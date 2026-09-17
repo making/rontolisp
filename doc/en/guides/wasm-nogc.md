@@ -40,9 +40,15 @@ A function is eligible only if its **entire transitive call graph** stays
 inside this subset:
 
 - numbers and booleans: arithmetic (`+ - * / mod rem 1+ 1- abs min max sqrt`),
-  the integer bitwise operators (`logand logior logxor lognot ash`),
-  comparison and predicates (`= < <= > >= not zerop plusp minusp evenp
-  oddp`);
+  the transcendental functions (`exp log sin cos tan asin acos atan sinh
+  cosh tanh`, the two-argument `(atan y x)`, `(log n base)`, and `expt`
+  when either operand is a float) as calls into the same fdlibm runtime
+  the other backends run — an argument that would leave the real domain
+  (`(log -1.0)`, `(asin 2.0)`) answers `NaN` rather than a complex value,
+  since this backend has no complex-number tier; `expt` of two non-float
+  operands is not eligible here, the integer bitwise operators (`logand
+  logior logxor lognot ash`), comparison and predicates (`= < <= > >= not
+  zerop plusp minusp evenp oddp`);
 - control and binding: `if`/`when`/`unless`/`cond`/`progn`/`let`/`let*`,
   recursion and calls to other eligible functions;
 - iteration and local mutation: `dotimes`/`do`/`do*` and the underlying

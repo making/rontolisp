@@ -243,7 +243,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * {@code (char= (char s i) #\x)} idiom behaves exactly like the other backends, on
 	 * ASCII and beyond ({@code char} decodes the i-th code point through the
 	 * {@code __char_at} helper, {@code length} counts code points through
-	 * {@code __strlen_cp}, {@code subseq} converts through {@code __byte_offset}).
+	 * {@code __strlen_cp}, {@code subseq} converts through {@code __byte_offset}). The
+	 * eleven real transcendentals ({@code exp log sin cos tan asin acos atan sinh cosh
+	 * tanh}, {@code atan} and {@code log} taking their optional second argument too) and
+	 * {@code expt} are calls into the fdlibm runtime this module carries when reached
+	 * ({@code .kb/transcendentals.md}); there is no complex tier here, so an argument
+	 * that would leave the real domain answers NaN, and {@code expt} of two non-float
+	 * operands is refused rather than guessed (see {@link #compileExpt}).
 	 */
 	private static final Set<String> BUILTINS = Set.of(LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.DIV,
 			LispNames.MOD, LispNames.REM, LispNames.ABS, LispNames.MIN, LispNames.MAX, LispNames.FLOAT,
@@ -251,7 +257,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			LispNames.LE, LispNames.GT, LispNames.GE, LispNames.NOT, LispNames.SQRT, LispNames.LOGAND, LispNames.LOGIOR,
 			LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH, LispNames.CONCATENATE, LispNames.LENGTH,
 			LispNames.SUBSEQ, LispNames.STRING_EQ, LispNames.CHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR,
-			LispNames.CHAR_EQ, LispNames.PRINC_TO_STRING);
+			LispNames.CHAR_EQ, LispNames.PRINC_TO_STRING, LispNames.EXP, LispNames.LOG, LispNames.SIN, LispNames.COS,
+			LispNames.TAN, LispNames.ASIN, LispNames.ACOS, LispNames.ATAN, LispNames.SINH, LispNames.COSH,
+			LispNames.TANH, LispNames.EXPT);
 
 	/**
 	 * The packed double-float array operators (F64VEC). Like {@link #BUILTINS} they
@@ -1264,8 +1272,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				}
 				return vt;
 			}
-			// Float division, (float x) and sqrt are always FLOAT.
-			case LispNames.DIV, LispNames.FLOAT, LispNames.SQRT -> {
+			// Float division, (float x), sqrt and the real transcendentals are always
+			// FLOAT -- exp/log/sin/cos/tan/asin/acos/atan/sinh/cosh/tanh, atan's optional
+			// second argument (atan2) and log's optional second argument (the base) walk
+			// the same way sqrt's single argument does.
+			case LispNames.DIV, LispNames.FLOAT, LispNames.SQRT, LispNames.EXP, LispNames.LOG, LispNames.SIN,
+					LispNames.COS, LispNames.TAN, LispNames.ASIN, LispNames.ACOS, LispNames.ATAN, LispNames.SINH,
+					LispNames.COSH, LispNames.TANH -> {
 				for (int i = 1; i < args.size(); i++) {
 					typeOf(args.get(i), env, tc);
 				}
@@ -1382,8 +1395,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// sum is still an integer value, so the BOOL bottom keeps the arithmetic
 			// shapes from ever answering BOOL: the seed below is INT, and BOOL yields
 			// to it on contact).
+			// expt joins the same way: FLOAT as soon as either operand is FLOAT (the
+			// pow(x, y) path -- see compileExpt), INT while both stay exact, though the
+			// exact integer-exponent loop itself is not part of this eligible subset (a
+			// compile error names it rather than silently answering a float).
 			case LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.MOD, LispNames.REM, LispNames.ABS,
-					LispNames.MIN, LispNames.MAX -> {
+					LispNames.MIN, LispNames.MAX, LispNames.EXPT -> {
 				Ty t = Ty.INT;
 				for (int i = 1; i < args.size(); i++) {
 					t = t.join(typeOf(args.get(i), env, tc));
@@ -1722,10 +1739,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	/**
-	 * The fdlibm functions the reachable bodies' {@code vec:} transcendental kernels call
-	 * ({@code vec:exp} .. {@code vec:cosh} and their {@code -into} siblings), closed over
-	 * the callees -- what {@link #placeFunctions} gives a slot and the code section a
-	 * body. Empty for a module that lowers none of them.
+	 * The fdlibm functions the reachable bodies call, closed over the callees -- what
+	 * {@link #placeFunctions} gives a slot and the code section a body. Empty for a
+	 * module that lowers none of them. Two families reach here: the {@code vec:}
+	 * transcendental kernels ({@code vec:exp} .. {@code vec:cosh} and their {@code -into}
+	 * siblings) and, since 2026-09-17, the scalar builtins themselves
+	 * ({@code exp log sin cos tan asin acos atan sinh cosh tanh} and {@code expt}) -- see
+	 * {@link #collectFdlibmRoots}.
 	 */
 	private static List<WasmFdlibmRuntimeBuilder.Fn> fdlibmFunctions(List<String> reachable, Map<String, Defun> defuns,
 			Map<String, WasmImportCompiler.Decl> imports) {
@@ -1738,28 +1758,53 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return new ArrayList<>(WasmFdlibmRuntimeBuilder.closure(roots));
 	}
 
+	// A scalar (expt ...) call always reserves POW, whether or not the particular
+	// call site turns out to be the float path: a call whose operands are both
+	// non-float fails to COMPILE (compileExpt), so reserving the slot is never
+	// wasted in a module that actually finishes compiling.
 	private static void collectFdlibmRoots(LispVal v, Set<WasmFdlibmRuntimeBuilder.Fn> out) {
 		if (!(v instanceof LispCons c)) {
 			return;
 		}
-		if (c.car() instanceof LispSymbol s && isSimdCall(s.name())) {
-			String member = simdMember(s.name());
-			if (member.endsWith("-INTO")) {
-				member = member.substring(0, member.length() - "-INTO".length());
+		if (c.car() instanceof LispSymbol s) {
+			if (isSimdCall(s.name())) {
+				String member = simdMember(s.name());
+				if (member.endsWith("-INTO")) {
+					member = member.substring(0, member.length() - "-INTO".length());
+				}
+				switch (member) {
+					case LispNames.VEC_EXP -> out.add(WasmFdlibmRuntimeBuilder.Fn.EXP);
+					case LispNames.VEC_LOG -> out.add(WasmFdlibmRuntimeBuilder.Fn.LOG);
+					case LispNames.VEC_TANH -> out.add(WasmFdlibmRuntimeBuilder.Fn.TANH);
+					case LispNames.VEC_SIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.SIN);
+					case LispNames.VEC_COS -> out.add(WasmFdlibmRuntimeBuilder.Fn.COS);
+					case LispNames.VEC_TAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.TAN);
+					case LispNames.VEC_ASIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ASIN);
+					case LispNames.VEC_ACOS -> out.add(WasmFdlibmRuntimeBuilder.Fn.ACOS);
+					case LispNames.VEC_ATAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ATAN);
+					case LispNames.VEC_SINH -> out.add(WasmFdlibmRuntimeBuilder.Fn.SINH);
+					case LispNames.VEC_COSH -> out.add(WasmFdlibmRuntimeBuilder.Fn.COSH);
+					default -> {
+					}
+				}
 			}
-			switch (member) {
-				case LispNames.VEC_EXP -> out.add(WasmFdlibmRuntimeBuilder.Fn.EXP);
-				case LispNames.VEC_LOG -> out.add(WasmFdlibmRuntimeBuilder.Fn.LOG);
-				case LispNames.VEC_TANH -> out.add(WasmFdlibmRuntimeBuilder.Fn.TANH);
-				case LispNames.VEC_SIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.SIN);
-				case LispNames.VEC_COS -> out.add(WasmFdlibmRuntimeBuilder.Fn.COS);
-				case LispNames.VEC_TAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.TAN);
-				case LispNames.VEC_ASIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ASIN);
-				case LispNames.VEC_ACOS -> out.add(WasmFdlibmRuntimeBuilder.Fn.ACOS);
-				case LispNames.VEC_ATAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ATAN);
-				case LispNames.VEC_SINH -> out.add(WasmFdlibmRuntimeBuilder.Fn.SINH);
-				case LispNames.VEC_COSH -> out.add(WasmFdlibmRuntimeBuilder.Fn.COSH);
-				default -> {
+			else {
+				switch (s.name()) {
+					case LispNames.EXP -> out.add(WasmFdlibmRuntimeBuilder.Fn.EXP);
+					case LispNames.LOG -> out.add(WasmFdlibmRuntimeBuilder.Fn.LOG);
+					case LispNames.SIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.SIN);
+					case LispNames.COS -> out.add(WasmFdlibmRuntimeBuilder.Fn.COS);
+					case LispNames.TAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.TAN);
+					case LispNames.ASIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ASIN);
+					case LispNames.ACOS -> out.add(WasmFdlibmRuntimeBuilder.Fn.ACOS);
+					case LispNames.ATAN -> out.add(c.toList().size() == 3 ? WasmFdlibmRuntimeBuilder.Fn.ATAN2
+							: WasmFdlibmRuntimeBuilder.Fn.ATAN);
+					case LispNames.SINH -> out.add(WasmFdlibmRuntimeBuilder.Fn.SINH);
+					case LispNames.COSH -> out.add(WasmFdlibmRuntimeBuilder.Fn.COSH);
+					case LispNames.TANH -> out.add(WasmFdlibmRuntimeBuilder.Fn.TANH);
+					case LispNames.EXPT -> out.add(WasmFdlibmRuntimeBuilder.Fn.POW);
+					default -> {
+					}
 				}
 			}
 		}
@@ -1968,8 +2013,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				break;
 			}
 		}
-		// A nonempty literal pool implies `used`, so `used` follows.
-		boolean used = !literals.isEmpty() || boundaryString || stringOp || floatVec;
+		// A nonempty literal pool implies `used`, so `used` follows. sin/cos/tan (scalar
+		// or vec:) need the trig reduction's tables blob in linear memory even when
+		// nothing else in the module does -- a scalar (sin x) alone has no literal, no
+		// string op and no float vector, so without this arm the module would carry the
+		// tables' data bytes with no memory section to hold them.
+		boolean used = !literals.isEmpty() || boundaryString || stringOp || floatVec
+				|| WasmFdlibmRuntimeBuilder.needsTables(fdlibmFns);
 		// Only printing an INT/FLOAT renders through __itoa / __ftoa, both of which
 		// allocate the text they return; a folded literal write or a string passthrough
 		// moves no heap, so a literal-only printing module bumps nothing. A
@@ -2016,11 +2066,21 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 */
 	private static Mem placeFunctions(MemLayout layout, int internalCount, int wrapperCount) {
 		int funcBase = layout.printUsed() ? 1 : 0;
-		int allocIndex = funcBase + internalCount + wrapperCount;
-		int memcpyIndex = allocIndex + 1;
-		int streqIndex = memcpyIndex + 1;
-		int itoaIndex = streqIndex + 1;
-		int next = itoaIndex + 1;
+		int next = funcBase + internalCount + wrapperCount;
+		// These four are gated on `used`, like every helper below -- until 2026-09-17
+		// every path that reached the fdlibm block below also allocated a packed float
+		// vector (floatVec), which forced `used` true regardless, so the reservation
+		// went unconditional and the gap stayed invisible. A scalar (exp x) call
+		// reaches fdlibm with no vector and no string at all, so a pure-numeric module
+		// now exposes it: the code section only EMITS these four under `mem.used()`
+		// (see the writeCode block), and reserving their indices unconditionally left
+		// fdlibmBase (and everything after it) pointing past the end of the actual
+		// function section -- the tree shaker's `applyRefs` caught it as a CALL to a
+		// dropped/nonexistent index.
+		int allocIndex = layout.used() ? next++ : -1;
+		int memcpyIndex = layout.used() ? next++ : -1;
+		int streqIndex = layout.used() ? next++ : -1;
+		int itoaIndex = layout.used() ? next++ : -1;
 		// The UTF-8 code-point helpers, each gated on the operator that calls it
 		// (planMemory's strlenUsed/byteOffsetUsed/charAtUsed): a module that never
 		// indexes a string emits none of them and keeps its exact bytes.
@@ -4508,6 +4568,18 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.ABS -> compileAbs(cons, args, fn);
 			case LispNames.FLOAT -> compileFloat(args, fn);
 			case LispNames.SQRT -> compileSqrt(args, fn);
+			case LispNames.EXP -> compileTranscendentalUnary(args, fn, WasmFdlibmRuntimeBuilder.Fn.EXP, name);
+			case LispNames.LOG -> compileLog(args, fn);
+			case LispNames.SIN -> compileTranscendentalUnary(args, fn, WasmFdlibmRuntimeBuilder.Fn.SIN, name);
+			case LispNames.COS -> compileTranscendentalUnary(args, fn, WasmFdlibmRuntimeBuilder.Fn.COS, name);
+			case LispNames.TAN -> compileTranscendentalUnary(args, fn, WasmFdlibmRuntimeBuilder.Fn.TAN, name);
+			case LispNames.ASIN -> compileTranscendentalUnary(args, fn, WasmFdlibmRuntimeBuilder.Fn.ASIN, name);
+			case LispNames.ACOS -> compileTranscendentalUnary(args, fn, WasmFdlibmRuntimeBuilder.Fn.ACOS, name);
+			case LispNames.ATAN -> compileAtan(args, fn);
+			case LispNames.SINH -> compileTranscendentalUnary(args, fn, WasmFdlibmRuntimeBuilder.Fn.SINH, name);
+			case LispNames.COSH -> compileTranscendentalUnary(args, fn, WasmFdlibmRuntimeBuilder.Fn.COSH, name);
+			case LispNames.TANH -> compileTranscendentalUnary(args, fn, WasmFdlibmRuntimeBuilder.Fn.TANH, name);
+			case LispNames.EXPT -> compileExpt(args, fn);
 			case LispNames.CONCATENATE -> compileConcatenate(args, fn);
 			case LispNames.LENGTH -> compileLength(args, fn);
 			case LispNames.MAKE_ARRAY -> compileMakeArray(args, fn);
@@ -5211,6 +5283,80 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		compileCoerced(args.get(1), fn, Ty.FLOAT);
 		fn.writer.write(Instruction.F64_SQRT);
+		return Ty.FLOAT;
+	}
+
+	// (exp x) / (sin x) / (asin x) / etc: the argument coerced to f64, then a call
+	// into the fdlibm runtime this module carries when reached
+	// (collectFdlibmRoots / Mem.fdlibmIndex) -- the same bits the interpreter, the
+	// JVM and the wasm-GC backend run (.kb/transcendentals.md). There is no complex
+	// tier in this backend's value model, so an argument that would leave the real
+	// domain (a negative log/asin/acos argument) answers fdlibm's own NaN rather
+	// than escaping to the plane.
+	private Ty compileTranscendentalUnary(List<LispVal> args, Fn fn, WasmFdlibmRuntimeBuilder.Fn what, String name) {
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException(
+					"--no-gc: " + name + " takes exactly one argument in '" + fn.fnName + "'");
+		}
+		compileCoerced(args.get(1), fn, Ty.FLOAT);
+		fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.fdlibmIndex(what));
+		return Ty.FLOAT;
+	}
+
+	// (log n): the natural logarithm. (log n base): the quotient of the two
+	// logarithms -- one call form, two calls into the same fdlibm function, matching
+	// WasmComplexCompiler's real arm.
+	private Ty compileLog(List<LispVal> args, Fn fn) {
+		if (args.size() == 2) {
+			return compileTranscendentalUnary(args, fn, WasmFdlibmRuntimeBuilder.Fn.LOG, LispNames.LOG);
+		}
+		if (args.size() != 3) {
+			throw new UnsupportedOperationException("--no-gc: log takes one or two arguments in '" + fn.fnName + "'");
+		}
+		compileCoerced(args.get(1), fn, Ty.FLOAT);
+		fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.fdlibmIndex(WasmFdlibmRuntimeBuilder.Fn.LOG));
+		compileCoerced(args.get(2), fn, Ty.FLOAT);
+		fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.fdlibmIndex(WasmFdlibmRuntimeBuilder.Fn.LOG));
+		fn.writer.write(Instruction.F64_DIV);
+		return Ty.FLOAT;
+	}
+
+	// (atan x): the real arctangent. (atan y x): atan2 over the full circle -- y
+	// pushed first, matching StrictMath.atan2(y, x) and the interpreter.
+	private Ty compileAtan(List<LispVal> args, Fn fn) {
+		if (args.size() == 2) {
+			return compileTranscendentalUnary(args, fn, WasmFdlibmRuntimeBuilder.Fn.ATAN, LispNames.ATAN);
+		}
+		if (args.size() != 3) {
+			throw new UnsupportedOperationException("--no-gc: atan takes one or two arguments in '" + fn.fnName + "'");
+		}
+		compileCoerced(args.get(1), fn, Ty.FLOAT);
+		compileCoerced(args.get(2), fn, Ty.FLOAT);
+		fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.fdlibmIndex(WasmFdlibmRuntimeBuilder.Fn.ATAN2));
+		return Ty.FLOAT;
+	}
+
+	// (expt base power): the float pow(x, y) when either operand is a FLOAT -- the
+	// one point the eligible subset joins the fdlibm runtime (.kb/transcendentals.md).
+	// An exact base to an exact exponent needs the rational-multiplication loop the
+	// other backends run (WasmExptCompiler), which needs a value model (ratio,
+	// arbitrary-precision integer) this backend does not carry, so it stays a
+	// compile error naming the operation rather than a silently wrong float answer.
+	private Ty compileExpt(List<LispVal> args, Fn fn) {
+		if (args.size() != 3) {
+			throw new UnsupportedOperationException("--no-gc: expt takes exactly two arguments in '" + fn.fnName + "'");
+		}
+		Ty baseTy = staticType(args.get(1), fn);
+		Ty powerTy = staticType(args.get(2), fn);
+		if (baseTy != Ty.FLOAT && powerTy != Ty.FLOAT) {
+			throw new UnsupportedOperationException("--no-gc: expt of two non-float operands in '" + fn.fnName
+					+ "' needs the exact rational-multiplication loop, which this backend's value model (no ratio,"
+					+ " no bignum tower) does not carry; coerce one operand to a float, or use the default wasm-GC"
+					+ " backend, the interpreter or the JVM backend");
+		}
+		compileCoerced(args.get(1), fn, Ty.FLOAT);
+		compileCoerced(args.get(2), fn, Ty.FLOAT);
+		fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.fdlibmIndex(WasmFdlibmRuntimeBuilder.Fn.POW));
 		return Ty.FLOAT;
 	}
 

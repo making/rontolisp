@@ -15,7 +15,7 @@ wasmtime run --invoke fact fact.wasm 5      # => 120, ~108 bytes, no wasm-GC run
 
 関数が対象となるのは、その**推移的な呼び出しグラフ全体**が次のサブセットに収まる場合だけです:
 
-- 数値とブール: 算術(`+ - * / mod rem 1+ 1- abs min max sqrt`)、整数ビット演算(`logand logior logxor lognot ash`)、比較と述語(`= < <= > >= not zerop plusp minusp evenp oddp`);
+- 数値とブール: 算術(`+ - * / mod rem 1+ 1- abs min max sqrt`)、超越関数(`exp log sin cos tan asin acos atan sinh cosh tanh`、2 引数の `(atan y x)`、`(log n base)`、および一方の引数が浮動小数点数の場合の `expt`)は他のバックエンドと同じ fdlibm ランタイムへの呼び出しとしてローワリングされます — このバックエンドには複素数階層がないため、実数域を外れる引数(`(log -1.0)`、`(asin 2.0)`)は複素数ではなく `NaN` を返し、2 引数とも浮動小数点数でない `expt` は対象外です。整数ビット演算(`logand logior logxor lognot ash`)、比較と述語(`= < <= > >= not zerop plusp minusp evenp oddp`);
 - 制御と束縛: `if`/`when`/`unless`/`cond`/`progn`/`let`/`let*`、再帰、他の対象関数の呼び出し;
 - 反復とローカルな変更: `dotimes`/`do`/`do*` とその基盤の `while`/`setq`/`return`。let/`do` 束縛変数は自由に再代入できます。`loop` は非 cons 化節(数値 `for`、`sum`/`count`/`maximize`/`minimize`、`repeat`/`while`/`until`/`do`/`return`)に限り対象です — `collect`/`append`/`nconc` と `for ... in`/`on` の節はリストを確保するため対象外です;
 - 浮動小数点/整数変換: `float truncate floor ceiling round`;

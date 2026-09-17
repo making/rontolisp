@@ -2237,6 +2237,49 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
+	void scalarTranscendentalsLowerNativelyOnNoGc() {
+		// The scalar builtins -- exp/log/sin/cos/tan/asin/acos/atan/sinh/cosh/tanh, the
+		// two-argument (atan y x) and (log n base), and expt when one operand is a
+		// FLOAT -- used to be unknown under --no-gc (.kb/vec.md); since 2026-09-17 they
+		// are calls into the same fdlibm runtime the vec: kernels above call, so the
+		// same coefficient probes apply, and an exact integer operand (expt's base
+		// here) coerces through the INT -> FLOAT promotion the lattice already has.
+		String source = """
+				(defun f (x y)
+				  (+ (exp x) (log x) (sin x) (cos x) (tan x) (asin x) (acos x) (atan x)
+				     (sinh x) (cosh x) (tanh x) (atan y x) (log x y) (expt 2 y)))
+				(rontolisp:wasm-export 'f :params '(:float :float) :returns :float)
+				""";
+		for (boolean simd : new boolean[] { false, true }) {
+			byte[] code = Objects.requireNonNull(sections(simd ? compileSimd(source) : compile(source)).get(10));
+			for (WasmFdlibmRuntimeBuilder.Fn fn : new WasmFdlibmRuntimeBuilder.Fn[] { WasmFdlibmRuntimeBuilder.Fn.EXP,
+					WasmFdlibmRuntimeBuilder.Fn.LOG, WasmFdlibmRuntimeBuilder.Fn.K_SIN,
+					WasmFdlibmRuntimeBuilder.Fn.K_TAN, WasmFdlibmRuntimeBuilder.Fn.ASIN,
+					WasmFdlibmRuntimeBuilder.Fn.ATAN }) {
+				assertThat(containsSequence(code, fdlibmConstant(fn))).as("fdlibm %s, simd=%s", fn, simd).isTrue();
+			}
+			assertThat(containsSimdPrefixInUserFunction(code))
+				.as("no SIMD prefix in the scalar transcendental lowering, simd=%s", simd)
+				.isFalse();
+		}
+	}
+
+	@Test
+	void exptOfTwoNonFloatOperandsIsCompileError() {
+		// The exact rational-multiplication loop the other backends run for an
+		// integer/ratio base to an integer exponent needs a value model (ratio,
+		// arbitrary-precision integer) this backend does not carry, so only the float
+		// pow(x, y) path joins the eligible subset -- a clear compile error rather
+		// than a silently wrong float answer.
+		assertThatThrownBy(() -> compile("""
+				(defun f (a b) (expt a b))
+				(rontolisp:wasm-export 'f :params '(:int :int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("expt")
+			.hasMessageContaining("rational-multiplication");
+	}
+
+	@Test
 	void comparisonSelectsLowerNativelyOnNoGc() {
 		// vec:maximum / vec:minimum / vec:relu / vec:clip (and
 		// -into) are strict-comparison selects. Without --simd they are scalar

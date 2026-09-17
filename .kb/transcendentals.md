@@ -44,9 +44,22 @@ The one stated exception is `--gpu`'s transcendental tier (`.kb/linalg-simd.md`)
     tanh`), under `--simd`, or when any name can resolve at run time; a trig body
     without the blob is refused as a compiler bug.
   - `--no-gc`: `NoGcWasmCompiler.fdlibmFunctions` scans the reachable bodies for the
-    `vec:` transcendental kernels, closes over the callees, and `placeFunctions` gives
-    them indices after the Schubfach helpers (`Mem.fdlibmIndex`); the blob follows the
-    Schubfach tables (`layoutData`). The scalar `(exp x)` builtins remain unknown there.
+    `vec:` transcendental kernels AND, since 2026-09-17, the scalar builtins themselves
+    (`collectFdlibmRoots`), closes over the callees, and `placeFunctions` gives them
+    indices after the Schubfach helpers (`Mem.fdlibmIndex`); the blob follows the
+    Schubfach tables (`layoutData`), placed only when a reached name can carry `sin`,
+    `cos` or `tan`'s reduction tables, so a pure-numeric module that never calls one
+    still carries no memory section. The scalar site is a `call` straight into the
+    fdlibm function over a raw `f64` (the argument coerced through the same INT ->
+    FLOAT promotion the numeric lattice already runs, no boxing): `compileTranscendentalUnary`
+    for the eleven unary names, `compileLog` for `(log n)`/`(log n base)` (two calls,
+    `f64.div`), `compileAtan` for `(atan x)`/`(atan y x)` (`Fn.ATAN2`, `y` pushed before
+    `x`), `compileExpt` for `expt` -- only when the STATIC type of either operand is
+    FLOAT (`staticType`); an exact base to an exact exponent needs the rational-loop
+    tier this backend's value model (no ratio, no bignum) does not carry, so that shape
+    is a compile error naming the operation, not a guess. No complex tier here either:
+    an argument that would leave the real domain (`(log -1.0)`, `(asin 2.0)`) answers
+    fdlibm's own NaN.
   - Call sites: `WasmTranscendentalCompiler` (real unary), `WasmExptCompiler` (`pow`,
     dispatching exactly as the interpreter's `expt`: an exact base to an integer
     exponent is the rational loop, anything with a float or a ratio exponent is
@@ -96,6 +109,8 @@ The one stated exception is `--gpu`'s transcendental tier (`.kb/linalg-simd.md`)
 `WasmFdlibmRuntimeBuilderTest` (bits against `StrictMath`), `ci-spec.yaml`'s
 `transcendentals-bit-identical-cross-backend` (four backends x `--simd`, digits),
 `NoGcWasmCompilerTest`'s `{expAndSign,logAndTanh,sinCosTan,arcAndHyperbolic}LowerNativelyOnNoGc`
+and `scalarTranscendentalsLowerNativelyOnNoGc`/`exptOfTwoNonFloatOperandsIsCompileError`
 (the coefficients present, no `v128`), `WasmLispCompilerIntegrationTest`'s
-`noGcRuns*UnderBothLowerings` (no-gc == wasm-GC) and `compileAndRunComplex*`,
+`noGcRuns*UnderBothLowerings` including `noGcRunsScalarTranscendentalsUnderBothLowerings`
+(no-gc == wasm-GC) and `compileAndRunComplex*`,
 `JvmLispCompilerTest#compileAndRunComplexUnaryMathMirrorsTheInterpreterArmForArm`.

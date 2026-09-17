@@ -185,8 +185,11 @@ wasm `signum` maps `-0.0`/NaN to `0.0`.
   sign walk element loops over `WasmVecSimdRuntimeBuilder.emitScalarUnaryF64` (a call into the
   fdlibm runtime, or the inline `emitSignumF64`), which `NoGcWasmCompiler.compileSimdUnaryF64`
   reuses, so BOTH `--no-gc` lowerings emit the identical loop (no `0xFD`). All f32 lane forms are
-  exact by the `53 >= 2*24+2` bound. The scalar `(exp x)`/`(log x)`/etc. builtins remain unknown
-  on `--no-gc`.
+  exact by the `53 >= 2*24+2` bound. Since 2026-09-17 the scalar `(exp x)`/`(log x)`/etc.
+  builtins join `--no-gc` too, one call each into the same fdlibm runtime the `vec:` kernels
+  above call (`NoGcWasmCompiler.compileTranscendentalUnary`/`compileLog`/`compileAtan`, the
+  pre-scan extended in `collectFdlibmRoots`), with `expt` only over the FLOAT lattice point
+  (`.kb/transcendentals.md`).
 - New v128 opcodes (`f32x4/f64x2.sqrt/abs/neg/lt/gt`, `v128.bitselect`) go in
   `am.ik.wasm.Instruction` AND `WasmSections.skipSimd` (which throws on unknown 0xFD).
 

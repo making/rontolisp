@@ -3714,6 +3714,42 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void noGcRunsScalarTranscendentalsUnderBothLowerings() throws Exception {
+		// The scalar builtins (no vec: wrapper) -- exp/sin/atan2/log(n,base)/expt(float)
+		// -- call the same fdlibm functions the wasm-GC backend's scalar builtins call
+		// (.kb/transcendentals.md, .kb/vec.md), so a --no-gc value equals the wasm-GC
+		// backend's exactly; the nontrivial probes are compared against a wasm-GC run
+		// (truncated to an integer so both printers agree byte for byte), the exact
+		// edges (log(1) = 0, sin(0) = 0) to literals.
+		String wasmGcExp = compileAndRun("(print (truncate (* 1000000 (exp 1.0))))");
+		String wasmGcAtan2 = compileAndRun("(print (truncate (* 1000000 (atan 1.0 -1.0))))");
+		String wasmGcLogBase = compileAndRun("(print (truncate (* 1000000 (log 8.0 2.0))))");
+		String wasmGcPow = compileAndRun("(print (truncate (* 1000000 (expt 2 0.5))))");
+		String source = """
+				(defun expf (i) (truncate (* 1000000 (exp 1.0))))
+				(defun logone (i) (truncate (log 1.0)))
+				(defun sinzero (i) (truncate (sin 0.0)))
+				(defun atan2q (i) (truncate (* 1000000 (atan 1.0 -1.0))))
+				(defun logbase (i) (truncate (* 1000000 (log 8.0 2.0))))
+				(defun powf (i) (truncate (* 1000000 (expt 2 0.5))))
+				(rontolisp:wasm-export 'expf :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'logone :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'sinzero :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'atan2q :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'logbase :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'powf :params '(:int) :returns :int)
+				""";
+		for (boolean simd : new boolean[] { false, true }) {
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "expf", "0")).isEqualTo(wasmGcExp);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "logone", "0")).isEqualTo("0");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "sinzero", "0")).isEqualTo("0");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "atan2q", "0")).isEqualTo(wasmGcAtan2);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "logbase", "0")).isEqualTo(wasmGcLogBase);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "powf", "0")).isEqualTo(wasmGcPow);
+		}
+	}
+
+	@Test
 	void noGcRunsComparisonSelectsUnderBothLowerings() throws Exception {
 		// vec:maximum / vec:minimum / vec:relu / vec:clip (+ -into)
 		// are strict-comparison selects ((if (> x y) x y) and its mirrors), so every
