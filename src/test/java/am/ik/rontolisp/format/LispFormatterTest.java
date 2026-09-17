@@ -703,6 +703,25 @@ class LispFormatterTest {
 	}
 
 	/**
+	 * The four directories the "format Lisp" release step formats in place -- unlike the
+	 * corpus above (vendored third-party libraries under {@code src/test/resources} that
+	 * nobody ever ran through this formatter), a file here SHIPS as-is and is expected to
+	 * already be a fixpoint. A file that needs reformatting here is silently rewritten
+	 * the next time someone runs that step against an unrelated change.
+	 * @return the shipped {@code .lisp} and {@code .asd} files
+	 * @throws IOException if a tree cannot be walked
+	 */
+	static Stream<Path> shippedLispSources() throws IOException {
+		List<Path> roots = List.of(Path.of("examples"), Path.of("src/main/resources"), Path.of("size-report/programs"),
+				Path.of("bench-report/programs"));
+		List<Path> found = new ArrayList<>();
+		for (Path root : roots) {
+			lispSourcesUnder(root).forEach(found::add);
+		}
+		return found.stream();
+	}
+
+	/**
 	 * The walk itself, over an arbitrary root so the boundary cases can be pinned against
 	 * a temporary tree rather than against the repository.
 	 * @param root the directory to walk
@@ -831,6 +850,15 @@ class LispFormatterTest {
 		if (before != null) {
 			assertThat(tokens(formatted)).as("formatting %s changed its token stream", file).isEqualTo(before);
 		}
+	}
+
+	@ParameterizedTest
+	@MethodSource("shippedLispSources")
+	void shippedLispResourcesAreAlreadyFormatted(Path file) throws IOException {
+		String source = Files.readString(file);
+		assertThat(LispFormatter.format(source))
+			.as("%s is not formatter-clean; run the format step and commit the result", file)
+			.isEqualTo(source);
 	}
 
 	// The reader's own tokens, or null when the file does not read at all (a fixture that
