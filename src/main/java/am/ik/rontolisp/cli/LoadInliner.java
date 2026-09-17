@@ -25,9 +25,9 @@ import am.ik.rontolisp.eval.AsdfSystems;
 import am.ik.rontolisp.eval.BuiltinSystems;
 import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.ShimLibraries;
+import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.reader.Features;
-import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -303,9 +303,9 @@ public final class LoadInliner {
 				}
 				// The default file mapping downcases the module name (like ASDF's
 				// coerce-name): (require :util) reads as UTIL under the upcase premise
-				// but still loads util.lisp.
-				rawPath = require.path() != null ? require.path()
-						: require.name().toLowerCase(java.util.Locale.ROOT) + ".lisp";
+				// but still loads util.lisp. The spelling lives in the source-language
+				// seam, beside the extension that picks the language.
+				rawPath = require.path() != null ? require.path() : SourceLanguage.fileNameForModule(require.name());
 			}
 			LoadForm load = null;
 			if (require == null) {
@@ -382,10 +382,10 @@ public final class LoadInliner {
 		// #. in a loaded file rides the same marker read as the main source; the markers
 		// resolve later in UserMacroExpander against the macro-time evaluator. A read
 		// error is prefixed with this file's path, so a spliced library's stray paren
-		// names its own line, not a line of the flattened entry program.
-		List<LispVal> forms = source.contains("#.")
-				? LispReader.readAllWithReadEvalMarkers(source, ctx.features(), path)
-				: LispReader.readAllFromString(source, ctx.features(), path);
+		// names its own line, not a line of the flattened entry program. The read is
+		// the source-language seam's, picked by THIS file's extension, so one program
+		// may mix languages file by file.
+		List<LispVal> forms = SourceLanguage.forFile(path, null).read(source, ctx.features(), path);
 		// A file that selects a package with a top-level (in-package ...) must not leak
 		// it
 		// past the load: bracket the spliced forms with package save/restore markers so

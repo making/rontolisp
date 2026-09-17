@@ -31,13 +31,13 @@ import am.ik.rontolisp.eval.TokenizersLibrary;
 import am.ik.rontolisp.eval.TorchLibrary;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.LispExitSignal;
+import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.VecLibrary;
 import am.ik.rontolisp.eval.UrlLibrary;
 import am.ik.rontolisp.eval.UsocketLibrary;
 import am.ik.rontolisp.eval.WitImportInliner;
 import am.ik.rontolisp.eval.WitLibrary;
 import am.ik.rontolisp.reader.Features;
-import am.ik.rontolisp.reader.LispReader;
 
 /**
  * Web Image entry point that exposes the rontolisp interpreter and compilers to
@@ -109,10 +109,8 @@ public final class RontoPlayground {
 			// #. pays for the marker read; each form's markers resolve just before it
 			// runs. The COMPILE buttons keep the error-mode read (frontend below): their
 			// pipeline has no macro-time marker resolution pass.
-			boolean markers = source.contains("#.");
-			List<LispVal> exprs = markers
-					? LispReader.readAllWithReadEvalMarkers(source, am.ik.rontolisp.reader.Features.INTERPRETER)
-					: LispReader.readAllFromString(source);
+			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
+			List<LispVal> exprs = SourceLanguage.COMMON_LISP.read(source, Features.INTERPRETER, null);
 			// The last form's values are echoed one per line: (floor 10 3) echoes 3
 			// then 1. Deliberately only the LAST form, unlike the CLI REPL (which
 			// echoes every form, as SBCL does reading them one at a time): this same
@@ -185,8 +183,11 @@ public final class RontoPlayground {
 	// browser resolves (load ...) at run time, against the same uploaded files a WIT file
 	// is read from.
 	private static List<LispVal> frontend(String source, Features features, WitExportDirective.Backend backend) {
-		List<LispVal> read = WitImportInliner.inline(LispReader.readAllFromString(source, features), null, backend,
-				uploads);
+		// The strict (error-mode) read is deliberate here, not a leftover: this
+		// reduced frontend has no marker-resolution pass, so a #. must be a read
+		// error rather than a marker no pass resolves.
+		List<LispVal> read = WitImportInliner.inline(SourceLanguage.COMMON_LISP.readStrict(source, features), null,
+				backend, uploads);
 		// objc:, appkit:, metal: and scene: need the Objective-C runtime on the machine
 		// that RUNS the program, and the JVM output would need the binding's class
 		// files, which the browser build does not carry: refuse both outputs by the

@@ -9,6 +9,7 @@ import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.compiler.JvmExportDirective;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.eval.DistClient;
+import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.reader.Features;
 import org.jspecify.annotations.Nullable;
 
@@ -57,6 +58,8 @@ public final class JvmSourceCompiler {
 	private List<String> dists = List.of();
 
 	private List<String> features = List.of();
+
+	private @Nullable String sourceLanguage;
 
 	/**
 	 * @param className the class to emit, in either the {@code com.acme.Kernels} or the
@@ -176,6 +179,19 @@ public final class JvmSourceCompiler {
 	}
 
 	/**
+	 * @param sourceLanguage the entry source's language ({@code --source-language}),
+	 * overriding the pick from the entry file's extension, or {@code null} for the
+	 * default
+	 */
+	public JvmSourceCompiler sourceLanguage(@Nullable String sourceLanguage) {
+		if (sourceLanguage != null) {
+			SourceLanguage.parse(sourceLanguage);
+		}
+		this.sourceLanguage = sourceLanguage;
+		return this;
+	}
+
+	/**
 	 * Compiles a source text.
 	 * <p>
 	 * A failure carries the frontend's {@code file:line:column:} prefix, exactly as the
@@ -210,9 +226,9 @@ public final class JvmSourceCompiler {
 
 	private Optional<Result> run(String source, @Nullable String entryFile, boolean onlyIfExported) {
 		return CompileDiagnostics.recording(() -> {
-			CompileFrontend.Result frontend = CompileFrontend.run(source, entryFile, this.baseDir, this.systemPath,
-					DistClient.createDefault(this.dists), this.features, false, this.servlet, this.dynamic, false,
-					false, false, false, null, false, this.noPrune);
+			CompileFrontend.Result frontend = CompileFrontend.run(source, entryFile, this.sourceLanguage, this.baseDir,
+					this.systemPath, DistClient.createDefault(this.dists), this.features, false, this.servlet,
+					this.dynamic, false, false, false, false, null, false, this.noPrune);
 			if (onlyIfExported && frontend.program().stream().noneMatch(JvmExportDirective::isExportForm)) {
 				return Optional.empty();
 			}

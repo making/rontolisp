@@ -59,7 +59,6 @@ import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.runtime.RontoHttpClack;
 import am.ik.rontolisp.runtime.RontoHttpServer;
-import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -3050,8 +3049,9 @@ public final class LispEvaluator {
 					path = str.value();
 				}
 				else {
-					// Downcased like ASDF's coerce-name (see LoadInliner).
-					path = name.toLowerCase(java.util.Locale.ROOT) + ".lisp";
+					// Downcased like ASDF's coerce-name (see LoadInliner): the spelling
+					// lives in the source-language seam, beside the extension.
+					path = SourceLanguage.fileNameForModule(name);
 				}
 				// The required file is expected to (provide name) itself, which marks
 				// the module; requiring loads the file either way (like Common Lisp).
@@ -3348,15 +3348,12 @@ public final class LispEvaluator {
 			// per-form substitution walk; every other file keeps the plain read.
 			// The resolved path rides along so a reader error inside a loaded file names
 			// that file and line, exactly like the compile path's LoadInliner splice.
-			if (source.contains("#.")) {
-				for (LispVal form : LispReader.readAllWithReadEvalMarkers(source, features, resolved)) {
-					eval(resolveReadTimeEvalInCode(form));
-				}
-			}
-			else {
-				for (LispVal form : LispReader.readAllFromString(source, features, resolved)) {
-					eval(form);
-				}
+			// Both the read and the #. question are the source-language seam's, picked
+			// by THIS file's extension, so one program may mix languages file by file.
+			SourceLanguage language = SourceLanguage.forFile(resolved, null);
+			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
+			for (LispVal form : language.read(source, features, resolved)) {
+				eval(markers ? resolveReadTimeEvalInCode(form) : form);
 			}
 		}
 		finally {

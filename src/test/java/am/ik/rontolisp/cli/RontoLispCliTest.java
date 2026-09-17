@@ -1264,6 +1264,24 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void sourceLanguageOverrideNamesTheEntryLanguage() throws Exception {
+		// --source-language overrides the pick from the entry file's extension; with
+		// the one language this build reads the program runs exactly as without it.
+		Path program = this.tempDir.resolve("hello.lisp");
+		Files.writeString(program, "(print (+ 1 2))\n");
+		assertThat(runCli("", program.toString(), "--source-language=common-lisp")).contains("3");
+	}
+
+	@Test
+	void anUnknownSourceLanguageFailsFast() throws Exception {
+		Path program = this.tempDir.resolve("hello.lisp");
+		Files.writeString(program, "(print (+ 1 2))\n");
+		String[] result = runReporting(program.toString(), "--source-language=elvish");
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[2]).contains("--source-language");
+	}
+
+	@Test
 	void theTestSubcommandHasItsOwnHelp() {
 		assertThat(runCli("", "test", "--help")).contains("Usage: rontolisp test")
 			.contains("--reporter")

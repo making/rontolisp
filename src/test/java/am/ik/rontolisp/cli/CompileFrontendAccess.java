@@ -6,8 +6,8 @@ import java.util.List;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.HostBoundary;
 import am.ik.rontolisp.eval.DistClient;
+import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.reader.Features;
-import am.ik.rontolisp.reader.LispReader;
 
 /**
  * The compile path's front end as a TEST runs it: one door onto {@link CompileFrontend},
@@ -67,9 +67,9 @@ public final class CompileFrontendAccess {
 	 */
 	public static List<LispVal> corpus(String source, Features features, boolean wasm, boolean noWasi) {
 		// #. in the corpus rides the marker read (resolved in UserMacroExpander), like
-		// the CLI.
-		List<LispVal> read = source.contains("#.") ? LispReader.readAllWithReadEvalMarkers(source, features)
-				: LispReader.readAllFromString(source, features);
+		// the CLI -- through the same source-language seam, so the decision cannot
+		// drift from the production read.
+		List<LispVal> read = SourceLanguage.COMMON_LISP.read(source, features, null);
 		// LoadInliner splices the built-in ASDF shim systems the corpus load-systems
 		// (bordeaux-threads' bt2 case), exactly like the CLI. The loader throws: see the
 		// class comment -- the corpus must reference no filesystem source.
@@ -93,8 +93,8 @@ public final class CompileFrontendAccess {
 	 */
 	public static List<LispVal> wasmReactor(String source, String baseDir, boolean noGc) {
 		return CompileFrontend
-			.run(source, null, baseDir, List.of(), DistClient.createDefault(List.of()), List.of(), true, false, false,
-					false, true, noGc, false, null, false, false)
+			.run(source, null, null, baseDir, List.of(), DistClient.createDefault(List.of()), List.of(), true, false,
+					false, false, true, noGc, false, null, false, false)
 			.program();
 	}
 
@@ -109,8 +109,8 @@ public final class CompileFrontendAccess {
 	 */
 	public static List<LispVal> noGcComponent(String source, String baseDir) {
 		return CompileFrontend
-			.run(source, null, baseDir, List.of(), DistClient.createDefault(List.of()), List.of(), true, false, false,
-					true, false, true, false, null, false, false)
+			.run(source, null, null, baseDir, List.of(), DistClient.createDefault(List.of()), List.of(), true, false,
+					false, true, false, true, false, null, false, false)
 			.program();
 	}
 
@@ -130,7 +130,7 @@ public final class CompileFrontendAccess {
 		// DistClient.createDefault mirrors the CLI's default (Quicklisp, cached under
 		// ~/.rontolisp) and touches neither network nor disk unless the program actually
 		// ql:quickloads something -- a vendored system resolves against systemPath.
-		CompileFrontend.Result result = CompileFrontend.run(source, null, null, systemPath,
+		CompileFrontend.Result result = CompileFrontend.run(source, null, null, null, systemPath,
 				DistClient.createDefault(List.of()), List.of(), wasm, false, false, component, false, false, false,
 				null, false, false);
 		return new Program(result.program(), result.features());

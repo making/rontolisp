@@ -37,12 +37,23 @@ worth its blast radius is a result; land the measurement, not the change.
 
 ```
 Source string
-  -> LispReader (reader pkg) -> List<LispVal> (AST)
+  -> SourceLanguage (eval pkg): read + lower -> List<LispVal> (core forms, the IR)
     -> [LispMacroExpander] -> expanded AST               # cond/and/or/setf -> if/let/progn/setq/rplaca/rplacd
     -> LispEvaluator (eval pkg)                          # interpret
     -> JvmLispCompiler (codegen.jvm) -> byte[] (.class)
     -> WasmLispCompiler (codegen.wasm) -> byte[] (.wasm)
 ```
+
+A language is something that PRODUCES core forms and then joins the existing pipeline
+(`CompileFrontend.expand`, `LispEvaluator`), never something beside it. `SourceLanguage`
+is the one seam from user source to forms (`.kb/source-language.md`): it owns the read
+-- including the `#.` decision -- and picks the language per file from its extension,
+with a `--source-language` CLI override for the entry source, so one program may mix
+languages file by file. No class outside the seam reads user source through `LispReader`
+(`SourceLanguageSeamTest` pins this); library source shipped in the jar stays Common
+Lisp and keeps its direct reads, as do the runtime data reads and the `.asd` scans.
+No new package: the seam lives in `eval`, reachable from `cli`, `web` and the
+interpreter's `load` under the existing graph.
 
 `am.ik.jvm`, `am.ik.wasm`, `am.ik.wit`, `am.ik.gpu` and `am.ik.objc` are **language-independent**
 libraries; none may import rontolisp packages or external dependencies. `am.ik.gpu` is the

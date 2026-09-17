@@ -5,8 +5,8 @@ import java.util.List;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.reader.Features;
-import am.ik.rontolisp.reader.LispReader;
 
 /**
  * The REPL's shared prompt and read-eval step over the line buffer: when the accumulated
@@ -68,11 +68,11 @@ final class ReplBuffer {
 		try {
 			// #. read-time eval at the REPL: only a buffer textually containing #. pays
 			// for the marker read; each form's markers resolve just before it runs, the
-			// same timing interpret/loadFile use.
+			// same timing interpret/loadFile use. The REPL has no file, so it reads the
+			// default language through the source-language seam.
 			String source = buffer.toString();
-			boolean markers = source.contains("#.");
-			List<LispVal> exprs = markers ? LispReader.readAllWithReadEvalMarkers(source, Features.INTERPRETER)
-					: LispReader.readAllFromString(source);
+			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
+			List<LispVal> exprs = SourceLanguage.COMMON_LISP.read(source, Features.INTERPRETER, null);
 			// EVERY form in the buffer is echoed, right after it runs, and as a
 			// multiple-value consumer would see it: one value per line, as in any CL
 			// REPL ((floor 10 3) echoes 3 then 1; (values) echoes nothing). A form's
@@ -99,7 +99,7 @@ final class ReplBuffer {
 	// standard output mid-line (e.g. a print-family call without a trailing newline).
 	private static void freshLine(LispEvaluator evaluator) {
 		try {
-			evaluator.eval(LispReader.readAllFromString("(fresh-line)").get(0));
+			evaluator.eval(SourceLanguage.COMMON_LISP.read("(fresh-line)", Features.INTERPRETER, null).get(0));
 		}
 		catch (RuntimeException ignored) {
 			// Echo the result anyway; fresh-line is cosmetic.

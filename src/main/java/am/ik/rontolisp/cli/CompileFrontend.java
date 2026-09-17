@@ -28,6 +28,7 @@ import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.MetalLibrary;
 import am.ik.rontolisp.eval.SceneLibrary;
 import am.ik.rontolisp.eval.SocketsLibrary;
+import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.StdinLibrary;
 import am.ik.rontolisp.eval.TlsLibrary;
@@ -44,7 +45,6 @@ import am.ik.rontolisp.eval.WitImportInliner;
 import am.ik.rontolisp.eval.WitLibrary;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.reader.Features;
-import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -81,6 +81,8 @@ final class CompileFrontend {
 	 * Runs the front end.
 	 * @param source the program text
 	 * @param entryFile the path the text was read from, for diagnostics
+	 * @param sourceLanguage the {@code --source-language} override naming the entry
+	 * source's language, or {@code null} to pick it from the entry file's extension
 	 * @param baseDir the directory relative paths resolve against
 	 * @param systemPath the ASDF system search path
 	 * @param dists the Quicklisp-format distributions
@@ -98,10 +100,10 @@ final class CompileFrontend {
 	 * @param noPrune {@code --no-prune}
 	 * @return the expanded program and what a backend needs to know about it
 	 */
-	static Result run(String source, @Nullable String entryFile, @Nullable String baseDir, List<String> systemPath,
-			DistClient dists, List<String> declaredFeatures, boolean wasm, boolean servlet, boolean dynamic,
-			boolean component, boolean noWasi, boolean noGc, boolean hostFetch, @Nullable HostBoundary hostBoundary,
-			boolean reentrant, boolean noPrune) {
+	static Result run(String source, @Nullable String entryFile, @Nullable String sourceLanguage,
+			@Nullable String baseDir, List<String> systemPath, DistClient dists, List<String> declaredFeatures,
+			boolean wasm, boolean servlet, boolean dynamic, boolean component, boolean noWasi, boolean noGc,
+			boolean hostFetch, @Nullable HostBoundary hostBoundary, boolean reentrant, boolean noPrune) {
 		HostBoundary boundary = hostBoundary == null ? HostBoundary.ENVELOPE : hostBoundary;
 		// Inline top-level (load "path") forms at compile time: the compilers collect
 		// defuns in a static pass that a runtime load cannot feed, so a program split
@@ -172,8 +174,9 @@ final class CompileFrontend {
 		// #. read-time eval on the compile path: the marker read wraps each datum in a
 		// (%read-eval datum) marker that UserMacroExpander later resolves against the
 		// macro-time evaluator, per top-level form (the interpreter's loadFile timing).
-		List<LispVal> read = source.contains("#.") ? LispReader.readAllWithReadEvalMarkers(source, features, entryFile)
-				: LispReader.readAllFromString(source, features, entryFile);
+		// The read itself is the source-language seam's: the entry file's language
+		// (its extension, or the CLI override), read with the target's features.
+		List<LispVal> read = SourceLanguage.forFile(entryFile, sourceLanguage).read(source, features, entryFile);
 		List<LispVal> loaded = LoadInliner.inline(read, SourceLoader.fileSystem(), baseDir, systemPath, features,
 				dists);
 		return expand(loaded, features, baseDir, wasm, dynamic, component, noWasi, noGc, hostFetch, boundary, reentrant,

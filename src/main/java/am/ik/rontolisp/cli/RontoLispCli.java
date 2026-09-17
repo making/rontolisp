@@ -35,11 +35,11 @@ import am.ik.rontolisp.eval.LispEvalException;
 import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.ObjcInterop;
+import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.VecSimd;
 import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.reader.Features;
-import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -139,6 +139,14 @@ public final class RontoLispCli {
 		// names no feature of ours (see declaredFeatures).
 		List<String> features = declaredFeatures(options.get("--feature"));
 
+		// --source-language NAME: the entry source's language, overriding the pick
+		// from its extension. Parsed (not just carried) here so a misspelling fails
+		// fast, before any file is read.
+		String sourceLanguage = options.get("--source-language");
+		if (sourceLanguage != null) {
+			SourceLanguage.parse(sourceLanguage);
+		}
+
 		// -e/--eval "FORMS": the program is the argument itself rather than a file, and
 		// nothing downstream can tell the difference -- it interprets, and with -o it
 		// compiles. Only what a file itself provides is missing: a directory for a
@@ -204,7 +212,7 @@ public final class RontoLispCli {
 					options.contains("--host-random"), options.contains("--host-fetch"),
 					options.contains("--reentrant"),
 					options.contains("--host-boundary") ? HostBoundary.parse(options.get("--host-boundary")) : null,
-					JvmArtifactOptions.from(options), inputFile);
+					JvmArtifactOptions.from(options), inputFile, sourceLanguage);
 		}
 		else {
 			// A side-artifact flag names a file to write BESIDE the output, so without
@@ -235,7 +243,7 @@ public final class RontoLispCli {
 			}
 			interpret(source, baseDir, systemPath, dists, features, options.contains("--simd"),
 					options.contains("--blas"), options.contains("--gpu"), options.contains("--parallel"), inputFile,
-					commandLine(inputFile, options.arguments()));
+					commandLine(inputFile, options.arguments()), sourceLanguage);
 		}
 	}
 
@@ -495,7 +503,7 @@ public final class RontoLispCli {
 
 	private void interpret(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
 			List<String> declaredFeatures, boolean simd, boolean blas, boolean gpu, boolean parallel,
-			@Nullable String entryFile, List<String> commandLine) {
+			@Nullable String entryFile, List<String> commandLine, @Nullable String sourceLanguage) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setLoadBaseDir(baseDir);
 		evaluator.setSystemPath(systemPath);
@@ -520,17 +528,13 @@ public final class RontoLispCli {
 		}
 		// #. read-time eval: only sources textually containing #. pay for the marker
 		// read; each top-level form's markers resolve just before it evaluates, the
-		// same timing the runtime loadFile uses.
-		if (source.contains("#.")) {
-			for (LispVal expr : LispReader.readAllWithReadEvalMarkers(source, evaluator.features(), entryFile)) {
-				evaluator.eval(evaluator.resolveReadTimeEvalInCode(expr));
-			}
-			this.out.flush();
-			return;
-		}
-		List<LispVal> exprs = LispReader.readAllFromString(source, evaluator.features(), entryFile);
+		// same timing the runtime loadFile uses. Both the read and the #. question
+		// are the source-language seam's, in the entry file's language.
+		SourceLanguage language = SourceLanguage.forFile(entryFile, sourceLanguage);
+		List<LispVal> exprs = language.read(source, evaluator.features(), entryFile);
+		boolean markers = SourceLanguage.usesReadEvalMarkers(source);
 		for (LispVal expr : exprs) {
-			evaluator.eval(expr);
+			evaluator.eval(markers ? evaluator.resolveReadTimeEvalInCode(expr) : expr);
 		}
 		// A program whose last write is a raw octet (write-byte to standard output) has
 		// nothing left to flush it: an auto-flushing PrintStream only drains on a
@@ -543,11 +547,11 @@ public final class RontoLispCli {
 			OptimizeLevel optimize, boolean noGc, boolean simd, boolean blas, boolean gpu, boolean parallel,
 			boolean noPrune, boolean noMain, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch,
 			boolean reentrant, @Nullable HostBoundary hostBoundary, JvmArtifactOptions jvmArtifact,
-			@Nullable String entryFile) {
+			@Nullable String entryFile, @Nullable String sourceLanguage) {
 		CompileDiagnostics.recording(() -> {
 			compileRecorded(source, baseDir, systemPath, dists, declaredFeatures, outputFile, dynamic, component,
 					noWasi, optimize, noGc, simd, blas, gpu, parallel, noPrune, noMain, wit, jsGlue, hostRandom,
-					hostFetch, reentrant, hostBoundary, jvmArtifact, entryFile);
+					hostFetch, reentrant, hostBoundary, jvmArtifact, entryFile, sourceLanguage);
 			return null;
 		});
 	}
@@ -557,7 +561,7 @@ public final class RontoLispCli {
 			OptimizeLevel optimize, boolean noGc, boolean simd, boolean blas, boolean gpu, boolean parallel,
 			boolean noPrune, boolean noMain, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch,
 			boolean reentrant, @Nullable HostBoundary hostBoundary, JvmArtifactOptions jvmArtifact,
-			@Nullable String entryFile) {
+			@Nullable String entryFile, @Nullable String sourceLanguage) {
 		// --emit-wit describes a component's typed world, so it is meaningless for any
 		// other
 		// output; fail fast instead of silently ignoring the request.
@@ -698,9 +702,9 @@ public final class RontoLispCli {
 		// macro expansion, the library splice chain, the WIT lowerings, the boundp fold
 		// and the library tree-shaker -- in the one place all four backends and the
 		// embedded JVM seam (JvmSourceCompiler) share (CompileFrontend).
-		CompileFrontend.Result frontend = CompileFrontend.run(source, entryFile, baseDir, systemPath, dists,
-				declaredFeatures, outputFile.endsWith(".wasm"), outputFile.endsWith(".war"), dynamic, component, noWasi,
-				noGc, hostFetch, hostBoundary, reentrant, noPrune);
+		CompileFrontend.Result frontend = CompileFrontend.run(source, entryFile, sourceLanguage, baseDir, systemPath,
+				dists, declaredFeatures, outputFile.endsWith(".wasm"), outputFile.endsWith(".war"), dynamic, component,
+				noWasi, noGc, hostFetch, hostBoundary, reentrant, noPrune);
 		List<LispVal> program = frontend.program();
 		Features features = frontend.features();
 		boolean serve = frontend.serve();
@@ -1238,6 +1242,13 @@ public final class RontoLispCli {
 		this.out.println("                     it also selects the branches that call that implementation's");
 		this.out.println("                     internals. The rontolisp features are refused: they describe");
 		this.out.println("                     the build, which -o and the flags beside it decide.");
+		this.out.println("  --source-language NAME");
+		this.out.println("                     The entry source's language, overriding the pick from");
+		this.out.println("                     its extension (a (load ...)ed file is still picked by");
+		this.out.println("                     its own extension, so one program may mix languages");
+		this.out.println("                     file by file). Today only common-lisp, which every");
+		this.out.println("                     extension reads as anyway: the flag is the seam a");
+		this.out.println("                     second language arrives through.");
 	}
 
 	private static String readFile(String path) {

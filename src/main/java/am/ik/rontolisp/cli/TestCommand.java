@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Locale;
 
 import am.ik.rontolisp.eval.AsdfSystems;
+import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.reader.Features;
 import org.jspecify.annotations.Nullable;
@@ -94,7 +95,7 @@ final class TestCommand {
 			return asd ? system(stripExtension(path), baseDir, systemPath, reporter, colors)
 					: file(path, baseDir, systemPath, reporter, colors);
 		}
-		if (asd || target.endsWith(".lisp")) {
+		if (asd || SourceLanguage.isSourceFile(target)) {
 			return fail(target + ": no such file");
 		}
 		if (Files.isDirectory(path)) {

@@ -1534,7 +1534,7 @@ public final class AsdfSystems {
 			SourceLoader loader, Features features) {
 		String dir = primary.packageInferredDir();
 		String file = (dir == null || dir.isEmpty() ? "" : dir + "/") + name.substring(primary.name().length() + 1)
-				+ ".lisp";
+				+ SourceLanguage.COMMON_LISP.defaultExtension();
 		String path = SourceLoader.resolve(primary.baseDir(), file);
 		String source;
 		try {
