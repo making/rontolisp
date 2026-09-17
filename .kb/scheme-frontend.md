@@ -253,6 +253,13 @@ family, bodies) pass the destination down; every other form is a leaf `(setq R v
   carrier variables, `(tagbody L (let ((i C)) ...))`, because each iteration's closure must
   capture ITS binding. Detected by counting the `lambda`s the body lowering emitted, not by
   scanning for the word `lambda` (an `(import (prefix ..))` renames it).
+- **So does a loop jumped to from where a loop variable is shadowed**
+  (`(let ((count (+ count 1))) (fill (cdr path) count))`, an inner named `let` reusing the
+  outer's variable name): a variable keeps its Scheme spelling, so the in-place `setq`
+  there assigned the INNER binding and the loop never advanced. `Target.shadowedFrom`
+  compares the jump site's binding of each name with the loop's; a mismatch re-lowers the
+  loop in the carrier shape, whose fresh names nothing can shadow. Found by
+  `examples/scheme/collatz.scm`.
 - Mutual and higher-order tail calls are ordinary calls (depths below).
 
 ## Traps
