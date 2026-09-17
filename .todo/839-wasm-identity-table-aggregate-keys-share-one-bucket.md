@@ -14,7 +14,7 @@ and writing a 50,000-element list took 62 s.
    backends. Record the numbers in `.kb/hash-tables.md`.
 2. Design an identity hash for wasm GC aggregates that survives the representation (e.g.
    a lazily assigned hash field in the struct header, or a side counter), weighing the
-   per-object size cost against `.kb/wasm-size` budgets -- a cost paid by every cons is
+   per-object size cost against the size numbers of `.kb/size-measurement.md` -- a cost paid by every cons is
    likely not worth it; one paid only by keyed objects may be.
 3. If no design is worth its size, write the measurement and the rejected designs into the
    kb and close as such.
