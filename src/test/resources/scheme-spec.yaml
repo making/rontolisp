@@ -787,3 +787,84 @@ cases:
       2
       mine
       (((3)) 7)
+  - name: eval-evaluates-a-datum-in-the-one-global-environment
+    source: |
+      (define env (interaction-environment))
+      (define (execute exp) (apply (eval (car exp) user-initial-environment) (cdr exp)))
+      (write (list (execute '(> 5 3)) (execute '(< 5 3)) (execute '(+ 1 2 3)))) (newline)
+      (define (square-it x) (* x x))
+      (define eval-counter 10)
+      (write (list (eval '(square-it 7) env) (eval 'eval-counter env) ((eval 'square-it env) 3)
+                   (eval '(if (null? '()) 'empty 'full) env) (eval 5 env) (eval "s" env) (eval ''q env)))
+      (newline)
+      (define (list-copy l) (list 'mine l))
+      (write (list (eval '(list-copy '(1)) env) (eval '(reverse '(1 2)) env))) (newline)
+      (display (list env (eq? env system-global-environment) (eq? env (scheme-report-environment 5))
+                     (eq? env (environment '(scheme base) '(only (scheme write) display)))))
+      (newline)
+      (write (map (lambda (e) (eval e env)) '((+ 1 1) (string-append "a" "b") (symbol->string 'sym))))
+      (newline)
+    expected: |
+      (#t #f 6)
+      (49 10 9 empty 5 "s" q)
+      ((mine (1)) (2 1))
+      (#[environment] #t #t #t)
+      (2 "ab" "sym")
+  - name: eval-defines-into-a-table-of-its-own-and-its-loops-run-in-constant-stack
+    source: |
+      (write (eval '(begin (define (fact n) (if (= n 0) 1 (* n (fact (- n 1))))) (fact 10)) env)) (newline)
+      (write (list (eval '(fact 5) env) (eval '(define x-in-eval 1) env) (eval 'x-in-eval env))) (newline)
+      (eval '(set! x-in-eval 2) env)
+      (eval '(set! eval-counter 11) env)
+      (write (list (eval 'x-in-eval env) (eval 'eval-counter env) eval-counter)) (newline)
+      (write (eval '(let loop ((i 0)) (if (= i 100000) i (loop (+ i 1)))) env)) (newline)
+      (write (eval '(begin (define (count-down n acc) (if (= n 0) acc (count-down (- n 1) (+ acc 1))))
+                           (count-down 100000 0))
+                   env))
+      (newline)
+      (write (eval '(do ((i 0 (+ i 1)) (s 0 (+ s i))) ((= i 100000) s)) env)) (newline)
+      (write (eval '(let loop ((i 0) (acc '()))
+                      (if (= i 3) (map (lambda (t) (t)) acc) (loop (+ i 1) (cons (lambda () i) acc))))
+                   env))
+      (newline)
+      (write (eval '(let loop ((i 0)) (if (< i 3) (cons i (loop (+ i 1))) '())) env)) (newline)
+      (write (eval '(let loop ((i 0)) (if (< i 3) (loop (+ i 1)) loop)) env)) (newline)
+    expected: |
+      3628800
+      (120 #!unspecific 1)
+      (2 11 10)
+      100000
+      100000
+      4999950000
+      (2 1 0)
+      (0 1 2)
+      #<procedure>
+  - name: eval-knows-the-derived-forms-quasiquote-and-the-promise-syntax
+    source: |
+      (write (eval '(let* ((a 1) (b (+ a 1)))
+                      (letrec ((ev? (lambda (n) (if (= n 0) #t (od? (- n 1)))))
+                               (od? (lambda (n) (if (= n 0) #f (ev? (- n 1))))))
+                        (list a b (ev? 10) (od? 10))))
+                   env))
+      (newline)
+      (write (eval '(cond ((assv 2 '((1 . a) (2 . b))) => cdr) (else 'none)) env)) (newline)
+      (write (eval '(case (* 2 3) ((2 3 5 7) 'prime) ((1 4 6 8 9) 'composite)) env)) (newline)
+      (write (eval '(list (and 1 2) (and) (or #f 3) (or) (when #t 'w) (unless #t 'u) `(1 ,(+ 1 1) ,@(list 3 4)))
+                   env))
+      (newline)
+      (write (eval '(let ((x 1)) (define (get) x) (set! x 2) (get)) env)) (newline)
+      (write (eval '(list ((lambda args args) 1 2 3) ((lambda (a . rest) (list a rest)) 1 2 3)) env)) (newline)
+      (write (eval '(let ((if (lambda (a b c) (list a b c)))) (if 1 2 3)) env)) (newline)
+      (write (list (force (eval '(delay (+ 1 2)) env)) (stream-head (eval '(cons-stream 1 (cons-stream 2 '())) env) 2)))
+      (newline)
+      (write (eval '(call/cc (lambda (k) (+ 1 (k 42)))) env)) (newline)
+    expected: |
+      (1 2 #t #f)
+      b
+      composite
+      (2 #t 3 #f w #!unspecific (1 2 3 4))
+      2
+      ((1 2 3) (1 (2 3)))
+      (1 2 3)
+      (3 (1 2))
+      42

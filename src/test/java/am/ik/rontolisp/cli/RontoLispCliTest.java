@@ -1611,6 +1611,32 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void anErrorInsideSchemeEvalIsReportedInSchemeTerms() throws Exception {
+		// The evaluator behind eval spells its own messages through the Scheme printer,
+		// on the interpreter and the compiled backends alike (scheme-spec.yaml pins the
+		// values; the messages end the program, so they are pinned here).
+		for (String[] program : List.of(
+				new String[] { "(eval 'nothing (interaction-environment))", "Unbound variable: nothing" },
+				new String[] { "(eval '(if) (interaction-environment))", "Ill-formed special form: (if)" },
+				new String[] { "(eval '(define-record-type p (mk) p?) (interaction-environment))",
+						"Not supported inside eval: (define-record-type p (mk) p?)" },
+				new String[] { "(eval 1 2)", "eval: not an environment: 2" },
+				new String[] { "(eval '((lambda (a b) a) 1) (interaction-environment))",
+						"Wrong number of arguments: (a b) given (1)" },
+				new String[] { "(eval '(3 4) (interaction-environment))", "The object is not applicable: 3" },
+				new String[] { "(environment '(scheme char))", "environment: library is not available: (scheme char)" },
+				new String[] { "(eval 'if (interaction-environment))",
+						"Syntactic keyword may not be used as an expression: if" })) {
+			Path file = this.tempDir.resolve("eval-error.scm");
+			Files.writeString(file, program[0] + "\n");
+			String[] result = runReporting(file.toString());
+			assertThat(result[0]).as(program[0]).isEqualTo("1");
+			assertThat(result[1]).as(program[0]).isEmpty();
+			assertThat(result[2].trim()).as(program[0]).isEqualTo("Unhandled condition: " + program[1]);
+		}
+	}
+
+	@Test
 	void theHelpSaysSchemeIsExperimental() {
 		assertThat(runCli("", "-h")).contains("scheme (.scm) is EXPERIMENTAL");
 	}
