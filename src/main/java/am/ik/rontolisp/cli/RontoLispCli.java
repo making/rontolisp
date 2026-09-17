@@ -54,6 +54,8 @@ public final class RontoLispCli {
 
 	private int exitCode;
 
+	private @Nullable Boolean assumedTerminal;
+
 	/**
 	 * Create a new CLI instance.
 	 * @param in the input stream
@@ -69,7 +71,8 @@ public final class RontoLispCli {
 	 * it at 0 and reports failure by throwing, which {@code main} turns into one line on
 	 * standard error and exit code 1; the {@code format} subcommand instead has to
 	 * distinguish "these files are not formatted" (1) from "something went wrong" (2) so
-	 * it can be used as a CI gate.
+	 * it can be used as a CI gate, and a REPL reading from a pipe answers 1 when any form
+	 * failed -- it reported each failure and went on, so there is nothing to throw.
 	 * @return the exit code, 0 when there was nothing to report
 	 */
 	public int exitCode() {
@@ -380,18 +383,34 @@ public final class RontoLispCli {
 		}
 		// The REPL has no file to pick a language from: the override, else the default.
 		SourceSession session = new SourceSession(SourceLanguage.forFile(null, sourceLanguage));
-		StringBuilder buffer = new StringBuilder();
-		if (System.console() != null && isJLineAvailable()) {
-			JLineRepl.run(session, evaluator, this.out, buffer);
+		boolean systemTerminal = this.in == System.in && System.console() != null && System.console().isTerminal();
+		boolean terminal = this.assumedTerminal != null ? this.assumedTerminal : systemTerminal;
+		ReplBuffer repl = new ReplBuffer(session, evaluator, new ReplBuffer.Channels(this.out, System.err, terminal));
+		if (systemTerminal && isJLineAvailable()) {
+			JLineRepl.run(repl);
 		}
 		else {
-			replWithBufferedReader(session, evaluator, buffer);
+			replWithBufferedReader(repl);
+		}
+		// A piped session is a script runner: a form that failed makes the whole run
+		// fail, as a file's uncaught error does.
+		if (repl.failedOnAPipe()) {
+			this.exitCode = 1;
 		}
 	}
 
-	private void replWithBufferedReader(SourceSession session, LispEvaluator evaluator, StringBuilder buffer) {
+	/**
+	 * Makes the REPL behave as on a terminal (prompts, failures on standard output) or as
+	 * on a pipe, whatever the input stream is: a test drives both from a byte array.
+	 * @param terminal whether to behave as on a terminal
+	 */
+	void assumeTerminal(boolean terminal) {
+		this.assumedTerminal = terminal;
+	}
+
+	private void replWithBufferedReader(ReplBuffer repl) {
 		BufferedReader reader = new BufferedReader(new InputStreamReader(this.in));
-		this.out.print(ReplBuffer.prompt(session, evaluator, buffer));
+		this.out.print(repl.prompt());
 		this.out.flush();
 		try {
 			String line;
@@ -399,10 +418,9 @@ public final class RontoLispCli {
 				if ("(quit)".equals(line.trim())) {
 					break;
 				}
-				buffer.append(line).append('\n');
-				if (session.isComplete(buffer.toString())) {
-					ReplBuffer.eval(session, evaluator, this.out, buffer);
-					this.out.print(ReplBuffer.prompt(session, evaluator, buffer));
+				repl.accept(line);
+				if (repl.isEmpty()) {
+					this.out.print(repl.prompt());
 					this.out.flush();
 				}
 			}

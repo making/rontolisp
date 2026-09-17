@@ -35,6 +35,8 @@ help, the title of `doc/*/guides/scheme.md`). `--no-gc` is refused by name
 | `'()` | `NIL` | `&rest` lists, `apply` and every list primitive end in it |
 | `#t` | `T` | |
 | `#f` | the VALUE of `rontolisp::%scheme-false`, the symbol `\|#f\|`, bound by the first form of every lowered file | distinct from NIL; a symbol so quoted data, `case` and `equal?` need nothing special |
+| the unspecified value: an `effect` builtin, `set!`, the missing arm of `if`/`when`/`unless`, a `cond`/`case` with no clause taken, `(begin)` | the VALUE of `rontolisp::%scheme-unspecified`, the symbol `\|#!unspecific\|`, bound in the same first `setq`; `(progn effect U)` -- but the raw effect / `NIL` where the value is DISCARDED (`Context.discarded`: a body form before the last, a file's top-level form) | ONE object, so a REPL can skip it by value (`(define (g) (display "a"))` echoed `"a"`); not `NIL` (`(list (if #f #f))` has length 1) and true in a test. The spelling is escaped by `mangle` like `#f` and excluded by `symbol?`. Cost (2026-09-17): +93 B class / +26 B wasm per program (`hello`), nothing measurable on a 100M-iteration `when` loop. A missing arm is spelled `CORE_UNSPECIFIED` in desugarings |
+| `exit`, `emergency-exit` (`(scheme process-context)`, merged into the no-import default) | `%scheme-exit`: finish both output streams, then `%host-exit` with `#t`/none 0, `#f` 1, an integer's low 8 bits | the `uiop:quit` primitive (`.kb/uiop.md`), so all four backends end the process where the call stands -- `exit` does NOT run pending `dynamic-wind` afters either (stated deviation) |
 | `(if c a b)` | `(if (eq c false) b a)`; a predicate fuses: `(if (pair? x) ..)` -> `(if (consp x) ..)`, `and`/`or`/`not` compose | `SchemeBuiltins.Result`: `pred` (T/NIL) and `or-false` (value or NIL: `memq`, `assq`, `member`) fuse in a test and convert anywhere else -- `(if raw t false)` / `(or raw false)` |
 | top-level `(define x v)` | top-level `(setq x v)` | NEVER `defvar`: that makes the name special and a `let` of it leaks into callees (2 instead of 1) |
 | top-level procedure defined ONCE by a `lambda`, never `set!` | `defun`, called directly | keeps the direct call and the tree shaker. `set!` is collected by name, blind to scope: over-approximating only costs the direct call |
@@ -55,13 +57,13 @@ excludes strings (`vectorp` does not); `integer?` accepts `2.0`; `max`/`min` are
 when any argument is; `equal?` is its own helper (recurses into vectors, `eqv?` on
 records; CL's `equal` compares a general vector by identity and an instance slot-wise).
 
-## The library tags: `base`, `write`, `inexact`, `cxr`, `lazy` and `sicp`
+## The library tags: `base`, `write`, `inexact`, `cxr`, `lazy`, `process-context` and `sicp`
 
 `SchemeBuiltins` entries carry the R7RS library that exports them. `base`, `write`,
 `inexact`, `cxr` (the whole `(scheme cxr)` set, `caaar` through `cddddr`: every one a
-standard Common Lisp function of the same name) and `lazy` are
+standard Common Lisp function of the same name), `lazy` and `process-context` are
 `SchemeLowering.IMPORTABLE_LIBRARIES`: `(import (scheme <tag>))` names them, and a file
-with no import at all merges all five. Keywords carry a library too: `SYNTAX` is `base`,
+with no import at all merges all six. Keywords carry a library too: `SYNTAX` is `base`,
 `LAZY_SYNTAX` (`delay`, `delay-force`) `lazy`, `SICP_SYNTAX` (`cons-stream`) `sicp`.
 `sicp` (`true false nil` -- via `SchemeLowering.Constant`, not an `Entry`, since they are
 values, not procedures -- `filter reduce fold-left fold-right delete last-pair append!
@@ -170,14 +172,39 @@ names outlive each buffer; everything else is per buffer.
 - `(setq false '|#f|)` is emitted once, by the first buffer that lowers. `(import ...)` is
   accepted anywhere at the top level and only ADDS names (an R7RS REPL starts with
   everything visible; base and write are).
-- Echo: `SchemeTopLevel.echoes` is false for a definition, an import, a `set!` and a call
-  to an `effect` builtin (`display`, `newline`, `vector-set!`, `for-each`, ...: the fourth
-  result kind in `SchemeBuiltins`, lowered exactly like `value`). Values print through
+- Echo: `SchemeTopLevel.echoes` is false for a definition, an import and a record type --
+  forms with no value. Everything else is decided by the VALUE: `SourceSession.echo` skips
+  the unspecified object, whatever expression answered it (a syntactic rule on the head
+  missed every procedure of the user's own ending in `display`). A session lowers its
+  top-level forms in value context, a file in a discarding one. Values print through
   `%scheme-write`, CALLED on the value (`LispEvaluator.printThrough`) -- never quoted into
   a form, which the package resolver walks before evaluating and never finishes on a
   cyclic value (the Common Lisp echo with a `print-object` method had the same bug).
   Continuation is "the reader ran out of input"
   (`LispReadException.isEndOfFile`), so `#;`, `#| |#` and `#\(` need no second rule.
+- **Applying a non-procedure** is reported by `SourceSession.describe` as
+  `#f is not a procedure; operands: (2 3)`. The interpreter's `apply` throws
+  `eval/LispApplyException` (a `LispEvalException` with the SAME message and condition
+  class Common Lisp saw -- `The function #f is undefined` for a symbol designator,
+  `Not a function: 3` otherwise -- plus the value and the evaluated arguments), found
+  through the cause chain because the handler-bind seam may wrap it. Interpreter REPL only:
+  file mode keeps the Common Lisp wording, and the compiled backends fail differently
+  again (a `ClassCastException` on the JVM, a trap on wasm), for Common Lisp too.
+
+## The shared REPL loop (`cli/ReplBuffer`), both languages
+
+**A terminal is a person, a pipe is a script.** `RontoLispCli.repl` calls it a terminal when
+`in` is `System.in` and `System.console()` is non-null and `isTerminal()` (a test forces
+either with `assumeTerminal`). On a terminal: a prompt per fresh form, `Error:` on stdout
+between the prompts, status 0. On a pipe: no prompt at all (it was one per form AND per
+blank or comment line, `scheme> scheme> scheme> 25`), `Error:` on stderr after flushing
+stdout, and status 1 at end of input when any form failed -- what a file's uncaught error
+gives. JLine is used only on the real system terminal. `LispExitSignal` escapes the loop
+(`(exit n)`, `(uiop:quit n)`: it used to be caught as `Error: null` and the session went on)
+and its status wins over an earlier failure. A malformed buffer (`(+ 5 6) garbage)`) is
+reported whole and nothing in it runs: the buffer is read before it is evaluated (pinned).
+SICP corpus (`.todo/artefacts/828-sicp-sample-corpus-harness/`, 2026-09-17): file mode 1,307 exit 0 before and
+after, one stdout difference (a timing print); REPL transcripts no longer contain a prompt.
 
 ## Destination-driven lowering (`SchemeLowering.lower`)
 
@@ -304,8 +331,12 @@ when a buffer is complete), `SchemeReaderTest`, `SchemeNamesTest`,
 `RontoLispCliTest` (`aSchemeFileIsPickedByItsExtension`, `aCommonLispProgramLoadsASchemeFile`,
 `aSchemeSyntaxErrorNamesItsPositionOnEveryPath`, `aSchemeProgramIsRefusedByTheScalarBackend`,
 `anUncaughtSchemeErrorReportsItsMessageAndIrritants`,
-`aSchemeTranscendentalWithAComplexAnswerIsRefusedByName`, the four `theSchemeRepl...` transcripts, the
-first of which replays its input as a FILE and compares, `aCyclicValueIsEchoedWithoutKillingTheSession`),
+`aSchemeTranscendentalWithAComplexAnswerIsRefusedByName`, the `theSchemeRepl...` transcripts, the
+first of which replays its input as a FILE and compares, `aCyclicValueIsEchoedWithoutKillingTheSession`,
+`aPipedReplWritesNoPromptForEitherLanguage`, `aTerminalReplPromptsOncePerFreshForm`,
+`aPipedReplReportsFailuresOnStandardErrorAndEndsNonZero`, `exitEndsTheSessionWithItsStatusInEitherLanguage`),
+`SchemeSpecE2eTest.exitEndsTheProcessWithItsStatusOnEveryBackend` (one program per status; the JVM
+leg in a child process, since `exit` there is `System.exit`),
 `DocExamplesTest` (a ```` ```scheme ```` fence is a
 whole program whose stdout is asserted).
 Probes behind the first version of this table: `.todo/artefacts/825-minimal-experimental-scheme-front-end/`.

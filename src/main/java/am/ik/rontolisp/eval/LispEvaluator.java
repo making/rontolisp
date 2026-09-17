@@ -11120,7 +11120,12 @@ public final class LispEvaluator {
 	private LispVal apply(LispVal function, List<LispVal> args, Environment env) {
 		if (function instanceof LispSymbol sym) {
 			// A symbol is a function designator naming its global function (CL-style).
-			function = resolveFunction(sym.name());
+			try {
+				function = resolveFunction(sym.name());
+			}
+			catch (LispEvalException ex) {
+				throw new LispApplyException(ex, sym, args);
+			}
 		}
 		if (function instanceof LispFunction builtIn) {
 			// The signal-point seam: an error a BUILT-IN raises runs the handler-bind
@@ -11218,7 +11223,7 @@ public final class LispEvaluator {
 				}
 			}
 		}
-		throw new LispEvalException("Not a function: " + function.print());
+		throw new LispApplyException(new LispEvalException("Not a function: " + function.print()), function, args);
 	}
 
 	// Scans a keyword/value argument tail starting at the given index for the named

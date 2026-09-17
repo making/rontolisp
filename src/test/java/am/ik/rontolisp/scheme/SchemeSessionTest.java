@@ -29,7 +29,7 @@ class SchemeSessionTest {
 	void theFalseValueIsBoundOncePerSession() {
 		SchemeSession session = Scheme.session();
 		assertThat(lowered(session, "1")).isEqualTo("""
-				mute (SETQ RONTOLISP::%SCHEME-FALSE '|#f|)
+				mute (SETQ RONTOLISP::%SCHEME-FALSE '|#f| RONTOLISP::%SCHEME-UNSPECIFIED '|#!unspecific|)
 				echo 1""");
 		assertThat(lowered(session, "2")).isEqualTo("echo 2");
 	}
@@ -68,13 +68,15 @@ class SchemeSessionTest {
 	}
 
 	@Test
-	void whatHasNoValueToShowIsMute() {
+	void aDefinitionHasNoValueAndAnEffectAnswersTheUnspecifiedObject() {
 		SchemeSession session = Scheme.session();
 		session.read("(define x 1)");
-		assertThat(lowered(session, "(set! x 2) (display x) (newline) (import (scheme base)) x")).isEqualTo("""
-				mute (SETQ |x| 2)
-				mute (RONTOLISP::%SCHEME-DISPLAY |x|)
-				mute (TERPRI)
+		// Whether an expression's value is shown is the VALUE's to say: the echo skips
+		// the
+		// unspecified object, however the expression producing it was spelled.
+		assertThat(lowered(session, "(set! x 2) (display x) (import (scheme base)) x")).isEqualTo("""
+				echo (PROGN (SETQ |x| 2) RONTOLISP::%SCHEME-UNSPECIFIED)
+				echo (PROGN (RONTOLISP::%SCHEME-DISPLAY |x|) RONTOLISP::%SCHEME-UNSPECIFIED)
 				mute\s
 				echo |x|""");
 	}

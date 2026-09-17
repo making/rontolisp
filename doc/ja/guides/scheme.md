@@ -1,7 +1,8 @@
 # Scheme（実験的）
 
 **実験的機能です。** rontolisp は R7RS-small の一部 -- `(scheme base)`、
-`(scheme write)`、`(scheme inexact)`、`(scheme cxr)`、`(scheme lazy)` -- を、Scheme プログラムを全バックエンドで動かせる最小限の範囲で読みます。
+`(scheme write)`、`(scheme inexact)`、`(scheme cxr)`、`(scheme lazy)`、`(scheme process-context)` の `exit`
+-- を、Scheme プログラムを全バックエンドで動かせる最小限の範囲で読みます。
 準拠は意図的に部分的で、互換性の約束はありません。Scheme プログラムを JVM や WebAssembly で
 試す用途に使い、動き続けてほしいものは Common Lisp で書いてください。
 
@@ -41,9 +42,13 @@ rontolisp prog.txt --source-language scheme        # any extension
 ## REPL
 
 ファイルを指定せずに `--source-language scheme` を付けると Scheme の REPL が起動します。
-値は `write` の表記でエコーされます。定義、`set!`、副作用のために呼ぶ手続き（`display`）は
-何もエコーしません。フォームは複数行にまたがれます。エラーはスタックオーバーフローも含めて
-報告され、定義を保ったままセッションが続きます。
+値は `write` の表記でエコーされます。定義は何もエコーせず、未規定値 -- `display`、`set!`、
+`for-each`、どの分岐も選ばれなかった `if` が返すもの。自作の手続きの末尾がそれらでも同じ --
+もエコーしません。フォームは複数行にまたがれます。エラーはスタックオーバーフローも含めて
+報告され、定義を保ったままセッションが続きます。`(exit)` で終了します。
+入力をパイプで与えると、[Common Lisp の REPL](../getting-started/repl.md) と同じく
+スクリプト実行器になります: プロンプトを出さず、エラーは標準エラーへ、失敗したフォームが
+あれば終了ステータスは 1 です。
 
 ```console
 $ rontolisp --source-language scheme
@@ -55,10 +60,13 @@ scheme> (square 5)
 -5
 scheme> (list #t #f '() 'Sym)
 (#t #f () Sym)
-scheme> (quit)
+scheme> (define (show x) (display x) (newline))
+scheme> (show 'done)
+done
+scheme> (exit)
 ```
 
-これら 5 ライブラリがエクスポートする名前 -- それに加えて、後述の
+これら 6 ライブラリがエクスポートする名前 -- それに加えて、後述の
 どの `(import ...)` にも属さない SICP 互換名 -- は最初からすべて見えており、
 プロンプトで入力した `(import ...)` は名前を追加するだけです。別々のプロンプトで入力した
 定義は、1 つのファイルに書いた場合と同じく、順序によらず互いを参照できます。フォームは
@@ -77,8 +85,8 @@ scheme> (quit)
   `let*`、`letrec`、`letrec*`、名前付き `let`、`do`、`begin`、`set!`、`quote`、`quasiquote`、
   `let-values`、`let*-values`、`define-record-type`（トップレベルのみ）、`delay`、
   `delay-force`、および
-  `(import (scheme base) (scheme write) (scheme inexact) (scheme cxr) (scheme lazy))`
-  （`only` / `except` / `prefix` / `rename` 可）。
+  `(import (scheme base) (scheme write) (scheme inexact) (scheme cxr) (scheme lazy)
+  (scheme process-context))`（`only` / `except` / `prefix` / `rename` 可）。
 - **手続き**: `eq? eqv? equal?`; `+ - * / = < > <= >= quotient remainder modulo
   floor-quotient floor-remainder truncate-quotient truncate-remainder abs min max gcd lcm
   expt square floor ceiling round truncate zero? positive? negative? odd? even? number?
@@ -93,7 +101,8 @@ scheme> (quit)
   vector-length vector-ref vector-set! vector->list list->vector vector-fill!`;
   `procedure? apply map for-each call/cc call-with-current-continuation dynamic-wind
   values call-with-values error`; `display write newline write-char write-string`
-  （現在の出力ポートのみ）。`write` と `display` は循環するリストやベクタをデータラベル付きで
+  （現在の出力ポートのみ）; `exit emergency-exit`（`#t` または引数なしはステータス 0、
+  `#f` は 1、整数はその下位 8 ビット）。`write` と `display` は循環するリストやベクタをデータラベル付きで
   `#0=(a b c . #0#)` のように書きます。循環のない共有構造は出現のたびに書き出します。
 - **SICP 互換、R7RS ではない**: `true false nil`（リテラルではなく普通の変数）、
   `filter reduce fold-left fold-right delete last-pair append! list-index 1+ -1+ random
@@ -102,8 +111,8 @@ scheme> (quit)
   stream->list stream-head stream-tail stream-ref stream-map stream-for-each stream-filter
   stream-append`。ストリームは `'()` か、cdr がプロミスであるペアなので、
   `the-empty-stream` は `'()`、`stream-null?` は `null?` です。これらは `(import ...)` を
-  一切書かないプログラムでのみ見える -- 5 ライブラリと同じ扱いだが、どの import もこれらを名指しできないため、明示的な import リストがあると
-  届かない。
+  一切書かないプログラムでのみ見える -- 6 ライブラリと同じ扱いだが、どの import もこれらを
+  名指しできないため、明示的な import リストがあると届かない。
 
 ```scheme
 (display (list true false nil (cadddr '(1 2 3 4)))) (newline)
@@ -183,7 +192,10 @@ once (42 42)
   捕捉する `guard` はありません。
 - レコードは Common Lisp の `#S(...)` 構文で表示されます。`equal?` はレコードを同一性で
   比較します。
-- `write` は `'x` を `(quote x)` と表示します。
+- `write` は `'x` を `(quote x)` と、未規定値を `#!unspecific` と表示します。未規定値は
+  1 つのオブジェクトで、条件としては真です。
+- `exit` は `emergency-exit` と同じくその場でプロセスを終了します: 囲んでいる
+  `dynamic-wind` の `after` は実行されません。
 - 複素数はありません: `(sqrt -4)`、`(log -1)`、`(asin 2)` は手続き名を挙げたエラーで
   プログラムを終了します。
 - 不正確な引数に対する `exp`、`log`、`sin`、`cos`、`tan`、`asin`、`acos`、`atan` の結果は、

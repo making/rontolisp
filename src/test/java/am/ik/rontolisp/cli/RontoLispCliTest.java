@@ -53,9 +53,28 @@ class RontoLispCliTest {
 	 * {@code System.exit}, so it cannot be called from a test JVM.
 	 */
 	private String[] runReporting(String... args) {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		return runReporting(new RontoLispCli(new ByteArrayInputStream(new byte[0]), new PrintStream(this.stdout)),
+				args);
+	}
+
+	private final ByteArrayOutputStream stdout = new ByteArrayOutputStream();
+
+	/**
+	 * A REPL session through the reporting wrapper, fed the input as a PIPE feeds it (no
+	 * prompt, failures on standard error) or as a TERMINAL does: {@code {exitCode,
+	 * stdout, stderr}}.
+	 */
+	private String[] runSession(boolean terminal, String input, String... args) {
+		RontoLispCli cli = new RontoLispCli(new ByteArrayInputStream(input.getBytes(StandardCharsets.UTF_8)),
+				new PrintStream(this.stdout, true, StandardCharsets.UTF_8));
+		cli.assumeTerminal(terminal);
+		return runReporting(cli, args);
+	}
+
+	private String[] runReporting(RontoLispCli cli, String... args) {
+		ByteArrayOutputStream out = this.stdout;
+		out.reset();
 		ByteArrayOutputStream err = new ByteArrayOutputStream();
-		RontoLispCli cli = new RontoLispCli(new ByteArrayInputStream(new byte[0]), new PrintStream(out));
 		PrintStream oldErr = System.err;
 		System.setErr(new PrintStream(err));
 		int code;
@@ -620,25 +639,87 @@ class RontoLispCliTest {
 	@Test
 	void replEchoesEveryValueOnItsOwnLine() {
 		// As in any CL REPL: (floor 10 3) echoes the quotient AND the remainder.
-		assertThat(runCli("(floor 10 3)\n")).contains("3\n1\n");
-		assertThat(runCli("(values 1 2 3)\n")).contains("1\n2\n3\n");
-		assertThat(runCli("(defun f () (values 1 2))\n(f)\n")).contains("1\n2\n");
+		assertThat(runCli("(floor 10 3)\n")).isEqualTo("3\n1\n");
+		assertThat(runCli("(values 1 2 3)\n")).isEqualTo("1\n2\n3\n");
+		assertThat(runCli("(defun f () (values 1 2))\n(f)\n")).isEqualTo("F\n1\n2\n");
 		// No values at all echoes nothing, and a single value stays a single line.
-		assertThat(runCli("(values)\n")).isEqualTo("CL-USER> CL-USER> ");
-		assertThat(runCli("(+ 1 2)\n")).isEqualTo("CL-USER> 3\nCL-USER> ");
+		assertThat(runCli("(values)\n")).isEmpty();
+		assertThat(runCli("(+ 1 2)\n")).isEqualTo("3\n");
 		// Two forms on one line echo twice, as SBCL does reading them one at a time,
 		// and each form's own output precedes its own value.
-		assertThat(runCli("(values 1 2) (+ 3 4)\n")).isEqualTo("CL-USER> 1\n2\n7\nCL-USER> ");
-		assertThat(runCli("(print 'a) (print 'b)\n")).isEqualTo("CL-USER> A\nA\nB\nB\nCL-USER> ");
+		assertThat(runCli("(values 1 2) (+ 3 4)\n")).isEqualTo("1\n2\n7\n");
+		assertThat(runCli("(print 'a) (print 'b)\n")).isEqualTo("A\nA\nB\nB\n");
 	}
 
 	@Test
-	void replPromptNamesTheCurrentPackage() {
+	void aPipedReplWritesNoPromptForEitherLanguage() {
+		// A pipe is a script runner: stdout is the values and the program's own output,
+		// nothing else -- not a prompt per form, and not one per blank or comment line.
+		assertThat(runCli("\n; a comment\n(* 5 5)\n\n")).isEqualTo("25\n");
+		assertThat(runCli("\n; a comment\n(* 5 5)\n\n", "--source-language", "scheme")).isEqualTo("25\n");
+	}
+
+	@Test
+	void aTerminalReplPromptsOncePerFreshForm() {
 		// The prompt is the current package, as in any CL REPL: an (in-package ...)
 		// typed at one prompt shows at the next, so which package a bare symbol
 		// interns into is never invisible.
-		assertThat(runCli("(defpackage :app (:use :cl))\n(in-package :app)\n(+ 1 2)\n"))
+		assertThat(runSession(true, "(defpackage :app (:use :cl))\n(in-package :app)\n(+ 1 2)\n")[1])
 			.isEqualTo("CL-USER> APP\nCL-USER> :APP\nAPP> 3\nAPP> ");
+		// A form typed over two lines is answered at one prompt.
+		assertThat(runSession(true, "(+ 1\n 2)\n(define x 1)\n", "--source-language", "scheme")[1])
+			.isEqualTo("scheme> 3\nscheme> scheme> ");
+	}
+
+	@Test
+	void aPipedReplReportsFailuresOnStandardErrorAndEndsNonZero() {
+		for (String[] session : List.of(runSession(false, "(car 1)\n(+ 1 2)\n"),
+				runSession(false, "(car 1)\n(+ 1 2)\n", "--source-language", "scheme"))) {
+			assertThat(session[0]).isEqualTo("1");
+			assertThat(session[1]).isEqualTo("3\n");
+			assertThat(session[2]).startsWith("Error: car ").endsWith("\n").hasLineCount(1);
+		}
+		assertThat(runSession(false, "(+ 1 2)\n")[0]).isEqualTo("0");
+		// On a terminal the report stays between the prompts, and the status is 0: a
+		// person saw it.
+		String[] terminal = runSession(true, "(car 1)\n(+ 1 2)\n", "--source-language", "scheme");
+		assertThat(terminal[0]).isEqualTo("0");
+		assertThat(terminal[1]).startsWith("scheme> Error: car ").endsWith("\nscheme> 3\nscheme> ");
+		assertThat(terminal[2]).isEmpty();
+	}
+
+	@Test
+	void exitEndsTheSessionWithItsStatusInEitherLanguage() {
+		String[] scheme = runSession(false, "(display \"a\")\n(exit 3)\n(display \"never\")\n", "--source-language",
+				"scheme");
+		assertThat(scheme[0]).isEqualTo("3");
+		assertThat(scheme[1]).isEqualTo("a\n");
+		assertThat(runSession(false, "(exit)\n", "--source-language", "scheme")[0]).isEqualTo("0");
+		assertThat(runSession(false, "(exit #t)\n", "--source-language", "scheme")[0]).isEqualTo("0");
+		assertThat(runSession(false, "(exit #f)\n", "--source-language", "scheme")[0]).isEqualTo("1");
+		assertThat(runSession(false, "(emergency-exit 300)\n", "--source-language", "scheme")[0]).isEqualTo("44");
+		// The status an exit asks for wins over a failure reported before it.
+		assertThat(runSession(false, "(car 1)\n(exit 0)\n", "--source-language", "scheme")[0]).isEqualTo("0");
+		// It used to be reported as "Error: null" and the session went on.
+		String[] lisp = runSession(false, "(+ 1 2)\n(uiop:quit 4)\n5\n");
+		assertThat(lisp[0]).isEqualTo("4");
+		assertThat(lisp[1]).isEqualTo("3\n");
+		assertThat(lisp[2]).isEmpty();
+	}
+
+	@Test
+	void anExitInASchemeFileEndsTheProcessWithItsStatus() throws Exception {
+		Path program = this.tempDir.resolve("exits.scm");
+		Files.writeString(program, """
+				(import (scheme base) (scheme write) (scheme process-context))
+				(display "before") (newline)
+				(dynamic-wind (lambda () #t) (lambda () (exit 7)) (lambda () (display "after")))
+				(display "never")
+				""");
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("7");
+		assertThat(result[1]).isEqualTo("before\n");
+		assertThat(result[2]).isEmpty();
 	}
 
 	@Test
@@ -663,10 +744,8 @@ class RontoLispCliTest {
 				(define (count i) (if (= i 0) 'done (count (- i 1))))
 				(count 1000000)
 				""";
-		assertThat(runCli(program, "--source-language", "scheme"))
-			.isEqualTo("scheme> ".repeat(2) + "4\n" + "scheme> ".repeat(2) + "1\n" + "scheme> ".repeat(3) + "5\n"
-					+ "scheme> ".repeat(2) + "(2 3)\n" + "scheme> ".repeat(3) + "#t\n" + "scheme> ".repeat(2)
-					+ "assigned\n" + "scheme> ".repeat(2) + "done\n" + "scheme> ");
+		String answers = "4\n1\n5\n(2 3)\n#t\nassigned\ndone\n";
+		assertThat(runCli(program, "--source-language", "scheme")).isEqualTo(answers);
 		StringBuilder echoes = new StringBuilder();
 		for (String line : program.lines().toList()) {
 			echoes.append(
@@ -675,65 +754,115 @@ class RontoLispCliTest {
 		}
 		Path file = this.tempDir.resolve("transcript.scm");
 		Files.writeString(file, echoes.toString());
-		assertThat(runCli("", file.toString())).isEqualTo("4\n1\n5\n(2 3)\n#t\nassigned\ndone\n");
+		assertThat(runCli("", file.toString())).isEqualTo(answers);
 	}
 
 	@Test
 	void theSchemeReplEchoesThroughTheSchemePrinter() {
 		assertThat(runCli("(list #t #f '() 'Sym \"s\" #\\a 1.5)\n", "--source-language", "scheme"))
-			.isEqualTo("scheme> (#t #f () Sym \"s\" #\\a 1.5)\nscheme> ");
+			.isEqualTo("(#t #f () Sym \"s\" #\\a 1.5)\n");
 		// One value per line; no value, a definition and an effect echo nothing, and an
-		// effect's own output still ends its line before the next prompt.
+		// effect's own output still ends its line.
 		assertThat(runCli("(values 1 'a)\n(values)\n(display \"hi\")\n(newline)\n", "--source-language", "scheme"))
-			.isEqualTo("scheme> 1\na\nscheme> scheme> hi\nscheme> \nscheme> ");
+			.isEqualTo("1\na\nhi\n\n");
 		assertThat(runCli("(define-record-type point (make-point x) point? (x point-x))\n(point? (make-point 1))\n"
 				+ "(point-x (make-point 7))\n", "--source-language", "scheme"))
-			.isEqualTo("scheme> scheme> #t\nscheme> 7\nscheme> ");
+			.isEqualTo("#t\n7\n");
+	}
+
+	@Test
+	void theSchemeReplEchoesNothingForTheUnspecifiedValue() {
+		// What an effect answers is ONE object, not the value its Common Lisp half
+		// happened to return ("a" from display, () from a one-armed if) -- and the echo
+		// skips it however the procedure producing it was written.
+		String input = """
+				(if #f #f)
+				(define (g) (display "a"))
+				(g)
+				(define (print-rat x) (display x) (newline))
+				(print-rat 1/2)
+				(define v 0)
+				(set! v 1)
+				(for-each display '(1 2))
+				(when #f 1)
+				(cond (#f 1))
+				(case 1 ((2) 3))
+				(vector-set! (make-vector 1) 0 v)
+				(list (if #f #f))
+				(length (list (if #f #f)))
+				(if (if #f #f) 'true 'false)
+				""";
+		assertThat(runCli(input, "--source-language", "scheme")).isEqualTo("a\n1/2\n12\n(#!unspecific)\n1\ntrue\n");
+	}
+
+	@Test
+	void theSchemeReplNamesANonProcedureAndItsOperands() {
+		String[] session = runSession(false, """
+				(define (get key) #f)
+				((get 'op) 2 3)
+				(define h 3)
+				(h 1)
+				((if #f #f))
+				""", "--source-language", "scheme");
+		assertThat(session[2]).isEqualTo("""
+				Error: #f is not a procedure; operands: (2 3)
+				Error: 3 is not a procedure; operands: (1)
+				Error: #!unspecific is not a procedure
+				""");
+	}
+
+	@Test
+	void aMalformedLineIsReportedWholeWithoutEvaluatingItsCompletePrefix() {
+		// Pinned, not designed: the buffer is read before anything in it runs.
+		for (String[] session : List.of(runSession(false, "(print 5) garbage)\n(+ 1 2)\n"),
+				runSession(false, "(display 5) garbage)\n(+ 1 2)\n", "--source-language", "scheme"))) {
+			assertThat(session[1]).isEqualTo("3\n");
+			assertThat(session[2]).startsWith("Error: ");
+		}
 	}
 
 	@Test
 	void theSchemeReplContinuesAnIncompleteDatumByTheSchemeReadersRules() {
 		// A Common Lisp paren count would stop early on #\( and never on a #| comment.
 		String input = "(list #\\(\n 1)\n#| (\n |# 2\n#;(a\n b) 3\n\"a\n(\"\n";
-		// The piped driver prompts once per EVALUATED buffer: each answer below took two
-		// lines.
-		assertThat(runCli(input, "--source-language", "scheme"))
-			.isEqualTo("scheme> (#\\( 1)\nscheme> 2\nscheme> 3\nscheme> \"a\\n(\"\nscheme> ");
+		assertThat(runCli(input, "--source-language", "scheme")).isEqualTo("(#\\( 1)\n2\n3\n\"a\\n(\"\n");
 	}
 
 	@Test
 	void theSchemeReplReportsAnErrorWithoutAFilePrefixAndGoesOn() {
-		String output = runCli("(car)\n(if)\n)\n(+ 1 2)\n", "--source-language", "scheme");
-		assertThat(output).contains("Error: ").doesNotContain("null:").endsWith("scheme> 3\nscheme> ");
+		String[] session = runSession(false, "(car)\n(if)\n)\n(+ 1 2)\n", "--source-language", "scheme");
+		assertThat(session[1]).isEqualTo("3\n");
+		assertThat(session[2]).contains("Error: ").doesNotContain("null:");
 	}
 
 	@Test
 	void aStackOverflowAtTheReplIsReportedAndTheSessionKeepsItsDefinitions() {
 		// Each level binds a special, so the deepest frames' restores run with no stack
 		// left: whatever they could not undo must not survive into the next prompt.
-		String lisp = runCli("""
+		String[] lisp = runSession(true, """
 				(defvar *level* 0)
 				(defun sink (n) (let ((*level* n)) (+ 1 (sink (+ n 1)))))
 				(sink 1)
 				*level*
 				(+ 1 2)
 				""");
-		assertThat(lisp).contains("Error: stack overflow").endsWith("CL-USER> 0\nCL-USER> 3\nCL-USER> ");
-		String scheme = runCli("""
+		assertThat(lisp[1]).contains("Error: stack overflow").endsWith("CL-USER> 0\nCL-USER> 3\nCL-USER> ");
+		String[] scheme = runSession(false, """
 				(define (sink n) (+ 1 (sink n)))
 				(define kept 42)
 				(sink 0)
 				kept
 				""", "--source-language", "scheme");
-		assertThat(scheme).contains("Error: stack overflow").endsWith("scheme> 42\nscheme> ");
+		assertThat(scheme[1]).isEqualTo("42\n");
+		assertThat(scheme[2]).startsWith("Error: stack overflow");
 	}
 
 	@Test
 	void aCyclicValueIsEchoedWithoutKillingTheSession() {
 		assertThat(runCli("(define l (list 1 2))\n(set-cdr! (cdr l) l)\nl\n(+ 1 2)\n", "--source-language", "scheme"))
-			.isEqualTo("scheme> scheme> scheme> #0=(1 2 . #0#)\nscheme> 3\nscheme> ");
+			.isEqualTo("#0=(1 2 . #0#)\n3\n");
 		// A print-object method routes the Common Lisp echo through prin1-to-string.
-		String lisp = runCli("""
+		String[] lisp = runSession(false, """
 				(defclass pt () ())
 				(defmethod print-object ((p pt) s) (format s "PT"))
 				(defparameter *l* (list 1 2))
@@ -741,7 +870,8 @@ class RontoLispCliTest {
 				*l*
 				(+ 1 2)
 				""");
-		assertThat(lisp).doesNotContain("Error").endsWith("CL-USER> 3\nCL-USER> ");
+		assertThat(lisp[2]).isEmpty();
+		assertThat(lisp[1]).endsWith("\n3\n");
 	}
 
 	@Test

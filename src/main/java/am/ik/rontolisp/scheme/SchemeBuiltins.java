@@ -35,8 +35,9 @@ import org.jspecify.annotations.Nullable;
  * library exports), {@code result} says what the template answers -- {@code value},
  * {@code pred} (a Common Lisp boolean, {@code T}/{@code NIL}, which fuses into an
  * {@code if} test and is converted to {@code #t}/{@code #f} anywhere else),
- * {@code or-false} (a value, or {@code NIL} meaning {@code #f}) or {@code effect}
- * (unspecified: lowered like a {@code value}, and a REPL echoes nothing for it). One
+ * {@code or-false} (a value, or {@code NIL} meaning {@code #f}) or {@code effect} (the
+ * template's value is discarded and the call answers the unspecified object, which a REPL
+ * does not echo). One
  * {@code ((params) template)} pair per accepted argument count; {@code &rest r} params
  * splice as the template's dotted tail {@code (f a . r)}. {@code :function} is the
  * first-class value; it may be omitted only for a single fixed-arity alternative, where
@@ -51,6 +52,20 @@ final class SchemeBuiltins {
 	/** The variable holding the false value, as spelled in the emitted program. */
 	static final String FALSE_VARIABLE = "RONTOLISP::%SCHEME-FALSE";
 
+	/**
+	 * The variable holding the unspecified object: what an effect ({@code display},
+	 * {@code set!}, an {@code if} with no taken arm) answers. A symbol, like the false
+	 * value, so no backend learns it; true in a test, and one element of a list.
+	 */
+	static final String UNSPECIFIED_VARIABLE = "RONTOLISP::%SCHEME-UNSPECIFIED";
+
+	/**
+	 * The unspecified object's symbol name, MIT Scheme's spelling of it. Escaped by
+	 * {@link SchemeNames#mangle}, so no identifier and no {@code string->symbol} can
+	 * forge it.
+	 */
+	static final String UNSPECIFIED_NAME = "#!unspecific";
+
 	/** What a template's value is. */
 	enum Result {
 
@@ -64,8 +79,8 @@ final class SchemeBuiltins {
 		OR_FALSE,
 
 		/**
-		 * An unspecified value, called for its effect: an interactive session echoes
-		 * nothing.
+		 * Called for its effect: the call answers the unspecified object, which an
+		 * interactive session does not echo.
 		 */
 		EFFECT
 
@@ -316,7 +331,8 @@ final class SchemeBuiltins {
 			 :function (lambda (&rest r) (rontolisp::%scheme-stream-append r)))
 
 			;; --- symbols ---
-			("symbol?" base pred ((x) (and (symbolp x) x (not (eq x t)) (not (eq x rontolisp::%scheme-false)))))
+			("symbol?" base pred ((x) (and (symbolp x) x (not (eq x t)) (not (eq x rontolisp::%scheme-false))
+			                              (not (eq x rontolisp::%scheme-unspecified)))))
 			("symbol->string" base value ((s) (rontolisp::%scheme-symbol->string s)))
 			("string->symbol" base value ((s) (rontolisp::%scheme-string->symbol s)))
 
@@ -384,13 +400,14 @@ final class SchemeBuiltins {
 			("list->vector" base value ((l) (coerce l 'vector)))
 			("vector-fill!" base effect ((v x) (fill v x)) ((v x from) (fill v x :start from))
 			 ((v x from to) (fill v x :start from :end to))
-			 :function (lambda (v x &optional (from 0) to) (fill v x :start from :end to)))
+			 :function (lambda (v x &optional (from 0) to) (fill v x :start from :end to) rontolisp::%scheme-unspecified))
 
 			;; --- control ---
 			("procedure?" base pred ((x) (functionp x)))
 			("apply" base value ((f a &rest r) (apply f a . r)) :function (lambda (f &rest r) (apply f (rontolisp::%scheme-spread r))))
 			("map" base value ((f l &rest r) (mapcar f l . r)) :function (lambda (f &rest r) (apply #'mapcar f r)))
-			("for-each" base effect ((f l &rest r) (mapc f l . r)) :function (lambda (f &rest r) (apply #'mapc f r)))
+			("for-each" base effect ((f l &rest r) (mapc f l . r))
+			 :function (lambda (f &rest r) (apply #'mapc f r) rontolisp::%scheme-unspecified))
 			("call/cc" base value ((f) (rontolisp::%scheme-call/cc f)))
 			("call-with-current-continuation" base value ((f) (rontolisp::%scheme-call/cc f)))
 			("dynamic-wind" base value ((before thunk after) (rontolisp::%scheme-dynamic-wind before thunk after)))
@@ -408,6 +425,14 @@ final class SchemeBuiltins {
 			("write" write effect ((x) (rontolisp::%scheme-write x)))
 			("write-shared" write effect ((x) (rontolisp::%scheme-write x)))
 			("write-simple" write effect ((x) (rontolisp::%scheme-write x)))
+
+			;; --- (scheme process-context): the process ends where the call stands, on
+			;; every backend -- no dynamic-wind after thunk runs, for exit either.
+			("exit" process-context effect (() (rontolisp::%scheme-exit t)) ((code) (rontolisp::%scheme-exit code))
+			 :function (lambda (&optional (code t)) (rontolisp::%scheme-exit code)))
+			("emergency-exit" process-context effect (() (rontolisp::%scheme-exit t))
+			 ((code) (rontolisp::%scheme-exit code))
+			 :function (lambda (&optional (code t)) (rontolisp::%scheme-exit code)))
 			""";
 
 	private static final SequencedMap<String, Entry> ENTRIES = parse();
@@ -434,7 +459,8 @@ final class SchemeBuiltins {
 	static LispVal toSchemeValue(Result result, LispVal raw) {
 		LispSymbol falseVariable = new LispSymbol(FALSE_VARIABLE);
 		return switch (result) {
-			case VALUE, EFFECT -> raw;
+			case VALUE -> raw;
+			case EFFECT -> list(new LispSymbol("PROGN"), raw, new LispSymbol(UNSPECIFIED_VARIABLE));
 			case PREDICATE -> list(new LispSymbol("IF"), raw, LispTrue.INSTANCE, falseVariable);
 			case OR_FALSE -> list(new LispSymbol("OR"), raw, falseVariable);
 		};

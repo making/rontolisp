@@ -31,7 +31,8 @@
 (defun rontolisp::%scheme-needs-escape (name)
   (or (rontolisp::%scheme-escaped-p name)
       (and (> (length name) 0) (char= (char name 0) #\&)) (string= name "#f")
-      (find #\: name) (not (rontolisp::%scheme-has-lowercase name))))
+      (string= name "#!unspecific") (find #\: name)
+      (not (rontolisp::%scheme-has-lowercase name))))
 
 (defun rontolisp::%scheme-symbol->string (symbol)
   (let ((name (symbol-name symbol)))
@@ -634,6 +635,19 @@
     (dolist (irritant irritants)
       (write-char #\Space)
       (rontolisp::%scheme-print irritant t))))
+
+;; exit and emergency-exit (R7RS 6.14): #t or no argument is success, #f failure, an
+;; integer the status itself, masked to eight bits the way uiop:quit masks it. The
+;; process ends where the call stands on every backend -- the interpreter's exit signal
+;; runs no unwind-protect cleanup, the compiled ones end the process -- so exit does not
+;; run the after thunks of the dynamic-winds it is inside either.
+(defun rontolisp::%scheme-exit (code)
+  (finish-output *standard-output*)
+  (finish-output *error-output*)
+  (%host-exit
+   (cond ((integerp code) (logand code 255))
+         ((eq code rontolisp::%scheme-false) 1)
+         (t 0))))
 
 ;; --- (scheme lazy) and SICP streams ---------------------------------------------------
 

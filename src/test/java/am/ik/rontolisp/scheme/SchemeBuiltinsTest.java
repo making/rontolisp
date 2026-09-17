@@ -76,7 +76,8 @@ class SchemeBuiltinsTest {
 			rest = cell.cdr();
 		}
 		if (rest instanceof am.ik.rontolisp.LispSymbol symbol && symbol.name().startsWith("RONTOLISP::%SCHEME-")
-				&& !symbol.name().equals(SchemeBuiltins.FALSE_VARIABLE)) {
+				&& !symbol.name().equals(SchemeBuiltins.FALSE_VARIABLE)
+				&& !symbol.name().equals(SchemeBuiltins.UNSPECIFIED_VARIABLE)) {
 			assertThat(am.ik.rontolisp.eval.SchemeLibrary.isSchemeFunction(symbol.name()))
 				.as("%s names %s", entry, symbol.name())
 				.isTrue();

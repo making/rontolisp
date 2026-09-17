@@ -68,6 +68,18 @@ parentheses, the REPL keeps reading until it is closed before evaluating. It als
 supports line editing, history navigation with the up/down arrow keys, and Ctrl-C
 to cancel the current input. Type `(quit)` or press Ctrl-D to exit.
 
+With input piped in rather than typed, the REPL is a script runner: it prints no
+prompt, only the values and the program's own output, reports each error on standard
+error, and exits with status 1 at the end of input if any form failed.
+`(uiop:quit code)` ends it at once with that status.
+
+```console
+$ printf '(+ 1 2)\n(car 1)\n(* 2 3)\n' | rontolisp 2>/dev/null; echo "exit=$?"
+3
+6
+exit=1
+```
+
 Try a quick expression here:
 
 ```lisp
