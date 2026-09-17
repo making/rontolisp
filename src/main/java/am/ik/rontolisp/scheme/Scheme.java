@@ -31,8 +31,16 @@ public final class Scheme {
 	 * @return the top-level forms
 	 */
 	public static List<LispVal> read(String source, @Nullable String file) {
-		SchemeReader reader = new SchemeReader(source, file);
-		return new SchemeLowering(reader, reader.readAll()).lower();
+		return SchemeLowering.ofFile(new SchemeReader(source, file)).lower();
+	}
+
+	/**
+	 * Starts an interactive session -- a REPL, a playground -- that reads one buffer at a
+	 * time.
+	 * @return the session
+	 */
+	public static SchemeSession session() {
+		return new SchemeSession();
 	}
 
 }

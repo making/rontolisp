@@ -28,9 +28,10 @@ Not a language feature, same area:
   an uploaded file; the REPL and the compile buttons read Common Lisp
   (`RontoPlayground.evalLine` / `frontend`). The doc site's Scheme fences are static for
   the same reason (`DocExamplesTest` verifies them; `RunnableBlockTransformer` runs `lisp`
-  only). A whole-file lowering does not fit a form-at-a-time REPL: decide whether the
-  REPL keeps the defun-or-variable pre-scan's state across forms or lowers every
-  top-level procedure to a variable there.
+  only). The form-at-a-time lowering is solved: the CLI REPL reads through
+  `eval/SourceSession` (`.kb/scheme-frontend.md`, "A session"). What is left here is the
+  pick itself and `evalLine` taking that seam -- it echoes only the LAST form, so it
+  needs `Step.echoes` of the last step, not `ReplBuffer`'s loop.
 - **The generic printer costs 58.8 KB of `.class`** (7.1 KB of wasm). Measured pieces on
   the JVM: `aref` 14 KB, a `do` loop 9 KB, `char` 7 KB, `write-char` 6 KB. That is the JVM
   backend's per-feature runtime, not the printer's shape -- look there, not in

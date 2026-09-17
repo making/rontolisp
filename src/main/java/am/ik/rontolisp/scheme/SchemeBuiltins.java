@@ -33,12 +33,13 @@ import org.jspecify.annotations.Nullable;
  * {@code library} is the R7RS library exporting the name ({@code base} / {@code write}),
  * {@code result} says what the template answers -- {@code value}, {@code pred} (a Common
  * Lisp boolean, {@code T}/{@code NIL}, which fuses into an {@code if} test and is
- * converted to {@code #t}/{@code #f} anywhere else) or {@code or-false} (a value, or
- * {@code NIL} meaning {@code #f}). One {@code ((params) template)} pair per accepted
- * argument count; {@code &rest r} params splice as the template's dotted tail
- * {@code (f a . r)}. {@code :function} is the first-class value; it may be omitted only
- * for a single fixed-arity alternative, where it is derived as a {@code lambda} around
- * the template.
+ * converted to {@code #t}/{@code #f} anywhere else), {@code or-false} (a value, or
+ * {@code NIL} meaning {@code #f}) or {@code effect} (unspecified: lowered like a
+ * {@code value}, and a REPL echoes nothing for it). One {@code ((params) template)} pair
+ * per accepted argument count; {@code &rest r} params splice as the template's dotted
+ * tail {@code (f a . r)}. {@code :function} is the first-class value; it may be omitted
+ * only for a single fixed-arity alternative, where it is derived as a {@code lambda}
+ * around the template.
  *
  * <p>
  * Parameter names are uppercase symbols (the reader upcases them), which no user variable
@@ -59,7 +60,13 @@ final class SchemeBuiltins {
 		PREDICATE,
 
 		/** A Scheme value, or {@code NIL} standing for {@code #f}. */
-		OR_FALSE
+		OR_FALSE,
+
+		/**
+		 * An unspecified value, called for its effect: an interactive session echoes
+		 * nothing.
+		 */
+		EFFECT
 
 	}
 
@@ -181,8 +188,8 @@ final class SchemeBuiltins {
 			("cons" base value ((a b) (cons a b)) :function #'cons)
 			("car" base value ((p) (car p)) :function #'car)
 			("cdr" base value ((p) (cdr p)) :function #'cdr)
-			("set-car!" base value ((p v) (rplaca p v)))
-			("set-cdr!" base value ((p v) (rplacd p v)))
+			("set-car!" base effect ((p v) (rplaca p v)))
+			("set-cdr!" base effect ((p v) (rplacd p v)))
 			("caar" base value ((p) (caar p)))
 			("cadr" base value ((p) (cadr p)))
 			("cdar" base value ((p) (cdar p)))
@@ -241,7 +248,7 @@ final class SchemeBuiltins {
 			 :function (lambda (&rest r) (coerce r 'string)))
 			("string-length" base value ((s) (length s)))
 			("string-ref" base value ((s k) (char s k)))
-			("string-set!" base value ((s k c) (setf (char s k) c)))
+			("string-set!" base effect ((s k c) (setf (char s k) c)))
 			("string=?" base pred ((a b) (string= a b))
 			 ((a b &rest r) (rontolisp::%scheme-chain #'string= (list a b . r)))
 			 :function (lambda (&rest r) (if (rontolisp::%scheme-chain #'string= r) t rontolisp::%scheme-false)))
@@ -274,12 +281,12 @@ final class SchemeBuiltins {
 			("vector" base value ((&rest r) (vector . r)) :function #'vector)
 			("vector-length" base value ((v) (length v)))
 			("vector-ref" base value ((v k) (aref v k)))
-			("vector-set!" base value ((v k x) (setf (aref v k) x)))
+			("vector-set!" base effect ((v k x) (setf (aref v k) x)))
 			("vector->list" base value ((v) (coerce v 'list)) ((v from) (coerce (subseq v from) 'list))
 			 ((v from to) (coerce (subseq v from to) 'list))
 			 :function (lambda (v &optional (from 0) to) (coerce (subseq v from to) 'list)))
 			("list->vector" base value ((l) (coerce l 'vector)))
-			("vector-fill!" base value ((v x) (fill v x)) ((v x from) (fill v x :start from))
+			("vector-fill!" base effect ((v x) (fill v x)) ((v x from) (fill v x :start from))
 			 ((v x from to) (fill v x :start from :end to))
 			 :function (lambda (v x &optional (from 0) to) (fill v x :start from :end to)))
 
@@ -287,7 +294,7 @@ final class SchemeBuiltins {
 			("procedure?" base pred ((x) (functionp x)))
 			("apply" base value ((f a &rest r) (apply f a . r)) :function (lambda (f &rest r) (apply f (rontolisp::%scheme-spread r))))
 			("map" base value ((f l &rest r) (mapcar f l . r)) :function (lambda (f &rest r) (apply #'mapcar f r)))
-			("for-each" base value ((f l &rest r) (mapc f l . r)) :function (lambda (f &rest r) (apply #'mapc f r)))
+			("for-each" base effect ((f l &rest r) (mapc f l . r)) :function (lambda (f &rest r) (apply #'mapc f r)))
 			("call/cc" base value ((f) (rontolisp::%scheme-call/cc f)))
 			("call-with-current-continuation" base value ((f) (rontolisp::%scheme-call/cc f)))
 			("dynamic-wind" base value ((before thunk after) (rontolisp::%scheme-dynamic-wind before thunk after)))
@@ -298,13 +305,13 @@ final class SchemeBuiltins {
 			 :function (lambda (message &rest r) (error "~A" (rontolisp::%scheme-error-message message r))))
 
 			;; --- output: the current output port only ---
-			("newline" base value (() (terpri)))
-			("write-char" base value ((c) (write-char c)))
-			("write-string" base value ((s) (write-string s)))
-			("display" write value ((x) (rontolisp::%scheme-display x)))
-			("write" write value ((x) (rontolisp::%scheme-write x)))
-			("write-shared" write value ((x) (rontolisp::%scheme-write x)))
-			("write-simple" write value ((x) (rontolisp::%scheme-write x)))
+			("newline" base effect (() (terpri)))
+			("write-char" base effect ((c) (write-char c)))
+			("write-string" base effect ((s) (write-string s)))
+			("display" write effect ((x) (rontolisp::%scheme-display x)))
+			("write" write effect ((x) (rontolisp::%scheme-write x)))
+			("write-shared" write effect ((x) (rontolisp::%scheme-write x)))
+			("write-simple" write effect ((x) (rontolisp::%scheme-write x)))
 			""";
 
 	private static final SequencedMap<String, Entry> ENTRIES = parse();
@@ -331,7 +338,7 @@ final class SchemeBuiltins {
 	static LispVal toSchemeValue(Result result, LispVal raw) {
 		LispSymbol falseVariable = new LispSymbol(FALSE_VARIABLE);
 		return switch (result) {
-			case VALUE -> raw;
+			case VALUE, EFFECT -> raw;
 			case PREDICATE -> list(new LispSymbol("IF"), raw, LispTrue.INSTANCE, falseVariable);
 			case OR_FALSE -> list(new LispSymbol("OR"), raw, falseVariable);
 		};
@@ -355,6 +362,7 @@ final class SchemeBuiltins {
 			case "VALUE" -> Result.VALUE;
 			case "PRED" -> Result.PREDICATE;
 			case "OR-FALSE" -> Result.OR_FALSE;
+			case "EFFECT" -> Result.EFFECT;
 			default -> throw new IllegalStateException("unknown result kind for " + name);
 		};
 		List<Alternative> alternatives = new ArrayList<>();

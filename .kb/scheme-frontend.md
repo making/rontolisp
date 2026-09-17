@@ -23,8 +23,8 @@ help, the title of `doc/*/guides/scheme.md`). `--no-gc` is refused by name
   `TokenizersLibrary`, INSIDE the prelude whose string comparisons it uses) and
   `LibraryDefunPruner` drops what stays unreachable. The playground's chain has the splice
   too; a `.scm` reaches the playground through `(load ...)` of an uploaded file.
-- A whole FILE is lowered at once: defun-or-variable is decided by a pre-scan. The REPL
-  reads one form at a time and stays Common Lisp.
+- A whole FILE is lowered at once: defun-or-variable is decided by a pre-scan. A REPL has
+  no whole program to scan and lowers through a session instead ("A session" below).
 
 ## The lowering table
 
@@ -54,6 +54,38 @@ help, the title of `doc/*/guides/scheme.md`). `--no-gc` is refused by name
 excludes strings (`vectorp` does not); `integer?` accepts `2.0`; `max`/`min` are inexact
 when any argument is; `equal?` is its own helper (recurses into vectors, `eqv?` on
 records; CL's `equal` compares a general vector by identity and an instance slot-wise).
+
+## A session (`SchemeSession`, `SchemeLowering.interact`)
+
+`rontolisp --source-language scheme` with no file; reached through `eval/SourceSession`
+(`.kb/source-language.md`). The global `Scope`, the temporaries counter and the `set!`
+names outlive each buffer; everything else is per buffer.
+
+- **Every top-level definition is a variable** (`setq`, later calls `funcall` it), never a
+  `defun`: no pre-scan can see the forms still to be typed.
+- **Each definition also emits a trampoline**, `(defun f (&rest a) (apply f a))`. A form
+  typed BEFORE `f` existed lowered `(f x)` as a direct call ("a name this file does not
+  define"), and the trampoline is what that call reaches -- reading the variable on every
+  call, so it follows `set!` and redefinition. Without it, `ev?`/`od?` typed at two prompts
+  fail with an undefined function (measured 2026-09-17).
+- **Stateless is not enough**, which is why this is a session and not a lowering mode: a
+  later buffer must know `point?` is a record predicate (a raw `T`/`NIL` in an `if` test is
+  always true to Scheme) and that `f` is a variable in VALUE position. A record
+  procedure stays a direct call and cannot be `define`d over; the whole
+  `define-record-type` may be typed again.
+- A procedure's self tail calls stay a loop (a file makes it a `defun` with the same loop;
+  without it 1,000,000 iterations overflow the stack) unless the session has assigned the
+  name SO FAR. Stated deviation: a `set!` typed later does not reach a saved old value,
+  which keeps jumping to itself. Likewise a form is lowered against the names known when
+  it was typed: shadowing a built-in later does not reach it.
+- `(setq false '|#f|)` is emitted once, by the first buffer that lowers. `(import ...)` is
+  accepted anywhere at the top level and only ADDS names (an R7RS REPL starts with
+  everything visible; base and write are).
+- Echo: `SchemeTopLevel.echoes` is false for a definition, an import, a `set!` and a call
+  to an `effect` builtin (`display`, `newline`, `vector-set!`, `for-each`, ...: the fourth
+  result kind in `SchemeBuiltins`, lowered exactly like `value`). Values print through
+  `%scheme-write`; continuation is "the reader ran out of input"
+  (`LispReadException.isEndOfFile`), so `#;`, `#| |#` and `#\(` need no second rule.
 
 ## Destination-driven lowering (`SchemeLowering.lower`)
 
@@ -155,10 +187,12 @@ proper tail calls in general. Each is refused by name where it can be.
 
 `SchemeSpecE2eTest` over `scheme-spec.yaml` (one case per table row and per procedure
 group, all four backends in `./mvnw test`; the wasm legs need `wasmtime` on `PATH`),
-`SchemeLoweringTest` (the table as emitted forms), `SchemeReaderTest`, `SchemeNamesTest`,
+`SchemeLoweringTest` (the table as emitted forms), `SchemeSessionTest` (what a session emits,
+when a buffer is complete), `SchemeReaderTest`, `SchemeNamesTest`,
 `SchemeBuiltinsTest` (every `:function` evaluates, every helper a template names exists),
 `RontoLispCliTest` (`aSchemeFileIsPickedByItsExtension`, `aCommonLispProgramLoadsASchemeFile`,
 `aSchemeSyntaxErrorNamesItsPositionOnEveryPath`, `aSchemeProgramIsRefusedByTheScalarBackend`,
-`anUncaughtSchemeErrorReportsItsMessageAndIrritants`), `DocExamplesTest` (a ```` ```scheme ```` fence is a
+`anUncaughtSchemeErrorReportsItsMessageAndIrritants`, the four `theSchemeRepl...` transcripts, the
+first of which replays its input as a FILE and compares), `DocExamplesTest` (a ```` ```scheme ```` fence is a
 whole program whose stdout is asserted).
 Probes behind the first version of this table: `.todo/artefacts/825-minimal-experimental-scheme-front-end/`.

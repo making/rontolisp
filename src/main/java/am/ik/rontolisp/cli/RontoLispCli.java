@@ -36,6 +36,7 @@ import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.ObjcInterop;
 import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceSession;
 import am.ik.rontolisp.eval.VecSimd;
 import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.SourceLoader;
@@ -159,7 +160,8 @@ public final class RontoLispCli {
 		}
 		if (!test && inline == null && !options.containsNoKey()) {
 			repl(systemPath, dists, features, options.contains("--simd"), options.contains("--blas"),
-					options.contains("--gpu"), options.contains("--parallel"), commandLine(null, options.arguments()));
+					options.contains("--gpu"), options.contains("--parallel"), commandLine(null, options.arguments()),
+					sourceLanguage);
 			return;
 		}
 
@@ -357,7 +359,7 @@ public final class RontoLispCli {
 	}
 
 	private void repl(List<String> systemPath, DistClient dists, List<String> declaredFeatures, boolean simd,
-			boolean blas, boolean gpu, boolean parallel, List<String> commandLine) {
+			boolean blas, boolean gpu, boolean parallel, List<String> commandLine, @Nullable String sourceLanguage) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setSystemPath(systemPath);
 		evaluator.setDeclaredFeatures(declaredFeatures);
@@ -376,18 +378,20 @@ public final class RontoLispCli {
 		if (parallel) {
 			evaluator.setParallel(true);
 		}
+		// The REPL has no file to pick a language from: the override, else the default.
+		SourceSession session = new SourceSession(SourceLanguage.forFile(null, sourceLanguage));
 		StringBuilder buffer = new StringBuilder();
 		if (System.console() != null && isJLineAvailable()) {
-			JLineRepl.run(evaluator, this.out, buffer);
+			JLineRepl.run(session, evaluator, this.out, buffer);
 		}
 		else {
-			replWithBufferedReader(evaluator, buffer);
+			replWithBufferedReader(session, evaluator, buffer);
 		}
 	}
 
-	private void replWithBufferedReader(LispEvaluator evaluator, StringBuilder buffer) {
+	private void replWithBufferedReader(SourceSession session, LispEvaluator evaluator, StringBuilder buffer) {
 		BufferedReader reader = new BufferedReader(new InputStreamReader(this.in));
-		this.out.print(ReplBuffer.prompt(evaluator, buffer));
+		this.out.print(ReplBuffer.prompt(session, evaluator, buffer));
 		this.out.flush();
 		try {
 			String line;
@@ -396,9 +400,9 @@ public final class RontoLispCli {
 					break;
 				}
 				buffer.append(line).append('\n');
-				if (ReplBuffer.isBalanced(buffer.toString())) {
-					ReplBuffer.eval(evaluator, this.out, buffer);
-					this.out.print(ReplBuffer.prompt(evaluator, buffer));
+				if (session.isComplete(buffer.toString())) {
+					ReplBuffer.eval(session, evaluator, this.out, buffer);
+					this.out.print(ReplBuffer.prompt(session, evaluator, buffer));
 					this.out.flush();
 				}
 			}
@@ -1262,9 +1266,10 @@ public final class RontoLispCli {
 		this.out.println("                     the build, which -o and the flags beside it decide.");
 		this.out.println("  --source-language NAME");
 		this.out.println("                     The entry source's language, overriding the pick from");
-		this.out.println("                     its extension (a (load ...)ed file is still picked by");
+		this.out.println("                     its extension; with no file, the REPL's language (a");
+		this.out.println("                     scheme> prompt). A (load ...)ed file is still picked by");
 		this.out.println("                     its own extension, so one program may mix languages");
-		this.out.println("                     file by file). common-lisp is every extension's default;");
+		this.out.println("                     file by file. common-lisp is every extension's default;");
 		this.out.println("                     scheme (.scm) is EXPERIMENTAL: a subset of R7RS-small");
 		this.out.println("                     (scheme base), partial conformance by design and no");
 		this.out.println("                     compatibility promise. Not with --no-gc.");

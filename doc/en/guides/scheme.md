@@ -39,6 +39,32 @@ rontolisp prog.txt --source-language scheme        # any extension
 (3 true #f "s")
 ```
 
+## REPL
+
+With no file, `--source-language scheme` starts a Scheme REPL. Values are echoed as
+`write` prints them; a definition, a `set!` and a procedure called for its effect
+(`display`) echo nothing. A form may span lines.
+
+```console
+$ rontolisp --source-language scheme
+scheme> (define (square x) (* x x))
+scheme> (map square '(1 2 3))
+(1 4 9)
+scheme> (set! square -)
+scheme> (square 5)
+-5
+scheme> (list #t #f '() 'Sym)
+(#t #f () Sym)
+scheme> (quit)
+```
+
+Everything `(scheme base)` and `(scheme write)` export is visible from the start, and an
+`(import ...)` typed at the prompt only adds names. Definitions typed at separate prompts
+see each other in either order, as they would in one file. Two things differ from a file,
+because a form is fixed when it is typed: redefining a built-in procedure (`square`) does
+not reach the forms typed before it, and a procedure that calls itself in tail position
+keeps looping on itself if a later `set!` replaces it while an old copy is still held.
+
 ## What is supported
 
 - **Reader** (case-sensitive): `#t` `#f` `#true` `#false`, integers, decimals, rationals,

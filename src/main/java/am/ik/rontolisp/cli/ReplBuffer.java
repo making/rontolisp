@@ -6,14 +6,15 @@ import java.util.List;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceSession;
 import am.ik.rontolisp.reader.Features;
 
 /**
  * The REPL's shared prompt and read-eval step over the line buffer: when the accumulated
- * input balances, every form in it is evaluated and echoed, and the buffer is cleared.
- * Both REPL drivers -- the plain {@code BufferedReader} loop and {@link JLineRepl} --
- * take their prompt from here and run their lines through here, so the two REPLs cannot
- * drift.
+ * input is complete -- the language's {@link SourceSession} says when -- every form in it
+ * is evaluated and echoed, and the buffer is cleared. Both REPL drivers -- the plain
+ * {@code BufferedReader} loop and {@link JLineRepl} -- take their prompt from here and
+ * run their lines through here, so the two REPLs cannot drift.
  */
 final class ReplBuffer {
 
@@ -21,70 +22,53 @@ final class ReplBuffer {
 	}
 
 	/**
-	 * The prompt for the next line: {@code CL-USER> } -- the CURRENT package's name, read
-	 * fresh every line, as a Common Lisp REPL names it. An {@code (in-package :foo)}
-	 * typed at one prompt therefore shows as {@code FOO> } at the next, which is the
-	 * whole point: which package a bare symbol interns into is otherwise invisible. A
-	 * continuation line (the buffer holds an unbalanced form) is blanked to the same
-	 * width instead, so the typed text stays in one column.
+	 * The prompt for the next line: the language's own -- {@code CL-USER> }, the CURRENT
+	 * package's name read fresh every line, so an {@code (in-package :foo)} typed at one
+	 * prompt shows as {@code FOO> } at the next; {@code scheme> } for Scheme, which has
+	 * no package to show. A continuation line (the buffer holds an incomplete form) is
+	 * blanked to the same width instead, so the typed text stays in one column.
+	 * @param session the REPL's language session
 	 * @param evaluator the REPL's evaluator, holding the current package
-	 * @param buffer the accumulated input, empty unless a form is still unbalanced
+	 * @param buffer the accumulated input, empty unless a form is still incomplete
 	 * @return the prompt to print
 	 */
-	static String prompt(LispEvaluator evaluator, StringBuilder buffer) {
-		String prompt = evaluator.currentPackageName() + "> ";
+	static String prompt(SourceSession session, LispEvaluator evaluator, StringBuilder buffer) {
+		String prompt = session.prompt(evaluator);
 		return buffer.isEmpty() ? prompt : " ".repeat(prompt.length());
 	}
 
-	static boolean isBalanced(String input) {
-		int depth = 0;
-		boolean inString = false;
-		for (int i = 0; i < input.length(); i++) {
-			char c = input.charAt(i);
-			if (inString) {
-				if (c == '\\' && i + 1 < input.length()) {
-					i++;
-				}
-				else if (c == '"') {
-					inString = false;
-				}
-			}
-			else {
-				if (c == '"') {
-					inString = true;
-				}
-				else if (c == '(') {
-					depth++;
-				}
-				else if (c == ')') {
-					depth--;
-				}
-			}
-		}
-		return depth <= 0 && !inString;
-	}
-
-	static void eval(LispEvaluator evaluator, PrintStream out, StringBuilder buffer) {
+	static void eval(SourceSession session, LispEvaluator evaluator, PrintStream out, StringBuilder buffer) {
 		try {
 			// #. read-time eval at the REPL: only a buffer textually containing #. pays
 			// for the marker read; each form's markers resolve just before it runs, the
 			// same timing interpret/loadFile use. The REPL has no file, so it reads the
-			// default language through the source-language seam.
+			// session's language through the source-language seam.
 			String source = buffer.toString();
 			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
-			List<LispVal> exprs = SourceLanguage.COMMON_LISP.read(source, Features.INTERPRETER, null);
 			// EVERY form in the buffer is echoed, right after it runs, and as a
 			// multiple-value consumer would see it: one value per line, as in any CL
 			// REPL ((floor 10 3) echoes 3 then 1; (values) echoes nothing). A form's
 			// own output therefore precedes its own value, and two forms typed on one
-			// line echo twice -- what SBCL does reading them one at a time.
-			for (LispVal expr : exprs) {
-				List<LispVal> values = evaluator.evalValues(markers ? evaluator.resolveReadTimeEvalInCode(expr) : expr);
+			// line echo twice -- what SBCL does reading them one at a time. A form the
+			// language says has no value to show (a Scheme define) echoes nothing.
+			for (SourceSession.Step step : session.read(source, Features.INTERPRETER)) {
+				List<LispVal> values = List.of();
+				for (int i = 0; i < step.forms().size(); i++) {
+					LispVal form = step.forms().get(i);
+					LispVal expr = markers ? evaluator.resolveReadTimeEvalInCode(form) : form;
+					if (step.echoes() && i == step.forms().size() - 1) {
+						values = evaluator.evalValues(expr);
+					}
+					else {
+						evaluator.eval(expr);
+					}
+				}
 				freshLine(evaluator);
 				for (LispVal value : values) {
-					// prin1 semantics, print-object route included: a geom:solid echoes
-					// as its method prints it, as in any CL REPL.
-					out.println(evaluator.prin1ToStringRouted(value));
+					// The language's own write: prin1 with the print-object route for
+					// Common Lisp (a geom:solid echoes as its method prints it), the
+					// Scheme printer for Scheme.
+					out.println(session.print(value, evaluator));
 				}
 			}
 		}

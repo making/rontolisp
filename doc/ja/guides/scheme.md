@@ -38,6 +38,32 @@ rontolisp prog.txt --source-language scheme        # any extension
 (3 true #f "s")
 ```
 
+## REPL
+
+ファイルを指定せずに `--source-language scheme` を付けると Scheme の REPL が起動します。
+値は `write` の表記でエコーされます。定義、`set!`、副作用のために呼ぶ手続き（`display`）は
+何もエコーしません。フォームは複数行にまたがれます。
+
+```console
+$ rontolisp --source-language scheme
+scheme> (define (square x) (* x x))
+scheme> (map square '(1 2 3))
+(1 4 9)
+scheme> (set! square -)
+scheme> (square 5)
+-5
+scheme> (list #t #f '() 'Sym)
+(#t #f () Sym)
+scheme> (quit)
+```
+
+`(scheme base)` と `(scheme write)` がエクスポートする名前は最初からすべて見えており、
+プロンプトで入力した `(import ...)` は名前を追加するだけです。別々のプロンプトで入力した
+定義は、1 つのファイルに書いた場合と同じく、順序によらず互いを参照できます。フォームは
+入力時点で確定するため、ファイルとの違いが 2 点あります: 組み込み手続き（`square`）を再定義しても、
+それ以前に入力したフォームには及びません。また、末尾位置で自分自身を呼ぶ手続きは、後から `set!` で
+置き換えても、保持されている古いコピーは自分自身へのループを続けます。
+
 ## 対応範囲
 
 - **リーダー**（大文字小文字を区別）: `#t` `#f` `#true` `#false`、整数、小数、有理数、

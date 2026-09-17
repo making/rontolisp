@@ -13,9 +13,20 @@ names, so one program may mix languages file by file (`LoadInliner.spliceFile` o
 compile path, `LispEvaluator.loadFile` on the interpreter). The entry source's
 language is its extension or the override (`CompileFrontend.run`,
 `RontoLispCli.interpret`, `JvmSourceCompiler.sourceLanguage` for embedders). The REPL
-and the browser playground have no file and read the default; the playground's compile
-buttons keep the error-mode read (`readStrict`) because their reduced frontend has no
-marker-resolution pass.
+has no file: its language is the override, else the default. The browser playground has
+no language pick yet and reads the default; its compile buttons keep the error-mode read
+(`readStrict`) because their reduced frontend has no marker-resolution pass.
+
+## Reading without a file: `SourceSession`
+
+A consumer that reads one buffer at a time asks the LANGUAGE four things, through
+`eval/SourceSession` (one per REPL): `isComplete` (continue the line or read now), `read`
+(core forms per top-level form, plus whether its value is worth echoing), `print` (the
+language's own `write`) and `prompt` (`CL-USER> ` follows the current package, `scheme> `
+has none). It is a session because a language may carry state between buffers; Scheme
+does (`.kb/scheme-frontend.md`, "A session"), Common Lisp keeps none here. `cli/ReplBuffer`
+is the one consumer today, shared by both REPL drivers; the playground's `evalLine` is the
+same shape and takes this seam when it gains a language pick.
 
 The entry-language override is validated where it is parsed (an unknown name fails
 fast); loaded files always pick by extension, so the override never leaks into them.
@@ -32,8 +43,8 @@ synthesizes itself -- which is Common Lisp whatever the user's language is (ever
 `Environment`'s runtime `read`/`read-from-string` of DATA; `AsdfSystems`' `.asd`
 metadata (tolerant `#.`-skipping read) and leading-`defpackage` scans. A further
 language extends `forFile` (and `isSourceFile`) and lowers to the same core forms;
-what else it needs to own (REPL continuation, error positions, a formatter) is decided
-when it asks for it, by adding a method to the seam.
+what else it needs to own (error positions, a formatter) is decided when it asks for it,
+by adding a method to the seam; what a REPL needs is `SourceSession`'s four.
 
 ## The second language: `SCHEME` (experimental)
 
@@ -47,5 +58,6 @@ package-inferred sub-system file stay Common Lisp.
 ## Tests
 
 `SourceLanguageSeamTest` (no class outside the seam reads user source through
-`LispReader` directly; no stale exemptions), `RontoLispCliTest`,
+`LispReader` directly; no stale exemptions), `RontoLispCliTest` (the `repl...` and
+`theSchemeRepl...` transcripts),
 `JvmSourceCompilerTest`.

@@ -642,6 +642,72 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void theSchemeReplDefinesRedefinesAssignsAndCallsAcrossPrompts() throws Exception {
+		// One form per prompt, so no lowering ever sees two of them together -- and the
+		// answers are the ones the same text gives as a file.
+		String program = """
+				(define (f x) (* x 2))
+				(f 2)
+				(set! f car)
+				(f '(1 2))
+				(define g 1)
+				(define (g) 5)
+				(g)
+				(define (h x) (+ x 1))
+				(map h '(1 2))
+				(define (ev? n) (if (= n 0) #t (od? (- n 1))))
+				(define (od? n) (if (= n 0) #f (ev? (- n 1))))
+				(ev? 10)
+				(set! od? (lambda (n) 'assigned))
+				(ev? 10)
+				(define (count i) (if (= i 0) 'done (count (- i 1))))
+				(count 1000000)
+				""";
+		assertThat(runCli(program, "--source-language", "scheme"))
+			.isEqualTo("scheme> ".repeat(2) + "4\n" + "scheme> ".repeat(2) + "1\n" + "scheme> ".repeat(3) + "5\n"
+					+ "scheme> ".repeat(2) + "(2 3)\n" + "scheme> ".repeat(3) + "#t\n" + "scheme> ".repeat(2)
+					+ "assigned\n" + "scheme> ".repeat(2) + "done\n" + "scheme> ");
+		StringBuilder echoes = new StringBuilder();
+		for (String line : program.lines().toList()) {
+			echoes.append(
+					line.startsWith("(define") || line.startsWith("(set!") ? line : "(write " + line + ") (newline)")
+				.append('\n');
+		}
+		Path file = this.tempDir.resolve("transcript.scm");
+		Files.writeString(file, echoes.toString());
+		assertThat(runCli("", file.toString())).isEqualTo("4\n1\n5\n(2 3)\n#t\nassigned\ndone\n");
+	}
+
+	@Test
+	void theSchemeReplEchoesThroughTheSchemePrinter() {
+		assertThat(runCli("(list #t #f '() 'Sym \"s\" #\\a 1.5)\n", "--source-language", "scheme"))
+			.isEqualTo("scheme> (#t #f () Sym \"s\" #\\a 1.5)\nscheme> ");
+		// One value per line; no value, a definition and an effect echo nothing, and an
+		// effect's own output still ends its line before the next prompt.
+		assertThat(runCli("(values 1 'a)\n(values)\n(display \"hi\")\n(newline)\n", "--source-language", "scheme"))
+			.isEqualTo("scheme> 1\na\nscheme> scheme> hi\nscheme> \nscheme> ");
+		assertThat(runCli("(define-record-type point (make-point x) point? (x point-x))\n(point? (make-point 1))\n"
+				+ "(point-x (make-point 7))\n", "--source-language", "scheme"))
+			.isEqualTo("scheme> scheme> #t\nscheme> 7\nscheme> ");
+	}
+
+	@Test
+	void theSchemeReplContinuesAnIncompleteDatumByTheSchemeReadersRules() {
+		// A Common Lisp paren count would stop early on #\( and never on a #| comment.
+		String input = "(list #\\(\n 1)\n#| (\n |# 2\n#;(a\n b) 3\n\"a\n(\"\n";
+		// The piped driver prompts once per EVALUATED buffer: each answer below took two
+		// lines.
+		assertThat(runCli(input, "--source-language", "scheme"))
+			.isEqualTo("scheme> (#\\( 1)\nscheme> 2\nscheme> 3\nscheme> \"a\\n(\"\nscheme> ");
+	}
+
+	@Test
+	void theSchemeReplReportsAnErrorWithoutAFilePrefixAndGoesOn() {
+		String output = runCli("(car)\n(if)\n)\n(+ 1 2)\n", "--source-language", "scheme");
+		assertThat(output).contains("Error: ").doesNotContain("null:").endsWith("scheme> 3\nscheme> ");
+	}
+
+	@Test
 	void replWithSimdInterceptsVecKernels() {
 		// The installed Vector API kernel prints #<function VEC:DOT> -- and so does the
 		// vec.lisp defun it replaces, since defuns carry names now. The REPL text can no

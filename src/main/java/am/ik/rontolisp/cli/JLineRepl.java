@@ -6,6 +6,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Path;
 
 import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.SourceSession;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
@@ -57,7 +58,7 @@ final class JLineRepl {
 		}
 	}
 
-	static void run(LispEvaluator evaluator, PrintStream out, StringBuilder buffer) {
+	static void run(SourceSession session, LispEvaluator evaluator, PrintStream out, StringBuilder buffer) {
 		selectNativeImageTerminalProvider();
 		// Disable grapheme cluster (mode 2027) detection. JLine probes for it by
 		// sending a DECRQM query (CSI ? 2027 $ p); terminals that do not understand
@@ -65,7 +66,7 @@ final class JLineRepl {
 		try (Terminal terminal = TerminalBuilder.builder().system(true).graphemeCluster(false).build()) {
 			LineReader lineReader = buildLineReader(terminal);
 			while (true) {
-				String prompt = ReplBuffer.prompt(evaluator, buffer);
+				String prompt = ReplBuffer.prompt(session, evaluator, buffer);
 				String line;
 				try {
 					line = lineReader.readLine(prompt);
@@ -81,8 +82,8 @@ final class JLineRepl {
 					break;
 				}
 				buffer.append(line).append('\n');
-				if (ReplBuffer.isBalanced(buffer.toString())) {
-					ReplBuffer.eval(evaluator, out, buffer);
+				if (session.isComplete(buffer.toString())) {
+					ReplBuffer.eval(session, evaluator, out, buffer);
 				}
 			}
 		}

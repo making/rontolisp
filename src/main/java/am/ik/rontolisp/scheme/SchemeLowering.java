@@ -291,9 +291,16 @@ final class SchemeLowering {
 	private record Lowered(LispVal lambdaList, List<LispVal> body) {
 	}
 
-	private final SchemeReader reader;
+	// The text being lowered: the file, or the buffer a session is reading now.
+	private SchemeReader reader;
 
-	private final List<LispVal> datums;
+	private List<LispVal> datums = List.of();
+
+	// A session lowers one buffer at a time against a global scope that outlives each of
+	// them, so nothing may depend on having seen the whole program.
+	private final boolean interactive;
+
+	private boolean falseBound;
 
 	private final Set<LispSymbol> generated = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
 
@@ -307,9 +314,80 @@ final class SchemeLowering {
 
 	private int closures;
 
-	SchemeLowering(SchemeReader reader, List<LispVal> datums) {
+	private SchemeLowering(SchemeReader reader, boolean interactive) {
 		this.reader = reader;
-		this.datums = datums;
+		this.interactive = interactive;
+	}
+
+	/**
+	 * A lowering of one whole file.
+	 * @param reader the file's reader
+	 * @return the lowering
+	 */
+	static SchemeLowering ofFile(SchemeReader reader) {
+		return new SchemeLowering(reader, false);
+	}
+
+	/**
+	 * A lowering that reads buffer after buffer ({@link #interact}): everything
+	 * {@code (scheme base)} and {@code (scheme write)} export is visible from the start,
+	 * as in any R7RS REPL.
+	 * @return the lowering
+	 */
+	static SchemeLowering ofSession() {
+		SchemeLowering lowering = new SchemeLowering(new SchemeReader("", null), true);
+		lowering.imports();
+		return lowering;
+	}
+
+	/**
+	 * Lowers one buffer of a session, one entry per top-level datum.
+	 *
+	 * <p>
+	 * No pre-scan can see the forms still to be typed, so EVERY top-level definition is a
+	 * variable, called through {@code funcall} by the forms that follow it. A form typed
+	 * BEFORE the definition lowered its call as a direct one (a name nobody defined yet),
+	 * so each definition also leaves a {@code defun} trampoline applying the variable's
+	 * current value: a forward reference, a later {@code set!} and a redefinition all
+	 * land on the same procedure a whole file would call.
+	 * @param buffer the reader over the typed text
+	 * @return the lowered datums, in order
+	 */
+	List<SchemeTopLevel> interact(SchemeReader buffer) {
+		this.reader = buffer;
+		this.datums = buffer.readAll();
+		// Temporaries are recognized by identity while their datum is lowered; the
+		// COUNTER is what must outlive the buffer, a record's generated slot being
+		// global.
+		this.generated.clear();
+		List<LispVal> forms = new ArrayList<>();
+		for (LispVal datum : this.datums) {
+			spliceBegins(datum, forms);
+		}
+		for (LispVal form : forms) {
+			collectAssigned(form);
+			// At a prompt every import is a leading one, and it only ever ADDS names.
+			if (form instanceof LispCons cons && syntaxOf(cons, this.global) == Core.IMPORT) {
+				for (LispVal set : elements(cons.cdr(), cons)) {
+					importSet(set, cons)
+						.forEach((name, binding) -> this.global.bindings.put(SchemeNames.mangle(name), binding));
+				}
+			}
+		}
+		declareGlobals(forms);
+		List<SchemeTopLevel> out = new ArrayList<>();
+		if (!this.falseBound) {
+			out.add(new SchemeTopLevel(List.of(falseBinding()), false));
+		}
+		for (LispVal form : forms) {
+			List<LispVal> lowered = new ArrayList<>();
+			boolean echoes = topLevel(form, lowered);
+			out.add(new SchemeTopLevel(List.copyOf(lowered), echoes));
+		}
+		// Only now: a buffer that failed to lower evaluated nothing, the binding
+		// included.
+		this.falseBound = true;
+		return out;
 	}
 
 	/**
@@ -317,6 +395,7 @@ final class SchemeLowering {
 	 * @return the Common Lisp top-level forms
 	 */
 	List<LispVal> lower() {
+		this.datums = this.reader.readAll();
 		List<LispVal> forms = new ArrayList<>();
 		int start = imports();
 		for (LispVal datum : this.datums.subList(start, this.datums.size())) {
@@ -330,11 +409,15 @@ final class SchemeLowering {
 		// #f is a DISTINCT non-NIL value, so '() stays NIL and every list primitive keeps
 		// working. It lives in a variable because a quoted symbol costs a lookup per
 		// evaluation on wasm (3x on a test-heavy loop, .kb/scheme-frontend.md).
-		out.add(list(symbol("SETQ"), this.falseVariable, list(symbol("QUOTE"), symbol("#f"))));
+		out.add(falseBinding());
 		for (LispVal form : forms) {
 			topLevel(form, out);
 		}
 		return out;
+	}
+
+	private LispVal falseBinding() {
+		return list(symbol("SETQ"), this.falseVariable, list(symbol("QUOTE"), symbol("#f")));
 	}
 
 	// ------------------------------------------------------------------ imports
@@ -483,11 +566,13 @@ final class SchemeLowering {
 			if (core == Core.DEFINE) {
 				Definition definition = definition(form);
 				String name = name(definition.name());
+				refuseARecordProcedure(definition.name(), form);
 				definitions.merge(name, 1, Integer::sum);
 				(definition.procedure() ? procedures : variables).putIfAbsent(name, definition.name());
 			}
 			else if (core == Core.DEFINE_VALUES) {
 				for (LispSymbol variable : formals(second(form), form).all()) {
+					refuseARecordProcedure(variable, form);
 					definitions.merge(name(variable), 2, Integer::sum);
 					variables.putIfAbsent(name(variable), variable);
 				}
@@ -498,8 +583,8 @@ final class SchemeLowering {
 		}
 		variables.forEach((name, identifier) -> this.global.bindings.put(name, new Variable(cl(identifier))));
 		procedures.forEach((name, identifier) -> {
-			boolean direct = definitions.getOrDefault(name, 0) == 1 && !this.assignedNames.contains(name)
-					&& !variables.containsKey(name);
+			boolean direct = !this.interactive && definitions.getOrDefault(name, 0) == 1
+					&& !this.assignedNames.contains(name) && !variables.containsKey(name);
 			this.global.bindings.put(name, direct ? new GlobalFunction(cl(identifier)) : new Variable(cl(identifier)));
 		});
 		for (LispCons record : records) {
@@ -507,16 +592,49 @@ final class SchemeLowering {
 		}
 	}
 
-	private void topLevel(LispVal datum, List<LispVal> out) {
+	// A file refuses a redefined record procedure in declareRecord, which sees both
+	// definitions; a session meets the second one alone, against the scope it kept.
+	private void refuseARecordProcedure(LispSymbol identifier, LispCons form) {
+		Binding known = this.global.bindings.get(name(identifier));
+		if (known instanceof GlobalFunction || known instanceof GlobalPredicate) {
+			throw error("cannot redefine " + identifier.name() + ", a record procedure", form);
+		}
+	}
+
+	// Answers whether the datum has a value worth echoing: a definition, an import, an
+	// assignment and a procedure called for its effect have none.
+	private boolean topLevel(LispVal datum, List<LispVal> out) {
 		if (datum instanceof LispCons form) {
 			try {
 				switch (syntaxOf(form, this.global)) {
-					case DEFINE -> out.add(inherit(form, topLevelDefine(form)));
-					case DEFINE_VALUES -> out.add(inherit(form, defineValues(form, this.global)));
+					case DEFINE -> {
+						out.add(inherit(form, topLevelDefine(form)));
+						trampoline(definition(form).name(), out);
+					}
+					case DEFINE_VALUES -> {
+						out.add(inherit(form, defineValues(form, this.global)));
+						for (LispSymbol variable : formals(second(form), form).all()) {
+							trampoline(variable, out);
+						}
+					}
 					case DEFINE_RECORD_TYPE -> recordType(form, out);
-					case IMPORT -> throw error("import must come before everything else", form);
-					case null, default -> out.add(value(form, this.global));
+					case IMPORT -> {
+						if (!this.interactive) {
+							throw error("import must come before everything else", form);
+						}
+					}
+					case SET -> {
+						out.add(value(form, this.global));
+						return false;
+					}
+					case null, default -> {
+						out.add(value(form, this.global));
+						return !(form.car() instanceof LispSymbol head
+								&& lookup(head, this.global) instanceof Builtin builtin
+								&& builtin.entry().result() == SchemeBuiltins.Result.EFFECT);
+					}
 				}
+				return false;
 			}
 			catch (LispReadException ex) {
 				throw ex;
@@ -525,8 +643,18 @@ final class SchemeLowering {
 				throw SourceProvenance.noteFailure(form, ex);
 			}
 		}
-		else {
-			out.add(value(datum, this.global));
+		out.add(value(datum, this.global));
+		return true;
+	}
+
+	// (defun f (&rest a) (apply f a)): what a call lowered BEFORE the session defined f
+	// reaches. It reads the variable on every call, so it follows set! and redefinition.
+	private void trampoline(LispSymbol identifier, List<LispVal> out) {
+		if (this.interactive) {
+			LispSymbol name = cl(identifier);
+			LispSymbol arguments = fresh("A");
+			out.add(list(symbol("DEFUN"), name, list(symbol("&REST"), arguments),
+					list(symbol("APPLY"), name, arguments)));
 		}
 	}
 
@@ -584,8 +712,12 @@ final class SchemeLowering {
 		if (!(binding instanceof Variable variable)) {
 			throw error("cannot redefine " + definition.name().name() + ", a record procedure", form);
 		}
+		// A session's procedure keeps its self tail calls a loop, like the defun a file
+		// would make of it, unless the session has assigned the name so far. A set! typed
+		// LATER cannot reach back into it: only a saved old value would tell.
+		Binding self = this.interactive && !this.assignedNames.contains(name(definition.name())) ? variable : null;
 		return list(symbol("SETQ"), variable.symbol(),
-				definedValue(definition, new DefinedIn(form, this.global, null)));
+				definedValue(definition, new DefinedIn(form, this.global, self)));
 	}
 
 	private record DefinedIn(LispCons form, Scope scope, @Nullable Binding self) {

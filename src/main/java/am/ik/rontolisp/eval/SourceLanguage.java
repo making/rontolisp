@@ -35,7 +35,9 @@ import am.ik.rontolisp.scheme.Scheme;
  * file by file: {@code load} (both the interpreter's and the compile path's inliner)
  * picks by the LOADED file's extension, while the entry source is picked by the entry
  * file's extension unless the {@code --source-language} CLI override names one. The REPL
- * and the browser playground have no file and read the default.
+ * has no file and reads the override's language, one buffer at a time, through
+ * {@link SourceSession}; the browser playground has no language pick and reads the
+ * default.
  */
 public enum SourceLanguage {
 
