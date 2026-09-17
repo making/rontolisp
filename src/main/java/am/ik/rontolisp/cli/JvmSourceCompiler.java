@@ -226,9 +226,20 @@ public final class JvmSourceCompiler {
 
 	private Optional<Result> run(String source, @Nullable String entryFile, boolean onlyIfExported) {
 		return CompileDiagnostics.recording(() -> {
-			CompileFrontend.Result frontend = CompileFrontend.run(source, entryFile, this.sourceLanguage, this.baseDir,
-					this.systemPath, DistClient.createDefault(this.dists), this.features, false, this.servlet,
-					this.dynamic, false, false, false, false, null, false, this.noPrune);
+			CompileFrontend.Result frontend = CompileFrontend.run(CompileFrontend.Request.builder()
+				.source(source)
+				.entryFile(entryFile)
+				.sourceLanguage(this.sourceLanguage)
+				.systemPath(this.systemPath)
+				.dists(DistClient.createDefault(this.dists))
+				.declaredFeatures(this.features)
+				.options(CompileFrontend.Options.builder()
+					.baseDir(this.baseDir)
+					.servlet(this.servlet)
+					.dynamic(this.dynamic)
+					.noPrune(this.noPrune)
+					.build())
+				.build());
 			if (onlyIfExported && frontend.program().stream().noneMatch(JvmExportDirective::isExportForm)) {
 				return Optional.empty();
 			}

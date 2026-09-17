@@ -702,9 +702,27 @@ public final class RontoLispCli {
 		// macro expansion, the library splice chain, the WIT lowerings, the boundp fold
 		// and the library tree-shaker -- in the one place all four backends and the
 		// embedded JVM seam (JvmSourceCompiler) share (CompileFrontend).
-		CompileFrontend.Result frontend = CompileFrontend.run(source, entryFile, sourceLanguage, baseDir, systemPath,
-				dists, declaredFeatures, outputFile.endsWith(".wasm"), outputFile.endsWith(".war"), dynamic, component,
-				noWasi, noGc, hostFetch, hostBoundary, reentrant, noPrune);
+		CompileFrontend.Result frontend = CompileFrontend.run(CompileFrontend.Request.builder()
+			.source(source)
+			.entryFile(entryFile)
+			.sourceLanguage(sourceLanguage)
+			.systemPath(systemPath)
+			.dists(dists)
+			.declaredFeatures(declaredFeatures)
+			.options(CompileFrontend.Options.builder()
+				.baseDir(baseDir)
+				.wasm(outputFile.endsWith(".wasm"))
+				.servlet(outputFile.endsWith(".war"))
+				.dynamic(dynamic)
+				.component(component)
+				.noWasi(noWasi)
+				.noGc(noGc)
+				.hostFetch(hostFetch)
+				.hostBoundary(hostBoundary)
+				.reentrant(reentrant)
+				.noPrune(noPrune)
+				.build())
+			.build());
 		List<LispVal> program = frontend.program();
 		Features features = frontend.features();
 		boolean serve = frontend.serve();

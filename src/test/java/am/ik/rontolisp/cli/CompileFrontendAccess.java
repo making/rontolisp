@@ -4,7 +4,6 @@ import java.io.FileNotFoundException;
 import java.util.List;
 
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.compiler.HostBoundary;
 import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.reader.Features;
@@ -77,8 +76,8 @@ public final class CompileFrontendAccess {
 			throw new FileNotFoundException(path);
 		}, null, List.of(), features);
 		return CompileFrontend
-			.expand(loaded, features, null, wasm, false, false, noWasi, false, false, HostBoundary.ENVELOPE, false,
-					false)
+			.expand(new CompileFrontend.Loaded(loaded, features),
+					CompileFrontend.Options.builder().wasm(wasm).noWasi(noWasi).build())
 			.program();
 	}
 
@@ -93,8 +92,10 @@ public final class CompileFrontendAccess {
 	 */
 	public static List<LispVal> wasmReactor(String source, String baseDir, boolean noGc) {
 		return CompileFrontend
-			.run(source, null, null, baseDir, List.of(), DistClient.createDefault(List.of()), List.of(), true, false,
-					false, false, true, noGc, false, null, false, false)
+			.run(CompileFrontend.Request.builder()
+				.source(source)
+				.options(CompileFrontend.Options.builder().baseDir(baseDir).wasm(true).noWasi(true).noGc(noGc).build())
+				.build())
 			.program();
 	}
 
@@ -108,10 +109,10 @@ public final class CompileFrontendAccess {
 	 * @return the expanded, spliced and pruned top-level forms
 	 */
 	public static List<LispVal> noGcComponent(String source, String baseDir) {
-		return CompileFrontend
-			.run(source, null, null, baseDir, List.of(), DistClient.createDefault(List.of()), List.of(), true, false,
-					false, true, false, true, false, null, false, false)
-			.program();
+		return CompileFrontend.run(CompileFrontend.Request.builder()
+			.source(source)
+			.options(CompileFrontend.Options.builder().baseDir(baseDir).wasm(true).component(true).noGc(true).build())
+			.build()).program();
 	}
 
 	/**
@@ -130,9 +131,12 @@ public final class CompileFrontendAccess {
 		// DistClient.createDefault mirrors the CLI's default (Quicklisp, cached under
 		// ~/.rontolisp) and touches neither network nor disk unless the program actually
 		// ql:quickloads something -- a vendored system resolves against systemPath.
-		CompileFrontend.Result result = CompileFrontend.run(source, null, null, null, systemPath,
-				DistClient.createDefault(List.of()), List.of(), wasm, false, false, component, false, false, false,
-				null, false, false);
+		CompileFrontend.Result result = CompileFrontend.run(CompileFrontend.Request.builder()
+			.source(source)
+			.systemPath(systemPath)
+			.dists(DistClient.createDefault(List.of()))
+			.options(CompileFrontend.Options.builder().wasm(wasm).component(component).build())
+			.build());
 		return new Program(result.program(), result.features());
 	}
 

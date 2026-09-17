@@ -1,6 +1,7 @@
 package am.ik.rontolisp.cli;
 
 import java.util.List;
+import java.util.Objects;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
@@ -78,16 +79,102 @@ final class CompileFrontend {
 	}
 
 	/**
-	 * Runs the front end.
+	 * What the front end reads: the entry source and where its {@code (load ...)}s and
+	 * ASDF systems come from, plus the {@link Options} the whole pipeline runs under.
+	 *
 	 * @param source the program text
 	 * @param entryFile the path the text was read from, for diagnostics
 	 * @param sourceLanguage the {@code --source-language} override naming the entry
 	 * source's language, or {@code null} to pick it from the entry file's extension
-	 * @param baseDir the directory relative paths resolve against
 	 * @param systemPath the ASDF system search path
 	 * @param dists the Quicklisp-format distributions
 	 * @param declaredFeatures the read-time features the user declared
 	 * ({@code --feature})
+	 * @param options the target and pass options
+	 */
+	record Request(String source, @Nullable String entryFile, @Nullable String sourceLanguage, List<String> systemPath,
+			DistClient dists, List<String> declaredFeatures, Options options) {
+
+		static Builder builder() {
+			return new Builder();
+		}
+
+		static final class Builder {
+
+			private @Nullable String source;
+
+			private @Nullable String entryFile;
+
+			private @Nullable String sourceLanguage;
+
+			private List<String> systemPath = List.of();
+
+			private @Nullable DistClient dists;
+
+			private List<String> declaredFeatures = List.of();
+
+			private @Nullable Options options;
+
+			private Builder() {
+			}
+
+			Builder source(String source) {
+				this.source = source;
+				return this;
+			}
+
+			Builder entryFile(@Nullable String entryFile) {
+				this.entryFile = entryFile;
+				return this;
+			}
+
+			Builder sourceLanguage(@Nullable String sourceLanguage) {
+				this.sourceLanguage = sourceLanguage;
+				return this;
+			}
+
+			Builder systemPath(List<String> systemPath) {
+				this.systemPath = systemPath;
+				return this;
+			}
+
+			Builder dists(DistClient dists) {
+				this.dists = dists;
+				return this;
+			}
+
+			Builder declaredFeatures(List<String> declaredFeatures) {
+				this.declaredFeatures = declaredFeatures;
+				return this;
+			}
+
+			Builder options(Options options) {
+				this.options = options;
+				return this;
+			}
+
+			/**
+			 * Builds the request. {@code dists} defaults to the CLI's default
+			 * distribution client, which touches neither network nor disk unless the
+			 * program quickloads something.
+			 * @return the request
+			 */
+			Request build() {
+				return new Request(Objects.requireNonNull(this.source, "source is required"), this.entryFile,
+						this.sourceLanguage, this.systemPath,
+						this.dists != null ? this.dists : DistClient.createDefault(List.of()), this.declaredFeatures,
+						Objects.requireNonNull(this.options, "options is required"));
+			}
+
+		}
+
+	}
+
+	/**
+	 * The target and the command-line switches the pass pipeline reads. Every flag
+	 * defaults to off and the host boundary to {@link HostBoundary#ENVELOPE}.
+	 *
+	 * @param baseDir the directory relative paths resolve against
 	 * @param wasm whether the target is a {@code .wasm} output
 	 * @param servlet whether the target is a {@code .war} output (JVM servlet mode)
 	 * @param dynamic {@code --dynamic}
@@ -95,16 +182,140 @@ final class CompileFrontend {
 	 * @param noWasi {@code --no-wasi}
 	 * @param noGc {@code --no-gc}
 	 * @param hostFetch {@code --host-fetch}
-	 * @param hostBoundary {@code --host-boundary}, or {@code null} for the default
+	 * @param hostBoundary {@code --host-boundary}
 	 * @param reentrant {@code --reentrant}
 	 * @param noPrune {@code --no-prune}
+	 */
+	record Options(@Nullable String baseDir, boolean wasm, boolean servlet, boolean dynamic, boolean component,
+			boolean noWasi, boolean noGc, boolean hostFetch, HostBoundary hostBoundary, boolean reentrant,
+			boolean noPrune) {
+
+		static Builder builder() {
+			return new Builder();
+		}
+
+		static final class Builder {
+
+			private @Nullable String baseDir;
+
+			private boolean wasm;
+
+			private boolean servlet;
+
+			private boolean dynamic;
+
+			private boolean component;
+
+			private boolean noWasi;
+
+			private boolean noGc;
+
+			private boolean hostFetch;
+
+			private @Nullable HostBoundary hostBoundary;
+
+			private boolean reentrant;
+
+			private boolean noPrune;
+
+			private Builder() {
+			}
+
+			Builder baseDir(@Nullable String baseDir) {
+				this.baseDir = baseDir;
+				return this;
+			}
+
+			Builder wasm(boolean wasm) {
+				this.wasm = wasm;
+				return this;
+			}
+
+			Builder servlet(boolean servlet) {
+				this.servlet = servlet;
+				return this;
+			}
+
+			Builder dynamic(boolean dynamic) {
+				this.dynamic = dynamic;
+				return this;
+			}
+
+			Builder component(boolean component) {
+				this.component = component;
+				return this;
+			}
+
+			Builder noWasi(boolean noWasi) {
+				this.noWasi = noWasi;
+				return this;
+			}
+
+			Builder noGc(boolean noGc) {
+				this.noGc = noGc;
+				return this;
+			}
+
+			Builder hostFetch(boolean hostFetch) {
+				this.hostFetch = hostFetch;
+				return this;
+			}
+
+			/**
+			 * Sets the host boundary.
+			 * @param hostBoundary {@code --host-boundary}, or {@code null} for the
+			 * default
+			 * @return this builder
+			 */
+			Builder hostBoundary(@Nullable HostBoundary hostBoundary) {
+				this.hostBoundary = hostBoundary;
+				return this;
+			}
+
+			Builder reentrant(boolean reentrant) {
+				this.reentrant = reentrant;
+				return this;
+			}
+
+			Builder noPrune(boolean noPrune) {
+				this.noPrune = noPrune;
+				return this;
+			}
+
+			Options build() {
+				return new Options(this.baseDir, this.wasm, this.servlet, this.dynamic, this.component, this.noWasi,
+						this.noGc, this.hostFetch,
+						this.hostBoundary != null ? this.hostBoundary : HostBoundary.ENVELOPE, this.reentrant,
+						this.noPrune);
+			}
+
+		}
+
+	}
+
+	/**
+	 * The read, load-inlined top-level forms {@link #expand} starts from, with the
+	 * feature set they were read with.
+	 *
+	 * @param forms the top-level forms
+	 * @param features the feature set the forms were read with
+	 */
+	record Loaded(List<LispVal> forms, Features features) {
+	}
+
+	/**
+	 * Runs the front end.
+	 * @param request the source and the options to run it under
 	 * @return the expanded program and what a backend needs to know about it
 	 */
-	static Result run(String source, @Nullable String entryFile, @Nullable String sourceLanguage,
-			@Nullable String baseDir, List<String> systemPath, DistClient dists, List<String> declaredFeatures,
-			boolean wasm, boolean servlet, boolean dynamic, boolean component, boolean noWasi, boolean noGc,
-			boolean hostFetch, @Nullable HostBoundary hostBoundary, boolean reentrant, boolean noPrune) {
-		HostBoundary boundary = hostBoundary == null ? HostBoundary.ENVELOPE : hostBoundary;
+	static Result run(Request request) {
+		Options options = request.options();
+		String entryFile = request.entryFile();
+		boolean wasm = options.wasm();
+		boolean component = options.component();
+		boolean noWasi = options.noWasi();
+		boolean noGc = options.noGc();
+		HostBoundary boundary = options.hostBoundary();
 		// Inline top-level (load "path") forms at compile time: the compilers collect
 		// defuns in a static pass that a runtime load cannot feed, so a program split
 		// across files (a console driver loading a rendering-free core) would otherwise
@@ -134,7 +345,7 @@ final class CompileFrontend {
 		// because the clack-handler-rontolisp shim branches on features and on nothing
 		// else (.kb/clack.md).
 		Features features = wasm ? (reactor ? Features.WASM_REACTOR : Features.WASM)
-				: (servlet ? Features.JVM_SERVLET : Features.JVM);
+				: (options.servlet() ? Features.JVM_SERVLET : Features.JVM);
 		// And #+rontolisp-component selects code for the COMPONENT BOUNDARY, which is a
 		// different boundary rather than a different backend: a component's host
 		// functions cross the canonical ABI, so the core-module directives
@@ -162,7 +373,7 @@ final class CompileFrontend {
 		// Everything downstream reads with the result, including the (load ...) inlining
 		// and the ASDF components below, and the compiled program's run-time *features*
 		// is seeded from it (WasmLispCompiler.runtimeFeatures / JvmLispCompiler).
-		features = features.with(declaredFeatures);
+		features = features.with(request.declaredFeatures());
 		// (rontolisp:wit-import "kv.wit" :interface "..."): bind a WIT interface's
 		// functions. Unlike wit-export this runs BEFORE UserMacroExpander, because the
 		// names it binds live in a package the WIT names -- the (defpackage kv ...) it
@@ -176,11 +387,11 @@ final class CompileFrontend {
 		// macro-time evaluator, per top-level form (the interpreter's loadFile timing).
 		// The read itself is the source-language seam's: the entry file's language
 		// (its extension, or the CLI override), read with the target's features.
-		List<LispVal> read = SourceLanguage.forFile(entryFile, sourceLanguage).read(source, features, entryFile);
-		List<LispVal> loaded = LoadInliner.inline(read, SourceLoader.fileSystem(), baseDir, systemPath, features,
-				dists);
-		return expand(loaded, features, baseDir, wasm, dynamic, component, noWasi, noGc, hostFetch, boundary, reentrant,
-				noPrune);
+		List<LispVal> read = SourceLanguage.forFile(entryFile, request.sourceLanguage())
+			.read(request.source(), features, entryFile);
+		List<LispVal> loaded = LoadInliner.inline(read, SourceLoader.fileSystem(), options.baseDir(),
+				request.systemPath(), features, request.dists());
+		return expand(new Loaded(loaded, features), options);
 	}
 
 	/**
@@ -206,23 +417,23 @@ final class CompileFrontend {
 	 * caller may legitimately want its own source loader -- the corpus guards pass one
 	 * that THROWS, which is how they assert the catalogue never comes to depend on a file
 	 * on disk.
-	 * @param loaded the read, load-inlined top-level forms
-	 * @param features the feature set the program was read with
-	 * @param baseDir the directory relative paths resolve against
-	 * @param wasm whether the target is a {@code .wasm} output
-	 * @param dynamic {@code --dynamic}
-	 * @param component {@code --component}
-	 * @param noWasi {@code --no-wasi}
-	 * @param noGc {@code --no-gc}
-	 * @param hostFetch {@code --host-fetch}
-	 * @param boundary the host boundary, already defaulted
-	 * @param reentrant {@code --reentrant}
-	 * @param noPrune {@code --no-prune}
+	 * @param input the read, load-inlined top-level forms and their feature set
+	 * @param options the target and pass options
 	 * @return the expanded program and what a backend needs to know about it
 	 */
-	static Result expand(List<LispVal> loaded, Features features, @Nullable String baseDir, boolean wasm,
-			boolean dynamic, boolean component, boolean noWasi, boolean noGc, boolean hostFetch, HostBoundary boundary,
-			boolean reentrant, boolean noPrune) {
+	static Result expand(Loaded input, Options options) {
+		List<LispVal> loaded = input.forms();
+		Features features = input.features();
+		String baseDir = options.baseDir();
+		boolean wasm = options.wasm();
+		boolean dynamic = options.dynamic();
+		boolean component = options.component();
+		boolean noWasi = options.noWasi();
+		boolean noGc = options.noGc();
+		boolean hostFetch = options.hostFetch();
+		HostBoundary boundary = options.hostBoundary();
+		boolean reentrant = options.reentrant();
+		boolean noPrune = options.noPrune();
 		WitExportDirective.Backend witBackend = witBackend(wasm, noGc, component);
 		// Expand the (rontolisp:async (defun ...)) wrapper before anything scans for
 		// definitions: HttpLibrary's handler reachability, WitExportInliner's defun
