@@ -52,16 +52,6 @@ public class LispEvalException extends RuntimeException {
 		this(message, condition, null);
 	}
 
-	/**
-	 * Create an evaluation exception that refines a failure without changing what it
-	 * signals: the same message, condition and condition class, the failure as the cause.
-	 * @param failure the failure refined
-	 */
-	protected LispEvalException(LispEvalException failure) {
-		this(String.valueOf(failure.getMessage()), failure.condition(), failure.conditionClassName());
-		initCause(failure);
-	}
-
 	private LispEvalException(String message, @Nullable LispVal condition, @Nullable String conditionClassName) {
 		super(message);
 		this.condition = condition;

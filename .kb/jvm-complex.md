@@ -171,8 +171,7 @@ body wholesale with the Kahan form, which fixed the slot swap the sweep
 originally found there). That census is now the pinning test
 `JvmLispCompilerTest#compileAndRunComplexUnaryMathMirrorsTheInterpreterArmForArm`:
 it runs the generated program through `LispEvaluator` and asserts the compiled
-output IS the interpreter's, which is the only pin the platform's `Math`
-rounding cannot invalidate. A differential only sees disagreement, so both ends
+output IS the interpreter's. A differential only sees disagreement, so both ends
 carry an anchor against the real functions
 (`LispEvaluatorTest#evalComplexTanTanhAreQuotientsOnEveryAxis`, and the
 four-backend leg `ci-spec.yaml`'s `complex-tan-tanh-are-quotients`, which pins
@@ -187,7 +186,7 @@ already took. The value is the EXISTING complex arm run at `(x, +0.0)`
 is defined twice and `(asin 2d0)` IS `(asin #c(2d0 0d0))`.
 
 **`expt` is the one exception, and deliberately.** A real base's phase is EXACTLY pi, so
-the answer is `Math.pow(|x|, y)` turned through `y*pi` radians (`_cpowr`, the
+the answer is `StrictMath.pow(|x|, y)` turned through `y*pi` radians (`_cpowr`, the
 interpreter's `negativeBasePow`) -- not `_cpow`'s `exp(w*log z)`, which would have to
 recover that phase from a logarithm. Measured against SBCL 2.2.9 on 2026-09-11:
 `(expt -8d0 1/3)` is `#C(1.0000000000000002 1.7320508075688772)` by the rotation and
@@ -246,14 +245,14 @@ unchanged, so two shapes keep the pre-existing corner rather than gaining an arm
 (CLHS). Both live in `JvmMathFnCompiler.compileBinary`, AHEAD of the one-argument path,
 which is byte-for-byte what it was.
 
-- **`atan2` is `Math.atan2`, the same call `phase` makes**, so
+- **`atan2` is `StrictMath.atan2`, the same call `phase` makes**, so
   `(atan (imagpart z) (realpart z))` IS `(phase z)` and no second quadrant assembly
   exists to drift. Both arguments must be REAL (CLHS): they go through
   `compileUnboxedOperand`, whose `_dbl` funnel already throws the interpreter's
   "Expected real number" for a holder. `atan` NEVER opens the complex gate -- it is not
   a real-domain escape, and the two-argument form cannot answer a complex.
 - **`log/2` is TWO logarithms and one division.** `escapesToComplex` therefore reads
-  BOTH literals: `(log 8 2)` keeps the gate shut and compiles to two `Math.log` calls
+  BOTH literals: `(log 8 2)` keeps the gate shut and compiles to two `StrictMath.log` calls
   and a `DDIV`; anything a literal cannot prove non-negative runs both arguments through
   `_cu1`'s `U1_LOG` and divides with `_cdiv`
   (`JvmLispCompilerTest#aLiteralProvenRealBaseKeepsTheComplexGateShut`).
@@ -338,27 +337,18 @@ rendered) instead of the complex answer; ordering there answers `nil` instead
 of signalling. The embedded runtime reader has no `#C` arm yet. `signum` of a
 complex is 754's audit.
 
-The `_cu1` real path and the interpreter's unary math are both `Math.<fn>`, so
-they agree on every platform -- but a `Math` result is not one number:
-`Math.exp(1.0)` is `2.718281828459045` on x64 and `2.7182818284590455` on
-aarch64 (2026-09-10, the defect behind the deleted `.todo/756`, which was
-`./mvnw test` red on every aarch64 box). The pinning tests therefore assert
-the interpreter's own `Math` values (`Double.toString(Math.exp(1))`), never a
-printed digit string, and only the platform-exact answers keep literals.
-
-`Math.log` splits the same way, and the split reaches the COMPLEX answers
-through `complexLog`'s `log(hypot(...))`: `Math.log(3.0)` is
-`1.0986122886681098` on x64 (correctly rounded) and `1.0986122886681096` on
-aarch64, so `(atanh 2)` answers `0.5493061443340549` / `...548` and
-`(acosh #c(1 1))` `1.0612750619050357` / `...355` -- x64 landing on SBCL's
-digits, aarch64 one ulp below them (2026-09-11, measured on the interpreter and
-on `-o Probe.class` under `linux/amd64`; it was `./mvnw test` red on CI with the
-literals, green on every aarch64 box). Only `Math.log` moves: the moduli it is
-handed (`sqrt`/`hypot`) are the same doubles everywhere, so these pins spell the
-call -- `"#C(" + Math.log(3.0) / 2 + " ...)"`,
-`2 * Math.log(1.7000157758867898)` for the acosh sqrt-sum modulus -- and the
-round trips (`(cosh (acosh #c(1 1)))`) assert closeness to the argument within
-2 ulps, which is what a round trip actually pins.
+The `_cu1` real path and the interpreter's unary math are both
+`StrictMath.<fn>` (fdlibm, `.kb/transcendentals.md`), one number on every
+platform. They were `Math.<fn>` until 2026-09-17, which is not: `Math.exp(1.0)`
+is `2.718281828459045` on x64 and `2.7182818284590455` on aarch64 (the defect
+behind the deleted `.todo/756`, `./mvnw test` red on every aarch64 box), and
+`Math.log(3.0)` is `1.0986122886681098` on x64 and `...096` on aarch64, which
+reached the COMPLEX answers through `complexLog`'s `log(hypot(...))`
+(`(atanh 2)` `0.5493061443340549` / `...548`). The pinning tests still spell the
+call (`"#C(" + StrictMath.log(3.0) / 2 + " ...)"`) rather than a digit string,
+and the round trips (`(cosh (acosh #c(1 1)))`) assert closeness to the argument
+within 2 ulps, which is what a round trip actually pins; either shape is now
+platform-independent.
 
 Pinning tests: `JvmLispCompilerTest#compileAndRunComplex*` (mirrors
 `LispEvaluatorTest`'s `evalComplex*` case for case);

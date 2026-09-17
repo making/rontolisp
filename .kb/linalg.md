@@ -101,19 +101,18 @@ Everything strided bottoms out here, so there is exactly one place a strided rea
 ## `-inf` through `where` -> `softmax`
 Masked attention is `(linalg:where mask score -inf)` then `softmax`, and it works only because
 `where` SELECTS: the older multiply-by-a-0.0/1.0-mask spelling turns `0.0 * -inf` into `NaN`.
-It was not free. `WasmExpCompiler`'s software `exp` used to be a degree-5 Taylor polynomial on
-`t = x / 256` followed by 8 squarings, and that polynomial has a real root near `t = -2.18`
-(`x = -558`) below which `p(t)` is NEGATIVE and an even number of squarings makes it hugely
-POSITIVE -- `(exp -1000)` was `2.4e125`, so a masked softmax returned `NaN` on WASM. A large
-finite negative mask would NOT have been safer. Fix (todo-456): the standard range reduction
-`x = k*ln2 + r`, a degree-12 Taylor polynomial for `e^r`, and a scale by `2^k` through the
-exponent bits (`WasmExpCompiler.UNDERFLOW_LO`, mirrored in
-`WasmVecSimdRuntimeBuilder.emitExpF64` so `--simd`/`--no-gc` kernels stay bit-identical).
-NaN still propagates, `+inf` untouched. Rest of the WASM transcendental contract: [[vec]].
+It was not free. WASM's first software `exp` was a degree-5 Taylor polynomial on `t = x / 256`
+followed by 8 squarings, and that polynomial has a real root near `t = -2.18` (`x = -558`) below
+which `p(t)` is NEGATIVE and an even number of squarings makes it hugely POSITIVE --
+`(exp -1000)` was `2.4e125`, so a masked softmax returned `NaN` on WASM. A large finite
+negative mask would NOT have been safer. Fixed by todo-456's range reduction, and since
+2026-09-17 `exp` is fdlibm on every backend (`.kb/transcendentals.md`), whose `x < -745.13`
+answers `0.0`; the `--simd`/`--no-gc` kernels call the same function. NaN still propagates,
+`+inf` untouched. Rest of the WASM transcendental contract: [[vec]].
 
 `softmax`/`log-softmax`/`erf` live here rather than in the differentiable layer because a second
 copy would fork the array math; `erf` exists for the EXACT GELU `x * (1 + erf(x/sqrt 2)) / 2`
-([[torch]]). Its accuracy depends on `exp`, so on WASM it inherits that backend's software `exp`.
+([[torch]]). Its accuracy depends on `exp`, one fdlibm on every backend.
 
 ## Seeded RNG (the np.random analog)
 Wichmann-Hill: three multiplicative congruential generators (`%la-rng-s1/-s2/-s3`, moduli

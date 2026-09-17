@@ -147,9 +147,8 @@ final class WasmLinalgSimdRuntimeBuilder {
 	static final int SIGN = 19;
 
 	// The transcendental ufuncs (log / tanh / sin / cos / tan / asin / acos / atan /
-	// sinh / cosh): element loops like exp / sign, mirroring
-	// WasmLogCompiler / WasmTanhCompiler / WasmSinCosCompiler / WasmAtanCompiler /
-	// WasmSinhCoshCompiler (no lane form exists).
+	// sinh / cosh): element loops like exp / sign over the fdlibm runtime (no lane
+	// form exists).
 
 	static final int LOG = 20;
 
@@ -162,7 +161,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	static final int TAN = 24;
 
 	// The inverse-trigonometric / hyperbolic ufuncs (asin / acos / atan / sinh / cosh):
-	// element loops mirroring WasmAtanCompiler / WasmSinhCoshCompiler.
+	// element loops over the fdlibm runtime.
 
 	static final int ASIN = 25;
 
@@ -703,10 +702,9 @@ final class WasmLinalgSimdRuntimeBuilder {
 	//
 	// laneUop >= 0 runs whole lane groups (WasmVecLoops.gcMap1: sqrt / abs / negative,
 	// each mirroring the wasm defun's own scalar semantics); laneUop < 0 walks elements
-	// through _v_get / _v_set with the defun's exact f64 sequence (scalarOp names it:
-	// the WasmExpCompiler range-reduced Taylor + exponent-bit scale, the WasmLogCompiler
-	// atanh series, the WasmTanhCompiler clamped exp derivation, the WasmSinCosCompiler
-	// Cody-Waite reduction, or WasmSignumCompiler's (x>0)-(x<0)).
+	// through _v_get / _v_set calling the defun's own operator (scalarOp names it: the
+	// fdlibm runtime function behind (exp x) etc., or WasmSignumCompiler's
+	// (x>0)-(x<0)).
 	//
 	// params: 0 = a
 	// i32: count 1, kind 2, shift 3, ng 4, g 5, rem 6, i 7, len 8
@@ -747,7 +745,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 			get(w, vbD);
 			get(w, i);
 			vget(w, vbA, i, vecBase);
-			WasmVecSimdRuntimeBuilder.emitScalarUnaryF64(w, scalarOp, f64Base);
+			WasmVecSimdRuntimeBuilder.emitScalarUnaryF64(w, scalarOp, f64Base, WasmLispCompiler::fdlibmFunc);
 			w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
 			w.write(Instruction.DROP);
 			WasmVecLoops.closeIndexLoop(w, i);
@@ -780,12 +778,13 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// (abs x) has no double literal among its argument forms, so it compiles to
 	// _rat_cmp's float path -- x < 0 ? 0 - x : x, which leaves -0.0 alone where
 	// Math.abs would not -- and (- (* ax ax)) / (- v) are the generic unary minus,
-	// which is _rat_sub(0, x), i.e. 0 - x. exp is WasmExpCompiler's range-reduced
-	// approximation, emitted here by emitExpF64 from the same constants.
+	// which is _rat_sub(0, x), i.e. 0 - x. exp is the fdlibm runtime's, the function
+	// the defun's own (exp ...) calls.
 	//
 	// params: 0 = a
 	// i32: count 1, kind 2, shift 3, ng 4, i 5, len 6, n 7
-	// f64: x 8, ax 9, term 10, total 11, xx 12, expT 13, expAcc 14, expK 15
+	// f64: x 8, ax 9, term 10, total 11, xx 12, expT 13, expAcc 14, expK 15 (the last
+	// three are spare since exp became a call)
 	// eq: res 16, vbD 17, vbA 18, nd 19, da 20
 	private static byte[] buildErf(int vecBase) {
 		ByteArrayOutputStream b = new ByteArrayOutputStream();
@@ -1359,12 +1358,13 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.F64_CONST).writeF64(1.1283791670955126);
 		get(w, ax);
 		w.write(Instruction.F64_MUL);
-		// (- (* ax ax)) is unary minus: f64.neg.
+		// (- (* ax ax)) is unary minus: f64.neg; exp is the fdlibm runtime's, the
+		// same function the defun's (exp ...) calls.
 		get(w, ax);
 		get(w, ax);
 		w.write(Instruction.F64_MUL);
 		w.write(Instruction.F64_NEG);
-		WasmVecSimdRuntimeBuilder.emitExpF64(w, expT, expK, expAcc);
+		w.write(Instruction.CALL).writeUnsignedLeb128(WasmLispCompiler.fdlibmFunc(WasmFdlibmRuntimeBuilder.Fn.EXP));
 		w.write(Instruction.F64_MUL);
 		get(w, total);
 		w.write(Instruction.F64_MUL);

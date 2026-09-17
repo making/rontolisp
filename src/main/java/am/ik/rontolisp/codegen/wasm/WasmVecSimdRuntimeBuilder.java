@@ -1,6 +1,7 @@
 package am.ik.rontolisp.codegen.wasm;
 
 import java.io.ByteArrayOutputStream;
+import java.util.function.ToIntFunction;
 
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
@@ -129,13 +130,10 @@ final class WasmVecSimdRuntimeBuilder {
 	// negative / reciprocal / abs run whole lane groups (WasmVecLoops.gcMap1, mirroring
 	// the wasm defun's own scalar semantics -- see the U_* notes there); exp / log /
 	// tanh / sin / cos / tan / asin / acos / atan / sinh / cosh / sign walk elements
-	// through _v_get / _v_set with the defun's exact f64 sequence (the WasmExpCompiler
-	// range-reduced Taylor + exponent-bit scale, the WasmLogCompiler atanh series, the
-	// WasmTanhCompiler clamped exp derivation, the WasmSinCosCompiler Cody-Waite
-	// reduction, the
-	// WasmAtanCompiler fold-and-series, the WasmSinhCoshCompiler exp derivation, the
-	// WasmSignumCompiler (x>0)-(x<0)), so bit-identity to the scalar path is
-	// constructive at both widths.
+	// through _v_get / _v_set calling the defun's own operator (the fdlibm runtime
+	// function behind (exp x) etc., WasmFdlibmRuntimeBuilder; WasmSignumCompiler's
+	// (x>0)-(x<0) inline), so bit-identity to the scalar path is constructive at both
+	// widths.
 
 	static final int EXP = 15;
 
@@ -162,8 +160,7 @@ final class WasmVecSimdRuntimeBuilder {
 	static final int RECIPROCAL_INTO = 26;
 
 	// The transcendental ufuncs (log / tanh / sin / cos / tan): element loops like
-	// exp / sign, mirroring WasmLogCompiler / WasmTanhCompiler / WasmSinCosCompiler
-	// (no lane form exists).
+	// exp / sign over the fdlibm runtime (no lane form exists).
 
 	static final int LOG = 27;
 
@@ -186,7 +183,7 @@ final class WasmVecSimdRuntimeBuilder {
 	static final int TAN_INTO = 36;
 
 	// The inverse-trigonometric / hyperbolic ufuncs (asin / acos / atan / sinh / cosh):
-	// element loops mirroring WasmAtanCompiler / WasmSinhCoshCompiler.
+	// element loops over the fdlibm runtime.
 
 	static final int ASIN = 37;
 
@@ -746,38 +743,57 @@ final class WasmVecSimdRuntimeBuilder {
 
 	/** The number of consecutive f64 locals {@link #emitScalarUnaryF64} needs. */
 	static int scalarOpF64Locals(int scalarOp) {
+		return scalarOp == SCALAR_OP_SIGN ? 1 : 0;
+	}
+
+	/**
+	 * The fdlibm function a transcendental scalar op calls
+	 * ({@link WasmFdlibmRuntimeBuilder}); {@link #SCALAR_OP_SIGN} has none.
+	 * @param scalarOp the op
+	 * @return the function
+	 */
+	static WasmFdlibmRuntimeBuilder.Fn scalarOpFn(int scalarOp) {
 		return switch (scalarOp) {
-			case SCALAR_OP_SIN, SCALAR_OP_COS, SCALAR_OP_TAN, SCALAR_OP_ASIN, SCALAR_OP_ACOS, SCALAR_OP_ATAN -> 5;
-			case SCALAR_OP_SINH, SCALAR_OP_COSH -> 4;
-			case SCALAR_OP_EXP, SCALAR_OP_LOG, SCALAR_OP_TANH -> 3;
-			default -> 2;
+			case SCALAR_OP_EXP -> WasmFdlibmRuntimeBuilder.Fn.EXP;
+			case SCALAR_OP_LOG -> WasmFdlibmRuntimeBuilder.Fn.LOG;
+			case SCALAR_OP_TANH -> WasmFdlibmRuntimeBuilder.Fn.TANH;
+			case SCALAR_OP_SIN -> WasmFdlibmRuntimeBuilder.Fn.SIN;
+			case SCALAR_OP_COS -> WasmFdlibmRuntimeBuilder.Fn.COS;
+			case SCALAR_OP_TAN -> WasmFdlibmRuntimeBuilder.Fn.TAN;
+			case SCALAR_OP_ASIN -> WasmFdlibmRuntimeBuilder.Fn.ASIN;
+			case SCALAR_OP_ACOS -> WasmFdlibmRuntimeBuilder.Fn.ACOS;
+			case SCALAR_OP_ATAN -> WasmFdlibmRuntimeBuilder.Fn.ATAN;
+			case SCALAR_OP_SINH -> WasmFdlibmRuntimeBuilder.Fn.SINH;
+			case SCALAR_OP_COSH -> WasmFdlibmRuntimeBuilder.Fn.COSH;
+			default -> throw new IllegalArgumentException("no fdlibm function for scalar op " + scalarOp);
 		};
 	}
 
 	/**
-	 * Consumes an f64 on the stack and leaves {@code op(x)}, the defun path's exact f64
-	 * sequence, over consecutive raw f64 locals starting at {@code f64Base}.
+	 * Consumes an f64 on the stack and leaves {@code op(x)}: a call into the fdlibm
+	 * runtime for a transcendental op (the same function the scalar {@code (exp x)} site
+	 * calls, so the kernel is bit-identical to the defun by construction), the inline
+	 * sign sequence for {@link #SCALAR_OP_SIGN} over the raw f64 local at
+	 * {@code f64Base}.
+	 * @param w the body writer
+	 * @param scalarOp the op
+	 * @param f64Base the first scratch f64 local ({@link #scalarOpF64Locals})
+	 * @param fdlibm the function index of each fdlibm function in this module
 	 */
-	static void emitScalarUnaryF64(WasmWriter w, int scalarOp, int f64Base) {
-		switch (scalarOp) {
-			case SCALAR_OP_EXP -> emitExpF64(w, f64Base, f64Base + 1, f64Base + 2);
-			case SCALAR_OP_SIGN -> emitSignumF64(w, f64Base);
-			case SCALAR_OP_LOG -> emitLogF64(w, f64Base, f64Base + 1, f64Base + 2);
-			case SCALAR_OP_TANH -> emitTanhF64(w, f64Base, f64Base + 1, f64Base + 2);
-			case SCALAR_OP_SIN, SCALAR_OP_COS, SCALAR_OP_TAN -> emitSinCosF64(w, scalarOp, f64Base);
-			case SCALAR_OP_ASIN, SCALAR_OP_ACOS, SCALAR_OP_ATAN -> emitAtanFamilyF64(w, scalarOp, f64Base);
-			case SCALAR_OP_SINH, SCALAR_OP_COSH -> emitSinhCoshF64(w, scalarOp, f64Base);
-			default -> throw new IllegalArgumentException("no scalar unary op " + scalarOp);
+	static void emitScalarUnaryF64(WasmWriter w, int scalarOp, int f64Base,
+			ToIntFunction<WasmFdlibmRuntimeBuilder.Fn> fdlibm) {
+		if (scalarOp == SCALAR_OP_SIGN) {
+			emitSignumF64(w, f64Base);
+			return;
 		}
+		w.write(Instruction.CALL).writeUnsignedLeb128(fdlibm.applyAsInt(scalarOpFn(scalarOp)));
 	}
 
 	// (vec:exp v) / (vec:log v) / (vec:tanh v) / (vec:sign v) and their -into siblings:
 	// an element loop through _v_get / _v_set (widen on read, compute in f64, narrow on
-	// write -- the emap rule), with the operator emitted as the SAME f64 sequence the
-	// boxed defun path uses (WasmExpCompiler's Horner approximation, WasmLogCompiler's
-	// atanh series, WasmTanhCompiler's clamped exp derivation, WasmSignumCompiler's
-	// (x>0)-(x<0)), so the result is bit-identical to the scalar defun by construction
-	// at both widths.
+	// write -- the emap rule), with the operator a call into the SAME fdlibm function
+	// the boxed defun path calls (WasmSignumCompiler's (x>0)-(x<0) inline for sign), so
+	// the result is bit-identical to the scalar defun by construction at both widths.
 	//
 	// i32: count, kind, shift, ng, i. f64: the op's scratch locals. eq: vbD, vbV.
 	private static byte[] buildUnaryElement(int scalarOp, boolean into, int vecBase, int scalar) {
@@ -810,138 +826,13 @@ final class WasmVecSimdRuntimeBuilder {
 		WasmVecLoops.get(w, vbV);
 		WasmVecLoops.get(w, i);
 		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + V_GET);
-		emitScalarUnaryF64(w, scalarOp, f64Base);
+		emitScalarUnaryF64(w, scalarOp, f64Base, WasmLispCompiler::fdlibmFunc);
 		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + V_SET);
 		w.write(Instruction.DROP);
 		WasmVecLoops.closeIndexLoop(w, i);
 		finish(w, into, count, vbD);
 		w.write(Instruction.END);
 		return withLocals(b.toByteArray(), 5, nF64, 0, 0, 2, 0);
-	}
-
-	/**
-	 * Consumes an f64 {@code x} on the stack and leaves {@code exp(x)}: the exact
-	 * range-reduction + Taylor + exponent-bit-scale sequence {@link WasmExpCompiler}
-	 * emits on the boxed defun path, on three raw f64 locals instead of boxed temps
-	 * ({@code x} is reused for {@code r} and the scale stores through {@code acc},
-	 * exactly as the boxed slots are). The result is left on the stack AND in
-	 * {@code accLocal}, so the tanh/sinh/cosh derivations (which DROP the stack copy)
-	 * keep working.
-	 */
-	static void emitExpF64(WasmWriter w, int xLocal, int kLocal, int accLocal) {
-		WasmVecLoops.set(w, xLocal);
-		// The IEEE edges, then the finite main path (WasmExpCompiler's order).
-		WasmVecLoops.get(w, xLocal);
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.F64_NE);
-		w.write(Instruction.IF, Type.F64.code());
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.ELSE);
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.F64_CONST).writeF64(WasmExpCompiler.OVERFLOW_HI);
-		w.write(Instruction.F64_GT);
-		w.write(Instruction.IF, Type.F64.code());
-		w.write(Instruction.F64_CONST).writeF64(Double.POSITIVE_INFINITY);
-		w.write(Instruction.ELSE);
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.F64_CONST).writeF64(WasmExpCompiler.UNDERFLOW_LO);
-		w.write(Instruction.F64_LT);
-		w.write(Instruction.IF, Type.F64.code());
-		w.write(Instruction.F64_CONST).writeF64(0.0);
-		w.write(Instruction.ELSE);
-		emitExpMainF64(w, xLocal, kLocal, accLocal);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-		WasmVecLoops.set(w, accLocal);
-		WasmVecLoops.get(w, accLocal);
-	}
-
-	// The finite path of emitExpF64; leaves the f64 result on the stack and the
-	// boxed-equivalent e^r midpoint in accLocal.
-	private static void emitExpMainF64(WasmWriter w, int xLocal, int kLocal, int accLocal) {
-		// k = nearest(x * INV_LN2)
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.F64_CONST).writeF64(WasmExpCompiler.INV_LN2);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_NEAREST);
-		WasmVecLoops.set(w, kLocal);
-		// r = (x - k*LN2_HI) - k*LN2_LO, reusing xLocal.
-		WasmVecLoops.get(w, xLocal);
-		WasmVecLoops.get(w, kLocal);
-		w.write(Instruction.F64_CONST).writeF64(WasmExpCompiler.LN2_HI);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_SUB);
-		WasmVecLoops.get(w, kLocal);
-		w.write(Instruction.F64_CONST).writeF64(WasmExpCompiler.LN2_LO);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_SUB);
-		WasmVecLoops.set(w, xLocal);
-		// Horner: acc = e^r.
-		w.write(Instruction.F64_CONST).writeF64(WasmExpCompiler.HORNER_COEFFS[0]);
-		for (int i = 1; i < WasmExpCompiler.HORNER_COEFFS.length; i++) {
-			WasmVecLoops.get(w, xLocal);
-			w.write(Instruction.F64_MUL);
-			w.write(Instruction.F64_CONST).writeF64(WasmExpCompiler.HORNER_COEFFS[i]);
-			w.write(Instruction.F64_ADD);
-		}
-		WasmVecLoops.set(w, accLocal);
-		emitExpScaleF64(w, kLocal, accLocal);
-	}
-
-	// The raw-local mirror of WasmExpCompiler.emitScale: multiplies accLocal (e^r)
-	// by 2^k (k in kLocal); leaves the f64 result on the stack.
-	private static void emitExpScaleF64(WasmWriter w, int kLocal, int accLocal) {
-		// if (trunc(k) == 1024): (e^r * 2^1023) * 2.
-		WasmVecLoops.get(w, kLocal);
-		w.write(Instruction.I32_TRUNC_S_F64);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1024);
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.IF, Type.F64.code());
-		WasmVecLoops.get(w, accLocal);
-		w.write(Instruction.F64_CONST).writeF64(WasmExpCompiler.TWO_POW_1023);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_CONST).writeF64(2.0);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.ELSE);
-		// if (trunc(k) >= -1021): e^r * reinterpret(((i64)k + 1023) << 52).
-		WasmVecLoops.get(w, kLocal);
-		w.write(Instruction.I32_TRUNC_S_F64);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(-1021);
-		w.write(Instruction.I32_GE_S);
-		w.write(Instruction.IF, Type.F64.code());
-		WasmVecLoops.get(w, accLocal);
-		WasmVecLoops.get(w, kLocal);
-		w.write(Instruction.I32_TRUNC_S_F64);
-		w.write(Instruction.I64_EXTEND_S_I32);
-		w.write(Instruction.I64_CONST);
-		w.writeSignedLeb128(1023);
-		w.write(Instruction.I64_ADD);
-		w.write(Instruction.I64_CONST);
-		w.writeSignedLeb128(52);
-		w.write(Instruction.I64_SHL);
-		w.write(Instruction.F64_REINTERPRET_I64);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.ELSE);
-		// else: (e^r * reinterpret(((i64)k + 1077) << 52)) * 2^-54.
-		WasmVecLoops.get(w, accLocal);
-		WasmVecLoops.get(w, kLocal);
-		w.write(Instruction.I32_TRUNC_S_F64);
-		w.write(Instruction.I64_EXTEND_S_I32);
-		w.write(Instruction.I64_CONST);
-		w.writeSignedLeb128(1077);
-		w.write(Instruction.I64_ADD);
-		w.write(Instruction.I64_CONST);
-		w.writeSignedLeb128(52);
-		w.write(Instruction.I64_SHL);
-		w.write(Instruction.F64_REINTERPRET_I64);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_CONST).writeF64(WasmExpCompiler.TWO_POW_NEG54);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
 	}
 
 	/**
@@ -974,594 +865,6 @@ final class WasmVecSimdRuntimeBuilder {
 		WasmVecLoops.get(w, xLocal);
 		w.write(Instruction.F64_CONST).writeF64(0.0);
 		w.write(cmp);
-	}
-
-	/**
-	 * Consumes an f64 {@code x} on the stack and leaves {@code log(x)}: the exact
-	 * exponent-extraction + atanh-series sequence {@link WasmLogCompiler} emits on the
-	 * boxed defun path, on three raw f64 locals instead of boxed temps ({@code x} is
-	 * reused for {@code s} and {@code m} for {@code u}, exactly as the boxed slots are).
-	 */
-	static void emitLogF64(WasmWriter w, int xLocal, int mLocal, int eLocal) {
-		WasmVecLoops.set(w, xLocal);
-		// The IEEE edges, then the finite positive main path (WasmLogCompiler's order).
-		WasmVecLoops.get(w, xLocal);
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.F64_NE);
-		w.write(Instruction.IF, Type.F64.code());
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.ELSE);
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.F64_CONST).writeF64(0.0);
-		w.write(Instruction.F64_EQ);
-		w.write(Instruction.IF, Type.F64.code());
-		w.write(Instruction.F64_CONST).writeF64(Double.NEGATIVE_INFINITY);
-		w.write(Instruction.ELSE);
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.F64_CONST).writeF64(0.0);
-		w.write(Instruction.F64_LT);
-		w.write(Instruction.IF, Type.F64.code());
-		w.write(Instruction.F64_CONST).writeF64(Double.NaN);
-		w.write(Instruction.ELSE);
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.F64_CONST).writeF64(Double.POSITIVE_INFINITY);
-		w.write(Instruction.F64_EQ);
-		w.write(Instruction.IF, Type.F64.code());
-		w.write(Instruction.F64_CONST).writeF64(Double.POSITIVE_INFINITY);
-		w.write(Instruction.ELSE);
-		emitLogMainF64(w, xLocal, mLocal, eLocal);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-	}
-
-	// The finite positive path of emitLogF64; leaves the f64 result on the stack.
-	private static void emitLogMainF64(WasmWriter w, int xLocal, int mLocal, int eLocal) {
-		// e = 0.0; if (x < MIN_NORMAL) { x *= 2^54; e = -54.0 }
-		w.write(Instruction.F64_CONST).writeF64(0.0);
-		WasmVecLoops.set(w, eLocal);
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.F64_CONST).writeF64(WasmLogCompiler.MIN_NORMAL);
-		w.write(Instruction.F64_LT);
-		w.write(Instruction.IF, 0x40);
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.F64_CONST).writeF64(WasmLogCompiler.SCALE_UP);
-		w.write(Instruction.F64_MUL);
-		WasmVecLoops.set(w, xLocal);
-		w.write(Instruction.F64_CONST).writeF64(WasmLogCompiler.SCALE_E);
-		WasmVecLoops.set(w, eLocal);
-		w.write(Instruction.END);
-		// e += (f64)((bits(x) >> 52) - 1023)
-		WasmVecLoops.get(w, eLocal);
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.I64_REINTERPRET_F64);
-		w.write(Instruction.I64_CONST);
-		w.writeSignedLeb128(52);
-		w.write(Instruction.I64_SHR_U);
-		w.write(Instruction.I64_CONST);
-		w.writeSignedLeb128(1023);
-		w.write(Instruction.I64_SUB);
-		w.write(Instruction.F64_CONVERT_S_I64);
-		w.write(Instruction.F64_ADD);
-		WasmVecLoops.set(w, eLocal);
-		// m = reinterpret((bits(x) & MANT_MASK) | ONE_BITS), in [1, 2).
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.I64_REINTERPRET_F64);
-		w.write(Instruction.I64_CONST);
-		w.writeSignedLeb128(WasmLogCompiler.MANT_MASK);
-		w.write(Instruction.I64_AND);
-		w.write(Instruction.I64_CONST);
-		w.writeSignedLeb128(WasmLogCompiler.ONE_BITS);
-		w.write(Instruction.I64_OR);
-		w.write(Instruction.F64_REINTERPRET_I64);
-		WasmVecLoops.set(w, mLocal);
-		// if (m > sqrt(2)) { m *= 0.5; e += 1 }
-		WasmVecLoops.get(w, mLocal);
-		w.write(Instruction.F64_CONST).writeF64(WasmLogCompiler.SQRT2);
-		w.write(Instruction.F64_GT);
-		w.write(Instruction.IF, 0x40);
-		WasmVecLoops.get(w, mLocal);
-		w.write(Instruction.F64_CONST).writeF64(0.5);
-		w.write(Instruction.F64_MUL);
-		WasmVecLoops.set(w, mLocal);
-		WasmVecLoops.get(w, eLocal);
-		w.write(Instruction.F64_CONST).writeF64(1.0);
-		w.write(Instruction.F64_ADD);
-		WasmVecLoops.set(w, eLocal);
-		w.write(Instruction.END);
-		// s = (m - 1) / (m + 1), reusing xLocal; u = s^2, reusing mLocal.
-		WasmVecLoops.get(w, mLocal);
-		w.write(Instruction.F64_CONST).writeF64(1.0);
-		w.write(Instruction.F64_SUB);
-		WasmVecLoops.get(w, mLocal);
-		w.write(Instruction.F64_CONST).writeF64(1.0);
-		w.write(Instruction.F64_ADD);
-		w.write(Instruction.F64_DIV);
-		WasmVecLoops.set(w, xLocal);
-		WasmVecLoops.get(w, xLocal);
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.F64_MUL);
-		WasmVecLoops.set(w, mLocal);
-		// Horner over u, then ln(m) = (poly * s) * 2, then + e*ln2.
-		w.write(Instruction.F64_CONST).writeF64(WasmLogCompiler.HORNER_COEFFS[0]);
-		for (int i = 1; i < WasmLogCompiler.HORNER_COEFFS.length; i++) {
-			WasmVecLoops.get(w, mLocal);
-			w.write(Instruction.F64_MUL);
-			w.write(Instruction.F64_CONST).writeF64(WasmLogCompiler.HORNER_COEFFS[i]);
-			w.write(Instruction.F64_ADD);
-		}
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_CONST).writeF64(2.0);
-		w.write(Instruction.F64_MUL);
-		WasmVecLoops.get(w, eLocal);
-		w.write(Instruction.F64_CONST).writeF64(WasmLogCompiler.LN2);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_ADD);
-	}
-
-	/**
-	 * Consumes an f64 {@code x} on the stack and leaves {@code tanh(x)}: the exact
-	 * clamped {@code (e^(2x)-1)/(e^(2x)+1)} derivation {@link WasmTanhCompiler} emits on
-	 * the boxed defun path, over the same three raw f64 locals as {@link #emitExpF64}
-	 * ({@code x} holds the clamped doubled argument the exp core consumes, {@code t} its
-	 * range index).
-	 */
-	static void emitTanhF64(WasmWriter w, int tLocal, int accLocal, int xLocal) {
-		WasmVecLoops.set(w, xLocal);
-		// tanh is ODD, so tanh(+/-0.0) is the argument itself -- the derivation below
-		// cannot produce that (exp(-0.0) is 1.0, and (e-1)/(e+1) is 0.0/2.0 = +0.0).
-		// Mirrors the guard WasmTanhCompiler emits on the boxed defun path.
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.F64_CONST).writeF64(0.0);
-		w.write(Instruction.F64_EQ);
-		w.write(Instruction.IF, Type.F64.code());
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.ELSE);
-		WasmVecLoops.get(w, xLocal);
-		w.write(Instruction.F64_CONST).writeF64(2.0);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_CONST).writeF64(-WasmTanhCompiler.CLAMP);
-		w.write(Instruction.F64_MAX);
-		w.write(Instruction.F64_CONST).writeF64(WasmTanhCompiler.CLAMP);
-		w.write(Instruction.F64_MIN);
-		emitExpF64(w, xLocal, tLocal, accLocal);
-		w.write(Instruction.DROP);
-		WasmVecLoops.get(w, accLocal);
-		w.write(Instruction.F64_CONST).writeF64(1.0);
-		w.write(Instruction.F64_SUB);
-		WasmVecLoops.get(w, accLocal);
-		w.write(Instruction.F64_CONST).writeF64(1.0);
-		w.write(Instruction.F64_ADD);
-		w.write(Instruction.F64_DIV);
-		w.write(Instruction.END);
-	}
-
-	/**
-	 * Consumes an f64 {@code x} on the stack and leaves {@code sin(x)} / {@code cos(x)} /
-	 * {@code tan(x)}: the exact Cody-Waite reduction + Taylor-polynomial + quadrant
-	 * selection sequence {@link WasmSinCosCompiler} emits on the boxed defun path, on
-	 * five raw f64 locals instead of boxed temps ({@code x} is reused for {@code r} and
-	 * {@code k} for the quadrant {@code q}, exactly as the boxed slots are).
-	 */
-	static void emitSinCosF64(WasmWriter w, int scalarOp, int f64Base) {
-		int x = f64Base, k = f64Base + 1, z = f64Base + 2, s = f64Base + 3, c = f64Base + 4;
-		WasmVecLoops.set(w, x);
-		// The IEEE edges, then the finite main path (WasmSinCosCompiler's order).
-		WasmVecLoops.get(w, x);
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_NE);
-		w.write(Instruction.IF, Type.F64.code());
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.ELSE);
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_ABS);
-		w.write(Instruction.F64_CONST).writeF64(Double.POSITIVE_INFINITY);
-		w.write(Instruction.F64_EQ);
-		w.write(Instruction.IF, Type.F64.code());
-		w.write(Instruction.F64_CONST).writeF64(Double.NaN);
-		w.write(Instruction.ELSE);
-		// The odd functions' zero rung, mirroring WasmSinCosCompiler: sin(+/-0.0) and
-		// tan(+/-0.0) are the argument itself, which the Cody-Waite reduction cannot
-		// produce (its -0.0 - (-0.0) cancels to +0.0). cos is even and takes no rung.
-		boolean odd = scalarOp == SCALAR_OP_SIN || scalarOp == SCALAR_OP_TAN;
-		if (odd) {
-			WasmVecLoops.get(w, x);
-			w.write(Instruction.F64_CONST).writeF64(0.0);
-			w.write(Instruction.F64_EQ);
-			w.write(Instruction.IF, Type.F64.code());
-			WasmVecLoops.get(w, x);
-			w.write(Instruction.ELSE);
-		}
-		emitSinCosMainF64(w, scalarOp, x, k, z, s, c);
-		if (odd) {
-			w.write(Instruction.END);
-		}
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-	}
-
-	// The finite path of emitSinCosF64; leaves the f64 result on the stack.
-	private static void emitSinCosMainF64(WasmWriter w, int scalarOp, int x, int k, int z, int s, int c) {
-		// if (|x| > BIG) { x -= nearest(x / 2pi) * 2pi; x = clamp(x, -BIG, BIG) }
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_ABS);
-		w.write(Instruction.F64_CONST).writeF64(WasmSinCosCompiler.BIG);
-		w.write(Instruction.F64_GT);
-		w.write(Instruction.IF, 0x40);
-		WasmVecLoops.get(w, x);
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_CONST).writeF64(WasmSinCosCompiler.INV_TWO_PI);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_NEAREST);
-		w.write(Instruction.F64_CONST).writeF64(WasmSinCosCompiler.TWO_PI);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_SUB);
-		w.write(Instruction.F64_CONST).writeF64(-WasmSinCosCompiler.BIG);
-		w.write(Instruction.F64_MAX);
-		w.write(Instruction.F64_CONST).writeF64(WasmSinCosCompiler.BIG);
-		w.write(Instruction.F64_MIN);
-		WasmVecLoops.set(w, x);
-		w.write(Instruction.END);
-		// k = nearest(x * 2/pi)
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_CONST).writeF64(WasmSinCosCompiler.TWO_OVER_PI);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_NEAREST);
-		WasmVecLoops.set(w, k);
-		// r = (x - k*PIO2_1) - k*PIO2_1T, reusing x.
-		WasmVecLoops.get(w, x);
-		WasmVecLoops.get(w, k);
-		w.write(Instruction.F64_CONST).writeF64(WasmSinCosCompiler.PIO2_1);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_SUB);
-		WasmVecLoops.get(w, k);
-		w.write(Instruction.F64_CONST).writeF64(WasmSinCosCompiler.PIO2_1T);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_SUB);
-		WasmVecLoops.set(w, x);
-		// z = r * r
-		WasmVecLoops.get(w, x);
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_MUL);
-		WasmVecLoops.set(w, z);
-		// s = Horner(SIN_COEFFS over z) * r
-		w.write(Instruction.F64_CONST).writeF64(WasmSinCosCompiler.SIN_COEFFS[0]);
-		for (int i = 1; i < WasmSinCosCompiler.SIN_COEFFS.length; i++) {
-			WasmVecLoops.get(w, z);
-			w.write(Instruction.F64_MUL);
-			w.write(Instruction.F64_CONST).writeF64(WasmSinCosCompiler.SIN_COEFFS[i]);
-			w.write(Instruction.F64_ADD);
-		}
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_MUL);
-		WasmVecLoops.set(w, s);
-		// c = Horner(COS_COEFFS over z)
-		w.write(Instruction.F64_CONST).writeF64(WasmSinCosCompiler.COS_COEFFS[0]);
-		for (int i = 1; i < WasmSinCosCompiler.COS_COEFFS.length; i++) {
-			WasmVecLoops.get(w, z);
-			w.write(Instruction.F64_MUL);
-			w.write(Instruction.F64_CONST).writeF64(WasmSinCosCompiler.COS_COEFFS[i]);
-			w.write(Instruction.F64_ADD);
-		}
-		WasmVecLoops.set(w, c);
-		// q = (f64)(trunc(k) & 3), reusing k.
-		WasmVecLoops.get(w, k);
-		w.write(Instruction.I32_TRUNC_S_F64);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(3);
-		w.write(Instruction.I32_AND);
-		w.write(Instruction.F64_CONVERT_S_I32);
-		WasmVecLoops.set(w, k);
-		// The quadrant selection.
-		switch (scalarOp) {
-			case SCALAR_OP_SIN -> emitQuadrantSelectF64(w, k, s, c, false);
-			case SCALAR_OP_COS -> emitQuadrantSelectF64(w, k, c, s, true);
-			default -> emitTanSelectF64(w, k, s, c);
-		}
-	}
-
-	// The raw-local mirror of WasmSinCosCompiler.emitQuadrantSelect.
-	private static void emitQuadrantSelectF64(WasmWriter w, int q, int primary, int secondary, boolean negateOdd) {
-		WasmVecLoops.get(w, q);
-		w.write(Instruction.F64_CONST).writeF64(0.0);
-		w.write(Instruction.F64_EQ);
-		w.write(Instruction.IF, Type.F64.code());
-		WasmVecLoops.get(w, primary);
-		w.write(Instruction.ELSE);
-		WasmVecLoops.get(w, q);
-		w.write(Instruction.F64_CONST).writeF64(1.0);
-		w.write(Instruction.F64_EQ);
-		w.write(Instruction.IF, Type.F64.code());
-		WasmVecLoops.get(w, secondary);
-		if (negateOdd) {
-			w.write(Instruction.F64_NEG);
-		}
-		w.write(Instruction.ELSE);
-		WasmVecLoops.get(w, q);
-		w.write(Instruction.F64_CONST).writeF64(2.0);
-		w.write(Instruction.F64_EQ);
-		w.write(Instruction.IF, Type.F64.code());
-		WasmVecLoops.get(w, primary);
-		w.write(Instruction.F64_NEG);
-		w.write(Instruction.ELSE);
-		WasmVecLoops.get(w, secondary);
-		if (!negateOdd) {
-			w.write(Instruction.F64_NEG);
-		}
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-	}
-
-	// The raw-local mirror of WasmSinCosCompiler.emitTanSelect.
-	private static void emitTanSelectF64(WasmWriter w, int q, int s, int c) {
-		WasmVecLoops.get(w, q);
-		w.write(Instruction.F64_CONST).writeF64(1.0);
-		w.write(Instruction.F64_EQ);
-		WasmVecLoops.get(w, q);
-		w.write(Instruction.F64_CONST).writeF64(3.0);
-		w.write(Instruction.F64_EQ);
-		w.write(Instruction.I32_OR);
-		w.write(Instruction.IF, Type.F64.code());
-		WasmVecLoops.get(w, c);
-		WasmVecLoops.get(w, s);
-		w.write(Instruction.F64_DIV);
-		w.write(Instruction.F64_NEG);
-		w.write(Instruction.ELSE);
-		WasmVecLoops.get(w, s);
-		WasmVecLoops.get(w, c);
-		w.write(Instruction.F64_DIV);
-		w.write(Instruction.END);
-	}
-
-	/**
-	 * Consumes an f64 {@code x} on the stack and leaves {@code atan(x)} / {@code
-	 * asin(x)} / {@code acos(x)}: the exact fold-and-series sequence
-	 * {@link WasmAtanCompiler} emits on the boxed defun path, on five raw f64 locals
-	 * instead of boxed temps ({@code x} is overwritten with the transformed atan argument
-	 * for asin/acos, exactly as the boxed slot is).
-	 */
-	static void emitAtanFamilyF64(WasmWriter w, int scalarOp, int f64Base) {
-		int x = f64Base, t = f64Base + 1, u = f64Base + 2, z = f64Base + 3, r = f64Base + 4;
-		WasmVecLoops.set(w, x);
-		switch (scalarOp) {
-			case SCALAR_OP_ATAN -> emitAtanCoreF64(w, x, t, u, z, r);
-			case SCALAR_OP_ASIN -> {
-				// if (|x| > 1) -> NaN, else atan(x / sqrt((1-x)*(1+x))).
-				emitAtanDomainGuardF64(w, x);
-				WasmVecLoops.get(w, x);
-				emitOneMinusAndOnePlusF64(w, x);
-				w.write(Instruction.F64_MUL);
-				w.write(Instruction.F64_SQRT);
-				w.write(Instruction.F64_DIV);
-				WasmVecLoops.set(w, x);
-				emitAtanCoreF64(w, x, t, u, z, r);
-				w.write(Instruction.END);
-			}
-			default -> {
-				// acos: if (|x| > 1) -> NaN, else 2 * atan(sqrt((1-x)/(1+x))).
-				emitAtanDomainGuardF64(w, x);
-				emitOneMinusAndOnePlusF64(w, x);
-				w.write(Instruction.F64_DIV);
-				w.write(Instruction.F64_SQRT);
-				WasmVecLoops.set(w, x);
-				emitAtanCoreF64(w, x, t, u, z, r);
-				w.write(Instruction.F64_CONST).writeF64(2.0);
-				w.write(Instruction.F64_MUL);
-				w.write(Instruction.END);
-			}
-		}
-	}
-
-	// The raw-local mirror of WasmAtanCompiler.emitDomainGuard: opens
-	// "if (|x| > 1) -> NaN else ..." (the caller emits the else body + END).
-	private static void emitAtanDomainGuardF64(WasmWriter w, int x) {
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_ABS);
-		w.write(Instruction.F64_CONST).writeF64(1.0);
-		w.write(Instruction.F64_GT);
-		w.write(Instruction.IF, Type.F64.code());
-		w.write(Instruction.F64_CONST).writeF64(Double.NaN);
-		w.write(Instruction.ELSE);
-	}
-
-	// The raw-local mirror of WasmAtanCompiler.emitOneMinusAndOnePlus: leaves
-	// [1-x, 1+x] on the stack.
-	private static void emitOneMinusAndOnePlusF64(WasmWriter w, int x) {
-		w.write(Instruction.F64_CONST).writeF64(1.0);
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_SUB);
-		w.write(Instruction.F64_CONST).writeF64(1.0);
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_ADD);
-	}
-
-	// The raw-local mirror of WasmAtanCompiler.emitAtanCore; leaves the f64 result on
-	// the stack.
-	private static void emitAtanCoreF64(WasmWriter w, int x, int t, int u, int z, int r) {
-		// t = x < 0 ? 0 - x : x
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_CONST).writeF64(0.0);
-		w.write(Instruction.F64_LT);
-		w.write(Instruction.IF, Type.F64.code());
-		w.write(Instruction.F64_CONST).writeF64(0.0);
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_SUB);
-		w.write(Instruction.ELSE);
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.END);
-		WasmVecLoops.set(w, t);
-		// u = t > 1 ? 1/t : t
-		WasmVecLoops.get(w, t);
-		w.write(Instruction.F64_CONST).writeF64(1.0);
-		w.write(Instruction.F64_GT);
-		w.write(Instruction.IF, Type.F64.code());
-		w.write(Instruction.F64_CONST).writeF64(1.0);
-		WasmVecLoops.get(w, t);
-		w.write(Instruction.F64_DIV);
-		w.write(Instruction.ELSE);
-		WasmVecLoops.get(w, t);
-		w.write(Instruction.END);
-		WasmVecLoops.set(w, u);
-		// The half-angle folds: u = u / (sqrt(1 + u*u) + 1).
-		for (int i = 0; i < WasmAtanCompiler.HALF_ANGLE_FOLDS; i++) {
-			WasmVecLoops.get(w, u);
-			w.write(Instruction.F64_CONST).writeF64(1.0);
-			WasmVecLoops.get(w, u);
-			WasmVecLoops.get(w, u);
-			w.write(Instruction.F64_MUL);
-			w.write(Instruction.F64_ADD);
-			w.write(Instruction.F64_SQRT);
-			w.write(Instruction.F64_CONST).writeF64(1.0);
-			w.write(Instruction.F64_ADD);
-			w.write(Instruction.F64_DIV);
-			WasmVecLoops.set(w, u);
-		}
-		// z = u * u
-		WasmVecLoops.get(w, u);
-		WasmVecLoops.get(w, u);
-		w.write(Instruction.F64_MUL);
-		WasmVecLoops.set(w, z);
-		// r = Horner(ATAN_COEFFS over z) * u * 4
-		w.write(Instruction.F64_CONST).writeF64(WasmAtanCompiler.ATAN_COEFFS[0]);
-		for (int i = 1; i < WasmAtanCompiler.ATAN_COEFFS.length; i++) {
-			WasmVecLoops.get(w, z);
-			w.write(Instruction.F64_MUL);
-			w.write(Instruction.F64_CONST).writeF64(WasmAtanCompiler.ATAN_COEFFS[i]);
-			w.write(Instruction.F64_ADD);
-		}
-		WasmVecLoops.get(w, u);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.F64_CONST).writeF64(4.0);
-		w.write(Instruction.F64_MUL);
-		WasmVecLoops.set(w, r);
-		// The reciprocal select: r = t > 1 ? pi/2 - r : r.
-		WasmVecLoops.get(w, t);
-		w.write(Instruction.F64_CONST).writeF64(1.0);
-		w.write(Instruction.F64_GT);
-		w.write(Instruction.IF, Type.F64.code());
-		w.write(Instruction.F64_CONST).writeF64(WasmAtanCompiler.PI_OVER_2);
-		WasmVecLoops.get(w, r);
-		w.write(Instruction.F64_SUB);
-		w.write(Instruction.ELSE);
-		WasmVecLoops.get(w, r);
-		w.write(Instruction.END);
-		WasmVecLoops.set(w, r);
-		// The sign select: x < 0 ? 0 - r : r, left on the stack.
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_CONST).writeF64(0.0);
-		w.write(Instruction.F64_LT);
-		w.write(Instruction.IF, Type.F64.code());
-		w.write(Instruction.F64_CONST).writeF64(0.0);
-		WasmVecLoops.get(w, r);
-		w.write(Instruction.F64_SUB);
-		w.write(Instruction.ELSE);
-		WasmVecLoops.get(w, r);
-		w.write(Instruction.END);
-	}
-
-	/**
-	 * Consumes an f64 {@code x} on the stack and leaves {@code sinh(x)} / {@code
-	 * cosh(x)}: the exact exp-derivation (+ sinh's small-x odd Taylor series) sequence
-	 * {@link WasmSinhCoshCompiler} emits on the boxed defun path, on four raw f64 locals
-	 * instead of boxed temps ({@code x} survives the exponential for the sign restore;
-	 * the exp core runs on {@code t} / {@code k} / {@code acc}, with {@code t} doubling
-	 * as the series' {@code z} and the sign-restore scratch, exactly as the boxed slots
-	 * do).
-	 */
-	static void emitSinhCoshF64(WasmWriter w, int scalarOp, int f64Base) {
-		int x = f64Base, t = f64Base + 1, acc = f64Base + 2, k = f64Base + 3;
-		WasmVecLoops.set(w, x);
-		// if (x != x) -> NaN
-		WasmVecLoops.get(w, x);
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_NE);
-		w.write(Instruction.IF, Type.F64.code());
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.ELSE);
-		// if (|x| == +inf) -> x (sinh) / |x| (cosh)
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_ABS);
-		w.write(Instruction.F64_CONST).writeF64(Double.POSITIVE_INFINITY);
-		w.write(Instruction.F64_EQ);
-		w.write(Instruction.IF, Type.F64.code());
-		WasmVecLoops.get(w, x);
-		if (scalarOp == SCALAR_OP_COSH) {
-			w.write(Instruction.F64_ABS);
-		}
-		w.write(Instruction.ELSE);
-		if (scalarOp == SCALAR_OP_COSH) {
-			emitCoshMainF64(w, x, t, k, acc);
-		}
-		else {
-			emitSinhMainF64(w, x, t, k, acc);
-		}
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-	}
-
-	// The raw-local mirror of WasmSinhCoshCompiler.emitSinhMain.
-	private static void emitSinhMainF64(WasmWriter w, int x, int t, int k, int acc) {
-		// if (|x| > SMALL) exp derivation else the odd Taylor series.
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_ABS);
-		w.write(Instruction.F64_CONST).writeF64(WasmSinhCoshCompiler.SMALL);
-		w.write(Instruction.F64_GT);
-		w.write(Instruction.IF, Type.F64.code());
-		// e = exp(|x|); s = (e - 1/e) * 0.5.
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_ABS);
-		emitExpF64(w, t, k, acc);
-		w.write(Instruction.F64_CONST).writeF64(1.0);
-		WasmVecLoops.get(w, acc);
-		w.write(Instruction.F64_DIV);
-		w.write(Instruction.F64_SUB);
-		w.write(Instruction.F64_CONST).writeF64(0.5);
-		w.write(Instruction.F64_MUL);
-		WasmVecLoops.set(w, t);
-		// The sign restore: x < 0 ? 0 - s : s.
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_CONST).writeF64(0.0);
-		w.write(Instruction.F64_LT);
-		w.write(Instruction.IF, Type.F64.code());
-		w.write(Instruction.F64_CONST).writeF64(0.0);
-		WasmVecLoops.get(w, t);
-		w.write(Instruction.F64_SUB);
-		w.write(Instruction.ELSE);
-		WasmVecLoops.get(w, t);
-		w.write(Instruction.END);
-		w.write(Instruction.ELSE);
-		// z = x * x; Horner(SINH_COEFFS over z) * x.
-		WasmVecLoops.get(w, x);
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_MUL);
-		WasmVecLoops.set(w, t);
-		w.write(Instruction.F64_CONST).writeF64(WasmSinhCoshCompiler.SINH_COEFFS[0]);
-		for (int i = 1; i < WasmSinhCoshCompiler.SINH_COEFFS.length; i++) {
-			WasmVecLoops.get(w, t);
-			w.write(Instruction.F64_MUL);
-			w.write(Instruction.F64_CONST).writeF64(WasmSinhCoshCompiler.SINH_COEFFS[i]);
-			w.write(Instruction.F64_ADD);
-		}
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_MUL);
-		w.write(Instruction.END);
-	}
-
-	// The raw-local mirror of WasmSinhCoshCompiler.emitCoshMain.
-	private static void emitCoshMainF64(WasmWriter w, int x, int t, int k, int acc) {
-		// e = exp(|x|); (e + 1/e) * 0.5.
-		WasmVecLoops.get(w, x);
-		w.write(Instruction.F64_ABS);
-		emitExpF64(w, t, k, acc);
-		w.write(Instruction.F64_CONST).writeF64(1.0);
-		WasmVecLoops.get(w, acc);
-		w.write(Instruction.F64_DIV);
-		w.write(Instruction.F64_ADD);
-		w.write(Instruction.F64_CONST).writeF64(0.5);
-		w.write(Instruction.F64_MUL);
 	}
 
 	// --- reductions ----------------------------------------------------------------

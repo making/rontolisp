@@ -2518,6 +2518,9 @@ public final class JvmLispCompiler implements LispCompiler {
 				.storeRef(storeRef)
 				.envLookupRef(envLookupRef)
 				.lookupRef(lookupRef)
+				.notFnRef(cp.addMethodref(thisClass,
+						cp.addNameAndType(cp.addUtf8(JvmRuntimeBuilder.NOT_FN_NAME),
+								cp.addUtf8(JvmRuntimeBuilder.NOT_FN_DESC))))
 				.genvField(genvField)
 				.fenvField(fenvField)
 				.invoke(invoke)
@@ -2570,6 +2573,13 @@ public final class JvmLispCompiler implements LispCompiler {
 							: null);
 			dispatchMethods.addAll(JvmRuntimeBuilder.buildArityMethods(functions, lambdaDecls, cp, thisClass,
 					objectArrayClass, stringClass, dispatchableFuncIds, reportsMiss, reportsCount));
+		}
+		// What applying a non-function raises, shared by every dispatcher and by _apply
+		// (the eval runtime, which the spread dispatcher comes with).
+		if (!indirectCallArities.isEmpty() || usesEval) {
+			dispatchMethods.add(new DispatchMethod(cp.addUtf8(JvmRuntimeBuilder.NOT_FN_NAME),
+					cp.addUtf8(JvmRuntimeBuilder.NOT_FN_DESC),
+					JvmRuntimeBuilder.buildNotFnBody(cp, stringClass, lispToStringMethod), 1));
 		}
 		for (int arity : indirectCallArities) {
 			dispatchMethods.addAll(JvmRuntimeBuilder.buildDispatchMethods(arity, functions, lambdaDecls,

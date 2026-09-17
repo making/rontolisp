@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Deque;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -1518,8 +1519,25 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	private record Mem(Map<String, Integer> literals, Map<String, Integer> regions, byte[] data, int dataBase,
 			int heapBase, int iovAddr, int funcBase, int allocIndex, int memcpyIndex, int streqIndex, int itoaIndex,
 			int strlenIndex, int byteOffsetIndex, int charAtIndex, int markIndex, int resetIndex, int rontoAllocIndex,
-			int ftoaIndex, int schubBase, int writeStdoutIndex, boolean used, boolean printUsed, boolean ftoaUsed,
+			int ftoaIndex, int schubBase, int fdlibmBase, List<WasmFdlibmRuntimeBuilder.Fn> fdlibmFns,
+			int fdlibmTablesBase, int writeStdoutIndex, boolean used, boolean printUsed, boolean ftoaUsed,
 			boolean hostArena, boolean allocates) {
+
+		/**
+		 * The function index of an fdlibm function this module carries: its position in
+		 * {@link #fdlibmFns} past {@link #fdlibmBase}. A function the plan did not reach
+		 * has no index, and asking for one is a compiler bug (the plan's scan and the
+		 * kernel emission must agree).
+		 * @param fn the function
+		 * @return its index
+		 */
+		int fdlibmIndex(WasmFdlibmRuntimeBuilder.Fn fn) {
+			int at = this.fdlibmFns.indexOf(fn);
+			if (at < 0) {
+				throw new IllegalStateException("--no-gc: fdlibm " + fn + " reached but not planned");
+			}
+			return this.fdlibmBase + at;
+		}
 
 		// The five Schubfach helpers behind __ftoa, appended right after it
 		// in this order; bodies come from WasmSchubfachRuntimeBuilder.
@@ -1606,8 +1624,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * which is what an export wrapper's save/restore bracket exists to undo
 	 */
 	private record MemLayout(Map<String, Integer> literals, Map<String, Integer> regions, byte[] data, int heapBase,
-			int iovAddr, int schubBase, boolean used, boolean printUsed, boolean ftoaUsed, boolean strlenUsed,
-			boolean byteOffsetUsed, boolean charAtUsed, boolean hostArena, boolean allocates) {
+			int iovAddr, int schubBase, int fdlibmTablesBase, List<WasmFdlibmRuntimeBuilder.Fn> fdlibmFns, boolean used,
+			boolean printUsed, boolean ftoaUsed, boolean strlenUsed, boolean byteOffsetUsed, boolean charAtUsed,
+			boolean hostArena, boolean allocates) {
 
 		/**
 		 * The same plan with the given literals laid out header-free, in the same order.
@@ -1619,10 +1638,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			if (headerFree.isEmpty()) {
 				return this;
 			}
-			DataPlan plan = layoutData(this.regions.keySet(), headerFree, this.ftoaUsed, this.printUsed);
+			DataPlan plan = layoutData(this.regions.keySet(), headerFree, this.ftoaUsed, this.printUsed,
+					this.fdlibmTablesBase != 0);
 			return new MemLayout(plan.literals(), plan.regions(), plan.data(), plan.heapBase(), plan.iovAddr(),
-					plan.schubBase(), this.used, this.printUsed, this.ftoaUsed, this.strlenUsed, this.byteOffsetUsed,
-					this.charAtUsed, this.hostArena, this.allocates);
+					plan.schubBase(), plan.fdlibmTablesBase(), this.fdlibmFns, this.used, this.printUsed, this.ftoaUsed,
+					this.strlenUsed, this.byteOffsetUsed, this.charAtUsed, this.hostArena, this.allocates);
 		}
 	}
 
@@ -1630,7 +1650,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * The data-segment half of a {@link MemLayout}, as {@link #layoutData} answers it.
 	 */
 	private record DataPlan(Map<String, Integer> literals, Map<String, Integer> regions, byte[] data, int heapBase,
-			int iovAddr, int schubBase) {
+			int iovAddr, int schubBase, int fdlibmTablesBase) {
 	}
 
 	private static final int STR_DATA_BASE = 8;
@@ -1641,7 +1661,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * tables and the fd_write scratch.
 	 */
 	private static DataPlan layoutData(Collection<String> literals, Set<String> headerFree, boolean ftoaUsed,
-			boolean printUsed) {
+			boolean printUsed, boolean fdlibmTables) {
 		LinkedHashMap<String, Integer> offsets = new LinkedHashMap<>();
 		LinkedHashMap<String, Integer> regions = new LinkedHashMap<>();
 		ByteArrayOutputStream data = new ByteArrayOutputStream();
@@ -1676,6 +1696,20 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			data.write(blob, 0, blob.length);
 			cursor += blob.length;
 		}
+		// The fdlibm trig reduction's tables and scratch (WasmFdlibmRuntimeBuilder):
+		// raw bytes after the Schubfach tables, only when a vec: trig kernel reaches
+		// them; 8-aligned for the f64 scratch arrays.
+		int fdlibmTablesBase = 0;
+		if (fdlibmTables) {
+			while ((cursor & 7) != 0) {
+				data.write(0);
+				cursor++;
+			}
+			fdlibmTablesBase = cursor;
+			byte[] blob = WasmFdlibmRuntimeBuilder.tables();
+			data.write(blob, 0, blob.length);
+			cursor += blob.length;
+		}
 		int heapBase = (cursor + 7) & ~7;
 		// The fd_write scratch (iovec + nwritten) sits between the static data and the
 		// bump heap, present only when the module prints.
@@ -1684,7 +1718,53 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			iovAddr = heapBase;
 			heapBase += 16;
 		}
-		return new DataPlan(offsets, regions, data.toByteArray(), heapBase, iovAddr, schubBase);
+		return new DataPlan(offsets, regions, data.toByteArray(), heapBase, iovAddr, schubBase, fdlibmTablesBase);
+	}
+
+	/**
+	 * The fdlibm functions the reachable bodies' {@code vec:} transcendental kernels call
+	 * ({@code vec:exp} .. {@code vec:cosh} and their {@code -into} siblings), closed over
+	 * the callees -- what {@link #placeFunctions} gives a slot and the code section a
+	 * body. Empty for a module that lowers none of them.
+	 */
+	private static List<WasmFdlibmRuntimeBuilder.Fn> fdlibmFunctions(List<String> reachable, Map<String, Defun> defuns,
+			Map<String, WasmImportCompiler.Decl> imports) {
+		Set<WasmFdlibmRuntimeBuilder.Fn> roots = EnumSet.noneOf(WasmFdlibmRuntimeBuilder.Fn.class);
+		for (String name : reachable) {
+			if (!imports.containsKey(name)) {
+				collectFdlibmRoots(progn(Objects.requireNonNull(defuns.get(name)).body()), roots);
+			}
+		}
+		return new ArrayList<>(WasmFdlibmRuntimeBuilder.closure(roots));
+	}
+
+	private static void collectFdlibmRoots(LispVal v, Set<WasmFdlibmRuntimeBuilder.Fn> out) {
+		if (!(v instanceof LispCons c)) {
+			return;
+		}
+		if (c.car() instanceof LispSymbol s && isSimdCall(s.name())) {
+			String member = simdMember(s.name());
+			if (member.endsWith("-INTO")) {
+				member = member.substring(0, member.length() - "-INTO".length());
+			}
+			switch (member) {
+				case LispNames.VEC_EXP -> out.add(WasmFdlibmRuntimeBuilder.Fn.EXP);
+				case LispNames.VEC_LOG -> out.add(WasmFdlibmRuntimeBuilder.Fn.LOG);
+				case LispNames.VEC_TANH -> out.add(WasmFdlibmRuntimeBuilder.Fn.TANH);
+				case LispNames.VEC_SIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.SIN);
+				case LispNames.VEC_COS -> out.add(WasmFdlibmRuntimeBuilder.Fn.COS);
+				case LispNames.VEC_TAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.TAN);
+				case LispNames.VEC_ASIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ASIN);
+				case LispNames.VEC_ACOS -> out.add(WasmFdlibmRuntimeBuilder.Fn.ACOS);
+				case LispNames.VEC_ATAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ATAN);
+				case LispNames.VEC_SINH -> out.add(WasmFdlibmRuntimeBuilder.Fn.SINH);
+				case LispNames.VEC_COSH -> out.add(WasmFdlibmRuntimeBuilder.Fn.COSH);
+				default -> {
+				}
+			}
+		}
+		collectFdlibmRoots(c.car(), out);
+		collectFdlibmRoots(c.cdr(), out);
 	}
 
 	/**
@@ -1810,10 +1890,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		PrintUse printUse = collectPrintUse(reachable, defuns, imports, types);
 		this.printUse = printUse;
 		literals.addAll(runtimeLiterals(printUse, ftoaUsed));
+		List<WasmFdlibmRuntimeBuilder.Fn> fdlibmFns = fdlibmFunctions(reachable, defuns, imports);
 		// Every literal headered for now. Which ones can drop the header depends on the
 		// import fold, and the fold is sized against THIS plan (chooseFoldedImports), so
 		// the caller re-lays the same order once the fold is decided (withHeaderFree).
-		DataPlan plan = layoutData(literals, Set.of(), ftoaUsed, printUsed);
+		DataPlan plan = layoutData(literals, Set.of(), ftoaUsed, printUsed,
+				WasmFdlibmRuntimeBuilder.needsTables(fdlibmFns));
 
 		boolean boundaryString = false;
 		// Whether the HOST has anything to do with the bump heap, which is what the
@@ -1918,8 +2000,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		boolean strlenUsed = usesStringLength(reachable, defuns, imports, types);
 		return new MemLayout(plan.literals(), plan.regions(), plan.data(), plan.heapBase(), plan.iovAddr(),
-				plan.schubBase(), used, printUsed, ftoaUsed, strlenUsed, byteOffsetUsed, charAtUsed, hostArena,
-				allocates);
+				plan.schubBase(), plan.fdlibmTablesBase(), fdlibmFns, used, printUsed, ftoaUsed, strlenUsed,
+				byteOffsetUsed, charAtUsed, hostArena, allocates);
 	}
 
 	/**
@@ -1960,12 +2042,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		if (layout.ftoaUsed()) {
 			next += 6;
 		}
+		// The fdlibm functions the vec: transcendental kernels call, in
+		// MemLayout.fdlibmFns order (Mem.fdlibmIndex), after the printing helpers.
+		int fdlibmBase = layout.fdlibmFns().isEmpty() ? -1 : next;
+		next += layout.fdlibmFns().size();
 		int writeStdoutIndex = layout.printUsed() ? next : -1;
 		return new Mem(layout.literals(), layout.regions(), layout.data(), STR_DATA_BASE, layout.heapBase(),
 				layout.iovAddr(), funcBase, allocIndex, memcpyIndex, streqIndex, itoaIndex, strlenIndex,
 				byteOffsetIndex, charAtIndex, markIndex, resetIndex, rontoAllocIndex, ftoaIndex, layout.schubBase(),
-				writeStdoutIndex, layout.used(), layout.printUsed(), layout.ftoaUsed(), layout.hostArena(),
-				layout.allocates());
+				fdlibmBase, layout.fdlibmFns(), layout.fdlibmTablesBase(), writeStdoutIndex, layout.used(),
+				layout.printUsed(), layout.ftoaUsed(), layout.hostArena(), layout.allocates());
 	}
 
 	/** The printing operators that gate the fd_write import. */
@@ -2283,7 +2369,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int utf8Helpers = (mem.strlenIndex() >= 0 ? 1 : 0) + (mem.byteOffsetIndex() >= 0 ? 1 : 0)
 				+ (mem.charAtIndex() >= 0 ? 1 : 0);
 		int localFuncCount = internalCount + wrapperBodies.size() + (mem.used() ? 4 : 0) + utf8Helpers
-				+ (mem.hostArena() ? 3 : 0) + (mem.ftoaUsed() ? 6 : 0) + (mem.printUsed() ? 1 : 0);
+				+ (mem.hostArena() ? 3 : 0) + (mem.ftoaUsed() ? 6 : 0) + mem.fdlibmFns().size()
+				+ (mem.printUsed() ? 1 : 0);
 		// Canonical string ABI for --component :string exports:
 		// cabi_realloc (the host lowers string arguments through it), one retptr shim
 		// per :string-RETURNING export (MAX_FLAT_RESULTS = 1, so the lifted core
@@ -2388,6 +2475,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.F64 }, new Type[] { Type.I64, Type.I32 });
 			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I64, Type.I32, Type.I32, Type.I32 },
 					new Type[] { Type.I32 });
+		}
+		// The fdlibm functions (Mem.fdlibmIndex order), each its own f64/i32 shape.
+		for (WasmFdlibmRuntimeBuilder.Fn fn : mem.fdlibmFns()) {
+			Type[] params = new Type[fn.params.length];
+			for (int i = 0; i < params.length; i++) {
+				params[i] = fn.params[i].wasm;
+			}
+			funcTypes[nextFunc++] = typeTable.intern(params, new Type[] { fn.result.wasm });
 		}
 		if (mem.printUsed()) {
 			// __write_stdout (ptr i32, len i32) -> (): the sole fd_write caller.
@@ -2547,6 +2642,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					code.addFunction(
 							WasmSchubfachRuntimeBuilder.buildF64DecBody(mem.schubGIndex(), mem.schubRopIndex()));
 					code.addFunction(WasmSchubfachRuntimeBuilder.buildDecFmtBody());
+				}
+				for (WasmFdlibmRuntimeBuilder.Fn fn : mem.fdlibmFns()) {
+					code.addFunction(WasmFdlibmRuntimeBuilder.build(fn, mem::fdlibmIndex, mem.fdlibmTablesBase()));
 				}
 				if (mem.printUsed()) {
 					code.addFunction(writeStdoutBody(mem));
@@ -6333,13 +6431,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return vecTy;
 	}
 
-	// (vec:exp v) / (vec:sign v) and their -into siblings: the operator exists only as
-	// an f64 instruction sequence (WasmExpCompiler's software
-	// approximation / WasmSignumCompiler's (x>0)-(x<0)), reused via the GC backend's
-	// raw-f64 emitters -- so the values match the wasm-GC backend's exactly, and
-	// diverge from the interpreter/JVM at the same edges the wasm scalar builtins
-	// already do (exp low-order digits; sign maps -0.0/NaN to 0.0). exp has no lane
-	// form anywhere and sign's is not worth one, so BOTH --simd modes drive the same
+	// (vec:exp v) / (vec:sign v) and their -into siblings: the operator is a call into
+	// the fdlibm runtime this module carries (Mem.fdlibmIndex; the same bits as the
+	// wasm-GC backend, the interpreter and the JVM) or WasmSignumCompiler's
+	// (x>0)-(x<0) inline (sign maps -0.0/NaN to 0.0, the wasm defun's edge). exp has no
+	// lane form anywhere and sign's is not worth one, so BOTH --simd modes drive the same
 	// one-element-per-iteration loop: an f32 element widens on read and narrows on
 	// store (the emap rule). The destination MAY alias v (the add-into rule).
 	private Ty compileSimdUnaryF64(List<LispVal> args, Fn fn, int scalarOp, boolean into, String what) {
@@ -6368,7 +6464,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		if (single) {
 			w.write(Instruction.F64_PROMOTE_F32);
 		}
-		WasmVecSimdRuntimeBuilder.emitScalarUnaryF64(w, scalarOp, f64Base);
+		WasmVecSimdRuntimeBuilder.emitScalarUnaryF64(w, scalarOp, f64Base, fn.mem::fdlibmIndex);
 		if (single) {
 			w.write(Instruction.F32_DEMOTE_F64);
 		}

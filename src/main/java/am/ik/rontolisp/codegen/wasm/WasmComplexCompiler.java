@@ -5,6 +5,7 @@ import java.util.List;
 import am.ik.rontolisp.LispComplex;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.codegen.wasm.WasmFdlibmRuntimeBuilder.Fn;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
@@ -24,8 +25,9 @@ import am.ik.wasm.Type;
  * Float parts are coerced through the ONE shared {@code _as_f64}
  * ({@code .kb/wasm-shared-coercion.md}); exact parts fold through the shared
  * {@code _rat_*} helpers, so funnels match real arithmetic. The transcendental formulas
- * reuse the backend's software cores, carrying their approximation error like every WASM
- * transcendental.
+ * are the interpreter's term for term, over the fdlibm runtime
+ * ({@link WasmTranscendentalCompiler}) -- the same bits as {@code StrictMath} on the
+ * other backends.
  */
 final class WasmComplexCompiler {
 
@@ -134,7 +136,7 @@ final class WasmComplexCompiler {
 		WasmEmitHelper.castFloatGetF64(ctx);
 		f64Const(ctx, 0.0);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.ELSE);
 		emitTestExactOrRatio(ctx, slot);
 		ctx.writer.write(Instruction.IF);
@@ -178,7 +180,7 @@ final class WasmComplexCompiler {
 		getLocal(ctx, imSlot);
 		WasmEmitHelper.castFloatGetF64(ctx);
 		ctx.writer.write(Instruction.F64_NEG);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.ELSE);
 		constI32(ctx, 0);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
@@ -206,9 +208,9 @@ final class WasmComplexCompiler {
 		ctx.writer.write(Instruction.END);
 	}
 
-	// (phase x): atan2(im, re) for a complex (the software atan core plus quadrant
-	// assembly, carrying its approximation error); 0.0 for a non-negative real, pi
-	// for a negative one. A non-number lands in _type_err_num through _as_f64.
+	// (phase x): atan2(im, re) for a complex (fdlibm's atan2, the interpreter's
+	// Math.atan2); 0.0 for a non-negative real, pi for a negative one. A non-number
+	// lands in _type_err_num through _as_f64.
 	static void compilePhase(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
@@ -226,19 +228,19 @@ final class WasmComplexCompiler {
 		getLocal(ctx, slot);
 		WasmEmitHelper.castFloatGetF64(ctx);
 		int fSlot = ctx.allocTemp();
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(fSlot);
-		WasmExpCompiler.unboxF64Local(ctx, fSlot);
+		WasmEmitHelper.unboxF64Local(ctx, fSlot);
 		f64Const(ctx, 0.0);
 		ctx.writer.write(Instruction.F64_LT);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.writeRefType(true, Type.EQ.code());
 		f64Const(ctx, Math.PI);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.ELSE);
 		f64Const(ctx, 0.0);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
@@ -418,23 +420,23 @@ final class WasmComplexCompiler {
 		getLocal(ctx, slot);
 		WasmEmitHelper.castFloatGetF64(ctx);
 		int fSlot = ctx.allocTemp();
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(fSlot);
-		WasmExpCompiler.unboxF64Local(ctx, fSlot);
+		WasmEmitHelper.unboxF64Local(ctx, fSlot);
 		f64Const(ctx, 0.0);
 		ctx.writer.write(Instruction.F64_LT);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.writeRefType(true, Type.EQ.code());
 		f64Const(ctx, 0.0);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		int zeroSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(zeroSlot);
-		WasmExpCompiler.unboxF64Local(ctx, fSlot);
+		WasmEmitHelper.unboxF64Local(ctx, fSlot);
 		ctx.writer.write(Instruction.F64_NEG);
 		ctx.writer.write(Instruction.F64_SQRT);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		int rootSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(rootSlot);
@@ -444,9 +446,9 @@ final class WasmComplexCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_COMPLEX);
 		ctx.writer.write(Instruction.ELSE);
-		WasmExpCompiler.unboxF64Local(ctx, fSlot);
+		WasmEmitHelper.unboxF64Local(ctx, fSlot);
 		ctx.writer.write(Instruction.F64_SQRT);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
@@ -466,9 +468,16 @@ final class WasmComplexCompiler {
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(expSlot);
 		int rSlot = ctx.allocTemp();
+		// The exact loop takes an i31 exponent over an EXACT base -- the interpreter's
+		// exptComplex: a float part anywhere in the base goes through exp(w*log(z)) like
+		// a float exponent does, so (expt #c(1.0 2.0) 3) answers the same bits here as
+		// there rather than the squaring loop's.
 		getLocal(ctx, expSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(Type.I31.code());
+		emitTestFloatBase(ctx, baseSlot);
+		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.I32_AND);
 		ctx.writer.write(Instruction.IF, 0x40);
 		emitExptExactLoop(ctx, baseSlot, expSlot, rSlot);
 		ctx.writer.write(Instruction.ELSE);
@@ -477,11 +486,31 @@ final class WasmComplexCompiler {
 		getLocal(ctx, rSlot);
 	}
 
-	// The eleven float unary functions over a syntactic complex, through the
-	// backend's software cores (each formula the interpreter's, in f64).
+	// Pushes `slot holds a float, or a complex with a float part` as an i32.
+	private static void emitTestFloatBase(WasmLispCompiler.Ctx ctx, int slot) {
+		getLocal(ctx, slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		emitTestComplex(ctx, slot);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I32);
+		for (int field = 0; field < 2; field++) {
+			pushPart(ctx, slot, field);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		}
+		ctx.writer.write(Instruction.I32_OR);
+		ctx.writer.write(Instruction.ELSE);
+		constI32(ctx, 0);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.I32_OR);
+	}
+
+	// The eleven float unary functions over a syntactic complex, each formula the
+	// interpreter's, in f64 over the fdlibm runtime.
 	// (asinh x): the plane arm is the interpreter's formula below; a real operand
 	// never leaves the real line (asinh's real domain is all of it) and takes the
-	// software core.
+	// real arm.
 	static void compileAsinh(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
@@ -504,7 +533,7 @@ final class WasmComplexCompiler {
 		getLocal(ctx, slot);
 		WasmEmitHelper.castFloatGetF64(ctx);
 		WasmInverseHypCompiler.emitAsinhRealF64(ctx);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.END);
 	}
 
@@ -531,11 +560,11 @@ final class WasmComplexCompiler {
 		ctx.writer.write(Instruction.ELSE);
 		getLocal(ctx, slot);
 		WasmEmitHelper.castFloatGetF64(ctx);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		int fSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(fSlot);
-		WasmExpCompiler.unboxF64Local(ctx, fSlot);
+		WasmEmitHelper.unboxF64Local(ctx, fSlot);
 		f64Const(ctx, 1.0);
 		ctx.writer.write(Instruction.F64_LT);
 		ctx.writer.write(Instruction.IF);
@@ -545,7 +574,7 @@ final class WasmComplexCompiler {
 		emitComplexTag(ctx);
 		getLocal(ctx, fSlot);
 		f64Const(ctx, 0.0);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_COMPLEX);
 		int escSlot = ctx.allocTemp();
@@ -561,9 +590,9 @@ final class WasmComplexCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_COMPLEX);
 		ctx.writer.write(Instruction.ELSE);
-		WasmExpCompiler.unboxF64Local(ctx, fSlot);
+		WasmEmitHelper.unboxF64Local(ctx, fSlot);
 		WasmInverseHypCompiler.emitAcoshRealF64(ctx);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
@@ -606,15 +635,16 @@ final class WasmComplexCompiler {
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_COMPLEX);
 		ctx.writer.write(Instruction.ELSE);
 		int fSlot = emitRealAsF64Box(ctx, slot);
-		WasmExpCompiler.unboxF64Local(ctx, fSlot);
+		WasmEmitHelper.unboxF64Local(ctx, fSlot);
 		f64Const(ctx, 0.0);
 		ctx.writer.write(Instruction.F64_LT);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.writeRefType(true, Type.EQ.code());
 		emitPlaneArmAt(ctx, fSlot, am.ik.rontolisp.LispNames.LOG);
 		ctx.writer.write(Instruction.ELSE);
-		WasmExpCompiler.unboxF64Local(ctx, fSlot);
-		WasmLogCompiler.emitLogCore(ctx, ctx.allocTemp(), ctx.allocTemp(), ctx.allocTemp());
+		WasmEmitHelper.unboxF64Local(ctx, fSlot);
+		WasmTranscendentalCompiler.call(ctx, Fn.LOG);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
@@ -631,18 +661,18 @@ final class WasmComplexCompiler {
 			call(ctx, WasmLispCompiler.FUNC_C_DIV);
 			return;
 		}
-		WasmLogCompiler.compileOf(args.get(1), ctx);
+		WasmTranscendentalCompiler.compileArg(args.get(1), ctx, Fn.LOG);
 		int numSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(numSlot);
-		WasmLogCompiler.compileOf(args.get(2), ctx);
+		WasmTranscendentalCompiler.compileArg(args.get(2), ctx, Fn.LOG);
 		int denSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(denSlot);
-		WasmExpCompiler.unboxF64Local(ctx, numSlot);
-		WasmExpCompiler.unboxF64Local(ctx, denSlot);
+		WasmEmitHelper.unboxF64Local(ctx, numSlot);
+		WasmEmitHelper.unboxF64Local(ctx, denSlot);
 		ctx.writer.write(Instruction.F64_DIV);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 	}
 
 	// (atan y x): C's atan2, the angle of the vector (x, y) over the full circle --
@@ -703,11 +733,11 @@ final class WasmComplexCompiler {
 		// |x| > 1 AND finite. An infinity has no complex asin/acos either (the formula
 		// would manufacture a #C(NaN Infinity)), so it keeps the real arm's NaN with
 		// the NaN itself -- f64.gt and f64.lt both answer false for a NaN.
-		WasmExpCompiler.unboxF64Local(ctx, fSlot);
+		WasmEmitHelper.unboxF64Local(ctx, fSlot);
 		ctx.writer.write(Instruction.F64_ABS);
 		f64Const(ctx, 1.0);
 		ctx.writer.write(Instruction.F64_GT);
-		WasmExpCompiler.unboxF64Local(ctx, fSlot);
+		WasmEmitHelper.unboxF64Local(ctx, fSlot);
 		ctx.writer.write(Instruction.F64_ABS);
 		f64Const(ctx, Double.POSITIVE_INFINITY);
 		ctx.writer.write(Instruction.F64_LT);
@@ -716,9 +746,9 @@ final class WasmComplexCompiler {
 		ctx.writer.writeRefType(true, Type.EQ.code());
 		emitPlaneArmAt(ctx, fSlot, name);
 		ctx.writer.write(Instruction.ELSE);
-		WasmExpCompiler.unboxF64Local(ctx, fSlot);
-		WasmAtanCompiler.emitAsinAcosRealF64(ctx, name);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.unboxF64Local(ctx, fSlot);
+		WasmTranscendentalCompiler.call(ctx, am.ik.rontolisp.LispNames.ASIN.equals(name) ? Fn.ASIN : Fn.ACOS);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
@@ -729,7 +759,7 @@ final class WasmComplexCompiler {
 	private static int emitRealAsF64Box(WasmLispCompiler.Ctx ctx, int slot) {
 		getLocal(ctx, slot);
 		WasmEmitHelper.castFloatGetF64(ctx);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		int fSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(fSlot);
@@ -744,7 +774,7 @@ final class WasmComplexCompiler {
 		emitComplexTag(ctx);
 		getLocal(ctx, fSlot);
 		f64Const(ctx, 0.0);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_COMPLEX);
 		int escSlot = ctx.allocTemp();
@@ -779,10 +809,10 @@ final class WasmComplexCompiler {
 	 */
 	static void emitNegativeBasePowInto(WasmLispCompiler.Ctx ctx, int modulusSlot, int ySlot) {
 		int thetaSlot = ctx.allocTemp();
-		WasmExpCompiler.unboxF64Local(ctx, ySlot);
+		WasmEmitHelper.unboxF64Local(ctx, ySlot);
 		f64Const(ctx, Math.PI);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(thetaSlot);
 		int cosSlot = ctx.allocTemp();
@@ -790,14 +820,14 @@ final class WasmComplexCompiler {
 		int sinSlot = ctx.allocTemp();
 		callSinInto(ctx, thetaSlot, sinSlot);
 		emitComplexTag(ctx);
-		WasmExpCompiler.unboxF64Local(ctx, modulusSlot);
-		WasmExpCompiler.unboxF64Local(ctx, cosSlot);
+		WasmEmitHelper.unboxF64Local(ctx, modulusSlot);
+		WasmEmitHelper.unboxF64Local(ctx, cosSlot);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.boxF64(ctx);
-		WasmExpCompiler.unboxF64Local(ctx, modulusSlot);
-		WasmExpCompiler.unboxF64Local(ctx, sinSlot);
+		WasmEmitHelper.boxF64(ctx);
+		WasmEmitHelper.unboxF64Local(ctx, modulusSlot);
+		WasmEmitHelper.unboxF64Local(ctx, sinSlot);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_COMPLEX);
 	}
@@ -825,14 +855,14 @@ final class WasmComplexCompiler {
 		ctx.writer.write(Instruction.ELSE);
 		getLocal(ctx, slot);
 		WasmEmitHelper.castFloatGetF64(ctx);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		int fSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(fSlot);
-		WasmExpCompiler.unboxF64Local(ctx, fSlot);
+		WasmEmitHelper.unboxF64Local(ctx, fSlot);
 		f64Const(ctx, 1.0);
 		ctx.writer.write(Instruction.F64_GT);
-		WasmExpCompiler.unboxF64Local(ctx, fSlot);
+		WasmEmitHelper.unboxF64Local(ctx, fSlot);
 		f64Const(ctx, -1.0);
 		ctx.writer.write(Instruction.F64_LT);
 		ctx.writer.write(Instruction.I32_OR);
@@ -843,7 +873,7 @@ final class WasmComplexCompiler {
 		emitComplexTag(ctx);
 		getLocal(ctx, fSlot);
 		f64Const(ctx, 0.0);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_COMPLEX);
 		int escSlot = ctx.allocTemp();
@@ -859,9 +889,9 @@ final class WasmComplexCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_COMPLEX);
 		ctx.writer.write(Instruction.ELSE);
-		WasmExpCompiler.unboxF64Local(ctx, fSlot);
+		WasmEmitHelper.unboxF64Local(ctx, fSlot);
 		WasmInverseHypCompiler.emitAtanhRealF64(ctx);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
@@ -890,7 +920,7 @@ final class WasmComplexCompiler {
 		getLocal(ctx, slot);
 		WasmEmitHelper.castFloatGetF64(ctx);
 		int xBox = ctx.allocTemp();
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(xBox);
 		int cosBox = ctx.allocTemp();
@@ -1162,19 +1192,19 @@ final class WasmComplexCompiler {
 		int lIm = ctx.allocTemp();
 		emitComplexLogInto(ctx, z[0], z[1], lRe, lIm);
 		// e = (w0*l0 - w1*l1, w0*l1 + w1*l0), boxed per component.
-		WasmExpCompiler.unboxF64Local(ctx, w[0]);
-		WasmExpCompiler.unboxF64Local(ctx, lRe);
+		WasmEmitHelper.unboxF64Local(ctx, w[0]);
+		WasmEmitHelper.unboxF64Local(ctx, lRe);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.unboxF64Local(ctx, w[1]);
-		WasmExpCompiler.unboxF64Local(ctx, lIm);
+		WasmEmitHelper.unboxF64Local(ctx, w[1]);
+		WasmEmitHelper.unboxF64Local(ctx, lIm);
 		ctx.writer.write(Instruction.F64_MUL);
 		ctx.writer.write(Instruction.F64_SUB);
 		int eRe = boxF64Temp(ctx);
-		WasmExpCompiler.unboxF64Local(ctx, w[0]);
-		WasmExpCompiler.unboxF64Local(ctx, lIm);
+		WasmEmitHelper.unboxF64Local(ctx, w[0]);
+		WasmEmitHelper.unboxF64Local(ctx, lIm);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.unboxF64Local(ctx, w[1]);
-		WasmExpCompiler.unboxF64Local(ctx, lRe);
+		WasmEmitHelper.unboxF64Local(ctx, w[1]);
+		WasmEmitHelper.unboxF64Local(ctx, lRe);
 		ctx.writer.write(Instruction.F64_MUL);
 		ctx.writer.write(Instruction.F64_ADD);
 		int eIm = boxF64Temp(ctx);
@@ -1195,10 +1225,10 @@ final class WasmComplexCompiler {
 	// the interpreter), otherwise t = sqrt((|re| + hypot)/2) with the
 	// sign-dependent assembly.
 	private static void emitComplexSqrtInto(WasmLispCompiler.Ctx ctx, int reBox, int imBox, int reOut, int imOut) {
-		WasmExpCompiler.unboxF64Local(ctx, reBox);
+		WasmEmitHelper.unboxF64Local(ctx, reBox);
 		f64Const(ctx, 0.0);
 		ctx.writer.write(Instruction.F64_EQ);
-		WasmExpCompiler.unboxF64Local(ctx, imBox);
+		WasmEmitHelper.unboxF64Local(ctx, imBox);
 		f64Const(ctx, 0.0);
 		ctx.writer.write(Instruction.F64_EQ);
 		ctx.writer.write(Instruction.I32_AND);
@@ -1212,113 +1242,61 @@ final class WasmComplexCompiler {
 		ctx.writer.write(Instruction.ELSE);
 		int hBox = ctx.allocTemp();
 		emitHypotInto(ctx, reBox, imBox, hBox);
-		WasmExpCompiler.unboxF64Local(ctx, reBox);
+		WasmEmitHelper.unboxF64Local(ctx, reBox);
 		ctx.writer.write(Instruction.F64_ABS);
-		WasmExpCompiler.unboxF64Local(ctx, hBox);
+		WasmEmitHelper.unboxF64Local(ctx, hBox);
 		ctx.writer.write(Instruction.F64_ADD);
 		f64Const(ctx, 0.5);
 		ctx.writer.write(Instruction.F64_MUL);
 		ctx.writer.write(Instruction.F64_SQRT);
 		int tBox = boxF64Temp(ctx);
-		WasmExpCompiler.unboxF64Local(ctx, reBox);
+		WasmEmitHelper.unboxF64Local(ctx, reBox);
 		f64Const(ctx, 0.0);
 		ctx.writer.write(Instruction.F64_GE);
 		ctx.writer.write(Instruction.IF, 0x40);
 		getLocal(ctx, tBox);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(reOut);
-		WasmExpCompiler.unboxF64Local(ctx, imBox);
-		WasmExpCompiler.unboxF64Local(ctx, tBox);
+		WasmEmitHelper.unboxF64Local(ctx, imBox);
+		WasmEmitHelper.unboxF64Local(ctx, tBox);
 		f64Const(ctx, 2.0);
 		ctx.writer.write(Instruction.F64_MUL);
 		ctx.writer.write(Instruction.F64_DIV);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(imOut);
 		ctx.writer.write(Instruction.ELSE);
-		WasmExpCompiler.unboxF64Local(ctx, imBox);
+		WasmEmitHelper.unboxF64Local(ctx, imBox);
 		ctx.writer.write(Instruction.F64_ABS);
-		WasmExpCompiler.unboxF64Local(ctx, tBox);
+		WasmEmitHelper.unboxF64Local(ctx, tBox);
 		f64Const(ctx, 2.0);
 		ctx.writer.write(Instruction.F64_MUL);
 		ctx.writer.write(Instruction.F64_DIV);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(reOut);
-		WasmExpCompiler.unboxF64Local(ctx, tBox);
-		WasmExpCompiler.unboxF64Local(ctx, imBox);
+		WasmEmitHelper.unboxF64Local(ctx, tBox);
+		WasmEmitHelper.unboxF64Local(ctx, imBox);
 		ctx.writer.write(Instruction.F64_COPYSIGN);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(imOut);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
 
-	// hypot(re, im) scaled to avoid overflowing the squaring: max*sqrt(1+(min/max)^2).
+	// hypot(re, im): fdlibm's, the interpreter's Math.hypot.
 	private static void emitHypotInto(WasmLispCompiler.Ctx ctx, int reBox, int imBox, int out) {
-		WasmExpCompiler.unboxF64Local(ctx, reBox);
-		ctx.writer.write(Instruction.F64_ABS);
-		int aBox = boxF64Temp(ctx);
-		WasmExpCompiler.unboxF64Local(ctx, imBox);
-		ctx.writer.write(Instruction.F64_ABS);
-		int bBox = boxF64Temp(ctx);
-		// max = a > b ? a : b; min = the other.
-		WasmExpCompiler.unboxF64Local(ctx, aBox);
-		WasmExpCompiler.unboxF64Local(ctx, bBox);
-		ctx.writer.write(Instruction.F64_GT);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		WasmExpCompiler.unboxF64Local(ctx, aBox);
-		ctx.writer.write(Instruction.ELSE);
-		WasmExpCompiler.unboxF64Local(ctx, bBox);
-		ctx.writer.write(Instruction.END);
-		int maxBox = boxF64Temp(ctx);
-		WasmExpCompiler.unboxF64Local(ctx, aBox);
-		WasmExpCompiler.unboxF64Local(ctx, bBox);
-		ctx.writer.write(Instruction.F64_GT);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		WasmExpCompiler.unboxF64Local(ctx, bBox);
-		ctx.writer.write(Instruction.ELSE);
-		WasmExpCompiler.unboxF64Local(ctx, aBox);
-		ctx.writer.write(Instruction.END);
-		int minBox = boxF64Temp(ctx);
-		// min == 0 ? max : max*sqrt(1+(min/max)^2).
-		WasmExpCompiler.unboxF64Local(ctx, minBox);
-		f64Const(ctx, 0.0);
-		ctx.writer.write(Instruction.F64_EQ);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		WasmExpCompiler.unboxF64Local(ctx, maxBox);
-		ctx.writer.write(Instruction.ELSE);
-		WasmExpCompiler.unboxF64Local(ctx, minBox);
-		WasmExpCompiler.unboxF64Local(ctx, maxBox);
-		ctx.writer.write(Instruction.F64_DIV);
-		WasmExpCompiler.unboxF64Local(ctx, minBox);
-		WasmExpCompiler.unboxF64Local(ctx, maxBox);
-		ctx.writer.write(Instruction.F64_DIV);
-		ctx.writer.write(Instruction.F64_MUL);
-		f64Const(ctx, 1.0);
-		ctx.writer.write(Instruction.F64_ADD);
-		ctx.writer.write(Instruction.F64_SQRT);
-		WasmExpCompiler.unboxF64Local(ctx, maxBox);
-		ctx.writer.write(Instruction.F64_MUL);
-		ctx.writer.write(Instruction.END);
-		WasmExpCompiler.boxF64(ctx);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(out);
+		WasmTranscendentalCompiler.callInto(ctx, Fn.HYPOT, reBox, imBox, out);
 	}
 
 	// log(z) = (ln(hypot), atan2(im, re)) into the boxed out-slots.
 	private static void emitComplexLogInto(WasmLispCompiler.Ctx ctx, int reBox, int imBox, int reOut, int imOut) {
-		int hBox = ctx.allocTemp();
-		emitHypotInto(ctx, reBox, imBox, hBox);
-		WasmExpCompiler.unboxF64Local(ctx, hBox);
-		int xSlot = ctx.allocTemp();
-		int mSlot = ctx.allocTemp();
-		int eSlot = ctx.allocTemp();
-		WasmLogCompiler.emitLogCore(ctx, xSlot, mSlot, eSlot);
+		WasmEmitHelper.unboxF64Local(ctx, reBox);
+		WasmEmitHelper.unboxF64Local(ctx, imBox);
+		WasmTranscendentalCompiler.call(ctx, Fn.HYPOT);
+		WasmTranscendentalCompiler.call(ctx, Fn.LOG);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(reOut);
 		emitAtan2Into(ctx, imBox, reBox, imOut);
@@ -1326,28 +1304,22 @@ final class WasmComplexCompiler {
 
 	// exp(z) = (e^re*cos(im), e^re*sin(im)) into the boxed out-slots.
 	private static void emitComplexExpInto(WasmLispCompiler.Ctx ctx, int reBox, int imBox, int reOut, int imOut) {
-		WasmExpCompiler.unboxF64Local(ctx, reBox);
-		int xSlot = ctx.allocTemp();
-		int kSlot = ctx.allocTemp();
-		int accSlot = ctx.allocTemp();
-		WasmExpCompiler.emitExpCore(ctx, xSlot, kSlot, accSlot);
 		int eBox = ctx.allocTemp();
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(eBox);
+		WasmTranscendentalCompiler.callInto(ctx, Fn.EXP, reBox, eBox);
 		int cosBox = ctx.allocTemp();
 		callCosInto(ctx, imBox, cosBox);
 		int sinBox = ctx.allocTemp();
 		callSinInto(ctx, imBox, sinBox);
-		WasmExpCompiler.unboxF64Local(ctx, eBox);
-		WasmExpCompiler.unboxF64Local(ctx, cosBox);
+		WasmEmitHelper.unboxF64Local(ctx, eBox);
+		WasmEmitHelper.unboxF64Local(ctx, cosBox);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(reOut);
-		WasmExpCompiler.unboxF64Local(ctx, eBox);
-		WasmExpCompiler.unboxF64Local(ctx, sinBox);
+		WasmEmitHelper.unboxF64Local(ctx, eBox);
+		WasmEmitHelper.unboxF64Local(ctx, sinBox);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(imOut);
 	}
@@ -1362,16 +1334,16 @@ final class WasmComplexCompiler {
 		callSinhInto(ctx, imBox, sinhIm);
 		int coshIm = ctx.allocTemp();
 		callCoshInto(ctx, imBox, coshIm);
-		WasmExpCompiler.unboxF64Local(ctx, sinRe);
-		WasmExpCompiler.unboxF64Local(ctx, coshIm);
+		WasmEmitHelper.unboxF64Local(ctx, sinRe);
+		WasmEmitHelper.unboxF64Local(ctx, coshIm);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(reOut);
-		WasmExpCompiler.unboxF64Local(ctx, cosRe);
-		WasmExpCompiler.unboxF64Local(ctx, sinhIm);
+		WasmEmitHelper.unboxF64Local(ctx, cosRe);
+		WasmEmitHelper.unboxF64Local(ctx, sinhIm);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(imOut);
 	}
@@ -1386,17 +1358,17 @@ final class WasmComplexCompiler {
 		callSinhInto(ctx, imBox, sinhIm);
 		int coshIm = ctx.allocTemp();
 		callCoshInto(ctx, imBox, coshIm);
-		WasmExpCompiler.unboxF64Local(ctx, cosRe);
-		WasmExpCompiler.unboxF64Local(ctx, coshIm);
+		WasmEmitHelper.unboxF64Local(ctx, cosRe);
+		WasmEmitHelper.unboxF64Local(ctx, coshIm);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(reOut);
-		WasmExpCompiler.unboxF64Local(ctx, sinRe);
-		WasmExpCompiler.unboxF64Local(ctx, sinhIm);
+		WasmEmitHelper.unboxF64Local(ctx, sinRe);
+		WasmEmitHelper.unboxF64Local(ctx, sinhIm);
 		ctx.writer.write(Instruction.F64_MUL);
 		ctx.writer.write(Instruction.F64_NEG);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(imOut);
 	}
@@ -1421,20 +1393,20 @@ final class WasmComplexCompiler {
 	private static void emitAsinAcosRootsInto(WasmLispCompiler.Ctx ctx, int reBox, int imBox, int uRe, int uIm, int vRe,
 			int vIm) {
 		f64Const(ctx, 1.0);
-		WasmExpCompiler.unboxF64Local(ctx, reBox);
+		WasmEmitHelper.unboxF64Local(ctx, reBox);
 		ctx.writer.write(Instruction.F64_SUB);
 		int uArgRe = boxF64Temp(ctx);
 		f64Const(ctx, 0.0);
-		WasmExpCompiler.unboxF64Local(ctx, imBox);
+		WasmEmitHelper.unboxF64Local(ctx, imBox);
 		ctx.writer.write(Instruction.F64_SUB);
 		int uArgIm = boxF64Temp(ctx);
 		emitComplexSqrtInto(ctx, uArgRe, uArgIm, uRe, uIm);
 		f64Const(ctx, 1.0);
-		WasmExpCompiler.unboxF64Local(ctx, reBox);
+		WasmEmitHelper.unboxF64Local(ctx, reBox);
 		ctx.writer.write(Instruction.F64_ADD);
 		int vArgRe = boxF64Temp(ctx);
 		f64Const(ctx, 0.0);
-		WasmExpCompiler.unboxF64Local(ctx, imBox);
+		WasmEmitHelper.unboxF64Local(ctx, imBox);
 		ctx.writer.write(Instruction.F64_ADD);
 		int vArgIm = boxF64Temp(ctx);
 		emitComplexSqrtInto(ctx, vArgRe, vArgIm, vRe, vIm);
@@ -1449,24 +1421,24 @@ final class WasmComplexCompiler {
 		int vRe = ctx.allocTemp();
 		int vIm = ctx.allocTemp();
 		emitAsinAcosRootsInto(ctx, reBox, imBox, uRe, uIm, vRe, vIm);
-		WasmExpCompiler.unboxF64Local(ctx, uRe);
-		WasmExpCompiler.unboxF64Local(ctx, vRe);
+		WasmEmitHelper.unboxF64Local(ctx, uRe);
+		WasmEmitHelper.unboxF64Local(ctx, vRe);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.unboxF64Local(ctx, uIm);
-		WasmExpCompiler.unboxF64Local(ctx, vIm);
+		WasmEmitHelper.unboxF64Local(ctx, uIm);
+		WasmEmitHelper.unboxF64Local(ctx, vIm);
 		ctx.writer.write(Instruction.F64_MUL);
 		ctx.writer.write(Instruction.F64_SUB);
 		int prod = boxF64Temp(ctx);
 		emitAtan2Into(ctx, reBox, prod, reOut);
-		WasmExpCompiler.unboxF64Local(ctx, uRe);
-		WasmExpCompiler.unboxF64Local(ctx, vIm);
+		WasmEmitHelper.unboxF64Local(ctx, uRe);
+		WasmEmitHelper.unboxF64Local(ctx, vIm);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.unboxF64Local(ctx, uIm);
-		WasmExpCompiler.unboxF64Local(ctx, vRe);
+		WasmEmitHelper.unboxF64Local(ctx, uIm);
+		WasmEmitHelper.unboxF64Local(ctx, vRe);
 		ctx.writer.write(Instruction.F64_MUL);
 		ctx.writer.write(Instruction.F64_SUB);
 		WasmInverseHypCompiler.emitAsinhRealF64(ctx);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(imOut);
 	}
@@ -1483,20 +1455,20 @@ final class WasmComplexCompiler {
 		int half = ctx.allocTemp();
 		emitAtan2Into(ctx, uRe, vRe, half);
 		f64Const(ctx, 2.0);
-		WasmExpCompiler.unboxF64Local(ctx, half);
+		WasmEmitHelper.unboxF64Local(ctx, half);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(reOut);
-		WasmExpCompiler.unboxF64Local(ctx, vRe);
-		WasmExpCompiler.unboxF64Local(ctx, uIm);
+		WasmEmitHelper.unboxF64Local(ctx, vRe);
+		WasmEmitHelper.unboxF64Local(ctx, uIm);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.unboxF64Local(ctx, vIm);
-		WasmExpCompiler.unboxF64Local(ctx, uRe);
+		WasmEmitHelper.unboxF64Local(ctx, vIm);
+		WasmEmitHelper.unboxF64Local(ctx, uRe);
 		ctx.writer.write(Instruction.F64_MUL);
 		ctx.writer.write(Instruction.F64_SUB);
 		WasmInverseHypCompiler.emitAsinhRealF64(ctx);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(imOut);
 	}
@@ -1505,10 +1477,10 @@ final class WasmComplexCompiler {
 	private static void emitComplexAtanInto(WasmLispCompiler.Ctx ctx, int reBox, int imBox, int reOut, int imOut) {
 		// l1 = log(1+im, -re).
 		f64Const(ctx, 1.0);
-		WasmExpCompiler.unboxF64Local(ctx, imBox);
+		WasmEmitHelper.unboxF64Local(ctx, imBox);
 		ctx.writer.write(Instruction.F64_ADD);
 		int l1ArgRe = boxF64Temp(ctx);
-		WasmExpCompiler.unboxF64Local(ctx, reBox);
+		WasmEmitHelper.unboxF64Local(ctx, reBox);
 		ctx.writer.write(Instruction.F64_NEG);
 		int l1ArgIm = boxF64Temp(ctx);
 		int l1Re = ctx.allocTemp();
@@ -1516,7 +1488,7 @@ final class WasmComplexCompiler {
 		emitComplexLogInto(ctx, l1ArgRe, l1ArgIm, l1Re, l1Im);
 		// l2 = log(1-im, re).
 		f64Const(ctx, 1.0);
-		WasmExpCompiler.unboxF64Local(ctx, imBox);
+		WasmEmitHelper.unboxF64Local(ctx, imBox);
 		ctx.writer.write(Instruction.F64_SUB);
 		int l2ArgRe = boxF64Temp(ctx);
 		int l2ArgIm = reBox;
@@ -1524,20 +1496,20 @@ final class WasmComplexCompiler {
 		int l2Im = ctx.allocTemp();
 		emitComplexLogInto(ctx, l2ArgRe, l2ArgIm, l2Re, l2Im);
 		// answer ((l2.1-l1.1)/2, (l1.0-l2.0)/2).
-		WasmExpCompiler.unboxF64Local(ctx, l2Im);
-		WasmExpCompiler.unboxF64Local(ctx, l1Im);
+		WasmEmitHelper.unboxF64Local(ctx, l2Im);
+		WasmEmitHelper.unboxF64Local(ctx, l1Im);
 		ctx.writer.write(Instruction.F64_SUB);
 		f64Const(ctx, 2.0);
 		ctx.writer.write(Instruction.F64_DIV);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(reOut);
-		WasmExpCompiler.unboxF64Local(ctx, l1Re);
-		WasmExpCompiler.unboxF64Local(ctx, l2Re);
+		WasmEmitHelper.unboxF64Local(ctx, l1Re);
+		WasmEmitHelper.unboxF64Local(ctx, l2Re);
 		ctx.writer.write(Instruction.F64_SUB);
 		f64Const(ctx, 2.0);
 		ctx.writer.write(Instruction.F64_DIV);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(imOut);
 	}
@@ -1548,64 +1520,64 @@ final class WasmComplexCompiler {
 	// evaluates -log(s - z) instead -- the same logarithm of a quantity that adds
 	// without cancellation (their product is s^2 - z^2 = 1).
 	private static void emitComplexAsinhInto(WasmLispCompiler.Ctx ctx, int reBox, int imBox, int reOut, int imOut) {
-		WasmExpCompiler.unboxF64Local(ctx, reBox);
-		WasmExpCompiler.unboxF64Local(ctx, reBox);
+		WasmEmitHelper.unboxF64Local(ctx, reBox);
+		WasmEmitHelper.unboxF64Local(ctx, reBox);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.unboxF64Local(ctx, imBox);
-		WasmExpCompiler.unboxF64Local(ctx, imBox);
+		WasmEmitHelper.unboxF64Local(ctx, imBox);
+		WasmEmitHelper.unboxF64Local(ctx, imBox);
 		ctx.writer.write(Instruction.F64_MUL);
 		ctx.writer.write(Instruction.F64_SUB);
 		int z2Re = boxF64Temp(ctx);
 		f64Const(ctx, 2.0);
-		WasmExpCompiler.unboxF64Local(ctx, reBox);
+		WasmEmitHelper.unboxF64Local(ctx, reBox);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.unboxF64Local(ctx, imBox);
+		WasmEmitHelper.unboxF64Local(ctx, imBox);
 		ctx.writer.write(Instruction.F64_MUL);
 		f64Const(ctx, 0.0);
 		ctx.writer.write(Instruction.F64_ADD);
 		int z2Im = boxF64Temp(ctx);
-		WasmExpCompiler.unboxF64Local(ctx, z2Re);
+		WasmEmitHelper.unboxF64Local(ctx, z2Re);
 		f64Const(ctx, 1.0);
 		ctx.writer.write(Instruction.F64_ADD);
 		int sArgRe = boxF64Temp(ctx);
 		int sRe = ctx.allocTemp();
 		int sIm = ctx.allocTemp();
 		emitComplexSqrtInto(ctx, sArgRe, z2Im, sRe, sIm);
-		WasmExpCompiler.unboxF64Local(ctx, reBox);
-		WasmExpCompiler.unboxF64Local(ctx, sRe);
+		WasmEmitHelper.unboxF64Local(ctx, reBox);
+		WasmEmitHelper.unboxF64Local(ctx, sRe);
 		ctx.writer.write(Instruction.F64_ADD);
 		int wRe = boxF64Temp(ctx);
-		WasmExpCompiler.unboxF64Local(ctx, imBox);
-		WasmExpCompiler.unboxF64Local(ctx, sIm);
+		WasmEmitHelper.unboxF64Local(ctx, imBox);
+		WasmEmitHelper.unboxF64Local(ctx, sIm);
 		ctx.writer.write(Instruction.F64_ADD);
 		int wIm = boxF64Temp(ctx);
-		WasmExpCompiler.unboxF64Local(ctx, wRe);
-		WasmExpCompiler.unboxF64Local(ctx, wRe);
+		WasmEmitHelper.unboxF64Local(ctx, wRe);
+		WasmEmitHelper.unboxF64Local(ctx, wRe);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.unboxF64Local(ctx, wIm);
-		WasmExpCompiler.unboxF64Local(ctx, wIm);
+		WasmEmitHelper.unboxF64Local(ctx, wIm);
+		WasmEmitHelper.unboxF64Local(ctx, wIm);
 		ctx.writer.write(Instruction.F64_MUL);
 		ctx.writer.write(Instruction.F64_ADD);
 		f64Const(ctx, 1.0);
 		ctx.writer.write(Instruction.F64_LT);
 		ctx.writer.write(Instruction.IF, 0x40);
-		WasmExpCompiler.unboxF64Local(ctx, sRe);
-		WasmExpCompiler.unboxF64Local(ctx, reBox);
+		WasmEmitHelper.unboxF64Local(ctx, sRe);
+		WasmEmitHelper.unboxF64Local(ctx, reBox);
 		ctx.writer.write(Instruction.F64_SUB);
 		int vRe = boxF64Temp(ctx);
-		WasmExpCompiler.unboxF64Local(ctx, sIm);
-		WasmExpCompiler.unboxF64Local(ctx, imBox);
+		WasmEmitHelper.unboxF64Local(ctx, sIm);
+		WasmEmitHelper.unboxF64Local(ctx, imBox);
 		ctx.writer.write(Instruction.F64_SUB);
 		int vIm = boxF64Temp(ctx);
 		emitComplexLogInto(ctx, vRe, vIm, reOut, imOut);
-		WasmExpCompiler.unboxF64Local(ctx, reOut);
+		WasmEmitHelper.unboxF64Local(ctx, reOut);
 		ctx.writer.write(Instruction.F64_NEG);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(reOut);
-		WasmExpCompiler.unboxF64Local(ctx, imOut);
+		WasmEmitHelper.unboxF64Local(ctx, imOut);
 		ctx.writer.write(Instruction.F64_NEG);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(imOut);
 		ctx.writer.write(Instruction.ELSE);
@@ -1616,11 +1588,11 @@ final class WasmComplexCompiler {
 	// acosh(z) = 2*log(sqrt((z+1)/2) + sqrt((z-1)/2)) -- the ANSI form; the /2 of
 	// the imaginary part keeps its sign, which picks the sheet at the cut.
 	private static void emitComplexAcoshInto(WasmLispCompiler.Ctx ctx, int reBox, int imBox, int reOut, int imOut) {
-		WasmExpCompiler.unboxF64Local(ctx, imBox);
+		WasmEmitHelper.unboxF64Local(ctx, imBox);
 		f64Const(ctx, 2.0);
 		ctx.writer.write(Instruction.F64_DIV);
 		int im2 = boxF64Temp(ctx);
-		WasmExpCompiler.unboxF64Local(ctx, reBox);
+		WasmEmitHelper.unboxF64Local(ctx, reBox);
 		f64Const(ctx, 1.0);
 		ctx.writer.write(Instruction.F64_ADD);
 		f64Const(ctx, 2.0);
@@ -1629,7 +1601,7 @@ final class WasmComplexCompiler {
 		int s1Re = ctx.allocTemp();
 		int s1Im = ctx.allocTemp();
 		emitComplexSqrtInto(ctx, a1, im2, s1Re, s1Im);
-		WasmExpCompiler.unboxF64Local(ctx, reBox);
+		WasmEmitHelper.unboxF64Local(ctx, reBox);
 		f64Const(ctx, 1.0);
 		ctx.writer.write(Instruction.F64_SUB);
 		f64Const(ctx, 2.0);
@@ -1638,25 +1610,25 @@ final class WasmComplexCompiler {
 		int s2Re = ctx.allocTemp();
 		int s2Im = ctx.allocTemp();
 		emitComplexSqrtInto(ctx, a2, im2, s2Re, s2Im);
-		WasmExpCompiler.unboxF64Local(ctx, s1Re);
-		WasmExpCompiler.unboxF64Local(ctx, s2Re);
+		WasmEmitHelper.unboxF64Local(ctx, s1Re);
+		WasmEmitHelper.unboxF64Local(ctx, s2Re);
 		ctx.writer.write(Instruction.F64_ADD);
 		int sumRe = boxF64Temp(ctx);
-		WasmExpCompiler.unboxF64Local(ctx, s1Im);
-		WasmExpCompiler.unboxF64Local(ctx, s2Im);
+		WasmEmitHelper.unboxF64Local(ctx, s1Im);
+		WasmEmitHelper.unboxF64Local(ctx, s2Im);
 		ctx.writer.write(Instruction.F64_ADD);
 		int sumIm = boxF64Temp(ctx);
 		emitComplexLogInto(ctx, sumRe, sumIm, reOut, imOut);
-		WasmExpCompiler.unboxF64Local(ctx, reOut);
+		WasmEmitHelper.unboxF64Local(ctx, reOut);
 		f64Const(ctx, 2.0);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(reOut);
-		WasmExpCompiler.unboxF64Local(ctx, imOut);
+		WasmEmitHelper.unboxF64Local(ctx, imOut);
 		f64Const(ctx, 2.0);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(imOut);
 	}
@@ -1665,45 +1637,46 @@ final class WasmComplexCompiler {
 	// (the log of the quotient would answer the other edge of the cut).
 	private static void emitComplexAtanhInto(WasmLispCompiler.Ctx ctx, int reBox, int imBox, int reOut, int imOut) {
 		f64Const(ctx, 1.0);
-		WasmExpCompiler.unboxF64Local(ctx, reBox);
+		WasmEmitHelper.unboxF64Local(ctx, reBox);
 		ctx.writer.write(Instruction.F64_ADD);
 		int a1 = boxF64Temp(ctx);
 		int l1Re = ctx.allocTemp();
 		int l1Im = ctx.allocTemp();
 		emitComplexLogInto(ctx, a1, imBox, l1Re, l1Im);
 		f64Const(ctx, 1.0);
-		WasmExpCompiler.unboxF64Local(ctx, reBox);
+		WasmEmitHelper.unboxF64Local(ctx, reBox);
 		ctx.writer.write(Instruction.F64_SUB);
 		int a2 = boxF64Temp(ctx);
-		WasmExpCompiler.unboxF64Local(ctx, imBox);
+		WasmEmitHelper.unboxF64Local(ctx, imBox);
 		ctx.writer.write(Instruction.F64_NEG);
 		int a2Im = boxF64Temp(ctx);
 		int l2Re = ctx.allocTemp();
 		int l2Im = ctx.allocTemp();
 		emitComplexLogInto(ctx, a2, a2Im, l2Re, l2Im);
-		WasmExpCompiler.unboxF64Local(ctx, l1Re);
-		WasmExpCompiler.unboxF64Local(ctx, l2Re);
+		WasmEmitHelper.unboxF64Local(ctx, l1Re);
+		WasmEmitHelper.unboxF64Local(ctx, l2Re);
 		ctx.writer.write(Instruction.F64_SUB);
 		f64Const(ctx, 2.0);
 		ctx.writer.write(Instruction.F64_DIV);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(reOut);
-		WasmExpCompiler.unboxF64Local(ctx, l1Im);
-		WasmExpCompiler.unboxF64Local(ctx, l2Im);
+		WasmEmitHelper.unboxF64Local(ctx, l1Im);
+		WasmEmitHelper.unboxF64Local(ctx, l2Im);
 		ctx.writer.write(Instruction.F64_SUB);
 		f64Const(ctx, 2.0);
 		ctx.writer.write(Instruction.F64_DIV);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(imOut);
 	}
 
 	// cis(z) = (e^-im*cos(re), e^-im*sin(re)) into the boxed out-slots.
 	private static void emitComplexCisInto(WasmLispCompiler.Ctx ctx, int reBox, int imBox, int reOut, int imOut) {
-		WasmExpCompiler.unboxF64Local(ctx, imBox);
+		WasmEmitHelper.unboxF64Local(ctx, imBox);
 		ctx.writer.write(Instruction.F64_NEG);
-		WasmExpCompiler.emitExpCore(ctx, ctx.allocTemp(), ctx.allocTemp(), ctx.allocTemp());
+		WasmTranscendentalCompiler.call(ctx, Fn.EXP);
+		WasmEmitHelper.boxF64(ctx);
 		int eBox = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(eBox);
@@ -1711,16 +1684,16 @@ final class WasmComplexCompiler {
 		callCosInto(ctx, reBox, cosBox);
 		int sinBox = ctx.allocTemp();
 		callSinInto(ctx, reBox, sinBox);
-		WasmExpCompiler.unboxF64Local(ctx, eBox);
-		WasmExpCompiler.unboxF64Local(ctx, cosBox);
+		WasmEmitHelper.unboxF64Local(ctx, eBox);
+		WasmEmitHelper.unboxF64Local(ctx, cosBox);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(reOut);
-		WasmExpCompiler.unboxF64Local(ctx, eBox);
-		WasmExpCompiler.unboxF64Local(ctx, sinBox);
+		WasmEmitHelper.unboxF64Local(ctx, eBox);
+		WasmEmitHelper.unboxF64Local(ctx, sinBox);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(imOut);
 	}
@@ -1735,16 +1708,16 @@ final class WasmComplexCompiler {
 		callSinInto(ctx, imBox, sinIm);
 		int cosIm = ctx.allocTemp();
 		callCosInto(ctx, imBox, cosIm);
-		WasmExpCompiler.unboxF64Local(ctx, sinhRe);
-		WasmExpCompiler.unboxF64Local(ctx, cosIm);
+		WasmEmitHelper.unboxF64Local(ctx, sinhRe);
+		WasmEmitHelper.unboxF64Local(ctx, cosIm);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(reOut);
-		WasmExpCompiler.unboxF64Local(ctx, coshRe);
-		WasmExpCompiler.unboxF64Local(ctx, sinIm);
+		WasmEmitHelper.unboxF64Local(ctx, coshRe);
+		WasmEmitHelper.unboxF64Local(ctx, sinIm);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(imOut);
 	}
@@ -1759,16 +1732,16 @@ final class WasmComplexCompiler {
 		callSinInto(ctx, imBox, sinIm);
 		int cosIm = ctx.allocTemp();
 		callCosInto(ctx, imBox, cosIm);
-		WasmExpCompiler.unboxF64Local(ctx, coshRe);
-		WasmExpCompiler.unboxF64Local(ctx, cosIm);
+		WasmEmitHelper.unboxF64Local(ctx, coshRe);
+		WasmEmitHelper.unboxF64Local(ctx, cosIm);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(reOut);
-		WasmExpCompiler.unboxF64Local(ctx, sinhRe);
-		WasmExpCompiler.unboxF64Local(ctx, sinIm);
+		WasmEmitHelper.unboxF64Local(ctx, sinhRe);
+		WasmEmitHelper.unboxF64Local(ctx, sinIm);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(imOut);
 	}
@@ -1787,256 +1760,67 @@ final class WasmComplexCompiler {
 	// (a+bi)/(c+di) over boxed f64 components into the boxed out-slots.
 	private static void emitComplexDivF64(WasmLispCompiler.Ctx ctx, int aRe, int aIm, int cRe, int cIm, int reOut,
 			int imOut) {
-		WasmExpCompiler.unboxF64Local(ctx, cRe);
-		WasmExpCompiler.unboxF64Local(ctx, cRe);
+		WasmEmitHelper.unboxF64Local(ctx, cRe);
+		WasmEmitHelper.unboxF64Local(ctx, cRe);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.unboxF64Local(ctx, cIm);
-		WasmExpCompiler.unboxF64Local(ctx, cIm);
+		WasmEmitHelper.unboxF64Local(ctx, cIm);
+		WasmEmitHelper.unboxF64Local(ctx, cIm);
 		ctx.writer.write(Instruction.F64_MUL);
 		ctx.writer.write(Instruction.F64_ADD);
 		int denom = boxF64Temp(ctx);
-		WasmExpCompiler.unboxF64Local(ctx, aRe);
-		WasmExpCompiler.unboxF64Local(ctx, cRe);
+		WasmEmitHelper.unboxF64Local(ctx, aRe);
+		WasmEmitHelper.unboxF64Local(ctx, cRe);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.unboxF64Local(ctx, aIm);
-		WasmExpCompiler.unboxF64Local(ctx, cIm);
+		WasmEmitHelper.unboxF64Local(ctx, aIm);
+		WasmEmitHelper.unboxF64Local(ctx, cIm);
 		ctx.writer.write(Instruction.F64_MUL);
 		ctx.writer.write(Instruction.F64_ADD);
-		WasmExpCompiler.unboxF64Local(ctx, denom);
+		WasmEmitHelper.unboxF64Local(ctx, denom);
 		ctx.writer.write(Instruction.F64_DIV);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(reOut);
-		WasmExpCompiler.unboxF64Local(ctx, aIm);
-		WasmExpCompiler.unboxF64Local(ctx, cRe);
+		WasmEmitHelper.unboxF64Local(ctx, aIm);
+		WasmEmitHelper.unboxF64Local(ctx, cRe);
 		ctx.writer.write(Instruction.F64_MUL);
-		WasmExpCompiler.unboxF64Local(ctx, aRe);
-		WasmExpCompiler.unboxF64Local(ctx, cIm);
+		WasmEmitHelper.unboxF64Local(ctx, aRe);
+		WasmEmitHelper.unboxF64Local(ctx, cIm);
 		ctx.writer.write(Instruction.F64_MUL);
 		ctx.writer.write(Instruction.F64_SUB);
-		WasmExpCompiler.unboxF64Local(ctx, denom);
+		WasmEmitHelper.unboxF64Local(ctx, denom);
 		ctx.writer.write(Instruction.F64_DIV);
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(imOut);
 	}
 
-	// atan2(y, x) of the boxed components into the boxed out slot: the software
-	// atan core plus quadrant assembly (NaN in, NaN out; the x == 0 rungs tell +0
-	// from -0 through copysign, like Math.atan2).
+	// atan2(y, x) of the boxed components into the boxed out slot: fdlibm's atan2,
+	// the interpreter's Math.atan2 (NaN in, NaN out; the x == 0 rungs tell +0 from -0).
 	private static void emitAtan2Into(WasmLispCompiler.Ctx ctx, int yBox, int xBox, int out) {
-		// NaN in either -> NaN.
-		WasmExpCompiler.unboxF64Local(ctx, xBox);
-		WasmExpCompiler.unboxF64Local(ctx, xBox);
-		ctx.writer.write(Instruction.F64_NE);
-		WasmExpCompiler.unboxF64Local(ctx, yBox);
-		WasmExpCompiler.unboxF64Local(ctx, yBox);
-		ctx.writer.write(Instruction.F64_NE);
-		ctx.writer.write(Instruction.I32_OR);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		f64Const(ctx, Double.NaN);
-		ctx.writer.write(Instruction.ELSE);
-		// x > 0 -> atan(y/x).
-		WasmExpCompiler.unboxF64Local(ctx, xBox);
-		f64Const(ctx, 0.0);
-		ctx.writer.write(Instruction.F64_GT);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		WasmExpCompiler.unboxF64Local(ctx, yBox);
-		WasmExpCompiler.unboxF64Local(ctx, xBox);
-		ctx.writer.write(Instruction.F64_DIV);
-		callAtanInto(ctx);
-		ctx.writer.write(Instruction.ELSE);
-		// x < 0 -> atan(y/x) + copysign(pi, y).
-		WasmExpCompiler.unboxF64Local(ctx, xBox);
-		f64Const(ctx, 0.0);
-		ctx.writer.write(Instruction.F64_LT);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		WasmExpCompiler.unboxF64Local(ctx, yBox);
-		WasmExpCompiler.unboxF64Local(ctx, xBox);
-		ctx.writer.write(Instruction.F64_DIV);
-		callAtanInto(ctx);
-		f64Const(ctx, Math.PI);
-		WasmExpCompiler.unboxF64Local(ctx, yBox);
-		ctx.writer.write(Instruction.F64_COPYSIGN);
-		ctx.writer.write(Instruction.F64_ADD);
-		ctx.writer.write(Instruction.ELSE);
-		// x == 0: the IEEE edges. A nonzero y answers copysign(pi/2, y) over either
-		// zero (the limits of the two branches above meet there); a zero y keeps its
-		// own sign over +0 and takes copysign(pi, y) over -0. (Before cis/asinh/
-		// acosh/atanh the x==0 arm answered y itself over +0 -- no existing pin
-		// exercised it; (log #c(0 1)) now lands on (0.0, pi/2) as it must.)
-		f64Const(ctx, 0.0);
-		WasmExpCompiler.unboxF64Local(ctx, yBox);
-		ctx.writer.write(Instruction.F64_EQ);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		f64Const(ctx, 1.0);
-		WasmExpCompiler.unboxF64Local(ctx, xBox);
-		ctx.writer.write(Instruction.F64_COPYSIGN);
-		f64Const(ctx, 0.0);
-		ctx.writer.write(Instruction.F64_GT);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		WasmExpCompiler.unboxF64Local(ctx, yBox);
-		ctx.writer.write(Instruction.ELSE);
-		f64Const(ctx, Math.PI);
-		WasmExpCompiler.unboxF64Local(ctx, yBox);
-		ctx.writer.write(Instruction.F64_COPYSIGN);
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.ELSE);
-		f64Const(ctx, Math.PI / 2);
-		WasmExpCompiler.unboxF64Local(ctx, yBox);
-		ctx.writer.write(Instruction.F64_COPYSIGN);
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.END);
-		WasmExpCompiler.boxF64(ctx);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(out);
+		WasmTranscendentalCompiler.callInto(ctx, Fn.ATAN2, yBox, xBox, out);
 	}
 
-	// sin of the boxed value into the boxed out slot (the real sin edges, then
-	// the finite core).
+	// sin / cos / sinh / cosh of the boxed value into the boxed out slot: the fdlibm
+	// functions, edges included.
 	private static void callSinInto(WasmLispCompiler.Ctx ctx, int inBox, int outBox) {
-		int xSlot = ctx.allocTemp();
-		getLocal(ctx, inBox);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(xSlot);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		ctx.writer.write(Instruction.F64_NE);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		ctx.writer.write(Instruction.ELSE);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		ctx.writer.write(Instruction.F64_ABS);
-		f64Const(ctx, Double.POSITIVE_INFINITY);
-		ctx.writer.write(Instruction.F64_EQ);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		f64Const(ctx, Double.NaN);
-		ctx.writer.write(Instruction.ELSE);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		f64Const(ctx, 0.0);
-		ctx.writer.write(Instruction.F64_EQ);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		ctx.writer.write(Instruction.ELSE);
-		WasmSinCosCompiler.emitSinMain(ctx, xSlot, ctx.allocTemp(), ctx.allocTemp(), ctx.allocTemp(), ctx.allocTemp());
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.END);
-		WasmExpCompiler.boxF64(ctx);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(outBox);
+		WasmTranscendentalCompiler.callInto(ctx, Fn.SIN, inBox, outBox);
 	}
 
-	// cos of the boxed value into the boxed out slot.
 	private static void callCosInto(WasmLispCompiler.Ctx ctx, int inBox, int outBox) {
-		int xSlot = ctx.allocTemp();
-		getLocal(ctx, inBox);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(xSlot);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		ctx.writer.write(Instruction.F64_NE);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		ctx.writer.write(Instruction.ELSE);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		ctx.writer.write(Instruction.F64_ABS);
-		f64Const(ctx, Double.POSITIVE_INFINITY);
-		ctx.writer.write(Instruction.F64_EQ);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		f64Const(ctx, Double.NaN);
-		ctx.writer.write(Instruction.ELSE);
-		WasmSinCosCompiler.emitCosMain(ctx, xSlot, ctx.allocTemp(), ctx.allocTemp(), ctx.allocTemp(), ctx.allocTemp());
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.END);
-		WasmExpCompiler.boxF64(ctx);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(outBox);
+		WasmTranscendentalCompiler.callInto(ctx, Fn.COS, inBox, outBox);
 	}
 
-	// sinh of the boxed value into the boxed out slot (the real sinh edges, then
-	// the finite core).
 	private static void callSinhInto(WasmLispCompiler.Ctx ctx, int inBox, int outBox) {
-		int xSlot = ctx.allocTemp();
-		getLocal(ctx, inBox);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(xSlot);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		ctx.writer.write(Instruction.F64_NE);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		ctx.writer.write(Instruction.ELSE);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		ctx.writer.write(Instruction.F64_ABS);
-		f64Const(ctx, Double.POSITIVE_INFINITY);
-		ctx.writer.write(Instruction.F64_EQ);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		ctx.writer.write(Instruction.ELSE);
-		WasmSinhCoshCompiler.emitSinhF64(ctx, xSlot, ctx.allocTemp(), ctx.allocTemp(), ctx.allocTemp());
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.END);
-		WasmExpCompiler.boxF64(ctx);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(outBox);
+		WasmTranscendentalCompiler.callInto(ctx, Fn.SINH, inBox, outBox);
 	}
 
-	// cosh of the boxed value into the boxed out slot.
 	private static void callCoshInto(WasmLispCompiler.Ctx ctx, int inBox, int outBox) {
-		int xSlot = ctx.allocTemp();
-		getLocal(ctx, inBox);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(xSlot);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		ctx.writer.write(Instruction.F64_NE);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		ctx.writer.write(Instruction.ELSE);
-		WasmExpCompiler.unboxF64Local(ctx, xSlot);
-		ctx.writer.write(Instruction.F64_ABS);
-		f64Const(ctx, Double.POSITIVE_INFINITY);
-		ctx.writer.write(Instruction.F64_EQ);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		f64Const(ctx, Double.POSITIVE_INFINITY);
-		ctx.writer.write(Instruction.ELSE);
-		WasmSinhCoshCompiler.emitCoshF64(ctx, xSlot, ctx.allocTemp(), ctx.allocTemp(), ctx.allocTemp());
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.END);
-		WasmExpCompiler.boxF64(ctx);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(outBox);
-	}
-
-	// atan of the f64 on the stack, left on the stack.
-	private static void callAtanInto(WasmLispCompiler.Ctx ctx) {
-		WasmExpCompiler.boxF64(ctx);
-		int xSlot = ctx.allocTemp();
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(xSlot);
-		WasmAtanCompiler.emitAtanCore(ctx, xSlot, ctx.allocTemp(), ctx.allocTemp(), ctx.allocTemp(), ctx.allocTemp());
+		WasmTranscendentalCompiler.callInto(ctx, Fn.COSH, inBox, outBox);
 	}
 
 	private static int boxF64Temp(WasmLispCompiler.Ctx ctx) {
 		int slot = ctx.allocTemp();
-		WasmExpCompiler.boxF64(ctx);
+		WasmEmitHelper.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
 		return slot;

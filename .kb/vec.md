@@ -157,28 +157,21 @@ an f64 scalar, `_v_get`/`_v_set` widened against the FULL double scalar for an f
 ## Element-wise unary ufuncs
 
 The seventeen ufuncs (+ `-into`) exist in BOTH packages under their numpy names. They emptied
-`BuiltinFunctionWrappers.WASM_UNSUPPORTED` -- every transcendental built-in now compiles on WASM.
-WASM software scalars: `WasmAtanCompiler` (~1e-15, `-0.0` PRESERVED since there is no `i32.trunc`;
-acos = `2*atan(sqrt((1-x)/(1+x)))` NOT `pi/2 - asin`, so `(acos 1)` is exactly 0.0),
-`WasmSinhCoshCompiler` (NaN/+-inf branches must PRECEDE the exponential), `WasmSinCosCompiler`
-(Cody-Waite, ~1e-11 for |x| <= ~1e6), `WasmLogCompiler` (~1e-10),
-`WasmTanhCompiler` (argument clamped to +-40, so large inputs saturate to exactly +-1.0).
-`WasmExpCompiler` itself is the standard range reduction `x = k*ln2 + r` (two-part ln2
-split, like Cody-Waite), a degree-12 Taylor polynomial for `e^r`, and a scale by `2^k`
-through the exponent bits -- ~3e-14 relative over the full finite range, with the edges
-`x > 709.8 -> +inf`, `x < -745.2 -> 0.0`, NaN -> NaN.
-`(sin -0.0)`/`(tan -0.0)`/`(tanh -0.0)` are `0.0`; wasm `signum` maps `-0.0`/NaN to `0.0`.
+`BuiltinFunctionWrappers.WASM_UNSUPPORTED` -- every transcendental built-in compiles on WASM,
+since 2026-09-17 as a call into the fdlibm runtime (`WasmFdlibmRuntimeBuilder`), the same
+algorithm the interpreter and the JVM run as `StrictMath`, so the digits are one set on every
+backend (`.kb/transcendentals.md`). `(sin -0.0)`/`(tan -0.0)`/`(tanh -0.0)` are `-0.0` (odd);
+wasm `signum` maps `-0.0`/NaN to `0.0`.
 
 - **The oracle is each backend's OWN scalar defun** (the emap rule: read widened to f64, apply the
-  backend's scalar op, narrow on store), so cross-backend `-0.0`/NaN/low-digit output stays OUT of
-  ci-spec. The one edge where wasm's `exp` is EXACTLY the JVM's is underflow:
-  `WasmExpCompiler.UNDERFLOW_LO` answers `0.0` below the smallest denormal, exactly where
-  `Math.exp` does. It is what makes a `-infinity` mask reach `linalg:softmax` as `0.0`
-  (`.kb/linalg.md`); `emitExpF64` carries the same sequence so `--simd`/`--no-gc` stay
-  bit-identical to the defun.
+  backend's scalar op, narrow on store), so cross-backend `-0.0`/NaN output stays OUT of ci-spec;
+  the transcendental digits themselves are one set everywhere since 2026-09-17
+  (`.kb/transcendentals.md`). fdlibm's `exp` answers `0.0` below the smallest denormal, which is
+  what makes a `-infinity` mask reach `linalg:softmax` as `0.0` (`.kb/linalg.md`); the
+  `--simd`/`--no-gc` kernels call the same function, so they stay bit-identical to the defun.
 - **Lane forms only where they equal the defun.** Interpreter/JVM and wasm-GC lane-ize sqrt, abs,
-  negative and reciprocal only (`VectorOperators.EXP` is not bit-identical to `Math.exp`; gate
-  `JvmSimdVectorTemplate.hasLaneForm`); `sqrt`'s element function is the float-domain square root
+  negative and reciprocal only (`VectorOperators.EXP` is not bit-identical to `StrictMath.exp`;
+  gate `JvmSimdVectorTemplate.hasLaneForm`); `sqrt`'s element function is the float-domain square root
   (`vec::%fsqrt`, `linalg::%la-fsqrt` beside it): NaN on a negative input on both paths. CL `sqrt`
   roots negatives into the complex plane, and a complex has no packed element store, so the CL
   spelling signalled on the scalar path (a type error on the interpreter/JVM, a trap on wasm-GC)
@@ -188,11 +181,12 @@ through the exponent bits -- ~3e-14 relative over the full finite range, with th
   the rule is now general: an element function that can answer a complex does not belong in a
   packed kernel. Scalar `(sqrt x)` itself stays complex-extended; only the packed
   element functions are float-domain, pinned by `ci-spec.yaml`'s `vec-sqrt-negative-cross-backend`
-  (four backends x scalar/`--simd`, with 200-element lane shapes); exp/log/tanh/sin/cos/tan/sign walk element loops over
-  `WasmVecSimdRuntimeBuilder.emitExpF64`/`emitLogF64`/`emitTanhF64`/`emitSinCosF64`/`emitSignumF64`,
-  which `NoGcWasmCompiler.compileSimdUnaryF64` reuses, so BOTH `--no-gc` lowerings emit the identical
-  loop (no `0xFD`). All f32 lane forms are exact by the `53 >= 2*24+2` bound. The scalar
-  `(exp x)`/`(log x)`/etc. builtins remain unknown on `--no-gc`.
+  (four backends x scalar/`--simd`, with 200-element lane shapes); the transcendental ufuncs and
+  sign walk element loops over `WasmVecSimdRuntimeBuilder.emitScalarUnaryF64` (a call into the
+  fdlibm runtime, or the inline `emitSignumF64`), which `NoGcWasmCompiler.compileSimdUnaryF64`
+  reuses, so BOTH `--no-gc` lowerings emit the identical loop (no `0xFD`). All f32 lane forms are
+  exact by the `53 >= 2*24+2` bound. The scalar `(exp x)`/`(log x)`/etc. builtins remain unknown
+  on `--no-gc`.
 - New v128 opcodes (`f32x4/f64x2.sqrt/abs/neg/lt/gt`, `v128.bitselect`) go in
   `am.ik.wasm.Instruction` AND `WasmSections.skipSimd` (which throws on unknown 0xFD).
 
@@ -624,7 +618,9 @@ chain, decoded to TEXT so a moved argmax fails loudly rather than shifting a dig
   `codegen/jvm/JvmSimdVectorTemplateBf16Test`.
 - `NoGcWasmCompilerTest`: `0xFD` presence/absence, `f64.load/store` 0x2B/0x39 and `f32.load/store`
   0x2A/0x38, `#f` narrow/widen, compile errors (mixed width, from-list, `matvec-into`),
-  `{expAndSign,logAndTanh,sinCosTan}LowerNativelyOnNoGc`, and
+  `{expAndSign,logAndTanh,sinCosTan,arcAndHyperbolic}LowerNativelyOnNoGc` (the fdlibm
+  coefficients present in the code section, no `0xFD` opcode in the user's body -- the byte does
+  occur inside fdlibm's immediates), and
   `intoKernelsCallTheBumpAllocatorOnlyForTheConstructors` -- `allocVec` site count 2 vs 3, matched on
   `i32.shl; i32.add; call $__ronto_alloc`, since a bare `0x10 <idx>` scan false-positives inside v128
   immediates.
@@ -639,7 +635,9 @@ chain, decoded to TEXT so a moved argmax fails loudly rather than shifting a dig
   be disabled too or wasmtime rejects the combination). The `noGcRuns*UnderBothLowerings` family
   compares `--no-gc` against a wasm-GC run, not a constant, and surfaced a `WasmTreeShaker` gap: no
   case for the `0xFD` prefix, so `--no-gc --optimize` on ANY vec program threw "unhandled opcode
-  0xFD". Scalar-builtin probes `{log,tanh,sinCosTan}SoftwareApproximation`, tolerance 1e-5.
+  0xFD". Scalar-builtin probes `{log,tanh,sinCosTan}SoftwareApproximation` keep their
+  historical tolerance shape over the whole call path; the bits are
+  `WasmFdlibmRuntimeBuilderTest`'s.
 - ci-spec: the whole corpus runs on four backends x {default, `--simd`} (the axis above), plus
   `vec-kernels-cross-backend` (four backends byte-identical; f64-exact inputs so
   `mean`/`norm` land on exact doubles, plus a square and a non-square `vec:matvec`),

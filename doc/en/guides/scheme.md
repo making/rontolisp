@@ -264,9 +264,6 @@ interpreter resolves them all.
   the `dynamic-wind`s it is inside do not run.
 - There are no complex numbers: `(sqrt -4)`, `(log -1)` and `(asin 2)` end the program
   with an error naming the procedure.
-- `exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos` and `atan` of an inexact argument can
-  differ from the JVM's in the last digits on WebAssembly, and between x86-64 and AArch64
-  on the JVM. `sqrt` and the four arithmetic operations answer the same digits everywhere.
 - Error messages spell Common Lisp names (`CAR`).
 - **Not yet**: `define-syntax` / `syntax-rules`, `define-library`, `guard` / `raise`,
   `parameterize`, `case-lambda`, bytevectors, ports other than the current

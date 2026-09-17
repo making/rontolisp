@@ -1781,12 +1781,13 @@ final class WasmEvalRuntimeBuilder {
 		final int FN = 0, ARGLIST = 1, PARAMS = 2, NEWENV = 3, BODY = 4, PAIR = 5, TMP = 6, ARGCUR = 7, ARG0 = 8;
 		final int FUNCID = 15, LEN = 16;
 
-		// if fn is null -> nil
+		// fn is null: NIL names no function. The spread dispatcher's prologue is where
+		// a value that names none is reported (a throw in EH mode, a trap outside it),
+		// so every such arm below hands the ORIGINAL value over to it.
 		getLocal(w, FN);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF, 0x40);
-		emitNull(w);
-		w.write(Instruction.RETURN);
+		emitSpreadDispatch(w, FN, ARGLIST);
 		w.write(Instruction.END);
 
 		// symbol designator (CL-style): a symbol resolves in the function namespace
@@ -1831,9 +1832,9 @@ final class WasmEvalRuntimeBuilder {
 		setLocal(w, FN);
 		w.write(Instruction.ELSE);
 		// A symbol that resolves in neither $fenv nor the registry is an undefined
-		// function: fail LOUDLY like the funcall dispatchers' miss arm (returning
-		// nil here silently swallowed (apply (intern "NOSUCH") ...)).
-		w.write(Instruction.UNREACHABLE);
+		// function: fail LOUDLY through the funcall dispatchers' own miss arm
+		// (returning nil here silently swallowed (apply (intern "NOSUCH") ...)).
+		emitSpreadDispatch(w, FN, ARGLIST);
 		w.write(Instruction.END);
 		if (usesEval) {
 			w.write(Instruction.END);
@@ -1938,10 +1939,19 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // if closure
 
-		// not callable -> nil
-		emitNull(w);
+		// not callable: the dispatcher reports it
+		emitSpreadDispatch(w, FN, ARGLIST);
 		w.write(Instruction.END); // function
 		return body.toByteArray();
+	}
+
+	/** Emits {@code return _dispatch_spread(fn, argList)}. */
+	private static void emitSpreadDispatch(WasmWriter w, int fnSlot, int argListSlot) {
+		getLocal(w, fnSlot);
+		getLocal(w, argListSlot);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_SPREAD);
+		w.write(Instruction.RETURN);
 	}
 
 	/**

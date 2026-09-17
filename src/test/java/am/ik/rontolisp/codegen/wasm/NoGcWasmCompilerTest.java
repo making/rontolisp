@@ -1500,6 +1500,39 @@ class NoGcWasmCompilerTest {
 		return functionBodies(Objects.requireNonNull(sections(module).get(10))).get(0);
 	}
 
+	// Whether the code section holds the 0xFD SIMD prefix as an opcode, the f64.const
+	// / f32.const immediates stepped over (a coefficient byte is not an opcode).
+	private static boolean containsSimdPrefix(byte[] code) {
+		return containsSimdPrefix(code, 0, code.length);
+	}
+
+	// The same over the FIRST function body only -- the user's f, where a vec:
+	// lowering lives. The fdlibm bodies appended after the user's functions carry the
+	// byte inside LEB immediates too (sinh's low-word bound 0x8fb9f87d), so a probe of
+	// a transcendental lowering reads the user's body alone.
+	private static boolean containsSimdPrefixInUserFunction(byte[] code) {
+		int[] p = { 0 };
+		readUleb(code, p); // the entry count
+		int size = readUleb(code, p);
+		return containsSimdPrefix(code, p[0], p[0] + size);
+	}
+
+	private static boolean containsSimdPrefix(byte[] code, int from, int to) {
+		for (int i = from; i < to; i++) {
+			int b = code[i] & 0xFF;
+			if (b == 0x44) {
+				i += 8;
+			}
+			else if (b == 0x43) {
+				i += 4;
+			}
+			else if (b == 0xFD) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private static boolean containsSequence(byte[] haystack, int... needle) {
 		outer: for (int i = 0; i + needle.length <= haystack.length; i++) {
 			for (int j = 0; j < needle.length; j++) {
@@ -1756,7 +1789,7 @@ class NoGcWasmCompilerTest {
 		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
 		assertThat(sections.get(5)).as("memory section (the matrix lives in linear memory)").isNotNull();
 		byte[] code = Objects.requireNonNull(sections.get(10));
-		assertThat(containsSequence(code, 0xFD)).as("no SIMD prefix in the scalar module").isFalse();
+		assertThat(containsSimdPrefix(code)).as("no SIMD prefix in the scalar module").isFalse();
 		// A quoted literal dimension list builds the same layout (the single-float width
 		// included).
 		byte[] quoted = compile("""
@@ -1882,7 +1915,7 @@ class NoGcWasmCompilerTest {
 		assertThat(sections).containsKey(5).doesNotContainKey(2);
 		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
 		byte[] code = Objects.requireNonNull(sections.get(10));
-		assertThat(containsSequence(code, 0xFD)).as("no SIMD prefix (0xFD) in the scalar --no-gc module").isFalse();
+		assertThat(containsSimdPrefix(code)).as("no SIMD prefix (0xFD) in the scalar --no-gc module").isFalse();
 		assertThat(containsSequence(code, 0x2B, 0x00, 0x00)).as("f64.load (0x2B) reads packed elements").isTrue();
 		assertThat(containsSequence(code, 0x39, 0x00, 0x00)).as("f64.store (0x39) writes packed elements").isTrue();
 		// The v128 build of the very same source DOES carry 0xFD -- the two differ only
@@ -2024,14 +2057,37 @@ class NoGcWasmCompilerTest {
 		}
 	}
 
+	// The f64.const of a coefficient only one fdlibm function carries
+	// (WasmFdlibmRuntimeBuilder): what the lowering probes below look for, since the
+	// body itself may be inlined into its one caller by the optimizer.
+	private static int[] fdlibmConstant(WasmFdlibmRuntimeBuilder.Fn fn) {
+		double c = switch (fn) {
+			case EXP -> 0x1.62e42fefa39efp9; // o_threshold
+			case EXPM1 -> -0x1.11111111110f4p-5; // Q1
+			case LOG -> 0x1.5555555555593p-1; // Lg1
+			case K_SIN -> -0x1.5555555555549p-3; // S1
+			case K_TAN -> 0x1.5555555555563p-2; // T[0]
+			case ASIN -> -0x1.4d61203eb6f7dp-2; // pS1
+			case ATAN -> 0x1.555555555550dp-2; // aT[0]
+			default -> throw new IllegalArgumentException("no probe constant for " + fn);
+		};
+		int[] out = new int[9];
+		out[0] = 0x44; // f64.const
+		long bits = Double.doubleToRawLongBits(c);
+		for (int i = 0; i < 8; i++) {
+			out[1 + i] = (int) ((bits >>> (8 * i)) & 0xFF);
+		}
+		return out;
+	}
+
 	@Test
 	void expAndSignLowerNativelyOnNoGc() {
-		// vec:exp / vec:sign (and -into) reuse the
-		// GC backend's raw-f64 emitters (WasmVecSimdRuntimeBuilder.emitExpF64 /
-		// emitSignumF64), so BOTH lowerings drive the same scalar element loop -- no
-		// 0xFD SIMD opcode even under --simd, and the exp range-reduction constant
-		// (f64.const 1/ln2, WasmExpCompiler.INV_LN2) appears in the body. The probe
-		// avoids vec:sum (whose --simd lowering IS v128) so 0xFD absence is exp/sign's.
+		// vec:exp / vec:sign (and -into) call the fdlibm exp the module carries
+		// (WasmFdlibmRuntimeBuilder) / inline WasmVecSimdRuntimeBuilder.emitSignumF64,
+		// so BOTH lowerings drive the same scalar element loop -- no 0xFD SIMD opcode
+		// even under --simd, and fdlibm exp's coefficients are in the code section. The
+		// probe avoids vec:sum (whose --simd lowering IS v128) so 0xFD absence is
+		// exp/sign's.
 		String source = """
 				(defun f (n)
 				  (let ((v (vec:ones n)) (o (vec:zeros n)))
@@ -2040,16 +2096,13 @@ class NoGcWasmCompilerTest {
 				    (+ (vec:aref (vec:exp v) 0) (vec:aref (vec:sign o) 1))))
 				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
 				""";
-		int[] invScale = new int[9];
-		invScale[0] = 0x44; // f64.const
-		long bits = Double.doubleToRawLongBits(WasmExpCompiler.INV_LN2);
-		for (int i = 0; i < 8; i++) {
-			invScale[1 + i] = (int) ((bits >>> (8 * i)) & 0xFF);
-		}
 		for (boolean simd : new boolean[] { false, true }) {
 			byte[] code = Objects.requireNonNull(sections(simd ? compileSimd(source) : compile(source)).get(10));
-			assertThat(containsSequence(code, invScale)).as("exp INV_LN2 constant, simd=%s", simd).isTrue();
-			assertThat(containsSequence(code, 0xFD)).as("no SIMD prefix in the exp/sign lowering, simd=%s", simd)
+			assertThat(containsSequence(code, fdlibmConstant(WasmFdlibmRuntimeBuilder.Fn.EXP)))
+				.as("fdlibm exp, simd=%s", simd)
+				.isTrue();
+			assertThat(containsSimdPrefixInUserFunction(code))
+				.as("no SIMD prefix in the exp/sign lowering, simd=%s", simd)
 				.isFalse();
 		}
 		// -into writes into the caller's block: only the two constructors allocate.
@@ -2063,12 +2116,11 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void logAndTanhLowerNativelyOnNoGc() {
-		// vec:log / vec:tanh (and -into) reuse the GC backend's
-		// raw-f64 emitters (WasmVecSimdRuntimeBuilder.emitLogF64 / emitTanhF64), so
-		// BOTH lowerings drive the same scalar element loop -- no 0xFD SIMD opcode even
-		// under --simd, and the log mantissa-normalization constant (f64.const sqrt(2),
-		// WasmLogCompiler.SQRT2) appears in the body. The probe avoids vec:sum (whose
-		// --simd lowering IS v128) so 0xFD absence is log/tanh's.
+		// vec:log / vec:tanh (and -into) call the fdlibm log / tanh the module
+		// carries (tanh over expm1), so BOTH lowerings drive the same scalar element
+		// loop -- no 0xFD SIMD opcode even under --simd, and fdlibm log's and expm1's
+		// coefficients are in the code section. The probe avoids vec:sum (whose --simd
+		// lowering IS v128) so 0xFD absence is log/tanh's.
 		String source = """
 				(defun f (n)
 				  (let ((v (vec:ones n)) (o (vec:zeros n)))
@@ -2077,16 +2129,16 @@ class NoGcWasmCompilerTest {
 				    (+ (vec:aref (vec:log v) 0) (vec:aref (vec:tanh o) 1))))
 				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
 				""";
-		int[] sqrt2 = new int[9];
-		sqrt2[0] = 0x44; // f64.const
-		long bits = Double.doubleToRawLongBits(WasmLogCompiler.SQRT2);
-		for (int i = 0; i < 8; i++) {
-			sqrt2[1 + i] = (int) ((bits >>> (8 * i)) & 0xFF);
-		}
 		for (boolean simd : new boolean[] { false, true }) {
 			byte[] code = Objects.requireNonNull(sections(simd ? compileSimd(source) : compile(source)).get(10));
-			assertThat(containsSequence(code, sqrt2)).as("log SQRT2 constant, simd=%s", simd).isTrue();
-			assertThat(containsSequence(code, 0xFD)).as("no SIMD prefix in the log/tanh lowering, simd=%s", simd)
+			assertThat(containsSequence(code, fdlibmConstant(WasmFdlibmRuntimeBuilder.Fn.LOG)))
+				.as("fdlibm log, simd=%s", simd)
+				.isTrue();
+			assertThat(containsSequence(code, fdlibmConstant(WasmFdlibmRuntimeBuilder.Fn.EXPM1)))
+				.as("fdlibm expm1 (tanh's callee), simd=%s", simd)
+				.isTrue();
+			assertThat(containsSimdPrefixInUserFunction(code))
+				.as("no SIMD prefix in the log/tanh lowering, simd=%s", simd)
 				.isFalse();
 		}
 		// -into writes into the caller's block: only the two constructors allocate.
@@ -2100,12 +2152,12 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void sinCosTanLowerNativelyOnNoGc() {
-		// vec:sin / vec:cos / vec:tan (and -into)
-		// reuse the GC backend's raw-f64 emitter (WasmVecSimdRuntimeBuilder
-		// .emitSinCosF64), so BOTH lowerings drive the same scalar element loop -- no
-		// 0xFD SIMD opcode even under --simd, and the Cody-Waite reduction constant
-		// (f64.const WasmSinCosCompiler.PIO2_1) appears in the body. The probe avoids
-		// vec:sum (whose --simd lowering IS v128) so 0xFD absence is sin/cos/tan's.
+		// vec:sin / vec:cos / vec:tan (and -into) call the fdlibm sin / cos / tan the
+		// module carries, so BOTH lowerings drive the same scalar element loop -- no
+		// 0xFD SIMD opcode even under --simd, and fdlibm __kernel_sin's and
+		// __kernel_tan's coefficients are in the code section (with the 2/pi table the
+		// reduction reads in the data section). The probe avoids vec:sum (whose --simd
+		// lowering IS v128) so 0xFD absence is sin/cos/tan's.
 		String source = """
 				(defun f (n)
 				  (let ((v (vec:ones n)) (o (vec:zeros n)))
@@ -2114,17 +2166,25 @@ class NoGcWasmCompilerTest {
 				    (+ (vec:aref (vec:sin v) 0) (vec:aref (vec:cos o) 1) (vec:aref (vec:tan (vec:tan-into o o)) 2))))
 				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
 				""";
-		int[] pio21 = new int[9];
-		pio21[0] = 0x44; // f64.const
-		long bits = Double.doubleToRawLongBits(WasmSinCosCompiler.PIO2_1);
-		for (int i = 0; i < 8; i++) {
-			pio21[1 + i] = (int) ((bits >>> (8 * i)) & 0xFF);
-		}
 		for (boolean simd : new boolean[] { false, true }) {
-			byte[] code = Objects.requireNonNull(sections(simd ? compileSimd(source) : compile(source)).get(10));
-			assertThat(containsSequence(code, pio21)).as("Cody-Waite PIO2_1 constant, simd=%s", simd).isTrue();
-			assertThat(containsSequence(code, 0xFD)).as("no SIMD prefix in the sin/cos/tan lowering, simd=%s", simd)
+			byte[] module = simd ? compileSimd(source) : compile(source);
+			byte[] code = Objects.requireNonNull(sections(module).get(10));
+			assertThat(containsSequence(code, fdlibmConstant(WasmFdlibmRuntimeBuilder.Fn.K_SIN)))
+				.as("fdlibm __kernel_sin, simd=%s", simd)
+				.isTrue();
+			assertThat(containsSequence(code, fdlibmConstant(WasmFdlibmRuntimeBuilder.Fn.K_TAN)))
+				.as("fdlibm __kernel_tan, simd=%s", simd)
+				.isTrue();
+			assertThat(containsSimdPrefixInUserFunction(code))
+				.as("no SIMD prefix in the sin/cos/tan lowering, simd=%s", simd)
 				.isFalse();
+			byte[] data = Objects.requireNonNull(sections(module).get(11));
+			int[] tables = new int[64];
+			byte[] blob = WasmFdlibmRuntimeBuilder.tables();
+			for (int i = 0; i < tables.length; i++) {
+				tables[i] = blob[i] & 0xFF;
+			}
+			assertThat(containsSequence(data, tables)).as("the 2/pi table, simd=%s", simd).isTrue();
 		}
 		// -into writes into the caller's block: only the two constructors allocate.
 		assertThat(allocCallCount(compile("""
@@ -2137,14 +2197,12 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void arcAndHyperbolicLowerNativelyOnNoGc() {
-		// vec:asin / vec:acos / vec:atan / vec:sinh /
-		// vec:cosh (and -into) reuse the GC backend's raw-f64 emitters
-		// (WasmVecSimdRuntimeBuilder.emitAtanFamilyF64 / emitSinhCoshF64), so BOTH
-		// lowerings drive the same scalar element loop -- no 0xFD SIMD opcode even
-		// under --simd, and the atan reciprocal-fold constant (f64.const pi/2,
-		// WasmAtanCompiler.PI_OVER_2) plus the sinh series constant (f64.const 1/9!,
-		// WasmSinhCoshCompiler.SINH_COEFFS[0]) appear in the body. The probe avoids
-		// vec:sum (whose --simd lowering IS v128) so 0xFD absence is these ops'.
+		// vec:asin / vec:acos / vec:atan / vec:sinh / vec:cosh (and -into) call the
+		// fdlibm functions the module carries, so BOTH lowerings drive the same scalar
+		// element loop -- no 0xFD SIMD opcode even under --simd, and fdlibm asin's,
+		// atan's and expm1's (sinh's callee) coefficients are in the code section. The
+		// probe
+		// avoids vec:sum (whose --simd lowering IS v128) so 0xFD absence is these ops'.
 		String source = """
 				(defun f (n)
 				  (let ((v (vec:ones n)) (o (vec:zeros n)))
@@ -2156,23 +2214,14 @@ class NoGcWasmCompilerTest {
 				       (vec:aref (vec:sinh v) 0) (vec:aref (vec:cosh (vec:cosh-into o o)) 2))))
 				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
 				""";
-		int[] piOver2 = new int[9];
-		piOver2[0] = 0x44; // f64.const
-		long bits = Double.doubleToRawLongBits(WasmAtanCompiler.PI_OVER_2);
-		for (int i = 0; i < 8; i++) {
-			piOver2[1 + i] = (int) ((bits >>> (8 * i)) & 0xFF);
-		}
-		int[] sinhC0 = new int[9];
-		sinhC0[0] = 0x44; // f64.const
-		long sBits = Double.doubleToRawLongBits(WasmSinhCoshCompiler.SINH_COEFFS[0]);
-		for (int i = 0; i < 8; i++) {
-			sinhC0[1 + i] = (int) ((sBits >>> (8 * i)) & 0xFF);
-		}
 		for (boolean simd : new boolean[] { false, true }) {
 			byte[] code = Objects.requireNonNull(sections(simd ? compileSimd(source) : compile(source)).get(10));
-			assertThat(containsSequence(code, piOver2)).as("atan PI_OVER_2 constant, simd=%s", simd).isTrue();
-			assertThat(containsSequence(code, sinhC0)).as("sinh series constant, simd=%s", simd).isTrue();
-			assertThat(containsSequence(code, 0xFD)).as("no SIMD prefix in the arc/hyperbolic lowering, simd=%s", simd)
+			for (WasmFdlibmRuntimeBuilder.Fn fn : new WasmFdlibmRuntimeBuilder.Fn[] { WasmFdlibmRuntimeBuilder.Fn.ASIN,
+					WasmFdlibmRuntimeBuilder.Fn.ATAN, WasmFdlibmRuntimeBuilder.Fn.EXPM1 }) {
+				assertThat(containsSequence(code, fdlibmConstant(fn))).as("fdlibm %s, simd=%s", fn, simd).isTrue();
+			}
+			assertThat(containsSimdPrefixInUserFunction(code))
+				.as("no SIMD prefix in the arc/hyperbolic lowering, simd=%s", simd)
 				.isFalse();
 		}
 		// -into writes into the caller's block: only the two constructors allocate.
@@ -2222,7 +2271,7 @@ class NoGcWasmCompilerTest {
 				""";
 		for (boolean simd : new boolean[] { false, true }) {
 			byte[] code = Objects.requireNonNull(sections(simd ? compileSimd(clip) : compile(clip)).get(10));
-			assertThat(containsSequence(code, 0xFD)).as("no SIMD prefix in the clip lowering, simd=%s", simd).isFalse();
+			assertThat(containsSimdPrefix(code)).as("no SIMD prefix in the clip lowering, simd=%s", simd).isFalse();
 			assertThat(containsSequence(code, 0x64, 0x1B)).as("clip's gt select, simd=%s", simd).isTrue();
 			assertThat(containsSequence(code, 0x63, 0x1B)).as("clip's lt select, simd=%s", simd).isTrue();
 		}
@@ -2555,7 +2604,7 @@ class NoGcWasmCompilerTest {
 		assertThat(sections).containsKey(5).doesNotContainKey(2);
 		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
 		byte[] code = Objects.requireNonNull(sections.get(10));
-		assertThat(containsSequence(code, 0xFD)).as("no SIMD prefix (0xFD) in the scalar f32 module").isFalse();
+		assertThat(containsSimdPrefix(code)).as("no SIMD prefix (0xFD) in the scalar f32 module").isFalse();
 		assertThat(containsSequence(code, 0x2A, 0x00, 0x00)).as("f32.load (0x2A) reads packed f32 elements").isTrue();
 		assertThat(containsSequence(code, 0x38, 0x00, 0x00)).as("f32.store (0x38) writes packed f32 elements").isTrue();
 	}

@@ -261,9 +261,6 @@ once (42 42)
   `dynamic-wind` の `after` は実行されません。
 - 複素数はありません: `(sqrt -4)`、`(log -1)`、`(asin 2)` は手続き名を挙げたエラーで
   プログラムを終了します。
-- 不正確な引数に対する `exp`、`log`、`sin`、`cos`、`tan`、`asin`、`acos`、`atan` の結果は、
-  WebAssembly では JVM と末尾の桁が異なることがあり、JVM でも x86-64 と AArch64 とで
-  異なることがあります。`sqrt` と四則演算はどこでも同じ桁を返します。
 - エラーメッセージには Common Lisp の名前（`CAR`）が出ます。
 - **未対応**: `define-syntax` / `syntax-rules`、`define-library`、`guard` / `raise`、
   `parameterize`、`case-lambda`、バイトベクタ、現在の出力ポート以外のポート、

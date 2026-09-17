@@ -123,10 +123,11 @@ defines regardless of what library put there first.
   names the procedure. `(log 0)` is `-inf.0` on every backend, as in Common Lisp here.
 - A user binding of any of these names wins like `square` (16 SICP samples define `sqrt`,
   100 bind `exp` as a variable in `(eval exp env)`).
-- **The transcendental DIGITS are the backend's own** -- the interpreter and the JVM
-  `Math`, wasm a software core -- and differ in the last digits; the measurement and why
-  it is not unified here: `.kb/transcendentals.md`. `sqrt` of a float is `f64.sqrt` /
-  `Math.sqrt`, correctly rounded, so identical everywhere.
+- **The transcendental digits are one set on every backend** -- fdlibm everywhere since
+  2026-09-17 (`.kb/transcendentals.md`); before that the interpreter and the JVM ran
+  `Math` and wasm a software core, and the SICP sample
+  `chapter1/section1/subsection8/02.scm` printed differently on wasm. `sqrt` of a float is
+  `f64.sqrt` / `Math.sqrt`, correctly rounded.
 - **`%scheme-print-flonum`** is the printer's float arm and `number->string`'s: the digits
   are the Common Lisp printer's (shortest round-trip, Schubfach on wasm), re-laid out with
   the ECMAScript thresholds -- positional while the point is at most 21 digits right of the
@@ -311,14 +312,13 @@ names outlive each buffer; everything else is per buffer.
   cyclic value (the Common Lisp echo with a `print-object` method had the same bug).
   Continuation is "the reader ran out of input"
   (`LispReadException.isEndOfFile`), so `#;`, `#| |#` and `#\(` need no second rule.
-- **Applying a non-procedure** is reported by `SourceSession.describe` as
-  `#f is not a procedure; operands: (2 3)`. The interpreter's `apply` throws
-  `eval/LispApplyException` (a `LispEvalException` with the SAME message and condition
-  class Common Lisp saw -- `The function #f is undefined` for a symbol designator,
-  `Not a function: 3` otherwise -- plus the value and the evaluated arguments), found
-  through the cause chain because the handler-bind seam may wrap it. Interpreter REPL only:
-  file mode keeps the Common Lisp wording, and the compiled backends fail differently
-  again (a `ClassCastException` on the JVM, a trap on wasm), for Common Lisp too.
+- **Applying a non-procedure** reports the condition's own text at the REPL, as file mode
+  and every compiled backend do: `Not a function: 3`, and `The function #f is undefined`
+  for `#f` (a symbol here). The REPL used to reword it (`#f is not a procedure; operands:
+  (2 3)`, 2026-09-17, removed the same day): a rewording only the interpreter REPL could
+  produce split one failure into two texts, and no backend may learn a Scheme name to
+  carry it ([error-handling.md](error-handling.md), "Applying a value that names no
+  function"). Pinned by `RontoLispCliTest.theSchemeReplReportsANonProcedureAsAFileDoes`.
 
 ## The shared REPL loop (`cli/ReplBuffer`), both languages
 

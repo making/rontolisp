@@ -216,6 +216,16 @@ public final class ClosRegistry {
 	public static final String EXPECTED_REAL_MESSAGE_PREFIX = "Expected real number, got: ";
 
 	/**
+	 * The prefix of the message applying a value that is not a function designator
+	 * reports -- {@code (funcall 3 1)}, a Scheme {@code (h 1)} over a non-procedure --
+	 * signaled as a {@code type-error}; the printed value follows. A SYMBOL designator
+	 * naming no function (NIL included) is an {@code undefined-function} instead. Every
+	 * backend detects it where it already dispatches on the callee's representation, and
+	 * the JVM landing pad recovers the class from this prefix (the arithmetic precedent).
+	 */
+	public static final String NOT_A_FUNCTION_MESSAGE_PREFIX = "Not a function: ";
+
+	/**
 	 * The prefix of the message a call with the wrong number of arguments reports. The
 	 * whole message is {@link #arityMessage}, spelled identically by the interpreter's
 	 * {@code apply} and by both compiled backends' indirect-call dispatchers, so the JVM

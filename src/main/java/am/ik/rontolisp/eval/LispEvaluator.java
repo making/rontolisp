@@ -11120,12 +11120,7 @@ public final class LispEvaluator {
 	private LispVal apply(LispVal function, List<LispVal> args, Environment env) {
 		if (function instanceof LispSymbol sym) {
 			// A symbol is a function designator naming its global function (CL-style).
-			try {
-				function = resolveFunction(sym.name());
-			}
-			catch (LispEvalException ex) {
-				throw new LispApplyException(ex, sym, args);
-			}
+			function = resolveFunction(sym.name());
 		}
 		if (function instanceof LispFunction builtIn) {
 			// The signal-point seam: an error a BUILT-IN raises runs the handler-bind
@@ -11223,7 +11218,15 @@ public final class LispEvaluator {
 				}
 			}
 		}
-		throw new LispApplyException(new LispEvalException("Not a function: " + function.print()), function, args);
+		// Not a designator at all: CL's type-error. NIL IS a symbol, so it is the
+		// undefined-function the symbol arm above reports for any unbound name.
+		LispEvalException failure = function instanceof LispNil
+				? LispEvalException.ofClass(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME,
+						ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + "NIL"
+								+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX)
+				: LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+						ClosRegistry.NOT_A_FUNCTION_MESSAGE_PREFIX + function.print());
+		throw failure;
 	}
 
 	// Scans a keyword/value argument tail starting at the given index for the named

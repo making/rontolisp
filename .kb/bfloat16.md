@@ -285,7 +285,7 @@ needed"). No `linalg:` acceleration seam takes it: `--simd`, `--blas` and `--gpu
   defun. **The members are exactly the ones with a single-float lane loop** (`add` / `sub`
   / `mul` / `div` with the four CL spellings, `sqrt` / `abs` / `negative` / `reciprocal`,
   all with `-into` siblings): `scale` multiplies by a genuine f64 scalar, the comparison
-  selects are scalar loops, and the transcendental ufuncs call `java.lang.Math` per
+  selects are scalar loops, and the transcendental ufuncs call `StrictMath` per
   element. Two findings the work turned up, both recorded because a later reader cannot
   reconstruct them: on an **sNaN input** the packed lanes quiet the source payload while
   the scalar instructions answer the indefinite, so the kernels are pinned at `isNaN`

@@ -593,7 +593,7 @@ final class LinalgSimdKernels {
 				break;
 			}
 		}
-		double v = 1.1283791670955126 * ax * Math.exp(-(ax * ax)) * total;
+		double v = 1.1283791670955126 * ax * StrictMath.exp(-(ax * ax)) * total;
 		return x < 0.0 ? -v : v;
 	}
 

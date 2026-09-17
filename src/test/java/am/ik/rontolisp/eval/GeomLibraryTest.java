@@ -182,7 +182,7 @@ class GeomLibraryTest {
 		// circumradius r has area (n/2) r^2 sin(2pi/n), and the solid is that prism
 		// plus the pyramid over the wider n-gon. An inverted facet in any of the four
 		// families would subtract and miss this by a mile.
-		double ngon = 24 / 2.0 * Math.sin(2 * PI / 24);
+		double ngon = 24 / 2.0 * StrictMath.sin(2 * PI / 24);
 		double exact = ngon * (6 * 6 * 156.0 + 18 * 18 * 44.0 / 3.0);
 		assertThat(number("(geom:volume (geom:arrow :length 200 :sides 24))")).isCloseTo(exact, offset(1e-2));
 		// The defaults are fractions of the length, so naming them changes nothing.
@@ -388,7 +388,8 @@ class GeomLibraryTest {
 				  (geom:rotate n 0.4 :z)
 				  (geom:place n :axis :z :angle 0.4)
 				  (linalg:row (geom:world-rotation n) 0))
-				""")).usingComparatorWithPrecision(1e-6).containsExactly(Math.cos(0.4), -Math.sin(0.4), 0.0);
+				""")).usingComparatorWithPrecision(1e-6)
+			.containsExactly(StrictMath.cos(0.4), -StrictMath.sin(0.4), 0.0);
 	}
 
 	@Test
@@ -654,14 +655,14 @@ class GeomLibraryTest {
 				(defvar *hole* (geom:cylinder :radius 10 :height 20 :sides 24))
 				(geom:translate *hole* (geom:vec3 0 0 -10))
 				""";
-		double prism = 0.5 * 24 * 100 * Math.sin(2 * PI / 24) * 20;
+		double prism = 0.5 * 24 * 100 * StrictMath.sin(2 * PI / 24) * 20;
 		assertThat(number(setUp + "(geom:volume (geom:difference *plate* *hole*))")).isCloseTo(200000.0 - prism,
 				org.assertj.core.data.Offset.offset(1.0));
 		// The bore's lateral surface is part of the result: total area = plate faces
 		// minus the two cap disks plus the 24-gon prism wall.
-		double wall = 24 * 2 * 10 * Math.sin(PI / 24) * 20;
+		double wall = 24 * 2 * 10 * StrictMath.sin(PI / 24) * 20;
 		assertThat(number(setUp + "(geom:surface-area (geom:difference *plate* *hole*))")).isCloseTo(
-				2 * (10000 - 0.5 * 24 * 100 * Math.sin(2 * PI / 24)) + 4 * 100 * 20 + wall,
+				2 * (10000 - 0.5 * 24 * 100 * StrictMath.sin(2 * PI / 24)) + 4 * 100 * 20 + wall,
 				org.assertj.core.data.Offset.offset(1.0));
 	}
 

@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -1778,7 +1779,42 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_CDR = FUNC_CAR + 1;
 
-	static final int FX_FUNC_LAST = FUNC_CDR;
+	// The fdlibm transcendental runtime (WasmFdlibmRuntimeBuilder): one fixed slot per
+	// WasmFdlibmRuntimeBuilder.Fn, in ordinal order, so (exp x) is a call to the same
+	// algorithm the interpreter and the JVM run as StrictMath (.kb/transcendentals.md).
+	// A slot the program never reaches (Ctx.fdlibmUsed, closed over the callees) holds
+	// a trapping stub, so the space stays dense without carrying the bytes; the trig
+	// reduction's tables ride in a shakeable blob placed before Pass 2 when a trig name
+	// is spelled at all (fdlibmTablesBase). Appended after the last fixed helper so no
+	// index above shifts.
+	static final int FUNC_FD_BASE = FUNC_CDR + 1;
+
+	static final int FX_FUNC_LAST = FUNC_FD_BASE + WasmFdlibmRuntimeBuilder.FUNC_COUNT - 1;
+
+	/**
+	 * The fixed function index of an fdlibm function.
+	 * @param fn the function
+	 * @return its index
+	 */
+	static int fdlibmFunc(WasmFdlibmRuntimeBuilder.Fn fn) {
+		return FUNC_FD_BASE + fn.ordinal();
+	}
+
+	/**
+	 * The fixed type index of an fdlibm function's signature.
+	 * @param fn the function
+	 * @return its type index
+	 */
+	static int fdlibmType(WasmFdlibmRuntimeBuilder.Fn fn) {
+		if (fn.result == WasmFdlibmRuntimeBuilder.Ty.I) {
+			return fn.params.length == 1 ? TYPE_FD_REM : TYPE_FD_KREM;
+		}
+		return switch (fn.params.length) {
+			case 1 -> TYPE_FD_UNARY;
+			case 2 -> TYPE_FD_BINARY;
+			default -> TYPE_FD_KERNEL;
+		};
+	}
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -2120,7 +2156,19 @@ public final class WasmLispCompiler implements LispCompiler {
 	// holds one outside the array printer's buckets.
 	static final int TYPE_F32BOX = TYPE_PRINT_F32 + 1;
 
-	static final int SCHUB_TYPE_LAST = TYPE_F32BOX;
+	// The fdlibm runtime's five signatures (WasmFdlibmRuntimeBuilder), appended after
+	// the Schubfach block so no fixed type index above moves.
+	static final int TYPE_FD_UNARY = TYPE_F32BOX + 1; // (f64) -> f64
+
+	static final int TYPE_FD_BINARY = TYPE_FD_UNARY + 1; // (f64, f64) -> f64
+
+	static final int TYPE_FD_KERNEL = TYPE_FD_BINARY + 1; // (f64, f64, i32) -> f64
+
+	static final int TYPE_FD_REM = TYPE_FD_KERNEL + 1; // (f64) -> i32
+
+	static final int TYPE_FD_KREM = TYPE_FD_REM + 1; // (i32, i32) -> i32
+
+	static final int SCHUB_TYPE_LAST = TYPE_FD_KREM;
 
 	// --- the --simd block (see WasmVecSimdRuntimeBuilder) -------------------------
 	//
@@ -3682,6 +3730,22 @@ public final class WasmLispCompiler implements LispCompiler {
 		// compiles, so a user literal blob (a packed lookup table) stays the LAST
 		// aligned append and its marginal per-element cost stays exact.
 		int schubBlobBase = stringTable.appendShakeableBlobProbedOnBase(SchubfachTables.blob());
+		// The fdlibm trig reduction's tables (WasmFdlibmRuntimeBuilder.tables()): the
+		// same shape of blob, placed only when a name that can reach sin/cos/tan is
+		// spelled at all (the real trig, and the arms of exp/expt/cis/sinh/cosh/tanh
+		// that rotate through them), or under --simd, whose kernel bodies reach them
+		// unconditionally. Which functions get real bodies is decided after Pass 2
+		// (fdlibmNeeded); a body that addresses the blob without it being placed is a
+		// compiler bug and refused there.
+		// A program that can resolve ANY name at run time (eval, read, a runtime load,
+		// --dynamic) keeps every wrapper-catalog body reachable, the trig ones included.
+		boolean mayReachTrig = this.simd || this.dynamic || usesEval || anyNameResolvable(program, usesRead, usesLoad);
+		for (String name : new String[] { LispNames.SIN, LispNames.COS, LispNames.TAN, LispNames.EXP, LispNames.EXPT,
+				LispNames.CIS, LispNames.SINH, LispNames.COSH, LispNames.TANH }) {
+			mayReachTrig |= programUsesSymbol(program, name);
+		}
+		int fdlibmTablesBase = mayReachTrig
+				? stringTable.appendShakeableBlobProbedOnBase(WasmFdlibmRuntimeBuilder.tables()) : -1;
 		// Bake the instance layouts into the data segment BEFORE Pass 2a: %obj-new
 		// emits a record's address as an i32.const inside an ordinary function body, so
 		// unlike the eval registry, the intern table and the case-fold tables -- all of
@@ -3753,6 +3817,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Ctx.warnedClRedefinitions).
 		Set<String> warnedClRedefinitions = new HashSet<>();
 		Set<Integer> indirectCallArities = new HashSet<>();
+		// The fdlibm functions the emitted bodies call (Ctx.fdlibmUsed): under --simd
+		// the kernel bodies call every unary one, so all of those are needed regardless
+		// of what the program spells.
+		Set<WasmFdlibmRuntimeBuilder.Fn> fdlibmUsed = EnumSet.noneOf(WasmFdlibmRuntimeBuilder.Fn.class);
+		if (this.simd) {
+			fdlibmUsed.addAll(EnumSet.of(WasmFdlibmRuntimeBuilder.Fn.EXP, WasmFdlibmRuntimeBuilder.Fn.LOG,
+					WasmFdlibmRuntimeBuilder.Fn.TANH, WasmFdlibmRuntimeBuilder.Fn.SIN, WasmFdlibmRuntimeBuilder.Fn.COS,
+					WasmFdlibmRuntimeBuilder.Fn.TAN, WasmFdlibmRuntimeBuilder.Fn.ASIN, WasmFdlibmRuntimeBuilder.Fn.ACOS,
+					WasmFdlibmRuntimeBuilder.Fn.ATAN, WasmFdlibmRuntimeBuilder.Fn.SINH,
+					WasmFdlibmRuntimeBuilder.Fn.COSH));
+		}
 		// Set by the seams that dispatch a designator the compiler could not read; see
 		// Ctx.runtimeDesignatorDispatch and the registry gate below.
 		boolean[] runtimeDesignatorDispatch = new boolean[1];
@@ -3823,6 +3898,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.duplicatedDefunNames(duplicatedDefunNames)
 			.lambdaDecls(lambdaDecls)
 			.indirectCallArities(indirectCallArities)
+			.fdlibmUsed(fdlibmUsed)
 			.runtimeDesignatorDispatch(runtimeDesignatorDispatch)
 			.injectedRuntimeLambdas(injectedRuntimeLambdas)
 			.valueFuncIds(valueFuncIds)
@@ -3908,11 +3984,19 @@ public final class WasmLispCompiler implements LispCompiler {
 		// result calls the _str_from_mem helper, whose index follows the lambdas.
 		Map<String, Integer> importBodySlots = new HashMap<>();
 		ctxBuilder.injectedRuntimeDefunNames(injectedRuntimeDefuns);
+		// The fdlibm functions each INJECTED body calls, kept apart from the module-wide
+		// set: a wrapper catalog body reaches them only when the wrapper itself is
+		// reachable, which is decided below once the dispatch gate has run
+		// (fdlibmNeeded). Recording them into the module-wide set would give every
+		// program every fdlibm body, since the catalog wraps every transcendental.
+		Map<String, Set<WasmFdlibmRuntimeBuilder.Fn>> injectedFdlibmUses = new HashMap<>();
 		for (DefunDecl defun : defuns) {
 			// See Ctx.injectedRuntimeBody: a wrapper catalog body is not the user's
 			// designator use, so its dispatches do not arm the name registry.
 			boolean injectedBody = injectedRuntimeDefuns.contains(defun.name);
 			ctxBuilder.injectedRuntimeBody(injectedBody);
+			ctxBuilder.fdlibmUsed(injectedBody ? injectedFdlibmUses.computeIfAbsent(defun.name,
+					k -> EnumSet.noneOf(WasmFdlibmRuntimeBuilder.Fn.class)) : fdlibmUsed);
 			// An injected body is compiled as if a character vector were possible even
 			// when the gate is closed. It is not the program: it is the wrapper catalog
 			// and the shared sequence helpers, which a gate-closed program can only
@@ -3996,6 +4080,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// a lambda lifted out of a wrapper body is compiled here, and counting it as the
 		// user's is the conservative direction).
 		ctxBuilder.injectedRuntimeBody(false);
+		ctxBuilder.fdlibmUsed(fdlibmUsed);
 		ctxBuilder.charvecPossible(this.charvecPossible);
 
 		// Pass 2b: Build _start function body
@@ -4778,6 +4863,20 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| runtimeFunctionBox;
 		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(defuns, valueFuncIds, spelledLiterals, registryLive,
 				nameResolvable, symbolBuilders);
+		// An injected wrapper body's fdlibm calls count once the wrapper can be
+		// reached: materialized as a function value, hittable through the name
+		// registry, or named as #'op in the user's program (the apply-direct-call
+		// shape). Every other wrapper is dead code the shaker drops, and its callees
+		// keep their stubs.
+		for (int i = 0; i < defuns.size(); i++) {
+			String name = defuns.get(i).name;
+			Set<WasmFdlibmRuntimeBuilder.Fn> uses = injectedFdlibmUses.get(name);
+			if (uses != null && !uses.isEmpty()
+					&& (valueFuncIds.contains(i) || dispatchableFuncIds.contains(i) || program.stream()
+						.anyMatch(expr -> BuiltinFunctionWrappers.referencesFunctionValue(expr, name)))) {
+				fdlibmUsed.addAll(uses);
+			}
+		}
 		// A dispatcher whose br_table over every callable would be too big for one
 		// function body is emitted as a TREE of pages instead, and those pages are
 		// appended after EVERY other function -- so no existing index moves and a
@@ -4808,12 +4907,22 @@ public final class WasmLispCompiler implements LispCompiler {
 				? WasmRuntimeBuilder.buildArityChkBody(arityReport) : WasmRuntimeBuilder.buildArityChkStubBody())
 				: new byte[0];
 		int arityChkIndex = arityReport != null ? arityChkFuncIndex() : -1;
+		// What a dispatcher throws for a value that names no function: EH mode only,
+		// where a throw has a tag and a catcher (the entry landing pad at least).
+		WasmRuntimeBuilder.NotFunctionReport notFunctionReport = ehMode ? new WasmRuntimeBuilder.NotFunctionReport(
+				stringTable,
+				this.usesInstances
+						? conditionInstance(ClosRegistry.TYPE_ERROR_CLASS_NAME, closRegistry, layoutAddresses) : null,
+				this.usesInstances
+						? conditionInstance(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME, closRegistry, layoutAddresses)
+						: null)
+				: null;
 		for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 			if (indirectCallArities.contains(arity)) {
 				WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(arity, defuns,
 						lambdaDecls, numDefuns, stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds,
 						dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
-						this.optimize.prefersSizeOverSpeed());
+						this.optimize.prefersSizeOverSpeed(), notFunctionReport);
 				dispatchBodies.add(built.body());
 				for (byte[] page : built.pages()) {
 					dispatchPageBodies.add(page);
@@ -4837,7 +4946,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(0, defuns, lambdaDecls,
 					numDefuns, stringTable, usesEval, userFuncBase(), true, dispatchableFuncIds,
 					dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
-					this.optimize.prefersSizeOverSpeed());
+					this.optimize.prefersSizeOverSpeed(), notFunctionReport);
 			dispatchBodies.add(built.body());
 			for (byte[] page : built.pages()) {
 				dispatchPageBodies.add(page);
@@ -4866,7 +4975,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				WasmRuntimeBuilder.DispatchFunctions built = WasmRuntimeBuilder.buildDispatch(arity, defuns,
 						lambdaDecls, numDefuns, stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds,
 						dispatchPageFuncBase + dispatchPageBodies.size(), arityReport, arityChkIndex,
-						this.optimize.prefersSizeOverSpeed());
+						this.optimize.prefersSizeOverSpeed(), notFunctionReport);
 				extraDispatchBodies.add(built.body());
 				for (byte[] page : built.pages()) {
 					dispatchPageBodies.add(page);
@@ -4891,6 +5000,14 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.usesInstances ? instanceTypeBase() : -1, renderPathGlobalIndex, renderDepthGlobalIndex,
 				this.charvecPossible);
 		byte[] printI32NoNlBody = WasmRuntimeBuilder.buildPrintI32Core(false);
+		// The fdlibm functions that get real bodies: what Pass 2 (and the --simd
+		// kernels) recorded, closed over the callees. A trig function without the
+		// tables placed would read its reduction out of address -1: the pre-scan that
+		// places them is broader than any call path, so this is a compiler bug.
+		Set<WasmFdlibmRuntimeBuilder.Fn> fdlibmNeeded = WasmFdlibmRuntimeBuilder.closure(fdlibmUsed);
+		if (WasmFdlibmRuntimeBuilder.needsTables(fdlibmNeeded) && fdlibmTablesBase < 0) {
+			throw new IllegalStateException("fdlibm trig reached without its tables placed: " + fdlibmNeeded);
+		}
 		byte[] schubUmulhiBody = WasmSchubfachRuntimeBuilder.buildUmulhiBody();
 		byte[] schubGBody = WasmSchubfachRuntimeBuilder.buildGBody(FUNC_SCHUB_UMULHI, schubBlobBase);
 		byte[] schubRopBody = WasmSchubfachRuntimeBuilder.buildRopBody(FUNC_SCHUB_UMULHI);
@@ -5732,6 +5849,17 @@ public final class WasmLispCompiler implements LispCompiler {
 				types.addRecGroup(rec -> rec.addSubFinalStruct(fields -> {
 					fields.addField(false, w -> w.write(Type.F32));
 				}));
+				// The fdlibm runtime's signatures, in constant order.
+				// TYPE_FD_UNARY: (f64) -> f64
+				types.addFunc(new Type[] { Type.F64 }, new Type[] { Type.F64 });
+				// TYPE_FD_BINARY: (f64, f64) -> f64
+				types.addFunc(new Type[] { Type.F64, Type.F64 }, new Type[] { Type.F64 });
+				// TYPE_FD_KERNEL: (f64 x, f64 y, i32 iy) -> f64
+				types.addFunc(new Type[] { Type.F64, Type.F64, Type.I32 }, new Type[] { Type.F64 });
+				// TYPE_FD_REM: (f64) -> i32
+				types.addFunc(new Type[] { Type.F64 }, new Type[] { Type.I32 });
+				// TYPE_FD_KREM: (i32 e0, i32 nx) -> i32
+				types.addFunc(new Type[] { Type.I32, Type.I32 }, new Type[] { Type.I32 });
 				if (this.simd) {
 					// type 48 (TYPE_V128ARR): array (mut v128) -- the lane-group storage
 					// of a packed float array. Declaring it at all requires the SIMD
@@ -6344,6 +6472,10 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (FUNC_CAR)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _cdr (list) -> value
 															// (FUNC_CDR)
+				// the fdlibm runtime (FUNC_FD_BASE ..), in Fn ordinal order
+				for (WasmFdlibmRuntimeBuilder.Fn fn : WasmFdlibmRuntimeBuilder.Fn.values()) {
+					fnDef.addFunction(fdlibmType(fn));
+				}
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -7211,6 +7343,14 @@ public final class WasmLispCompiler implements LispCompiler {
 				// every car/cdr site under --optimize=size, dead and shaken otherwise.
 				code.addFunction(WasmConsRuntimeBuilder.buildFieldBody(0));
 				code.addFunction(WasmConsRuntimeBuilder.buildFieldBody(1));
+				// the fdlibm runtime (FUNC_FD_BASE ..): a real body for every function
+				// Pass 2 (or a --simd kernel) reaches, closed over the callees; a
+				// trapping stub in every other slot.
+				for (WasmFdlibmRuntimeBuilder.Fn fn : WasmFdlibmRuntimeBuilder.Fn.values()) {
+					code.addFunction(fdlibmNeeded.contains(fn)
+							? WasmFdlibmRuntimeBuilder.build(fn, WasmLispCompiler::fdlibmFunc, fdlibmTablesBase)
+							: WasmFdlibmRuntimeBuilder.stub(fn));
+				}
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp
@@ -7860,24 +8000,39 @@ public final class WasmLispCompiler implements LispCompiler {
 	 */
 	private WasmRuntimeBuilder.@Nullable ArityReport arityReport(boolean on, ClosRegistry closRegistry,
 			StringTable stringTable, Map<String, Integer> layoutAddresses) {
-		String tag = LispLayout.CLASS_TAG_PREFIX + ClosRegistry.PROGRAM_ERROR_CLASS_NAME;
-		Integer address = layoutAddresses.get(tag);
-		ClosRegistry.ClassInfo info = closRegistry.findClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME);
-		LispLayout layout = closRegistry.findLayoutByTag(tag);
-		if (!on || address == null || info == null || layout == null) {
+		WasmRuntimeBuilder.ConditionInstance instance = on
+				? conditionInstance(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, closRegistry, layoutAddresses) : null;
+		if (instance == null) {
 			return null;
 		}
-		int formatControl = -1;
+		return new WasmRuntimeBuilder.ArityReport(stringTable, instance.layoutAddress(), instance.instanceTypeIndex(),
+				instance.slotCapacity(), instance.formatControlSlot());
+	}
+
+	/**
+	 * The seeded condition class a runtime helper can construct, or {@code null} when
+	 * this module did not bake its layout (or the class reports no
+	 * {@code format-control}).
+	 * @param className the seeded condition class name
+	 * @param closRegistry the class registry, for the slot layout
+	 * @param layoutAddresses the baked instance layout records
+	 * @return the instance shape, or null
+	 */
+	private WasmRuntimeBuilder.@Nullable ConditionInstance conditionInstance(String className,
+			ClosRegistry closRegistry, Map<String, Integer> layoutAddresses) {
+		String tag = LispLayout.CLASS_TAG_PREFIX + className;
+		Integer address = layoutAddresses.get(tag);
+		ClosRegistry.ClassInfo info = closRegistry.findClass(className);
+		LispLayout layout = closRegistry.findLayoutByTag(tag);
+		if (address == null || info == null || layout == null) {
+			return null;
+		}
 		for (int i = 0; i < info.slots().size(); i++) {
 			if ("FORMAT-CONTROL".equals(info.slots().get(i).baseName())) {
-				formatControl = i;
+				return new WasmRuntimeBuilder.ConditionInstance(address, instanceTypeBase(), layout.capacity(), i);
 			}
 		}
-		if (formatControl < 0) {
-			return null;
-		}
-		return new WasmRuntimeBuilder.ArityReport(stringTable, address, instanceTypeBase(), layout.capacity(),
-				formatControl);
+		return null;
 	}
 
 	private Set<Integer> dispatchableFuncIds(List<DefunDecl> defuns, Set<Integer> valueFuncIds,
@@ -8788,6 +8943,25 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<Integer> indirectCallArities;
 
 		/**
+		 * The fdlibm functions the emitted bodies call, module-wide and MUTATED during
+		 * emission like {@link #indirectCallArities}: the code section gives exactly the
+		 * closure of this set real bodies and every other slot a trapping stub. Every
+		 * call site goes through {@link #fdlibm}, which is what records it.
+		 */
+		Set<WasmFdlibmRuntimeBuilder.Fn> fdlibmUsed;
+
+		/**
+		 * Records that the body being emitted calls {@code fn} and answers its function
+		 * index -- the ONE way a call to the fdlibm runtime is spelled.
+		 * @param fn the function
+		 * @return its fixed index
+		 */
+		int fdlibm(WasmFdlibmRuntimeBuilder.Fn fn) {
+			this.fdlibmUsed.add(fn);
+			return fdlibmFunc(fn);
+		}
+
+		/**
 		 * Whether Pass 2 dispatched a designator it could NOT read -- a
 		 * {@code funcall}/{@code mapcar}/{@code sort}/{@code maphash}/... whose function
 		 * argument is neither {@code #'name} nor {@code 'name} nor a literal
@@ -9530,6 +9704,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
+			this.fdlibmUsed = builder.fdlibmUsed;
 			this.runtimeDesignatorDispatch = builder.runtimeDesignatorDispatch;
 			this.injectedRuntimeBody = builder.injectedRuntimeBody;
 			this.injectedRuntimeLambdas = builder.injectedRuntimeLambdas;
@@ -9634,6 +9809,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private List<LambdaInfo> lambdaDecls = new ArrayList<>();
 
 			private Set<Integer> indirectCallArities = new HashSet<>();
+
+			private Set<WasmFdlibmRuntimeBuilder.Fn> fdlibmUsed = EnumSet.noneOf(WasmFdlibmRuntimeBuilder.Fn.class);
 
 			private boolean[] runtimeDesignatorDispatch = new boolean[1];
 
@@ -9830,6 +10007,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder indirectCallArities(Set<Integer> indirectCallArities) {
 				this.indirectCallArities = indirectCallArities;
+				return this;
+			}
+
+			Builder fdlibmUsed(Set<WasmFdlibmRuntimeBuilder.Fn> fdlibmUsed) {
+				this.fdlibmUsed = fdlibmUsed;
 				return this;
 			}
 

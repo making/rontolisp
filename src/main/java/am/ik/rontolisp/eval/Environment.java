@@ -2488,7 +2488,7 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.ABS, args, 1);
 			if (args.get(0) instanceof LispComplex c) {
 				// The modulus is a real -- a float even for exact parts, like SBCL.
-				return new LispDouble(Math.hypot(realToDouble(c.real()), realToDouble(c.imag())));
+				return new LispDouble(StrictMath.hypot(realToDouble(c.real()), realToDouble(c.imag())));
 			}
 			if (hasDouble(args)) {
 				return new LispDouble(Math.abs(asDouble(args.get(0))));
@@ -2597,7 +2597,7 @@ public final class Environment implements Scope {
 	}
 
 	private static void registerMath(Environment env) {
-		// Unary floating-point functions: a double for real operands (Math.<name>),
+		// Unary floating-point functions: a double for real operands (StrictMath.<name>),
 		// the float complex formula for complex ones. A real argument OUTSIDE the
 		// function's real domain runs the same complex formula at (x, +0.0) instead of
 		// answering NaN (SBCL parity, .todo/763): sqrt of a negative below, log of a
@@ -2614,7 +2614,7 @@ public final class Environment implements Scope {
 			}
 			return new LispDouble(Math.sqrt(d));
 		}));
-		defineUnaryComplex(env, LispNames.EXP, Math::exp, Environment::complexExp);
+		defineUnaryComplex(env, LispNames.EXP, StrictMath::exp, Environment::complexExp);
 		// log's real domain is the non-negative reals; a zero keeps -Infinity (the
 		// zero edge is CL's own, not this escape). The optional BASE makes the answer
 		// the QUOTIENT of the two logarithms, each of which takes the escape on its
@@ -2622,11 +2622,11 @@ public final class Environment implements Scope {
 		// the one-argument answer moves.
 		env.defineFunction(LispNames.LOG, new LispFunction(LispNames.LOG, args -> {
 			requireArgCountBetween(LispNames.LOG, args, 1, 2);
-			LispVal value = unaryComplexEscape(args.get(0), Math::log, Environment::complexLog, d -> !(d < 0.0));
+			LispVal value = unaryComplexEscape(args.get(0), StrictMath::log, Environment::complexLog, d -> !(d < 0.0));
 			if (args.size() == 1) {
 				return value;
 			}
-			LispVal base = unaryComplexEscape(args.get(1), Math::log, Environment::complexLog, d -> !(d < 0.0));
+			LispVal base = unaryComplexEscape(args.get(1), StrictMath::log, Environment::complexLog, d -> !(d < 0.0));
 			List<LispVal> quotient = List.of(value, base);
 			if (hasComplex(quotient)) {
 				return divComplex(quotient);
@@ -2634,27 +2634,29 @@ public final class Environment implements Scope {
 			// Both logarithms are floats, so this is the float arm of / itself.
 			return new LispDouble(asDouble(value) / asDouble(base));
 		}));
-		defineUnaryComplex(env, LispNames.SIN, Math::sin, Environment::complexSin);
-		defineUnaryComplex(env, LispNames.COS, Math::cos, Environment::complexCos);
-		defineUnaryComplex(env, LispNames.TAN, Math::tan, Environment::complexTan);
-		defineUnaryComplexEscape(env, LispNames.ASIN, Math::asin, Environment::complexAsin, Environment::insideUnit);
-		defineUnaryComplexEscape(env, LispNames.ACOS, Math::acos, Environment::complexAcos, Environment::insideUnit);
+		defineUnaryComplex(env, LispNames.SIN, StrictMath::sin, Environment::complexSin);
+		defineUnaryComplex(env, LispNames.COS, StrictMath::cos, Environment::complexCos);
+		defineUnaryComplex(env, LispNames.TAN, StrictMath::tan, Environment::complexTan);
+		defineUnaryComplexEscape(env, LispNames.ASIN, StrictMath::asin, Environment::complexAsin,
+				Environment::insideUnit);
+		defineUnaryComplexEscape(env, LispNames.ACOS, StrictMath::acos, Environment::complexAcos,
+				Environment::insideUnit);
 		// atan's optional second argument is C's atan2: the angle of the vector (x, y)
-		// over the full circle, which IS the phase of x + yi -- the same Math.atan2
+		// over the full circle, which IS the phase of x + yi -- the same StrictMath.atan2
 		// phase already answers with, signed zeros and all. CLHS requires both
 		// arguments to be real there, so a complex signals rather than computing.
 		env.defineFunction(LispNames.ATAN, new LispFunction(LispNames.ATAN, args -> {
 			requireArgCountBetween(LispNames.ATAN, args, 1, 2);
 			if (args.size() == 1) {
-				return unaryComplex(args.get(0), Math::atan, Environment::complexAtan);
+				return unaryComplex(args.get(0), StrictMath::atan, Environment::complexAtan);
 			}
 			requireRealOperand(LispNames.ATAN, args.get(0));
 			requireRealOperand(LispNames.ATAN, args.get(1));
-			return new LispDouble(Math.atan2(asDouble(args.get(0)), asDouble(args.get(1))));
+			return new LispDouble(StrictMath.atan2(asDouble(args.get(0)), asDouble(args.get(1))));
 		}));
-		defineUnaryComplex(env, LispNames.SINH, Math::sinh, Environment::complexSinh);
-		defineUnaryComplex(env, LispNames.COSH, Math::cosh, Environment::complexCosh);
-		defineUnaryComplex(env, LispNames.TANH, Math::tanh, Environment::complexTanh);
+		defineUnaryComplex(env, LispNames.SINH, StrictMath::sinh, Environment::complexSinh);
+		defineUnaryComplex(env, LispNames.COSH, StrictMath::cosh, Environment::complexCosh);
+		defineUnaryComplex(env, LispNames.TANH, StrictMath::tanh, Environment::complexTanh);
 		// cis answers a complex for every argument (it is the polar constructor:
 		// (cis x) = (complex (cos x) (sin x))), so it does not fit defineUnaryComplex's
 		// real-answers-real shape.
@@ -2665,7 +2667,7 @@ public final class Environment implements Scope {
 				return LispComplex.valueOf(new LispDouble(r[0]), new LispDouble(r[1]));
 			}
 			double d = asDouble(args.get(0));
-			return LispComplex.valueOf(new LispDouble(Math.cos(d)), new LispDouble(Math.sin(d)));
+			return LispComplex.valueOf(new LispDouble(StrictMath.cos(d)), new LispDouble(StrictMath.sin(d)));
 		}));
 		defineUnaryComplex(env, LispNames.ASINH, Environment::asinhReal, Environment::complexAsinh);
 		defineUnaryComplexEscape(env, LispNames.ACOSH, Environment::acoshReal, Environment::complexAcosh,
@@ -2958,12 +2960,12 @@ public final class Environment implements Scope {
 			return normalizeBig(n.sqrt());
 		}));
 		// expt: rational^integer stays exact (a negative exponent yields the
-		// reciprocal, e.g. (expt 2 -1) -> 1/2); otherwise Math.pow (double). A
+		// reciprocal, e.g. (expt 2 -1) -> 1/2); otherwise StrictMath.pow (double). A
 		// complex operand with an integer exponent stays exact by repeated
 		// multiplication (e.g. (expt #c(1 1) 2) -> #C(0 2)); any other complex
 		// exponentiation goes through exp(w*log(z)) in floats. A NEGATIVE real base
 		// to a non-integer power leaves the real line and answers the plane
-		// (negativeBasePow), where Math.pow alone would answer NaN.
+		// (negativeBasePow), where StrictMath.pow alone would answer NaN.
 		env.defineFunction(LispNames.EXPT, new LispFunction(LispNames.EXPT, args -> {
 			requireArgCount(LispNames.EXPT, args, 2);
 			if (hasComplex(args)) {
@@ -2983,7 +2985,7 @@ public final class Environment implements Scope {
 			if (escapesToPlane(base, power)) {
 				return negativeBasePow(base, power);
 			}
-			return new LispDouble(Math.pow(base, power));
+			return new LispDouble(StrictMath.pow(base, power));
 		}));
 		// gcd: greatest common divisor (always non-negative). Variadic: (gcd) is 0 and
 		// (gcd n) is (abs n).
@@ -3019,7 +3021,7 @@ public final class Environment implements Scope {
 				// -- 0 for exact parts, #C(0.0 0.0) for float parts, like SBCL.
 				double re = realToDouble(c.real());
 				double im = realToDouble(c.imag());
-				double abs = Math.hypot(re, im);
+				double abs = StrictMath.hypot(re, im);
 				if (abs == 0.0) {
 					return LispComplex.valueOf(c.real(), c.imag());
 				}
@@ -3316,7 +3318,7 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.PHASE, new LispFunction(LispNames.PHASE, args -> {
 			requireArgCount(LispNames.PHASE, args, 1);
 			if (args.get(0) instanceof LispComplex c) {
-				return new LispDouble(Math.atan2(realToDouble(c.imag()), realToDouble(c.real())));
+				return new LispDouble(StrictMath.atan2(realToDouble(c.imag()), realToDouble(c.real())));
 			}
 			// A non-negative real is at angle zero, a negative one at pi (SBCL).
 			return new LispDouble(asDouble(requireReal(LispNames.PHASE, args.get(0))) < 0 ? Math.PI : 0.0);
@@ -8198,8 +8200,8 @@ public final class Environment implements Scope {
 	 * Whether {@code base^power} over two REAL floats leaves the real line: a negative
 	 * base raised to a power that is not an integer. Everything else -- a non-negative
 	 * base, an integer-valued power (a float {@code 2d0} included, whose parity
-	 * {@code Math.pow} already honours) and either operand NaN or the power infinite --
-	 * has a real answer {@code Math.pow} gives.
+	 * {@code StrictMath.pow} already honours) and either operand NaN or the power
+	 * infinite -- has a real answer {@code StrictMath.pow} gives.
 	 * @param base the base as a float
 	 * @param power the exponent as a float
 	 * @return whether the answer is complex
@@ -8216,10 +8218,10 @@ public final class Environment implements Scope {
 	// bits -- (expt #c(-8d0 0d0) 1/3) is not (expt -8d0 1/3) -- which is SBCL's split
 	// too, and correct: the real base carries information the complex one does not.
 	private static LispVal negativeBasePow(double base, double power) {
-		double modulus = Math.pow(-base, power);
+		double modulus = StrictMath.pow(-base, power);
 		double theta = power * Math.PI;
-		return LispComplex.valueOf(new LispDouble(modulus * Math.cos(theta)),
-				new LispDouble(modulus * Math.sin(theta)));
+		return LispComplex.valueOf(new LispDouble(modulus * StrictMath.cos(theta)),
+				new LispDouble(modulus * StrictMath.sin(theta)));
 	}
 
 	// The principal square root of (re, im) in floats.
@@ -8227,7 +8229,7 @@ public final class Environment implements Scope {
 		if (re == 0.0 && im == 0.0) {
 			return new double[] { re, im };
 		}
-		double t = Math.sqrt((Math.abs(re) + Math.hypot(re, im)) / 2);
+		double t = Math.sqrt((Math.abs(re) + StrictMath.hypot(re, im)) / 2);
 		if (re >= 0) {
 			return new double[] { t, im / (2 * t) };
 		}
@@ -8235,20 +8237,20 @@ public final class Environment implements Scope {
 	}
 
 	private static double[] complexExp(double re, double im) {
-		double e = Math.exp(re);
-		return new double[] { e * Math.cos(im), e * Math.sin(im) };
+		double e = StrictMath.exp(re);
+		return new double[] { e * StrictMath.cos(im), e * StrictMath.sin(im) };
 	}
 
 	private static double[] complexLog(double re, double im) {
-		return new double[] { Math.log(Math.hypot(re, im)), Math.atan2(im, re) };
+		return new double[] { StrictMath.log(StrictMath.hypot(re, im)), StrictMath.atan2(im, re) };
 	}
 
 	private static double[] complexSin(double re, double im) {
-		return new double[] { Math.sin(re) * Math.cosh(im), Math.cos(re) * Math.sinh(im) };
+		return new double[] { StrictMath.sin(re) * StrictMath.cosh(im), StrictMath.cos(re) * StrictMath.sinh(im) };
 	}
 
 	private static double[] complexCos(double re, double im) {
-		return new double[] { Math.cos(re) * Math.cosh(im), -Math.sin(re) * Math.sinh(im) };
+		return new double[] { StrictMath.cos(re) * StrictMath.cosh(im), -StrictMath.sin(re) * StrictMath.sinh(im) };
 	}
 
 	private static double[] complexTan(double re, double im) {
@@ -8270,7 +8272,7 @@ public final class Environment implements Scope {
 	private static double[] complexAsin(double re, double im) {
 		double[] u = complexSqrt(1 - re, 0.0 - im);
 		double[] v = complexSqrt(1 + re, 0.0 + im);
-		return new double[] { Math.atan2(re, u[0] * v[0] - u[1] * v[1]), asinhReal(u[0] * v[1] - u[1] * v[0]) };
+		return new double[] { StrictMath.atan2(re, u[0] * v[0] - u[1] * v[1]), asinhReal(u[0] * v[1] - u[1] * v[0]) };
 	}
 
 	// acos(z) = (2*atan2(Re(u), Re(v)), asinh(Im(conj(v)*u))) over the same two roots
@@ -8279,7 +8281,7 @@ public final class Environment implements Scope {
 	private static double[] complexAcos(double re, double im) {
 		double[] u = complexSqrt(1 - re, 0.0 - im);
 		double[] v = complexSqrt(1 + re, 0.0 + im);
-		return new double[] { 2 * Math.atan2(u[0], v[0]), asinhReal(v[0] * u[1] - v[1] * u[0]) };
+		return new double[] { 2 * StrictMath.atan2(u[0], v[0]), asinhReal(v[0] * u[1] - v[1] * u[0]) };
 	}
 
 	// atan(z) = (i/2)*(log(1-i*z) - log(1+i*z)).
@@ -8290,11 +8292,11 @@ public final class Environment implements Scope {
 	}
 
 	private static double[] complexSinh(double re, double im) {
-		return new double[] { Math.sinh(re) * Math.cos(im), Math.cosh(re) * Math.sin(im) };
+		return new double[] { StrictMath.sinh(re) * StrictMath.cos(im), StrictMath.cosh(re) * StrictMath.sin(im) };
 	}
 
 	private static double[] complexCosh(double re, double im) {
-		return new double[] { Math.cosh(re) * Math.cos(im), Math.sinh(re) * Math.sin(im) };
+		return new double[] { StrictMath.cosh(re) * StrictMath.cos(im), StrictMath.sinh(re) * StrictMath.sin(im) };
 	}
 
 	private static double[] complexTanh(double re, double im) {
@@ -8316,12 +8318,12 @@ public final class Environment implements Scope {
 	private static double asinhReal(double x) {
 		double a = Math.abs(x);
 		if (a <= 1.0) {
-			return Math.copySign(Math.log1p(a + (a * a) / (1.0 + Math.hypot(a, 1.0))), x);
+			return Math.copySign(StrictMath.log1p(a + (a * a) / (1.0 + StrictMath.hypot(a, 1.0))), x);
 		}
 		if (a < 8.5e307) {
-			return Math.copySign(Math.log(a + Math.hypot(a, 1.0)), x);
+			return Math.copySign(StrictMath.log(a + StrictMath.hypot(a, 1.0)), x);
 		}
-		return Math.copySign(Math.log(a) + Math.log(2.0), x);
+		return Math.copySign(StrictMath.log(a) + StrictMath.log(2.0), x);
 	}
 
 	// acosh for x >= 1 only (the caller routes x < 1 into the plane). Three branches:
@@ -8332,14 +8334,14 @@ public final class Environment implements Scope {
 	private static double acoshReal(double x) {
 		if (x < 2.0) {
 			double xm = x - 1.0;
-			return Math.log1p(xm + Math.sqrt(xm * (x + 1.0)));
+			return StrictMath.log1p(xm + Math.sqrt(xm * (x + 1.0)));
 		}
 		if (x < 8.5e307) {
 			double inv = 1.0 / x;
 			double r = Math.sqrt(1.0 - inv * inv);
-			return Math.log(2.0 * x) + Math.log1p((r - 1.0) / 2.0);
+			return StrictMath.log(2.0 * x) + StrictMath.log1p((r - 1.0) / 2.0);
 		}
-		return Math.log(x) + Math.log(2.0);
+		return StrictMath.log(x) + StrictMath.log(2.0);
 	}
 
 	// Whether a real argument keeps the REAL arm of asin, acos and atanh -- inside
@@ -8347,7 +8349,8 @@ public final class Environment implements Scope {
 	// answers true and comes back out as itself rather than as a complex NaN pair.
 	// An INFINITY does the same, for the same reason: it has no complex value either
 	// (the formula would manufacture a #C(NaN Infinity), and SBCL signals
-	// FLOATING-POINT-INVALID rather than answer one), so Math.asin's NaN is the honest
+	// FLOATING-POINT-INVALID rather than answer one), so StrictMath.asin's NaN is the
+	// honest
 	// answer. log is the opposite case and is not on this predicate: (log -Infinity)
 	// is #C(Infinity pi), a real point of the plane, and SBCL answers it.
 	private static boolean insideUnit(double x) {
@@ -8356,15 +8359,15 @@ public final class Environment implements Scope {
 
 	// atanh for |x| <= 1 only (the caller routes |x| > 1 into the plane). The log1p
 	// difference is accurate for small x and answers +-Infinity at +-1; a signed zero
-	// in answers the signed zero out (odd, like Math.sinh's small branch).
+	// in answers the signed zero out (odd, like StrictMath.sinh's small branch).
 	private static double atanhReal(double x) {
-		return (Math.log1p(x) - Math.log1p(-x)) * 0.5;
+		return (StrictMath.log1p(x) - StrictMath.log1p(-x)) * 0.5;
 	}
 
 	// cis(z) = exp(i*z) = (e^-im*cos(re), e^-im*sin(re)).
 	private static double[] complexCis(double re, double im) {
-		double e = Math.exp(-im);
-		return new double[] { e * Math.cos(re), e * Math.sin(re) };
+		double e = StrictMath.exp(-im);
+		return new double[] { e * StrictMath.cos(re), e * StrictMath.sin(re) };
 	}
 
 	// asinh(z) = log(z + sqrt(z^2 + 1)). The +0.0 on the imaginary part of z^2

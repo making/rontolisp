@@ -310,12 +310,12 @@ page.
 | `user-homedir-pathname` | `(user-homedir-pathname)` | The `HOME` directory as a DIRECTORY pathname (trailing separator), or `nil` when the variable is unset |
 | `invoke-debugger` | `(invoke-debugger c)` | Signals the condition and never returns -- no backend has a debugger to enter |
 | `compile-file` `compile-file-pathname` `remove-method` | `(compile-file "x.lisp")` | Exist and signal: a rontolisp program is compiled whole (no fasl, no pathname naming one) and a method is not a first-class object |
-| `exp` | `(exp 0)` | `1.0` (interpreter/JVM use `Math.exp`; WASM uses a software approximation) |
-| `log` | `(log 1)` | `0.0` (natural log; interpreter/JVM use `Math.log`, WASM a software approximation) |
-| `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0` (interpreter/JVM use `Math.sin`/`cos`/`tan`, WASM a software approximation) |
-| `asin` `acos` `atan` | `(atan 0)` | `0.0` (all backends -- WASM uses a software approximation) |
+| `exp` | `(exp 0)` | `1.0` (fdlibm on every backend: `StrictMath.exp` on the interpreter/JVM, the same algorithm on WASM) |
+| `log` | `(log 1)` | `0.0` (natural log; fdlibm on every backend) |
+| `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0` (fdlibm on every backend) |
+| `asin` `acos` `atan` | `(atan 0)` | `0.0` (all backends, fdlibm on each) |
 | `sinh` `cosh` `tanh` | `(tanh 0)` | `0.0` (all backends -- WASM derives all three from its software `exp`) |
-| `asinh` `acosh` `atanh` | `(asinh 0)`, `(acosh 1)`, `(atanh 0)` | `0.0` (inverse hyperbolics; a real argument outside the domain crosses into the plane, WASM a software approximation) |
+| `asinh` `acosh` `atanh` | `(asinh 0)`, `(acosh 1)`, `(atanh 0)` | `0.0` (inverse hyperbolics; a real argument outside the domain crosses into the plane; the same bits on every backend) |
 | `cis` | `(cis 0)` | `#C(1.0 0.0)` (the unit-circle point; always answers a complex) |
 | `gcd` | `(gcd 12 18)`, `(gcd 24 36 60)` | `6`, `12` (variadic; greatest common divisor, `(gcd)` is `0`) |
 | `lcm` | `(lcm 4 6)`, `(lcm 2 3 4)` | `12`, `12` (variadic; least common multiple; `0` if any argument is `0`, `(lcm)` is `1`) |
