@@ -7,7 +7,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispSymbol;
@@ -37,7 +39,7 @@ import org.jspecify.annotations.Nullable;
  */
 public final class SchemeLibrary {
 
-	@Nullable private static volatile List<LispVal> forms;
+	private static final Map<String, List<LispVal>> FORMS = new ConcurrentHashMap<>();
 
 	@Nullable private static volatile Set<String> functionNames;
 
@@ -45,23 +47,27 @@ public final class SchemeLibrary {
 	}
 
 	/**
-	 * Returns the parsed library definitions. The source is written in canonical shape
-	 * (internal double-colon {@code rontolisp::} helpers, bare {@code cl} names), so it
-	 * needs no package resolution. Parsed once and cached.
+	 * Returns the library definitions as the interpreter reads them.
 	 * @return the library forms
+	 * @see #forms(Features)
 	 */
 	public static List<LispVal> forms() {
-		List<LispVal> cached = forms;
-		if (cached == null) {
-			synchronized (SchemeLibrary.class) {
-				cached = forms;
-				if (cached == null) {
-					cached = List.copyOf(LispReader.readAllFromString(readSource(), Features.INTERPRETER));
-					forms = cached;
-				}
-			}
-		}
-		return cached;
+		return forms(Features.INTERPRETER);
+	}
+
+	/**
+	 * Returns the parsed library definitions for a target. The source is written in
+	 * canonical shape (internal double-colon {@code rontolisp::} helpers, bare {@code cl}
+	 * names), so it needs no package resolution. It is read with the TARGET's features:
+	 * {@code parallel-execute} spawns threads under {@code #+thread-support} and runs its
+	 * thunks in order without it. Both branches define the same names, so the name set
+	 * does not depend on the target. Parsed once per feature set and cached.
+	 * @param features the target backend's reader features
+	 * @return the library forms
+	 */
+	public static List<LispVal> forms(Features features) {
+		return FORMS.computeIfAbsent(String.join(",", features.names()),
+				ignored -> List.copyOf(LispReader.readAllFromString(readSource(), features)));
 	}
 
 	private static String readSource() {
@@ -97,15 +103,26 @@ public final class SchemeLibrary {
 	}
 
 	/**
-	 * The compile-path pre-pass: prepends the library definitions when the program
-	 * references one of its functions. A program that does not is returned unchanged.
+	 * {@link #process(List, Features)} for the interpreter's features.
 	 * @param program the top-level forms (after load inlining and user-macro expansion)
 	 * @return the program with the library spliced in when used
 	 */
 	public static List<LispVal> process(List<LispVal> program) {
+		return process(program, Features.INTERPRETER);
+	}
+
+	/**
+	 * The compile-path pre-pass: prepends the library definitions, read for the target,
+	 * when the program references one of its functions. A program that does not is
+	 * returned unchanged.
+	 * @param program the top-level forms (after load inlining and user-macro expansion)
+	 * @param features the target backend's reader features
+	 * @return the program with the library spliced in when used
+	 */
+	public static List<LispVal> process(List<LispVal> program, Features features) {
 		for (LispVal form : program) {
 			if (references(form)) {
-				List<LispVal> out = new ArrayList<>(forms());
+				List<LispVal> out = new ArrayList<>(forms(features));
 				out.addAll(program);
 				return out;
 			}
