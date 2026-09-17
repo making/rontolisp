@@ -1993,18 +1993,14 @@ class RontoLispCliTest {
 	// inside the stack the CLI hands the interpreter. cl-mustache's spec suite is the
 	// real-world specimen (~800 KiB down); this is the same shape in two lines.
 	//
-	// The depth is MEASURED rather than written down. A Lisp call costs about 1.5 KiB of
-	// Java stack here, but a JIT that inlines more spends less, so a constant that
-	// overflows 1 MiB on one machine fits on another: CI run 34637528638 failed exactly
-	// that way, with 1500 frames fitting where they had not locally. The search doubles
-	// the depth until the launcher-sized stack gives way, so the pair below always runs
-	// the mechanism -- and the answer is at most twice what 1 MiB holds, which the CLI's
-	// 16 MiB clears with room to spare.
+	// The depth is MEASURED, and measured beside the run it justifies. What 1 MiB holds
+	// is the JIT's answer, not the program's: 337 calls with C1 frames, 511 cold, ~1130
+	// once Graal has compiled the evaluator, and more than 1500 on CI run 34637528638.
+	// A depth found once and reused later (a constant, or a search cached for the JVM)
+	// can therefore fit by the time it is asserted on.
 	private static final int DEEP_PROGRAM_FIRST_DEPTH = 1500;
 
-	private static final int DEEP_PROGRAM_MAX_DEPTH = 1 << 20;
-
-	private static int deepProgramDepth;
+	private static final int DEEP_PROGRAM_MAX_DEPTH = 1 << 16;
 
 	// What linux-x64 gives thread 0, and so what the CLI used to interpret on there.
 	private static final long LAUNCHER_STACK_BYTES = 1L << 20;
@@ -2016,62 +2012,43 @@ class RontoLispCliTest {
 				""".formatted(depth);
 	}
 
-	// The shallowest doubling of the depth that a launcher-sized stack cannot hold, found
-	// once per JVM because the answer is the platform's, not the test's.
-	private static synchronized int depthTheLauncherStackCannotHold() throws InterruptedException {
-		if (deepProgramDepth != 0) {
-			return deepProgramDepth;
-		}
-		for (int candidate = DEEP_PROGRAM_FIRST_DEPTH; candidate <= DEEP_PROGRAM_MAX_DEPTH; candidate *= 2) {
-			final int depth = candidate;
-			Throwable thrown = onAStackOf(LAUNCHER_STACK_BYTES, () -> {
-				RontoLispCli cli = new RontoLispCli(new ByteArrayInputStream(new byte[0]),
-						new PrintStream(new ByteArrayOutputStream()));
-				cli.run(new String[] { "-e", deepProgram(depth) });
-			});
-			if (thrown instanceof StackOverflowError) {
-				deepProgramDepth = depth;
-				return depth;
-			}
-		}
-		throw new AssertionError(
-				"no depth up to " + DEEP_PROGRAM_MAX_DEPTH + " overflowed a " + LAUNCHER_STACK_BYTES + "-byte stack");
-	}
-
-	@Test
-	void theDeepProgramDoesNotFitALauncherSizedStack() throws Exception {
-		// The control for the test below: without it that test could pass on a stack it
-		// never needed. The interpreter's recursion depth is the PROGRAM's, and the depth
-		// this answers is by construction one the stack a platform hands main cannot
-		// hold.
-		int depth = depthTheLauncherStackCannotHold();
-		Throwable thrown = onAStackOf(LAUNCHER_STACK_BYTES, () -> {
-			RontoLispCli cli = new RontoLispCli(new ByteArrayInputStream(new byte[0]),
-					new PrintStream(new ByteArrayOutputStream()));
-			cli.run(new String[] { "-e", deepProgram(depth) });
-		});
-		assertThat(thrown).isInstanceOf(StackOverflowError.class);
-	}
-
 	@Test
 	void mainRunsTheProgramOnItsOwnStackNotTheLaunchersOne() throws Exception {
 		// So the depth ceiling is one number on every platform and every launcher: main
-		// is called here on a thread with exactly what linux-x64 gives thread 0, and the
-		// program that cannot run there runs anyway.
-		int depth = depthTheLauncherStackCannotHold();
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		PrintStream oldOut = System.out;
-		System.setOut(new PrintStream(out, true, StandardCharsets.UTF_8));
-		Throwable thrown;
-		try {
-			thrown = onAStackOf(LAUNCHER_STACK_BYTES,
-					() -> RontoLispCli.main(new String[] { "-e", deepProgram(depth) }));
+		// is called here on a thread with exactly what linux-x64 gives thread 0, and runs
+		// a program that the same thread cannot run through run.
+		//
+		// Each round pairs the two at one depth, main FIRST: the control then runs on a
+		// JIT at least as warm as main's, so its overflow shows the depth needs more than
+		// the launcher's stack even with the frames main may have had. A control that
+		// fits does not fail the test -- it doubles the depth and pairs again.
+		for (int depth = DEEP_PROGRAM_FIRST_DEPTH; depth <= DEEP_PROGRAM_MAX_DEPTH; depth *= 2) {
+			final int d = depth;
+			ByteArrayOutputStream out = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(out, true, StandardCharsets.UTF_8));
+			Throwable thrown;
+			try {
+				thrown = onAStackOf(LAUNCHER_STACK_BYTES,
+						() -> RontoLispCli.main(new String[] { "-e", deepProgram(d) }));
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			assertThat(thrown).as("main at depth %d", depth).isNull();
+			assertThat(out.toString(StandardCharsets.UTF_8)).contains(String.valueOf(depth));
+			Throwable control = onAStackOf(LAUNCHER_STACK_BYTES, () -> {
+				RontoLispCli cli = new RontoLispCli(new ByteArrayInputStream(new byte[0]),
+						new PrintStream(new ByteArrayOutputStream()));
+				cli.run(new String[] { "-e", deepProgram(d) });
+			});
+			if (control instanceof StackOverflowError) {
+				return;
+			}
+			assertThat(control).as("run on the launcher's stack at depth %d", depth).isNull();
 		}
-		finally {
-			System.setOut(oldOut);
-		}
-		assertThat(thrown).isNull();
-		assertThat(out.toString(StandardCharsets.UTF_8)).contains(String.valueOf(depth));
+		throw new AssertionError(
+				"no depth up to " + DEEP_PROGRAM_MAX_DEPTH + " overflowed a " + LAUNCHER_STACK_BYTES + "-byte stack");
 	}
 
 	@Test

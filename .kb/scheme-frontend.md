@@ -39,7 +39,7 @@ help, the title of `doc/*/guides/scheme.md`). `--no-gc` is refused by name
 | `exit`, `emergency-exit` (`(scheme process-context)`, merged into the no-import default) | `%scheme-exit`: finish both output streams, then `%host-exit` with `#t`/none 0, `#f` 1, an integer's low 8 bits | the `uiop:quit` primitive (`.kb/uiop.md`), so all four backends end the process where the call stands -- `exit` does NOT run pending `dynamic-wind` afters either (stated deviation) |
 | `(if c a b)` | `(if (eq c false) b a)`; a predicate fuses: `(if (pair? x) ..)` -> `(if (consp x) ..)`, `and`/`or`/`not` compose | `SchemeBuiltins.Result`: `pred` (T/NIL) and `or-false` (value or NIL: `memq`, `assq`, `member`) fuse in a test and convert anywhere else -- `(if raw t false)` / `(or raw false)` |
 | top-level `(define x v)` | top-level `(setq x v)` | NEVER `defvar`: that makes the name special and a `let` of it leaks into callees (2 instead of 1) |
-| top-level procedure defined ONCE by a `lambda`, never `set!` | `defun`, called directly | keeps the direct call and the tree shaker. `set!` is collected by name, blind to scope: over-approximating only costs the direct call |
+| top-level procedure defined ONCE by a `lambda`, never `set!`, and -- when it shadows an import -- never read before that definition | `defun`, called directly | keeps the direct call and the tree shaker. `set!` is collected by name, blind to scope: over-approximating only costs the direct call |
 | any other procedure binding | variable + `funcall`; a procedure name in value position -> `#'name` | Lisp-1 over Lisp-2 (`.kb/lisp2-namespaces.md`). A known procedure's first-class value is its `:function` form in `SchemeBuiltins` |
 | a name this file does not define | call position: a direct call; value position: a variable | what lets a Common Lisp file and a Scheme file call each other |
 | `(lambda args ..)`, `(lambda (a . r) ..)` | `&rest` | the dotted formals are parsed here: `LambdaLists.parse` reads through `toList()` and DROPS an improper tail |
@@ -57,6 +57,32 @@ excludes strings (`vectorp` does not); `integer?` accepts `2.0`; `max`/`min` are
 when any argument is; `equal?` is its own helper (recurses into vectors, `eqv?` on
 records; CL's `equal` compares a general vector by identity and an instance slot-wise).
 
+## A file that reads an imported name before it redefines it
+
+- **Such a name is a variable, initialized to the import's value** by a second leading
+  `setq` (a builtin's `:function` form, a SICP constant's form), and every reference goes
+  through it: `(define old-abs abs) (define (abs x) ...)` keeps the host's `abs` the way
+  the book's evaluators keep `apply`. A `defun` is position-blind -- the interpreter runs
+  forms in order and had no `abs` yet (`The function abs is undefined`), the compile path
+  hoisted the user's (`old-abs` WAS the user's `abs`: `StackOverflowError` on the JVM) --
+  so a name the file reads early cannot take that shape.
+- "Read before": a name mentioned (scope-blind, `collectNames`) by a form RUN at the top
+  level -- anything but a procedure definition or a record type -- at or before the
+  name's first definition, directly or through what any name defined before that form
+  mentions (`SchemeLowering.readBeforeDefinition`). So `(define (f x) (abs x))
+  (define (abs x) ...) (f 1)` keeps both `defun`s, and `(define (f x) (abs x)) (f 1)
+  (define (abs x) ...)` does not. A body of a procedure defined earlier and called later
+  sees the user's binding, as a global lookup at call time would.
+- Corpus (2026-09-17): the lowered forms of all 1,592 SICP samples are byte-identical
+  before and after -- no sample reads a builtin before redefining it (the 19 textual
+  hits are quoted data and bodies not run early). Pinned by `SchemeLoweringTest` and the
+  `a-builtin-used-before-...` case of `scheme-spec.yaml` (all four backends).
+- **A NON-imported name called before its `define`** (`(f 1)` above `(define (f x) ...)`)
+  is left as it is, deliberately: an error in Scheme, the interpreter's
+  `The function f is undefined`, while the compile path's hoisted `defun` answers 2.
+  Refusing it on the compile path would cost the direct call of every procedure for a
+  program that is wrong anyway; a session has the same order as the interpreter.
+
 ## The library tags: `base`, `write`, `inexact`, `cxr`, `lazy`, `process-context` and `sicp`
 
 `SchemeBuiltins` entries carry the R7RS library that exports them. `base`, `write`,
@@ -67,7 +93,7 @@ with no import at all merges all six. Keywords carry a library too: `SYNTAX` is 
 `LAZY_SYNTAX` (`delay`, `delay-force`) `lazy`, `SICP_SYNTAX` (`cons-stream`) `sicp`.
 `sicp` (`true false nil` -- via `SchemeLowering.Constant`, not an `Entry`, since they are
 values, not procedures -- `filter reduce fold-left fold-right delete last-pair append!
-list-index 1+ -1+ random runtime`) is no R7RS library, so no import names it:
+list-index 1+ -1+ random runtime parallel-execute test-and-set!`) is no R7RS library, so no import names it:
 `SchemeLowering.imports()`'s no-import branch merges it too, so a file with no import at
 all (an unqualified SICP sample, or a REPL) sees it anyway, and an explicit import list
 narrows to exactly what it names (`.todo/829`
@@ -140,6 +166,33 @@ defines regardless of what library put there first.
   the JVM and wasm, except two `fragment`s whose delayed thunk names a global no file
   defines (a compile error there, `.todo/828`). The remaining stream failures are samples
   calling procedures defined in OTHER samples (`partial-sums`, `display-stream`, `pairs`).
+
+## `parallel-execute` and `test-and-set!` (SICP 3.4)
+
+- **`scheme.lisp` is read with the TARGET's features** (`SchemeLibrary.forms(Features)`,
+  from `CompileFrontend.expand` and the playground's chain). `%scheme-parallel-execute`
+  under `#+thread-support` spawns one `rontolisp:make-thread` per thunk and joins them all
+  in nested `unwind-protect`, so a thunk's error is re-signaled by its join only after the
+  remaining threads are joined. Without it (both wasm) the thunks run in argument order:
+  a legal interleaving, where a serializer's busy-wait never contends -- NOT a call-time
+  signal like `bt2:make-thread` (`.kb/threads.md`), which has no such reading. Both
+  branches define the same names, so `isSchemeFunction` and the pruner read the
+  interpreter's copy.
+- `test-and-set!` is a `pred` over ONE `rontolisp:make-mutex` for every cell
+  (`%scheme-test-and-set-lock`, a `defvar` the pruner drops with the helper: a program
+  that does not call it carries no mutex, pinned in `LibraryDefunPrunerTest`). "Set" is
+  "car is not `#f`", so `'()` is set. A user `define` (the book's non-atomic version,
+  `24_test_and_set.scm`) wins like `square`.
+- Races (2026-09-17, 64 cores): four unserialized thunks of 100,000 `(set! g (+ g 1))`
+  on a global ended between 111,274 and 270,784 on the JVM and the interpreter and never
+  crashed; the same on a `let` variable captured by the thunks (the JVM's boxed capture)
+  kept an integer. Three serialized thunks of 20,000 were exact on all four backends,
+  also under `-Djdk.virtualThreadScheduler.parallelism=1` and
+  `-XX:ActiveProcessorCount=1`, and with a `display` inside the critical section: the
+  book's `the-mutex` spins through its self tail call, which lowers to a loop.
+- Corpus (2026-09-17, `.todo/artefacts/828-sicp-sample-corpus-harness/run.py`): file mode
+  1,342 -> 1,347 exiting 0 (the five `parallel-execute` samples), no other exit or stdout
+  change; all 19 `variant=concurrent` samples exit 0 on the interpreter, the JVM and wasm.
 
 ## A session (`SchemeSession`, `SchemeLowering.interact`)
 
@@ -227,6 +280,13 @@ family, bodies) pass the destination down; every other form is a leaf `(setq R v
   carrier variables, `(tagbody L (let ((i C)) ...))`, because each iteration's closure must
   capture ITS binding. Detected by counting the `lambda`s the body lowering emitted, not by
   scanning for the word `lambda` (an `(import (prefix ..))` renames it).
+- **So does a loop jumped to from where a loop variable is shadowed**
+  (`(let ((count (+ count 1))) (fill (cdr path) count))`, an inner named `let` reusing the
+  outer's variable name): a variable keeps its Scheme spelling, so the in-place `setq`
+  there assigned the INNER binding and the loop never advanced. `Target.shadowedFrom`
+  compares the jump site's binding of each name with the loop's; a mismatch re-lowers the
+  loop in the carrier shape, whose fresh names nothing can shadow. Found by
+  `examples/scheme/collatz.scm`.
 - Mutual and higher-order tail calls are ordinary calls (depths below).
 
 ## Traps

@@ -227,14 +227,37 @@ final class SchemeLowering {
 
 		private final boolean parallel;
 
+		private final Scope home;
+
+		private final List<String> names;
+
 		private boolean used;
 
-		Target(Binding binding, LoopShape shape) {
+		private boolean shadowed;
+
+		Target(Binding binding, LoopShape shape, Scope home, List<String> names) {
 			this.binding = binding;
 			this.label = shape.label();
 			this.assigned = shape.assigned();
 			this.rest = shape.rest();
 			this.parallel = shape.parallel();
+			this.home = home;
+			this.names = names;
+		}
+
+		// Whether a jump from this scope would assign an inner variable of the same name
+		// instead of the loop variable: only the in-place shape assigns the variables
+		// themselves, and a carrier is a fresh name no binding can spell.
+		boolean shadowedFrom(Scope scope) {
+			if (!this.parallel) {
+				return false;
+			}
+			for (String name : this.names) {
+				if (scope.find(name) != this.home.bindings.get(name)) {
+					return true;
+				}
+			}
+			return false;
 		}
 
 		boolean accepts(int argumentCount) {
@@ -353,6 +376,9 @@ final class SchemeLowering {
 
 	private final Set<String> assignedNames = new HashSet<>();
 
+	// What a file's names read before their definition hold until then.
+	private final SequencedMap<LispSymbol, LispVal> initialValues = new LinkedHashMap<>();
+
 	private final Scope global = new Scope(null);
 
 	private final LispSymbol falseVariable = symbol(SchemeBuiltins.FALSE_VARIABLE);
@@ -459,6 +485,14 @@ final class SchemeLowering {
 		// working. It lives in a variable because a quoted symbol costs a lookup per
 		// evaluation on wasm (3x on a test-heavy loop, .kb/scheme-frontend.md).
 		out.add(falseBinding());
+		if (!this.initialValues.isEmpty()) {
+			List<LispVal> assignment = new ArrayList<>(List.of(symbol("SETQ")));
+			this.initialValues.forEach((variable, value) -> {
+				assignment.add(variable);
+				assignment.add(value);
+			});
+			out.add(listOf(assignment));
+		}
 		for (LispVal form : forms) {
 			topLevel(form, out);
 		}
@@ -652,14 +686,120 @@ final class SchemeLowering {
 				records.add(form);
 			}
 		}
+		Set<String> readEarly = this.interactive ? Set.of() : readBeforeDefinition(forms);
 		variables.forEach((name, identifier) -> this.global.bindings.put(name, new Variable(cl(identifier))));
 		procedures.forEach((name, identifier) -> {
 			boolean direct = !this.interactive && definitions.getOrDefault(name, 0) == 1
-					&& !this.assignedNames.contains(name) && !variables.containsKey(name);
+					&& !this.assignedNames.contains(name) && !variables.containsKey(name) && !readEarly.contains(name);
 			this.global.bindings.put(name, direct ? new GlobalFunction(cl(identifier)) : new Variable(cl(identifier)));
 		});
 		for (LispCons record : records) {
 			declareRecord(record, definitions);
+		}
+	}
+
+	/**
+	 * The names this file defines over an imported binding -- a builtin, a SICP constant
+	 * -- that a form may READ before the first definition. Those become variables holding
+	 * the imported value until then ({@link #initialValues}): a {@code defun} is
+	 * position-blind, so the interpreter has no function yet and the compile path hoists
+	 * the user's. A read counts when it is in a form run at the top level (anything but a
+	 * procedure definition and a record type), directly or through what anything defined
+	 * before that form mentions. Scope-blind, like {@link #collectAssigned}:
+	 * over-approximating only costs the direct call.
+	 */
+	private Set<String> readBeforeDefinition(List<LispVal> forms) {
+		Map<String, Integer> firstDefinition = new HashMap<>();
+		List<List<String>> defined = new ArrayList<>();
+		List<Boolean> run = new ArrayList<>();
+		// What each form mentions: a definition's value or body, never its own target.
+		List<Set<String>> mentioned = new ArrayList<>();
+		for (int i = 0; i < forms.size(); i++) {
+			List<String> names = new ArrayList<>();
+			Set<String> referenced = new HashSet<>();
+			boolean runs = true;
+			if (forms.get(i) instanceof LispCons form && syntaxOf(form, this.global) == Core.DEFINE) {
+				Definition definition = definition(form);
+				names.add(name(definition.name()));
+				definition.body().forEach(expression -> collectNames(expression, referenced));
+				runs = !definition.procedure();
+			}
+			else if (forms.get(i) instanceof LispCons form && syntaxOf(form, this.global) == Core.DEFINE_VALUES) {
+				formals(second(form), form).all().forEach(variable -> names.add(name(variable)));
+				collectNames(form.cdr() instanceof LispCons rest ? rest.cdr() : LispNil.INSTANCE, referenced);
+			}
+			else if (forms.get(i) instanceof LispCons form && syntaxOf(form, this.global) == Core.DEFINE_RECORD_TYPE) {
+				runs = false;
+			}
+			else {
+				collectNames(forms.get(i), referenced);
+			}
+			mentioned.add(referenced);
+			for (String name : names) {
+				Binding imported = this.global.bindings.get(name);
+				if (imported instanceof Builtin || imported instanceof Constant) {
+					firstDefinition.putIfAbsent(name, i);
+				}
+			}
+			defined.add(names);
+			run.add(runs);
+		}
+		Set<String> early = new HashSet<>();
+		if (firstDefinition.isEmpty()) {
+			return early;
+		}
+		Map<String, Set<String>> mentions = new HashMap<>();
+		for (int i = 0; i < forms.size(); i++) {
+			Set<String> referenced = mentioned.get(i);
+			if (run.get(i)) {
+				List<String> pending = new ArrayList<>(referenced);
+				Set<String> reached = new HashSet<>(referenced);
+				while (!pending.isEmpty()) {
+					String name = pending.removeLast();
+					Integer definedAt = firstDefinition.get(name);
+					if (definedAt != null && definedAt >= i) {
+						early.add(name);
+					}
+					for (String next : mentions.getOrDefault(name, Set.of())) {
+						if (reached.add(next)) {
+							pending.add(next);
+						}
+					}
+				}
+			}
+			for (String name : defined.get(i)) {
+				mentions.computeIfAbsent(name, key -> new HashSet<>()).addAll(referenced);
+			}
+		}
+		for (String name : early) {
+			LispVal value = switch (this.global.bindings.get(name)) {
+				case Builtin builtin -> builtin.entry().function();
+				case Constant constant -> constant.form();
+				case null, default -> throw new IllegalStateException("not an imported value: " + name);
+			};
+			this.initialValues.put(symbol(name), value);
+		}
+		return early;
+	}
+
+	private void collectNames(LispVal datum, Set<String> out) {
+		switch (datum) {
+			case LispSymbol identifier -> out.add(name(identifier));
+			case LispCons cons -> {
+				LispVal rest = cons;
+				while (rest instanceof LispCons cell) {
+					collectNames(cell.car(), out);
+					rest = cell.cdr();
+				}
+				collectNames(rest, out);
+			}
+			case LispArray array -> {
+				for (LispVal element : array.data()) {
+					collectNames(element, out);
+				}
+			}
+			default -> {
+			}
 		}
 	}
 
@@ -1137,6 +1277,9 @@ final class SchemeLowering {
 		if (destination != null && binding != null) {
 			for (Target target : destination.targets()) {
 				if (target.binding == binding && target.accepts(operands.size())) {
+					if (target.shadowedFrom(scope)) {
+						target.shadowed = true;
+					}
 					return jump(target, values(operands, scope));
 				}
 			}
@@ -1620,7 +1763,8 @@ final class SchemeLowering {
 			variables.add(bind(variable, bodyScope));
 			carriers.add(fresh("C"));
 		}
-		Target target = new Target(binding, new LoopShape(fresh("L"), fresh ? carriers : variables, false, !fresh));
+		Target target = new Target(binding, new LoopShape(fresh("L"), fresh ? carriers : variables, false, !fresh),
+				bodyScope, loop.variables().stream().map(this::name).toList());
 		Destination outer = context.destination();
 		LispSymbol result = outer != null ? outer.result() : fresh("R");
 		List<Target> targets = new ArrayList<>(outer != null ? outer.targets() : List.of());
@@ -1630,7 +1774,7 @@ final class SchemeLowering {
 		if (binding.escaped) {
 			return null;
 		}
-		if (!fresh && target.used && this.closures != closuresBefore) {
+		if (!fresh && target.used && (this.closures != closuresBefore || target.shadowed)) {
 			return pureLoop(loop, context, true);
 		}
 		List<LispVal> pairs = new ArrayList<>();
@@ -1778,7 +1922,8 @@ final class SchemeLowering {
 		}
 		boolean rest = spec.formals().rest() != null;
 		Target target = new Target(java.util.Objects.requireNonNull(spec.self()),
-				new LoopShape(fresh("L"), fresh ? carriers : variables, rest, !fresh));
+				new LoopShape(fresh("L"), fresh ? carriers : variables, rest, !fresh), inner,
+				spec.formals().all().stream().map(this::name).toList());
 		LispSymbol result = fresh("R");
 		int closuresBefore = this.closures;
 		List<LispVal> statements = body(spec.body(),
@@ -1786,7 +1931,7 @@ final class SchemeLowering {
 		if (!target.used) {
 			return null;
 		}
-		if (!fresh && this.closures != closuresBefore) {
+		if (!fresh && (this.closures != closuresBefore || target.shadowed)) {
 			return selfLoop(spec, scope, true);
 		}
 		List<LispVal> pairs = new ArrayList<>();

@@ -9,6 +9,7 @@ documented here: [`size-report/`](../size-report).
 | Directory | Programs |
 | --- | --- |
 | [`console/`](console) | Algorithms and console I/O — pure, cross-backend |
+| [`scheme/`](scheme) | Scheme (`.scm`) programs for the experimental Scheme front end: symbolic differentiation, eight queens, Huffman trees, streams, a metacircular evaluator |
 | [`ml/`](ml) | Numerical computing and machine learning (arrays, `linalg`, `--simd`, `--gpu`) |
 | [`deep-learning-from-scratch/`](deep-learning-from-scratch) | The book *Deep Learning from Scratch* (ゼロから作るDeep Learning) ch02–ch08, ported |
 | [`llm/`](llm) | llama2.c's `run.c` ported whole: a Llama 2 inference engine over the real TinyStories checkpoints — the example `--simd` is for |

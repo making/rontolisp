@@ -106,7 +106,8 @@ scheme> (exit)
   `#0=(a b c . #0#)` のように書きます。循環のない共有構造は出現のたびに書き出します。
 - **SICP 互換、R7RS ではない**: `true false nil`（リテラルではなく普通の変数）、
   `filter reduce fold-left fold-right delete last-pair append! list-index 1+ -1+ random
-  runtime`、ストリーム: `cons-stream`（構文）、`the-empty-stream stream-car stream-cdr
+  runtime parallel-execute test-and-set!`、ストリーム: `cons-stream`（構文）、
+  `the-empty-stream stream-car stream-cdr
   stream-first stream-rest stream-pair? stream-null? empty-stream? stream list->stream
   stream->list stream-head stream-tail stream-ref stream-map stream-for-each stream-filter
   stream-append`。ストリームは `'()` か、cdr がプロミスであるペアなので、
@@ -124,6 +125,26 @@ scheme> (exit)
 (#t #f () 4)
 (1 3 5)
 (((() . 1) . 2) . 3)
+```
+
+`parallel-execute` はインタプリタと JVM では各サンクをそれぞれのスレッドで実行し、すべてが
+終わってから戻ります。サンク内のエラーはそのときに通知されます。WebAssembly にはスレッドが
+ないため、サンクは引数の順に一つずつ実行されます。これはスレッド実行でも起こりうる実行順序の
+一つで、`test-and-set!` の上に作ったシリアライザが待たされることはありません。`test-and-set!`
+はどのバックエンドでもアトミックです。
+
+```scheme
+(define cell (list false))
+(display (list (test-and-set! cell) (test-and-set! cell))) (newline)
+(define finished '())
+(define (finish name) (lambda () (set! finished (cons name finished))))
+(parallel-execute (finish 'only))
+(display finished) (newline)
+```
+
+```
+(#f #t)
+(only)
 ```
 
 プロミスは一度だけ評価され、その値を覚えています。ストリームをたどると各セルは一度だけ評価されます。

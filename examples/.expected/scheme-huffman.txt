@@ -1,0 +1,16 @@
+message: "abracadabra alakazam"
+code table:
+  #\a x9 -> 0
+  #\b x2 -> 1101
+  #\r x2 -> 1110
+  #\c x1 -> 11110
+  #\d x1 -> 11111
+  #\space x1 -> 1000
+  #\l x1 -> 1001
+  #\k x1 -> 1010
+  #\z x1 -> 1011
+  #\m x1 -> 1100
+encoded: 0110111100111100111110110111100100001001010100101101100
+bits: 55 (fixed 8-bit: 160)
+decoded: "abracadabra alakazam"
+round trip: ok

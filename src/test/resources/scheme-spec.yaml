@@ -174,6 +174,23 @@ cases:
       (0 1 2 3)
       (4 1 0)
       (11 12 13)
+  - name: a-jump-from-where-a-loop-variable-is-shadowed-assigns-the-loop-variable
+    source: |
+      (write (let fill ((path '(3 2 1)) (count 0))
+               (if (null? path) count (let ((count (+ count 1))) (fill (cdr path) count)))))
+      (newline)
+      (write (let outer ((i 0) (acc '()))
+               (if (= (length acc) 3) (list i (reverse acc))
+                   (let inner ((i 10) (n 0))
+                     (if (= n 2) (outer (+ i 1) (cons i acc)) (inner (+ i 1) (+ n 1)))))))
+      (newline)
+      (define (shadowed-self n total)
+        (if (= n 0) total (let ((m (- n 1))) (let* ((total (+ total n))) (shadowed-self m total)))))
+      (write (shadowed-self 4 0)) (newline)
+    expected: |
+      3
+      (13 (12 12 12))
+      10
   - name: a-named-let-whose-name-escapes-is-a-procedure
     source: |
       (write (let fact ((n 10)) (if (= n 0) 1 (* n (fact (- n 1)))))) (newline)
@@ -711,3 +728,62 @@ cases:
       (#t #f #t #t 8)
       200000
       (4 10 18)
+  - name: parallel-execute-joins-every-thunk-and-a-serializer-over-test-and-set-is-exact
+    source: |
+      (define tas-cell (list false))
+      (write (list (test-and-set! tas-cell) (test-and-set! tas-cell) (car tas-cell))) (newline)
+      (define (make-sicp-mutex)
+        (let ((cell (list false)))
+          (define (the-mutex m)
+            (cond ((eq? m 'acquire)
+                   (if (test-and-set! cell)
+                       (the-mutex 'acquire)))
+                  ((eq? m 'release) (set-car! cell false))))
+          the-mutex))
+      (define (make-serializer)
+        (let ((mutex (make-sicp-mutex)))
+          (lambda (p)
+            (define (serialized-p . args)
+              (mutex 'acquire)
+              (let ((val (apply p args)))
+                (mutex 'release)
+                val))
+            serialized-p)))
+      (define serialized-total 0)
+      (define protect (make-serializer))
+      (define (bump-times n)
+        (lambda ()
+          (do ((i 0 (+ i 1))) ((= i n))
+            ((protect (lambda () (set! serialized-total (+ serialized-total 1))))))))
+      (parallel-execute (bump-times 5000) (bump-times 5000) (bump-times 5000))
+      (write serialized-total) (newline)
+      (define joined '())
+      (apply parallel-execute
+             (map (lambda (k) (protect (lambda () (set! joined (cons k joined))))) '(1 2 3 4)))
+      (write (length joined)) (newline)
+    expected: |
+      (#f #t #t)
+      15000
+      4
+  - name: a-builtin-used-before-the-file-redefines-it-means-the-builtin-until-then
+    source: |
+      (define old-caddr caddr)
+      (define (caddr x) (if (null? x) 'empty (old-caddr x)))
+      (write (list (caddr '()) (caddr '(1 2 3)))) (newline)
+      (write (cdddr '(1 2 3 4))) (newline)
+      (define (cdddr x) 'mine)
+      (write (cdddr '(1 2 3 4))) (newline)
+      (define (first-of-rest x) (cadar x))
+      (write (first-of-rest '((1 2)))) (newline)
+      (define (cadar x) 'mine)
+      (write (first-of-rest '((1 2)))) (newline)
+      (define cdadr-before (map cdadr '((1 (2 3)))))
+      (define cdadr 7)
+      (write (list cdadr-before cdadr)) (newline)
+    expected: |
+      (empty 3)
+      (4)
+      mine
+      2
+      mine
+      (((3)) 7)

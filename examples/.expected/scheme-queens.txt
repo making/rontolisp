@@ -1,0 +1,18 @@
+queens(1) = 1 solutions
+queens(2) = 0 solutions
+queens(3) = 0 solutions
+queens(4) = 2 solutions
+queens(5) = 10 solutions
+queens(6) = 4 solutions
+queens(7) = 40 solutions
+queens(8) = 92 solutions
+
+first solution for 8: (1 5 8 6 3 7 2 4)
+ Q . . . . . . .
+ . . . . Q . . .
+ . . . . . . . Q
+ . . . . . Q . .
+ . . Q . . . . .
+ . . . . . . Q .
+ . Q . . . . . .
+ . . . Q . . . .
