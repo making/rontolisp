@@ -38,6 +38,11 @@ class SchemeReaderTest {
 	}
 
 	@Test
+	void negativeZeroKeepsItsSign() {
+		assertThat(printed("-0.0 -0. -.0 0.0")).isEqualTo("[-0.0, -0.0, -0.0, 0.0]");
+	}
+
+	@Test
 	void charactersAndStrings() {
 		assertThat(printed(
 				"#\\a #\\A #\\space #\\newline #\\tab #\\x41 #\\( \"a\\n\\t\\\"\\\\b\" \"\\x41;\" \"a \\\n   b\""))

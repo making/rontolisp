@@ -40,6 +40,9 @@ pieces are `.todo/829` .. `.todo/837`.
 1. `SicpCorpusE2eTest`, opt-in like `ExamplesE2eTest` (`-Drontolisp.sicp=<unpacked dir>`);
    the corpus is never checked in. Reaches the front end through `CompileFrontendAccess` /
    `JvmSourceCompiler`, all four backends, stdout compared against the interpreter.
+   Transcendental digits differ on wasm until `.todo/842` (`.kb/transcendentals.md`):
+   compare floats within a tolerance, or name `chapter1/section1/subsection8/02.scm`
+   (the one sample measured to print them) as an exception.
 2. A checked-in manifest: category per file (the static rule in `baseline.py`, ported), and
    the expected outcome for the named exceptions. A `scheme`/`concurrent` file that fails
    is a test failure; a `fragment` that starts to fail differently is not.

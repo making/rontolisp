@@ -1,4 +1,4 @@
-# `examples/scheme/`: Scheme sample programs in the examples suite
+# examples: a scheme directory of Scheme sample programs in the examples suite
 
 Difficulty: Medium
 
@@ -8,7 +8,7 @@ never runs one on the four backends.
 
 ## To do
 
-1. `examples/scheme/` with a README (en; follow the other directories' shape) and a row in
+1. a new examples scheme directory with a README (en; follow the other directories' shape) and a row in
    `examples/README.md`. Programs original to the repo (do not copy SICP corpus files --
    license), each exercising what the front end supports today, e.g.:
    - a SICP-style classic: symbolic differentiation, the eight queens, Huffman trees;

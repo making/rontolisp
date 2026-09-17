@@ -57,22 +57,55 @@ excludes strings (`vectorp` does not); `integer?` accepts `2.0`; `max`/`min` are
 when any argument is; `equal?` is its own helper (recurses into vectors, `eqv?` on
 records; CL's `equal` compares a general vector by identity and an instance slot-wise).
 
-## Two tags beside `base` and `write`: `sicp` and `cxr`
+## The library tags: `base`, `write`, `inexact`, `cxr` and `sicp`
 
-`SchemeBuiltins` entries also carry the tags `sicp` (`true false nil` -- via
-`SchemeLowering.Constant`, not an `Entry`, since they are values, not procedures --
-`filter reduce fold-left fold-right delete last-pair append! list-index 1+ -1+ random
-runtime`) and `cxr` (the whole `(scheme cxr)` set, `caaar` through `cddddr`: every one a
-standard Common Lisp function of the same name). Neither is an R7RS export of
-`(scheme base)`, so neither is reachable BY NAME through `(import ...)` --
-`SchemeLowering.imports()`'s no-import branch merges them the same way it merges `base`
-and `write`, so a file with no import at all (an unqualified SICP sample, or a REPL) sees
-them anyway, and an explicit import list narrows to exactly what it names (`.todo/829`
+`SchemeBuiltins` entries carry the R7RS library that exports them. `base`, `write`,
+`inexact` and `cxr` (the whole `(scheme cxr)` set, `caaar` through `cddddr`: every one a
+standard Common Lisp function of the same name) are `SchemeLowering.IMPORTABLE_LIBRARIES`:
+`(import (scheme <tag>))` names them, and a file with no import at all merges all four.
+`sicp` (`true false nil` -- via `SchemeLowering.Constant`, not an `Entry`, since they are
+values, not procedures -- `filter reduce fold-left fold-right delete last-pair append!
+list-index 1+ -1+ random runtime`) is no R7RS library, so no import names it:
+`SchemeLowering.imports()`'s no-import branch merges it too, so a file with no import at
+all (an unqualified SICP sample, or a REPL) sees it anyway, and an explicit import list
+narrows to exactly what it names (`.todo/829`
 measured 1,251 -> 1,307 of the 1,592-file SICP sample corpus running to exit 0 in file
 mode from this alone, zero regressions -- `.todo/artefacts/828-sicp-sample-corpus-harness/`
 has the harness). A user `define` of any of these still wins, exactly like `square`:
 `SchemeLowering.declareGlobals` overwrites the global scope entry for any name the file
 defines regardless of what library put there first.
+
+## `(scheme inexact)` and how a flonum prints
+
+- **Every procedure is a `%scheme-` helper**, not a template over the Common Lisp
+  function: an exact argument with an exact answer stays exact (`(sqrt 16)` 4, `(sqrt 1/4)`
+  1/2 through `isqrt` of numerator and denominator; `(exp 0)` 1, `(log 1)` 0, `(sin 0)` 0,
+  `(cos 0)` 1, `(acos 1)` 0, `(atan 0 x>0)` 0), and a real argument Common Lisp would
+  answer with a complex (`(sqrt -4)` is `#C(0.0 2.0)`, also `log` of a negative, `asin`/
+  `acos` outside [-1, 1]) is refused through `%scheme-no-complex`, an `error` whose message
+  names the procedure. `(log 0)` is `-inf.0` on every backend, as in Common Lisp here.
+- A user binding of any of these names wins like `square` (16 SICP samples define `sqrt`,
+  100 bind `exp` as a variable in `(eval exp env)`).
+- **The transcendental DIGITS are the backend's own** -- the interpreter and the JVM
+  `Math`, wasm a software core -- and differ in the last digits; the measurement and why
+  it is not unified here: `.kb/transcendentals.md`. `sqrt` of a float is `f64.sqrt` /
+  `Math.sqrt`, correctly rounded, so identical everywhere.
+- **`%scheme-print-flonum`** is the printer's float arm and `number->string`'s: the digits
+  are the Common Lisp printer's (shortest round-trip, Schubfach on wasm), re-laid out with
+  the ECMAScript thresholds -- positional while the point is at most 21 digits right of the
+  first digit or fewer than 6 zeros left of it (`123456789.123`,
+  `100000000000000000000.0`, `0.000001`), `<digits>e<exp>` otherwise (`1e21`, `1.5e-7`);
+  the Common Lisp printer answered `1.0e21` and `1.23456789123e8`. `+inf.0` `-inf.0`
+  `+nan.0` print; READING them is still refused.
+- `-0.0` is read with `Double.parseDouble` (`BigDecimal.doubleValue()` dropped the sign),
+  and `string->number` negates after converting.
+- Cost (2026-09-17): `(display (list 1 'a "s"))` went from 58,745 to 72,993 B of `.class`
+  (generic fixnum-fusion helpers for the digit arithmetic, `princ-to-string`); the `.wasm`
+  grew 14 B, because the type-test fold drops the float arm of a program that makes no
+  float. `(display 42)` is unchanged.
+- Corpus (2026-09-17, `.todo/artefacts/828-sicp-sample-corpus-harness/run.py`): file mode
+  1,307 -> 1,314 samples exiting 0, no regression; no sample still fails on an inexact
+  name.
 
 ## A session (`SchemeSession`, `SchemeLowering.interact`)
 
@@ -252,7 +285,7 @@ over-deep datum. `(* power 2)` in Brent's step cost 468 wasm bytes over `(+ powe
 `define-library`, `guard`/`raise` (onto `handler-case`), `parameterize` (the special-`let`
 restore), bytevectors (the `(unsigned-byte 8)` pack), ports beyond the current output port
 (`%STREAM` instances), `eval`, `(scheme char)` and the other libraries, `|...|`
-identifiers, `+inf.0`/`+nan.0`, internal `define-record-type`, re-entrant continuations,
+identifiers, reading `+inf.0`/`+nan.0`, internal `define-record-type`, re-entrant continuations,
 proper tail calls in general. Each is refused by name where it can be.
 
 ## Tests
@@ -264,7 +297,8 @@ when a buffer is complete), `SchemeReaderTest`, `SchemeNamesTest`,
 `SchemeBuiltinsTest` (every `:function` evaluates, every helper a template names exists),
 `RontoLispCliTest` (`aSchemeFileIsPickedByItsExtension`, `aCommonLispProgramLoadsASchemeFile`,
 `aSchemeSyntaxErrorNamesItsPositionOnEveryPath`, `aSchemeProgramIsRefusedByTheScalarBackend`,
-`anUncaughtSchemeErrorReportsItsMessageAndIrritants`, the `theSchemeRepl...` transcripts, the
+`anUncaughtSchemeErrorReportsItsMessageAndIrritants`,
+`aSchemeTranscendentalWithAComplexAnswerIsRefusedByName`, the `theSchemeRepl...` transcripts, the
 first of which replays its input as a FILE and compares, `aCyclicValueIsEchoedWithoutKillingTheSession`,
 `aPipedReplWritesNoPromptForEitherLanguage`, `aTerminalReplPromptsOncePerFreshForm`,
 `aPipedReplReportsFailuresOnStandardErrorAndEndsNonZero`, `exitEndsTheSessionWithItsStatusInEitherLanguage`),

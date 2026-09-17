@@ -455,6 +455,10 @@ final class SchemeLowering {
 
 	// ------------------------------------------------------------------ imports
 
+	/** The R7RS libraries {@code (import (scheme <name>))} accepts. */
+	private static final List<String> IMPORTABLE_LIBRARIES = List.of("base", "write", "inexact", "cxr",
+			"process-context");
+
 	// Leading (import ...) forms pick what the global scope holds; a program with none
 	// sees everything, like a REPL.
 	private int imports() {
@@ -468,16 +472,14 @@ final class SchemeLowering {
 			index++;
 		}
 		if (index == 0) {
-			imported.putAll(library("base"));
-			imported.putAll(library("write"));
+			for (String library : IMPORTABLE_LIBRARIES) {
+				imported.putAll(library(library));
+			}
 			// Not R7RS exports, so not reachable by name through (import ...): a REPL,
-			// and a
-			// file with no import at all, sees them anyway, the way an unqualified SICP
-			// sample -- written against an implementation that already had them --
+			// and a file with no import at all, sees them anyway, the way an unqualified
+			// SICP sample -- written against an implementation that already had them --
 			// expects.
 			imported.putAll(library("sicp"));
-			imported.putAll(library("cxr"));
-			imported.putAll(library("process-context"));
 		}
 		for (Map.Entry<String, Binding> entry : imported.entrySet()) {
 			this.global.bindings.put(SchemeNames.mangle(entry.getKey()), entry.getValue());
@@ -493,12 +495,11 @@ final class SchemeLowering {
 		boolean modifier = parts.size() >= 2 && parts.get(1) instanceof LispCons;
 		if (!modifier) {
 			if (parts.size() == 2 && head.name().equals("scheme") && parts.get(1) instanceof LispSymbol name
-					&& (name.name().equals("base") || name.name().equals("write")
-							|| name.name().equals("process-context"))) {
+					&& IMPORTABLE_LIBRARIES.contains(name.name())) {
 				return library(name.name());
 			}
 			throw error("library " + set.print() + " is not available: this experimental front end has (scheme base),"
-					+ " (scheme write) and (scheme process-context) only", form);
+					+ " (scheme write), (scheme inexact), (scheme cxr) and (scheme process-context) only", form);
 		}
 		Map<String, Binding> base = importSet(parts.get(1), form);
 		Map<String, Binding> result = new LinkedHashMap<>();

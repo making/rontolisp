@@ -1589,6 +1589,21 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void aSchemeTranscendentalWithAComplexAnswerIsRefusedByName() throws Exception {
+		// Common Lisp answers #C(0.0 2.0); this front end has no complex numbers.
+		for (String call : List.of("(sqrt -4)", "(log -1.5)", "(asin 2)", "(acos -1.5)", "(log 8 -2)")) {
+			Path program = this.tempDir.resolve("complex.scm");
+			Files.writeString(program, "(display " + call + ")\n");
+			String[] result = runReporting(program.toString());
+			assertThat(result[0]).as(call).isEqualTo("1");
+			assertThat(result[1]).as(call).isEmpty();
+			assertThat(result[2].trim()).as(call)
+				.startsWith("Unhandled condition: " + call.substring(1, call.indexOf(' ')) + ": ")
+				.contains("complex numbers are not supported: ");
+		}
+	}
+
+	@Test
 	void theHelpSaysSchemeIsExperimental() {
 		assertThat(runCli("", "-h")).contains("scheme (.scm) is EXPERIMENTAL");
 	}

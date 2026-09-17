@@ -84,8 +84,12 @@ one, so `(floor 1d300)` is the exact 301-digit value.
   interpreter-vs-WASM-GC differential sweep with 0 mismatches. Near ties stay
   out of ci-spec: `--no-gc` has no ratio representation, so no shared corpus
   case can spell one.
-- `isqrt` goes through f64 (`WasmIsqrtCompiler`), exact on the i31 range only, diverging from the
-  interpreter. `random`'s integer path draws at most 63 bits.
+- `isqrt` (`WasmIsqrtCompiler`) takes f64 for an i31 (or float) operand and an exact Newton
+  iteration over `_big_intlen`/`_big_ash`/`_big_divrem`/`_big_add`/`_big_cmp` for the two wide
+  tiers -- the f64 path trapped past 2^31 and rounded past 2^53 (2026-09-17). `numerator`/
+  `denominator` answer a wide integer / 1 at the call site (`WasmRatioAccessorCompiler`),
+  because `_rat_num`/`_rat_den` return i32 and wrapped it. `random`'s integer path draws at
+  most 63 bits.
 - A host **u64 at or above 2^63** keeps its float-approximation lift and exact-or-trap export
   treatment ([[wit]], "The integer boundary"). `json-parse` keeps json.lisp's 18-digit rule; the
   Preview 1 `wasm-import`/`wit-import` seam narrows to `:s32`; `integer-length`/`logbitp` clamp
@@ -108,4 +112,5 @@ limb promotion behind an operation that can overflow: `fib` keeps ~540 B of it, 
 
 ## Tests
 `Md5E2eTest` (all four), `WasmLispCompilerIntegrationTest.exactIntegersBeyondI31PromoteToBoxedI64`,
-`.exactIntegersBeyondI64PromoteToLimbBigints`, ci-spec `exact-integers-beyond-the-i64-range`.
+`.exactIntegersBeyondI64PromoteToLimbBigints`, `.isqrtIsExactBeyondTheI31Range`,
+`.aWideIntegerIsItsOwnNumeratorOverOne`, ci-spec `exact-integers-beyond-the-i64-range`.

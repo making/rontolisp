@@ -1,10 +1,11 @@
 # Scheme (experimental)
 
-**Experimental.** rontolisp reads a subset of R7RS-small -- `(scheme base)` and
-`(scheme write)` -- just large enough to run a Scheme program on every backend.
-Conformance is partial by design and nothing here is a compatibility promise. Use it to
-try a Scheme program on the JVM or WebAssembly; write Common Lisp for anything you need
-to keep working.
+**Experimental.** rontolisp reads a subset of R7RS-small -- `(scheme base)`,
+`(scheme write)`, `(scheme inexact)`, `(scheme cxr)` and `(scheme process-context)`'s `exit`
+-- just large enough to run a
+Scheme program on every backend. Conformance is partial by design and nothing here is a
+compatibility promise. Use it to try a Scheme program on the JVM or WebAssembly; write
+Common Lisp for anything you need to keep working.
 
 A `.scm` file is read as Scheme; `--source-language scheme` says so for any other file.
 The language is picked per file, so one program may mix the two.
@@ -66,8 +67,8 @@ done
 scheme> (exit)
 ```
 
-Everything `(scheme base)` and `(scheme write)` export -- plus the SICP-compatibility
-names below, which no `(import ...)` names -- is visible from the start, and an
+Everything those five libraries export -- plus the SICP-compatibility names below, which
+no `(import ...)` names -- is visible from the start, and an
 `(import ...)` typed at the prompt only adds names. Definitions typed at separate prompts
 see each other in either order, as they would in one file. Two things differ from a file,
 because a form is fixed when it is typed: redefining a built-in procedure (`square`) does
@@ -84,15 +85,17 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
   `lambda`, `if`, `cond` (`else`, `=>`), `case`, `and`, `or`, `when`, `unless`, `let`,
   `let*`, `letrec`, `letrec*`, named `let`, `do`, `begin`, `set!`, `quote`, `quasiquote`,
   `let-values`, `let*-values`, `define-record-type` (top level only), and
-  `(import (scheme base) (scheme write) (scheme process-context))` with `only` /
+  `(import (scheme base) (scheme write) (scheme inexact) (scheme cxr)
+  (scheme process-context))` with `only` /
   `except` / `prefix` / `rename`.
 - **Procedures**: `eq? eqv? equal?`; `+ - * / = < > <= >= quotient remainder modulo
   floor-quotient floor-remainder truncate-quotient truncate-remainder abs min max gcd lcm
   expt square floor ceiling round truncate zero? positive? negative? odd? even? number?
-  real? rational? integer? exact? inexact? exact-integer? exact inexact number->string
-  string->number`; `not boolean?`; `cons car cdr set-car! set-cdr! caar cadr cdar cddr list
-  length append reverse list-tail list-ref list-copy memq memv member assq assv assoc null?
-  pair? list?`; `symbol? symbol->string string->symbol`; `char? char->integer integer->char
+  real? rational? integer? exact? inexact? exact-integer? exact inexact exact-integer-sqrt
+  number->string string->number`; `(scheme inexact)`: `sqrt exp log sin cos tan asin acos
+  atan finite? infinite? nan?`; `not boolean?`; `cons car cdr set-car! set-cdr! caar cadr
+  cdar cddr list length append reverse list-tail list-ref list-copy memq memv member assq
+  assv assoc null? pair? list?`; `symbol? symbol->string string->symbol`; `char? char->integer integer->char
   char=? char<? char>? char<=? char>=?`; `string? make-string string string-length
   string-ref string-set! string=? string<? string>? string<=? string>=? substring
   string-append string-copy string->list list->string`; `vector? make-vector vector
@@ -104,10 +107,10 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
   vector with datum labels, `#0=(a b c . #0#)`; structure shared without a cycle is
   written out each time.
 - **SICP compatibility, not R7RS**: `true false nil` (ordinary variables, not literals);
-  the whole `(scheme cxr)` set, `caaar` through `cddddr`; `filter reduce fold-left
-  fold-right delete last-pair append! list-index 1+ -1+ random runtime`. These are
-  visible only when a program has no `(import ...)` at all -- exactly like `(scheme
-  base)`/`(scheme write)` -- so an explicit import list leaves them unreachable by name.
+  `filter reduce fold-left fold-right delete last-pair append! list-index 1+ -1+ random
+  runtime`. These are visible only when a program has no `(import ...)` at all -- like
+  the five libraries -- and no import names them, so an explicit import list leaves them
+  unreachable.
 
 ```scheme
 (display (list true false nil (cadddr '(1 2 3 4)))) (newline)
@@ -119,6 +122,19 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
 (#t #f () 4)
 (1 3 5)
 (((() . 1) . 2) . 3)
+```
+
+An exact argument with an exact answer stays exact, and a flonum prints positionally
+below `1e21` and with an exponent from there (and below `1e-6`):
+
+```scheme
+(write (list (sqrt 16) (sqrt 1/4) (sqrt 2) (exp 0) (atan 0 1))) (newline)
+(write (list 123456789.123 1e21 0.000001 1.5e-7 (/ 1.0 0.0))) (newline)
+```
+
+```
+(4 1/2 1.4142135623730951 1 0)
+(123456789.123 1e21 0.000001 1.5e-7 +inf.0)
 ```
 
 ```scheme
@@ -161,11 +177,16 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
   one object, true in a test.
 - `exit` ends the process where it stands, like `emergency-exit`: the `after` thunks of
   the `dynamic-wind`s it is inside do not run.
+- There are no complex numbers: `(sqrt -4)`, `(log -1)` and `(asin 2)` end the program
+  with an error naming the procedure.
+- `exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos` and `atan` of an inexact argument can
+  differ from the JVM's in the last digits on WebAssembly, and between x86-64 and AArch64
+  on the JVM. `sqrt` and the four arithmetic operations answer the same digits everywhere.
 - Error messages spell Common Lisp names (`CAR`).
 - **Not yet**: `define-syntax` / `syntax-rules`, `define-library`, `guard` / `raise`,
   `parameterize`, `case-lambda`, `delay`, bytevectors, ports other than the current
   output port, `eval`, `(scheme char)` and the other libraries, `|...|` identifiers,
-  `+inf.0` / `+nan.0`. The syntactic ones are refused by name when the file is read.
+  reading `+inf.0` / `+nan.0`. The syntactic ones are refused by name when the file is read.
 
 ## Mixing with Common Lisp
 
