@@ -37,11 +37,10 @@ import org.jspecify.annotations.Nullable;
  * {@code if} test and is converted to {@code #t}/{@code #f} anywhere else),
  * {@code or-false} (a value, or {@code NIL} meaning {@code #f}) or {@code effect} (the
  * template's value is discarded and the call answers the unspecified object, which a REPL
- * does not echo). One
- * {@code ((params) template)} pair per accepted argument count; {@code &rest r} params
- * splice as the template's dotted tail {@code (f a . r)}. {@code :function} is the
- * first-class value; it may be omitted only for a single fixed-arity alternative, where
- * it is derived as a {@code lambda} around the template.
+ * does not echo). One {@code ((params) template)} pair per accepted argument count;
+ * {@code &rest r} params splice as the template's dotted tail {@code (f a . r)}.
+ * {@code :function} is the first-class value; it may be omitted only for a single
+ * fixed-arity alternative, where it is derived as a {@code lambda} around the template.
  *
  * <p>
  * Parameter names are uppercase symbols (the reader upcases them), which no user variable
