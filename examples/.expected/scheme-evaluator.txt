@@ -1,0 +1,29 @@
+;; (define (factorial n) (if (= n 0) 1 (* n (factorial (- n 1)))))
+=> factorial
+;; (factorial 20)
+=> 2432902008176640000
+;; (define (map f items) (if (null? items) (quote ()) (cons (f (car items)) (map f (cdr items)))))
+=> map
+;; (map (lambda (x) (* x x)) (list 1 2 3 4 5))
+=> (1 4 9 16 25)
+;; (define (make-counter) (let ((count 0)) (lambda () (set! count (+ count 1)) count)))
+=> make-counter
+;; (define tick (make-counter))
+=> tick
+;; (tick)
+=> 1
+;; (tick)
+=> 2
+;; (tick)
+=> 3
+;; (define (fib n) (cond ((< n 2) n) (else (+ (fib (- n 1)) (fib (- n 2))))))
+=> fib
+;; (fib 15)
+=> 610
+;; ((lambda (x y) (list y x)) (quote first) (quote second))
+=> (second first)
+;; (begin (display "side effect inside the evaluated program") (newline) (quote done))
+side effect inside the evaluated program
+=> done
+;; car
+=> #<primitive car>

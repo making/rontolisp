@@ -227,14 +227,37 @@ final class SchemeLowering {
 
 		private final boolean parallel;
 
+		private final Scope home;
+
+		private final List<String> names;
+
 		private boolean used;
 
-		Target(Binding binding, LoopShape shape) {
+		private boolean shadowed;
+
+		Target(Binding binding, LoopShape shape, Scope home, List<String> names) {
 			this.binding = binding;
 			this.label = shape.label();
 			this.assigned = shape.assigned();
 			this.rest = shape.rest();
 			this.parallel = shape.parallel();
+			this.home = home;
+			this.names = names;
+		}
+
+		// Whether a jump from this scope would assign an inner variable of the same name
+		// instead of the loop variable: only the in-place shape assigns the variables
+		// themselves, and a carrier is a fresh name no binding can spell.
+		boolean shadowedFrom(Scope scope) {
+			if (!this.parallel) {
+				return false;
+			}
+			for (String name : this.names) {
+				if (scope.find(name) != this.home.bindings.get(name)) {
+					return true;
+				}
+			}
+			return false;
 		}
 
 		boolean accepts(int argumentCount) {
@@ -1137,6 +1160,9 @@ final class SchemeLowering {
 		if (destination != null && binding != null) {
 			for (Target target : destination.targets()) {
 				if (target.binding == binding && target.accepts(operands.size())) {
+					if (target.shadowedFrom(scope)) {
+						target.shadowed = true;
+					}
 					return jump(target, values(operands, scope));
 				}
 			}
@@ -1620,7 +1646,8 @@ final class SchemeLowering {
 			variables.add(bind(variable, bodyScope));
 			carriers.add(fresh("C"));
 		}
-		Target target = new Target(binding, new LoopShape(fresh("L"), fresh ? carriers : variables, false, !fresh));
+		Target target = new Target(binding, new LoopShape(fresh("L"), fresh ? carriers : variables, false, !fresh),
+				bodyScope, loop.variables().stream().map(this::name).toList());
 		Destination outer = context.destination();
 		LispSymbol result = outer != null ? outer.result() : fresh("R");
 		List<Target> targets = new ArrayList<>(outer != null ? outer.targets() : List.of());
@@ -1630,7 +1657,7 @@ final class SchemeLowering {
 		if (binding.escaped) {
 			return null;
 		}
-		if (!fresh && target.used && this.closures != closuresBefore) {
+		if (!fresh && target.used && (this.closures != closuresBefore || target.shadowed)) {
 			return pureLoop(loop, context, true);
 		}
 		List<LispVal> pairs = new ArrayList<>();
@@ -1778,7 +1805,8 @@ final class SchemeLowering {
 		}
 		boolean rest = spec.formals().rest() != null;
 		Target target = new Target(java.util.Objects.requireNonNull(spec.self()),
-				new LoopShape(fresh("L"), fresh ? carriers : variables, rest, !fresh));
+				new LoopShape(fresh("L"), fresh ? carriers : variables, rest, !fresh), inner,
+				spec.formals().all().stream().map(this::name).toList());
 		LispSymbol result = fresh("R");
 		int closuresBefore = this.closures;
 		List<LispVal> statements = body(spec.body(),
@@ -1786,7 +1814,7 @@ final class SchemeLowering {
 		if (!target.used) {
 			return null;
 		}
-		if (!fresh && this.closures != closuresBefore) {
+		if (!fresh && (this.closures != closuresBefore || target.shadowed)) {
 			return selfLoop(spec, scope, true);
 		}
 		List<LispVal> pairs = new ArrayList<>();
