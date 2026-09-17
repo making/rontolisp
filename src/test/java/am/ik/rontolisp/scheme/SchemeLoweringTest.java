@@ -170,10 +170,19 @@ class SchemeLoweringTest {
 	}
 
 	@Test
+	void displayOfALiteralNeedsNoPrinter() {
+		assertThat(lowered("(display \"text\") (display #\\a) (display 42) (display 1.5)")).isEqualTo("""
+				(WRITE-STRING "text")
+				(WRITE-CHAR #\\a)
+				(PRINC 42)
+				(RONTOLISP::%SCHEME-DISPLAY 1.5)""");
+	}
+
+	@Test
 	void importsSelectWhatIsVisible() {
-		assertThat(lowered("(import (scheme base)) (display 1)")).isEqualTo("(|display| 1)");
-		assertThat(lowered("(import (scheme base) (scheme write)) (display 1)"))
-			.isEqualTo("(RONTOLISP::%SCHEME-DISPLAY 1)");
+		assertThat(lowered("(import (scheme base)) (display x)")).isEqualTo("(|display| |x|)");
+		assertThat(lowered("(import (scheme base) (scheme write)) (display x)"))
+			.isEqualTo("(RONTOLISP::%SCHEME-DISPLAY |x|)");
 		assertThat(lowered("(import (prefix (only (scheme base) car) s:)) (s:car x)")).isEqualTo("(CAR |x|)");
 		assertThatThrownBy(() -> lowered("(import (scheme char))")).isInstanceOf(LispReadException.class)
 			.hasMessage("test.scm:1:1: library (|scheme| |char|) is not available: this experimental front end has"

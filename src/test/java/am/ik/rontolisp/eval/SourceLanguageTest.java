@@ -40,8 +40,21 @@ class SourceLanguageTest {
 	@Test
 	void everyExtensionReadsCommonLispUntilALanguageClaimsIt() {
 		assertThat(SourceLanguage.forFile("hello.lisp", null)).isEqualTo(SourceLanguage.COMMON_LISP);
-		assertThat(SourceLanguage.forFile("hello.scm", null)).isEqualTo(SourceLanguage.COMMON_LISP);
+		assertThat(SourceLanguage.forFile("hello.txt", null)).isEqualTo(SourceLanguage.COMMON_LISP);
 		assertThat(SourceLanguage.forFile(null, null)).isEqualTo(SourceLanguage.COMMON_LISP);
+	}
+
+	@Test
+	void schemeClaimsItsExtension() {
+		assertThat(SourceLanguage.forFile("hello.scm", null)).isEqualTo(SourceLanguage.SCHEME);
+		assertThat(SourceLanguage.forFile("hello.lisp", "scheme")).isEqualTo(SourceLanguage.SCHEME);
+		assertThat(SourceLanguage.forFile("hello.scm", "common-lisp")).isEqualTo(SourceLanguage.COMMON_LISP);
+		assertThat(SourceLanguage.isSourceFile("foo.scm")).isTrue();
+		assertThat(SourceLanguage.SCHEME.defaultExtension()).isEqualTo(".scm");
+		// The seam's read is the whole front end: read, desugar, lower to core forms.
+		assertThat(
+				SourceLanguage.SCHEME.read("(car x)", Features.INTERPRETER, null).stream().map(LispVal::print).toList())
+			.containsExactly("(SETQ RONTOLISP::%SCHEME-FALSE '|#f|)", "(CAR |x|)");
 	}
 
 	@Test
