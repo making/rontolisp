@@ -2,13 +2,13 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**14,486 / 19,485 tests pass (74.3%)** -- 2,078 fail, 2,921 signal an error.
+**14,637 / 19,485 tests pass (75.1%)** -- 2,048 fail, 2,800 signal an error.
 
 7 top-level forms could not be read, 439 could not be evaluated, 4 did not terminate; every test those forms would have defined is missing from the counts above.
 
 | chapter | tests | pass | fail | error | pass rate | top-level forms lost |
 |---|---:|---:|---:|---:|---:|---:|
-| arrays | 1,356 | 1,071 | 102 | 183 | 79.0% | 11 |
+| arrays | 1,356 | 1,125 | 102 | 129 | 83.0% | 11 |
 | characters | 259 | 209 | 10 | 40 | 80.7% | 11 |
 | conditions | 673 | 543 | 68 | 62 | 80.7% | 11 |
 | cons | 1,879 | 1,630 | 172 | 77 | 86.7% | 11 |
@@ -23,17 +23,17 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | objects | 846 | 340 | 203 | 303 | 40.2% | 37 |
 | packages | 492 | 168 | 120 | 204 | 34.1% | 29 |
 | pathnames | 214 | 120 | 26 | 68 | 56.1% | 12 |
-| printer | 544 | 235 | 128 | 181 | 43.2% | 48 |
+| printer | 544 | 240 | 123 | 181 | 44.1% | 48 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 13 |
-| reader | 575 | 312 | 88 | 175 | 54.3% | 19 |
-| sequences | 3,287 | 2,972 | 129 | 186 | 90.4% | 11 |
-| streams | 759 | 225 | 82 | 452 | 29.6% | 56 |
-| strings | 509 | 396 | 64 | 49 | 77.8% | 12 |
+| reader | 575 | 364 | 71 | 140 | 63.3% | 19 |
+| sequences | 3,287 | 2,997 | 120 | 170 | 91.2% | 11 |
+| streams | 759 | 241 | 82 | 436 | 31.8% | 56 |
+| strings | 509 | 395 | 65 | 49 | 77.6% | 12 |
 | structures | 1,030 | 712 | 59 | 259 | 69.1% | 36 |
 | symbols | 1,144 | 1,070 | 27 | 47 | 93.5% | 12 |
 | system-construction | 77 | 23 | 4 | 50 | 29.9% | 11 |
 | types-and-classes | 626 | 313 | 213 | 100 | 50.0% | 13 |
-| **total** | **19,485** | **14,486** | **2,078** | **2,921** | **74.3%** | **450** |
+| **total** | **19,485** | **14,637** | **2,048** | **2,800** | **75.1%** | **450** |
 
 ## Most frequent failure reasons
 
@@ -54,7 +54,6 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | 46 | `The function FIND-METHOD is undefined` |
 | 40 | `The function MAKE-CONCATENATED-STREAM is undefined` |
 | 40 | `X: :displaced-to is not supported` |
-| 40 | `X: first argument is not a bit array: #(0 0 1 1)` |
 | 33 | `The function MAKE-ECHO-STREAM is undefined` |
 | 31 | `The function COPY-STRUCTURE is undefined` |
 | 31 | `UnsupportedOperationException: X :element-type must be the literal 'character or '(unsigned-byte 8)` |
@@ -76,7 +75,8 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | 18 | `Function expects 1 argument, got 5` |
 | 18 | `The assertion (X (X X) (X (X X) '(5))) failed.` |
 | 18 | `The function PPRINT-FILL is undefined` |
-| 18 | `UnsupportedOperationException: map supports only the 'list, 'string, 'vector, or nil result types, got: 'X` |
 | 18 | `UnsupportedOperationException: setf X only supports aliasing an existing class X (setf (find-class 'alias) (fi` |
 | 17 | `Function expects 1 argument, got 3` |
+| 17 | `The function UPGRADED-ARRAY-ELEMENT-TYPE is undefined` |
+| 16 | `The function BOOLE is undefined` |
 
