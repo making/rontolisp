@@ -52,8 +52,9 @@ class SchemeBuiltinsTest {
 			LispVal value = lookup(evaluator, entry.name());
 			assertThat(value instanceof LispFunction || value instanceof LispLambda).as(entry.name()).isTrue();
 		}
-		SchemeBuiltins.constants().forEach((name, form) -> assertThat(lookup(evaluator, name).print()).as(name)
-			.isEqualTo(evaluator.eval(form).print()));
+		SchemeBuiltins.constants()
+			.forEach((name, form) -> assertThat(lookup(evaluator, name).print()).as(name)
+				.isEqualTo(evaluator.eval(form).print()));
 		assertThat(lookup(evaluator, "no-such-procedure").print()).isEqualTo("RONTOLISP::%SCHEME-UNBOUND");
 	}
 

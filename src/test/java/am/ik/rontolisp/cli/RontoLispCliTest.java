@@ -1624,8 +1624,7 @@ class RontoLispCliTest {
 				new String[] { "(eval '((lambda (a b) a) 1) (interaction-environment))",
 						"Wrong number of arguments: (a b) given (1)" },
 				new String[] { "(eval '(3 4) (interaction-environment))", "The object is not applicable: 3" },
-				new String[] { "(environment '(scheme char))",
-						"environment: library is not available: (scheme char)" },
+				new String[] { "(environment '(scheme char))", "environment: library is not available: (scheme char)" },
 				new String[] { "(eval 'if (interaction-environment))",
 						"Syntactic keyword may not be used as an expression: if" })) {
 			Path file = this.tempDir.resolve("eval-error.scm");

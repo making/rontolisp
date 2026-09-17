@@ -282,7 +282,8 @@ class SchemeLoweringTest {
 		// procedure and constant by its mangled name, cut to the names a program spells.
 		assertThat(Scheme.runtimeForms(name -> name.equals("s%+") || name.equals("car") || name.equals("false"))
 			.get(0)
-			.print()).isEqualTo("(DEFUN RONTOLISP::%SCHEME-BUILTIN (NAME) (CASE NAME ((|s%+|) #'+) ((|car|) #'CAR)"
+			.print())
+			.isEqualTo("(DEFUN RONTOLISP::%SCHEME-BUILTIN (NAME) (CASE NAME ((|s%+|) #'+) ((|car|) #'CAR)"
 					+ " ((|false|) RONTOLISP::%SCHEME-FALSE) (T 'RONTOLISP::%SCHEME-UNBOUND)))");
 		assertThat(Scheme.runtimeForms(name -> false).get(1).print()).isEqualTo(
 				"(DEFUN RONTOLISP::%SCHEME-LIBRARY-P (NAME) (IF (MEMBER NAME '(|base| |write| |inexact| |cxr| |lazy|"
