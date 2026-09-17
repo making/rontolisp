@@ -13810,10 +13810,15 @@ class WasmLispCompilerIntegrationTest {
 	// arm of read-sequence used to read 1 to 4 bytes per code point through the WASI
 	// import, which made uiop:read-file-string 23x the cost of reading the same file as
 	// bytes (.kb/character-sequence-io.md). Both halves move the same 1,048,576
-	// characters off the same file; only the element type differs.
+	// characters off the same file; only the element type differs. The string leg's
+	// loaded-machine spread crosses the bound intermittently on CI (parallel JUnit on
+	// 4 CPUs with a cold wasmtime), while a per-character fd_read regression misses
+	// the bound on EVERY attempt -- so the timed pair is retried with the bound
+	// unchanged rather than loosened, the way overAReservedPort retries what the
+	// reservation cannot close.
 	@Test
 	void readSequenceIntoAStringCostsAboutWhatTheSameFileCostsAsBytes() throws Exception {
-		String[] lines = compileAndRunWithDir("""
+		String code = """
 				(with-open-file (out "cost.txt" :direction :output :if-exists :supersede)
 				  (write-string (make-string 1048576 :initial-element #\\y) out))
 				(defvar *t0* (get-internal-real-time))
@@ -13824,12 +13829,20 @@ class WasmLispCompilerIntegrationTest {
 				  (read-sequence (make-string 1048576) in))
 				(print (- *t1* *t0*))
 				(print (- (get-internal-real-time) *t1*))
-				""").split("\n");
-		long bytes = Long.parseLong(lines[0].trim());
-		long chars = Long.parseLong(lines[1].trim());
+				""";
+		long bytes = 0;
+		long chars = 0;
+		for (int attempt = 0; attempt < 3; attempt++) {
+			String[] lines = compileAndRunWithDir(code).split("\n");
+			bytes = Long.parseLong(lines[0].trim());
+			chars = Long.parseLong(lines[1].trim());
+			if (chars <= 500 + 6 * bytes) {
+				return;
+			}
+		}
 		assertThat(chars)
 			.as("1,048,576 characters read into a string (%d ms) against the same file read "
-					+ "into a byte vector (%d ms)", chars, bytes)
+					+ "into a byte vector (%d ms), after 3 attempts", chars, bytes)
 			.isLessThanOrEqualTo(500 + 6 * bytes);
 	}
 
