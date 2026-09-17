@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.LetBoundDesignators;
+import am.ik.rontolisp.compiler.ParallelLetStaging;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.Opcode;
 import org.jspecify.annotations.Nullable;
@@ -75,6 +76,11 @@ final class JvmLetCompiler {
 		// propagated into them and dropped, so the designator never becomes a VALUE here
 		// (LetBoundDesignators; the WASM twin does the same).
 		LispCons letForm = LetBoundDesignators.propagate(cons, ctx.specialVars, ctx.functions.keySet());
+		// A let is PARALLEL, and the loop below binds one variable at a time: a let in
+		// which a later init reads an earlier variable's name is staged through
+		// temporaries first (ParallelLetStaging; the WASM twin does the same). Any other
+		// let comes back as the same object.
+		letForm = ParallelLetStaging.stage(letForm);
 		List<LispVal> parts = letForm.toList();
 		// A bare symbol entry is an init-less binding to nil.
 		LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));

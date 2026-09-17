@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.compiler.ArithmeticIdentities;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispSymbol;
@@ -22,6 +23,12 @@ final class JvmArithCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String opKey, int doubleOpcode, String className) {
 		List<LispVal> args = cons.toList();
+		if (args.size() == 1) {
+			// (+) is 0 and (*) is 1, the identities (CLHS 12.2); nothing else takes no
+			// argument.
+			JvmExprCompiler.compileExpr(ArithmeticIdentities.of(cons), ctx, className);
+			return;
+		}
 		if (isComplexCapable(opKey) && JvmLispCompiler.hasComplexOperand(args)) {
 			compileComplex(args, ctx, opKey, className);
 			return;

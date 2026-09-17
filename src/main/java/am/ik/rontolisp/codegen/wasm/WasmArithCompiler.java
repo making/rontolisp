@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.compiler.ArithmeticIdentities;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
@@ -37,6 +38,12 @@ final class WasmArithCompiler {
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, int f64Opcode, int ratioFunc) {
 		List<LispVal> args = cons.toList();
+		if (args.size() == 1) {
+			// (+) is 0 and (*) is 1, the identities (CLHS 12.2); nothing else takes no
+			// argument.
+			WasmExprCompiler.compileExpr(ArithmeticIdentities.of(cons), ctx);
+			return;
+		}
 		if (WasmLispCompiler.hasDoubleLiteral(args)) {
 			// Unary (/ x) is the reciprocal: 1.0 / x.
 			if (args.size() == 2 && ratioFunc == WasmLispCompiler.FUNC_RAT_DIV) {

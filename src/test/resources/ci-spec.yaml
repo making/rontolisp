@@ -16955,6 +16955,33 @@ cases:
       "Expected integer, got: #C(1 2)"
       "Expected real number, got: #C(1 2)"
       #C(5.0 0.0)
+  - name: arithmetic-identities-with-no-arguments
+    source: |
+      ;; CLHS 12.2: (+) is 0 and (*) is 1. The compile path used to die on both with an
+      ;; IndexOutOfBoundsException.
+      (print (list (+) (*)))
+      (defun ainl-nothing () (+))
+      (print (+ (ainl-nothing) (*) 5))
+    expected: |
+      (0 1)
+      6
+  - name: let-binds-in-parallel
+    source: |
+      ;; Every init form of a let is evaluated before any variable is bound: a later
+      ;; init reads the OUTER binding of an earlier variable's name. The JVM backend
+      ;; bound them one by one, so the swap answered (2 2).
+      (print (let ((lbp-a 1) (lbp-b 2)) (let ((lbp-a lbp-b) (lbp-b lbp-a)) (list lbp-a lbp-b))))
+      (defun lbp-swap (a b) (let ((a b) (b a)) (list a b)))
+      (print (lbp-swap 1 2))
+      (defun lbp-shadow (x) (let ((x (+ x 1)) (y x)) (list x y)))
+      (print (lbp-shadow 1))
+      (defun lbp-captured (x) (let ((x (* x 10)) (f (lambda () x))) (list x (funcall f))))
+      (print (lbp-captured 1))
+    expected: |
+      (2 1)
+      (2 1)
+      (2 1)
+      (10 1)
 
 # Cases that cannot join the corpus above: one that ENDS the program, one whose
 # subject a backend does not have at all. Each is compiled and run on its own.

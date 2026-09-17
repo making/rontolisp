@@ -19363,4 +19363,32 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (write-to-string (list 'a 'b) :length 1))")).isEqualTo("\"(A ...)\"");
 	}
 
+	@Test
+	void compileAndRunArithmeticWithNoArguments() throws Exception {
+		// CLHS 12.2: (+) is 0 and (*) is 1, the identities. (Was an
+		// IndexOutOfBoundsException out of the arithmetic compiler.)
+		assertThat(compileAndRun("""
+				(print (list (+) (*)))
+				(defun sum-nothing () (+))
+				(print (+ (sum-nothing) (*) 5))
+				""")).isEqualTo("(0 1)\n6");
+	}
+
+	@Test
+	void compileAndRunLetBindsInParallel() throws Exception {
+		// CLHS 3.1.2.1.2.1 / let: every init form is evaluated BEFORE any variable is
+		// bound, so a later init reads the OUTER binding of an earlier variable's name.
+		assertThat(compileAndRun("""
+				(print (let ((a 1) (b 2)) (let ((a b) (b a)) (list a b))))
+				(defun swap (a b) (let ((a b) (b a)) (list a b)))
+				(print (swap 1 2))
+				(defun shadow (x) (let ((x (+ x 1)) (y x)) (list x y)))
+				(print (shadow 1))
+				(defun captured (x) (let ((x (* x 10)) (f (lambda () x))) (list x (funcall f))))
+				(print (captured 1))
+				(defun typed (n) (let ((n (+ n 1)) (m (* n 2))) (+ n m)))
+				(print (typed 5))
+				""")).isEqualTo("(2 1)\n(2 1)\n(2 1)\n(10 1)\n16");
+	}
+
 }
