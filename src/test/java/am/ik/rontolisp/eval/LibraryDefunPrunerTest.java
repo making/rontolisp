@@ -1115,6 +1115,20 @@ class LibraryDefunPrunerTest {
 	}
 
 	@Test
+	void theSchemePromiseRecordPrunesByNameThoughItLivesInRontolisp() {
+		// scheme.lisp's promise record is recognized by its NAME, not its package: a
+		// lowered Scheme program that never delays keeps only the predicate its printer
+		// tests, and one that delays keeps the constructor too.
+		List<String> printing = definedNames(LibraryDefunPruner
+			.prune(SchemeLibrary.process(LispReader.readAllFromString("(rontolisp::%scheme-display (car (list 1)))"))));
+		assertThat(printing).contains("RONTOLISP::%SCHEME-PROMISE-P")
+			.doesNotContain("RONTOLISP::%SCHEME-NEW-PROMISE", "RONTOLISP::%SCHEME-PROMISE-BOX");
+		List<String> delaying = definedNames(LibraryDefunPruner.prune(SchemeLibrary.process(LispReader
+			.readAllFromString("(rontolisp::%scheme-force (rontolisp::%scheme-delay 0 (lambda () 1)))"))));
+		assertThat(delaying).contains("RONTOLISP::%SCHEME-NEW-PROMISE", "RONTOLISP::%SCHEME-PROMISE-BOX");
+	}
+
+	@Test
 	void aUserDefstructIsNeverExpandedOrPruned() {
 		// A user (or third-party) defstruct stays on the compilers' expansion path,
 		// which alone has the program's export oracle at the right time; here it rides

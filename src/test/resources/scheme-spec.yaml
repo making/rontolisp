@@ -625,3 +625,69 @@ cases:
       ((((() . 1) . 2) . 3) (1 2 3))
       ((1 3 4) (4) (1 2 3 4))
       (6 4 0 #t)
+  - name: a-promise-is-forced-once-and-memoized
+    source: |
+      (define forced 0)
+      (define p (delay (begin (set! forced (+ forced 1)) (* 6 7))))
+      (write (list (promise? p) (promise? 5) (procedure? p) forced)) (newline)
+      (write (list (force p) (force p) forced (force 9))) (newline)
+      (write (list (force (make-promise 3)) (let ((q (delay 1))) (eq? q (make-promise q))))) (newline)
+      (define reentered 0)
+      (define r (delay (begin (set! reentered (+ reentered 1))
+                              (if (> reentered 5) reentered (force r)))))
+      (write (list (force r) (force r))) (newline)
+      (define (countdown n) (delay-force (if (= n 0) (delay 'done) (countdown (- n 1)))))
+      (write (force (countdown 100000))) (newline)
+      (define thunks
+        (let loop ((i 0) (acc '()))
+          (if (= i 3) acc (loop (+ i 1) (cons (delay i) acc)))))
+      (write (map force thunks)) (newline)
+      (display (list (delay 1) (cons-stream 1 2))) (newline)
+    expected: |
+      (#t #f #f 0)
+      (42 42 1 9)
+      (3 #t)
+      (6 6)
+      done
+      (2 1 0)
+      (#<promise> (1 . #<promise>))
+  - name: delay-and-cons-stream-are-shadowable
+    source: |
+      (define (after-delay delay action) (list delay action))
+      (write (after-delay 3 'go)) (newline)
+      (write (let ((delay (lambda (x) (* x 2)))) (delay 21))) (newline)
+    expected: |
+      (3 go)
+      42
+  - name: infinite-streams-and-the-stream-procedures
+    source: |
+      (define (integers-from n) (cons-stream n (integers-from (+ n 1))))
+      (define (sieve s)
+        (cons-stream (stream-car s)
+                     (sieve (stream-filter
+                             (lambda (x) (not (= 0 (remainder x (stream-car s)))))
+                             (stream-cdr s)))))
+      (write (stream-ref (sieve (integers-from 2)) 50)) (newline)
+      (define evaluated 0)
+      (define squares
+        (stream-map (lambda (x) (set! evaluated (+ evaluated 1)) (* x x)) (integers-from 0)))
+      (write (list (stream-ref squares 10) (stream-ref squares 10) evaluated)) (newline)
+      (write (stream-head (stream-map + (integers-from 0) (integers-from 10)) 4)) (newline)
+      (write (stream->list (stream-append (stream 1 2) the-empty-stream (list->stream '(3 4))))) (newline)
+      (write (stream->list (stream-tail (integers-from 0) 5) 3)) (newline)
+      (stream-for-each display (stream-first (cons-stream (stream 1 2 3) '()))) (newline)
+      (write (list (stream-pair? (integers-from 0)) (stream-pair? '(1 2)) (stream-null? the-empty-stream)
+                   (empty-stream? (stream-rest (stream 1))) (stream-car (stream-cdr (integers-from 7)))))
+      (newline)
+      (write (stream-ref (integers-from 0) 200000)) (newline)
+      (write (stream-head (stream-map * (stream 1 2 3) (stream 4 5 6)) 3)) (newline)
+    expected: |
+      233
+      (100 100 11)
+      (10 12 14 16)
+      (1 2 3 4)
+      (5 6 7)
+      123
+      (#t #f #t #t 8)
+      200000
+      (4 10 18)

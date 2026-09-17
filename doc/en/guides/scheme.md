@@ -1,7 +1,7 @@
 # Scheme (experimental)
 
 **Experimental.** rontolisp reads a subset of R7RS-small -- `(scheme base)`,
-`(scheme write)`, `(scheme inexact)` and `(scheme cxr)` -- just large enough to run a
+`(scheme write)`, `(scheme inexact)`, `(scheme cxr)` and `(scheme lazy)` -- just large enough to run a
 Scheme program on every backend. Conformance is partial by design and nothing here is a
 compatibility promise. Use it to try a Scheme program on the JVM or WebAssembly; write
 Common Lisp for anything you need to keep working.
@@ -59,7 +59,7 @@ scheme> (list #t #f '() 'Sym)
 scheme> (quit)
 ```
 
-Everything those four libraries export -- plus the SICP-compatibility names below, which
+Everything those five libraries export -- plus the SICP-compatibility names below, which
 no `(import ...)` names -- is visible from the start, and an
 `(import ...)` typed at the prompt only adds names. Definitions typed at separate prompts
 see each other in either order, as they would in one file. Two things differ from a file,
@@ -76,15 +76,16 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
 - **Syntax**: `define` (both forms, internal definitions as `letrec*`), `define-values`,
   `lambda`, `if`, `cond` (`else`, `=>`), `case`, `and`, `or`, `when`, `unless`, `let`,
   `let*`, `letrec`, `letrec*`, named `let`, `do`, `begin`, `set!`, `quote`, `quasiquote`,
-  `let-values`, `let*-values`, `define-record-type` (top level only), and
-  `(import (scheme base) (scheme write) (scheme inexact) (scheme cxr))` with `only` /
-  `except` / `prefix` / `rename`.
+  `let-values`, `let*-values`, `define-record-type` (top level only), `delay`,
+  `delay-force`, and
+  `(import (scheme base) (scheme write) (scheme inexact) (scheme cxr) (scheme lazy))` with
+  `only` / `except` / `prefix` / `rename`.
 - **Procedures**: `eq? eqv? equal?`; `+ - * / = < > <= >= quotient remainder modulo
   floor-quotient floor-remainder truncate-quotient truncate-remainder abs min max gcd lcm
   expt square floor ceiling round truncate zero? positive? negative? odd? even? number?
   real? rational? integer? exact? inexact? exact-integer? exact inexact exact-integer-sqrt
   number->string string->number`; `(scheme inexact)`: `sqrt exp log sin cos tan asin acos
-  atan finite? infinite? nan?`; `not boolean?`; `cons car cdr set-car! set-cdr! caar cadr
+  atan finite? infinite? nan?`; `(scheme lazy)`: `force make-promise promise?`; `not boolean?`; `cons car cdr set-car! set-cdr! caar cadr
   cdar cddr list length append reverse list-tail list-ref list-copy memq memv member assq
   assv assoc null? pair? list?`; `symbol? symbol->string string->symbol`; `char? char->integer integer->char
   char=? char<? char>? char<=? char>=?`; `string? make-string string string-length
@@ -98,9 +99,13 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
   time.
 - **SICP compatibility, not R7RS**: `true false nil` (ordinary variables, not literals);
   `filter reduce fold-left fold-right delete last-pair append! list-index 1+ -1+ random
-  runtime`. These are visible only when a program has no `(import ...)` at all -- like
-  the four libraries -- and no import names them, so an explicit import list leaves them
-  unreachable.
+  runtime`; streams: `cons-stream` (syntax), `the-empty-stream stream-car stream-cdr
+  stream-first stream-rest stream-pair? stream-null? empty-stream? stream list->stream
+  stream->list stream-head stream-tail stream-ref stream-map stream-for-each stream-filter
+  stream-append`. A stream is `'()` or a pair whose cdr is a promise, so
+  `the-empty-stream` is `'()` and `stream-null?` is `null?`. These are visible only when
+  a program has no `(import ...)` at all -- like the five libraries -- and no import names
+  them, so an explicit import list leaves them unreachable.
 
 ```scheme
 (display (list true false nil (cadddr '(1 2 3 4)))) (newline)
@@ -112,6 +117,24 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
 (#t #f () 4)
 (1 3 5)
 (((() . 1) . 2) . 3)
+```
+
+A promise is forced once and remembers its value; walking a stream forces each cell once.
+
+```scheme
+(define (integers-from n) (cons-stream n (integers-from (+ n 1))))
+(define (sieve s)
+  (cons-stream (stream-car s)
+               (sieve (stream-filter (lambda (x) (not (= 0 (remainder x (stream-car s)))))
+                                     (stream-cdr s)))))
+(display (stream-head (sieve (integers-from 2)) 10)) (newline)
+(define p (delay (begin (display "once ") 42)))
+(display (list (force p) (force p))) (newline)
+```
+
+```
+(2 3 5 7 11 13 17 19 23 29)
+once (42 42)
 ```
 
 An exact argument with an exact answer stays exact, and a flonum prints positionally
@@ -171,7 +194,7 @@ below `1e21` and with an exponent from there (and below `1e-6`):
   on the JVM. `sqrt` and the four arithmetic operations answer the same digits everywhere.
 - Error messages spell Common Lisp names (`CAR`).
 - **Not yet**: `define-syntax` / `syntax-rules`, `define-library`, `guard` / `raise`,
-  `parameterize`, `case-lambda`, `delay`, bytevectors, ports other than the current
+  `parameterize`, `case-lambda`, bytevectors, ports other than the current
   output port, `eval`, `(scheme char)` and the other libraries, `|...|` identifiers,
   reading `+inf.0` / `+nan.0`. The syntactic ones are refused by name when the file is read.
 

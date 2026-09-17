@@ -59,7 +59,7 @@ final class SchemeLowering {
 
 		QUOTE, QUASIQUOTE, UNQUOTE, UNQUOTE_SPLICING, LAMBDA, IF, SET, BEGIN, LET, LET_STAR, LETREC, LETREC_STAR, DO,
 		COND, CASE, AND, OR, WHEN, UNLESS, DEFINE, DEFINE_VALUES, DEFINE_RECORD_TYPE, LET_VALUES, LET_STAR_VALUES,
-		IMPORT, ELSE, ARROW, RAW, RAW_PREDICATE, UNSUPPORTED
+		IMPORT, ELSE, ARROW, DELAY, DELAY_FORCE, CONS_STREAM, RAW, RAW_PREDICATE, UNSUPPORTED
 
 	}
 
@@ -95,11 +95,26 @@ final class SchemeLowering {
 		table.put("else", Core.ELSE);
 		table.put("=>", Core.ARROW);
 		for (String unsupported : List.of("define-syntax", "let-syntax", "letrec-syntax", "syntax-rules",
-				"syntax-error", "define-library", "guard", "parameterize", "case-lambda", "delay", "delay-force",
-				"make-promise", "include", "include-ci", "cond-expand")) {
+				"syntax-error", "define-library", "guard", "parameterize", "case-lambda", "include", "include-ci",
+				"cond-expand")) {
 			table.put(unsupported, Core.UNSUPPORTED);
 		}
 		return table;
+	}
+
+	/** The keywords of {@code (scheme lazy)}. */
+	private static final SequencedMap<String, Core> LAZY_SYNTAX = orderedMap("delay", Core.DELAY, "delay-force",
+			Core.DELAY_FORCE);
+
+	/** The SICP keyword no R7RS library exports: {@code (cons-stream a b)}. */
+	private static final SequencedMap<String, Core> SICP_SYNTAX = orderedMap("cons-stream", Core.CONS_STREAM);
+
+	private static SequencedMap<String, Core> orderedMap(Object... namesAndCores) {
+		SequencedMap<String, Core> map = new LinkedHashMap<>();
+		for (int i = 0; i < namesAndCores.length; i += 2) {
+			map.put((String) namesAndCores[i], (Core) namesAndCores[i + 1]);
+		}
+		return map;
 	}
 
 	// The keywords a desugaring spells. Compared by IDENTITY before any scope lookup, so
@@ -121,6 +136,8 @@ final class SchemeLowering {
 	private static final LispSymbol CORE_LAMBDA = core("lambda", Core.LAMBDA);
 
 	private static final LispSymbol CORE_RAW_PREDICATE = core("raw-predicate", Core.RAW_PREDICATE);
+
+	private static final LispSymbol CORE_DELAY = core("delay", Core.DELAY);
 
 	private static LispSymbol core(String name, Core core) {
 		LispSymbol symbol = new LispSymbol(name);
@@ -431,7 +448,7 @@ final class SchemeLowering {
 	// ------------------------------------------------------------------ imports
 
 	/** The R7RS libraries {@code (import (scheme <name>))} accepts. */
-	private static final List<String> IMPORTABLE_LIBRARIES = List.of("base", "write", "inexact", "cxr");
+	private static final List<String> IMPORTABLE_LIBRARIES = List.of("base", "write", "inexact", "cxr", "lazy");
 
 	// Leading (import ...) forms pick what the global scope holds; a program with none
 	// sees everything, like a REPL.
@@ -473,7 +490,7 @@ final class SchemeLowering {
 				return library(name.name());
 			}
 			throw error("library " + set.print() + " is not available: this experimental front end has (scheme base),"
-					+ " (scheme write), (scheme inexact) and (scheme cxr) only", form);
+					+ " (scheme write), (scheme inexact), (scheme cxr) and (scheme lazy) only", form);
 		}
 		Map<String, Binding> base = importSet(parts.get(1), form);
 		Map<String, Binding> result = new LinkedHashMap<>();
@@ -528,7 +545,12 @@ final class SchemeLowering {
 		if (library.equals("base")) {
 			SYNTAX.forEach((name, core) -> exports.put(name, new Syntax(core, name)));
 		}
+		if (library.equals("lazy")) {
+			LAZY_SYNTAX.forEach((name, core) -> exports.put(name, new Syntax(core, name)));
+		}
 		if (library.equals("sicp")) {
+			SICP_SYNTAX.forEach((name, core) -> exports.put(name, new Syntax(core, name)));
+			exports.put("the-empty-stream", new Constant(LispNil.INSTANCE));
 			exports.put("true", new Constant(LispTrue.INSTANCE));
 			exports.put("false", new Constant(this.falseVariable));
 			exports.put("nil", new Constant(LispNil.INSTANCE));
@@ -1029,6 +1051,15 @@ final class SchemeLowering {
 				yield lower(syntax.core() == Core.WHEN ? list(CORE_IF, parts.get(1), body, LispNil.INSTANCE)
 						: list(CORE_IF, parts.get(1), LispNil.INSTANCE, body), context);
 			}
+			case DELAY, DELAY_FORCE -> leaf(promise(syntax.core() == Core.DELAY ? 0 : 1, form, scope), context);
+			case CONS_STREAM -> {
+				List<LispVal> parts = elements(form, form);
+				if (parts.size() != 3) {
+					throw error("cons-stream takes a head and a tail", form);
+				}
+				yield leaf(list(symbol("CONS"), value(parts.get(1), scope),
+						value(inherit(form, list(CORE_DELAY, parts.get(2))), scope)), context);
+			}
 			case RAW -> leaf(single(form), context);
 			case RAW_PREDICATE ->
 				leaf(SchemeBuiltins.toSchemeValue(SchemeBuiltins.Result.PREDICATE, single(form)), context);
@@ -1040,6 +1071,13 @@ final class SchemeLowering {
 			case UNSUPPORTED ->
 				throw error(syntax.name() + " is not supported by this experimental front end yet", form);
 		};
+	}
+
+	// (delay e) and (delay-force e): a promise record around the state and a thunk
+	// lowered like any lambda, so a loop that delays rebinds its variables per iteration.
+	private LispVal promise(int state, LispCons form, Scope scope) {
+		LispVal thunk = value(inherit(form, list(CORE_LAMBDA, LispNil.INSTANCE, single(form))), scope);
+		return list(symbol("RONTOLISP::%SCHEME-DELAY"), new LispInteger(state), thunk);
 	}
 
 	// ------------------------------------------------------------------ application

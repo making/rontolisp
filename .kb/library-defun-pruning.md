@@ -37,7 +37,11 @@ third-party `Candidates` keyed-unit rule.
 
 - Recognized by the struct name's PACKAGE (`BUNDLED_STRUCT_PACKAGES`: torch/linalg/vec).
   Extend the set (never widen to `RONTOLISP`) if json/url/prelude gain one; third-party and
-  user defstructs stay on the compilers' expansion path.
+  user defstructs stay on the compilers' expansion path. The one exception is by NAME:
+  `scheme.lisp`'s structs (`schemeStructNames`, the promise record), whose helpers live in
+  `rontolisp::`. As a root the promise record cost every lowered Scheme program 1,181 B of
+  class and 563 B of wasm; expanded, a printing program keeps only its predicate, +122 /
+  +15 B (2026-09-17, `(display (list 1 'a "s"))`).
 - The expansion populates compiler-owned state (`structAccessors` incl. the
   `TYPED_VECTOR_SLOT_BASE` encoding, and `ClosRegistry`), so a
   `(%struct-definition (defstruct ...))` marker (`LispNames.STRUCT_DEFINITION`) takes the
@@ -59,7 +63,8 @@ third-party `Candidates` keyed-unit rule.
 - Consumer is torch's three records (`.kb/torch.md`); a `(:print-object ...)` struct turns the
   `print-object` seam on program-wide (`.kb/clos.md`), a cost the pruner cannot collect.
 - Pins: the `aBundledDefstruct*` / `theStructDefinitionMarkerAnchorsNothingItSpells` /
-  `aTypedVectorStructsSetfWriterRidesItsAccessor` / `aUserDefstructIsNeverExpandedOrPruned`
+  `aTypedVectorStructsSetfWriterRidesItsAccessor` / `aUserDefstructIsNeverExpandedOrPruned` /
+  `theSchemePromiseRecordPrunesByNameThoughItLivesInRontolisp`
   group in `LibraryDefunPrunerTest`, and
   `Jvm/WasmLispCompiler*Test#compileAndRunAPrunedBundledDefstructThroughTheRegistrationMarker`.
 

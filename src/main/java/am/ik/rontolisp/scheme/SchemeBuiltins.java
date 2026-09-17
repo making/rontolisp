@@ -31,16 +31,16 @@ import org.jspecify.annotations.Nullable;
  * </pre>
  *
  * {@code library} is the R7RS library exporting the name ({@code base} / {@code write} /
- * {@code inexact} / {@code cxr}, or {@code sicp} for a name no R7RS library exports),
- * {@code result} says what the template answers -- {@code value}, {@code pred} (a Common
- * Lisp boolean, {@code T}/{@code NIL}, which fuses into an {@code if} test and is
- * converted to {@code #t}/{@code #f} anywhere else), {@code or-false} (a value, or
- * {@code NIL} meaning {@code #f}) or {@code effect} (unspecified: lowered like a
- * {@code value}, and a REPL echoes nothing for it). One {@code ((params) template)} pair
- * per accepted argument count; {@code &rest r} params splice as the template's dotted
- * tail {@code (f a . r)}. {@code :function} is the first-class value; it may be omitted
- * only for a single fixed-arity alternative, where it is derived as a {@code lambda}
- * around the template.
+ * {@code inexact} / {@code cxr} / {@code lazy}, or {@code sicp} for a name no R7RS
+ * library exports), {@code result} says what the template answers -- {@code value},
+ * {@code pred} (a Common Lisp boolean, {@code T}/{@code NIL}, which fuses into an
+ * {@code if} test and is converted to {@code #t}/{@code #f} anywhere else),
+ * {@code or-false} (a value, or {@code NIL} meaning {@code #f}) or {@code effect}
+ * (unspecified: lowered like a {@code value}, and a REPL echoes nothing for it). One
+ * {@code ((params) template)} pair per accepted argument count; {@code &rest r} params
+ * splice as the template's dotted tail {@code (f a . r)}. {@code :function} is the
+ * first-class value; it may be omitted only for a single fixed-arity alternative, where
+ * it is derived as a {@code lambda} around the template.
  *
  * <p>
  * Parameter names are uppercase symbols (the reader upcases them), which no user variable
@@ -91,7 +91,7 @@ final class SchemeBuiltins {
 	 *
 	 * @param name the Scheme name
 	 * @param library the exporting library's last component ({@code base}, {@code write},
-	 * {@code inexact}, {@code cxr}), or {@code sicp}
+	 * {@code inexact}, {@code cxr}, {@code lazy}), or {@code sicp}
 	 * @param result what the templates answer
 	 * @param alternatives the accepted argument shapes
 	 * @param function the first-class value: a form answering a function that returns
@@ -283,6 +283,37 @@ final class SchemeBuiltins {
 			("-1+" sicp value ((x) (- x 1)))
 			("random" sicp value ((n) (random n)))
 			("runtime" sicp value (() (/ (float (get-internal-real-time) 1.0d0) internal-time-units-per-second)))
+
+			;; --- (scheme lazy): delay and delay-force are syntax (SchemeLowering) ---
+			("force" lazy value ((p) (rontolisp::%scheme-force p)))
+			("make-promise" lazy value ((x) (rontolisp::%scheme-make-promise x)))
+			("promise?" lazy pred ((x) (rontolisp::%scheme-promise? x)))
+
+			;; --- sicp streams: a stream is '() or (value . promise), so the-empty-stream
+			;; is '() and stream-null? is null?; cons-stream is syntax (SchemeLowering).
+			;; Common Lisp helpers, so a user definition of apply or map cannot reach them.
+			("stream-car" sicp value ((s) (car s)))
+			("stream-cdr" sicp value ((s) (rontolisp::%scheme-stream-cdr s)))
+			("stream-first" sicp value ((s) (car s)))
+			("stream-rest" sicp value ((s) (rontolisp::%scheme-stream-cdr s)))
+			("stream-pair?" sicp pred ((x) (rontolisp::%scheme-stream-pair? x)))
+			("stream-null?" sicp pred ((x) (null x)))
+			("empty-stream?" sicp pred ((x) (null x)))
+			("stream" sicp value ((&rest r) (rontolisp::%scheme-list->stream (list . r)))
+			 :function (lambda (&rest r) (rontolisp::%scheme-list->stream r)))
+			("list->stream" sicp value ((l) (rontolisp::%scheme-list->stream l)))
+			("stream->list" sicp value ((s) (rontolisp::%scheme-stream->list s nil))
+			 ((s k) (rontolisp::%scheme-stream->list s k))
+			 :function (lambda (s &optional k) (rontolisp::%scheme-stream->list s k)))
+			("stream-head" sicp value ((s k) (rontolisp::%scheme-stream->list s k)))
+			("stream-tail" sicp value ((s k) (rontolisp::%scheme-stream-tail s k)))
+			("stream-ref" sicp value ((s k) (rontolisp::%scheme-stream-ref s k)))
+			("stream-map" sicp value ((f s &rest r) (rontolisp::%scheme-stream-map f (list s . r)))
+			 :function (lambda (f &rest r) (rontolisp::%scheme-stream-map f r)))
+			("stream-for-each" sicp effect ((f s) (rontolisp::%scheme-stream-for-each f s)))
+			("stream-filter" sicp value ((pred s) (rontolisp::%scheme-stream-filter pred s)))
+			("stream-append" sicp value ((&rest r) (rontolisp::%scheme-stream-append (list . r)))
+			 :function (lambda (&rest r) (rontolisp::%scheme-stream-append r)))
 
 			;; --- symbols ---
 			("symbol?" base pred ((x) (and (symbolp x) x (not (eq x t)) (not (eq x rontolisp::%scheme-false)))))

@@ -55,12 +55,14 @@ excludes strings (`vectorp` does not); `integer?` accepts `2.0`; `max`/`min` are
 when any argument is; `equal?` is its own helper (recurses into vectors, `eqv?` on
 records; CL's `equal` compares a general vector by identity and an instance slot-wise).
 
-## The library tags: `base`, `write`, `inexact`, `cxr` and `sicp`
+## The library tags: `base`, `write`, `inexact`, `cxr`, `lazy` and `sicp`
 
 `SchemeBuiltins` entries carry the R7RS library that exports them. `base`, `write`,
-`inexact` and `cxr` (the whole `(scheme cxr)` set, `caaar` through `cddddr`: every one a
-standard Common Lisp function of the same name) are `SchemeLowering.IMPORTABLE_LIBRARIES`:
-`(import (scheme <tag>))` names them, and a file with no import at all merges all four.
+`inexact`, `cxr` (the whole `(scheme cxr)` set, `caaar` through `cddddr`: every one a
+standard Common Lisp function of the same name) and `lazy` are
+`SchemeLowering.IMPORTABLE_LIBRARIES`: `(import (scheme <tag>))` names them, and a file
+with no import at all merges all five. Keywords carry a library too: `SYNTAX` is `base`,
+`LAZY_SYNTAX` (`delay`, `delay-force`) `lazy`, `SICP_SYNTAX` (`cons-stream`) `sicp`.
 `sicp` (`true false nil` -- via `SchemeLowering.Constant`, not an `Entry`, since they are
 values, not procedures -- `filter reduce fold-left fold-right delete last-pair append!
 list-index 1+ -1+ random runtime`) is no R7RS library, so no import names it:
@@ -104,6 +106,37 @@ defines regardless of what library put there first.
 - Corpus (2026-09-17, `.todo/artefacts/828-sicp-sample-corpus-harness/run.py`): file mode
   1,307 -> 1,314 samples exiting 0, no regression; no sample still fails on an inexact
   name.
+
+## Promises and streams (`(scheme lazy)`, SICP streams)
+
+- **A promise is a `defstruct`, `%scheme-promise`, around a box `(state . payload)`**:
+  2 forced (payload the value), 0 `(delay e)` (a thunk answering the value), 1
+  `(delay-force e)` (a thunk answering a promise). A record, so `promise?` is honest and
+  `procedure?` of a promise is `#f`; `force` of a non-promise answers it. `%scheme-force`
+  is a loop: a `delay-force` result's box is copied in and SHARED (R7RS's
+  `promise-update!`), so a chain of 100,000 `delay-force`s runs in constant stack, and the
+  box is re-read after the thunk returns, so a thunk that forces its own promise
+  (R7RS 4.2.5's reentrancy example) keeps the first value to land.
+- `(delay e)` lowers to `(%scheme-delay 0 (lambda () e))`: the thunk goes through the
+  ordinary `lambda` lowering, so a loop that delays counts as a closure and rebinds its
+  variables per iteration. `(cons-stream a b)` is `(cons a <delay b>)` spelled with the
+  identity-compared `CORE_DELAY`, so a user binding of `delay` does not capture it. Both
+  are keywords only until shadowed: 13 SICP samples bind `delay` as a variable.
+- **A stream is `'()` or `(value . promise)`**: `the-empty-stream` is a `Constant` NIL and
+  `stream-null?` is `null`, since the corpus mixes them with `'()`/`null?`. The stream
+  procedures are `%scheme-stream-*` Common Lisp helpers, not Scheme source, so a user
+  `define` of `apply` cannot reach them (a Scheme stand-in broke in the two samples that
+  redefine it). Every walk (`stream-ref`, `stream-tail`, `stream-filter`'s skip,
+  `stream->list`, `stream-for-each`) is a loop: `(stream-ref s 200000)` is pinned.
+  `stream-head` answers a LIST (MIT Scheme's).
+- The printer writes `#<promise>`; its predicate is what every printing program keeps of
+  the record (`.kb/library-defun-pruning.md`, the name exception).
+- Corpus (2026-09-17, `.todo/artefacts/828-sicp-sample-corpus-harness/run.py`): file mode
+  1,314 -> 1,342 samples exiting 0, REPL mode 1,591 unchanged, no regression. Every sample
+  that uses a stream or promise name and now exits 0 on the interpreter prints the same on
+  the JVM and wasm, except two `fragment`s whose delayed thunk names a global no file
+  defines (a compile error there, `.todo/828`). The remaining stream failures are samples
+  calling procedures defined in OTHER samples (`partial-sums`, `display-stream`, `pairs`).
 
 ## A session (`SchemeSession`, `SchemeLowering.interact`)
 

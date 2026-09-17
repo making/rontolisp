@@ -186,7 +186,7 @@ class SchemeLoweringTest {
 		assertThat(lowered("(import (prefix (only (scheme base) car) s:)) (s:car x)")).isEqualTo("(CAR |x|)");
 		assertThatThrownBy(() -> lowered("(import (scheme char))")).isInstanceOf(LispReadException.class)
 			.hasMessage("test.scm:1:1: library (|scheme| |char|) is not available: this experimental front end has"
-					+ " (scheme base), (scheme write), (scheme inexact) and (scheme cxr) only");
+					+ " (scheme base), (scheme write), (scheme inexact), (scheme cxr) and (scheme lazy) only");
 		assertThat(lowered("(import (scheme inexact)) (sqrt x)")).isEqualTo("(RONTOLISP::%SCHEME-SQRT |x|)");
 		assertThat(lowered("(import (scheme base)) (sqrt x)")).isEqualTo("(|sqrt| |x|)");
 		assertThat(lowered("(import (only (scheme cxr) caddr)) (caddr x)")).isEqualTo("(CADDR |x|)");
@@ -221,6 +221,29 @@ class SchemeLoweringTest {
 		assertThat(lowered("(define nil 1) nil")).isEqualTo("""
 				(SETQ |nil| 1)
 				|nil|""");
+	}
+
+	@Test
+	void delayAndConsStreamWrapTheirOperandInAPromiseThunk() {
+		assertThat(lowered("(list (delay (f x)) (delay-force (g)) (cons-stream 1 (h)) (force p))")).isEqualTo(
+				"""
+						(LIST (RONTOLISP::%SCHEME-DELAY 0 (LAMBDA NIL (|f| |x|))) (RONTOLISP::%SCHEME-DELAY 1 (LAMBDA NIL (|g|))) \
+						(CONS 1 (RONTOLISP::%SCHEME-DELAY 0 (LAMBDA NIL (|h|)))) (RONTOLISP::%SCHEME-FORCE |p|))""");
+		assertThat(lowered("(import (scheme lazy)) (delay-force x)"))
+			.isEqualTo("(RONTOLISP::%SCHEME-DELAY 1 (LAMBDA NIL |x|))");
+		// cons-stream and the stream procedures are the sicp vocabulary: no import names
+		// them.
+		assertThat(lowered("(import (scheme base) (scheme lazy)) (cons-stream a b)"))
+			.isEqualTo("(|cons-stream| |a| |b|)");
+	}
+
+	@Test
+	void delayAndConsStreamAreShadowableLikeAnyKeyword() {
+		assertThat(lowered("(define (after-delay delay action) (list delay (delay action)))")).isEqualTo("""
+				(DEFUN |after-delay| (|delay| |action|) (LIST |delay| (FUNCALL |delay| |action|)))""");
+		assertThat(lowered("(define (cons-stream a b) (cons a b)) (cons-stream 1 2)")).isEqualTo("""
+				(DEFUN |cons-stream| (|a| |b|) (CONS |a| |b|))
+				(|cons-stream| 1 2)""");
 	}
 
 	@Test

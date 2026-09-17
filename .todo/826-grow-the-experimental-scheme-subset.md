@@ -14,10 +14,10 @@ backend, add its cases to `scheme-spec.yaml`.
 | `guard` / `raise` / `error-object?` / `error-object-message` | `handler-case` / `error` / a condition's report | compiles in EH mode (`.kb/error-handling.md`). Until then an `error` can only end the program |
 | `parameterize` / `make-parameter` | the special-`let` restore (`.kb/dynamic-special-variables.md`) | a parameter object is a procedure: needs a first-class handle on a special |
 | `case-lambda` | a `&rest` lambda dispatching on `(length args)` | |
-| `delay` / `force` / `make-promise` | a record with a thunk | split off: `.todo/831` (with `cons-stream` and the stream procedures) |
+| `delay` / `force` / `make-promise` | a record with a thunk | done in `.todo/831` (with `cons-stream` and the stream procedures) |
 | bytevectors | the `(unsigned-byte 8)` pack (`.kb/packed-integer-vectors.md`) | reader `#u8(` is refused today |
 | ports (`current-output-port`, string ports, `read-line`, `read-char`) | `%STREAM` instances (`.kb/read-load-streams.md`) | `display`/`write` take one argument today; the two-argument form is an arity error. `read` from the current input port is split off: `.todo/832` |
-| `(scheme char)`, `(scheme cxr)`, `(scheme inexact)`, `(scheme lazy)` | table rows in `SchemeBuiltins` with their own `library` tag | `importSet` already keys visibility on the tag. Split off: `(scheme cxr)` -> `.todo/829`, `(scheme inexact)` -> `.todo/830`, `(scheme lazy)` -> `.todo/831` |
+| `(scheme char)`, `(scheme cxr)`, `(scheme inexact)`, `(scheme lazy)` | table rows in `SchemeBuiltins` with their own `library` tag | `importSet` already keys visibility on the tag. Split off: `(scheme cxr)` -> `.todo/829`, `(scheme inexact)` -> `.todo/830`, `(scheme lazy)` -> `.todo/831` (those three done) |
 | `define-library` / `include` | per-file lowering gets a library scope | cross-file references are by convention today: an unknown name is a direct call / a variable |
 | internal `define-record-type` | needs a non-top-level `defstruct`, which the compile path refuses (`.kb/defstruct.md`) | |
 | `|...|` identifiers, `+inf.0` / `+nan.0`, `#!fold-case` | reader | check that every backend PRINTS infinities the same way first |

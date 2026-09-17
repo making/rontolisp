@@ -495,8 +495,36 @@ public final class LibraryDefunPruner {
 		if (summary == null) {
 			return false;
 		}
+		if (schemeStructNames().contains(summary.structName())) {
+			return true;
+		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(summary.structName());
 		return qn != null && BUNDLED_STRUCT_PACKAGES.contains(PackageRegistry.canonicalBuiltinName(qn.pkg()));
+	}
+
+	@Nullable private static volatile Set<String> schemeStructNames;
+
+	/**
+	 * The structs {@code scheme.lisp} defines (the promise record), BY NAME: the Scheme
+	 * helpers live in {@code rontolisp::}, which must never join
+	 * {@link #BUNDLED_STRUCT_PACKAGES} as a whole, and a record every lowered Scheme
+	 * program would otherwise carry as an unprunable root costs 1.2 KB of class and 0.6
+	 * KB of wasm to a program that never delays anything.
+	 */
+	private static Set<String> schemeStructNames() {
+		Set<String> cached = schemeStructNames;
+		if (cached == null) {
+			Set<String> names = new HashSet<>();
+			for (LispVal form : SchemeLibrary.forms()) {
+				LispMacroExpander.StructDefinedNames summary = LispMacroExpander.defstructDefinedNames(form);
+				if (summary != null) {
+					names.add(summary.structName());
+				}
+			}
+			cached = Set.copyOf(names);
+			schemeStructNames = cached;
+		}
+		return cached;
 	}
 
 	/**

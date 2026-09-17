@@ -258,6 +258,7 @@
            (rontolisp::%scheme-print-datum (aref x i) escape labels))
          (write-char #\)))
         ((floatp x) (rontolisp::%scheme-print-flonum x))
+        ((rontolisp::%scheme-promise-p x) (write-string "#<promise>"))
         ((functionp x) (write-string "#<procedure>"))
         (t (princ x))))
 
@@ -633,3 +634,120 @@
     (dolist (irritant irritants)
       (write-char #\Space)
       (rontolisp::%scheme-print irritant t))))
+
+;; --- (scheme lazy) and SICP streams ---------------------------------------------------
+
+;; A promise is a record around a BOX, (state . payload): state 2 is forced and the
+;; payload its value; 0 is (delay e), a thunk answering the value; 1 is (delay-force e),
+;; a thunk answering another promise. Promises that delay-force chains into each other
+;; SHARE one box (R7RS 4.2.5's promise-update!), so forcing the chain is a loop that
+;; runs in constant space and memoizes every link at once.
+(defstruct (rontolisp::%scheme-promise
+            (:constructor rontolisp::%scheme-new-promise (box)) (:copier nil))
+  box)
+
+(defun rontolisp::%scheme-delay (state thunk)
+  (rontolisp::%scheme-new-promise (cons state thunk)))
+
+(defun rontolisp::%scheme-promise? (x) (rontolisp::%scheme-promise-p x))
+
+(defun rontolisp::%scheme-make-promise (x)
+  (if (rontolisp::%scheme-promise-p x)
+      x
+      (rontolisp::%scheme-new-promise (cons 2 x))))
+
+;; Forcing a non-promise answers it. The box is read again after the thunk returns:
+;; the thunk may have forced this same promise, and the first value to land wins.
+(defun rontolisp::%scheme-force (p)
+  (if (not (rontolisp::%scheme-promise-p p))
+      p
+      (do ()
+          ((= (car (rontolisp::%scheme-promise-box p)) 2)
+           (cdr (rontolisp::%scheme-promise-box p)))
+        (let ((box (rontolisp::%scheme-promise-box p)))
+          (let ((state (car box)) (result (funcall (cdr box))))
+            (setq box (rontolisp::%scheme-promise-box p))
+            (if (/= (car box) 2)
+                (if (and (= state 1) (rontolisp::%scheme-promise-p result))
+                    (let ((inner (rontolisp::%scheme-promise-box result)))
+                      (rplaca box (car inner))
+                      (rplacd box (cdr inner))
+                      (setf (rontolisp::%scheme-promise-box result) box))
+                    (progn
+                      (rplaca box 2)
+                      (rplacd box result)))))))))
+
+(defun rontolisp::%scheme-stream-pair? (x)
+  (and (consp x) (rontolisp::%scheme-promise-p (cdr x))))
+
+(defun rontolisp::%scheme-stream-cdr (s) (rontolisp::%scheme-force (cdr s)))
+
+;; The streams below are walked in loops, never by recursion: a sieve asked for its 50th
+;; prime forces thousands of cells.
+(defun rontolisp::%scheme-stream-tail (s n)
+  (do ((i 0 (+ i 1)))
+      ((>= i n) s)
+    (setq s (rontolisp::%scheme-stream-cdr s))))
+
+(defun rontolisp::%scheme-stream-ref (s n)
+  (car (rontolisp::%scheme-stream-tail s n)))
+
+;; The first N elements as a list; every element when N is NIL.
+(defun rontolisp::%scheme-stream->list (s n)
+  (let ((out nil) (i 0))
+    (do ()
+        ((or (not (consp s)) (and n (>= i n))) (nreverse out))
+      (setq out (cons (car s) out))
+      (setq i (+ i 1))
+      (if (or (null n) (< i n)) (setq s (rontolisp::%scheme-stream-cdr s))))))
+
+(defun rontolisp::%scheme-list->stream (list)
+  (let ((s nil))
+    (dolist (x (reverse list) s)
+      (setq s (cons x (rontolisp::%scheme-new-promise (cons 2 s)))))))
+
+(defun rontolisp::%scheme-stream-map (proc streams)
+  (if (dolist (s streams nil) (if (not (consp s)) (return t)))
+      nil
+      (cons (apply proc (mapcar #'car streams))
+            (rontolisp::%scheme-delay 0
+                                      (lambda ()
+                                        (rontolisp::%scheme-stream-map proc
+                                         (mapcar #'rontolisp::%scheme-stream-cdr
+                                                 streams)))))))
+
+(defun rontolisp::%scheme-stream-for-each (proc s)
+  (do ()
+      ((not (consp s)) nil)
+    (funcall proc (car s))
+    (setq s (rontolisp::%scheme-stream-cdr s))))
+
+(defun rontolisp::%scheme-stream-filter (pred s)
+  (do ()
+      ((or (not (consp s))
+           (not (eq (funcall pred (car s)) rontolisp::%scheme-false)))
+       (if (consp s)
+           (cons (car s)
+                 (rontolisp::%scheme-delay 0
+                                           (lambda ()
+                                             (rontolisp::%scheme-stream-filter
+                                              pred
+                                              (rontolisp::%scheme-stream-cdr
+                                               s)))))
+           nil))
+    (setq s (rontolisp::%scheme-stream-cdr s))))
+
+(defun rontolisp::%scheme-stream-append (streams)
+  (do ()
+      ((or (null streams) (consp (car streams)))
+       (if (null streams)
+           nil
+           (let ((s (car streams)))
+             (cons (car s)
+                   (rontolisp::%scheme-delay 0
+                                             (lambda ()
+                                               (rontolisp::%scheme-stream-append
+                                                (cons
+                                                 (rontolisp::%scheme-stream-cdr
+                                                  s) (cdr streams)))))))))
+    (setq streams (cdr streams))))

@@ -1,7 +1,7 @@
 # Scheme（実験的）
 
 **実験的機能です。** rontolisp は R7RS-small の一部 -- `(scheme base)`、
-`(scheme write)`、`(scheme inexact)`、`(scheme cxr)` -- を、Scheme プログラムを全バックエンドで動かせる最小限の範囲で読みます。
+`(scheme write)`、`(scheme inexact)`、`(scheme cxr)`、`(scheme lazy)` -- を、Scheme プログラムを全バックエンドで動かせる最小限の範囲で読みます。
 準拠は意図的に部分的で、互換性の約束はありません。Scheme プログラムを JVM や WebAssembly で
 試す用途に使い、動き続けてほしいものは Common Lisp で書いてください。
 
@@ -58,7 +58,7 @@ scheme> (list #t #f '() 'Sym)
 scheme> (quit)
 ```
 
-これら 4 ライブラリがエクスポートする名前 -- それに加えて、後述の
+これら 5 ライブラリがエクスポートする名前 -- それに加えて、後述の
 どの `(import ...)` にも属さない SICP 互換名 -- は最初からすべて見えており、
 プロンプトで入力した `(import ...)` は名前を追加するだけです。別々のプロンプトで入力した
 定義は、1 つのファイルに書いた場合と同じく、順序によらず互いを参照できます。フォームは
@@ -75,15 +75,16 @@ scheme> (quit)
 - **構文**: `define`（両形式。内部定義は `letrec*`）、`define-values`、
   `lambda`、`if`、`cond`（`else`、`=>`）、`case`、`and`、`or`、`when`、`unless`、`let`、
   `let*`、`letrec`、`letrec*`、名前付き `let`、`do`、`begin`、`set!`、`quote`、`quasiquote`、
-  `let-values`、`let*-values`、`define-record-type`（トップレベルのみ）、および
-  `(import (scheme base) (scheme write) (scheme inexact) (scheme cxr))`（`only` /
-  `except` / `prefix` / `rename` 可）。
+  `let-values`、`let*-values`、`define-record-type`（トップレベルのみ）、`delay`、
+  `delay-force`、および
+  `(import (scheme base) (scheme write) (scheme inexact) (scheme cxr) (scheme lazy))`
+  （`only` / `except` / `prefix` / `rename` 可）。
 - **手続き**: `eq? eqv? equal?`; `+ - * / = < > <= >= quotient remainder modulo
   floor-quotient floor-remainder truncate-quotient truncate-remainder abs min max gcd lcm
   expt square floor ceiling round truncate zero? positive? negative? odd? even? number?
   real? rational? integer? exact? inexact? exact-integer? exact inexact exact-integer-sqrt
   number->string string->number`; `(scheme inexact)`: `sqrt exp log sin cos tan asin acos
-  atan finite? infinite? nan?`; `not boolean?`; `cons car cdr set-car! set-cdr! caar cadr
+  atan finite? infinite? nan?`; `(scheme lazy)`: `force make-promise promise?`; `not boolean?`; `cons car cdr set-car! set-cdr! caar cadr
   cdar cddr list length append reverse list-tail list-ref list-copy memq memv member assq
   assv assoc null? pair? list?`; `symbol? symbol->string string->symbol`; `char? char->integer integer->char
   char=? char<? char>? char<=? char>=?`; `string? make-string string string-length
@@ -96,8 +97,12 @@ scheme> (quit)
   `#0=(a b c . #0#)` のように書きます。循環のない共有構造は出現のたびに書き出します。
 - **SICP 互換、R7RS ではない**: `true false nil`（リテラルではなく普通の変数）、
   `filter reduce fold-left fold-right delete last-pair append! list-index 1+ -1+ random
-  runtime`。これらは `(import ...)` を一切書かないプログラムでのみ見える -- 4 ライブラリと
-  同じ扱いだが、どの import もこれらを名指しできないため、明示的な import リストがあると
+  runtime`、ストリーム: `cons-stream`（構文）、`the-empty-stream stream-car stream-cdr
+  stream-first stream-rest stream-pair? stream-null? empty-stream? stream list->stream
+  stream->list stream-head stream-tail stream-ref stream-map stream-for-each stream-filter
+  stream-append`。ストリームは `'()` か、cdr がプロミスであるペアなので、
+  `the-empty-stream` は `'()`、`stream-null?` は `null?` です。これらは `(import ...)` を
+  一切書かないプログラムでのみ見える -- 5 ライブラリと同じ扱いだが、どの import もこれらを名指しできないため、明示的な import リストがあると
   届かない。
 
 ```scheme
@@ -110,6 +115,24 @@ scheme> (quit)
 (#t #f () 4)
 (1 3 5)
 (((() . 1) . 2) . 3)
+```
+
+プロミスは一度だけ評価され、その値を覚えています。ストリームをたどると各セルは一度だけ評価されます。
+
+```scheme
+(define (integers-from n) (cons-stream n (integers-from (+ n 1))))
+(define (sieve s)
+  (cons-stream (stream-car s)
+               (sieve (stream-filter (lambda (x) (not (= 0 (remainder x (stream-car s)))))
+                                     (stream-cdr s)))))
+(display (stream-head (sieve (integers-from 2)) 10)) (newline)
+(define p (delay (begin (display "once ") 42)))
+(display (list (force p) (force p))) (newline)
+```
+
+```
+(2 3 5 7 11 13 17 19 23 29)
+once (42 42)
 ```
 
 正確な引数に正確な答えがあれば結果も正確なままです。浮動小数点数は `1e21` 未満では
@@ -168,7 +191,7 @@ scheme> (quit)
   異なることがあります。`sqrt` と四則演算はどこでも同じ桁を返します。
 - エラーメッセージには Common Lisp の名前（`CAR`）が出ます。
 - **未対応**: `define-syntax` / `syntax-rules`、`define-library`、`guard` / `raise`、
-  `parameterize`、`case-lambda`、`delay`、バイトベクタ、現在の出力ポート以外のポート、
+  `parameterize`、`case-lambda`、バイトベクタ、現在の出力ポート以外のポート、
   `eval`、`(scheme char)` などのライブラリ、`|...|` 識別子、
   `+inf.0` / `+nan.0` の読み取り。構文に関するものは、ファイルを読む時点で名前を挙げて拒否されます。
 
