@@ -5,7 +5,9 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.SequencedMap;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNil;
@@ -58,13 +60,6 @@ final class SchemeBuiltins {
 	 * value, so no backend learns it; true in a test, and one element of a list.
 	 */
 	static final String UNSPECIFIED_VARIABLE = "RONTOLISP::%SCHEME-UNSPECIFIED";
-
-	/**
-	 * The unspecified object's symbol name, MIT Scheme's spelling of it. Escaped by
-	 * {@link SchemeNames#mangle}, so no identifier and no {@code string->symbol} can
-	 * forge it.
-	 */
-	static final String UNSPECIFIED_NAME = "#!unspecific";
 
 	/**
 	 * The one global environment every environment specifier denotes, as a symbol -- like
@@ -523,28 +518,26 @@ final class SchemeBuiltins {
 	 * KB without, measured 2026-09-17 -- and a datum a program can hand {@code eval} is
 	 * built from the symbols and strings it spells, the same rule the compiled name
 	 * registry applies to Common Lisp's {@code eval} ({@code .kb/eval-runtime.md}).
+	 * @param mangle a Scheme name to its symbol name ({@code SchemeNames.mangle}, which
+	 * this table does not reach for itself: the names reach for this table)
 	 * @param spelled whether a mangled name is spelled by the program the table is for
 	 * @return the definition
 	 */
-	static List<LispVal> runtimeForms(java.util.function.Predicate<String> spelled) {
+	static List<LispVal> runtimeForms(UnaryOperator<String> mangle, Predicate<String> spelled) {
 		List<LispVal> arms = new ArrayList<>();
 		for (Entry entry : ENTRIES.values()) {
-			String mangled = SchemeNames.mangle(entry.name());
-			if (spelled.test(mangled)) {
-				arms.add(list(list(new LispSymbol(mangled)), entry.function()));
+			String key = mangle.apply(entry.name());
+			if (spelled.test(key)) {
+				arms.add(list(list(new LispSymbol(key)), entry.function()));
 			}
 		}
 		CONSTANTS.forEach((name, form) -> {
-			String mangled = SchemeNames.mangle(name);
-			if (spelled.test(mangled)) {
-				arms.add(list(list(new LispSymbol(mangled)), form));
+			String key = mangle.apply(name);
+			if (spelled.test(key)) {
+				arms.add(list(list(new LispSymbol(key)), form));
 			}
 		});
-		// The otherwise clause spelled by the reader, so its `t` is whatever the reader
-		// makes of one.
-		arms.add(LispReader
-			.readAllFromString("(t '" + UNBOUND.toLowerCase(java.util.Locale.ROOT) + ")", Features.INTERPRETER)
-			.get(0));
+		arms.add(list(LispTrue.INSTANCE, list(new LispSymbol("QUOTE"), new LispSymbol(UNBOUND))));
 		LispSymbol name = new LispSymbol("NAME");
 		return List.of(list(new LispSymbol("DEFUN"), new LispSymbol("RONTOLISP::%SCHEME-BUILTIN"), list(name),
 				new LispCons(new LispSymbol("CASE"), new LispCons(name, listOf(arms)))));

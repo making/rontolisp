@@ -57,7 +57,7 @@ public final class Scheme {
 	 * @return the forms
 	 */
 	public static List<LispVal> runtimeForms(Predicate<String> spelled) {
-		List<LispVal> forms = new ArrayList<>(SchemeBuiltins.runtimeForms(spelled));
+		List<LispVal> forms = new ArrayList<>(SchemeBuiltins.runtimeForms(SchemeNames::mangle, spelled));
 		forms.add(SchemeLowering.libraryPredicateForm());
 		return List.copyOf(forms);
 	}

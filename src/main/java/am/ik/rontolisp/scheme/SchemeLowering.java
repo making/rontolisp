@@ -20,9 +20,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceProvenance;
-import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
-import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -504,7 +502,7 @@ final class SchemeLowering {
 
 	private LispVal falseBinding() {
 		return list(symbol("SETQ"), this.falseVariable, list(symbol("QUOTE"), symbol("#f")), this.unspecifiedVariable,
-				list(symbol("QUOTE"), symbol(SchemeBuiltins.UNSPECIFIED_NAME)));
+				list(symbol("QUOTE"), symbol(SchemeNames.UNSPECIFIED_NAME)));
 	}
 
 	// ------------------------------------------------------------------ imports
@@ -521,14 +519,14 @@ final class SchemeLowering {
 	 * @return the definition, in the library's canonical shape
 	 */
 	static LispVal libraryPredicateForm() {
-		StringBuilder names = new StringBuilder();
+		List<LispVal> names = new ArrayList<>();
 		for (String library : IMPORTABLE_LIBRARIES) {
-			names.append(" |").append(library).append('|');
+			names.add(symbol(library));
 		}
-		return LispReader
-			.readAllFromString("(defun rontolisp::%scheme-library-p (name) (if (member name '(" + names + ")) t nil))",
-					Features.INTERPRETER)
-			.get(0);
+		LispSymbol name = symbol("NAME");
+		return list(symbol("DEFUN"), symbol("RONTOLISP::%SCHEME-LIBRARY-P"), list(name),
+				list(symbol("IF"), list(symbol("MEMBER"), name, list(symbol("QUOTE"), listOf(names))),
+						LispTrue.INSTANCE, LispNil.INSTANCE));
 	}
 
 	// Leading (import ...) forms pick what the global scope holds; a program with none
