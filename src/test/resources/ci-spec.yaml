@@ -5083,6 +5083,27 @@ cases:
       (EQUAL EQUAL EQUALP)
       #<HASH-TABLE :TEST EQL :COUNT 0>
       #<HASH-TABLE :TEST EQ :COUNT 0>
+  - name: hash-table-as-hash-key
+    source: |
+      ;; A hash table is compared and hashed by identity under every test: filling
+      ;; a table after it was stored as a key keeps its entry, a table holding
+      ;; itself is a key, and two empty tables are neither eq nor equal.
+      (let ((ci-ta (make-hash-table)) (ci-tb (make-hash-table)))
+        (print (list (eq ci-ta ci-tb) (eql ci-ta ci-tb) (equal ci-ta ci-tb) (equalp ci-ta ci-tb)
+                     (equal ci-ta ci-ta))))
+      (dolist (ci-outer (list (make-hash-table :test 'eq) (make-hash-table :test 'eql)
+                              (make-hash-table :test 'equal) (make-hash-table :test 'equalp)))
+        (let ((ci-key (make-hash-table)))
+          (setf (gethash ci-key ci-outer) (hash-table-test ci-outer))
+          (setf (gethash 'x ci-key) 1)
+          (setf (gethash 'self ci-key) ci-key)
+          (print (list (gethash ci-key ci-outer) (gethash (make-hash-table) ci-outer)))))
+    expected: |
+      (NIL NIL NIL NIL T)
+      (EQ NIL)
+      (EQL NIL)
+      (EQUAL NIL)
+      (EQUALP NIL)
   - name: arrays-cross-backend
     source: |
       (defun ci-mat-sum (m rows cols)

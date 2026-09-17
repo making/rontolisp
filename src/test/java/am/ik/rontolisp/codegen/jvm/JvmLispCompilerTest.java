@@ -12526,6 +12526,25 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAHashTableKeyHashesAndComparesByIdentity() throws Exception {
+		// A hash table is a LinkedHashMap, whose own hashCode and equals walk its
+		// entries: a table filled after it was stored as a key lost its entry under
+		// every test, and two empty tables were eq.
+		assertThat(compileAndRun("""
+				(let ((a (make-hash-table)) (b (make-hash-table)))
+				  (print (list (eq a b) (eql a b) (equal a b) (equalp a b) (eq a a)))
+				  (dolist (test (list (make-hash-table :test 'eq) (make-hash-table :test 'eql)
+				                      (make-hash-table) (make-hash-table :test 'equalp)))
+				    (let ((k (make-hash-table)))
+				      (setf (gethash k test) 'found)
+				      (print (gethash (make-hash-table) test))
+				      (setf (gethash 'x k) 1)
+				      (setf (gethash 'self k) k)
+				      (print (gethash k test)))))
+				""")).isEqualTo("(NIL NIL NIL NIL T)\nNIL\nFOUND\nNIL\nFOUND\nNIL\nFOUND\nNIL\nFOUND");
+	}
+
+	@Test
 	void compileAndRunPackageVar() throws Exception {
 		// The value is the package KEYWORD find-package answers, so the two are eq.
 		assertThat(compileAndRun("(print *package*)")).isEqualTo(":CL-USER");

@@ -122,6 +122,16 @@ share the box, so `hash-table-p` is `ref.test TYPE_CELL` PLUS the header-car tes
   `System.identityHashCode` for it explicitly. Before that a vector holding itself
   overflowed the stack as a key and a vector grown after it was stored lost its entry
   (`JvmLispCompilerTest#compileAndRunAVectorKeyHashesByIdentity`).
+- A HASH TABLE key is identity under every test and on every backend, like a vector.
+  On the JVM a table is a `LinkedHashMap`, whose `hashCode` AND `equals` walk the
+  entries: `_hash` and `_eqv` both answer by identity for any `java.util.Map`. Before
+  that a table filled after it was stored lost its entry under all four tests and two
+  empty tables were `eq` (`JvmLispCompilerTest#compileAndRunAHashTableKeyHashesAndComparesByIdentity`,
+  ci-spec `hash-table-as-hash-key`). Audit 2026-09-17, all four backends agree: a
+  rank-2 array, a packed fixnum/double vector and a structure mutated after storage
+  in an `eq` table keep their entry. A fill-pointer STRING grown after storage loses
+  it on all four (strings hash by content); `eq` on two distinct equal strings is the
+  one split (`T` interpreter/JVM, `NIL` WASM).
 - `puthash` doubles (`FUNC_HASH_RESIZE`) past load factor 0.75; both funcs sit just before
   `FUNC_USER_BASE` in Preview 1 and `--component`. `maphash` order is unspecified: interpreter and
   JVM walk insertion order (JVM through `#order`, which is why the bucket index may reorder
