@@ -8,6 +8,7 @@ import org.jspecify.annotations.Nullable;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.scheme.Scheme;
 
 /**
  * The ONE seam between user source text and the core forms every pipeline consumes. A
@@ -43,7 +44,21 @@ public enum SourceLanguage {
 	 * read-time-eval decision ({@code readAllWithReadEvalMarkers} when the text contains
 	 * one, the plain read otherwise).
 	 */
-	COMMON_LISP;
+	COMMON_LISP(".lisp"),
+
+	/**
+	 * Scheme, EXPERIMENTAL: a subset of R7RS-small {@code (scheme base)} read
+	 * case-sensitively and lowered to the same core forms by the {@code scheme} package
+	 * ({@code .kb/scheme-frontend.md}). Partial conformance by design, no compatibility
+	 * promise. It has no {@code #.} and no reader features.
+	 */
+	SCHEME(".scm");
+
+	private final String extension;
+
+	SourceLanguage(String extension) {
+		this.extension = extension;
+	}
 
 	/**
 	 * Reads user source text into core forms.
@@ -55,6 +70,9 @@ public enum SourceLanguage {
 	 * @return the parsed top-level forms
 	 */
 	public List<LispVal> read(String source, Features features, @Nullable String file) {
+		if (this == SCHEME) {
+			return Scheme.read(source, file);
+		}
 		return usesReadEvalMarkers(source) ? LispReader.readAllWithReadEvalMarkers(source, features, file)
 				: LispReader.readAllFromString(source, features, file);
 	}
@@ -82,6 +100,9 @@ public enum SourceLanguage {
 	 * @return the parsed top-level forms
 	 */
 	public List<LispVal> readStrict(String source, Features features) {
+		if (this == SCHEME) {
+			return Scheme.read(source, null);
+		}
 		return LispReader.readAllFromString(source, features);
 	}
 
@@ -99,8 +120,8 @@ public enum SourceLanguage {
 		if (override != null) {
 			return parse(override);
 		}
-		if (path != null && path.endsWith(COMMON_LISP.defaultExtension())) {
-			return COMMON_LISP;
+		if (path != null && path.endsWith(SCHEME.defaultExtension())) {
+			return SCHEME;
 		}
 		return COMMON_LISP;
 	}
@@ -113,7 +134,7 @@ public enum SourceLanguage {
 	 * @return the extension, e.g. {@code ".lisp"}
 	 */
 	public String defaultExtension() {
-		return ".lisp";
+		return this.extension;
 	}
 
 	/**
@@ -125,7 +146,7 @@ public enum SourceLanguage {
 	 * @return {@code true} when the target names a source file
 	 */
 	public static boolean isSourceFile(String path) {
-		return path.endsWith(COMMON_LISP.defaultExtension());
+		return path.endsWith(COMMON_LISP.defaultExtension()) || path.endsWith(SCHEME.defaultExtension());
 	}
 
 	/**
@@ -150,8 +171,11 @@ public enum SourceLanguage {
 		if (name.equals("common-lisp") || name.equals("cl") || name.equals("lisp")) {
 			return COMMON_LISP;
 		}
-		throw new IllegalArgumentException(
-				"--source-language '" + override + "' names no language this build reads (try common-lisp)");
+		if (name.equals("scheme") || name.equals("scm")) {
+			return SCHEME;
+		}
+		throw new IllegalArgumentException("--source-language '" + override
+				+ "' names no language this build reads (try common-lisp, or the experimental scheme)");
 	}
 
 }

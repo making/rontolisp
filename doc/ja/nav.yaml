@@ -133,6 +133,8 @@ sections:
         title: テスト（rove）
       - file: guides/reader-case.md
         title: リーダーのケース（大文字化）
+      - file: guides/scheme.md
+        title: Scheme（実験的）
       - file: guides/math-backends.md
         title: 数学関数のバックエンド
       - file: guides/clock-and-random.md

@@ -28,6 +28,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 - [core-representation.md](core-representation.md) -- core value model, three-pass compilation, `FreeVarAnalyzer` capture rule, non-top-level `defun`, `%` prefix, JVM method mangling, WASM rec-groups
 - [lisp2-namespaces.md](lisp2-namespaces.md) -- Lisp-2 function/variable namespace split
+- [parallel-let.md](parallel-let.md) -- `let` stays parallel on the compile path (`ParallelLetStaging` at the let compilers' entry); `(+)`/`(*)` identities
 - [lambda-lists.md](lambda-lists.md) -- `&optional`/`&rest`/`&key`/`&aux` desugared to required + `&rest`
 - [argument-evaluation-order.md](argument-evaluation-order.md) -- call arguments and `list` elements evaluate left to right on every backend
 - [do-return-block.md](do-return-block.md) -- `do`/`return`, `block`/`return-from` (lexical), `catch`/`throw`, `tagbody`/`go`, `prog`
@@ -51,6 +52,8 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [reader-features.md](reader-features.md) -- `#+`/`#-`, `*features*` as a runtime variable, `#|...|#`, `#.`, `--feature`
 - [read-time-constants.md](read-time-constants.md) -- `pi`/float-range/fixnum/array limits as bound symbols, not reader substitutions; per-backend values
 - [source-positions.md](source-positions.md) -- `file:line:column` in reader and frontend errors; the cons-identity rule every AST pass honours
+- [source-language.md](source-language.md) -- the one seam from user source to core forms (`SourceLanguage`): per-file language pick, `--source-language`, what is NOT user source
+- [scheme-frontend.md](scheme-frontend.md) -- the EXPERIMENTAL Scheme front end: lowering table, destination-driven loops, identifier escaping, the `#f` / loop-shape / tail-depth / size measurements
 - [format.md](format.md) -- `format`'s two renderings of one directive set, and the shared Schubfach float printer
 - [pretty-printer.md](pretty-printer.md) -- `write`/`pprint`, dispatch tables, `pprint-logical-block`, printer-control variables
 - [formatter.md](formatter.md) -- `rontolisp format`: the whitespace-only invariant and `IndentRules`

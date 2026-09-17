@@ -30,10 +30,19 @@ NOT user source, so NOT through the seam (pinned by `SourceLanguageSeamTest`, ne
 synthesizes itself -- which is Common Lisp whatever the user's language is (every
 `*Library` splice, `ShimLibraries`, `UiopLibrary`, the four `macro` readers);
 `Environment`'s runtime `read`/`read-from-string` of DATA; `AsdfSystems`' `.asd`
-metadata (tolerant `#.`-skipping read) and leading-`defpackage` scans. A second
+metadata (tolerant `#.`-skipping read) and leading-`defpackage` scans. A further
 language extends `forFile` (and `isSourceFile`) and lowers to the same core forms;
 what else it needs to own (REPL continuation, error positions, a formatter) is decided
 when it asks for it, by adding a method to the seam.
+
+## The second language: `SCHEME` (experimental)
+
+`.scm`, or `--source-language scheme` (`scm`). `read` hands the text to
+`am.ik.rontolisp.scheme.Scheme.read` -- reader, desugaring and lowering to core forms in
+one step, with no `#.` and no reader features -- and everything downstream is unchanged
+(`.kb/scheme-frontend.md`). `CompileFrontend.run` refuses the entry language under
+`--no-gc`. `defaultExtension()` is per language; `fileNameForModule` and the
+package-inferred sub-system file stay Common Lisp.
 
 ## Tests
 

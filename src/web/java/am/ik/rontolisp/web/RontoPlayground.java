@@ -207,7 +207,8 @@ public final class RontoPlayground {
 				.process(VecLibrary.process(LispPreludeLibrary.process(
 						UrlLibrary.process(JsonLibrary
 							.process(LinalgLibrary.process(GeomLibrary.process(TorchLibrary
-								.process(GgufLibrary.process(TokenizersLibrary.process(read))))))),
+								.process(GgufLibrary.process(TokenizersLibrary
+									.process(am.ik.rontolisp.eval.SchemeLibrary.process(read)))))))),
 						features))))));
 		// uiop:quit on the WASM button is exit.lisp's wasi_snapshot_preview1 proc_exit
 		// binding (eval/ExitLibrary), like the CLI's Preview 1 output; a no-op for the

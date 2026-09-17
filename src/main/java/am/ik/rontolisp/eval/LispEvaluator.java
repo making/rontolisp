@@ -230,6 +230,8 @@ public final class LispEvaluator {
 
 	private boolean urlLibraryLoaded = false;
 
+	private boolean schemeLibraryLoaded = false;
+
 	private boolean usocketLibraryLoaded = false;
 
 	private boolean witLibraryLoaded = false;
@@ -8408,6 +8410,23 @@ public final class LispEvaluator {
 				this.urlLibraryLoaded = true;
 				for (LispVal form : UrlLibrary.forms()) {
 					eval(form, this.globalEnv);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The run-time half of the experimental Scheme front end (scheme.lisp) loads
+			// the same way on the first resolution of a rontolisp::%scheme- helper, which
+			// only a lowered Scheme program names.
+			if (!this.schemeLibraryLoaded && SchemeLibrary.isSchemeFunction(name)) {
+				this.schemeLibraryLoaded = true;
+				// evalResolved, not the bare eval the neighbours use:
+				// %scheme-error-message
+				// rebinds *standard-output*, and only a form whose special bindings were
+				// registered (SpecialVarCollector) binds it DYNAMICALLY for its callees.
+				for (LispVal form : SchemeLibrary.forms()) {
+					evalResolved(form);
 				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 				if (loaded != null) {

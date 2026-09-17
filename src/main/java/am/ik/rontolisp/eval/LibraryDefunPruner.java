@@ -1166,6 +1166,7 @@ public final class LibraryDefunPruner {
 					collectDefinitionNames(JsonLibrary.forms(), names);
 					collectDefinitionNames(JsonLibrary.wrapperForms(), names);
 					collectDefinitionNames(UrlLibrary.forms(), names);
+					collectDefinitionNames(SchemeLibrary.forms(), names);
 					for (String name : LispPreludeLibrary.names()) {
 						collectDefinitionNames(LispPreludeLibrary.formsFor(name), names);
 					}

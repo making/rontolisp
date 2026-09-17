@@ -17,6 +17,7 @@ import java.util.stream.Stream;
 
 import com.sun.net.httpserver.HttpServer;
 import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterAll;
@@ -47,6 +48,10 @@ import static org.assertj.core.api.Assertions.fail;
  * the comment line just below it -- has its printed value asserted. This holds on EVERY
  * page, guide and reference alike: a shown result no test re-measures is a number that
  * drifts.</li>
+ * <li>A <code>```scheme</code> block is a WHOLE program for the experimental Scheme front
+ * end (it is lowered a file at a time, so it shares nothing with its neighbours): it must
+ * run, and a plain block right after it is its asserted standard output. It is static on
+ * the site -- the runnable cells read Common Lisp.</li>
  * <li>REPL transcripts (<code>```console</code>) and shell blocks (<code>```bash</code>)
  * are static and not executed, and are where an example that cannot run headless (stdin,
  * files, a form that signals) belongs.</li>
@@ -163,6 +168,15 @@ class DocExamplesTest {
 
 		for (int i = 0; i < blocks.size(); i++) {
 			Block block = blocks.get(i);
+			if (block.isScheme()) {
+				String actual = runScheme(block.content(), markdown);
+				Block expected = (i + 1 < blocks.size()) ? blocks.get(i + 1) : null;
+				if (expected != null && expected.isExpectedOutput()) {
+					assertThat(actual).as("output of Scheme example in %s:%n%s", markdown, block.content())
+						.isEqualTo(expected.content().strip());
+				}
+				continue;
+			}
 			if (!block.isLisp()) {
 				continue;
 			}
@@ -191,6 +205,22 @@ class DocExamplesTest {
 					.isEqualTo(expected.content().strip());
 			}
 		}
+	}
+
+	// A Scheme example is a whole program on a fresh evaluator: the front end decides
+	// defun-or-variable per FILE, so a block cannot lean on an earlier one.
+	private static String runScheme(String source, Path page) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		try {
+			for (LispVal form : SourceLanguage.SCHEME.read(source, evaluator.features(), null)) {
+				evaluator.eval(form);
+			}
+		}
+		catch (RuntimeException ex) {
+			fail("Scheme example in %s failed to evaluate:%n%s%n-> %s".formatted(page, source, ex), ex);
+		}
+		return out.toString(StandardCharsets.UTF_8).strip();
 	}
 
 	/**
@@ -265,6 +295,9 @@ class DocExamplesTest {
 					}
 					content = rewritten;
 					pendingStdout = buffer.toString(StandardCharsets.UTF_8).strip();
+				}
+				else if (info.equals("scheme")) {
+					pendingStdout = runScheme(String.join("\n", content), page);
 				}
 				else if (isOutputInfo(info) && pendingStdout != null) {
 					content = pendingStdout.isEmpty() ? List.of()
@@ -410,6 +443,10 @@ class DocExamplesTest {
 
 		boolean isLisp() {
 			return this.info.equals("lisp");
+		}
+
+		boolean isScheme() {
+			return this.info.equals("scheme");
 		}
 
 		boolean isExpectedOutput() {

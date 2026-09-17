@@ -1,0 +1,164 @@
+# The EXPERIMENTAL Scheme front end (`am.ik.rontolisp.scheme`)
+
+**Invariant: a Scheme program is read, desugared and LOWERED to the Common Lisp core forms
+the pipeline already consumes; no backend learns a Scheme name.** There is no IR beneath
+those forms to target instead: both backends dispatch on the canonical operator NAME and
+`FreeVarAnalyzer` is a hand walker over the same names, so an unknown head would be a
+silent three-way divergence. Status is experimental -- partial R7RS-small conformance by
+design, no compatibility promise -- and every user surface says so (`--source-language`
+help, the title of `doc/*/guides/scheme.md`). `--no-gc` is refused by name
+(`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
+
+## Where it sits
+
+- `scheme` depends on the AST types and `reader` only: `SchemeReader` (text -> datums, its
+  own case-sensitive reader), `SchemeLowering` (datums -> core forms), `SchemeBuiltins`
+  (the procedure table), `SchemeNames` (identifier escaping), `Scheme` (the facade).
+- Reached ONLY through the seam: `eval/SourceLanguage.SCHEME`, picked for `.scm` or by
+  `--source-language scheme` (`.kb/source-language.md`). Per FILE, so a Common Lisp file
+  may `(load "lib.scm")` and call its procedures as `(|name| ...)`.
+- The run-time half is Common Lisp source, `eval/scheme.lisp`, handled the `UrlLibrary`
+  way by `eval/SchemeLibrary`: the interpreter loads it on the first resolution of a
+  `rontolisp::%scheme-` FUNCTION, `CompileFrontend.expand` splices it innermost (beside
+  `TokenizersLibrary`, INSIDE the prelude whose string comparisons it uses) and
+  `LibraryDefunPruner` drops what stays unreachable. The playground's chain has the splice
+  too; a `.scm` reaches the playground through `(load ...)` of an uploaded file.
+- A whole FILE is lowered at once: defun-or-variable is decided by a pre-scan. The REPL
+  reads one form at a time and stays Common Lisp.
+
+## The lowering table
+
+| Scheme | lowers to | why |
+|---|---|---|
+| identifier `foo` | symbol `foo`, verbatim | canonical names are upcased, so a name with an ASCII lowercase letter can never hit a `LispNames` case label |
+| `CAR`, `X`, `T`, `+` (no lowercase), `a:b`, `&rest`, `s%...`, `#f` | escaped: `s%` + name, `%`->`%%`, `:`->`%c` | `(defun \|CAR\| ...)` REPLACES the built-in; `a:b` is "symbol b of package a" to the resolver ("No such package: a"); `&rest` is a lambda-list keyword; the prefix and `#f` keep the map injective and the false value unforgeable. The rule is spelled twice (`SchemeNames.mangle`, `%scheme-needs-escape` in `scheme.lisp`) -- change both |
+| `'()` | `NIL` | `&rest` lists, `apply` and every list primitive end in it |
+| `#t` | `T` | |
+| `#f` | the VALUE of `rontolisp::%scheme-false`, the symbol `\|#f\|`, bound by the first form of every lowered file | distinct from NIL; a symbol so quoted data, `case` and `equal?` need nothing special |
+| `(if c a b)` | `(if (eq c false) b a)`; a predicate fuses: `(if (pair? x) ..)` -> `(if (consp x) ..)`, `and`/`or`/`not` compose | `SchemeBuiltins.Result`: `pred` (T/NIL) and `or-false` (value or NIL: `memq`, `assq`, `member`) fuse in a test and convert anywhere else -- `(if raw t false)` / `(or raw false)` |
+| top-level `(define x v)` | top-level `(setq x v)` | NEVER `defvar`: that makes the name special and a `let` of it leaks into callees (2 instead of 1) |
+| top-level procedure defined ONCE by a `lambda`, never `set!` | `defun`, called directly | keeps the direct call and the tree shaker. `set!` is collected by name, blind to scope: over-approximating only costs the direct call |
+| any other procedure binding | variable + `funcall`; a procedure name in value position -> `#'name` | Lisp-1 over Lisp-2 (`.kb/lisp2-namespaces.md`). A known procedure's first-class value is its `:function` form in `SchemeBuiltins` |
+| a name this file does not define | call position: a direct call; value position: a variable | what lets a Common Lisp file and a Scheme file call each other |
+| `(lambda args ..)`, `(lambda (a . r) ..)` | `&rest` | the dotted formals are parsed here: `LambdaLists.parse` reads through `toList()` and DROPS an improper tail |
+| named `let` / `do` whose name is only tail-called; a self tail call | `tagbody`/`go`, every `go` in STATEMENT position | destination-driven lowering (below) |
+| named `let` whose name escapes; `letrec`; internal `define` | bind to nil, `setq` a `lambda`, `funcall` | the shape `labels` itself lowers to (`.kb/flet-labels.md`), so `labels` would buy no direct call |
+| `cond` `case` `and` `or` `when` `unless` `do` | desugared to `if`/`let`/`begin`/named `let` first | spelled with identity-compared `CORE_*` symbols: `(define (f if) (or if 1))` still gets the real `if` |
+| `call/cc` | `block` + a closure doing `return-from` (`%scheme-call/cc`) | escape-only, one-shot; crosses lambdas through `CrossLambdaExitLowering` |
+| `dynamic-wind` | `before`, then `unwind-protect` | the exit half runs on every exit channel; re-entry does not exist |
+| `(call-with-values (lambda () ..) (lambda (a b) ..))`, `let-values`, `define-values` | `multiple-value-bind` | the syntactic tier (`.kb/multiple-values.md`). Any other shape: `(apply consumer (multiple-value-list (funcall producer)))`. A loop's `(values ..)` result survives the `setq` into the result variable because `values` publishes through `%mv-spill` |
+| `define-record-type` (top level only) | `defstruct` with `(:conc-name nil)`, each slot NAMED after its accessor, a BOA constructor; the modifier a `defun` over `(setf (accessor r) v)` | `defstruct` is what registers the instance layout on every backend (`.kb/defstruct.md`); the accessor IS the generated one, no wrapper call. The predicate answers T/NIL and is a `pred` (`GlobalPredicate`) |
+| `quasiquote` | `cons`/`append`/`(coerce .. 'vector)`, constant parts quoted | depth-counted per R7RS: the innermost unquote of a nested template IS evaluated |
+
+`symbol?` excludes `T`, `NIL` and the false value; `boolean?` is `#t`/`#f` only; `vector?`
+excludes strings (`vectorp` does not); `integer?` accepts `2.0`; `max`/`min` are inexact
+when any argument is; `equal?` is its own helper (recurses into vectors, `eqv?` on
+records; CL's `equal` compares a general vector by identity and an instance slot-wise).
+
+## Destination-driven lowering (`SchemeLowering.lower`)
+
+`lower(expr, Context)` answers an EXPRESSION when the context has no `Destination` and a
+STATEMENT when it has one: a statement stores its value in the destination's result
+variable or jumps to a `Target` label. Tail-transparent forms (`if`, `begin`, the `let`
+family, bodies) pass the destination down; every other form is a leaf `(setq R value)`.
+
+- A named `let` is first tried as a PURE loop: its name is a `LoopName` binding, and any
+  use other than a jump -- a non-tail call, a call from inside a `lambda`, a bare
+  reference -- sets `escaped`, discarding the attempt for the procedure shape. Optimistic
+  re-lowering is exponential in the nesting depth of NON-pure named lets, which is small.
+- A procedure with a known name (`defun`, a never-assigned `letrec`/`define` variable
+  bound to a syntactic `lambda`) is tried as a self loop only when its body mentions a
+  call to the name; if no call turned out to be a tail call the plain shape is used, so
+  `fib` carries no `tagbody`.
+- **Loop variables are assigned in place (`psetq`)** -- the shape the backends' typed
+  loops recognize. **A loop whose body creates a closure rebinds per iteration** from
+  carrier variables, `(tagbody L (let ((i C)) ...))`, because each iteration's closure must
+  capture ITS binding. Detected by counting the `lambda`s the body lowering emitted, not by
+  scanning for the word `lambda` (an `(import (prefix ..))` renames it).
+- Mutual and higher-order tail calls are ordinary calls (depths below).
+
+## Traps
+
+- **`(setq false '|#f|)` is emitted unconditionally**, first: the helpers in `scheme.lisp`
+  read the variable, and the interpreter's lazy load is keyed on FUNCTION resolution.
+- A template parameter used more than once (`symbol?`, `square`, `floor`) binds a
+  non-atomic argument to a temporary; substitution never touches the operator position or
+  a `quote`/`function` form. No parameter may be named `t`/`nil` (the table is read by
+  `LispReader`; `SchemeBuiltinsTest` pins it).
+- `#'apply` is not a function value on the compile path ("Cannot compile: APPLY"), and the
+  comparison function values are BINARY: first-class `apply` spreads through
+  `%scheme-spread`, first-class `<`/`char<?`/`string<?` walk `%scheme-chain`.
+- Generated temporaries are UPPERCASE `%SCM-<kind><n>`, which no escaped user identifier
+  can spell; the counter is per file, so emission is deterministic (three compiles of the
+  corpus: one `.class` hash, one `.wasm` hash).
+- A syntax error is a positioned `LispReadException` on BOTH paths: `SchemeReader` keeps
+  its own cons -> offset map, because `SourceProvenance` records on the compile path only.
+  Lowered conses also `inherit` their datum's position (`.kb/source-positions.md`).
+- **The interpreter loads `scheme.lisp` through `evalResolved`, not the bare
+  `eval(form, globalEnv)` its neighbours use**: `%scheme-error-message` rebinds
+  `*standard-output*`, and only a form whose special bindings were registered
+  (`SpecialVarCollector.collectForm`) binds it dynamically for its callees. Loaded bare,
+  the message went to stdout and the report named the exception class. Any other lazily
+  loaded library that starts rebinding a special needs the same entry.
+- The front end changes no Common Lisp program's output: the whole `ci-spec.yaml` corpus
+  (7.3 MB of `.class`, `.wasm` and component) compiled with the jar before and after
+  differs in 3 bytes, the build timestamp (2026-09-17).
+- Found through this corpus, fixed in the backends, not worked around here: parallel `let`
+  (`.kb/parallel-let.md`) and `(+)`/`(*)` with no arguments.
+
+## Measurements (2026-09-17, wasmtime 47, x86-64 Linux, Java 25)
+
+**`#f` representation** -- 100,000,000 `if` tests, wasm / JVM seconds, artifact bytes:
+
+| `#f` is | wasm | JVM | `.wasm` | `.class` |
+|---|---|---|---|---|
+| an inline `'\|#f\|` | 4.56 | 0.27 | 3225 | 9573 |
+| a global holding the symbol (chosen) | 1.48 | 0.28 | 3248 | 9635 |
+| a global holding a `defstruct` singleton | 1.32 | 0.27 | 3672 | 10363 |
+| (reference: NIL, a native test) | 1.48 | 0.24 | 3094 | 9180 |
+
+A quoted symbol costs a lookup per evaluation on wasm; the global costs nothing over a
+native NIL test. The singleton buys unforgeability the name escaping already gives, for
++424 / +728 bytes and quoted data that would have to be built at run time.
+
+**Loop shape** -- 300,000,000 iterations of a two-variable loop, wasm / JVM seconds:
+
+| shape | wasm | JVM |
+|---|---|---|
+| in place, `psetq` (chosen) | 1.97 | 0.80 |
+| per-iteration `let` from carriers (only under a closure) | 2.41 | 0.73 |
+| variables pre-bound to nil, copied in at the label | 8.31 | -- |
+| (reference: CL `do`) | 1.64 | 0.83 |
+
+The nil-initialized shape loses the integer typing of the loop variables: 4x.
+
+**Tail-call depth that is NOT a loop** (`ev?`/`od?`), default stacks: JVM (`java Prog`)
+passes 2,000 and overflows at 5,000; interpreter, wasm and component pass 10,000 and fail
+at 100,000 (`StackOverflowError` / `call stack exhausted`).
+
+**Size.** `(display "hello, world")` is 1,594 B of class and 498 B of wasm: `display` of a
+string, character or integer LITERAL lowers to `write-string` / `write-char` / `princ`.
+The generic printer (`%scheme-print`) costs 58.8 KB of class and 7.1 KB of wasm. It writes
+a symbol's spelling character by character instead of building it: with
+`(coerce list 'string)` in that path the same program was 70.2 KB / 17.5 KB.
+
+## Not here yet (each its own follow-up)
+
+`syntax-rules`/`define-syntax` (a shadow-aware walk like `substituteSymbolMacros`),
+`define-library`, `guard`/`raise` (onto `handler-case`), `parameterize` (the special-`let`
+restore), bytevectors (the `(unsigned-byte 8)` pack), ports beyond the current output port
+(`%STREAM` instances), `eval`, `(scheme char)` and the other libraries, `|...|`
+identifiers, `+inf.0`/`+nan.0`, internal `define-record-type`, re-entrant continuations,
+proper tail calls in general. Each is refused by name where it can be.
+
+## Tests
+
+`SchemeSpecE2eTest` over `scheme-spec.yaml` (one case per table row and per procedure
+group, all four backends in `./mvnw test`; the wasm legs need `wasmtime` on `PATH`),
+`SchemeLoweringTest` (the table as emitted forms), `SchemeReaderTest`, `SchemeNamesTest`,
+`SchemeBuiltinsTest` (every `:function` evaluates, every helper a template names exists),
+`RontoLispCliTest` (`aSchemeFileIsPickedByItsExtension`, `aCommonLispProgramLoadsASchemeFile`,
+`aSchemeSyntaxErrorNamesItsPositionOnEveryPath`, `aSchemeProgramIsRefusedByTheScalarBackend`,
+`anUncaughtSchemeErrorReportsItsMessageAndIrritants`), `DocExamplesTest` (a ```` ```scheme ```` fence is a
+whole program whose stdout is asserted).
+Probes behind the first version of this table: `.todo/artefacts/825-minimal-experimental-scheme-front-end/`.

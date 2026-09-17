@@ -133,6 +133,8 @@ sections:
         title: Testing (rove)
       - file: guides/reader-case.md
         title: Reader Case (Upcasing)
+      - file: guides/scheme.md
+        title: Scheme (experimental)
       - file: guides/math-backends.md
         title: Math Function Backends
       - file: guides/clock-and-random.md

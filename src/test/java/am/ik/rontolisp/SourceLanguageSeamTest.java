@@ -98,6 +98,8 @@ class SourceLanguageSeamTest {
 			Map.entry("am.ik.rontolisp.eval.WaitForLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.WitLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.UrlLibrary", SHIPPED_SOURCE),
+			Map.entry("am.ik.rontolisp.eval.SchemeLibrary", SHIPPED_SOURCE),
+			Map.entry("am.ik.rontolisp.scheme.SchemeBuiltins", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.macro.CompileRuntime", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.macro.FormatRenderer", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.macro.LispMacroExpander", SHIPPED_SOURCE),

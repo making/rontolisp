@@ -1264,9 +1264,10 @@ public final class RontoLispCli {
 		this.out.println("                     The entry source's language, overriding the pick from");
 		this.out.println("                     its extension (a (load ...)ed file is still picked by");
 		this.out.println("                     its own extension, so one program may mix languages");
-		this.out.println("                     file by file). Today only common-lisp, which every");
-		this.out.println("                     extension reads as anyway: the flag is the seam a");
-		this.out.println("                     second language arrives through.");
+		this.out.println("                     file by file). common-lisp is every extension's default;");
+		this.out.println("                     scheme (.scm) is EXPERIMENTAL: a subset of R7RS-small");
+		this.out.println("                     (scheme base), partial conformance by design and no");
+		this.out.println("                     compatibility promise. Not with --no-gc.");
 	}
 
 	private static String readFile(String path) {

@@ -1,0 +1,335 @@
+;; The run-time half of the EXPERIMENTAL Scheme front end (am.ik.rontolisp.scheme),
+;; written in Common Lisp so one definition runs on every backend and no emitter
+;; learns a Scheme name: the interpreter loads it on the first resolution of a
+;; rontolisp::%scheme- function, the compile path splices it when the program
+;; references one (SchemeLibrary.java) and the tree-shaker drops what stays
+;; unreachable.
+;;
+;; The value model these helpers share with the lowering (.kb/scheme-frontend.md):
+;; '() is NIL, #t is T, and #f is the value of rontolisp::%scheme-false -- a DISTINCT
+;; non-NIL object the lowered program binds before anything else runs. A helper
+;; answering a Common Lisp boolean (T/NIL) is declared `pred` or `or-false` in
+;; SchemeBuiltins, which converts at the call site; every other helper answers
+;; Scheme values itself.
+;;
+;; Symbol names follow SchemeNames.mangle: a spelling that could collide with a
+;; canonical name is escaped behind "s%" (with % -> %%, : -> %c). The rule is spelled
+;; TWICE, there and in %scheme-needs-escape below; change the two together.
+
+;; --- symbols ------------------------------------------------------------------
+
+(defun rontolisp::%scheme-escaped-p (name)
+  (and (>= (length name) 2) (char= (char name 0) #\s)
+       (char= (char name 1) #\%)))
+
+(defun rontolisp::%scheme-has-lowercase (name)
+  (do ((i 0 (+ i 1)))
+      ((>= i (length name)) nil)
+    (let ((c (char name i)))
+      (if (and (char>= c #\a) (char<= c #\z)) (return t)))))
+
+(defun rontolisp::%scheme-needs-escape (name)
+  (or (rontolisp::%scheme-escaped-p name)
+      (and (> (length name) 0) (char= (char name 0) #\&)) (string= name "#f")
+      (find #\: name) (not (rontolisp::%scheme-has-lowercase name))))
+
+(defun rontolisp::%scheme-symbol->string (symbol)
+  (let ((name (symbol-name symbol)))
+    (if (rontolisp::%scheme-escaped-p name)
+        (let ((out nil) (n (length name)))
+          (do ((i 2 (+ i 1)))
+              ((>= i n))
+            (let ((c (char name i)))
+              (if (and (char= c #\%) (< (+ i 1) n))
+                  (progn
+                    (setq i (+ i 1))
+                    (setq out
+                          (cons (if (char= (char name i) #\c) #\: (char name i))
+                                out)))
+                  (setq out (cons c out)))))
+          (coerce (nreverse out) 'string))
+        (copy-seq name))))
+
+(defun rontolisp::%scheme-string->symbol (name)
+  (if (rontolisp::%scheme-needs-escape name)
+      (let ((out (list #\% #\s)))
+        (do ((i 0 (+ i 1)))
+            ((>= i (length name)))
+          (let ((c (char name i)))
+            (cond ((char= c #\%) (setq out (cons #\% (cons #\% out))))
+                  ((char= c #\:) (setq out (cons #\c (cons #\% out))))
+                  (t (setq out (cons c out))))))
+        (intern (coerce (nreverse out) 'string)))
+      (intern name)))
+
+;; --- write / display ------------------------------------------------------------
+
+(defun rontolisp::%scheme-write-char-datum (c)
+  (write-string "#\\")
+  (let ((code (char-code c)))
+    (cond ((= code 32) (write-string "space"))
+          ((= code 10) (write-string "newline"))
+          ((= code 9) (write-string "tab"))
+          ((= code 13) (write-string "return"))
+          ((= code 0) (write-string "null"))
+          ((= code 7) (write-string "alarm"))
+          ((= code 8) (write-string "backspace"))
+          ((= code 27) (write-string "escape"))
+          ((= code 127) (write-string "delete"))
+          (t (write-char c)))))
+
+(defun rontolisp::%scheme-write-string-datum (s)
+  (write-char #\")
+  (do ((i 0 (+ i 1)))
+      ((>= i (length s)))
+    (let ((c (char s i)))
+      (let ((code (char-code c)))
+        (cond ((= code 34) (write-string "\\\""))
+              ((= code 92) (write-string "\\\\"))
+              ((= code 10) (write-string "\\n"))
+              ((= code 9) (write-string "\\t"))
+              ((= code 13) (write-string "\\r"))
+              (t (write-char c))))))
+  (write-char #\"))
+
+;; Writes a symbol's Scheme spelling WITHOUT building it: the printer is in nearly every
+;; program, and a string built from a character list drags the sequence runtime in
+;; (measured 2026-09-17: a lone (display x) was 70 KB of class and 17.5 KB of wasm).
+(defun rontolisp::%scheme-print-symbol (symbol)
+  (let ((name (symbol-name symbol)))
+    (if (rontolisp::%scheme-escaped-p name)
+        (let ((n (length name)))
+          (do ((i 2 (+ i 1)))
+              ((>= i n))
+            (let ((c (char name i)))
+              (if (and (char= c #\%) (< (+ i 1) n))
+                  (progn
+                    (setq i (+ i 1))
+                    (write-char
+                     (if (char= (char name i) #\c) #\: (char name i))))
+                  (write-char c)))))
+        (write-string name))))
+
+(defun rontolisp::%scheme-print (x escape)
+  (cond ((eq x t) (write-string "#t"))
+        ((eq x rontolisp::%scheme-false) (write-string "#f"))
+        ((null x) (write-string "()"))
+        ((symbolp x) (rontolisp::%scheme-print-symbol x))
+        ((stringp x)
+         (if escape (rontolisp::%scheme-write-string-datum x) (write-string x)))
+        ((characterp x)
+         (if escape (rontolisp::%scheme-write-char-datum x) (write-char x)))
+        ((consp x)
+         (write-char #\()
+         (rontolisp::%scheme-print (car x) escape)
+         (do ((rest (cdr x) (cdr rest)))
+             ((not (consp rest))
+              (if (not (null rest))
+                  (progn
+                    (write-string " . ")
+                    (rontolisp::%scheme-print rest escape))))
+           (write-char #\Space)
+           (rontolisp::%scheme-print (car rest) escape))
+         (write-char #\)))
+        ((vectorp x)
+         (write-string "#(")
+         (do ((i 0 (+ i 1)))
+             ((>= i (length x)))
+           (if (> i 0) (write-char #\Space))
+           (rontolisp::%scheme-print (aref x i) escape))
+         (write-char #\)))
+        ((functionp x) (write-string "#<procedure>"))
+        (t (princ x)))
+  nil)
+
+(defun rontolisp::%scheme-display (x) (rontolisp::%scheme-print x nil))
+
+(defun rontolisp::%scheme-write (x) (rontolisp::%scheme-print x t))
+
+;; --- equivalence, lists -----------------------------------------------------------
+
+;; equal? recurses into pairs, strings and vectors (CL's equal compares a general
+;; vector by identity) and is eqv? on everything else, records included. The cdr
+;; direction is a loop, so a long list costs no stack.
+(defun rontolisp::%scheme-equal? (a b)
+  (do ((x a (cdr x)) (y b (cdr y)))
+      ((not (and (consp x) (consp y)))
+       (cond ((eql x y) t)
+             ((stringp x) (and (stringp y) (string= x y) t))
+             ((and (vectorp x) (vectorp y) (not (stringp y))
+                   (= (length x) (length y)))
+              (do ((i 0 (+ i 1)))
+                  ((>= i (length x)) t)
+                (if (not (rontolisp::%scheme-equal? (aref x i) (aref y i)))
+                    (return nil))))
+             (t nil)))
+    (if (not (rontolisp::%scheme-equal? (car x) (car y))) (return nil))))
+
+(defun rontolisp::%scheme-member (x list)
+  (do ((rest list (cdr rest)))
+      ((not (consp rest)) nil)
+    (if (rontolisp::%scheme-equal? x (car rest)) (return rest))))
+
+(defun rontolisp::%scheme-member-by (x list same)
+  (do ((rest list (cdr rest)))
+      ((not (consp rest)) nil)
+    (if (not (eq (funcall same x (car rest)) rontolisp::%scheme-false))
+        (return rest))))
+
+(defun rontolisp::%scheme-assoc (x alist)
+  (do ((rest alist (cdr rest)))
+      ((not (consp rest)) nil)
+    (if (and (consp (car rest)) (rontolisp::%scheme-equal? x (car (car rest))))
+        (return (car rest)))))
+
+(defun rontolisp::%scheme-assoc-by (x alist same)
+  (do ((rest alist (cdr rest)))
+      ((not (consp rest)) nil)
+    (if (and (consp (car rest))
+         (not (eq (funcall same x (car (car rest))) rontolisp::%scheme-false)))
+        (return (car rest)))))
+
+(defun rontolisp::%scheme-list? (x)
+  (do ((rest x (cdr rest))) ((not (consp rest)) (null rest))))
+
+;; (< a b c ...) as a first-class procedure: the Common Lisp function values of the
+;; comparisons are binary, so the chain is walked pairwise. Answers T/NIL.
+(defun rontolisp::%scheme-chain (compare arguments)
+  (do ((rest arguments (cdr rest)))
+      ((or (null rest) (null (cdr rest))) t)
+    (if (not (funcall compare (car rest) (car (cdr rest)))) (return nil))))
+
+;; --- numbers ----------------------------------------------------------------------
+
+(defun rontolisp::%scheme-integer? (x)
+  (or (integerp x) (and (floatp x) (= x (truncate x)))))
+
+;; max / min are inexact when any argument is (R7RS 6.2.6); CL's may answer the exact one.
+(defun rontolisp::%scheme-max (a b)
+  (let ((m (max a b))) (if (or (floatp a) (floatp b)) (float m 1.0d0) m)))
+
+(defun rontolisp::%scheme-min (a b)
+  (let ((m (min a b))) (if (or (floatp a) (floatp b)) (float m 1.0d0) m)))
+
+(defun rontolisp::%scheme-number->string (n radix)
+  (if (or (= radix 10) (not (integerp n)))
+      (princ-to-string n)
+      (if (zerop n)
+          "0"
+          (do ((m (abs n) (truncate m radix))
+               (digits
+                nil
+                (cons
+                 (char "0123456789abcdefghijklmnopqrstuvwxyz" (rem m radix))
+                 digits)))
+              ((zerop m)
+               (coerce (if (< n 0) (cons #\- digits) digits) 'string))))))
+
+(defun rontolisp::%scheme-digit (c radix)
+  (let ((code (char-code c)))
+    (let ((value
+           (cond ((and (>= code 48) (<= code 57)) (- code 48))
+                 ((and (>= code 97) (<= code 122)) (- code 87))
+                 ((and (>= code 65) (<= code 90)) (- code 55))
+                 (t radix))))
+      (if (< value radix) value nil))))
+
+;; Scans digits of S from START: (value . end), END = START when there are none.
+(defun rontolisp::%scheme-scan-digits (s start radix)
+  (let ((value 0) (end start))
+    (do ((i start (+ i 1)))
+        ((>= i (length s)))
+      (let ((digit (rontolisp::%scheme-digit (char s i) radix)))
+        (if digit
+            (progn
+              (setq value (+ (* value radix) digit))
+              (setq end (+ i 1)))
+            (return nil))))
+    (cons value end)))
+
+;; [sign] digits [/ digits], and in radix 10 also [sign] digits* [. digits*] [e [sign]
+;; digits+]. The decimal is built EXACTLY and converted once, so the result is the
+;; correctly rounded double the reader would have produced for the same text.
+(defun rontolisp::%scheme-string->number (s radix)
+  (let ((n (length s)) (start 0) (sign 1))
+    (if (and (> n 0) (or (char= (char s 0) #\+) (char= (char s 0) #\-)))
+        (progn
+          (if (char= (char s 0) #\-) (setq sign -1))
+          (setq start 1)))
+    (let ((whole (rontolisp::%scheme-scan-digits s start radix)))
+      (let ((whole-end (cdr whole)))
+        (cond ((and (= whole-end n) (> whole-end start)) (* sign (car whole)))
+              ((and (> whole-end start) (< whole-end n)
+                    (char= (char s whole-end) #\/))
+               (let ((denominator
+                      (rontolisp::%scheme-scan-digits s (+ whole-end 1) radix)))
+                 (if (and (= (cdr denominator) n)
+                          (> (cdr denominator) (+ whole-end 1))
+                          (> (car denominator) 0))
+                     (/ (* sign (car whole)) (car denominator))
+                     rontolisp::%scheme-false)))
+              ((= radix 10)
+               (rontolisp::%scheme-decimal s
+                (list sign start (car whole) whole-end)))
+              (t rontolisp::%scheme-false))))))
+
+(defun rontolisp::%scheme-decimal (s state)
+  (let ((n (length s))
+        (sign (car state))
+        (start (car (cdr state)))
+        (whole (car (cdr (cdr state))))
+        (i (car (cdr (cdr (cdr state))))))
+    (let ((mantissa whole) (scale 0) (digits (- i start)) (exponent 0) (ok t))
+      (if (and (< i n) (char= (char s i) #\.))
+          (let ((fraction (rontolisp::%scheme-scan-digits s (+ i 1) 10)))
+            (setq scale (- (cdr fraction) (+ i 1)))
+            (setq digits (+ digits scale))
+            (setq mantissa (+ (* whole (expt 10 scale)) (car fraction)))
+            (setq i (cdr fraction))))
+      (if (and (< i n) (or (char= (char s i) #\e) (char= (char s i) #\E)))
+          (let ((exponent-sign 1) (j (+ i 1)))
+            (if (and (< j n) (or (char= (char s j) #\+) (char= (char s j) #\-)))
+                (progn
+                  (if (char= (char s j) #\-) (setq exponent-sign -1))
+                  (setq j (+ j 1))))
+            (let ((scanned (rontolisp::%scheme-scan-digits s j 10)))
+              (if (= (cdr scanned) j) (setq ok nil))
+              (setq exponent (* exponent-sign (car scanned)))
+              (setq i (cdr scanned)))))
+      (if (and ok (= i n) (> digits 0))
+          (float (* sign mantissa (expt 10 (- exponent scale))) 1.0d0)
+          rontolisp::%scheme-false))))
+
+;; --- control ----------------------------------------------------------------------
+
+;; apply as a first-class procedure: (a b (c d)) -> (a b c d), the argument list
+;; (apply f a b '(c d)) spreads. #'apply itself is not a function value on the compile
+;; path.
+(defun rontolisp::%scheme-spread (arguments)
+  (if (null (cdr arguments))
+      (car arguments)
+      (cons (car arguments) (rontolisp::%scheme-spread (cdr arguments)))))
+
+;; Escape-only, one-shot: the continuation is a closure over a block, so calling it
+;; after the call/cc returned is an error, and re-entry does not exist.
+(defun rontolisp::%scheme-call/cc (receiver)
+  (block rontolisp::%scheme-continuation
+    (funcall receiver
+             (lambda (&rest results)
+               (return-from rontolisp::%scheme-continuation
+                            (values-list results))))))
+
+;; The exit half runs on every way out -- a normal return, an escaping continuation,
+;; an error. There is no re-entry, so BEFORE runs exactly once.
+(defun rontolisp::%scheme-dynamic-wind (before thunk after)
+  (funcall before)
+  (unwind-protect (funcall thunk) (funcall after)))
+
+(defun rontolisp::%scheme-error-message (message irritants)
+  (with-output-to-string (*standard-output*)
+    (if (stringp message)
+        (write-string message)
+        (rontolisp::%scheme-print message t))
+    (dolist (irritant irritants)
+      (write-char #\Space)
+      (rontolisp::%scheme-print irritant t))))

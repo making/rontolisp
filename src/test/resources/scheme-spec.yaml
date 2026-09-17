@@ -1,0 +1,517 @@
+# The corpus of the EXPERIMENTAL Scheme front end (SchemeSpecE2eTest): one case per row of
+# the lowering table in .kb/scheme-frontend.md and per procedure group of the subset.
+# Cases run IN ORDER, concatenated into one .scm program per backend (shared global
+# state), and the output is sliced back per case -- the ci-spec.yaml idea. Every case
+# must print the same text on the interpreter, the JVM, wasm and the component.
+cases:
+  - name: identifiers-keep-their-case-and-never-hit-a-common-lisp-name
+    source: |
+      (define (loop list) (car list))
+      (write (loop '(1 2 3))) (newline)
+      (define (remove-if print) (list 'mine print))
+      (write (remove-if '(1 2))) (newline)
+      (define Foo 1) (define foo 2) (define FOO 3)
+      (write (list Foo foo FOO)) (newline)
+    expected: |
+      1
+      (mine (1 2))
+      (1 2 3)
+  - name: an-identifier-without-a-lowercase-letter-is-renamed-when-bound
+    source: |
+      (define X 10)
+      (define (CAR x) (list 'mine x X))
+      (write (CAR '(1 2))) (newline)
+      (write (car '(1 2))) (newline)
+      (define (tn T NIL) (list T NIL))
+      (write (tn 1 2)) (newline)
+      (define (amp &rest a:b) (list &rest a:b))
+      (write (amp 3 4)) (newline)
+      (write (let ((LIST 5) (+ -)) (+ LIST 2))) (newline)
+    expected: |
+      (mine (1 2) 10)
+      1
+      (1 2)
+      (3 4)
+      3
+  - name: symbols-as-data-round-trip-through-their-escaped-spelling
+    source: |
+      (write '(ABC T NIL nil t a:b &rest s%x x%y)) (newline)
+      (write (map symbol->string '(ABC T a:b s%x abc))) (newline)
+      (write (list (eq? 'ABC (string->symbol "ABC")) (eq? 'abc (string->symbol "abc"))
+                   (eq? 'a:b (string->symbol "a:b")) (eq? 'abc 'ABC)))
+      (newline)
+      (write (list (symbol? 'T) (symbol? 'NIL) (symbol? 'nil) (null? 'NIL) (eq? 'T #t)))
+      (newline)
+      (write (list (eq? (string->symbol "#f") #f) (if (string->symbol "#f") 'true 'false)))
+      (newline)
+    expected: |
+      (ABC T NIL nil t a:b &rest s%x x%y)
+      ("ABC" "T" "a:b" "s%x" "abc")
+      (#t #t #t #f)
+      (#t #t #t #f #f)
+      (#f true)
+  - name: the-empty-list-is-true-and-false-is-its-own-value
+    source: |
+      (define (truthy x) (if x 'yes 'no))
+      (write (map truthy (list '() #f #t 0 "" 'a (list)))) (newline)
+      (write (list (null? '()) (null? #f) (eq? '() #f) (boolean? '()) (boolean? #f) (boolean? #t)))
+      (newline)
+      (write (list #t #f #true #false '#t '#f '(#t #f))) (newline)
+      (write (list (not #f) (not '()) (not 0) (not (not 'a)))) (newline)
+    expected: |
+      (yes no yes yes yes yes yes)
+      (#t #f #f #f #t #t)
+      (#t #f #t #f #t #f (#t #f))
+      (#t #f #f #t)
+  - name: a-predicate-fuses-into-a-test-and-converts-as-a-value
+    source: |
+      (define (kind x)
+        (cond ((pair? x) 'pair) ((null? x) 'null) ((and (number? x) (not (zero? x))) 'nonzero)
+              ((or (string? x) (char? x)) 'text) (else 'other)))
+      (write (map kind (list '(1) '() 5 0 "s" #\c 'q))) (newline)
+      (write (list (pair? '(1)) (pair? 1) (and (pair? '(1)) (null? '())) (or (pair? 1) (null? 1))))
+      (newline)
+      (write (map pair? '((1) 2 ()))) (newline)
+      (write (list (and) (or) (and 1 2) (and 1 #f 2) (or #f 3) (or #f #f) (and 1 '()))) (newline)
+    expected: |
+      (pair null nonzero other text text other)
+      (#t #f #t #f)
+      (#t #f #f)
+      (#t #f 2 #f 3 #f ())
+  - name: a-top-level-define-is-lexical-not-special
+    source: |
+      (define gx 1)
+      (define (get-gx) gx)
+      (write (let ((gx 2)) (get-gx))) (newline)
+      (set! gx 5)
+      (write (get-gx)) (newline)
+    expected: |
+      1
+      5
+  - name: lisp-1-over-lisp-2
+    source: |
+      (define (twice f x) (f (f x)))
+      (define (add1 x) (+ x 1))
+      (write (twice add1 5)) (newline)
+      (write (twice (lambda (x) (* x x)) 3)) (newline)
+      (write (twice cdr '(1 2 3))) (newline)
+      (define op add1)
+      (write (op 1)) (newline)
+      (set! op (lambda (x) (* x 10)))
+      (write (op 1)) (newline)
+      (define (compose f g) (lambda (x) (f (g x))))
+      (write ((compose car cdr) '(1 2 3))) (newline)
+      (write (map (lambda (p) (p 4)) (list add1 even? - (lambda (x) x)))) (newline)
+      (define redefined 1)
+      (define (redefined) 'second)
+      (write (redefined)) (newline)
+      (write (let ((list vector)) (list 1 2))) (newline)
+    expected: |
+      7
+      81
+      (3)
+      2
+      10
+      2
+      (5 #t -4 4)
+      second
+      #(1 2)
+  - name: lambda-formals
+    source: |
+      (write ((lambda args args) 1 2 3)) (newline)
+      (write ((lambda (a . r) (list a r)) 1 2 3)) (newline)
+      (write ((lambda (a b) (list b a)) 1 2)) (newline)
+      (define (sum . xs) (apply + xs))
+      (write (list (sum) (sum 1) (sum 1 2 3) (apply sum 1 2 '(3 4)))) (newline)
+    expected: |
+      (1 2 3)
+      (1 (2 3))
+      (2 1)
+      (0 1 6 10)
+  - name: a-named-let-is-a-loop-a-million-iterations-deep
+    source: |
+      (define (count n)
+        (let loop ((i 0) (acc 0))
+          (if (< i n) (loop (+ i 1) (+ acc i)) acc)))
+      (write (count 1000000)) (newline)
+      (write (let loop ((i 0)) (cond ((= i 1000000) 'done) (else (loop (+ i 1)))))) (newline)
+    expected: |
+      499999500000
+      done
+  - name: a-do-loop-and-a-self-tail-call-are-loops-too
+    source: |
+      (write (do ((i 0 (+ i 1)) (acc '() (cons i acc))) ((= i 5) acc))) (newline)
+      (write (do ((i 0 (+ i 1)) (sum 0 (+ sum i))) ((= i 1000000) sum))) (newline)
+      (define (down n acc) (if (= n 0) acc (down (- n 1) (+ acc 1))))
+      (write (down 1000000 0)) (newline)
+      (define (gather n . acc) (if (= n 0) acc (gather (- n 1) n 'x)))
+      (write (gather 3)) (newline)
+      (define (walk l)
+        (define (inner l n) (cond ((null? l) n) ((pair? (car l)) (inner (cdr l) (+ n (walk (car l))))) (else (inner (cdr l) (+ n 1)))))
+        (inner l 0))
+      (write (walk '(1 (2 3) ((4)) 5))) (newline)
+      (let ((v (make-vector 3 0)))
+        (do ((i 0 (+ i 1))) ((= i 3)) (vector-set! v i (* i i)))
+        (write v) (newline))
+    expected: |
+      (4 3 2 1 0)
+      499999500000
+      1000000
+      (1 x)
+      5
+      #(0 1 4)
+  - name: a-loop-whose-body-closes-over-its-variables-rebinds-them-per-iteration
+    source: |
+      (define (thunks n)
+        (let loop ((i 0) (acc '()))
+          (if (= i n) (reverse acc) (loop (+ i 1) (cons (lambda () i) acc)))))
+      (write (map (lambda (t) (t)) (thunks 4))) (newline)
+      (write (map (lambda (t) (t)) (do ((i 0 (+ i 1)) (acc '() (cons (lambda () (* i i)) acc))) ((= i 3) acc))))
+      (newline)
+      (define (adders n acc) (if (= n 0) acc (adders (- n 1) (cons (lambda (x) (+ x n)) acc))))
+      (write (map (lambda (f) (f 10)) (adders 3 '()))) (newline)
+    expected: |
+      (0 1 2 3)
+      (4 1 0)
+      (11 12 13)
+  - name: a-named-let-whose-name-escapes-is-a-procedure
+    source: |
+      (write (let fact ((n 10)) (if (= n 0) 1 (* n (fact (- n 1)))))) (newline)
+      (write (let walk ((t '(1 (2 (3 4)) 5))) (cond ((null? t) 0) ((pair? t) (+ (walk (car t)) (walk (cdr t)))) (else t))))
+      (newline)
+      (write (let loop ((l '(1 2 3))) (if (null? l) '() (cons (* 2 (car l)) (map (lambda (x) x) (loop (cdr l)))))))
+      (newline)
+      (define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+      (write (fib 20)) (newline)
+    expected: |
+      3628800
+      15
+      (2 4 6)
+      6765
+  - name: internal-defines-are-letrec-star
+    source: |
+      (define (idef x)
+        (define a (* x 2))
+        (define (even? n) (if (= n 0) #t (odd? (- n 1))))
+        (define (odd? n) (if (= n 0) #f (even? (- n 1))))
+        (define b (+ a 1))
+        (list a b (even? a) (odd? a)))
+      (write (idef 5)) (newline)
+      (write (letrec ((ev? (lambda (n) (if (= n 0) #t (od? (- n 1))))) (od? (lambda (n) (if (= n 0) #f (ev? (- n 1)))))) (ev? 100)))
+      (newline)
+      (write (letrec* ((a 1) (b (+ a 1))) (list a b))) (newline)
+      (write (let* ((x 1) (x (+ x 1)) (y (* x 10))) (list x y))) (newline)
+      (write (let ((x 1)) (let ((x 2) (y x)) (list x y)))) (newline)
+      (write (let ((a 1) (b 2)) (let ((a b) (b a)) (list a b)))) (newline)
+      (write (let ((a 1) (b 2)) (let swap ((a b) (b a) (n 0)) (if (= n 3) (list a b) (swap b a (+ n 1))))))
+      (newline)
+    expected: |
+      (10 11 #t #f)
+      #t
+      (1 2)
+      (2 20)
+      (2 1)
+      (2 1)
+      (1 2)
+  - name: derived-forms
+    source: |
+      (define (classify n)
+        (case n ((1 2 3) 'small) ((10) 'ten) ((a b) 'letter) ((#\x) 'char) (else 'big)))
+      (write (map classify (list 1 3 10 'a #\x 99 "s"))) (newline)
+      (write (case 5 ((1) 'one) (else => (lambda (k) (* k 2))))) (newline)
+      (write (cond ((assv 2 '((1 . a) (2 . b))) => cdr) (else 'none))) (newline)
+      (write (cond ((assv 9 '((1 . a))) => cdr) (#f 'no) ((+ 1 1)) (else 'none))) (newline)
+      (write (list (when (> 1 0) 'a 'b) (unless (> 1 0) 'c) (when #f 'd))) (newline)
+      (define counter 0)
+      (begin (set! counter (+ counter 1)) (set! counter (* counter 10)))
+      (write counter) (newline)
+      (define (shadow if) (or if 'fallback))
+      (write (list (shadow #f) (shadow 1))) (newline)
+    expected: |
+      (small small ten letter char big big)
+      10
+      b
+      2
+      (b () ())
+      10
+      (fallback 1)
+  - name: quote-and-quasiquote
+    source: |
+      (write '(a (b . c) #(1 x "s") "str" #\a 1.5 1/2 ())) (newline)
+      (define n 3)
+      (write `(1 ,n ,(+ n 1) ,@(list 5 6) tail)) (newline)
+      (write `(a . ,n)) (newline)
+      (write `#(1 ,n ,@(list 4 5))) (newline)
+      (write `(1 `(2 ,(3 ,n)))) (newline)
+      (write `(plain list)) (newline)
+      (write (quasiquote (x (unquote (* 2 n))))) (newline)
+    expected: |
+      (a (b . c) #(1 x "s") "str" #\a 1.5 1/2 ())
+      (1 3 4 5 6 tail)
+      (a . 3)
+      #(1 3 4 5)
+      (1 (quasiquote (2 (unquote (3 3)))))
+      (plain list)
+      (x 6)
+  - name: call-cc-escapes-and-dynamic-wind-runs-the-exit-half
+    source: |
+      (write (+ 1 (call/cc (lambda (k) (map (lambda (x) (if (> x 2) (k x) x)) '(1 2 3 4)) 99)))) (newline)
+      (write (call-with-current-continuation (lambda (k) 'no-escape))) (newline)
+      (write (call/cc (lambda (k)
+        (dynamic-wind (lambda () (display "in ")) (lambda () (k 'escaped)) (lambda () (display "out "))))))
+      (newline)
+      (write (dynamic-wind (lambda () (display "before ")) (lambda () 'normal) (lambda () (display "after "))))
+      (newline)
+      (define (find-first pred l)
+        (call/cc (lambda (return) (for-each (lambda (x) (if (pred x) (return x))) l) #f)))
+      (write (list (find-first even? '(1 3 4 5)) (find-first even? '(1 3)))) (newline)
+      (call-with-values (lambda () (call/cc (lambda (k) (k 1 2)))) (lambda (a b) (write (list a b)) (newline)))
+    expected: |
+      4
+      no-escape
+      in out escaped
+      before after normal
+      (4 #f)
+      (1 2)
+  - name: multiple-values
+    source: |
+      (define (split l)
+        (let loop ((l l) (evens '()) (odds '()))
+          (cond ((null? l) (values (reverse evens) (reverse odds)))
+                ((even? (car l)) (loop (cdr l) (cons (car l) evens) odds))
+                (else (loop (cdr l) evens (cons (car l) odds))))))
+      (call-with-values (lambda () (split '(1 2 3 4 5))) (lambda (e o) (write (list e o)) (newline)))
+      (write (call-with-values (lambda () (values 1 2 3)) list)) (newline)
+      (define (producer) (values 'a 'b))
+      (write (call-with-values producer cons)) (newline)
+      (write (let-values (((a b) (values 1 2)) ((c) (values 3))) (list a b c))) (newline)
+      (write (let-values (((a . rest) (values 1 2 3)) (all (values 4 5))) (list a rest all))) (newline)
+      (write (let ((a 'outer)) (let-values (((a) (values 1)) ((b) (values a))) (list a b)))) (newline)
+      (write (let*-values (((a b) (values 1 2)) ((c) (values (+ a b)))) (list a b c))) (newline)
+      (define-values (q r) (values (quotient 17 5) (remainder 17 5)))
+      (write (list q r)) (newline)
+      (write (+ 1 (values 2))) (newline)
+    expected: |
+      ((2 4) (1 3 5))
+      (1 2 3)
+      (a . b)
+      (1 2 3)
+      (1 (2 3) (4 5))
+      (1 outer)
+      (1 2 3)
+      (3 2)
+      3
+  - name: records
+    source: |
+      (define-record-type <point> (make-point x y) point? (x point-x set-point-x!) (y point-y))
+      (define p (make-point 1 2))
+      (set-point-x! p 10)
+      (write (list (point-x p) (point-y p) (point? p) (point? 5) (point? '()))) (newline)
+      (write (map point-x (list p (make-point 7 8)))) (newline)
+      (write (map point? (list p 1))) (newline)
+      (write (list (equal? p p) (equal? p (make-point 10 2)) (eqv? p p))) (newline)
+      (define-record-type thing (make-thing) thing? (slot thing-slot set-thing-slot!))
+      (define t (make-thing))
+      (set-thing-slot! t 'filled)
+      (write (list (thing-slot t) (thing? t) (point? t) (pair? p) (vector? p) (procedure? make-point))) (newline)
+    expected: |
+      (10 2 #t #f #f)
+      (10 7)
+      (#t #f)
+      (#t #f #t)
+      (filled #t #f #f #f #t)
+  - name: equivalence
+    source: |
+      (write (list (eq? 'a 'a) (eq? '() '()) (eq? (list 1) (list 1)) (eqv? 1.5 1.5) (eqv? 2 2.0) (eqv? (vector) (vector))
+                   (eqv? 100000000000000000000 100000000000000000000) (eqv? #\a #\a)))
+      (newline)
+      (write (list (equal? '(1 (2 #(3 "x"))) '(1 (2 #(3 "x")))) (equal? #(1 2) #(1 3)) (equal? "ab" "ab")
+                   (equal? 2 2.0) (equal? '(1 . 2) '(1 . 2)) (equal? #(1) '(1)) (equal? "a" 'a)))
+      (newline)
+    expected: |
+      (#t #t #f #t #f #f #t #t)
+      (#t #f #t #f #t #f #f)
+  - name: numbers
+    source: |
+      (write (list (+ 1 2) (- 10) (- 10 3 2) (* 2 3 4) (/ 6 3) (/ 1 3) (/ 1.0 4) (+) (*))) (newline)
+      (write (list (= 1 1 1) (< 1 2 3) (< 1 3 2) (> 3 2) (<= 1 1 2) (>= 2 2 1) (= 1 1.0))) (newline)
+      (write (list (quotient 17 5) (quotient -17 5) (remainder -17 5) (modulo -17 5) (modulo 17 -5)
+                   (floor-quotient -17 5) (floor-remainder -17 5) (truncate-quotient -17 5) (truncate-remainder -17 5)))
+      (newline)
+      (write (list (abs -5) (abs 2.5) (min 3 1 2) (max 3 1 2) (max 3 2.0) (min 1 2.0) (gcd 12 18) (lcm 4 6)
+                   (expt 2 100) (expt 2.0 3) (square 5)))
+      (newline)
+      (write (list (zero? 0) (zero? 0.0) (positive? 1) (negative? -1) (odd? 3) (even? 3))) (newline)
+      (write (list (number? 1) (number? 'a) (integer? 2) (integer? 2.0) (integer? 2.5) (integer? 1/2)
+                   (rational? 1/2) (real? 1.5) (exact? 1/2) (exact? 1.5) (inexact? 1.5) (exact-integer? 2.0)))
+      (newline)
+      (write (list (exact 2.0) (exact 2.5) (inexact 1/4) (inexact 3) (exact->inexact 1/2) (inexact->exact 0.5)))
+      (newline)
+      (write (list (floor 2.5) (ceiling 2.5) (round 2.5) (round 3.5) (truncate -2.5) (floor 7/2) (round 7/2) (floor 5)))
+      (newline)
+      (write (list (number->string 255) (number->string 255 16) (number->string -10 2) (number->string 1.5)
+                   (number->string 1/3) (number->string 0 2)))
+      (newline)
+      (write (list (string->number "42") (string->number "-17") (string->number "+5") (string->number "1/3")
+                   (string->number "2.5") (string->number ".5") (string->number "1e3") (string->number "-1.5e-2")
+                   (string->number "ff" 16) (string->number "101" 2) (string->number "0.1")))
+      (newline)
+      (write (list (string->number "abc") (string->number "") (string->number "1/0") (string->number "1.2.3")
+                   (string->number "12x") (string->number "-") (string->number "1e") (string->number "9" 8)))
+      (newline)
+      (write (list 1e3 -0.5 .25 #xff #b101 #o17 12345678901234567890 -3/6)) (newline)
+      (write (list (apply + '(1 2 3)) (apply < '(1 2 3)) (apply < '(1 3 2)) (apply max '(1 5 3)) (apply = '(2 2))
+                   (map + '(1 2) '(10 20)) (map - '(1 2)) (apply min 4 '(2.0 3))))
+      (newline)
+    expected: |
+      (3 -10 5 24 2 1/3 0.25 0 1)
+      (#t #t #f #t #t #t #t)
+      (3 -3 -2 3 -3 -4 3 -3 -2)
+      (5 2.5 1 3 3.0 1.0 6 12 1267650600228229401496703205376 8.0 25)
+      (#t #t #t #t #t #f)
+      (#t #f #t #t #f #f #t #t #t #f #t #f)
+      (2 5/2 0.25 3.0 0.5 1/2)
+      (2.0 3.0 2.0 4.0 -2.0 3 4 5)
+      ("255" "ff" "-1010" "1.5" "1/3" "0")
+      (42 -17 5 1/3 2.5 0.5 1000.0 -0.015 255 5 0.1)
+      (#f #f #f #f #f #f #f #f)
+      (1000.0 -0.5 0.25 255 5 15 12345678901234567890 -1/2)
+      (6 #t #f 5 #t (11 22) (-1 -2) 2.0)
+  - name: pairs-and-lists
+    source: |
+      (define l (list 1 2 3))
+      (set-car! l 'a) (set-cdr! (cddr l) '(4))
+      (write (list l (cons 1 2) (car l) (cdr l) (caar '((1) 2)) (cadr l) (cdar '((1 2) 3)) (cddr l))) (newline)
+      (write (list (length l) (length '()) (append) (append '(1)) (append '(1) '(2) '(3 4)) (append '(1) 2)
+                   (reverse l) (list-tail l 2) (list-ref l 1) (list-copy l)))
+      (newline)
+      (write (list (memq 'c '(a b c d)) (memq 'z '(a b)) (memv 2.0 '(1 2.0 3)) (member "b" '("a" "b" "c"))
+                   (member 2.0 '(1 2 3) =) (member '(1) '((0) (1)))))
+      (newline)
+      (write (list (assq 'b '((a 1) (b 2))) (assq 'z '((a 1))) (assv 2 '((1 . one) (2 . two)))
+                   (assoc "b" '(("a" . 1) ("b" . 2))) (assoc 2.0 '((1 . a) (2 . b)) =) (assoc #(1) '((#(1) . v)))))
+      (newline)
+      (write (list (null? '()) (null? l) (pair? l) (pair? '()) (list? l) (list? '()) (list? '(1 . 2)) (list? 5)))
+      (newline)
+      (write (list (if (memq 'b '(a b)) 'found 'missing) (if (memq 'z '(a b)) 'found 'missing)
+                   (if (assq 'z '()) 'found 'missing)))
+      (newline)
+      (write (map (lambda (k) (assq k '((a . 1) (b . 2)))) '(a z))) (newline)
+    expected: |
+      ((a 2 3 4) (1 . 2) a (2 3 4) 1 2 (2) (3 4))
+      (4 0 () (1) (1 2 3 4) (1 . 2) (4 3 2 a) (3 4) 2 (a 2 3 4))
+      ((c d) #f (2.0 3) ("b" "c") (2 3) ((1)))
+      ((b 2) #f (2 . two) ("b" . 2) (2 . b) (#(1) . v))
+      (#t #f #t #f #t #t #f #f)
+      (found missing missing)
+      ((a . 1) #f)
+  - name: symbols-and-characters
+    source: |
+      (write (list (symbol? 'a) (symbol? "a") (symbol? '()) (symbol? #t) (symbol? #f) (symbol? car)
+                   (symbol->string 'hello) (string->symbol "with space") (string->symbol "MiXed")))
+      (newline)
+      (write (list (char? #\a) (char? "a") (char->integer #\A) (integer->char 97) (char=? #\a #\a) (char=? #\a #\b)
+                   (char<? #\a #\b #\c) (char<? #\a #\c #\b) (char>? #\b #\a) (char<=? #\a #\a) (char>=? #\a #\b)))
+      (newline)
+      (write (list #\a #\A #\space #\newline #\tab #\nul #\x41 #\( #\0)) (newline)
+      (display (list #\a #\space #\b "s" 'sym)) (newline)
+      (write (apply char<? (list #\a #\b))) (newline)
+    expected: |
+      (#t #f #f #f #f #f "hello" with space MiXed)
+      (#t #f 65 #\a #t #f #t #f #t #t #f)
+      (#\a #\A #\space #\newline #\tab #\null #\A #\( #\0)
+      (a   b s sym)
+      #t
+  - name: strings
+    source: |
+      (define s (make-string 3 #\a))
+      (string-set! s 1 #\b)
+      (write (list s (string? s) (string? 'a) (string-length s) (string-length "") (string-ref s 1)
+                   (string-length (make-string 2)) (string #\x #\y)))
+      (newline)
+      (write (list (string=? "abc" "abc") (string=? "abc" "abd") (string=? "a" "a" "a") (string<? "abc" "abd")
+                   (string<? "b" "a") (string>? "b" "a") (string<=? "a" "a") (string>=? "a" "b") (string<? "a" "b" "c")))
+      (newline)
+      (write (list (substring "hello world" 6 11) (string-append) (string-append "a" "b" "c") (string-copy "hello")
+                   (string-copy "hello" 1) (string-copy "hello" 1 3) (string->list "abc") (string->list "abcd" 2)
+                   (list->string (list #\x #\y)) (apply string-append (list "p" "q"))))
+      (newline)
+      (define copy (string-copy "abc"))
+      (string-set! copy 0 #\z)
+      (write (list copy (equal? copy "zbc"))) (newline)
+      (write "quote\" backslash\\ newline\n tab\t") (newline)
+      (display "quote\" backslash\\ tab\t.") (newline)
+      (write (map string-length (list "" "a" "ab"))) (newline)
+    expected: |
+      ("aba" #t #f 3 0 #\b 2 "xy")
+      (#t #f #t #t #f #t #t #f #t)
+      ("world" "" "abc" "hello" "ello" "el" (#\a #\b #\c) (#\c #\d) "xy" "pq")
+      ("zbc" #t)
+      "quote\" backslash\\ newline\n tab\t"
+      quote" backslash\ tab	.
+      (0 1 2)
+  - name: vectors
+    source: |
+      (define v (make-vector 3 'x))
+      (vector-set! v 0 1)
+      (write (list v (vector? v) (vector? "str") (vector? '(1)) (vector-length v) (vector-ref v 0) (vector 1 "a" #\b)
+                   (vector) (vector-length (make-vector 2))))
+      (newline)
+      (write (list (vector->list #(1 2 3)) (vector->list #(1 2 3) 1) (vector->list #(1 2 3) 1 2) (list->vector '(a b))
+                   (list->vector '())))
+      (newline)
+      (define w (vector 1 2 3 4))
+      (vector-fill! w 0 1 3)
+      (write w) (newline)
+      (vector-fill! w 'z)
+      (write w) (newline)
+      (write (map vector-length (list #() #(1)))) (newline)
+      (write #(1 #(2 (3)) "s")) (newline)
+    expected: |
+      (#(1 x x) #t #f #f 3 1 #(1 "a" #\b) #() 2)
+      ((1 2 3) (2 3) (2) #(a b) #())
+      #(1 0 0 4)
+      #(z z z z)
+      (0 1)
+      #(1 #(2 (3)) "s")
+  - name: control
+    source: |
+      (write (list (procedure? car) (procedure? (lambda () 1)) (procedure? 'car) (procedure? procedure?)))
+      (newline)
+      (write (list (apply + 1 2 '(3)) (apply list '()) (apply apply (list + (list 1 2))) (map (lambda (x y) (* x y)) '(1 2 3) '(4 5 6))
+                   (map car '((a 1) (b 2))) (map (lambda (x) x) '())))
+      (newline)
+      (define seen '())
+      (for-each (lambda (x y) (set! seen (cons (+ x y) seen))) '(1 2) '(10 20))
+      (write seen) (newline)
+      (write (map (lambda (f) (f '(3 1 2))) (list car cdr length reverse list?))) (newline)
+    expected: |
+      (#t #t #f #t)
+      (6 () 3 (4 10 18) (a b) ())
+      (22 11)
+      (3 (1 2) 3 (2 1 3) #t)
+  - name: output
+    source: |
+      (display "text") (write-string " more") (write-char #\!) (newline)
+      (write 'sym) (display " ") (write "str") (display " ") (write #\c) (display " ") (display 42) (newline)
+      (display (list 1 (list 2 "three" #\4) (vector 5 'six) (cons 7 8) #t #f '())) (newline)
+      (write car) (display " ") (display (lambda (x) x)) (newline)
+      (display 1.5) (display " ") (display 1/2) (display " ") (display -7) (newline)
+    expected: |
+      text more!
+      sym "str" #\c 42
+      (1 (2 three 4) #(5 six) (7 . 8) #t #f ())
+      #<procedure> #<procedure>
+      1.5 1/2 -7
+  - name: comments-and-reader-syntax
+    source: |
+      ; a line comment
+      #| a block
+         #| nested |# comment |#
+      (write (list 1 #;(ignored datum) 2 #;3 '(a . b) '(a . (b . (c))))) (newline)
+      (write (list "a\x41;b" "line \
+           continued" (quote x) '`(a ,b ,@c)))
+      (newline)
+    expected: |
+      (1 2 (a . b) (a b c))
+      ("aAb" "line continued" x (quasiquote (a (unquote b) (unquote-splicing c))))

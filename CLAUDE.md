@@ -53,7 +53,10 @@ languages file by file. No class outside the seam reads user source through `Lis
 (`SourceLanguageSeamTest` pins this); library source shipped in the jar stays Common
 Lisp and keeps its direct reads, as do the runtime data reads and the `.asd` scans.
 No new package: the seam lives in `eval`, reachable from `cli`, `web` and the
-interpreter's `load` under the existing graph.
+interpreter's `load` under the existing graph. The second language is `scheme` -- an
+EXPERIMENTAL subset of R7RS-small for `.scm`, lowered to the same core forms so that no
+backend learns a Scheme name; its run-time helpers are Common Lisp source spliced like any
+other library (`.kb/scheme-frontend.md`).
 
 `am.ik.jvm`, `am.ik.wasm`, `am.ik.wit`, `am.ik.gpu` and `am.ik.objc` are **language-independent**
 libraries; none may import rontolisp packages or external dependencies. `am.ik.gpu` is the
@@ -78,7 +81,8 @@ cli -> eval, compiler, codegen.*, macro, reader, format, am.ik.wit
 codegen.jvm -> compiler, macro, runtime, am.ik.jvm, am.ik.gpu, am.ik.objc
 codegen.wasm -> compiler, macro, am.ik.wasm, am.ik.wit
 compiler -> macro, runtime, rontolisp (AST types only), am.ik.wit
-eval -> macro, compiler, reader, runtime, rontolisp (AST types only), am.ik.gpu, am.ik.objc
+eval -> macro, compiler, reader, scheme, runtime, rontolisp (AST types only), am.ik.gpu, am.ik.objc
+scheme -> reader, rontolisp (AST types only)
 macro -> reader, rontolisp (AST types only)
 reader -> rontolisp (AST types only)
 format -> (nothing)

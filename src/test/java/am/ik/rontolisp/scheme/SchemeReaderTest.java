@@ -1,0 +1,78 @@
+package am.ik.rontolisp.scheme;
+
+import java.util.List;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.reader.LispReadException;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+class SchemeReaderTest {
+
+	private static List<LispVal> read(String source) {
+		return new SchemeReader(source, "test.scm").readAll();
+	}
+
+	private static String printed(String source) {
+		return read(source).stream().map(LispVal::print).toList().toString();
+	}
+
+	@Test
+	void identifiersKeepTheirCase() {
+		assertThat(printed("foo Foo FOO list->vector + ... 1+ -x"))
+			.isEqualTo("[|foo|, |Foo|, FOO, |list->vector|, +, ..., 1+, |-x|]");
+	}
+
+	@Test
+	void booleansAreTheirOwnDatums() {
+		assertThat(read("#t #true #f #false")).containsExactly(SchemeReader.TRUE, SchemeReader.TRUE, SchemeReader.FALSE,
+				SchemeReader.FALSE);
+	}
+
+	@Test
+	void numbers() {
+		assertThat(printed("42 -17 +5 1/2 -3/6 1.5 .5 -0.25 1e3 1.5e-2 #xff #b101 #o17 #d10 12345678901234567890"))
+			.isEqualTo("[42, -17, 5, 1/2, -1/2, 1.5, 0.5, -0.25, 1000.0, 0.015, 255, 5, 15, 10, 12345678901234567890]");
+	}
+
+	@Test
+	void charactersAndStrings() {
+		assertThat(printed(
+				"#\\a #\\A #\\space #\\newline #\\tab #\\x41 #\\( \"a\\n\\t\\\"\\\\b\" \"\\x41;\" \"a \\\n   b\""))
+			.isEqualTo("[#\\a, #\\A, #\\Space, #\\Newline, #\\Tab, #\\A, #\\(, \"a\n\t\\\"\\\\b\", \"A\", \"a b\"]");
+	}
+
+	@Test
+	void listsVectorsAndAbbreviations() {
+		assertThat(printed("() (a . b) (a b . c) #(1 x) '(a) `(a ,b ,@c)")).isEqualTo(
+				"[NIL, (|a| . |b|), (|a| |b| . |c|), #(1 |x|), (|quote| (|a|)), (|quasiquote| (|a| (|unquote| |b|) (|unquote-splicing| |c|)))]");
+	}
+
+	@Test
+	void commentsAreSkipped() {
+		assertThat(printed("1 ; line\n #| block #| nested |# |# 2 #;(datum comment) 3 #;4")).isEqualTo("[1, 2, 3]");
+	}
+
+	@Test
+	void aReadErrorNamesWhereTheConstructOpened() {
+		assertThatThrownBy(() -> read("(define x\n  (list 1 2")).isInstanceOf(LispReadException.class)
+			.hasMessage("test.scm:2:3: unclosed '('");
+		assertThatThrownBy(() -> read("\n  \"never closed")).hasMessage("test.scm:2:3: unterminated string");
+		assertThatThrownBy(() -> read("(a))")).hasMessage("test.scm:1:4: unexpected ')'");
+		assertThatThrownBy(() -> read("(. a)")).hasMessage("test.scm:1:2: a dotted pair needs a datum before the '.'");
+	}
+
+	@Test
+	void unsupportedSyntaxIsRefusedByName() {
+		assertThatThrownBy(() -> read("#u8(1 2)")).hasMessage("test.scm:1:1: bytevectors are not supported");
+		assertThatThrownBy(() -> read("|a b|")).hasMessage("test.scm:1:1: |...| identifiers are not supported");
+		assertThatThrownBy(() -> read("[a]"))
+			.hasMessage("test.scm:1:1: '[' is not a delimiter in R7RS; use parentheses");
+		assertThatThrownBy(() -> read("#\\bogus")).hasMessage("test.scm:1:1: unknown character name: #\\bogus");
+		assertThatThrownBy(() -> read("+inf.0"))
+			.hasMessage("test.scm:1:1: infinities and NaN are not supported: +inf.0");
+	}
+
+}

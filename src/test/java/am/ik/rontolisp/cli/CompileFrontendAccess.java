@@ -140,4 +140,22 @@ public final class CompileFrontendAccess {
 		return new Program(result.program(), result.features());
 	}
 
+	/**
+	 * Compiles a SCHEME source text through the whole front end, the way the CLI does for
+	 * a {@code .scm} entry file: the read goes through the source-language seam, and the
+	 * run-time helpers are spliced by the pass pipeline like any other library.
+	 * @param source the Scheme program text
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program scheme(String source, boolean wasm, boolean component) {
+		CompileFrontend.Result result = CompileFrontend.run(CompileFrontend.Request.builder()
+			.source(source)
+			.sourceLanguage("scheme")
+			.options(CompileFrontend.Options.builder().wasm(wasm).component(component).build())
+			.build());
+		return new Program(result.program(), result.features());
+	}
+
 }

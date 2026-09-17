@@ -1282,6 +1282,78 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void aSchemeFileIsPickedByItsExtension() throws Exception {
+		Path program = this.tempDir.resolve("hello.scm");
+		Files.writeString(program, """
+				(import (scheme base) (scheme write))
+				(define (greet Name) (string-append "hello, " Name))
+				(display (greet "scheme")) (newline)
+				(write (list #t #f '() 'Sym)) (newline)
+				""");
+		assertThat(runCli("", program.toString())).isEqualTo("hello, scheme\n(#t #f () Sym)\n");
+	}
+
+	@Test
+	void sourceLanguageSchemeReadsAnyExtensionAsScheme() throws Exception {
+		Path program = this.tempDir.resolve("hello.txt");
+		Files.writeString(program, "(display (if '() 'empty-list-is-true 'no)) (newline)\n");
+		assertThat(runCli("", program.toString(), "--source-language=scheme")).isEqualTo("empty-list-is-true\n");
+	}
+
+	@Test
+	void aCommonLispProgramLoadsASchemeFile() throws Exception {
+		// The language is picked per FILE: the loaded .scm is Scheme, and its top-level
+		// procedure is an ordinary function the Common Lisp side calls by its
+		// case-sensitive name.
+		Files.writeString(this.tempDir.resolve("lib.scm"), "(define (twice x) (* 2 x))\n");
+		Path program = this.tempDir.resolve("main.lisp");
+		Files.writeString(program, "(load \"lib.scm\")\n(print (|twice| 21))\n");
+		assertThat(runCli("", program.toString()).trim()).isEqualTo("42");
+		Path compiled = this.tempDir.resolve("MixedLanguages.class");
+		runCli("", program.toString(), "-o", compiled.toString());
+		assertThat(Files.size(compiled)).isPositive();
+	}
+
+	@Test
+	void aSchemeSyntaxErrorNamesItsPositionOnEveryPath() throws Exception {
+		Path program = this.tempDir.resolve("broken.scm");
+		Files.writeString(program, "(define (f x)\n  (if))\n");
+		String expected = "error: " + program + ":2:3: malformed if";
+		assertThat(runReporting(program.toString())[2].trim()).isEqualTo(expected);
+		assertThat(runReporting(program.toString(), "-o", this.tempDir.resolve("Broken.class").toString())[2].trim())
+			.isEqualTo(expected);
+	}
+
+	@Test
+	void aSchemeProgramIsRefusedByTheScalarBackend() throws Exception {
+		Path program = this.tempDir.resolve("scalar.scm");
+		Files.writeString(program, "(define (f x) (* x 2))\n");
+		String[] result = runReporting(program.toString(), "-o", this.tempDir.resolve("scalar.wasm").toString(),
+				"--no-gc");
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[2].trim()).isEqualTo("error: Cannot compile: a Scheme program needs the GC backend --"
+				+ " --no-gc has no cons cell, no symbol and no closure (drop --no-gc)");
+	}
+
+	@Test
+	void anUncaughtSchemeErrorReportsItsMessageAndIrritants() throws Exception {
+		// The message is built under a rebound *standard-output*, inside a helper the
+		// interpreter loads lazily: loaded without registering its special bindings,
+		// the text went to stdout and the report named the exception class.
+		Path program = this.tempDir.resolve("fails.scm");
+		Files.writeString(program, "(define (f) (error \"bad thing:\" 'sym \"str\" 42 '(1 #f)))\n(f)\n");
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[1]).isEmpty();
+		assertThat(result[2].trim()).isEqualTo("Unhandled condition: bad thing: sym \"str\" 42 (1 #f)");
+	}
+
+	@Test
+	void theHelpSaysSchemeIsExperimental() {
+		assertThat(runCli("", "-h")).contains("scheme (.scm) is EXPERIMENTAL");
+	}
+
+	@Test
 	void theTestSubcommandHasItsOwnHelp() {
 		assertThat(runCli("", "test", "--help")).contains("Usage: rontolisp test")
 			.contains("--reporter")

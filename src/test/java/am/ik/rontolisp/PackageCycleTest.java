@@ -77,6 +77,11 @@ class PackageCycleTest {
 		assertThat(graph.getOrDefault("am.ik.objc", Set.of())).isEmpty();
 		assertThat(graph.getOrDefault("am.ik.ffi", Set.of())).isEmpty();
 		assertThat(graph.getOrDefault("am.ik.rontolisp.reader", Set.of())).doesNotContain("am.ik.rontolisp.eval");
+		// The Scheme front end produces core forms and nothing else: it sees the AST
+		// types and the reader, and is reached only through eval's source-language seam.
+		assertThat(graph.getOrDefault("am.ik.rontolisp.scheme", Set.of())).containsOnly("am.ik.rontolisp",
+				"am.ik.rontolisp.reader");
+		assertThat(graph.getOrDefault("am.ik.rontolisp.eval", Set.of())).contains("am.ik.rontolisp.scheme");
 	}
 
 	/**

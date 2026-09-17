@@ -243,6 +243,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.SchemeLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/scheme\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.UrlLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/url\\.lisp"

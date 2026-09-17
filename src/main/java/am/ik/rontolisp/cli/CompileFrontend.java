@@ -28,6 +28,7 @@ import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.MetalLibrary;
 import am.ik.rontolisp.eval.SceneLibrary;
+import am.ik.rontolisp.eval.SchemeLibrary;
 import am.ik.rontolisp.eval.SocketsLibrary;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceLoader;
@@ -387,8 +388,14 @@ final class CompileFrontend {
 		// macro-time evaluator, per top-level form (the interpreter's loadFile timing).
 		// The read itself is the source-language seam's: the entry file's language
 		// (its extension, or the CLI override), read with the target's features.
-		List<LispVal> read = SourceLanguage.forFile(entryFile, request.sourceLanguage())
-			.read(request.source(), features, entryFile);
+		SourceLanguage language = SourceLanguage.forFile(entryFile, request.sourceLanguage());
+		if (language == SourceLanguage.SCHEME && noGc) {
+			// Every Scheme program needs what the scalar backend does not have: the
+			// lowering's first form binds the false value, and a list is a cons.
+			throw new IllegalArgumentException("Cannot compile: a Scheme program needs the GC backend -- --no-gc has"
+					+ " no cons cell, no symbol and no closure (drop --no-gc)");
+		}
+		List<LispVal> read = language.read(request.source(), features, entryFile);
 		List<LispVal> loaded = LoadInliner.inline(read, SourceLoader.fileSystem(), options.baseDir(),
 				request.systemPath(), features, request.dists());
 		return expand(new Loaded(loaded, features), options);
@@ -606,12 +613,17 @@ final class CompileFrontend {
 		// references its spliced definitions introduce.
 		// TokenizersLibrary is innermost and has no place in that order at all: it
 		// reaches for nothing but cl, and nothing any other pass splices reaches for it.
+		// SchemeLibrary sits beside it for the same reason -- only a lowered Scheme
+		// program
+		// names a rontolisp::%scheme- helper -- and INSIDE the prelude, which supplies
+		// the
+		// string comparisons the helpers are written over.
 		List<LispVal> program = UnreadCharLibrary
 			.process(WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(
-					UrlLibrary.process(AppKitLibrary.process(JsonLibrary
-						.process(LinalgLibrary.process(GeomLibrary.process(MetalLibrary.process(SceneLibrary.process(
-								TorchLibrary.process(CheckpointLibrary.process(SafetensorsLibrary.process(GgufLibrary
-									.process(TokenizersLibrary.process(UserMacroExpander.expand(loaded))))))))))))),
+					UrlLibrary.process(AppKitLibrary.process(JsonLibrary.process(LinalgLibrary.process(GeomLibrary
+						.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary
+							.process(SafetensorsLibrary.process(GgufLibrary.process(TokenizersLibrary
+								.process(SchemeLibrary.process(UserMacroExpander.expand(loaded)))))))))))))),
 					features)))));
 		// uiop:getenv on the --component path is environment.lisp over a wit-imported
 		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /
