@@ -22,6 +22,20 @@ PROGRAM's, so a ceiling inherited from the platform is a different product on ea
 - Interpreter frames cost roughly 1.5 KiB of Java stack per Lisp call: `(defun depth (n)
   (if (= n 0) 0 (+ 1 (depth (- n 1)))))` at 1500 overflows 1 MiB, at 4000 overflows 4 MiB
   and survives 8.
+- **That cost is the JIT's, not the program's.** The deepest `depth` a 1 MiB thread holds,
+  one JVM per row (2026-09-17, linux-x64, Oracle GraalVM 25.0.4, binary search per round):
+
+  | JIT state | calls |
+  | --------- | ----- |
+  | `-XX:TieredStopAtLevel=1` (C1 frames only) | 337 |
+  | `-Xint` | 373 |
+  | first round, default | 511 |
+  | warm, C2 (`-XX:-UseJVMCICompiler`) | 997-998 |
+  | warm, Graal (default) | 1131-1132, dipping to 1055 |
+
+  16 MiB holds 5986 under C1 only and 20430 warm. CI run 34637528638 held more than 1500 in
+  1 MiB. So a depth that overflowed once can fit later in the same JVM, and a test must not
+  reuse one (below).
 
 ## Mechanics
 
@@ -66,10 +80,14 @@ fraction of an interpreter frame, and a compiled program's launcher has the knob
 
 ## Pinning tests
 
-`RontoLispCliTest#theDeepProgramDoesNotFitALauncherSizedStack` is the CONTROL -- it drives
-`run` on a 1 MiB thread and requires the `StackOverflowError`, so
-`#mainRunsTheProgramOnItsOwnStackNotTheLaunchersOne` (same thread, same program, through
-`main`) cannot pass on a stack it never needed. `#theStackOptionIsReadOffTheRawArgumentsAndConsumed`
+`RontoLispCliTest#mainRunsTheProgramOnItsOwnStackNotTheLaunchersOne` calls `main` on a
+1 MiB thread and, right after at the same depth, the CONTROL: `run` on the same thread, which
+must overflow, so the test cannot pass on a stack it never needed. A control that fits
+doubles the depth and pairs again. The pair used to be two tests sharing a depth searched
+once per JVM; the depth was found cold and asserted on warm, and the control failed once under
+parallel load (2026-09-17). In the same JVM after warm-up, 200 re-runs at the found depth
+all overflowed locally -- the failure needs a JIT whose warm limit crosses the found depth,
+which is why the pairing, not a margin, is the fix. `#theStackOptionIsReadOffTheRawArgumentsAndConsumed`
 and `#theStackOptionRefusesASizeNoThreadCanBeGiven` pin the flag;
 `#anUncaughtStackOverflowInAFileIsOneLineAndExitOne` the report and
 `#aStackOverflowAtTheReplIsReportedAndTheSessionKeepsItsDefinitions` the recovery, in both
