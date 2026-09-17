@@ -768,7 +768,9 @@ public final class LispReader {
 	// carrier.
 	// Everything the reader can decide on its own is decided here -- the type name must
 	// be
-	// a symbol and the slot names/values must pair up -- while whether the type exists
+	// a symbol, a string or a character -- CLHS 2.4.8.13 coerces each slot
+	// designator with (string slot), so "A" and #\A both name slot A -- and the slot
+	// names/values must pair up -- while whether the type exists
 	// and
 	// whether it has those slots needs the ClosRegistry, so it is left to the fold
 	// (StructLiteralFolder), which runs per top-level form on every backend. Contents are
@@ -789,10 +791,14 @@ public final class LispReader {
 		List<String> slotNames = new ArrayList<>();
 		List<LispVal> slotValues = new ArrayList<>();
 		for (int i = 1; i < items.size(); i += 2) {
-			if (!(items.get(i) instanceof LispSymbol slotSym)) {
-				throw err("#S(" + typeName + " ...): expected a slot name, got " + items.get(i).print());
-			}
-			slotNames.add(slotSym.name());
+			LispVal designator = items.get(i);
+			String spelled = switch (designator) {
+				case LispSymbol slotSym -> slotSym.name();
+				case LispString slotStr -> slotStr.value();
+				case LispChar slotChar -> new String(Character.toChars(slotChar.codePoint()));
+				default -> throw err("#S(" + typeName + " ...): expected a slot name, got " + designator.print());
+			};
+			slotNames.add(spelled);
 			slotValues.add(items.get(i + 1));
 		}
 		return new am.ik.rontolisp.LispStructLiteral(typeName, slotNames, slotValues);

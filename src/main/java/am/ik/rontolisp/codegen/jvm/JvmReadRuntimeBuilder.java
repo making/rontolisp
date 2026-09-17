@@ -186,6 +186,8 @@ final class JvmReadRuntimeBuilder {
 
 	private final MethodrefConstant charDigit;
 
+	private final MethodrefConstant charToString;
+
 	private final MethodrefConstant bigIntegerInitRadix;
 
 	private final MethodrefConstant bigIntegerSignum;
@@ -337,6 +339,8 @@ final class JvmReadRuntimeBuilder {
 		this.charIsLetter = cp.addMethodref(characterCls,
 				cp.addNameAndType(cp.addUtf8("isLetter"), cp.addUtf8("(C)Z")));
 		this.charDigit = cp.addMethodref(characterCls, cp.addNameAndType(cp.addUtf8("digit"), cp.addUtf8("(II)I")));
+		this.charToString = cp.addMethodref(characterCls,
+				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("(I)Ljava/lang/String;")));
 		this.bigIntegerInitRadix = cp.addMethodref(this.bigIntegerClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;I)V")));
 		this.bigIntegerSignum = cp.addMethodref(this.bigIntegerClass,
@@ -518,7 +522,7 @@ final class JvmReadRuntimeBuilder {
 				buildReadArrayN()));
 		ms.add(new ReadMethod(this.cp.addUtf8("_readPacked"), this.cp.addUtf8("(I)Ljava/lang/Object;"), 8, 12,
 				buildReadPacked()));
-		ms.add(new ReadMethod(this.cp.addUtf8("_readStruct"), this.cp.addUtf8("()Ljava/lang/Object;"), 8, 18,
+		ms.add(new ReadMethod(this.cp.addUtf8("_readStruct"), this.cp.addUtf8("()Ljava/lang/Object;"), 8, 21,
 				buildReadStruct()));
 		ms.add(new ReadMethod(this.cp.addUtf8("_rdLen"), this.cp.addUtf8("(Ljava/lang/Object;Ljava/lang/String;)I"), 4,
 				4, buildRdLen()));
@@ -2507,8 +2511,10 @@ final class JvmReadRuntimeBuilder {
 
 	// _readStruct: cursor just past "#S(". Parses the type name and the slot name/value
 	// pairs, resolves the layout in the baked _rdStructs directory, applies the fold's
-	// rules (leftmost repeated slot wins, an omitted slot takes its nil/baked-constant
-	// initform or signals), and builds the Object[]{layout, v1..vn} instance -- the
+	// rules (slot designators coerced like CLHS 2.4.8.13's (string slot), leftmost
+	// repeated slot wins, :allow-other-keys licensing unknown slots, an omitted slot
+	// taking its nil/baked-constant initform or signals), and builds the
+	// Object[]{layout, v1..vn} instance -- the
 	// exact shape %obj-new emits. Without the instance gate no defstruct exists, so any
 	// #S(...) resolves to the "not a defined structure type" error.
 	private List<Integer> buildReadStruct() {
@@ -2758,19 +2764,32 @@ final class JvmReadRuntimeBuilder {
 		a.iinc(11, 1);
 		a.branch(Opcode.GOTO, sloop);
 		a.bind(sdone);
-		// slot name/value pairs
+		// slot name/value pairs. Locals 18/19/20 are the :allow-other-keys state (seen,
+		// licensing) and the first unknown slot's display spelling, reported at the end
+		// when nothing licensed it -- recording instead of signalling keeps the single
+		// pass order-independent, since the marker may follow the unknown slot.
 		int pairLoop = a.label();
 		int pl1 = a.label();
 		int pl2 = a.label();
 		int badSlot = a.label();
-		int goodSlot = a.label();
+		int isCharSlot = a.label();
+		int haveSlotName = a.label();
 		int pv1 = a.label();
 		int pv2 = a.label();
+		int notAok = a.label();
+		int aokNil = a.label();
 		int kloop = a.label();
 		int knext = a.label();
 		int kdone = a.label();
 		int haveIdx = a.label();
 		int fillDefaults = a.label();
+		int fillInit = a.label();
+		a.iconst(0);
+		a.istore(18);
+		a.iconst(0);
+		a.istore(19);
+		a.aconstNull();
+		a.astore(20);
 		a.bind(pairLoop);
 		a.invokestatic(this.readSkipWs);
 		pos(a);
@@ -2787,15 +2806,51 @@ final class JvmReadRuntimeBuilder {
 		a.branch(Opcode.GOTO, fillDefaults);
 		a.bind(pl2);
 		a.invokestatic(this.readExpr);
-		a.astore(8); // snObj
+		a.astore(8); // snObj, normalized to a String display spelling below
 		a.aload(8);
 		a.instanceOf(this.stringClass);
-		a.branch(Opcode.IFEQ, badSlot);
+		a.branch(Opcode.IFEQ, isCharSlot);
 		a.aload(8);
 		a.checkcast(this.stringClass);
 		ldc(a, "\"");
 		a.invokevirtual(this.stringStartsWith);
-		a.branch(Opcode.IFEQ, goodSlot);
+		a.branch(Opcode.IFEQ, haveSlotName);
+		// A string designator spells the name with _readStr's quote wrapping: strip it.
+		a.aload(8);
+		a.checkcast(this.stringClass);
+		a.iconst(1);
+		a.aload(8);
+		a.checkcast(this.stringClass);
+		a.invokevirtual(this.stringLength);
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.invokevirtual(this.stringSubstring);
+		a.astore(8);
+		a.branch(Opcode.GOTO, haveSlotName);
+		a.bind(isCharSlot);
+		// A character designator is the one-code-point int[] _readCharLit boxes.
+		a.aload(8);
+		a.instanceOf(this.intArrayClass);
+		a.branch(Opcode.IFEQ, badSlot);
+		a.aload(8);
+		a.checkcast(this.intArrayClass);
+		a.arraylength();
+		a.iconst(1);
+		a.branch(Opcode.IF_ICMPNE, badSlot);
+		a.aload(8);
+		a.checkcast(this.intArrayClass);
+		a.iconst(0);
+		a.iaload();
+		a.invokestatic(this.charToString);
+		a.astore(8);
+		a.bind(haveSlotName);
+		a.invokestatic(this.readSkipWs);
+		pos(a);
+		srcLen(a);
+		a.branch(Opcode.IF_ICMPLT, pv1);
+		err(a, "Unexpected end of input, expected ')'");
+		a.aconstNull();
+		a.areturn();
 		a.bind(badSlot);
 		sbNew(a, "#S(");
 		a.aload(0);
@@ -2805,14 +2860,6 @@ final class JvmReadRuntimeBuilder {
 		a.invokestatic(this.lispToString);
 		a.invokevirtual(this.sbAppendStr);
 		sbThrow(a);
-		a.aconstNull();
-		a.areturn();
-		a.bind(goodSlot);
-		a.invokestatic(this.readSkipWs);
-		pos(a);
-		srcLen(a);
-		a.branch(Opcode.IF_ICMPLT, pv1);
-		err(a, "Unexpected end of input, expected ')'");
 		a.aconstNull();
 		a.areturn();
 		a.bind(pv1);
@@ -2833,6 +2880,26 @@ final class JvmReadRuntimeBuilder {
 		a.checkcast(this.stringClass);
 		a.invokestatic(this.rdName);
 		a.astore(13); // base name
+		// :allow-other-keys is never a slot: the leftmost pair naming it decides, and a
+		// non-nil value licenses every other unknown slot.
+		a.aload(13);
+		ldc(a, "ALLOW-OTHER-KEYS");
+		a.invokevirtual(this.stringEqualsIgnoreCase);
+		a.branch(Opcode.IFEQ, notAok);
+		a.iload(18);
+		a.branch(Opcode.IFNE, pairLoop);
+		a.iconst(1);
+		a.istore(18);
+		a.aload(9);
+		a.branch(Opcode.IFNULL, aokNil);
+		a.iconst(1);
+		a.istore(19);
+		a.branch(Opcode.GOTO, pairLoop);
+		a.bind(aokNil);
+		a.iconst(0);
+		a.istore(19);
+		a.branch(Opcode.GOTO, pairLoop);
+		a.bind(notAok);
 		a.iconst(-1);
 		a.istore(10); // idx
 		a.iconst(0);
@@ -2858,21 +2925,13 @@ final class JvmReadRuntimeBuilder {
 		a.bind(kdone);
 		a.iload(10);
 		a.branch(Opcode.IFGE, haveIdx);
-		sbNew(a, "#S(");
-		a.aload(0);
-		a.invokevirtual(this.sbAppendStr);
-		sbText(a, " ...): ");
-		a.aload(5);
-		a.iconst(1);
-		a.aaload();
-		a.invokevirtual(this.sbAppendStr);
-		sbText(a, " has no slot named ");
+		// An unknown slot is recorded, not signalled: a later :allow-other-keys may
+		// license it, and only the first one is ever reported.
+		a.aload(20);
+		a.branch(Opcode.IFNONNULL, pairLoop);
 		a.aload(8);
-		a.checkcast(this.stringClass);
-		a.invokevirtual(this.sbAppendStr);
-		sbThrow(a);
-		a.aconstNull();
-		a.areturn();
+		a.astore(20);
+		a.branch(Opcode.GOTO, pairLoop);
 		a.bind(haveIdx);
 		// leftmost wins: store only while the slot still holds the sentinel
 		a.aload(7);
@@ -2890,6 +2949,26 @@ final class JvmReadRuntimeBuilder {
 		a.aastore();
 		a.branch(Opcode.GOTO, pairLoop);
 		a.bind(fillDefaults);
+		a.iload(19);
+		a.branch(Opcode.IFNE, fillInit);
+		a.aload(20);
+		a.branch(Opcode.IFNULL, fillInit);
+		sbNew(a, "#S(");
+		a.aload(0);
+		a.invokevirtual(this.sbAppendStr);
+		sbText(a, " ...): ");
+		a.aload(5);
+		a.iconst(1);
+		a.aaload();
+		a.invokevirtual(this.sbAppendStr);
+		sbText(a, " has no slot named ");
+		a.aload(20);
+		a.checkcast(this.stringClass);
+		a.invokevirtual(this.sbAppendStr);
+		sbThrow(a);
+		a.aconstNull();
+		a.areturn();
+		a.bind(fillInit);
 		int floop = a.label();
 		int fnext = a.label();
 		int fdone = a.label();

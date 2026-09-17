@@ -59,11 +59,22 @@ knows nothing about `ClosRegistry`, so reading is split in two:
 - The carrier is a first-class `LispVal`, not a `(%read-struct ...)` marker cons: being neither
   symbol nor cons it rides through `quote`, backquote templates and `#(...)` literals with no special
   case. The fold walks conses AND `LispArray` storage for the same reason.
-- Fold-time rules (CLHS 2.4.8.13): values are DATA, never evaluated; a repeated slot keeps its
-  LEFTMOST value; an omitted slot's initform must be a CONSTANT (the fold runs at compile time on
-  three backends, so `(+ 1 2)` there is a clear error, not a per-backend divergence); an unknown type
-  and a slot the type lacks are errors. Slot names match by package-stripped base name with the
-  keyword marker dropped, so `:X`, `X` and `PKG::X` all name `X`.
+- Fold-time rules (CLHS 2.4.8.13 -- a `#S` literal is the constructor called with
+  the given slots as keywords): values are DATA, never evaluated; each slot
+  designator is coerced with `(string slot), so a symbol, a string (`"A"`) and a
+  character (`#\A`) all name a slot (SYNTAX.SHARP-S.3/.4); a repeated slot keeps its
+  LEFTMOST value; `:allow-other-keys` is never a slot and never an error -- the
+  LEFTMOST pair naming it decides (case-insensitive base match, so a string
+  designator counts too) and a non-nil value licenses every other unknown slot
+  (SYNTAX.SHARP-S.6/.7/.8, order-independent: a first unknown is recorded, not
+  signalled, so a later marker still licenses it); an omitted slot's initform must
+  be a CONSTANT (the fold runs at compile time on three backends, so `(+ 1 2)`
+  there is a clear error, not a per-backend divergence); an unknown type and an
+  unlicensed slot the type lacks are errors. Slot names match by package-stripped
+  base name with the keyword marker dropped, so `:X`, `X` and `PKG::X` all name
+  `X`. The compiled runtime readers spell the same rules out: the JVM's
+  `_readStruct` bytecode (message-verbatim with the fold) and WASM's `_rd_struct`
+  (static messages), both single-pass with a recorded first unknown.
 
 ## Consequences of "an instance is not a list"
 

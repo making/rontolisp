@@ -13745,6 +13745,38 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileReadFromStringStructSlotDesignatorsAndAllowOtherKeys() throws Exception {
+		// SYNTAX.SHARP-S.3/.4 (string/character designators) and .6/.7/.8
+		// (:allow-other-keys licensing unknown slots, order-independent).
+		assertThat(compileAndRun("""
+				(defstruct skpt a b c)
+				(print (skpt-a (read-from-string "#s(SKPT \\"A\\" x)")))
+				(print (skpt-a (read-from-string "#S(SKPT #\\\\A x)")))
+				(print (skpt-a (read-from-string "#S(SKPT :A X :ALLOW-OTHER-KEYS 1)")))
+				(print (skpt-b (read-from-string "#s(SKPT :B Z :ALLOW-OTHER-KEYS NIL)")))
+				(print (read-from-string "#S(SKPT :B Z :ALLOW-OTHER-KEYS T :A X :FOO BAR)"))
+				(print (read-from-string "#S(SKPT :FOO 1 :ALLOW-OTHER-KEYS T :A X)"))
+				""")).isEqualTo("X\nX\nX\nZ\n#S(SKPT :A X :B Z :C NIL)\n#S(SKPT :A X :B NIL :C NIL)");
+	}
+
+	@Test
+	void compileReadFromStringStructUnlicensedUnknownSlotSignals() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct skpt a b)
+				(defun try (s)
+				  (handler-case (progn (read-from-string s) "no-error")
+				    (error (e) (simple-condition-format-control e))))
+				(print (try "#S(SKPT :Z 1)"))
+				(print (try "#S(SKPT :Z 1 :ALLOW-OTHER-KEYS NIL)"))
+				(print (try "#S(SKPT 1 X)"))
+				""")).isEqualTo("""
+				"#S(SKPT ...): SKPT has no slot named :Z"
+				"#S(SKPT ...): SKPT has no slot named :Z"
+				"#S(SKPT ...): expected a slot name, got 1"
+				""".trim());
+	}
+
+	@Test
 	void compileReadFromStringSymbolParityAndBlockComments() throws Exception {
 		assertThat(compileAndRun("""
 				(print (read-from-string "#foo"))

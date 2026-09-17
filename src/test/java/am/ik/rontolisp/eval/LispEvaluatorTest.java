@@ -16277,6 +16277,42 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void structLiteralAcceptsStringAndCharacterSlotDesignators() {
+		// CLHS 2.4.8.13 coerces each slot designator with (string slot):
+		// SYNTAX.SHARP-S.3 (a string) and SYNTAX.SHARP-S.4 (a character).
+		assertThat(evalMulti("""
+				(defstruct st1 a b c)
+				(list (st1-a (read-from-string "#s(ST1 \\"A\\" x)"))
+				      (st1-a (read-from-string "#S(ST1 #\\\\A x)")))
+				""").print()).isEqualTo("(X X)");
+	}
+
+	@Test
+	void structLiteralAllowOtherKeysLicensesUnknownSlots() {
+		// SYNTAX.SHARP-S.6/.7/.8: :allow-other-keys is never a slot, and the
+		// leftmost pair naming it decides -- a non-nil value licenses unknown slots.
+		assertThat(evalMulti("""
+				(defstruct st1 a b c)
+				(list (st1-a (read-from-string "#S(ST1 :A X :ALLOW-OTHER-KEYS 1)"))
+				      (st1-b (read-from-string "#s(ST1 :B Z :ALLOW-OTHER-KEYS NIL)"))
+				      (read-from-string "#S(ST1 :B Z :ALLOW-OTHER-KEYS T :A X :FOO BAR)")
+				      (read-from-string "#S(ST1 :FOO 1 :ALLOW-OTHER-KEYS T :A X)"))
+				""").print()).isEqualTo("(X Z #S(ST1 :A X :B Z :C NIL) #S(ST1 :A X :B NIL :C NIL))");
+	}
+
+	@Test
+	void structLiteralAllowOtherKeysNilStillRejectsUnknownSlots() {
+		assertThat(evalMulti("""
+				(defstruct st1 a b)
+				(list (handler-case (read-from-string "#S(ST1 :Z 1 :ALLOW-OTHER-KEYS NIL)")
+				        (error (e) (simple-condition-format-control e)))
+				      (handler-case (read-from-string "#S(ST1 1 X)")
+				        (error (e) (simple-condition-format-control e))))
+				""").print())
+			.isEqualTo("(\"#S(ST1 ...): ST1 has no slot named :Z\" \"#S(ST1 ...): expected a slot name, got 1\")");
+	}
+
+	@Test
 	void structLiteralWithAnOddArgumentListIsAReadError() {
 		assertThatThrownBy(() -> evalMulti("""
 				(defstruct point x y)

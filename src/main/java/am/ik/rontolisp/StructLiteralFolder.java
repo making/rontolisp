@@ -20,16 +20,23 @@ import java.util.Set;
  * one form at a time.
  *
  * <p>
- * The rules follow CLHS 2.4.8.13:
+ * The rules follow CLHS 2.4.8.13 -- a {@code #S} literal is the constructor called with
+ * the given slots as keywords, each designator coerced with {@code (string slot)} (so a
+ * symbol, a string and a character all name a slot; the reader stores the coerced
+ * spelling):
  * <ul>
  * <li>slot values are read as DATA and are never evaluated;</li>
  * <li>a slot named more than once takes its LEFTMOST value;</li>
  * <li>a slot the literal omits takes its recorded initform, which must be a constant
  * (rontolisp cannot evaluate an initform at fold time on the compile path, so a
  * non-constant one is a clear error rather than a per-backend divergence);</li>
- * <li>a name that is not a defined structure type, and a slot the type does not have, are
- * errors -- the odd-length and non-symbol-name cases are already reader errors, since the
- * reader can decide those without a registry.</li>
+ * <li>{@code :allow-other-keys} is never a slot and never an error: the LEFTMOST pair
+ * naming it decides, and a non-nil value licenses every other unknown slot (the same rule
+ * {@code LispMacroExpander.keywordTailProblem} applies to keyword tails);</li>
+ * <li>a name that is not a defined structure type, and a slot the type does not have
+ * (with no licensing {@code :allow-other-keys}), are errors -- the odd-length and
+ * non-symbol/string/character-name cases are already reader errors, since the reader can
+ * decide those without a registry.</li>
  * </ul>
  */
 public final class StructLiteralFolder {
@@ -137,11 +144,26 @@ public final class StructLiteralFolder {
 			throw new IllegalArgumentException("#S(" + literal.typeName() + " ...): " + literal.typeName()
 					+ " is not a defined structure type" + hint);
 		}
+		// The LEFTMOST :allow-other-keys pair decides whether unknown slots are
+		// licensed; the pairs themselves are never slots and never errors.
+		boolean allowOtherKeys = false;
+		for (int i = 0; i < literal.slotNames().size(); i++) {
+			if (isAllowOtherKeys(literal.slotNames().get(i))) {
+				allowOtherKeys = !(literal.slotValues().get(i) instanceof LispNil);
+				break;
+			}
+		}
 		LispVal[] slots = new LispVal[layout.slotCount()];
 		for (int i = 0; i < literal.slotNames().size(); i++) {
 			String spelled = literal.slotNames().get(i);
+			if (isAllowOtherKeys(spelled)) {
+				continue;
+			}
 			int index = slotIndexOf(layout, spelled);
 			if (index < 0) {
+				if (allowOtherKeys) {
+					continue;
+				}
 				throw new IllegalArgumentException(
 						"#S(" + literal.typeName() + " ...): " + layout.printName() + " has no slot named " + spelled);
 			}
@@ -190,6 +212,22 @@ public final class StructLiteralFolder {
 			case LispSymbol ignored -> null;
 			default -> initform;
 		};
+	}
+
+	/**
+	 * Whether a spelled slot name is the {@code :allow-other-keys} marker: the
+	 * package-stripped base name with the keyword marker dropped, compared
+	 * case-insensitively, so a string designator {@code "ALLOW-OTHER-KEYS"} counts the
+	 * same way {@code :allow-other-keys} does (CLHS 2.4.8.13 coerces every designator
+	 * with {@code string} before interning the keyword).
+	 */
+	private static boolean isAllowOtherKeys(String spelled) {
+		String base = LispSymbol.displayName(spelled);
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(base);
+		if (qn != null) {
+			base = qn.member();
+		}
+		return base.equalsIgnoreCase("ALLOW-OTHER-KEYS");
 	}
 
 	/**

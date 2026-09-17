@@ -66,7 +66,7 @@ final class WasmReadRuntimeBuilder {
 	 */
 	record ReadCtx(int nilOffset, int quoteOffset, int functionOffset, boolean ehMode, boolean simd,
 			int instanceTypeIndex, int structDirBase, int structDirCount, int charNamesBase, int charNamesCount,
-			int pathnameLayoutAddr, Msg msgEof, Msg msgCharEof, Msg msgCharName, Msg msgRadix, Msg msgRank,
+			int aokBase, int pathnameLayoutAddr, Msg msgEof, Msg msgCharEof, Msg msgCharName, Msg msgRadix, Msg msgRank,
 			Msg msgRagged, Msg msgNested, Msg msgProper, Msg msgPackedNum, Msg msgReadEval, Msg msgFeature,
 			Msg msgLabels, Msg msgBlockComment, Msg msgStructType, Msg msgStructClassHint, Msg msgStructName,
 			Msg msgStructEmpty, Msg msgStructOdd, Msg msgStructNoSlot, Msg msgStructInit, Msg msgDivZero,
@@ -185,8 +185,11 @@ final class WasmReadRuntimeBuilder {
 			structDirBase = st.appendBlob(dir.toByteArray());
 		}
 		Integer pathnameAddr = layoutAddresses.get(LispLayout.PATHNAME_TAG);
+		// The :allow-other-keys marker the #S pair loop compares base names against
+		// (exact bytes: symbols arrive upcased through _rd_token).
+		int aokBase = st.addString("ALLOW-OTHER-KEYS").offset();
 		return new ReadCtx(nilOffset, quoteOffset, functionOffset, ehMode, simd, instanceTypeIndex, structDirBase,
-				structDirCount, charNamesBase, CHAR_NAMES.length,
+				structDirCount, charNamesBase, CHAR_NAMES.length, aokBase,
 				instanceTypeIndex >= 0 && pathnameAddr != null ? pathnameAddr : -1,
 				msg(st, "Unexpected end of input, expected ')'"), msg(st, "Unexpected end of input after #\\"),
 				msg(st, "Unknown character name after #\\"), msg(st, "Invalid digits after #x/#o/#b"),
@@ -3485,12 +3488,284 @@ final class WasmReadRuntimeBuilder {
 		end(w);
 	}
 
+	/**
+	 * Stores one byte at the absolute linear-memory address in {@code ptrSlot} and
+	 * advances it by one.
+	 */
+	private static void storeNextByte(WasmWriter w, int ptrSlot, Runnable pushByte) {
+		getLocal(w, ptrSlot);
+		pushByte.run();
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, ptrSlot);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, ptrSlot);
+	}
+
+	/**
+	 * Reads a string slot designator (cursor at the opening quote) into
+	 * {@code SSTART}/{@code SLEN}/{@code SBASE}: the escapes the reader maps
+	 * ({@code \n \t \\ \"}, default keeping backslash plus char) decoded in place, so a
+	 * later value read -- which only touches later input -- cannot clobber the name. An
+	 * empty designator is the no-slot error, like the symbol path's empty token.
+	 */
+	private static void emitStructSlotString(WasmWriter w, ReadCtx ctx, int sstart, int wp, int bp, int escp, int slen,
+			int sbase) {
+		loadMem32(w, CURSOR);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, sstart);
+		getLocal(w, sstart);
+		setLocal(w, wp);
+		advanceCursor(w);
+		block(w);
+		loop(w);
+		loadMem32(w, CURSOR);
+		loadMem32(w, END_ADDR);
+		w.write(Instruction.I32_GE_S);
+		ifVoid(w);
+		emitErr(w, ctx, ctx.msgEof());
+		end(w);
+		curByte(w);
+		setLocal(w, bp);
+		getLocal(w, bp);
+		i32(w, '"');
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		advanceCursor(w);
+		br(w, 2);
+		end(w);
+		getLocal(w, bp);
+		i32(w, '\\');
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		cursorPlusLtEnd(w, 1);
+		w.write(Instruction.I32_EQZ);
+		ifVoid(w);
+		emitErr(w, ctx, ctx.msgEof());
+		end(w);
+		advanceCursor(w);
+		curByte(w);
+		setLocal(w, escp);
+		advanceCursor(w);
+		getLocal(w, escp);
+		i32(w, 'n');
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		storeNextByte(w, wp, () -> i32(w, 0x0A));
+		end(w);
+		getLocal(w, escp);
+		i32(w, 't');
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		storeNextByte(w, wp, () -> i32(w, 0x09));
+		end(w);
+		getLocal(w, escp);
+		i32(w, '\\');
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		storeNextByte(w, wp, () -> i32(w, 0x5C));
+		end(w);
+		getLocal(w, escp);
+		i32(w, '"');
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		storeNextByte(w, wp, () -> i32(w, 0x22));
+		end(w);
+		getLocal(w, escp);
+		i32(w, 'n');
+		w.write(Instruction.I32_EQ);
+		getLocal(w, escp);
+		i32(w, 't');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		getLocal(w, escp);
+		i32(w, '\\');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		getLocal(w, escp);
+		i32(w, '"');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_EQZ);
+		ifVoid(w);
+		storeNextByte(w, wp, () -> i32(w, 0x5C));
+		storeNextByte(w, wp, () -> getLocal(w, escp));
+		end(w);
+		br(w, 1);
+		end(w);
+		getLocal(w, wp);
+		getLocal(w, bp);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, wp);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, wp);
+		advanceCursor(w);
+		br(w, 0);
+		end(w);
+		end(w);
+		getLocal(w, wp);
+		getLocal(w, sstart);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, slen);
+		getLocal(w, sstart);
+		setLocal(w, sbase);
+		getLocal(w, slen);
+		w.write(Instruction.I32_EQZ);
+		ifVoid(w);
+		emitErr(w, ctx, ctx.msgStructNoSlot());
+		end(w);
+	}
+
+	/**
+	 * Reads a character slot designator (cursor at the {@code '#'}, the next byte a
+	 * backslash) into {@code SSTART}/{@code SLEN}/{@code SBASE}: resolved through
+	 * {@code _rd_charlit} like any character literal, then UTF-8-encoded over the token
+	 * (the encoding always fits -- the token holds {@code "#\"} plus the name). The
+	 * character value rests in its own {@code valTmp} eqref local (never the shared
+	 * {@code VAL}: the ref-type fold types a stale loop-carried local against the cast),
+	 * the code point lands in {@code CODE} and its encoded length in {@code LEN}.
+	 */
+	private static void emitStructSlotChar(WasmWriter w, int sstart, int slen, int sbase, int tok, int code, int len,
+			int valTmp) {
+		loadMem32(w, CURSOR);
+		setLocal(w, tok);
+		advanceCursor(w);
+		advanceCursor(w);
+		call(w, WasmLispCompiler.FUNC_RD_CHARLIT);
+		setLocal(w, valTmp);
+		getLocal(w, valTmp);
+		refCast(w, WasmLispCompiler.TYPE_CHAR);
+		structGet(w, WasmLispCompiler.TYPE_CHAR, 0);
+		setLocal(w, code);
+		getLocal(w, code);
+		i32(w, 0x80);
+		w.write(Instruction.I32_LT_S);
+		ifVoid(w);
+		getLocal(w, tok);
+		getLocal(w, code);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		i32(w, 1);
+		setLocal(w, len);
+		w.write(Instruction.ELSE);
+		getLocal(w, code);
+		i32(w, 0x800);
+		w.write(Instruction.I32_LT_S);
+		ifVoid(w);
+		getLocal(w, tok);
+		getLocal(w, code);
+		i32(w, 6);
+		w.write(Instruction.I32_SHR_U);
+		i32(w, 0xC0);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, tok);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, code);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		i32(w, 0x80);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		i32(w, 2);
+		setLocal(w, len);
+		w.write(Instruction.ELSE);
+		getLocal(w, code);
+		i32(w, 0x10000);
+		w.write(Instruction.I32_LT_S);
+		ifVoid(w);
+		getLocal(w, tok);
+		getLocal(w, code);
+		i32(w, 12);
+		w.write(Instruction.I32_SHR_U);
+		i32(w, 0xE0);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, tok);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, code);
+		i32(w, 6);
+		w.write(Instruction.I32_SHR_U);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		i32(w, 0x80);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, tok);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, code);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		i32(w, 0x80);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		i32(w, 3);
+		setLocal(w, len);
+		w.write(Instruction.ELSE);
+		getLocal(w, tok);
+		getLocal(w, code);
+		i32(w, 18);
+		w.write(Instruction.I32_SHR_U);
+		i32(w, 0xF0);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, tok);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, code);
+		i32(w, 12);
+		w.write(Instruction.I32_SHR_U);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		i32(w, 0x80);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, tok);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, code);
+		i32(w, 6);
+		w.write(Instruction.I32_SHR_U);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		i32(w, 0x80);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, tok);
+		i32(w, 3);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, code);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		i32(w, 0x80);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		i32(w, 4);
+		setLocal(w, len);
+		end(w);
+		end(w);
+		end(w);
+		getLocal(w, tok);
+		setLocal(w, sstart);
+		getLocal(w, len);
+		setLocal(w, slen);
+		getLocal(w, tok);
+		setLocal(w, sbase);
+	}
+
 	// _rd_struct () -> value: cursor just past "#S(". Resolves the type in the baked
 	// directory (findStructTag's exact-then-member-fallback rule), applies the fold's
-	// slot rules (leftmost repeated slot wins, an omitted slot takes its nil/baked
-	// constant-text initform or signals), and builds the TYPE_INSTANCE %obj-new builds.
-	// Kept beside the printer's emitPrintInstance shape: the layout record supplies the
-	// slot names, the slots array holds the values only.
+	// slot rules (designators coerced like CLHS 2.4.8.13's (string slot), leftmost
+	// repeated slot wins, :allow-other-keys licensing unknown slots, an omitted slot
+	// takes its nil/baked constant-text initform or signals), and builds the
+	// TYPE_INSTANCE %obj-new builds. Kept beside the printer's emitPrintInstance shape:
+	// the layout record supplies the slot names, the slots array holds the values only.
+	// A first unknown slot is recorded, not signalled: a later :allow-other-keys may
+	// license it, keeping the single pass order-independent.
 	static byte[] buildRdStructBody(ReadCtx ctx) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
@@ -3503,15 +3778,17 @@ final class WasmReadRuntimeBuilder {
 			w.write(Instruction.END);
 			return body.toByteArray();
 		}
-		w.write(2);
+		w.write(3);
 		w.write(2);
 		w.writeRefType(true, Type.EQ.code());
-		w.write(20);
+		w.write(23);
 		w.write(Type.I32);
+		w.write(1);
+		w.writeRefType(true, Type.EQ.code());
 		final int SLOTS = 0, VAL = 1;
 		final int NSTART = 2, NLEN = 3, QUAL = 4, PSTART = 5, PLEN = 6, MSTART = 7, MLEN = 8, IDX = 9, ENT = 10,
 				LAYADDR = 11, SLOTC = 12, K = 13, SSTART = 14, SLEN = 15, SBASE = 16, SAVC = 17, SAVE = 18, CI = 19,
-				INITS = 20, TMPI = 21;
+				INITS = 20, TMPI = 21, AOKSEEN = 22, AOKALLOW = 23, FIRSTUNK = 24, CVAL = 25;
 		emitSkipWs(w, ctx);
 		loadMem32(w, CURSOR);
 		loadMem32(w, END_ADDR);
@@ -3777,6 +4054,13 @@ final class WasmReadRuntimeBuilder {
 		br(w, 0);
 		end(w); // loop
 		end(w); // block
+		// :allow-other-keys state: seen, licensing, and the first unknown slot's flag.
+		i32(w, 0);
+		setLocal(w, AOKSEEN);
+		i32(w, 0);
+		setLocal(w, AOKALLOW);
+		i32(w, 0);
+		setLocal(w, FIRSTUNK);
 		// slot name/value pairs
 		block(w); // pair-done
 		loop(w); // pair loop
@@ -3793,6 +4077,36 @@ final class WasmReadRuntimeBuilder {
 		ifVoid(w);
 		advanceCursor(w);
 		br(w, 2); // break the pair loop
+		end(w);
+		// The slot designator: a string "..." or character #\X names the slot like
+		// CLHS 2.4.8.13's (string slot), decoded in place (the write pointer never
+		// passes the read pointer, and later reads only touch later input); anything
+		// else is the plain symbol token. NSTART/NLEN/QUAL and ENT/CI are dead up
+		// here and serve as scratch.
+		block(w); // NAME
+		curByte(w);
+		setLocal(w, K);
+		getLocal(w, K);
+		i32(w, '"');
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		emitStructSlotString(w, ctx, SSTART, NSTART, NLEN, QUAL, SLEN, SBASE);
+		br(w, 1);
+		end(w);
+		getLocal(w, K);
+		i32(w, '#');
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		cursorPlusLtEnd(w, 1);
+		ifVoid(w);
+		byteAtCursorPlus(w, 1);
+		i32(w, '\\');
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		emitStructSlotChar(w, SSTART, SLEN, SBASE, ENT, CI, K, CVAL);
+		br(w, 3);
+		end(w);
+		end(w);
 		end(w);
 		call(w, WasmLispCompiler.FUNC_RD_TOKEN);
 		setLocal(w, SSTART);
@@ -3877,6 +4191,7 @@ final class WasmReadRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		setLocal(w, SBASE);
 		end(w);
+		end(w); // NAME
 		// base-name length into TMPI
 		getLocal(w, SSTART);
 		getLocal(w, SLEN);
@@ -3900,6 +4215,32 @@ final class WasmReadRuntimeBuilder {
 		end(w);
 		call(w, WasmLispCompiler.FUNC_READ_EXPR);
 		setLocal(w, VAL);
+		// :allow-other-keys is never a slot: the leftmost pair naming it decides, and
+		// a non-nil value licenses every other unknown slot.
+		block(w); // AOK
+		getLocal(w, TMPI);
+		i32(w, 16);
+		w.write(Instruction.I32_NE);
+		brIf(w, 0);
+		getLocal(w, SBASE);
+		i32(w, ctx.aokBase());
+		i32(w, 16);
+		call(w, WasmLispCompiler.FUNC_RD_MEMEQ);
+		w.write(Instruction.I32_EQZ);
+		brIf(w, 0);
+		// The leftmost pair decides: record only while unseen.
+		getLocal(w, AOKSEEN);
+		w.write(Instruction.I32_EQZ);
+		ifVoid(w);
+		i32(w, 1);
+		setLocal(w, AOKSEEN);
+		getLocal(w, VAL);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		setLocal(w, AOKALLOW);
+		end(w);
+		br(w, 1);
+		end(w); // AOK
 		// slot index by base name against the layout record's slot entries
 		i32(w, -1);
 		setLocal(w, IDX);
@@ -3949,7 +4290,15 @@ final class WasmReadRuntimeBuilder {
 		i32(w, 0);
 		w.write(Instruction.I32_LT_S);
 		ifVoid(w);
-		emitErr(w, ctx, ctx.msgStructNoSlot());
+		// An unknown slot is recorded, not signalled: a later :allow-other-keys may
+		// license it, and only the first one is ever reported.
+		getLocal(w, FIRSTUNK);
+		w.write(Instruction.I32_EQZ);
+		ifVoid(w);
+		i32(w, 1);
+		setLocal(w, FIRSTUNK);
+		end(w);
+		br(w, 1);
 		end(w);
 		// leftmost wins: store only while the slot still holds the sentinel
 		getLocal(w, SLOTS);
@@ -3968,6 +4317,16 @@ final class WasmReadRuntimeBuilder {
 		br(w, 0); // continue the pair loop
 		end(w); // pair loop
 		end(w); // pair-done block
+		// An unlicensed unknown slot reports here, after a later :allow-other-keys
+		// had its chance.
+		block(w);
+		getLocal(w, AOKALLOW);
+		brIf(w, 0);
+		getLocal(w, FIRSTUNK);
+		w.write(Instruction.I32_EQZ);
+		brIf(w, 0);
+		emitErr(w, ctx, ctx.msgStructNoSlot());
+		end(w);
 		// omitted slots: nil, the baked constant text re-read in place, or a signal
 		i32(w, 0);
 		setLocal(w, K);
