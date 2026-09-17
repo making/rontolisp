@@ -1,0 +1,1593 @@
+file	category	interpreter	interpreter+shim	jvm+shim	wasm+shim	missing-names-used
+chapter1/section1/subsection1/01.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection1/02.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection1/03.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection1/04.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection1/05.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection1/06.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection1/07.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection1/08.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection1/09.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection1/10.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection1/11.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection1/12.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection1/13.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection1/14.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection1/15.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection2/01_var_size.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection2/02_size_use_1.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection2/03_size_use_2.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection2/04.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection2/05.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection2/06_pi.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection2/07_radius.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection2/08_pi_radius_radius.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection2/09_circumference_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection2/10_circumference_use.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection3/01.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection4/01_square_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection4/02_square_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection4/03.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection4/04.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection4/05_square_square.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection4/06_sum_of_squares.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection4/07_sum_of_squares_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection4/08_f.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection4/09_f_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection5/01_f_of_five.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/01_abs_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/02_abs_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/03.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/04.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/05.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/06_geq_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/07_ten.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/08_five_plus_three_plus_four.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/09_nine_minus_one.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/10_six_over_two.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/11_two_times_four_etc.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/12_definea.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/13_defineb.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/14_a_plus_b_etc.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/15_a_equal_b.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/16_b_gt_a_etc.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/17_a_equal_four_etc.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/18_two_plus_etc.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/19_a_greater_b_etc.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/20.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/21.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/22_larger_two_square_example.scm	fragment	1	1	-	-	
+chapter1/section1/subsection6/23.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/24_plusminusexample.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/25_ptest.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection6/26.scm	scheme	timeout	timeout	-	-	
+chapter1/section1/subsection7/01_sqrt_iter.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection7/02_sqrt_iter_example.scm	fragment	1	1	-	-	
+chapter1/section1/subsection7/03_improve.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection7/04_improve_example.scm	fragment	1	1	-	-	
+chapter1/section1/subsection7/05_average_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection7/06_average_example.scm	fragment	1	1	-	-	
+chapter1/section1/subsection7/07_is_good_enough.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection7/08_is_good_enough_example.scm	fragment	1	1	-	-	
+chapter1/section1/subsection7/09_sqrt.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection7/10_sqrt_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection7/11_sqrt_example_2.scm	scheme	1	ok	ok	ok	sqrt
+chapter1/section1/subsection7/12_sqrt_example_3.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection7/13_sqrt_example_4.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection7/14_sqrt_example_5.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection7/15_conditional.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection7/16.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection7/17.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection7/18_delighted.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection7/19.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection7/20_example_1.8.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection7/21.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection7/22_example_1.9.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection8/01.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection8/02.scm	scheme	1	ok	ok	ok	exp,log
+chapter1/section1/subsection8/03.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection8/04.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection8/05.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection8/06.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection8/07.scm	scheme	ok	ok	ok	ok	
+chapter1/section1/subsection8/08.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection1/01_factorial_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection1/02_factorial_example.scm	fragment	1	1	-	-	
+chapter1/section2/subsection1/03.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection1/04_factorial_iterative_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection1/05_inc_dec_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection1/06_plus_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection1/07.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection1/08.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection1/09_ackermann_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection1/10_ackermann_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection1/11.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection1/12.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection1/13_fghk_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection1/14_fghk_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection2/01_fib_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection2/02_fib_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection2/03.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection2/04_count_change_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection2/05_count_change_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection2/06.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection2/07.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection2/08_example_1.12_1.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection2/09_example_1.12_2.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection2/10_pascal_triangle.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection2/11_example_1.13.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection3/01_sine_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection3/02_sine_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection4/01_expt_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection4/02_expt_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection4/03_expt_linear_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection4/04_expt_example2.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection4/05_expt_log_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection4/06_fast_expt_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection4/07_even_definition.scm	fragment	1	1	-	-	
+chapter1/section2/subsection4/08_even_example.scm	fragment	1	1	-	-	
+chapter1/section2/subsection4/09_fast_expt_iter.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection4/10_example_1.17.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection4/11_times_definition.scm	scheme	ok	ok	compile	compile	
+chapter1/section2/subsection4/12_times_example.scm	scheme	ok	ok	compile	compile	
+chapter1/section2/subsection4/13_example_1.18_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection4/14_example_1.18.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection4/15_fast_times_iter.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection4/16_example_1.19.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection4/17_fib_log_solution.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection4/18_example_1.20.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection5/01_gcd_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection5/02_gcd_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection6/01_smallest_divisor_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection6/02_smallest_divisor_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection6/03_prime_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection6/04_prime_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection6/05_expmod_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection6/06_expmod_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection6/07_random_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection6/08_fermat_test_definition.scm	scheme	1	ok	ok	ok	random
+chapter1/section2/subsection6/09_fermat_test_example.scm	scheme	1	ok	ok	ok	random
+chapter1/section2/subsection6/10_fast_prime_definition.scm	scheme	1	ok	ok	ok	false,random,true
+chapter1/section2/subsection6/11_fast_prime_example.scm	scheme	1	ok	ok	ok	false,random,true
+chapter1/section2/subsection6/12_smallest_division_solution.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection6/13_timed_prime_definition.scm	scheme	1	ok	ok	ok	runtime
+chapter1/section2/subsection6/14_timed_prime_example.scm	scheme	1	ok	ok	ok	runtime
+chapter1/section2/subsection6/15_search_for_primes_definition.scm	scheme	ok	ok	ok	ok	runtime
+chapter1/section2/subsection6/16_search_for_primes_example.scm	scheme	ok	ok	ok	ok	runtime
+chapter1/section2/subsection6/17_better_smallest_divisor_solution.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection6/18_mod_timed_prime_test_solution.scm	scheme	ok	ok	ok	ok	false,random,true
+chapter1/section2/subsection6/19_mod_timed_prime_test_example.scm	scheme	ok	ok	ok	ok	false,random,true
+chapter1/section2/subsection6/20_no_extra_work.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection6/21.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection6/22_carmichael.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection6/23_example_1.29.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection6/24_miller_rabin_test.scm	scheme	ok	ok	ok	ok	
+chapter1/section2/subsection6/25_example_1.30.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/section3/01_cube_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/section3/02_cube_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/01_sum_integers_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/02_sum_integers_example.scm	fragment	1	1	-	-	
+chapter1/section3/subsection1/03_sum_cubes_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/04_sum_cubes_example.scm	fragment	1	1	-	-	
+chapter1/section3/subsection1/05_pi_sum_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/06_pi_sum_example.scm	fragment	1	1	-	-	
+chapter1/section3/subsection1/07_inc_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/08_sum_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/09_sum_example_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/10_identity.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/11_identity_example.scm	fragment	1	1	-	-	
+chapter1/section3/subsection1/12_sum_integers_definition2.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/13_sum_integers_example2.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/14_pi_sum_definition2.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/15_pi_sum_example2.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/16_integral_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/17_integral_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/18_integral_example2.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/19_simpsons_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/20_example_1.31.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/21_sum_example_iter.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/22_sum_example_iter_example.scm	fragment	1	1	-	-	
+chapter1/section3/subsection1/23_factorial_product.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/24_pi_product.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/25_product_r.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/26_factorial_product_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/27.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/28_example_accumulate_numbers.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/29.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection1/30_example_filtered_accumulate.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/01.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/02.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/03_pi_sum_definition3.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/04_integral_example_2.scm	fragment	1	1	-	-	
+chapter1/section3/subsection2/05_integral_definition2.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/06_plus4_definition_1.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/07_plus4_example.scm	fragment	1	1	-	-	
+chapter1/section3/subsection2/08_plus4_definition_2.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/09.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/10_f_helper_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/11_f_helper_example.scm	fragment	1	1	-	-	
+chapter1/section3/subsection2/12_f_helper_definition2.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/13_f_2_helper_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/14_f_helper_definition3.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/15_f_3_helper_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/16_h_error_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/17_expmod_definition_2.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/18_expmod_example_2.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/19.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/20.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/21_fg_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/22.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection2/23.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/01_positive_negative_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/02_search_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/03_search_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/04_close_enough_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/05_close_enough_example.scm	fragment	1	1	-	-	
+chapter1/section3/subsection3/06_half_definition.scm	scheme	1	ok	ok	ok	sin
+chapter1/section3/subsection3/07_half_example.scm	scheme	1	ok	ok	ok	sin
+chapter1/section3/subsection3/08_half_example2.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/09_fixed_definition.scm	scheme	1	ok	ok	ok	cos
+chapter1/section3/subsection3/10_fixed_example.scm	scheme	1	ok	ok	ok	cos
+chapter1/section3/subsection3/11_fixed_example2.scm	scheme	1	ok	ok	ok	cos,sin
+chapter1/section3/subsection3/12_sqrt_definition2.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/13_sqrt_example7.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/14_sqrt_definition3.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/15_example_1.37.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/16_modified_fixed_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/17_modified_fixed_definition_average_dampening.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/18_example_1.36_1.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/19_example_1.36_2.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/20_cont_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/21_cont_example.scm	fragment	1	1	-	-	
+chapter1/section3/subsection3/22.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/23_cont_frac.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/24_cont_example_1.scm	fragment	1	1	-	-	
+chapter1/section3/subsection3/25.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/26.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection3/27_tan_ex.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/01_average_damp_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/02_average_damp_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/03_sqrt_definition4.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/04_sqrt_example3.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/05_cube_root_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/06_cube_root_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/07_deriv_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/08_dx.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/09_deriv_example.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/10_newtons_method_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/11_sqrt_definition5.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/12_sqrt_example4.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/13_fixed_point_of_transform_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/14_sqrt_definition6.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/15_sqrt_example5.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/16_sqrt_definition7.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/17_sqrt_example6.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/18_cubic_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/19_cubic_definition_2.scm	fragment	1	1	-	-	
+chapter1/section3/subsection4/20_cubic_example_2.scm	fragment	1	1	-	-	
+chapter1/section3/subsection4/21_double_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/22_double_example.scm	fragment	1	1	-	-	
+chapter1/section3/subsection4/23.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/24_double_example_solution.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/25_compose_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/26_compose_example.scm	fragment	1	1	-	-	
+chapter1/section3/subsection4/27_compose_definition_solution.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/28_compose_example_solution.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/29_repeated_definition.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/30_repeated_example.scm	fragment	1	1	-	-	
+chapter1/section3/subsection4/31_repeated_definition_solution.scm	fragment	1	1	-	-	
+chapter1/section3/subsection4/32_repeated_example_solution.scm	fragment	1	1	-	-	
+chapter1/section3/subsection4/33_n_fold_smooth_solution.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/34_example_1.44.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/35_nth_root_solution.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/36_example_1.45.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/37_iterative_improve.scm	scheme	ok	ok	ok	ok	
+chapter1/section3/subsection4/38_example_1.46_1.scm	scheme	ok	ok	ok	ok	
+chapter2/chapter2/01.scm	scheme	ok	ok	ok	ok	
+chapter2/chapter2/02_linear_combination_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/01_cons_1_2.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/02_cons_1_2_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/03_cons_1_2_example2.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/04_cons_1_2_3_4.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/05_cons_1_2_3_4_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/06_cons_1_2_3_4_example2.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/07_make_rat2.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/08_rat_example_1.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/09_print_rat.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/10_print_rat_example_0.scm	fragment	1	1	-	-	
+chapter2/section1/subsection1/11_print_rat_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/12_print_rat_example2.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/13_print_rat_example3.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/14_print_rat_example4.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/15_numer.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/16_make_rat_3.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/17_make_rat_3_example_1.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/18_numer_rat.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/19_add_rat_2.scm	fragment	ok	ok	ok	ok	
+chapter2/section1/subsection1/20.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection1/21_example_2.1.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection2/01_make_rat_4.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection2/02_print_rat_example5.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection2/03_x_point.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection2/04.scm	fragment	ok	ok	ok	ok	
+chapter2/section1/subsection2/05_example_2.2.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection2/06.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection2/07_example_2.3.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection2/08.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection2/09_example_2.3_2.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection3/01.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection3/02_cons_with_dispatch.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection3/03_cons_1_2_run.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection3/04_cons_lambda.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection3/05.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection3/06_cons_1_2_run_2.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection3/07_pair_with_fast_expt.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection3/08_example_2.5.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection3/09_zero.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection3/10_church_solution.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection4/01_add_interval.scm	fragment	1	1	-	-	
+chapter2/section1/subsection4/02_mul_interval.scm	fragment	1	1	-	-	
+chapter2/section1/subsection4/03_div_interval.scm	fragment	1	1	-	-	
+chapter2/section1/subsection4/04_make_interval.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection4/05_print_interval.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection4/06_add_interval_example.scm	fragment	1	1	-	-	
+chapter2/section1/subsection4/07_mul_interval_example.scm	fragment	1	1	-	-	
+chapter2/section1/subsection4/08_div_interval_example.scm	fragment	1	1	-	-	
+chapter2/section1/subsection4/09.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection4/10_sub_interval_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection4/11.scm	fragment	1	1	-	-	
+chapter2/section1/subsection4/12.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection4/13_make_center_width.scm	fragment	ok	ok	ok	ok	
+chapter2/section1/subsection4/14_make_center_width_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection4/15_make_center_percent.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection4/16_make_center_percent_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section1/subsection4/17_par.scm	fragment	ok	ok	ok	ok	
+chapter2/section1/subsection4/18_par_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/01_cons_example.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection1/02_one_four.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/03_one_four_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/04_car_one_four.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/05_cdr_one_four.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/06_car_cdr_one_four.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/07_cons_one_four.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/08_cons5_one_four.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/09_list_ref.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/10_list_ref_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/11_manual_squares.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/12_manual_odds.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/13_length.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/14_length_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/15_length_iter.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/16_append_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/17_append_example2.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/18_append.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/19_last_pair_by_student.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/20_last_pair_example.scm	scheme	1	ok	ok	ok	last-pair
+chapter2/section2/subsection1/21_last_pair_definition.scm	scheme	1	ok	ok	ok	last-pair
+chapter2/section2/subsection1/22_reverse_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/23_naive_reverse_definition.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/24_reverse.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/25_us_coins.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/26_cc_example.scm	fragment	1	1	-	-	
+chapter2/section2/subsection1/27_cc_helpers.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/28_cc.scm	fragment	1	1	-	-	
+chapter2/section2/subsection1/29_exercise_2_19_solution.scm	fragment	1	1	-	-	
+chapter2/section2/subsection1/30_currying_plus.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/31_curry_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/32_currying.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/33_currying_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/34_currying_currying.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/35_currying_currying_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/36_currying_currying_example_2.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/37_currying_currying_example_3.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/38_brooks_solution.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/39_brooks_curried_solution.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/40_currying_currying_example_4.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/41_currying_currying_example_5.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/42_scale_list.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection1/43_scale_list_example.scm	fragment	1	1	-	-	
+chapter2/section2/subsection1/44_map.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection1/45_map_example.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection1/46_map_example2.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection1/47_scale_list2.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/48_square_list_example.scm	fragment	1	1	-	-	
+chapter2/section2/subsection1/49_square_list_pedestrian.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/50_square_list_with_map.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/51_square_list_warning.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/52_square_list2.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection1/53_square_list3.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection1/54_for_each_by_student.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/55_for_each_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection1/56_for_each.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/01.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/02_tree_x.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/03_length_tree_x.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/04_count_leaves_tree_x.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/05_list_x_x.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/06_length_list_x_x.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/07_count_leaves_list_x_x.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/08_count_leaves.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/09_count_leaves_example.scm	fragment	1	1	-	-	
+chapter2/section2/subsection2/10_xy.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/11_appendxy.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/12_pairxy.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/13_listxy.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/14_appendxy_sol.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/15_pairxy_sol.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/16_listxy_sol.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/17_x_list_list.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/18_x_x_list_list.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/19_reverse_x.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/20_deep_reverse.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/21_deep_reverse_x.scm	fragment	1	1	-	-	
+chapter2/section2/subsection2/22_deep_reverse_solution.scm	fragment	1	1	-	-	
+chapter2/section2/subsection2/23_fringe.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/24_x_fringe_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/25_x_fringe_example_2.scm	fragment	1	1	-	-	
+chapter2/section2/subsection2/26_x_fringe_example_3.scm	fragment	1	1	-	-	
+chapter2/section2/subsection2/27_x_fringe_solution.scm	fragment	1	1	-	-	
+chapter2/section2/subsection2/28_make_mobile.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/29_make_branch.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/30_make_mobile_branch_alternative.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/31_branch_construction.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/32_total_weight.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/33_example_2.29.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/34_is_balanced_solution.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/35_example_2.29_2.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/36_scale_tree.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection2/37_scale_tree_example.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection2/38_scale_tree_example_2.scm	fragment	1	1	-	-	
+chapter2/section2/subsection2/39_scale_tree_with_map.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/40_square_tree.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/41_square_tree_example.scm	fragment	1	1	-	-	
+chapter2/section2/subsection2/42_square_tree_pedestrian.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/43_square_tree_with_map.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/44_tree_map.scm	fragment	1	1	-	-	
+chapter2/section2/subsection2/45_square_tree_using_tree_map.scm	fragment	ok	ok	ok	ok	
+chapter2/section2/subsection2/46_tree_map_with_map.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/47_sublists.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection2/48_example_2.33.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/01_odd_definition.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/02.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/03_sum_odd_squares_example.scm	fragment	1	1	-	-	
+chapter2/section2/subsection3/04.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection3/05_even_fibs_example.scm	fragment	1	1	-	-	
+chapter2/section2/subsection3/06.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection3/07_filter.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection3/08_filter_odd.scm	scheme	1	ok	ok	ok	filter
+chapter2/section2/subsection3/09.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection3/10_accumulate.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/11_simple_plus.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/12.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/13_simple_times.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/14.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/15.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection3/16_enumerate_interval.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection3/17_enumerate_interval_example.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection3/18_enumerate_tree.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection3/19_enumerate_tree_example.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection3/20.scm	fragment	1	1	-	-	filter,nil
+chapter2/section2/subsection3/21.scm	fragment	1	1	-	-	filter,nil
+chapter2/section2/subsection3/22_list_fib_squares.scm	fragment	1	1	-	-	nil
+chapter2/section2/subsection3/23_list_fib_squares_example.scm	fragment	1	1	-	-	nil
+chapter2/section2/subsection3/24_product_of_squares_of_odd_elements.scm	fragment	1	1	-	-	filter
+chapter2/section2/subsection3/25_product_of_squares_of_odd_elements_example.scm	fragment	1	1	-	-	filter
+chapter2/section2/subsection3/26_linus.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/27.scm	fragment	ok	ok	ok	ok	filter
+chapter2/section2/subsection3/28_map_append_length_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/29.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/30_horner_eval_example.scm	fragment	1	1	-	-	
+chapter2/section2/subsection3/31_horner_solution.scm	fragment	1	1	-	-	
+chapter2/section2/subsection3/32_horner_eval_example_2.scm	fragment	1	1	-	-	
+chapter2/section2/subsection3/33.scm	fragment	1	1	-	-	
+chapter2/section2/subsection3/34_accumulate_n.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/35_example_2.36.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/36_dot_product.scm	fragment	1	1	-	-	
+chapter2/section2/subsection3/37_dot_product_example.scm	fragment	1	1	-	-	
+chapter2/section2/subsection3/38_exercise_2_37_solution.scm	fragment	ok	ok	ok	ok	
+chapter2/section2/subsection3/39_example_2.37.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/40_fold_left.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection3/41_fold_right.scm	fragment	1	1	-	-	fold-right,nil
+chapter2/section2/subsection3/42_simple_divide.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/43_fold_right_example_1.scm	fragment	1	1	-	-	fold-right
+chapter2/section2/subsection3/44_fold_left_example_1.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/45_fold_right_example.scm	fragment	1	1	-	-	fold-right,nil
+chapter2/section2/subsection3/46_fold_left_example.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection3/47_fold_right_example_1_solution.scm	fragment	1	1	-	-	fold-right
+chapter2/section2/subsection3/48_fold_left_example_1_solution.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/49_fold_right_example_solution.scm	fragment	1	1	-	-	fold-right,nil
+chapter2/section2/subsection3/50_fold_left_example_solution.scm	scheme	1	ok	ok	ok	nil
+chapter2/section2/subsection3/51.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/52.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/53_reverse_example_2.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/54.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/55.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/56_enumerate_interval_n.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/57.scm	fragment	1	1	-	-	nil
+chapter2/section2/subsection3/58_flatmap.scm	fragment	ok	ok	ok	ok	nil
+chapter2/section2/subsection3/59_flatmap_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/60_prime_sum.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/61_prime_sum_example.scm	fragment	1	1	-	-	
+chapter2/section2/subsection3/62_make_pair_sum.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/63_make_pair_sum_example.scm	fragment	1	1	-	-	
+chapter2/section2/subsection3/64_prime_sum_pairs.scm	fragment	1	1	-	-	filter,nil
+chapter2/section2/subsection3/65_prime_sum_pairs_example.scm	fragment	1	1	-	-	
+chapter2/section2/subsection3/66.scm	fragment	1	1	-	-	nil
+chapter2/section2/subsection3/67_permutations_example.scm	fragment	1	1	-	-	
+chapter2/section2/subsection3/68_remove.scm	scheme	1	ok	ok	ok	filter
+chapter2/section2/subsection3/69_remove_example.scm	fragment	1	1	-	-	
+chapter2/section2/subsection3/70_solution_2.40.scm	fragment	ok	ok	ok	ok	nil
+chapter2/section2/subsection3/71_example_2.40.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/72.scm	fragment	ok	ok	ok	ok	nil
+chapter2/section2/subsection3/73_example_2.41.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/74_example_queens.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/75_queens.scm	fragment	ok	ok	compile	compile	filter,nil
+chapter2/section2/subsection3/76_adjoin_position.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/77_empty_board.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/78_is_safe.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection3/79_queens_solution.scm	fragment	ok	ok	compile	compile	filter,nil
+chapter2/section2/subsection4/01_wave2.scm	js-import	1	-	-	-	
+chapter2/section2/subsection4/02_wave2_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/03_flipped_pairs.scm	js-import	1	-	-	-	
+chapter2/section2/subsection4/04_wave4_2.scm	js-import	1	-	-	-	
+chapter2/section2/subsection4/05_right_split.scm	js-import	1	-	-	-	
+chapter2/section2/subsection4/06_corner_split.scm	js-import	1	-	-	-	
+chapter2/section2/subsection4/07_corner_split_example_1.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/08_right_split_example_1.scm	js-import	1	-	-	-	
+chapter2/section2/subsection4/09_square_limit.scm	js-import	1	-	-	-	
+chapter2/section2/subsection4/10_square_limit_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/11_up_split.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/12_up_split_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/13_square_of_four.scm	js-import	1	-	-	-	
+chapter2/section2/subsection4/14_square_of_four_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/15_flipped_pairs_call.scm	js-import	1	-	-	-	
+chapter2/section2/subsection4/16_flipped_pairs_2.scm	js-import	1	-	-	-	
+chapter2/section2/subsection4/17_flipped_pairs_example.scm	fragment	1	1	-	-	
+chapter2/section2/subsection4/18_square_limit_2.scm	js-import	1	-	-	-	
+chapter2/section2/subsection4/19_square_limit_example_2.scm	fragment	1	1	-	-	
+chapter2/section2/subsection4/20_split.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/21_right_split_up_split.scm	js-import	1	-	-	-	
+chapter2/section2/subsection4/22_split_definition.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/23_split_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/24_frame_coord_map.scm	fragment	ok	ok	ok	ok	
+chapter2/section2/subsection4/25_frame_coord_map_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/26_vector_example.scm	fragment	1	1	-	-	
+chapter2/section2/subsection4/27_vector_example_2.scm	fragment	1	1	-	-	
+chapter2/section2/subsection4/28_vector_functions.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/29_vector_functions_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/30_frame_functions.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/31_frame_functions_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/32_frame_functions_2.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/33_draw_line.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/34_segments_to_painter.scm	fragment	ok	ok	ok	ok	
+chapter2/section2/subsection4/35_segments_to_painter_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/36_segment_functions.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/37_segment_functions_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/38_unit_frame.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/39_outline_painter.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/40_outline_painter_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/41_x_painter.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/42_x_painter_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/43_diamond_painter.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/44_diamond_painter_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/45_transform_painter.scm	fragment	ok	ok	ok	ok	
+chapter2/section2/subsection4/46_flip_vert.scm	fragment	ok	ok	ok	ok	
+chapter2/section2/subsection4/47_flip_vert_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/48_shrink_to_upper_right.scm	fragment	ok	ok	ok	ok	
+chapter2/section2/subsection4/49_shrink_to_upper_right_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/50_rotate90.scm	fragment	ok	ok	ok	ok	
+chapter2/section2/subsection4/51_rotate90_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/52_squash_inwards.scm	fragment	ok	ok	ok	ok	
+chapter2/section2/subsection4/53_squash_inwards_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/54_beside.scm	fragment	ok	ok	ok	ok	
+chapter2/section2/subsection4/55_beside_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/56_flip_horiz.scm	fragment	ok	ok	ok	ok	
+chapter2/section2/subsection4/57_flip_horiz_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/58_rotate180.scm	fragment	ok	ok	ok	ok	
+chapter2/section2/subsection4/59_rotate180_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/60_rotate270.scm	fragment	ok	ok	ok	ok	
+chapter2/section2/subsection4/61_rotate270_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/62_below_definition.scm	fragment	ok	ok	ok	ok	
+chapter2/section2/subsection4/63_below_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section2/subsection4/64.scm	fragment	ok	ok	ok	ok	
+chapter2/section2/subsection4/65_combine4_click_here.scm	js-import	1	-	-	-	
+chapter2/section3/subsection1/01_ab.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/02_list_ab.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/03_list_quote_a_quote_b.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/04_list_quote_a_b.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/05_memq.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/06_memq_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/07.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/08.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/09.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/10.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/11.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/12.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/13.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/14_list_abc.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/15_list_list_george.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/16_tail_list_list_x1.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/17_tail_head_list_list.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/18_member_red_list_list.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/19_member_red_list_red.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/20_equal_definition.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/21_equal_example_1.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/22.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/23_equal.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/24_equal_2.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection1/25_which_is_which.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection2/01_deriv.scm	scheme	1	ok	ok	ok	caddr
+chapter2/section3/subsection2/02_is_variable_example.scm	fragment	1	1	-	-	
+chapter2/section3/subsection2/03_is_variable.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection2/04_is_same_variable_example.scm	fragment	1	1	-	-	
+chapter2/section3/subsection2/05_is_same_variable.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection2/06_make_sum_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection2/07_make_sum.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection2/08_is_sum_example.scm	fragment	1	1	-	-	
+chapter2/section3/subsection2/09_is_sum.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection2/10_addend_example.scm	fragment	1	1	-	-	
+chapter2/section3/subsection2/11_addend.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection2/12_augend_example.scm	fragment	1	1	-	-	
+chapter2/section3/subsection2/13_augend.scm	scheme	1	ok	ok	ok	caddr
+chapter2/section3/subsection2/14_is_product_example.scm	fragment	1	1	-	-	
+chapter2/section3/subsection2/15_is_product.scm	fragment	1	1	-	-	
+chapter2/section3/subsection2/16_multiplier_example.scm	fragment	1	1	-	-	
+chapter2/section3/subsection2/17_multiplier.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection2/18_multiplicand_example.scm	fragment	1	1	-	-	
+chapter2/section3/subsection2/19_multiplicand.scm	scheme	1	ok	ok	ok	caddr
+chapter2/section3/subsection2/20_deriv_example_8.scm	scheme	1	ok	ok	ok	caddr
+chapter2/section3/subsection2/21_deriv_example_2.scm	scheme	1	ok	ok	ok	caddr
+chapter2/section3/subsection2/22_xyx3.scm	scheme	1	ok	ok	ok	caddr
+chapter2/section3/subsection2/23_make_sum_example_2.scm	fragment	1	1	-	-	
+chapter2/section3/subsection2/24_make_sum_2.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection2/25_number_equal_example.scm	unreadable	1	-	-	-	
+chapter2/section3/subsection2/26_number_equal.scm	unreadable	1	-	-	-	
+chapter2/section3/subsection2/27_make_product_example_2.scm	unreadable	1	-	-	-	
+chapter2/section3/subsection2/28_make_product_2.scm	unreadable	1	-	-	-	
+chapter2/section3/subsection2/29_deriv_2.scm	scheme	ok	ok	ok	ok	caddr
+chapter2/section3/subsection2/30_here_is_how.scm	scheme	1	ok	ok	ok	caddr
+chapter2/section3/subsection2/31_why_y.scm	scheme	1	ok	ok	ok	caddr
+chapter2/section3/subsection2/32_deriv_list_times.scm	scheme	1	ok	ok	ok	caddr
+chapter2/section3/subsection2/33_deriv_expo.scm	scheme	ok	ok	ok	ok	caddr
+chapter2/section3/subsection2/34_example_deriv_expo.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection2/35_deriv_3.scm	fragment	ok	ok	ok	ok	
+chapter2/section3/subsection2/36_deriv_3_example.scm	fragment	1	1	-	-	
+chapter2/section3/subsection2/37_deriv_3_solution_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection2/38_deriv_3_solution.scm	fragment	1	1	-	-	
+chapter2/section3/subsection2/39.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection2/40_example_2.61_1.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection2/41.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection2/42_example_2.61_2.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection3/01_is_element_of_set.scm	scheme	1	ok	ok	ok	false,nil,true
+chapter2/section3/subsection3/02_is_element_of_set_example.scm	scheme	1	ok	ok	ok	false,nil,true
+chapter2/section3/subsection3/03_adjoin_set.scm	scheme	1	ok	ok	ok	false,nil,true
+chapter2/section3/subsection3/04_adjoin_set_example.scm	fragment	1	1	-	-	nil
+chapter2/section3/subsection3/05_intersection_set.scm	scheme	1	ok	ok	ok	false,nil,true
+chapter2/section3/subsection3/06_intersection_set_example.scm	scheme	1	ok	ok	ok	false,nil,true
+chapter2/section3/subsection3/07.scm	scheme	ok	ok	ok	ok	false,true
+chapter2/section3/subsection3/08_union_set_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection3/09.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection3/10_is_element_of_set_example_2.scm	fragment	1	1	-	-	
+chapter2/section3/subsection3/11_intersection_set_example2.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection3/12_adjoin_set_ordered.scm	fragment	1	1	-	-	nil
+chapter2/section3/subsection3/13_union_set_ordered.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection3/14_union_set_ordered_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection3/15_make_tree_function.scm	scheme	1	ok	ok	ok	caddr
+chapter2/section3/subsection3/16_make_tree_example.scm	fragment	1	1	-	-	
+chapter2/section3/subsection3/17_is_element_of_set_example_3.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection3/18_adjoin_set_example_2.scm	fragment	1	1	-	-	nil
+chapter2/section3/subsection3/19_tree_to_list_1.scm	scheme	ok	ok	ok	ok	caddr
+chapter2/section3/subsection3/20_tree_to_list_2.scm	scheme	ok	ok	ok	ok	caddr
+chapter2/section3/subsection3/21_list_to_tree.scm	scheme	ok	ok	ok	ok	caddr
+chapter2/section3/subsection3/22_list_to_tree_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection3/23_union_set_as_tree_solution.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection3/24_union_set_tree_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection3/25_intersection_set_as_tree_solution.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection3/26_intersection_set_tree_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection3/27_record.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection3/28.scm	fragment	ok	ok	ok	ok	false
+chapter2/section3/subsection3/29_lookup_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection3/30_ex_set_lookup_binary_tree.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection3/31_lookup_example2.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection4/01_make_leaf.scm	scheme	ok	ok	ok	ok	caddr
+chapter2/section3/subsection4/02_make_leaf_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection4/03_make_code_tree.scm	scheme	ok	ok	ok	ok	cadddr,caddr
+chapter2/section3/subsection4/04_make_code_tree_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection4/05_tree_property.scm	scheme	ok	ok	ok	ok	cadddr,caddr
+chapter2/section3/subsection4/06_tree_property_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection4/07_decode_function.scm	scheme	ok	ok	ok	ok	cadddr,caddr
+chapter2/section3/subsection4/08_decode_function_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection4/09_adjoin_set3.scm	scheme	ok	ok	ok	ok	cadddr,caddr
+chapter2/section3/subsection4/10_adjoin_set3_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection4/11_make_leaf_set.scm	scheme	ok	ok	ok	ok	cadddr,caddr
+chapter2/section3/subsection4/12_make_leaf_set_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection4/13_sample_tree.scm	scheme	1	ok	ok	ok	cadddr,caddr
+chapter2/section3/subsection4/14_decode_solution.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection4/15_encode.scm	fragment	ok	ok	ok	ok	
+chapter2/section3/subsection4/16_encode_symbol.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection4/17_encode_symbol_solution.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection4/18_encode_symbol_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection4/19_generate_huffman_tree.scm	fragment	ok	ok	ok	ok	cadddr,caddr
+chapter2/section3/subsection4/20_successive_merge.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection4/21_successive_merge_solution.scm	fragment	ok	ok	ok	ok	cadddr,caddr
+chapter2/section3/subsection4/22_generate_huffman_tree_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section3/subsection4/23_boom_yip.scm	scheme	ok	ok	ok	ok	
+chapter2/section4/subsection1/01_make_complex_number1.scm	scheme	ok	ok	ok	ok	atan,cos,sin,sqrt
+chapter2/section4/subsection1/02_make_complex_number_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section4/subsection1/03_make_complex_number2.scm	scheme	ok	ok	ok	ok	atan,cos,sin,sqrt
+chapter2/section4/subsection2/01_attach_tag.scm	scheme	ok	ok	ok	ok	
+chapter2/section4/subsection2/02_attach_tag_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section4/subsection2/03_make_complex_number_rectangular.scm	scheme	ok	ok	ok	ok	atan,cos,sin,sqrt
+chapter2/section4/subsection2/04_make_complex_number_rectangular_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section4/subsection2/05_make_complex_number_polar.scm	scheme	ok	ok	ok	ok	atan,cos,sin,sqrt
+chapter2/section4/subsection2/06_make_complex_number_polar_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section4/subsection2/07_make_complex_number.scm	scheme	ok	ok	ok	ok	atan,cos,sin,sqrt
+chapter2/section4/subsection2/08_make_complex_number_example_2.scm	scheme	ok	ok	ok	ok	
+chapter2/section4/subsection2/09_make_complex_number_generic.scm	scheme	ok	ok	ok	ok	atan,cos,sin,sqrt
+chapter2/section4/subsection2/10_make_complex_number_generic_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section4/subsection3/01_operation_table_from_chapter_3.scm	scheme	ok	ok	ok	ok	
+chapter2/section4/subsection3/02_install_rectangular_package_usage.scm	scheme	ok	ok	ok	ok	
+chapter2/section4/subsection3/03_install_rectangular_package.scm	scheme	ok	ok	ok	ok	atan,cos,false,sin,sqrt
+chapter2/section4/subsection3/04_install_polar_package.scm	scheme	ok	ok	ok	ok	atan,cos,false,sin,sqrt
+chapter2/section4/subsection3/05_install_polar_package_usage.scm	scheme	ok	ok	ok	ok	
+chapter2/section4/subsection3/06_apply_definition.scm	scheme	ok	ok	ok	ok	
+chapter2/section4/subsection3/07_generic_selectors.scm	fragment	ok	ok	compile	compile	
+chapter2/section4/subsection3/08_generic_selectors_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section4/subsection3/09_generic_constructors.scm	fragment	ok	ok	compile	compile	
+chapter2/section4/subsection3/10_deriv_2_4.scm	scheme	1	ok	ok	ok	caddr
+chapter2/section4/subsection3/11_xyx4.scm	scheme	1	ok	ok	ok	caddr
+chapter2/section4/subsection3/12_deriv_x_example.scm	fragment	1	1	-	-	
+chapter2/section4/subsection3/13_deriv_generic_sum_product.scm	fragment	1	1	-	-	false
+chapter2/section4/subsection3/14_deriv_generic_data.scm	scheme	ok	ok	ok	ok	
+chapter2/section4/subsection3/15_deriv_xyx3_generic_example.scm	fragment	1	1	-	-	
+chapter2/section4/subsection3/16_deriv_expo_data.scm	scheme	ok	ok	ok	ok	
+chapter2/section4/subsection3/17_example_deriv_expo_generic.scm	scheme	ok	ok	ok	ok	
+chapter2/section4/subsection3/18_deriv_expo_put_it_all_together.scm	fragment	ok	ok	ok	ok	false
+chapter2/section4/subsection3/19_make_from_real_imag_message_passing.scm	scheme	ok	ok	ok	ok	atan,sqrt
+chapter2/section4/subsection3/20_apply_generic_message_passing.scm	scheme	ok	ok	ok	ok	atan,sqrt
+chapter2/section4/subsection3/21_message_passing_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section4/subsection3/22_generic_selectors_message_passing.scm	scheme	ok	ok	ok	ok	atan,sqrt
+chapter2/section4/subsection3/23_make_from_mag_ang_message_passing.scm	scheme	ok	ok	ok	ok	atan,sqrt
+chapter2/section4/subsection3/24_message_passing_example_2.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection1/01_install_javascript_number_package.scm	scheme	ok	ok	ok	ok	false
+chapter2/section5/subsection1/02_actually_install_javascript_number_package.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection1/03_install_javascript_number_package_usage.scm	scheme	ok	ok	ok	ok	false
+chapter2/section5/subsection1/04_install_javascript_number_package_usage_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection1/05_benefit_of_additivity.scm	scheme	ok	ok	ok	ok	false
+chapter2/section5/subsection1/06_benefit_of_additivity_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection1/07_install_complex_package.scm	scheme	ok	ok	ok	ok	atan,cos,false,sin,sqrt
+chapter2/section5/subsection1/08_actually_install_complex_package.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection1/09_install_complex_package_usage.scm	scheme	ok	ok	ok	ok	atan,cos,false,sin,sqrt
+chapter2/section5/subsection1/10_install_complex_package_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection1/11_use_generic_magnitude.scm	scheme	ok	ok	ok	ok	atan,cos,false,sin,sqrt
+chapter2/section5/subsection1/12_use_generic_magnitude_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection1/13.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection2/01_add_complex_to_javascript_number_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection2/02_put_get_coercion.scm	scheme	ok	ok	ok	ok	caddr
+chapter2/section5/subsection2/03_put_coercion_usage.scm	scheme	ok	ok	ok	ok	atan,caddr,cos,false,sin,sqrt
+chapter2/section5/subsection2/04_put_coercion_usage_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection2/05_base_operation_table.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection2/06_javascript_number_package.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection2/07_complex_number_package.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection2/08_coercion_support.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection2/09_apply_generic_with_coercion_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection2/10_apply_generic_with_coercion.scm	fragment	ok	ok	compile	compile	
+chapter2/section5/subsection2/11_apply_generic_with_unavailable_type_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection2/12_apply_generic_with_unavailable_type.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection2/13_multi_coercion_example.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection2/14_multi_coercion.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection2/15_rational_number_package.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection2/16_raise_example.scm	fragment	ok	ok	compile	compile	
+chapter2/section5/subsection2/17_raise.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection3/01_add_mul_poly.scm	fragment	ok	ok	ok	ok	false
+chapter2/section5/subsection3/02_add_terms.scm	fragment	ok	ok	ok	ok	false
+chapter2/section5/subsection3/03_mul_terms.scm	fragment	ok	ok	ok	ok	false
+chapter2/section5/subsection3/04_adjoin_term.scm	fragment	ok	ok	ok	ok	false
+chapter2/section5/subsection3/05_make_polynomial_requires.scm	scheme	ok	ok	ok	ok	
+chapter2/section5/subsection3/06_make_polynomial.scm	scheme	ok	ok	ok	ok	false
+chapter2/section5/subsection3/07_make_polynomial_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/01_withdraw_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/02_withdraw_example2.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/03_withdraw_example3.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/04_withdraw_example4.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/05_withdraw.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/06_new_withdraw_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/07_new_withdraw.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/08_make_withdraw.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/09_make_withdraw_define.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/10_make_withdraw_example1.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/11_make_withdraw_example2.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/12_make_withdraw_example3.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/13_make_withdraw_example4.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/14_make_account.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/15_make_account_example_my.scm	fragment	1	1	-	-	
+chapter3/section1/subsection1/16_make_account_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/17_make_account_example1.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/18_make_account_example2.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/19_make_account_example3.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/20_make_account_example4.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/21.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/22_make_accumulator_example.scm	fragment	1	1	-	-	
+chapter3/section1/subsection1/23_make_accumulator_example1.scm	fragment	1	1	-	-	
+chapter3/section1/subsection1/24_make_accumulator_example2.scm	fragment	1	1	-	-	
+chapter3/section1/subsection1/25_make_accumulator_example_solution.scm	fragment	1	1	-	-	
+chapter3/section1/subsection1/26_make_accumulator_solution.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/27_make_monitored_example.scm	fragment	1	1	-	-	sqrt
+chapter3/section1/subsection1/28_make_monitored_example1.scm	fragment	1	1	-	-	sqrt
+chapter3/section1/subsection1/29_make_monitored_example2.scm	fragment	1	1	-	-	sqrt
+chapter3/section1/subsection1/30_make_monitored_example3.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/31.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/32_make_account_exercise.scm	fragment	1	1	-	-	
+chapter3/section1/subsection1/33_make_account_exercise_example1.scm	fragment	1	1	-	-	
+chapter3/section1/subsection1/34_make_account_exercise_example2.scm	fragment	1	1	-	-	
+chapter3/section1/subsection1/35_make_account_password_protected.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/36_mka.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection1/37_mka_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection2/01_rand_update.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection2/02_rand_definition.scm	fragment	1	1	-	-	
+chapter3/section1/subsection2/03_random_init.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection2/04_rand_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection2/05_monte_carlo.scm	fragment	1	1	-	-	sqrt
+chapter3/section1/subsection2/06_estimate_pi_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection2/07_estimate_pi_alternative.scm	fragment	1	1	-	-	sqrt
+chapter3/section1/subsection2/08_random_in_range.scm	scheme	ok	ok	ok	ok	random
+chapter3/section1/subsection2/09_random_in_range_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection2/10_exercise_3_5_solution_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection2/11_exercise_3_5_solution.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection2/12.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection2/13_prng_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/01_make_simplified_withdraw.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/02_make_simplified_withdraw_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/03_make_simplified_withdraw_example1.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/04_make_simplified_withdraw_example2.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/05_make_decrementer.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/06_make_decrementer_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/07_make_decrementer_example1.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/08_make_decrementer_example2.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/09.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/10.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/11.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/12.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/13.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/14_make_simplified_withdraw_example3.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/15_make_simplified_withdraw_example4.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/16_make_simplified_withdraw_example5.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/17_make_simplified_withdraw_example6.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/18.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/19.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/20_factorial_iterative.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/21_factorial_imperative.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/22_make_joint_example.scm	fragment	1	1	-	-	
+chapter3/section1/subsection3/23_make_joint.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/24_joint_acc_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/25.scm	scheme	ok	ok	ok	ok	
+chapter3/section1/subsection3/26_exercise_3_8_solution_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section2/subsection1/01.scm	scheme	ok	ok	ok	ok	
+chapter3/section2/subsection1/02.scm	scheme	ok	ok	ok	ok	
+chapter3/section2/subsection2/01.scm	scheme	ok	ok	ok	ok	
+chapter3/section2/subsection2/02.scm	scheme	ok	ok	ok	ok	
+chapter3/section2/subsection2/03.scm	scheme	ok	ok	ok	ok	
+chapter3/section2/subsection3/01_make_withdraw2.scm	scheme	ok	ok	ok	ok	
+chapter3/section2/subsection3/02_make_withdraw2_w1_declare.scm	scheme	ok	ok	ok	ok	
+chapter3/section2/subsection3/03_make_withdraw2_w1_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section2/subsection3/04_make_withdraw2_w2_declare.scm	scheme	ok	ok	ok	ok	
+chapter3/section2/subsection3/05_make_withdraw3.scm	scheme	ok	ok	ok	ok	
+chapter3/section2/subsection3/06_make_withdraw3_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section2/subsection3/07_make_withdraw3_example_2.scm	scheme	ok	ok	ok	ok	
+chapter3/section2/subsection4/01_another_sqrt.scm	scheme	ok	ok	ok	ok	
+chapter3/section2/subsection4/02_another_make_account.scm	scheme	ok	ok	ok	ok	
+chapter3/section2/subsection5/01.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/01_mutable_list_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/02.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/03_get_new_pair.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/04.scm	fragment	ok	ok	ok	ok	
+chapter3/section3/subsection1/05_mutable_pair_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/06_append_example3.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/07_append2.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/08_append_mutator.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/09_last_pair_example_2.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/10_last_pair.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/11_append_interaction_1.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/12_append_interaction_2.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/13_append_interaction_3.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/14_append_interaction_4.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/15_append_interaction_5.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/16_append_interaction_6.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/17_append_interaction_7.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/18_append_interaction_8.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/19_make_cycle.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/20_make_cycle_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/21_mystery_loop.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/22_mystery_loop_example_1.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/23_mystery_loop_example_2.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/24_pair_example1.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/25_pair_example2.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/26_abab.scm	fragment	1	1	-	-	
+chapter3/section3/subsection1/27_set_to_wow.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/28_set_to_wow_example_1.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/29_set_to_wow_example_2.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/30_set_to_wow_example_3.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/31_set_to_wow_example_4.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/32_count_pairs.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/33_exercise_3_16_solution.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/34_exercise_3_16_solution_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/35.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/36_exercise_3_17_solution_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/37.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/38_exercise_3_18_solution_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/39_pair2_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/40_contains_cycle_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/41_contains_cycle.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/42.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/43_cons_1_2_run_3.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/44_pair2.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/45_pair2_example1.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection1/46_pair2_example2.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/01_modify_pointers_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/02_modify_pointers.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/03_is_empty_queue_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/04_is_empty_queue.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/05_make_queue_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/06_make_queue.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/07_front_queue_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/08_front_queue.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/09_print_queue_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/10_insert_queue.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/11_delete_queue.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/12_make_queue_example1.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/13_insert_queue_example1.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/14_insert_queue_example2.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/15_delete_queue_example1.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/16_delete_queue_example2.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/17.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/18_ex_3_21_solution_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/19.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/20_ex_3_22_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection2/21.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection3/01_lookup1_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection3/02_lookup1.scm	scheme	ok	ok	ok	ok	false
+chapter3/section3/subsection3/03_insert_into_table1.scm	scheme	ok	ok	ok	ok	false
+chapter3/section3/subsection3/04_make_table1.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection3/05_lookup2_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection3/06_just_assoc.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection3/07_lookup2.scm	scheme	ok	ok	ok	ok	false
+chapter3/section3/subsection3/08_insert_into_table2.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection3/09_make_table2.scm	scheme	ok	ok	ok	ok	false
+chapter3/section3/subsection3/10_operation_table_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection3/11_operation_table.scm	scheme	ok	ok	ok	ok	false
+chapter3/section3/subsection3/12.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection3/13_solution_3_25.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection3/14_solution_3_25_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection3/15_ex_3_26_solution.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection3/16_ex_3_26_solution_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection3/17.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection3/18_memorize_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection3/19_memo_fib.scm	scheme	ok	ok	ok	ok	false
+chapter3/section3/subsection3/20_memorize.scm	scheme	ok	ok	ok	ok	false
+chapter3/section3/subsection4/01_make_wire_usage.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/02_or_gate_example.scm	fragment	1	1	-	-	
+chapter3/section3/subsection4/03_and_gate_example.scm	fragment	1	1	-	-	
+chapter3/section3/subsection4/04_inverter_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/05_and_gate_example_2.scm	fragment	1	1	-	-	
+chapter3/section3/subsection4/06_half_adder_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/07_half_adder.scm	fragment	ok	ok	ok	ok	
+chapter3/section3/subsection4/08_full_adder_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/09_full_adder.scm	fragment	ok	ok	ok	ok	
+chapter3/section3/subsection4/10_inverter.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/11_logical_and.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/12_and_gate.scm	fragment	1	1	-	-	
+chapter3/section3/subsection4/13_logical_or.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/14_or_gate.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/15_make_wire.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/16_call_each.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/17_get_signal.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/18_after_delay.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/19_propagate.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/20_probe.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/21_the_agenda.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/22_probing_two_wires.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/23_probe_carry.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/24_half_adder_example_2.scm	fragment	1	1	-	-	
+chapter3/section3/subsection4/25_set_signal_example.scm	fragment	1	1	-	-	
+chapter3/section3/subsection4/26_propagate_example_1.scm	fragment	1	1	-	-	
+chapter3/section3/subsection4/27_set_signal_example_2.scm	fragment	1	1	-	-	
+chapter3/section3/subsection4/28_propagate_example_2.scm	fragment	1	1	-	-	
+chapter3/section3/subsection4/29_make_time_segment.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/30_make_agenda.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/31_is_empty_agenda.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/32_add_to_agenda.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/33_remove_first_agenda_item.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection4/34_first_agenda_item.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection5/01_celsius_fahrenheit_converter_example.scm	scheme	1	ok	ok	ok	false,true
+chapter3/section3/subsection5/02_celsius_fahrenheit_converter.scm	scheme	1	ok	ok	ok	false,true
+chapter3/section3/subsection5/03_celsius_probe.scm	scheme	1	ok	ok	ok	false,true
+chapter3/section3/subsection5/04_set_value_example.scm	scheme	1	ok	ok	ok	false,true
+chapter3/section3/subsection5/05_set_value_example_2.scm	scheme	1	1	-	-	false,true
+chapter3/section3/subsection5/06_forget_value_example.scm	scheme	1	ok	ok	ok	false,true
+chapter3/section3/subsection5/07_set_value_example_3.scm	scheme	1	ok	ok	ok	false,true
+chapter3/section3/subsection5/08_adder.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection5/09_inform_about_value.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection5/10_multiplier_2.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection5/11_constant.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection5/12_redefine_display.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection5/13_probe_2.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection5/14_make_connector.scm	scheme	ok	ok	ok	ok	false,true
+chapter3/section3/subsection5/15_for_each_except.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection5/16_has_value.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection5/17_averager_example.scm	fragment	1	1	-	-	
+chapter3/section3/subsection5/18_averager.scm	scheme	1	ok	ok	ok	false,true
+chapter3/section3/subsection5/19_squarer_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection5/20_squarer.scm	scheme	ok	ok	ok	ok	
+chapter3/section3/subsection5/21.scm	scheme	ok	ok	ok	ok	
+chapter3/section4/section4/01_withdraw_example_3_4.scm	scheme	ok	ok	ok	ok	
+chapter3/section4/section4/02_withdraw_example_3_4_second.scm	scheme	ok	ok	ok	ok	
+chapter3/section4/subsection1/01_withdraw_concurrency.scm	fragment	1	1	-	-	
+chapter3/section4/subsection1/02_balance_concurrency.scm	scheme	ok	ok	ok	ok	
+chapter3/section4/subsection1/03_withdraw_example_concurrency.scm	fragment	1	1	-	-	
+chapter3/section4/subsection2/01_concurrent_execute_example.scm	concurrent	1	1	-	-	parallel-execute
+chapter3/section4/subsection2/02_serializer_example.scm	concurrent	1	1	-	-	false,parallel-execute,test-and-set!
+chapter3/section4/subsection2/03_make_account_serialize_attempt_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section4/subsection2/04_make_account_serialize_attempt.scm	concurrent	ok	ok	ok	ok	false,test-and-set!
+chapter3/section4/subsection2/05_serializer_example_2.scm	concurrent	1	1	-	-	false,parallel-execute,test-and-set!
+chapter3/section4/subsection2/06_serializer_example_3.scm	concurrent	1	1	-	-	parallel-execute
+chapter3/section4/subsection2/07_serializer_example_4.scm	concurrent	1	1	-	-	false,parallel-execute,test-and-set!
+chapter3/section4/subsection2/08_serializer_example_5.scm	concurrent	ok	ok	ok	ok	false,test-and-set!
+chapter3/section4/subsection2/09_serializer_example_6.scm	concurrent	ok	ok	ok	ok	false,test-and-set!
+chapter3/section4/subsection2/10_exchange_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section4/subsection2/11_exchange.scm	concurrent	ok	ok	ok	ok	false,test-and-set!
+chapter3/section4/subsection2/12_make_account_and_serializer.scm	concurrent	ok	ok	ok	ok	false,test-and-set!
+chapter3/section4/subsection2/13_make_account_and_serializer_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section4/subsection2/14_make_account_and_serializer_usage.scm	concurrent	ok	ok	ok	ok	false,test-and-set!
+chapter3/section4/subsection2/15_serialized_exchange_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section4/subsection2/16_serialized_exchange.scm	concurrent	ok	ok	ok	ok	false,test-and-set!
+chapter3/section4/subsection2/17_transfer_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section4/subsection2/18_transfer.scm	concurrent	ok	ok	ok	ok	false,test-and-set!
+chapter3/section4/subsection2/19_make_account_and_serializer_exercise.scm	concurrent	ok	ok	ok	ok	false,test-and-set!
+chapter3/section4/subsection2/20_make_account_and_serializer_exercise_usage.scm	concurrent	ok	ok	ok	ok	false,test-and-set!
+chapter3/section4/subsection2/21_make_account_and_serializer_exercise_example.scm	concurrent	ok	ok	ok	ok	false,test-and-set!
+chapter3/section4/subsection2/22_serializer.scm	concurrent	ok	ok	ok	ok	false,test-and-set!
+chapter3/section4/subsection2/23_mutex.scm	concurrent	ok	ok	ok	ok	false,test-and-set!
+chapter3/section4/subsection2/24_test_and_set.scm	concurrent	ok	ok	ok	ok	false,true
+chapter3/section5/subsection1/01_sum_primes1.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/02_sum_primes1_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/03_sum_primes2.scm	fragment	ok	ok	ok	ok	filter,nil
+chapter3/section5/subsection1/04_stream_tail.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/05_stream_tail_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/06_stream_functions.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/07_stream_functions_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/08_display_stream.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/09_display_stream_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/10_no_more_outrageous.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/11_stream_enumerate_interval_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/12_stream_enumerate_interval.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/13_stream_enumerate_interval_example_2.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/14_stream_filter.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/15_stream_filter_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/16_enumerate_interval_example_3.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/17_which_in_this_case.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/18_now_passed_to.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/19_memo.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/20_memo_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/21.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/22_stream_map_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/23_stream_map_optimized.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/24_stream_map_optimized_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/25_stream_map_2_optimized_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/26_stream_map_2_optimized.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/27.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/28_stream_map_optimized_example_2.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection1/29_assignment_and_streams.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/01_integers_starting_from_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/02_integers_starting_from.scm	scheme	ok	ok	ok	ok	cons-stream
+chapter3/section5/subsection2/03_integers_definition.scm	scheme	1	ok	ok	ok	cons-stream
+chapter3/section5/subsection2/04_integers_definition_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/05_is_divisible2_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/06_is_divisible2.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/07_no_sevens.scm	scheme	1	ok	ok	ok	cons-stream,stream-filter
+chapter3/section5/subsection2/08_no_sevens_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/09_on_sevens_example.scm	scheme	1	ok	ok	ok	cons-stream,stream-filter,stream-ref
+chapter3/section5/subsection2/10_fibgen_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/11_fibgen.scm	scheme	1	ok	ok	ok	cons-stream
+chapter3/section5/subsection2/12_sieve_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/13_sieve.scm	scheme	1	ok	ok	ok	cons-stream,stream-car,stream-cdr,stream-filter
+chapter3/section5/subsection2/14_sieve_example_2.scm	scheme	1	ok	ok	ok	cons-stream,stream-car,stream-cdr,stream-filter,stream-ref
+chapter3/section5/subsection2/15_ones_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/16_ones_definition.scm	scheme	1	ok	ok	ok	cons-stream
+chapter3/section5/subsection2/17_add_streams_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/18_add_streams.scm	scheme	ok	ok	ok	ok	stream-map
+chapter3/section5/subsection2/19_integers_definition_2_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/20_integers_definition_2.scm	scheme	1	ok	ok	ok	cons-stream,stream-map
+chapter3/section5/subsection2/21_fibs_by_magic_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/22_fibs_by_magic.scm	scheme	1	ok	ok	ok	cons-stream,stream-cdr,stream-map
+chapter3/section5/subsection2/23_scale_stream_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/24_scale_stream.scm	scheme	ok	ok	ok	ok	stream-map
+chapter3/section5/subsection2/25_double_stream_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/26_double_stream.scm	scheme	1	ok	ok	ok	cons-stream,stream-map
+chapter3/section5/subsection2/27_primes_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/28_primes.scm	fragment	1	ok	compile	compile	cons-stream,stream-filter
+chapter3/section5/subsection2/29_is_prime2_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/30_is_prime2.scm	fragment	ok	ok	compile	compile	cons-stream,false,stream-car,stream-cdr,true
+chapter3/section5/subsection2/31_add_streams_exercise_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/32_add_streams_exercise.scm	scheme	1	ok	ok	ok	cons-stream,stream-map
+chapter3/section5/subsection2/33_mul_streams_students.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/34_merge_function_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/35_merge_function.scm	scheme	ok	ok	ok	ok	cons-stream,stream-car,stream-cdr,stream-null?
+chapter3/section5/subsection2/36_hamming_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/37_hamming_stream.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection2/38.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection3/01_sqrt_improve_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection3/02_sqrt_improve.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection3/03_sqrt_stream.scm	fragment	1	1	-	-	cons-stream,stream-map
+chapter3/section5/subsection3/04_sqrt_stream_example.scm	fragment	1	1	-	-	cons-stream,stream-map
+chapter3/section5/subsection3/05_pi_stream.scm	fragment	1	1	-	-	cons-stream,stream-car,stream-cdr,stream-map
+chapter3/section5/subsection3/06_pi_stream_example.scm	fragment	1	1	-	-	cons-stream,stream-car,stream-cdr,stream-map
+chapter3/section5/subsection3/07_euler_transform_example.scm	fragment	1	1	-	-	cons-stream,stream-car,stream-cdr,stream-map,stream-ref
+chapter3/section5/subsection3/08_make_tableau.scm	scheme	ok	ok	ok	ok	cons-stream
+chapter3/section5/subsection3/09_accelerated_sequence.scm	fragment	1	1	-	-	cons-stream,stream-car,stream-cdr,stream-map,stream-ref
+chapter3/section5/subsection3/10_accelerated_sequence_example.scm	fragment	1	1	-	-	cons-stream,stream-car,stream-cdr,stream-map,stream-ref
+chapter3/section5/subsection3/11_int_pairs.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection3/12_prime_sum_pairs_stream.scm	fragment	1	1	-	-	cons-stream,false,stream-car,stream-cdr,stream-filter,true
+chapter3/section5/subsection3/13_stream_append_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection3/14_stream_append.scm	scheme	ok	ok	ok	ok	cons-stream,stream-car,stream-cdr,stream-null?
+chapter3/section5/subsection3/15_pairs_first_attempt.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection3/16_pairs_first_attempt_usage.scm	fragment	1	1	-	-	cons-stream
+chapter3/section5/subsection3/17_pairs_first_attempt_example.scm	fragment	1	1	-	-	cons-stream
+chapter3/section5/subsection3/18_interleave_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection3/19_interleave.scm	scheme	ok	ok	ok	ok	cons-stream,stream-car,stream-cdr,stream-null?
+chapter3/section5/subsection3/20_pairs_second_attempt.scm	scheme	1	ok	ok	ok	cons-stream,stream-car,stream-cdr,stream-map,stream-null?
+chapter3/section5/subsection3/21_pairs_second_attempt_example.scm	fragment	1	1	-	-	cons-stream
+chapter3/section5/subsection3/22_integral_1_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection3/23_integral_1.scm	scheme	ok	ok	ok	ok	cons-stream,stream-map
+chapter3/section5/subsection4/01_integral_example_4.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection4/02_integral.scm	scheme	ok	ok	ok	ok	cons-stream,force,stream-map
+chapter3/section5/subsection4/03_solve.scm	fragment	1	1	-	-	delay,stream-map,stream-ref
+chapter3/section5/subsection4/04_solve_optimized.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection4/05_e.scm	fragment	1	1	-	-	stream-ref
+chapter3/section5/subsection4/06.scm	scheme	ok	ok	ok	ok	cons-stream,stream-car,stream-cdr,stream-null?,the-empty-stream
+chapter3/section5/subsection5/01.scm	fragment	1	1	-	-	
+chapter3/section5/subsection5/02_random_numbers.scm	fragment	1	1	-	-	cons-stream,stream-map
+chapter3/section5/subsection5/03_random_numbers_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection5/04_cesaro_stream.scm	fragment	1	1	-	-	cons-stream,stream-car,stream-cdr,stream-map
+chapter3/section5/subsection5/05_cesaro_stream_example.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection5/06_monte_carlo_stream.scm	fragment	1	1	-	-	cons-stream,sqrt,stream-car,stream-cdr,stream-map
+chapter3/section5/subsection5/07_display_pi.scm	scheme	ok	ok	ok	ok	
+chapter3/section5/subsection5/08_stream_withdraw.scm	scheme	ok	ok	ok	ok	cons-stream,stream-car,stream-cdr
+chapter3/section5/subsection5/09_stream_withdraw_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/01_headline_4_1_1.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/02_eval.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/03_eval_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/04_apply.scm	fragment	ok	ok	ok	ok	
+chapter4/section1/subsection1/05_apply_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/06_list_of_values_without_map.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/07_list_of_values.scm	fragment	1	1	-	-	eval,read
+chapter4/section1/subsection1/08_list_of_values_example.scm	fragment	1	1	-	-	eval,read
+chapter4/section1/subsection1/09_eval_if.scm	fragment	ok	ok	ok	ok	eval
+chapter4/section1/subsection1/10_eval_if_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/11_eval_sequence.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/12_eval_sequence_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/13_eval_block.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/14_list_of_unassigned.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/15_scan_out_declarations.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/16_scan_out_declarations_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/17_eval_block_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/18_eval_return.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/19_eval_return_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/20_eval_assignment.scm	fragment	ok	ok	ok	ok	eval
+chapter4/section1/subsection1/21_eval_assignment_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/22_eval_definition.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/23_eval_definition_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/24_functions_4_1_1.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/25_parse_and_evaluate.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/26_parse_and_evaluate_test_factorial.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/27_parse_and_evaluate_test_append.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection1/28_parse_and_evaluate_test_map.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/01_parse_declaration.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/02_parse_literal_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/03_parse_literal_example_2.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/04_parse_literal_example_3.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/05_is_literal.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/06_is_literal_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/07_tagged_list.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/08_tagged_list_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/09_literal_value.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/10_literal_value_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/11_make_literal.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/12_variable.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/13_symbol_of_name.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/14_variable_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/15_make_name.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/16_application.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/17_application_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/18_make_application.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/19_if.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/20_if_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/21_lambda.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/22_lambda_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/23_make_lambda_expression.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/24_begin.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/25_begin_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/26_block.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/27_block_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/28_return.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/29_return_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/30_assignment.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/31_assignment_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/32_declaration_symbol.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/33_make_constant_declaration.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/34_definition.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/35_definition_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/36_function_declaration.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/37_operator_combination.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/38_operator_combination_to_application.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/39_functions_4_1_2.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/40.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/41_factorial_imperative_2.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/42_factorial_with_loop.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection2/43_factorial_with_while_loop_function.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection3/01_true_2.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection3/02_true.scm	scheme	ok	ok	ok	ok	false
+chapter4/section1/subsection3/03_true_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection3/04_make_procedure.scm	scheme	ok	ok	ok	ok	cadddr,caddr,false
+chapter4/section1/subsection3/05_make_procedure_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection3/06_return_value.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection3/07_return_value_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection3/08_enclosing_environment.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection3/09_enclosing_environment_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection3/10_make_frame_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection3/11_make_frame.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection3/12_extend_environment.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection3/13_extend_environment_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection3/14_lookup_variable_value.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection3/15_lookup_variable_value_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection3/16_assign_name_value.scm	fragment	ok	ok	compile	compile	
+chapter4/section1/subsection3/17_assign_name_value_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection3/18_functions_4_1_3.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection4/01_setup_environment.scm	fragment	1	1	-	-	false,read,true
+chapter4/section1/subsection4/02_setup_environment_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection4/03_the_global_environment.scm	fragment	1	1	-	-	false,read,true
+chapter4/section1/subsection4/04_the_global_environment_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection4/05_primitive_procedure.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection4/06_primitive_procedure_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection4/07_primitive_procedures_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection4/08_primitive_constants_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection4/09_apply_primitive_procedure.scm	fragment	ok	ok	ok	ok	
+chapter4/section1/subsection4/10_apply_primitive_procedure_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection4/11_functions_4_1_4.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection4/12_driver_loop.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection4/13_user_read.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection4/14_user_print.scm	fragment	ok	ok	ok	ok	
+chapter4/section1/subsection4/15_user_print_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection4/16_driver_loop_example.scm	fragment	1	1	-	-	eval,read
+chapter4/section1/subsection4/17_meta_append.scm	fragment	1	1	-	-	eval,read
+chapter4/section1/subsection4/18_meta_append_example.scm	fragment	1	1	-	-	eval,read
+chapter4/section1/subsection5/01_factorial_4_1_5.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection5/02.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection5/03_evaluate_example_4_1_5.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection6/01_lambda_calculus_factorial.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection6/02.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection6/03.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection6/04_mystery_f.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/01_factorial_4_1_7.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/02_analyze_headline.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/03_evaluate_4_1_7.scm	fragment	ok	ok	ok	ok	
+chapter4/section1/subsection7/04_evaluate_4_1_7_simple_function.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/05_analyze_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/06_analyze.scm	fragment	ok	ok	ok	ok	
+chapter4/section1/subsection7/07_analyze_literal_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/08_analyze_literal.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/09_analyze_variable_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/10_analyze_variable.scm	fragment	ok	ok	ok	ok	
+chapter4/section1/subsection7/11_analyze_application_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/12_analyze_application.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/13_analyze_if_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/14_analyze_if.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/15_analyze_lambda_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/16_analyze_lambda.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/17_analyze_sequence_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/18_analyze_sequence.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/19_analyze_block_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/20_analyze_block.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/21_analyze_return_statement_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/22_analyze_return_statement.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/23_analyze_assignment_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/24_analyze_assignment.scm	fragment	ok	ok	ok	ok	
+chapter4/section1/subsection7/25_analyze_sequence_2.scm	fragment	ok	ok	compile	compile	
+chapter4/section1/subsection7/26_parse_and_evaluate_4_1_7.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/27_evaluate_4_1_7_test_factorial.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/28_evaluate_4_1_7_test_append.scm	scheme	ok	ok	ok	ok	
+chapter4/section1/subsection7/29_evaluate_4_1_7_test_map.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection1/01_try_me_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection1/02_try_me.scm	embedded-lazy	ok	ok	ok	ok	
+chapter4/section2/subsection1/03_unless.scm	embedded-lazy	1	1	-	-	
+chapter4/section2/subsection1/04_xs_is_null.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection1/05_unless_example.scm	embedded-lazy	1	1	-	-	
+chapter4/section2/subsection1/06_factorial_lazy.scm	embedded-lazy	ok	ok	ok	ok	
+chapter4/section2/subsection1/07_factorial_unless_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection2/01_functions_4_1_1_lazy.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection2/02_eval_lazy_example.scm	fragment	1	1	-	-	eval,read
+chapter4/section2/subsection2/03_eval_lazy.scm	fragment	1	1	-	-	eval,exp,read
+chapter4/section2/subsection2/04_actual_value_lazy_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection2/05_actual_value_lazy.scm	fragment	ok	ok	ok	ok	eval
+chapter4/section2/subsection2/06_apply_lazy_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection2/07_apply_lazy.scm	fragment	ok	ok	compile	compile	
+chapter4/section2/subsection2/08_eval_if_lazy_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection2/09_eval_if_lazy.scm	fragment	ok	ok	ok	ok	eval
+chapter4/section2/subsection2/10_driver_loop_lazy.scm	fragment	1	1	-	-	read
+chapter4/section2/subsection2/11_driver_loop_lazy_example.scm	fragment	1	1	-	-	read
+chapter4/section2/subsection2/12_delay_it_lazy.scm	fragment	1	1	-	-	caddr,eval,read
+chapter4/section2/subsection2/13_force_it_lazy.scm	fragment	1	1	-	-	eval,read
+chapter4/section2/subsection2/14_exercise_4_27_a.scm	fragment	ok	ok	ok	ok	read
+chapter4/section2/subsection2/15_exercise_4_27.scm	fragment	1	1	-	-	read
+chapter4/section2/subsection2/16_exercise_4_29.scm	fragment	ok	ok	ok	ok	read
+chapter4/section2/subsection2/17_exercise_4_30_b.scm	fragment	ok	ok	ok	ok	read
+chapter4/section2/subsection2/18_exercise_4_30_c.scm	fragment	ok	ok	ok	ok	read
+chapter4/section2/subsection2/19_parse_and_evaluate_lazy.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection2/20_parse_and_evaluate_test_factorial_lazy.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection2/21_parse_and_evaluate_test_append_lazy.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection2/22_parse_and_evaluate_test_map_lazy.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection2/23_parse_and_evaluate_test_try_me_lazy.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection3/01_pair_lazy_header.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection3/02_pair_lazy_footer.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection3/03_pair_lazy_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection3/04_list_lib_test_header.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection3/05_list_lib_test_footer.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection3/06_list_lib_test.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection3/07_lazy_integral_header.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection3/08_lazy_integral_footer.scm	scheme	ok	ok	ok	ok	
+chapter4/section2/subsection3/09_lazy_integral_test.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/section3/01_prime_sum_pair_non_det.scm	embedded-amb	1	1	-	-	cons-stream,false,stream-car,stream-cdr,true
+chapter4/section3/section3/02_prime_sum_pair_non_det_example.scm	embedded-amb	1	1	-	-	cons-stream,false,stream-car,stream-cdr,true
+chapter4/section3/subsection1/01_list_non_det.scm	embedded-amb	1	1	-	-	
+chapter4/section3/subsection1/02_require_non_det_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection1/03_require_non_det.scm	embedded-amb	ok	ok	ok	ok	
+chapter4/section3/subsection1/04_an_element_of_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection1/05_an_element_of.scm	embedded-amb	ok	ok	ok	ok	
+chapter4/section3/subsection1/06_an_integer_starting_from_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection1/07_an_integer_starting_from.scm	embedded-amb	ok	ok	ok	ok	
+chapter4/section3/subsection1/08_interaction_non_det.scm	embedded-amb	1	1	-	-	cons-stream,false,stream-car,stream-cdr,true
+chapter4/section3/subsection1/09_interaction_non_det_2.scm	embedded-amb	1	1	-	-	cons-stream,false,stream-car,stream-cdr,true
+chapter4/section3/subsection1/10_interaction_non_det_3.scm	embedded-amb	1	1	-	-	cons-stream,false,stream-car,stream-cdr,true
+chapter4/section3/subsection1/11_interaction_non_det_4.scm	embedded-amb	1	1	-	-	cons-stream,false,stream-car,stream-cdr,true
+chapter4/section3/subsection1/12_interaction_non_det_5.scm	embedded-amb	1	1	-	-	cons-stream,false,stream-car,stream-cdr,true
+chapter4/section3/subsection1/13_pythagorean_triple_amb_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection1/14_pythagorean_triple_amb.scm	embedded-amb	ok	ok	ok	ok	
+chapter4/section3/subsection1/15.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection1/16_a_pythagorean_triple_between_2_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection1/17_a_pythagorean_triple_between_2.scm	embedded-amb	ok	ok	ok	ok	sqrt
+chapter4/section3/subsection2/01_distinct_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection2/02_distinct.scm	scheme	ok	ok	ok	ok	false,true
+chapter4/section3/subsection2/03_office_move.scm	embedded-amb	1	1	-	-	false,true
+chapter4/section3/subsection2/04_office_move_example.scm	fragment	1	1	-	-	
+chapter4/section3/subsection2/05_nouns.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection2/06_parse_sentence.scm	embedded-amb	1	1	-	-	
+chapter4/section3/subsection2/07_parse_noun_phrase.scm	embedded-amb	1	1	-	-	
+chapter4/section3/subsection2/08_parse_word.scm	embedded-amb	1	1	-	-	
+chapter4/section3/subsection2/09_unparsed.scm	embedded-amb	ok	ok	ok	ok	
+chapter4/section3/subsection2/10_parse_input.scm	embedded-amb	1	1	-	-	
+chapter4/section3/subsection2/11_parse_input_example.scm	embedded-amb	1	1	-	-	
+chapter4/section3/subsection2/12_prepositions.scm	embedded-amb	ok	ok	ok	ok	
+chapter4/section3/subsection2/13_parse_prepositional_phrase.scm	embedded-amb	1	1	-	-	
+chapter4/section3/subsection2/14_parse_sentence_2.scm	embedded-amb	1	1	-	-	
+chapter4/section3/subsection2/15_parse_input_2.scm	embedded-amb	ok	ok	ok	ok	
+chapter4/section3/subsection2/16_parse_noun_phrase_2.scm	embedded-amb	1	1	-	-	
+chapter4/section3/subsection2/17_parse_input_example_2.scm	embedded-amb	1	1	-	-	
+chapter4/section3/subsection2/18_multiple_legal_parses.scm	embedded-amb	1	1	-	-	
+chapter4/section3/subsection3/01_is_amb_amb.scm	fragment	ok	ok	ok	ok	
+chapter4/section3/subsection3/02_analyze_amb_headline.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection3/03_analyze_amb.scm	fragment	ok	ok	ok	ok	
+chapter4/section3/subsection3/04_ambeval.scm	fragment	ok	ok	ok	ok	
+chapter4/section3/subsection3/05_analyze_literal_amb.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection3/06_analyze_variable_amb.scm	fragment	ok	ok	ok	ok	
+chapter4/section3/subsection3/07_analyze_lambda_amb.scm	fragment	ok	ok	ok	ok	
+chapter4/section3/subsection3/08_analyze_declaration_amb.scm	fragment	ok	ok	ok	ok	
+chapter4/section3/subsection3/09_analyze_assignment_amb.scm	fragment	ok	ok	ok	ok	
+chapter4/section3/subsection3/10_analyze_return_statement_amb.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection3/11_analyze_block_amb.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection3/12_analyze_application_amb.scm	fragment	ok	ok	compile	compile	
+chapter4/section3/subsection3/13_execute_application_amb.scm	fragment	ok	ok	ok	ok	
+chapter4/section3/subsection3/14_analyze_amb_amb.scm	fragment	ok	ok	compile	compile	
+chapter4/section3/subsection3/15_driver_loop_amb_example.scm	fragment	1	1	-	-	
+chapter4/section3/subsection3/16_driver_loop_amb.scm	fragment	1	1	-	-	read
+chapter4/section3/subsection3/17_all_solutions.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection3/18_first_solution.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection3/19_all_solutions_test_1.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection3/20_all_solutions_test_2.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection3/21_all_solutions_test_3.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection3/22_full_parser.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection3/23_all_solutions_test_4.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection3/24_all_solutions_test_5.scm	scheme	ok	ok	ok	ok	
+chapter4/section3/subsection3/25_first_solutions_test_1.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/section4/01.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection1/01_sample_data_base_1.scm	embedded-query	1	1	-	-	
+chapter4/section4/subsection1/02_sample_data_base_1_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/03_sample_data_base_2.scm	embedded-query	1	1	-	-	
+chapter4/section4/subsection1/04_sample_data_base_2_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/05_sample_data_base_3.scm	embedded-query	1	1	-	-	
+chapter4/section4/subsection1/06_sample_data_base_3_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/07_sample_data_base_4.scm	embedded-query	1	1	-	-	
+chapter4/section4/subsection1/08_sample_data_base_4_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/09_sample_data_base_5.scm	embedded-query	1	1	-	-	
+chapter4/section4/subsection1/10_sample_data_base_5_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/11_sample_data_base_6.scm	embedded-query	1	1	-	-	
+chapter4/section4/subsection1/12_sample_data_base_6_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/13_sample_data_base_7.scm	embedded-query	1	1	-	-	
+chapter4/section4/subsection1/14_sample_data_base_7_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/15_sample_data_base_8.scm	embedded-query	1	1	-	-	
+chapter4/section4/subsection1/16_sample_data_base_8_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/17_sample_data_base_9.scm	embedded-query	1	1	-	-	
+chapter4/section4/subsection1/18_sample_data_base_9_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/19_simple_queries_1.scm	embedded-query	1	1	-	-	cons-stream,delay,false,force,read,stream-append,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream,true
+chapter4/section4/subsection1/20_simple_queries_1_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/21_simple_queries_2.scm	embedded-query	1	1	-	-	cons-stream,delay,false,force,read,stream-append,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream,true
+chapter4/section4/subsection1/22_simple_queries_2_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/23_simple_queries_3.scm	embedded-query	1	1	-	-	cons-stream,delay,false,force,read,stream-append,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream,true
+chapter4/section4/subsection1/24_simple_queries_3_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/25_simple_queries_4.scm	embedded-query	1	1	-	-	cons-stream,delay,false,force,read,stream-append,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream,true
+chapter4/section4/subsection1/26_simple_queries_4_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/27_simple_queries_5.scm	embedded-query	1	1	-	-	cons-stream,delay,false,force,read,stream-append,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream,true
+chapter4/section4/subsection1/28_simple_queries_5_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/29_compound_queries_1.scm	embedded-query	1	1	-	-	cons-stream,delay,false,force,read,stream-append,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream,true
+chapter4/section4/subsection1/30_compound_queries_1_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/31_compound_queries_2.scm	embedded-query	1	1	-	-	cons-stream,delay,false,force,read,stream-append,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream,true
+chapter4/section4/subsection1/32_compound_queries_2_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/33_compound_queries_3.scm	embedded-query	1	1	-	-	cons-stream,delay,false,force,read,stream-append,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream,true
+chapter4/section4/subsection1/34_compound_queries_3_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/35_compound_queries_4.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/36_compound_queries_4_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/37_rules_1.scm	embedded-query	1	1	-	-	
+chapter4/section4/subsection1/38_rules_1_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/39_rule_same.scm	embedded-query	1	1	-	-	
+chapter4/section4/subsection1/40_rule_same_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/41_rules_2.scm	embedded-query	1	1	-	-	
+chapter4/section4/subsection1/42_rules_2_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/43_rules_3.scm	embedded-query	1	1	-	-	cons-stream,delay,false,force,read,stream-append,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream,true
+chapter4/section4/subsection1/44_rules_4.scm	embedded-query	1	1	-	-	cons-stream,delay,false,force,read,stream-append,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream,true
+chapter4/section4/subsection1/45_rules_5.scm	embedded-query	1	1	-	-	cons-stream,delay,false,force,read,stream-append,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream,true
+chapter4/section4/subsection1/46_rules_5_example.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/47_append_to_form.scm	embedded-query	1	1	-	-	
+chapter4/section4/subsection1/48_append_to_form_just_the_rules.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/49_append_to_form_example_1.scm	embedded-query	ok	ok	ok	ok	
+chapter4/section4/subsection1/50_append_to_form_example_2.scm	embedded-query	1	1	-	-	
+chapter4/section4/subsection1/51_append_to_form_example_3.scm	embedded-query	1	1	-	-	
+chapter4/section4/subsection1/52_append_to_form_example_4.scm	embedded-query	1	1	-	-	
+chapter4/section4/subsection4/01_lp_header.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/02_query_driver_loop.scm	fragment	1	ok	ok	ok	cons-stream,delay,false,force,read,stream-append,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream,true
+chapter4/section4/subsection4/03_query_driver_loop_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/04_process_query_example_1.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/05_process_query.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/06_evaluate_query.scm	fragment	1	ok	ok	ok	cons-stream,delay,false,force,stream-append,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream,true
+chapter4/section4/subsection4/07_simple_query.scm	fragment	1	ok	ok	ok	cons-stream,delay,false,force,stream-append,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream,true
+chapter4/section4/subsection4/08_conjoin.scm	fragment	1	ok	ok	ok	cons-stream,delay,false,force,stream-car,stream-cdr,stream-null?
+chapter4/section4/subsection4/09_put_and.scm	fragment	1	ok	ok	ok	cons-stream,delay,false,force,stream-car,stream-cdr,stream-null?
+chapter4/section4/subsection4/10_disjoin.scm	fragment	1	ok	ok	ok	cons-stream,delay,false,force,stream-car,stream-cdr,stream-null?,the-empty-stream
+chapter4/section4/subsection4/11_negate.scm	fragment	1	ok	ok	ok	cons-stream,delay,false,force,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream
+chapter4/section4/subsection4/12_compound_queries_5_example.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/13_javascript_predicate.scm	fragment	1	ok	ok	ok	cons-stream,delay,false,force,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream
+chapter4/section4/subsection4/14_execute.scm	fragment	ok	ok	ok	ok	eval,user-initial-environment
+chapter4/section4/subsection4/15_always_true.scm	scheme	ok	ok	ok	ok	false
+chapter4/section4/subsection4/16_find_assertions.scm	fragment	1	ok	ok	ok	cons-stream,delay,false,force,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream
+chapter4/section4/subsection4/17_check_an_assertion.scm	fragment	ok	ok	ok	ok	cons-stream,false,the-empty-stream
+chapter4/section4/subsection4/18_pattern_match.scm	fragment	ok	ok	ok	ok	false
+chapter4/section4/subsection4/19_extend_if_consistent.scm	fragment	ok	ok	ok	ok	false
+chapter4/section4/subsection4/20_apply_rules.scm	fragment	1	ok	ok	ok	cons-stream,delay,false,force,stream-append,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream,true
+chapter4/section4/subsection4/21_apply_a_rule.scm	fragment	ok	ok	ok	ok	cons-stream,false,the-empty-stream,true
+chapter4/section4/subsection4/22_rename_variables_in.scm	fragment	ok	ok	ok	ok	
+chapter4/section4/subsection4/23_unify_match.scm	fragment	ok	ok	ok	ok	false,true
+chapter4/section4/subsection4/24_extend_if_possible.scm	fragment	ok	ok	ok	ok	false,true
+chapter4/section4/subsection4/25_depends_on.scm	fragment	ok	ok	ok	ok	false,true
+chapter4/section4/subsection4/26_fetch_assertions.scm	fragment	1	ok	ok	ok	false,the-empty-stream
+chapter4/section4/subsection4/27_get_stream.scm	scheme	ok	ok	ok	ok	false,the-empty-stream
+chapter4/section4/subsection4/28_fetch_rules.scm	fragment	1	ok	ok	ok	false,stream-append,the-empty-stream
+chapter4/section4/subsection4/29_add_rule_or_assertion.scm	fragment	1	ok	ok	ok	cons-stream,false,stream-append,the-empty-stream
+chapter4/section4/subsection4/30_store_assertion_in_index.scm	fragment	ok	ok	ok	ok	cons-stream,false,the-empty-stream
+chapter4/section4/subsection4/31_index_key_of.scm	fragment	ok	ok	ok	ok	
+chapter4/section4/subsection4/32_stream_append_delayed.scm	scheme	1	ok	ok	ok	cons-stream,delay,force,stream-car,stream-cdr,stream-null?
+chapter4/section4/subsection4/33_stream_flatmap.scm	scheme	1	ok	ok	ok	cons-stream,delay,force,stream-car,stream-cdr,stream-map,stream-null?,the-empty-stream
+chapter4/section4/subsection4/34_singleton_stream.scm	scheme	ok	ok	ok	ok	cons-stream,the-empty-stream
+chapter4/section4/subsection4/35_is_variable_4.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/36_convert_to_query_syntax.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/37_instantiate.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/38_append_to_form_example_5.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/39.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/40.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/41.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/42.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/43.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/44_comma_separated.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/45.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/46.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/47_type.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/48_is_assertion.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/49_is_empty_conjunction.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/50_is_rule.scm	scheme	ok	ok	ok	ok	
+chapter4/section4/subsection4/51_make_binding.scm	scheme	ok	ok	ok	ok	false
+chapter4/section4/subsection4/52_sum_of_squares_in_lp.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection1/01_gcd_controller_example.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection1/02_gcd_controller_declaration.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection1/03_gcd_controller_construction.scm	fragment	1	1	-	-	
+chapter5/section1/subsection1/04_controller.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection1/05_gcd_with_prompt.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection1/06_gcd_with_prompt_example.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection1/07_gcd_with_prompt_declaration.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection2/01_remainder_example.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection2/02_remainder.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection2/03_gcd_elaborated.scm	fragment	1	1	-	-	
+chapter5/section1/subsection2/04_gcd_elaborated_example.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection2/05_gcd_elaborated_declaration.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection2/06.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection4/01_factorial_5_1_4.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection4/02_gcd_5_1_4_example.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection4/03_gcd_5_1_4.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection4/04_factorial_recursive_example.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection4/05_factorial_recursive_declaration.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection4/06_fib_5_1_4_example.scm	fragment	1	1	-	-	
+chapter5/section1/subsection4/07_fib_5_1_4.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection4/08_fib_recursive_example.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection4/09_fib_recursive_declaration.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection4/10_expt_5_1_4.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection4/11_expt_5_1_4_example.scm	scheme	ok	ok	ok	ok	
+chapter5/section1/subsection4/12_expt_iterative_5_1_4.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/section2/01_gcd_machine_example.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/section2/02_gcd_machine.scm	fragment	1	1	-	-	false
+chapter5/section2/section2/03_set_register_contents_a.scm	fragment	1	1	-	-	false
+chapter5/section2/section2/04_set_register_contents_b.scm	fragment	1	1	-	-	false
+chapter5/section2/section2/05_start_gcd_machine.scm	fragment	1	1	-	-	false
+chapter5/section2/section2/06_get_register_contents_a.scm	fragment	1	1	-	-	false
+chapter5/section2/subsection1/01_gcd_machine_complete_example.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection1/02_make_machine.scm	fragment	ok	ok	ok	ok	false
+chapter5/section2/subsection1/03_make_register.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection1/04_get_contents.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection1/05_make_stack.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection1/06.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection1/07_pop.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection1/08_make_new_machine.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection1/09_start.scm	fragment	ok	ok	ok	ok	
+chapter5/section2/subsection1/10_get_register.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection2/01_assemble.scm	fragment	ok	ok	ok	ok	false
+chapter5/section2/subsection2/02_extract_labels.scm	fragment	ok	ok	ok	ok	
+chapter5/section2/subsection2/03_update_insts.scm	fragment	ok	ok	ok	ok	false
+chapter5/section2/subsection2/04_make_inst.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection2/05_make_label_entry.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection2/06_lookup_label.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection3/01.scm	fragment	ok	ok	ok	ok	
+chapter5/section2/subsection3/02_make_execution_function.scm	fragment	ok	ok	ok	ok	false
+chapter5/section2/subsection3/03_type_function.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection3/04_make_assign.scm	fragment	ok	ok	ok	ok	
+chapter5/section2/subsection3/05_assign_reg_name.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection3/06_advance_pc.scm	fragment	ok	ok	ok	ok	
+chapter5/section2/subsection3/07_make_test.scm	fragment	ok	ok	ok	ok	
+chapter5/section2/subsection3/08_test_instruction_syntax.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection3/09_make_branch_5.scm	fragment	ok	ok	ok	ok	
+chapter5/section2/subsection3/10_branch_branch_dest.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection3/11_make_go_to.scm	fragment	ok	ok	ok	ok	false
+chapter5/section2/subsection3/12_go_to_go_to_dest.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection3/13_make_save.scm	fragment	ok	ok	ok	ok	
+chapter5/section2/subsection3/14_save_restore.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection3/15_make_perform.scm	fragment	ok	ok	ok	ok	false
+chapter5/section2/subsection3/16_perform_perform_action.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection3/17_make_primitive_exp.scm	fragment	ok	ok	ok	ok	
+chapter5/section2/subsection3/18_is_register_exp0.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection3/19_make_operation_exp.scm	fragment	ok	ok	ok	ok	
+chapter5/section2/subsection3/20_is_register_exp.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection3/21_lookup_prim.scm	scheme	ok	ok	ok	ok	
+chapter5/section2/subsection4/01.scm	scheme	ok	ok	ok	ok	
+chapter5/section3/subsection1/01_count_leaves_5_3_1.scm	scheme	ok	ok	ok	ok	
+chapter5/section3/subsection1/02_count_leaves_5_3_1_iter.scm	scheme	ok	ok	ok	ok	
+chapter5/section3/subsection2/01_testing_5_3_2.scm	fragment	1	1	-	-	false
+chapter5/section4/subsection4/01_eceval.scm	scheme	ok	ok	ok	ok	
+chapter5/section4/subsection4/02_eceval_controller.scm	scheme	ok	ok	ok	ok	
+chapter5/section4/subsection4/03_prompt_for_input.scm	scheme	ok	ok	ok	ok	
+chapter5/section4/subsection4/04_eceval_operations.scm	scheme	ok	ok	ok	ok	
+chapter5/section4/subsection4/05_ec_eval_all.scm	fragment	1	1	-	-	
+chapter5/section5/subsection6/01.scm	scheme	ok	ok	ok	ok	
+chapter5/section5/subsection6/02.scm	scheme	ok	ok	ok	ok	
+chapter5/section5/subsection6/03.scm	fragment	1	1	-	-	
+chapter5/section5/subsection6/04.scm	fragment	1	1	-	-	
+chapter5/section5/subsection6/05.scm	fragment	1	1	-	-	
+chapter5/section5/subsection7/01_compile_and_go_example.scm	fragment	1	1	-	-	caddr,false,true
+chapter5/section5/subsection7/02_start_eceval.scm	fragment	1	1	-	-	caddr,false,true
+chapter5/section5/subsection7/03_display_instructions.scm	scheme	ok	ok	ok	ok	
+chapter5/section5/subsection7/04_eceval_2.scm	scheme	ok	ok	ok	ok	
+chapter5/section5/subsection7/05_compile_and_go.scm	fragment	1	1	-	-	caddr,false,true
+chapter5/section5/subsection7/06.scm	scheme	ok	ok	ok	ok	
+chapter5/section5/subsection7/07.scm	fragment	1	1	-	-	
