@@ -1299,37 +1299,37 @@ final class JvmSimdVectorTemplate {
 
 	private static double applyUnary(int op, double x) {
 		if (op == UOP_EXP) {
-			return Math.exp(x);
+			return StrictMath.exp(x);
 		}
 		if (op == UOP_LOG) {
-			return Math.log(x);
+			return StrictMath.log(x);
 		}
 		if (op == UOP_TANH) {
-			return Math.tanh(x);
+			return StrictMath.tanh(x);
 		}
 		if (op == UOP_SIN) {
-			return Math.sin(x);
+			return StrictMath.sin(x);
 		}
 		if (op == UOP_COS) {
-			return Math.cos(x);
+			return StrictMath.cos(x);
 		}
 		if (op == UOP_TAN) {
-			return Math.tan(x);
+			return StrictMath.tan(x);
 		}
 		if (op == UOP_ASIN) {
-			return Math.asin(x);
+			return StrictMath.asin(x);
 		}
 		if (op == UOP_ACOS) {
-			return Math.acos(x);
+			return StrictMath.acos(x);
 		}
 		if (op == UOP_ATAN) {
-			return Math.atan(x);
+			return StrictMath.atan(x);
 		}
 		if (op == UOP_SINH) {
-			return Math.sinh(x);
+			return StrictMath.sinh(x);
 		}
 		if (op == UOP_COSH) {
-			return Math.cosh(x);
+			return StrictMath.cosh(x);
 		}
 		if (op == UOP_SQRT) {
 			return Math.sqrt(x);
@@ -1375,7 +1375,7 @@ final class JvmSimdVectorTemplate {
 				break;
 			}
 		}
-		double v = 1.1283791670955126 * ax * Math.exp(-(ax * ax)) * total;
+		double v = 1.1283791670955126 * ax * StrictMath.exp(-(ax * ax)) * total;
 		return x < 0.0 ? -v : v;
 	}
 

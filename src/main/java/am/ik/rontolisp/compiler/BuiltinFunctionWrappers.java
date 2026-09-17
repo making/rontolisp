@@ -36,12 +36,11 @@ public final class BuiltinFunctionWrappers {
 	 * Built-in operators that the WASM backend cannot compile. The WASM compiler passes
 	 * these to {@link #generate(Set, Set)} so that no wrapper defun referencing them is
 	 * injected. Now EMPTY -- the last members ({@code asin} / {@code acos} / {@code atan}
-	 * / {@code sinh} / {@code cosh}) left when the WASM backend gained software
-	 * approximations for every transcendental built-in ({@code WasmExpCompiler} /
-	 * {@code WasmLogCompiler} / {@code WasmTanhCompiler} / {@code WasmSinCosCompiler} /
-	 * {@code WasmAtanCompiler} / {@code WasmSinhCoshCompiler}), so every {@code #'}
-	 * first-class value is supported. Kept as the seam for any future built-in a backend
-	 * cannot compile.
+	 * / {@code sinh} / {@code cosh}) left when the WASM backend gained every
+	 * transcendental built-in (today the fdlibm runtime,
+	 * {@code codegen.wasm.WasmFdlibmRuntimeBuilder}), so every {@code #'} first-class
+	 * value is supported. Kept as the seam for any future built-in a backend cannot
+	 * compile.
 	 */
 	public static final Set<String> WASM_UNSUPPORTED = Set.of();
 

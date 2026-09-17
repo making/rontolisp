@@ -536,9 +536,17 @@ final class JvmComplexRuntimeBuilder {
 		emitU2(c, ref.index());
 	}
 
+	/**
+	 * The transcendentals: {@code StrictMath} on every backend (.kb/transcendentals.md).
+	 */
+	private static final Set<String> STRICT_MATH = Set.of("exp", "log", "log1p", "sin", "cos", "tan", "asin", "acos",
+			"atan", "atan2", "sinh", "cosh", "tanh", "pow", "hypot");
+
 	private static void callMath(List<Integer> c, Refs refs, ConstantPool cp, String name, String desc) {
+		ClassConstant owner = STRICT_MATH.contains(name) ? cp.addClass(cp.addUtf8("java/lang/StrictMath"))
+				: refs.mathClass();
 		c.add(Opcode.INVOKESTATIC);
-		emitU2(c, cp.addMethodref(refs.mathClass(), cp.addNameAndType(cp.addUtf8(name), cp.addUtf8(desc))).index());
+		emitU2(c, cp.addMethodref(owner, cp.addNameAndType(cp.addUtf8(name), cp.addUtf8(desc))).index());
 	}
 
 	/**

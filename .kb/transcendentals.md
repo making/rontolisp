@@ -1,61 +1,101 @@
-# Transcendental functions: the digits are each backend's own
+# Transcendental functions: one algorithm, fdlibm, on every backend
 
-**Invariant: `exp log sin cos tan asin acos atan sinh cosh tanh` and float `expt` are NOT
-bit-identical across backends, so a cross-backend corpus (`ci-spec.yaml`,
-`scheme-spec.yaml`, the SICP corpus harness) must not print their low digits.** Pin exact
-anchors (`(exp 0.0)` 1.0, `(atan 1 0)` pi/2, `(log 1.0)` 0.0) or compare within a
-tolerance. `sqrt` of a non-negative float is `Math.sqrt` / `f64.sqrt`, correctly rounded,
-and IS identical everywhere; so are `+ - * /`.
+**Invariant: `exp log sin cos tan asin acos atan atan2 sinh cosh tanh`, float `expt`
+(`pow`), `hypot`, `log1p` and every complex function built on them answer the SAME BITS
+on the interpreter, the JVM (on every CPU) and both WASM targets, with or without
+`--simd`.** The algorithm is fdlibm -- `java.lang.StrictMath`'s -- everywhere; a
+cross-backend corpus may print their full digits (`ci-spec.yaml`'s
+`transcendentals-bit-identical-cross-backend` does, over the large-argument trig
+reduction, the subnormal log, the overflow edges, the plane escapes and the complex
+arms). `sqrt` stays `Math.sqrt` / `f64.sqrt`, correctly rounded and identical everywhere.
+The one stated exception is `--gpu`'s transcendental tier (`.kb/linalg-simd.md`).
 
 ## Where each lives
 
-- Interpreter (`eval/Environment`) and JVM (`codegen/jvm/JvmMathFnCompiler`): `java.lang.Math`,
-  which HotSpot intrinsifies per CPU -- `Math.exp(1.0)` is `2.718281828459045` on x86-64
-  and `2.7182818284590455` on AArch64 (`.kb/jvm-complex.md`). The two agree on one machine.
-- WASM (no transcendental instruction): software cores emitted per call site --
-  `WasmExpCompiler`, `WasmLogCompiler`, `WasmSinCosCompiler`, `WasmAtanCompiler`,
-  `WasmSinhCoshCompiler`, `WasmTanhCompiler`, `WasmInverseHypCompiler`, `WasmExptCompiler`
-  (`exp(y log x)`) -- MIRRORED constant for constant by the `--simd`/`--no-gc` kernels
-  (`WasmVecSimdRuntimeBuilder.emit*F64`) and reused by the complex functions
-  (`.kb/wasm-complex.md`), each contract being "bit-identical to the scalar defun".
+- Interpreter (`eval/Environment`, `eval/VecSimdKernels`, `eval/LinalgSimdKernels`'s
+  erf, `eval/GeomKernels`) and JVM (`codegen/jvm/JvmMathFnCompiler.buildOps`,
+  `JvmNumericRuntimeBuilder`'s `_pow`, `JvmComplexRuntimeBuilder.callMath`,
+  `JvmSimdVectorTemplate`, `JvmGeomTemplate`): `StrictMath`. `Math` is per-CPU
+  (`Math.exp(1.0)` is `2.718281828459045` on x86-64 and `2.7182818284590455` on AArch64)
+  and must not come back for any of these names; `Math.sqrt`/`abs`/`copySign`/`rint`
+  are exact operations and stay.
+- WASM (no transcendental instruction): `codegen/wasm/WasmFdlibmRuntimeBuilder`, one
+  runtime FUNCTION per algorithm (`Fn`: the 13 public ones plus `k_sin`/`k_cos`/`k_tan`,
+  `rem_pio2`/`krem` and `expm1`/`log1p`/`hypot`), shared by the GC backend and
+  `--no-gc`. The sources are fdlibm transliterated statement for statement from the
+  JDK's own `java.lang.FdLibm` into a C-like subset (`Sources`), which a small
+  compiler in the same class (lexer, parser, emitter over raw `f64`/`i32`/`i64`
+  locals) turns into a body; the `__HI`/`__LO` word accessors are `i64.reinterpret`
+  arithmetic, `(int) d` is the saturating `i32.trunc_sat_f64_s` (Java's cast), and
+  the language has NO implicit promotion, so a missed cast in a transliteration fails
+  to parse. The trig reduction's 2/pi table, `npio2_hw` and `__kernel_rem_pio2`'s
+  scratch arrays live in linear memory (`tables()`, a shakeable blob probed on its base;
+  every access cites the base as its own `i32.const`).
+  - GC backend: fixed slots `FUNC_FD_BASE + Fn.ordinal()` after `_cdr` (types
+    `TYPE_FD_*` after the Schubfach block). Every call site goes through
+    `Ctx.fdlibm(fn)`, which records the function; the code section gives the closure
+    of that set real bodies and every other slot a trapping stub
+    (`WasmFdlibmRuntimeBuilder.stub`). An INJECTED wrapper-catalog body (`#'exp`'s)
+    records into a per-wrapper set instead, merged only when the wrapper is reachable
+    (materialized as a value, hittable through the name registry, or named as `#'op`
+    in the user's program) -- otherwise every program would carry every body, since
+    the catalog wraps every transcendental. The tables blob is placed before Pass 2
+    when a name that can reach trig is spelled (`sin cos tan exp expt cis sinh cosh
+    tanh`), under `--simd`, or when any name can resolve at run time; a trig body
+    without the blob is refused as a compiler bug.
+  - `--no-gc`: `NoGcWasmCompiler.fdlibmFunctions` scans the reachable bodies for the
+    `vec:` transcendental kernels, closes over the callees, and `placeFunctions` gives
+    them indices after the Schubfach helpers (`Mem.fdlibmIndex`); the blob follows the
+    Schubfach tables (`layoutData`). The scalar `(exp x)` builtins remain unknown there.
+  - Call sites: `WasmTranscendentalCompiler` (real unary), `WasmExptCompiler` (`pow`,
+    dispatching exactly as the interpreter's `expt`: an exact base to an integer
+    exponent is the rational loop, anything with a float or a ratio exponent is
+    `pow`), `WasmComplexCompiler` (the interpreter's complex formulas term for term,
+    over the same calls; the complex `expt` takes the squaring loop only for an EXACT
+    base, like `exptComplex`), `WasmInverseHypCompiler` (the interpreter's
+    `asinhReal`/`acoshReal`/`atanhReal` groupings over `log1p`/`log`/`hypot`), and the
+    `--simd`/`--no-gc` kernels (`WasmVecSimdRuntimeBuilder.emitScalarUnaryF64`, a
+    call; `WasmLinalgSimdRuntimeBuilder`'s erf).
 
-## Measured (2026-09-17, x86-64 Linux, Java 25.0.4, wasmtime 47)
+## Measured (2026-09-17, x86-64 Linux, Java 25.0.4, wasmtime 47.0.3, loaded 64-core box)
 
-Seeded random arguments (300 per function: trig on [-10, 10], `exp` on [-30, 30], `log`
-of `exp` of [-50, 50], `expt` base [0.1, 10] exponent [-5, 5]), ulps from glibc's
-result (near correctly rounded), interpreter = JVM on every argument:
+- Bits: `WasmFdlibmRuntimeBuilderTest` runs every function over 16,225 arguments (random
+  bit patterns, the ranges each is used over, values near multiples of pi/2, 1e22-class
+  trig arguments, 65 special values paired for the binary functions) and every result
+  equals `StrictMath`'s (NaN payloads excepted: an engine may sign a computed NaN
+  either way). The old cores were up to 4e5 ulp off (`log` near 1, trig near a zero,
+  float `expt`) and matched the JVM on 12-45% of arguments; the SICP sample that printed
+  differently on wasm no longer does.
+- `.wasm` size (default = `--optimize` here, bytes): one `exp` site 3,977 -> 4,059 (one
+  function of ~600 B against one inline core); five `exp` sites 6,414 -> 4,239; one
+  `sin` site 4,081 -> 8,016 (the price of the real reduction: `k_sin`, `k_cos`,
+  `rem_pio2`, `krem` and 992 B of tables); the 12 functions once each 24,991 -> 21,347.
+- wasmtime, 3e6 calls in a `dotimes` (best of 3): `exp` 0.296 -> 0.204 s, `sin` 0.365 ->
+  0.209 s, float `expt` 0.549 -> 0.488 s -- fdlibm on raw locals beats the inline cores,
+  which boxed every intermediate in a GC struct.
+- JVM, the same loops, `Math` -> `StrictMath`: `exp` 0.124 -> 0.146 s (+18%), `sin`
+  0.125 -> 0.157 s (+26%), float `expt` 0.209 -> 0.551 s (+164%: `Math.pow` is a
+  HotSpot intrinsic, `StrictMath.pow` fdlibm in Java; `y == 2.0`, `0.5` and `+-1` keep
+  their fast paths). The interpreter pays the same per call. Squares and roots are
+  unaffected, and no kernel in the repo spends its time in `pow`; the numbers are the
+  cost of the invariant, not a regression to fix.
 
-| function | interp/JVM exact / max ulp | wasm exact / max ulp | wasm = JVM |
-|---|---|---|---|
-| sin | 307 / 1 | 133 / 62,382 | 134 |
-| cos | 308 / 0 | 129 / 60,236 | 129 |
-| tan | 308 / 0 | 77 / 93,168 | 77 |
-| atan | 288 / 1 | 175 / 4 | 173 |
-| atan (2 args) | 250 / 1 | 179 / 3 | 158 |
-| exp | 307 / 1 | 36 / 18 | 35 |
-| log | 308 / 0 | 126 / 247,450 | 126 |
-| expt (float) | 300 / 0 | 40 / 398,017 | 40 |
-| asin / acos | 279, 284 / 1 | 131, 133 / 4, 3 | 130, 134 |
-| sinh / cosh / tanh | 300, 281, 243 / 0-2 | 130, 149, 186 / 154, 2, 28 | 130, 152, 180 |
-| sqrt | 308 / 0 | 308 / 0 | 308 |
+## Traps
 
-The large ulp counts are where the answer is near zero (`log` near 1, `sin` near a
-multiple of pi): an absolute error of ~1e-11 is many ulps of a tiny result.
+- The 0xFD byte of a no-gc probe: fdlibm's coefficients (asin's `0x1.23de10dfdf709p-15`)
+  and LEB immediates (sinh's `0x8fb9f87d`) contain it, so a "no SIMD prefix" scan must
+  step over float immediates and read the user's body only
+  (`NoGcWasmCompilerTest.containsSimdPrefixInUserFunction`).
+- A `mayReachTrig` pre-scan that misses a path is a compile-time `IllegalStateException`,
+  never a wrong number: extend the name list rather than the exception.
+- `Math.scalb` in `Pow`'s subnormal tail is `(z * 2^-1000) * 2^(n+1000)` in the source:
+  exact steps and one rounding, the same double `scalb`'s stepped multiply lands on.
 
-`Math` vs `StrictMath` (fdlibm, the only bit-reproducible `java.lang` choice), 10^6
-arguments: differ on sin 3.2%, cos 3.3%, tan 3.5%, exp 9.6%, log 0.2%, tanh 5.4%, pow 9.7%;
-identical on atan, atan2, asin, sinh. Per call StrictMath costs +0-50% (exp 14.8 -> 21.4 ns,
-tanh 18.2 -> 27.9 ns, sin 18.4 -> 22.9 ns; lambda-dispatched loop, indicative only).
+## Pinning tests
 
-SICP corpus: of the 36 samples that call these procedures and exit 0, with every
-top-level expression wrapped in `write`, ONE prints different digits on wasm
-(`chapter1/section1/subsection8/02.scm`, `(exp (double (log 14)))`: `195.99999999999991`
-on the JVM, `196.0000000000001` on wasm); the JVM matched the interpreter on all 36.
-
-## Why it is not unified yet
-
-One set of bits on every backend AND every JVM platform means fdlibm everywhere:
-`StrictMath` on the interpreter and the JVM, an fdlibm port for WASM (including
-`__kernel_rem_pio2`), replacing every core above and every kernel that mirrors one. It
-also fixes the WASM ACCURACY (up to 4e5 ulp today), which is the stronger reason. That is
-`.todo/842`, sized beyond the Scheme `(scheme inexact)` item that measured it.
+`WasmFdlibmRuntimeBuilderTest` (bits against `StrictMath`), `ci-spec.yaml`'s
+`transcendentals-bit-identical-cross-backend` (four backends x `--simd`, digits),
+`NoGcWasmCompilerTest`'s `{expAndSign,logAndTanh,sinCosTan,arcAndHyperbolic}LowerNativelyOnNoGc`
+(the coefficients present, no `v128`), `WasmLispCompilerIntegrationTest`'s
+`noGcRuns*UnderBothLowerings` (no-gc == wasm-GC) and `compileAndRunComplex*`,
+`JvmLispCompilerTest#compileAndRunComplexUnaryMathMirrorsTheInterpreterArmForArm`.

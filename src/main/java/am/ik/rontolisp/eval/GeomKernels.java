@@ -360,7 +360,7 @@ public final class GeomKernels {
 					}
 				}
 			}
-			double v = m * Math.pow(10.0, (double) (es * e - frac));
+			double v = m * StrictMath.pow(10.0, (double) (es * e - frac));
 			this.value = neg ? -v : v;
 			this.next = j;
 			return true;

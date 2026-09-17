@@ -107,21 +107,20 @@ over one is a guaranteed bail plus a trap.
   non-number: `_type_err_num` ("Expected number, got: ..."), the same funnel
   as every other mistyped arithmetic operand.
 
-## Transcendentals: the software cores, carrying their error
+## Transcendentals: fdlibm, the interpreter's formulas term for term
 
 `sqrt` (except a non-negative real, which keeps native `f64.sqrt`), `abs`
-(scaled `hypot`, exact for the pinned magnitudes), `phase` (`atan2` from the
-atan core plus quadrant assembly -- `copysign` tells `+0` from `-0`, NaN in
-gives NaN out; on the imaginary axis the assembly answers `copysign(pi/2, y)`
-for a nonzero `y` over either zero and only a zero `y` takes its own sign
-(over `+0`) or `copysign(pi, y)` (over `-0`) -- the four `Math.atan2` rungs,
-where the assembly used to answer the imaginary part itself over `+0`, the
-bug `.todo/766` recorded and the inverse-hyperbolic plane arms surfaced in
-2026-09), `expt` (exact squaring loop for an i31 exponent, `exp(w*log
-z)` otherwise) and the fifteen unary functions reuse the backend's software
-exp/log/sin/cos/sinh/cosh/atan cores, so like every WASM transcendental they
-are close but not bit-exact: pinned with `isCloseTo`, everything else
-print-compared (`WasmLispCompilerIntegrationTest.compileAndRunComplex*`).
+(fdlibm `hypot`), `phase` (fdlibm `atan2`, whose rungs answer the imaginary
+axis and the signed zeros: `copysign(pi/2, y)` for a nonzero `y` over either
+zero, a zero `y`'s own sign over `+0` and `copysign(pi, y)` over `-0` -- the
+axis the old hand-rolled assembly got wrong, `.todo/766`), `expt` (the exact
+squaring loop for an i31 exponent over an EXACT base, `exp(w*log z)` for
+anything with a float part, `Environment.exptComplex`'s rule) and the fifteen
+unary functions run the interpreter's formulas over calls into the fdlibm
+runtime (`WasmTranscendentalCompiler`, `.kb/transcendentals.md`), so since
+2026-09-17 they answer the interpreter's BITS; `isCloseTo` pins that predate
+it still pass, and `ci-spec.yaml`'s `transcendentals-bit-identical-cross-backend`
+prints the digits.
 
 ## asin/acos: the branch cut is the contract, not the digits
 
@@ -130,10 +129,10 @@ The cut rule is one rule for all three implementations and lives in
 `u = sqrt(1 - z)` and `v = sqrt(1 + z)`, whose `0.0 - im` / `0.0 + im` make an
 imaginary zero of either sign land on ONE sheet, so the side of the cut is the
 real part's and `(asin #c(2d0 0d0))` equals `(asin #c(2d0 -0d0))`.
-`emitAsinAcosRootsInto` builds the pair; the real parts go through the software
-`emitAtan2Into` and the imaginary parts through `WasmInverseHypCompiler`'s
-asinh core, so the magnitudes carry this backend's usual ~1e-11 and are pinned
-with `isCloseTo`.
+`emitAsinAcosRootsInto` builds the pair; the real parts go through fdlibm's
+`atan2` and the imaginary parts through `WasmInverseHypCompiler`'s asinh (the
+interpreter's grouping over fdlibm `log1p`/`hypot`/`log`), so the magnitudes are
+the interpreter's bits.
 
 The ZEROS are exact here too, and have no tolerance: a real argument inside
 `[-1, 1]` leaves both roots real, the asinh argument is a difference of zeros,
@@ -154,14 +153,12 @@ including `expt`'s `|x|^y` turned through `y*pi` radians rather than
 backend's own:
 
 - **Where the arm lives.** `WasmComplexCompiler.compileLog` /
-  `compileAsinAcos` shadow the software real cores
-  (`WasmLogCompiler.emitLogCore`, `WasmAtanCompiler.emitAsinAcosRealF64`)
-  inside one runtime domain test, and `emitPlaneArmAt` builds the temporary
+  `compileAsinAcos` shadow the real calls (fdlibm `log`, `asin`/`acos`) inside
+  one runtime domain test, and `emitPlaneArmAt` builds the temporary
   `(x, +0.0)` complex the plane arm runs on -- `compileAcosh`'s shape exactly.
-  `expt`'s escape is `WasmExptCompiler.emitNegativeBaseOrNaN` plus
-  `WasmComplexCompiler.emitNegativeBasePowInto`, over this backend's software
-  `exp`/`log`/`sin`/`cos`, so the digits carry the usual ~1e-9 and are pinned
-  with `isCloseTo` (`WasmLispCompilerIntegrationTest#compileAndRunRealDomainEscapesAnswerThePlane`).
+  `expt`'s escape is `WasmExptCompiler.emitFloatPath` plus
+  `WasmComplexCompiler.emitNegativeBasePowInto`, over fdlibm `pow`/`cos`/`sin`
+  (`WasmLispCompilerIntegrationTest#compileAndRunRealDomainEscapesAnswerThePlane`).
 - **The arm is emitted per CALL, not always.** The helpers here are
   unconditional, but these arms are INLINE at the site, so the site reads the
   same `LispMacroExpander.escapesToComplex` predicate the JVM's gate does: a
@@ -185,16 +182,15 @@ NaN -- the one documented place where that answer survives.
 ## The two-argument `atan` and `log` (`.todo/762`, 2026-09-11)
 
 - `(atan y x)` is `WasmComplexCompiler.compileAtan2`, which runs `phase`'s OWN
-  `emitAtan2Into` -- so the axes and the signed zeros are exact constants
-  (`0.0`, `-0.0`, `+-pi/2`, `+-pi`) on this backend too, and only the off-axis
-  values carry the software atan core's ~1e-9. Both arguments must be real; a
+  `emitAtan2Into` -- fdlibm's `atan2`, so the axes, the signed zeros and the
+  off-axis values are all the interpreter's. Both arguments must be real; a
   SYNTACTIC complex lands in `_type_err_real` through `emitRealOperandGuard`
   (renamed from `emitMinMaxComplexGuard`, which min/max still shares), the same
   syntactic-steering corner min/max has always had.
 - `(log n base)` is `compileLogBase`: the quotient of two logarithms, with the
   complex-capable spelling running both through `compileLogOf` and dividing
-  with `_c_div`, and the real one through `WasmLogCompiler.compileOf` into a
-  plain `f64.div` -- so `(log 8 2)` pulls in no complex runtime at all. Whether
+  with `_c_div`, and the real one through `WasmTranscendentalCompiler.compileArg`
+  into a plain `f64.div` -- so `(log 8 2)` pulls in no complex runtime at all. Whether
   a site is complex-capable is `LispMacroExpander.escapesToComplex` over BOTH
   arguments, the predicate the JVM's gate reads.
 - `_c_div` gained the JVM's arm: neither operand a `TYPE_COMPLEX` -> delegate to
@@ -202,10 +198,10 @@ NaN -- the one documented place where that answer survives.
   an exact zero imaginary part away, where the JVM's float path could not), but
   through the `c^2+d^2` denominator -- so the two backends now agree bit for bit
   on `(log n b)` when both logarithms stayed real.
-- The exact-power rows are NOT exact here: the software log's error rides through
-  the quotient, so `(log 8 2)` is within ~1e-9 of `3.0` rather than equal to it,
-  and `ci-spec.yaml`'s `atan2-and-log-base` pins the contract (the exact axes, the
-  identity against `phase`, the magnitude and the TYPE) rather than digits.
+- The quotient is fdlibm `log` over fdlibm `log` on every backend, the same bits
+  everywhere (`(log 8 2)` is `3.0`); `ci-spec.yaml`'s `atan2-and-log-base` pins
+  the contract (the exact axes, the identity against `phase`, the magnitude and
+  the TYPE) and `transcendentals-bit-identical-cross-backend` the digits.
 
 ## `_c_div`'s float arm is Smith's form (`.todo/779`, 2026-09-11)
 
@@ -223,9 +219,10 @@ implementations, changed together. What is this backend's alone:
 - The EXACT path below it is byte-for-byte what it was, denominator included: it
   now only ever sees exact parts, where nothing rounds or overflows, and a zero
   divisor still fails inside `_rat_div` the way a real `(/ x 0)` does.
-- Raw `f64` instructions round exactly as the JVM's `DDIV`/`DMUL` do, so unlike
-  everything that goes through the software log core, the two backends agree BIT
-  for bit on a float complex quotient. `WasmLispCompilerIntegrationTest#compileAndRunComplexFloatDivisionIsSmithsForm`
+- Raw `f64` instructions round exactly as the JVM's `DDIV`/`DMUL` do, so the two
+  backends agree BIT for bit on a float complex quotient (as they do on the
+  transcendentals since 2026-09-17).
+  `WasmLispCompilerIntegrationTest#compileAndRunComplexFloatDivisionIsSmithsForm`
   therefore pins digits, not tolerances.
 
 ## Known corners (documented, matching the JVM where stated)

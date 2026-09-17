@@ -375,6 +375,33 @@ final class WasmEmitHelper {
 	}
 
 	/**
+	 * Boxes the {@code f64} on the stack into a {@code TYPE_FLOAT} struct -- the float
+	 * math sites' idiom, since the body compiler only allocates {@code (ref null eq)}
+	 * temporaries.
+	 * @param ctx the compile context
+	 */
+	static void boxF64(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+	}
+
+	/**
+	 * Loads {@code local[slot]} (a {@code TYPE_FLOAT} struct) and pushes its {@code f64}
+	 * field.
+	 * @param ctx the compile context
+	 * @param slot the boxed temporary
+	 */
+	static void unboxF64Local(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.writeUnsignedLeb128(0);
+	}
+
+	/**
 	 * Emits {@code call FUNC_AS_F64}: consumes the {@code (ref null eq)} on the stack and
 	 * leaves its {@code f64} value.
 	 *

@@ -23726,7 +23726,7 @@ public final class LispMacroExpander {
 					LispVal arg = args.next(directive);
 					int scale = fmtHasParam(params, 2) ? fmtIntParam(params, 2, directive) : 0;
 					LispVal value = (scale == 0) ? arg
-							: fmtCall(LispNames.MUL, arg, new LispDouble(Math.pow(10, scale)));
+							: fmtCall(LispNames.MUL, arg, new LispDouble(StrictMath.pow(10, scale)));
 					LispVal base = fmtHasParam(params, 1) ? decimalFloatExpr(value, fmtParam(params, 1), null, at)
 							: fmtCall(LispNames.PRINC_PIECE_INTERNAL, value);
 					if (fmtHasParam(params, 0)) {

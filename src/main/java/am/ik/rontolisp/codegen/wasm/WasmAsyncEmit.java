@@ -747,6 +747,7 @@ final class WasmAsyncEmit {
 			.functions(proto.functions)
 			.lambdaDecls(proto.lambdaDecls)
 			.indirectCallArities(proto.indirectCallArities)
+			.fdlibmUsed(proto.fdlibmUsed)
 			// Module-wide and MUTATED during emission, like indirectCallArities above:
 			// a designator the async body dispatches without being able to read it must
 			// still arm the name registry (see Ctx.runtimeDesignatorDispatch).

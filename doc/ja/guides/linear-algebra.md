@@ -101,7 +101,7 @@ rontolisp には `x[:, :n]` という構文がないため、`slice` は軸ご�
 
 ## 乱数
 
-`np.random` に相当する乱数はシード可能で、バックエンド間で決定的です。[`linalg:seed`](../reference/functions/linalg-seed.md) は Wichmann-Hill 生成器をリセットし、その draw は正確な整数演算と IEEE double 演算だけで構成されるため、シード済みの [`linalg:rand`](../reference/functions/linalg-rand.md)、[`linalg:randn`](../reference/functions/linalg-randn.md)、[`linalg:uniform`](../reference/functions/linalg-uniform.md)、[`linalg:choice`](../reference/functions/linalg-choice.md)、[`linalg:permutation`](../reference/functions/linalg-permutation.md) の列は interpreter・JVM・両 WASM ターゲットで bit-identical です — 重み初期化とミニバッチ抽出がどこでも正確に再現されます。`randn` は Box-Muller ではなく Irwin-Hall(一様乱数 12 個の和)を使います(Box-Muller の `log`/`cos` は WASM で発散するため)。そのため裾は 6σ でクリップされます。初期化には十分ですが、分布が `np.random.randn` と厳密に一致するわけではありません。
+`np.random` に相当する乱数はシード可能で、バックエンド間で決定的です。[`linalg:seed`](../reference/functions/linalg-seed.md) は Wichmann-Hill 生成器をリセットし、その draw は正確な整数演算と IEEE double 演算だけで構成されるため、シード済みの [`linalg:rand`](../reference/functions/linalg-rand.md)、[`linalg:randn`](../reference/functions/linalg-randn.md)、[`linalg:uniform`](../reference/functions/linalg-uniform.md)、[`linalg:choice`](../reference/functions/linalg-choice.md)、[`linalg:permutation`](../reference/functions/linalg-permutation.md) の列は interpreter・JVM・両 WASM ターゲットで bit-identical です — 重み初期化とミニバッチ抽出がどこでも正確に再現されます。`randn` は Box-Muller ではなく Irwin-Hall(一様乱数 12 個の和)を使います(`log`/`cos` がまだバックエンドごとに異なっていた頃の選択で、今は異なりませんが、シード済みの列は契約なのでそのままです)。そのため裾は 6σ でクリップされます。初期化には十分ですが、分布が `np.random.randn` と厳密に一致するわけではありません。
 
 ```lisp
 (linalg:seed 42)         ; => 42

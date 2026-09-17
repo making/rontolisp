@@ -310,12 +310,12 @@
 | `user-homedir-pathname` | `(user-homedir-pathname)` | `HOME` を**ディレクトリ**パス名として返す(末尾は区切り文字)。変数が未設定なら `nil` |
 | `invoke-debugger` | `(invoke-debugger c)` | 条件を通知し決して戻らない -- 入り込めるデバッガはどのバックエンドにも無い |
 | `compile-file` `compile-file-pathname` `remove-method` | `(compile-file "x.lisp")` | 存在して通知する: rontolisp のプログラムは丸ごとコンパイルされ(fasl も、それを指すパス名も無い)、メソッドは第一級オブジェクトではない |
-| `exp` | `(exp 0)` | `1.0`(インタプリタ/JVMは `Math.exp` を使用。WASMはソフトウェア近似を使用) |
-| `log` | `(log 1)` | `0.0`(自然対数。インタプリタ/JVM は `Math.log`、WASM はソフトウェア近似) |
-| `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0`(インタプリタ/JVM は `Math.sin`/`cos`/`tan`、WASM はソフトウェア近似) |
-| `asin` `acos` `atan` | `(atan 0)` | `0.0`(全バックエンド -- WASM はソフトウェア近似) |
+| `exp` | `(exp 0)` | `1.0`(どのバックエンドでも fdlibm: インタプリタ/JVM は `StrictMath.exp`、WASM は同じアルゴリズム) |
+| `log` | `(log 1)` | `0.0`(自然対数。どのバックエンドでも fdlibm) |
+| `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0`(どのバックエンドでも fdlibm) |
+| `asin` `acos` `atan` | `(atan 0)` | `0.0`(全バックエンド、どれも fdlibm) |
 | `sinh` `cosh` `tanh` | `(tanh 0)` | `0.0`(全バックエンド -- WASM は 3 つともソフトウェア `exp` から導出) |
-| `asinh` `acosh` `atanh` | `(asinh 0)`, `(acosh 1)`, `(atanh 0)` | `0.0`(逆双曲線関数、定義域外の実数引数は複素平面へ跨ぐ、WASM はソフトウェア近似) |
+| `asinh` `acosh` `atanh` | `(asinh 0)`, `(acosh 1)`, `(atanh 0)` | `0.0`(逆双曲線関数、定義域外の実数引数は複素平面へ跨ぐ、どのバックエンドでも同じビット) |
 | `cis` | `(cis 0)` | `#C(1.0 0.0)`(単位円上の点、常に複素数を返す) |
 | `gcd` | `(gcd 12 18)`, `(gcd 24 36 60)` | `6`, `12`(可変長引数。最大公約数、`(gcd)` は `0`) |
 | `lcm` | `(lcm 4 6)`, `(lcm 2 3 4)` | `12`, `12`(可変長引数。最小公倍数。いずれかの引数が `0` なら `0`、`(lcm)` は `1`) |

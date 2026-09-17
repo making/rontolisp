@@ -4588,9 +4588,8 @@ cases:
       (1.0 4.0 9.0)
       3
       1/3
-  # exp is native (Math.exp) on the interpreter/JVM and a software approximation on
-  # WASM, so only values that are exact on every backend are asserted: exp(0) is 1.0
-  # and sigmoid(0) = 1/(1+exp(0)) is 0.5.
+  # The exact anchors of exp: exp(0) is 1.0 and sigmoid(0) = 1/(1+exp(0)) is 0.5. The
+  # digits of everything else are transcendentals-bit-identical-cross-backend's.
   - name: exp-exact-cross-backend-cases
     source: |
       (defun sigmoid (x) (/ 1.0 (+ 1.0 (exp (- 0 x)))))
@@ -4599,10 +4598,8 @@ cases:
     expected: |
       1.0
       0.5
-  # log and tanh are native (Math.log/Math.tanh) on the interpreter/JVM and software
-  # approximations on WASM, so only values that are exact on every backend are
-  # asserted: log(1) is 0.0, tanh(0) is 0.0, and tanh saturates to exactly
-  # +/-1.0 far inside the WASM clamp.
+  # The exact anchors of log and tanh: log(1) is 0.0, tanh(0) is 0.0, and tanh
+  # saturates to exactly +/-1.0 past |x| = 22 (fdlibm's own edge, on every backend).
   - name: log-tanh-exact-cross-backend-cases
     source: |
       (print (log 1))
@@ -4614,11 +4611,9 @@ cases:
       0.0
       1.0
       -1.0
-  # sin/cos/tan are native (Math.sin/cos/tan) on the interpreter/JVM and a software
-  # Cody-Waite + Taylor approximation on WASM, so only values that are exact on
-  # every backend are asserted: the zero anchors, and the two quadrant anchors
-  # sin(pi/2) = 1.0 / cos(pi) = -1.0 (exact on the f64 pi both in java.lang.Math
-  # and in the WASM reduction).
+  # The exact anchors of sin/cos/tan: the zeros, and the two quadrant anchors
+  # sin(pi/2) = 1.0 / cos(pi) = -1.0 on the f64 pi (exact in fdlibm's reduction, the
+  # one every backend runs).
   - name: sin-cos-tan-exact-cross-backend-cases
     source: |
       (print (sin 0))
@@ -4632,10 +4627,8 @@ cases:
       0.0
       1.0
       -1.0
-  # The arc/hyperbolic ufuncs (atan/asin/acos/sinh/cosh): only the exact
-  # anchors -- the wasm software approximations agree with Math.* to ~1e-15 (atan
-  # family) / ~1e-7 (sinh/cosh), which diverges in printed low digits, so pi/4-class
-  # values stay out (documented like exp's low-digit divergence).
+  # The exact anchors of the arc/hyperbolic ufuncs (atan/asin/acos/sinh/cosh); the
+  # pi/4-class values are transcendentals-bit-identical-cross-backend's.
   - name: arc-hyperbolic-exact-cross-backend-cases
     source: |
       (print (atan 0))
@@ -4649,10 +4642,9 @@ cases:
       0.0
       0.0
       1.0
-  # cis and the inverse hyperbolics: exact anchors only -- the nonzero values and
-  # the plane arms group log differently per backend (pinned per backend in the
-  # compiler test suites), but each zero point answers exactly and cis of 0 is the
-  # exact unit-circle point on every backend.
+  # cis and the inverse hyperbolics at their exact zero points, and cis of 0 as the
+  # exact unit-circle point; the nonzero values and the plane arms are
+  # transcendentals-bit-identical-cross-backend's.
   - name: cis-inverse-hyperbolic-exact-cross-backend-cases
     source: |
       (print (cis 0))
@@ -4664,6 +4656,156 @@ cases:
       0.0
       0.0
       0.0
+  # Every transcendental prints the SAME digits on all four backends: the interpreter
+  # and the JVM run StrictMath (fdlibm), the WASM backends the same fdlibm as runtime
+  # functions (WasmFdlibmRuntimeBuilder), so nothing here is an exact anchor -- these
+  # are the low digits the cases above once had to leave out, over arguments that
+  # reach the large-argument trig reduction (1e22), the subnormal log (5e-324), the
+  # overflow edges, the plane escapes and the complex arms (.kb/transcendentals.md).
+  - name: transcendentals-bit-identical-cross-backend
+    source: |
+      (defun tr-show (x) (print x))
+      (dolist (x '(0.5 1.0 -2.5 10.0 100.0 1e6 1e22))
+        (tr-show (exp x)) (tr-show (sin x)) (tr-show (cos x)) (tr-show (tan x)) (tr-show (atan x))
+        (tr-show (sinh x)) (tr-show (cosh x)) (tr-show (tanh x)))
+      (dolist (x '(0.5 2.0 10.0 1e22 5e-324))
+        (tr-show (log x)) (tr-show (log x 2)))
+      (dolist (x '(-0.9 0.1 0.999))
+        (tr-show (asin x)) (tr-show (acos x)) (tr-show (atanh x)) (tr-show (asinh (* 3 x))) (tr-show (acosh (+ 1.5 x))))
+      (tr-show (atan 3.0 -4.0))
+      (tr-show (atan -1e-3 1e3))
+      (tr-show (expt 2 0.5))
+      (tr-show (expt 10.0 -0.75))
+      (tr-show (expt 1.1 10))
+      (tr-show (expt 1.0001 1e6))
+      (tr-show (expt -8.0 1/3))
+      (tr-show (exp #c(1.0 2.0)))
+      (tr-show (log #c(-1.0 0.5)))
+      (tr-show (sin #c(1.0 1.0)))
+      (tr-show (tan #c(1.0 0.5)))
+      (tr-show (asin 2.0))
+      (tr-show (log -100.0))
+      (tr-show (atan #c(1.0 2.0)))
+      (tr-show (tanh #c(1.0 2.0)))
+      (tr-show (asinh #c(1.0 2.0)))
+      (tr-show (acosh 0.5))
+      (tr-show (atanh 2.0))
+      (tr-show (cis 2.5))
+      (tr-show (abs #c(3.0 4.5)))
+      (tr-show (phase #c(-3.0 4.5)))
+      (tr-show (expt #c(1.0 2.0) 2.5))
+      (tr-show (expt #c(1.0 2.0) 3))
+      (tr-show (aref (linalg:exp #d(0.5 1.5 -2.5)) 2))
+      (tr-show (aref (linalg:erf #d(0.5 1.5 -2.5)) 1))
+      (tr-show (vec:aref (vec:sin (vec:from-list '(0.5 1.5 -2.5))) 2))
+    expected: |
+      1.6487212707001282
+      0.479425538604203
+      0.8775825618903728
+      0.5463024898437905
+      0.4636476090008061
+      0.5210953054937474
+      1.1276259652063807
+      0.46211715726000974
+      2.7182818284590455
+      0.8414709848078965
+      0.5403023058681398
+      1.5574077246549023
+      0.7853981633974483
+      1.1752011936438014
+      1.543080634815244
+      0.7615941559557649
+      0.0820849986238988
+      -0.5984721441039564
+      -0.8011436155469337
+      0.7470222972386603
+      -1.1902899496825317
+      -6.0502044810397875
+      6.132289479663686
+      -0.9866142981514303
+      22026.465794806718
+      -0.5440211108893698
+      -0.8390715290764524
+      0.6483608274590866
+      1.4711276743037347
+      11013.232874703393
+      11013.232920103324
+      0.9999999958776927
+      2.6881171418161356e43
+      -0.5063656411097588
+      0.8623188722876839
+      -0.5872139151569291
+      1.5607966601082315
+      1.3440585709080678e43
+      1.3440585709080678e43
+      1.0
+      Infinity
+      -0.34999350217129294
+      0.9367521275331447
+      -0.373624453987599
+      1.5707953267948966
+      Infinity
+      Infinity
+      1.0
+      Infinity
+      -0.8522008497671888
+      0.523214785395139
+      -1.628778225606899
+      1.5707963267948966
+      Infinity
+      Infinity
+      1.0
+      -0.6931471805599453
+      -1.0
+      0.6931471805599453
+      1.0
+      2.302585092994046
+      3.3219280948873626
+      50.65687204586901
+      73.08241808752197
+      -744.4400719213812
+      -1074.0
+      -1.1197695149986342
+      2.6905658417935308
+      -1.4722194895832204
+      -1.7190518512089272
+      #C(0.0 0.9272952180016122)
+      0.1001674211615598
+      1.4706289056333368
+      0.10033534773107558
+      0.2956730475634225
+      1.0469679150031883
+      1.526071239626163
+      0.044725087168733454
+      3.8002011672501994
+      1.8174973487844737
+      1.5663626972430162
+      2.498091544796509
+      -9.999999999996666e-7
+      1.4142135623730951
+      0.17782794100389226
+      2.5937424601000023
+      2.6747109931126854e43
+      #C(1.0000000000000002 1.7320508075688772)
+      #C(-1.1312043837568138 2.471726672004819)
+      #C(0.11157177565710492 2.677945044588987)
+      #C(1.2984575814159773 0.6349639147847361)
+      #C(0.8068774121630847 1.0428307283443607)
+      #C(1.5707963267948966 -1.3169578969248166)
+      #C(4.605170185988092 3.141592653589793)
+      #C(1.3389725222944935 0.4023594781085251)
+      #C(1.16673625724092 -0.2434582011857254)
+      #C(1.4693517443681852 1.0634400235777521)
+      #C(-2.220446049250313e-16 1.0471975511965979)
+      #C(0.5493061443340548 1.5707963267948966)
+      #C(-0.8011436155469337 0.5984721441039564)
+      5.408326913195984
+      2.1587989303424644
+      #C(-6.960664459571899 2.7296244647840076)
+      #C(-11.000000000000004 -1.9999999999999973)
+      0.0820849986238988
+      0.9661051464753109
+      -0.5984721441039564
   # A pure imaginary argument lands on the imaginary axis, where the WASM atan2
   # quadrant assembly used to answer the imaginary part itself (.todo/766). pi/2
   # is the constant the assembly answers there and the log's magnitude is
@@ -8093,7 +8235,8 @@ cases:
   # The GPT increment: the activation, the module walk, the two sampling
   # primitives and the AdamW / clipping plumbing the chapter-3 port needed. The
   # float rows are tolerance PREDICATES, like the Adam row above -- erf and gelu
-  # ride exp, whose last digits differ on the WASM backends -- while the shapes,
+  # ride a series over exp, and were written so before exp was one fdlibm on every
+  # backend -- while the shapes,
   # the drawn indices and the field names are exact on all four, which is what
   # makes a SAMPLED text reproducible across backends at all. Their tensors say
   # :element-type 'double-float: the 1e-9 bound is inside single-float's own
@@ -11094,9 +11237,9 @@ cases:
   # expt dispatches on the RUN-TIME exponent on every backend: a float or ratio
   # exponent that no literal scan can see (a variable, a call) gives a float, an
   # integer-valued float exponent takes the exact multiplication path (8.0, not
-  # 7.999...), and the Math.pow edges agree. A fractional power's low-order digits
-  # differ on WASM (exp(y*log(x)) over the software exp/log), so it is printed
-  # rounded.
+  # 7.999...), and the pow edges agree. A fractional power is fdlibm's pow on every
+  # backend (transcendentals-bit-identical-cross-backend prints its digits); this
+  # case keeps the rounded print it was written with.
   - name: expt-with-a-runtime-float-or-ratio-exponent
     source: |
       (defun give (x) x)
@@ -16817,9 +16960,9 @@ cases:
   - name: complex-asin-acos-branch-cut
     # asin/acos cut the real axis outside [-1, 1]: the value ON the cut is the one
     # continuous with quadrant IV above +1 and quadrant II below -1, and the sign of an
-    # imaginary ZERO does not move it (where sqrt and log let it). The transcendental
-    # digits differ between the backends, so what travels here is the contract: the two
-    # zero signs answer ONE value, that value's imaginary part has the sign the cut
+    # imaginary ZERO does not move it (where sqrt and log let it). What travels here is
+    # the contract (the digits are transcendentals-bit-identical-cross-backend's): the
+    # two zero signs answer ONE value, that value's imaginary part has the sign the cut
     # names, and a real argument inside [-1, 1] answers an exact zero.
     source: |
       (print (= (asin #c(2d0 0d0)) (asin #c(2d0 -0d0))))
@@ -16851,8 +16994,8 @@ cases:
     # tan and tanh are sin/cos and sinh/cosh DIVIDED, and a backend that loses the
     # denominator answers the NUMERATOR -- a plausible number, not an error. The JVM did
     # exactly that (|cos z|^2 written over cos z's real part), so (tan #c(1d0 0d0))
-    # answered sin 1 and (tanh #c(1d0 0d0)) sinh 1. The transcendental digits differ
-    # between the backends, so what travels here is the identity: each axis of the
+    # answered sin 1 and (tanh #c(1d0 0d0)) sinh 1. What travels here is the identity
+    # (the digits are transcendentals-bit-identical-cross-backend's): each axis of the
     # complex function IS the real function of that family, and the quotient off the
     # axes is the quotient.
     source: |
@@ -16872,10 +17015,10 @@ cases:
   - name: atan2-and-log-base
     # atan's optional second argument is C's atan2 -- the angle of the vector (x, y)
     # over the full circle, which IS the phase of x + yi -- and log's is the base,
-    # making the answer the QUOTIENT of the two logarithms. WASM's transcendentals are
-    # software approximations, so what travels is the contract: the quadrant edges and
-    # the signed zeros (exact constants on every backend), the identity against phase,
-    # and the quotient's magnitude and type.
+    # making the answer the QUOTIENT of the two logarithms. What travels is the
+    # contract: the quadrant edges and the signed zeros (exact constants on every
+    # backend), the identity against phase, and the quotient's magnitude and type; the
+    # digits themselves are transcendentals-bit-identical-cross-backend's.
     source: |
       (print (atan 0d0 1d0))
       (print (atan 1d0 0d0))
