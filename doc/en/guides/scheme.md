@@ -58,7 +58,8 @@ scheme> (list #t #f '() 'Sym)
 scheme> (quit)
 ```
 
-Everything `(scheme base)` and `(scheme write)` export is visible from the start, and an
+Everything `(scheme base)` and `(scheme write)` export -- plus the SICP-compatibility
+names below, which no `(import ...)` names -- is visible from the start, and an
 `(import ...)` typed at the prompt only adds names. Definitions typed at separate prompts
 see each other in either order, as they would in one file. Two things differ from a file,
 because a form is fixed when it is typed: redefining a built-in procedure (`square`) does
@@ -90,6 +91,23 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
   `procedure? apply map for-each call/cc call-with-current-continuation dynamic-wind
   values call-with-values error`; `display write newline write-char write-string` (the
   current output port only).
+- **SICP compatibility, not R7RS**: `true false nil` (ordinary variables, not literals);
+  the whole `(scheme cxr)` set, `caaar` through `cddddr`; `filter reduce fold-left
+  fold-right delete last-pair append! list-index 1+ -1+ random runtime`. These are
+  visible only when a program has no `(import ...)` at all -- exactly like `(scheme
+  base)`/`(scheme write)` -- so an explicit import list leaves them unreachable by name.
+
+```scheme
+(display (list true false nil (cadddr '(1 2 3 4)))) (newline)
+(display (filter odd? '(1 2 3 4 5))) (newline)
+(display (fold-left cons '() '(1 2 3))) (newline)
+```
+
+```
+(#t #f () 4)
+(1 3 5)
+(((() . 1) . 2) . 3)
+```
 
 ```scheme
 (define (sum-to n)

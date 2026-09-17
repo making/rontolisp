@@ -515,3 +515,20 @@ cases:
     expected: |
       (1 2 (a . b) (a b c))
       ("aAb" "line continued" x (quasiquote (a (unquote b) (unquote-splicing c))))
+  - name: the-sicp-vocabulary-not-r7rs-visible-without-import-like-base-and-write
+    source: |
+      (write (list true false nil)) (newline)
+      (write (list (caaar '(((1 2) 3) 4)) (cadddr '(1 2 3 4)) (cddddr '(1 2 3 4 5 6)))) (newline)
+      (write (list (filter odd? '(1 2 3 4 5)) (list-index even? '(1 3 5 6 7)))) (newline)
+      (write (list (reduce + 0 '()) (reduce + 0 '(1 2 3 4 5)))) (newline)
+      (write (list (fold-left cons '() '(1 2 3)) (fold-right cons '() '(1 2 3)))) (newline)
+      (write (list (delete 2 '(1 2 3 2 4)) (last-pair '(1 2 3 4)) (append! (list 1 2) (list 3 4)))) (newline)
+      (write (list (1+ 5) (-1+ 5) (random 1) (>= (runtime) 0))) (newline)
+    expected: |
+      (#t #f ())
+      (1 4 (5 6))
+      ((1 3 5) 3)
+      (0 15)
+      ((((() . 1) . 2) . 3) (1 2 3))
+      ((1 3 4) (4) (1 2 3 4))
+      (6 4 0 #t)
