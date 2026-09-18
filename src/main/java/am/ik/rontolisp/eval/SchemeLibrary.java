@@ -23,11 +23,12 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The run-time half of the EXPERIMENTAL Scheme front end ({@code scheme.lisp} on the
- * classpath, plus the forms {@link Scheme#runtimeForms()} generates from the front end's
- * tables): the printer behind {@code display}/{@code write}, an {@code equal?} that
- * recurses into vectors, the symbol-name escaping, {@code call/cc}, {@code dynamic-wind}
- * and the evaluator behind {@code eval}. It is Common Lisp source like every other
- * shipped library, so no backend learns a Scheme name ({@code .kb/scheme-frontend.md}).
+ * classpath, plus the forms {@link Scheme#runtimeForms(java.util.function.Predicate)}
+ * generates from the front end's tables): the printer behind
+ * {@code display}/{@code write}, an {@code equal?} that recurses into vectors, the
+ * symbol-name escaping, {@code call/cc}, {@code dynamic-wind} and the evaluator behind
+ * {@code eval}. It is Common Lisp source like every other shipped library, so no backend
+ * learns a Scheme name ({@code .kb/scheme-frontend.md}).
  *
  * <p>
  * Consumers, the {@link UrlLibrary} shape:
