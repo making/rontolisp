@@ -142,11 +142,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	private boolean needsHttpRuntime;
 
 	/**
-	 * Whether the last {@link #compile} builds an {@code equalp} hash table, i.e. whether
-	 * the emitted class needs {@code RontoHashTable} -- the class the key fold is written
-	 * in -- beside it.
+	 * Whether the last {@link #compile} uses hash tables, i.e. whether the emitted class
+	 * needs {@code RontoHashTable} beside it: the key fold for an {@code equalp} table,
+	 * and the tombstone machinery (tombstone/liveCount/liveValues/maybeCompact) every
+	 * table's put/remove/count/values helpers call since `.todo/855`.
 	 */
-	private boolean needsHashFoldRuntime;
+	private boolean needsHashTableRuntime;
 
 	/**
 	 * Whether the last {@link #compile} can observe a complex value, i.e. whether the
@@ -537,7 +538,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * @return each class file's path within an output tree (or jar), mapped to its bytes
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
-		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsHashFoldRuntime
+		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsHashTableRuntime
 				&& !this.needsComplexRuntime) {
 			return Map.of();
 		}
@@ -545,7 +546,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (this.needsHandleRuntime) {
 			files.putAll(JvmExportRuntimeBuilder.runtimeClassFiles());
 		}
-		if (this.needsHashFoldRuntime) {
+		if (this.needsHashTableRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(JvmHashRuntimeBuilder.RUNTIME_CLASS_FILES));
 		}
 		if (this.needsComplexRuntime) {
@@ -1303,8 +1304,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// representation), whether or not the program's own source names a hash op.
 		// A table whose keys are FOLDED: the three extra helpers and the fold call in
 		// get/put/remove ride on their own gate, so a program that writes no
-		// :test 'equalp is emitted exactly as it was before the fold existed -- and the
-		// travelling RontoHashTable stays out of its output.
+		// :test 'equalp is emitted exactly as it was before the fold existed. The
+		// travelling RontoHashTable rides with any hash-using output, fold or not:
+		// every table's put/remove/count/values helpers call its tombstone machinery.
 		boolean usesEqualpHashTables = LispMacroExpander.programMakesEqualpHashTable(program)
 				|| forcedGroups.contains(GROUP_HASH_EQUALP);
 		// A table whose aggregates key by identity: the makers, the test reader and
@@ -1702,10 +1704,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A served program calls the embedded server and the Clack glue, so those class
 		// files travel with the output and it runs on a bare `java -cp .`.
 		this.needsHttpRuntime = usesHttpHandler;
-		// An equalp table folds its keys through RontoHashTable.equalpKey, so that class
-		// travels with the output too -- and with nothing else, since no other program
-		// emits a call to it.
-		this.needsHashFoldRuntime = usesEqualpHashTables;
+		// An equalp table folds its keys through RontoHashTable.equalpKey, and every
+		// table's put/remove/count/values helpers call its tombstone machinery, so that
+		// class travels with any hash-using output -- and with nothing else, since no
+		// other program emits a call to it.
+		this.needsHashTableRuntime = usesEqualpHashTables || usesHashTables;
 		// widen-float-bits/narrow-float-bits (.todo/671) can touch a packed float array
 		// and a packed (unsigned-byte 16) vector it received only as a parameter (never
 		// a literal in THIS program's own AST, e.g. a reusable chunk-widening defun a

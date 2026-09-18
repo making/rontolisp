@@ -12567,6 +12567,60 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunRemhashKeepsCountOrderAndReuse() throws Exception {
+		// Removing every other entry of a 1,000-entry table, oldest first: the count
+		// drops, maphash walks the survivors in insertion order, a removed key stays
+		// gone, removing a missing key answers NIL, re-storing a removed key appends
+		// it, and clr resets everything (.todo/855's tombstone representation).
+		assertThat(compileAndRun("""
+				(let ((h (make-hash-table :test 'eq)) (keys nil))
+				  (dotimes (i 1000)
+				    (let ((k (cons i i)))
+				      (push k keys)
+				      (setf (gethash k h) i)))
+				  (dolist (k (reverse keys)) (when (evenp (car k)) (remhash k h)))
+				  (let ((seen nil))
+				    (maphash (lambda (k v) (push (car k) seen)) h)
+				    (print (list (hash-table-count h) (nreverse seen)))))
+				""")).startsWith("(500 (1 3 5 7").endsWith("997 999))");
+		assertThat(compileAndRun("""
+				(let ((h (make-hash-table :test 'eq)) (k0 (cons 0 0)) (k1 (cons 1 1)))
+				  (setf (gethash k0 h) 'a)
+				  (setf (gethash k1 h) 'b)
+				  (print (list (remhash k0 h) (remhash :missing h) (hash-table-count h)))
+				  (print (gethash k0 h :gone))
+				  (setf (gethash k0 h) 'c)
+				  (let ((seen nil))
+				    (maphash (lambda (k v) (push k seen)) h)
+				    (print (list (hash-table-count h) (gethash k0 h) (mapcar #'car seen))))
+				  (clrhash h)
+				  (print (hash-table-count h))
+				  (setf (gethash k1 h) 'd)
+				  (print (list (hash-table-count h) (gethash k1 h))))
+				""")).isEqualTo("(T NIL 1)\n:GONE\n(2 C (0 1))\n0\n(1 D)");
+	}
+
+	@Test
+	void compileAndRunRemhashOfManyEntriesStaysFast() throws Exception {
+		// .todo/855: removing from the insertion-order list was O(n) per removal, so
+		// removing every entry oldest-first was quadratic (~3 s per 50k on this
+		// machine). Tombstones make each removal O(1); the bound below has an order
+		// of magnitude of headroom over the fixed shape and fails on the old one.
+		long start = System.nanoTime();
+		assertThat(compileAndRun("""
+				(let ((h (make-hash-table :test 'eq)) (keys nil))
+				  (dotimes (i 400000)
+				    (let ((k (cons i i)))
+				      (push k keys)
+				      (setf (gethash k h) i)))
+				  (dolist (k (reverse keys)) (remhash k h))
+				  (print (hash-table-count h)))
+				""")).isEqualTo("0");
+		long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+		assertThat(elapsedMs).as("400k oldest-first remhashes took %d ms", elapsedMs).isLessThan(15000);
+	}
+
+	@Test
 	void compileAndRunEqOnDistinctEqualStringsComparesByIdentity() throws Exception {
 		// A string is a quote-framed String or a character-vector List, and _eqv used to
 		// answer both by content: two distinct equal strings were eq. equal still

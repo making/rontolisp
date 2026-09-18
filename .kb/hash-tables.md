@@ -141,8 +141,19 @@ share the box, so `hash-table-p` is `ref.test TYPE_CELL` PLUS the header-car tes
 - JVM: the `LinkedHashMap` is a BUCKET INDEX (boxed `Integer` hash -> `ArrayList` of `Object[2]`)
   plus an insertion-order `ArrayList` under `#order`; re-storing mutates the pair in place. The
   shape is declared ONCE in `runtime/RontoHashTable` and read by `JvmHashRuntimeBuilder` and the
-  hand-written runtimes (`RontoHttpClack`'s `:headers`) — a plain `HashMap` fails at the first
+  hand-written runtimes (`RontoHttpClack`'s `:headers`) -- a plain `HashMap` fails at the first
   `gethash`. Buckets are `new ArrayList<>(1)`, not the default ten.
+  **A removal does NOT unlink the pair from `#order`** -- unlinking scans and memmoves,
+  O(n) per `remhash`, which measured 2.9 s for 50,000 removals from a 300,000-entry
+  `eq` table on the JVM against ~0 ms on WASM (`.todo/855`; the other suspects --
+  packed `(vector i)`, `make-wkey`, `identityHashCode`, the bucket index -- split
+  clean). The pair keeps its slot with an unforgeable tombstone for a key, counted
+  under `#dead`; the live count is the list size minus that number, `maphash` (via
+  `_hashValues`) skips tombstones, and the list compacts in place once half of it is
+  dead (on a fresh `put` and before a full walk, so each removal stays O(1)
+  amortised). After the change the same program prints its answer in 659 ms on the
+  JVM against 1,307 ms on WASM Preview 1 (medians of 5 runs, linux-x86-64,
+  2026-09-18; before: 3,592 ms / 1,443 ms).
 - WASM `FUNC_HASH` must agree with `_equal` (equal keys hash equal); signature
   `((ref null eq)) -> i32` = `TYPE_RAT_GET`, always emitted. Strings/symbols fold content bytes
   (`h = h*31 + byte`) because `_equal` compares via `_string_eq`, not interned offsets

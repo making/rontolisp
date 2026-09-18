@@ -1,6 +1,7 @@
 package am.ik.rontolisp.runtime;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,7 +20,10 @@ import java.util.Objects;
  * Insertion order -- what {@code maphash} walks -- is a second {@link #LIST_CLASS} of the
  * same pairs, hanging off {@link #ORDER_KEY}; a String key can never collide with an
  * {@code Integer} bucket key, so the whole table stays ONE object that
- * {@code hash-table-p} and the printer recognise by its class alone.
+ * {@code hash-table-p} and the printer recognise by its class alone. A removed pair is
+ * NOT unlinked from that list (unlinking is O(n) per removal: scan plus memmove, which
+ * made 50,000 removals take ~3 s -- `.todo/855`); its key slot is nulled instead and the
+ * list compacts lazily, while the count of such tombstones hangs off {@link #DEAD_KEY}.
  *
  * <p>
  * The class is exact, not merely map-shaped: the emitted helpers cast to it, so a plain
@@ -43,6 +47,15 @@ public final class RontoHashTable {
 
 	/** The key the insertion-order list hangs off inside the table. */
 	public static final String ORDER_KEY = "#order";
+
+	/**
+	 * The key the tombstone count hangs off inside the table: how many pairs in the
+	 * insertion-order list carry the tombstone instead of a key. A third String key
+	 * beside {@link #ORDER_KEY}, colliding with nothing. The live count is the order
+	 * list's size minus this number; the list compacts (in place, keeping its identity)
+	 * once half of it is dead.
+	 */
+	public static final String DEAD_KEY = "#dead";
 
 	/**
 	 * The key an {@code equalp} table's marker hangs off inside the table -- present (any
@@ -69,6 +82,15 @@ public final class RontoHashTable {
 	 * un-budgeted one does not merely take that long, it allocates that much.
 	 */
 	public static final int FOLD_WORK_CAP = 4096;
+
+	/**
+	 * The tombstone a removed pair carries in its key slot: a private object no user key
+	 * can ever be, so readers tell live pairs from dead ones by reference. A marker
+	 * object rather than null because this package may not import the build's
+	 * {@code @Nullable}, which the nullness checker would otherwise require on the pair's
+	 * contents.
+	 */
+	private static final Object TOMBSTONE = new Object();
 
 	private RontoHashTable() {
 	}
@@ -185,7 +207,90 @@ public final class RontoHashTable {
 	public static LinkedHashMap<Object, Object> newTable() {
 		LinkedHashMap<Object, Object> table = new LinkedHashMap<>();
 		table.put(ORDER_KEY, new ArrayList<>());
+		table.put(DEAD_KEY, Integer.valueOf(0));
 		return table;
+	}
+
+	/**
+	 * How many pairs in the insertion-order list are tombstoned. Tolerant of a missing
+	 * counter (a hand-built table that never removes) -- such a table has no dead pairs
+	 * by construction.
+	 * @param table the table
+	 * @return the tombstone count
+	 */
+	public static int deadCount(Map<Object, Object> table) {
+		Object dead = table.get(DEAD_KEY);
+		return dead == null ? 0 : ((Integer) dead).intValue();
+	}
+
+	/**
+	 * The live entry count: the order list's size minus its tombstones. O(1), like the
+	 * list size it replaces.
+	 * @param table the table
+	 * @return the live entry count
+	 */
+	public static int liveCount(Map<Object, Object> table) {
+		return order(table).size() - deadCount(table);
+	}
+
+	/**
+	 * Marks a pair removed: unlinks nothing, tombstones the pair's key slot and counts
+	 * one more dead entry. The pair is already out of its bucket; bucket scans never see
+	 * a tombstoned key, and the order-list readers ({@link #liveValues}, {@code maphash},
+	 * {@code hash-table-count}) skip it.
+	 * @param table the table
+	 * @param pair the removed entry pair
+	 */
+	public static void tombstone(Map<Object, Object> table, Object[] pair) {
+		pair[0] = TOMBSTONE;
+		table.put(DEAD_KEY, Integer.valueOf(deadCount(table) + 1));
+	}
+
+	/**
+	 * Compacts the insertion-order list in place when at least half of it is dead,
+	 * keeping the list's identity (readers hold no reference across calls, but the table
+	 * does). Called after an insertion and before a full walk, so each removal stays O(1)
+	 * and a dead-majority list never lingers: a compaction costs O(n) once per n/2
+	 * removals.
+	 * @param table the table
+	 */
+	public static void maybeCompact(Map<Object, Object> table) {
+		List<Object> ord = order(table);
+		int dead = deadCount(table);
+		if (dead > 0 && dead * 2 >= ord.size()) {
+			int kept = 0;
+			for (int read = 0; read < ord.size(); read++) {
+				Object entry = ord.get(read);
+				if (((Object[]) entry)[0] != TOMBSTONE) {
+					ord.set(kept++, entry);
+				}
+			}
+			ord.subList(kept, ord.size()).clear();
+			table.put(DEAD_KEY, Integer.valueOf(0));
+		}
+	}
+
+	/**
+	 * The live entry pairs in insertion order, compacting first when half dead. A
+	 * snapshot: mutating it touches no table.
+	 * @param table the table
+	 * @return the live pairs
+	 */
+	public static Object[] liveValues(Map<Object, Object> table) {
+		maybeCompact(table);
+		List<Object> ord = order(table);
+		int dead = deadCount(table);
+		if (dead == 0) {
+			return ord.toArray();
+		}
+		Object[] live = new Object[ord.size() - dead];
+		int kept = 0;
+		for (Object entry : ord) {
+			if (((Object[]) entry)[0] != TOMBSTONE) {
+				live[kept++] = entry;
+			}
+		}
+		return kept == live.length ? live : Arrays.copyOf(live, kept);
 	}
 
 	/**
