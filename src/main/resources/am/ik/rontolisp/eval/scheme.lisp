@@ -60,8 +60,9 @@
             (cond ((char= c #\%) (setq out (cons #\% (cons #\% out))))
                   ((char= c #\:) (setq out (cons #\c (cons #\% out))))
                   (t (setq out (cons c out))))))
-        (intern (coerce (nreverse out) 'string)))
-      (intern name)))
+        (values (intern (coerce (nreverse out) 'string))))
+      ;; values: intern's second value is not Scheme's to answer.
+      (values (intern name))))
 
 ;; --- write / display ------------------------------------------------------------
 
@@ -333,6 +334,11 @@
 (defvar rontolisp::%scheme-eof-instance (rontolisp::%make-scheme-eof))
 
 (defun rontolisp::%scheme-eof-object? (x) (rontolisp::%scheme-eof-p x))
+
+;; (eof-object) calls this rather than reading the variable: the interpreter loads this
+;; library on the first resolution of one of its FUNCTIONS, so a bare variable
+;; reference as a program's first use of it would be unbound.
+(defun rontolisp::%scheme-eof-object () rontolisp::%scheme-eof-instance)
 
 (defvar rontolisp::%scheme-dot (list nil))
 

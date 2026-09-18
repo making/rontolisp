@@ -32,6 +32,14 @@ fail silently at the call site.
 8. If its trailing arguments are a BODY, an `am.ik.rontolisp.format.IndentRules` entry --
    without one `rontolisp format` lays the body out as a function call (`.kb/formatter.md`).
 
+## Adding a Scheme builtin
+
+A `SchemeBuiltins` entry (or constant, or a keyword in `SchemeLowering`) needs a reference
+page in both trees: `doc/<lang>/scheme/reference/<slug>.md`, a `_catalog.yaml` entry under
+the category of the R7RS library that really exports it, and a row in that library's table
+page whose example the page checks with `; =>`. `SchemeReferenceTest` fails until all
+three exist (`.kb/scheme-frontend.md`, "The reference").
+
 ## Adding a Prelude Function (pure Lisp over existing primitives)
 
 When the operator is expressible in Lisp over primitives every backend already has

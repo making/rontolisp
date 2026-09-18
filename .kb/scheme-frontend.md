@@ -411,7 +411,12 @@ signals (no `guard` yet to catch it with).
 
 - **EOF is a `defstruct` singleton** (`%scheme-eof`, one `%scheme-eof-instance`):
   unforgeable (no read syntax, `symbol?` false), prints `#<eof>` like Gauche,
-  `eof-object?` is its predicate. `(read)`/`read-char`/`peek-char`/`read-line` answer
+  `eof-object?` is its predicate. `(eof-object)` CALLS `%scheme-eof-object` rather than
+  reading the variable: the interpreter loads `scheme.lisp` on the first resolution of
+  one of its FUNCTIONS, so a template whose only library reference is a variable is
+  unbound when it is the first thing a fresh evaluator runs (a REPL's first form, a
+  one-form program) -- `SchemeBuiltinsTest.eofObjectWorksAsTheFirstThingAFreshEvaluatorRuns`.
+  `(read)`/`read-char`/`peek-char`/`read-line` answer
   it at end of input instead of signalling; a second `(read)` there answers it again
   (the peek stays parked). A port argument stays refused by arity, like
   `display`/`write`'s second argument -- string ports and `(read port)` are `.todo/826`'s.
@@ -626,6 +631,13 @@ family, bodies) pass the destination down; every other form is a leaf `(setq R v
 
 ## Traps
 
+- **A helper whose tail is a Common Lisp operator with a second value answers it too.**
+  `%scheme-string->symbol` ended in `intern`, so `(call-with-values (lambda ()
+  (string->symbol "a")) list)` was `(a ())` and the REPL echoed a stray `()` after any
+  form that called it. It answers `(values (intern ...))` now
+  (`SchemeBuiltinsTest.stringToSymbolAnswersOneValue`); a helper ending in `floor`,
+  `gethash`, `intern` and the like needs the same `values`.
+
 - **`(setq false '|#f|)` is emitted unconditionally**, first: the helpers in `scheme.lisp`
   read the variable, and the interpreter's lazy load is keyed on FUNCTION resolution.
 - A template parameter used more than once (`symbol?`, `square`, `floor`) binds a
@@ -821,5 +833,29 @@ first of which replays its input as a FILE and compares, `aCyclicValueIsEchoedWi
 leg in a child process, since `exit` there is `System.exit`; plus `emergency-exit`
 legs asserting it did not),
 `DocExamplesTest` (a ```` ```scheme ```` fence is a
-whole program whose stdout is asserted).
+whole program whose stdout is asserted; one with a `; =>` runs through a REPL session and
+each annotation is the form's echo), `SchemeReferenceTest` (the reference, below).
 Probes behind the first version of this table: `.todo/artefacts/825-minimal-experimental-scheme-front-end/`.
+
+## The reference (`doc/<lang>/scheme/reference/`, `.todo/860`)
+
+One page per name `Scheme.providedNames()` answers -- every `SchemeBuiltins` entry and
+constant and every `SchemeLowering.syntaxNames()` keyword, 248 on 2026-09-18 -- under one
+`_catalog.yaml` (`label: Scheme`, so a search hit on `car` says which language's page it
+is). A category is the library the name is REALLY exported from (Gauche 0.9.15's
+`module-exports` is the oracle): `exact->inexact`/`inexact->exact` under `(scheme r5rs)`
+and the `read-char` family under `(scheme base)`, as the `SchemeBuiltins` tags say since
+`.todo/857`; the keywords of `(scheme base)` (and `import`, which no library exports) are the
+`Syntax` table, `delay`/`delay-force` sit with `(scheme lazy)` and `cons-stream` with the
+SICP names. Table pages are `syntax.md` and `library-<name>.md`, never a bare library
+name: `read`, `write` and `eval` are procedure slugs in the same directory (docgen refuses
+a detail page at an index page's path).
+
+`SchemeReferenceTest` pins it: the catalog's names equal `Scheme.providedNames()` in both
+trees (a builtin added without a page fails there), the trees list the same entries in the
+same order, and every table row's example is on its detail page -- with its result as the
+`; =>` annotation when the result is code -- inside a ```` ```scheme ```` block
+`DocExamplesTest` checks. **A new Scheme builtin, constant or keyword needs a detail page,
+a catalog entry and a table row in both trees.** A detail page states behavior and every
+deviation in Scheme terms; how a name is lowered stays here.
+

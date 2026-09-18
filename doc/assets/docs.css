@@ -277,6 +277,14 @@ a:hover { text-decoration-color: var(--accent); }
 	font-size: 14px;
 	color: var(--ink-strong);
 }
+.search-hit .hit-label {
+	font-family: var(--sans);
+	font-size: 11px;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--muted);
+	margin-left: 6px;
+}
 .search-hit .hit-crumb {
 	display: block;
 	font-family: var(--sans);

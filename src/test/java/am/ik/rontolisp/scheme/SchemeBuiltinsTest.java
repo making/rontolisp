@@ -118,6 +118,39 @@ class SchemeBuiltinsTest {
 	}
 
 	@Test
+	void eofObjectWorksAsTheFirstThingAFreshEvaluatorRuns() {
+		// The interpreter loads scheme.lisp on the first resolution of one of its
+		// FUNCTIONS; a template that reads one of its variables directly would be
+		// unbound until some other helper had been called.
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		LispVal eof = null;
+		for (SchemeTopLevel topLevel : Scheme.session(SchemeStandard.RONTOLISP).read("(eof-object)")) {
+			for (LispVal form : topLevel.forms()) {
+				eof = evaluator.eval(form);
+			}
+		}
+		assertThat(eof).isNotNull();
+		LispEvaluator file = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal form : Scheme.read("(define e (eof-object)) (display (eof-object? e))", null)) {
+			file.eval(form);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo("#t");
+	}
+
+	@Test
+	void stringToSymbolAnswersOneValue() {
+		// Common Lisp's intern answers a second value; a Scheme procedure must not.
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal form : Scheme.read("(write (call-with-values (lambda () (string->symbol \"abc\")) list))"
+				+ " (write (call-with-values (lambda () (string->symbol \"a b\")) list))", null)) {
+			evaluator.eval(form);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo("(abc)(a b)");
+	}
+
+	@Test
 	void anArgumentATemplateNamesTwiceIsEvaluatedOnce() {
 		List<LispVal> forms = Scheme.read("(square (f))", null);
 		assertThat(forms.get(1).print()).isEqualTo("(LET ((%SCM-A1 (|f|))) (* %SCM-A1 %SCM-A1))");

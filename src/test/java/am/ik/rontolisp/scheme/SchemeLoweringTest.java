@@ -399,7 +399,7 @@ class SchemeLoweringTest {
 				(RONTOLISP::%SCHEME-READ-CHAR)
 				(RONTOLISP::%SCHEME-PEEK-CHAR)
 				(RONTOLISP::%SCHEME-READ-LINE)
-				RONTOLISP::%SCHEME-EOF-INSTANCE""");
+				(RONTOLISP::%SCHEME-EOF-OBJECT)""");
 		assertThat(lowered("(import (scheme read)) (read) (read-char) (eof-object)"))
 			.isEqualTo("(RONTOLISP::%SCHEME-READ)\n(|read-char|)\n(|eof-object|)");
 	}
