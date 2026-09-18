@@ -1,13 +1,11 @@
 package am.ik.rontolisp.cli;
 
 import java.io.BufferedOutputStream;
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
@@ -390,7 +388,7 @@ public final class RontoLispCli {
 			JLineRepl.run(repl);
 		}
 		else {
-			replWithBufferedReader(repl);
+			replWithBufferedReader(repl, evaluator);
 		}
 		// A piped session is a script runner: a form that failed makes the whole run
 		// fail, as a file's uncaught error does.
@@ -408,13 +406,16 @@ public final class RontoLispCli {
 		this.assumedTerminal = terminal;
 	}
 
-	private void replWithBufferedReader(ReplBuffer repl) {
-		BufferedReader reader = new BufferedReader(new InputStreamReader(this.in));
+	private void replWithBufferedReader(ReplBuffer repl, LispEvaluator evaluator) {
+		// Lines come through the evaluator's shared standard input reader -- the same
+		// BufferedReader the read family uses -- so a piped session holds no second
+		// look-ahead of its own and a (read) inside the session sees what was typed
+		// next (a (driver-loop) typed at the prompt takes over).
 		this.out.print(repl.prompt());
 		this.out.flush();
 		try {
 			String line;
-			while ((line = reader.readLine()) != null) {
+			while ((line = evaluator.readReplLine()) != null) {
 				if ("(quit)".equals(line.trim())) {
 					break;
 				}

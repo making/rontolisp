@@ -868,3 +868,66 @@ cases:
       (1 2 3)
       (3 (1 2))
       42
+  - name: read-answers-what-quoted-data-lowers-to
+    stdin: |
+      quit 42 "hi" #\a #(1 2) (1 . 2) 'a 99 #|b|# 100 #;(1 2) 101 #t #f () 1/2 2.5 #xFF
+    source: |
+      (write (read)) (newline)
+      (write (read)) (newline)
+      (write (read)) (newline)
+      (write (read)) (newline)
+      (write (read)) (newline)
+      (write (read)) (newline)
+      (write (read)) (newline)
+      (write (read)) (newline)
+      (write (read)) (newline)
+      (write (read)) (newline)
+      (write (read)) (newline)
+      (write (read)) (newline)
+      (write (read)) (newline)
+      (write (read)) (newline)
+      (write (read)) (newline)
+      (write (read)) (newline)
+      (read-line)
+    expected: |
+      quit
+      42
+      "hi"
+      #\a
+      #(1 2)
+      (1 . 2)
+      (quote a)
+      99
+      100
+      101
+      #t
+      #f
+      ()
+      1/2
+      2.5
+      255
+  - name: read-char-peek-char-read-line-and-char-ready-on-the-current-input-port
+    stdin: |
+      ab
+      hello
+    source: |
+      (write (list (read-char) (peek-char) (read-char))) (newline)
+      (write (read-line)) (newline)
+      (write (read-line)) (newline)
+      (write (list (char-ready?) (eof-object? (read-char)) (char-ready?))) (newline)
+    expected: |
+      (#\a #\b #\b)
+      ""
+      "hello"
+      (#t #t #t)
+  - name: read-at-end-answers-the-eof-object
+    source: |
+      (write (list (eof-object? (read)) (eof-object? (read)) (eof-object? 1))) (newline)
+      (write (list (eq? (eof-object) (eof-object)) (eof-object? (eof-object)))) (newline)
+      (write (eof-object)) (newline)
+      (display (char-ready?)) (newline)
+    expected: |
+      (#t #t #f)
+      (#t #t)
+      #<eof>
+      #t

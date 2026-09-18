@@ -87,14 +87,16 @@ records; CL's `equal` compares a general vector by identity and an instance slot
   Refusing it on the compile path would cost the direct call of every procedure for a
   program that is wrong anyway; a session has the same order as the interpreter.
 
-## The library tags: `base`, `write`, `inexact`, `cxr`, `lazy`, `process-context`, `eval`, `repl`, `sicp` and `r5rs`
+## The library tags: `base`, `write`, `read`, `inexact`, `cxr`, `lazy`, `process-context`, `eval`, `repl`, `sicp` and `r5rs`
 
 `SchemeBuiltins` entries carry the R7RS library that exports them. `base`, `write`,
-`inexact`, `cxr` (the whole `(scheme cxr)` set, `caaar` through `cddddr`: every one a
+`read` (`read`, `eof-object`, `eof-object?`, `read-char`, `peek-char`, `read-line`,
+`char-ready?`, all on the current input port with no port argument), `inexact`,
+`cxr` (the whole `(scheme cxr)` set, `caaar` through `cddddr`: every one a
 standard Common Lisp function of the same name), `lazy`, `process-context`, `eval`
 (`eval`, `environment`) and `repl` (`interaction-environment`) are
 `SchemeLowering.IMPORTABLE_LIBRARIES`: `(import (scheme <tag>))` names them, and a file
-with no import at all merges all eight. Keywords carry a library too: `SYNTAX` is `base`,
+with no import at all merges all nine. Keywords carry a library too: `SYNTAX` is `base`,
 `LAZY_SYNTAX` (`delay`, `delay-force`) `lazy`, `SICP_SYNTAX` (`cons-stream`) `sicp`.
 `sicp` (`true false nil the-empty-stream user-initial-environment
 system-global-environment` -- via `SchemeLowering.Constant` over
@@ -269,6 +271,46 @@ defines regardless of what library put there first.
   `SchemeBuiltinsTest.theRunTimeTableAnswersEveryProcedureAndConstantByItsMangledName`,
   `LibraryDefunPrunerTest.theSchemeEvaluatorAndItsProcedureTableFollowOnlyAProgramThatEvals`,
   `RontoLispCliTest.anErrorInsideSchemeEvalIsReportedInSchemeTerms`.
+
+## `(scheme read)` (the current input port, no port argument)
+
+A reader in `scheme.lisp` over `read-char` on `*standard-input*`, spliced like the
+rest of the run-time half, on all four backends -- not the emitted Common Lisp reader
+(which upcases and knows `#'`, `|...|`, packages). A datum comes back as what quoted
+data lowers to (`SchemeLowering.datum`): identifiers via `SchemeNames.mangle`
+(`%scheme-string->symbol` at run time), `#t` -> `T`, `#f` -> the false value, `()`
+-> `NIL`, strings/chars/numbers (the `%scheme-string->number` path, `#x`/`#b`/`#o`/`#d`
+included), `'`/`` ` ``/`,`/`,@` as `quote`/`quasiquote`/`unquote`/`unquote-splicing`
+lists, `#( )`, dotted pairs, `;`/`#;`/`#| |#` skipped -- or `(eq? (read) 'quit)` is
+false. Refusals match the frontend: `|...|`, `+inf.0`/`+nan.0`, bytevectors,
+`[`/`]`/`{`/`}`, unsupported `#`, `(|...|/|char|)` by name; an incomplete datum
+signals (no `guard` yet to catch it with).
+
+- **EOF is a `defstruct` singleton** (`%scheme-eof`, one `%scheme-eof-instance`):
+  unforgeable (no read syntax, `symbol?` false), prints `#<eof>` like Gauche,
+  `eof-object?` is its predicate. `(read)`/`read-char`/`peek-char`/`read-line` answer
+  it at end of input instead of signalling; a second `(read)` there answers it again
+  (the peek stays parked). A port argument stays refused by arity, like
+  `display`/`write`'s second argument -- string ports and `(read port)` are `.todo/826`'s.
+- **One Lisp-level pushback cell** (a list, so `#|` un-reads two characters), keyed on
+  the current `*standard-input*` value (one stream at a time, like CL's unread-char
+  cell; a rebind clears it). Peek is read + pushback, never CL's `peek-char`, so no
+  WASM peek slot is ever parked (`PEEK_FD_ADDR` is drained by `read-char` only, and
+  mixing peek with `read-line` there loses it) and `read`/`read-line` mix freely.
+- **`char-ready?` answers `#t` everywhere**: WASM has no non-blocking probe (`listen`
+  is a call-time error there), so a probe would split the four backends; true with
+  data and at EOF (the pinned cases), true as well on a terminal with nothing typed
+  (the stated deviation, where the next read would hang).
+- **Stdin costs/supports**: one `read-char` per character (a WASI `fd_read` byte on
+  Preview 1, UTF-8 assembled byte-wise like `sockets.lisp`; a string-stream record
+  when `*standard-input*` is rebound). A non-async `--component` program keeps the
+  adapter's blocking stdin path (nothing spliced, no new WIT/flags), so `< file`
+  redirection works there too.
+- **REPL shares one `BufferedReader`** (`Environment.replInputReader` via
+  `LispEvaluator.readReplLine`, which `RontoLispCli.replWithBufferedReader` reads
+  instead of its own): a piped session holds no second look-ahead of its own, so a
+  `(read)` inside it -- a `(driver-loop)` typed at the prompt taking over -- sees
+  what was typed next. JLine (a real terminal, interactive) is unchanged.
 
 ## A session (`SchemeSession`, `SchemeLowering.interact`)
 
@@ -452,8 +494,9 @@ over-deep datum. `(* power 2)` in Brent's step cost 468 wasm bytes over `(+ powe
 
 `syntax-rules`/`define-syntax` (a shadow-aware walk like `substituteSymbolMacros`),
 `define-library`, `guard`/`raise` (onto `handler-case`), `parameterize` (the special-`let`
-restore), bytevectors (the `(unsigned-byte 8)` pack), ports beyond the current output port
-(`%STREAM` instances), `(scheme char)` and the other libraries, `|...|`
+restore), bytevectors (the `(unsigned-byte 8)` pack), ports beyond the current output
+and input ports (string ports, a port argument to `read`/`write`/`display`;
+`%STREAM` instances), `(scheme char)` and the other libraries, `|...|`
 identifiers, reading `+inf.0`/`+nan.0`, internal `define-record-type`, re-entrant continuations,
 proper tail calls in general. Each is refused by name where it can be.
 

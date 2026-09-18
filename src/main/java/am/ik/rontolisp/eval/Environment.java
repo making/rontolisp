@@ -256,6 +256,27 @@ public final class Environment implements Scope {
 	}
 
 	/**
+	 * The process standard input reader the read family shares with the REPL's line
+	 * reader. Both go through this one {@code BufferedReader} so a piped session's
+	 * look-ahead lives in exactly one place: the REPL no longer buffers lines the
+	 * run-time {@code (read)} owes the program (a {@code (driver-loop)} typed at the
+	 * prompt takes over the session's own stdin).
+	 */
+	@Nullable private BufferedReader replInputReader;
+
+	/**
+	 * Reads one REPL line through the shared standard input reader, like
+	 * {@code BufferedReader.readLine} (a trailing {@code \r} is kept here; the REPL
+	 * buffer's line handling is unchanged).
+	 * @return the line without its terminator, or {@code null} at end of input
+	 * @throws java.io.IOException if the read fails
+	 */
+	public @Nullable String readReplLine() throws java.io.IOException {
+		BufferedReader reader = this.replInputReader;
+		return reader == null ? null : reader.readLine();
+	}
+
+	/**
 	 * Opens a buffered served-request body ({@link HttpRequestBodyStream}) in the stream
 	 * table and answers its handle. Installed by {@code createGlobal} (the table is local
 	 * to it); called by the evaluator when it builds a {@code :raw-body :buffered} Clack
@@ -4585,6 +4606,7 @@ public final class Environment implements Scope {
 
 	private static void registerIO(Environment env, PrintStream out, InputStream in) {
 		BufferedReader stdinReader = new BufferedReader(new InputStreamReader(in));
+		env.replInputReader = stdinReader;
 		// Tracks whether standard output is at the beginning of a line, so fresh-line
 		// (~&) can emit a newline only when needed.
 		boolean[] atLineStart = { true };

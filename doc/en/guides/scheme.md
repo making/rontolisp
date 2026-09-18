@@ -1,7 +1,7 @@
 # Scheme (experimental)
 
 **Experimental.** rontolisp reads a subset of R7RS-small -- `(scheme base)`,
-`(scheme write)`, `(scheme inexact)`, `(scheme cxr)`, `(scheme lazy)`,
+`(scheme write)`, `(scheme read)`, `(scheme inexact)`, `(scheme cxr)`, `(scheme lazy)`,
 `(scheme process-context)`'s `exit`, `(scheme eval)` and `(scheme repl)` -- just large
 enough to run a
 Scheme program on every backend. Conformance is partial by design and nothing here is a
@@ -68,7 +68,7 @@ done
 scheme> (exit)
 ```
 
-Everything those eight libraries export -- plus the SICP-compatibility names below, which
+Everything those nine libraries export -- plus the SICP-compatibility names below, which
 no `(import ...)` names -- is visible from the start, and an
 `(import ...)` typed at the prompt only adds names. Definitions typed at separate prompts
 see each other in either order, as they would in one file. Two things differ from a file,
@@ -87,7 +87,7 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
   `let*`, `letrec`, `letrec*`, named `let`, `do`, `begin`, `set!`, `quote`, `quasiquote`,
   `let-values`, `let*-values`, `define-record-type` (top level only), `delay`,
   `delay-force`, and
-  `(import (scheme base) (scheme write) (scheme inexact) (scheme cxr) (scheme lazy)
+  `(import (scheme base) (scheme write) (scheme read) (scheme inexact) (scheme cxr) (scheme lazy)
   (scheme process-context) (scheme eval) (scheme repl))` with `only` / `except` /
   `prefix` / `rename`.
 - **Procedures**: `eq? eqv? equal?`; `+ - * / = < > <= >= quotient remainder modulo
@@ -103,8 +103,9 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
   string-append string-copy string->list list->string`; `vector? make-vector vector
   vector-length vector-ref vector-set! vector->list list->vector vector-fill!`;
   `procedure? apply map for-each call/cc call-with-current-continuation dynamic-wind
-  values call-with-values error`; `display write newline write-char write-string` (the
-  current output port only); `exit emergency-exit` (`#t` or no argument is status 0, `#f`
+   values call-with-values error`; `display write newline write-char write-string` (the
+   current output port only); `read eof-object eof-object? read-char peek-char read-line
+   char-ready?` (the current input port only, no port argument); `exit emergency-exit` (`#t` or no argument is status 0, `#f`
   is 1, an integer is its low eight bits); `(scheme eval)`: `eval environment`;
   `(scheme repl)`: `interaction-environment`. `write` and `display` write a circular list
   or vector with datum labels, `#0=(a b c . #0#)`; structure shared without a cycle is
@@ -267,7 +268,8 @@ interpreter resolves them all.
 - Error messages spell Common Lisp names (`CAR`).
 - **Not yet**: `define-syntax` / `syntax-rules`, `define-library`, `guard` / `raise`,
   `parameterize`, `case-lambda`, bytevectors, ports other than the current
-  output port, `(scheme char)` and the other libraries, `|...|` identifiers,
+  output and input ports (string ports, and a port argument to `read` / `write` /
+  `display`), `(scheme char)` and the other libraries, `|...|` identifiers,
   reading `+inf.0` / `+nan.0`. The syntactic ones are refused by name when the file is read.
 
 ## Mixing with Common Lisp

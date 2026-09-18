@@ -790,6 +790,18 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Reads one REPL line through the shared standard input reader -- the same
+	 * {@code BufferedReader} the read family uses, so a piped session's look-ahead lives
+	 * in exactly one place and a {@code (read)} inside the session sees what was typed
+	 * next.
+	 * @return the line without its terminator, or {@code null} at end of input
+	 * @throws java.io.IOException if the read fails
+	 */
+	public @Nullable String readReplLine() throws java.io.IOException {
+		return this.globalEnv.readReplLine();
+	}
+
+	/**
 	 * Sets the program's argument vector, argv0 first -- the value the {@code uiop/image}
 	 * command-line family reads ({@code (uiop:command-line-arguments)} is its rest,
 	 * {@code (uiop:argv0)} its first). The CLI threads the input file and the arguments

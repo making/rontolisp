@@ -508,7 +508,7 @@ final class SchemeLowering {
 	// ------------------------------------------------------------------ imports
 
 	/** The R7RS libraries {@code (import (scheme <name>))} accepts. */
-	private static final List<String> IMPORTABLE_LIBRARIES = List.of("base", "write", "inexact", "cxr", "lazy",
+	private static final List<String> IMPORTABLE_LIBRARIES = List.of("base", "write", "read", "inexact", "cxr", "lazy",
 			"process-context", "eval", "repl");
 
 	/**
@@ -570,8 +570,8 @@ final class SchemeLowering {
 				return library(name.name());
 			}
 			throw error("library " + set.print() + " is not available: this experimental front end has (scheme base),"
-					+ " (scheme write), (scheme inexact), (scheme cxr), (scheme lazy), (scheme process-context),"
-					+ " (scheme eval) and (scheme repl) only", form);
+					+ " (scheme write), (scheme read), (scheme inexact), (scheme cxr), (scheme lazy),"
+					+ " (scheme process-context)," + " (scheme eval) and (scheme repl) only", form);
 		}
 		Map<String, Binding> base = importSet(parts.get(1), form);
 		Map<String, Binding> result = new LinkedHashMap<>();

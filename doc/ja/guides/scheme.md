@@ -1,7 +1,7 @@
 # Scheme（実験的）
 
 **実験的機能です。** rontolisp は R7RS-small の一部 -- `(scheme base)`、
-`(scheme write)`、`(scheme inexact)`、`(scheme cxr)`、`(scheme lazy)`、`(scheme process-context)` の `exit`、
+`(scheme write)`、`(scheme read)`、`(scheme inexact)`、`(scheme cxr)`、`(scheme lazy)`、`(scheme process-context)` の `exit`、
 `(scheme eval)`、`(scheme repl)`
 -- を、Scheme プログラムを全バックエンドで動かせる最小限の範囲で読みます。
 準拠は意図的に部分的で、互換性の約束はありません。Scheme プログラムを JVM や WebAssembly で
@@ -67,7 +67,7 @@ done
 scheme> (exit)
 ```
 
-これら 8 ライブラリがエクスポートする名前 -- それに加えて、後述の
+これら 9 ライブラリがエクスポートする名前 -- それに加えて、後述の
 どの `(import ...)` にも属さない SICP 互換名 -- は最初からすべて見えており、
 プロンプトで入力した `(import ...)` は名前を追加するだけです。別々のプロンプトで入力した
 定義は、1 つのファイルに書いた場合と同じく、順序によらず互いを参照できます。フォームは
@@ -86,7 +86,7 @@ scheme> (exit)
   `let*`、`letrec`、`letrec*`、名前付き `let`、`do`、`begin`、`set!`、`quote`、`quasiquote`、
   `let-values`、`let*-values`、`define-record-type`（トップレベルのみ）、`delay`、
   `delay-force`、および
-  `(import (scheme base) (scheme write) (scheme inexact) (scheme cxr) (scheme lazy)
+  `(import (scheme base) (scheme write) (scheme read) (scheme inexact) (scheme cxr) (scheme lazy)
   (scheme process-context) (scheme eval) (scheme repl))`（`only` / `except` /
   `prefix` / `rename` 可）。
 - **手続き**: `eq? eqv? equal?`; `+ - * / = < > <= >= quotient remainder modulo
@@ -103,7 +103,8 @@ scheme> (exit)
   vector-length vector-ref vector-set! vector->list list->vector vector-fill!`;
   `procedure? apply map for-each call/cc call-with-current-continuation dynamic-wind
   values call-with-values error`; `display write newline write-char write-string`
-  （現在の出力ポートのみ）; `exit emergency-exit`（`#t` または引数なしはステータス 0、
+  （現在の出力ポートのみ）; `read eof-object eof-object? read-char peek-char read-line
+  char-ready?`（現在の入力ポートのみ、ポート引数なし）; `exit emergency-exit`（`#t` または引数なしはステータス 0、
   `#f` は 1、整数はその下位 8 ビット）; `(scheme eval)`: `eval environment`;
   `(scheme repl)`: `interaction-environment`。`write` と `display` は循環するリストやベクタを
   データラベル付きで
@@ -263,7 +264,8 @@ once (42 42)
   プログラムを終了します。
 - エラーメッセージには Common Lisp の名前（`CAR`）が出ます。
 - **未対応**: `define-syntax` / `syntax-rules`、`define-library`、`guard` / `raise`、
-  `parameterize`、`case-lambda`、バイトベクタ、現在の出力ポート以外のポート、
+  `parameterize`、`case-lambda`、バイトベクタ、現在の出力ポートと入力ポート以外のポート
+  （文字列ポート、および `read` / `write` / `display` へのポート引数）、
   `(scheme char)` などのライブラリ、`|...|` 識別子、
   `+inf.0` / `+nan.0` の読み取り。構文に関するものは、ファイルを読む時点で名前を挙げて拒否されます。
 

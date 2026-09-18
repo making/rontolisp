@@ -660,6 +660,17 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void aPipedSchemeReplReadSeesWhatWasTypedNext() {
+		// (read) consumes the session's own stdin: the next datum typed is the answer
+		// (a (driver-loop) typed at the prompt takes over). Lines and run-time reads
+		// share one BufferedReader, so no second look-ahead hides what was typed.
+		String[] session = runSession(false, "(display (read)) (newline)\n42\n", "--source-language", "scheme");
+		assertThat(session[0]).isEqualTo("0");
+		assertThat(session[1]).isEqualTo("42\n\n");
+		assertThat(session[2]).isEmpty();
+	}
+
+	@Test
 	void aTerminalReplPromptsOncePerFreshForm() {
 		// The prompt is the current package, as in any CL REPL: an (in-package ...)
 		// typed at one prompt shows at the next, so which package a bare symbol

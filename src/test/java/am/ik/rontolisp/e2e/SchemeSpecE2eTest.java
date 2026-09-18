@@ -59,10 +59,14 @@ class SchemeSpecE2eTest {
 	// in-process legs measure the same ceiling rather than JUnit's.
 	private static final long PROGRAM_STACK_BYTES = 16L << 20;
 
-	record Case(String name, String source, String expected) {
+	record Case(String name, String source, String expected, String stdin) {
 
 		List<String> expectedLines() {
 			return splitLines(this.expected);
+		}
+
+		String stdinOrEmpty() {
+			return this.stdin == null ? "" : this.stdin;
 		}
 
 	}
@@ -77,6 +81,17 @@ class SchemeSpecE2eTest {
 			return program.toString();
 		}
 
+		// The concatenated standard input every leg feeds the program: each case's
+		// blob already ends with a newline (a YAML block scalar does), so one case's
+		// reads never bleed into the next.
+		String stdin() {
+			StringBuilder stdin = new StringBuilder();
+			for (Case c : this.cases) {
+				stdin.append(c.stdinOrEmpty());
+			}
+			return stdin.toString();
+		}
+
 	}
 
 	@TempDir
@@ -86,11 +101,12 @@ class SchemeSpecE2eTest {
 	Stream<DynamicNode> e2e() throws Exception {
 		Spec spec = loadSpec();
 		String program = spec.program();
+		String stdin = spec.stdin();
 		List<DynamicNode> backends = new ArrayList<>();
-		backends.add(backend("INTERPRETER", spec, () -> interpret(program)));
-		backends.add(backend("JVM", spec, () -> runOnJvm(program)));
-		backends.add(wasmBackend("WASM", spec, false));
-		backends.add(wasmBackend("WASM_COMPONENT", spec, true));
+		backends.add(backend("INTERPRETER", spec, () -> interpret(program, stdin)));
+		backends.add(backend("JVM", spec, () -> runOnJvm(program, stdin)));
+		backends.add(wasmBackend("WASM", spec, stdin, false));
+		backends.add(wasmBackend("WASM_COMPONENT", spec, stdin, true));
 		return backends.stream();
 	}
 
@@ -142,7 +158,7 @@ class SchemeSpecE2eTest {
 					if (!HostWasmtime.isAvailable()) {
 						abort("no usable wasmtime on PATH");
 					}
-					HostWasmtime.ExecResult result = runWasmModule(source, component, "exit-" + expected);
+					HostWasmtime.ExecResult result = runWasmModule(source, "", component, "exit-" + expected);
 					assertThat(result.exitCode()).isEqualTo(expected);
 					assertThat(result.stdout()).isEqualTo("before\n");
 				}));
@@ -151,12 +167,91 @@ class SchemeSpecE2eTest {
 		return legs.stream();
 	}
 
-	private static DynamicContainer wasmBackend(String leg, Spec spec, boolean component) {
+	/**
+	 * A read-eval-print loop over stdin -- the shape the book's chapter 4 evaluators
+	 * share -- fed three expressions through a real stdin pipe (not
+	 * {@code with-input-from-string}): what {@code .todo/832} gates for the second stage
+	 * of {@code .todo/828} (feeding the {@code embedded-*} samples to the evaluator the
+	 * corpus ships).
+	 */
+	@TestFactory
+	Stream<DynamicNode> driverLoopReadsThreeExpressionsFromStdinOnEveryBackend() {
+		String program = """
+				;; A read-eval-print loop over stdin, the shape the book's chapter 4
+				;; evaluators share: prompt, read a datum, eval it in the global
+				;; environment, print the value, and loop. An end of input ends the
+				;; loop; three expressions piped in answer three values.
+				;; Spells the operators the piped expressions use, so a compiled
+				;; program's eval table holds them (it holds only spelled names).
+				(define eval-operators '(+ car *))
+				(define (prompt-for-input string)
+				  (newline) (newline) (display string) (newline))
+				(define (announce-output string)
+				  (newline) (display string) (newline))
+				(define (user-print object)
+				  (if (eof-object? object)
+				      (display "done")
+				      (begin (display object) (newline))))
+				(define (driver-loop)
+				  (prompt-for-input ";;; M-Eval input:")
+				  (let ((input (read)))
+				    (cond ((eof-object? input)
+				           (announce-output ";;; M-Eval done"))
+				          (else
+				           (let ((output (eval input (interaction-environment))))
+				             (announce-output ";;; M-Eval value:")
+				             (user-print output)
+				             (driver-loop))))))
+				(driver-loop)
+				""";
+		String stdin = "(+ 1 2)\n(car '(a b))\n(* 6 7)\n";
+		String expected = """
+
+
+				;;; M-Eval input:
+
+				;;; M-Eval value:
+				3
+
+
+				;;; M-Eval input:
+
+				;;; M-Eval value:
+				a
+
+
+				;;; M-Eval input:
+
+				;;; M-Eval value:
+				42
+
+
+				;;; M-Eval input:
+
+				;;; M-Eval done
+				""";
+		List<DynamicNode> legs = new ArrayList<>();
+		legs.add(dynamicTest("INTERPRETER", () -> assertThat(interpret(program, stdin)).isEqualTo(expected)));
+		legs.add(dynamicTest("JVM", () -> assertThat(runOnJvm(program, stdin)).isEqualTo(expected)));
+		for (boolean component : List.of(false, true)) {
+			legs.add(dynamicTest(component ? "WASM_COMPONENT" : "WASM", () -> {
+				if (!HostWasmtime.isAvailable()) {
+					abort("no usable wasmtime on PATH");
+				}
+				HostWasmtime.ExecResult result = runWasmModule(program, stdin, component, "scheme-driver-loop");
+				assertThat(result.exitCode()).as("wasmtime exit code: %s", result.stderr()).isZero();
+				assertThat(result.stdout()).isEqualTo(expected);
+			}));
+		}
+		return legs.stream();
+	}
+
+	private static DynamicContainer wasmBackend(String leg, Spec spec, String stdin, boolean component) {
 		if (!HostWasmtime.isAvailable()) {
 			return dynamicContainer(leg,
 					Stream.of(dynamicTest("(skipped)", () -> abort("no usable wasmtime on PATH"))));
 		}
-		return backend(leg, spec, () -> runOnWasm(spec.program(), component));
+		return backend(leg, spec, () -> runOnWasm(spec.program(), stdin, component));
 	}
 
 	private static DynamicContainer backend(String leg, Spec spec, Callable<String> run) {
@@ -186,10 +281,12 @@ class SchemeSpecE2eTest {
 		return dynamicContainer(leg, tests.stream());
 	}
 
-	private static String interpret(String program) throws Exception {
+	private static String interpret(String program, String stdin) throws Exception {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		byte[] input = stdin.getBytes(StandardCharsets.UTF_8);
 		onAProgramStack(() -> {
-			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8),
+					new java.io.ByteArrayInputStream(input));
 			for (LispVal form : SourceLanguage.SCHEME.read(program, Features.INTERPRETER, "spec.scm")) {
 				evaluator.eval(form);
 			}
@@ -198,7 +295,7 @@ class SchemeSpecE2eTest {
 		return out.toString(StandardCharsets.UTF_8);
 	}
 
-	private static String runOnJvm(String program) throws Exception {
+	private static String runOnJvm(String program, String stdin) throws Exception {
 		String name = "SchemeSpec";
 		byte[] classBytes = new JvmSourceCompiler(name).sourceLanguage("scheme").compile(program, null).classBytes();
 		ClassLoader loader = new ClassLoader(SchemeSpecE2eTest.class.getClassLoader()) {
@@ -212,24 +309,27 @@ class SchemeSpecE2eTest {
 		};
 		Method main = loader.loadClass(name).getMethod("main", String[].class);
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		PrintStream previous = System.out;
+		PrintStream previousOut = System.out;
+		java.io.InputStream previousIn = System.in;
 		System.setOut(new PrintStream(out, true, StandardCharsets.UTF_8));
+		System.setIn(new java.io.ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8)));
 		try {
 			onAProgramStack(() -> main.invoke(null, (Object) new String[0]));
 		}
 		finally {
-			System.setOut(previous);
+			System.setOut(previousOut);
+			System.setIn(previousIn);
 		}
 		return out.toString(StandardCharsets.UTF_8);
 	}
 
-	private static String runOnWasm(String program, boolean component) throws Exception {
-		HostWasmtime.ExecResult result = runWasmModule(program, component, "scheme-spec");
+	private static String runOnWasm(String program, String stdin, boolean component) throws Exception {
+		HostWasmtime.ExecResult result = runWasmModule(program, stdin, component, "scheme-spec");
 		assertThat(result.exitCode()).as("wasmtime exit code (component=%s): %s", component, result.stderr()).isZero();
 		return result.stdout();
 	}
 
-	private static HostWasmtime.ExecResult runWasmModule(String program, boolean component, String name)
+	private static HostWasmtime.ExecResult runWasmModule(String program, String stdin, boolean component, String name)
 			throws Exception {
 		CompileFrontendAccess.Program frontend = CompileFrontendAccess.scheme(program, true, component);
 		byte[] module = WasmLispCompiler.builder()
@@ -239,7 +339,28 @@ class SchemeSpecE2eTest {
 			.compile(frontend.forms());
 		String path = workDir.resolve(name + (component ? ".component.wasm" : ".wasm")).toString();
 		HostWasmtime.INSTANCE.copyFileToContainer(Transferable.of(module), path);
-		return HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", path);
+		Path stdinFile = workDir.resolve(name + (component ? ".component.stdin" : ".stdin"));
+		Files.write(stdinFile, stdin.getBytes(StandardCharsets.UTF_8));
+		Path outFile = Files.createTempFile(workDir, name + "-wasm", ".out");
+		Path errFile = Files.createTempFile(workDir, name + "-wasm", ".err");
+		try {
+			Process process = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", path)
+				.redirectInput(stdinFile.toFile())
+				.redirectOutput(outFile.toFile())
+				.redirectError(errFile.toFile())
+				.start();
+			if (!process.waitFor(300, java.util.concurrent.TimeUnit.SECONDS)) {
+				process.destroyForcibly().waitFor();
+				throw new IllegalStateException("wasmtime command timed out: " + path);
+			}
+			String stdout = Files.readString(outFile, StandardCharsets.UTF_8);
+			String stderr = Files.readString(errFile, StandardCharsets.UTF_8);
+			return new HostWasmtime.ExecResult(process.exitValue(), stdout, stderr);
+		}
+		finally {
+			Files.deleteIfExists(outFile);
+			Files.deleteIfExists(errFile);
+		}
 	}
 
 	// Runs the body on a thread with the CLI's program stack and rethrows what it threw.
