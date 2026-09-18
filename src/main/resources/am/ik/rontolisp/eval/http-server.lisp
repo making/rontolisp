@@ -460,18 +460,20 @@
 ;;; --- the response ------------------------------------------------------------
 
 (defun rontolisp::%http-header-name (k)
-  ;; (string ...): string-downcase answers a MUTABLE character vector on the
-  ;; compile paths, and a header name crosses into the transport glue (the JVM
-  ;; RontoHttpClack.toResponse, the reactor envelope), which reads the RENDERED
-  ;; string representation -- so render exactly once here, at the boundary.
-  (string
+  ;; (%normalize-string ...): string-downcase answers a MUTABLE character vector
+  ;; on the compile paths, and a header name crosses into the transport glue (the
+  ;; JVM RontoHttpClack.toResponse, the reactor envelope), which reads the
+  ;; RENDERED string representation -- so render exactly once here, at the
+  ;; boundary. Plain `string` will not do: of a string it answers the argument
+  ;; itself, vector and all.
+  (%normalize-string
    (if (stringp k) (string-downcase k) (string-downcase (symbol-name k)))))
 
 (defun rontolisp::%http-header-value (v)
-  ;; (string ...): a value the handler built with a string producer (format
-  ;; nil, concatenate) is a mutable character vector; render it once at the
-  ;; transport boundary, same as the name above.
-  (if (stringp v) (string v) (%princ-piece v)))
+  ;; (%normalize-string ...): a value the handler built with a string producer
+  ;; (format nil, concatenate) is a mutable character vector; render it once at
+  ;; the transport boundary, same as the name above.
+  (if (stringp v) (%normalize-string v) (%princ-piece v)))
 
 (defun rontolisp::%http-drop-header-p (name)
   ;; The transport computes the framing headers from the body it is about to
@@ -577,10 +579,10 @@
          ((null part) nil)
          (t (error "http-handler: a list response body must hold strings"))))
       (setq rest (cdr rest)))
-    ;; (string ...): the capture is a mutable character vector on the compile
-    ;; paths, and this joined body crosses into the transport glue, which reads
-    ;; the RENDERED string representation -- render once at the boundary.
-    (string (get-output-stream-string out))))
+    ;; (%normalize-string ...): the capture is a mutable character vector on the
+    ;; compile paths, and this joined body crosses into the transport glue, which
+    ;; reads the RENDERED string representation -- render once at the boundary.
+    (%normalize-string (get-output-stream-string out))))
 
 (defun rontolisp::%http-body-string (body)
   ;; A Clack response body -> what the transport writes: a STRING, an

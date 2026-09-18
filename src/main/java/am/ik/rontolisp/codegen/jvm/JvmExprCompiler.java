@@ -673,6 +673,14 @@ final class JvmExprCompiler {
 				case LispNames.FIXED_DECIMAL -> JvmFixedDecimalCompiler.compile(cons, ctx, className);
 				case LispNames.GENSYM -> JvmGensymCompiler.compile(cons, ctx, className);
 				case LispNames.STRING -> JvmSymbolApiCompiler.compileString(cons, ctx, className);
+				// The transport boundary's explicit render: normalize a mutable
+				// character vector into its framed string, anything else through
+				// unchanged (a no-op unless the array runtime is emitted -- without
+				// it no character vector can exist).
+				case LispNames.NORMALIZE_STRING -> {
+					JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
+					JvmArrayCompiler.emitStrvNormalize(ctx, className);
+				}
 				case LispNames.SYMBOL_NAME -> JvmSymbolApiCompiler.compileSymbolName(cons, ctx, className);
 				case LispNames.INTERN -> JvmSymbolApiCompiler.compileIntern(cons, ctx, className);
 				case LispNames.FIND_SYMBOL -> JvmSymbolApiCompiler.compileFindSymbol(cons, ctx, className);

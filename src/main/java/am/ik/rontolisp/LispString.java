@@ -163,6 +163,16 @@ public final class LispString implements LispVal {
 		return this.sourceLiteral;
 	}
 
+	/**
+	 * Marks this string a CONSTANT after the fact: a string a macro built into its
+	 * expansion is a literal baked into the program exactly like a reader {@code "..."}
+	 * (CLHS 3.2.4.4 lets either coalesce), so separate expansions with equal contents
+	 * compare {@code eq}. Only the macro expander calls this, on its fresh result tree.
+	 */
+	public void markSourceLiteral() {
+		this.sourceLiteral = true;
+	}
+
 	// Whether this string is the value of a FRESH-STRING producer the pure-builtin fold
 	// evaluated at compile time (string-upcase/concatenate 'string/subseq of literals).
 	// Such a value must materialize as a fresh MUTABLE string per evaluation -- the

@@ -12641,6 +12641,18 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunStringIdentityEdges() throws Exception {
+		// string of a string is that string -- a literal, an allocated copy and a
+		// character vector alike -- while a fresh string stays distinct. A string a
+		// macro builds is a constant too, pinned by ci-spec (this harness compiles
+		// expressions, not defmacro programs).
+		assertThat(compileAndRun("""
+				(let ((s (copy-seq "ab")))
+				  (print (list (eq s (string s)) (eq "ab" (string "ab")) (eq s (string "ab")))))
+				""")).isEqualTo("(T T NIL)");
+	}
+
+	@Test
 	void compileAndRunPackageVar() throws Exception {
 		// The value is the package KEYWORD find-package answers, so the two are eq.
 		assertThat(compileAndRun("(print *package*)")).isEqualTo(":CL-USER");

@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispString;
@@ -48,7 +49,65 @@ final class WasmSymbolApiCompiler {
 			WasmEmitHelper.compileStringLiteral(new LispString(literal).literal(), ctx);
 			return;
 		}
-		WasmExprCompiler.compileExpr(LispMacroExpander.strictStringDesignatorForm(parts.get(1)), ctx);
+		// Computed: a string answers ITSELF -- a quote-framed literal and a mutable
+		// character vector alike (CLHS string of a string, and what the interpreter
+		// does); anything else takes the guarded coercion below. One evaluation --
+		// the value parks in a local both arms read back.
+		WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		int nameSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(nameSlot);
+		// stringp (proper or charvec)?
+		WasmStringpCompiler.emitStringpI32(ctx, nameSlot);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(nameSlot);
+		ctx.writer.write(Instruction.ELSE);
+		// Slow: nil, an unquoted TYPE_STRING (a symbol -- quoted ones stringp above),
+		// or a character render through _princ_to_str; anything else signals through
+		// the error machinery (catchable in EH mode, a trap without it), like the
+		// strict designator form's error arm -- just without the offending value,
+		// which no textless trap could carry anyway.
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(nameSlot);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(nameSlot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINC_TO_STR);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(nameSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(nameSlot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINC_TO_STR);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(nameSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(nameSlot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINC_TO_STR);
+		ctx.writer.write(Instruction.ELSE);
+		WasmExprCompiler.compileExpr(new LispCons(new LispSymbol(LispNames.ERROR),
+				new LispCons(new LispString(LispNames.STRING + " expects a string designator"), LispNil.INSTANCE)),
+				ctx);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
 	}
 
 	static void compileIntern(LispCons cons, WasmLispCompiler.Ctx ctx) {

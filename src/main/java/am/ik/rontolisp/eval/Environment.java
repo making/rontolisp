@@ -3983,6 +3983,15 @@ public final class Environment implements Scope {
 						LispNames.STRING + " expects a string designator, got: " + args.get(0).print());
 			};
 		}));
+		// %normalize-string: the transport boundary's explicit render. The interpreter
+		// has no framed-vs-charvec distinction, so there is nothing to normalize and
+		// the argument answers itself; the compile backends route a mutable character
+		// vector through their normalizer and pass anything else through unchanged.
+		// Strings only; identity and mutability of the result are unspecified.
+		env.defineFunction(LispNames.NORMALIZE_STRING, new LispFunction(LispNames.NORMALIZE_STRING, args -> {
+			requireArgCount(LispNames.NORMALIZE_STRING, args, 1);
+			return args.get(0);
+		}));
 		// make-symbol: rontolisp has no intern table (symbols compare by name), so
 		// "uninterned" is represented by the same "#:" name prefix gensym uses.
 		env.defineFunction(LispNames.MAKE_SYMBOL, new LispFunction(LispNames.MAKE_SYMBOL, args -> {

@@ -5261,6 +5261,20 @@ cases:
       (NIL NIL 1 MISS)
       (T T)
       (1 NIL 2 NIL 3)
+  - name: string-identity-edges-string-and-macro-built-constants
+    source: |
+      ;; string of a string is that string (SBCL, CLHS string), on every backend --
+      ;; a literal, an allocated copy, and a character vector alike -- while a fresh
+      ;; string stays distinct; and a string a macro builds into its expansion is a
+      ;; constant everywhere, like a reader literal (CLHS 3.2.4.4 lets either
+      ;; coalesce).
+      (let ((s (copy-seq "ab")))
+        (print (list (eq s (string s)) (eq "ab" (string "ab")) (eq s (string "ab")))))
+      (defmacro ci-made-string () (format nil "~a" "made"))
+      (print (list (eq (ci-made-string) (ci-made-string)) (eq (ci-made-string) "made")))
+    expected: |
+      (T T NIL)
+      (T T)
   - name: hash-table-as-hash-key
     source: |
       ;; A hash table is compared and hashed by identity under every test: filling

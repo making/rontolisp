@@ -18150,6 +18150,16 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileStringIdentityEdges() throws Exception {
+		// Like the JVM twin (macro-built constants pinned by ci-spec instead -- this
+		// harness compiles expressions, not defmacro programs).
+		assertThat(compileAndRun("""
+				(let ((s (copy-seq "ab")))
+				  (print (list (eq s (string s)) (eq "ab" (string "ab")) (eq s (string "ab")))))
+				""")).isEqualTo("(T T NIL)");
+	}
+
+	@Test
 	void compileHashTableMaphashRemhashAndClrhash() throws Exception {
 		assertThat(compileAndRun("""
 				(defun sum-values (h)

@@ -970,6 +970,13 @@ final class WasmExprCompiler {
 				case LispNames.FIXED_DECIMAL -> WasmFixedDecimalCompiler.compile(cons, ctx);
 				case LispNames.GENSYM -> WasmGensymCompiler.compile(cons, ctx);
 				case LispNames.STRING -> WasmSymbolApiCompiler.compileString(cons, ctx);
+				// The transport boundary's explicit render: normalize a mutable
+				// character vector into its framed string, anything else through
+				// unchanged (a no-op unless a character vector is possible).
+				case LispNames.NORMALIZE_STRING -> {
+					WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
+					WasmEmitHelper.emitCharvecToStrCall(ctx);
+				}
 				case LispNames.SYMBOL_NAME -> WasmSymbolApiCompiler.compileSymbolName(cons, ctx);
 				case LispNames.INTERN -> WasmSymbolApiCompiler.compileIntern(cons, ctx);
 				case LispNames.FIND_SYMBOL -> WasmSymbolApiCompiler.compileFindSymbol(cons, ctx);

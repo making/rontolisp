@@ -7912,6 +7912,7 @@ public final class LispEvaluator {
 			for (LispVal bodyExpr : macro.body()) {
 				expansion = eval(bodyExpr, macroEnv);
 			}
+			markExpansionConstants(expansion, new java.util.IdentityHashMap<>());
 			return expansion;
 		}
 		finally {
@@ -7922,6 +7923,40 @@ public final class LispEvaluator {
 				for (int i = dynamicParams.size() - 1; i >= 0; i--) {
 					this.dynamicBindings.pop(dynamicParams.get(i));
 				}
+			}
+		}
+	}
+
+	/**
+	 * Marks every string a macro built into its fresh expansion tree a source constant:
+	 * baked into the program exactly like a reader {@code "..."}, so separate expansions
+	 * with equal contents compare {@code eq} on the interpreter the way coalesced
+	 * literals do on the compiled backends (CLHS 3.2.4.4 permits either). Strings the
+	 * macro spliced from its input are already marked; marking them again is a no-op.
+	 * Guarded by identity because an expansion may close a cycle.
+	 * @param form the fresh expansion tree
+	 * @param seen the objects already visited
+	 */
+	private static void markExpansionConstants(LispVal form, java.util.IdentityHashMap<LispVal, Boolean> seen) {
+		if (!(form instanceof LispCons || form instanceof LispArray || form instanceof LispString)
+				|| seen.containsKey(form)) {
+			return;
+		}
+		seen.put(form, Boolean.TRUE);
+		if (form instanceof LispString string) {
+			string.markSourceLiteral();
+		}
+		else if (form instanceof LispCons cons) {
+			LispVal rest = cons;
+			while (rest instanceof LispCons cell) {
+				markExpansionConstants(cell.car(), seen);
+				rest = cell.cdr();
+			}
+			markExpansionConstants(rest, seen);
+		}
+		else if (form instanceof LispArray array) {
+			for (LispVal element : array.data()) {
+				markExpansionConstants(element, seen);
 			}
 		}
 	}

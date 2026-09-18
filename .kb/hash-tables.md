@@ -51,14 +51,46 @@ comparing two `LispString.sourceLiteral()` strings by content. A symbol's name
 
 Blast radius measured before the change: the whole `./mvnw test` suite (eval, codegen,
 cli, e2e, ansi, scheme) stayed green, and no shipped library or example relied on
-value comparison. Remaining differences, all constant-coalescing edges the ANSI leaves
-implementation-dependent: a string a MACRO builds into its expansion is a constant on the
-compiled backends but an allocated string on the interpreter (`(eq (m) (m))` is `NIL`
-there); `(eq s (string s))` on an allocated string is `T` on the interpreter and `NIL` on
-the compiled backends, whose `string` copies. Pinned by ci-spec
-`eq-eql-on-distinct-equal-strings`, `LispEvaluatorTest#eqAndEqlCompareDistinctEqualStringsByIdentity`,
-`JvmLispCompilerTest#compileAndRunEqOnDistinctEqualStringsComparesByIdentity`,
-`WasmLispCompilerIntegrationTest#compileEqOnDistinctEqualStringsAndGrownCharacterVectorKeys`.
+value comparison.
+
+## The two constant-coalescing edges (`.todo/853`, 2026-09-18)
+Both were constant-coalescing edges ANSI leaves implementation-dependent, and both now
+read the same on all four backends:
+
+- **`string` of a string is that string** (SBCL, CLHS `string`): a literal, an allocated
+  copy and a character vector alike answer themselves; a fresh string stays distinct.
+  The interpreter always did; the JVM routed every computed designator through the
+  display render (`JvmSymbolApiCompiler.compileString`), WASM through `_princ_to_str`.
+  Both now test first: JVM `stringp` (proper or charvec) answers the temp, else the
+  guarded coercion (symbol incl. nil / char through display and reframe, anything else
+  the strict form's own error); WASM `stringp`-i32 answers the local, else nil /
+  unquoted-`TYPE_STRING` / `TYPE_CHAR` render, else trap. The other designator
+  positions (`string=`, `%string-compare`, trims) keep copying -- they only read
+  contents, so identity is unobservable there, and no audit found a consumer that
+  mutates what `string` answers.
+- **A string a macro builds into its expansion is a constant** like a reader literal
+  (CLHS 3.2.4.4 lets either coalesce): `(eq (m) (m))` is `T` everywhere, matching the
+  compiled backends' literal coalescing and SBCL. `expandMacroCall` marks every string
+  in the fresh expansion tree a source literal (shared by `defmacro`,
+  compiler macros and `macrolet`, on every path through the one method); identity,
+  hashing and the literal-write protections follow the flag, so a mutated
+  macro-built string rebinds/copies exactly like a mutated reader literal. The
+  alternative -- documenting the interpreter's `NIL` -- would have pinned a
+  divergence in the project's own print-the-same-thing rule for no safety gain:
+  programs relying on per-expansion string identity are already broken on the three
+  compiled backends.
+- Pinned by ci-spec `string-identity-edges-string-and-macro-built-constants`,
+  `LispEvaluatorTest#stringOfAStringIsThatStringAndMacroBuiltStringsAreConstants`,
+  `JvmLispCompilerTest#compileAndRunStringIdentityEdges`,
+  `WasmLispCompilerIntegrationTest#compileStringIdentityEdges`.
+- **The transport boundary keeps its own render**: the HTTP stack read `string` as
+  "normalize to a framed string" (a charvec from `string-downcase`/`format`/
+  `concatenate`/`get-output-stream-string` into the transports, which unquote
+  `String`s and drop anything else). Those three call sites now spell
+  `%normalize-string` -- charvec to fresh framed string, anything else through
+  unchanged (JVM `_strv` / WASM `_charvec_to_str`, no-ops where no character
+  vector can exist; the interpreter answers the argument). Identity and
+  mutability of its result are unspecified; strings only.
 
 ## `equalp` is a KEY FOLD, on all four backends
 `equalp` on two values is `equal` on their folds, so one structural table carries both tests.

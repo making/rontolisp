@@ -60,7 +60,103 @@ final class JvmSymbolApiCompiler {
 			JvmEmitHelper.compileStringLiteral(new LispString(literal).literal(), ctx);
 			return;
 		}
-		JvmExprCompiler.compileExpr(LispMacroExpander.strictStringDesignatorForm(parts.get(1)), ctx, className);
+		// Computed: a string answers ITSELF -- a quote-framed literal and a mutable
+		// character vector alike (CLHS string of a string, and what the interpreter
+		// does); anything else takes the guarded coercion below. One evaluation --
+		// the value parks in a temp both arms read back.
+		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		int tempSlot = ctx.allocTemp();
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(tempSlot);
+		// stringp (proper or charvec)?
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		JvmEmitHelper.emitSharedCall(ctx, className, "_pStringp", 1, helper -> {
+			// The helper Ctx shares the constant pool; the check is stringp's own.
+			JvmStringpCompiler.emitStringpCheck(helper, 0);
+		});
+		int notStringp = emitBranch(ctx, Opcode.IFNULL);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		int done = emitBranch(ctx, Opcode.GOTO);
+		JvmEmitHelper.patchBranch(ctx, notStringp, ctx.code.size());
+		// Slow: the guarded coercion. A symbol (nil and every bare String --
+		// quoted ones stringp above) or a character renders through display and
+		// reframes; anything else signals exactly like the strict designator form
+		// this replaces.
+		// nil is a symbol, like every bare String.
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		int isNil = emitBranch(ctx, Opcode.IFNULL);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(ctx.stringClass.index());
+		int notSymbol = emitBranch(ctx, Opcode.IFEQ);
+		int coerceStr = emitBranch(ctx, Opcode.GOTO);
+		JvmEmitHelper.patchBranch(ctx, isNil, ctx.code.size());
+		int coerceNil = emitBranch(ctx, Opcode.GOTO);
+		JvmEmitHelper.patchBranch(ctx, notSymbol, ctx.code.size());
+		// character?
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(JvmEmitHelper.charArrayClass(ctx).index());
+		int notChar = emitBranch(ctx, Opcode.IFEQ);
+		JvmEmitHelper.patchBranch(ctx, coerceStr, ctx.code.size());
+		JvmEmitHelper.patchBranch(ctx, coerceNil, ctx.code.size());
+		// render and reframe: "\"" + display + "\""
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.lispToDisplayString.index());
+		emitRequote(ctx);
+		int done2 = emitBranch(ctx, Opcode.GOTO);
+		JvmEmitHelper.patchBranch(ctx, notChar, ctx.code.size());
+		emitStringDesignatorThrow(tempSlot, ctx);
+		JvmEmitHelper.patchBranch(ctx, done, ctx.code.size());
+		JvmEmitHelper.patchBranch(ctx, done2, ctx.code.size());
+	}
+
+	// "\"" + content + "\"", the quote frame a string VALUE carries. Display answers
+	// a String already, so this is two concats.
+	private static void emitRequote(JvmLispCompiler.Ctx ctx) {
+		int concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;").index();
+		JvmEmitHelper.compileStringLiteral("\"", ctx);
+		ctx.emit(Opcode.SWAP);
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(concat);
+		JvmEmitHelper.compileStringLiteral("\"", ctx);
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(concat);
+	}
+
+	// throw new RuntimeException("string expects a string designator, got: " + value)
+	// -- the strict designator form's own wording.
+	private static void emitStringDesignatorThrow(int tempSlot, JvmLispCompiler.Ctx ctx) {
+		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
+		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(runtimeEx,
+				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
+		ConstantPool.MethodrefConstant valueOf = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
+			.addNameAndType(ctx.cp.addUtf8("valueOf"), ctx.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;")));
+		ConstantPool.MethodrefConstant concat = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
+			.addNameAndType(ctx.cp.addUtf8("concat"), ctx.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
+		ctx.emit(Opcode.NEW);
+		ctx.emitU2(runtimeEx.index());
+		ctx.emit(Opcode.DUP);
+		JvmEmitHelper.compileStringLiteral(LispNames.STRING + " expects a string designator, got: ", ctx);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		// princ-render the value the way ~s would, so the report reads the same.
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.lispToDisplayString.index());
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(valueOf.index());
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(concat.index());
+		ctx.emit(Opcode.INVOKESPECIAL);
+		ctx.emitU2(ctor.index());
+		ctx.emit(Opcode.ATHROW);
 	}
 
 	/** intern: strip the surrounding quotes from the runtime string. */

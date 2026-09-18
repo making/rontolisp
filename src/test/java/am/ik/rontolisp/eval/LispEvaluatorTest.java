@@ -13503,6 +13503,22 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void stringOfAStringIsThatStringAndMacroBuiltStringsAreConstants() {
+		// CLHS string of a string, and CLHS 3.2.4.4 coalescing: a literal, an
+		// allocated copy and a character vector answer themselves, while a fresh
+		// string stays distinct; a string a macro builds into its expansion is a
+		// constant like a reader literal, on every backend alike.
+		assertThat(evalMulti("""
+				(let ((s (copy-seq "ab")))
+				  (list (eq s (string s)) (eq "ab" (string "ab")) (eq s (string "ab"))))
+				""").print()).isEqualTo("(T T NIL)");
+		assertThat(evalMulti("""
+				(defmacro ei-made () (format nil "~a" "made"))
+				(list (eq (ei-made) (ei-made)) (eq (ei-made) "made"))
+				""").print()).isEqualTo("(T T)");
+	}
+
+	@Test
 	void eachHashTableTestPrintsItsOwnTag() {
 		// The printed :TEST field reports the test lookup implements, on every backend.
 		LispVal result = evalMulti("""

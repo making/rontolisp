@@ -3051,6 +3051,15 @@ public final class LispNames {
 	public static final String STR_FRESH = "%STR-FRESH";
 
 	/**
+	 * The {@code %normalize-string} internal: normalize a string to its
+	 * transport-readable (framed) form -- a mutable character vector becomes a fresh
+	 * proper string, anything else passes through unchanged. The explicit rendering the
+	 * transport boundary needs now that {@code string} of a string answers the argument
+	 * itself; used by the HTTP stack, never read from source.
+	 */
+	public static final String NORMALIZE_STRING = "%NORMALIZE-STRING";
+
+	/**
 	 * The {@code %seq-string-result} internal TYPE DESIGNATOR: "a string, built by a
 	 * sequence operator's own result conversion rather than by a program-written
 	 * {@code coerce} / {@code map}". It reads as {@code string} everywhere the two
