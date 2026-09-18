@@ -12,7 +12,8 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 ## Where it sits
 
 - `scheme` depends on the AST types and `reader` only: `SchemeReader` (text -> datums, its
-  own case-sensitive reader), `SchemeLowering` (datums -> core forms), `SchemeBuiltins`
+  own case-sensitive reader), `SchemeExpander` + `SyntaxRules` (macros, datums -> datums,
+  "Macros" below), `SchemeLowering` (datums -> core forms), `SchemeBuiltins`
   (the procedure table), `SchemeNames` (identifier escaping), `Scheme` (the facade).
 - Reached ONLY through the seam: `eval/SourceLanguage.SCHEME`, picked for `.scm` or by
   `--source-language scheme` (`.kb/source-language.md`). Per FILE, so a Common Lisp file
@@ -54,6 +55,7 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `(call-with-values (lambda () ..) (lambda (a b) ..))`, `let-values`, `define-values` | `multiple-value-bind` | the syntactic tier (`.kb/multiple-values.md`). Any other shape: `(apply consumer (multiple-value-list (funcall producer)))`. A loop's `(values ..)` result survives the `setq` into the result variable because `values` publishes through `%mv-spill` |
 | `define-record-type` (top level only) | `defstruct` with `(:conc-name nil)`, each slot NAMED after its accessor, a BOA constructor; the modifier a `defun` over `(setf (accessor r) v)` answering the unspecified object | `defstruct` is what registers the instance layout on every backend (`.kb/defstruct.md`); the accessor IS the generated one, no wrapper call. The predicate answers T/NIL and is a `pred` (`GlobalPredicate`) |
 | `quasiquote` | `cons`/`append`/`(coerce .. 'vector)`, constant parts quoted | depth-counted per R7RS: the innermost unquote of a nested template IS evaluated |
+| `define-syntax` / `let-syntax` / `letrec-syntax` with `syntax-rules` | nothing: expanded away before the lowering (`SchemeExpander`); `let-syntax`'s body is `(let () body)` | hygiene by renaming, "Macros" below |
 | `(eval datum env)`, `(interaction-environment)`, `(scheme-report-environment 5)`, `(environment sets..)`, `user-initial-environment`, `system-global-environment` | `(%scheme-eval-in datum '\|#[environment]\|)`: a Scheme evaluator over DATUMS in `scheme.lisp`; every specifier is the one global environment, a quoted symbol | the lowering is not inside a compiled program and the backends' run-time `eval` evaluates core forms, so one evaluator serves all four ("`eval`" below) |
 
 `symbol?` excludes `T`, `NIL` and the false value; `boolean?` is `#t`/`#f` only; `vector?`
@@ -487,6 +489,72 @@ signals (no `guard` yet to catch it with).
   (a fresh "file") starts folding off again; `SchemeReader` keeps the same flag as an
   instance field, one per compile-time read.
 
+## Macros (`SchemeExpander`, `SyntaxRules`; 2026-09-18, `.todo/861`)
+
+**The expander runs BEFORE the lowering, over datums, and outputs datums with no macro
+left**, so every pre-scan of the lowering -- the `set!` census, the defun-or-variable
+decision, a body's internal definitions, `readBeforeDefinition` -- sees the expanded
+program: a macro expanding to `(define f (lambda ..))` still makes `f` a `defun`, one
+expanding to `(set! g ..)` still makes `g` a variable. Expanding on demand inside the
+lowering would have hidden both from the scans that run first.
+
+- **Gate**: only a file (or session buffer) that spells `define-syntax`, `let-syntax`,
+  `letrec-syntax` or `syntax-error` -- by name or through an import rename -- is
+  expanded (`SchemeExpander.needed`); a session keeps its expander, and so its macros,
+  from then on. Every other program is lowered exactly as before, byte for byte.
+- **Hygiene by renaming.** A symbol a template introduces becomes an ALIAS: a fresh
+  `LispSymbol` of the same spelling (identity-distinct; `LispSymbol` equality is by name,
+  so aliases live in an `IdentityHashMap`) remembering the symbol and the macro's
+  DEFINITION environment. Resolution looks the alias up where it is used first (a binder
+  the same expansion introduced), then resolves the original in the definition
+  environment. A bound alias becomes a fresh generated variable (`%SCM-V<n>`); a free
+  alias resolving to a keyword becomes the lowering's identity-compared core symbol
+  (`SchemeLowering.coreSymbol`, now one per implemented keyword, so `(let ((if list))
+  (my-or ..))` still expands to the real `if`); to a variable, its emitted name; free,
+  its spelling. `quote`, `case` data and the literal parts of a `quasiquote` get the
+  aliases stripped back to their spelling. Literals match by `free-identifier=?` (same
+  binding in each side's environment, or both free with one spelling): a user's local
+  `else` does not match a macro's `else` literal (Gauche agrees).
+- **Every LOCAL of an expanded program is renamed** to a generated variable, the user's
+  too. A free alias is emitted by its spelling and the lowering keeps Scheme spellings
+  for locals, so without this `(let ((x 'outer)) (let-syntax ((m .. x)) (let ((x
+  'inner)) (m))))` answered `inner` (Gauche: `outer`) -- the Common Lisp binding captured
+  it. Renaming every local makes that impossible by construction; renaming only on
+  detected shadowing would need to know, at the binder, which macros might later emit the
+  name. Top-level names keep their spelling (other files reach them); a top-level name a
+  TEMPLATE defines is a hidden generated global only that expansion spells (Gauche -r7:
+  `(def-foo 42)` then `foo` is unbound), which keeps `(define count 0)` inside a
+  counter-defining macro from colliding with the user's `count`.
+- **The walk mirrors the lowering's scoping** of every binding form (`lambda`, `define`,
+  the `let` family and named `let`, `letrec`, `let-values`, `do`, internal definitions
+  bound before any value, letrec*-style). A shape it cannot parse is handed to the
+  lowering stripped of aliases, and the lowering names what is wrong. Top-level names
+  defined anywhere in the file are pre-registered, as `declareGlobals` would.
+- **Positions**: every cons an expansion builds inherits the USE's position, both in
+  `SourceProvenance` and in `SchemeReader`'s own map (`SchemeReader.inherit`), so an
+  error inside an expansion (`(if)`) names where the use stands.
+- **Errors**, positioned: no clause matches, a macro keyword as a variable, `syntax-error`
+  (message plus the arguments as written), a pattern variable at the wrong ellipsis depth,
+  a syntax definition in expression position, a transformer other than `syntax-rules`,
+  more than 1,000 nested expansions ("does not terminate"). Strict R7RS refuses a
+  top-level `define-syntax` over an import (R7RS 5.6.1), as it does `define`.
+- **Library**: `define-syntax`, `let-syntax`, `letrec-syntax`, `syntax-rules`,
+  `syntax-error`, `...` and `_` are `(scheme base)` keywords (R7RS 7.1; Gauche's
+  `scheme.base` exports all seven). `...` and `_` are keywords only to the matcher and as
+  "misplaced" errors; a free `...` also counts as the ellipsis. None of the 1,586 SICP
+  samples spells any of them, so the corpus classification (`providedNames`) is unmoved.
+- **Stated limits**: `syntax-rules` only; a macro is per FILE (a `load`ed file neither
+  sees nor exports macros); a template's names inside `define-record-type` are stripped,
+  not renamed; `eval` knows no macro and refuses `define-syntax` by name (its keyword
+  list in `scheme.lisp`); an improper use `(m 1 . 2)` is matched rather than refused.
+- Pinned by the three `syntax-rules-...` / `syntax-definitions-...` cases of
+  `scheme-spec.yaml` (all four backends, expected output Gauche 0.9.15's; being in the
+  concatenated corpus, they also push every case before them through the expander),
+  `SchemeLoweringTest` (`aSyntaxRulesMacroIsExpanded...`, `...RenamesEveryLocalVariable`,
+  `aTemplateBinderCaptures...`, `aMisusedMacroIsAPositionedError`,
+  `strictR7rsRefusesASyntaxDefinitionOverAnImport`) and
+  `SchemeSessionTest.aMacroDefinedAtOnePromptIsExpandedAtTheNext`.
+
 ## A session (`SchemeSession`, `SchemeLowering.interact`)
 
 `rontolisp --source-language scheme` with no file; reached through `eval/SourceSession`
@@ -712,7 +780,6 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 ## Not here yet (each its own follow-up)
 
-`syntax-rules`/`define-syntax` (a shadow-aware walk like `substituteSymbolMacros`),
 `define-library`, `guard`/`raise` (onto `handler-case`), `parameterize` (the special-`let`
 restore), bytevectors (the `(unsigned-byte 8)` pack), ports beyond the current output
 and input ports (string ports, a port argument to `read`/`write`/`display`;

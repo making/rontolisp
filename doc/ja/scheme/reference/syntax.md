@@ -31,3 +31,10 @@
 | `else` | `(cond ((> 1 2) 'a) (else 'b))` | `b` |
 | `=>` | `(cond ((assv 'b '((a 1) (b 2))) => cadr) (else #f))` | `2` |
 | `import` | `(import (scheme base) (scheme write))` | プログラムからその 2 つのライブラリが見える |
+| `define-syntax` | `(let () (define-syntax two (syntax-rules () ((_) 2))) (* (two) 3))` | `6` |
+| `let-syntax` | `(let-syntax ((double (syntax-rules () ((_ e) (* 2 e))))) (double 21))` | `42` |
+| `letrec-syntax` | `(letrec-syntax ((my-or (syntax-rules () ((_) #f) ((_ e r ...) (let ((t e)) (if t t (my-or r ...))))))) (my-or #f 7))` | `7` |
+| `syntax-rules` | `(let-syntax ((first (syntax-rules () ((_ a b ...) 'a)))) (first x y z))` | `x` |
+| `syntax-error` | `(one-arg 5)` | `5` |
+| `...` | `(let-syntax ((my-list (syntax-rules () ((_ e ...) (list e ...))))) (my-list 1 2 3))` | `(1 2 3)` |
+| `_` | `(let-syntax ((second (syntax-rules () ((_ _ b . _) b)))) (second 1 2 3))` | `2` |

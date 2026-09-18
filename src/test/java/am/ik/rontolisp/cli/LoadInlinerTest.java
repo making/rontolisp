@@ -770,6 +770,50 @@ class LoadInlinerTest {
 	}
 
 	@Test
+	void foldsEvalReadFromStringOfLocalTimeStyleLet() {
+		// local-time computes *default-timezone-repository-path* at load time with
+		// (eval (read-from-string "(let ((system (asdf:find-system :local-time nil)))
+		// (when system (asdf:component-pathname system)))")) to learn where its
+		// bundled zoneinfo/ lives. On the compile backends the runtime eval of a
+		// reader-built form resolves no ASDF function, so the folder unwraps the
+		// literal-string eval/read-from-string: the string is read at fold time and the
+		// nested let/when reduces to the system's source directory, exactly as the
+		// unwrapped (asdf:component-pathname (asdf:find-system ...)) already does.
+		List<LispVal> result = LoadInliner.inline(LispReader.readAllFromString("""
+				(asdf:defsystem :local-time :components ((:file "main")))
+				(defparameter *root*
+				  (eval (read-from-string "(let ((system (asdf:find-system :local-time nil)))
+				    (when system (asdf:component-pathname system)))")))"""),
+				loaderOf(Map.of("main.lisp", "(defun m () 1)")), "projects/local-time");
+		assertThat(result.stream().map(LispVal::print)).contains("(DEFPARAMETER *ROOT* \"projects/local-time/\")");
+	}
+
+	@Test
+	void leavesEvalReadFromStringIntactWhenNotFoldable() {
+		// A non-literal read-from-string argument (or an unreadable/unevaluable string)
+		// must not be silently dropped: the form stays as-is so the interpreter's runtime
+		// eval still has the chance to run it.
+		List<LispVal> result = LoadInliner.inline(
+				LispReader.readAllFromString("(defparameter *x* (eval (read-from-string (compute-string))))"),
+				loaderOf(Map.of()));
+		assertThat(result.stream().map(LispVal::print))
+			.containsExactly("(DEFPARAMETER *X* (EVAL (READ-FROM-STRING (COMPUTE-STRING))))");
+	}
+
+	@Test
+	void doesNotFoldEvalForAnUnregisteredSystem() {
+		// The eval/read-from-string string names a system that is not in the compile-time
+		// registry: find-system would answer nil, so reducing would invent a directory
+		// the fold cannot justify. The eval must stay untouched (and not fold to a path).
+		List<LispVal> result = LoadInliner.inline(LispReader.readAllFromString("""
+				(defparameter *root*
+				  (eval (read-from-string "(let ((system (asdf:find-system :unknown nil)))
+				    (when system (asdf:component-pathname system)))")))"""), loaderOf(Map.of()));
+		assertThat(result.stream().map(LispVal::print)).anyMatch(form -> form.startsWith("(DEFPARAMETER *ROOT* (EVAL"))
+			.noneMatch(form -> form.contains("unknown/"));
+	}
+
+	@Test
 	void foldsMakePathnameNestedInsideMergePathnamesStar() {
 		// The uax-15 seed shape end-to-end: system-source-directory + find-system on the
 		// currently-loading system merged with a make-pathname directory literal.

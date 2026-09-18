@@ -31,6 +31,13 @@ categories:
       - { slug: else, name: "else" }
       - { slug: arrow, name: "=>" }
       - { slug: import, name: "import" }
+      - { slug: define-syntax, name: "define-syntax" }
+      - { slug: let-syntax, name: "let-syntax" }
+      - { slug: letrec-syntax, name: "letrec-syntax" }
+      - { slug: syntax-rules, name: "syntax-rules" }
+      - { slug: syntax-error, name: "syntax-error" }
+      - { slug: ellipsis, name: "..." }
+      - { slug: underscore, name: "_" }
   - title: "(scheme base): 等価性"
     index_page: scheme/reference/library-base.md
     functions:

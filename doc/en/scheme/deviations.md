@@ -28,7 +28,7 @@
 
 ## Not yet
 
-`define-syntax` / `syntax-rules`, `define-library`, `guard` / `raise`,
+`define-library`, `guard` / `raise`,
 `parameterize`, `case-lambda`, bytevectors, ports other than the current
 output and input ports (string ports, and a port argument to `read` / `write` /
 `display`), `(scheme char)` and the other libraries, `|...|` identifiers,

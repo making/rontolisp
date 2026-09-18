@@ -54,17 +54,6 @@ import org.jspecify.annotations.Nullable;
  */
 final class SchemeLowering {
 
-	/**
-	 * The syntactic keywords the lowering implements, plus the ones it refuses by name.
-	 */
-	private enum Core {
-
-		QUOTE, QUASIQUOTE, UNQUOTE, UNQUOTE_SPLICING, LAMBDA, IF, SET, BEGIN, LET, LET_STAR, LETREC, LETREC_STAR, DO,
-		COND, CASE, AND, OR, WHEN, UNLESS, DEFINE, DEFINE_VALUES, DEFINE_RECORD_TYPE, LET_VALUES, LET_STAR_VALUES,
-		IMPORT, ELSE, ARROW, DELAY, DELAY_FORCE, CONS_STREAM, RAW, RAW_PREDICATE, UNSPECIFIED, UNSUPPORTED
-
-	}
-
 	private static final SequencedMap<String, Core> SYNTAX = syntaxTable();
 
 	private static SequencedMap<String, Core> syntaxTable() {
@@ -96,9 +85,16 @@ final class SchemeLowering {
 		table.put("import", Core.IMPORT);
 		table.put("else", Core.ELSE);
 		table.put("=>", Core.ARROW);
-		for (String unsupported : List.of("define-syntax", "let-syntax", "letrec-syntax", "syntax-rules",
-				"syntax-error", "define-library", "guard", "parameterize", "case-lambda", "include", "include-ci",
-				"cond-expand")) {
+		// Consumed by SchemeExpander before the lowering sees the program.
+		table.put("define-syntax", Core.DEFINE_SYNTAX);
+		table.put("let-syntax", Core.LET_SYNTAX);
+		table.put("letrec-syntax", Core.LETREC_SYNTAX);
+		table.put("syntax-rules", Core.SYNTAX_RULES);
+		table.put("syntax-error", Core.SYNTAX_ERROR);
+		table.put("...", Core.ELLIPSIS);
+		table.put("_", Core.UNDERSCORE);
+		for (String unsupported : List.of("define-library", "guard", "parameterize", "case-lambda", "include",
+				"include-ci", "cond-expand")) {
 			table.put(unsupported, Core.UNSUPPORTED);
 		}
 		return table;
@@ -140,6 +136,8 @@ final class SchemeLowering {
 	// (define (f if) (or a b)) still expands `or` into the real `if`.
 	private static final Map<LispSymbol, Core> CORE_SYMBOLS = new IdentityHashMap<>();
 
+	private static final Map<Core, LispSymbol> CORE_BY_CORE = new java.util.EnumMap<>(Core.class);
+
 	private static final LispSymbol CORE_IF = core("if", Core.IF);
 
 	private static final LispSymbol CORE_LET = core("let", Core.LET);
@@ -165,7 +163,29 @@ final class SchemeLowering {
 	private static LispSymbol core(String name, Core core) {
 		LispSymbol symbol = new LispSymbol(name);
 		CORE_SYMBOLS.put(symbol, core);
+		CORE_BY_CORE.putIfAbsent(core, symbol);
 		return symbol;
+	}
+
+	// One identity symbol per implemented keyword, for what a macro template spells: the
+	// expander hands the lowering these instead of the template's own aliases.
+	static {
+		for (Map<String, Core> table : List.of(SYNTAX, LAZY_SYNTAX, SICP_SYNTAX)) {
+			table.forEach((name, core) -> {
+				if (core != Core.UNSUPPORTED && !CORE_BY_CORE.containsKey(core)) {
+					core(name, core);
+				}
+			});
+		}
+	}
+
+	/**
+	 * The identity-compared symbol that means a keyword wherever it stands.
+	 * @param core the keyword
+	 * @return its symbol, or {@code null} for a keyword refused by name
+	 */
+	static @Nullable LispSymbol coreSymbol(Core core) {
+		return CORE_BY_CORE.get(core);
 	}
 
 	/** What an identifier means at a point in the program. */
@@ -419,6 +439,10 @@ final class SchemeLowering {
 
 	private int closures;
 
+	// Created by the first file or buffer that defines a macro; a session keeps it, and
+	// with it the macros of earlier buffers.
+	private @Nullable SchemeExpander expander;
+
 	private SchemeLowering(SchemeReader reader, boolean interactive, SchemeStandard standard) {
 		this.reader = reader;
 		this.interactive = interactive;
@@ -469,7 +493,7 @@ final class SchemeLowering {
 		// global.
 		this.generated.clear();
 		List<LispVal> forms = new ArrayList<>();
-		for (LispVal datum : this.datums) {
+		for (LispVal datum : expanded(this.datums)) {
 			spliceBegins(datum, forms);
 		}
 		for (LispVal form : forms) {
@@ -506,7 +530,7 @@ final class SchemeLowering {
 		this.datums = this.reader.readAll();
 		List<LispVal> forms = new ArrayList<>();
 		int start = imports();
-		for (LispVal datum : this.datums.subList(start, this.datums.size())) {
+		for (LispVal datum : expanded(this.datums.subList(start, this.datums.size()))) {
 			spliceBegins(datum, forms);
 		}
 		for (LispVal form : forms) {
@@ -538,6 +562,59 @@ final class SchemeLowering {
 			}
 		}
 		return out;
+	}
+
+	// The datums with every macro expanded, when the program defines any: a program that
+	// spells no syntax definition is lowered exactly as before.
+	private List<LispVal> expanded(List<LispVal> datums) {
+		if (this.expander == null && !SchemeExpander.needed(datums, this::globalKeyword)) {
+			return datums;
+		}
+		if (this.expander == null) {
+			this.expander = new SchemeExpander(new ExpanderHost());
+		}
+		return this.expander.topLevel(datums);
+	}
+
+	private @Nullable Core globalKeyword(LispSymbol identifier) {
+		return this.global.find(SchemeNames.mangle(identifier.name())) instanceof Syntax syntax ? syntax.core() : null;
+	}
+
+	private final class ExpanderHost implements SchemeExpander.Host {
+
+		@Override
+		public @Nullable Core keyword(LispSymbol identifier) {
+			return globalKeyword(identifier);
+		}
+
+		@Override
+		public @Nullable LispSymbol coreSymbol(Core core) {
+			return SchemeLowering.coreSymbol(core);
+		}
+
+		@Override
+		public LispSymbol fresh(String kind) {
+			return SchemeLowering.this.fresh(kind);
+		}
+
+		@Override
+		public LispReadException error(String message, LispCons form) {
+			return SchemeLowering.this.error(message, form);
+		}
+
+		@Override
+		public <T extends LispVal> T inherit(LispCons original, T rewritten) {
+			if (rewritten instanceof LispCons cons) {
+				SchemeLowering.this.reader.inherit(original, cons);
+			}
+			return SchemeLowering.inherit(original, rewritten);
+		}
+
+		@Override
+		public void checkTopLevelDefinition(LispSymbol identifier, LispCons form) {
+			refuseRedefiningAnImport(identifier, form);
+		}
+
 	}
 
 	private LispVal falseBinding() {
@@ -1511,7 +1588,13 @@ final class SchemeLowering {
 				throw error("a definition is only allowed at the top level or at the head of a body", form);
 			case DEFINE_RECORD_TYPE -> throw error("define-record-type is only supported at the top level", form);
 			case IMPORT -> throw error("import must come before everything else", form);
-			case ELSE, ARROW, UNQUOTE, UNQUOTE_SPLICING -> throw error("misplaced " + syntax.name(), form);
+			case ELSE, ARROW, UNQUOTE, UNQUOTE_SPLICING, ELLIPSIS, UNDERSCORE ->
+				throw error("misplaced " + syntax.name(), form);
+			// SchemeExpander consumes these before the lowering; one reaches here only
+			// through a program the expander never saw a syntax definition in.
+			case DEFINE_SYNTAX, LET_SYNTAX, LETREC_SYNTAX, SYNTAX_ERROR ->
+				throw error("misplaced " + syntax.name(), form);
+			case SYNTAX_RULES -> throw error("syntax-rules is only allowed as a syntax definition's transformer", form);
 			case UNSUPPORTED ->
 				throw error(syntax.name() + " is not supported by this experimental front end yet", form);
 		};

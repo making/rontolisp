@@ -26,7 +26,7 @@
 
 ## 未対応
 
-`define-syntax` / `syntax-rules`、`define-library`、`guard` / `raise`、
+`define-library`、`guard` / `raise`、
 `parameterize`、`case-lambda`、バイトベクタ、現在の出力ポートと入力ポート以外のポート
 （文字列ポート、および `read` / `write` / `display` へのポート引数）、
 `(scheme char)` などのライブラリ、`|...|` 識別子、

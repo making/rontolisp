@@ -61,6 +61,13 @@ class SourceLanguageSeamTest {
 	private static final String SYSTEM_METADATA = "reads .asd system metadata and leading package declarations,"
 			+ " not the program being loaded";
 
+	/**
+	 * A compile-time fold of a constant string embedded in a form, not a user source
+	 * file.
+	 */
+	private static final String COMPILE_TIME_CONSTANT = "reduces a literal string embedded in a form (a"
+			+ " read-from-string constant folded at compile time), not user source files";
+
 	private static final Map<String, String> EXEMPT = Map.ofEntries(
 			Map.entry("am.ik.rontolisp.eval.AppKitLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.AsdfRuntimeLibrary", SHIPPED_SOURCE),
@@ -100,6 +107,7 @@ class SourceLanguageSeamTest {
 			Map.entry("am.ik.rontolisp.eval.UrlLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.SchemeLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.scheme.SchemeBuiltins", SHIPPED_SOURCE),
+			Map.entry("am.ik.rontolisp.cli.CompileTimePathnameFolder", COMPILE_TIME_CONSTANT),
 			Map.entry("am.ik.rontolisp.macro.CompileRuntime", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.macro.FormatRenderer", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.macro.LispMacroExpander", SHIPPED_SOURCE),

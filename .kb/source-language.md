@@ -51,7 +51,9 @@ NOT user source, so NOT through the seam (pinned by `SourceLanguageSeamTest`, ne
 synthesizes itself -- which is Common Lisp whatever the user's language is (every
 `*Library` splice, `ShimLibraries`, `UiopLibrary`, the four `macro` readers);
 `Environment`'s runtime `read`/`read-from-string` of DATA; `AsdfSystems`' `.asd`
-metadata (tolerant `#.`-skipping read) and leading-`defpackage` scans. A further
+metadata (tolerant `#.`-skipping read) and leading-`defpackage` scans;
+`cli.CompileTimePathnameFolder`'s compile-time fold of a constant string embedded in a
+form (the `read-from-string` hidden behind `eval`). A further
 language extends `forFile` (and `isSourceFile`) and lowers to the same core forms;
 what else it needs to own (error positions, a formatter) is decided when it asks for it,
 by adding a method to the seam; what a REPL needs is `SourceSession`'s four.
