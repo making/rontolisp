@@ -15,7 +15,7 @@ backend, add its cases to `scheme-spec.yaml`.
 | `parameterize` / `make-parameter` | the special-`let` restore (`.kb/dynamic-special-variables.md`) | a parameter object is a procedure: needs a first-class handle on a special. Done in `.todo/867` (deviations: `.kb/scheme-frontend.md`, "Parameters") |
 | `case-lambda` | a `&rest` lambda dispatching on `(length args)` | Done in `.todo/869` (deviations: `.kb/scheme-frontend.md`, "`case-lambda`"; static clause dispatch: `.todo/870`) |
 | `delay` / `force` / `make-promise` | a record with a thunk | done in `.todo/831` (with `cons-stream` and the stream procedures) |
-| bytevectors | the `(unsigned-byte 8)` pack (`.kb/packed-integer-vectors.md`) | reader `#u8(` is refused today |
+| bytevectors | the `(unsigned-byte 8)` pack (`.kb/packed-integer-vectors.md`) | reader `#u8(` is refused today. Split off: `.todo/871` |
 | ports (`current-output-port`, string ports, `read-line`, `read-char`) | `%STREAM` instances (`.kb/read-load-streams.md`) | `display`/`write` take one argument today; the two-argument form is an arity error. `read` from the current input port is split off: `.todo/832` |
 | `(scheme char)`, `(scheme cxr)`, `(scheme inexact)`, `(scheme lazy)` | table rows in `SchemeBuiltins` with their own `library` tag | `importSet` already keys visibility on the tag. Split off: `(scheme cxr)` -> `.todo/829`, `(scheme inexact)` -> `.todo/830`, `(scheme lazy)` -> `.todo/831` (those three done) |
 | `define-library` / `include` | per-file lowering gets a library scope | cross-file references are by convention today: an unknown name is a direct call / a variable |
