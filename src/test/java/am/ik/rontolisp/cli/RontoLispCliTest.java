@@ -830,6 +830,26 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void theSchemeReplCatchesAndReportsRaisedObjects() throws IOException {
+		// An error object caught at one prompt is a value at the next; an uncaught raise
+		// reports the object as write spells it, an uncaught error its message and
+		// irritants -- the file-mode texts after "Unhandled condition: ".
+		String[] session = runSession(false, """
+				(define e1 (guard (e (#t e)) (error "bad" 1 "two")))
+				(error-object-message e1)
+				(error-object-irritants e1)
+				(with-exception-handler (lambda (e) 10) (lambda () (+ 1 (raise-continuable 'c))))
+				(raise (list 1 "a"))
+				(error "msg" 'x)
+				""", "--source-language", "scheme");
+		assertThat(session[1]).isEqualTo("\"bad\"\n(1 \"two\")\n11\n");
+		assertThat(session[2]).isEqualTo("""
+				Error: (1 "a")
+				Error: msg x
+				""");
+	}
+
+	@Test
 	void aMalformedLineIsReportedWholeWithoutEvaluatingItsCompletePrefix() {
 		// Pinned, not designed: the buffer is read before anything in it runs.
 		for (String[] session : List.of(runSession(false, "(print 5) garbage)\n(+ 1 2)\n"),

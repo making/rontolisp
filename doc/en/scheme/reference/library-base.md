@@ -165,7 +165,20 @@ The procedures of `(scheme base)`. Its syntactic keywords are on [Syntax](syntax
 | `dynamic-wind` | `(dynamic-wind (lambda () (display "before ")) (lambda () (display "during ")) (lambda () (display "after")))` | prints `before during after` |
 | `values` | `(values 1 2)` | `1, 2` |
 | `call-with-values` | `(call-with-values (lambda () (values 1 2)) cons)` | `(1 . 2)` |
-| `error` | `(error "division by zero:" a)` | ends the program, reporting `division by zero: 1` for `a` = 1 |
+
+## Exceptions
+
+| Name | Example | Result |
+|---|---|---|
+| `error` | `(guard (e (#t (error-object-message e))) (error "division by zero:" 1))` | `"division by zero:"` |
+| `raise` | `(guard (e (#t (list 'caught e))) (raise 42))` | `(caught 42)` |
+| `raise-continuable` | `(with-exception-handler (lambda (e) 10) (lambda () (+ 1 (raise-continuable 'oops))))` | `11` |
+| `with-exception-handler` | `(call/cc (lambda (k) (with-exception-handler (lambda (e) (k (list 'handled e))) (lambda () (raise 'boom)))))` | `(handled boom)` |
+| `error-object?` | `(guard (e (#t (error-object? e))) (error "bad"))` | `#t` |
+| `error-object-message` | `(guard (e (#t (error-object-message e))) (error "bad thing:" 1 2))` | `"bad thing:"` |
+| `error-object-irritants` | `(guard (e (#t (error-object-irritants e))) (error "bad thing:" 1 2))` | `(1 2)` |
+| `read-error?` | `(guard (e (#t (read-error? e))) (error "not a read error"))` | `#f` |
+| `file-error?` | `(guard (e (#t (file-error? e))) (raise 'oops))` | `#f` |
 
 ## Output
 

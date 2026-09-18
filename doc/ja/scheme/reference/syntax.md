@@ -30,6 +30,7 @@
 | `let*-values` | `(let*-values (((a b) (values 1 2)) ((c) (values (+ a b)))) (list a b c))` | `(1 2 3)` |
 | `else` | `(cond ((> 1 2) 'a) (else 'b))` | `b` |
 | `=>` | `(cond ((assv 'b '((a 1) (b 2))) => cadr) (else #f))` | `2` |
+| `guard` | `(guard (e ((symbol? e) (list 'caught e))) (raise 'oops))` | `(caught oops)` |
 | `import` | `(import (scheme base) (scheme write))` | プログラムからその 2 つのライブラリが見える |
 | `define-syntax` | `(let () (define-syntax two (syntax-rules () ((_) 2))) (* (two) 3))` | `6` |
 | `let-syntax` | `(let-syntax ((double (syntax-rules () ((_ e) (* 2 e))))) (double 21))` | `42` |

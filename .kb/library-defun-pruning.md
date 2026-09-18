@@ -28,6 +28,13 @@ six of them -- see CLAUDE.md's `CompileFrontend` bullet.
   pre-expansion AST.
 - **Part 2 — an ASDF-spliced third-party tree**: the same four kinds for every form
   `LoadInliner` spliced for a system.
+- **A bundled library's `define-condition` is keyed too** (2026-09-18, `.todo/865`), under
+  the class name + its readers (`bundledConditionKeys`, the third-party key rule):
+  signalling one spells its name. As a root, `scheme.lisp`'s three conditions made every
+  lowered Scheme program able to create conditions, which routes the condition report
+  runtime in: `(display (list 1 'a "s"))` went from 74,022 B of class / 11,481 B of wasm
+  to 98,278 / 41,632; keyed, it is byte-identical again. Only `scheme.lisp` of the
+  prunable libraries defines one; `defclass` stays a root (geom's type model).
 
 ## A BUNDLED library's `defstruct` is expanded BEFORE reachability
 `BundledStructs.expand` inside `prune()`, right after resolution, expands it into exactly the

@@ -1311,6 +1311,19 @@ cases:
       (1 2 3)
       (3 (1 2))
       42
+  # Before every other stdin case: those read to the end of the input.
+  - name: read-raises-a-read-error
+    stdin: |
+      ) 7
+    source: |
+      (write (guard (e ((read-error? e) (list 'read-error (error-object? e) (error-object-message e))))
+               (read)))
+      (newline)
+      (write (read))
+      (newline)
+    expected: |
+      (read-error #t "unexpected ')'")
+      7
   - name: read-answers-what-quoted-data-lowers-to
     stdin: |
       quit 42 "hi" #\a #(1 2) (1 . 2) 'a 99 #|b|# 100 #;(1 2) 101 #t #f () 1/2 2.5 #xFF
@@ -1517,6 +1530,139 @@ cases:
       (2 3)
       (3 1)
       (is-a b-or-c (z other))
+  # guard (R7RS 4.2.7), raise, error objects; expected output is Gauche 0.9.15's
+  # (gosh -r7). (+ 1 'a) is the built-in error: a type-error on every backend, where
+  # (car 1) is an uncatchable trap on wasm.
+  - name: guard-catches-raised-objects-error-objects-and-built-in-errors
+    source: |
+      (write (guard (e (#t (list 'caught e))) (raise 'boom)))
+      (newline)
+      (write (guard (e ((symbol? e) (list 'sym e)) ((string? e) (list 'str e))) (raise "s")))
+      (newline)
+      (write (list (guard (e ((assq 'a e) => cdr) ((assq 'b e))) (raise (list (cons 'a 42))))
+                   (guard (e ((assq 'a e) => cdr) ((assq 'b e))) (raise (list (cons 'b 23))))))
+      (newline)
+      (write (guard (e (else (list 'else e))) (raise 5)))
+      (newline)
+      (write (guard (e (#t (list 'outer e))) (guard (e ((number? e) 'num)) (raise 'not-a-number))))
+      (newline)
+      (write (guard (e (#t 'x)) (guard (e2 ((begin (display "[test]") #f) 1)) (raise 'r))))
+      (newline)
+      (write (guard (e (#f 1)) 'no-raise))
+      (newline)
+      (write (let ((x (guard (e (#t e)) (raise 1)))) (+ x 1)))
+      (newline)
+      (write (guard (e (#t (display "[handler]") e))
+               (dynamic-wind (lambda () (display "[in]"))
+                             (lambda () (raise 'dw))
+                             (lambda () (display "[out]")))))
+      (newline)
+      (define (guard-loop i acc)
+        (if (= i 5) (reverse acc)
+            (guard-loop (+ i 1) (cons (guard (e ((odd? e) (* e 10)) (else e)) (raise i)) acc))))
+      (write (guard-loop 0 '()))
+      (newline)
+      (write (guard (e ((error-object? e) (list (error-object-message e) (error-object-irritants e))))
+               (error "bad thing" 1 "two" 'three)))
+      (newline)
+      (write (let ((e (guard (e (#t e)) (error "only message"))))
+               (list (error-object? e) (error-object-message e) (error-object-irritants e))))
+      (newline)
+      (write (list (error-object? 5) (error-object? 'x) (guard (e (#t (error-object? e))) (raise 'x))))
+      (newline)
+      (write (guard (e ((string? e) (list 'reraised-caught e)))
+               (guard (e ((number? e) 'num)) (raise "s"))))
+      (newline)
+      (write (let ((first (guard (e (#t e)) (error "inner" 1))))
+               (guard (e (#t (list (eq? e first) (error-object-message e)))) (raise first))))
+      (newline)
+      (write (guard (e ((error-object? e) 'built-in-caught)) (+ 1 (car (list 'a)))))
+      (newline)
+      (write (guard (e ((read-error? e) 'read) ((file-error? e) 'file) (else 'other)) (error "x")))
+      (newline)
+    expected: |
+      (caught boom)
+      (str "s")
+      (42 (b . 23))
+      (else 5)
+      (outer not-a-number)
+      [test]x
+      no-raise
+      2
+      [in][out][handler]dw
+      (0 10 2 30 4)
+      ("bad thing" (1 "two" three))
+      (#t "only message" ())
+      (#f #f #f)
+      (reraised-caught "s")
+      (#t "inner")
+      built-in-caught
+      other
+  - name: with-exception-handler-and-raise-continuable
+    source: |
+      (write (with-exception-handler (lambda (e) 42) (lambda () (+ (raise-continuable 'c) 1))))
+      (newline)
+      (write (call/cc (lambda (k)
+                        (with-exception-handler (lambda (e) (k (list 'escaped e)))
+                                                (lambda () (raise 'x))))))
+      (newline)
+      (write (call/cc (lambda (k)
+                        (with-exception-handler (lambda (e) (k (error-object-message e)))
+                                                (lambda () (error "from error" 1))))))
+      (newline)
+      (write (guard (e (#t (list 'g e)))
+               (with-exception-handler (lambda (e) (raise (list 'wrapped e)))
+                                       (lambda () (raise 'inner)))))
+      (newline)
+      (write (guard (e ((error-object? e) (list 'secondary (error-object-irritants e))))
+               (with-exception-handler (lambda (e) 'returned) (lambda () (raise 'nc)))))
+      (newline)
+      (write (with-exception-handler
+              (lambda (e) (* e 2))
+              (lambda ()
+                (with-exception-handler
+                 (lambda (e) (+ (raise-continuable (+ e 1)) 100))
+                 (lambda () (raise-continuable 5))))))
+      (newline)
+      (write (call/cc (lambda (k)
+                        (with-exception-handler (lambda (e) (k (list 'arith (error-object? e))))
+                                                (lambda () (+ 1 (car (list 'a))))))))
+      (newline)
+      (define weh-handler (lambda (e) (list 'first-class e)))
+      (write (apply with-exception-handler (list weh-handler (lambda () (raise-continuable 7)))))
+      (newline)
+      (write (map (lambda (x) (guard (e (#t (list 'r e))) (if (odd? x) (raise x) x))) '(1 2 3)))
+      (newline)
+    expected: |
+      43
+      (escaped x)
+      "from error"
+      (g (wrapped inner))
+      (secondary ())
+      112
+      (arith #t)
+      (first-class 7)
+      ((r 1) 2 (r 3))
+  - name: guard-in-macros-and-raise-inside-eval
+    source: |
+      (define-syntax try-or
+        (syntax-rules () ((_ body fallback) (guard (e (#t fallback)) body))))
+      (write (let ((e 'user-e)) (try-or (raise 'x) e)))
+      (newline)
+      (define-syntax catching
+        (syntax-rules () ((_ var body) (guard (var ((symbol? var) (list 'sym var))) body))))
+      (write (catching c (raise 'y)))
+      (newline)
+      (write (guard (e (#t (list 'from-eval e))) (eval '(raise 9) (interaction-environment))))
+      (newline)
+      (write (eval '(with-exception-handler (lambda (e) (* e 3)) (lambda () (raise-continuable 4)))
+                   (interaction-environment)))
+      (newline)
+    expected: |
+      user-e
+      (sym y)
+      (from-eval 9)
+      12
 # An uncaught application of a non-procedure ends the program, so these cannot
 # join the concatenated corpus above -- one program per case, per backend, like
 # ci-spec.yaml's standalone: list (.todo/851). The dynamic-wind puts the wasm
@@ -1550,6 +1696,32 @@ standalone:
     stdout: |
     stderr: |
       Unhandled condition: The object is not applicable: 3
+    fails: true
+  # An uncaught raise reports its object as write spells it; an uncaught error its
+  # message and irritants. A guard no clause of which is taken raises again after its
+  # body is unwound, so a handler's value cannot resume a raise-continuable there (Gauche
+  # prints 11): the stated deviation, a secondary error.
+  - name: an-uncaught-raise-reports-the-object
+    source: |
+      (dynamic-wind (lambda () #t) (lambda () (raise (list 1 "a" 'b))) (lambda () #t))
+    stdout: |
+    stderr: |
+      Unhandled condition: (1 "a" b)
+    fails: true
+  - name: an-uncaught-error-reports-its-message-and-irritants
+    source: |
+      (dynamic-wind (lambda () #t) (lambda () (error "bad thing" 1 "two" 'three)) (lambda () #t))
+    stdout: |
+    stderr: |
+      Unhandled condition: bad thing 1 "two" three
+    fails: true
+  - name: a-guard-reraise-cannot-resume-a-raise-continuable
+    source: |
+      (display (with-exception-handler (lambda (e) 10)
+                 (lambda () (guard (e ((string? e) 's)) (+ 1 (raise-continuable 'y))))))
+    stdout: |
+    stderr: |
+      Unhandled condition: handler returned from non-continuable exception: y
     fails: true
   # --scheme-standard: a valid R7RS program means the same under both standards, and
   # strict R7RS keeps the sicp/r5rs names out of eval's reach too.

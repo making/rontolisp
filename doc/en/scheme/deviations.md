@@ -14,8 +14,14 @@
   `values` inside `eval` -- answers its first value only on the compiled backends; the
   interpreter answers them all. Written as a call, `(values 1 2)`, it answers them all
   everywhere.
-- An uncaught `error` ends the program with its message and irritants. There is no
-  `guard` to catch it.
+- **Exceptions are caught after the unwinding.** A `guard` runs its clauses after its body
+  has been left, so when none is taken the object is raised again from the `guard`: a
+  handler outside it cannot resume a `raise-continuable` of the body. The handler of a
+  `with-exception-handler` runs where `raise`, `raise-continuable` and `error` stand, but
+  for an error a built-in procedure signals it runs after the `thunk` has been left. On
+  WebAssembly an error the machine traps on (`car` of a non-pair, an index out of range)
+  ends the program instead of being raised. An uncaught `error` ends the program with its
+  message and irritants, an uncaught `raise` with its object.
 - A record prints in Common Lisp's `#S(...)` syntax. `equal?` compares records by
   identity.
 - `write` prints `'x` as `(quote x)`, and the unspecified value as `#!unspecific`. It is
@@ -28,7 +34,7 @@
 
 ## Not yet
 
-`define-library`, `guard` / `raise`,
+`define-library`,
 `parameterize`, `case-lambda`, bytevectors, ports other than the current
 output and input ports (string ports, and a port argument to `read` / `write` /
 `display`), `(scheme char)` and the other libraries, `|...|` identifiers,

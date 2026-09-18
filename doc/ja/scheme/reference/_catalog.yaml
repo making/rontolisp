@@ -30,6 +30,7 @@ categories:
       - { slug: let-star-values, name: "let*-values" }
       - { slug: else, name: "else" }
       - { slug: arrow, name: "=>" }
+      - { slug: guard, name: "guard" }
       - { slug: import, name: "import" }
       - { slug: define-syntax, name: "define-syntax" }
       - { slug: let-syntax, name: "let-syntax" }
@@ -184,7 +185,18 @@ categories:
       - { slug: dynamic-wind, name: "dynamic-wind" }
       - { slug: values, name: "values" }
       - { slug: call-with-values, name: "call-with-values" }
+  - title: "(scheme base): 例外"
+    index_page: scheme/reference/library-base.md
+    functions:
       - { slug: error, name: "error" }
+      - { slug: raise, name: "raise" }
+      - { slug: raise-continuable, name: "raise-continuable" }
+      - { slug: with-exception-handler, name: "with-exception-handler" }
+      - { slug: error-object-p, name: "error-object?" }
+      - { slug: error-object-message, name: "error-object-message" }
+      - { slug: error-object-irritants, name: "error-object-irritants" }
+      - { slug: read-error-p, name: "read-error?" }
+      - { slug: file-error-p, name: "file-error?" }
   - title: "(scheme base): 出力"
     index_page: scheme/reference/library-base.md
     functions:

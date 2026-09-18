@@ -200,11 +200,18 @@ public final class LibraryDefunPruner {
 				keys = structs != null ? structs.keysFor(name) : List.of(name);
 			}
 			else {
-				keys = closCandidates.keysAt(i);
-				if (keys == null) {
-					continue;
+				List<String> conditionKeys = provenance.isPrunableSystem(i) ? null
+						: bundledConditionKeys(resolved.get(i), bundled);
+				if (conditionKeys != null) {
+					keys = conditionKeys;
 				}
-				thirdParty.addAll(keys);
+				else {
+					keys = closCandidates.keysAt(i);
+					if (keys == null) {
+						continue;
+					}
+					thirdParty.addAll(keys);
+				}
 			}
 			for (String key : keys) {
 				defsByName.computeIfAbsent(key, k -> new ArrayList<>()).add(i);
@@ -1212,7 +1219,33 @@ public final class LibraryDefunPruner {
 			if (name != null) {
 				out.add(name);
 			}
+			List<String> condition = conditionDefinedNames(form);
+			if (condition != null) {
+				out.add(condition.get(0));
+			}
 		}
+	}
+
+	/**
+	 * The keep-keys of a bundled library's {@code define-condition} -- its class name
+	 * spellings and reader names, kept iff one is referenced -- or {@code null} for any
+	 * other form. Signalling a condition spells its class name ({@code (error 'c ...)}),
+	 * so an unreferenced one has no instance; as a root it made every program that
+	 * splices the library able to create conditions, which routes the condition report
+	 * runtime into all of them. {@code defclass} stays a root (geom's type model).
+	 */
+	private static @Nullable List<String> bundledConditionKeys(LispVal form, Set<String> bundled) {
+		List<String> names = conditionDefinedNames(form);
+		return names != null && bundled.contains(names.get(0)) ? names : null;
+	}
+
+	private static @Nullable List<String> conditionDefinedNames(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
+				|| !LispNames.DEFINE_CONDITION.equals(LispSymbol.memberName(op.name()))) {
+			return null;
+		}
+		List<String> names = LispMacroExpander.classDefinedNames(form);
+		return names == null || names.isEmpty() ? null : names;
 	}
 
 	/**
