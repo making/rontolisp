@@ -72,8 +72,9 @@ Each arm reproduces its `expandCoerce` body exactly, oddities included:
   walk) -- wrong, but what the operator has always answered.
 - **`'string`** -- `LispString` is itself; a list or converted vector of all
   `LispChar` becomes a string. A NON-character element declines and the
-  expansion's `(map 'string #'identity ...)` answers as before:
-  `(coerce '(1 2) 'string)` is `"12"`.
+  expansion's `(map 'string #'identity ...)` signals it (since 2026-09-18; it
+  used to answer `"12"` for `(coerce '(1 2) 'string)`,
+  [copy-list-runtime.md](copy-list-runtime.md)).
 - **`'vector`** -- a list or string fills a fresh rank-1 `LispArray`; anything
   else is the IDENTITY (as `coerceToVectorBody`'s else arm), so this arm never
   declines: `(coerce 5 'vector)` is `5`, a packed float array is itself.

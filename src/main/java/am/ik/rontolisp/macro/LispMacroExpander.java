@@ -7029,13 +7029,75 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (copy-list lst) into (append lst nil). {@code append} copies every argument
-	 * except the last, so this yields a shallow copy of the list.
+	 * Expands {@code (copy-list lst)} into a call to the shared
+	 * {@link #copyListRuntimeWrapper()} when the program carries it, else into
+	 * {@code (append lst nil)} -- which copies a PROPER list but fails on a dotted one
+	 * (every backend's {@code append} walks its non-last argument to nil), so the
+	 * fallback only serves a program that defines {@code %copy-list-runtime} itself.
 	 * @param cons the copy-list expression
+	 * @param helperPresent whether the program defines {@code %copy-list-runtime}
 	 * @return the expanded expression
 	 */
-	public static LispVal expandCopyList(LispCons cons) {
-		return listToCons(List.of(new LispSymbol(LispNames.APPEND), cons.toList().get(1), LispNil.INSTANCE));
+	public static LispVal expandCopyList(LispCons cons, boolean helperPresent) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			return programErrorForm(cons, "COPY-LIST expects 1 argument, got " + (parts.size() - 1));
+		}
+		if (helperPresent) {
+			return listToCons(List.of(new LispSymbol(LispNames.COPY_LIST_RUNTIME), parts.get(1)));
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.APPEND), parts.get(1), LispNil.INSTANCE));
+	}
+
+	// The shared copy-list: a fresh spine whose last cdr is the argument's final atom, so
+	// a dotted list copies dotted (CLHS copy-list) -- (append x nil), the lowering this
+	// replaced, walks its argument to nil and failed on the atom. A non-list signals
+	// instead of answering: the string datum keeps the helper instance-free (an
+	// (error 'type-error ...) would pull the condition-instance runtime into every
+	// program that copies a list, ~45 KB on the JVM).
+	private static final String COPY_LIST_RUNTIME_SOURCE = """
+			(setq %copy-list-runtime
+			  (lambda (%cpl-x)
+			    (if (consp %cpl-x)
+			        (let* ((%cpl-head (cons (car %cpl-x) nil))
+			               (%cpl-tail %cpl-head)
+			               (%cpl-cur (cdr %cpl-x)))
+			          (do () ((atom %cpl-cur) nil)
+			            (rplacd %cpl-tail (setq %cpl-tail (cons (car %cpl-cur) nil)))
+			            (setq %cpl-cur (cdr %cpl-cur)))
+			          (rplacd %cpl-tail %cpl-cur)
+			          %cpl-head)
+			        (if (null %cpl-x)
+			            nil
+			            (error "The value ~s is not of type LIST" %cpl-x)))))
+			""";
+
+	/**
+	 * Builds the shared {@code %copy-list-runtime} defun every {@code copy-list} site on
+	 * a compile path calls. Answered in the {@code (setq name (lambda ...))} shape
+	 * {@code BuiltinFunctionWrappers.generate} uses, because a backend injects it in the
+	 * same loop and for the same reason as {@link #sortRuntimeWrapper()}: a
+	 * {@code #'copy-list} wrapper body is a site of its own.
+	 * @return the helper's definition, wrapper-shaped
+	 */
+	public static LispVal copyListRuntimeWrapper() {
+		return LispReader.readAllFromString(COPY_LIST_RUNTIME_SOURCE, Features.INTERPRETER).get(0);
+	}
+
+	/**
+	 * Whether any form names {@code copy-list}, i.e. whether the program (or a generated
+	 * wrapper body) can hold a site for {@link #copyListRuntimeWrapper()} to serve. The
+	 * same pre-expansion name scan as {@link #programUsesSort(List)}.
+	 * @param forms the program's (or the generated wrappers') top-level forms
+	 * @return true when a copy-list site can occur
+	 */
+	public static boolean programUsesCopyList(List<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (namesAnySymbol(form, java.util.Set.of(LispNames.COPY_LIST))) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -27844,9 +27906,18 @@ public final class LispMacroExpander {
 			// (coerce x 'string) reaches this too (coerceToStringBody is a
 			// (map 'string #'identity ...) form), so the string arm of the shared
 			// %seq-to-string conversion carries the join once for the whole program.
+			// Each element must be a character (a string's element type): a
+			// non-character signals rather than joining its printed text, so
+			// (coerce '(#\a 1) 'string) is an error, not "a1". The string datum keeps
+			// the check instance-free on every backend.
+			LispSymbol eltVar = new LispSymbol("__map_e");
+			LispVal checked = makeLet(eltVar.name(), call,
+					makeIf(callOf(LispNames.CHARACTERP, eltVar), eltVar,
+							listToCons(List.of(new LispSymbol(LispNames.ERROR),
+									new LispString("The value ~s is not of type CHARACTER"), eltVar))));
 			accInit = LispNil.INSTANCE;
 			accStep = listToCons(List.of(new LispSymbol(LispNames.CONS),
-					listToCons(List.of(new LispSymbol(LispNames.PRINC_PIECE_INTERNAL), call)), accVar));
+					listToCons(List.of(new LispSymbol(LispNames.PRINC_PIECE_INTERNAL), checked)), accVar));
 			resultForm = joinStringPiecesReversed(accVar);
 		}
 		else if ("LIST".equals(resultType)) {

@@ -3533,6 +3533,14 @@ public final class WasmLispCompiler implements LispCompiler {
 			injectedRuntimeDefuns.add(sortDecl.name);
 			defuns.add(sortDecl);
 		}
+		// The shared copy-list, once per program naming copy-list (its own source or a
+		// #'copy-list wrapper body), for the same reason as the sort above.
+		if (!userDefinedNames.contains(LispNames.COPY_LIST_RUNTIME) && (LispMacroExpander.programUsesCopyList(program)
+				|| LispMacroExpander.programUsesCopyList(wrappers))) {
+			DefunDecl copyListDecl = extractSetqLambda(LispMacroExpander.copyListRuntimeWrapper());
+			injectedRuntimeDefuns.add(copyListDecl.name);
+			defuns.add(copyListDecl);
+		}
 		// The shared subseq dispatch, once per program that calls subseq -- from its own
 		// source or from a wrapper body just added, which is why this is here and not in
 		// expandTopLevelDefinitions (.kb/subseq-runtime.md). No array gate: this backend

@@ -105,7 +105,8 @@ Found writing the reference, each checked against Gauche 0.9.15 and pinned by th
   `fold-right`).
 - Found beside it, not fixed here: Common Lisp's own `copy-list` drops a dotted tail on
   the interpreter and fails on the compiled backends, and `coerce` of a list holding a
-  non-character to `string` builds a string (`.todo/866`).
+  non-character to `string` builds a string -- both fixed 2026-09-18
+  ([copy-list-runtime.md](copy-list-runtime.md)).
 
 ## `exit` runs the outstanding `dynamic-wind` afters (2026-09-18, `.todo/845`)
 
