@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.SequencedMap;
 import java.util.SequencedSet;
 import java.util.Set;
@@ -85,6 +86,7 @@ final class SchemeLowering {
 		table.put("import", Core.IMPORT);
 		table.put("else", Core.ELSE);
 		table.put("=>", Core.ARROW);
+		table.put("guard", Core.GUARD);
 		// Consumed by SchemeExpander before the lowering sees the program.
 		table.put("define-syntax", Core.DEFINE_SYNTAX);
 		table.put("let-syntax", Core.LET_SYNTAX);
@@ -93,8 +95,8 @@ final class SchemeLowering {
 		table.put("syntax-error", Core.SYNTAX_ERROR);
 		table.put("...", Core.ELLIPSIS);
 		table.put("_", Core.UNDERSCORE);
-		for (String unsupported : List.of("define-library", "guard", "parameterize", "case-lambda", "include",
-				"include-ci", "cond-expand")) {
+		for (String unsupported : List.of("define-library", "parameterize", "case-lambda", "include", "include-ci",
+				"cond-expand")) {
 			table.put(unsupported, Core.UNSUPPORTED);
 		}
 		return table;
@@ -153,6 +155,9 @@ final class SchemeLowering {
 	private static final LispSymbol CORE_LAMBDA = core("lambda", Core.LAMBDA);
 
 	private static final LispSymbol CORE_RAW_PREDICATE = core("raw-predicate", Core.RAW_PREDICATE);
+
+	// (raw form): a Common Lisp form a desugaring puts where an expression stands.
+	private static final LispSymbol CORE_RAW = core("raw", Core.RAW);
 
 	// Stands where a desugaring has no expression to put: the missing arm of an if, a
 	// cond or case no clause of which is taken. Lowered to the unspecified object.
@@ -1571,6 +1576,7 @@ final class SchemeLowering {
 				yield lower(syntax.core() == Core.WHEN ? list(CORE_IF, parts.get(1), body, CORE_UNSPECIFIED)
 						: list(CORE_IF, parts.get(1), CORE_UNSPECIFIED, body), context);
 			}
+			case GUARD -> leaf(guard(form, scope), context);
 			case DELAY, DELAY_FORCE -> leaf(promise(syntax.core() == Core.DELAY ? 0 : 1, form, scope), context);
 			case CONS_STREAM -> {
 				List<LispVal> parts = elements(form, form);
@@ -1598,6 +1604,30 @@ final class SchemeLowering {
 			case UNSUPPORTED ->
 				throw error(syntax.name() + " is not supported by this experimental front end yet", form);
 		};
+	}
+
+	// (guard (var clause...) body...) (R7RS 4.2.7): %scheme-guard runs the body as a
+	// thunk under a handler-case and a guard entry on the Scheme handler stack, then the
+	// clauses as a procedure of the raised object, as a cond whose missing else raises
+	// the object again -- from the guard, whose body has been unwound by then
+	// (.kb/scheme-frontend.md, "Exceptions").
+	private LispVal guard(LispCons form, Scope scope) {
+		List<LispVal> parts = elements(form, form);
+		if (parts.size() < 3 || !(parts.get(1) instanceof LispCons spec)) {
+			throw error("a guard needs (variable clause...) and a body", form);
+		}
+		List<LispVal> specParts = elements(spec, form);
+		LispSymbol variable = identifier(specParts.get(0), form);
+		LispSymbol raised = fresh("C");
+		List<LispVal> clauses = new ArrayList<>(specParts.subList(1, specParts.size()));
+		clauses.add(list(Objects.requireNonNull(coreSymbol(Core.ELSE)),
+				list(CORE_RAW, list(symbol("RONTOLISP::%SCHEME-RAISE"), raised))));
+		LispVal handler = list(CORE_LAMBDA, list(raised),
+				list(CORE_LET, list(list(variable, raised)), new LispCons(CORE_COND, listOf(clauses))));
+		LispVal body = new LispCons(CORE_LAMBDA,
+				new LispCons(LispNil.INSTANCE, listOf(parts.subList(2, parts.size()))));
+		return list(symbol("RONTOLISP::%SCHEME-GUARD"), value(inherit(form, body), scope),
+				value(inherit(form, handler), scope));
 	}
 
 	// (delay e) and (delay-force e): a promise record around the state and a thunk

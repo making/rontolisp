@@ -7,7 +7,7 @@ plus the [*Structure and Interpretation of Computer Programs* (SICP)-compatibili
 
 | Library | Provides |
 |---|---|
-| [(scheme base)](reference/library-base.md) | The core: numbers, booleans, pairs and lists, symbols, characters, strings, vectors, control, and input and output on the current ports; its syntax is on [Syntax](reference/syntax.md) |
+| [(scheme base)](reference/library-base.md) | The core: numbers, booleans, pairs and lists, symbols, characters, strings, vectors, control, exceptions, and input and output on the current ports; its syntax is on [Syntax](reference/syntax.md) |
 | [(scheme write)](reference/library-write.md) | `display` and `write` |
 | [(scheme read)](reference/library-read.md) | `read` |
 | [(scheme inexact)](reference/library-inexact.md) | Transcendental functions and the float predicates |

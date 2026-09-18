@@ -489,8 +489,23 @@ class SchemeLoweringTest {
 		assertThatThrownBy(() -> lowered("(car 1 2)")).hasMessage("test.scm:1:1: wrong number of arguments to car: 2");
 		assertThatThrownBy(() -> lowered("(f (define x 1))"))
 			.hasMessage("test.scm:1:4: a definition is only allowed at the top level or at the head of a body");
-		assertThatThrownBy(() -> lowered("(guard (e (#t 1)) 2)"))
-			.hasMessage("test.scm:1:1: guard is not supported by this experimental front end yet");
+		assertThatThrownBy(() -> lowered("(parameterize ((p 1)) 2)"))
+			.hasMessage("test.scm:1:1: parameterize is not supported by this experimental front end yet");
+		assertThatThrownBy(() -> lowered("(guard e 1)"))
+			.hasMessage("test.scm:1:1: a guard needs (variable clause...) and a body");
+	}
+
+	@Test
+	void aGuardIsABodyThunkAndAClauseProcedureWhoseMissingElseRaisesAgain() {
+		assertThat(lowered("(display (guard (e ((symbol? e) (list 'sym e))) (raise 'x)))")).isEqualTo(
+				"(RONTOLISP::%SCHEME-DISPLAY (RONTOLISP::%SCHEME-GUARD (LAMBDA NIL (RONTOLISP::%SCHEME-RAISE '|x|)) "
+						+ "(LAMBDA (%SCM-C1) (LET ((|e| %SCM-C1)) (IF (AND (SYMBOLP |e|) |e| (NOT (EQ |e| T)) "
+						+ "(NOT (EQ |e| RONTOLISP::%SCHEME-FALSE)) (NOT (EQ |e| RONTOLISP::%SCHEME-UNSPECIFIED))) "
+						+ "(LIST '|sym| |e|) (RONTOLISP::%SCHEME-RAISE %SCM-C1))))))");
+		// A user else is taken first; a user binding of raise does not reach the
+		// re-raise.
+		assertThat(lowered("(define (raise x) x) (display (guard (e (else 1)) 2))"))
+			.contains("(LAMBDA (%SCM-C1) (LET ((|e| %SCM-C1)) 1))");
 	}
 
 	@Test

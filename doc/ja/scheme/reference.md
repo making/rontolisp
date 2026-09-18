@@ -7,7 +7,7 @@ Scheme フロントエンドが提供する名前ごとの 1 ページです。�
 | ページ | 内容 |
 |---|---|
 | [構文](reference/syntax.md) | `(scheme base)` の構文キーワードと `import` |
-| [(scheme base)](reference/library-base.md) | 数値、ペアとリスト、シンボル、文字、文字列、ベクタ、制御、入出力 |
+| [(scheme base)](reference/library-base.md) | 数値、ペアとリスト、シンボル、文字、文字列、ベクタ、制御、例外、入出力 |
 | [(scheme write)](reference/library-write.md) | `display`、`write` とその変種 |
 | [(scheme read)](reference/library-read.md) | `read` |
 | [(scheme inexact)](reference/library-inexact.md) | 超越関数、`finite?`、`infinite?`、`nan?` |

@@ -439,8 +439,21 @@ final class SchemeBuiltins {
 				("values" base value ((&rest r) (values . r)) :function #'values)
 				("call-with-values" base value
 				 ((producer consumer) (apply (rontolisp::%scheme-ensure-procedure consumer) (multiple-value-list (funcall (rontolisp::%scheme-ensure-procedure producer))))))
-				("error" base value ((message &rest r) (error "~A" (rontolisp::%scheme-error-message message (list . r))))
-				 :function (lambda (message &rest r) (error "~A" (rontolisp::%scheme-error-message message r))))
+
+				;; --- exceptions (R7RS 6.11): guard is syntax (SchemeLowering). An error object
+				;; is a condition, so a guard and a handler see what a built-in signals too.
+				("error" base value ((message &rest r) (rontolisp::%scheme-signal-error message (list . r)))
+				 :function (lambda (message &rest r) (rontolisp::%scheme-signal-error message r)))
+				("raise" base value ((x) (rontolisp::%scheme-raise x)))
+				("raise-continuable" base value ((x) (rontolisp::%scheme-raise-continuable x)))
+				("with-exception-handler" base value
+				 ((handler thunk) (rontolisp::%scheme-with-exception-handler (rontolisp::%scheme-ensure-procedure handler)
+				                                                            (rontolisp::%scheme-ensure-procedure thunk))))
+				("error-object?" base pred ((x) (typep x 'condition)))
+				("error-object-message" base value ((x) (rontolisp::%scheme-error-object-message x)))
+				("error-object-irritants" base value ((x) (rontolisp::%scheme-error-object-irritants x)))
+				("read-error?" base pred ((x) (typep x 'reader-error)))
+				("file-error?" base pred ((x) (typep x 'file-error)))
 
 			;; --- output: the current output port only ---
 			("newline" base effect (() (terpri)))

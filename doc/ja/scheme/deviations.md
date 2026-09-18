@@ -12,8 +12,14 @@
 - 第一級の `values` -- `(apply values '(1 2))`、変数経由の `values`、`eval` の中の `values`
   -- は、コンパイルされたバックエンドでは最初の値だけを返します。インタプリタはすべてを
   返します。呼び出しとして書いた `(values 1 2)` はどこでもすべてを返します。
-- 捕捉されない `error` は、メッセージと irritant を表示してプログラムを終了します。
-  捕捉する `guard` はありません。
+- **例外は巻き戻しの後で捕捉されます。** `guard` は本体を抜けた後で節を実行するため、
+  どの節も選ばれなければ `guard` からオブジェクトを再び発生させます。外側のハンドラは本体の
+  `raise-continuable` を再開できません。`with-exception-handler` のハンドラは `raise`、
+  `raise-continuable`、`error` の場所で実行されますが、組み込み手続きのエラーでは `thunk`
+  を抜けた後で実行されます。WebAssembly では、機械がトラップするエラー（ペアでないものの
+  `car`、範囲外の添字）は発生させられずにプログラムを終了します。捕捉されない `error` は
+  メッセージと irritant を、捕捉されない `raise` はそのオブジェクトを表示してプログラムを
+  終了します。
 - レコードは Common Lisp の `#S(...)` 構文で表示されます。`equal?` はレコードを同一性で
   比較します。
 - `write` は `'x` を `(quote x)` と、未規定値を `#!unspecific` と表示します。未規定値は
@@ -26,7 +32,7 @@
 
 ## 未対応
 
-`define-library`、`guard` / `raise`、
+`define-library`、
 `parameterize`、`case-lambda`、バイトベクタ、現在の出力ポートと入力ポート以外のポート
 （文字列ポート、および `read` / `write` / `display` へのポート引数）、
 `(scheme char)` などのライブラリ、`|...|` 識別子、

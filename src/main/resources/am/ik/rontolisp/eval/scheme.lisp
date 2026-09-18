@@ -403,8 +403,10 @@
             (= code 96) (= code 44) (= code 124)))))
 
 (defun rontolisp::%scheme-read-error (message datum)
-  (error "~A"
-   (rontolisp::%scheme-error-message message (if datum (list datum) nil))))
+  (rontolisp::%scheme-raise
+   (make-condition 'rontolisp::%scheme-read-error-condition
+                   :message message
+                   :irritants (if datum (list datum) nil))))
 
 (defun rontolisp::%scheme-skip-atmosphere ()
   (do ()
@@ -1363,6 +1365,130 @@
     (dolist (irritant irritants)
       (write-char #\Space)
       (rontolisp::%scheme-print irritant t))))
+
+;; --- exceptions (R7RS 6.11) -------------------------------------------------------
+;; The handlers raise and raise-continuable consult are a Scheme-level stack,
+;; %scheme-handlers: a with-exception-handler procedure, or the catch tag of a guard.
+;; A raise calls the innermost procedure with the stack outside it in effect -- where
+;; the raise stands, with no Common Lisp condition made -- or throws its object to the
+;; innermost guard. A condition a built-in signals is caught by the handler-case of the
+;; nearest guard or with-exception-handler instead, so its handler runs at that
+;; boundary, after the unwinding, on every backend alike. A raise no handler takes
+;; becomes a %scheme-raise condition around its object: what an uncaught raise
+;; reports, and what a Common Lisp handler-case around Scheme code sees.
+;; An error object is any condition: error makes a %scheme-error, which keeps its
+;; message and irritants apart; a built-in's condition answers its report and ().
+(defvar rontolisp::%scheme-handlers nil)
+
+(define-condition rontolisp::%scheme-error (error)
+  ((rontolisp::%scheme-error-message-slot :initarg :message
+    :reader rontolisp::%scheme-error-message-of)
+   (rontolisp::%scheme-error-irritants-slot :initarg :irritants
+    :reader rontolisp::%scheme-error-irritants-of))
+  (:report
+   (lambda (c stream)
+     (write-string (rontolisp::%scheme-error-message
+                    (rontolisp::%scheme-error-message-of c)
+                    (rontolisp::%scheme-error-irritants-of c)) stream))))
+
+;; What read raises on malformed input: an error object read-error? answers #t for.
+(define-condition rontolisp::%scheme-read-error-condition
+    (rontolisp::%scheme-error reader-error)
+  ())
+
+(define-condition rontolisp::%scheme-raise (error)
+  ((rontolisp::%scheme-raise-payload-slot :initarg :payload
+    :reader rontolisp::%scheme-raise-payload))
+  (:report
+   (lambda (c stream)
+     (write-string (with-output-to-string (*standard-output*)
+                     (rontolisp::%scheme-print
+                      (rontolisp::%scheme-raise-payload c) t)) stream))))
+
+(defun rontolisp::%scheme-signal-error (message irritants)
+  (rontolisp::%scheme-raise
+   (make-condition 'rontolisp::%scheme-error
+                   :message message
+                   :irritants irritants)))
+
+(defun rontolisp::%scheme-raise (x) (rontolisp::%scheme-dispatch x nil))
+
+(defun rontolisp::%scheme-raise-continuable (x)
+  (rontolisp::%scheme-dispatch x t))
+
+;; Hands X to the innermost handler, with the handlers outside it in effect. A
+;; procedure's value answers a continuable raise; returning from any other raise is a
+;; secondary error, raised where the handler ran (R7RS 6.11).
+(defun rontolisp::%scheme-dispatch (x continuable)
+  (let ((handlers rontolisp::%scheme-handlers))
+    (cond ((null handlers) (error 'rontolisp::%scheme-raise :payload x))
+          ((functionp (car handlers))
+           (let ((value
+                  (let ((rontolisp::%scheme-handlers (cdr handlers)))
+                    (funcall (car handlers) x))))
+             (if continuable
+                 value
+                 (let ((rontolisp::%scheme-handlers (cdr handlers)))
+                   (rontolisp::%scheme-handler-returned x)))))
+          (t (throw (car handlers) x)))))
+
+(defun rontolisp::%scheme-handler-returned (x)
+  (rontolisp::%scheme-signal-error
+   (rontolisp::%scheme-error-message
+    "handler returned from non-continuable exception:" (list x)) nil))
+
+;; What a guard clause or a handler is handed for the condition C a handler-case caught.
+(defun rontolisp::%scheme-condition-object (c)
+  (if (typep c 'rontolisp::%scheme-raise)
+      (rontolisp::%scheme-raise-payload c)
+      c))
+
+(defun rontolisp::%scheme-with-exception-handler (handler thunk)
+  (handler-case (let ((rontolisp::%scheme-handlers
+                       (cons handler rontolisp::%scheme-handlers)))
+                  (funcall thunk))
+    ;; A raise no handler took passed this one already: on its way out.
+    (rontolisp::%scheme-raise (c)
+      (error 'rontolisp::%scheme-raise
+             :payload (rontolisp::%scheme-raise-payload c)))
+    (error (c)
+      (funcall handler c)
+      (rontolisp::%scheme-handler-returned c))))
+
+;; (guard (var clause...) body...): BODY a thunk, HANDLER a procedure of the raised
+;; object running the clauses -- and raising the object again when none is taken --
+;; in the guard's dynamic environment, after the body has been unwound. The body
+;; answers its first value only.
+(defun rontolisp::%scheme-guard (body handler)
+  (let ((tag (list nil)) (result nil))
+    (let ((x
+           (catch tag
+             (handler-case (progn
+                             (setq result
+                                   (let ((rontolisp::%scheme-handlers
+                                          (cons tag
+                                                rontolisp::%scheme-handlers)))
+                                     (funcall body)))
+                             tag)
+               (error (c) (rontolisp::%scheme-condition-object c))))))
+      (if (eq x tag) result (funcall handler x)))))
+
+(defun rontolisp::%scheme-error-object-message (x)
+  (cond
+   ((typep x 'rontolisp::%scheme-error) (rontolisp::%scheme-error-message-of x))
+   ((typep x 'condition) (princ-to-string x))
+   (t (rontolisp::%scheme-not-an-error-object "error-object-message" x))))
+
+(defun rontolisp::%scheme-error-object-irritants (x)
+  (cond
+   ((typep x 'rontolisp::%scheme-error)
+    (rontolisp::%scheme-error-irritants-of x))
+   ((typep x 'condition) nil)
+   (t (rontolisp::%scheme-not-an-error-object "error-object-irritants" x))))
+
+(defun rontolisp::%scheme-not-an-error-object (name x)
+  (rontolisp::%scheme-signal-error
+   (concatenate 'string name ": not an error object:") (list x)))
 
 ;; exit and emergency-exit (R7RS 6.14): #t or no argument is success, #f failure, an
 ;; integer the status itself, masked to eight bits the way uiop:quit masks it. exit

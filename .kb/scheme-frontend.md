@@ -51,6 +51,7 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | named `let` whose name escapes; `letrec`; internal `define` | bind to nil, `setq` a `lambda`, `funcall` | the shape `labels` itself lowers to (`.kb/flet-labels.md`), so `labels` would buy no direct call |
 | `cond` `case` `and` `or` `when` `unless` `do` | desugared to `if`/`let`/`begin`/named `let` first | spelled with identity-compared `CORE_*` symbols: `(define (f if) (or if 1))` still gets the real `if` |
 | `call/cc` | `block` + a closure doing `return-from` (`%scheme-call/cc`) | escape-only, one-shot; crosses lambdas through `CrossLambdaExitLowering` |
+| `(guard (v clause..) body..)` | `(%scheme-guard (lambda () body..) (lambda (C) (let ((v C)) (cond clause.. (else (%scheme-raise C))))))` | a Scheme-level handler stack plus `handler-case`, "Exceptions" below |
 | `dynamic-wind` | `before`, then `unwind-protect` | the exit half runs on every exit channel; re-entry does not exist |
 | `(call-with-values (lambda () ..) (lambda (a b) ..))`, `let-values`, `define-values` | `multiple-value-bind` | the syntactic tier (`.kb/multiple-values.md`). Any other shape: `(apply consumer (multiple-value-list (funcall producer)))`. A loop's `(values ..)` result survives the `setq` into the result variable because `values` publishes through `%mv-spill` |
 | `define-record-type` (top level only) | `defstruct` with `(:conc-name nil)`, each slot NAMED after its accessor, a BOA constructor; the modifier a `defun` over `(setf (accessor r) v)` answering the unspecified object | `defstruct` is what registers the instance layout on every backend (`.kb/defstruct.md`); the accessor IS the generated one, no wrapper call. The predicate answers T/NIL and is a `pred` (`GlobalPredicate`) |
@@ -449,7 +450,7 @@ included), `'`/`` ` ``/`,`/`,@` as `quote`/`quasiquote`/`unquote`/`unquote-splic
 lists, `#( )`, dotted pairs, `;`/`#;`/`#| |#` skipped -- or `(eq? (read) 'quit)` is
 false. Refusals match the frontend: `|...|`, `+inf.0`/`+nan.0`, bytevectors,
 `[`/`]`/`{`/`}`, unsupported `#`, `(|...|/|char|)` by name; an incomplete datum
-signals (no `guard` yet to catch it with).
+raises a read error (`read-error?`, "Exceptions" below).
 
 - **EOF is a `defstruct` singleton** (`%scheme-eof`, one `%scheme-eof-instance`):
   unforgeable (no read syntax, `symbol?` false), prints `#<eof>` like Gauche,
@@ -554,6 +555,67 @@ lowering would have hidden both from the scans that run first.
   `aTemplateBinderCaptures...`, `aMisusedMacroIsAPositionedError`,
   `strictR7rsRefusesASyntaxDefinitionOverAnImport`) and
   `SchemeSessionTest.aMacroDefinedAtOnePromptIsExpandedAtTheNext`.
+
+## Exceptions (`guard`, `raise`, `with-exception-handler`; 2026-09-18, `.todo/865`)
+
+**Scheme raises go through a Scheme-level handler stack; built-in errors through
+`handler-case`.** `rontolisp::%scheme-handlers` (a `defvar`, bound by `let`) holds, innermost
+first, `with-exception-handler` procedures and `guard` catch tags. `raise` /
+`raise-continuable` (`%scheme-dispatch`) call the innermost procedure with the stack
+outside it bound -- where the raise stands, no condition made -- or `throw` the object to
+the innermost guard's tag. A procedure returning answers a `raise-continuable`; from
+anything else it raises the secondary error `handler returned from non-continuable
+exception: <obj>` (message, no irritants -- Gauche's `error-object-irritants` is `()` too)
+with the same outer stack. Stack empty: `(error '%scheme-raise :payload obj)`, the
+condition whose report is the payload as `write` spells it -- what an uncaught raise
+reports and what a Common Lisp `handler-case` around Scheme code catches.
+
+- **`handler-case` catches what a built-in signals** (`(+ 1 'a)`, an internal
+  `(error "~A" ..)` of `scheme.lisp`): `%scheme-guard` and `%scheme-with-exception-handler`
+  wrap their thunk in one, so a built-in error's handler runs at that boundary, after the
+  unwinding, on ALL FOUR backends alike. `handler-bind` would run it at the signal point on
+  the interpreter only (`.kb/error-handling.md`, "Deviations") and puts the program in
+  restart mode. `with-exception-handler`'s `handler-case` passes a `%scheme-raise` through
+  (re-signalled typed): that raise already went past its handler. A guard's catches one
+  (a thread's raise re-signalled by `parallel-execute`'s join).
+- **Error objects are conditions.** `error` raises a `make-condition` of `%scheme-error`
+  (message and irritants slots, `:report` = `%scheme-error-message`); `read` a
+  `%scheme-read-error-condition`, whose second parent is `reader-error` (lite multiple
+  parents) so `read-error?` is `(typep x 'reader-error)`. `error-object?` is `(typep x
+  'condition)`: a built-in's condition is an error object whose message is its report and
+  whose irritants are `()`, as in Gauche. `file-error?` is `(typep x 'file-error)`; no
+  Scheme procedure opens a file.
+- **Every signal is TYPED.** Raising a caught condition again goes into a fresh
+  `%scheme-raise` around it, never `(error c)`: a computed designator bails
+  `conditionNarrowing` and bakes the run-time error dispatch plus every condition class in
+  (+60 KB class / +73 KB wasm measured on a CL probe).
+- **Stated deviations** (doc pages): a guard's clauses run after the body is left and a
+  clause-less fall-through raises again from the guard, so an outer handler cannot resume a
+  body's `raise-continuable` (Gauche answers 11 where this is a secondary error, the
+  `a-guard-reraise-...` standalone case); a guard answers its body's first value; on wasm
+  `car` of a non-pair and an out-of-range index are traps no handler sees (arithmetic type
+  errors are catchable, so the corpus uses `(+ 1 'a)`); `eval` refuses `guard` by name
+  (its keyword list), while `raise` and the rest reach `eval` through the generated table.
+- The guard lowering spells its re-raise and helpers as `(raw ..)` (`CORE_RAW`), so a user
+  `define` of `raise` does not capture it. `SchemeExpander` scopes the guard variable to
+  the clauses.
+- Cost (2026-09-18, x86-64 Linux, Java 25; `-o P.class --class-name P` / `-o p.wasm`): a
+  program spelling none of these names is byte-identical (`hello.scm` 1,661 / 510 B,
+  `(display (list 1 'a "s"))` 74,022 / 11,481 B, `(twice add1 5)` 79,678 / 24,993 B -- the
+  pruner keys the conditions, `.kb/library-defun-pruning.md`). An uncaught-`error` program
+  `(define (f x) (if (< x 0) (error "negative:" x) x)) (display (f 3))` went from
+  78,423 / 22,616 to 100,023 / 41,757 B: the condition classes and their report lambdas (on
+  wasm the old string message was dropped outside EH mode; a report is live code).
+  `(display (guard (e (#t (list 'caught e))) (raise 'boom)))` is 104,738 / 46,989 B and the
+  `with-exception-handler` + `raise-continuable` probe 105,449 / 46,888 B. The first cut --
+  `handler-bind` for the handler, `(error c)` for the re-raise -- measured 168,349 /
+  127,194 B and 161,939 / 120,811 B for the same two.
+- Corpus (2026-09-18): no SICP sample spells a new name; `SicpCorpusE2eTest` after the
+  change of `error` 5,262 legs, 0 failures, 17 skipped, the manifest unchanged.
+- Pinned by the `guard-...`, `with-exception-handler-...`, `read-raises-a-read-error`
+  cases of `scheme-spec.yaml` (all four backends, Gauche 0.9.15 `-r7` output), its three
+  exception `standalone:` cases, `SchemeLoweringTest.aGuardIsABodyThunk...`,
+  `RontoLispCliTest.theSchemeReplCatchesAndReportsRaisedObjects`.
 
 ## A session (`SchemeSession`, `SchemeLowering.interact`)
 
@@ -780,7 +842,7 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 ## Not here yet (each its own follow-up)
 
-`define-library`, `guard`/`raise` (onto `handler-case`), `parameterize` (the special-`let`
+`define-library`, `parameterize` (the special-`let`
 restore), bytevectors (the `(unsigned-byte 8)` pack), ports beyond the current output
 and input ports (string ports, a port argument to `read`/`write`/`display`;
 `%STREAM` instances), `(scheme char)` and the other libraries, `|...|`

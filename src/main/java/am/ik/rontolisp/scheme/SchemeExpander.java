@@ -481,6 +481,28 @@ final class SchemeExpander {
 				}
 				yield rebuild(form, head, out);
 			}
+			case GUARD -> {
+				// (guard (var clause...) body...): var is bound in the clauses only.
+				atLeast(parts, 3);
+				List<LispVal> spec = elementsOrMalformed(parts.get(1));
+				if (spec.isEmpty()) {
+					throw new MalformedException();
+				}
+				Env inner = new Env(env);
+				List<LispVal> rewrittenSpec = new ArrayList<>();
+				rewrittenSpec.add(bindIdentifier(spec.get(0), inner));
+				for (LispVal clauseDatum : spec.subList(1, spec.size())) {
+					List<LispVal> rewritten = new ArrayList<>();
+					for (LispVal expression : elementsOrMalformed(clauseDatum)) {
+						rewritten.add(expression(expression, inner));
+					}
+					rewrittenSpec.add(inheritList(clauseDatum, rewritten));
+				}
+				List<LispVal> out = new ArrayList<>();
+				out.add(inheritList(parts.get(1), rewrittenSpec));
+				out.addAll(body(parts.subList(2, parts.size()), new Env(env)));
+				yield rebuild(form, head, out);
+			}
 			case DEFINE_RECORD_TYPE, IMPORT -> strip(form);
 			case DEFINE_SYNTAX -> throw this.host
 				.error("a syntax definition is only allowed at the top level or at the head of a body", form);
