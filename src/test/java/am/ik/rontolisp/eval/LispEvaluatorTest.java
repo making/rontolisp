@@ -6435,8 +6435,7 @@ class LispEvaluatorTest {
 		assertThat(eval("(copy-list '(1 2 . 3))").print()).isEqualTo("(1 2 . 3)");
 		assertThat(eval("(let* ((a (list 1 2)) (b (copy-list a))) (list b (eq a b) (eq (cdr a) (cdr b))))").print())
 			.isEqualTo("((1 2) NIL NIL)");
-		assertThat(eval("(handler-case (copy-list 5) (type-error () :type-error))").print())
-			.isEqualTo(":TYPE-ERROR");
+		assertThat(eval("(handler-case (copy-list 5) (type-error () :type-error))").print()).isEqualTo(":TYPE-ERROR");
 	}
 
 	@Test
