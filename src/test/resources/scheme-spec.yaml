@@ -966,6 +966,20 @@ cases:
     expected: |
       (1 2 (a . b) (a b c))
       ("aAb" "line continued" x (quasiquote (a (unquote b) (unquote-splicing c))))
+  - name: fold-case-directive-folds-identifiers-and-character-names-not-strings
+    source: |
+      #!fold-case
+      (DEFINE (INCR X) (+ X 1))
+      (WRITE
+       (LIST (INCR 41) (SYMBOL->STRING (QUOTE Bar)) (CHAR->INTEGER #\NEWLINE)))
+      (NEWLINE)
+      #!no-fold-case
+      (define (bump x) (+ x 1))
+      (write (list (bump 1) (symbol->string (quote Bar)) "STILL SHOUTING"))
+      (newline)
+    expected: |
+      (42 "bar" 10)
+      (2 "Bar" "STILL SHOUTING")
   - name: the-sicp-vocabulary-not-r7rs-visible-without-import-like-base-and-write
     source: |
       (write (list true false nil))

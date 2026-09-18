@@ -5,6 +5,7 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import am.ik.rontolisp.LispArray;
@@ -70,6 +71,11 @@ final class SchemeReader {
 	private final Map<LispCons, Integer> offsets = new IdentityHashMap<>();
 
 	private int pos;
+
+	// R7RS 7.1.1 <directive>: #!fold-case / #!no-fold-case, toggled while reading this
+	// file. Off by default; folds identifiers and character NAMES with a simple
+	// lower-case, never string literals or the character itself.
+	private boolean foldCase;
 
 	SchemeReader(String input, @Nullable String file) {
 		this.input = input;
@@ -278,13 +284,16 @@ final class SchemeReader {
 			return new LispChar(first);
 		}
 		String name = new StringBuilder().appendCodePoint(first).append(this.input, nameStart, this.pos).toString();
-		Integer named = CHARACTER_NAMES.get(name);
+		// #!fold-case folds the NAME, not the character it names (an unadorned #\A is
+		// untouched -- the single-codepoint case above never reaches here).
+		String lookup = this.foldCase ? name.toLowerCase(Locale.ROOT) : name;
+		Integer named = CHARACTER_NAMES.get(lookup);
 		if (named != null) {
 			return new LispChar(named);
 		}
-		if (first == 'x') {
+		if (lookup.charAt(0) == 'x') {
 			try {
-				return new LispChar(Integer.parseInt(name.substring(1), 16));
+				return new LispChar(Integer.parseInt(lookup.substring(1), 16));
 			}
 			catch (NumberFormatException ex) {
 				// falls through to the unknown-name error
@@ -379,7 +388,7 @@ final class SchemeReader {
 		if (token.equals("+inf.0") || token.equals("-inf.0") || token.equals("+nan.0") || token.equals("-nan.0")) {
 			throw error("infinities and NaN are not supported: " + token, start);
 		}
-		return new LispSymbol(token);
+		return new LispSymbol(this.foldCase ? token.toLowerCase(Locale.ROOT) : token);
 	}
 
 	private String token() {
@@ -518,9 +527,26 @@ final class SchemeReader {
 					throw error("a datum must follow '#;'", start);
 				}
 			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '!') {
+				readDirective();
+			}
 			else {
 				return;
 			}
+		}
+	}
+
+	// #!fold-case / #!no-fold-case: an R7RS <directive>, part of <atmosphere> like a
+	// comment -- it produces no datum, only the side effect of toggling case folding
+	// for the rest of this file (or until the counterpart directive).
+	private void readDirective() {
+		int start = this.pos;
+		this.pos += 2;
+		String word = token();
+		switch (word) {
+			case "fold-case" -> this.foldCase = true;
+			case "no-fold-case" -> this.foldCase = false;
+			default -> throw error("unsupported '#' syntax: #!" + word, start);
 		}
 	}
 

@@ -3,7 +3,8 @@
 - **リーダー**（大文字小文字を区別）: `#t` `#f` `#true` `#false`、整数、小数、有理数、
   `#x` `#b` `#o` `#d`、`#\a` `#\space` `#\newline` `#\x41`、
   `\n \t \" \\ \xHH;` を含む文字列、`#( )` ベクタ、ドット対、`'` `` ` `` `,` `,@`、`;`、`#;`、
-  `#| |#`。
+  `#| |#`、`#!fold-case` / `#!no-fold-case`（ファイル単位。識別子と文字名を畳み込む
+  -- 文字列や文字そのものは対象外 -- 対になる指示子かファイル末尾まで有効）。
 - **特殊形式**: `define`（両形式。内部定義は `letrec*`）、`define-values`、
   `lambda`、`if`、`cond`（`else`、`=>`）、`case`、`and`、`or`、`when`、`unless`、`let`、
   `let*`、`letrec`、`letrec*`、名前付き `let`、`do`、`begin`、`set!`、`quote`、`quasiquote`、

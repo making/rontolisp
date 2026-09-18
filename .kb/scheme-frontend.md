@@ -366,6 +366,13 @@ signals (no `guard` yet to catch it with).
   instead of its own): a piped session holds no second look-ahead of its own, so a
   `(read)` inside it -- a `(driver-loop)` typed at the prompt taking over -- sees
   what was typed next. JLine (a real terminal, interactive) is unchanged.
+- **`#!fold-case` / `#!no-fold-case` (`.todo/858`)**: an R7RS `<directive>`, part of
+  `<atmosphere>` like a comment -- no datum, only the side effect of folding
+  identifiers (`string-downcase`, never string literals) and `#\`-style character
+  NAMES (not the character a bare `#\A` names) until the counterpart directive. Kept
+  keyed on `*standard-input*` the same way as the pushback cell above, so a rebind
+  (a fresh "file") starts folding off again; `SchemeReader` keeps the same flag as an
+  instance field, one per compile-time read.
 
 ## A session (`SchemeSession`, `SchemeLowering.interact`)
 

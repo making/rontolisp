@@ -80,4 +80,31 @@ class SchemeReaderTest {
 			.hasMessage("test.scm:1:1: infinities and NaN are not supported: +inf.0");
 	}
 
+	@Test
+	void foldCaseTogglesOnAndOffAndOnAgainWithinOneFile() {
+		assertThat(printed("#!fold-case FOO Foo #!no-fold-case FOO Foo #!fold-case FOO"))
+			.isEqualTo("[|foo|, |foo|, FOO, |Foo|, |foo|]");
+	}
+
+	@Test
+	void foldCaseFoldsCharacterNamesNotTheCharacterItself() {
+		assertThat(printed("#!fold-case #\\NEWLINE #\\A #\\SPACE")).isEqualTo("[#\\Newline, #\\A, #\\Space]");
+		assertThatThrownBy(() -> read("#\\NEWLINE")).hasMessage("test.scm:1:1: unknown character name: #\\NEWLINE");
+	}
+
+	@Test
+	void foldCaseDoesNotFoldStrings() {
+		assertThat(printed("#!fold-case \"Foo\"")).isEqualTo("[\"Foo\"]");
+	}
+
+	@Test
+	void foldCaseIsAtmosphereAndDoesNotShiftWhatFollows() {
+		assertThatThrownBy(() -> read("#!fold-case (a))")).hasMessage("test.scm:1:16: unexpected ')'");
+	}
+
+	@Test
+	void anUnknownBangDirectiveIsRefusedByName() {
+		assertThatThrownBy(() -> read("#!bogus 1")).hasMessage("test.scm:1:1: unsupported '#' syntax: #!bogus");
+	}
+
 }
