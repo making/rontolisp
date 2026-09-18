@@ -125,7 +125,7 @@ class SchemeBuiltinsTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
 		LispVal eof = null;
-		for (SchemeTopLevel topLevel : Scheme.session().read("(eof-object)")) {
+		for (SchemeTopLevel topLevel : Scheme.session(SchemeStandard.RONTOLISP).read("(eof-object)")) {
 			for (LispVal form : topLevel.forms()) {
 				eof = evaluator.eval(form);
 			}
