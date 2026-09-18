@@ -1721,6 +1721,122 @@ cases:
       (sym y)
       (from-eval 9)
       12
+  # parameterize / make-parameter (R7RS 4.2.6): the binding is dynamic, the converter runs
+  # on the initial value and on each parameterize value, and a body is a <body>.
+  - name: parameterize-binds-for-the-dynamic-extent-of-its-body
+    source: |
+      (define prm-p (make-parameter 10))
+      (define prm-q (make-parameter 5 (lambda (x) (* x 2))))
+      (write (list (prm-p) (prm-q)))
+      (newline)
+      (parameterize ((prm-p 1) (prm-q 3))
+        (write (list (prm-p) (prm-q)))
+        (newline))
+      (write (list (prm-p) (prm-q)))
+      (newline)
+      (define (prm-show) (prm-p))
+      (write (parameterize ((prm-p 'inner)) (prm-show)))
+      (newline)
+      (write (parameterize ((prm-p 1)) (parameterize ((prm-p 2)) (prm-p))))
+      (newline)
+      (write (parameterize () 'no-bindings))
+      (newline)
+      (write (parameterize ((prm-p 'body))
+               (define local (list (prm-p) 'defined))
+               local))
+      (newline)
+      (write (list (procedure? prm-p) (prm-p)))
+      (newline)
+      (define prm-traced
+        (make-parameter 1 (lambda (x) (write (list 'convert x)) (newline) x)))
+      (parameterize ((prm-traced 2)) (write (prm-traced)) (newline))
+      (write (prm-traced))
+      (newline)
+      (define (prm-count-down n)
+        (if (= n 0) (prm-p) (parameterize ((prm-p n)) (prm-count-down (- n 1)))))
+      (write (list (prm-count-down 1000) (prm-p)))
+      (newline)
+      (write (parameterize ((prm-q 7)) (map (lambda (x) (+ x (prm-q))) '(1 2))))
+      (newline)
+      (write (call-with-values (lambda () (parameterize ((prm-p 1)) (values (prm-p) 2))) list))
+      (newline)
+      (write (let ((prm-p (lambda () 'shadowed)) (parameterize list)) (parameterize (prm-p))))
+      (newline)
+    expected: |
+      (10 10)
+      (1 6)
+      (10 10)
+      inner
+      2
+      no-bindings
+      (body defined)
+      (#t 10)
+      (convert 1)
+      (convert 2)
+      2
+      1
+      (1 10)
+      (15 16)
+      (1 2)
+      (shadowed)
+  # A raise, a built-in error, a call/cc escape and a converter error each leave the
+  # value as it was; a with-exception-handler handler runs where the raise stands. A
+  # parallel-execute thread starts with the caller's bindings (Gauche's threads do; not
+  # checked against it: Gauche has no parallel-execute).
+  - name: parameterize-is-restored-on-every-exit
+    source: |
+      (define prm-r (make-parameter 'outer))
+      (write (guard (e (#t (list 'caught e (prm-r))))
+        (parameterize ((prm-r 'raised)) (raise (prm-r)))))
+      (newline)
+      (write (prm-r))
+      (newline)
+      (write (guard (e (#t (prm-r))) (parameterize ((prm-r 'built-in)) (+ 1 'a))))
+      (newline)
+      (write (with-exception-handler
+              (lambda (c) (list 'handler-sees (prm-r)))
+              (lambda () (parameterize ((prm-r 'at-raise)) (raise-continuable 1)))))
+      (newline)
+      (write (call-with-current-continuation
+              (lambda (k) (parameterize ((prm-r 'escaped)) (k (prm-r))))))
+      (newline)
+      (write (prm-r))
+      (newline)
+      (write (dynamic-wind (lambda () #f)
+                           (lambda () (parameterize ((prm-r 'wound)) (prm-r)))
+                           (lambda () (write (prm-r)) (newline))))
+      (newline)
+      (define prm-n (make-parameter 0 (lambda (x) (if (number? x) x (error "not a number:" x)))))
+      (write (guard (e ((error-object? e) (list (error-object-message e) (error-object-irritants e))))
+        (parameterize ((prm-r 'never) (prm-n 'a)) (prm-r))))
+      (newline)
+      (write (list (prm-r) (prm-n)))
+      (newline)
+      (define-syntax with-r
+        (syntax-rules () ((_ v body ...) (parameterize ((prm-r v)) body ...))))
+      (write (let ((prm-r (lambda () 'user))) (with-r 'macro (prm-r))))
+      (newline)
+      (write (with-r 'macro (prm-r)))
+      (newline)
+      (define prm-seen 'none)
+      (parameterize ((prm-r 'in-thread))
+        (parallel-execute (lambda () (set! prm-seen (prm-r)))))
+      (write (list prm-seen (prm-r)))
+      (newline)
+    expected: |
+      (caught raised outer)
+      outer
+      outer
+      (handler-sees at-raise)
+      escaped
+      outer
+      outer
+      wound
+      ("not a number:" (a))
+      (outer 0)
+      user
+      macro
+      (in-thread outer)
 # An uncaught application of a non-procedure ends the program, so these cannot
 # join the concatenated corpus above -- one program per case, per backend, like
 # ci-spec.yaml's standalone: list (.todo/851). The dynamic-wind puts the wasm
@@ -1780,6 +1896,23 @@ standalone:
     stdout: |
     stderr: |
       Unhandled condition: handler returned from non-continuable exception: y
+    fails: true
+  # A parameter object takes no argument (Gauche's sets the value: R7RS leaves it an
+  # error), and parameterize refuses what is not a parameter object by name.
+  - name: a-parameter-object-takes-no-argument
+    source: |
+      (define standalone-parameter (make-parameter 1))
+      (dynamic-wind (lambda () #t) (lambda () (standalone-parameter 5)) (lambda () #t))
+    stdout: |
+    stderr: |
+      Unhandled condition: a parameter object takes no argument: 5
+    fails: true
+  - name: parameterize-refuses-what-is-not-a-parameter-object
+    source: |
+      (dynamic-wind (lambda () #t) (lambda () (parameterize ((5 1)) 'body)) (lambda () #t))
+    stdout: |
+    stderr: |
+      Unhandled condition: parameterize: not a parameter object: 5
     fails: true
   # --scheme-standard: a valid R7RS program means the same under both standards, and
   # strict R7RS keeps the sicp/r5rs names out of eval's reach too.

@@ -165,6 +165,7 @@
 | `dynamic-wind` | `(dynamic-wind (lambda () (display "before ")) (lambda () (display "during ")) (lambda () (display "after")))` | `before during after` を出力 |
 | `values` | `(values 1 2)` | `1, 2` |
 | `call-with-values` | `(call-with-values (lambda () (values 1 2)) cons)` | `(1 . 2)` |
+| `make-parameter` | `((make-parameter 5 (lambda (x) (* x 2))))` | `10` |
 
 ## 例外
 

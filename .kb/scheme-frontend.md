@@ -53,6 +53,7 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `call/cc` | `block` + a closure doing `return-from` (`%scheme-call/cc`) | escape-only, one-shot; crosses lambdas through `CrossLambdaExitLowering` |
 | `(guard (v clause..) body..)` | `(%scheme-guard (lambda () body..) (lambda (C) (let ((v C)) (cond clause.. (else (%scheme-raise C))))))` | a Scheme-level handler stack plus `handler-case`, "Exceptions" below |
 | `dynamic-wind` | `before`, then `unwind-protect` | the exit half runs on every exit channel; re-entry does not exist |
+| `(parameterize ((p v)..) body..)` | `(%scheme-parameterize (list p v ..) (lambda () body..))`; no binding: `(let () body..)` | a special `let` inside the helper, "Parameters" below |
 | `(call-with-values (lambda () ..) (lambda (a b) ..))`, `let-values`, `define-values` | `multiple-value-bind` | the syntactic tier (`.kb/multiple-values.md`). Any other shape: `(apply consumer (multiple-value-list (funcall producer)))`. A loop's `(values ..)` result survives the `setq` into the result variable because `values` publishes through `%mv-spill` |
 | `define-record-type` (top level only) | `defstruct` with `(:conc-name nil)`, each slot NAMED after its accessor, a BOA constructor; the modifier a `defun` over `(setf (accessor r) v)` answering the unspecified object | `defstruct` is what registers the instance layout on every backend (`.kb/defstruct.md`); the accessor IS the generated one, no wrapper call. The predicate answers T/NIL and is a `pred` (`GlobalPredicate`) |
 | `quasiquote` | `cons`/`append`/`(coerce .. 'vector)`, constant parts quoted | depth-counted per R7RS: the innermost unquote of a nested template IS evaluated |
@@ -617,6 +618,48 @@ reports and what a Common Lisp `handler-case` around Scheme code catches.
   exception `standalone:` cases, `SchemeLoweringTest.aGuardIsABodyThunk...`,
   `RontoLispCliTest.theSchemeReplCatchesAndReportsRaisedObjects`.
 
+## Parameters (`make-parameter`, `parameterize`; 2026-09-18, `.todo/867`)
+
+**The binding is a special `let` in `scheme.lisp`, never in the lowered program.**
+`rontolisp::%scheme-parameterizations` (a `defvar`) is an alist record -> value, innermost
+first; `%scheme-parameterize` conses the new entries onto it and binds it with `let` around
+the body thunk, so the restore is the one `.kb/dynamic-special-variables.md` gives every
+special on every exit channel -- `raise` to a `guard`, a built-in error, a `call/cc`
+escape, `exit`'s throw -- on all four backends, and a JVM thread sees its own. Keeping
+the `let` in the helper (the `%scheme-handlers` precedent) makes the variable's specialness
+a property of `scheme.lisp` alone; the interpreter loads that lazily, on the first
+`%scheme-` function, so a `let` in the lowered program could be read before the `defvar`.
+
+- **A parameter object is a closure over a `defstruct` record** (`%scheme-parameter`:
+  global value, converter). `(p)` walks the alist, else the record's value. `parameterize`
+  gets the record by calling the procedure with the token `%scheme-parameter-token`; only
+  a parameter answers a record, so anything else is refused by name
+  (`parameterize: not a parameter object: 5`). A procedure that is not a parameter IS
+  called with the token -- Gauche calls it too, with no argument. A cons record would be
+  forgeable by `list`, which answers `(token)`.
+- Every value is converted before any is bound (a converter's error leaves all as they
+  were); the converter runs on the initial value and never on the restore (R7RS 4.2.6).
+- `(p v)` is refused by name (`a parameter object takes no argument: 5`); Gauche sets.
+  Both refusals are `(error "~A" (%scheme-error-message ..))` like
+  `%scheme-ensure-procedure`: a `%scheme-signal-error` condition cost +20 KB class /
+  +17 KB wasm more on the probe below.
+- `%scheme-parallel-execute` hands the alist to each thread through `make-thread`'s
+  bindings, so a thread starts with the caller's values, as the sequential wasm run does.
+  A `parallel-execute` program therefore keeps the `defvar` even when it makes no parameter.
+- `eval` refuses `parameterize` by name (its keyword list); `make-parameter` reaches it
+  through the generated table. `SchemeExpander` walks both halves of a binding as
+  expressions and the body as a `<body>`.
+- Cost (2026-09-18, x86-64 Linux, Java 25; `-o P.class --class-name P` / `-o p.wasm`): a
+  program spelling neither name is byte-identical before and after (`hello.scm` 1,661 /
+  510 B, `(display (list 1 'a "s"))` 74,022 / 11,481, `(twice add1 5)` 79,678 / 24,993,
+  the guard probe 104,738 / 46,989). `(define p (make-parameter 10)) (display
+  (parameterize ((p 1)) (p)))` is 82,688 / 26,714 B -- `(p)` is a variable call, so the
+  right control is `twice` (the ensure-procedure message machinery): ~3.0 KB class /
+  1.7 KB wasm for the parameter machinery itself.
+- Pinned by the two `parameterize-...` cases and the two parameter `standalone:` cases of
+  `scheme-spec.yaml` (all four backends, Gauche 0.9.15 `-r7` output except the thread
+  line and the refusals), `SchemeLoweringTest.parameterizeIsTheParametersAndValuesInOrderAndABodyThunk`.
+
 ## A session (`SchemeSession`, `SchemeLowering.interact`)
 
 `rontolisp --source-language scheme` with no file; reached through `eval/SourceSession`
@@ -842,8 +885,7 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 ## Not here yet (each its own follow-up)
 
-`define-library`, `parameterize` (the special-`let`
-restore), bytevectors (the `(unsigned-byte 8)` pack), ports beyond the current output
+`define-library`, bytevectors (the `(unsigned-byte 8)` pack), ports beyond the current output
 and input ports (string ports, a port argument to `read`/`write`/`display`;
 `%STREAM` instances), `(scheme char)` and the other libraries, `|...|`
 identifiers, reading `+inf.0`/`+nan.0`, internal `define-record-type`, re-entrant continuations,
@@ -944,7 +986,7 @@ Probes behind the first version of this table: `.todo/artefacts/825-minimal-expe
 ## The reference (`doc/<lang>/scheme/reference/`, `.todo/860`)
 
 One page per name `Scheme.providedNames()` answers -- every `SchemeBuiltins` entry and
-constant and every `SchemeLowering.syntaxNames()` keyword, 248 on 2026-09-18 -- under one
+constant and every `SchemeLowering.syntaxNames()` keyword, 250 on 2026-09-18 -- under one
 `_catalog.yaml` (`label: Scheme`, so a search hit on `car` says which language's page it
 is). A category is the library the name is REALLY exported from (Gauche 0.9.15's
 `module-exports` is the oracle): `exact->inexact`/`inexact->exact` under `(scheme r5rs)`

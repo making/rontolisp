@@ -436,6 +436,11 @@ final class SchemeBuiltins {
 				("call/cc" base value ((f) (rontolisp::%scheme-call/cc (rontolisp::%scheme-ensure-procedure f))))
 				("call-with-current-continuation" base value ((f) (rontolisp::%scheme-call/cc (rontolisp::%scheme-ensure-procedure f))))
 				("dynamic-wind" base value ((before thunk after) (rontolisp::%scheme-dynamic-wind (rontolisp::%scheme-ensure-procedure before) (rontolisp::%scheme-ensure-procedure thunk) (rontolisp::%scheme-ensure-procedure after))))
+				;; parameterize is syntax (SchemeLowering); a parameter object is a procedure.
+				("make-parameter" base value ((x) (rontolisp::%scheme-make-parameter x nil))
+				 ((x converter) (rontolisp::%scheme-make-parameter x (rontolisp::%scheme-ensure-procedure converter)))
+				 :function (lambda (x &optional converter)
+				             (rontolisp::%scheme-make-parameter x (if converter (rontolisp::%scheme-ensure-procedure converter)))))
 				("values" base value ((&rest r) (values . r)) :function #'values)
 				("call-with-values" base value
 				 ((producer consumer) (apply (rontolisp::%scheme-ensure-procedure consumer) (multiple-value-list (funcall (rontolisp::%scheme-ensure-procedure producer))))))

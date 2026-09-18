@@ -31,6 +31,7 @@ categories:
       - { slug: else, name: "else" }
       - { slug: arrow, name: "=>" }
       - { slug: guard, name: "guard" }
+      - { slug: parameterize, name: "parameterize" }
       - { slug: import, name: "import" }
       - { slug: define-syntax, name: "define-syntax" }
       - { slug: let-syntax, name: "let-syntax" }
@@ -185,6 +186,7 @@ categories:
       - { slug: dynamic-wind, name: "dynamic-wind" }
       - { slug: values, name: "values" }
       - { slug: call-with-values, name: "call-with-values" }
+      - { slug: make-parameter, name: "make-parameter" }
   - title: "(scheme base): exceptions"
     index_page: scheme/reference/library-base.md
     functions:

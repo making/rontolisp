@@ -503,6 +503,19 @@ final class SchemeExpander {
 				out.addAll(body(parts.subList(2, parts.size()), new Env(env)));
 				yield rebuild(form, head, out);
 			}
+			case PARAMETERIZE -> {
+				// (parameterize ((param value)...) body...): both halves of a binding are
+				// expressions, and the body is a <body> of its own.
+				atLeast(parts, 3);
+				List<LispVal> bindings = new ArrayList<>();
+				for (LispVal binding : elementsOrMalformed(parts.get(1))) {
+					bindings.add(inheritList(binding, pair(binding).stream().map(e -> expression(e, env)).toList()));
+				}
+				List<LispVal> out = new ArrayList<>();
+				out.add(inheritList(parts.get(1), bindings));
+				out.addAll(body(parts.subList(2, parts.size()), new Env(env)));
+				yield rebuild(form, head, out);
+			}
 			case DEFINE_RECORD_TYPE, IMPORT -> strip(form);
 			case DEFINE_SYNTAX -> throw this.host
 				.error("a syntax definition is only allowed at the top level or at the head of a body", form);
