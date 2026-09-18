@@ -133,8 +133,6 @@ sections:
         title: Testing (rove)
       - file: guides/reader-case.md
         title: Reader Case (Upcasing)
-      - file: guides/scheme.md
-        title: Scheme (experimental)
       - file: guides/math-backends.md
         title: Math Function Backends
       - file: guides/clock-and-random.md
@@ -157,3 +155,23 @@ sections:
         title: Compiled eval Limitations
       - file: guides/read-load-limitations.md
         title: Compiled read/load Limitations
+  - title: Scheme (experimental)
+    pages:
+      - file: scheme/index.md
+        title: Overview
+      - file: scheme/repl.md
+        title: REPL
+      - file: scheme/standards.md
+        title: Standards
+      - file: scheme/syntax.md
+        title: Syntax
+      - file: scheme/libraries.md
+        title: Libraries
+      - file: scheme/sicp.md
+        title: SICP Compatibility
+      - file: scheme/eval.md
+        title: eval
+      - file: scheme/deviations.md
+        title: Deviations
+      - file: scheme/common-lisp.md
+        title: Mixing with Common Lisp

@@ -18,5 +18,6 @@ Gauche 0.9.15 check (2026-09-18): `#!fold-case` then `(DISPLAY (CAR (list 1)))` 
   the datums it reads, the same way.
 - Tests: `SchemeReaderTest` (on/off/on within one file, position of what follows),
   and one `scheme-spec.yaml` case (all four backends).
-- Docs: the reader section of the Scheme doc (`guides/scheme.md`, or `scheme/syntax.md` after `.todo/859`), `.kb/scheme-frontend.md`
+- Docs: `doc/{en,ja}/scheme/syntax.md`'s reader bullet (`.todo/859` split the old
+  `guides/scheme.md` into a `scheme/` section of pages), `.kb/scheme-frontend.md`
   "Not here yet".

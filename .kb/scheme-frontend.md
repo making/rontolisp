@@ -6,7 +6,7 @@ those forms to target instead: both backends dispatch on the canonical operator 
 `FreeVarAnalyzer` is a hand walker over the same names, so an unknown head would be a
 silent three-way divergence. Status is experimental -- partial R7RS-small conformance by
 design, no compatibility promise -- and every user surface says so (`--source-language`
-help, the title of `doc/*/guides/scheme.md`). `--no-gc` is refused by name
+help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 (`CompileFrontend.run`): it has no cons cell, no symbol and no closure.
 
 ## Where it sits

@@ -14,8 +14,7 @@ import org.jspecify.annotations.Nullable;
  * {@code (scheme write)}, read case-sensitively and LOWERED to the Common Lisp core forms
  * every pipeline already consumes. Partial conformance by design and no compatibility
  * promise; the subset, the lowering table and the stated deviations are in
- * {@code .kb/scheme-frontend.md} and on the user-facing page
- * {@code doc/en/guides/scheme.md}.
+ * {@code .kb/scheme-frontend.md} and on the user-facing {@code doc/en/scheme/} section.
  *
  * <p>
  * This package depends on the AST types and {@code reader} only. It is reached through
