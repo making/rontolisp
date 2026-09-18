@@ -75,7 +75,7 @@ hand-kept lists:
 | `JvmExportRuntimeBuilder.RUNTIME_CLASS_FILES` | a `:float-vector`/`:float-matrix` export | `RontoFloatArray` + `RontoBoundary` |
 | `JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES` | `rontolisp:http-handler` / `%http-server-start` | `RontoHttpServer`, `RontoHttpClack`, `RontoClackEnv`, `RontoHashTable` |
 | `JvmHttpHandlerRuntimeBuilder.WAR_RUNTIME_CLASS_FILES` | a `.war` or `<servlet>true</servlet>`, IN ADDITION to the served list | `RontoHttpServlet` + `RontoHttpServletInitializer` |
-| `JvmHashRuntimeBuilder.RUNTIME_CLASS_FILES` | `(make-hash-table :test 'equalp)` | `RontoHashTable` again, for `equalpKey` (`.kb/hash-tables.md`) |
+| `JvmHashRuntimeBuilder.RUNTIME_CLASS_FILES` | any hash-table use (`equalpKey` for an `equalp` table, the tombstone machinery for every table -- `.kb/hash-tables.md`) | `RontoHashTable` again |
 
 Path: `JvmRuntimeClassFiles.read` -> `JvmLispCompiler.runtimeClassFiles()` -> `RontoLispCli`
 (beside `-o X.class`, INSIDE `-o X.jar`) and `LispSourceSet` (plugin, `target/classes`);

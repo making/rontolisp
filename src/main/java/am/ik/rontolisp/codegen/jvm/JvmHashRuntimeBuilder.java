@@ -34,7 +34,10 @@ import am.ik.rontolisp.runtime.RontoHashTable;
  * {@code Integer} bucket key can collide with, so the table stays ONE object that
  * {@code _hashP} and the printer recognise by its class alone. Because an entry pair is
  * mutated in place when an existing key is re-stored, that list needs no maintenance on
- * re-put; the pair it holds is the pair the bucket holds.
+ * re-put; the pair it holds is the pair the bucket holds. A REMOVED pair is not unlinked
+ * from it either -- unlinking scans and memmoves, O(n) per removal -- but tombstoned (key
+ * slot nulled, counted under {@code RontoHashTable.DEAD_KEY}), and the list compacts
+ * lazily; see {@code RontoHashTable} for the shape.
  *
  * <p>
  * The generated static helpers (all gated on the program actually using hash tables):
@@ -171,7 +174,7 @@ final class JvmHashRuntimeBuilder {
 	 * The travelling class the {@code equalp} fold is written in -- plain Java over the
 	 * JVM value model, which a bytecode transcription of the same walk would only make
 	 * harder to keep in step with the interpreter's. It goes BESIDE a compiled program
-	 * that makes an {@code equalp} table, like the handle and served-request runtimes
+	 * that uses hash tables, like the handle and served-request runtimes
 	 * ({@code .kb/jvm-export.md}, "What travels"); every other program still compiles to
 	 * exactly one file.
 	 */
@@ -281,12 +284,8 @@ final class JvmHashRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
 		MethodrefConstant listRemoveAt = cp.addMethodref(listClass,
 				cp.addNameAndType(cp.addUtf8("remove"), cp.addUtf8("(I)Ljava/lang/Object;")));
-		MethodrefConstant listRemoveObj = cp.addMethodref(listClass,
-				cp.addNameAndType(cp.addUtf8("remove"), cp.addUtf8("(Ljava/lang/Object;)Z")));
 		MethodrefConstant listClear = cp.addMethodref(listClass,
 				cp.addNameAndType(cp.addUtf8("clear"), cp.addUtf8("()V")));
-		MethodrefConstant listToArray = cp.addMethodref(listClass,
-				cp.addNameAndType(cp.addUtf8("toArray"), cp.addUtf8("()[Ljava/lang/Object;")));
 		MethodrefConstant integerValueOf = cp.addMethodref(integerClass,
 				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(I)Ljava/lang/Integer;")));
 		MethodrefConstant identityHashCode = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/System")),
@@ -297,6 +296,20 @@ final class JvmHashRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8(HASH), cp.addUtf8(HASH_DESC)));
 		MethodrefConstant ordRef = cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(ORD), cp.addUtf8(ORD_DESC)));
 		StringConstant orderKey = cp.addString(ORDER_KEY);
+		StringConstant deadKey = cp.addString(RontoHashTable.DEAD_KEY);
+		ClassConstant rontoHashTableClass = cp.addClass(cp.addUtf8(RontoHashTable.class.getName().replace('.', '/')));
+		ClassConstant mapInterface = cp.addClass(cp.addUtf8("java/util/Map"));
+		// The tombstone machinery
+		// (RontoHashTable.tombstone/liveCount/liveValues/maybeCompact):
+		// removals null the pair's key slot instead of unlinking the order list.
+		MethodrefConstant tombstoneRef = cp.addMethodref(rontoHashTableClass,
+				cp.addNameAndType(cp.addUtf8("tombstone"), cp.addUtf8("(Ljava/util/Map;[Ljava/lang/Object;)V")));
+		MethodrefConstant liveCountRef = cp.addMethodref(rontoHashTableClass,
+				cp.addNameAndType(cp.addUtf8("liveCount"), cp.addUtf8("(Ljava/util/Map;)I")));
+		MethodrefConstant liveValuesRef = cp.addMethodref(rontoHashTableClass,
+				cp.addNameAndType(cp.addUtf8("liveValues"), cp.addUtf8("(Ljava/util/Map;)[Ljava/lang/Object;")));
+		MethodrefConstant maybeCompactRef = cp.addMethodref(rontoHashTableClass,
+				cp.addNameAndType(cp.addUtf8("maybeCompact"), cp.addUtf8("(Ljava/util/Map;)V")));
 		// The compiled representation of the boolean t is the symbol "T" (a bare String).
 		StringConstant trueStr = cp.addString("T");
 		// The equalp fold: the key each of get/put/remove places by, and the marker the
@@ -311,7 +324,7 @@ final class JvmHashRuntimeBuilder {
 					objectHashCode, hashRef, listClass, cp.addClass(cp.addUtf8("java/util/Map")), identityHashCode));
 
 		// _hashMake(): m = new LinkedHashMap(); m.put(ORDER_KEY, new ArrayList());
-		// return m
+		// m.put(DEAD_KEY, 0); return m
 		JvmAsm make = new JvmAsm();
 		make.anew(mapClass);
 		make.dup();
@@ -321,6 +334,12 @@ final class JvmHashRuntimeBuilder {
 		make.anew(listClass);
 		make.dup();
 		make.invokespecial(listInit);
+		make.invokevirtual(mapPut);
+		make.pop();
+		make.dup();
+		make.ldcString(deadKey);
+		make.iconst(0);
+		make.invokestatic(integerValueOf);
 		make.invokevirtual(mapPut);
 		make.pop();
 		make.areturn();
@@ -347,10 +366,10 @@ final class JvmHashRuntimeBuilder {
 				identityTables));
 		methods.add(buildPut(cp, mapClass, listClass, objectClass, objectArrayClass, mapGet, mapPut, listInitCapacity,
 				listAdd, listGet, listSize, integerValueOf, hashRef, ordRef, equalMethod, eqvMethod, eqMethod,
-				ratArrClass, integerClass, identityHashCode, keyRef, testRef, identityTables));
+				ratArrClass, integerClass, identityHashCode, keyRef, testRef, identityTables, maybeCompactRef));
 		methods.add(buildRem(cp, mapClass, listClass, objectArrayClass, mapGet, mapRemove, listGet, listSize,
-				listRemoveAt, listRemoveObj, integerValueOf, hashRef, ordRef, equalMethod, eqvMethod, eqMethod,
-				ratArrClass, integerClass, identityHashCode, trueStr, keyRef, testRef, identityTables));
+				listRemoveAt, integerValueOf, hashRef, equalMethod, eqvMethod, eqMethod, ratArrClass, integerClass,
+				identityHashCode, trueStr, keyRef, testRef, identityTables, tombstoneRef));
 
 		if (identityTables) {
 			methods.addAll(buildIdentityTables(cp, thisClass, mapClass, mapGet, mapPut, trueStr));
@@ -389,6 +408,13 @@ final class JvmHashRuntimeBuilder {
 		clr.checkcast(mapClass);
 		clr.ldcString(orderKey);
 		clr.aload(1);
+		clr.invokevirtual(mapPut);
+		clr.pop();
+		clr.aload(0);
+		clr.checkcast(mapClass);
+		clr.ldcString(deadKey);
+		clr.iconst(0);
+		clr.invokestatic(integerValueOf);
 		clr.invokevirtual(mapPut);
 		clr.pop();
 		if (identityTables) {
@@ -448,11 +474,10 @@ final class JvmHashRuntimeBuilder {
 		methods.add(new HashMethod(cp.addUtf8(CLR), cp.addUtf8(CLR_DESC), identityTables ? 4 : (equalpFold ? 4 : 3),
 				identityTables ? 3 : (equalpFold ? 3 : 2), clr.code));
 
-		// _hashCount(table): return Long.valueOf(_hashOrd(table).size())
+		// _hashCount(table): return Long.valueOf(liveCount(table))
 		JvmAsm count = new JvmAsm();
 		count.aload(0);
-		count.invokestatic(ordRef);
-		count.invokevirtual(listSize);
+		count.invokestatic(liveCountRef);
 		count.op(Opcode.I2L);
 		count.invokestatic(longValueOf);
 		count.areturn();
@@ -461,8 +486,7 @@ final class JvmHashRuntimeBuilder {
 		// _hashSize(table): the same count as a bare int (the printer's :COUNT field)
 		JvmAsm size = new JvmAsm();
 		size.aload(0);
-		size.invokestatic(ordRef);
-		size.invokevirtual(listSize);
+		size.invokestatic(liveCountRef);
 		size.ireturn();
 		methods.add(new HashMethod(cp.addUtf8(SIZE), cp.addUtf8(SIZE_DESC), 1, 1, size.code));
 
@@ -479,11 +503,11 @@ final class JvmHashRuntimeBuilder {
 		hp.areturn();
 		methods.add(new HashMethod(cp.addUtf8(P), cp.addUtf8(P_DESC), 2, 1, hp.code));
 
-		// _hashValues(table): return _hashOrd(table).toArray()
+		// _hashValues(table): the live pairs in insertion order, compacting first when
+		// half dead -- what maphash walks.
 		JvmAsm values = new JvmAsm();
 		values.aload(0);
-		values.invokestatic(ordRef);
-		values.invokevirtual(listToArray);
+		values.invokestatic(liveValuesRef);
 		values.areturn();
 		methods.add(new HashMethod(cp.addUtf8(VALUES), cp.addUtf8(VALUES_DESC), 1, 1, values.code));
 
@@ -764,7 +788,7 @@ final class JvmHashRuntimeBuilder {
 			MethodrefConstant ordRef, MethodrefConstant equalMethod, MethodrefConstant eqvMethod,
 			MethodrefConstant eqMethod, ClassConstant ratArrClass, ClassConstant integerClass,
 			MethodrefConstant identityHashCode, @Nullable MethodrefConstant keyRef, @Nullable MethodrefConstant testRef,
-			boolean identityTables) {
+			boolean identityTables, MethodrefConstant maybeCompactRef) {
 		JvmAsm a = new JvmAsm();
 		emitFoldKey(a, keyRef);
 		if (testRef != null) {
@@ -849,21 +873,27 @@ final class JvmHashRuntimeBuilder {
 		a.aload(5);
 		a.invokevirtual(listAdd);
 		a.pop();
+		// A fresh pair may push a dead-majority order list over the compaction
+		// threshold; compacting here keeps every removal O(1) amortised.
+		a.aload(1);
+		a.invokestatic(maybeCompactRef);
 		a.aload(2);
 		a.areturn();
 		return new HashMethod(cp.addUtf8(PUT), cp.addUtf8(PUT_DESC), 7, identityTables ? 8 : 7, a.code);
 	}
 
-	// _hashRem(key, table): drop the pair from its bucket and from the order list; an
-	// emptied bucket goes with it, so a put/remove cycle does not leak bucket objects.
+	// _hashRem(key, table): drop the pair from its bucket and tombstone it in the order
+	// list (null the key slot, count one more dead) instead of unlinking it there --
+	// unlinking scans and memmoves, O(n) per removal. An emptied bucket goes with the
+	// pair, so a put/remove cycle does not leak bucket objects.
 	private static HashMethod buildRem(ConstantPool cp, ClassConstant mapClass, ClassConstant listClass,
 			ClassConstant objectArrayClass, MethodrefConstant mapGet, MethodrefConstant mapRemove,
 			MethodrefConstant listGet, MethodrefConstant listSize, MethodrefConstant listRemoveAt,
-			MethodrefConstant listRemoveObj, MethodrefConstant integerValueOf, MethodrefConstant hashRef,
-			MethodrefConstant ordRef, MethodrefConstant equalMethod, MethodrefConstant eqvMethod,
-			MethodrefConstant eqMethod, ClassConstant ratArrClass, ClassConstant integerClass,
-			MethodrefConstant identityHashCode, StringConstant trueStr, @Nullable MethodrefConstant keyRef,
-			@Nullable MethodrefConstant testRef, boolean identityTables) {
+			MethodrefConstant integerValueOf, MethodrefConstant hashRef, MethodrefConstant equalMethod,
+			MethodrefConstant eqvMethod, MethodrefConstant eqMethod, ClassConstant ratArrClass,
+			ClassConstant integerClass, MethodrefConstant identityHashCode, StringConstant trueStr,
+			@Nullable MethodrefConstant keyRef, @Nullable MethodrefConstant testRef, boolean identityTables,
+			MethodrefConstant tombstoneRef) {
 		JvmAsm a = new JvmAsm();
 		emitFoldKey(a, keyRef);
 		if (testRef != null) {
@@ -909,10 +939,8 @@ final class JvmHashRuntimeBuilder {
 		a.invokevirtual(listRemoveAt);
 		a.pop();
 		a.aload(1);
-		a.invokestatic(ordRef);
 		a.aload(4);
-		a.invokevirtual(listRemoveObj);
-		a.pop();
+		a.invokestatic(tombstoneRef);
 		a.aload(2);
 		a.invokevirtual(listSize);
 		a.branch(Opcode.IFNE, keepBucket);
