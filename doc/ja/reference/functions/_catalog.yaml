@@ -433,6 +433,7 @@ categories:
       - { slug: apropos, name: "apropos" }
       - { slug: package-error-package, name: "package-error-package" }
       - { slug: symbol-value, name: "symbol-value" }
+      - { slug: set, name: "set" }
       - { slug: boundp, name: "boundp" }
       - { slug: fboundp, name: "fboundp" }
       - { slug: fmakunbound, name: "fmakunbound" }

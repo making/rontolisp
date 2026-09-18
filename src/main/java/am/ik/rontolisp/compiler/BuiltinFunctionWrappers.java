@@ -182,6 +182,10 @@ public final class BuiltinFunctionWrappers {
 		// on the reference puts both sides on one scan (cl-json's aggregate-scope
 		// (mapcar #'symbol-value scope-variables) is the consumer).
 		gated.add(LispNames.SYMBOL_VALUE);
+		// #'set for the same reason: the wrapper body is the backing-store chain plus
+		// the _store mirror call, real only under usesEval, and the (function set)
+		// spelling fires the same scan.
+		gated.add(LispNames.SET);
 		// #'widen-float-bits / #'narrow-float-bits (.todo/671): the wrapper bodies call
 		// the JVM's _widenFloatBits/_narrowFloatBits helpers, emitted only for a
 		// program whose OWN source names widen-float-bits/narrow-float-bits
@@ -1735,6 +1739,9 @@ public final class BuiltinFunctionWrappers {
 			// wrapper is REFERENCE-GATED (see above), and the #'symbol-value reference
 			// that injects it also fires the usesEval scan that makes its body real.
 			unary(LispNames.SYMBOL_VALUE),
+			// set beside it, reference-gated for the same reason: the body is the
+			// backing-store chain plus the mirror store.
+			binary(LispNames.SET),
 			// find-package IS one of them, because its wrapper body is a COMPUTED
 			// designator and that already has a real lowering: the per-expression
 			// compilers rewrite it to a lookup in the package table the backend bakes in

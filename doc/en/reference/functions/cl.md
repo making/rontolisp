@@ -160,6 +160,7 @@ page.
 | `apropos` | `(apropos "CAR" :cl)` | Print each match and return `nil` |
 | `package-error-package` | `(package-error-package c)` | The offending designator out of a `package-error` condition |
 | `symbol-value` | `(symbol-value '*level*)` | The global variable's value; unbound names signal an error (lexical bindings are invisible) |
+| `set` | `(set '*level* 8)`, `(setf (symbol-value '*level*) 8)` | Set the global variable by a computed name, creating the binding when unbound (an active dynamic binding is left alone) |
 | `boundp` | `(boundp '*level*)` | `t` when the symbol names a bound global variable (t/nil/keywords are self-bound) |
 | `fboundp` | `(fboundp 'car)` | `t` for functions, macros and special forms (compilers: a computed argument sees functions only) |
 | `fmakunbound` | `(fmakunbound 'greet)` | `greet` -- makes the name call-time-undefined again (compilers: late-bound references only) |

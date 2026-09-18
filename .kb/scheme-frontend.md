@@ -276,15 +276,16 @@ defines regardless of what library put there first.
   `system-global-environment` (`sicp` constants) and `(environment sets..)` (`eval`;
   every set is checked against `IMPORTABLE_LIBRARIES` through the generated
   `%scheme-library-p`, modifiers included). `(eval x)` with no environment is accepted.
-- **Name resolution order**: eval's own globals (`%scheme-eval-globals`, an alist -- with
-  no `set` on the compile path a `define` inside `eval` cannot become a program global,
-  so it reaches later `eval`s only), then the program's `fboundp` / `boundp` names (a
-  user `define` wins over a builtin, as in a file; `fboundp` is case-sensitive, so a
-  lowercase `car` never answers `CAR`), then the builtins through `%scheme-builtin`.
-  `set!` of a program variable or a builtin makes eval's own copy (stated deviation, the
-  compiled CL `eval`'s one-way mirror). A keyword is syntax unless a variable of that
-  name is in scope (`%scheme-eval-syntax`: frames, eval's globals, `boundp`, `fboundp`);
-  a datum's symbols carry their mangled spelling, so the keyword `=>` is `s%=>` there.
+- **Name resolution order**: the program's variables (`boundp` -- including what
+  `eval` itself defined, since `set` makes a global appear at run time on every
+  backend, `.todo/852`), then the program's `fboundp` names (a user `define` wins
+  over a builtin, as in a file; `fboundp` is case-sensitive, so a lowercase `car`
+  never answers `CAR`), then the builtins through `%scheme-builtin`. A `define`
+  inside `eval` is a program global through `set`, visible to later `eval`s and to
+  the program itself; a `set!` of a program variable or a builtin assigns it the
+  same way. A keyword is syntax unless a variable of that name is in scope
+  (`%scheme-eval-syntax`: frames, `boundp`, `fboundp`); a datum's symbols carry
+  their mangled spelling, so the keyword `=>` is `s%=>` there.
 - **The run-time table is GENERATED from `SchemeBuiltins`** (`runtimeForms`: one `case`
   arm per entry's `:function` and per constant, keyed by the mangled name, appended to
   `scheme.lisp`'s forms by `SchemeLibrary.forms`, so the table is spelled once); the

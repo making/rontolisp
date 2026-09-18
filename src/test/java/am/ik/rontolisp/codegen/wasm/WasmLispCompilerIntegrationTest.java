@@ -20722,6 +20722,48 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void setWritesBackingStoreAndMirror() throws Exception {
+		// Like the JVM twin: a backing store write reaches a compiled direct read
+		// as well as symbol-value; a storeless name lands in GLOBAL_ENV.
+		assertThat(compileAndRun("""
+				(defvar *wset-g* 1)
+				(print (set '*wset-g* 2))
+				(print *wset-g*)
+				(print (symbol-value '*wset-g*))
+				(print (setf (symbol-value '*wset-g*) 3))
+				(print *wset-g*)
+				(print (set (intern "WSET-NEW") 4))
+				(print (symbol-value 'wset-new))
+				(print (symbol-value (intern "WSET-NEW")))
+				(print (boundp 'wset-new))
+				(print (boundp 'wset-never))
+				(print (funcall #'set '*wset-g* 5))
+				(print *wset-g*)
+				""")).isEqualTo("2\n2\n2\n3\n3\n4\n4\n4\nT\nNIL\n5\n5");
+	}
+
+	@Test
+	void setWritesThroughInsideAFunctionBody() throws Exception {
+		assertThat(compileAndRun("""
+				(defvar *wset-f* 1)
+				(defun wset-bump () (set '*wset-f* (+ *wset-f* 10)))
+				(wset-bump)
+				(print *wset-f*)
+				(print (symbol-value '*wset-f*))
+				(wset-bump)
+				(print (symbol-value '*wset-f*))
+				""")).isEqualTo("11\n11\n21");
+	}
+
+	@Test
+	void setOfAConstantTraps() throws Exception {
+		assertThat(compileAndRunExpectTrap("(set nil 1)")).contains("unreachable");
+		assertThat(compileAndRunExpectTrap("(set t 2)")).contains("unreachable");
+		assertThat(compileAndRunExpectTrap("(set :kw 3)")).contains("unreachable");
+		assertThat(compileAndRunExpectTrap("(set (intern \"NIL\") 4)")).contains("unreachable");
+	}
+
+	@Test
 	void reinitializeInstanceAndComputedChangeClass() throws Exception {
 		// The two runtime halves of the CLOS surface family: reinitialize-instance is
 		// callable with no user method (the system default fills the supplied

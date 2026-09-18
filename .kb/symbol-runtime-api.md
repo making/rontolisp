@@ -186,6 +186,43 @@ likewise not tombstone-aware.
   `WasmLispCompilerIntegrationTest#setfSymbolFunctionAliasAndRedefinition`, ci-spec
   `setf-symbol-function-and-fdefinition`.
 
+### `set` / `(setf (symbol-value name) value)` for a computed name (`.todo/852`)
+`expandSetf` lowers the place to `(set name value)` -- one store, evaluated once each
+side, answering the value -- so only `set` needs the per-backend work.
+
+- **Semantics, all four backends**: the GLOBAL namespace, creating the binding when the
+  name is unbound (what a run-time evaluator defines program globals through -- and a
+  deliberate creation where CL's `set` signals). An already-active dynamic binding is
+  left alone everywhere alike (unlike `setq`): `set` targets the global cell, so a
+  `symbol-value` inside the extent still answers the dynamic one, exactly the
+  pre-existing "reads the global default" divergence. Constants (nil, t and keywords,
+  by value or by computed `NIL`/`T` name, and the empty name) and non-symbols signal on
+  the interpreter and the JVM and trap on WASM, the symbol API's usual split.
+- **Interpreter**: a builtin over `Environment` (`define` on the global env).
+  **JVM** (`JvmSymbolApiCompiler.compileSet`): validate, then a per-name
+  name-equals chain over `ctx.globals` writing the static field, every taken arm
+  landing on the unconditional `_store(name, value, null)` mirror -- which creates the
+  binding when no backing store took it. **WASM** (`WasmSymbolApiCompiler.compileSet`):
+  the same shape inline (offsets compared by canonical string-table offset, so a
+  literal and a run-time `intern` agree; the global list sorted, the index map being a
+  hash), landing on `FUNC_STORE` over `GLOBAL_ENV`. Both force `usesEval` (a `SET`
+  spelling; a raw `(setf (symbol-value ...) ...)` spells `SYMBOL_VALUE`, which is
+  already in the chain), and `#'set` is a reference-gated wrapper like
+  `#'symbol-value`. `--no-gc` refuses by omission, like every other eval-runtime
+  operator.
+- **The `boundp` soundness gate gains an arm** (`CompileTimeBoundp`): a program calling
+  `set` -- or spelling the raw `symbol-value` place (`usesSymbolValueWrite`, the
+  lowering happens per expression, after the gate) -- can make a global appear at run
+  time, so the whole fold is off.
+- A direct reference to a name only `set` created does not compile (like an
+  eval-created global); the program reads it through `symbol-value`/`eval`. Inside a
+  compiled runtime `eval`, `set` is an unknown operator and answers nil, like every
+  other inline-only operator (`boundp`, `symbol-value`).
+- Tests: `LispEvaluatorTest#set*`, `JvmLispCompilerTest#compileAndRunSet*`,
+  `WasmLispCompilerIntegrationTest#set*`, `CompileTimeBoundpTest`
+  (the gate arm), `BuiltinFunctionWrapperCatalogTest` (the `#'set` value), ci-spec
+  `set-and-setf-symbol-value-for-computed-names`.
+
 ### Computed `find-package` is answered from a BAKED table
 A computed designator lowers to `(cdr (assoc (string x) '(("CL" . :CL) ...) :test #'string=))`,
 built by `LispMacroExpander.expandRuntimeFindPackage` from

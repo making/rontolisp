@@ -998,6 +998,7 @@ final class WasmExprCompiler {
 				case LispNames.BOUNDP -> WasmSymbolApiCompiler.compileBoundp(cons, ctx);
 				case LispNames.FBOUNDP -> WasmSymbolApiCompiler.compileFboundp(cons, ctx);
 				case LispNames.SYMBOL_VALUE -> WasmSymbolApiCompiler.compileSymbolValue(cons, ctx);
+				case LispNames.SET -> WasmSymbolApiCompiler.compileSet(cons, ctx);
 				case LispNames.FMAKUNBOUND -> WasmSymbolApiCompiler.compileFmakunbound(cons, ctx);
 				case LispNames.SET_SYMBOL_FUNCTION_INTERNAL ->
 					WasmSymbolApiCompiler.compileSetSymbolFunction(cons, ctx);

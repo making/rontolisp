@@ -1134,14 +1134,13 @@ class LibraryDefunPrunerTest {
 		List<String> printing = definedNames(LibraryDefunPruner
 			.prune(SchemeLibrary.process(LispReader.readAllFromString("(rontolisp::%scheme-display (car (list 1)))"))));
 		assertThat(printing).doesNotContain("RONTOLISP::%SCHEME-EVAL", "RONTOLISP::%SCHEME-BUILTIN",
-				"RONTOLISP::%SCHEME-EVAL-GLOBALS", "RONTOLISP::%SCHEME-LIBRARY-P");
+				"RONTOLISP::%SCHEME-LIBRARY-P");
 		// The table a compiled program carries holds the procedures the program SPELLS
 		// -- as a symbol anywhere, quoted data included, or inside a string literal --
 		// never the whole table, which reaches every helper there is.
 		List<LispVal> evaluating = LibraryDefunPruner.prune(SchemeLibrary.process(LispReader.readAllFromString(
 				"(rontolisp::%scheme-eval-in '(|s%+| 1 2) '|#[environment]|) (rontolisp::%scheme-string->symbol \"vector-ref\")")));
-		assertThat(definedNames(evaluating)).contains("RONTOLISP::%SCHEME-EVAL", "RONTOLISP::%SCHEME-BUILTIN",
-				"RONTOLISP::%SCHEME-EVAL-GLOBALS");
+		assertThat(definedNames(evaluating)).contains("RONTOLISP::%SCHEME-EVAL", "RONTOLISP::%SCHEME-BUILTIN");
 		String table = survivingPrintOf(evaluating, "%SCHEME-BUILTIN");
 		assertThat(table).contains("((|s%+|) #'+)", "((|vector-ref|) ").doesNotContain("(|car|)", "(|display|)");
 	}

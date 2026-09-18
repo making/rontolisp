@@ -211,10 +211,10 @@ once (42 42)
 どれも唯一の大域環境です: `(interaction-environment)`、`(scheme-report-environment 5)`、
 `(environment '(scheme base) ...)` -- その import 集合は上記のライブラリに照らして検査されます --
 および MIT Scheme の `user-initial-environment` と `system-global-environment` はすべて
-これを指し、引数は省略できます。大域環境が持つのは、プログラムが定義したもの、`eval` 自身が
-定義したもの、組み込み手続きで、この順に探されます。`eval` の中の `define` は後の `eval`
-からだけ見え、プログラムの変数への `set!` は `eval` 自身のコピーを変えます: プログラムは自分の
-値を読み続けます。
+これを指し、引数は省略できます。大域環境が持つのは、プログラムの変数（`eval` 自身が
+定義したものを含む）、プログラムの手続き、組み込み手続きで、この順に探されます。`eval` の中の `define` はプログラムの
+大域変数になり、後の `eval` からもプログラム自身からも（`eval` 経由で）見えます。
+プログラムの変数への `set!` はそれに代入します。プログラムは `eval` が書いた値を読みます。
 
 ```scheme
 (define (execute exp) (apply (eval (car exp) user-initial-environment) (cdr exp)))

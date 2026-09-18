@@ -2099,6 +2099,12 @@ public final class LispNames {
 	/** The {@code symbol-value} function. The global variable value named by a symbol. */
 	public static final String SYMBOL_VALUE = "SYMBOL-VALUE";
 
+	/**
+	 * The {@code set} function. Sets the global variable value named by a symbol,
+	 * creating the binding when the name is unbound.
+	 */
+	public static final String SET = "SET";
+
 	/** The {@code defvar} special form. */
 	public static final String DEFVAR = "DEFVAR";
 

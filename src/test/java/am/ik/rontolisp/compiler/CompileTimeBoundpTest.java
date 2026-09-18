@@ -109,6 +109,12 @@ class CompileTimeBoundpTest {
 		// here costs nothing.
 		assertThat(folded("(eval (read)) (unless (boundp '+k+) (defconstant +k+ 1))")).contains("BOUNDP");
 		assertThat(folded("(load \"x.lisp\") (unless (boundp '+k+) (defconstant +k+ 1))")).contains("BOUNDP");
+		// set creates the binding when the name is unbound -- and (setf
+		// (symbol-value ...) ...) lowers to it after this gate -- so either spelling
+		// anywhere in the program poisons the fold the same way.
+		assertThat(folded("(set 'late 1) (unless (boundp '+k+) (defconstant +k+ 1))")).contains("BOUNDP");
+		assertThat(folded("(setf (symbol-value 'late) 1) (unless (boundp '+k+) (defconstant +k+ 1))"))
+			.contains("BOUNDP");
 		assertThat(CompileTimeBoundp
 			.fold(LispReader.readAllFromString("(unless (boundp '+k+) (defconstant +k+ 1))"), true, true)
 			.toString()).contains("BOUNDP");

@@ -160,6 +160,7 @@
 | `apropos` | `(apropos "CAR" :cl)` | 各一致を印字して `nil` を返します |
 | `package-error-package` | `(package-error-package c)` | `package-error` コンディションから原因の指示子を取り出します |
 | `symbol-value` | `(symbol-value '*level*)` | グローバル変数の値。未束縛の名前はエラー(レキシカルな束縛は見えない) |
+| `set` | `(set '*level* 8)`、`(setf (symbol-value '*level*) 8)` | 計算された名前でグローバル変数を設定し、未束縛なら束縛を作成(有効な動的束縛は変更しない) |
 | `boundp` | `(boundp '*level*)` | シンボルが束縛されたグローバル変数を指すとき `t`(t/nil/キーワードは自己束縛) |
 | `fboundp` | `(fboundp 'car)` | 関数・マクロ・特殊形式に対して `t`(コンパイラ: 計算された引数は関数のみ判定) |
 | `fmakunbound` | `(fmakunbound 'greet)` | `greet` -- 名前を再び「呼び出し時に未定義」にします(コンパイラ: 遅延束縛の参照のみ) |

@@ -16537,6 +16537,54 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunSetWritesBackingStoreAndMirror() throws Exception {
+		// A store into a global with a backing store must reach a compiled direct
+		// read as well as symbol-value; a name without one lands in the mirror,
+		// where symbol-value and boundp answer it.
+		assertThat(compileAndRun("""
+				(defvar *jset-g* 1)
+				(print (set '*jset-g* 2))
+				(print *jset-g*)
+				(print (symbol-value '*jset-g*))
+				(print (setf (symbol-value '*jset-g*) 3))
+				(print *jset-g*)
+				(print (set (intern "JSET-NEW") 4))
+				(print (symbol-value 'jset-new))
+				(print (symbol-value (intern "JSET-NEW")))
+				(print (boundp 'jset-new))
+				(print (boundp 'jset-never))
+				(print (funcall #'set '*jset-g* 5))
+				(print *jset-g*)
+				""")).isEqualTo("2\n2\n2\n3\n3\n4\n4\n4\nT\nNIL\n5\n5");
+	}
+
+	@Test
+	void compileAndRunSetWritesThroughInsideAFunctionBody() throws Exception {
+		// The mirror is written wherever the store runs, not only at the top level:
+		// symbol-value sees a store a defun body made.
+		assertThat(compileAndRun("""
+				(defvar *jset-f* 1)
+				(defun jset-bump () (set '*jset-f* (+ *jset-f* 10)))
+				(jset-bump)
+				(print *jset-f*)
+				(print (symbol-value '*jset-f*))
+				(jset-bump)
+				(print (symbol-value '*jset-f*))
+				""")).isEqualTo("11\n11\n21");
+	}
+
+	@Test
+	void compileAndRunSetOfAConstantSignals() throws Exception {
+		assertThat(compileAndRun("""
+				(print (handler-case (set nil 1) (error (e) :nil)))
+				(print (handler-case (set t 2) (error (e) :t)))
+				(print (handler-case (set :kw 3) (error (e) :kw)))
+				(print (handler-case (set (intern "NIL") 4) (error (e) :computed-nil)))
+				(print (handler-case (set 5 6) (error (e) :not-symbol)))
+				""")).isEqualTo(":NIL\n:T\n:KW\n:COMPUTED-NIL\n:NOT-SYMBOL");
+	}
+
+	@Test
 	void compileAndRunReinitializeInstanceWithNoUserMethod() throws Exception {
 		// CL supplies the system default (chaining into shared-initialize's initarg
 		// fill), so a bare call compiles and fills the supplied initargs -- upstream

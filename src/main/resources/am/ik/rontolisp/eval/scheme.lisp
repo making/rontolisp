@@ -1357,12 +1357,13 @@
 ;; one definition: the lowering (SchemeLowering.java) is not inside a compiled program,
 ;; and the run-time eval the compiled backends carry (.kb/eval-runtime.md) evaluates
 ;; Common Lisp core forms, not Scheme. Every environment specifier is the one global
-;; environment, the symbol #[environment], which holds three things in this order: what
-;; eval itself defined (%scheme-eval-globals -- a compiled program has no `set` to make a
-;; global appear at run time, so eval keeps its definitions in a table of its own), the
-;; program's own procedures and variables (fboundp / boundp, the names its file
-;; lowered), and the builtins, through the table SchemeBuiltins generates
-;; (%scheme-builtin). A name the program defines wins over a builtin, as in a file.
+;; environment, the symbol #[environment], which holds three things in this order: the
+;; program's own variables (boundp -- including what eval itself defined, since `set`
+;; makes a global appear at run time on every backend), the program's procedures
+;; (fboundp, the names its file lowered), and the builtins, through the table
+;; SchemeBuiltins generates (%scheme-builtin). A name the program defines wins over a
+;; builtin, as in a file, and a later definition wins over an earlier one, whatever
+;; namespace the earlier one lived in.
 ;;
 ;; A local environment is a list of frames, (alist . loop): an alist of (name . value)
 ;; cells -- set! mutates the cell, an internal define pushes onto the innermost frame,
@@ -1375,8 +1376,6 @@
 ;; never assigned and never rebound in the body (%scheme-eval-called-only). Tail
 ;; positions of the other forms (if, begin, the let family, cond, case, and, or, when,
 ;; unless, the do result) iterate the same way; any other call recurses.
-
-(defvar rontolisp::%scheme-eval-globals nil)
 
 (defun rontolisp::%scheme-eval-in (x env)
   (if (eq env '|#[environment]|)
@@ -1422,9 +1421,8 @@
 
 (defun rontolisp::%scheme-eval-syntax (head env)
   (if (and (rontolisp::%scheme-eval-keyword-p head)
-           (null (rontolisp::%scheme-eval-cell head env))
-           (null (assoc head rontolisp::%scheme-eval-globals :test #'eq))
-           (not (boundp head)) (not (fboundp head)))
+           (null (rontolisp::%scheme-eval-cell head env)) (not (boundp head))
+           (not (fboundp head)))
       head
       nil))
 
@@ -1450,47 +1448,42 @@
     (if cell (cdr cell) (rontolisp::%scheme-eval-global name))))
 
 (defun rontolisp::%scheme-eval-global (name)
-  (let ((cell (assoc name rontolisp::%scheme-eval-globals :test #'eq)))
-    (cond (cell (cdr cell))
-          ((fboundp name) (symbol-function name))
-          ((boundp name) (symbol-value name))
-          (t (let ((value (rontolisp::%scheme-builtin name)))
-               (cond ((not (eq value 'rontolisp::%scheme-unbound)) value)
-                     ((rontolisp::%scheme-eval-keyword-p name)
-                      (error "~A"
-                       (rontolisp::%scheme-error-message
-                        "Syntactic keyword may not be used as an expression:"
-                        (list name))))
-                     (t (error "~A"
-                               (rontolisp::%scheme-error-message
-                                "Unbound variable:" (list name))))))))))
+  (cond ((boundp name) (symbol-value name))
+        ((fboundp name) (symbol-function name))
+        (t (let ((value (rontolisp::%scheme-builtin name)))
+             (cond ((not (eq value 'rontolisp::%scheme-unbound)) value)
+                   ((rontolisp::%scheme-eval-keyword-p name)
+                    (error "~A"
+                     (rontolisp::%scheme-error-message
+                      "Syntactic keyword may not be used as an expression:"
+                      (list name))))
+                   (t (error "~A"
+                             (rontolisp::%scheme-error-message
+                              "Unbound variable:" (list name)))))))))
 
-;; define: at the top level into eval's own globals, in a body into the innermost frame.
+;; define: at the top level a program global, through `set` -- visible to later evals
+;; and to the program itself, on every backend alike; in a body into the innermost
+;; frame.
 (defun rontolisp::%scheme-eval-define (name value env)
   (if (null env)
-      (let ((cell (assoc name rontolisp::%scheme-eval-globals :test #'eq)))
-        (if cell
-            (rplacd cell value)
-            (setq rontolisp::%scheme-eval-globals
-                  (cons (cons name value) rontolisp::%scheme-eval-globals))))
+      (set name value)
       (let ((frame (car env)))
         (let ((cell (assoc name (car frame) :test #'eq)))
           (if cell
               (rplacd cell value)
               (rplaca frame (cons (cons name value) (car frame))))))))
 
-;; set!: a local cell, else eval's own global, else -- for the program's own variable or
-;; a builtin, which nothing can assign from outside a compiled program -- a global of
-;; eval's own from here on; an unknown name is an error, as in R7RS.
+;; set!: a local cell, else the program's own global -- a variable, a procedure's
+;; variable shadowing, or a builtin shadowed from here on, all through `set`, so the
+;; program reads what eval wrote; an unknown name is an error, as in R7RS.
 (defun rontolisp::%scheme-eval-assign (name value env)
   (let ((cell (rontolisp::%scheme-eval-cell name env)))
     (cond (cell (rplacd cell value))
-          ((or (assoc name rontolisp::%scheme-eval-globals :test #'eq)
-               (boundp name) (fboundp name)
+          ((or (boundp name) (fboundp name)
                (not
                 (eq (rontolisp::%scheme-builtin name)
                     'rontolisp::%scheme-unbound)))
-           (rontolisp::%scheme-eval-define name value nil))
+           (set name value))
           (t (error "~A"
                     (rontolisp::%scheme-error-message "Unbound variable:"
                                                       (list name)))))))

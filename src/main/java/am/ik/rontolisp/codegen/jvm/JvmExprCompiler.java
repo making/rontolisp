@@ -706,6 +706,7 @@ final class JvmExprCompiler {
 					JvmSymbolApiCompiler.compileSetSymbolFunction(cons, ctx, className);
 				case LispNames.FENV_FUNCTION_INTERNAL -> JvmSymbolApiCompiler.compileFenvFunction(cons, ctx, className);
 				case LispNames.SYMBOL_VALUE -> JvmSymbolApiCompiler.compileSymbolValue(cons, ctx, className);
+				case LispNames.SET -> JvmSymbolApiCompiler.compileSet(cons, ctx, className);
 				// Only a COMPUTED designator reaches here: PackageResolver folds a
 				// literal
 				// one to the quoted package keyword before the compiler ever sees it

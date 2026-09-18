@@ -10883,6 +10883,38 @@ cases:
       6
       (:NEW 5)
       T
+  - name: set-and-setf-symbol-value-for-computed-names
+    source: |
+      ;; set assigns a global by a computed name and creates the binding when
+      ;; unbound; (setf (symbol-value name) v) is the same store. Both write a
+      ;; compiled backing store when the name has one, else the eval mirror, so a
+      ;; direct read and symbol-value agree afterwards.
+      (defvar *set-global* 1)
+      (print (set '*set-global* 2))
+      (print *set-global*)
+      (print (symbol-value '*set-global*))
+      (print (setf (symbol-value '*set-global*) 3))
+      (print *set-global*)
+      (print (set (intern "SET-CREATED") 4))
+      (print (symbol-value 'set-created))
+      (print (symbol-value (intern "SET-CREATED")))
+      (print (boundp 'set-created))
+      (print (boundp 'set-never-defined))
+      (print (funcall #'set '*set-global* 5))
+      (print *set-global*)
+    expected: |
+      2
+      2
+      2
+      3
+      3
+      4
+      4
+      4
+      T
+      NIL
+      5
+      5
   - name: runtime-package-symbol-ops
     source: |
       ;; the postmodern shapes: computed find-package / find-symbol, fmakunbound,

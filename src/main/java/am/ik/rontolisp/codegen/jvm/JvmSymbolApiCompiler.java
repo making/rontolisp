@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
@@ -451,6 +452,188 @@ final class JvmSymbolApiCompiler {
 		JvmEmitHelper.patchBranch(ctx, done, ctx.code.size());
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(valueSlot);
+	}
+
+	/**
+	 * {@code (set name value)} -- store {@code value} into the global variable
+	 * {@code name} names, creating the binding when the name is unbound: the
+	 * computed-name counterpart of {@code setq}, and what a run-time evaluator defines
+	 * and assigns program globals through. A name with a compiled backing store writes
+	 * that static field (so compiled reads see the store); the eval mirror is written
+	 * unconditionally through {@code _store} (which creates the binding there when no
+	 * backing store exists -- so {@code symbol-value} and {@code eval} see the store
+	 * wherever it lands). Deliberately deaf to an already-active dynamic binding (unlike
+	 * {@code setq}, which writes it): the store targets the global namespace on every
+	 * backend alike. Constants (nil, t and keywords, by value or by computed name) and
+	 * non-symbols signal. Forces {@code usesEval} in {@link JvmLispCompiler} like the
+	 * rest of the symbol API.
+	 */
+	static void compileSet(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new IllegalArgumentException(LispNames.SET + " expects 2 arguments, got " + (parts.size() - 1));
+		}
+		int nameSlot = compileArgToTemp(parts.get(1), ctx, className);
+		int valueSlot = compileArgToTemp(parts.get(2), ctx, className);
+		// null (nil) -> throw
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(nameSlot);
+		int notNil = emitBranch(ctx, Opcode.IFNONNULL);
+		emitSetConstantThrow("NIL", ctx);
+		JvmEmitHelper.patchBranch(ctx, notNil, ctx.code.size());
+		// not a String (symbols are bare Strings, strings carry their quotes) -> throw
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(nameSlot);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(ctx.stringClass.index());
+		int isString = emitBranch(ctx, Opcode.IFNE);
+		emitSetTypeThrow(nameSlot, ctx);
+		JvmEmitHelper.patchBranch(ctx, isString, ctx.code.size());
+		// T, NIL by computed name, keywords and the empty name are constants ->
+		// throw. The empty name would otherwise sail through both probes below and
+		// materialize a binding no read can spell.
+		emitSetConstantNameThrow(nameSlot, "T", ctx);
+		emitSetConstantNameThrow(nameSlot, "NIL", ctx);
+		emitSetEmptyNameThrow(nameSlot, ctx);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(nameSlot);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.stringClass.index());
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(ctx.stringCharAt.index());
+		JvmEmitHelper.emitIntConst(ctx, ':');
+		int notKeyword = emitBranch(ctx, Opcode.IF_ICMPNE);
+		emitSetConstantNameThrowDynamic(nameSlot, ctx);
+		JvmEmitHelper.patchBranch(ctx, notKeyword, ctx.code.size());
+		// backing stores first, in declaration order: a compiled read must see the
+		// store, not only the mirror below. Every taken arm lands on the mirror:
+		// the field IS the store, and the mirror keeps symbol-value and eval with
+		// it.
+		List<Integer> toMirror = new ArrayList<>();
+		for (String global : ctx.globals) {
+			ConstantPool.FieldrefConstant field = ctx.globalFields.get(global);
+			if (field == null) {
+				continue;
+			}
+			JvmEmitHelper.compileStringLiteral(global, ctx);
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(nameSlot);
+			ctx.emit(Opcode.INVOKEVIRTUAL);
+			ctx.emitU2(ctx.objectEquals.index());
+			int miss = emitBranch(ctx, Opcode.IFEQ);
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(valueSlot);
+			ctx.emit(Opcode.PUTSTATIC);
+			ctx.emitU2(field.index());
+			toMirror.add(emitBranch(ctx, Opcode.GOTO));
+			JvmEmitHelper.patchBranch(ctx, miss, ctx.code.size());
+		}
+		// the mirror, unconditionally: _store creates the binding when no backing
+		// store took it, and answers the stored value, the set result.
+		int mirrorPos = ctx.code.size();
+		for (int target : toMirror) {
+			JvmEmitHelper.patchBranch(ctx, target, mirrorPos);
+		}
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(nameSlot);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(valueSlot);
+		ctx.emit(Opcode.ACONST_NULL);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(java.util.Objects.requireNonNull(ctx.evalStoreRef).index());
+	}
+
+	// throw new RuntimeException("SET cannot set " + constant)
+	private static void emitSetConstantThrow(String constant, JvmLispCompiler.Ctx ctx) {
+		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
+		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(runtimeEx,
+				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
+		ctx.emit(Opcode.NEW);
+		ctx.emitU2(runtimeEx.index());
+		ctx.emit(Opcode.DUP);
+		JvmEmitHelper.compileStringLiteral(LispNames.SET + " cannot set " + constant, ctx);
+		ctx.emit(Opcode.INVOKESPECIAL);
+		ctx.emitU2(ctor.index());
+		ctx.emit(Opcode.ATHROW);
+	}
+
+	// throw new RuntimeException("SET cannot set " + name) for a computed constant name
+	private static void emitSetConstantNameThrow(int nameSlot, String constant, JvmLispCompiler.Ctx ctx) {
+		JvmEmitHelper.compileStringLiteral(constant, ctx);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(nameSlot);
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(ctx.objectEquals.index());
+		int keep = emitBranch(ctx, Opcode.IFEQ);
+		emitSetConstantThrow(constant, ctx);
+		JvmEmitHelper.patchBranch(ctx, keep, ctx.code.size());
+	}
+
+	// throw new RuntimeException("SET cannot set " + name) for a keyword (the name is
+	// on the stack as a String here)
+	private static void emitSetConstantNameThrowDynamic(int nameSlot, JvmLispCompiler.Ctx ctx) {
+		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
+		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(runtimeEx,
+				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
+		ConstantPool.MethodrefConstant concat = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
+			.addNameAndType(ctx.cp.addUtf8("concat"), ctx.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
+		ctx.emit(Opcode.NEW);
+		ctx.emitU2(runtimeEx.index());
+		ctx.emit(Opcode.DUP);
+		JvmEmitHelper.compileStringLiteral(LispNames.SET + " cannot set ", ctx);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(nameSlot);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.stringClass.index());
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(concat.index());
+		ctx.emit(Opcode.INVOKESPECIAL);
+		ctx.emitU2(ctor.index());
+		ctx.emit(Opcode.ATHROW);
+	}
+
+	// throw new RuntimeException("SET cannot set ") for the empty name (the name is
+	// on the stack as a String here)
+	private static void emitSetEmptyNameThrow(int nameSlot, JvmLispCompiler.Ctx ctx) {
+		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
+		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(runtimeEx,
+				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
+		ConstantPool.MethodrefConstant isEmpty = ctx.cp.addMethodref(ctx.stringClass,
+				ctx.cp.addNameAndType(ctx.cp.addUtf8("isEmpty"), ctx.cp.addUtf8("()Z")));
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(nameSlot);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.stringClass.index());
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(isEmpty.index());
+		int keep = emitBranch(ctx, Opcode.IFEQ);
+		emitSetConstantThrow("", ctx);
+		JvmEmitHelper.patchBranch(ctx, keep, ctx.code.size());
+	}
+
+	// throw new RuntimeException("SET expects a symbol, got " + value)
+	private static void emitSetTypeThrow(int nameSlot, JvmLispCompiler.Ctx ctx) {
+		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
+		ConstantPool.MethodrefConstant ctor = ctx.cp.addMethodref(runtimeEx,
+				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
+		ConstantPool.MethodrefConstant valueOf = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
+			.addNameAndType(ctx.cp.addUtf8("valueOf"), ctx.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;")));
+		ConstantPool.MethodrefConstant concat = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
+			.addNameAndType(ctx.cp.addUtf8("concat"), ctx.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
+		ctx.emit(Opcode.NEW);
+		ctx.emitU2(runtimeEx.index());
+		ctx.emit(Opcode.DUP);
+		JvmEmitHelper.compileStringLiteral(LispNames.SET + " expects a symbol, got ", ctx);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(nameSlot);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(valueOf.index());
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(concat.index());
+		ctx.emit(Opcode.INVOKESPECIAL);
+		ctx.emitU2(ctor.index());
+		ctx.emit(Opcode.ATHROW);
 	}
 
 	/**

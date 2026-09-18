@@ -102,8 +102,14 @@ public final class CompileTimeBoundp {
 		// binds a runtime-named symbol in the eval env mirror, so a literal probe of a
 		// name the program never defines statically may still answer t while a progv
 		// extent is active.
+		// set is in the gate for the same reason one step further: (set name value)
+		// -- and (setf (symbol-value name) value), which lowers to it per expression,
+		// after this gate -- creates the binding when the name is unbound, so a
+		// literal probe of a name the program never defines statically may still
+		// answer t at run time.
 		if (dynamic || callsAnywhere(program, LispNames.EVAL) || callsAnywhere(program, LispNames.LOAD)
-				|| callsAnywhere(program, LispNames.PROGV)) {
+				|| callsAnywhere(program, LispNames.PROGV) || callsAnywhere(program, LispNames.SET)
+				|| am.ik.rontolisp.macro.LispMacroExpander.usesSymbolValueWrite(program)) {
 			return program;
 		}
 		Names poisoned = new Names(packagesResolved);

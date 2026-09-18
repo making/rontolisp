@@ -3699,6 +3699,16 @@ public final class LispMacroExpander {
 				// returns fn, the setf value.
 				case LispNames.SYMBOL_FUNCTION, LispNames.FDEFINITION -> listToCons(
 						List.of(new LispSymbol(LispNames.SET_SYMBOL_FUNCTION_INTERNAL), placeParts.get(1), value));
+				// (setf (symbol-value name) val) -> (set name val): the store both
+				// spell -- the name is evaluated once, the value once, and set answers
+				// it, so the two are indistinguishable.
+				case LispNames.SYMBOL_VALUE -> {
+					if (placeParts.size() != 2) {
+						throw new IllegalArgumentException(
+								"setf of symbol-value expects (symbol-value name): " + placeCons.print());
+					}
+					yield listToCons(List.of(new LispSymbol(LispNames.SET), placeParts.get(1), value));
+				}
 				case LispNames.CAR, LispNames.FIRST -> expandSetfWithRplaca(placeParts.get(1), value);
 				case LispNames.CDR, LispNames.REST -> expandSetfWithRplacd(placeParts.get(1), value);
 				case LispNames.GETHASH ->
@@ -22935,6 +22945,47 @@ public final class LispMacroExpander {
 		}
 		String member = memberOf(head.name());
 		return LispNames.SYMBOL_FUNCTION.equals(member) || LispNames.FDEFINITION.equals(member);
+	}
+
+	/**
+	 * Whether the program writes the variable namespace through a
+	 * {@code (setf (symbol-value ...))} place (anywhere in the tree, quoted data
+	 * skipped). The lowering to {@code set} happens per expression, after the gates, so
+	 * the raw place shape is what the {@code boundp} soundness gate and the eval-runtime
+	 * gate read.
+	 * @param program the top-level forms
+	 * @return true when such a place is written
+	 */
+	public static boolean usesSymbolValueWrite(List<LispVal> program) {
+		return program.stream().anyMatch(LispMacroExpander::containsSymbolValueWrite);
+	}
+
+	private static boolean containsSymbolValueWrite(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op) {
+			String member = memberOf(op.name());
+			if (LispNames.QUOTE.equals(member)) {
+				return false;
+			}
+			if (LispNames.SETF.equals(member) && cons.isProperList()) {
+				List<LispVal> parts = cons.toList();
+				for (int i = 1; i + 1 < parts.size(); i += 2) {
+					if (isSymbolValuePlace(parts.get(i))) {
+						return true;
+					}
+				}
+			}
+		}
+		return containsSymbolValueWrite(cons.car()) || containsSymbolValueWrite(cons.cdr());
+	}
+
+	private static boolean isSymbolValuePlace(LispVal place) {
+		if (!(place instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
+			return false;
+		}
+		return LispNames.SYMBOL_VALUE.equals(memberOf(head.name()));
 	}
 
 	/**

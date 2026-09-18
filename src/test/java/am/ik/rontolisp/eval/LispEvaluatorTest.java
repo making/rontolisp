@@ -15377,6 +15377,53 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void setAssignsAGlobalByAComputedNameAndCreatesIt() {
+		assertThat(evalMulti("""
+				(defvar *set-u* 1)
+				(set '*set-u* 2)
+				(list *set-u* (symbol-value '*set-u*) (boundp '*set-u*))
+				""").print()).isEqualTo("(2 2 T)");
+		// An unbound name appears, visible to boundp and symbol-value alike.
+		assertThat(evalMulti("""
+				(set (intern "SET-U-NEW") 3)
+				(list (symbol-value 'set-u-new) (symbol-value (intern "SET-U-NEW")) (boundp 'set-u-new))
+				""").print()).isEqualTo("(3 3 T)");
+		// The store answers the value, like setq.
+		assertThat(evalMulti("(set '*set-u-v* (set '*set-u-w* 7))").print()).isEqualTo("7");
+	}
+
+	@Test
+	void setfSymbolValueIsTheSameStoreAsSet() {
+		assertThat(evalMulti("""
+				(defvar *set-sv* 1)
+				(setf (symbol-value '*set-sv*) 2)
+				(list *set-sv* (symbol-value '*set-sv*))
+				""").print()).isEqualTo("(2 2)");
+		assertThat(evalMulti("""
+				(setf (symbol-value (intern "SET-SV-NEW")) 3)
+				(symbol-value 'set-sv-new)
+				""").print()).isEqualTo("3");
+	}
+
+	@Test
+	void setOfAConstantOrNonSymbolSignals() {
+		assertThatThrownBy(() -> eval("(set nil 1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("SET expects a symbol");
+		assertThatThrownBy(() -> eval("(set t 1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("SET expects a symbol");
+		assertThatThrownBy(() -> eval("(set :kw 1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("SET cannot set");
+		assertThatThrownBy(() -> eval("(set (intern \"NIL\") 1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("SET cannot set");
+		assertThatThrownBy(() -> eval("(set 5 1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("SET expects a symbol");
+		assertThatThrownBy(() -> eval("(set 'x)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("SET expects 2 arguments");
+		assertThatThrownBy(() -> eval("(setf (symbol-value) 1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("setf of symbol-value expects (symbol-value name)");
+	}
+
+	@Test
 	void findSymbolAnswersNilForAPackageThatDoesNotExist() {
 		// CL signals a package-error; the compile paths cannot (no registry at run
 		// time), and probing an OPTIONAL system this way is what libraries do

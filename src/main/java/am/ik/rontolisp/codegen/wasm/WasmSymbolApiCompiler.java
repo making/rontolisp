@@ -212,6 +212,116 @@ final class WasmSymbolApiCompiler {
 	}
 
 	/**
+	 * {@code (set name value)} -- store {@code value} into the global variable
+	 * {@code name} names, creating the binding when unbound: the computed-name
+	 * counterpart of {@code setq}. A name with a compiled backing store writes that
+	 * module global (matched by canonical string-table offset, so a caller's literal and
+	 * a run-time {@code intern} agree); the eval mirror is written unconditionally
+	 * through {@code _store}, which creates the binding in {@code GLOBAL_ENV} when no
+	 * backing store took it. Deliberately deaf to an already-active dynamic binding, like
+	 * the JVM twin: the store targets the global namespace on every backend alike.
+	 * Constants (nil, t and keywords, by value or by computed name) and non-symbols trap,
+	 * the {@code %error} convention of the symbol API. Forces {@code usesEval} in
+	 * {@link WasmLispCompiler} like the rest of the symbol API.
+	 */
+	static void compileSet(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new UnsupportedOperationException(LispNames.SET + " expects 2 arguments, got " + (parts.size() - 1));
+		}
+		WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		int nameSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(nameSlot);
+		WasmExprCompiler.compileExpr(parts.get(2), ctx);
+		int valueSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(valueSlot);
+		// null (nil) -> trap
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(nameSlot);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.IF, 0x40);
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.writer.write(Instruction.END);
+		// not a string struct -> trap
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(nameSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.IF, 0x40);
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.writer.write(Instruction.END);
+		// the symbol t (shared literal offset) is a constant -> trap
+		emitNameOffsetEquals(nameSlot, ctx.stringTable.addString("T").offset(), ctx);
+		ctx.writer.write(Instruction.IF, 0x40);
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.writer.write(Instruction.END);
+		// a computed NIL names the constant, not a binding -> trap
+		emitNameOffsetEquals(nameSlot, ctx.stringTable.addString("NIL").offset(), ctx);
+		ctx.writer.write(Instruction.IF, 0x40);
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.writer.write(Instruction.END);
+		// a keyword (first content byte ':') is a constant -> trap
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(nameSlot);
+		WasmEmitHelper.emitStrBytesArray(ctx);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(':');
+		ctx.writer.write(Instruction.I32_EQ);
+		ctx.writer.write(Instruction.IF, 0x40);
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.writer.write(Instruction.END);
+		// backing stores first: a compiled read must see the store, not only the
+		// mirror below. Sorted by name: the index map is a hash, at most one entry
+		// can match, and emission must stay deterministic.
+		java.util.List<String> orderedGlobals = new java.util.ArrayList<>(ctx.globalIndices.keySet());
+		java.util.Collections.sort(orderedGlobals);
+		for (String global : orderedGlobals) {
+			Integer index = ctx.globalIndices.get(global);
+			if (index == null) {
+				continue;
+			}
+			emitNameOffsetEquals(nameSlot, ctx.stringTable.addString(global).offset(), ctx);
+			ctx.writer.write(Instruction.IF, 0x40);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(valueSlot);
+			ctx.writer.write(Instruction.SET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(index);
+			ctx.writer.write(Instruction.END);
+		}
+		// the mirror, unconditionally: _store creates the binding when no backing
+		// store took it, and answers the stored value, the set result.
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(nameSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(valueSlot);
+		ctx.writer.write(Instruction.GET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_ENV);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STORE);
+	}
+
+	// The name's canonical string-table offset == the given one, as an i32 condition.
+	private static void emitNameOffsetEquals(int nameSlot, int offset, WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(nameSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.writeUnsignedLeb128(0);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(offset);
+		ctx.writer.write(Instruction.I32_EQ);
+	}
+
+	/**
 	 * Emits {@code fboundp}'s literal answer for a program that also calls
 	 * {@code fmakunbound}: when {@code GLOBAL_FENV} holds a binding for the name it
 	 * decides (t when the value cell is set, nil when {@code fmakunbound} cleared it),

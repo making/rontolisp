@@ -1370,8 +1370,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// producer's dynamic value count with (apply fn (append ...)).
 		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic || usesJava || usesObjc || usesFfi
 				|| programUsesSymbol(program, LispNames.APPLY) || programUsesSymbol(program, LispNames.BOUNDP)
-				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.FBOUNDP)
-				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
+				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.SET)
+				|| programUsesSymbol(program, LispNames.FBOUNDP) || programUsesSymbol(program, LispNames.FMAKUNBOUND)
 				// (setf (symbol-function ...)) writes _fenv (the raw place shape is
 				// scanned: the lowering to %set-symbol-function happens per expression,
 				// after this gate).

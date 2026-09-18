@@ -1191,7 +1191,7 @@ cases:
       ((mine (1)) (2 1))
       (#[environment] #t #t #t)
       (2 "ab" "sym")
-  - name: eval-defines-into-a-table-of-its-own-and-its-loops-run-in-constant-stack
+  - name: eval-defines-program-globals-and-its-loops-run-in-constant-stack
     source: |
       (write
        (eval '(begin
@@ -1205,6 +1205,11 @@ cases:
       (eval '(set! x-in-eval 2) env)
       (eval '(set! eval-counter 11) env)
       (write (list (eval 'x-in-eval env) (eval 'eval-counter env) eval-counter))
+      (newline)
+      ;; What eval defines is a program global: later evals and the program
+      ;; (through eval) read it, and a set! of a program variable reaches it.
+      (eval '(define prog-visible 42) env)
+      (write (list (eval 'prog-visible env) (eval '(+ prog-visible 8) env)))
       (newline)
       (write (eval '(let loop ((i 0)) (if (= i 100000) i (loop (+ i 1)))) env))
       (newline)
@@ -1231,7 +1236,8 @@ cases:
     expected: |
       3628800
       (120 #!unspecific 1)
-      (2 11 10)
+      (2 11 11)
+      (42 50)
       100000
       100000
       4999950000

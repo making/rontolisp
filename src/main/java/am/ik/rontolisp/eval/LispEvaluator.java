@@ -1911,6 +1911,26 @@ public final class LispEvaluator {
 						LispNames.SYMBOL_VALUE + " expects a symbol, got " + args.get(0).print());
 			};
 		}));
+		// set: store into the GLOBAL variable namespace only, creating the binding
+		// when the name is unbound -- the computed-name counterpart of setq, and what
+		// a run-time evaluator defines and assigns program globals through. An
+		// already-active dynamic binding is deliberately left alone (like the compiled
+		// backends, which have no dynamic cell to address by name): use setq to assign
+		// the current dynamic binding.
+		this.globalEnv.defineFunction(LispNames.SET, new LispFunction(LispNames.SET, args -> {
+			if (args.size() != 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.SET + " expects 2 arguments, got " + args.size());
+			}
+			if (!(args.get(0) instanceof LispSymbol sym)) {
+				throw new LispEvalException(LispNames.SET + " expects a symbol, got " + args.get(0).print());
+			}
+			if (sym.isKeyword() || "NIL".equals(sym.name()) || "T".equals(sym.name()) || sym.name().isEmpty()) {
+				throw new LispEvalException(LispNames.SET + " cannot set " + args.get(0).print());
+			}
+			this.globalEnv.define(sym.name(), args.get(1));
+			return args.get(1);
+		}));
 		// (make-synonym-stream 'sym): the synonym-stream VALUE -- an instance of the
 		// fixed LispLayout.SYNONYM_STREAM layout holding the symbol, plus (in the cell
 		// reserved beside it) a reader closure answering that variable's CURRENT value.

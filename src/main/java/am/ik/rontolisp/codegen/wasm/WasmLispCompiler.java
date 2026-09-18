@@ -3093,7 +3093,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// _intern body (canonical offsets) which lives in the reader runtime.
 		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic
 				|| programUsesSymbol(program, LispNames.BOUNDP) || programUsesSymbol(program, LispNames.SYMBOL_VALUE)
-				|| programUsesSymbol(program, LispNames.FBOUNDP) || programUsesSymbol(program, LispNames.FMAKUNBOUND)
+				|| programUsesSymbol(program, LispNames.SET) || programUsesSymbol(program, LispNames.FBOUNDP)
+				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
 				// (setf (symbol-function ...)) writes GLOBAL_FENV (the raw place shape
 				// is scanned: the %set-symbol-function lowering happens per expression,
 				// after this gate).

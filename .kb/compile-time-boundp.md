@@ -25,8 +25,11 @@ Motivation: `(unless (boundp '+k+) (defconstant +k+ v))`, the portable redefinit
 
 ## Soundness gate
 Unsound exactly when a global can appear at run time: `eval`, `load`, `--dynamic`,
-`progv`. The first three force the full eval runtime anyway; `progv` does not, so its gate
-entry genuinely costs the fold.
+`progv`. The first three force the eval runtime anyway; `progv` does not, so its gate
+entry genuinely costs the fold. `set` joins them (`.todo/852`): `(set name value)` --
+and `(setf (symbol-value name) value)`, which lowers to it per expression, after this
+gate, so the raw place shape is scanned too -- creates the binding when the name is
+unbound.
 
 ## What is decidable
 `nil`, `t` and keywords fold to `t`. For a quoted ordinary symbol:

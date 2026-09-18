@@ -22,8 +22,8 @@ stubs to hold fixed function indices, JVM needs none.
   designator, literal `lambda`, `multiple-value-call`, an apply of a `flet`/`labels` name or an
   unknown literal target sets `usesApplyRuntime` (`buildApplyBody(usesEval)` without the
   `$fenv`/closure arms, the spread dispatcher, the `_lookup` registry).
-  `eval`/`load`/`--dynamic`/`boundp`/`symbol-value`/`fboundp`/`fmakunbound`/
-  `(setf (symbol-function ...))` force the full runtime.
+  `eval`/`load`/`--dynamic`/`boundp`/`symbol-value`/`set`/`fboundp`/`fmakunbound`/
+  `(setf (symbol-value ...))`/`(setf (symbol-function ...))` force the full runtime.
 - **JVM has no apply tier**: `apply`/`multiple-value-call` force `usesEval`.
   `BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS` is injected exactly when the program can reach one
   (`referencesFunctionDesignator`, position-blind on purpose), and that reference is what forces the
