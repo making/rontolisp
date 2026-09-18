@@ -631,7 +631,8 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildRatToDouble(nRatToDouble, dRatToDouble, biSignum, biNeg, biBitLength, biShiftLeft, biCompareTo,
 				biDiv, biRem, biLongValue, dblLongBits, dblNegInf, dblPosInf, cRat3, cRat4, cRat2p53, cRatFracMask));
 		methods.add(buildPow(nPow, dBinary, rRatNum, rRatDen, rRat, biPow, doubleClass, longClass, longValue,
-				numberClass, numDoubleValue, doubleValueOf, mathPow, rDbl));
+				numberClass, numDoubleValue, doubleValueOf, mathPow, rDbl, cp.addLong(Integer.MAX_VALUE),
+				cp.addLong(-(long) Integer.MAX_VALUE)));
 		ClassConstant listClass = cp.addClass(cp.addUtf8("java/util/List"));
 		StringRefs stringRefs = new StringRefs(stringClass, listClass,
 				cp.addMethodref(stringClass, cp.addNameAndType(cp.addUtf8("isEmpty"), cp.addUtf8("()Z"))),
@@ -2596,12 +2597,15 @@ final class JvmNumericRuntimeBuilder {
 	// so a double or ratio arriving through a variable or a call is handled here rather
 	// than cast: a Double base with an integer exponent short-circuits to Math.pow, and a
 	// non-Long exponent (a Double, a ratio, a huge BigInteger) takes Math.pow(_dbl(base),
-	// _dbl(e)) -- the interpreter's answer for (expt 4 1/2) = 2.0 and (expt 2 0.5).
+	// _dbl(e)) -- the interpreter's answer for (expt 4 1/2) = 2.0 and (expt 2 0.5). A
+	// Long exponent beyond [-Integer.MAX_VALUE, Integer.MAX_VALUE] takes the same
+	// Math.pow path: narrowing it with L2I would silently answer base^(e mod 2^32)
+	// ((expt 2 4294967297) is Infinity, not 2), the interpreter's rule (.todo/849).
 	private static NumericMethod buildPow(Utf8Constant name, Utf8Constant desc, MethodrefConstant rRatNum,
 			MethodrefConstant rRatDen, MethodrefConstant rRat, MethodrefConstant biPow, ClassConstant doubleClass,
 			ClassConstant longClass, MethodrefConstant longValue, ClassConstant numberClass,
 			MethodrefConstant numDoubleValue, MethodrefConstant doubleValueOf, MethodrefConstant mathPow,
-			MethodrefConstant rDbl) {
+			MethodrefConstant rDbl, LongConstant cPowMax, LongConstant cPowMin) {
 		List<Integer> c = new ArrayList<>();
 		// if (!(e instanceof Long)) return Double.valueOf(Math.pow(_dbl(base), _dbl(e)))
 		c.add(Opcode.ALOAD_1);
@@ -2630,6 +2634,28 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.emitU2(c, doubleValueOf.index());
 		c.add(Opcode.ARETURN);
 		JvmRuntimeBuilder.patchBranch(c, ifLongExp, c.size());
+		// if (e > Integer.MAX_VALUE || e < -Integer.MAX_VALUE) return
+		// Double.valueOf(Math.pow(_dbl(base), _dbl(e)))
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, longClass.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, longValue.index());
+		emitLdc2(c, cPowMax);
+		c.add(Opcode.LCMP);
+		int ifTooBig = c.size();
+		c.add(Opcode.IFGT);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, longClass.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, longValue.index());
+		emitLdc2(c, cPowMin);
+		c.add(Opcode.LCMP);
+		int ifTooSmall = c.size();
+		c.add(Opcode.IFLT);
+		JvmRuntimeBuilder.emitU2(c, 0);
 		// local 2 = (int) e
 		c.add(Opcode.ALOAD_1);
 		c.add(Opcode.CHECKCAST);
@@ -2694,6 +2720,30 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.emitU2(c, biPow.index());
 		c.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(c, rRat.index());
+		c.add(Opcode.ARETURN);
+		// A Long exponent beyond the int range: Math.pow over the widened doubles,
+		// the same shape as the non-Long arm above.
+		int outOfRange = c.size();
+		JvmRuntimeBuilder.patchBranch(c, ifTooBig, outOfRange);
+		JvmRuntimeBuilder.patchBranch(c, ifTooSmall, outOfRange);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rDbl.index());
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, numberClass.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, numDoubleValue.index());
+		c.add(Opcode.ALOAD_1);
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, rDbl.index());
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, numberClass.index());
+		c.add(Opcode.INVOKEVIRTUAL);
+		JvmRuntimeBuilder.emitU2(c, numDoubleValue.index());
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, mathPow.index());
+		c.add(Opcode.INVOKESTATIC);
+		JvmRuntimeBuilder.emitU2(c, doubleValueOf.index());
 		c.add(Opcode.ARETURN);
 		return new NumericMethod(name, desc, c, 5, 3, List.of());
 	}

@@ -6751,6 +6751,11 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(print (expt 1/2 2))")).isEqualTo("1/4");
 		assertThat(compileAndRun("(print (expt 1/2 -2))")).isEqualTo("4");
 		assertThat(compileAndRun("(print (expt 2 -1))")).isEqualTo("1/2");
+		// An integer exponent beyond the i31 range is pow, not a trap (.todo/849):
+		// the interpreter's rule, pinned on every backend.
+		assertThat(compileAndRun("(print (expt 2 4294967297))")).isEqualTo("Infinity");
+		assertThat(compileAndRun("(print (expt 2 -4294967297))")).isEqualTo("0.0");
+		assertThat(compileAndRun("(print (let ((b 1.5)) (expt b -4294967297)))")).isEqualTo("0.0");
 	}
 
 	@Test

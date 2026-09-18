@@ -7990,6 +7990,11 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (expt 3 0))")).isEqualTo("1");
 		assertThat(compileAndRun("(print (expt 2.0 3))")).isEqualTo("8.0");
 		assertThat(compileAndRun("(print (expt 2 70))")).isEqualTo("1180591620717411303424");
+		// An integer exponent beyond the int range is pow, not base^(e mod 2^32)
+		// (.todo/849): the interpreter's rule, pinned on every backend.
+		assertThat(compileAndRun("(print (expt 2 4294967297))")).isEqualTo("Infinity");
+		assertThat(compileAndRun("(print (expt 2 -4294967297))")).isEqualTo("0.0");
+		assertThat(compileAndRun("(print (let ((b 1.5)) (expt b -4294967297)))")).isEqualTo("0.0");
 	}
 
 	// Complex numbers (.todo/752): every case mirrors the interpreter case of

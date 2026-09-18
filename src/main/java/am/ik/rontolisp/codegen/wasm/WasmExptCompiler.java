@@ -16,7 +16,11 @@ import am.ik.wasm.Type;
  * An exact base (an integer or a ratio) to an integer exponent: repeated rational
  * multiplication, so a ratio base stays exact, an integer base promotes to big integers
  * at any magnitude (the loop runs through {@code _rat_mul}'s tier-aware fast path), and a
- * negative exponent yields the reciprocal ({@code (expt 2 -1)} is {@code 1/2}).
+ * negative exponent yields the reciprocal ({@code (expt 2 -1)} is {@code 1/2}). The loop
+ * counter is an i31, so the exact path is taken only for an i31 exponent: anything else
+ * (a bignum of any tier) is the float {@code pow} below, the interpreter's rule for an
+ * integer exponent beyond the int range ({@code (expt 2 4294967297)} is {@code Infinity},
+ * not a trap -- and not a 2^30-iteration loop either, `.todo/849`).
  *
  * <p>
  * Anything else -- a float base, a float exponent, a ratio exponent -- is the float
@@ -79,15 +83,29 @@ final class WasmExptCompiler {
 		ctx.writer.write(Instruction.IF, 0x40);
 		emitFloatPath(ctx, baseSlot, pSlot, rSlot, complexEscape);
 		ctx.writer.write(Instruction.ELSE);
-		emitIntegerExponent(ctx, baseSlot, pSlot, rSlot);
+		emitIntegerExponent(ctx, baseSlot, pSlot, rSlot, complexEscape);
 		ctx.writer.write(Instruction.END);
 
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(rSlot);
 	}
 
-	// The exact path: r = base^p by repeated _rat_mul, p an i31 integer.
-	private static void emitIntegerExponent(WasmLispCompiler.Ctx ctx, int baseSlot, int pSlot, int rSlot) {
+	// The exact path: r = base^p by repeated _rat_mul, p an i31 integer. A bignum
+	// exponent of any tier takes the float path instead (see the class comment).
+	private static void emitIntegerExponent(WasmLispCompiler.Ctx ctx, int baseSlot, int pSlot, int rSlot,
+			boolean complexEscape) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(pSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		ctx.writer.write(Instruction.IF, 0x40);
+		emitIntegerLoop(ctx, baseSlot, pSlot, rSlot);
+		ctx.writer.write(Instruction.ELSE);
+		emitFloatPath(ctx, baseSlot, pSlot, rSlot, complexEscape);
+		ctx.writer.write(Instruction.END);
+	}
+
+	private static void emitIntegerLoop(WasmLispCompiler.Ctx ctx, int baseSlot, int pSlot, int rSlot) {
 		// Negative exponent: base = (/ 1 base), power = -power.
 		WasmMathHelper.getI32(ctx, pSlot);
 		WasmMathHelper.constI32(ctx, 0);
