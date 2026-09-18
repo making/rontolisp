@@ -342,7 +342,18 @@
 
 (defvar rontolisp::%scheme-pushback-stream nil)
 
+;; #!fold-case / #!no-fold-case (R7RS 7.1.1): a directive is per FILE, so it is kept
+;; alongside the same stream-keyed state as the pushback cell above and reset the same
+;; way -- whichever stream *standard-input* names next starts with folding off.
+(defvar rontolisp::%scheme-fold-case nil)
+
+(defvar rontolisp::%scheme-fold-case-stream nil)
+
 (defun rontolisp::%scheme-pushback-sync ()
+  (if (not (eq rontolisp::%scheme-fold-case-stream *standard-input*))
+      (progn
+        (setq rontolisp::%scheme-fold-case-stream *standard-input*)
+        (setq rontolisp::%scheme-fold-case nil)))
   (if (and rontolisp::%scheme-pushback-chars
            (not (eq rontolisp::%scheme-pushback-stream *standard-input*)))
       (progn
@@ -417,10 +428,28 @@
                            (eq skipped rontolisp::%scheme-dot))
                        (rontolisp::%scheme-read-error "a datum must follow '#;'"
                                                       nil))))
+                ((and (not (rontolisp::%scheme-eof-p d)) (= (char-code d) 33))
+                 (rontolisp::%scheme-next-char)
+                 (rontolisp::%scheme-read-directive))
                 (t
                  (rontolisp::%scheme-pushback (code-char 35))
                  (return nil)))))
             (t (return nil))))))
+
+;; #!fold-case / #!no-fold-case, the '!' already consumed: an R7RS <directive>, part of
+;; <atmosphere> like a comment -- no datum, only the side effect of toggling folding for
+;; the rest of this stream (or until the counterpart directive).
+(defun rontolisp::%scheme-read-directive ()
+  (let ((first (rontolisp::%scheme-next-char)))
+    (if (rontolisp::%scheme-eof-p first)
+        (rontolisp::%scheme-read-error "unsupported '#' syntax" "#!")
+        (let ((word (rontolisp::%scheme-accumulate-token first)))
+          (cond
+           ((string= word "fold-case") (setq rontolisp::%scheme-fold-case t))
+           ((string= word "no-fold-case")
+            (setq rontolisp::%scheme-fold-case nil))
+           (t (rontolisp::%scheme-read-error "unsupported '#' syntax"
+               (concatenate 'string "#!" word))))))))
 
 (defun rontolisp::%scheme-skip-block-comment (depth)
   (do ()
@@ -581,7 +610,10 @@
                 (t (let ((number (rontolisp::%scheme-string->number token 10)))
                      (if (not (eq number rontolisp::%scheme-false))
                          number
-                         (rontolisp::%scheme-string->symbol token)))))))))
+                         (rontolisp::%scheme-string->symbol
+                          (if rontolisp::%scheme-fold-case
+                              (string-downcase token)
+                              token))))))))))
 
 (defun rontolisp::%scheme-read-hash ()
   (let ((c (rontolisp::%scheme-peek-char)))
@@ -650,21 +682,28 @@
             (setq chars (cons (rontolisp::%scheme-next-char) chars)))
           (if (= (length chars) 1)
               first
-              (let ((name (coerce (nreverse chars) (quote string))))
-                (cond ((string= name "alarm") (code-char 7))
-                      ((string= name "backspace") (code-char 8))
-                      ((string= name "delete") (code-char 127))
-                      ((string= name "escape") (code-char 27))
-                      ((string= name "newline") (code-char 10))
-                      ((string= name "null") (code-char 0))
-                      ((string= name "nul") (code-char 0))
-                      ((string= name "return") (code-char 13))
-                      ((string= name "space") (code-char 32))
-                      ((string= name "tab") (code-char 9))
-                      ((string= name "linefeed") (code-char 10))
-                      ((= (char-code (char name 0)) 120)
+              (let* ((name (coerce (nreverse chars) (quote string)))
+                     ;; #!fold-case folds the NAME, not the character it names -- the
+                     ;; single-codepoint case above (an unadorned #\A) never reaches
+                     ;; here.
+                     (lookup
+                      (if rontolisp::%scheme-fold-case
+                          (string-downcase name)
+                          name)))
+                (cond ((string= lookup "alarm") (code-char 7))
+                      ((string= lookup "backspace") (code-char 8))
+                      ((string= lookup "delete") (code-char 127))
+                      ((string= lookup "escape") (code-char 27))
+                      ((string= lookup "newline") (code-char 10))
+                      ((string= lookup "null") (code-char 0))
+                      ((string= lookup "nul") (code-char 0))
+                      ((string= lookup "return") (code-char 13))
+                      ((string= lookup "space") (code-char 32))
+                      ((string= lookup "tab") (code-char 9))
+                      ((string= lookup "linefeed") (code-char 10))
+                      ((= (char-code (char lookup 0)) 120)
                        (let ((value
-                              (rontolisp::%scheme-parse-hex (subseq name 1))))
+                              (rontolisp::%scheme-parse-hex (subseq lookup 1))))
                          (if (null value)
                              (rontolisp::%scheme-read-error
                               "unknown character name" name)

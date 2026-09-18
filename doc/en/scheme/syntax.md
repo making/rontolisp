@@ -3,7 +3,9 @@
 - **Reader** (case-sensitive): `#t` `#f` `#true` `#false`, integers, decimals, rationals,
   `#x` `#b` `#o` `#d`, `#\a` `#\space` `#\newline` `#\x41`, strings with
   `\n \t \" \\ \xHH;`, `#( )` vectors, dotted pairs, `'` `` ` `` `,` `,@`, `;`, `#;`,
-  `#| |#`.
+  `#| |#`, `#!fold-case` / `#!no-fold-case` (per file, folding identifiers and character
+  names -- not strings, not the character itself -- until the counterpart directive or
+  end of file).
 - **Special forms**: `define` (both forms, internal definitions as `letrec*`),
   `define-values`,
   `lambda`, `if`, `cond` (`else`, `=>`), `case`, `and`, `or`, `when`, `unless`, `let`,
