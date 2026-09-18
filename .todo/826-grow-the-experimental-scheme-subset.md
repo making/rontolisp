@@ -20,7 +20,7 @@ backend, add its cases to `scheme-spec.yaml`.
 | `(scheme char)`, `(scheme cxr)`, `(scheme inexact)`, `(scheme lazy)` | table rows in `SchemeBuiltins` with their own `library` tag | `importSet` already keys visibility on the tag. Split off: `(scheme cxr)` -> `.todo/829`, `(scheme inexact)` -> `.todo/830`, `(scheme lazy)` -> `.todo/831` (those three done) |
 | `define-library` / `include` | per-file lowering gets a library scope | cross-file references are by convention today: an unknown name is a direct call / a variable |
 | internal `define-record-type` | needs a non-top-level `defstruct`, which the compile path refuses (`.kb/defstruct.md`) | |
-| `|...|` identifiers, `+inf.0` / `+nan.0`, `#!fold-case` | reader | check that every backend PRINTS infinities the same way first |
+| `|...|` identifiers, `+inf.0` / `+nan.0` | reader | check that every backend PRINTS infinities the same way first. `#!fold-case` split off: `.todo/858` |
 
 Driven by a corpus rather than by the report: `.todo/828` (the SICP sample corpus) and its
 items `.todo/829` .. `.todo/837`; `eval` is `.todo/833`.
