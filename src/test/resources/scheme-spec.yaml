@@ -1398,6 +1398,125 @@ cases:
       (#t #t)
       #<eof>
       #t
+  # define-syntax / syntax-rules (.kb/scheme-frontend.md, "Macros"). Expected output is
+  # Gauche 0.9.15's. From here on the concatenated program defines a macro, so every
+  # case above is ALSO run through the expander on the way.
+  - name: syntax-rules-template-binders-capture-nothing-and-free-names-mean-the-definition
+    source: |
+      (define-syntax mac-swap!
+        (syntax-rules ()
+          ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))
+      (define tmp 1)
+      (define mac-other 2)
+      (mac-swap! tmp mac-other)
+      (write (list tmp mac-other))
+      (newline)
+      (define-syntax mac-or
+        (syntax-rules ()
+          ((_) #f)
+          ((_ e) e)
+          ((_ e r ...) (let ((t e)) (if t t (mac-or r ...))))))
+      (define t 5)
+      (write (list (mac-or #f t) (let ((if list)) (mac-or #f 3)) (mac-or)))
+      (newline)
+      (define-syntax mac-while
+        (syntax-rules ()
+          ((_ c body ...) (let lp () (when c body ... (lp))))))
+      (define mac-i 0)
+      (mac-while (< mac-i 3) (display mac-i) (set! mac-i (+ mac-i 1)))
+      (newline)
+      (define-syntax mac-let*
+        (syntax-rules ()
+          ((_ () body ...) (let () body ...))
+          ((_ ((x v) rest ...) body ...) (let ((x v)) (mac-let* (rest ...) body ...)))))
+      (write (mac-let* ((a 1) (b (+ a 1))) (* a b)))
+      (newline)
+      (write (let ((x 'outer))
+               (let-syntax ((m (syntax-rules () ((_) x))))
+                 (let ((x 'inner))
+                   (m)))))
+      (newline)
+    expected: |
+      (2 1)
+      (5 3 #f)
+      012
+      2
+      outer
+  - name: syntax-rules-patterns-ellipses-literals-and-escapes
+    source: |
+      (define-syntax mac-last (syntax-rules () ((_ a ... z) 'z)))
+      (define-syntax mac-vec (syntax-rules () ((_ #(a ...)) (list a ...))))
+      (define-syntax mac-nest (syntax-rules () ((_ (a b ...) ...) '((b ... a) ...))))
+      (define-syntax mac-flat (syntax-rules () ((_ (a ...) ...) '(a ... ...))))
+      (define-syntax mac-dot (syntax-rules () ((_ a . b) '(a b))))
+      (define-syntax mac-tail (syntax-rules () ((_ a ... . r) '((a ...) r))))
+      (define-syntax mac-ell (syntax-rules ::: () ((_ a :::) (list a ::: '...))))
+      (define-syntax mac-esc (syntax-rules () ((_ a) '(a (... ...)))))
+      (define-syntax mac-lit (syntax-rules (=>) ((_ a => b) (list a b)) ((_ a b c) 'no-arrow)))
+      (define-syntax mac-data (syntax-rules () ((_ 1 x) 'one) ((_ "s" x) 'string) ((_ #t x) 'true) ((_ _ x) 'any)))
+      (write (list (mac-last 1 2 3) (mac-vec #(1 2 3)) (mac-nest (1 2 3) (4 5)) (mac-flat (1 2) () (3))))
+      (newline)
+      (write (list (mac-dot 1 2 3) (mac-tail 1 2) (mac-ell 1 2) (mac-esc 1)))
+      (newline)
+      (write (list (mac-lit 1 => 2) (mac-lit 1 2 3) (let ((=> 0)) (mac-lit 1 => 2))))
+      (newline)
+      (write (list (mac-data 1 0) (mac-data "s" 0) (mac-data #t 0) (mac-data 'q 0)))
+      (newline)
+    expected: |
+      (3 (1 2 3) ((2 3 1) (5 4)) (1 2 3))
+      ((1 (2 3)) ((1 2) ()) (1 2 ...) (1 ...))
+      ((1 2) no-arrow no-arrow)
+      (one string true any)
+  - name: syntax-definitions-in-bodies-let-syntax-letrec-syntax-and-expanded-core-forms
+    source: |
+      (define-syntax mac-def-counter
+        (syntax-rules ()
+          ((_ get) (begin (define count 0) (define (get) (set! count (+ count 1)) count)))))
+      (mac-def-counter mac-tick)
+      (mac-tick)
+      (define count 100)
+      (write (list (mac-tick) count))
+      (newline)
+      (define (mac-f x)
+        (define-syntax twice (syntax-rules () ((_ e) (begin e e))))
+        (twice (set! x (* x 2)))
+        x)
+      (write (mac-f 3))
+      (newline)
+      (write (letrec-syntax ((ev? (syntax-rules () ((_ n) (if (= n 0) #t (od? (- n 1))))))
+                             (od? (syntax-rules () ((_ n) (if (= n 0) #f #t)))))
+               (list (ev? 2) (ev? 1))))
+      (newline)
+      (define-syntax mac-quote (syntax-rules () ((_ x) (list 'x `(x ,x y) '#(x z)))))
+      (write (mac-quote 5))
+      (newline)
+      (define-syntax mac-sum (syntax-rules () ((_ n) (do ((i 0 (+ i 1)) (s 0 (+ s i))) ((= i n) s)))))
+      (define i 10)
+      (write (let ((s 1)) (+ s (mac-sum i))))
+      (newline)
+      (define-syntax mac-cond
+        (syntax-rules (else)
+          ((_ (else e)) e)
+          ((_ (c e) rest ...) (if c e (mac-cond rest ...)))))
+      (write (list (mac-cond (#f 1) (else 2)) (mac-cond (#f 1) (#t 3) (else 4))))
+      (newline)
+      (define-syntax mac-values
+        (syntax-rules () ((_ (a b) e body) (let-values (((a b) e)) body))))
+      (write (mac-values (q r) (values 3 1) (list q r)))
+      (newline)
+      (define-syntax mac-case
+        (syntax-rules () ((_ k) (case k ((a) 'is-a) ((b c) 'b-or-c) (else => (lambda (x) (list x 'other)))))))
+      (write (list (mac-case 'a) (mac-case 'c) (mac-case 'z)))
+      (newline)
+    expected: |
+      (2 100)
+      12
+      (#t #f)
+      (5 (5 5 y) #(5 z))
+      46
+      (2 3)
+      (3 1)
+      (is-a b-or-c (z other))
 # An uncaught application of a non-procedure ends the program, so these cannot
 # join the concatenated corpus above -- one program per case, per backend, like
 # ci-spec.yaml's standalone: list (.todo/851). The dynamic-wind puts the wasm

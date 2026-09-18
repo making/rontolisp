@@ -97,6 +97,19 @@ final class SchemeReader {
 	}
 
 	/**
+	 * Records a cons a later pass built as standing where the original stands, so an
+	 * error in it is positioned too.
+	 * @param original a datum this reader produced (or one already inherited)
+	 * @param rewritten what replaces it
+	 */
+	void inherit(LispCons original, LispCons rewritten) {
+		Integer offset = this.offsets.get(original);
+		if (offset != null) {
+			this.offsets.putIfAbsent(rewritten, offset);
+		}
+	}
+
+	/**
 	 * Reads every datum in the input.
 	 * @return the top-level datums, in order
 	 */

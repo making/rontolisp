@@ -26,6 +26,17 @@ class SchemeSessionTest {
 	}
 
 	@Test
+	void aMacroDefinedAtOnePromptIsExpandedAtTheNext() {
+		SchemeSession session = Scheme.session(SchemeStandard.RONTOLISP);
+		assertThat(lowered(session, "(define-syntax twice (syntax-rules () ((_ e) (begin e e))))"))
+			.isEqualTo("mute (SETQ RONTOLISP::%SCHEME-FALSE '|#f| RONTOLISP::%SCHEME-UNSPECIFIED '|#!unspecific|)");
+		// Its top-level begin splices into two entries, as in a file.
+		assertThat(lowered(session, "(twice (newline))").lines())
+			.allMatch(entry -> entry.startsWith("echo ") && entry.contains("(TERPRI)"))
+			.hasSize(2);
+	}
+
+	@Test
 	void theFalseValueIsBoundOncePerSession() {
 		SchemeSession session = Scheme.session(SchemeStandard.RONTOLISP);
 		assertThat(lowered(session, "1")).isEqualTo(
