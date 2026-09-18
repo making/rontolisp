@@ -1267,8 +1267,9 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandButlast(cons), ctx, className);
 				case LispNames.IDENTITY ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandIdentity(cons), ctx, className);
-				case LispNames.COPY_LIST ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandCopyList(cons), ctx, className);
+				case LispNames.COPY_LIST -> JvmExprCompiler.compileExpr(
+						LispMacroExpander.expandCopyList(cons, ctx.functions.containsKey(LispNames.COPY_LIST_RUNTIME)),
+						ctx, className);
 				case LispNames.NREVERSE -> {
 					// A string/vector sequence reverses via a coerced list and is
 					// rebuilt in its own representation; null when the call is already

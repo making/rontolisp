@@ -7813,6 +7813,16 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void copyListKeepsADottedTail() throws Exception {
+		// copy-list lowered to (append x nil), which walks to nil and trapped on the
+		// atom's cast; the shared %copy-list-runtime keeps it.
+		assertThat(compileAndRun("""
+				(print (list (copy-list '(1 2 . 3)) (mapcar #'copy-list '((a . b) (c)))
+				             (handler-case (copy-list 5) (error () :not-a-list))))
+				""")).isEqualTo("((1 2 . 3) ((A . B) (C)) :NOT-A-LIST)");
+	}
+
+	@Test
 	void theStringResultOfMapJoinsItsPiecesOnce() throws Exception {
 		// (map 'string ...) rebuilt the whole result once per element, quadratic in the
 		// OUTPUT: 56.2 ms a call at n = 4000 on wasm-GC, and the cursor beside it could
@@ -7825,13 +7835,15 @@ class WasmLispCompilerIntegrationTest {
 				             (map 'string #'identity (list #\\a #\\b #\\c))
 				             (map 'string #'identity (list #\\a #\\b #\\c #\\d))
 				             (map 'string #'identity (list #\\a #\\b #\\c #\\d #\\e))
-				             (map 'string #'identity (list 1 2 33))
 				             (map 'string #'char-upcase "abc")
 				             (map 'string #'identity "")
 				             (map 'string #'identity #(#\\x #\\y))))
-				""")).isEqualTo("(\"\" \"a\" \"ab\" \"abc\" \"abcd\" \"abcde\" \"1233\" \"ABC\" \"\" \"xy\")");
-		assertThat(compileAndRun("(print (list (coerce (list #\\x #\\y #\\z) 'string) (coerce '(1 2) 'string)))"))
-			.isEqualTo("(\"xyz\" \"12\")");
+				""")).isEqualTo("(\"\" \"a\" \"ab\" \"abc\" \"abcd\" \"abcde\" \"ABC\" \"\" \"xy\")");
+		assertThat(compileAndRun("""
+				(print (list (coerce (list #\\x #\\y #\\z) 'string)
+				             (handler-case (coerce '(1 2) 'string) (error () :not-a-character))
+				             (handler-case (map 'string #'identity (list #\\a 33)) (error () :not-a-character))))
+				""")).isEqualTo("(\"xyz\" :NOT-A-CHARACTER :NOT-A-CHARACTER)");
 		assertThat(compileAndRun("""
 				(let ((s (map 'string #'char-upcase (make-string 5000 :initial-element #\\q))))
 				  (print (list (length s) (subseq s 0 4) (char s 4999))))
@@ -19795,7 +19807,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (coerce #(#\\p #\\q) 'string))
 				(print (coerce nil 'string))
 				(print (coerce nil 'vector))
-				(print (coerce '(1 2) 'string))
+				(print (handler-case (coerce '(1 2) 'string) (error () :not-a-character)))
 				(print (coerce 5 'vector))
 				(print (coerce 5 'list))
 				(print (position #\\Space "a b c"))
@@ -19803,7 +19815,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (count #\\a "banana"))
 				(print (remove #\\a "banana"))
 				""")).isEqualTo(
-				"1\n(#\\z #\\z)\n(7 7)\n(1 2 3)\n(1.0 2.0)\n\"pq\"\n\"\"\n#()\n\"12\"\n5\nNIL\n1\n3\n3\n\"bnn\"");
+				"1\n(#\\z #\\z)\n(7 7)\n(1 2 3)\n(1.0 2.0)\n\"pq\"\n\"\"\n#()\n:NOT-A-CHARACTER\n5\nNIL\n1\n3\n3\n\"bnn\"");
 	}
 
 	@Test

@@ -973,7 +973,7 @@ cases:
       (print (coerce #(#\p #\q) 'string))
       (print (coerce nil 'string))
       (print (coerce nil 'vector))
-      (print (coerce '(1 2) 'string))
+      (print (handler-case (coerce '(1 2) 'string) (error () :not-a-character)))
       (print (coerce 5 'vector))
       (print (coerce 5 'list))
       (print (position #\Space "a b c"))
@@ -990,7 +990,7 @@ cases:
       "pq"
       ""
       #()
-      "12"
+      :NOT-A-CHARACTER
       5
       NIL
       1
@@ -2310,18 +2310,18 @@ cases:
       (print (map 'list #'char-code (list #\a #\b)))
       ;; The 'string accumulator is a LIST of the per-element princ pieces joined
       ;; pairwise at the end; it used to be one %string-concat of the whole result
-      ;; per element, which is quadratic in the OUTPUT. Odd and even piece counts,
-      ;; an empty and a one-element sequence, and multi-character pieces are what
-      ;; the halving has to get right -- and every literal (coerce x 'string) runs
-      ;; the same body.
+      ;; per element, which is quadratic in the OUTPUT. Odd and even piece counts
+      ;; and an empty and a one-element sequence are what the halving has to get
+      ;; right -- and every literal (coerce x 'string) runs the same body. A
+      ;; non-character element signals rather than joining its printed text.
       (print (map 'string #'identity nil))
       (print (map 'string #'identity (list #\a)))
       (print (map 'string #'identity (list #\a #\b #\c)))
       (print (map 'string #'identity (list #\a #\b #\c #\d)))
-      (print (map 'string #'identity (list 1 2 33)))
+      (print (handler-case (map 'string #'identity (list 1 2 33)) (error () :not-a-character)))
       (print (map 'string #'identity "abcde"))
       (print (coerce (list #\x #\y #\z) 'string))
-      (print (coerce (list 1 2) 'string))
+      (print (handler-case (coerce (list 1 2) 'string) (error () :not-a-character)))
       (print (length (map 'string #'char-upcase (make-string 5000 :initial-element #\q))))
       (print (subseq (map 'string #'char-upcase (make-string 5000 :initial-element #\q)) 0 4))
       (print (funcall #'map 'string #'char-upcase "abcd"))
@@ -2341,10 +2341,10 @@ cases:
       "a"
       "abc"
       "abcd"
-      "1233"
+      :NOT-A-CHARACTER
       "abcde"
       "xyz"
-      "12"
+      :NOT-A-CHARACTER
       5000
       "QQQQ"
       "ABCD"
@@ -18166,6 +18166,38 @@ standalone:
       ""
       "日"
       (192)
+  - name: copy-list-keeps-a-dotted-tail-and-coerce-string-rejects-non-characters
+    source: |
+      ;; copy-list copies a dotted list dotted (CLHS copy-list), into a fresh spine.
+      (print (copy-list '(1 2 . 3)))
+      (print (copy-list '(1 . 2)))
+      (print (copy-list nil))
+      (let* ((src (list 1 2 3)) (dup (copy-list src)))
+        (setf (car dup) 9)
+        (print (list src dup (eq src dup))))
+      (print (mapcar #'copy-list '((a . b) (c d))))
+      (print (handler-case (copy-list 5) (error () :not-a-list)))
+      ;; A string's elements are characters: a non-character element is an error,
+      ;; from coerce and from map 'string alike, never its printed text.
+      (print (coerce (list #\a #\b) 'string))
+      (print (coerce (vector #\c #\d) 'string))
+      (print (handler-case (coerce (list #\a 1) 'string) (error () :not-a-character)))
+      (print (handler-case (coerce (vector 1 2) 'string) (error () :not-a-character)))
+      (print (handler-case (map 'string #'identity (list #\a "b")) (error () :not-a-character)))
+      (print (map 'string #'char-upcase "ab"))
+    stdout: |
+      (1 2 . 3)
+      (1 . 2)
+      NIL
+      ((1 2 3) (9 2 3) NIL)
+      ((A . B) (C D))
+      :NOT-A-LIST
+      "ab"
+      "cd"
+      :NOT-A-CHARACTER
+      :NOT-A-CHARACTER
+      :NOT-A-CHARACTER
+      "AB"
   - name: uncaught-simple-error-report
     source: |
       (print (handler-case (error "caught: ~a" 2) (error (e) (princ-to-string e))))

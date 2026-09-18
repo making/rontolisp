@@ -3330,6 +3330,16 @@ public final class LispNames {
 	public static final String SORT_RUNTIME = "%SORT-RUNTIME";
 
 	/**
+	 * The {@code %copy-list-runtime} internal helper: the shared {@code copy-list} every
+	 * site on a compile path calls, {@code (%copy-list-runtime list)}, which copies the
+	 * spine and keeps a dotted list's final atom as the copy's tail. Injected once per
+	 * program that names {@code copy-list}, beside the builtin wrappers, like
+	 * {@link #SORT_RUNTIME}. The interpreter never sees it (its {@code copy-list} is
+	 * native and keeps the tail the same way).
+	 */
+	public static final String COPY_LIST_RUNTIME = "%COPY-LIST-RUNTIME";
+
+	/**
 	 * The {@code %no-applicable-method} internal helper: the generic-function
 	 * dispatchers' shared last-resort signal, {@code (error (%string-concat prefix
 	 * (princ-to-string (%class-designator arg))))} as ONE defun. Injected once per

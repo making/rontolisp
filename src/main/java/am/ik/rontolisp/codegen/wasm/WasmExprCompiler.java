@@ -1670,7 +1670,9 @@ final class WasmExprCompiler {
 				case LispNames.LAST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLast(cons), ctx);
 				case LispNames.BUTLAST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandButlast(cons), ctx);
 				case LispNames.IDENTITY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandIdentity(cons), ctx);
-				case LispNames.COPY_LIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCopyList(cons), ctx);
+				case LispNames.COPY_LIST -> WasmExprCompiler.compileExpr(
+						LispMacroExpander.expandCopyList(cons, ctx.functions.containsKey(LispNames.COPY_LIST_RUNTIME)),
+						ctx);
 				case LispNames.NREVERSE -> {
 					// A string/vector sequence reverses via a coerced list and is
 					// rebuilt in its own representation; null when the call is already

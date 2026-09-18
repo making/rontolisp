@@ -1472,6 +1472,12 @@ public final class JvmLispCompiler implements LispCompiler {
 				&& (LispMacroExpander.programUsesSort(program) || LispMacroExpander.programUsesSort(wrappers))) {
 			defuns.add(extractSetqLambda(LispMacroExpander.sortRuntimeWrapper()));
 		}
+		// The shared copy-list, once per program naming copy-list (its own source or a
+		// #'copy-list wrapper body), for the same reason as the sort above.
+		if (!userDefinedNames.contains(LispNames.COPY_LIST_RUNTIME) && (LispMacroExpander.programUsesCopyList(program)
+				|| LispMacroExpander.programUsesCopyList(wrappers))) {
+			defuns.add(extractSetqLambda(LispMacroExpander.copyListRuntimeWrapper()));
+		}
 		// The shared subseq dispatch, once per program that calls subseq -- from its own
 		// source or from a wrapper body just added, which is why this is here and not in
 		// expandTopLevelDefinitions (.kb/subseq-runtime.md). Gated on the array runtime

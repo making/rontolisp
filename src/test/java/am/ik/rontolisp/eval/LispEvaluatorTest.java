@@ -6429,13 +6429,23 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void copyListKeepsADottedTailAndRejectsANonList() {
+		// CLHS copy-list: a dotted list copies dotted. The native arm used to collect the
+		// cars and drop the final atom.
+		assertThat(eval("(copy-list '(1 2 . 3))").print()).isEqualTo("(1 2 . 3)");
+		assertThat(eval("(let* ((a (list 1 2)) (b (copy-list a))) (list b (eq a b) (eq (cdr a) (cdr b))))").print())
+			.isEqualTo("((1 2) NIL NIL)");
+		assertThat(eval("(handler-case (copy-list 5) (type-error () :type-error))").print()).isEqualTo(":TYPE-ERROR");
+	}
+
+	@Test
 	void theStringResultOfMapCollectsItsPiecesAndJoinsThemOnceRatherThanConcatenatingPerElement() {
 		// (map 'string ...) accumulated (%string-concat acc (princ-to-string call)) per
 		// element, which rebuilds the whole result every element and is quadratic in the
 		// OUTPUT -- a different defect from the head-walk beside it, and one the cursor
 		// could not reach. The pieces are collected and joined pairwise instead. Odd and
-		// even counts, an empty and a one-element sequence, and MULTI-character pieces
-		// are what the halving has to get right.
+		// even counts and an empty and a one-element sequence are what the halving has to
+		// get right.
 		assertThat(evalMulti("""
 				(list (map 'string #'identity nil)
 				      (map 'string #'identity (list #\\a))
@@ -6443,14 +6453,17 @@ class LispEvaluatorTest {
 				      (map 'string #'identity (list #\\a #\\b #\\c))
 				      (map 'string #'identity (list #\\a #\\b #\\c #\\d))
 				      (map 'string #'identity (list #\\a #\\b #\\c #\\d #\\e))
-				      (map 'string #'identity (list 1 2 33))
 				      (map 'string #'char-upcase "abc")
 				      (map 'string #'identity "")
 				      (map 'string #'identity #(#\\x #\\y)))
-				""").print()).isEqualTo("(\"\" \"a\" \"ab\" \"abc\" \"abcd\" \"abcde\" \"1233\" \"ABC\" \"\" \"xy\")");
-		// coerce's string arm IS this body, so it moved with it.
-		assertThat(evalMulti("(list (coerce (list #\\x #\\y #\\z) 'string) (coerce '(1 2) 'string))").print())
-			.isEqualTo("(\"xyz\" \"12\")");
+				""").print()).isEqualTo("(\"\" \"a\" \"ab\" \"abc\" \"abcd\" \"abcde\" \"ABC\" \"\" \"xy\")");
+		// coerce's string arm IS this body, so it moved with it -- including the signal
+		// for a non-character element, which is never its printed text.
+		assertThat(eval("(coerce (list #\\x #\\y #\\z) 'string)").print()).isEqualTo("\"xyz\"");
+		assertThatThrownBy(() -> eval("(map 'string #'identity (list 1 2 33))"))
+			.hasMessageContaining("The value 1 is not of type CHARACTER");
+		assertThatThrownBy(() -> eval("(coerce '(#\\a 2) 'string)"))
+			.hasMessageContaining("The value 2 is not of type CHARACTER");
 		// Long enough that the per-element rebuild showed: 9.7 ms a call in the
 		// interpreter and 56 on wasm-GC at n = 4000.
 		assertThat(evalMulti("""
@@ -15712,8 +15725,10 @@ class LispEvaluatorTest {
 		// arm must reproduce it, not improve on it.
 		assertThat(eval("(coerce 5 'list)").print()).isEqualTo("NIL");
 		assertThatThrownBy(() -> eval("(coerce (make-array '(2 2)) 'list)")).hasMessageContaining("not a sequence");
-		// A non-character element on the way to a string is the expansion's business.
-		assertThat(eval("(coerce '(1 2) 'string)").print()).isEqualTo("\"12\"");
+		// A non-character element on the way to a string is the expansion's business --
+		// which signals it.
+		assertThatThrownBy(() -> eval("(coerce '(1 2) 'string)"))
+			.hasMessageContaining("The value 1 is not of type CHARACTER");
 		// (coerce x 'vector) over a non-list, non-string is the identity, packed arrays
 		// included.
 		assertThat(eval("(coerce 5 'vector)").print()).isEqualTo("5");
