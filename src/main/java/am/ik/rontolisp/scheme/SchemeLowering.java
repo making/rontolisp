@@ -1327,8 +1327,11 @@ final class SchemeLowering {
 			if (slot == null || !type.accessors().containsKey(field)) {
 				throw error("a modifier needs an accessor for its field: " + field, form);
 			}
+			// A modifier answers the unspecified object, like set-car!, so a REPL does
+			// not
+			// echo the stored value.
 			out.add(inherit(form, list(symbol("DEFUN"), cl(modifier), list(record, newValue),
-					list(symbol("SETF"), list(slot, record), newValue))));
+					list(symbol("SETF"), list(slot, record), newValue), this.unspecifiedVariable)));
 		});
 	}
 

@@ -231,7 +231,8 @@ class SchemeLoweringTest {
 			.isEqualTo("""
 					(DEFSTRUCT (|point| (:CONSTRUCTOR |make-point| (|point-x| |point-y|)) (:PREDICATE |point?|) \
 					(:COPIER NIL) (:CONC-NAME NIL)) |point-x| |point-y|)
-					(DEFUN |set-x!| (%SCM-R1 %SCM-V2) (SETF (|point-x| %SCM-R1) %SCM-V2))""");
+					(DEFUN |set-x!| (%SCM-R1 %SCM-V2) (SETF (|point-x| %SCM-R1) %SCM-V2) \
+					RONTOLISP::%SCHEME-UNSPECIFIED)""");
 	}
 
 	@Test

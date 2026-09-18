@@ -52,7 +52,7 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `call/cc` | `block` + a closure doing `return-from` (`%scheme-call/cc`) | escape-only, one-shot; crosses lambdas through `CrossLambdaExitLowering` |
 | `dynamic-wind` | `before`, then `unwind-protect` | the exit half runs on every exit channel; re-entry does not exist |
 | `(call-with-values (lambda () ..) (lambda (a b) ..))`, `let-values`, `define-values` | `multiple-value-bind` | the syntactic tier (`.kb/multiple-values.md`). Any other shape: `(apply consumer (multiple-value-list (funcall producer)))`. A loop's `(values ..)` result survives the `setq` into the result variable because `values` publishes through `%mv-spill` |
-| `define-record-type` (top level only) | `defstruct` with `(:conc-name nil)`, each slot NAMED after its accessor, a BOA constructor; the modifier a `defun` over `(setf (accessor r) v)` | `defstruct` is what registers the instance layout on every backend (`.kb/defstruct.md`); the accessor IS the generated one, no wrapper call. The predicate answers T/NIL and is a `pred` (`GlobalPredicate`) |
+| `define-record-type` (top level only) | `defstruct` with `(:conc-name nil)`, each slot NAMED after its accessor, a BOA constructor; the modifier a `defun` over `(setf (accessor r) v)` answering the unspecified object | `defstruct` is what registers the instance layout on every backend (`.kb/defstruct.md`); the accessor IS the generated one, no wrapper call. The predicate answers T/NIL and is a `pred` (`GlobalPredicate`) |
 | `quasiquote` | `cons`/`append`/`(coerce .. 'vector)`, constant parts quoted | depth-counted per R7RS: the innermost unquote of a nested template IS evaluated |
 | `(eval datum env)`, `(interaction-environment)`, `(scheme-report-environment 5)`, `(environment sets..)`, `user-initial-environment`, `system-global-environment` | `(%scheme-eval-in datum '\|#[environment]\|)`: a Scheme evaluator over DATUMS in `scheme.lisp`; every specifier is the one global environment, a quoted symbol | the lowering is not inside a compiled program and the backends' run-time `eval` evaluates core forms, so one evaluator serves all four ("`eval`" below) |
 
@@ -60,6 +60,48 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 excludes strings (`vectorp` does not); `integer?` accepts `2.0`; `max`/`min` are inexact
 when any argument is; `equal?` is its own helper (recurses into vectors, `eqv?` on
 records; CL's `equal` compares a general vector by identity and an instance slot-wise).
+
+## Where a Common Lisp function answers differently (2026-09-18, `.todo/862`)
+
+Found writing the reference, each checked against Gauche 0.9.15 and pinned by the
+`numbers-lists-and-records-at-their-r7rs-edges` case (plus `list-copy` in
+`pairs-and-lists`), two `standalone:` error cases, and
+`SchemeBuiltinsTest.anArgumentR7rsMakesAnErrorIsRefusedByName`:
+
+- **`quotient`/`truncate-quotient`/`floor-quotient`, `odd?`/`even?`, `gcd`/`lcm`** keep
+  the inline CL operation behind `(integerp ..)` tests and send anything else to a helper
+  that refuses a non-integer by name (`odd?: not an integer: 1.5`; CL's `oddp` answered
+  for `1.5`) and makes the answer inexact when an argument is (`(quotient 7.0 2)` 3.0,
+  `(gcd 2.0 4)` 2.0; CL's `truncate` answers an integer, `gcd` refuses a float).
+- `rational?` excludes the infinities and NaN (`realp` did not), `integer?` too;
+  `number->string` applies the radix to a ratio's two parts (`princ-to-string` ignored it).
+- `list-copy` keeps a dotted tail and answers a non-pair itself; `list?` is Floyd's
+  cycle check (the walk never returned on a circular list).
+- `reduce` is SRFI-1's `(f elem acc)` (CL's `reduce` is `(f acc elem)`: `(reduce - 0
+  '(1 2 3 4))` was -8, not 2); `fold-left`/`fold-right` take several lists (MIT).
+- `string`/`list->string` refuse a non-character (`coerce` built `"a1"`);
+  `stream-car`/`stream-cdr` refuse a non-pair (`car` of `'()` answered `()`).
+- `case` compares with `eql`, and two equal string LITERALS are one object on every
+  backend (CLHS 3.2.4.4 coalescing, `.kb/hash-tables.md`), so `(case "a" (("a") ..))`
+  matches -- R7RS 6.1 leaves `(eqv? "a" "a")` unspecified, so that is conforming and
+  unchanged; a computed key, `(string #\a)`, does not match, as in Gauche.
+- **Never `float` an exact value in a helper**: the flonum constructor stays reachable
+  in a program that makes no flonum, and wasm's type-test fold
+  (`.kb/wasm-ref-type-fold.md`) can then no longer drop the flonum arms of the
+  arithmetic and the printer. `%scheme-inexact-like` adds `(- x x)` of the inexact
+  argument instead. Measured on `(display (quotient 17 5))`: 8,599 B of wasm before,
+  34,537 with `float`, 25,490 without. The rest is the named refusal:
+  `%scheme-error-message`'s string stream (a helper calling `(error "text")` alone
+  cost +189 B). A program that already has it pays nearly nothing -- one with a
+  `lambda` passed to `map`, `filter odd?` and a recursive `quotient`: 33,026 -> 33,657 B
+  of wasm, 87,992 -> 90,697 B of class. A 3M-iteration `quotient`/`odd?`/`gcd` loop runs
+  in the same time on the JVM and wasm (single runs, within noise).
+- `SicpCorpusE2eTest` over the pinned corpus after the change: 5,262 legs, 0 failures,
+  17 skipped, the manifest unchanged (no sample calls `reduce`, `fold-left` or
+  `fold-right`).
+- Found beside it, not fixed here: Common Lisp's own `copy-list` drops a dotted tail on
+  the interpreter and fails on the compiled backends, and `coerce` of a list holding a
+  non-character to `string` builds a string (`.todo/866`).
 
 ## `exit` runs the outstanding `dynamic-wind` afters (2026-09-18, `.todo/845`)
 
