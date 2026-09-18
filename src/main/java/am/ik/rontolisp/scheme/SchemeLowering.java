@@ -5,9 +5,11 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.SequencedMap;
+import java.util.SequencedSet;
 import java.util.Set;
 
 import am.ik.rontolisp.LispArray;
@@ -108,6 +110,23 @@ final class SchemeLowering {
 
 	/** The SICP keyword no R7RS library exports: {@code (cons-stream a b)}. */
 	private static final SequencedMap<String, Core> SICP_SYNTAX = orderedMap("cons-stream", Core.CONS_STREAM);
+
+	/**
+	 * The syntactic keywords a file may spell without defining: every implemented
+	 * keyword, not the refused-by-name ones. For {@link Scheme#providedNames()}.
+	 * @return the keyword spellings
+	 */
+	static SequencedSet<String> syntaxNames() {
+		SequencedSet<String> names = new LinkedHashSet<>();
+		for (Map.Entry<String, Core> entry : SYNTAX.entrySet()) {
+			if (entry.getValue() != Core.UNSUPPORTED) {
+				names.add(entry.getKey());
+			}
+		}
+		names.addAll(LAZY_SYNTAX.keySet());
+		names.addAll(SICP_SYNTAX.keySet());
+		return names;
+	}
 
 	private static SequencedMap<String, Core> orderedMap(Object... namesAndCores) {
 		SequencedMap<String, Core> map = new LinkedHashMap<>();

@@ -1,7 +1,9 @@
 package am.ik.rontolisp.scheme;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.SequencedSet;
 import java.util.function.Predicate;
 
 import am.ik.rontolisp.LispVal;
@@ -60,6 +62,22 @@ public final class Scheme {
 		List<LispVal> forms = new ArrayList<>(SchemeBuiltins.runtimeForms(SchemeNames::mangle, spelled));
 		forms.add(SchemeLowering.libraryPredicateForm());
 		return List.copyOf(forms);
+	}
+
+	/**
+	 * Every name a file with no import resolves without defining: the procedure entries
+	 * and constants of the libraries the no-import default merges, plus the syntactic
+	 * keywords the lowering implements. A file that uses any other free name is a
+	 * fragment, not a program -- the rule the SICP corpus harness
+	 * ({@code SicpCorpusE2eTest}) ports to classify each sample.
+	 * @return the provided names, in canonical order
+	 */
+	public static SequencedSet<String> providedNames() {
+		SequencedSet<String> names = new LinkedHashSet<>();
+		names.addAll(SchemeBuiltins.entries().keySet());
+		names.addAll(SchemeBuiltins.constants().keySet());
+		names.addAll(SchemeLowering.syntaxNames());
+		return names;
 	}
 
 }

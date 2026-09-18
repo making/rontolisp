@@ -554,6 +554,44 @@ and input ports (string ports, a port argument to `read`/`write`/`display`;
 identifiers, reading `+inf.0`/`+nan.0`, internal `define-record-type`, re-entrant continuations,
 proper tail calls in general. Each is refused by name where it can be.
 
+## The SICP sample corpus harness (`.todo/828`)
+
+`SicpCorpusE2eTest` (opt-in: `-Drontolisp.sicp=<unpacked sicp.zip>`) runs every
+sample in file mode on all four backends against the interpreter, gated by the
+checked-in `src/test/resources/sicp-manifest.tsv` (category + expected outcome per
+file; the static rule of `baseline.py` ported into the test, which fails on any
+drift from the manifest instead of silently re-gating).
+
+Corpus (2026-09-18, `sicp.zip` sha256
+`476c0904386f02db5cebfa8a11410e13e0d3fb92da513c376e50c6a16873d8fe`, 1,586 `.scm`):
+`scheme` 1,181, `concurrent` 19, `fragment` 286, `embedded-query` 52,
+`embedded-amb` 27, `embedded-lazy` 4, `js-import` 13, `unreadable` 4. Interpreter
+exits 0 on 1,347 (every `scheme`/`concurrent` file but two that behave as the book
+says: `chapter1/section1/subsection6/26.scm` never terminates under applicative
+order, `chapter3/section3/subsection5/05_set_value_example_2.scm` ends in
+`(error "Contradiction" ...)`). File mode and REPL mode agree on every file. Of
+the 1,347, the JVM, wasm Preview 1 AND the component print byte-identical stdout
+on 1,333; the rest are 2 `scheme` timing prints (`(runtime)` wall-clock, matched
+modulo the seconds) and 12 `fragment`s the compile backends refuse (a global
+VARIABLE nothing defines is a compile error where the interpreter only fails if
+the path runs -- the harness classes them as fragments by decision). The
+`chapter1/section1/subsection8/02.scm` transcendental digits print identically on
+wasm (fdlibm): no tolerance, no exception. The `; expected:` annotations (450
+files) are a positive check only: 158 agree with the REPL echo, no disagreement
+is a wrong value (the annotation names another expression, the file ends in a
+definition, or the book's digits are stale -- e.g. `02_sine_example.scm`, where
+IEEE arithmetic answers `0.9999996073961978`).
+
+`embedded-*` stay excluded for a measured reason, one per family: the corpus
+does not ship a complete evaluator. The amb evaluator lacks its `(amb? exp)`
+dispatch clause and `define-variable!`, and no stream support is unwirable under
+`ambeval` (a `(cons-stream a b)` under it looks up an unbound operator -- the
+stream-using interactions cannot run there without evaluator surgery). The lazy
+evaluator lacks `define-variable!`. The query system lacks its whole syntax
+layer (`assertion-to-be-added?`, `query-syntax-process`, ... -- no file in the
+corpus defines them). Feeding them to the evaluators' `driver-loop`s over stdin
+is follow-up work once those pieces exist.
+
 ## Tests
 
 `SchemeSpecE2eTest` over `scheme-spec.yaml` (one case per table row and per procedure
