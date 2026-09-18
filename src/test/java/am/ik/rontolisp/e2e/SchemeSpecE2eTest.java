@@ -79,9 +79,15 @@ class SchemeSpecE2eTest {
 	 * on its own, per backend -- the ci-spec.yaml {@code standalone:} idea. A case also
 	 * stands alone when it must be read against a {@code --scheme-standard} other than
 	 * the corpus's default: {@code standards} lists every standard it runs under (the
-	 * default alone when absent), and each one must print the same.
+	 * default alone when absent), and each one must print the same. {@code stdin} is fed
+	 * to every leg, like a corpus case's.
 	 */
-	record Standalone(String name, String source, String stdout, String stderr, Boolean fails, List<String> standards) {
+	record Standalone(String name, String source, String stdin, String stdout, String stderr, Boolean fails,
+			List<String> standards) {
+
+		String stdinOrEmpty() {
+			return this.stdin == null ? "" : this.stdin;
+		}
 
 		List<String> standardsOrDefault() {
 			return this.standards == null ? List.of("rontolisp") : this.standards;
@@ -175,7 +181,8 @@ class SchemeSpecE2eTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		Throwable[] thrown = new Throwable[1];
 		onAProgramStack(() -> {
-			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8),
+					new java.io.ByteArrayInputStream(s.stdinOrEmpty().getBytes(StandardCharsets.UTF_8)));
 			SourceStandards standards = SourceStandards.parse(standard);
 			evaluator.setSourceStandards(standards);
 			try {
@@ -221,9 +228,12 @@ class SchemeSpecE2eTest {
 					.classBytes());
 		Path outFile = Files.createTempFile(workDir, stem + "-jvm", ".out");
 		Path errFile = Files.createTempFile(workDir, stem + "-jvm", ".err");
+		Path inFile = Files.createTempFile(workDir, stem + "-jvm", ".in");
+		Files.writeString(inFile, s.stdinOrEmpty(), StandardCharsets.UTF_8);
 		try {
 			Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
 					"-cp", dir.toString(), stem)
+				.redirectInput(inFile.toFile())
 				.redirectOutput(outFile.toFile())
 				.redirectError(errFile.toFile())
 				.start();
@@ -249,11 +259,12 @@ class SchemeSpecE2eTest {
 		finally {
 			Files.deleteIfExists(outFile);
 			Files.deleteIfExists(errFile);
+			Files.deleteIfExists(inFile);
 		}
 	}
 
 	private static void runStandaloneWasm(Standalone s, String standard, boolean component) throws Exception {
-		HostWasmtime.ExecResult result = runWasmModule(s.source(), "", component,
+		HostWasmtime.ExecResult result = runWasmModule(s.source(), s.stdinOrEmpty(), component,
 				"standalone-" + s.name().replaceAll("[^A-Za-z0-9]", "") + "-" + standard, standard);
 		String leg = component ? "WASM_COMPONENT" : "WASM";
 		String where = "standalone case '%s' [%s] on %s%n--- source ---%n%s--- end source ---%n--- stderr ---%n%s"

@@ -1166,6 +1166,28 @@ class LibraryDefunPrunerTest {
 	}
 
 	@Test
+	void thePortSectionFollowsOnlyAProgramThatUsesAPortProcedure() {
+		// (read) on standard input keeps the one stream-keyed pushback cell and no port
+		// record at all -- not even the layout; a port procedure (a current port
+		// included) switches the reader to the port's own state.
+		List<LispVal> reader = LibraryDefunPruner.prune(SchemeLibrary
+			.process(LispReader.readAllFromString("(rontolisp::%scheme-display (rontolisp::%scheme-read))")));
+		assertThat(survivingPrintOf(reader, "%SCHEME-NEXT-CHAR")).contains("%SCHEME-PUSHBACK-CHARS")
+			.doesNotContain("%SCHEME-READING-PORT");
+		assertThat(reader.toString()).doesNotContain("%SCHEME-PORT");
+		for (String program : List.of(
+				"(rontolisp::%scheme-display (rontolisp::%scheme-read-from (rontolisp::%scheme-open-input-string \"1\")))",
+				"(rontolisp::%scheme-display (rontolisp::%scheme-current-port 0)) (rontolisp::%scheme-read)")) {
+			List<LispVal> pruned = LibraryDefunPruner
+				.prune(SchemeLibrary.process(LispReader.readAllFromString(program)));
+			assertThat(survivingPrintOf(pruned, "%SCHEME-NEXT-CHAR")).as(program)
+				.contains("%SCHEME-READING-PORT")
+				.doesNotContain("%SCHEME-PUSHBACK-CHARS");
+			assertThat(survivingPrintOf(pruned, "%SCHEME-PRINT-DATUM")).as(program).contains("%SCHEME-PRINT-PORT");
+		}
+	}
+
+	@Test
 	void aUserDefstructIsNeverExpandedOrPruned() {
 		// A user (or third-party) defstruct stays on the compilers' expansion path,
 		// which alone has the program's export oracle at the right time; here it rides

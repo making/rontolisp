@@ -56,9 +56,23 @@ public final class SchemeLibrary {
 	 */
 	static final String BYTEVECTORS_FEATURE = "rontolisp-scheme-bytevectors";
 
+	/**
+	 * The feature {@code scheme.lisp} is read with when the program uses a port
+	 * procedure: it adds the port section, keeps the reader's state in the port being
+	 * read, lets {@code parameterize} bind the standard streams for a current port, and
+	 * gives the printer its port arm. A program that uses none -- {@code (read)} over
+	 * standard input included -- keeps the one stream-keyed pushback cell and its bytes.
+	 * The interpreter always reads with it.
+	 */
+	static final String PORTS_FEATURE = "rontolisp-scheme-ports";
+
+	private static final List<String> ALL_FEATURES = List.of(BYTEVECTORS_FEATURE, PORTS_FEATURE);
+
 	private static final Map<String, List<LispVal>> SOURCE_FORMS = new ConcurrentHashMap<>();
 
 	private static final Map<String, Set<String>> BYTEVECTOR_FUNCTIONS = new ConcurrentHashMap<>();
+
+	private static final Map<String, Set<String>> PORT_FUNCTIONS = new ConcurrentHashMap<>();
 
 	private static final Map<String, List<LispVal>> FORMS = new ConcurrentHashMap<>();
 
@@ -110,10 +124,24 @@ public final class SchemeLibrary {
 			// interpreter loads the library once for every program, so its table holds
 			// every procedure; a compiled program gets one cut to what it spells
 			// (process).
-			List<LispVal> forms = new ArrayList<>(sourceForms(features.with(List.of(BYTEVECTORS_FEATURE))));
+			List<LispVal> forms = new ArrayList<>(sourceForms(features.with(ALL_FEATURES)));
 			forms.addAll(Scheme.runtimeForms(name -> true, standards.scheme()));
 			return List.copyOf(forms);
 		});
+	}
+
+	/**
+	 * Every definition {@code scheme.lisp} can contribute, read both with and without its
+	 * feature-selected arms: a compiled program gets the variant its features pick
+	 * ({@link #process}), and each variant's definitions must be known to be library
+	 * definitions (prunable) whichever one it is.
+	 * @return the forms of the variant with every feature, then those of the variant
+	 * without any
+	 */
+	public static List<LispVal> everyVariantForms() {
+		List<LispVal> forms = new ArrayList<>(forms());
+		forms.addAll(sourceForms(Features.INTERPRETER));
+		return List.copyOf(forms);
 	}
 
 	private static List<LispVal> sourceForms(Features features) {
@@ -193,9 +221,15 @@ public final class SchemeLibrary {
 				List<LispVal> generated = Scheme.runtimeForms(
 						name -> symbols.contains(name) || strings.stream().anyMatch(string -> string.contains(name)),
 						standards.scheme());
-				boolean bytevectors = makesBytevectors(program, features) || makesBytevectors(generated, features);
+				List<String> selected = new ArrayList<>();
+				if (makesBytevectors(program, features) || makesBytevectors(generated, features)) {
+					selected.add(BYTEVECTORS_FEATURE);
+				}
+				if (makesPorts(program, features) || makesPorts(generated, features)) {
+					selected.add(PORTS_FEATURE);
+				}
 				List<LispVal> out = new ArrayList<>(
-						sourceForms(bytevectors ? features.with(List.of(BYTEVECTORS_FEATURE)) : features));
+						sourceForms(selected.isEmpty() ? features : features.with(selected)));
 				out.addAll(generated);
 				out.addAll(program);
 				return out;
@@ -225,12 +259,13 @@ public final class SchemeLibrary {
 	}
 
 	// The library functions that can make a bytevector: those that spell one, then every
-	// function calling one of those, to a fixpoint. Read WITHOUT the feature, so the
-	// printer's arm does not count as making one.
+	// function calling one of those, to a fixpoint. Read WITHOUT the bytevector feature,
+	// so the printer's arm does not count as making one, and WITH the ports feature, so
+	// get-output-bytevector does.
 	private static Set<String> bytevectorFunctions(Features features) {
 		return BYTEVECTOR_FUNCTIONS.computeIfAbsent(String.join(",", features.names()), ignored -> {
 			Map<String, LispVal> bodies = new HashMap<>();
-			for (LispVal form : sourceForms(features)) {
+			for (LispVal form : sourceForms(features.with(List.of(PORTS_FEATURE)))) {
 				if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
 						&& "DEFUN".equals(head.name()) && cons.cdr() instanceof LispCons rest
 						&& rest.car() instanceof LispSymbol name) {
@@ -255,6 +290,40 @@ public final class SchemeLibrary {
 			}
 			return Set.copyOf(makers);
 		});
+	}
+
+	/**
+	 * Whether the forms use ports: they call a library function that exists only under
+	 * {@link #PORTS_FEATURE} -- every port procedure's helper, the current ports
+	 * included. Derived from the library source (the functions the feature adds), so a
+	 * new port helper needs no list edit.
+	 * @param forms the program's forms, or the forms generated for it
+	 * @param features the target backend's reader features
+	 * @return {@code true} when the program needs the library's port section
+	 */
+	static boolean makesPorts(List<LispVal> forms, Features features) {
+		Set<String> portFunctions = PORT_FUNCTIONS.computeIfAbsent(String.join(",", features.names()), ignored -> {
+			Set<String> names = definedFunctions(sourceForms(features.with(List.of(PORTS_FEATURE))));
+			names.removeAll(definedFunctions(sourceForms(features)));
+			return Set.copyOf(names);
+		});
+		for (LispVal form : forms) {
+			if (callsAny(form, portFunctions)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static Set<String> definedFunctions(List<LispVal> forms) {
+		Set<String> names = new HashSet<>();
+		for (LispVal form : forms) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head && "DEFUN".equals(head.name())
+					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
+				names.add(name.name());
+			}
+		}
+		return names;
 	}
 
 	private static boolean spellsBytevector(LispVal form) {

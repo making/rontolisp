@@ -1,8 +1,8 @@
 # write-string
 
-`(write-string string)`
+`(write-string string [port [start [end]]])`
 
-`string` の文字を（引用符なしで）現在の出力ポートに書き出します。ポート引数はなく、R7RS の省略可能な `start`/`end` 引数も受け付けません。
+`string` の文字を（引用符なしで）現在の出力ポートに書き出します。`port` を渡すとそこへ書き出します。`start` と `end` は、添字 `start` から `end` の手前までの文字を選びます。
 
 ```scheme
 (write-string "hello")
@@ -11,4 +11,8 @@
 
 ```
 hello
+```
+
+```scheme
+(let ((p (open-output-string))) (write-string "hello" p 1 3) (get-output-string p)) ; => "el"
 ```

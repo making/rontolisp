@@ -7,7 +7,7 @@ plus the [*Structure and Interpretation of Computer Programs* (SICP)-compatibili
 
 | Library | Provides |
 |---|---|
-| [(scheme base)](reference/library-base.md) | The core: numbers, booleans, pairs and lists, symbols, characters, strings, vectors, bytevectors, control, exceptions, and input and output on the current ports; its syntax is on [Syntax](reference/syntax.md) |
+| [(scheme base)](reference/library-base.md) | The core: numbers, booleans, pairs and lists, symbols, characters, strings, vectors, bytevectors, control, exceptions, ports -- string and bytevector ports, the current ports -- and input and output; its syntax is on [Syntax](reference/syntax.md) |
 | [(scheme write)](reference/library-write.md) | `display` and `write` |
 | [(scheme read)](reference/library-read.md) | `read` |
 | [(scheme inexact)](reference/library-inexact.md) | Transcendental functions and the float predicates |
@@ -18,7 +18,25 @@ plus the [*Structure and Interpretation of Computer Programs* (SICP)-compatibili
 | [(scheme eval)](reference/library-eval.md) | `eval` and `environment` -- see [eval](eval.md) |
 | [(scheme repl)](reference/library-repl.md) | `interaction-environment` |
 
-Input and output use the current ports only: no procedure takes a port argument.
+Every input and output procedure takes an optional port argument and uses the current
+port without one. The current ports are parameter objects, so `parameterize` redirects
+them; there are no file ports.
+
+```scheme
+(define out (open-output-string))
+(parameterize ((current-output-port out))
+  (display "captured ")
+  (write '(1 "two")))
+(write (get-output-string out)) (newline)
+
+(define in (open-input-string "(a b) 42"))
+(write (list (read in) (read in) (eof-object? (read in)))) (newline)
+```
+
+```
+"captured (1 \"two\")"
+((a b) 42 #t)
+```
 
 ```scheme
 (define (sum-to n)

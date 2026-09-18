@@ -564,6 +564,26 @@ class SchemeLoweringTest {
 	}
 
 	@Test
+	void aPortArgumentSelectsThePortHelperAndACurrentPortIsAParameterValue() {
+		// Without a port the call is what it always was, so a program using no port
+		// procedure lowers byte for byte as before.
+		assertThat(lowered("(display 'x) (newline) (read-char)"))
+			.isEqualTo("(RONTOLISP::%SCHEME-DISPLAY '|x|)\n(TERPRI)\n(RONTOLISP::%SCHEME-READ-CHAR)");
+		assertThat(lowered("(define p (open-output-string)) (display 'x p) (newline p) (write-string \"abc\" p 1)"))
+			.isEqualTo("""
+					(SETQ |p| (RONTOLISP::%SCHEME-OPEN-OUTPUT-STRING))
+					(RONTOLISP::%SCHEME-DISPLAY-TO '|x| |p|)
+					(TERPRI (RONTOLISP::%SCHEME-OUTPUT-STREAM "newline" |p|))
+					(RONTOLISP::%SCHEME-WRITE-STRING-TO "abc" |p| 1 NIL)""");
+		// A call of a current port answers the port; its value is the parameter object
+		// parameterize binds.
+		assertThat(lowered("(display (current-output-port))"))
+			.isEqualTo("(RONTOLISP::%SCHEME-DISPLAY (RONTOLISP::%SCHEME-CURRENT-PORT 1))");
+		assertThat(lowered("(parameterize ((current-output-port 1)) 2)")).isEqualTo(
+				"(RONTOLISP::%SCHEME-PARAMETERIZE (LIST (RONTOLISP::%SCHEME-PORT-PARAMETER 1) 1) (LAMBDA NIL 2))");
+	}
+
+	@Test
 	void aSyntaxRulesMacroIsExpandedBeforeTheLoweringSeesTheProgram() {
 		// The definition leaves nothing behind; the use is what its template says.
 		assertThat(lowered("(define-syntax ten (syntax-rules () ((_) 10))) (display (ten))")).isEqualTo("(PRINC 10)");
