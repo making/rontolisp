@@ -12,7 +12,7 @@ backend, add its cases to `scheme-spec.yaml`.
 |---|---|---|
 | `define-syntax` / `syntax-rules` | an expander in `SchemeLowering`, before desugaring | needs a shadow-aware walk like `substituteSymbolMacros`; hygiene for the introduced core keywords already exists (`CORE_*` identity symbols). Done in `.todo/861` (limits: `.kb/scheme-frontend.md`, "Macros") |
 | `guard` / `raise` / `error-object?` / `error-object-message` | `handler-case` / `error` / a condition's report | compiles in EH mode (`.kb/error-handling.md`). Done in `.todo/865` (deviations: `.kb/scheme-frontend.md`, "Exceptions") |
-| `parameterize` / `make-parameter` | the special-`let` restore (`.kb/dynamic-special-variables.md`) | a parameter object is a procedure: needs a first-class handle on a special. Split off: `.todo/867` |
+| `parameterize` / `make-parameter` | the special-`let` restore (`.kb/dynamic-special-variables.md`) | a parameter object is a procedure: needs a first-class handle on a special. Done in `.todo/867` (deviations: `.kb/scheme-frontend.md`, "Parameters") |
 | `case-lambda` | a `&rest` lambda dispatching on `(length args)` | |
 | `delay` / `force` / `make-promise` | a record with a thunk | done in `.todo/831` (with `cons-stream` and the stream procedures) |
 | bytevectors | the `(unsigned-byte 8)` pack (`.kb/packed-integer-vectors.md`) | reader `#u8(` is refused today |
