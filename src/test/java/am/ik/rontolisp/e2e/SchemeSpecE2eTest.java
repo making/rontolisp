@@ -136,7 +136,7 @@ class SchemeSpecE2eTest {
 						evaluator.eval(form);
 					}
 				}).isInstanceOfSatisfying(LispExitSignal.class, exit -> assertThat(exit.code()).isEqualTo(expected));
-				assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo("before\n");
+				assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo("before\nafter");
 			}));
 			legs.add(dynamicTest(name + " JVM", () -> {
 				Path dir = workDir.resolve("exit-" + expected);
@@ -151,7 +151,7 @@ class SchemeSpecE2eTest {
 					.start();
 				String out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 				assertThat(process.waitFor()).isEqualTo(expected);
-				assertThat(out).isEqualTo("before\n");
+				assertThat(out).isEqualTo("before\nafter");
 			}));
 			for (boolean component : List.of(false, true)) {
 				legs.add(dynamicTest(name + (component ? " WASM_COMPONENT" : " WASM"), () -> {
@@ -160,9 +160,49 @@ class SchemeSpecE2eTest {
 					}
 					HostWasmtime.ExecResult result = runWasmModule(source, "", component, "exit-" + expected);
 					assertThat(result.exitCode()).isEqualTo(expected);
-					assertThat(result.stdout()).isEqualTo("before\n");
+					assertThat(result.stdout()).isEqualTo("before\nafter");
 				}));
 			}
+		}
+		// emergency-exit alone may skip the afters: the same program with it prints no
+		// "after" on any backend.
+		String abrupt = """
+				(display "before") (newline)
+				(dynamic-wind (lambda () #t) (lambda () (emergency-exit 7)) (lambda () (display "after")))
+				(display "never")
+				""";
+		legs.add(dynamicTest("(emergency-exit 7) INTERPRETER", () -> {
+			ByteArrayOutputStream out = new ByteArrayOutputStream();
+			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+			assertThatThrownBy(() -> {
+				for (LispVal form : SourceLanguage.SCHEME.read(abrupt, Features.INTERPRETER, "exit.scm")) {
+					evaluator.eval(form);
+				}
+			}).isInstanceOfSatisfying(LispExitSignal.class, exit -> assertThat(exit.code()).isEqualTo(7));
+			assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo("before\n");
+		}));
+		legs.add(dynamicTest("(emergency-exit 7) JVM", () -> {
+			Path dir = workDir.resolve("emergency-exit-7");
+			Files.createDirectories(dir);
+			Files.write(dir.resolve("SchemeExit.class"),
+					new JvmSourceCompiler("SchemeExit").sourceLanguage("scheme").compile(abrupt, null).classBytes());
+			Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+					"-cp", dir.toString(), "SchemeExit")
+				.redirectErrorStream(true)
+				.start();
+			String out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+			assertThat(process.waitFor()).isEqualTo(7);
+			assertThat(out).isEqualTo("before\n");
+		}));
+		for (boolean component : List.of(false, true)) {
+			legs.add(dynamicTest("(emergency-exit 7)" + (component ? " WASM_COMPONENT" : " WASM"), () -> {
+				if (!HostWasmtime.isAvailable()) {
+					abort("no usable wasmtime on PATH");
+				}
+				HostWasmtime.ExecResult result = runWasmModule(abrupt, "", component, "emergency-exit-7");
+				assertThat(result.exitCode()).isEqualTo(7);
+				assertThat(result.stdout()).isEqualTo("before\n");
+			}));
 		}
 		return legs.stream();
 	}

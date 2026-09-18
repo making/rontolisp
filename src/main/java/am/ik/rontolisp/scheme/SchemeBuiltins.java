@@ -460,10 +460,14 @@ final class SchemeBuiltins {
 				("interaction-environment" repl value (() '|#[environment]|))
 				("scheme-report-environment" r5rs value ((v) (progn v '|#[environment]|)))
 
-				;; --- (scheme process-context): the process ends where the call stands, on
-				;; every backend -- no dynamic-wind after thunk runs, for exit either.
-				("exit" process-context effect (() (rontolisp::%scheme-exit t)) ((code) (rontolisp::%scheme-exit code))
-				 :function (lambda (&optional (code t)) (rontolisp::%scheme-exit code)))
+				;; --- (scheme process-context): exit throws to the catch tag every
+				;; lowered file wraps its top-level forms in (SchemeLowering), unwinding
+				;; through the outstanding dynamic-wind afters on its way out; the catch
+				;; calls %scheme-exit. Only emergency-exit ends the process where the
+				;; call stands, on every backend.
+				("exit" process-context effect (() (throw 'rontolisp::%scheme-exit-tag t))
+				 ((code) (throw 'rontolisp::%scheme-exit-tag code))
+				 :function (lambda (&optional (code t)) (throw 'rontolisp::%scheme-exit-tag code)))
 				("emergency-exit" process-context effect (() (rontolisp::%scheme-exit t))
 				 ((code) (rontolisp::%scheme-exit code))
 				 :function (lambda (&optional (code t)) (rontolisp::%scheme-exit code)))

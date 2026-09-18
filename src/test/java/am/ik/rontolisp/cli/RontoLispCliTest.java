@@ -729,7 +729,7 @@ class RontoLispCliTest {
 				""");
 		String[] result = runReporting(program.toString());
 		assertThat(result[0]).isEqualTo("7");
-		assertThat(result[1]).isEqualTo("before\n");
+		assertThat(result[1]).isEqualTo("before\nafter");
 		assertThat(result[2]).isEmpty();
 	}
 

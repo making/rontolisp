@@ -107,7 +107,10 @@ class SchemeBuiltinsTest {
 		}
 		if (rest instanceof am.ik.rontolisp.LispSymbol symbol && symbol.name().startsWith("RONTOLISP::%SCHEME-")
 				&& !symbol.name().equals(SchemeBuiltins.FALSE_VARIABLE)
-				&& !symbol.name().equals(SchemeBuiltins.UNSPECIFIED_VARIABLE)) {
+				&& !symbol.name().equals(SchemeBuiltins.UNSPECIFIED_VARIABLE)
+				// A catch tag, not a function: quoted in the exit template and the
+				// wrapper, defined nowhere.
+				&& !symbol.name().equals(SchemeLowering.EXIT_TAG_NAME)) {
 			assertThat(am.ik.rontolisp.eval.SchemeLibrary.isSchemeFunction(symbol.name()))
 				.as("%s names %s", entry, symbol.name())
 				.isTrue();
