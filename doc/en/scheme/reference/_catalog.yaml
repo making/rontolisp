@@ -275,6 +275,10 @@ categories:
       - { slug: force, name: "force" }
       - { slug: make-promise, name: "make-promise" }
       - { slug: promise-p, name: "promise?" }
+  - title: "(scheme case-lambda)"
+    index_page: scheme/reference/library-case-lambda.md
+    functions:
+      - { slug: case-lambda, name: "case-lambda" }
   - title: "(scheme process-context)"
     index_page: scheme/reference/library-process-context.md
     functions:

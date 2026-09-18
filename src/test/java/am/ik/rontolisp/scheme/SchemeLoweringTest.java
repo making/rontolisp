@@ -258,7 +258,7 @@ class SchemeLoweringTest {
 		assertThatThrownBy(() -> lowered("(import (scheme char))")).isInstanceOf(LispReadException.class)
 			.hasMessage("test.scm:1:1: library (|scheme| |char|) is not available: this experimental front end has"
 					+ " (scheme base), (scheme write), (scheme read), (scheme inexact), (scheme cxr), (scheme lazy),"
-					+ " (scheme process-context), (scheme eval) and (scheme repl) only");
+					+ " (scheme case-lambda), (scheme process-context), (scheme eval) and (scheme repl) only");
 		assertThat(lowered("(import (scheme inexact)) (sqrt x)")).isEqualTo("(RONTOLISP::%SCHEME-SQRT |x|)");
 		assertThat(lowered("(import (scheme base)) (sqrt x)")).isEqualTo("(|sqrt| |x|)");
 		assertThat(lowered("(import (only (scheme cxr) caddr)) (caddr x)")).isEqualTo("(CADDR |x|)");
@@ -317,7 +317,7 @@ class SchemeLoweringTest {
 					+ " ((|false|) RONTOLISP::%SCHEME-FALSE) (T 'RONTOLISP::%SCHEME-UNBOUND)))");
 		assertThat(Scheme.runtimeForms(name -> false, SchemeStandard.RONTOLISP).get(1).print()).isEqualTo(
 				"(DEFUN RONTOLISP::%SCHEME-LIBRARY-P (NAME) (IF (MEMBER NAME '(|base| |write| |read| |inexact| |cxr| |lazy|"
-						+ " |process-context| |eval| |repl|)) T NIL))");
+						+ " |case-lambda| |process-context| |eval| |repl|)) T NIL))");
 	}
 
 	@Test
@@ -489,8 +489,12 @@ class SchemeLoweringTest {
 		assertThatThrownBy(() -> lowered("(car 1 2)")).hasMessage("test.scm:1:1: wrong number of arguments to car: 2");
 		assertThatThrownBy(() -> lowered("(f (define x 1))"))
 			.hasMessage("test.scm:1:4: a definition is only allowed at the top level or at the head of a body");
-		assertThatThrownBy(() -> lowered("(case-lambda ((x) x))"))
-			.hasMessage("test.scm:1:1: case-lambda is not supported by this experimental front end yet");
+		assertThatThrownBy(() -> lowered("(define-library (a) (begin))"))
+			.hasMessage("test.scm:1:1: define-library is not supported by this experimental front end yet");
+		assertThatThrownBy(() -> lowered("(case-lambda ((x) x) (y))"))
+			.hasMessage("test.scm:1:22: a case-lambda clause is (formals body...)");
+		assertThatThrownBy(() -> lowered("(case-lambda ((x 1) x))"))
+			.hasMessage("test.scm:1:14: expected an identifier, got 1");
 		assertThatThrownBy(() -> lowered("(parameterize ((p)) 2)"))
 			.hasMessage("test.scm:1:16: a parameterize binding is (parameter value)");
 		assertThatThrownBy(() -> lowered("(guard e 1)"))
@@ -508,6 +512,40 @@ class SchemeLoweringTest {
 		// re-raise.
 		assertThat(lowered("(define (raise x) x) (display (guard (e (else 1)) 2))"))
 			.contains("(LAMBDA (%SCM-C1) (LET ((|e| %SCM-C1)) 1))");
+	}
+
+	@Test
+	void caseLambdaIsOneRestLambdaTakingTheFirstClauseThatAcceptsTheCount() {
+		assertThat(lowered("(display (case-lambda ((x) x) ((x . r) r)))"))
+			.isEqualTo("(RONTOLISP::%SCHEME-DISPLAY (LAMBDA (&REST %SCM-A1) (LET ((%SCM-N2 (LENGTH %SCM-A1)))"
+					+ " (IF (= %SCM-N2 1) (LET ((|x| (NTH 0 %SCM-A1))) |x|)"
+					+ " (IF (>= %SCM-N2 1) (LET ((|x| (NTH 0 %SCM-A1)) (|r| (NTHCDR 1 %SCM-A1))) |r|)"
+					+ " (RONTOLISP::%SCHEME-CASE-LAMBDA-ARITY %SCM-A1))))))");
+		// A clause taking any count ends the chain; nothing counts when it is the only
+		// one.
+		assertThat(lowered("(display (case-lambda (r r)))"))
+			.isEqualTo("(RONTOLISP::%SCHEME-DISPLAY (LAMBDA (&REST %SCM-A1) (LET ((|r| %SCM-A1)) |r|)))");
+		// Defined once, it is a defun called directly, and a self tail call through
+		// another clause is a jump.
+		assertThat(lowered("(define f (case-lambda ((n) (f n 0)) ((n acc) (if (= n 0) acc (f (- n 1) (+ acc n))))))"
+				+ " (display (f 3))"))
+			.startsWith("(DEFUN |f| (&REST %SCM-C")
+			.contains("(GO %SCM-L")
+			.endsWith("(RONTOLISP::%SCHEME-DISPLAY (|f| 3))");
+		// A user binding of the name, or of car, reaches neither the keyword nor the
+		// dispatch.
+		assertThat(lowered("(define (car x) x) (display (let ((case-lambda list)) (case-lambda 1 2)))"))
+			.endsWith("(RONTOLISP::%SCHEME-DISPLAY (LET ((|case-lambda| #'LIST)) (FUNCALL"
+					+ " (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |case-lambda|) 1 2)))");
+	}
+
+	@Test
+	void caseLambdaIsImportedFromItsOwnLibraryOnly() {
+		assertThat(strict("(import (scheme base)) (case-lambda ((x) x))")).startsWith("(|case-lambda| ");
+		assertThat(strict("(import (scheme base) (only (scheme case-lambda) case-lambda)) (case-lambda ((x) x))"))
+			.startsWith("(LAMBDA (&REST ");
+		assertThat(lowered("(import (prefix (scheme case-lambda) s:)) (s:case-lambda ((x) x))"))
+			.startsWith("(LAMBDA (&REST ");
 	}
 
 	@Test

@@ -1916,6 +1916,13 @@
              (rontolisp::%scheme-error-message "The object is not applicable:"
                                                (list f)))))
 
+;; A case-lambda none of whose clauses accepts ARGUMENTS (R7RS 4.2.9): an error object
+;; naming them, as Gauche reports it.
+(defun rontolisp::%scheme-case-lambda-arity (arguments)
+  (error "~A"
+         (rontolisp::%scheme-error-message
+          "wrong number of arguments to case-lambda:" (list arguments))))
+
 ;; Evaluates every form of BODY but the last, for effect, and answers the last one: the
 ;; tail form the caller continues with.
 (defun rontolisp::%scheme-eval-butlast (body env)

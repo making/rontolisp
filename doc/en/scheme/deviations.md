@@ -24,6 +24,8 @@
   message and irritants, an uncaught `raise` with its object.
 - Calling a parameter object with an argument is an error; Gauche sets its value. `eval`
   refuses `parameterize` by name.
+- A `case-lambda` called with a number of arguments no clause accepts raises an error
+  object; `eval` refuses `case-lambda` by name.
 - A record prints in Common Lisp's `#S(...)` syntax. `equal?` compares records by
   identity.
 - `write` prints `'x` as `(quote x)`, and the unspecified value as `#!unspecific`. It is
@@ -36,8 +38,7 @@
 
 ## Not yet
 
-`define-library`,
-`case-lambda`, bytevectors, ports other than the current
+`define-library`, bytevectors, ports other than the current
 output and input ports (string ports, and a port argument to `read` / `write` /
 `display`), `(scheme char)` and the other libraries, `|...|` identifiers,
 reading `+inf.0` / `+nan.0`. The syntactic ones are refused by name when the file is

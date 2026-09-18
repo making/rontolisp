@@ -96,7 +96,7 @@ final class SchemeLowering {
 		table.put("syntax-error", Core.SYNTAX_ERROR);
 		table.put("...", Core.ELLIPSIS);
 		table.put("_", Core.UNDERSCORE);
-		for (String unsupported : List.of("define-library", "case-lambda", "include", "include-ci", "cond-expand")) {
+		for (String unsupported : List.of("define-library", "include", "include-ci", "cond-expand")) {
 			table.put(unsupported, Core.UNSUPPORTED);
 		}
 		return table;
@@ -105,6 +105,9 @@ final class SchemeLowering {
 	/** The keywords of {@code (scheme lazy)}. */
 	private static final SequencedMap<String, Core> LAZY_SYNTAX = orderedMap("delay", Core.DELAY, "delay-force",
 			Core.DELAY_FORCE);
+
+	/** The keyword of {@code (scheme case-lambda)}. */
+	private static final SequencedMap<String, Core> CASE_LAMBDA_SYNTAX = orderedMap("case-lambda", Core.CASE_LAMBDA);
 
 	/** The SICP keyword no R7RS library exports: {@code (cons-stream a b)}. */
 	private static final SequencedMap<String, Core> SICP_SYNTAX = orderedMap("cons-stream", Core.CONS_STREAM);
@@ -122,6 +125,7 @@ final class SchemeLowering {
 			}
 		}
 		names.addAll(LAZY_SYNTAX.keySet());
+		names.addAll(CASE_LAMBDA_SYNTAX.keySet());
 		names.addAll(SICP_SYNTAX.keySet());
 		return names;
 	}
@@ -175,7 +179,7 @@ final class SchemeLowering {
 	// One identity symbol per implemented keyword, for what a macro template spells: the
 	// expander hands the lowering these instead of the template's own aliases.
 	static {
-		for (Map<String, Core> table : List.of(SYNTAX, LAZY_SYNTAX, SICP_SYNTAX)) {
+		for (Map<String, Core> table : List.of(SYNTAX, LAZY_SYNTAX, CASE_LAMBDA_SYNTAX, SICP_SYNTAX)) {
 			table.forEach((name, core) -> {
 				if (core != Core.UNSUPPORTED && !CORE_BY_CORE.containsKey(core)) {
 					core(name, core);
@@ -422,6 +426,9 @@ final class SchemeLowering {
 	private final Set<LispSymbol> generated = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
 
 	private final Set<String> assignedNames = new HashSet<>();
+
+	// Each case-lambda datum's desugaring, so every pre-scan and the lowering see one.
+	private final Map<LispCons, LispVal> caseLambdas = new IdentityHashMap<>();
 
 	// What a file's names read before their definition hold until then.
 	private final SequencedMap<LispSymbol, LispVal> initialValues = new LinkedHashMap<>();
@@ -770,7 +777,7 @@ final class SchemeLowering {
 
 	/** The R7RS libraries {@code (import (scheme <name>))} accepts. */
 	private static final List<String> IMPORTABLE_LIBRARIES = List.of("base", "write", "read", "inexact", "cxr", "lazy",
-			"process-context", "eval", "repl");
+			"case-lambda", "process-context", "eval", "repl");
 
 	/**
 	 * {@code (defun rontolisp::%scheme-library-p (name) ...)}: whether
@@ -862,7 +869,8 @@ final class SchemeLowering {
 			}
 			throw error("library " + set.print() + " is not available: this experimental front end has (scheme base),"
 					+ " (scheme write), (scheme read), (scheme inexact), (scheme cxr), (scheme lazy),"
-					+ " (scheme process-context)," + " (scheme eval) and (scheme repl) only", form);
+					+ " (scheme case-lambda), (scheme process-context)," + " (scheme eval) and (scheme repl) only",
+					form);
 		}
 		Map<String, Binding> base = importSet(parts.get(1), form);
 		Map<String, Binding> result = new LinkedHashMap<>();
@@ -919,6 +927,9 @@ final class SchemeLowering {
 		}
 		if (library.equals("lazy")) {
 			LAZY_SYNTAX.forEach((name, core) -> exports.put(name, new Syntax(core, name)));
+		}
+		if (library.equals("case-lambda")) {
+			CASE_LAMBDA_SYNTAX.forEach((name, core) -> exports.put(name, new Syntax(core, name)));
 		}
 		if (library.equals("sicp")) {
 			SICP_SYNTAX.forEach((name, core) -> exports.put(name, new Syntax(core, name)));
@@ -1234,6 +1245,10 @@ final class SchemeLowering {
 			throw error("malformed define", form);
 		}
 		LispVal value = parts.size() == 3 ? parts.get(2) : LispNil.INSTANCE;
+		if (value instanceof LispCons dispatch && syntaxOf(dispatch, this.global) == Core.CASE_LAMBDA) {
+			// A procedure all the same: a defun when the file defines it once.
+			value = caseLambda(dispatch);
+		}
 		if (value instanceof LispCons lambda && syntaxOf(lambda, this.global) == Core.LAMBDA
 				&& lambda.cdr() instanceof LispCons rest && rest.cdr() instanceof LispCons) {
 			return new Definition(name, rest.car(), elements(rest.cdr(), lambda));
@@ -1577,6 +1592,7 @@ final class SchemeLowering {
 						: list(CORE_IF, parts.get(1), CORE_UNSPECIFIED, body), context);
 			}
 			case GUARD -> leaf(guard(form, scope), context);
+			case CASE_LAMBDA -> lower(caseLambda(form), context);
 			case PARAMETERIZE -> {
 				List<LispVal> parts = elements(form, form);
 				if (parts.size() < 3) {
@@ -1639,6 +1655,56 @@ final class SchemeLowering {
 				new LispCons(LispNil.INSTANCE, listOf(parts.subList(2, parts.size()))));
 		return list(symbol("RONTOLISP::%SCHEME-GUARD"), value(inherit(form, body), scope),
 				value(inherit(form, handler), scope));
+	}
+
+	// (case-lambda (formals body...) ...) (R7RS 4.2.9): one rest-argument lambda whose
+	// body takes the first clause whose formals accept the argument count, each formal
+	// bound from the argument list by a let -- so a clause body is a <body>, and a self
+	// tail call of a procedure defined by one is a jump like any lambda's. No clause
+	// accepting the count is a Scheme error naming the arguments. Desugared once per
+	// datum: the pre-scans ask for it before the lowering does.
+	private LispVal caseLambda(LispCons form) {
+		LispVal cached = this.caseLambdas.get(form);
+		if (cached != null) {
+			return cached;
+		}
+		LispSymbol arguments = fresh("A");
+		LispSymbol count = fresh("N");
+		boolean counted = false;
+		LispVal chain = list(CORE_RAW, list(symbol("RONTOLISP::%SCHEME-CASE-LAMBDA-ARITY"), arguments));
+		List<LispVal> clauses = elements(form.cdr(), form);
+		for (int i = clauses.size() - 1; i >= 0; i--) {
+			LispVal clause = clauses.get(i);
+			if (!(clause instanceof LispCons where) || elements(where, form).size() < 2) {
+				throw error("a case-lambda clause is (formals body...)", clause instanceof LispCons cons ? cons : form);
+			}
+			List<LispVal> parts = elements(where, where);
+			Formals formals = formals(parts.get(0), where);
+			int required = formals.required().size();
+			List<LispVal> bindings = new ArrayList<>();
+			for (int j = 0; j < required; j++) {
+				bindings.add(list(formals.required().get(j),
+						list(CORE_RAW, list(symbol("NTH"), new LispInteger(j), arguments))));
+			}
+			if (formals.rest() != null) {
+				bindings.add(list(formals.rest(), list(CORE_RAW,
+						required == 0 ? arguments : list(symbol("NTHCDR"), new LispInteger(required), arguments))));
+			}
+			LispVal body = inherit(where,
+					new LispCons(CORE_LET, new LispCons(listOf(bindings), listOf(parts.subList(1, parts.size())))));
+			if (formals.rest() != null && required == 0) {
+				chain = body;
+				continue;
+			}
+			counted = true;
+			LispVal test = list(symbol(formals.rest() == null ? "=" : ">="), count, new LispInteger(required));
+			chain = list(CORE_IF, list(CORE_RAW_PREDICATE, test), body, chain);
+		}
+		LispVal dispatch = counted
+				? list(CORE_LET, list(list(count, list(CORE_RAW, list(symbol("LENGTH"), arguments)))), chain) : chain;
+		LispVal lambda = inherit(form, list(CORE_LAMBDA, arguments, dispatch));
+		this.caseLambdas.put(form, lambda);
+		return lambda;
 	}
 
 	// (parameterize ((param value) ...) body...) (R7RS 4.2.6): %scheme-parameterize takes

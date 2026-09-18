@@ -1,9 +1,9 @@
 # ライブラリ
 
-ファイルが `import` できる 9 つの R7RS ライブラリと、それぞれが提供するものです。
+ファイルが `import` できる 10 の R7RS ライブラリと、それぞれが提供するものです。
 名前ごとのページは[リファレンス](reference.md)にあります。`(import ...)` で始まるファイル
 （[構文](syntax.md)参照）は、名指ししたライブラリだけを見ます。`import` を一切書かない
-ファイルは、9 つすべてに加えて
+ファイルは、10 すべてに加えて
 [*Structure and Interpretation of Computer Programs*（SICP）互換の名前](sicp.md)も見えます。
 
 | ライブラリ | 提供するもの |
@@ -14,6 +14,7 @@
 | [(scheme inexact)](reference/library-inexact.md) | 超越関数と浮動小数点数の述語 |
 | [(scheme cxr)](reference/library-cxr.md) | 3 段と 4 段の `car`/`cdr` の合成 |
 | [(scheme lazy)](reference/library-lazy.md) | プロミス |
+| [(scheme case-lambda)](reference/library-case-lambda.md) | `case-lambda` |
 | [(scheme process-context)](reference/library-process-context.md) | `exit` と `emergency-exit` のみ |
 | [(scheme eval)](reference/library-eval.md) | `eval` と `environment`。[eval](eval.md) を参照 |
 | [(scheme repl)](reference/library-repl.md) | `interaction-environment` |

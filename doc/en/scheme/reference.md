@@ -14,6 +14,7 @@ example.
 | [(scheme inexact)](reference/library-inexact.md) | Transcendental functions, `finite?`, `infinite?`, `nan?` |
 | [(scheme cxr)](reference/library-cxr.md) | The three- and four-deep `car`/`cdr` compositions |
 | [(scheme lazy)](reference/library-lazy.md) | Promises |
+| [(scheme case-lambda)](reference/library-case-lambda.md) | `case-lambda` |
 | [(scheme process-context)](reference/library-process-context.md) | `exit`, `emergency-exit` |
 | [(scheme eval)](reference/library-eval.md) | `eval`, `environment` |
 | [(scheme repl)](reference/library-repl.md) | `interaction-environment` |

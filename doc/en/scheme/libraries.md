@@ -1,8 +1,8 @@
 # Libraries
 
-The nine R7RS libraries a file may `import`, and what each provides. Every name has its
+The ten R7RS libraries a file may `import`, and what each provides. Every name has its
 own page in the [Reference](reference.md). A file that opens with `(import ...)` (see
-[Syntax](syntax.md)) sees only the libraries it names; a file with none sees all nine,
+[Syntax](syntax.md)) sees only the libraries it names; a file with none sees all ten,
 plus the [*Structure and Interpretation of Computer Programs* (SICP)-compatibility names](sicp.md).
 
 | Library | Provides |
@@ -13,6 +13,7 @@ plus the [*Structure and Interpretation of Computer Programs* (SICP)-compatibili
 | [(scheme inexact)](reference/library-inexact.md) | Transcendental functions and the float predicates |
 | [(scheme cxr)](reference/library-cxr.md) | The three- and four-deep `car`/`cdr` compositions |
 | [(scheme lazy)](reference/library-lazy.md) | Promises |
+| [(scheme case-lambda)](reference/library-case-lambda.md) | `case-lambda` |
 | [(scheme process-context)](reference/library-process-context.md) | `exit` and `emergency-exit` only |
 | [(scheme eval)](reference/library-eval.md) | `eval` and `environment` -- see [eval](eval.md) |
 | [(scheme repl)](reference/library-repl.md) | `interaction-environment` |

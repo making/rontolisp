@@ -6,12 +6,13 @@
   `#| |#`、`#!fold-case` / `#!no-fold-case`（ファイル単位。識別子と文字名を畳み込む
   -- 文字列や文字そのものは対象外 -- 対になる指示子かファイル末尾まで有効）。
 - **特殊形式**: リファレンスの[構文](reference/syntax.md)に 1 つずつページがあります
-  （`delay` と `delay-force` は [(scheme lazy)](reference/library-lazy.md)）。および
+  （`delay` と `delay-force` は [(scheme lazy)](reference/library-lazy.md)、`case-lambda` は
+  [(scheme case-lambda)](reference/library-case-lambda.md)）。および
   `(import (scheme base) (scheme write) (scheme read) (scheme inexact) (scheme cxr) (scheme lazy)
-  (scheme process-context) (scheme eval) (scheme repl))`（`only` / `except` /
+  (scheme case-lambda) (scheme process-context) (scheme eval) (scheme repl))`（`only` / `except` /
   `prefix` / `rename` 可）。
 
-9 つのライブラリそれぞれが何をエクスポートするかは[ライブラリ](libraries.md)を、
+10 のライブラリそれぞれが何をエクスポートするかは[ライブラリ](libraries.md)を、
 `import` を一切書かない場合に見える名前は
 [*Structure and Interpretation of Computer Programs*（SICP）互換](sicp.md)を参照してください。
 

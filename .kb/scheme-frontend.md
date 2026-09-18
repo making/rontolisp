@@ -53,6 +53,7 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `call/cc` | `block` + a closure doing `return-from` (`%scheme-call/cc`) | escape-only, one-shot; crosses lambdas through `CrossLambdaExitLowering` |
 | `(guard (v clause..) body..)` | `(%scheme-guard (lambda () body..) (lambda (C) (let ((v C)) (cond clause.. (else (%scheme-raise C))))))` | a Scheme-level handler stack plus `handler-case`, "Exceptions" below |
 | `dynamic-wind` | `before`, then `unwind-protect` | the exit half runs on every exit channel; re-entry does not exist |
+| `(case-lambda (formals body..)..)` | `(lambda (&rest A) (let ((N (length A))) (if (= N 1) (let ((x (nth 0 A))) body..) .. (%scheme-case-lambda-arity A))))`, spelled as a Scheme `lambda` datum with `raw` parts | "`case-lambda`" below |
 | `(parameterize ((p v)..) body..)` | `(%scheme-parameterize (list p v ..) (lambda () body..))`; no binding: `(let () body..)` | a special `let` inside the helper, "Parameters" below |
 | `(call-with-values (lambda () ..) (lambda (a b) ..))`, `let-values`, `define-values` | `multiple-value-bind` | the syntactic tier (`.kb/multiple-values.md`). Any other shape: `(apply consumer (multiple-value-list (funcall producer)))`. A loop's `(values ..)` result survives the `setq` into the result variable because `values` publishes through `%mv-spill` |
 | `define-record-type` (top level only) | `defstruct` with `(:conc-name nil)`, each slot NAMED after its accessor, a BOA constructor; the modifier a `defun` over `(setf (accessor r) v)` answering the unspecified object | `defstruct` is what registers the instance layout on every backend (`.kb/defstruct.md`); the accessor IS the generated one, no wrapper call. The predicate answers T/NIL and is a `pred` (`GlobalPredicate`) |
@@ -188,7 +189,7 @@ regions carry it.
   Refusing it on the compile path would cost the direct call of every procedure for a
   program that is wrong anyway; a session has the same order as the interpreter.
 
-## The library tags: `base`, `write`, `read`, `inexact`, `cxr`, `lazy`, `process-context`, `eval`, `repl`, `sicp` and `r5rs`
+## The library tags: `base`, `write`, `read`, `inexact`, `cxr`, `lazy`, `case-lambda`, `process-context`, `eval`, `repl`, `sicp` and `r5rs`
 
 `SchemeBuiltins` entries carry the R7RS library that exports them, checked entry by
 entry against Gauche 0.9.15's `(module-exports (find-module 'scheme.<lib>))`
@@ -196,11 +197,12 @@ entry against Gauche 0.9.15's `(module-exports (find-module 'scheme.<lib>))`
 `read-char`, `peek-char`, `read-line` and `char-ready?` are `base`, as in R7RS -- all on
 the current input port with no port argument), `inexact`,
 `cxr` (the whole `(scheme cxr)` set, `caaar` through `cddddr`: every one a
-standard Common Lisp function of the same name), `lazy`, `process-context`, `eval`
-(`eval`, `environment`) and `repl` (`interaction-environment`) are
-`SchemeLowering.IMPORTABLE_LIBRARIES`: `(import (scheme <tag>))` names them, and a file
-with no import at all merges all nine. Keywords carry a library too: `SYNTAX` is `base`,
-`LAZY_SYNTAX` (`delay`, `delay-force`) `lazy`, `SICP_SYNTAX` (`cons-stream`) `sicp`.
+standard Common Lisp function of the same name), `lazy`, `case-lambda` (the keyword
+alone), `process-context`, `eval` (`eval`, `environment`) and `repl`
+(`interaction-environment`) are `SchemeLowering.IMPORTABLE_LIBRARIES`: `(import (scheme
+<tag>))` names them, and a file with no import at all merges all ten. Keywords carry a
+library too: `SYNTAX` is `base`, `LAZY_SYNTAX` (`delay`, `delay-force`) `lazy`,
+`CASE_LAMBDA_SYNTAX` `case-lambda`, `SICP_SYNTAX` (`cons-stream`) `sicp`.
 `sicp` (`true false nil the-empty-stream user-initial-environment
 system-global-environment` -- via `SchemeLowering.Constant` over
 `SchemeBuiltins.constants()`, not an `Entry`, since they are values, not procedures --
@@ -231,7 +233,7 @@ is R7RS-small within the implemented subset:
    first datum (`an R7RS program begins with an import declaration`, R7RS 5.1). Gauche
    instead starts empty and fails at the first unbound name.
 2. **`sicp` and `r5rs` names are never visible**: `SchemeLowering.imports()`'s no-import
-   branch (the session's) merges the nine libraries only.
+   branch (the session's) merges the ten libraries only.
 3. **Redefining an imported binding in a file is refused** (R7RS 5.6.1 "it is an error";
    Gauche -r7 allows the `define` silently): a top-level `define`, `define-values`, or a
    `define-record-type` type or procedure name over a `Builtin` or `Syntax` binding
@@ -660,6 +662,55 @@ a property of `scheme.lisp` alone; the interpreter loads that lazily, on the fir
 - Pinned by the two `parameterize-...` cases and the two parameter `standalone:` cases of
   `scheme-spec.yaml` (all four backends, Gauche 0.9.15 `-r7` output except the thread
   line and the refusals), `SchemeLoweringTest.parameterizeIsTheParametersAndValuesInOrderAndABodyThunk`.
+
+## `case-lambda` (`(scheme case-lambda)`; 2026-09-18, `.todo/869`)
+
+**Desugared, in `SchemeLowering.caseLambda`, into a Scheme `lambda` datum with a rest
+formal**, then lowered like any lambda -- nothing new reaches a backend:
+
+```scheme
+(lambda %SCM-A1
+  (let ((%SCM-N2 (raw (length %SCM-A1))))
+    (if (raw-predicate (= %SCM-N2 1)) (let ((x (raw (nth 0 %SCM-A1)))) body..)
+        (if (raw-predicate (>= %SCM-N2 1)) (let ((x (raw (nth 0 %SCM-A1))) (r (raw (nthcdr 1 %SCM-A1)))) body..)
+            (raw (%scheme-case-lambda-arity %SCM-A1))))))
+```
+
+- The keywords are the identity-compared `CORE_*` symbols and the accessors `raw`, so a
+  user binding of `let`, `car` or `length` reaches neither; the temporaries are fresh
+  `%SCM-` symbols no identifier spells. A clause's formals are bound by `let`, so its body
+  is a `<body>`; a rest-only clause ends the chain (nothing after it is reachable), and a
+  procedure with only such clauses counts nothing.
+- **`definition()` desugars a `(define f (case-lambda ..))` value first**, so the
+  defun-or-variable decision sees a syntactic `lambda`: defined once, `f` is a `defun`
+  called directly, and a self tail call through ANOTHER clause (`((n) (f n 0))`) is a
+  `selfLoop` jump with a rest carrier -- `(cl-count 100000)` in the spec case. The
+  desugaring is cached per datum (`caseLambdas`, identity), so the pre-scans and the
+  lowering see one set of temporaries.
+- No clause accepting the count: `%scheme-case-lambda-arity`, an `(error "~A" ..)` with
+  `wrong number of arguments to case-lambda: (1 2 3)` -- an error object `guard` catches,
+  irritants `()` as in Gauche, whose message says `case lambda`.
+- `SchemeExpander` scopes each clause like a `lambda` (formals, then a `<body>`), so a
+  template's clause formal is renamed and hygienic (the `cl-opt` macro in the spec case).
+- Library `case-lambda`, merged into the no-import default; `(import (scheme base))` does
+  not see it (under `r7rs` a file must import it). `eval` refuses it by name (its keyword
+  list already held it).
+- Cost (2026-09-18, x86-64 Linux, Java 25; `-o P.class --class-name P` / `-o p.wasm`): a
+  program not spelling it is byte-identical before and after (`hello.scm` 1,666 / 510 B,
+  `(display (list 1 'a "s"))` 74,026 / 11,481, `twice` 79,687 / 24,993). `(define area
+  (case-lambda ((w) (* w w)) ((w h) (* w h))))` with two calls is 79,014 / 23,571 B
+  against 74,195 / 8,985 for the same with a dotted rest formal: the arity refusal pulls
+  `%scheme-error-message`'s string-stream machinery, as the `twice` probe's
+  ensure-procedure does. Time, 20M calls of a two-clause `case-lambda` against a plain
+  two-argument `defun` (single runs, incl. startup): JVM 0.20 vs 0.13 s, wasm 1.09 vs
+  0.26 s -- the rest list, `length` and `nth` per call. A direct call of a `defun` defined
+  by one could pick its clause statically: `.todo/870`.
+- None of the SICP samples spells `case-lambda` (`sicp.zip` above), so the corpus
+  classification (`providedNames`) is unmoved.
+- Pinned by `case-lambda-takes-the-first-clause-...` and the two `case-lambda` standalone
+  cases of `scheme-spec.yaml` (all four backends, Gauche 0.9.15 `-r7` output but the
+  message), `SchemeLoweringTest.caseLambdaIsOneRestLambda...` and
+  `caseLambdaIsImportedFromItsOwnLibraryOnly`.
 
 ## A session (`SchemeSession`, `SchemeLowering.interact`)
 
