@@ -103,14 +103,42 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * The {@code embedded-*} samples stay excluded for a measured reason, one per family: the
  * corpus does not ship a complete evaluator -- the amb evaluator lacks its
  * {@code (amb? exp)} dispatch clause, {@code define-variable!} and any stream support
- * under {@code ambeval}; the lazy evaluator lacks {@code define-variable!}; the query
- * system lacks its whole syntax layer ({@code assertion-to-be-added?},
- * {@code query-syntax-process}, ...). Feeding them to a driver loop is follow-up work
- * once those pieces exist; the manifest records the reason per row.
+ * under {@code ambeval}; the lazy evaluator lacks its {@code eval} dispatch,
+ * {@code eval-sequence}, {@code eval-definition}, the whole expression-syntax layer AND
+ * {@code define-variable!} (2026-09-18, {@code .todo/856}: the "define-variable! only"
+ * premise did not survive measurement -- no corpus file defines {@code self-evaluating?},
+ * {@code variable?}, {@code quoted?}, ... either); the query system lacks its whole
+ * syntax layer ({@code assertion-to-be-added?}, {@code query-syntax-process}, ...).
+ * Feeding them to a driver loop is follow-up work once those pieces exist; the manifest
+ * records the reason per row.
+ *
+ * <p>
+ * The amb family's stream-free samples run as driver legs ({@link #ambDrivers()}): the
+ * evaluator is one corpus core file
+ * ({@code chapter4/section3/subsection3/16_driver_loop_amb.scm}, minus its trailing
+ * {@code (driver-loop)} call) over the corpus support files, closed by the
+ * harness-written {@code /sicp-amb-glue.scm} (the syntax layer, {@code define-variable!},
+ * {@code analyze-quoted}, {@code analyze-sequence}, the {@code amb?}/{@code let?} advice
+ * on {@code analyze}, {@code apply-primitive-procedure} over the host {@code apply}, the
+ * driver prompts, a driver loop with the EOF clause the book loop lacks, the global
+ * environment with the extra primitives the samples need, and the replacing
+ * {@code (driver-loop)} call -- no corpus text in it). Stdin per leg is the two corpus
+ * prelude files ({@code 03_require_non_det.scm}, {@code 05_an_element_of.scm}) then the
+ * sample; the EOF clause ends the run, so the legs stay in-process on every backend (an
+ * {@code (exit)} terminator would be {@code System.exit} on the JVM leg); the legs are
+ * listed in {@code /sicp-amb-drivers.tsv}. The stream-using interactions (subsection1
+ * {@code 08}-{@code 12}, prime-sum-pair) stay excluded -- a {@code (cons-stream a b)}
+ * under {@code ambeval} looks up an unbound operator -- and so does
+ * {@code 03_office_move.scm}, which finds the book answer but needs ~256 MiB of host
+ * stack on the interpreter where the CLI hands every program 16 MiB.
  */
 class SicpCorpusE2eTest {
 
 	private static final String MANIFEST_RESOURCE = "/sicp-manifest.tsv";
+
+	private static final String AMB_DRIVERS_RESOURCE = "/sicp-amb-drivers.tsv";
+
+	private static final String AMB_GLUE_RESOURCE = "/sicp-amb-glue.scm";
 
 	private static final long LEG_TIMEOUT_SECONDS = 90;
 
@@ -342,9 +370,113 @@ class SicpCorpusE2eTest {
 		return dynamicContainer(entry.file(), legs.stream());
 	}
 
-	private static String exitMessage(Entry entry, Outcome outcome) {
-		return entry.file() + " exited " + outcome.exit() + (outcome.timedOut() ? " (timed out)" : "") + "\n"
+	/**
+	 * The amb driver legs of {@code .todo/856}: every stream-free {@code embedded-amb}
+	 * sample in {@code /sicp-amb-drivers.tsv}, fed to the composed amb evaluator over
+	 * stdin with the interpreter as the reference -- the same four legs and the same
+	 * exit-0 plus byte-identical-stdout contract as a {@code scheme/ok} file.
+	 * @throws Exception if the composition cannot be read
+	 */
+	@TestFactory
+	Stream<DynamicNode> ambDrivers() throws Exception {
+		Path root = corpusRoot();
+		assumeTrue(root != null, () -> "SICP corpus E2E is opt-in: pass -Drontolisp.sicp=<unpacked sicp.zip dir> "
+				+ "(holding programs_scm/)");
+		String program = composeAmbProgram(root);
+		List<String> samples = loadAmbDrivers();
+		String only = System.getProperty("rontolisp.sicp.only");
+		List<String> selected = samples.stream()
+			.filter(sample -> only == null || only.isBlank() || sample.contains(only))
+			.toList();
+		assumeTrue(!selected.isEmpty(), () -> "-Drontolisp.sicp.only=" + only + " matched no amb driver leg");
+		List<DynamicNode> nodes = new ArrayList<>();
+		for (String sample : selected) {
+			nodes.add(ambDriverNode(program, root, sample));
+		}
+		return nodes.stream();
+	}
+
+	/**
+	 * The composed amb evaluator: the corpus support files, then the corpus core file
+	 * minus its trailing {@code (driver-loop)} call (the harness drives the input itself;
+	 * stdin ends after the sample and the glue loop's EOF clause ends the run), then the
+	 * harness glue ending in the replacing {@code (driver-loop)} call. Every addition to
+	 * the corpus files is the checked-in {@code /sicp-amb-glue.scm} -- no corpus text is
+	 * checked in.
+	 */
+	static String composeAmbProgram(Path root) throws IOException {
+		Path programs = root.resolve("programs_scm");
+		StringBuilder program = new StringBuilder();
+		for (String support : List.of("chapter4/section1/subsection3/02_true.scm",
+				"chapter4/section1/subsection3/04_make_procedure.scm",
+				"chapter4/section1/subsection3/12_extend_environment.scm",
+				"chapter4/section1/subsection3/14_lookup_variable_value.scm",
+				"chapter4/section1/subsection3/16_assign_name_value.scm",
+				"chapter4/section1/subsection4/01_setup_environment.scm")) {
+			program.append(Files.readString(programs.resolve(support))).append('\n');
+		}
+		String core = Files.readString(programs.resolve("chapter4/section3/subsection3/16_driver_loop_amb.scm"));
+		String stripped = core.stripTrailing();
+		assertThat(stripped).as("the amb core file should end in its (driver-loop) call").endsWith("(driver-loop)");
+		program.append(stripped, 0, stripped.length() - "(driver-loop)".length()).append('\n');
+		program.append(readResource(AMB_GLUE_RESOURCE)).append('\n');
+		return program.toString();
+	}
+
+	/**
+	 * Stdin per amb driver leg: the two corpus prelude files, then the sample. The glue
+	 * loop's EOF clause ends the run, so no terminator form is appended.
+	 */
+	static byte[] ambStdin(Path root, String sample) throws IOException {
+		Path programs = root.resolve("programs_scm");
+		String stdin = Files.readString(programs.resolve("chapter4/section3/subsection1/03_require_non_det.scm")) + "\n"
+				+ Files.readString(programs.resolve("chapter4/section3/subsection1/05_an_element_of.scm")) + "\n"
+				+ Files.readString(programs.resolve(sample)) + "\n";
+		return stdin.getBytes(StandardCharsets.UTF_8);
+	}
+
+	private static DynamicContainer ambDriverNode(String program, Path root, String sample) {
+		List<DynamicNode> legs = new ArrayList<>();
+		legs.add(dynamicTest("INTERPRETER", () -> {
+			Outcome reference = interpretSource(program, sample, ambStdin(root, sample));
+			assertThat(reference.exit()).as(exitMessage(sample, reference)).isZero();
+		}));
+		legs.add(dynamicTest("JVM", () -> {
+			byte[] stdin = ambStdin(root, sample);
+			Outcome reference = interpretSource(program, sample, stdin);
+			assertThat(reference.exit()).as(exitMessage(sample, reference)).isZero();
+			Outcome actual = runOnJvmSource(program, stdin);
+			assertThat(actual.exit()).as(exitMessage(sample, actual)).isZero();
+			assertThat(actual.stdout()).as("JVM stdout differs for %s", sample).isEqualTo(reference.stdout());
+		}));
+		legs.add(dynamicTest("WASM", () -> {
+			requireWasmtime();
+			byte[] stdin = ambStdin(root, sample);
+			Outcome reference = interpretSource(program, sample, stdin);
+			assertThat(reference.exit()).as(exitMessage(sample, reference)).isZero();
+			Outcome actual = runOnWasmSource(program, "amb_" + sample, false, stdin);
+			assertThat(actual.exit()).as(exitMessage(sample, actual)).isZero();
+			assertThat(actual.stdout()).as("wasm stdout differs for %s", sample).isEqualTo(reference.stdout());
+		}));
+		legs.add(dynamicTest("WASM_COMPONENT", () -> {
+			requireWasmtime();
+			byte[] stdin = ambStdin(root, sample);
+			Outcome reference = interpretSource(program, sample, stdin);
+			assertThat(reference.exit()).as(exitMessage(sample, reference)).isZero();
+			Outcome actual = runOnWasmSource(program, "amb_" + sample, true, stdin);
+			assertThat(actual.exit()).as(exitMessage(sample, actual)).isZero();
+			assertThat(actual.stdout()).as("component stdout differs for %s", sample).isEqualTo(reference.stdout());
+		}));
+		return dynamicContainer(sample, legs.stream());
+	}
+
+	private static String exitMessage(String file, Outcome outcome) {
+		return file + " exited " + outcome.exit() + (outcome.timedOut() ? " (timed out)" : "") + "\n"
 				+ outcome.stdout();
+	}
+
+	private static String exitMessage(Entry entry, Outcome outcome) {
+		return exitMessage(entry.file(), outcome);
 	}
 
 	private static void assertTimingMatches(Outcome actual, Outcome reference, Entry entry) {
@@ -374,10 +506,14 @@ class SicpCorpusE2eTest {
 	private static Outcome interpret(Path file) throws Exception {
 		String source = Files.readString(file);
 		String name = file.getFileName().toString();
+		return interpretSource(source, name, new byte[0]);
+	}
+
+	private static Outcome interpretSource(String source, String name, byte[] stdin) throws Exception {
 		return onAProgramStack(() -> {
 			ByteArrayOutputStream out = new ByteArrayOutputStream();
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8),
-					new java.io.ByteArrayInputStream(new byte[0]));
+					new java.io.ByteArrayInputStream(stdin));
 			try {
 				for (LispVal form : SourceLanguage.SCHEME.read(source, Features.INTERPRETER, name)) {
 					evaluator.eval(form);
@@ -397,7 +533,10 @@ class SicpCorpusE2eTest {
 	}
 
 	private static Outcome runOnJvm(Path file) throws Exception {
-		String source = Files.readString(file);
+		return runOnJvmSource(Files.readString(file), new byte[0]);
+	}
+
+	private static Outcome runOnJvmSource(String source, byte[] stdin) throws Exception {
 		return onAProgramStack(() -> {
 			byte[] classBytes;
 			try {
@@ -428,7 +567,7 @@ class SicpCorpusE2eTest {
 			PrintStream previousOut = System.out;
 			java.io.InputStream previousIn = System.in;
 			System.setOut(new PrintStream(out, true, StandardCharsets.UTF_8));
-			System.setIn(new java.io.ByteArrayInputStream(new byte[0]));
+			System.setIn(new java.io.ByteArrayInputStream(stdin));
 			try {
 				main.invoke(null, (Object) new String[0]);
 			}
@@ -449,6 +588,12 @@ class SicpCorpusE2eTest {
 	private static Outcome runOnWasm(Path file, boolean component) throws Exception {
 		String source = Files.readString(file);
 		String base = file.getFileName().toString().replaceAll("[^A-Za-z0-9]", "_");
+		return runOnWasmSource(source, base, component, new byte[0]);
+	}
+
+	private static Outcome runOnWasmSource(String source, String name, boolean component, byte[] stdin)
+			throws Exception {
+		String base = name.replaceAll("[^A-Za-z0-9]", "_");
 		CompileFrontendAccess.Program frontend;
 		try {
 			frontend = CompileFrontendAccess.scheme(source, true, component);
@@ -464,7 +609,7 @@ class SicpCorpusE2eTest {
 		Path moduleFile = workDir.resolve(base + (component ? ".component.wasm" : ".wasm"));
 		Files.write(moduleFile, module);
 		Path stdinFile = workDir.resolve(base + ".stdin");
-		Files.write(stdinFile, new byte[0]);
+		Files.write(stdinFile, stdin);
 		Path outFile = Files.createTempFile(workDir, base + "-wasm", ".out");
 		Path errFile = Files.createTempFile(workDir, base + "-wasm", ".err");
 		try {
@@ -554,6 +699,27 @@ class SicpCorpusE2eTest {
 				entries.add(new Entry(columns[0], columns[1], columns[2], columns[3]));
 			}
 			return entries;
+		}
+	}
+
+	private static List<String> loadAmbDrivers() throws IOException {
+		String text = readResource(AMB_DRIVERS_RESOURCE);
+		List<String> samples = new ArrayList<>();
+		for (String line : text.split("\n")) {
+			if (line.isBlank() || line.startsWith("#")) {
+				continue;
+			}
+			samples.add(line.strip());
+		}
+		return samples;
+	}
+
+	private static String readResource(String resource) throws IOException {
+		try (InputStream in = SicpCorpusE2eTest.class.getResourceAsStream(resource)) {
+			if (in == null) {
+				throw new IOException("missing test resource: " + resource);
+			}
+			return new String(in.readAllBytes(), StandardCharsets.UTF_8);
 		}
 	}
 

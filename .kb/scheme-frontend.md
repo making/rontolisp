@@ -604,10 +604,41 @@ does not ship a complete evaluator. The amb evaluator lacks its `(amb? exp)`
 dispatch clause and `define-variable!`, and no stream support is unwirable under
 `ambeval` (a `(cons-stream a b)` under it looks up an unbound operator -- the
 stream-using interactions cannot run there without evaluator surgery). The lazy
-evaluator lacks `define-variable!`. The query system lacks its whole syntax
-layer (`assertion-to-be-added?`, `query-syntax-process`, ... -- no file in the
-corpus defines them). Feeding them to the evaluators' `driver-loop`s over stdin
-is follow-up work once those pieces exist.
+evaluator lacks its `eval` dispatch, `eval-sequence`, `eval-definition`, the
+whole expression-syntax layer AND `define-variable!` (2026-09-18,
+`.todo/856`: the earlier "only `define-variable!`" note did not survive
+measurement -- no corpus file defines `self-evaluating?`, `variable?`,
+`quoted?`, `cond->if`, `define-variable!` or `analyze-quoted` either). The query
+system lacks its whole syntax layer (`assertion-to-be-added?`,
+`query-syntax-process`, ... -- no file in the corpus defines them). Feeding them
+to the evaluators' `driver-loop`s over stdin is follow-up work once those pieces
+exist.
+
+SICP stage 3 (2026-09-18, `.todo/856`): the amb family's stream-free samples run
+as driver legs (`SicpCorpusE2eTest#ambDrivers`, legs listed in
+`src/test/resources/sicp-amb-drivers.tsv`) -- 19 of the 20 exit 0 on all four
+backends with byte-identical stdout to the interpreter (the first value the book
+prints: `(1 a)`, the `(sentence ...)` parses, `ok` for the defines-only legs).
+The composition is one corpus core file
+(`chapter4/section3/subsection3/16_driver_loop_amb.scm`, minus its trailing
+`(driver-loop)` call) over six corpus support files, closed by the
+harness-written `src/test/resources/sicp-amb-glue.scm` (the syntax layer the
+corpus never ships, `define-variable!`, `analyze-quoted`,
+`analyze-sequence`, the `amb?`/`let?` advice on `analyze` -- the samples use
+`let`, which the corpus evaluator has no clause for --
+`apply-primitive-procedure` over the host `apply`, since the corpus's
+`apply-in-underlying-scheme` is not provided, the driver prompts, a driver loop
+with the EOF clause the book loop lacks, the global environment with the extra
+primitives the samples need, and the replacing `(driver-loop)` call); stdin per
+leg is the two corpus prelude files (`require`, `an-element-of`) then the sample
+to EOF. The EOF clause (rather than an `(exit)` terminator) keeps the legs
+in-process on every backend -- on the JVM an `(exit)` inside the evaluated
+program is `System.exit`, which kills the test's own fork. Still excluded, with numbers:
+the 7 stream-using interactions (a `(cons-stream a b)` under `ambeval` looks up
+an unbound operator) and `03_office_move.scm`, which does find the book answer
+`((baker 3) (cooper 2) (fletcher 4) (miller 5) (smith 1))` but needs ~256 MiB of
+host stack on the interpreter (64 MiB still overflows) where the CLI hands every
+program 16 MiB. The lazy 4 and query 52 stay excluded for the reasons above.
 
 ## Tests
 

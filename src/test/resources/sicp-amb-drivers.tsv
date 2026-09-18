@@ -1,0 +1,42 @@
+# SICP amb driver legs (.todo/856): one row per stream-free embedded-amb sample
+# wired as a driver leg in SicpCorpusE2eTest#ambDrivers.
+# The composed program is the same for every leg: the corpus support files
+#   chapter4/section1/subsection3/02_true.scm
+#   chapter4/section1/subsection3/04_make_procedure.scm
+#   chapter4/section1/subsection3/12_extend_environment.scm
+#   chapter4/section1/subsection3/14_lookup_variable_value.scm
+#   chapter4/section1/subsection3/16_assign_name_value.scm
+#   chapter4/section1/subsection4/01_setup_environment.scm
+# plus the corpus core file
+#   chapter4/section3/subsection3/16_driver_loop_amb.scm
+# minus its trailing (driver-loop) call, plus the harness glue
+#   /sicp-amb-glue.scm (which ends in the replacing (driver-loop) call).
+# Stdin per leg is the two corpus prelude files, then the sample; the glue loop's
+# EOF clause ends the run, so no terminator form is appended and the legs stay
+# in-process on every backend (an (exit) terminator would be System.exit on the
+# JVM leg):
+#   chapter4/section3/subsection1/03_require_non_det.scm
+#   chapter4/section3/subsection1/05_an_element_of.scm
+#   <this row's sample>
+# Every leg runs INTERPRETER, JVM, WASM and WASM_COMPONENT; each backend must
+# exit 0 with byte-identical stdout to the interpreter's (the same contract as
+# a scheme/ok file). Column: sample (relative to programs_scm/).
+chapter4/section3/subsection1/01_list_non_det.scm
+chapter4/section3/subsection1/03_require_non_det.scm
+chapter4/section3/subsection1/05_an_element_of.scm
+chapter4/section3/subsection1/07_an_integer_starting_from.scm
+chapter4/section3/subsection1/14_pythagorean_triple_amb.scm
+chapter4/section3/subsection1/17_a_pythagorean_triple_between_2.scm
+chapter4/section3/subsection2/06_parse_sentence.scm
+chapter4/section3/subsection2/07_parse_noun_phrase.scm
+chapter4/section3/subsection2/08_parse_word.scm
+chapter4/section3/subsection2/09_unparsed.scm
+chapter4/section3/subsection2/10_parse_input.scm
+chapter4/section3/subsection2/11_parse_input_example.scm
+chapter4/section3/subsection2/12_prepositions.scm
+chapter4/section3/subsection2/13_parse_prepositional_phrase.scm
+chapter4/section3/subsection2/14_parse_sentence_2.scm
+chapter4/section3/subsection2/15_parse_input_2.scm
+chapter4/section3/subsection2/16_parse_noun_phrase_2.scm
+chapter4/section3/subsection2/17_parse_input_example_2.scm
+chapter4/section3/subsection2/18_multiple_legal_parses.scm

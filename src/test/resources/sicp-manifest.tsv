@@ -1306,11 +1306,11 @@ chapter4/section1/subsection7/27_evaluate_4_1_7_test_factorial.scm	scheme	ok
 chapter4/section1/subsection7/28_evaluate_4_1_7_test_append.scm	scheme	ok	
 chapter4/section1/subsection7/29_evaluate_4_1_7_test_map.scm	scheme	ok	
 chapter4/section2/subsection1/01_try_me_example.scm	scheme	ok	
-chapter4/section2/subsection1/02_try_me.scm	embedded-lazy	lenient-ok	needs the lazy evaluator (driver-loop reads stdin); corpus lacks its define-variable!
-chapter4/section2/subsection1/03_unless.scm	embedded-lazy	lenient-error	needs the lazy evaluator (driver-loop reads stdin); corpus lacks its define-variable!
+chapter4/section2/subsection1/02_try_me.scm	embedded-lazy	lenient-ok	needs the lazy evaluator (driver-loop reads stdin); corpus lacks its eval dispatch, eval-sequence, eval-definition, expression-syntax layer and define-variable! (.todo/856)
+chapter4/section2/subsection1/03_unless.scm	embedded-lazy	lenient-error	needs the lazy evaluator (driver-loop reads stdin); corpus lacks its eval dispatch, eval-sequence, eval-definition, expression-syntax layer and define-variable! (.todo/856)
 chapter4/section2/subsection1/04_xs_is_null.scm	scheme	ok	
-chapter4/section2/subsection1/05_unless_example.scm	embedded-lazy	lenient-error	needs the lazy evaluator (driver-loop reads stdin); corpus lacks its define-variable!
-chapter4/section2/subsection1/06_factorial_lazy.scm	embedded-lazy	lenient-ok	needs the lazy evaluator (driver-loop reads stdin); corpus lacks its define-variable!
+chapter4/section2/subsection1/05_unless_example.scm	embedded-lazy	lenient-error	needs the lazy evaluator (driver-loop reads stdin); corpus lacks its eval dispatch, eval-sequence, eval-definition, expression-syntax layer and define-variable! (.todo/856)
+chapter4/section2/subsection1/06_factorial_lazy.scm	embedded-lazy	lenient-ok	needs the lazy evaluator (driver-loop reads stdin); corpus lacks its eval dispatch, eval-sequence, eval-definition, expression-syntax layer and define-variable! (.todo/856)
 chapter4/section2/subsection1/07_factorial_unless_example.scm	scheme	ok	
 chapter4/section2/subsection2/01_functions_4_1_1_lazy.scm	scheme	ok	
 chapter4/section2/subsection2/02_eval_lazy_example.scm	fragment	lenient-error	
@@ -1344,43 +1344,43 @@ chapter4/section2/subsection3/06_list_lib_test.scm	scheme	ok
 chapter4/section2/subsection3/07_lazy_integral_header.scm	scheme	ok	
 chapter4/section2/subsection3/08_lazy_integral_footer.scm	scheme	ok	
 chapter4/section2/subsection3/09_lazy_integral_test.scm	scheme	ok	
-chapter4/section3/section3/01_prime_sum_pair_non_det.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/section3/02_prime_sum_pair_non_det_example.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/subsection1/01_list_non_det.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
+chapter4/section3/section3/01_prime_sum_pair_non_det.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); stream-using interaction, no stream support unwirable under ambeval (cons-stream looks up an unbound operator)
+chapter4/section3/section3/02_prime_sum_pair_non_det_example.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); stream-using interaction, no stream support unwirable under ambeval (cons-stream looks up an unbound operator)
+chapter4/section3/subsection1/01_list_non_det.scm	embedded-amb	lenient-error	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
 chapter4/section3/subsection1/02_require_non_det_example.scm	scheme	ok	
-chapter4/section3/subsection1/03_require_non_det.scm	embedded-amb	lenient-ok	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
+chapter4/section3/subsection1/03_require_non_det.scm	embedded-amb	lenient-ok	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
 chapter4/section3/subsection1/04_an_element_of_example.scm	scheme	ok	
-chapter4/section3/subsection1/05_an_element_of.scm	embedded-amb	lenient-ok	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
+chapter4/section3/subsection1/05_an_element_of.scm	embedded-amb	lenient-ok	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
 chapter4/section3/subsection1/06_an_integer_starting_from_example.scm	scheme	ok	
-chapter4/section3/subsection1/07_an_integer_starting_from.scm	embedded-amb	lenient-ok	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/subsection1/08_interaction_non_det.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/subsection1/09_interaction_non_det_2.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/subsection1/10_interaction_non_det_3.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/subsection1/11_interaction_non_det_4.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/subsection1/12_interaction_non_det_5.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
+chapter4/section3/subsection1/07_an_integer_starting_from.scm	embedded-amb	lenient-ok	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
+chapter4/section3/subsection1/08_interaction_non_det.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); stream-using interaction, no stream support unwirable under ambeval (cons-stream looks up an unbound operator)
+chapter4/section3/subsection1/09_interaction_non_det_2.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); stream-using interaction, no stream support unwirable under ambeval (cons-stream looks up an unbound operator)
+chapter4/section3/subsection1/10_interaction_non_det_3.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); stream-using interaction, no stream support unwirable under ambeval (cons-stream looks up an unbound operator)
+chapter4/section3/subsection1/11_interaction_non_det_4.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); stream-using interaction, no stream support unwirable under ambeval (cons-stream looks up an unbound operator)
+chapter4/section3/subsection1/12_interaction_non_det_5.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); stream-using interaction, no stream support unwirable under ambeval (cons-stream looks up an unbound operator)
 chapter4/section3/subsection1/13_pythagorean_triple_amb_example.scm	scheme	ok	
-chapter4/section3/subsection1/14_pythagorean_triple_amb.scm	embedded-amb	lenient-ok	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
+chapter4/section3/subsection1/14_pythagorean_triple_amb.scm	embedded-amb	lenient-ok	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
 chapter4/section3/subsection1/15.scm	scheme	ok	
 chapter4/section3/subsection1/16_a_pythagorean_triple_between_2_example.scm	scheme	ok	
-chapter4/section3/subsection1/17_a_pythagorean_triple_between_2.scm	embedded-amb	lenient-ok	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
+chapter4/section3/subsection1/17_a_pythagorean_triple_between_2.scm	embedded-amb	lenient-ok	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
 chapter4/section3/subsection2/01_distinct_example.scm	scheme	ok	
 chapter4/section3/subsection2/02_distinct.scm	scheme	ok	
-chapter4/section3/subsection2/03_office_move.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
+chapter4/section3/subsection2/03_office_move.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); finds the book answer but needs ~256 MiB of host stack on the interpreter (the CLI hands every program 16 MiB), so no driver leg
 chapter4/section3/subsection2/04_office_move_example.scm	fragment	lenient-error	
 chapter4/section3/subsection2/05_nouns.scm	scheme	ok	
-chapter4/section3/subsection2/06_parse_sentence.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/subsection2/07_parse_noun_phrase.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/subsection2/08_parse_word.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/subsection2/09_unparsed.scm	embedded-amb	lenient-ok	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/subsection2/10_parse_input.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/subsection2/11_parse_input_example.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/subsection2/12_prepositions.scm	embedded-amb	lenient-ok	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/subsection2/13_parse_prepositional_phrase.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/subsection2/14_parse_sentence_2.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/subsection2/15_parse_input_2.scm	embedded-amb	lenient-ok	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/subsection2/16_parse_noun_phrase_2.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/subsection2/17_parse_input_example_2.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
-chapter4/section3/subsection2/18_multiple_legal_parses.scm	embedded-amb	lenient-error	needs the amb evaluator (driver-loop reads stdin); corpus lacks its analyze dispatch, define-variable! and stream support under ambeval
+chapter4/section3/subsection2/06_parse_sentence.scm	embedded-amb	lenient-error	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
+chapter4/section3/subsection2/07_parse_noun_phrase.scm	embedded-amb	lenient-error	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
+chapter4/section3/subsection2/08_parse_word.scm	embedded-amb	lenient-error	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
+chapter4/section3/subsection2/09_unparsed.scm	embedded-amb	lenient-ok	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
+chapter4/section3/subsection2/10_parse_input.scm	embedded-amb	lenient-error	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
+chapter4/section3/subsection2/11_parse_input_example.scm	embedded-amb	lenient-error	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
+chapter4/section3/subsection2/12_prepositions.scm	embedded-amb	lenient-ok	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
+chapter4/section3/subsection2/13_parse_prepositional_phrase.scm	embedded-amb	lenient-error	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
+chapter4/section3/subsection2/14_parse_sentence_2.scm	embedded-amb	lenient-error	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
+chapter4/section3/subsection2/15_parse_input_2.scm	embedded-amb	lenient-ok	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
+chapter4/section3/subsection2/16_parse_noun_phrase_2.scm	embedded-amb	lenient-error	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
+chapter4/section3/subsection2/17_parse_input_example_2.scm	embedded-amb	lenient-error	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
+chapter4/section3/subsection2/18_multiple_legal_parses.scm	embedded-amb	lenient-error	amb driver leg (ambDrivers: 16_driver_loop_amb minus its (driver-loop) call + sicp-amb-glue.scm over stdin require/an-element-of/sample to EOF); exit 0 on all four backends
 chapter4/section3/subsection3/01_is_amb_amb.scm	fragment	lenient-ok	
 chapter4/section3/subsection3/02_analyze_amb_headline.scm	scheme	ok	
 chapter4/section3/subsection3/03_analyze_amb.scm	fragment	lenient-ok	
