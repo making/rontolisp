@@ -601,8 +601,16 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   - `merge-pathnames` and `truename` are `LispPreludeLibrary` entries (one Lisp definition over
     primitives), unlike `make-pathname`/`uiop:merge-pathnames*`, which stay Java + compile-time
     folding. `truename` is `(or (probe-file p) (error ...))`, whose load-bearing half is the
-    SIGNAL. **One residue**: local-time's DEFAULT repository path is computed with a runtime
-    `make-pathname`, so the compile paths need an explicit `:timezone-repository`.
+    SIGNAL. **The one residue was local-time's DEFAULT repository path being `nil` on the compile
+    paths** -- it is computed at load time with `(eval (read-from-string "(let ((system
+    (asdf:find-system :local-time nil))) (when system (asdf:component-pathname system)))"))`, a
+    shape whose runtime `eval` of a reader-built form resolves no ASDF function on the compiled
+    backends. `CompileTimePathnameFolder` now folds that literal-string `eval`/`read-from-string`
+    wrapper: the string is read at fold time and the nested `let`/`when`/`find-system`/
+    `component-pathname` reduces to a literal source directory, so the default is no longer `nil`
+    (`.todo/222`). The folded path is the directory of the machine that COMPILED the artifact, so a
+    portable JVM artifact or a WASM build without `--dir` still passes an explicit
+    `:timezone-repository`.
   - Also landed: the `find` family taking the whole position keyword set (`buildPositionScan`,
     `positionScanValues.elementResult`), `make-array :initial-contents` from a packed vector, and
     `:element-type 'unsigned-byte` opening a BINARY stream.

@@ -2,7 +2,15 @@
 
 Difficulty: Low (what is left is ONE gap, and it is not about pathnames)
 
-## Status (2026-08-03, done inside `.todo/249`)
+## Status (2026-08-03, done inside `.todo/249`; item 5 closed 2026-09-18)
+
+**All five items are done.** Item 5 -- the zero-arg
+`(local-time:reread-timezone-repository)` on the compiled backends -- landed when
+`CompileTimePathnameFolder` learned to fold the literal-string
+`(eval (read-from-string "..."))` wrapper that asks ASDF for a system's source
+directory, so `*default-timezone-repository-path*` is no longer `nil` on the compile
+paths. Details mirrored in `.kb/asdf.md`; verification is manual (the local-time
+quickload lives in the quicklisp cache, outside the vendored corpus).
 
 **Items 1-4 are DONE.** `make-pathname` is prelude Lisp
 (`LispPreludeLibrary.MAKE_PATHNAME`) on top of the shared `%pathname-split`
