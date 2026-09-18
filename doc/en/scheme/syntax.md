@@ -14,4 +14,5 @@
   `prefix` / `rename`.
 
 See [Libraries](libraries.md) for what each of those nine libraries exports, and
-[SICP Compatibility](sicp.md) for the names visible with no `import` at all.
+[*Structure and Interpretation of Computer Programs* (SICP) Compatibility](sicp.md) for the
+names visible with no `import` at all.

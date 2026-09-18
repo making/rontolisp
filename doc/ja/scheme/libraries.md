@@ -3,7 +3,8 @@
 ファイルが `import` できる 9 つの R7RS ライブラリと、それぞれが提供するものです。
 名前ごとのページは[リファレンス](reference.md)にあります。`(import ...)` で始まるファイル
 （[構文](syntax.md)参照）は、名指ししたライブラリだけを見ます。`import` を一切書かない
-ファイルは、9 つすべてに加えて [SICP 互換の名前](sicp.md)も見えます。
+ファイルは、9 つすべてに加えて
+[*Structure and Interpretation of Computer Programs*（SICP）互換の名前](sicp.md)も見えます。
 
 | ライブラリ | 提供するもの |
 |---|---|

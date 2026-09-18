@@ -47,7 +47,8 @@ rontolisp prog.txt --source-language scheme        # any extension
 - [構文](syntax.md) -- リーダー、特殊形式、`import`。
 - [ライブラリ](libraries.md) -- import できる 9 つの R7RS ライブラリと、それぞれが
   提供するもの。
-- [SICP 互換](sicp.md) -- `import` なしで見える MIT/SICP 由来の名前。
+- [*Structure and Interpretation of Computer Programs*（SICP）互換](sicp.md) -- `import`
+  なしで見える MIT/SICP 由来の名前。
 - [eval](eval.md) -- `(eval datum env)` と、それが受け付ける環境。
 - [仕様との差異](deviations.md) -- この実装が R7RS から外れている点と、まだ未実装のもの。
 - [Common Lisp との混在](common-lisp.md) -- Common Lisp のファイルから Scheme の手続きを

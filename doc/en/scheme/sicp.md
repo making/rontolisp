@@ -1,5 +1,9 @@
 # SICP Compatibility
 
+*[Structure and Interpretation of Computer Programs](https://sarabander.github.io/sicp/html/index.xhtml)*
+(SICP), by Harold Abelson and Gerald Jay Sussman, is the MIT textbook these names come
+from, along with MIT Scheme, the dialect it was written for.
+
 **Not R7RS.** MIT Scheme's `true`, `false` and `nil` (ordinary variables, not literals),
 `user-initial-environment` and `system-global-environment` (both naming the one global
 environment, see [eval](eval.md)), list and number utilities such as `filter`,

@@ -1,5 +1,9 @@
 # SICP 互換
 
+*[Structure and Interpretation of Computer Programs](https://sarabander.github.io/sicp/html/index.xhtml)*
+(SICP、Harold Abelson と Gerald Jay Sussman による MIT の教科書) が、これらの名前と、
+それが書かれた方言である MIT Scheme の出どころです。
+
 **R7RS ではありません。** MIT Scheme の `true`、`false`、`nil`（リテラルではなく普通の変数）、
 `user-initial-environment` と `system-global-environment`（どちらも唯一の大域環境を指す。
 [eval](eval.md)を参照）、`filter`、`fold-left`、`1+` などのリストと数値のユーティリティ、

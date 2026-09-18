@@ -1,6 +1,6 @@
 # Syntax
 
-The syntactic keywords the front end implements. All but `import` are exported by `(scheme base)`; `import` is program syntax that no library exports. `delay` and `delay-force` are listed under [(scheme lazy)](library-lazy.md), `cons-stream` under [SICP names](library-sicp.md). The keywords that are refused by name are listed in [Deviations](../deviations.md).
+The syntactic keywords the front end implements. All but `import` are exported by `(scheme base)`; `import` is program syntax that no library exports. `delay` and `delay-force` are listed under [(scheme lazy)](library-lazy.md), `cons-stream` under [*Structure and Interpretation of Computer Programs* (SICP) names](library-sicp.md). The keywords that are refused by name are listed in [Deviations](../deviations.md).
 
 | Name | Example | Result |
 |---|---|---|
