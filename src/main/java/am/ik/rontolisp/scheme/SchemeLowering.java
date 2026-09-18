@@ -87,6 +87,7 @@ final class SchemeLowering {
 		table.put("else", Core.ELSE);
 		table.put("=>", Core.ARROW);
 		table.put("guard", Core.GUARD);
+		table.put("parameterize", Core.PARAMETERIZE);
 		// Consumed by SchemeExpander before the lowering sees the program.
 		table.put("define-syntax", Core.DEFINE_SYNTAX);
 		table.put("let-syntax", Core.LET_SYNTAX);
@@ -95,8 +96,7 @@ final class SchemeLowering {
 		table.put("syntax-error", Core.SYNTAX_ERROR);
 		table.put("...", Core.ELLIPSIS);
 		table.put("_", Core.UNDERSCORE);
-		for (String unsupported : List.of("define-library", "parameterize", "case-lambda", "include", "include-ci",
-				"cond-expand")) {
+		for (String unsupported : List.of("define-library", "case-lambda", "include", "include-ci", "cond-expand")) {
 			table.put(unsupported, Core.UNSUPPORTED);
 		}
 		return table;
@@ -1577,6 +1577,17 @@ final class SchemeLowering {
 						: list(CORE_IF, parts.get(1), CORE_UNSPECIFIED, body), context);
 			}
 			case GUARD -> leaf(guard(form, scope), context);
+			case PARAMETERIZE -> {
+				List<LispVal> parts = elements(form, form);
+				if (parts.size() < 3) {
+					throw error("a parameterize needs ((parameter value) ...) and a body", form);
+				}
+				List<LispVal> bindings = elements(parts.get(1), form);
+				List<LispVal> body = parts.subList(2, parts.size());
+				yield bindings.isEmpty()
+						? lower(new LispCons(CORE_LET, new LispCons(LispNil.INSTANCE, listOf(body))), context)
+						: leaf(parameterize(form, bindings, body, scope), context);
+			}
 			case DELAY, DELAY_FORCE -> leaf(promise(syntax.core() == Core.DELAY ? 0 : 1, form, scope), context);
 			case CONS_STREAM -> {
 				List<LispVal> parts = elements(form, form);
@@ -1628,6 +1639,26 @@ final class SchemeLowering {
 				new LispCons(LispNil.INSTANCE, listOf(parts.subList(2, parts.size()))));
 		return list(symbol("RONTOLISP::%SCHEME-GUARD"), value(inherit(form, body), scope),
 				value(inherit(form, handler), scope));
+	}
+
+	// (parameterize ((param value) ...) body...) (R7RS 4.2.6): %scheme-parameterize takes
+	// the parameters and values alternating, in the order written, converts every value
+	// before binding any, and runs the body thunk with them bound -- a special let inside
+	// the helper, so every exit restores them (.kb/scheme-frontend.md, "Parameters").
+	private LispVal parameterize(LispCons form, List<LispVal> bindings, List<LispVal> body, Scope scope) {
+		List<LispVal> operands = new ArrayList<>();
+		operands.add(symbol("LIST"));
+		for (LispVal binding : bindings) {
+			if (!(binding instanceof LispCons where) || elements(where, where).size() != 2) {
+				throw error("a parameterize binding is (parameter value)",
+						binding instanceof LispCons cons ? cons : form);
+			}
+			List<LispVal> pair = elements(where, where);
+			operands.add(value(pair.get(0), scope));
+			operands.add(value(pair.get(1), scope));
+		}
+		LispVal thunk = new LispCons(CORE_LAMBDA, new LispCons(LispNil.INSTANCE, listOf(body)));
+		return list(symbol("RONTOLISP::%SCHEME-PARAMETERIZE"), listOf(operands), value(inherit(form, thunk), scope));
 	}
 
 	// (delay e) and (delay-force e): a promise record around the state and a thunk

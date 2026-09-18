@@ -489,8 +489,10 @@ class SchemeLoweringTest {
 		assertThatThrownBy(() -> lowered("(car 1 2)")).hasMessage("test.scm:1:1: wrong number of arguments to car: 2");
 		assertThatThrownBy(() -> lowered("(f (define x 1))"))
 			.hasMessage("test.scm:1:4: a definition is only allowed at the top level or at the head of a body");
-		assertThatThrownBy(() -> lowered("(parameterize ((p 1)) 2)"))
-			.hasMessage("test.scm:1:1: parameterize is not supported by this experimental front end yet");
+		assertThatThrownBy(() -> lowered("(case-lambda ((x) x))"))
+			.hasMessage("test.scm:1:1: case-lambda is not supported by this experimental front end yet");
+		assertThatThrownBy(() -> lowered("(parameterize ((p)) 2)"))
+			.hasMessage("test.scm:1:16: a parameterize binding is (parameter value)");
 		assertThatThrownBy(() -> lowered("(guard e 1)"))
 			.hasMessage("test.scm:1:1: a guard needs (variable clause...) and a body");
 	}
@@ -506,6 +508,21 @@ class SchemeLoweringTest {
 		// re-raise.
 		assertThat(lowered("(define (raise x) x) (display (guard (e (else 1)) 2))"))
 			.contains("(LAMBDA (%SCM-C1) (LET ((|e| %SCM-C1)) 1))");
+	}
+
+	@Test
+	void parameterizeIsTheParametersAndValuesInOrderAndABodyThunk() {
+		assertThat(lowered("(define p (make-parameter 1)) (display (parameterize ((p 2) (car 3)) (define x (p)) x))"))
+			.isEqualTo(
+					"""
+							(SETQ |p| (RONTOLISP::%SCHEME-MAKE-PARAMETER 1 NIL))
+							(RONTOLISP::%SCHEME-DISPLAY (RONTOLISP::%SCHEME-PARAMETERIZE (LIST |p| 2 #'CAR 3) \
+							(LAMBDA NIL (LET ((|x| NIL)) (SETQ |x| (FUNCALL (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |p|))) |x|))))""");
+		// No binding: the body alone, no helper.
+		assertThat(lowered("(display (parameterize () 1))")).isEqualTo("(RONTOLISP::%SCHEME-DISPLAY (LET NIL 1))");
+		// A converter is checked to be a procedure where make-parameter is called.
+		assertThat(lowered("(define (f x) x) (make-parameter 1 f)"))
+			.contains("(RONTOLISP::%SCHEME-MAKE-PARAMETER 1 (RONTOLISP::%SCHEME-ENSURE-PROCEDURE #'|f|))");
 	}
 
 	@Test

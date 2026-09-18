@@ -165,6 +165,7 @@ The procedures of `(scheme base)`. Its syntactic keywords are on [Syntax](syntax
 | `dynamic-wind` | `(dynamic-wind (lambda () (display "before ")) (lambda () (display "during ")) (lambda () (display "after")))` | prints `before during after` |
 | `values` | `(values 1 2)` | `1, 2` |
 | `call-with-values` | `(call-with-values (lambda () (values 1 2)) cons)` | `(1 . 2)` |
+| `make-parameter` | `((make-parameter 5 (lambda (x) (* x 2))))` | `10` |
 
 ## Exceptions
 

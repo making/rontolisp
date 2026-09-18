@@ -1357,6 +1357,66 @@
   (funcall before)
   (unwind-protect (funcall thunk) (funcall after)))
 
+;; --- parameter objects (R7RS 4.2.6) ------------------------------------------------
+;; A parameter object is a closure over its record, which holds the global value and the
+;; converter. parameterize binds %scheme-parameterizations, an alist of record -> value,
+;; innermost first, with a special let: the restore then rides every exit channel the
+;; backends give a special binding, and a thread starts from the global values. The
+;; record is a defstruct so that nothing but a parameter object can answer one: the
+;; token argument is how parameterize asks a procedure for it.
+(defvar rontolisp::%scheme-parameterizations nil)
+
+(defvar rontolisp::%scheme-parameter-token (list nil))
+
+(defstruct (rontolisp::%scheme-parameter
+            (:constructor rontolisp::%scheme-new-parameter (value converter))
+            (:copier nil))
+  value
+  converter)
+
+(defun rontolisp::%scheme-make-parameter (value converter)
+  (let ((record
+         (rontolisp::%scheme-new-parameter
+          (if converter (funcall converter value) value) converter)))
+    (lambda (&rest arguments)
+      (cond ((null arguments) (rontolisp::%scheme-parameter-lookup record))
+            ((and (eq (car arguments) rontolisp::%scheme-parameter-token)
+                  (null (cdr arguments)))
+             record)
+            (t (error "~A"
+                      (rontolisp::%scheme-error-message
+                       "a parameter object takes no argument:" arguments)))))))
+
+(defun rontolisp::%scheme-parameter-lookup (record)
+  (do ((bindings rontolisp::%scheme-parameterizations (cdr bindings)))
+      ((null bindings) (rontolisp::%scheme-parameter-value record))
+    (if (eq (car (car bindings)) record) (return (cdr (car bindings))))))
+
+;; PARAMETERS-AND-VALUES alternate, as parameterize wrote them. Every value is converted
+;; before any is bound, so a converter's error leaves every parameter as it was.
+(defun rontolisp::%scheme-parameterize (parameters-and-values body)
+  (let ((bindings rontolisp::%scheme-parameterizations)
+        (rest parameters-and-values))
+    (do ()
+        ((null rest))
+      (let ((record
+             (if (functionp (car rest))
+                 (funcall (car rest) rontolisp::%scheme-parameter-token)
+                 nil)))
+        (if (not (rontolisp::%scheme-parameter-p record))
+            (error "~A"
+                   (rontolisp::%scheme-error-message
+                    "parameterize: not a parameter object:" (list (car rest)))))
+        (setq bindings
+              (cons (cons record
+                          (if (rontolisp::%scheme-parameter-converter record)
+                              (funcall
+                               (rontolisp::%scheme-parameter-converter record)
+                               (car (cdr rest)))
+                              (car (cdr rest)))) bindings)))
+      (setq rest (cdr (cdr rest))))
+    (let ((rontolisp::%scheme-parameterizations bindings)) (funcall body))))
+
 (defun rontolisp::%scheme-error-message (message irritants)
   (with-output-to-string (*standard-output*)
     (if (stringp message)
@@ -1637,10 +1697,16 @@
 ;; its own thread and every thread is JOINED before the call returns, so a program's
 ;; output is complete when it ends. The joins nest in unwind-protect: a thunk's error is
 ;; re-signaled by its join, but only after the remaining threads have been joined too.
+;; A thread starts with the caller's parameterize bindings, which is what the sequential
+;; WASM run sees as well.
 #+thread-support
 (defun rontolisp::%scheme-parallel-execute (thunks)
-  (rontolisp::%scheme-join-all
-   (mapcar (lambda (thunk) (rontolisp:make-thread thunk)) thunks)))
+  (let ((bindings
+         (list
+          (cons 'rontolisp::%scheme-parameterizations
+                rontolisp::%scheme-parameterizations))))
+    (rontolisp::%scheme-join-all
+     (mapcar (lambda (thunk) (rontolisp:make-thread thunk bindings)) thunks))))
 
 #+thread-support
 (defun rontolisp::%scheme-join-all (threads)
