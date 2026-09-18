@@ -815,6 +815,87 @@ cases:
       #(z z z z)
       (0 1)
       #(1 #(2 (3)) "s")
+  # Expected output is Gauche 0.9.15's (gosh -r7).
+  - name: bytevectors
+    source: |
+      (define bv (bytevector 1 2 3))
+      (write (list bv (bytevector) (make-bytevector 3 7) (bytevector-length (make-bytevector 2))))
+      (newline)
+      (display bv)
+      (newline)
+      (write
+       (list (bytevector? bv) (bytevector? #(1 2)) (vector? bv) (bytevector? "a")
+             (vector? #(1)) (map bytevector? (list #u8() 1 '() "x"))))
+      (newline)
+      (bytevector-u8-set! bv 0 255)
+      (write (list (bytevector-u8-ref #u8(10 20 30) 1) bv (bytevector-length bv)))
+      (newline)
+      (write
+       (list (bytevector-copy #u8(1 2 3 4 5)) (bytevector-copy #u8(1 2 3 4 5) 2)
+             (bytevector-copy #u8(1 2 3 4 5) 1 3)))
+      (newline)
+      (define bv-a (bytevector 1 2 3 4 5))
+      (bytevector-copy! bv-a 1 #u8(9 8 7) 0 2)
+      (write bv-a)
+      (newline)
+      (bytevector-copy! bv-a 0 #u8(6 6))
+      (write bv-a)
+      (newline)
+      (define bv-s (bytevector 1 2 3 4 5))
+      (bytevector-copy! bv-s 1 bv-s 0 3)
+      (define bv-t (bytevector 1 2 3 4 5))
+      (bytevector-copy! bv-t 0 bv-t 2)
+      (write (list bv-s bv-t))
+      (newline)
+      (write (list (bytevector-append #u8(1) #u8() #u8(2 3)) (bytevector-append)))
+      (newline)
+      (write
+       (list (utf8->string #u8(65 66 67 227 129 130)) (string->utf8 "λx")
+             (utf8->string #u8(65 66 67 68) 1 3) (utf8->string #u8(65 66 67 68) 2)
+             (string->utf8 "abcd" 1 3) (string->utf8 "abcd" 2)
+             (utf8->string (string->utf8 "hé日本"))))
+      (newline)
+      (write
+       (list (equal? #u8(1 2) (bytevector 1 2)) (equal? #u8(1 2) #(1 2))
+             (equal? #u8(1 2) #u8(1 3)) (equal? '(#u8(1)) (list (bytevector 1)))
+             (equal? #(1 2) #u8(1 2))))
+      (newline)
+      (write (list '#u8(1 2) #u8( 1   2 ) #U8(3) #u8(#xff #b101 0) `(1 ,#u8(2))))
+      (newline)
+      (write (vector #u8(1) "x"))
+      (newline)
+      (write (let ((b (bytevector-copy #u8(1 2)))) (bytevector-u8-set! b 1 9) b))
+      (newline)
+      (write
+       (list (map bytevector-length (list #u8() #u8(1 2))) (apply bytevector '(4 5))
+             (map bytevector-u8-ref (list #u8(7 8)) '(1))))
+      (newline)
+      (define bv-shared (bytevector 1 2))
+      (write-shared (list bv-shared bv-shared))
+      (newline)
+      (write
+       (list (eval '(bytevector-length #u8(1 2 3)) (environment '(scheme base)))
+             (eval '(bytevector 1 2) (environment '(scheme base)))
+             (eval #u8(4) (environment '(scheme base)))))
+      (newline)
+    expected: |
+      (#u8(1 2 3) #u8() #u8(7 7 7) 2)
+      #u8(1 2 3)
+      (#t #f #f #f #t (#t #f #f #f))
+      (20 #u8(255 2 3) 3)
+      (#u8(1 2 3 4 5) #u8(3 4 5) #u8(2 3))
+      #u8(1 9 8 4 5)
+      #u8(6 6 8 4 5)
+      (#u8(1 1 2 3 5) #u8(3 4 5 4 5))
+      (#u8(1 2 3) #u8())
+      ("ABCあ" #u8(206 187 120) "BC" "CD" #u8(98 99) #u8(99 100) "hé日本")
+      (#t #f #f #t #f)
+      (#u8(1 2) #u8(1 2) #u8(3) #u8(255 5 0) (1 #u8(2)))
+      #(#u8(1) "x")
+      #u8(1 9)
+      ((0 2) #u8(4 5) (8))
+      (#0=#u8(1 2) #0#)
+      (3 #u8(1 2) #u8(4))
   - name: control
     source: |
       (write
@@ -973,12 +1054,15 @@ cases:
       (WRITE
        (LIST (INCR 41) (SYMBOL->STRING (QUOTE Bar)) (CHAR->INTEGER #\NEWLINE)))
       (NEWLINE)
+      (WRITE (LIST (BYTEVECTOR-LENGTH #U8(1 2)) (BYTEVECTOR #XFF)))
+      (NEWLINE)
       #!no-fold-case
       (define (bump x) (+ x 1))
       (write (list (bump 1) (symbol->string (quote Bar)) "STILL SHOUTING"))
       (newline)
     expected: |
       (42 "bar" 10)
+      (2 #u8(255))
       (2 "Bar" "STILL SHOUTING")
   - name: the-sicp-vocabulary-not-r7rs-visible-without-import-like-base-and-write
     source: |
@@ -1326,8 +1410,12 @@ cases:
       7
   - name: read-answers-what-quoted-data-lowers-to
     stdin: |
-      quit 42 "hi" #\a #(1 2) (1 . 2) 'a 99 #|b|# 100 #;(1 2) 101 #t #f () 1/2 2.5 #xFF
+      quit 42 "hi" #\a #(1 2) (1 . 2) 'a 99 #|b|# 100 #;(1 2) 101 #t #f () 1/2 2.5 #xFF #u8(1 #xff) #U8()
     source: |
+      (write (read))
+      (newline)
+      (write (read))
+      (newline)
       (write (read))
       (newline)
       (write (read))
@@ -1378,6 +1466,8 @@ cases:
       1/2
       2.5
       255
+      #u8(1 255)
+      #u8()
   - name: read-char-peek-char-read-line-and-char-ready-on-the-current-input-port
     stdin: |
       ab
@@ -2035,11 +2125,14 @@ standalone:
       (newline)
       (write (eof-object? (eof-object)))
       (newline)
+      (write (list (bytevector 1 2) (utf8->string (string->utf8 "ok")) (vector? #u8())))
+      (newline)
     stdout: |
       (0 1 4)
       (8 #t 3 2 3 2)
       6
       #t
+      (#u8(1 2) "ok" #f)
   - name: strict-r7rs-imports-case-lambda-from-its-own-library
     standards: [rontolisp, r7rs]
     source: |
@@ -2090,4 +2183,26 @@ standalone:
       a
     stderr: |
       Unhandled condition: string: not a character: 1
+    fails: true
+  # A bytevector element is a byte: a constructor or a store of anything else is refused
+  # by name (the underlying pack would mask it silently).
+  - name: bytevector-of-a-non-byte-is-an-error
+    source: |
+      (dynamic-wind (lambda () #t)
+                    (lambda () (write (bytevector 0 255)) (newline) (bytevector 1 256))
+                    (lambda () #t))
+    stdout: |
+      #u8(0 255)
+    stderr: |
+      Unhandled condition: bytevector: not a byte: 256
+    fails: true
+  - name: bytevector-u8-set-of-a-non-byte-is-an-error
+    source: |
+      (define standalone-bv (make-bytevector 1 0))
+      (dynamic-wind (lambda () #t)
+                    (lambda () (bytevector-u8-set! standalone-bv 0 -1))
+                    (lambda () #t))
+    stdout: |
+    stderr: |
+      Unhandled condition: bytevector-u8-set!: not a byte: -1
     fails: true

@@ -174,6 +174,20 @@ categories:
       - { slug: vector-to-list, name: "vector->list" }
       - { slug: list-to-vector, name: "list->vector" }
       - { slug: vector-fill-bang, name: "vector-fill!" }
+  - title: "(scheme base): バイトベクタ"
+    index_page: scheme/reference/library-base.md
+    functions:
+      - { slug: bytevector-p, name: "bytevector?" }
+      - { slug: make-bytevector, name: "make-bytevector" }
+      - { slug: bytevector, name: "bytevector" }
+      - { slug: bytevector-length, name: "bytevector-length" }
+      - { slug: bytevector-u8-ref, name: "bytevector-u8-ref" }
+      - { slug: bytevector-u8-set-bang, name: "bytevector-u8-set!" }
+      - { slug: bytevector-copy, name: "bytevector-copy" }
+      - { slug: bytevector-copy-bang, name: "bytevector-copy!" }
+      - { slug: bytevector-append, name: "bytevector-append" }
+      - { slug: utf8-to-string, name: "utf8->string" }
+      - { slug: string-to-utf8, name: "string->utf8" }
   - title: "(scheme base): 制御"
     index_page: scheme/reference/library-base.md
     functions:

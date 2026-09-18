@@ -290,6 +290,17 @@
            (write-char #\Space)
            (rontolisp::%scheme-print-datum (car rest) escape labels))
          (write-char #\)))
+        ;; A bytevector is the (unsigned-byte 8) pack. The arm exists only in a program
+        ;; that can make one (SchemeLibrary reads this file with the feature then), so a
+        ;; program that cannot keeps its printer byte for byte.
+        #+rontolisp-scheme-bytevectors
+        ((rontolisp::%scheme-bytevector-p x)
+         (write-string "#u8(")
+         (do ((i 0 (+ i 1)))
+             ((>= i (length x)))
+           (if (> i 0) (write-char #\Space))
+           (princ (aref x i)))
+         (write-char #\)))
         ((vectorp x)
          (write-string "#(")
          (do ((i 0 (+ i 1)))
@@ -593,6 +604,24 @@
                (rontolisp::%scheme-read-error "a vector cannot be dotted" nil))
               (t (setq elems (cons datum elems))))))))
 
+(defun rontolisp::%scheme-read-bytevector ()
+  (let ((elems nil))
+    (do ()
+        (nil)
+      (rontolisp::%scheme-skip-atmosphere)
+      (if (rontolisp::%scheme-eof-p (rontolisp::%scheme-peek-char))
+          (rontolisp::%scheme-read-error "unclosed '#u8('" nil))
+      (let ((datum (rontolisp::%scheme-read-datum)))
+        (cond ((eq datum rontolisp::%scheme-close)
+               (return (rontolisp::%scheme-bytevector (nreverse elems))))
+              ((eq datum rontolisp::%scheme-dot)
+               (rontolisp::%scheme-read-error "a bytevector cannot be dotted"
+                                              nil))
+              ((not (and (integerp datum) (<= 0 datum) (<= datum 255)))
+               (rontolisp::%scheme-read-error
+                "a bytevector element must be a byte (0-255)" datum))
+              (t (setq elems (cons datum elems))))))))
+
 (defun rontolisp::%scheme-accumulate-token (first)
   (let ((chars (list first)))
     (do ()
@@ -639,7 +668,14 @@
              (cond ((or (string= token "#t") (string= token "#true")) t)
                    ((or (string= token "#f") (string= token "#false"))
                     rontolisp::%scheme-false)
-                   ((or (string= token "#u8") (>= (length token) 3))
+                   ((and (string-equal token "#u8")
+                         (not
+                          (rontolisp::%scheme-eof-p
+                           (rontolisp::%scheme-peek-char)))
+                         (= (char-code (rontolisp::%scheme-peek-char)) 40))
+                    (rontolisp::%scheme-next-char)
+                    (rontolisp::%scheme-read-bytevector))
+                   ((>= (length token) 3)
                     (rontolisp::%scheme-hash-token-datum token))
                    (t (rontolisp::%scheme-read-error "unsupported '#' syntax"
                                                      token))))))))
@@ -651,32 +687,25 @@
 (defun rontolisp::%scheme-hash-token-datum (token)
   (if (>= (length token) 3)
       (let ((second (char token 1)))
-        (if (or (= (char-code second) 117) (= (char-code second) 85))
-            (rontolisp::%scheme-read-error "bytevectors are not supported"
-                                           token)
-            (let ((radix
-                   (cond
-                    ((or (= (char-code second) 120) (= (char-code second) 88))
-                     16)
-                    ((or (= (char-code second) 98) (= (char-code second) 66)) 2)
-                    ((or (= (char-code second) 111) (= (char-code second) 79))
-                     8)
-                    ((or (= (char-code second) 100) (= (char-code second) 68))
-                     10)
-                    (t nil))))
-              (if (null radix)
-                  (rontolisp::%scheme-read-error "unsupported '#' syntax" token)
-                  (let ((digits (subseq token 2)))
-                    (if (= (length digits) 0)
-                        (rontolisp::%scheme-read-error "unsupported '#' syntax"
-                                                       token)
-                        (let ((number
-                               (rontolisp::%scheme-string->number digits
-                                                                  radix)))
-                          (if (eq number rontolisp::%scheme-false)
-                              (rontolisp::%scheme-read-error
-                               "unsupported '#' syntax" token)
-                              number))))))))
+        (let ((radix
+               (cond
+                ((or (= (char-code second) 120) (= (char-code second) 88)) 16)
+                ((or (= (char-code second) 98) (= (char-code second) 66)) 2)
+                ((or (= (char-code second) 111) (= (char-code second) 79)) 8)
+                ((or (= (char-code second) 100) (= (char-code second) 68)) 10)
+                (t nil))))
+          (if (null radix)
+              (rontolisp::%scheme-read-error "unsupported '#' syntax" token)
+              (let ((digits (subseq token 2)))
+                (if (= (length digits) 0)
+                    (rontolisp::%scheme-read-error "unsupported '#' syntax"
+                                                   token)
+                    (let ((number
+                           (rontolisp::%scheme-string->number digits radix)))
+                      (if (eq number rontolisp::%scheme-false)
+                          (rontolisp::%scheme-read-error
+                           "unsupported '#' syntax" token)
+                          number)))))))
       (rontolisp::%scheme-read-error "unsupported '#' syntax" token)))
 
 (defun rontolisp::%scheme-read-character ()
@@ -874,6 +903,9 @@
        (cond ((eql x y) t)
              ((stringp x) (and (stringp y) (string= x y) t))
              ((and (vectorp x) (vectorp y) (not (stringp y))
+                   #+rontolisp-scheme-bytevectors
+                   (eq (rontolisp::%scheme-bytevector-p x)
+                       (rontolisp::%scheme-bytevector-p y))
                    (= (length x) (length y)))
               (do ((i 0 (+ i 1)))
                   ((>= i (length x)) t)
@@ -881,6 +913,51 @@
                     (return nil))))
              (t nil)))
     (if (not (rontolisp::%scheme-equal? (car x) (car y))) (return nil))))
+
+;; --- bytevectors: the (unsigned-byte 8) pack (.kb/packed-integer-vectors.md) -------
+;;
+;; Every constructor refuses what is not a byte: the pack itself would mask 256 to 0.
+;; A function spelling (unsigned-byte 8) or string-to-octets, and every caller of one, is
+;; what tells SchemeLibrary.makesBytevectors that a program can make a bytevector.
+
+(defun rontolisp::%scheme-bytevector-p (x)
+  (typep x '(simple-array (unsigned-byte 8) (*))))
+
+(defun rontolisp::%scheme-byte (who x)
+  (if (and (integerp x) (<= 0 x) (<= x 255))
+      x
+      (error "~A"
+             (rontolisp::%scheme-error-message
+              (concatenate 'string who ": not a byte:") (list x)))))
+
+(defun rontolisp::%scheme-make-bytevector (n fill)
+  (make-array n
+   :element-type '(unsigned-byte 8)
+   :initial-element (rontolisp::%scheme-byte "make-bytevector" fill)))
+
+(defun rontolisp::%scheme-bytevector (bytes)
+  (let ((v (make-array (length bytes) :element-type '(unsigned-byte 8))))
+    (do ((rest bytes (cdr rest)) (i 0 (+ i 1)))
+        ((null rest) v)
+      (setf (aref v i) (rontolisp::%scheme-byte "bytevector" (car rest))))))
+
+(defun rontolisp::%scheme-bytevector-append (bytevectors)
+  (let ((n 0))
+    (dolist (b bytevectors) (setq n (+ n (length b))))
+    (let ((v (make-array n :element-type '(unsigned-byte 8))) (at 0))
+      (dolist (b bytevectors v)
+        (replace v b :start1 at)
+        (setq at (+ at (length b)))))))
+
+(defun rontolisp::%scheme-string->utf8 (s) (rontolisp:string-to-octets s))
+
+;; R7RS copies as if through a temporary when TO and FROM are one bytevector. Common
+;; Lisp's replace promises the same, but copies forward on every backend here, so an
+;; overlapping source region is taken out first.
+(defun rontolisp::%scheme-bytevector-copy! (to at from start end)
+  (if (eq to from)
+      (replace to (subseq from start end) :start1 at)
+      (replace to from :start1 at :start2 start :end2 end)))
 
 (defun rontolisp::%scheme-member (x list)
   (do ((rest list (cdr rest)))

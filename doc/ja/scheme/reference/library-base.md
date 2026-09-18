@@ -152,6 +152,22 @@
 | `list->vector` | `(list->vector '(1 2 3))` | `#(1 2 3)` |
 | `vector-fill!` | `(let ((v (make-vector 3 0))) (vector-fill! v 7) v)` | `#(7 7 7)` |
 
+## バイトベクタ
+
+| 名前 | 例 | 結果 |
+|---|---|---|
+| `bytevector?` | `(bytevector? #u8(1 2))` | `#t` |
+| `make-bytevector` | `(make-bytevector 3 7)` | `#u8(7 7 7)` |
+| `bytevector` | `(bytevector 1 2 255)` | `#u8(1 2 255)` |
+| `bytevector-length` | `(bytevector-length #u8(1 2 3))` | `3` |
+| `bytevector-u8-ref` | `(bytevector-u8-ref #u8(10 20 30) 1)` | `20` |
+| `bytevector-u8-set!` | `(let ((b (bytevector 1 2 3))) (bytevector-u8-set! b 0 255) b)` | `#u8(255 2 3)` |
+| `bytevector-copy` | `(bytevector-copy #u8(1 2 3 4 5) 1 3)` | `#u8(2 3)` |
+| `bytevector-copy!` | `(let ((b (bytevector 1 2 3 4 5))) (bytevector-copy! b 1 #u8(9 8 7) 0 2) b)` | `#u8(1 9 8 4 5)` |
+| `bytevector-append` | `(bytevector-append #u8(1) #u8() #u8(2 3))` | `#u8(1 2 3)` |
+| `utf8->string` | `(utf8->string #u8(65 66 67 227 129 130))` | `"ABCあ"` |
+| `string->utf8` | `(string->utf8 "λx")` | `#u8(206 187 120)` |
+
 ## 制御
 
 | 名前 | 例 | 結果 |

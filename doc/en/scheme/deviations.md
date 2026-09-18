@@ -35,11 +35,13 @@
 - There are no complex numbers: `(sqrt -4)`, `(log -1)` and `(asin 2)` end the program
   with an error naming the procedure.
 - Error messages spell Common Lisp names (`CAR`).
+- `utf8->string` decodes a byte that begins no valid UTF-8 sequence to the character
+  with that byte's code instead of signalling an error.
 
 ## Not yet
 
-`define-library`, bytevectors, ports other than the current
-output and input ports (string ports, and a port argument to `read` / `write` /
+`define-library`, ports other than the current
+output and input ports (string ports, bytevector ports and `read-u8` / `write-u8`, and a port argument to `read` / `write` /
 `display`), `(scheme char)` and the other libraries, `|...|` identifiers,
 reading `+inf.0` / `+nan.0`. The syntactic ones are refused by name when the file is
 read.

@@ -8,7 +8,7 @@
 
 | ライブラリ | 提供するもの |
 |---|---|
-| [(scheme base)](reference/library-base.md) | 中核部分: 数値、真偽値、ペアとリスト、シンボル、文字、文字列、ベクタ、制御、例外、現在のポートでの入出力。構文は[構文](reference/syntax.md)にあります |
+| [(scheme base)](reference/library-base.md) | 中核部分: 数値、真偽値、ペアとリスト、シンボル、文字、文字列、ベクタ、バイトベクタ、制御、例外、現在のポートでの入出力。構文は[構文](reference/syntax.md)にあります |
 | [(scheme write)](reference/library-write.md) | `display` と `write` |
 | [(scheme read)](reference/library-read.md) | `read` |
 | [(scheme inexact)](reference/library-inexact.md) | 超越関数と浮動小数点数の述語 |

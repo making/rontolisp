@@ -5,6 +5,8 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -13,6 +15,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispIntVector;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -43,7 +47,18 @@ import org.jspecify.annotations.Nullable;
  */
 public final class SchemeLibrary {
 
+	/**
+	 * The feature {@code scheme.lisp} is read with when the program can make a
+	 * bytevector: it selects the printer's {@code #u8(} arm and {@code equal?}'s
+	 * bytevector-versus-vector test, so a program that cannot make one carries neither.
+	 * The interpreter, which loads the library once for every program, always reads with
+	 * it.
+	 */
+	static final String BYTEVECTORS_FEATURE = "rontolisp-scheme-bytevectors";
+
 	private static final Map<String, List<LispVal>> SOURCE_FORMS = new ConcurrentHashMap<>();
+
+	private static final Map<String, Set<String>> BYTEVECTOR_FUNCTIONS = new ConcurrentHashMap<>();
 
 	private static final Map<String, List<LispVal>> FORMS = new ConcurrentHashMap<>();
 
@@ -95,7 +110,7 @@ public final class SchemeLibrary {
 			// interpreter loads the library once for every program, so its table holds
 			// every procedure; a compiled program gets one cut to what it spells
 			// (process).
-			List<LispVal> forms = new ArrayList<>(sourceForms(features));
+			List<LispVal> forms = new ArrayList<>(sourceForms(features.with(List.of(BYTEVECTORS_FEATURE))));
 			forms.addAll(Scheme.runtimeForms(name -> true, standards.scheme()));
 			return List.copyOf(forms);
 		});
@@ -175,15 +190,110 @@ public final class SchemeLibrary {
 				for (LispVal spelled : program) {
 					collectSpellings(spelled, symbols, strings);
 				}
-				List<LispVal> out = new ArrayList<>(sourceForms(features));
-				out.addAll(Scheme.runtimeForms(
+				List<LispVal> generated = Scheme.runtimeForms(
 						name -> symbols.contains(name) || strings.stream().anyMatch(string -> string.contains(name)),
-						standards.scheme()));
+						standards.scheme());
+				boolean bytevectors = makesBytevectors(program, features) || makesBytevectors(generated, features);
+				List<LispVal> out = new ArrayList<>(
+						sourceForms(bytevectors ? features.with(List.of(BYTEVECTORS_FEATURE)) : features));
+				out.addAll(generated);
 				out.addAll(program);
 				return out;
 			}
 		}
 		return program;
+	}
+
+	/**
+	 * Whether the forms can make a bytevector: they spell one (a {@code #u8(...)}
+	 * literal, the {@code (unsigned-byte 8)} element type, the UTF-8 encoder) or call a
+	 * library function that can, directly or through the functions it calls --
+	 * {@code read}, whose reader knows {@code #u8(}, included. Derived from the library
+	 * source rather than listed, so a new constructor needs no second edit.
+	 * @param forms the program's forms, or the forms generated for it
+	 * @param features the target backend's reader features
+	 * @return {@code true} when the printer needs its {@code #u8(} arm
+	 */
+	static boolean makesBytevectors(List<LispVal> forms, Features features) {
+		Set<String> makers = bytevectorFunctions(features);
+		for (LispVal form : forms) {
+			if (spellsBytevector(form) || callsAny(form, makers)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// The library functions that can make a bytevector: those that spell one, then every
+	// function calling one of those, to a fixpoint. Read WITHOUT the feature, so the
+	// printer's arm does not count as making one.
+	private static Set<String> bytevectorFunctions(Features features) {
+		return BYTEVECTOR_FUNCTIONS.computeIfAbsent(String.join(",", features.names()), ignored -> {
+			Map<String, LispVal> bodies = new HashMap<>();
+			for (LispVal form : sourceForms(features)) {
+				if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+						&& "DEFUN".equals(head.name()) && cons.cdr() instanceof LispCons rest
+						&& rest.car() instanceof LispSymbol name) {
+					bodies.put(name.name(), rest.cdr());
+				}
+			}
+			Set<String> makers = new HashSet<>();
+			bodies.forEach((name, body) -> {
+				if (spellsBytevector(body)) {
+					makers.add(name);
+				}
+			});
+			boolean grew = true;
+			while (grew) {
+				grew = false;
+				for (Map.Entry<String, LispVal> entry : bodies.entrySet()) {
+					if (!makers.contains(entry.getKey()) && callsAny(entry.getValue(), makers)) {
+						makers.add(entry.getKey());
+						grew = true;
+					}
+				}
+			}
+			return Set.copyOf(makers);
+		});
+	}
+
+	private static boolean spellsBytevector(LispVal form) {
+		return switch (form) {
+			case LispIntVector vector -> vector.width() == 8;
+			case LispSymbol symbol -> LispNames.STRING_TO_OCTETS.equals(LispSymbol.memberName(symbol.name()));
+			case LispCons cons -> {
+				if (LispNames.unsignedByteWidth(cons) == 8) {
+					yield true;
+				}
+				LispVal rest = cons;
+				while (rest instanceof LispCons cell) {
+					if (spellsBytevector(cell.car())) {
+						yield true;
+					}
+					rest = cell.cdr();
+				}
+				yield spellsBytevector(rest);
+			}
+			case LispArray array -> Arrays.stream(array.data()).anyMatch(SchemeLibrary::spellsBytevector);
+			default -> false;
+		};
+	}
+
+	private static boolean callsAny(LispVal form, Set<String> names) {
+		return switch (form) {
+			case LispSymbol symbol -> names.contains(symbol.name());
+			case LispCons cons -> {
+				LispVal rest = cons;
+				while (rest instanceof LispCons cell) {
+					if (callsAny(cell.car(), names)) {
+						yield true;
+					}
+					rest = cell.cdr();
+				}
+				yield callsAny(rest, names);
+			}
+			default -> false;
+		};
 	}
 
 	private static void collectSpellings(LispVal form, Set<String> symbols, List<String> strings) {

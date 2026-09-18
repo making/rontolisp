@@ -1146,6 +1146,26 @@ class LibraryDefunPrunerTest {
 	}
 
 	@Test
+	void thePrintersBytevectorArmFollowsOnlyAProgramThatCanMakeABytevector() {
+		// A program that cannot make a bytevector keeps its printer byte for byte: no
+		// #u8( arm, no (unsigned-byte 8) test. One that can -- a constructor, a literal,
+		// or read, whose reader knows #u8( -- gets both.
+		String plain = survivingPrintOf(
+				LibraryDefunPruner.prune(SchemeLibrary
+					.process(LispReader.readAllFromString("(rontolisp::%scheme-display (list 1 (vector 2)))"))),
+				"%SCHEME-PRINT-DATUM");
+		assertThat(plain).contains("#(").doesNotContain("#u8(");
+		for (String program : List.of("(rontolisp::%scheme-display (rontolisp::%scheme-bytevector (list 1)))",
+				"(rontolisp::%scheme-display #8@(1 2))", "(rontolisp::%scheme-display (rontolisp::%scheme-read))",
+				"(rontolisp::%scheme-display (rontolisp::%scheme-string->utf8 \"a\"))")) {
+			String printer = survivingPrintOf(
+					LibraryDefunPruner.prune(SchemeLibrary.process(LispReader.readAllFromString(program))),
+					"%SCHEME-PRINT-DATUM");
+			assertThat(printer).as(program).contains("#u8(");
+		}
+	}
+
+	@Test
 	void aUserDefstructIsNeverExpandedOrPruned() {
 		// A user (or third-party) defstruct stays on the compilers' expansion path,
 		// which alone has the program's export oracle at the right time; here it rides

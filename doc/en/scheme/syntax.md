@@ -2,7 +2,7 @@
 
 - **Reader** (case-sensitive): `#t` `#f` `#true` `#false`, integers, decimals, rationals,
   `#x` `#b` `#o` `#d`, `#\a` `#\space` `#\newline` `#\x41`, strings with
-  `\n \t \" \\ \xHH;`, `#( )` vectors, dotted pairs, `'` `` ` `` `,` `,@`, `;`, `#;`,
+  `\n \t \" \\ \xHH;`, `#( )` vectors, `#u8( )` bytevectors, dotted pairs, `'` `` ` `` `,` `,@`, `;`, `#;`,
   `#| |#`, `#!fold-case` / `#!no-fold-case` (per file, folding identifiers and character
   names -- not strings, not the character itself -- until the counterpart directive or
   end of file).

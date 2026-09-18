@@ -59,10 +59,11 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `define-record-type` (top level only) | `defstruct` with `(:conc-name nil)`, each slot NAMED after its accessor, a BOA constructor; the modifier a `defun` over `(setf (accessor r) v)` answering the unspecified object | `defstruct` is what registers the instance layout on every backend (`.kb/defstruct.md`); the accessor IS the generated one, no wrapper call. The predicate answers T/NIL and is a `pred` (`GlobalPredicate`) |
 | `quasiquote` | `cons`/`append`/`(coerce .. 'vector)`, constant parts quoted | depth-counted per R7RS: the innermost unquote of a nested template IS evaluated |
 | `define-syntax` / `let-syntax` / `letrec-syntax` with `syntax-rules` | nothing: expanded away before the lowering (`SchemeExpander`); `let-syntax`'s body is `(let () body)` | hygiene by renaming, "Macros" below |
+| `#u8(...)`, `bytevector`, `make-bytevector`, `bytevector-append`, `string->utf8` | the `(unsigned-byte 8)` pack (`.kb/packed-integer-vectors.md`): the literal is an 8-bit `LispIntVector` datum, self-evaluating; the constructors are `%scheme-` helpers over `make-array :element-type '(unsigned-byte 8)` / `rontolisp:string-to-octets` | "Bytevectors" below |
 | `(eval datum env)`, `(interaction-environment)`, `(scheme-report-environment 5)`, `(environment sets..)`, `user-initial-environment`, `system-global-environment` | `(%scheme-eval-in datum '\|#[environment]\|)`: a Scheme evaluator over DATUMS in `scheme.lisp`; every specifier is the one global environment, a quoted symbol | the lowering is not inside a compiled program and the backends' run-time `eval` evaluates core forms, so one evaluator serves all four ("`eval`" below) |
 
 `symbol?` excludes `T`, `NIL` and the false value; `boolean?` is `#t`/`#f` only; `vector?`
-excludes strings (`vectorp` does not); `integer?` accepts `2.0`; `max`/`min` are inexact
+is `simple-vector-p`, so it excludes strings and bytevectors (`vectorp` does not); `integer?` accepts `2.0`; `max`/`min` are inexact
 when any argument is; `equal?` is its own helper (recurses into vectors, `eqv?` on
 records; CL's `equal` compares a general vector by identity and an instance slot-wise).
 
@@ -452,7 +453,8 @@ data lowers to (`SchemeLowering.datum`): identifiers via `SchemeNames.mangle`
 -> `NIL`, strings/chars/numbers (the `%scheme-string->number` path, `#x`/`#b`/`#o`/`#d`
 included), `'`/`` ` ``/`,`/`,@` as `quote`/`quasiquote`/`unquote`/`unquote-splicing`
 lists, `#( )`, dotted pairs, `;`/`#;`/`#| |#` skipped -- or `(eq? (read) 'quit)` is
-false. Refusals match the frontend: `|...|`, `+inf.0`/`+nan.0`, bytevectors,
+false. `#u8(` / `#U8(` reads a bytevector through `%scheme-bytevector`, refusing a
+non-byte element as a read error. Refusals match the frontend: `|...|`, `+inf.0`/`+nan.0`,
 `[`/`]`/`{`/`}`, unsupported `#`, `(|...|/|char|)` by name; an incomplete datum
 raises a read error (`read-error?`, "Exceptions" below).
 
@@ -712,6 +714,57 @@ formal**, then lowered like any lambda -- nothing new reaches a backend:
   message), `SchemeLoweringTest.caseLambdaIsOneRestLambda...` and
   `caseLambdaIsImportedFromItsOwnLibraryOnly`.
 
+## Bytevectors (2026-09-18, `.todo/871`)
+
+**A bytevector IS the `(unsigned-byte 8)` pack** (`.kb/packed-integer-vectors.md`): a
+`LispIntVector` of width 8 on the interpreter, a width-headed `long[]` on the JVM, a bare
+`(array (mut i8))` on wasm. Nothing reaches a backend that a Common Lisp program cannot
+already send it.
+
+- `SchemeReader` reads `#u8(` / `#U8(` (case-insensitive like `#x`, as Gauche) into an
+  8-bit `LispIntVector`, refusing a non-byte element and a dot by name. It is a datum like
+  a number: `atom`, `datum` and `quoted` pass it through, so a literal is self-evaluating
+  and each evaluation allocates a fresh vector (the pack's literal rule), which is what
+  makes storing into a literal harmless.
+- `bytevector?` is `(typep x '(simple-array (unsigned-byte 8) (*)))`; `vector?` became
+  `simple-vector-p` (a packed vector is not simple). `bytevector-u8-ref` / `-length` /
+  `-copy` are `aref` / `length` / `subseq` (type-preserving). `utf8->string` is
+  `rontolisp:octets-to-string` (lenient: a byte that leads no valid sequence decodes to its
+  own code point -- Gauche makes an incomplete string; a stated deviation).
+- **Every constructor refuses a non-byte by name** (`%scheme-byte`: `bytevector: not a
+  byte: 256`), and so does `bytevector-u8-set!`'s store: the pack would mask 256 to 0.
+- **`bytevector-copy!` is `%scheme-bytevector-copy!`**, which copies the source region out
+  first when both arguments are one bytevector: Common Lisp's `replace` copies forward on
+  every backend, overlap or not (`.todo/872`).
+- **The printer's `#u8(` arm and `equal?`'s vector-versus-bytevector test are behind a
+  reader feature**, `rontolisp-scheme-bytevectors` (`SchemeLibrary.BYTEVECTORS_FEATURE`):
+  `SchemeLibrary.process` reads `scheme.lisp` with it only when the program -- or the
+  `eval` table generated for it -- can make a bytevector (`makesBytevectors`: an 8-bit
+  literal, the element type `(unsigned-byte 8)`, `string-to-octets`, or a call of a
+  library function that reaches one of those, the fixpoint computed over the library read
+  WITHOUT the feature -- so `read`, whose reader builds one, counts, and a new
+  constructor needs no list edit). The interpreter always reads with it. A bytevector a
+  Common Lisp file of the same program makes, with no Scheme constructor anywhere, prints
+  as `#(...)`.
+- `write-shared` labels a shared bytevector (`(#0=#u8(1 2) #0#)`, as Gauche): it stays a
+  printer node.
+- Cost (2026-09-18, x86-64 Linux, Java 25; `-o P.class --class-name P` / `-o p.wasm`):
+  every probe that cannot make a bytevector is byte-identical before and after --
+  `hello` 1,666 / 510 B, `(display (list 1 'a "s"))` 74,026 / 11,481, a `write` of a list
+  with a vector plus `equal?` 77,578 / 18,300, `eval` 127,288 / 81,996, the `guard` /
+  `with-exception-handler` / error probes. `vector?` alone SHRINKS, 74,682 / 13,737 to
+  74,670 / 13,704. `(write (read))` grows 154,937 / 94,222 to 161,652 / 99,557: it can
+  read `#u8(`, so it gets the pack's `_iv*` dispatch and the printer arm. A bytevector
+  program (`bytevector`, `bytevector-u8-set!`, `-ref`, `-length`, `write`) is 88,790 /
+  28,829 against 78,298 / 17,462 for the same with a vector: the pack, the refusal's
+  message machinery and the printer arm.
+- Out of scope: binary ports (`open-input-bytevector`, `read-u8`, ...), with the rest of
+  `.todo/826`'s ports row.
+- Pinned by the `bytevectors` case (Gauche 0.9.15 `-r7` output), the `#u8(` lines of the
+  read, fold-case and strict-R7RS cases and the two `bytevector...-non-byte` standalone
+  cases of `scheme-spec.yaml` (all four backends), `SchemeReaderTest.aBytevector...`,
+  `LibraryDefunPrunerTest.thePrintersBytevectorArmFollowsOnlyAProgramThatCanMakeABytevector`.
+
 ## A session (`SchemeSession`, `SchemeLowering.interact`)
 
 `rontolisp --source-language scheme` with no file; reached through `eval/SourceSession`
@@ -937,8 +990,8 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 ## Not here yet (each its own follow-up)
 
-`define-library`, bytevectors (the `(unsigned-byte 8)` pack), ports beyond the current output
-and input ports (string ports, a port argument to `read`/`write`/`display`;
+`define-library`, ports beyond the current output
+and input ports (string ports, bytevector ports and `read-u8`/`write-u8`, a port argument to `read`/`write`/`display`;
 `%STREAM` instances), `(scheme char)` and the other libraries, `|...|`
 identifiers, reading `+inf.0`/`+nan.0`, internal `define-record-type`, re-entrant continuations,
 proper tail calls in general. Each is refused by name where it can be.
