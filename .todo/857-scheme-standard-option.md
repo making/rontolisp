@@ -29,6 +29,13 @@ Every other entry matches its R7RS library. Visible change: a file that imports
 explicitly. A file with no `import` merges every tag, so the SICP corpus cannot move.
 Confirm this with `SicpCorpusE2eTest`.
 
+`.todo/859`'s `scheme/libraries.md` already documents `read-char`/`peek-char`/
+`read-line`/`char-ready?`/`eof-object`/`eof-object?` under `(scheme base)` and
+`(scheme read)` as exporting only `read` -- the retag above brings `SchemeBuiltins` in
+line with what the page already says. `exact->inexact`/`inexact->exact` are not on that
+page (they were undocumented before this item too); tag them `r5rs` without adding them
+to a page here.
+
 ## What `r7rs` changes
 
 1. **A file that does not begin with `import` is refused** when it is lowered, as a
@@ -88,5 +95,6 @@ The mode is a property of reading Scheme source, so it travels with the
   backends. Check whether `SchemeSpecE2eTest` can pass CLI flags; if not, add a
   per-case field instead of a second corpus.
 - `.kb/scheme-frontend.md`: a section for the modes, and update the library-tag section.
-- `doc/{en,ja}`: the option and both values, on the Scheme pages (`guides/scheme.md`, or the split pages if `.todo/859` has landed).
+- `doc/{en,ja}`: the option and both values, on `scheme/index.md` and `scheme/sicp.md`
+  (`.todo/859` split the old `guides/scheme.md` into a `scheme/` section of pages).
   Run `DocExamplesTest`.

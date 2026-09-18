@@ -3,8 +3,9 @@
 Difficulty: Medium
 
 Common Lisp has `reference/functions/` (a `_catalog.yaml`, per-package table pages and one
-page per name). Scheme has only the flat procedure paragraph of `guides/scheme.md`. Add
-the same kind of reference for everything `Scheme.providedNames()` answers:
+page per name). Scheme has only `doc/<lang>/scheme/libraries.md`'s per-library tables
+(`.todo/859`). Add the same kind of reference for everything `Scheme.providedNames()`
+answers:
 `SchemeBuiltins` entries, constants and `SchemeLowering.syntaxNames()`. That is about 260
 names as of 2026-09-18 (212 table entries).
 
@@ -30,8 +31,8 @@ confirm that with `./mvnw -f docs-tool/pom.xml test`.
   the Scheme ones if not.
 - A detail page gives the signature, the behavior, and every deviation stated in
   Scheme terms (current port only, escape-only `call/cc`, `sqrt` of a negative
-  refused, `#!unspecific`, and so on). These deviations currently live in the guide's
-  "Deviations" section and in `.kb/scheme-frontend.md`. The page must not describe
+  refused, `#!unspecific`, and so on). These deviations currently live in
+  `doc/<lang>/scheme/deviations.md` and in `.kb/scheme-frontend.md`. The page must not describe
   how the name is lowered; that belongs in `.kb`.
 - Sidebar: one entry "Reference" in the Scheme section, with the category table pages as
   `subpages:`, the way `reference/functions.md` does.

@@ -133,8 +133,6 @@ sections:
         title: テスト（rove）
       - file: guides/reader-case.md
         title: リーダーのケース（大文字化）
-      - file: guides/scheme.md
-        title: Scheme（実験的）
       - file: guides/math-backends.md
         title: 数学関数のバックエンド
       - file: guides/clock-and-random.md
@@ -157,3 +155,21 @@ sections:
         title: コンパイル時evalの制限
       - file: guides/read-load-limitations.md
         title: コンパイル時read/loadの制限
+  - title: Scheme（実験的）
+    pages:
+      - file: scheme/index.md
+        title: 概要
+      - file: scheme/repl.md
+        title: REPL
+      - file: scheme/syntax.md
+        title: 構文
+      - file: scheme/libraries.md
+        title: ライブラリ
+      - file: scheme/sicp.md
+        title: SICP 互換
+      - file: scheme/eval.md
+        title: eval
+      - file: scheme/deviations.md
+        title: 仕様との差異
+      - file: scheme/common-lisp.md
+        title: Common Lisp との混在

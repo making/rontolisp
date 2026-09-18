@@ -2,7 +2,7 @@
 
 Programs for the **experimental** Scheme front end: a `.scm` file is read as a subset of
 R7RS-small plus a few SICP-compatibility names, as described in the
-[Scheme guide](../../doc/en/guides/scheme.md). Each runs identically on the interpreter,
+[Scheme section](../../doc/en/scheme/index.md). Each runs identically on the interpreter,
 the JVM, WASM and `--component`, and each is checked in [`examples.yaml`](../examples.yaml).
 
 | Program | Shows |
