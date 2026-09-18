@@ -10,7 +10,7 @@ backend, add its cases to `scheme-spec.yaml`.
 
 | feature | lowers onto | note |
 |---|---|---|
-| `define-syntax` / `syntax-rules` | an expander in `SchemeLowering`, before desugaring | needs a shadow-aware walk like `substituteSymbolMacros`; hygiene for the introduced core keywords already exists (`CORE_*` identity symbols). Split off: `.todo/861` |
+| `define-syntax` / `syntax-rules` | an expander in `SchemeLowering`, before desugaring | needs a shadow-aware walk like `substituteSymbolMacros`; hygiene for the introduced core keywords already exists (`CORE_*` identity symbols). Done in `.todo/861` (limits: `.kb/scheme-frontend.md`, "Macros") |
 | `guard` / `raise` / `error-object?` / `error-object-message` | `handler-case` / `error` / a condition's report | compiles in EH mode (`.kb/error-handling.md`). Until then an `error` can only end the program |
 | `parameterize` / `make-parameter` | the special-`let` restore (`.kb/dynamic-special-variables.md`) | a parameter object is a procedure: needs a first-class handle on a special |
 | `case-lambda` | a `&rest` lambda dispatching on `(length args)` | |
