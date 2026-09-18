@@ -8981,6 +8981,35 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalValuesAtTopLevelIgnoresValuesPassedAsAnArgument() {
+		// An argument is a single-value context: extra values an argument form
+		// published are gone once the call it feeds runs, so only the called
+		// function's own tail decides what the echo shows.
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		evaluator.eval(LispReader.readFromString("(defun tlv-two () (values 5 6))"));
+		evaluator.eval(LispReader.readFromString("(defun tlv-floor () (floor 7 2))"));
+		evaluator.eval(LispReader.readFromString("(defun tlv-inc (x) (+ x 1))"));
+		evaluator.eval(LispReader.readFromString("(defun tlv-wrap (x) (list (values x 2)))"));
+		assertThat(topLevelValues(evaluator, "(+ 1 (values 5 6))")).isEqualTo("6");
+		assertThat(topLevelValues(evaluator, "(car (list (values 5 6)))")).isEqualTo("5");
+		assertThat(topLevelValues(evaluator, "(list (tlv-floor))")).isEqualTo("(3)");
+		assertThat(topLevelValues(evaluator, "(list (tlv-two))")).isEqualTo("(5)");
+		assertThat(topLevelValues(evaluator, "(tlv-inc (values 1 2))")).isEqualTo("2");
+		assertThat(topLevelValues(evaluator, "(tlv-wrap 1)")).isEqualTo("(1)");
+		assertThat(topLevelValues(evaluator, "(funcall #'list (tlv-two))")).isEqualTo("(5)");
+		// The called function's own values still cross: the argument's are cleared
+		// BEFORE it runs, not after.
+		assertThat(topLevelValues(evaluator, "(values (tlv-two) 7)")).isEqualTo("5 7");
+		assertThat(topLevelValues(evaluator, "(funcall #'values (tlv-two) 7)")).isEqualTo("5 7");
+		assertThat(topLevelValues(evaluator, "(values-list (list (tlv-two) 8))")).isEqualTo("5 8");
+		// The same holds inside a consumer.
+		assertThat(evaluator.eval(LispReader.readFromString("(multiple-value-list (list (tlv-floor)))")).print())
+			.isEqualTo("((3))");
+		assertThat(evaluator.eval(LispReader.readFromString("(multiple-value-list (tlv-wrap 1))")).print())
+			.isEqualTo("((1))");
+	}
+
+	@Test
 	void evalMultipleValueConsumerClearsTheSpillChannel() {
 		// Pins the clear-after-snapshot half of the %mv-spill protocol.
 		assertThat(evalMulti(

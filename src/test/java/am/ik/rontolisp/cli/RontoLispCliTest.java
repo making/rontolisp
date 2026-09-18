@@ -779,6 +779,10 @@ class RontoLispCliTest {
 		assertThat(runCli("(define-record-type point (make-point x) point? (x point-x))\n(point? (make-point 1))\n"
 				+ "(point-x (make-point 7))\n", "--source-language", "scheme"))
 			.isEqualTo("#t\n7\n");
+		// An argument's extra values are not the call's: each form echoes one value.
+		assertThat(runCli("(+ 1 (values 5 6))\n(car (list (values 5 6)))\n(define (two) (values 1 2))\n(list (two))\n",
+				"--source-language", "scheme"))
+			.isEqualTo("6\n5\n(1)\n");
 	}
 
 	@Test
