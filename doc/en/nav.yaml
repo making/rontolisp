@@ -173,3 +173,30 @@ sections:
         title: Deviations
       - file: scheme/common-lisp.md
         title: Mixing with Common Lisp
+      - file: scheme/reference.md
+        title: Reference
+        subpages:
+          - file: scheme/reference/syntax.md
+            title: "Syntax"
+          - file: scheme/reference/library-base.md
+            title: "(scheme base)"
+          - file: scheme/reference/library-write.md
+            title: "(scheme write)"
+          - file: scheme/reference/library-read.md
+            title: "(scheme read)"
+          - file: scheme/reference/library-inexact.md
+            title: "(scheme inexact)"
+          - file: scheme/reference/library-cxr.md
+            title: "(scheme cxr)"
+          - file: scheme/reference/library-lazy.md
+            title: "(scheme lazy)"
+          - file: scheme/reference/library-process-context.md
+            title: "(scheme process-context)"
+          - file: scheme/reference/library-eval.md
+            title: "(scheme eval)"
+          - file: scheme/reference/library-repl.md
+            title: "(scheme repl)"
+          - file: scheme/reference/library-r5rs.md
+            title: "(scheme r5rs)"
+          - file: scheme/reference/library-sicp.md
+            title: "SICP Names"

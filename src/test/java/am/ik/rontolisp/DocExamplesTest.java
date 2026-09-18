@@ -1,5 +1,6 @@
 package am.ik.rontolisp;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -17,7 +18,10 @@ import java.util.stream.Stream;
 
 import com.sun.net.httpserver.HttpServer;
 import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceSession;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterAll;
@@ -28,6 +32,7 @@ import org.junit.jupiter.api.condition.DisabledIfSystemProperty;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.fail;
 
 /**
@@ -51,7 +56,13 @@ import static org.assertj.core.api.Assertions.fail;
  * <li>A <code>```scheme</code> block is a WHOLE program for the experimental Scheme front
  * end (it is lowered a file at a time, so it shares nothing with its neighbours): it must
  * run, and a plain block right after it is its asserted standard output. It is static on
- * the site -- the runnable cells read Common Lisp.</li>
+ * the site -- the runnable cells read Common Lisp. A <code>```scheme</code> block with a
+ * <code>; =&gt;</code> annotation is instead read by a REPL session of its own, form by
+ * form, and each annotation is compared with what that REPL echoes for its form: the
+ * {@code write} text, nothing for a definition or an effect, several values joined by
+ * {@code ", "}. An {@code exit} ends the block's program, keeping what it printed.</li>
+ * <li>A <code>```stdin</code> block is the standard input of the <code>```scheme</code>
+ * block right after it (every other block reads an empty input).</li>
  * <li>REPL transcripts (<code>```console</code>) and shell blocks (<code>```bash</code>)
  * are static and not executed, and are where an example that cannot run headless (stdin,
  * files, a form that signals) belongs.</li>
@@ -161,15 +172,88 @@ class DocExamplesTest {
 	}
 
 	private void checkPage(Path markdown) throws IOException {
-		List<Block> blocks = parseFencedBlocks(Files.readString(markdown, StandardCharsets.UTF_8));
+		checkMarkdown(Files.readString(markdown, StandardCharsets.UTF_8), markdown.toString());
+	}
+
+	/**
+	 * The {@code ; =>} check of a Scheme block is live: a wrong annotation fails the
+	 * page, exactly as it does in a {@code lisp} block.
+	 */
+	@Test
+	void aWrongSchemeAnnotationFailsThePage() {
+		String right = """
+				```scheme
+				(define (f x) (* x 2))
+				(f 21) ; => 42
+				(list #t "s" #\\a) ; => (#t "s" #\\a)
+				(values 1 2) ; => 1, 2
+				```
+				""";
+		checkMarkdown(right, "right.md");
+		assertThatThrownBy(() -> checkMarkdown(right.replace("=> 42", "=> 43"), "wrong.md"))
+			.isInstanceOf(AssertionError.class)
+			.hasMessageContaining("43");
+	}
+
+	/**
+	 * A {@code stdin} block feeds the Scheme block after it, and {@code exit} ends it.
+	 */
+	@Test
+	void aStdinBlockFeedsTheSchemeBlockAfterIt() {
+		checkMarkdown("""
+				```stdin
+				hello
+				```
+
+				```scheme
+				(read-line) ; => "hello"
+				(read-line) ; => #<eof>
+				```
+
+				```scheme
+				(display "before") (newline)
+				(exit 3)
+				(display "after")
+				```
+
+				```
+				before
+				```
+				""", "stdin.md");
+	}
+
+	private void checkMarkdown(String text, String markdown) {
+		List<Block> blocks = parseFencedBlocks(text);
 
 		ByteArrayOutputStream buffer = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(buffer, true, StandardCharsets.UTF_8));
 
+		String stdin = "";
 		for (int i = 0; i < blocks.size(); i++) {
 			Block block = blocks.get(i);
+			if (block.isStdin()) {
+				stdin = block.content();
+				continue;
+			}
+			String blockStdin = stdin;
+			stdin = "";
 			if (block.isScheme()) {
-				String actual = runScheme(block.content(), markdown);
+				String actual;
+				if (block.content().contains(ARROW)) {
+					SchemeRun run = runSchemeSession(block.content(), blockStdin, markdown);
+					for (int f = 0; f < run.forms().size(); f++) {
+						String source = String.join("\n", run.forms().get(f));
+						String annotation = lastArrowAnnotation(source);
+						if (!annotation.isEmpty()) {
+							assertThat(run.shown().get(f)).as("`; =>` result in %s:%n%s", markdown, source)
+								.isEqualTo(annotation);
+						}
+					}
+					actual = run.stdout();
+				}
+				else {
+					actual = runScheme(block.content(), blockStdin, markdown);
+				}
 				Block expected = (i + 1 < blocks.size()) ? blocks.get(i + 1) : null;
 				if (expected != null && expected.isExpectedOutput()) {
 					assertThat(actual).as("output of Scheme example in %s:%n%s", markdown, block.content())
@@ -209,18 +293,114 @@ class DocExamplesTest {
 
 	// A Scheme example is a whole program on a fresh evaluator: the front end decides
 	// defun-or-variable per FILE, so a block cannot lean on an earlier one.
-	private static String runScheme(String source, Path page) {
+	static String runScheme(String source, String stdin, String page) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		LispEvaluator evaluator = schemeEvaluator(out, stdin);
 		try {
 			for (LispVal form : SourceLanguage.SCHEME.read(source, evaluator.features(), null)) {
 				evaluator.eval(form);
 			}
 		}
+		catch (LispExitSignal exit) {
+			// (exit) ends the program; what it printed before is its output.
+		}
 		catch (RuntimeException ex) {
 			fail("Scheme example in %s failed to evaluate:%n%s%n-> %s".formatted(page, source, ex), ex);
 		}
 		return out.toString(StandardCharsets.UTF_8).strip();
+	}
+
+	private static LispEvaluator schemeEvaluator(ByteArrayOutputStream out, String stdin) {
+		return new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8),
+				new ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8)));
+	}
+
+	/**
+	 * An annotated Scheme block, run the way a REPL runs it.
+	 *
+	 * @param forms the block's lines, one group per top-level form (its trailing comment
+	 * lines included)
+	 * @param shown per group, what the REPL echoes for its last form: {@code ""} when it
+	 * echoes nothing, several values joined by {@code ", "}
+	 * @param stdout everything the block printed
+	 */
+	record SchemeRun(List<List<String>> forms, List<String> shown, String stdout) {
+	}
+
+	/**
+	 * Runs an annotated Scheme block through a REPL session of its own, on a fresh
+	 * evaluator, and records what the REPL echoes for every top-level form -- the text a
+	 * {@code ; =>} annotation states. An {@code exit} ends the block: the forms after it
+	 * show nothing.
+	 */
+	static SchemeRun runSchemeSession(String content, String stdin, String page) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = schemeEvaluator(out, stdin);
+		SourceSession session = new SourceSession(SourceLanguage.SCHEME);
+		List<List<String>> forms = splitSchemeForms(session, content);
+		List<String> shown = new ArrayList<>();
+		boolean exited = false;
+		for (List<String> form : forms) {
+			String source = String.join("\n", form);
+			if (exited) {
+				shown.add("");
+				continue;
+			}
+			List<String> echoes = new ArrayList<>();
+			try {
+				for (SourceSession.Step step : session.read(source, Features.INTERPRETER)) {
+					echoes.clear();
+					List<LispVal> values = List.of();
+					for (int i = 0; i < step.forms().size(); i++) {
+						if (step.echoes() && i == step.forms().size() - 1) {
+							values = evaluator.evalValues(step.forms().get(i));
+						}
+						else {
+							evaluator.eval(step.forms().get(i));
+						}
+					}
+					for (LispVal value : values) {
+						String echoed = session.echo(value, evaluator);
+						if (echoed != null) {
+							echoes.add(echoed);
+						}
+					}
+				}
+			}
+			catch (LispExitSignal exit) {
+				exited = true;
+				echoes.clear();
+			}
+			catch (RuntimeException ex) {
+				fail("Scheme example in %s failed to evaluate:%n%s%n-> %s".formatted(page, source, ex), ex);
+			}
+			shown.add(String.join(", ", echoes));
+		}
+		return new SchemeRun(forms, shown, out.toString(StandardCharsets.UTF_8).strip());
+	}
+
+	/**
+	 * {@link #splitForms} for a Scheme block: the language's own reader says when a group
+	 * is complete, since {@code #t}, {@code #\(} and {@code #|...|#} mean something else
+	 * to Common Lisp's.
+	 */
+	static List<List<String>> splitSchemeForms(SourceSession session, String content) {
+		List<List<String>> forms = new ArrayList<>();
+		List<String> current = new ArrayList<>();
+		boolean complete = false;
+		for (String line : content.split("\n", -1)) {
+			if (complete && !isCommentOrBlank(line)) {
+				forms.add(current);
+				current = new ArrayList<>();
+				complete = false;
+			}
+			current.add(line);
+			complete = complete || (!isCommentOrBlank(line) && session.isComplete(String.join("\n", current)));
+		}
+		if (current.stream().anyMatch(line -> !isCommentOrBlank(line))) {
+			forms.add(current);
+		}
+		return forms;
 	}
 
 	/**
@@ -261,6 +441,7 @@ class DocExamplesTest {
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(buffer, true, StandardCharsets.UTF_8));
 		String pendingStdout = null; // stdout of the previous lisp block, awaiting an
 										// output fence
+		String stdin = "";
 
 		int i = 0;
 		while (i < lines.length) {
@@ -297,7 +478,19 @@ class DocExamplesTest {
 					pendingStdout = buffer.toString(StandardCharsets.UTF_8).strip();
 				}
 				else if (info.equals("scheme")) {
-					pendingStdout = runScheme(String.join("\n", content), page);
+					String source = String.join("\n", content);
+					if (source.contains(ARROW)) {
+						SchemeRun run = runSchemeSession(source, stdin, page.toString());
+						List<String> rewritten = new ArrayList<>();
+						for (int f = 0; f < run.forms().size(); f++) {
+							rewritten.addAll(rewriteArrow(run.forms().get(f), run.shown().get(f)));
+						}
+						content = rewritten;
+						pendingStdout = run.stdout();
+					}
+					else {
+						pendingStdout = runScheme(source, stdin, page.toString());
+					}
 				}
 				else if (isOutputInfo(info) && pendingStdout != null) {
 					content = pendingStdout.isEmpty() ? List.of()
@@ -307,6 +500,7 @@ class DocExamplesTest {
 				else {
 					pendingStdout = null;
 				}
+				stdin = info.equals("stdin") ? String.join("\n", content) + "\n" : "";
 
 				out.append(line).append('\n');
 				for (String c : content) {
@@ -447,6 +641,10 @@ class DocExamplesTest {
 
 		boolean isScheme() {
 			return this.info.equals("scheme");
+		}
+
+		boolean isStdin() {
+			return this.info.equals("stdin");
 		}
 
 		boolean isExpectedOutput() {

@@ -440,7 +440,7 @@ final class SchemeBuiltins {
 			;; refused by arity, like display/write's second argument --
 			;; string ports and (read port) are .todo/826's.
 			("read" read value (() (rontolisp::%scheme-read)))
-			("eof-object" read value (() rontolisp::%scheme-eof-instance))
+			("eof-object" read value (() (rontolisp::%scheme-eof-object)))
 			("eof-object?" read pred ((x) (rontolisp::%scheme-eof-object? x)))
 			("read-char" read value (() (rontolisp::%scheme-read-char)))
 			("peek-char" read value (() (rontolisp::%scheme-peek-char)))

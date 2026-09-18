@@ -503,7 +503,10 @@
 			a.href = hitHref(hit);
 			a.setAttribute("role", "option");
 			a.setAttribute("aria-selected", i === search.active ? "true" : "false");
-			var html = '<span class="hit-title">' + highlight(page.t, terms) + "</span>";
+			// A label tells two operator pages of one name apart (Scheme's car from
+			// Common Lisp's): the name is the same, the catalog is not.
+			var label = page.l ? ' <span class="hit-label">' + escHtml(page.l) + "</span>" : "";
+			var html = '<span class="hit-title">' + highlight(page.t, terms) + label + "</span>";
 			if (hit.heading) {
 				html += '<span class="hit-crumb">' + highlight(hit.heading, terms) + "</span>";
 			}

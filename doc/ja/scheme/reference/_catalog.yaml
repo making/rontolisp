@@ -1,0 +1,326 @@
+index_page: scheme/reference.md
+label: Scheme
+categories:
+  - title: "構文"
+    index_page: scheme/reference/syntax.md
+    functions:
+      - { slug: quote, name: "quote" }
+      - { slug: quasiquote, name: "quasiquote" }
+      - { slug: unquote, name: "unquote" }
+      - { slug: unquote-splicing, name: "unquote-splicing" }
+      - { slug: lambda, name: "lambda" }
+      - { slug: if, name: "if" }
+      - { slug: set-bang, name: "set!" }
+      - { slug: begin, name: "begin" }
+      - { slug: let, name: "let" }
+      - { slug: let-star, name: "let*" }
+      - { slug: letrec, name: "letrec" }
+      - { slug: letrec-star, name: "letrec*" }
+      - { slug: do, name: "do" }
+      - { slug: cond, name: "cond" }
+      - { slug: case, name: "case" }
+      - { slug: and, name: "and" }
+      - { slug: or, name: "or" }
+      - { slug: when, name: "when" }
+      - { slug: unless, name: "unless" }
+      - { slug: define, name: "define" }
+      - { slug: define-values, name: "define-values" }
+      - { slug: define-record-type, name: "define-record-type" }
+      - { slug: let-values, name: "let-values" }
+      - { slug: let-star-values, name: "let*-values" }
+      - { slug: else, name: "else" }
+      - { slug: arrow, name: "=>" }
+      - { slug: import, name: "import" }
+  - title: "(scheme base): 等価性"
+    index_page: scheme/reference/library-base.md
+    functions:
+      - { slug: eq-p, name: "eq?" }
+      - { slug: eqv-p, name: "eqv?" }
+      - { slug: equal-p, name: "equal?" }
+  - title: "(scheme base): 数値"
+    index_page: scheme/reference/library-base.md
+    functions:
+      - { slug: plus, name: "+" }
+      - { slug: minus, name: "-" }
+      - { slug: mul, name: "*" }
+      - { slug: div, name: "/" }
+      - { slug: numeq, name: "=" }
+      - { slug: lt, name: "<" }
+      - { slug: gt, name: ">" }
+      - { slug: le, name: "<=" }
+      - { slug: ge, name: ">=" }
+      - { slug: quotient, name: "quotient" }
+      - { slug: remainder, name: "remainder" }
+      - { slug: modulo, name: "modulo" }
+      - { slug: truncate-quotient, name: "truncate-quotient" }
+      - { slug: truncate-remainder, name: "truncate-remainder" }
+      - { slug: floor-quotient, name: "floor-quotient" }
+      - { slug: floor-remainder, name: "floor-remainder" }
+      - { slug: abs, name: "abs" }
+      - { slug: min, name: "min" }
+      - { slug: max, name: "max" }
+      - { slug: gcd, name: "gcd" }
+      - { slug: lcm, name: "lcm" }
+      - { slug: expt, name: "expt" }
+      - { slug: square, name: "square" }
+      - { slug: floor, name: "floor" }
+      - { slug: ceiling, name: "ceiling" }
+      - { slug: round, name: "round" }
+      - { slug: truncate, name: "truncate" }
+      - { slug: zero-p, name: "zero?" }
+      - { slug: positive-p, name: "positive?" }
+      - { slug: negative-p, name: "negative?" }
+      - { slug: odd-p, name: "odd?" }
+      - { slug: even-p, name: "even?" }
+      - { slug: number-p, name: "number?" }
+      - { slug: real-p, name: "real?" }
+      - { slug: rational-p, name: "rational?" }
+      - { slug: integer-p, name: "integer?" }
+      - { slug: exact-p, name: "exact?" }
+      - { slug: inexact-p, name: "inexact?" }
+      - { slug: exact-integer-p, name: "exact-integer?" }
+      - { slug: exact, name: "exact" }
+      - { slug: inexact, name: "inexact" }
+      - { slug: number-to-string, name: "number->string" }
+      - { slug: string-to-number, name: "string->number" }
+      - { slug: exact-integer-sqrt, name: "exact-integer-sqrt" }
+  - title: "(scheme base): 真偽値"
+    index_page: scheme/reference/library-base.md
+    functions:
+      - { slug: not, name: "not" }
+      - { slug: boolean-p, name: "boolean?" }
+  - title: "(scheme base): ペアとリスト"
+    index_page: scheme/reference/library-base.md
+    functions:
+      - { slug: cons, name: "cons" }
+      - { slug: car, name: "car" }
+      - { slug: cdr, name: "cdr" }
+      - { slug: set-car-bang, name: "set-car!" }
+      - { slug: set-cdr-bang, name: "set-cdr!" }
+      - { slug: caar, name: "caar" }
+      - { slug: cadr, name: "cadr" }
+      - { slug: cdar, name: "cdar" }
+      - { slug: cddr, name: "cddr" }
+      - { slug: list, name: "list" }
+      - { slug: length, name: "length" }
+      - { slug: append, name: "append" }
+      - { slug: reverse, name: "reverse" }
+      - { slug: list-tail, name: "list-tail" }
+      - { slug: list-ref, name: "list-ref" }
+      - { slug: list-copy, name: "list-copy" }
+      - { slug: memq, name: "memq" }
+      - { slug: memv, name: "memv" }
+      - { slug: member, name: "member" }
+      - { slug: assq, name: "assq" }
+      - { slug: assv, name: "assv" }
+      - { slug: assoc, name: "assoc" }
+      - { slug: null-p, name: "null?" }
+      - { slug: pair-p, name: "pair?" }
+      - { slug: list-p, name: "list?" }
+  - title: "(scheme base): シンボル"
+    index_page: scheme/reference/library-base.md
+    functions:
+      - { slug: symbol-p, name: "symbol?" }
+      - { slug: symbol-to-string, name: "symbol->string" }
+      - { slug: string-to-symbol, name: "string->symbol" }
+  - title: "(scheme base): 文字"
+    index_page: scheme/reference/library-base.md
+    functions:
+      - { slug: char-p, name: "char?" }
+      - { slug: char-to-integer, name: "char->integer" }
+      - { slug: integer-to-char, name: "integer->char" }
+      - { slug: char-eq-p, name: "char=?" }
+      - { slug: char-lt-p, name: "char<?" }
+      - { slug: char-gt-p, name: "char>?" }
+      - { slug: char-le-p, name: "char<=?" }
+      - { slug: char-ge-p, name: "char>=?" }
+  - title: "(scheme base): 文字列"
+    index_page: scheme/reference/library-base.md
+    functions:
+      - { slug: string-p, name: "string?" }
+      - { slug: make-string, name: "make-string" }
+      - { slug: string, name: "string" }
+      - { slug: string-length, name: "string-length" }
+      - { slug: string-ref, name: "string-ref" }
+      - { slug: string-set-bang, name: "string-set!" }
+      - { slug: string-eq-p, name: "string=?" }
+      - { slug: string-lt-p, name: "string<?" }
+      - { slug: string-gt-p, name: "string>?" }
+      - { slug: string-le-p, name: "string<=?" }
+      - { slug: string-ge-p, name: "string>=?" }
+      - { slug: substring, name: "substring" }
+      - { slug: string-append, name: "string-append" }
+      - { slug: string-copy, name: "string-copy" }
+      - { slug: string-to-list, name: "string->list" }
+      - { slug: list-to-string, name: "list->string" }
+  - title: "(scheme base): ベクタ"
+    index_page: scheme/reference/library-base.md
+    functions:
+      - { slug: vector-p, name: "vector?" }
+      - { slug: make-vector, name: "make-vector" }
+      - { slug: vector, name: "vector" }
+      - { slug: vector-length, name: "vector-length" }
+      - { slug: vector-ref, name: "vector-ref" }
+      - { slug: vector-set-bang, name: "vector-set!" }
+      - { slug: vector-to-list, name: "vector->list" }
+      - { slug: list-to-vector, name: "list->vector" }
+      - { slug: vector-fill-bang, name: "vector-fill!" }
+  - title: "(scheme base): 制御"
+    index_page: scheme/reference/library-base.md
+    functions:
+      - { slug: procedure-p, name: "procedure?" }
+      - { slug: apply, name: "apply" }
+      - { slug: map, name: "map" }
+      - { slug: for-each, name: "for-each" }
+      - { slug: call-cc, name: "call/cc" }
+      - { slug: call-with-current-continuation, name: "call-with-current-continuation" }
+      - { slug: dynamic-wind, name: "dynamic-wind" }
+      - { slug: values, name: "values" }
+      - { slug: call-with-values, name: "call-with-values" }
+      - { slug: error, name: "error" }
+  - title: "(scheme base): 出力"
+    index_page: scheme/reference/library-base.md
+    functions:
+      - { slug: newline, name: "newline" }
+      - { slug: write-char, name: "write-char" }
+      - { slug: write-string, name: "write-string" }
+  - title: "(scheme base): 入力"
+    index_page: scheme/reference/library-base.md
+    functions:
+      - { slug: read-char, name: "read-char" }
+      - { slug: peek-char, name: "peek-char" }
+      - { slug: read-line, name: "read-line" }
+      - { slug: char-ready-p, name: "char-ready?" }
+      - { slug: eof-object, name: "eof-object" }
+      - { slug: eof-object-p, name: "eof-object?" }
+  - title: "(scheme write)"
+    index_page: scheme/reference/library-write.md
+    functions:
+      - { slug: display, name: "display" }
+      - { slug: write, name: "write" }
+      - { slug: write-shared, name: "write-shared" }
+      - { slug: write-simple, name: "write-simple" }
+  - title: "(scheme read)"
+    index_page: scheme/reference/library-read.md
+    functions:
+      - { slug: read, name: "read" }
+  - title: "(scheme inexact)"
+    index_page: scheme/reference/library-inexact.md
+    functions:
+      - { slug: sqrt, name: "sqrt" }
+      - { slug: exp, name: "exp" }
+      - { slug: log, name: "log" }
+      - { slug: sin, name: "sin" }
+      - { slug: cos, name: "cos" }
+      - { slug: tan, name: "tan" }
+      - { slug: asin, name: "asin" }
+      - { slug: acos, name: "acos" }
+      - { slug: atan, name: "atan" }
+      - { slug: finite-p, name: "finite?" }
+      - { slug: infinite-p, name: "infinite?" }
+      - { slug: nan-p, name: "nan?" }
+  - title: "(scheme cxr)"
+    index_page: scheme/reference/library-cxr.md
+    functions:
+      - { slug: caaar, name: "caaar" }
+      - { slug: caadr, name: "caadr" }
+      - { slug: cadar, name: "cadar" }
+      - { slug: caddr, name: "caddr" }
+      - { slug: cdaar, name: "cdaar" }
+      - { slug: cdadr, name: "cdadr" }
+      - { slug: cddar, name: "cddar" }
+      - { slug: cdddr, name: "cdddr" }
+      - { slug: caaaar, name: "caaaar" }
+      - { slug: caaadr, name: "caaadr" }
+      - { slug: caadar, name: "caadar" }
+      - { slug: caaddr, name: "caaddr" }
+      - { slug: cadaar, name: "cadaar" }
+      - { slug: cadadr, name: "cadadr" }
+      - { slug: caddar, name: "caddar" }
+      - { slug: cadddr, name: "cadddr" }
+      - { slug: cdaaar, name: "cdaaar" }
+      - { slug: cdaadr, name: "cdaadr" }
+      - { slug: cdadar, name: "cdadar" }
+      - { slug: cdaddr, name: "cdaddr" }
+      - { slug: cddaar, name: "cddaar" }
+      - { slug: cddadr, name: "cddadr" }
+      - { slug: cdddar, name: "cdddar" }
+      - { slug: cddddr, name: "cddddr" }
+  - title: "(scheme lazy)"
+    index_page: scheme/reference/library-lazy.md
+    functions:
+      - { slug: delay, name: "delay" }
+      - { slug: delay-force, name: "delay-force" }
+      - { slug: force, name: "force" }
+      - { slug: make-promise, name: "make-promise" }
+      - { slug: promise-p, name: "promise?" }
+  - title: "(scheme process-context)"
+    index_page: scheme/reference/library-process-context.md
+    functions:
+      - { slug: exit, name: "exit" }
+      - { slug: emergency-exit, name: "emergency-exit" }
+  - title: "(scheme eval)"
+    index_page: scheme/reference/library-eval.md
+    functions:
+      - { slug: eval, name: "eval" }
+      - { slug: environment, name: "environment" }
+  - title: "(scheme repl)"
+    index_page: scheme/reference/library-repl.md
+    functions:
+      - { slug: interaction-environment, name: "interaction-environment" }
+  - title: "(scheme r5rs)"
+    index_page: scheme/reference/library-r5rs.md
+    functions:
+      - { slug: exact-to-inexact, name: "exact->inexact" }
+      - { slug: inexact-to-exact, name: "inexact->exact" }
+      - { slug: scheme-report-environment, name: "scheme-report-environment" }
+  - title: "SICP: 手続き"
+    index_page: scheme/reference/library-sicp.md
+    functions:
+      - { slug: filter, name: "filter" }
+      - { slug: reduce, name: "reduce" }
+      - { slug: fold-left, name: "fold-left" }
+      - { slug: fold-right, name: "fold-right" }
+      - { slug: delete, name: "delete" }
+      - { slug: last-pair, name: "last-pair" }
+      - { slug: append-bang, name: "append!" }
+      - { slug: list-index, name: "list-index" }
+      - { slug: 1plus, name: "1+" }
+      - { slug: minus-1plus, name: "-1+" }
+      - { slug: random, name: "random" }
+      - { slug: runtime, name: "runtime" }
+  - title: "SICP: 並行処理"
+    index_page: scheme/reference/library-sicp.md
+    functions:
+      - { slug: parallel-execute, name: "parallel-execute" }
+      - { slug: test-and-set-bang, name: "test-and-set!" }
+  - title: "SICP: ストリーム"
+    index_page: scheme/reference/library-sicp.md
+    functions:
+      - { slug: cons-stream, name: "cons-stream" }
+      - { slug: stream-car, name: "stream-car" }
+      - { slug: stream-cdr, name: "stream-cdr" }
+      - { slug: stream-first, name: "stream-first" }
+      - { slug: stream-rest, name: "stream-rest" }
+      - { slug: stream-pair-p, name: "stream-pair?" }
+      - { slug: stream-null-p, name: "stream-null?" }
+      - { slug: empty-stream-p, name: "empty-stream?" }
+      - { slug: stream, name: "stream" }
+      - { slug: list-to-stream, name: "list->stream" }
+      - { slug: stream-to-list, name: "stream->list" }
+      - { slug: stream-head, name: "stream-head" }
+      - { slug: stream-tail, name: "stream-tail" }
+      - { slug: stream-ref, name: "stream-ref" }
+      - { slug: stream-map, name: "stream-map" }
+      - { slug: stream-for-each, name: "stream-for-each" }
+      - { slug: stream-filter, name: "stream-filter" }
+      - { slug: stream-append, name: "stream-append" }
+      - { slug: the-empty-stream, name: "the-empty-stream" }
+  - title: "SICP: 定数"
+    index_page: scheme/reference/library-sicp.md
+    functions:
+      - { slug: true, name: "true" }
+      - { slug: false, name: "false" }
+      - { slug: nil, name: "nil" }
+      - { slug: user-initial-environment, name: "user-initial-environment" }
+      - { slug: system-global-environment, name: "system-global-environment" }

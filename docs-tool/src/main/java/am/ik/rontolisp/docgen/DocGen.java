@@ -170,6 +170,15 @@ public final class DocGen {
 				indexToCatalog.put(indexPage, catalog);
 			}
 		}
+		// A detail page and a table page at one path would overwrite each other's HTML.
+		for (Catalog catalog : catalogs) {
+			for (Catalog.Entry entry : catalog.flatEntries()) {
+				if (indexToCatalog.containsKey(catalog.mdFile(entry))) {
+					throw new IOException("Catalog '" + catalog.baseDir() + "' entry '" + entry.name()
+							+ "' has the slug of the index page " + catalog.mdFile(entry));
+				}
+			}
+		}
 
 		List<Nav.Page> pages = nav.flatPages();
 		for (int i = 0; i < pages.size(); i++) {
@@ -281,7 +290,7 @@ public final class DocGen {
 			HtmlTemplate.Crumb next = (i < refs.size() - 1) ? detailCrumb(lang, catalog, refs.get(i + 1).entry())
 					: null;
 			String detailBody = renderBody(Files.readString(mdPath, StandardCharsets.UTF_8), catalog.mdFile(entry),
-					lang, docPath, entry.name(), true);
+					lang, docPath, entry.name(), true, catalog.label());
 			HtmlTemplate.PageContext ctx = new HtmlTemplate.PageContext(nav, lang, entry.name(), docPath,
 					catalog.mdFile(entry), indexDocPath, detailBody, TocBuilder.build(detailBody), backlink, prev, next,
 					languageList);
@@ -326,10 +335,19 @@ public final class DocGen {
 	 */
 	private String renderBody(String markdown, String mdFile, String lang, String docPath, String title,
 			boolean operator) throws IOException {
+		return renderBody(markdown, mdFile, lang, docPath, title, operator, "");
+	}
+
+	/**
+	 * @param label the catalog's {@link Catalog#label}, which the search results show
+	 * beside the title
+	 */
+	private String renderBody(String markdown, String mdFile, String lang, String docPath, String title,
+			boolean operator, String label) throws IOException {
 		String body = this.renderer.render(this.parser.parse(markdown));
 		body = alignHeadingIds(body, mdFile, lang);
 		body = rewriteMarkdownLinks(body);
-		this.searchIndex.addPage(docPath.substring(lang.length() + 1), title, body, operator);
+		this.searchIndex.addPage(docPath.substring(lang.length() + 1), title, body, operator, label);
 		return RunnableBlockTransformer.transform(body);
 	}
 

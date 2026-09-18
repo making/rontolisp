@@ -6,12 +6,9 @@
   `#| |#`, `#!fold-case` / `#!no-fold-case` (per file, folding identifiers and character
   names -- not strings, not the character itself -- until the counterpart directive or
   end of file).
-- **Special forms**: `define` (both forms, internal definitions as `letrec*`),
-  `define-values`,
-  `lambda`, `if`, `cond` (`else`, `=>`), `case`, `and`, `or`, `when`, `unless`, `let`,
-  `let*`, `letrec`, `letrec*`, named `let`, `do`, `begin`, `set!`, `quote`, `quasiquote`,
-  `let-values`, `let*-values`, `define-record-type` (top level only), `delay`,
-  `delay-force`, and
+- **Special forms**: one page each under [Syntax](reference/syntax.md) in the
+  reference (`delay` and `delay-force` under [(scheme lazy)](reference/library-lazy.md)),
+  and
   `(import (scheme base) (scheme write) (scheme read) (scheme inexact) (scheme cxr) (scheme lazy)
   (scheme process-context) (scheme eval) (scheme repl))` with `only` / `except` /
   `prefix` / `rename`.

@@ -45,11 +45,12 @@ rontolisp prog.txt --source-language scheme        # any extension
 
 - [REPL](repl.md) -- the interactive session and script-runner mode.
 - [Syntax](syntax.md) -- the reader, special forms and `import`.
-- [Libraries](libraries.md) -- every procedure, grouped by the R7RS library that exports
-  it.
+- [Libraries](libraries.md) -- the nine importable R7RS libraries and what each
+  provides.
 - [SICP Compatibility](sicp.md) -- the MIT/SICP names visible with no `import`.
 - [eval](eval.md) -- `(eval datum env)` and the environments it accepts.
 - [Deviations](deviations.md) -- where this front end departs from R7RS, then what is
   not implemented yet.
 - [Mixing with Common Lisp](common-lisp.md) -- calling a Scheme procedure from a Common
   Lisp file, and back.
+- [Reference](reference.md) -- one page per procedure, constant and syntactic keyword.

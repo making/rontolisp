@@ -692,11 +692,17 @@ public final class SkillGen {
 		return String.join(", ", parts);
 	}
 
-	/** {@code reference/special-forms} -> {@code Special forms}. */
+	/**
+	 * {@code reference/special-forms} -> {@code Special forms}; a labeled catalog leads
+	 * with its label ({@code scheme/reference} -> {@code Scheme reference}).
+	 */
 	static String kindTitle(Catalog catalog) {
 		String dir = catalog.baseDir();
 		String leaf = dir.contains("/") ? dir.substring(dir.lastIndexOf('/') + 1) : dir;
 		String words = leaf.replace('-', ' ');
+		if (!catalog.label().isEmpty()) {
+			return catalog.label() + " " + words;
+		}
 		return Character.toUpperCase(words.charAt(0)) + words.substring(1);
 	}
 
