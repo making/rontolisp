@@ -63,7 +63,11 @@ The one stated exception is `--gpu`'s transcendental tier (`.kb/linalg-simd.md`)
   - Call sites: `WasmTranscendentalCompiler` (real unary), `WasmExptCompiler` (`pow`,
     dispatching exactly as the interpreter's `expt`: an exact base to an integer
     exponent is the rational loop, anything with a float or a ratio exponent is
-    `pow`), `WasmComplexCompiler` (the interpreter's complex formulas term for term,
+    `pow` -- and an integer exponent outside the i31 range is `pow` too
+    (`(expt 2 4294967297)` is `Infinity`, not a trap; the loop counter is an i31,
+    and a 2^30-iteration loop would never get there anyway -- `.todo/849`; the JVM's
+    `_pow` takes the same rule at the int range instead of narrowing with `L2I`),
+    `WasmComplexCompiler` (the interpreter's complex formulas term for term,
     over the same calls; the complex `expt` takes the squaring loop only for an EXACT
     base, like `exptComplex`), `WasmInverseHypCompiler` (the interpreter's
     `asinhReal`/`acoshReal`/`atanhReal` groupings over `log1p`/`log`/`hypot`), and the
