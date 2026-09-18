@@ -12,7 +12,8 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 ## Where it sits
 
 - `scheme` depends on the AST types and `reader` only: `SchemeReader` (text -> datums, its
-  own case-sensitive reader), `SchemeLowering` (datums -> core forms), `SchemeBuiltins`
+  own case-sensitive reader), `SchemeExpander` + `SyntaxRules` (macros, datums -> datums,
+  "Macros" below), `SchemeLowering` (datums -> core forms), `SchemeBuiltins`
   (the procedure table), `SchemeNames` (identifier escaping), `Scheme` (the facade).
 - Reached ONLY through the seam: `eval/SourceLanguage.SCHEME`, picked for `.scm` or by
   `--source-language scheme` (`.kb/source-language.md`). Per FILE, so a Common Lisp file
@@ -54,6 +55,7 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `(call-with-values (lambda () ..) (lambda (a b) ..))`, `let-values`, `define-values` | `multiple-value-bind` | the syntactic tier (`.kb/multiple-values.md`). Any other shape: `(apply consumer (multiple-value-list (funcall producer)))`. A loop's `(values ..)` result survives the `setq` into the result variable because `values` publishes through `%mv-spill` |
 | `define-record-type` (top level only) | `defstruct` with `(:conc-name nil)`, each slot NAMED after its accessor, a BOA constructor; the modifier a `defun` over `(setf (accessor r) v)` | `defstruct` is what registers the instance layout on every backend (`.kb/defstruct.md`); the accessor IS the generated one, no wrapper call. The predicate answers T/NIL and is a `pred` (`GlobalPredicate`) |
 | `quasiquote` | `cons`/`append`/`(coerce .. 'vector)`, constant parts quoted | depth-counted per R7RS: the innermost unquote of a nested template IS evaluated |
+| `define-syntax` / `let-syntax` / `letrec-syntax` with `syntax-rules` | nothing: expanded away before the lowering (`SchemeExpander`); `let-syntax`'s body is `(let () body)` | hygiene by renaming, "Macros" below |
 | `(eval datum env)`, `(interaction-environment)`, `(scheme-report-environment 5)`, `(environment sets..)`, `user-initial-environment`, `system-global-environment` | `(%scheme-eval-in datum '\|#[environment]\|)`: a Scheme evaluator over DATUMS in `scheme.lisp`; every specifier is the one global environment, a quoted symbol | the lowering is not inside a compiled program and the backends' run-time `eval` evaluates core forms, so one evaluator serves all four ("`eval`" below) |
 
 `symbol?` excludes `T`, `NIL` and the false value; `boolean?` is `#t`/`#f` only; `vector?`
@@ -409,7 +411,12 @@ signals (no `guard` yet to catch it with).
 
 - **EOF is a `defstruct` singleton** (`%scheme-eof`, one `%scheme-eof-instance`):
   unforgeable (no read syntax, `symbol?` false), prints `#<eof>` like Gauche,
-  `eof-object?` is its predicate. `(read)`/`read-char`/`peek-char`/`read-line` answer
+  `eof-object?` is its predicate. `(eof-object)` CALLS `%scheme-eof-object` rather than
+  reading the variable: the interpreter loads `scheme.lisp` on the first resolution of
+  one of its FUNCTIONS, so a template whose only library reference is a variable is
+  unbound when it is the first thing a fresh evaluator runs (a REPL's first form, a
+  one-form program) -- `SchemeBuiltinsTest.eofObjectWorksAsTheFirstThingAFreshEvaluatorRuns`.
+  `(read)`/`read-char`/`peek-char`/`read-line` answer
   it at end of input instead of signalling; a second `(read)` there answers it again
   (the peek stays parked). A port argument stays refused by arity, like
   `display`/`write`'s second argument -- string ports and `(read port)` are `.todo/826`'s.
@@ -439,6 +446,72 @@ signals (no `guard` yet to catch it with).
   keyed on `*standard-input*` the same way as the pushback cell above, so a rebind
   (a fresh "file") starts folding off again; `SchemeReader` keeps the same flag as an
   instance field, one per compile-time read.
+
+## Macros (`SchemeExpander`, `SyntaxRules`; 2026-09-18, `.todo/861`)
+
+**The expander runs BEFORE the lowering, over datums, and outputs datums with no macro
+left**, so every pre-scan of the lowering -- the `set!` census, the defun-or-variable
+decision, a body's internal definitions, `readBeforeDefinition` -- sees the expanded
+program: a macro expanding to `(define f (lambda ..))` still makes `f` a `defun`, one
+expanding to `(set! g ..)` still makes `g` a variable. Expanding on demand inside the
+lowering would have hidden both from the scans that run first.
+
+- **Gate**: only a file (or session buffer) that spells `define-syntax`, `let-syntax`,
+  `letrec-syntax` or `syntax-error` -- by name or through an import rename -- is
+  expanded (`SchemeExpander.needed`); a session keeps its expander, and so its macros,
+  from then on. Every other program is lowered exactly as before, byte for byte.
+- **Hygiene by renaming.** A symbol a template introduces becomes an ALIAS: a fresh
+  `LispSymbol` of the same spelling (identity-distinct; `LispSymbol` equality is by name,
+  so aliases live in an `IdentityHashMap`) remembering the symbol and the macro's
+  DEFINITION environment. Resolution looks the alias up where it is used first (a binder
+  the same expansion introduced), then resolves the original in the definition
+  environment. A bound alias becomes a fresh generated variable (`%SCM-V<n>`); a free
+  alias resolving to a keyword becomes the lowering's identity-compared core symbol
+  (`SchemeLowering.coreSymbol`, now one per implemented keyword, so `(let ((if list))
+  (my-or ..))` still expands to the real `if`); to a variable, its emitted name; free,
+  its spelling. `quote`, `case` data and the literal parts of a `quasiquote` get the
+  aliases stripped back to their spelling. Literals match by `free-identifier=?` (same
+  binding in each side's environment, or both free with one spelling): a user's local
+  `else` does not match a macro's `else` literal (Gauche agrees).
+- **Every LOCAL of an expanded program is renamed** to a generated variable, the user's
+  too. A free alias is emitted by its spelling and the lowering keeps Scheme spellings
+  for locals, so without this `(let ((x 'outer)) (let-syntax ((m .. x)) (let ((x
+  'inner)) (m))))` answered `inner` (Gauche: `outer`) -- the Common Lisp binding captured
+  it. Renaming every local makes that impossible by construction; renaming only on
+  detected shadowing would need to know, at the binder, which macros might later emit the
+  name. Top-level names keep their spelling (other files reach them); a top-level name a
+  TEMPLATE defines is a hidden generated global only that expansion spells (Gauche -r7:
+  `(def-foo 42)` then `foo` is unbound), which keeps `(define count 0)` inside a
+  counter-defining macro from colliding with the user's `count`.
+- **The walk mirrors the lowering's scoping** of every binding form (`lambda`, `define`,
+  the `let` family and named `let`, `letrec`, `let-values`, `do`, internal definitions
+  bound before any value, letrec*-style). A shape it cannot parse is handed to the
+  lowering stripped of aliases, and the lowering names what is wrong. Top-level names
+  defined anywhere in the file are pre-registered, as `declareGlobals` would.
+- **Positions**: every cons an expansion builds inherits the USE's position, both in
+  `SourceProvenance` and in `SchemeReader`'s own map (`SchemeReader.inherit`), so an
+  error inside an expansion (`(if)`) names where the use stands.
+- **Errors**, positioned: no clause matches, a macro keyword as a variable, `syntax-error`
+  (message plus the arguments as written), a pattern variable at the wrong ellipsis depth,
+  a syntax definition in expression position, a transformer other than `syntax-rules`,
+  more than 1,000 nested expansions ("does not terminate"). Strict R7RS refuses a
+  top-level `define-syntax` over an import (R7RS 5.6.1), as it does `define`.
+- **Library**: `define-syntax`, `let-syntax`, `letrec-syntax`, `syntax-rules`,
+  `syntax-error`, `...` and `_` are `(scheme base)` keywords (R7RS 7.1; Gauche's
+  `scheme.base` exports all seven). `...` and `_` are keywords only to the matcher and as
+  "misplaced" errors; a free `...` also counts as the ellipsis. None of the 1,586 SICP
+  samples spells any of them, so the corpus classification (`providedNames`) is unmoved.
+- **Stated limits**: `syntax-rules` only; a macro is per FILE (a `load`ed file neither
+  sees nor exports macros); a template's names inside `define-record-type` are stripped,
+  not renamed; `eval` knows no macro and refuses `define-syntax` by name (its keyword
+  list in `scheme.lisp`); an improper use `(m 1 . 2)` is matched rather than refused.
+- Pinned by the three `syntax-rules-...` / `syntax-definitions-...` cases of
+  `scheme-spec.yaml` (all four backends, expected output Gauche 0.9.15's; being in the
+  concatenated corpus, they also push every case before them through the expander),
+  `SchemeLoweringTest` (`aSyntaxRulesMacroIsExpanded...`, `...RenamesEveryLocalVariable`,
+  `aTemplateBinderCaptures...`, `aMisusedMacroIsAPositionedError`,
+  `strictR7rsRefusesASyntaxDefinitionOverAnImport`) and
+  `SchemeSessionTest.aMacroDefinedAtOnePromptIsExpandedAtTheNext`.
 
 ## A session (`SchemeSession`, `SchemeLowering.interact`)
 
@@ -558,6 +631,13 @@ family, bodies) pass the destination down; every other form is a leaf `(setq R v
 
 ## Traps
 
+- **A helper whose tail is a Common Lisp operator with a second value answers it too.**
+  `%scheme-string->symbol` ended in `intern`, so `(call-with-values (lambda ()
+  (string->symbol "a")) list)` was `(a ())` and the REPL echoed a stray `()` after any
+  form that called it. It answers `(values (intern ...))` now
+  (`SchemeBuiltinsTest.stringToSymbolAnswersOneValue`); a helper ending in `floor`,
+  `gethash`, `intern` and the like needs the same `values`.
+
 - **`(setq false '|#f|)` is emitted unconditionally**, first: the helpers in `scheme.lisp`
   read the variable, and the interpreter's lazy load is keyed on FUNCTION resolution.
 - A template parameter used more than once (`symbol?`, `square`, `floor`) binds a
@@ -658,7 +738,6 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 ## Not here yet (each its own follow-up)
 
-`syntax-rules`/`define-syntax` (a shadow-aware walk like `substituteSymbolMacros`),
 `define-library`, `guard`/`raise` (onto `handler-case`), `parameterize` (the special-`let`
 restore), bytevectors (the `(unsigned-byte 8)` pack), ports beyond the current output
 and input ports (string ports, a port argument to `read`/`write`/`display`;
@@ -754,5 +833,29 @@ first of which replays its input as a FILE and compares, `aCyclicValueIsEchoedWi
 leg in a child process, since `exit` there is `System.exit`; plus `emergency-exit`
 legs asserting it did not),
 `DocExamplesTest` (a ```` ```scheme ```` fence is a
-whole program whose stdout is asserted).
+whole program whose stdout is asserted; one with a `; =>` runs through a REPL session and
+each annotation is the form's echo), `SchemeReferenceTest` (the reference, below).
 Probes behind the first version of this table: `.todo/artefacts/825-minimal-experimental-scheme-front-end/`.
+
+## The reference (`doc/<lang>/scheme/reference/`, `.todo/860`)
+
+One page per name `Scheme.providedNames()` answers -- every `SchemeBuiltins` entry and
+constant and every `SchemeLowering.syntaxNames()` keyword, 248 on 2026-09-18 -- under one
+`_catalog.yaml` (`label: Scheme`, so a search hit on `car` says which language's page it
+is). A category is the library the name is REALLY exported from (Gauche 0.9.15's
+`module-exports` is the oracle): `exact->inexact`/`inexact->exact` under `(scheme r5rs)`
+and the `read-char` family under `(scheme base)`, as the `SchemeBuiltins` tags say since
+`.todo/857`; the keywords of `(scheme base)` (and `import`, which no library exports) are the
+`Syntax` table, `delay`/`delay-force` sit with `(scheme lazy)` and `cons-stream` with the
+SICP names. Table pages are `syntax.md` and `library-<name>.md`, never a bare library
+name: `read`, `write` and `eval` are procedure slugs in the same directory (docgen refuses
+a detail page at an index page's path).
+
+`SchemeReferenceTest` pins it: the catalog's names equal `Scheme.providedNames()` in both
+trees (a builtin added without a page fails there), the trees list the same entries in the
+same order, and every table row's example is on its detail page -- with its result as the
+`; =>` annotation when the result is code -- inside a ```` ```scheme ```` block
+`DocExamplesTest` checks. **A new Scheme builtin, constant or keyword needs a detail page,
+a catalog entry and a table row in both trees.** A detail page states behavior and every
+deviation in Scheme terms; how a name is lowered stays here.
+

@@ -20,6 +20,10 @@ playground's WebAssembly runtime, so `lisp` examples run in-page.
 - A category may override the top-level `index_page:` (`Catalog.Category.indexPage`) — how ONE
   `reference/functions/_catalog.yaml` backs 14 per-package table pages — and may point outside
   the catalog directory; `DocGen.generateLanguage` validates every `index_page` resolves.
+- An optional top-level `label:` (`Catalog.label`) marks a catalog whose names collide with
+  another's (`label: Scheme` on `scheme/reference/`, whose `car` is not `reference/functions/car`):
+  the search index carries it as `"l"` and `docs.js` shows it beside the hit's title; the skill's
+  operator index titles the catalog with it. A detail page at an index page's path is refused.
 - A nav entry may own `subpages:` — rendered like catalog detail pages but absent from the
   sidebar; every descendant highlights its TOP-level ancestor's row (`DocGen.renderSubpages`'s
   `topDocPath`, threaded unchanged, versus `parent`/`backlink`, recomputed per level). A
@@ -38,6 +42,12 @@ playground's WebAssembly runtime, so `lisp` examples run in-page.
   `do-symbols`' "sorted order" sorts on the OWNER-QUALIFIED spelling
   (`PackageResolver.accessibleSymbols`); `intern` cannot help (no intern table,
   `.kb/symbol-runtime-api.md`) and `defpackage`'s `:intern` is unsupported.
+- ` ```scheme ` = a whole Scheme program on a fresh evaluator, stdout asserted by a following
+  plain block; static on the site. With any `; =>` in it, the block instead runs through a
+  REPL session of its own, form by form, and each annotation is what that REPL echoes (the
+  `write` text; nothing for a definition or an effect; several values joined by `, `).
+  `exit` ends the block keeping its output. A ` ```stdin ` block right before a ` ```scheme `
+  block is its standard input (every other block reads an empty one).
 - ` ```console ` = static transcript or anything needing stdin/files/network or that signals
   (`read`, `open`, `load`, `with-open-file`, `error`, `rontolisp:fetch`); not executed.
   ` ```bash ` = shell. Plain ` ``` ` = expected output.

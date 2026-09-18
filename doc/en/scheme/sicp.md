@@ -1,17 +1,20 @@
 # SICP Compatibility
 
-**Not R7RS.** `true false nil` (ordinary variables, not literals);
-`user-initial-environment system-global-environment` and R5RS's
-`scheme-report-environment`, all naming the one global environment (see
-[eval](eval.md)); R5RS's `exact->inexact inexact->exact`; `filter reduce fold-left fold-right delete last-pair append!
-list-index 1+ -1+ random runtime parallel-execute test-and-set!`; streams:
-`cons-stream` (syntax), `the-empty-stream stream-car stream-cdr
-stream-first stream-rest stream-pair? stream-null? empty-stream? stream list->stream
-stream->list stream-head stream-tail stream-ref stream-map stream-for-each stream-filter
-stream-append`. A stream is `'()` or a pair whose cdr is a promise, so
-`the-empty-stream` is `'()` and `stream-null?` is `null?`. These are visible only when
-a program has no `(import ...)` at all -- like the six libraries -- and no import names
-them, so an explicit import list leaves them unreachable.
+*[Structure and Interpretation of Computer Programs](https://sarabander.github.io/sicp/html/index.xhtml)*
+(SICP), by Harold Abelson and Gerald Jay Sussman, is the MIT textbook these names come
+from, along with MIT Scheme, the dialect it was written for.
+
+**Not R7RS.** MIT Scheme's `true`, `false` and `nil` (ordinary variables, not literals),
+`user-initial-environment` and `system-global-environment` (both naming the one global
+environment, see [eval](eval.md)), list and number utilities such as `filter`,
+`fold-left` and `1+`, `runtime` and `random`, `parallel-execute` and `test-and-set!`,
+and SICP's streams: `cons-stream` (syntax) and the stream procedures. Each has its own
+page under [SICP Names](reference/library-sicp.md); R5RS's `scheme-report-environment`,
+`exact->inexact` and `inexact->exact` are under
+[(scheme r5rs)](reference/library-r5rs.md). A stream is `'()` or a pair whose cdr is a
+promise, so `the-empty-stream` is `'()` and `stream-null?` is `null?`. These are visible
+only when a program has no `(import ...)` at all -- like the six libraries -- and no
+import names them, so an explicit import list leaves them unreachable.
 [`--scheme-standard r7rs`](standards.md) hides them everywhere.
 
 ```scheme

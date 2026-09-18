@@ -441,7 +441,7 @@ final class SchemeBuiltins {
 			;; (read port) are .todo/826's. (scheme read) exports read alone; the
 			;; character procedures and the EOF object are (scheme base).
 			("read" read value (() (rontolisp::%scheme-read)))
-			("eof-object" base value (() rontolisp::%scheme-eof-instance))
+			("eof-object" base value (() (rontolisp::%scheme-eof-object)))
 			("eof-object?" base pred ((x) (rontolisp::%scheme-eof-object? x)))
 			("read-char" base value (() (rontolisp::%scheme-read-char)))
 			("peek-char" base value (() (rontolisp::%scheme-peek-char)))

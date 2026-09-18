@@ -1,25 +1,24 @@
 # ライブラリ
 
-この実装が知っているすべての手続きを、それをエクスポートする R7RS ライブラリごとに
-分類したものです。`(import ...)` で始まるファイル（[構文](syntax.md)参照）は、
-名指ししたライブラリだけを見ます。`import` を一切書かないファイルは、9 つすべてに加えて
-[SICP 互換の名前](sicp.md)も見えます。
+ファイルが `import` できる 9 つの R7RS ライブラリと、それぞれが提供するものです。
+名前ごとのページは[リファレンス](reference.md)にあります。`(import ...)` で始まるファイル
+（[構文](syntax.md)参照）は、名指ししたライブラリだけを見ます。`import` を一切書かない
+ファイルは、9 つすべてに加えて
+[*Structure and Interpretation of Computer Programs*（SICP）互換の名前](sicp.md)も見えます。
 
-## (scheme base)
-
-| 分類 | 手続き |
+| ライブラリ | 提供するもの |
 |---|---|
-| 同値性 | `eq?` `eqv?` `equal?` |
-| 数値 | `+` `-` `*` `/` `=` `<` `>` `<=` `>=` `quotient` `remainder` `modulo` `floor-quotient` `floor-remainder` `truncate-quotient` `truncate-remainder` `abs` `min` `max` `gcd` `lcm` `expt` `square` `floor` `ceiling` `round` `truncate` `zero?` `positive?` `negative?` `odd?` `even?` `number?` `real?` `rational?` `integer?` `exact?` `inexact?` `exact-integer?` `exact` `inexact` `exact-integer-sqrt` `number->string` `string->number` |
-| 真偽値 | `not` `boolean?` |
-| ペアとリスト | `cons` `car` `cdr` `set-car!` `set-cdr!` `caar` `cadr` `cdar` `cddr` `list` `length` `append` `reverse` `list-tail` `list-ref` `list-copy` `memq` `memv` `member` `assq` `assv` `assoc` `null?` `pair?` `list?` |
-| シンボル | `symbol?` `symbol->string` `string->symbol` |
-| 文字 | `char?` `char->integer` `integer->char` `char=?` `char<?` `char>?` `char<=?` `char>=?` |
-| 文字列 | `string?` `make-string` `string` `string-length` `string-ref` `string-set!` `string=?` `string<?` `string>?` `string<=?` `string>=?` `substring` `string-append` `string-copy` `string->list` `list->string` |
-| ベクタ | `vector?` `make-vector` `vector` `vector-length` `vector-ref` `vector-set!` `vector->list` `list->vector` `vector-fill!` |
-| 制御 | `procedure?` `apply` `map` `for-each` `call/cc` `call-with-current-continuation` `dynamic-wind` `values` `call-with-values` `error` |
-| 出力（現在の出力ポートのみ） | `newline` `write-char` `write-string` |
-| 入力（現在の入力ポートのみ、ポート引数なし） | `read-char` `peek-char` `read-line` `char-ready?` `eof-object` `eof-object?` |
+| [(scheme base)](reference/library-base.md) | 中核部分: 数値、真偽値、ペアとリスト、シンボル、文字、文字列、ベクタ、制御、現在のポートでの入出力。構文は[構文](reference/syntax.md)にあります |
+| [(scheme write)](reference/library-write.md) | `display` と `write` |
+| [(scheme read)](reference/library-read.md) | `read` |
+| [(scheme inexact)](reference/library-inexact.md) | 超越関数と浮動小数点数の述語 |
+| [(scheme cxr)](reference/library-cxr.md) | 3 段と 4 段の `car`/`cdr` の合成 |
+| [(scheme lazy)](reference/library-lazy.md) | プロミス |
+| [(scheme process-context)](reference/library-process-context.md) | `exit` と `emergency-exit` のみ |
+| [(scheme eval)](reference/library-eval.md) | `eval` と `environment`。[eval](eval.md) を参照 |
+| [(scheme repl)](reference/library-repl.md) | `interaction-environment` |
+
+入出力は現在のポートだけを使います。ポート引数を取る手続きはありません。
 
 ```scheme
 (define (sum-to n)
@@ -40,75 +39,6 @@
 4
 3
 ```
-
-## (scheme write)
-
-| 手続き |
-|---|
-| `display` `write` |
-
-どちらも現在の出力ポートのみに書き込み、循環するリストやベクタをデータラベル付きで
-書きます -- 詳細は下の[表示](#printing)を参照してください。
-
-## (scheme read)
-
-| 手続き |
-|---|
-| `read` |
-
-現在の入力ポートのみから読み込み、ポート引数は取りません。
-
-## (scheme inexact)
-
-| 手続き |
-|---|
-| `sqrt` `exp` `log` `sin` `cos` `tan` `asin` `acos` `atan` `finite?` `infinite?` `nan?` |
-
-## (scheme cxr)
-
-3 段・4 段の `car`/`cdr` の組み合わせすべて。`caar`/`cadr`/`cdar`/`cddr` は
-`(scheme base)` に属します。24 個すべてが標準の Common Lisp 関数なので、
-それぞれ同名の関数へ転送するだけです。
-
-| 手続き |
-|---|
-| `caaar` `caadr` `cadar` `caddr` `cdaar` `cdadr` `cddar` `cdddr` |
-| `caaaar` `caaadr` `caadar` `caaddr` `cadaar` `cadadr` `caddar` `cadddr` |
-| `cdaaar` `cdaadr` `cdadar` `cdaddr` `cddaar` `cddadr` `cdddar` `cddddr` |
-
-## (scheme lazy)
-
-| 手続き |
-|---|
-| `force` `make-promise` `promise?` |
-
-`delay` と `delay-force` は特殊形式です（[構文](syntax.md)参照）。このライブラリの
-手続きではありません。
-
-## (scheme process-context)
-
-| 手続き |
-|---|
-| `exit` `emergency-exit` |
-
-`#t` または引数なしはステータス 0、`#f` は 1、整数はその下位 8 ビットです。`exit` が
-`dynamic-wind` とどう関わるかは[仕様との差異](deviations.md)を参照してください。
-
-## (scheme eval)
-
-| 手続き |
-|---|
-| `eval` `environment` |
-
-詳細な意味は[eval](eval.md)を参照してください。
-
-## (scheme repl)
-
-| 手続き |
-|---|
-| `interaction-environment` |
-
-[eval](eval.md)を参照してください。
 
 ## 表示
 

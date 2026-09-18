@@ -26,7 +26,8 @@ scheme> (exit)
 ```
 
 これら 9 ライブラリがエクスポートする名前 -- それに加えて、
-[SICP 互換の名前](sicp.md)（どの `(import ...)` にも属さない。[`--scheme-standard r7rs`](standards.md) では除く）は最初からすべて見えており、
+[*Structure and Interpretation of Computer Programs*（SICP）互換の名前](sicp.md)（どの
+`(import ...)` にも属さない。[`--scheme-standard r7rs`](standards.md) では除く）は最初からすべて見えており、
 プロンプトで入力した `(import ...)` は名前を追加するだけです。別々のプロンプトで入力した
 定義は、1 つのファイルに書いた場合と同じく、順序によらず互いを参照できます。フォームは
 入力時点で確定するため、ファイルとの違いが 2 点あります: 組み込み手続き（`square`）を再定義しても、

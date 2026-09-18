@@ -18,9 +18,10 @@ import java.util.regex.Pattern;
  * that a page view stays free and the common query is instant:
  *
  * <ul>
- * <li>{@code <lang>/search-index.json} -- page paths, titles, operator signatures and
- * every H1-H3 heading. Tens of KB; {@code docs.js} fetches it when the browser goes idle,
- * so "I know the name, take me there" answers without a network round trip.
+ * <li>{@code <lang>/search-index.json} -- page paths, titles, operator signatures, the
+ * catalog label of an operator page ({@code Scheme}) and every H1-H3 heading. Tens of KB;
+ * {@code docs.js} fetches it when the browser goes idle, so "I know the name, take me
+ * there" answers without a network round trip.
  * <li>{@code <lang>/search-body.json} -- the section bodies keyed to the same pages and
  * headings. Several hundred KB; fetched on the first keystroke.
  * </ul>
@@ -79,8 +80,8 @@ public final class SearchIndex {
 	private record Section(int headingIndex, String text) {
 	}
 
-	private record Page(String path, String title, String signature, boolean operator, List<Heading> headings,
-			List<Section> sections) {
+	private record Page(String path, String title, String signature, boolean operator, String label,
+			List<Heading> headings, List<Section> sections) {
 	}
 
 	private final String lang;
@@ -104,6 +105,17 @@ public final class SearchIndex {
 	 * highest-ranked thing anyone types
 	 */
 	public void addPage(String path, String title, String bodyHtml, boolean operator) {
+		addPage(path, title, bodyHtml, operator, "");
+	}
+
+	/**
+	 * Indexes one rendered page that carries a label.
+	 * @param label shown beside the title in the results ({@code ""} for none): what
+	 * tells two operator pages of one name apart -- the Scheme {@code car} and the Common
+	 * Lisp one
+	 * @see #addPage(String, String, String, boolean)
+	 */
+	public void addPage(String path, String title, String bodyHtml, boolean operator, String label) {
 		List<Heading> headings = new ArrayList<>();
 		List<Section> sections = new ArrayList<>();
 		Matcher matcher = HEADING.matcher(bodyHtml);
@@ -121,7 +133,8 @@ public final class SearchIndex {
 			bodyStart = matcher.end();
 		}
 		addSection(sections, headingIndex, bodyHtml.substring(bodyStart));
-		this.pages.add(new Page(path, title, operator ? signature(bodyHtml) : null, operator, headings, sections));
+		this.pages
+			.add(new Page(path, title, operator ? signature(bodyHtml) : null, operator, label, headings, sections));
 	}
 
 	private static void addSection(List<Section> sections, int headingIndex, String html) {
@@ -154,6 +167,9 @@ public final class SearchIndex {
 			}
 			if (page.operator()) {
 				json.append(",\"o\":1");
+			}
+			if (!page.label().isEmpty()) {
+				json.append(",\"l\":").append(quote(page.label()));
 			}
 			json.append(",\"h\":[");
 			for (int h = 0; h < page.headings().size(); h++) {

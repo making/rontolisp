@@ -1,15 +1,18 @@
 # SICP 互換
 
-**R7RS ではありません。** `true false nil`（リテラルではなく普通の変数）、
-`user-initial-environment system-global-environment` と R5RS の
-`scheme-report-environment`（どれも唯一の大域環境を指す。[eval](eval.md)を参照）、
-R5RS の `exact->inexact inexact->exact`、`filter reduce fold-left fold-right delete last-pair append! list-index 1+ -1+ random
-runtime parallel-execute test-and-set!`、ストリーム: `cons-stream`（構文）、
-`the-empty-stream stream-car stream-cdr
-stream-first stream-rest stream-pair? stream-null? empty-stream? stream list->stream
-stream->list stream-head stream-tail stream-ref stream-map stream-for-each stream-filter
-stream-append`。ストリームは `'()` か、cdr がプロミスであるペアなので、
-`the-empty-stream` は `'()`、`stream-null?` は `null?` です。これらは `(import ...)` を
+*[Structure and Interpretation of Computer Programs](https://sarabander.github.io/sicp/html/index.xhtml)*
+(SICP、Harold Abelson と Gerald Jay Sussman による MIT の教科書) が、これらの名前と、
+それが書かれた方言である MIT Scheme の出どころです。
+
+**R7RS ではありません。** MIT Scheme の `true`、`false`、`nil`（リテラルではなく普通の変数）、
+`user-initial-environment` と `system-global-environment`（どちらも唯一の大域環境を指す。
+[eval](eval.md)を参照）、`filter`、`fold-left`、`1+` などのリストと数値のユーティリティ、
+`runtime` と `random`、`parallel-execute` と `test-and-set!`、そして SICP のストリーム:
+`cons-stream`（構文）とストリーム手続きです。それぞれのページは
+[SICP 互換の名前](reference/library-sicp.md)にあり、R5RS の `scheme-report-environment`、
+`exact->inexact`、`inexact->exact` は [(scheme r5rs)](reference/library-r5rs.md) にあります。ストリームは `'()` か、cdr が
+プロミスであるペアなので、`the-empty-stream` は `'()`、`stream-null?` は `null?` です。
+これらは `(import ...)` を
 一切書かないプログラムでのみ見える -- 6 ライブラリと同じ扱いだが、どの import もこれらを
 名指しできないため、明示的な import リストがあると届かない。
 [`--scheme-standard r7rs`](standards.md) ではどこからも見えない。

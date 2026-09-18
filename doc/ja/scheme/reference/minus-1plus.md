@@ -1,0 +1,10 @@
+# -1+
+
+`(-1+ z)`
+
+`z` から 1 を引いた値を返します。R7RS ではなく *[Structure and Interpretation of Computer Programs](../sicp.md)*（SICP）/MIT の名前です。どのライブラリもエクスポートしないため、`import` のないファイルと REPL でだけ見えます。
+
+```scheme
+(-1+ 5) ; => 4
+(-1+ 0) ; => -1
+```

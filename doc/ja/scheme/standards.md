@@ -6,7 +6,7 @@
 
 | 値 | 意味 |
 |---|---|
-| `rontolisp`（既定） | この処理系独自の方言: R7RS に [SICP 互換](sicp.md)の名前と R5RS の名前を加えたもの。`(import ...)` のないファイルと REPL から見える。 |
+| `rontolisp`（既定） | この処理系独自の方言: R7RS に [*Structure and Interpretation of Computer Programs*（SICP）互換](sicp.md)の名前と R5RS の名前を加えたもの。`(import ...)` のないファイルと REPL から見える。 |
 | `r7rs` | R7RS-small を厳密に。ただしこのフロントエンドが実装している範囲の中で。 |
 
 `r7rs` では:

@@ -399,7 +399,7 @@ class SchemeLoweringTest {
 				(RONTOLISP::%SCHEME-READ-CHAR)
 				(RONTOLISP::%SCHEME-PEEK-CHAR)
 				(RONTOLISP::%SCHEME-READ-LINE)
-				RONTOLISP::%SCHEME-EOF-INSTANCE""");
+				(RONTOLISP::%SCHEME-EOF-OBJECT)""");
 		assertThat(lowered("(import (scheme read)) (read) (read-char) (eof-object)"))
 			.isEqualTo("(RONTOLISP::%SCHEME-READ)\n(|read-char|)\n(|eof-object|)");
 	}
@@ -488,8 +488,81 @@ class SchemeLoweringTest {
 		assertThatThrownBy(() -> lowered("(car 1 2)")).hasMessage("test.scm:1:1: wrong number of arguments to car: 2");
 		assertThatThrownBy(() -> lowered("(f (define x 1))"))
 			.hasMessage("test.scm:1:4: a definition is only allowed at the top level or at the head of a body");
-		assertThatThrownBy(() -> lowered("(define-syntax m (syntax-rules ()))"))
-			.hasMessage("test.scm:1:1: define-syntax is not supported by this experimental front end yet");
+		assertThatThrownBy(() -> lowered("(guard (e (#t 1)) 2)"))
+			.hasMessage("test.scm:1:1: guard is not supported by this experimental front end yet");
+	}
+
+	@Test
+	void aSyntaxRulesMacroIsExpandedBeforeTheLoweringSeesTheProgram() {
+		// The definition leaves nothing behind; the use is what its template says.
+		assertThat(lowered("(define-syntax ten (syntax-rules () ((_) 10))) (display (ten))")).isEqualTo("(PRINC 10)");
+		// A macro expanding to a definition is seen by the defun-or-variable pre-scan...
+		assertThat(lowered("""
+				(define-syntax def (syntax-rules () ((_ n v) (define n v))))
+				(def f (lambda (x) x))
+				(f 1)""")).isEqualTo("(DEFUN |f| (%SCM-V1) %SCM-V1)\n(|f| 1)");
+		// ...and so is a set! it expands to.
+		assertThat(lowered("""
+				(define-syntax inc! (syntax-rules () ((_ v) (set! v (+ v 1)))))
+				(define (g) 1)
+				(inc! g)""")).startsWith("(SETQ |g| (LAMBDA NIL 1))");
+	}
+
+	@Test
+	void aProgramThatDefinesAMacroRenamesEveryLocalVariable() {
+		// No Common Lisp binding may capture the name a free template identifier is
+		// emitted as, so a program with a syntax definition binds no local by its own
+		// name. A program without one is lowered exactly as before.
+		assertThat(lowered("(define-syntax m (syntax-rules () ((_ e) e))) (define (f a) (let ((b a)) (m b)))"))
+			.isEqualTo("(DEFUN |f| (%SCM-V1) (LET ((%SCM-V2 %SCM-V1)) %SCM-V2))");
+		assertThat(lowered("(define (f a) (let ((b a)) b))")).isEqualTo("(DEFUN |f| (|a|) (LET ((|b| |a|)) |b|))");
+	}
+
+	@Test
+	void aTemplateBinderCapturesNoUserIdentifierAndAFreeTemplateIdentifierMeansWhatItMeantAtTheDefinition() {
+		// swap!'s tmp is a fresh variable, not the user's global tmp.
+		assertThat(lowered("""
+				(define-syntax swap! (syntax-rules () ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))
+				(define tmp 1)
+				(define y 2)
+				(swap! tmp y)""")).endsWith("(LET ((%SCM-V1 |tmp|)) (SETQ |tmp| |y|) (SETQ |y| %SCM-V1))");
+		// The template's `if` is the keyword even where the user bound `if`.
+		assertThat(lowered("""
+				(define-syntax my-if (syntax-rules () ((_ c a b) (if c a b))))
+				(define (f if) (my-if if 1 2))"""))
+			.isEqualTo("(DEFUN |f| (%SCM-V1) (IF (EQ %SCM-V1 RONTOLISP::%SCHEME-FALSE) 2 1))");
+	}
+
+	@Test
+	void aMisusedMacroIsAPositionedError() {
+		assertThatThrownBy(() -> lowered("(define-syntax m (syntax-rules () ((_ a) a)))\n(m 1 2)"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessage("test.scm:2:1: no syntax-rules clause of m matches (m 1 2)");
+		assertThatThrownBy(() -> lowered("(define-syntax m (syntax-rules () ((_) 1)))\n(display m)"))
+			.hasMessage("test.scm:2:1: the macro m is not a variable");
+		assertThatThrownBy(
+				() -> lowered("(define-syntax m (syntax-rules () ((_ a) (syntax-error \"bad use\" a))))\n(m (1 x))"))
+			.hasMessage("test.scm:2:1: bad use (1 x)");
+		assertThatThrownBy(() -> lowered("(define-syntax m (syntax-rules () ((_) (m))))\n(display (m))"))
+			.hasMessage("test.scm:2:10: the expansion of m does not terminate");
+		assertThatThrownBy(() -> lowered("(define-syntax m (lambda (x) x))"))
+			.hasMessage("test.scm:1:1: only syntax-rules transformers are supported");
+		assertThatThrownBy(() -> lowered("(define-syntax m (syntax-rules () ((_ a ...) (list a))))\n(m 1)"))
+			.hasMessage("test.scm:2:1: the pattern variable a is used without an ellipsis");
+		assertThatThrownBy(() -> lowered("(define-syntax m (syntax-rules () ((_ a) (list a ...))))\n(m 1)")).hasMessage(
+				"test.scm:2:1: an ellipsis in a syntax-rules template follows no pattern variable that matched under one");
+		assertThatThrownBy(() -> lowered("(define (f) (display (define-syntax m (syntax-rules ()))))"))
+			.hasMessage("test.scm:1:22: a syntax definition is only allowed at the top level or at the head of a body");
+		// An error inside an expansion names where the use stands.
+		assertThatThrownBy(() -> lowered("(define-syntax m (syntax-rules () ((_) (if))))\n\n(m)"))
+			.hasMessage("test.scm:3:1: malformed if");
+	}
+
+	@Test
+	void strictR7rsRefusesASyntaxDefinitionOverAnImport() {
+		assertThatThrownBy(() -> strict("(import (scheme base)) (define-syntax if (syntax-rules () ((_) 1)))"))
+			.hasMessage("test.scm:1:24: cannot redefine if: it is imported (R7RS 5.6.1)");
+		assertThat(strict("(import (scheme base)) (define-syntax one (syntax-rules () ((_) 1))) (one)")).isEqualTo("1");
 	}
 
 }

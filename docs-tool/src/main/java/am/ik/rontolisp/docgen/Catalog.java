@@ -28,6 +28,7 @@ import org.yaml.snakeyaml.Yaml;
  *     index_page: reference/functions/cl.md   # optional; falls back to the file's index_page
  *     functions:
  *       - { slug: plus, name: "+" }
+ * label: Scheme                                # optional; see {@link #label}
  * </pre>
  *
  * A category's own {@code index_page} lets several table pages share one catalog (and one
@@ -43,8 +44,16 @@ import org.yaml.snakeyaml.Yaml;
  * (e.g. {@code reference/functions.md}); a category without its own {@code index_page}
  * uses this one
  * @param categories the ordered groups of entries
+ * @param label what tells this catalog's pages apart from another catalog's page of the
+ * same name ({@code Scheme}, for {@code car}), or {@code ""} for none; the search results
+ * show it beside the name
  */
-public record Catalog(String baseDir, String indexPage, List<Category> categories) {
+public record Catalog(String baseDir, String indexPage, List<Category> categories, String label) {
+
+	/** A catalog with no {@link #label}. */
+	public Catalog(String baseDir, String indexPage, List<Category> categories) {
+		this(baseDir, indexPage, categories, "");
+	}
 
 	/**
 	 * A titled group of detail pages.
@@ -147,7 +156,7 @@ public record Catalog(String baseDir, String indexPage, List<Category> categorie
 		try (InputStream in = Files.newInputStream(catalogYaml)) {
 			Map<String, Object> root = new Yaml().load(in);
 			if (root == null) {
-				return new Catalog(baseDir, "", List.of());
+				return new Catalog(baseDir, "", List.of(), "");
 			}
 			String indexPage = String.valueOf(root.getOrDefault("index_page", baseDir + ".md"));
 			List<Category> categories = new ArrayList<>();
@@ -171,7 +180,7 @@ public record Catalog(String baseDir, String indexPage, List<Category> categorie
 					categories.add(new Category(title, entries, categoryIndexPage));
 				}
 			}
-			return new Catalog(baseDir, indexPage, categories);
+			return new Catalog(baseDir, indexPage, categories, String.valueOf(root.getOrDefault("label", "")));
 		}
 	}
 

@@ -431,6 +431,63 @@ class DocGenTest {
 		assertThat(tier2Sections("ja")).hasSameSizeAs(tier2Sections("en"));
 	}
 
+	/**
+	 * Scheme and Common Lisp both have a {@code car} page: the Scheme one carries its
+	 * catalog's label, so a reader tells the two hits apart, and the Common Lisp one has
+	 * none.
+	 */
+	@Test
+	void aLabeledCatalogsPagesCarryTheLabelInTheSearchIndex() throws IOException {
+		for (String lang : List.of("en", "ja")) {
+			Map<String, Map<?, ?>> byPath = new java.util.HashMap<>();
+			for (Object page : tier1Pages(lang)) {
+				Map<?, ?> map = (Map<?, ?>) page;
+				byPath.put(String.valueOf(map.get("p")), map);
+			}
+			Map<?, ?> scheme = byPath.get("scheme/reference/car.html");
+			Map<?, ?> lisp = byPath.get("reference/functions/car.html");
+			assertThat(scheme.get("t")).isEqualTo(lisp.get("t")).isEqualTo("car");
+			assertThat(scheme.get("l")).isEqualTo("Scheme");
+			assertThat(lisp.get("l")).isNull();
+		}
+	}
+
+	/**
+	 * A table page may live in its catalog's own directory, where a detail page whose
+	 * slug is the table's name would overwrite it: Scheme's {@code read} procedure beside
+	 * a {@code (scheme read)} table named {@code read.md}.
+	 */
+	@Test
+	void aDetailPageAtAnIndexPagesPathFailsTheBuild(@TempDir Path tmp) throws IOException {
+		Path en = tmp.resolve("doc").resolve("en");
+		Files.createDirectories(en.resolve("ref"));
+		Files.writeString(en.resolve("nav.yaml"), """
+				title: docs
+				lang_name: English
+				sections:
+				  - title: Guide
+				    pages:
+				      - file: ref.md
+				        title: Ref
+				        subpages:
+				          - file: ref/read.md
+				            title: Read
+				""", StandardCharsets.UTF_8);
+		Files.writeString(en.resolve("ref.md"), "# Ref\n", StandardCharsets.UTF_8);
+		Files.writeString(en.resolve("ref/read.md"), "# Read\n", StandardCharsets.UTF_8);
+		Files.writeString(en.resolve("ref/_catalog.yaml"), """
+				index_page: ref.md
+				categories:
+				  - title: A
+				    index_page: ref/read.md
+				    functions:
+				      - { slug: read, name: "read" }
+				""", StandardCharsets.UTF_8);
+		assertThatThrownBy(() -> new DocGen(tmp.resolve("doc"), tmp.resolve("out"), "en").generate())
+			.isInstanceOf(IOException.class)
+			.hasMessageContaining("ref/read.md");
+	}
+
 	@Test
 	void theSearchIndexReachesTheOperatorPagesWithTheirSignature() throws IOException {
 		Map<?, ?> mapcar = tier1Pages("en").stream()

@@ -26,7 +26,8 @@ scheme> (exit)
 ```
 
 Everything those nine libraries export -- plus the
-[SICP-compatibility names](sicp.md), which no `(import ...)` names, unless
+[*Structure and Interpretation of Computer Programs* (SICP)-compatibility names](sicp.md),
+which no `(import ...)` names, unless
 [`--scheme-standard r7rs`](standards.md) -- is visible from the
 start, and an
 `(import ...)` typed at the prompt only adds names. Definitions typed at separate prompts

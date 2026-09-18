@@ -1,0 +1,15 @@
+package am.ik.rontolisp.scheme;
+
+/**
+ * The syntactic keywords the Scheme front end implements, plus the ones it refuses by
+ * name: what an identifier resolving to a keyword means to {@link SchemeExpander} and
+ * {@link SchemeLowering} alike.
+ */
+enum Core {
+
+	QUOTE, QUASIQUOTE, UNQUOTE, UNQUOTE_SPLICING, LAMBDA, IF, SET, BEGIN, LET, LET_STAR, LETREC, LETREC_STAR, DO, COND,
+	CASE, AND, OR, WHEN, UNLESS, DEFINE, DEFINE_VALUES, DEFINE_RECORD_TYPE, LET_VALUES, LET_STAR_VALUES, IMPORT, ELSE,
+	ARROW, DELAY, DELAY_FORCE, CONS_STREAM, DEFINE_SYNTAX, LET_SYNTAX, LETREC_SYNTAX, SYNTAX_RULES, SYNTAX_ERROR,
+	ELLIPSIS, UNDERSCORE, RAW, RAW_PREDICATE, UNSPECIFIED, UNSUPPORTED
+
+}
