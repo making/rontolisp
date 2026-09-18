@@ -44,6 +44,21 @@ public final class IndentRules {
 	private static final Style CLAUSE = Style.clause();
 
 	/**
+	 * The source dialect a file is formatted as. Common Lisp is the default everywhere
+	 * the caller does not name one, so a {@code .lisp} file formats exactly as before;
+	 * {@code .scm} files take the Scheme rules, which know the operators Common Lisp does
+	 * not have ({@code define}, a named {@code let}, {@code do}, ...).
+	 */
+	public enum Dialect {
+
+		/** Common Lisp: the table as it always was. */
+		COMMON_LISP,
+		/** Scheme: the table below over the Common Lisp one. */
+		SCHEME
+
+	}
+
+	/**
 	 * A list shaped like a definition -- name, lambda list, then a body at 2: a
 	 * {@code flet}/{@code labels}/{@code macrolet} local function, a
 	 * {@code handler-case}/{@code restart-case} clause.
@@ -140,12 +155,57 @@ public final class IndentRules {
 		return rules;
 	}
 
+	private static final Map<String, Style> SCHEME_RULES = schemeRules();
+
+	// The operators Common Lisp does not have, or hears differently. Everything else
+	// falls through to RULES and the shared naming guess, so a .lisp file never sees
+	// these.
+	private static Map<String, Style> schemeRules() {
+		Map<String, Style> rules = new HashMap<>();
+		// (begin forms...): a body like progn, not a call.
+		rules.put("begin", Style.body(0, 2));
+		// (define (name args...) body...): the whole header on the first line, the
+		// body always broken out even of one; (define name value): the value beside
+		// the name while it fits. Told apart per form -- schemeStyleFor below --
+		// since only the header's shape says which it is. A name ending in ! or ? is
+		// nothing special here; the Common Lisp guess only broke it because it never
+		// knew define at all.
+		// (define-record-type name (constructor ...) predicate? slot...): the name on
+		// the first line, one clause per line after it.
+		rules.put("define-record-type", Style.body(1, 2));
+		// (define-values formals init): the init beside the formals while it fits.
+		rules.put("define-values", Style.operands(1, 2));
+		// (delay expr), (delay-force expr): one body form, broken out only past the
+		// margin. (cons-stream a b) is an ordinary two-argument call.
+		for (String name : List.of("delay", "delay-force")) {
+			rules.put(name, Style.operands(0, 2));
+		}
+		// Binding forms with no named shape: like let.
+		for (String name : List.of("letrec", "letrec*", "let-values", "let*-values")) {
+			rules.put(name, Style.body(1, 2, BINDING));
+		}
+		return rules;
+	}
+
 	/**
 	 * The style a listing is laid out with when it does not fit on one line.
 	 * @param listing the listing
 	 * @return the style
 	 */
 	public static Style styleFor(CstNode.Listing listing) {
+		return styleFor(listing, Dialect.COMMON_LISP);
+	}
+
+	/**
+	 * The style a listing is laid out with when it does not fit on one line, in the given
+	 * dialect. A Scheme file consults the Scheme operators first; anything else reads
+	 * exactly as in Common Lisp, so a {@code .lisp} file is byte-identical however it is
+	 * asked for.
+	 * @param listing the listing
+	 * @param dialect the source dialect
+	 * @return the style
+	 */
+	public static Style styleFor(CstNode.Listing listing, Dialect dialect) {
 		// A literal (#(, #S(, #2A(, ...) has no operator position at all.
 		if (!"(".equals(listing.open())) {
 			return Style.data();
@@ -159,8 +219,61 @@ public final class IndentRules {
 			return Style.data();
 		}
 		String key = operatorKey(head.text());
+		if (dialect == Dialect.SCHEME) {
+			Style scheme = schemeStyleFor(key, items);
+			if (scheme != null) {
+				return scheme;
+			}
+			Style rule = RULES.get(key);
+			if (rule != null) {
+				return rule;
+			}
+			// Anything else is a procedure call. The Common Lisp guess below reads
+			// def-/with-/do- names as macros, but the Scheme subset has no defining
+			// macro beyond the tabled ones -- a define-variable! is an ordinary
+			// function -- so guessing layouts every such call as a body.
+			return Style.call();
+		}
 		Style rule = RULES.get(key);
 		return rule != null ? rule : byNamingConvention(key, items);
+	}
+
+	// A Scheme operator with a shape of its own, or null to fall through to the
+	// shared table. define, let/let* and do read their shape off the form, so what
+	// comes back is built per form rather than shared.
+	private static @Nullable Style schemeStyleFor(String key, List<CstNode> items) {
+		switch (key) {
+			case "define": {
+				// (define (name args...) body...): the header on the first line, the
+				// body after it like any other body; (define name value): the value
+				// beside the name while it fits. Told apart per form since only the
+				// header's shape says which it is. A name ending in ! or ? is nothing
+				// special here; the Common Lisp guess only broke it because it never
+				// knew define at all.
+				boolean procedure = items.size() > 1 && items.get(1) instanceof CstNode.Listing;
+				return procedure ? Style.body(1, 2) : Style.operands(1, 2);
+			}
+			case "let", "let*": {
+				// A named let keeps its name AND its binding list on the first line;
+				// the count is stored on the style because only the form knows it.
+				boolean named = items.size() > 2 && items.get(1) instanceof CstNode.Atom;
+				return new Style(Style.Kind.SCHEME_LET, named ? 2 : 1, 2, Style.data(BINDING), true);
+			}
+			case "do": {
+				return new Style(Style.Kind.SCHEME_DO, 2, 2, null, true);
+			}
+			case "quote": {
+				// (quote datum) reads like 'datum however operator-like the datum's
+				// head: the datum stays on the line and breaks inside itself as data.
+				if (items.size() == 2) {
+					return new Style(Style.Kind.SCHEME_QUOTE, 1, 2, Style.data(), false);
+				}
+				return null;
+			}
+			default: {
+				return SCHEME_RULES.get(key);
+			}
+		}
 	}
 
 	/**
@@ -270,6 +383,13 @@ public final class IndentRules {
 			case CALL -> index >= 1 ? style.childStyle() : null;
 			case BODY -> index == 1 ? style.childStyle() : null;
 			case CLAUSES -> index > style.inlineArgs() ? style.childStyle() : null;
+			// A named let's bindings sit at inlineArgs (2), a plain one's at 1.
+			case SCHEME_LET -> index == style.inlineArgs() ? style.childStyle() : null;
+			// The quoted datum breaks inside itself as data.
+			case SCHEME_QUOTE -> index == 1 ? style.childStyle() : null;
+			// The do bindings take the binding style, the end-test clause the clause
+			// style; the body lays itself out.
+			case SCHEME_DO -> index == 1 ? Style.data(BINDING) : index == 2 ? CLAUSE : null;
 			default -> null;
 		};
 	}

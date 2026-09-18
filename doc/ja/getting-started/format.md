@@ -1,13 +1,16 @@
 # ソースコードのフォーマット
 
 `rontolisp format` はLispのソースファイルをその場で再インデントします。ファイルまたは
-ディレクトリを指定すると、その配下のすべての `.lisp` / `.asd` ファイルが唯一の正規の
-レイアウトに書き換えられます。インデントについて考えたりレビューしたりする必要が
-なくなります。
+ディレクトリを指定すると、その配下のすべての `.lisp` / `.asd` / `.scm` ファイルが
+唯一の正規のレイアウトに書き換えられます。インデントについて考えたりレビューしたり
+する必要がなくなります。`.scm` ファイルはSchemeのルールでインデントされます。
+SchemeのルールはCommon Lispにない演算子（`define`、名前付き `let`、`do`、
+`define-record-type`）を扱い、折り返されたクォート済みリストは1行1フォームで配置
+します。それ以外はCommon Lispのルールです。
 
 ```bash
 rontolisp format app.lisp          # one file
-rontolisp format src/              # every .lisp / .asd under src/
+rontolisp format src/              # every .lisp / .asd / .scm under src/
 rontolisp format src/ tests/       # several paths
 ```
 
@@ -108,6 +111,23 @@ rontolisp format --check src/ || { echo "run: rontolisp format src/"; exit 1; }
 ; => (4 16 36 64 100)
 ```
 
+`.scm` ファイルも考え方は同じで、Schemeの演算子に従います。`define` はヘッダを
+最初の行に置き、名前付き `let` は名前と束縛も最初の行に置き、`do` は束縛と終了
+テストを収まる限り最初の行に置きます。
+
+```scheme
+(define (count-up n)
+  (let loop ((i 0) (acc '()))
+    (if (= i n) (reverse acc) (loop (+ i 1) (cons (* i i) acc)))))
+
+(display (count-up 5))
+(newline)
+```
+
+```
+(0 1 4 9 16)
+```
+
 ### 本体が2フォーム以上なら必ず複数行
 
 2つ以上のフォームからなる本体は順番に実行される「文の列」なので、どれほど短くても
@@ -156,7 +176,9 @@ rontolisp format --check src/ || { echo "run: rontolisp format src/"; exit 1; }
 （長い文字列、これ以上短くできない深い入れ子）はマージンを超えることがあります。
 
 フォーマッタが知らないマクロは名前から推測されます。`with-...` と `do-...` は引数1つ
-＋本体、`def...` は名前＋本体、それ以外は関数呼び出しとして扱われます。
+＋本体、`def...` は名前＋本体、それ以外は関数呼び出しとして扱われます。`.scm`
+ファイルでは推測は一切ありません。未知の演算子はすべて手続き呼び出しです。上記
+以外の定義マクロがサブセットに存在しないためです。
 
 `def...` マクロは `defun` と同じようにラムダリストを1行目に残しますが、それは2番目の
 要素がラムダリストで「ありうる」場合だけです。つまり、素のパラメータ名のリスト

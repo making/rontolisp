@@ -279,6 +279,182 @@ class LispFormatterTest {
 				""");
 	}
 
+	private static String scheme(String source) {
+		return LispFormatter.format(source, LispFormatter.DEFAULT_WIDTH, IndentRules.Dialect.SCHEME);
+	}
+
+	private static String scheme(String source, int width) {
+		return LispFormatter.format(source, width, IndentRules.Dialect.SCHEME);
+	}
+
+	@Test
+	void indentsANamedLetWithItsBindingsOnTheFirstLine() {
+		// The loop name is taken for the binding list by the Common Lisp rule; in
+		// Scheme the name AND the bindings stay on the first line.
+		assertThat(
+				scheme("(let walk ((n start) (path '()))\n(if (= n 1) (walk 2 path) (walk (foo n) (cons n path))))\n"))
+			.isEqualTo("""
+					(let walk ((n start) (path '()))
+					  (if (= n 1) (walk 2 path) (walk (foo n) (cons n path))))
+					""");
+		assertThat(scheme("(let ((a 1) (b 2)) (+ a b))\n")).isEqualTo("(let ((a 1) (b 2)) (+ a b))\n");
+		assertThat(scheme("(let* loop ((i 0)) (loop (+ i 1)))\n")).isEqualTo("(let* loop ((i 0)) (loop (+ i 1)))\n");
+	}
+
+	@Test
+	void laysOutADefineByItsHeaderShape() {
+		// A procedure keeps its header on the first line; a name ending in ! is
+		// nothing special once define has a rule of its own.
+		assertThat(
+				scheme("(define (define-variable! name value env)\n(set-cdr! binding value) (set-car! env value))\n"))
+			.isEqualTo("""
+					(define (define-variable! name value env)
+					  (set-cdr! binding value)
+					  (set-car! env value))
+					""");
+		assertThat(scheme("(define limit 100000)\n")).isEqualTo("(define limit 100000)\n");
+	}
+
+	@Test
+	void breaksADefineRecordTypeAfterItsName() {
+		// The Common Lisp guess joins the constructor onto the first line.
+		assertThat(scheme(
+				"(define-record-type compound (make-compound parameters body env) compound? (parameters compound-parameters))\n"))
+			.isEqualTo("""
+					(define-record-type compound
+					  (make-compound parameters body env)
+					  compound?
+					  (parameters compound-parameters))
+					""");
+	}
+
+	@Test
+	void laysOutDefineValuesAndLetValuesLikeLet() {
+		assertThat(scheme("(define-values (a b) (values 1 2))\n")).isEqualTo("(define-values (a b) (values 1 2))\n");
+		assertThat(scheme("(let-values (((a b) (values 1 2)) ((c d) (values 3 4))) (+ a b c d))\n", 40)).isEqualTo("""
+				(let-values (((a b) (values 1 2))
+				             ((c d) (values 3 4)))
+				  (+ a b c d))
+				""");
+	}
+
+	@Test
+	void keepsADoHeaderOnOneLineWhileItFits() {
+		// Unlike the Common Lisp do, nothing is forced onto a line of its own: the
+		// bindings and the end test stay on the first line, the body follows at 2.
+		assertThat(scheme("(do ((n 1 (+ n 1))) ((= n 1000))\n(display n))\n")).isEqualTo("""
+				(do ((n 1 (+ n 1))) ((= n 1000))
+				  (display n))
+				""");
+		assertThat(scheme("(do ((i 0 (+ i 1))) ((= i 5)))\n")).isEqualTo("(do ((i 0 (+ i 1))) ((= i 5)))\n");
+	}
+
+	@Test
+	void laysOutDelayAndBeginAsBodiesInScheme() {
+		assertThat(scheme("(delay (compute x))\n")).isEqualTo("(delay (compute x))\n");
+		assertThat(scheme("(begin (m-eval (car exprs) env) (eval-sequence (cdr exprs) env))\n", 40)).isEqualTo("""
+				(begin
+				  (m-eval (car exprs) env)
+				  (eval-sequence (cdr exprs) env))
+				""");
+		// In Common Lisp begin is an unknown call, and stays one.
+		assertThat(LispFormatter.format("(begin (m-eval (car exprs) env) (eval-sequence (cdr exprs) env))\n", 40))
+			.isEqualTo("""
+					(begin (m-eval (car exprs) env)
+					       (eval-sequence (cdr exprs) env))
+					""");
+	}
+
+	@Test
+	void liftsAClauseBodyOnlyWhenItFitsOnOneLine() {
+		// A multi-line body broken open to reach the predicate reads worse than the
+		// line the predicate keeps to itself, ties included; a single line stays.
+		assertThat(scheme(
+				"(cond (else (let ((s (chain-length n))) (if (> s best-steps) (loop bound (+ n 1) n s) (loop bound (+ n 1) best-start best-steps)))))\n",
+				40))
+			.isEqualTo("""
+					(cond (else
+					       (let ((s (chain-length n)))
+					         (if (> s best-steps)
+					             (loop bound (+ n 1) n s)
+					             (loop
+					               bound
+					               (+ n 1)
+					               best-start
+					               best-steps)))))
+					""");
+		assertThat(scheme("(cond ((null? sequence-with-a-much-longer-name) '()) (else (keep pred (cdr seq))))\n"))
+			.isEqualTo("""
+					(cond ((null? sequence-with-a-much-longer-name) '())
+					      (else (keep pred (cdr seq))))
+					""");
+	}
+
+	@Test
+	void keepsACaseRecipientBesideItsArrow() {
+		assertThat(scheme("(case x ((1 2) (quote one)) ((3) => (lambda (y) (+ y 1))) (else (quote other)))\n", 40))
+			.isEqualTo("""
+					(case x
+					  ((1 2) (quote one))
+					  ((3) => (lambda (y) (+ y 1)))
+					  (else (quote other)))
+					""");
+	}
+
+	@Test
+	void laysOutBrokenQuotedDataOnePerLine() {
+		// A quote is data however operator-like its head, in both spellings.
+		assertThat(scheme("'(+ - * = < > car cdr cons null? list display newline)\n", 40)).isEqualTo("""
+				'(+
+				  -
+				  *
+				  =
+				  <
+				  >
+				  car
+				  cdr
+				  cons
+				  null?
+				  list
+				  display
+				  newline)
+				""");
+		assertThat(scheme("(quote (+ - * = < > car cdr cons null? list display newline))\n", 40)).isEqualTo("""
+				(quote (+
+				        -
+				        *
+				        =
+				        <
+				        >
+				        car
+				        cdr
+				        cons
+				        null?
+				        list
+				        display
+				        newline))
+				""");
+	}
+
+	@Test
+	void readsADatumCommentAsAPrefix() {
+		// #; comments out one datum; the formatter keeps it glued to that datum the
+		// way it keeps every other prefix.
+		assertThat(scheme("(define y #;(skipped datum) 5)\n")).isEqualTo("(define y #;(skipped datum) 5)\n");
+		// #true, a named character and brackets are ordinary token characters here
+		// and survive verbatim.
+		assertThat(scheme("(define x #true)\n")).isEqualTo("(define x #true)\n");
+		assertThat(scheme("(define z #\\x41)\n")).isEqualTo("(define z #\\x41)\n");
+	}
+
+	@Test
+	void letsUnknownSchemeOperatorsReadAsCalls() {
+		// The Common Lisp guess reads a def- name as a definition; in Scheme an
+		// unknown head is a procedure call, ! or no.
+		assertThat(scheme("(define-variable! target (m-eval (caddr expr) env) env)\n"))
+			.isEqualTo("(define-variable! target (m-eval (caddr expr) env) env)\n");
+	}
+
 	@Test
 	void keepsKeywordArgumentsWithTheirValues() {
 		assertThat(LispFormatter
@@ -755,7 +931,8 @@ class LispFormatterTest {
 			}
 		});
 		return found.stream()
-			.filter(path -> path.toString().endsWith(".lisp") || path.toString().endsWith(".asd"))
+			.filter(path -> path.toString().endsWith(".lisp") || path.toString().endsWith(".asd")
+					|| path.toString().endsWith(".scm"))
 			.filter(path -> !path.toString().contains("/target/"))
 			// The ANSI suite checkout is foreign, git-ignored code we do not format;
 			// whether it survives the fixpoint is the suite's business, not ours, and
@@ -838,11 +1015,10 @@ class LispFormatterTest {
 	@MethodSource("repositoryLispSources")
 	void formattingIsIdempotentAndPreservesEveryToken(Path file) throws IOException {
 		String source = Files.readString(file);
-		String formatted = LispFormatter.format(source);
+		String formatted = formatFor(file, source);
 		// Formatting is a fixpoint: a formatted file formats to itself. Without this the
 		// command could not be used as a CI gate, since --check would never go quiet.
-		assertThat(LispFormatter.format(formatted)).as("formatting %s twice differs from once", file)
-			.isEqualTo(formatted);
+		assertThat(formatFor(file, formatted)).as("formatting %s twice differs from once", file).isEqualTo(formatted);
 		// ...and it changes NO code. The lexer discards exactly what the formatter is
 		// allowed to change (whitespace and comments) and keeps everything else, so an
 		// identical token stream is the precise statement of "same program".
@@ -856,9 +1032,17 @@ class LispFormatterTest {
 	@MethodSource("shippedLispSources")
 	void shippedLispResourcesAreAlreadyFormatted(Path file) throws IOException {
 		String source = Files.readString(file);
-		assertThat(LispFormatter.format(source))
+		assertThat(formatFor(file, source))
 			.as("%s is not formatter-clean; run the format step and commit the result", file)
 			.isEqualTo(source);
+	}
+
+	// The rules follow the file, as rontolisp format does: a .scm file is indented as
+	// Scheme, anything else as Common Lisp.
+	private static String formatFor(Path file, String source) {
+		return file.toString().endsWith(".scm")
+				? LispFormatter.format(source, LispFormatter.DEFAULT_WIDTH, IndentRules.Dialect.SCHEME)
+				: LispFormatter.format(source);
 	}
 
 	// The reader's own tokens, or null when the file does not read at all (a fixture that

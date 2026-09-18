@@ -107,6 +107,9 @@ public final class FormatReader {
 		if (lookingAt("#'")) {
 			return readPrefix("#'", trivia);
 		}
+		if (lookingAt("#;")) {
+			return readPrefix("#;", trivia);
+		}
 		if (lookingAt("#.")) {
 			return readPrefix("#.", trivia);
 		}

@@ -45,7 +45,8 @@
   (cond ((number? e) 0)
         ((variable? e) (if (eq? e var) 1 0))
         ((op? e '+) (make-sum (deriv (cadr e) var) (deriv (caddr e) var)))
-        ((op? e '-) (make-difference (deriv (cadr e) var) (deriv (caddr e) var)))
+        ((op? e '-)
+         (make-difference (deriv (cadr e) var) (deriv (caddr e) var)))
         ((op? e '*)
          (let ((u (cadr e)) (v (caddr e)))
            (make-sum (make-product u (deriv v var))
@@ -84,19 +85,16 @@
     (- (* x x) (* 2 x))
     (+ (* 1/2 (expt x 2)) (* 5 x))))
 
-(for-each
- (lambda (e)
-   (let ((d (deriv e 'x)))
-     (show "f(x)  = " e)
-     (show "f'(x) = " d)
-     (show "f'(2) = " (evaluate d '((x . 2) (y . 7))))
-     (newline)))
- examples)
+(for-each (lambda (e)
+            (let ((d (deriv e 'x)))
+              (show "f(x)  = " e)
+              (show "f'(x) = " d)
+              (show "f'(2) = " (evaluate d '((x . 2) (y . 7))))
+              (newline))) examples)
 
 ;; Higher derivatives by repeated application.
 (define (nth-deriv e var n)
-  (let loop ((e e) (n n))
-    (if (= n 0) e (loop (deriv e var) (- n 1)))))
+  (let loop ((e e) (n n)) (if (= n 0) e (loop (deriv e var) (- n 1)))))
 
 (do ((k 0 (+ k 1))) ((> k 6))
   (display "d^")

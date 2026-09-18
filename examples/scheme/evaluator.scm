@@ -27,7 +27,9 @@
 
 (define (set-variable! name value env)
   (let ((binding (lookup-binding name env)))
-    (if binding (set-cdr! binding value) (error "set! of an unbound variable" name))))
+    (if binding
+        (set-cdr! binding value)
+        (error "set! of an unbound variable" name))))
 
 (define (define-variable! name value env)
   (let ((binding (assq name (car env))))
@@ -82,16 +84,16 @@
     (if (pair? target)
         ;; (define (name . params) body ...)
         (define-variable! (car target)
-                          (make-compound (cdr target) (cddr expr) env)
-                          env)
+                          (make-compound (cdr target) (cddr expr) env) env)
         (define-variable! target (m-eval (caddr expr) env) env))
     (if (pair? target) (car target) target)))
 
 (define (eval-sequence exprs env)
   (if (null? (cdr exprs))
       (m-eval (car exprs) env)
-      (begin (m-eval (car exprs) env)
-             (eval-sequence (cdr exprs) env))))
+      (begin
+        (m-eval (car exprs) env)
+        (eval-sequence (cdr exprs) env))))
 
 ;; (let ((n v) ...) body ...) => ((lambda (n ...) body ...) v ...)
 (define (let->combination expr)
@@ -102,10 +104,9 @@
 (define (cond->if clauses)
   (cond ((null? clauses) #f)
         ((eq? (caar clauses) 'else) (cons 'begin (cdar clauses)))
-        (else (list 'if
-                    (caar clauses)
-                    (cons 'begin (cdar clauses))
-                    (cond->if (cdr clauses))))))
+        (else
+         (list 'if (caar clauses) (cons 'begin (cdar clauses))
+               (cond->if (cdr clauses))))))
 
 (define (m-apply procedure arguments)
   (cond ((primitive? procedure)
@@ -120,51 +121,56 @@
 ;;; The global environment.
 
 (define (setup-environment)
-  (extend-environment
-   '(+ - * = < > car cdr cons null? list display newline)
-   (map (lambda (entry) (make-primitive (car entry) (cdr entry)))
-        (list (cons '+ +) (cons '- -) (cons '* *) (cons '= =) (cons '< <) (cons '> >)
-              (cons 'car car) (cons 'cdr cdr) (cons 'cons cons) (cons 'null? null?)
-              (cons 'list list) (cons 'display display) (cons 'newline newline)))
-   '()))
+  (extend-environment '(+ - * = < > car cdr cons null? list display newline)
+                      (map
+                       (lambda (entry) (make-primitive (car entry) (cdr entry)))
+                       (list (cons '+ +) (cons '- -) (cons '* *) (cons '= =)
+                             (cons '< <) (cons '> >) (cons 'car car)
+                             (cons 'cdr cdr) (cons 'cons cons)
+                             (cons 'null? null?) (cons 'list list)
+                             (cons 'display display) (cons 'newline newline)))
+                      '()))
 
 ;; How a value of the evaluated language is shown.
 (define (show-value value)
   (cond ((compound? value) (display "#<procedure>"))
-        ((primitive? value) (display "#<primitive ") (display (primitive-name value)) (display ">"))
+        ((primitive? value)
+         (display "#<primitive ")
+         (display (primitive-name value))
+         (display ">"))
         (else (write value))))
 
 (define program
-  '((define (factorial n)
-      (if (= n 0) 1 (* n (factorial (- n 1)))))
+  '((define (factorial n) (if (= n 0) 1 (* n (factorial (- n 1)))))
     (factorial 20)
     (define (map f items)
       (if (null? items) '() (cons (f (car items)) (map f (cdr items)))))
     (map (lambda (x) (* x x)) (list 1 2 3 4 5))
     (define (make-counter)
       (let ((count 0))
-        (lambda () (set! count (+ count 1)) count)))
+        (lambda ()
+          (set! count (+ count 1))
+          count)))
     (define tick (make-counter))
     (tick)
     (tick)
     (tick)
-    (define (fib n)
-      (cond ((< n 2) n)
-            (else (+ (fib (- n 1)) (fib (- n 2))))))
+    (define (fib n) (cond ((< n 2) n) (else (+ (fib (- n 1)) (fib (- n 2))))))
     (fib 15)
     ((lambda (x y) (list y x)) 'first 'second)
-    (begin (display "side effect inside the evaluated program") (newline) 'done)
+    (begin
+      (display "side effect inside the evaluated program")
+      (newline)
+      'done)
     car))
 
 (define global-environment (setup-environment))
 
-(for-each
- (lambda (expr)
-   (display ";; ")
-   (write expr)
-   (newline)
-   (let ((value (m-eval expr global-environment)))
-     (display "=> ")
-     (show-value value)
-     (newline)))
- program)
+(for-each (lambda (expr)
+            (display ";; ")
+            (write expr)
+            (newline)
+            (let ((value (m-eval expr global-environment)))
+              (display "=> ")
+              (show-value value)
+              (newline))) program)

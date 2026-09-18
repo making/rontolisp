@@ -24,7 +24,9 @@ import org.jspecify.annotations.Nullable;
  * {@code (rec (list acc) body)} is indistinguishable from a function call, and only
  * {@code labels} knows better. Which children it applies to depends on {@link Kind}:
  * {@link Kind#BODY} gives it to the first argument, {@link Kind#CLAUSES} to every
- * argument past {@code inlineArgs}, {@link Kind#DATA} to all of them.
+ * argument past {@code inlineArgs}, {@link Kind#DATA} to all of them,
+ * {@link Kind#SCHEME_LET} to the argument at {@code inlineArgs} (the binding list, with
+ * or without a loop name before it).
  * @param statements whether the arguments past {@code inlineArgs} are an implicit
  * {@code progn} -- a SEQUENCE of things done in order. Two or more of those always get a
  * line each, however short they are, for the same reason no formatter of a C-like
@@ -87,7 +89,28 @@ public record Style(Kind kind, int inlineArgs, int bodyIndent, @Nullable Style c
 		 * specialized lambda list (the first list argument) stays on the first line, so
 		 * qualifiers like {@code :around} do not push it onto a line of its own.
 		 */
-		DEFMETHOD
+		DEFMETHOD,
+		/**
+		 * Scheme's explicit {@code (quote datum)}: the datum stays on the operator's line
+		 * and breaks inside itself as data, exactly like {@code 'datum} (which the
+		 * renderer forces to {@link Kind#DATA} however operator-like its head).
+		 */
+		SCHEME_QUOTE,
+		/**
+		 * Scheme's {@code let}/{@code let*}: like {@link #BODY}, except a named
+		 * {@code let} keeps its name AND its binding list on the first line. The number
+		 * of distinguished arguments is found off the form -- two when the first one is
+		 * the loop name -- so it is stored per form, not per rule
+		 * ({@code IndentRules.schemeLetStyle}).
+		 */
+		SCHEME_LET,
+		/**
+		 * Scheme's {@code do}: the bindings and the end-test clause stay on the first
+		 * line while they fit (unlike {@link #DO}, nothing is forced onto a line of its
+		 * own), the body follows at 2. The bindings take the binding style, the end test
+		 * the clause style.
+		 */
+		SCHEME_DO
 
 	}
 

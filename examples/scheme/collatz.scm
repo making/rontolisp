@@ -60,7 +60,10 @@
     (vector-set! buckets b (+ (vector-ref buckets b) 1))))
 (do ((b 0 (+ b 1))) ((= b 10))
   (column (* b 20) 3)
-  (write-string (if (= b 9) "+     " (string-append "-" (pad-left (number->string (+ (* b 20) 19)) 3) "  ")))
+  (write-string
+   (if (= b 9)
+       "+     "
+       (string-append "-" (pad-left (number->string (+ (* b 20) 19)) 3) "  ")))
   (write-string (make-string (quotient (vector-ref buckets b) 5) #\#))
   (write-string " ")
   (display (vector-ref buckets b))
@@ -71,7 +74,8 @@
 (define (first-longer-than threshold starts)
   (call/cc
    (lambda (return)
-     (for-each (lambda (n) (if (> (chain-length n) threshold) (return n))) starts)
+     (for-each (lambda (n) (if (> (chain-length n) threshold) (return n)))
+               starts)
      #f)))
 
 (define (range from to)
@@ -80,21 +84,21 @@
 
 (newline)
 (define starts (range 1 limit))
-(for-each
- (lambda (threshold)
-   (display "first start with more than ")
-   (display threshold)
-   (display " steps: ")
-   (display (first-longer-than threshold starts))
-   (newline))
- '(100 200 300 400))
+(for-each (lambda (threshold)
+            (display "first start with more than ")
+            (display threshold)
+            (display " steps: ")
+            (display (first-longer-than threshold starts))
+            (newline)) '(100 200 300 400))
 
 ;; A million iterations of a named let: a loop, so constant stack on every backend.
 (define (sum-of-lengths iterations)
   (let loop ((i 0) (total 0))
     (if (= i iterations)
         total
-        (loop (+ i 1) (+ total (vector-ref steps (+ 1 (remainder i (- limit 1)))))))))
+        (loop
+          (+ i 1)
+          (+ total (vector-ref steps (+ 1 (remainder i (- limit 1)))))))))
 (display "sum of the first 1,000,000 cyclic lookups: ")
 (display (sum-of-lengths 1000000))
 (newline)

@@ -10,16 +10,13 @@
 ;;;; Run:
 ;;;;   java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar examples/scheme/streams.scm
 
-(define (integers-from n)
-  (cons-stream n (integers-from (+ n 1))))
+(define (integers-from n) (cons-stream n (integers-from (+ n 1))))
 
 (define integers (integers-from 1))
 
-(define (add-streams s1 s2)
-  (stream-map + s1 s2))
+(define (add-streams s1 s2) (stream-map + s1 s2))
 
-(define (scale-stream s factor)
-  (stream-map (lambda (x) (* x factor)) s))
+(define (scale-stream s factor) (stream-map (lambda (x) (* x factor)) s))
 
 ;; Defined in terms of itself: each element is the sum of the two before it.
 (define fibs
@@ -29,8 +26,9 @@
 
 (define (sieve s)
   (cons-stream (stream-car s)
-               (sieve (stream-filter (lambda (x) (not (divisible? x (stream-car s))))
-                                     (stream-cdr s)))))
+               (sieve
+                (stream-filter (lambda (x) (not (divisible? x (stream-car s))))
+                               (stream-cdr s)))))
 
 (define primes (sieve (integers-from 2)))
 
@@ -72,6 +70,10 @@
 (display computed)
 (newline)
 
-(define p (delay (begin (display "[forcing] ") (* 6 7))))
+(define p
+  (delay
+    (begin
+      (display "[forcing] ")
+      (* 6 7))))
 (display (list (force p) (force p)))
 (newline)

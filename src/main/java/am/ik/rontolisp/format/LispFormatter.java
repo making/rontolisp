@@ -51,6 +51,8 @@ public final class LispFormatter {
 
 	private final int width;
 
+	private final IndentRules.Dialect dialect;
+
 	private final StringBuilder out = new StringBuilder();
 
 	private final Map<CstNode, Optional<String>> flatCache = new IdentityHashMap<>();
@@ -66,8 +68,9 @@ public final class LispFormatter {
 	 */
 	private boolean afterLineComment;
 
-	private LispFormatter(int width) {
+	private LispFormatter(int width, IndentRules.Dialect dialect) {
 		this.width = width;
+		this.dialect = dialect;
 	}
 
 	/**
@@ -88,11 +91,24 @@ public final class LispFormatter {
 	 * @throws FormatException if the source cannot be read as Lisp
 	 */
 	public static String format(String source, int width) {
+		return format(source, width, IndentRules.Dialect.COMMON_LISP);
+	}
+
+	/**
+	 * Format the given source in a dialect.
+	 * @param source the source
+	 * @param width the right margin to wrap to
+	 * @param dialect the source dialect: {@code .scm} files take the Scheme rules,
+	 * anything else the Common Lisp ones
+	 * @return the formatted source, ending in a newline (empty for empty input)
+	 * @throws FormatException if the source cannot be read
+	 */
+	public static String format(String source, int width, IndentRules.Dialect dialect) {
 		// Line endings are normalized to LF where they are LAYOUT -- which is
 		// FormatReader's job, not a pass over the source: a CR inside a string or
 		// character literal belongs to that token, and rewriting it would change the
 		// program (`.kb/formatter.md`).
-		LispFormatter formatter = new LispFormatter(width);
+		LispFormatter formatter = new LispFormatter(width, dialect);
 		formatter.renderTopLevel(new FormatReader(source).readAll());
 		return formatter.alignTrailingComments();
 	}
@@ -168,11 +184,19 @@ public final class LispFormatter {
 			return;
 		}
 		emit(text);
-		render(prefix.datum(), indent + text.length(), override, closers);
+		// In Scheme a quote is data, however operator-like its head: a broken quoted
+		// list lays out a form per line, not packed like a call's arguments. A style
+		// the parent forced still wins -- a binding owns its init form.
+		Style datumOverride = override;
+		if (datumOverride == null && this.dialect == IndentRules.Dialect.SCHEME && "'".equals(text)
+				&& prefix.datum() instanceof CstNode.Listing) {
+			datumOverride = Style.data();
+		}
+		render(prefix.datum(), indent + text.length(), datumOverride, closers);
 	}
 
 	private void renderListing(CstNode.Listing listing, int indent, @Nullable Style override, int closers) {
-		Style style = override != null ? override : IndentRules.styleFor(listing);
+		Style style = override != null ? override : IndentRules.styleFor(listing, this.dialect);
 		String flat = flat(listing);
 		if (flat != null && fits(indent, flat.length(), closers) && !isStatementSequence(listing, style)) {
 			emit(flat);
@@ -186,7 +210,8 @@ public final class LispFormatter {
 			case DATA -> renderData(listing, indent, style, inner);
 			case DO -> renderIteration(listing, indent, inner);
 			case LOOP -> renderLoop(listing, indent, inner);
-			case BODY, CLAUSES -> renderBody(listing, indent, style, style.inlineArgs(), style.bodyIndent(), inner);
+			case BODY, CLAUSES, SCHEME_LET, SCHEME_DO, SCHEME_QUOTE ->
+				renderBody(listing, indent, style, style.inlineArgs(), style.bodyIndent(), inner);
 			case CLAUSE ->
 				renderBody(listing, indent, style, clauseInlineArgs(listing, indent, inner), style.bodyIndent(), inner);
 			case DEFMETHOD ->
@@ -269,7 +294,11 @@ public final class LispFormatter {
 	private int renderCall(CstNode.Listing listing, int indent, Style style, int inner) {
 		List<CstNode> items = listing.items();
 		render(items.get(0), column(), null, closersAfter(items, 0, inner));
-		int breakColumn = argumentColumn(items, indent, inner);
+		// A cond's clauses align under the first one however deep the nest: at the
+		// shallow column they would read as body forms of whatever encloses the cond,
+		// so the alignment fallback other calls get does not apply to them.
+		int breakColumn = this.dialect == IndentRules.Dialect.SCHEME && style.kind() == Style.Kind.CALL
+				&& style.childStyle() != null ? column() + 1 : argumentColumn(items, indent, inner);
 		Style argumentStyle = style.childStyle();
 		// Arguments pack: one shares the line when it fits and takes a line of its own
 		// when it does not. cond's clauses are the exception -- they are alternatives,
@@ -292,8 +321,10 @@ public final class LispFormatter {
 		int breakColumn = indent + listing.open().length();
 		// Elements pack, unless they have a forced shape -- a run of bindings or clauses
 		// is a
-		// column, a run of literals is a paragraph.
-		boolean fill = style.childStyle() == null;
+		// column, a run of literals is a paragraph. Scheme data never packs: a quoted
+		// program is read a form per line, so one over-long element per line is what a
+		// broken literal looks like there.
+		boolean fill = style.childStyle() == null && this.dialect == IndentRules.Dialect.COMMON_LISP;
 		CstNode first = items.get(0);
 		if (first instanceof CstNode.LineComment && !first.trivia().startsLine()) {
 			emitTrailingComment(first);
@@ -735,7 +766,7 @@ public final class LispFormatter {
 		if (!style.statements()) {
 			return false;
 		}
-		if (style.kind() == Style.Kind.DO) {
+		if (style.kind() == Style.Kind.DO || style.kind() == Style.Kind.SCHEME_DO) {
 			// (do (bindings) (end-test result ...) body ...) -- three distinct parts, and
 			// the layout is what tells them apart. One with a body is never a one-liner
 			// however short it is; one without has nothing to separate.
@@ -780,7 +811,7 @@ public final class LispFormatter {
 				// flatten it from above, and (defun f (x) (when x (a) (b))) would
 				// collapse
 				// whole even though its own when may not.
-				if (isStatementSequence(listing, IndentRules.styleFor(listing))) {
+				if (isStatementSequence(listing, IndentRules.styleFor(listing, this.dialect))) {
 					yield null;
 				}
 				StringBuilder flat = new StringBuilder(listing.open());
@@ -867,6 +898,17 @@ public final class LispFormatter {
 	 */
 	private int clauseInlineArgs(CstNode.Listing listing, int indent, int closers) {
 		List<CstNode> items = listing.items();
+		if (this.dialect == IndentRules.Dialect.SCHEME && items.size() == 3
+				&& items.get(1) instanceof CstNode.Atom arrow && "=>".equals(arrow.text())) {
+			// A case => clause keeps `key => recipient` on one line while the
+			// recipient fits there whole.
+			String keyFlat = flat(items.get(0));
+			if (keyFlat != null) {
+				Shape beside = shapeAt(items.get(2), indent + 1 + keyFlat.length() + " => ".length(), closers);
+				return beside.lines() == 1 && beside.overruns() == 0 ? 2 : 0;
+			}
+			return 0;
+		}
 		if (items.size() != 2 || !(items.get(0) instanceof CstNode.Atom predicate)) {
 			return 0;
 		}
@@ -875,6 +917,12 @@ public final class LispFormatter {
 		// on the next line at indent + 1.
 		Shape beside = shapeAt(body, indent + 1 + predicate.text().length() + 1, closers);
 		Shape below = shapeAt(body, indent + 1, closers);
+		if (this.dialect == IndentRules.Dialect.SCHEME) {
+			// A Scheme clause keeps its body beside the predicate only when the body
+			// fits there whole: a multi-line body broken open to reach the predicate
+			// reads worse than the line the predicate keeps to itself, ties included.
+			return beside.lines() == 1 && beside.overruns() <= below.overruns() ? 1 : 0;
+		}
 		return beside.lines() <= below.lines() && beside.overruns() <= below.overruns() ? 1 : 0;
 	}
 

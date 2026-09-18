@@ -12,21 +12,23 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Stream;
 
+import am.ik.rontolisp.format.IndentRules;
 import am.ik.rontolisp.format.LispFormatter;
 
 /**
  * The {@code rontolisp format} subcommand: re-indents Lisp source files in place.
  * <p>
- * A directory argument is walked for {@code .lisp} and {@code .asd} files; a file named
- * explicitly is formatted whatever its extension, so a {@code .cl} or a script can be
- * passed by name. Files are visited in sorted order and each is written only when its
- * content actually changes, so the command is safe to re-run and leaves timestamps alone
- * on an already-formatted tree.
+ * A directory argument is walked for {@code .lisp}, {@code .asd} and {@code .scm} files;
+ * a file named explicitly is formatted whatever its extension, so a {@code .cl} or a
+ * script can be passed by name. A {@code .scm} file takes the Scheme indent rules,
+ * anything else the Common Lisp ones. Files are visited in sorted order and each is
+ * written only when its content actually changes, so the command is safe to re-run and
+ * leaves timestamps alone on an already-formatted tree.
  */
 final class FormatCommand {
 
 	/** Extensions searched for inside a directory argument. */
-	private static final List<String> EXTENSIONS = List.of(".lisp", ".asd");
+	private static final List<String> EXTENSIONS = List.of(".lisp", ".asd", ".scm");
 
 	private final PrintStream out;
 
@@ -113,7 +115,7 @@ final class FormatCommand {
 			String formatted;
 			try {
 				source = Files.readString(file);
-				formatted = LispFormatter.format(source, width);
+				formatted = LispFormatter.format(source, width, dialectOf(file));
 			}
 			catch (IOException | RuntimeException ex) {
 				// One unreadable file must not abandon the rest of the tree: report
@@ -164,6 +166,14 @@ final class FormatCommand {
 		}
 	}
 
+	// The rules follow the file: a .scm file is indented as Scheme, anything else as
+	// Common Lisp -- including a .scm named explicitly, and excluding standard input,
+	// which has no name to read.
+	private static IndentRules.Dialect dialectOf(Path file) {
+		return file.getFileName().toString().endsWith(".scm") ? IndentRules.Dialect.SCHEME
+				: IndentRules.Dialect.COMMON_LISP;
+	}
+
 	private static List<Path> collect(List<String> paths) throws IOException {
 		List<Path> files = new ArrayList<>();
 		for (String path : paths) {
@@ -206,8 +216,10 @@ final class FormatCommand {
 		this.out.println("Usage: rontolisp format [options] <file-or-directory>...");
 		this.out.println();
 		this.out.println("Re-indents Lisp source in place. A directory is walked for");
-		this.out.println(".lisp and .asd files; a file named explicitly is formatted");
+		this.out.println(".lisp, .asd and .scm files; a file named explicitly is formatted");
 		this.out.println("whatever its extension. '-' formats standard input to stdout.");
+		this.out.println("A .scm file is indented with the Scheme rules, anything else");
+		this.out.println("with the Common Lisp ones.");
 		this.out.println();
 		this.out.println("Only whitespace changes: indentation, line breaks and blank");
 		this.out.println("lines. Token spelling (case included), strings, block comments");

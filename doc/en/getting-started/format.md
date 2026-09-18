@@ -1,13 +1,16 @@
 # Formatting Source Code
 
 `rontolisp format` re-indents Lisp source files in place. Point it at a file or
-at a directory and every `.lisp` and `.asd` file under it is rewritten to one
+at a directory and every `.lisp`, `.asd` and `.scm` file under it is rewritten to one
 canonical layout, so indentation stops being something anyone has to think about
-or review.
+or review. A `.scm` file is indented with the Scheme rules, which know the
+operators Common Lisp does not have -- `define`, a named `let`, `do`,
+`define-record-type` -- and lay out a broken quoted list a form per line;
+anything else takes the Common Lisp ones.
 
 ```bash
 rontolisp format app.lisp          # one file
-rontolisp format src/              # every .lisp / .asd under src/
+rontolisp format src/              # every .lisp / .asd / .scm under src/
 rontolisp format src/ tests/       # several paths
 ```
 
@@ -112,6 +115,23 @@ A function call puts its arguments under the first one, and keeps each
 ; => (4 16 36 64 100)
 ```
 
+A `.scm` file follows the same ideas with Scheme's operators: `define` keeps
+its header on the first line, a named `let` keeps its name and bindings there
+too, and `do` keeps its bindings and end test there while they fit:
+
+```scheme
+(define (count-up n)
+  (let loop ((i 0) (acc '()))
+    (if (= i n) (reverse acc) (loop (+ i 1) (cons (* i i) acc)))))
+
+(display (count-up 5))
+(newline)
+```
+
+```
+(0 1 4 9 16)
+```
+
 ### Two body forms are always two lines
 
 A body of two or more forms is a sequence performed in order, so it gets a line
@@ -163,7 +183,9 @@ end up past the margin.
 
 A macro the formatter has not been told about is laid out from its name:
 `with-...` and `do-...` take one argument then a body, `def...` takes a name and
-then a body, and anything else is laid out as a function call.
+then a body, and anything else is laid out as a function call. In a `.scm` file
+there is no guessing at all: every unknown operator is a procedure call, since
+the subset has no defining macro beyond the ones above.
 
 A `def...` macro keeps a lambda list on its first line the way `defun` does, but
 only when its second element could BE a lambda list -- a list of plain parameter

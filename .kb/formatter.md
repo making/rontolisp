@@ -16,7 +16,9 @@ only `Trivia`: `blankLineBefore`, `startsLine`; all other whitespace is re-deriv
 
 - **Extending the reader's surface syntax means extending `FormatReader.readDispatch`/`readToken`
   too** -- otherwise an unknown `#X(` reads as atom `#X` plus a list and the corpus token
-  comparison fails.
+  comparison fails. `#;` reads as a `Prefix` over the datum it comments out (glued, like
+  `#.`); `#true`, `#\x41` and `[`/`]` need nothing -- they are ordinary token characters
+  the output reproduces verbatim.
 - **Whitespace is not always removable.** A `Prefix` prints GLUED to its datum, wrong for exactly
   one case: a `,` whose datum starts with `@` or `.`, since `, @x` glued is `,@x`.
   `FormatReader.separatedPrefix` keeps one space there and only there. General rule for a future
@@ -80,6 +82,37 @@ be a lambda list, then at least one more element. "Could be a lambda list" is a 
 lambda list may not bind a constant), which is what tells alexandria's
 `(deftest xor.3 (xor nil nil nil) nil t)` from a definition. Ambiguity is decided in favour of
 the lambda list; an operator that matters belongs in `RULES`.
+
+## Scheme sources (`.todo/848`)
+
+`FormatCommand` walks `.scm` beside `.lisp`/`.asd` and picks the rules by extension
+(`IndentRules.Dialect`, `.scm` named explicitly included, `-` stdin excluded); a
+`.lisp` file reads exactly as before, pinned by the unchanged corpus tests. A Scheme
+file consults `SCHEME_RULES` first, then the shared table, and an unknown head is a
+procedure call -- the Common Lisp naming guess is skipped, since the subset has no
+defining macro beyond the tabled ones (that guess is what laid out a
+`define-variable!` call one parameter per line).
+
+- `define` reads its header per form: a list header is `body(1, 2)`, anything else
+  `operands(1, 2)`. `define-record-type` is `body(1, 2)` (the guess joined the
+  constructor onto the first line), `define-values` `operands(1, 2)`,
+  `let-values`/`letrec` the `let` shape. `begin` is `body(0, 2)` -- in Common Lisp
+  it stays an unknown call, which is why it shares no rule.
+- Named `let`/`let*` keep name AND bindings on the first line (`SCHEME_LET`, the
+  count stored per form); `do` keeps bindings and end test there while they fit
+  (`SCHEME_DO`, bindings take the binding style, the end test the clause style --
+  unlike `DO` nothing is forced onto its own line). `delay`/`delay-force` are
+  `operands(0, 2)`; `cons-stream`, `for-each`, `map` are ordinary calls.
+- A quote is data however operator-like its head: a listing under `'` and an
+  explicit `(quote datum)` (`SCHEME_QUOTE`) both break inside themselves as `DATA`,
+  and broken `DATA` lays out one element per line instead of filling.
+- A `cond`'s clauses align under the first one however deep the nest (no shallow
+  fallback -- there they would read as body forms), and a clause keeps its body
+  beside the predicate only when the body fits there whole, ties included (a
+  `case` `=>` recipient the same beside `key =>`).
+- `examples/scheme/` and `scheme-spec.yaml`'s `source:` blocks are formatted with
+  these rules (expected outputs and `stdin:` blocks untouched); `shippedLispSources`
+  and the corpus walk cover `.scm`, so the tree enforces it.
 
 ## Deliberate divergences from trivial-formatter
 Reference: https://github.com/hyotang666/trivial-formatter.

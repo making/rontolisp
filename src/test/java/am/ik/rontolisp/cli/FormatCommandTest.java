@@ -58,6 +58,26 @@ class FormatCommandTest {
 	}
 
 	@Test
+	void walksADirectoryForSchemeFilesToo(@TempDir Path dir) throws IOException {
+		String unformatted = "(let loop ((i 0))\n(loop (+ i 1))\n(display i))\n";
+		String formatted = "(let loop ((i 0))\n  (loop (+ i 1))\n  (display i))\n";
+		Path scm = Files.writeString(dir.resolve("a.scm"), unformatted);
+		Path txt = Files.writeString(dir.resolve("notes.txt"), unformatted);
+		assertThat(run(new Output(), dir.toString())).isZero();
+		assertThat(Files.readString(scm)).isEqualTo(formatted);
+		assertThat(Files.readString(txt)).isEqualTo(unformatted);
+	}
+
+	@Test
+	void formatsSchemeSourcesWithTheSchemeRules(@TempDir Path dir) throws IOException {
+		// A named let's name and bindings stay on the first line; the Common Lisp
+		// rule would break the bindings off it.
+		Path file = Files.writeString(dir.resolve("a.scm"), "(let loop ((i 0))\n(loop (+ i 1))\n(display i))\n");
+		assertThat(run(new Output(), file.toString())).isZero();
+		assertThat(Files.readString(file)).isEqualTo("(let loop ((i 0))\n  (loop (+ i 1))\n  (display i))\n");
+	}
+
+	@Test
 	void formatsAFileNamedExplicitlyWhateverItsExtension(@TempDir Path dir) throws IOException {
 		Path file = Files.writeString(dir.resolve("script.cl"), UNFORMATTED);
 		assertThat(run(new Output(), file.toString())).isZero();
