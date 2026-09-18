@@ -17,7 +17,7 @@ Scheme フロントエンドが提供する名前ごとの 1 ページです。�
 | [(scheme eval)](reference/library-eval.md) | `eval`、`environment` |
 | [(scheme repl)](reference/library-repl.md) | `interaction-environment` |
 | [(scheme r5rs)](reference/library-r5rs.md) | ほかのライブラリにない R5RS の名前。`import` なしで見える |
-| [SICP 互換の名前](reference/library-sicp.md) | SICP / MIT Scheme の名前。`import` なしで見える |
+| [SICP 互換の名前](reference/library-sicp.md) | *[Structure and Interpretation of Computer Programs](sicp.md)*（SICP）/ MIT Scheme の名前。`import` なしで見える |
 
 `(import ...)` で始まるファイルは、指定したライブラリだけを見ます。`import` のないファイルと
 REPL からは、ここに載っているすべての名前が見えます。ただし

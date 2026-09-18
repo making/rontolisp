@@ -1,6 +1,6 @@
 # SICP 互換の名前
 
-SICP / MIT Scheme の名前です。どの R7RS ライブラリもエクスポートしないため `import` では届かず、`import` のないファイルと REPL からだけ見え、[`--scheme-standard r7rs`](../standards.md) ではどこからも見えません。[SICP 互換](../sicp.md)を参照してください。
+*[Structure and Interpretation of Computer Programs](../sicp.md)*（SICP）/ MIT Scheme の名前です。どの R7RS ライブラリもエクスポートしないため `import` では届かず、`import` のないファイルと REPL からだけ見え、[`--scheme-standard r7rs`](../standards.md) ではどこからも見えません。[SICP 互換](../sicp.md)を参照してください。
 
 ## 手続き
 

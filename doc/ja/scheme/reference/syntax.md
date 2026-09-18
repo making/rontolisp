@@ -1,6 +1,6 @@
 # 構文
 
-フロントエンドが実装している構文キーワードです。`import` 以外はすべて `(scheme base)` がエクスポートします。`import` はプログラムの構文で、どのライブラリもエクスポートしません。`delay` と `delay-force` は [(scheme lazy)](library-lazy.md) に、`cons-stream` は [SICP 互換の名前](library-sicp.md) に載っています。名前で拒否されるキーワードは[仕様との差異](../deviations.md)にあります。
+フロントエンドが実装している構文キーワードです。`import` 以外はすべて `(scheme base)` がエクスポートします。`import` はプログラムの構文で、どのライブラリもエクスポートしません。`delay` と `delay-force` は [(scheme lazy)](library-lazy.md) に、`cons-stream` は [*Structure and Interpretation of Computer Programs*（SICP）互換の名前](library-sicp.md) に載っています。名前で拒否されるキーワードは[仕様との差異](../deviations.md)にあります。
 
 | 名前 | 例 | 結果 |
 |---|---|---|

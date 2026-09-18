@@ -12,7 +12,8 @@
   `prefix` / `rename` 可）。
 
 9 つのライブラリそれぞれが何をエクスポートするかは[ライブラリ](libraries.md)を、
-`import` を一切書かない場合に見える名前は[SICP 互換](sicp.md)を参照してください。
+`import` を一切書かない場合に見える名前は
+[*Structure and Interpretation of Computer Programs*（SICP）互換](sicp.md)を参照してください。
 
 ## マクロ
 

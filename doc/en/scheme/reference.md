@@ -18,7 +18,7 @@ example.
 | [(scheme eval)](reference/library-eval.md) | `eval`, `environment` |
 | [(scheme repl)](reference/library-repl.md) | `interaction-environment` |
 | [(scheme r5rs)](reference/library-r5rs.md) | R5RS names outside the other libraries, visible with no `import` |
-| [SICP Names](reference/library-sicp.md) | The SICP / MIT Scheme names, visible with no `import` |
+| [SICP Names](reference/library-sicp.md) | The *[Structure and Interpretation of Computer Programs](sicp.md)* (SICP) / MIT Scheme names, visible with no `import` |
 
 A file that opens with `(import ...)` sees only the libraries it names; a file with none,
 and the REPL, see every name listed here -- except under

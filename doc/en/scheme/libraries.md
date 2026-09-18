@@ -3,7 +3,7 @@
 The nine R7RS libraries a file may `import`, and what each provides. Every name has its
 own page in the [Reference](reference.md). A file that opens with `(import ...)` (see
 [Syntax](syntax.md)) sees only the libraries it names; a file with none sees all nine,
-plus the [SICP-compatibility names](sicp.md).
+plus the [*Structure and Interpretation of Computer Programs* (SICP)-compatibility names](sicp.md).
 
 | Library | Provides |
 |---|---|
