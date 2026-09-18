@@ -610,6 +610,8 @@ reports and what a Common Lisp `handler-case` around Scheme code catches.
   `with-exception-handler` + `raise-continuable` probe 105,449 / 46,888 B. The first cut --
   `handler-bind` for the handler, `(error c)` for the re-raise -- measured 168,349 /
   127,194 B and 161,939 / 120,811 B for the same two.
+- Corpus (2026-09-18): no SICP sample spells a new name; `SicpCorpusE2eTest` after the
+  change of `error` 5,262 legs, 0 failures, 17 skipped, the manifest unchanged.
 - Pinned by the `guard-...`, `with-exception-handler-...`, `read-raises-a-read-error`
   cases of `scheme-spec.yaml` (all four backends, Gauche 0.9.15 `-r7` output), its three
   exception `standalone:` cases, `SchemeLoweringTest.aGuardIsABodyThunk...`,
