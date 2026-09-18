@@ -113,7 +113,8 @@
 
 ;; write and display must terminate on a circular structure (R7RS 6.13.3): a node a
 ;; cycle closes on is written with a datum label, #0=(1 2 . #0#). Sharing without a
-;; cycle is written out each time, as write does.
+;; cycle is written out each time, as write does; write-shared instead labels every
+;; node occurring more than once (%scheme-write-shared below).
 ;;
 ;; No eq hash table: on wasm one costs 16 KB of every printing program and scans a
 ;; single bucket for an aggregate key, which made writing a 50,000-element list take
@@ -204,6 +205,42 @@
       (if (= (cdr (car l)) 4) (setq labeled (cons (car l) labeled))))
     (if labeled (cons labeled 0))))
 
+;; write-shared labels every pair or vector that occurs more than once, not only the
+;; nodes a cycle closes on (R7RS 6.13.3). Counting is one depth-first walk beside the
+;; cycle walk above: a revisit -- of an open node (a cycle) or a closed one (sharing)
+;; counts without recursing, so the walk ends on a cycle and visits each node once,
+;; and only the outermost shared node takes a label, as in (#0=(1 2) #0#).
+(defun rontolisp::%scheme-count-shared (x seen)
+  (do ()
+      ((not (rontolisp::%scheme-node-p x)))
+    (let ((entry (rontolisp::%scheme-entry x (car seen))))
+      (cond ((null entry)
+             (rplaca seen (cons (cons x 1) (car seen)))
+             (if (consp x)
+                 (progn
+                   (rontolisp::%scheme-count-shared (car x) seen)
+                   (setq x (cdr x)))
+                 (let ((v x))
+                   (setq x nil)
+                   (do ((i 0 (+ i 1)))
+                       ((>= i (length v)))
+                     (rontolisp::%scheme-count-shared (aref v i) seen)))))
+            (t
+             (rplacd entry (+ (cdr entry) 1))
+             (setq x nil))))))
+
+;; The labels X needs for write-shared, as (entries . next-number): entries (node . 4)
+;; for each node occurring more than once, or NIL when there is none -- the shape
+;; %scheme-print-datum already prints.
+(defun rontolisp::%scheme-shared-labels (x)
+  (let ((seen (list nil)) (labeled nil))
+    (rontolisp::%scheme-count-shared x seen)
+    (do ((l (car seen) (cdr l)))
+        ((null l))
+      (if (> (cdr (car l)) 1)
+          (setq labeled (cons (cons (car (car l)) 4) labeled))))
+    (if labeled (cons labeled 0))))
+
 ;; Whether X carries a label: one to define (4) or one already written (negative).
 (defun rontolisp::%scheme-labeled-p (x labels)
   (rontolisp::%scheme-entry x (car labels)))
@@ -267,6 +304,11 @@
 (defun rontolisp::%scheme-display (x) (rontolisp::%scheme-print x nil))
 
 (defun rontolisp::%scheme-write (x) (rontolisp::%scheme-print x t))
+
+(defun rontolisp::%scheme-write-shared (x)
+  (rontolisp::%scheme-print-datum x t
+   (if (rontolisp::%scheme-node-p x) (rontolisp::%scheme-shared-labels x)))
+  nil)
 
 ;; --- (scheme read): a datum reader on the current input port ----------------------
 ;;

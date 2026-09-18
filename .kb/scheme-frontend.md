@@ -542,7 +542,23 @@ calls it cycle-free when the walk ends. It gives up on a cdr chain meeting itsel
 (Brent) or car/element nesting past 1,000, where any cycle through a car must end up;
 only then `%scheme-mark-cycles` runs, over an alist: quadratic, but only for a cyclic or
 over-deep datum. `(* power 2)` in Brent's step cost 468 wasm bytes over `(+ power power)`.
-`write-shared` labels only cycles, like `write`.
+
+**`write-shared` labels every shared node, not only cycles** (2026-09-18,
+`.todo/840`): `%scheme-write-shared` counts occurrences in one depth-first walk
+beside the cycle walk -- a revisit of an open node (a cycle) or a closed one
+(sharing) counts without recursing, so the walk ends on a cycle and visits each
+node once -- and reuses the `(entries . next-number)` label shape, with an entry
+`(node . 4)` for every node seen more than once. Only the outermost shared node
+takes a label, as R7RS's own example does: `(write-shared (list x x))` is
+`(#0=(1 2) #0#)`, nested sharing `(#0=(#1=("s") #1#) #0#)`, a shared vector
+`(#0=#(1 2) #0#)`. `write` and `display` are untouched. A program calling only
+`display` compiles byte-identical before and after (80,121 B of class / 11,636 B of
+wasm for `(display (list 1 'a "s"))`, `-o Disp.class --class-name Disp` /
+`-o disp.wasm`, both times -- the pruner drops the three new helpers with the
+`write-shared` template that alone references them); a program that writes shared
+structure SHRINKS, 80,177 to 78,376 B of class and 9,230 to 8,018 B of wasm for
+`(define x (list 1 2)) (write-shared (list x x))` (the counting walk is smaller than
+the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 ## Not here yet (each its own follow-up)
 
