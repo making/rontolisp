@@ -197,6 +197,31 @@
 | `read-error?` | `(guard (e (#t (read-error? e))) (error "not a read error"))` | `#f` |
 | `file-error?` | `(guard (e (#t (file-error? e))) (raise 'oops))` | `#f` |
 
+## ポート
+
+| 名前 | 例 | 結果 |
+|---|---|---|
+| `current-input-port` | `(parameterize ((current-input-port (open-input-string "(1 2) x"))) (read))` | `(1 2)` |
+| `current-output-port` | `(let ((p (open-output-string))) (parameterize ((current-output-port p)) (display "hi")) (get-output-string p))` | `"hi"` |
+| `current-error-port` | `(output-port? (current-error-port))` | `#t` |
+| `port?` | `(port? (open-input-string "x"))` | `#t` |
+| `input-port?` | `(input-port? (open-output-string))` | `#f` |
+| `output-port?` | `(output-port? (open-output-string))` | `#t` |
+| `textual-port?` | `(textual-port? (open-input-string "x"))` | `#t` |
+| `binary-port?` | `(binary-port? (open-input-bytevector #u8(1)))` | `#t` |
+| `input-port-open?` | `(let ((p (open-input-string "x"))) (close-port p) (input-port-open? p))` | `#f` |
+| `output-port-open?` | `(output-port-open? (open-output-string))` | `#t` |
+| `close-port` | `(let ((p (open-output-string))) (close-port p) (output-port-open? p))` | `#f` |
+| `close-input-port` | `(let ((p (open-input-string "x"))) (close-input-port p) (input-port-open? p))` | `#f` |
+| `close-output-port` | `(let ((p (open-output-string))) (close-output-port p) (output-port-open? p))` | `#f` |
+| `call-with-port` | `(call-with-port (open-input-string "(1 2)") read)` | `(1 2)` |
+| `open-input-string` | `(read (open-input-string "(a . b) c"))` | `(a . b)` |
+| `open-output-string` | `(let ((p (open-output-string))) (write 'x p) (write "y" p) (get-output-string p))` | `"x\"y\""` |
+| `get-output-string` | `(let ((p (open-output-string))) (display "ab" p) (get-output-string p))` | `"ab"` |
+| `open-input-bytevector` | `(read-u8 (open-input-bytevector #u8(7 8)))` | `7` |
+| `open-output-bytevector` | `(let ((p (open-output-bytevector))) (write-u8 1 p) (write-u8 2 p) (get-output-bytevector p))` | `#u8(1 2)` |
+| `get-output-bytevector` | `(let ((p (open-output-bytevector))) (write-bytevector #u8(5 6) p) (get-output-bytevector p))` | `#u8(5 6)` |
+
 ## 出力
 
 | 名前 | 例 | 結果 |
@@ -204,6 +229,9 @@
 | `newline` | `(newline)` | 現在の行を終える |
 | `write-char` | `(write-char #\a)` | `a` を出力 |
 | `write-string` | `(write-string "hello")` | `hello` を出力 |
+| `write-u8` | `(let ((p (open-output-bytevector))) (write-u8 255 p) (get-output-bytevector p))` | `#u8(255)` |
+| `write-bytevector` | `(let ((p (open-output-bytevector))) (write-bytevector #u8(1 2 3 4) p 1 3) (get-output-bytevector p))` | `#u8(2 3)` |
+| `flush-output-port` | `(flush-output-port)` | 出力ポートが溜めているものを書き出す |
 
 ## 入力
 
@@ -213,5 +241,11 @@
 | `peek-char` | `(peek-char)` | 入力 `xy` に対して `#\x`（続けて呼んでも同じ） |
 | `read-line` | `(read-line)` | 入力 `first line` に対して `"first line"` |
 | `char-ready?` | `(char-ready?)` | `#t` |
+| `read-string` | `(read-string 3 (open-input-string "abcdef"))` | `"abc"` |
+| `read-u8` | `(read-u8 (open-input-bytevector #u8(1 2)))` | `1` |
+| `peek-u8` | `(let ((p (open-input-bytevector #u8(9)))) (list (peek-u8 p) (read-u8 p)))` | `(9 9)` |
+| `u8-ready?` | `(u8-ready? (open-input-bytevector #u8()))` | `#t` |
+| `read-bytevector` | `(read-bytevector 2 (open-input-bytevector #u8(1 2 3)))` | `#u8(1 2)` |
+| `read-bytevector!` | `(let ((b (make-bytevector 4 0))) (read-bytevector! b (open-input-bytevector #u8(7 8)) 1) b)` | `#u8(0 7 8 0)` |
 | `eof-object` | `(write (eof-object))` | `#<eof>` を出力 |
 | `eof-object?` | `(eof-object? (eof-object))` | `#t` |

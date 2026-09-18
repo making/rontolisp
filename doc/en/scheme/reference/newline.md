@@ -1,8 +1,8 @@
 # newline
 
-`(newline)`
+`(newline [port])`
 
-Writes an end of line to the current output port. It takes no port argument: only the current output port is supported.
+Writes an end of line to the current output port. With `port`, it writes there instead; `port` must be an open textual output port.
 
 ```scheme
 (display "one")
@@ -14,4 +14,8 @@ Writes an end of line to the current output port. It takes no port argument: onl
 ```
 one
 two
+```
+
+```scheme
+(let ((p (open-output-string))) (display "a" p) (newline p) (get-output-string p)) ; => "a\n"
 ```

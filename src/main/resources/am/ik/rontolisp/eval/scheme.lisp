@@ -310,6 +310,8 @@
          (write-char #\)))
         ((floatp x) (rontolisp::%scheme-print-flonum x))
         ((rontolisp::%scheme-promise-p x) (write-string "#<promise>"))
+        #+rontolisp-scheme-ports
+        ((rontolisp::%scheme-port-p x) (rontolisp::%scheme-print-port x))
         ((functionp x) (write-string "#<procedure>"))
         (t (princ x))))
 
@@ -330,10 +332,11 @@
 ;; is false. So this is a reader in the same language, over read-char on
 ;; *standard-input*, spliced like the rest of the run-time half, on all four backends.
 ;;
-;; One Lisp-level pushback cell (a list, so "#|" can be un-read as two characters)
-;; keyed on the current *standard-input* value: with-input-from-string rebinds the
-;; stream, and the cell follows it rather than leaking across bindings (one stream at
-;; a time, like CL's unread-char cell). peek is read + pushback, never CL's peek-char,
+;; A Lisp-level pushback cell (a list, so "#|" can be un-read as two characters): in a
+;; program without ports, ONE cell keyed on the current *standard-input* value --
+;; with-input-from-string rebinds the stream, and the cell follows it rather than
+;; leaking across bindings (one stream at a time, like CL's unread-char cell); with
+;; ports, the cell of the port being read. peek is read + pushback, never CL's peek-char,
 ;; so no WASM peek slot is ever parked and read/read-line/char-ready? mix freely.
 ;; char-ready? is (listen) where threads exist; on WASM there is no non-blocking probe,
 ;; so it answers #t (true for a string stream with data and at EOF, the cases the
@@ -355,17 +358,20 @@
 
 (defvar rontolisp::%scheme-close (list nil))
 
-(defvar rontolisp::%scheme-pushback-chars nil)
+;; Without ports -- a program that makes no port object -- the reader's state is ONE
+;; pushback cell and one fold-case flag, keyed on the current *standard-input*.
+#-rontolisp-scheme-ports (defvar rontolisp::%scheme-pushback-chars nil)
 
-(defvar rontolisp::%scheme-pushback-stream nil)
+#-rontolisp-scheme-ports (defvar rontolisp::%scheme-pushback-stream nil)
 
 ;; #!fold-case / #!no-fold-case (R7RS 7.1.1): a directive is per FILE, so it is kept
 ;; alongside the same stream-keyed state as the pushback cell above and reset the same
 ;; way -- whichever stream *standard-input* names next starts with folding off.
-(defvar rontolisp::%scheme-fold-case nil)
+#-rontolisp-scheme-ports (defvar rontolisp::%scheme-fold-case nil)
 
-(defvar rontolisp::%scheme-fold-case-stream nil)
+#-rontolisp-scheme-ports (defvar rontolisp::%scheme-fold-case-stream nil)
 
+#-rontolisp-scheme-ports
 (defun rontolisp::%scheme-pushback-sync ()
   (if (not (eq rontolisp::%scheme-fold-case-stream *standard-input*))
       (progn
@@ -377,6 +383,7 @@
         (setq rontolisp::%scheme-pushback-chars nil)
         (setq rontolisp::%scheme-pushback-stream nil))))
 
+#-rontolisp-scheme-ports
 (defun rontolisp::%scheme-peek-char ()
   (rontolisp::%scheme-pushback-sync)
   (if rontolisp::%scheme-pushback-chars
@@ -386,6 +393,7 @@
         (setq rontolisp::%scheme-pushback-chars (list c))
         c)))
 
+#-rontolisp-scheme-ports
 (defun rontolisp::%scheme-next-char ()
   (rontolisp::%scheme-pushback-sync)
   (if rontolisp::%scheme-pushback-chars
@@ -395,12 +403,58 @@
         c)
       (read-char nil nil rontolisp::%scheme-eof-instance)))
 
+#-rontolisp-scheme-ports
 (defun rontolisp::%scheme-pushback (c)
   (rontolisp::%scheme-pushback-sync)
   (setq rontolisp::%scheme-pushback-stream *standard-input*)
   (setq rontolisp::%scheme-pushback-chars
         (cons c rontolisp::%scheme-pushback-chars))
   c)
+
+;; With ports, the state lives in the port being read: an explicit port argument binds
+;; %scheme-reading-port, and no argument reads the current input port -- the parameterized
+;; one, or a wrapper around whatever *standard-input* is (the ports section below).
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-reading-port ()
+  (or rontolisp::%scheme-reading-port (rontolisp::%scheme-current-port 0)))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-peek-char ()
+  (let ((port (rontolisp::%scheme-reading-port)))
+    (if (rontolisp::%scheme-port-pushback port)
+        (car (rontolisp::%scheme-port-pushback port))
+        (let ((c
+               (read-char (rontolisp::%scheme-port-stream port) nil
+                          rontolisp::%scheme-eof-instance)))
+          (setf (rontolisp::%scheme-port-pushback port) (list c))
+          c))))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-next-char ()
+  (let ((port (rontolisp::%scheme-reading-port)))
+    (if (rontolisp::%scheme-port-pushback port)
+        (let ((c (car (rontolisp::%scheme-port-pushback port))))
+          (setf (rontolisp::%scheme-port-pushback port)
+                (cdr (rontolisp::%scheme-port-pushback port)))
+          c)
+        (read-char (rontolisp::%scheme-port-stream port) nil
+                   rontolisp::%scheme-eof-instance))))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-pushback (c)
+  (let ((port (rontolisp::%scheme-reading-port)))
+    (setf (rontolisp::%scheme-port-pushback port)
+          (cons c (rontolisp::%scheme-port-pushback port)))
+    c))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-set-fold-case (on)
+  (setf (rontolisp::%scheme-port-fold-case (rontolisp::%scheme-reading-port))
+        on))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-folding-p ()
+  (rontolisp::%scheme-port-fold-case (rontolisp::%scheme-reading-port)))
 
 (defun rontolisp::%scheme-whitespace? (c)
   (let ((code (char-code c)))
@@ -463,12 +517,16 @@
     (if (rontolisp::%scheme-eof-p first)
         (rontolisp::%scheme-read-error "unsupported '#' syntax" "#!")
         (let ((word (rontolisp::%scheme-accumulate-token first)))
-          (cond
-           ((string= word "fold-case") (setq rontolisp::%scheme-fold-case t))
-           ((string= word "no-fold-case")
-            (setq rontolisp::%scheme-fold-case nil))
-           (t (rontolisp::%scheme-read-error "unsupported '#' syntax"
-               (concatenate 'string "#!" word))))))))
+          (cond ((string= word "fold-case")
+                 #-rontolisp-scheme-ports (setq rontolisp::%scheme-fold-case t)
+                 #+rontolisp-scheme-ports (rontolisp::%scheme-set-fold-case t))
+                ((string= word "no-fold-case")
+                 #-rontolisp-scheme-ports
+                 (setq rontolisp::%scheme-fold-case nil)
+                 #+rontolisp-scheme-ports
+                 (rontolisp::%scheme-set-fold-case nil))
+                (t (rontolisp::%scheme-read-error "unsupported '#' syntax"
+                    (concatenate 'string "#!" word))))))))
 
 (defun rontolisp::%scheme-skip-block-comment (depth)
   (do ()
@@ -648,7 +706,10 @@
                      (if (not (eq number rontolisp::%scheme-false))
                          number
                          (rontolisp::%scheme-string->symbol
-                          (if rontolisp::%scheme-fold-case
+                          (if #-rontolisp-scheme-ports
+                              rontolisp::%scheme-fold-case
+                              #+rontolisp-scheme-ports
+                              (rontolisp::%scheme-folding-p)
                               (string-downcase token)
                               token))))))))))
 
@@ -724,7 +785,9 @@
                      ;; single-codepoint case above (an unadorned #\A) never reaches
                      ;; here.
                      (lookup
-                      (if rontolisp::%scheme-fold-case
+                      (if #-rontolisp-scheme-ports rontolisp::%scheme-fold-case
+                          #+rontolisp-scheme-ports
+                          (rontolisp::%scheme-folding-p)
                           (string-downcase name)
                           name)))
                 (cond ((string= lookup "alarm") (code-char 7))
@@ -853,6 +916,7 @@
 
 (defun rontolisp::%scheme-read-char () (rontolisp::%scheme-next-char))
 
+#-rontolisp-scheme-ports
 (defun rontolisp::%scheme-read-line ()
   (rontolisp::%scheme-pushback-sync)
   (let ((first
@@ -879,6 +943,25 @@
                         (let ((s (coerce (nreverse chars) (quote string))))
                           (return (rontolisp::%scheme-strip-cr s))))
                        (t (setq chars (cons c chars)))))))))))
+
+;; With ports the pushback is the port's, and next-char already takes it first.
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-read-line ()
+  (let ((chars nil))
+    (do ()
+        (nil)
+      (let ((c (rontolisp::%scheme-next-char)))
+        (cond ((rontolisp::%scheme-eof-p c)
+               (return
+                (if (null chars)
+                    rontolisp::%scheme-eof-instance
+                    (rontolisp::%scheme-strip-cr
+                     (coerce (nreverse chars) (quote string))))))
+              ((= (char-code c) 10)
+               (return
+                (rontolisp::%scheme-strip-cr
+                 (coerce (nreverse chars) (quote string)))))
+              (t (setq chars (cons c chars))))))))
 
 (defun rontolisp::%scheme-strip-cr (s)
   (let ((n (length s)))
@@ -1473,7 +1556,8 @@
 ;; before any is bound, so a converter's error leaves every parameter as it was.
 (defun rontolisp::%scheme-parameterize (parameters-and-values body)
   (let ((bindings rontolisp::%scheme-parameterizations)
-        (rest parameters-and-values))
+        (rest parameters-and-values)
+        #+rontolisp-scheme-ports (ports nil))
     (do ()
         ((null rest))
       (let ((record
@@ -1490,9 +1574,423 @@
                               (funcall
                                (rontolisp::%scheme-parameter-converter record)
                                (car (cdr rest)))
-                              (car (cdr rest)))) bindings)))
+                              (car (cdr rest)))) bindings))
+        #+rontolisp-scheme-ports
+        (setq ports
+              (rontolisp::%scheme-note-port-binding ports record
+                                                    (cdr (car bindings)))))
       (setq rest (cdr (cdr rest))))
-    (let ((rontolisp::%scheme-parameterizations bindings)) (funcall body))))
+    (let ((rontolisp::%scheme-parameterizations bindings))
+      #-rontolisp-scheme-ports (funcall body)
+      #+rontolisp-scheme-ports
+      (if ports
+          (rontolisp::%scheme-with-port-streams ports body)
+          (funcall body)))))
+
+;; --- ports (R7RS 6.13) --------------------------------------------------------------
+;; A port is a record, never a bare Common Lisp stream: the standard streams are the T
+;; designator on the compiled backends (not a value, .kb/read-load-streams.md) and
+;; *error-output* answers a fresh wrapper per read there, so neither could be told
+;; apart or compared. A textual port holds the Common Lisp stream it reads or writes;
+;; a binary input port the bytevector and, in PUSHBACK, the read position; a binary
+;; output port the bytes written so far, newest first. A textual input port keeps the
+;; reader's own state -- its pushback characters and the #!fold-case flag -- so several
+;; ports can be read in turn.
+;;
+;; The three current ports are parameter objects over these records. Parameterizing one
+;; also binds the Common Lisp special it stands for (%scheme-with-port-streams), so
+;; (display x) with no port, and Common Lisp code called from the body, write where
+;; the port does. Not parameterized, a current port is a wrapper around what the
+;; special holds now, cached while that stays the same object: (current-output-port)
+;; answers one port, and a Common Lisp caller's with-output-to-string is honored.
+;;
+;; The whole section exists only under the ports feature, which SchemeLibrary turns on
+;; for a program calling one of its functions: every other program -- (read) on
+;; standard input included -- carries none of it, not even the record's layout.
+#+rontolisp-scheme-ports
+(defstruct (rontolisp::%scheme-port (:constructor rontolisp::%scheme-new-port
+                                                  (input binary string stream
+                                                         open pushback
+                                                         fold-case))
+                                    (:copier nil))
+  input
+  binary
+  string
+  stream
+  open
+  pushback
+  fold-case)
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-make-port (input binary string stream)
+  (rontolisp::%scheme-new-port input binary string stream t
+                               (if (and binary input) 0 nil) nil))
+
+#+rontolisp-scheme-ports (defvar rontolisp::%scheme-reading-port nil)
+
+;; Defuns, not the defstruct's own predicate and accessors: the interpreter loads this
+;; library on the first resolution of one of its FUNCTIONS, which a template calling
+;; only a structure predicate would never trigger.
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-port? (x) (rontolisp::%scheme-port-p x))
+
+;; DIRECTION-P: test the direction (input when WHICH) instead of the kind (binary when
+;; WHICH).
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-port-kind? (x which direction-p)
+  (and (rontolisp::%scheme-port-p x)
+       (if direction-p
+           (eq (rontolisp::%scheme-port-input x) which)
+           (eq (rontolisp::%scheme-port-binary x) which))))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-print-port (port)
+  (write-string
+   (if (rontolisp::%scheme-port-binary port) "#<binary-" "#<textual-"))
+  (write-string
+   (if (rontolisp::%scheme-port-input port) "input-port>" "output-port>")))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-port-error (who message port)
+  (error "~A"
+         (rontolisp::%scheme-error-message
+          (concatenate 'string who ": " message) (list port))))
+
+;; PORT, when it is an open port of the direction and kind asked for.
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-check-port (who port input binary)
+  (cond ((not
+          (and (rontolisp::%scheme-port-p port)
+               (eq (rontolisp::%scheme-port-input port) input)
+               (eq (rontolisp::%scheme-port-binary port) binary)))
+         (rontolisp::%scheme-port-error who
+                                        (if binary
+                                            (if input
+                                                "not a binary input port:"
+                                                "not a binary output port:")
+                                            (if input
+                                                "not a textual input port:"
+                                                "not a textual output port:"))
+                                        port))
+        ((not (rontolisp::%scheme-port-open port))
+         (rontolisp::%scheme-port-error who "the port is closed:" port))
+        (t port)))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-port-converter (who input)
+  (lambda (port) (rontolisp::%scheme-check-port who port input nil)))
+
+#+rontolisp-scheme-ports
+(defvar rontolisp::%scheme-port-records
+  (list (rontolisp::%scheme-new-parameter nil
+         (rontolisp::%scheme-port-converter "current-input-port" t))
+        (rontolisp::%scheme-new-parameter nil
+         (rontolisp::%scheme-port-converter "current-output-port" nil))
+        (rontolisp::%scheme-new-parameter nil
+         (rontolisp::%scheme-port-converter "current-error-port" nil))))
+
+;; The cached wrappers of the three standard streams, input, output, error.
+#+rontolisp-scheme-ports
+(defvar rontolisp::%scheme-port-wrappers (list nil nil nil))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-standard-stream (which)
+  (cond ((eql which 0) *standard-input*)
+        ((eql which 1) *standard-output*)
+        (t *error-output*)))
+
+;; The current input (0), output (1) or error (2) port. equal, not eq: the compiled
+;; backends answer a new wrapper of one stream for every read of *error-output*.
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-current-port (which)
+  (let ((stream (rontolisp::%scheme-standard-stream which))
+        (port
+         (rontolisp::%scheme-parameter-lookup
+          (nth which rontolisp::%scheme-port-records))))
+    (if (and port (equal (rontolisp::%scheme-port-stream port) stream))
+        port
+        (let ((cell (nthcdr which rontolisp::%scheme-port-wrappers)))
+          (if (and (car cell)
+                   (equal (rontolisp::%scheme-port-stream (car cell)) stream))
+              (car cell)
+              (car
+               (rplaca cell
+                       (rontolisp::%scheme-make-port (eql which 0) nil nil
+                                                     stream))))))))
+
+;; current-input-port and the rest are parameter objects: called with no argument, the
+;; current port; with the parameter token, their record (%scheme-parameterize).
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-port-parameter (which)
+  (let ((record (nth which rontolisp::%scheme-port-records)))
+    (lambda (&rest arguments)
+      (cond ((null arguments) (rontolisp::%scheme-current-port which))
+            ((and (eq (car arguments) rontolisp::%scheme-parameter-token)
+                  (null (cdr arguments)))
+             record)
+            (t (error "~A"
+                      (rontolisp::%scheme-error-message
+                       "a parameter object takes no argument:" arguments)))))))
+
+;; PORTS is (input output error), what this parameterize binds each current port to, or
+;; NIL while it binds none: an ordinary parameterize then costs no frame more, and a
+;; deep recursion through one reaches as deep as before.
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-note-port-binding (ports record value)
+  (do ((records rontolisp::%scheme-port-records (cdr records)) (i 0 (+ i 1)))
+      ((null records) ports)
+    (if (eq (car records) record)
+        (let ((noted (or ports (list nil nil nil))))
+          (rplaca (nthcdr i noted) value)
+          (return noted)))))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-with-port-streams (ports body)
+  (let ((*standard-input*
+         (if (car ports)
+             (rontolisp::%scheme-port-stream (car ports))
+             *standard-input*))
+        (*standard-output*
+         (if (car (cdr ports))
+             (rontolisp::%scheme-port-stream (car (cdr ports)))
+             *standard-output*))
+        (*error-output*
+         (if (car (cdr (cdr ports)))
+             (rontolisp::%scheme-port-stream (car (cdr (cdr ports))))
+             *error-output*)))
+    (funcall body)))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-open-input-string (s)
+  (rontolisp::%scheme-make-port t nil t (make-string-input-stream s)))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-open-output-string ()
+  (rontolisp::%scheme-make-port nil nil t (make-string-output-stream)))
+
+;; Common Lisp's get-output-stream-string empties the stream; R7RS's get-output-string
+;; does not, so what it answers is written back.
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-get-output-string (port)
+  (if (not
+       (and (rontolisp::%scheme-port-p port)
+            (rontolisp::%scheme-port-string port)
+            (not (rontolisp::%scheme-port-input port))))
+      (rontolisp::%scheme-port-error "get-output-string"
+                                     "not a string output port:" port)
+      (let ((s
+             (get-output-stream-string (rontolisp::%scheme-port-stream port))))
+        (write-string s (rontolisp::%scheme-port-stream port))
+        s)))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-open-input-bytevector (bytes)
+  (rontolisp::%scheme-make-port t t nil
+                                (if (rontolisp::%scheme-bytevector-p bytes)
+                                    (copy-seq bytes)
+                                    (rontolisp::%scheme-port-error
+                                     "open-input-bytevector" "not a bytevector:"
+                                     bytes))))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-open-output-bytevector ()
+  (rontolisp::%scheme-make-port nil t nil nil))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-get-output-bytevector (port)
+  (if (not
+       (and (rontolisp::%scheme-port-p port)
+            (rontolisp::%scheme-port-binary port)
+            (not (rontolisp::%scheme-port-input port))))
+      (rontolisp::%scheme-port-error "get-output-bytevector"
+                                     "not a bytevector output port:" port)
+      (rontolisp::%scheme-bytevector
+       (reverse (rontolisp::%scheme-port-stream port)))))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-output-stream (who port)
+  (rontolisp::%scheme-port-stream
+   (rontolisp::%scheme-check-port who port nil nil)))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-display-to (x port)
+  (let ((*standard-output* (rontolisp::%scheme-output-stream "display" port)))
+    (rontolisp::%scheme-print x nil)))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-write-to (who x port)
+  (let ((*standard-output* (rontolisp::%scheme-output-stream who port)))
+    (rontolisp::%scheme-print x t)))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-write-shared-to (x port)
+  (let ((*standard-output*
+         (rontolisp::%scheme-output-stream "write-shared" port)))
+    (rontolisp::%scheme-write-shared x)))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-write-string-to (s port start end)
+  (write-string (if (or start end) (subseq s (or start 0) end) s)
+                (rontolisp::%scheme-output-stream "write-string" port)))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-flush-output-port (port)
+  (finish-output (rontolisp::%scheme-output-stream "flush-output-port" port)))
+
+;; A textual input procedure with a port argument: the same procedure, reading PORT.
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-input-port (who port)
+  (rontolisp::%scheme-check-port who port t nil))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-read-from (port)
+  (let ((rontolisp::%scheme-reading-port
+         (rontolisp::%scheme-input-port "read" port)))
+    (rontolisp::%scheme-read)))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-read-char-from (port)
+  (let ((rontolisp::%scheme-reading-port
+         (rontolisp::%scheme-input-port "read-char" port)))
+    (rontolisp::%scheme-next-char)))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-peek-char-from (port)
+  (let ((rontolisp::%scheme-reading-port
+         (rontolisp::%scheme-input-port "peek-char" port)))
+    (rontolisp::%scheme-peek-char)))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-read-line-from (port)
+  (let ((rontolisp::%scheme-reading-port
+         (rontolisp::%scheme-input-port "read-line" port)))
+    (rontolisp::%scheme-read-line)))
+
+;; (read-string k): at most K characters, the EOF object when none is left.
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-read-chars (k)
+  (let ((chars nil) (n 0))
+    (do ()
+        ((>= n k))
+      (let ((c (rontolisp::%scheme-next-char)))
+        (if (rontolisp::%scheme-eof-p c)
+            (return nil)
+            (progn
+              (setq chars (cons c chars))
+              (setq n (+ n 1))))))
+    (if (and (null chars) (> k 0))
+        rontolisp::%scheme-eof-instance
+        (coerce (nreverse chars) (quote string)))))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-read-chars-from (k port)
+  (let ((rontolisp::%scheme-reading-port
+         (rontolisp::%scheme-input-port "read-string" port)))
+    (rontolisp::%scheme-read-chars k)))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-char-ready-from (port)
+  (rontolisp::%scheme-input-port "char-ready?" port)
+  t)
+
+;; Binary input: the bytevector in STREAM, the position in PUSHBACK.
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-binary-input (who port)
+  (rontolisp::%scheme-check-port who port t t))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-read-u8 (port advance)
+  (let* ((port
+          (rontolisp::%scheme-binary-input (if advance "read-u8" "peek-u8")
+                                           port))
+         (bytes (rontolisp::%scheme-port-stream port))
+         (at (rontolisp::%scheme-port-pushback port)))
+    (if (>= at (length bytes))
+        rontolisp::%scheme-eof-instance
+        (progn
+          (if advance (setf (rontolisp::%scheme-port-pushback port) (+ at 1)))
+          (aref bytes at)))))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-u8-ready (port)
+  (rontolisp::%scheme-binary-input "u8-ready?" port)
+  t)
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-read-bytes (k port)
+  (let* ((port (rontolisp::%scheme-binary-input "read-bytevector" port))
+         (bytes (rontolisp::%scheme-port-stream port))
+         (at (rontolisp::%scheme-port-pushback port))
+         (end (min (length bytes) (+ at k))))
+    (if (and (>= at (length bytes)) (> k 0))
+        rontolisp::%scheme-eof-instance
+        (progn
+          (setf (rontolisp::%scheme-port-pushback port) end)
+          (subseq bytes at end)))))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-read-bytes! (to port start end)
+  (let* ((port (rontolisp::%scheme-binary-input "read-bytevector!" port))
+         (bytes (rontolisp::%scheme-port-stream port))
+         (at (rontolisp::%scheme-port-pushback port))
+         (end (or end (length to)))
+         (n (max 0 (min (- end start) (- (length bytes) at)))))
+    (if (and (= n 0) (< start end))
+        rontolisp::%scheme-eof-instance
+        (progn
+          (do ((i 0 (+ i 1)))
+              ((>= i n))
+            (setf (aref to (+ start i)) (aref bytes (+ at i))))
+          (setf (rontolisp::%scheme-port-pushback port) (+ at n))
+          n))))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-binary-output (who port)
+  (rontolisp::%scheme-check-port who port nil t))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-write-u8 (byte port)
+  (let ((port (rontolisp::%scheme-binary-output "write-u8" port)))
+    (setf (rontolisp::%scheme-port-stream port)
+          (cons (rontolisp::%scheme-byte "write-u8" byte)
+                (rontolisp::%scheme-port-stream port)))))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-write-bytevector (bytes port start end)
+  (let ((port (rontolisp::%scheme-binary-output "write-bytevector" port)))
+    (do ((i start (+ i 1)))
+        ((>= i (or end (length bytes))))
+      (setf (rontolisp::%scheme-port-stream port)
+            (cons (aref bytes i) (rontolisp::%scheme-port-stream port))))))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-port-open-p (who port input)
+  (if (and (rontolisp::%scheme-port-p port)
+           (eq (rontolisp::%scheme-port-input port) input))
+      (rontolisp::%scheme-port-open port)
+      (rontolisp::%scheme-port-error who
+       (if input "not an input port:" "not an output port:") port)))
+
+;; close-port (INPUT :any), close-input-port (INPUT t), close-output-port (INPUT nil):
+;; closing twice is harmless, and a standard port is only marked closed.
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-close-port (who port input)
+  (if (not
+       (and (rontolisp::%scheme-port-p port)
+        (or (eq input :any) (eq (rontolisp::%scheme-port-input port) input))))
+      (rontolisp::%scheme-port-error who
+                                     (cond ((eq input :any) "not a port:")
+                                           (input "not an input port:")
+                                           (t "not an output port:")) port)
+      (setf (rontolisp::%scheme-port-open port) nil)))
+
+#+rontolisp-scheme-ports
+(defun rontolisp::%scheme-call-with-port (port proc)
+  (if (not (rontolisp::%scheme-port-p port))
+      (rontolisp::%scheme-port-error "call-with-port" "not a port:" port))
+  (let ((results (multiple-value-list (funcall proc port))))
+    (setf (rontolisp::%scheme-port-open port) nil)
+    (values-list results)))
 
 (defun rontolisp::%scheme-error-message (message irritants)
   (with-output-to-string (*standard-output*)

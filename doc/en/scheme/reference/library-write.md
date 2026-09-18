@@ -1,6 +1,6 @@
 # (scheme write)
 
-Writing a datum to the current output port.
+Writing a datum to the current output port, or to the port given as the last argument.
 
 | Name | Example | Result |
 |---|---|---|

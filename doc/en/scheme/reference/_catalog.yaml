@@ -213,12 +213,38 @@ categories:
       - { slug: error-object-irritants, name: "error-object-irritants" }
       - { slug: read-error-p, name: "read-error?" }
       - { slug: file-error-p, name: "file-error?" }
+  - title: "(scheme base): ports"
+    index_page: scheme/reference/library-base.md
+    functions:
+      - { slug: current-input-port, name: "current-input-port" }
+      - { slug: current-output-port, name: "current-output-port" }
+      - { slug: current-error-port, name: "current-error-port" }
+      - { slug: port-p, name: "port?" }
+      - { slug: input-port-p, name: "input-port?" }
+      - { slug: output-port-p, name: "output-port?" }
+      - { slug: textual-port-p, name: "textual-port?" }
+      - { slug: binary-port-p, name: "binary-port?" }
+      - { slug: input-port-open-p, name: "input-port-open?" }
+      - { slug: output-port-open-p, name: "output-port-open?" }
+      - { slug: close-port, name: "close-port" }
+      - { slug: close-input-port, name: "close-input-port" }
+      - { slug: close-output-port, name: "close-output-port" }
+      - { slug: call-with-port, name: "call-with-port" }
+      - { slug: open-input-string, name: "open-input-string" }
+      - { slug: open-output-string, name: "open-output-string" }
+      - { slug: get-output-string, name: "get-output-string" }
+      - { slug: open-input-bytevector, name: "open-input-bytevector" }
+      - { slug: open-output-bytevector, name: "open-output-bytevector" }
+      - { slug: get-output-bytevector, name: "get-output-bytevector" }
   - title: "(scheme base): output"
     index_page: scheme/reference/library-base.md
     functions:
       - { slug: newline, name: "newline" }
       - { slug: write-char, name: "write-char" }
       - { slug: write-string, name: "write-string" }
+      - { slug: write-u8, name: "write-u8" }
+      - { slug: write-bytevector, name: "write-bytevector" }
+      - { slug: flush-output-port, name: "flush-output-port" }
   - title: "(scheme base): input"
     index_page: scheme/reference/library-base.md
     functions:
@@ -226,6 +252,12 @@ categories:
       - { slug: peek-char, name: "peek-char" }
       - { slug: read-line, name: "read-line" }
       - { slug: char-ready-p, name: "char-ready?" }
+      - { slug: read-string, name: "read-string" }
+      - { slug: read-u8, name: "read-u8" }
+      - { slug: peek-u8, name: "peek-u8" }
+      - { slug: u8-ready-p, name: "u8-ready?" }
+      - { slug: read-bytevector, name: "read-bytevector" }
+      - { slug: read-bytevector-bang, name: "read-bytevector!" }
       - { slug: eof-object, name: "eof-object" }
       - { slug: eof-object-p, name: "eof-object?" }
   - title: "(scheme write)"

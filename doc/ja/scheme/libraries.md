@@ -8,7 +8,7 @@
 
 | ライブラリ | 提供するもの |
 |---|---|
-| [(scheme base)](reference/library-base.md) | 中核部分: 数値、真偽値、ペアとリスト、シンボル、文字、文字列、ベクタ、バイトベクタ、制御、例外、現在のポートでの入出力。構文は[構文](reference/syntax.md)にあります |
+| [(scheme base)](reference/library-base.md) | 中核部分: 数値、真偽値、ペアとリスト、シンボル、文字、文字列、ベクタ、バイトベクタ、制御、例外、ポート（文字列ポート、バイトベクタポート、現在のポート）、入出力。構文は[構文](reference/syntax.md)にあります |
 | [(scheme write)](reference/library-write.md) | `display` と `write` |
 | [(scheme read)](reference/library-read.md) | `read` |
 | [(scheme inexact)](reference/library-inexact.md) | 超越関数と浮動小数点数の述語 |
@@ -19,7 +19,25 @@
 | [(scheme eval)](reference/library-eval.md) | `eval` と `environment`。[eval](eval.md) を参照 |
 | [(scheme repl)](reference/library-repl.md) | `interaction-environment` |
 
-入出力は現在のポートだけを使います。ポート引数を取る手続きはありません。
+入出力の手続きはどれも省略可能なポート引数を取り、省くと現在のポートを使います。現在の
+ポートはパラメータオブジェクトなので、`parameterize` で差し替えられます。ファイルポートは
+ありません。
+
+```scheme
+(define out (open-output-string))
+(parameterize ((current-output-port out))
+  (display "captured ")
+  (write '(1 "two")))
+(write (get-output-string out)) (newline)
+
+(define in (open-input-string "(a b) 42"))
+(write (list (read in) (read in) (eof-object? (read in)))) (newline)
+```
+
+```
+"captured (1 \"two\")"
+((a b) 42 #t)
+```
 
 ```scheme
 (define (sum-to n)
