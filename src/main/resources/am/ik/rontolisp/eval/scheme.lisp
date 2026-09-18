@@ -1144,10 +1144,10 @@
       (rontolisp::%scheme-print irritant t))))
 
 ;; exit and emergency-exit (R7RS 6.14): #t or no argument is success, #f failure, an
-;; integer the status itself, masked to eight bits the way uiop:quit masks it. The
-;; process ends where the call stands on every backend -- the interpreter's exit signal
-;; runs no unwind-protect cleanup, the compiled ones end the process -- so exit does not
-;; run the after thunks of the dynamic-winds it is inside either.
+;; integer the status itself, masked to eight bits the way uiop:quit masks it. exit
+;; throws to the catch tag every lowered file wraps its top-level forms in, so the
+;; outstanding dynamic-wind afters run on the way out; the catch calls this function
+;; with the thrown code. emergency-exit calls it directly, skipping the afters.
 (defun rontolisp::%scheme-exit (code)
   (finish-output *standard-output*)
   (finish-output *error-output*)

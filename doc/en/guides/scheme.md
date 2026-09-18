@@ -261,8 +261,8 @@ interpreter resolves them all.
   identity.
 - `write` prints `'x` as `(quote x)`, and the unspecified value as `#!unspecific`. It is
   one object, true in a test.
-- `exit` ends the process where it stands, like `emergency-exit`: the `after` thunks of
-  the `dynamic-wind`s it is inside do not run.
+- `exit` runs the `after` thunks of the `dynamic-wind`s it is inside, then ends the
+  process with its status; only `emergency-exit` ends the process where it stands.
 - There are no complex numbers: `(sqrt -4)`, `(log -1)` and `(asin 2)` end the program
   with an error naming the procedure.
 - Error messages spell Common Lisp names (`CAR`).

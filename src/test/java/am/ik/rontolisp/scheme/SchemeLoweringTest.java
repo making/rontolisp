@@ -245,7 +245,11 @@ class SchemeLoweringTest {
 		assertThat(lowered("(import (scheme base)) (display x)")).isEqualTo("(|display| |x|)");
 		assertThat(lowered("(import (scheme base) (scheme write)) (display x)"))
 			.isEqualTo("(RONTOLISP::%SCHEME-DISPLAY |x|)");
-		assertThat(lowered("(import (scheme process-context)) (exit 2)")).isEqualTo("(RONTOLISP::%SCHEME-EXIT 2)");
+		assertThat(lowered("(import (scheme process-context)) (exit 2)"))
+			.isEqualTo("(LET ((%SCM-EXIT-DONE1 (LIST NIL)))"
+					+ " (LET ((%SCM-EXIT-CODE2 (CATCH 'RONTOLISP::%SCHEME-EXIT-TAG (PROGN (THROW 'RONTOLISP::%SCHEME-EXIT-TAG 2)"
+					+ " %SCM-EXIT-DONE1)))) (IF (EQ %SCM-EXIT-CODE2 %SCM-EXIT-DONE1) NIL"
+					+ " (RONTOLISP::%SCHEME-EXIT %SCM-EXIT-CODE2))))");
 		assertThat(lowered("(import (prefix (only (scheme base) car) s:)) (s:car x)")).isEqualTo("(CAR |x|)");
 		assertThatThrownBy(() -> lowered("(import (scheme char))")).isInstanceOf(LispReadException.class)
 			.hasMessage("test.scm:1:1: library (|scheme| |char|) is not available: this experimental front end has"
@@ -257,27 +261,47 @@ class SchemeLoweringTest {
 	}
 
 	@Test
+	void exitThrowsToATagEachTopLevelFormCatches() {
+		// emergency-exit ends the process where it stands and never throws, so alone it
+		// wraps nothing; exit throws, so its form is caught, and a defun stays bare --
+		// the backends only hoist one that is a direct child of the program.
+		assertThat(lowered("(import (scheme process-context)) (emergency-exit 7)"))
+			.isEqualTo("(RONTOLISP::%SCHEME-EXIT 7)");
+		// The trigger is file-level: (f) spells neither exit nor eval, but f throws.
+		assertThat(lowered("(import (scheme base) (scheme process-context)) (define (f) (exit 7)) (f)"))
+			.startsWith("(DEFUN |f|");
+		assertThat(lowered("(import (scheme base) (scheme process-context)) (define (f) (exit 7)) (f)")).contains("""
+				(CATCH 'RONTOLISP::%SCHEME-EXIT-TAG (PROGN (|f|)""");
+		// A program spelling neither exit nor eval cannot reach the throw and is
+		// emitted exactly as before.
+		assertThat(lowered("(display 1) (display 2)")).isEqualTo("(PRINC 1)\n(PRINC 2)");
+	}
+
+	@Test
 	void evalAndEveryEnvironmentSpecifierLowerToTheRunTimeEvaluator() {
 		// The evaluator is %scheme-eval in scheme.lisp; every specifier is the one
 		// global environment, a symbol. The env argument may be left out.
+		// Run-time data handed to eval may name exit, so every form of a file that
+		// spells eval runs inside the exit catch too.
 		assertThat(lowered("(eval x user-initial-environment) (eval x) (interaction-environment)"
 				+ " system-global-environment (scheme-report-environment 5) (environment '(scheme base))"))
-			.isEqualTo("""
-					(RONTOLISP::%SCHEME-EVAL-IN |x| '|#[environment]|)
-					(RONTOLISP::%SCHEME-EVAL |x| NIL)
-					'|#[environment]|
-					'|#[environment]|
-					(PROGN 5 '|#[environment]|)
-					(RONTOLISP::%SCHEME-ENVIRONMENT (LIST '(|scheme| |base|)))""");
+			.isEqualTo(
+					"""
+							(LET ((%SCM-EXIT-DONE1 (LIST NIL))) (LET ((%SCM-EXIT-CODE2 (CATCH 'RONTOLISP::%SCHEME-EXIT-TAG (PROGN (RONTOLISP::%SCHEME-EVAL-IN |x| '|#[environment]|) %SCM-EXIT-DONE1)))) (IF (EQ %SCM-EXIT-CODE2 %SCM-EXIT-DONE1) NIL (RONTOLISP::%SCHEME-EXIT %SCM-EXIT-CODE2))))
+							(LET ((%SCM-EXIT-DONE3 (LIST NIL))) (LET ((%SCM-EXIT-CODE4 (CATCH 'RONTOLISP::%SCHEME-EXIT-TAG (PROGN (RONTOLISP::%SCHEME-EVAL |x| NIL) %SCM-EXIT-DONE3)))) (IF (EQ %SCM-EXIT-CODE4 %SCM-EXIT-DONE3) NIL (RONTOLISP::%SCHEME-EXIT %SCM-EXIT-CODE4))))
+							(LET ((%SCM-EXIT-DONE5 (LIST NIL))) (LET ((%SCM-EXIT-CODE6 (CATCH 'RONTOLISP::%SCHEME-EXIT-TAG (PROGN '|#[environment]| %SCM-EXIT-DONE5)))) (IF (EQ %SCM-EXIT-CODE6 %SCM-EXIT-DONE5) NIL (RONTOLISP::%SCHEME-EXIT %SCM-EXIT-CODE6))))
+							(LET ((%SCM-EXIT-DONE7 (LIST NIL))) (LET ((%SCM-EXIT-CODE8 (CATCH 'RONTOLISP::%SCHEME-EXIT-TAG (PROGN '|#[environment]| %SCM-EXIT-DONE7)))) (IF (EQ %SCM-EXIT-CODE8 %SCM-EXIT-DONE7) NIL (RONTOLISP::%SCHEME-EXIT %SCM-EXIT-CODE8))))
+							(LET ((%SCM-EXIT-DONE9 (LIST NIL))) (LET ((%SCM-EXIT-CODE10 (CATCH 'RONTOLISP::%SCHEME-EXIT-TAG (PROGN (PROGN 5 '|#[environment]|) %SCM-EXIT-DONE9)))) (IF (EQ %SCM-EXIT-CODE10 %SCM-EXIT-DONE9) NIL (RONTOLISP::%SCHEME-EXIT %SCM-EXIT-CODE10))))
+							(LET ((%SCM-EXIT-DONE11 (LIST NIL))) (LET ((%SCM-EXIT-CODE12 (CATCH 'RONTOLISP::%SCHEME-EXIT-TAG (PROGN (RONTOLISP::%SCHEME-ENVIRONMENT (LIST '(|scheme| |base|))) %SCM-EXIT-DONE11)))) (IF (EQ %SCM-EXIT-CODE12 %SCM-EXIT-DONE11) NIL (RONTOLISP::%SCHEME-EXIT %SCM-EXIT-CODE12))))""");
 		// (scheme eval) and (scheme repl) are importable; the MIT and R5RS names ride the
 		// no-import default only, like the sicp tag.
 		assertThat(lowered("(import (scheme eval) (scheme repl)) (eval x (interaction-environment))"
-				+ " user-initial-environment (scheme-report-environment 5)"))
-			.isEqualTo("""
-					(RONTOLISP::%SCHEME-EVAL-IN |x| '|#[environment]|)
-					|user-initial-environment|
-					(|scheme-report-environment| 5)""");
-		assertThat(lowered("(import (scheme base)) (eval x)")).isEqualTo("(|eval| |x|)");
+				+ " user-initial-environment (scheme-report-environment 5)")
+			.split("\n")).hasSize(3)
+			.allSatisfy(form -> assertThat(form).startsWith("(LET ((%SCM-EXIT-DONE")
+				.contains("CATCH 'RONTOLISP::%SCHEME-EXIT-TAG"));
+		assertThat(lowered("(import (scheme base)) (eval x)")).startsWith("(LET ((%SCM-EXIT-DONE1 (LIST NIL)))")
+			.contains("(CATCH 'RONTOLISP::%SCHEME-EXIT-TAG (PROGN (|eval| |x|)");
 		// The run-time table behind it is generated from the same entries, one arm per
 		// procedure and constant by its mangled name, cut to the names a program spells.
 		assertThat(Scheme.runtimeForms(name -> name.equals("s%+") || name.equals("car") || name.equals("false"))

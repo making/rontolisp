@@ -39,7 +39,7 @@ help, the title of `doc/*/guides/scheme.md`). `--no-gc` is refused by name
 | `#t` | `T` | |
 | `#f` | the VALUE of `rontolisp::%scheme-false`, the symbol `\|#f\|`, bound by the first form of every lowered file | distinct from NIL; a symbol so quoted data, `case` and `equal?` need nothing special |
 | the unspecified value: an `effect` builtin, `set!`, the missing arm of `if`/`when`/`unless`, a `cond`/`case` with no clause taken, `(begin)` | the VALUE of `rontolisp::%scheme-unspecified`, the symbol `\|#!unspecific\|`, bound in the same first `setq`; `(progn effect U)` -- but the raw effect / `NIL` where the value is DISCARDED (`Context.discarded`: a body form before the last, a file's top-level form) | ONE object, so a REPL can skip it by value (`(define (g) (display "a"))` echoed `"a"`); not `NIL` (`(list (if #f #f))` has length 1) and true in a test. The spelling is escaped by `mangle` like `#f` and excluded by `symbol?`. Cost (2026-09-17): +93 B class / +26 B wasm per program (`hello`), nothing measurable on a 100M-iteration `when` loop. A missing arm is spelled `CORE_UNSPECIFIED` in desugarings |
-| `exit`, `emergency-exit` (`(scheme process-context)`, merged into the no-import default) | `%scheme-exit`: finish both output streams, then `%host-exit` with `#t`/none 0, `#f` 1, an integer's low 8 bits | the `uiop:quit` primitive (`.kb/uiop.md`), so all four backends end the process where the call stands -- `exit` does NOT run pending `dynamic-wind` afters either (stated deviation) |
+| `exit`, `emergency-exit` (`(scheme process-context)`, merged into the no-import default) | `exit` throws its code to `rontolisp::%scheme-exit-tag`; every file top-level form runs inside a `catch` for it that ends the process through `%scheme-exit` with the caught code ("`exit` runs ..." below). `emergency-exit` calls `%scheme-exit` directly: finish both output streams, then `%host-exit` with `#t`/none 0, `#f` 1, an integer's low 8 bits | the `uiop:quit` primitive (`.kb/uiop.md`); `exit` runs the outstanding `dynamic-wind` afters on its way out, only `emergency-exit` ends the process where the call stands |
 | `(if c a b)` | `(if (eq c false) b a)`; a predicate fuses: `(if (pair? x) ..)` -> `(if (consp x) ..)`, `and`/`or`/`not` compose | `SchemeBuiltins.Result`: `pred` (T/NIL) and `or-false` (value or NIL: `memq`, `assq`, `member`) fuse in a test and convert anywhere else -- `(if raw t false)` / `(or raw false)` |
 | top-level `(define x v)` | top-level `(setq x v)` | NEVER `defvar`: that makes the name special and a `let` of it leaks into callees (2 instead of 1) |
 | top-level procedure defined ONCE by a `lambda`, never `set!`, and -- when it shadows an import -- never read before that definition | `defun`, called directly | keeps the direct call and the tree shaker. `set!` is collected by name, blind to scope: over-approximating only costs the direct call |
@@ -60,6 +60,60 @@ help, the title of `doc/*/guides/scheme.md`). `--no-gc` is refused by name
 excludes strings (`vectorp` does not); `integer?` accepts `2.0`; `max`/`min` are inexact
 when any argument is; `equal?` is its own helper (recurses into vectors, `eqv?` on
 records; CL's `equal` compares a general vector by identity and an instance slot-wise).
+
+## `exit` runs the outstanding `dynamic-wind` afters (2026-09-18, `.todo/845`)
+
+`exit` lowers to `(throw 'rontolisp::%scheme-exit-tag code)` -- the template and the
+`:function` (so an `eval`'d exit throws too) -- and every FILE top-level form runs
+inside its catch:
+
+```lisp
+(let ((%done (list nil)))
+  (let ((%code (catch 'rontolisp::%scheme-exit-tag (progn <form> %done))))
+    (if (eq %code %done) nil (rontolisp::%scheme-exit %code))))
+```
+
+The throw unwinds through the `unwind-protect`s `%scheme-dynamic-wind` is made of, so
+the afters run on every backend (the tag rides the same channel as user
+`catch`/`throw`, which is what turns the wasm landing pads on), and the catch ends the
+process through `%scheme-exit` with the thrown code. The fresh cell tells a throw from
+normal completion whatever the code is: `(exit '())` throws NIL, which a literal marker
+could not tell apart.
+
+- **One catch per form, not per file**: the backends only hoist a `defun`/`defstruct`
+  that is a direct child of the program, so those stay bare (defining never throws -- a
+  body only runs inside some value form's extent); the leading setqs bind quoted values
+  and stay bare too. Hoisting the defuns first instead would reorder definitions before
+  the expressions that precede them, breaking the deliberate call-before-define error.
+- **Only a file that can reach the throw is wrapped**: a datum spelling `exit` (a call,
+  a first-class value, quoted data an `eval` may take apart), a string one may read it
+  out of, or `eval` (whose run-time data may name it) -- the same line the run-time
+  procedure table draws. Anything else is emitted exactly as before, so a program that
+  never quits compiles to the same bytes and pulls no exit machinery (`ExitLibrary`'s
+  invariant, and a `--no-wasi` reactor stays acceptable).
+- **A session wraps every entry unconditionally** -- it has no whole file and no
+  artifact to keep small -- answering the entry's last form's value, which is what the
+  prompt echoes. Non-last forms take the statement guard, a `defun`/`defstruct` stays
+  bare as in a file (defining never throws), and a last form that is itself a syntactic
+  multiple-value producer -- in lowered code only `(VALUES ...)` can stand there alone
+  -- keeps its shape with its ARGUMENTS guarded instead: the prompt echoes through
+  `evalValues`, which takes the multi-value path only for that shape, so `(values)`
+  still echoes nothing and `(values 1 'a)` still echoes both.
+- **Residual**: an `exit` inside a file the entry file `load`s at run time is caught by
+  the loaded file's own wrapper, which ends the process without running the loading
+  file's afters (the compile path inlines the load, so the afters run there). Both
+  skipped everything before.
+
+Cost (2026-09-18, x86-64 Linux, Java 25; `hello.scm` is `(display "hello, world")`
+compiled `-o Hello.class --class-name Hello` / `-o hello.wasm`, the exit program the
+pin test's): a program spelling neither `exit` nor `eval` is byte-identical before and
+after (1,665 B of class / 510 B of wasm both times). The exit program goes from 52,074
+to 53,162 B of class (+1,088) and 1,778 to 6,205 B of wasm (+4,427): the tag and its
+landing pads are fixed, one catch region per wrapped form scales it. Control, Common
+Lisp `(catch t (unwind-protect (throw t x) ...))` against the same without the
+catch/throw: 5,256 vs 4,137 B of class (+1,119), 2,912 vs 840 B of wasm (+2,072) -- the
+machinery costs what it costs on every backend, the wrapper only decides how many
+regions carry it.
 
 ## A file that reads an imported name before it redefines it
 
@@ -515,8 +569,9 @@ the `theSchemeRepl...` transcripts, the
 first of which replays its input as a FILE and compares, `aCyclicValueIsEchoedWithoutKillingTheSession`,
 `aPipedReplWritesNoPromptForEitherLanguage`, `aTerminalReplPromptsOncePerFreshForm`,
 `aPipedReplReportsFailuresOnStandardErrorAndEndsNonZero`, `exitEndsTheSessionWithItsStatusInEitherLanguage`),
-`SchemeSpecE2eTest.exitEndsTheProcessWithItsStatusOnEveryBackend` (one program per status; the JVM
-leg in a child process, since `exit` there is `System.exit`),
+`SchemeSpecE2eTest.exitEndsTheProcessWithItsStatusOnEveryBackend` (one program per status, each asserting the `after` thunk ran; the JVM
+leg in a child process, since `exit` there is `System.exit`; plus `emergency-exit`
+legs asserting it did not),
 `DocExamplesTest` (a ```` ```scheme ```` fence is a
 whole program whose stdout is asserted).
 Probes behind the first version of this table: `.todo/artefacts/825-minimal-experimental-scheme-front-end/`.

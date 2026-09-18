@@ -386,6 +386,14 @@ final class SchemeLowering {
 
 	private final LispSymbol unspecifiedVariable = symbol(SchemeBuiltins.UNSPECIFIED_VARIABLE);
 
+	/**
+	 * The catch tag {@code exit} throws its code to, in canonical spelling: the template
+	 * spells it lowercase and the reader upcases it.
+	 */
+	static final String EXIT_TAG_NAME = "RONTOLISP::%SCHEME-EXIT-TAG";
+
+	private static final String EXIT_FUNCTION_NAME = "RONTOLISP::%SCHEME-EXIT";
+
 	private int counter;
 
 	private int closures;
@@ -458,7 +466,7 @@ final class SchemeLowering {
 		for (LispVal form : forms) {
 			List<LispVal> lowered = new ArrayList<>();
 			boolean echoes = topLevel(form, lowered);
-			out.add(new SchemeTopLevel(List.copyOf(lowered), echoes));
+			out.add(new SchemeTopLevel(List.copyOf(exitGuardEntry(lowered)), echoes));
 		}
 		// Only now: a buffer that failed to lower evaluated nothing, the binding
 		// included.
@@ -494,8 +502,16 @@ final class SchemeLowering {
 			});
 			out.add(listOf(assignment));
 		}
+		// The leading setqs bind quoted values and cannot throw; every top-level form
+		// after them runs inside the exit catch when the file can reach it.
+		int bodyFrom = out.size();
 		for (LispVal form : forms) {
 			topLevel(form, out);
+		}
+		if (mayThrowExit(forms)) {
+			for (int i = bodyFrom; i < out.size(); i++) {
+				out.set(i, exitGuard(out.get(i)));
+			}
 		}
 		return out;
 	}
@@ -503,6 +519,145 @@ final class SchemeLowering {
 	private LispVal falseBinding() {
 		return list(symbol("SETQ"), this.falseVariable, list(symbol("QUOTE"), symbol("#f")), this.unspecifiedVariable,
 				list(symbol("QUOTE"), symbol(SchemeNames.UNSPECIFIED_NAME)));
+	}
+
+	// Whether any top-level datum can reach the throwing exit: it spells exit -- as a
+	// call, a first-class value or quoted data an eval may take apart -- or a string
+	// one may read it out of (the same line the run-time procedure table draws), or it
+	// spells eval, whose run-time data may name exit. Anything else cannot throw to
+	// the tag, so it is emitted exactly as before and a program that never quits
+	// compiles to the same bytes.
+	private static boolean mayThrowExit(List<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (spellsExitOrEval(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean spellsExitOrEval(LispVal form) {
+		return switch (form) {
+			case LispSymbol symbol -> symbol.name().equals("exit") || symbol.name().equals("eval");
+			case LispString string -> string.value().contains("exit");
+			case LispCons cons -> spellsExitOrEval(cons.car()) || spellsExitOrEval(cons.cdr());
+			case LispArray array -> {
+				for (LispVal element : array.data()) {
+					if (spellsExitOrEval(element)) {
+						yield true;
+					}
+				}
+				yield false;
+			}
+			case null, default -> false;
+		};
+	}
+
+	private LispVal quotedExitTag() {
+		return list(symbol("QUOTE"), symbol(EXIT_TAG_NAME));
+	}
+
+	// Wraps one file top-level form -- a STATEMENT nobody reads the value of -- so an
+	// exit inside it unwinds through the outstanding dynamic-wind afters to this
+	// catch, which ends the process through %scheme-exit with the thrown code. A defun
+	// or defstruct stays bare: the backends only hoist one that is a direct child of
+	// the program, and defining never throws -- a body only runs inside some value
+	// form's extent. The fresh cell tells a throw from normal completion, whatever the
+	// code is: (exit '()) throws NIL, which a literal marker could not tell apart.
+	private LispVal exitGuard(LispVal form) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& ("DEFUN".equals(head.name()) || "DEFSTRUCT".equals(head.name()))) {
+			return form;
+		}
+		LispSymbol done = fresh("EXIT-DONE");
+		LispSymbol code = fresh("EXIT-CODE");
+		LispVal caught = list(symbol("CATCH"), quotedExitTag(), list(symbol("PROGN"), form, done));
+		LispVal guarded = list(symbol("LET"), listOf(List.of(list(done, list(symbol("LIST"), LispNil.INSTANCE)))),
+				list(symbol("LET"), listOf(List.of(list(code, caught))), list(symbol("IF"),
+						list(symbol("EQ"), code, done), LispNil.INSTANCE, list(symbol(EXIT_FUNCTION_NAME), code))));
+		return form instanceof LispCons lowered ? inherit(lowered, guarded) : guarded;
+	}
+
+	// Wraps one session entry the same way. A session has no whole file to wrap and no
+	// artifact to keep small, so every entry is wrapped unconditionally -- including a
+	// definition, whose value may throw -- while a defun or defstruct stays bare like
+	// in a file. Every form but the last takes the statement guard (the session
+	// discards their values); the last answers the entry's value, which is what the
+	// prompt echoes. A last form that is itself a syntactic multiple-value producer --
+	// in lowered code only (VALUES ...) can stand there alone -- keeps its shape with
+	// its ARGUMENTS guarded instead: the prompt echoes through evalValues, which takes
+	// the multi-value path only for that shape, so (values) echoes nothing and
+	// (values 1 'a) echoes both.
+	private List<LispVal> exitGuardEntry(List<LispVal> forms) {
+		if (forms.isEmpty()) {
+			return forms;
+		}
+		List<LispVal> out = new ArrayList<>();
+		for (int i = 0; i < forms.size() - 1; i++) {
+			out.add(exitGuard(forms.get(i)));
+		}
+		LispVal last = forms.get(forms.size() - 1);
+		if (last instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& ("DEFUN".equals(head.name()) || "DEFSTRUCT".equals(head.name()))) {
+			out.add(last);
+		}
+		else if (isMvProducer(last)) {
+			out.add(guardProducerArgs((LispCons) last));
+		}
+		else {
+			out.add(exitGuardValue(last));
+		}
+		return List.copyOf(out);
+	}
+
+	// The session's value guard: like the file's, but answers the form's value.
+	private LispVal exitGuardValue(LispVal form) {
+		LispSymbol done = fresh("EXIT-DONE");
+		LispSymbol value = fresh("EXIT-VALUE");
+		LispSymbol code = fresh("EXIT-CODE");
+		LispVal caught = list(symbol("CATCH"), quotedExitTag(),
+				list(symbol("PROGN"), list(symbol("SETQ"), value, form), done));
+		LispVal guarded = list(symbol("LET"),
+				listOf(List.of(list(done, list(symbol("LIST"), LispNil.INSTANCE)), list(value, LispNil.INSTANCE))),
+				list(symbol("LET"), listOf(List.of(list(code, caught))), list(symbol("IF"),
+						list(symbol("EQ"), code, done), value, list(symbol(EXIT_FUNCTION_NAME), code))));
+		return form instanceof LispCons lowered ? inherit(lowered, guarded) : guarded;
+	}
+
+	// Guards the arguments of a syntactic multiple-value producer in place, keeping
+	// the producer's shape (and a zero-argument (VALUES) bare). Mirrors
+	// LispMacroExpander's producer recognition, which the scheme package may not
+	// import; in lowered code a producer head is always the real operator -- a user
+	// binding of values lowers to a distinct lowercase symbol.
+	private LispVal guardProducerArgs(LispCons form) {
+		if (!form.isProperList()) {
+			return exitGuardValue(form);
+		}
+		List<LispVal> parts = form.toList();
+		List<LispVal> guarded = new ArrayList<>();
+		guarded.add(parts.get(0));
+		for (int i = 1; i < parts.size(); i++) {
+			guarded.add(exitGuardValue(parts.get(i)));
+		}
+		return inherit(form, listOf(guarded));
+	}
+
+	private static boolean isMvProducer(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+			return false;
+		}
+		int size = cons.toList().size();
+		return switch (op.name()) {
+			case "VALUES" -> true;
+			case "FLOOR", "CEILING", "ROUND", "TRUNCATE", "FFLOOR", "FCEILING", "FROUND", "FTRUNCATE" ->
+				size == 2 || size == 3;
+			case "GETHASH" -> size == 3 || size == 4;
+			case "ARRAY-DISPLACEMENT" -> size == 2;
+			case "SUBTYPEP" -> size == 3;
+			case "FIND-SYMBOL", "INTERN" -> size == 2 || size == 3;
+			case "READ-FROM-STRING" -> size == 2;
+			default -> false;
+		};
 	}
 
 	// ------------------------------------------------------------------ imports
