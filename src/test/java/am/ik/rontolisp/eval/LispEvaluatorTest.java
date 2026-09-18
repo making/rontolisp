@@ -9449,6 +9449,38 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void binaryFileStreamPositionQueriesAndSeeks(@TempDir Path tempDir) {
+		// file-position is REAL for a binary file stream (.kb/read-load-streams.md): the
+		// query is the byte offset the byte primitives advanced, and the set repositions
+		// the file -- so a caller can seek and read the sought bytes rather than walk
+		// front to back (what uiop:parse-windows-shortcut does). A CHARACTER file stream
+		// still answers nil: its offset is not a byte count the reader exposes.
+		String file = tempDir.resolve("pos.bin").toString().replace("\\", "\\\\");
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString("""
+				(with-open-file (out "%s" :direction :output :if-exists :supersede
+				                     :element-type '(unsigned-byte 8))
+				  (dotimes (i 10) (write-byte i out))
+				  (print (file-position out)))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (file-position in))
+				  (print (read-byte in))
+				  (print (file-position in))
+				  (print (file-position in 5))
+				  (print (file-position in))
+				  (print (read-byte in))
+				  (print (file-position in)))
+				;; A character file stream has no byte offset to report.
+				(with-open-file (in "%s")
+				  (print (file-position in)))
+				""".formatted(file, file, file))) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo("10\n0\n0\n1\nT\n5\n5\n6\nNIL");
+	}
+
+	@Test
 	void evalEnsureDirectoriesExist(@TempDir Path tempDir) {
 		String base = tempDir.toString().replace("\\", "\\\\");
 		// The DIRECTORY component is everything up to the last slash, so the file name
