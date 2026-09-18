@@ -433,7 +433,7 @@ final class SchemeBuiltins {
 			("write-string" base effect ((s) (write-string s)))
 			("display" write effect ((x) (rontolisp::%scheme-display x)))
 			("write" write effect ((x) (rontolisp::%scheme-write x)))
-			("write-shared" write effect ((x) (rontolisp::%scheme-write x)))
+			("write-shared" write effect ((x) (rontolisp::%scheme-write-shared x)))
 			("write-simple" write effect ((x) (rontolisp::%scheme-write x)))
 
 			;; --- (scheme read): the current input port only; a port argument stays
