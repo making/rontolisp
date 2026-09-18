@@ -13,6 +13,7 @@ Scheme フロントエンドが提供する名前ごとの 1 ページです。�
 | [(scheme inexact)](reference/library-inexact.md) | 超越関数、`finite?`、`infinite?`、`nan?` |
 | [(scheme cxr)](reference/library-cxr.md) | 3 段と 4 段の `car`/`cdr` の合成 |
 | [(scheme lazy)](reference/library-lazy.md) | プロミス |
+| [(scheme case-lambda)](reference/library-case-lambda.md) | `case-lambda` |
 | [(scheme process-context)](reference/library-process-context.md) | `exit`、`emergency-exit` |
 | [(scheme eval)](reference/library-eval.md) | `eval`、`environment` |
 | [(scheme repl)](reference/library-repl.md) | `interaction-environment` |

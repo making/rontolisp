@@ -1837,6 +1837,97 @@ cases:
       user
       macro
       (in-thread outer)
+  # case-lambda (R7RS 4.2.9): the first clause whose formals accept the argument count
+  # runs, a clause body is a <body>, a self tail call through another clause is a loop,
+  # and a count no clause accepts is an error object (Gauche 0.9.15 -r7 output, except
+  # that its message spells "case lambda"). A macro's template binder stays hygienic.
+  - name: case-lambda-takes-the-first-clause-that-accepts-the-arguments
+    source: |
+      (define cl-range
+        (case-lambda
+          ((e) (cl-range 0 e))
+          ((b e) (do ((r '() (cons e r)) (e (- e 1) (- e 1))) ((< e b) r)))))
+      (write (list (cl-range 3) (cl-range 3 5)))
+      (newline)
+      (define cl-kind
+        (case-lambda
+          ((x) (list 'one x))
+          ((x . r) (list 'many x r))
+          ((x y) (list 'never x y))
+          (r (list 'none r))))
+      (write (list (cl-kind) (cl-kind 1) (cl-kind 1 2) (cl-kind 1 2 3)))
+      (newline)
+      (define cl-count
+        (case-lambda
+          ((n) (cl-count 0 n))
+          ((i n) (if (= i n) i (cl-count (+ i 1) n)))))
+      (write (cl-count 100000))
+      (newline)
+      (write (map (case-lambda ((x) (* x 2)) ((x y) (+ x y))) '(1 2) '(10 20)))
+      (newline)
+      (write (apply (case-lambda ((a b c) (list c b a)) (r r)) '(1 2 3)))
+      (newline)
+      (define (cl-make-acc)
+        (let ((n 0))
+          (case-lambda
+            (() n)
+            ((k) (set! n (+ n k)) n))))
+      (define cl-acc (cl-make-acc))
+      (cl-acc 5)
+      (cl-acc 7)
+      (write (cl-acc))
+      (newline)
+      (define (cl-local x)
+        (define g
+          (case-lambda
+            ((a) (define y (* a 10)) (+ y x))
+            ((a b) (g (+ a b)))))
+        (list (g 1) (g 1 2)))
+      (write (cl-local 100))
+      (newline)
+      (write (letrec ((h (case-lambda ((n) (h n '())) ((n acc) (if (= n 0) acc (h (- n 1) (cons n acc)))))))
+               (h 4)))
+      (newline)
+      (define cl-strict (case-lambda ((x) x) ((x y) y)))
+      (write (guard (e ((error-object? e) (list 'caught (error-object-message e) (error-object-irritants e))))
+               (cl-strict 1 2 3)))
+      (newline)
+      (write (guard (e ((error-object? e) 'caught-none)) (cl-strict)))
+      (newline)
+      (define-syntax cl-opt
+        (syntax-rules ()
+          ((_ name default body)
+           (define name (case-lambda (() (let ((cl-x default)) body)) ((cl-x) body))))))
+      (define cl-x 4)
+      (cl-opt cl-twice 21 (* cl-x 2))
+      (write (list (cl-twice) (cl-twice 5)))
+      (newline)
+      (write (let ((case-lambda list)) (case-lambda 1 2)))
+      (newline)
+      (define cl-p (make-parameter 'outer))
+      (define cl-show (case-lambda (() (cl-p)) ((v) (parameterize ((cl-p v)) (cl-show)))))
+      (write (list (cl-show) (cl-show 'inner) (cl-show)))
+      (newline)
+      (write (guard (e (#t (list 'raised e))) ((case-lambda ((x) (raise x))) 'boom)))
+      (newline)
+      (write (call-with-values (lambda () ((case-lambda ((a b) (values b a))) 1 2)) list))
+      (newline)
+    expected: |
+      ((0 1 2) (3 4))
+      ((none ()) (one 1) (many 1 (2)) (many 1 (2 3)))
+      100000
+      (11 22)
+      (3 2 1)
+      12
+      (110 130)
+      (1 2 3 4)
+      (caught "wrong number of arguments to case-lambda: (1 2 3)" ())
+      caught-none
+      (8 8)
+      (1 2)
+      (outer inner outer)
+      (raised boom)
+      (2 1)
 # An uncaught application of a non-procedure ends the program, so these cannot
 # join the concatenated corpus above -- one program per case, per backend, like
 # ci-spec.yaml's standalone: list (.todo/851). The dynamic-wind puts the wasm
@@ -1914,6 +2005,16 @@ standalone:
     stderr: |
       Unhandled condition: parameterize: not a parameter object: 5
     fails: true
+  # A count no case-lambda clause accepts, uncaught.
+  - name: case-lambda-with-no-matching-clause-is-an-error
+    source: |
+      (define standalone-cl (case-lambda ((x) x) ((x y z) z)))
+      (dynamic-wind (lambda () #t) (lambda () (display (standalone-cl 1)) (newline) (standalone-cl 1 2)) (lambda () #t))
+    stdout: |
+      1
+    stderr: |
+      Unhandled condition: wrong number of arguments to case-lambda: (1 2)
+    fails: true
   # --scheme-standard: a valid R7RS program means the same under both standards, and
   # strict R7RS keeps the sicp/r5rs names out of eval's reach too.
   - name: a-valid-r7rs-program-prints-the-same-under-both-standards
@@ -1939,6 +2040,15 @@ standalone:
       (8 #t 3 2 3 2)
       6
       #t
+  - name: strict-r7rs-imports-case-lambda-from-its-own-library
+    standards: [rontolisp, r7rs]
+    source: |
+      (import (scheme base) (scheme write) (only (scheme case-lambda) case-lambda))
+      (define area (case-lambda ((r) (* 3 r r)) ((w h) (* w h))))
+      (write (list (area 2) (area 2 5)))
+      (newline)
+    stdout: |
+      (12 10)
   - name: strict-r7rs-eval-reaches-no-sicp-procedure
     standards: [r7rs]
     source: |

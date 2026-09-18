@@ -192,6 +192,8 @@ sections:
             title: "(scheme cxr)"
           - file: scheme/reference/library-lazy.md
             title: "(scheme lazy)"
+          - file: scheme/reference/library-case-lambda.md
+            title: "(scheme case-lambda)"
           - file: scheme/reference/library-process-context.md
             title: "(scheme process-context)"
           - file: scheme/reference/library-eval.md

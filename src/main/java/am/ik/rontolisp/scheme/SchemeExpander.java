@@ -411,6 +411,20 @@ final class SchemeExpander {
 				out.addAll(body(parts.subList(2, parts.size()), new Env(inner)));
 				yield rebuild(form, head, out);
 			}
+			case CASE_LAMBDA -> {
+				// (case-lambda (formals body...)...): each clause is a lambda of its own.
+				List<LispVal> out = new ArrayList<>();
+				for (LispVal clause : parts.subList(1, parts.size())) {
+					List<LispVal> clauseParts = elementsOrMalformed(clause);
+					atLeast(clauseParts, 2);
+					Env inner = new Env(env);
+					List<LispVal> rewritten = new ArrayList<>();
+					rewritten.add(formals(clauseParts.get(0), inner));
+					rewritten.addAll(body(clauseParts.subList(1, clauseParts.size()), new Env(inner)));
+					out.add(inheritList(clause, rewritten));
+				}
+				yield rebuild(form, head, out);
+			}
 			case BEGIN -> parts.size() == 1 ? rebuild(form, head, List.of())
 					: rebuild(form, head, body(parts.subList(1, parts.size()), new Env(env)));
 			case LET -> let(form, head, parts, env);
