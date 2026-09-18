@@ -4,7 +4,7 @@
 どれも唯一の大域環境です: `(interaction-environment)`、`(scheme-report-environment 5)`、
 `(environment '(scheme base) ...)` -- その import 集合は[ライブラリ](libraries.md)に照らして検査されます --
 および MIT Scheme の `user-initial-environment` と `system-global-environment` はすべて
-これを指し、引数は省略できます。大域環境が持つのは、プログラムの変数（`eval` 自身が
+これを指し、引数は省略できます（[`--scheme-standard r7rs`](standards.md) では省略不可）。大域環境が持つのは、プログラムの変数（`eval` 自身が
 定義したものを含む）、プログラムの手続き、組み込み手続きで、この順に探されます。`eval` の中の `define` はプログラムの
 大域変数になり、後の `eval` からもプログラム自身からも（`eval` 経由で）見えます。
 プログラムの変数への `set!` はそれに代入します。プログラムは `eval` が書いた値を読みます。

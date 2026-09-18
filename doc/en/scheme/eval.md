@@ -5,7 +5,8 @@ specifier is the one global environment: `(interaction-environment)`,
 `(scheme-report-environment 5)`, `(environment '(scheme base) ...)` -- its import sets
 are checked against [the libraries](libraries.md) -- and MIT Scheme's
 `user-initial-environment`
-and `system-global-environment` all name it, and the argument may be left out. It holds
+and `system-global-environment` all name it, and the argument may be left out (not under
+[`--scheme-standard r7rs`](standards.md)). It holds
 the program's variables (including what `eval` itself defined), the program's
 procedures, and the built-in procedures, in that order. A `define` inside `eval` is a program global, visible to later `eval`s
 and to the program itself (through `eval` -- a name first defined this way has no

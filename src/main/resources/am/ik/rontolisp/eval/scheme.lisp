@@ -1452,17 +1452,20 @@
 ;; The keywords eval knows: the ones it implements and the ones it refuses by name. A
 ;; user binding of the same name, local or global, wins over the keyword as in a file.
 ;; A datum's symbols carry their mangled spelling (SchemeNames), so => is s%=> here: the
-;; one keyword with no lowercase letter.
+;; one keyword with no lowercase letter. The sicp keyword (cons-stream) is the generated
+;; %scheme-eval-extension-keyword-p's to answer: none under --scheme-standard r7rs.
 (defun rontolisp::%scheme-eval-keyword-p (name)
-  (member name
-          '(|quote| |quasiquote| |unquote| |unquote-splicing| |lambda| |if|
-                    |set!| |define| |begin| |let| |let*| |letrec| |letrec*| |do|
-                    |cond| |case| |and| |or| |when| |unless| |else| |s%=>|
-                    |delay| |delay-force| |cons-stream| |define-record-type|
-                    |define-values| |let-values| |let*-values| |import|
-                    |define-syntax| |let-syntax| |letrec-syntax| |syntax-rules|
-                    |syntax-error| |define-library| |guard| |parameterize|
-                    |case-lambda| |include| |include-ci| |cond-expand|)))
+  (or (member name
+              '(|quote| |quasiquote| |unquote| |unquote-splicing| |lambda| |if|
+                        |set!| |define| |begin| |let| |let*| |letrec| |letrec*|
+                        |do| |cond| |case| |and| |or| |when| |unless| |else|
+                        |s%=>| |delay| |delay-force| |define-record-type|
+                        |define-values| |let-values| |let*-values| |import|
+                        |define-syntax| |let-syntax| |letrec-syntax|
+                        |syntax-rules| |syntax-error| |define-library| |guard|
+                        |parameterize| |case-lambda| |include| |include-ci|
+                        |cond-expand|))
+      (rontolisp::%scheme-eval-extension-keyword-p name)))
 
 (defun rontolisp::%scheme-eval-syntax (head env)
   (if (and (rontolisp::%scheme-eval-keyword-p head)

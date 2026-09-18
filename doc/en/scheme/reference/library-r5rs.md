@@ -1,6 +1,6 @@
 # (scheme r5rs)
 
-R5RS names that R7RS keeps only in `(scheme r5rs)`. That library is not importable here: these names are visible only to a file with no `import` and at the REPL.
+R5RS names that R7RS keeps only in `(scheme r5rs)`. That library is not importable here: these names are visible only to a file with no `import` and at the REPL, and never under [`--scheme-standard r7rs`](../standards.md).
 
 | Name | Example | Result |
 |---|---|---|

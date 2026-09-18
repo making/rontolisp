@@ -26,6 +26,7 @@ import am.ik.rontolisp.eval.BuiltinSystems;
 import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.ShimLibraries;
 import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.reader.Features;
 import org.jspecify.annotations.Nullable;
@@ -162,13 +163,31 @@ public final class LoadInliner {
 	 */
 	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
 			List<String> systemPath, Features features, DistClient dists) {
+		return inline(program, loader, baseDir, systemPath, features, dists, SourceStandards.DEFAULT);
+	}
+
+	/**
+	 * Same as {@link #inline(List, SourceLoader, String, List, Features, DistClient)} for
+	 * a program read against the given standards: every loaded file is read against them,
+	 * as the entry file was.
+	 * @param program the top-level forms read from the source
+	 * @param loader the loader used to resolve {@code load} paths
+	 * @param baseDir the directory of the entry source, or {@code null}
+	 * @param systemPath extra directories searched for {@code NAME.asd} files
+	 * @param features the reader features for loaded files
+	 * @param dists the dist downloader behind {@code ql:quickload}
+	 * @param standards what loaded files are read against ({@code --scheme-standard})
+	 * @return the program with top-level {@code load}/system forms inlined
+	 */
+	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
+			List<String> systemPath, Features features, DistClient dists, SourceStandards standards) {
 		List<LispVal> result = new ArrayList<>();
 		// The system registry and the loaded set are insertion-ordered: the baked
 		// %asdf-registry% (AsdfRuntimeLibrary) is emitted from them, and the emitted
 		// program must be deterministic (.kb/emitted-output-determinism.md).
 		Ctx ctx = new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new java.util.LinkedHashMap<>(), new HashMap<>(),
 				new java.util.LinkedHashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), features, dists,
-				baseDir);
+				baseDir, standards);
 		expandInto(program, result, ctx, baseDir);
 		// Fold the ASDF/UIOP pathname primitives + bundle with-open-file bodies of
 		// literal-path files: a real library evaluates them at load time to build a path
@@ -198,7 +217,7 @@ public final class LoadInliner {
 	private record Ctx(SourceLoader loader, Deque<String> loading, Set<String> provided,
 			Map<String, AsdfSystems.LispSystem> systems, Map<String, String> systemPackages, Set<String> loadedSystems,
 			Deque<String> loadingSystems, List<String> systemPath, Features features, DistClient dists,
-			@Nullable String entryBaseDir) {
+			@Nullable String entryBaseDir, SourceStandards standards) {
 	}
 
 	private static void expandInto(List<LispVal> forms, List<LispVal> out, Ctx ctx, @Nullable String baseDir) {
@@ -385,7 +404,7 @@ public final class LoadInliner {
 		// names its own line, not a line of the flattened entry program. The read is
 		// the source-language seam's, picked by THIS file's extension, so one program
 		// may mix languages file by file.
-		List<LispVal> forms = SourceLanguage.forFile(path, null).read(source, ctx.features(), path);
+		List<LispVal> forms = SourceLanguage.forFile(path, null).read(source, ctx.features(), path, ctx.standards());
 		// A file that selects a package with a top-level (in-package ...) must not leak
 		// it
 		// past the load: bracket the spliced forms with package save/restore markers so
@@ -537,7 +556,7 @@ public final class LoadInliner {
 		Ctx systemCtx = system.features().isEmpty() ? ctx
 				: new Ctx(ctx.loader(), ctx.loading(), ctx.provided(), ctx.systems(), ctx.systemPackages(),
 						ctx.loadedSystems(), ctx.loadingSystems(), ctx.systemPath(),
-						ctx.features().with(system.features()), ctx.dists(), ctx.entryBaseDir());
+						ctx.features().with(system.features()), ctx.dists(), ctx.entryBaseDir(), ctx.standards());
 		// Everything spliced from here on belongs to this system. A dependency opens its
 		// own bracket inside this one, so the pruner's innermost-wins rule attributes
 		// each

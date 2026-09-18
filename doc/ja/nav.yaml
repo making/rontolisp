@@ -161,6 +161,8 @@ sections:
         title: 概要
       - file: scheme/repl.md
         title: REPL
+      - file: scheme/standards.md
+        title: 規格
       - file: scheme/syntax.md
         title: 構文
       - file: scheme/libraries.md

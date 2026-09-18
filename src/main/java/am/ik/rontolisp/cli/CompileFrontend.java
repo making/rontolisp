@@ -31,6 +31,7 @@ import am.ik.rontolisp.eval.SceneLibrary;
 import am.ik.rontolisp.eval.SchemeLibrary;
 import am.ik.rontolisp.eval.SocketsLibrary;
 import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.StdinLibrary;
 import am.ik.rontolisp.eval.TlsLibrary;
@@ -87,14 +88,16 @@ final class CompileFrontend {
 	 * @param entryFile the path the text was read from, for diagnostics
 	 * @param sourceLanguage the {@code --source-language} override naming the entry
 	 * source's language, or {@code null} to pick it from the entry file's extension
+	 * @param standards what every source file is read against ({@code --scheme-standard})
 	 * @param systemPath the ASDF system search path
 	 * @param dists the Quicklisp-format distributions
 	 * @param declaredFeatures the read-time features the user declared
 	 * ({@code --feature})
 	 * @param options the target and pass options
 	 */
-	record Request(String source, @Nullable String entryFile, @Nullable String sourceLanguage, List<String> systemPath,
-			DistClient dists, List<String> declaredFeatures, Options options) {
+	record Request(String source, @Nullable String entryFile, @Nullable String sourceLanguage,
+			SourceStandards standards, List<String> systemPath, DistClient dists, List<String> declaredFeatures,
+			Options options) {
 
 		static Builder builder() {
 			return new Builder();
@@ -107,6 +110,8 @@ final class CompileFrontend {
 			private @Nullable String entryFile;
 
 			private @Nullable String sourceLanguage;
+
+			private SourceStandards standards = SourceStandards.DEFAULT;
 
 			private List<String> systemPath = List.of();
 
@@ -131,6 +136,11 @@ final class CompileFrontend {
 
 			Builder sourceLanguage(@Nullable String sourceLanguage) {
 				this.sourceLanguage = sourceLanguage;
+				return this;
+			}
+
+			Builder standards(SourceStandards standards) {
+				this.standards = standards;
 				return this;
 			}
 
@@ -162,7 +172,7 @@ final class CompileFrontend {
 			 */
 			Request build() {
 				return new Request(Objects.requireNonNull(this.source, "source is required"), this.entryFile,
-						this.sourceLanguage, this.systemPath,
+						this.sourceLanguage, this.standards, this.systemPath,
 						this.dists != null ? this.dists : DistClient.createDefault(List.of()), this.declaredFeatures,
 						Objects.requireNonNull(this.options, "options is required"));
 			}
@@ -296,12 +306,24 @@ final class CompileFrontend {
 
 	/**
 	 * The read, load-inlined top-level forms {@link #expand} starts from, with the
-	 * feature set they were read with.
+	 * feature set and the standards they were read with.
 	 *
 	 * @param forms the top-level forms
 	 * @param features the feature set the forms were read with
+	 * @param standards the standards the forms were read against: a Scheme program's
+	 * run-time {@code eval} table follows them
 	 */
-	record Loaded(List<LispVal> forms, Features features) {
+	record Loaded(List<LispVal> forms, Features features, SourceStandards standards) {
+
+		/**
+		 * Forms read against every language's default standard.
+		 * @param forms the top-level forms
+		 * @param features the feature set the forms were read with
+		 */
+		Loaded(List<LispVal> forms, Features features) {
+			this(forms, features, SourceStandards.DEFAULT);
+		}
+
 	}
 
 	/**
@@ -395,10 +417,10 @@ final class CompileFrontend {
 			throw new IllegalArgumentException("Cannot compile: a Scheme program needs the GC backend -- --no-gc has"
 					+ " no cons cell, no symbol and no closure (drop --no-gc)");
 		}
-		List<LispVal> read = language.read(request.source(), features, entryFile);
+		List<LispVal> read = language.read(request.source(), features, entryFile, request.standards());
 		List<LispVal> loaded = LoadInliner.inline(read, SourceLoader.fileSystem(), options.baseDir(),
-				request.systemPath(), features, request.dists());
-		return expand(new Loaded(loaded, features), options);
+				request.systemPath(), features, request.dists(), request.standards());
+		return expand(new Loaded(loaded, features, request.standards()), options);
 	}
 
 	/**
@@ -620,10 +642,11 @@ final class CompileFrontend {
 		// string comparisons the helpers are written over.
 		List<LispVal> program = UnreadCharLibrary
 			.process(WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(
-					UrlLibrary.process(AppKitLibrary.process(JsonLibrary.process(LinalgLibrary.process(GeomLibrary
-						.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary
-							.process(SafetensorsLibrary.process(GgufLibrary.process(TokenizersLibrary
-								.process(SchemeLibrary.process(UserMacroExpander.expand(loaded), features))))))))))))),
+					UrlLibrary.process(AppKitLibrary.process(JsonLibrary
+						.process(LinalgLibrary.process(GeomLibrary.process(MetalLibrary.process(SceneLibrary
+							.process(TorchLibrary.process(CheckpointLibrary.process(SafetensorsLibrary
+								.process(GgufLibrary.process(TokenizersLibrary.process(SchemeLibrary
+									.process(UserMacroExpander.expand(loaded), features, input.standards()))))))))))))),
 					features)))));
 		// uiop:getenv on the --component path is environment.lisp over a wit-imported
 		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /

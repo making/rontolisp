@@ -10,6 +10,7 @@ import am.ik.rontolisp.compiler.JvmExportDirective;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 import org.jspecify.annotations.Nullable;
 
@@ -60,6 +61,8 @@ public final class JvmSourceCompiler {
 	private List<String> features = List.of();
 
 	private @Nullable String sourceLanguage;
+
+	private SourceStandards standards = SourceStandards.DEFAULT;
 
 	/**
 	 * @param className the class to emit, in either the {@code com.acme.Kernels} or the
@@ -192,6 +195,16 @@ public final class JvmSourceCompiler {
 	}
 
 	/**
+	 * @param schemeStandard the standard every Scheme file of the program is read against
+	 * ({@code --scheme-standard}: {@code rontolisp} or {@code r7rs}), or {@code null} for
+	 * the default
+	 */
+	public JvmSourceCompiler schemeStandard(@Nullable String schemeStandard) {
+		this.standards = SourceStandards.parse(schemeStandard);
+		return this;
+	}
+
+	/**
 	 * Compiles a source text.
 	 * <p>
 	 * A failure carries the frontend's {@code file:line:column:} prefix, exactly as the
@@ -230,6 +243,7 @@ public final class JvmSourceCompiler {
 				.source(source)
 				.entryFile(entryFile)
 				.sourceLanguage(this.sourceLanguage)
+				.standards(this.standards)
 				.systemPath(this.systemPath)
 				.dists(DistClient.createDefault(this.dists))
 				.declaredFeatures(this.features)

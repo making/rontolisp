@@ -307,12 +307,14 @@ class SchemeLoweringTest {
 			.contains("(CATCH 'RONTOLISP::%SCHEME-EXIT-TAG (PROGN (|eval| |x|)");
 		// The run-time table behind it is generated from the same entries, one arm per
 		// procedure and constant by its mangled name, cut to the names a program spells.
-		assertThat(Scheme.runtimeForms(name -> name.equals("s%+") || name.equals("car") || name.equals("false"))
+		assertThat(Scheme
+			.runtimeForms(name -> name.equals("s%+") || name.equals("car") || name.equals("false"),
+					SchemeStandard.RONTOLISP)
 			.get(0)
 			.print())
 			.isEqualTo("(DEFUN RONTOLISP::%SCHEME-BUILTIN (NAME) (CASE NAME ((|s%+|) #'+) ((|car|) #'CAR)"
 					+ " ((|false|) RONTOLISP::%SCHEME-FALSE) (T 'RONTOLISP::%SCHEME-UNBOUND)))");
-		assertThat(Scheme.runtimeForms(name -> false).get(1).print()).isEqualTo(
+		assertThat(Scheme.runtimeForms(name -> false, SchemeStandard.RONTOLISP).get(1).print()).isEqualTo(
 				"(DEFUN RONTOLISP::%SCHEME-LIBRARY-P (NAME) (IF (MEMBER NAME '(|base| |write| |read| |inexact| |cxr| |lazy|"
 						+ " |process-context| |eval| |repl|)) T NIL))");
 	}
@@ -382,6 +384,101 @@ class SchemeLoweringTest {
 		assertThat(lowered("(define (cons-stream a b) (cons a b)) (cons-stream 1 2)")).isEqualTo("""
 				(DEFUN |cons-stream| (|a| |b|) (CONS |a| |b|))
 				(|cons-stream| 1 2)""");
+	}
+
+	@Test
+	void eachNameIsImportedFromTheR7rsLibraryThatExportsIt() {
+		// exact->inexact and inexact->exact are (scheme r5rs) names: no R7RS import
+		// reaches them, only the no-import default.
+		assertThat(lowered("(import (scheme base) (scheme inexact)) (exact->inexact x) (inexact->exact y)"))
+			.isEqualTo("(|exact->inexact| |x|)\n(|inexact->exact| |y|)");
+		assertThat(lowered("(exact->inexact x)")).isEqualTo("(FLOAT |x| 1.0)");
+		// The current-input-port character procedures and the EOF object are
+		// (scheme base); (scheme read) exports read alone.
+		assertThat(lowered("(import (scheme base)) (read-char) (peek-char) (read-line) (eof-object)")).isEqualTo("""
+				(RONTOLISP::%SCHEME-READ-CHAR)
+				(RONTOLISP::%SCHEME-PEEK-CHAR)
+				(RONTOLISP::%SCHEME-READ-LINE)
+				RONTOLISP::%SCHEME-EOF-INSTANCE""");
+		assertThat(lowered("(import (scheme read)) (read) (read-char) (eof-object)"))
+			.isEqualTo("(RONTOLISP::%SCHEME-READ)\n(|read-char|)\n(|eof-object|)");
+	}
+
+	private static String strict(String source) {
+		List<LispVal> forms = Scheme.read(source, "test.scm", SchemeStandard.R7RS);
+		return forms.subList(1, forms.size()).stream().map(LispVal::print).collect(Collectors.joining("\n"));
+	}
+
+	@Test
+	void anR7rsProgramBeginsWithAnImportDeclaration() {
+		assertThatThrownBy(() -> strict("; a comment\n  (display 1)")).isInstanceOf(LispReadException.class)
+			.hasMessage("test.scm:2:3: an R7RS program begins with an import declaration");
+		assertThatThrownBy(() -> strict("\n42"))
+			.hasMessage("test.scm:2:1: an R7RS program begins with an import declaration");
+		assertThatThrownBy(() -> strict(""))
+			.hasMessage("test.scm:1:1: an R7RS program begins with an import declaration");
+		assertThat(strict("(import (scheme base) (scheme write)) (display 1)")).isEqualTo("(PRINC 1)");
+	}
+
+	@Test
+	void strictR7rsNeverSeesTheSicpOrR5rsNames() {
+		// Unreachable by import in either standard; strict mode has no no-import default,
+		// and a name nobody imports or defines is a direct call as always.
+		assertThat(strict("(import (scheme base) (scheme inexact)) (exact->inexact x) (1+ x) true"))
+			.isEqualTo("(|exact->inexact| |x|)\n(|s%1+| |x|)\n|true|");
+		assertThat(strict("(import (scheme base)) (cons-stream a b)")).isEqualTo("(|cons-stream| |a| |b|)");
+	}
+
+	@Test
+	void strictR7rsRefusesRedefiningOrAssigningAnImport() {
+		assertThatThrownBy(() -> strict("(import (scheme base))\n(define (car x) x)"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessage("test.scm:2:1: cannot redefine car: it is imported (R7RS 5.6.1)");
+		assertThatThrownBy(() -> strict("(import (scheme base))\n(define list 1)"))
+			.hasMessage("test.scm:2:1: cannot redefine list: it is imported (R7RS 5.6.1)");
+		assertThatThrownBy(() -> strict("(import (scheme base))\n(define-values (a cdr) (values 1 2))"))
+			.hasMessage("test.scm:2:1: cannot redefine cdr: it is imported (R7RS 5.6.1)");
+		assertThatThrownBy(
+				() -> strict("(import (scheme base))\n(define-record-type point (make-point x) pair? (x px))"))
+			.hasMessage("test.scm:2:1: cannot redefine pair?: it is imported (R7RS 5.6.1)");
+		assertThatThrownBy(() -> strict("(import (scheme base))\n(define (when x) x)"))
+			.hasMessage("test.scm:2:1: cannot redefine when: it is imported (R7RS 5.6.1)");
+		assertThatThrownBy(() -> strict("(import (scheme base))\n(define (f) (set! car 1))"))
+			.hasMessage("test.scm:2:13: cannot assign car: it is imported (R7RS 5.6.1)");
+		// What the file did not import is free, and so is a local binding of an import.
+		assertThat(strict("(import (except (scheme base) cdr))\n(define (cdr x) x) (define (f car) (set! car 1) car)"))
+			.isEqualTo("(DEFUN |cdr| (|x|) |x|)\n(DEFUN |f| (|car|) (SETQ |car| 1) |car|)");
+		// The default standard lets a user definition win.
+		assertThat(lowered("(import (scheme base)) (define (car x) x) (car 1)")).contains("(DEFUN |car| (|x|) |x|)");
+	}
+
+	@Test
+	void strictR7rsEvalTakesItsEnvironment() {
+		assertThatThrownBy(() -> strict("(import (scheme base) (scheme eval))\n(eval 'x)"))
+			.hasMessage("test.scm:2:1: wrong number of arguments to eval: 1");
+		assertThat(strict("(import (scheme base) (scheme eval))\n(eval 'x (environment '(scheme base)))"))
+			.contains("(RONTOLISP::%SCHEME-EVAL-IN '|x| (RONTOLISP::%SCHEME-ENVIRONMENT (LIST '(|scheme| |base|))))");
+		// The run-time table behind eval holds no sicp or r5rs name either, and a
+		// first-class eval needs its environment too.
+		assertThat(Scheme.runtimeForms(name -> true, SchemeStandard.R7RS).get(0).print()).doesNotContain("|s%1+|")
+			.doesNotContain("|exact->inexact|")
+			.doesNotContain("|user-initial-environment|")
+			.contains("((|eval|) (LAMBDA (X ENV) (RONTOLISP::%SCHEME-EVAL-IN X ENV)))")
+			.contains("((|car|) #'CAR)");
+		assertThat(Scheme.runtimeForms(name -> true, SchemeStandard.RONTOLISP).get(0).print()).contains("|s%1+|");
+		assertThat(Scheme.runtimeForms(name -> false, SchemeStandard.R7RS).get(2).print())
+			.isEqualTo("(DEFUN RONTOLISP::%SCHEME-EVAL-EXTENSION-KEYWORD-P (NAME) (IF (MEMBER NAME 'NIL) T NIL))");
+		assertThat(Scheme.runtimeForms(name -> false, SchemeStandard.RONTOLISP).get(2).print()).isEqualTo(
+				"(DEFUN RONTOLISP::%SCHEME-EVAL-EXTENSION-KEYWORD-P (NAME) (IF (MEMBER NAME '(|cons-stream|)) T NIL))");
+	}
+
+	@Test
+	void aStrictSessionStartsWithEveryR7rsLibraryAndMayRedefine() {
+		SchemeSession session = Scheme.session(SchemeStandard.R7RS);
+		assertThat(session.read("(display (square 2))").get(1).forms().get(0).print()).contains("%SCHEME-DISPLAY");
+		assertThat(session.read("(1+ 2)").get(0).forms().get(0).print()).contains("(|s%1+| 2)");
+		assertThat(session.read("(define (car x) x)").get(0).forms().get(0).print())
+			.contains("(SETQ |car| (LAMBDA (|x|) |x|))");
 	}
 
 	@Test

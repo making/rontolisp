@@ -34,16 +34,28 @@ public final class Scheme {
 	 * @return the top-level forms
 	 */
 	public static List<LispVal> read(String source, @Nullable String file) {
-		return SchemeLowering.ofFile(new SchemeReader(source, file)).lower();
+		return read(source, file, SchemeStandard.RONTOLISP);
+	}
+
+	/**
+	 * Reads a Scheme program against a standard and lowers it to Common Lisp core forms.
+	 * @param source the program text
+	 * @param file the origin file for diagnostics, or {@code null} when unknown
+	 * @param standard what the program is read against ({@code --scheme-standard})
+	 * @return the top-level forms
+	 */
+	public static List<LispVal> read(String source, @Nullable String file, SchemeStandard standard) {
+		return SchemeLowering.ofFile(new SchemeReader(source, file), standard).lower();
 	}
 
 	/**
 	 * Starts an interactive session -- a REPL, a playground -- that reads one buffer at a
 	 * time.
+	 * @param standard what the session is read against ({@code --scheme-standard})
 	 * @return the session
 	 */
-	public static SchemeSession session() {
-		return new SchemeSession();
+	public static SchemeSession session(SchemeStandard standard) {
+		return new SchemeSession(standard);
 	}
 
 	/**
@@ -55,11 +67,15 @@ public final class Scheme {
 	 * @param spelled whether the program the forms are for spells a (mangled) procedure
 	 * name -- the table holds only those entries; the interpreter, which loads the
 	 * library once for every program, passes a predicate that accepts everything
+	 * @param standard what the program is read against: under {@link SchemeStandard#R7RS}
+	 * {@code eval} reaches no {@code sicp} or {@code r5rs} name, procedure, constant or
+	 * keyword
 	 * @return the forms
 	 */
-	public static List<LispVal> runtimeForms(Predicate<String> spelled) {
-		List<LispVal> forms = new ArrayList<>(SchemeBuiltins.runtimeForms(SchemeNames::mangle, spelled));
+	public static List<LispVal> runtimeForms(Predicate<String> spelled, SchemeStandard standard) {
+		List<LispVal> forms = new ArrayList<>(SchemeBuiltins.runtimeForms(SchemeNames::mangle, spelled, standard));
 		forms.add(SchemeLowering.libraryPredicateForm());
+		forms.add(SchemeLowering.extensionKeywordForm(standard));
 		return List.copyOf(forms);
 	}
 

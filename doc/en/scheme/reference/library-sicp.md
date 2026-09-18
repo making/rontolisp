@@ -1,6 +1,6 @@
 # SICP Names
 
-The SICP / MIT Scheme names: exported by no R7RS library, so unreachable by `import`, and visible only to a file with no `import` and at the REPL. See [SICP Compatibility](../sicp.md).
+The SICP / MIT Scheme names: exported by no R7RS library, so unreachable by `import`, and visible only to a file with no `import` and at the REPL, and never under [`--scheme-standard r7rs`](../standards.md). See [SICP Compatibility](../sicp.md).
 
 ## Procedures
 

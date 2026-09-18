@@ -5,12 +5,13 @@
 [eval](eval.md)を参照）、`filter`、`fold-left`、`1+` などのリストと数値のユーティリティ、
 `runtime` と `random`、`parallel-execute` と `test-and-set!`、そして SICP のストリーム:
 `cons-stream`（構文）とストリーム手続きです。それぞれのページは
-[SICP 互換の名前](reference/library-sicp.md)にあり、R5RS の `scheme-report-environment` は
-[(scheme r5rs)](reference/library-r5rs.md) にあります。ストリームは `'()` か、cdr が
+[SICP 互換の名前](reference/library-sicp.md)にあり、R5RS の `scheme-report-environment`、
+`exact->inexact`、`inexact->exact` は [(scheme r5rs)](reference/library-r5rs.md) にあります。ストリームは `'()` か、cdr が
 プロミスであるペアなので、`the-empty-stream` は `'()`、`stream-null?` は `null?` です。
 これらは `(import ...)` を
 一切書かないプログラムでのみ見える -- 6 ライブラリと同じ扱いだが、どの import もこれらを
 名指しできないため、明示的な import リストがあると届かない。
+[`--scheme-standard r7rs`](standards.md) ではどこからも見えない。
 
 ```scheme
 (display (list true false nil (cadddr '(1 2 3 4)))) (newline)

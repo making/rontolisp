@@ -12,9 +12,10 @@ import am.ik.rontolisp.reader.LispReadException;
  */
 public final class SchemeSession {
 
-	private final SchemeLowering lowering = SchemeLowering.ofSession();
+	private final SchemeLowering lowering;
 
-	SchemeSession() {
+	SchemeSession(SchemeStandard standard) {
+		this.lowering = SchemeLowering.ofSession(standard);
 	}
 
 	/**

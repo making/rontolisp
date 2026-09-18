@@ -20,4 +20,5 @@ Scheme フロントエンドが提供する名前ごとの 1 ページです。�
 | [SICP 互換の名前](reference/library-sicp.md) | SICP / MIT Scheme の名前。`import` なしで見える |
 
 `(import ...)` で始まるファイルは、指定したライブラリだけを見ます。`import` のないファイルと
-REPL からは、ここに載っているすべての名前が見えます。
+REPL からは、ここに載っているすべての名前が見えます。ただし
+[`--scheme-standard r7rs`](standards.md) では R5RS と SICP の名前は見えません。

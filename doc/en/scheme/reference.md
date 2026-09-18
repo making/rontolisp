@@ -21,4 +21,5 @@ example.
 | [SICP Names](reference/library-sicp.md) | The SICP / MIT Scheme names, visible with no `import` |
 
 A file that opens with `(import ...)` sees only the libraries it names; a file with none,
-and the REPL, see every name listed here.
+and the REPL, see every name listed here -- except under
+[`--scheme-standard r7rs`](standards.md), which hides the R5RS and SICP names.

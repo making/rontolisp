@@ -23,12 +23,11 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The run-time half of the EXPERIMENTAL Scheme front end ({@code scheme.lisp} on the
- * classpath, plus the forms {@link Scheme#runtimeForms(java.util.function.Predicate)}
- * generates from the front end's tables): the printer behind
- * {@code display}/{@code write}, an {@code equal?} that recurses into vectors, the
- * symbol-name escaping, {@code call/cc}, {@code dynamic-wind} and the evaluator behind
- * {@code eval}. It is Common Lisp source like every other shipped library, so no backend
- * learns a Scheme name ({@code .kb/scheme-frontend.md}).
+ * classpath, plus the forms {@link Scheme#runtimeForms} generates from the front end's
+ * tables): the printer behind {@code display}/{@code write}, an {@code equal?} that
+ * recurses into vectors, the symbol-name escaping, {@code call/cc}, {@code dynamic-wind}
+ * and the evaluator behind {@code eval}. It is Common Lisp source like every other
+ * shipped library, so no backend learns a Scheme name ({@code .kb/scheme-frontend.md}).
  *
  * <p>
  * Consumers, the {@link UrlLibrary} shape:
@@ -63,6 +62,17 @@ public final class SchemeLibrary {
 	}
 
 	/**
+	 * Returns the library definitions as the interpreter reads them, for a program read
+	 * against the standards: the run-time table behind {@code eval} follows
+	 * {@code --scheme-standard}.
+	 * @param standards what the program's source is read against
+	 * @return the library forms
+	 */
+	public static List<LispVal> forms(SourceStandards standards) {
+		return forms(Features.INTERPRETER, standards);
+	}
+
+	/**
 	 * Returns the parsed library definitions for a target. The source is written in
 	 * canonical shape (internal double-colon {@code rontolisp::} helpers, bare {@code cl}
 	 * names), so it needs no package resolution. It is read with the TARGET's features:
@@ -73,7 +83,12 @@ public final class SchemeLibrary {
 	 * @return the library forms
 	 */
 	public static List<LispVal> forms(Features features) {
-		return FORMS.computeIfAbsent(String.join(",", features.names()), ignored -> {
+		return forms(features, SourceStandards.DEFAULT);
+	}
+
+	private static List<LispVal> forms(Features features, SourceStandards standards) {
+		String key = String.join(",", features.names()) + "/" + standards.scheme().optionName();
+		return FORMS.computeIfAbsent(key, ignored -> {
 			// The forms the scheme package GENERATES from its tables -- the run-time
 			// procedure table behind eval, the library-name predicate behind
 			// (environment ...) -- follow the source, so each table is spelled once. The
@@ -81,7 +96,7 @@ public final class SchemeLibrary {
 			// every procedure; a compiled program gets one cut to what it spells
 			// (process).
 			List<LispVal> forms = new ArrayList<>(sourceForms(features));
-			forms.addAll(Scheme.runtimeForms(name -> true));
+			forms.addAll(Scheme.runtimeForms(name -> true, standards.scheme()));
 			return List.copyOf(forms);
 		});
 	}
@@ -124,12 +139,13 @@ public final class SchemeLibrary {
 	}
 
 	/**
-	 * {@link #process(List, Features)} for the interpreter's features.
+	 * {@link #process(List, Features, SourceStandards)} for the interpreter's features
+	 * and the default standards.
 	 * @param program the top-level forms (after load inlining and user-macro expansion)
 	 * @return the program with the library spliced in when used
 	 */
 	public static List<LispVal> process(List<LispVal> program) {
-		return process(program, Features.INTERPRETER);
+		return process(program, Features.INTERPRETER, SourceStandards.DEFAULT);
 	}
 
 	/**
@@ -147,9 +163,11 @@ public final class SchemeLibrary {
 	 * ({@code .kb/eval-runtime.md}).
 	 * @param program the top-level forms (after load inlining and user-macro expansion)
 	 * @param features the target backend's reader features
+	 * @param standards what the program's source was read against: the run-time table
+	 * follows {@code --scheme-standard}
 	 * @return the program with the library spliced in when used
 	 */
-	public static List<LispVal> process(List<LispVal> program, Features features) {
+	public static List<LispVal> process(List<LispVal> program, Features features, SourceStandards standards) {
 		for (LispVal form : program) {
 			if (references(form)) {
 				Set<String> symbols = new HashSet<>();
@@ -159,7 +177,8 @@ public final class SchemeLibrary {
 				}
 				List<LispVal> out = new ArrayList<>(sourceForms(features));
 				out.addAll(Scheme.runtimeForms(
-						name -> symbols.contains(name) || strings.stream().anyMatch(string -> string.contains(name))));
+						name -> symbols.contains(name) || strings.stream().anyMatch(string -> string.contains(name)),
+						standards.scheme()));
 				out.addAll(program);
 				return out;
 			}

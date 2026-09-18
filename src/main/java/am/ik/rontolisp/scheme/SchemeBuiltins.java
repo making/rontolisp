@@ -194,8 +194,8 @@ final class SchemeBuiltins {
 				("exact-integer?" base pred ((x) (integerp x)))
 				("exact" base value ((x) (rational x)))
 				("inexact" base value ((x) (float x 1.0d0)))
-				("inexact->exact" base value ((x) (rational x)))
-				("exact->inexact" base value ((x) (float x 1.0d0)))
+				("inexact->exact" r5rs value ((x) (rational x)))
+				("exact->inexact" r5rs value ((x) (float x 1.0d0)))
 				("number->string" base value ((n) (rontolisp::%scheme-number->string n 10))
 				 ((n radix) (rontolisp::%scheme-number->string n radix))
 				 :function (lambda (n &optional (radix 10)) (rontolisp::%scheme-number->string n radix)))
@@ -436,23 +436,25 @@ final class SchemeBuiltins {
 			("write-shared" write effect ((x) (rontolisp::%scheme-write-shared x)))
 			("write-simple" write effect ((x) (rontolisp::%scheme-write x)))
 
-			;; --- (scheme read): the current input port only; a port argument stays
-			;; refused by arity, like display/write's second argument --
-			;; string ports and (read port) are .todo/826's.
+			;; --- input: the current input port only; a port argument stays refused by
+			;; arity, like display/write's second argument -- string ports and
+			;; (read port) are .todo/826's. (scheme read) exports read alone; the
+			;; character procedures and the EOF object are (scheme base).
 			("read" read value (() (rontolisp::%scheme-read)))
-			("eof-object" read value (() (rontolisp::%scheme-eof-object)))
-			("eof-object?" read pred ((x) (rontolisp::%scheme-eof-object? x)))
-			("read-char" read value (() (rontolisp::%scheme-read-char)))
-			("peek-char" read value (() (rontolisp::%scheme-peek-char)))
-			("read-line" read value (() (rontolisp::%scheme-read-line)))
-			("char-ready?" read pred (() (rontolisp::%scheme-char-ready?)))
+			("eof-object" base value (() (rontolisp::%scheme-eof-object)))
+			("eof-object?" base pred ((x) (rontolisp::%scheme-eof-object? x)))
+			("read-char" base value (() (rontolisp::%scheme-read-char)))
+			("peek-char" base value (() (rontolisp::%scheme-peek-char)))
+			("read-line" base value (() (rontolisp::%scheme-read-line)))
+			("char-ready?" base pred (() (rontolisp::%scheme-char-ready?)))
 
 				;; --- (scheme eval), (scheme repl) and the R5RS scheme-report-environment:
 				;; every environment specifier is the one global environment, the symbol
 				;; #[environment] (ENVIRONMENT_NAME); the evaluator is %scheme-eval in
 				;; scheme.lisp, over the run-time table generated from these entries
 				;; (runtimeForms). r5rs is no importable library: (scheme r5rs) would promise
-				;; the whole of R5RS, so its one name rides the no-import default like sicp.
+				;; the whole of R5RS, so its names (this one, exact->inexact and
+				;; inexact->exact) ride the no-import default like sicp.
 				("eval" eval value ((x) (rontolisp::%scheme-eval x nil)) ((x env) (rontolisp::%scheme-eval-in x env))
 				 :function (lambda (x &optional (env '|#[environment]|)) (rontolisp::%scheme-eval-in x env)))
 				("environment" eval value ((&rest r) (rontolisp::%scheme-environment (list . r)))
@@ -473,7 +475,22 @@ final class SchemeBuiltins {
 				 :function (lambda (&optional (code t)) (rontolisp::%scheme-exit code)))
 				""";
 
-	private static final SequencedMap<String, Entry> ENTRIES = parse();
+	private static final SequencedMap<String, Entry> ENTRIES = parse(TABLE);
+
+	/**
+	 * What {@link SchemeStandard#R7RS} reads differently, in the table's own shape: the
+	 * environment argument of {@code eval} is required (R7RS 6.12).
+	 */
+	private static final String R7RS_TABLE = """
+			("eval" eval value ((x env) (rontolisp::%scheme-eval-in x env))
+			 :function (lambda (x env) (rontolisp::%scheme-eval-in x env)))
+			""";
+
+	/**
+	 * The entries under {@link SchemeStandard#R7RS}: no {@code sicp} or {@code r5rs}
+	 * name, and the {@link #R7RS_TABLE} rows in place of their defaults.
+	 */
+	private static final SequencedMap<String, Entry> R7RS_ENTRIES = strictEntries();
 
 	/**
 	 * The bare VALUES (not procedures) the {@code sicp} tag provides, each as the form
@@ -495,6 +512,50 @@ final class SchemeBuiltins {
 	 */
 	static SequencedMap<String, Entry> entries() {
 		return ENTRIES;
+	}
+
+	/**
+	 * Every procedure a program read against the standard can reach, keyed by its Scheme
+	 * name, in table order.
+	 * @param standard the standard
+	 * @return the entries
+	 */
+	static SequencedMap<String, Entry> entries(SchemeStandard standard) {
+		return standard == SchemeStandard.R7RS ? R7RS_ENTRIES : ENTRIES;
+	}
+
+	/**
+	 * The bare values a program read against the standard can reach: none under
+	 * {@link SchemeStandard#R7RS}, where they are all {@code sicp}.
+	 * @param standard the standard
+	 * @return the name to the form answering its value
+	 */
+	static SequencedMap<String, LispVal> constants(SchemeStandard standard) {
+		return standard == SchemeStandard.R7RS ? Collections.emptySortedMap() : CONSTANTS;
+	}
+
+	/**
+	 * Whether a library tag is an R7RS library, as opposed to {@code sicp} /
+	 * {@code r5rs}, which strict R7RS never sees.
+	 * @param library the tag
+	 * @return {@code true} for an R7RS library
+	 */
+	static boolean isR7rsLibrary(String library) {
+		return !library.equals("sicp") && !library.equals("r5rs");
+	}
+
+	private static SequencedMap<String, Entry> strictEntries() {
+		SequencedMap<String, Entry> overrides = parse(R7RS_TABLE);
+		SequencedMap<String, Entry> entries = new LinkedHashMap<>();
+		ENTRIES.forEach((name, entry) -> {
+			if (isR7rsLibrary(entry.library())) {
+				entries.put(name, overrides.getOrDefault(name, entry));
+			}
+		});
+		if (!entries.keySet().containsAll(overrides.keySet())) {
+			throw new IllegalStateException("an R7RS override names no R7RS entry: " + overrides.keySet());
+		}
+		return Collections.unmodifiableSequencedMap(entries);
 	}
 
 	/**
@@ -536,17 +597,21 @@ final class SchemeBuiltins {
 	 * @param mangle a Scheme name to its symbol name ({@code SchemeNames.mangle}, which
 	 * this table does not reach for itself: the names reach for this table)
 	 * @param spelled whether a mangled name is spelled by the program the table is for
+	 * @param standard the standard the program is read against: under
+	 * {@link SchemeStandard#R7RS} the table holds no {@code sicp} or {@code r5rs} name,
+	 * so {@code eval} cannot reach one either
 	 * @return the definition
 	 */
-	static List<LispVal> runtimeForms(UnaryOperator<String> mangle, Predicate<String> spelled) {
+	static List<LispVal> runtimeForms(UnaryOperator<String> mangle, Predicate<String> spelled,
+			SchemeStandard standard) {
 		List<LispVal> arms = new ArrayList<>();
-		for (Entry entry : ENTRIES.values()) {
+		for (Entry entry : entries(standard).values()) {
 			String key = mangle.apply(entry.name());
 			if (spelled.test(key)) {
 				arms.add(list(list(new LispSymbol(key)), entry.function()));
 			}
 		}
-		CONSTANTS.forEach((name, form) -> {
+		constants(standard).forEach((name, form) -> {
 			String key = mangle.apply(name);
 			if (spelled.test(key)) {
 				arms.add(list(list(new LispSymbol(key)), form));
@@ -576,9 +641,9 @@ final class SchemeBuiltins {
 		};
 	}
 
-	private static SequencedMap<String, Entry> parse() {
+	private static SequencedMap<String, Entry> parse(String table) {
 		SequencedMap<String, Entry> entries = new LinkedHashMap<>();
-		for (LispVal row : LispReader.readAllFromString(TABLE, Features.INTERPRETER)) {
+		for (LispVal row : LispReader.readAllFromString(table, Features.INTERPRETER)) {
 			Entry entry = entry(((LispCons) row).toList());
 			if (entries.put(entry.name(), entry) != null) {
 				throw new IllegalStateException("duplicate Scheme builtin: " + entry.name());

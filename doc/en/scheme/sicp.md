@@ -5,11 +5,13 @@
 environment, see [eval](eval.md)), list and number utilities such as `filter`,
 `fold-left` and `1+`, `runtime` and `random`, `parallel-execute` and `test-and-set!`,
 and SICP's streams: `cons-stream` (syntax) and the stream procedures. Each has its own
-page under [SICP Names](reference/library-sicp.md); R5RS's `scheme-report-environment`
-is under [(scheme r5rs)](reference/library-r5rs.md). A stream is `'()` or a pair whose
-cdr is a promise, so `the-empty-stream` is `'()` and `stream-null?` is `null?`. These
-are visible only when a program has no `(import ...)` at all -- like the six libraries
--- and no import names them, so an explicit import list leaves them unreachable.
+page under [SICP Names](reference/library-sicp.md); R5RS's `scheme-report-environment`,
+`exact->inexact` and `inexact->exact` are under
+[(scheme r5rs)](reference/library-r5rs.md). A stream is `'()` or a pair whose cdr is a
+promise, so `the-empty-stream` is `'()` and `stream-null?` is `null?`. These are visible
+only when a program has no `(import ...)` at all -- like the six libraries -- and no
+import names them, so an explicit import list leaves them unreachable.
+[`--scheme-standard r7rs`](standards.md) hides them everywhere.
 
 ```scheme
 (display (list true false nil (cadddr '(1 2 3 4)))) (newline)

@@ -1432,3 +1432,49 @@ standalone:
     stderr: |
       Unhandled condition: The object is not applicable: 3
     fails: true
+  # --scheme-standard: a valid R7RS program means the same under both standards, and
+  # strict R7RS keeps the sicp/r5rs names out of eval's reach too.
+  - name: a-valid-r7rs-program-prints-the-same-under-both-standards
+    standards: [rontolisp, r7rs]
+    source: |
+      (import (scheme base) (scheme write) (scheme eval) (scheme cxr))
+      (define-record-type point (make-point x y) point? (x point-x) (y point-y set-point-y!))
+      (define (norm1 p) (+ (abs (point-x p)) (abs (point-y p))))
+      (define p (make-point 3 -4))
+      (set-point-y! p -5)
+      (define-values (q r) (values (floor-quotient 17 5) (floor-remainder 17 5)))
+      (let loop ((i 0) (acc '()))
+        (if (< i 3) (loop (+ i 1) (cons (square i) acc))
+            (begin (write (reverse acc)) (newline))))
+      (write (list (norm1 p) (point? p) q r (caddr '(1 2 3)) (exact (floor 2.5))))
+      (newline)
+      (write (eval '(let ((x 2)) (* x (+ x 1))) (environment '(scheme base))))
+      (newline)
+      (write (eof-object? (eof-object)))
+      (newline)
+    stdout: |
+      (0 1 4)
+      (8 #t 3 2 3 2)
+      6
+      #t
+  - name: strict-r7rs-eval-reaches-no-sicp-procedure
+    standards: [r7rs]
+    source: |
+      (import (scheme base) (scheme write) (scheme eval))
+      (display (eval '(+ 1 2) (environment '(scheme base))))
+      (newline)
+      (display (eval '(1+ 1) (environment '(scheme base))))
+    stdout: |
+      3
+    stderr: |
+      Unhandled condition: Unbound variable: 1+
+    fails: true
+  - name: strict-r7rs-eval-knows-no-sicp-keyword
+    standards: [r7rs]
+    source: |
+      (import (scheme base) (scheme write) (scheme eval))
+      (display (car (eval '(cons-stream 1 2) (environment '(scheme base)))))
+    stdout: |
+    stderr: |
+      Unhandled condition: Unbound variable: cons-stream
+    fails: true

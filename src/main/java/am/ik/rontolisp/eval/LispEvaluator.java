@@ -434,6 +434,12 @@ public final class LispEvaluator {
 	private Features features = Features.INTERPRETER;
 
 	/**
+	 * What every source this evaluator reads is read against
+	 * ({@link #setSourceStandards}).
+	 */
+	private SourceStandards sourceStandards = SourceStandards.DEFAULT;
+
+	/**
 	 * The program's own argument vector, argv0 first -- what {@code %host-argv} answers
 	 * and therefore what the {@code uiop/image} command-line family reads. Empty by
 	 * default: an EMBEDDED run (the tests, the browser playground) has no command line of
@@ -767,6 +773,25 @@ public final class LispEvaluator {
 		}
 		this.features = Features.INTERPRETER.with(names);
 		this.globalEnv.define(LispNames.FEATURES_VAR, Environment.featureKeywordList(this.features.names()));
+	}
+
+	/**
+	 * Sets the standard each language's source is read against
+	 * ({@code --scheme-standard}): every file this evaluator {@code load}s, and the
+	 * run-time table behind Scheme's {@code eval}. Set before the program runs.
+	 * @param standards the standards
+	 */
+	public void setSourceStandards(SourceStandards standards) {
+		this.sourceStandards = standards;
+	}
+
+	/**
+	 * The standards in force, for a caller that reads a source on this evaluator's behalf
+	 * (the CLI reads the entry program itself).
+	 * @return the standards
+	 */
+	public SourceStandards sourceStandards() {
+		return this.sourceStandards;
 	}
 
 	/**
@@ -3390,7 +3415,7 @@ public final class LispEvaluator {
 			// by THIS file's extension, so one program may mix languages file by file.
 			SourceLanguage language = SourceLanguage.forFile(resolved, null);
 			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
-			for (LispVal form : language.read(source, features, resolved)) {
+			for (LispVal form : language.read(source, features, resolved, this.sourceStandards)) {
 				eval(markers ? resolveReadTimeEvalInCode(form) : form);
 			}
 		}
@@ -8596,7 +8621,7 @@ public final class LispEvaluator {
 				// %scheme-error-message
 				// rebinds *standard-output*, and only a form whose special bindings were
 				// registered (SpecialVarCollector) binds it DYNAMICALLY for its callees.
-				for (LispVal form : SchemeLibrary.forms()) {
+				for (LispVal form : SchemeLibrary.forms(this.sourceStandards)) {
 					evalResolved(form);
 				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);

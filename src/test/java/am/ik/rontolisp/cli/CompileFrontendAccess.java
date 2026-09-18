@@ -6,6 +6,7 @@ import java.util.List;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 
 /**
@@ -150,9 +151,22 @@ public final class CompileFrontendAccess {
 	 * @return the expanded program and the feature set it was read with
 	 */
 	public static Program scheme(String source, boolean wasm, boolean component) {
+		return scheme(source, wasm, component, "rontolisp");
+	}
+
+	/**
+	 * {@link #scheme(String, boolean, boolean)} read against a {@code --scheme-standard}.
+	 * @param source the Scheme program text
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @param standard the {@code --scheme-standard} value
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program scheme(String source, boolean wasm, boolean component, String standard) {
 		CompileFrontend.Result result = CompileFrontend.run(CompileFrontend.Request.builder()
 			.source(source)
 			.sourceLanguage("scheme")
+			.standards(SourceStandards.parse(standard))
 			.options(CompileFrontend.Options.builder().wasm(wasm).component(component).build())
 			.build());
 		return new Program(result.program(), result.features());

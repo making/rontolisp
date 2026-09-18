@@ -1,6 +1,6 @@
 # (scheme r5rs)
 
-R7RS が `(scheme r5rs)` にだけ残している R5RS の名前です。このライブラリはここでは import できません。これらの名前は `import` のないファイルと REPL からだけ見えます。
+R7RS が `(scheme r5rs)` にだけ残している R5RS の名前です。このライブラリはここでは import できません。これらの名前は `import` のないファイルと REPL からだけ見え、[`--scheme-standard r7rs`](../standards.md) ではどこからも見えません。
 
 | 名前 | 例 | 結果 |
 |---|---|---|

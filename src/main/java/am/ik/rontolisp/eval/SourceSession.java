@@ -46,12 +46,21 @@ public final class SourceSession {
 	private final @Nullable SchemeSession scheme;
 
 	/**
-	 * Starts a session.
+	 * Starts a session read against every language's default standard.
 	 * @param language the language typed at the prompt
 	 */
 	public SourceSession(SourceLanguage language) {
+		this(language, SourceStandards.DEFAULT);
+	}
+
+	/**
+	 * Starts a session.
+	 * @param language the language typed at the prompt
+	 * @param standards what the typed text is read against ({@code --scheme-standard})
+	 */
+	public SourceSession(SourceLanguage language, SourceStandards standards) {
 		this.language = language;
-		this.scheme = language == SourceLanguage.SCHEME ? Scheme.session() : null;
+		this.scheme = language == SourceLanguage.SCHEME ? Scheme.session(standards.scheme()) : null;
 	}
 
 	/**

@@ -28,6 +28,16 @@ does (`.kb/scheme-frontend.md`, "A session"), Common Lisp keeps none here. `cli/
 is the one consumer today, shared by both REPL drivers; the playground's `evalLine` is the
 same shape and takes this seam when it gains a language pick.
 
+**How strictly a language is read is program-wide, not per file**, and travels with the
+seam: `eval/SourceStandards` (today one member, the `--scheme-standard` value,
+`scheme/SchemeStandard`) is handed to every read of user source -- `read(source,
+features, file, standards)`, `SourceSession(language, standards)`, `LoadInliner`,
+`LispEvaluator.setSourceStandards` for run-time `load` -- and to
+`CompileFrontend.Loaded`, whose `SchemeLibrary` splice generates `eval`'s table from it.
+A wrapper in `eval` rather than the enum itself, so `cli` names no `scheme` type. The
+three-argument `read` means the default and is for the sites that read no user source
+or have no option to honor (the playground).
+
 The entry-language override is validated where it is parsed (an unknown name fails
 fast); loaded files always pick by extension, so the override never leaks into them.
 `isSourceFile` answers the `rontolisp test` question (a missing `foo.lisp` is an error,

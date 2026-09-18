@@ -44,6 +44,8 @@ rontolisp prog.txt --source-language scheme        # any extension
 ## This section
 
 - [REPL](repl.md) -- the interactive session and script-runner mode.
+- [Standards](standards.md) -- `--scheme-standard`: this implementation's dialect or
+  strict R7RS.
 - [Syntax](syntax.md) -- the reader, special forms and `import`.
 - [Libraries](libraries.md) -- the nine importable R7RS libraries and what each
   provides.

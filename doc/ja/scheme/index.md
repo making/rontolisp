@@ -43,6 +43,7 @@ rontolisp prog.txt --source-language scheme        # any extension
 ## このセクション
 
 - [REPL](repl.md) -- 対話セッションとスクリプト実行モード。
+- [規格](standards.md) -- `--scheme-standard`: この処理系の方言か、厳密な R7RS か。
 - [構文](syntax.md) -- リーダー、特殊形式、`import`。
 - [ライブラリ](libraries.md) -- import できる 9 つの R7RS ライブラリと、それぞれが
   提供するもの。

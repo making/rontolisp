@@ -72,6 +72,8 @@ final class SchemeReader {
 
 	private int pos;
 
+	private int firstDatumOffset;
+
 	// R7RS 7.1.1 <directive>: #!fold-case / #!no-fold-case, toggled while reading this
 	// file. Off by default; folds identifiers and character NAMES with a simple
 	// lower-case, never string literals or the character itself.
@@ -113,8 +115,20 @@ final class SchemeReader {
 			if (datum == DOT) {
 				throw error("unexpected '.'", start);
 			}
+			if (datums.isEmpty()) {
+				this.firstDatumOffset = start;
+			}
 			datums.add(datum);
 		}
+	}
+
+	/**
+	 * Where the first top-level datum {@link #readAll} read stands, an atom included; the
+	 * start of the input when there was none.
+	 * @return the position
+	 */
+	SourceLocation locateFirstDatum() {
+		return SourceLocation.at(this.file, this.firstDatumOffset, this.input);
 	}
 
 	// Reads one datum, or the CLOSE / DOT sentinel a list reader is waiting for.
