@@ -8,6 +8,8 @@ element width, a read widens UNSIGNED, a non-integer store is a type error
 representation, which still REMEMBERS the element type ([array-literals.md](array-literals.md)).
 Rank-n falls back for every specialized type except packed floats; CHARACTER degrades the same.
 
+Scheme's bytevectors are the 8-bit pack ([scheme-frontend.md](scheme-frontend.md), "Bytevectors").
+
 ## Representation
 - Interpreter `LispIntVector`: `int width` (8/16/32) + pre-masked `long[]`.
 - JVM: bare `long[]{width, e0, ...}`, `instanceof long[]` the free discriminator;
@@ -60,7 +62,8 @@ registry, the `concatenateBuiltin` arrangement); `JvmArrayCompiler.compileMake` 
   `(equal (array-element-type x) '(unsigned-byte N))`, dimensions unchecked -- so a general
   `#(...)` is never a `(vector (unsigned-byte 8))` (s-sql's `sql-escape` dispatches on it).
 - `subseq`/`copy-seq` are TYPE-PRESERVING via `%array-alike` (`LispNames.ARRAY_ALIKE`, in
-  `CL_INTERNALS`); `replace` mask-stores element-wise; `coerce`/`concatenate` pack when the
+  `CL_INTERNALS`); `replace` mask-stores element-wise (forward, even over overlapping regions
+  of one vector -- a bug on every backend and sequence type, `.todo/872`); `coerce`/`concatenate` pack when the
   RESULT TYPE asks ([concatenate-result-families.md](concatenate-result-families.md));
   `reverse`, `remove`, `map 'vector` and printing return GENERAL everywhere, the interpreter's
   `seqResult` deliberately rebuilding general to match the compilers.

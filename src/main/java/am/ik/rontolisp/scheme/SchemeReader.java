@@ -13,6 +13,7 @@ import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispRatio;
@@ -35,8 +36,9 @@ import org.jspecify.annotations.Nullable;
  * A datum is an ordinary {@link LispVal}, so the lowering walks the same types every
  * other pass does: an identifier is a {@link LispSymbol} holding its spelling VERBATIM
  * (mangling is the lowering's job), the empty list is {@link LispNil}, a vector a
- * {@link LispArray}, and the two booleans are the symbols {@link #TRUE} / {@link #FALSE},
- * whose {@code #} no identifier can start with.
+ * {@link LispArray}, a bytevector an 8-bit {@link LispIntVector}, and the two booleans
+ * are the symbols {@link #TRUE} / {@link #FALSE}, whose {@code #} no identifier can start
+ * with.
  *
  * <p>
  * Every list's head cons is recorded with {@link SourceProvenance}, like
@@ -265,8 +267,10 @@ final class SchemeReader {
 			case "#t", "#true" -> TRUE;
 			case "#f", "#false" -> FALSE;
 			default -> {
-				if (token.startsWith("#u8")) {
-					throw error("bytevectors are not supported", start);
+				if (token.equalsIgnoreCase("#u8") && this.pos < this.input.length()
+						&& this.input.charAt(this.pos) == '(') {
+					this.pos++;
+					yield readBytevector(start);
 				}
 				LispVal number = token.length() > 2 ? prefixedNumber(token) : null;
 				if (number == null) {
@@ -295,6 +299,37 @@ final class SchemeReader {
 			elements.add(datum);
 		}
 		return new LispArray(new int[] { elements.size() }, elements.toArray(new LispVal[0]));
+	}
+
+	// #u8( byte* ): an (unsigned-byte 8) packed vector, the representation every backend
+	// already has for one. An element is an exact integer in 0..255; anything else is
+	// refused here rather than masked by the pack.
+	private LispVal readBytevector(int start) {
+		List<Long> bytes = new ArrayList<>();
+		while (true) {
+			skipAtmosphere();
+			if (this.pos >= this.input.length()) {
+				throw eof("unclosed '#u8('", start);
+			}
+			int at = this.pos;
+			LispVal datum = readDatum();
+			if (datum == CLOSE) {
+				break;
+			}
+			if (datum == DOT) {
+				throw error("a bytevector cannot be dotted", at);
+			}
+			if (!(datum instanceof LispInteger(long value)) || value < 0 || value > 255) {
+				String spelled = datum instanceof LispSymbol symbol ? symbol.name() : datum.print();
+				throw error("a bytevector element must be a byte (0-255): " + spelled, at);
+			}
+			bytes.add(value);
+		}
+		long[] data = new long[bytes.size()];
+		for (int i = 0; i < data.length; i++) {
+			data[i] = bytes.get(i);
+		}
+		return new LispIntVector(8, data);
 	}
 
 	private LispVal readCharacter(int start) {

@@ -412,7 +412,7 @@ final class SchemeBuiltins {
 				("list->string" base value ((l) (rontolisp::%scheme-list->string "list->string" l)))
 
 				;; --- vectors ---
-				("vector?" base pred ((x) (and (vectorp x) (not (stringp x)))))
+				("vector?" base pred ((x) (simple-vector-p x)))
 				("make-vector" base value ((n) (make-array n :initial-element 0)) ((n fill) (make-array n :initial-element fill))
 				 :function (lambda (n &optional (fill 0)) (make-array n :initial-element fill)))
 				("vector" base value ((&rest r) (vector . r)) :function #'vector)
@@ -426,6 +426,32 @@ final class SchemeBuiltins {
 				("vector-fill!" base effect ((v x) (fill v x)) ((v x from) (fill v x :start from))
 				 ((v x from to) (fill v x :start from :end to))
 				 :function (lambda (v x &optional (from 0) to) (fill v x :start from :end to) rontolisp::%scheme-unspecified))
+
+				;; --- bytevectors: the (unsigned-byte 8) pack. Every constructor is a helper
+				;; (SchemeLibrary.makesBytevectors gates the printer's #u8( arm on them).
+				("bytevector?" base pred ((x) (typep x '(simple-array (unsigned-byte 8) (*)))))
+				("make-bytevector" base value ((n) (rontolisp::%scheme-make-bytevector n 0))
+				 ((n fill) (rontolisp::%scheme-make-bytevector n fill))
+				 :function (lambda (n &optional (fill 0)) (rontolisp::%scheme-make-bytevector n fill)))
+				("bytevector" base value ((&rest r) (rontolisp::%scheme-bytevector (list . r)))
+				 :function (lambda (&rest r) (rontolisp::%scheme-bytevector r)))
+				("bytevector-length" base value ((v) (length v)))
+				("bytevector-u8-ref" base value ((v k) (aref v k)))
+				("bytevector-u8-set!" base effect ((v k b) (setf (aref v k) (rontolisp::%scheme-byte "bytevector-u8-set!" b))))
+				("bytevector-copy" base value ((v) (copy-seq v)) ((v from) (subseq v from)) ((v from to) (subseq v from to))
+				 :function (lambda (v &optional (from 0) to) (subseq v from to)))
+				("bytevector-copy!" base effect ((to at from) (rontolisp::%scheme-bytevector-copy! to at from 0 nil))
+				 ((to at from start) (rontolisp::%scheme-bytevector-copy! to at from start nil))
+				 ((to at from start end) (rontolisp::%scheme-bytevector-copy! to at from start end))
+				 :function (lambda (to at from &optional (start 0) end) (rontolisp::%scheme-bytevector-copy! to at from start end) rontolisp::%scheme-unspecified))
+				("bytevector-append" base value ((&rest r) (rontolisp::%scheme-bytevector-append (list . r)))
+				 :function (lambda (&rest r) (rontolisp::%scheme-bytevector-append r)))
+				("utf8->string" base value ((v) (rontolisp:octets-to-string v)) ((v from) (rontolisp:octets-to-string (subseq v from)))
+				 ((v from to) (rontolisp:octets-to-string (subseq v from to)))
+				 :function (lambda (v &optional (from 0) to) (rontolisp:octets-to-string (subseq v from to))))
+				("string->utf8" base value ((s) (rontolisp::%scheme-string->utf8 s)) ((s from) (rontolisp::%scheme-string->utf8 (subseq s from)))
+				 ((s from to) (rontolisp::%scheme-string->utf8 (subseq s from to)))
+				 :function (lambda (s &optional (from 0) to) (rontolisp::%scheme-string->utf8 (subseq s from to))))
 
 				;; --- control ---
 				("procedure?" base pred ((x) (functionp x)))

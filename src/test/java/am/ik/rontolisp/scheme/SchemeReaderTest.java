@@ -1,7 +1,9 @@
 package am.ik.rontolisp.scheme;
 
+import java.util.Arrays;
 import java.util.List;
 
+import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReadException;
 import org.junit.jupiter.api.Test;
@@ -56,6 +58,29 @@ class SchemeReaderTest {
 	}
 
 	@Test
+	void aBytevectorIsAPackedOctetVector() {
+		List<LispVal> read = read("#u8(1 #xff 0) #U8() #u8( 7 )");
+		assertThat(read).allSatisfy(datum -> assertThat(datum).isInstanceOf(LispIntVector.class));
+		assertThat(read.stream().map(datum -> ((LispIntVector) datum).width()).toList()).containsOnly(8);
+		assertThat(read.stream().map(datum -> Arrays.toString(((LispIntVector) datum).data())).toList())
+			.containsExactly("[1, 255, 0]", "[]", "[7]");
+	}
+
+	@Test
+	void aBytevectorHoldsOnlyBytes() {
+		assertThatThrownBy(() -> read("#u8(1 256)"))
+			.hasMessage("test.scm:1:7: a bytevector element must be a byte (0-255): 256");
+		assertThatThrownBy(() -> read("#u8(a)"))
+			.hasMessage("test.scm:1:5: a bytevector element must be a byte (0-255): a");
+		assertThatThrownBy(() -> read("#u8(1.0)"))
+			.hasMessage("test.scm:1:5: a bytevector element must be a byte (0-255): 1.0");
+		assertThatThrownBy(() -> read("#u8(1 . 2)")).hasMessage("test.scm:1:7: a bytevector cannot be dotted");
+		assertThatThrownBy(() -> read("#u8(1 2")).hasMessage("test.scm:1:1: unclosed '#u8('");
+		assertThatThrownBy(() -> read("#u8 (1)")).hasMessage("test.scm:1:1: unsupported '#' syntax: #u8");
+		assertThatThrownBy(() -> read("#u16(1)")).hasMessage("test.scm:1:1: unsupported '#' syntax: #u16");
+	}
+
+	@Test
 	void commentsAreSkipped() {
 		assertThat(printed("1 ; line\n #| block #| nested |# |# 2 #;(datum comment) 3 #;4")).isEqualTo("[1, 2, 3]");
 	}
@@ -71,7 +96,6 @@ class SchemeReaderTest {
 
 	@Test
 	void unsupportedSyntaxIsRefusedByName() {
-		assertThatThrownBy(() -> read("#u8(1 2)")).hasMessage("test.scm:1:1: bytevectors are not supported");
 		assertThatThrownBy(() -> read("|a b|")).hasMessage("test.scm:1:1: |...| identifiers are not supported");
 		assertThatThrownBy(() -> read("[a]"))
 			.hasMessage("test.scm:1:1: '[' is not a delimiter in R7RS; use parentheses");
