@@ -2,7 +2,7 @@
 
 `(define-record-type name (constructor field...) predicate (field accessor [modifier])...)`
 
-Defines a record type: `constructor` makes a record from the listed fields, `predicate` tests for one, and each `accessor` (and optional `modifier`) reads (and writes) a field. Only allowed at the top level. A record writes in Common Lisp's `#S(...)` syntax, with each field named after its accessor, and `equal?` compares records by identity. A modifier answers the value it stored rather than the unspecified value.
+Defines a record type: `constructor` makes a record from the listed fields, `predicate` tests for one, and each `accessor` (and optional `modifier`) reads (and writes) a field. Only allowed at the top level. A record writes in Common Lisp's `#S(...)` syntax, with each field named after its accessor, and `equal?` compares records by identity.
 
 ```scheme
 (define-record-type point (make-point x y) point? (x point-x set-point-x!) (y point-y))

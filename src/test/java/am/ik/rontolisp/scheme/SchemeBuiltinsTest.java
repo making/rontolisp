@@ -12,8 +12,11 @@ import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class SchemeBuiltinsTest {
 
@@ -149,6 +152,29 @@ class SchemeBuiltinsTest {
 			evaluator.eval(form);
 		}
 		assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo("(abc)(a b)");
+	}
+
+	@ParameterizedTest
+	@CsvSource(delimiter = '|', textBlock = """
+			(odd? 1.5)                  | odd?: not an integer: 1.5
+			(even? 1/2)                 | even?: not an integer: 1/2
+			(quotient 7.5 2)            | quotient: not an integer: 7.5
+			(floor-quotient 7 2.5)      | floor-quotient: not an integer: 2.5
+			(gcd 2.5 4)                 | gcd: not an integer: 2.5
+			(lcm 4 'a)                  | lcm: not an integer: a
+			(string #\\a 1)             | string: not a character: 1
+			(list->string (list #\\a 1)) | list->string: not a character: 1
+			(stream-car '())            | stream-car: not a stream pair: ()
+			(stream-cdr '())            | stream-cdr: not a stream pair: ()
+			""")
+	void anArgumentR7rsMakesAnErrorIsRefusedByName(String program, String message) {
+		LispEvaluator evaluator = new LispEvaluator(
+				new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
+		assertThatThrownBy(() -> {
+			for (LispVal form : Scheme.read(program, null)) {
+				evaluator.eval(form);
+			}
+		}).hasMessageContaining(message);
 	}
 
 	@Test

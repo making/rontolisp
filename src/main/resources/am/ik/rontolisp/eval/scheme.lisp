@@ -907,7 +907,75 @@
         (return (car rest)))))
 
 (defun rontolisp::%scheme-list? (x)
-  (do ((rest x (cdr rest))) ((not (consp rest)) (null rest))))
+  ;; Floyd: FAST takes two steps per SLOW's one, so a circular list meets itself (#f)
+  ;; instead of walking forever.
+  (let ((slow x) (fast x))
+    (do ()
+        (nil)
+      (if (not (consp fast)) (return (null fast)))
+      (setq fast (cdr fast))
+      (if (not (consp fast)) (return (null fast)))
+      (setq fast (cdr fast))
+      (setq slow (cdr slow))
+      (if (eq fast slow) (return nil)))))
+
+;; R7RS list-copy: the spine is copied up to its last pair, a dotted tail is kept, and
+;; an object that is not a pair is answered itself.
+(defun rontolisp::%scheme-list-copy (x)
+  (if (consp x)
+      (let* ((head (cons (car x) nil)) (tail head))
+        (do ((rest (cdr x) (cdr rest)))
+            ((not (consp rest))
+             (rplacd tail rest)
+             head)
+          (let ((cell (cons (car rest) nil)))
+            (rplacd tail cell)
+            (setq tail cell))))
+      x))
+
+;; SRFI-1 / MIT reduce: (f elem acc) left to right, seeded with the first element.
+(defun rontolisp::%scheme-reduce (f initial list)
+  (if (consp list)
+      (let ((acc (car list)))
+        (do ((rest (cdr list) (cdr rest)))
+            ((not (consp rest)) acc)
+          (setq acc (funcall f (car rest) acc))))
+      initial))
+
+;; Whether any of LISTS has run out: the multi-list folds stop at the shortest.
+(defun rontolisp::%scheme-any-empty (lists)
+  (do ((rest lists (cdr rest)))
+      ((null rest) nil)
+    (if (not (consp (car rest))) (return t))))
+
+;; MIT fold-left / fold-right over several lists: (f acc e1 e2 ...) from the left,
+;; (f e1 e2 ... acc) from the right.
+(defun rontolisp::%scheme-fold-left (f initial lists)
+  (let ((acc initial))
+    (do ((rest lists (mapcar #'cdr rest)))
+        ((rontolisp::%scheme-any-empty rest) acc)
+      (setq acc (apply f acc (mapcar #'car rest))))))
+
+(defun rontolisp::%scheme-fold-right (f initial lists)
+  (let ((rows nil) (acc initial))
+    (do ((rest lists (mapcar #'cdr rest)))
+        ((rontolisp::%scheme-any-empty rest))
+      (setq rows (cons (mapcar #'car rest) rows)))
+    (do ((rest rows (cdr rest)))
+        ((null rest) acc)
+      (setq acc (apply f (append (car rest) (list acc)))))))
+
+;; string / list->string: every element must be a character, (string #\a 1) is an error
+;; rather than "a1".
+(defun rontolisp::%scheme-list->string (who list)
+  (do ((rest list (cdr rest)))
+      ((not (consp rest)))
+    (if (not (characterp (car rest)))
+        (error "~A"
+               (rontolisp::%scheme-error-message
+                (concatenate 'string who ": not a character:")
+                (list (car rest))))))
+  (coerce list 'string))
 
 ;; SRFI-1 filter: pred is a Scheme procedure, so its answer is compared against the
 ;; false value rather than trusted as a Common Lisp boolean.
@@ -935,7 +1003,68 @@
 ;; --- numbers ----------------------------------------------------------------------
 
 (defun rontolisp::%scheme-integer? (x)
-  (or (integerp x) (and (floatp x) (= x (truncate x)))))
+  (or (integerp x)
+      (and (floatp x) (rontolisp::%scheme-finite? x) (= x (truncate x)))))
+
+;; X when it is an integer, exact or inexact; otherwise an error naming WHO (R7RS makes
+;; a non-integer argument to quotient, gcd, odd? ... an error).
+(defun rontolisp::%scheme-integer-argument (who x)
+  (if (and (realp x) (rontolisp::%scheme-integer? x))
+      x
+      (error "~A"
+             (rontolisp::%scheme-error-message
+              (concatenate 'string who ": not an integer:") (list x)))))
+
+;; EXACT made inexact when INEXACT is a flonum: plus a zero computed FROM that flonum.
+;; Never `float`, which builds a flonum out of an exact value: that constructor would stay
+;; reachable in a program that never makes a flonum, and the wasm type-test fold could no
+;; longer drop the flonum arms of its arithmetic and printer (+12 KB for (quotient 17 5)).
+(defun rontolisp::%scheme-inexact-like (exact inexact)
+  (if (floatp inexact) (+ exact (- inexact inexact)) exact))
+
+;; The integer divisions past their inline exact-integer path: an inexact operand makes
+;; the quotient inexact, (quotient 7.0 2) is 3.0.
+(defun rontolisp::%scheme-quotient (who a b)
+  (rontolisp::%scheme-integer-argument who a)
+  (rontolisp::%scheme-integer-argument who b)
+  (rontolisp::%scheme-inexact-like
+   (rontolisp::%scheme-inexact-like (values (truncate a b)) a) b))
+
+(defun rontolisp::%scheme-floor-quotient (a b)
+  (rontolisp::%scheme-integer-argument "floor-quotient" a)
+  (rontolisp::%scheme-integer-argument "floor-quotient" b)
+  (rontolisp::%scheme-inexact-like
+   (rontolisp::%scheme-inexact-like (values (floor a b)) a) b))
+
+(defun rontolisp::%scheme-odd? (x)
+  (oddp (truncate (rontolisp::%scheme-integer-argument "odd?" x))))
+
+(defun rontolisp::%scheme-even? (x)
+  (evenp (truncate (rontolisp::%scheme-integer-argument "even?" x))))
+
+;; gcd / lcm over any number of integers, inexact when any argument is: (gcd 2.0 4) is
+;; 2.0.
+(defun rontolisp::%scheme-gcd (arguments)
+  (let ((result 0) (inexact nil))
+    (do ((rest arguments (cdr rest)))
+        ((null rest) (rontolisp::%scheme-inexact-like result inexact))
+      (if (floatp (car rest)) (setq inexact (car rest)))
+      (setq result
+            (gcd result
+                 (values
+                  (truncate
+                   (rontolisp::%scheme-integer-argument "gcd" (car rest)))))))))
+
+(defun rontolisp::%scheme-lcm (arguments)
+  (let ((result 1) (inexact nil))
+    (do ((rest arguments (cdr rest)))
+        ((null rest) (rontolisp::%scheme-inexact-like result inexact))
+      (if (floatp (car rest)) (setq inexact (car rest)))
+      (setq result
+            (lcm result
+                 (values
+                  (truncate
+                   (rontolisp::%scheme-integer-argument "lcm" (car rest)))))))))
 
 ;; --- (scheme inexact) ---------------------------------------------------------------
 
@@ -1103,22 +1232,27 @@
 (defun rontolisp::%scheme-min (a b)
   (let ((m (min a b))) (if (or (floatp a) (floatp b)) (float m 1.0d0) m)))
 
+(defun rontolisp::%scheme-integer->string (n radix)
+  (if (zerop n)
+      "0"
+      (do ((m (abs n) (truncate m radix))
+           (digits
+            nil
+            (cons (char "0123456789abcdefghijklmnopqrstuvwxyz" (rem m radix))
+                  digits)))
+          ((zerop m) (coerce (if (< n 0) (cons #\- digits) digits) 'string)))))
+
+;; RADIX applies to every exact number, a ratio's numerator and denominator alike
+;; ((number->string 1/3 2) is "1/11"); a flonum is written in decimal.
 (defun rontolisp::%scheme-number->string (n radix)
-  (if (or (= radix 10) (not (integerp n)))
-      (if (floatp n)
-          (with-output-to-string (*standard-output*)
-            (rontolisp::%scheme-print-flonum n))
-          (princ-to-string n))
-      (if (zerop n)
-          "0"
-          (do ((m (abs n) (truncate m radix))
-               (digits
-                nil
-                (cons
-                 (char "0123456789abcdefghijklmnopqrstuvwxyz" (rem m radix))
-                 digits)))
-              ((zerop m)
-               (coerce (if (< n 0) (cons #\- digits) digits) 'string))))))
+  (cond ((floatp n)
+         (with-output-to-string (*standard-output*)
+           (rontolisp::%scheme-print-flonum n)))
+        ((or (= radix 10) (not (rationalp n))) (princ-to-string n))
+        ((integerp n) (rontolisp::%scheme-integer->string n radix))
+        (t (concatenate 'string
+            (rontolisp::%scheme-integer->string (numerator n) radix) "/"
+            (rontolisp::%scheme-integer->string (denominator n) radix)))))
 
 (defun rontolisp::%scheme-digit (c radix)
   (let ((code (char-code c)))
@@ -1414,7 +1548,18 @@
 (defun rontolisp::%scheme-stream-pair? (x)
   (and (consp x) (rontolisp::%scheme-promise-p (cdr x))))
 
-(defun rontolisp::%scheme-stream-cdr (s) (rontolisp::%scheme-force (cdr s)))
+(defun rontolisp::%scheme-not-a-stream-pair (who s)
+  (error "~A"
+         (rontolisp::%scheme-error-message
+          (concatenate 'string who ": not a stream pair:") (list s))))
+
+(defun rontolisp::%scheme-stream-car (s)
+  (if (consp s) (car s) (rontolisp::%scheme-not-a-stream-pair "stream-car" s)))
+
+(defun rontolisp::%scheme-stream-cdr (s)
+  (if (consp s)
+      (rontolisp::%scheme-force (cdr s))
+      (rontolisp::%scheme-not-a-stream-pair "stream-cdr" s)))
 
 ;; The streams below are walked in loops, never by recursion: a sieve asked for its 50th
 ;; prime forces thousands of cells.
