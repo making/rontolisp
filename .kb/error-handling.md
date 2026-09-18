@@ -811,6 +811,16 @@ standalone `uncaught-non-function-report`, `LispEvaluatorTest`
 - **One text in every mode**: the Scheme REPL used to reword the failure (`#f is not a procedure;
   operands: (2 3)`, carried by a LispApplyException, removed) while file mode and the compiled backends
   could not. The REPL prints the condition's text now (`.kb/scheme-frontend.md`).
+- **Scheme never reaches this path for its own values** (`.todo/851`, 2026-09-18): a
+  lowered Scheme combination whose operator is not a known procedure goes through
+  `rontolisp::%scheme-ensure-procedure` (a `functionp` check reporting
+  `The object is not applicable: <scheme-print>` through `%scheme-error-message`,
+  the same text `%scheme-eval-apply` reports), so `#f`, the unspecified object, a
+  number and any symbol report as Scheme values before any backend dispatches on
+  them. The backends carry the message; none learns a Scheme name. A Scheme
+  `(h 1)` over a number therefore reports `The object is not applicable: 3`, not
+  the `Not a function: 3` a CL `(funcall 3 1)` reports -- same backends, different
+  front ends, each in its own terms.
 - Cost (2026-09-17, a 20M-iteration `funcall` loop, 12-16 alternating runs, load 6-16): JVM
   monomorphic 23-38 -> 0-1 ms (the loop now folds entirely), polymorphic 109-114 vs 99-131 ms; wasm
   P1 EH mode mono 259 vs 262 ms, poly 766 vs 783; component poly 753 vs 804 against an A/A run of

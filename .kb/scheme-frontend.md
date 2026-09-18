@@ -410,12 +410,34 @@ names outlive each buffer; everything else is per buffer.
   Continuation is "the reader ran out of input"
   (`LispReadException.isEndOfFile`), so `#;`, `#| |#` and `#\(` need no second rule.
 - **Applying a non-procedure** reports the condition's own text at the REPL, as file mode
-  and every compiled backend do: `Not a function: 3`, and `The function #f is undefined`
-  for `#f` (a symbol here). The REPL used to reword it (`#f is not a procedure; operands:
-  (2 3)`, 2026-09-17, removed the same day): a rewording only the interpreter REPL could
-  produce split one failure into two texts, and no backend may learn a Scheme name to
-  carry it ([error-handling.md](error-handling.md), "Applying a value that names no
-  function"). Pinned by `RontoLispCliTest.theSchemeReplReportsANonProcedureAsAFileDoes`.
+  and every compiled backend do: `The object is not applicable: 3`, `...: #f` and
+  `...: #!unspecific` -- the same text `%scheme-eval-apply` reports, built by
+  `%scheme-error-message` through the Scheme printer. Every lowered combination whose
+  operator is not a known procedure goes through `%scheme-ensure-procedure` (a
+  `functionp` check; `.todo/851`, 2026-09-18): a variable call, a computed operator,
+  a literal `#f`/`#t` operator, and the `apply`/`map`/`for-each`/`call/cc`/
+  `dynamic-wind`/`call-with-values` templates' procedure arguments. A Scheme
+  application applies a PROCEDURE value, never a symbol designator, so a symbol --
+  `#f` included -- is not an `undefined-function` about a name. No backend learns a
+  Scheme name: the message is built in `scheme.lisp`, the backends only carry it.
+  The REPL used to reword it (`#f is not a procedure; operands: (2 3)`, 2026-09-17,
+  removed the same day): a rewording only the interpreter REPL could produce split one
+  failure into two texts ([error-handling.md](error-handling.md), "Applying a value
+  that names no function"). Pinned by `RontoLispCliTest.theSchemeReplReportsANonProcedureAsAFileDoes`
+  and the `standalone:` cases of `scheme-spec.yaml` (all four backends).
+- **Cost** (2026-09-18, x86-64 Linux, Java 25): a program with no indirect call is
+  byte-identical (`hello.scm`: 1,665 B of class / 510 B of wasm before and after).
+  `(display (twice add1 5))` (two variable calls) goes from 75,135 to 79,717 B of
+  class (+4,582) and 13,660 to 25,027 B of wasm (+11,367): the first pull of
+  `%scheme-error-message`'s `with-output-to-string` string-stream machinery (a
+  program already using Scheme `error` or `eval` pays only the ensure defun and its
+  call sites). Time: a 2M-iteration Scheme variable-call loop 0.127 vs 0.134 s on
+  the JVM (real, incl. startup, single runs -- in the noise, as the backend check
+  of [error-handling.md](error-handling.md) was); 20M iterations 0.150 s after.
+  The marking alternative (backend classes reserved symbols as non-functions) was
+  not taken: it would still need the Scheme printer at the signal point to name
+  `#f` as `#f` rather than `|#f|`, i.e. a backend that learns Scheme printing, for
+  no size win over the one helper every indirect call already shares with `eval`.
 
 ## The shared REPL loop (`cli/ReplBuffer`), both languages
 

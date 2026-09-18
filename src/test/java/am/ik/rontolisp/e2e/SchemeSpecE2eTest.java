@@ -71,7 +71,33 @@ class SchemeSpecE2eTest {
 
 	}
 
-	record Spec(List<Case> cases) {
+	/**
+	 * A case that cannot join the shared corpus because running it ENDS the program: an
+	 * uncaught condition takes the process down, and its report goes to standard error,
+	 * which the concatenated run neither slices nor keeps. Each one is compiled and run
+	 * on its own, per backend -- the ci-spec.yaml {@code standalone:} idea.
+	 */
+	record Standalone(String name, String source, String stdout, String stderr, Boolean fails) {
+
+		List<String> stdoutLines() {
+			return splitLines(this.stdout == null ? "" : this.stdout);
+		}
+
+		List<String> stderrLines() {
+			return splitLines(this.stderr == null ? "" : this.stderr);
+		}
+
+		boolean failsExpected() {
+			return Boolean.TRUE.equals(this.fails);
+		}
+
+	}
+
+	record Spec(List<Case> cases, List<Standalone> standalone) {
+
+		List<Standalone> standaloneCases() {
+			return this.standalone == null ? List.of() : this.standalone;
+		}
 
 		String program() {
 			StringBuilder program = new StringBuilder();
@@ -108,6 +134,123 @@ class SchemeSpecE2eTest {
 		backends.add(wasmBackend("WASM", spec, stdin, false));
 		backends.add(wasmBackend("WASM_COMPONENT", spec, stdin, true));
 		return backends.stream();
+	}
+
+	/**
+	 * The spec's {@code standalone:} list: one program per case, per backend -- a case
+	 * whose program ENDS (an uncaught condition takes the process down, and its report
+	 * goes to standard error, which the concatenated run neither slices nor keeps).
+	 */
+	@TestFactory
+	Stream<DynamicNode> standalone() throws Exception {
+		Spec spec = loadSpec();
+		List<DynamicNode> legs = new ArrayList<>();
+		for (Standalone s : spec.standaloneCases()) {
+			legs.add(dynamicTest(s.name() + " INTERPRETER", () -> runStandaloneInterpreter(s)));
+			legs.add(dynamicTest(s.name() + " JVM", () -> runStandaloneJvm(s)));
+			for (boolean component : List.of(false, true)) {
+				legs.add(dynamicTest(s.name() + (component ? " WASM_COMPONENT" : " WASM"), () -> {
+					if (!HostWasmtime.isAvailable()) {
+						abort("no usable wasmtime on PATH");
+					}
+					runStandaloneWasm(s, component);
+				}));
+			}
+		}
+		return legs.stream();
+	}
+
+	private static void runStandaloneInterpreter(Standalone s) throws Exception {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		Throwable[] thrown = new Throwable[1];
+		onAProgramStack(() -> {
+			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+			try {
+				for (LispVal form : SourceLanguage.SCHEME.read(s.source(), Features.INTERPRETER, "standalone.scm")) {
+					evaluator.eval(form);
+				}
+			}
+			catch (Throwable ex) {
+				thrown[0] = ex;
+			}
+			return null;
+		});
+		String where = "standalone case '%s' on INTERPRETER%n--- source ---%n%s--- end source ---".formatted(s.name(),
+				s.source());
+		assertThat(splitLines(out.toString(StandardCharsets.UTF_8))).as("%s", where)
+			.containsExactlyElementsOf(s.stdoutLines());
+		if (s.failsExpected()) {
+			assertThat(thrown[0]).as("%s: expected a failure", where).isNotNull();
+			String message = String.valueOf(thrown[0].getMessage());
+			for (String line : s.stderrLines()) {
+				// The interpreter throws the bare message; the compiled backends prefix
+				// it with "Unhandled condition: " -- strip that for the comparison so
+				// one expectation covers all four.
+				String bare = line.startsWith("Unhandled condition: ")
+						? line.substring("Unhandled condition: ".length()) : line;
+				assertThat(message).as("%s", where).contains(bare);
+			}
+		}
+		else {
+			assertThat(thrown[0]).as("%s: unexpected failure %s", where, thrown[0]).isNull();
+		}
+	}
+
+	private static void runStandaloneJvm(Standalone s) throws Exception {
+		String stem = "SStandalone" + s.name().replaceAll("[^A-Za-z0-9]", "");
+		Path dir = workDir.resolve(stem);
+		Files.createDirectories(dir);
+		Files.write(dir.resolve(stem + ".class"),
+				new JvmSourceCompiler(stem).sourceLanguage("scheme").compile(s.source(), null).classBytes());
+		Path outFile = Files.createTempFile(workDir, stem + "-jvm", ".out");
+		Path errFile = Files.createTempFile(workDir, stem + "-jvm", ".err");
+		try {
+			Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+					"-cp", dir.toString(), stem)
+				.redirectOutput(outFile.toFile())
+				.redirectError(errFile.toFile())
+				.start();
+			if (!process.waitFor(300, java.util.concurrent.TimeUnit.SECONDS)) {
+				process.destroyForcibly().waitFor();
+				throw new IllegalStateException("java command timed out: " + stem);
+			}
+			String stdout = Files.readString(outFile, StandardCharsets.UTF_8);
+			String stderr = Files.readString(errFile, StandardCharsets.UTF_8);
+			String where = "standalone case '%s' on JVM%n--- source ---%n%s--- end source ---%n--- stderr ---%n%s"
+				.formatted(s.name(), s.source(), stderr);
+			assertThat(splitLines(stdout)).as("%s", where).containsExactlyElementsOf(s.stdoutLines());
+			for (String line : s.stderrLines()) {
+				assertThat(splitLines(stderr)).as("%s", where).contains(line);
+			}
+			if (s.failsExpected()) {
+				assertThat(process.exitValue()).as("%s: expected a non-zero exit", where).isNotZero();
+			}
+			else {
+				assertThat(process.exitValue()).as("%s", where).isZero();
+			}
+		}
+		finally {
+			Files.deleteIfExists(outFile);
+			Files.deleteIfExists(errFile);
+		}
+	}
+
+	private static void runStandaloneWasm(Standalone s, boolean component) throws Exception {
+		HostWasmtime.ExecResult result = runWasmModule(s.source(), "", component,
+				"standalone-" + s.name().replaceAll("[^A-Za-z0-9]", ""));
+		String leg = component ? "WASM_COMPONENT" : "WASM";
+		String where = "standalone case '%s' on %s%n--- source ---%n%s--- end source ---%n--- stderr ---%n%s"
+			.formatted(s.name(), leg, s.source(), result.stderr());
+		assertThat(splitLines(result.stdout())).as("%s", where).containsExactlyElementsOf(s.stdoutLines());
+		for (String line : s.stderrLines()) {
+			assertThat(splitLines(result.stderr())).as("%s", where).contains(line);
+		}
+		if (s.failsExpected()) {
+			assertThat(result.exitCode()).as("%s: expected a non-zero exit", where).isNotZero();
+		}
+		else {
+			assertThat(result.exitCode()).as("%s: %s", where, result.stderr()).isZero();
+		}
 	}
 
 	/**

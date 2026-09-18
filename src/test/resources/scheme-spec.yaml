@@ -1384,3 +1384,37 @@ cases:
       (#t #t)
       #<eof>
       #t
+# An uncaught application of a non-procedure ends the program, so these cannot
+# join the concatenated corpus above -- one program per case, per backend, like
+# ci-spec.yaml's standalone: list (.todo/851). The dynamic-wind puts the wasm
+# module in EH mode, where the report is printable at all.
+standalone:
+  - name: applying-false-reports-not-applicable
+    source: |
+      (dynamic-wind (lambda () #t)
+                    (lambda () ((if #t #f car) 1))
+                    (lambda () #t))
+    stdout: |
+    stderr: |
+      Unhandled condition: The object is not applicable: #f
+    fails: true
+  - name: applying-the-unspecified-object-reports-not-applicable
+    source: |
+      (define standalone-unspecified (if #f #f))
+      (dynamic-wind (lambda () #t)
+                    (lambda () ((if #t standalone-unspecified car) 1))
+                    (lambda () #t))
+    stdout: |
+    stderr: |
+      Unhandled condition: The object is not applicable: #!unspecific
+    fails: true
+  - name: applying-a-number-reports-not-applicable
+    source: |
+      (define standalone-number 3)
+      (dynamic-wind (lambda () #t)
+                    (lambda () (standalone-number 1))
+                    (lambda () #t))
+    stdout: |
+    stderr: |
+      Unhandled condition: The object is not applicable: 3
+    fails: true

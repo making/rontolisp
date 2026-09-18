@@ -78,17 +78,17 @@ class SchemeLoweringTest {
 		assertThat(lowered("(define old-abs abs) (define (abs x) (old-abs x)) (abs -5)")).isEqualTo("""
 				(SETQ |abs| (LAMBDA (X) (ABS X)))
 				(SETQ |old-abs| |abs|)
-				(SETQ |abs| (LAMBDA (|x|) (FUNCALL |old-abs| |x|)))
-				(FUNCALL |abs| -5)""");
+				(SETQ |abs| (LAMBDA (|x|) (FUNCALL (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |old-abs|) |x|)))
+				(FUNCALL (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |abs|) -5)""");
 		// Called at the top level first, and reached through a procedure called before
 		// the definition.
 		assertThat(lowered("(abs -5) (define (abs x) 'mine)")).isEqualTo("""
 				(SETQ |abs| (LAMBDA (X) (ABS X)))
-				(FUNCALL |abs| -5)
+				(FUNCALL (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |abs|) -5)
 				(SETQ |abs| (LAMBDA (|x|) '|mine|))""");
 		assertThat(lowered("(define (f x) (abs x)) (f 1) (define (abs x) 'mine)")).isEqualTo("""
 				(SETQ |abs| (LAMBDA (X) (ABS X)))
-				(DEFUN |f| (|x|) (FUNCALL |abs| |x|))
+				(DEFUN |f| (|x|) (FUNCALL (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |abs|) |x|))
 				(|f| 1)
 				(SETQ |abs| (LAMBDA (|x|) '|mine|))""");
 		// A value, not a procedure, and a SICP constant.
@@ -103,8 +103,8 @@ class SchemeLoweringTest {
 		assertThat(lowered("(define f (lambda (x) x)) (set! f car) (f 1) (define (g h) (h f))")).isEqualTo("""
 				(SETQ |f| (LAMBDA (|x|) |x|))
 				(SETQ |f| #'CAR)
-				(FUNCALL |f| 1)
-				(DEFUN |g| (|h|) (FUNCALL |h| |f|))""");
+				(FUNCALL (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |f|) 1)
+				(DEFUN |g| (|h|) (FUNCALL (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |h|) |f|))""");
 	}
 
 	@Test
@@ -116,11 +116,12 @@ class SchemeLoweringTest {
 
 	@Test
 	void aProcedureNameInValuePositionIsAFunctionValue() {
-		assertThat(lowered("(define (f x) x) (map f '(1)) (map car '((1))) (map pair? '(1))")).isEqualTo("""
-				(DEFUN |f| (|x|) |x|)
-				(MAPCAR #'|f| '(1))
-				(MAPCAR #'CAR '((1)))
-				(MAPCAR (LAMBDA (X) (IF (CONSP X) T RONTOLISP::%SCHEME-FALSE)) '(1))""");
+		assertThat(lowered("(define (f x) x) (map f '(1)) (map car '((1))) (map pair? '(1))")).isEqualTo(
+				"""
+						(DEFUN |f| (|x|) |x|)
+						(MAPCAR (RONTOLISP::%SCHEME-ENSURE-PROCEDURE #'|f|) '(1))
+						(MAPCAR (RONTOLISP::%SCHEME-ENSURE-PROCEDURE #'CAR) '((1)))
+						(MAPCAR (RONTOLISP::%SCHEME-ENSURE-PROCEDURE (LAMBDA (X) (IF (CONSP X) T RONTOLISP::%SCHEME-FALSE))) '(1))""");
 	}
 
 	@Test
@@ -175,9 +176,10 @@ class SchemeLoweringTest {
 
 	@Test
 	void aNamedLetWhoseNameEscapesIsAProcedure() {
-		assertThat(lowered("(let fact ((n 5)) (if (= n 0) 1 (* n (fact (- n 1)))))")).isEqualTo("""
-				(LET ((|fact| NIL)) (SETQ |fact| (LAMBDA (|n|) (IF (= |n| 0) 1 (* |n| (FUNCALL |fact| (- |n| 1)))))) \
-				(FUNCALL |fact| 5))""");
+		assertThat(lowered("(let fact ((n 5)) (if (= n 0) 1 (* n (fact (- n 1)))))")).isEqualTo(
+				"""
+						(LET ((|fact| NIL)) (SETQ |fact| (LAMBDA (|n|) (IF (= |n| 0) 1 (* |n| (FUNCALL (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |fact|) (- |n| 1)))))) \
+						(FUNCALL |fact| 5))""");
 	}
 
 	@Test
@@ -194,7 +196,7 @@ class SchemeLoweringTest {
 	void internalDefinitionsAreLetrecStar() {
 		assertThat(lowered("(define (f x) (define a 1) (define (g y) (+ y a)) (g x))")).isEqualTo("""
 				(DEFUN |f| (|x|) (LET ((|a| NIL) (|g| NIL)) (SETQ |a| 1) (SETQ |g| (LAMBDA (|y|) (+ |y| |a|))) \
-				(FUNCALL |g| |x|)))""");
+				(FUNCALL (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |g|) |x|)))""");
 	}
 
 	@Test
@@ -218,8 +220,9 @@ class SchemeLoweringTest {
 	void callWithValuesOverTwoVisibleLambdasIsAMultipleValueBind() {
 		assertThat(lowered("(call-with-values (lambda () (values 1 2)) (lambda (a b) (+ a b)))")).isEqualTo("""
 				(MULTIPLE-VALUE-BIND (|a| |b|) (VALUES 1 2) (+ |a| |b|))""");
-		assertThat(lowered("(call-with-values p c)")).isEqualTo("""
-				(APPLY |c| (MULTIPLE-VALUE-LIST (FUNCALL |p|)))""");
+		assertThat(lowered("(call-with-values p c)")).isEqualTo(
+				"""
+						(APPLY (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |c|) (MULTIPLE-VALUE-LIST (FUNCALL (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |p|))))""");
 	}
 
 	@Test
@@ -319,7 +322,8 @@ class SchemeLoweringTest {
 		assertThat(lowered("(list (sqrt x) (atan y x) (log x 10))")).isEqualTo(
 				"(LIST (RONTOLISP::%SCHEME-SQRT |x|) (RONTOLISP::%SCHEME-ATAN2 |y| |x|) (RONTOLISP::%SCHEME-LOG-BASE |x| 10))");
 		assertThat(lowered("(define (sqrt x) x) (sqrt 4)")).contains("(|sqrt| 4)");
-		assertThat(lowered("(define (ev exp env) (exp env))")).contains("(FUNCALL |exp| |env|)");
+		assertThat(lowered("(define (ev exp env) (exp env))"))
+			.contains("(FUNCALL (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |exp|) |env|)");
 	}
 
 	@Test
@@ -372,8 +376,9 @@ class SchemeLoweringTest {
 
 	@Test
 	void delayAndConsStreamAreShadowableLikeAnyKeyword() {
-		assertThat(lowered("(define (after-delay delay action) (list delay (delay action)))")).isEqualTo("""
-				(DEFUN |after-delay| (|delay| |action|) (LIST |delay| (FUNCALL |delay| |action|)))""");
+		assertThat(lowered("(define (after-delay delay action) (list delay (delay action)))")).isEqualTo(
+				"""
+						(DEFUN |after-delay| (|delay| |action|) (LIST |delay| (FUNCALL (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |delay|) |action|)))""");
 		assertThat(lowered("(define (cons-stream a b) (cons a b)) (cons-stream 1 2)")).isEqualTo("""
 				(DEFUN |cons-stream| (|a| |b|) (CONS |a| |b|))
 				(|cons-stream| 1 2)""");

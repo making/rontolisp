@@ -1519,6 +1519,18 @@
              (rontolisp::%scheme-error-message "The object is not applicable:"
                                                (list f)))))
 
+;; The check a lowered combination's operator goes through: a Scheme application
+;; applies a PROCEDURE value, never a symbol designator, so a non-function --
+;; #f, the unspecified object, a number, a symbol -- reports what eval reports
+;; (.kb/scheme-frontend.md), on every backend, without any backend learning a
+;; Scheme name. Answers f when it is one.
+(defun rontolisp::%scheme-ensure-procedure (f)
+  (if (functionp f)
+      f
+      (error "~A"
+             (rontolisp::%scheme-error-message "The object is not applicable:"
+                                               (list f)))))
+
 ;; Evaluates every form of BODY but the last, for effect, and answers the last one: the
 ;; tail form the caller continues with.
 (defun rontolisp::%scheme-eval-butlast (body env)

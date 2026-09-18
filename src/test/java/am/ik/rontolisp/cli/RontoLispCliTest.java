@@ -818,15 +818,15 @@ class RontoLispCliTest {
 				(h 1)
 				""", "--source-language", "scheme");
 		assertThat(session[2]).isEqualTo("""
-				Error: The function #f is undefined
-				Error: Not a function: 3
+				Error: The object is not applicable: #f
+				Error: The object is not applicable: 3
 				""");
 		Path program = this.tempDir.resolve("apply.scm");
 		Files.writeString(program, "(define h 3)\n(display \"before\")\n(h 1)\n");
 		String[] file = runReporting(program.toString());
 		assertThat(file[0]).isEqualTo("1");
 		assertThat(file[1]).isEqualTo("before");
-		assertThat(file[2]).isEqualTo("Unhandled condition: Not a function: 3\n");
+		assertThat(file[2]).isEqualTo("Unhandled condition: The object is not applicable: 3\n");
 	}
 
 	@Test

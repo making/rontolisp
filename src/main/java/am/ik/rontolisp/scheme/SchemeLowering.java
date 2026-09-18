@@ -1510,15 +1510,33 @@ final class SchemeLowering {
 				yield LispNil.INSTANCE;
 			}
 			case Variable variable ->
-				new LispCons(symbol("FUNCALL"), new LispCons(variable.symbol(), listOf(arguments)));
+				new LispCons(symbol("FUNCALL"), new LispCons(ensure(variable.symbol()), listOf(arguments)));
 			case null, default -> {
 				if (call.operator() instanceof LispSymbol head) {
+					if (head.equals(SchemeReader.FALSE)) {
+						yield new LispCons(symbol("FUNCALL"),
+								new LispCons(ensure(this.falseVariable), listOf(arguments)));
+					}
+					if (head.equals(SchemeReader.TRUE)) {
+						yield new LispCons(symbol("FUNCALL"),
+								new LispCons(ensure(LispTrue.INSTANCE), listOf(arguments)));
+					}
 					// Not defined in this file: a procedure some other file defines.
 					yield new LispCons(cl(head), listOf(arguments));
 				}
-				yield new LispCons(symbol("FUNCALL"), new LispCons(value(call.operator(), scope), listOf(arguments)));
+				yield new LispCons(symbol("FUNCALL"),
+						new LispCons(ensure(value(call.operator(), scope)), listOf(arguments)));
 			}
 		};
+	}
+
+	// A combination's operator, checked to be a procedure as eval checks it
+	// (%scheme-eval-apply): a Scheme application applies a procedure value, never a
+	// symbol designator, so #f, the unspecified object, a number or a symbol reports
+	// "The object is not applicable" with the value printed as Scheme prints it, on
+	// every backend, without any backend learning a Scheme name.
+	private static LispVal ensure(LispVal operator) {
+		return list(symbol("RONTOLISP::%SCHEME-ENSURE-PROCEDURE"), operator);
 	}
 
 	// (display "text") needs no printer: the generic one dispatches on every type there

@@ -56,8 +56,8 @@ class SchemeSessionTest {
 		// A later buffer knows ev? is a variable, in call and in value position alike.
 		assertThat(lowered(session, "(ev? 1) (map ev? '(1))")).isEqualTo(
 				"""
-						echo (LET ((%SCM-EXIT-DONE7 (LIST NIL)) (%SCM-EXIT-VALUE8 NIL)) (LET ((%SCM-EXIT-CODE9 (CATCH 'RONTOLISP::%SCHEME-EXIT-TAG (PROGN (SETQ %SCM-EXIT-VALUE8 (FUNCALL |ev?| 1)) %SCM-EXIT-DONE7)))) (IF (EQ %SCM-EXIT-CODE9 %SCM-EXIT-DONE7) %SCM-EXIT-VALUE8 (RONTOLISP::%SCHEME-EXIT %SCM-EXIT-CODE9))))
-						echo (LET ((%SCM-EXIT-DONE10 (LIST NIL)) (%SCM-EXIT-VALUE11 NIL)) (LET ((%SCM-EXIT-CODE12 (CATCH 'RONTOLISP::%SCHEME-EXIT-TAG (PROGN (SETQ %SCM-EXIT-VALUE11 (MAPCAR |ev?| '(1))) %SCM-EXIT-DONE10)))) (IF (EQ %SCM-EXIT-CODE12 %SCM-EXIT-DONE10) %SCM-EXIT-VALUE11 (RONTOLISP::%SCHEME-EXIT %SCM-EXIT-CODE12))))""");
+						echo (LET ((%SCM-EXIT-DONE7 (LIST NIL)) (%SCM-EXIT-VALUE8 NIL)) (LET ((%SCM-EXIT-CODE9 (CATCH 'RONTOLISP::%SCHEME-EXIT-TAG (PROGN (SETQ %SCM-EXIT-VALUE8 (FUNCALL (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |ev?|) 1)) %SCM-EXIT-DONE7)))) (IF (EQ %SCM-EXIT-CODE9 %SCM-EXIT-DONE7) %SCM-EXIT-VALUE8 (RONTOLISP::%SCHEME-EXIT %SCM-EXIT-CODE9))))
+						echo (LET ((%SCM-EXIT-DONE10 (LIST NIL)) (%SCM-EXIT-VALUE11 NIL)) (LET ((%SCM-EXIT-CODE12 (CATCH 'RONTOLISP::%SCHEME-EXIT-TAG (PROGN (SETQ %SCM-EXIT-VALUE11 (MAPCAR (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |ev?|) '(1))) %SCM-EXIT-DONE10)))) (IF (EQ %SCM-EXIT-CODE12 %SCM-EXIT-DONE10) %SCM-EXIT-VALUE11 (RONTOLISP::%SCHEME-EXIT %SCM-EXIT-CODE12))))""");
 		assertThat(lowered(session, "(define x 1)")).isEqualTo(
 				"""
 						mute (LET ((%SCM-EXIT-DONE14 (LIST NIL))) (LET ((%SCM-EXIT-CODE15 (CATCH 'RONTOLISP::%SCHEME-EXIT-TAG (PROGN (SETQ |x| 1) %SCM-EXIT-DONE14)))) (IF (EQ %SCM-EXIT-CODE15 %SCM-EXIT-DONE14) NIL (RONTOLISP::%SCHEME-EXIT %SCM-EXIT-CODE15)))) (DEFUN |x| (&REST %SCM-A13) (APPLY |x| %SCM-A13))""");
@@ -70,7 +70,7 @@ class SchemeSessionTest {
 		assertThat(lowered(session, "(define (count i) (if (= i 0) i (count (- i 1))))")).contains("TAGBODY");
 		session.read("(set! walk car)");
 		assertThat(lowered(session, "(define (walk i) (if (= i 0) i (walk (- i 1))))")).doesNotContain("TAGBODY")
-			.contains("(FUNCALL |walk| (- |i| 1))");
+			.contains("(FUNCALL (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |walk|) (- |i| 1))");
 	}
 
 	@Test

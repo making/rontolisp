@@ -414,16 +414,16 @@ final class SchemeBuiltins {
 
 				;; --- control ---
 				("procedure?" base pred ((x) (functionp x)))
-				("apply" base value ((f a &rest r) (apply f a . r)) :function (lambda (f &rest r) (apply f (rontolisp::%scheme-spread r))))
-				("map" base value ((f l &rest r) (mapcar f l . r)) :function (lambda (f &rest r) (apply #'mapcar f r)))
-				("for-each" base effect ((f l &rest r) (mapc f l . r))
-				 :function (lambda (f &rest r) (apply #'mapc f r) rontolisp::%scheme-unspecified))
-				("call/cc" base value ((f) (rontolisp::%scheme-call/cc f)))
-				("call-with-current-continuation" base value ((f) (rontolisp::%scheme-call/cc f)))
-				("dynamic-wind" base value ((before thunk after) (rontolisp::%scheme-dynamic-wind before thunk after)))
+				("apply" base value ((f a &rest r) (apply (rontolisp::%scheme-ensure-procedure f) a . r)) :function (lambda (f &rest r) (apply (rontolisp::%scheme-ensure-procedure f) (rontolisp::%scheme-spread r))))
+				("map" base value ((f l &rest r) (mapcar (rontolisp::%scheme-ensure-procedure f) l . r)) :function (lambda (f &rest r) (apply #'mapcar (rontolisp::%scheme-ensure-procedure f) r)))
+				("for-each" base effect ((f l &rest r) (mapc (rontolisp::%scheme-ensure-procedure f) l . r))
+				 :function (lambda (f &rest r) (apply #'mapc (rontolisp::%scheme-ensure-procedure f) r) rontolisp::%scheme-unspecified))
+				("call/cc" base value ((f) (rontolisp::%scheme-call/cc (rontolisp::%scheme-ensure-procedure f))))
+				("call-with-current-continuation" base value ((f) (rontolisp::%scheme-call/cc (rontolisp::%scheme-ensure-procedure f))))
+				("dynamic-wind" base value ((before thunk after) (rontolisp::%scheme-dynamic-wind (rontolisp::%scheme-ensure-procedure before) (rontolisp::%scheme-ensure-procedure thunk) (rontolisp::%scheme-ensure-procedure after))))
 				("values" base value ((&rest r) (values . r)) :function #'values)
 				("call-with-values" base value
-				 ((producer consumer) (apply consumer (multiple-value-list (funcall producer)))))
+				 ((producer consumer) (apply (rontolisp::%scheme-ensure-procedure consumer) (multiple-value-list (funcall (rontolisp::%scheme-ensure-procedure producer))))))
 				("error" base value ((message &rest r) (error "~A" (rontolisp::%scheme-error-message message (list . r))))
 				 :function (lambda (message &rest r) (error "~A" (rontolisp::%scheme-error-message message r))))
 
