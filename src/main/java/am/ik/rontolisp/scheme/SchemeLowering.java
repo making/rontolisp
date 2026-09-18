@@ -390,6 +390,8 @@ final class SchemeLowering {
 	// them, so nothing may depend on having seen the whole program.
 	private final boolean interactive;
 
+	private final SchemeStandard standard;
+
 	private boolean falseBound;
 
 	private final Set<LispSymbol> generated = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
@@ -417,28 +419,31 @@ final class SchemeLowering {
 
 	private int closures;
 
-	private SchemeLowering(SchemeReader reader, boolean interactive) {
+	private SchemeLowering(SchemeReader reader, boolean interactive, SchemeStandard standard) {
 		this.reader = reader;
 		this.interactive = interactive;
+		this.standard = standard;
 	}
 
 	/**
 	 * A lowering of one whole file.
 	 * @param reader the file's reader
+	 * @param standard the standard the file is read against
 	 * @return the lowering
 	 */
-	static SchemeLowering ofFile(SchemeReader reader) {
-		return new SchemeLowering(reader, false);
+	static SchemeLowering ofFile(SchemeReader reader, SchemeStandard standard) {
+		return new SchemeLowering(reader, false, standard);
 	}
 
 	/**
-	 * A lowering that reads buffer after buffer ({@link #interact}): everything
-	 * {@code (scheme base)} and {@code (scheme write)} export is visible from the start,
-	 * as in any R7RS REPL.
+	 * A lowering that reads buffer after buffer ({@link #interact}): every importable
+	 * library is visible from the start, as in any R7RS REPL -- plus the {@code sicp} and
+	 * {@code r5rs} names under {@link SchemeStandard#RONTOLISP}.
+	 * @param standard the standard the session is read against
 	 * @return the lowering
 	 */
-	static SchemeLowering ofSession() {
-		SchemeLowering lowering = new SchemeLowering(new SchemeReader("", null), true);
+	static SchemeLowering ofSession(SchemeStandard standard) {
+		SchemeLowering lowering = new SchemeLowering(new SchemeReader("", null), true, standard);
 		lowering.imports();
 		return lowering;
 	}
@@ -703,6 +708,27 @@ final class SchemeLowering {
 						LispTrue.INSTANCE, LispNil.INSTANCE));
 	}
 
+	/**
+	 * {@code (defun rontolisp::%scheme-eval-extension-keyword-p (name) ...)}: whether
+	 * {@code name} is a keyword {@code eval} knows beyond R7RS -- the {@code sicp} syntax
+	 * ({@code cons-stream}), none under {@link SchemeStandard#R7RS}. Generated from the
+	 * same table the lowering reads, so the list is spelled once.
+	 * @param standard the standard the program is read against
+	 * @return the definition, in the library's canonical shape
+	 */
+	static LispVal extensionKeywordForm(SchemeStandard standard) {
+		List<LispVal> names = new ArrayList<>();
+		if (standard == SchemeStandard.RONTOLISP) {
+			for (String keyword : SICP_SYNTAX.keySet()) {
+				names.add(symbol(SchemeNames.mangle(keyword)));
+			}
+		}
+		LispSymbol name = symbol("NAME");
+		return list(symbol("DEFUN"), symbol("RONTOLISP::%SCHEME-EVAL-EXTENSION-KEYWORD-P"), list(name),
+				list(symbol("IF"), list(symbol("MEMBER"), name, list(symbol("QUOTE"), listOf(names))),
+						LispTrue.INSTANCE, LispNil.INSTANCE));
+	}
+
 	// Leading (import ...) forms pick what the global scope holds; a program with none
 	// sees everything, like a REPL.
 	private int imports() {
@@ -716,6 +742,12 @@ final class SchemeLowering {
 			index++;
 		}
 		if (index == 0) {
+			// R7RS 5.1: a program begins with an import declaration. A session has no
+			// program to begin, and starts with every library instead.
+			if (this.standard == SchemeStandard.R7RS && !this.interactive) {
+				throw new LispReadException("an R7RS program begins with an import declaration",
+						this.reader.locateFirstDatum());
+			}
 			for (String library : IMPORTABLE_LIBRARIES) {
 				imported.putAll(library(library));
 			}
@@ -723,8 +755,11 @@ final class SchemeLowering {
 			// and a file with no import at all, sees them anyway, the way an unqualified
 			// SICP sample -- written against an implementation that already had them --
 			// expects. r5rs is the same shape: (scheme r5rs) would promise all of R5RS.
-			imported.putAll(library("sicp"));
-			imported.putAll(library("r5rs"));
+			// Strict R7RS sees neither.
+			if (this.standard == SchemeStandard.RONTOLISP) {
+				imported.putAll(library("sicp"));
+				imported.putAll(library("r5rs"));
+			}
 		}
 		for (Map.Entry<String, Binding> entry : imported.entrySet()) {
 			this.global.bindings.put(SchemeNames.mangle(entry.getKey()), entry.getValue());
@@ -807,7 +842,7 @@ final class SchemeLowering {
 			SICP_SYNTAX.forEach((name, core) -> exports.put(name, new Syntax(core, name)));
 			SchemeBuiltins.constants().forEach((name, form) -> exports.put(name, new Constant(form)));
 		}
-		for (SchemeBuiltins.Entry entry : SchemeBuiltins.entries().values()) {
+		for (SchemeBuiltins.Entry entry : SchemeBuiltins.entries(this.standard).values()) {
 			if (entry.library().equals(library)) {
 				exports.put(entry.name(), new Builtin(entry));
 			}
@@ -863,17 +898,24 @@ final class SchemeLowering {
 				Definition definition = definition(form);
 				String name = name(definition.name());
 				refuseARecordProcedure(definition.name(), form);
+				refuseRedefiningAnImport(definition.name(), form);
 				definitions.merge(name, 1, Integer::sum);
 				(definition.procedure() ? procedures : variables).putIfAbsent(name, definition.name());
 			}
 			else if (core == Core.DEFINE_VALUES) {
 				for (LispSymbol variable : formals(second(form), form).all()) {
 					refuseARecordProcedure(variable, form);
+					refuseRedefiningAnImport(variable, form);
 					definitions.merge(name(variable), 2, Integer::sum);
 					variables.putIfAbsent(name(variable), variable);
 				}
 			}
 			else if (core == Core.DEFINE_RECORD_TYPE) {
+				RecordType type = recordType(form);
+				refuseRedefiningAnImport(type.name(), form);
+				for (LispSymbol procedure : recordProcedures(type)) {
+					refuseRedefiningAnImport(procedure, form);
+				}
 				records.add(form);
 			}
 		}
@@ -991,6 +1033,20 @@ final class SchemeLowering {
 			}
 			default -> {
 			}
+		}
+	}
+
+	// R7RS 5.6.1: in a program it is an error to redefine an imported binding. Strict
+	// mode reports it where the default lets a user definition win; a session may
+	// redefine, as an R7RS REPL does. Before declareGlobals overwrites anything, the
+	// global scope holds exactly the imports.
+	private void refuseRedefiningAnImport(LispSymbol identifier, LispCons form) {
+		if (this.standard != SchemeStandard.R7RS || this.interactive) {
+			return;
+		}
+		Binding imported = this.global.bindings.get(name(identifier));
+		if (imported instanceof Builtin || imported instanceof Syntax) {
+			throw error("cannot redefine " + identifier.name() + ": it is imported (R7RS 5.6.1)", form);
 		}
 	}
 
@@ -1158,13 +1214,7 @@ final class SchemeLowering {
 
 	private void declareRecord(LispCons form, Map<String, Integer> definitions) {
 		RecordType type = recordType(form);
-		List<LispSymbol> procedures = new ArrayList<>(type.accessors().values());
-		procedures.addAll(type.modifiers().values());
-		if (type.constructor() != null) {
-			procedures.add(type.constructor());
-		}
-		procedures.add(type.predicate());
-		for (LispSymbol procedure : procedures) {
+		for (LispSymbol procedure : recordProcedures(type)) {
 			String name = name(procedure);
 			if (definitions.merge(name, 1, Integer::sum) != 1 || this.assignedNames.contains(name)) {
 				throw error("a record procedure cannot be redefined or assigned: " + procedure.name(), form);
@@ -1172,6 +1222,16 @@ final class SchemeLowering {
 			this.global.bindings.put(name, procedure == type.predicate() ? new GlobalPredicate(cl(procedure))
 					: new GlobalFunction(cl(procedure)));
 		}
+	}
+
+	private static List<LispSymbol> recordProcedures(RecordType type) {
+		List<LispSymbol> procedures = new ArrayList<>(type.accessors().values());
+		procedures.addAll(type.modifiers().values());
+		if (type.constructor() != null) {
+			procedures.add(type.constructor());
+		}
+		procedures.add(type.predicate());
+		return procedures;
 	}
 
 	/**
@@ -1393,6 +1453,11 @@ final class SchemeLowering {
 				List<LispVal> parts = elements(form, form);
 				if (parts.size() != 3) {
 					throw error("malformed set!", form);
+				}
+				LispSymbol assigned = identifier(parts.get(1), form);
+				if (this.standard == SchemeStandard.R7RS && !this.interactive
+						&& lookup(assigned, scope) instanceof Builtin) {
+					throw error("cannot assign " + assigned.name() + ": it is imported (R7RS 5.6.1)", form);
 				}
 				yield effect(list(symbol("SETQ"), variableSymbol(identifier(parts.get(1), form), scope),
 						value(parts.get(2), scope)), context);

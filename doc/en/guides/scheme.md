@@ -69,12 +69,36 @@ scheme> (exit)
 ```
 
 Everything those nine libraries export -- plus the SICP-compatibility names below, which
-no `(import ...)` names -- is visible from the start, and an
+no `(import ...)` names, unless `--scheme-standard r7rs` -- is visible from the start, and an
 `(import ...)` typed at the prompt only adds names. Definitions typed at separate prompts
 see each other in either order, as they would in one file. Two things differ from a file,
 because a form is fixed when it is typed: redefining a built-in procedure (`square`) does
 not reach the forms typed before it, and a procedure that calls itself in tail position
 keeps looping on itself if a later `set!` replaces it while an old copy is still held.
+
+## Standards
+
+`--scheme-standard` picks what every Scheme file of the program is read against: the
+entry file, a file it loads (at run time or inlined by `-o`), and the REPL.
+
+| value | meaning |
+|---|---|
+| `rontolisp` (default) | This implementation's own dialect: R7RS plus the SICP-compatibility and R5RS names below, visible to a file with no `(import ...)` and to the REPL. |
+| `r7rs` | R7RS-small, strictly, within the subset listed below. |
+
+Under `r7rs`:
+
+- A program must begin with `(import ...)`.
+- The SICP-compatibility and R5RS names are never visible, not even to `eval`.
+- Redefining or `set!`-ing an imported name in a file is an error. The REPL may redefine one.
+- `eval` requires its environment argument.
+
+A valid R7RS program prints the same under both values.
+
+```console
+$ rontolisp --scheme-standard r7rs sicp.scm
+error: sicp.scm:1:1: an R7RS program begins with an import declaration
+```
 
 ## What is supported
 
@@ -113,6 +137,7 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
 - **SICP compatibility, not R7RS**: `true false nil` (ordinary variables, not literals);
   `user-initial-environment system-global-environment` and R5RS's
   `scheme-report-environment`, all naming the one global environment (see `eval` below);
+  R5RS's `exact->inexact inexact->exact`;
   `filter reduce fold-left fold-right delete last-pair append! list-index 1+ -1+ random
   runtime parallel-execute test-and-set!`; streams: `cons-stream` (syntax),
   `the-empty-stream stream-car stream-cdr
@@ -121,7 +146,8 @@ keeps looping on itself if a later `set!` replaces it while an old copy is still
   stream-append`. A stream is `'()` or a pair whose cdr is a promise, so
   `the-empty-stream` is `'()` and `stream-null?` is `null?`. These are visible only when
   a program has no `(import ...)` at all -- like the six libraries -- and no import names
-  them, so an explicit import list leaves them unreachable.
+  them, so an explicit import list leaves them unreachable. `--scheme-standard r7rs`
+  hides them everywhere.
 
 ```scheme
 (display (list true false nil (cadddr '(1 2 3 4)))) (newline)
@@ -212,7 +238,8 @@ below `1e21` and with an exponent from there (and below `1e-6`):
 specifier is the one global environment: `(interaction-environment)`,
 `(scheme-report-environment 5)`, `(environment '(scheme base) ...)` -- its import sets
 are checked against the libraries above -- and MIT Scheme's `user-initial-environment`
-and `system-global-environment` all name it, and the argument may be left out. It holds
+and `system-global-environment` all name it, and the argument may be left out (not under
+`--scheme-standard r7rs`). It holds
 the program's variables (including what `eval` itself defined), the program's
 procedures, and the built-in procedures, in that order. A `define` inside `eval` is a program global, visible to later `eval`s
 and to the program itself (through `eval` -- a name first defined this way has no

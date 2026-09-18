@@ -20,6 +20,7 @@ import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.YamlResources;
@@ -75,9 +76,16 @@ class SchemeSpecE2eTest {
 	 * A case that cannot join the shared corpus because running it ENDS the program: an
 	 * uncaught condition takes the process down, and its report goes to standard error,
 	 * which the concatenated run neither slices nor keeps. Each one is compiled and run
-	 * on its own, per backend -- the ci-spec.yaml {@code standalone:} idea.
+	 * on its own, per backend -- the ci-spec.yaml {@code standalone:} idea. A case also
+	 * stands alone when it must be read against a {@code --scheme-standard} other than
+	 * the corpus's default: {@code standards} lists every standard it runs under (the
+	 * default alone when absent), and each one must print the same.
 	 */
-	record Standalone(String name, String source, String stdout, String stderr, Boolean fails) {
+	record Standalone(String name, String source, String stdout, String stderr, Boolean fails, List<String> standards) {
+
+		List<String> standardsOrDefault() {
+			return this.standards == null ? List.of("rontolisp") : this.standards;
+		}
 
 		List<String> stdoutLines() {
 			return splitLines(this.stdout == null ? "" : this.stdout);
@@ -146,27 +154,33 @@ class SchemeSpecE2eTest {
 		Spec spec = loadSpec();
 		List<DynamicNode> legs = new ArrayList<>();
 		for (Standalone s : spec.standaloneCases()) {
-			legs.add(dynamicTest(s.name() + " INTERPRETER", () -> runStandaloneInterpreter(s)));
-			legs.add(dynamicTest(s.name() + " JVM", () -> runStandaloneJvm(s)));
-			for (boolean component : List.of(false, true)) {
-				legs.add(dynamicTest(s.name() + (component ? " WASM_COMPONENT" : " WASM"), () -> {
-					if (!HostWasmtime.isAvailable()) {
-						abort("no usable wasmtime on PATH");
-					}
-					runStandaloneWasm(s, component);
-				}));
+			for (String standard : s.standardsOrDefault()) {
+				String name = s.name() + " [" + standard + "]";
+				legs.add(dynamicTest(name + " INTERPRETER", () -> runStandaloneInterpreter(s, standard)));
+				legs.add(dynamicTest(name + " JVM", () -> runStandaloneJvm(s, standard)));
+				for (boolean component : List.of(false, true)) {
+					legs.add(dynamicTest(name + (component ? " WASM_COMPONENT" : " WASM"), () -> {
+						if (!HostWasmtime.isAvailable()) {
+							abort("no usable wasmtime on PATH");
+						}
+						runStandaloneWasm(s, standard, component);
+					}));
+				}
 			}
 		}
 		return legs.stream();
 	}
 
-	private static void runStandaloneInterpreter(Standalone s) throws Exception {
+	private static void runStandaloneInterpreter(Standalone s, String standard) throws Exception {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		Throwable[] thrown = new Throwable[1];
 		onAProgramStack(() -> {
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+			SourceStandards standards = SourceStandards.parse(standard);
+			evaluator.setSourceStandards(standards);
 			try {
-				for (LispVal form : SourceLanguage.SCHEME.read(s.source(), Features.INTERPRETER, "standalone.scm")) {
+				for (LispVal form : SourceLanguage.SCHEME.read(s.source(), Features.INTERPRETER, "standalone.scm",
+						standards)) {
 					evaluator.eval(form);
 				}
 			}
@@ -175,8 +189,8 @@ class SchemeSpecE2eTest {
 			}
 			return null;
 		});
-		String where = "standalone case '%s' on INTERPRETER%n--- source ---%n%s--- end source ---".formatted(s.name(),
-				s.source());
+		String where = "standalone case '%s' [%s] on INTERPRETER%n--- source ---%n%s--- end source ---"
+			.formatted(s.name(), standard, s.source());
 		assertThat(splitLines(out.toString(StandardCharsets.UTF_8))).as("%s", where)
 			.containsExactlyElementsOf(s.stdoutLines());
 		if (s.failsExpected()) {
@@ -196,12 +210,15 @@ class SchemeSpecE2eTest {
 		}
 	}
 
-	private static void runStandaloneJvm(Standalone s) throws Exception {
-		String stem = "SStandalone" + s.name().replaceAll("[^A-Za-z0-9]", "");
+	private static void runStandaloneJvm(Standalone s, String standard) throws Exception {
+		String stem = "SStandalone" + s.name().replaceAll("[^A-Za-z0-9]", "") + standard.replaceAll("[^A-Za-z0-9]", "");
 		Path dir = workDir.resolve(stem);
 		Files.createDirectories(dir);
 		Files.write(dir.resolve(stem + ".class"),
-				new JvmSourceCompiler(stem).sourceLanguage("scheme").compile(s.source(), null).classBytes());
+				new JvmSourceCompiler(stem).sourceLanguage("scheme")
+					.schemeStandard(standard)
+					.compile(s.source(), null)
+					.classBytes());
 		Path outFile = Files.createTempFile(workDir, stem + "-jvm", ".out");
 		Path errFile = Files.createTempFile(workDir, stem + "-jvm", ".err");
 		try {
@@ -216,8 +233,8 @@ class SchemeSpecE2eTest {
 			}
 			String stdout = Files.readString(outFile, StandardCharsets.UTF_8);
 			String stderr = Files.readString(errFile, StandardCharsets.UTF_8);
-			String where = "standalone case '%s' on JVM%n--- source ---%n%s--- end source ---%n--- stderr ---%n%s"
-				.formatted(s.name(), s.source(), stderr);
+			String where = "standalone case '%s' [%s] on JVM%n--- source ---%n%s--- end source ---%n--- stderr ---%n%s"
+				.formatted(s.name(), standard, s.source(), stderr);
 			assertThat(splitLines(stdout)).as("%s", where).containsExactlyElementsOf(s.stdoutLines());
 			for (String line : s.stderrLines()) {
 				assertThat(splitLines(stderr)).as("%s", where).contains(line);
@@ -235,12 +252,12 @@ class SchemeSpecE2eTest {
 		}
 	}
 
-	private static void runStandaloneWasm(Standalone s, boolean component) throws Exception {
+	private static void runStandaloneWasm(Standalone s, String standard, boolean component) throws Exception {
 		HostWasmtime.ExecResult result = runWasmModule(s.source(), "", component,
-				"standalone-" + s.name().replaceAll("[^A-Za-z0-9]", ""));
+				"standalone-" + s.name().replaceAll("[^A-Za-z0-9]", "") + "-" + standard, standard);
 		String leg = component ? "WASM_COMPONENT" : "WASM";
-		String where = "standalone case '%s' on %s%n--- source ---%n%s--- end source ---%n--- stderr ---%n%s"
-			.formatted(s.name(), leg, s.source(), result.stderr());
+		String where = "standalone case '%s' [%s] on %s%n--- source ---%n%s--- end source ---%n--- stderr ---%n%s"
+			.formatted(s.name(), standard, leg, s.source(), result.stderr());
 		assertThat(splitLines(result.stdout())).as("%s", where).containsExactlyElementsOf(s.stdoutLines());
 		for (String line : s.stderrLines()) {
 			assertThat(splitLines(result.stderr())).as("%s", where).contains(line);
@@ -301,7 +318,8 @@ class SchemeSpecE2eTest {
 					if (!HostWasmtime.isAvailable()) {
 						abort("no usable wasmtime on PATH");
 					}
-					HostWasmtime.ExecResult result = runWasmModule(source, "", component, "exit-" + expected);
+					HostWasmtime.ExecResult result = runWasmModule(source, "", component, "exit-" + expected,
+							"rontolisp");
 					assertThat(result.exitCode()).isEqualTo(expected);
 					assertThat(result.stdout()).isEqualTo("before\nafter");
 				}));
@@ -342,7 +360,7 @@ class SchemeSpecE2eTest {
 				if (!HostWasmtime.isAvailable()) {
 					abort("no usable wasmtime on PATH");
 				}
-				HostWasmtime.ExecResult result = runWasmModule(abrupt, "", component, "emergency-exit-7");
+				HostWasmtime.ExecResult result = runWasmModule(abrupt, "", component, "emergency-exit-7", "rontolisp");
 				assertThat(result.exitCode()).isEqualTo(7);
 				assertThat(result.stdout()).isEqualTo("before\n");
 			}));
@@ -421,7 +439,8 @@ class SchemeSpecE2eTest {
 				if (!HostWasmtime.isAvailable()) {
 					abort("no usable wasmtime on PATH");
 				}
-				HostWasmtime.ExecResult result = runWasmModule(program, stdin, component, "scheme-driver-loop");
+				HostWasmtime.ExecResult result = runWasmModule(program, stdin, component, "scheme-driver-loop",
+						"rontolisp");
 				assertThat(result.exitCode()).as("wasmtime exit code: %s", result.stderr()).isZero();
 				assertThat(result.stdout()).isEqualTo(expected);
 			}));
@@ -507,14 +526,14 @@ class SchemeSpecE2eTest {
 	}
 
 	private static String runOnWasm(String program, String stdin, boolean component) throws Exception {
-		HostWasmtime.ExecResult result = runWasmModule(program, stdin, component, "scheme-spec");
+		HostWasmtime.ExecResult result = runWasmModule(program, stdin, component, "scheme-spec", "rontolisp");
 		assertThat(result.exitCode()).as("wasmtime exit code (component=%s): %s", component, result.stderr()).isZero();
 		return result.stdout();
 	}
 
-	private static HostWasmtime.ExecResult runWasmModule(String program, String stdin, boolean component, String name)
-			throws Exception {
-		CompileFrontendAccess.Program frontend = CompileFrontendAccess.scheme(program, true, component);
+	private static HostWasmtime.ExecResult runWasmModule(String program, String stdin, boolean component, String name,
+			String standard) throws Exception {
+		CompileFrontendAccess.Program frontend = CompileFrontendAccess.scheme(program, true, component, standard);
 		byte[] module = WasmLispCompiler.builder()
 			.component(component)
 			.runtimeFeatures(frontend.features().names())

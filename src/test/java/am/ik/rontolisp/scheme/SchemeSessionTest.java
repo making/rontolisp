@@ -27,7 +27,7 @@ class SchemeSessionTest {
 
 	@Test
 	void theFalseValueIsBoundOncePerSession() {
-		SchemeSession session = Scheme.session();
+		SchemeSession session = Scheme.session(SchemeStandard.RONTOLISP);
 		assertThat(lowered(session, "1")).isEqualTo(
 				"""
 						mute (SETQ RONTOLISP::%SCHEME-FALSE '|#f| RONTOLISP::%SCHEME-UNSPECIFIED '|#!unspecific|)
@@ -38,14 +38,14 @@ class SchemeSessionTest {
 
 	@Test
 	void aBufferThatFailedToLowerLeavesTheFalseValueToTheNextOne() {
-		SchemeSession session = Scheme.session();
+		SchemeSession session = Scheme.session(SchemeStandard.RONTOLISP);
 		assertThatThrownBy(() -> session.read("(if)")).isInstanceOf(LispReadException.class);
 		assertThat(lowered(session, "1")).startsWith("mute (SETQ RONTOLISP::%SCHEME-FALSE");
 	}
 
 	@Test
 	void everyDefinitionIsAVariableWithATrampolineForTheCallsLoweredBeforeIt() {
-		SchemeSession session = Scheme.session();
+		SchemeSession session = Scheme.session(SchemeStandard.RONTOLISP);
 		session.read("0");
 		// The forward reference is a name nobody defined yet: a direct call. Every
 		// entry runs inside the exit catch, answering its last form's value; a defun
@@ -65,7 +65,7 @@ class SchemeSessionTest {
 
 	@Test
 	void aSelfTailCallStaysALoopUnlessTheSessionAssignedTheName() {
-		SchemeSession session = Scheme.session();
+		SchemeSession session = Scheme.session(SchemeStandard.RONTOLISP);
 		session.read("0");
 		assertThat(lowered(session, "(define (count i) (if (= i 0) i (count (- i 1))))")).contains("TAGBODY");
 		session.read("(set! walk car)");
@@ -75,7 +75,7 @@ class SchemeSessionTest {
 
 	@Test
 	void aDefinitionHasNoValueAndAnEffectAnswersTheUnspecifiedObject() {
-		SchemeSession session = Scheme.session();
+		SchemeSession session = Scheme.session(SchemeStandard.RONTOLISP);
 		session.read("(define x 1)");
 		// Whether an expression's value is shown is the VALUE's to say: the echo skips
 		// the
@@ -90,7 +90,7 @@ class SchemeSessionTest {
 
 	@Test
 	void anImportAtThePromptOnlyAddsNames() {
-		SchemeSession session = Scheme.session();
+		SchemeSession session = Scheme.session(SchemeStandard.RONTOLISP);
 		session.read("0");
 		assertThat(lowered(session, "(import (prefix (only (scheme base) car) s:)) (s:car '(1)) (cdr '(1))")).isEqualTo(
 				"""
@@ -101,7 +101,7 @@ class SchemeSessionTest {
 
 	@Test
 	void aRecordProcedureIsKnownToLaterBuffersAndCannotBeRedefined() {
-		SchemeSession session = Scheme.session();
+		SchemeSession session = Scheme.session(SchemeStandard.RONTOLISP);
 		session.read("(define-record-type point (make-point x) point? (x point-x))");
 		assertThat(lowered(session, "(point? 1)")).isEqualTo("echo (LET ((%SCM-EXIT-DONE1 (LIST NIL))"
 				+ " (%SCM-EXIT-VALUE2 NIL)) (LET ((%SCM-EXIT-CODE3 (CATCH 'RONTOLISP::%SCHEME-EXIT-TAG"
@@ -119,7 +119,7 @@ class SchemeSessionTest {
 	void aValuesLastFormKeepsItsShapeWithGuardedArguments() {
 		// The prompt echoes through evalValues, which takes the multi-value path only
 		// for a syntactic producer: (values) echoes nothing however it is wrapped.
-		SchemeSession session = Scheme.session();
+		SchemeSession session = Scheme.session(SchemeStandard.RONTOLISP);
 		session.read("0");
 		assertThat(lowered(session, "(values 1 'a)")).startsWith("echo (VALUES (LET ((%SCM-EXIT-DONE")
 			.contains("(RONTOLISP::%SCHEME-EXIT %SCM-EXIT-CODE");
@@ -128,7 +128,7 @@ class SchemeSessionTest {
 
 	@Test
 	void aGeneratedGlobalNameIsNeverReusedByALaterBuffer() {
-		SchemeSession session = Scheme.session();
+		SchemeSession session = Scheme.session(SchemeStandard.RONTOLISP);
 		String first = lowered(session, "(define-record-type a #f a? (f))");
 		String second = lowered(session, "(define-record-type b #f b? (g))");
 		assertThat(first).contains("%SCM-SLOT1");

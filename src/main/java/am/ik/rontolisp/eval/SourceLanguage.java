@@ -72,8 +72,22 @@ public enum SourceLanguage {
 	 * @return the parsed top-level forms
 	 */
 	public List<LispVal> read(String source, Features features, @Nullable String file) {
+		return read(source, features, file, SourceStandards.DEFAULT);
+	}
+
+	/**
+	 * Reads user source text into core forms against the program's standards.
+	 * @param source the program text
+	 * @param features the active reader features (the target backend's on the compile
+	 * path, the evaluator's on the interpreter)
+	 * @param file the origin file for diagnostics, or {@code null} when unknown
+	 * ({@code -e}, the REPL, the playground)
+	 * @param standards what each language is read against ({@code --scheme-standard})
+	 * @return the parsed top-level forms
+	 */
+	public List<LispVal> read(String source, Features features, @Nullable String file, SourceStandards standards) {
 		if (this == SCHEME) {
-			return Scheme.read(source, file);
+			return Scheme.read(source, file, standards.scheme());
 		}
 		return usesReadEvalMarkers(source) ? LispReader.readAllWithReadEvalMarkers(source, features, file)
 				: LispReader.readAllFromString(source, features, file);

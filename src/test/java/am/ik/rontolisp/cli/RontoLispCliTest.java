@@ -1573,6 +1573,53 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void schemeStandardR7rsIsStrictOnAFileOnEveryPath() throws Exception {
+		Path program = this.tempDir.resolve("sicp.scm");
+		Files.writeString(program, "; no import\n(display (1+ 1))\n");
+		assertThat(runReporting(program.toString())[1]).isEqualTo("2");
+		String expected = "error: " + program + ":2:1: an R7RS program begins with an import declaration";
+		assertThat(runReporting(program.toString(), "--scheme-standard", "r7rs")[2].trim()).isEqualTo(expected);
+		assertThat(runReporting(program.toString(), "--scheme-standard=r7rs", "-o",
+				this.tempDir.resolve("Sicp.class").toString())[2]
+			.trim()).isEqualTo(expected);
+		Path strict = this.tempDir.resolve("strict.scm");
+		Files.writeString(strict, "(import (scheme base) (scheme write))\n(display (square 3))\n");
+		assertThat(runCli("", strict.toString(), "--scheme-standard", "r7rs")).isEqualTo("9");
+	}
+
+	@Test
+	void schemeStandardR7rsReachesAFileLoadedAtRunTimeAndInlined() throws Exception {
+		Files.writeString(this.tempDir.resolve("lib.scm"), "(define (twice x) (* 2 x))\n");
+		Path program = this.tempDir.resolve("main.lisp");
+		Files.writeString(program, "(load \"lib.scm\")\n(print (|twice| 21))\n");
+		String expected = "error: " + this.tempDir.resolve("lib.scm")
+				+ ":1:1: an R7RS program begins with an import declaration";
+		assertThat(runReporting(program.toString(), "--scheme-standard", "r7rs")[2].trim()).isEqualTo(expected);
+		assertThat(runReporting(program.toString(), "--scheme-standard", "r7rs", "-o",
+				this.tempDir.resolve("Mixed.class").toString())[2]
+			.trim()).isEqualTo(expected);
+	}
+
+	@Test
+	void schemeStandardR7rsStartsTheReplWithTheR7rsLibrariesOnly() {
+		String[] session = runSession(false, "(square 3)\n(1+ 1)\n(exact->inexact 1)\n", "--source-language", "scheme",
+				"--scheme-standard", "r7rs");
+		assertThat(session[1]).isEqualTo("9\n");
+		assertThat(session[2]).contains("s%1+").contains("exact->inexact");
+		assertThat(runCli("(1+ 1)\n", "--source-language", "scheme")).isEqualTo("2\n");
+	}
+
+	@Test
+	void anUnknownSchemeStandardFailsFastByName() throws Exception {
+		Path program = this.tempDir.resolve("hello.scm");
+		Files.writeString(program, "(display 1)\n");
+		String[] result = runReporting(program.toString(), "--scheme-standard=r6rs");
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[1]).isEmpty();
+		assertThat(result[2]).contains("--scheme-standard 'r6rs' names no standard");
+	}
+
+	@Test
 	void aSchemeSyntaxErrorNamesItsPositionOnEveryPath() throws Exception {
 		Path program = this.tempDir.resolve("broken.scm");
 		Files.writeString(program, "(define (f x)\n  (if))\n");

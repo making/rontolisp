@@ -68,12 +68,37 @@ scheme> (exit)
 ```
 
 これら 9 ライブラリがエクスポートする名前 -- それに加えて、後述の
-どの `(import ...)` にも属さない SICP 互換名 -- は最初からすべて見えており、
+どの `(import ...)` にも属さない SICP 互換名（`--scheme-standard r7rs` では除く） -- は最初からすべて見えており、
 プロンプトで入力した `(import ...)` は名前を追加するだけです。別々のプロンプトで入力した
 定義は、1 つのファイルに書いた場合と同じく、順序によらず互いを参照できます。フォームは
 入力時点で確定するため、ファイルとの違いが 2 点あります: 組み込み手続き（`square`）を再定義しても、
 それ以前に入力したフォームには及びません。また、末尾位置で自分自身を呼ぶ手続きは、後から `set!` で
 置き換えても、保持されている古いコピーは自分自身へのループを続けます。
+
+## 規格
+
+`--scheme-standard` は、プログラムのすべての Scheme ファイルをどの規格で読むかを選びます:
+エントリファイル、そこからロードするファイル（実行時のロードも `-o` によるインライン化も）、
+そして REPL です。
+
+| 値 | 意味 |
+|---|---|
+| `rontolisp`（既定） | この処理系独自の方言: R7RS に、後述の SICP 互換名と R5RS の名前を加えたもの。`(import ...)` のないファイルと REPL から見える。 |
+| `r7rs` | R7RS-small を厳密に。ただし下記の対応範囲の中で。 |
+
+`r7rs` では:
+
+- プログラムは `(import ...)` で始まらなければなりません。
+- SICP 互換名と R5RS の名前は、`eval` からも含めて一切見えません。
+- ファイル中で import した名前を再定義したり `set!` したりするとエラーです。REPL では再定義できます。
+- `eval` は環境引数が必須です。
+
+正しい R7RS プログラムは、どちらの値でも同じ出力になります。
+
+```console
+$ rontolisp --scheme-standard r7rs sicp.scm
+error: sicp.scm:1:1: an R7RS program begins with an import declaration
+```
 
 ## 対応範囲
 
@@ -112,6 +137,7 @@ scheme> (exit)
 - **SICP 互換、R7RS ではない**: `true false nil`（リテラルではなく普通の変数）、
   `user-initial-environment system-global-environment` と R5RS の
   `scheme-report-environment`（どれも唯一の大域環境を指す。後述の `eval` を参照）、
+  R5RS の `exact->inexact inexact->exact`、
   `filter reduce fold-left fold-right delete last-pair append! list-index 1+ -1+ random
   runtime parallel-execute test-and-set!`、ストリーム: `cons-stream`（構文）、
   `the-empty-stream stream-car stream-cdr
@@ -120,7 +146,8 @@ scheme> (exit)
   stream-append`。ストリームは `'()` か、cdr がプロミスであるペアなので、
   `the-empty-stream` は `'()`、`stream-null?` は `null?` です。これらは `(import ...)` を
   一切書かないプログラムでのみ見える -- 6 ライブラリと同じ扱いだが、どの import もこれらを
-  名指しできないため、明示的な import リストがあると届かない。
+  名指しできないため、明示的な import リストがあると届かない。`--scheme-standard r7rs` では
+  どこからも見えない。
 
 ```scheme
 (display (list true false nil (cadddr '(1 2 3 4)))) (newline)
@@ -211,7 +238,7 @@ once (42 42)
 どれも唯一の大域環境です: `(interaction-environment)`、`(scheme-report-environment 5)`、
 `(environment '(scheme base) ...)` -- その import 集合は上記のライブラリに照らして検査されます --
 および MIT Scheme の `user-initial-environment` と `system-global-environment` はすべて
-これを指し、引数は省略できます。大域環境が持つのは、プログラムの変数（`eval` 自身が
+これを指し、引数は省略できます（`--scheme-standard r7rs` では省略不可）。大域環境が持つのは、プログラムの変数（`eval` 自身が
 定義したものを含む）、プログラムの手続き、組み込み手続きで、この順に探されます。`eval` の中の `define` はプログラムの
 大域変数になり、後の `eval` からもプログラム自身からも（`eval` 経由で）見えます。
 プログラムの変数への `set!` はそれに代入します。プログラムは `eval` が書いた値を読みます。

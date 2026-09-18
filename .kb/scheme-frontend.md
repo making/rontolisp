@@ -143,9 +143,11 @@ regions carry it.
 
 ## The library tags: `base`, `write`, `read`, `inexact`, `cxr`, `lazy`, `process-context`, `eval`, `repl`, `sicp` and `r5rs`
 
-`SchemeBuiltins` entries carry the R7RS library that exports them. `base`, `write`,
-`read` (`read`, `eof-object`, `eof-object?`, `read-char`, `peek-char`, `read-line`,
-`char-ready?`, all on the current input port with no port argument), `inexact`,
+`SchemeBuiltins` entries carry the R7RS library that exports them, checked entry by
+entry against Gauche 0.9.15's `(module-exports (find-module 'scheme.<lib>))`
+(2026-09-18). `base`, `write`, `read` (`read` alone: `eof-object`, `eof-object?`,
+`read-char`, `peek-char`, `read-line` and `char-ready?` are `base`, as in R7RS -- all on
+the current input port with no port argument), `inexact`,
 `cxr` (the whole `(scheme cxr)` set, `caaar` through `cddddr`: every one a
 standard Common Lisp function of the same name), `lazy`, `process-context`, `eval`
 (`eval`, `environment`) and `repl` (`interaction-environment`) are
@@ -160,13 +162,76 @@ list-index 1+ -1+ random runtime parallel-execute test-and-set!`) is no R7RS lib
 `SchemeLowering.imports()`'s no-import branch merges it too, so a file with no import at
 all (an unqualified SICP sample, or a REPL) sees it anyway, and an explicit import list
 narrows to exactly what it names. `r5rs` (`scheme-report-environment`) rides the same
-no-import default: `(scheme r5rs)` would promise the whole of R5RS, so it stays refused
-by name (`.todo/829`
+no-import default, as do R5RS's `exact->inexact` and `inexact->exact` (tagged `base`
+until 2026-09-18, so `(import (scheme base))` exposed them): `(scheme r5rs)` would promise
+the whole of R5RS, so it stays refused by name (`.todo/829`
 measured 1,251 -> 1,307 of the 1,592-file SICP sample corpus running to exit 0 in file
 mode from this alone, zero regressions -- `.todo/artefacts/828-sicp-sample-corpus-harness/`
 has the harness). A user `define` of any of these still wins, exactly like `square`:
 `SchemeLowering.declareGlobals` overwrites the global scope entry for any name the file
-defines regardless of what library put there first.
+defines regardless of what library put there first -- under `--scheme-standard
+rontolisp`; `r7rs` refuses it (next section).
+
+## `--scheme-standard rontolisp|r7rs` (2026-09-18, `.todo/857`)
+
+One option, like `gosh -r7`, picks what EVERY Scheme file of the program is read
+against: the entry file, a file `load`ed at run time (`LispEvaluator.loadFile`) or
+inlined (`LoadInliner`), and the REPL (`SchemeSession`). `rontolisp` (default) is
+everything above: R7RS plus `sicp` and `r5rs`, all visible without an import. `r7rs`
+is R7RS-small within the implemented subset:
+
+1. **A file that does not begin with `import` is refused** at lowering, positioned at its
+   first datum (`an R7RS program begins with an import declaration`, R7RS 5.1). Gauche
+   instead starts empty and fails at the first unbound name.
+2. **`sicp` and `r5rs` names are never visible**: `SchemeLowering.imports()`'s no-import
+   branch (the session's) merges the nine libraries only.
+3. **Redefining an imported binding in a file is refused** (R7RS 5.6.1 "it is an error";
+   Gauche -r7 allows the `define` silently): a top-level `define`, `define-values`, or a
+   `define-record-type` type or procedure name over a `Builtin` or `Syntax` binding
+   (`refuseRedefiningAnImport`, run before `declareGlobals` overwrites the scope), and a
+   `set!` resolving to a `Builtin` (positioned; the default's own refusal of that `set!`
+   is an unpositioned "not a variable in this file"). A SESSION may redefine, as an
+   R7RS REPL and gosh's `r7rs.user` do: it is where one experiments.
+4. **`eval` needs its environment**: `SchemeBuiltins.entries(R7RS)` swaps in the
+   `R7RS_TABLE` row, `((x env) ...)` with a two-argument `:function`, so a direct
+   `(eval x)` is the lowering's positioned arity error and a first-class or run-time
+   `eval` of one argument is the helper's arity error.
+
+**Decision: `eval`'s run-time table follows the standard.** `Scheme.runtimeForms` takes
+it: under `r7rs` the generated `%scheme-builtin` holds no `sicp`/`r5rs` procedure or
+constant (`entries(R7RS)`, `constants(R7RS)` empty), and the generated
+`%scheme-eval-extension-keyword-p` (the `SICP_SYNTAX` names, i.e. `cons-stream`, which
+`%scheme-eval-keyword-p` consults) answers nothing. So `(eval '(1+ 1) (environment
+'(scheme base)))` is `Unbound variable: 1+` under `r7rs` -- Gauche -r7 says the same --
+and 2 under the default. Every environment specifier is still the one global
+environment, so a `(scheme base)` environment still sees the program's own globals and
+every IMPORTABLE library; only the non-R7RS names are cut. The compiled table is cut to
+spelled names as before (`CompileFrontend.Loaded.standards` reaches
+`SchemeLibrary.process`); the interpreter's copy is loaded per evaluator from
+`SchemeLibrary.forms(SourceStandards)`, cached per features x standard.
+
+**Plumbing.** The value is `scheme/SchemeStandard`; it crosses the seam wrapped in
+`eval/SourceStandards` (one member per language that offers a choice), so `cli` holds
+it without an edge to `scheme` (`.kb/source-language.md`). `RontoLispCli` parses
+`--scheme-standard` next to `--source-language` and refuses an unknown value by name;
+`JvmSourceCompiler.schemeStandard(String)` is the embedder's. The Maven plugin compiles
+`.lisp` only and has no parameter (a `.lisp` there that loads a `.scm` reads it under
+the default). The playground keeps the default.
+
+The retag and the default standard move no SICP sample: a file with no import still
+merges every tag. `SicpCorpusE2eTest` over the pinned corpus after the change
+(2026-09-18): 5,262 legs, 0 failures, 17 skipped, the manifest unchanged.
+
+Unchanged in both: a name the file neither imports nor defines is a direct call or
+variable reference -- how Scheme and Common Lisp files call each other; a whole-program
+unbound-name check would cross files.
+
+Pinned by `SchemeLoweringTest` (`anR7rsProgramBeginsWithAnImportDeclaration`,
+`strictR7rs...`, `eachNameIsImportedFromTheR7rsLibraryThatExportsIt`), the
+`RontoLispCliTest.schemeStandard...` cases (file on both paths, loaded file on both
+paths, REPL, unknown value), and the `standalone:` cases of `scheme-spec.yaml` with a
+`standards:` field (the valid R7RS program under both; `eval` reaching no `1+` and no
+`cons-stream` under `r7rs`), all four backends.
 
 ## `(scheme inexact)` and how a flonum prints
 
@@ -275,7 +340,8 @@ defines regardless of what library put there first.
   `(scheme-report-environment 5)` (`r5rs`), `user-initial-environment` /
   `system-global-environment` (`sicp` constants) and `(environment sets..)` (`eval`;
   every set is checked against `IMPORTABLE_LIBRARIES` through the generated
-  `%scheme-library-p`, modifiers included). `(eval x)` with no environment is accepted.
+  `%scheme-library-p`, modifiers included). `(eval x)` with no environment is accepted,
+  except under `--scheme-standard r7rs`.
 - **Name resolution order**: the program's variables (`boundp` -- including what
   `eval` itself defined, since `set` makes a global appear at run time on every
   backend, `.todo/852`), then the program's `fboundp` names (a user `define` wins

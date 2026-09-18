@@ -71,6 +71,8 @@ final class SchemeReader {
 
 	private int pos;
 
+	private int firstDatumOffset;
+
 	SchemeReader(String input, @Nullable String file) {
 		this.input = input;
 		this.file = file;
@@ -107,8 +109,20 @@ final class SchemeReader {
 			if (datum == DOT) {
 				throw error("unexpected '.'", start);
 			}
+			if (datums.isEmpty()) {
+				this.firstDatumOffset = start;
+			}
 			datums.add(datum);
 		}
+	}
+
+	/**
+	 * Where the first top-level datum {@link #readAll} read stands, an atom included; the
+	 * start of the input when there was none.
+	 * @return the position
+	 */
+	SourceLocation locateFirstDatum() {
+		return SourceLocation.at(this.file, this.firstDatumOffset, this.input);
 	}
 
 	// Reads one datum, or the CLOSE / DOT sentinel a list reader is waiting for.

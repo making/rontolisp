@@ -34,6 +34,7 @@ import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.ObjcInterop;
 import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.eval.SourceSession;
 import am.ik.rontolisp.eval.VecSimd;
 import am.ik.rontolisp.eval.DistClient;
@@ -148,6 +149,10 @@ public final class RontoLispCli {
 		if (sourceLanguage != null) {
 			SourceLanguage.parse(sourceLanguage);
 		}
+		// --scheme-standard NAME: what EVERY Scheme file of the program is read against
+		// -- the entry file, a loaded one, the REPL -- like gosh -r7. Parsed here for
+		// the same reason.
+		SourceStandards standards = SourceStandards.parse(options.get("--scheme-standard"));
 
 		// -e/--eval "FORMS": the program is the argument itself rather than a file, and
 		// nothing downstream can tell the difference -- it interprets, and with -o it
@@ -162,7 +167,7 @@ public final class RontoLispCli {
 		if (!test && inline == null && !options.containsNoKey()) {
 			repl(systemPath, dists, features, options.contains("--simd"), options.contains("--blas"),
 					options.contains("--gpu"), options.contains("--parallel"), commandLine(null, options.arguments()),
-					sourceLanguage);
+					sourceLanguage, standards);
 			return;
 		}
 
@@ -215,7 +220,7 @@ public final class RontoLispCli {
 					options.contains("--host-random"), options.contains("--host-fetch"),
 					options.contains("--reentrant"),
 					options.contains("--host-boundary") ? HostBoundary.parse(options.get("--host-boundary")) : null,
-					JvmArtifactOptions.from(options), inputFile, sourceLanguage);
+					JvmArtifactOptions.from(options), inputFile, sourceLanguage, standards);
 		}
 		else {
 			// A side-artifact flag names a file to write BESIDE the output, so without
@@ -246,7 +251,7 @@ public final class RontoLispCli {
 			}
 			interpret(source, baseDir, systemPath, dists, features, options.contains("--simd"),
 					options.contains("--blas"), options.contains("--gpu"), options.contains("--parallel"), inputFile,
-					commandLine(inputFile, options.arguments()), sourceLanguage);
+					commandLine(inputFile, options.arguments()), sourceLanguage, standards);
 		}
 	}
 
@@ -360,7 +365,8 @@ public final class RontoLispCli {
 	}
 
 	private void repl(List<String> systemPath, DistClient dists, List<String> declaredFeatures, boolean simd,
-			boolean blas, boolean gpu, boolean parallel, List<String> commandLine, @Nullable String sourceLanguage) {
+			boolean blas, boolean gpu, boolean parallel, List<String> commandLine, @Nullable String sourceLanguage,
+			SourceStandards standards) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setSystemPath(systemPath);
 		evaluator.setDeclaredFeatures(declaredFeatures);
@@ -380,7 +386,8 @@ public final class RontoLispCli {
 			evaluator.setParallel(true);
 		}
 		// The REPL has no file to pick a language from: the override, else the default.
-		SourceSession session = new SourceSession(SourceLanguage.forFile(null, sourceLanguage));
+		SourceSession session = new SourceSession(SourceLanguage.forFile(null, sourceLanguage), standards);
+		evaluator.setSourceStandards(standards);
 		boolean systemTerminal = this.in == System.in && System.console() != null && System.console().isTerminal();
 		boolean terminal = this.assumedTerminal != null ? this.assumedTerminal : systemTerminal;
 		ReplBuffer repl = new ReplBuffer(session, evaluator, new ReplBuffer.Channels(this.out, System.err, terminal));
@@ -526,7 +533,8 @@ public final class RontoLispCli {
 
 	private void interpret(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
 			List<String> declaredFeatures, boolean simd, boolean blas, boolean gpu, boolean parallel,
-			@Nullable String entryFile, List<String> commandLine, @Nullable String sourceLanguage) {
+			@Nullable String entryFile, List<String> commandLine, @Nullable String sourceLanguage,
+			SourceStandards standards) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setLoadBaseDir(baseDir);
 		evaluator.setSystemPath(systemPath);
@@ -554,7 +562,8 @@ public final class RontoLispCli {
 		// same timing the runtime loadFile uses. Both the read and the #. question
 		// are the source-language seam's, in the entry file's language.
 		SourceLanguage language = SourceLanguage.forFile(entryFile, sourceLanguage);
-		List<LispVal> exprs = language.read(source, evaluator.features(), entryFile);
+		evaluator.setSourceStandards(standards);
+		List<LispVal> exprs = language.read(source, evaluator.features(), entryFile, standards);
 		boolean markers = SourceLanguage.usesReadEvalMarkers(source);
 		for (LispVal expr : exprs) {
 			evaluator.eval(markers ? evaluator.resolveReadTimeEvalInCode(expr) : expr);
@@ -570,11 +579,11 @@ public final class RontoLispCli {
 			OptimizeLevel optimize, boolean noGc, boolean simd, boolean blas, boolean gpu, boolean parallel,
 			boolean noPrune, boolean noMain, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch,
 			boolean reentrant, @Nullable HostBoundary hostBoundary, JvmArtifactOptions jvmArtifact,
-			@Nullable String entryFile, @Nullable String sourceLanguage) {
+			@Nullable String entryFile, @Nullable String sourceLanguage, SourceStandards standards) {
 		CompileDiagnostics.recording(() -> {
 			compileRecorded(source, baseDir, systemPath, dists, declaredFeatures, outputFile, dynamic, component,
 					noWasi, optimize, noGc, simd, blas, gpu, parallel, noPrune, noMain, wit, jsGlue, hostRandom,
-					hostFetch, reentrant, hostBoundary, jvmArtifact, entryFile, sourceLanguage);
+					hostFetch, reentrant, hostBoundary, jvmArtifact, entryFile, sourceLanguage, standards);
 			return null;
 		});
 	}
@@ -584,7 +593,7 @@ public final class RontoLispCli {
 			OptimizeLevel optimize, boolean noGc, boolean simd, boolean blas, boolean gpu, boolean parallel,
 			boolean noPrune, boolean noMain, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch,
 			boolean reentrant, @Nullable HostBoundary hostBoundary, JvmArtifactOptions jvmArtifact,
-			@Nullable String entryFile, @Nullable String sourceLanguage) {
+			@Nullable String entryFile, @Nullable String sourceLanguage, SourceStandards standards) {
 		// --emit-wit describes a component's typed world, so it is meaningless for any
 		// other
 		// output; fail fast instead of silently ignoring the request.
@@ -729,6 +738,7 @@ public final class RontoLispCli {
 			.source(source)
 			.entryFile(entryFile)
 			.sourceLanguage(sourceLanguage)
+			.standards(standards)
 			.systemPath(systemPath)
 			.dists(dists)
 			.declaredFeatures(declaredFeatures)
@@ -1292,6 +1302,15 @@ public final class RontoLispCli {
 		this.out.println("                     scheme (.scm) is EXPERIMENTAL: a subset of R7RS-small");
 		this.out.println("                     (scheme base), partial conformance by design and no");
 		this.out.println("                     compatibility promise. Not with --no-gc.");
+		this.out.println("  --scheme-standard NAME");
+		this.out.println("                     What every Scheme file of the program is read against:");
+		this.out.println("                     the entry file, a (load ...)ed one and the REPL.");
+		this.out.println("                     rontolisp (the default) is this implementation's own");
+		this.out.println("                     dialect: R7RS plus the SICP/MIT and R5RS names, visible");
+		this.out.println("                     without an import. r7rs is R7RS-small, strictly: a program");
+		this.out.println("                     begins with (import ...), no SICP/MIT or R5RS name, no");
+		this.out.println("                     redefinition of an imported name, eval takes its");
+		this.out.println("                     environment.");
 	}
 
 	private static String readFile(String path) {
