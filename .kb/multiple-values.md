@@ -95,6 +95,28 @@ unconditional spill would tax the hottest built-ins on every call:
   not rewritten on any path; a non-tail `return-from`/`go` escape is not scanned; `handler-case`
   and `multiple-value-prog1` are not tail contexts.
 
+## An argument is a single-value context (interpreter)
+**Invariant: what an ARGUMENT published is discarded before the callee runs; what was published
+before the argument list is not touched.** `LispEvaluator.evalArgs` brackets the arguments with
+`Environment.beginArguments` / `endArguments`, so `(list (f))`, `(+ 1 (values 5 6))` and a
+callee whose tail is `(list (values x 2))` answer one value, `(values (f) 7)` still answers
+`5 7` (the callee publishes after the clear), and a tail's values survive a later all-quiet
+call on their way out -- the Scheme session guard's `(if (eq code done) value ...)` and the
+syntactic producers' `(progn (setq %mv-spill ...) (if (eq v s) d v))` depend on that.
+- Mechanism: a flag on the global `Environment` (`spillPublished`), saved and zeroed at
+  `beginArguments`, set by every Java publisher (`publishSpill`: `values`, `values-list`,
+  `parse-integer`, the unwind-protect restore, `macroexpand-1`'s flag) and by a Lisp `setq` of
+  the global to non-nil (`Environment.set`). `endArguments` clears the channel if it is set,
+  else restores the saved flag. A new Java writer of the channel must go through
+  `publishSpill`, or its values survive the next argument boundary (the old leak, not a crash).
+- Cost (2026-09-18, fib 27 + a 2M-call loop, 8 alternating process pairs x 4 steady-state
+  iterations, loaded host): a map probe per call measured +5-9%; the flag, 2168 -> 2163 ms
+  median, no measurable change. A non-local exit out of an argument leaves the flag zeroed,
+  which only means less clearing.
+- Compiled backends do NOT clear here yet: `(multiple-value-list (+ 1 (values 5 6)))` answers
+  `(6 6)` on JVM and both WASM targets, and cl-ppcre's `(scan "abc" "xyz")` answers
+  `(NIL NIL)` there against `(NIL)` on the interpreter and SBCL (`ClPpcreE2eTest` pins both).
+
 ## The REPL echo is a consumer
 `LispEvaluator.evalValues(form) -> List<LispVal>` is the ONLY multiple-value entry point outside
 the macro expander.
@@ -104,13 +126,21 @@ the macro expander.
   level. Resolution runs ONCE: package resolution is not idempotent under a `:shadow` package.
 - `ReplBuffer.eval` echoes EVERY form right after it runs (as SBCL does);
   `RontoPlayground.evalLine` (`src/web/java`, also the doc site's "Run" cells) echoes the LAST.
-- Diffed against SBCL 2.2.9. Remaining differences: a non-tail `values` nobody consumes leaks;
+- Diffed against SBCL 2.2.9. Remaining differences: a `values` in a non-tail, non-argument
+  position (a `progn` body form, a `let` init) nobody consumes leaks;
   `print` omits CL's leading newline / trailing space. ([[gensym-macroexpand]] for
   `macroexpand-1`/`macroexpand`, [[declarations-type-checks]] for `subtypep`'s valid-p,
   [[read-load-streams]] for `read-from-string`'s stop index.)
 
 ## Documented deviations
-- A `values` in a NON-tail position with no consumer leaves a stale spill. `funcall #'values`
+- A `values` in a NON-tail position with no consumer leaves a stale spill -- on the interpreter
+  only outside argument positions (above), on the compiled backends everywhere.
+- Zero values are not represented: `(values)` publishes nil, so a consumer behind a call reads
+  ONE nil -- `(multiple-value-list (g))` with `(defun g () (values))` answers `(NIL)` and Scheme
+  `(call-with-values (lambda () (values)) list)` answers `(())` on every backend (R7RS/gosh:
+  `()`). A distinct zero-count spill value would make any stale one erase the primary of a
+  later consumer (a `(values)`-returning helper called in a loop body would blank the REPL echo
+  of the function around it), so it waits on the non-tail clears above. `funcall #'values`
   through the compiled wrapper yields the primary only; the interpreter spills.
 - Producers are recognized before user-macro expansion on the interpreter but after it on the
   compile path, so a USER MACRO expanding to `(values ...)` yields all values only when compiled.
@@ -129,7 +159,9 @@ list verbatim; `BuiltinFunctionWrappers`.
 `LispEvaluatorTest` (`evalValues*`, `evalMultipleValue*`, `evalNthValue`,
 `evalUnwindProtectCleanupKeepsTheProtectedFormsValues`,
 `evalSyntacticMvProducerTailPublishesThroughAFunctionReturn`,
-`evalMultipleValueConsumerClearsTheSpillChannel`);
+`evalMultipleValueConsumerClearsTheSpillChannel`, `evalValuesAtTopLevelIgnoresValuesPassedAsAnArgument`);
+`RontoLispCliTest.theSchemeReplEchoesThroughTheSchemePrinter` (the argument case),
+`ClPpcreE2eTest.expectedOnTheInterpreter`;
 `RontoLispCliTest.replEchoesEveryValueOnItsOwnLine`; `JvmLispCompilerTest.compileAndRun*` and
 `WasmLispCompilerIntegrationTest` twins; ci-spec `multiple-values-core`,
 `unwind-protect-values` (adds the `--component` leg), `mv-producer-function-return` (its

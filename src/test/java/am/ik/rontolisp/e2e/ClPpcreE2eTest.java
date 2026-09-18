@@ -80,6 +80,20 @@ class ClPpcreE2eTest extends AsdfLibraryE2eSupport {
 			"(\"03\" \"1234\")", "\"a\\\\.b\\\\*c\"", "3", "(1 3 3 5)", "\"baaa\"", "(\"a\" \",\" \"b\")",
 			"\"ONE 2 THREE\"", "\"123\"", "(\"03\" \"1234\")", "(0 3 #() #())", "(NIL NIL)", "(0 3 #() #())");
 
+	/**
+	 * {@code (scan "abc" "xyz")} answers ONE nil, as on SBCL: the string method's tail is
+	 * {@code (scan (create-scanner ...) ...)}, and the interpreter discards the extra
+	 * value {@code create-scanner} published as an ARGUMENT. The compiled legs still read
+	 * it back (.kb/multiple-values.md, "An argument is a single-value context").
+	 */
+	@Override
+	protected List<String> expectedOnTheInterpreter() {
+		List<String> lines = new java.util.ArrayList<>(EXPECTED);
+		lines.set(1, "(NIL)");
+		lines.set(21, "(NIL)");
+		return lines;
+	}
+
 	@Override
 	protected String systemDir() {
 		return SYSTEM_DIR;

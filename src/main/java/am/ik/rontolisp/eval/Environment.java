@@ -200,6 +200,17 @@ public final class Environment implements Scope {
 	private final NameMap functions = new NameMap();
 
 	/**
+	 * Set on the GLOBAL environment whenever a non-nil value may have landed on the
+	 * {@code %mv-spill} channel ({@link LispNames#MV_SPILL}) within the current argument
+	 * list (see {@link #beginArguments}): every Java publisher goes through
+	 * {@link #publishSpill} and a Lisp {@code setq} of the global through {@link #set}.
+	 * It lets the interpreter clear what an argument published at the price of a field
+	 * read and write per call instead of a map lookup. Conservative: a {@code setq} of
+	 * nil leaves it as it was.
+	 */
+	private boolean spillPublished;
+
+	/**
 	 * Resolves the print family's default destination at call time. Set by the evaluator
 	 * (on the global environment) to read the current -- dynamic-first -- value of
 	 * {@code *standard-output*}, so a {@code (let ((*standard-output* stream)) ...)} or
@@ -634,6 +645,9 @@ public final class Environment implements Scope {
 				this.pending.remove(name);
 			}
 			this.bindings.put(name, value);
+			if (this.parent == null && value != LispNil.INSTANCE && LispNames.MV_SPILL.equals(name)) {
+				this.spillPublished = true;
+			}
 			return;
 		}
 		if (this.parent != null) {
@@ -642,6 +656,46 @@ public final class Environment implements Scope {
 		}
 		// If not found anywhere, define in current scope
 		this.bindings.put(name, value);
+	}
+
+	/**
+	 * Publishes a producer's extra values (a fresh list, nil for none) to the
+	 * {@code %mv-spill} channel of this -- the global -- environment.
+	 * @param extras the values after the primary
+	 */
+	void publishSpill(LispVal extras) {
+		this.bindings.put(LispNames.MV_SPILL, extras);
+		if (extras != LispNil.INSTANCE) {
+			this.spillPublished = true;
+		}
+	}
+
+	/**
+	 * Opens an argument list on this -- the global -- environment: from here on the
+	 * publish flag records only what the arguments publish.
+	 * @return the flag as it was, for {@link #endArguments}
+	 */
+	boolean beginArguments() {
+		boolean outer = this.spillPublished;
+		this.spillPublished = false;
+		return outer;
+	}
+
+	/**
+	 * Closes an argument list: an argument is a single-value context, so whatever an
+	 * argument published is discarded before the callee runs, while values published
+	 * BEFORE the argument list (a tail whose value is still on its way to a consumer) are
+	 * left alone when no argument published anything.
+	 * @param outer what {@link #beginArguments} returned
+	 */
+	void endArguments(boolean outer) {
+		if (this.spillPublished) {
+			this.spillPublished = false;
+			this.bindings.put(LispNames.MV_SPILL, LispNil.INSTANCE);
+		}
+		else {
+			this.spillPublished = outer;
+		}
 	}
 
 	/**
@@ -6329,7 +6383,7 @@ public final class Environment implements Scope {
 			LispVal[] valueAndPos = parseInteger(str.value(), start, end, radix, junkAllowed);
 			// Publish the stop position as the second value through the spill, so a
 			// first-class #'parse-integer matches the call-position expansion.
-			env.define(LispNames.MV_SPILL, new LispCons(valueAndPos[1], LispNil.INSTANCE));
+			env.publishSpill(new LispCons(valueAndPos[1], LispNil.INSTANCE));
 			return valueAndPos[0];
 		}));
 	}
@@ -7171,7 +7225,7 @@ public final class Environment implements Scope {
 			for (int i = args.size() - 1; i >= 1; i--) {
 				extras = new LispCons(args.get(i), extras);
 			}
-			env.define(LispNames.MV_SPILL, extras);
+			env.publishSpill(extras);
 			return args.isEmpty() ? LispNil.INSTANCE : args.get(0);
 		}));
 		// values-list: (values-list '(1 2)) == (values 1 2) -- the first element is
@@ -7179,7 +7233,7 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.VALUES_LIST, new LispFunction(LispNames.VALUES_LIST, args -> {
 			requireArgCount(LispNames.VALUES_LIST, args, 1);
 			if (args.get(0) instanceof LispCons cons) {
-				env.define(LispNames.MV_SPILL, cons.cdr());
+				env.publishSpill(cons.cdr());
 				return cons.car();
 			}
 			env.define(LispNames.MV_SPILL, LispNil.INSTANCE);

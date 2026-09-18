@@ -8033,8 +8033,8 @@ public final class LispEvaluator {
 	 * @return the expansion
 	 */
 	private LispVal expandedWithFlag(LispVal form, LispVal expansion) {
-		this.globalEnv.define(LispNames.MV_SPILL,
-				new LispCons(expansion == form ? LispNil.INSTANCE : LispTrue.INSTANCE, LispNil.INSTANCE));
+		this.globalEnv
+			.publishSpill(new LispCons(expansion == form ? LispNil.INSTANCE : LispTrue.INSTANCE, LispNil.INSTANCE));
 		return expansion;
 	}
 
@@ -10074,7 +10074,7 @@ public final class LispEvaluator {
 			eval(parts.get(i), env);
 		}
 		if (spill != null) {
-			this.globalEnv.define(LispNames.MV_SPILL, spill);
+			this.globalEnv.publishSpill(spill);
 		}
 	}
 
@@ -10753,13 +10753,23 @@ public final class LispEvaluator {
 	// The count is a capacity hint (evalCons already walked the form to check
 	// properness, so it knows the exact size); the loop still stops at the chain's
 	// actual end, so a form rewritten mid-evaluation merely re-grows the list.
+	//
+	// An argument is a single-value context, so the extra values an argument form left
+	// on the %mv-spill channel are discarded once every argument is in -- before the
+	// callee runs, which publishes its own. Without this, (list (f)) answered f's
+	// extras as the list's own to a consumer (the REPL echo above all). Only what the
+	// ARGUMENTS published is discarded, so a tail's values still on their way out
+	// survive a later call such as (eq code done) (Environment.endArguments).
 	private List<LispVal> evalArgs(LispCons cons, Environment env, int count) {
 		List<LispVal> args = new ArrayList<>(Math.max(count, 0));
 		LispVal rest = cons.cdr();
+		Environment global = this.globalEnv;
+		boolean outer = global.beginArguments();
 		while (rest instanceof LispCons argCons) {
 			args.add(eval(argCons.car(), env));
 			rest = argCons.cdr();
 		}
+		global.endArguments(outer);
 		return args;
 	}
 
