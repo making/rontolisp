@@ -823,7 +823,8 @@ binary output port's the bytes written, newest first. `close-port` only clears `
   byte: 256`), error objects a `guard` catches -- Gauche's texts differ.
 - `eval` reaches every port procedure through the generated table; a current port's
   table value is its parameter object.
-- Not here: file ports (`(scheme file)`: `open-input-file`, `with-output-to-file`, ...),
+- Not here: file ports (`(scheme file)`: `open-input-file`, `with-output-to-file`, ...;
+  `.todo/874`),
   and the non-R7RS `with-output-to-string` / `call-with-output-string` (no SICP sample
   spells any port name).
 - Cost (2026-09-18, x86-64 Linux, Java 25; `-o P.class --class-name P` / `-o p.wasm`):
