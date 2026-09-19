@@ -2,38 +2,38 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**14,690 / 19,485 tests pass (75.4%)** -- 2,007 fail, 2,788 signal an error.
+**15,018 / 19,486 tests pass (77.1%)** -- 1,680 fail, 2,788 signal an error.
 
-7 top-level forms could not be read, 439 could not be evaluated, 4 did not terminate; every test those forms would have defined is missing from the counts above.
+7 top-level forms could not be read, 439 could not be evaluated, 3 did not terminate; every test those forms would have defined is missing from the counts above.
 
 | chapter | tests | pass | fail | error | pass rate | top-level forms lost |
 |---|---:|---:|---:|---:|---:|---:|
-| arrays | 1,356 | 1,125 | 102 | 129 | 83.0% | 11 |
-| characters | 259 | 209 | 10 | 40 | 80.7% | 11 |
-| conditions | 673 | 543 | 68 | 62 | 80.7% | 11 |
-| cons | 1,879 | 1,644 | 158 | 77 | 87.5% | 11 |
-| data-and-control-flow | 1,428 | 1,084 | 211 | 133 | 75.9% | 12 |
-| environment | 210 | 121 | 19 | 70 | 57.6% | 11 |
-| eval-and-compile | 306 | 204 | 54 | 48 | 66.7% | 11 |
+| arrays | 1,356 | 1,178 | 49 | 129 | 86.9% | 11 |
+| characters | 259 | 212 | 7 | 40 | 81.9% | 11 |
+| conditions | 673 | 553 | 58 | 62 | 82.2% | 11 |
+| cons | 1,879 | 1,656 | 146 | 77 | 88.1% | 11 |
+| data-and-control-flow | 1,428 | 1,193 | 102 | 133 | 83.5% | 12 |
+| environment | 210 | 123 | 16 | 71 | 58.6% | 11 |
+| eval-and-compile | 306 | 216 | 42 | 48 | 70.6% | 11 |
 | files | 87 | 26 | 8 | 53 | 29.9% | 11 |
-| hash-tables | 157 | 128 | 22 | 7 | 81.5% | 13 |
-| iteration | 843 | 649 | 171 | 23 | 77.0% | 13 |
-| misc | 740 | 716 | 19 | 5 | 96.8% | 11 |
-| numbers | 1,444 | 1,227 | 77 | 140 | 85.0% | 15 |
-| objects | 846 | 340 | 203 | 303 | 40.2% | 37 |
-| packages | 492 | 168 | 120 | 204 | 34.1% | 29 |
+| hash-tables | 157 | 129 | 21 | 7 | 82.2% | 13 |
+| iteration | 843 | 723 | 97 | 23 | 85.8% | 13 |
+| misc | 740 | 717 | 18 | 5 | 96.9% | 11 |
+| numbers | 1,444 | 1,252 | 52 | 140 | 86.7% | 15 |
+| objects | 846 | 342 | 201 | 303 | 40.4% | 37 |
+| packages | 492 | 173 | 115 | 204 | 35.2% | 29 |
 | pathnames | 214 | 120 | 26 | 68 | 56.1% | 12 |
-| printer | 544 | 240 | 123 | 181 | 44.1% | 48 |
+| printer | 544 | 241 | 123 | 180 | 44.3% | 48 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 13 |
-| reader | 575 | 364 | 71 | 140 | 63.3% | 19 |
-| sequences | 3,287 | 3,014 | 103 | 170 | 91.7% | 11 |
-| streams | 759 | 241 | 82 | 436 | 31.8% | 56 |
+| reader | 576 | 368 | 68 | 140 | 63.9% | 18 |
+| sequences | 3,287 | 3,017 | 100 | 170 | 91.8% | 11 |
+| streams | 759 | 245 | 78 | 436 | 32.3% | 56 |
 | strings | 509 | 404 | 56 | 49 | 79.4% | 12 |
 | structures | 1,030 | 712 | 59 | 259 | 69.1% | 36 |
-| symbols | 1,144 | 1,074 | 29 | 41 | 93.9% | 12 |
-| system-construction | 77 | 23 | 4 | 50 | 29.9% | 11 |
-| types-and-classes | 626 | 314 | 212 | 100 | 50.2% | 13 |
-| **total** | **19,485** | **14,690** | **2,007** | **2,788** | **75.4%** | **450** |
+| symbols | 1,144 | 1,076 | 27 | 41 | 94.1% | 12 |
+| system-construction | 77 | 26 | 1 | 50 | 33.8% | 11 |
+| types-and-classes | 626 | 316 | 210 | 100 | 50.5% | 13 |
+| **total** | **19,486** | **15,018** | **1,680** | **2,788** | **77.1%** | **449** |
 
 ## Most frequent failure reasons
 
