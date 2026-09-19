@@ -2,7 +2,7 @@
 
 **Experimental.** rontolisp reads a subset of R7RS-small -- `(scheme base)`,
 `(scheme write)`, `(scheme read)`, `(scheme char)`, `(scheme inexact)`, `(scheme cxr)`, `(scheme lazy)`,
-`(scheme case-lambda)`, `(scheme process-context)`'s `exit`, `(scheme eval)` and `(scheme repl)` -- just large
+`(scheme case-lambda)`, `(scheme process-context)`'s `exit`, `(scheme eval)`, `(scheme repl)` and `(scheme file)` -- just large
 enough to run a
 Scheme program on every backend. Conformance is partial by design and nothing here is a
 compatibility promise. Use it to try a Scheme program on the JVM or WebAssembly; write
@@ -47,7 +47,7 @@ rontolisp prog.txt --source-language scheme        # any extension
 - [Standards](standards.md) -- `--scheme-standard`: this implementation's dialect or
   strict R7RS.
 - [Syntax](syntax.md) -- the reader, special forms and `import`.
-- [Libraries](libraries.md) -- the eleven importable R7RS libraries and what each
+- [Libraries](libraries.md) -- the twelve importable R7RS libraries and what each
   provides.
 - [*Structure and Interpretation of Computer Programs* (SICP) Compatibility](sicp.md) -- the
   MIT/SICP names visible with no `import`.

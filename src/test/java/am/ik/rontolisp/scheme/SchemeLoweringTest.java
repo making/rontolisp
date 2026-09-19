@@ -342,14 +342,19 @@ class SchemeLoweringTest {
 		assertThatThrownBy(() -> lowered("(import (scheme time))")).isInstanceOf(LispReadException.class)
 			.hasMessage("test.scm:1:1: library (|scheme| |time|) is not available: this experimental front end has"
 					+ " (scheme base), (scheme write), (scheme read), (scheme char), (scheme inexact), (scheme cxr),"
-					+ " (scheme lazy), (scheme case-lambda), (scheme process-context), (scheme eval) and (scheme repl)"
-					+ " only");
+					+ " (scheme lazy), (scheme case-lambda), (scheme process-context), (scheme eval), (scheme repl)"
+					+ " and (scheme file) only");
 		assertThat(lowered("(import (scheme char)) (char-upcase x)")).isEqualTo("(CHAR-UPCASE |x|)");
 		assertThat(lowered("(import (scheme base)) (char-upcase x)")).isEqualTo("(|char-upcase| |x|)");
 		assertThat(lowered("(char-upcase x)")).isEqualTo("(CHAR-UPCASE |x|)");
 		assertThat(lowered("(import (scheme inexact)) (sqrt x)")).isEqualTo("(RONTOLISP::%SCHEME-SQRT |x|)");
 		assertThat(lowered("(import (scheme base)) (sqrt x)")).isEqualTo("(|sqrt| |x|)");
 		assertThat(lowered("(import (only (scheme cxr) caddr)) (caddr x)")).isEqualTo("(CADDR |x|)");
+		assertThat(lowered("(import (scheme file)) (file-exists? x)"))
+			.isEqualTo("(IF (PROBE-FILE |x|) T RONTOLISP::%SCHEME-FALSE)");
+		assertThat(lowered("(import (scheme base)) (open-input-file x)")).isEqualTo("(|open-input-file| |x|)");
+		assertThat(lowered("(open-input-file x)"))
+			.isEqualTo("(RONTOLISP::%SCHEME-OPEN-INPUT-FILE \"open-input-file\" |x|)");
 	}
 
 	@Test
@@ -405,7 +410,7 @@ class SchemeLoweringTest {
 					+ " ((|false|) RONTOLISP::%SCHEME-FALSE) (T 'RONTOLISP::%SCHEME-UNBOUND)))");
 		assertThat(Scheme.runtimeForms(name -> false, SchemeStandard.RONTOLISP).get(1).print()).isEqualTo(
 				"(DEFUN RONTOLISP::%SCHEME-LIBRARY-P (NAME) (IF (MEMBER NAME '(|base| |write| |read| |char| |inexact| |cxr|"
-						+ " |lazy| |case-lambda| |process-context| |eval| |repl|)) T NIL))");
+						+ " |lazy| |case-lambda| |process-context| |eval| |repl| |file|)) T NIL))");
 	}
 
 	@Test

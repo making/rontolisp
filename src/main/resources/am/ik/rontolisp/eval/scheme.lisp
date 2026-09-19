@@ -1846,7 +1846,10 @@
   stream
   open
   pushback
-  fold-case)
+  fold-case
+  ;; A file port ((scheme file)): STREAM is a Common Lisp file stream, which closing
+  ;; the port closes; a binary input file port keeps its peeked byte in PUSHBACK.
+  #+rontolisp-scheme-files file)
 
 #+rontolisp-scheme-ports
 (defun rontolisp::%scheme-make-port (input binary string stream)
@@ -2028,7 +2031,8 @@
   (if (not
        (and (rontolisp::%scheme-port-p port)
             (rontolisp::%scheme-port-binary port)
-            (not (rontolisp::%scheme-port-input port))))
+            (not (rontolisp::%scheme-port-input port))
+            #+rontolisp-scheme-files (not (rontolisp::%scheme-port-file port))))
       (rontolisp::%scheme-port-error "get-output-bytevector"
                                      "not a bytevector output port:" port)
       (rontolisp::%scheme-bytevector
@@ -2130,6 +2134,12 @@
   (let* ((port
           (rontolisp::%scheme-binary-input (if advance "read-u8" "peek-u8")
                                            port))
+         #+rontolisp-scheme-files
+         (port
+          (if (rontolisp::%scheme-port-file port)
+              (return-from rontolisp::%scheme-read-u8
+                           (rontolisp::%scheme-file-read-u8 port advance))
+              port))
          (bytes (rontolisp::%scheme-port-stream port))
          (at (rontolisp::%scheme-port-pushback port)))
     (if (>= at (length bytes))
@@ -2146,6 +2156,12 @@
 #+rontolisp-scheme-ports
 (defun rontolisp::%scheme-read-bytes (k port)
   (let* ((port (rontolisp::%scheme-binary-input "read-bytevector" port))
+         #+rontolisp-scheme-files
+         (port
+          (if (rontolisp::%scheme-port-file port)
+              (return-from rontolisp::%scheme-read-bytes
+                           (rontolisp::%scheme-file-read-bytes k port))
+              port))
          (bytes (rontolisp::%scheme-port-stream port))
          (at (rontolisp::%scheme-port-pushback port))
          (end (min (length bytes) (+ at k))))
@@ -2158,6 +2174,12 @@
 #+rontolisp-scheme-ports
 (defun rontolisp::%scheme-read-bytes! (to port start end)
   (let* ((port (rontolisp::%scheme-binary-input "read-bytevector!" port))
+         #+rontolisp-scheme-files
+         (port
+          (if (rontolisp::%scheme-port-file port)
+              (return-from rontolisp::%scheme-read-bytes!
+               (rontolisp::%scheme-file-read-bytes! to port start end))
+              port))
          (bytes (rontolisp::%scheme-port-stream port))
          (at (rontolisp::%scheme-port-pushback port))
          (end (or end (length to)))
@@ -2178,6 +2200,11 @@
 #+rontolisp-scheme-ports
 (defun rontolisp::%scheme-write-u8 (byte port)
   (let ((port (rontolisp::%scheme-binary-output "write-u8" port)))
+    #+rontolisp-scheme-files
+    (if (rontolisp::%scheme-port-file port)
+        (return-from rontolisp::%scheme-write-u8
+                     (write-byte (rontolisp::%scheme-byte "write-u8" byte)
+                                 (rontolisp::%scheme-port-stream port))))
     (setf (rontolisp::%scheme-port-stream port)
           (cons (rontolisp::%scheme-byte "write-u8" byte)
                 (rontolisp::%scheme-port-stream port)))))
@@ -2187,8 +2214,14 @@
   (let ((port (rontolisp::%scheme-binary-output "write-bytevector" port)))
     (do ((i start (+ i 1)))
         ((>= i (or end (length bytes))))
+      #-rontolisp-scheme-files
       (setf (rontolisp::%scheme-port-stream port)
-            (cons (aref bytes i) (rontolisp::%scheme-port-stream port))))))
+            (cons (aref bytes i) (rontolisp::%scheme-port-stream port)))
+      #+rontolisp-scheme-files
+      (if (rontolisp::%scheme-port-file port)
+          (write-byte (aref bytes i) (rontolisp::%scheme-port-stream port))
+          (setf (rontolisp::%scheme-port-stream port)
+                (cons (aref bytes i) (rontolisp::%scheme-port-stream port)))))))
 
 #+rontolisp-scheme-ports
 (defun rontolisp::%scheme-port-open-p (who port input)
@@ -2209,15 +2242,152 @@
                                      (cond ((eq input :any) "not a port:")
                                            (input "not an input port:")
                                            (t "not an output port:")) port)
-      (setf (rontolisp::%scheme-port-open port) nil)))
+      (progn
+        #+rontolisp-scheme-files (rontolisp::%scheme-release-port port)
+        (setf (rontolisp::%scheme-port-open port) nil))))
 
 #+rontolisp-scheme-ports
 (defun rontolisp::%scheme-call-with-port (port proc)
   (if (not (rontolisp::%scheme-port-p port))
       (rontolisp::%scheme-port-error "call-with-port" "not a port:" port))
   (let ((results (multiple-value-list (funcall proc port))))
+    #+rontolisp-scheme-files (rontolisp::%scheme-release-port port)
     (setf (rontolisp::%scheme-port-open port) nil)
     (values-list results)))
+
+;; --- file ports ((scheme file), R7RS 6.13.1) ----------------------------------------
+;; A file port is the same record over a Common Lisp file stream. open's :direction and
+;; :element-type must be literal (.kb/read-load-streams.md), so each opener spells its
+;; own open. A failed open raises an error object file-error? answers #t for, whatever
+;; the backend's own open signalled. Only under the files feature, which SchemeLibrary
+;; turns on for a program calling one of these helpers.
+#+rontolisp-scheme-files
+(defun rontolisp::%scheme-file-error (who message path)
+  (rontolisp::%scheme-raise
+   (make-condition 'rontolisp::%scheme-file-error-condition
+                   :message (concatenate 'string who ": " message)
+                   :irritants (list path))))
+
+#+rontolisp-scheme-files
+(defun rontolisp::%scheme-file-name (who path)
+  (if (stringp path)
+      path
+      (rontolisp::%scheme-port-error who "not a file name:" path)))
+
+;; STREAM is what the opener's open answered, NIL when it failed.
+#+rontolisp-scheme-files
+(defun rontolisp::%scheme-file-port (who path stream input binary)
+  (if (null stream)
+      (rontolisp::%scheme-file-error who "cannot open file:" path)
+      (let ((port (rontolisp::%scheme-make-port input binary nil stream)))
+        (setf (rontolisp::%scheme-port-file port) t)
+        (if binary (setf (rontolisp::%scheme-port-pushback port) nil))
+        port)))
+
+#+rontolisp-scheme-files
+(defun rontolisp::%scheme-open-input-file (who path)
+  (let ((path (rontolisp::%scheme-file-name who path)))
+    (rontolisp::%scheme-file-port who path
+     (handler-case (open path :direction :input) (error () nil)) t nil)))
+
+#+rontolisp-scheme-files
+(defun rontolisp::%scheme-open-output-file (who path)
+  (let ((path (rontolisp::%scheme-file-name who path)))
+    (rontolisp::%scheme-file-port who path
+                                  (handler-case (open path
+                                                 :direction :output
+                                                 :if-exists :supersede
+                                                 :if-does-not-exist :create)
+                                    (error () nil)) nil nil)))
+
+#+rontolisp-scheme-files
+(defun rontolisp::%scheme-open-binary-input-file (path)
+  (let ((path (rontolisp::%scheme-file-name "open-binary-input-file" path)))
+    (rontolisp::%scheme-file-port "open-binary-input-file" path
+                                  (handler-case (open path
+                                                      :direction :input
+                                                      :element-type
+                                                      '(unsigned-byte 8))
+                                    (error () nil)) t t)))
+
+#+rontolisp-scheme-files
+(defun rontolisp::%scheme-open-binary-output-file (path)
+  (let ((path (rontolisp::%scheme-file-name "open-binary-output-file" path)))
+    (rontolisp::%scheme-file-port "open-binary-output-file" path
+                                  (handler-case (open path
+                                                 :direction :output
+                                                 :element-type
+                                                 '(unsigned-byte 8)
+                                                 :if-exists :supersede
+                                                 :if-does-not-exist :create)
+                                    (error () nil)) nil t)))
+
+;; Closing a file port closes its stream, once.
+#+rontolisp-scheme-files
+(defun rontolisp::%scheme-release-port (port)
+  (if (and (rontolisp::%scheme-port-file port)
+           (rontolisp::%scheme-port-open port))
+      (close (rontolisp::%scheme-port-stream port))))
+
+;; with-input-from-file and with-output-to-file: PORT is the current port WHICH for
+;; THUNK and is closed on every way out. (call-with-input-file and
+;; call-with-output-file are call-with-port over the opened port.)
+#+rontolisp-scheme-files
+(defun rontolisp::%scheme-with-file (port which thunk)
+  (unwind-protect (rontolisp::%scheme-parameterize
+                   (list (rontolisp::%scheme-port-parameter which) port) thunk)
+    (rontolisp::%scheme-release-port port)
+    (setf (rontolisp::%scheme-port-open port) nil)))
+
+#+rontolisp-scheme-files
+(defun rontolisp::%scheme-delete-file (path)
+  (let ((path (rontolisp::%scheme-file-name "delete-file" path)))
+    (if (not
+         (handler-case (progn
+                         (delete-file path)
+                         t)
+           (error () nil)))
+        (rontolisp::%scheme-file-error "delete-file" "cannot delete file:"
+                                       path))))
+
+;; Binary file input: PUSHBACK holds the byte (or EOF) a peek-u8 read ahead.
+#+rontolisp-scheme-files
+(defun rontolisp::%scheme-file-read-u8 (port advance)
+  (let ((b
+         (if (rontolisp::%scheme-port-pushback port)
+             (rontolisp::%scheme-port-pushback port)
+             (read-byte (rontolisp::%scheme-port-stream port) nil
+                        rontolisp::%scheme-eof-instance))))
+    (setf (rontolisp::%scheme-port-pushback port) (if advance nil b))
+    b))
+
+#+rontolisp-scheme-files
+(defun rontolisp::%scheme-file-read-bytes (k port)
+  (let ((bytes nil) (n 0))
+    (do ()
+        ((>= n k))
+      (let ((b (rontolisp::%scheme-file-read-u8 port t)))
+        (if (rontolisp::%scheme-eof-p b)
+            (return nil)
+            (progn
+              (setq bytes (cons b bytes))
+              (setq n (+ n 1))))))
+    (if (and (null bytes) (> k 0))
+        rontolisp::%scheme-eof-instance
+        (rontolisp::%scheme-bytevector (nreverse bytes)))))
+
+#+rontolisp-scheme-files
+(defun rontolisp::%scheme-file-read-bytes! (to port start end)
+  (let ((end (or end (length to))) (n 0))
+    (do ()
+        ((>= (+ start n) end))
+      (let ((b (rontolisp::%scheme-file-read-u8 port t)))
+        (if (rontolisp::%scheme-eof-p b)
+            (return nil)
+            (progn
+              (setf (aref to (+ start n)) b)
+              (setq n (+ n 1))))))
+    (if (and (= n 0) (< start end)) rontolisp::%scheme-eof-instance n)))
 
 (defun rontolisp::%scheme-error-message (message irritants)
   (with-output-to-string (*standard-output*)
@@ -2256,6 +2426,12 @@
 ;; What read raises on malformed input: an error object read-error? answers #t for.
 (define-condition rontolisp::%scheme-read-error-condition
     (rontolisp::%scheme-error reader-error)
+  ())
+
+;; What a failed file operation raises: an error object file-error? answers #t for.
+#+rontolisp-scheme-files
+(define-condition rontolisp::%scheme-file-error-condition
+    (rontolisp::%scheme-error file-error)
   ())
 
 (define-condition rontolisp::%scheme-raise (error)

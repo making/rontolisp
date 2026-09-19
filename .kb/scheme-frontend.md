@@ -65,7 +65,7 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `(include "f")`, `(include-ci "f")` | `(begin <f's datums>)`, spliced before macro expansion | the same section |
 | `define-syntax` / `let-syntax` / `letrec-syntax` with `syntax-rules` | nothing: expanded away before the lowering (`SchemeExpander`); `let-syntax`'s body is `(let () body)` | hygiene by renaming, "Macros" below |
 | `#u8(...)`, `bytevector`, `make-bytevector`, `bytevector-append`, `string->utf8` | the `(unsigned-byte 8)` pack (`.kb/packed-integer-vectors.md`): the literal is an 8-bit `LispIntVector` datum, self-evaluating; the constructors are `%scheme-` helpers over `make-array :element-type '(unsigned-byte 8)` / `rontolisp:string-to-octets` | "Bytevectors" below |
-| a port procedure; the optional port argument of `display`, `read-char`, ...; `(current-output-port)` | a `%scheme-` helper over a `%scheme-port` record (`(display x p)` -> `(%scheme-display-to x p)`, which binds `*standard-output*` to the port's stream around the printer); with no port argument the template is what it always was. A current port's VALUE is `(%scheme-port-parameter 1)`, a parameter object | the standard streams are the `t` designator on the compiled backends, not values ("Ports" below) |
+| a port procedure (a `(scheme file)` one included); the optional port argument of `display`, `read-char`, ...; `(current-output-port)` | a `%scheme-` helper over a `%scheme-port` record (`(display x p)` -> `(%scheme-display-to x p)`, which binds `*standard-output*` to the port's stream around the printer); with no port argument the template is what it always was. A current port's VALUE is `(%scheme-port-parameter 1)`, a parameter object | the standard streams are the `t` designator on the compiled backends, not values ("Ports" below) |
 | `(eval datum env)`, `(interaction-environment)`, `(scheme-report-environment 5)`, `(environment sets..)`, `user-initial-environment`, `system-global-environment` | `(%scheme-eval-in datum '\|#[environment]\|)`: a Scheme evaluator over DATUMS in `scheme.lisp`; every specifier is the one global environment, a quoted symbol | the lowering is not inside a compiled program and the backends' run-time `eval` evaluates core forms, so one evaluator serves all four ("`eval`" below) |
 
 `symbol?` excludes `T`, `NIL` and the false value; `boolean?` is `#t`/`#f` only; `vector?`
@@ -261,7 +261,7 @@ its record in `internalRecords` by datum identity and defines nothing twice.
   Refusing it on the compile path would cost the direct call of every procedure for a
   program that is wrong anyway; a session has the same order as the interpreter.
 
-## The library tags: `base`, `write`, `read`, `char`, `inexact`, `cxr`, `lazy`, `case-lambda`, `process-context`, `eval`, `repl`, `sicp` and `r5rs`
+## The library tags: `base`, `write`, `read`, `char`, `inexact`, `cxr`, `lazy`, `case-lambda`, `process-context`, `eval`, `repl`, `file`, `sicp` and `r5rs`
 
 `SchemeBuiltins` entries carry the R7RS library that exports them, checked entry by
 entry against Gauche 0.9.15's `(module-exports (find-module 'scheme.<lib>))`
@@ -270,9 +270,9 @@ entry against Gauche 0.9.15's `(module-exports (find-module 'scheme.<lib>))`
 `base`, as in R7RS), `char` (all 22 `(scheme char)` exports, "`(scheme char)`" below), `inexact`,
 `cxr` (the whole `(scheme cxr)` set, `caaar` through `cddddr`: every one a
 standard Common Lisp function of the same name), `lazy`, `case-lambda` (the keyword
-alone), `process-context`, `eval` (`eval`, `environment`) and `repl`
-(`interaction-environment`) are `SchemeLowering.IMPORTABLE_LIBRARIES`: `(import (scheme
-<tag>))` names them, and a file with no import at all merges all eleven. Keywords carry a
+alone), `process-context`, `eval` (`eval`, `environment`), `repl`
+(`interaction-environment`) and `file` (all ten `(scheme file)` exports, "File ports" below) are `SchemeLowering.IMPORTABLE_LIBRARIES`: `(import (scheme
+<tag>))` names them, and a file with no import at all merges all twelve. Keywords carry a
 library too: `SYNTAX` is `base`, `LAZY_SYNTAX` (`delay`, `delay-force`) `lazy`,
 `CASE_LAMBDA_SYNTAX` `case-lambda`, `SICP_SYNTAX` (`cons-stream`) `sicp`.
 `sicp` (`true false nil the-empty-stream user-initial-environment
@@ -305,7 +305,7 @@ is R7RS-small within the implemented subset:
    first datum (`an R7RS program begins with an import declaration`, R7RS 5.1). Gauche
    instead starts empty and fails at the first unbound name.
 2. **`sicp` and `r5rs` names are never visible**: `SchemeLowering.imports()`'s no-import
-   branch (the session's) merges the eleven libraries only.
+   branch (the session's) merges the twelve libraries only.
 3. **Redefining an imported binding in a file is refused** (R7RS 5.6.1 "it is an error";
    Gauche -r7 allows the `define` silently): a top-level `define`, `define-values`, or a
    `define-record-type` type or procedure name over a `Builtin` or `Syntax` binding
@@ -950,7 +950,7 @@ all four and `open-stream-p` after `close` is T on wasm. Slots: `input`, `binary
 `string` (made by `open-...-string`), `stream`, `open`, `pushback`, `fold-case`. A
 textual port's `stream` is the CL stream it reads or writes (`t` for the standard ones);
 a binary input port's is the bytevector (a copy) with the position in `pushback`; a
-binary output port's the bytes written, newest first. `close-port` only clears `open`.
+binary output port's the bytes written, newest first. `close-port` clears `open` (and closes a file port's stream, "File ports" below).
 
 - **Output with a port** binds `*standard-output*` to the port's stream around the
   unchanged printer (`%scheme-display-to` & co), so the printer keeps its one shape.
@@ -986,7 +986,7 @@ binary output port's the bytes written, newest first. `close-port` only clears `
   gets, so `LibraryDefunPruner`'s bundled-name sets read `SchemeLibrary.everyVariantForms()`;
   with `forms()` alone the no-port reader's four `defvar`s were not known as library
   definitions and stayed as roots (+580 B class in every printing program).
-- **Binary ports are over bytevectors only.** The standard ports are textual, so
+- **Binary ports are over bytevectors and files.** The standard ports are textual, so
   `read-u8`/`write-u8`/`read-bytevector`... with no port argument are refused by name
   (Gauche reads/writes the byte). A port is textual or binary, never both (Gauche's are
   both: `binary-port?` of a string port is `#t` there). `u8-ready?` and `char-ready?`
@@ -996,9 +996,7 @@ binary output port's the bytes written, newest first. `close-port` only clears `
   byte: 256`), error objects a `guard` catches -- Gauche's texts differ.
 - `eval` reaches every port procedure through the generated table; a current port's
   table value is its parameter object.
-- Not here: file ports (`(scheme file)`: `open-input-file`, `with-output-to-file`, ...;
-  `.todo/874`),
-  and the non-R7RS `with-output-to-string` / `call-with-output-string` (no SICP sample
+- File ports: "File ports" below. Not here: the non-R7RS `with-output-to-string` / `call-with-output-string` (no SICP sample
   spells any port name).
 - Cost (2026-09-18, x86-64 Linux, Java 25; `-o P.class --class-name P` / `-o p.wasm`):
   every program spelling no port name is byte-identical before and after -- `hello`
@@ -1018,6 +1016,75 @@ binary output port's the bytes written, newest first. `close-port` only clears `
   compiled backends) and `writing-to-a-closed-port-is-an-error`,
   `SchemeLoweringTest.aPortArgumentSelectsThePortHelperAndACurrentPortIsAParameterValue`,
   `LibraryDefunPrunerTest.thePortSectionFollowsOnlyAProgramThatUsesAPortProcedure`.
+
+## File ports (`(scheme file)`; 2026-09-19, `.todo/874`)
+
+**A file port is the `%scheme-port` record over a Common Lisp file stream**, with a
+`file` slot set; everything that reads or writes a textual port works on it unchanged.
+
+- **Each opener spells its own literal `open`** (`%scheme-open-input-file` & co in
+  `scheme.lisp`): `:direction` / `:element-type` must be literal
+  (`.kb/read-load-streams.md`, "Computed open options"). Output opens `:if-exists
+  :supersede :if-does-not-exist :create`. The path reaches `open` as a variable, so no
+  literal-path folding applies (`CompileTimePathnameFolder` folds `with-open-file` of a
+  literal only): a literal `"/tmp/x"` in the Scheme source is read at RUN time
+  (measured, JVM and wasm).
+- **A failed open is a `file-error?` object on every backend**: the opener wraps `open`
+  in `(handler-case .. (error () nil))` and raises `%scheme-file-error-condition`
+  (`%scheme-error` + CL `file-error`, like the read error) with message `who: cannot open
+  file:` and the path as irritant. Needed because Common Lisp's `open` signals a
+  SIMPLE-ERROR on all four backends (measured 2026-09-19: interpreter
+  `OPEN: cannot open file ...`, JVM the raw `FileNotFoundException` text, wasm `open:
+  cannot open file`), and `delete-file` of a missing file too (`DELETE-FILE: cannot
+  delete ...`, prelude) -- ANSI says `file-error`; `.todo/890` has the CL fix. The
+  handler stays right after it.
+- **Closing really closes**: `%scheme-release-port` `close`s the stream of an open file
+  port, from `close-port` & co and `call-with-port`. `with-input-from-file` /
+  `with-output-to-file` are `%scheme-with-file`: `%scheme-parameterize` of the port
+  parameter (so `(current-output-port)` IS the file port and Common Lisp code writes
+  there too) inside an `unwind-protect` that closes the file on every exit channel --
+  Gauche leaves it open (and unflushed) on an escape. `call-with-input-file` /
+  `call-with-output-file` are `call-with-port` over the opener: closed on return only, as
+  R7RS says.
+- **Binary file ports**: `binary` and `file` set; `read-u8` & co test `file` first and
+  go to `%scheme-file-read-u8` (`read-byte`, the peeked byte or EOF in `pushback`),
+  `write-u8` / `write-bytevector` to `write-byte`. `get-output-bytevector` refuses a file
+  port. `read-bytevector` from a file builds its result through `%scheme-bytevector`, so
+  the bytevector feature's fixpoint counts it -- computed with the files feature only for
+  a program that has file ports (`SchemeLibrary.process`), so no other program's
+  bytevector decision moves.
+- **`file-exists?` is `(probe-file f)`, no helper**, so a program asking only that pulls
+  in no port machinery. `delete-file` is `%scheme-delete-file`: CL `delete-file` in a
+  `handler-case`, a file error on failure.
+- **Everything file-specific is behind a third reader feature**, `rontolisp-scheme-files`
+  (`SchemeLibrary.FILES_FEATURE`): the openers, the condition, the `file` slot itself and
+  the file arms of `close-port`, `call-with-port`, the binary procedures and
+  `get-output-bytevector`. `makesFiles` is `makesPorts`' derivation one feature up
+  (functions defined under ports+files minus ports); a file program implies the ports
+  feature. The interpreter always reads with all three.
+- **An output file port left open loses its buffered output on the interpreter and the
+  JVM** (a `BufferedWriter` / `BufferedOutputStream` nobody flushes at exit); wasm writes
+  through `fd_write` and keeps it (measured 2026-09-19, all four: a `display` to an
+  unclosed port). A Common Lisp stream behaves the same; stated in the docs as "close the
+  port", the flush-at-exit fix is `.todo/891`.
+- The spec cases build every path under `/tmp` from `(random 1000000000)` -- a literal
+  path would never test the preopen resolution, and two runs of the corpus at once (two
+  worktrees) must not share a file; the driver's wasm legs pass `--dir /tmp`. A wasm
+  program run without a preopen covering the path gets the file error (errno path).
+- Cost (2026-09-19, x86-64 Linux, Java 25; `-o P.class --class-name P` / `-o p.wasm`):
+  every program spelling no `(scheme file)` name is byte-identical before and after --
+  `hello` 1,666 / 510 B, `(display (list 1 'a "s"))` 74,026 / 11,549, the string-port
+  probe 83,882 / 25,913, the bytevector-port probe 98,075 / 39,604, a `parameterize` +
+  `read` + `close-port` + `call-with-port` probe 186,878 / 124,918, `(write (read))`
+  175,526 / 118,935, `eval` 128,025 / 82,618, a `file-error?` probe 106,447 / 47,759.
+  `(write (file-exists? "/tmp"))` 76,240 / 12,927 (the printer); `with-output-to-file` +
+  `display` 116,440 / 52,235; a `call-with-output-file` / `call-with-input-file` round
+  trip 128,454 / 58,277; a binary round trip 115,834 / 51,186.
+- Pinned by the `file-ports-write-then-read`, `with-output-to-file-restores-the-current-port`,
+  `binary-file-ports` and `a-failed-open-is-a-file-error` cases of `scheme-spec.yaml`
+  (all four backends; Gauche 0.9.15 `-r7` output but the deviations their comments state),
+  `SchemeLoweringTest.importsSelectWhatIsVisible`,
+  `LibraryDefunPrunerTest.theFileSectionFollowsOnlyAProgramThatUsesAFileProcedure`.
 
 ## Libraries and include (`define-library`, `include`; 2026-09-19, `.todo/882`)
 
@@ -1358,7 +1425,7 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 ## Not here yet (each its own follow-up)
 
-`cond-expand`, exporting syntax from a library, file ports (`(scheme file)`), the other
+`cond-expand`, exporting syntax from a library, the other
 libraries, `|...|` identifiers, reading `+inf.0`/`+nan.0`,
 re-entrant continuations, proper tail calls in general. Each is refused by name where it
 can be.

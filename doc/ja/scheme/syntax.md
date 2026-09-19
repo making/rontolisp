@@ -10,10 +10,10 @@
   （`delay` と `delay-force` は [(scheme lazy)](reference/library-lazy.md)、`case-lambda` は
   [(scheme case-lambda)](reference/library-case-lambda.md)）。および
   `(import (scheme base) (scheme write) (scheme read) (scheme char) (scheme inexact) (scheme cxr) (scheme lazy)
-  (scheme case-lambda) (scheme process-context) (scheme eval) (scheme repl))`（`only` / `except` /
+  (scheme case-lambda) (scheme process-context) (scheme eval) (scheme repl) (scheme file))`（`only` / `except` /
   `prefix` / `rename` 可）。
 
-11 のライブラリそれぞれが何をエクスポートするかは[ライブラリ](libraries.md)を、
+12 のライブラリそれぞれが何をエクスポートするかは[ライブラリ](libraries.md)を、
 `import` を一切書かない場合に見える名前は
 [*Structure and Interpretation of Computer Programs*（SICP）互換](sicp.md)を参照してください。
 

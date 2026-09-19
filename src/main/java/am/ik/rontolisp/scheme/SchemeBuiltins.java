@@ -34,16 +34,16 @@ import org.jspecify.annotations.Nullable;
  *
  * {@code library} is the R7RS library exporting the name ({@code base} / {@code write} /
  * {@code char} / {@code inexact} / {@code cxr} / {@code lazy} / {@code process-context} /
- * {@code eval} / {@code repl}, or {@code sicp} / {@code r5rs} for a name no import can
- * reach), {@code result} says what the template answers -- {@code value}, {@code pred} (a
- * Common Lisp boolean, {@code T}/{@code NIL}, which fuses into an {@code if} test and is
- * converted to {@code #t}/{@code #f} anywhere else), {@code or-false} (a value, or
- * {@code NIL} meaning {@code #f}) or {@code effect} (the template's value is discarded
- * and the call answers the unspecified object, which a REPL does not echo). One
- * {@code ((params) template)} pair per accepted argument count; {@code &rest r} params
- * splice as the template's dotted tail {@code (f a . r)}. {@code :function} is the
- * first-class value; it may be omitted only for a single fixed-arity alternative, where
- * it is derived as a {@code lambda} around the template.
+ * {@code file} / {@code eval} / {@code repl}, or {@code sicp} / {@code r5rs} for a name
+ * no import can reach), {@code result} says what the template answers -- {@code value},
+ * {@code pred} (a Common Lisp boolean, {@code T}/{@code NIL}, which fuses into an
+ * {@code if} test and is converted to {@code #t}/{@code #f} anywhere else),
+ * {@code or-false} (a value, or {@code NIL} meaning {@code #f}) or {@code effect} (the
+ * template's value is discarded and the call answers the unspecified object, which a REPL
+ * does not echo). One {@code ((params) template)} pair per accepted argument count;
+ * {@code &rest r} params splice as the template's dotted tail {@code (f a . r)}.
+ * {@code :function} is the first-class value; it may be omitted only for a single
+ * fixed-arity alternative, where it is derived as a {@code lambda} around the template.
  *
  * <p>
  * Parameter names are uppercase symbols (the reader upcases them), which no user variable
@@ -111,7 +111,8 @@ final class SchemeBuiltins {
 	 * @param name the Scheme name
 	 * @param library the exporting library's last component ({@code base}, {@code write},
 	 * {@code char}, {@code inexact}, {@code cxr}, {@code lazy}, {@code process-context},
-	 * {@code eval}, {@code repl}), or a tag no import names ({@code sicp}, {@code r5rs})
+	 * {@code file}, {@code eval}, {@code repl}), or a tag no import names ({@code sicp},
+	 * {@code r5rs})
 	 * @param result what the templates answer
 	 * @param alternatives the accepted argument shapes
 	 * @param function the first-class value: a form answering a function that returns
@@ -646,6 +647,27 @@ final class SchemeBuiltins {
 			 :function (lambda (v &optional p (start 0) end)
 			             (rontolisp::%scheme-write-bytevector v (or p (rontolisp::%scheme-current-port 1)) start end)
 			             rontolisp::%scheme-unspecified))
+
+			;; --- (scheme file): ports over Common Lisp file streams, each opener its own
+			;; literal open in scheme.lisp; a failed open raises a file-error? object.
+			("open-input-file" file value ((f) (rontolisp::%scheme-open-input-file "open-input-file" f)))
+			("open-output-file" file value ((f) (rontolisp::%scheme-open-output-file "open-output-file" f)))
+			("open-binary-input-file" file value ((f) (rontolisp::%scheme-open-binary-input-file f)))
+			("open-binary-output-file" file value ((f) (rontolisp::%scheme-open-binary-output-file f)))
+			("call-with-input-file" file value
+			 ((f p) (rontolisp::%scheme-call-with-port (rontolisp::%scheme-open-input-file "call-with-input-file" f)
+			                                           (rontolisp::%scheme-ensure-procedure p))))
+			("call-with-output-file" file value
+			 ((f p) (rontolisp::%scheme-call-with-port (rontolisp::%scheme-open-output-file "call-with-output-file" f)
+			                                           (rontolisp::%scheme-ensure-procedure p))))
+			("with-input-from-file" file value
+			 ((f p) (rontolisp::%scheme-with-file (rontolisp::%scheme-open-input-file "with-input-from-file" f) 0
+			                                      (rontolisp::%scheme-ensure-procedure p))))
+			("with-output-to-file" file value
+			 ((f p) (rontolisp::%scheme-with-file (rontolisp::%scheme-open-output-file "with-output-to-file" f) 1
+			                                      (rontolisp::%scheme-ensure-procedure p))))
+			("file-exists?" file pred ((f) (probe-file f)))
+			("delete-file" file effect ((f) (rontolisp::%scheme-delete-file f)))
 
 			;; --- (scheme eval), (scheme repl) and the R5RS scheme-report-environment:
 			;; every environment specifier is the one global environment, the symbol

@@ -2,8 +2,9 @@
 
 `(file-error? obj)`
 
-Answers `#t` when `obj` is the error of a failed file operation. The Scheme front end has no procedure that opens a file, so only an error signaled by Common Lisp code the program calls can answer `#t`.
+Answers `#t` when `obj` is the error of a failed file operation: a file the [(scheme file)](library-file.md) procedures cannot open, create or delete, or a `file-error` signaled by Common Lisp code the program calls.
 
 ```scheme
+(guard (e (#t (file-error? e))) (open-input-file "no-such-file.txt")) ; => #t
 (guard (e (#t (file-error? e))) (raise 'oops)) ; => #f
 ```

@@ -1,9 +1,9 @@
 # ライブラリ
 
-ファイルが `import` できる 11 の R7RS ライブラリと、それぞれが提供するものです。
+ファイルが `import` できる 12 の R7RS ライブラリと、それぞれが提供するものです。
 名前ごとのページは[リファレンス](reference.md)にあります。`(import ...)` で始まるファイル
 （[構文](syntax.md)参照）は、名指ししたライブラリだけを見ます。`import` を一切書かない
-ファイルは、11 すべてに加えて
+ファイルは、12 すべてに加えて
 [*Structure and Interpretation of Computer Programs*（SICP）互換の名前](sicp.md)も見えます。
 
 | ライブラリ | 提供するもの |
@@ -19,10 +19,11 @@
 | [(scheme process-context)](reference/library-process-context.md) | `exit` と `emergency-exit` のみ |
 | [(scheme eval)](reference/library-eval.md) | `eval` と `environment`。[eval](eval.md) を参照 |
 | [(scheme repl)](reference/library-repl.md) | `interaction-environment` |
+| [(scheme file)](reference/library-file.md) | ファイルポート、`file-exists?`、`delete-file` |
 
 入出力の手続きはどれも省略可能なポート引数を取り、省くと現在のポートを使います。現在の
-ポートはパラメータオブジェクトなので、`parameterize` で差し替えられます。ファイルポートは
-ありません。
+ポートはパラメータオブジェクトなので、`parameterize` で差し替えられます。ファイルポートはファイル名を指定して
+開きます。[(scheme file)](reference/library-file.md) を参照してください。
 
 ```scheme
 (define out (open-output-string))

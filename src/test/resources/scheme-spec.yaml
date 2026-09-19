@@ -2374,6 +2374,138 @@ cases:
       "current-output-port: not a textual output port: 5"
       "current-input-port: not a textual input port: #<textual-output-port>"
       (#<textual-output-port> #<binary-input-port> #<binary-output-port> #<textual-input-port>)
+  # (scheme file) (.todo/874). Every path is built at run time under a random prefix: a
+  # literal one would be folded at compile time (.kb/read-load-streams.md), and two runs
+  # of this corpus at once must not share a file. Gauche 0.9.15 -r7 output.
+  - name: file-ports-write-then-read
+    source: |
+      (define fp-dir (string-append "/tmp/rontolisp-scheme-spec-" (number->string (random 1000000000)) "-"))
+      (define fp-text (string-append fp-dir "text.txt"))
+      (define fp-out (open-output-file fp-text))
+      (write (list (port? fp-out) (output-port? fp-out) (textual-port? fp-out) (input-port? fp-out) (output-port-open? fp-out)))
+      (newline)
+      (write '(a "b" #\c 1.5) fp-out)
+      (newline fp-out)
+      (write-string "second line" fp-out)
+      (write-char #\! fp-out)
+      (close-port fp-out)
+      (close-output-port fp-out)
+      (write (list (output-port-open? fp-out) (file-exists? fp-text)))
+      (newline)
+      (define fp-in (open-input-file fp-text))
+      (write (list (input-port? fp-in) (read fp-in) (read-char fp-in) (peek-char fp-in) (read-line fp-in) (eof-object? (read-char fp-in))))
+      (close-input-port fp-in)
+      (newline)
+      (write (list (input-port-open? fp-in) (call-with-input-file fp-text read-line)))
+      (newline)
+      (write (call-with-output-file fp-text (lambda (p) (display "replaced" p) (output-port-open? p))))
+      (write (call-with-input-file fp-text (lambda (p) (list (read-string 3 p) (read-string 100 p) (eof-object? (read-string 1 p))))))
+      (newline)
+      (delete-file fp-text)
+      (write (file-exists? fp-text))
+      (newline)
+    expected: |
+      (#t #t #t #f #t)
+      (#f #t)
+      (#t (a "b" #\c 1.5) #\newline #\s "second line!" #t)
+      (#f "(a \"b\" #\\c 1.5)")
+      #t("rep" "laced" #t)
+      #f
+  # The current port is the file's for the thunk and is restored, and the file closed, on
+  # every way out. Gauche leaves the file open (and unflushed) on an escape, so it reads
+  # #<eof> where this reads "x".
+  - name: with-output-to-file-restores-the-current-port
+    source: |
+      (define fw-dir (string-append "/tmp/rontolisp-scheme-spec-" (number->string (random 1000000000)) "-"))
+      (define fw-file (string-append fw-dir "with.txt"))
+      (write (with-output-to-file fw-file (lambda () (display "to the file ") (write "q") (newline (current-output-port)) 'done)))
+      (newline)
+      (write (with-input-from-file fw-file (lambda () (list (read) (read) (read-char) (eof-object? (read-char))))))
+      (newline)
+      (display "standard output again")
+      (newline)
+      (write (call/cc (lambda (k) (with-output-to-file fw-file (lambda () (display "partial") (k 'escaped))))))
+      (newline)
+      (write (guard (e ((symbol? e) (list 'caught e))) (with-output-to-file fw-file (lambda () (display "x") (raise 'boom)))))
+      (newline)
+      (display "still standard output")
+      (newline)
+      (define fw-saved #f)
+      (write (with-input-from-file fw-file (lambda () (set! fw-saved (current-input-port)) (read-line))))
+      (write (input-port-open? fw-saved))
+      (newline)
+      (delete-file fw-file)
+    expected: |
+      done
+      (to the #\space #f)
+      standard output again
+      escaped
+      (caught boom)
+      still standard output
+      "x"#f
+  # A file port is textual or binary, never both (Gauche's are both). After the EOF peek
+  # Gauche's read-bytevector answers a bytevector; R7RS says the EOF object.
+  - name: binary-file-ports
+    source: |
+      (define fb-file (string-append "/tmp/rontolisp-scheme-spec-" (number->string (random 1000000000)) "-bytes.bin"))
+      (define fb-out (open-binary-output-file fb-file))
+      (write (list (binary-port? fb-out) (textual-port? fb-out) (output-port? fb-out)))
+      (newline)
+      (write-u8 0 fb-out)
+      (write-bytevector (bytevector 1 2 3 255) fb-out 1)
+      (write-bytevector (string->utf8 "hé") fb-out)
+      (close-port fb-out)
+      (define fb-in (open-binary-input-file fb-file))
+      (write (list (binary-port? fb-in) (peek-u8 fb-in) (read-u8 fb-in) (peek-u8 fb-in) (read-bytevector 2 fb-in) (u8-ready? fb-in)))
+      (newline)
+      (define fb-buf (make-bytevector 6 9))
+      (write (list (read-bytevector! fb-buf fb-in 1) fb-buf (eof-object? (read-u8 fb-in)) (eof-object? (peek-u8 fb-in))
+                   (eof-object? (read-bytevector 1 fb-in))))
+      (newline)
+      (write (read-bytevector! (make-bytevector 2 0) fb-in))
+      (newline)
+      (close-input-port fb-in)
+      (delete-file fb-file)
+    expected: |
+      (#t #f #t)
+      (#t 0 0 2 #u8(2 3) #t)
+      (4 #u8(9 255 104 195 169 9) #t #t #t)
+      #<eof>
+  # A failed open or delete raises an error object file-error? answers #t for. Gauche
+  # raises a plain error for an output file it cannot create; R7RS says a file error.
+  - name: a-failed-open-is-a-file-error
+    source: |
+      (define (fe-kind thunk)
+        (guard (e ((file-error? e) 'file-error) ((error-object? e) 'other-error) (#t 'not-an-error-object)) (thunk) 'no-error))
+      (define fe-missing (string-append "/tmp/rontolisp-scheme-spec-" (number->string (random 1000000000)) "-missing/none.txt"))
+      (for-each
+       (lambda (thunk) (write (fe-kind thunk)) (newline))
+       (list (lambda () (open-input-file fe-missing))
+             (lambda () (open-binary-input-file fe-missing))
+             (lambda () (open-output-file fe-missing))
+             (lambda () (open-binary-output-file fe-missing))
+             (lambda () (call-with-input-file fe-missing read))
+             (lambda () (with-input-from-file fe-missing read))
+             (lambda () (delete-file fe-missing))
+             (lambda () (read-char (open-output-string)))
+             (lambda () (raise 'not-a-file-error))))
+      (write (list (file-exists? fe-missing) (file-exists? "/tmp")))
+      (newline)
+      (write (guard (e ((file-error? e) (list (error-object-message e) (equal? (error-object-irritants e) (list fe-missing)))))
+               (open-input-file fe-missing)))
+      (newline)
+    expected: |
+      file-error
+      file-error
+      file-error
+      file-error
+      file-error
+      file-error
+      file-error
+      other-error
+      not-an-error-object
+      (#f #t)
+      ("open-input-file: cannot open file:" #t)
   # (scheme char): the Unicode answers are the JDK's (the backends' char-upcase tables
   # come from it), laid out by generated range tables so all four backends agree. The
   # expected text is Gauche 0.9.15's, except where .kb/scheme-frontend.md, "(scheme
