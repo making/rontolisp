@@ -166,10 +166,6 @@ class SchemeLibrariesTest {
 		assertThatThrownBy(() -> lowered(
 				"(define-library (m) (export f (rename g f)) (begin (define f 1) (define g 1)))" + "\n(import (m))"))
 			.hasMessage("main.scm:1:21: the library exports f twice");
-		assertThatThrownBy(() -> lowered(
-				"(define-library (m) (export m) (begin (define-syntax m (syntax-rules () ((_) 1)))))\n(import (m))"))
-			.hasMessage("main.scm:1:21: exporting syntax from a library is not supported by this experimental"
-					+ " front end yet: m");
 		assertThatThrownBy(() -> lowered("(define-library (m) (frob))\n(import (m))"))
 			.hasMessage("main.scm:1:21: unknown library declaration: frob");
 		assertThatThrownBy(() -> lowered("(define-library (m) (begin))\n(define-library (m) (begin))"))
@@ -184,6 +180,88 @@ class SchemeLibrariesTest {
 				(define-library (a) (export f) (import (b)) (begin (define f 1)))
 				(define-library (b) (export g) (import (a)) (begin (define g 1)))
 				(import (a))""")).hasMessage("main.scm:2:32: library import cycle: (a) -> (b) -> (a)");
+	}
+
+	@Test
+	void anExportedMacroCallsTheLibrarysPrivateHelperNotTheImportersName() {
+		// The template's helper is the library's private defun, a direct call; the
+		// importer's own helper is untouched.
+		assertThat(lowered("""
+				(define-library (m) (export twice) (import (scheme base))
+				  (begin (define (helper x) (* x 2))
+				         (define-syntax twice (syntax-rules () ((_ e) (helper e))))))
+				(import (scheme base) (m))
+				(define (helper x) 'mine)
+				(twice 3) (helper 4)""")).isEqualTo("""
+				(DEFUN |s%%(m)helper| (|s%%(m)%SCM-V1|) (* |s%%(m)%SCM-V1| 2))
+				(DEFUN |helper| (%SCM-V1) '|mine|)
+				(|s%%(m)helper| 3)
+				(|helper| 4)""");
+	}
+
+	@Test
+	void anExportedMacroIsHygienicAcrossTheLibraryBoundary() {
+		// swap!'s tmp does not capture the importer's tmp; the importer's own if does
+		// not reach the template's; a template may assign the library's private variable.
+		String program = lowered("""
+				(define-library (m) (export swap! my-or inc!) (import (scheme base))
+				  (begin
+				    (define count 0)
+				    (define-syntax swap! (syntax-rules () ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))
+				    (define-syntax my-or (syntax-rules () ((_ a b) (let ((t a)) (if t t b)))))
+				    (define-syntax inc! (syntax-rules () ((_) (set! count (+ count 1)))))))
+				(import (scheme base) (m))
+				(define tmp 1) (define y 2) (define count 'mine)
+				(swap! tmp y)
+				(let ((if list)) (my-or #f tmp))
+				(inc!)""");
+		assertThat(program).contains("(SETQ |tmp| |y|)")
+			.contains("(SETQ |s%%(m)count| (+ |s%%(m)count| 1))")
+			.doesNotContain("(SETQ |count| (+");
+		assertThat(program).doesNotContain("(|if|").doesNotContain("(FUNCALL %SCM-V");
+	}
+
+	@Test
+	void importSetsSelectRenameAndPrefixAMacro() {
+		String library = """
+				(define-library (m) (export one two) (import (scheme base))
+				  (begin (define-syntax one (syntax-rules () ((_) 1)))
+				         (define-syntax two (syntax-rules () ((_) (+ (one) (one)))))))
+				""";
+		assertThat(lowered(library + "(import (scheme base) (only (m) two)) (two)")).isEqualTo("(+ 1 1)");
+		assertThat(lowered(library + "(import (scheme base) (prefix (rename (m) (two deux)) m:)) (m:deux) (m:one)"))
+			.isEqualTo("(+ 1 1)\n1");
+		// two's template reaches one where two was defined; the importer's one is a
+		// function some other file defines.
+		assertThat(lowered(library + "(import (scheme base) (except (m) one)) (two) (one)"))
+			.isEqualTo("(+ 1 1)\n(|one|)");
+		assertThatThrownBy(() -> lowered(library + "(import (scheme base) (m)) (display one)"))
+			.hasMessage("main.scm:4:28: the macro one is not a variable");
+	}
+
+	@Test
+	void aLibraryReExportsAMacroItImports() {
+		assertThat(lowered("""
+				(define-library (a) (export f) (import (scheme base))
+				  (begin (define (g) 7) (define-syntax f (syntax-rules () ((_) (g))))))
+				(define-library (b) (export f h) (import (scheme base) (a))
+				  (begin (define (h) (f))))
+				(import (scheme base) (b))
+				(f) (h)""")).isEqualTo("""
+				(DEFUN |s%%(a)g| NIL 7)
+				(DEFUN |s%%(b)h| NIL (|s%%(a)g|))
+				(|s%%(a)g|)
+				(|s%%(b)h|)""");
+	}
+
+	@Test
+	void aStrictR7rsProgramMayNotRedefineAnImportedMacro() {
+		assertThatThrownBy(() -> lowered("""
+				(define-library (m) (export one) (import (scheme base))
+				  (begin (define-syntax one (syntax-rules () ((_) 1)))))
+				(import (scheme base) (m))
+				(define (one) 2)""", Map.of(), SchemeStandard.R7RS))
+			.hasMessage("main.scm:4:1: cannot redefine one: it is imported (R7RS 5.6.1)");
 	}
 
 	@Test
@@ -230,6 +308,18 @@ class SchemeLibrariesTest {
 		assertThat(entries.getFirst().echoes()).isFalse();
 		assertThat(entries.getLast().echoes()).isTrue();
 		assertThat(entries.getLast().forms().getLast().print()).contains("(|s%%(m)f|)");
+	}
+
+	@Test
+	void aSessionImportsALibraryThatExportsSyntax() {
+		SchemeSession session = Scheme.session(SchemeStandard.RONTOLISP, files(Map.of()));
+		session.read("""
+				(define-library (m) (export twice) (import (scheme base))
+				  (begin (define (helper x) (* x 2))
+				         (define-syntax twice (syntax-rules () ((_ e) (helper e))))))""");
+		List<SchemeTopLevel> entries = session.read("(import (m)) (twice 3)");
+		assertThat(entries.getLast().forms().getLast().print()).contains("(|s%%(m)helper| 3)");
+		assertThat(session.read("(twice 4)").getLast().forms().getLast().print()).contains("(|s%%(m)helper| 4)");
 	}
 
 }

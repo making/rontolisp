@@ -89,6 +89,44 @@ final class SchemeExpander {
 		 */
 		int condExpandClause(LispCons form);
 
+		/**
+		 * The macro a library exported under this name into the top-level scope, or
+		 * {@code null}.
+		 * @param identifier a user identifier
+		 * @return the macro ({@link #exportedMacro}), or {@code null}
+		 */
+		@Nullable Object importedMacro(LispSymbol identifier);
+
+		/**
+		 * The lowering's top-level binding of an identifier, or {@code null}: what a free
+		 * template identifier of a macro defined in THIS lowering means when another
+		 * lowering expands it.
+		 * @param identifier the identifier
+		 * @return the binding, opaque to the expander
+		 */
+		@Nullable Object binding(LispSymbol identifier);
+
+		/**
+		 * A generated identifier the lowering reads as another lowering's binding: how a
+		 * free template identifier of an imported macro reaches the library's own
+		 * binding, a private one included.
+		 * @param binding what {@link #binding} of the defining lowering answered
+		 * @return the identifier to emit
+		 */
+		LispSymbol foreign(Object binding);
+
+	}
+
+	/**
+	 * The aliases of every expander of one program: a macro a library exports is expanded
+	 * by the importer's expander, and its aliases must be known to both.
+	 */
+	static final class Aliases {
+
+		private final Map<LispSymbol, Alias> map = new IdentityHashMap<>();
+
+		private int counter;
+
 	}
 
 	/** What an identifier means to the expander. */
@@ -106,14 +144,34 @@ final class SchemeExpander {
 	private record Variable(LispSymbol symbol) implements Meaning {
 	}
 
+	/**
+	 * A top-level binding of another lowering -- where an imported macro was defined --
+	 * emitted as the identifier {@link Host#foreign} answers.
+	 */
+	private record Imported(Object binding) implements Meaning {
+	}
+
+	/**
+	 * A scope. {@code host} is the lowering whose top level the outermost one is: a free
+	 * identifier is resolved there, and a top-level {@link Variable} of a host other than
+	 * the expanding one is that host's spelling, translated through {@link Host#binding}.
+	 */
 	private static final class Env {
 
 		private final @Nullable Env parent;
 
+		private final Host host;
+
 		private final Map<Object, Meaning> frame = new HashMap<>();
 
-		Env(@Nullable Env parent) {
+		Env(Env parent) {
 			this.parent = parent;
+			this.host = parent.host;
+		}
+
+		Env(Host host) {
+			this.parent = null;
+			this.host = host;
 		}
 
 	}
@@ -136,37 +194,45 @@ final class SchemeExpander {
 	private final Host host;
 
 	// Outlives each buffer of a session: its macros and top-level names.
-	private final Env global = new Env(null);
+	private final Env global;
 
-	private final Map<LispSymbol, Alias> aliases = new IdentityHashMap<>();
+	private final Map<LispSymbol, Alias> aliases;
 
-	private int aliasCounter;
+	private final Aliases shared;
 
 	private int depth;
 
-	SchemeExpander(Host host) {
+	SchemeExpander(Host host, Aliases aliases) {
 		this.host = host;
+		this.global = new Env(host);
+		this.shared = aliases;
+		this.aliases = aliases.map;
 	}
 
 	/**
-	 * Whether a top-level syntax definition of this lowering defined the name.
+	 * The macro a top-level syntax definition of this lowering defined under the name, as
+	 * a library exports it: opaque to the lowering, handed back through
+	 * {@link Host#importedMacro} by an importer.
 	 * @param name the identifier's spelling
-	 * @return whether it names a macro
+	 * @return the macro, or {@code null} when the name names none
 	 */
-	boolean definesSyntax(String name) {
-		return this.global.frame.get(name) instanceof Macro;
+	@Nullable Object exportedMacro(String name) {
+		return this.global.frame.get(name) instanceof Macro macro ? macro : null;
 	}
 
 	/**
 	 * Whether a program spelling these datums needs the expander: it names a syntax
-	 * definition keyword (or {@code syntax-error}), directly or through an import rename.
+	 * definition keyword (or {@code syntax-error}), directly or through an import rename,
+	 * or a macro a library exported.
 	 * @param datums the program's datums
 	 * @param keyword the lowering's top-level keyword lookup
+	 * @param importedMacro whether an identifier names an imported macro at the top level
 	 * @return whether to expand
 	 */
-	static boolean needed(List<LispVal> datums, java.util.function.Function<LispSymbol, @Nullable Core> keyword) {
+	static boolean needed(List<LispVal> datums, java.util.function.Function<LispSymbol, @Nullable Core> keyword,
+			java.util.function.Predicate<LispSymbol> importedMacro) {
 		for (LispVal datum : datums) {
-			if (spellsSyntaxDefinition(datum, keyword)) {
+			if (spellsSyntaxDefinition(datum, keyword, importedMacro)) {
 				return true;
 			}
 		}
@@ -174,19 +240,21 @@ final class SchemeExpander {
 	}
 
 	private static boolean spellsSyntaxDefinition(LispVal datum,
-			java.util.function.Function<LispSymbol, @Nullable Core> keyword) {
+			java.util.function.Function<LispSymbol, @Nullable Core> keyword,
+			java.util.function.Predicate<LispSymbol> importedMacro) {
 		return switch (datum) {
 			case LispSymbol symbol -> {
 				Core core = keyword.apply(symbol);
 				yield core == Core.DEFINE_SYNTAX || core == Core.LET_SYNTAX || core == Core.LETREC_SYNTAX
 						|| core == Core.SYNTAX_ERROR || symbol.name().equals("define-syntax")
-						|| symbol.name().equals("let-syntax") || symbol.name().equals("letrec-syntax");
+						|| symbol.name().equals("let-syntax") || symbol.name().equals("letrec-syntax")
+						|| importedMacro.test(symbol);
 			}
-			case LispCons cons ->
-				spellsSyntaxDefinition(cons.car(), keyword) || spellsSyntaxDefinition(cons.cdr(), keyword);
+			case LispCons cons -> spellsSyntaxDefinition(cons.car(), keyword, importedMacro)
+					|| spellsSyntaxDefinition(cons.cdr(), keyword, importedMacro);
 			case LispArray array -> {
 				for (LispVal element : array.data()) {
-					if (spellsSyntaxDefinition(element, keyword)) {
+					if (spellsSyntaxDefinition(element, keyword, importedMacro)) {
 						yield true;
 					}
 				}
@@ -289,15 +357,30 @@ final class SchemeExpander {
 		for (Env scope = env; scope != null; scope = scope.parent) {
 			Meaning meaning = scope.frame.get(key);
 			if (meaning != null) {
-				return meaning;
+				// A top-level variable of another lowering is its spelling THERE.
+				return meaning instanceof Variable variable && scope.parent == null && scope.host != this.host
+						? imported(scope.host.binding(variable.symbol())) : meaning;
 			}
 		}
 		Alias alias = this.aliases.get(identifier);
 		if (alias != null) {
 			return resolve(alias.original(), alias.env());
 		}
-		Core core = this.host.keyword(identifier);
-		return core == null ? null : new Keyword(core);
+		Host owner = env.host;
+		Core core = owner.keyword(identifier);
+		if (core != null) {
+			return new Keyword(core);
+		}
+		if (owner.importedMacro(identifier) instanceof Macro macro) {
+			return macro;
+		}
+		// Free where an imported macro was defined: that library's binding, private or
+		// imported, never whatever the importer calls the same spelling.
+		return owner == this.host ? null : imported(owner.binding(identifier));
+	}
+
+	private @Nullable Meaning imported(@Nullable Object binding) {
+		return binding == null ? null : new Imported(binding);
 	}
 
 	// What free-identifier=? compares: the binding, or the spelling of a free name.
@@ -313,7 +396,7 @@ final class SchemeExpander {
 
 	private LispSymbol alias(LispSymbol identifier, Env env) {
 		LispSymbol alias = new LispSymbol(identifier.name());
-		this.aliases.put(alias, new Alias(identifier, env, new AliasKey(++this.aliasCounter)));
+		this.aliases.put(alias, new Alias(identifier, env, new AliasKey(++this.shared.counter)));
 		return alias;
 	}
 
@@ -351,6 +434,7 @@ final class SchemeExpander {
 		Meaning meaning = resolve(identifier, env);
 		return switch (meaning) {
 			case Variable variable -> variable.symbol();
+			case Imported imported -> this.host.foreign(imported.binding());
 			case Keyword keyword -> keywordSymbol(identifier, keyword.core());
 			case Macro macro -> {
 				if (form != null) {

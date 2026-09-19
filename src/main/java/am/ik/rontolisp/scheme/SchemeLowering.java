@@ -272,6 +272,17 @@ final class SchemeLowering {
 	}
 
 	/**
+	 * A {@code syntax-rules} macro a user library exports: only the expander reads it
+	 * ({@link SchemeExpander#exportedMacro}), a program that names one is always
+	 * expanded, so the lowering meets it only where the expander already refused it.
+	 *
+	 * @param macro the expander's macro, opaque here
+	 * @param name its name where it was defined
+	 */
+	private record ImportedSyntax(Object macro, String name) implements Binding {
+	}
+
+	/**
 	 * The name of a named {@code let} being tried as a PURE loop: every reference must be
 	 * a jump. Any other use -- a non-tail call, a call from inside a {@code lambda}, a
 	 * bare reference -- sets {@link #escaped}, and the loop is lowered again as a
@@ -683,6 +694,7 @@ final class SchemeLowering {
 		// COUNTER is what must outlive the buffer, a record's generated slot being
 		// global.
 		this.generated.clear();
+		this.foreignSymbols.clear();
 		this.internalRecords.clear();
 		// A library typed at a prompt is declared, not lowered: a later import lowers it.
 		List<LispVal> program = new ArrayList<>();
@@ -695,19 +707,18 @@ final class SchemeLowering {
 				program.add(datum);
 			}
 		}
+		List<LispVal> included = includes(program, null);
+		// Before the expansion too, so a macro imported at this prompt expands here.
+		for (LispVal datum : included) {
+			sessionImport(datum);
+		}
 		List<LispVal> forms = new ArrayList<>();
-		for (LispVal datum : expanded(includes(program, null))) {
+		for (LispVal datum : expanded(included)) {
 			spliceBegins(datum, forms);
 		}
 		for (LispVal form : forms) {
 			collectAssigned(form);
-			// At a prompt every import is a leading one, and it only ever ADDS names.
-			if (form instanceof LispCons cons && syntaxOf(cons, this.global) == Core.IMPORT) {
-				for (LispVal set : elements(cons.cdr(), cons)) {
-					importSet(set, cons)
-						.forEach((name, binding) -> this.global.bindings.put(SchemeNames.mangle(name), binding));
-				}
-			}
+			sessionImport(form);
 		}
 		declareGlobals(forms);
 		List<SchemeTopLevel> out = new ArrayList<>();
@@ -727,6 +738,17 @@ final class SchemeLowering {
 		// included.
 		this.falseBound = true;
 		return out;
+	}
+
+	// At a prompt every import is a leading one, and it only ever ADDS names; importing
+	// the same set again changes nothing.
+	private void sessionImport(LispVal form) {
+		if (form instanceof LispCons cons && syntaxOf(cons, this.global) == Core.IMPORT) {
+			for (LispVal set : elements(cons.cdr(), cons)) {
+				importSet(set, cons)
+					.forEach((name, binding) -> this.global.bindings.put(SchemeNames.mangle(name), binding));
+			}
+		}
 	}
 
 	/**
@@ -766,7 +788,7 @@ final class SchemeLowering {
 		for (LispVal form : forms) {
 			topLevel(form, out);
 		}
-		if (mayThrowExit(forms)) {
+		if (mayThrowExit(forms) || this.foreignExitOrEval) {
 			for (int i = bodyFrom; i < out.size(); i++) {
 				out.set(i, exitGuard(out.get(i)));
 			}
@@ -777,11 +799,12 @@ final class SchemeLowering {
 	// The datums with every macro expanded, when the program defines any: a program that
 	// spells no syntax definition is lowered exactly as before.
 	private List<LispVal> expanded(List<LispVal> datums) {
-		if (this.expander == null && !SchemeExpander.needed(datums, this::globalKeyword)) {
+		if (this.expander == null
+				&& !SchemeExpander.needed(datums, this::globalKeyword, name -> importedMacro(name) != null)) {
 			return datums;
 		}
 		if (this.expander == null) {
-			this.expander = new SchemeExpander(new ExpanderHost());
+			this.expander = new SchemeExpander(new ExpanderHost(), this.libraries.aliases());
 		}
 		return this.expander.topLevel(datums);
 	}
@@ -789,6 +812,20 @@ final class SchemeLowering {
 	private @Nullable Core globalKeyword(LispSymbol identifier) {
 		return this.global.find(SchemeNames.mangle(identifier.name())) instanceof Syntax syntax ? syntax.core() : null;
 	}
+
+	private @Nullable Object importedMacro(LispSymbol identifier) {
+		return this.global.find(SchemeNames.mangle(identifier.name())) instanceof ImportedSyntax syntax ? syntax.macro()
+				: null;
+	}
+
+	// The identifiers a macro exported by another library emits for that library's
+	// bindings (SchemeExpander.Host.foreign), one per binding; and whether one of them
+	// is exit or eval, which mayThrowExit cannot see by spelling.
+	private final Map<Binding, LispSymbol> foreignSymbols = new IdentityHashMap<>();
+
+	private final Set<LispSymbol> foreignIdentifiers = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+
+	private boolean foreignExitOrEval;
 
 	private final class ExpanderHost implements SchemeExpander.Host {
 
@@ -833,6 +870,30 @@ final class SchemeLowering {
 		@Override
 		public int condExpandClause(LispCons form) {
 			return SchemeFeatures.clause(form, SchemeLowering.this.featureHost);
+		}
+
+		@Override
+		public @Nullable Object importedMacro(LispSymbol identifier) {
+			return SchemeLowering.this.importedMacro(identifier);
+		}
+
+		@Override
+		public @Nullable Object binding(LispSymbol identifier) {
+			return lookup(identifier, SchemeLowering.this.global);
+		}
+
+		@Override
+		public LispSymbol foreign(Object binding) {
+			return SchemeLowering.this.foreignSymbols.computeIfAbsent((Binding) binding, key -> {
+				LispSymbol identifier = fresh("L");
+				SchemeLowering.this.global.bindings.put(identifier.name(), key);
+				SchemeLowering.this.foreignIdentifiers.add(identifier);
+				if (key instanceof Builtin builtin
+						&& (builtin.entry().name().equals("exit") || builtin.entry().name().equals("eval"))) {
+					SchemeLowering.this.foreignExitOrEval = true;
+				}
+				return identifier;
+			});
 		}
 
 	}
@@ -1287,8 +1348,8 @@ final class SchemeLowering {
 			exports = instantiate(name, form);
 		}
 		for (Binding binding : exports.values()) {
-			if (binding instanceof Variable || binding instanceof GlobalFunction
-					|| binding instanceof GlobalPredicate) {
+			if (binding instanceof Variable || binding instanceof GlobalFunction || binding instanceof GlobalPredicate
+					|| binding instanceof ImportedSyntax) {
 				this.libraryImports.add(binding);
 			}
 		}
@@ -1409,7 +1470,7 @@ final class SchemeLowering {
 		for (LispVal datum : forms) {
 			topLevel(datum, out);
 		}
-		if (mayThrowExit(forms)) {
+		if (mayThrowExit(forms) || this.foreignExitOrEval) {
 			out.replaceAll(this::exitGuard);
 		}
 		this.libraryForms = instantiationGuarded(out);
@@ -1486,12 +1547,12 @@ final class SchemeLowering {
 					internal = identifier(spec, exportForm);
 					external = internal;
 				}
-				Binding binding = this.global.find(name(internal));
+				// A syntax definition shadows an import of the same name, as the expander
+				// resolves it.
+				Object macro = this.expander != null ? this.expander.exportedMacro(internal.name()) : null;
+				Binding binding = macro != null ? new ImportedSyntax(macro, internal.name())
+						: this.global.find(name(internal));
 				if (binding == null) {
-					if (this.expander != null && this.expander.definesSyntax(internal.name())) {
-						throw error("exporting syntax from a library is not supported by this experimental front end"
-								+ " yet: " + internal.name(), exportForm);
-					}
 					throw error("the library exports " + internal.name() + ", which it neither defines nor imports",
 							exportForm);
 				}
@@ -2813,6 +2874,8 @@ final class SchemeLowering {
 			}
 			case Syntax syntax ->
 				throw new IllegalArgumentException("the keyword " + syntax.name() + " is not a variable");
+			case ImportedSyntax macro ->
+				throw new IllegalArgumentException("the macro " + macro.name() + " is not a variable");
 			// Not defined in this file: a variable some other file defines.
 			case null -> cl(identifier);
 		};
@@ -4033,8 +4096,11 @@ final class SchemeLowering {
 
 	private LispSymbol variableSymbol(LispSymbol identifier, Scope scope) {
 		return switch (lookup(identifier, scope)) {
-			case Variable variable when this.libraryImports.contains(variable) -> throw new IllegalArgumentException(
-					"cannot assign " + identifier.name() + ": it is imported from a library");
+			// A library's own macro may assign the library's variable.
+			case Variable variable when this.libraryImports.contains(variable)
+					&& !this.foreignIdentifiers.contains(identifier) ->
+				throw new IllegalArgumentException(
+						"cannot assign " + identifier.name() + ": it is imported from a library");
 			case Variable variable -> variable.symbol();
 			case null -> cl(identifier);
 			default -> throw new IllegalArgumentException(

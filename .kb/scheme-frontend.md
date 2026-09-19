@@ -760,7 +760,7 @@ lowering would have hidden both from the scans that run first.
   "misplaced" errors; a free `...` also counts as the ellipsis. None of the 1,586 SICP
   samples spells any of them, so the corpus classification (`providedNames`) is unmoved.
 - **Stated limits**: `syntax-rules` only; a macro is per FILE (a `load`ed file neither
-  sees nor exports macros); a template's names inside a TOP-LEVEL `define-record-type`
+  sees nor exports macros; a library exports them, "Exported syntax"); a template's names inside a TOP-LEVEL `define-record-type`
   are stripped, not renamed (a body's are renamed like any internal definition's); `eval` knows no macro and refuses `define-syntax` by name (its keyword
   list in `scheme.lisp`); an improper use `(m 1 . 2)` is matched rather than refused.
 - Pinned by the three `syntax-rules-...` / `syntax-definitions-...` cases of
@@ -1195,10 +1195,8 @@ variable is read live (the library's `set!` shows). No backend learns anything.
   Scheme).
 - **Exports** (`exports`): an identifier or `(rename internal external)`, resolved in the
   library scope AFTER its body is lowered; a name neither defined nor imported, or
-  exported twice, is a positioned error. A macro cannot be exported (refused by name,
-  `SchemeExpander.definesSyntax`): the importer's expander would need the library's
-  environment, and a template's free reference to a PRIVATE name would have to resolve
-  to the library binding in the importer's lowering -- follow-up work.
+  exported twice, is a positioned error. A macro is exported too ("Exported syntax"
+  below).
 - **Importer rules**: `set!` of an imported library variable is refused (R7RS 5.6.1) in
   both standards; a `define` over a library import wins under `rontolisp` (only the
   importer's name changes: the library keeps calling its own) and is refused under
@@ -1248,6 +1246,62 @@ the `files:` field writes a case's other files beside it),
 `RontoLispCliTest.aSchemeProgramReadsItsLibraryFilesAndIncludesBesideItOnEveryPath` (CLI
 interpreter, `-o`, once-per-program across two loaded files, the REPL) and the reference
 pages' `; file: NAME` blocks (`DocExamplesTest`).
+
+## Exported syntax (2026-09-19, `.todo/883`)
+
+**An exported macro is the library expander's own `Macro` -- its `syntax-rules` and its
+DEFINITION `Env` -- and a free template identifier reaches the importer's lowering as the
+library's `Binding` itself, through a generated identifier.** No datum form of the macro
+is re-read by the importer, so nothing about the library has to be spelled twice.
+
+- **Export**: `exports` asks `SchemeExpander.exportedMacro(name)` FIRST (a
+  `define-syntax` shadows an import of the name, as the expander resolves it) and wraps
+  it in the lowering's `ImportedSyntax` binding. `importSet`'s `only`/`except`/`prefix`/
+  `rename` move it like any binding; a library that imports a macro re-exports it by the
+  plain `global.find`. It joins `libraryImports`, so strict R7RS refuses a `define` over it.
+- **Every `Env` knows its lowering** (`Env.host`, the `Host` of the expander whose global
+  it descends from). Resolution walks the frames as before; then, at the root, it asks
+  THAT host: a keyword, else an imported macro (`Host.importedMacro`), else -- only when
+  the root is another lowering's -- that lowering's top-level binding (`Host.binding`,
+  its `lookup`). A top-level `Variable` found in another lowering's global frame is that
+  lowering's spelling and is translated the same way. The answer is the `Imported`
+  meaning.
+- **`Imported` is emitted as `Host.foreign(binding)`**: a fresh generated `%SCM-L<n>`
+  the importer puts in its global scope bound to the library's `Binding` object (one per
+  binding per lowering). So a private `defun` is a direct call to `s%%(lib)name`, a record
+  predicate stays fused, a builtin is the builtin whatever the importer did to its name,
+  and a variable is read live. A template may `set!` the library's variable (Gauche
+  agrees): `variableSymbol` exempts a foreign identifier from the "imported from a
+  library" refusal. It cannot assign a library procedure that the library itself never
+  assigns -- that is a `defun`, "not a variable in this file".
+- **Aliases are shared by every expander of one top-level lowering**
+  (`SchemeLibraries.aliases`, `SchemeExpander.Aliases`): the importer strips and keys
+  aliases a library's own expansion created.
+- **The gate**: `SchemeExpander.needed` also fires for a program spelling a name bound to
+  an imported macro; nothing else changes for a program that imports none. A session runs
+  a buffer's top-level `import`s BEFORE expanding it (`sessionImport`, again after, as
+  before), so `(import (m)) (m-macro ...)` typed at one prompt expands.
+- **`exit` by another name**: `mayThrowExit` decides by spelling; a template's `exit`
+  reaches the importer as `%SCM-L<n>`, so `foreign` raises `foreignExitOrEval` for the
+  `exit` and `eval` builtins and the file's forms take the exit guard.
+- **Stated deviation**: a template identifier its library neither defines nor imports
+  resolves FREE, i.e. by its spelling where the macro is used (Gauche: unbound variable).
+  An error case only, unless the name is a Common Lisp function another file defines,
+  which the free spelling still reaches; resolving it to "unbound" would need a binding
+  kind every `case null` of the lowering learns.
+
+Measured (2026-09-19, x86-64 Linux, Java 25): every program that imports no macro
+compiles to byte-identical `.class` and `.wasm` before and after -- `hello`, the six
+`examples/scheme/*.scm`, the concatenated `scheme-spec.yaml` corpus and its standalone
+cases under every standard each lists (78 of 78 artifacts). Oracle: Gauche 0.9.15 (`gosh
+-r7 -I.`) prints the same as all four backends for the `a-library-exports-syntax-...` case
+under both standards.
+
+Pinned by `SchemeLibrariesTest` (`anExportedMacro...`, `importSetsSelectRenameAndPrefixAMacro`,
+`aLibraryReExportsAMacroItImports`, `aStrictR7rsProgramMayNotRedefineAnImportedMacro`,
+`aSessionImportsALibraryThatExportsSyntax`), the `a-library-exports-syntax-hygienically`
+standalone case of `scheme-spec.yaml` (all four backends, both standards) and the
+`define-library` reference page (`DocExamplesTest`).
 
 ## `cond-expand` (2026-09-19, `.todo/892`)
 
@@ -1663,7 +1717,7 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 ## Not here yet (each its own follow-up)
 
-Exporting syntax from a library, the other
+The other
 libraries, radix and exactness prefixes in `string->number` (`.todo/889`),
 re-entrant continuations, tail calls through a procedure value (`.todo/899`) and among
 internal definitions (`.todo/898`). Each is refused by name where it

@@ -3101,6 +3101,74 @@ standalone:
       rect: 10
       circle: 0
       (16 (9 10 0))
+  # A library exports syntax: a template's free names are the library's (a private
+  # helper called directly, a private variable assigned), its binders capture nothing the
+  # importer wrote, and except/rename/only/prefix select macros; a library in the program
+  # file exports a macro whose template uses a macro it imports.
+  - name: a-library-exports-syntax-hygienically
+    standards: [rontolisp, r7rs]
+    files:
+      tools/counter.sld: |
+        (define-library (tools counter)
+          (export inc! current swap! my-or define-counter (rename with-reset reset-and))
+          (import (scheme base))
+          (begin
+            (define count 0)
+            (define (bump n) (set! count (+ count n)) count)
+            (define (current) count)
+            (define-syntax inc!
+              (syntax-rules ()
+                ((_) (bump 1))
+                ((_ n) (bump n))))
+            (define-syntax swap!
+              (syntax-rules ()
+                ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))
+            (define-syntax my-or
+              (syntax-rules ()
+                ((_) #f)
+                ((_ e) e)
+                ((_ e r ...) (let ((t e)) (if t t (my-or r ...))))))
+            (define-syntax define-counter
+              (syntax-rules ()
+                ((_ name) (define name (let ((n 0)) (lambda () (set! n (+ n 1)) (inc!) n))))))
+            (define-syntax with-reset
+              (syntax-rules ()
+                ((_ body ...) (begin (set! count 100) body ... count))))))
+    source: |
+      (define-library (tools twice)
+        (export twice)
+        (import (scheme base) (only (tools counter) inc!))
+        (begin
+          (define (helper x) (* x 2))
+          (define-syntax twice
+            (syntax-rules ()
+              ((_ e) (begin (inc!) (helper e)))))))
+      (import (scheme base) (scheme write)
+              (except (tools counter) current)
+              (rename (only (tools counter) current) (current counter-value))
+              (prefix (tools twice) t:))
+      (define (bump n) 'mine)
+      (define (helper x) 'mine)
+      (define tmp 1)
+      (define y 2)
+      (swap! tmp y)
+      (define t 5)
+      (define-counter tick)
+      (tick)
+      (inc! 5)
+      (write (list tmp y (my-or #f t) (my-or) (my-or #f #f 7) (bump 1) (helper 1)))
+      (newline)
+      (write (list (tick) (t:twice 21) (counter-value)))
+      (newline)
+      (write (let ((if list)) (my-or #f 3)))
+      (newline)
+      (write (reset-and (inc! 2)))
+      (newline)
+    stdout: |
+      (2 1 5 #f 7 mine mine)
+      (2 42 8)
+      3
+      102
   # cond-expand around the import declarations, in a body, as a library declaration and
   # in a macro template; (library ...) of a standard library and of a library file.
   # Gauche 0.9.15 (gosh -r7 -I.) prints the same, but `other` for the second line.

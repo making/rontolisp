@@ -44,6 +44,10 @@ final class SchemeLibraries<B> {
 
 	private final List<LispVal> pending = new ArrayList<>();
 
+	// A library's exported macro is expanded by its importer's expander, so every
+	// expander of one lowering shares the aliases.
+	private final SchemeExpander.Aliases aliases = new SchemeExpander.Aliases();
+
 	/**
 	 * The libraries of one lowering.
 	 * @param files where included files and library files are read from
@@ -53,6 +57,10 @@ final class SchemeLibraries<B> {
 	SchemeLibraries(SchemeFiles files, @Nullable String root) {
 		this.files = files;
 		this.root = root;
+	}
+
+	SchemeExpander.Aliases aliases() {
+		return this.aliases;
 	}
 
 	SchemeFiles files() {
