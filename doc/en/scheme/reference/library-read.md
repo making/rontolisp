@@ -1,6 +1,6 @@
 # (scheme read)
 
-Reading a datum from the current input port. The character and line readers are `(scheme base)`'s ([input](library-base.md#input)).
+Reading a datum from the current input port, or from the port given as the argument. The character and line readers are `(scheme base)`'s ([input](library-base.md#input)).
 
 | Name | Example | Result |
 |---|---|---|

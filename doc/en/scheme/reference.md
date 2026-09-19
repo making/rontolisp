@@ -8,7 +8,7 @@ example.
 | Page | Contents |
 |---|---|
 | [Syntax](reference/syntax.md) | The syntactic keywords of `(scheme base)`, and `import` |
-| [(scheme base)](reference/library-base.md) | Numbers, pairs and lists, symbols, characters, strings, vectors, control, exceptions, input and output |
+| [(scheme base)](reference/library-base.md) | Numbers, pairs and lists, symbols, characters, strings, vectors, control, exceptions, ports, input and output |
 | [(scheme write)](reference/library-write.md) | `display`, `write` and their variants |
 | [(scheme read)](reference/library-read.md) | `read` |
 | [(scheme inexact)](reference/library-inexact.md) | Transcendental functions, `finite?`, `infinite?`, `nan?` |

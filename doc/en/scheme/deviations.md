@@ -26,6 +26,10 @@
   refuses `parameterize` by name.
 - A `case-lambda` called with a number of arguments no clause accepts raises an error
   object; `eval` refuses `case-lambda` by name.
+- A port is textual or binary, never both: `binary-port?` of a string port is `#f` (a
+  Gauche port is both). The standard ports are textual, so `read-u8`, `write-u8` and the
+  other binary procedures need a bytevector port argument. `char-ready?` and `u8-ready?`
+  always answer `#t`.
 - A record prints in Common Lisp's `#S(...)` syntax. `equal?` compares records by
   identity.
 - `write` prints `'x` as `(quote x)`, and the unspecified value as `#!unspecific`. It is
@@ -40,8 +44,6 @@
 
 ## Not yet
 
-`define-library`, ports other than the current
-output and input ports (string ports, bytevector ports and `read-u8` / `write-u8`, and a port argument to `read` / `write` /
-`display`), `(scheme char)` and the other libraries, `|...|` identifiers,
+`define-library`, file ports (`(scheme file)`), `(scheme char)` and the other libraries, `|...|` identifiers,
 reading `+inf.0` / `+nan.0`. The syntactic ones are refused by name when the file is
 read.

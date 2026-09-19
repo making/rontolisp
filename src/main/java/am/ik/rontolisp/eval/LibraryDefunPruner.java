@@ -522,7 +522,7 @@ public final class LibraryDefunPruner {
 		Set<String> cached = schemeStructNames;
 		if (cached == null) {
 			Set<String> names = new HashSet<>();
-			for (LispVal form : SchemeLibrary.forms()) {
+			for (LispVal form : SchemeLibrary.everyVariantForms()) {
 				LispMacroExpander.StructDefinedNames summary = LispMacroExpander.defstructDefinedNames(form);
 				if (summary != null) {
 					names.add(summary.structName());
@@ -1201,7 +1201,7 @@ public final class LibraryDefunPruner {
 					collectDefinitionNames(JsonLibrary.forms(), names);
 					collectDefinitionNames(JsonLibrary.wrapperForms(), names);
 					collectDefinitionNames(UrlLibrary.forms(), names);
-					collectDefinitionNames(SchemeLibrary.forms(), names);
+					collectDefinitionNames(SchemeLibrary.everyVariantForms(), names);
 					for (String name : LispPreludeLibrary.names()) {
 						collectDefinitionNames(LispPreludeLibrary.formsFor(name), names);
 					}

@@ -4703,6 +4703,63 @@ public final class Environment implements Scope {
 		// file-length answers nil for it. Concurrent for the same reason the table above
 		// is (one virtual thread per served request).
 		Map<Long, String> streamPaths = new ConcurrentHashMap<>();
+		// The byte position of each BINARY file stream, keyed by the same handle. Only
+		// `open` fills a path (below), so only a binary file stream has an entry here,
+		// and it is what file-position answers and repositions
+		// (.kb/read-load-streams.md):
+		// the query is the CLOSEABLE caller's offset and the set reopens the file at it.
+		// Concurrent for the same reason the table above is (one virtual thread per
+		// served request).
+		Map<Long, Long> streamPositions = new ConcurrentHashMap<>();
+		// The set half of file-position for a BINARY file stream: reposition the file at
+		// the given byte offset and answer T, or nil if the stream was not a file
+		// stream or has left the table. An input stream re-opens the file (which also
+		// drops the buffered lookahead, whose bytes a repositioned channel would
+		// otherwise re-emit out of order); an output stream flushes first, then re-opens
+		// for WRITE -- no CREATE, no TRUNCATE -- so the file keeps everything before the
+		// offset and the write position is the new channel's (a write then lands n bytes
+		// in, exactly as CL requires for a repositioned output stream).
+		java.util.function.BiFunction<Long, LispVal, LispVal> binaryFileStreamSet = (handle, posArg) -> {
+			if (!(posArg instanceof LispInteger position)) {
+				throw new LispEvalException(LispNames.FILE_POSITION + " expects an integer position");
+			}
+			long n = position.value();
+			if (n < 0) {
+				throw new LispEvalException(LispNames.FILE_POSITION + ": position must be non-negative");
+			}
+			String path = streamPaths.get(handle);
+			if (path == null) {
+				return LispNil.INSTANCE;
+			}
+			try {
+				Closeable entry = streams.get(handle);
+				if (entry instanceof java.io.Flushable flushable) {
+					flushable.flush();
+				}
+				if (entry instanceof InputStream) {
+					java.io.FileInputStream fis = new java.io.FileInputStream(path);
+					fis.getChannel().position(n);
+					streams.put(handle, new BufferedInputStream(fis));
+				}
+				else if (entry instanceof OutputStream) {
+					java.nio.channels.FileChannel ch = java.nio.channels.FileChannel.open(Path.of(path),
+							java.nio.file.StandardOpenOption.WRITE);
+					ch.position(n);
+					streams.put(handle, new BufferedOutputStream(java.nio.channels.Channels.newOutputStream(ch)));
+				}
+				else {
+					return LispNil.INSTANCE;
+				}
+				if (entry instanceof Closeable) {
+					entry.close();
+				}
+				streamPositions.put(handle, n);
+				return LispTrue.INSTANCE;
+			}
+			catch (IOException ex) {
+				throw new UncheckedIOException(ex);
+			}
+		};
 		// Handles 0/1/2 are the process standard streams (the WASI file descriptors the
 		// wasm backends use), so a user stream never collides with the *error-output*
 		// designator; the table entry for 2 makes every stream operation -- print family,
@@ -4948,13 +5005,22 @@ public final class Environment implements Scope {
 			streams.put(handle, new StringWriter());
 			return streamValue(handle, LispLayout.Kinds.STRING_OUTPUT);
 		}));
-		// Lite: streams do not support repositioning -- callers (which guard this with
-		// ignore-errors in portable code) take their fallback path -- EXCEPT the
-		// buffered served-request body, whose position is a real byte index (that is
-		// what lets circular-streams rewind a body lack-request already parsed).
+		// file-position: REAL for the three position-bearing streams -- the buffered
+		// served-request body (a real byte index, what lets circular-streams rewind a
+		// body lack-request already parsed) and a BINARY FILE stream, whose position
+		// file-position exists to report and move. Everything else -- string streams,
+		// sockets, the standard streams, a character file stream -- answers nil, which
+		// is what Common Lisp prescribes for "the position cannot be determined"; a
+		// SEEK that cannot reposition answers nil rather than pretending, because a
+		// caller that seeks and then reads would otherwise get the wrong bytes
+		// (.kb/read-load-streams.md). The set repositions by re-opening the file at the
+		// requested offset, which also drops the buffered lookahead.
 		env.defineFunction(LispNames.FILE_POSITION, new LispFunction(LispNames.FILE_POSITION, args -> {
-			if (!args.isEmpty() && streamTarget(args.get(0)) instanceof LispInteger handle
-					&& streams.get(handle.value()) instanceof HttpRequestBodyStream body) {
+			if (args.isEmpty() || !(streamTarget(args.get(0)) instanceof LispInteger handle)) {
+				return LispNil.INSTANCE;
+			}
+			long h = handle.value();
+			if (streams.get(h) instanceof HttpRequestBodyStream body) {
 				if (args.size() >= 2) {
 					if (!(args.get(1) instanceof LispInteger position)) {
 						throw new LispEvalException(LispNames.FILE_POSITION + " expects an integer position");
@@ -4963,6 +5029,23 @@ public final class Environment implements Scope {
 					return LispTrue.INSTANCE;
 				}
 				return new LispInteger(body.position());
+			}
+			// A binary file stream: an InputStream/OutputStream table entry that was
+			// opened with a path. Only these carry a sitting entry in streamPositions,
+			// so the query is exactly the counter the byte primitives advance.
+			if (streamPaths.containsKey(h)) {
+				if (streams.get(h) instanceof InputStream) {
+					if (args.size() >= 2) {
+						return binaryFileStreamSet.apply(h, args.get(1));
+					}
+					return new LispInteger(streamPositions.getOrDefault(h, 0L));
+				}
+				if (streams.get(h) instanceof OutputStream) {
+					if (args.size() >= 2) {
+						return binaryFileStreamSet.apply(h, args.get(1));
+					}
+					return new LispInteger(streamPositions.getOrDefault(h, 0L));
+				}
 			}
 			return LispNil.INSTANCE;
 		}));
@@ -5383,6 +5466,7 @@ public final class Environment implements Scope {
 			}
 			Closeable stream = streams.remove(handle.value());
 			streamPaths.remove(handle.value());
+			streamPositions.remove(handle.value());
 			if (stream == null) {
 				throw new LispEvalException(LispNames.CLOSE + ": not an open stream: " + handle.value());
 			}
@@ -5842,6 +5926,9 @@ public final class Environment implements Scope {
 					catch (IOException ex) {
 						throw new UncheckedIOException(ex);
 					}
+					if (streamPaths.containsKey(handle.value())) {
+						streamPositions.merge(handle.value(), 1L, Long::sum);
+					}
 				}
 				else {
 					throw new LispEvalException(LispNames.READ_BYTE + " expects a binary input stream");
@@ -5891,6 +5978,9 @@ public final class Environment implements Scope {
 			catch (IOException ex) {
 				throw new UncheckedIOException(ex);
 			}
+			if (streamPaths.containsKey(handle.value())) {
+				streamPositions.merge(handle.value(), 1L, Long::sum);
+			}
 			return value;
 		}));
 		// The bulk binary-I/O primitives behind read-sequence / write-sequence over a
@@ -5926,6 +6016,9 @@ public final class Environment implements Scope {
 				byte[] bytes = in2.readNBytes((end - start) * buf.width());
 				int n = bytes.length / buf.width();
 				buf.load(ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN), start, n);
+				if (src instanceof LispInteger handle && streamPaths.containsKey(handle.value())) {
+					streamPositions.merge(handle.value(), (long) bytes.length, Long::sum);
+				}
 				return new LispInteger(start + n);
 			}
 			catch (IOException ex) {
@@ -6005,6 +6098,9 @@ public final class Environment implements Scope {
 				}
 				else if (out2 == System.err) {
 					out2.flush();
+				}
+				if (dest instanceof LispInteger handle && streamPaths.containsKey(handle.value())) {
+					streamPositions.merge(handle.value(), (long) bytes.length, Long::sum);
 				}
 			}
 			catch (IOException ex) {

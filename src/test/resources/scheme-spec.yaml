@@ -1485,6 +1485,28 @@ cases:
       255
       #u8(1 255)
       #u8()
+  # The current input port, read with and without a port argument, between reads of a
+  # string port and a parameterized one: one pushback per port (Gauche 0.9.15 -r7).
+  - name: the-current-input-port-mixes-with-string-ports
+    stdin: |
+      (a b) xyz tail
+      line two
+      abcdef
+    source: |
+      (define ci-s (open-input-string "(from string)"))
+      (write (list (peek-char) (read ci-s) (read) (read-char (current-input-port)) (read-char)))
+      (newline)
+      (write (read-line (current-input-port)))
+      (newline)
+      (parameterize ((current-input-port (open-input-string "inner"))) (write (list (read) (eof-object? (read)))))
+      (newline)
+      (write (list (read-line) (read-string 3) (read-string 4 (current-input-port))))
+      (newline)
+    expected: |
+      (#\( (from string) (a b) #\space #\x)
+      "yz tail"
+      (inner #t)
+      ("line two" "abc" "def\n")
   - name: read-char-peek-char-read-line-and-char-ready-on-the-current-input-port
     stdin: |
       ab
@@ -2035,6 +2057,198 @@ cases:
       (outer inner outer)
       (raised boom)
       (2 1)
+  # Ports (.todo/873): string ports, the optional port argument; Gauche 0.9.15 -r7 output.
+  - name: string-ports-write-and-read
+    source: |
+      (define sp-out (open-output-string))
+      (write 'abc sp-out)
+      (display " " sp-out)
+      (write "q\"x" sp-out)
+      (newline sp-out)
+      (write-char #\z sp-out)
+      (write-string "hello" sp-out 1 3)
+      (write-string "!" sp-out)
+      (write (get-output-string sp-out))
+      (newline)
+      (write (string=? (get-output-string sp-out) (get-output-string sp-out)))
+      (newline)
+      (define sp-in (open-input-string "(1 2 . 3) foo \"bar\" #\\a 42 line one\nline two\n"))
+      (write (list (read sp-in) (peek-char sp-in) (read-char sp-in) (read sp-in) (read sp-in)))
+      (newline)
+      (write (list (read sp-in) (read sp-in) (read-line sp-in) (read-line sp-in)))
+      (newline)
+      (write (list (eof-object? (read-line sp-in)) (eof-object? (read-char sp-in))
+                   (eof-object? (peek-char sp-in)) (eof-object? (read sp-in)) (char-ready? sp-in)))
+      (newline)
+      (write (list (read-string 3 (open-input-string "abcdef")) (read-string 10 (open-input-string "ab"))
+                   (eof-object? (read-string 3 (open-input-string ""))) (read-string 0 (open-input-string "abc"))))
+      (newline)
+    expected: |
+      "abc \"q\\\"x\"\nzel!"
+      #t
+      ((1 2 . 3) #\space #\space foo "bar")
+      (#\a 42 " line one" "line two")
+      (#t #t #t #t #t)
+      ("abc" "ab" #t "")
+  # The current ports are parameter objects: parameterize binds the standard stream too,
+  # restored on every exit channel.
+  - name: parameterize-redirects-the-current-ports
+    source: |
+      (define cp-a (open-output-string))
+      (define cp-b (open-output-string))
+      (parameterize ((current-output-port cp-a))
+        (display "a1 ")
+        (parameterize ((current-output-port cp-b)) (display "b1 ") (write "b2" (current-output-port)))
+        (display "a2 ")
+        (guard (e (#t (display "caught ")))
+          (parameterize ((current-output-port cp-b)) (display "b3 ") (raise 'x)))
+        (display "a3"))
+      (write (list (get-output-string cp-a) (get-output-string cp-b)))
+      (newline)
+      (write (list (eq? (current-output-port) (current-output-port)) (output-port? (current-output-port))
+                   (input-port? (current-input-port)) (output-port? (current-error-port))))
+      (newline)
+      (define cp-in (open-input-string "(hello world) 42 rest"))
+      (write (peek-char cp-in))
+      (parameterize ((current-input-port cp-in))
+        (write (list (read-char) (read) (read) (read-line))))
+      (newline)
+      (parameterize ((current-error-port (current-output-port)))
+        (display "via the error port" (current-error-port))
+        (newline (current-error-port)))
+      (flush-output-port)
+      (flush-output-port (current-output-port))
+    expected: |
+      ("a1 a2 caught a3" "b1 \"b2\"b3 ")
+      (#t #t #t #t)
+      #\((#\( hello world ") 42 rest")
+      via the error port
+  - name: port-procedures-are-first-class-and-reach-eval
+    source: |
+      (define fc-out (open-output-string))
+      (for-each (lambda (x) (write x fc-out) (write-char #\, fc-out)) '(1 "two" #\3 sym))
+      (apply display (list "!" fc-out))
+      (write (get-output-string fc-out))
+      (newline)
+      (write (map (lambda (f) (let ((p (open-output-string))) (f '("s" #\c) p) (get-output-string p)))
+                  (list display write write-simple write-shared)))
+      (newline)
+      (write (eval '(let ((p (open-output-string))) (write 'x p) (display " " p) (write-u8 1 (open-output-bytevector))
+                       (get-output-string p))
+                   (environment '(scheme base) '(scheme write))))
+      (newline)
+      (write (eval '(read (open-input-string "(1 . 2)")) (environment '(scheme base) '(scheme read))))
+      (newline)
+    expected: |
+      "1,\"two\",#\\3,sym,!"
+      ("(s c)" "(\"s\" #\\c)" "(\"s\" #\\c)" "(\"s\" #\\c)")
+      "x "
+      (1 . 2)
+  # Pushback and #!fold-case are per port. The read error's message is ours (Gauche names
+  # the port).
+  - name: the-reader-state-belongs-to-the-port
+    source: |
+      (define rs-1 (open-input-string "ab"))
+      (define rs-2 (open-input-string "xy"))
+      (write (list (peek-char rs-1) (read-char rs-2) (read-char rs-1) (read-char rs-2) (read-char rs-1)))
+      (newline)
+      (define rs-f1 (open-input-string "#!fold-case ABC #\\SPACE"))
+      (define rs-f2 (open-input-string "DEF"))
+      (write (list (read rs-f1) (read rs-f2) (read rs-f1)))
+      (newline)
+      (write (list (read (open-input-string "#u8(1 2 255) (a . b)"))
+                   (guard (e ((read-error? e) (error-object-message e))) (read (open-input-string ")")))))
+      (newline)
+    expected: |
+      (#\a #\x #\a #\y #\b)
+      (abc DEF #\space)
+      (#u8(1 2 255) "unexpected ')'")
+  - name: bytevector-ports
+    source: |
+      (define bp-in (open-input-bytevector (bytevector 1 2 3 255)))
+      (write (list (binary-port? bp-in) (input-port? bp-in) (peek-u8 bp-in) (read-u8 bp-in) (read-u8 bp-in) (u8-ready? bp-in)))
+      (newline)
+      (write (read-bytevector 5 bp-in))
+      (newline)
+      (write (list (eof-object? (read-bytevector 2 bp-in)) (eof-object? (read-u8 bp-in)) (eof-object? (peek-u8 bp-in))))
+      (newline)
+      (define bp-out (open-output-bytevector))
+      (write-u8 7 bp-out)
+      (write-bytevector (bytevector 1 2 3 4) bp-out 1 3)
+      (write-bytevector (bytevector 9) bp-out)
+      (write-u8 255 bp-out)
+      (write (list (get-output-bytevector bp-out) (get-output-bytevector bp-out)))
+      (newline)
+      (define bp-buf (make-bytevector 5 0))
+      (write (list (read-bytevector! bp-buf (open-input-bytevector (bytevector 1 2 3)) 1) bp-buf
+                   (eof-object? (read-bytevector! bp-buf (open-input-bytevector (bytevector))))))
+      (newline)
+      (write (utf8->string (let ((p (open-output-bytevector))) (write-bytevector (string->utf8 "héllo") p) (get-output-bytevector p))))
+      (newline)
+    expected: |
+      (#t #t 1 1 2 #t)
+      #u8(3 255)
+      (#t #t #t)
+      (#u8(7 2 3 9 255) #u8(7 2 3 9 255))
+      (3 #u8(0 1 2 3 0) #t)
+      "héllo"
+  # binary-port? of a string port is #f here; Gauche's ports are both textual and binary.
+  - name: port-predicates-and-closing
+    source: |
+      (define pc-in (open-input-string "hi there"))
+      (define pc-out (open-output-string))
+      (write (list (port? pc-in) (port? 1) (port? "s") (textual-port? pc-in) (binary-port? pc-in)
+                   (input-port? pc-out) (output-port? pc-out)))
+      (newline)
+      (write (list (input-port-open? pc-in) (output-port-open? pc-out)))
+      (close-port pc-in)
+      (close-output-port pc-out)
+      (close-output-port pc-out)
+      (write (list (input-port-open? pc-in) (output-port-open? pc-out)))
+      (newline)
+      (write (call-with-port (open-input-string "hi there") read))
+      (newline)
+      (define pc-p (open-output-string))
+      (call-with-values (lambda () (call-with-port pc-p (lambda (q) (write 'z q) (values 1 (output-port-open? q)))))
+        (lambda (x y) (write (list x y (output-port-open? pc-p) (get-output-string pc-p)))))
+      (newline)
+    expected: |
+      (#t #f #f #t #f #f #t)
+      (#t #t)(#f #f)
+      hi
+      (1 #t #f "z")
+  # The refusals, each an error object; the messages are ours.
+  - name: port-errors-are-error-objects
+    source: |
+      (define (pe-message thunk) (guard (e ((error-object? e) (error-object-message e))) (thunk)))
+      (for-each
+       (lambda (thunk) (write (pe-message thunk)) (newline))
+       (list (lambda () (write-u8 1))
+             (lambda () (read-u8))
+             (lambda () (display 1 (open-input-string "")))
+             (lambda () (read-char (open-output-string)))
+             (lambda () (get-output-string (open-input-string "")))
+             (lambda () (write-u8 256 (open-output-bytevector)))
+             (lambda () (let ((p (open-output-string))) (close-port p) (write 1 p)))
+             (lambda () (let ((p (open-input-string "abc"))) (close-input-port p) (read-line p)))
+             (lambda () (close-input-port (open-output-string)))
+             (lambda () (parameterize ((current-output-port 5)) 1))
+             (lambda () (parameterize ((current-input-port (open-output-string))) 1))))
+      (write (list (current-output-port) (open-input-bytevector (bytevector)) (open-output-bytevector) (current-input-port)))
+      (newline)
+    expected: |
+      "write-u8: not a binary output port: #<textual-output-port>"
+      "read-u8: not a binary input port: #<textual-input-port>"
+      "display: not a textual output port: #<textual-input-port>"
+      "read-char: not a textual input port: #<textual-output-port>"
+      "get-output-string: not a string output port: #<textual-input-port>"
+      "write-u8: not a byte: 256"
+      "write: the port is closed: #<textual-output-port>"
+      "read-line: the port is closed: #<textual-input-port>"
+      "close-input-port: not an input port: #<textual-output-port>"
+      "current-output-port: not a textual output port: 5"
+      "current-input-port: not a textual input port: #<textual-output-port>"
+      (#<textual-output-port> #<binary-input-port> #<binary-output-port> #<textual-input-port>)
 # An uncaught application of a non-procedure ends the program, so these cannot
 # join the concatenated corpus above -- one program per case, per backend, like
 # ci-spec.yaml's standalone: list (.todo/851). The dynamic-wind puts the wasm
@@ -2222,4 +2436,33 @@ standalone:
     stdout: |
     stderr: |
       Unhandled condition: bytevector-u8-set!: not a byte: -1
+    fails: true
+  # A program that uses no port procedure keeps the reader's one stream-keyed pushback
+  # cell (SchemeLibrary.PORTS_FEATURE); the corpus above uses ports, so this is where the
+  # other variant of the reader runs on the compiled backends.
+  - name: the-reader-without-ports-reads-standard-input
+    stdin: |
+      #!fold-case (ABC #\SPACE #u8(1 2)) ab
+      rest of line
+      last
+    source: |
+      (write (list (peek-char) (read) (read-char) (peek-char) (read-char) (read-line)))
+      (newline)
+      (write (list (read-line) (read-char) (read-line) (eof-object? (read))))
+      (newline)
+    stdout: |
+      (#\# (abc #\space #u8(1 2)) #\space #\a #\a "b")
+      ("rest of line" #\l "ast" #t)
+  - name: writing-to-a-closed-port-is-an-error
+    source: |
+      (define standalone-port (open-output-string))
+      (close-port standalone-port)
+      (dynamic-wind (lambda () #t)
+                    (lambda () (display "open: ") (write (output-port-open? standalone-port)) (newline)
+                               (write 1 standalone-port))
+                    (lambda () #t))
+    stdout: |
+      open: #f
+    stderr: |
+      Unhandled condition: write: the port is closed: #<textual-output-port>
     fails: true

@@ -60,6 +60,7 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `quasiquote` | `cons`/`append`/`(coerce .. 'vector)`, constant parts quoted | depth-counted per R7RS: the innermost unquote of a nested template IS evaluated |
 | `define-syntax` / `let-syntax` / `letrec-syntax` with `syntax-rules` | nothing: expanded away before the lowering (`SchemeExpander`); `let-syntax`'s body is `(let () body)` | hygiene by renaming, "Macros" below |
 | `#u8(...)`, `bytevector`, `make-bytevector`, `bytevector-append`, `string->utf8` | the `(unsigned-byte 8)` pack (`.kb/packed-integer-vectors.md`): the literal is an 8-bit `LispIntVector` datum, self-evaluating; the constructors are `%scheme-` helpers over `make-array :element-type '(unsigned-byte 8)` / `rontolisp:string-to-octets` | "Bytevectors" below |
+| a port procedure; the optional port argument of `display`, `read-char`, ...; `(current-output-port)` | a `%scheme-` helper over a `%scheme-port` record (`(display x p)` -> `(%scheme-display-to x p)`, which binds `*standard-output*` to the port's stream around the printer); with no port argument the template is what it always was. A current port's VALUE is `(%scheme-port-parameter 1)`, a parameter object | the standard streams are the `t` designator on the compiled backends, not values ("Ports" below) |
 | `(eval datum env)`, `(interaction-environment)`, `(scheme-report-environment 5)`, `(environment sets..)`, `user-initial-environment`, `system-global-environment` | `(%scheme-eval-in datum '\|#[environment]\|)`: a Scheme evaluator over DATUMS in `scheme.lisp`; every specifier is the one global environment, a quoted symbol | the lowering is not inside a compiled program and the backends' run-time `eval` evaluates core forms, so one evaluator serves all four ("`eval`" below) |
 
 `symbol?` excludes `T`, `NIL` and the false value; `boolean?` is `#t`/`#f` only; `vector?`
@@ -198,8 +199,8 @@ regions carry it.
 `SchemeBuiltins` entries carry the R7RS library that exports them, checked entry by
 entry against Gauche 0.9.15's `(module-exports (find-module 'scheme.<lib>))`
 (2026-09-18). `base`, `write`, `read` (`read` alone: `eof-object`, `eof-object?`,
-`read-char`, `peek-char`, `read-line` and `char-ready?` are `base`, as in R7RS -- all on
-the current input port with no port argument), `inexact`,
+`read-char`, `peek-char`, `read-line`, `char-ready?` and every other port procedure are
+`base`, as in R7RS), `inexact`,
 `cxr` (the whole `(scheme cxr)` set, `caaar` through `cddddr`: every one a
 standard Common Lisp function of the same name), `lazy`, `case-lambda` (the keyword
 alone), `process-context`, `eval` (`eval`, `environment`) and `repl`
@@ -446,7 +447,7 @@ paths, REPL, unknown value), and the `standalone:` cases of `scheme-spec.yaml` w
   `LibraryDefunPrunerTest.theSchemeEvaluatorAndItsProcedureTableFollowOnlyAProgramThatEvals`,
   `RontoLispCliTest.anErrorInsideSchemeEvalIsReportedInSchemeTerms`.
 
-## `(scheme read)` (the current input port, no port argument)
+## `(scheme read)` (the current input port, or a port argument)
 
 A reader in `scheme.lisp` over `read-char` on `*standard-input*`, spliced like the
 rest of the run-time half, on all four backends -- not the emitted Common Lisp reader
@@ -470,11 +471,11 @@ raises a read error (`read-error?`, "Exceptions" below).
   one-form program) -- `SchemeBuiltinsTest.eofObjectWorksAsTheFirstThingAFreshEvaluatorRuns`.
   `(read)`/`read-char`/`peek-char`/`read-line` answer
   it at end of input instead of signalling; a second `(read)` there answers it again
-  (the peek stays parked). A port argument stays refused by arity, like
-  `display`/`write`'s second argument -- string ports and `(read port)` are `.todo/826`'s.
+  (the peek stays parked). `(read port)` reads a textual input port ("Ports" below).
 - **One Lisp-level pushback cell** (a list, so `#|` un-reads two characters), keyed on
   the current `*standard-input*` value (one stream at a time, like CL's unread-char
-  cell; a rebind clears it). Peek is read + pushback, never CL's `peek-char`, so no
+  cell; a rebind clears it) -- in a program that uses no port procedure. With ports the
+  cell is the port's ("Ports" below). Peek is read + pushback, never CL's `peek-char`, so no
   WASM peek slot is ever parked (`PEEK_FD_ADDR` is drained by `read-char` only, and
   mixing peek with `read-line` there loses it) and `read`/`read-line` mix freely.
 - **`char-ready?` answers `#t` everywhere**: WASM has no non-blocking probe (`listen`
@@ -761,12 +762,92 @@ already send it.
   program (`bytevector`, `bytevector-u8-set!`, `-ref`, `-length`, `write`) is 88,790 /
   28,829 against 78,298 / 17,462 for the same with a vector: the pack, the refusal's
   message machinery and the printer arm.
-- Out of scope: binary ports (`open-input-bytevector`, `read-u8`, ...), with the rest of
-  `.todo/826`'s ports row.
+- Binary ports over bytevectors: "Ports" below.
 - Pinned by the `bytevectors` case (Gauche 0.9.15 `-r7` output), the `#u8(` lines of the
   read, fold-case and strict-R7RS cases and the two `bytevector...-non-byte` standalone
   cases of `scheme-spec.yaml` (all four backends), `SchemeReaderTest.aBytevector...`,
   `LibraryDefunPrunerTest.thePrintersBytevectorArmFollowsOnlyAProgramThatCanMakeABytevector`.
+
+## Ports (2026-09-18, `.todo/873`)
+
+**A port is a `defstruct`, `%scheme-port`, never a bare Common Lisp stream**: the
+standard streams are the `t` designator on the compiled backends (not a value,
+`.kb/read-load-streams.md`), and the JVM and wasm answer a NEW wrapper instance for
+every read of `*error-output*` (`(eq *error-output* *error-output*)` is NIL there,
+`equal` is T; measured 2026-09-18), so neither can be told apart or compared. CL's
+stream predicates do not help either: `input-stream-p` of a string OUTPUT stream is T on
+all four and `open-stream-p` after `close` is T on wasm. Slots: `input`, `binary`,
+`string` (made by `open-...-string`), `stream`, `open`, `pushback`, `fold-case`. A
+textual port's `stream` is the CL stream it reads or writes (`t` for the standard ones);
+a binary input port's is the bytevector (a copy) with the position in `pushback`; a
+binary output port's the bytes written, newest first. `close-port` only clears `open`.
+
+- **Output with a port** binds `*standard-output*` to the port's stream around the
+  unchanged printer (`%scheme-display-to` & co), so the printer keeps its one shape.
+  `(let ((*standard-output* t)) ..)` and `(write-string s t)` inside a
+  `with-output-to-string` reach the process stdout on all four backends, and
+  `(read-char t)` reads the process stdin with `*standard-input*` rebound (measured).
+- **`get-output-string` writes back what it read**: CL's `get-output-stream-string`
+  empties the stream, R7RS's does not.
+- **The current ports are parameter objects** over three `%scheme-parameter` records
+  (`%scheme-port-records`), whose converters refuse anything but an open textual port of
+  the direction. `%scheme-parameterize` notes a binding of one of them and then binds the
+  special it stands for (`%scheme-with-port-streams`), so `(display x)` with no port --
+  and Common Lisp code called from the body -- writes where the port does, and the
+  restore is the special binding's on every exit channel. Only when a port record is
+  bound: a frame per level more is what took the 1,000-deep `prm-count-down` spec case
+  over wasm's stack when every `parameterize` went through it.
+- **Not parameterized, a current port is a cached wrapper of what the special holds
+  now** (`%scheme-current-port`, compared with `equal`), so `(eq? (current-output-port)
+  (current-output-port))` is `#t` and a Common Lisp caller's `with-output-to-string`
+  around a Scheme procedure is honored by `(current-output-port)` too.
+- **The reader's state is the port's.** With ports, `%scheme-next-char` / `peek-char` /
+  `pushback` and the `#!fold-case` flag read `%scheme-reading-port` -- bound by an
+  explicit port argument (`%scheme-read-from` & co), else the current input port -- so
+  a peek on one port survives reads of another, and a parameterized input port shares
+  its pushback with explicit reads of it (the `the-reader-state-belongs-to-the-port` and
+  `the-current-input-port-mixes-with-string-ports` cases).
+- **The whole port section, those reader variants, the `parameterize` hook and the
+  printer's `#<textual-input-port>` arm are behind a reader feature**,
+  `rontolisp-scheme-ports` (`SchemeLibrary.PORTS_FEATURE`), on for a program calling a
+  function that exists ONLY under the feature (`makesPorts`: the difference between the
+  two reads of `scheme.lisp`, so a new port helper needs no list edit). The interpreter
+  always reads with it. **Trap**: a `#-` definition exists only in the variant a program
+  gets, so `LibraryDefunPruner`'s bundled-name sets read `SchemeLibrary.everyVariantForms()`;
+  with `forms()` alone the no-port reader's four `defvar`s were not known as library
+  definitions and stayed as roots (+580 B class in every printing program).
+- **Binary ports are over bytevectors only.** The standard ports are textual, so
+  `read-u8`/`write-u8`/`read-bytevector`... with no port argument are refused by name
+  (Gauche reads/writes the byte). A port is textual or binary, never both (Gauche's are
+  both: `binary-port?` of a string port is `#t` there). `u8-ready?` and `char-ready?`
+  answer `#t`.
+- Refusals are `(error "~A" ..)` with Scheme-spelled messages (`display: not a textual
+  output port: #<textual-input-port>`, `write: the port is closed: ...`, `write-u8: not a
+  byte: 256`), error objects a `guard` catches -- Gauche's texts differ.
+- `eval` reaches every port procedure through the generated table; a current port's
+  table value is its parameter object.
+- Not here: file ports (`(scheme file)`: `open-input-file`, `with-output-to-file`, ...;
+  `.todo/874`),
+  and the non-R7RS `with-output-to-string` / `call-with-output-string` (no SICP sample
+  spells any port name).
+- Cost (2026-09-18, x86-64 Linux, Java 25; `-o P.class --class-name P` / `-o p.wasm`):
+  every program spelling no port name is byte-identical before and after -- `hello`
+  1,661 / 510 B, `(display (list 1 'a "s"))` 74,022 / 11,481, `twice` 79,678 / 24,993,
+  `(write (read))` 161,644 / 99,557, a `read-line`/`read-char`/`peek-char` program
+  90,266 / 25,303, the `guard`, `make-parameter`, bytevector and `eval` probes.
+  `(define p (open-output-string)) (write (list 1 "a") p) (display (get-output-string
+  p))` is 83,446 / 25,752; `parameterize` of `current-output-port` plus `(read
+  (open-input-string ..))` 171,238 / 104,272; a bytevector-port round trip 96,851 /
+  38,824. Time, a `read-char` loop over 2,000,000 characters of stdin with and without a
+  port name elsewhere in the program: JVM 0.19 / 0.19 s, wasm 1.09 / 0.91 s (single runs
+  incl. startup) -- the current-port lookup per character.
+- Pinned by the seven port cases and `the-current-input-port-mixes-with-string-ports`
+  of `scheme-spec.yaml` (all four backends; Gauche 0.9.15 `-r7` output but the stated
+  deviations and messages), the standalone `the-reader-without-ports-reads-standard-input`
+  (the no-port reader variant, which the corpus -- using ports -- no longer runs on the
+  compiled backends) and `writing-to-a-closed-port-is-an-error`,
+  `SchemeLoweringTest.aPortArgumentSelectsThePortHelperAndACurrentPortIsAParameterValue`,
+  `LibraryDefunPrunerTest.thePortSectionFollowsOnlyAProgramThatUsesAPortProcedure`.
 
 ## A session (`SchemeSession`, `SchemeLowering.interact`)
 
@@ -1002,9 +1083,7 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 ## Not here yet (each its own follow-up)
 
-`define-library`, ports beyond the current output
-and input ports (string ports, bytevector ports and `read-u8`/`write-u8`, a port argument to `read`/`write`/`display`;
-`%STREAM` instances), `(scheme char)` and the other libraries, `|...|`
+`define-library`, file ports (`(scheme file)`), `(scheme char)` and the other libraries, `|...|`
 identifiers, reading `+inf.0`/`+nan.0`, internal `define-record-type`, re-entrant continuations,
 proper tail calls in general. Each is refused by name where it can be.
 
