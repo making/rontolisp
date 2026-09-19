@@ -19,8 +19,10 @@ Encoding and pipeline invariants shared by the interpreter and both compilers.
   first non-packable store widens in place (`_rmGet`/`_rmSet`, `_arrayWiden`;
   [adjustable-arrays.md](adjustable-arrays.md)).
 - `%` prefix: internal helpers outside the public API (`%remf-tail`).
-- `JvmLispCompiler.mangleMethodName()`: `/ < > : .` ->
-  `$div`/`$lt`/`$gt`/`$le`/`$ge`/`$colon`/`$dot`, `%` -> `$pct`. Trap: `%` is legal in a JVM
+- `JvmLispCompiler.mangleMethodName()`: `/ < > : . [ ;` ->
+  `$div`/`$lt`/`$gt`/`$le`/`$ge`/`$colon`/`$dot`/`$lbrack`/`$semi`, `%` -> `$pct`
+  (`[` and `;` since 2026-09-19: a name spelling one failed to load, `ClassFormatError`
+  "Illegal method name"). Trap: `%` is legal in a JVM
   method name but OpenJDK's JVMCI treats it as a *format string*, so a hot `%`-prefixed defun
   aborts JIT compilation and warns into stdout.
 - Template-class embedding is a last resort: prefer (1) macro expansion, (2) a

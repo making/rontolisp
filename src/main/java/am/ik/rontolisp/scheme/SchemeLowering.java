@@ -497,6 +497,23 @@ final class SchemeLowering {
 
 	private int closures;
 
+	// Each internal define-record-type datum's hoisted type, so a body lowered twice (a
+	// loop tried as a pure loop first) defines it once and binds the same names.
+	private final Map<LispCons, InternalRecord> internalRecords = new IdentityHashMap<>();
+
+	// Every internal record type name taken so far; a session keeps them, so a type
+	// typed again in a later buffer is a new one and the old instances keep their
+	// layout.
+	private final Set<String> internalRecordNames = new HashSet<>();
+
+	// What the top-level form being lowered hoists ahead of itself: the defstruct and
+	// modifier defuns of the internal record types it holds.
+	private final List<LispVal> hoisted = new ArrayList<>();
+
+	// The mangled name of the top-level definition being lowered, "" for any other form:
+	// what an internal record type's name is qualified by.
+	private String enclosing = "";
+
 	// Created by the first file or buffer that defines a macro; a session keeps it, and
 	// with it the macros of earlier buffers.
 	private @Nullable SchemeExpander expander;
@@ -557,6 +574,7 @@ final class SchemeLowering {
 		// COUNTER is what must outlive the buffer, a record's generated slot being
 		// global.
 		this.generated.clear();
+		this.internalRecords.clear();
 		// A library typed at a prompt is declared, not lowered: a later import lowers it.
 		List<LispVal> program = new ArrayList<>();
 		for (LispVal datum : this.datums) {
@@ -1639,6 +1657,27 @@ final class SchemeLowering {
 	// type have none. What an expression answers is the value's to say -- an effect's is
 	// the unspecified object, which a session does not echo.
 	private boolean topLevel(LispVal datum, List<LispVal> out) {
+		this.hoisted.clear();
+		this.enclosing = "";
+		if (datum instanceof LispCons form && syntaxOf(form, this.global) == Core.DEFINE
+				&& form.cdr() instanceof LispCons rest) {
+			// Malformed or not: definition() reports that, positioned, below.
+			LispVal target = rest.car() instanceof LispCons signature ? signature.car() : rest.car();
+			if (target instanceof LispSymbol name) {
+				this.enclosing = name(name);
+			}
+		}
+		List<LispVal> lowered = new ArrayList<>();
+		boolean echoes = topLevelForm(datum, lowered);
+		// The internal record types stand before the form that uses them: the
+		// interpreter runs the forms in order.
+		out.addAll(this.hoisted);
+		out.addAll(lowered);
+		this.hoisted.clear();
+		return echoes;
+	}
+
+	private boolean topLevelForm(LispVal datum, List<LispVal> out) {
 		if (datum instanceof LispCons form) {
 			try {
 				switch (syntaxOf(form, this.global)) {
@@ -1916,6 +1955,91 @@ final class SchemeLowering {
 		});
 	}
 
+	/**
+	 * An internal record type, hoisted to the top level.
+	 *
+	 * @param procedures what the body binds: each record procedure and the top-level
+	 * procedure it means
+	 */
+	private record InternalRecord(List<LocalProcedure> procedures) {
+	}
+
+	private record LocalProcedure(LispSymbol identifier, Binding binding) {
+	}
+
+	private void refuseAgainInBody(LispSymbol identifier, Set<String> recordNames, LispCons form) {
+		if (recordNames.contains(name(identifier))) {
+			throw error("a body defines " + identifier.name() + " twice", form);
+		}
+	}
+
+	// An internal define-record-type is a TOP-LEVEL defstruct, hoisted ahead of the
+	// top-level form holding it: a defstruct is what registers the layout on every
+	// backend, and the compile path refuses one anywhere else. Its name,
+	// s%%[<enclosing definition> <type>], is one no identifier mangles to
+	// (SchemeNames.libraryPrefix's argument), qualified by the top-level definition it
+	// stands in so two procedures' types never meet. The slots are named after the
+	// FIELDS -- the expander may have renamed the accessors -- and the accessors are the
+	// generated ones through a conc-name; the other procedures are defuns named after
+	// the type. The body binds its names to these, so every call stays direct. One type
+	// per occurrence, not per evaluation (R7RS leaves generativity unspecified).
+	private InternalRecord internalRecord(LispCons form) {
+		InternalRecord known = this.internalRecords.get(form);
+		if (known != null) {
+			return known;
+		}
+		RecordType type = recordType(form);
+		String base = this.prefix + SchemeNames.PREFIX + "%[" + this.enclosing + " " + name(type.name());
+		String candidate = base + "]";
+		for (int ordinal = 2; !this.internalRecordNames.add(candidate); ordinal++) {
+			candidate = base + " " + ordinal + "]";
+		}
+		String structName = candidate;
+		String concName = structName + " ";
+		Map<String, LispSymbol> slots = new HashMap<>();
+		List<LispVal> slotList = new ArrayList<>();
+		for (String field : type.fields()) {
+			LispSymbol slot = symbol(SchemeNames.mangle(field));
+			slots.put(field, slot);
+			slotList.add(slot);
+		}
+		List<LocalProcedure> procedures = new ArrayList<>();
+		type.accessors()
+			.forEach((field, accessor) -> procedures
+				.add(new LocalProcedure(accessor, new GlobalFunction(symbol(concName + SchemeNames.mangle(field))))));
+		List<LispVal> constructorParams = new ArrayList<>();
+		for (String field : type.constructorFields()) {
+			constructorParams.add(slots.get(field));
+		}
+		LispSymbol constructor;
+		if (type.constructor() != null) {
+			constructor = symbol(structName + "(" + name(type.constructor()) + ")");
+			procedures.add(new LocalProcedure(type.constructor(), new GlobalFunction(constructor)));
+		}
+		else {
+			constructor = fresh("MAKE");
+		}
+		LispSymbol predicate = symbol(structName + "(" + name(type.predicate()) + ")");
+		procedures.add(new LocalProcedure(type.predicate(), new GlobalPredicate(predicate)));
+		LispVal options = list(symbol(structName), list(symbol(":CONSTRUCTOR"), constructor, listOf(constructorParams)),
+				list(symbol(":PREDICATE"), predicate), list(symbol(":COPIER"), LispNil.INSTANCE),
+				list(symbol(":CONC-NAME"), new LispString(concName)));
+		this.hoisted.add(inherit(form, new LispCons(symbol("DEFSTRUCT"), new LispCons(options, listOf(slotList)))));
+		type.modifiers().forEach((field, modifier) -> {
+			LispSymbol name = symbol(structName + "(" + name(modifier) + ")");
+			LispSymbol record = fresh("R");
+			LispSymbol newValue = fresh("V");
+			this.hoisted.add(inherit(form,
+					list(symbol("DEFUN"), name, list(record, newValue),
+							list(symbol("SETF"), list(symbol(concName + SchemeNames.mangle(field)), record), newValue),
+							this.unspecifiedVariable)));
+			procedures.add(new LocalProcedure(modifier, new GlobalFunction(name)));
+		});
+		InternalRecord record = new InternalRecord(List.copyOf(procedures));
+		this.internalRecords.put(form, record);
+		return record;
+	}
+
 	// ------------------------------------------------------------------ expressions
 
 	private LispVal value(LispVal expression, Scope scope) {
@@ -2119,7 +2243,8 @@ final class SchemeLowering {
 				leaf(SchemeBuiltins.toSchemeValue(SchemeBuiltins.Result.PREDICATE, single(form)), context);
 			case DEFINE, DEFINE_VALUES ->
 				throw error("a definition is only allowed at the top level or at the head of a body", form);
-			case DEFINE_RECORD_TYPE -> throw error("define-record-type is only supported at the top level", form);
+			case DEFINE_RECORD_TYPE ->
+				throw error("define-record-type is only allowed at the top level or in a body", form);
 			case IMPORT -> throw error("import must come before everything else", form);
 			case DEFINE_LIBRARY ->
 				throw error("define-library must come before the program's import declarations", form);
@@ -2989,15 +3114,33 @@ final class SchemeLowering {
 		}
 		Scope scope = context.scope();
 		List<LispVal> pairs = new ArrayList<>();
+		// An internal record type binds no variable at all: its names mean the hoisted
+		// top-level procedures, called directly. Such a name may not be defined twice.
+		Set<String> variables = new HashSet<>();
+		Set<String> recordNames = new HashSet<>();
 		for (LispVal form : flat) {
 			if (form instanceof LispCons cons) {
 				Core core = syntaxOf(cons, scope);
 				if (core == Core.DEFINE) {
-					pairs.add(list(bind(definition(cons).name(), scope), LispNil.INSTANCE));
+					LispSymbol name = definition(cons).name();
+					refuseAgainInBody(name, recordNames, cons);
+					variables.add(name(name));
+					pairs.add(list(bind(name, scope), LispNil.INSTANCE));
 				}
 				else if (core == Core.DEFINE_VALUES) {
 					for (LispSymbol variable : formals(second(cons), cons).all()) {
+						refuseAgainInBody(variable, recordNames, cons);
+						variables.add(name(variable));
 						pairs.add(list(bind(variable, scope), LispNil.INSTANCE));
+					}
+				}
+				else if (core == Core.DEFINE_RECORD_TYPE) {
+					for (LocalProcedure procedure : internalRecord(cons).procedures()) {
+						String name = name(procedure.identifier());
+						if (variables.contains(name) || !recordNames.add(name)) {
+							throw error("a body defines " + procedure.identifier().name() + " twice", cons);
+						}
+						scope.bindings.put(name, procedure.binding());
 					}
 				}
 			}
@@ -3016,6 +3159,13 @@ final class SchemeLowering {
 			}
 			else if (core == Core.DEFINE_VALUES && form instanceof LispCons cons) {
 				lowered.add(inherit(cons, defineValues(cons, scope)));
+			}
+			else if (core == Core.DEFINE_RECORD_TYPE) {
+				// Defined at the top level already; a body ending in one answers the
+				// unspecified object.
+				if (last) {
+					lowered.add(lower(CORE_UNSPECIFIED, context));
+				}
 			}
 			else {
 				lowered.add(lower(form, last ? context : Context.discarding(scope)));

@@ -2,7 +2,7 @@
 
 `(define-record-type name (constructor field...) predicate (field accessor [modifier])...)`
 
-レコード型を定義します。`constructor` は列挙したフィールドからレコードを作り、`predicate` はレコードかどうかを判定し、各 `accessor`（と省略可能な `modifier`）はフィールドを読み（書き）ます。トップレベルでのみ使えます。レコードは Common Lisp の `#S(...)` 構文で書き出され、各フィールドはアクセサの名前で表示されます。`equal?` はレコードを同一性で比較します。
+レコード型を定義します。`constructor` は列挙したフィールドからレコードを作り、`predicate` はレコードかどうかを判定し、各 `accessor`（と省略可能な `modifier`）はフィールドを読み（書き）ます。トップレベルと本体の中で使えます。レコードは Common Lisp の `#S(...)` 構文で書き出され、各フィールドはアクセサの名前で表示されます。`equal?` はレコードを同一性で比較します。
 
 ```scheme
 (define-record-type point (make-point x y) point? (x point-x set-point-x!) (y point-y))
@@ -17,4 +17,18 @@
 ```
 (10 4 #t #f)
 #S(point :point-x 10 :point-y 4)
+```
+
+本体の中では名前はその本体に局所的で、レコードは型名を囲むトップレベル定義の名前で修飾して表示し、各フィールドはフィールド名で表示されます。
+
+```scheme
+(define (tagged v)
+  (define-record-type tag (make-tag v) tag? (v tag-value))
+  (make-tag v))
+(write (tagged 1))
+(newline)
+```
+
+```
+#S(s%%[tagged tag] :v 1)
 ```

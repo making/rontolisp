@@ -248,6 +248,78 @@ class SchemeLoweringTest {
 	}
 
 	@Test
+	void anInternalRecordTypeIsAHoistedDefstructItsBodyCallsDirectly() {
+		// Named after the enclosing definition and the type, a spelling no identifier
+		// mangles to; slots after the fields; no variable bound in the body.
+		assertThat(lowered("""
+				(define (f n)
+				  (define-record-type node (make-node v) node? (v node-v set-node-v!))
+				  (define x (make-node n))
+				  (set-node-v! x 1)
+				  (if (node? x) (node-v x) node-v))""")).isEqualTo("""
+				(DEFSTRUCT (|s%%[f node]| (:CONSTRUCTOR |s%%[f node](make-node)| (|v|)) \
+				(:PREDICATE |s%%[f node](node?)|) (:COPIER NIL) (:CONC-NAME "s%%[f node] ")) |v|)
+				(DEFUN |s%%[f node](set-node-v!)| (%SCM-R1 %SCM-V2) (SETF (|s%%[f node] v| %SCM-R1) %SCM-V2) \
+				RONTOLISP::%SCHEME-UNSPECIFIED)
+				(DEFUN |f| (|n|) (LET ((|x| NIL)) (SETQ |x| (|s%%[f node](make-node)| |n|)) \
+				(|s%%[f node](set-node-v!)| |x| 1) \
+				(IF (|s%%[f node](node?)| |x|) (|s%%[f node] v| |x|) #'|s%%[f node] v|)))""");
+	}
+
+	@Test
+	void internalRecordTypesOfTheSameNameAreDistinctTypes() {
+		// A second one in the same definition takes an ordinal; one outside any
+		// definition has an empty qualifier. The hoisted forms stand before their form.
+		assertThat(lowered("""
+				(define (g)
+				  (let () (define-record-type t #f t?) 1)
+				  (let () (define-record-type t #f t?) 2))
+				(display (let () (define-record-type t #f t?) (t? 1)))""")).isEqualTo("""
+				(DEFSTRUCT (|s%%[g t]| (:CONSTRUCTOR %SCM-MAKE1 NIL) (:PREDICATE |s%%[g t](t?)|) \
+				(:COPIER NIL) (:CONC-NAME "s%%[g t] ")))
+				(DEFSTRUCT (|s%%[g t 2]| (:CONSTRUCTOR %SCM-MAKE2 NIL) (:PREDICATE |s%%[g t 2](t?)|) \
+				(:COPIER NIL) (:CONC-NAME "s%%[g t 2] ")))
+				(DEFUN |g| NIL (LET NIL 1) (LET NIL 2))
+				(DEFSTRUCT (|s%%[ t]| (:CONSTRUCTOR %SCM-MAKE3 NIL) (:PREDICATE |s%%[ t](t?)|) \
+				(:COPIER NIL) (:CONC-NAME "s%%[ t] ")))
+				(RONTOLISP::%SCHEME-DISPLAY (LET NIL (IF (|s%%[ t](t?)| 1) T RONTOLISP::%SCHEME-FALSE)))""");
+	}
+
+	@Test
+	void anInternalRecordTypeShadowsAndIsScopedToItsBody() {
+		assertThat(lowered("""
+				(define (h point-x)
+				  (list (let () (define-record-type point (mk x) point? (x point-x)) (point-x (mk 1)))
+				        point-x))""")).contains("(|s%%[h point] x| (|s%%[h point](mk)| 1))").contains(" |point-x|))");
+	}
+
+	@Test
+	void anInternalRecordProcedureIsNotAVariable() {
+		assertThatThrownBy(() -> lowered("(define (f) (define-record-type p (mk) p?) (define mk 1) mk)"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("a body defines mk twice");
+		assertThatThrownBy(() -> lowered("(define (f) (define-record-type p (mk) p?) (set! mk 1))"))
+			.hasMessageContaining("cannot assign mk: it is not a variable");
+		assertThatThrownBy(() -> lowered("(display (if #t (define-record-type p (mk) p?)))"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("define-record-type is only allowed at the top level or in a body");
+	}
+
+	@Test
+	void aMacroUseBesideAnInternalRecordTypeKeepsItsNamesLocal() {
+		// The expander renames the record's procedures like any internal definition, so
+		// the template's own point-x still means the global one; a renamed procedure's
+		// hoisted name carries the generated spelling.
+		assertThat(lowered("""
+				(define (point-x p) 'global)
+				(define-syntax gx (syntax-rules () ((_ v) (point-x v))))
+				(define (f)
+				  (define-record-type point (mk x) point? (x point-x))
+				  (list (point-x (mk 1)) (gx 2)))"""))
+			.contains("(LIST (|s%%[f point] x| (|s%%[f point](%SCM-V2)| 1)) (|point-x| 2))");
+	}
+
+	@Test
 	void displayOfALiteralNeedsNoPrinter() {
 		assertThat(lowered("(display \"text\") (display #\\a) (display 42) (display 1.5)")).isEqualTo("""
 				(WRITE-STRING "text")

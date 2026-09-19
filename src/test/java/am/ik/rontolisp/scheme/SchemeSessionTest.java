@@ -37,6 +37,19 @@ class SchemeSessionTest {
 	}
 
 	@Test
+	void anInternalRecordTypeTypedAgainIsANewTypeHoistedIntoItsEntry() {
+		SchemeSession session = Scheme.session(SchemeStandard.RONTOLISP);
+		session.read("0");
+		// The defstruct stands bare ahead of the guarded definition, in the same entry.
+		assertThat(lowered(session, "(define (f) (define-record-type t (mk) t?) (t? (mk)))"))
+			.startsWith("mute (DEFSTRUCT (|s%%[f t]| ")
+			.contains("(SETQ |f| (LAMBDA NIL (IF (|s%%[f t](t?)| (|s%%[f t](mk)|)) T RONTOLISP::%SCHEME-FALSE)))");
+		// Old instances keep their layout: the redefinition names a new type.
+		assertThat(lowered(session, "(define (f) (define-record-type t (mk a) t? (a ta)) (ta (mk 1)))"))
+			.startsWith("mute (DEFSTRUCT (|s%%[f t 2]| ");
+	}
+
+	@Test
 	void theFalseValueIsBoundOncePerSession() {
 		SchemeSession session = Scheme.session(SchemeStandard.RONTOLISP);
 		assertThat(lowered(session, "1")).isEqualTo(
