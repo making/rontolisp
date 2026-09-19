@@ -29,3 +29,5 @@ python3 exp.py            # REPL echo vs the `; expected:` annotations
   wasm with the shim (`ok` = exit 0 AND stdout equal to the interpreter's), and the
   not-yet-provided names the file uses.
 - `repl.py` drives one REPL transcript: `python3 repl.py $'(car 5)\n'`.
+- `internal_tail_cycles.py sicp` lists the bodies and `letrec`s whose local procedures
+  tail-call each other in a cycle (`.todo/898`: none in the corpus).

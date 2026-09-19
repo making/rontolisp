@@ -1,10 +1,11 @@
 # Deviations
 
 - **Tail calls are proper only where they become a loop**: a named `let` or `do`, a
-  procedure calling itself in tail position, and top-level procedures of a file that
-  call each other in tail position (`even?`/`odd?`, a state machine, an evaluator's
-  `eval`/`apply`). A tail call through a procedure value (an argument, a variable, `apply`),
-  one among internal definitions, and any at the REPL uses stack: a procedure calling
+  procedure calling itself in tail position, and procedures that call each other in tail
+  position (`even?`/`odd?`, a state machine, an evaluator's `eval`/`apply`) when they are
+  the top-level procedures of a file, the internal definitions of one body or the `lambda`
+  bindings of one `letrec`. A tail call through a procedure value (an argument, a variable,
+  `apply`) and any among the REPL's definitions uses stack: a procedure calling
   itself through an argument overflows the JVM's default stack about 1,700 calls deep,
   WebAssembly about 2,700 and the interpreter about 15,000.
 - **`call/cc` is escape-only.** A continuation can be called while its `call/cc` is still

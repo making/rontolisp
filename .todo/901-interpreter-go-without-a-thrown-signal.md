@@ -15,3 +15,6 @@ Follow-up of `.todo/897`. On the interpreter every `(go L)` throws a `GoSignal` 
   measurable: the throw is the cost, not the table.
 - A dynamic `go` (from a closure) must keep working; pinned by the `tagbody` tests named in
   `.kb/do-return-block.md`.
+- The internal tail-call groups (`.todo/898`) pay it too: 300K shallow internal
+  `ev?`/`od?` entries 4.1 -> 5.8 s, 30K `(parity 100)` 5.5 -> 9.6 s (2026-09-19), while
+  the compiled backends got faster.

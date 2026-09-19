@@ -1482,8 +1482,9 @@ family, bodies) pass the destination down; every other form is a leaf `(setq R v
   compares the jump site's binding of each name with the loop's; a mismatch re-lowers the
   loop in the carrier shape, whose fresh names nothing can shadow. Found by
   `examples/scheme/collatz.scm`.
-- Mutual tail calls among top-level procedures are jumps too ("Tail-call groups" below);
-  higher-order ones and those among internal definitions are ordinary calls (depths below).
+- Mutual tail calls among top-level procedures, among a body's internal definitions and
+  among a `letrec`'s lambdas are jumps too ("Tail-call groups" below); higher-order ones
+  are ordinary calls (depths below).
 - **A leaf stores ONE value** (`(setq R value)`), so a leaf that may answer other than one
   value leaves the loop instead: `(return-from B form)`, B the loop's `block`, named after
   R (`%SCM-B<n>` for `%SCM-R<n>`, never from the counter, so a discarded loop attempt
@@ -1571,9 +1572,9 @@ outside such a cycle changes: a program with none lowers byte-identically.
   `evaluator.scm` change; each prints the same on all four backends before and after.
   Common Lisp programs never reach this pass.
 - **Not members** (ordinary calls, depths below): a tail call through a procedure VALUE
-  (an argument, a `lambda` in a variable, `apply` -- `.todo/899`), mutual recursion among
-  INTERNAL definitions (`.todo/898`), and every definition typed at the REPL (a session's
-  definitions are variables).
+  (an argument, a `lambda` in a variable, `apply` -- `.todo/899`), and every definition
+  typed at the REPL (a session's definitions are variables; internal definitions inside
+  one are groups like anywhere else).
 - **Not a trampoline, and not `return_call`.** A hand-written trampoline (a tail call
   answers a bounce, every non-tail call site drives them) measured, against plain calls:
   `fib 32` JVM 43-45 vs 47-56 ms, wasm 85-107 vs 58-72, interpreter 12.2 vs 5.5 s; 3M
@@ -1586,6 +1587,54 @@ Pinned by `SchemeLoweringTest.topLevelProceduresWhoseTailCallsFormACycleAreOneGr
 `#aCycleThroughANonTailCallIsNoGroupAndNumbersNothing`, `#anAssignedOrRedefinedProcedureIsNoMember`
 and the `top-level-procedures-whose-tail-calls-cycle-run-in-constant-stack` case of
 `scheme-spec.yaml` (all four backends; Gauche 0.9.15 `-r7` prints the same).
+
+### Internal groups (`SchemeLowering.internalGroups`; 2026-09-19, `.todo/898`)
+
+**The same probe runs on every body and every `letrec`**: the internal `define`s bound to a
+syntactic `lambda` (and the `letrec` bindings whose init is one) whose tail calls cycle are
+one group, `lowerGroup` with the body's scope as home. The group is a `lambda` in a fresh
+variable of the body's `let`, assigned where the first member stands; each member's variable
+gets a `lambda` entering it:
+
+```
+(let ((ev? nil) (od? nil) (G nil))
+  (setq G (lambda (W C1) (let ((R nil)) (tagbody TOP .. L0 .. L1 .. END) R)))
+  (setq ev? (lambda (n) (funcall G 0 n)))
+  (setq od? (lambda (n) (funcall G 1 n)))
+  ..)
+```
+
+- **Members**: never `set!` (by spelling, like `collectAssigned`), bound once in the body,
+  not also bound by a `define-values`, no `case-lambda`. A member used as a value is its
+  variable's entry `lambda` -- no escape rule is needed, since nothing but the jumps inside
+  `G` ever bypasses the variable. A jump to a member whose `define` has not run yet runs it
+  anyway; R7RS calls reading that variable before its definition an error.
+- **Measured before building (the todo's premise)**: 0 of the 1,586 SICP corpus files and 0
+  of the six `examples/scheme` have such a cycle (a static scan of tail positions over
+  every body and `letrec`, `.todo/artefacts/828-sicp-sample-corpus-harness/internal_tail_cycles.py`; 252 bodies define local procedures, 82 of them tail-call a
+  sibling, none back). Built anyway: R7RS requires proper tail calls, and a local state
+  machine is a normal Scheme shape. Blast radius: all 1,592 files compile to
+  byte-identical `.class` and `.wasm` before and after (the probe restores the counter).
+- **Depth** (`(parity 1000000)` over internal `ev?`/`od?`): overflowed on all four
+  backends before (the depths of a procedure value, below); `#t` on all four now.
+- **Time** (2026-09-19, x86-64 Linux, Java 25, wasmtime 47, a loaded 64-core box, best
+  of 5 alternating runs; before -> after): 10M `(parity (remainder k 4))`, JVM 475 -> 249
+  ms, wasm 799 -> 678, component 777 -> 678; 300K `(parity 100)`, JVM 324 -> 176, wasm
+  651 -> 250, component 646 -> 253. Faster, unlike the top-level groups: the calls it
+  replaces were `funcall`s through `%scheme-ensure-procedure`, not direct `defun` calls.
+  Interpreter (best of 3): 300K shallow 4.1 -> 5.8 s, 30K `(parity 100)` 5.5 -> 9.6 s --
+  every jump is a thrown `GoSignal` there, `.todo/901`.
+- **Size**: `G` takes one argument more than the widest member, and on both compiled
+  backends the first indirect call of an ARITY pulls every dispatchable function of that
+  arity (`_invoke_N`, `.kb/core-representation.md`). The shallow program grew 50,117 ->
+  56,756 B of class and 26,185 -> 28,840 B of wasm, where nothing else called through a
+  value with two arguments; with such a call already present (`(f a b)` once) 56,681 ->
+  56,931 / 28,494 -> 28,929.
+
+Pinned by `SchemeLoweringTest.internalProceduresWhoseTailCallsFormACycleAreOneGroupLambdaEachMemberCallsIt`,
+`#internalProceduresWithNoTailCycleLowerAsBeforeAndNumberNothing` and the
+`internal-procedures-whose-tail-calls-cycle-run-in-constant-stack` case of `scheme-spec.yaml`
+(all four backends; Gauche 0.9.15 `-r7` prints the same).
 
 ## Traps
 
@@ -1653,7 +1702,7 @@ The nil-initialized shape loses the integer typing of the loop variables: 4x.
 binary search): a tail call through a procedure VALUE, `(define (g self n) (if (= n 0) 'done
 (self self (- n 1))))`, JVM (`java Prog`) 1,716, wasm and component 2,693, interpreter
 15,234. Top-level `ev?`/`od?` was JVM 3,516 / wasm 10,780 / interpreter 10,230 before the
-tail-call groups and is unbounded now.
+tail-call groups and is unbounded now, and so is an internal or `letrec` pair.
 
 **Size.** `(display "hello, world")` is 1,594 B of class and 498 B of wasm: `display` of a
 string, character or integer LITERAL lowers to `write-string` / `write-char` / `princ`.
@@ -1719,9 +1768,8 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 The other
 libraries, radix and exactness prefixes in `string->number` (`.todo/889`),
-re-entrant continuations, tail calls through a procedure value (`.todo/899`) and among
-internal definitions (`.todo/898`). Each is refused by name where it
-can be.
+re-entrant continuations, tail calls through a procedure value (`.todo/899`). Each is
+refused by name where it can be.
 
 ## The SICP sample corpus harness (`.todo/828`)
 

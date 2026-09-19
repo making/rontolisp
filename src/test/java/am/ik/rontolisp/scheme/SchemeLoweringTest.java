@@ -290,6 +290,68 @@ class SchemeLoweringTest {
 	}
 
 	@Test
+	void internalProceduresWhoseTailCallsFormACycleAreOneGroupLambdaEachMemberCallsIt() {
+		// The group's lambda lives in a variable of the body, assigned where the first
+		// member stands; each member is a lambda entering it at its index.
+		assertThat(lowered("""
+				(define (f x)
+				  (define (ev? n) (if (= n 0) #t (od? (- n 1))))
+				  (define (od? n) (if (= n 0) #f (ev? (- n 1))))
+				  (ev? x))""")).isEqualTo("""
+				(DEFUN |f| (|x|) (LET ((|ev?| NIL) (|od?| NIL) (%SCM-G1 NIL)) \
+				(SETQ %SCM-G1 (LAMBDA (%SCM-W2 %SCM-C3) (LET ((%SCM-R4 NIL)) \
+				(TAGBODY %SCM-L7 (IF (= %SCM-W2 1) (GO %SCM-L6)) \
+				%SCM-L5 (LET ((|n| %SCM-C3)) (IF (= |n| 0) (SETQ %SCM-R4 T) \
+				(PROGN (SETQ %SCM-C3 (- |n| 1) %SCM-W2 1) (GO %SCM-L7)))) \
+				(GO %SCM-L8) \
+				%SCM-L6 (LET ((|n| %SCM-C3)) (IF (= |n| 0) (SETQ %SCM-R4 RONTOLISP::%SCHEME-FALSE) \
+				(PROGN (SETQ %SCM-C3 (- |n| 1) %SCM-W2 0) (GO %SCM-L7)))) \
+				%SCM-L8) %SCM-R4))) \
+				(SETQ |ev?| (LAMBDA (|n|) (FUNCALL %SCM-G1 0 |n|))) \
+				(SETQ |od?| (LAMBDA (|n|) (FUNCALL %SCM-G1 1 |n|))) \
+				(FUNCALL (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |ev?|) |x|)))""");
+		// letrec bindings the same way.
+		assertThat(lowered("""
+				(define (f x)
+				  (letrec ((a (lambda (n) (if (= n 0) 'a (b (- n 1)))))
+				           (b (lambda (n) (if (= n 0) 'b (a (- n 1))))))
+				    (a x)))""")).contains(
+				"(LET ((|a| NIL) (|b| NIL) (%SCM-G1 NIL)) (SETQ %SCM-G1 (LAMBDA (%SCM-W2 %SCM-C3)",
+				"(PROGN (SETQ %SCM-C3 (- |n| 1) %SCM-W2 1) (GO %SCM-L7))",
+				"(SETQ |a| (LAMBDA (|n|) (FUNCALL %SCM-G1 0 |n|))) (SETQ |b| (LAMBDA (|n|) (FUNCALL %SCM-G1 1 |n|)))");
+	}
+
+	@Test
+	void internalProceduresWithNoTailCycleLowerAsBeforeAndNumberNothing() {
+		// A cycle through a non-tail call is no group, and the probe numbers nothing.
+		assertThat(lowered("""
+				(define (f x)
+				  (define (g y) (h y))
+				  (define (h y) (if (null? y) 0 (+ 1 (g (cdr y)))))
+				  (let loop ((i 0)) (if (= i 3) (g x) (loop (+ i 1)))))""")).isEqualTo(
+				"""
+						(DEFUN |f| (|x|) (LET ((|g| NIL) (|h| NIL)) \
+						(SETQ |g| (LAMBDA (|y|) (FUNCALL (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |h|) |y|))) \
+						(SETQ |h| (LAMBDA (|y|) (IF (NULL |y|) 0 (+ 1 (FUNCALL (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |g|) (CDR |y|)))))) \
+						(BLOCK %SCM-B3 (LET ((|i| 0) (%SCM-R3 NIL)) (TAGBODY %SCM-L2 (IF (= |i| 3) \
+						(RETURN-FROM %SCM-B3 (FUNCALL (RONTOLISP::%SCHEME-ENSURE-PROCEDURE |g|) |x|)) \
+						(PROGN (SETQ |i| (+ |i| 1)) (GO %SCM-L2)))) %SCM-R3))))""");
+		// An assigned member, or one a define-values binds again, is no member.
+		assertThat(lowered("""
+				(define (f x)
+				  (define (a n) (if (= n 0) 'a (b (- n 1))))
+				  (define (b n) (if (= n 0) 'b (a (- n 1))))
+				  (set! b a)
+				  (a x))""")).doesNotContain("%SCM-G");
+		assertThat(lowered("""
+				(define (f x)
+				  (define (a n) (if (= n 0) 'a (b (- n 1))))
+				  (define (b n) (if (= n 0) 'b (a (- n 1))))
+				  (define-values (b) (values a))
+				  (a x))""")).doesNotContain("%SCM-G");
+	}
+
+	@Test
 	void internalDefinitionsAreLetrecStar() {
 		assertThat(lowered("(define (f x) (define a 1) (define (g y) (+ y a)) (g x))")).isEqualTo("""
 				(DEFUN |f| (|x|) (LET ((|a| NIL) (|g| NIL)) (SETQ |a| 1) (SETQ |g| (LAMBDA (|y|) (+ |y| |a|))) \
