@@ -57,6 +57,22 @@ Example (`hello.lisp`):
 3
 ```
 
+## Recursion Depth
+
+The compiled `main` runs the program on a thread of its own with a **16 MiB** stack, the
+size the interpreter runs on, so `-Xss` no longer decides how deep a program can recurse.
+The system property `rontolisp.stack` sets another size, in MiB (`0` leaves it to the
+JVM, that is to `-Xss`):
+
+```bash
+java -Drontolisp.stack=64 Hello
+java -Drontolisp.stack=64 -jar hello.jar
+```
+
+A program that uses `objc:` or `appkit:` stays on the launcher's first thread, which AppKit
+requires, and so does a class whose top level runs when it is initialized (one with a
+`rontolisp:jvm-export`).
+
 ## Optimize (Dead-Code Elimination)
 
 Compilation drops every method unreachable from `main`, along with any static field

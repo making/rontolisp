@@ -8,8 +8,9 @@
   are the top-level procedures of a file, the internal definitions of one body or the
   `lambda` bindings of one `letrec`; a tail call through a procedure value (an argument, a
   variable, `apply`) and any among the REPL's definitions uses stack there: a procedure
-  calling itself through an argument overflows the JVM's default stack about 1,800 calls
-  deep and the interpreter about 15,000 (`--stack` raises the interpreter's).
+  calling itself through an argument overflows about 16,000 calls deep compiled to the JVM
+  and about 15,000 in the interpreter, both on a 16 MiB stack (`-Drontolisp.stack` and
+  `--stack` raise them).
 - **`call/cc` is escape-only.** A continuation can be called while its `call/cc` is still
   running, once. There is no re-entry, so no generators or coroutines through it, and
   `dynamic-wind` runs its `before` exactly once.

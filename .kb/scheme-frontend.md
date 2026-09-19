@@ -1707,7 +1707,8 @@ The nil-initialized shape loses the integer typing of the loop variables: 4x.
 
 **Tail-call depth that is NOT a loop**, default stacks, largest passing depth (2026-09-19,
 binary search): a tail call through a procedure VALUE, `(define (g self n) (if (= n 0) 'done
-(self self (- n 1))))`, JVM (`java Prog`) 1,716-1,844 (17,677 under `-Xss16m`), wasm and
+(self self (- n 1))))`, JVM (`java Prog`) 1,716-1,844 (17,677 under `-Xss16m`; 16,201 since the
+compiled `main` runs on a 16 MiB worker, `.kb/interpreter-stack.md`), wasm and
 component 2,693-2,975 before `return_call` and 5,000,000 (the probe's ceiling) after
 (`.kb/wasm-tail-calls.md`), interpreter 15,234-15,497. Top-level `ev?`/`od?` was JVM 3,516
 / wasm 10,780 / interpreter 10,230 before the tail-call groups and is unbounded now, and
