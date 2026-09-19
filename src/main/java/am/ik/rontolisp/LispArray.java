@@ -334,6 +334,25 @@ public final class LispArray implements LispVal {
 	}
 
 	/**
+	 * Replaces this array with a DISPLACED view over {@code target} (the
+	 * {@code adjust-array ... :displaced-to} on an {@code :adjustable} array, which keeps
+	 * its identity): the view's own dimensions and fill pointer, owning no storage. The
+	 * element type becomes the target's, since a view answers the type it is a view of.
+	 * @param dimensions the view's dimension sizes (length = rank, {@code >= 0})
+	 * @param target the array supplying the storage
+	 * @param offset the row-major index into {@code target} where the view starts
+	 * @param fillPointer the view's fill pointer, or {@code -1} for none
+	 */
+	public void becomeDisplaced(int[] dimensions, LispVal target, int offset, int fillPointer) {
+		this.dimensions = dimensions;
+		this.data = NO_DATA;
+		this.fillPointer = fillPointer;
+		this.displacedTo = target;
+		this.displacedOffset = offset;
+		this.elementTypeCode = targetElementTypeCode(target);
+	}
+
+	/**
 	 * Returns the fill pointer, or {@code -1} when the array has none.
 	 * @return the fill pointer, or {@code -1}
 	 */

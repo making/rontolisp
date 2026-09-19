@@ -1559,35 +1559,75 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.ADJUST_ARRAY, new LispFunction(LispNames.ADJUST_ARRAY, args -> {
 			if (args.size() < 2) {
-				throw new LispEvalException(LispNames.ADJUST_ARRAY + " expects an array and new dimensions");
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.ADJUST_ARRAY + " expects an array and new dimensions");
 			}
 			// The slots the adjustment OPENS take the value's own element type zero, the
 			// same fill make-array gives an unsupplied element, unless an explicit
 			// :initial-element says otherwise.
 			LispVal init = arrayDefaultElement(args.get(0));
+			boolean initGiven = false;
+			LispVal initialContents = null;
 			LispVal fillPointerArg = null;
-			for (int i = 2; i + 1 < args.size(); i += 2) {
-				if (args.get(i) instanceof LispSymbol kw) {
-					switch (kw.name()) {
-						case LispNames.INITIAL_ELEMENT_KEYWORD -> init = args.get(i + 1);
-						case LispNames.FILL_POINTER_KEYWORD -> fillPointerArg = args.get(i + 1);
-						case LispNames.DISPLACED_TO_KEYWORD ->
-							throw new LispEvalException(LispNames.ADJUST_ARRAY + ": :displaced-to is not supported");
-						default -> {
-						}
+			LispVal displacedToArg = null;
+			LispVal displacedOffsetArg = null;
+			for (int i = 2; i < args.size(); i += 2) {
+				if (i + 1 >= args.size()) {
+					throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+							LispNames.ADJUST_ARRAY + ": odd keyword arguments");
+				}
+				if (!(args.get(i) instanceof LispSymbol kw)) {
+					throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+							LispNames.ADJUST_ARRAY + ": malformed keyword arguments");
+				}
+				LispVal value = args.get(i + 1);
+				switch (kw.name()) {
+					case LispNames.ELEMENT_TYPE_KEYWORD -> {
+						// Accepted and ignored: adjust-array never changes the element
+						// type
+						// (and CLHS only requires it to be type-equivalent when
+						// supplied).
 					}
+					case LispNames.INITIAL_ELEMENT_KEYWORD -> {
+						init = value;
+						initGiven = true;
+					}
+					case LispNames.INITIAL_CONTENTS_KEYWORD -> initialContents = value;
+					case LispNames.FILL_POINTER_KEYWORD -> fillPointerArg = value;
+					case LispNames.DISPLACED_TO_KEYWORD -> displacedToArg = value;
+					case LispNames.DISPLACED_INDEX_OFFSET_KEYWORD -> displacedOffsetArg = value;
+					default -> throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+							LispNames.ADJUST_ARRAY + ": unknown keyword " + kw.name());
 				}
 			}
-			if (args.get(0) instanceof LispString str) {
-				int[] strDims = parseDimensions(args.get(1));
-				if (strDims.length != 1) {
-					throw new LispEvalException(LispNames.ADJUST_ARRAY + ": a string is rank 1");
+			if (initGiven && initialContents != null) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.ADJUST_ARRAY + ": :initial-element and :initial-contents cannot both be given");
+			}
+			int[] dims = parseDimensions(args.get(1));
+			if (displacedToArg != null && !(displacedToArg instanceof LispNil)) {
+				// CLHS forbids :initial-element / :initial-contents beside :displaced-to:
+				// the view has no storage of its own to initialize.
+				if (initGiven || initialContents != null) {
+					throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, LispNames.ADJUST_ARRAY
+							+ ": :displaced-to cannot be combined with :initial-element/:initial-contents");
 				}
-				str.adjustCapacity(strDims[0], requireChar(LispNames.ADJUST_ARRAY, init).codePoint());
-				return str;
+				int offset = displacedOffsetArg == null ? 0 : (int) asLong(displacedOffsetArg);
+				int fp = adjustFillPointer(fillPointerArg, dims, valueHasFillPointer(args.get(0)),
+						valueFillPointer(args.get(0)));
+				return adjustArrayDisplaced(args.get(0), dims, offset, fp, displacedToArg);
+			}
+			if (displacedOffsetArg != null && !(displacedOffsetArg instanceof LispNil)) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.ADJUST_ARRAY + ": :displaced-index-offset requires :displaced-to");
+			}
+			int fp = adjustFillPointer(fillPointerArg, dims, valueHasFillPointer(args.get(0)),
+					valueFillPointer(args.get(0)));
+			if (args.get(0) instanceof LispString str) {
+				return adjustString(str, dims, init, initGiven, initialContents, fp);
 			}
 			LispArray array = requireGeneralArray(LispNames.ADJUST_ARRAY, args.get(0));
-			return adjustArray(array, parseDimensions(args.get(1)), init, fillPointerArg);
+			return adjustArray(array, dims, init, initGiven, initialContents, fp);
 		}));
 		env.defineFunction(LispNames.ARRAY_ALIKE, new LispFunction(LispNames.ARRAY_ALIKE, args -> {
 			requireArgCount(LispNames.ARRAY_ALIKE, args, 2);
@@ -1705,10 +1745,11 @@ public final class Environment implements Scope {
 	}
 
 	// The shared adjust-array core: build the resized copy (preserving the elements at
-	// common subscripts), then either adjust the array in place (:adjustable, returning
-	// it) or return the fresh copy. Matches LispMacroExpander.expandAdjustArray on the
-	// compile path.
-	private static LispVal adjustArray(LispArray array, int[] newDims, LispVal init, @Nullable LispVal fillPointerArg) {
+	// common subscripts, or overwriting them wholesale from :initial-contents), then
+	// either adjust the array in place (:adjustable, returning it) or return the fresh
+	// copy. Matches LispMacroExpander.expandAdjustArray on the compile path.
+	private static LispVal adjustArray(LispArray array, int[] newDims, LispVal init, boolean initGiven,
+			@Nullable LispVal initialContents, int fillPointer) {
 		// A displaced argument un-displaces first (SBCL 2.2.9): its current view
 		// contents become its own storage and the displacement drops, in place, before
 		// the rest of the adjustment runs -- matches the compile path's expansion,
@@ -1718,57 +1759,172 @@ public final class Environment implements Scope {
 		array.undisplace();
 		int[] oldDims = array.dimensions();
 		if (newDims.length != oldDims.length) {
-			throw new LispEvalException(LispNames.ADJUST_ARRAY + ": rank mismatch");
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+					LispNames.ADJUST_ARRAY + ": rank mismatch");
 		}
 		int total = 1;
 		for (int d : newDims) {
 			total *= d;
 		}
-		int fillPointer = -1;
-		if (fillPointerArg != null && !(fillPointerArg instanceof LispNil)) {
-			if (newDims.length != 1) {
-				throw new LispEvalException(LispNames.ADJUST_ARRAY + ": :fill-pointer requires a rank-1 array");
-			}
-			fillPointer = (fillPointerArg instanceof LispInteger n) ? (int) n.value() : newDims[0];
-		}
-		else if (array.hasFillPointer()) {
-			fillPointer = array.fillPointer();
-		}
-		if (fillPointer > total || (fillPointer < 0 && fillPointer != -1)) {
-			throw new LispEvalException(LispNames.ADJUST_ARRAY + ": :fill-pointer out of range");
-		}
 		LispVal[] data = new LispVal[total];
 		for (int i = 0; i < total; i++) {
 			data[i] = init;
 		}
-		LispArray resized = new LispArray(newDims, data, fillPointer, array.adjustable(), array.elementTypeCode());
-		// Copy the elements at the subscripts valid in BOTH shapes (per-subscript, not
-		// flat: resizing a matrix keeps (i, j) at (i, j)).
-		int[] subs = new int[newDims.length];
-		for (int flat = 0; flat < total; flat++) {
-			int rem = flat;
-			boolean inOld = true;
-			int oldFlat = 0;
-			for (int k = newDims.length - 1; k >= 0; k--) {
-				subs[k] = rem % newDims[k];
-				rem /= newDims[k];
-			}
-			for (int k = 0; k < newDims.length; k++) {
-				if (subs[k] >= oldDims[k]) {
-					inOld = false;
-					break;
+		// :initial-contents fills the WHOLE result (like make-array), so the overlap copy
+		// below is skipped; otherwise the elements at common subscripts are retained.
+		if (initialContents != null) {
+			fillInitialContents(initialContents, newDims, 0, data, 0);
+		}
+		else {
+			// Copy the elements at the subscripts valid in BOTH shapes (per-subscript,
+			// not flat: resizing a matrix keeps (i, j) at (i, j)).
+			int[] subs = new int[newDims.length];
+			for (int flat = 0; flat < total; flat++) {
+				int rem = flat;
+				boolean inOld = true;
+				int oldFlat = 0;
+				for (int k = newDims.length - 1; k >= 0; k--) {
+					subs[k] = rem % newDims[k];
+					rem /= newDims[k];
 				}
-				oldFlat = oldFlat * oldDims[k] + subs[k];
-			}
-			if (inOld) {
-				data[flat] = array.readFlat(oldFlat);
+				for (int k = 0; k < newDims.length; k++) {
+					if (subs[k] >= oldDims[k]) {
+						inOld = false;
+						break;
+					}
+					oldFlat = oldFlat * oldDims[k] + subs[k];
+				}
+				if (inOld) {
+					data[flat] = array.readFlat(oldFlat);
+				}
 			}
 		}
+		LispArray resized = new LispArray(newDims, data, fillPointer, array.adjustable(), array.elementTypeCode());
 		if (array.adjustable()) {
 			array.become(resized);
 			return array;
 		}
 		return resized;
+	}
+
+	// The adjust-array :fill-pointer rule. An explicit :fill-pointer (nil is treated as
+	// "carry the old one over", the behaviour the ANSI fp tests expect) wins; otherwise
+	// the adjusted array inherits the original's fill pointer, range-checked against the
+	// new dimension so shrinking below it errors. A rank-1 array is the only shape a
+	// fill pointer is legal on.
+	private static int adjustFillPointer(@Nullable LispVal fillPointerArg, int[] dims, boolean hasFillPointer,
+			int existingFillPointer) {
+		if (fillPointerArg != null && !(fillPointerArg instanceof LispNil)) {
+			if (dims.length != 1) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.ADJUST_ARRAY + ": :fill-pointer requires a rank-1 array");
+			}
+			int fp = fillPointerArg instanceof LispInteger n ? (int) n.value() : dims[0];
+			if (fp < 0 || fp > dims[0]) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.ADJUST_ARRAY + ": :fill-pointer out of range");
+			}
+			return fp;
+		}
+		if (hasFillPointer) {
+			if (dims.length != 1) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.ADJUST_ARRAY + ": :fill-pointer requires a rank-1 array");
+			}
+			if (existingFillPointer > dims[0]) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.ADJUST_ARRAY + ": :fill-pointer out of range");
+			}
+			return existingFillPointer;
+		}
+		return -1;
+	}
+
+	// The :displaced-to half of adjust-array: build the displaced VIEW of `target`, or
+	// turn the source (when :adjustable) into one in place. The target decides the shape
+	// -- a string target is a string view -- exactly as make-array does.
+	private static LispVal adjustArrayDisplaced(LispVal arrayVal, int[] dims, int offset, int fillPointer,
+			LispVal target) {
+		int total = 1;
+		for (int d : dims) {
+			total *= d;
+		}
+		if (target instanceof LispString targetString) {
+			if (dims.length != 1) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.ADJUST_ARRAY + ": a string :displaced-to target needs a rank-1 view");
+			}
+			if (offset < 0 || total + offset > targetString.capacity()) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.ADJUST_ARRAY + ": :displaced-to string is too small for the requested view");
+			}
+			if (arrayVal instanceof LispString str && str.adjustable()) {
+				str.becomeDisplaced(targetString, offset, total, fillPointer);
+				return str;
+			}
+			return new LispString(targetString, offset, total, fillPointer,
+					arrayVal instanceof LispString s && s.adjustable());
+		}
+		int targetTotal = switch (target) {
+			case LispIntVector iv -> iv.length();
+			case LispFloatArray fa -> fa.totalSize();
+			default -> requireArray(LispNames.ADJUST_ARRAY, target).totalSize();
+		};
+		if (offset < 0 || total + offset > targetTotal) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+					LispNames.ADJUST_ARRAY + ": :displaced-to array is too small for the requested view");
+		}
+		if (arrayVal instanceof LispArray array && array.adjustable()) {
+			array.becomeDisplaced(dims, target, offset, fillPointer);
+			return array;
+		}
+		return new LispArray(dims, target, offset, fillPointer, arrayVal instanceof LispArray a && a.adjustable());
+	}
+
+	// The string half of adjust-array: build (or, for an adjustable string, resize in
+	// place) the character array, filling it from :initial-contents or retaining the
+	// original's characters at the overlapping positions.
+	private static LispVal adjustString(LispString str, int[] dims, LispVal init, boolean initGiven,
+			@Nullable LispVal initialContents, int fillPointer) {
+		int newCap = dims[0];
+		int fillChar = initGiven ? requireChar(LispNames.ADJUST_ARRAY, init).codePoint()
+				: ArrayElementTypes.DEFAULT_CHARACTER;
+		int[] cp = new int[newCap];
+		java.util.Arrays.fill(cp, fillChar);
+		if (initialContents != null) {
+			LispVal[] tmp = new LispVal[newCap];
+			fillInitialContents(initialContents, new int[] { newCap }, 0, tmp, 0);
+			for (int i = 0; i < newCap; i++) {
+				cp[i] = requireChar(LispNames.ADJUST_ARRAY, tmp[i]).codePoint();
+			}
+		}
+		else {
+			int oldCap = str.capacity();
+			for (int i = 0; i < newCap && i < oldCap; i++) {
+				cp[i] = str.charAt(i);
+			}
+		}
+		if (str.adjustable()) {
+			str.adoptContent(cp, fillPointer);
+			return str;
+		}
+		return new LispString(new String(cp, 0, cp.length), fillPointer, false);
+	}
+
+	private static boolean valueHasFillPointer(LispVal value) {
+		return switch (value) {
+			case LispString s -> s.fillPointer() >= 0;
+			case LispArray a -> a.hasFillPointer();
+			default -> false;
+		};
+	}
+
+	private static int valueFillPointer(LispVal value) {
+		return switch (value) {
+			case LispString s -> s.fillPointer();
+			case LispArray a -> a.fillPointer();
+			default -> -1;
+		};
 	}
 
 	private static int vectorPush(String fn, LispArray array, LispVal value) {
@@ -2015,6 +2171,12 @@ public final class Environment implements Scope {
 	// (possibly nested) sequence -- list, string, or vector -- whose nesting depth
 	// matches the rank, each level's length matching the corresponding dimension.
 	private static void fillInitialContents(LispVal contents, int[] dims, int dimIndex, LispVal[] data, int offset) {
+		if (dims.length == 0) {
+			// A RANK-0 array's :initial-contents is the single element itself, not a
+			// sequence (CLHS 15.1.1).
+			data[offset] = contents;
+			return;
+		}
 		List<LispVal> items = switch (contents) {
 			case LispNil ignored -> List.of();
 			case LispCons cons -> cons.toList();

@@ -19042,6 +19042,28 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void adjustArrayInitialContentsAndDisplacedTo() {
+		// :initial-contents fills the WHOLE result (like make-array); :displaced-to
+		// builds
+		// a displaced view over the target (a NON-adjustable source is left alone and a
+		// string source answers a string).
+		assertThat(evalMulti("""
+				(setq v (make-array 5 :initial-contents (list 'a 'b 'c 'd 'e)))
+				(adjust-array v 4 :initial-contents (list 'w 'x 'y 'z))
+				""").print()).isEqualTo("#(W X Y Z)");
+		assertThat(evalMulti("""
+				(setq a0 (make-array 7 :initial-contents (list 1 2 3 4 5 6 7)))
+				(setq a1 (make-array 5 :initial-contents (list 'a 'b 'c 'd 'e)))
+				(setq a2 (adjust-array a1 4 :displaced-to a0))
+				(list a2 (eq (array-displacement a2) a0) (array-dimensions a1))
+				""").print()).isEqualTo("(#(1 2 3 4) T (5))");
+		assertThat(evalMulti("""
+				(setq s (make-array 3 :element-type 'character :adjustable t :initial-contents "abc"))
+				(adjust-array s 4 :initial-contents "wxyz")
+				""").print()).isEqualTo("\"wxyz\"");
+	}
+
+	@Test
 	void displacedArrayAliasesTheTargetStorage() {
 		assertThat(evalMulti("""
 				(setq base (make-array 6 :initial-element 0))
