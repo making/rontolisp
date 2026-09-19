@@ -29,6 +29,7 @@ import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.CorpusFixtures;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -22136,19 +22137,24 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalUiopOsWorkingDirectoryAndTheWindowsShortcutFamily() {
+	void evalUiopOsWorkingDirectoryAndTheWindowsShortcutFamily() throws Exception {
 		// getcwd is real where the host has a working directory (here: user.dir);
 		// chdir signals on every backend, because none can move one. The two octet
-		// readers are real stream work; the two .lnk parsers name the primitive they
-		// would need -- file-position on a binary stream, which is nil here.
+		// readers are real stream work; the two .lnk parsers are upstream's bodies and
+		// seek a binary file stream, which the interpreter supports, so over the
+		// fixture they answer upstream's structure. parse-file-location-info reads its
+		// FileLocationInfo at the stream's CURRENT position, so the probe seeks to the
+		// offset parse-windows-shortcut reaches before delegating to it.
+		String lnk = lnkFixturePathString();
 		assertThat(evalMulti("(pathnamep (uiop:getcwd))").print()).isEqualTo("T");
 		assertThat(evalMulti("""
-				(list (handler-case (uiop:chdir "/tmp") (uiop:not-implemented-error () :chdir))
-				      (handler-case (uiop:parse-windows-shortcut "x.lnk")
-				        (uiop:not-implemented-error () :parse-windows-shortcut))
-				      (handler-case (uiop:parse-file-location-info nil)
-				        (uiop:not-implemented-error () :parse-file-location-info)))
-				""").print()).isEqualTo("(:CHDIR :PARSE-WINDOWS-SHORTCUT :PARSE-FILE-LOCATION-INFO)");
+				(let ((lnk "%s"))
+				  (list (handler-case (uiop:chdir "/tmp") (uiop:not-implemented-error () :chdir))
+				        (uiop:parse-windows-shortcut lnk)
+				        (with-open-file (in lnk :element-type '(unsigned-byte 8))
+				          (file-position in 76)
+				          (uiop:parse-file-location-info in))))
+				""".formatted(lnk)).print()).isEqualTo("(:CHDIR \"app.exe\" \"app.exe\")");
 		assertThat(evalMulti("""
 				(asdf:load-system "flexi-streams")
 				(let* ((v (make-array 7 :element-type '(unsigned-byte 8)
@@ -22156,6 +22162,10 @@ class LispEvaluatorTest {
 				       (s (flex:make-in-memory-input-stream v)))
 				  (list (uiop:read-little-endian s) (uiop:read-null-terminated-string s)))
 				""").print()).isEqualTo("(513 \"hi\")");
+	}
+
+	private static String lnkFixturePathString() throws Exception {
+		return CorpusFixtures.lnkFixturePath().toString().replace("\\", "\\\\");
 	}
 
 	@Test

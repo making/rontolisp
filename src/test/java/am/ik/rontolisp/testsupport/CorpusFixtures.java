@@ -78,6 +78,46 @@ public final class CorpusFixtures {
 	}
 
 	/**
+	 * The classpath resource holding the {@code .lnk} fixture the uiop/os parsers
+	 * consume.
+	 */
+	private static final String LNK_FIXTURE_RESOURCE = "/lnk/sample.lnk";
+
+	/** The file name the {@code uiop-os-host-identity} ci-spec case parses. */
+	public static final String LNK_FIXTURE_NAME = "x.lnk";
+
+	/**
+	 * The filesystem path of the {@code .lnk} fixture resource, for a unit test that
+	 * passes a pathname straight into {@code uiop:parse-windows-shortcut}.
+	 * @return the fixture's filesystem path
+	 * @throws IOException if the resource cannot be located on the filesystem
+	 */
+	public static Path lnkFixturePath() throws IOException {
+		var url = CorpusFixtures.class.getResource(LNK_FIXTURE_RESOURCE);
+		if (url == null) {
+			throw new IOException("missing .lnk fixture resource " + LNK_FIXTURE_RESOURCE);
+		}
+		try {
+			return Path.of(url.toURI());
+		}
+		catch (java.net.URISyntaxException e) {
+			throw new IOException("bad fixture URI " + url, e);
+		}
+	}
+
+	/**
+	 * Stages the {@code .lnk} fixture under the directory the corpus program runs in,
+	 * named {@link #LNK_FIXTURE_NAME} so the {@code uiop-os-host-identity} case can parse
+	 * it by that relative name. Idempotent.
+	 * @param runDir the working directory the corpus program runs with
+	 * @throws IOException if the fixture cannot be staged
+	 */
+	public static void stageLnkFixture(Path runDir) throws IOException {
+		Files.copy(lnkFixturePath(), runDir.resolve(LNK_FIXTURE_NAME),
+				java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+	}
+
+	/**
 	 * Records the top-level entry names already present under {@code runDir}, to pass to
 	 * {@link #removeNewEntries} after an in-process corpus run.
 	 * @param runDir the directory the corpus program is about to run in

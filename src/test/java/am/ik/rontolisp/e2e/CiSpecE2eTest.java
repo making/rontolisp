@@ -241,6 +241,9 @@ class CiSpecE2eTest {
 		// .todo/257. Every leg of this driver runs with @TempDir as its working
 		// directory.
 		am.ik.rontolisp.testsupport.CorpusFixtures.stageWildPathnameTree(workDir);
+		// The `uiop-os-host-identity` case parses a .lnk shortcut, which no backend
+		// can build at run time -- the same reason the wild-pathname tree is staged.
+		am.ik.rontolisp.testsupport.CorpusFixtures.stageLnkFixture(workDir);
 
 		// The SCALAR leg of a backend records its compiled artifact here and the SIMD
 		// leg of the SAME backend reads it back, to assert the flag changed what was
