@@ -185,7 +185,9 @@ publish in a non-tail position -- an argument, a `let` initform, a form before t
   operator is byte-identical (13,220 B of class, 5,479 B of wasm). With one appended, class
   14,106 -> 14,128 B (+22), wasm 7,203 -> 7,331 B (+128); JVM 167-200 -> 178-209 ms (noise),
   wasm 703-715 -> 419-425 ms -- FASTER, the `let`-temporary tail lands on the unboxed local
-  path the bare `(+ ...)` branch did not. The mv-heavy probe programs grow 1.2-1.5%
+  path the bare `(+ ...)` branch did not. Since the generic helpers' i31 head
+  (.kb/wasm-int-fusion.md, same day) the bare tail runs 432-548 ms and the settled one
+  460-536 ms: no difference left. The mv-heavy probe programs grow 1.2-1.5%
   (474,800 -> 480,681 B of class, 348,373 -> 353,587 B of wasm).
 
 ## The interpreter's value-count register

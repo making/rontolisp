@@ -1838,6 +1838,54 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void theGenericArithmeticHelpersAnswerEveryTierThroughTheirI31Head() throws Exception {
+		// A single + - * over plain boxed operands (parameters, call results) is not
+		// fused (.kb/wasm-int-fusion.md) and calls _rat_add/_rat_sub/_rat_mul. Outside
+		// --optimize=size those helpers open with an i31 x i31 head that answers in i64
+		// and boxes through _int_new; the head must not change any answer at a tier
+		// boundary: i31 overflow into TYPE_BIGNUM, i64 into the limb tier, a ratio, a
+		// float. Expected output: SBCL.
+		String program = """
+				(defun add (a b) (+ a b))
+				(defun sub (a b) (- a b))
+				(defun mul (a b) (* a b))
+				(defun fib (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+				(print (add 1073741823 1))
+				(print (sub -1073741824 1))
+				(print (add -1073741824 -1073741824))
+				(print (sub 1073741823 -1073741824))
+				(print (mul -1073741824 -1073741824))
+				(print (mul 1073741823 -1073741824))
+				(print (add 3 -3))
+				(print (sub (add 1073741823 1) 1))
+				(print (mul (mul 1073741823 1073741823) 1073741823))
+				(print (add 1/2 1))
+				(print (mul 2 1.5))
+				(print (sub 7 9223372036854775807))
+				(print (fib 25))
+				""";
+		List<LispVal> parsed = LispReader.readAllFromString(program);
+		String expected = """
+				1073741824
+				-1073741825
+				-2147483648
+				2147483647
+				1152921504606846976
+				-1152921503533105152
+				0
+				1073741823
+				1237940035826615764299808767
+				3/2
+				3.0
+				-9223372036854775800
+				75025""";
+		for (OptimizeLevel level : OptimizeLevel.values()) {
+			byte[] module = WasmLispCompiler.builder().optimize(level).build().compile(parsed);
+			assertThat(runModule(module, "i31-head-" + level + ".wasm")).as("at %s", level).isEqualTo(expected);
+		}
+	}
+
+	@Test
 	void declaredArrayTypesEmitSingleArmAccessorsWithoutChangingResults() throws Exception {
 		// Declaration-driven array emission (.kb/declarations-type-checks.md): a rank-1
 		// aref/%aset/length site whose array representation is pinned down -- by a

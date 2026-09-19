@@ -73,7 +73,8 @@ through `_int_new`.
   `WasmLetCompiler`'s unboxed-local eligibility, ONE switch on purpose -- a raw local with fusion
   off bails into its boxed shadow at every assignment, slower AND larger than either end
   (`.kb/optimize-dead-code-elimination.md`).
-- A single fusable op with neither a raw-reading leaf nor a literal operand.
+- A single fusable op with neither a raw-reading leaf nor a literal operand. It calls
+  `_rat_add`/`_rat_sub`/`_rat_mul`, whose i31 head (below) is what makes it fast.
 - More than **64 ops or 32 expression leaves** (the site emits the tree twice;
   `.kb/wasm-function-body-size.md`).
 - A node whose immediate argument is a literal double (the `hasDoubleLiteral` f64 path keeps
@@ -82,6 +83,30 @@ through `_int_new`.
   `rontolisp:async-defun` -- the name never enters `Ctx.inlinableDefuns` because a call must
   answer the `TYPE_FUTURE` its state machine builds (`.kb/async-await.md`).
 - Division (`/`) is never fused (exact ratios).
+
+## The generic helpers' i31 head (the unfused single op)
+
+**Invariant: `_rat_add`/`_rat_sub`/`_rat_mul` answer two i31 operands exactly as their
+`_big_*` path would, before any dispatch.** Outside `--optimize=size`
+(`WasmRatioRuntimeBuilder.buildRatBinaryBody(..., i31Head)`) each opens with
+`if (a is i31 & b is i31) return _int_new(a op b)` in i64 -- exact, `|a|,|b| <= 2^30`, and
+`_int_new` picks the narrowest tier. Without it an unfused `(+ a b)` over plain boxed
+operands (every recursive function's `(+ (f ...) (f ...))` tail, a `+` of two parameters)
+paid `_rat_add -> _big_add -> _int_val x2 -> _int_new`.
+- Measured 2026-09-19 (x86-64, wasmtime 47, 20 x fib 30 = 32M calls, alternating runs):
+  bare `(if (< n 2) n (+ (fib ...) (fib ...)))` 683-852 -> 432-548 ms, now level with the
+  let-bound tail (.kb/multiple-values.md "Cost", 419-485 ms) -- the 40% gap between the
+  two shapes was this dispatch, not the `if`. A head in `_big_add` alone (hand-patched
+  module) reached only 588-594 ms: the `_rat_add` hop is the other half. `bench-report`
+  `fib` (fib 34) 184-226 -> 134-169 ms; the other nine bench programs within noise.
+- Size: +38..+112 B per module at `default` (fib 5,050 -> 5,160; zlib 106,624 -> 106,726);
+  `--optimize=size` and a program with no generic `+ - *` (`hello_world`) byte-identical.
+  The size level keeps the dispatch-only body so the type-test fold can still reduce
+  `_rat_add` to a pure forwarder of `_big_add` in an integer-only module
+  (.kb/wasm-ref-type-fold.md "What follows it"); with the head it never is one.
+- Tests: `WasmRatioRuntimeBuilderTest`,
+  `WasmLispCompilerIntegrationTest.theGenericArithmeticHelpersAnswerEveryTierThroughTheirI31Head`
+  (tier boundaries at every level, SBCL output).
 
 ## Mechanics
 

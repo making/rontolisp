@@ -170,13 +170,39 @@ final class WasmRatioRuntimeBuilder {
 	// re-normalizes through _int_new, so an i31 overflow promotes to a bignum box and
 	// a bignum result that fits demotes back), exact rational path otherwise.
 	// Arithmetic past the i64 range wraps.
-	static byte[] buildRatBinaryBody(int i32Opcode, int f64Opcode) {
+	//
+	// i31Head (every level but --optimize=size) opens the body with the two-i31 case
+	// answered inline: two i31s add, subtract or multiply exactly in i64 (|a|,|b| <=
+	// 2^30),
+	// and _int_new boxes the result in its narrowest tier -- what the _big_* path below
+	// answers for the same operands, minus its two _int_val calls and the dispatch. This
+	// is the path of every unfused (+ a b) over plain boxed operands (a recursive
+	// function's `(+ (f ...) (f ...))` tail): measured 2026-09-19, fib 30 x 20 on
+	// wasmtime 47 went 680-740 -> 415-480 ms (.kb/wasm-int-fusion.md). The size level
+	// keeps the dispatch-only body, which the type-test fold can still reduce to a pure
+	// forwarder of _big_* in an integer-only module (.kb/wasm-ref-type-fold.md).
+	static byte[] buildRatBinaryBody(int i32Opcode, int f64Opcode, boolean i31Head) {
 		int i64Opcode = i32Opcode == Instruction.I32_ADD ? Instruction.I64_ADD
 				: i32Opcode == Instruction.I32_SUB ? Instruction.I64_SUB : Instruction.I64_MUL;
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		w.write(0); // no extra locals
+
+		if (i31Head) {
+			getLocal(w, 0);
+			refTestI31(w);
+			getLocal(w, 1);
+			refTestI31(w);
+			w.write(Instruction.I32_AND);
+			w.write(Instruction.IF, 0x40);
+			emitI31ToI64(w, 0);
+			emitI31ToI64(w, 1);
+			w.write(i64Opcode);
+			call(w, WasmLispCompiler.FUNC_INT_NEW);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+		}
 
 		// Float fast path: if either operand is a float, compute in f64 (float contagion)
 		// and box the result. Mirrors the JVM _add/_sub/_mul Double prologue.
@@ -987,6 +1013,15 @@ final class WasmRatioRuntimeBuilder {
 	private static void call(WasmWriter w, int funcIndex) {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(funcIndex);
+	}
+
+	// Emits local[slot], known to be an i31, as its sign-extended i64 value.
+	private static void emitI31ToI64(WasmWriter w, int slot) {
+		getLocal(w, slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.I64_EXTEND_S_I32);
 	}
 
 	private static void refTestI31(WasmWriter w) {

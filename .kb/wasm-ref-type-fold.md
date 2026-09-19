@@ -83,7 +83,9 @@ Catch labels are relative to the try_table's ENCLOSING context, not its own labe
   body is `local.get 0..n-1; call g; end` with `g` of the same canonical type is a hop --
   every `call` of it is rewritten to `g`, chains to their last link -- and the shaker drops
   the stub. It exists because the fold leaves exactly such stubs of the dispatching
-  helpers (`_rat_add` -> `_big_add`, `_rat_cmp` -> `_big_cmp`).
+  helpers (`_rat_add` -> `_big_add` under `--optimize=size` only -- at `default` the
+  i31 head keeps `_rat_add` a real function, .kb/wasm-int-fusion.md; `_rat_cmp` ->
+  `_big_cmp`).
 - **`WasmPeephole.rewrite`** (same call, behind the redirect): the adjacent-instruction
   peepholes, which also collect the fold's own `i32.const; drop` / `ref.null; drop` debris
   (`.kb/optimize-dead-code-elimination.md`, "The adjacent-instruction peepholes"). The
