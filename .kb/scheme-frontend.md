@@ -1522,9 +1522,28 @@ at 100,000 (`StackOverflowError` / `call stack exhausted`).
 
 **Size.** `(display "hello, world")` is 1,594 B of class and 498 B of wasm: `display` of a
 string, character or integer LITERAL lowers to `write-string` / `write-char` / `princ`.
-The generic printer (`%scheme-print`) costs 58.8 KB of class and 7.1 KB of wasm. It writes
-a symbol's spelling character by character instead of building it: with
-`(coerce list 'string)` in that path the same program was 70.2 KB / 17.5 KB.
+The generic printer (`%scheme-print`) costs 43.1 KB of class and 8.4 KB of wasm
+(`(define x (list 1 2)) (display x)`, 2026-09-19). It writes a symbol's spelling character by
+character instead of building it: with `(coerce list 'string)` in that path the same program
+was 70.2 KB / 17.5 KB.
+
+**Where the JVM bytes went (2026-09-19, `.todo/894`).** The printer measured 74,048 B of class
+against 8,505 B of wasm, and the old per-piece reading (`aref` 14 KB, a `do` loop 9 KB, `char`
+7 KB, `write-char` 6 KB) was marginal cost inside that program, not the pieces': alone, each is
+6.8 / 7.3 / 8.2 / 2.4 KB over an empty program, the shared generic-arithmetic and prin1 helpers
+counted once. 31 KB of the 74 was the JVM eval runtime (`_eval`, `_invoke_v`, `_store`, the
+registered wrapper lambdas), switched on by the funcall in `%stream-target` -- a prelude entry
+rooted because DEAD `scheme.lisp` helpers spell `with-output-to-string` / `*error-output*`
+(`.kb/library-defun-pruning.md`, synthesized-call entries). Both halves are fixed at their
+source: the entry is rooted by live forms only, and on the JVM a computed funcall no longer
+forces the runtime and an apply gets the apply tier (`.kb/eval-runtime.md`). Class bytes
+before -> after, outputs identical: `(display x)` 74,048 -> 43,141; `examples/scheme`
+collatz 101,066 -> 71,056, queens 90,597 -> 67,381, differentiation 112,884 -> 96,530,
+huffman 113,542 -> 97,093, streams 99,692 -> 83,814, evaluator 121,905 -> 106,169. Wasm moved
+only for the printer (-100 B, the resolver); a no-printer program (`hello.scm`) and
+`size-report/programs/hello_world` / `pi_approx` are byte-identical. What is left of the 43 KB
+is the printer's own defuns (`%scheme-print-flonum` alone 3.4 KB of code) and the runtime
+`princ` renderers its fallback arm reaches.
 
 **Cycles in `write`/`display`** (R7RS: must terminate; label what a cycle closes on,
 `#0=(1 2 . #0#)`). `(define x (list 1 2)) (display x)`, class / wasm bytes, and writing a

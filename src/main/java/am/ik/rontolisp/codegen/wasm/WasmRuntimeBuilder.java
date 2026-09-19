@@ -308,6 +308,111 @@ final class WasmRuntimeBuilder {
 	}
 
 	/**
+	 * Builds the {@code _eql_tail} body ({@code FUNC_EQL_TAIL}): what {@code eql} -- and
+	 * so {@code eq}, the same predicate ({@code .kb/eq-numbers.md}) -- answers for two
+	 * values the call site has already found NOT {@code ref.eq}, with a first operand
+	 * that is neither a symbol/string nor an i31 (the site settles those two inline,
+	 * {@code WasmEmitHelper.emitEqlComparison}). Takes two (ref null eq) args (locals 0
+	 * and 1), returns i32. Floats compare by bit pattern (or both NaN), characters by
+	 * code point, boxed or limb integers and ratios by value, complexes part-wise through
+	 * {@code _equal}'s eql base case; anything else is 0. Floats come first, as the boxed
+	 * value a loop most often compares. One function rather than the value chain inlined
+	 * at each site; in a module with none of these types the fold leaves it a constant,
+	 * and {@link am.ik.wasm.WasmPeephole} then removes its calls.
+	 * @return the function body
+	 */
+	static byte[] buildEqlTailBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // 0 extra locals
+		// both floats -> equal bit patterns or both NaN (-0.0 and 0.0 are not eql)
+		refTest(w, 0, WasmLispCompiler.TYPE_FLOAT);
+		refTest(w, 1, WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		emitFloatBitsEqual(w);
+		w.write(Instruction.ELSE);
+		// both characters -> code points equal
+		refTest(w, 0, WasmLispCompiler.TYPE_CHAR);
+		refTest(w, 1, WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		charField(w, 0);
+		charField(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.ELSE);
+		// both boxed integers -> i64 fields equal
+		refTest(w, 0, WasmLispCompiler.TYPE_BIGNUM);
+		refTest(w, 1, WasmLispCompiler.TYPE_BIGNUM);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		bignumField(w, 0);
+		bignumField(w, 1);
+		w.write(Instruction.I64_EQ);
+		w.write(Instruction.ELSE);
+		// both limb integers -> _big_eq (canonical limbs)
+		refTest(w, 0, WasmLispCompiler.TYPE_BIGINT);
+		refTest(w, 1, WasmLispCompiler.TYPE_BIGINT);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, 0);
+		getLocal(w, 1);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_EQ);
+		w.write(Instruction.ELSE);
+		// both ratios -> numerators and denominators equal
+		refTest(w, 0, WasmLispCompiler.TYPE_RATIO);
+		refTest(w, 1, WasmLispCompiler.TYPE_RATIO);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		ratioComponent(w, 0, WasmLispCompiler.FUNC_RAT_NUM);
+		ratioComponent(w, 1, WasmLispCompiler.FUNC_RAT_NUM);
+		w.write(Instruction.I32_EQ);
+		ratioComponent(w, 0, WasmLispCompiler.FUNC_RAT_DEN);
+		ratioComponent(w, 1, WasmLispCompiler.FUNC_RAT_DEN);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.ELSE);
+		// both complexes -> _equal(re, re) && _equal(im, im)
+		refTest(w, 0, WasmLispCompiler.TYPE_COMPLEX);
+		refTest(w, 1, WasmLispCompiler.TYPE_COMPLEX);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		complexField(w, 0, 0);
+		complexField(w, 1, 0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQUAL);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		complexField(w, 0, 1);
+		complexField(w, 1, 1);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQUAL);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		// anything else (a cons, an instance, a closure, nil) is identity-only
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END); // end complex if
+		w.write(Instruction.END); // end ratio if
+		w.write(Instruction.END); // end limb-integer if
+		w.write(Instruction.END); // end bignum if
+		w.write(Instruction.END); // end char if
+		w.write(Instruction.END); // end float if
+		w.write(Instruction.END); // end function
+		return body.toByteArray();
+	}
+
+	/**
 	 * Opens the both-instances arm of {@code _equal} (nothing when there is no instance
 	 * type): same layout record and every slot recursively equal. The caller closes the
 	 * {@code if} after the remaining eql arms, so this leaves the ELSE open.

@@ -13,8 +13,8 @@ page.
 | `mod` | `(mod 10 3)`, `(mod -13 4)` | `1`, `3` (result takes the sign of the divisor) |
 | `rem` | `(rem 13 4)`, `(rem -13 4)` | `1`, `-1` (result takes the sign of the dividend) |
 | `=` | `(= 1 1)`, `(= 3 3 3)` | `t` (variadic) |
-| `eq` | `(eq 'foo 'foo)`, `(eq 1.5 1.5)` | `t`, `nil` (object identity: symbols and small integers compare equal, but floats and ratios are distinct objects, so never `eq`; reference identity for cons cells) |
-| `eql` | `(eql 1.5 1.5)`, `(eql 3 3.0)` | `t`, `nil` (like `eq`, but numbers of the same type and value are equal — e.g. floats and ratios) |
+| `eq` | `(eq 'foo 'foo)`, `(eq 1.5 1.5)` | `t`, `t` (object identity for symbols and cons cells; numbers and characters compare by type and value, exactly as `eql`) |
+| `eql` | `(eql 1.5 1.5)`, `(eql 3 3.0)` | `t`, `nil` (numbers of the same type and value are equal — e.g. floats and ratios; the same predicate as `eq`) |
 | `equal` | `(equal '(1 2 (3)) '(1 2 (3)))`, `(equal "abc" "abc")` | `t`, `t` (structural equality: cons cells compared recursively by car and cdr, otherwise like `eql`) |
 | `equalp` | `(equalp "ABC" "abc")` | `t` (like `equal` but strings/characters compare case-insensitively and numbers by value; arrays/hash-tables fall back to `eql`) |
 | `<` | `(< 1 2)`, `(< 1 2 3)` | `t` (variadic; true when strictly increasing) |

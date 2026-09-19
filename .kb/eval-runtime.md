@@ -24,13 +24,32 @@ stubs to hold fixed function indices, JVM needs none.
   `$fenv`/closure arms, the spread dispatcher, the `_lookup` registry).
   `eval`/`load`/`--dynamic`/`boundp`/`symbol-value`/`set`/`fboundp`/`fmakunbound`/
   `(setf (symbol-value ...))`/`(setf (symbol-function ...))` force the full runtime.
-- **JVM has no apply tier**: `apply`/`multiple-value-call` force `usesEval`.
-  `BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS` is injected exactly when the program can reach one
-  (`referencesFunctionDesignator`, position-blind on purpose), and that reference is what forces the
-  gate. **Trap: inject those bodies unconditionally and the class calls an undeclared `_apply`**; the
+- **JVM apply tier** (2026-09-19, `.todo/894`; before it, any `apply`/`multiple-value-call`
+  forced the whole eval runtime): `usesApplyRuntime` = `usesEval` ||
+  `needsApplyRuntime(program, applyGateWrappers)` (the WASM scan; a literal target naming a compiled
+  function is a direct call in `JvmApplyCompiler`) || a reachable applying wrapper ||
+  `GROUP_APPLY` forced. It emits `_apply` (`buildApply(ec, withEval=false)`: no `_fenv` arm, no
+  interpreted-closure arm), the spread dispatcher `_invoke_v`, `_notFn`/`_arityChk` and `_lookup` --
+  not `_eval`/`_store`/`_envLookup`, the `_genv`/`_fenv` fields, or a dispatcher per arity.
+  `gateGroupFor("_apply")` is `GROUP_APPLY`, so a mispredicted apply site costs a re-run with the
+  tier, never the interpreter. `(defun ap (f l) (apply f l))`: 48,251 -> 24,099 B of class.
+- **Applying wrappers.** `BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS` is injected exactly when
+  the program can reach one (`referencesFunctionDesignator`, position-blind on purpose; a name
+  read or built at run time), and that reference is what brings the tier in. **A computed
+  funcall/apply target counts only beside a symbol constant spelling one of the names**
+  (`BuiltinFunctionWrappers.spellsSymbolConstant`: quoted data at any depth, or `#'`): the registry
+  answers only names the program loads as values. Counting every computed target put the eval
+  runtime into every higher-order function -- `(defun app (f x) (funcall f x))`: 49,177 -> 9,719 B
+  -- and into every program carrying `%stream-target`, whose synonym arm funcalls a closure.
+  **Trap: inject those bodies unconditionally and the class calls an undeclared `_apply`**; the
   post-compile self-check (`gateGroupFor`/`GateUnderpredicted`, `.kb/adjustable-arrays.md`) then
-  forces `GROUP_EVAL` on eval-free programs -- 4 KB -> 34 KB once one top-level global makes the
-  mirror real. `GateUnderpredicted` stays as a backstop; the ARRAY gate had the same problem.
+  forces the group on eval-free programs -- 4 KB -> 34 KB once one top-level global made the
+  mirror real, when the group was still `GROUP_EVAL`. `GateUnderpredicted` stays as a backstop;
+  the ARRAY gate had the same problem. Pinned by `JvmLispCompilerTest.
+  aComputedFuncallTargetCarriesNoApplyOrEvalRuntime`,
+  `aComputedTargetBesideAQuotedWrapperNameStillReachesTheWrapper`,
+  `aRuntimeApplyGetsTheApplyTierNotTheInterpreter`,
+  `anApplyOfALiteralCompiledTargetNeedsNoApplyRuntime`.
 - **Name-registry gate.** JVM: `_lookup` when
   `usesEval || usesRuntimeFunctionDesignator || !indirectCallArities.isEmpty()` -- effectively always
   true, since injected wrapper bodies take the designator as a PARAMETER (measured:

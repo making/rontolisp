@@ -274,6 +274,46 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	/**
+	 * Whether the expression spells one of the names as a SYMBOL CONSTANT: anywhere
+	 * inside a {@code (quote ...)} datum, at any depth (list, dotted tail or vector
+	 * element), or as {@code (function name)}. That is exactly how a symbol designator
+	 * naming a built-in can exist at run time in a program with no symbol builder and no
+	 * data evaluator -- the name registry answers only names the program loads as values
+	 * -- so a computed {@code funcall} target can reach one of the names' wrappers only
+	 * when this answers true.
+	 * @param expr the expression to scan
+	 * @param names the operator names
+	 * @return {@code true} when one of the names occurs as a symbol constant
+	 */
+	public static boolean spellsSymbolConstant(LispVal expr, Set<String> names) {
+		if (!(expr instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op
+				&& (LispNames.QUOTE.equals(op.name()) || LispNames.FUNCTION.equals(op.name()))) {
+			return mentionsSymbol(cons.cdr(), names);
+		}
+		return spellsSymbolConstant(cons.car(), names) || spellsSymbolConstant(cons.cdr(), names);
+	}
+
+	private static boolean mentionsSymbol(LispVal datum, Set<String> names) {
+		if (datum instanceof LispSymbol sym) {
+			return names.contains(sym.name());
+		}
+		if (datum instanceof LispCons cons) {
+			return mentionsSymbol(cons.car(), names) || mentionsSymbol(cons.cdr(), names);
+		}
+		if (datum instanceof am.ik.rontolisp.LispArray array) {
+			for (LispVal element : array.data()) {
+				if (mentionsSymbol(element, names)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Whether the expression takes the named operator as a first-class function value --
 	 * a {@code (function name)} form (the {@code #'name} reader shape).
 	 * @param expr the expression to scan

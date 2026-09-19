@@ -230,10 +230,8 @@ final class JvmHashRuntimeBuilder {
 	 * @param longValueOf {@code Long.valueOf(long)}
 	 * @param equalMethod the recursive {@code _equal} predicate the bucket scan decides
 	 * with
-	 * @param eqvMethod the {@code _eqv} (eql) predicate an eql table's bucket scan
-	 * decides with; always emitted, like {@code equalMethod}
-	 * @param eqMethod the {@code _eq} (eq) predicate an eq table's bucket scan decides
-	 * with; always emitted, like {@code equalMethod}
+	 * @param eqvMethod the {@code _eqv} (eql, and so eq) predicate an eql or eq table's
+	 * bucket scan decides with; always emitted, like {@code equalMethod}
 	 * @param strvMethod the {@code _strv} character-vector normalizer, or null when the
 	 * program uses no arrays; when present {@code _hash} folds a character vector as the
 	 * string with the same content, which is what {@code _equal} compares it as
@@ -249,7 +247,7 @@ final class JvmHashRuntimeBuilder {
 	 */
 	static List<HashMethod> build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
 			ClassConstant objectArrayClass, MethodrefConstant longValueOf, MethodrefConstant equalMethod,
-			MethodrefConstant eqvMethod, MethodrefConstant eqMethod, @Nullable MethodrefConstant strvMethod,
+			MethodrefConstant eqvMethod, @Nullable MethodrefConstant strvMethod,
 			@Nullable ClassConstant stringArrayClass, boolean equalpFold, boolean identityTables) {
 		ClassConstant mapClass = cp.addClass(cp.addUtf8(MAP_CLASS));
 		ClassConstant listClass = cp.addClass(cp.addUtf8(LIST_CLASS));
@@ -362,13 +360,13 @@ final class JvmHashRuntimeBuilder {
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(TEST), cp.addUtf8(TEST_DESC))) : null;
 
 		methods.add(buildGet(cp, mapClass, listClass, objectArrayClass, mapGet, listGet, listSize, integerValueOf,
-				hashRef, equalMethod, eqvMethod, eqMethod, ratArrClass, integerClass, identityHashCode, keyRef, testRef,
+				hashRef, equalMethod, eqvMethod, ratArrClass, integerClass, identityHashCode, keyRef, testRef,
 				identityTables));
 		methods.add(buildPut(cp, mapClass, listClass, objectClass, objectArrayClass, mapGet, mapPut, listInitCapacity,
-				listAdd, listGet, listSize, integerValueOf, hashRef, ordRef, equalMethod, eqvMethod, eqMethod,
-				ratArrClass, integerClass, identityHashCode, keyRef, testRef, identityTables, maybeCompactRef));
+				listAdd, listGet, listSize, integerValueOf, hashRef, ordRef, equalMethod, eqvMethod, ratArrClass,
+				integerClass, identityHashCode, keyRef, testRef, identityTables, maybeCompactRef));
 		methods.add(buildRem(cp, mapClass, listClass, objectArrayClass, mapGet, mapRemove, listGet, listSize,
-				listRemoveAt, integerValueOf, hashRef, equalMethod, eqvMethod, eqMethod, ratArrClass, integerClass,
+				listRemoveAt, integerValueOf, hashRef, equalMethod, eqvMethod, ratArrClass, integerClass,
 				identityHashCode, trueStr, keyRef, testRef, identityTables, tombstoneRef));
 
 		if (identityTables) {
@@ -724,9 +722,9 @@ final class JvmHashRuntimeBuilder {
 	private static HashMethod buildGet(ConstantPool cp, ClassConstant mapClass, ClassConstant listClass,
 			ClassConstant objectArrayClass, MethodrefConstant mapGet, MethodrefConstant listGet,
 			MethodrefConstant listSize, MethodrefConstant integerValueOf, MethodrefConstant hashRef,
-			MethodrefConstant equalMethod, MethodrefConstant eqvMethod, MethodrefConstant eqMethod,
-			ClassConstant ratArrClass, ClassConstant integerClass, MethodrefConstant identityHashCode,
-			@Nullable MethodrefConstant keyRef, @Nullable MethodrefConstant testRef, boolean identityTables) {
+			MethodrefConstant equalMethod, MethodrefConstant eqvMethod, ClassConstant ratArrClass,
+			ClassConstant integerClass, MethodrefConstant identityHashCode, @Nullable MethodrefConstant keyRef,
+			@Nullable MethodrefConstant testRef, boolean identityTables) {
 		JvmAsm a = new JvmAsm();
 		emitFoldKey(a, keyRef);
 		if (testRef != null) {
@@ -762,7 +760,7 @@ final class JvmHashRuntimeBuilder {
 		a.invokevirtual(listGet);
 		a.checkcast(objectArrayClass);
 		a.astore(5);
-		emitTestCompare(a, 5, 6, equalMethod, eqvMethod, eqMethod, identityTables);
+		emitTestCompare(a, 5, 6, equalMethod, eqvMethod, identityTables);
 		a.branch(Opcode.IFEQ, next);
 		a.aload(5);
 		a.iconst(1);
@@ -786,9 +784,9 @@ final class JvmHashRuntimeBuilder {
 			MethodrefConstant mapPut, MethodrefConstant listInit, MethodrefConstant listAdd, MethodrefConstant listGet,
 			MethodrefConstant listSize, MethodrefConstant integerValueOf, MethodrefConstant hashRef,
 			MethodrefConstant ordRef, MethodrefConstant equalMethod, MethodrefConstant eqvMethod,
-			MethodrefConstant eqMethod, ClassConstant ratArrClass, ClassConstant integerClass,
-			MethodrefConstant identityHashCode, @Nullable MethodrefConstant keyRef, @Nullable MethodrefConstant testRef,
-			boolean identityTables, MethodrefConstant maybeCompactRef) {
+			ClassConstant ratArrClass, ClassConstant integerClass, MethodrefConstant identityHashCode,
+			@Nullable MethodrefConstant keyRef, @Nullable MethodrefConstant testRef, boolean identityTables,
+			MethodrefConstant maybeCompactRef) {
 		JvmAsm a = new JvmAsm();
 		emitFoldKey(a, keyRef);
 		if (testRef != null) {
@@ -835,7 +833,7 @@ final class JvmHashRuntimeBuilder {
 		a.invokevirtual(listGet);
 		a.checkcast(objectArrayClass);
 		a.astore(5);
-		emitTestCompare(a, 5, 7, equalMethod, eqvMethod, eqMethod, identityTables);
+		emitTestCompare(a, 5, 7, equalMethod, eqvMethod, identityTables);
 		a.branch(Opcode.IFEQ, next);
 		// The stored key becomes the key just handed in, matching the interpreter (its
 		// entry record is replaced), so maphash hands back the newest key object.
@@ -890,10 +888,9 @@ final class JvmHashRuntimeBuilder {
 			ClassConstant objectArrayClass, MethodrefConstant mapGet, MethodrefConstant mapRemove,
 			MethodrefConstant listGet, MethodrefConstant listSize, MethodrefConstant listRemoveAt,
 			MethodrefConstant integerValueOf, MethodrefConstant hashRef, MethodrefConstant equalMethod,
-			MethodrefConstant eqvMethod, MethodrefConstant eqMethod, ClassConstant ratArrClass,
-			ClassConstant integerClass, MethodrefConstant identityHashCode, StringConstant trueStr,
-			@Nullable MethodrefConstant keyRef, @Nullable MethodrefConstant testRef, boolean identityTables,
-			MethodrefConstant tombstoneRef) {
+			MethodrefConstant eqvMethod, ClassConstant ratArrClass, ClassConstant integerClass,
+			MethodrefConstant identityHashCode, StringConstant trueStr, @Nullable MethodrefConstant keyRef,
+			@Nullable MethodrefConstant testRef, boolean identityTables, MethodrefConstant tombstoneRef) {
 		JvmAsm a = new JvmAsm();
 		emitFoldKey(a, keyRef);
 		if (testRef != null) {
@@ -932,7 +929,7 @@ final class JvmHashRuntimeBuilder {
 		a.invokevirtual(listGet);
 		a.checkcast(objectArrayClass);
 		a.astore(4);
-		emitTestCompare(a, 4, 6, equalMethod, eqvMethod, eqMethod, identityTables);
+		emitTestCompare(a, 4, 6, equalMethod, eqvMethod, identityTables);
 		a.branch(Opcode.IFEQ, next);
 		a.aload(2);
 		a.iload(3);
@@ -1133,11 +1130,11 @@ final class JvmHashRuntimeBuilder {
 	}
 
 	// Pushes the bucket-scan comparison of the entry pair in pairSlot against the key
-	// in local 0: _eqv for an eql table, _eq for an eq table, _equal otherwise. The
-	// table's test code sits in testSlot; without identity tables this is the _equal
-	// call it always was, not one instruction more.
+	// in local 0: _eqv for an eql or eq table (eq IS eql, .kb/eq-numbers.md), _equal
+	// otherwise. The table's test code sits in testSlot; without identity tables this is
+	// the _equal call it always was, not one instruction more.
 	private static void emitTestCompare(JvmAsm a, int pairSlot, int testSlot, MethodrefConstant equalMethod,
-			MethodrefConstant eqvMethod, MethodrefConstant eqMethod, boolean identityTables) {
+			MethodrefConstant eqvMethod, boolean identityTables) {
 		if (!identityTables) {
 			a.aload(pairSlot);
 			a.iconst(0);
@@ -1147,14 +1144,10 @@ final class JvmHashRuntimeBuilder {
 			return;
 		}
 		int eqlArm = a.label();
-		int eqArm = a.label();
 		int done = a.label();
 		a.iload(testSlot);
 		a.iconst(2);
-		a.branch(Opcode.IF_ICMPEQ, eqlArm);
-		a.iload(testSlot);
-		a.iconst(3);
-		a.branch(Opcode.IF_ICMPEQ, eqArm);
+		a.branch(Opcode.IF_ICMPGE, eqlArm);
 		a.aload(pairSlot);
 		a.iconst(0);
 		a.aaload();
@@ -1167,13 +1160,6 @@ final class JvmHashRuntimeBuilder {
 		a.aaload();
 		a.aload(0);
 		a.invokestatic(eqvMethod);
-		a.branch(Opcode.GOTO, done);
-		a.bind(eqArm);
-		a.aload(pairSlot);
-		a.iconst(0);
-		a.aaload();
-		a.aload(0);
-		a.invokestatic(eqMethod);
 		a.bind(done);
 	}
 

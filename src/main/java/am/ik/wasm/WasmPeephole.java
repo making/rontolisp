@@ -2,7 +2,10 @@ package am.ik.wasm;
 
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.IntUnaryOperator;
 
 import am.ik.wasm.WasmCodeModel.Body;
 import am.ik.wasm.WasmCodeModel.BlockType;
@@ -40,6 +43,18 @@ import org.jspecify.annotations.Nullable;
  * (2 bytes): the branch only asks whether the operand is zero, which two negations leave
  * as it was. Only there -- a later {@code i32.and} would see the value, not its
  * truth.</li>
+ * <li>{@code call F} -&gt; one {@code drop} per parameter, then {@code i32.const K}, when
+ * F's whole body is {@code i32.const K} (no locals, nothing else): calling it only
+ * consumes the arguments. The drops then meet the pure argument pushes in front of them
+ * and all of it goes. This is a runtime helper {@link WasmRefTypeFolder} proved has no
+ * live arm in this module; left as a call, a never-taken one still costs its caller the
+ * registers a call clobbers.</li>
+ * <li>{@code if (result T) X else X end}, X one pure instruction the same in both arms
+ * -&gt; {@code drop; X}: the condition decides nothing. What a folded constant call
+ * leaves when the other arm already answered the same constant.</li>
+ * <li>{@code ref.test}, {@code ref.is_null} or {@code i32.eqz} then {@code drop} -&gt;
+ * {@code drop}: a unary test that cannot trap, computed for nobody -- so the operand's
+ * own push can then go with the drop.</li>
  * </ul>
  * and one structural rewrite, which is why this pass decodes blocks at all:
  * <ul>
@@ -114,9 +129,31 @@ public final class WasmPeephole {
 		boolean changed = false;
 		for (int d = 0; d < entries.size(); d++) {
 			byte[] entry = entries.get(d);
-			byte[] out = rewriteEntry(entry, types, types.func(defTypeIdx[d]).results().isEmpty(), pureNonNullCall);
+			byte[] out = rewriteEntry(entry, types, types.func(defTypeIdx[d]).results().isEmpty(), pureNonNullCall,
+					NO_CONSTANTS);
 			changed |= out != entry;
 			rewritten.add(out);
+		}
+		// A second pass for the calls of a constant function, decided over the bodies
+		// the first pass left (the fold's debris in a helper is what hides its constant).
+		int numImports = WasmSections.importedFunctionCount(module);
+		Map<Integer, byte[]> constants = new HashMap<>();
+		for (int d = 0; d < rewritten.size(); d++) {
+			byte[] constant = constantBody(rewritten.get(d));
+			if (constant != null) {
+				constants.put(numImports + d, constant);
+			}
+		}
+		if (!constants.isEmpty()) {
+			ConstantCalls calls = new ConstantCalls(constants,
+					f -> types.func(defTypeIdx[f - numImports]).params().size());
+			for (int d = 0; d < rewritten.size(); d++) {
+				byte[] entry = rewritten.get(d);
+				byte[] out = rewriteEntry(entry, types, types.func(defTypeIdx[d]).results().isEmpty(), pureNonNullCall,
+						calls);
+				changed |= out != entry;
+				rewritten.set(d, out);
+			}
 		}
 		if (!changed) {
 			return module;
@@ -146,24 +183,61 @@ public final class WasmPeephole {
 
 		int opcode;
 
+		// The bytes to write in place of the whole span, for an instruction a rule
+		// SYNTHESIZED (a constant call's drops and constant); null otherwise.
+		byte @Nullable [] bytes;
+
 		Op(Instr in) {
 			this.in = in;
 			this.opcode = in.op;
 		}
 
+		Op(Instr in, int opcode, byte[] bytes) {
+			this.in = in;
+			this.opcode = opcode;
+			this.bytes = bytes;
+		}
+
+	}
+
+	/**
+	 * The functions whose whole body is one {@code i32.const}, by function index, with
+	 * that instruction's bytes, and each one's parameter count.
+	 */
+	private record ConstantCalls(Map<Integer, byte[]> constants, IntUnaryOperator paramCount) {
+	}
+
+	private static final ConstantCalls NO_CONSTANTS = new ConstantCalls(Map.of(), f -> 0);
+
+	// The `i32.const K` bytes when the code entry is exactly: no local declarations,
+	// `i32.const K`, `end`; null otherwise.
+	private static byte @Nullable [] constantBody(byte[] entry) {
+		if (entry.length < 4 || entry[0] != 0 || entry[1] != (byte) Instruction.I32_CONST
+				|| entry[entry.length - 1] != (byte) Instruction.END) {
+			return null;
+		}
+		// The immediate is a signed LEB128 that must end exactly before the `end`.
+		int p = 2;
+		while (p < entry.length - 1 && (entry[p] & 0x80) != 0) {
+			p++;
+		}
+		if (p != entry.length - 2) {
+			return null;
+		}
+		return WasmSections.slice(entry, 1, entry.length - 1);
 	}
 
 	private static byte[] rewriteEntry(byte[] entry, TypeSection types, boolean funcResultsEmpty,
-			java.util.function.IntPredicate pureNonNullCall) {
+			java.util.function.IntPredicate pureNonNullCall, ConstantCalls calls) {
 		Body body = WasmCodeModel.decode(entry, types);
 		List<Instr> code = body.code();
 		if (code.isEmpty()) {
 			return entry;
 		}
-		List<Op> out = local(code, pureNonNullCall);
+		List<Op> out = local(code, pureNonNullCall, calls);
 		boolean changed = out.size() != code.size();
 		for (Op op : out) {
-			changed |= op.opcode != op.in.op;
+			changed |= op.opcode != op.in.op || op.bytes != null;
 		}
 		while (loopTail(out, funcResultsEmpty)) {
 			changed = true;
@@ -175,7 +249,10 @@ public final class WasmPeephole {
 		ByteArrayOutputStream buf = new ByteArrayOutputStream(entry.length);
 		WasmSections.writeRaw(buf, WasmSections.slice(entry, 0, localsEnd));
 		for (Op op : out) {
-			if (op.opcode == op.in.op) {
+			if (op.bytes != null) {
+				WasmSections.writeRaw(buf, op.bytes);
+			}
+			else if (op.opcode == op.in.op) {
 				WasmSections.writeRaw(buf, WasmSections.slice(entry, op.in.start, op.in.end));
 			}
 			else {
@@ -191,15 +268,29 @@ public final class WasmPeephole {
 	// adjacent pair (a `tee` in front of a `drop`, the two neighbours a deleted pure
 	// value leaves touching, or the `i32.eqz` a re-tested box becomes beside the
 	// `i32.eqz` its consumer wrote) is seen without a second traversal.
-	private static List<Op> local(List<Instr> code, java.util.function.IntPredicate pureNonNullCall) {
+	private static List<Op> local(List<Instr> code, java.util.function.IntPredicate pureNonNullCall,
+			ConstantCalls calls) {
 		List<Op> out = new ArrayList<>(code.size());
 		for (Instr in : code) {
-			out.add(new Op(in));
-			while (out.size() >= 2 && collapseTail(out, pureNonNullCall)) {
-				// keep collapsing
+			byte @Nullable [] constant = in.op == Instruction.CALL ? calls.constants().get((int) in.a) : null;
+			if (constant == null) {
+				add(out, new Op(in), pureNonNullCall);
+				continue;
 			}
+			// The call only consumes its arguments: drop each, then push the constant.
+			for (int i = calls.paramCount().applyAsInt((int) in.a); i > 0; i--) {
+				add(out, new Op(in, Instruction.DROP, new byte[] { (byte) Instruction.DROP }), pureNonNullCall);
+			}
+			add(out, new Op(in, Instruction.I32_CONST, constant), pureNonNullCall);
 		}
 		return out;
+	}
+
+	private static void add(List<Op> out, Op op, java.util.function.IntPredicate pureNonNullCall) {
+		out.add(op);
+		while (out.size() >= 2 && collapseTail(out, pureNonNullCall)) {
+			// keep collapsing
+		}
 	}
 
 	private static boolean collapseTail(List<Op> out, java.util.function.IntPredicate pureNonNullCall) {
@@ -219,6 +310,20 @@ public final class WasmPeephole {
 		if (b.opcode == Instruction.DROP && isPure(a)) {
 			out.remove(n - 1);
 			out.remove(n - 2);
+			return true;
+		}
+		if (b.opcode == Instruction.DROP && isPureUnaryTest(a)) {
+			out.remove(n - 2);
+			return true;
+		}
+		if (b.opcode == Instruction.END && n >= 5 && isSameArmIf(out, n - 5)) {
+			Op open = out.get(n - 5);
+			Op arm = out.get(n - 4);
+			for (int i = 0; i < 5; i++) {
+				out.remove(n - 1 - i);
+			}
+			add(out, new Op(open.in, Instruction.DROP, new byte[] { (byte) Instruction.DROP }), pureNonNullCall);
+			add(out, arm, pureNonNullCall);
 			return true;
 		}
 		if (b.opcode == Instruction.REF_IS_NULL && n >= 6 && isBoxedTruth(out, n - 6, pureNonNullCall)) {
@@ -252,6 +357,50 @@ public final class WasmPeephole {
 		return call.opcode == Instruction.CALL && pureNonNullCall.test((int) call.in.a)
 				&& out.get(at + 2).opcode == Instruction.ELSE && out.get(at + 3).opcode == Instruction.REF_NULL
 				&& out.get(at + 4).opcode == Instruction.END;
+	}
+
+	// `if (result T) X else X end` at out[at..at+4]: no block parameters, one result, and
+	// each arm the same single pure instruction.
+	private static boolean isSameArmIf(List<Op> out, int at) {
+		Op open = out.get(at);
+		if (open.opcode != Instruction.IF || open.bytes != null || open.in.blockType == null
+				|| !open.in.blockType.params().isEmpty() || open.in.blockType.results().size() != 1) {
+			return false;
+		}
+		Op x = out.get(at + 1);
+		Op y = out.get(at + 3);
+		return out.get(at + 2).opcode == Instruction.ELSE && sameValue(x, y);
+	}
+
+	// Two pure single-instruction values that push the same thing.
+	private static boolean sameValue(Op x, Op y) {
+		if (x.opcode != y.opcode) {
+			return false;
+		}
+		return switch (x.opcode) {
+			case Instruction.I32_CONST -> immediate(x) == immediate(y);
+			// Not i64.const: WasmCodeModel skips its immediate, so two of them cannot be
+			// told apart here.
+			case Instruction.GET_LOCAL, Instruction.GET_GLOBAL ->
+				x.bytes == null && y.bytes == null && x.in.a == y.in.a;
+			default -> false;
+		};
+	}
+
+	// The value an i32.const pushes, whether decoded or synthesized.
+	private static long immediate(Op op) {
+		byte[] bytes = op.bytes;
+		return bytes == null ? op.in.a : WasmSections.readS(bytes, new int[] { 1 });
+	}
+
+	// A unary operator that cannot trap and cannot store: its operand, dropped, is the
+	// same as its result, dropped.
+	private static boolean isPureUnaryTest(Op op) {
+		if (op.bytes != null) {
+			return false;
+		}
+		return op.opcode == Instruction.I32_EQZ || op.opcode == Instruction.REF_IS_NULL
+				|| (op.opcode == Instruction.GC_PREFIX && (op.in.sub == Instruction.REF_TEST || op.in.sub == 0x15));
 	}
 
 	// A value that cannot trap and cannot store, so nothing observes it being produced.

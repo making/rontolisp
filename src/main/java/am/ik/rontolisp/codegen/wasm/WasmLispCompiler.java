@@ -1819,6 +1819,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	// calls it nowhere.
 	static final int FUNC_IHASH = FX_FUNC_LAST + 1;
 
+	// _eql_tail ((ref null eq) a, (ref null eq) b) -> i32: eql -- and eq, the same
+	// predicate (.kb/eq-numbers.md) -- for two values already known NOT to be ref.eq
+	// (WasmRuntimeBuilder.buildEqlTailBody). Every eq/eql site tests ref.eq inline and
+	// calls this on a miss, instead of inlining the value chain. Reuses _equal's
+	// signature (TYPE_RAT_CMP), so no new type entry; appended after the last fixed
+	// helper so no index above shifts.
+	static final int FUNC_EQL_TAIL = FUNC_IHASH + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -1849,7 +1857,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_IHASH + 1;
+	static final int FUNC_VEC_BASE = FUNC_EQL_TAIL + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -1862,9 +1870,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// helpers, the three bignum helpers (_int_new, _int_val, _print_i64_no_nl), the
 	// limb bigint runtime (_limb_* / _big_*, WasmBigIntRuntimeBuilder) and the
 	// unboxed-fixnum fusion helpers (_fx_*, WasmFxRuntimeBuilder), the fdlibm
-	// runtime and the identity-hash helper (_ihash) -- plus, under
+	// runtime, the identity-hash helper (_ihash) and the eq/eql tail (_eql_tail) -- plus,
+	// under
 	// --simd, the vec: SIMD block. Use userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FUNC_IHASH + 1;
+	static final int FUNC_USER_BASE = FUNC_EQL_TAIL + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -6592,6 +6601,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					fnDef.addFunction(fdlibmType(fn));
 				}
 				fnDef.addFunction(TYPE_RAT_GET); // _ihash (key) -> i32 (FUNC_IHASH)
+				fnDef.addFunction(TYPE_RAT_CMP); // _eql_tail (a, b) -> i32
+													// (FUNC_EQL_TAIL)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -7500,6 +7511,8 @@ public final class WasmLispCompiler implements LispCompiler {
 						? WasmIdentityHashRuntimeBuilder.build(identityHashSeqGlobalIndex,
 								this.usesInstances ? instanceTypeBase() : -1)
 						: WasmIdentityHashRuntimeBuilder.buildStub());
+				// the eq/eql tail body (FUNC_EQL_TAIL): shaken when no site compares.
+				code.addFunction(WasmRuntimeBuilder.buildEqlTailBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp

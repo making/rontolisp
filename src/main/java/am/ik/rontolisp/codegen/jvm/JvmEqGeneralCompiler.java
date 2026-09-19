@@ -7,27 +7,23 @@ import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
 
 /**
- * Compiles the {@code eq} and {@code eql} built-in functions. Both give reference
- * equality for Object[] (cons cells) and value equality for Long, String, etc.; they
- * differ only on floats and ratios, which are eql (by value) but not eq (distinct boxed
- * objects). Handles null (nil) correctly.
+ * Compiles the {@code eq} and {@code eql} built-in functions, which are one predicate
+ * ({@code .kb/eq-numbers.md}): reference equality for Object[] (cons cells) and value
+ * equality for Long, Double, ratios, String, etc. Both share the per-class {@code _pEql}
+ * helper. Handles null (nil) correctly.
  */
 final class JvmEqGeneralCompiler {
 
 	private JvmEqGeneralCompiler() {
 	}
 
-	/** Compiles {@code eql} (numbers compared by type and value). */
+	/**
+	 * Compiles {@code eql} and {@code eq} (numbers compared by type and value).
+	 * @param cons the call form
+	 * @param ctx the compilation context
+	 * @param className the class being compiled
+	 */
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		compile(cons, ctx, className, JvmNumericRuntimeBuilder.EQV);
-	}
-
-	/** Compiles {@code eq} (like {@code eql} but floats and ratios are never equal). */
-	static void compileEq(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		compile(cons, ctx, className, JvmNumericRuntimeBuilder.EQ_STRICT);
-	}
-
-	private static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className, String opName) {
 		List<LispVal> args = cons.toList();
 		// Evaluate both args
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
@@ -35,12 +31,11 @@ final class JvmEqGeneralCompiler {
 		// The nil handling around the numeric helper is the same wherever it is
 		// written, so it lives in one per-class method (JvmEmitHelper.emitSharedCall)
 		// instead of ~45 bytecodes per site.
-		JvmEmitHelper.emitSharedCall(ctx, className, JvmNumericRuntimeBuilder.EQV.equals(opName) ? "_pEql" : "_pEq", 2,
-				helper -> emitCompare(helper, opName));
+		JvmEmitHelper.emitSharedCall(ctx, className, "_pEql", 2, JvmEqGeneralCompiler::emitCompare);
 	}
 
 	/** Emits the comparison over the two values in local slots 0 and 1. */
-	private static void emitCompare(JvmLispCompiler.Ctx ctx, String opName) {
+	private static void emitCompare(JvmLispCompiler.Ctx ctx) {
 		int aSlot = 0;
 		int bSlot = 1;
 		// If a is null: return (b == null) ? t : nil
@@ -72,11 +67,9 @@ final class JvmEqGeneralCompiler {
 		ctx.emit(aSlot);
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(bSlot);
-		// _eqv (eql) is a.equals(b) plus element-wise comparison for ratios; _eq (eq) is
-		// the
-		// same but floats and ratios are never equal.
+		// _eqv is a.equals(b) plus element-wise comparison for ratios.
 		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(ctx.numOp(opName).index());
+		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.EQV).index());
 		JvmEmitHelper.emitBoolFromInt(ctx);
 		// end
 		JvmEmitHelper.patchBranch(ctx, gotoBothNullPos, ctx.code.size());

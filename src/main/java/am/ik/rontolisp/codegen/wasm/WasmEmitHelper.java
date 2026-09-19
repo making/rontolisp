@@ -820,133 +820,15 @@ final class WasmEmitHelper {
 	}
 
 	/**
-	 * Compares two (ref null eq) values on the stack for {@code eq} (object identity).
-	 * Produces an i32 (0=false, 1=true). Uses ref.eq for identity (so equal small
-	 * integers and same-object cons cells are eq); when ref.eq is false, two TYPE_CHAR
-	 * structs with the same code point still compare equal (matching the interpreter's
-	 * value-based {@code LispChar.equals} and the JVM's {@code _eqv} int[] fast-path, so
-	 * {@code (eq #\A #\A)} agrees across every backend -- CL permits {@code eq} to return
-	 * {@code T} for characters that {@code char=}); otherwise falls back to string offset
-	 * comparison for TYPE_STRING values (which also covers symbols, since the StringTable
-	 * deduplicates identical symbols/strings to the same offset). Floats and ratios are
-	 * distinct boxed objects and are therefore never eq.
-	 */
-	static void emitEqComparison(WasmLispCompiler.Ctx ctx) {
-		int aSlot = ctx.allocTemp();
-		int bSlot = ctx.allocTemp();
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(aSlot);
-		// Try ref.eq
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(aSlot);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.REF_EQ);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(1);
-		ctx.writer.write(Instruction.ELSE);
-		// Both characters: compare code points; both boxed integers: compare i64 fields
-		// (the interpreter's eq compares value types by equals, so (eq #x100000000
-		// #x100000000) answers T on every backend); else fall back to symbol/string
-		// offset
-		emitCharCodePointEqOrElse(ctx, aSlot, bSlot,
-				() -> emitBignumEqOrElse(ctx, aSlot, bSlot, () -> emitStringEqOrZero(ctx, aSlot, bSlot)));
-		ctx.writer.write(Instruction.END); // end ref.eq if
-	}
-
-	/**
-	 * Emits {@code if both operands are TYPE_BIGNUM then i64 field == i64 field else
-	 * <fallback>}, leaving an i32 (0=false, 1=true) on the stack.
-	 */
-	private static void emitBignumEqOrElse(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot, Runnable elseBranch) {
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(aSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
-		ctx.writer.write(Instruction.I32_AND);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		emitBignumField(ctx, aSlot);
-		emitBignumField(ctx, bSlot);
-		ctx.writer.write(Instruction.I64_EQ);
-		ctx.writer.write(Instruction.ELSE);
-		// both limb integers -> _big_eq (canonical limbs, so limb value equality;
-		// the normalization invariant keeps mixed-tier pairs numerically unequal)
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(aSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
-		ctx.writer.write(Instruction.I32_AND);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(aSlot);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_EQ);
-		ctx.writer.write(Instruction.ELSE);
-		elseBranch.run();
-		ctx.writer.write(Instruction.END); // end limb-integer if
-		ctx.writer.write(Instruction.END); // end bignum if
-	}
-
-	/**
-	 * Emits {@code if both operands are TYPE_CHAR then code point == code point else
-	 * <fallback>}, leaving an i32 (0=false, 1=true) on the stack. Shared between
-	 * {@link #emitEqComparison eq} and {@link #emitEqlComparison eql} so both give
-	 * TYPE_CHAR value equality (two separately-allocated char structs holding the same
-	 * code point compare true, mirroring the JVM {@code _eqv} int[] branch and the
-	 * interpreter's value-based {@code LispChar.equals}).
-	 */
-	private static void emitCharCodePointEqOrElse(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot, Runnable elseBranch) {
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(aSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
-		ctx.writer.write(Instruction.I32_AND);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(aSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
-		ctx.writer.writeUnsignedLeb128(0);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
-		ctx.writer.writeUnsignedLeb128(0);
-		ctx.writer.write(Instruction.I32_EQ);
-		ctx.writer.write(Instruction.ELSE);
-		elseBranch.run();
-		ctx.writer.write(Instruction.END); // end char if
-	}
-
-	/**
-	 * Compares two (ref null eq) values on the stack for {@code eql}. Like {@code eq},
-	 * but floats and ratios of the same type and value are equal. Produces an i32
-	 * (0=false, 1=true).
+	 * Compares two (ref null eq) values on the stack for {@code eql} -- and {@code eq},
+	 * the same predicate on every backend ({@code .kb/eq-numbers.md}: a number compares
+	 * by type and value, never by box identity). Produces an i32 (0=false, 1=true):
+	 * {@code ref.eq} inline (identical references, which covers every i31 integer, the
+	 * nil/t singletons and the same cons), then inline the symbol/string offset compare
+	 * and the i31 miss, and otherwise one call to {@code _eql_tail}
+	 * ({@link WasmLispCompiler#FUNC_EQL_TAIL}), which compares characters and numbers of
+	 * the same type and value.
+	 * @param ctx the compilation context
 	 */
 	static void emitEqlComparison(WasmLispCompiler.Ctx ctx) {
 		int aSlot = ctx.allocTemp();
@@ -955,7 +837,6 @@ final class WasmEmitHelper {
 		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(aSlot);
-		// Try ref.eq
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
@@ -966,272 +847,55 @@ final class WasmEmitHelper {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(1);
 		ctx.writer.write(Instruction.ELSE);
-		// Both characters: compare code points (char structs are value objects); if not
-		// both chars, fall through to float / ratio / string comparisons below.
-		emitCharCodePointEqOrElse(ctx, aSlot, bSlot, () -> emitEqlNonCharTail(ctx, aSlot, bSlot));
+		// The two misses that dominate stay inline, so they cost no call: a symbol or
+		// string (compared by interned offset, and never eql to anything else) and an
+		// i31 fixnum (eql only to itself, which ref.eq already refused).
+		emitRefTest(ctx, aSlot, WasmLispCompiler.TYPE_STRING);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I32);
+		emitRefTest(ctx, bSlot, WasmLispCompiler.TYPE_STRING);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I32);
+		emitStringOffset(ctx, aSlot);
+		emitStringOffset(ctx, bSlot);
+		ctx.writer.write(Instruction.I32_EQ);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.ELSE);
+		emitRefTest(ctx, aSlot, Type.I31.code());
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I32);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(aSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(bSlot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQL_TAIL);
+		ctx.writer.write(Instruction.END); // end i31 if
+		ctx.writer.write(Instruction.END); // end string if
 		ctx.writer.write(Instruction.END); // end ref.eq if
 	}
 
-	// Emits eql's non-char, non-ref.eq tail: TYPE_BIGNUM value comparison, TYPE_FLOAT
-	// value comparison, then TYPE_RATIO numerator+denominator comparison, then
-	// symbol/string offset compare. Leaves an i32 (0/1) on the stack. Extracted so the
-	// shared TYPE_CHAR helper can be used from both emitEqComparison and
-	// emitEqlComparison without duplicating the char-compare shape.
-	/** Pushes the f64 field of the float struct in {@code slot}. */
-	private static void emitFloatField(WasmLispCompiler.Ctx ctx, int slot) {
+	private static void emitRefTest(WasmLispCompiler.Ctx ctx, int slot, int heapType) {
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-		ctx.writer.writeUnsignedLeb128(0);
-	}
-
-	/**
-	 * Two float structs compared the way {@code Double.equals} compares: equal bit
-	 * patterns, or both NaN. See the call site in {@link #emitEqlNonCharTail} for why
-	 * this is not {@code f64.eq}.
-	 */
-	private static void emitFloatFieldBitsEqual(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot) {
-		emitFloatField(ctx, aSlot);
-		ctx.writer.write(Instruction.I64_REINTERPRET_F64);
-		emitFloatField(ctx, bSlot);
-		ctx.writer.write(Instruction.I64_REINTERPRET_F64);
-		ctx.writer.write(Instruction.I64_EQ);
-		emitFloatField(ctx, aSlot);
-		emitFloatField(ctx, aSlot);
-		ctx.writer.write(Instruction.F64_NE);
-		emitFloatField(ctx, bSlot);
-		emitFloatField(ctx, bSlot);
-		ctx.writer.write(Instruction.F64_NE);
-		ctx.writer.write(Instruction.I32_AND);
-		ctx.writer.write(Instruction.I32_OR);
-	}
-
-	private static void emitEqlNonCharTail(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot) {
-		// Both complexes: _equal(reA, reB) && _equal(imA, imB) through the shared
-		// _equal -- its eql base case answers part-wise eql for real parts
-		// (bignum fields, float bits, ratio components), so no value chain is
-		// inlined here and a site stays one pair of calls.
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_COMPLEX);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_COMPLEX);
-		ctx.writer.write(Instruction.I32_AND);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		int reASlot = ctx.allocTemp();
-		int reBSlot = ctx.allocTemp();
-		int imASlot = ctx.allocTemp();
-		int imBSlot = ctx.allocTemp();
-		emitComplexPart(ctx, aSlot, 0);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(reASlot);
-		emitComplexPart(ctx, bSlot, 0);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(reBSlot);
-		emitComplexPart(ctx, aSlot, 1);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(imASlot);
-		emitComplexPart(ctx, bSlot, 1);
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(imBSlot);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(reASlot);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(reBSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQUAL);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(imASlot);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(imBSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQUAL);
-		ctx.writer.write(Instruction.ELSE);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(0);
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.ELSE);
-		emitEqlValueTail(ctx, aSlot, bSlot);
-		ctx.writer.write(Instruction.END); // end both-complex if
+		ctx.writer.writeHeapType(heapType);
 	}
 
-	// Pushes part 0 (real) or 1 (imaginary) of the TYPE_COMPLEX in {@code slot}
-	// (field 0 is the tag; the parts live in fields 1 and 2).
-	private static void emitComplexPart(WasmLispCompiler.Ctx ctx, int slot, int field) {
+	private static void emitStringOffset(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_COMPLEX);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_COMPLEX);
-		ctx.writer.writeUnsignedLeb128(field + 1);
-	}
-
-	private static void emitEqlValueTail(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot) {
-		// Both boxed integers: compare i64 fields (the _int_new normalization keeps
-		// every in-range integer an i31, so a boxed value only ever equals another
-		// boxed value)
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(aSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
-		ctx.writer.write(Instruction.I32_AND);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		emitBignumField(ctx, aSlot);
-		emitBignumField(ctx, bSlot);
-		ctx.writer.write(Instruction.I64_EQ);
-		ctx.writer.write(Instruction.ELSE);
-		// Both limb integers: _big_eq value equality (canonical limbs)
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(aSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
-		ctx.writer.write(Instruction.I32_AND);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(aSlot);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_EQ);
-		ctx.writer.write(Instruction.ELSE);
-		// Both floats: compare f64 fields (float structs are value objects)
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(aSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
-		ctx.writer.write(Instruction.I32_AND);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		// Equal BIT PATTERNS, or both NaN -- not f64.eq. f64.eq is the numeric
-		// comparison, which calls -0.0 and 0.0 equal; CLHS makes those two = but NOT
-		// eql, and the interpreter (Double.equals) and the JVM backend (_eqv) both
-		// answer NIL, as does upstream Common Lisp. The both-NaN arm is what keeps this
-		// identical to Double.equals rather than merely bitwise: doubleToLongBits folds
-		// every NaN onto one canonical pattern, so Java calls a NaN and that same NaN
-		// negated equal, where their raw bits differ in the sign bit.
-		emitFloatFieldBitsEqual(ctx, aSlot, bSlot);
-		ctx.writer.write(Instruction.ELSE);
-		// Both ratios: compare numerators and denominators
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(aSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_RATIO);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_RATIO);
-		ctx.writer.write(Instruction.I32_AND);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(aSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_NUM);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_NUM);
-		ctx.writer.write(Instruction.I32_EQ);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(aSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_DEN);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_DEN);
-		ctx.writer.write(Instruction.I32_EQ);
-		ctx.writer.write(Instruction.I32_AND);
-		ctx.writer.write(Instruction.ELSE);
-		// Symbols and strings: compare interned offsets
-		emitStringEqOrZero(ctx, aSlot, bSlot);
-		ctx.writer.write(Instruction.END); // end ratio if
-		ctx.writer.write(Instruction.END); // end float if
-		ctx.writer.write(Instruction.END); // end limb-integer if
-		ctx.writer.write(Instruction.END); // end bignum if
-		// end char if and end ref.eq if are emitted by the caller
-		// (emitCharCodePointEqOrElse and emitEqlComparison respectively).
-	}
-
-	// Pushes the i64 field of the TYPE_BIGNUM held in the given local.
-	private static void emitBignumField(WasmLispCompiler.Ctx ctx, int slot) {
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(slot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
-		ctx.writer.writeUnsignedLeb128(0);
-	}
-
-	// Emits an i32 result: 1 if both slots are TYPE_STRING structs with the same data
-	// offset (so the StringTable has deduplicated them, i.e. they are the same
-	// symbol/string), 0 otherwise.
-	private static void emitStringEqOrZero(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot) {
-		// Check if a is string
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(aSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		// Check if b is string
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		// Both strings: compare offset fields
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
 		ctx.writer.writeUnsignedLeb128(0);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
-		ctx.writer.writeUnsignedLeb128(0);
-		ctx.writer.write(Instruction.I32_EQ);
-		ctx.writer.write(Instruction.ELSE);
-		// a is string, b is not
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(0);
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.ELSE);
-		// a is not string
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(0);
-		ctx.writer.write(Instruction.END);
 	}
 
 	static void compileStringLiteral(String displayForm, WasmLispCompiler.Ctx ctx) {

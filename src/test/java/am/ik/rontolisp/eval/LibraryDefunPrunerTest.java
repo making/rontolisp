@@ -263,6 +263,29 @@ class LibraryDefunPrunerTest {
 	}
 
 	@Test
+	void aSynthesizedCallEntryIsRootedByTheLiveFormsOnly() {
+		// %stream-target is spliced on a surface fact (a stream producer is spelled) and
+		// rooted on the same fact, because the call to it is synthesized after this
+		// pass. A DEAD definition's spelling is no such fact: every lowered Scheme
+		// program carried the resolver -- and, through its closure funcall, the JVM
+		// eval runtime -- because scheme.lisp spells with-output-to-string in helpers
+		// the program never calls.
+		String dead = """
+				(defun used () 1)
+				(defun unused () (with-output-to-string (s) (princ 1 s)))
+				""";
+		assertThat(systemDefinedNames("(asdf:load-system :demo) (print (demo:used))", demoSystem(dead)))
+			.contains("USED")
+			.doesNotContain("UNUSED", "%STREAM-TARGET");
+		String live = """
+				(defun used () (helper))
+				(defun helper () (with-output-to-string (s) (princ 1 s)))
+				""";
+		assertThat(systemDefinedNames("(asdf:load-system :demo) (print (demo:used))", demoSystem(live)))
+			.contains("USED", "HELPER", "%STREAM-TARGET");
+	}
+
+	@Test
 	void aThirdPartyVariableWithAnImpureInitformStaysEvenWhenNobodyReadsIt() {
 		// Dropping a definition drops its initform with it. A defun can only ever fail
 		// loudly ("undefined function"), but a (defvar *x* (register ...)) nobody READS

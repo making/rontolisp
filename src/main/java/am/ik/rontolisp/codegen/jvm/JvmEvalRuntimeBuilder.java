@@ -1007,9 +1007,17 @@ final class JvmEvalRuntimeBuilder {
 		return new JvmEvalRuntimeBuilder(k).envLookupBody();
 	}
 
-	/** Builds the {@code _apply} method body. */
-	static List<Integer> buildApply(EvalConstants k) {
-		return new JvmEvalRuntimeBuilder(k).applyBody();
+	/**
+	 * Builds the {@code _apply} method body.
+	 * @param k the constants
+	 * @param withEval whether the eval runtime is emitted beside it. Without it -- the
+	 * APPLY TIER a program with a runtime apply but no eval gets -- no interpreted
+	 * closure and no {@code _fenv} binding can exist, so the body has neither arm and
+	 * references neither {@code _eval} nor {@code _envLookup}.
+	 * @return the body
+	 */
+	static List<Integer> buildApply(EvalConstants k, boolean withEval) {
+		return new JvmEvalRuntimeBuilder(k).applyBody(withEval);
 	}
 
 	/** Builds the {@code _store} method body. */
@@ -1153,7 +1161,7 @@ final class JvmEvalRuntimeBuilder {
 
 	// === _apply(Object fn, Object argList) -> value ===
 
-	private List<Integer> applyBody() {
+	private List<Integer> applyBody(boolean withEval) {
 		Asm a = new Asm();
 		final int FN = 0, ARGLIST = 1, ARR = 2, PARAMS = 3, NEWENV = 4, BODY = 5, PAIR = 6, TMP = 7, ARGCUR = 8,
 				ARG0 = 9;
@@ -1174,18 +1182,20 @@ final class JvmEvalRuntimeBuilder {
 		a.instanceOf(this.k.stringClass());
 		a.branch(Opcode.IFEQ, notSym);
 		int desReg = a.label();
-		a.aload(FN);
-		a.getstatic(this.k.fenvField());
-		a.invokestatic(this.k.envLookupRef());
-		a.astore(TMP);
-		a.aload(TMP);
-		a.branch(Opcode.IFNULL, desReg);
-		a.aload(TMP);
-		a.checkcast(this.k.objectArrayClass());
-		a.iconst(1);
-		a.aaload();
-		a.astore(FN);
-		a.branch(Opcode.GOTO, resolved);
+		if (withEval) {
+			a.aload(FN);
+			a.getstatic(this.k.fenvField());
+			a.invokestatic(this.k.envLookupRef());
+			a.astore(TMP);
+			a.aload(TMP);
+			a.branch(Opcode.IFNULL, desReg);
+			a.aload(TMP);
+			a.checkcast(this.k.objectArrayClass());
+			a.iconst(1);
+			a.aaload();
+			a.astore(FN);
+			a.branch(Opcode.GOTO, resolved);
+		}
 		a.bind(desReg);
 		int desMiss = a.label();
 		a.aload(FN);
@@ -1240,70 +1250,73 @@ final class JvmEvalRuntimeBuilder {
 
 		// interpreted closure? funcId == -1
 		int compiled = a.label();
-		a.iload(FUNCID);
-		a.iconst(-1);
-		a.branch(Opcode.IF_ICMPNE, compiled);
-		// arr = {Integer(-1), lambdaTail, capturedEnv}
-		idx(a, ARR, 1);
-		a.astore(PAIR); // lambdaTail = ((params) body...)
-		idx(a, ARR, 2);
-		a.astore(NEWENV); // capturedEnv
-		car(a, PAIR);
-		a.astore(PARAMS);
-		cdr(a, PAIR);
-		a.astore(BODY);
-		// bind params to args
-		a.aload(ARGLIST);
-		a.astore(ARGCUR);
-		int bloop = a.label();
-		int bend = a.label();
-		a.bind(bloop);
-		a.aload(PARAMS);
-		a.branch(Opcode.IFNULL, bend);
-		// pval = argcur == null ? null : car(argcur)
-		int pnull = a.label();
-		int pset = a.label();
-		a.aload(ARGCUR);
-		a.branch(Opcode.IFNULL, pnull);
-		car(a, ARGCUR);
-		a.branch(Opcode.GOTO, pset);
-		a.bind(pnull);
-		a.aconstNull();
-		a.bind(pset);
-		a.astore(TMP);
-		// binding = cons(car(params), pval)
-		a.iconst(2);
-		a.anewarray(this.k.objectClass());
-		a.dup();
-		a.iconst(0);
-		car(a, PARAMS);
-		a.aastore();
-		a.dup();
-		a.iconst(1);
-		a.aload(TMP);
-		a.aastore();
-		a.astore(PAIR);
-		// newenv = cons(binding, newenv)
-		consFromSlots(a, PAIR, NEWENV);
-		a.astore(NEWENV);
-		cdr(a, PARAMS);
-		a.astore(PARAMS);
-		// argcur = argcur == null ? null : cdr(argcur)
-		int anull = a.label();
-		int aset = a.label();
-		a.aload(ARGCUR);
-		a.branch(Opcode.IFNULL, anull);
-		cdr(a, ARGCUR);
-		a.branch(Opcode.GOTO, aset);
-		a.bind(anull);
-		a.aconstNull();
-		a.bind(aset);
-		a.astore(ARGCUR);
-		a.branch(Opcode.GOTO, bloop);
-		a.bind(bend);
-		prognInto(a, BODY, NEWENV, TMP);
-		a.aload(TMP);
-		a.areturn();
+		// Only the eval runtime builds one.
+		if (withEval) {
+			a.iload(FUNCID);
+			a.iconst(-1);
+			a.branch(Opcode.IF_ICMPNE, compiled);
+			// arr = {Integer(-1), lambdaTail, capturedEnv}
+			idx(a, ARR, 1);
+			a.astore(PAIR); // lambdaTail = ((params) body...)
+			idx(a, ARR, 2);
+			a.astore(NEWENV); // capturedEnv
+			car(a, PAIR);
+			a.astore(PARAMS);
+			cdr(a, PAIR);
+			a.astore(BODY);
+			// bind params to args
+			a.aload(ARGLIST);
+			a.astore(ARGCUR);
+			int bloop = a.label();
+			int bend = a.label();
+			a.bind(bloop);
+			a.aload(PARAMS);
+			a.branch(Opcode.IFNULL, bend);
+			// pval = argcur == null ? null : car(argcur)
+			int pnull = a.label();
+			int pset = a.label();
+			a.aload(ARGCUR);
+			a.branch(Opcode.IFNULL, pnull);
+			car(a, ARGCUR);
+			a.branch(Opcode.GOTO, pset);
+			a.bind(pnull);
+			a.aconstNull();
+			a.bind(pset);
+			a.astore(TMP);
+			// binding = cons(car(params), pval)
+			a.iconst(2);
+			a.anewarray(this.k.objectClass());
+			a.dup();
+			a.iconst(0);
+			car(a, PARAMS);
+			a.aastore();
+			a.dup();
+			a.iconst(1);
+			a.aload(TMP);
+			a.aastore();
+			a.astore(PAIR);
+			// newenv = cons(binding, newenv)
+			consFromSlots(a, PAIR, NEWENV);
+			a.astore(NEWENV);
+			cdr(a, PARAMS);
+			a.astore(PARAMS);
+			// argcur = argcur == null ? null : cdr(argcur)
+			int anull = a.label();
+			int aset = a.label();
+			a.aload(ARGCUR);
+			a.branch(Opcode.IFNULL, anull);
+			cdr(a, ARGCUR);
+			a.branch(Opcode.GOTO, aset);
+			a.bind(anull);
+			a.aconstNull();
+			a.bind(aset);
+			a.astore(ARGCUR);
+			a.branch(Opcode.GOTO, bloop);
+			a.bind(bend);
+			prognInto(a, BODY, NEWENV, TMP);
+			a.aload(TMP);
+			a.areturn();
+		}
 
 		// compiled closure: dispatch by argument count
 		a.bind(compiled);

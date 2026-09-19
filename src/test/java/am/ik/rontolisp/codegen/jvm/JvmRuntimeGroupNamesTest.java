@@ -62,12 +62,11 @@ class JvmRuntimeGroupNamesTest {
 				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
 		MethodrefConstant equal = selfMethod(cp, selfClass, "_equal", "(Ljava/lang/Object;Ljava/lang/Object;)I");
 		MethodrefConstant eqv = selfMethod(cp, selfClass, "_eqv", "(Ljava/lang/Object;Ljava/lang/Object;)I");
-		MethodrefConstant eq = selfMethod(cp, selfClass, "_eq", "(Ljava/lang/Object;Ljava/lang/Object;)I");
 		MethodrefConstant strv = selfMethod(cp, selfClass, "_strv", "(Ljava/lang/Object;)Ljava/lang/Object;");
 		ClassConstant stringArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/String;"));
 
 		List<JvmHashRuntimeBuilder.HashMethod> emitted = JvmHashRuntimeBuilder.build(cp, selfClass, objectClass,
-				objectArrayClass, longValueOf, equal, eqv, eq, strv, stringArrayClass, false, false);
+				objectArrayClass, longValueOf, equal, eqv, strv, stringArrayClass, false, false);
 
 		assertThat(emitted.stream().map(m -> m.name().index()).collect(Collectors.toSet()))
 			.isEqualTo(indicesOf(cp, JvmHashRuntimeBuilder.METHOD_NAMES));
@@ -84,12 +83,11 @@ class JvmRuntimeGroupNamesTest {
 				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
 		MethodrefConstant equal = selfMethod(cp, selfClass, "_equal", "(Ljava/lang/Object;Ljava/lang/Object;)I");
 		MethodrefConstant eqv = selfMethod(cp, selfClass, "_eqv", "(Ljava/lang/Object;Ljava/lang/Object;)I");
-		MethodrefConstant eq = selfMethod(cp, selfClass, "_eq", "(Ljava/lang/Object;Ljava/lang/Object;)I");
 		MethodrefConstant strv = selfMethod(cp, selfClass, "_strv", "(Ljava/lang/Object;)Ljava/lang/Object;");
 		ClassConstant stringArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/String;"));
 
 		List<JvmHashRuntimeBuilder.HashMethod> folding = JvmHashRuntimeBuilder.build(cp, selfClass, objectClass,
-				objectArrayClass, longValueOf, equal, eqv, eq, strv, stringArrayClass, true, false);
+				objectArrayClass, longValueOf, equal, eqv, strv, stringArrayClass, true, false);
 
 		Set<String> names = new java.util.LinkedHashSet<>(JvmHashRuntimeBuilder.METHOD_NAMES);
 		names.addAll(JvmHashRuntimeBuilder.EQUALP_METHOD_NAMES);
@@ -108,12 +106,11 @@ class JvmRuntimeGroupNamesTest {
 				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
 		MethodrefConstant equal = selfMethod(cp, selfClass, "_equal", "(Ljava/lang/Object;Ljava/lang/Object;)I");
 		MethodrefConstant eqv = selfMethod(cp, selfClass, "_eqv", "(Ljava/lang/Object;Ljava/lang/Object;)I");
-		MethodrefConstant eq = selfMethod(cp, selfClass, "_eq", "(Ljava/lang/Object;Ljava/lang/Object;)I");
 		MethodrefConstant strv = selfMethod(cp, selfClass, "_strv", "(Ljava/lang/Object;)Ljava/lang/Object;");
 		ClassConstant stringArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/String;"));
 
 		List<JvmHashRuntimeBuilder.HashMethod> identity = JvmHashRuntimeBuilder.build(cp, selfClass, objectClass,
-				objectArrayClass, longValueOf, equal, eqv, eq, strv, stringArrayClass, false, true);
+				objectArrayClass, longValueOf, equal, eqv, strv, stringArrayClass, false, true);
 
 		Set<String> names = new java.util.LinkedHashSet<>(JvmHashRuntimeBuilder.METHOD_NAMES);
 		names.addAll(JvmHashRuntimeBuilder.IDENTITY_METHOD_NAMES);

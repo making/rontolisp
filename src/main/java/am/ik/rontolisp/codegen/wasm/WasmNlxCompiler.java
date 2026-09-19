@@ -235,7 +235,7 @@ final class WasmNlxCompiler {
 		}
 		if (eqTags) {
 			// A user tag is an ordinary value compared with eq, not a unique id.
-			WasmEmitHelper.emitEqComparison(ctx);
+			WasmEmitHelper.emitEqlComparison(ctx);
 		}
 		else {
 			ctx.writer.write(Instruction.REF_EQ);

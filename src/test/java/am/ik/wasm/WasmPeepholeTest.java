@@ -213,6 +213,84 @@ class WasmPeepholeTest {
 	}
 
 	@Test
+	void foldsACallOfAFunctionWhoseWholeBodyIsAConstant() {
+		// The call only consumes its argument: it becomes a drop and the constant, and
+		// the drop takes the argument's pure push with it. A callee with anything else in
+		// its body -- here one more instruction -- is a real call and stays.
+		byte[] caller = body(0, w -> {
+			local(w, Instruction.GET_LOCAL, 0);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(1);
+			local(w, Instruction.GET_LOCAL, 0);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(2);
+			w.write(Instruction.I32_ADD);
+		});
+		byte[] constant = body(0, w -> {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(300);
+		});
+		byte[] computed = body(0, w -> {
+			local(w, Instruction.GET_LOCAL, 0);
+			w.write(Instruction.I32_EQZ);
+		});
+		byte[] rewritten = WasmPeephole.rewrite(module(new int[] { 0, 0, 0 }, List.of(caller, constant, computed)));
+
+		assertThat(code(rewritten, 0)).containsExactly("i32.const", "local.get 0", "call 2", "i32.add", "end");
+	}
+
+	@Test
+	void foldsAnIfWhoseArmsPushTheSameConstant() {
+		// The condition decides nothing, so it is dropped -- and a test that cannot trap
+		// goes with its drop, and the operand's push with that. Two different constants
+		// are a real choice and stay.
+		byte[] same = body(0, w -> {
+			local(w, Instruction.GET_LOCAL, 0);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF);
+			w.write(Type.I32);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.ELSE);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.END);
+		});
+		byte[] different = body(0, w -> {
+			local(w, Instruction.GET_LOCAL, 0);
+			w.write(Instruction.IF);
+			w.write(Type.I32);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.ELSE);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(1);
+			w.write(Instruction.END);
+		});
+		// Two i64 constants are never taken for the same: the decoder does not keep their
+		// immediates, so the rule cannot compare them.
+		byte[] wide = body(0, w -> {
+			local(w, Instruction.GET_LOCAL, 0);
+			w.write(Instruction.IF);
+			w.write(Type.I64);
+			w.write(Instruction.I64_CONST);
+			w.writeSignedLeb128(1);
+			w.write(Instruction.ELSE);
+			w.write(Instruction.I64_CONST);
+			w.writeSignedLeb128(2);
+			w.write(Instruction.END);
+			w.write(Instruction.I32_WRAP_I64);
+		});
+		byte[] module = module(new int[] { 0, 0, 0 }, List.of(same, different, wide));
+		byte[] rewritten = WasmPeephole.rewrite(module);
+
+		assertThat(code(rewritten, 0)).containsExactly("i32.const", "end");
+		assertThat(code(rewritten, 1)).containsExactly("local.get 0", "if", "i32.const", "else", "i32.const", "end",
+				"end");
+		assertThat(code(rewritten, 2)).isEqualTo(code(module, 2));
+	}
+
+	@Test
 	void deletesADoubleNegationOnlyABranchConsumes() {
 		// An `if`/`br_if` asks whether the operand is zero, which two negations leave
 		// as it was; an `i32.and` would see the value itself, so that pair stays. The
