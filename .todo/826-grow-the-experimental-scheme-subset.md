@@ -21,7 +21,7 @@ backend, add its cases to `scheme-spec.yaml`.
 | `define-library` / `include` | per-file lowering gets a library scope | Done in `.todo/882` (`.kb/scheme-frontend.md`, "Libraries and include"); exporting syntax from a library is `.todo/883` |
 | `cond-expand` (top level and as a library declaration) | a pre-pass beside `include`'s, over a feature list (`r7rs`, `rontolisp`, `(library ...)`, `and`/`or`/`not`, `else`) | refused by name today, in a program and in a `define-library` |
 | internal `define-record-type` | needs a non-top-level `defstruct`, which the compile path refuses (`.kb/defstruct.md`) | Done in `.todo/884`: the `defstruct` is hoisted to the top level (`.kb/scheme-frontend.md`, "Internal record types"; one type per occurrence, not per evaluation) |
-| `|...|` identifiers, `+inf.0` / `+nan.0` | reader | check that every backend PRINTS infinities the same way first |
+| `|...|` identifiers, `+inf.0` / `+nan.0` | reader | check that every backend PRINTS infinities the same way first. Split off: `.todo/886` |
 
 Driven by a corpus rather than by the report: `.todo/828` (the SICP sample corpus) and its
 items `.todo/829` .. `.todo/837`; `eval` is `.todo/833`.
