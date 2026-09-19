@@ -33,10 +33,10 @@ import org.jspecify.annotations.Nullable;
  * </pre>
  *
  * {@code library} is the R7RS library exporting the name ({@code base} / {@code write} /
- * {@code inexact} / {@code cxr} / {@code lazy} / {@code process-context} / {@code eval} /
- * {@code repl}, or {@code sicp} / {@code r5rs} for a name no import can reach),
- * {@code result} says what the template answers -- {@code value}, {@code pred} (a Common
- * Lisp boolean, {@code T}/{@code NIL}, which fuses into an {@code if} test and is
+ * {@code char} / {@code inexact} / {@code cxr} / {@code lazy} / {@code process-context} /
+ * {@code eval} / {@code repl}, or {@code sicp} / {@code r5rs} for a name no import can
+ * reach), {@code result} says what the template answers -- {@code value}, {@code pred} (a
+ * Common Lisp boolean, {@code T}/{@code NIL}, which fuses into an {@code if} test and is
  * converted to {@code #t}/{@code #f} anywhere else), {@code or-false} (a value, or
  * {@code NIL} meaning {@code #f}) or {@code effect} (the template's value is discarded
  * and the call answers the unspecified object, which a REPL does not echo). One
@@ -110,8 +110,8 @@ final class SchemeBuiltins {
 	 *
 	 * @param name the Scheme name
 	 * @param library the exporting library's last component ({@code base}, {@code write},
-	 * {@code inexact}, {@code cxr}, {@code lazy}, {@code process-context}, {@code eval},
-	 * {@code repl}), or a tag no import names ({@code sicp}, {@code r5rs})
+	 * {@code char}, {@code inexact}, {@code cxr}, {@code lazy}, {@code process-context},
+	 * {@code eval}, {@code repl}), or a tag no import names ({@code sicp}, {@code r5rs})
 	 * @param result what the templates answer
 	 * @param alternatives the accepted argument shapes
 	 * @param function the first-class value: a form answering a function that returns
@@ -410,6 +410,53 @@ final class SchemeBuiltins {
 			 ((s from to) (coerce (subseq s from to) 'list))
 			 :function (lambda (s &optional (from 0) to) (coerce (subseq s from to) 'list)))
 			("list->string" base value ((l) (rontolisp::%scheme-list->string "list->string" l)))
+
+			;; --- (scheme char): Unicode properties and case mappings through helpers over
+			;; tables generated from the JDK (SchemeCharacters), so every backend answers
+			;; alike -- alpha-char-p and digit-char-p are ASCII-only on wasm. char-upcase
+			;; and char-downcase are the simple mappings every backend already shares.
+			("char-alphabetic?" char pred ((c) (rontolisp::%scheme-char-alphabetic? c)))
+			("char-numeric?" char pred ((c) (rontolisp::%scheme-char-numeric? c)))
+			("char-whitespace?" char pred ((c) (rontolisp::%scheme-char-whitespace? c)))
+			("char-upper-case?" char pred ((c) (rontolisp::%scheme-char-upper-case? c)))
+			("char-lower-case?" char pred ((c) (rontolisp::%scheme-char-lower-case? c)))
+			("digit-value" char or-false ((c) (rontolisp::%scheme-digit-value c)))
+			("char-upcase" char value ((c) (char-upcase c)))
+			("char-downcase" char value ((c) (char-downcase c)))
+			("char-foldcase" char value ((c) (rontolisp::%scheme-char-foldcase c)))
+			("char-ci=?" char pred ((a b) (rontolisp::%scheme-char-ci=? a b))
+			 ((a b &rest r) (rontolisp::%scheme-chain #'rontolisp::%scheme-char-ci=? (list a b . r)))
+			 :function (lambda (&rest r) (if (rontolisp::%scheme-chain #'rontolisp::%scheme-char-ci=? r) t rontolisp::%scheme-false)))
+			("char-ci<?" char pred ((a b) (rontolisp::%scheme-char-ci<? a b))
+			 ((a b &rest r) (rontolisp::%scheme-chain #'rontolisp::%scheme-char-ci<? (list a b . r)))
+			 :function (lambda (&rest r) (if (rontolisp::%scheme-chain #'rontolisp::%scheme-char-ci<? r) t rontolisp::%scheme-false)))
+			("char-ci>?" char pred ((a b) (rontolisp::%scheme-char-ci>? a b))
+			 ((a b &rest r) (rontolisp::%scheme-chain #'rontolisp::%scheme-char-ci>? (list a b . r)))
+			 :function (lambda (&rest r) (if (rontolisp::%scheme-chain #'rontolisp::%scheme-char-ci>? r) t rontolisp::%scheme-false)))
+			("char-ci<=?" char pred ((a b) (rontolisp::%scheme-char-ci<=? a b))
+			 ((a b &rest r) (rontolisp::%scheme-chain #'rontolisp::%scheme-char-ci<=? (list a b . r)))
+			 :function (lambda (&rest r) (if (rontolisp::%scheme-chain #'rontolisp::%scheme-char-ci<=? r) t rontolisp::%scheme-false)))
+			("char-ci>=?" char pred ((a b) (rontolisp::%scheme-char-ci>=? a b))
+			 ((a b &rest r) (rontolisp::%scheme-chain #'rontolisp::%scheme-char-ci>=? (list a b . r)))
+			 :function (lambda (&rest r) (if (rontolisp::%scheme-chain #'rontolisp::%scheme-char-ci>=? r) t rontolisp::%scheme-false)))
+			("string-ci=?" char pred ((a b) (rontolisp::%scheme-string-ci=? a b))
+			 ((a b &rest r) (rontolisp::%scheme-chain #'rontolisp::%scheme-string-ci=? (list a b . r)))
+			 :function (lambda (&rest r) (if (rontolisp::%scheme-chain #'rontolisp::%scheme-string-ci=? r) t rontolisp::%scheme-false)))
+			("string-ci<?" char pred ((a b) (rontolisp::%scheme-string-ci<? a b))
+			 ((a b &rest r) (rontolisp::%scheme-chain #'rontolisp::%scheme-string-ci<? (list a b . r)))
+			 :function (lambda (&rest r) (if (rontolisp::%scheme-chain #'rontolisp::%scheme-string-ci<? r) t rontolisp::%scheme-false)))
+			("string-ci>?" char pred ((a b) (rontolisp::%scheme-string-ci>? a b))
+			 ((a b &rest r) (rontolisp::%scheme-chain #'rontolisp::%scheme-string-ci>? (list a b . r)))
+			 :function (lambda (&rest r) (if (rontolisp::%scheme-chain #'rontolisp::%scheme-string-ci>? r) t rontolisp::%scheme-false)))
+			("string-ci<=?" char pred ((a b) (rontolisp::%scheme-string-ci<=? a b))
+			 ((a b &rest r) (rontolisp::%scheme-chain #'rontolisp::%scheme-string-ci<=? (list a b . r)))
+			 :function (lambda (&rest r) (if (rontolisp::%scheme-chain #'rontolisp::%scheme-string-ci<=? r) t rontolisp::%scheme-false)))
+			("string-ci>=?" char pred ((a b) (rontolisp::%scheme-string-ci>=? a b))
+			 ((a b &rest r) (rontolisp::%scheme-chain #'rontolisp::%scheme-string-ci>=? (list a b . r)))
+			 :function (lambda (&rest r) (if (rontolisp::%scheme-chain #'rontolisp::%scheme-string-ci>=? r) t rontolisp::%scheme-false)))
+			("string-upcase" char value ((s) (rontolisp::%scheme-string-upcase s)))
+			("string-downcase" char value ((s) (rontolisp::%scheme-string-downcase s)))
+			("string-foldcase" char value ((s) (rontolisp::%scheme-string-foldcase s)))
 
 			;; --- vectors ---
 			("vector?" base pred ((x) (simple-vector-p x)))

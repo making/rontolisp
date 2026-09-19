@@ -44,6 +44,6 @@
 
 ## Not yet
 
-`define-library`, file ports (`(scheme file)`), `(scheme char)` and the other libraries, `|...|` identifiers,
+`define-library`, file ports (`(scheme file)`), the other libraries, `|...|` identifiers,
 reading `+inf.0` / `+nan.0`. The syntactic ones are refused by name when the file is
 read.

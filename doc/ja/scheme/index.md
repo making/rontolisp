@@ -1,7 +1,7 @@
 # Scheme（実験的）
 
 **実験的機能です。** rontolisp は R7RS-small の一部 -- `(scheme base)`、
-`(scheme write)`、`(scheme read)`、`(scheme inexact)`、`(scheme cxr)`、`(scheme lazy)`、`(scheme case-lambda)`、`(scheme process-context)` の `exit`、
+`(scheme write)`、`(scheme read)`、`(scheme char)`、`(scheme inexact)`、`(scheme cxr)`、`(scheme lazy)`、`(scheme case-lambda)`、`(scheme process-context)` の `exit`、
 `(scheme eval)`、`(scheme repl)`
 -- を、Scheme プログラムを全バックエンドで動かせる最小限の範囲で読みます。
 準拠は意図的に部分的で、互換性の約束はありません。Scheme プログラムを JVM や WebAssembly で
@@ -45,7 +45,7 @@ rontolisp prog.txt --source-language scheme        # any extension
 - [REPL](repl.md) -- 対話セッションとスクリプト実行モード。
 - [規格](standards.md) -- `--scheme-standard`: この処理系の方言か、厳密な R7RS か。
 - [構文](syntax.md) -- リーダー、特殊形式、`import`。
-- [ライブラリ](libraries.md) -- import できる 10 の R7RS ライブラリと、それぞれが
+- [ライブラリ](libraries.md) -- import できる 11 の R7RS ライブラリと、それぞれが
   提供するもの。
 - [*Structure and Interpretation of Computer Programs*（SICP）互換](sicp.md) -- `import`
   なしで見える MIT/SICP 由来の名前。

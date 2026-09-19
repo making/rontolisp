@@ -2249,6 +2249,126 @@ cases:
       "current-output-port: not a textual output port: 5"
       "current-input-port: not a textual input port: #<textual-output-port>"
       (#<textual-output-port> #<binary-input-port> #<binary-output-port> #<textual-input-port>)
+  # (scheme char): the Unicode answers are the JDK's (the backends' char-upcase tables
+  # come from it), laid out by generated range tables so all four backends agree. The
+  # expected text is Gauche 0.9.15's, except where .kb/scheme-frontend.md, "(scheme
+  # char)", says Gauche departs from Unicode (marked below).
+  - name: char-library-classifies-and-converts-ascii
+    source: |
+      (write
+       (list (char-alphabetic? #\a) (char-alphabetic? #\1) (char-numeric? #\7)
+             (char-numeric? #\x) (char-whitespace? #\space) (char-whitespace? #\tab)
+             (char-whitespace? #\newline) (char-whitespace? #\a) (char-upper-case? #\A)
+             (char-upper-case? #\a) (char-lower-case? #\a) (char-lower-case? #\1)))
+      (newline)
+      (write
+       (list (digit-value #\7) (digit-value #\a) (char-upcase #\a) (char-downcase #\A)
+             (char-foldcase #\Q) (char-upcase #\1)))
+      (newline)
+      (write
+       (list (char-ci=? #\a #\A) (char-ci=? #\a #\A #\b) (char-ci<? #\a #\B #\c)
+             (char-ci>? #\c #\B) (char-ci<=? #\a #\A #\b) (char-ci>=? #\b #\B #\c)
+             (char-ci<? #\Z #\a) (char-ci<? #\_ #\a)))
+      (newline)
+      (write
+       (list (string-ci=? "Hello" "hELLO") (string-ci=? "a" "A" "b")
+             (string-ci<? "apple" "BANANA") (string-ci>? "b" "A") (string-ci<=? "a" "A" "b")
+             (string-ci>=? "b" "B" "a") (string-ci<? "_" "A")))
+      (newline)
+      (write
+       (list (string-upcase "Hello, World") (string-downcase "Hello, World")
+             (string-foldcase "Hello, World")))
+      (newline)
+      (if (char-upper-case? #\A) (display "fused") (display "not fused"))
+      (newline)
+    expected: |
+      (#t #f #t #f #t #t #t #f #t #f #t #f)
+      (7 #f #\A #\a #\q #\1)
+      (#t #f #t #t #t #f #f #t)
+      (#t #f #t #t #t #t #t)
+      ("HELLO, WORLD" "hello, world" "hello, world")
+      fused
+  - name: char-library-follows-unicode
+    source: |
+      (write
+       (list (char-alphabetic? (integer->char #x3BB)) (char-alphabetic? (integer->char #x3042))
+             (char-alphabetic? (integer->char #x2160)) (char-alphabetic? (integer->char #x345))
+             (char-numeric? (integer->char #x664)) (char-numeric? (integer->char #xFF11))
+             (char-numeric? (integer->char #x2155)) (digit-value (integer->char #x664))
+             (digit-value (integer->char #xFF11)) (digit-value (integer->char #x2155))
+             (digit-value (integer->char #x1D7CE))))
+      (newline)
+      (write
+       (list (char-whitespace? (integer->char #xA0)) (char-whitespace? (integer->char #x3000))
+             (char-whitespace? (integer->char #x2028)) (char-whitespace? (integer->char #x1C))
+             (char-whitespace? (integer->char #x200B))))
+      (newline)
+      (write
+       (list (char-upper-case? (integer->char #x1C5)) (char-lower-case? (integer->char #x1C5))
+             (char-lower-case? (integer->char #xAA)) (char-upper-case? (integer->char #x2160))
+             (char-lower-case? (integer->char #xDF)) (char-upper-case? (integer->char #x2102))
+             (char-upper-case? (integer->char #x1D400))))
+      (newline)
+      (write
+       (map char->integer
+            (list (char-upcase (integer->char #xDF)) (char-foldcase (integer->char #x3C2))
+                  (char-downcase (integer->char #x3C2)) (char-foldcase (integer->char #x1E9E))
+                  (char-foldcase (integer->char #x130)) (char-downcase (integer->char #x130))
+                  (char-foldcase (integer->char #x1C5)) (char-foldcase (integer->char #xB5))
+                  (char-upcase (integer->char #x1C5)) (char-foldcase (integer->char #x131)))))
+      (newline)
+      (write
+       (list (string-upcase "straße") (string-foldcase "Straße") (string-downcase "ΧΑΟΣ")
+             (string-downcase "ΧΑΟΣ Σ") (string-foldcase "ΧΑΟΣ") (string-upcase "ﬁx")
+             (string-downcase "İ") (string-downcase "AΣ.") (string-downcase "AΣ'S")))
+      (newline)
+      (write
+       (list (string-ci=? "Straße" "STRASSE") (char-ci=? (integer->char #x3C2) (integer->char #x3A3))
+             (string-ci<? "straße" "STRASSF") (string-ci=? "ΧΑΟΣ" "χαος")))
+      (newline)
+      ;; Unicode, not Gauche: U+0131 has no case folding and U+1E9E's full folding is
+      ;; "ss" (Gauche: "i̇i", "ß"); a Cherokee small letter folds to its capital
+      ;; (Gauche's tables predate Unicode 8: 43888).
+      (write
+       (list (string-foldcase "İı") (string-foldcase (string (integer->char #x1E9E)))
+             (char->integer (char-foldcase (integer->char #xAB70)))))
+      (newline)
+    expected: |
+      (#t #t #t #t #t #t #f 4 1 #f 0)
+      (#t #t #t #f #f)
+      (#f #f #t #t #t #t #t)
+      (223 963 962 223 304 105 454 956 452 305)
+      ("STRASSE" "strasse" "χαος" "χαος σ" "χαοσ" "FIX" "i̇" "aς." "aσ's")
+      (#t #t #t #t)
+      ("i̇ı" "ss" 5024)
+  - name: char-library-procedures-are-first-class-and-reach-eval
+    source: |
+      (write
+       (list (map char-upcase (string->list "abc")) (apply char-ci=? (list #\a #\A))
+             (apply string-ci<? '("a" "B" "c")) (map digit-value (string->list "0x9"))
+             (map string-foldcase '("A" "ß")) (char-whitespace? #\x)))
+      (newline)
+      (write
+       (eval '(list (string-upcase "eval") (char-ci=? #\e #\E) (digit-value #\5))
+             (environment '(scheme base) '(scheme char))))
+      (newline)
+    expected: |
+      ((#\A #\B #\C) #t #t (0 #f 9) ("a" "ss") #f)
+      ("EVAL" #t 5)
+  # R7RS 2.1: #!fold-case folds as string-foldcase does, in the file and on a port.
+  # Gauche folds only ASCII there: it reads (straße #\space ΧΑΟΣ).
+  - name: fold-case-directive-folds-as-string-foldcase
+    source: |
+      #!fold-case
+      (define Straße 1)
+      (write (list STRASSE strasse))
+      #!no-fold-case
+      (newline)
+      (write (read (open-input-string "#!fold-case (Straße #\\SPACE ΧΑΟΣ)")))
+      (newline)
+    expected: |
+      (1 1)
+      (strasse #\space χαοσ)
 # An uncaught application of a non-procedure ends the program, so these cannot
 # join the concatenated corpus above -- one program per case, per backend, like
 # ci-spec.yaml's standalone: list (.todo/851). The dynamic-wind puts the wasm
@@ -2373,6 +2493,14 @@ standalone:
       (newline)
     stdout: |
       (12 10)
+  - name: strict-r7rs-imports-scheme-char
+    standards: [rontolisp, r7rs]
+    source: |
+      (import (scheme base) (scheme write) (prefix (scheme char) c:))
+      (write (list (c:char-upcase #\a) (c:string-foldcase "ABC") (c:char-ci=? #\a #\A)))
+      (newline)
+    stdout: |
+      (#\A "abc" #t)
   - name: strict-r7rs-eval-reaches-no-sicp-procedure
     standards: [r7rs]
     source: |

@@ -1,8 +1,8 @@
 # Libraries
 
-The ten R7RS libraries a file may `import`, and what each provides. Every name has its
+The eleven R7RS libraries a file may `import`, and what each provides. Every name has its
 own page in the [Reference](reference.md). A file that opens with `(import ...)` (see
-[Syntax](syntax.md)) sees only the libraries it names; a file with none sees all ten,
+[Syntax](syntax.md)) sees only the libraries it names; a file with none sees all eleven,
 plus the [*Structure and Interpretation of Computer Programs* (SICP)-compatibility names](sicp.md).
 
 | Library | Provides |
@@ -10,6 +10,7 @@ plus the [*Structure and Interpretation of Computer Programs* (SICP)-compatibili
 | [(scheme base)](reference/library-base.md) | The core: numbers, booleans, pairs and lists, symbols, characters, strings, vectors, bytevectors, control, exceptions, ports -- string and bytevector ports, the current ports -- and input and output; its syntax is on [Syntax](reference/syntax.md) |
 | [(scheme write)](reference/library-write.md) | `display` and `write` |
 | [(scheme read)](reference/library-read.md) | `read` |
+| [(scheme char)](reference/library-char.md) | Unicode character classes, case mappings and case-insensitive comparisons |
 | [(scheme inexact)](reference/library-inexact.md) | Transcendental functions and the float predicates |
 | [(scheme cxr)](reference/library-cxr.md) | The three- and four-deep `car`/`cdr` compositions |
 | [(scheme lazy)](reference/library-lazy.md) | Promises |

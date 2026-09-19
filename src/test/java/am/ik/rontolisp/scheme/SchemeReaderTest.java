@@ -117,6 +117,13 @@ class SchemeReaderTest {
 	}
 
 	@Test
+	void foldCaseFoldsAsStringFoldcaseDoes() {
+		// R7RS 2.1: as if by string-foldcase -- full case folding, not lowercasing (a
+		// final sigma folds to sigma, sharp s to "ss", a Cherokee letter to its capital).
+		assertThat(printed("#!fold-case Straße ΧΑΟΣ ǅ")).isEqualTo("[|strasse|, χαοσ, ǆ]");
+	}
+
+	@Test
 	void foldCaseDoesNotFoldStrings() {
 		assertThat(printed("#!fold-case \"Foo\"")).isEqualTo("[\"Foo\"]");
 	}
