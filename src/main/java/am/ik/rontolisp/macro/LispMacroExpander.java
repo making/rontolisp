@@ -34670,11 +34670,11 @@ public final class LispMacroExpander {
 	 * Settles a LAMBDA body's tail for the compile paths -- a {@code flet}/{@code labels}
 	 * function and a built-in wrapper included -- so a closure answers one value where
 	 * its tail is one, whatever an argument published ({@link #settleMvTail}'s clears).
-	 * Unlike a {@code defun} body, a syntactic producer in the tail is NOT rewritten to
-	 * publish: the interpreter rewrites no lambda body, so
-	 * {@code (funcall (lambda () (gethash k h)))} answers one value on every backend
-	 * ({@link TailMode#CLEAR}). An empty body answers nil, which is one value: it gets a
-	 * clearing nil.
+	 * Clear only ({@link TailMode#CLEAR}): a syntactic producer in a user lambda's tail
+	 * was already rewritten to publish by {@link #injectMvSpillGlobal}
+	 * ({@code settleLambdaTails}), and a built-in wrapper's stays one value, as the
+	 * built-in it wraps is on the interpreter. An empty body answers nil, which is one
+	 * value: it gets a clearing nil.
 	 * @param body the body forms
 	 * @return the body with its last form settled, or {@code body} itself when nothing
 	 * changed
@@ -34776,9 +34776,8 @@ public final class LispMacroExpander {
 		/**
 		 * The compile paths' walk over a {@code lambda} body (a
 		 * {@code flet}/{@code labels} function, a built-in wrapper included): clear only.
-		 * A syntactic producer in a lambda's tail stays ONE value, as it is on the
-		 * interpreter, which rewrites no lambda body -- the documented gap, kept the same
-		 * on every backend.
+		 * A user lambda's producer tail was made to publish earlier, by
+		 * {@link #injectMvSpillGlobal}; a built-in wrapper's stays one value.
 		 */
 		CLEAR;
 
@@ -34813,8 +34812,10 @@ public final class LispMacroExpander {
 						SourceProvenance.inherit(producer, nestMvBindings(lowered.bindings(), listToCons(valuesParts))),
 						false);
 			}
-			// A lambda's tail: the producer is the one-value cl function call it also is
-			// on the interpreter, classified by name below.
+			// Clear mode (a lambda's tail as the backend compiles it): a user lambda's
+			// producer was rewritten to publish before this walk, so what is left is a
+			// built-in wrapper's, the one-value cl function call it also is on the
+			// interpreter, classified by name below.
 		}
 		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
 			if (form instanceof LispCons) {
@@ -35282,6 +35283,93 @@ public final class LispMacroExpander {
 			out.add(rewritten);
 		}
 		return changed ? out : program;
+	}
+
+	/**
+	 * Rewrites the tail of every {@code lambda} body and every {@code flet}/
+	 * {@code labels} function body in {@code form}, at any depth, so that a syntactic
+	 * producer there publishes its secondary value ({@link #spillEscapingMvProducers}) as
+	 * it does in a {@code defun}'s tail. Publish only: the backends' lambda compilers
+	 * clear a single-valued tail afterwards ({@link #settleFunctionBody}). A
+	 * {@code quote} is data and a {@code defmacro}/{@code macrolet}/
+	 * {@code define-compiler-macro} definition is compile-time code, so neither is
+	 * entered. Unchanged subtrees keep their cons identity (.kb/source-positions.md).
+	 * @param form any form
+	 * @return the rewritten form, or {@code form} itself when nothing changed
+	 */
+	private static LispVal settleLambdaTails(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return form;
+		}
+		List<LispVal> parts = cons.toList();
+		String head = cons.car() instanceof LispSymbol sym ? sym.name() : "";
+		switch (head) {
+			case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE, LispNames.DEFMACRO, LispNames.DEFINE_COMPILER_MACRO,
+					LispNames.DECLARE:
+				return form;
+			default:
+				break;
+		}
+		List<LispVal> out = new java.util.ArrayList<>(parts.size());
+		boolean changed = false;
+		for (int i = 0; i < parts.size(); i++) {
+			LispVal part = parts.get(i);
+			LispVal rewritten;
+			if (i == 1 && (LispNames.FLET.equals(head) || LispNames.LABELS.equals(head))) {
+				rewritten = settleLocalFunctionTails(part);
+			}
+			else if (i == 1 && LispNames.MACROLET.equals(head)) {
+				rewritten = part;
+			}
+			else {
+				rewritten = settleLambdaTails(part);
+			}
+			changed = changed || rewritten != part;
+			out.add(rewritten);
+		}
+		if (LispNames.LAMBDA.equals(head) && out.size() >= 3) {
+			LispVal last = out.get(out.size() - 1);
+			LispVal settled = spillEscapingMvProducers(last);
+			changed = changed || settled != last;
+			out.set(out.size() - 1, settled);
+		}
+		return changed ? rebuilt(cons, out) : form;
+	}
+
+	/**
+	 * The {@code flet}/{@code labels} definition list: each {@code (name params . body)}
+	 * gets its body walked and its tail published, like a lambda's
+	 * ({@link #settleLambdaTails}).
+	 */
+	private static LispVal settleLocalFunctionTails(LispVal definitions) {
+		if (!(definitions instanceof LispCons defsCons) || !defsCons.isProperList()) {
+			return definitions;
+		}
+		List<LispVal> defs = defsCons.toList();
+		List<LispVal> out = new java.util.ArrayList<>(defs.size());
+		boolean changed = false;
+		for (LispVal def : defs) {
+			LispVal rewritten = def;
+			if (def instanceof LispCons defCons && defCons.isProperList() && defCons.toList().size() >= 3) {
+				List<LispVal> defParts = new java.util.ArrayList<>(defCons.toList());
+				boolean defChanged = false;
+				for (int i = 2; i < defParts.size(); i++) {
+					LispVal body = settleLambdaTails(defParts.get(i));
+					defChanged = defChanged || body != defParts.get(i);
+					defParts.set(i, body);
+				}
+				int lastIndex = defParts.size() - 1;
+				LispVal settled = spillEscapingMvProducers(defParts.get(lastIndex));
+				defChanged = defChanged || settled != defParts.get(lastIndex);
+				defParts.set(lastIndex, settled);
+				if (defChanged) {
+					rewritten = rebuilt(defCons, defParts);
+				}
+			}
+			changed = changed || rewritten != def;
+			out.add(rewritten);
+		}
+		return changed ? rebuilt(defsCons, out) : definitions;
 	}
 
 	/** Wraps the body in nested single-binding {@code let}s, first binding outermost. */
@@ -40030,6 +40118,13 @@ public final class LispMacroExpander {
 			// published. Gated on usesMv: without a consumer nothing can observe the
 			// spill, and the emitted output stays byte-identical.
 			program = settleDefunTails(program);
+			// A lambda's or a flet/labels function's tail publishes the same way
+			// (the interpreter's evalLambdaForm runs the same rewrite).
+			List<LispVal> lambdaSettled = new java.util.ArrayList<>(program.size());
+			for (LispVal form : program) {
+				lambdaSettled.add(settleLambdaTails(form));
+			}
+			program = lambdaSettled;
 		}
 		for (String name : PRINTER_MODE_VARS.keySet()) {
 			// print-unreadable-object READS *print-escape* to decide how it spells the

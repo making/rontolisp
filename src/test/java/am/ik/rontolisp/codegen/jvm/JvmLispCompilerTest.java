@@ -10675,6 +10675,46 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunSyntacticMvProducerTailPublishesThroughALambdaReturn() throws Exception {
+		// A syntactic producer in a lambda's tail keeps its secondary value through
+		// the call. Shared verbatim with LispEvaluatorTest.MV_PRODUCER_LAMBDA_TAIL and
+		// the mv-producer-lambda-tail ci-spec case; every line is SBCL's.
+		assertThat(compileAndRun("""
+				(defvar ci-mvl-h (make-hash-table :test 'equal))
+				(setf (gethash "K" ci-mvl-h) 5)
+				(defvar ci-mvl-f (lambda (x) (floor x 3)))
+				(defun ci-mvl-in-defun (x) (funcall (lambda () (truncate x 4))))
+				(defun ci-mvl-flet (x) (flet ((g (y) (ceiling y 2))) (multiple-value-list (g x))))
+				(defun ci-mvl-maker () (lambda (x) (round x 2)))
+				(print (multiple-value-list (funcall (lambda () (floor 7 2)))))
+				(print (multiple-value-list (funcall (lambda () (floor 7.5)))))
+				(print (multiple-value-list (funcall (lambda (x) (truncate x)) 7.5)))
+				(print (multiple-value-list (funcall (lambda (x) (ceiling x 2)) 7)))
+				(print (multiple-value-list (funcall (lambda (x) (round x 2)) 7)))
+				(print (multiple-value-list (funcall (lambda () (gethash "K" ci-mvl-h)))))
+				(print (multiple-value-list (funcall (lambda () (gethash "Z" ci-mvl-h)))))
+				(print (multiple-value-list (funcall (lambda () (let ((a 1)) (if a (floor 9 4) 0))))))
+				(print (multiple-value-list (funcall ci-mvl-f 10)))
+				(print (mapcar (lambda (x) (multiple-value-list (funcall ci-mvl-f x))) '(1 5 9)))
+				(print (multiple-value-list (ci-mvl-in-defun 9)))
+				(print (ci-mvl-flet 5))
+				(print (multiple-value-list (funcall (ci-mvl-maker) 7)))
+				(print (flet ((g (x) (floor x 2))) (multiple-value-list (g 5))))
+				(print (labels ((g (x) (if (> x 10) (g (- x 10)) (truncate x 3)))) (multiple-value-list (g 25))))
+				(print (multiple-value-bind (q r) (funcall (lambda () (floor 17 5))) (list q r)))
+				(print (multiple-value-list (funcall (lambda () (subtypep 'fixnum 'integer)))))
+				(print (multiple-value-list (funcall (lambda () (read-from-string "abc")))))
+				(print (multiple-value-list (funcall (lambda () (find-symbol "CAR")))))
+				(print (multiple-value-list (funcall (lambda () (floor 7 2) 3))))
+				(print (multiple-value-list (funcall (lambda () (list (floor 7 2))))))
+				(print (multiple-value-list (funcall (lambda () (let ((v (floor 7 2))) v)))))
+				(print (multiple-value-list (car (mapcar (lambda (x) (floor x 2)) '(5)))))
+				""")).isEqualTo(String.join("\n", "(3 1)", "(7 0.5)", "(7 0.5)", "(4 -1)", "(4 -1)", "(5 T)",
+				"(NIL NIL)", "(2 1)", "(3 1)", "((0 1) (1 2) (3 0))", "(2 1)", "(3 -1)", "(4 -1)", "(2 1)", "(1 2)",
+				"(3 2)", "(T T)", "(ABC 3)", "(CAR :INHERITED)", "(3)", "((3))", "(3)", "(2)"));
+	}
+
+	@Test
 	void compileAndRunMultipleValueChannelIsExactInSingleValueContexts() throws Exception {
 		// The tail discipline (LispMacroExpander.settleMvTail): a single-valued tail --
 		// of a defun, a lambda, a flet function, a consumer's producer form -- clears

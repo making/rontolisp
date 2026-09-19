@@ -116,12 +116,19 @@ unconditional spill would tax the hottest built-ins on every call:
   interpreter `evalDefun`, ungated; `--no-gc` never. A producer LEXICALLY inside a consumer is
   intercepted by the consumer's expansion first. `handler-case`'s protected form and clause
   bodies are tail contexts too (`settleHandlerCase`).
-- Deliberate gap: a producer tail in a bare `lambda` or a `flet`/`labels` LOCAL function body is
-  not rewritten on any path -- the interpreter rewrites no lambda body, and the compile paths'
-  lambda walk (`TailMode.CLEAR`, below) treats the producer as the one-value `cl` call it is
-  there, so `(funcall (lambda () (gethash k h)))` answers one value everywhere. A non-tail
-  `return-from`/`go` escape is not scanned; `multiple-value-prog1` needs no walk (its expansion
-  ends in `values-list`).
+- Lambda and `flet`/`labels` bodies too (2026-09-19): the interpreter's `evalLambdaForm` runs
+  the same rewrite on a lambda's last body form (memoized by its cons identity,
+  `lambdaTailSettlements` -- a `flet` expansion rebuilds its lambdas around the same body conses),
+  and `injectMvSpillGlobal` walks the whole program for `lambda` forms and `flet`/`labels`
+  definitions at any depth (`settleLambdaTails`; `quote`, `defmacro`, `define-compiler-macro` and
+  `macrolet` definitions are not entered), so `(funcall (lambda () (floor 7 2)))` is `(3 1)`
+  everywhere. It runs BEFORE Pass 2 on purpose: the backends' own lambda walk sees the body after
+  `expandFloorFamilyDivisor` has turned `(floor a b)` into `(floor (/ a b))`, whose remainder is a
+  different number. A built-in WRAPPER's tail stays one value (the interpreter's built-in answers
+  one). Cost: interpreter closure creation (2M `lambda` evaluations, 5 alternating pairs) 3,695-
+  4,333 -> 3,693-3,987 ms, medians 3,761 -> 3,759; a program with no producer-tail lambda compiles
+  to the same size on both backends. A non-tail `return-from`/`go` escape is not scanned;
+  `multiple-value-prog1` needs no walk (its expansion ends in `values-list`).
 
 ## A tail settles the channel (compile paths)
 **Invariant: once a function body's tail has run, the channel holds that body's extra values.
@@ -170,7 +177,8 @@ publish in a non-tail position -- an argument, a `let` initform, a form before t
   `evalHandlerCase`, `spillEscapingMvProducers`: syntactic producers publish, nothing clears, and
   a macro form keeps its shape -- the macro-time purity walks read stored bodies),
   `PUBLISH_AND_CLEAR` (`settleMvTail`: defuns, consumers, handler-case), `CLEAR`
-  (`settleFunctionBody`: lambdas and wrappers).
+  (`settleFunctionBody`: lambdas and wrappers -- a user lambda's producer tail was already made
+  to publish by `settleLambdaTails`, above).
 - Every rebuild carries the original's source position (`SourceProvenance.inherit`,
   [[source-positions]] "Half 2"): the walk rebuilds the tail of EVERY defun in a program with
   a multiple-value operator, so a compile error inside one must still name its line
@@ -260,6 +268,8 @@ leaf that may answer other than one value leaves through a `return-from`).
 `LispEvaluatorTest` (`evalValues*`, `evalMultipleValue*`, `evalNthValue`,
 `evalUnwindProtectCleanupKeepsTheProtectedFormsValues`,
 `evalSyntacticMvProducerTailPublishesThroughAFunctionReturn`,
+`evalSyntacticMvProducerTailPublishesThroughALambdaReturn` (+ the JVM/wasm twins and the
+`mv-producer-lambda-tail` ci-spec case),
 `evalMultipleValueConsumerClearsTheSpillChannel`, `evalValuesAtTopLevelIgnoresValuesPassedAsAnArgument`,
 `evalMultipleValueChannelIsExactInSingleValueContexts`);
 `LispPreludeLibraryTest.everyPreludeDefunOfAClFunctionThatAnswersSeveralValuesIsKnownToTheTailDiscipline`;
