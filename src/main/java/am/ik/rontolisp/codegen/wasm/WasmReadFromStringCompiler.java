@@ -46,6 +46,31 @@ final class WasmReadFromStringCompiler {
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
 		ctx.writer.write(Instruction.DROP);
+		// CLHS 2.2 / 23.2: read consumes one whitespace byte that terminates the datum --
+		// a list and a character literal alike, not only a token -- so advance the
+		// cursor past it here (mirroring the frontend lexer's "<=32" byte-level
+		// whitespace test) before the delta below is computed. This only moves the
+		// cursor used by the SECOND value; the datum above was already parsed and
+		// dropped.
+		// if (cursor < end) { if (byte_at_cursor <= 32) mem[CURSOR] = cursor + 1 }
+		loadCursor(ctx);
+		loadEnd(ctx);
+		ctx.writer.write(Instruction.I32_LT_S);
+		ctx.writer.write(Instruction.IF, 0x40);
+		curByte(ctx);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(32);
+		ctx.writer.write(Instruction.I32_LE_S);
+		ctx.writer.write(Instruction.IF, 0x40);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.READ_CURSOR_ADDR);
+		loadCursor(ctx);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.write(Instruction.I32_ADD);
+		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
 		loadCursor(ctx);
 		ctx.writer.write(Instruction.I32_ADD);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
@@ -56,6 +81,19 @@ final class WasmReadFromStringCompiler {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.READ_CURSOR_ADDR);
 		ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
+	}
+
+	// Pushes mem[READ_END_ADDR].
+	private static void loadEnd(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.READ_END_ADDR);
+		ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
+	}
+
+	// Pushes the byte at the cursor.
+	private static void curByte(WasmLispCompiler.Ctx ctx) {
+		loadCursor(ctx);
+		ctx.writer.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
 	}
 
 	private static void emitSetup(LispCons cons, WasmLispCompiler.Ctx ctx) {

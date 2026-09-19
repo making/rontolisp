@@ -14062,7 +14062,7 @@ class JvmLispCompilerTest {
 				(print (multiple-value-list (read-from-string "(1 2) x")))
 				(print (nth-value 1 (read-from-string "42")))
 				(multiple-value-bind (v i) (read-from-string "(a b)") (print v) (print i))
-				""")).isEqualTo("(ABC 3)\n((1 2) 5)\n2\n(A B)\n5");
+				""")).isEqualTo("(ABC 3)\n((1 2) 6)\n2\n(A B)\n5");
 	}
 
 	@Test

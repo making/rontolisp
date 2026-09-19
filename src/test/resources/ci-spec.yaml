@@ -5055,6 +5055,19 @@ cases:
       T
       (3 2 1)
       :CL
+  - name: read-from-string-stop-index
+    source: |
+      (print (multiple-value-list (read-from-string "abc def")))
+      (print (multiple-value-list (read-from-string "(a) b")))
+      (print (multiple-value-list (read-from-string (format nil "abc~%"))))
+      (print (multiple-value-list (read-from-string "abc")))
+      (print (multiple-value-list (read-from-string "(a)")))
+    expected: |
+      (ABC 4)
+      ((A) 4)
+      (ABC 4)
+      (ABC 3)
+      ((A) 3)
   - name: runtime-read-char-literals
     source: |
       (print (read-from-string "#\\a"))

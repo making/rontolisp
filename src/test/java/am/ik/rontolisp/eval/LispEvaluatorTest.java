@@ -22760,14 +22760,17 @@ class LispEvaluatorTest {
 	}
 
 	// read-from-string answers CL's SECOND value, the index of the first character it
-	// did not read. CLHS 23.2: a token's whitespace terminator is CONSUMED with the
-	// token, a terminating macro character is given back -- so "abc def" stops at 4 and
-	// "(1 2) x" at 5. See .kb/read-load-streams.md.
+	// did not read. CLHS 23.2: a whitespace terminator is CONSUMED with the datum it
+	// terminates, a terminating macro character is given back -- and (SBCL-verified) this
+	// holds for a list or a character literal exactly as it does for a token, so
+	// "abc def" stops at 4 and "(1 2) x" at 6 (past the space after the ')'), not 5. See
+	// .kb/read-load-streams.md.
 	@Test
 	void readFromStringAnswersTheStopIndexAsItsSecondValue() {
 		assertThat(evalMulti("(multiple-value-list (read-from-string \"abc\"))").print()).isEqualTo("(ABC 3)");
 		assertThat(evalMulti("(multiple-value-list (read-from-string \"abc  def\"))").print()).isEqualTo("(ABC 4)");
-		assertThat(evalMulti("(multiple-value-list (read-from-string \"(1 2) x\"))").print()).isEqualTo("((1 2) 5)");
+		assertThat(evalMulti("(multiple-value-list (read-from-string \"(1 2) x\"))").print()).isEqualTo("((1 2) 6)");
+		assertThat(evalMulti("(multiple-value-list (read-from-string \"(1 2)\"))").print()).isEqualTo("((1 2) 5)");
 		assertThat(evalMulti("(multiple-value-list (read-from-string \"123.45\"))").print()).isEqualTo("(123.45 6)");
 		assertThat(evalMulti("(nth-value 1 (read-from-string \"#x1f\"))").print()).isEqualTo("4");
 		// Across a function boundary and through a wrapper the consumer was handed: the

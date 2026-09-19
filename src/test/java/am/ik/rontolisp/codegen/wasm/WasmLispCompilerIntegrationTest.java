@@ -12579,8 +12579,9 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("""
 				(print (multiple-value-list (read-from-string "abc")))
 				(print (nth-value 1 (read-from-string "(1 2)")))
+				(print (multiple-value-list (read-from-string "(1 2) x")))
 				(multiple-value-bind (v i) (read-from-string "(a b)") (print v) (print i))
-				""")).isEqualTo("(ABC 3)\n5\n(A B)\n5");
+				""")).isEqualTo("(ABC 3)\n5\n((1 2) 6)\n(A B)\n5");
 	}
 
 	@Test

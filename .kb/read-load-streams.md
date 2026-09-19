@@ -75,10 +75,16 @@ interpreter's alone** (the `*read-eval*` shape -- the emitted readers have no su
   which is what lets it answer for text the parse refuses. JVM: `_readFromString` then
   `_readPos`. WASM: the cursor delta, the start value riding the OPERAND STACK across the
   parse call rather than costing a scratch address.
-- CLHS 23.2 decides the last character: a token's whitespace terminator is CONSUMED with
-  the token, a terminating macro character is given back. `"abc  def"` -> 4, `"(1 2) x"`
-  -> 5. `LispLexer.lastSkipEndedInToken` is the flag; a datum that ended at a closing
-  delimiter or a string's own closing quote takes no trailing character.
+- CLHS 23.2 decides the last character: a whitespace terminator is CONSUMED with the
+  datum it terminates, a terminating macro character is given back -- and (SBCL-verified,
+  2026-09-19, `.todo/903`) this holds for ANY datum, not only a token: a list, a string
+  and a character literal all swallow one trailing whitespace character exactly like a
+  symbol or number does. `"abc  def"` -> 4, `"(1 2) x"` -> 6, `"\"str\" x"` -> 6. The
+  premise once recorded here (only a token's terminator is consumed) was the bug
+  `.todo/903` fixed: interpreter `LispLexer.datumEnd` no longer gates the trailing-
+  whitespace check on how the datum ended; JVM `_readFromString` advances `_readPos` past
+  it after `_readExpr` returns; WASM `%read-from-string-end` advances the cursor the same
+  way before computing the delta.
 - `*read-suppress*` (CLHS 2.2): the datum's characters are consumed and NOTHING is parsed,
   so an unknown package, a bogus character name and an out-of-range digit all pass. The
   interpreter's built-in reads the variable through `Environment.setReadSuppressQuery`,
@@ -103,7 +109,8 @@ Pinned by `LispEvaluatorTest#readFromStringAnswersTheStopIndexAsItsSecondValue`,
 `#aDiscardedReadFromStringLeavesNoSecondValueBehind`,
 `#readSuppressConsumesTheDatumAndAnswersNil`,
 `JvmLispCompilerTest#compileReadFromStringStopIndex`,
-`WasmLispCompilerIntegrationTest#readFromStringStopIndex`.
+`WasmLispCompilerIntegrationTest#readFromStringStopIndex`, ci-spec
+`read-from-string-stop-index`.
 
 ## `read-line`, `read-char`, `peek-char`
 - `read-line` strips one trailing CR everywhere (`BufferedReader.readLine`; WASM `_read_line` does an
