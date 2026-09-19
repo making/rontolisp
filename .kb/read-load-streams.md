@@ -464,13 +464,22 @@ never calls `file-position` pays nothing. A CHARACTER file stream, a socket, a s
 stream, a standard stream and a closed handle answer `nil` (Common Lisp's "cannot be
 determined") on both; the JVM `#'file-position` function-value wrapper is
 `REFERENCE_GATED` like `#'file-length`, because its body lowers to the gated
-`_filePosition`. The two WASM backends still answer `nil` on the set (`nil = cannot be
-determined` is CL-sanctioned); the served-request body keeps its own REAL `file-position`
-through `HttpRequestBodyStream` on all four.
+`_filePosition`. The **`--component` WASM backend** also answers real today (.todo/877):
+its fd-based reads are offset-based, so the adapter tracks a per-fd byte offset and the
+`_file_position` / `_file_position_set` runtime pair talks to it through two injected
+`file_position_get` / `file_position_set` imports (the preview1 `fd_seek` stand-in, since
+WASI 0.3 has no moveable cursor); a character stream there answers `nil` too, decided by
+a per-fd binary flag set when the stream is opened with an `(unsigned-byte 8)` element
+type. The **Preview 1** WASM backend still answers `nil` on both the query and the set
+(`nil = cannot be determined` is CL-sanctioned) -- its `fd_seek` import is `.todo/876`,
+not landed. The served-request body keeps its own REAL `file-position` through
+`HttpRequestBodyStream` on all four.
 
 Pinned by `LispEvaluatorTest#binaryFileStreamPositionQueriesAndSeeks`,
 `JvmLispCompilerTest#compileAndRunBinaryFileStreamPositionQueriesAndSeeks`,
-`compileAndRunLiteStreamBuiltins` and the Gray rewrite case.
+`WasmLispCompilerIntegrationTest#componentFilePositionQueriesAndSeeks`,
+`compileAndRunLiteStreamBuiltins`, the Gray rewrite case and ci-spec
+`file-position-round-trips-on-a-binary-file-stream`.
 
 ## A stream is a VALUE, not a handle
 **Every OPEN stream is an instance of the fixed `LispLayout.STREAM` layout** — tag `%STREAM`,

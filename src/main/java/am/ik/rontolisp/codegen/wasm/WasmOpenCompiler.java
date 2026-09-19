@@ -62,6 +62,27 @@ final class WasmOpenCompiler {
 		WasmErrorCompiler.compile(new LispCons(new LispSymbol(LispNames.ERROR_INTERNAL),
 				new LispCons(new LispString("open: cannot open file"), am.ik.rontolisp.LispNil.INSTANCE)), ctx);
 		ctx.writer.write(Instruction.END);
+		// A binary (unsigned-byte 8) file stream carries a per-fd flag the _file_position
+		// runtime reads to answer nil for a character stream (mirroring the interpreter
+		// and
+		// the JVM). Only when the program both runs under --component and calls
+		// file-position at all, so every other program keeps its bytes.
+		if (ctx.componentFilePosition && (OpenModes.staticMode(parts) & OpenModes.BINARY_BIT) != 0) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(fd);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(am.ik.wasm.Type.I31.code());
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(100);
+			ctx.writer.write(Instruction.I32_SUB);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.STREAM_BINARY_FLAGS_ADDR);
+			ctx.writer.write(Instruction.I32_ADD);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(1);
+			ctx.writer.write(Instruction.I32_STORE8, 0x00, 0x00);
+		}
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(fd);
 	}
