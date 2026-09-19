@@ -2435,6 +2435,14 @@ public final class Environment implements Scope {
 			}
 		}));
 		env.defineFunction(LispNames.SUB, new LispFunction(LispNames.SUB, args -> {
+			// Unlike + and *, - has no identity (CLHS 12.2): the compile path
+			// (compiler/ArithmeticIdentities) rejects (-) with this same text at compile
+			// time, and this check keeps the interpreter's runtime signal matching it
+			// instead of leaking the IndexOutOfBoundsException of indexing an empty list.
+			if (args.isEmpty()) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.SUB + " requires at least one argument");
+			}
 			if (hasComplex(args)) {
 				return subComplex(args);
 			}
@@ -2497,6 +2505,14 @@ public final class Environment implements Scope {
 			}
 		}));
 		env.defineFunction(LispNames.DIV, new LispFunction(LispNames.DIV, args -> {
+			// Unlike + and *, / has no identity (CLHS 12.2): the compile path
+			// (compiler/ArithmeticIdentities) rejects (/) with this same text at compile
+			// time, and this check keeps the interpreter's runtime signal matching it
+			// instead of leaking the IndexOutOfBoundsException of indexing an empty list.
+			if (args.isEmpty()) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.DIV + " requires at least one argument");
+			}
 			if (hasComplex(args)) {
 				return divComplex(args);
 			}

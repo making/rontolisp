@@ -17348,6 +17348,21 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void zeroArgumentSubtractionAndDivisionSignalCatchableProgramErrors() {
+		// (-) and (/) have no identity (CLHS 12.2 gives + and * only): the compile path
+		// (compiler/ArithmeticIdentities) rejects them with "<op> requires at least one
+		// argument" at compile time, and the interpreter used to leak the raw
+		// IndexOutOfBoundsException from indexing an empty argument list instead of
+		// signaling that same message as a catchable program-error.
+		assertThatThrownBy(() -> eval("(-)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("- requires at least one argument");
+		assertThatThrownBy(() -> eval("(/)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("/ requires at least one argument");
+		assertThat(eval("(handler-case (-) (program-error (c) :caught))").print()).isEqualTo(":CAUGHT");
+		assertThat(eval("(handler-case (/) (program-error (c) :caught))").print()).isEqualTo(":CAUGHT");
+	}
+
+	@Test
 	void applyingANonFunctionSignalsATypeErrorAndNilAnUndefinedFunction() {
 		// The cross-backend contract of .kb/error-handling.md ("Applying a value that
 		// names no function"); the JVM twin is
