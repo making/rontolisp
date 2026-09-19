@@ -18,7 +18,7 @@ backend, add its cases to `scheme-spec.yaml`.
 | bytevectors | the `(unsigned-byte 8)` pack (`.kb/packed-integer-vectors.md`) | Done in `.todo/871` (`.kb/scheme-frontend.md`, "Bytevectors"; binary ports stay with the ports row) |
 | ports (`current-output-port`, string ports, bytevector ports and `read-u8`/`write-u8`, `read-line`, `read-char`) | `%STREAM` instances (`.kb/read-load-streams.md`) | `display`/`write` take one argument today; the two-argument form is an arity error. `read` from the current input port is split off: `.todo/832`. Done in `.todo/873` (`.kb/scheme-frontend.md`, "Ports"; file ports -- `(scheme file)` -- are `.todo/874`) |
 | `(scheme char)`, `(scheme cxr)`, `(scheme inexact)`, `(scheme lazy)` | table rows in `SchemeBuiltins` with their own `library` tag | `importSet` already keys visibility on the tag. Split off: `(scheme cxr)` -> `.todo/829`, `(scheme inexact)` -> `.todo/830`, `(scheme lazy)` -> `.todo/831` (those three done), `(scheme char)` -> `.todo/879` (all four done; `(scheme char)`: `.kb/scheme-frontend.md`, "`(scheme char)`") |
-| `define-library` / `include` | per-file lowering gets a library scope | cross-file references are by convention today: an unknown name is a direct call / a variable |
+| `define-library` / `include` | per-file lowering gets a library scope | cross-file references are by convention today: an unknown name is a direct call / a variable. Split off: `.todo/882` |
 | internal `define-record-type` | needs a non-top-level `defstruct`, which the compile path refuses (`.kb/defstruct.md`) | |
 | `|...|` identifiers, `+inf.0` / `+nan.0` | reader | check that every backend PRINTS infinities the same way first |
 
