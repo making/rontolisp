@@ -249,3 +249,9 @@ The procedures of `(scheme base)`. Its syntactic keywords are on [Syntax](syntax
 | `read-bytevector!` | `(let ((b (make-bytevector 4 0))) (read-bytevector! b (open-input-bytevector #u8(7 8)) 1) b)` | `#u8(0 7 8 0)` |
 | `eof-object` | `(write (eof-object))` | prints `#<eof>` |
 | `eof-object?` | `(eof-object? (eof-object))` | `#t` |
+
+## System interface
+
+| Name | Example | Result |
+|---|---|---|
+| `features` | `(features)` | `(r7rs exact-closed ieee-float full-unicode ratios rontolisp)` |

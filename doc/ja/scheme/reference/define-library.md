@@ -8,9 +8,10 @@
 - `(import import-set...)`。ライブラリ本体から見えるもので、ライブラリが何も `import` しないときは、`import` のないプログラムと同じくすべてが見えます;
 - `(begin body...)`;
 - `(include "file"...)` と `(include-ci "file"...)`。ファイルの内容を本体に加えます;
-- `(include-library-declarations "file"...)`。そのファイルにさらに宣言が入っています。
+- `(include-library-declarations "file"...)`。そのファイルにさらに宣言が入っています;
+- `(cond-expand (requirement declaration...)...)`。[cond-expand](cond-expand.md) が選んだ節の宣言です。
 
-本体はそれ自体 1 つのファイルとして変換されます。インポートする側に届くのはエクスポートした名前だけで、それ以外のトップレベルの名前はライブラリの中に閉じるので、プログラムが同じ名前を定義してもかまいません。ライブラリは、インポートするファイルの先頭、その `import` より前にある `define-library` 形式の中から探されるか、ファイルとして探されます: `(import (geometry point))` は、プログラムを開始したファイルのディレクトリにある `geometry/point.sld`、なければ `geometry/point.scm` を読みます。いくつのファイルがインポートしても、ライブラリが実行されるのは最初のファイルがインポートしたときの 1 回だけです。ライブラリはまだ構文をエクスポートできず、`cond-expand` は名前を挙げて拒否されます。
+本体はそれ自体 1 つのファイルとして変換されます。インポートする側に届くのはエクスポートした名前だけで、それ以外のトップレベルの名前はライブラリの中に閉じるので、プログラムが同じ名前を定義してもかまいません。ライブラリは、インポートするファイルの先頭、その `import` より前にある `define-library` 形式の中から探されるか、ファイルとして探されます: `(import (geometry point))` は、プログラムを開始したファイルのディレクトリにある `geometry/point.sld`、なければ `geometry/point.scm` を読みます。いくつのファイルがインポートしても、ライブラリが実行されるのは最初のファイルがインポートしたときの 1 回だけです。ライブラリはまだ構文をエクスポートできません。
 
 ```scheme
 (define-library (counter) (export next!) (import (scheme base)) (begin (define n 0) (define (next!) (set! n (+ n 1)) n)))

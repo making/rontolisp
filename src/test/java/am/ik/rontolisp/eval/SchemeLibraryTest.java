@@ -1,5 +1,8 @@
 package am.ik.rontolisp.eval;
 
+import java.util.stream.Collectors;
+
+import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.scheme.Scheme;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -22,6 +25,28 @@ class SchemeLibraryTest {
 			"(write (list +inf.0 (floor 2.5)))" })
 	void anyOtherProgramKeepsThePrinterItHad(String source) {
 		assertThat(SchemeLibrary.makesBarSymbols(Scheme.read(source, null), Features.INTERPRETER)).isFalse();
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { "(eval '(cond-expand (r7rs 1)) (interaction-environment))",
+			"(eval (read (open-input-string \"(cond-expand (else 2))\")) (interaction-environment))" })
+	void aProgramThatSpellsCondExpandGetsTheEvalArm(String source) {
+		assertThat(processed(source)).contains("(RONTOLISP::%SCHEME-EVAL-COND-EXPAND X)");
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { "(eval '(+ 1 2) (interaction-environment))",
+			"(write (cond-expand (r7rs (eval 1 (interaction-environment)))))" })
+	void anyOtherEvalHasNoCondExpandArm(String source) {
+		assertThat(processed(source)).contains("%SCHEME-EVAL-KEYWORD-P")
+			.doesNotContain("(RONTOLISP::%SCHEME-EVAL-COND-EXPAND X)");
+	}
+
+	private static String processed(String source) {
+		return SchemeLibrary.process(Scheme.read(source, null), Features.INTERPRETER, SourceStandards.DEFAULT)
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
 	}
 
 }

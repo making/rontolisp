@@ -1586,6 +1586,25 @@ public final class WasmLispCompiler implements LispCompiler {
 	// after the last fixed helper so no index above shifts.
 	static final int FUNC_FILE_LENGTH = FUNC_EQUALP_KEY + 1;
 
+	// _file_position (stream) -> integer | nil: the tracked byte position of a file
+	// stream, answered by the injected file_position_get import (WasmIoRuntimeBuilder).
+	// Component mode only: under Preview 1 the host would need the fd_seek import (todo
+	// 876) for this, so that backend still answers nil and the FILE_POSITION operator
+	// compiles to the constant there (WasmExprCompiler). Reuses the ((ref null eq)) ->
+	// (ref null eq) signature (TYPE_CALLABLE_BASE + 0), so no new type entry; appended
+	// after the last fixed helper so no index above shifts.
+	static final int FUNC_FILE_POSITION = FUNC_FILE_LENGTH + 1;
+
+	// _file_position_set (stream, position) -> t | nil: repositions a file stream through
+	// the injected file_position_set import, answering t on success and nil when the
+	// position cannot be set (a character stream, a standard stream, a non-file).
+	// Component
+	// mode only, for the same reason as _file_position. Reuses the binary
+	// ((ref null eq), (ref null eq)) -> (ref null eq) signature (TYPE_CALLABLE_BASE + 1),
+	// so no new type entry; appended after the last fixed helper so no index above
+	// shifts.
+	static final int FUNC_FILE_POSITION_SET = FUNC_FILE_POSITION + 1;
+
 	// _type_err_int / _type_err_num ((ref null eq) culprit) -> (): the arithmetic
 	// runtime's non-number landing (WasmEmitHelper.buildTypeErrBody). _int_val's
 	// non-integer arm calls the first, _as_f64's non-number arm the second; both arms
@@ -1597,7 +1616,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// keeps the printer family unreachable there. Both reuse the ((ref null eq)) -> ()
 	// signature (TYPE_PRINT_VAL), so no new type entry; appended after the last fixed
 	// helper so no index above shifts.
-	static final int FUNC_TYPE_ERR_INT = FUNC_FILE_LENGTH + 1;
+	static final int FUNC_TYPE_ERR_INT = FUNC_FILE_POSITION_SET + 1;
 
 	static final int FUNC_TYPE_ERR_NUM = FUNC_TYPE_ERR_INT + 1;
 
@@ -2602,6 +2621,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	// adapter's scratch.)
 	static final int SOCK_FD_ADDR = 0x40018;
 
+	// The per-fd binary-stream flag table (page 5, beside the adapter's file-offset table
+	// at 0x51800): one byte per preview1 file fd, indexed as STREAM_BINARY_FLAGS_ADDR +
+	// (fd - 100). 0 = a character stream (whose byte position file-position cannot
+	// report, so it answers nil, mirroring the interpreter and the JVM), 1 = a stream
+	// opened with an (unsigned-byte 8) element type. Reset to 0 by the adapter's
+	// path_open, set to 1 by the _file_position runtime's _mark call after a binary open
+	// (WasmOpenCompiler), and read by the _file_position query/set. Component mode only.
+	static final int STREAM_BINARY_FLAGS_ADDR = 0x51a00;
+
 	// Minimum base address of the growable runtime intern table (8-byte (offset,len)
 	// records appended by _intern for symbols first seen at runtime). The actual base
 	// is computed per program -- max(this, 16-aligned end of the static string
@@ -3082,6 +3110,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// command line at all -- the expression compiler answers nil there, the way it
 		// does for %host-getcwd.
 		boolean usesHostArgv = !this.component && !this.noWasi && programUsesSymbol(program, LispNames.HOST_ARGV);
+		// file-position only needs the two injected file_position_* imports on the
+		// --component backend (the Preview 1 host would need the fd_seek import, todo
+		// 876); gated on both so a program that never calls file-position imports
+		// nothing new and every byte stays where it is.
+		boolean usesFilePosition = this.component && !this.noWasi
+				&& programUsesSymbol(program, LispNames.FILE_POSITION);
 		// Whether anything the module emits can reach the WASI environ_get / args_get
 		// calls, and with them the env/argv scratch block. _getenv is emitted
 		// unconditionally but is only CALLED for %host-getenv, and only off
@@ -3956,6 +3990,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			// compilers see the Preview 1 answer; ctx.noWasi tells the reject sites the
 			// reason so their messages name the actual conflict.
 			.component(this.component && !this.noWasi)
+			.componentFilePosition(usesFilePosition)
 			.noWasi(this.noWasi)
 			.reactorComponent(this.component && this.noWasi)
 			.hostRandom(this.hostRandom)
@@ -4861,6 +4896,22 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "args_sizes_get", TYPE_INTERN));
 			hostImports
 				.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "args_get", TYPE_INTERN));
+		}
+		// file-position: the two adapter exports the _file_position runtime calls. Both
+		// are
+		// (i32, i32) -> i32 -- the fd plus a memory pointer to the tracked 8-byte offset,
+		// the fd_filestat_get shape -- so each is TYPE_INTERN and no type entry is
+		// appended. Component only, gated on the program using file-position (see
+		// usesFilePosition above); when absent the runtime bodies are stubs and nothing
+		// is
+		// injected.
+		final int @Nullable [] filePosOrdinals = usesFilePosition
+				? new int[] { hostImports.size(), hostImports.size() + 1 } : null;
+		if (filePosOrdinals != null) {
+			hostImports.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "file_position_get",
+					TYPE_INTERN));
+			hostImports.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "file_position_set",
+					TYPE_INTERN));
 		}
 
 		// Which funcIds the arity ladders (and the name registry below) must carry a case
@@ -6481,6 +6532,12 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (FUNC_EQUALP_KEY)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _file_length (stream) ->
 															// length (FUNC_FILE_LENGTH)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _file_position (stream) ->
+															// position
+															// (FUNC_FILE_POSITION)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _file_position_set (stream,
+															// position) -> t | nil
+															// (FUNC_FILE_POSITION_SET)
 				fnDef.addFunction(TYPE_PRINT_VAL); // _type_err_int (FUNC_TYPE_ERR_INT)
 				fnDef.addFunction(TYPE_PRINT_VAL); // _type_err_num (FUNC_TYPE_ERR_NUM)
 				fnDef.addFunction(TYPE_STR_TO_MEM); // _str_char_ref (s, i) -> code point
@@ -7375,6 +7432,17 @@ public final class WasmLispCompiler implements LispCompiler {
 								this.charvecPossible, this.usesIdentityHashTables));
 				// file-length body (FUNC_FILE_LENGTH), over the fd_filestat_get import.
 				code.addFunction(WasmIoRuntimeBuilder.buildFileLengthBody());
+				// file-position bodies (FUNC_FILE_POSITION / FUNC_FILE_POSITION_SET),
+				// over
+				// the injected file_position_get / file_position_set imports; a nil
+				// double-stubbed pair unless --component and the program calls
+				// file-position, since elsewhere the operator compiles to the nil
+				// constant
+				// and nothing calls them.
+				code.addFunction(filePosOrdinals == null ? WasmEmitHelper.buildNilBody() : WasmIoRuntimeBuilder
+					.buildFilePositionBody(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + filePosOrdinals[0]));
+				code.addFunction(filePosOrdinals == null ? WasmEmitHelper.buildNilBody() : WasmIoRuntimeBuilder
+					.buildFilePositionSetBody(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + filePosOrdinals[1]));
 				// arithmetic non-number landing bodies (FUNC_TYPE_ERR_INT,
 				// FUNC_TYPE_ERR_NUM): a catchable $lisp-cond throw in EH mode, a bare
 				// `unreachable` outside it (no tag section exists there, and referencing
@@ -9170,6 +9238,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean component = false;
 
 		/**
+		 * True when the program is a {@code --component} build that calls
+		 * {@code file-position} at all -- the one fact {@code WasmOpenCompiler} needs to
+		 * mark a binary (unsigned-byte 8) file stream's per-fd flag, which the
+		 * {@code _file_position} runtime then reads to answer nil for a character stream
+		 * (mirroring the interpreter and the JVM).
+		 */
+		boolean componentFilePosition = false;
+
+		/**
 		 * True under {@code --no-wasi} (Preview 1 reactor or reactor component): the WASI
 		 * import slots are internal stubs. Read by the reject sites whose "requires
 		 * --component" messages would otherwise mislead a reactor build.
@@ -9817,6 +9894,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.dynamic = builder.dynamic;
 			this.optimize = builder.optimize;
 			this.component = builder.component;
+			this.componentFilePosition = builder.componentFilePosition;
 			this.noWasi = builder.noWasi;
 			this.reactorComponent = builder.reactorComponent;
 			this.hostRandom = builder.hostRandom;
@@ -9934,6 +10012,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private OptimizeLevel optimize = OptimizeLevel.DEFAULT;
 
 			private boolean component = false;
+
+			private boolean componentFilePosition = false;
 
 			private boolean noWasi = false;
 
@@ -10168,6 +10248,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder component(boolean component) {
 				this.component = component;
+				return this;
+			}
+
+			Builder componentFilePosition(boolean componentFilePosition) {
+				this.componentFilePosition = componentFilePosition;
 				return this;
 			}
 

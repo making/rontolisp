@@ -630,6 +630,22 @@ final class WasmEmitHelper {
 	}
 
 	/**
+	 * A function body that answers {@code nil} (ref.null eq) for any argument list -- the
+	 * stub a fixed-index runtime helper gets when its real body would call an import the
+	 * program does not declare, so the function index stays valid while nothing calls it.
+	 * @return the encoded body bytes
+	 */
+	static byte[] buildNilBody() {
+		java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // no locals
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
 	 * Converts an i32 (0=false, non-0=true) on the WASM stack into a Lisp boolean
 	 * (ref.null eq = nil, or the symbol {@code t}).
 	 */

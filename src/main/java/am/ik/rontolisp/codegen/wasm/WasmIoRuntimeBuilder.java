@@ -930,6 +930,9 @@ final class WasmIoRuntimeBuilder {
 	/** preview1 {@code filetype::regular_file}. */
 	private static final int FILETYPE_REGULAR_FILE = 4;
 
+	/** The 8-byte scratch {@code file_position_*} writes/reads the tracked offset in. */
+	private static final int FILEPOS_BYTES = 8;
+
 	/**
 	 * Builds the _file_length(stream) function body: the byte length of the file the
 	 * stream is open on as an exact integer, or {@code ref.null eq} (nil) when the length
@@ -1044,6 +1047,223 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.I64_LOAD, 0x03, FILESTAT_SIZE_OFFSET);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _file_position(stream) function body: the byte position of the file the
+	 * stream is open on as an exact integer, or {@code ref.null eq} (nil) when the
+	 * position cannot be determined.
+	 *
+	 * <p>
+	 * The fd is already in hand, so the position is one {@code file_position_get} away;
+	 * on the {@code --component} backend that import is the adapter's tracked per-fd byte
+	 * offset (the preview1 {@code fd_seek} stand-in, since WASI 0.3 reads are
+	 * offset-based and have no moveable cursor). The answer is REAL here exactly as it is
+	 * on the interpreter and the JVM. What still answers nil is what genuinely has no
+	 * position, the same set {@code _file_length} answers nil for: a non-handle
+	 * designator ({@code t}, nil, an unresolved synonym), a string stream (a negative
+	 * handle), a process standard stream (below {@code FIRST_USER_HANDLE}), and anything
+	 * the host cannot address as a file -- which the import answers as a non-zero errno.
+	 *
+	 * <p>
+	 * The 8-byte offset is staged at {@code HEAP_PTR}, advanced then popped back, exactly
+	 * the {@code _open} / {@code _file_length} discipline (load-bearing under
+	 * {@code --component}, where the adapter may allocate through {@code cabi_realloc}
+	 * while the call runs).
+	 *
+	 * <p>
+	 * {@code getImport} is the slot-encoded function index of the injected
+	 * {@code file_position_get} import ({@code PLACEHOLDER_FUNC_BASE + ordinal}),
+	 * resolved by the {@code WasmImportInjector} post-pass.
+	 * @return the function body bytes
+	 */
+	static byte[] buildFilePositionBody(int getImport) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: STREAM=0 (ref) ; i32 locals: FD=1, OFF=2, ERR=3
+		w.write(1);
+		w.write(3);
+		w.write(Type.I32);
+		final int STREAM = 0, FD = 1, OFF = 2, ERR = 3;
+
+		// A non-handle designator has no file behind it.
+		getLocal(w, STREAM);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		getLocal(w, STREAM);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		setLocal(w, FD);
+		// A negative handle is a string stream; 0/1/2 are the process standard streams.
+		getLocal(w, FD);
+		i32(w, (int) am.ik.rontolisp.compiler.StreamDesignators.FIRST_USER_HANDLE);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// A CHARACTER file stream has no byte position the reader exposes (mirroring the
+		// interpreter and the JVM): the per-fd binary flag is 0 unless the stream was
+		// opened with an (unsigned-byte 8) element type.
+		getLocal(w, FD);
+		i32(w, 100);
+		w.write(Instruction.I32_SUB);
+		i32(w, WasmLispCompiler.STREAM_BINARY_FLAGS_ADDR);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// off = align8(HEAP_PTR); HEAP_PTR advanced over it, popped back after.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		i32(w, 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, OFF);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, OFF);
+			i32(w, FILEPOS_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		i32(w, FILEPOS_BYTES);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// errno = file_position_get(fd, off)
+		getLocal(w, FD);
+		getLocal(w, OFF);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(getImport);
+		setLocal(w, ERR);
+		// pop the staged offset
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// a non-zero errno: the host cannot report this descriptor's position -> nil
+		getLocal(w, ERR);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// return _int_new(mem_i64[off])
+		getLocal(w, OFF);
+		w.write(Instruction.I64_LOAD, 0x03, 0x00);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _file_position_set(stream, position) function body: repositions the file
+	 * behind the stream and answers the symbol {@code t} on success, or {@code ref.null
+	 * eq} (nil) when the position cannot be set -- the same nil answer the character
+	 * streams answer (CL's "cannot be repositioned").
+	 *
+	 * <p>
+	 * The position argument is widened through {@code _int_val} and staged at
+	 * {@code HEAP_PTR}, then handed to the injected {@code file_position_set} import (the
+	 * adapter's tracked-offset rewrite). The staged 8 bytes use the same advance-then-pop
+	 * discipline as {@link #buildFilePositionBody}.
+	 * @param setImport the slot-encoded function index of the injected
+	 * {@code file_position_set} import ({@code PLACEHOLDER_FUNC_BASE + ordinal})
+	 * @return the function body bytes
+	 */
+	static byte[] buildFilePositionSetBody(int setImport) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: STREAM=0 (ref), POS=1 (ref) ; i32 locals: FD=2, OFF=3, ERR=4
+		w.write(1);
+		w.write(3);
+		w.write(Type.I32);
+		final int STREAM = 0, POS = 1, FD = 2, OFF = 3, ERR = 4;
+
+		getLocal(w, STREAM);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		getLocal(w, STREAM);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		setLocal(w, FD);
+		getLocal(w, FD);
+		i32(w, (int) am.ik.rontolisp.compiler.StreamDesignators.FIRST_USER_HANDLE);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// A CHARACTER file stream cannot be repositioned through a byte offset (mirroring
+		// the interpreter and the JVM): the per-fd binary flag is 0 unless the stream was
+		// opened with an (unsigned-byte 8) element type.
+		getLocal(w, FD);
+		i32(w, 100);
+		w.write(Instruction.I32_SUB);
+		i32(w, WasmLispCompiler.STREAM_BINARY_FLAGS_ADDR);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// off = align8(HEAP_PTR); HEAP_PTR advanced over it, popped back after.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		i32(w, 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, OFF);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, OFF);
+			i32(w, FILEPOS_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		i32(w, FILEPOS_BYTES);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// mem_i64[off] = _int_val(pos)
+		getLocal(w, OFF);
+		getLocal(w, POS);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+		w.write(Instruction.I64_STORE, 0x03, 0x00);
+		// errno = file_position_set(fd, off)
+		getLocal(w, FD);
+		getLocal(w, OFF);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(setImport);
+		setLocal(w, ERR);
+		// pop the staged offset
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// a non-zero errno: the position cannot be set -> nil
+		getLocal(w, ERR);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// return t
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_T_SYM);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}

@@ -12932,6 +12932,33 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void componentFilePositionQueriesAndSeeks() throws Exception {
+		// file-position is REAL on the component backend: the query is the byte position
+		// the byte primitives advanced, and the set repositions through the adapter's
+		// tracked per-fd offset (the fd_seek stand-in, since WASI 0.3 reads are
+		// offset-based). The same program the JVM twin runs (JvmLispCompilerTest
+		// #compileAndRunBinaryFileStreamPositionQueriesAndSeeks) -- write a known byte
+		// pattern, read to a midpoint, seek back, re-read. A CHARACTER file stream still
+		// answers nil.
+		assertThat(compileAndRunComponentWithDir("""
+				(with-open-file (out "pos.bin" :direction :output :if-exists :supersede
+				                     :element-type '(unsigned-byte 8))
+				  (dotimes (i 10) (write-byte i out))
+				  (print (file-position out)))
+				(with-open-file (in "pos.bin" :element-type '(unsigned-byte 8))
+				  (print (file-position in))
+				  (print (read-byte in))
+				  (print (file-position in))
+				  (print (file-position in 5))
+				  (print (file-position in))
+				  (print (read-byte in))
+				  (print (file-position in)))
+				(with-open-file (in "pos.bin")
+				  (print (file-position in)))
+				""")).isEqualTo("10\n0\n0\n1\nT\n5\n5\n6\nNIL");
+	}
+
+	@Test
 	void uiopStreamFileContentsAndSafeIoCompilesAndRuns() throws Exception {
 		// .todo/359: the "give me the contents" half of uiop/stream on this backend
 		// too -- the same program as the JVM twin

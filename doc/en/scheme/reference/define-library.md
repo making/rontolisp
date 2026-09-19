@@ -8,9 +8,10 @@ Program syntax, exported by no library: defines a library that a program, or ano
 - `(import import-set...)`, what the library's body sees -- everything, as in a program with no `import`, when the library imports nothing;
 - `(begin body...)`;
 - `(include "file"...)` and `(include-ci "file"...)`, which add a file's contents to the body;
-- `(include-library-declarations "file"...)`, whose file holds more declarations.
+- `(include-library-declarations "file"...)`, whose file holds more declarations;
+- `(cond-expand (requirement declaration...)...)`, the declarations of the clause [cond-expand](cond-expand.md) takes.
 
-The body is lowered like a file of its own. Only the exported names reach an importer; every other top-level name stays private to the library, so a program may define the same name. A library is found among the `define-library` forms at the beginning of the importing file, before its `import`s, or as a file: `(import (geometry point))` reads `geometry/point.sld`, else `geometry/point.scm`, in the directory of the file the program started from. It runs once, when the first file imports it, however many files import it. A library cannot export syntax yet, and `cond-expand` is refused by name.
+The body is lowered like a file of its own. Only the exported names reach an importer; every other top-level name stays private to the library, so a program may define the same name. A library is found among the `define-library` forms at the beginning of the importing file, before its `import`s, or as a file: `(import (geometry point))` reads `geometry/point.sld`, else `geometry/point.scm`, in the directory of the file the program started from. It runs once, when the first file imports it, however many files import it. A library cannot export syntax yet.
 
 ```scheme
 (define-library (counter) (export next!) (import (scheme base)) (begin (define n 0) (define (next!) (set! n (+ n 1)) n)))

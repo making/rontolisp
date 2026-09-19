@@ -107,3 +107,24 @@ none of the files at run time.
 ```
 (314 3)
 ```
+
+## Features
+
+[cond-expand](reference/cond-expand.md) picks code by the [features](reference/features.md)
+of the implementation and the libraries it has, when the program is read: a program
+written for several Scheme systems runs here, and the branches it does not take are
+never compiled.
+
+```scheme
+(import (scheme base) (scheme write))
+(cond-expand
+  (gauche (define (implementation) "Gauche"))
+  (rontolisp (define (implementation) "rontolisp"))
+  (else (define (implementation) "some Scheme")))
+(display (implementation))
+(newline)
+```
+
+```
+rontolisp
+```

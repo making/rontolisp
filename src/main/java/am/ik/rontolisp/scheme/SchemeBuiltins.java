@@ -683,6 +683,10 @@ final class SchemeBuiltins {
 			("interaction-environment" repl value (() '|#[environment]|))
 			("scheme-report-environment" r5rs value ((v) (progn v '|#[environment]|)))
 
+			;; --- (features): the feature identifiers cond-expand tests (SchemeFeatures),
+			;; a fresh list per call.
+			("features" base value (() (rontolisp::%scheme-features)))
+
 			;; --- (scheme process-context): exit throws to the catch tag every
 			;; lowered file wraps its top-level forms in (SchemeLowering), unwinding
 			;; through the outstanding dynamic-wind afters on its way out; the catch

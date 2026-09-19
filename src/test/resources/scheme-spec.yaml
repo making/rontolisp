@@ -2713,6 +2713,28 @@ cases:
       (newline)
     expected: |
       (#t #t #t (3.0) (1/2 . half) #f)
+  # R7RS 4.2.1: the clause taken is decided while the program is lowered, against the
+  # features every backend shares. Gauche 0.9.15 lists its own features and answers
+  # (a other e) for the second line.
+  - name: cond-expand-takes-the-first-clause-whose-requirement-holds
+    source: |
+      (write (features))
+      (newline)
+      (write (list (cond-expand ((and) 'a))
+                   (cond-expand ((or gauche chibi) 'other) ((not rontolisp) 'unknown) (else 'rontolisp))
+                   (cond-expand ((and r7rs (not exact-complex)) 'e) (else 'x))))
+      (newline)
+      (define (sign n)
+        (cond-expand
+          ((library (scheme inexact)) (define magnitude (abs n)))
+          (else (define magnitude n)))
+        (if (= magnitude n) '+ '-))
+      (write (list (sign 2) (sign -2) `(q ,(cond-expand (ratios (/ 1 3))))))
+      (newline)
+    expected: |
+      (r7rs exact-closed ieee-float full-unicode ratios rontolisp)
+      (a rontolisp e)
+      (+ - (q 1/3))
 # An uncaught application of a non-procedure ends the program, so these cannot
 # join the concatenated corpus above -- one program per case, per backend, like
 # ci-spec.yaml's standalone: list (.todo/851). The dynamic-wind puts the wasm
@@ -3040,3 +3062,57 @@ standalone:
       rect: 10
       circle: 0
       (16 (9 10 0))
+  # cond-expand around the import declarations, in a body, as a library declaration and
+  # in a macro template; (library ...) of a standard library and of a library file.
+  # Gauche 0.9.15 (gosh -r7 -I.) prints the same, but `other` for the second line.
+  - name: cond-expand-at-the-top-level-in-a-body-in-a-library-and-in-a-template
+    standards: [rontolisp, r7rs]
+    files:
+      tools/greeting.sld: |
+        (define-library (tools greeting)
+          (export greet)
+          (cond-expand
+            (r7rs (import (scheme base) (scheme write)))
+            (else (import (scheme base))))
+          (cond-expand
+            ((library (scheme char))
+             (import (scheme char))
+             (begin (define (shout s) (string-upcase s))))
+            (else
+             (begin (define (shout s) s))))
+          (begin
+            (define (greet who)
+              (display (string-append "hello, " (shout who)))
+              (newline))))
+    source: |
+      (import (scheme base))
+      (cond-expand
+        ((and r7rs (library (scheme write)))
+         (import (scheme write) (scheme eval) (tools greeting)))
+        (else (import (scheme char))))
+      (define-syntax when-ratios
+        (syntax-rules ()
+          ((_ body ...) (cond-expand (ratios body ...) (else 'no-ratios)))))
+      (define (half n)
+        (cond-expand
+          (exact-closed (define result (/ n 2)))
+          (else (define result (inexact (/ n 2)))))
+        result)
+      (write (list (half 3) (when-ratios (/ 1 3)) (cond-expand ((not ieee-float) 'no) (else 2.5))))
+      (newline)
+      (write (cond-expand ((or gauche chibi) 'other) ((not rontolisp) 'unknown) (else 'rontolisp)))
+      (newline)
+      (write (and (memq 'r7rs (features)) (memq 'full-unicode (features)) #t))
+      (newline)
+      (greet "cond-expand")
+      (write (eval '(cond-expand ((library (scheme base)) 'yes) (else 'no)) (environment '(scheme base))))
+      (newline)
+      (write (cond-expand ((library (tools missing)) 'found) (else 'missing)))
+      (newline)
+    stdout: |
+      (3/2 1/3 2.5)
+      rontolisp
+      #t
+      hello, COND-EXPAND
+      yes
+      missing
