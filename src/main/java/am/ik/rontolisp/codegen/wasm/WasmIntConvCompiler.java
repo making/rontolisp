@@ -2,8 +2,11 @@ package am.ik.rontolisp.codegen.wasm;
 
 import java.util.List;
 
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
@@ -145,9 +148,10 @@ final class WasmIntConvCompiler {
 		// range that narrowing is exact -- every double past 2^52 is already an
 		// integer, so rounding cannot carry a value across the boundary. PAST it the
 		// answer is a bignum, and _f64_fdiv over a divisor of one is what widens it
-		// exactly instead of clamping at i64.max; a NaN fails the magnitude test
-		// (f64.lt is false for it) and an infinity is declined by _f64_fdiv, so both
-		// keep the saturating narrowing they always had.
+		// exactly instead of clamping at i64.max. A NaN fails the magnitude test
+		// (f64.lt is false for it) and, like an infinity, is declined by _f64_fdiv:
+		// neither has an integer to answer, so that null signals (the interpreter's
+		// text in EH mode, a bare trap outside it).
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		WasmEmitHelper.castFloatGetF64(ctx);
@@ -174,7 +178,8 @@ final class WasmIntConvCompiler {
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.writeRefType(true, am.ik.wasm.Type.EQ.code());
-		emitNarrowedFromSlot(ctx, tmpSlot, f64RoundingOp);
+		WasmErrorCompiler.compile(new LispCons(new LispSymbol(LispNames.ERROR_INTERNAL),
+				new LispCons(new LispString(ClosRegistry.NON_FINITE_ROUNDING_MESSAGE), LispNil.INSTANCE)), ctx);
 		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(wideSlot);

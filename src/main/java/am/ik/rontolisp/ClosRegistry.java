@@ -189,6 +189,14 @@ public final class ClosRegistry {
 	public static final String INDEX_OUT_OF_BOUNDS_MESSAGE = "index out of bounds";
 
 	/**
+	 * What {@code floor}/{@code ceiling}/{@code round}/{@code truncate} (and so their
+	 * float twins) signal for a NaN or an infinity, which has no integer to round to --
+	 * one text on every backend, constant so a WASM build carries no irritant printer for
+	 * it.
+	 */
+	public static final String NON_FINITE_ROUNDING_MESSAGE = "rounding a non-finite float to an integer is undefined";
+
+	/**
 	 * The prefix of the message a non-integer reaching an exact-arithmetic coercion
 	 * reports (the interpreter's {@code asLong}/{@code asBigInteger}, the JVM runtime's
 	 * {@code _big} widening, the wasm runtime's {@code _int_val}); the printed operand

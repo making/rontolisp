@@ -356,6 +356,27 @@ old route (`ExactRounding.infiniteDivisorQuotient`,
 `JvmNumericRuntimeBuilder.emitInfiniteDivisorQuotient`,
 `WasmFloatFdivRuntimeBuilder.emitInfiniteDivisorQuotient`).
 
+**A non-finite QUOTIENT signals** (2026-09-19): a NaN or infinite argument, or a two-argument call
+whose `a/b` is one (`(floor inf 2)`, `(truncate 1.0 0.0)`), has no integer, so every backend signals
+the constant `ClosRegistry.NON_FINITE_ROUNDING_MESSAGE` (a `simple-error`; wasm traps outside EH
+mode). It used to clamp to a long -- `(floor inf)` was `9223372036854775807`, and on the JVM a NaN
+slipped past the range guard (`DCMPL` answers -1 for unordered; it is `DCMPG` now) into `D2L`'s `0`.
+The `f` variants signal with their integer twin; SBCL (traps masked) answers `ffloor`/`fceiling`/
+`ftruncate` of an infinity with the infinity but signals on `fround`, ECL signals on all four -- the
+twin rule is kept. Where the check lives: `ExactRounding.floatToInteger`; the JVM's `_fdiv`, which now
+THROWS for a NaN/infinite float dividend over a finite nonzero divisor instead of declining, so the
+one-argument site's out-of-long-range arm needs no null check (its per-site tail got shorter: the
++59 B a program using the family pays is the message constant plus the `_fdiv` throw); wasm-GC's
+one-argument site, whose `_f64_fdiv` null (reachable only for a NaN/infinity there) compiles
+`(%error msg)` instead of the saturating narrowing -- a bare `unreachable` outside EH mode, so a
+non-EH module shrinks (mandelbrot 11,409 -> 11,401 B, matmul 10,026 -> 10,010 B). The in-range path
+is unchanged on every backend. `decode-float`/`integer-decode-float`/`rationalize` (prelude) test
+`(= (- x x) 0.0)` -- false for exactly a NaN or an infinity -- and signal their own constant text;
+`decode-float` of an infinity and the other two of a NaN used to loop forever (a `decode-float` +
+`rationalize` program: +302 B class, +99 B wasm). Programs naming none of these are byte-identical. Pinned by ci-spec
+`rounding-or-decoding-an-infinity-or-a-nan-signals` and `roundingOrDecodingAnInfinityOrANanSignals*`
+in `LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`.
+
 Pinned by ci-spec `mod-rem-zero-is-the-truncate-and-floor-remainder`,
 `mod-rem-are-the-exact-float-remainder-at-any-magnitude`,
 `the-floor-family-quotient-is-exact-at-any-magnitude`;

@@ -130,8 +130,9 @@ final class JvmIntConvCompiler {
 		// a finite double past 2^52 IS a mathematical integer, so out there the answer is
 		// a bignum and _fdiv (over a divisor of 1) is what widens it exactly instead of
 		// clamping at Long.MAX_VALUE. The magnitude guard keeps the ordinary rounding a
-		// pair of instructions; a NaN fails it (DCMPL) and an infinity is declined by
-		// _fdiv, so both keep the narrowing they always had.
+		// pair of instructions; a NaN fails it (DCMPG answers 1 for an unordered pair --
+		// DCMPL's -1 would pass it into D2L's 0) and reaches _fdiv with the infinities,
+		// where all three signal -- so _fdiv never answers null here.
 		JvmEmitHelper.patchBranch(ctx, ifNotRatioPos, ctx.code.size());
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(temp);
@@ -147,7 +148,7 @@ final class JvmIntConvCompiler {
 					ctx.cp.addNameAndType(ctx.cp.addUtf8("abs"), ctx.cp.addUtf8("(D)D")))
 			.index());
 		JvmEmitHelper.emitRawDouble(LONG_LIMIT, ctx);
-		ctx.emit(Opcode.DCMPL);
+		ctx.emit(Opcode.DCMPG);
 		int ifInLongRange = ctx.code.size();
 		ctx.emit(Opcode.IFLT);
 		ctx.emitU2(0);
@@ -160,22 +161,12 @@ final class JvmIntConvCompiler {
 		JvmEmitHelper.emitIntConst(ctx, mode);
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.FDIV).index());
-		ctx.emit(Opcode.DUP);
-		int ifExactWidening = ctx.code.size();
-		ctx.emit(Opcode.IFNONNULL);
+		int gotoEndWidened = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);
-		ctx.emit(Opcode.POP);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(temp);
-		JvmEmitHelper.unboxDouble(ctx);
-		if (mathMethod != null) {
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(mathMethod.index());
-		}
 		JvmEmitHelper.patchBranch(ctx, ifInLongRange, ctx.code.size());
 		ctx.emit(Opcode.D2L);
 		JvmEmitHelper.boxLong(ctx);
-		JvmEmitHelper.patchBranch(ctx, ifExactWidening, ctx.code.size());
 		int gotoEndPos = ctx.code.size();
 		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);
@@ -184,6 +175,7 @@ final class JvmIntConvCompiler {
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(temp);
 		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
+		JvmEmitHelper.patchBranch(ctx, gotoEndWidened, ctx.code.size());
 		JvmEmitHelper.patchBranch(ctx, gotoEnd2Pos, ctx.code.size());
 		if (fusedEnd >= 0) {
 			JvmEmitHelper.patchBranch(ctx, fusedEnd, ctx.code.size());

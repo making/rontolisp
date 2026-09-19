@@ -2166,7 +2166,7 @@ class WasmLispCompilerIntegrationTest {
 			(print (ftr 1d300 7.0))
 			(print (f1 1d300))
 			(print (ftr 1d30 3.0))
-			(print (list (ftr 3.0 (/ 1.0 0.0)) (ftr 1.0 0.0)))
+			(print (list (ftr 3.0 (/ 1.0 0.0))))
 			(print (list (floor 3.7) (ceiling 3.2) (round 2.5) (round 3.5) (truncate -3.7)))
 			(print (floor 1d300))
 			""";
@@ -2178,9 +2178,46 @@ class WasmLispCompilerIntegrationTest {
 			(%s 1.0)
 			%s
 			(333333333333333339961541612885 1.0)
-			((0 3.0) (9223372036854775807 NaN))
+			((0 3.0))
 			(3 4 2 4 -3)
 			%s""".formatted(Q_1D300, BIG_1D300, BIG_1D300);
+
+	@Test
+	void roundingOrDecodingAnInfinityOrANanSignals() throws Exception {
+		// The floor family narrowed a NaN or an infinity with i64.trunc_sat_f64_s --
+		// (floor inf) was i64.max, (fround nan) 0.0 -- and decode-float of an infinity
+		// never returned. Each now signals the interpreter's text (ci-spec
+		// rounding-or-decoding-an-infinity-or-a-nan-signals).
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(NON_FINITE_ROUNDING_PROGRAM,
+				am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(NON_FINITE_ROUNDING_EXPECTED);
+	}
+
+	static final String NON_FINITE_ROUNDING_PROGRAM = """
+			(defvar *inf* (/ 1.0 0.0))
+			(defvar *nan* (- *inf* *inf*))
+			(defmacro try (form) `(handler-case (multiple-value-list ,form) (error (e) (princ-to-string e))))
+			(defun fl (a) (floor a))
+			(print (list (try (fl *inf*)) (try (round *nan*))
+			             (try (ffloor (- *inf*))) (try (floor *inf* 2))))
+			(print (list (try (truncate 1.0 0.0)) (try (funcall #'fround *nan*))
+			             (try (floor 5 *inf*))))
+			(print (list (try (rational *nan*)) (try (rationalize *inf*))
+			             (try (decode-float *inf*))))
+			(print (list (try (integer-decode-float *nan*)) (try (fl 2.5))
+			             (try (floor 1d300 1d299))))
+			""";
+
+	static final String NON_FINITE_ROUNDING_EXPECTED = """
+			("rounding a non-finite float to an integer is undefined" \
+			"rounding a non-finite float to an integer is undefined" \
+			"rounding a non-finite float to an integer is undefined" \
+			"rounding a non-finite float to an integer is undefined")
+			("rounding a non-finite float to an integer is undefined" \
+			"rounding a non-finite float to an integer is undefined" (0 5.0))
+			("rational of a non-finite float is undefined" "rationalize of a non-finite float is undefined" \
+			"decode-float of a non-finite float is undefined")
+			("integer-decode-float of a non-finite float is undefined" (2 0.5) (10 0.0))""";
 
 	@Test
 	void theFloorFamilyQuotientIsExactAtEveryMagnitude() throws Exception {

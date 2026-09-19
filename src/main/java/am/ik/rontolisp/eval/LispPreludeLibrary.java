@@ -2330,7 +2330,9 @@ public final class LispPreludeLibrary {
 				""");
 		// decode-float: significand in [1/2, 1), exponent, sign -- CL's binary
 		// decomposition. Halving/doubling by two is exact in binary floating point,
-		// so the scaling loop introduces no rounding error on any backend.
+		// so the scaling loop introduces no rounding error on any backend. A NaN or
+		// an infinity has no decomposition (x - x is not 0.0 for exactly those) and
+		// is signalled -- the loop never ended on an infinity.
 		SOURCES.put(LispNames.DECODE_FLOAT, """
 				(defun decode-float (f)
 				  (let ((x (abs (float f)))
@@ -2339,6 +2341,8 @@ public final class LispPreludeLibrary {
 				    (if (= x 0.0)
 				        (values 0.0 0 s)
 				        (progn
+				          (unless (= (- x x) 0.0)
+				            (error "decode-float of a non-finite float is undefined"))
 				          (while (>= x 1.0) (setq x (/ x 2.0)) (setq e (+ e 1)))
 				          (while (< x 0.5) (setq x (* x 2.0)) (setq e (- e 1)))
 				          (values x e s)))))
@@ -2365,13 +2369,14 @@ public final class LispPreludeLibrary {
 		// factors of two; every intermediate is scalar-small (a 53-bit
 		// significand at most), exact on the interpreter, the JVM and WASM-GC.
 		// Zero decodes as 0, 0 and its sign; a non-finite float has no
-		// decomposition and is signalled.
+		// decomposition and is signalled (x - x is 0.0 for every finite float and
+		// NaN for an infinity or a NaN -- a NaN used to loop forever).
 		SOURCES.put(LispNames.INTEGER_DECODE_FLOAT, """
 				(defun integer-decode-float (f)
 				  (check-type f float)
 				  (if (= f 0.0)
 				      (values 0 0 (if (< f 0) -1.0 1.0))
-				      (if (= (/ 1.0 f) 0.0)
+				      (if (not (= (- f f) 0.0))
 				          (error "integer-decode-float of a non-finite float is undefined")
 				          (let ((a (abs f))
 				                (e 0)
@@ -2455,6 +2460,8 @@ public final class LispPreludeLibrary {
 						      (if (= x 0.0)
 						          0
 						          (let ((ax (abs x)))
+						            (unless (= (- ax ax) 0.0)
+						              (error "rationalize of a non-finite float is undefined"))
 						            (multiple-value-bind (sig exp sign) (integer-decode-float ax)
 						              (if (<= 0 exp)
 						                  (if (< x 0) (- (ash sig exp)) (ash sig exp))

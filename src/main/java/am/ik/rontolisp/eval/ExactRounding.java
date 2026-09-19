@@ -2,6 +2,7 @@ package am.ik.rontolisp.eval;
 
 import java.math.BigInteger;
 
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
@@ -111,8 +112,8 @@ final class ExactRounding {
 
 	/**
 	 * The exact integer a finite double rounds to, as a bignum when it does not fit a
-	 * {@code long}. A non-finite double keeps the saturating narrowing (there is no
-	 * integer to answer, and the float rounders do not signal here).
+	 * {@code long}. A NaN or an infinity has no integer to answer and signals, as every
+	 * compiled backend does ({@code .kb/wasm-bignum.md}, "Deliberate limits").
 	 * @param d the float to convert
 	 * @param mode {@link #TRUNCATE}, {@link #FLOOR}, {@link #CEILING} or {@link #ROUND}
 	 * @return the integer value
@@ -123,7 +124,7 @@ final class ExactRounding {
 			return new LispInteger((long) rounded);
 		}
 		if (!Double.isFinite(rounded)) {
-			return new LispInteger((long) rounded);
+			throw new LispEvalException(ClosRegistry.NON_FINITE_ROUNDING_MESSAGE);
 		}
 		// A finite double at this magnitude is already a mathematical integer, so the
 		// widening is exact and needs no rounding decision of its own.

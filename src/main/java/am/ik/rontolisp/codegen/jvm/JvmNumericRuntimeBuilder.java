@@ -427,6 +427,8 @@ final class JvmNumericRuntimeBuilder {
 		ConstantPool.StringConstant divZeroStr = cp.addString("Division by zero");
 		ConstantPool.StringConstant ashTooLargeStr = cp.addString("ash: shift count too large");
 		ConstantPool.StringConstant rationalNonFiniteStr = cp.addString("rational of a non-finite float is undefined");
+		ConstantPool.StringConstant roundingNonFiniteStr = cp
+			.addString(am.ik.rontolisp.ClosRegistry.NON_FINITE_ROUNDING_MESSAGE);
 
 		// The non-number landing (_big / _dbl / _abs's BigInteger arm): a plain
 		// RuntimeException carrying "Expected integer|number, got: <prin1>" -- the
@@ -644,7 +646,7 @@ final class JvmNumericRuntimeBuilder {
 				typeErrRefs, rationalNonFiniteStr, rcClass, hasComplex));
 		methods.add(buildFdiv(nFdiv, dFdiv, doubleClass, numberClass, numDoubleValue, ratArrClass, rFrat, rDiv,
 				rRatTrunc, rRatFloor, rRatCeil, rRatRound, dblIsInfinite, dblIsFinite, longClass, longValue, bigClass,
-				biSignum, longValueOf));
+				biSignum, longValueOf, typeErrRefs, roundingNonFiniteStr));
 		methods.add(buildLogOp(nLogand, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biAnd, Opcode.LAND));
 		methods.add(buildLogOp(nLogior, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biOr, Opcode.LOR));
 		methods.add(buildLogOp(nLogxor, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biXor, Opcode.LXOR));
@@ -3498,9 +3500,12 @@ final class JvmNumericRuntimeBuilder {
 	}
 
 	// _fdiv(Object a, Object b, int mode): the floor family's quotient when a float is
-	// involved, or null to decline (no float operand, a ratio, a non-finite float, a
-	// zero float divisor -- all of which keep the ordinary route, the last so the
-	// non-trapping (/ x 0.0) policy stands). Both operands become the exact rationals
+	// involved, or null to decline (no float operand, a ratio, a non-finite divisor over
+	// a
+	// non-finite or zero dividend, a zero float divisor -- all of which keep the ordinary
+	// route, the last so the non-trapping (/ x 0.0) policy stands). A NaN or infinite
+	// dividend over a finite nonzero divisor signals: its quotient has no integer. Both
+	// operands become the exact rationals
 	// they are and divide through _div, which is exact at any magnitude; an even
 	// division answers an integer already and everything else rounds through the
 	// rational rounder the mode names.
@@ -3521,7 +3526,8 @@ final class JvmNumericRuntimeBuilder {
 			MethodrefConstant rFrat, MethodrefConstant rDiv, MethodrefConstant rRatTrunc, MethodrefConstant rRatFloor,
 			MethodrefConstant rRatCeil, MethodrefConstant rRatRound, MethodrefConstant dblIsInfinite,
 			MethodrefConstant dblIsFinite, ClassConstant longClass, MethodrefConstant longValue, ClassConstant bigClass,
-			MethodrefConstant biSignum, MethodrefConstant longValueOf) {
+			MethodrefConstant biSignum, MethodrefConstant longValueOf, TypeErrRefs typeErrRefs,
+			ConstantPool.StringConstant nonFiniteStr) {
 		List<Integer> c = new ArrayList<>();
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.INSTANCEOF);
@@ -3577,6 +3583,25 @@ final class JvmNumericRuntimeBuilder {
 		int ifDividendOk = c.size();
 		c.add(Opcode.IFNONNULL);
 		JvmRuntimeBuilder.emitU2(c, 0);
+		// A NaN or an infinite float dividend over a finite nonzero divisor has a
+		// non-finite quotient: no integer to answer, so it signals -- the interpreter's
+		// text. (A ratio dividend still declines.) The one-argument call site relies on
+		// this: its out-of-long-range arm calls here over a divisor of one and never
+		// sees a null.
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, doubleClass.index());
+		int ifRatioDividend = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		c.add(Opcode.NEW);
+		JvmRuntimeBuilder.emitU2(c, typeErrRefs.rte().index());
+		c.add(Opcode.DUP);
+		JvmRuntimeBuilder.emitLdc(c, nonFiniteStr.index());
+		c.add(Opcode.INVOKESPECIAL);
+		JvmRuntimeBuilder.emitU2(c, typeErrRefs.rteInit().index());
+		c.add(Opcode.ATHROW);
+		JvmRuntimeBuilder.patchBranch(c, ifRatioDividend, c.size());
 		c.add(Opcode.ACONST_NULL);
 		c.add(Opcode.ARETURN);
 		JvmRuntimeBuilder.patchBranch(c, ifDividendOk, c.size());

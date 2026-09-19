@@ -280,8 +280,8 @@ its record in `internalRecords` by datum identity and defines nothing twice.
   infinities) and a NaN as itself. `exact` of an infinity or a NaN is refused with a
   constant message (`%scheme-exact-flonum`; the irritant formatting of
   `%scheme-error-message` cost +25 KB of wasm for a lone `(exact 2.5)`); before, the
-  interpreter and the JVM signalled and wasm trapped on `unreachable`. The Common Lisp
-  level is `.todo/888`.
+  interpreter and the JVM signalled and wasm trapped on `unreachable`. Common Lisp's own
+  `floor` family now signals there ([[linalg-simd]], "mod / rem and the floor family").
 - **Left as found**: `(eqv? +nan.0 +nan.0)` is `#t` on every backend (Common Lisp's `eql`
   of one bit pattern; R7RS leaves it unspecified, Gauche `#f`). `(eq? x x)` of a flonum
   variable is `#f` on the interpreter and the JVM, `#t` on wasm -- a Common Lisp split,

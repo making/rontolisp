@@ -17584,6 +17584,45 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void roundingOrDecodingAnInfinityOrANanSignalsTheInterpretersText() throws Exception {
+		// The floor family narrowed a NaN or an infinity with D2L -- (floor inf) was
+		// Long.MAX_VALUE, and a NaN passed the DCMPL range guard into D2L's 0 -- and
+		// decode-float of an infinity never returned (ci-spec
+		// rounding-or-decoding-an-infinity-or-a-nan-signals).
+		String program = """
+				(defvar *inf* (/ 1.0 0.0))
+				(defvar *nan* (- *inf* *inf*))
+				(defmacro try (form) `(handler-case (multiple-value-list ,form) (error (e) (princ-to-string e))))
+				(defun fl (a) (floor a))
+				(print (list (try (fl *inf*)) (try (round *nan*))
+				             (try (ffloor (- *inf*))) (try (floor *inf* 2))))
+				(print (list (try (truncate 1.0 0.0)) (try (funcall #'fround *nan*))
+				             (try (floor 5 *inf*))))
+				(print (list (try (rational *nan*)) (try (rationalize *inf*))
+				             (try (decode-float *inf*))))
+				(print (list (try (integer-decode-float *nan*)) (try (fl 2.5))
+				             (try (floor 1d300 1d299))))
+				""";
+		String rounding = "\"rounding a non-finite float to an integer is undefined\"";
+		String expected = """
+				(%1$s %1$s %1$s %1$s)
+				(%1$s %1$s (0 5.0))
+				("rational of a non-finite float is undefined" "rationalize of a non-finite float is undefined" \
+				"decode-float of a non-finite float is undefined")
+				("integer-decode-float of a non-finite float is undefined" (2 0.5) (10 0.0))""".formatted(rounding);
+		ByteArrayOutputStream interpreted = new ByteArrayOutputStream();
+		am.ik.rontolisp.eval.LispEvaluator evaluator = new am.ik.rontolisp.eval.LispEvaluator(
+				new PrintStream(interpreted, true, StandardCharsets.UTF_8));
+		for (LispVal form : LispReader.readAllFromString(program)) {
+			evaluator.eval(form);
+		}
+		assertThat(interpreted.toString(StandardCharsets.UTF_8).trim()).isEqualTo(expected);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(expected);
+	}
+
+	@Test
 	void theFloorFamilyQuotientIsExactPastTheLongRange() throws Exception {
 		// The quotient used to be computed as a double and narrowed into a long, so it
 		// clamped past 2^63 and the remainder derived from it came back equal to the

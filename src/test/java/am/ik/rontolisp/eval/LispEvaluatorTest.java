@@ -8779,6 +8779,37 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void roundingOrDecodingAnInfinityOrANanSignals() {
+		// (floor inf) clamped to Long.MAX_VALUE and (fround nan) answered 0.0; SBCL
+		// signals
+		// both. decode-float of an infinity and integer-decode-float/rationalize of a NaN
+		// never returned.
+		for (String form : List.of("(floor *inf*)", "(ceiling (- *inf*))", "(round *nan*)", "(truncate *nan*)",
+				"(ffloor *inf*)", "(fround *nan*)", "(floor *inf* 2)", "(truncate 1.0 0.0)", "(floor *nan* 1.0)",
+				"(funcall #'floor *inf*)")) {
+			assertThatThrownBy(() -> eval(nonFinite(form))).as(form)
+				.isInstanceOf(LispEvalException.class)
+				.hasMessage("rounding a non-finite float to an integer is undefined");
+		}
+		assertThatThrownBy(() -> eval(nonFinite("(decode-float *inf*)")))
+			.hasMessageContaining("decode-float of a non-finite float is undefined");
+		assertThatThrownBy(() -> eval(nonFinite("(integer-decode-float *nan*)")))
+			.hasMessageContaining("integer-decode-float of a non-finite float is undefined");
+		assertThatThrownBy(() -> eval(nonFinite("(rationalize *nan*)")))
+			.hasMessageContaining("rationalize of a non-finite float is undefined");
+		// A finite quotient over an infinite divisor still answers.
+		assertThat(eval(nonFinite("(multiple-value-list (floor 5 *inf*))")).print()).isEqualTo("(0 5.0)");
+	}
+
+	/**
+	 * Wraps a form in a scope binding an infinity and a NaN as
+	 * {@code *inf*}/{@code *nan*}.
+	 */
+	private static String nonFinite(String form) {
+		return "(let* ((*inf* (/ 1.0 0.0)) (*nan* (- *inf* *inf*))) " + form + ")";
+	}
+
+	@Test
 	void theFloorFamilySecondValueIsTheRemainderCLHSDefines() {
 		// CLHS: quotient*divisor + remainder = number, with a quotient that "always
 		// represents a mathematical integer" -- so the second value of truncate IS rem
