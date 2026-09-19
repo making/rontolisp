@@ -9776,9 +9776,13 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunIntegerDecodeFloat() throws Exception {
+		// CLHS: the sign is an INTEGER and the significand is scaled to
+		// float-digits bits (53 for a normal double), not stripped of factors
+		// of two -- matches SBCL exactly (.todo/896).
 		assertThat(compileAndRun(
 				"(print (multiple-value-list (integer-decode-float 1.5))) (print (multiple-value-list (integer-decode-float -0.5))) (print (multiple-value-list (integer-decode-float 0.0))) (print (multiple-value-list (integer-decode-float 2.0))) (print (multiple-value-list (integer-decode-float 6.5))) (print (nth-value 1 (integer-decode-float 1.5))) (print (funcall #'integer-decode-float 1.5))"))
-			.isEqualTo("(3 -1 1.0)\n(1 -1 -1.0)\n(0 0 1.0)\n(1 1 1.0)\n(13 -1 1.0)\n-1\n3");
+			.isEqualTo(
+					"(6755399441055744 -52 1)\n(4503599627370496 -53 -1)\n(0 0 1)\n(4503599627370496 -51 1)\n(7318349394477056 -50 1)\n-52\n6755399441055744");
 		assertThat(compileAndRun(
 				"(print (nth-value 0 (integer-decode-float 4.9406564584124654d-324))) (print (nth-value 1 (integer-decode-float 4.9406564584124654d-324)))"))
 			.isEqualTo("1\n-1074");
