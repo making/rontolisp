@@ -796,6 +796,11 @@ final class SchemeExpander {
 				else if (core == Core.DEFINE_VALUES && parts(form).size() == 3) {
 					formals(parts(form).get(1), env);
 				}
+				else if (core == Core.DEFINE_RECORD_TYPE) {
+					for (LispSymbol name : recordProcedureNames(form)) {
+						bind(name, env);
+					}
+				}
 			}
 			pending.add(datum);
 		}
@@ -808,11 +813,83 @@ final class SchemeExpander {
 			else if (core == Core.DEFINE_VALUES) {
 				out.add(defineValues((LispCons) datum, env, false));
 			}
+			else if (core == Core.DEFINE_RECORD_TYPE) {
+				out.add(internalRecordType((LispCons) datum, env));
+			}
 			else {
 				out.add(expression(datum, env));
 			}
 		}
 		return out;
+	}
+
+	// The procedures a define-record-type defines: the constructor, the predicate, the
+	// accessors and the modifiers. A shape this cannot parse defines nothing here; the
+	// lowering names what is wrong.
+	private List<LispSymbol> recordProcedureNames(LispCons form) {
+		List<LispSymbol> names = new ArrayList<>();
+		List<LispVal> parts = parts(form);
+		if (parts.size() < 4) {
+			return names;
+		}
+		LispVal constructor = parts.get(2) instanceof LispCons spec ? spec.car() : parts.get(2);
+		for (LispVal candidate : List.of(constructor, parts.get(3))) {
+			if (isPlainIdentifier(candidate)) {
+				names.add((LispSymbol) candidate);
+			}
+		}
+		for (LispVal field : parts.subList(4, parts.size())) {
+			if (field instanceof LispCons spec && spec.cdr() instanceof LispCons procedures) {
+				for (LispVal procedure : carsOf(procedures)) {
+					if (isPlainIdentifier(procedure)) {
+						names.add((LispSymbol) procedure);
+					}
+				}
+			}
+		}
+		return names;
+	}
+
+	// An internal define-record-type, its procedure names already bound as locals: they
+	// are emitted renamed like any internal definition's, while the type and field names
+	// -- labels, not bindings -- are stripped.
+	private LispVal internalRecordType(LispCons form, Env env) {
+		List<LispVal> parts = parts(form);
+		if (parts.size() < 4) {
+			return strip(form);
+		}
+		List<LispVal> out = new ArrayList<>();
+		out.add(strip(parts.get(1)));
+		if (parts.get(2) instanceof LispCons spec && spec.isProperList()) {
+			List<LispVal> constructor = new ArrayList<>();
+			constructor.add(renamedProcedure(spec.car(), env));
+			for (LispVal field : carsOf(spec.cdr())) {
+				constructor.add(strip(field));
+			}
+			out.add(inheritList(spec, constructor));
+		}
+		else {
+			out.add(renamedProcedure(parts.get(2), env));
+		}
+		out.add(renamedProcedure(parts.get(3), env));
+		for (LispVal field : parts.subList(4, parts.size())) {
+			if (field instanceof LispCons spec && spec.isProperList()) {
+				List<LispVal> rewritten = new ArrayList<>();
+				rewritten.add(strip(spec.car()));
+				for (LispVal procedure : carsOf(spec.cdr())) {
+					rewritten.add(renamedProcedure(procedure, env));
+				}
+				out.add(inheritList(spec, rewritten));
+			}
+			else {
+				out.add(strip(field));
+			}
+		}
+		return rebuild(form, keywordSymbol((LispSymbol) form.car(), Core.DEFINE_RECORD_TYPE), out);
+	}
+
+	private LispVal renamedProcedure(LispVal datum, Env env) {
+		return isPlainIdentifier(datum) ? reference((LispSymbol) datum, env, null) : strip(datum);
 	}
 
 	// A form whose head is a macro use, expanded until it is not.
@@ -1069,6 +1146,15 @@ final class SchemeExpander {
 			throw new MalformedException();
 		}
 		return elements;
+	}
+
+	// The cars of a list, an improper tail ignored: for a shape the lowering checks.
+	private static List<LispVal> carsOf(LispVal list) {
+		List<LispVal> cars = new ArrayList<>();
+		for (LispVal rest = list; rest instanceof LispCons cell; rest = cell.cdr()) {
+			cars.add(cell.car());
+		}
+		return cars;
 	}
 
 	private static List<LispVal> parts(LispCons form) {

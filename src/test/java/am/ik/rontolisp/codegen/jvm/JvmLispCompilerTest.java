@@ -17790,6 +17790,15 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void bracketAndSemicolonInAFunctionNameAreMangledAway() throws Exception {
+		// Both are illegal in a JVM unqualified name (JVMS 4.2.2): the class failed to
+		// load with ClassFormatError "Illegal method name".
+		assertThat(JvmLispCompiler.mangleMethodName("a[b];c")).isEqualTo("a$lbrackb]$semic");
+		assertThat(compileAndRun("(defun |f[1];x| (x) (* 2 x)) (defvar |*g[;]*| 3) (print (|f[1];x| |*g[;]*|))"))
+			.isEqualTo("6");
+	}
+
+	@Test
 	void percentGlobalVariableNameIsMangledAway() throws Exception {
 		// Static field names go through the same mangler ("_g$" + mangleMethodName).
 		byte[] classBytes = new JvmLispCompiler("Test")

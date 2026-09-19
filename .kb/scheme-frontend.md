@@ -58,7 +58,8 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `(case-lambda (formals body..)..)` | `(lambda (&rest A) (let ((N (length A))) (if (= N 1) (let ((x (nth 0 A))) body..) .. (%scheme-case-lambda-arity A))))`, spelled as a Scheme `lambda` datum with `raw` parts | "`case-lambda`" below |
 | `(parameterize ((p v)..) body..)` | `(%scheme-parameterize (list p v ..) (lambda () body..))`; no binding: `(let () body..)` | a special `let` inside the helper, "Parameters" below |
 | `(call-with-values (lambda () ..) (lambda (a b) ..))`, `let-values`, `define-values` | `multiple-value-bind` | the syntactic tier (`.kb/multiple-values.md`). Any other shape: `(apply consumer (multiple-value-list (funcall producer)))`. A loop's leaf that may answer other than one value leaves through `(return-from B ..)` ("Destination-driven lowering") -- a `(setq R (values a b))` keeps one value, on every backend |
-| `define-record-type` (top level only) | `defstruct` with `(:conc-name nil)`, each slot NAMED after its accessor, a BOA constructor; the modifier a `defun` over `(setf (accessor r) v)` answering the unspecified object | `defstruct` is what registers the instance layout on every backend (`.kb/defstruct.md`); the accessor IS the generated one, no wrapper call. The predicate answers T/NIL and is a `pred` (`GlobalPredicate`) |
+| top-level `define-record-type` | `defstruct` with `(:conc-name nil)`, each slot NAMED after its accessor, a BOA constructor; the modifier a `defun` over `(setf (accessor r) v)` answering the unspecified object | `defstruct` is what registers the instance layout on every backend (`.kb/defstruct.md`); the accessor IS the generated one, no wrapper call. The predicate answers T/NIL and is a `pred` (`GlobalPredicate`) |
+| `define-record-type` in a body | the same `defstruct`, HOISTED ahead of the top-level form holding it, named `s%%[<enclosing definition> <type>]`; the body binds its names to the hoisted procedures, no variable | "Internal record types" below |
 | `quasiquote` | `cons`/`append`/`(coerce .. 'vector)`, constant parts quoted | depth-counted per R7RS: the innermost unquote of a nested template IS evaluated |
 | `(define-library (a b) ...)`, `(import (a b))` | the library body lowered once, before the importer's forms, with private top-level names (`s%%(a b)name`); an export is the library's binding, so a call stays direct | "Libraries and include" below |
 | `(include "f")`, `(include-ci "f")` | `(begin <f's datums>)`, spliced before macro expansion | the same section |
@@ -171,6 +172,68 @@ Lisp `(catch t (unwind-protect (throw t x) ...))` against the same without the
 catch/throw: 5,256 vs 4,137 B of class (+1,119), 2,912 vs 840 B of wasm (+2,072) -- the
 machinery costs what it costs on every backend, the wrapper only decides how many
 regions carry it.
+
+## Internal record types (`define-record-type` in a body; 2026-09-19, `.todo/884`)
+
+**A body's `define-record-type` is a top-level `defstruct`, hoisted; the body binds
+names, not variables.** `defstruct` is what registers the instance layout on every
+backend and the compile path refuses one below the top level (`.kb/defstruct.md`), so
+`SchemeLowering.internalRecord` emits the `defstruct` and the modifier `defun`s into
+`hoisted`, which `topLevel` puts AHEAD of the top-level form being lowered (the
+interpreter runs forms in order; the exit wrapper and a session entry keep a
+`defstruct`/`defun` bare). `body` binds each record procedure in the body's scope to a
+`GlobalFunction` / `GlobalPredicate` of the hoisted name, letrec*-style like an internal
+`define`: every call stays direct, a predicate still fuses in a test, and a procedure in
+value position is `#'name`. A retried body (a loop lowered again as a procedure) finds
+its record in `internalRecords` by datum identity and defines nothing twice.
+
+- **Names**: the struct is `s%%[<enclosing> <type>]` -- `<enclosing>` the mangled name of
+  the top-level `define` holding it, empty for any other form, and ` 2`, ` 3` ... before
+  the `]` when the lowering already took that name. No identifier mangles to `s%%[`
+  (`SchemeNames.libraryPrefix`'s argument), and neither part can hold a space, so the
+  map is injective; a library prefixes it with its own. Qualifying by the enclosing
+  definition keeps two FILES apart the way their top-level names are: two files
+  defining the same `f` already collide. Residual: two separately lowered files whose
+  unnamed top-level forms (`(let () (define-record-type t ..) ..)`) define a type of
+  the same name share `s%%[ t]`. The slots are the FIELD names (the expander may have
+  renamed the accessors, `%SCM-V7`), the accessors the defstruct's own through
+  `(:conc-name "s%%[f node] ")`, the constructor, predicate and modifiers
+  `s%%[f node](make-node)`. So an internal record prints `#S(s%%[f node] :v 42)` and a
+  run-time arity error names `s%%[f node](make-node)`.
+- **One type per occurrence, not per evaluation.** R7RS leaves generativity open;
+  Gauche 0.9.15 makes a new type on every evaluation of the body (an instance of one
+  call's type is rejected by the next call's accessor). Per evaluation would need a
+  run-time type token in every instance, visible in every print, and would turn the
+  constructor and predicate into closures, for a difference a program sees only by
+  mixing two evaluations' instances. A session
+  keeps `internalRecordNames`, so a definition typed again at the prompt names a new
+  type and the old instances keep their layout.
+- **Scope**: a record procedure may not be defined twice in one body (`a body defines mk
+  twice`), and `set!` of one is `cannot assign mk: it is not a variable in this file` --
+  a top-level record's procedures refuse both too. Outside a body (`(if c
+  (define-record-type ..))`) it is `define-record-type is only allowed at the top level
+  or in a body`.
+- **Macros**: `SchemeExpander.body` binds the record's constructor, predicate, accessors
+  and modifiers in the body's frame before any value, and emits them renamed; the type
+  and field names are labels and are stripped. So `(define-syntax gx (syntax-rules ()
+  ((_ v) (point-x v))))` used beside an internal `point-x` still calls the global one.
+- **JVM**: `[` is illegal in a JVM method name; `JvmLispCompiler.mangleMethodName` maps
+  it (and `;`) since this change (`.kb/core-representation.md`).
+- **Cost** (x86-64 Linux, Java 25, wasmtime 47): every program that spells no internal
+  record compiles byte-identical before and after -- `hello.scm`, the six
+  `examples/scheme/*.scm`, the 70 concatenable `scheme-spec.yaml` cases as one program
+  (885,270 B of class, 1,970,462 B of wasm, 1,976,252 B of component), and two Common
+  Lisp programs (`size-report/programs/hello_world`, `pi_approx`), on `.class`, wasm
+  and the component. A record written in a body against the same record at the top
+  level: 75,883 vs 75,752 B of class (+131, the longer names), 12,372 B of wasm and
+  13,840 B of component both.
+- Pinned by `SchemeLoweringTest` (`anInternalRecordType...`,
+  `internalRecordTypesOfTheSameNameAreDistinctTypes`,
+  `aMacroUseBesideAnInternalRecordTypeKeepsItsNamesLocal`), `SchemeSessionTest.
+  anInternalRecordTypeTypedAgainIsANewTypeHoistedIntoItsEntry`, the
+  `internal-record-types-are-local-to-their-body` case of `scheme-spec.yaml` (all four
+  backends, Gauche's output), and `JvmLispCompilerTest.
+  bracketAndSemicolonInAFunctionNameAreMangledAway`.
 
 ## A file that reads an imported name before it redefines it
 
@@ -624,8 +687,8 @@ lowering would have hidden both from the scans that run first.
   "misplaced" errors; a free `...` also counts as the ellipsis. None of the 1,586 SICP
   samples spells any of them, so the corpus classification (`providedNames`) is unmoved.
 - **Stated limits**: `syntax-rules` only; a macro is per FILE (a `load`ed file neither
-  sees nor exports macros); a template's names inside `define-record-type` are stripped,
-  not renamed; `eval` knows no macro and refuses `define-syntax` by name (its keyword
+  sees nor exports macros); a template's names inside a TOP-LEVEL `define-record-type`
+  are stripped, not renamed (a body's are renamed like any internal definition's); `eval` knows no macro and refuses `define-syntax` by name (its keyword
   list in `scheme.lisp`); an improper use `(m 1 . 2)` is matched rather than refused.
 - Pinned by the three `syntax-rules-...` / `syntax-definitions-...` cases of
   `scheme-spec.yaml` (all four backends, expected output Gauche 0.9.15's; being in the
@@ -1258,7 +1321,7 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 ## Not here yet (each its own follow-up)
 
 `cond-expand`, exporting syntax from a library, file ports (`(scheme file)`), the other
-libraries, `|...|` identifiers, reading `+inf.0`/`+nan.0`, internal `define-record-type`,
+libraries, `|...|` identifiers, reading `+inf.0`/`+nan.0`,
 re-entrant continuations, proper tail calls in general. Each is refused by name where it
 can be.
 

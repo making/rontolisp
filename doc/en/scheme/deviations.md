@@ -27,7 +27,8 @@
   other binary procedures need a bytevector port argument. `char-ready?` and `u8-ready?`
   always answer `#t`.
 - A record prints in Common Lisp's `#S(...)` syntax. `equal?` compares records by
-  identity.
+  identity. A `define-record-type` in a body makes one type where it is written, not a
+  new one each time the body runs (Gauche does the latter).
 - `write` prints `'x` as `(quote x)`, and the unspecified value as `#!unspecific`. It is
   one object, true in a test.
 - `exit` runs the `after` thunks of the `dynamic-wind`s it is inside, then ends the

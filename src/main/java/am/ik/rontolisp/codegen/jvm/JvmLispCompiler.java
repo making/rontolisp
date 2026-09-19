@@ -5317,6 +5317,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (mangled.indexOf('/') >= 0) {
 			mangled = mangled.replace("/", "$div");
 		}
+		// '[' and ';' are the rest of JVMS 4.2.2's list: a name spelling either (a Scheme
+		// internal record type's, s%%[f node]) failed to load as "Illegal method name".
+		if (mangled.indexOf('[') >= 0) {
+			mangled = mangled.replace("[", "$lbrack");
+		}
+		if (mangled.indexOf(';') >= 0) {
+			mangled = mangled.replace(";", "$semi");
+		}
 		// '%' is legal in a JVM method name, but JVMCI (HotSpotSpeculationLog:201)
 		// passes a message containing the method name as the FORMAT string of
 		// BailoutException, where a '%' starts a format conversion: under a JVMCI

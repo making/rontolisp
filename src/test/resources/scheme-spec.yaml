@@ -571,6 +571,59 @@ cases:
       (#t #f)
       (#t #f #t)
       (filled #t #f #f #f #t)
+  # R7RS leaves generativity unspecified: one type per occurrence here, one per
+  # evaluation in Gauche, so no line below meets instances of two evaluations.
+  - name: internal-record-types-are-local-to-their-body
+    source: |
+      (define (ir-counter-box start)
+        (define-record-type box (new-box value) box? (value box-value set-box-value!))
+        (define b (new-box start))
+        (define (bump!) (set-box-value! b (+ (box-value b) 1)) (box-value b))
+        (list bump! (lambda () (box? b)) (lambda (x) (box? x))))
+      (define ir-counter (ir-counter-box 10))
+      ((car ir-counter))
+      (write (list ((car ir-counter)) ((cadr ir-counter)) ((caddr ir-counter) 5)))
+      (newline)
+      (define (ir-sum-cells xs)
+        (define (total cells) (if (null? cells) 0 (+ (cell-value (car cells)) (total (cdr cells)))))
+        (define-record-type cell (make-cell value) cell? (value cell-value))
+        (total (map make-cell xs)))
+      (write (ir-sum-cells '(1 2 3 4)))
+      (newline)
+      (define (ir-other-cell) (define-record-type cell (make-cell value) cell? (value cell-value)) (make-cell 0))
+      (define (ir-cell-kind x) (define-record-type cell (make-cell value) cell? (value cell-value)) (cell? x))
+      (write (list (ir-cell-kind (ir-other-cell)) (ir-cell-kind 'cell)))
+      (newline)
+      (define ir-x 'outer)
+      (write
+       (let ((ir-point? 'outer))
+         (let ()
+           (define-record-type point (make-point x y) ir-point? (x ir-x) (y point-y))
+           (define p (make-point 3 4))
+           (list (ir-x p) (point-y p) (ir-point? p) (if (ir-point? 7) 'yes 'no)
+                 (map ir-x (list p (make-point 5 6)))))))
+      (newline)
+      (write ir-x)
+      (newline)
+      (write
+       (let loop ((i 0) (acc '()))
+         (define-record-type pair-of (kons a d) pair-of? (a kar) (d kdr))
+         (define k (kons i acc))
+         (if (< i 3) (loop (+ i 1) (cons (kar k) (kdr k))) (list acc (pair-of? k) (pair-of? acc)))))
+      (newline)
+      (define (ir-tagged)
+        (define-record-type tag #f tag?)
+        (list (tag? 1) (procedure? tag?)))
+      (write (ir-tagged))
+      (newline)
+    expected: |
+      (12 #t #f)
+      10
+      (#f #f)
+      (3 4 #t no (3 5))
+      outer
+      ((2 1 0) #t #f)
+      (#f #t)
   - name: equivalence
     source: |
       (write

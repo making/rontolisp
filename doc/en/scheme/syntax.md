@@ -54,5 +54,5 @@ the macro was defined, whatever the use site binds.
 
 The limits: only `syntax-rules` transformers; a macro is visible in the file that
 defines it (a `(load ...)`ed file does not see the loader's macros, nor the other way
-round); names a template introduces into a `define-record-type` are not renamed; `eval`
+round); names a template introduces into a top-level `define-record-type` are not renamed; `eval`
 knows no macro and refuses `define-syntax`.
