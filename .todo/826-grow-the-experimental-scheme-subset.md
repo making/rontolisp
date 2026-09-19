@@ -38,7 +38,7 @@ Not a language feature, same area:
   `eval/SourceSession` (`.kb/scheme-frontend.md`, "A session"). What is left here is the
   pick itself and `evalLine` taking that seam -- it echoes only the LAST form, so it
   needs `Step.echoes` of the last step, not `ReplBuffer`'s loop.
-- **The generic printer costs 58.8 KB of `.class`** (7.1 KB of wasm). Measured pieces on
+- **The generic printer costs 58.8 KB of `.class`** (7.1 KB of wasm). Split off: `.todo/894`. Measured pieces on
   the JVM: `aref` 14 KB, a `do` loop 9 KB, `char` 7 KB, `write-char` 6 KB. That is the JVM
   backend's per-feature runtime, not the printer's shape -- look there, not in
   `scheme.lisp`.
