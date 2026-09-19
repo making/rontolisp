@@ -49,5 +49,6 @@ Not a language feature, same area:
   tail calls through a procedure value (`.todo/899`), the interpreter's thrown `go`
   (`.todo/901`).
 - `(-)` on the interpreter reports `Index 0 out of bounds for length 0`; the compile path
-  says `- requires at least one argument` (`compiler/ArithmeticIdentities`). Split off:
-  `.todo/908`.
+  says `- requires at least one argument` (`compiler/ArithmeticIdentities`). Done in
+  `.todo/908`: `SUB`/`DIV` now signal that same text as a catchable `program-error`
+  instead of leaking the raw `IndexOutOfBoundsException`.
