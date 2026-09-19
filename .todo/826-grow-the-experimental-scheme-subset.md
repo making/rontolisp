@@ -28,7 +28,7 @@ items `.todo/829` .. `.todo/837`; `eval` is `.todo/833`.
 
 Not a language feature, same area:
 
-- **The playground has no language pick.** A `.scm` reaches it only through `(load ...)` of
+- **The playground has no language pick.** Split off: `.todo/893`. A `.scm` reaches it only through `(load ...)` of
   an uploaded file; the REPL and the compile buttons read Common Lisp
   (`RontoPlayground.evalLine` / `frontend`). The doc site's Scheme fences are static for
   the same reason (`DocExamplesTest` verifies them; `RunnableBlockTransformer` runs `lisp`
