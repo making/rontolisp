@@ -627,13 +627,34 @@ class SchemeLoweringTest {
 		// one.
 		assertThat(lowered("(display (case-lambda (r r)))"))
 			.isEqualTo("(RONTOLISP::%SCHEME-DISPLAY (LAMBDA (&REST %SCM-A1) (LET ((|r| %SCM-A1)) |r|)))");
-		// Defined once, it is a defun called directly, and a self tail call through
-		// another clause is a jump.
+		// Defined once, each clause is a defun of its own that a direct call picks by
+		// its count, a self tail call picking the same clause is a jump, and the
+		// procedure's own defun dispatches for everything else.
 		assertThat(lowered("(define f (case-lambda ((n) (f n 0)) ((n acc) (if (= n 0) acc (f (- n 1) (+ acc n))))))"
 				+ " (display (f 3))"))
-			.startsWith("(DEFUN |f| (&REST %SCM-C")
+			.isEqualTo(
+					"""
+							(DEFUN |s%%{f 1}| (|n|) (|s%%{f 2}| |n| 0))
+							(DEFUN |s%%{f 2}| (%SCM-C6 %SCM-C7) (LET ((|n| %SCM-C6) (|acc| %SCM-C7) (%SCM-R9 NIL)) \
+							(TAGBODY %SCM-L8 (IF (= |n| 0) (SETQ %SCM-R9 |acc|) (PROGN (PSETQ |n| (- |n| 1) |acc| (+ |acc| |n|)) \
+							(GO %SCM-L8)))) %SCM-R9))
+							(DEFUN |f| (&REST %SCM-A10) (LET ((%SCM-N11 (LENGTH %SCM-A10))) \
+							(IF (= %SCM-N11 1) (|s%%{f 1}| (NTH 0 %SCM-A10)) (IF (= %SCM-N11 2) \
+							(|s%%{f 2}| (NTH 0 %SCM-A10) (NTH 1 %SCM-A10)) (RONTOLISP::%SCHEME-CASE-LAMBDA-ARITY %SCM-A10)))))
+							(RONTOLISP::%SCHEME-DISPLAY (|s%%{f 1}| 3))""");
+		// A rest clause is applied by the dispatch; a count only a later clause would
+		// accept picks the first one; a count none accepts calls the dispatch, which
+		// reports it at run time; a first-class use is the dispatch.
+		assertThat(lowered("(define g (case-lambda ((x . r) r) ((x y) y))) (display (list (g 1 2) (g) g))"))
+			.contains("(IF (>= %SCM-N4 1) (APPLY #'|s%%{g 1}| %SCM-A3) (IF (= %SCM-N4 2)")
+			.endsWith("(LIST (|s%%{g 1}| 1 2) (|g|) #'|g|))");
+		// A clause that may call another clause calling it back keeps the one
+		// dispatching lambda, so a tail call among them stays a jump.
+		assertThat(lowered("(define h (case-lambda ((n) (if (= n 0) 0 (h n 1))) ((n k) (h (- n k))))) (display (h 3))"))
+			.startsWith("(DEFUN |h| (&REST %SCM-C")
 			.contains("(GO %SCM-L")
-			.endsWith("(RONTOLISP::%SCHEME-DISPLAY (|f| 3))");
+			.doesNotContain("s%%{")
+			.endsWith("(RONTOLISP::%SCHEME-DISPLAY (|h| 3))");
 		// A user binding of the name, or of car, reaches neither the keyword nor the
 		// dispatch.
 		assertThat(lowered("(define (car x) x) (display (let ((case-lambda list)) (case-lambda 1 2)))"))
