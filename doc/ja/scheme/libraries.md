@@ -77,3 +77,33 @@
 (4 1/2 1.4142135623730951 1 0)
 (123456789.123 1e21 0.000001 1.5e-7 +inf.0)
 ```
+
+## 自分のライブラリ
+
+プログラムは [define-library](reference/define-library.md) でライブラリに分けられます:
+ファイルの先頭、その `import` より前に書くか、専用のファイルに置けば
+`(import (shapes circle))` がプログラムと同じ場所の `shapes/circle.sld` として見つけます。
+ライブラリの名前は、エクスポートしない限りライブラリの中に閉じます。
+[include](reference/include.md) はファイルの内容をその位置に置きます。どちらもプログラムと
+同時に読まれるので、コンパイルしたプログラムは実行時にそれらのファイルを必要としません。
+
+```scheme
+; file: shapes/circle.sld
+(define-library (shapes circle)
+  (export area)
+  (import (scheme base))
+  (begin
+    (define pi 314/100)
+    (define (area r) (* pi r r))))
+```
+
+```scheme
+(import (scheme base) (scheme write) (shapes circle))
+(define pi 3)
+(write (list (area 10) pi))
+(newline)
+```
+
+```
+(314 3)
+```

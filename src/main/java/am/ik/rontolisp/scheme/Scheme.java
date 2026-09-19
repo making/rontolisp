@@ -45,7 +45,22 @@ public final class Scheme {
 	 * @return the top-level forms
 	 */
 	public static List<LispVal> read(String source, @Nullable String file, SchemeStandard standard) {
-		return SchemeLowering.ofFile(new SchemeReader(source, file), standard).lower();
+		return read(source, file, standard, SchemeFiles.NONE);
+	}
+
+	/**
+	 * Reads a Scheme program against a standard and lowers it to Common Lisp core forms,
+	 * with the files it names: what it {@code include}s and the {@code define-library}
+	 * files it imports.
+	 * @param source the program text
+	 * @param file the origin file for diagnostics and for what the program's file names
+	 * are relative to, or {@code null} when unknown
+	 * @param standard what the program is read against ({@code --scheme-standard})
+	 * @param files where the named files are read from
+	 * @return the top-level forms
+	 */
+	public static List<LispVal> read(String source, @Nullable String file, SchemeStandard standard, SchemeFiles files) {
+		return SchemeLowering.ofFile(new SchemeReader(source, file), standard, files).lower();
 	}
 
 	/**
@@ -55,7 +70,18 @@ public final class Scheme {
 	 * @return the session
 	 */
 	public static SchemeSession session(SchemeStandard standard) {
-		return new SchemeSession(standard);
+		return session(standard, SchemeFiles.NONE);
+	}
+
+	/**
+	 * Starts an interactive session that reads one buffer at a time, with the files it
+	 * names relative to the working directory.
+	 * @param standard what the session is read against ({@code --scheme-standard})
+	 * @param files where included files and library files are read from
+	 * @return the session
+	 */
+	public static SchemeSession session(SchemeStandard standard, SchemeFiles files) {
+		return new SchemeSession(standard, files);
 	}
 
 	/**

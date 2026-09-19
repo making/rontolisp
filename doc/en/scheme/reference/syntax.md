@@ -1,6 +1,6 @@
 # Syntax
 
-The syntactic keywords the front end implements. All but `import` are exported by `(scheme base)`; `import` is program syntax that no library exports. `delay` and `delay-force` are listed under [(scheme lazy)](library-lazy.md), `cons-stream` under [*Structure and Interpretation of Computer Programs* (SICP) names](library-sicp.md). The keywords that are refused by name are listed in [Deviations](../deviations.md).
+The syntactic keywords the front end implements. All but `import` and `define-library` are exported by `(scheme base)`; those two are program syntax that no library exports. `delay` and `delay-force` are listed under [(scheme lazy)](library-lazy.md), `cons-stream` under [*Structure and Interpretation of Computer Programs* (SICP) names](library-sicp.md). The keywords that are refused by name are listed in [Deviations](../deviations.md).
 
 | Name | Example | Result |
 |---|---|---|
@@ -33,6 +33,9 @@ The syntactic keywords the front end implements. All but `import` are exported b
 | `guard` | `(guard (e ((symbol? e) (list 'caught e))) (raise 'oops))` | `(caught oops)` |
 | `parameterize` | `(let ((p (make-parameter 1))) (parameterize ((p 2)) (p)))` | `2` |
 | `import` | `(import (scheme base) (scheme write))` | the program sees those two libraries |
+| `define-library` | `(define-library (counter) (export next!) (import (scheme base)) (begin (define n 0) (define (next!) (set! n (+ n 1)) n)))` | a library `(import (counter))` reads |
+| `include` | `(include "greet.scm")` | the definitions of `greet.scm`, where the `include` stands |
+| `include-ci` | `(include-ci "loud.scm")` | the same, identifiers folded to lower case |
 | `define-syntax` | `(let () (define-syntax two (syntax-rules () ((_) 2))) (* (two) 3))` | `6` |
 | `let-syntax` | `(let-syntax ((double (syntax-rules () ((_ e) (* 2 e))))) (double 21))` | `42` |
 | `letrec-syntax` | `(letrec-syntax ((my-or (syntax-rules () ((_) #f) ((_ e r ...) (let ((t e)) (if t t (my-or r ...))))))) (my-or #f 7))` | `7` |

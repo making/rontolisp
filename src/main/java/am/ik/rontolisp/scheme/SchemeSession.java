@@ -14,8 +14,8 @@ public final class SchemeSession {
 
 	private final SchemeLowering lowering;
 
-	SchemeSession(SchemeStandard standard) {
-		this.lowering = SchemeLowering.ofSession(standard);
+	SchemeSession(SchemeStandard standard, SchemeFiles files) {
+		this.lowering = SchemeLowering.ofSession(standard, files);
 	}
 
 	/**

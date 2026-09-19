@@ -14,7 +14,9 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 - `scheme` depends on the AST types and `reader` only: `SchemeReader` (text -> datums, its
   own case-sensitive reader), `SchemeExpander` + `SyntaxRules` (macros, datums -> datums,
   "Macros" below), `SchemeLowering` (datums -> core forms), `SchemeBuiltins`
-  (the procedure table), `SchemeNames` (identifier escaping), `Scheme` (the facade).
+  (the procedure table), `SchemeNames` (identifier escaping), `SchemeLibraries` +
+  `SchemeFiles` (`define-library` and `include`, "Libraries and include" below),
+  `Scheme` (the facade).
 - Reached ONLY through the seam: `eval/SourceLanguage.SCHEME`, picked for `.scm` or by
   `--source-language scheme` (`.kb/source-language.md`). Per FILE, so a Common Lisp file
   may `(load "lib.scm")` and call its procedures as `(|name| ...)`.
@@ -58,6 +60,8 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `(call-with-values (lambda () ..) (lambda (a b) ..))`, `let-values`, `define-values` | `multiple-value-bind` | the syntactic tier (`.kb/multiple-values.md`). Any other shape: `(apply consumer (multiple-value-list (funcall producer)))`. A loop's leaf that may answer other than one value leaves through `(return-from B ..)` ("Destination-driven lowering") -- a `(setq R (values a b))` keeps one value, on every backend |
 | `define-record-type` (top level only) | `defstruct` with `(:conc-name nil)`, each slot NAMED after its accessor, a BOA constructor; the modifier a `defun` over `(setf (accessor r) v)` answering the unspecified object | `defstruct` is what registers the instance layout on every backend (`.kb/defstruct.md`); the accessor IS the generated one, no wrapper call. The predicate answers T/NIL and is a `pred` (`GlobalPredicate`) |
 | `quasiquote` | `cons`/`append`/`(coerce .. 'vector)`, constant parts quoted | depth-counted per R7RS: the innermost unquote of a nested template IS evaluated |
+| `(define-library (a b) ...)`, `(import (a b))` | the library body lowered once, before the importer's forms, with private top-level names (`s%%(a b)name`); an export is the library's binding, so a call stays direct | "Libraries and include" below |
+| `(include "f")`, `(include-ci "f")` | `(begin <f's datums>)`, spliced before macro expansion | the same section |
 | `define-syntax` / `let-syntax` / `letrec-syntax` with `syntax-rules` | nothing: expanded away before the lowering (`SchemeExpander`); `let-syntax`'s body is `(let () body)` | hygiene by renaming, "Macros" below |
 | `#u8(...)`, `bytevector`, `make-bytevector`, `bytevector-append`, `string->utf8` | the `(unsigned-byte 8)` pack (`.kb/packed-integer-vectors.md`): the literal is an 8-bit `LispIntVector` datum, self-evaluating; the constructors are `%scheme-` helpers over `make-array :element-type '(unsigned-byte 8)` / `rontolisp:string-to-octets` | "Bytevectors" below |
 | a port procedure; the optional port argument of `display`, `read-char`, ...; `(current-output-port)` | a `%scheme-` helper over a `%scheme-port` record (`(display x p)` -> `(%scheme-display-to x p)`, which binds `*standard-output*` to the port's stream around the printer); with no port argument the template is what it always was. A current port's VALUE is `(%scheme-port-parameter 1)`, a parameter object | the standard streams are the `t` designator on the compiled backends, not values ("Ports" below) |
@@ -914,6 +918,98 @@ binary output port's the bytes written, newest first. `close-port` only clears `
   `SchemeLoweringTest.aPortArgumentSelectsThePortHelperAndACurrentPortIsAParameterValue`,
   `LibraryDefunPrunerTest.thePortSectionFollowsOnlyAProgramThatUsesAPortProcedure`.
 
+## Libraries and include (`define-library`, `include`; 2026-09-19, `.todo/882`)
+
+**A library is a file lowering of its own whose top-level names are PRIVATE symbols, and
+an export is the binding itself.** `SchemeLowering.instantiate` lowers the library body
+with a child `SchemeLowering` (its own global `Scope` from its own `import`s, its own
+expander, prefix `SchemeNames.libraryPrefix`), and the importer's `importSet` puts the
+exported `Binding` objects into its scope under the external names -- so a `defun`
+stays a direct call in the importer, a record predicate stays fused, an exported
+variable is read live (the library's `set!` shows). No backend learns anything.
+
+- **Private names**: every top-level name a library defines -- `defun`, variable,
+  `defstruct` type/slots/constructor/predicate/modifier, and every `fresh` temporary
+  (a macro's hidden global, a record's anonymous slot) -- is `s%%(a b)` + the mangled
+  name. No identifier mangles to it (an escaped one continues `s%` with `%%`, `%c` or a
+  non-`%`; no identifier holds a parenthesis), and the space/`)` keep `(a b)` apart from
+  `(a)`. So a program's `helper` never collides with a library's, two libraries never
+  collide, and the same library lowered twice emits the same names. Symbol names with
+  a space and parentheses compile on the JVM and wasm (checked by the spec cases).
+  Stated deviation: a library's record prints those names (`#S(s%%(p)point ...)`).
+- **Where a library comes from** (`SchemeLibraries`, one per top-level lowering, shared
+  by the nested ones): the leading `define-library` forms of the importing file or
+  session buffer (`declareLibraries`, before the `import`s -- Gauche -r7 accepts that),
+  else `a/b.sld`, else `a/b.scm`, relative to the directory of the file the lowering
+  STARTED from (`libraries.root()`), for a library's own imports too, like a load path.
+  Every `define-library` in a found file is declared. A cycle is refused with the chain.
+- **Lowered once per lowering, emitted in dependency order**: `instantiate` lowers on
+  the first import and parks the forms in `SchemeLibraries.pending`; a nested library's
+  `leave` runs before its importer's, and `lower()` / `interact()` drain them right after
+  the `#f` binding. **Once per PROGRAM** across separately lowered files (a Common Lisp
+  file loading two `.scm` files that import one library -- inlined on the compile path,
+  loaded at run time on the interpreter): definitions stay bare top-level forms (the
+  backends hoist only a direct child), the statements -- variable initializations,
+  expressions, `initialValues` -- run behind `(defvar s%%(a)%SCM-INSTANTIATED nil)` and
+  one `(if flag nil (progn (setq flag t) ...))` (`instantiationGuarded`). A library of
+  definitions alone has no flag. The statements move after the library's definitions;
+  that only changes a library that calls a procedure before defining it (an error in
+  Scheme).
+- **Exports** (`exports`): an identifier or `(rename internal external)`, resolved in the
+  library scope AFTER its body is lowered; a name neither defined nor imported, or
+  exported twice, is a positioned error. A macro cannot be exported (refused by name,
+  `SchemeExpander.definesSyntax`): the importer's expander would need the library's
+  environment, and a template's free reference to a PRIVATE name would have to resolve
+  to the library binding in the importer's lowering -- follow-up work.
+- **Importer rules**: `set!` of an imported library variable is refused (R7RS 5.6.1) in
+  both standards; a `define` over a library import wins under `rontolisp` (only the
+  importer's name changes: the library keeps calling its own) and is refused under
+  `r7rs`, like a builtin (`libraryImports`, an identity set). A name read before such a
+  redefinition becomes a variable holding the import (`readBeforeDefinition`). Importing
+  one name from two libraries is not refused (the later wins; Gauche is silent too).
+- **Library scope**: no `import` declaration sees everything under `rontolisp` (like a
+  program) and is refused under `r7rs` when the library has a body. Declarations:
+  `export`, `import`, `begin`, `include`, `include-ci`, `include-library-declarations`;
+  `cond-expand` is refused by name, anything else is "unknown library declaration". A
+  library is always lowered in FILE mode, also when a session imports it.
+- **`include` / `include-ci`** (`includes`/`included`): a datum pre-pass BEFORE macro
+  expansion -- so an included definition or `define-syntax` is seen by every pre-scan
+  and by the expander's gate -- that replaces each `(include "f"...)` whose head the
+  global scope maps to the keyword with `(CORE_BEGIN datums...)`, recursively, relative
+  to the file the `include` is written in; `quote`/`quasiquote` are not entered. It is
+  scope-blind below the top level, like `collectAssigned` (a local named `include` would
+  still include). `include-ci` reads with the reader's fold-case flag set. Datums that
+  include nothing are returned as the SAME objects, so a program without `include`
+  lowers byte-identically. `SchemeExpander.resolve` reads an identity `CORE_*` symbol as
+  its keyword (the include's `begin` enters the expander). An `include` a macro expands
+  into reaches the lowering and is refused by name.
+- **Positions**: an included file or a library file gets its own `SchemeReader`; the
+  program's reader keeps the included ones (`SchemeReader.other`) and consults them in
+  `locate`/`inherit`, so `sub/bad.scm:2:3: malformed if` names the included file.
+- **Files** come through `scheme/SchemeFiles` (`find(from, path)`, `null` for none):
+  `eval/SourceLanguage.schemeFiles` adapts the loader the reading site already has --
+  `SourceLoader.fileSystem()` on the compile path's entry read, the `LoadInliner`'s
+  loader for an inlined file, the evaluator's `sourceLoader()` for `RontoLispCli` and
+  run-time `load`, a filesystem loader for the REPL (relative to the working directory).
+  A read with no loader (`SchemeFiles.NONE`) refuses every file by name. The files are
+  read at lowering time, so a compiled program carries their contents.
+
+Measured (2026-09-19, x86-64 Linux, Java 25): every program that spells neither
+(`hello`, the seven `examples/scheme/*.scm`, the concatenated `scheme-spec.yaml` corpus and
+its 20 standalone cases) compiles to byte-identical `.class` and `.wasm` before and after
+(56 of 56 artifacts). The `libraries-in-the-program-file-...` spec program (two libraries,
+a record, an instantiation flag) against the same program written inline: 82,143 vs
+81,755 B of class (+388), 26,555 vs 26,508 B of wasm (+47) -- the flag and the longer
+symbol names; a library procedure is a direct call, so no run-time cost per call.
+Oracle: Gauche 0.9.15 (`gosh -r7 -I.`) prints the same for both spec cases.
+
+Pinned by `SchemeLibrariesTest` (the emitted forms, the errors, a session), the two
+`libraries-...` standalone cases of `scheme-spec.yaml` (all four backends, both standards;
+the `files:` field writes a case's other files beside it),
+`RontoLispCliTest.aSchemeProgramReadsItsLibraryFilesAndIncludesBesideItOnEveryPath` (CLI
+interpreter, `-o`, once-per-program across two loaded files, the REPL) and the reference
+pages' `; file: NAME` blocks (`DocExamplesTest`).
+
 ## A session (`SchemeSession`, `SchemeLowering.interact`)
 
 `rontolisp --source-language scheme` with no file; reached through `eval/SourceSession`
@@ -1161,9 +1257,10 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 ## Not here yet (each its own follow-up)
 
-`define-library`, file ports (`(scheme file)`), the other libraries, `|...|`
-identifiers, reading `+inf.0`/`+nan.0`, internal `define-record-type`, re-entrant continuations,
-proper tail calls in general. Each is refused by name where it can be.
+`cond-expand`, exporting syntax from a library, file ports (`(scheme file)`), the other
+libraries, `|...|` identifiers, reading `+inf.0`/`+nan.0`, internal `define-record-type`,
+re-entrant continuations, proper tail calls in general. Each is refused by name where it
+can be.
 
 ## The SICP sample corpus harness (`.todo/828`)
 
@@ -1241,6 +1338,7 @@ group, all four backends in `./mvnw test`; the wasm legs need `wasmtime` on `PAT
 `SchemeLoweringTest` (the table as emitted forms), `SchemeSessionTest` (what a session emits,
 when a buffer is complete), `SchemeReaderTest`, `SchemeNamesTest`,
 `SchemeBuiltinsTest` (every `:function` evaluates, every helper a template names exists),
+`SchemeLibrariesTest` (`define-library` / `include`),
 `RontoLispCliTest` (`aSchemeFileIsPickedByItsExtension`, `aCommonLispProgramLoadsASchemeFile`,
 `aSchemeSyntaxErrorNamesItsPositionOnEveryPath`, `aSchemeProgramIsRefusedByTheScalarBackend`,
 `anUncaughtSchemeErrorReportsItsMessageAndIrritants`,

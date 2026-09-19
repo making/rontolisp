@@ -76,3 +76,33 @@ below `1e21` and with an exponent from there (and below `1e-6`):
 (4 1/2 1.4142135623730951 1 0)
 (123456789.123 1e21 0.000001 1.5e-7 +inf.0)
 ```
+
+## Libraries of your own
+
+A program splits into libraries with [define-library](reference/define-library.md): at the
+beginning of the file, before its `import`s, or in a file of its own that
+`(import (shapes circle))` finds as `shapes/circle.sld` beside the program. A library's
+names are private unless it exports them. [include](reference/include.md) puts a file's
+contents where it stands; both are read when the program is, so a compiled program needs
+none of the files at run time.
+
+```scheme
+; file: shapes/circle.sld
+(define-library (shapes circle)
+  (export area)
+  (import (scheme base))
+  (begin
+    (define pi 314/100)
+    (define (area r) (* pi r r))))
+```
+
+```scheme
+(import (scheme base) (scheme write) (shapes circle))
+(define pi 3)
+(write (list (area 10) pi))
+(newline)
+```
+
+```
+(314 3)
+```

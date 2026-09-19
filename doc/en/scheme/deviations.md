@@ -37,9 +37,15 @@
 - Error messages spell Common Lisp names (`CAR`).
 - `utf8->string` decodes a byte that begins no valid UTF-8 sequence to the character
   with that byte's code instead of signalling an error.
+- A library found in a file is looked up beside the file the program started from, with
+  no search path. A `define-library` written in a file is seen by that file alone: a file
+  `load`ed beside it finds the library only as a `.sld` file. A library cannot export
+  syntax. A record type a library defines prints its names with the library's name in
+  front of them. Importing one name from two libraries is not refused; the later import
+  wins.
 
 ## Not yet
 
-`define-library`, file ports (`(scheme file)`), the other libraries, `|...|` identifiers,
+`cond-expand`, file ports (`(scheme file)`), the other libraries, `|...|` identifiers,
 reading `+inf.0` / `+nan.0`. The syntactic ones are refused by name when the file is
 read.

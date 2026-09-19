@@ -33,6 +33,9 @@ categories:
       - { slug: guard, name: "guard" }
       - { slug: parameterize, name: "parameterize" }
       - { slug: import, name: "import" }
+      - { slug: define-library, name: "define-library" }
+      - { slug: include, name: "include" }
+      - { slug: include-ci, name: "include-ci" }
       - { slug: define-syntax, name: "define-syntax" }
       - { slug: let-syntax, name: "let-syntax" }
       - { slug: letrec-syntax, name: "letrec-syntax" }

@@ -417,7 +417,8 @@ final class CompileFrontend {
 			throw new IllegalArgumentException("Cannot compile: a Scheme program needs the GC backend -- --no-gc has"
 					+ " no cons cell, no symbol and no closure (drop --no-gc)");
 		}
-		List<LispVal> read = language.read(request.source(), features, entryFile, request.standards());
+		List<LispVal> read = language.read(request.source(), features, entryFile, request.standards(),
+				SourceLoader.fileSystem());
 		List<LispVal> loaded = LoadInliner.inline(read, SourceLoader.fileSystem(), options.baseDir(),
 				request.systemPath(), features, request.dists(), request.standards());
 		return expand(new Loaded(loaded, features, request.standards()), options);
