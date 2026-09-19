@@ -85,7 +85,9 @@ context-sensitive rule (`(string-downcase "ΑΣ")` is `"ασ"`). Interpreter and
 - `--no-gc` rejects the three at `collectCalls`, so it is not a fifth opinion.
 - **Still ASCII-only on WASM and therefore divergent**: `alpha-char-p`
   (`WasmCharCompiler.compileAlphaCharP`) and the `string-equal`/`char-equal` case-insensitive
-  compare (`WasmStringRuntimeBuilder.emitMaybeLower`); tracked separately.
+  compare (`WasmStringRuntimeBuilder.emitMaybeLower`); tracked separately (`.todo/269`). The Scheme
+  `(scheme char)` classifiers go around them, through tables generated from the JDK
+  (`.kb/scheme-frontend.md`).
 
 ## Character NAMES in `#\`
 - **Short names** (`LispLexer.charByName`, mirrored by the two RUNTIME readers

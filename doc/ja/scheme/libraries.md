@@ -1,9 +1,9 @@
 # ライブラリ
 
-ファイルが `import` できる 10 の R7RS ライブラリと、それぞれが提供するものです。
+ファイルが `import` できる 11 の R7RS ライブラリと、それぞれが提供するものです。
 名前ごとのページは[リファレンス](reference.md)にあります。`(import ...)` で始まるファイル
 （[構文](syntax.md)参照）は、名指ししたライブラリだけを見ます。`import` を一切書かない
-ファイルは、10 すべてに加えて
+ファイルは、11 すべてに加えて
 [*Structure and Interpretation of Computer Programs*（SICP）互換の名前](sicp.md)も見えます。
 
 | ライブラリ | 提供するもの |
@@ -11,6 +11,7 @@
 | [(scheme base)](reference/library-base.md) | 中核部分: 数値、真偽値、ペアとリスト、シンボル、文字、文字列、ベクタ、バイトベクタ、制御、例外、ポート（文字列ポート、バイトベクタポート、現在のポート）、入出力。構文は[構文](reference/syntax.md)にあります |
 | [(scheme write)](reference/library-write.md) | `display` と `write` |
 | [(scheme read)](reference/library-read.md) | `read` |
+| [(scheme char)](reference/library-char.md) | Unicode に基づく文字の分類、大文字・小文字の変換、大文字と小文字を区別しない比較 |
 | [(scheme inexact)](reference/library-inexact.md) | 超越関数と浮動小数点数の述語 |
 | [(scheme cxr)](reference/library-cxr.md) | 3 段と 4 段の `car`/`cdr` の合成 |
 | [(scheme lazy)](reference/library-lazy.md) | プロミス |

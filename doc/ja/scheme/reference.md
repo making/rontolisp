@@ -10,6 +10,7 @@ Scheme フロントエンドが提供する名前ごとの 1 ページです。�
 | [(scheme base)](reference/library-base.md) | 数値、ペアとリスト、シンボル、文字、文字列、ベクタ、制御、例外、ポート、入出力 |
 | [(scheme write)](reference/library-write.md) | `display`、`write` とその変種 |
 | [(scheme read)](reference/library-read.md) | `read` |
+| [(scheme char)](reference/library-char.md) | 文字の分類、大文字・小文字の変換、`char-ci=?` と `string-ci=?` とその順序比較 |
 | [(scheme inexact)](reference/library-inexact.md) | 超越関数、`finite?`、`infinite?`、`nan?` |
 | [(scheme cxr)](reference/library-cxr.md) | 3 段と 4 段の `car`/`cdr` の合成 |
 | [(scheme lazy)](reference/library-lazy.md) | プロミス |

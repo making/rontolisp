@@ -10205,6 +10205,11 @@ public final class LispMacroExpander {
 		LispVal tail = fmtCall(LispNames.SUBSEQ, r1, fmtCall(LispNames.ADD, vs1, n), fmtCall(LispNames.LENGTH, r1));
 		LispVal functional = fmtCall(LispNames.CONCATENATE, quoteOf("STRING"), head, mid, tail);
 		LispSymbol k = new LispSymbol("__rpl_k");
+		// The two destructive arms read their source through (src, o) -- seq2 and start2,
+		// or a copy of the source region and 0 when the call overlaps itself
+		// (sourceDetached).
+		LispSymbol src = new LispSymbol("__rpl_src");
+		LispSymbol o = new LispSymbol("__rpl_o");
 		// A list seq1 is rewritten in place through its cons cells, as fill does: one
 		// cursor walk rather than an nth per element, so the destination stays O(n).
 		LispSymbol cell = new LispSymbol("__rpl_c");
@@ -10219,15 +10224,15 @@ public final class LispMacroExpander {
 		// dotted tail all answer and signal exactly what they did before.
 		LispSymbol dstSrcCell = new LispSymbol("__rpl_dc");
 		LispVal dstSrcSeed = makeIf(
-				fmtCall(LispNames.AND, callOf(LispNames.LISTP, r2), callOf(LispNames.INTEGERP, vs2),
-						fmtCall(LispNames.GE, vs2, new LispInteger(0))),
-				fmtCall(LispNames.NTHCDR, vs2, r2), LispNil.INSTANCE);
-		LispVal listLoop = makeLet(dstSrcCell.name(), dstSrcSeed,
+				fmtCall(LispNames.AND, callOf(LispNames.LISTP, src), callOf(LispNames.INTEGERP, o),
+						fmtCall(LispNames.GE, o, new LispInteger(0))),
+				fmtCall(LispNames.NTHCDR, o, src), LispNil.INSTANCE);
+		LispVal listLoop = sourceDetached(r1, r2, vs1, vs2, n, src, o, makeLet(dstSrcCell.name(), dstSrcSeed,
 				listToCons(List.of(new LispSymbol(LispNames.DO), listToCons(List.of(cellStep, kStep)),
 						listToCons(List
 							.of(fmtCall(LispNames.OR, fmtCall(LispNames.GE, k, n), callOf(LispNames.NULL, cell)), r1)),
 						fmtCall(LispNames.RPLACA, cell,
-								readElementAdvancing(dstSrcCell, r2, fmtCall(LispNames.ADD, vs2, k))))));
+								readElementAdvancing(dstSrcCell, src, fmtCall(LispNames.ADD, o, k)))))));
 		LispVal nonArray = makeIf(callOf(LispNames.LISTP, r1), listLoop, functional);
 		if (!arraysExist && arms != SeqOpArms.ARRAY_ONLY) {
 			// No array can exist, so seq1 is a string or a list and the destructive
@@ -10246,7 +10251,7 @@ public final class LispMacroExpander {
 		// vector-to-vector copy (ironclad's copy-digest, ~7% of the PBKDF2 profile).
 		LispSymbol srcCell = new LispSymbol("__rpl_sc");
 		LispVal srcStep = listToCons(
-				List.of(srcCell, fmtCall(LispNames.NTHCDR, vs2, r2), callOf(LispNames.CDR, srcCell)));
+				List.of(srcCell, fmtCall(LispNames.NTHCDR, o, src), callOf(LispNames.CDR, srcCell)));
 		LispVal srcKStep = listToCons(List.of(k, new LispInteger(0), fmtCall(LispNames.ADD, k, new LispInteger(1))));
 		LispVal listSourceLoop = listToCons(List.of(new LispSymbol(LispNames.DO),
 				listToCons(List.of(srcStep, srcKStep)),
@@ -10255,19 +10260,20 @@ public final class LispMacroExpander {
 				fmtCall(LispNames.ROW_MAJOR_ASET, r1, fmtCall(LispNames.ADD, vs1, k), callOf(LispNames.CAR, srcCell))));
 		LispVal arefLoop = listToCons(List.of(new LispSymbol(LispNames.DOTIMES), listToCons(List.of(k, n)),
 				fmtCall(LispNames.ROW_MAJOR_ASET, r1, fmtCall(LispNames.ADD, vs1, k),
-						fmtCall(LispNames.AREF, r2, fmtCall(LispNames.ADD, vs2, k)))));
-		LispVal copyLoop = makeIf(callOf(LispNames.LISTP, r2), listSourceLoop, arefLoop);
+						fmtCall(LispNames.AREF, src, fmtCall(LispNames.ADD, o, k)))));
+		LispVal copyLoop = makeIf(callOf(LispNames.LISTP, src), listSourceLoop, arefLoop);
 		if (arms == SeqOpArms.ARRAY_ONLY) {
 			// The shared array helper's element loop is fronted by the backend's bulk
 			// copy (%replace-bulk): true = the elements were copied in one engine-level
 			// move, nil = nothing happened and the loop runs. Only here -- inline sites
 			// (SeqOpArms.ALL) are rare and keep the plain loop, and the wide helper
 			// delegates its array arm to this body.
-			copyLoop = makeIf(callOf(LispNames.LISTP, r2), listSourceLoop,
-					makeIf(fmtCall(LispNames.REPLACE_BULK, r1, r2, vs1, vs2, n), LispNil.INSTANCE, arefLoop));
-			return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, makeProgn(List.of(copyLoop, r1))));
+			copyLoop = makeIf(callOf(LispNames.LISTP, src), listSourceLoop,
+					makeIf(fmtCall(LispNames.REPLACE_BULK, r1, src, vs1, o, n), LispNil.INSTANCE, arefLoop));
+			return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings,
+					sourceDetached(r1, r2, vs1, vs2, n, src, o, makeProgn(List.of(copyLoop, r1)))));
 		}
-		LispVal mutating = makeProgn(List.of(copyLoop, r1));
+		LispVal mutating = sourceDetached(r1, r2, vs1, vs2, n, src, o, makeProgn(List.of(copyLoop, r1)));
 		if (arms == SeqOpArms.ALL_CALLING_ARRAY_ARM) {
 			// The bounds are already defaulted here, so the callee's own or-wrappers see
 			// integers and default nothing again.
@@ -10275,6 +10281,26 @@ public final class LispMacroExpander {
 		}
 		LispVal body = makeIf(callOf(LispNames.ARRAYP_INTERNAL, r1), mutating, nonArray);
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
+	}
+
+	// (let* ((src (if (and (eq r1 r2) (< vs2 vs1)) (subseq r2 vs2 (+ vs2 n)) r2))
+	// (o (if (eq src r2) vs2 0)))
+	// body)
+	// CLHS replace: when seq1 and seq2 are one object and the regions overlap, the result
+	// is as if the whole source region were copied first. A forward element copy is
+	// already that when start1 <= start2 (each read is at or ahead of every write); only
+	// start1 > start2 reads elements it has overwritten, so only then is the region
+	// copied
+	// out -- the one shape that works for every arm, including a list source, which
+	// cannot be walked backward.
+	private static LispVal sourceDetached(LispSymbol r1, LispSymbol r2, LispSymbol vs1, LispSymbol vs2, LispSymbol n,
+			LispSymbol src, LispSymbol o, LispVal body) {
+		LispVal overlaps = fmtCall(LispNames.AND, fmtCall(LispNames.EQ_GENERAL, r1, r2),
+				fmtCall(LispNames.LT, vs2, vs1));
+		LispVal srcInit = makeIf(overlaps, fmtCall(LispNames.SUBSEQ, r2, vs2, fmtCall(LispNames.ADD, vs2, n)), r2);
+		LispVal oInit = makeIf(fmtCall(LispNames.EQ_GENERAL, src, r2), vs2, new LispInteger(0));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
+				listToCons(List.of(listToCons(List.of(src, srcInit)), listToCons(List.of(o, oInit)))), body));
 	}
 
 	/**

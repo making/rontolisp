@@ -808,8 +808,8 @@ final class SchemeLowering {
 	// ------------------------------------------------------------------ imports
 
 	/** The R7RS libraries {@code (import (scheme <name>))} accepts. */
-	private static final List<String> IMPORTABLE_LIBRARIES = List.of("base", "write", "read", "inexact", "cxr", "lazy",
-			"case-lambda", "process-context", "eval", "repl");
+	private static final List<String> IMPORTABLE_LIBRARIES = List.of("base", "write", "read", "char", "inexact", "cxr",
+			"lazy", "case-lambda", "process-context", "eval", "repl");
 
 	/**
 	 * {@code (defun rontolisp::%scheme-library-p (name) ...)}: whether
@@ -899,9 +899,9 @@ final class SchemeLowering {
 					&& IMPORTABLE_LIBRARIES.contains(name.name())) {
 				return library(name.name());
 			}
-			throw error("library " + set.print() + " is not available: this experimental front end has (scheme base),"
-					+ " (scheme write), (scheme read), (scheme inexact), (scheme cxr), (scheme lazy),"
-					+ " (scheme case-lambda), (scheme process-context)," + " (scheme eval) and (scheme repl) only",
+			List<String> names = IMPORTABLE_LIBRARIES.stream().map(library -> "(scheme " + library + ")").toList();
+			throw error("library " + set.print() + " is not available: this experimental front end has "
+					+ String.join(", ", names.subList(0, names.size() - 1)) + " and " + names.getLast() + " only",
 					form);
 		}
 		Map<String, Binding> base = importSet(parts.get(1), form);

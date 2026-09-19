@@ -710,7 +710,7 @@
                               rontolisp::%scheme-fold-case
                               #+rontolisp-scheme-ports
                               (rontolisp::%scheme-folding-p)
-                              (string-downcase token)
+                              (rontolisp::%scheme-string-foldcase token)
                               token))))))))))
 
 (defun rontolisp::%scheme-read-hash ()
@@ -788,7 +788,7 @@
                       (if #-rontolisp-scheme-ports rontolisp::%scheme-fold-case
                           #+rontolisp-scheme-ports
                           (rontolisp::%scheme-folding-p)
-                          (string-downcase name)
+                          (rontolisp::%scheme-string-foldcase name)
                           name)))
                 (cond ((string= lookup "alarm") (code-char 7))
                       ((string= lookup "backspace") (code-char 8))
@@ -1034,14 +1034,6 @@
 
 (defun rontolisp::%scheme-string->utf8 (s) (rontolisp:string-to-octets s))
 
-;; R7RS copies as if through a temporary when TO and FROM are one bytevector. Common
-;; Lisp's replace promises the same, but copies forward on every backend here, so an
-;; overlapping source region is taken out first.
-(defun rontolisp::%scheme-bytevector-copy! (to at from start end)
-  (if (eq to from)
-      (replace to (subseq from start end) :start1 at)
-      (replace to from :start1 at :start2 start :end2 end)))
-
 (defun rontolisp::%scheme-member (x list)
   (do ((rest list (cdr rest)))
       ((not (consp rest)) nil)
@@ -1159,6 +1151,241 @@
   (do ((rest arguments (cdr rest)))
       ((or (null rest) (null (cdr rest))) t)
     (if (not (funcall compare (car rest) (car (cdr rest)))) (return nil))))
+
+;; --- (scheme char) -------------------------------------------------------------------
+;; The Unicode properties are the JDK's, read from range tables SchemeCharacters
+;; generates and appends to this library (%scheme-alphabetic-ranges and the rest): a
+;; string of inclusive [from, to] pairs, each bound four base-64 characters (48 + d,
+;; skipping the backslash), decoded into a vector on first use. ASCII answers first
+;; without a table. Case folding is
+;; spelled again in SchemeCharacters.foldcase, which #!fold-case uses at compile time;
+;; change the two together.
+
+;; A generated table, decoded into a simple vector of its bounds.
+(defun rontolisp::%scheme-decode-ranges (table)
+  (let* ((n (floor (length table) 4))
+         (bounds (make-array n :initial-element 0)))
+    (dotimes (i n bounds)
+      (let ((value 0))
+        (dotimes (k 4)
+          (let ((d (- (char-code (char table (+ (* i 4) k))) 48)))
+            (setq value (+ (* value 64) (if (> d 43) (- d 1) d)))))
+        (setf (svref bounds i) value)))))
+
+;; The index of the [from, to] pair of the decoded BOUNDS holding CODE, or NIL.
+(defun rontolisp::%scheme-range-index (code bounds)
+  (let ((low 0) (high (- (ash (length bounds) -1) 1)) (found nil))
+    (do ()
+        ((or found (> low high)) found)
+      (let ((middle (ash (+ low high) -1)))
+        (cond ((< code (svref bounds (* 2 middle))) (setq high (- middle 1)))
+         ((> code (svref bounds (+ (* 2 middle) 1))) (setq low (+ middle 1)))
+         (t (setq found middle)))))))
+
+(defun rontolisp::%scheme-char-alphabetic? (c)
+  (let ((code (char-code c)))
+    (if (< code 128)
+        (or (<= 65 code 90) (<= 97 code 122))
+        (if (rontolisp::%scheme-range-index code
+             (rontolisp::%scheme-alphabetic-ranges))
+            t
+            nil))))
+
+;; Numeric_Type=Decimal (general category Nd), which comes in runs of ten from a zero
+;; -- adjacent runs share one table range (U+1D7CE..U+1D7FF is five), hence the mod.
+(defun rontolisp::%scheme-digit-value (c)
+  (let ((code (char-code c)))
+    (if (< code 128)
+        (if (<= 48 code 57) (- code 48) nil)
+        (let* ((table (rontolisp::%scheme-decimal-ranges))
+               (run (rontolisp::%scheme-range-index code table)))
+          (if run (mod (- code (svref table (* 2 run))) 10) nil)))))
+
+(defun rontolisp::%scheme-char-numeric? (c)
+  (if (rontolisp::%scheme-digit-value c) t nil))
+
+;; White_Space; SchemeCharacters.isWhiteSpace says the same through the JDK.
+(defun rontolisp::%scheme-char-whitespace? (c)
+  (let ((code (char-code c)))
+    (or (<= 9 code 13) (= code 32) (= code 133) (= code 160) (= code 5760)
+        (<= 8192 code 8202) (= code 8232) (= code 8233) (= code 8239)
+        (= code 8287) (= code 12288))))
+
+;; The Uppercase property: "has a lowercase mapping", corrected by a table where
+;; the two disagree (U+2102 has none and is uppercase, a titlecase letter has one
+;; and is not).
+(defun rontolisp::%scheme-char-upper-case? (c)
+  (let ((code (char-code c)))
+    (if (< code 128)
+        (<= 65 code 90)
+        (let ((mapped (char/= c (char-downcase c))))
+          (if (rontolisp::%scheme-range-index code
+               (rontolisp::%scheme-uppercase-exceptions))
+              (not mapped)
+              mapped)))))
+
+(defun rontolisp::%scheme-char-lower-case? (c)
+  (let ((code (char-code c)))
+    (if (< code 128)
+        (<= 97 code 122)
+        (let ((mapped (char/= c (char-upcase c))))
+          (if (rontolisp::%scheme-range-index code
+               (rontolisp::%scheme-lowercase-exceptions))
+              (not mapped)
+              mapped)))))
+
+;; Unicode simple case folding: the lowercase of the uppercase, except that the
+;; dotted and dotless i have none and Cherokee folds to its capitals.
+(defun rontolisp::%scheme-char-foldcase (c)
+  (let ((code (char-code c)))
+    (cond ((< code 128) (char-downcase c))
+          ((or (= code 304) (= code 305)) c)
+          (t (let ((upper (char-upcase c)))
+               (if (<= 5024 (char-code upper) 5109)
+                   upper
+                   (char-downcase upper)))))))
+
+(defun rontolisp::%scheme-char-ci=? (a b)
+  (char= (rontolisp::%scheme-char-foldcase a)
+         (rontolisp::%scheme-char-foldcase b)))
+
+(defun rontolisp::%scheme-char-ci<? (a b)
+  (char< (rontolisp::%scheme-char-foldcase a)
+         (rontolisp::%scheme-char-foldcase b)))
+
+(defun rontolisp::%scheme-char-ci>? (a b)
+  (char> (rontolisp::%scheme-char-foldcase a)
+         (rontolisp::%scheme-char-foldcase b)))
+
+(defun rontolisp::%scheme-char-ci<=? (a b)
+  (char<= (rontolisp::%scheme-char-foldcase a)
+          (rontolisp::%scheme-char-foldcase b)))
+
+(defun rontolisp::%scheme-char-ci>=? (a b)
+  (char>= (rontolisp::%scheme-char-foldcase a)
+          (rontolisp::%scheme-char-foldcase b)))
+
+(defun rontolisp::%scheme-ascii-string-p (s)
+  (let ((n (length s)) (i 0))
+    (do ()
+        ((or (>= i n) (>= (char-code (char s i)) 128)) (>= i n))
+      (setq i (+ i 1)))))
+
+;; Pushes the characters of STRING onto the list ACCUMULATOR, mapped by F.
+(defun rontolisp::%scheme-push-mapped (string f accumulator)
+  (dotimes (i (length string) accumulator)
+    (setq accumulator (cons (funcall f (char string i)) accumulator))))
+
+;; The full mappings (R7RS 6.7): a character may map to several, so the result may
+;; be longer than the argument. An ASCII string takes Common Lisp's per-character
+;; fold, which is the same there.
+(defun rontolisp::%scheme-string-upcase (s)
+  (if (rontolisp::%scheme-ascii-string-p s)
+      (string-upcase s)
+      (let ((out nil))
+        (dotimes (i (length s))
+          (let* ((c (char s i))
+                 (special (rontolisp::%scheme-special-upcase (char-code c))))
+            (setq out
+                  (if special
+                      (rontolisp::%scheme-push-mapped special
+                                                      (function identity) out)
+                      (cons (char-upcase c) out)))))
+        (coerce (nreverse out) (quote string)))))
+
+(defun rontolisp::%scheme-string-foldcase (s)
+  (if (rontolisp::%scheme-ascii-string-p s)
+      (string-downcase s)
+      (let ((out nil))
+        (dotimes (i (length s))
+          (let* ((c (char s i)) (code (char-code c)))
+            (setq out
+                  (cond ((= code 304) (cons (code-char 775) (cons #\i out)))
+                        ((= code 7838) (cons #\s (cons #\s out)))
+                        ((= code 305) (cons c out))
+                        (t
+                         (let ((special
+                                (rontolisp::%scheme-special-upcase code)))
+                           (if special
+                               (rontolisp::%scheme-push-mapped special
+                                (function rontolisp::%scheme-char-foldcase) out)
+                               (cons (rontolisp::%scheme-char-foldcase c)
+                                     out))))))))
+        (coerce (nreverse out) (quote string)))))
+
+;; Cased (Unicode 3.13): Uppercase, Lowercase or titlecase -- a titlecase letter has a
+;; lowercase mapping.
+(defun rontolisp::%scheme-cased-p (c)
+  (or (rontolisp::%scheme-char-upper-case? c)
+      (rontolisp::%scheme-char-lower-case? c) (char/= c (char-downcase c))))
+
+(defun rontolisp::%scheme-case-ignorable-p (c)
+  (if (rontolisp::%scheme-range-index (char-code c)
+       (rontolisp::%scheme-case-ignorable-ranges))
+      t
+      nil))
+
+;; Whether a cased character comes STEP-wise from index I of S, looking through
+;; case-ignorable ones.
+(defun rontolisp::%scheme-cased-beside-p (s i step)
+  (let ((j (+ i step)) (n (length s)) (answer 0))
+    (do ()
+        ((not (eql answer 0)) answer)
+      (if (or (< j 0) (>= j n))
+          (setq answer nil)
+          (let ((c (char s j)))
+            (cond ((rontolisp::%scheme-cased-p c) (setq answer t))
+                  ((rontolisp::%scheme-case-ignorable-p c) (setq j (+ j step)))
+                  (t (setq answer nil))))))))
+
+;; The Final_Sigma condition for the capital sigma at index I.
+(defun rontolisp::%scheme-final-sigma-p (s i)
+  (and (rontolisp::%scheme-cased-beside-p s i -1)
+       (not (rontolisp::%scheme-cased-beside-p s i 1))))
+
+(defun rontolisp::%scheme-string-downcase (s)
+  (if (rontolisp::%scheme-ascii-string-p s)
+      (string-downcase s)
+      (let ((out nil))
+        (dotimes (i (length s))
+          (let* ((c (char s i)) (code (char-code c)))
+            (setq out
+                  (cond ((= code 304) (cons (code-char 775) (cons #\i out)))
+                        ((= code 931)
+                         (cons (code-char
+                                (if (rontolisp::%scheme-final-sigma-p s i)
+                                    962
+                                    963)) out))
+                        (t (cons (char-downcase c) out))))))
+        (coerce (nreverse out) (quote string)))))
+
+(defun rontolisp::%scheme-string-ci=? (a b)
+  (string= (rontolisp::%scheme-string-foldcase a)
+           (rontolisp::%scheme-string-foldcase b)))
+
+(defun rontolisp::%scheme-string-ci<? (a b)
+  (if (string< (rontolisp::%scheme-string-foldcase a)
+               (rontolisp::%scheme-string-foldcase b))
+      t
+      nil))
+
+(defun rontolisp::%scheme-string-ci>? (a b)
+  (if (string> (rontolisp::%scheme-string-foldcase a)
+               (rontolisp::%scheme-string-foldcase b))
+      t
+      nil))
+
+(defun rontolisp::%scheme-string-ci<=? (a b)
+  (if (string<= (rontolisp::%scheme-string-foldcase a)
+                (rontolisp::%scheme-string-foldcase b))
+      t
+      nil))
+
+(defun rontolisp::%scheme-string-ci>=? (a b)
+  (if (string>= (rontolisp::%scheme-string-foldcase a)
+                (rontolisp::%scheme-string-foldcase b))
+      t
+      nil))
 
 ;; --- numbers ----------------------------------------------------------------------
 
