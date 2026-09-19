@@ -12365,6 +12365,72 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aTagbodyStatementAnswersATailGoInsteadOfThrowingIt() {
+		// A go in the statement's tail -- through if, progn, let, let*, when, unless and
+		// cond -- is the label's body index; a statement with no go answers NO_JUMP.
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		LispEvaluator.TagbodyLabels labels = LispEvaluator.TagbodyLabels
+			.of(((LispCons) LispReader.readFromString("(a (f) b (g))")).toList());
+		Environment env = new Environment(null);
+		for (String statement : List.of("(go b)", "(if nil 1 (go b))", "(progn 1 (go b))",
+				"(let ((x t)) (if x (go b)))", "(let* ((x t) (y x)) (when y (go b)))", "(unless nil (go b))",
+				"(cond (nil 1) (t (go b)))")) {
+			assertThat(evaluator.evalTagbodyStatement(LispReader.readFromString(statement), env, labels)).as(statement)
+				.isEqualTo(2);
+		}
+		assertThat(evaluator.evalTagbodyStatement(LispReader.readFromString("(if nil (go a))"), env, labels))
+			.isEqualTo(LispEvaluator.NO_JUMP);
+	}
+
+	@Test
+	void aTailGoUndoesTheBindingsItLeavesAndReachesTheInnermostLabel() {
+		// SBCL 2.x prints the same two lists: the special binding of each pass is gone at
+		// the next, and the inner tagbody's own outer label shadows the enclosing one.
+		assertThat(evalMulti("""
+				(defvar *depth* 0)
+				(defun walk (n)
+				  (let ((trace nil))
+				    (tagbody
+				     top
+				       (let ((*depth* (+ *depth* 1)) (k n))
+				         (push (list k *depth*) trace)
+				         (let* ((m (- k 1)))
+				           (setq n m)
+				           (cond ((> m 2) (go top))
+				                 ((= m 2) (when t (go two)))
+				                 (t (unless nil (go done))))))
+				     two
+				       (progn (push 'two trace) (if (> n 0) (progn (setq n 0) (go top)) (go done)))
+				     done
+				       (push (list 'done *depth*) trace))
+				    (reverse trace)))
+				(list (walk 5)
+				      (let ((out nil))
+				        (tagbody
+				         outer
+				           (tagbody
+				              (let ((x (length out)))
+				                (if (< x 2) (progn (push x out) (go outer)) (go inner)))
+				            inner
+				              (push 'inner out)
+				              (if (< (length out) 4) (go outer) (go end))
+				            outer
+				              (push 'shadow out)
+				              (go end)
+				            end)
+				         end)
+				        (reverse out)))
+				""").print()).isEqualTo("(((5 1) (4 1) (3 1) TWO (0 1) (DONE 0)) (0 SHADOW))");
+	}
+
+	@Test
+	void aMalformedTagbodyStatementIsStillAProgramError() {
+		assertThat(eval("(handler-case (tagbody (let ((1 2)) (go x)) x) (error () 'error))").print())
+			.isEqualTo("ERROR");
+		assertThat(eval("(handler-case (tagbody (if . 1) x) (error () 'error))").print()).isEqualTo("ERROR");
+	}
+
+	@Test
 	void restartsDisappearOutsideTheirExtent() {
 		assertThat(eval("(progn (restart-case 1 (gone () nil)) (find-restart 'gone))")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(handler-case (invoke-restart :nope) (error (e) :no-restart))").print())

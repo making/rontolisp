@@ -1564,6 +1564,11 @@ outside such a cycle changes: a program with none lowers byte-identically.
   self loop already pays), which is also the evaluator's +16% there. `.todo/901` is the
   interpreter half: memoizing the label table per `tagbody` form alone bought nothing
   measurable, so it was not kept.
+  **Since `.todo/901` (2026-09-19) a `go` in a tagbody statement's tail is not thrown**
+  (`.kb/do-return-block.md`), which is every jump these groups and loops emit. Interpreter,
+  same programs, one loaded 64-core box, alternating runs, whole process: 10M shallow
+  77.1-90.6 -> 43.4-44.2 s; `evalfib` (`fib 24`) 39.7-42.2 -> 32.4-35.1 s -- back at the
+  plain defuns' 37.8 s and 31.1-33.9 s above, measured on a quieter box.
 - **Depth, default stacks** (before -> after): `ev?`/`od?` JVM 3,516 / wasm and component
   10,780 / interpreter 10,230 -> 1,000,000 on all four; `evalloop` (the evaluator running
   a 1,000,000-iteration interpreted loop) overflowed on all four, now answers `done`.
@@ -1630,7 +1635,9 @@ gets a `lambda` entering it:
   651 -> 250, component 646 -> 253. Faster, unlike the top-level groups: the calls it
   replaces were `funcall`s through `%scheme-ensure-procedure`, not direct `defun` calls.
   Interpreter (best of 3): 300K shallow 4.1 -> 5.8 s, 30K `(parity 100)` 5.5 -> 9.6 s --
-  every jump is a thrown `GoSignal` there, `.todo/901`.
+  every jump was a thrown `GoSignal` there. After `.todo/901` (same day, no throw for a
+  tail `go`; before -> after, same box): 300K shallow 5.35-5.72 -> 3.98-4.56 s, 30K
+  `(parity 100)` 8.81-10.40 -> 4.94-5.89 s, i.e. the plain procedures' cost again.
 - **Size**: `G` takes one argument more than the widest member, and on both compiled
   backends the first indirect call of an ARITY pulls every dispatchable function of that
   arity (`_invoke_N`, `.kb/core-representation.md`). The shallow program grew 50,117 ->

@@ -35,6 +35,9 @@ frames are entered. What must keep its frame, because something runs after the v
 Measure before building: `fib 32`, `evalfib` (`examples/scheme/evaluator.scm` running
 `(fib 27)`), the 300K shallow `(parity (remainder k 4))` loop and the 30K `(parity 100)`
 of `.kb/scheme-frontend.md`, so the loop's cost on non-tail code is known. Adjacent:
-`.todo/901` (a `go` as a thrown `GoSignal`), which the same restructuring may absorb. Pin
+`LispEvaluator.evalTagbodyStatement` (`.todo/901`, done): a tail-context walk of a tagbody
+statement through `if`/`progn`/`let`/`let*`/`when`/`unless`/`cond` that answers a label
+index instead of throwing `GoSignal`; the loop generalizes it (a tagbody statement is a tail
+context whose continuation is a jump) and should absorb it rather than sit beside it. Pin
 with a wasm+interpreter depth test (the JVM stays bounded, so no four-backend
 `scheme-spec.yaml` case can hold it).

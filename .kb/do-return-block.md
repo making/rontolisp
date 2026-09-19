@@ -98,6 +98,30 @@ qualification, not the constant, tells them apart.
   `WasmLispCompilerIntegrationTest.integerTagbodyTag`, ci-spec `integer-tagbody-tag`.
 - **Interpreter = dynamic `go`** (a superset of CL's lexical `go`): a thrown `GoSignal`
   re-entering at the label, so it **crosses function boundaries**.
+- **Except in a statement's tail** (`LispEvaluator.evalTagbodyStatement`, 2026-09-19,
+  `.todo/901`): `evalTagbody` walks each statement through `if`, `progn`, `let`, and the
+  memoized expansions of `let*`/`when`/`unless`/`cond`, and a `(go L)` there whose tag is
+  one of ITS labels answers the label's index instead of throwing -- the walk never enters
+  another `tagbody`, so this is the innermost owner either way. A `let` binding a special
+  undoes it in its `finally` before the index leaves, as before the throw did. Every other
+  `go` (an argument position, an outer tag, a closure) still throws. The walk stands in for
+  `evalConsClassifyingRawFailures` at each form it takes apart, so a malformed statement is
+  still a `program-error`; any other shape goes to `eval`. The label table is a key array
+  scanned from the end (the last duplicate wins, as the `HashMap` it replaced), not a map
+  built per entry.
+  - Why: a thrown `go` unwinds every Java frame between it and the `tagbody` (`evalCons` ->
+    `evalIf` -> `eval` -> `evalLet` ...), and the JIT only turns that into a jump when all of
+    them inline, which the recursive evaluator rarely allows. Measured (same day, loaded
+    64-core box, whole-process wall clock incl. ~0.55 s start-up, before -> after): a Scheme
+    named-`let` count-down, 300 x 3,000 steps, 2.65-3.07 -> 1.81-1.88 s, against 2.27-2.55 s
+    for the same steps as non-tail calls -- a loop step now costs less than a call step; the
+    CL `tagbody` count-down in `steps.lisp` (2 x 300 x 3,000 each way) 4.42-4.54 -> 3.59-3.90
+    s. The Scheme tail-call groups: `.kb/scheme-frontend.md`.
+  - `.todo/912` (`eval` as a loop) generalizes the same tail context; the walk is its
+    special case with "jump" as the continuation, and folds into it.
+  - Pinned by `LispEvaluatorTest.aTagbodyStatementAnswersATailGoInsteadOfThrowingIt`,
+    `#aTailGoUndoesTheBindingsItLeavesAndReachesTheInnermostLabel` (SBCL prints the same),
+    `#aMalformedTagbodyStatementIsStillAProgramError`.
 - **Compilers = LEXICAL**: `go` becomes goto/br when its tag is in the SAME compiled function.
   `JvmTagbodyCompiler` (every label a `joinShape` join point at the tagbody's entry stack
   shape) + `JvmGoCompiler`; `WasmTagbodyCompiler` (dispatch loop + `br_table`, `i31` pc), which
