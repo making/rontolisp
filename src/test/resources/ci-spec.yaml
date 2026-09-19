@@ -3891,7 +3891,7 @@ cases:
       42
       99
       42
-  - name: eq-vs-eql-floats-ratios-are-eql-by-value
+  - name: eq-and-eql-floats-ratios-by-value
     source: |
       (print (if (eql 1.5 1.5) 42 99))
       (print (if (eq 1.5 1.5) 42 99))
@@ -3899,7 +3899,7 @@ cases:
       (print (member 1.0 (list 2.0 1.0)))
     expected: |
       42
-      99
+      42
       42
       (1.0)
   - name: equal-structural-equality-cons-cells
@@ -9652,7 +9652,7 @@ cases:
         1
         NIL
         NIL
-      wasm-component: |
+      wasm_component: |
         10
         0
         0
@@ -13399,11 +13399,11 @@ cases:
       ;; can collapse the two allocations to one.
       (let ((cp 128513))
         (print (eq (code-char cp) (code-char cp))))        ; T
-      ;; eq on non-characters unchanged: two freshly-consed cells are not eq,
-      ;; two boxed floats with the same value are not eq, but two equal small
-      ;; integers (i31) are (ref.eq on i31 already worked).
+      ;; Two freshly-consed cells are not eq; two floats with the same value are,
+      ;; since eq on numbers is eql (.kb/eq-numbers.md), and so are two equal
+      ;; small integers.
       (print (eq (list 1) (list 1)))                       ; NIL
-      (print (eq 1.5 1.5))                                 ; NIL
+      (print (eq 1.5 1.5))                                 ; T
       (print (eq 42 42))                                   ; T
       ;; eql / equal on characters unchanged (they already worked); pinned here
       ;; as a companion regression guard.
@@ -13416,7 +13416,7 @@ cases:
       NIL
       T
       NIL
-      NIL
+      T
       T
       T
       T

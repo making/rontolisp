@@ -42,6 +42,6 @@ Programs with no `eq`/`eql` site are byte-identical. WASM, raw bytes vs. before:
 `contact-book` +0.06%, `maze-rl` +0.07%. JVM jars shrink 33-75 B (one helper instead of two).
 
 Speed, wasmtime, best of 10, 3M iterations of a 10-element list search: symbol `eq` misses
-unchanged (378 vs 375 ms); fixnum `eql` misses 15-25% faster (221 -> 186; 253 -> 188 in a module
-with floats) from the inline i31 exit; float `eql` misses ~10% slower (613 -> 672) from the call
+unchanged (374 vs 376 ms); fixnum `eql` misses 12-15% faster (223 -> 197; 218 -> 185 in a module
+with floats) from the inline i31 exit; float `eql` misses 5-10% slower (632 -> 664) from the call
 into `_eql_tail`. JVM unchanged within noise.
