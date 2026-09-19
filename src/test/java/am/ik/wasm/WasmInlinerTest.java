@@ -393,4 +393,89 @@ class WasmInlinerTest {
 		assertThat(WasmInliner.inline(module, new int[] { 1 })).isNotSameAs(module);
 	}
 
+	@Test
+	void aTailCallSiteTakesTheMovedBodyFollowedByAReturn() {
+		// The one call site is `return_call 0`: the callee's answer is the caller's, so
+		// the moved body ends in a `return` -- whatever the caller had after the site (a
+		// dispatcher case falls through into the NEXT case's body there).
+		byte[] caller = body(0, w -> {
+			constant(w, 2);
+			constant(w, 3);
+			op(w, Instruction.RETURN_CALL, 0);
+		});
+		byte[] module = module(new int[] { 0, 2 }, List.of(ADD, caller), Map.of("g", 1));
+
+		byte[] inlined = inlineAndValidate(module);
+
+		assertThat(opcodes(inlined, 1)).containsExactly(Instruction.I32_CONST, Instruction.I32_CONST,
+				Instruction.I32_ADD, Instruction.RETURN, Instruction.END);
+		assertThat(definedFunctions(WasmTreeShaker.shake(inlined))).isEqualTo(1);
+	}
+
+	@Test
+	void aTailCallInsideAMovedBodyBecomesACallAndABranchOutOfTheWrappingBlock() {
+		// `if (local.get 0) { i32.const 1; return_call 2 } i32.const 0`: moved into its
+		// caller, the tail call is a plain call followed by the branch a `return` gets
+		// -- the callee's frame is gone either way, so the stack is exactly as deep as
+		// the tail call left it. Function 2 is exported so it stays a call target.
+		byte[] early = body(0, w -> {
+			op(w, Instruction.GET_LOCAL, 0);
+			w.write(Instruction.IF);
+			w.write(0x40); // (void)
+			constant(w, 1);
+			op(w, Instruction.RETURN_CALL, 2);
+			w.write(Instruction.END);
+			constant(w, 0);
+		});
+		byte[] caller = body(0, w -> {
+			constant(w, 5);
+			op(w, Instruction.CALL, 0);
+		});
+		byte[] module = module(new int[] { 1, 2, 1 }, List.of(early, caller, SQUARE), Map.of("g", 1, "sq", 2));
+
+		byte[] inlined = inlineAndValidate(module);
+
+		// The argument push stays on the stack under a block declaring the callee's
+		// type (the stack hand-over), so the block is the second instruction.
+		List<Instr> code = decode(inlined, 1).code();
+		assertThat(code.get(1).op).isEqualTo(Instruction.BLOCK);
+		assertThat(code.stream().map(in -> in.op)).doesNotContain(Instruction.RETURN_CALL, Instruction.RETURN);
+		int call = -1;
+		for (int i = 0; i < code.size(); i++) {
+			if (code.get(i).op == Instruction.CALL) {
+				call = i;
+			}
+		}
+		assertThat(call).isPositive();
+		assertThat(code.get(call).a).isEqualTo(2L);
+		assertThat(code.get(call + 1).op).isEqualTo(Instruction.BR);
+		assertThat(code.get(call + 1).a).isEqualTo(1L);
+		assertThat(definedFunctions(WasmTreeShaker.shake(inlined))).isEqualTo(2);
+	}
+
+	@Test
+	void aTrailingTailCallInAMovedBodyNeedsNoBlock() {
+		// A forwarder, as the emitter spells one: `local.get 0; return_call 2; end`. The
+		// tail call is the body's last instruction, so as a plain call it falls off the
+		// end exactly as the tail call left -- no wrapping block, no branch, and the
+		// move is what it was when the forwarder said `call`.
+		byte[] forwarder = body(0, w -> {
+			op(w, Instruction.GET_LOCAL, 0);
+			op(w, Instruction.RETURN_CALL, 2);
+		});
+		byte[] caller = body(0, w -> {
+			constant(w, 4);
+			op(w, Instruction.CALL, 0);
+		});
+		byte[] module = module(new int[] { 1, 2, 1 }, List.of(forwarder, caller, SQUARE), Map.of("g", 1, "sq", 2));
+
+		byte[] inlined = inlineAndValidate(module);
+
+		List<Instr> code = decode(inlined, 1).code();
+		assertThat(code.stream().map(in -> in.op)).containsExactly(Instruction.I32_CONST, Instruction.CALL,
+				Instruction.END);
+		assertThat(code.get(1).a).isEqualTo(2L);
+		assertThat(definedFunctions(WasmTreeShaker.shake(inlined))).isEqualTo(2);
+	}
+
 }

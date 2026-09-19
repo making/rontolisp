@@ -25462,4 +25462,46 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("(2 1)\n(2 1)\n(2 1)\n(10 1)\n16");
 	}
 
+	@Test
+	void aTailCallRunsInConstantStackAndATailPositionThatKeepsItsFrameStillDoes() throws Exception {
+		// Every call in tail position is a return_call (Ctx.tailPosition,
+		// .kb/wasm-tail-calls.md): through a function value (the dispatcher tail-calls
+		// its target too), a direct call, a labels lambda, apply of a literal and of a
+		// value, and the value of a return-from / let / progn / the chain. 300,000 deep
+		// overflowed wasmtime's stack at about 3,000 before. The second line is what
+		// must NOT be a tail call: a special let's body (the restore runs after it), an
+		// unwind-protect's protected form, a handler-case body and a
+		// multiple-value-prog1's first form all keep their frame.
+		assertThat(compileAndRunEh(
+				"""
+						(defun through-value (self n) (if (= n 0) 'done (funcall self self (- n 1))))
+						(defun ping (n) (if (= n 0) 'pong-done (pong (- n 1))))
+						(defun pong (n) (if (= n 0) 'ping-done (ping (- n 1))))
+						(defun via-labels (n) (labels ((step (i acc) (if (= i 0) acc (step (- i 1) (+ acc 1))))) (step n 0)))
+						(defun via-apply (n) (if (= n 0) 'applied (apply #'via-apply (list (- n 1)))))
+						(defun via-value-apply (f n) (if (= n 0) 'value-applied (apply f f (list (- n 1)))))
+						(defun via-block (n) (block b (dolist (x '(1)) (return-from b (through-value #'through-value n))) 'never))
+						(defun via-let (n) (let ((m (+ n 0))) (progn (the t (through-value #'through-value m)))))
+						(print (list (through-value #'through-value 300000) (ping 300000) (via-labels 300000)
+						             (via-apply 300000) (via-value-apply #'via-value-apply 300000)
+						             (via-block 300000) (via-let 300000)))
+						(defvar *depth* 0)
+						(defun reads-special () *depth*)
+						(defun binds-special () (let ((*depth* 7)) (reads-special)))
+						(defvar *log* nil)
+						(defun protected () (unwind-protect (progn (push :body *log*) :value) (push :cleanup *log*)))
+						(defun raises () (error "boom"))
+						(defun catches () (handler-case (raises) (error () :caught)))
+						(defun first-of-two () (multiple-value-prog1 (values 1 2) (push :after *log*)))
+						(print (list (binds-special) *depth* (protected) (reverse *log*) (catches) (first-of-two)))
+						"""))
+			.isEqualTo("(DONE PONG-DONE 300000 APPLIED VALUE-APPLIED DONE DONE)\n"
+					+ "(7 0 :VALUE (:BODY :CLEANUP) :CAUGHT 1)");
+		// The component wraps the same core module: the same depth through a value.
+		assertThat(compileAndRunComponent("""
+				(defun through-value (self n) (if (= n 0) 'done (funcall self self (- n 1))))
+				(print (through-value #'through-value 300000))
+				""")).isEqualTo("DONE");
+	}
+
 }

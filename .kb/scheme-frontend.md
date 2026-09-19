@@ -1571,17 +1571,24 @@ outside such a cycle changes: a program with none lowers byte-identically.
   files (the chapter-4.4 query system, the chapter-5.5.7 compile-and-go) and
   `evaluator.scm` change; each prints the same on all four backends before and after.
   Common Lisp programs never reach this pass.
-- **Not members** (ordinary calls, depths below): a tail call through a procedure VALUE
-  (an argument, a `lambda` in a variable, `apply` -- `.todo/899`), and every definition
-  typed at the REPL (a session's definitions are variables; internal definitions inside
-  one are groups like anywhere else).
-- **Not a trampoline, and not `return_call`.** A hand-written trampoline (a tail call
-  answers a bounce, every non-tail call site drives them) measured, against plain calls:
-  `fib 32` JVM 43-45 vs 47-56 ms, wasm 85-107 vs 58-72, interpreter 12.2 vs 5.5 s; 3M
-  shallow `ev?`/`od?` calls JVM 720-914 vs 39-60 ms (15x), wasm 1.58-1.78 s vs 73-81 ms
-  (20x), interpreter 122 vs 7.6 s (16x). wasm's `return_call` (wasmtime 47 enables
-  `tail-call`) would make every tail call proper on the two wasm targets only; the JVM has
-  no counterpart. Both are `.todo/899`'s to weigh.
+- **Not members** (ordinary calls): a tail call through a procedure VALUE (an argument,
+  a `lambda` in a variable, `apply`), and every definition typed at the REPL (a session's
+  definitions are variables; internal definitions inside one are groups like anywhere
+  else). On the two wasm targets such a call is proper anyway: the backend emits every
+  call in tail position as `return_call` and the dispatcher tail-calls its target
+  (`.kb/wasm-tail-calls.md`, 2026-09-19, `.todo/899`), so the lowering's `(funcall
+  (%scheme-ensure-procedure f) ..)` runs in constant stack there -- the check returns
+  before the call. On the JVM and the interpreter it uses stack (depths below).
+- **Not a trampoline.** A hand-written trampoline (a tail call answers a bounce, every
+  non-tail call site drives them) measured, against plain calls: `fib 32` JVM 43-45 vs
+  47-56 ms, wasm 85-107 vs 58-72, interpreter 12.2 vs 5.5 s; 3M shallow `ev?`/`od?` calls
+  JVM 720-914 vs 39-60 ms (15x), wasm 1.58-1.78 s vs 73-81 ms (20x), interpreter 122 vs
+  7.6 s (16x). Not acceptable as a general mechanism on any backend, and on wasm
+  `return_call` made it moot. The JVM has no counterpart (`.todo/899` measured its
+  options: a Scheme call through a value is two JVM frames, `g` and `_invoke_2`; a larger
+  stack for compiled output's `main` raises the ceiling 1,844 -> 17,677 at 16 MiB and is a
+  Common Lisp-wide change of every emitted `main`, `.todo/911`). The interpreter's loop
+  in `eval`, the non-trampoline shape, is `.todo/912`.
 
 Pinned by `SchemeLoweringTest.topLevelProceduresWhoseTailCallsFormACycleAreOneGroupEachEntersAtItsLabel`,
 `#aCycleThroughANonTailCallIsNoGroupAndNumbersNothing`, `#anAssignedOrRedefinedProcedureIsNoMember`
@@ -1700,9 +1707,11 @@ The nil-initialized shape loses the integer typing of the loop variables: 4x.
 
 **Tail-call depth that is NOT a loop**, default stacks, largest passing depth (2026-09-19,
 binary search): a tail call through a procedure VALUE, `(define (g self n) (if (= n 0) 'done
-(self self (- n 1))))`, JVM (`java Prog`) 1,716, wasm and component 2,693, interpreter
-15,234. Top-level `ev?`/`od?` was JVM 3,516 / wasm 10,780 / interpreter 10,230 before the
-tail-call groups and is unbounded now, and so is an internal or `letrec` pair.
+(self self (- n 1))))`, JVM (`java Prog`) 1,716-1,844 (17,677 under `-Xss16m`), wasm and
+component 2,693-2,975 before `return_call` and 5,000,000 (the probe's ceiling) after
+(`.kb/wasm-tail-calls.md`), interpreter 15,234-15,497. Top-level `ev?`/`od?` was JVM 3,516
+/ wasm 10,780 / interpreter 10,230 before the tail-call groups and is unbounded now, and
+so is an internal or `letrec` pair.
 
 **Size.** `(display "hello, world")` is 1,594 B of class and 498 B of wasm: `display` of a
 string, character or integer LITERAL lowers to `write-string` / `write-char` / `princ`.
@@ -1768,8 +1777,9 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 The other
 libraries, radix and exactness prefixes in `string->number` (`.todo/889`),
-re-entrant continuations, tail calls through a procedure value (`.todo/899`). Each is
-refused by name where it can be.
+re-entrant continuations, tail calls through a procedure value on the JVM and the
+interpreter (proper on both wasm targets, `.kb/wasm-tail-calls.md`). Each is refused by
+name where it can be.
 
 ## The SICP sample corpus harness (`.todo/828`)
 

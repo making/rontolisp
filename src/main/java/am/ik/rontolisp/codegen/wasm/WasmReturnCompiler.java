@@ -38,7 +38,12 @@ final class WasmReturnCompiler {
 		}
 		int targetDepth = blockStackDepthOf(ctx, marker);
 		List<LispVal> parts = cons.toList();
+		WasmLispCompiler.UnwindScope escaped = ctx.unwindScopes.peek();
+		boolean crossesRegion = escaped != null && escaped.blockDepth() >= targetDepth;
 		if (parts.size() > 1) {
+			// The value is the block's; when the block is in tail position and the exit
+			// crosses no protected region, it is the function's too (Ctx.tailPosition).
+			ctx.tailPosition = marker.tail() && !crossesRegion;
 			// state-machine mode: the return value is a spine child (empty stack)
 			WasmAsyncEmit.spine(parts.get(1), ctx);
 		}
@@ -46,8 +51,7 @@ final class WasmReturnCompiler {
 			ctx.writer.write(Instruction.REF_NULL);
 			ctx.writer.writeHeapType(Type.EQ.code());
 		}
-		WasmLispCompiler.UnwindScope escaped = ctx.unwindScopes.peek();
-		if (escaped != null && escaped.blockDepth() >= targetDepth) {
+		if (crossesRegion) {
 			// The exit crosses the innermost protected region (an unwind-protect, a
 			// handler-case, or a special let's binding restores): run its cleanups
 			// through the trampoline; the trampolines cascade to the block, innermost

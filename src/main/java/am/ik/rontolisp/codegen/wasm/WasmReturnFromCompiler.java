@@ -63,6 +63,11 @@ final class WasmReturnFromCompiler {
 		}
 		int targetDepth = WasmReturnCompiler.blockStackDepthOf(ctx, target);
 		if (parts.size() == 3) {
+			// The value is the block's; when the block is in tail position and no
+			// protected region's cleanups follow it, it is the function's too
+			// (Ctx.tailPosition).
+			WasmLispCompiler.UnwindScope innermost = ctx.unwindScopes.peek();
+			ctx.tailPosition = target.tail() && (innermost == null || innermost.blockDepth() < targetDepth);
 			// state-machine mode: the return value is a spine child (empty stack)
 			WasmAsyncEmit.spine(parts.get(2), ctx);
 		}

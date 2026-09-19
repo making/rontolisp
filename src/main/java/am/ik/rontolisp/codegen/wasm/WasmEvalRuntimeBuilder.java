@@ -1932,12 +1932,10 @@ final class WasmEvalRuntimeBuilder {
 		// each case reads its target's required parameters out of it, handing a variadic
 		// target the remaining tail. The per-arity dispatchers cannot serve apply -- they
 		// take one WASM parameter per Lisp argument, so they stop at MAX_CALLABLE_ARITY,
-		// and an apply past it used to fall off the ladder and trap.
-		getLocal(w, FN);
-		getLocal(w, ARGLIST);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_SPREAD);
-		w.write(Instruction.RETURN);
+		// and an apply past it used to fall off the ladder and trap. A tail call, like
+		// every dispatch: an (apply f ...) in tail position whose target applies again
+		// otherwise leaves one _apply frame per round.
+		emitSpreadDispatch(w, FN, ARGLIST);
 		w.write(Instruction.END); // if closure
 
 		// not callable: the dispatcher reports it
@@ -1946,13 +1944,15 @@ final class WasmEvalRuntimeBuilder {
 		return body.toByteArray();
 	}
 
-	/** Emits {@code return _dispatch_spread(fn, argList)}. */
+	/**
+	 * Emits {@code return _dispatch_spread(fn, argList)} as a tail call: an {@code apply}
+	 * in tail position then runs in constant stack all the way to the target.
+	 */
 	private static void emitSpreadDispatch(WasmWriter w, int fnSlot, int argListSlot) {
 		getLocal(w, fnSlot);
 		getLocal(w, argListSlot);
-		w.write(Instruction.CALL);
+		w.write(Instruction.RETURN_CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_SPREAD);
-		w.write(Instruction.RETURN);
 	}
 
 	/**

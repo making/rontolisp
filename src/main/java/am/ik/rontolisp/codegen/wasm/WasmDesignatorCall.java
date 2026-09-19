@@ -131,11 +131,23 @@ final class WasmDesignatorCall {
 	 * @param args one emitter per argument
 	 */
 	void emitCall(WasmLispCompiler.Ctx ctx, List<Runnable> args) {
+		emitCall(ctx, args, false);
+	}
+
+	/**
+	 * As {@link #emitCall(WasmLispCompiler.Ctx, List)}; with {@code tail}, the call is a
+	 * {@code return_call} ({@code Ctx.tailPosition}).
+	 * @param ctx the compilation context
+	 * @param args one emitter per argument
+	 * @param tail whether the call is in tail position of the function being built
+	 */
+	void emitCall(WasmLispCompiler.Ctx ctx, List<Runnable> args, boolean tail) {
+		int callOp = tail ? Instruction.RETURN_CALL : Instruction.CALL;
 		if (this.target == null) {
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(this.funcSlot);
 			args.forEach(Runnable::run);
-			ctx.writer.write(Instruction.CALL);
+			ctx.writer.write(callOp);
 			ctx.writer.writeUnsignedLeb128(this.dispatchFuncIndex);
 			return;
 		}
@@ -183,7 +195,7 @@ final class WasmDesignatorCall {
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(restSlot);
 		}
-		ctx.writer.write(Instruction.CALL);
+		ctx.writer.write(callOp);
 		ctx.writer.writeUnsignedLeb128(this.target.funcIndex());
 	}
 

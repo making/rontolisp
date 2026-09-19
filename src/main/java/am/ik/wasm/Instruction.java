@@ -84,6 +84,14 @@ public interface Instruction {
 	/** {@code CALL_INDIRECT} (0x11). */
 	int CALL_INDIRECT = 0X11;
 
+	/**
+	 * {@code RETURN_CALL} (0x12, the tail-call proposal): a direct call whose callee's
+	 * results are this function's, the caller's frame gone before the callee runs. Its
+	 * immediate is a function index, like {@link #CALL}'s; the callee's result types must
+	 * equal the caller's.
+	 */
+	int RETURN_CALL = 0X12;
+
 	/** {@code DROP} (0x1A). */
 	int DROP = 0X1A;
 

@@ -176,6 +176,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [wasm-counted-loops.md](wasm-counted-loops.md) -- a loop induction variable as a bare `i64` counter
 - [wasm-unboxed-locals.md](wasm-unboxed-locals.md) -- dual-representation `let` locals
 - [wasm-callable-arity.md](wasm-callable-arity.md) -- the 10-parameter callable limit as an index origin
+- [wasm-tail-calls.md](wasm-tail-calls.md) -- every call in tail position is a `return_call`, the dispatcher and `_apply` tail-call their target: constant stack through a function value, a direct call, `labels`, `apply`; the one consumed-at-entry flag, the post-passes that learned the opcode, the inliner's three rules, the depth/byte/time numbers and the crash-reads-as-fast trap
 - [wasm-function-body-size.md](wasm-function-body-size.md) -- no emitted function body may grow without bound
 - [cons-access-runtime.md](cons-access-runtime.md) -- `car`/`cdr` as one shared callee under `--optimize=size`; the temp-free plain-local read; what an external optimizer's residue is made of
 - [wasm-shortest-encoding.md](wasm-shortest-encoding.md) -- every emitted byte in its shortest legal encoding

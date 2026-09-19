@@ -50,6 +50,15 @@ final class WasmLetCompiler {
 	 * stack. The caller must NOT emit its own DROP.
 	 */
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, boolean forEffect) {
+		compile(cons, ctx, forEffect, false);
+	}
+
+	/**
+	 * As above; with {@code tail}, the last body form is in tail position
+	 * ({@code Ctx.tailPosition}) -- unless a binding here is dynamic, whose restore runs
+	 * after the body, or the let compiles for effect.
+	 */
+	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, boolean forEffect, boolean tail) {
 		// A binding that only holds a literal designator for the body's funcall sites is
 		// propagated into them and dropped, so the designator never becomes a VALUE here
 		// (LetBoundDesignators; the JVM twin does the same). It cannot collide with the
@@ -476,6 +485,9 @@ final class WasmLetCompiler {
 					WasmExprCompiler.compileForEffect(parts.get(i), ctx);
 				}
 				else {
+					// Lexical bindings only (a dynamic one has a region above): the
+					// body's value is the let's, and nothing runs after it.
+					ctx.tailPosition = tail && dynamicRestores == null;
 					WasmExprCompiler.compileExpr(parts.get(i), ctx);
 				}
 			}
