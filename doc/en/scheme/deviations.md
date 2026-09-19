@@ -1,15 +1,15 @@
 # Deviations
 
-- **Tail calls are proper on WebAssembly, and elsewhere only where they become a loop.**
-  Compiled to WebAssembly (`-o prog.wasm`, `--component`), every call in tail position runs
-  in constant stack. On the JVM and in the interpreter that holds for a named `let` or
-  `do`, a procedure calling itself in tail position, and procedures that call each other in
-  tail position (`even?`/`odd?`, a state machine, an evaluator's `eval`/`apply`) when they
-  are the top-level procedures of a file, the internal definitions of one body or the
-  `lambda` bindings of one `letrec`; a tail call through a procedure value (an argument, a
-  variable, `apply`) and any among the REPL's definitions uses stack there: a procedure
-  calling itself through an argument overflows the JVM's default stack about 1,800 calls
-  deep and the interpreter about 15,000 (`--stack` raises the interpreter's).
+- **Tail calls are proper on WebAssembly and in the interpreter, and on the JVM only where
+  they become a loop.** Compiled to WebAssembly (`-o prog.wasm`, `--component`) and run by
+  the interpreter (`rontolisp prog.scm`, the REPL), every call in tail position runs in
+  constant stack. On the JVM that holds for a named `let` or `do`, a procedure calling
+  itself in tail position, and procedures that call each other in tail position
+  (`even?`/`odd?`, a state machine, an evaluator's `eval`/`apply`) when they are the
+  top-level procedures of a file, the internal definitions of one body or the `lambda`
+  bindings of one `letrec`; a tail call through a procedure value (an argument, a
+  variable, `apply`) uses stack there: a procedure calling itself through an argument
+  overflows the JVM's default stack about 1,800 calls deep.
 - **`call/cc` is escape-only.** A continuation can be called while its `call/cc` is still
   running, once. There is no re-entry, so no generators or coroutines through it, and
   `dynamic-wind` runs its `before` exactly once.

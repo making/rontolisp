@@ -660,6 +660,21 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void aSchemeTailCallThroughAProcedureValueRunsInConstantStackOnTheInterpreter() {
+		// 300,000 deep on the test JVM's own thread, where the interpreter used to hold
+		// a few thousand: a session's definitions are variables called through funcall,
+		// and a file's tail call through an argument is the same funcall. The wasm twin
+		// is WasmLispCompilerIntegrationTest's constant-stack case; the JVM output stays
+		// bounded (.kb/interpreter-tail-calls.md).
+		String program = "(define (g self n) (if (= n 0) 'done (self self (- n 1))))";
+		assertThat(runCli(program + "\n(g g 300000)\n", "--source-language", "scheme")).isEqualTo("done\n");
+		String[] file = runReporting("-e", program + " (display (g g 300000)) (newline)", "--source-language",
+				"scheme");
+		assertThat(file[2]).isEmpty();
+		assertThat(file[1]).isEqualTo("done\n");
+	}
+
+	@Test
 	void aPipedSchemeReplReadSeesWhatWasTypedNext() {
 		// (read) consumes the session's own stdin: the next datum typed is the answer
 		// (a (driver-loop) typed at the prompt takes over). Lines and run-time reads

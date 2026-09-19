@@ -292,7 +292,10 @@ primitive step that is not a publish and not a call of user code clears it
   `await`, a value-less `return`/`return-from`/`throw`, an empty `progn`/block/`catch`/clause
   body, an `if` without an else branch taking it, a result-less `do-symbols`.
 A form that merely passes a sub-form's value on (`if`, `let`, `progn`, a block, `catch`,
-`handler-case` without `:no-error`, a user function's body) leaves the channel to that
+`handler-case` without `:no-error`, a user function's body, the last form of an `or` --
+its `t` clause since 2026-09-19, `LispMacroExpander.expandOr`, on all four backends: `(or
+nil (values 1 2))` answers both values as CLHS 7.4 says and SBCL prints, where the old
+bodyless clause bound it to a temporary and answered one) leaves the channel to that
 sub-form: a `(values ...)` tail reaches the consumer behind any number of returns, and a
 `values` whose value went into a variable or an argument never does.
 `unwind-protect` saves the channel around its cleanups and `publishSpill`s it back

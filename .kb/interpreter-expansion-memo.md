@@ -32,5 +32,8 @@ Place-writing macros (`push`, `pop`, `incf`, `decf`, `pushnew`, `remf`, `psetf`,
 ## Tests
 - `LispEvaluatorTest.aRewrittenBuiltinMacroFormKeepsItsFirstExpansion`,
   `LispEvaluatorTest.aMemoizedBuiltinMacroDoesNotHoldTheMemoWhileItsExpansionRuns`
-- `LispEvaluatorHotMethodSizeTest` — arms must not push either `evalCons` half over the
-  8000-bytecode cliff (`.kb/hot-path-method-size.md`)
+- `LispEvaluatorHotMethodSizeTest` — arms must not push any of the three operator-table
+  methods (`evalCons`, `rareOperatorExpansion`, `evalConsRareOperator`) over the
+  8000-bytecode cliff (`.kb/hot-path-method-size.md`); an arm's expansion REPLACES the form
+  in `evalCons`'s loop rather than being evaluated in a frame of its own
+  (`.kb/interpreter-tail-calls.md`)

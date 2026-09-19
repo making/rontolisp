@@ -136,6 +136,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [emitted-output-determinism.md](emitted-output-determinism.md) -- the same program compiles to the same bytes on every run
 - [default-run-path.md](default-run-path.md) -- flagless `rontolisp app.lisp` runs the interpreter by decision
 - [interpreter-stack.md](interpreter-stack.md) -- the CLI runs every program on a stack it chose, and `--stack`
+- [interpreter-tail-calls.md](interpreter-tail-calls.md) -- the interpreter's `eval` is a loop: a form in tail position replaces the frame, so a tail call through a value, `apply`, mutual defuns runs in constant stack; the block-owner identity, the depth and time numbers, `or`'s last form
 - [measurement-probes.md](measurement-probes.md) -- whether a performance number answers the question that was asked
 - [test-execution.md](test-execution.md) -- how the test suite actually runs (surefire forks, parallelism), and the rule that no test may name a scratch path or a port from a constant: two builds share one machine
 - [running-backends.md](running-backends.md) -- running a program on all four backends by hand, the native-image E2E leg, the examples suite

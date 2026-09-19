@@ -12431,6 +12431,111 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aGoInTheTailOfAFunctionCalledFromAStatementJumpsToTheStatementsTagbody() {
+		// The interpreter's go is dynamic (.kb/do-return-block.md): a tail go inside a
+		// function a statement tail-calls, or under case / multiple-value-bind in the
+		// statement's own tail, lands on the statement's tagbody either way.
+		assertThat(evalMulti("""
+				(defun helper (n) (if (< n 3) (go top) (go out)))
+				(list (let ((n 0)) (tagbody top (setq n (+ n 1)) (helper n) out) n)
+				      (let ((n 0))
+				        (tagbody top (setq n (+ n 1))
+				           (case n (3 (go out)) (t (multiple-value-bind (a) (values n) (go top))))
+				         out)
+				        n))
+				""").print()).isEqualTo("(3 3)");
+	}
+
+	@Test
+	void aTailCallRunsInConstantStack() {
+		// 100,000 deep: the CLI's 16 MiB worker held about 15,000 and JUnit's thread far
+		// fewer (.kb/interpreter-tail-calls.md). Through a procedure value, mutual
+		// defuns, apply, a lambda head, a labels function, a return-from, and every
+		// tail-transparent form in between.
+		assertThat(evalMulti("""
+				(defun through-value (self n) (if (= n 0) 'done (funcall self self (- n 1))))
+				(defun ev (n) (if (= n 0) t (od (- n 1))))
+				(defun od (n) (if (= n 0) nil (ev (- n 1))))
+				(defun apply-tail (self n) (if (= n 0) 'applied (apply self self (list (- n 1)))))
+				(defun lambda-head (n) (if (= n 0) 'lambda-end ((lambda (k) (lambda-head k)) (- n 1))))
+				(defun forms (n)
+				  (progn
+				    (let ((k n))
+				      (let* ((m k))
+				        (cond ((= m 0) 'forms-end)
+				              (t (when t
+				                   (unless nil
+				                     (block b
+				                       (case 1
+				                         (1 (multiple-value-bind (q) (floor m 1)
+				                              (the symbol (or nil (and t (forms (- q 1)))))))))))))))))
+				(defun labels-tail (n) (labels ((walk (k) (if (= k 0) 'walked (walk (- k 1))))) (walk n)))
+				(defun tail-exit (n) (if (= n 0) (return-from tail-exit 'bottom) (tail-exit (- n 1))))
+				(defun deep-inside (n) (dolist (x '(1)) (setq n (through-value #'through-value n))) n)
+				(list (through-value #'through-value 100000) (ev 100000) (apply-tail #'apply-tail 100000)
+				      (lambda-head 100000) (forms 100000) (labels-tail 100000) (tail-exit 100000)
+				      (deep-inside 100000))
+				""").print()).isEqualTo("(DONE T APPLIED LAMBDA-END FORMS-END WALKED BOTTOM DONE)");
+	}
+
+	@Test
+	void aTailPositionThatKeepsItsFrameStillUnwindsItsBookkeeping() {
+		// SBCL 2.x prints the same list: a special let and a special parameter restore
+		// their binding when the chain returns, an unwind-protect cleanup runs once per
+		// activation (innermost first), and handler-case, multiple-value-prog1, catch and
+		// progv keep their frame around the tail call inside them.
+		assertThat(evalMulti("""
+				(defvar *d* 0)
+				(defun deep-special (n) (let ((*d* (+ *d* 1))) (if (= n 0) *d* (deep-special (- n 1)))))
+				(defun special-param (*d* n) (if (= n 0) *d* (special-param (+ *d* 1) (- n 1))))
+				(defvar *log* nil)
+				(defun up (n) (unwind-protect (if (= n 0) 'done (up (- n 1))) (push n *log*)))
+				(list (deep-special 5) *d* (special-param 0 5) *d*
+				      (list (up 3) *log*)
+				      (handler-case (labels ((f (n) (if (= n 0) (error "bottom") (f (- n 1))))) (f 5))
+				        (error (e) (princ-to-string e)))
+				      (multiple-value-list (multiple-value-prog1 (values 1 2) (deep-special 2)))
+				      (catch 'tag (labels ((f (n) (if (= n 0) (throw 'tag 'thrown) (f (- n 1))))) (f 5)))
+				      (progv '(*d*) '(7) (labels ((f (n) (if (= n 0) *d* (f (- n 1))))) (f 3)))
+				      *d*)
+				""").print()).isEqualTo("(6 0 5 0 (DONE (3 2 1 0)) \"bottom\" (1 2) THROWN 7 0)");
+	}
+
+	@Test
+	void aReturnFromReachesTheActivationWhoseBlockTheClosureCaptured() {
+		// SBCL prints the same: an exit aimed at an activation a tail call has replaced
+		// ends the whole chain with its value, an exit through a callee's frame returns
+		// from the caller, an inner block is transparent to it -- and a block that has
+		// returned cannot be exited.
+		assertThat(evalMulti("""
+				(defun keep (n acc)
+				  (if (= n 0) (funcall (car acc)) (keep (- n 1) (cons (lambda () (return-from keep n)) acc))))
+				(defun callee (k) (funcall k) 'not-exited)
+				(defun caller () (callee (lambda () (return-from caller 'exited))))
+				(defun pass-through (n)
+				  (block inner (if (= n 0) (return-from pass-through 'outer) (pass-through (- n 1)))))
+				(list (keep 5 nil) (caller) (pass-through 3))
+				""").print()).isEqualTo("(1 EXITED OUTER)");
+		assertThatThrownBy(() -> eval("(let ((k nil)) (block b (setq k (lambda () (return-from b 1)))) (funcall k))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("no enclosing block named B");
+	}
+
+	@Test
+	void aFuncallInTailPositionKeepsTheBuiltInsHandlerBindSeam() {
+		// What the closure raises still runs the handler-bind handlers before the
+		// unwind, with the restarts established below the handler still in reach --
+		// also when the funcall is reached at the end of a tail-call chain.
+		assertThat(evalMulti("""
+				(defun chain (n) (if (= n 0) (funcall (lambda () (no-such-function-here))) (chain (- n 1))))
+				(list (handler-bind ((error (lambda (c) (invoke-restart 'r))))
+				        (restart-case (funcall (lambda () (no-such-function-here))) (r () 'restarted)))
+				      (handler-bind ((error (lambda (c) (invoke-restart 'r))))
+				        (restart-case (chain 5) (r () 'restarted-deep))))
+				""").print()).isEqualTo("(RESTARTED RESTARTED-DEEP)");
+	}
+
+	@Test
 	void restartsDisappearOutsideTheirExtent() {
 		assertThat(eval("(progn (restart-case 1 (gone () nil)) (find-restart 'gone))")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(handler-case (invoke-restart :nope) (error (e) :no-restart))").print())

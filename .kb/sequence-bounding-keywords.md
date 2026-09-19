@@ -70,7 +70,8 @@ resolves through the compilers' function-designator normalization).
 
 - **Expansion**: `LispMacroExpander` -- `expandFilter` (remove family), `substituteScan`,
   `nsubstituteScan`, `countScan`, all over `SeqScanScaffold`. Reached by the interpreter's
-  call position (`evalBuiltinMacro`) and by both backends' operator cases.
+  call position (`rareOperatorExpansion`, whose expansion replaces the form in `evalCons`'s
+  loop) and by both backends' operator cases.
 - **Interpreter runtime**: `LispEvaluator.sequenceScanValues` -- one method for all fifteen,
   parameterized by `SeqScanMode` (item / predicate / negated predicate) and `SeqScanAction`
   (count / remove / substitute) plus a destructive flag. Every registration in the family goes

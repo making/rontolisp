@@ -21,7 +21,12 @@ PROGRAM's, so a ceiling inherited from the platform is a different product on ea
   program (re-measured 2026-09-11, linux-x64).
 - Interpreter frames cost roughly 1.5 KiB of Java stack per Lisp call: `(defun depth (n)
   (if (= n 0) 0 (+ 1 (depth (- n 1)))))` at 1500 overflows 1 MiB, at 4000 overflows 4 MiB
-  and survives 8.
+  and survives 8. **Since `.todo/912` (2026-09-19) a non-tail call is two Java frames
+  where it was thirteen, and a tail call is none**: `depth` reaches 35,726 on the 16 MiB
+  worker where it reached 10,435, and a tail-recursive chain has no ceiling at all
+  (`.kb/interpreter-tail-calls.md`). The frame counts below are the pre-loop ones unless
+  dated later; the mechanism -- the worker thread, `--stack`, the overflow report and the
+  REPL's recovery -- is unchanged.
 - **That cost is the JIT's, not the program's.** The deepest `depth` a 1 MiB thread holds,
   one JVM per row (2026-09-17, linux-x64, Oracle GraalVM 25.0.4, binary search per round):
 
@@ -80,9 +85,11 @@ fraction of an interpreter frame, and a compiled program's launcher has the knob
 2026-09-19 (linux-x64, `.todo/899`): a Scheme tail call through a procedure value -- two
 JVM frames per call, the caller and `_invoke_N` -- reaches 1,844 deep under `java Prog`
 (1 MiB), 17,677 under `-Xss16m`, and 8,000,000 under `-Xss256m`, where the JIT's frames
-take over after the first ~10k calls; the interpreter's 16 MiB worker holds 15,497 of the
-same. So COLD, a compiled program is shallower than the interpreter; warm it is far deeper.
-Compiled wasm has no ceiling for those calls at all (`.kb/wasm-tail-calls.md`).
+take over after the first ~10k calls; the interpreter's 16 MiB worker held 15,497 of the
+same before `.todo/912` and has no ceiling for a tail call since
+(`.kb/interpreter-tail-calls.md`). So COLD, a compiled program is shallower than the
+interpreter; warm it is far deeper on a NON-tail recursion. Compiled wasm has no ceiling
+for those calls at all (`.kb/wasm-tail-calls.md`).
 
 ## Pinning tests
 
