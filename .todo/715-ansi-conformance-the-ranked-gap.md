@@ -59,17 +59,17 @@ may then fail.
 
 | family | tests (per-test-name) | owner |
 |---|---:|---|
-| the stream surface: `open` 142 (`:direction` 49, `:if-exists` 42, `:element-type` 20, `cannot open` 6), residual composite constructors (`make-concatenated-stream` 18, `make-echo-stream` 12, `make-two-way-stream` 11), `clear-input` 11, `file-length` 16 / `file-position` 10 / `file-string-length` 6 | ~200 | **unowned** -- `.todo/387` closed 2026-09-19 with the constructors; the `:direction`/`:if-exists`/`:element-type` and byte-method residue needs re-filing |
+| the stream surface: `open` 142 (`:direction` 49, `:if-exists` 42, `:element-type` 20, `cannot open` 6), residual composite constructors (`make-concatenated-stream` 18, `make-echo-stream` 12, `make-two-way-stream` 11), `clear-input` 11, `file-length` 16 / `file-position` 10 / `file-string-length` 6 | ~200 | `.todo/906` (file-stream residue; `.todo/387` closed with the constructors) |
 | `subtypep` valid-p (still under-claiming for compound heads) | 140 | `.todo/214` (secondary values) / `.todo/035` (type system) |
 | the printer surface: `print` 126, `write` 58, the `pprint-*` family 153 | ~200 | `.todo/041` (layout + `pprint-*` operators) |
-| the array surface: `adjust-array` 96 (`:displaced-to` 40, non-adjustable 18), `make-array` 10 | ~100 | **unowned** -- `.todo/043`/`.todo/180` closed; the `:displaced-to`/adjustability residue needs re-filing |
+| the array surface: `adjust-array` 96 (`:displaced-to` 40, non-adjustable 18), `make-array` 10 | ~100 | `.todo/905` (`:displaced-to`/adjustability residue; `.todo/043`/`.todo/180` closed without covering it) |
 | `loop` | 97 | `.todo/029` (134 names left: validation ~30, hash/`across` destructuring, dotted `append`, typed init) |
 | the reader surface: `read-preserving-whitespace` 27, `set-syntax-from-char` 12, `get-macro-character` 9, `name-char` 9 | ~60 | `.todo/214`, `.todo/041` (readtable half) |
-| the runtime package API: `unuse-package` 25, `shadowing-import` 13, `delete-package` 12, plus `set-up-packages` 56 (an aux defun, not an operator) | ~120 | **unowned** -- `.todo/741` closed covering only part; re-file before quoting |
+| the runtime package API: `unuse-package` 25, `shadowing-import` 13, `delete-package` 12, plus `set-up-packages` 56 (an aux defun, not an operator) | ~120 | `.todo/904` (`.todo/741` closed covering only part) |
 | the sequence surface: `make-sequence` 39, `write-sequence` 33, `read-sequence` 29, `fill` 23 | ~120 | `.todo/006` / `.todo/031` |
 | compile/loader introspection: `make-load-form` 41, `compile-file` 23, `disassemble` 14, `trace` 15 | ~90 | `.todo/042` |
 | condition restarts: `restart-case` 19, `with-condition-restarts` 8 | ~30 | `.todo/039` |
-| `copy-structure` (31 by reason -- the failing tests are named `STRUCT-TEST-*`, not `COPY-STRUCTURE`) | 31 | **unowned** |
+| `copy-structure` (31 by reason -- the failing tests are named `STRUCT-TEST-*`, not `COPY-STRUCTURE`) | 31 | `.todo/907` |
 | `boole` 13, `upgraded-array-element-type` 11, `formatter` 10, `pathname-match-p` 14 | ~50 | various |
 | `#:test-not` keyword, `:allow-other-keys`, arity (`expects 1 argument, got N`) | ~60 | `.todo/006`, `.todo/031` |
 
