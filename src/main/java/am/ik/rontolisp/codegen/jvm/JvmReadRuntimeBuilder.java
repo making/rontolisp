@@ -509,7 +509,7 @@ final class JvmReadRuntimeBuilder {
 		ms.add(new ReadMethod(this.cp.addUtf8("_classify"), this.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/Object;"),
 				6, 10, buildClassify()));
 		ms.add(new ReadMethod(this.cp.addUtf8("_readFromString"),
-				this.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"), 4, 2, buildReadFromString()));
+				this.cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;"), 4, 3, buildReadFromString()));
 		ms.add(new ReadMethod(this.cp.addUtf8("_readHash"), this.cp.addUtf8("()Ljava/lang/Object;"), 8, 4,
 				buildReadHash()));
 		ms.add(new ReadMethod(this.cp.addUtf8("_readCharLit"), this.cp.addUtf8("()Ljava/lang/Object;"), 6, 4,
@@ -1466,6 +1466,7 @@ final class JvmReadRuntimeBuilder {
 	private List<Integer> buildReadFromString() {
 		JvmAsm a = new JvmAsm();
 		int retNull = a.label();
+		int noTrailingWs = a.label();
 		a.aload(0);
 		a.checkcast(this.stringClass);
 		a.astore(1);
@@ -1485,6 +1486,20 @@ final class JvmReadRuntimeBuilder {
 		srcLen(a);
 		a.branch(Opcode.IF_ICMPGE, retNull);
 		a.invokestatic(this.readExpr);
+		a.astore(2);
+		// CLHS 2.2 / 23.2: read consumes one whitespace character that terminates the
+		// datum, a list and a character literal alike, not only a token -- so advance
+		// _readPos past it here. This only affects %read-from-string-end, which reads
+		// _readPos right after this call; the returned datum is unaffected.
+		pos(a);
+		srcLen(a);
+		a.branch(Opcode.IF_ICMPGE, noTrailingWs);
+		charAtPos(a);
+		a.invokestatic(this.isWhitespace);
+		a.branch(Opcode.IFEQ, noTrailingWs);
+		advance(a);
+		a.bind(noTrailingWs);
+		a.aload(2);
 		a.areturn();
 		a.bind(retNull);
 		a.aconstNull();
