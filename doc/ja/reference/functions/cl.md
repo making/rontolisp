@@ -399,7 +399,7 @@
 | `float-sign` | `(float-sign -2.5)`、`(float-sign -2.5 3.0)` | `-1.0`、`-3.0` -- 符号を浮動小数点数で(負のゼロは `-1.0`)、または第2引数の絶対値に第1引数の符号を付けた値 |
 | `float-digits` | `(float-digits 1.5)`、`(float-digits 0.0)` | `53`、`0` -- 2進仮数部の桁数(正規化数では53、非正規化数ではそれより少ない) |
 | `decode-float` | `(decode-float 6.5)` | `0.8125`、`3`、`1.0` -- [1/2, 1) の仮数部、2 進指数部、符号 |
-| `integer-decode-float` | `(integer-decode-float 6.5)` | `13`、`-1`、`1.0` -- 整数の仮数部、2 進指数部、符号 |
+| `integer-decode-float` | `(integer-decode-float 6.5)` | `7318349394477056`、`-50`、`1` -- 整数の仮数部、2 進指数部、整数の符号 |
 | `char-name` | `(char-name #\Space)` | `"Space"` -- 図形文字には `nil` |
 | `fdefinition` | `(fdefinition 'car)` | 関数値を返します。`symbol-function` と同じ |
 | `use-package` | `(use-package :mypkg)` | パッケージを use リストに追加し、その外部シンボルを修飾なしで見えるようにします（リテラルなトップレベル呼び出しはコンパイル時ディレクティブ） |

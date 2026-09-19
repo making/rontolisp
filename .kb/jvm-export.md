@@ -95,6 +95,11 @@ nothing at all, not even `@Nullable` — so `RontoHashTable.get` takes the absen
   `System.out.flush()` epilogue and the `JvmUncaughtHandler` table become `_top$run`, invoked
   LAST after the ThreadLocal/stream/layout/struct seeding. A signalling top-level form therefore
   surfaces as `ExceptionInInitializerError`, poisoning the class; `uiop:quit` kills the JVM.
+- **Such a class keeps the plain `main`** -- no sized-stack launcher ([interpreter-stack.md](
+  interpreter-stack.md), `JvmSizedMainBuilder`): `<clinit>` runs on the caller's thread before
+  `main` exists to move it, so a launcher would add bytes and move nothing. The launcher is
+  emitted only for a class with a `main` whose top level runs IN `main`; a `--no-main`, jvm-export
+  or war output is byte-identical to before it (checked 2026-09-19).
 
 ## `--no-main` and `-o out.jar`
 

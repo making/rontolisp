@@ -3105,12 +3105,12 @@ final class WasmRuntimeBuilder {
 					}
 				}
 			}
-			// Call target function
-			w.write(Instruction.CALL);
+			// Tail-call the target: what it answers is the dispatcher's answer, and the
+			// dispatcher's frame is gone while it runs -- a call through a function
+			// value costs the caller's frame alone, so a tail call through one
+			// (return_call at the call site) runs in constant stack.
+			w.write(Instruction.RETURN_CALL);
 			w.writeUnsignedLeb128(target.funcIndex());
-			// Break to $result block
-			w.write(Instruction.BR);
-			w.writeUnsignedLeb128(numCases - k + (armShapes.isEmpty() ? 0 : 1));
 		}
 
 		// End default block
@@ -3339,9 +3339,10 @@ final class WasmRuntimeBuilder {
 				w.write(Instruction.GET_LOCAL);
 				w.writeUnsignedLeb128(a);
 			}
-			w.write(Instruction.CALL);
+			// A page answers for the node: tail-call it, so a paged dispatch is as
+			// deep as an unpaged one while the target runs.
+			w.write(Instruction.RETURN_CALL);
 			w.writeUnsignedLeb128(pageIndex);
-			w.write(Instruction.RETURN);
 		}
 		w.write(Instruction.END); // $default
 		w.write(Instruction.UNREACHABLE);

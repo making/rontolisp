@@ -1,4 +1,4 @@
-# The interpreter's depth ceiling is the CLI's, not the launcher's
+# A program's depth ceiling is the product's, not the launcher's
 
 **Invariant: `RontoLispCli.main` NEVER interprets on the thread the launcher called it on.**
 It reads `--stack`, then runs the whole command line on a thread of its own
@@ -21,7 +21,12 @@ PROGRAM's, so a ceiling inherited from the platform is a different product on ea
   program (re-measured 2026-09-11, linux-x64).
 - Interpreter frames cost roughly 1.5 KiB of Java stack per Lisp call: `(defun depth (n)
   (if (= n 0) 0 (+ 1 (depth (- n 1)))))` at 1500 overflows 1 MiB, at 4000 overflows 4 MiB
-  and survives 8.
+  and survives 8. **Since `.todo/912` (2026-09-19) a non-tail call is two Java frames
+  where it was thirteen, and a tail call is none**: `depth` reaches 35,726 on the 16 MiB
+  worker where it reached 10,435, and a tail-recursive chain has no ceiling at all
+  (`.kb/interpreter-tail-calls.md`). The frame counts below are the pre-loop ones unless
+  dated later; the mechanism -- the worker thread, `--stack`, the overflow report and the
+  REPL's recovery -- is unchanged.
 - **That cost is the JIT's, not the program's.** The deepest `depth` a 1 MiB thread holds,
   one JVM per row (2026-09-17, linux-x64, Oracle GraalVM 25.0.4, binary search per round):
 
@@ -72,11 +77,58 @@ PROGRAM's, so a ceiling inherited from the platform is a different product on ea
 - Non-daemon threads a program started (the embedded HTTP server) still hold the JVM open
   after main returns: joining the worker changed nothing about that.
 
-## What this does NOT cover
+## Compiled JVM output runs on the same size of worker
 
-Compiled output runs its own `main` on the JVM's first thread -- `java -jar app.jar` is
-sized by `-Xss` and the platform, not by anything above. Deliberate: compiled frames are a
-fraction of an interpreter frame, and a compiled program's launcher has the knob.
+Until 2026-09-19 a compiled `main` ran the program on the JVM's first thread, sized by `-Xss`
+and the platform. Now the emitted `main` is a launcher (`codegen/jvm/JvmSizedMainBuilder`):
+`new Thread(null, new Prog(), "main", Integer.getInteger("rontolisp.stack", 16) << 20)`,
+start, join, rethrow on thread 0 what the worker threw. The old `main` body is emitted
+unchanged as `private static _main$body(String[])`; the class itself is the `Runnable`
+(`run()` -> `_main$run(this)`, which catches `Throwable` into the instance field
+`_main$thrown`), so no second class file travels.
+
+- **`-Drontolisp.stack=<MiB>` is the compiled twin of `--stack`.** `0` or less hands the size
+  back to the JVM (`-Xss`); an unparsable value is the default (`Integer.getInteger`).
+- What stays the same: the uncaught-condition report and the `Exception in thread "main"`
+  echo (the SAME throwable is rethrown on thread 0; `JvmUncaughtHandler` lives in the body),
+  exit codes, `System.exit`/`uiop:quit` from the program, argv, stdin, `java:` seeing a thread
+  named `main`, a reflective `main` call observing the throw. An interrupt aimed at thread 0
+  is remembered and re-asserted after the join, as in `joinLaunch`.
+- A class that also carries the async runtime already has a `run()`: its head dispatches the
+  launcher instance, told apart by its null `_asyncLatch` (`JvmAsyncRuntimeBuilder.build`'s
+  `launcherRun`). `run` is a tree-shaker root whenever the launcher exists.
+- **NOT emitted** -- and the output is byte-identical to before -- when there is no `main`
+  (`--no-main`, `-o app.war`), when the top level runs in `<clinit>` (any
+  `rontolisp:jvm-export`, a war: the JVM initializes the class on the caller's thread before
+  `main` could move anything), and when the program reaches `objc:` (raw or through the spliced
+  `appkit`/`metal`/`scene` layers): AppKit belongs to thread 0 ([objc.md](objc.md)). Checked
+  2026-09-19 by compiling `examples/macos/counter.lisp` (`-o Counter.class`, `-o counter.jar`),
+  a jvm-export class and a `--no-main` class with the jars before and after: all identical.
+  **The macOS manual GUI check (CLAUDE.md, "After Task Completion") was NOT run -- the change
+  was made on linux-x64; it is still outstanding.**
+
+### The numbers (2026-09-19, linux-x64, Oracle GraalVM 25, before -> after)
+
+- A tail call through a procedure value, largest passing depth under `java Prog`: Scheme
+  `(define (g self n) (if (= n 0) 'done (self self (- n 1))))` **1,792 -> 16,201-16,207**; the
+  CL `(funcall self self ..)` twin 1,775-1,816 -> 16,138-16,287 (`-Xss16m` before: 16,301).
+  `-Drontolisp.stack=1` 1,855, `=256` passes the probe's 40,000,000 ceiling. The interpreter's
+  worker held 15,497 of the Scheme calls until the loop in `eval` landed later the same day
+  (`.todo/912`, [interpreter-tail-calls.md](interpreter-tail-calls.md)): a tail call has no
+  ceiling there now, and its non-tail `depth` reaches 35,726 -- so on a tail call compiled
+  output is the shallower one again, and on a non-tail recursion the two are level.
+- Non-tail `(defun depth (n) (if (= n 0) 0 (+ 1 (depth (- n 1)))))`: 30,616 at the default,
+  and under `-Xint` 9,072 at 1 MiB vs 160,309 at 16 MiB. C1 frames are the fattest:
+  `-XX:TieredStopAtLevel=1` holds 2,230 in 1 MiB, the interpreter 9,072 -- which is why
+  `JvmSizedMainTest` pins depth in a child JVM under `-Xint` (one frame size, 4x margin each
+  side) instead of pairing a control as the interpreter's test must.
+- Startup (`java -cp . Depth 10`, 100 interleaved runs): median 87.7 -> 88.6 ms, min 73.1 ->
+  74.1 ms -- the extra thread costs about 1 ms, inside the noise. `bench-report` JVM column,
+  best of 5 alternating twice: every benchmark within run-to-run noise.
+- Size, every artifact with a `main`: +819-872 B of class (`(display "hello, world")` .scm
+  1,661 -> 2,533, `(print ..)` 3,924 -> 4,743, `fib` 12,110 -> 12,929, an async program
+  41,692 -> 42,379), +380-480 B of jar. `size-report` measures wasm only, so none of its
+  numbers move.
 
 ## Pinning tests
 
@@ -92,6 +144,11 @@ and `#theStackOptionRefusesASizeNoThreadCanBeGiven` pin the flag;
 `#anUncaughtStackOverflowInAFileIsOneLineAndExitOne` the report and
 `#aStackOverflowAtTheReplIsReportedAndTheSessionKeepsItsDefinitions` the recovery, in both
 languages.
+
+`JvmSizedMainTest` pins the compiled launcher: depth under `-Xint` in a child JVM at the
+default and at `-Drontolisp.stack=1`/`=0`, the one-line report and exit 1 from thread 0, the
+thread's name, and the ABSENCE of the launcher from an `objc:`/`appkit:` class and a
+jvm-export class.
 
 The in-process E2E interpreter leg mirrors the constant rather than the mechanism:
 `AsdfLibraryE2eSupport`'s `INTERPRETER_STACK_BYTES` must track `WORKER_STACK_BYTES`, or the

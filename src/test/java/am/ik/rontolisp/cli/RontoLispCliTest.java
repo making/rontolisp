@@ -660,6 +660,21 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void aSchemeTailCallThroughAProcedureValueRunsInConstantStackOnTheInterpreter() {
+		// 300,000 deep on the test JVM's own thread, where the interpreter used to hold
+		// a few thousand: a session's definitions are variables called through funcall,
+		// and a file's tail call through an argument is the same funcall. The wasm twin
+		// is WasmLispCompilerIntegrationTest's constant-stack case; the JVM output stays
+		// bounded (.kb/interpreter-tail-calls.md).
+		String program = "(define (g self n) (if (= n 0) 'done (self self (- n 1))))";
+		assertThat(runCli(program + "\n(g g 300000)\n", "--source-language", "scheme")).isEqualTo("done\n");
+		String[] file = runReporting("-e", program + " (display (g g 300000)) (newline)", "--source-language",
+				"scheme");
+		assertThat(file[2]).isEmpty();
+		assertThat(file[1]).isEqualTo("done\n");
+	}
+
+	@Test
 	void aPipedSchemeReplReadSeesWhatWasTypedNext() {
 		// (read) consumes the session's own stdin: the next datum typed is the answer
 		// (a (driver-loop) typed at the prompt takes over). Lines and run-time reads
@@ -783,6 +798,23 @@ class RontoLispCliTest {
 		assertThat(runCli("(+ 1 (values 5 6))\n(car (list (values 5 6)))\n(define (two) (values 1 2))\n(list (two))\n",
 				"--source-language", "scheme"))
 			.isEqualTo("6\n5\n(1)\n");
+	}
+
+	@Test
+	void theSchemeReplRunsATopLevelBeginAsOneStep() {
+		// A top-level begin must still splice (its definitions need to land at the top
+		// level), but the splicing must answer as ONE step: SchemeLowering#interact used
+		// to return one SchemeTopLevel per spliced form, so ReplBuffer's per-step
+		// fresh-line put each on its own line ("3", "4", "5") instead of running the
+		// effects together and echoing only the last value -- as the Common Lisp REPL
+		// does for (progn (princ 1) (princ 2)): "12" then "2".
+		assertThat(runCli("(begin (display 3) (display 4) 5)\n", "--source-language", "scheme")).isEqualTo("34\n5\n");
+		// A macro whose template is a begin of effects splices the same way, from
+		// expansion instead of a typed begin.
+		assertThat(
+				runCli("(define-syntax two-effects (syntax-rules () ((_ a b v) (begin (display a) (display b) v))))\n"
+						+ "(two-effects 3 4 5)\n", "--source-language", "scheme"))
+			.isEqualTo("34\n5\n");
 	}
 
 	@Test

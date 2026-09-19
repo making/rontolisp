@@ -4198,10 +4198,13 @@ cases:
   # Slice C (.todo/037): the logcount population count (negatives count 0
   # bits), integer-decode-float's three values, and rationalize. The
   # rationalize rows stay inside what every backend holds: integer-valued
-  # floats answer their exact integer through the fast path, integers and
-  # ratios pass through; a fractional float needs big-denominator interval
-  # fractions, which trap fail-stop on WASM-GC exactly as (/ 1 (ash 1 52))
-  # does, so 0.1-scale answers are pinned on the interpreter/JVM unit tests.
+  # floats answer their exact integer through a fast path that runs BEFORE
+  # integer-decode-float (.todo/896 -- that function's significand is now the
+  # full (float-digits ax)-bit value, so its exponent is no longer reliably
+  # non-negative for a whole-number float), integers and ratios pass through;
+  # a fractional float needs big-denominator interval fractions, which trap
+  # fail-stop on WASM-GC exactly as (/ 1 (ash 1 52)) does, so 0.1-scale
+  # answers are pinned on the interpreter/JVM unit tests.
   - name: slice-c-logcount
     source: |
       (print (logcount 0))
@@ -4232,14 +4235,16 @@ cases:
       (print (multiple-value-list (integer-decode-float 6.5)))
       (print (nth-value 1 (integer-decode-float 6.5)))
       (print (funcall #'integer-decode-float 1.5))
+      (print (multiple-value-list (integer-decode-float 4.9406564584124654d-324)))
     expected: |
-      (3 -1 1.0)
-      (1 -1 -1.0)
-      (0 0 1.0)
-      (1 1 1.0)
-      (13 -1 1.0)
-      -1
-      3
+      (6755399441055744 -52 1)
+      (4503599627370496 -53 -1)
+      (0 0 1)
+      (4503599627370496 -51 1)
+      (7318349394477056 -50 1)
+      -50
+      6755399441055744
+      (1 -1074 1)
   - name: slice-c-rationalize
     source: |
       (print (rationalize 2.0))
@@ -5055,6 +5060,19 @@ cases:
       T
       (3 2 1)
       :CL
+  - name: read-from-string-stop-index
+    source: |
+      (print (multiple-value-list (read-from-string "abc def")))
+      (print (multiple-value-list (read-from-string "(a) b")))
+      (print (multiple-value-list (read-from-string (format nil "abc~%"))))
+      (print (multiple-value-list (read-from-string "abc")))
+      (print (multiple-value-list (read-from-string "(a)")))
+    expected: |
+      (ABC 4)
+      ((A) 4)
+      (ABC 4)
+      (ABC 3)
+      ((A) 3)
   - name: runtime-read-char-literals
     source: |
       (print (read-from-string "#\\a"))
@@ -9771,6 +9789,19 @@ cases:
       OPEN: cannot open file fe890-missing/x.txt
       DELETE-FILE: cannot delete fe890-missing/x.txt
       end of file
+  - name: ensure-directories-exist-signals-file-error-when-the-host-refuses
+    # SBCL-verified: creating a directory THROUGH an existing plain file signals a
+    # file-error whose pathname is the designator GIVEN, not a bare SIMPLE-ERROR --
+    # the %delete-file / %rename-file shape (interpreter and WASM used to signal a
+    # SIMPLE-ERROR directly; the JVM ignored mkdirs' result and answered success).
+    source: |
+      (with-open-file (out "ede-block.txt" :direction :output) (write-line "x" out))
+      (handler-case
+          (progn (ensure-directories-exist "ede-block.txt/sub/x.txt") :no-error)
+        (file-error (e) (print (namestring (file-error-pathname e))))
+        (error () (print :other-error)))
+    expected: |
+      "ede-block.txt/sub/x.txt"
   - name: open-if-exists-append-keeps-the-existing-content
     # smart-buffer's disk-spill path writes every chunk past the memory limit
     # this way, so the option is real on all four backends: :direction :output
@@ -10983,6 +11014,112 @@ cases:
       ((3))
       (3)
       (2)
+  - name: floor-family-function-object
+    source: |
+      ; The floor family as a FUNCTION object: an optional divisor, and both values
+      ; through a funcall, an apply, a variable and a function return (SBCL agrees).
+      (defun ci-ffo-call (g a b) (funcall g a b))
+      (defun ci-ffo-tail (x) (funcall #'floor x))
+      (print (funcall #'floor 7 2))
+      (print (mapcar #'truncate '(7 9) '(2 4)))
+      (print (multiple-value-list (funcall #'floor 7.5)))
+      (print (multiple-value-list (let ((g #'floor)) (funcall g 7.5))))
+      (print (multiple-value-list (let ((g #'floor)) (funcall g 7 2))))
+      (print (multiple-value-list (funcall #'round 5 2)))
+      (print (multiple-value-list (apply #'ceiling '(7 2))))
+      (print (mapcar #'ffloor '(7 9) '(2 4)))
+      (print (multiple-value-list (funcall #'ftruncate 7 2)))
+      (print (multiple-value-list (let ((g #'fround)) (funcall g 7.5))))
+      (print (multiple-value-list (ci-ffo-call #'floor -7 2)))
+      (print (multiple-value-list (ci-ffo-call #'round 7 2)))
+      (print (multiple-value-list (ci-ffo-call #'ceiling 7 2)))
+      (print (multiple-value-list (ci-ffo-tail 7.5)))
+      (print (multiple-value-list (funcall #'truncate 7/2)))
+      (print (multiple-value-list (car (mapcar #'floor '(7) '(2)))))
+      (print (multiple-value-list (1+ (funcall #'floor 7 2))))
+      (multiple-value-bind (q r) (funcall #'floor 17 5) (print (list q r)))
+      (print (mapcar (lambda (x) (multiple-value-list (funcall #'ceiling x))) '(-0.0 0.5 -2.5)))
+      (print (mapcar (lambda (x) (multiple-value-list (funcall #'fround x))) '(-0.0 2.5 -7/2)))
+    expected: |
+      3
+      (3 2)
+      (7 0.5)
+      (7 0.5)
+      (3 1)
+      (2 1)
+      (4 -1)
+      (3.0 2.0)
+      (3.0 1)
+      (8.0 -0.5)
+      (-4 1)
+      (4 -1)
+      (4 -1)
+      (7 0.5)
+      (3 1/2)
+      (3)
+      (4)
+      (3 2)
+      ((0 -0.0) (1 -0.5) (-2 -0.5))
+      ((0.0 -0.0) (2.0 0.5) (-4.0 1/2))
+  - name: multiple-value-builtins-function-object
+    source: |
+      ; gethash/find-symbol/intern/subtypep/read-from-string/array-displacement as
+      ; FUNCTION objects answer both values, as in call position (SBCL agrees).
+      (defvar *ci-mvf-h* (make-hash-table))
+      (setf (gethash 1 *ci-mvf-h*) 'one)
+      (defun ci-mvf-call (g a b) (funcall g a b))
+      (defun ci-mvf-tail (k) (funcall #'gethash k *ci-mvf-h*))
+      (print (multiple-value-list (funcall #'gethash 1 *ci-mvf-h*)))
+      (print (multiple-value-list (funcall #'gethash 2 *ci-mvf-h*)))
+      (print (multiple-value-list (funcall #'gethash 2 *ci-mvf-h* 'none)))
+      (print (multiple-value-list (let ((g #'gethash)) (funcall g 1 *ci-mvf-h*))))
+      (print (multiple-value-list (apply #'gethash (list 1 *ci-mvf-h*))))
+      (print (multiple-value-list (ci-mvf-call #'gethash 2 *ci-mvf-h*)))
+      (print (multiple-value-list (ci-mvf-tail 1)))
+      (print (mapcar #'gethash '(1 2) (list *ci-mvf-h* *ci-mvf-h*)))
+      (print (multiple-value-list (car (mapcar #'gethash '(1) (list *ci-mvf-h*)))))
+      (multiple-value-bind (v p) (funcall #'gethash 1 *ci-mvf-h*) (print (list v p)))
+      (print (multiple-value-list (let ((g #'find-symbol)) (funcall g "CAR" "CL"))))
+      (print (multiple-value-list (apply #'find-symbol (list "CAR" "CL"))))
+      (print (multiple-value-list (funcall #'intern "CAR" "CL")))
+      (print (multiple-value-list (let ((g #'intern)) (funcall g "CAR" "CL"))))
+      (print (multiple-value-list (funcall #'subtypep 'integer 'number)))
+      (print (multiple-value-list (let ((g #'subtypep)) (funcall g 'string 'number))))
+      (print (multiple-value-list (funcall #'subtypep 'integer 'number nil)))
+      (print (multiple-value-list (funcall #'read-from-string "(a b) c")))
+      (print (multiple-value-list (let ((g #'read-from-string)) (funcall g "42 x"))))
+      (print (multiple-value-list (funcall #'array-displacement (make-array 3))))
+      (let* ((a (make-array 5)) (b (make-array 2 :displaced-to a :displaced-index-offset 1)))
+        (multiple-value-bind (x o) (funcall #'array-displacement b) (print (list (eq x a) o))))
+      (let ((g1 (gensym)))
+        (multiple-value-bind (v p) (gethash 1 *ci-mvf-h*) (print (list v p)))
+        (print (multiple-value-list (funcall #'gethash 2 *ci-mvf-h*)))
+        (print (- (parse-integer (symbol-name (gensym)) :start 1) (parse-integer (symbol-name g1) :start 1))))
+    expected: |
+      (ONE T)
+      (NIL NIL)
+      (NONE NIL)
+      (ONE T)
+      (ONE T)
+      (NIL NIL)
+      (ONE T)
+      (ONE NIL)
+      (ONE)
+      (ONE T)
+      (CAR :EXTERNAL)
+      (CAR :EXTERNAL)
+      (CAR :EXTERNAL)
+      (CAR :EXTERNAL)
+      (T T)
+      (NIL T)
+      (T T)
+      ((A B) 6)
+      (42 3)
+      (NIL 0)
+      (T 1)
+      (ONE T)
+      (NIL NIL)
+      1
   - name: multiple-value-setq-and-rotatef
     source: |
       (let (a b) (multiple-value-setq (a b) (values 1 2)) (print (list a b)))

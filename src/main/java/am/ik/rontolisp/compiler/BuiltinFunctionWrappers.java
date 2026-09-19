@@ -2,6 +2,7 @@ package am.ik.rontolisp.compiler;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import am.ik.rontolisp.ArrayElementTypes;
@@ -168,6 +169,11 @@ public final class BuiltinFunctionWrappers {
 		// exactly this reason). Ungated, every program carried a wrapper calling a defun
 		// it does not have.
 		gated.add(LispNames.TYPEP);
+		// #'subtypep for the same reason: its specifiers are parameters, so the body
+		// calls the %subtypep-runtime dispatch defun, injected only for a program whose
+		// own source needs it (LispMacroExpander.needsRuntimeSubtypep, which counts a
+		// (function subtypep)).
+		gated.add(LispNames.SUBTYPEP);
 		// #'coerce for the same reason, one step removed: the wrapper's result type is a
 		// PARAMETER, so its body takes the computed-coerce dispatch, whose "already of
 		// that type" arm is a computed typep -- the same %typep-runtime defun, gated by
@@ -241,6 +247,37 @@ public final class BuiltinFunctionWrappers {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * The multiple-value producers other than the floor family -- the operators whose
+	 * wrapper publishes its second value ({@code LispMacroExpander.settleWrapperLambdas})
+	 * only in a program that names it as a designator.
+	 */
+	public static final Set<String> VALUE_PUBLISHING_PRODUCERS = Set.of(LispNames.GETHASH, LispNames.FIND_SYMBOL,
+			LispNames.INTERN, LispNames.SUBTYPEP, LispNames.READ_FROM_STRING, LispNames.ARRAY_DISPLACEMENT);
+
+	/**
+	 * The {@link #VALUE_PUBLISHING_PRODUCERS} a program names as a function designator
+	 * ({@link #referencesFunctionDesignator}) -- the ones whose wrapper publishes its
+	 * second value. Every other program carries the one-value wrapper it always did, so
+	 * its output stays byte-identical; what it gives up is the second value of a wrapper
+	 * reached through a designator computed at run time or through {@code eval}.
+	 * @param program the top-level forms
+	 * @param extraForms further forms that count as the program's (a condition's
+	 * {@code :report} lambdas)
+	 * @return the named producers
+	 */
+	public static Set<String> designatedValueProducers(List<LispVal> program,
+			java.util.Collection<LispVal> extraForms) {
+		Set<String> named = new java.util.HashSet<>();
+		for (String op : VALUE_PUBLISHING_PRODUCERS) {
+			if (program.stream().anyMatch(expr -> referencesFunctionDesignator(expr, op))
+					|| extraForms.stream().anyMatch(expr -> referencesFunctionDesignator(expr, op))) {
+				named.add(op);
+			}
+		}
+		return named;
 	}
 
 	/**
@@ -386,10 +423,25 @@ public final class BuiltinFunctionWrappers {
 	 * @return the wrapper forms
 	 */
 	public static List<LispVal> generate(Set<String> userDefinedNames, Set<String> excludedNames) {
+		return generate(userDefinedNames, excludedNames, Set.of());
+	}
+
+	/**
+	 * As {@link #generate(Set, Set)}, with the full lambda list ({@link #VALUE_SHAPES})
+	 * for the multiple-value producers the program names as a designator
+	 * ({@link #designatedValueProducers}).
+	 * @param userDefinedNames names the program defines (its own definition wins)
+	 * @param excludedNames names the caller's gates keep out
+	 * @param designatedProducers the producers whose value shape is injected
+	 * @return the wrapper forms
+	 */
+	public static List<LispVal> generate(Set<String> userDefinedNames, Set<String> excludedNames,
+			Set<String> designatedProducers) {
 		List<LispVal> wrappers = new ArrayList<>();
 		for (WrapperDef def : WRAPPER_DEFS) {
 			if (!userDefinedNames.contains(def.name) && !excludedNames.contains(def.name)) {
-				wrappers.add(def.toSetqLambda());
+				WrapperDef valueShape = designatedProducers.contains(def.name) ? VALUE_SHAPES.get(def.name) : null;
+				wrappers.add((valueShape != null ? valueShape : def).toSetqLambda());
 			}
 		}
 		return wrappers;
@@ -1485,6 +1537,17 @@ public final class BuiltinFunctionWrappers {
 		return new WrapperDef(LispNames.FIND_SYMBOL, List.of("n", LispNames.LAMBDA_REST, "p"), List.of(body));
 	}
 
+	/**
+	 * The full lambda lists of the multiple-value producers whose catalog wrapper is
+	 * narrower -- {@code (gethash key table &optional default)},
+	 * {@code (intern name &optional package)} -- injected in place of the catalog entry
+	 * for a program that names the operator as a designator
+	 * ({@link #designatedValueProducers}); every other program keeps the catalog's
+	 * wrapper, and its bytes.
+	 */
+	private static final Map<String, WrapperDef> VALUE_SHAPES = Map.of(LispNames.GETHASH,
+			binaryOptionalThird(LispNames.GETHASH), LispNames.INTERN, unaryOptionalSecond(LispNames.INTERN));
+
 	private static final List<WrapperDef> WRAPPER_DEFS = List.of(
 			// Signal operators and format (gated by REFERENCE_GATED_FUNCTIONS in the
 			// backend compilers)
@@ -1593,9 +1656,14 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.CONSP), unary(LispNames.KEYWORDP), unary(LispNames.FUNCTIONP), unary(LispNames.VALUES_LIST),
 			unary(LispNames.VECTORP),
 			// Type conversion (arity 1)
-			unary(LispNames.FLOAT), unary(LispNames.TRUNCATE), unary(LispNames.FLOOR), unary(LispNames.CEILING),
-			unary(LispNames.ROUND), unary(LispNames.FFLOOR), unary(LispNames.FCEILING), unary(LispNames.FROUND),
-			unary(LispNames.FTRUNCATE), unary(LispNames.RATIONAL),
+			unary(LispNames.FLOAT), unary(LispNames.RATIONAL),
+			// The floor family takes its optional divisor as a function too; with the
+			// spill global present, LispMacroExpander.settleWrapperLambdas makes the
+			// tail publish the remainder (.kb/multiple-values.md).
+			unaryOptionalSecond(LispNames.TRUNCATE), unaryOptionalSecond(LispNames.FLOOR),
+			unaryOptionalSecond(LispNames.CEILING), unaryOptionalSecond(LispNames.ROUND),
+			unaryOptionalSecond(LispNames.FFLOOR), unaryOptionalSecond(LispNames.FCEILING),
+			unaryOptionalSecond(LispNames.FROUND), unaryOptionalSecond(LispNames.FTRUNCATE),
 			// Math/IO/list (arity 1)
 			// print / prin1 / princ carry the optional stream: the wrapper forwards it
 			// unconditionally, since an omitted stream and an explicit nil are the same
@@ -1714,8 +1782,10 @@ public final class BuiltinFunctionWrappers {
 			// symbol -- keeping the wrapper and its helper gated together.
 			unary(LispNames.PARSE_INTEGER), unary(LispNames.READ_FROM_STRING),
 			// Hash-table operators: gated like parse-integer/read-from-string (see
-			// HASH_FUNCTIONS). gethash here is the 2-arg form (no default);
-			// %puthash is internal and omitted. #'make-hash-table builds the DEFAULT
+			// HASH_FUNCTIONS). gethash here is the 2-arg form (no default; the
+			// VALUE_SHAPES one takes it); %puthash is internal and omitted.
+			// #'make-hash-table
+			// builds the DEFAULT
 			// table and drops its initargs -- the same lite forwarding as the signal
 			// operators -- but it takes them as a &rest tail rather than declaring
 			// itself nullary: (apply #'make-hash-table initargs) is how alexandria's
@@ -1829,9 +1899,14 @@ public final class BuiltinFunctionWrappers {
 			// is a type DESIGNATOR: both lowerings already have a computed-designator
 			// arm (expandComputedCoerce / %typep-runtime), and a wrapper parameter is
 			// exactly that shape.
-			binary(LispNames.ELT), binary(LispNames.COERCE), binary(LispNames.TYPEP), unary(LispNames.ENDP),
-			listStarWrapper(), binary(LispNames.REVAPPEND), binary(LispNames.NRECONC), vectorWrapper(),
-			binary(LispNames.SVREF), unary(LispNames.ARRAY_RANK), binary(LispNames.ARRAY_DIMENSION),
+			binary(LispNames.ELT), binary(LispNames.COERCE), binary(LispNames.TYPEP),
+			// #'subtypep (gated by REFERENCE_GATED_FUNCTIONS): its specifiers are
+			// parameters, so the body is the computed %subtypep-runtime dispatch; the
+			// optional environment is accepted and ignored, as in call position.
+			new WrapperDef(LispNames.SUBTYPEP, List.of("a", "b", LispNames.LAMBDA_OPTIONAL, "e"),
+					List.of(call(LispNames.SUBTYPEP, "a", "b"))),
+			unary(LispNames.ENDP), listStarWrapper(), binary(LispNames.REVAPPEND), binary(LispNames.NRECONC),
+			vectorWrapper(), binary(LispNames.SVREF), unary(LispNames.ARRAY_RANK), binary(LispNames.ARRAY_DIMENSION),
 			unary(LispNames.ARRAY_TOTAL_SIZE), arrayRowMajorIndexWrapper(), mapWrapper(), mapIntoWrapper(),
 			boundedSequenceIo(LispNames.READ_SEQUENCE), boundedSequenceIo(LispNames.WRITE_SEQUENCE),
 			readtableStub(LispNames.COPY_READTABLE), readtableStub(LispNames.READTABLE_CASE),

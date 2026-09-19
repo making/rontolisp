@@ -17,11 +17,16 @@ requires it, so a `return` mid-expression **discards** the abandoned expression'
 operands for free.
 
 ## `block`/`return-from` on the INTERPRETER is LEXICAL, like the compile path
-- `runBlock` runs the body in its own `Environment` marked with the block name
-  (`Environment.installBlock`); **that scope object IS the block's identity**, one per
-  activation. `blockExit` resolves up the LEXICAL chain (`Environment.findBlock`). The nil
-  block is an ordinary name (`NIL_BLOCK` = `"NIL"`), so named blocks in between are transparent
-  to a plain `return` for free.
+- A block body runs in its own `Environment` marked with the block name
+  (`Environment.installBlock(name, owner)`); **the scope's OWNER is the block's identity**:
+  the scope itself for a block run in a frame of its own (`apply`'s defun-body block,
+  `evalDoSymbols`), and the frame's first block scope for a block `evalCons`'s loop
+  entered in tail position -- every block a frame enters is that frame's continuation, so
+  a `return-from` aimed at any of them ends the frame with the exit's value
+  (`.kb/interpreter-tail-calls.md`). `blockExit` resolves up the LEXICAL chain
+  (`Environment.findBlock`, which answers the owner). The nil block is an ordinary name
+  (`NIL_BLOCK` = `"NIL"`), so named blocks in between are transparent to a plain `return`
+  for free.
 - **Not dynamic on purpose**: a `handler-bind` handler runs at the SIGNAL point, so a
   nearest-active-frame lookup let the signalling function's own loop catch rove's `signals`
   and return the CONDITION. For a dynamic exit use `catch`/`throw`.
@@ -98,6 +103,33 @@ qualification, not the constant, tells them apart.
   `WasmLispCompilerIntegrationTest.integerTagbodyTag`, ci-spec `integer-tagbody-tag`.
 - **Interpreter = dynamic `go`** (a superset of CL's lexical `go`): a thrown `GoSignal`
   re-entering at the label, so it **crosses function boundaries**.
+- **Except in a statement's tail** (`LispEvaluator.evalTagbodyStatement`, 2026-09-19,
+  `.todo/901`): `evalTagbody` runs each statement through `evalCons`'s loop with the
+  tagbody's labels (`.kb/interpreter-tail-calls.md`), and a `(go L)` in any tail context
+  the loop follows -- an `if` arm, the last form of a `progn`, a `let`, a block or a called
+  function's body, a macro's expansion -- whose tag is one of ITS labels answers the label's
+  jump token instead of throwing; the loop never enters another `tagbody`, so this is the
+  innermost owner either way. A `let` binding a special undoes it in its `finally` before
+  the token leaves, as before the throw did. Every other `go` (an argument position, an
+  outer tag, a closure) still throws. The loop is the evaluation seam, so a malformed
+  statement is still a `program-error`. The label table is a key array scanned from the
+  end (the last duplicate wins, as the `HashMap` it replaced), not a map built per entry;
+  the jump tokens are integer objects private to the activation, compared by identity.
+  - Why: a thrown `go` unwinds every Java frame between it and the `tagbody` (`evalCons` ->
+    `evalIf` -> `eval` -> `evalLet` ...), and the JIT only turns that into a jump when all of
+    them inline, which the recursive evaluator rarely allows. Measured (same day, loaded
+    64-core box, whole-process wall clock incl. ~0.55 s start-up, before -> after): a Scheme
+    named-`let` count-down, 300 x 3,000 steps, 2.65-3.07 -> 1.81-1.88 s, against 2.27-2.55 s
+    for the same steps as non-tail calls -- a loop step now costs less than a call step; the
+    CL `tagbody` count-down in `steps.lisp` (2 x 300 x 3,000 each way) 4.42-4.54 -> 3.59-3.90
+    s. The Scheme tail-call groups: `.kb/scheme-frontend.md`.
+  - It began as a separate walk over `if`/`progn`/`let`/`let*`/`when`/`unless`/`cond`
+    and folded into `evalCons` when that became a loop (`.todo/912`, the same day): a
+    tagbody statement is a tail context whose continuation is a jump, so the loop covers
+    it with one parameter.
+  - Pinned by `LispEvaluatorTest.aTagbodyStatementAnswersATailGoInsteadOfThrowingIt`,
+    `#aTailGoUndoesTheBindingsItLeavesAndReachesTheInnermostLabel` (SBCL prints the same),
+    `#aMalformedTagbodyStatementIsStillAProgramError`.
 - **Compilers = LEXICAL**: `go` becomes goto/br when its tag is in the SAME compiled function.
   `JvmTagbodyCompiler` (every label a `joinShape` join point at the tagbody's entry stack
   shape) + `JvmGoCompiler`; `WasmTagbodyCompiler` (dispatch loop + `br_table`, `i31` pc), which

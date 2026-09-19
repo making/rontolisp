@@ -114,6 +114,12 @@ Six failures that look identical from outside (an unexpected ratio) and are not.
   every case sits on one side of its condition, and the thorough-looking half is the half
   that hides it.** The counting rule checks the PROCEDURE: fewer than ~220
   `target/surefire-reports/*.txt` means the run was cut off, whatever its failure count says.
+- **G. The baseline arm CRASHED, and a crash is a fast run.** An A/B of wasm tail calls read
+  +43% on a `labels` loop; the baseline modules were overflowing the stack in their driver
+  (a 10,000-deep self-recursion that only the change made constant-stack) and the timer
+  measured the trap (`.kb/wasm-tail-calls.md`, 2026-09-19). **A timing harness prints each
+  arm's LAST OUTPUT LINE beside its time, and a row whose arms print differently is not a
+  ratio.** Discarding stdout to keep the table clean is how this one got through.
 
 ### What to do about C, D and E
 1. **Make the harness call the kernel the way the product calls it** -- one timing method per

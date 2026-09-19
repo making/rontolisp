@@ -19,12 +19,12 @@ Symbols are read with the reader's [upcasing](../../guides/reader-case.md), iden
 
 ## The stop index, and `*read-suppress*`
 
-Like Common Lisp's, `read-from-string` answers a SECOND value: the index of the first character it did not read. A token's whitespace terminator is consumed with the token, a terminating macro character is given back, so `"abc  def"` stops at 4 and `"(1 2) x"` at 5. Ask for it with a [multiple-value](../macros/multiple-value-bind.md) consumer; a caller that wants only the datum pays nothing for it.
+Like Common Lisp's, `read-from-string` answers a SECOND value: the index of the first character it did not read. A whitespace terminator is consumed with the datum it terminates -- a list or a character literal exactly like a token -- and a terminating macro character is given back, so `"abc  def"` stops at 4 and `"(1 2) x"` at 6 (past the space after the `)`). Ask for it with a [multiple-value](../macros/multiple-value-bind.md) consumer; a caller that wants only the datum pays nothing for it. The function object `#'read-from-string` answers the same two values.
 
 ```lisp
 (multiple-value-list (read-from-string "abc")) ; => (ABC 3)
 (multiple-value-list (read-from-string "abc  def")) ; => (ABC 4)
-(nth-value 1 (read-from-string "(1 2) x")) ; => 5
+(nth-value 1 (read-from-string "(1 2) x")) ; => 6
 ```
 
 Binding `*read-suppress*` to true makes the reader consume exactly the characters a real read would and answer `nil`, suppressing every error the datum would otherwise signal -- an unknown package, a bogus character name, an out-of-range digit. This is what a `#+`/`#-` guard does to the form it skips, and it is the interpreter's behavior: the runtime reader of compiled output has no suppressed mode.

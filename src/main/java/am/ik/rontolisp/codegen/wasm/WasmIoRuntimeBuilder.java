@@ -1303,9 +1303,10 @@ final class WasmIoRuntimeBuilder {
 	 * {@code _list_directory} open): a host answers EEXIST for a directory that is
 	 * already there, and the verify turns that into the T the contract promises without
 	 * trusting any one errno number. Anything that is not an openable directory stays
-	 * nil, and the call-site compiler turns nil into the Lisp error
-	 * ({@code ensure-directories-exist} has no "cannot be determined" answer, unlike
-	 * {@code file-length}).
+	 * nil, and the Lisp {@code ensure-directories-exist} above the call site
+	 * ({@code LispPreludeLibrary}) turns that nil into a {@code file-error} -- the
+	 * {@code %delete-file} / {@code %rename-file} shape, unlike {@code file-length}'s
+	 * "cannot be determined" nil.
 	 * @param st the string table (for the {@code T} symbol)
 	 * @return the function body bytes
 	 */

@@ -330,7 +330,7 @@ public final class WasmLocalSink {
 						return false;
 					}
 				}
-				case Instruction.SET_GLOBAL, Instruction.CALL -> {
+				case Instruction.SET_GLOBAL, Instruction.CALL, Instruction.RETURN_CALL -> {
 					if (readsGlobal) {
 						return false;
 					}

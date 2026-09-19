@@ -49,6 +49,10 @@ final class WasmExprCompiler {
 	}
 
 	static void compileExpr(LispVal expr, WasmLispCompiler.Ctx ctx) {
+		// Consume the tail marker: it applies to THIS form only, and only a
+		// tail-transparent form hands it on to a sub-form (Ctx.tailPosition).
+		boolean tail = ctx.tailPosition;
+		ctx.tailPosition = false;
 		if (ctx.asyncResume != null) {
 			// Consume the spine marker set by the async-aware form compilers: it
 			// applies to THIS form only (WasmAsyncEmit).
@@ -94,7 +98,7 @@ final class WasmExprCompiler {
 					compileSymbolRef(sym, ctx);
 				}
 			}
-			case LispCons cons -> compileCons(cons, ctx);
+			case LispCons cons -> compileCons(cons, ctx, tail);
 			case am.ik.rontolisp.LispArray array -> WasmQuoteCompiler.compileLiteralArray(array, ctx);
 			// An instance is self-evaluating (CLHS 3.1.2.1.3: neither a symbol nor a
 			// cons), so a #S(...) literal in code position builds the same TYPE_INSTANCE
@@ -307,8 +311,18 @@ final class WasmExprCompiler {
 	}
 
 	private static void compileCons(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compileCons(cons, ctx, false);
+	}
+
+	/**
+	 * Compiles a compound form. {@code tail} is the consumed {@code Ctx.tailPosition}:
+	 * passed EXPLICITLY to the tail-transparent forms and the call emitters below rather
+	 * than read back off the context, so a compiler that reaches one of them directly
+	 * (not through {@code compileExpr}) can never see a stale marker.
+	 */
+	private static void compileCons(LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		try {
-			compileConsLocated(cons, ctx);
+			compileConsLocated(cons, ctx, tail);
 		}
 		catch (RuntimeException ex) {
 			// The innermost cons that came from source names the position; the exception
@@ -317,7 +331,7 @@ final class WasmExprCompiler {
 		}
 	}
 
-	private static void compileConsLocated(LispCons cons, WasmLispCompiler.Ctx ctx) {
+	private static void compileConsLocated(LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		LispVal head = cons.car();
 		// A dotted tail is only meaningful as data (inside quote); in call position it
 		// would otherwise be silently dropped by the toList() walks below.
@@ -1529,9 +1543,9 @@ final class WasmExprCompiler {
 				// not recorded as program-spelled (see LispNames.UNSPELLED_QUOTE).
 				case LispNames.UNSPELLED_QUOTE ->
 					WasmEmitHelper.compileUnspelledLiteral(((LispSymbol) ((LispCons) cons.cdr()).car()).name(), ctx);
-				case LispNames.IF -> WasmIfCompiler.compile(cons, ctx);
+				case LispNames.IF -> WasmIfCompiler.compile(cons, ctx, tail);
 				case LispNames.WHILE -> WasmWhileCompiler.compile(cons, ctx);
-				case LispNames.LET -> WasmLetCompiler.compile(cons, ctx);
+				case LispNames.LET -> WasmLetCompiler.compile(cons, ctx, false, tail);
 				case LispNames.PROGV ->
 					// The symbols are runtime-computed, but the candidate SPECIALS are
 					// static: lower to a loop dispatching each name over that set, with
@@ -1556,7 +1570,7 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandHandlerBind(cons, ctx.closRegistry), ctx);
 				case LispNames.IGNORE_ERRORS ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandIgnoreErrors(cons), ctx);
-				case LispNames.PROGN -> WasmPrognCompiler.compile(cons, ctx);
+				case LispNames.PROGN -> WasmPrognCompiler.compile(cons, ctx, tail);
 				case LispNames.TAGBODY -> WasmTagbodyCompiler.compile(cons, ctx);
 				case LispNames.GO -> WasmTagbodyCompiler.compileGo(cons, ctx);
 				case LispNames.PRINT_UNREADABLE_OBJECT ->
@@ -1623,14 +1637,18 @@ final class WasmExprCompiler {
 				case LispNames.PUSH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPush(cons), ctx);
 				case LispNames.POP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPop(cons), ctx);
 				case LispNames.REMF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRemf(cons), ctx);
-				case LispNames.LET_STAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLetStar(cons), ctx);
+				case LispNames.LET_STAR -> {
+					// A nested let chain: transparent to the tail position.
+					ctx.tailPosition = tail;
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandLetStar(cons), ctx);
+				}
 				case LispNames.DOLIST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDolist(cons), ctx);
 				case LispNames.DO -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDo(cons), ctx);
 				case LispNames.DO_STAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDoStar(cons), ctx);
 				case LispNames.LOOP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLoop(cons), ctx);
-				case LispNames.BLOCK_INTERNAL -> WasmBlockCompiler.compile(cons, ctx);
-				case LispNames.BLOCK -> WasmBlockCompiler.compileNamed(cons, ctx);
-				case LispNames.FN_BLOCK_INTERNAL -> WasmBlockCompiler.compileFnBlock(cons, ctx);
+				case LispNames.BLOCK_INTERNAL -> WasmBlockCompiler.compile(cons, ctx, tail);
+				case LispNames.BLOCK -> WasmBlockCompiler.compileNamed(cons, ctx, tail);
+				case LispNames.FN_BLOCK_INTERNAL -> WasmBlockCompiler.compileFnBlock(cons, ctx, tail);
 				case LispNames.NLX_TAG_INTERNAL -> WasmNlxCompiler.compileTag(ctx);
 				case LispNames.NLX_CATCH_INTERNAL -> WasmNlxCompiler.compileCatch(cons, ctx);
 				case LispNames.NLX_THROW_INTERNAL -> WasmNlxCompiler.compileThrow(cons, ctx);
@@ -1805,7 +1823,7 @@ final class WasmExprCompiler {
 						}
 					}
 					else {
-						WasmFunctionCallCompiler.compileFuncall(cons, ctx);
+						WasmFunctionCallCompiler.compileFuncall(cons, ctx, tail);
 					}
 				}
 				case LispNames.FUNCTION -> WasmFunctionFormCompiler.compile(cons, ctx);
@@ -1886,7 +1904,7 @@ final class WasmExprCompiler {
 				case LispNames.COPY_SEQ -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCopySeq(cons), ctx);
 				case LispNames.VECTORP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandVectorp(cons), ctx);
 				case LispNames.ARRAYP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayp(cons), ctx);
-				case LispNames.APPLY -> WasmApplyCompiler.compile(cons, ctx);
+				case LispNames.APPLY -> WasmApplyCompiler.compile(cons, ctx, tail);
 				case LispNames.NULL -> WasmNullPredCompiler.compile(cons, ctx);
 				case LispNames.ATOM -> WasmAtomCompiler.compile(cons, ctx);
 				case LispNames.NUMBERP -> WasmNumberpCompiler.compile(cons, ctx);
@@ -2183,11 +2201,17 @@ final class WasmExprCompiler {
 				case LispNames.DECLARE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDeclare(cons), ctx);
 				case LispNames.DECLAIM -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDeclaim(cons), ctx);
 				case LispNames.PROCLAIM -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProclaim(cons), ctx);
-				case LispNames.THE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandThe(cons), ctx);
+				case LispNames.THE -> {
+					ctx.tailPosition = tail;
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandThe(cons), ctx);
+				}
 				case LispNames.EVAL_WHEN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandEvalWhen(cons), ctx);
 				case LispNames.WITH_COMPILATION_UNIT ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithCompilationUnit(cons), ctx);
-				case LispNames.LOCALLY -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLocally(cons), ctx);
+				case LispNames.LOCALLY -> {
+					ctx.tailPosition = tail;
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandLocally(cons), ctx);
+				}
 				case LispNames.WITH_STANDARD_IO_SYNTAX ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithStandardIoSyntax(cons), ctx);
 				case LispNames.WRITE_CHAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandWriteChar(cons), ctx);
@@ -2279,7 +2303,7 @@ final class WasmExprCompiler {
 					// disappears even outside a larger expression tree.
 					else if (!ctx.inlinableDefuns.containsKey(sym.name())
 							|| !WasmIntFusionCompiler.tryCompile(cons, ctx)) {
-						WasmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx);
+						WasmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx, tail);
 					}
 				}
 			}

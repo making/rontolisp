@@ -4592,6 +4592,20 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunEnsureDirectoriesExistSignalsFileErrorWhenTheHostRefuses() throws Exception {
+		// SBCL-verified: /proc refuses mkdir, so this signals a file-error carrying the
+		// designator GIVEN -- the delete-file / rename-file shape, not a bare
+		// SIMPLE-ERROR (the JVM used to ignore mkdirs' result and answer success). The
+		// path is computed so no literal-path folding applies.
+		assertThat(compileAndRun("""
+				(defvar *ede-path* (concatenate 'string "/proc/" "no-such-dir-fixture/x/y.txt"))
+				(handler-case
+				    (progn (ensure-directories-exist *ede-path*) :no-error)
+				  (file-error (e) (print (namestring (file-error-pathname e))))
+				  (error () (print :other-error)))""")).isEqualTo("\"/proc/no-such-dir-fixture/x/y.txt\"");
+	}
+
+	@Test
 	void compileAndRunExportAndUnexport() throws Exception {
 		// A literal top-level export is consumed by the PackageResolver, which is what
 		// makes it work here at all: the compiled output has no package registry.
@@ -9776,9 +9790,13 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunIntegerDecodeFloat() throws Exception {
+		// CLHS: the sign is an INTEGER and the significand is scaled to
+		// float-digits bits (53 for a normal double), not stripped of factors
+		// of two -- matches SBCL exactly (.todo/896).
 		assertThat(compileAndRun(
 				"(print (multiple-value-list (integer-decode-float 1.5))) (print (multiple-value-list (integer-decode-float -0.5))) (print (multiple-value-list (integer-decode-float 0.0))) (print (multiple-value-list (integer-decode-float 2.0))) (print (multiple-value-list (integer-decode-float 6.5))) (print (nth-value 1 (integer-decode-float 1.5))) (print (funcall #'integer-decode-float 1.5))"))
-			.isEqualTo("(3 -1 1.0)\n(1 -1 -1.0)\n(0 0 1.0)\n(1 1 1.0)\n(13 -1 1.0)\n-1\n3");
+			.isEqualTo(
+					"(6755399441055744 -52 1)\n(4503599627370496 -53 -1)\n(0 0 1)\n(4503599627370496 -51 1)\n(7318349394477056 -50 1)\n-52\n6755399441055744");
 		assertThat(compileAndRun(
 				"(print (nth-value 0 (integer-decode-float 4.9406564584124654d-324))) (print (nth-value 1 (integer-decode-float 4.9406564584124654d-324)))"))
 			.isEqualTo("1\n-1074");
@@ -10712,6 +10730,101 @@ class JvmLispCompilerTest {
 				""")).isEqualTo(String.join("\n", "(3 1)", "(7 0.5)", "(7 0.5)", "(4 -1)", "(4 -1)", "(5 T)",
 				"(NIL NIL)", "(2 1)", "(3 1)", "((0 1) (1 2) (3 0))", "(2 1)", "(3 -1)", "(4 -1)", "(2 1)", "(1 2)",
 				"(3 2)", "(T T)", "(ABC 3)", "(CAR :INHERITED)", "(3)", "((3))", "(3)", "(2)"));
+	}
+
+	@Test
+	void compileAndRunFloorFamilyFunctionObjectTakesADivisorAndAnswersBothValues() throws Exception {
+		// The floor family as a function object: an optional divisor, and both values
+		// through a funcall, an apply, a variable and a function return. Shared verbatim
+		// with LispEvaluatorTest.FLOOR_FAMILY_FUNCTION_OBJECT and the
+		// floor-family-function-object ci-spec case; every line is SBCL's.
+		assertThat(compileAndRun("""
+				(defun ci-ffo-call (g a b) (funcall g a b))
+				(defun ci-ffo-tail (x) (funcall #'floor x))
+				(print (funcall #'floor 7 2))
+				(print (mapcar #'truncate '(7 9) '(2 4)))
+				(print (multiple-value-list (funcall #'floor 7.5)))
+				(print (multiple-value-list (let ((g #'floor)) (funcall g 7.5))))
+				(print (multiple-value-list (let ((g #'floor)) (funcall g 7 2))))
+				(print (multiple-value-list (funcall #'round 5 2)))
+				(print (multiple-value-list (apply #'ceiling '(7 2))))
+				(print (mapcar #'ffloor '(7 9) '(2 4)))
+				(print (multiple-value-list (funcall #'ftruncate 7 2)))
+				(print (multiple-value-list (let ((g #'fround)) (funcall g 7.5))))
+				(print (multiple-value-list (ci-ffo-call #'floor -7 2)))
+				(print (multiple-value-list (ci-ffo-call #'round 7 2)))
+				(print (multiple-value-list (ci-ffo-call #'ceiling 7 2)))
+				(print (multiple-value-list (ci-ffo-tail 7.5)))
+				(print (multiple-value-list (funcall #'truncate 7/2)))
+				(print (multiple-value-list (car (mapcar #'floor '(7) '(2)))))
+				(print (multiple-value-list (1+ (funcall #'floor 7 2))))
+				(multiple-value-bind (q r) (funcall #'floor 17 5) (print (list q r)))
+				(print (mapcar (lambda (x) (multiple-value-list (funcall #'ceiling x))) '(-0.0 0.5 -2.5)))
+				(print (mapcar (lambda (x) (multiple-value-list (funcall #'fround x))) '(-0.0 2.5 -7/2)))
+				""")).isEqualTo(String.join("\n", "3", "(3 2)", "(7 0.5)", "(7 0.5)", "(3 1)", "(2 1)", "(4 -1)",
+				"(3.0 2.0)", "(3.0 1)", "(8.0 -0.5)", "(-4 1)", "(4 -1)", "(4 -1)", "(7 0.5)", "(3 1/2)", "(3)", "(4)",
+				"(3 2)", "((0 -0.0) (1 -0.5) (-2 -0.5))", "((0.0 -0.0) (2.0 0.5) (-4.0 1/2))"));
+		// Without a multiple-value operator anywhere in the program.
+		assertThat(compileAndRun("""
+				(print (funcall #'floor 7 2))
+				(print (mapcar #'truncate '(7 9) '(2 4)))
+				(print (mapcar #'fceiling '(7 9) '(2 4)))
+				(print (let ((g #'round)) (funcall g 7 2)))
+				(print (funcall #'floor 7.5))
+				""")).isEqualTo(String.join("\n", "3", "(3 2)", "(4.0 3.0)", "4", "7"));
+	}
+
+	@Test
+	void compileAndRunMultipleValueBuiltinsFunctionObjectsAnswerBothValues() throws Exception {
+		// gethash/find-symbol/intern/subtypep/read-from-string/array-displacement as
+		// function objects answer both values. Shared verbatim with
+		// LispEvaluatorTest.MV_BUILTINS_FUNCTION_OBJECT and the
+		// multiple-value-builtins-function-object ci-spec case; every line is SBCL's.
+		assertThat(compileAndRun("""
+				(defvar *ci-mvf-h* (make-hash-table))
+				(setf (gethash 1 *ci-mvf-h*) 'one)
+				(defun ci-mvf-call (g a b) (funcall g a b))
+				(defun ci-mvf-tail (k) (funcall #'gethash k *ci-mvf-h*))
+				(print (multiple-value-list (funcall #'gethash 1 *ci-mvf-h*)))
+				(print (multiple-value-list (funcall #'gethash 2 *ci-mvf-h*)))
+				(print (multiple-value-list (funcall #'gethash 2 *ci-mvf-h* 'none)))
+				(print (multiple-value-list (let ((g #'gethash)) (funcall g 1 *ci-mvf-h*))))
+				(print (multiple-value-list (apply #'gethash (list 1 *ci-mvf-h*))))
+				(print (multiple-value-list (ci-mvf-call #'gethash 2 *ci-mvf-h*)))
+				(print (multiple-value-list (ci-mvf-tail 1)))
+				(print (mapcar #'gethash '(1 2) (list *ci-mvf-h* *ci-mvf-h*)))
+				(print (multiple-value-list (car (mapcar #'gethash '(1) (list *ci-mvf-h*)))))
+				(multiple-value-bind (v p) (funcall #'gethash 1 *ci-mvf-h*) (print (list v p)))
+				(print (multiple-value-list (let ((g #'find-symbol)) (funcall g "CAR" "CL"))))
+				(print (multiple-value-list (apply #'find-symbol (list "CAR" "CL"))))
+				(print (multiple-value-list (funcall #'intern "CAR" "CL")))
+				(print (multiple-value-list (let ((g #'intern)) (funcall g "CAR" "CL"))))
+				(print (multiple-value-list (funcall #'subtypep 'integer 'number)))
+				(print (multiple-value-list (let ((g #'subtypep)) (funcall g 'string 'number))))
+				(print (multiple-value-list (funcall #'subtypep 'integer 'number nil)))
+				(print (multiple-value-list (funcall #'read-from-string "(a b) c")))
+				(print (multiple-value-list (let ((g #'read-from-string)) (funcall g "42 x"))))
+				(print (multiple-value-list (funcall #'array-displacement (make-array 3))))
+				(let* ((a (make-array 5)) (b (make-array 2 :displaced-to a :displaced-index-offset 1)))
+				  (multiple-value-bind (x o) (funcall #'array-displacement b) (print (list (eq x a) o))))
+				(let ((g1 (gensym)))
+				  (multiple-value-bind (v p) (gethash 1 *ci-mvf-h*) (print (list v p)))
+				  (print (multiple-value-list (funcall #'gethash 2 *ci-mvf-h*)))
+				  (print (- (parse-integer (symbol-name (gensym)) :start 1) (parse-integer (symbol-name g1) :start 1))))
+				""")).isEqualTo(String.join("\n", "(ONE T)", "(NIL NIL)", "(NONE NIL)", "(ONE T)", "(ONE T)",
+				"(NIL NIL)", "(ONE T)", "(ONE NIL)", "(ONE)", "(ONE T)", "(CAR :EXTERNAL)", "(CAR :EXTERNAL)",
+				"(CAR :EXTERNAL)", "(CAR :EXTERNAL)", "(T T)", "(NIL T)", "(T T)", "((A B) 6)", "(42 3)", "(NIL 0)",
+				"(T 1)", "(ONE T)", "(NIL NIL)", "1"));
+		// Without a multiple-value operator anywhere in the program.
+		assertThat(compileAndRun("""
+				(defvar *h* (make-hash-table))
+				(setf (gethash 1 *h*) 'one)
+				(print (funcall #'gethash 2 *h* 'none))
+				(print (mapcar #'gethash '(1 2) (list *h* *h*)))
+				(print (funcall #'subtypep 'integer 'number))
+				(print (let ((g #'find-symbol)) (funcall g "CAR" "CL")))
+				(print (funcall #'read-from-string "(a b) c"))
+				""")).isEqualTo(String.join("\n", "NONE", "(ONE NIL)", "T", "CAR", "(A B)"));
 	}
 
 	@Test
@@ -14020,7 +14133,7 @@ class JvmLispCompilerTest {
 				(print (multiple-value-list (read-from-string "(1 2) x")))
 				(print (nth-value 1 (read-from-string "42")))
 				(multiple-value-bind (v i) (read-from-string "(a b)") (print v) (print i))
-				""")).isEqualTo("(ABC 3)\n((1 2) 5)\n2\n(A B)\n5");
+				""")).isEqualTo("(ABC 3)\n((1 2) 6)\n2\n(A B)\n5");
 	}
 
 	@Test
@@ -15153,7 +15266,9 @@ class JvmLispCompilerTest {
 		// 8,604 since the dispatcher reports a non-function (_notFn and the
 		// representation
 		// test in front of the id read, .kb/error-handling.md): +309 B.
-		assertThat(classBytes.length).isLessThan(8_700);
+		// 9,421 since main runs the program on a sized worker thread
+		// (.kb/interpreter-stack.md): +817 B, in every class with a main.
+		assertThat(classBytes.length).isLessThan(9_500);
 		assertThat(runClass(classBytes)).isEqualTo("(1 4 9)");
 	}
 

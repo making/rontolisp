@@ -463,8 +463,13 @@ public final class LispMacroExpander {
 	 * <pre>
 	 * (or)             -> nil
 	 * (or x)           -> x
-	 * (or x y ... z)   -> (cond (x) (y) ... (z))
+	 * (or x y ... z)   -> (cond (x) (y) ... (t z))
 	 * </pre>
+	 *
+	 * The last form is the {@code t} clause's body, not a bodyless clause of its own:
+	 * CLHS 7.4 (or) -- the last form is evaluated in the position of the whole
+	 * {@code or}, so ALL its values are returned and it is a tail call, where a bodyless
+	 * clause binds it to a temporary first (one value, one frame kept).
 	 * @param cons the or expression
 	 * @return the expanded expression
 	 */
@@ -478,10 +483,13 @@ public final class LispMacroExpander {
 			// (or x) -> x
 			return parts.get(1);
 		}
-		// (or x y ... z) -> (cond (x) (y) ... (z))
-		// Each clause is a bodyless clause wrapping a single expr
-		LispVal clauses = LispNil.INSTANCE;
-		for (int i = parts.size() - 1; i >= 1; i--) {
+		// (or x y ... z) -> (cond (x) (y) ... (t z))
+		// Each clause but the last is a bodyless clause wrapping a single expr
+		int lastIndex = parts.size() - 1;
+		LispVal clauses = new LispCons(
+				new LispCons(LispTrue.INSTANCE, new LispCons(parts.get(lastIndex), LispNil.INSTANCE)),
+				LispNil.INSTANCE);
+		for (int i = lastIndex - 1; i >= 1; i--) {
 			LispVal clause = new LispCons(parts.get(i), LispNil.INSTANCE);
 			clauses = new LispCons(clause, clauses);
 		}
@@ -34326,6 +34334,30 @@ public final class LispMacroExpander {
 	 * @param op the operator name
 	 * @return {@code true} for an f-prefixed rounder
 	 */
+	private static boolean isFloorFamilyName(String op) {
+		return switch (op) {
+			case LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.TRUNCATE -> true;
+			default -> isFFamily(op);
+		};
+	}
+
+	/**
+	 * Whether the built-in's FUNCTION object answers several values: the syntactic
+	 * producers ({@link #isMvProducerForm}) other than {@code values}, whose wrapper tail
+	 * is made to publish ({@link #settleWrapperLambdas}) as the interpreter's function
+	 * publishes (.kb/multiple-values.md, "The other producers as function objects").
+	 * @param op the operator name
+	 * @return {@code true} for a producer whose function object publishes
+	 */
+	private static boolean isPublishingWrapperName(String op) {
+		return switch (op) {
+			case LispNames.GETHASH, LispNames.FIND_SYMBOL, LispNames.INTERN, LispNames.SUBTYPEP,
+					LispNames.READ_FROM_STRING, LispNames.ARRAY_DISPLACEMENT ->
+				true;
+			default -> isFloorFamilyName(op);
+		};
+	}
+
 	private static boolean isFFamily(String op) {
 		return switch (op) {
 			case LispNames.FFLOOR, LispNames.FCEILING, LispNames.FROUND, LispNames.FTRUNCATE -> true;
@@ -34363,6 +34395,14 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal floorFamilyRemainder(String op, String prefix, LispVal dividend, LispVal divisor,
 			LispVal quotient, LispVal quotientOf) {
+		if (divisor instanceof LispInteger one && one.value() == 1) {
+			// No divisor: the number minus its integer quotient, in ONE rounding and so
+			// the correctly rounded remainder. The quotient converts to a float exactly
+			// -- it is within 1 of a float under 2^53, and the float itself above 2^52
+			// -- and the zero signs are CL's ((truncate -0.0) is 0 and -0.0). What mod
+			// or rem reach through a generic division, this reaches with one subtraction.
+			return mvCall(LispNames.SUB, dividend, quotient);
+		}
 		if (LispNames.TRUNCATE.equals(op)) {
 			return mvCall(LispNames.REM, dividend, divisor);
 		}
@@ -34534,9 +34574,11 @@ public final class LispMacroExpander {
 					return new MvProducer(bindings, values, null);
 				}
 				case LispNames.GETHASH: {
-					// (gethash key table [default]) -> value + present-p. A fresh
-					// gensym is the not-found default, so a stored nil (or the
-					// caller's default) is distinguished from a missing key.
+					// (gethash key table [default]) -> value + present-p. An internal
+					// symbol is the not-found default, so a stored nil (or the
+					// caller's default) is distinguished from a missing key -- a
+					// constant, not a (gensym): that advanced the gensym counter the
+					// program sees on every lookup.
 					LispSymbol k = new LispSymbol(prefix + "_k");
 					LispSymbol h = new LispSymbol(prefix + "_h");
 					bindings.add(new MvBinding(k, parts.get(1)));
@@ -34547,8 +34589,10 @@ public final class LispMacroExpander {
 						bindings.add(new MvBinding(d, parts.get(3)));
 						dflt = d;
 					}
+					// Bound once: WASM builds a symbol literal at each occurrence.
 					LispSymbol s = new LispSymbol(prefix + "_s");
-					bindings.add(new MvBinding(s, listToCons(List.of(new LispSymbol(LispNames.GENSYM)))));
+					bindings.add(new MvBinding(s, listToCons(
+							List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.GETHASH_ABSENT)))));
 					LispSymbol v = new LispSymbol(prefix + "_v");
 					bindings.add(new MvBinding(v, listToCons(List.of(new LispSymbol(LispNames.GETHASH), k, h, s))));
 					LispVal missing = mvCall(LispNames.EQ_GENERAL, v, s);
@@ -34729,8 +34773,9 @@ public final class LispMacroExpander {
 	 * Clear only ({@link TailMode#CLEAR}): a syntactic producer in a user lambda's tail
 	 * was already rewritten to publish by {@link #injectMvSpillGlobal}
 	 * ({@code settleLambdaTails}), and a built-in wrapper's stays one value, as the
-	 * built-in it wraps is on the interpreter. An empty body answers nil, which is one
-	 * value: it gets a clearing nil.
+	 * built-in it wraps is on the interpreter -- except a multiple-value producer's (the
+	 * floor family, gethash, ...), which {@link #settleWrapperLambdas} makes publish
+	 * first. An empty body answers nil, which is one value: it gets a clearing nil.
 	 * @param body the body forms
 	 * @return the body with its last form settled, or {@code body} itself when nothing
 	 * changed
@@ -34754,13 +34799,20 @@ public final class LispMacroExpander {
 	 * ({@code BuiltinFunctionWrappers.generate}'s {@code (setq name (lambda ...))} forms)
 	 * like any other function body ({@link #settleFunctionBody}): the wrapper of
 	 * {@code car} is a function, and {@code (funcall f (values '(1) 2))} with {@code f}
-	 * holding it must answer one value. The compilers add the wrappers after
+	 * holding it must answer one value. A multiple-value producer's wrapper is the
+	 * exception: its tail publishes the second value as the interpreter's function does
+	 * -- the floor family's always, the other producers'
+	 * ({@link #isPublishingWrapperName}) when the program names them as a designator
+	 * ({@code publishing}), so a program that never takes one as a value keeps the
+	 * one-value wrapper byte for byte. The compilers add the wrappers after
 	 * {@link #injectMvSpillGlobal} ran, so they settle them here, gated on
 	 * {@link #declaresMvSpill}.
 	 * @param wrappers the wrapper forms
+	 * @param publishing the non-floor producers the program names as a designator
+	 * ({@code BuiltinFunctionWrappers.designatedValueProducers})
 	 * @return the wrappers with their lambda bodies settled
 	 */
-	public static List<LispVal> settleWrapperLambdas(List<LispVal> wrappers) {
+	public static List<LispVal> settleWrapperLambdas(List<LispVal> wrappers, java.util.Set<String> publishing) {
 		List<LispVal> out = new java.util.ArrayList<>(wrappers.size());
 		for (LispVal wrapper : wrappers) {
 			LispVal settled = wrapper;
@@ -34768,7 +34820,17 @@ public final class LispMacroExpander {
 					&& setq.toList().get(2) instanceof LispCons lambda && lambda.isProperList()
 					&& lambda.toList().size() >= 3) {
 				List<LispVal> lambdaParts = lambda.toList();
-				List<LispVal> body = settleFunctionBody(lambdaParts.subList(2, lambdaParts.size()));
+				List<LispVal> body = new java.util.ArrayList<>(lambdaParts.subList(2, lambdaParts.size()));
+				if (setq.toList().get(1) instanceof LispSymbol name
+						&& (isFloorFamilyName(name.name()) || publishing.contains(name.name()))) {
+					// A producer's wrapper (the floor family, gethash, find-symbol, ...)
+					// is a multiple-value producer, as the interpreter's function is: its
+					// (op a b) / (op a) tail publishes the second value, which the
+					// clear-only settle below passes along.
+					int last = body.size() - 1;
+					body.set(last, settleTail(body.get(last), TailMode.PUBLISH).form());
+				}
+				body = settleFunctionBody(body);
 				List<LispVal> newLambda = new java.util.ArrayList<>(lambdaParts.subList(0, 2));
 				newLambda.addAll(body);
 				List<LispVal> newSetq = new java.util.ArrayList<>(setq.toList());
@@ -34833,7 +34895,8 @@ public final class LispMacroExpander {
 		 * The compile paths' walk over a {@code lambda} body (a
 		 * {@code flet}/{@code labels} function, a built-in wrapper included): clear only.
 		 * A user lambda's producer tail was made to publish earlier, by
-		 * {@link #injectMvSpillGlobal}; a built-in wrapper's stays one value.
+		 * {@link #injectMvSpillGlobal}; a built-in wrapper's stays one value unless
+		 * {@link #settleWrapperLambdas} made it publish (a multiple-value producer's).
 		 */
 		CLEAR;
 
@@ -34987,7 +35050,9 @@ public final class LispMacroExpander {
 				if (callee != null) {
 					name = callee;
 				}
-				if (passesMultipleValues(name)) {
+				if (passesMultipleValues(name) || callee != null && isPublishingWrapperName(callee)) {
+					// A producer through a designator runs its WRAPPER, which publishes
+					// the second value (settleWrapperLambdas).
 					yield new SettledTail(form, false);
 				}
 				if (!isSingleValuedOperator(name, parts)) {
@@ -37617,8 +37682,10 @@ public final class LispMacroExpander {
 			if (LispNames.QUOTE.equals(op.name())) {
 				// Quoted DATA is not a call -- but a #'typep / #'coerce inside it still
 				// injects the wrapper (the reference scan that gates the wrapper walks
-				// into quotes), so the two scans have to agree about exactly that.
-				return containsWrapperInjectingReference(cons.cdr());
+				// into quotes), so the two scans have to agree about exactly that; and
+				// a #'subtypep injects its wrapper the same way.
+				return containsWrapperInjectingReference(cons.cdr())
+						|| containsFunctionReference(cons.cdr(), LispNames.SUBTYPEP);
 			}
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
 			String member = qn == null ? op.name() : qn.member();
@@ -37638,10 +37705,11 @@ public final class LispMacroExpander {
 			}
 			if (LispNames.FUNCTION.equals(op.name()) && cons.cdr() instanceof LispCons named
 					&& named.car() instanceof LispSymbol target
-					&& LispNames.UPGRADED_COMPLEX_PART_TYPE.equals(memberOf(target.name()))) {
-				// #'upgraded-complex-part-type: the injected wrapper's body is a
-				// call site, so the reference counts like one (the #'typep/#'coerce
-				// rule in containsRuntimeTypep).
+					&& (LispNames.UPGRADED_COMPLEX_PART_TYPE.equals(memberOf(target.name()))
+							|| LispNames.SUBTYPEP.equals(memberOf(target.name())))) {
+				// #'upgraded-complex-part-type / #'subtypep: the injected wrapper's
+				// body is a call site, so the reference counts like one (the
+				// #'typep/#'coerce rule in containsRuntimeTypep).
 				return true;
 			}
 		}
@@ -38137,6 +38205,23 @@ public final class LispMacroExpander {
 			return true;
 		}
 		return containsWrapperInjectingReference(cons.car()) || containsWrapperInjectingReference(cons.cdr());
+	}
+
+	/**
+	 * Whether the form holds a {@code (function name)} anywhere, quoted data included --
+	 * the reference {@code BuiltinFunctionWrappers.referencesFunctionValue} gates a
+	 * wrapper on.
+	 */
+	private static boolean containsFunctionReference(LispVal form, String name) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op && LispNames.FUNCTION.equals(op.name())
+				&& cons.cdr() instanceof LispCons named && named.car() instanceof LispSymbol target
+				&& name.equals(target.name())) {
+			return true;
+		}
+		return containsFunctionReference(cons.car(), name) || containsFunctionReference(cons.cdr(), name);
 	}
 
 	/** Whether a typep specifier argument takes the computed-specifier dispatch path. */

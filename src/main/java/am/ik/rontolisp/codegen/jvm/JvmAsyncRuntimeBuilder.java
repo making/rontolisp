@@ -12,6 +12,8 @@ import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.compiler.FetchResponseShape;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * Builds the JVM bytecode of the async/await runtime: the {@code %async-run} primitive
  * behind {@code rontolisp:async-defun}/{@code async-lambda}, the generic
@@ -163,12 +165,17 @@ final class JvmAsyncRuntimeBuilder {
 	 * @param stringLength {@code String.length()}
 	 * @param stringSubstring {@code String.substring(II)}
 	 * @param stringConcat {@code String.concat(String)}
+	 * @param launcherRun the sized-stack launcher's {@code _main$run(Prog)}, or null when
+	 * main runs on the caller's thread ({@code JvmSizedMainBuilder}): the class has ONE
+	 * {@code run()}, so the launcher instance -- the one whose latch is null -- is
+	 * dispatched from its head
 	 * @return the runtime bodies
 	 */
 	static AsyncRuntime build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
 			ClassConstant objectArrayClass, ClassConstant stringClass, JvmLispCompiler.ConditionChannel channel,
 			MethodrefConstant instanceInitRef, boolean usesFetch, MethodrefConstant longValueOf,
-			MethodrefConstant stringLength, MethodrefConstant stringSubstring, MethodrefConstant stringConcat) {
+			MethodrefConstant stringLength, MethodrefConstant stringSubstring, MethodrefConstant stringConcat,
+			@Nullable MethodrefConstant launcherRun) {
 		// --- shared class/method references ---
 		ClassConstant futureClass = cp.addClass(cp.addUtf8("java/util/concurrent/CompletableFuture"));
 		MethodrefConstant futureCtor = cp.addMethodref(futureClass,
@@ -343,6 +350,19 @@ final class JvmAsyncRuntimeBuilder {
 		AsyncMethod runMethod;
 		{
 			Asm a = new Asm();
+			if (launcherRun != null) {
+				// if (this._asyncLatch == null) { _main$run(this); return; }
+				int asyncBody = a.label();
+				a.aload(0);
+				a.op(Opcode.GETFIELD);
+				a.u2(latchField.index());
+				a.branch(Opcode.IFNONNULL, asyncBody);
+				a.aload(0);
+				a.op(Opcode.INVOKESTATIC);
+				a.u2(launcherRun.index());
+				a.op(Opcode.RETURN);
+				a.bind(asyncBody);
+			}
 			// _handoffTl.set(this._asyncLatch)
 			a.op(Opcode.GETSTATIC);
 			a.u2(handoffField.index());

@@ -1134,9 +1134,11 @@ public final class LispLexer {
 	 * parsing -- which is what lets it swallow the tokens a real read would refuse (an
 	 * unknown package, an out-of-range digit, a bogus character name).
 	 * <p>
-	 * A token ends at its terminator; CLHS 23.2 says {@code read} CONSUMES a whitespace
-	 * terminator and gives a terminating macro character back, so one trailing whitespace
-	 * character joins the count after a token and after nothing else.
+	 * CLHS 23.2 says {@code read} CONSUMES a whitespace character that terminates the
+	 * datum and gives a terminating macro character back -- and this holds for ANY datum,
+	 * not just a token: in SBCL, {@code read-from-string} of a list followed by a space
+	 * answers one past that space exactly as it does after a token, so one trailing
+	 * whitespace character joins the count unconditionally.
 	 * @param input the source text
 	 * @param features the features the {@code #+}/{@code #-} conditionals test
 	 * @return the index of the first character the read did not consume
@@ -1146,16 +1148,11 @@ public final class LispLexer {
 		LispLexer lexer = new LispLexer(input, features, ReadEvalMode.SKIP_UNREADABLE);
 		lexer.skipDatum();
 		int end = lexer.pos;
-		if (lexer.lastSkipEndedInToken && end < input.length() && Character.isWhitespace(input.charAt(end))) {
+		if (end < input.length() && Character.isWhitespace(input.charAt(end))) {
 			end++;
 		}
 		return end;
 	}
-
-	// Whether the last unit skipDatumOrConditional consumed ended at a token's
-	// terminator (rather than at a closing delimiter it consumed itself), which is what
-	// decides whether a following whitespace character is consumed with the datum.
-	private boolean lastSkipEndedInToken;
 
 	// Skips one datum at the raw character level, without tokenizing it, so a form
 	// guarded by a failing #+/#- may use syntax the reader does not support. A nested
@@ -1195,7 +1192,6 @@ public final class LispLexer {
 	// a non-space character that is neither EOF nor ')'.
 	private boolean skipDatumOrConditional() {
 		char c = this.input.charAt(this.pos);
-		this.lastSkipEndedInToken = false;
 		if (c == '\'' || c == '`') {
 			this.pos++;
 			skipDatum();
@@ -1290,16 +1286,12 @@ public final class LispLexer {
 			else if (this.pos < this.input.length() && this.input.charAt(this.pos) == '"') {
 				skipStringRaw();
 			}
-			else {
-				this.lastSkipEndedInToken = true;
-			}
 			return true;
 		}
 		// A symbol or number token.
 		while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
 			this.pos++;
 		}
-		this.lastSkipEndedInToken = true;
 		return true;
 	}
 
@@ -1371,7 +1363,6 @@ public final class LispLexer {
 		while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
 			this.pos++;
 		}
-		this.lastSkipEndedInToken = true;
 	}
 
 	private static boolean isDigit(char c) {

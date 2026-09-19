@@ -135,7 +135,8 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [library-defun-pruning.md](library-defun-pruning.md) -- AST pruning of spliced library defuns, rontolisp's own and ASDF-spliced; the JVM-lived parse caches the splice reads from
 - [emitted-output-determinism.md](emitted-output-determinism.md) -- the same program compiles to the same bytes on every run
 - [default-run-path.md](default-run-path.md) -- flagless `rontolisp app.lisp` runs the interpreter by decision
-- [interpreter-stack.md](interpreter-stack.md) -- the CLI runs every program on a stack it chose, and `--stack`
+- [interpreter-stack.md](interpreter-stack.md) -- the CLI and a compiled JVM `main` run every program on a stack they chose; `--stack`, `-Drontolisp.stack`
+- [interpreter-tail-calls.md](interpreter-tail-calls.md) -- the interpreter's `eval` is a loop: a form in tail position replaces the frame, so a tail call through a value, `apply`, mutual defuns runs in constant stack; the block-owner identity, the depth and time numbers, `or`'s last form
 - [measurement-probes.md](measurement-probes.md) -- whether a performance number answers the question that was asked
 - [test-execution.md](test-execution.md) -- how the test suite actually runs (surefire forks, parallelism), and the rule that no test may name a scratch path or a port from a constant: two builds share one machine
 - [running-backends.md](running-backends.md) -- running a program on all four backends by hand, the native-image E2E leg, the examples suite
@@ -176,6 +177,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [wasm-counted-loops.md](wasm-counted-loops.md) -- a loop induction variable as a bare `i64` counter
 - [wasm-unboxed-locals.md](wasm-unboxed-locals.md) -- dual-representation `let` locals
 - [wasm-callable-arity.md](wasm-callable-arity.md) -- the 10-parameter callable limit as an index origin
+- [wasm-tail-calls.md](wasm-tail-calls.md) -- every call in tail position is a `return_call`, the dispatcher and `_apply` tail-call their target: constant stack through a function value, a direct call, `labels`, `apply`; the one consumed-at-entry flag, the post-passes that learned the opcode, the inliner's three rules, the depth/byte/time numbers and the crash-reads-as-fast trap
 - [wasm-function-body-size.md](wasm-function-body-size.md) -- no emitted function body may grow without bound
 - [cons-access-runtime.md](cons-access-runtime.md) -- `car`/`cdr` as one shared callee under `--optimize=size`; the temp-free plain-local read; what an external optimizer's residue is made of
 - [wasm-shortest-encoding.md](wasm-shortest-encoding.md) -- every emitted byte in its shortest legal encoding

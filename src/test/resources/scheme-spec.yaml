@@ -310,6 +310,65 @@ cases:
       (1 2 3)
       (x y)(1 2 3)
       (a 30000)
+  - name: internal-procedures-whose-tail-calls-cycle-run-in-constant-stack
+    source: |
+      (define (ic-parity n)
+        (define (ev? n) (if (= n 0) #t (od? (- n 1))))
+        (define (od? n) (if (= n 0) #f (ev? (- n 1))))
+        (list (ev? n) (od? (+ n 1)) (map od? '(0 1 2))))
+      (write (list (ic-parity 100000) (ic-parity 7)))
+      (newline)
+      (define (ic-count-xy input)
+        (letrec ((state-a (lambda (rest count)
+                            (cond ((null? rest) (list 'a count))
+                                  ((eq? (car rest) 'x) (state-b (cdr rest) (+ count 1)))
+                                  (else (state-a (cdr rest) count)))))
+                 (state-b (lambda (rest count)
+                            (let loop ((rest rest))
+                              (cond ((null? rest) (list 'b count))
+                                    ((eq? (car rest) 'y) (state-a (cdr rest) count))
+                                    (else (loop (cdr rest))))))))
+          (state-a input 0)))
+      (define (ic-letters n acc)
+        (if (= n 0) acc (ic-letters (- n 1) (cons 'x (cons 'z (cons 'y acc))))))
+      (write (ic-count-xy (ic-letters 30000 '())))
+      (newline)
+      (define (ic-thunks n)
+        (define (collect k acc) (if (= k 0) (map (lambda (f) (f)) acc) (push k acc)))
+        (define (push k acc) (collect (- k 1) (cons (lambda () (list k n)) acc)))
+        (collect n '()))
+      (write (ic-thunks 3))
+      (newline)
+      (define (ic-split n)
+        (define (split n) (if (= n 0) (values 'x 'y) (join (- n 1))))
+        (define (join n) (if (= n 0) (values 1 2 3) (split (- n 1))))
+        (split n))
+      (call-with-values (lambda () (ic-split 2)) (lambda args (write args)))
+      (call-with-values (lambda () (ic-split 3)) (lambda args (write args)))
+      (newline)
+      (define (ic-rest n)
+        (define (p . r) (if (null? r) 'p (q (car r) (cdr r))))
+        (define (q a b) (if (= a 0) (list 'q b) (p (- a 1) b)))
+        (list (q n '(z)) (p 3 'w)))
+      (write (ic-rest 5))
+      (newline)
+      (define (ic-sum-per-row rows)
+        (let loop ((rows rows) (acc '()))
+          (if (null? rows)
+              (reverse acc)
+              (let ()
+                (define (walk xs total) (if (null? xs) total (step xs total)))
+                (define (step xs total) (walk (cdr xs) (+ total (car xs))))
+                (loop (cdr rows) (cons (lambda () (walk (car rows) 0)) acc))))))
+      (write (map (lambda (f) (f)) (ic-sum-per-row '((1 2 3) (4 5) ()))))
+      (newline)
+    expected: |
+      ((#t #t (#f #t #f)) (#f #f (#f #t #f)))
+      (a 30000)
+      ((1 3) (2 3) (3 3))
+      (x y)(1 2 3)
+      ((q ((((((z))))))) (q ((((w))))))
+      (6 9 0)
   - name: a-loop-whose-body-closes-over-its-variables-rebinds-them-per-iteration
     source: |
       (define (thunks n)
@@ -3101,6 +3160,74 @@ standalone:
       rect: 10
       circle: 0
       (16 (9 10 0))
+  # A library exports syntax: a template's free names are the library's (a private
+  # helper called directly, a private variable assigned), its binders capture nothing the
+  # importer wrote, and except/rename/only/prefix select macros; a library in the program
+  # file exports a macro whose template uses a macro it imports.
+  - name: a-library-exports-syntax-hygienically
+    standards: [rontolisp, r7rs]
+    files:
+      tools/counter.sld: |
+        (define-library (tools counter)
+          (export inc! current swap! my-or define-counter (rename with-reset reset-and))
+          (import (scheme base))
+          (begin
+            (define count 0)
+            (define (bump n) (set! count (+ count n)) count)
+            (define (current) count)
+            (define-syntax inc!
+              (syntax-rules ()
+                ((_) (bump 1))
+                ((_ n) (bump n))))
+            (define-syntax swap!
+              (syntax-rules ()
+                ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))
+            (define-syntax my-or
+              (syntax-rules ()
+                ((_) #f)
+                ((_ e) e)
+                ((_ e r ...) (let ((t e)) (if t t (my-or r ...))))))
+            (define-syntax define-counter
+              (syntax-rules ()
+                ((_ name) (define name (let ((n 0)) (lambda () (set! n (+ n 1)) (inc!) n))))))
+            (define-syntax with-reset
+              (syntax-rules ()
+                ((_ body ...) (begin (set! count 100) body ... count))))))
+    source: |
+      (define-library (tools twice)
+        (export twice)
+        (import (scheme base) (only (tools counter) inc!))
+        (begin
+          (define (helper x) (* x 2))
+          (define-syntax twice
+            (syntax-rules ()
+              ((_ e) (begin (inc!) (helper e)))))))
+      (import (scheme base) (scheme write)
+              (except (tools counter) current)
+              (rename (only (tools counter) current) (current counter-value))
+              (prefix (tools twice) t:))
+      (define (bump n) 'mine)
+      (define (helper x) 'mine)
+      (define tmp 1)
+      (define y 2)
+      (swap! tmp y)
+      (define t 5)
+      (define-counter tick)
+      (tick)
+      (inc! 5)
+      (write (list tmp y (my-or #f t) (my-or) (my-or #f #f 7) (bump 1) (helper 1)))
+      (newline)
+      (write (list (tick) (t:twice 21) (counter-value)))
+      (newline)
+      (write (let ((if list)) (my-or #f 3)))
+      (newline)
+      (write (reset-and (inc! 2)))
+      (newline)
+    stdout: |
+      (2 1 5 #f 7 mine mine)
+      (2 42 8)
+      3
+      102
   # cond-expand around the import declarations, in a body, as a library declaration and
   # in a macro template; (library ...) of a standard library and of a library file.
   # Gauche 0.9.15 (gosh -r7 -I.) prints the same, but `other` for the second line.

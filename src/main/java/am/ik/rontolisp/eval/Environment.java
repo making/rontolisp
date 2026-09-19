@@ -437,10 +437,18 @@ public final class Environment implements Scope {
 	 * resolves the name up this scope chain -- the same chain a {@code lambda} closes
 	 * over -- so a handler or callback built inside a block exits THAT block, never
 	 * whichever same-named block happens to be dynamically active at the signal point.
-	 * The scope object itself is the block's identity (one per activation), so recursion
-	 * and a re-entered loop body each get their own.
+	 * The exit's target is {@link #blockOwner}: the scope itself when the block runs in a
+	 * frame of its own, the frame's first block scope when the evaluator's loop entered
+	 * it in tail position (.kb/interpreter-tail-calls.md), so recursion and a re-entered
+	 * loop body each get their own.
 	 */
 	@Nullable private String blockName;
+
+	/**
+	 * The identity a {@code return-from} aimed at this block's scope targets; see
+	 * {@link #blockName}. Null on an ordinary scope.
+	 */
+	@Nullable private Environment blockOwner;
 
 	/**
 	 * Create a new environment with the given parent scope.
@@ -451,25 +459,39 @@ public final class Environment implements Scope {
 	}
 
 	/**
-	 * Marks this scope as the one a {@code (block name ...)} establishes; see
-	 * {@link #blockName}. Called once, on a scope created for the block body alone.
+	 * Marks this scope as the one a {@code (block name ...)} establishes and as the
+	 * target of its exits; see {@link #blockName}. Called once, on a scope created for
+	 * the block body alone, by a catcher that compares the exit's target with this scope.
 	 * @param name the block name ({@code "NIL"} for the nil block)
 	 */
 	void installBlock(String name) {
-		this.blockName = name;
+		installBlock(name, this);
 	}
 
 	/**
-	 * The innermost scope in this lexical chain establishing a block of the given name --
-	 * the exit target of a {@code return-from} evaluated here -- or {@code null} when no
-	 * such block is lexically visible.
+	 * Marks this scope as the one a {@code (block name ...)} establishes, with the exit
+	 * target {@code owner}: the scope the evaluator's loop frame catches exits for, i.e.
+	 * the first block scope that frame entered, shared by every block it reaches in tail
+	 * position afterwards (.kb/interpreter-tail-calls.md).
+	 * @param name the block name ({@code "NIL"} for the nil block)
+	 * @param owner the identity an exit aimed at this block carries
+	 */
+	void installBlock(String name, Environment owner) {
+		this.blockName = name;
+		this.blockOwner = owner;
+	}
+
+	/**
+	 * The exit target of the block of the given name that is lexically innermost here --
+	 * what a {@code return-from} evaluated in this scope aims at -- or {@code null} when
+	 * no such block is lexically visible.
 	 * @param name the block name being exited
-	 * @return the establishing scope, which is the block's identity
+	 * @return the target identity ({@link #blockOwner} of the establishing scope)
 	 */
 	@Nullable Environment findBlock(String name) {
 		for (Environment scope = this; scope != null; scope = scope.parent) {
 			if (name.equals(scope.blockName)) {
-				return scope;
+				return scope.blockOwner;
 			}
 		}
 		return null;
@@ -5604,9 +5626,11 @@ public final class Environment implements Scope {
 		// %make-directories: the ONE directory-CREATING primitive, the write-side sibling
 		// of %list-directory. Uses Files directly, like open -- the SourceLoader seam is
 		// the read side, and a host that cannot open a file for writing cannot create a
-		// directory either. Everything user-facing (ensure-directories-exist) is Lisp
-		// source over it, in LispPreludeLibrary, so the "which part of the namestring is
-		// the directory" rule has one definition for every backend.
+		// directory either. Answers nil rather than signalling when the host refuses, the
+		// %delete-file / %rename-file shape: the "a refused directory is a file-error"
+		// decision lives once, in the Lisp ensure-directories-exist above it
+		// (LispPreludeLibrary), which is also where "which part of the namestring is the
+		// directory" is decided.
 		env.defineFunction(LispNames.MAKE_DIRECTORIES, new LispFunction(LispNames.MAKE_DIRECTORIES, args -> {
 			requireArgCount(LispNames.MAKE_DIRECTORIES, args, 1);
 			if (!(args.get(0) instanceof LispString path)) {
@@ -5617,8 +5641,7 @@ public final class Environment implements Scope {
 				return LispTrue.INSTANCE;
 			}
 			catch (IOException | RuntimeException ex) {
-				throw new LispEvalException(
-						LispNames.MAKE_DIRECTORIES + ": cannot create " + path.value() + ": " + ex.getMessage());
+				return LispNil.INSTANCE;
 			}
 		}));
 		// %delete-file: the ONE file-REMOVING primitive, the other write-side sibling of
@@ -7704,18 +7727,109 @@ public final class Environment implements Scope {
 	}
 
 	/**
-	 * Runs {@code intOp} ({@code floor}/{@code ceiling}/{@code round}/{@code truncate})
-	 * over {@code arg} and floats the result, by calling the already-registered
-	 * {@link LispNames#FLOAT} and {@code intOp} functions rather than re-deriving the
-	 * rounding -- the {@code ffloor}/{@code fceiling}/{@code fround}/{@code ftruncate}
-	 * one-argument function value (todo-667).
+	 * The integer {@code op}
+	 * ({@code floor}/{@code ceiling}/{@code round}/{@code truncate}) rounds one real to
+	 * -- the one-argument quotient, one value.
+	 * @param op the rounding operator
+	 * @param arg the real to round
+	 * @return the integer quotient
 	 */
-	private static LispVal floatOfIntQuotient(Environment env, String intOp, LispVal arg) {
-		if (!(env.lookupFunctionOrNull(intOp) instanceof LispFunction intFn)
-				|| !(env.lookupFunctionOrNull(LispNames.FLOAT) instanceof LispFunction floatFn)) {
-			throw new IllegalStateException(intOp + "/" + LispNames.FLOAT + " must be registered first");
+	static LispVal roundToInteger(String op, LispVal arg) {
+		// Real-only by contract: a complex signals a catchable type-error (SBCL parity);
+		// any other non-number keeps the historical message below.
+		requireRealOperand(op, arg);
+		if (arg instanceof LispInteger || arg instanceof LispBigInteger) {
+			return arg;
 		}
-		return floatFn.body().apply(List.of(intFn.body().apply(List.of(arg))));
+		int mode = ExactRounding.mode(op);
+		if (arg instanceof LispDouble d) {
+			return ExactRounding.floatToInteger(d.value(), mode);
+		}
+		if (arg instanceof LispRatio r) {
+			return normalizeBig(switch (op) {
+				case LispNames.FLOOR -> r.floor();
+				case LispNames.CEILING -> r.ceiling();
+				case LispNames.ROUND -> r.round();
+				default -> r.truncate();
+			});
+		}
+		throw new LispEvalException(op.toLowerCase(Locale.ROOT) + " expects a number, got: " + arg.print());
+	}
+
+	/**
+	 * The integer quotient {@code op} makes of {@code dividend / divisor}: exact at any
+	 * magnitude, a float operand included ({@link ExactRounding#quotient}).
+	 */
+	private static LispVal floorFamilyQuotient(Environment env, String op, LispVal dividend, LispVal divisor) {
+		LispVal exact = ExactRounding.quotient(dividend, divisor, ExactRounding.mode(op));
+		if (exact != null) {
+			return exact;
+		}
+		return roundToInteger(op, callGlobal(env, LispNames.DIV, dividend, divisor));
+	}
+
+	/**
+	 * A floor-family function call: the quotient, with the remainder published as the
+	 * second value -- the same expressions the syntactic lowering emits
+	 * ({@code LispMacroExpander.floorFamilyRemainder}): with no divisor the number minus
+	 * its quotient (one rounding), with one the {@code rem}/{@code mod} CLHS defines the
+	 * family by, exact at every magnitude.
+	 * @param env the global environment
+	 * @param name the function's own name (for the arity message)
+	 * @param op the integer rounding operator
+	 * @param floatQuotient whether the quotient is floated ({@code ffloor} and twins)
+	 * @param args the number and the optional divisor
+	 * @return the quotient
+	 */
+	private static LispVal floorFamilyValues(Environment env, String name, String op, boolean floatQuotient,
+			List<LispVal> args) {
+		requireArgCountBetween(name, args, 1, 2);
+		LispVal dividend = args.get(0);
+		LispVal quotient;
+		LispVal remainder;
+		if (args.size() == 1) {
+			quotient = roundToInteger(op, dividend);
+			remainder = callGlobal(env, LispNames.SUB, dividend, quotient);
+		}
+		else {
+			LispVal divisor = args.get(1);
+			quotient = floorFamilyQuotient(env, op, dividend, divisor);
+			remainder = switch (op) {
+				case LispNames.TRUNCATE -> callGlobal(env, LispNames.REM, dividend, divisor);
+				case LispNames.FLOOR -> callGlobal(env, LispNames.MOD, dividend, divisor);
+				case LispNames.CEILING -> ceilingRemainder(env, dividend, divisor);
+				default -> {
+					// round lands on floor's quotient or ceiling's; its remainder is the
+					// one that belongs to whichever it chose.
+					LispVal floor = floorFamilyQuotient(env, LispNames.FLOOR, dividend, divisor);
+					yield callGlobal(env, LispNames.EQ, quotient, floor) instanceof LispNil
+							? ceilingRemainder(env, dividend, divisor)
+							: callGlobal(env, LispNames.MOD, dividend, divisor);
+				}
+			};
+		}
+		env.publishSpill(new LispCons(remainder, LispNil.INSTANCE));
+		return floatQuotient ? callGlobal(env, LispNames.FLOAT, quotient) : quotient;
+	}
+
+	/**
+	 * Ceiling's remainder: the negated {@code mod} of the negated dividend, or
+	 * {@code rem}'s zero when that is zero (negating would flip a zero's sign).
+	 */
+	private static LispVal ceilingRemainder(Environment env, LispVal dividend, LispVal divisor) {
+		LispVal m = callGlobal(env, LispNames.MOD, callGlobal(env, LispNames.SUB, dividend), divisor);
+		if (!(callGlobal(env, LispNames.ZEROP, m) instanceof LispNil)) {
+			return callGlobal(env, LispNames.REM, dividend, divisor);
+		}
+		return callGlobal(env, LispNames.SUB, m);
+	}
+
+	/** Calls an already-registered global built-in on evaluated arguments. */
+	private static LispVal callGlobal(Environment env, String name, LispVal... args) {
+		if (!(env.lookupFunctionOrNull(name) instanceof LispFunction fn)) {
+			throw new IllegalStateException(name + " must be registered");
+		}
+		return fn.body().apply(List.of(args));
 	}
 
 	private static void registerTypeConversion(Environment env) {
@@ -7741,91 +7855,25 @@ public final class Environment implements Scope {
 			}
 			throw new LispEvalException("float expects a number, got: " + arg.print());
 		}));
-		env.defineFunction(LispNames.TRUNCATE, new LispFunction(LispNames.TRUNCATE, args -> {
-			requireArgCount(LispNames.TRUNCATE, args, 1);
-			LispVal arg = args.get(0);
-			// Real-only by contract: a complex signals a catchable type-error (SBCL
-			// parity); any other non-number keeps the historical message below.
-			requireRealOperand(LispNames.TRUNCATE, arg);
-			if (arg instanceof LispInteger || arg instanceof LispBigInteger) {
-				return arg;
-			}
-			if (arg instanceof LispDouble d) {
-				return ExactRounding.floatToInteger(d.value(), ExactRounding.TRUNCATE);
-			}
-			if (arg instanceof LispRatio r) {
-				return normalizeBig(r.truncate());
-			}
-			throw new LispEvalException("truncate expects a number, got: " + arg.print());
-		}));
-		env.defineFunction(LispNames.FLOOR, new LispFunction(LispNames.FLOOR, args -> {
-			requireArgCount(LispNames.FLOOR, args, 1);
-			LispVal arg = args.get(0);
-			requireRealOperand(LispNames.FLOOR, arg);
-			if (arg instanceof LispInteger || arg instanceof LispBigInteger) {
-				return arg;
-			}
-			if (arg instanceof LispDouble d) {
-				return ExactRounding.floatToInteger(d.value(), ExactRounding.FLOOR);
-			}
-			if (arg instanceof LispRatio r) {
-				return normalizeBig(r.floor());
-			}
-			throw new LispEvalException("floor expects a number, got: " + arg.print());
-		}));
-		env.defineFunction(LispNames.CEILING, new LispFunction(LispNames.CEILING, args -> {
-			requireArgCount(LispNames.CEILING, args, 1);
-			LispVal arg = args.get(0);
-			requireRealOperand(LispNames.CEILING, arg);
-			if (arg instanceof LispInteger || arg instanceof LispBigInteger) {
-				return arg;
-			}
-			if (arg instanceof LispDouble d) {
-				return ExactRounding.floatToInteger(d.value(), ExactRounding.CEILING);
-			}
-			if (arg instanceof LispRatio r) {
-				return normalizeBig(r.ceiling());
-			}
-			throw new LispEvalException("ceiling expects a number, got: " + arg.print());
-		}));
-		env.defineFunction(LispNames.ROUND, new LispFunction(LispNames.ROUND, args -> {
-			requireArgCount(LispNames.ROUND, args, 1);
-			LispVal arg = args.get(0);
-			requireRealOperand(LispNames.ROUND, arg);
-			if (arg instanceof LispInteger || arg instanceof LispBigInteger) {
-				return arg;
-			}
-			if (arg instanceof LispDouble d) {
-				return ExactRounding.floatToInteger(d.value(), ExactRounding.ROUND);
-			}
-			if (arg instanceof LispRatio r) {
-				return normalizeBig(r.round());
-			}
-			throw new LispEvalException("round expects a number, got: " + arg.print());
-		}));
-		// ffloor/fceiling/fround/ftruncate: CLHS defines each as its integer twin with a
-		// FLOAT primary value (todo-667). The one-argument form is all a first-class
-		// function value needs (matching floor/ceiling/round/truncate's own wrapper,
-		// which is unary too -- the two-argument form is reachable only through the
-		// macro lowering in call position, LispMacroExpander#expandFFamily), so this
-		// reuses the FLOOR/CEILING/ROUND/TRUNCATE and FLOAT functions just registered
-		// above rather than re-deriving the rounding.
-		env.defineFunction(LispNames.FFLOOR, new LispFunction(LispNames.FFLOOR, args -> {
-			requireArgCount(LispNames.FFLOOR, args, 1);
-			return floatOfIntQuotient(env, LispNames.FLOOR, args.get(0));
-		}));
-		env.defineFunction(LispNames.FCEILING, new LispFunction(LispNames.FCEILING, args -> {
-			requireArgCount(LispNames.FCEILING, args, 1);
-			return floatOfIntQuotient(env, LispNames.CEILING, args.get(0));
-		}));
-		env.defineFunction(LispNames.FROUND, new LispFunction(LispNames.FROUND, args -> {
-			requireArgCount(LispNames.FROUND, args, 1);
-			return floatOfIntQuotient(env, LispNames.ROUND, args.get(0));
-		}));
-		env.defineFunction(LispNames.FTRUNCATE, new LispFunction(LispNames.FTRUNCATE, args -> {
-			requireArgCount(LispNames.FTRUNCATE, args, 1);
-			return floatOfIntQuotient(env, LispNames.TRUNCATE, args.get(0));
-		}));
+		// floor/ceiling/round/truncate and their float-quotient twins as FUNCTION objects
+		// ((funcall #'floor 7 2), (mapcar #'truncate xs ys)): an optional divisor, and
+		// the
+		// remainder published as the second value -- a function call is a multiple-value
+		// producer like any other, and the compile paths' wrappers publish the same
+		// (.kb/multiple-values.md, "The floor family as a function object"). The call
+		// position does not come here: LispEvaluator rounds it directly, one value.
+		for (String op : List.of(LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND)) {
+			env.defineFunction(op, new LispFunction(op, args -> floorFamilyValues(env, op, op, false, args), true));
+		}
+		for (String op : List.of(LispNames.FTRUNCATE, LispNames.FFLOOR, LispNames.FCEILING, LispNames.FROUND)) {
+			String intOp = switch (op) {
+				case LispNames.FFLOOR -> LispNames.FLOOR;
+				case LispNames.FCEILING -> LispNames.CEILING;
+				case LispNames.FROUND -> LispNames.ROUND;
+				default -> LispNames.TRUNCATE;
+			};
+			env.defineFunction(op, new LispFunction(op, args -> floorFamilyValues(env, op, intOp, true, args), true));
+		}
 		env.defineFunction(LispNames.NUMERATOR, new LispFunction(LispNames.NUMERATOR, args -> {
 			requireArgCount(LispNames.NUMERATOR, args, 1);
 			LispVal arg = args.get(0);

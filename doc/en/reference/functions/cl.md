@@ -399,7 +399,7 @@ page.
 | `float-sign` | `(float-sign -2.5)`, `(float-sign -2.5 3.0)` | `-1.0`, `-3.0` -- the sign as a float (negative zero answers `-1.0`), or the second float's magnitude with the first's sign |
 | `float-digits` | `(float-digits 1.5)`, `(float-digits 0.0)` | `53`, `0` -- radix-2 significand digits (53 for every normal double, fewer for a subnormal) |
 | `decode-float` | `(decode-float 6.5)` | `0.8125`, `3`, `1.0` -- significand in [1/2, 1), binary exponent, sign |
-| `integer-decode-float` | `(integer-decode-float 6.5)` | `13`, `-1`, `1.0` -- integer significand, binary exponent, sign |
+| `integer-decode-float` | `(integer-decode-float 6.5)` | `7318349394477056`, `-50`, `1` -- integer significand, binary exponent, integer sign |
 | `char-name` | `(char-name #\Space)` | `"Space"` -- `nil` for graphic characters |
 | `fdefinition` | `(fdefinition 'car)` | the function value, like `symbol-function` |
 | `use-package` | `(use-package :mypkg)` | add packages to a package's use list, so their external symbols are visible unqualified (a literal top-level call is a compile-time directive) |

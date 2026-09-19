@@ -272,6 +272,17 @@ final class SchemeLowering {
 	}
 
 	/**
+	 * A {@code syntax-rules} macro a user library exports: only the expander reads it
+	 * ({@link SchemeExpander#exportedMacro}), a program that names one is always
+	 * expanded, so the lowering meets it only where the expander already refused it.
+	 *
+	 * @param macro the expander's macro, opaque here
+	 * @param name its name where it was defined
+	 */
+	private record ImportedSyntax(Object macro, String name) implements Binding {
+	}
+
+	/**
 	 * The name of a named {@code let} being tried as a PURE loop: every reference must be
 	 * a jump. Any other use -- a non-tail call, a call from inside a {@code lambda}, a
 	 * bare reference -- sets {@link #escaped}, and the loop is lowered again as a
@@ -503,29 +514,37 @@ final class SchemeLowering {
 	}
 
 	/**
-	 * A top-level procedure a tail-call group may hold: one defined once, by a
-	 * {@code lambda}, never assigned -- a {@link GlobalFunction} with no
-	 * {@code case-lambda} clauses.
+	 * A procedure a tail-call group may hold: one defined once, by a {@code lambda},
+	 * never assigned. At the top level a {@link GlobalFunction} with no
+	 * {@code case-lambda} clauses; in a body (an internal {@code define}, a
+	 * {@code letrec} binding) the {@link Variable} the body binds it to.
 	 *
-	 * @param form the {@code define}
+	 * @param form the {@code define}, or a {@code letrec} binding's {@code lambda}
 	 * @param definition its parse
-	 * @param function its binding
+	 * @param binding its binding: a tail call to it is a jump
 	 */
-	private record Member(LispCons form, Definition definition, GlobalFunction function) {
+	private record Member(LispCons form, Definition definition, Binding binding) {
+
+		GlobalFunction function() {
+			return (GlobalFunction) this.binding;
+		}
+
 	}
 
 	/**
-	 * Top-level procedures whose tail calls to each other form a cycle, lowered as ONE
-	 * {@code defun} holding each member's body under a label, so every tail call among
-	 * them is a jump; each member's own {@code defun} calls it with its index
-	 * (.kb/scheme-frontend.md, "Tail-call groups").
+	 * Procedures whose tail calls to each other form a cycle, lowered as ONE function
+	 * holding each member's body under a label, so every tail call among them is a jump;
+	 * each member itself calls it with its index (.kb/scheme-frontend.md, "Tail-call
+	 * groups"). At the top level the function is a {@code defun} and each member its own
+	 * {@code defun}; in a body it is a {@code lambda} in a variable of the body and each
+	 * member a {@code lambda} calling it.
 	 */
 	private static final class Group {
 
-		// In file order; the first one's define emits the group's defun.
+		// In definition order; the first one's definition emits the group's function.
 		private final List<Member> members;
 
-		// The group's defun, once the first member's define has emitted it.
+		// The group's function, once the first member's definition has emitted it.
 		private @Nullable LispSymbol function;
 
 		Group(List<Member> members) {
@@ -535,14 +554,16 @@ final class SchemeLowering {
 	}
 
 	/**
-	 * A group's {@code defun} and, per member, the members its body jumps to.
+	 * A group's function and, per member, the members its body jumps to.
 	 *
-	 * @param defun the group's {@code defun}
-	 * @param function its name
+	 * @param function its name: the {@code defun}'s, or the variable holding the
+	 * {@code lambda}
+	 * @param lambdaList {@code (W C1 .. Cn)}
+	 * @param body the function's one body form
 	 * @param jumps per member, the indexes of the members a tail call in its body jumps
 	 * to
 	 */
-	private record LoweredGroup(LispVal defun, LispSymbol function, List<Set<Integer>> jumps) {
+	private record LoweredGroup(LispSymbol function, LispVal lambdaList, LispVal body, List<Set<Integer>> jumps) {
 	}
 
 	/** What a lowering attempt changes that a discarded one must put back. */
@@ -683,6 +704,7 @@ final class SchemeLowering {
 		// COUNTER is what must outlive the buffer, a record's generated slot being
 		// global.
 		this.generated.clear();
+		this.foreignSymbols.clear();
 		this.internalRecords.clear();
 		// A library typed at a prompt is declared, not lowered: a later import lowers it.
 		List<LispVal> program = new ArrayList<>();
@@ -695,19 +717,31 @@ final class SchemeLowering {
 				program.add(datum);
 			}
 		}
+		List<LispVal> included = includes(program, null);
+		// Before the expansion too, so a macro imported at this prompt expands here.
+		for (LispVal datum : included) {
+			sessionImport(datum);
+		}
+		// Grouped by which typed datum each spliced form came from: a top-level begin
+		// (typed, or a macro's template) must splice its definitions to the top level,
+		// but the splicing must still answer as ONE session step, echoing only the
+		// group's last form -- as a whole file's own progn/begin would (.kb/
+		// scheme-frontend.md, "A session").
+		List<List<LispVal>> groups = new ArrayList<>();
+		for (List<LispVal> expandedGroup : expandedGrouped(included)) {
+			List<LispVal> group = new ArrayList<>();
+			for (LispVal datum : expandedGroup) {
+				spliceBegins(datum, group);
+			}
+			groups.add(group);
+		}
 		List<LispVal> forms = new ArrayList<>();
-		for (LispVal datum : expanded(includes(program, null))) {
-			spliceBegins(datum, forms);
+		for (List<LispVal> group : groups) {
+			forms.addAll(group);
 		}
 		for (LispVal form : forms) {
 			collectAssigned(form);
-			// At a prompt every import is a leading one, and it only ever ADDS names.
-			if (form instanceof LispCons cons && syntaxOf(cons, this.global) == Core.IMPORT) {
-				for (LispVal set : elements(cons.cdr(), cons)) {
-					importSet(set, cons)
-						.forEach((name, binding) -> this.global.bindings.put(SchemeNames.mangle(name), binding));
-				}
-			}
+			sessionImport(form);
 		}
 		declareGlobals(forms);
 		List<SchemeTopLevel> out = new ArrayList<>();
@@ -718,15 +752,34 @@ final class SchemeLowering {
 		if (!libraryForms.isEmpty()) {
 			out.add(new SchemeTopLevel(libraryForms, false));
 		}
-		for (LispVal form : forms) {
+		for (List<LispVal> group : groups) {
+			if (group.isEmpty()) {
+				// A typed datum consumed entirely (a define-syntax) leaves nothing to
+				// run or echo.
+				continue;
+			}
 			List<LispVal> lowered = new ArrayList<>();
-			boolean echoes = topLevel(form, lowered);
+			boolean echoes = false;
+			for (LispVal form : group) {
+				echoes = topLevel(form, lowered);
+			}
 			out.add(new SchemeTopLevel(List.copyOf(exitGuardEntry(lowered)), echoes));
 		}
 		// Only now: a buffer that failed to lower evaluated nothing, the binding
 		// included.
 		this.falseBound = true;
 		return out;
+	}
+
+	// At a prompt every import is a leading one, and it only ever ADDS names; importing
+	// the same set again changes nothing.
+	private void sessionImport(LispVal form) {
+		if (form instanceof LispCons cons && syntaxOf(cons, this.global) == Core.IMPORT) {
+			for (LispVal set : elements(cons.cdr(), cons)) {
+				importSet(set, cons)
+					.forEach((name, binding) -> this.global.bindings.put(SchemeNames.mangle(name), binding));
+			}
+		}
 	}
 
 	/**
@@ -766,7 +819,7 @@ final class SchemeLowering {
 		for (LispVal form : forms) {
 			topLevel(form, out);
 		}
-		if (mayThrowExit(forms)) {
+		if (mayThrowExit(forms) || this.foreignExitOrEval) {
 			for (int i = bodyFrom; i < out.size(); i++) {
 				out.set(i, exitGuard(out.get(i)));
 			}
@@ -777,18 +830,51 @@ final class SchemeLowering {
 	// The datums with every macro expanded, when the program defines any: a program that
 	// spells no syntax definition is lowered exactly as before.
 	private List<LispVal> expanded(List<LispVal> datums) {
-		if (this.expander == null && !SchemeExpander.needed(datums, this::globalKeyword)) {
+		if (this.expander == null
+				&& !SchemeExpander.needed(datums, this::globalKeyword, name -> importedMacro(name) != null)) {
 			return datums;
 		}
 		if (this.expander == null) {
-			this.expander = new SchemeExpander(new ExpanderHost());
+			this.expander = new SchemeExpander(new ExpanderHost(), this.libraries.aliases());
 		}
 		return this.expander.topLevel(datums);
+	}
+
+	// Like expanded, but grouped by which input datum each result form came from: what
+	// interact needs so a session step wraps and echoes one typed datum's forms
+	// together, however many a spliced begin turned it into.
+	private List<List<LispVal>> expandedGrouped(List<LispVal> datums) {
+		if (this.expander == null
+				&& !SchemeExpander.needed(datums, this::globalKeyword, name -> importedMacro(name) != null)) {
+			List<List<LispVal>> groups = new ArrayList<>(datums.size());
+			for (LispVal datum : datums) {
+				groups.add(List.of(datum));
+			}
+			return groups;
+		}
+		if (this.expander == null) {
+			this.expander = new SchemeExpander(new ExpanderHost(), this.libraries.aliases());
+		}
+		return this.expander.topLevelGrouped(datums);
 	}
 
 	private @Nullable Core globalKeyword(LispSymbol identifier) {
 		return this.global.find(SchemeNames.mangle(identifier.name())) instanceof Syntax syntax ? syntax.core() : null;
 	}
+
+	private @Nullable Object importedMacro(LispSymbol identifier) {
+		return this.global.find(SchemeNames.mangle(identifier.name())) instanceof ImportedSyntax syntax ? syntax.macro()
+				: null;
+	}
+
+	// The identifiers a macro exported by another library emits for that library's
+	// bindings (SchemeExpander.Host.foreign), one per binding; and whether one of them
+	// is exit or eval, which mayThrowExit cannot see by spelling.
+	private final Map<Binding, LispSymbol> foreignSymbols = new IdentityHashMap<>();
+
+	private final Set<LispSymbol> foreignIdentifiers = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+
+	private boolean foreignExitOrEval;
 
 	private final class ExpanderHost implements SchemeExpander.Host {
 
@@ -833,6 +919,30 @@ final class SchemeLowering {
 		@Override
 		public int condExpandClause(LispCons form) {
 			return SchemeFeatures.clause(form, SchemeLowering.this.featureHost);
+		}
+
+		@Override
+		public @Nullable Object importedMacro(LispSymbol identifier) {
+			return SchemeLowering.this.importedMacro(identifier);
+		}
+
+		@Override
+		public @Nullable Object binding(LispSymbol identifier) {
+			return lookup(identifier, SchemeLowering.this.global);
+		}
+
+		@Override
+		public LispSymbol foreign(Object binding) {
+			return SchemeLowering.this.foreignSymbols.computeIfAbsent((Binding) binding, key -> {
+				LispSymbol identifier = fresh("L");
+				SchemeLowering.this.global.bindings.put(identifier.name(), key);
+				SchemeLowering.this.foreignIdentifiers.add(identifier);
+				if (key instanceof Builtin builtin
+						&& (builtin.entry().name().equals("exit") || builtin.entry().name().equals("eval"))) {
+					SchemeLowering.this.foreignExitOrEval = true;
+				}
+				return identifier;
+			});
 		}
 
 	}
@@ -1287,8 +1397,8 @@ final class SchemeLowering {
 			exports = instantiate(name, form);
 		}
 		for (Binding binding : exports.values()) {
-			if (binding instanceof Variable || binding instanceof GlobalFunction
-					|| binding instanceof GlobalPredicate) {
+			if (binding instanceof Variable || binding instanceof GlobalFunction || binding instanceof GlobalPredicate
+					|| binding instanceof ImportedSyntax) {
 				this.libraryImports.add(binding);
 			}
 		}
@@ -1409,7 +1519,7 @@ final class SchemeLowering {
 		for (LispVal datum : forms) {
 			topLevel(datum, out);
 		}
-		if (mayThrowExit(forms)) {
+		if (mayThrowExit(forms) || this.foreignExitOrEval) {
 			out.replaceAll(this::exitGuard);
 		}
 		this.libraryForms = instantiationGuarded(out);
@@ -1486,12 +1596,12 @@ final class SchemeLowering {
 					internal = identifier(spec, exportForm);
 					external = internal;
 				}
-				Binding binding = this.global.find(name(internal));
+				// A syntax definition shadows an import of the same name, as the expander
+				// resolves it.
+				Object macro = this.expander != null ? this.expander.exportedMacro(internal.name()) : null;
+				Binding binding = macro != null ? new ImportedSyntax(macro, internal.name())
+						: this.global.find(name(internal));
 				if (binding == null) {
-					if (this.expander != null && this.expander.definesSyntax(internal.name())) {
-						throw error("exporting syntax from a library is not supported by this experimental front end"
-								+ " yet: " + internal.name(), exportForm);
-					}
 					throw error("the library exports " + internal.name() + ", which it neither defines nor imports",
 							exportForm);
 				}
@@ -1733,20 +1843,36 @@ final class SchemeLowering {
 	 */
 	private void declareGroups(List<LispVal> forms) {
 		List<Member> members = new ArrayList<>();
-		Map<String, Integer> index = new HashMap<>();
 		for (LispVal datum : forms) {
 			if (datum instanceof LispCons form && syntaxOf(form, this.global) == Core.DEFINE) {
 				Definition definition = definition(form);
 				if (definition.procedure() && definition.caseLambda() == null
 						&& this.global.bindings.get(name(definition.name())) instanceof GlobalFunction function
 						&& function.clauses().isEmpty()) {
-					index.putIfAbsent(definition.name().name(), members.size());
 					members.add(new Member(form, definition, function));
 				}
 			}
 		}
+		for (Group group : groups(members, this.global)) {
+			for (Member member : group.members) {
+				this.groups.put(name(member.definition().name()), group);
+			}
+		}
+	}
+
+	/**
+	 * The groups among the procedures a scope defines: the ones that may call each other
+	 * in a cycle -- by a cheap scan of the call heads, blind to scope -- are lowered as a
+	 * group once, as a probe, and what their bodies actually JUMP to decides. Empty, and
+	 * nothing numbered, when there is no such cycle.
+	 */
+	private List<Group> groups(List<Member> members, Scope home) {
 		if (members.size() < 2) {
-			return;
+			return List.of();
+		}
+		Map<String, Integer> index = new HashMap<>();
+		for (int i = 0; i < members.size(); i++) {
+			index.putIfAbsent(members.get(i).definition().name().name(), i);
 		}
 		List<Set<Integer>> mentions = new ArrayList<>();
 		for (Member member : members) {
@@ -1761,16 +1887,20 @@ final class SchemeLowering {
 			}
 			mentions.add(callees);
 		}
+		List<Group> out = new ArrayList<>();
 		for (List<Integer> cycle : cycles(mentions)) {
-			settleGroup(cycle.stream().map(members::get).toList());
+			settleGroup(cycle.stream().map(members::get).toList(), home, out);
 		}
+		return out;
 	}
 
-	private void settleGroup(List<Member> candidate) {
+	// A candidate the jumps do not hold together is settled again as the cycles they do
+	// form.
+	private void settleGroup(List<Member> candidate, Scope home, List<Group> out) {
 		Snapshot snapshot = snapshot();
 		LoweredGroup probe;
 		try {
-			probe = lowerGroup(candidate);
+			probe = lowerGroup(candidate, home);
 		}
 		catch (RuntimeException ex) {
 			// The real lowering reports it, positioned, where the form stands.
@@ -1781,14 +1911,11 @@ final class SchemeLowering {
 		}
 		List<List<Integer>> cycles = cycles(probe.jumps());
 		if (cycles.size() == 1 && cycles.get(0).size() == candidate.size()) {
-			Group group = new Group(candidate);
-			for (Member member : candidate) {
-				this.groups.put(name(member.definition().name()), group);
-			}
+			out.add(new Group(candidate));
 			return;
 		}
 		for (List<Integer> cycle : cycles) {
-			settleGroup(cycle.stream().map(candidate::get).toList());
+			settleGroup(cycle.stream().map(candidate::get).toList(), home, out);
 		}
 	}
 
@@ -1828,7 +1955,8 @@ final class SchemeLowering {
 	 * {@code W} cost wasm a dispatch round per jump, and the members as an {@code if}
 	 * chain under {@code TOP} ran the metacircular evaluator 15% slower on the JVM.
 	 */
-	private LoweredGroup lowerGroup(List<Member> members) {
+	private LoweredGroup lowerGroup(List<Member> members, Scope home) {
+		boolean topLevel = home == this.global;
 		List<Formals> formals = new ArrayList<>();
 		int width = 0;
 		for (Member member : members) {
@@ -1868,16 +1996,18 @@ final class SchemeLowering {
 			for (int j = 0; j < members.size(); j++) {
 				Formals parsed = formals.get(j);
 				Target target = new Target(
-						members.get(j).function(), new LoopShape(i == j ? labels.get(j) : top,
+						members.get(j).binding(), new LoopShape(i == j ? labels.get(j) : top,
 								carriers.subList(0, parsed.all().size()), parsed.rest() != null, false),
-						this.global, List.of());
+						home, List.of());
 				if (i != j) {
 					target.presets = List.of(which, new LispInteger(j));
 				}
 				targets.add(target);
 			}
-			this.enclosing = name(member.definition().name());
-			Scope inner = new Scope(this.global);
+			if (topLevel) {
+				this.enclosing = name(member.definition().name());
+			}
+			Scope inner = new Scope(home);
 			List<LispVal> pairs = new ArrayList<>();
 			List<LispSymbol> all = formals.get(i).all();
 			for (int j = 0; j < all.size(); j++) {
@@ -1903,13 +2033,85 @@ final class SchemeLowering {
 		lambdaList.addAll(carriers);
 		LispVal body = exiting(exit,
 				list(symbol("LET"), list(list(result, LispNil.INSTANCE)), listOf(tagbody), result));
-		LispVal defun = list(symbol("DEFUN"), function, listOf(lambdaList), body);
-		return new LoweredGroup(inherit(members.get(0).form(), defun), function, jumps);
+		return new LoweredGroup(function, listOf(lambdaList), body, jumps);
+	}
+
+	/**
+	 * The groups among the procedures a body or a {@code letrec} binds, by the form
+	 * defining each member. A candidate is a variable bound to a syntactic
+	 * {@code lambda}; one that is ever assigned (by spelling, like
+	 * {@code collectAssigned}) or bound twice is no member.
+	 */
+	private Map<LispCons, Group> internalGroups(List<Member> candidates, Set<String> alsoBound, Scope scope) {
+		if (candidates.size() < 2) {
+			return Map.of();
+		}
+		Map<String, Integer> counts = new HashMap<>();
+		for (Member candidate : candidates) {
+			counts.merge(candidate.definition().name().name(), 1, Integer::sum);
+		}
+		List<Member> members = new ArrayList<>();
+		for (Member candidate : candidates) {
+			String name = candidate.definition().name().name();
+			if (counts.getOrDefault(name, 0) == 1 && !alsoBound.contains(name)
+					&& !this.assignedNames.contains(name(candidate.definition().name()))
+					&& candidate.binding() instanceof Variable) {
+				members.add(candidate);
+			}
+		}
+		Map<LispCons, Group> out = new IdentityHashMap<>();
+		for (Group group : groups(members, scope)) {
+			for (Member member : group.members) {
+				out.put(member.form(), group);
+			}
+		}
+		return out;
+	}
+
+	private static Member member(Group group, LispVal form) {
+		for (Member member : group.members) {
+			if (member.form() == form) {
+				return member;
+			}
+		}
+		throw new IllegalStateException("not a member of its group");
 	}
 
 	// A member's own defun: enters the group at its label, nil in the carriers it does
 	// not take.
 	private LispVal groupEntry(Group group, Member member) {
+		Entry entry = entry(group, member);
+		return inherit(member.form(), list(symbol("DEFUN"), member.function().symbol(), entry.lambdaList(),
+				new LispCons(Objects.requireNonNull(group.function), entry.arguments())));
+	}
+
+	// A member of a body's group: a lambda calling the group's, which the first member's
+	// definition assigns to its variable ahead of its own.
+	private List<LispVal> internalGroupDefinition(Group group, Member member, Scope scope, List<LispVal> pairs) {
+		List<LispVal> out = new ArrayList<>();
+		if (group.function == null) {
+			LoweredGroup lowered = lowerGroup(group.members, scope);
+			group.function = lowered.function();
+			pairs.add(list(lowered.function(), LispNil.INSTANCE));
+			this.closures++;
+			out.add(inherit(group.members.get(0).form(), list(symbol("SETQ"), lowered.function(),
+					list(symbol("LAMBDA"), lowered.lambdaList(), lowered.body()))));
+		}
+		this.closures++;
+		Entry entry = entry(group, member);
+		out.add(inherit(member.form(),
+				list(symbol("SETQ"), variableSymbol(member.definition().name(), scope),
+						list(symbol("LAMBDA"), entry.lambdaList(), new LispCons(symbol("FUNCALL"),
+								new LispCons(Objects.requireNonNull(group.function), entry.arguments()))))));
+		return out;
+	}
+
+	private record Entry(LispVal lambdaList, LispVal arguments) {
+	}
+
+	// A member's parameters, and what it hands the group's function after it: its
+	// index, its parameters, nil in the carriers it does not take.
+	private Entry entry(Group group, Member member) {
 		int width = 0;
 		for (Member other : group.members) {
 			width = Math.max(width,
@@ -1921,14 +2123,12 @@ final class SchemeLowering {
 			parameters.add(cl(formal));
 		}
 		List<LispVal> arguments = new ArrayList<>();
-		arguments.add(Objects.requireNonNull(group.function));
 		arguments.add(new LispInteger(group.members.indexOf(member)));
 		arguments.addAll(parameters);
-		while (arguments.size() < width + 2) {
+		while (arguments.size() < width + 1) {
 			arguments.add(LispNil.INSTANCE);
 		}
-		return inherit(member.form(), list(symbol("DEFUN"), member.function().symbol(),
-				lambdaList(parameters, formals.rest() != null), listOf(arguments)));
+		return new Entry(lambdaList(parameters, formals.rest() != null), listOf(arguments));
 	}
 
 	/**
@@ -2332,9 +2532,10 @@ final class SchemeLowering {
 			.orElseThrow(() -> new IllegalStateException("not a member of its group"));
 		List<LispVal> out = new ArrayList<>();
 		if (group.function == null) {
-			LoweredGroup lowered = lowerGroup(group.members);
+			LoweredGroup lowered = lowerGroup(group.members, this.global);
 			group.function = lowered.function();
-			out.add(lowered.defun());
+			out.add(inherit(group.members.get(0).form(),
+					list(symbol("DEFUN"), lowered.function(), lowered.lambdaList(), lowered.body())));
 		}
 		out.add(groupEntry(group, member));
 		return out;
@@ -2813,6 +3014,8 @@ final class SchemeLowering {
 			}
 			case Syntax syntax ->
 				throw new IllegalArgumentException("the keyword " + syntax.name() + " is not a variable");
+			case ImportedSyntax macro ->
+				throw new IllegalArgumentException("the macro " + macro.name() + " is not a variable");
 			// Not defined in this file: a variable some other file defines.
 			case null -> cl(identifier);
 		};
@@ -3493,11 +3696,30 @@ final class SchemeLowering {
 		for (LispSymbol variable : bindings.variables()) {
 			pairs.add(list(bind(variable, inner), LispNil.INSTANCE));
 		}
+		List<Member> candidates = new ArrayList<>();
+		for (int i = 0; i < bindings.variables().size(); i++) {
+			LispSymbol variable = bindings.variables().get(i);
+			if (bindings.inits().get(i) instanceof LispCons lambda && syntaxOf(lambda, inner) == Core.LAMBDA) {
+				List<LispVal> lambdaParts = elements(lambda, lambda);
+				if (lambdaParts.size() >= 3) {
+					candidates.add(new Member(lambda,
+							new Definition(variable, lambdaParts.get(1), lambdaParts.subList(2, lambdaParts.size())),
+							Objects.requireNonNull(lookup(variable, inner))));
+				}
+			}
+		}
+		Map<LispCons, Group> groups = internalGroups(candidates, Set.of(), inner);
 		List<LispVal> forms = new ArrayList<>();
 		for (int i = 0; i < bindings.variables().size(); i++) {
 			LispSymbol variable = bindings.variables().get(i);
-			forms.add(list(symbol("SETQ"), variableSymbol(variable, inner),
-					recursiveValue(variable, bindings.inits().get(i), inner)));
+			LispVal init = bindings.inits().get(i);
+			Group group = init instanceof LispCons lambda ? groups.get(lambda) : null;
+			if (group != null) {
+				forms.addAll(internalGroupDefinition(group, member(group, init), inner, pairs));
+			}
+			else {
+				forms.add(list(symbol("SETQ"), variableSymbol(variable, inner), recursiveValue(variable, init, inner)));
+			}
 		}
 		forms.addAll(body(parts.subList(2, parts.size()), context.in(new Scope(inner))));
 		return new LispCons(symbol("LET"), new LispCons(listOf(pairs), listOf(forms)));
@@ -3809,6 +4031,8 @@ final class SchemeLowering {
 		// top-level procedures, called directly. Such a name may not be defined twice.
 		Set<String> variables = new HashSet<>();
 		Set<String> recordNames = new HashSet<>();
+		// What a define-values binds: no tail-call group member.
+		Set<String> valuesNames = new HashSet<>();
 		for (LispVal form : flat) {
 			if (form instanceof LispCons cons) {
 				Core core = syntaxOf(cons, scope);
@@ -3822,6 +4046,7 @@ final class SchemeLowering {
 					for (LispSymbol variable : formals(second(cons), cons).all()) {
 						refuseAgainInBody(variable, recordNames, cons);
 						variables.add(name(variable));
+						valuesNames.add(variable.name());
 						pairs.add(list(bind(variable, scope), LispNil.INSTANCE));
 					}
 				}
@@ -3836,12 +4061,27 @@ final class SchemeLowering {
 				}
 			}
 		}
+		List<Member> candidates = new ArrayList<>();
+		for (LispVal form : flat) {
+			if (form instanceof LispCons cons && syntaxOf(cons, scope) == Core.DEFINE) {
+				Definition definition = definition(cons);
+				if (definition.procedure() && definition.caseLambda() == null) {
+					candidates
+						.add(new Member(cons, definition, Objects.requireNonNull(lookup(definition.name(), scope))));
+				}
+			}
+		}
+		Map<LispCons, Group> groups = internalGroups(candidates, valuesNames, scope);
 		List<LispVal> lowered = new ArrayList<>();
 		for (int i = 0; i < flat.size(); i++) {
 			LispVal form = flat.get(i);
 			boolean last = i == flat.size() - 1;
 			Core core = form instanceof LispCons cons ? syntaxOf(cons, scope) : null;
-			if (core == Core.DEFINE && form instanceof LispCons cons) {
+			Group group = form instanceof LispCons cons ? groups.get(cons) : null;
+			if (group != null) {
+				lowered.addAll(internalGroupDefinition(group, member(group, form), scope, pairs));
+			}
+			else if (core == Core.DEFINE && form instanceof LispCons cons) {
 				Definition definition = definition(cons);
 				Binding self = this.assignedNames.contains(name(definition.name())) ? null
 						: lookup(definition.name(), scope);
@@ -4033,8 +4273,11 @@ final class SchemeLowering {
 
 	private LispSymbol variableSymbol(LispSymbol identifier, Scope scope) {
 		return switch (lookup(identifier, scope)) {
-			case Variable variable when this.libraryImports.contains(variable) -> throw new IllegalArgumentException(
-					"cannot assign " + identifier.name() + ": it is imported from a library");
+			// A library's own macro may assign the library's variable.
+			case Variable variable when this.libraryImports.contains(variable)
+					&& !this.foreignIdentifiers.contains(identifier) ->
+				throw new IllegalArgumentException(
+						"cannot assign " + identifier.name() + ": it is imported from a library");
 			case Variable variable -> variable.symbol();
 			case null -> cl(identifier);
 			default -> throw new IllegalArgumentException(

@@ -74,9 +74,12 @@ public final class ShadowedBuiltins {
 	 * {@code handler-case} clause heads ({@code (error (e) ...)} is a clause, not a
 	 * call), and {@code make-instance}/{@code class-of} have dedicated dispatch machinery
 	 * ({@code %mop-make-instance}, the metaobject runtime) a rename would sever.
+	 * {@code subtypep}'s wrapper leans on the {@code %subtypep-runtime} a gate has
+	 * already injected, so it cannot be spelled as a fallback
+	 * ({@link #LOWERED_WITHOUT_WRAPPER} says the same of its lowering).
 	 */
 	private static final Set<String> NOT_SHADOWABLE = Set.of(LispNames.ERROR, LispNames.CERROR, LispNames.SIGNAL,
-			LispNames.WARN, LispNames.MAKE_INSTANCE, LispNames.CLASS_OF);
+			LispNames.WARN, LispNames.MAKE_INSTANCE, LispNames.CLASS_OF, LispNames.SUBTYPEP);
 
 	/**
 	 * Wrapped names the INTERPRETER evaluates through an {@code evalCons} case, a macro

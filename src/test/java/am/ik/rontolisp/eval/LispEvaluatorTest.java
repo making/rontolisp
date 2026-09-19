@@ -5618,18 +5618,35 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalIntegerDecodeFloat() {
-		assertThat(eval("(multiple-value-list (integer-decode-float 1.5))").print()).isEqualTo("(3 -1 1.0)");
-		assertThat(eval("(multiple-value-list (integer-decode-float -0.5))").print()).isEqualTo("(1 -1 -1.0)");
-		assertThat(eval("(multiple-value-list (integer-decode-float 0.0))").print()).isEqualTo("(0 0 1.0)");
-		assertThat(eval("(multiple-value-list (integer-decode-float 2.0))").print()).isEqualTo("(1 1 1.0)");
-		assertThat(eval("(multiple-value-list (integer-decode-float 6.5))").print()).isEqualTo("(13 -1 1.0)");
-		assertThat(eval("(nth-value 0 (integer-decode-float 1.5))").print()).isEqualTo("3");
-		assertThat(eval("(nth-value 1 (integer-decode-float 1.5))").print()).isEqualTo("-1");
-		assertThat(eval("(nth-value 2 (integer-decode-float -1.5))").print()).isEqualTo("-1.0");
-		// A subnormal decodes exactly; compared piece-wise so the exact
-		// significand never prints (the rational would hang the printer).
+		// CLHS: the sign is an INTEGER (a float only for decode-float), and the
+		// significand is the float's significand scaled to float-digits bits --
+		// 53 for a normal double, exactly as SBCL answers (checked against
+		// (integer-decode-float ...) in SBCL 2.2.9). rontolisp used to strip
+		// factors of two from the significand and answer a float sign
+		// (.todo/896); a stripped, odd significand is wrong for any of these
+		// forms whose true 53-bit significand happens to be even.
+		assertThat(eval("(multiple-value-list (integer-decode-float 1.0))").print())
+			.isEqualTo("(4503599627370496 -52 1)");
+		assertThat(eval("(multiple-value-list (integer-decode-float 2.0))").print())
+			.isEqualTo("(4503599627370496 -51 1)");
+		assertThat(eval("(multiple-value-list (integer-decode-float -0.5))").print())
+			.isEqualTo("(4503599627370496 -53 -1)");
+		assertThat(eval("(multiple-value-list (integer-decode-float 1.5))").print())
+			.isEqualTo("(6755399441055744 -52 1)");
+		assertThat(eval("(multiple-value-list (integer-decode-float 0.0))").print()).isEqualTo("(0 0 1)");
+		assertThat(eval("(multiple-value-list (integer-decode-float 6.5))").print())
+			.isEqualTo("(7318349394477056 -50 1)");
+		assertThat(eval("(nth-value 0 (integer-decode-float 1.5))").print()).isEqualTo("6755399441055744");
+		assertThat(eval("(nth-value 1 (integer-decode-float 1.5))").print()).isEqualTo("-52");
+		assertThat(eval("(nth-value 2 (integer-decode-float -1.5))").print()).isEqualTo("-1");
+		// A subnormal's significand is shorter than 53 bits (float-digits), so the raw
+		// mantissa is not padded with extra factors of two: the smallest positive
+		// subnormal decodes to a 1-bit significand, matching SBCL exactly.
 		assertThat(eval("(nth-value 0 (integer-decode-float 4.9406564584124654d-324))").print()).isEqualTo("1");
 		assertThat(eval("(nth-value 1 (integer-decode-float 4.9406564584124654d-324))").print()).isEqualTo("-1074");
+		// A subnormal whose mantissa is even is not stripped either.
+		assertThat(eval("(multiple-value-list (integer-decode-float 9.881312916824931d-324))").print())
+			.isEqualTo("(2 -1074 1)");
 		// The largest double: a 53-bit significand and a small exponent.
 		assertThat(eval("(nth-value 0 (integer-decode-float 1.7976931348623157d308))").print())
 			.isEqualTo("9007199254740991");
@@ -5637,7 +5654,7 @@ class LispEvaluatorTest {
 		// Recomposition is the identity, exactly.
 		assertThat(eval("(multiple-value-bind (s e sign) (integer-decode-float 6.5) (= (* s (expt 2 e) sign) 6.5))")
 			.print()).isEqualTo("T");
-		assertThat(eval("(funcall #'integer-decode-float 1.5)").print()).isEqualTo("3");
+		assertThat(eval("(funcall #'integer-decode-float 1.5)").print()).isEqualTo("6755399441055744");
 		assertThatThrownBy(() -> eval("(integer-decode-float)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("expects 1 argument");
 		assertThatThrownBy(() -> eval("(integer-decode-float 1.0 2.0)")).isInstanceOf(LispEvalException.class)
@@ -9337,6 +9354,130 @@ class LispEvaluatorTest {
 	}
 
 	/**
+	 * The floor family as a FUNCTION object: an optional divisor, and both values through
+	 * a funcall, an apply, a variable and a function return. Shared verbatim with
+	 * JvmLispCompilerTest / WasmLispCompilerIntegrationTest and the
+	 * {@code floor-family-function-object} ci-spec case; every line is SBCL's.
+	 */
+	static final String FLOOR_FAMILY_FUNCTION_OBJECT = """
+			(defun ci-ffo-call (g a b) (funcall g a b))
+			(defun ci-ffo-tail (x) (funcall #'floor x))
+			(print (funcall #'floor 7 2))
+			(print (mapcar #'truncate '(7 9) '(2 4)))
+			(print (multiple-value-list (funcall #'floor 7.5)))
+			(print (multiple-value-list (let ((g #'floor)) (funcall g 7.5))))
+			(print (multiple-value-list (let ((g #'floor)) (funcall g 7 2))))
+			(print (multiple-value-list (funcall #'round 5 2)))
+			(print (multiple-value-list (apply #'ceiling '(7 2))))
+			(print (mapcar #'ffloor '(7 9) '(2 4)))
+			(print (multiple-value-list (funcall #'ftruncate 7 2)))
+			(print (multiple-value-list (let ((g #'fround)) (funcall g 7.5))))
+			(print (multiple-value-list (ci-ffo-call #'floor -7 2)))
+			(print (multiple-value-list (ci-ffo-call #'round 7 2)))
+			(print (multiple-value-list (ci-ffo-call #'ceiling 7 2)))
+			(print (multiple-value-list (ci-ffo-tail 7.5)))
+			(print (multiple-value-list (funcall #'truncate 7/2)))
+			(print (multiple-value-list (car (mapcar #'floor '(7) '(2)))))
+			(print (multiple-value-list (1+ (funcall #'floor 7 2))))
+			(multiple-value-bind (q r) (funcall #'floor 17 5) (print (list q r)))
+			(print (mapcar (lambda (x) (multiple-value-list (funcall #'ceiling x))) '(-0.0 0.5 -2.5)))
+			(print (mapcar (lambda (x) (multiple-value-list (funcall #'fround x))) '(-0.0 2.5 -7/2)))
+			""";
+
+	/** What SBCL prints for {@link #FLOOR_FAMILY_FUNCTION_OBJECT}, one line per print. */
+	static final String FLOOR_FAMILY_FUNCTION_OBJECT_EXPECTED = String.join("\n", "3", "(3 2)", "(7 0.5)", "(7 0.5)",
+			"(3 1)", "(2 1)", "(4 -1)", "(3.0 2.0)", "(3.0 1)", "(8.0 -0.5)", "(-4 1)", "(4 -1)", "(4 -1)", "(7 0.5)",
+			"(3 1/2)", "(3)", "(4)", "(3 2)", "((0 -0.0) (1 -0.5) (-2 -0.5))", "((0.0 -0.0) (2.0 0.5) (-4.0 1/2))");
+
+	@Test
+	void evalFloorFamilyFunctionObjectTakesADivisorAndAnswersBothValues() {
+		assertThat(printedLines(FLOOR_FAMILY_FUNCTION_OBJECT)).isEqualTo(FLOOR_FAMILY_FUNCTION_OBJECT_EXPECTED);
+		// Without a multiple-value operator anywhere in the program.
+		assertThat(printedLines("""
+				(print (funcall #'floor 7 2))
+				(print (mapcar #'truncate '(7 9) '(2 4)))
+				(print (mapcar #'fceiling '(7 9) '(2 4)))
+				(print (let ((g #'round)) (funcall g 7 2)))
+				(print (funcall #'floor 7.5))
+				""")).isEqualTo(String.join("\n", "3", "(3 2)", "(4.0 3.0)", "4", "7"));
+	}
+
+	/**
+	 * The other multiple-value built-ins as FUNCTION objects -- gethash (with its
+	 * optional default), find-symbol, intern, subtypep (with its optional environment),
+	 * read-from-string and array-displacement -- answer both values through a funcall, an
+	 * apply, a variable and a function return. Shared verbatim with JvmLispCompilerTest /
+	 * WasmLispCompilerIntegrationTest and the
+	 * {@code multiple-value-builtins-function-object} ci-spec case; every line is SBCL's.
+	 */
+	static final String MV_BUILTINS_FUNCTION_OBJECT = """
+			(defvar *ci-mvf-h* (make-hash-table))
+			(setf (gethash 1 *ci-mvf-h*) 'one)
+			(defun ci-mvf-call (g a b) (funcall g a b))
+			(defun ci-mvf-tail (k) (funcall #'gethash k *ci-mvf-h*))
+			(print (multiple-value-list (funcall #'gethash 1 *ci-mvf-h*)))
+			(print (multiple-value-list (funcall #'gethash 2 *ci-mvf-h*)))
+			(print (multiple-value-list (funcall #'gethash 2 *ci-mvf-h* 'none)))
+			(print (multiple-value-list (let ((g #'gethash)) (funcall g 1 *ci-mvf-h*))))
+			(print (multiple-value-list (apply #'gethash (list 1 *ci-mvf-h*))))
+			(print (multiple-value-list (ci-mvf-call #'gethash 2 *ci-mvf-h*)))
+			(print (multiple-value-list (ci-mvf-tail 1)))
+			(print (mapcar #'gethash '(1 2) (list *ci-mvf-h* *ci-mvf-h*)))
+			(print (multiple-value-list (car (mapcar #'gethash '(1) (list *ci-mvf-h*)))))
+			(multiple-value-bind (v p) (funcall #'gethash 1 *ci-mvf-h*) (print (list v p)))
+			(print (multiple-value-list (let ((g #'find-symbol)) (funcall g "CAR" "CL"))))
+			(print (multiple-value-list (apply #'find-symbol (list "CAR" "CL"))))
+			(print (multiple-value-list (funcall #'intern "CAR" "CL")))
+			(print (multiple-value-list (let ((g #'intern)) (funcall g "CAR" "CL"))))
+			(print (multiple-value-list (funcall #'subtypep 'integer 'number)))
+			(print (multiple-value-list (let ((g #'subtypep)) (funcall g 'string 'number))))
+			(print (multiple-value-list (funcall #'subtypep 'integer 'number nil)))
+			(print (multiple-value-list (funcall #'read-from-string "(a b) c")))
+			(print (multiple-value-list (let ((g #'read-from-string)) (funcall g "42 x"))))
+			(print (multiple-value-list (funcall #'array-displacement (make-array 3))))
+			(let* ((a (make-array 5)) (b (make-array 2 :displaced-to a :displaced-index-offset 1)))
+			  (multiple-value-bind (x o) (funcall #'array-displacement b) (print (list (eq x a) o))))
+			(let ((g1 (gensym)))
+			  (multiple-value-bind (v p) (gethash 1 *ci-mvf-h*) (print (list v p)))
+			  (print (multiple-value-list (funcall #'gethash 2 *ci-mvf-h*)))
+			  (print (- (parse-integer (symbol-name (gensym)) :start 1) (parse-integer (symbol-name g1) :start 1))))
+			""";
+
+	/** What SBCL prints for {@link #MV_BUILTINS_FUNCTION_OBJECT}, one line per print. */
+	static final String MV_BUILTINS_FUNCTION_OBJECT_EXPECTED = String.join("\n", "(ONE T)", "(NIL NIL)", "(NONE NIL)",
+			"(ONE T)", "(ONE T)", "(NIL NIL)", "(ONE T)", "(ONE NIL)", "(ONE)", "(ONE T)", "(CAR :EXTERNAL)",
+			"(CAR :EXTERNAL)", "(CAR :EXTERNAL)", "(CAR :EXTERNAL)", "(T T)", "(NIL T)", "(T T)", "((A B) 6)", "(42 3)",
+			"(NIL 0)", "(T 1)", "(ONE T)", "(NIL NIL)", "1");
+
+	@Test
+	void evalMultipleValueBuiltinsFunctionObjectsAnswerBothValues() {
+		assertThat(printedLines(MV_BUILTINS_FUNCTION_OBJECT)).isEqualTo(MV_BUILTINS_FUNCTION_OBJECT_EXPECTED);
+		// Without a multiple-value operator anywhere in the program.
+		assertThat(printedLines("""
+				(defvar *h* (make-hash-table))
+				(setf (gethash 1 *h*) 'one)
+				(print (funcall #'gethash 2 *h* 'none))
+				(print (mapcar #'gethash '(1 2) (list *h* *h*)))
+				(print (funcall #'subtypep 'integer 'number))
+				(print (let ((g #'find-symbol)) (funcall g "CAR" "CL")))
+				(print (funcall #'read-from-string "(a b) c"))
+				""")).isEqualTo(String.join("\n", "NONE", "(ONE NIL)", "T", "CAR", "(A B)"));
+	}
+
+	private static String printedLines(String program) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal expr : LispReader.readAllFromString(program)) {
+			evaluator.eval(expr);
+		}
+		return out.toString(StandardCharsets.UTF_8)
+			.lines()
+			.map(String::trim)
+			.filter(line -> !line.isEmpty())
+			.collect(joining("\n"));
+	}
+
+	/**
 	 * The cleanup-shape x exit-shape matrix of
 	 * {@link #evalUnwindProtectCleanupKeepsTheProtectedFormsValues()}, shared verbatim
 	 * with the compile backends' copies (JvmLispCompilerTest /
@@ -9720,6 +9861,22 @@ class LispEvaluatorTest {
 		assertThat(Files.isDirectory(tempDir.resolve("c/d"))).isTrue();
 		// No slash at all: a file in the working directory, so nothing is created.
 		assertThat(eval("(ensure-directories-exist \"plain.txt\")").print()).isEqualTo("\"plain.txt\"");
+	}
+
+	@Test
+	void ensureDirectoriesExistSignalsFileErrorWhenTheHostRefuses() {
+		// SBCL-verified: creating a directory under /proc (a virtual filesystem that
+		// refuses mkdir) signals a file-error whose pathname is the designator GIVEN --
+		// the whole namestring, not just the directory component that actually failed --
+		// the delete-file / rename-file shape (.kb/read-load-streams.md), not a bare
+		// SIMPLE-ERROR.
+		String path = "/proc/no-such-dir-fixture/x/y.txt";
+		assertThat(evalMulti("""
+				(handler-case
+				    (progn (ensure-directories-exist "%s") :no-error)
+				  (file-error (e) (namestring (file-error-pathname e)))
+				  (error () :other-error))
+				""".formatted(path)).print()).isEqualTo("\"" + path + "\"");
 	}
 
 	@Test
@@ -12238,6 +12395,177 @@ class LispEvaluatorTest {
 				(let ((i 0))
 				  (tagbody 5 (setq i (+ i 1)) (if (< i 3) (go 5)))
 				  i)""").print()).isEqualTo("3");
+	}
+
+	@Test
+	void aTagbodyStatementAnswersATailGoInsteadOfThrowingIt() {
+		// A go in the statement's tail -- through if, progn, let, let*, when, unless and
+		// cond -- is the label's body index; a statement with no go answers NO_JUMP.
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		LispEvaluator.TagbodyLabels labels = LispEvaluator.TagbodyLabels
+			.of(((LispCons) LispReader.readFromString("(a (f) b (g))")).toList());
+		Environment env = new Environment(null);
+		for (String statement : List.of("(go b)", "(if nil 1 (go b))", "(progn 1 (go b))",
+				"(let ((x t)) (if x (go b)))", "(let* ((x t) (y x)) (when y (go b)))", "(unless nil (go b))",
+				"(cond (nil 1) (t (go b)))")) {
+			assertThat(evaluator.evalTagbodyStatement(LispReader.readFromString(statement), env, labels)).as(statement)
+				.isEqualTo(2);
+		}
+		assertThat(evaluator.evalTagbodyStatement(LispReader.readFromString("(if nil (go a))"), env, labels))
+			.isEqualTo(LispEvaluator.NO_JUMP);
+	}
+
+	@Test
+	void aTailGoUndoesTheBindingsItLeavesAndReachesTheInnermostLabel() {
+		// SBCL 2.x prints the same two lists: the special binding of each pass is gone at
+		// the next, and the inner tagbody's own outer label shadows the enclosing one.
+		assertThat(evalMulti("""
+				(defvar *depth* 0)
+				(defun walk (n)
+				  (let ((trace nil))
+				    (tagbody
+				     top
+				       (let ((*depth* (+ *depth* 1)) (k n))
+				         (push (list k *depth*) trace)
+				         (let* ((m (- k 1)))
+				           (setq n m)
+				           (cond ((> m 2) (go top))
+				                 ((= m 2) (when t (go two)))
+				                 (t (unless nil (go done))))))
+				     two
+				       (progn (push 'two trace) (if (> n 0) (progn (setq n 0) (go top)) (go done)))
+				     done
+				       (push (list 'done *depth*) trace))
+				    (reverse trace)))
+				(list (walk 5)
+				      (let ((out nil))
+				        (tagbody
+				         outer
+				           (tagbody
+				              (let ((x (length out)))
+				                (if (< x 2) (progn (push x out) (go outer)) (go inner)))
+				            inner
+				              (push 'inner out)
+				              (if (< (length out) 4) (go outer) (go end))
+				            outer
+				              (push 'shadow out)
+				              (go end)
+				            end)
+				         end)
+				        (reverse out)))
+				""").print()).isEqualTo("(((5 1) (4 1) (3 1) TWO (0 1) (DONE 0)) (0 SHADOW))");
+	}
+
+	@Test
+	void aMalformedTagbodyStatementIsStillAProgramError() {
+		assertThat(eval("(handler-case (tagbody (let ((1 2)) (go x)) x) (error () 'error))").print())
+			.isEqualTo("ERROR");
+		assertThat(eval("(handler-case (tagbody (if . 1) x) (error () 'error))").print()).isEqualTo("ERROR");
+	}
+
+	@Test
+	void aGoInTheTailOfAFunctionCalledFromAStatementJumpsToTheStatementsTagbody() {
+		// The interpreter's go is dynamic (.kb/do-return-block.md): a tail go inside a
+		// function a statement tail-calls, or under case / multiple-value-bind in the
+		// statement's own tail, lands on the statement's tagbody either way.
+		assertThat(evalMulti("""
+				(defun helper (n) (if (< n 3) (go top) (go out)))
+				(list (let ((n 0)) (tagbody top (setq n (+ n 1)) (helper n) out) n)
+				      (let ((n 0))
+				        (tagbody top (setq n (+ n 1))
+				           (case n (3 (go out)) (t (multiple-value-bind (a) (values n) (go top))))
+				         out)
+				        n))
+				""").print()).isEqualTo("(3 3)");
+	}
+
+	@Test
+	void aTailCallRunsInConstantStack() {
+		// 100,000 deep: the CLI's 16 MiB worker held about 15,000 and JUnit's thread far
+		// fewer (.kb/interpreter-tail-calls.md). Through a procedure value, mutual
+		// defuns, apply, a lambda head, a labels function, a return-from, and every
+		// tail-transparent form in between.
+		assertThat(evalMulti("""
+				(defun through-value (self n) (if (= n 0) 'done (funcall self self (- n 1))))
+				(defun ev (n) (if (= n 0) t (od (- n 1))))
+				(defun od (n) (if (= n 0) nil (ev (- n 1))))
+				(defun apply-tail (self n) (if (= n 0) 'applied (apply self self (list (- n 1)))))
+				(defun lambda-head (n) (if (= n 0) 'lambda-end ((lambda (k) (lambda-head k)) (- n 1))))
+				(defun forms (n)
+				  (progn
+				    (let ((k n))
+				      (let* ((m k))
+				        (cond ((= m 0) 'forms-end)
+				              (t (when t
+				                   (unless nil
+				                     (block b
+				                       (case 1
+				                         (1 (multiple-value-bind (q) (floor m 1)
+				                              (the symbol (or nil (and t (forms (- q 1)))))))))))))))))
+				(defun labels-tail (n) (labels ((walk (k) (if (= k 0) 'walked (walk (- k 1))))) (walk n)))
+				(defun tail-exit (n) (if (= n 0) (return-from tail-exit 'bottom) (tail-exit (- n 1))))
+				(defun deep-inside (n) (dolist (x '(1)) (setq n (through-value #'through-value n))) n)
+				(list (through-value #'through-value 100000) (ev 100000) (apply-tail #'apply-tail 100000)
+				      (lambda-head 100000) (forms 100000) (labels-tail 100000) (tail-exit 100000)
+				      (deep-inside 100000))
+				""").print()).isEqualTo("(DONE T APPLIED LAMBDA-END FORMS-END WALKED BOTTOM DONE)");
+	}
+
+	@Test
+	void aTailPositionThatKeepsItsFrameStillUnwindsItsBookkeeping() {
+		// SBCL 2.x prints the same list: a special let and a special parameter restore
+		// their binding when the chain returns, an unwind-protect cleanup runs once per
+		// activation (innermost first), and handler-case, multiple-value-prog1, catch and
+		// progv keep their frame around the tail call inside them.
+		assertThat(evalMulti("""
+				(defvar *d* 0)
+				(defun deep-special (n) (let ((*d* (+ *d* 1))) (if (= n 0) *d* (deep-special (- n 1)))))
+				(defun special-param (*d* n) (if (= n 0) *d* (special-param (+ *d* 1) (- n 1))))
+				(defvar *log* nil)
+				(defun up (n) (unwind-protect (if (= n 0) 'done (up (- n 1))) (push n *log*)))
+				(list (deep-special 5) *d* (special-param 0 5) *d*
+				      (list (up 3) *log*)
+				      (handler-case (labels ((f (n) (if (= n 0) (error "bottom") (f (- n 1))))) (f 5))
+				        (error (e) (princ-to-string e)))
+				      (multiple-value-list (multiple-value-prog1 (values 1 2) (deep-special 2)))
+				      (catch 'tag (labels ((f (n) (if (= n 0) (throw 'tag 'thrown) (f (- n 1))))) (f 5)))
+				      (progv '(*d*) '(7) (labels ((f (n) (if (= n 0) *d* (f (- n 1))))) (f 3)))
+				      *d*)
+				""").print()).isEqualTo("(6 0 5 0 (DONE (3 2 1 0)) \"bottom\" (1 2) THROWN 7 0)");
+	}
+
+	@Test
+	void aReturnFromReachesTheActivationWhoseBlockTheClosureCaptured() {
+		// SBCL prints the same: an exit aimed at an activation a tail call has replaced
+		// ends the whole chain with its value, an exit through a callee's frame returns
+		// from the caller, an inner block is transparent to it -- and a block that has
+		// returned cannot be exited.
+		assertThat(evalMulti("""
+				(defun keep (n acc)
+				  (if (= n 0) (funcall (car acc)) (keep (- n 1) (cons (lambda () (return-from keep n)) acc))))
+				(defun callee (k) (funcall k) 'not-exited)
+				(defun caller () (callee (lambda () (return-from caller 'exited))))
+				(defun pass-through (n)
+				  (block inner (if (= n 0) (return-from pass-through 'outer) (pass-through (- n 1)))))
+				(list (keep 5 nil) (caller) (pass-through 3))
+				""").print()).isEqualTo("(1 EXITED OUTER)");
+		assertThatThrownBy(() -> eval("(let ((k nil)) (block b (setq k (lambda () (return-from b 1)))) (funcall k))"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("no enclosing block named B");
+	}
+
+	@Test
+	void aFuncallInTailPositionKeepsTheBuiltInsHandlerBindSeam() {
+		// What the closure raises still runs the handler-bind handlers before the
+		// unwind, with the restarts established below the handler still in reach --
+		// also when the funcall is reached at the end of a tail-call chain.
+		assertThat(evalMulti("""
+				(defun chain (n) (if (= n 0) (funcall (lambda () (no-such-function-here))) (chain (- n 1))))
+				(list (handler-bind ((error (lambda (c) (invoke-restart 'r))))
+				        (restart-case (funcall (lambda () (no-such-function-here))) (r () 'restarted)))
+				      (handler-bind ((error (lambda (c) (invoke-restart 'r))))
+				        (restart-case (chain 5) (r () 'restarted-deep))))
+				""").print()).isEqualTo("(RESTARTED RESTARTED-DEEP)");
 	}
 
 	@Test
@@ -22698,14 +23026,17 @@ class LispEvaluatorTest {
 	}
 
 	// read-from-string answers CL's SECOND value, the index of the first character it
-	// did not read. CLHS 23.2: a token's whitespace terminator is CONSUMED with the
-	// token, a terminating macro character is given back -- so "abc def" stops at 4 and
-	// "(1 2) x" at 5. See .kb/read-load-streams.md.
+	// did not read. CLHS 23.2: a whitespace terminator is CONSUMED with the datum it
+	// terminates, a terminating macro character is given back -- and (SBCL-verified) this
+	// holds for a list or a character literal exactly as it does for a token, so
+	// "abc def" stops at 4 and "(1 2) x" at 6 (past the space after the ')'), not 5. See
+	// .kb/read-load-streams.md.
 	@Test
 	void readFromStringAnswersTheStopIndexAsItsSecondValue() {
 		assertThat(evalMulti("(multiple-value-list (read-from-string \"abc\"))").print()).isEqualTo("(ABC 3)");
 		assertThat(evalMulti("(multiple-value-list (read-from-string \"abc  def\"))").print()).isEqualTo("(ABC 4)");
-		assertThat(evalMulti("(multiple-value-list (read-from-string \"(1 2) x\"))").print()).isEqualTo("((1 2) 5)");
+		assertThat(evalMulti("(multiple-value-list (read-from-string \"(1 2) x\"))").print()).isEqualTo("((1 2) 6)");
+		assertThat(evalMulti("(multiple-value-list (read-from-string \"(1 2)\"))").print()).isEqualTo("((1 2) 5)");
 		assertThat(evalMulti("(multiple-value-list (read-from-string \"123.45\"))").print()).isEqualTo("(123.45 6)");
 		assertThat(evalMulti("(nth-value 1 (read-from-string \"#x1f\"))").print()).isEqualTo("4");
 		// Across a function boundary and through a wrapper the consumer was handed: the

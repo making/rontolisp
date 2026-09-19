@@ -1724,13 +1724,22 @@ public final class LispPreludeLibrary {
 		// namestring that already ends in a slash IS the directory. A namestring with no
 		// slash names a file in the working directory and creates nothing. Returns the
 		// pathspec (see LispNames.ENSURE_DIRECTORIES_EXIST for the missing second value).
+		// %make-directories answers nil rather than signalling when the host refuses --
+		// the delete-file / rename-file shape (%file-error carrying the designator as
+		// given), so "a directory the host refuses is a file-error" has one definition.
 		SOURCES.put(LispNames.ENSURE_DIRECTORIES_EXIST, """
 				(defun ensure-directories-exist (%ede-path)
 				  (let* ((%ede-x (%path-ns %ede-path))
 				         (%ede-p (if (stringp %ede-x) %ede-x ""))
 				         (%ede-s (position #\\/ %ede-p :from-end t))
 				         (%ede-d (if %ede-s (subseq %ede-p 0 (+ %ede-s 1)) "")))
-				    (if (string= %ede-d "") %ede-path (progn (%make-directories %ede-d) %ede-path))))
+				    (if (string= %ede-d "")
+				        %ede-path
+				        (if (%make-directories %ede-d)
+				            %ede-path
+				            (%file-error %ede-path
+				                         (format nil "ENSURE-DIRECTORIES-EXIST: cannot create directory ~A"
+				                                 %ede-d))))))
 				""");
 		// %directory-in: directory's per-directory half -- the entries of ONE directory
 		// prefix that the final (name) component matches, or the pathspec itself when
@@ -2471,11 +2480,17 @@ public final class LispPreludeLibrary {
 				        c)))
 				""");
 		// integer-decode-float: like decode-float but the significand is an
-		// integer -- f = significand * 2^exponent * sign, exactly. The float is
-		// scaled into [2^52, 2^53) (exact in binary floating point, the
-		// decode-float argument above), truncated to an integer, and stripped of
-		// factors of two; every intermediate is scalar-small (a 53-bit
-		// significand at most), exact on the interpreter, the JVM and WASM-GC.
+		// integer -- f = significand * 2^exponent * sign, exactly, with the sign
+		// an INTEGER (CLHS: a float sign is decode-float's business only). The
+		// significand is scaled to exactly (float-digits f) bits -- 53 for a
+		// normal double, fewer for a subnormal, whose true precision is shorter
+		// (see float-digits below) -- never stripped of trailing factors of two
+		// beyond that width: a normal double's significand always fills the full
+		// 53 bits, even bits included, matching the fixed-width mantissa field
+		// the hardware stores (.todo/896 -- the previous body stripped every
+		// factor of two it could, answering 1 0 1.0 for 1.0d0 where SBCL answers
+		// 4503599627370496 -52 1). Every intermediate is scalar-small (at most a
+		// 53-bit significand), exact on the interpreter, the JVM and WASM-GC.
 		// Zero decodes as 0, 0 and its sign; a non-finite float has no
 		// decomposition and is signalled (x - x is 0.0 for every finite float and
 		// NaN for an infinity or a NaN -- a NaN used to loop forever).
@@ -2483,24 +2498,21 @@ public final class LispPreludeLibrary {
 				(defun integer-decode-float (f)
 				  (check-type f float)
 				  (if (= f 0.0)
-				      (values 0 0 (if (< f 0) -1.0 1.0))
+				      (values 0 0 (if (< f 0) -1 1))
 				      (if (not (= (- f f) 0.0))
 				          (error "integer-decode-float of a non-finite float is undefined")
-				          (let ((a (abs f))
-				                (e 0)
-				                (hi (expt 2.0 53))
-				                (lo (expt 2.0 52)))
+				          (let* ((a (abs f))
+				                 (e 0)
+				                 (digits (float-digits a))
+				                 (hi (expt 2.0 digits))
+				                 (lo (expt 2.0 (1- digits))))
 				            (while (>= a hi)
 				              (setq a (/ a 2.0))
 				              (setq e (+ e 1)))
 				            (while (< a lo)
 				              (setq a (* a 2.0))
 				              (setq e (- e 1)))
-				            (let ((n (truncate a)))
-				              (while (evenp n)
-				                (setq n (ash n -1))
-				                (setq e (+ e 1)))
-				              (values n e (if (< f 0) -1.0 1.0)))))))
+				            (values (truncate a) e (if (< f 0) -1 1))))))
 				""");
 		// float-sign: the sign of the first float as a float -- 1.0 or -1.0, or
 		// the second float's magnitude with the first float's sign. A comparison
@@ -2555,11 +2567,20 @@ public final class LispPreludeLibrary {
 		// integer-decode-float as integers, and the simplest rational in the
 		// interval is the continued-fraction mediant (one floor jump per term,
 		// never a unit walk). An integer-valued float answers its exact integer
-		// already a simplest rational, and the only one that round-trips by
+		// (already a simplest rational, and the only one that round-trips by
 		// construction) -- with no fraction involved this is exact on every
-		// backend. The round-trip postcondition is checked with the same float
-		// conversion the callers use; when it fails the exact value is the answer,
-		// which is what a backend whose fractions wrap (WASM-GC past i31) needs.
+		// backend, and the check runs BEFORE integer-decode-float: since
+		// .todo/896 that function answers a full-width (float-digits ax)-bit
+		// significand instead of one stripped down to its odd part, an
+		// integer-valued float's exponent is no longer reliably non-negative
+		// (2.0 decodes to significand 4503599627370496 and exponent -51, not
+		// significand 1 and exponent 1), so branching on the exponent's sign
+		// would route ordinary whole-number floats through the fractional
+		// interval search below with 53-bit-wide intermediates -- exactly the
+		// case a backend whose fractions wrap (WASM-GC past i31) cannot carry.
+		// The round-trip postcondition on the fractional branch is checked
+		// with the same float conversion the callers use; when it fails the
+		// exact value is the answer, for that same backend.
 		SOURCES.put(LispNames.RATIONALIZE,
 				"""
 						(defun rationalize (x)
@@ -2570,9 +2591,9 @@ public final class LispPreludeLibrary {
 						          (let ((ax (abs x)))
 						            (unless (= (- ax ax) 0.0)
 						              (error "rationalize of a non-finite float is undefined"))
-						            (multiple-value-bind (sig exp sign) (integer-decode-float ax)
-						              (if (<= 0 exp)
-						                  (if (< x 0) (- (ash sig exp)) (ash sig exp))
+						            (if (= (ftruncate ax) ax)
+						                (if (< x 0) (- (truncate ax)) (truncate ax))
+						                (multiple-value-bind (sig exp sign) (integer-decode-float ax)
 						                  (let* ((u (if (< exp -1022) (/ (expt 2 1074)) (expt 2 (+ exp -53 (integer-length sig)))))
 						                         (xc (/ sig (ash 1 (- exp))))
 						                         (half (/ u 2))

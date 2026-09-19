@@ -69,6 +69,14 @@ final class WasmIfCompiler {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compile(cons, ctx, false);
+	}
+
+	/**
+	 * As {@link #compile(LispCons, WasmLispCompiler.Ctx)}; with {@code tail}, both arms
+	 * are in tail position ({@code Ctx.tailPosition}) -- the test never is.
+	 */
+	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		List<LispVal> parts = cons.toList();
 		if (ctx.asyncResume != null && WasmAwaitAnalysis.countAwaits(cons) > 0) {
 			compileAsync(parts, ctx);
@@ -85,6 +93,7 @@ final class WasmIfCompiler {
 				ctx.writer.writeHeapType(Type.EQ.code());
 			}
 			else {
+				ctx.tailPosition = tail;
 				WasmExprCompiler.compileExpr(live, ctx);
 			}
 			return;
@@ -99,6 +108,7 @@ final class WasmIfCompiler {
 		// nested in a branch computes the correct br depth to its enclosing %block.
 		ctx.wasmCtrlDepth++;
 		if (parts.size() > 3) {
+			ctx.tailPosition = tail;
 			WasmExprCompiler.compileExpr(parts.get(3), ctx);
 		}
 		else {
@@ -106,6 +116,7 @@ final class WasmIfCompiler {
 			ctx.writer.writeHeapType(Type.EQ.code());
 		}
 		ctx.writer.write(Instruction.ELSE);
+		ctx.tailPosition = tail;
 		WasmExprCompiler.compileExpr(parts.get(2), ctx);
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END);

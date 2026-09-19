@@ -1,12 +1,16 @@
 # Deviations
 
-- **Tail calls are proper only where they become a loop**: a named `let` or `do`, a
-  procedure calling itself in tail position, and top-level procedures of a file that
-  call each other in tail position (`even?`/`odd?`, a state machine, an evaluator's
-  `eval`/`apply`). A tail call through a procedure value (an argument, a variable, `apply`),
-  one among internal definitions, and any at the REPL uses stack: a procedure calling
-  itself through an argument overflows the JVM's default stack about 1,700 calls deep,
-  WebAssembly about 2,700 and the interpreter about 15,000.
+- **Tail calls are proper on WebAssembly and in the interpreter, and on the JVM only where
+  they become a loop.** Compiled to WebAssembly (`-o prog.wasm`, `--component`) and run by
+  the interpreter (`rontolisp prog.scm`, the REPL), every call in tail position runs in
+  constant stack. On the JVM that holds for a named `let` or `do`, a procedure calling
+  itself in tail position, and procedures that call each other in tail position
+  (`even?`/`odd?`, a state machine, an evaluator's `eval`/`apply`) when they are the
+  top-level procedures of a file, the internal definitions of one body or the `lambda`
+  bindings of one `letrec`; a tail call through a procedure value (an argument, a
+  variable, `apply`) uses stack there: a procedure calling itself through an argument
+  overflows about 16,000 calls deep compiled to the JVM, on its 16 MiB stack
+  (`-Drontolisp.stack` raises it).
 - **`call/cc` is escape-only.** A continuation can be called while its `call/cc` is still
   running, once. There is no re-entry, so no generators or coroutines through it, and
   `dynamic-wind` runs its `before` exactly once.
@@ -45,8 +49,9 @@
   with that byte's code instead of signalling an error.
 - A library found in a file is looked up beside the file the program started from, with
   no search path. A `define-library` written in a file is seen by that file alone: a file
-  `load`ed beside it finds the library only as a `.sld` file. A library cannot export
-  syntax. A record type a library defines prints its names with the library's name in
+  `load`ed beside it finds the library only as a `.sld` file. A name an exported macro's
+  template uses that its library neither defines nor imports means what it means where the
+  macro is used. A record type a library defines prints its names with the library's name in
   front of them. Importing one name from two libraries is not refused; the later import
   wins.
 - A `cond-expand` is decided when the program is read, against the features every

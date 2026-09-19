@@ -9900,11 +9900,15 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void integerDecodeFloat() throws Exception {
-		// Only small significands are pinned: the significand of a general
-		// double leaves the i31 range, like any other limb-tier integer.
+		// CLHS: the sign is an INTEGER and the significand is scaled to
+		// float-digits bits (53 for a normal double), not stripped of factors
+		// of two -- matches SBCL exactly (.todo/896). A normal double's
+		// significand leaves the i31 range, like any other limb-tier integer,
+		// and the bignum path answers it exactly on this backend too.
 		assertThat(compileAndRunPrelude(
 				"(print (multiple-value-list (integer-decode-float 1.5))) (print (multiple-value-list (integer-decode-float -0.5))) (print (multiple-value-list (integer-decode-float 0.0))) (print (multiple-value-list (integer-decode-float 2.0))) (print (multiple-value-list (integer-decode-float 6.5))) (print (nth-value 1 (integer-decode-float 1.5))) (print (funcall #'integer-decode-float 1.5))"))
-			.isEqualTo("(3 -1 1.0)\n(1 -1 -1.0)\n(0 0 1.0)\n(1 1 1.0)\n(13 -1 1.0)\n-1\n3");
+			.isEqualTo(
+					"(6755399441055744 -52 1)\n(4503599627370496 -53 -1)\n(0 0 1)\n(4503599627370496 -51 1)\n(7318349394477056 -50 1)\n-52\n6755399441055744");
 	}
 
 	@Test
@@ -10958,6 +10962,101 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo(String.join("\n", "(3 1)", "(7 0.5)", "(7 0.5)", "(4 -1)", "(4 -1)", "(5 T)",
 				"(NIL NIL)", "(2 1)", "(3 1)", "((0 1) (1 2) (3 0))", "(2 1)", "(3 -1)", "(4 -1)", "(2 1)", "(1 2)",
 				"(3 2)", "(T T)", "(ABC 3)", "(CAR :INHERITED)", "(3)", "((3))", "(3)", "(2)"));
+	}
+
+	@Test
+	void floorFamilyFunctionObjectTakesADivisorAndAnswersBothValues() throws Exception {
+		// The floor family as a function object: an optional divisor, and both values
+		// through a funcall, an apply, a variable and a function return. Shared verbatim
+		// with LispEvaluatorTest.FLOOR_FAMILY_FUNCTION_OBJECT and the
+		// floor-family-function-object ci-spec case; every line is SBCL's.
+		assertThat(compileAndRun("""
+				(defun ci-ffo-call (g a b) (funcall g a b))
+				(defun ci-ffo-tail (x) (funcall #'floor x))
+				(print (funcall #'floor 7 2))
+				(print (mapcar #'truncate '(7 9) '(2 4)))
+				(print (multiple-value-list (funcall #'floor 7.5)))
+				(print (multiple-value-list (let ((g #'floor)) (funcall g 7.5))))
+				(print (multiple-value-list (let ((g #'floor)) (funcall g 7 2))))
+				(print (multiple-value-list (funcall #'round 5 2)))
+				(print (multiple-value-list (apply #'ceiling '(7 2))))
+				(print (mapcar #'ffloor '(7 9) '(2 4)))
+				(print (multiple-value-list (funcall #'ftruncate 7 2)))
+				(print (multiple-value-list (let ((g #'fround)) (funcall g 7.5))))
+				(print (multiple-value-list (ci-ffo-call #'floor -7 2)))
+				(print (multiple-value-list (ci-ffo-call #'round 7 2)))
+				(print (multiple-value-list (ci-ffo-call #'ceiling 7 2)))
+				(print (multiple-value-list (ci-ffo-tail 7.5)))
+				(print (multiple-value-list (funcall #'truncate 7/2)))
+				(print (multiple-value-list (car (mapcar #'floor '(7) '(2)))))
+				(print (multiple-value-list (1+ (funcall #'floor 7 2))))
+				(multiple-value-bind (q r) (funcall #'floor 17 5) (print (list q r)))
+				(print (mapcar (lambda (x) (multiple-value-list (funcall #'ceiling x))) '(-0.0 0.5 -2.5)))
+				(print (mapcar (lambda (x) (multiple-value-list (funcall #'fround x))) '(-0.0 2.5 -7/2)))
+				""")).isEqualTo(String.join("\n", "3", "(3 2)", "(7 0.5)", "(7 0.5)", "(3 1)", "(2 1)", "(4 -1)",
+				"(3.0 2.0)", "(3.0 1)", "(8.0 -0.5)", "(-4 1)", "(4 -1)", "(4 -1)", "(7 0.5)", "(3 1/2)", "(3)", "(4)",
+				"(3 2)", "((0 -0.0) (1 -0.5) (-2 -0.5))", "((0.0 -0.0) (2.0 0.5) (-4.0 1/2))"));
+		// Without a multiple-value operator anywhere in the program.
+		assertThat(compileAndRun("""
+				(print (funcall #'floor 7 2))
+				(print (mapcar #'truncate '(7 9) '(2 4)))
+				(print (mapcar #'fceiling '(7 9) '(2 4)))
+				(print (let ((g #'round)) (funcall g 7 2)))
+				(print (funcall #'floor 7.5))
+				""")).isEqualTo(String.join("\n", "3", "(3 2)", "(4.0 3.0)", "4", "7"));
+	}
+
+	@Test
+	void multipleValueBuiltinsFunctionObjectsAnswerBothValues() throws Exception {
+		// gethash/find-symbol/intern/subtypep/read-from-string/array-displacement as
+		// function objects answer both values. Shared verbatim with
+		// LispEvaluatorTest.MV_BUILTINS_FUNCTION_OBJECT and the
+		// multiple-value-builtins-function-object ci-spec case; every line is SBCL's.
+		assertThat(compileAndRun("""
+				(defvar *ci-mvf-h* (make-hash-table))
+				(setf (gethash 1 *ci-mvf-h*) 'one)
+				(defun ci-mvf-call (g a b) (funcall g a b))
+				(defun ci-mvf-tail (k) (funcall #'gethash k *ci-mvf-h*))
+				(print (multiple-value-list (funcall #'gethash 1 *ci-mvf-h*)))
+				(print (multiple-value-list (funcall #'gethash 2 *ci-mvf-h*)))
+				(print (multiple-value-list (funcall #'gethash 2 *ci-mvf-h* 'none)))
+				(print (multiple-value-list (let ((g #'gethash)) (funcall g 1 *ci-mvf-h*))))
+				(print (multiple-value-list (apply #'gethash (list 1 *ci-mvf-h*))))
+				(print (multiple-value-list (ci-mvf-call #'gethash 2 *ci-mvf-h*)))
+				(print (multiple-value-list (ci-mvf-tail 1)))
+				(print (mapcar #'gethash '(1 2) (list *ci-mvf-h* *ci-mvf-h*)))
+				(print (multiple-value-list (car (mapcar #'gethash '(1) (list *ci-mvf-h*)))))
+				(multiple-value-bind (v p) (funcall #'gethash 1 *ci-mvf-h*) (print (list v p)))
+				(print (multiple-value-list (let ((g #'find-symbol)) (funcall g "CAR" "CL"))))
+				(print (multiple-value-list (apply #'find-symbol (list "CAR" "CL"))))
+				(print (multiple-value-list (funcall #'intern "CAR" "CL")))
+				(print (multiple-value-list (let ((g #'intern)) (funcall g "CAR" "CL"))))
+				(print (multiple-value-list (funcall #'subtypep 'integer 'number)))
+				(print (multiple-value-list (let ((g #'subtypep)) (funcall g 'string 'number))))
+				(print (multiple-value-list (funcall #'subtypep 'integer 'number nil)))
+				(print (multiple-value-list (funcall #'read-from-string "(a b) c")))
+				(print (multiple-value-list (let ((g #'read-from-string)) (funcall g "42 x"))))
+				(print (multiple-value-list (funcall #'array-displacement (make-array 3))))
+				(let* ((a (make-array 5)) (b (make-array 2 :displaced-to a :displaced-index-offset 1)))
+				  (multiple-value-bind (x o) (funcall #'array-displacement b) (print (list (eq x a) o))))
+				(let ((g1 (gensym)))
+				  (multiple-value-bind (v p) (gethash 1 *ci-mvf-h*) (print (list v p)))
+				  (print (multiple-value-list (funcall #'gethash 2 *ci-mvf-h*)))
+				  (print (- (parse-integer (symbol-name (gensym)) :start 1) (parse-integer (symbol-name g1) :start 1))))
+				""")).isEqualTo(String.join("\n", "(ONE T)", "(NIL NIL)", "(NONE NIL)", "(ONE T)", "(ONE T)",
+				"(NIL NIL)", "(ONE T)", "(ONE NIL)", "(ONE)", "(ONE T)", "(CAR :EXTERNAL)", "(CAR :EXTERNAL)",
+				"(CAR :EXTERNAL)", "(CAR :EXTERNAL)", "(T T)", "(NIL T)", "(T T)", "((A B) 6)", "(42 3)", "(NIL 0)",
+				"(T 1)", "(ONE T)", "(NIL NIL)", "1"));
+		// Without a multiple-value operator anywhere in the program.
+		assertThat(compileAndRun("""
+				(defvar *h* (make-hash-table))
+				(setf (gethash 1 *h*) 'one)
+				(print (funcall #'gethash 2 *h* 'none))
+				(print (mapcar #'gethash '(1 2) (list *h* *h*)))
+				(print (funcall #'subtypep 'integer 'number))
+				(print (let ((g #'find-symbol)) (funcall g "CAR" "CL")))
+				(print (funcall #'read-from-string "(a b) c"))
+				""")).isEqualTo(String.join("\n", "NONE", "(ONE NIL)", "T", "CAR", "(A B)"));
 	}
 
 	@Test
@@ -12537,8 +12636,9 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("""
 				(print (multiple-value-list (read-from-string "abc")))
 				(print (nth-value 1 (read-from-string "(1 2)")))
+				(print (multiple-value-list (read-from-string "(1 2) x")))
 				(multiple-value-bind (v i) (read-from-string "(a b)") (print v) (print i))
-				""")).isEqualTo("(ABC 3)\n5\n(A B)\n5");
+				""")).isEqualTo("(ABC 3)\n5\n((1 2) 6)\n(A B)\n5");
 	}
 
 	@Test
@@ -12921,6 +13021,32 @@ class WasmLispCompilerIntegrationTest {
 				NIL""";
 		assertThat(compileAndRunWithDir(code)).isEqualTo(expected);
 		assertThat(compileAndRunComponentWithDir(code)).isEqualTo(expected);
+	}
+
+	private static final String ENSURE_DIRECTORIES_EXIST_REFUSED_PROGRAM = """
+			(with-open-file (out "ede-block.txt" :direction :output) (write-line "x" out))
+			(handler-case
+			    (progn (ensure-directories-exist "ede-block.txt/sub/x.txt") :no-error)
+			  (file-error (e) (print (namestring (file-error-pathname e))))
+			  (error () (print :other-error)))""";
+
+	private static final String ENSURE_DIRECTORIES_EXIST_REFUSED_EXPECTED = "\"ede-block.txt/sub/x.txt\"";
+
+	@Test
+	void ensureDirectoriesExistSignalsFileErrorWhenTheHostRefuses() throws Exception {
+		// SBCL-verified: creating a directory THROUGH an existing plain file signals a
+		// file-error whose pathname is the designator GIVEN, not a bare SIMPLE-ERROR
+		// (WasmMakeDirectoriesCompiler used to signal one directly instead of the Lisp
+		// ensure-directories-exist testing %make-directories' nil, the
+		// %delete-file / %rename-file shape).
+		assertThat(compileAndRunWithDirs(ENSURE_DIRECTORIES_EXIST_REFUSED_PROGRAM))
+			.isEqualTo(ENSURE_DIRECTORIES_EXIST_REFUSED_EXPECTED);
+	}
+
+	@Test
+	void ensureDirectoriesExistSignalsFileErrorWhenTheHostRefusesOnTheComponentPath() throws Exception {
+		assertThat(compileAndRunComponentWithDirs(ENSURE_DIRECTORIES_EXIST_REFUSED_PROGRAM))
+			.isEqualTo(ENSURE_DIRECTORIES_EXIST_REFUSED_EXPECTED);
 	}
 
 	@Test
@@ -25364,6 +25490,48 @@ class WasmLispCompilerIntegrationTest {
 				(defun typed (n) (let ((n (+ n 1)) (m (* n 2))) (+ n m)))
 				(print (typed 5))
 				""")).isEqualTo("(2 1)\n(2 1)\n(2 1)\n(10 1)\n16");
+	}
+
+	@Test
+	void aTailCallRunsInConstantStackAndATailPositionThatKeepsItsFrameStillDoes() throws Exception {
+		// Every call in tail position is a return_call (Ctx.tailPosition,
+		// .kb/wasm-tail-calls.md): through a function value (the dispatcher tail-calls
+		// its target too), a direct call, a labels lambda, apply of a literal and of a
+		// value, and the value of a return-from / let / progn / the chain. 300,000 deep
+		// overflowed wasmtime's stack at about 3,000 before. The second line is what
+		// must NOT be a tail call: a special let's body (the restore runs after it), an
+		// unwind-protect's protected form, a handler-case body and a
+		// multiple-value-prog1's first form all keep their frame.
+		assertThat(compileAndRunEh(
+				"""
+						(defun through-value (self n) (if (= n 0) 'done (funcall self self (- n 1))))
+						(defun ping (n) (if (= n 0) 'pong-done (pong (- n 1))))
+						(defun pong (n) (if (= n 0) 'ping-done (ping (- n 1))))
+						(defun via-labels (n) (labels ((step (i acc) (if (= i 0) acc (step (- i 1) (+ acc 1))))) (step n 0)))
+						(defun via-apply (n) (if (= n 0) 'applied (apply #'via-apply (list (- n 1)))))
+						(defun via-value-apply (f n) (if (= n 0) 'value-applied (apply f f (list (- n 1)))))
+						(defun via-block (n) (block b (dolist (x '(1)) (return-from b (through-value #'through-value n))) 'never))
+						(defun via-let (n) (let ((m (+ n 0))) (progn (the t (through-value #'through-value m)))))
+						(print (list (through-value #'through-value 300000) (ping 300000) (via-labels 300000)
+						             (via-apply 300000) (via-value-apply #'via-value-apply 300000)
+						             (via-block 300000) (via-let 300000)))
+						(defvar *depth* 0)
+						(defun reads-special () *depth*)
+						(defun binds-special () (let ((*depth* 7)) (reads-special)))
+						(defvar *log* nil)
+						(defun protected () (unwind-protect (progn (push :body *log*) :value) (push :cleanup *log*)))
+						(defun raises () (error "boom"))
+						(defun catches () (handler-case (raises) (error () :caught)))
+						(defun first-of-two () (multiple-value-prog1 (values 1 2) (push :after *log*)))
+						(print (list (binds-special) *depth* (protected) (reverse *log*) (catches) (first-of-two)))
+						"""))
+			.isEqualTo("(DONE PONG-DONE 300000 APPLIED VALUE-APPLIED DONE DONE)\n"
+					+ "(7 0 :VALUE (:BODY :CLEANUP) :CAUGHT 1)");
+		// The component wraps the same core module: the same depth through a value.
+		assertThat(compileAndRunComponent("""
+				(defun through-value (self n) (if (= n 0) 'done (funcall self self (- n 1))))
+				(print (through-value #'through-value 300000))
+				""")).isEqualTo("DONE");
 	}
 
 }

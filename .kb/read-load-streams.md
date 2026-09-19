@@ -75,10 +75,16 @@ interpreter's alone** (the `*read-eval*` shape -- the emitted readers have no su
   which is what lets it answer for text the parse refuses. JVM: `_readFromString` then
   `_readPos`. WASM: the cursor delta, the start value riding the OPERAND STACK across the
   parse call rather than costing a scratch address.
-- CLHS 23.2 decides the last character: a token's whitespace terminator is CONSUMED with
-  the token, a terminating macro character is given back. `"abc  def"` -> 4, `"(1 2) x"`
-  -> 5. `LispLexer.lastSkipEndedInToken` is the flag; a datum that ended at a closing
-  delimiter or a string's own closing quote takes no trailing character.
+- CLHS 23.2 decides the last character: a whitespace terminator is CONSUMED with the
+  datum it terminates, a terminating macro character is given back -- and (SBCL-verified,
+  2026-09-19, `.todo/903`) this holds for ANY datum, not only a token: a list, a string
+  and a character literal all swallow one trailing whitespace character exactly like a
+  symbol or number does. `"abc  def"` -> 4, `"(1 2) x"` -> 6, `"\"str\" x"` -> 6. The
+  premise once recorded here (only a token's terminator is consumed) was the bug
+  `.todo/903` fixed: interpreter `LispLexer.datumEnd` no longer gates the trailing-
+  whitespace check on how the datum ended; JVM `_readFromString` advances `_readPos` past
+  it after `_readExpr` returns; WASM `%read-from-string-end` advances the cursor the same
+  way before computing the delta.
 - `*read-suppress*` (CLHS 2.2): the datum's characters are consumed and NOTHING is parsed,
   so an unknown package, a bogus character name and an out-of-range digit all pass. The
   interpreter's built-in reads the variable through `Environment.setReadSuppressQuery`,
@@ -103,7 +109,8 @@ Pinned by `LispEvaluatorTest#readFromStringAnswersTheStopIndexAsItsSecondValue`,
 `#aDiscardedReadFromStringLeavesNoSecondValueBehind`,
 `#readSuppressConsumesTheDatumAndAnswersNil`,
 `JvmLispCompilerTest#compileReadFromStringStopIndex`,
-`WasmLispCompilerIntegrationTest#readFromStringStopIndex`.
+`WasmLispCompilerIntegrationTest#readFromStringStopIndex`, ci-spec
+`read-from-string-stop-index`.
 
 ## `read-line`, `read-char`, `peek-char`
 - `read-line` strips one trailing CR everywhere (`BufferedReader.readLine`; WASM `_read_line` does an
@@ -451,18 +458,21 @@ paths (`.todo/212`).
   (`FUNC_MAKE_DIRECTORIES` after `FUNC_C_SIGNUM`, called by `WasmMakeDirectoriesCompiler`)
   over the THIRTEENTH preview1 import, `path_create_directory`. Preview 1 creates ONE
   level per call, so the body walks the slash-separated prefixes and creates each --
-  the recursive answer the other two give. It SIGNALS on WASM where `file-length`
-  answers nil, because its contract has no "cannot be determined" answer: the runtime
-  answers T-or-nil and the call-site compiler raises the error on nil (the `_open`
-  precedent, catchable in EH mode). A nonzero final errno is VERIFIED by opening the
-  path as a directory, which turns "already there" into T whatever errno the host used.
+  the recursive answer the other two give. **Answers nil rather than signalling** (the
+  `%delete-file` / `%rename-file` shape below, since `.todo/900`: before that the
+  interpreter and WASM signalled a bare `SIMPLE-ERROR` at the primitive and the JVM
+  ignored `mkdirs`' result outright and answered success for a directory it never made).
+  A nonzero final WASM errno is VERIFIED by opening the path as a directory, which turns
+  "already there" into T whatever errno the host used; the JVM re-checks with
+  `File.isDirectory()` after `mkdirs()` for the same reason (`mkdirs` answers false both
+  for "already there" and for "refused", so the boolean alone cannot tell them apart).
 - `delete-file` over `%delete-file`, which answers nil rather than signalling when the file is absent
   or the host refused, so "a missing file is an error" lives once in the Lisp above it -- a
-  `file-error` through `%file-error`, as are `rename-file`'s and `truename`'s. Both
-  WASM backends unlink for real now (`_delete_file` over the FOURTEENTH preview1 import,
-  `path_unlink_file`, called by `WasmDeleteFileCompiler`). mito's `generate-migrations`
-  deletes superseded migration files on all four. Removing a DIRECTORY still signals:
-  unlink cannot rmdir (above).
+  `file-error` through `%file-error`, as are `rename-file`'s, `truename`'s and, since
+  `.todo/900`, `ensure-directories-exist`'s. Both WASM backends unlink for real now
+  (`_delete_file` over the FOURTEENTH preview1 import, `path_unlink_file`, called by
+  `WasmDeleteFileCompiler`). mito's `generate-migrations` deletes superseded migration
+  files on all four. Removing a DIRECTORY still signals: unlink cannot rmdir (above).
 - `rename-file` over `%rename-file` (same nil-not-signal rule); the new name is MERGED with the old
   one, so a bare file name keeps the directory. Both WASM backends move for real
   (`_rename_file` over the FIFTEENTH preview1 import, `path_rename` -- the one new
@@ -474,9 +484,9 @@ paths (`.todo/212`).
   `adapter.wat` implements all three over `wasi:filesystem@0.3.0`
   (`create-directory-at` / `unlink-file-at` / `rename-at`, SYNC-lowered like `open-at`,
   sharing its `0x50050` result cell); `adapter-http-server-p1.wat` exports them as
-  errno 76 -- the serve world has no filesystem, and `%delete-file`/`%rename-file`
-  read a nonzero errno as nil while `%make-directories` signals through its call-site
-  error.
+  errno 76 -- the serve world has no filesystem, so `%make-directories`/`%delete-file`/
+  `%rename-file` all read a nonzero errno as nil there, and the Lisp callers above them
+  signal identically.
 
 **`uiop:read-file-string` must NOT size its buffer from `file-length`**: prelude Lisp over
 `with-open-file` + a CHUNKED `read-sequence` loop, both properties load-bearing. **The loop stops on

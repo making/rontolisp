@@ -662,8 +662,8 @@ report's two top rows: 370 + 299 lost forms) and to fail the COMPILE on the comp
   on, so only this lowering can reach it), because the entry landing pad's report of the instance can
   then come only from the payload cdr. Without the third, `(print (handler-case (error "warm") (error
   (e) :ok))) (remove 1 '(1 2) :bogus 4)` printed `Unhandled condition: ` and nothing else.
-- **The interpreter's evaluation seam**, `LispEvaluator.evalConsClassifyingRawFailures` around every
-  `evalCons`: an `IllegalArgumentException` / `IndexOutOfBoundsException` escaping a form is a
+- **The interpreter's evaluation seam**, the catch clauses of `LispEvaluator.evalCons`'s loop frame
+  (`.kb/interpreter-tail-calls.md`): an `IllegalArgumentException` / `IndexOutOfBoundsException` escaping a form is a
   `program-error` (that is how the expander and the special forms report a malformed form), a cast /
   arithmetic / negative-size failure takes `rawFailureConditionClass`'s rule, and an
   `UnsupportedOperationException` -- a rontolisp LIMITATION (`setf does not support place`, `map

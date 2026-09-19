@@ -760,7 +760,7 @@ lowering would have hidden both from the scans that run first.
   "misplaced" errors; a free `...` also counts as the ellipsis. None of the 1,586 SICP
   samples spells any of them, so the corpus classification (`providedNames`) is unmoved.
 - **Stated limits**: `syntax-rules` only; a macro is per FILE (a `load`ed file neither
-  sees nor exports macros); a template's names inside a TOP-LEVEL `define-record-type`
+  sees nor exports macros; a library exports them, "Exported syntax"); a template's names inside a TOP-LEVEL `define-record-type`
   are stripped, not renamed (a body's are renamed like any internal definition's); `eval` knows no macro and refuses `define-syntax` by name (its keyword
   list in `scheme.lisp`); an improper use `(m 1 . 2)` is matched rather than refused.
 - Pinned by the three `syntax-rules-...` / `syntax-definitions-...` cases of
@@ -1195,10 +1195,8 @@ variable is read live (the library's `set!` shows). No backend learns anything.
   Scheme).
 - **Exports** (`exports`): an identifier or `(rename internal external)`, resolved in the
   library scope AFTER its body is lowered; a name neither defined nor imported, or
-  exported twice, is a positioned error. A macro cannot be exported (refused by name,
-  `SchemeExpander.definesSyntax`): the importer's expander would need the library's
-  environment, and a template's free reference to a PRIVATE name would have to resolve
-  to the library binding in the importer's lowering -- follow-up work.
+  exported twice, is a positioned error. A macro is exported too ("Exported syntax"
+  below).
 - **Importer rules**: `set!` of an imported library variable is refused (R7RS 5.6.1) in
   both standards; a `define` over a library import wins under `rontolisp` (only the
   importer's name changes: the library keeps calling its own) and is refused under
@@ -1248,6 +1246,62 @@ the `files:` field writes a case's other files beside it),
 `RontoLispCliTest.aSchemeProgramReadsItsLibraryFilesAndIncludesBesideItOnEveryPath` (CLI
 interpreter, `-o`, once-per-program across two loaded files, the REPL) and the reference
 pages' `; file: NAME` blocks (`DocExamplesTest`).
+
+## Exported syntax (2026-09-19, `.todo/883`)
+
+**An exported macro is the library expander's own `Macro` -- its `syntax-rules` and its
+DEFINITION `Env` -- and a free template identifier reaches the importer's lowering as the
+library's `Binding` itself, through a generated identifier.** No datum form of the macro
+is re-read by the importer, so nothing about the library has to be spelled twice.
+
+- **Export**: `exports` asks `SchemeExpander.exportedMacro(name)` FIRST (a
+  `define-syntax` shadows an import of the name, as the expander resolves it) and wraps
+  it in the lowering's `ImportedSyntax` binding. `importSet`'s `only`/`except`/`prefix`/
+  `rename` move it like any binding; a library that imports a macro re-exports it by the
+  plain `global.find`. It joins `libraryImports`, so strict R7RS refuses a `define` over it.
+- **Every `Env` knows its lowering** (`Env.host`, the `Host` of the expander whose global
+  it descends from). Resolution walks the frames as before; then, at the root, it asks
+  THAT host: a keyword, else an imported macro (`Host.importedMacro`), else -- only when
+  the root is another lowering's -- that lowering's top-level binding (`Host.binding`,
+  its `lookup`). A top-level `Variable` found in another lowering's global frame is that
+  lowering's spelling and is translated the same way. The answer is the `Imported`
+  meaning.
+- **`Imported` is emitted as `Host.foreign(binding)`**: a fresh generated `%SCM-L<n>`
+  the importer puts in its global scope bound to the library's `Binding` object (one per
+  binding per lowering). So a private `defun` is a direct call to `s%%(lib)name`, a record
+  predicate stays fused, a builtin is the builtin whatever the importer did to its name,
+  and a variable is read live. A template may `set!` the library's variable (Gauche
+  agrees): `variableSymbol` exempts a foreign identifier from the "imported from a
+  library" refusal. It cannot assign a library procedure that the library itself never
+  assigns -- that is a `defun`, "not a variable in this file".
+- **Aliases are shared by every expander of one top-level lowering**
+  (`SchemeLibraries.aliases`, `SchemeExpander.Aliases`): the importer strips and keys
+  aliases a library's own expansion created.
+- **The gate**: `SchemeExpander.needed` also fires for a program spelling a name bound to
+  an imported macro; nothing else changes for a program that imports none. A session runs
+  a buffer's top-level `import`s BEFORE expanding it (`sessionImport`, again after, as
+  before), so `(import (m)) (m-macro ...)` typed at one prompt expands.
+- **`exit` by another name**: `mayThrowExit` decides by spelling; a template's `exit`
+  reaches the importer as `%SCM-L<n>`, so `foreign` raises `foreignExitOrEval` for the
+  `exit` and `eval` builtins and the file's forms take the exit guard.
+- **Stated deviation**: a template identifier its library neither defines nor imports
+  resolves FREE, i.e. by its spelling where the macro is used (Gauche: unbound variable).
+  An error case only, unless the name is a Common Lisp function another file defines,
+  which the free spelling still reaches; resolving it to "unbound" would need a binding
+  kind every `case null` of the lowering learns.
+
+Measured (2026-09-19, x86-64 Linux, Java 25): every program that imports no macro
+compiles to byte-identical `.class` and `.wasm` before and after -- `hello`, the six
+`examples/scheme/*.scm`, the concatenated `scheme-spec.yaml` corpus and its standalone
+cases under every standard each lists (78 of 78 artifacts). Oracle: Gauche 0.9.15 (`gosh
+-r7 -I.`) prints the same as all four backends for the `a-library-exports-syntax-...` case
+under both standards.
+
+Pinned by `SchemeLibrariesTest` (`anExportedMacro...`, `importSetsSelectRenameAndPrefixAMacro`,
+`aLibraryReExportsAMacroItImports`, `aStrictR7rsProgramMayNotRedefineAnImportedMacro`,
+`aSessionImportsALibraryThatExportsSyntax`), the `a-library-exports-syntax-hygienically`
+standalone case of `scheme-spec.yaml` (all four backends, both standards) and the
+`define-library` reference page (`DocExamplesTest`).
 
 ## `cond-expand` (2026-09-19, `.todo/892`)
 
@@ -1327,7 +1381,10 @@ names outlive each buffer; everything else is per buffer.
   handler-bind seam): that built-in was two Java frames per Lisp call, 14 against a
   `defun`'s 13 (12 now), and a non-tail `count` in a session overflowed between 7,000 and 7,500
   against a file's 9,000-9,500 (default `--stack`, 2026-09-17). After it both pass 9,000;
-  JIT state moves either edge by a few hundred.
+  JIT state moves either edge by a few hundred. Since `.todo/912` (2026-09-19) that
+  application is a tail call of `evalCons`'s loop: a session's `(self self ..)` runs in
+  constant stack like a file's, and a non-tail call costs two Java frames
+  (`.kb/interpreter-tail-calls.md`).
 - **Each definition also emits a trampoline**, `(defun f (&rest a) (apply f a))`. A form
   typed BEFORE `f` existed lowered `(f x)` as a direct call ("a name this file does not
   define"), and the trampoline is what that call reaches -- reading the variable on every
@@ -1356,6 +1413,16 @@ names outlive each buffer; everything else is per buffer.
   cyclic value (the Common Lisp echo with a `print-object` method had the same bug).
   Continuation is "the reader ran out of input"
   (`LispReadException.isEndOfFile`), so `#;`, `#| |#` and `#\(` need no second rule.
+- **One typed datum is one `SchemeTopLevel`, however many forms `spliceBegins` turns it
+  into** (2026-09-19, `.todo/909`): a top-level `begin` -- typed, or a macro's template --
+  must still splice so its definitions land at the top level, but `interact` groups the
+  spliced forms of ONE datum into a single entry (echoing only the last, the others
+  statement-guarded) instead of one entry per spliced form. `SchemeExpander.topLevel`
+  already splices a `begin` into its queue while expanding, so the grouping is carried
+  by `topLevelGrouped`, tagging each queued form with which input datum it came from.
+  Before this, `cli/ReplBuffer`'s per-step fresh-line ran once per spliced form, so
+  `(begin (display 3) (display 4) 5)` printed `3`, `4` and `5` on three lines instead of
+  `34` then `5` (the `(progn (princ 1) (princ 2))` shape the Common Lisp REPL uses).
 - **Applying a non-procedure** reports the condition's own text at the REPL, as file mode
   and every compiled backend do: `The object is not applicable: 3`, `...: #f` and
   `...: #!unspecific` -- the same text `%scheme-eval-apply` reports, built by
@@ -1428,8 +1495,9 @@ family, bodies) pass the destination down; every other form is a leaf `(setq R v
   compares the jump site's binding of each name with the loop's; a mismatch re-lowers the
   loop in the carrier shape, whose fresh names nothing can shadow. Found by
   `examples/scheme/collatz.scm`.
-- Mutual tail calls among top-level procedures are jumps too ("Tail-call groups" below);
-  higher-order ones and those among internal definitions are ordinary calls (depths below).
+- Mutual tail calls among top-level procedures, among a body's internal definitions and
+  among a `letrec`'s lambdas are jumps too ("Tail-call groups" below); higher-order ones
+  are ordinary calls (depths below).
 - **A leaf stores ONE value** (`(setq R value)`), so a leaf that may answer other than one
   value leaves the loop instead: `(return-from B form)`, B the loop's `block`, named after
   R (`%SCM-B<n>` for `%SCM-R<n>`, never from the counter, so a discarded loop attempt
@@ -1509,6 +1577,11 @@ outside such a cycle changes: a program with none lowers byte-identically.
   self loop already pays), which is also the evaluator's +16% there. `.todo/901` is the
   interpreter half: memoizing the label table per `tagbody` form alone bought nothing
   measurable, so it was not kept.
+  **Since `.todo/901` (2026-09-19) a `go` in a tagbody statement's tail is not thrown**
+  (`.kb/do-return-block.md`), which is every jump these groups and loops emit. Interpreter,
+  same programs, one loaded 64-core box, alternating runs, whole process: 10M shallow
+  77.1-90.6 -> 43.4-44.2 s; `evalfib` (`fib 24`) 39.7-42.2 -> 32.4-35.1 s -- back at the
+  plain defuns' 37.8 s and 31.1-33.9 s above, measured on a quieter box.
 - **Depth, default stacks** (before -> after): `ev?`/`od?` JVM 3,516 / wasm and component
   10,780 / interpreter 10,230 -> 1,000,000 on all four; `evalloop` (the evaluator running
   a 1,000,000-iteration interpreted loop) overflowed on all four, now answers `done`.
@@ -1516,22 +1589,85 @@ outside such a cycle changes: a program with none lowers byte-identically.
   files (the chapter-4.4 query system, the chapter-5.5.7 compile-and-go) and
   `evaluator.scm` change; each prints the same on all four backends before and after.
   Common Lisp programs never reach this pass.
-- **Not members** (ordinary calls, depths below): a tail call through a procedure VALUE
-  (an argument, a `lambda` in a variable, `apply` -- `.todo/899`), mutual recursion among
-  INTERNAL definitions (`.todo/898`), and every definition typed at the REPL (a session's
-  definitions are variables).
-- **Not a trampoline, and not `return_call`.** A hand-written trampoline (a tail call
-  answers a bounce, every non-tail call site drives them) measured, against plain calls:
-  `fib 32` JVM 43-45 vs 47-56 ms, wasm 85-107 vs 58-72, interpreter 12.2 vs 5.5 s; 3M
-  shallow `ev?`/`od?` calls JVM 720-914 vs 39-60 ms (15x), wasm 1.58-1.78 s vs 73-81 ms
-  (20x), interpreter 122 vs 7.6 s (16x). wasm's `return_call` (wasmtime 47 enables
-  `tail-call`) would make every tail call proper on the two wasm targets only; the JVM has
-  no counterpart. Both are `.todo/899`'s to weigh.
+- **Not members** (ordinary calls): a tail call through a procedure VALUE (an argument,
+  a `lambda` in a variable, `apply`), and every definition typed at the REPL (a session's
+  definitions are variables; internal definitions inside one are groups like anywhere
+  else). On the two wasm targets such a call is proper anyway: the backend emits every
+  call in tail position as `return_call` and the dispatcher tail-calls its target
+  (`.kb/wasm-tail-calls.md`, 2026-09-19, `.todo/899`), so the lowering's `(funcall
+  (%scheme-ensure-procedure f) ..)` runs in constant stack there -- the check returns
+  before the call. So is the interpreter's since `.todo/912`: `evalCons` applies the
+  closure a `funcall`/`apply` names in its own loop frame (`.kb/interpreter-tail-calls.md`).
+  On the JVM it uses stack (depths below).
+- **Not a trampoline.** A hand-written trampoline (a tail call answers a bounce, every
+  non-tail call site drives them) measured, against plain calls: `fib 32` JVM 43-45 vs
+  47-56 ms, wasm 85-107 vs 58-72, interpreter 12.2 vs 5.5 s; 3M shallow `ev?`/`od?` calls
+  JVM 720-914 vs 39-60 ms (15x), wasm 1.58-1.78 s vs 73-81 ms (20x), interpreter 122 vs
+  7.6 s (16x). Not acceptable as a general mechanism on any backend, and on wasm
+  `return_call` made it moot. The JVM has no counterpart (`.todo/899` measured its
+  options: a Scheme call through a value is two JVM frames, `g` and `_invoke_2`; a larger
+  stack for compiled output's `main` raises the ceiling 1,844 -> 17,677 at 16 MiB and is a
+  Common Lisp-wide change of every emitted `main` -- landed the same day as the sized-main
+  launcher, `.todo/911`, `.kb/interpreter-stack.md`). The interpreter's loop
+  in `eval`, the non-trampoline shape, landed 2026-09-19 (`.todo/912`,
+  `.kb/interpreter-tail-calls.md`): a tail call through a value is proper there too, and
+  the loop is faster than the recursion it replaced (`fib 32` 4.72-5.26 -> 4.49-4.68 s,
+  `evalfib` on `(fib 24)` 32.6-38.6 -> 25.2-26.3 s).
 
 Pinned by `SchemeLoweringTest.topLevelProceduresWhoseTailCallsFormACycleAreOneGroupEachEntersAtItsLabel`,
 `#aCycleThroughANonTailCallIsNoGroupAndNumbersNothing`, `#anAssignedOrRedefinedProcedureIsNoMember`
 and the `top-level-procedures-whose-tail-calls-cycle-run-in-constant-stack` case of
 `scheme-spec.yaml` (all four backends; Gauche 0.9.15 `-r7` prints the same).
+
+### Internal groups (`SchemeLowering.internalGroups`; 2026-09-19, `.todo/898`)
+
+**The same probe runs on every body and every `letrec`**: the internal `define`s bound to a
+syntactic `lambda` (and the `letrec` bindings whose init is one) whose tail calls cycle are
+one group, `lowerGroup` with the body's scope as home. The group is a `lambda` in a fresh
+variable of the body's `let`, assigned where the first member stands; each member's variable
+gets a `lambda` entering it:
+
+```
+(let ((ev? nil) (od? nil) (G nil))
+  (setq G (lambda (W C1) (let ((R nil)) (tagbody TOP .. L0 .. L1 .. END) R)))
+  (setq ev? (lambda (n) (funcall G 0 n)))
+  (setq od? (lambda (n) (funcall G 1 n)))
+  ..)
+```
+
+- **Members**: never `set!` (by spelling, like `collectAssigned`), bound once in the body,
+  not also bound by a `define-values`, no `case-lambda`. A member used as a value is its
+  variable's entry `lambda` -- no escape rule is needed, since nothing but the jumps inside
+  `G` ever bypasses the variable. A jump to a member whose `define` has not run yet runs it
+  anyway; R7RS calls reading that variable before its definition an error.
+- **Measured before building (the todo's premise)**: 0 of the 1,586 SICP corpus files and 0
+  of the six `examples/scheme` have such a cycle (a static scan of tail positions over
+  every body and `letrec`, `.todo/artefacts/828-sicp-sample-corpus-harness/internal_tail_cycles.py`; 252 bodies define local procedures, 82 of them tail-call a
+  sibling, none back). Built anyway: R7RS requires proper tail calls, and a local state
+  machine is a normal Scheme shape. Blast radius: all 1,592 files compile to
+  byte-identical `.class` and `.wasm` before and after (the probe restores the counter).
+- **Depth** (`(parity 1000000)` over internal `ev?`/`od?`): overflowed on all four
+  backends before (the depths of a procedure value, below); `#t` on all four now.
+- **Time** (2026-09-19, x86-64 Linux, Java 25, wasmtime 47, a loaded 64-core box, best
+  of 5 alternating runs; before -> after): 10M `(parity (remainder k 4))`, JVM 475 -> 249
+  ms, wasm 799 -> 678, component 777 -> 678; 300K `(parity 100)`, JVM 324 -> 176, wasm
+  651 -> 250, component 646 -> 253. Faster, unlike the top-level groups: the calls it
+  replaces were `funcall`s through `%scheme-ensure-procedure`, not direct `defun` calls.
+  Interpreter (best of 3): 300K shallow 4.1 -> 5.8 s, 30K `(parity 100)` 5.5 -> 9.6 s --
+  every jump was a thrown `GoSignal` there. After `.todo/901` (same day, no throw for a
+  tail `go`; before -> after, same box): 300K shallow 5.35-5.72 -> 3.98-4.56 s, 30K
+  `(parity 100)` 8.81-10.40 -> 4.94-5.89 s, i.e. the plain procedures' cost again.
+- **Size**: `G` takes one argument more than the widest member, and on both compiled
+  backends the first indirect call of an ARITY pulls every dispatchable function of that
+  arity (`_invoke_N`, `.kb/core-representation.md`). The shallow program grew 50,117 ->
+  56,756 B of class and 26,185 -> 28,840 B of wasm, where nothing else called through a
+  value with two arguments; with such a call already present (`(f a b)` once) 56,681 ->
+  56,931 / 28,494 -> 28,929.
+
+Pinned by `SchemeLoweringTest.internalProceduresWhoseTailCallsFormACycleAreOneGroupLambdaEachMemberCallsIt`,
+`#internalProceduresWithNoTailCycleLowerAsBeforeAndNumberNothing` and the
+`internal-procedures-whose-tail-calls-cycle-run-in-constant-stack` case of `scheme-spec.yaml`
+(all four backends; Gauche 0.9.15 `-r7` prints the same).
 
 ## Traps
 
@@ -1597,9 +1733,13 @@ The nil-initialized shape loses the integer typing of the loop variables: 4x.
 
 **Tail-call depth that is NOT a loop**, default stacks, largest passing depth (2026-09-19,
 binary search): a tail call through a procedure VALUE, `(define (g self n) (if (= n 0) 'done
-(self self (- n 1))))`, JVM (`java Prog`) 1,716, wasm and component 2,693, interpreter
-15,234. Top-level `ev?`/`od?` was JVM 3,516 / wasm 10,780 / interpreter 10,230 before the
-tail-call groups and is unbounded now.
+(self self (- n 1))))`, JVM (`java Prog`) 1,716-1,844 (17,677 under `-Xss16m`; 16,201 since the
+compiled `main` runs on a 16 MiB worker, `.kb/interpreter-stack.md`), wasm and
+component 2,693-2,975 before `return_call` and 5,000,000 (the probe's ceiling) after
+(`.kb/wasm-tail-calls.md`), interpreter 15,234-15,497 before the loop in `eval` and
+5,000,000 after (`.kb/interpreter-tail-calls.md`). Top-level `ev?`/`od?` was JVM 3,516
+/ wasm 10,780 / interpreter 10,230 before the tail-call groups and is unbounded now, and
+so is an internal or `letrec` pair.
 
 **Size.** `(display "hello, world")` is 1,594 B of class and 498 B of wasm: `display` of a
 string, character or integer LITERAL lowers to `write-string` / `write-char` / `princ`.
@@ -1663,11 +1803,11 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 ## Not here yet (each its own follow-up)
 
-Exporting syntax from a library, the other
+The other
 libraries, radix and exactness prefixes in `string->number` (`.todo/889`),
-re-entrant continuations, tail calls through a procedure value (`.todo/899`) and among
-internal definitions (`.todo/898`). Each is refused by name where it
-can be.
+re-entrant continuations, tail calls through a procedure value on the JVM (proper on both
+wasm targets, `.kb/wasm-tail-calls.md`, and on the interpreter,
+`.kb/interpreter-tail-calls.md`). Each is refused by name where it can be.
 
 ## The SICP sample corpus harness (`.todo/828`)
 

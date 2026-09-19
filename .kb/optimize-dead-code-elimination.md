@@ -545,6 +545,12 @@ bearing:
   callee it replaces; anything not strictly smaller is abandoned. The pass therefore cannot grow
   the code or function section of any module whatever its local numbering does
   (`WasmTreeShakerCorpusTest` asserts it over the whole `ci-spec` corpus, both WASI modes).
+- **Tail calls** (`.kb/wasm-tail-calls.md`, 2026-09-19). A `return_call callee` site is a call
+  site whose moved body ends in a `return` (a dispatcher case falls through into the next case);
+  a `return_call X` inside a moved body is `call X; br <wrapper>` -- as deep as the tail call
+  left the stack, since the callee's frame is gone either way -- except a TRAILING one (the
+  body's last instruction at depth 0, every forwarder), which is a bare `call X` falling off the
+  end: the wrapper block would cost exactly what the move saves.
 
 **Two things that guard alone does not see, both measured the hard way on `zlib` (2026-09-13).**
 

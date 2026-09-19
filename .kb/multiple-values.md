@@ -17,14 +17,16 @@ line for line with SBCL on the `multiple-values-single-value-contexts` ci-spec c
 - `multiple-value-bind`, `multiple-value-list`, `multiple-value-call`, `nth-value` (CL_MACROS +
   `expandBuiltinMacro`; `multiple-value-call` as a macro deviates from CL's special operator).
 - Secondary values for `floor`/`ceiling`/`round`/`truncate`, `gethash` and `subtypep`, ONLY inside
-  consumers.
+  consumers -- in call position. Each of them as a FUNCTION object publishes too (below).
   Two-argument `(floor a b)` elsewhere: `expandFloorFamilyDivisor` -> `(floor (/ a b))`.
 
 ## The lowering (`LispMacroExpander`)
 `lowerMvProducer` -> `MvProducer{bindings, values}`: ordered `__mv<id>` temps (`MV_COUNTER`) as
 **nested single-binding lets** (`nestMvBindings`) so evaluation order holds on every backend.
-`isMvProducerForm` recognizes literal `values`, the floor family, `gethash` (a runtime `(gensym)`
-sentinel default plus `(eq v sentinel)` distinguishes a stored nil from a missing key), `subtypep`
+`isMvProducerForm` recognizes literal `values`, the floor family, `gethash` (the internal symbol
+`%GETHASH-ABSENT`, bound once per lookup, as the default plus `(eq v sentinel)` distinguishes a
+stored nil from a missing key -- a `(gensym)` until 2026-09-19, which advanced the program's gensym
+counter on every lookup and cost more than the lookup), `subtypep`
 (answer + valid-p, [[declarations-type-checks]]), one-argument `read-from-string` (datum + stop
 index, [[read-load-streams]]), else one temp. A producer the form is NOT recognized as goes through
 `spillEscapingMvProducers` FIRST, so a recognized producer in the TAIL of the `(let ...)`/`(progn
@@ -125,10 +127,82 @@ unconditional spill would tax the hottest built-ins on every call:
   everywhere. It runs BEFORE Pass 2 on purpose: the backends' own lambda walk sees the body after
   `expandFloorFamilyDivisor` has turned `(floor a b)` into `(floor (/ a b))`, whose remainder is a
   different number. A built-in WRAPPER's tail stays one value (the interpreter's built-in answers
-  one). Cost: interpreter closure creation (2M `lambda` evaluations, 5 alternating pairs) 3,695-
+  one), the floor family's excepted (next section). Cost: interpreter closure creation (2M `lambda` evaluations, 5 alternating pairs) 3,695-
   4,333 -> 3,693-3,987 ms, medians 3,761 -> 3,759; a program with no producer-tail lambda compiles
   to the same size on both backends. A non-tail `return-from`/`go` escape is not scanned;
   `multiple-value-prog1` needs no walk (its expansion ends in `values-list`).
+
+## The floor family as a function object
+**Invariant (2026-09-19): `#'floor`/`#'ceiling`/`#'round`/`#'truncate` and the four `f` twins take
+the optional divisor and answer both values, through a `funcall`, an `apply`, a variable, a
+`mapcar` and a function return, on every backend.** Before, the function took one argument
+(`(funcall #'floor 7 2)` signalled, wasm trapped) and answered one value.
+- Interpreter: the `LispFunction` (`Environment.floorFamilyValues`) is `passesValues` and publishes
+  the remainder itself. The call position does NOT come here: `evalCons` rounds `(floor x)` through
+  `Environment.roundToInteger`, one value, as it already did `(floor a b)` -- a consumer or a tail
+  lowered its producer before the dispatch, so the remainder is paid only by the function.
+- Compile paths: the wrapper is `unaryOptionalSecond` (`(if b (op a b) (op a))`), and
+  `settleWrapperLambdas` runs the `PUBLISH` tail walk over it before the `CLEAR` one, gated on the
+  spill global, so its tail becomes the syntactic producer's `(values q r)`. Without the global the
+  wrapper is the one-value dispatch.
+- `(funcall #'floor ...)`/`(apply #'floor ...)` over a LITERAL designator direct-calls that
+  wrapper, so `settleTail` classifies it as passing values (not by the name, which says `cl`
+  function, one value) -- the variable case and the literal one agree.
+- No divisor, the remainder is `(- x q)` (`floorFamilyRemainder`, both the lowering and the
+  interpreter's function): one correctly rounded subtraction, since `q` converts exactly (within 1
+  of a float under 2^53, the float itself above 2^52), with CL's zero signs (`(truncate -0.0)` is
+  `0`, `-0.0`). It replaced `mod`/`rem` by 1, which dominated the cost.
+- Cost (2026-09-19, x86-64 Linux, Java 25, wasmtime 47; `(mapcar #'floor xs)` over 1,000 floats x
+  3,000, 4 alternating pairs): no multiple-value operator in the program, class +288 B, wasm +9 B,
+  time unchanged (JVM 158-214 -> 167-199 ms, wasm 130-139 -> 135-136). With one, the wrapper
+  publishes: JVM 155-187 -> 247-271 ms, wasm 132-137 -> 167-255 (the `mod` remainder had it at
+  296-379). A consumer over a one-argument `floor` got faster from the `(- x q)` remainder (3M
+  `multiple-value-bind`s: JVM 98-99 -> 76-78 ms, wasm 433-461 -> 254-317, class 12,773 -> 12,127 B,
+  wasm 9,067 -> 8,772 B). A program referencing neither is byte-identical (`fib.lisp`, with and
+  without a consumer appended).
+
+## The other producers as function objects
+**Invariant (2026-09-19): `#'gethash` (with its optional default), `#'find-symbol`, `#'intern`
+(optional package), `#'subtypep` (optional environment, ignored), `#'read-from-string` (one
+argument) and `#'array-displacement` answer both values through a `funcall`, an `apply`, a
+variable, a `mapcar` and a function return, on every backend.** Pinned by the
+`multiple-value-builtins-function-object` ci-spec case and its three backend-test copies.
+- Interpreter: `LispEvaluator.installValuePublishingFunctions` rebinds each name, last in
+  `registerEval`, to a `passesValues` function that publishes what the lowering's companion reads
+  (`%find-symbol-status`, `%subtypep-valid`, `%read-from-string-end`, `%array-disp-offset`; gethash
+  a present-p off a private sentinel). The call position dispatches to the one-value built-in
+  (`evalConsRareOperator` -> `evalPrimaryValueCall`), as the floor family's does.
+- Compile paths: the wrapper publishes (`settleWrapperLambdas`' PUBLISH walk) and takes the full
+  lambda list (`BuiltinFunctionWrappers.VALUE_SHAPES`: gethash's default, intern's package) ONLY in a
+  program that names the operator as a designator, `#'name` or `'name`
+  (`BuiltinFunctionWrappers.designatedValueProducers`). Unlike the floor family's, these wrappers
+  are reachable in programs that never take them as values -- JVM keeps every wrapper under an eval
+  runtime (a `read-from-string` program's class was +1,444 B), and a shaken wrapper's literals still
+  move the WASM string table (+1 to +12 B) -- so an ungated change touched every program that
+  interns or reads. Given up by the gate: the second value (and gethash's 3-argument / intern's
+  2-argument call) of a wrapper reached only through a run-time designator or `eval`.
+  `#'subtypep` is a new wrapper, `REFERENCE_GATED`, and `containsRuntimeSubtypep` counts the
+  reference so `%subtypep-runtime` is injected.
+- A function object's arguments are COMPUTED on the compile paths, so `#'find-symbol`/`#'intern`
+  carry the computed-name deviations (`.kb/symbol-runtime-api.md`, "Computed `find-symbol`"):
+  `(funcall #'find-symbol "CAR")` is `(CAR :INTERNAL)` there, `:INHERITED` in SBCL and the
+  interpreter; an unknown name yields a symbol.
+- Cost (2026-09-19, x86-64 Linux, Java 25, wasmtime 47, 5 alternating pairs). The wrapper first
+  published through the lowering's `(gensym)` sentinel: 3M `(funcall g i h)` over `#'gethash` went
+  JVM 161-179 -> 330-349 ms, wasm 155-211 -> 360-382, exactly what 3M bare `(gensym)` cost (JVM
+  212-244, wasm 160-206) -- and each lookup advanced the gensym counter, which the ci-spec corpus
+  caught (`gensym-and-macroexpand` printed `#:G2` for `#:G1` once an earlier case's
+  `(funcall #'gethash ...)` published). With the constant sentinel: that loop, no multiple-value
+  operator, class 19,614 -> 19,756 B, wasm 9,618 -> 9,813 B, time unchanged (JVM 158-167 ->
+  156-183 ms, wasm 165-193 -> 171-208); with one, class 21,804 -> 22,283 B, wasm 12,111 -> 12,581 B,
+  JVM 159-179 -> 182-196 ms, wasm 156-208 -> 337-380 (every call allocates the published list and
+  the sentinel literal). The call-position consumer got faster and smaller (3M `multiple-value-bind`
+  over `(gethash i h)`: JVM 335-395 -> 170-187 ms, wasm 315-376 -> 302-329, class 12,069 -> 12,035 B,
+  wasm 8,085 -> 7,882 B). Interpreter call-position `gethash` (300k) unchanged within noise (base
+  452-533, new 460-563 ms over three sessions). Byte-identical: `fib` with and without a consumer,
+  a hash-table program without a consumer, `intern`/`find-symbol`, computed `subtypep`,
+  `read-from-string` + `array-displacement` programs, on all three compile targets; a program with a
+  `gethash` consumer changes by the sentinel only.
 
 ## A tail settles the channel (compile paths)
 **Invariant: once a function body's tail has run, the channel holds that body's extra values.
@@ -218,7 +292,10 @@ primitive step that is not a publish and not a call of user code clears it
   `await`, a value-less `return`/`return-from`/`throw`, an empty `progn`/block/`catch`/clause
   body, an `if` without an else branch taking it, a result-less `do-symbols`.
 A form that merely passes a sub-form's value on (`if`, `let`, `progn`, a block, `catch`,
-`handler-case` without `:no-error`, a user function's body) leaves the channel to that
+`handler-case` without `:no-error`, a user function's body, the last form of an `or` --
+its `t` clause since 2026-09-19, `LispMacroExpander.expandOr`, on all four backends: `(or
+nil (values 1 2))` answers both values as CLHS 7.4 says and SBCL prints, where the old
+bodyless clause bound it to a temporary and answered one) leaves the channel to that
 sub-form: a `(values ...)` tail reaches the consumer behind any number of returns, and a
 `values` whose value went into a variable or an argument never does.
 `unwind-protect` saves the channel around its cleanups and `publishSpill`s it back
@@ -278,7 +355,8 @@ leaf that may answer other than one value leaves through a `return-from`).
 `RontoLispCliTest.replEchoesEveryValueOnItsOwnLine`; `JvmLispCompilerTest.compileAndRun*` and
 `WasmLispCompilerIntegrationTest` twins (`*MultipleValueChannelIsExactInSingleValueContexts` is the
 shared matrix); ci-spec `multiple-values-core`, `multiple-values-single-value-contexts` (the
-matrix, SBCL's answers), `unwind-protect-values` (adds the `--component` leg),
+matrix, SBCL's answers), `floor-family-function-object` (+ `evalFloorFamilyFunctionObject*` and
+the JVM/wasm twins), `unwind-protect-values` (adds the `--component` leg),
 `mv-producer-function-return` (its `find-symbol`/`intern` rows probe a USER symbol because a
 non-literal name's runtime status diverges between interpreter and compile paths),
 `split-sequence-residue-features`, `rontolisp-package-introspection`; scheme-spec

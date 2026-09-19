@@ -147,8 +147,10 @@ public final class WasmCallForwarding {
 				return -1;
 			}
 		}
+		// A forwarder's one call is a tail call, so the emitter spells it return_call
+		// (0x12); a plain call (0x10) is the same shape.
 		Instr call = code.get(n);
-		if (call.op != 0x10 || code.get(n + 1).op != 0x0B) {
+		if ((call.op != 0x10 && call.op != 0x12) || code.get(n + 1).op != 0x0B) {
 			return -1;
 		}
 		return (int) call.a;
