@@ -41,6 +41,10 @@
 ;;   0x500b0 one lowered directory-entry (24 bytes: type variant @0, name ptr@16 len@20)
 ;;   0x50100 fd table: 64 slots x 16 bytes {descriptor@0, read-stream@4, eof-latch@8,
 ;;           valid@12}
+;;   0x51800 file-offset table: 64 slots x 8 bytes -- the byte position the next fd_read
+;;           on a FILE descriptor starts at (the preview1 fd_seek stand-in, since WASI 0.3
+;;           reads are offset-based and have no moveable cursor). Kept OUT of the fd table
+;;           so those 16-byte slots keep their stride.
 ;;   0x50500 preopen table: 16 slots x 264 bytes {descriptor@0, name-len@4, name@8..}
 ;;   0x51600 descriptor.stat result scratch: result<descriptor-stat, error-code>, 112
 ;;           bytes -- disc byte @0, descriptor-stat @8 (type @8, link-count @24, size @32)
@@ -242,6 +246,20 @@
     (i32.add (i32.const 0x50100)
       (i32.mul (i32.sub (local.get $fd) (i32.const 100)) (i32.const 16))))
 
+  ;; the per-fd tracked byte-offset cell for a preview1 file fd.
+  (func $offset_cell (param $fd i32) (result i32)
+    (i32.add (i32.const 0x51800)
+      (i32.mul (i32.sub (local.get $fd) (i32.const 100)) (i32.const 8))))
+
+  ;; the per-fd binary-stream flag for a preview1 file fd: 0 = character stream (whose
+  ;; byte position file-position genuinely cannot report), 1 = the stream was opened with
+  ;; an (unsigned-byte 8) element type. Reset to 0 on every path_open and set to 1 by the
+  ;; core's _mark_file_binary after a binary open, so a reused slot never inherits a stale
+  ;; answer.
+  (func $binary_cell (param $fd i32) (result i32)
+    (i32.add (i32.const 0x51a00)
+      (i32.sub (local.get $fd) (i32.const 100))))
+
   ;; Push every iovec through the writable end, signal EOF by dropping it, and answer the
   ;; total byte count. Shared by the stdio and the file half of fd_write.
   (func $push_iovs (param $tx i32) (param $iov i32) (param $cnt i32) (result i32)
@@ -329,6 +347,11 @@
     (i32.store (local.get $nw) (call $push_iovs (local.get $tx) (local.get $iov) (local.get $cnt)))
     (drop (call $future_read_fs (local.get $fut) (i32.const 0x50000)))
     (call $future_drop_fs (local.get $fut))
+    ;; append-via-stream lands bytes at the file's current end, so the tracked byte
+    ;; position advances by what was written -- file-position on a write stream.
+    (i64.store (call $offset_cell (local.get $fd))
+      (i64.add (i64.load (call $offset_cell (local.get $fd)))
+        (i64.extend_i32_u (i32.load (local.get $nw)))))
     (i32.const 0))
 
   ;; fd_write(fd, iov, cnt, nwritten) -> errno. fd==1 is stdout, fd==2 is stderr; otherwise
@@ -376,20 +399,60 @@
     (call $read_iov (i32.load (i32.const 0x50084)) (local.get $iov) (local.get $nread)
       (i32.const 0x50088)))
 
-  ;; The file half of fd_read: the slot's readable stream, opened on first use and left to
-  ;; advance across calls.
+  ;; The file half of fd_read: the slot's readable stream, opened on first use at the
+  ;; slot's tracked byte offset and left to advance across calls. Each read advances the
+  ;; tracked offset by the count delivered, so file-position-set (a pure offset rewrite in
+  ;; $file_position_set) and the next read agree -- no host cursor involved.
   (func $fd_read_file (param $fd i32) (param $iov i32) (param $cnt i32) (param $nread i32) (result i32)
     (local $sl i32) (local $ins i32)
     (local.set $sl (call $slot (local.get $fd)))
     (local.set $ins (i32.load offset=4 (local.get $sl)))
     (if (i32.eq (local.get $ins) (i32.const -1))
       (then
-        (call $file_read (i32.load (local.get $sl)) (i64.const 0) (i32.const 0x50060))
+        (call $file_read (i32.load (local.get $sl))
+          (i64.load (call $offset_cell (local.get $fd))) (i32.const 0x50060))
         (local.set $ins (i32.load (i32.const 0x50060)))
         (i32.store offset=4 (local.get $sl) (local.get $ins))
         (call $future_drop_fs (i32.load (i32.const 0x50064)))))
-    (call $read_iov (local.get $ins) (local.get $iov) (local.get $nread)
+    (drop (call $read_iov (local.get $ins) (local.get $iov) (local.get $nread)
       (i32.add (local.get $sl) (i32.const 8))))
+    (i64.store (call $offset_cell (local.get $fd))
+      (i64.add (i64.load (call $offset_cell (local.get $fd)))
+        (i64.extend_i32_u (i32.load (local.get $nread)))))
+    (i32.const 0))
+
+  ;; file-position query for a FILE descriptor: writes the tracked byte offset to the
+  ;; 8-byte slot at `off` and answers errno 0, or EBADF (8) when the fd names no open file
+  ;; (a standard stream, a socket, a closed handle) -- which the core reads as nil (Common
+  ;; Lisp's "cannot be determined"). The (i32, i32) -> i32 shape is the fd_filestat_get
+  ;; one, so the runtime stages the offset in its own scratch. Public counterpart of
+  ;; $fd_read_file's offset.
+  (func $file_position_get (param $fd i32) (param $off i32) (result i32)
+    (local $sl i32)
+    (if (i32.lt_u (local.get $fd) (i32.const 100)) (then (return (i32.const 8))))
+    (local.set $sl (call $slot (local.get $fd)))
+    (if (i32.eqz (i32.load offset=12 (local.get $sl))) (then (return (i32.const 8))))
+    (i64.store (local.get $off) (i64.load (call $offset_cell (local.get $fd))))
+    (i32.const 0))
+
+  ;; file-position set for a FILE descriptor: reads the new byte offset from the 8-byte
+  ;; slot at `off` and rewrites the tracked offset (the next fd_read goes there). Drops
+  ;; the cached readable stream so it is reopened at the new offset, and resets the
+  ;; per-stream EOF latch (a repositioned reader is not at EOF). errno 0 for an open file
+  ;; fd, EBADF (8) for anything else -- which the core reads as nil for the set, mirroring
+  ;; the interpreter/JVM's character-stream answer.
+  (func $file_position_set (param $fd i32) (param $off i32) (result i32)
+    (local $sl i32) (local $h i32)
+    (if (i32.lt_u (local.get $fd) (i32.const 100)) (then (return (i32.const 8))))
+    (local.set $sl (call $slot (local.get $fd)))
+    (if (i32.eqz (i32.load offset=12 (local.get $sl))) (then (return (i32.const 8))))
+    (local.set $h (i32.load offset=4 (local.get $sl)))
+    (if (i32.ne (local.get $h) (i32.const -1))
+      (then (call $stream_drop_r (local.get $h))))
+    (i32.store offset=4 (local.get $sl) (i32.const -1))
+    (i32.store offset=8 (local.get $sl) (i32.const 0))
+    (i64.store (call $offset_cell (local.get $fd)) (i64.load (local.get $off)))
+    (i32.const 0))
 
   ;; fd_read(fd, iov, cnt, nread) -> errno. Single-iovec; nread==0 signals EOF. fd==0 is
   ;; stdin; otherwise a file fd.
@@ -432,7 +495,10 @@
     (i32.store (local.get $sl) (i32.load offset=4 (i32.const 0x50050)))
     (i32.store offset=4 (local.get $sl) (i32.const -1))
     (i32.store offset=8 (local.get $sl) (i32.const 0))
-    (i32.store (local.get $fdout) (i32.add (i32.const 100) (local.get $idx)))
+    (local.set $idx (i32.add (i32.const 100) (local.get $idx)))
+    (i64.store (call $offset_cell (local.get $idx)) (i64.const 0))
+    (i32.store8 (call $binary_cell (local.get $idx)) (i32.const 0))
+    (i32.store (local.get $fdout) (local.get $idx))
     (i32.const 0))
 
   ;; fd_close(fd) -> errno. Drops the cached readable stream (if any) and the descriptor,
@@ -701,6 +767,8 @@
   (export "fd_prestat_get" (func $fd_prestat_get))
   (export "fd_prestat_dir_name" (func $fd_prestat_dir_name))
   (export "fd_filestat_get" (func $fd_filestat_get))
+  (export "file_position_get" (func $file_position_get))
+  (export "file_position_set" (func $file_position_set))
   (export "path_create_directory" (func $path_create_directory))
   (export "path_unlink_file" (func $path_unlink_file))
   (export "path_rename" (func $path_rename)))

@@ -1314,8 +1314,13 @@ final class WasmExprCompiler {
 				// non-handle designator) -- the same set the interpreter and the JVM
 				// answer nil for.
 				case LispNames.FILE_LENGTH -> WasmFileLengthCompiler.compile(cons, ctx);
-				// file-position and file-write-date answer nil here rather than
-				// signalling: neither has a call imported, and "cannot be determined" is
+				// file-position is REAL on the --component backend: the query and the set
+				// talk to the adapter's tracked per-fd byte offset through the injected
+				// file_position_get / file_position_set imports
+				// (WasmFilePositionCompiler),
+				// so a binary file stream's position round-trips. Under Preview 1 it
+				// answers nil -- no fd_seek import exists there (todo 876) -- and
+				// file-write-date answers nil on both, with "cannot be determined" being
 				// what Common Lisp prescribes for exactly that. The three write-side
 				// operators are REAL here -- %make-directories creates every missing
 				// level through path_create_directory (signalling on failure, since
@@ -1323,7 +1328,16 @@ final class WasmExprCompiler {
 				// %delete-file unlinks through path_unlink_file and %rename-file moves
 				// through path_rename (both answering nil when there is nothing to do,
 				// with the file-error raised once in the Lisp above them).
-				case LispNames.FILE_POSITION, LispNames.FILE_WRITE_DATE ->
+				case LispNames.FILE_POSITION -> {
+					if (ctx.component) {
+						WasmFilePositionCompiler.compile(cons, ctx);
+					}
+					else {
+						WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE),
+								ctx);
+					}
+				}
+				case LispNames.FILE_WRITE_DATE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx);
 				case LispNames.PATHNAMEP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPathnamep(cons), ctx);
 				case LispNames.MAKE_DIRECTORIES -> WasmMakeDirectoriesCompiler.compile(cons, ctx);

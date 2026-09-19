@@ -131,7 +131,8 @@ public final class WasmComponentBuilder {
 	 */
 	private static final List<String> PREVIEW1_FUNCS = List.of("fd_write", "fd_read", "path_open", "fd_readdir",
 			"fd_close", "random_get", "clock_time_get", "environ_sizes_get", "environ_get", "fd_prestat_get",
-			"fd_prestat_dir_name", "fd_filestat_get", "path_create_directory", "path_unlink_file", "path_rename");
+			"fd_prestat_dir_name", "fd_filestat_get", "path_create_directory", "path_unlink_file", "path_rename",
+			"file_position_get", "file_position_set");
 
 	/**
 	 * The adapter's NARROW implementations of the two fd-polymorphic entry points,
