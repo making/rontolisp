@@ -76,7 +76,13 @@ PROGRAM's, so a ceiling inherited from the platform is a different product on ea
 
 Compiled output runs its own `main` on the JVM's first thread -- `java -jar app.jar` is
 sized by `-Xss` and the platform, not by anything above. Deliberate: compiled frames are a
-fraction of an interpreter frame, and a compiled program's launcher has the knob.
+fraction of an interpreter frame, and a compiled program's launcher has the knob. Measured
+2026-09-19 (linux-x64, `.todo/899`): a Scheme tail call through a procedure value -- two
+JVM frames per call, the caller and `_invoke_N` -- reaches 1,844 deep under `java Prog`
+(1 MiB), 17,677 under `-Xss16m`, and 8,000,000 under `-Xss256m`, where the JIT's frames
+take over after the first ~10k calls; the interpreter's 16 MiB worker holds 15,497 of the
+same. So COLD, a compiled program is shallower than the interpreter; warm it is far deeper.
+Compiled wasm has no ceiling for those calls at all (`.kb/wasm-tail-calls.md`).
 
 ## Pinning tests
 

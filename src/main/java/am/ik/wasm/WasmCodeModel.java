@@ -426,7 +426,8 @@ final class WasmCodeModel {
 					i.catches = catches;
 					yield i;
 				}
-				case 0x08, 0x0C, 0x0D, 0x10, 0x20, 0x21, 0x22, 0x23, 0x24 -> {
+				// return_call (0x12) carries a function index exactly as call does.
+				case 0x08, 0x0C, 0x0D, 0x10, 0x12, 0x20, 0x21, 0x22, 0x23, 0x24 -> {
 					Instr i = new Instr(op, -1, start);
 					i.a = WasmSections.readU(buf, p);
 					yield i;

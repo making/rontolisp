@@ -99,6 +99,8 @@ public final class WasmInliner {
 
 	private static final int OP_CALL = 0x10;
 
+	private static final int OP_RETURN_CALL = 0x12;
+
 	private static final int OP_TRY_TABLE = 0x1F;
 
 	/**
@@ -338,7 +340,7 @@ public final class WasmInliner {
 		int at = -1;
 		for (int i = 0; i < callerCode.size(); i++) {
 			Instr in = callerCode.get(i);
-			if (in.op == OP_CALL && in.a == callee) {
+			if ((in.op == OP_CALL || in.op == OP_RETURN_CALL) && in.a == callee) {
 				if (at >= 0) {
 					return null; // not the single call site this pass was promised
 				}
@@ -348,6 +350,12 @@ public final class WasmInliner {
 		if (at < 0) {
 			return null;
 		}
+		// A tail-call site (`return_call callee`) takes the moved body followed by a
+		// `return`: what the callee answered is what the caller returns, whatever the
+		// caller's code after the site was for -- the emitter's tail sites are followed
+		// only by value-passing `end`s and `br`s, but a dispatcher case falls through
+		// into the NEXT case's body, which the return keeps out of reach.
+		boolean tailSite = callerCode.get(at).op == OP_RETURN_CALL;
 		Body calleeBody = WasmCodeModel.decode(calleeEntry, types);
 		List<Instr> moved = calleeBody.code();
 		FuncType calleeType = types.func(calleeTypeIdx);
@@ -446,6 +454,9 @@ public final class WasmInliner {
 		if (shape.needsBlock()) {
 			out.write(OP_END);
 		}
+		if (tailSite) {
+			out.write(OP_RETURN);
+		}
 		WasmSections.writeRaw(out, WasmSections.slice(callerEntry, callerCode.get(at).end, callerEntry.length));
 		return out.toByteArray();
 	}
@@ -460,7 +471,8 @@ public final class WasmInliner {
 		int[] writes = new int[params];
 		boolean needsBlock = false;
 		int depth = 0;
-		for (Instr in : code) {
+		for (int k = 0; k < code.size(); k++) {
+			Instr in = code.get(k);
 			if (in.op == OP_END && in.match >= 0) {
 				depth--;
 			}
@@ -482,6 +494,20 @@ public final class WasmInliner {
 					}
 				}
 				case OP_RETURN -> needsBlock = true;
+				// A tail call leaves the callee's frame as a `return` does; moved into
+				// the caller it becomes a plain call and a branch out of the wrapping
+				// block (writeMovedBody), which keeps the stack exactly as deep as the
+				// tail call kept it: the callee's frame is gone either way.
+				case OP_RETURN_CALL -> {
+					if (in.a == callee) {
+						return null; // recursive: the moved body would call a dead entry
+					}
+					// A tail call that is the body's LAST instruction (before the final
+					// end, at depth 0) falls off the end as a plain call would: no block.
+					// Every forwarder is this shape, and the block would cost what the
+					// move saves.
+					needsBlock |= !isTrailing(code, k, depth);
+				}
 				case OP_BR, OP_BR_IF -> needsBlock |= in.a >= depth;
 				case OP_BR_TABLE -> {
 					for (int label : java.util.Objects.requireNonNull(in.labels)) {
@@ -548,6 +574,18 @@ public final class WasmInliner {
 					out.write(OP_BR);
 					WasmSections.writeU(out, depth);
 				}
+				else if (in.op == OP_RETURN_CALL) {
+					// The callee's frame is gone either way: as a plain call here the
+					// stack is exactly as deep as the tail call left it. Only a
+					// non-trailing one needs the branch out (shapeOf); a trailing one
+					// falls off the end, block or no block.
+					out.write(OP_CALL);
+					WasmSections.writeU(out, (int) in.a);
+					if (needsBlock && !isTrailing(code, k, depth)) {
+						out.write(OP_BR);
+						WasmSections.writeU(out, depth);
+					}
+				}
 				else {
 					WasmSections.writeRaw(out, WasmSections.slice(entry, in.start, in.end));
 				}
@@ -556,6 +594,12 @@ public final class WasmInliner {
 				depth++;
 			}
 		}
+	}
+
+	// Whether the instruction at `k` is the body's last one (before the terminating end)
+	// at nesting depth 0: what it leaves on the stack is what the body answers.
+	private static boolean isTrailing(List<Instr> code, int k, int depth) {
+		return depth == 0 && k == code.size() - 2;
 	}
 
 	// --- Encoding helpers ---

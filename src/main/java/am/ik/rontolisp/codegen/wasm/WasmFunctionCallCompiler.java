@@ -26,13 +26,31 @@ final class WasmFunctionCallCompiler {
 	 * it: this is always a direct call against the function registry.
 	 */
 	static void compileDefault(String name, LispCons cons, WasmLispCompiler.Ctx ctx) {
-		compileDirectCall(name, cons, ctx);
+		compileDirectCall(name, cons, ctx, false);
+	}
+
+	/**
+	 * As {@link #compileDefault(String, LispCons, WasmLispCompiler.Ctx)}; with
+	 * {@code tail}, a call that resolves to a compiled function is a {@code return_call}
+	 * ({@code Ctx.tailPosition}).
+	 */
+	static void compileDefault(String name, LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
+		compileDirectCall(name, cons, ctx, tail);
 	}
 
 	/**
 	 * Compiles the {@code funcall} built-in.
 	 */
 	static void compileFuncall(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compileFuncall(cons, ctx, false);
+	}
+
+	/**
+	 * As {@link #compileFuncall(LispCons, WasmLispCompiler.Ctx)}; with {@code tail}, the
+	 * dispatch (or the direct call a literal designator gets) is a {@code return_call}:
+	 * every function value is reached in constant stack ({@code Ctx.tailPosition}).
+	 */
+	static void compileFuncall(LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		List<LispVal> parts = cons.toList();
 		int arity = parts.size() - 2; // (funcall f arg0 ...) -> arity = num_args
 		List<Runnable> args = new ArrayList<>();
@@ -44,7 +62,7 @@ final class WasmFunctionCallCompiler {
 		// is the DISPATCHERS' and no dispatcher is involved.
 		WasmDesignatorCall direct = WasmDesignatorCall.direct(parts.get(1), arity, ctx);
 		if (direct != null) {
-			direct.emitCall(ctx, args);
+			direct.emitCall(ctx, args, tail);
 			return;
 		}
 		if (arity > ctx.callArityCeiling) {
@@ -75,11 +93,11 @@ final class WasmFunctionCallCompiler {
 		// Push args
 		args.forEach(Runnable::run);
 		// Call dispatch
-		ctx.writer.write(Instruction.CALL);
+		ctx.writer.write(tail ? Instruction.RETURN_CALL : Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(dispatchFuncIdx);
 	}
 
-	private static void compileDirectCall(String name, LispCons cons, WasmLispCompiler.Ctx ctx) {
+	private static void compileDirectCall(String name, LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		// A host import whose every :string argument is a literal reaches the host
 		// without the wrapper, and without the GC byte array the wrapper would have
 		// unbuilt one instruction later (WasmImportCompiler.compileLiteralImportCall).
@@ -132,7 +150,9 @@ final class WasmFunctionCallCompiler {
 				ctx.writer.write(Instruction.GET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(restSlot);
 			}
-			ctx.writer.write(Instruction.CALL);
+			// Every compiled Lisp function answers one (ref null eq), so a tail call
+			// to any of them is a return_call from any of them.
+			ctx.writer.write(tail ? Instruction.RETURN_CALL : Instruction.CALL);
 			ctx.writer.writeUnsignedLeb128(fi.funcIndex());
 		}
 		else if (ctx.nestedDefunNames.contains(name) && ctx.globalIndices.containsKey(name)) {

@@ -4144,6 +4144,9 @@ public final class WasmLispCompiler implements LispCompiler {
 					WasmExprCompiler.compileForEffect(defun.bodyExprs.get(i), funcCtx);
 				}
 				else {
+					// The last form's value is the function's: a call there is a tail
+					// call (Ctx.tailPosition).
+					funcCtx.tailPosition = true;
 					WasmExprCompiler.compileExpr(defun.bodyExprs.get(i), funcCtx);
 				}
 			}
@@ -4344,6 +4347,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					WasmExprCompiler.compileForEffect(lambda.bodyExprs.get(i), lambdaCtx);
 				}
 				else {
+					lambdaCtx.tailPosition = true;
 					WasmExprCompiler.compileExpr(lambda.bodyExprs.get(i), lambdaCtx);
 				}
 			}
@@ -8841,7 +8845,19 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @param catchesPlain whether a plain {@code return} exits this block
 	 * @param functionBoundary whether this is the {@code %fn-block} function boundary
 	 */
-	record BlockMarker(int depth, @Nullable String name, boolean catchesPlain, boolean functionBoundary) {
+	record BlockMarker(int depth, @Nullable String name, boolean catchesPlain, boolean functionBoundary, boolean tail) {
+
+		/**
+		 * A marker for a block that is not in tail position.
+		 * @param depth the {@code wasmCtrlDepth} of the WASM block
+		 * @param name the block name, null for an unnamed one
+		 * @param catchesPlain whether it catches plain {@code return}
+		 * @param functionBoundary whether it is the {@code %fn-block} fallback
+		 */
+		BlockMarker(int depth, @Nullable String name, boolean catchesPlain, boolean functionBoundary) {
+			this(depth, name, catchesPlain, functionBoundary, false);
+		}
+
 	}
 
 	/**
@@ -9857,6 +9873,22 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * consumed {@link #asyncSpine} of the enclosing {@code compileExpr} call).
 		 */
 		boolean asyncSpineCurrent;
+
+		/**
+		 * Transient marker that the NEXT {@code compileExpr} call compiles a form in TAIL
+		 * position of the function being built: its value is the function's, and nothing
+		 * of this frame runs after it. A call there is emitted as {@code return_call}, so
+		 * a tail call through a procedure value, a direct tail call and a {@code labels}
+		 * tail call all run in constant stack. Armed by the defun/lambda body loops for
+		 * the last body form and re-armed by the tail-transparent forms ({@code if} arms,
+		 * a {@code progn}/lexical {@code let}/ {@code block} last form,
+		 * {@code let*}/{@code the}/{@code locally}); consumed at {@code compileExpr}
+		 * entry, so every other form's sub-forms are non-tail without knowing the flag
+		 * exists -- a {@code handler-case} body, an {@code unwind-protect} protected
+		 * form, a special {@code let}'s body and a {@code multiple-value-prog1} first
+		 * form keep their frame by construction.
+		 */
+		boolean tailPosition;
 
 		/**
 		 * Monotonic counter for the {@code %await$N} hoist bindings

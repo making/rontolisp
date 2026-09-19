@@ -1387,6 +1387,31 @@ public final class WasmRefTypeFolder {
 					emit(in);
 					return i + 1;
 				}
+				case 0x12 -> { // return_call: a call whose results are this function's
+					int callee = (int) in.a;
+					FuncType ft = this.m.funcTypes[callee];
+					List<Val> args = popN(ft.params().size());
+					if (callee >= this.m.numImports) {
+						if (!this.m.live[callee]) {
+							this.m.live[callee] = true;
+							this.m.changed = true;
+						}
+						@Nullable BitSet[] paramSets = this.m.localSets[callee - this.m.numImports];
+						for (int k = 0; k < args.size(); k++) {
+							if (args.get(k).ref()) {
+								this.m.join(paramSets[k], args.get(k).refSet());
+							}
+						}
+					}
+					// What the callee answers is what this function returns: deliver the
+					// callee's return sets to the function frame as a `return` would,
+					// then nothing below is reachable.
+					int spanStart = args.isEmpty() ? i : args.get(0).spanStart();
+					pushAll(valuesOf(ft.results(), this.m.returnSets[callee], spanStart));
+					branchTo(this.frames.size() - 1, true);
+					emit(in);
+					return unreachable(fr);
+				}
 				case 0x1A -> { // drop
 					pop();
 					emit(in);

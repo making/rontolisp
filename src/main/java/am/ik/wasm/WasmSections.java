@@ -490,8 +490,8 @@ public final class WasmSections {
 					skipLeb(buf, p);
 				}
 			}
-			case 0x10 -> recordFuncRef(buf, p, refs); // call
-			case 0x11 -> { // call_indirect
+			case 0x10, 0x12 -> recordFuncRef(buf, p, refs); // call, return_call
+			case 0x11, 0x13 -> { // call_indirect, return_call_indirect
 				recordTypeIdx(buf, p, refs);
 				skipLeb(buf, p); // tableidx
 			}

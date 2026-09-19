@@ -33,7 +33,18 @@ final class WasmBlockCompiler {
 
 	/** The internal {@code (%block body...)} boundary: unnamed, catches plain return. */
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		compileBody(cons.toList(), 1, ctx, null, true, false);
+		compile(cons, ctx, false);
+	}
+
+	/**
+	 * As {@link #compile(LispCons, WasmLispCompiler.Ctx)}; {@code tail} says whether the
+	 * block itself is in tail position ({@code Ctx.tailPosition}): then its last body
+	 * form is too, and so is the value of an exit that branches to it without crossing a
+	 * protected region -- the block is a plain WASM block, and nothing of this frame runs
+	 * after it.
+	 */
+	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
+		compileBody(cons.toList(), 1, ctx, null, true, false, tail);
 	}
 
 	/**
@@ -42,12 +53,20 @@ final class WasmBlockCompiler {
 	 * {@code (return-from nil ...)} compiles to plain {@code return}).
 	 */
 	static void compileNamed(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compileNamed(cons, ctx, false);
+	}
+
+	/**
+	 * As {@link #compileNamed(LispCons, WasmLispCompiler.Ctx)}, in tail position when
+	 * {@code tail}.
+	 */
+	static void compileNamed(LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
 			throw new IllegalArgumentException(LispNames.BLOCK + " expects a block name: " + cons.print());
 		}
 		String name = LispMacroExpander.blockName(parts.get(1));
-		compileBody(parts, 2, ctx, name, name == null, false);
+		compileBody(parts, 2, ctx, name, name == null, false, tail);
 	}
 
 	/**
@@ -56,22 +75,30 @@ final class WasmBlockCompiler {
 	 * an unmatched {@code return-from}. It does NOT catch plain {@code return}.
 	 */
 	static void compileFnBlock(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compileFnBlock(cons, ctx, false);
+	}
+
+	/**
+	 * As {@link #compileFnBlock(LispCons, WasmLispCompiler.Ctx)}, in tail position when
+	 * {@code tail}.
+	 */
+	static void compileFnBlock(LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
 			throw new IllegalArgumentException(LispNames.FN_BLOCK_INTERNAL + " expects a block name: " + cons.print());
 		}
 		String name = LispMacroExpander.blockName(parts.get(1));
-		compileBody(parts, 2, ctx, name, false, true);
+		compileBody(parts, 2, ctx, name, false, true, tail);
 	}
 
 	private static void compileBody(List<LispVal> parts, int bodyStart, WasmLispCompiler.Ctx ctx, @Nullable String name,
-			boolean catchesPlain, boolean functionBoundary) {
+			boolean catchesPlain, boolean functionBoundary, boolean tail) {
 		// block (result (ref null eq))
 		ctx.writer.write(Instruction.BLOCK);
 		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.wasmCtrlDepth++;
 		ctx.blockMarkers
-			.push(new WasmLispCompiler.BlockMarker(ctx.wasmCtrlDepth, name, catchesPlain, functionBoundary));
+			.push(new WasmLispCompiler.BlockMarker(ctx.wasmCtrlDepth, name, catchesPlain, functionBoundary, tail));
 		// Body forms run as a progn, leaving the last value on the stack.
 		if (parts.size() <= bodyStart) {
 			ctx.writer.write(Instruction.REF_NULL);
@@ -84,6 +111,9 @@ final class WasmBlockCompiler {
 			for (int i = bodyStart; i < parts.size(); i++) {
 				if (i > bodyStart) {
 					ctx.writer.write(Instruction.DROP);
+				}
+				if (i == parts.size() - 1) {
+					ctx.tailPosition = tail;
 				}
 				WasmExprCompiler.compileExpr(parts.get(i), ctx);
 			}

@@ -28,6 +28,16 @@ final class WasmApplyCompiler {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compile(cons, ctx, false);
+	}
+
+	/**
+	 * As {@link #compile(LispCons, WasmLispCompiler.Ctx)}; with {@code tail}, the final
+	 * call -- the physical direct call or {@code _apply} -- is a {@code return_call}
+	 * ({@code Ctx.tailPosition}).
+	 */
+	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
+		int callOp = tail ? Instruction.RETURN_CALL : Instruction.CALL;
 		List<LispVal> args = cons.toList();
 		int n = args.size();
 
@@ -54,7 +64,7 @@ final class WasmApplyCompiler {
 				}
 				WasmExprCompiler
 					.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.applyAlignedRestExpr(cons, required), ctx);
-				ctx.writer.write(Instruction.CALL);
+				ctx.writer.write(callOp);
 				ctx.writer.writeUnsignedLeb128(fi.funcIndex());
 				return;
 			}
@@ -98,7 +108,7 @@ final class WasmApplyCompiler {
 						emitNullSafeCell(ctx, 1);
 					}
 				}
-				ctx.writer.write(Instruction.CALL);
+				ctx.writer.write(callOp);
 				ctx.writer.writeUnsignedLeb128(fi.funcIndex());
 				return;
 			}
@@ -142,7 +152,7 @@ final class WasmApplyCompiler {
 		ctx.writer.writeUnsignedLeb128(funcSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(curSlot);
-		ctx.writer.write(Instruction.CALL);
+		ctx.writer.write(callOp);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
 	}
 

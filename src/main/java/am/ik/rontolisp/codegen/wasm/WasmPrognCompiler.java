@@ -32,6 +32,14 @@ final class WasmPrognCompiler {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compile(cons, ctx, false);
+	}
+
+	/**
+	 * As {@link #compile(LispCons, WasmLispCompiler.Ctx)}; with {@code tail}, the last
+	 * form is in tail position ({@code Ctx.tailPosition}).
+	 */
+	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() == 1) {
 			ctx.writer.write(Instruction.REF_NULL);
@@ -49,6 +57,7 @@ final class WasmPrognCompiler {
 			// skip materializing its (discarded) value-as-stored.
 			WasmExprCompiler.compileForEffect(parts.get(i), ctx);
 		}
+		ctx.tailPosition = tail;
 		WasmExprCompiler.compileExpr(parts.get(parts.size() - 1), ctx);
 	}
 
