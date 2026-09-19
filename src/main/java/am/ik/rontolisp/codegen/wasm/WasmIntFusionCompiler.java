@@ -308,7 +308,8 @@ final class WasmIntFusionCompiler {
 	 * {@code (+ start 1)} an {@code incf} of a plain local or parameter expands to, also
 	 * fuses: the i64 constant plus a checked {@code _fx_*} (or plain bitwise) op beats
 	 * the generic helper's full tier dispatch. A single op over two plain boxed leaves
-	 * keeps the generic call -- nothing about it would run leaner fused.
+	 * keeps the generic call: the helper's own i31 head answers that shape without the
+	 * per-site double emission ({@code .kb/wasm-int-fusion.md}).
 	 */
 	private static boolean hasConstOperand(Node root) {
 		return root instanceof OpNode op && op.args().stream().anyMatch(arg -> arg instanceof ConstLeaf);
