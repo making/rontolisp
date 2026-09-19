@@ -463,8 +463,13 @@ public final class LispMacroExpander {
 	 * <pre>
 	 * (or)             -> nil
 	 * (or x)           -> x
-	 * (or x y ... z)   -> (cond (x) (y) ... (z))
+	 * (or x y ... z)   -> (cond (x) (y) ... (t z))
 	 * </pre>
+	 *
+	 * The last form is the {@code t} clause's body, not a bodyless clause of its own:
+	 * CLHS 7.4 (or) -- the last form is evaluated in the position of the whole
+	 * {@code or}, so ALL its values are returned and it is a tail call, where a bodyless
+	 * clause binds it to a temporary first (one value, one frame kept).
 	 * @param cons the or expression
 	 * @return the expanded expression
 	 */
@@ -478,10 +483,13 @@ public final class LispMacroExpander {
 			// (or x) -> x
 			return parts.get(1);
 		}
-		// (or x y ... z) -> (cond (x) (y) ... (z))
-		// Each clause is a bodyless clause wrapping a single expr
-		LispVal clauses = LispNil.INSTANCE;
-		for (int i = parts.size() - 1; i >= 1; i--) {
+		// (or x y ... z) -> (cond (x) (y) ... (t z))
+		// Each clause but the last is a bodyless clause wrapping a single expr
+		int lastIndex = parts.size() - 1;
+		LispVal clauses = new LispCons(
+				new LispCons(LispTrue.INSTANCE, new LispCons(parts.get(lastIndex), LispNil.INSTANCE)),
+				LispNil.INSTANCE);
+		for (int i = lastIndex - 1; i >= 1; i--) {
 			LispVal clause = new LispCons(parts.get(i), LispNil.INSTANCE);
 			clauses = new LispCons(clause, clauses);
 		}

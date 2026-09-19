@@ -437,10 +437,18 @@ public final class Environment implements Scope {
 	 * resolves the name up this scope chain -- the same chain a {@code lambda} closes
 	 * over -- so a handler or callback built inside a block exits THAT block, never
 	 * whichever same-named block happens to be dynamically active at the signal point.
-	 * The scope object itself is the block's identity (one per activation), so recursion
-	 * and a re-entered loop body each get their own.
+	 * The exit's target is {@link #blockOwner}: the scope itself when the block runs in a
+	 * frame of its own, the frame's first block scope when the evaluator's loop entered
+	 * it in tail position (.kb/interpreter-tail-calls.md), so recursion and a re-entered
+	 * loop body each get their own.
 	 */
 	@Nullable private String blockName;
+
+	/**
+	 * The identity a {@code return-from} aimed at this block's scope targets; see
+	 * {@link #blockName}. Null on an ordinary scope.
+	 */
+	@Nullable private Environment blockOwner;
 
 	/**
 	 * Create a new environment with the given parent scope.
@@ -451,25 +459,39 @@ public final class Environment implements Scope {
 	}
 
 	/**
-	 * Marks this scope as the one a {@code (block name ...)} establishes; see
-	 * {@link #blockName}. Called once, on a scope created for the block body alone.
+	 * Marks this scope as the one a {@code (block name ...)} establishes and as the
+	 * target of its exits; see {@link #blockName}. Called once, on a scope created for
+	 * the block body alone, by a catcher that compares the exit's target with this scope.
 	 * @param name the block name ({@code "NIL"} for the nil block)
 	 */
 	void installBlock(String name) {
-		this.blockName = name;
+		installBlock(name, this);
 	}
 
 	/**
-	 * The innermost scope in this lexical chain establishing a block of the given name --
-	 * the exit target of a {@code return-from} evaluated here -- or {@code null} when no
-	 * such block is lexically visible.
+	 * Marks this scope as the one a {@code (block name ...)} establishes, with the exit
+	 * target {@code owner}: the scope the evaluator's loop frame catches exits for, i.e.
+	 * the first block scope that frame entered, shared by every block it reaches in tail
+	 * position afterwards (.kb/interpreter-tail-calls.md).
+	 * @param name the block name ({@code "NIL"} for the nil block)
+	 * @param owner the identity an exit aimed at this block carries
+	 */
+	void installBlock(String name, Environment owner) {
+		this.blockName = name;
+		this.blockOwner = owner;
+	}
+
+	/**
+	 * The exit target of the block of the given name that is lexically innermost here --
+	 * what a {@code return-from} evaluated in this scope aims at -- or {@code null} when
+	 * no such block is lexically visible.
 	 * @param name the block name being exited
-	 * @return the establishing scope, which is the block's identity
+	 * @return the target identity ({@link #blockOwner} of the establishing scope)
 	 */
 	@Nullable Environment findBlock(String name) {
 		for (Environment scope = this; scope != null; scope = scope.parent) {
 			if (name.equals(scope.blockName)) {
-				return scope;
+				return scope.blockOwner;
 			}
 		}
 		return null;

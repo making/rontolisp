@@ -21,7 +21,12 @@ PROGRAM's, so a ceiling inherited from the platform is a different product on ea
   program (re-measured 2026-09-11, linux-x64).
 - Interpreter frames cost roughly 1.5 KiB of Java stack per Lisp call: `(defun depth (n)
   (if (= n 0) 0 (+ 1 (depth (- n 1)))))` at 1500 overflows 1 MiB, at 4000 overflows 4 MiB
-  and survives 8.
+  and survives 8. **Since `.todo/912` (2026-09-19) a non-tail call is two Java frames
+  where it was thirteen, and a tail call is none**: `depth` reaches 35,726 on the 16 MiB
+  worker where it reached 10,435, and a tail-recursive chain has no ceiling at all
+  (`.kb/interpreter-tail-calls.md`). The frame counts below are the pre-loop ones unless
+  dated later; the mechanism -- the worker thread, `--stack`, the overflow report and the
+  REPL's recovery -- is unchanged.
 - **That cost is the JIT's, not the program's.** The deepest `depth` a 1 MiB thread holds,
   one JVM per row (2026-09-17, linux-x64, Oracle GraalVM 25.0.4, binary search per round):
 
@@ -108,7 +113,10 @@ unchanged as `private static _main$body(String[])`; the class itself is the `Run
   `(define (g self n) (if (= n 0) 'done (self self (- n 1))))` **1,792 -> 16,201-16,207**; the
   CL `(funcall self self ..)` twin 1,775-1,816 -> 16,138-16,287 (`-Xss16m` before: 16,301).
   `-Drontolisp.stack=1` 1,855, `=256` passes the probe's 40,000,000 ceiling. The interpreter's
-  worker holds 15,497 of the Scheme calls, so compiled output is no longer the shallower one.
+  worker held 15,497 of the Scheme calls until the loop in `eval` landed later the same day
+  (`.todo/912`, [interpreter-tail-calls.md](interpreter-tail-calls.md)): a tail call has no
+  ceiling there now, and its non-tail `depth` reaches 35,726 -- so on a tail call compiled
+  output is the shallower one again, and on a non-tail recursion the two are level.
 - Non-tail `(defun depth (n) (if (= n 0) 0 (+ 1 (depth (- n 1)))))`: 30,616 at the default,
   and under `-Xint` 9,072 at 1 MiB vs 160,309 at 16 MiB. C1 frames are the fattest:
   `-XX:TieredStopAtLevel=1` holds 2,230 in 1 MiB, the interpreter 9,072 -- which is why

@@ -131,8 +131,9 @@ per element of list1.
 interpreter (`LispEvaluator`), which evaluate their arguments before the call and were
 already in order -- but read a nil `:key` VALUE as a function to call until
 `presentKeyword` replaced `optionalKeywordArg` there. Everything else in the list above
-reaches the expansion through `evalBuiltinMacro`, so the interpreter and the three compile
-paths run the same hoist.
+reaches the expansion through `builtinMacroExpansion` (an arm of `evalCons` or
+`rareOperatorExpansion`, whose expansion replaces the form in the evaluator's loop), so the
+interpreter and the three compile paths run the same hoist.
 
 ## What it moved (ANSI, interpreter, 2026-09-11)
 

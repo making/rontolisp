@@ -1381,7 +1381,10 @@ names outlive each buffer; everything else is per buffer.
   handler-bind seam): that built-in was two Java frames per Lisp call, 14 against a
   `defun`'s 13 (12 now), and a non-tail `count` in a session overflowed between 7,000 and 7,500
   against a file's 9,000-9,500 (default `--stack`, 2026-09-17). After it both pass 9,000;
-  JIT state moves either edge by a few hundred.
+  JIT state moves either edge by a few hundred. Since `.todo/912` (2026-09-19) that
+  application is a tail call of `evalCons`'s loop: a session's `(self self ..)` runs in
+  constant stack like a file's, and a non-tail call costs two Java frames
+  (`.kb/interpreter-tail-calls.md`).
 - **Each definition also emits a trampoline**, `(defun f (&rest a) (apply f a))`. A form
   typed BEFORE `f` existed lowered `(f x)` as a direct call ("a name this file does not
   define"), and the trampoline is what that call reaches -- reading the variable on every
@@ -1583,7 +1586,9 @@ outside such a cycle changes: a program with none lowers byte-identically.
   call in tail position as `return_call` and the dispatcher tail-calls its target
   (`.kb/wasm-tail-calls.md`, 2026-09-19, `.todo/899`), so the lowering's `(funcall
   (%scheme-ensure-procedure f) ..)` runs in constant stack there -- the check returns
-  before the call. On the JVM and the interpreter it uses stack (depths below).
+  before the call. So is the interpreter's since `.todo/912`: `evalCons` applies the
+  closure a `funcall`/`apply` names in its own loop frame (`.kb/interpreter-tail-calls.md`).
+  On the JVM it uses stack (depths below).
 - **Not a trampoline.** A hand-written trampoline (a tail call answers a bounce, every
   non-tail call site drives them) measured, against plain calls: `fib 32` JVM 43-45 vs
   47-56 ms, wasm 85-107 vs 58-72, interpreter 12.2 vs 5.5 s; 3M shallow `ev?`/`od?` calls
@@ -1592,8 +1597,12 @@ outside such a cycle changes: a program with none lowers byte-identically.
   `return_call` made it moot. The JVM has no counterpart (`.todo/899` measured its
   options: a Scheme call through a value is two JVM frames, `g` and `_invoke_2`; a larger
   stack for compiled output's `main` raises the ceiling 1,844 -> 17,677 at 16 MiB and is a
-  Common Lisp-wide change of every emitted `main`, `.todo/911`). The interpreter's loop
-  in `eval`, the non-trampoline shape, is `.todo/912`.
+  Common Lisp-wide change of every emitted `main` -- landed the same day as the sized-main
+  launcher, `.todo/911`, `.kb/interpreter-stack.md`). The interpreter's loop
+  in `eval`, the non-trampoline shape, landed 2026-09-19 (`.todo/912`,
+  `.kb/interpreter-tail-calls.md`): a tail call through a value is proper there too, and
+  the loop is faster than the recursion it replaced (`fib 32` 4.72-5.26 -> 4.49-4.68 s,
+  `evalfib` on `(fib 24)` 32.6-38.6 -> 25.2-26.3 s).
 
 Pinned by `SchemeLoweringTest.topLevelProceduresWhoseTailCallsFormACycleAreOneGroupEachEntersAtItsLabel`,
 `#aCycleThroughANonTailCallIsNoGroupAndNumbersNothing`, `#anAssignedOrRedefinedProcedureIsNoMember`
@@ -1717,7 +1726,8 @@ binary search): a tail call through a procedure VALUE, `(define (g self n) (if (
 (self self (- n 1))))`, JVM (`java Prog`) 1,716-1,844 (17,677 under `-Xss16m`; 16,201 since the
 compiled `main` runs on a 16 MiB worker, `.kb/interpreter-stack.md`), wasm and
 component 2,693-2,975 before `return_call` and 5,000,000 (the probe's ceiling) after
-(`.kb/wasm-tail-calls.md`), interpreter 15,234-15,497. Top-level `ev?`/`od?` was JVM 3,516
+(`.kb/wasm-tail-calls.md`), interpreter 15,234-15,497 before the loop in `eval` and
+5,000,000 after (`.kb/interpreter-tail-calls.md`). Top-level `ev?`/`od?` was JVM 3,516
 / wasm 10,780 / interpreter 10,230 before the tail-call groups and is unbounded now, and
 so is an internal or `letrec` pair.
 
@@ -1785,9 +1795,9 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 The other
 libraries, radix and exactness prefixes in `string->number` (`.todo/889`),
-re-entrant continuations, tail calls through a procedure value on the JVM and the
-interpreter (proper on both wasm targets, `.kb/wasm-tail-calls.md`). Each is refused by
-name where it can be.
+re-entrant continuations, tail calls through a procedure value on the JVM (proper on both
+wasm targets, `.kb/wasm-tail-calls.md`, and on the interpreter,
+`.kb/interpreter-tail-calls.md`). Each is refused by name where it can be.
 
 ## The SICP sample corpus harness (`.todo/828`)
 
