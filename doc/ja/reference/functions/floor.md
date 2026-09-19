@@ -2,7 +2,7 @@
 
 `(floor number &optional divisor)`
 
-`number`（除数を与えた場合は `number/divisor`）を負の無限大方向に丸めて整数にします。通常の（単一値の）文脈では結果は商だけです。剰余は 2 番目の値であり、[`multiple-value-bind`](../macros/multiple-value-bind.md) などの多値コンシューマを通して観測できます。NaN や無限大（`number` でも商でも）には丸め先の整数がないため、エラーを通知します。`ceiling`、`round`、`truncate` と各 `f` 版も同じです。
+`number`（除数を与えた場合は `number/divisor`）を負の無限大方向に丸めて整数にします。通常の（単一値の）文脈では結果は商だけです。剰余は 2 番目の値であり、[`multiple-value-bind`](../macros/multiple-value-bind.md) などの多値コンシューマを通して観測できます。関数オブジェクト `#'floor` も同じ省略可能な除数を受け取り、同じ 2 つの値を返します。NaN や無限大（`number` でも商でも）には丸め先の整数がないため、エラーを通知します。`ceiling`、`round`、`truncate` と各 `f` 版も同じです。
 
 ```lisp
 (floor 3.7) ; => 3
@@ -15,4 +15,8 @@
 ```lisp
 (multiple-value-bind (q r) (floor 7 2)
   (list q r)) ; => (3 1)
+```
+
+```lisp
+(mapcar #'floor '(7 9) '(2 4)) ; => (3 2)
 ```

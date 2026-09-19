@@ -10961,6 +10961,48 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void floorFamilyFunctionObjectTakesADivisorAndAnswersBothValues() throws Exception {
+		// The floor family as a function object: an optional divisor, and both values
+		// through a funcall, an apply, a variable and a function return. Shared verbatim
+		// with LispEvaluatorTest.FLOOR_FAMILY_FUNCTION_OBJECT and the
+		// floor-family-function-object ci-spec case; every line is SBCL's.
+		assertThat(compileAndRun("""
+				(defun ci-ffo-call (g a b) (funcall g a b))
+				(defun ci-ffo-tail (x) (funcall #'floor x))
+				(print (funcall #'floor 7 2))
+				(print (mapcar #'truncate '(7 9) '(2 4)))
+				(print (multiple-value-list (funcall #'floor 7.5)))
+				(print (multiple-value-list (let ((g #'floor)) (funcall g 7.5))))
+				(print (multiple-value-list (let ((g #'floor)) (funcall g 7 2))))
+				(print (multiple-value-list (funcall #'round 5 2)))
+				(print (multiple-value-list (apply #'ceiling '(7 2))))
+				(print (mapcar #'ffloor '(7 9) '(2 4)))
+				(print (multiple-value-list (funcall #'ftruncate 7 2)))
+				(print (multiple-value-list (let ((g #'fround)) (funcall g 7.5))))
+				(print (multiple-value-list (ci-ffo-call #'floor -7 2)))
+				(print (multiple-value-list (ci-ffo-call #'round 7 2)))
+				(print (multiple-value-list (ci-ffo-call #'ceiling 7 2)))
+				(print (multiple-value-list (ci-ffo-tail 7.5)))
+				(print (multiple-value-list (funcall #'truncate 7/2)))
+				(print (multiple-value-list (car (mapcar #'floor '(7) '(2)))))
+				(print (multiple-value-list (1+ (funcall #'floor 7 2))))
+				(multiple-value-bind (q r) (funcall #'floor 17 5) (print (list q r)))
+				(print (mapcar (lambda (x) (multiple-value-list (funcall #'ceiling x))) '(-0.0 0.5 -2.5)))
+				(print (mapcar (lambda (x) (multiple-value-list (funcall #'fround x))) '(-0.0 2.5 -7/2)))
+				""")).isEqualTo(String.join("\n", "3", "(3 2)", "(7 0.5)", "(7 0.5)", "(3 1)", "(2 1)", "(4 -1)",
+				"(3.0 2.0)", "(3.0 1)", "(8.0 -0.5)", "(-4 1)", "(4 -1)", "(4 -1)", "(7 0.5)", "(3 1/2)", "(3)", "(4)",
+				"(3 2)", "((0 -0.0) (1 -0.5) (-2 -0.5))", "((0.0 -0.0) (2.0 0.5) (-4.0 1/2))"));
+		// Without a multiple-value operator anywhere in the program.
+		assertThat(compileAndRun("""
+				(print (funcall #'floor 7 2))
+				(print (mapcar #'truncate '(7 9) '(2 4)))
+				(print (mapcar #'fceiling '(7 9) '(2 4)))
+				(print (let ((g #'round)) (funcall g 7 2)))
+				(print (funcall #'floor 7.5))
+				""")).isEqualTo(String.join("\n", "3", "(3 2)", "(4.0 3.0)", "4", "7"));
+	}
+
+	@Test
 	void multipleValueChannelIsExactInSingleValueContexts() throws Exception {
 		// The tail discipline (LispMacroExpander.settleMvTail) on wasm: shared verbatim
 		// with LispEvaluatorTest / JvmLispCompilerTest and the

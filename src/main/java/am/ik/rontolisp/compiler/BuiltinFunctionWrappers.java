@@ -1593,9 +1593,14 @@ public final class BuiltinFunctionWrappers {
 			unary(LispNames.CONSP), unary(LispNames.KEYWORDP), unary(LispNames.FUNCTIONP), unary(LispNames.VALUES_LIST),
 			unary(LispNames.VECTORP),
 			// Type conversion (arity 1)
-			unary(LispNames.FLOAT), unary(LispNames.TRUNCATE), unary(LispNames.FLOOR), unary(LispNames.CEILING),
-			unary(LispNames.ROUND), unary(LispNames.FFLOOR), unary(LispNames.FCEILING), unary(LispNames.FROUND),
-			unary(LispNames.FTRUNCATE), unary(LispNames.RATIONAL),
+			unary(LispNames.FLOAT), unary(LispNames.RATIONAL),
+			// The floor family takes its optional divisor as a function too; with the
+			// spill global present, LispMacroExpander.settleWrapperLambdas makes the
+			// tail publish the remainder (.kb/multiple-values.md).
+			unaryOptionalSecond(LispNames.TRUNCATE), unaryOptionalSecond(LispNames.FLOOR),
+			unaryOptionalSecond(LispNames.CEILING), unaryOptionalSecond(LispNames.ROUND),
+			unaryOptionalSecond(LispNames.FFLOOR), unaryOptionalSecond(LispNames.FCEILING),
+			unaryOptionalSecond(LispNames.FROUND), unaryOptionalSecond(LispNames.FTRUNCATE),
 			// Math/IO/list (arity 1)
 			// print / prin1 / princ carry the optional stream: the wrapper forwards it
 			// unconditionally, since an omitted stream and an explicit nil are the same

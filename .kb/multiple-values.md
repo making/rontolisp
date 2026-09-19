@@ -17,7 +17,7 @@ line for line with SBCL on the `multiple-values-single-value-contexts` ci-spec c
 - `multiple-value-bind`, `multiple-value-list`, `multiple-value-call`, `nth-value` (CL_MACROS +
   `expandBuiltinMacro`; `multiple-value-call` as a macro deviates from CL's special operator).
 - Secondary values for `floor`/`ceiling`/`round`/`truncate`, `gethash` and `subtypep`, ONLY inside
-  consumers.
+  consumers -- in call position. The floor family as a FUNCTION object publishes too (below).
   Two-argument `(floor a b)` elsewhere: `expandFloorFamilyDivisor` -> `(floor (/ a b))`.
 
 ## The lowering (`LispMacroExpander`)
@@ -125,10 +125,41 @@ unconditional spill would tax the hottest built-ins on every call:
   everywhere. It runs BEFORE Pass 2 on purpose: the backends' own lambda walk sees the body after
   `expandFloorFamilyDivisor` has turned `(floor a b)` into `(floor (/ a b))`, whose remainder is a
   different number. A built-in WRAPPER's tail stays one value (the interpreter's built-in answers
-  one). Cost: interpreter closure creation (2M `lambda` evaluations, 5 alternating pairs) 3,695-
+  one), the floor family's excepted (next section). Cost: interpreter closure creation (2M `lambda` evaluations, 5 alternating pairs) 3,695-
   4,333 -> 3,693-3,987 ms, medians 3,761 -> 3,759; a program with no producer-tail lambda compiles
   to the same size on both backends. A non-tail `return-from`/`go` escape is not scanned;
   `multiple-value-prog1` needs no walk (its expansion ends in `values-list`).
+
+## The floor family as a function object
+**Invariant (2026-09-19): `#'floor`/`#'ceiling`/`#'round`/`#'truncate` and the four `f` twins take
+the optional divisor and answer both values, through a `funcall`, an `apply`, a variable, a
+`mapcar` and a function return, on every backend.** Before, the function took one argument
+(`(funcall #'floor 7 2)` signalled, wasm trapped) and answered one value.
+- Interpreter: the `LispFunction` (`Environment.floorFamilyValues`) is `passesValues` and publishes
+  the remainder itself. The call position does NOT come here: `evalCons` rounds `(floor x)` through
+  `Environment.roundToInteger`, one value, as it already did `(floor a b)` -- a consumer or a tail
+  lowered its producer before the dispatch, so the remainder is paid only by the function.
+- Compile paths: the wrapper is `unaryOptionalSecond` (`(if b (op a b) (op a))`), and
+  `settleWrapperLambdas` runs the `PUBLISH` tail walk over it before the `CLEAR` one, gated on the
+  spill global, so its tail becomes the syntactic producer's `(values q r)`. Without the global the
+  wrapper is the one-value dispatch.
+- `(funcall #'floor ...)`/`(apply #'floor ...)` over a LITERAL designator direct-calls that
+  wrapper, so `settleTail` classifies it as passing values (not by the name, which says `cl`
+  function, one value) -- the variable case and the literal one agree.
+- No divisor, the remainder is `(- x q)` (`floorFamilyRemainder`, both the lowering and the
+  interpreter's function): one correctly rounded subtraction, since `q` converts exactly (within 1
+  of a float under 2^53, the float itself above 2^52), with CL's zero signs (`(truncate -0.0)` is
+  `0`, `-0.0`). It replaced `mod`/`rem` by 1, which dominated the cost.
+- Cost (2026-09-19, x86-64 Linux, Java 25, wasmtime 47; `(mapcar #'floor xs)` over 1,000 floats x
+  3,000, 4 alternating pairs): no multiple-value operator in the program, class +288 B, wasm +9 B,
+  time unchanged (JVM 158-214 -> 167-199 ms, wasm 130-139 -> 135-136). With one, the wrapper
+  publishes: JVM 155-187 -> 247-271 ms, wasm 132-137 -> 167-255 (the `mod` remainder had it at
+  296-379). A consumer over a one-argument `floor` got faster from the `(- x q)` remainder (3M
+  `multiple-value-bind`s: JVM 98-99 -> 76-78 ms, wasm 433-461 -> 254-317, class 12,773 -> 12,127 B,
+  wasm 9,067 -> 8,772 B). A program referencing neither is byte-identical (`fib.lisp`, with and
+  without a consumer appended).
+- Not covered: `#'gethash`, `#'find-symbol`, `#'intern`, `#'subtypep`, `#'read-from-string`,
+  `#'array-displacement` as function objects still answer one value everywhere (SBCL: two).
 
 ## A tail settles the channel (compile paths)
 **Invariant: once a function body's tail has run, the channel holds that body's extra values.
@@ -278,7 +309,8 @@ leaf that may answer other than one value leaves through a `return-from`).
 `RontoLispCliTest.replEchoesEveryValueOnItsOwnLine`; `JvmLispCompilerTest.compileAndRun*` and
 `WasmLispCompilerIntegrationTest` twins (`*MultipleValueChannelIsExactInSingleValueContexts` is the
 shared matrix); ci-spec `multiple-values-core`, `multiple-values-single-value-contexts` (the
-matrix, SBCL's answers), `unwind-protect-values` (adds the `--component` leg),
+matrix, SBCL's answers), `floor-family-function-object` (+ `evalFloorFamilyFunctionObject*` and
+the JVM/wasm twins), `unwind-protect-values` (adds the `--component` leg),
 `mv-producer-function-return` (its `find-symbol`/`intern` rows probe a USER symbol because a
 non-literal name's runtime status diverges between interpreter and compile paths),
 `split-sequence-residue-features`, `rontolisp-package-introspection`; scheme-spec

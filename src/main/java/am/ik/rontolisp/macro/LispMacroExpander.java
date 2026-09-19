@@ -34270,6 +34270,13 @@ public final class LispMacroExpander {
 	 * @param op the operator name
 	 * @return {@code true} for an f-prefixed rounder
 	 */
+	private static boolean isFloorFamilyName(String op) {
+		return switch (op) {
+			case LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.TRUNCATE -> true;
+			default -> isFFamily(op);
+		};
+	}
+
 	private static boolean isFFamily(String op) {
 		return switch (op) {
 			case LispNames.FFLOOR, LispNames.FCEILING, LispNames.FROUND, LispNames.FTRUNCATE -> true;
@@ -34307,6 +34314,14 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal floorFamilyRemainder(String op, String prefix, LispVal dividend, LispVal divisor,
 			LispVal quotient, LispVal quotientOf) {
+		if (divisor instanceof LispInteger one && one.value() == 1) {
+			// No divisor: the number minus its integer quotient, in ONE rounding and so
+			// the correctly rounded remainder. The quotient converts to a float exactly
+			// -- it is within 1 of a float under 2^53, and the float itself above 2^52
+			// -- and the zero signs are CL's ((truncate -0.0) is 0 and -0.0). What mod
+			// or rem reach through a generic division, this reaches with one subtraction.
+			return mvCall(LispNames.SUB, dividend, quotient);
+		}
 		if (LispNames.TRUNCATE.equals(op)) {
 			return mvCall(LispNames.REM, dividend, divisor);
 		}
@@ -34673,7 +34688,8 @@ public final class LispMacroExpander {
 	 * Clear only ({@link TailMode#CLEAR}): a syntactic producer in a user lambda's tail
 	 * was already rewritten to publish by {@link #injectMvSpillGlobal}
 	 * ({@code settleLambdaTails}), and a built-in wrapper's stays one value, as the
-	 * built-in it wraps is on the interpreter. An empty body answers nil, which is one
+	 * built-in it wraps is on the interpreter -- except the floor family's, which
+	 * {@link #settleWrapperLambdas} makes publish first. An empty body answers nil, which is one
 	 * value: it gets a clearing nil.
 	 * @param body the body forms
 	 * @return the body with its last form settled, or {@code body} itself when nothing
@@ -34698,9 +34714,10 @@ public final class LispMacroExpander {
 	 * ({@code BuiltinFunctionWrappers.generate}'s {@code (setq name (lambda ...))} forms)
 	 * like any other function body ({@link #settleFunctionBody}): the wrapper of
 	 * {@code car} is a function, and {@code (funcall f (values '(1) 2))} with {@code f}
-	 * holding it must answer one value. The compilers add the wrappers after
-	 * {@link #injectMvSpillGlobal} ran, so they settle them here, gated on
-	 * {@link #declaresMvSpill}.
+	 * holding it must answer one value. The floor family's wrapper is the exception: it
+	 * is a producer, and its tail publishes the remainder as the interpreter's built-in
+	 * does. The compilers add the wrappers after {@link #injectMvSpillGlobal} ran, so
+	 * they settle them here, gated on {@link #declaresMvSpill}.
 	 * @param wrappers the wrapper forms
 	 * @return the wrappers with their lambda bodies settled
 	 */
@@ -34712,7 +34729,15 @@ public final class LispMacroExpander {
 					&& setq.toList().get(2) instanceof LispCons lambda && lambda.isProperList()
 					&& lambda.toList().size() >= 3) {
 				List<LispVal> lambdaParts = lambda.toList();
-				List<LispVal> body = settleFunctionBody(lambdaParts.subList(2, lambdaParts.size()));
+				List<LispVal> body = new java.util.ArrayList<>(lambdaParts.subList(2, lambdaParts.size()));
+				if (setq.toList().get(1) instanceof LispSymbol name && isFloorFamilyName(name.name())) {
+					// The floor family's wrapper is a multiple-value producer, as the
+					// interpreter's function is: its (op a b) / (op a) tail publishes the
+					// remainder, which the clear-only settle below passes along.
+					int last = body.size() - 1;
+					body.set(last, settleTail(body.get(last), TailMode.PUBLISH).form());
+				}
+				body = settleFunctionBody(body);
 				List<LispVal> newLambda = new java.util.ArrayList<>(lambdaParts.subList(0, 2));
 				newLambda.addAll(body);
 				List<LispVal> newSetq = new java.util.ArrayList<>(setq.toList());
@@ -34777,7 +34802,8 @@ public final class LispMacroExpander {
 		 * The compile paths' walk over a {@code lambda} body (a
 		 * {@code flet}/{@code labels} function, a built-in wrapper included): clear only.
 		 * A user lambda's producer tail was made to publish earlier, by
-		 * {@link #injectMvSpillGlobal}; a built-in wrapper's stays one value.
+		 * {@link #injectMvSpillGlobal}; a built-in wrapper's stays one value unless
+		 * {@link #settleWrapperLambdas} made it publish (the floor family).
 		 */
 		CLEAR;
 
@@ -34931,7 +34957,9 @@ public final class LispMacroExpander {
 				if (callee != null) {
 					name = callee;
 				}
-				if (passesMultipleValues(name)) {
+				if (passesMultipleValues(name) || callee != null && isFloorFamilyName(callee)) {
+					// The floor family through a designator runs its WRAPPER, which
+					// publishes the remainder (settleWrapperLambdas).
 					yield new SettledTail(form, false);
 				}
 				if (!isSingleValuedOperator(name, parts)) {
