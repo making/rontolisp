@@ -37,6 +37,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.DoublePredicate;
 import java.util.function.DoubleUnaryOperator;
+import java.util.function.IntFunction;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 
@@ -6950,16 +6951,28 @@ public final class Environment implements Scope {
 			// from its head per element, every other representation is the slot read it
 			// always was, and an exhausted list source still signals (above).
 			SequenceSourceCursor reader = new SequenceSourceCursor(source);
+			int from = start2;
+			IntFunction<LispVal> element = k -> reader.read(from + k);
+			if (target == source && start1 > start2 && copied > 0) {
+				// One object, and the writes would land ahead of the reads: CLHS asks for
+				// the
+				// result of copying the whole source region first, so read it out now.
+				LispVal[] region = new LispVal[copied];
+				for (int k = 0; k < copied; k++) {
+					region[k] = reader.read(start2 + k);
+				}
+				element = k -> region[k];
+			}
 			if (target instanceof LispArray targetArr && targetArr.dimensions().length == 1) {
 				for (int k = 0; k < copied; k++) {
-					targetArr.writeFlat(start1 + k, reader.read(start2 + k));
+					targetArr.writeFlat(start1 + k, element.apply(k));
 				}
 				return targetArr;
 			}
 			if (target instanceof LispIntVector targetIv) {
 				// Mask-store each element (a non-integer source element is a type error).
 				for (int k = 0; k < copied; k++) {
-					targetIv.setElement(start1 + k, exactIntElement(LispNames.REPLACE, reader.read(start2 + k)));
+					targetIv.setElement(start1 + k, exactIntElement(LispNames.REPLACE, element.apply(k)));
 				}
 				return targetIv;
 			}
@@ -6972,7 +6985,7 @@ public final class Environment implements Scope {
 					idx++;
 				}
 				for (int k = 0; k < copied && cur instanceof LispCons cell; k++) {
-					cell.setCar(reader.read(start2 + k));
+					cell.setCar(element.apply(k));
 					cur = cell.cdr();
 				}
 				return target;

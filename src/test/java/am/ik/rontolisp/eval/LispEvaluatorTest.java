@@ -6284,6 +6284,23 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void replaceOfOverlappingRegionsOfOneSequence() {
+		// CLHS replace: one object, overlapping regions, start1 > start2 -- the result is
+		// as if the source region were copied first. A forward element copy smeared the
+		// head across the tail (#(1 1 1 1 5)) on every backend; the #'replace wrapper
+		// took no keywords (.kb/sequence-op-runtimes.md).
+		assertThat(evalMulti("""
+				(let ((v (vector 1 2 3 4 5))
+				      (b (make-array 5 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3 4 5)))
+				      (s (copy-seq "abcde"))
+				      (l (list 1 2 3 4 5)))
+				  (list (replace v v :start1 1 :end2 3) (replace b b :start1 1 :end2 3)
+				        (replace s s :start1 1 :end2 3) (replace l l :start1 1 :end2 3)
+				        (funcall #'replace (list 1 2 3 4 5) (list 9) :start1 2)))
+				""").print()).isEqualTo("(#(1 1 2 3 5) #(1 1 2 3 5) \"aabce\" (1 1 2 3 5) (1 2 9 4 5))");
+	}
+
+	@Test
 	void replaceReadsAListSourceThroughACursorRatherThanIndexingItFromTheHead() {
 		// The native replace read its source with sequenceRef per element, and that walks
 		// a LIST from the head -- so a list source was quadratic on the INTERPRETER while
@@ -6303,11 +6320,10 @@ class LispEvaluatorTest {
 				""").print())
 			.isEqualTo("(#(1 2 3 0) #(0 1 2 3) #(3 4 5 0) #(1 2 3 0) (1 2 3 0) (0 2 3 4) #(0 0 0) #(7 8 0) "
 					+ "(#\\a #\\b 0))");
-		// A source and a destination that are the SAME list: the cursor reads the cell it
-		// is standing on, which is the cell the indexed read reached at that step, so a
-		// self-replace copies forward exactly as it did.
+		// A source and a destination that are the SAME list: CLHS copies as if through a
+		// temporary, so a start1 > start2 self-replace reads the region out first.
 		assertThat(evalMulti("(let ((l (list 1 2 3 4))) (list (replace l l :start1 1) l))").print())
-			.isEqualTo("((1 1 1 1) (1 1 1 1))");
+			.isEqualTo("((1 1 2 3) (1 1 2 3))");
 		assertThat(evalMulti("(let ((l (list 1 2 3 4))) (list (replace l l :start2 1) l))").print())
 			.isEqualTo("((2 3 4 4) (2 3 4 4))");
 		// A bounding index the source does not have still SIGNALS, from the same element

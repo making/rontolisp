@@ -1034,14 +1034,6 @@
 
 (defun rontolisp::%scheme-string->utf8 (s) (rontolisp:string-to-octets s))
 
-;; R7RS copies as if through a temporary when TO and FROM are one bytevector. Common
-;; Lisp's replace promises the same, but copies forward on every backend here, so an
-;; overlapping source region is taken out first.
-(defun rontolisp::%scheme-bytevector-copy! (to at from start end)
-  (if (eq to from)
-      (replace to (subseq from start end) :start1 at)
-      (replace to from :start1 at :start2 start :end2 end)))
-
 (defun rontolisp::%scheme-member (x list)
   (do ((rest list (cdr rest)))
       ((not (consp rest)) nil)

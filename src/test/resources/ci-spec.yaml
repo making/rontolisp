@@ -589,6 +589,42 @@ cases:
       "abXYef"
       (1 9 9)
       "abzzef"
+  # CLHS replace: when both sequences are ONE object and the regions overlap, the
+  # result is as if the whole source region were copied first. A forward element copy
+  # smeared the head across the tail (#(1 1 1 1 5)) on every backend when start1 >
+  # start2; the lowering copies that region out first. The #'replace wrapper used to
+  # take two arguments only, so the funcall below signalled on the compile paths.
+  - name: replace-overlapping-regions-of-one-sequence
+    source: |
+      (let ((ro-v (vector 1 2 3 4 5)))
+        (print (replace ro-v ro-v :start1 1 :end2 3)))
+      (let ((ro-b (make-array 5 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3 4 5))))
+        (print (replace ro-b ro-b :start1 1 :end2 3)))
+      (let ((ro-s (copy-seq "abcde")))
+        (print (replace ro-s ro-s :start1 1 :end2 3)))
+      (let ((ro-l (list 1 2 3 4 5)))
+        (print (replace ro-l ro-l :start1 1 :end2 3)))
+      (let ((ro-w (vector 1 2 3 4 5)))
+        (print (funcall #'replace ro-w ro-w :start1 2)))
+      (let ((ro-u (list 1 2 3 4 5)))
+        (setf (subseq ro-u 2) ro-u)
+        (print ro-u))
+      (let ((ro-f (vector 1 2 3 4 5)))
+        (print (replace ro-f ro-f :start2 1)))
+      (let ((ro-g (list 1 2 3 4 5)))
+        (print (replace ro-g ro-g :start2 2)))
+      ;; #'replace and #'fill forward their bounding keywords, as the call forms take them.
+      (print (funcall #'fill (vector 1 2 3 4) 0 :start 1 :end 3))
+    expected: |
+      #(1 1 2 3 5)
+      #(1 1 2 3 5)
+      "aabce"
+      (1 1 2 3 5)
+      #(1 2 1 2 3)
+      (1 2 1 2 3)
+      #(2 3 4 5 5)
+      (3 4 5 4 5)
+      #(1 0 0 4)
   # CLHS 17.2.1's bounding keywords across the count/remove/substitute family
   # (.kb/sequence-bounding-keywords.md): :start/:end bound the scanned subsequence,
   # :count caps the matches acted on, and :from-end REVERSES the walk -- which

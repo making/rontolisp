@@ -49,8 +49,22 @@ Builders in `LispMacroExpander`, each the body its `expand*` used to inline:
 the n elements moved in one engine-level copy, nil = nothing happened and the loop runs.
 `WasmArrayCompiler.compileReplaceBulk` fires only for DISTINCT packed integer vectors of the SAME
 width with in-bounds non-negative i31 bounds, then one `array.copy`; it declines everything else so
-the loop keeps owning the error shape and same-object overlap-forward semantics. The JVM compiles
-the form to constant nil.
+the loop keeps owning the error shape. It is handed the DETACHED source (below), so a
+self-overlapping copy reaches it as two distinct vectors. The JVM compiles the form to constant nil.
+
+## Self-overlapping `replace`
+CLHS: when seq1 and seq2 are one object and the regions overlap, the result is as if the whole
+source region were copied first. A forward element copy is already that when `start1 <= start2`;
+only `start1 > start2` reads elements it has overwritten (`#(1 1 1 1 5)` for
+`(replace v v :start1 1 :end2 3)` on every backend until 2026-09-19). `replaceDispatch`'s
+`sourceDetached` wraps both destructive arms (array, list) in
+`(let* ((src (if (and (eq r1 r2) (< s2 s1)) (subseq r2 s2 (+ s2 n)) r2)) (o (if (eq src r2) s2 0))) ...)`
+and they read through `src`/`o` -- a copy rather than a backward walk because a list source cannot
+be walked backward. The string rebuild arm reads with `subseq` and never needed it.
+The interpreter's native `replace` reads the region into an array first under the same condition
+(its string path, `LispString.replaceInPlace`, was already right). The `#'replace` / `#'fill`
+wrappers forward their bounding keywords (`BuiltinFunctionWrappers.boundingKeywords`); they took
+two arguments only.
 
 ## The arms
 - **`replace` into a LIST** used to fall through to the immutable-string rebuild (JVM
@@ -118,7 +132,10 @@ LOWERING carries a cursor per source and one for the result (`mapIntoDispatch`),
 - `WasmLispCompilerTest.aDestructiveSequenceOperatorSiteDoesNotCarryItsOwnCopyOfTheSharedRuntime`
   (marginal byte budgets),
   `.aProvenArrayDestinationLeavesTheSharedRuntimesNonArrayArmsWithoutACaller`.
-- Behavior: ci-spec `replace-into-a-list`, `sequence-op-runtime-arm-routing`;
+- Behavior: ci-spec `replace-into-a-list`, `sequence-op-runtime-arm-routing`,
+  `replace-overlapping-regions-of-one-sequence` (with `replaceOfOverlappingRegionsOfOneSequence` in
+  `LispEvaluatorTest`, `WasmLispCompilerIntegrationTest` and, `compileAndRun`-prefixed,
+  `JvmLispCompilerTest`);
   `JvmLispCompilerTest.compileAndRunReplaceIntoAList`,
   `WasmLispCompilerIntegrationTest.replaceIntoAList` / `.sequenceOpRuntimeArmRouting`.
 - Source cursors:

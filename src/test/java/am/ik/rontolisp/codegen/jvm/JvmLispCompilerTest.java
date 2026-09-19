@@ -7285,6 +7285,23 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunReplaceOfOverlappingRegionsOfOneSequence() throws Exception {
+		// CLHS replace: one object, overlapping regions, start1 > start2 -- the result is
+		// as if the source region were copied first. A forward element copy smeared the
+		// head across the tail (#(1 1 1 1 5)) on every backend; the #'replace wrapper
+		// took no keywords (.kb/sequence-op-runtimes.md).
+		assertThat(compileAndRun("""
+				(let ((v (vector 1 2 3 4 5))
+				      (b (make-array 5 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3 4 5)))
+				      (s (copy-seq "abcde"))
+				      (l (list 1 2 3 4 5)))
+				  (print (list (replace v v :start1 1 :end2 3) (replace b b :start1 1 :end2 3)
+				               (replace s s :start1 1 :end2 3) (replace l l :start1 1 :end2 3)
+				               (funcall #'replace (list 1 2 3 4 5) (list 9) :start1 2))))
+				""")).isEqualTo("(#(1 1 2 3 5) #(1 1 2 3 5) \"aabce\" (1 1 2 3 5) (1 2 9 4 5))");
+	}
+
+	@Test
 	void compileAndRunAListIntoAListReplaceReadsItsSourceWithACursor() throws Exception {
 		// The list-DESTINATION arm was the one arm still spelling (elt source (+ start2
 		// k)), so a list-into-list replace stayed quadratic here long after the array arm
@@ -7297,7 +7314,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (replace (list 0 0 0) (coerce (list 4 5 6) 'vector)))")).isEqualTo("(4 5 6)");
 		assertThat(compileAndRun("(print (replace (list 0 0 0 0) (list 1 2) :start2 9))")).isEqualTo("(0 0 0 0)");
 		assertThat(compileAndRun("(let ((l (list 1 2 3 4))) (replace l l :start1 1) (print l))"))
-			.isEqualTo("(1 1 1 1)");
+			.isEqualTo("(1 1 2 3)");
 		// Long enough that the head-walk showed.
 		assertThat(compileAndRun("""
 				(let* ((long (let ((out nil))
