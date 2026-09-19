@@ -722,9 +722,22 @@ final class SchemeLowering {
 		for (LispVal datum : included) {
 			sessionImport(datum);
 		}
+		// Grouped by which typed datum each spliced form came from: a top-level begin
+		// (typed, or a macro's template) must splice its definitions to the top level,
+		// but the splicing must still answer as ONE session step, echoing only the
+		// group's last form -- as a whole file's own progn/begin would (.kb/
+		// scheme-frontend.md, "A session").
+		List<List<LispVal>> groups = new ArrayList<>();
+		for (List<LispVal> expandedGroup : expandedGrouped(included)) {
+			List<LispVal> group = new ArrayList<>();
+			for (LispVal datum : expandedGroup) {
+				spliceBegins(datum, group);
+			}
+			groups.add(group);
+		}
 		List<LispVal> forms = new ArrayList<>();
-		for (LispVal datum : expanded(included)) {
-			spliceBegins(datum, forms);
+		for (List<LispVal> group : groups) {
+			forms.addAll(group);
 		}
 		for (LispVal form : forms) {
 			collectAssigned(form);
@@ -739,9 +752,17 @@ final class SchemeLowering {
 		if (!libraryForms.isEmpty()) {
 			out.add(new SchemeTopLevel(libraryForms, false));
 		}
-		for (LispVal form : forms) {
+		for (List<LispVal> group : groups) {
+			if (group.isEmpty()) {
+				// A typed datum consumed entirely (a define-syntax) leaves nothing to
+				// run or echo.
+				continue;
+			}
 			List<LispVal> lowered = new ArrayList<>();
-			boolean echoes = topLevel(form, lowered);
+			boolean echoes = false;
+			for (LispVal form : group) {
+				echoes = topLevel(form, lowered);
+			}
 			out.add(new SchemeTopLevel(List.copyOf(exitGuardEntry(lowered)), echoes));
 		}
 		// Only now: a buffer that failed to lower evaluated nothing, the binding
@@ -817,6 +838,24 @@ final class SchemeLowering {
 			this.expander = new SchemeExpander(new ExpanderHost(), this.libraries.aliases());
 		}
 		return this.expander.topLevel(datums);
+	}
+
+	// Like expanded, but grouped by which input datum each result form came from: what
+	// interact needs so a session step wraps and echoes one typed datum's forms
+	// together, however many a spliced begin turned it into.
+	private List<List<LispVal>> expandedGrouped(List<LispVal> datums) {
+		if (this.expander == null
+				&& !SchemeExpander.needed(datums, this::globalKeyword, name -> importedMacro(name) != null)) {
+			List<List<LispVal>> groups = new ArrayList<>(datums.size());
+			for (LispVal datum : datums) {
+				groups.add(List.of(datum));
+			}
+			return groups;
+		}
+		if (this.expander == null) {
+			this.expander = new SchemeExpander(new ExpanderHost(), this.libraries.aliases());
+		}
+		return this.expander.topLevelGrouped(datums);
 	}
 
 	private @Nullable Core globalKeyword(LispSymbol identifier) {

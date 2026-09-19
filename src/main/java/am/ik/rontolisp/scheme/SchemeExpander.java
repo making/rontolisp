@@ -271,6 +271,29 @@ final class SchemeExpander {
 	 * @return the expanded forms
 	 */
 	List<LispVal> topLevel(List<LispVal> datums) {
+		List<LispVal> out = new ArrayList<>();
+		for (List<LispVal> group : topLevelGrouped(datums)) {
+			out.addAll(group);
+		}
+		return out;
+	}
+
+	// One queued datum, tagged with which input datum (by index into the argument of
+	// topLevelGrouped) it came from: a spliced begin's children inherit their parent's
+	// tag, so the caller can tell which output forms one typed/read datum produced --
+	// needed so a session step (SchemeLowering#interact) wraps and echoes them as ONE
+	// entry, not one per spliced form (.kb/scheme-frontend.md, "A session").
+	private record Queued(int origin, LispVal datum) {
+	}
+
+	/**
+	 * {@link #topLevel(List)}, grouped by which input datum each result form came from --
+	 * a top-level {@code begin} (typed, or a macro's template) splices its forms into its
+	 * OWN datum's group, and a consumed syntax definition leaves an empty group.
+	 * @param datums the forms after the leading imports
+	 * @return one group per datum, same size and order as {@code datums}
+	 */
+	List<List<LispVal>> topLevelGrouped(List<LispVal> datums) {
 		// Like the lowering's pre-scan: a top-level definition's name is a variable of
 		// the whole file, not a keyword it may shadow.
 		for (LispVal datum : datums) {
@@ -284,10 +307,18 @@ final class SchemeExpander {
 				}
 			}
 		}
-		List<LispVal> out = new ArrayList<>();
-		Deque<LispVal> queue = new ArrayDeque<>(datums);
+		List<List<LispVal>> groups = new ArrayList<>(datums.size());
+		for (int i = 0; i < datums.size(); i++) {
+			groups.add(new ArrayList<>());
+		}
+		Deque<Queued> queue = new ArrayDeque<>();
+		for (int i = 0; i < datums.size(); i++) {
+			queue.add(new Queued(i, datums.get(i)));
+		}
 		while (!queue.isEmpty()) {
-			LispVal datum = headExpanded(queue.poll(), this.global);
+			Queued item = queue.poll();
+			List<LispVal> out = groups.get(item.origin());
+			LispVal datum = headExpanded(item.datum(), this.global);
 			if (!(datum instanceof LispCons form)) {
 				try {
 					out.add(expression(datum, this.global));
@@ -300,7 +331,10 @@ final class SchemeExpander {
 			}
 			Core core = keywordOf(form, this.global);
 			if (core == Core.BEGIN) {
-				pushFront(queue, elements(form.cdr(), form));
+				List<LispVal> elements = elements(form.cdr(), form);
+				for (int i = elements.size() - 1; i >= 0; i--) {
+					queue.push(new Queued(item.origin(), elements.get(i)));
+				}
 				continue;
 			}
 			if (core == Core.DEFINE_SYNTAX) {
@@ -320,7 +354,7 @@ final class SchemeExpander {
 				out.add(expression(form, this.global));
 			}
 		}
-		return out;
+		return groups;
 	}
 
 	// ------------------------------------------------------------------ identifiers

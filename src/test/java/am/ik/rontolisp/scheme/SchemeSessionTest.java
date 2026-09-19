@@ -30,10 +30,12 @@ class SchemeSessionTest {
 		SchemeSession session = Scheme.session(SchemeStandard.RONTOLISP);
 		assertThat(lowered(session, "(define-syntax twice (syntax-rules () ((_ e) (begin e e))))"))
 			.isEqualTo("mute (SETQ RONTOLISP::%SCHEME-FALSE '|#f| RONTOLISP::%SCHEME-UNSPECIFIED '|#!unspecific|)");
-		// Its top-level begin splices into two entries, as in a file.
-		assertThat(lowered(session, "(twice (newline))").lines())
-			.allMatch(entry -> entry.startsWith("echo ") && entry.contains("(TERPRI)"))
-			.hasSize(2);
+		// Its top-level begin splices its definitions, as in a file, but the typed
+		// datum still answers as ONE session entry -- one fresh-line, one echo of the
+		// LAST spliced form's value -- so the split never shows at the REPL
+		// (.kb/scheme-frontend.md, "A session").
+		assertThat(lowered(session, "(twice (newline))")).isEqualTo(
+				"echo (LET ((%SCM-EXIT-DONE1 (LIST NIL))) (LET ((%SCM-EXIT-CODE2 (CATCH 'RONTOLISP::%SCHEME-EXIT-TAG (PROGN (PROGN (TERPRI) RONTOLISP::%SCHEME-UNSPECIFIED) %SCM-EXIT-DONE1)))) (IF (EQ %SCM-EXIT-CODE2 %SCM-EXIT-DONE1) NIL (RONTOLISP::%SCHEME-EXIT %SCM-EXIT-CODE2)))) (LET ((%SCM-EXIT-DONE3 (LIST NIL)) (%SCM-EXIT-VALUES4 NIL)) (LET ((%SCM-EXIT-CODE5 (CATCH 'RONTOLISP::%SCHEME-EXIT-TAG (PROGN (SETQ %SCM-EXIT-VALUES4 (MULTIPLE-VALUE-LIST (PROGN (TERPRI) RONTOLISP::%SCHEME-UNSPECIFIED))) %SCM-EXIT-DONE3)))) (IF (EQ %SCM-EXIT-CODE5 %SCM-EXIT-DONE3) (VALUES-LIST %SCM-EXIT-VALUES4) (RONTOLISP::%SCHEME-EXIT %SCM-EXIT-CODE5))))");
 	}
 
 	@Test

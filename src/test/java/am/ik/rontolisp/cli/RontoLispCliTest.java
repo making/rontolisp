@@ -801,6 +801,23 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void theSchemeReplRunsATopLevelBeginAsOneStep() {
+		// A top-level begin must still splice (its definitions need to land at the top
+		// level), but the splicing must answer as ONE step: SchemeLowering#interact used
+		// to return one SchemeTopLevel per spliced form, so ReplBuffer's per-step
+		// fresh-line put each on its own line ("3", "4", "5") instead of running the
+		// effects together and echoing only the last value -- as the Common Lisp REPL
+		// does for (progn (princ 1) (princ 2)): "12" then "2".
+		assertThat(runCli("(begin (display 3) (display 4) 5)\n", "--source-language", "scheme")).isEqualTo("34\n5\n");
+		// A macro whose template is a begin of effects splices the same way, from
+		// expansion instead of a typed begin.
+		assertThat(
+				runCli("(define-syntax two-effects (syntax-rules () ((_ a b v) (begin (display a) (display b) v))))\n"
+						+ "(two-effects 3 4 5)\n", "--source-language", "scheme"))
+			.isEqualTo("34\n5\n");
+	}
+
+	@Test
 	void theSchemeReplEchoesNothingForTheUnspecifiedValue() {
 		// What an effect answers is ONE object, not the value its Common Lisp half
 		// happened to return ("a" from display, () from a one-armed if) -- and the echo

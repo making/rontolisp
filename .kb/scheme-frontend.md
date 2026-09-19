@@ -1413,6 +1413,16 @@ names outlive each buffer; everything else is per buffer.
   cyclic value (the Common Lisp echo with a `print-object` method had the same bug).
   Continuation is "the reader ran out of input"
   (`LispReadException.isEndOfFile`), so `#;`, `#| |#` and `#\(` need no second rule.
+- **One typed datum is one `SchemeTopLevel`, however many forms `spliceBegins` turns it
+  into** (2026-09-19, `.todo/909`): a top-level `begin` -- typed, or a macro's template --
+  must still splice so its definitions land at the top level, but `interact` groups the
+  spliced forms of ONE datum into a single entry (echoing only the last, the others
+  statement-guarded) instead of one entry per spliced form. `SchemeExpander.topLevel`
+  already splices a `begin` into its queue while expanding, so the grouping is carried
+  by `topLevelGrouped`, tagging each queued form with which input datum it came from.
+  Before this, `cli/ReplBuffer`'s per-step fresh-line ran once per spliced form, so
+  `(begin (display 3) (display 4) 5)` printed `3`, `4` and `5` on three lines instead of
+  `34` then `5` (the `(progn (princ 1) (princ 2))` shape the Common Lisp REPL uses).
 - **Applying a non-procedure** reports the condition's own text at the REPL, as file mode
   and every compiled backend do: `The object is not applicable: 3`, `...: #f` and
   `...: #!unspecific` -- the same text `%scheme-eval-apply` reports, built by
