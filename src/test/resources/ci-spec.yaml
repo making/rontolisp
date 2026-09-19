@@ -9707,6 +9707,41 @@ cases:
     expected: |
       "onetwo"
       "onetwo!"
+  - name: composite-stream-constructors
+    # .todo/387: the composite-stream constructors are prelude Lisp over the Gray
+    # protocol, so ONE definition serves every backend. Reading comes from the input
+    # component, writing reaches the output one, a concatenated stream skips each
+    # component at its end of file, and the accessors recover the components. The
+    # :append reopen rides the file stream so the write half composes with the read
+    # half.
+    source: |
+      (let ((o (make-string-output-stream)))
+        (let ((tw (make-two-way-stream (make-string-input-stream "AB") o)))
+          (write-string "hi" tw)
+          (write-char #\! tw))
+        (print (get-output-stream-string o)))
+      (let ((o (make-string-output-stream)))
+        (let ((es (make-echo-stream (make-string-input-stream "ab") o)))
+          (print (list (read-char es) (read-char es) (get-output-stream-string o)))))
+      (let ((cs (make-concatenated-stream (make-string-input-stream "AB")
+                                          (make-string-input-stream "CD"))))
+        (print (list (read-char cs) (read-char cs) (read-char cs) (read-char cs)
+                     (read-char cs nil :eof))))
+      (let ((i (make-string-input-stream "x")) (o (make-string-output-stream)))
+        (let ((tw (make-two-way-stream i o)))
+          (print (list (eq (two-way-stream-input-stream tw) i)
+                       (eq (two-way-stream-output-stream tw) o)))))
+      (with-open-file (out "cs389.dat" :direction :output) (write-string "a" out))
+      (with-open-file (out "cs389.dat" :direction :output :if-exists :append)
+        (write-string "b" out))
+      (with-open-file (in "cs389.dat") (print (read-line in)))
+    expected: |
+      "hi!"
+      (#\a #\b "ab")
+      (#\A #\B #\C #\D :EOF)
+      (T T)
+      "ab"
+
   - name: uiop-stream-file-contents-and-safe-io
     # .todo/359: the "give me the contents" half of uiop/stream -- write a file,
     # read it back through every slurper, and round-trip through with-output to a

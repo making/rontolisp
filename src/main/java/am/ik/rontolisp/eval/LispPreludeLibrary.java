@@ -1258,6 +1258,110 @@ public final class LispPreludeLibrary {
 				(defun %make-broadcast-stream (%mbs-components)
 				  (make-instance '%broadcast-stream :components %mbs-components))
 				""");
+		// make-two-way-stream: the composite-stream pattern one more time -- a Gray
+		// stream subclassing BOTH character base classes, sreading from the input
+		// component and writing to the output one. The methods use the BUILT-INS
+		// (read-char / write-char / write-string) so a component that is a stream
+		// HANDLE works, and the Gray rewrite that runs over the spliced prelude (the
+		// .kb/gray-streams.md pass, which runs AFTER this one in CompileFrontend)
+		// rewrites those call sites onto the dispatch helpers, so a component that is
+		// itself a Gray instance dispatches too. :eof is the protocol's end-of-stream
+		// answer, returned by the read built-in's eof-value.
+		SOURCES.put(LispNames.MAKE_TWO_WAY_STREAM, """
+				(defclass %two-way-stream
+				  (rontolisp:fundamental-character-input-stream
+				   rontolisp:fundamental-character-output-stream)
+				  ((in :initarg :input :reader %two-way-input)
+				   (out :initarg :output :reader %two-way-output)))
+				(defmethod rontolisp:stream-read-char ((%tw %two-way-stream))
+				  (read-char (%two-way-input %tw) nil :eof))
+				(defmethod rontolisp:stream-write-char ((%tw %two-way-stream) %tw-c)
+				  (write-char %tw-c (%two-way-output %tw))
+				  %tw-c)
+				(defmethod rontolisp:stream-write-string ((%tw %two-way-stream) %tw-str
+				                                         &optional (%tw-start 0) %tw-end)
+				  (write-string (subseq %tw-str %tw-start (or %tw-end (length %tw-str)))
+				                (%two-way-output %tw))
+				  %tw-str)
+				(defun make-two-way-stream (input-stream output-stream)
+				  (make-instance '%two-way-stream :input input-stream :output output-stream))
+				""");
+		// The two-way-stream accessors are their OWN prelude defuns (not part of the
+		// constructor entry): each surface name must be a prelude entry key so it
+		// resolves as a function value on the interpreter (every CL_FUNCTIONS name
+		// must, BuiltinFunctionWrapperCatalogTest). The body references the reader
+		// lazily, so it only needs the class defined at CALL time.
+		SOURCES.put(LispNames.TWO_WAY_STREAM_INPUT_STREAM, """
+				(defun two-way-stream-input-stream (%tw2wi-s)
+				  (%two-way-input %tw2wi-s))
+				""");
+		SOURCES.put(LispNames.TWO_WAY_STREAM_OUTPUT_STREAM, """
+				(defun two-way-stream-output-stream (%tw2wo-s)
+				  (%two-way-output %tw2wo-s))
+				""");
+		// make-echo-stream: a two-way stream whose reads are also written to the output
+		// component. Defined as its OWN Gray class (own in/out slots and readers) rather
+		// than a subclass of %two-way-stream: each prelude entry loads standalone on the
+		// interpreter (per-name), so an entry must not need another entry's defclass
+		// already evaluated. The read method echoes.
+		SOURCES.put(LispNames.MAKE_ECHO_STREAM, """
+				(defclass %echo-stream
+				  (rontolisp:fundamental-character-input-stream
+				   rontolisp:fundamental-character-output-stream)
+				  ((in :initarg :input :reader %echo-input)
+				   (out :initarg :output :reader %echo-output)))
+				(defmethod rontolisp:stream-read-char ((%es %echo-stream))
+				  (let ((%es-c (read-char (%echo-input %es) nil :eof)))
+				    (if (eq %es-c :eof)
+				        :eof
+				        (progn
+				          (write-char %es-c (%echo-output %es))
+				          %es-c))))
+				(defmethod rontolisp:stream-write-char ((%es %echo-stream) %es-c)
+				  (write-char %es-c (%echo-output %es))
+				  %es-c)
+				(defmethod rontolisp:stream-write-string ((%es %echo-stream) %es-str
+				                                         &optional (%es-start 0) %es-end)
+				  (write-string (subseq %es-str %es-start (or %es-end (length %es-str)))
+				                (%echo-output %es))
+				  %es-str)
+				(defun make-echo-stream (input-stream output-stream)
+				  (make-instance '%echo-stream :input input-stream :output output-stream))
+				""");
+		SOURCES.put(LispNames.ECHO_STREAM_INPUT_STREAM, """
+				(defun echo-stream-input-stream (%es2i-s)
+				  (%echo-input %es2i-s))
+				""");
+		SOURCES.put(LispNames.ECHO_STREAM_OUTPUT_STREAM, """
+				(defun echo-stream-output-stream (%es2o-s)
+				  (%echo-output %es2o-s))
+				""");
+		// make-concatenated-stream: a character input stream whose read walks the
+		// component list, dropping each at its end of file.
+		SOURCES.put(LispNames.MAKE_CONCATENATED_STREAM, """
+				(defclass %concatenated-stream (rontolisp:fundamental-character-input-stream)
+				  ((streams :initarg :streams :reader %concatenated-stream-streams)))
+				(defmethod rontolisp:stream-read-char ((%cs %concatenated-stream))
+				  (let ((%cs-st (%concatenated-stream-streams %cs)) (%cs-r :eof) (%cs-done nil))
+				    (do ()
+				        (%cs-done %cs-r)
+				      (cond ((null %cs-st)
+				             (setq %cs-r :eof)
+				             (setq %cs-done t))
+				            (t
+				             (let ((%cs-c (read-char (car %cs-st) nil :eof)))
+				               (if (eq %cs-c :eof)
+				                   (setq %cs-st (cdr %cs-st))
+				                   (progn
+				                     (setq %cs-r %cs-c)
+				                     (setq %cs-done t)))))))))
+				(defun make-concatenated-stream (&rest %mcs-streams)
+				  (make-instance '%concatenated-stream :streams %mcs-streams))
+				""");
+		SOURCES.put(LispNames.CONCATENATED_STREAM_STREAMS, """
+				(defun concatenated-stream-streams (%css-s)
+				  (%concatenated-stream-streams %css-s))
+				""");
 		// %stream-target: the ONE resolution of a stream DESIGNATOR down to the raw
 		// handle the I/O primitives act on. Two things are resolved, in this order.
 		// A synonym stream is a value (LispLayout.SYNONYM_STREAM) whose reserved cell
@@ -3695,6 +3799,23 @@ public final class LispPreludeLibrary {
 		if (LispNames.MAKE_BROADCAST_STREAM_INTERNAL.equals(entry)) {
 			return callsWithArguments(program, LispNames.MAKE_BROADCAST_STREAM, canonical);
 		}
+		// The composite-stream entries define a whole cluster -- the constructor, the
+		// accessors and the Gray class/methods. A program that names only an ACCESSOR
+		// (the stream arrives from elsewhere, a library hands it over) must still splice
+		// the cluster, which the constructor-name-based selection would miss -- so key on
+		// ANY of the surface names. Same for the interpreter's per-name loading.
+		if (LispNames.MAKE_TWO_WAY_STREAM.equals(entry)) {
+			return referencesAny(program, canonical, LispNames.MAKE_TWO_WAY_STREAM,
+					LispNames.TWO_WAY_STREAM_INPUT_STREAM, LispNames.TWO_WAY_STREAM_OUTPUT_STREAM);
+		}
+		if (LispNames.MAKE_ECHO_STREAM.equals(entry)) {
+			return referencesAny(program, canonical, LispNames.MAKE_ECHO_STREAM, LispNames.ECHO_STREAM_INPUT_STREAM,
+					LispNames.ECHO_STREAM_OUTPUT_STREAM);
+		}
+		if (LispNames.MAKE_CONCATENATED_STREAM.equals(entry)) {
+			return referencesAny(program, canonical, LispNames.MAKE_CONCATENATED_STREAM,
+					LispNames.CONCATENATED_STREAM_STREAMS);
+		}
 		// %make-array-et: the call is produced by
 		// LispMacroExpander.lowerRuntimeElementTypeMakeArray inside the expression
 		// compilers, after this pass, so selection keys on the SURFACE fact -- a
@@ -3832,6 +3953,16 @@ public final class LispPreludeLibrary {
 	private static boolean callsWithArguments(List<LispVal> program, String name, boolean canonical) {
 		for (LispVal form : program) {
 			if (callsWithArguments(form, name, canonical)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Whether the program names ANY of the given prelude surface functions. */
+	private static boolean referencesAny(List<LispVal> program, boolean canonical, String... names) {
+		for (String name : names) {
+			if (referencesName(program, name, canonical)) {
 				return true;
 			}
 		}
