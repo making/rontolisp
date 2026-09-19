@@ -1502,12 +1502,17 @@ public final class JvmLispCompiler implements LispCompiler {
 				wrapperExcludes.add(op);
 			}
 		}
-		List<LispVal> wrappers = BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes);
+		// gethash/find-symbol/... take their full lambda list and publish their second
+		// value only in a program that names them as a designator.
+		Set<String> designatedProducers = BuiltinFunctionWrappers.designatedValueProducers(program,
+				closRegistry.conditionReports().values());
+		List<LispVal> wrappers = BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes,
+				designatedProducers);
 		if (LispMacroExpander.declaresMvSpill(program)) {
 			// A wrapper is a function body like any other: its tail settles the
 			// multiple-value channel (the defuns' tails were settled by
 			// injectMvSpillGlobal, which ran before the wrappers existed).
-			wrappers = LispMacroExpander.settleWrapperLambdas(wrappers);
+			wrappers = LispMacroExpander.settleWrapperLambdas(wrappers, designatedProducers);
 		}
 		for (LispVal wrapper : wrappers) {
 			defuns.add(extractSetqLambda(wrapper));

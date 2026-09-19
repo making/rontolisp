@@ -2,7 +2,7 @@
 
 `(gethash key table &optional default)`
 
-`table` から `key` を検索し、対応する値を返します。キーがない場合は `default` (省略時は nil) を返します。キーは `equal` によるかのように構造的に比較されるため、等しいリスト・文字列・数値のキーが一致します。値を格納するには `gethash` を `setf` の場所として使います: `(setf (gethash key table) value)`。これは `incf`/`decf`/`push` とも連携します。[`multiple-value-bind`](../macros/multiple-value-bind.md)（および他の多値コンシューマ）の下では、`gethash` 呼び出しは 2 番目の present-p 値も供給し、格納された nil とキーの不在を区別できます。
+`table` から `key` を検索し、対応する値を返します。キーがない場合は `default` (省略時は nil) を返します。キーは `equal` によるかのように構造的に比較されるため、等しいリスト・文字列・数値のキーが一致します。値を格納するには `gethash` を `setf` の場所として使います: `(setf (gethash key table) value)`。これは `incf`/`decf`/`push` とも連携します。[`multiple-value-bind`](../macros/multiple-value-bind.md)（および他の多値コンシューマ）の下では、`gethash` 呼び出しは 2 番目の present-p 値も供給し、格納された nil とキーの不在を区別できます。関数オブジェクト `#'gethash` も同じ省略可能な default を受け取り、同じ 2 つの値を返します。
 
 ```lisp
 (let ((h (make-hash-table)))

@@ -2,7 +2,7 @@
 
 `(gethash key table &optional default)`
 
-Looks up `key` in `table` and returns the associated value, or `default` (nil when omitted) if the key is absent. Keys are compared structurally as if by `equal`, so an equal list, string, or number key matches. To store a value, use `gethash` as a `setf` place: `(setf (gethash key table) value)`, which also cooperates with `incf`/`decf`/`push`. Under [`multiple-value-bind`](../macros/multiple-value-bind.md) (and the other multiple-value consumers) a `gethash` call also supplies a second present-p value distinguishing a stored nil from a missing key.
+Looks up `key` in `table` and returns the associated value, or `default` (nil when omitted) if the key is absent. Keys are compared structurally as if by `equal`, so an equal list, string, or number key matches. To store a value, use `gethash` as a `setf` place: `(setf (gethash key table) value)`, which also cooperates with `incf`/`decf`/`push`. Under [`multiple-value-bind`](../macros/multiple-value-bind.md) (and the other multiple-value consumers) a `gethash` call also supplies a second present-p value distinguishing a stored nil from a missing key. The function object `#'gethash` takes the same optional default and answers the same two values.
 
 ```lisp
 (let ((h (make-hash-table)))

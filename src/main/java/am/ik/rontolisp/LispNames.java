@@ -2072,6 +2072,15 @@ public final class LispNames {
 	 */
 	public static final String FIND_SYMBOL_STATUS = "%FIND-SYMBOL-STATUS";
 
+	/**
+	 * The not-found default of a {@code gethash} multiple-value lowering: a
+	 * {@code gethash} that answers it found no entry. A constant internal symbol rather
+	 * than a fresh {@code (gensym)}, which advanced the gensym counter on every lookup --
+	 * visible to the program's next {@code gensym} -- and cost more than the lookup
+	 * itself.
+	 */
+	public static final String GETHASH_ABSENT = "%GETHASH-ABSENT";
+
 	/** The {@code :external} accessibility status keyword, spelled as it is stored. */
 	public static final String STATUS_EXTERNAL = ":EXTERNAL";
 

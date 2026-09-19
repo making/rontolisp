@@ -17,14 +17,16 @@ line for line with SBCL on the `multiple-values-single-value-contexts` ci-spec c
 - `multiple-value-bind`, `multiple-value-list`, `multiple-value-call`, `nth-value` (CL_MACROS +
   `expandBuiltinMacro`; `multiple-value-call` as a macro deviates from CL's special operator).
 - Secondary values for `floor`/`ceiling`/`round`/`truncate`, `gethash` and `subtypep`, ONLY inside
-  consumers -- in call position. The floor family as a FUNCTION object publishes too (below).
+  consumers -- in call position. Each of them as a FUNCTION object publishes too (below).
   Two-argument `(floor a b)` elsewhere: `expandFloorFamilyDivisor` -> `(floor (/ a b))`.
 
 ## The lowering (`LispMacroExpander`)
 `lowerMvProducer` -> `MvProducer{bindings, values}`: ordered `__mv<id>` temps (`MV_COUNTER`) as
 **nested single-binding lets** (`nestMvBindings`) so evaluation order holds on every backend.
-`isMvProducerForm` recognizes literal `values`, the floor family, `gethash` (a runtime `(gensym)`
-sentinel default plus `(eq v sentinel)` distinguishes a stored nil from a missing key), `subtypep`
+`isMvProducerForm` recognizes literal `values`, the floor family, `gethash` (the internal symbol
+`%GETHASH-ABSENT`, bound once per lookup, as the default plus `(eq v sentinel)` distinguishes a
+stored nil from a missing key -- a `(gensym)` until 2026-09-19, which advanced the program's gensym
+counter on every lookup and cost more than the lookup), `subtypep`
 (answer + valid-p, [[declarations-type-checks]]), one-argument `read-from-string` (datum + stop
 index, [[read-load-streams]]), else one temp. A producer the form is NOT recognized as goes through
 `spillEscapingMvProducers` FIRST, so a recognized producer in the TAIL of the `(let ...)`/`(progn
@@ -158,8 +160,49 @@ the optional divisor and answer both values, through a `funcall`, an `apply`, a 
   `multiple-value-bind`s: JVM 98-99 -> 76-78 ms, wasm 433-461 -> 254-317, class 12,773 -> 12,127 B,
   wasm 9,067 -> 8,772 B). A program referencing neither is byte-identical (`fib.lisp`, with and
   without a consumer appended).
-- Not covered: `#'gethash`, `#'find-symbol`, `#'intern`, `#'subtypep`, `#'read-from-string`,
-  `#'array-displacement` as function objects still answer one value everywhere (SBCL: two).
+
+## The other producers as function objects
+**Invariant (2026-09-19): `#'gethash` (with its optional default), `#'find-symbol`, `#'intern`
+(optional package), `#'subtypep` (optional environment, ignored), `#'read-from-string` (one
+argument) and `#'array-displacement` answer both values through a `funcall`, an `apply`, a
+variable, a `mapcar` and a function return, on every backend.** Pinned by the
+`multiple-value-builtins-function-object` ci-spec case and its three backend-test copies.
+- Interpreter: `LispEvaluator.installValuePublishingFunctions` rebinds each name, last in
+  `registerEval`, to a `passesValues` function that publishes what the lowering's companion reads
+  (`%find-symbol-status`, `%subtypep-valid`, `%read-from-string-end`, `%array-disp-offset`; gethash
+  a present-p off a private sentinel). The call position dispatches to the one-value built-in
+  (`evalConsRareOperator` -> `evalPrimaryValueCall`), as the floor family's does.
+- Compile paths: the wrapper publishes (`settleWrapperLambdas`' PUBLISH walk) and takes the full
+  lambda list (`BuiltinFunctionWrappers.VALUE_SHAPES`: gethash's default, intern's package) ONLY in a
+  program that names the operator as a designator, `#'name` or `'name`
+  (`BuiltinFunctionWrappers.designatedValueProducers`). Unlike the floor family's, these wrappers
+  are reachable in programs that never take them as values -- JVM keeps every wrapper under an eval
+  runtime (a `read-from-string` program's class was +1,444 B), and a shaken wrapper's literals still
+  move the WASM string table (+1 to +12 B) -- so an ungated change touched every program that
+  interns or reads. Given up by the gate: the second value (and gethash's 3-argument / intern's
+  2-argument call) of a wrapper reached only through a run-time designator or `eval`.
+  `#'subtypep` is a new wrapper, `REFERENCE_GATED`, and `containsRuntimeSubtypep` counts the
+  reference so `%subtypep-runtime` is injected.
+- A function object's arguments are COMPUTED on the compile paths, so `#'find-symbol`/`#'intern`
+  carry the computed-name deviations (`.kb/symbol-runtime-api.md`, "Computed `find-symbol`"):
+  `(funcall #'find-symbol "CAR")` is `(CAR :INTERNAL)` there, `:INHERITED` in SBCL and the
+  interpreter; an unknown name yields a symbol.
+- Cost (2026-09-19, x86-64 Linux, Java 25, wasmtime 47, 5 alternating pairs). The wrapper first
+  published through the lowering's `(gensym)` sentinel: 3M `(funcall g i h)` over `#'gethash` went
+  JVM 161-179 -> 330-349 ms, wasm 155-211 -> 360-382, exactly what 3M bare `(gensym)` cost (JVM
+  212-244, wasm 160-206) -- and each lookup advanced the gensym counter, which the ci-spec corpus
+  caught (`gensym-and-macroexpand` printed `#:G2` for `#:G1` once an earlier case's
+  `(funcall #'gethash ...)` published). With the constant sentinel: that loop, no multiple-value
+  operator, class 19,614 -> 19,756 B, wasm 9,618 -> 9,813 B, time unchanged (JVM 158-167 ->
+  156-183 ms, wasm 165-193 -> 171-208); with one, class 21,804 -> 22,283 B, wasm 12,111 -> 12,581 B,
+  JVM 159-179 -> 182-196 ms, wasm 156-208 -> 337-380 (every call allocates the published list and
+  the sentinel literal). The call-position consumer got faster and smaller (3M `multiple-value-bind`
+  over `(gethash i h)`: JVM 335-395 -> 170-187 ms, wasm 315-376 -> 302-329, class 12,069 -> 12,035 B,
+  wasm 8,085 -> 7,882 B). Interpreter call-position `gethash` (300k) unchanged within noise (base
+  452-533, new 460-563 ms over three sessions). Byte-identical: `fib` with and without a consumer,
+  a hash-table program without a consumer, `intern`/`find-symbol`, computed `subtypep`,
+  `read-from-string` + `array-displacement` programs, on all three compile targets; a program with a
+  `gethash` consumer changes by the sentinel only.
 
 ## A tail settles the channel (compile paths)
 **Invariant: once a function body's tail has run, the channel holds that body's extra values.
