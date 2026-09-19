@@ -9385,6 +9385,68 @@ class LispEvaluatorTest {
 				""")).isEqualTo(String.join("\n", "3", "(3 2)", "(4.0 3.0)", "4", "7"));
 	}
 
+	/**
+	 * The other multiple-value built-ins as FUNCTION objects -- gethash (with its
+	 * optional default), find-symbol, intern, subtypep (with its optional environment),
+	 * read-from-string and array-displacement -- answer both values through a funcall, an
+	 * apply, a variable and a function return. Shared verbatim with JvmLispCompilerTest /
+	 * WasmLispCompilerIntegrationTest and the
+	 * {@code multiple-value-builtins-function-object} ci-spec case; every line is SBCL's.
+	 */
+	static final String MV_BUILTINS_FUNCTION_OBJECT = """
+			(defvar *ci-mvf-h* (make-hash-table))
+			(setf (gethash 1 *ci-mvf-h*) 'one)
+			(defun ci-mvf-call (g a b) (funcall g a b))
+			(defun ci-mvf-tail (k) (funcall #'gethash k *ci-mvf-h*))
+			(print (multiple-value-list (funcall #'gethash 1 *ci-mvf-h*)))
+			(print (multiple-value-list (funcall #'gethash 2 *ci-mvf-h*)))
+			(print (multiple-value-list (funcall #'gethash 2 *ci-mvf-h* 'none)))
+			(print (multiple-value-list (let ((g #'gethash)) (funcall g 1 *ci-mvf-h*))))
+			(print (multiple-value-list (apply #'gethash (list 1 *ci-mvf-h*))))
+			(print (multiple-value-list (ci-mvf-call #'gethash 2 *ci-mvf-h*)))
+			(print (multiple-value-list (ci-mvf-tail 1)))
+			(print (mapcar #'gethash '(1 2) (list *ci-mvf-h* *ci-mvf-h*)))
+			(print (multiple-value-list (car (mapcar #'gethash '(1) (list *ci-mvf-h*)))))
+			(multiple-value-bind (v p) (funcall #'gethash 1 *ci-mvf-h*) (print (list v p)))
+			(print (multiple-value-list (let ((g #'find-symbol)) (funcall g "CAR" "CL"))))
+			(print (multiple-value-list (apply #'find-symbol (list "CAR" "CL"))))
+			(print (multiple-value-list (funcall #'intern "CAR" "CL")))
+			(print (multiple-value-list (let ((g #'intern)) (funcall g "CAR" "CL"))))
+			(print (multiple-value-list (funcall #'subtypep 'integer 'number)))
+			(print (multiple-value-list (let ((g #'subtypep)) (funcall g 'string 'number))))
+			(print (multiple-value-list (funcall #'subtypep 'integer 'number nil)))
+			(print (multiple-value-list (funcall #'read-from-string "(a b) c")))
+			(print (multiple-value-list (let ((g #'read-from-string)) (funcall g "42 x"))))
+			(print (multiple-value-list (funcall #'array-displacement (make-array 3))))
+			(let* ((a (make-array 5)) (b (make-array 2 :displaced-to a :displaced-index-offset 1)))
+			  (multiple-value-bind (x o) (funcall #'array-displacement b) (print (list (eq x a) o))))
+			(let ((g1 (gensym)))
+			  (multiple-value-bind (v p) (gethash 1 *ci-mvf-h*) (print (list v p)))
+			  (print (multiple-value-list (funcall #'gethash 2 *ci-mvf-h*)))
+			  (print (- (parse-integer (symbol-name (gensym)) :start 1) (parse-integer (symbol-name g1) :start 1))))
+			""";
+
+	/** What SBCL prints for {@link #MV_BUILTINS_FUNCTION_OBJECT}, one line per print. */
+	static final String MV_BUILTINS_FUNCTION_OBJECT_EXPECTED = String.join("\n", "(ONE T)", "(NIL NIL)", "(NONE NIL)",
+			"(ONE T)", "(ONE T)", "(NIL NIL)", "(ONE T)", "(ONE NIL)", "(ONE)", "(ONE T)", "(CAR :EXTERNAL)",
+			"(CAR :EXTERNAL)", "(CAR :EXTERNAL)", "(CAR :EXTERNAL)", "(T T)", "(NIL T)", "(T T)", "((A B) 6)", "(42 3)",
+			"(NIL 0)", "(T 1)", "(ONE T)", "(NIL NIL)", "1");
+
+	@Test
+	void evalMultipleValueBuiltinsFunctionObjectsAnswerBothValues() {
+		assertThat(printedLines(MV_BUILTINS_FUNCTION_OBJECT)).isEqualTo(MV_BUILTINS_FUNCTION_OBJECT_EXPECTED);
+		// Without a multiple-value operator anywhere in the program.
+		assertThat(printedLines("""
+				(defvar *h* (make-hash-table))
+				(setf (gethash 1 *h*) 'one)
+				(print (funcall #'gethash 2 *h* 'none))
+				(print (mapcar #'gethash '(1 2) (list *h* *h*)))
+				(print (funcall #'subtypep 'integer 'number))
+				(print (let ((g #'find-symbol)) (funcall g "CAR" "CL")))
+				(print (funcall #'read-from-string "(a b) c"))
+				""")).isEqualTo(String.join("\n", "NONE", "(ONE NIL)", "T", "CAR", "(A B)"));
+	}
+
 	private static String printedLines(String program) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));

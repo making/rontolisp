@@ -81,6 +81,12 @@ public final class LispEvaluator {
 	 */
 	private static final LispVal UNHANDLED = new LispSymbol("%unhandled-operator%");
 
+	/**
+	 * The one-value built-in behind each multiple-value built-in's publishing function
+	 * object, which a call position dispatches to ({@link #evalPrimaryValueCall}).
+	 */
+	private final Map<LispFunction, LispFunction> primaryValueBuiltins = new java.util.IdentityHashMap<>();
+
 	private final Environment globalEnv;
 
 	private final PackageResolver packageResolver = new PackageResolver();
@@ -3333,9 +3339,89 @@ public final class LispEvaluator {
 			}
 			return new LispString(name);
 		}));
+		installValuePublishingFunctions();
 		registerJava();
 		registerObjc();
 		registerFfi();
+	}
+
+	/**
+	 * Makes the FUNCTION objects of the multiple-value built-ins the syntactic tier
+	 * recognizes in call position -- {@code gethash}, {@code find-symbol},
+	 * {@code intern}, {@code subtypep}, {@code read-from-string} and
+	 * {@code array-displacement} -- answer their second value too, as the floor family's
+	 * does: a {@code funcall}, an {@code apply}, a variable or a {@code mapcar} reaches
+	 * the function, which publishes the value the companion built-in the lowering reads
+	 * it through computes ({@code LispMacroExpander.lowerMvProducer}). The call position
+	 * keeps the one-value built-in ({@link #evalPrimaryValueCall}): a consumer or a
+	 * function tail has lowered its producer before the dispatch, so only the function
+	 * pays for the second value. Runs last, after {@link #foldStructLiteralsOf} wrapped
+	 * {@code read-from-string}.
+	 */
+	private void installValuePublishingFunctions() {
+		LispVal absent = new LispSymbol("%gethash-absent%");
+		LispFunction gethash = registeredBuiltin(LispNames.GETHASH);
+		installValuePublishing(gethash, new LispFunction(LispNames.GETHASH, args -> {
+			if (args.size() != 2 && args.size() != 3) {
+				return gethash.body().apply(args);
+			}
+			LispVal found = gethash.body().apply(List.of(args.get(0), args.get(1), absent));
+			boolean present = found != absent;
+			this.globalEnv.publishSpill(new LispCons(present ? LispTrue.INSTANCE : LispNil.INSTANCE, LispNil.INSTANCE));
+			return present ? found : args.size() == 3 ? args.get(2) : LispNil.INSTANCE;
+		}, true));
+		publishSecondValue(LispNames.FIND_SYMBOL, LispNames.FIND_SYMBOL_STATUS, Integer.MAX_VALUE);
+		publishSecondValue(LispNames.INTERN, LispNames.FIND_SYMBOL_STATUS, Integer.MAX_VALUE);
+		publishSecondValue(LispNames.SUBTYPEP, LispNames.SUBTYPEP_VALID, Integer.MAX_VALUE);
+		// Only the one-argument read-from-string has its stop index (the keyword and
+		// optional arguments are not implemented, .kb/read-load-streams.md): with more,
+		// the function answers one value, as the call does.
+		publishSecondValue(LispNames.READ_FROM_STRING, LispNames.READ_FROM_STRING_END, 1);
+		publishSecondValue(LispNames.ARRAY_DISPLACEMENT, LispNames.ARRAY_DISP_OFFSET, Integer.MAX_VALUE);
+	}
+
+	/**
+	 * Rebinds {@code name} to a function that answers the one-value built-in's value and
+	 * publishes {@code secondName}'s answer over the same arguments as the second value
+	 * -- while it has at most {@code maxArgs} arguments; one value beyond that.
+	 */
+	private void publishSecondValue(String name, String secondName, int maxArgs) {
+		LispFunction primary = registeredBuiltin(name);
+		LispFunction second = registeredBuiltin(secondName);
+		installValuePublishing(primary, new LispFunction(name, args -> {
+			LispVal value = primary.body().apply(args);
+			this.globalEnv.publishSpill(args.size() > maxArgs ? LispNil.INSTANCE
+					: new LispCons(second.body().apply(args), LispNil.INSTANCE));
+			return value;
+		}, true));
+	}
+
+	/** Binds the publishing function and records the one-value built-in behind it. */
+	private void installValuePublishing(LispFunction primary, LispFunction publishing) {
+		this.globalEnv.defineFunction(publishing.name(), publishing);
+		this.primaryValueBuiltins.put(publishing, primary);
+	}
+
+	/** The registered built-in {@code name}. */
+	private LispFunction registeredBuiltin(String name) {
+		if (!(this.globalEnv.lookupFunctionOrNull(name) instanceof LispFunction builtin)) {
+			throw new IllegalStateException(name + " must be registered");
+		}
+		return builtin;
+	}
+
+	/**
+	 * A call-position {@code (gethash ...)}/{@code (find-symbol ...)}/... : the one-value
+	 * built-in while the name is still bound to its publishing function, else whatever
+	 * the name is bound to now (a user generic that shadows it), through the same
+	 * {@link #apply} seam and in the same order as an ordinary call. See
+	 * {@link #installValuePublishingFunctions}.
+	 */
+	private LispVal evalPrimaryValueCall(LispCons cons, Environment env, String name) {
+		LispVal function = resolveFunction(name);
+		List<LispVal> args = evalArgs(cons, env, cons.properLength() - 1);
+		LispFunction primary = function instanceof LispFunction bound ? this.primaryValueBuiltins.get(bound) : null;
+		return apply(primary != null ? primary : function, args, env);
 	}
 
 	// Registers the interpreter side of the `objc` package (eval/ObjcInterop over
@@ -6494,6 +6580,15 @@ public final class LispEvaluator {
 				}
 				break;
 			}
+			case LispNames.GETHASH:
+			case LispNames.FIND_SYMBOL:
+			case LispNames.INTERN:
+			case LispNames.SUBTYPEP:
+			case LispNames.READ_FROM_STRING:
+			case LispNames.ARRAY_DISPLACEMENT:
+				// One value in call position; the FUNCTION publishes the second
+				// (installValuePublishingFunctions), as the floor family's does above.
+				return evalPrimaryValueCall(cons, env, name);
 			case LispNames.FFLOOR:
 			case LispNames.FCEILING:
 			case LispNames.FROUND:

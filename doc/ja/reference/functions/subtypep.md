@@ -8,7 +8,7 @@
 
 複合指定子はクオートでも実行時計算でも、どちらの側にも書けます。`(or ...)` はいずれかの枝のサブタイプなら真、`(and ...)` はすべての連言のサブタイプなら真です。サブ側に置いた場合は `(or ...)` がすべての枝、`(and ...)` がいずれかの連言を要求します。それ以外の頭部はサブ側では頭部そのものへ簡約されます — 制限付き指定子は頭部の部分集合を表すからです。したがって `(subtypep '(integer 0 10) 'integer)` は `t` で、ベクタに対する `(subtypep (type-of a) 'vector)` も `t` です。スーパー側で同じ簡約を行うのは不健全なので (そちら側では複合指定子のほうが小さい型です)、`(subtypep 'integer '(integer 0 10))` は nil です。`(not ...)`・`(member ...)`・`(eql ...)`・`(satisfies ...)` はこの lite 版 `subtypep` が nil を返す「未知」です。
 
-第 2 値は CL の `valid-p` で、その判定が「決定」なのか「判断できない」なのかを表します。`t` の答えは常に決定です — 証明できたときにしか返さないからです。nil の答えは、型 *名* どうしの組であれば決定です (名前の束は完全に決定できます)。一方、どちらかが複合指定子の場合は `nil nil` (未決定) になります — 上記の複合規則は肯定方向しか証明しないからです。したがって `(subtypep '(and (cons symbol *) (cons * symbol)) '(cons symbol symbol))` は `nil nil` を返します: 実際には同じ型を表しますが、対ごとの規則ではそれを見抜けません。第 2 値を読むには多値フォーム ([`multiple-value-bind`](../macros/multiple-value-bind.md)・[`multiple-value-list`](../macros/multiple-value-list.md)・[`nth-value`](../macros/nth-value.md)) が必要で、通常の呼び出し位置では主値だけが見えます。差異: 未知の型 *名* に対して、ここでは `nil t` を返します (CL 処理系は `nil nil` を返すことがあります)。
+第 2 値は CL の `valid-p` で、その判定が「決定」なのか「判断できない」なのかを表します。`t` の答えは常に決定です — 証明できたときにしか返さないからです。nil の答えは、型 *名* どうしの組であれば決定です (名前の束は完全に決定できます)。一方、どちらかが複合指定子の場合は `nil nil` (未決定) になります — 上記の複合規則は肯定方向しか証明しないからです。したがって `(subtypep '(and (cons symbol *) (cons * symbol)) '(cons symbol symbol))` は `nil nil` を返します: 実際には同じ型を表しますが、対ごとの規則ではそれを見抜けません。第 2 値を読むには多値フォーム ([`multiple-value-bind`](../macros/multiple-value-bind.md)・[`multiple-value-list`](../macros/multiple-value-list.md)・[`nth-value`](../macros/nth-value.md)) が必要で、通常の呼び出し位置では主値だけが見えます。関数オブジェクト `#'subtypep` も同じ 2 つの値を返します。差異: 未知の型 *名* に対して、ここでは `nil t` を返します (CL 処理系は `nil nil` を返すことがあります)。
 
 ```lisp
 (subtypep 'integer 'number) ; => T
