@@ -57,7 +57,7 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `dynamic-wind` | `before`, then `unwind-protect` | the exit half runs on every exit channel; re-entry does not exist |
 | `(case-lambda (formals body..)..)` | `(lambda (&rest A) (let ((N (length A))) (if (= N 1) (let ((x (nth 0 A))) body..) .. (%scheme-case-lambda-arity A))))`, spelled as a Scheme `lambda` datum with `raw` parts | "`case-lambda`" below |
 | `(parameterize ((p v)..) body..)` | `(%scheme-parameterize (list p v ..) (lambda () body..))`; no binding: `(let () body..)` | a special `let` inside the helper, "Parameters" below |
-| `(call-with-values (lambda () ..) (lambda (a b) ..))`, `let-values`, `define-values` | `multiple-value-bind` | the syntactic tier (`.kb/multiple-values.md`). Any other shape: `(apply consumer (multiple-value-list (funcall producer)))`. A loop whose leaf is a `(values ..)` stores every leaf as a LIST and answers `(values-list R)` (`ValueCount`, "Destination-driven lowering") -- a `(setq R (values a b))` keeps one value, on every backend |
+| `(call-with-values (lambda () ..) (lambda (a b) ..))`, `let-values`, `define-values` | `multiple-value-bind` | the syntactic tier (`.kb/multiple-values.md`). Any other shape: `(apply consumer (multiple-value-list (funcall producer)))`. A loop's leaf that may answer other than one value leaves through `(return-from B ..)` ("Destination-driven lowering") -- a `(setq R (values a b))` keeps one value, on every backend |
 | `define-record-type` (top level only) | `defstruct` with `(:conc-name nil)`, each slot NAMED after its accessor, a BOA constructor; the modifier a `defun` over `(setf (accessor r) v)` answering the unspecified object | `defstruct` is what registers the instance layout on every backend (`.kb/defstruct.md`); the accessor IS the generated one, no wrapper call. The predicate answers T/NIL and is a `pred` (`GlobalPredicate`) |
 | `quasiquote` | `cons`/`append`/`(coerce .. 'vector)`, constant parts quoted | depth-counted per R7RS: the innermost unquote of a nested template IS evaluated |
 | `(define-library (a b) ...)`, `(import (a b))` | the library body lowered once, before the importer's forms, with private top-level names (`s%%(a b)name`); an export is the library's binding, so a call stays direct | "Libraries and include" below |
@@ -1125,15 +1125,28 @@ family, bodies) pass the destination down; every other form is a leaf `(setq R v
   loop in the carrier shape, whose fresh names nothing can shadow. Found by
   `examples/scheme/collatz.scm`.
 - Mutual and higher-order tail calls are ordinary calls (depths below).
-- **A leaf stores ONE value** (`(setq R value)`), so a loop whose leaf is a `(values ..)` of
-  other than one value is lowered again with a `multi` destination (`ValueCount`, the
-  `Destination`'s third component, shared by the loops nested in it): every leaf stores a
-  LIST -- `(values a b)` as `(list a b)`, anything else through `multiple-value-list`, an
-  effect as `(list unspecified)` -- and the loop answers `(values-list R)`. The first
-  lowering notes such a leaf (`sawValues`); a loop with none keeps the plain shape, so a
-  loop that exits through a CALL answers that call's first value only (documented in
-  `doc/*/scheme/deviations.md`; R7RS would pass them all, and the exact answer would cost
-  every loop exit a list).
+- **A leaf stores ONE value** (`(setq R value)`), so a leaf that may answer other than one
+  value leaves the loop instead: `(return-from B form)`, B the loop's `block`, named after
+  R (`%SCM-B<n>` for `%SCM-R<n>`, never from the counter, so a discarded loop attempt
+  renumbers nothing) and emitted only when some leaf uses it. Inner loops share the outer
+  one's (`Exit`, the `Destination`'s third component). Which forms: `SchemeValueCount` --
+  a user procedure call (its name always has a lower-case letter), `funcall`/`apply`/
+  `values-list`, a `values` of other than one argument, a helper in `PASSING_HELPERS`,
+  through `if`/`let`/`progn`/`cond`/`and`/`or` tails; a `cl` function answers one value.
+  `PASSING_HELPERS` is pinned against `scheme.lisp` by `SchemeValueCountTest` (a
+  conservative tail walk of every helper; a new helper handing on a user procedure's values
+  fails it until listed). Pinned end to end by scheme-spec `multiple-values`.
+- Measured (2026-09-19, x86-64 Linux, Java 25, wasmtime 47) against the list carrier the
+  `(values ..)` leaves used before (`(setq R (multiple-value-list form))`, `(values-list R)`):
+  30M calls of a 4-iteration loop exiting through a call every time, JVM 350-400 / 330-365 /
+  360-450 ms (plain / list / block, noise), wasm 1.27-1.46 / 1.61-1.78 / 1.31-1.46 s,
+  interpreter (300K calls) 5.7-6.2 / 6.3-6.8 / 6.1-6.4 s; a 300M-iteration integer loop
+  exiting through a call, no difference on any backend (the typed loops survive the
+  `block`). The `return-from` is a jump on both compiled backends and a stackless
+  `BlockReturnSignal` on the interpreter; the list carrier would also pull `values-list`
+  into the wasm (+3.9 KB). Blast radius: 65 of 1,586 SICP corpus files and 1 of 6
+  `examples/scheme` (`evaluator.scm`, +262 B of class, +8 B of wasm) change; every
+  changed leaf is a user procedure call, `funcall` or `apply`. The rest lower byte-identically.
 
 ## Traps
 
