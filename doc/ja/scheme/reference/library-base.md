@@ -249,3 +249,9 @@
 | `read-bytevector!` | `(let ((b (make-bytevector 4 0))) (read-bytevector! b (open-input-bytevector #u8(7 8)) 1) b)` | `#u8(0 7 8 0)` |
 | `eof-object` | `(write (eof-object))` | `#<eof>` を出力 |
 | `eof-object?` | `(eof-object? (eof-object))` | `#t` |
+
+## システムインターフェース
+
+| 名前 | 例 | 結果 |
+|---|---|---|
+| `features` | `(features)` | `(r7rs exact-closed ieee-float full-unicode ratios rontolisp)` |

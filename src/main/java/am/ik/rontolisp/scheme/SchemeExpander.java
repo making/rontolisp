@@ -82,6 +82,13 @@ final class SchemeExpander {
 		 */
 		void checkTopLevelDefinition(LispSymbol identifier, LispCons form);
 
+		/**
+		 * The clause a {@code cond-expand} takes.
+		 * @param form the {@code cond-expand}, every alias stripped
+		 * @return the clause's index among the clauses
+		 */
+		int condExpandClause(LispCons form);
+
 	}
 
 	/** What an identifier means to the expander. */
@@ -554,6 +561,7 @@ final class SchemeExpander {
 				yield rebuild(form, head, out);
 			}
 			case DEFINE_RECORD_TYPE, IMPORT, DEFINE_LIBRARY, INCLUDE, INCLUDE_CI -> strip(form);
+			case COND_EXPAND -> expression(condExpanded(form), env);
 			case DEFINE_SYNTAX -> throw this.host
 				.error("a syntax definition is only allowed at the top level or at the head of a body", form);
 			case LET_SYNTAX, LETREC_SYNTAX -> {
@@ -892,18 +900,37 @@ final class SchemeExpander {
 		return isPlainIdentifier(datum) ? reference((LispSymbol) datum, env, null) : strip(datum);
 	}
 
-	// A form whose head is a macro use, expanded until it is not.
+	// A form whose head is a macro use or a cond-expand, expanded until it is neither.
 	private LispVal headExpanded(LispVal datum, Env env) {
 		LispVal current = datum;
 		int steps = 0;
-		while (current instanceof LispCons form && form.car() instanceof LispSymbol head && isPlainIdentifier(head)
-				&& resolve(head, env) instanceof Macro macro) {
-			if (++steps > MAX_DEPTH) {
-				throw this.host.error("the expansion of " + macro.name() + " does not terminate", form);
+		while (current instanceof LispCons form && form.car() instanceof LispSymbol head && isPlainIdentifier(head)) {
+			Meaning meaning = resolve(head, env);
+			if (meaning instanceof Macro macro) {
+				if (++steps > MAX_DEPTH) {
+					throw this.host.error("the expansion of " + macro.name() + " does not terminate", form);
+				}
+				current = expand(macro, form, env);
 			}
-			current = expand(macro, form, env);
+			else if (meaning instanceof Keyword keyword && keyword.core() == Core.COND_EXPAND) {
+				current = condExpanded(form);
+			}
+			else {
+				break;
+			}
 		}
 		return current;
+	}
+
+	// (cond-expand clause...) a macro expanded into -- the pre-pass took every one the
+	// program spells -- as the (begin datums...) of the clause it takes. The requirements
+	// are decided on the stripped form (a feature is a name, not a binding); the body
+	// keeps its aliases, so the clause is as hygienic as the template.
+	private LispCons condExpanded(LispCons form) {
+		int taken = this.host.condExpandClause((LispCons) strip(form));
+		List<LispVal> clause = elementsOrMalformed(parts(form).get(taken + 1));
+		LispSymbol begin = Objects.requireNonNull(this.host.coreSymbol(Core.BEGIN));
+		return this.host.inherit(form, new LispCons(begin, SchemeBuiltins.listOf(clause.subList(1, clause.size()))));
 	}
 
 	private @Nullable LispSymbol definedName(LispCons form) {

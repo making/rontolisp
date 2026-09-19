@@ -100,7 +100,7 @@ final class SchemeLowering {
 		table.put("define-library", Core.DEFINE_LIBRARY);
 		table.put("include", Core.INCLUDE);
 		table.put("include-ci", Core.INCLUDE_CI);
-		table.put("cond-expand", Core.UNSUPPORTED);
+		table.put("cond-expand", Core.COND_EXPAND);
 		return table;
 	}
 
@@ -622,7 +622,7 @@ final class SchemeLowering {
 	 */
 	List<SchemeTopLevel> interact(SchemeReader buffer) {
 		this.reader = buffer;
-		this.datums = buffer.readAll();
+		this.datums = new ArrayList<>(buffer.readAll());
 		// Temporaries are recognized by identity while their datum is lowered; the
 		// COUNTER is what must outlive the buffer, a record's generated slot being
 		// global.
@@ -630,7 +630,8 @@ final class SchemeLowering {
 		this.internalRecords.clear();
 		// A library typed at a prompt is declared, not lowered: a later import lowers it.
 		List<LispVal> program = new ArrayList<>();
-		for (LispVal datum : this.datums) {
+		for (int index = 0; resolveTopLevelCondExpand(index); index++) {
+			LispVal datum = this.datums.get(index);
 			if (isLibraryDefinition(datum)) {
 				declareLibrary((LispCons) datum, buffer, null);
 			}
@@ -677,7 +678,7 @@ final class SchemeLowering {
 	 * @return the Common Lisp top-level forms
 	 */
 	List<LispVal> lower() {
-		this.datums = this.reader.readAll();
+		this.datums = new ArrayList<>(this.reader.readAll());
 		List<LispVal> forms = new ArrayList<>();
 		int start = imports(declareLibraries());
 		for (LispVal datum : expanded(includes(this.datums.subList(start, this.datums.size()), this.reader.file()))) {
@@ -771,6 +772,11 @@ final class SchemeLowering {
 		@Override
 		public void checkTopLevelDefinition(LispSymbol identifier, LispCons form) {
 			refuseRedefiningAnImport(identifier, form);
+		}
+
+		@Override
+		public int condExpandClause(LispCons form) {
+			return SchemeFeatures.clause(form, SchemeLowering.this.featureHost);
 		}
 
 	}
@@ -974,7 +980,7 @@ final class SchemeLowering {
 	private int imports(int start) {
 		int index = start;
 		Map<String, Binding> imported = new LinkedHashMap<>();
-		while (index < this.datums.size() && this.datums.get(index) instanceof LispCons form
+		while (resolveTopLevelCondExpand(index) && this.datums.get(index) instanceof LispCons form
 				&& form.car() instanceof LispSymbol head && head.name().equals("import")) {
 			for (LispVal set : elements(form.cdr(), form)) {
 				imported.putAll(importSet(set, form));
@@ -1117,11 +1123,72 @@ final class SchemeLowering {
 	// The leading define-library forms of a file: declared here, lowered when imported.
 	private int declareLibraries() {
 		int index = 0;
-		while (index < this.datums.size() && isLibraryDefinition(this.datums.get(index))) {
+		while (resolveTopLevelCondExpand(index) && isLibraryDefinition(this.datums.get(index))) {
 			declareLibrary((LispCons) this.datums.get(index), this.reader, this.reader.file());
 			index++;
 		}
 		return index;
+	}
+
+	// A cond-expand standing at the top level at `index` is replaced by the datums of the
+	// clause it takes, until the datum there is none: what the leading scans (the
+	// define-library, then the import declarations) run over, so a clause may hold
+	// either, and a (library ...) requirement sees every library declared before it.
+	// Spelled, not resolved: there is no scope before the imports, as for `import`.
+	// Answers whether a datum stands at `index`.
+	private boolean resolveTopLevelCondExpand(int index) {
+		while (index < this.datums.size() && this.datums.get(index) instanceof LispCons form
+				&& form.car() instanceof LispSymbol head && head.name().equals("cond-expand")) {
+			List<LispVal> taken = condExpandBody(form);
+			this.datums.remove(index);
+			this.datums.addAll(index, taken);
+		}
+		return index < this.datums.size();
+	}
+
+	// The datums of the clause a (cond-expand clause...) takes.
+	private List<LispVal> condExpandBody(LispCons form) {
+		List<LispVal> clauses = elements(form.cdr(), form);
+		int taken = SchemeFeatures.clause(form, this.featureHost);
+		return SchemeFeatures.body(clauses.get(taken), form, this.featureHost);
+	}
+
+	// (cond-expand clause...) as the (begin datums...) of the clause it takes.
+	private LispCons condExpanded(LispCons form) {
+		LispCons begin = new LispCons(CORE_BEGIN, listOf(condExpandBody(form)));
+		this.reader.inherit(form, begin);
+		return inherit(form, begin);
+	}
+
+	private final SchemeFeatures.Host featureHost = new SchemeFeatures.Host() {
+
+		@Override
+		public boolean libraryAvailable(LispVal name, LispCons form) {
+			return SchemeLowering.this.libraryAvailable(libraryName(name, form));
+		}
+
+		@Override
+		public LispReadException error(String message, LispCons form) {
+			return SchemeLowering.this.error(message, form);
+		}
+
+	};
+
+	// (library name) of cond-expand: a standard library this front end has, or a user
+	// library declared already or found as a file -- whether an import of it would find
+	// it, without lowering it.
+	private boolean libraryAvailable(List<String> name) {
+		if (name.getFirst().equals("scheme")) {
+			return name.size() == 2 && IMPORTABLE_LIBRARIES.contains(name.get(1));
+		}
+		if (this.libraries.declared(name) != null) {
+			return true;
+		}
+		SchemeFiles.Source source = libraryFileSource(name);
+		if (source != null) {
+			declareLibraryFile(source);
+		}
+		return this.libraries.declared(name) != null;
 	}
 
 	private void declareLibrary(LispCons form, SchemeReader reader, @Nullable String file) {
@@ -1201,28 +1268,40 @@ final class SchemeLowering {
 	// (a b) is a/b.sld (else a/b.scm) beside the file the lowering started from, the way
 	// Gauche finds it on its load path; every define-library in that file is declared.
 	private SchemeLibraries.Declaration libraryFile(List<String> name, LispCons form) {
+		SchemeFiles.Source source = libraryFileSource(name);
+		if (source == null) {
+			throw error("library " + printed(name) + " is not available: no define-library of it precedes the"
+					+ " program and there is no " + String.join("/", name) + ".sld", form);
+		}
+		declareLibraryFile(source);
+		SchemeLibraries.Declaration declaration = this.libraries.declared(name);
+		if (declaration == null) {
+			throw error(source.path() + " does not define library " + printed(name), form);
+		}
+		return declaration;
+	}
+
+	// (a b) is a/b.sld, else a/b.scm, or null.
+	private SchemeFiles.@Nullable Source libraryFileSource(List<String> name) {
 		String stem = String.join("/", name);
 		for (String extension : List.of(".sld", ".scm")) {
 			SchemeFiles.Source source = this.libraries.files().find(this.libraries.root(), stem + extension);
-			if (source == null) {
-				continue;
+			if (source != null) {
+				return source;
 			}
-			SchemeReader reader = new SchemeReader(source.text(), source.path());
-			for (LispVal datum : reader.readAll()) {
-				if (isLibraryDefinition(datum)) {
-					LispCons definition = (LispCons) datum;
-					this.libraries.declare(libraryName(second(definition), definition),
-							new SchemeLibraries.Declaration(definition, reader, source.path()));
-				}
-			}
-			SchemeLibraries.Declaration declaration = this.libraries.declared(name);
-			if (declaration == null) {
-				throw error(source.path() + " does not define library " + printed(name), form);
-			}
-			return declaration;
 		}
-		throw error("library " + printed(name) + " is not available: no define-library of it precedes the program"
-				+ " and there is no " + stem + ".sld", form);
+		return null;
+	}
+
+	private void declareLibraryFile(SchemeFiles.Source source) {
+		SchemeReader reader = new SchemeReader(source.text(), source.path());
+		for (LispVal datum : reader.readAll()) {
+			if (isLibraryDefinition(datum)) {
+				LispCons definition = (LispCons) datum;
+				this.libraries.declare(libraryName(second(definition), definition),
+						new SchemeLibraries.Declaration(definition, reader, source.path()));
+			}
+		}
 	}
 
 	// The lowered forms of a library: set by lowerLibrary.
@@ -1324,8 +1403,7 @@ final class SchemeLowering {
 						reading.pop();
 					}
 				}
-				case "cond-expand" ->
-					throw error("cond-expand is not supported by this experimental front end yet", declaration);
+				case "cond-expand" -> libraryDeclarations(condExpandBody(declaration), file, library, out, reading);
 				default -> throw error("unknown library declaration: " + head.name(), declaration);
 			}
 		}
@@ -1435,21 +1513,24 @@ final class SchemeLowering {
 	}
 
 	// Splices every (include "file" ...) the datums spell as a (begin datums...) of the
-	// files' contents, recursively, BEFORE macros are expanded -- so an included
-	// definition or syntax definition is seen by every pre-scan. Quoted data is left
-	// alone. Datums that include nothing are returned as they are, the same objects.
+	// files' contents, and every (cond-expand clause...) as a (begin datums...) of the
+	// clause it takes, recursively, BEFORE macros are expanded -- so an included or
+	// feature-dependent definition or syntax definition is seen by every pre-scan. Quoted
+	// data is left alone, and so is a cond-expand in a syntax-rules template: what the
+	// expander does with it (SchemeExpander). Datums that spell neither are returned as
+	// they are, the same objects.
 	private List<LispVal> includes(List<LispVal> datums, @Nullable String file) {
 		List<LispVal> out = new ArrayList<>(datums.size());
 		boolean changed = false;
 		for (LispVal datum : datums) {
-			LispVal resolved = included(datum, file, new java.util.ArrayDeque<>());
+			LispVal resolved = included(datum, file, new java.util.ArrayDeque<>(), true);
 			changed |= resolved != datum;
 			out.add(resolved);
 		}
 		return changed ? out : datums;
 	}
 
-	private LispVal included(LispVal datum, @Nullable String file, java.util.Deque<String> reading) {
+	private LispVal included(LispVal datum, @Nullable String file, java.util.Deque<String> reading, boolean features) {
 		if (!(datum instanceof LispCons form)) {
 			return datum;
 		}
@@ -1457,12 +1538,15 @@ final class SchemeLowering {
 		if (core == Core.QUOTE || core == Core.QUASIQUOTE) {
 			return datum;
 		}
+		if (core == Core.COND_EXPAND && features) {
+			return included(condExpanded(form), file, reading, true);
+		}
 		if (core == Core.INCLUDE || core == Core.INCLUDE_CI) {
 			List<LispVal> spliced = new ArrayList<>();
 			for (Included included : readIncluded(form, file, core == Core.INCLUDE_CI, reading)) {
 				reading.push(included.file());
 				for (LispVal inner : included.datums()) {
-					spliced.add(included(inner, included.file(), reading));
+					spliced.add(included(inner, included.file(), reading, features));
 				}
 				reading.pop();
 			}
@@ -1474,7 +1558,7 @@ final class SchemeLowering {
 		boolean changed = false;
 		LispVal rest = form;
 		while (rest instanceof LispCons cell) {
-			LispVal element = included(cell.car(), file, reading);
+			LispVal element = included(cell.car(), file, reading, features && core != Core.SYNTAX_RULES);
 			changed |= element != cell.car();
 			elements.add(element);
 			rest = cell.cdr();
@@ -2450,6 +2534,10 @@ final class SchemeLowering {
 			// can
 			// produce one after that.
 			case INCLUDE, INCLUDE_CI -> throw error(syntax.name() + " cannot be the expansion of a macro", form);
+			// Spliced before the lowering too, except where no walk enters: a
+			// quasiquote's
+			// unquoted expression.
+			case COND_EXPAND -> lower(condExpanded(form), context);
 			case ELSE, ARROW, UNQUOTE, UNQUOTE_SPLICING, ELLIPSIS, UNDERSCORE ->
 				throw error("misplaced " + syntax.name(), form);
 			// SchemeExpander consumes these before the lowering; one reaches here only

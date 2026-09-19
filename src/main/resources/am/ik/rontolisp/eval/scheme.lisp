@@ -3091,6 +3091,48 @@
          (rontolisp::%scheme-error-message
           "wrong number of arguments to case-lambda:" (list arguments))))
 
+;; The body of the clause (cond-expand clause...) X takes, as the lowering picks it
+;; (SchemeFeatures): the first whose requirement holds, else a last else clause. A
+;; (library ...) requirement holds for an importable (scheme <name>) only: eval sees no
+;; user library, as environment does not.
+(defun rontolisp::%scheme-eval-cond-expand (x)
+  (let ((clauses (rontolisp::%scheme-eval-parts x 0 nil)))
+    (dolist (clause clauses
+             (error "~A"
+              (rontolisp::%scheme-error-message
+               "no cond-expand clause is fulfilled and there is no else clause:"
+               (list x))))
+      (if (not (consp clause)) (rontolisp::%scheme-ill-formed x))
+      (if (eq (car clause) '|else|)
+          (if (cdr (member clause clauses :test #'eq))
+              (rontolisp::%scheme-ill-formed x)
+              (return (cdr clause))))
+      (if (rontolisp::%scheme-eval-feature-p (car clause) x)
+          (return (cdr clause))))))
+
+(defun rontolisp::%scheme-eval-feature-p (requirement x)
+  (cond ((and (symbolp requirement) requirement)
+         (if (member requirement (rontolisp::%scheme-features)) t nil))
+        ((not (consp requirement)) (rontolisp::%scheme-ill-formed x))
+        ((eq (car requirement) '|and|)
+         (dolist (operand (cdr requirement) t)
+           (if (not (rontolisp::%scheme-eval-feature-p operand x))
+               (return nil))))
+        ((eq (car requirement) '|or|)
+         (dolist (operand (cdr requirement) nil)
+           (if (rontolisp::%scheme-eval-feature-p operand x) (return t))))
+        ((not (and (consp (cdr requirement)) (null (cdr (cdr requirement)))))
+         (rontolisp::%scheme-ill-formed x))
+        ((eq (car requirement) '|not|)
+         (not (rontolisp::%scheme-eval-feature-p (car (cdr requirement)) x)))
+        ((eq (car requirement) '|library|)
+         (let ((name (car (cdr requirement))))
+           (if (and (consp name) (eq (car name) '|scheme|) (consp (cdr name))
+                    (null (cdr (cdr name))))
+               (rontolisp::%scheme-library-p (car (cdr name)))
+               nil)))
+        (t (rontolisp::%scheme-ill-formed x))))
+
 ;; Evaluates every form of BODY but the last, for effect, and answers the last one: the
 ;; tail form the caller continues with.
 (defun rontolisp::%scheme-eval-butlast (body env)
@@ -3582,6 +3624,15 @@
                                                          (rontolisp::%scheme-eval
                                                           (car (cdr parts))
                                                           inner)))))))
+                   ;; Only for a program that spells cond-expand: no other can hand
+                   ;; eval one (SchemeLibrary.COND_EXPAND_FEATURE).
+                   #+rontolisp-scheme-cond-expand
+                   ((eq head '|cond-expand|)
+                    (let ((parts (rontolisp::%scheme-eval-cond-expand x)))
+                      (if (null parts)
+                          (return rontolisp::%scheme-unspecified)
+                          (setq x
+                                (rontolisp::%scheme-eval-butlast parts env)))))
                    ((member head '(|unquote| |unquote-splicing| |else| |s%=>|))
                     (rontolisp::%scheme-ill-formed x))
                    (t (error "~A"

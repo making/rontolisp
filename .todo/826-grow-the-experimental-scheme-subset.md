@@ -19,7 +19,7 @@ backend, add its cases to `scheme-spec.yaml`.
 | ports (`current-output-port`, string ports, bytevector ports and `read-u8`/`write-u8`, `read-line`, `read-char`) | `%STREAM` instances (`.kb/read-load-streams.md`) | `display`/`write` take one argument today; the two-argument form is an arity error. `read` from the current input port is split off: `.todo/832`. Done in `.todo/873` (`.kb/scheme-frontend.md`, "Ports"; file ports -- `(scheme file)` -- are `.todo/874`) |
 | `(scheme char)`, `(scheme cxr)`, `(scheme inexact)`, `(scheme lazy)` | table rows in `SchemeBuiltins` with their own `library` tag | `importSet` already keys visibility on the tag. Split off: `(scheme cxr)` -> `.todo/829`, `(scheme inexact)` -> `.todo/830`, `(scheme lazy)` -> `.todo/831` (those three done), `(scheme char)` -> `.todo/879` (all four done; `(scheme char)`: `.kb/scheme-frontend.md`, "`(scheme char)`") |
 | `define-library` / `include` | per-file lowering gets a library scope | Done in `.todo/882` (`.kb/scheme-frontend.md`, "Libraries and include"); exporting syntax from a library is `.todo/883` |
-| `cond-expand` (top level and as a library declaration) | a pre-pass beside `include`'s, over a feature list (`r7rs`, `rontolisp`, `(library ...)`, `and`/`or`/`not`, `else`) | refused by name today, in a program and in a `define-library`. Split off: `.todo/892` |
+| `cond-expand` (top level and as a library declaration) | a pre-pass beside `include`'s, over a feature list (`r7rs`, `rontolisp`, `(library ...)`, `and`/`or`/`not`, `else`) | Done in `.todo/892` (`.kb/scheme-frontend.md`, "`cond-expand`"; also `(features)`, and `eval` takes one) |
 | internal `define-record-type` | needs a non-top-level `defstruct`, which the compile path refuses (`.kb/defstruct.md`) | Done in `.todo/884`: the `defstruct` is hoisted to the top level (`.kb/scheme-frontend.md`, "Internal record types"; one type per occurrence, not per evaluation) |
 | `|...|` identifiers, `+inf.0` / `+nan.0` | reader | Done in `.todo/886` (`.kb/scheme-frontend.md`, "Vertical-line identifiers and the infinities"; `write` lines a symbol that would not read back; follow-ups `.todo/887`, `.todo/888`, `.todo/889`) |
 
@@ -28,7 +28,7 @@ items `.todo/829` .. `.todo/837`; `eval` is `.todo/833`.
 
 Not a language feature, same area:
 
-- **The playground has no language pick.** A `.scm` reaches it only through `(load ...)` of
+- **The playground has no language pick.** Split off: `.todo/893`. A `.scm` reaches it only through `(load ...)` of
   an uploaded file; the REPL and the compile buttons read Common Lisp
   (`RontoPlayground.evalLine` / `frontend`). The doc site's Scheme fences are static for
   the same reason (`DocExamplesTest` verifies them; `RunnableBlockTransformer` runs `lisp`
