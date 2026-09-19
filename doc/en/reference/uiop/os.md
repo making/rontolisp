@@ -139,9 +139,11 @@ generally useful:
 |----------|--------------|
 | `uiop:read-little-endian` | read an unsigned little-endian integer of *n* octets (4 by default) from a binary stream |
 | `uiop:read-null-terminated-string` | read octets up to a `0` and answer them as a string |
-| `uiop:parse-windows-shortcut` / `uiop:parse-file-location-info` | signal `uiop:not-implemented-error` |
+| `uiop:parse-windows-shortcut` / `uiop:parse-file-location-info` | navigate a `.lnk` with `file-position` and answer the linked pathname |
 
 The two readers are real stream work and run everywhere `read-byte` does. The
-two `.lnk` parsers navigate the file with `file-position`, which no rontolisp
-file stream supports, so they name that primitive instead of misparsing
-silently.
+two parsers are upstream's bodies and seek a binary file stream with
+`file-position`, which the interpreter and the JVM support for a file stream.
+Both WASM backends still answer `nil`, so there the parsers signal
+`uiop:not-implemented-error` naming `file-position` instead of misreading
+the stream.

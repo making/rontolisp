@@ -141,9 +141,13 @@ an UNSET, which is why the reader answers the whole ENTRY, not its cdr. Writer =
 built-in). `getcwd` real where the host has a working directory, signals where it does not
 (`%host-getcwd` answers `user.dir` / NIL, and ONE shared Lisp definition turns that nil into the
 error — the divergence is a VALUE, not a second code path); `chdir` signals everywhere;
-`with-current-directory` INHERITS this and must not invent a second decision. The `.lnk` pair
-(`parse-windows-shortcut`, `parse-file-location-info`) signals naming `file-position`
-(`.kb/read-load-streams.md`); `read-little-endian` / `read-null-terminated-string` are real.
+`:rontolisp-wasm` gate as `architecture`: the four members of the shortcut family are real, and
+the two parsers seek a binary file stream with `file-position` -- real for a file stream on the
+host backends (`.kb/read-load-streams.md`), nil on both WASI backends, where they name the
+primitive instead of misreading (`read-little-endian` / `read-null-terminated-string` are real
+everywhere). The upstream `*link-initial-dword*` / `*link-guid*` constants are inlined (the
+inventory has no `*`, so a resource may not define them); the `.lnk` fixture and its staging live
+in `CorpusFixtures`.
 
 `uiop/pathname` (50/50, `uiop-pathname.lisp` over the flat-namestring model of
 `.kb/pathnames.md`) — logical pathnames follow the CL half's commitment (`logical-pathname-p` nil,

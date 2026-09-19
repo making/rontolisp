@@ -16133,9 +16133,13 @@ cases:
       (print (handler-case (progn (uiop:chdir "/tmp") :moved) (error () :chdir-signals)))
       (print (handler-case (if (pathnamep (uiop:getcwd)) :working-directory :not-a-pathname)
                (error () :no-working-directory)))
-      ;; The two octet readers are real; the two .lnk parsers name the primitive
-      ;; they would need (file-position on a binary stream, which is nil here).
-      (print (handler-case (uiop:parse-windows-shortcut "x.lnk") (error () :not-implemented)))
+      ;; The two octet readers are real; the two .lnk parsers are upstream's bodies
+      ;; and seek a binary file stream with file-position, which the host backends
+      ;; support -- so over the staged x.lnk (CorpusFixtures.stageLnkFixture) they
+      ;; answer upstream's structure -- but both WASI backends still answer nil for
+      ;; file-position, so there they signal instead of misreading.
+      (print (handler-case (uiop:parse-windows-shortcut "x.lnk")
+               (error () :not-implemented)))
     expected: |
       (T NIL NIL NIL)
       (:OS-UNIX :UNIX :RONTOLISP)
@@ -16147,7 +16151,7 @@ cases:
       NIL
       :CHDIR-SIGNALS
       :WORKING-DIRECTORY
-      :NOT-IMPLEMENTED
+      "app.exe"
     expectedByBackend:
       # The compiled ABI the artifact targets is what upstream's architecture is
       # used for, and a WASI program has preopened directories and no CURRENT one,

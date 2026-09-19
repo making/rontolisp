@@ -18,6 +18,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.CorpusFixtures;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -2964,7 +2965,9 @@ class JvmLispCompilerTest {
 		// interpreter. getenv is a Lisp definition over the %host-getenv primitive here,
 		// so the override map a (setf (uiop:getenv x) v) writes is read back on this
 		// backend exactly as on the interpreter; getcwd is real (user.dir) and chdir
-		// signals.
+		// signals. The .lnk parsers are upstream's bodies and seek a binary file
+		// stream, which this backend supports, so the shortcut parses the fixture.
+		String lnk = CorpusFixtures.lnkFixturePath().toString().replace("\\", "\\\\");
 		assertThat(compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
 				(print (list (uiop:featurep :rontolisp) (uiop:featurep :rontolisp-jvm)
 				             (uiop:featurep :rontolisp-interpreter)
@@ -2979,18 +2982,19 @@ class JvmLispCompilerTest {
 				(print (list (uiop:getenv "CI_JVM_UIOP_OS") (uiop:getenvp "CI_JVM_UIOP_OS")))
 				(print (list (stringp (uiop:getenv "PATH")) (pathnamep (uiop:getcwd))))
 				(print (handler-case (uiop:chdir "/tmp") (uiop:not-implemented-error () :chdir-signals)))
-				(print (handler-case (uiop:parse-windows-shortcut "x.lnk")
+				(print (handler-case (uiop:parse-windows-shortcut "%s")
 				         (uiop:not-implemented-error () :lnk-not-implemented)))
-				""", am.ik.rontolisp.reader.Features.JVM), am.ik.rontolisp.reader.Features.JVM))).isEqualTo("""
-				(T T NIL T T)
-				(T NIL NIL NIL)
-				(:OS-UNIX :UNIX :RONTOLISP :RONTOLISP :JVM NIL)
-				:UNIX
-				("one" "one")
-				(NIL NIL)
-				(T T)
-				:CHDIR-SIGNALS
-				:LNK-NOT-IMPLEMENTED""");
+				""".formatted(lnk), am.ik.rontolisp.reader.Features.JVM), am.ik.rontolisp.reader.Features.JVM)))
+			.isEqualTo("""
+					(T T NIL T T)
+					(T NIL NIL NIL)
+					(:OS-UNIX :UNIX :RONTOLISP :RONTOLISP :JVM NIL)
+					:UNIX
+					("one" "one")
+					(NIL NIL)
+					(T T)
+					:CHDIR-SIGNALS
+					"app.exe\"""");
 	}
 
 	@Test

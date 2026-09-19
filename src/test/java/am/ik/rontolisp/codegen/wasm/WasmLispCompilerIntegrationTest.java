@@ -4846,6 +4846,15 @@ class WasmLispCompilerIntegrationTest {
 				(print (list (uiop:getenv "RLENV") (uiop:getenvp "RLENV")))
 				(print (handler-case (uiop:getcwd) (uiop:not-implemented-error () :no-working-directory)))
 				(print (handler-case (uiop:chdir "/tmp") (uiop:not-implemented-error () :chdir-signals)))
+				;; The two .lnk parsers are upstream's bodies and seek a binary file
+				;; stream with file-position, which this backend answers nil for, so
+				;; behind the :rontolisp-wasm gate they signal naming the primitive
+				;; rather than misreading. The gate is the function's FIRST form, so no
+				;; .lnk file has to exist on disk.
+				(print (handler-case (uiop:parse-windows-shortcut "x.lnk")
+				         (uiop:not-implemented-error () :shortcut-signals)))
+				(print (handler-case (uiop:parse-file-location-info nil)
+				         (uiop:not-implemented-error () :fli-signals)))
 				""", Features.WASM), Features.WASM);
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
@@ -4862,7 +4871,9 @@ class WasmLispCompilerIntegrationTest {
 				("overridden" "overridden")
 				(NIL NIL)
 				:NO-WORKING-DIRECTORY
-				:CHDIR-SIGNALS""");
+				:CHDIR-SIGNALS
+				:SHORTCUT-SIGNALS
+				:FLI-SIGNALS""");
 	}
 
 	@Test

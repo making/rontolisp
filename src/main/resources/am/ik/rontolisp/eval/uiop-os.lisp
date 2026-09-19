@@ -138,11 +138,14 @@
                                       "no backend can move its own working directory (the JVM reads user.dir once at startup; WASI has no chdir)"))
 
 ;;; Windows shortcut support. The two octet readers are portable stream work
-;;; and are real; the two .lnk parsers navigate the file with file-position,
-;;; which is nil for a file stream on every backend (the deliberately lite
-;;; stream repositioning of .kb/read-load-streams.md), so they name that
-;;; primitive instead of silently misparsing. Re-evaluation trigger: the day
-;;; file-position works on a binary file stream, both are upstream's bodies.
+;;; and are real; the two .lnk parsers are upstream's bodies, which navigate the
+;;; file with file-position on a binary file stream. That repositioning is real
+;;; for a file stream on the host backends (the interpreter and the JVM,
+;;; .kb/read-load-streams.md) but nil on both WASI backends, so there the pair
+;;; names the primitive instead of silently misreading -- the same gate the
+;;; architecture predicate uses. Re-evaluation trigger: the day file-position
+;;; works on a binary file stream on the WASI backends (.todo/876), the two arms
+;;; below collapse into the body.
 (defun uiop/os:read-null-terminated-string (%rnt-s)
   (with-output-to-string (%rnt-out)
     (do ((%rnt-code (read-byte %rnt-s) (read-byte %rnt-s)))
@@ -155,11 +158,63 @@
       (setq %rle-sum (+ %rle-sum (ash (read-byte %rle-s) (* 8 %rle-i)))))))
 
 (defun uiop/os:parse-file-location-info (%pfli-s)
-  (declare (ignore %pfli-s))
-  (uiop/utility:not-implemented-error "UIOP/OS:PARSE-FILE-LOCATION-INFO"
-   "it seeks with file-position, which a file stream does not support here"))
+  (if (uiop/os:featurep :rontolisp-wasm)
+      (uiop/utility:not-implemented-error "UIOP/OS:PARSE-FILE-LOCATION-INFO"
+                                          "it seeks with file-position, which a WASI file stream does not support here")
+      (let ((start (file-position %pfli-s))
+            (total-length (uiop/os:read-little-endian %pfli-s))
+            (end-of-header (uiop/os:read-little-endian %pfli-s))
+            (fli-flags (uiop/os:read-little-endian %pfli-s))
+            (local-volume-offset (uiop/os:read-little-endian %pfli-s))
+            (local-offset (uiop/os:read-little-endian %pfli-s))
+            (network-volume-offset (uiop/os:read-little-endian %pfli-s))
+            (remaining-offset (uiop/os:read-little-endian %pfli-s)))
+        (declare (ignore total-length end-of-header local-volume-offset))
+        (unless (zerop fli-flags)
+          (cond ((logbitp 0 fli-flags)
+                 (file-position %pfli-s (+ start local-offset)))
+                ((logbitp 1 fli-flags)
+                 (file-position %pfli-s (+ start network-volume-offset #x14))))
+          (uiop/utility:strcat (uiop/os:read-null-terminated-string %pfli-s)
+                               (progn
+                                 (file-position %pfli-s
+                                                (+ start remaining-offset))
+                                 (uiop/os:read-null-terminated-string
+                                  %pfli-s)))))))
 
 (defun uiop/os:parse-windows-shortcut (%pws-pathname)
-  (declare (ignore %pws-pathname))
-  (uiop/utility:not-implemented-error "UIOP/OS:PARSE-WINDOWS-SHORTCUT"
-   "it seeks with file-position, which a file stream does not support here"))
+  (if (uiop/os:featurep :rontolisp-wasm)
+      (uiop/utility:not-implemented-error "UIOP/OS:PARSE-WINDOWS-SHORTCUT"
+                                          "it seeks with file-position, which a WASI file stream does not support here")
+      (with-open-file (s %pws-pathname :element-type '(unsigned-byte 8))
+        (handler-case (when (and (= (uiop/os:read-little-endian s) 76)
+                                 (let ((header (make-array 16)))
+                                   (read-sequence header s)
+                                   (equalp header
+                                           (vector 1 20 2 0 0 0 0 0 192 0 0 0 0
+                                                   0 0 70))))
+                        (let ((flags (uiop/os:read-little-endian s)))
+                          (file-position s 76) ;skip rest of header
+                          (when (logbitp 0 flags)
+                            ;; skip shell item id list
+                            (let ((length (uiop/os:read-little-endian s 2)))
+                              (file-position s (+ length (file-position s)))))
+                          (cond ((logbitp 1 flags)
+                                 (uiop/os:parse-file-location-info s))
+                                (t
+                                 (when (logbitp 2 flags)
+                                   ;; skip description string
+                                   (let ((length
+                                          (uiop/os:read-little-endian s 2)))
+                                     (file-position s
+                                      (+ length (file-position s)))))
+                                 (when (logbitp 3 flags)
+                                   ;; finally, our pathname
+                                   (let* ((length
+                                           (uiop/os:read-little-endian s 2))
+                                          (buffer (make-array length)))
+                                     (read-sequence buffer s)
+                                     (map 'string #'code-char buffer)))))))
+          (end-of-file (c)
+            (declare (ignore c))
+            nil)))))
