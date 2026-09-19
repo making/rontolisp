@@ -3,7 +3,9 @@ package am.ik.rontolisp.scheme;
 import java.util.Arrays;
 import java.util.List;
 
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispIntVector;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReadException;
 import org.junit.jupiter.api.Test;
@@ -96,12 +98,46 @@ class SchemeReaderTest {
 
 	@Test
 	void unsupportedSyntaxIsRefusedByName() {
-		assertThatThrownBy(() -> read("|a b|")).hasMessage("test.scm:1:1: |...| identifiers are not supported");
 		assertThatThrownBy(() -> read("[a]"))
 			.hasMessage("test.scm:1:1: '[' is not a delimiter in R7RS; use parentheses");
 		assertThatThrownBy(() -> read("#\\bogus")).hasMessage("test.scm:1:1: unknown character name: #\\bogus");
-		assertThatThrownBy(() -> read("+inf.0"))
-			.hasMessage("test.scm:1:1: infinities and NaN are not supported: +inf.0");
+	}
+
+	@Test
+	void aVerticalLineIdentifierIsASymbolOfAnySpelling() {
+		assertThat(read("|foo bar| || |1| |.| |a\\x41;b\\|c| |\\t\\\\\"| |#t|")).containsExactly(
+				new LispSymbol("foo bar"), new LispSymbol(""), new LispSymbol("1"), new LispSymbol("."),
+				new LispSymbol("aAb|c"), new LispSymbol("\t\\\""), new LispSymbol("#t"));
+	}
+
+	@Test
+	void aVerticalLineIdentifierSpelledLikeABooleanIsNotOne() {
+		assertThat(read("|#t| |#f| #t #f").stream().map(SchemeReader::isBoolean).toList()).containsExactly(false, false,
+				true, true);
+	}
+
+	@Test
+	void aVerticalLineDelimitsAndIsNeverFolded() {
+		assertThat(read("a|b c|d")).containsExactly(new LispSymbol("a"), new LispSymbol("b c"), new LispSymbol("d"));
+		assertThat(read("#!fold-case ABC |ABC|")).containsExactly(new LispSymbol("abc"), new LispSymbol("ABC"));
+	}
+
+	@Test
+	void aVerticalLineIdentifierThatDoesNotCloseIsAnError() {
+		assertThatThrownBy(() -> read("(a |b c")).isInstanceOf(LispReadException.class)
+			.hasMessage("test.scm:1:4: unterminated '|' identifier");
+		assertThatThrownBy(() -> read("|a\\qb|")).hasMessage("test.scm:1:3: unknown identifier escape: \\q");
+	}
+
+	@Test
+	void infinitiesAndNanAreFlonumsInAnyCaseAndRadix() {
+		assertThat(read("+inf.0 -inf.0 +INF.0 #x-Inf.0")).containsExactly(new LispDouble(Double.POSITIVE_INFINITY),
+				new LispDouble(Double.NEGATIVE_INFINITY), new LispDouble(Double.POSITIVE_INFINITY),
+				new LispDouble(Double.NEGATIVE_INFINITY));
+		assertThat(read("+nan.0 -nan.0 +NaN.0")).allSatisfy(datum -> assertThat(datum)
+			.isInstanceOfSatisfying(LispDouble.class, d -> assertThat(d.value()).isNaN()));
+		assertThat(read("+inf.00 inf.0 +inf -nan")).containsExactly(new LispSymbol("+inf.00"), new LispSymbol("inf.0"),
+				new LispSymbol("+inf"), new LispSymbol("-nan"));
 	}
 
 	@Test

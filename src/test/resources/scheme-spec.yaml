@@ -65,6 +65,62 @@ cases:
       (#t #t #t #f)
       (#t #t #t #f #f)
       (#f true)
+  # Gauche 0.9.15 -r7, except that it writes |+inf.0x| where R7RS reads an identifier.
+  - name: vertical-line-identifiers-are-symbols-of-any-spelling
+    source: |
+      (define |hello world| 42)
+      (define (|a.b;c[d]| x) (+ x 1))
+      (write (list |hello world| (|a.b;c[d]| 1) (eq? 'abc '|abc|) (eq? '|#t| #t) (symbol? '|#f|)))
+      (newline)
+      (write '(|foo bar| || |1| |.| |a\x41;b| |a\|b| |a\\b| |\t| ABC |+inf.0| + ... .a))
+      (newline)
+      (display '(|foo bar| || |1| |a\|b|))
+      (newline)
+      (write (map symbol->string '(|foo bar| || |A:b|)))
+      (newline)
+      (write (list (string->symbol "a b") (string->symbol "") (string->symbol "1+") (string->symbol "λx")))
+      (newline)
+      (let ((|#t| #f)) (write (if |#t| 'yes 'no)))
+      (newline)
+    expected: |
+      (42 2 #t #f #t)
+      (|foo bar| || |1| |.| aAb |a\|b| |a\\b| |\x09;| ABC |+inf.0| + ... .a)
+      (foo bar  1 a|b)
+      ("foo bar" "" "A:b")
+      (|a b| || |1+| λx)
+      no
+  # Gauche 0.9.15 -r7. (eqv? +nan.0 +nan.0) is left out: R7RS leaves it unspecified,
+  # Gauche answers #f and every backend here #t (Common Lisp's eql of one bit pattern).
+  - name: infinities-and-nan-read-print-and-compare
+    source: |
+      (write (list +inf.0 -inf.0 +nan.0 -nan.0 +INF.0 #x-inf.0))
+      (newline)
+      (write (list (= +nan.0 +nan.0) (< -inf.0 0 +inf.0) (> +nan.0 0) (< +nan.0 0) (= +inf.0 +inf.0)))
+      (newline)
+      (write (list (* 2 +inf.0) (/ 1. +inf.0) (- +inf.0 +inf.0) (max 1 +inf.0) (min 1 -inf.0) (abs -inf.0)))
+      (newline)
+      (write (list (nan? +nan.0) (infinite? -inf.0) (finite? +inf.0) (exact? +inf.0) (inexact? +nan.0)
+                   (integer? +inf.0) (rational? +nan.0) (real? -inf.0)))
+      (newline)
+      (write (list (floor +inf.0) (ceiling -inf.0) (round +nan.0) (truncate +inf.0) (floor 2.5) (round 2.5)
+                   (floor -2.5)))
+      (newline)
+      (write (list (number->string -inf.0) (string->number "+inf.0") (string->number "-Inf.0")
+                   (string->number "+nan.0") (string->number "inf.0") (string->number "+inf.0" 16)))
+      (newline)
+      (write (guard (e (#t (error-object? e))) (exact +inf.0)))
+      (newline)
+      (write (list (sqrt +inf.0) (exp -inf.0) (atan +inf.0) (eqv? +inf.0 +inf.0) (equal? -inf.0 -inf.0)))
+      (newline)
+    expected: |
+      (+inf.0 -inf.0 +nan.0 +nan.0 +inf.0 -inf.0)
+      (#f #t #f #f #t)
+      (+inf.0 0.0 +nan.0 +inf.0 -inf.0 +inf.0)
+      (#t #t #f #f #t #f #f #t)
+      (+inf.0 -inf.0 +nan.0 +inf.0 2.0 2.0 -3.0)
+      ("-inf.0" +inf.0 -inf.0 +nan.0 #f +inf.0)
+      #t
+      (+inf.0 0.0 1.5707963267948966 #t #t)
   - name: the-empty-list-is-true-and-false-is-its-own-value
     source: |
       (define (truthy x) (if x 'yes 'no))
@@ -863,7 +919,7 @@ cases:
       (write (apply char<? (list #\a #\b)))
       (newline)
     expected: |
-      (#t #f #f #f #f #f "hello" with space MiXed)
+      (#t #f #f #f #f #f "hello" |with space| MiXed)
       (#t #f 65 #\a #t #f #t #f #t #t #f)
       (#\a #\A #\space #\newline #\tab #\null #\A #\( #\0)
       (a   b s sym)
@@ -1589,6 +1645,20 @@ cases:
       255
       #u8(1 255)
       #u8()
+  # Gauche 0.9.15 -r7.
+  - name: read-knows-vertical-lines-and-infinities
+    stdin: |
+      |foo bar| || |a\x41;\|b| +inf.0 -INF.0 +nan.0 (a |b c| . |d|) #(|1| +inf.0)
+    source: |
+      (let* ((a (read)) (b (read)) (c (read)) (d (read)) (e (read)) (f (read)) (g (read)) (h (read)))
+        (write (list a b c d e f g h))
+        (newline)
+        (write (list (symbol->string c) (nan? f) (eq? a (string->symbol "foo bar"))))
+        (newline))
+      (read-line)
+    expected: |
+      (|foo bar| || |aA\|b| +inf.0 -inf.0 +nan.0 (a |b c| . d) #(|1| +inf.0))
+      ("aA|b" #t #t)
   # The current input port, read with and without a port argument, between reads of a
   # string port and a parameterized one: one pushback per port (Gauche 0.9.15 -r7).
   - name: the-current-input-port-mixes-with-string-ports
@@ -2772,7 +2842,7 @@ standalone:
     stdout: |
       3
     stderr: |
-      Unhandled condition: Unbound variable: 1+
+      Unhandled condition: Unbound variable: |1+|
     fails: true
   - name: strict-r7rs-eval-knows-no-sicp-keyword
     standards: [r7rs]

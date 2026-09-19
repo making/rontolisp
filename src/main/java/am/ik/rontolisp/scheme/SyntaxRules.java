@@ -452,13 +452,16 @@ final class SyntaxRules {
 
 	// #t and #f are symbols to the reader, but data to a pattern.
 	static boolean isIdentifier(LispVal datum) {
-		return datum instanceof LispSymbol symbol && !symbol.equals(SchemeReader.TRUE)
-				&& !symbol.equals(SchemeReader.FALSE);
+		return datum instanceof LispSymbol symbol && symbol != SchemeReader.TRUE && symbol != SchemeReader.FALSE;
 	}
 
 	private static boolean datumEquals(LispVal pattern, LispVal input) {
 		if (pattern instanceof LispCons || pattern instanceof LispArray) {
 			return false;
+		}
+		// A boolean is not equal to the identifier |#t| its symbol is equal to.
+		if (SchemeReader.isBoolean(pattern) || SchemeReader.isBoolean(input)) {
+			return pattern == input;
 		}
 		return pattern.equals(input);
 	}

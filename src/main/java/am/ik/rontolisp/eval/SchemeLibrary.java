@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Predicate;
 
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispCons;
@@ -67,6 +68,14 @@ public final class SchemeLibrary {
 	static final String PORTS_FEATURE = "rontolisp-scheme-ports";
 
 	/**
+	 * The feature {@code scheme.lisp} is read with when the program can hold a symbol
+	 * {@code write} puts between vertical lines ({@code |foo bar|}): it gives the
+	 * printer's symbol arm its {@code write} branch, so a program that cannot hold one
+	 * keeps its printer byte for byte. The interpreter always reads with it.
+	 */
+	static final String BAR_SYMBOLS_FEATURE = "rontolisp-scheme-bar-symbols";
+
+	/**
 	 * The feature {@code scheme.lisp} is read with when the program uses a
 	 * {@code (scheme file)} procedure: it adds the file openers, the file-error condition
 	 * and the file arms of the binary port procedures and of closing a port. It implies
@@ -76,7 +85,10 @@ public final class SchemeLibrary {
 	 */
 	static final String FILES_FEATURE = "rontolisp-scheme-files";
 
-	private static final List<String> ALL_FEATURES = List.of(BYTEVECTORS_FEATURE, PORTS_FEATURE, FILES_FEATURE);
+	private static final List<String> ALL_FEATURES = List.of(BYTEVECTORS_FEATURE, PORTS_FEATURE, BAR_SYMBOLS_FEATURE,
+			FILES_FEATURE);
+
+	private static final Set<String> INTERNING = Set.of("INTERN", "MAKE-SYMBOL");
 
 	private static final Map<String, List<LispVal>> SOURCE_FORMS = new ConcurrentHashMap<>();
 
@@ -85,6 +97,8 @@ public final class SchemeLibrary {
 	private static final Map<String, Set<String>> PORT_FUNCTIONS = new ConcurrentHashMap<>();
 
 	private static final Map<String, Set<String>> FILE_FUNCTIONS = new ConcurrentHashMap<>();
+
+	private static final Map<String, Set<String>> INTERNING_FUNCTIONS = new ConcurrentHashMap<>();
 
 	private static final Map<String, List<LispVal>> FORMS = new ConcurrentHashMap<>();
 
@@ -247,6 +261,9 @@ public final class SchemeLibrary {
 				if (files) {
 					selected.add(FILES_FEATURE);
 				}
+				if (makesBarSymbols(program, features) || makesBarSymbols(generated, features)) {
+					selected.add(BAR_SYMBOLS_FEATURE);
+				}
 				List<LispVal> out = new ArrayList<>(
 						sourceForms(selected.isEmpty() ? features : features.with(selected)));
 				out.addAll(generated);
@@ -282,33 +299,81 @@ public final class SchemeLibrary {
 	// so the printer's arm does not count as making one, and WITH the ports feature, so
 	// get-output-bytevector does.
 	private static Set<String> bytevectorFunctions(Features features) {
-		return BYTEVECTOR_FUNCTIONS.computeIfAbsent(String.join(",", features.names()), ignored -> {
-			Map<String, LispVal> bodies = new HashMap<>();
-			for (LispVal form : sourceForms(features.with(List.of(PORTS_FEATURE)))) {
-				if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
-						&& "DEFUN".equals(head.name()) && cons.cdr() instanceof LispCons rest
-						&& rest.car() instanceof LispSymbol name) {
-					bodies.put(name.name(), rest.cdr());
-				}
+		return BYTEVECTOR_FUNCTIONS.computeIfAbsent(String.join(",", features.names()),
+				ignored -> functionsReaching(sourceForms(features.with(List.of(PORTS_FEATURE))),
+						SchemeLibrary::spellsBytevector));
+	}
+
+	/**
+	 * Whether the forms can hold a symbol {@code write} puts between vertical lines: they
+	 * quote one ({@code '|foo bar|}, or inside a vector literal) or can intern any name
+	 * -- {@code string->symbol}, {@code read}, whatever calls them, {@code intern}
+	 * itself. Derived from the library source, like {@link #makesBytevectors}.
+	 * @param forms the program's forms, or the forms generated for it
+	 * @param features the target backend's reader features
+	 * @return {@code true} when the printer needs its vertical-line arm
+	 */
+	static boolean makesBarSymbols(List<LispVal> forms, Features features) {
+		Set<String> interning = INTERNING_FUNCTIONS.computeIfAbsent(String.join(",", features.names()),
+				ignored -> functionsReaching(sourceForms(features.with(List.of(PORTS_FEATURE))),
+						body -> callsAny(body, INTERNING)));
+		for (LispVal form : forms) {
+			if (callsAny(form, INTERNING) || callsAny(form, interning) || quotesBarSymbol(form, false)) {
+				return true;
 			}
-			Set<String> makers = new HashSet<>();
-			bodies.forEach((name, body) -> {
-				if (spellsBytevector(body)) {
-					makers.add(name);
+		}
+		return false;
+	}
+
+	private static boolean quotesBarSymbol(LispVal form, boolean quoted) {
+		return switch (form) {
+			case LispSymbol symbol -> quoted && Scheme.writtenWithVerticalLines(symbol.name());
+			case LispCons cons -> {
+				if (!quoted && cons.car() instanceof LispSymbol head && "QUOTE".equals(head.name())
+						&& cons.cdr() instanceof LispCons quotation) {
+					yield quotesBarSymbol(quotation.car(), true);
 				}
-			});
-			boolean grew = true;
-			while (grew) {
-				grew = false;
-				for (Map.Entry<String, LispVal> entry : bodies.entrySet()) {
-					if (!makers.contains(entry.getKey()) && callsAny(entry.getValue(), makers)) {
-						makers.add(entry.getKey());
-						grew = true;
+				LispVal rest = cons;
+				while (rest instanceof LispCons cell) {
+					if (quotesBarSymbol(cell.car(), quoted)) {
+						yield true;
 					}
+					rest = cell.cdr();
+				}
+				yield quotesBarSymbol(rest, quoted);
+			}
+			case LispArray array -> Arrays.stream(array.data()).anyMatch(element -> quotesBarSymbol(element, true));
+			default -> false;
+		};
+	}
+
+	// The library functions whose bodies pass the test, then every function calling one
+	// of those, to a fixpoint.
+	private static Set<String> functionsReaching(List<LispVal> source, Predicate<LispVal> test) {
+		Map<String, LispVal> bodies = new HashMap<>();
+		for (LispVal form : source) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head && "DEFUN".equals(head.name())
+					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
+				bodies.put(name.name(), rest.cdr());
+			}
+		}
+		Set<String> reaching = new HashSet<>();
+		bodies.forEach((name, body) -> {
+			if (test.test(body)) {
+				reaching.add(name);
+			}
+		});
+		boolean grew = true;
+		while (grew) {
+			grew = false;
+			for (Map.Entry<String, LispVal> entry : bodies.entrySet()) {
+				if (!reaching.contains(entry.getKey()) && callsAny(entry.getValue(), reaching)) {
+					reaching.add(entry.getKey());
+					grew = true;
 				}
 			}
-			return Set.copyOf(makers);
-		});
+		}
+		return Set.copyOf(reaching);
 	}
 
 	/**
