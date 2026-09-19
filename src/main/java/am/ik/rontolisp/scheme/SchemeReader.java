@@ -500,7 +500,7 @@ final class SchemeReader {
 		if (token.equals(".")) {
 			return DOT;
 		}
-		LispVal number = number(token, 10);
+		LispVal number = number(token, 10, null);
 		if (number != null) {
 			return number;
 		}
@@ -554,26 +554,58 @@ final class SchemeReader {
 				|| c == ',' || c == '|';
 	}
 
-	// #x / #b / #o / #d, exact integers and rationals only.
+	// R7RS <prefix R>: a <radix R> (#x/#b/#o/#d) and an <exactness> (#e/#i), in either
+	// order, each at most once. Unconsumed once a pair is unrecognized or repeats a kind
+	// already seen -- the leftover '#' then fails digit()/infnan below, so an invalid
+	// prefix answers null exactly like an invalid number does.
 	private static @Nullable LispVal prefixedNumber(String token) {
-		int radix = switch (Character.toLowerCase(token.charAt(1))) {
-			case 'x' -> 16;
-			case 'b' -> 2;
-			case 'o' -> 8;
-			case 'd' -> 10;
-			default -> 0;
-		};
-		return radix == 0 ? null : number(token.substring(2), radix);
+		int radix = 10;
+		boolean radixSet = false;
+		Boolean toInexact = null;
+		int index = 0;
+		while (index + 1 < token.length() && token.charAt(index) == '#') {
+			char c = Character.toLowerCase(token.charAt(index + 1));
+			int candidate = switch (c) {
+				case 'x' -> 16;
+				case 'b' -> 2;
+				case 'o' -> 8;
+				case 'd' -> 10;
+				default -> 0;
+			};
+			if (candidate != 0) {
+				if (radixSet) {
+					break;
+				}
+				radix = candidate;
+				radixSet = true;
+				index += 2;
+				continue;
+			}
+			if (c == 'e' || c == 'i') {
+				if (toInexact != null) {
+					break;
+				}
+				toInexact = c == 'i';
+				index += 2;
+				continue;
+			}
+			break;
+		}
+		return index == 0 ? null : number(token.substring(index), radix, toInexact);
 	}
 
-	private static @Nullable LispVal number(String token, int radix) {
+	// toInexact: TRUE for #i (the exact result converts to a flonum), FALSE for #e (a
+	// decimal converts to the exact rational/integer it spells rather than a flonum),
+	// null when the caller passed neither -- the pre-existing behavior, unchanged.
+	private static @Nullable LispVal number(String token, int radix, @Nullable Boolean toInexact) {
 		if (token.isEmpty()) {
 			return null;
 		}
 		if (INFINITIES_AND_NANS.contains(token.toLowerCase(Locale.ROOT))) {
 			// R7RS <infnan>, in any radix; case is insignificant in a number. A NaN's
-			// sign
-			// is not kept: every NaN is written +nan.0.
+			// sign is not kept: every NaN is written +nan.0. An exactness prefix cannot
+			// apply to an infinity or a NaN (Gauche leaves it as itself), so toInexact
+			// is ignored here.
 			if (Character.toLowerCase(token.charAt(1)) == 'n') {
 				return new LispDouble(Double.NaN);
 			}
@@ -595,13 +627,21 @@ final class SchemeReader {
 				if (denominator.signum() <= 0 || token.charAt(slash + 1) == '+') {
 					return null;
 				}
-				return LispRatio.valueOf(new BigInteger(unsignedPlus(token.substring(0, slash)), radix), denominator);
+				LispVal ratio = LispRatio.valueOf(new BigInteger(unsignedPlus(token.substring(0, slash)), radix),
+						denominator);
+				return applyExactness(ratio, toInexact);
 			}
 			if (radix != 10 || isDigits(token, signed ? 1 : 0)) {
-				return integer(new BigInteger(unsignedPlus(token), radix));
+				return applyExactness(integer(new BigInteger(unsignedPlus(token), radix)), toInexact);
 			}
 			if (!isDecimal(token, signed ? 1 : 0)) {
 				return null;
+			}
+			if (Boolean.FALSE.equals(toInexact)) {
+				// #e over decimal/exponent syntax: the exact rational the digits spell,
+				// built from the unscaled value and scale so no double rounding ever
+				// touches it (BigDecimal.doubleValue() would).
+				return exactDecimal(token);
 			}
 			// Correctly rounded like BigDecimal.doubleValue(), which would drop the sign
 			// of -0.0.
@@ -610,6 +650,28 @@ final class SchemeReader {
 		catch (NumberFormatException ex) {
 			return null;
 		}
+	}
+
+	private static LispVal exactDecimal(String token) {
+		BigDecimal decimal = new BigDecimal(token);
+		BigInteger unscaled = decimal.unscaledValue();
+		int scale = decimal.scale();
+		return scale <= 0 ? integer(unscaled.multiply(BigInteger.TEN.pow(-scale)))
+				: LispRatio.valueOf(unscaled, BigInteger.TEN.pow(scale));
+	}
+
+	// #i converts an already-exact result to the nearest double; #e (or no exactness
+	// prefix) leaves an already-exact result exactly as it is.
+	private static LispVal applyExactness(LispVal exact, @Nullable Boolean toInexact) {
+		if (!Boolean.TRUE.equals(toInexact)) {
+			return exact;
+		}
+		return new LispDouble(switch (exact) {
+			case LispInteger(long value) -> (double) value;
+			case LispBigInteger(BigInteger value) -> value.doubleValue();
+			case LispRatio ratio -> ratio.doubleValue();
+			default -> throw new IllegalStateException("not an exact number: " + exact);
+		});
 	}
 
 	private static String unsignedPlus(String token) {

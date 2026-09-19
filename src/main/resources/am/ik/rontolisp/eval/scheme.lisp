@@ -890,29 +890,14 @@
   (let ((c (rontolisp::%scheme-next-char)))
     (rontolisp::%scheme-accumulate-token c)))
 
+;; TOKEN is the whole "#..." spelling (its caller only calls here once it is at least
+;; three characters); %scheme-string->number reads its own #x/#b/#o/#d/#e/#i prefixes, so
+;; this is just that call plus the read error a bad '#' token raises instead of #f.
 (defun rontolisp::%scheme-hash-token-datum (token)
-  (if (>= (length token) 3)
-      (let ((second (char token 1)))
-        (let ((radix
-               (cond
-                ((or (= (char-code second) 120) (= (char-code second) 88)) 16)
-                ((or (= (char-code second) 98) (= (char-code second) 66)) 2)
-                ((or (= (char-code second) 111) (= (char-code second) 79)) 8)
-                ((or (= (char-code second) 100) (= (char-code second) 68)) 10)
-                (t nil))))
-          (if (null radix)
-              (rontolisp::%scheme-read-error "unsupported '#' syntax" token)
-              (let ((digits (subseq token 2)))
-                (if (= (length digits) 0)
-                    (rontolisp::%scheme-read-error "unsupported '#' syntax"
-                                                   token)
-                    (let ((number
-                           (rontolisp::%scheme-string->number digits radix)))
-                      (if (eq number rontolisp::%scheme-false)
-                          (rontolisp::%scheme-read-error
-                           "unsupported '#' syntax" token)
-                          number)))))))
-      (rontolisp::%scheme-read-error "unsupported '#' syntax" token)))
+  (let ((number (rontolisp::%scheme-string->number token 10)))
+    (if (eq number rontolisp::%scheme-false)
+        (rontolisp::%scheme-read-error "unsupported '#' syntax" token)
+        number)))
 
 (defun rontolisp::%scheme-read-character ()
   (let ((first (rontolisp::%scheme-next-char)))
@@ -1833,9 +1818,62 @@
 ;; [sign] digits [/ digits], and in radix 10 also [sign] digits* [. digits*] [e [sign]
 ;; digits+]. The decimal is built EXACTLY and converted once, so the result is the
 ;; correctly rounded double the reader would have produced for the same text.
+;;
+;; S may itself carry an R7RS <prefix>: #x/#b/#o/#d picks the radix (overriding RADIX,
+;; the caller's own default), #e/#i asks for an exact or an inexact result -- each at
+;; most once, in either order (%scheme-number-prefix). An exactness prefix on an
+;; infinity or a NaN is a no-op, same as Gauche; on a decimal it builds the exact
+;; rational the digits spell rather than rounding through a double, so "#e1.1" reads
+;; 11/10; on an already-exact result it is the plain float conversion.
 (defun rontolisp::%scheme-string->number (s radix)
-  (let ((infnan (rontolisp::%scheme-infnan s)))
-    (if infnan infnan (rontolisp::%scheme-string->real s radix))))
+  (multiple-value-bind (digits digits-radix exactness)
+      (rontolisp::%scheme-number-prefix s radix)
+    (let ((infnan (rontolisp::%scheme-infnan digits)))
+      (if infnan
+          infnan
+          (rontolisp::%scheme-string->real digits digits-radix exactness)))))
+
+;; Reads S's leading #x/#b/#o/#d and #e/#i pairs (each at most once, either order) and
+;; answers (values remainder radix exactness): RADIX is the caller's default unless a
+;; radix pair overrides it, EXACTNESS is NIL/:exact/:inexact. A pair that repeats a kind
+;; already seen, or is not one of these six letters, is left IN the remainder -- it then
+;; fails %scheme-infnan / %scheme-string->real, so an invalid prefix ends up #f exactly
+;; like an invalid number, the same way SchemeReader's prefixedNumber does for source.
+(defun rontolisp::%scheme-number-prefix (s radix)
+  (let ((n (length s)) (index 0) (radix-set nil) (exactness nil) (stop nil))
+    (do ()
+        (stop)
+      (if (not (and (< (+ index 1) n) (char= (char s index) #\#)))
+          (setq stop t)
+          (let ((c
+                 (rontolisp::%scheme-ascii-downcase
+                  (char-code (char s (+ index 1))))))
+            (let ((candidate
+                   (cond ((= c (char-code #\x)) 16)
+                         ((= c (char-code #\b)) 2)
+                         ((= c (char-code #\o)) 8)
+                         ((= c (char-code #\d)) 10)
+                         (t nil))))
+              (cond (candidate (if radix-set
+                                   (setq stop t)
+                                   (progn
+                                     (setq radix candidate)
+                                     (setq radix-set t)
+                                     (setq index (+ index 2)))))
+                    ((or (= c (char-code #\e)) (= c (char-code #\i)))
+                     (if exactness
+                         (setq stop t)
+                         (progn
+                           (setq exactness
+                                 (if (= c (char-code #\i)) :inexact :exact))
+                           (setq index (+ index 2)))))
+                    (t (setq stop t)))))))
+    (values (subseq s index) radix exactness)))
+
+;; #i on an already-exact number converts to the nearest double; #e (or no exactness
+;; prefix at all) leaves it exactly as it is.
+(defun rontolisp::%scheme-apply-exactness (exact exactness)
+  (if (eq exactness :inexact) (float exact 1.0d0) exact))
 
 ;; R7RS <infnan> -- +inf.0 -inf.0 +nan.0 -nan.0, case-insensitively and in any radix --
 ;; or NIL. A NaN's sign is not kept: every NaN is written +nan.0.
@@ -1856,7 +1894,7 @@
             nil))
       nil))
 
-(defun rontolisp::%scheme-string->real (s radix)
+(defun rontolisp::%scheme-string->real (s radix exactness)
   (let ((n (length s)) (start 0) (sign 1))
     (if (and (> n 0) (or (char= (char s 0) #\+) (char= (char s 0) #\-)))
         (progn
@@ -1864,7 +1902,9 @@
           (setq start 1)))
     (let ((whole (rontolisp::%scheme-scan-digits s start radix)))
       (let ((whole-end (cdr whole)))
-        (cond ((and (= whole-end n) (> whole-end start)) (* sign (car whole)))
+        (cond ((and (= whole-end n) (> whole-end start))
+               (rontolisp::%scheme-apply-exactness (* sign (car whole))
+                                                   exactness))
               ((and (> whole-end start) (< whole-end n)
                     (char= (char s whole-end) #\/))
                (let ((denominator
@@ -1872,14 +1912,15 @@
                  (if (and (= (cdr denominator) n)
                           (> (cdr denominator) (+ whole-end 1))
                           (> (car denominator) 0))
-                     (/ (* sign (car whole)) (car denominator))
+                     (rontolisp::%scheme-apply-exactness
+                      (/ (* sign (car whole)) (car denominator)) exactness)
                      rontolisp::%scheme-false)))
               ((= radix 10)
                (rontolisp::%scheme-decimal s
-                (list sign start (car whole) whole-end)))
+                (list sign start (car whole) whole-end) exactness))
               (t rontolisp::%scheme-false))))))
 
-(defun rontolisp::%scheme-decimal (s state)
+(defun rontolisp::%scheme-decimal (s state exactness)
   (let ((n (length s))
         (sign (car state))
         (start (car (cdr state)))
@@ -1903,10 +1944,14 @@
               (setq exponent (* exponent-sign (car scanned)))
               (setq i (cdr scanned)))))
       (if (and ok (= i n) (> digits 0))
-          ;; Negated AFTER the conversion, so "-0.0" keeps its sign.
-          (let ((magnitude
-                 (float (* mantissa (expt 10 (- exponent scale))) 1.0d0)))
-            (if (< sign 0) (- magnitude) magnitude))
+          (if (eq exactness :exact)
+              ;; The exact rational the digits spell -- mantissa * 10^(exponent-scale) --
+              ;; never rounded through a double, so "#e1.1" reads 11/10.
+              (* sign (/ mantissa (expt 10 scale)) (expt 10 exponent))
+              ;; Negated AFTER the conversion, so "-0.0" keeps its sign.
+              (let ((magnitude
+                     (float (* mantissa (expt 10 (- exponent scale))) 1.0d0)))
+                (if (< sign 0) (- magnitude) magnitude)))
           rontolisp::%scheme-false))))
 
 ;; --- control ----------------------------------------------------------------------

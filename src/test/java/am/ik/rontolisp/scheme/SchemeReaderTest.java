@@ -42,6 +42,30 @@ class SchemeReaderTest {
 	}
 
 	@Test
+	void radixAndExactnessPrefixesCombine() {
+		// Gauche 0.9.15's answers for the same tokens (`.todo/889`): a radix prefix
+		// overrides the caller's default, an exactness prefix converts the result,
+		// either order, each at most once, and #e on a decimal is the exact rational
+		// the digits spell rather than a flonum rounding.
+		assertThat(printed("#e1.5 #i5 #e#x10 #x#e10 #i#o17 #e1/3 #i1/3 #e0.0 #e-2.5e2 #e1e10"))
+			.isEqualTo("[3/2, 5.0, 16, 16, 15.0, 1/3, 0.3333333333333333, 0, -250, 10000000000]");
+	}
+
+	@Test
+	void anExactnessPrefixOnAnInfinityOrANanIsANoOp() {
+		assertThat(read("#e+inf.0")).containsExactly(new LispDouble(Double.POSITIVE_INFINITY));
+		assertThat(read("#i+inf.0")).containsExactly(new LispDouble(Double.POSITIVE_INFINITY));
+		assertThat(((LispDouble) read("#e+nan.0").getFirst()).value()).isNaN();
+	}
+
+	@Test
+	void aRepeatedOrUnrecognizedPrefixIsAReadError() {
+		assertThatThrownBy(() -> read("#b#x1")).isInstanceOf(LispReadException.class);
+		assertThatThrownBy(() -> read("#e#e1")).isInstanceOf(LispReadException.class);
+		assertThatThrownBy(() -> read("#z12")).isInstanceOf(LispReadException.class);
+	}
+
+	@Test
 	void negativeZeroKeepsItsSign() {
 		assertThat(printed("-0.0 -0. -.0 0.0")).isEqualTo("[-0.0, -0.0, -0.0, 0.0]");
 	}
