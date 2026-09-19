@@ -5604,9 +5604,11 @@ public final class Environment implements Scope {
 		// %make-directories: the ONE directory-CREATING primitive, the write-side sibling
 		// of %list-directory. Uses Files directly, like open -- the SourceLoader seam is
 		// the read side, and a host that cannot open a file for writing cannot create a
-		// directory either. Everything user-facing (ensure-directories-exist) is Lisp
-		// source over it, in LispPreludeLibrary, so the "which part of the namestring is
-		// the directory" rule has one definition for every backend.
+		// directory either. Answers nil rather than signalling when the host refuses, the
+		// %delete-file / %rename-file shape: the "a refused directory is a file-error"
+		// decision lives once, in the Lisp ensure-directories-exist above it
+		// (LispPreludeLibrary), which is also where "which part of the namestring is the
+		// directory" is decided.
 		env.defineFunction(LispNames.MAKE_DIRECTORIES, new LispFunction(LispNames.MAKE_DIRECTORIES, args -> {
 			requireArgCount(LispNames.MAKE_DIRECTORIES, args, 1);
 			if (!(args.get(0) instanceof LispString path)) {
@@ -5617,8 +5619,7 @@ public final class Environment implements Scope {
 				return LispTrue.INSTANCE;
 			}
 			catch (IOException | RuntimeException ex) {
-				throw new LispEvalException(
-						LispNames.MAKE_DIRECTORIES + ": cannot create " + path.value() + ": " + ex.getMessage());
+				return LispNil.INSTANCE;
 			}
 		}));
 		// %delete-file: the ONE file-REMOVING primitive, the other write-side sibling of

@@ -9789,6 +9789,19 @@ cases:
       OPEN: cannot open file fe890-missing/x.txt
       DELETE-FILE: cannot delete fe890-missing/x.txt
       end of file
+  - name: ensure-directories-exist-signals-file-error-when-the-host-refuses
+    # SBCL-verified: creating a directory THROUGH an existing plain file signals a
+    # file-error whose pathname is the designator GIVEN, not a bare SIMPLE-ERROR --
+    # the %delete-file / %rename-file shape (interpreter and WASM used to signal a
+    # SIMPLE-ERROR directly; the JVM ignored mkdirs' result and answered success).
+    source: |
+      (with-open-file (out "ede-block.txt" :direction :output) (write-line "x" out))
+      (handler-case
+          (progn (ensure-directories-exist "ede-block.txt/sub/x.txt") :no-error)
+        (file-error (e) (print (namestring (file-error-pathname e))))
+        (error () (print :other-error)))
+    expected: |
+      "ede-block.txt/sub/x.txt"
   - name: open-if-exists-append-keeps-the-existing-content
     # smart-buffer's disk-spill path writes every chunk past the memory limit
     # this way, so the option is real on all four backends: :direction :output

@@ -4592,6 +4592,20 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunEnsureDirectoriesExistSignalsFileErrorWhenTheHostRefuses() throws Exception {
+		// SBCL-verified: /proc refuses mkdir, so this signals a file-error carrying the
+		// designator GIVEN -- the delete-file / rename-file shape, not a bare
+		// SIMPLE-ERROR (the JVM used to ignore mkdirs' result and answer success). The
+		// path is computed so no literal-path folding applies.
+		assertThat(compileAndRun("""
+				(defvar *ede-path* (concatenate 'string "/proc/" "no-such-dir-fixture/x/y.txt"))
+				(handler-case
+				    (progn (ensure-directories-exist *ede-path*) :no-error)
+				  (file-error (e) (print (namestring (file-error-pathname e))))
+				  (error () (print :other-error)))""")).isEqualTo("\"/proc/no-such-dir-fixture/x/y.txt\"");
+	}
+
+	@Test
 	void compileAndRunExportAndUnexport() throws Exception {
 		// A literal top-level export is consumed by the PackageResolver, which is what
 		// makes it work here at all: the compiled output has no package registry.

@@ -9864,6 +9864,22 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void ensureDirectoriesExistSignalsFileErrorWhenTheHostRefuses() {
+		// SBCL-verified: creating a directory under /proc (a virtual filesystem that
+		// refuses mkdir) signals a file-error whose pathname is the designator GIVEN --
+		// the whole namestring, not just the directory component that actually failed --
+		// the delete-file / rename-file shape (.kb/read-load-streams.md), not a bare
+		// SIMPLE-ERROR.
+		String path = "/proc/no-such-dir-fixture/x/y.txt";
+		assertThat(evalMulti("""
+				(handler-case
+				    (progn (ensure-directories-exist "%s") :no-error)
+				  (file-error (e) (namestring (file-error-pathname e)))
+				  (error () :other-error))
+				""".formatted(path)).print()).isEqualTo("\"" + path + "\"");
+	}
+
+	@Test
 	void evalExportMakesASymbolExternal() {
 		// export before the definitions; the mirror case (export after them) is
 		// evalExportAfterTheDefinitionsPublishesThemUnderTheSingleColon below.

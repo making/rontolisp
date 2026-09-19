@@ -1724,13 +1724,22 @@ public final class LispPreludeLibrary {
 		// namestring that already ends in a slash IS the directory. A namestring with no
 		// slash names a file in the working directory and creates nothing. Returns the
 		// pathspec (see LispNames.ENSURE_DIRECTORIES_EXIST for the missing second value).
+		// %make-directories answers nil rather than signalling when the host refuses --
+		// the delete-file / rename-file shape (%file-error carrying the designator as
+		// given), so "a directory the host refuses is a file-error" has one definition.
 		SOURCES.put(LispNames.ENSURE_DIRECTORIES_EXIST, """
 				(defun ensure-directories-exist (%ede-path)
 				  (let* ((%ede-x (%path-ns %ede-path))
 				         (%ede-p (if (stringp %ede-x) %ede-x ""))
 				         (%ede-s (position #\\/ %ede-p :from-end t))
 				         (%ede-d (if %ede-s (subseq %ede-p 0 (+ %ede-s 1)) "")))
-				    (if (string= %ede-d "") %ede-path (progn (%make-directories %ede-d) %ede-path))))
+				    (if (string= %ede-d "")
+				        %ede-path
+				        (if (%make-directories %ede-d)
+				            %ede-path
+				            (%file-error %ede-path
+				                         (format nil "ENSURE-DIRECTORIES-EXIST: cannot create directory ~A"
+				                                 %ede-d))))))
 				""");
 		// %directory-in: directory's per-directory half -- the entries of ONE directory
 		// prefix that the final (name) component matches, or the pathspec itself when

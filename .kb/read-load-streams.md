@@ -458,18 +458,21 @@ paths (`.todo/212`).
   (`FUNC_MAKE_DIRECTORIES` after `FUNC_C_SIGNUM`, called by `WasmMakeDirectoriesCompiler`)
   over the THIRTEENTH preview1 import, `path_create_directory`. Preview 1 creates ONE
   level per call, so the body walks the slash-separated prefixes and creates each --
-  the recursive answer the other two give. It SIGNALS on WASM where `file-length`
-  answers nil, because its contract has no "cannot be determined" answer: the runtime
-  answers T-or-nil and the call-site compiler raises the error on nil (the `_open`
-  precedent, catchable in EH mode). A nonzero final errno is VERIFIED by opening the
-  path as a directory, which turns "already there" into T whatever errno the host used.
+  the recursive answer the other two give. **Answers nil rather than signalling** (the
+  `%delete-file` / `%rename-file` shape below, since `.todo/900`: before that the
+  interpreter and WASM signalled a bare `SIMPLE-ERROR` at the primitive and the JVM
+  ignored `mkdirs`' result outright and answered success for a directory it never made).
+  A nonzero final WASM errno is VERIFIED by opening the path as a directory, which turns
+  "already there" into T whatever errno the host used; the JVM re-checks with
+  `File.isDirectory()` after `mkdirs()` for the same reason (`mkdirs` answers false both
+  for "already there" and for "refused", so the boolean alone cannot tell them apart).
 - `delete-file` over `%delete-file`, which answers nil rather than signalling when the file is absent
   or the host refused, so "a missing file is an error" lives once in the Lisp above it -- a
-  `file-error` through `%file-error`, as are `rename-file`'s and `truename`'s. Both
-  WASM backends unlink for real now (`_delete_file` over the FOURTEENTH preview1 import,
-  `path_unlink_file`, called by `WasmDeleteFileCompiler`). mito's `generate-migrations`
-  deletes superseded migration files on all four. Removing a DIRECTORY still signals:
-  unlink cannot rmdir (above).
+  `file-error` through `%file-error`, as are `rename-file`'s, `truename`'s and, since
+  `.todo/900`, `ensure-directories-exist`'s. Both WASM backends unlink for real now
+  (`_delete_file` over the FOURTEENTH preview1 import, `path_unlink_file`, called by
+  `WasmDeleteFileCompiler`). mito's `generate-migrations` deletes superseded migration
+  files on all four. Removing a DIRECTORY still signals: unlink cannot rmdir (above).
 - `rename-file` over `%rename-file` (same nil-not-signal rule); the new name is MERGED with the old
   one, so a bare file name keeps the directory. Both WASM backends move for real
   (`_rename_file` over the FIFTEENTH preview1 import, `path_rename` -- the one new
@@ -481,9 +484,9 @@ paths (`.todo/212`).
   `adapter.wat` implements all three over `wasi:filesystem@0.3.0`
   (`create-directory-at` / `unlink-file-at` / `rename-at`, SYNC-lowered like `open-at`,
   sharing its `0x50050` result cell); `adapter-http-server-p1.wat` exports them as
-  errno 76 -- the serve world has no filesystem, and `%delete-file`/`%rename-file`
-  read a nonzero errno as nil while `%make-directories` signals through its call-site
-  error.
+  errno 76 -- the serve world has no filesystem, so `%make-directories`/`%delete-file`/
+  `%rename-file` all read a nonzero errno as nil there, and the Lisp callers above them
+  signal identically.
 
 **`uiop:read-file-string` must NOT size its buffer from `file-length`**: prelude Lisp over
 `with-open-file` + a CHUNKED `read-sequence` loop, both properties load-bearing. **The loop stops on

@@ -13023,6 +13023,32 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunComponentWithDir(code)).isEqualTo(expected);
 	}
 
+	private static final String ENSURE_DIRECTORIES_EXIST_REFUSED_PROGRAM = """
+			(with-open-file (out "ede-block.txt" :direction :output) (write-line "x" out))
+			(handler-case
+			    (progn (ensure-directories-exist "ede-block.txt/sub/x.txt") :no-error)
+			  (file-error (e) (print (namestring (file-error-pathname e))))
+			  (error () (print :other-error)))""";
+
+	private static final String ENSURE_DIRECTORIES_EXIST_REFUSED_EXPECTED = "\"ede-block.txt/sub/x.txt\"";
+
+	@Test
+	void ensureDirectoriesExistSignalsFileErrorWhenTheHostRefuses() throws Exception {
+		// SBCL-verified: creating a directory THROUGH an existing plain file signals a
+		// file-error whose pathname is the designator GIVEN, not a bare SIMPLE-ERROR
+		// (WasmMakeDirectoriesCompiler used to signal one directly instead of the Lisp
+		// ensure-directories-exist testing %make-directories' nil, the
+		// %delete-file / %rename-file shape).
+		assertThat(compileAndRunWithDirs(ENSURE_DIRECTORIES_EXIST_REFUSED_PROGRAM))
+			.isEqualTo(ENSURE_DIRECTORIES_EXIST_REFUSED_EXPECTED);
+	}
+
+	@Test
+	void ensureDirectoriesExistSignalsFileErrorWhenTheHostRefusesOnTheComponentPath() throws Exception {
+		assertThat(compileAndRunComponentWithDirs(ENSURE_DIRECTORIES_EXIST_REFUSED_PROGRAM))
+			.isEqualTo(ENSURE_DIRECTORIES_EXIST_REFUSED_EXPECTED);
+	}
+
 	@Test
 	void uiopFilesystemProbeReadsAndMutations() throws Exception {
 		// The uiop/filesystem read side runs on this backend too -- probe-file* and

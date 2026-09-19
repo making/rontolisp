@@ -7870,9 +7870,9 @@ public final class LispNames {
 	/**
 	 * The {@code ensure-directories-exist} built-in function: creates the directory
 	 * component of the given namestring (a trailing {@code /} makes the whole string the
-	 * directory) and returns the namestring. Interpreter and JVM create for real; both
-	 * WASM backends signal at CALL time, since no WASI directory-creation call is
-	 * imported and silently answering "it exists" would be a lie.
+	 * directory) and returns the namestring, or signals a {@code file-error} carrying the
+	 * designator as given when the host refuses -- on all four backends (ANSI, SBCL
+	 * agrees).
 	 *
 	 * <p>
 	 * Lite deviation: Common Lisp returns {@code (values pathspec created)} and this
@@ -7883,10 +7883,12 @@ public final class LispNames {
 
 	/**
 	 * The {@code %make-directories} internal primitive: create the named directory and
-	 * every missing parent, answering {@code t}. The write-side sibling of
-	 * {@link #LIST_DIRECTORY}, and the one call {@link #ENSURE_DIRECTORIES_EXIST} is Lisp
-	 * source over, so the "which part of the namestring is the directory" rule has a
-	 * single definition. Both WASM backends lower it to a call-time error.
+	 * every missing parent, answering {@code t}, or {@code nil} when the host refuses --
+	 * the {@link #DELETE_FILE_INTERNAL} / {@link #RENAME_FILE_INTERNAL} shape. The
+	 * write-side sibling of {@link #LIST_DIRECTORY}, and the one call
+	 * {@link #ENSURE_DIRECTORIES_EXIST} is Lisp source over, so both "which part of the
+	 * namestring is the directory" and "a refused directory is a file-error" have a
+	 * single definition.
 	 */
 	public static final String MAKE_DIRECTORIES = "%MAKE-DIRECTORIES";
 

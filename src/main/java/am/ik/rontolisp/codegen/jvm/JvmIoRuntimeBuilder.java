@@ -712,7 +712,11 @@ final class JvmIoRuntimeBuilder {
 		// other artifact keeps its original bytes.
 		this.fileList = listDirectory ? cp.addMethodref(this.fileClass,
 				cp.addNameAndType(cp.addUtf8("list"), cp.addUtf8("()[Ljava/lang/String;"))) : null;
-		this.fileIsDirectory = listDirectory
+		// Also minted for %make-directories: mkdirs' boolean answers false both for a
+		// directory that already exists (success) and for one the host refused (failure),
+		// so isDirectory() re-checks afterwards to tell them apart -- the WASM
+		// verify-by-opening precedent (.kb/read-load-streams.md).
+		this.fileIsDirectory = (listDirectory || fileMeta.makeDirectories())
 				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("isDirectory"), cp.addUtf8("()Z")))
 				: null;
 		this.fileInitChild = listDirectory
@@ -1679,10 +1683,13 @@ final class JvmIoRuntimeBuilder {
 	}
 
 	/**
-	 * {@code _makeDirectories(Object path) -> "T"}. Creates the directory and every
-	 * missing parent. {@code mkdirs} answers false for a directory that already exists,
-	 * which is a success here, so the boolean is dropped: the primitive's contract is "it
-	 * exists afterwards", and a path that could not be created fails at the next open.
+	 * {@code _makeDirectories(Object path) -> "T" | null}. Creates the directory and
+	 * every missing parent, answering null when it does not exist AFTERWARDS -- {@code
+	 * mkdirs} answers false both for a directory that already exists (success) and for
+	 * one the host refused (failure), so the boolean alone cannot tell them apart. The
+	 * re-check via {@code isDirectory()} is the WASM verify-by-opening precedent
+	 * (.kb/read-load-streams.md): "a refused directory is a file-error" is the Lisp
+	 * {@code ensure-directories-exist} above it, not here.
 	 */
 	private List<Integer> buildMakeDirectories() {
 		// Slots: 0=path (Object), 1=p (String)
@@ -1697,6 +1704,20 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, Objects.requireNonNull(this.fileMkdirs).index());
 		code.add(Opcode.POP);
+		code.add(Opcode.NEW);
+		emitU2(code, this.fileClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.fileInit.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, Objects.requireNonNull(this.fileIsDirectory).index());
+		int ifDirPos = code.size();
+		code.add(Opcode.IFNE);
+		emitU2(code, 0);
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifDirPos, code.size());
 		emitLdc(code, this.tStr.index());
 		code.add(Opcode.ARETURN);
 		return code;
