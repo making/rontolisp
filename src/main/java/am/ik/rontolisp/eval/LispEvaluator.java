@@ -326,6 +326,13 @@ public final class LispEvaluator {
 	private final java.util.IdentityHashMap<LispVal, LispVal> compilerMacroExpansions = new java.util.IdentityHashMap<>();
 
 	/**
+	 * Memo of {@link #settledLambdaTail}, keyed by the tail form's cons identity: the
+	 * rewrite is a pure function of the form, so like {@link #builtinMacroExpansions}
+	 * nothing invalidates it.
+	 */
+	private final java.util.IdentityHashMap<LispVal, LispVal> lambdaTailSettlements = new java.util.IdentityHashMap<>();
+
+	/**
 	 * Memo of evaluated {@code (load-time-value ...)} occurrences, keyed by cons identity
 	 * -- CL's "evaluated once" for interpreted code. Holds a one-element list so a
 	 * {@code nil} result still counts as computed.
@@ -10139,8 +10146,44 @@ public final class LispEvaluator {
 		// No lite return-from rewrite (and no block wrap): CL lambdas establish no
 		// block, so a (return-from f v) inside a lambda called within f's dynamic
 		// extent exits F -- the named signal propagates through the call.
-		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(1), parts.subList(2, parts.size()), false);
+		List<LispVal> body = parts.subList(2, parts.size());
+		if (!body.isEmpty() && body.get(body.size() - 1) instanceof LispCons tail) {
+			// A syntactic multiple-value producer in the tail publishes its secondary
+			// value, as in a defun's (evalDefun); the compile paths run the same
+			// rewrite in LispMacroExpander.injectMvSpillGlobal.
+			LispVal settled = settledLambdaTail(tail);
+			if (settled != tail) {
+				List<LispVal> settledBody = new ArrayList<>(body);
+				settledBody.set(settledBody.size() - 1, settled);
+				body = settledBody;
+			}
+		}
+		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(1), body, false);
 		return singleValue(new LispLambda(expanded.required(), expanded.rest(), expanded.body(), env));
+	}
+
+	/**
+	 * {@link LispMacroExpander#spillEscapingMvProducers} of a lambda body's tail,
+	 * memoized by the tail's cons identity ({@link #lambdaTailSettlements}): a closure is
+	 * made on every evaluation of its {@code lambda} form, and a
+	 * {@code flet}/{@code labels} expansion rebuilds its lambdas each time around the
+	 * same body conses.
+	 */
+	private LispVal settledLambdaTail(LispCons tail) {
+		LispVal cached;
+		synchronized (this.lambdaTailSettlements) {
+			cached = this.lambdaTailSettlements.get(tail);
+		}
+		if (cached != null) {
+			return cached;
+		}
+		LispVal settled = LispMacroExpander.spillEscapingMvProducers(tail);
+		synchronized (this.lambdaTailSettlements) {
+			if (this.lambdaTailSettlements.size() < EXPANSION_MEMO_LIMIT) {
+				this.lambdaTailSettlements.put(tail, settled);
+			}
+		}
+		return settled;
 	}
 
 	// The map* family (mapcar/mapc/mapcan/maplist/mapcon) operates on lists; passing a
