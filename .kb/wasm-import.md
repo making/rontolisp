@@ -23,9 +23,24 @@ Runs before `WasmTreeShaker.shake`. **The pre-injection module is invalid (calls
 never validate or emit it directly.**
 
 A RUNTIME BUILDER may bind one through the same placeholder encoding: `--host-random`'s entropy
-import and the `_argv` helper's `args_sizes_get`/`args_get` pair (`WasmArgvRuntimeBuilder`,
-[[uiop]]) are appended to `hostImports` LAST, after the directive-declared slots, so a program
-that also writes `rontolisp:wasm-import` keeps its ordinals and bytes.
+import, the `_argv` helper's `args_sizes_get`/`args_get` pair (`WasmArgvRuntimeBuilder`,
+[[uiop]]) and `file-position`'s host call (`--component`'s `file_position_get`/`_set` pair, or
+Preview 1's `fd_seek`, [[read-load-streams]]) are appended to `hostImports` LAST, after the
+directive-declared slots, so a program that also writes `rontolisp:wasm-import` keeps its
+ordinals and bytes.
+
+**This, not a new index-pinned preview1 slot, is how a WASI function the backend did not import
+before gets added.** A sixteenth slot in the fixed block shifts `IMPORT_FUNC_COUNT`,
+`FUNC_START` and every emitted function index, and with them both `--component` adapter blobs
+and the `--no-wasi` stub block; appending shifts nothing and costs nothing on a program that
+does not reach the feature. `fd_seek` (2026-09-19, `.todo/876`) was planned as slot sixteen and
+landed as an appended import instead: measured over a nine-module corpus, every module that
+does not call `file-position` -- Preview 1, `--component` and `--no-wasi` alike -- is
+BYTE-IDENTICAL, and the one that does grows 20334 -> 20987 bytes (+653: the two real runtime
+bodies, the import, and the per-`open` flag write). An appended import needs a type entry only
+when no fixed type already has its shape; `fd_seek`'s `(i32, i64, i32, i32) -> i32` is the
+first one that did, so it is emitted right after the `importSlots` block and counted into
+`abiTypeBase` (`--host-random` and `args_get` reuse `TYPE_INTERN` and add nothing).
 
 ## Memory-typed PARAMETERS stage on a stack; the RESULT scratch does not
 A `:string`/`:s-expr` parameter crosses as `(ptr,len)` into linear memory, and N of them have

@@ -406,7 +406,7 @@
 | `export` | `(export '(run))` | シンボルをパッケージの外部シンボルにします（リテラルなトップレベル呼び出しはコンパイル時ディレクティブ） |
 | `unexport` | `(unexport 'run)` | `export` の逆操作。シンボルは残りますが修飾なしでは見えなくなります |
 | `import` | `(import 'other:sym)` | 他パッケージのシンボルを修飾なしでアクセスできるようにします -- `:import-from` の実行時版（リテラルなトップレベル呼び出しはコンパイル時ディレクティブ） |
-| `file-position` | `(file-position s)` | 常に `nil`(lite: ストリームはシーク非対応) |
+| `file-position` | `(file-position s)` | バイナリファイルストリームのバイト位置。第2引数を与えると位置を移動します。位置を判定できないストリームでは `nil` |
 | `file-length` | `(file-length s)` | ファイルストリームが開いているファイルのバイト長。他のストリームでは `nil` |
 | `file-write-date` | `(file-write-date "x.txt")` | ファイルの更新時刻をユニバーサルタイムで返します。判定できない場合は `nil`(2つのWASMバックエンドでは常に `nil`) |
 | `ensure-directories-exist` | `(ensure-directories-exist "logs/app.log")` | pathspec のディレクトリ部分を作成して pathspec を返します(2つのWASMバックエンドではシグナルを発生させます) |

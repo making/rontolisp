@@ -9676,13 +9676,12 @@ cases:
       NIL
       300
   - name: file-position-round-trips-on-a-binary-file-stream
-    # .todo/877: file-position is REAL on the component backend. The query is the byte
-    # position the byte primitives advanced and the set seeks back through the adapter's
-    # tracked per-fd offset (the preview1 fd_seek stand-in -- WASI 0.3 reads are
-    # offset-based and have no moveable cursor). The interpreter, the JVM and the
-    # component answer the real positions; the Preview 1 WASM backend still answers nil
-    # everywhere (its fd_seek import is .todo/876, not landed), so a seek there is a
-    # no-op and the reads stay sequential from 0. A character stream answers nil.
+    # file-position is REAL on all four backends. Preview 1 queries and moves the
+    # descriptor's own cursor through fd_seek; the component has no cursor (WASI 0.3
+    # reads are offset-based) and goes through the adapter's tracked per-fd offset
+    # instead. A CHARACTER file stream answers nil everywhere -- the last form re-opens
+    # the same file after every binary handle is closed, so a WASM backend that let a
+    # reused descriptor keep a stale binary flag would print a number here.
     source: |
       (with-open-file (out "fp.bin" :direction :output :if-exists :supersede
                             :element-type '(unsigned-byte 8))
@@ -9708,27 +9707,6 @@ cases:
       5
       6
       NIL
-    expectedByBackend:
-      wasm: |
-        NIL
-        NIL
-        0
-        NIL
-        NIL
-        NIL
-        1
-        NIL
-        NIL
-      wasm_component: |
-        10
-        0
-        0
-        1
-        T
-        5
-        5
-        6
-        NIL
 
   - name: filesystem-write-create-rename-delete-and-probe
     # The three write-side operators are REAL on all four backends: the interpreter

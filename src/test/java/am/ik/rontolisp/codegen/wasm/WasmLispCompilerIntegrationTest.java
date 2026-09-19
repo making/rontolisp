@@ -13172,31 +13172,52 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunComponentWithDir(FILE_LENGTH_PROGRAM)).isEqualTo(FILE_LENGTH_EXPECTED);
 	}
 
+	/**
+	 * The program both {@code file-position} tests run, and the same one the JVM twin
+	 * runs
+	 * ({@code JvmLispCompilerTest#compileAndRunBinaryFileStreamPositionQueriesAndSeeks}):
+	 * write a known byte pattern, read to a midpoint, seek back, re-read. The last form
+	 * re-opens the same file as a CHARACTER stream -- which answers nil -- and does it
+	 * AFTER every binary handle is closed, so the host hands the same descriptor number
+	 * back and a stale per-fd binary flag would show up as a number here.
+	 */
+	private static final String FILE_POSITION_PROGRAM = """
+			(with-open-file (out "pos.bin" :direction :output :if-exists :supersede
+			                     :element-type '(unsigned-byte 8))
+			  (dotimes (i 10) (write-byte i out))
+			  (print (file-position out)))
+			(with-open-file (in "pos.bin" :element-type '(unsigned-byte 8))
+			  (print (file-position in))
+			  (print (read-byte in))
+			  (print (file-position in))
+			  (print (file-position in 5))
+			  (print (file-position in))
+			  (print (read-byte in))
+			  (print (file-position in)))
+			(with-open-file (in "pos.bin")
+			  (print (file-position in)))
+			""";
+
+	private static final String FILE_POSITION_EXPECTED = "10\n0\n0\n1\nT\n5\n5\n6\nNIL";
+
+	@Test
+	void filePositionQueriesAndSeeksOnPreview1() throws Exception {
+		// file-position is REAL on the Preview 1 backend too: the query is
+		// fd_seek(fd, 0, CUR) and the set fd_seek(fd, n, SET), over the one appended
+		// wasi_snapshot_preview1.fd_seek import a program that calls file-position gets.
+		assertThat(compileAndRunWithDir(FILE_POSITION_PROGRAM)).isEqualTo(FILE_POSITION_EXPECTED);
+		// And under --optimize, where the shaker has to keep an APPENDED import alive
+		// off the two runtime bodies that reach it.
+		assertThat(compileAndRunWithDirs(FILE_POSITION_PROGRAM)).isEqualTo(FILE_POSITION_EXPECTED);
+	}
+
 	@Test
 	void componentFilePositionQueriesAndSeeks() throws Exception {
 		// file-position is REAL on the component backend: the query is the byte position
 		// the byte primitives advanced, and the set repositions through the adapter's
 		// tracked per-fd offset (the fd_seek stand-in, since WASI 0.3 reads are
-		// offset-based). The same program the JVM twin runs (JvmLispCompilerTest
-		// #compileAndRunBinaryFileStreamPositionQueriesAndSeeks) -- write a known byte
-		// pattern, read to a midpoint, seek back, re-read. A CHARACTER file stream still
-		// answers nil.
-		assertThat(compileAndRunComponentWithDir("""
-				(with-open-file (out "pos.bin" :direction :output :if-exists :supersede
-				                     :element-type '(unsigned-byte 8))
-				  (dotimes (i 10) (write-byte i out))
-				  (print (file-position out)))
-				(with-open-file (in "pos.bin" :element-type '(unsigned-byte 8))
-				  (print (file-position in))
-				  (print (read-byte in))
-				  (print (file-position in))
-				  (print (file-position in 5))
-				  (print (file-position in))
-				  (print (read-byte in))
-				  (print (file-position in)))
-				(with-open-file (in "pos.bin")
-				  (print (file-position in)))
-				""")).isEqualTo("10\n0\n0\n1\nT\n5\n5\n6\nNIL");
+		// offset-based).
+		assertThat(compileAndRunComponentWithDir(FILE_POSITION_PROGRAM)).isEqualTo(FILE_POSITION_EXPECTED);
 	}
 
 	@Test

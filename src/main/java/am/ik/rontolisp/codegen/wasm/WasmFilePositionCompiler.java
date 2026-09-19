@@ -7,12 +7,14 @@ import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 
 /**
- * Compiles the {@code file-position} built-in on the {@code --component} backend: the
- * one-argument query and the two-argument set. The stream argument is resolved down to
- * its raw handle and handed to the {@code _file_position} / {@code _file_position_set}
- * runtime pair, which talk to the adapter's tracked per-fd byte offset through the
- * injected {@code file_position_get} / {@code file_position_set} imports -- the Preview 1
- * backend has no {@code fd_seek} import (todo 876) and keeps the constant-nil answer.
+ * Compiles the {@code file-position} built-in on either WASI backend: the one-argument
+ * query and the two-argument set. The stream argument is resolved down to its raw handle
+ * and handed to the {@code _file_position} / {@code _file_position_set} runtime pair,
+ * which reach the host through Preview 1's injected {@code fd_seek} or, under
+ * {@code --component} (where WASI 0.3 reads are offset-based and no cursor exists), the
+ * adapter's tracked per-fd byte offset behind the {@code file_position_get} /
+ * {@code file_position_set} imports. A {@code --no-wasi} module has no filesystem and
+ * keeps the constant-nil answer.
  */
 final class WasmFilePositionCompiler {
 
