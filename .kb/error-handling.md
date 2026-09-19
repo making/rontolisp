@@ -677,6 +677,11 @@ report's two top rows: 370 + 299 lost forms) and to fail the COMPILE on the comp
   expects ...`, `Environment.requireArgCount*` and every inline `X expects N arguments, got M` built-in
   check are `program-error`s (the ANSI suite's next six rows). The compiled backends signal the same
   through a function VALUE ("A wrong argument COUNT" below), `apply` included since 2026-09-12.
+  `-`/`/` (no identity, unlike `+`/`*`: `compiler/ArithmeticIdentities`) inline-check their own empty
+  argument list in `Environment.registerArithmetic` rather than fall through to the generic
+  `IndexOutOfBoundsException` conversion above, so `(-)`/`(/)` signal the SAME text
+  (`"- requires at least one argument"`) interpreted as `ArithmeticIdentities.of` rejects at compile
+  time, instead of the interpreter's former raw `Index 0 out of bounds for length 0`.
   The first-class twins are pinned on
   `#'member` / `#'find` / `#'position` and, since the family took the bounding keywords, on
   `#'remove` too -- its wrapper now forwards a keyword tail instead of taking a fixed two arguments
