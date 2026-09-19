@@ -492,6 +492,14 @@ categories:
       - { slug: make-synonym-stream, name: "make-synonym-stream" }
       - { slug: synonym-stream-symbol, name: "synonym-stream-symbol" }
       - { slug: make-broadcast-stream, name: "make-broadcast-stream" }
+      - { slug: make-two-way-stream, name: "make-two-way-stream" }
+      - { slug: two-way-stream-input-stream, name: "two-way-stream-input-stream" }
+      - { slug: two-way-stream-output-stream, name: "two-way-stream-output-stream" }
+      - { slug: make-echo-stream, name: "make-echo-stream" }
+      - { slug: echo-stream-input-stream, name: "echo-stream-input-stream" }
+      - { slug: echo-stream-output-stream, name: "echo-stream-output-stream" }
+      - { slug: make-concatenated-stream, name: "make-concatenated-stream" }
+      - { slug: concatenated-stream-streams, name: "concatenated-stream-streams" }
       - { slug: input-stream-p, name: "input-stream-p" }
       - { slug: output-stream-p, name: "output-stream-p" }
       - { slug: stream-element-type, name: "stream-element-type" }
@@ -1035,6 +1043,7 @@ categories:
       - { slug: type-error-expected-type, name: "type-error-expected-type" }
       - { slug: cell-error-name, name: "cell-error-name" }
       - { slug: unbound-slot-instance, name: "unbound-slot-instance" }
+      - { slug: file-error-pathname, name: "file-error-pathname" }
       - { slug: print-object, name: "print-object" }
       - { slug: simple-condition-format-arguments, name: "simple-condition-format-arguments" }
       - { slug: find-restart, name: "find-restart" }

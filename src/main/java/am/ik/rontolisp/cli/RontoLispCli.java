@@ -392,11 +392,17 @@ public final class RontoLispCli {
 		boolean systemTerminal = this.in == System.in && System.console() != null && System.console().isTerminal();
 		boolean terminal = this.assumedTerminal != null ? this.assumedTerminal : systemTerminal;
 		ReplBuffer repl = new ReplBuffer(session, evaluator, new ReplBuffer.Channels(this.out, System.err, terminal));
-		if (systemTerminal && isJLineAvailable()) {
-			JLineRepl.run(repl);
+		try {
+			if (systemTerminal && isJLineAvailable()) {
+				JLineRepl.run(repl);
+			}
+			else {
+				replWithBufferedReader(repl, evaluator);
+			}
 		}
-		else {
-			replWithBufferedReader(repl, evaluator);
+		finally {
+			// The session's end is the program's end, as interpret's is.
+			evaluator.flushOpenStreams();
 		}
 		// A piped session is a script runner: a form that failed makes the whole run
 		// fail, as a file's uncaught error does.
@@ -567,8 +573,16 @@ public final class RontoLispCli {
 		List<LispVal> exprs = language.read(source, evaluator.features(), entryFile, standards,
 				evaluator.sourceLoader());
 		boolean markers = SourceLanguage.usesReadEvalMarkers(source);
-		for (LispVal expr : exprs) {
-			evaluator.eval(markers ? evaluator.resolveReadTimeEvalInCode(expr) : expr);
+		try {
+			for (LispVal expr : exprs) {
+				evaluator.eval(markers ? evaluator.resolveReadTimeEvalInCode(expr) : expr);
+			}
+		}
+		finally {
+			// The program has ended -- by its last form, by quit/exit (LispExitSignal) or
+			// by an uncaught condition -- so an output file it never closed gets what it
+			// still buffers, as it does on the other three backends.
+			evaluator.flushOpenStreams();
 		}
 		// A program whose last write is a raw octet (write-byte to standard output) has
 		// nothing left to flush it: an auto-flushing PrintStream only drains on a

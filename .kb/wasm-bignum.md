@@ -48,7 +48,8 @@ first; a literal `(op (/ a b))` fuses into `_big_fdiv` for two exact integers, i
 rational it is and reusing `_big_fdiv`. `_f64_fdiv` answers NULL to DECLINE (ratio operand,
 non-finite float, zero divisor), falling back to `_rat_div`. The saturating `i64.trunc_sat_f64_s`
 runs only under a `|d| < 2^63` guard; past it the one-argument form calls `_f64_fdiv` with divisor
-one, so `(floor 1d300)` is the exact 301-digit value.
+one, so `(floor 1d300)` is the exact 301-digit value; a null there means a NaN or an infinity,
+which signals ([[linalg-simd]], "mod / rem and the floor family").
 
 ## Deliberate limits
 - **Ratio components stay i32**: `_rat_num`/`_rat_den` **wrap** TYPE_BIGNUM to i32 and **trap** on

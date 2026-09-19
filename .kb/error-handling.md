@@ -64,10 +64,11 @@ A condition is a CLOS-subset instance ([instance-syntax.md](instance-syntax.md))
   consumers that must keep READING it, never a copy: the constructor, and
   `PackageRegistry.CL_CONDITION_TYPES` = `ClosRegistry.CONDITION_CLASS_NAMES`, which makes every
   seeded name a `cl` symbol ([packages.md](packages.md)).
-- Seven classes carry `format-control`/`format-arguments` beyond CLHS's slot lists -- `type-error`,
+- Eight classes carry `format-control`/`format-arguments` beyond CLHS's slot lists -- `type-error`,
   `arithmetic-error`, `program-error`, `reader-error`, `package-error` (which also carries its
-  `package` designator) and the two `cell-error` leaves -- because that pair is how a BUILT-IN
-  error carries its message. `simple-type-error` therefore adds nothing, so both keep their old
+  `package` designator), `file-error` (`[PATHNAME, FORMAT-CONTROL, FORMAT-ARGUMENTS]`, the
+  pathname read by the prelude `file-error-pathname`) and the two `cell-error` leaves -- because
+  that pair is how a BUILT-IN error carries its message. `simple-type-error` therefore adds nothing, so both keep their old
   `%obj-ref` indexes. `stream-error` carries the offending `stream` (read by the prelude
   `stream-error-stream`); `end-of-file` inherits it, `reader-error` declares its own ahead of the
   message pair (`[STREAM, FORMAT-CONTROL, FORMAT-ARGUMENTS]`) with `stream-error` as its second
@@ -240,6 +241,13 @@ every narrowing is IMPOSSIBILITY-based.
   `%obj-new`) forces it back. On zlib that is **-61 KB**. **Trigger: the double-render deviation
   requires the renderer, so a declined artifact prints a rendered-once message; if that bites,
   render once EVERYWHERE, not by un-declining.**
+- **A tag built by a LATER lowering is taken from its site's presence.** The read family's
+  `end-of-file` (`expandReadEofSignal`, expression expansion) and a failed open's /
+  `%file-error`'s `file-error` (`lowerFileError`, body compilation, behind a pad only) are
+  constructed after both scans, so `conditionNarrowing` and `usedLayoutTags` read
+  `LispMacroExpander.END_OF_FILE_SITES` / `FILE_ERROR_SITES` instead. The narrowing used to
+  miss `end-of-file` entirely: a caught one `princ`ed as `#<END-OF-FILE :STREAM NIL>` on the
+  compiled backends instead of `end of file` (found and fixed 2026-09-19).
 - **`WasmInstanceLayouts.emit` takes a used-tag set** (`usedLayoutTags`): a `%class-`/`%struct-`
   layout ships only when its tag or bare name occurs as a symbol in the final program (plus the
   simple-* three the handler lowering synthesizes during Pass 2), with null (= bake all) under

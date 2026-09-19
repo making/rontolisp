@@ -1860,7 +1860,7 @@ cases:
       (print (fq-tr 1d300 7))
       (print (fq-one 1d300))
       (print (fq-tr 1d30 3.0))
-      (print (list (fq-tr 3.0 (/ 1.0 0.0)) (fq-tr 1.0 0.0)))
+      (print (list (fq-tr 3.0 (/ 1.0 0.0))))
       (print (list (fq-fl -3.0 (/ 1.0 0.0)) (fq-ce -3.0 (/ 1.0 0.0)) (fq-ro -3.0 (/ 1.0 0.0))
                     (fq-fl 3.0 (/ -1.0 0.0)) (fq-ce 3.0 (/ -1.0 0.0))))
       (print (list (floor 3.7) (ceiling 3.2) (round 2.5) (round 3.5) (truncate -3.7)))
@@ -1874,7 +1874,7 @@ cases:
       (142857142857142864643537179314917178386352654444022736416550587930257493998415456540910196440063980577672063404697696882420360462194347225092113169255243854692626742989510829105404319113541155722766993319281542849297302719852520125724950391825734642082751255545722406119730809924599483837922771505737 1.0)
       1000000000000000052504760255204420248704468581108159154915854115511802457988908195786371375080447864043704443832883878176942523235360430575644792184786706982848387200926575803737830233794788090059368953234970799945081119038967640880074652742780142494579258788820056842838115669472196386865459400540160
       (333333333333333339961541612885 1.0)
-      ((0 3.0) (9223372036854775807 NaN))
+      ((0 3.0))
       ((-1 Infinity) (0 -3.0) (0 -3.0) (-1 -Infinity) (0 3.0))
       (3 4 2 4 -3)
       ((3 1) (4 -1.0) (2 0.0))
@@ -1901,6 +1901,55 @@ cases:
       1.0e300
       7.0
       (7.0 8.0 9.0)
+  # A NaN or an infinity has no integer to round to and no rational to answer, so every
+  # operator that would have to produce one signals, with one message on every backend.
+  # The floor family used to clamp to a long ((floor inf) was 9223372036854775807 and
+  # (ffloor inf) 9.223372036854776e18), decode-float/integer-decode-float/rationalize of a
+  # NaN never returned. SBCL (traps masked, which is how rontolisp computes) signals on
+  # every row except ffloor/fceiling/ftruncate, which it answers as the infinity itself;
+  # rontolisp keeps the f-variants the float of their integer twin, as ECL does.
+  - name: rounding-or-decoding-an-infinity-or-a-nan-signals
+    source: |
+      (defvar *nf-inf* (/ 1.0 0.0))
+      (defvar *nf-nan* (- *nf-inf* *nf-inf*))
+      (defmacro nf-try (form)
+        `(handler-case (multiple-value-list ,form)
+           (error (nf-e)
+             (let ((nf-m (princ-to-string nf-e)))
+               (if (string= nf-m "rounding a non-finite float to an integer is undefined") :signalled nf-m)))))
+      (defun nf-fl (a) (floor a))
+      (defun nf-ro2 (a b) (multiple-value-bind (q r) (round a b) (list q r)))
+      (print (list (nf-try (floor *nf-inf*)) (nf-try (ceiling (- *nf-inf*))) (nf-try (round *nf-nan*))
+                   (nf-try (truncate *nf-nan*)) (nf-try (nf-fl *nf-inf*)) (nf-try (floor (/ 1.0 0.0)))))
+      (print (list (nf-try (ffloor *nf-inf*)) (nf-try (fceiling *nf-nan*)) (nf-try (fround *nf-inf*))
+                   (nf-try (ftruncate (- *nf-inf*)))))
+      (print (list (nf-try (floor *nf-inf* 2)) (nf-try (truncate 1.0 0.0)) (nf-try (nf-ro2 *nf-nan* 1.0))
+                   (nf-try (ffloor *nf-inf* 2.0)) (nf-try (floor *nf-inf* *nf-inf*))))
+      (print (list (nf-try (funcall #'floor *nf-inf*)) (nf-try (mapcar #'fround (list 1.5 *nf-nan*)))
+                   (nf-try (let ((nf-x *nf-inf*)) (declare (type double-float nf-x)) (round nf-x)))))
+      (print (list (nf-try (floor 5 *nf-inf*)) (nf-try (floor 2.5)) (nf-try (fround 2.5)) (nf-try (floor 1d300 1d299))))
+      (print (nf-try (rational *nf-inf*)))
+      (print (nf-try (rational *nf-nan*)))
+      (print (nf-try (rationalize *nf-nan*)))
+      (print (nf-try (rationalize (- *nf-inf*))))
+      (print (nf-try (decode-float *nf-inf*)))
+      (print (nf-try (decode-float *nf-nan*)))
+      (print (nf-try (integer-decode-float *nf-nan*)))
+      (print (list (nf-try (decode-float 0.75)) (nf-try (rationalize 2.0))))
+    expected: |
+      (:SIGNALLED :SIGNALLED :SIGNALLED :SIGNALLED :SIGNALLED :SIGNALLED)
+      (:SIGNALLED :SIGNALLED :SIGNALLED :SIGNALLED)
+      (:SIGNALLED :SIGNALLED :SIGNALLED :SIGNALLED :SIGNALLED)
+      (:SIGNALLED :SIGNALLED :SIGNALLED)
+      ((0 5.0) (2 0.5) (2.0 0.5) (10 0.0))
+      "rational of a non-finite float is undefined"
+      "rational of a non-finite float is undefined"
+      "rationalize of a non-finite float is undefined"
+      "rationalize of a non-finite float is undefined"
+      "decode-float of a non-finite float is undefined"
+      "decode-float of a non-finite float is undefined"
+      "integer-decode-float of a non-finite float is undefined"
+      ((0.75 0 1.0) (2))
   # min/max resolve a tie and an unordered pair with ONE rule -- min is (a <= b) ? a : b
   # and max is (a >= b) ? a : b, IEEE comparisons -- so NaN is the same question as the
   # signed-zero tie and belongs beside it.
@@ -9690,6 +9739,38 @@ cases:
       T
       NIL
       NIL
+  - name: a-failed-file-operation-signals-file-error
+    # ANSI: open / delete-file / rename-file / truename of a missing file signal
+    # file-error, and file-error-pathname answers the designator given (SBCL agrees
+    # on every class; it merges the pathname absolute, which rontolisp never does).
+    # A failed open lowers to the nil-answering %open-or-nil plus a %file-error on
+    # the compile paths; the path is computed so no literal-path folding applies.
+    source: |
+      (defvar *fe890-path* (concatenate 'string "fe890-missing/" "x.txt"))
+      (defun fe890-probe (thunk)
+        (handler-case (progn (funcall thunk) :no-error)
+          (file-error (e) (list :file-error (namestring (file-error-pathname e))))
+          (error () :other-error)))
+      (print (fe890-probe (lambda () (open *fe890-path*))))
+      (print (fe890-probe (lambda () (open *fe890-path* :direction :output))))
+      (print (fe890-probe (lambda () (with-open-file (s *fe890-path*) (read-line s)))))
+      (print (fe890-probe (lambda () (delete-file *fe890-path*))))
+      (print (fe890-probe (lambda () (rename-file *fe890-path* "y.txt"))))
+      (print (fe890-probe (lambda () (truename *fe890-path*))))
+      (handler-case (open *fe890-path*) (file-error (e) (princ e) (terpri)))
+      (handler-case (delete-file *fe890-path*) (file-error (e) (princ e) (terpri)))
+      (with-input-from-string (s "")
+        (handler-case (read-char s) (end-of-file (e) (princ e) (terpri))))
+    expected: |
+      (:FILE-ERROR "fe890-missing/x.txt")
+      (:FILE-ERROR "fe890-missing/x.txt")
+      (:FILE-ERROR "fe890-missing/x.txt")
+      (:FILE-ERROR "fe890-missing/x.txt")
+      (:FILE-ERROR "fe890-missing/x.txt")
+      (:FILE-ERROR "fe890-missing/x.txt")
+      OPEN: cannot open file fe890-missing/x.txt
+      DELETE-FILE: cannot delete fe890-missing/x.txt
+      end of file
   - name: open-if-exists-append-keeps-the-existing-content
     # smart-buffer's disk-spill path writes every chunk past the memory limit
     # this way, so the option is real on all four backends: :direction :output
@@ -9707,6 +9788,41 @@ cases:
     expected: |
       "onetwo"
       "onetwo!"
+  - name: composite-stream-constructors
+    # .todo/387: the composite-stream constructors are prelude Lisp over the Gray
+    # protocol, so ONE definition serves every backend. Reading comes from the input
+    # component, writing reaches the output one, a concatenated stream skips each
+    # component at its end of file, and the accessors recover the components. The
+    # :append reopen rides the file stream so the write half composes with the read
+    # half.
+    source: |
+      (let ((o (make-string-output-stream)))
+        (let ((tw (make-two-way-stream (make-string-input-stream "AB") o)))
+          (write-string "hi" tw)
+          (write-char #\! tw))
+        (print (get-output-stream-string o)))
+      (let ((o (make-string-output-stream)))
+        (let ((es (make-echo-stream (make-string-input-stream "ab") o)))
+          (print (list (read-char es) (read-char es) (get-output-stream-string o)))))
+      (let ((cs (make-concatenated-stream (make-string-input-stream "AB")
+                                          (make-string-input-stream "CD"))))
+        (print (list (read-char cs) (read-char cs) (read-char cs) (read-char cs)
+                     (read-char cs nil :eof))))
+      (let ((i (make-string-input-stream "x")) (o (make-string-output-stream)))
+        (let ((tw (make-two-way-stream i o)))
+          (print (list (eq (two-way-stream-input-stream tw) i)
+                       (eq (two-way-stream-output-stream tw) o)))))
+      (with-open-file (out "cs389.dat" :direction :output) (write-string "a" out))
+      (with-open-file (out "cs389.dat" :direction :output :if-exists :append)
+        (write-string "b" out))
+      (with-open-file (in "cs389.dat") (print (read-line in)))
+    expected: |
+      "hi!"
+      (#\a #\b "ab")
+      (#\A #\B #\C #\D :EOF)
+      (T T)
+      "ab"
+
   - name: uiop-stream-file-contents-and-safe-io
     # .todo/359: the "give me the contents" half of uiop/stream -- write a file,
     # read it back through every slurper, and round-trip through with-output to a
@@ -16017,9 +16133,13 @@ cases:
       (print (handler-case (progn (uiop:chdir "/tmp") :moved) (error () :chdir-signals)))
       (print (handler-case (if (pathnamep (uiop:getcwd)) :working-directory :not-a-pathname)
                (error () :no-working-directory)))
-      ;; The two octet readers are real; the two .lnk parsers name the primitive
-      ;; they would need (file-position on a binary stream, which is nil here).
-      (print (handler-case (uiop:parse-windows-shortcut "x.lnk") (error () :not-implemented)))
+      ;; The two octet readers are real; the two .lnk parsers are upstream's bodies
+      ;; and seek a binary file stream with file-position, which the host backends
+      ;; support -- so over the staged x.lnk (CorpusFixtures.stageLnkFixture) they
+      ;; answer upstream's structure -- but both WASI backends still answer nil for
+      ;; file-position, so there they signal instead of misreading.
+      (print (handler-case (uiop:parse-windows-shortcut "x.lnk")
+               (error () :not-implemented)))
     expected: |
       (T NIL NIL NIL)
       (:OS-UNIX :UNIX :RONTOLISP)
@@ -16031,7 +16151,7 @@ cases:
       NIL
       :CHDIR-SIGNALS
       :WORKING-DIRECTORY
-      :NOT-IMPLEMENTED
+      "app.exe"
     expectedByBackend:
       # The compiled ABI the artifact targets is what upstream's architecture is
       # used for, and a WASI program has preopened directories and no CURRENT one,

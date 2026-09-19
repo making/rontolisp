@@ -18,6 +18,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.CorpusFixtures;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -2964,7 +2965,9 @@ class JvmLispCompilerTest {
 		// interpreter. getenv is a Lisp definition over the %host-getenv primitive here,
 		// so the override map a (setf (uiop:getenv x) v) writes is read back on this
 		// backend exactly as on the interpreter; getcwd is real (user.dir) and chdir
-		// signals.
+		// signals. The .lnk parsers are upstream's bodies and seek a binary file
+		// stream, which this backend supports, so the shortcut parses the fixture.
+		String lnk = CorpusFixtures.lnkFixturePath().toString().replace("\\", "\\\\");
 		assertThat(compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
 				(print (list (uiop:featurep :rontolisp) (uiop:featurep :rontolisp-jvm)
 				             (uiop:featurep :rontolisp-interpreter)
@@ -2979,18 +2982,19 @@ class JvmLispCompilerTest {
 				(print (list (uiop:getenv "CI_JVM_UIOP_OS") (uiop:getenvp "CI_JVM_UIOP_OS")))
 				(print (list (stringp (uiop:getenv "PATH")) (pathnamep (uiop:getcwd))))
 				(print (handler-case (uiop:chdir "/tmp") (uiop:not-implemented-error () :chdir-signals)))
-				(print (handler-case (uiop:parse-windows-shortcut "x.lnk")
+				(print (handler-case (uiop:parse-windows-shortcut "%s")
 				         (uiop:not-implemented-error () :lnk-not-implemented)))
-				""", am.ik.rontolisp.reader.Features.JVM), am.ik.rontolisp.reader.Features.JVM))).isEqualTo("""
-				(T T NIL T T)
-				(T NIL NIL NIL)
-				(:OS-UNIX :UNIX :RONTOLISP :RONTOLISP :JVM NIL)
-				:UNIX
-				("one" "one")
-				(NIL NIL)
-				(T T)
-				:CHDIR-SIGNALS
-				:LNK-NOT-IMPLEMENTED""");
+				""".formatted(lnk), am.ik.rontolisp.reader.Features.JVM), am.ik.rontolisp.reader.Features.JVM)))
+			.isEqualTo("""
+					(T T NIL T T)
+					(T NIL NIL NIL)
+					(:OS-UNIX :UNIX :RONTOLISP :RONTOLISP :JVM NIL)
+					:UNIX
+					("one" "one")
+					(NIL NIL)
+					(T T)
+					:CHDIR-SIGNALS
+					"app.exe\"""");
 	}
 
 	@Test
@@ -5403,6 +5407,39 @@ class JvmLispCompilerTest {
 				  (princ (read-char s))
 				  (princ (peek-char #\\y s))
 				  (princ (read-char s)))""")).isEqualTo("xxyy");
+	}
+
+	@Test
+	void aFailedFileOperationSignalsFileErrorCarryingThePathname() throws Exception {
+		// The run-time path keeps every literal-path folding out of the way; nothing
+		// here creates the missing directory, so every operation fails for real.
+		assertThat(compileAndRun("""
+				(defvar *fe-path* (concatenate 'string "fe890-missing/" "x.txt"))
+				(defun fe-probe (thunk)
+				  (handler-case (progn (funcall thunk) :no-error)
+				    (file-error (e) (list :file-error (namestring (file-error-pathname e))))
+				    (error () :other-error)))
+				(print (fe-probe (lambda () (open *fe-path*))))
+				(print (fe-probe (lambda () (open *fe-path* :direction :output))))
+				(print (fe-probe (lambda () (with-open-file (s *fe-path*) (read-line s)))))
+				(print (fe-probe (lambda () (delete-file *fe-path*))))
+				(print (fe-probe (lambda () (rename-file *fe-path* "y.txt"))))
+				(print (fe-probe (lambda () (truename *fe-path*))))
+				(terpri)
+				(handler-case (open *fe-path*) (file-error (e) (princ e) (terpri)))
+				(handler-case (delete-file *fe-path*) (file-error (e) (princ e) (terpri)))
+				(with-input-from-string (s "")
+				  (handler-case (read-char s) (end-of-file (e) (princ e) (terpri))))""")).isEqualTo("""
+				(:FILE-ERROR "fe890-missing/x.txt")
+				(:FILE-ERROR "fe890-missing/x.txt")
+				(:FILE-ERROR "fe890-missing/x.txt")
+				(:FILE-ERROR "fe890-missing/x.txt")
+				(:FILE-ERROR "fe890-missing/x.txt")
+				(:FILE-ERROR "fe890-missing/x.txt")
+
+				OPEN: cannot open file fe890-missing/x.txt
+				DELETE-FILE: cannot delete fe890-missing/x.txt
+				end of file""");
 	}
 
 	@Test
@@ -11207,6 +11244,34 @@ class JvmLispCompilerTest {
 					  (print (list (slot-value s 'acc) (close s))))
 					(write-line "past" t)
 					"""))))).isEqualTo("(\"abc-:K\n\nl\n7\nf1\" T)\npast");
+	}
+
+	@Test
+	void compileAndRunCompositeStreamConstructors() throws Exception {
+		// The composite-stream constructors are prelude Lisp over the Gray protocol, so
+		// the same process pipeline that splices the broadcast stream carries them.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(print (let ((o (make-string-output-stream)))
+					         (let ((tw (make-two-way-stream (make-string-input-stream "AB") o)))
+					           (write-string "hi" tw)
+					           (write-char #\\! tw)
+					           (get-output-stream-string o))))
+					(print (let ((o (make-string-output-stream)))
+					         (let ((es (make-echo-stream (make-string-input-stream "ab") o)))
+					           (list (read-char es) (read-char es) (get-output-stream-string o)))))
+					(print (let ((cs (make-concatenated-stream (make-string-input-stream "AB")
+					                                            (make-string-input-stream "CD"))))
+					         (list (read-char cs) (read-char cs) (read-char cs) (read-char cs)
+					               (read-char cs nil :eof))))
+					(print (let ((i (make-string-input-stream "x")) (o (make-string-output-stream)))
+					         (let ((tw (make-two-way-stream i o)))
+					           (list (eq (two-way-stream-input-stream tw) i)
+					                 (eq (two-way-stream-output-stream tw) o)))))
+					(print (let ((tw (funcall #'make-two-way-stream (make-string-input-stream "x")
+					                           (make-string-output-stream))))
+					         (list (read-char tw) (read-char tw nil :eof))))
+					"""))))).isEqualTo("\"hi!\"\n(#\\a #\\b \"ab\")\n(#\\A #\\B #\\C #\\D :EOF)\n(T T)\n(#\\x :EOF)");
 	}
 
 	@Test
@@ -17581,6 +17646,45 @@ class JvmLispCompilerTest {
 			evaluator.eval(form);
 		}
 		assertThat(compileAndRun(program)).isEqualTo(interpreted.toString(StandardCharsets.UTF_8).trim());
+	}
+
+	@Test
+	void roundingOrDecodingAnInfinityOrANanSignalsTheInterpretersText() throws Exception {
+		// The floor family narrowed a NaN or an infinity with D2L -- (floor inf) was
+		// Long.MAX_VALUE, and a NaN passed the DCMPL range guard into D2L's 0 -- and
+		// decode-float of an infinity never returned (ci-spec
+		// rounding-or-decoding-an-infinity-or-a-nan-signals).
+		String program = """
+				(defvar *inf* (/ 1.0 0.0))
+				(defvar *nan* (- *inf* *inf*))
+				(defmacro try (form) `(handler-case (multiple-value-list ,form) (error (e) (princ-to-string e))))
+				(defun fl (a) (floor a))
+				(print (list (try (fl *inf*)) (try (round *nan*))
+				             (try (ffloor (- *inf*))) (try (floor *inf* 2))))
+				(print (list (try (truncate 1.0 0.0)) (try (funcall #'fround *nan*))
+				             (try (floor 5 *inf*))))
+				(print (list (try (rational *nan*)) (try (rationalize *inf*))
+				             (try (decode-float *inf*))))
+				(print (list (try (integer-decode-float *nan*)) (try (fl 2.5))
+				             (try (floor 1d300 1d299))))
+				""";
+		String rounding = "\"rounding a non-finite float to an integer is undefined\"";
+		String expected = """
+				(%1$s %1$s %1$s %1$s)
+				(%1$s %1$s (0 5.0))
+				("rational of a non-finite float is undefined" "rationalize of a non-finite float is undefined" \
+				"decode-float of a non-finite float is undefined")
+				("integer-decode-float of a non-finite float is undefined" (2 0.5) (10 0.0))""".formatted(rounding);
+		ByteArrayOutputStream interpreted = new ByteArrayOutputStream();
+		am.ik.rontolisp.eval.LispEvaluator evaluator = new am.ik.rontolisp.eval.LispEvaluator(
+				new PrintStream(interpreted, true, StandardCharsets.UTF_8));
+		for (LispVal form : LispReader.readAllFromString(program)) {
+			evaluator.eval(form);
+		}
+		assertThat(interpreted.toString(StandardCharsets.UTF_8).trim()).isEqualTo(expected);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(expected);
 	}
 
 	@Test

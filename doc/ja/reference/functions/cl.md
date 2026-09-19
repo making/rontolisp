@@ -418,6 +418,14 @@
 | `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | すべての操作を、指定した変数が **その時点で** 保持しているストリームへ転送するストリーム。どのシンボルでも同じなので、後から変数を再束縛すると転送先も変わります |
 | `synonym-stream-symbol` | `(synonym-stream-symbol s)` | シノニムストリームの転送先シンボル |
 | `make-broadcast-stream` | `(make-broadcast-stream a b)` | 書き込みのすべてを各コンポーネントへ順に配る出力ストリーム。コンポーネントがなければ書き込みを捨てるシンクです。コンポーネントを持つストリームは Gray ストリームなので出力プロトコル全体が使えます |
+| `make-two-way-stream` | `(make-two-way-stream in out)` | 入力と出力の各コンポーネントを1つにまとめたストリーム。読み込みは `in` から、書き込みは `out` へ届きます。Gray ストリームなので読み書き両方のプロトコルでディスパッチされます |
+| `two-way-stream-input-stream` | `(two-way-stream-input-stream s)` | 2way ストリームの入力コンポーネント |
+| `two-way-stream-output-stream` | `(two-way-stream-output-stream s)` | 2way ストリームの出力コンポーネント |
+| `make-echo-stream` | `(make-echo-stream in out)` | 読み取ったものを出力コンポーネントにも書き込む 2way ストリーム (対話エコーのイディオム) |
+| `echo-stream-input-stream` | `(echo-stream-input-stream s)` | エコーストリームの入力コンポーネント |
+| `echo-stream-output-stream` | `(echo-stream-output-stream s)` | エコーストリームの出力コンポーネント |
+| `make-concatenated-stream` | `(make-concatenated-stream a b)` | コンポーネントを順に読み込む入力ストリーム。各コンポーネントは端に達すると捨てられます |
+| `concatenated-stream-streams` | `(concatenated-stream-streams s)` | 連結ストリームのコンポーネントリスト |
 | `pathnamep` | `(pathnamep #P"/tmp/x")` | `t` — 値がパス名 (`#P"..."` が表す値) かどうか。文字列はパス名では**なく**、`(typep x 'pathname)` と一致します |
 | `input-stream-p` | `(input-stream-p s)` | 任意のストリームハンドルに `t` |
 | `output-stream-p` | `(output-stream-p s)` | 任意のストリームハンドルに `t` |
@@ -430,6 +438,7 @@
 | `type-error-expected-type` | `(type-error-expected-type c)` | `type-error` の `expected-type` スロット |
 | `cell-error-name` | `(cell-error-name c)` | `cell-error`(`unbound-variable`、`undefined-function`、`unbound-slot`)の `name` スロット |
 | `unbound-slot-instance` | `(unbound-slot-instance c)` | スロットが未束縛だったオブジェクト |
+| `file-error-pathname` | `(file-error-pathname c)` | 失敗したファイル操作に渡されたパス名 |
 | `print-object` | `(print-object obj stream)` | プリンタが参照するジェネリック関数。メソッドを定義すると、その型のインスタンスの出力を制御できます |
 | `find-restart` | `(find-restart 'retry c)` | その名前を持つ最内のアクティブなリスタートを第一級オブジェクトとして返します。なければ `nil`。lite: コンディション引数は無視されます |
 | `invoke-restart` | `(invoke-restart :reconnect host)` | 名前(シンボル/キーワード)またはオブジェクトでリスタートを引数付きで起動します。`restart-case` のリスタートなら制御はその節へ移ります |

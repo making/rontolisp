@@ -128,12 +128,23 @@ Pinned by `LispEvaluatorTest#readFromStringAnswersTheStopIndexAsItsSecondValue`,
   (`compiler.OpenModes.staticMode`, used by `Jvm/WasmOpenCompiler`); `open` therefore has no
   `BuiltinFunctionWrappers` entry. Modes 0 text-in / 1 text-out / 2 bin-in / 3 bin-out
   (`OUTPUT_BIT`/`BINARY_BIT`), plus `APPEND_BIT` (4) -> 5 / 7.
-- **A failed `open` SIGNALS on every backend.** WASM `_open` answers `ref.null eq` on a non-zero
-  errno; the null check and signal live at the call site (`WasmOpenCompiler`), catchable in EH mode.
-  It used to emit `unreachable`, uncatchable in any mode. **It signals a SIMPLE-ERROR, not a
-  `file-error`, on all four** (measured 2026-09-19; `handler-case` on `file-error` misses it) --
-  ANSI says `file-error`. The Scheme openers convert it (`.kb/scheme-frontend.md`, "File
-  ports"); the Common Lisp fix is `.todo/890`.
+- **A failed `open` signals a `file-error` on every backend**, carrying the designator as given
+  (`file-error-pathname`) and reporting `OPEN: cannot open file <namestring>` -- one text on all
+  four. Interpreter: the `open` built-in throws `ClosRegistry.newFileErrorCondition`. Compiled:
+  ONE shared call-site lowering, `LispMacroExpander.expandOpenFileErrorSignal` (the
+  `expandReadEofSignal` shape), applied by `Jvm/WasmExprCompiler`'s `open` case -- the backend
+  opens through the internal `%open-or-nil` (`Jvm/WasmOpenCompiler`), which answers nil on
+  failure, and the expansion tests it and calls `%file-error`. WASM `_open` answers
+  `ref.null eq` on a non-zero errno; JVM `_open` catches `IOException` in its own exception
+  table (`IoMethod.exceptionTable`, the one runtime method that has one) and answers null. A
+  computed option dispatches onto literal `open` leaves FIRST, each leaf lowering separately.
+  `%file-error` itself is the `%program-error` split (`lowerFileError`): a typed
+  `%error-cond` over a `%obj-new` behind a landing pad, plain `%error` otherwise -- so the
+  whole-program scans cannot see the construction and take `LispMacroExpander.FILE_ERROR_SITES`'
+  presence for the tag (`conditionNarrowing`, `WasmLispCompiler.usedLayoutTags`). Cost
+  (2026-09-19, `--optimize=size`): `with-open-file` + `read-line` without a handler +39 B P1
+  / +37 B component / +213 B JVM class; inside `handler-case` +172..+243 B WASM, +370..+501 B
+  JVM.
 - `--component`: `adapter.wat`'s `$ensure_preopen` read the first `get-directories` element
   unconditionally, handing `open-at` handle 0 with no `--dir` (`unknown handle index 0` trap); it now
   caches `-1` and `$path_open` turns that into an errno. Hit `probe-file` too.
@@ -156,6 +167,35 @@ Pinned by `LispEvaluatorTest#readFromStringAnswersTheStopIndexAsItsSecondValue`,
 Pinned by `LispEvaluatorTest#evalOpenAppendKeepsTheExistingContent`,
 `JvmLispCompilerTest#compileAndRunOpenAppend`, `LispEvaluatorTest#probeFile*` + twins, ci-spec
 `probe-file-existing-and-missing`, `open-if-exists-append-keeps-the-existing-content`.
+
+## Output left open at the end is WRITTEN, on all four backends
+
+A file output stream the program never closes keeps what it wrote, however the program ends
+(last form, `uiop:quit` / Scheme `exit` / `emergency-exit`, uncaught condition) -- C's `exit`
+and Gauche behave so. **SBCL does not** (measured 2026-09-19: an unclosed `open` + `write-line`
+leaves an EMPTY file under `--script`, `--non-interactive`, `sb-ext:exit` and an unhandled
+`error` alike); ANSI leaves it unspecified, and cross-backend identity decided, since wasm writes
+through `fd_write` and cannot lose it.
+
+- Interpreter: `Environment.flushOpenStreams` flushes every `Flushable` in the stream table
+  (a failing flush is skipped, as `exit` skips it). `RontoLispCli.interpret` calls it in a
+  `finally` round the form loop -- which `LispExitSignal` and an uncaught condition both
+  cross -- and `repl` likewise at the session's end. An embedder driving `LispEvaluator`
+  directly owns the program's end and calls `flushOpenStreams` itself.
+- JVM: `_flushStreams()V` (`JvmFlushStreamsBuilder`, same loop over `_streams`, `IOException`
+  skipped) is called before `main`'s `RETURN`, by `%host-exit` before `System.exit`
+  (`JvmExitCompiler`) and by the uncaught-condition handler before the rethrow
+  (`JvmUncaughtHandler`), reached through `Ctx.flushStreams`. **Gated on the unexpanded program
+  naming `open` or `with-open-file`** (the Scheme file ports splice Lisp that names `open`);
+  `with-open-file` must be in the gate because a quit in its body skips the close. Measured
+  2026-09-19 (default / `--optimize=off`): hello and `uiop:quit` keep their exact bytes, as
+  does a Scheme `display` program; `open` + `uiop:quit` 9,686 -> 9,874 / 372,771 -> 372,959,
+  `with-open-file` 8,411 -> 8,609 / 372,108 -> 372,293; a Scheme STRING-port program
+  54,231 -> 54,454 (its spliced port helpers name `open` for the file arms -- the gate
+  over-approximates, and a stray flush costs nothing else). Wasm outputs unchanged.
+
+Pinned by `UnclosedOutputFileE2eTest` (all four backends; reads the file after the process
+ends, since the spec corpora compare stdout only).
 
 ## Computed open options (the mode is still picked from a LITERAL)
 `(with-open-file (s path :element-type et) ...)` — options passed down as function arguments, as
@@ -418,7 +458,7 @@ paths (`.todo/212`).
   path as a directory, which turns "already there" into T whatever errno the host used.
 - `delete-file` over `%delete-file`, which answers nil rather than signalling when the file is absent
   or the host refused, so "a missing file is an error" lives once in the Lisp above it -- a
-  SIMPLE-ERROR today, not the `file-error` its comments claim (measured 2026-09-19, `.todo/890`). Both
+  `file-error` through `%file-error`, as are `rename-file`'s and `truename`'s. Both
   WASM backends unlink for real now (`_delete_file` over the FOURTEENTH preview1 import,
   `path_unlink_file`, called by `WasmDeleteFileCompiler`). mito's `generate-migrations`
   deletes superseded migration files on all four. Removing a DIRECTORY still signals:

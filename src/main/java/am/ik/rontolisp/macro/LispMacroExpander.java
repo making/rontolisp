@@ -6264,6 +6264,104 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Lowers {@code (%file-error pathname message)} for a compiled backend: the
+	 * {@link #lowerProgramError} split. Where a handler landing pad exists
+	 * ({@code typed}) the signal carries a fresh {@code file-error} instance whose
+	 * {@code pathname} slot holds the designator and whose {@code format-control} holds
+	 * the already-rendered message -- a bare variable there, so the condition narrowing
+	 * does not count it as a control the renderer must serve. Without a pad nothing can
+	 * observe the class and the plain {@code %error} channel prints the identical
+	 * top-level line. Both operands are bound once, in order.
+	 * @param cons the {@code %file-error} form
+	 * @param closRegistry the class registry (for the seeded slot layout)
+	 * @param typed whether the signal may carry an instance
+	 * @return the lowered form
+	 */
+	public static LispVal lowerFileError(LispCons cons, ClosRegistry closRegistry, boolean typed) {
+		List<LispVal> parts = cons.toList();
+		LispVal pathname = parts.size() > 1 ? parts.get(1) : LispNil.INSTANCE;
+		LispVal message = parts.size() > 2 ? parts.get(2) : LispNil.INSTANCE;
+		LispSymbol pathVar = new LispSymbol("__fe_path");
+		LispSymbol messageVar = new LispSymbol("__fe_msg");
+		LispVal signal;
+		if (!typed) {
+			signal = callOf(LispNames.ERROR_INTERNAL, messageVar);
+		}
+		else {
+			ClosRegistry.ClassInfo info = java.util.Objects
+				.requireNonNull(closRegistry.findClass(ClosRegistry.FILE_ERROR_CLASS_NAME));
+			List<LispVal> slots = new ArrayList<>();
+			for (ClosRegistry.SlotSpec slot : info.slots()) {
+				slots.add(switch (slot.baseName()) {
+					case "PATHNAME" -> pathVar;
+					case "FORMAT-CONTROL" -> messageVar;
+					default -> LispNil.INSTANCE;
+				});
+			}
+			signal = listToCons(List.of(new LispSymbol(LispNames.ERROR_COND_INTERNAL),
+					objNew(LispLayout.CLASS_TAG_PREFIX + info.name(), slots), messageVar));
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
+				listToCons(List.of(listToCons(List.of(pathVar, pathname)), listToCons(List.of(messageVar, message)))),
+				signal));
+	}
+
+	/** The text every backend reports a failed {@code open} with, before the path. */
+	public static final String OPEN_FAILURE_PREFIX = LispNames.OPEN + ": cannot open file ";
+
+	/** Fixed temporaries of the {@code open} file-error lowering. */
+	private static final String OPEN_FILE_VAR = "__open_file";
+
+	private static final String OPEN_NAMESTRING_VAR = "__open_ns";
+
+	private static final String OPEN_STREAM_VAR = "__open_stream";
+
+	/**
+	 * Rewrites an {@code open} call on a compiled backend so a failure signals a
+	 * {@code file-error} carrying the designator (ANSI), rather than whatever the host
+	 * open raised: the backend's {@code _open} answers nil on failure under the internal
+	 * name {@link LispNames#OPEN_OR_NIL_INTERNAL}, and the expansion tests that nil --
+	 * the {@link #expandReadEofSignal} shape. A successful open never answers nil.
+	 *
+	 * <pre>
+	 * (open p opts...) ->
+	 *   (let* ((__open_file p)
+	 *          (__open_ns &lt;namestring of __open_file&gt;)
+	 *          (__open_stream (%open-or-nil __open_ns opts...)))
+	 *     (if __open_stream
+	 *         __open_stream
+	 *         (%file-error __open_file (%string-concat "OPEN: cannot open file " __open_ns))))
+	 * </pre>
+	 *
+	 * The namestring is the pathname instance's own when the program can build one
+	 * ({@code instances}) and the designator itself otherwise, the {@link #coercePathArg}
+	 * rule, so the path is unwrapped exactly once.
+	 * @param cons the {@code open} call
+	 * @param instances whether a pathname instance can exist in the program
+	 * @return the lowered form, or null when the call has no path argument
+	 */
+	public static @Nullable LispVal expandOpenFileErrorSignal(LispCons cons, boolean instances) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			return null;
+		}
+		LispSymbol fileVar = new LispSymbol(OPEN_FILE_VAR);
+		LispSymbol nsVar = new LispSymbol(OPEN_NAMESTRING_VAR);
+		LispSymbol streamVar = new LispSymbol(OPEN_STREAM_VAR);
+		LispVal namestring = instances
+				? makeIf(objIs(fileVar, List.of(LispLayout.PATHNAME_TAG)), objRef(fileVar, 0), fileVar) : fileVar;
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(LispNames.OPEN_OR_NIL_INTERNAL));
+		call.add(nsVar);
+		call.addAll(parts.subList(2, parts.size()));
+		LispVal bindings = listToCons(List.of(listToCons(List.of(fileVar, parts.get(1))),
+				listToCons(List.of(nsVar, namestring)), listToCons(List.of(streamVar, listToCons(call)))));
+		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.FILE_ERROR_INTERNAL), fileVar, listToCons(
+				List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString(OPEN_FAILURE_PREFIX), nsVar))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, makeIf(streamVar, streamVar, signal)));
+	}
+
+	/**
 	 * Whether the program establishes a handler LANDING PAD -- a {@code handler-case},
 	 * {@code handler-bind}, {@code ignore-errors} or the {@code %hb-guard} the second
 	 * lowers to, in operator position of an evaluated form (quoted data does not count).
@@ -28780,9 +28878,38 @@ public final class LispMacroExpander {
 			// The %program-error lowering constructs its instance during BODY
 			// compilation, after this scan, and only behind a pad (lowerProgramError).
 			scan.tags.add(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.PROGRAM_ERROR_CLASS_NAME);
+			// So does the file-error of a failed open / %file-error (lowerFileError).
+			if (scan.fileErrorSite) {
+				scan.tags.add(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.FILE_ERROR_CLASS_NAME);
+			}
+		}
+		// A signalling read builds its end-of-file during the expression expansion
+		// (expandReadEofSignal), pad or no pad; without the tag a caught one printed as
+		// #<END-OF-FILE :STREAM NIL> on the compiled backends instead of its report.
+		if (scan.endOfFileSite) {
+			scan.tags.add(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.END_OF_FILE_CLASS_NAME);
 		}
 		return new ConditionNarrowing(java.util.Set.copyOf(scan.tags), !scan.rendererForced);
 	}
+
+	/**
+	 * The operators whose compiled form can construct a {@code file-error} instance in a
+	 * lowering that runs after the whole-program scans
+	 * ({@link #expandOpenFileErrorSignal} / {@link #lowerFileError}, behind a handler
+	 * landing pad): the scans that decide which condition tags exist take their presence
+	 * as the tag's.
+	 */
+	public static final java.util.Set<String> FILE_ERROR_SITES = java.util.Set.of(LispNames.OPEN,
+			LispNames.WITH_OPEN_FILE, LispNames.FILE_ERROR_INTERNAL);
+
+	/**
+	 * The read operators whose compiled form can construct an {@code end-of-file}
+	 * instance in the expression expansion ({@link #expandReadEofSignal}), after the
+	 * whole-program scans -- the {@link #FILE_ERROR_SITES} situation.
+	 */
+	public static final java.util.Set<String> END_OF_FILE_SITES = java.util.Set.of(LispNames.READ_CHAR,
+			LispNames.READ_BYTE, LispNames.READ_LINE, LispNames.PEEK_CHAR, LispNames.PEEK_CHAR_INTERNAL,
+			LispNames.READ_CHAR_RAW_INTERNAL, LispNames.READ_BYTE_RAW_INTERNAL, LispNames.READ_LINE_RAW_INTERNAL);
 
 	private static final java.util.Set<String> CONDITION_SIGNAL_FAMILY = java.util.Set.of(LispNames.ERROR,
 			LispNames.WARN, LispNames.CERROR, LispNames.SIGNAL, LispNames.MAKE_CONDITION);
@@ -28828,6 +28955,27 @@ public final class LispMacroExpander {
 
 		boolean inGeneratedErrorRuntime;
 
+		/**
+		 * Whether a site the compile paths lower to a {@code file-error} construction
+		 * AFTER this scan occurs ({@link #FILE_ERROR_SITES}).
+		 */
+		boolean fileErrorSite;
+
+		/**
+		 * Whether a read whose end of file signals occurs -- its {@code end-of-file}
+		 * construction is also a later lowering ({@link #END_OF_FILE_SITES}).
+		 */
+		boolean endOfFileSite;
+
+		private void noteSite(String member) {
+			if (FILE_ERROR_SITES.contains(member)) {
+				this.fileErrorSite = true;
+			}
+			if (END_OF_FILE_SITES.contains(member)) {
+				this.endOfFileSite = true;
+			}
+		}
+
 		ConditionTagScan(ClosRegistry closRegistry) {
 			this.closRegistry = closRegistry;
 		}
@@ -28850,6 +28998,10 @@ public final class LispMacroExpander {
 					}
 					if ("SYMBOL-FUNCTION".equals(member) || "FDEFINITION".equals(member) || "EVAL".equals(member)) {
 						this.bail = true;
+					}
+					if (!asData) {
+						// #'open reaches the first-class wrapper, whose body opens.
+						noteSite(member);
 					}
 				}
 				case LispCons cons -> walkCons(cons, asData);
@@ -28880,6 +29032,7 @@ public final class LispMacroExpander {
 			if (LANDING_PAD_HEADS.contains(member)) {
 				this.hasLandingPad = true;
 			}
+			noteSite(member);
 			if (LispNames.FUNCTION.equals(member)) {
 				if (parts.size() > 1 && parts.get(1) instanceof LispSymbol named
 						&& CONDITION_SIGNAL_FAMILY.contains(LispSymbol.memberName(named.name()))) {

@@ -139,6 +139,12 @@ final class JvmUncaughtHandler {
 		addU2(code, stackTraceElement);
 		code.add(Opcode.INVOKEVIRTUAL);
 		addU2(code, setStackTrace);
+		// The program ends here, so the output files it never closed get what they
+		// still buffer -- the same flush main's return and %host-exit do.
+		if (mainCtx.flushStreams != null) {
+			code.add(Opcode.INVOKESTATIC);
+			addU2(code, mainCtx.flushStreams.index());
+		}
 		// Rethrow: the launcher's exit code is 1 and its echo is now one line.
 		code.add(Opcode.ALOAD);
 		code.add(exSlot);

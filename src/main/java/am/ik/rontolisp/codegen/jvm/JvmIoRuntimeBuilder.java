@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Objects;
 
 import am.ik.jvm.AccessFlag;
+import am.ik.jvm.ByteCodeWriter;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
@@ -37,13 +38,19 @@ final class JvmIoRuntimeBuilder {
 	 * A stream-runtime method body ready to be emitted into the generated class.
 	 * {@code extraFlags} is OR-ed into the emitted access flags --
 	 * {@code ACC_SYNCHRONIZED} for the two methods that mutate the stream table (see
-	 * {@link #ADD_STREAM_METHOD}).
+	 * {@link #ADD_STREAM_METHOD}). {@code exceptionTable} is the body's handler table,
+	 * empty for every method but {@code _open}.
 	 */
 	record IoMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code,
-			int extraFlags) {
+			int extraFlags, List<ByteCodeWriter.ExceptionTableEntry> exceptionTable) {
 
 		IoMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
 			this(name, desc, maxStack, maxLocals, code, 0);
+		}
+
+		IoMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code,
+				int extraFlags) {
+			this(name, desc, maxStack, maxLocals, code, extraFlags, List.of());
 		}
 	}
 
@@ -959,7 +966,9 @@ final class JvmIoRuntimeBuilder {
 		List<IoMethod> ms = new ArrayList<>();
 		ms.add(new IoMethod(this.cp.addUtf8(ADD_STREAM_METHOD), this.cp.addUtf8(ADD_STREAM_DESC), 3, 3,
 				buildAddStream(), AccessFlag.ACC_SYNCHRONIZED));
-		ms.add(new IoMethod(this.cp.addUtf8(OPEN_METHOD), this.cp.addUtf8(OPEN_DESC), 6, 4, buildOpen()));
+		List<ByteCodeWriter.ExceptionTableEntry> openHandlers = new ArrayList<>();
+		ms.add(new IoMethod(this.cp.addUtf8(OPEN_METHOD), this.cp.addUtf8(OPEN_DESC), 6, 4, buildOpen(openHandlers), 0,
+				openHandlers));
 		// synchronized with _addStream: the entry is nulled out on the CURRENT table, so
 		// a close racing a table growth must not write into the array being replaced.
 		ms.add(new IoMethod(this.cp.addUtf8(CLOSE_METHOD), this.cp.addUtf8(CLOSE_DESC), 4, 3, buildClose(),
@@ -1483,14 +1492,18 @@ final class JvmIoRuntimeBuilder {
 	}
 
 	/**
-	 * {@code _open(Object path, int mode) -> Long handle}. Strips the surrounding quotes
-	 * from the path string, opens a {@code BufferedReader} (mode 0), a
+	 * {@code _open(Object path, int mode) -> Long handle | null}. Strips the surrounding
+	 * quotes from the path string, opens a {@code BufferedReader} (mode 0), a
 	 * {@code BufferedWriter} (mode 1), a {@code BufferedInputStream} (mode 2, binary) or
 	 * a {@code BufferedOutputStream} (mode 3, binary) and hands it to
 	 * {@link #ADD_STREAM_METHOD}, which returns the handle. The file is opened BEFORE the
-	 * table is touched, so the slow part stays outside the allocator's lock.
+	 * table is touched, so the slow part stays outside the allocator's lock. An
+	 * {@code IOException} from the open answers null -- the WASM {@code _open}'s contract
+	 * -- and the shared {@code open} lowering signals the {@code file-error}
+	 * ({@code LispMacroExpander.expandOpenFileErrorSignal}).
+	 * @param handlers receives the body's one exception-table entry
 	 */
-	private List<Integer> buildOpen() {
+	private List<Integer> buildOpen(List<ByteCodeWriter.ExceptionTableEntry> handlers) {
 		// Slots: 0=path (Object), 1=mode (int), 2=p (String), 3=stream
 		List<Integer> code = new ArrayList<>();
 		// p = ((String) path).substring(1, length - 1);
@@ -1517,6 +1530,7 @@ final class JvmIoRuntimeBuilder {
 		// default -> new BufferedOutputStream(new FileOutputStream(p, true)); };
 		// (5 and 7 are the OpenModes.APPEND_BIT arms -- :if-exists :append.)
 		int[] modes = { 0, 1, 2, 3, 5 };
+		int tryStart = code.size();
 		List<Integer> gotoStorePositions = new ArrayList<>();
 		int nextTestPos = -1;
 		for (int mode : modes) {
@@ -1547,6 +1561,7 @@ final class JvmIoRuntimeBuilder {
 		patchBranch(code, nextTestPos, code.size());
 		emitOpenStream(code, this.bufferedOutputStreamClass, this.fileOutputStreamClass,
 				this.fileOutputStreamAppendInit, this.bufferedOutputStreamInit, true);
+		int tryEnd = code.size();
 		for (int pos : gotoStorePositions) {
 			patchBranch(code, pos, code.size());
 		}
@@ -1562,6 +1577,13 @@ final class JvmIoRuntimeBuilder {
 			emitU2(code, Objects.requireNonNull(this.setStreamPathRef).index());
 		}
 		code.add(Opcode.ARETURN);
+		// catch (IOException e) { return null; }
+		int handlerPc = code.size();
+		code.add(Opcode.POP);
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ARETURN);
+		handlers.add(new ByteCodeWriter.ExceptionTableEntry(tryStart, tryEnd, handlerPc,
+				this.cp.addClass(this.cp.addUtf8("java/io/IOException")).index()));
 		return code;
 	}
 

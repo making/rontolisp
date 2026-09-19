@@ -21,6 +21,8 @@ import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispRatio;
+import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
@@ -29,6 +31,7 @@ import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.CorpusFixtures;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -8779,6 +8782,37 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void roundingOrDecodingAnInfinityOrANanSignals() {
+		// (floor inf) clamped to Long.MAX_VALUE and (fround nan) answered 0.0; SBCL
+		// signals
+		// both. decode-float of an infinity and integer-decode-float/rationalize of a NaN
+		// never returned.
+		for (String form : List.of("(floor *inf*)", "(ceiling (- *inf*))", "(round *nan*)", "(truncate *nan*)",
+				"(ffloor *inf*)", "(fround *nan*)", "(floor *inf* 2)", "(truncate 1.0 0.0)", "(floor *nan* 1.0)",
+				"(funcall #'floor *inf*)")) {
+			assertThatThrownBy(() -> eval(nonFinite(form))).as(form)
+				.isInstanceOf(LispEvalException.class)
+				.hasMessage("rounding a non-finite float to an integer is undefined");
+		}
+		assertThatThrownBy(() -> eval(nonFinite("(decode-float *inf*)")))
+			.hasMessageContaining("decode-float of a non-finite float is undefined");
+		assertThatThrownBy(() -> eval(nonFinite("(integer-decode-float *nan*)")))
+			.hasMessageContaining("integer-decode-float of a non-finite float is undefined");
+		assertThatThrownBy(() -> eval(nonFinite("(rationalize *nan*)")))
+			.hasMessageContaining("rationalize of a non-finite float is undefined");
+		// A finite quotient over an infinite divisor still answers.
+		assertThat(eval(nonFinite("(multiple-value-list (floor 5 *inf*))")).print()).isEqualTo("(0 5.0)");
+	}
+
+	/**
+	 * Wraps a form in a scope binding an infinity and a NaN as
+	 * {@code *inf*}/{@code *nan*}.
+	 */
+	private static String nonFinite(String form) {
+		return "(let* ((*inf* (/ 1.0 0.0)) (*nan* (- *inf* *inf*))) " + form + ")";
+	}
+
+	@Test
 	void theFloorFamilySecondValueIsTheRemainderCLHSDefines() {
 		// CLHS: quotient*divisor + remainder = number, with a quotient that "always
 		// represents a mathematical integer" -- so the second value of truncate IS rem
@@ -10258,6 +10292,39 @@ class LispEvaluatorTest {
 		String missing = tempDir.resolve("nope.txt").toString().replace("\\", "\\\\");
 		assertThatThrownBy(() -> eval("(open \"" + missing + "\")")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("cannot open file");
+	}
+
+	@Test
+	void aFailedFileOperationSignalsFileErrorCarryingThePathname(@TempDir Path tempDir) {
+		// ANSI: open / delete-file / rename-file / truename of a missing file signal
+		// file-error, and file-error-pathname answers the pathname given (SBCL agrees on
+		// the class; it merges the pathname absolute, which rontolisp never does).
+		String missing = tempDir.resolve("gone/x.txt").toString().replace("\\", "\\\\");
+		assertThat(evalMulti("""
+				(defvar *fe-path* "%s")
+				(defun fe-probe (thunk)
+				  (handler-case (progn (funcall thunk) :no-error)
+				    (file-error (e) (equal (namestring (file-error-pathname e)) *fe-path*))
+				    (error () :other-error)))
+				(list (fe-probe (lambda () (open *fe-path*)))
+				      (fe-probe (lambda () (open *fe-path* :direction :output)))
+				      (fe-probe (lambda () (with-open-file (s *fe-path*) (read-line s))))
+				      (fe-probe (lambda () (delete-file *fe-path*)))
+				      (fe-probe (lambda () (rename-file *fe-path* "y.txt")))
+				      (fe-probe (lambda () (truename *fe-path*)))
+				      (handler-case (open *fe-path*) (file-error (e) (princ-to-string e))))
+				""".formatted(missing)).print()).isEqualTo("(T T T T T T \"OPEN: cannot open file " + missing + "\")");
+	}
+
+	@Test
+	void theInterpretersFileErrorInstanceMirrorsTheSeededLayout() {
+		// newFileErrorCondition builds the instance without a registry, so its layout
+		// must keep matching the seed a compiled program's %obj-new is laid out from.
+		ClosRegistry.ClassInfo seeded = java.util.Objects.requireNonNull(new ClosRegistry().findClass("FILE-ERROR"));
+		LispInstance built = (LispInstance) ClosRegistry.newFileErrorCondition(new LispString("p"),
+				new LispString("m"));
+		assertThat(built.layout().slotNames())
+			.isEqualTo(seeded.slots().stream().map(ClosRegistry.SlotSpec::baseName).toList());
 	}
 
 	@Test
@@ -20652,6 +20719,89 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void makeTwoWayStreamReadsAndWritesItsComponents() {
+		// The composite-stream prelude: a two-way stream is a Gray stream reading the
+		// input component and writing the output one; the read side answers :eof, the
+		// write side walks the built-ins, and the accessors recover both components.
+		assertThat(evalMulti("""
+				(let ((o (make-string-output-stream)))
+				  (let ((tw (make-two-way-stream (make-string-input-stream "AB") o)))
+				    (write-string "hello" tw)
+				    (write-char #\\! tw))
+				  (get-output-stream-string o))
+				""").print()).isEqualTo("\"hello!\"");
+		assertThat(evalMulti("""
+				(let ((tw (make-two-way-stream (make-string-input-stream "AB")
+				                                (make-string-output-stream))))
+				  (list (read-char tw) (read-char tw) (read-char tw nil :eof)))
+				""").print()).isEqualTo("(#\\A #\\B :EOF)");
+		assertThat(evalMulti("""
+				(let ((i (make-string-input-stream "x")) (o (make-string-output-stream)))
+				  (let ((tw (make-two-way-stream i o)))
+				    (list (eq (two-way-stream-input-stream tw) i)
+				          (eq (two-way-stream-output-stream tw) o))))
+				""").print()).isEqualTo("(T T)");
+	}
+
+	@Test
+	void makeEchoStreamEchoesWhatItReads() {
+		// An echo stream writes everything it reads to the output component, even the
+		// trailing newline read-line pulls.
+		assertThat(evalMulti("""
+				(let ((o (make-string-output-stream)))
+				  (let ((es (make-echo-stream (make-string-input-stream "ab\\n") o)))
+				    (list (read-line es)
+				          (get-output-stream-string o))))
+				""").print()).isEqualTo("(\"ab\" \"ab\n\")");
+		assertThat(evalMulti("""
+				(let ((i (make-string-input-stream "x")) (o (make-string-output-stream)))
+				  (let ((es (make-echo-stream i o)))
+				    (read-char es)
+				    (list (eq (echo-stream-input-stream es) i)
+				          (eq (echo-stream-output-stream es) o))))
+				""").print()).isEqualTo("(T T)");
+	}
+
+	@Test
+	void makeConcatenatedStreamReadsItsComponentsInOrder() {
+		// Each component is dropped at its end of file; a component-less stream reads
+		// :eof immediately, and the accessor returns the original component list.
+		assertThat(evalMulti("""
+				(let ((cs (make-concatenated-stream (make-string-input-stream "AB")
+				                                    (make-string-input-stream "CD"))))
+				  (list (read-char cs) (read-char cs) (read-char cs) (read-char cs)
+				        (read-char cs nil :eof)))
+				""").print()).isEqualTo("(#\\A #\\B #\\C #\\D :EOF)");
+		assertThat(evalMulti("""
+				(let ((s1 (make-string-input-stream "AB")) (s2 (make-string-input-stream "CD")))
+				  (let ((cs (make-concatenated-stream s1 s2)))
+				    (list (length (concatenated-stream-streams cs))
+				          (eq (car (concatenated-stream-streams cs)) s1))))
+				""").print()).isEqualTo("(2 T)");
+		assertThat(evalMulti("""
+				(let ((cs (make-concatenated-stream)))
+				  (read-char cs nil :eof))
+				""").print()).isEqualTo(":EOF");
+	}
+
+	@Test
+	void compositeStreamConstructorsAreFirstClass() {
+		// Prelude defuns are first-class for free, so #' and apply reach them like any
+		// other function.
+		assertThat(evalMulti("""
+				(let ((tw (funcall #'make-two-way-stream
+				                   (make-string-input-stream "x")
+				                   (make-string-output-stream))))
+				  (read-char tw))
+				""").print()).isEqualTo("#\\x");
+		assertThat(evalMulti("""
+				(let ((cs (apply #'make-concatenated-stream
+				                 (list (make-string-input-stream "M")))))
+				  (read-char cs))
+				""").print()).isEqualTo("#\\M");
+	}
+
+	@Test
 	void grayCloseStandsDownForAProgramThatDefinesACloseMethod() {
 		// close is CL's own generic: a program that methods it owns the operator on
 		// every backend, and the Gray default must not get in front of it.
@@ -22022,19 +22172,24 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalUiopOsWorkingDirectoryAndTheWindowsShortcutFamily() {
+	void evalUiopOsWorkingDirectoryAndTheWindowsShortcutFamily() throws Exception {
 		// getcwd is real where the host has a working directory (here: user.dir);
 		// chdir signals on every backend, because none can move one. The two octet
-		// readers are real stream work; the two .lnk parsers name the primitive they
-		// would need -- file-position on a binary stream, which is nil here.
+		// readers are real stream work; the two .lnk parsers are upstream's bodies and
+		// seek a binary file stream, which the interpreter supports, so over the
+		// fixture they answer upstream's structure. parse-file-location-info reads its
+		// FileLocationInfo at the stream's CURRENT position, so the probe seeks to the
+		// offset parse-windows-shortcut reaches before delegating to it.
+		String lnk = lnkFixturePathString();
 		assertThat(evalMulti("(pathnamep (uiop:getcwd))").print()).isEqualTo("T");
 		assertThat(evalMulti("""
-				(list (handler-case (uiop:chdir "/tmp") (uiop:not-implemented-error () :chdir))
-				      (handler-case (uiop:parse-windows-shortcut "x.lnk")
-				        (uiop:not-implemented-error () :parse-windows-shortcut))
-				      (handler-case (uiop:parse-file-location-info nil)
-				        (uiop:not-implemented-error () :parse-file-location-info)))
-				""").print()).isEqualTo("(:CHDIR :PARSE-WINDOWS-SHORTCUT :PARSE-FILE-LOCATION-INFO)");
+				(let ((lnk "%s"))
+				  (list (handler-case (uiop:chdir "/tmp") (uiop:not-implemented-error () :chdir))
+				        (uiop:parse-windows-shortcut lnk)
+				        (with-open-file (in lnk :element-type '(unsigned-byte 8))
+				          (file-position in 76)
+				          (uiop:parse-file-location-info in))))
+				""".formatted(lnk)).print()).isEqualTo("(:CHDIR \"app.exe\" \"app.exe\")");
 		assertThat(evalMulti("""
 				(asdf:load-system "flexi-streams")
 				(let* ((v (make-array 7 :element-type '(unsigned-byte 8)
@@ -22042,6 +22197,10 @@ class LispEvaluatorTest {
 				       (s (flex:make-in-memory-input-stream v)))
 				  (list (uiop:read-little-endian s) (uiop:read-null-terminated-string s)))
 				""").print()).isEqualTo("(513 \"hi\")");
+	}
+
+	private static String lnkFixturePathString() throws Exception {
+		return CorpusFixtures.lnkFixturePath().toString().replace("\\", "\\\\");
 	}
 
 	@Test

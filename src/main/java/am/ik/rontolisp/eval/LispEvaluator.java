@@ -836,6 +836,17 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Flushes every output stream the program left open, as a process's end does on the
+	 * other backends (the wasm ones write through; the JVM backend flushes its stream
+	 * table on the way out). The caller that owns the program's end calls it -- the CLI
+	 * once the entry file has run, however it stopped -- because an embedded evaluator
+	 * cannot tell its last form from the next.
+	 */
+	public void flushOpenStreams() {
+		this.globalEnv.flushOpenStreams();
+	}
+
+	/**
 	 * Sets the program's argument vector, argv0 first -- the value the {@code uiop/image}
 	 * command-line family reads ({@code (uiop:command-line-arguments)} is its rest,
 	 * {@code (uiop:argv0)} its first). The CLI threads the input file and the arguments
@@ -6080,6 +6091,15 @@ public final class LispEvaluator {
 				LispVal message = cons.cdr() instanceof LispCons rest ? eval(rest.car(), env) : LispNil.INSTANCE;
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						message instanceof LispString s ? s.value() : message.display());
+			}
+			case LispNames.FILE_ERROR_INTERNAL: {
+				// (%file-error pathname message): the prelude file operations' signal, a
+				// file-error instance carrying the pathname as given.
+				List<LispVal> args = ((LispCons) cons.cdr()).toList();
+				LispVal pathname = eval(args.get(0), env);
+				LispVal message = eval(args.get(1), env);
+				String text = message instanceof LispString s ? s.value() : message.display();
+				throw new LispEvalException(text, ClosRegistry.newFileErrorCondition(pathname, new LispString(text)));
 			}
 			case LispNames.PRINT, LispNames.PRINC, LispNames.PRIN1, LispNames.PRINC_TO_STRING,
 					LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING, LispNames.PRINC_PIECE_INTERNAL,

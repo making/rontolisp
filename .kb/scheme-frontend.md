@@ -280,8 +280,8 @@ its record in `internalRecords` by datum identity and defines nothing twice.
   infinities) and a NaN as itself. `exact` of an infinity or a NaN is refused with a
   constant message (`%scheme-exact-flonum`; the irritant formatting of
   `%scheme-error-message` cost +25 KB of wasm for a lone `(exact 2.5)`); before, the
-  interpreter and the JVM signalled and wasm trapped on `unreachable`. The Common Lisp
-  level is `.todo/888`.
+  interpreter and the JVM signalled and wasm trapped on `unreachable`. Common Lisp's own
+  `floor` family now signals there ([[linalg-simd]], "mod / rem and the floor family").
 - **Left as found**: `(eqv? +nan.0 +nan.0)` is `#t` on every backend (Common Lisp's `eql`
   of one bit pattern; R7RS leaves it unspecified, Gauche `#f`). `(eq? x x)` of a flonum
   variable is `#f` on the interpreter and the JVM, `#t` on wasm -- a Common Lisp split,
@@ -1103,12 +1103,12 @@ binary output port's the bytes written, newest first. `close-port` clears `open`
 - **A failed open is a `file-error?` object on every backend**: the opener wraps `open`
   in `(handler-case .. (error () nil))` and raises `%scheme-file-error-condition`
   (`%scheme-error` + CL `file-error`, like the read error) with message `who: cannot open
-  file:` and the path as irritant. Needed because Common Lisp's `open` signals a
-  SIMPLE-ERROR on all four backends (measured 2026-09-19: interpreter
-  `OPEN: cannot open file ...`, JVM the raw `FileNotFoundException` text, wasm `open:
-  cannot open file`), and `delete-file` of a missing file too (`DELETE-FILE: cannot
-  delete ...`, prelude) -- ANSI says `file-error`; `.todo/890` has the CL fix. The
-  handler stays right after it.
+  file:` and the path as irritant. Common Lisp's `open` / `delete-file` signal a CL
+  `file-error` on all four backends now (`.kb/read-load-streams.md`), but the Scheme
+  object still has to be built for its message and irritants, and the clause stays
+  `error`, not `file-error`: a `--no-wasi` module stubs `open` to a plain
+  "requires WASI" error (`NoWasiFilesystemStubs`), which must still become a
+  `file-error?` object here.
 - **Closing really closes**: `%scheme-release-port` `close`s the stream of an open file
   port, from `close-port` & co and `call-with-port`. `with-input-from-file` /
   `with-output-to-file` are `%scheme-with-file`: `%scheme-parameterize` of the port
@@ -1134,11 +1134,9 @@ binary output port's the bytes written, newest first. `close-port` clears `open`
   `get-output-bytevector`. `makesFiles` is `makesPorts`' derivation one feature up
   (functions defined under ports+files minus ports); a file program implies the ports
   feature. The interpreter always reads with all three.
-- **An output file port left open loses its buffered output on the interpreter and the
-  JVM** (a `BufferedWriter` / `BufferedOutputStream` nobody flushes at exit); wasm writes
-  through `fd_write` and keeps it (measured 2026-09-19, all four: a `display` to an
-  unclosed port). A Common Lisp stream behaves the same; stated in the docs as "close the
-  port", the flush-at-exit fix is `.todo/891`.
+- **An output file port left open keeps its output on all four backends**, as in Gauche:
+  the interpreter and the JVM flush the stream table where the program ends, wasm writes
+  through `fd_write` (`.kb/read-load-streams.md`, "Output left open at the end").
 - The spec cases build every path under `/tmp` from `(random 1000000000)` -- a literal
   path would never test the preopen resolution, and two runs of the corpus at once (two
   worktrees) must not share a file; the driver's wasm legs pass `--dir /tmp`. A wasm

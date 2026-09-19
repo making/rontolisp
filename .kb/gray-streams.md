@@ -183,6 +183,27 @@ with it.** A component-LESS `(make-broadcast-stream)` is still the discarding
 `%make-string-output-stream` handle but rides the same prelude entry, so a sink-only program
 also carries gray.lisp.
 
+## The composite-stream constructors are Gray streams too
+`make-two-way-stream` / `make-echo-stream` / `make-concatenated-stream` (`.todo/387`,
+`.kb/read-load-streams.md`) are the same pattern on the INPUT half: prelude Lisp
+(`LispPreludeLibrary.MAKE_TWO_WAY_STREAM` / `MAKE_ECHO_STREAM` /
+`MAKE_CONCATENATED_STREAM`) defining Gray classes over the components. A two-way stream
+subclasses both `fundamental-character-input-stream` and `fundamental-character-output-stream`
+(slotted `in`/`out`); an echo stream is its OWN binary-input+output class (NOT a subclass of
+`%two-way-stream` -- each prelude entry loads standalone on the interpreter, so an entry must
+not need another entry's defclass already evaluated, and the echo entry re-declares its own
+slots and readers `%echo-input`/`%echo-output`); a concatenated stream subclasses
+`fundamental-character-input-stream` (slotted `streams`).
+
+The METHODS call the BUILT-INS (`read-char` / `write-char` / `write-string`), exactly like the
+broadcast defun, so a component that is a stream HANDLE works and the `.kb/gray-streams.md`
+compile-path rewrite -- which runs AFTER this splice -- redirects each call site onto the
+dispatch helpers, so a component that is itself a Gray instance dispatches. The `:eof` answer
+comes from the read built-in's eof-value, which the read dispatch translates back into the
+eof contract. Selection keys on ANY of the cluster's surface names (constructor or accessors,
+`referencedBySurfaceForm`), so a program that only receives the stream from a library still
+splices the whole entry.
+
 ## flexi-streams
 `flexi-streams.lisp` is a lite shim except for these REAL Gray classes:
 - `flexi-streams:vector-stream` (`flex:make-in-memory-input-stream`) — a

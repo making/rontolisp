@@ -2,7 +2,7 @@
 
 `(truename pathname)`
 
-Returns the pathname when the file exists and signals an error when it does not.
+Returns the pathname when the file exists and signals a `file-error` when it does not.
 The signal is the point: `(ignore-errors (truename path))` is the Common Lisp
 idiom for "this path if it is there, `nil` otherwise", and libraries use it to
 probe for an optional file or directory.

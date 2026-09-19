@@ -138,9 +138,11 @@ preopen されたディレクトリが与えられるだけで「現在の」デ
 |------|------|
 | `uiop:read-little-endian` | バイナリストリームから *n* オクテット（既定は 4）のリトルエンディアン非負整数を読みます |
 | `uiop:read-null-terminated-string` | `0` までのオクテットを読み、文字列として返します |
-| `uiop:parse-windows-shortcut` / `uiop:parse-file-location-info` | `uiop:not-implemented-error` をシグナルします |
+| `uiop:parse-windows-shortcut` / `uiop:parse-file-location-info` | `.lnk` を `file-position` で移動して、リンク先のパス名を返します |
 
 2 つのリーダーは純粋なストリーム処理で、`read-byte` が動くところならどこでも動き
-ます。2 つの `.lnk` パーサはファイル内を `file-position` で移動しますが、
-rontolisp のファイルストリームはこれをサポートしないため、黙って誤解析する代わり
-にそのプリミティブの名前を挙げてシグナルします。
+ます。2 つのパーサは上流の本体であり、バイナリファイルストリームを `file-position`
+で移動します。これはインタプリタと JVM ではファイルストリームに対してサポートされ
+ます。両方の WASM バックエンドでは依然として `nil` を返すため、そこではパーサは
+`file-position` の名前を挙げて `uiop:not-implemented-error` をシグナルし、ストリームを
+黙って誤解析しません。

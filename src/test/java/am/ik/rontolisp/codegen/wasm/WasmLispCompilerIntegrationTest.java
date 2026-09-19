@@ -2166,7 +2166,7 @@ class WasmLispCompilerIntegrationTest {
 			(print (ftr 1d300 7.0))
 			(print (f1 1d300))
 			(print (ftr 1d30 3.0))
-			(print (list (ftr 3.0 (/ 1.0 0.0)) (ftr 1.0 0.0)))
+			(print (list (ftr 3.0 (/ 1.0 0.0))))
 			(print (list (floor 3.7) (ceiling 3.2) (round 2.5) (round 3.5) (truncate -3.7)))
 			(print (floor 1d300))
 			""";
@@ -2178,9 +2178,46 @@ class WasmLispCompilerIntegrationTest {
 			(%s 1.0)
 			%s
 			(333333333333333339961541612885 1.0)
-			((0 3.0) (9223372036854775807 NaN))
+			((0 3.0))
 			(3 4 2 4 -3)
 			%s""".formatted(Q_1D300, BIG_1D300, BIG_1D300);
+
+	@Test
+	void roundingOrDecodingAnInfinityOrANanSignals() throws Exception {
+		// The floor family narrowed a NaN or an infinity with i64.trunc_sat_f64_s --
+		// (floor inf) was i64.max, (fround nan) 0.0 -- and decode-float of an infinity
+		// never returned. Each now signals the interpreter's text (ci-spec
+		// rounding-or-decoding-an-infinity-or-a-nan-signals).
+		assertThat(compileAndRunProgram(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(NON_FINITE_ROUNDING_PROGRAM,
+				am.ik.rontolisp.reader.Features.WASM, true, false)))
+			.isEqualTo(NON_FINITE_ROUNDING_EXPECTED);
+	}
+
+	static final String NON_FINITE_ROUNDING_PROGRAM = """
+			(defvar *inf* (/ 1.0 0.0))
+			(defvar *nan* (- *inf* *inf*))
+			(defmacro try (form) `(handler-case (multiple-value-list ,form) (error (e) (princ-to-string e))))
+			(defun fl (a) (floor a))
+			(print (list (try (fl *inf*)) (try (round *nan*))
+			             (try (ffloor (- *inf*))) (try (floor *inf* 2))))
+			(print (list (try (truncate 1.0 0.0)) (try (funcall #'fround *nan*))
+			             (try (floor 5 *inf*))))
+			(print (list (try (rational *nan*)) (try (rationalize *inf*))
+			             (try (decode-float *inf*))))
+			(print (list (try (integer-decode-float *nan*)) (try (fl 2.5))
+			             (try (floor 1d300 1d299))))
+			""";
+
+	static final String NON_FINITE_ROUNDING_EXPECTED = """
+			("rounding a non-finite float to an integer is undefined" \
+			"rounding a non-finite float to an integer is undefined" \
+			"rounding a non-finite float to an integer is undefined" \
+			"rounding a non-finite float to an integer is undefined")
+			("rounding a non-finite float to an integer is undefined" \
+			"rounding a non-finite float to an integer is undefined" (0 5.0))
+			("rational of a non-finite float is undefined" "rationalize of a non-finite float is undefined" \
+			"decode-float of a non-finite float is undefined")
+			("integer-decode-float of a non-finite float is undefined" (2 0.5) (10 0.0))""";
 
 	@Test
 	void theFloorFamilyQuotientIsExactAtEveryMagnitude() throws Exception {
@@ -4809,6 +4846,15 @@ class WasmLispCompilerIntegrationTest {
 				(print (list (uiop:getenv "RLENV") (uiop:getenvp "RLENV")))
 				(print (handler-case (uiop:getcwd) (uiop:not-implemented-error () :no-working-directory)))
 				(print (handler-case (uiop:chdir "/tmp") (uiop:not-implemented-error () :chdir-signals)))
+				;; The two .lnk parsers are upstream's bodies and seek a binary file
+				;; stream with file-position, which this backend answers nil for, so
+				;; behind the :rontolisp-wasm gate they signal naming the primitive
+				;; rather than misreading. The gate is the function's FIRST form, so no
+				;; .lnk file has to exist on disk.
+				(print (handler-case (uiop:parse-windows-shortcut "x.lnk")
+				         (uiop:not-implemented-error () :shortcut-signals)))
+				(print (handler-case (uiop:parse-file-location-info nil)
+				         (uiop:not-implemented-error () :fli-signals)))
 				""", Features.WASM), Features.WASM);
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
@@ -4825,7 +4871,9 @@ class WasmLispCompilerIntegrationTest {
 				("overridden" "overridden")
 				(NIL NIL)
 				:NO-WORKING-DIRECTORY
-				:CHDIR-SIGNALS""");
+				:CHDIR-SIGNALS
+				:SHORTCUT-SIGNALS
+				:FLI-SIGNALS""");
 	}
 
 	@Test
@@ -11843,6 +11891,32 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compositeStreamConstructors() throws Exception {
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(print (let ((o (make-string-output-stream)))
+					         (let ((tw (make-two-way-stream (make-string-input-stream "AB") o)))
+					           (write-string "hi" tw)
+					           (write-char #\\! tw)
+					           (get-output-stream-string o))))
+					(print (let ((o (make-string-output-stream)))
+					         (let ((es (make-echo-stream (make-string-input-stream "ab") o)))
+					           (list (read-char es) (read-char es) (get-output-stream-string o)))))
+					(print (let ((cs (make-concatenated-stream (make-string-input-stream "AB")
+					                                            (make-string-input-stream "CD"))))
+					         (list (read-char cs) (read-char cs) (read-char cs) (read-char cs)
+					               (read-char cs nil :eof))))
+					(print (let ((i (make-string-input-stream "x")) (o (make-string-output-stream)))
+					         (let ((tw (make-two-way-stream i o)))
+					           (list (eq (two-way-stream-input-stream tw) i)
+					                 (eq (two-way-stream-output-stream tw) o)))))
+					(print (let ((tw (funcall #'make-two-way-stream (make-string-input-stream "x")
+					                           (make-string-output-stream))))
+					         (list (read-char tw) (read-char tw nil :eof))))
+					"""))))).isEqualTo("\"hi!\"\n(#\\a #\\b \"ab\")\n(#\\A #\\B #\\C #\\D :EOF)\n(T T)\n(#\\x :EOF)");
+	}
+
+	@Test
 	void grayStreamInstanceDispatch() throws Exception {
 		// The GrayStreamsLibrary pre-pass splices gray.lisp and rewrites the
 		// write-string/write-char call sites onto the dispatch helpers, mirroring the
@@ -11864,8 +11938,9 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void grayOutputProtocolWidening() throws Exception {
-		// the line-oriented and print-family operators reach a Gray
+	void grayOutputProtocolWidening() throws Exception { // the line-oriented and
+															// print-family operators
+															// reach a Gray
 		// instance on the WASM path too -- a class defining ONLY stream-write-char
 		// (rove's indent-stream shape) answers all of them, and only the dispatch
 		// helpers the rewrites produced are spliced.
@@ -13605,6 +13680,46 @@ class WasmLispCompilerIntegrationTest {
 				  (princ (read-char s))
 				  (princ (peek-char #\\y s))
 				  (princ (read-char s)))""")).isEqualTo("xxyy");
+	}
+
+	private static final String FILE_ERROR_PROGRAM = """
+			(defvar *fe-path* (concatenate 'string "fe890-missing/" "x.txt"))
+			(defun fe-probe (thunk)
+			  (handler-case (progn (funcall thunk) :no-error)
+			    (file-error (e) (list :file-error (namestring (file-error-pathname e))))
+			    (error () :other-error)))
+			(print (fe-probe (lambda () (open *fe-path*))))
+			(print (fe-probe (lambda () (open *fe-path* :direction :output))))
+			(print (fe-probe (lambda () (with-open-file (s *fe-path*) (read-line s)))))
+			(print (fe-probe (lambda () (delete-file *fe-path*))))
+			(print (fe-probe (lambda () (rename-file *fe-path* "y.txt"))))
+			(print (fe-probe (lambda () (truename *fe-path*))))
+			(terpri)
+			(handler-case (open *fe-path*) (file-error (e) (princ e) (terpri)))
+			(handler-case (delete-file *fe-path*) (file-error (e) (princ e) (terpri)))
+			(with-input-from-string (s "")
+			  (handler-case (read-char s) (end-of-file (e) (princ e) (terpri))))""";
+
+	private static final String FILE_ERROR_EXPECTED = """
+			(:FILE-ERROR "fe890-missing/x.txt")
+			(:FILE-ERROR "fe890-missing/x.txt")
+			(:FILE-ERROR "fe890-missing/x.txt")
+			(:FILE-ERROR "fe890-missing/x.txt")
+			(:FILE-ERROR "fe890-missing/x.txt")
+			(:FILE-ERROR "fe890-missing/x.txt")
+
+			OPEN: cannot open file fe890-missing/x.txt
+			DELETE-FILE: cannot delete fe890-missing/x.txt
+			end of file""";
+
+	@Test
+	void aFailedFileOperationSignalsFileErrorCarryingThePathname() throws Exception {
+		assertThat(compileAndRunWithDirs(FILE_ERROR_PROGRAM)).isEqualTo(FILE_ERROR_EXPECTED);
+	}
+
+	@Test
+	void aFailedFileOperationSignalsFileErrorCarryingThePathnameOnTheComponentPath() throws Exception {
+		assertThat(compileAndRunComponentWithDirs(FILE_ERROR_PROGRAM)).isEqualTo(FILE_ERROR_EXPECTED);
 	}
 
 	@Test
