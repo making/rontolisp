@@ -34689,8 +34689,8 @@ public final class LispMacroExpander {
 	 * was already rewritten to publish by {@link #injectMvSpillGlobal}
 	 * ({@code settleLambdaTails}), and a built-in wrapper's stays one value, as the
 	 * built-in it wraps is on the interpreter -- except the floor family's, which
-	 * {@link #settleWrapperLambdas} makes publish first. An empty body answers nil, which is one
-	 * value: it gets a clearing nil.
+	 * {@link #settleWrapperLambdas} makes publish first. An empty body answers nil, which
+	 * is one value: it gets a clearing nil.
 	 * @param body the body forms
 	 * @return the body with its last form settled, or {@code body} itself when nothing
 	 * changed
