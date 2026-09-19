@@ -85,6 +85,15 @@ is not a prunable library definition.
   `torch:no-grad` references `torch::*grad-enabled*` -- both synthesized AFTER the pruner.
   Re-verify if a new built-in macro expansion emits a
   `linalg:`/`torch:`/`vec:`/`rontolisp::%json`/url/prelude name.
+- **Synthesized-call prelude entries** (`SYNTHESIZED_ENTRIES`: `%stream-target`,
+  `%print-cased`, `probe-file`, ...) are rooted by `LispPreludeLibrary.referencedBySurfaceForm`
+  over the LIVE forms (`rootSynthesized`, re-run to a fixpoint after each walk), never the whole
+  spliced program: a library splices whole, and a DEAD definition's spelling rooted the entry
+  anyway. Every lowered Scheme program kept `%stream-target` because `scheme.lisp` spells
+  `with-output-to-string` / `*error-output*` in helpers it never calls, and on the JVM its
+  closure funcall then switched the eval runtime on (`(display x)`: 74,048 -> 43,141 B of class,
+  8,505 -> 8,405 B of wasm, 2026-09-19, `.todo/894`). Pinned by
+  `#aSynthesizedCallEntryIsRootedByTheLiveFormsOnly`.
 - Two spellings widen this for THIRD-PARTY names only: an uninterned `'#:foo` designator, and
   a string literal whose WHOLE content is a canonical or member name. Both hash lookups.
 - **Not reference sources**: a `set-dispatch-macro-character` HOOK

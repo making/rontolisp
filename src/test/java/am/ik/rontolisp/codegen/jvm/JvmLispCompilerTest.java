@@ -19599,6 +19599,64 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aComputedFuncallTargetCarriesNoApplyOrEvalRuntime() throws Exception {
+		// A symbol reaching a computed target resolves through the registry, which
+		// answers only names the program spells as values -- so without a spelled
+		// map*/every/some name no applying wrapper can be reached, and the runtime its
+		// body calls is dead weight. Counting every computed target made any
+		// higher-order function 49 KB of class instead of 10.
+		String program = """
+				(defun app (f x) (funcall f x))
+				(print (app (lambda (y) (+ y 1)) 2))
+				(print (app 'car '(9 8)))
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_eval", "_apply", "_store", "_envLookup");
+		assertThat(runClass(classBytes)).isEqualTo("3\n9");
+	}
+
+	@Test
+	void aComputedTargetBesideAQuotedWrapperNameStillReachesTheWrapper() throws Exception {
+		// The name spelled inside quoted data is a registry row a computed target can
+		// resolve, so the wrapper -- and the _apply its body calls -- stays.
+		String program = """
+				(defvar *f* (car '(mapcar)))
+				(print (funcall *f* #'1+ '(1 2)))
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
+		assertThat(declaredMethodNames(classBytes)).contains("_apply");
+		assertThat(runClass(classBytes)).isEqualTo("(2 3)");
+	}
+
+	@Test
+	void aRuntimeApplyGetsTheApplyTierNotTheInterpreter() throws Exception {
+		// _apply and the spread dispatcher, but no _eval/_store/_envLookup: an eval-free
+		// program holds no interpreted closure and no _fenv binding. Through a symbol,
+		// past the per-arity ceiling, and through multiple-value-call's spread.
+		String program = """
+				(defun ap (f l) (apply f l))
+				(print (ap 'list '(1 2)))
+				(print (ap #'+ '(1 2 3 4 5 6 7 8 9 10 11 12)))
+				(print (multiple-value-call (car (list #'list)) (values 1 2) (floor 7 2)))
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
+		assertThat(declaredMethodNames(classBytes)).contains("_apply").doesNotContain("_eval", "_store", "_envLookup");
+		assertThat(runClass(classBytes)).isEqualTo("(1 2)\n78\n(1 2 3 1)");
+	}
+
+	@Test
+	void anApplyOfALiteralCompiledTargetNeedsNoApplyRuntime() throws Exception {
+		String program = """
+				(defun k (&rest r) r)
+				(print (apply #'k 1 2 '(3)))
+				(print (multiple-value-call #'k (values 1 2) 3))
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_apply", "_eval");
+		assertThat(runClass(classBytes)).isEqualTo("(1 2 3)\n(1 2 3)");
+	}
+
+	@Test
 	void aComputedDesignatorStillResolvesASymbolThroughTheRegistry() throws Exception {
 		// The name registry used to ride along on the always-on eval gate. It is now
 		// gated on the arities Pass 2 dispatched through, because an operator that calls

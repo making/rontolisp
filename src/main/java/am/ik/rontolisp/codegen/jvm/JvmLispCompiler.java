@@ -186,7 +186,13 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * The eval runtime's own methods; {@code _lookup$N} segments hang off
 	 * {@code _lookup}.
 	 */
-	private static final Set<String> EVAL_METHOD_NAMES = Set.of("_eval", "_apply", "_store", "_envLookup", "_lookup");
+	private static final Set<String> EVAL_METHOD_NAMES = Set.of("_eval", "_store", "_envLookup", "_lookup");
+
+	/**
+	 * The apply tier's gate: {@code _apply} and the spread dispatcher, without the
+	 * interpreter (see {@code usesApplyRuntime} in {@link #compile(List, Set, Map)}).
+	 */
+	private static final String GROUP_APPLY = "apply";
 
 	/**
 	 * Which gate emits a given runtime helper, i.e. which gate to force on when the
@@ -209,6 +215,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (EVAL_METHOD_NAMES.contains(helperName)) {
 			return GROUP_EVAL;
+		}
+		if ("_apply".equals(helperName)) {
+			return GROUP_APPLY;
 		}
 		if (JvmComplexRuntimeBuilder.METHOD_NAMES.contains(helperName)) {
 			return GROUP_COMPLEX;
@@ -1354,33 +1363,56 @@ public final class JvmLispCompiler implements LispCompiler {
 		//
 		// The scan counts 'name as well as #'name (FunctionDesignators normalizes the
 		// first into the second) and gives up entirely on a program that can hand the
-		// name registry a designator it cannot read: a computed funcall/apply target, or
-		// a name the program reads or builds at run time.
-		boolean usesApplyingWrapperValue = LispMacroExpander.usesRuntimeFunctionDesignator(program) || nameResolvable
-				|| symbolBuilders || BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS.stream()
+		// name registry a designator it cannot read: a name the program reads or builds
+		// at run time. A computed funcall/apply target counts only beside a symbol
+		// constant spelling one of the names (quoted data at any depth): the registry
+		// answers only names the program loads as values, so without one no symbol can
+		// reach a wrapper. Counting every computed target switched the whole eval
+		// runtime on for any higher-order function -- (funcall f x) over a parameter
+		// was 49 KB of class against 8 KB without it -- and for every program that
+		// spliced the stream resolver, whose synonym arm calls a closure.
+		boolean usesApplyingWrapperValue = (LispMacroExpander.usesRuntimeFunctionDesignator(program)
+				&& spellsSymbolConstant(resolvedProgram, closRegistry, BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS))
+				|| nameResolvable || symbolBuilders || BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS.stream()
 					.anyMatch(op -> referencesFunctionDesignator(resolvedProgram, closRegistry, op));
 		// When the program uses eval, the runtime _apply dispatches by argument count, so
-		// every arity up to the maximum callable must have a dispatch method. The apply
-		// built-in reuses _apply, so it forces the eval runtime to be emitted as well.
+		// every arity up to the maximum callable must have a dispatch method.
 		// boundp/symbol-value/fboundp resolve symbols at runtime against the eval
 		// runtime's global env mirror (_genv) and function registry (_lookup/_fenv), so
-		// they force the eval runtime like apply does. fmakunbound writes the tombstone
-		// into that same _fenv.
-		// multiple-value-call forces apply too: its expansion spreads a spill
-		// producer's dynamic value count with (apply fn (append ...)).
+		// they force the eval runtime. fmakunbound writes the tombstone into that same
+		// _fenv.
 		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic || usesJava || usesObjc || usesFfi
-				|| programUsesSymbol(program, LispNames.APPLY) || programUsesSymbol(program, LispNames.BOUNDP)
-				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.SET)
-				|| programUsesSymbol(program, LispNames.FBOUNDP) || programUsesSymbol(program, LispNames.FMAKUNBOUND)
+				|| programUsesSymbol(program, LispNames.BOUNDP) || programUsesSymbol(program, LispNames.SYMBOL_VALUE)
+				|| programUsesSymbol(program, LispNames.SET) || programUsesSymbol(program, LispNames.FBOUNDP)
+				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
 				// (setf (symbol-function ...)) writes _fenv (the raw place shape is
 				// scanned: the lowering to %set-symbol-function happens per expression,
 				// after this gate).
-				|| LispMacroExpander.usesSymbolFunctionWrite(program)
-				|| programUsesSymbol(program, LispNames.MULTIPLE_VALUE_CALL)
-				// The injected wrapper bodies that are (apply f r): the wrappers and the
-				// runtime they call are gated on the same reference (see
-				// wrapperExcludes).
-				|| usesApplyingWrapperValue || forcedGroups.contains(GROUP_EVAL);
+				|| LispMacroExpander.usesSymbolFunctionWrite(program) || forcedGroups.contains(GROUP_EVAL);
+		// The APPLY TIER: _apply and the spread dispatcher it hands the argument list
+		// to, without the interpreter (_eval/_store/_envLookup, the _genv mirror, a
+		// dispatcher for every arity). A runtime apply needs no more than that -- an
+		// eval-free program holds no interpreted closure and no _fenv binding -- and it
+		// used to put the whole eval runtime in: (apply f l) over a parameter was
+		// 48 KB of class. The WASM backend has had the same tier since todo-315, over
+		// the same scan: an apply (or a multiple-value-call, whose expansion spreads
+		// through apply) whose literal #'f/'f target names a compiled function is a
+		// physical direct call (JvmApplyCompiler) and needs neither. The wrapper-name set
+		// counts only wrappers the #'name spelling itself injects; a misprediction is
+		// caught by the post-compile self-check (GROUP_APPLY).
+		Set<String> applyGateWrappers = BuiltinFunctionWrappers.wrapperNames();
+		applyGateWrappers.removeAll(BuiltinFunctionWrappers.HASH_FUNCTIONS);
+		applyGateWrappers.removeAll(BuiltinFunctionWrappers.ARRAY_FILL_POINTER_FUNCTIONS);
+		applyGateWrappers.removeAll(BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS);
+		applyGateWrappers.remove(LispNames.PARSE_INTEGER);
+		applyGateWrappers.remove(LispNames.READ_FROM_STRING);
+		applyGateWrappers.remove(LispNames.SEQ_STRING);
+		applyGateWrappers.remove(LispNames.SEQ_INT_VECTOR);
+		applyGateWrappers.remove(LispNames.SEQ_FLOAT_VECTOR);
+		// The injected wrapper bodies that are (apply f r) count too: the wrappers and
+		// the runtime they call are gated on the same reference (see wrapperExcludes).
+		boolean usesApplyRuntime = usesEval || LispMacroExpander.needsApplyRuntime(program, applyGateWrappers)
+				|| usesApplyingWrapperValue || forcedGroups.contains(GROUP_APPLY);
 		// parse-integer / read-from-string wrappers reference runtime helpers that are
 		// emitted only when the program itself uses the operator (_parseInt; the reader
 		// runtime). Exclude each wrapper unless the program references the symbol, so the
@@ -1396,12 +1428,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (!usesFuncallValue) {
 			wrapperExcludes.add(LispNames.FUNCALL);
 		}
-		// The map*/every/some family, gated on the eval runtime as a whole rather than on
-		// each name: with the runtime OFF nothing can reach a wrapper the program does
-		// not spell (and its body would call an _apply that is not there), while with it
-		// ON an eval'd (mapcar ...) resolves the name through _lookup and needs every
-		// wrapper registered.
-		if (!usesEval) {
+		// The map*/every/some family, gated as a whole rather than on each name: with
+		// neither the eval runtime nor a reachable wrapper reference nothing can reach a
+		// wrapper the program does not spell (and its body would call an _apply that is
+		// not there), while with eval ON an eval'd (mapcar ...) resolves the name through
+		// _lookup and needs every wrapper registered. A wrapper reference alone brings
+		// the apply tier the bodies call.
+		if (!usesEval && !usesApplyingWrapperValue) {
 			wrapperExcludes.addAll(BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS);
 		}
 		// Hash-table wrappers reference helpers (JvmHashRuntimeBuilder) emitted only when
@@ -2478,7 +2511,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// eval gate stopped being forced on for programs that never mention eval, that
 		// always-on gate is what covered them, and without this clause
 		// (mapcar (car (list 'pred)) l) lost the registry and died on the symbol.
-		boolean needsLookup = usesEval || LispMacroExpander.usesRuntimeFunctionDesignator(program)
+		boolean needsLookup = usesApplyRuntime || LispMacroExpander.usesRuntimeFunctionDesignator(program)
 				|| !indirectCallArities.isEmpty()
 				// A computed (symbol-function x) / (fdefinition x) boxes through _lookup,
 				// and so does a (coerce v 'function) over a literal function designator
@@ -2546,9 +2579,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				.build();
 			if (usesEval) {
 				evalCode = JvmEvalRuntimeBuilder.buildEval(ec);
-				applyCode = JvmEvalRuntimeBuilder.buildApply(ec);
 				storeCode = JvmEvalRuntimeBuilder.buildStore(ec);
 				envLookupCode = JvmEvalRuntimeBuilder.buildEnvLookup(ec);
+			}
+			if (usesApplyRuntime) {
+				applyCode = JvmEvalRuntimeBuilder.buildApply(ec, usesEval);
 			}
 			lookupSegments = JvmEvalRuntimeBuilder.buildLookupSegments(ec, thisClass, dispatchableFuncIds,
 					this.dynamic || nameResolvable || symbolBuilders, spelledLiterals);
@@ -2575,7 +2610,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// knew about the check (JvmRuntimeBuilder.ArityReporting).
 		JvmRuntimeBuilder.ArityReporting arityReporting = JvmRuntimeBuilder.ArityReporting.NONE;
 		boolean reportsMiss = !indirectCallArities.isEmpty();
-		boolean reportsCount = usesEval || !arityGuardShapes.isEmpty();
+		boolean reportsCount = usesApplyRuntime || !arityGuardShapes.isEmpty();
 		if (reportsMiss || reportsCount) {
 			arityReporting = new JvmRuntimeBuilder.ArityReporting(
 					reportsMiss ? cp.addMethodref(thisClass,
@@ -2591,7 +2626,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		// What applying a non-function raises, shared by every dispatcher and by _apply
 		// (the eval runtime, which the spread dispatcher comes with).
-		if (!indirectCallArities.isEmpty() || usesEval) {
+		if (!indirectCallArities.isEmpty() || usesApplyRuntime) {
 			dispatchMethods.add(new DispatchMethod(cp.addUtf8(JvmRuntimeBuilder.NOT_FN_NAME),
 					cp.addUtf8(JvmRuntimeBuilder.NOT_FN_DESC),
 					JvmRuntimeBuilder.buildNotFnBody(cp, stringClass, lispToStringMethod), 1));
@@ -2602,9 +2637,8 @@ public final class JvmLispCompiler implements LispCompiler {
 					stringClass, applyRefForDispatch, lookupRefForDispatch, dispatchableFuncIds, arityReporting));
 		}
 		// The spread dispatcher _apply calls: it takes the argument list whole, so an
-		// apply through a COMPUTED designator has no arity ceiling. Emitted with the eval
-		// runtime, which is what apply forces.
-		if (usesEval) {
+		// apply through a COMPUTED designator has no arity ceiling. Emitted with _apply.
+		if (usesApplyRuntime) {
 			dispatchMethods.addAll(JvmRuntimeBuilder.buildDispatchMethods(0, functions, lambdaDecls, lambdaFuncInfos,
 					cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
 					applyRefForDispatch, lookupRefForDispatch, true, dispatchableFuncIds, arityReporting));
@@ -4468,6 +4502,15 @@ public final class JvmLispCompiler implements LispCompiler {
 										.writeU2(0)
 										.writeU2(0))));
 				}
+				if (usesApplyRuntime) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, applyName, evalDesc,
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
+									attr -> attr.writeU2(32)
+										.writeU2(20)
+										.writeCode((Object[]) applyBody.toArray(new Integer[0]))
+										.writeU2(0)
+										.writeU2(0))));
+				}
 				if (usesEval) {
 					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, envLookupName, envLookupDesc,
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
@@ -4481,13 +4524,6 @@ public final class JvmLispCompiler implements LispCompiler {
 									attr -> attr.writeU2(32)
 										.writeU2(22)
 										.writeCode((Object[]) evalBody.toArray(new Integer[0]))
-										.writeU2(0)
-										.writeU2(0))));
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, applyName, evalDesc,
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
-									attr -> attr.writeU2(32)
-										.writeU2(20)
-										.writeCode((Object[]) applyBody.toArray(new Integer[0]))
 										.writeU2(0)
 										.writeU2(0))));
 					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, storeName, storeDesc,
@@ -5104,6 +5140,14 @@ public final class JvmLispCompiler implements LispCompiler {
 					.values()
 					.stream()
 					.anyMatch(report -> BuiltinFunctionWrappers.referencesFunctionDesignator(report, op));
+	}
+
+	private static boolean spellsSymbolConstant(List<LispVal> program, ClosRegistry closRegistry, Set<String> names) {
+		return program.stream().anyMatch(expr -> BuiltinFunctionWrappers.spellsSymbolConstant(expr, names))
+				|| closRegistry.conditionReports()
+					.values()
+					.stream()
+					.anyMatch(report -> BuiltinFunctionWrappers.spellsSymbolConstant(report, names));
 	}
 
 	private static boolean usesEval(LispVal val) {
