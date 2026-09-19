@@ -9337,6 +9337,68 @@ class LispEvaluatorTest {
 	}
 
 	/**
+	 * The floor family as a FUNCTION object: an optional divisor, and both values through
+	 * a funcall, an apply, a variable and a function return. Shared verbatim with
+	 * JvmLispCompilerTest / WasmLispCompilerIntegrationTest and the
+	 * {@code floor-family-function-object} ci-spec case; every line is SBCL's.
+	 */
+	static final String FLOOR_FAMILY_FUNCTION_OBJECT = """
+			(defun ci-ffo-call (g a b) (funcall g a b))
+			(defun ci-ffo-tail (x) (funcall #'floor x))
+			(print (funcall #'floor 7 2))
+			(print (mapcar #'truncate '(7 9) '(2 4)))
+			(print (multiple-value-list (funcall #'floor 7.5)))
+			(print (multiple-value-list (let ((g #'floor)) (funcall g 7.5))))
+			(print (multiple-value-list (let ((g #'floor)) (funcall g 7 2))))
+			(print (multiple-value-list (funcall #'round 5 2)))
+			(print (multiple-value-list (apply #'ceiling '(7 2))))
+			(print (mapcar #'ffloor '(7 9) '(2 4)))
+			(print (multiple-value-list (funcall #'ftruncate 7 2)))
+			(print (multiple-value-list (let ((g #'fround)) (funcall g 7.5))))
+			(print (multiple-value-list (ci-ffo-call #'floor -7 2)))
+			(print (multiple-value-list (ci-ffo-call #'round 7 2)))
+			(print (multiple-value-list (ci-ffo-call #'ceiling 7 2)))
+			(print (multiple-value-list (ci-ffo-tail 7.5)))
+			(print (multiple-value-list (funcall #'truncate 7/2)))
+			(print (multiple-value-list (car (mapcar #'floor '(7) '(2)))))
+			(print (multiple-value-list (1+ (funcall #'floor 7 2))))
+			(multiple-value-bind (q r) (funcall #'floor 17 5) (print (list q r)))
+			(print (mapcar (lambda (x) (multiple-value-list (funcall #'ceiling x))) '(-0.0 0.5 -2.5)))
+			(print (mapcar (lambda (x) (multiple-value-list (funcall #'fround x))) '(-0.0 2.5 -7/2)))
+			""";
+
+	/** What SBCL prints for {@link #FLOOR_FAMILY_FUNCTION_OBJECT}, one line per print. */
+	static final String FLOOR_FAMILY_FUNCTION_OBJECT_EXPECTED = String.join("\n", "3", "(3 2)", "(7 0.5)", "(7 0.5)",
+			"(3 1)", "(2 1)", "(4 -1)", "(3.0 2.0)", "(3.0 1)", "(8.0 -0.5)", "(-4 1)", "(4 -1)", "(4 -1)", "(7 0.5)",
+			"(3 1/2)", "(3)", "(4)", "(3 2)", "((0 -0.0) (1 -0.5) (-2 -0.5))", "((0.0 -0.0) (2.0 0.5) (-4.0 1/2))");
+
+	@Test
+	void evalFloorFamilyFunctionObjectTakesADivisorAndAnswersBothValues() {
+		assertThat(printedLines(FLOOR_FAMILY_FUNCTION_OBJECT)).isEqualTo(FLOOR_FAMILY_FUNCTION_OBJECT_EXPECTED);
+		// Without a multiple-value operator anywhere in the program.
+		assertThat(printedLines("""
+				(print (funcall #'floor 7 2))
+				(print (mapcar #'truncate '(7 9) '(2 4)))
+				(print (mapcar #'fceiling '(7 9) '(2 4)))
+				(print (let ((g #'round)) (funcall g 7 2)))
+				(print (funcall #'floor 7.5))
+				""")).isEqualTo(String.join("\n", "3", "(3 2)", "(4.0 3.0)", "4", "7"));
+	}
+
+	private static String printedLines(String program) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal expr : LispReader.readAllFromString(program)) {
+			evaluator.eval(expr);
+		}
+		return out.toString(StandardCharsets.UTF_8)
+			.lines()
+			.map(String::trim)
+			.filter(line -> !line.isEmpty())
+			.collect(joining("\n"));
+	}
+
+	/**
 	 * The cleanup-shape x exit-shape matrix of
 	 * {@link #evalUnwindProtectCleanupKeepsTheProtectedFormsValues()}, shared verbatim
 	 * with the compile backends' copies (JvmLispCompilerTest /
@@ -18977,6 +19039,28 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> evalMulti("(adjust-array (make-array '(2 2)) 5)"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("rank mismatch");
+	}
+
+	@Test
+	void adjustArrayInitialContentsAndDisplacedTo() {
+		// :initial-contents fills the WHOLE result (like make-array); :displaced-to
+		// builds
+		// a displaced view over the target (a NON-adjustable source is left alone and a
+		// string source answers a string).
+		assertThat(evalMulti("""
+				(setq v (make-array 5 :initial-contents (list 'a 'b 'c 'd 'e)))
+				(adjust-array v 4 :initial-contents (list 'w 'x 'y 'z))
+				""").print()).isEqualTo("#(W X Y Z)");
+		assertThat(evalMulti("""
+				(setq a0 (make-array 7 :initial-contents (list 1 2 3 4 5 6 7)))
+				(setq a1 (make-array 5 :initial-contents (list 'a 'b 'c 'd 'e)))
+				(setq a2 (adjust-array a1 4 :displaced-to a0))
+				(list a2 (eq (array-displacement a2) a0) (array-dimensions a1))
+				""").print()).isEqualTo("(#(1 2 3 4) T (5))");
+		assertThat(evalMulti("""
+				(setq s (make-array 3 :element-type 'character :adjustable t :initial-contents "abc"))
+				(adjust-array s 4 :initial-contents "wxyz")
+				""").print()).isEqualTo("\"wxyz\"");
 	}
 
 	@Test

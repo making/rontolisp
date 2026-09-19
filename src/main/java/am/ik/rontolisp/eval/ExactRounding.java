@@ -6,6 +6,7 @@ import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 
 import org.jspecify.annotations.Nullable;
@@ -36,6 +37,20 @@ final class ExactRounding {
 	private static final double LONG_LIMIT = 9.223372036854776E18;
 
 	private ExactRounding() {
+	}
+
+	/**
+	 * The mode a floor-family operator names.
+	 * @param op {@code floor}, {@code ceiling}, {@code round} or {@code truncate}
+	 * @return {@link #FLOOR}, {@link #CEILING}, {@link #ROUND} or {@link #TRUNCATE}
+	 */
+	static int mode(String op) {
+		return switch (op) {
+			case LispNames.FLOOR -> FLOOR;
+			case LispNames.CEILING -> CEILING;
+			case LispNames.ROUND -> ROUND;
+			default -> TRUNCATE;
+		};
 	}
 
 	/**

@@ -26223,24 +26223,64 @@ public final class LispMacroExpander {
 			throw new UnsupportedOperationException("adjust-array expects an array and new dimensions");
 		}
 		LispVal initExpr = null;
+		boolean initGiven = false;
+		LispVal icExpr = null;
 		LispVal fpExpr = null;
+		LispVal displacedToExpr = null;
+		LispVal displacedOffsetExpr = null;
 		for (int i = 3; i + 1 < parts.size(); i += 2) {
 			if (parts.get(i) instanceof LispSymbol kw) {
 				switch (kw.name()) {
-					case LispNames.INITIAL_ELEMENT_KEYWORD -> initExpr = parts.get(i + 1);
+					case LispNames.INITIAL_ELEMENT_KEYWORD -> {
+						initExpr = parts.get(i + 1);
+						initGiven = true;
+					}
+					case LispNames.INITIAL_CONTENTS_KEYWORD -> icExpr = parts.get(i + 1);
 					case LispNames.FILL_POINTER_KEYWORD -> fpExpr = parts.get(i + 1);
-					case LispNames.DISPLACED_TO_KEYWORD ->
-						throw new UnsupportedOperationException("adjust-array: :displaced-to is not supported");
+					case LispNames.DISPLACED_TO_KEYWORD -> displacedToExpr = parts.get(i + 1);
+					case LispNames.DISPLACED_INDEX_OFFSET_KEYWORD -> displacedOffsetExpr = parts.get(i + 1);
+					case LispNames.ELEMENT_TYPE_KEYWORD -> {
+						// Accepted and ignored: adjust-array never changes the element
+						// type.
+					}
 					default -> {
 					}
 				}
 			}
 		}
+		boolean displaced = displacedToExpr != null && !(displacedToExpr instanceof LispNil);
 		LispSymbol a = new LispSymbol("__adj_a");
 		LispSymbol nd = new LispSymbol("__adj_nd");
 		LispSymbol ndl = new LispSymbol("__adj_ndl");
-		LispSymbol od = new LispSymbol("__adj_od");
 		LispSymbol fp = new LispSymbol("__adj_fp");
+		// the carried-over fill pointer: the explicit expression, else the array's own
+		LispVal fpInit = fpExpr != null ? fpExpr : makeIf(callOf(LispNames.ARRAY_HAS_FILL_POINTER_P, a),
+				callOf(LispNames.FILL_POINTER, a), LispNil.INSTANCE);
+		List<LispVal> baseBindings = List.of(listToCons(List.of(a, parts.get(1))),
+				listToCons(List.of(nd, parts.get(2))),
+				listToCons(List.of(ndl,
+						makeIf(callOf(LispNames.LISTP, nd), nd, mvCall(LispNames.CONS, nd, LispNil.INSTANCE)))),
+				listToCons(List.of(fp, fpInit)));
+		if (displaced) {
+			// :displaced-to on the compile path answers a FRESH displaced array built by
+			// make-array (which shares the whole displaced surface, fill pointer and
+			// :adjustable flag included). `a` is read only for the adjustable flag and
+			// the
+			// carried-over fill pointer, never undisplaced.
+			LispVal offset = displacedOffsetExpr != null ? displacedOffsetExpr : new LispInteger(0);
+			List<LispVal> makeParts = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.MAKE_ARRAY), ndl));
+			makeParts.add(new LispSymbol(LispNames.DISPLACED_TO_KEYWORD));
+			makeParts.add(displacedToExpr);
+			makeParts.add(new LispSymbol(LispNames.DISPLACED_INDEX_OFFSET_KEYWORD));
+			makeParts.add(offset);
+			makeParts.add(new LispSymbol(LispNames.FILL_POINTER_KEYWORD));
+			makeParts.add(fp);
+			makeParts.add(new LispSymbol(LispNames.ADJUSTABLE_KEYWORD));
+			makeParts.add(callOf(LispNames.ADJUSTABLE_ARRAY_P, a));
+			return listToCons(
+					List.of(new LispSymbol(LispNames.LET_STAR), listToCons(baseBindings), listToCons(makeParts)));
+		}
+		LispSymbol od = new LispSymbol("__adj_od");
 		LispSymbol newArr = new LispSymbol("__adj_new");
 		LispSymbol total = new LispSymbol("__adj_total");
 		// (%array-adopt-element-type
@@ -26255,15 +26295,26 @@ public final class LispMacroExpander {
 		// %array-adopt-element-type stamp carries over. (An :adjustable array keeps its
 		// own identity through %array-become and never reads the copy's stamp.)
 		List<LispVal> makeParts = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.MAKE_ARRAY), ndl));
-		makeParts.add(new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD));
-		makeParts.add(initExpr != null ? initExpr : callOf(LispNames.ARRAY_DEFAULT_ELEMENT, a));
+		if (icExpr != null) {
+			// :initial-contents fills the WHOLE result (like make-array), so no :initial-
+			// element and no overlap copy. The RESULT's element type is the adjusted
+			// array's, passed as a RUNTIME :element-type so make-array builds the right
+			// representation (a character vector for a char source) rather than
+			// defaulting
+			// to a boxed `t` array -- otherwise the copy would stop answering stringp.
+			makeParts.add(new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD));
+			makeParts.add(callOf(LispNames.ARRAY_ELEMENT_TYPE, a));
+			makeParts.add(new LispSymbol(LispNames.INITIAL_CONTENTS_KEYWORD));
+			makeParts.add(icExpr);
+		}
+		else {
+			makeParts.add(new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD));
+			makeParts.add(initExpr != null ? initExpr : callOf(LispNames.ARRAY_DEFAULT_ELEMENT, a));
+		}
 		makeParts.add(new LispSymbol(LispNames.FILL_POINTER_KEYWORD));
 		makeParts.add(fp);
 		makeParts.add(new LispSymbol(LispNames.ADJUSTABLE_KEYWORD));
 		makeParts.add(callOf(LispNames.ADJUSTABLE_ARRAY_P, a));
-		// the carried-over fill pointer: the explicit expression, else the array's own
-		LispVal fpInit = fpExpr != null ? fpExpr : makeIf(callOf(LispNames.ARRAY_HAS_FILL_POINTER_P, a),
-				callOf(LispNames.FILL_POINTER, a), LispNil.INSTANCE);
 		// `a` un-displaces (SBCL 2.2.9) as PART of its own binding, before any later
 		// binding reads it: its current view contents become its own storage and the
 		// displacement drops, in place. Later than this the ordering would matter --
@@ -26273,16 +26324,21 @@ public final class LispMacroExpander {
 		// nothing" while still displaced), and %array-become (the :adjustable half of
 		// the result) would otherwise leave the adjusted array pointing at data it no
 		// longer owns.
-		List<LispVal> bindings = List.of(listToCons(List.of(a, callOf(LispNames.ARRAY_UNDISPLACE, parts.get(1)))),
-				listToCons(List.of(nd, parts.get(2))),
-				listToCons(List.of(ndl,
-						makeIf(callOf(LispNames.LISTP, nd), nd, mvCall(LispNames.CONS, nd, LispNil.INSTANCE)))),
-				listToCons(List.of(od, callOf(LispNames.ARRAY_DIMENSIONS, a))), listToCons(List.of(fp, fpInit)),
-				listToCons(List.of(newArr, mvCall(LispNames.ARRAY_ADOPT_ELEMENT_TYPE, listToCons(makeParts), a))),
-				listToCons(List.of(total, callOf(LispNames.ARRAY_TOTAL_SIZE, newArr))));
+		List<LispVal> bindings = new java.util.ArrayList<>(
+				List.of(listToCons(List.of(a, callOf(LispNames.ARRAY_UNDISPLACE, parts.get(1)))),
+						listToCons(List.of(nd, parts.get(2))),
+						listToCons(List.of(ndl,
+								makeIf(callOf(LispNames.LISTP, nd), nd, mvCall(LispNames.CONS, nd, LispNil.INSTANCE)))),
+						listToCons(List.of(od, callOf(LispNames.ARRAY_DIMENSIONS, a))), listToCons(List.of(fp, fpInit)),
+						listToCons(
+								List.of(newArr, mvCall(LispNames.ARRAY_ADOPT_ELEMENT_TYPE, listToCons(makeParts), a))),
+						listToCons(List.of(total, callOf(LispNames.ARRAY_TOTAL_SIZE, newArr)))));
 		LispVal rankCheck = makeIf(mvCall(LispNames.EQ, callOf(LispNames.LENGTH, ndl), callOf(LispNames.LENGTH, od)),
 				LispNil.INSTANCE, mvCall(LispNames.ERROR, new LispString("adjust-array: rank mismatch")));
-		LispVal copyLoop = adjustArrayCopyLoop(a, ndl, od, newArr, total);
+		// The overlap copy is skipped for :initial-contents, which fills the result
+		// wholesale; both backends need a no-op there, and the form below only drives the
+		// (unused when absent) copy.
+		LispVal copyLoop = icExpr != null ? LispNil.INSTANCE : adjustArrayCopyLoop(a, ndl, od, newArr, total);
 		LispVal result = makeIf(callOf(LispNames.ADJUSTABLE_ARRAY_P, a), mvCall(LispNames.ARRAY_BECOME, a, newArr),
 				newArr);
 		return listToCons(
@@ -34270,6 +34326,13 @@ public final class LispMacroExpander {
 	 * @param op the operator name
 	 * @return {@code true} for an f-prefixed rounder
 	 */
+	private static boolean isFloorFamilyName(String op) {
+		return switch (op) {
+			case LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.TRUNCATE -> true;
+			default -> isFFamily(op);
+		};
+	}
+
 	private static boolean isFFamily(String op) {
 		return switch (op) {
 			case LispNames.FFLOOR, LispNames.FCEILING, LispNames.FROUND, LispNames.FTRUNCATE -> true;
@@ -34307,6 +34370,14 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal floorFamilyRemainder(String op, String prefix, LispVal dividend, LispVal divisor,
 			LispVal quotient, LispVal quotientOf) {
+		if (divisor instanceof LispInteger one && one.value() == 1) {
+			// No divisor: the number minus its integer quotient, in ONE rounding and so
+			// the correctly rounded remainder. The quotient converts to a float exactly
+			// -- it is within 1 of a float under 2^53, and the float itself above 2^52
+			// -- and the zero signs are CL's ((truncate -0.0) is 0 and -0.0). What mod
+			// or rem reach through a generic division, this reaches with one subtraction.
+			return mvCall(LispNames.SUB, dividend, quotient);
+		}
 		if (LispNames.TRUNCATE.equals(op)) {
 			return mvCall(LispNames.REM, dividend, divisor);
 		}
@@ -34673,8 +34744,9 @@ public final class LispMacroExpander {
 	 * Clear only ({@link TailMode#CLEAR}): a syntactic producer in a user lambda's tail
 	 * was already rewritten to publish by {@link #injectMvSpillGlobal}
 	 * ({@code settleLambdaTails}), and a built-in wrapper's stays one value, as the
-	 * built-in it wraps is on the interpreter. An empty body answers nil, which is one
-	 * value: it gets a clearing nil.
+	 * built-in it wraps is on the interpreter -- except the floor family's, which
+	 * {@link #settleWrapperLambdas} makes publish first. An empty body answers nil, which
+	 * is one value: it gets a clearing nil.
 	 * @param body the body forms
 	 * @return the body with its last form settled, or {@code body} itself when nothing
 	 * changed
@@ -34698,9 +34770,10 @@ public final class LispMacroExpander {
 	 * ({@code BuiltinFunctionWrappers.generate}'s {@code (setq name (lambda ...))} forms)
 	 * like any other function body ({@link #settleFunctionBody}): the wrapper of
 	 * {@code car} is a function, and {@code (funcall f (values '(1) 2))} with {@code f}
-	 * holding it must answer one value. The compilers add the wrappers after
-	 * {@link #injectMvSpillGlobal} ran, so they settle them here, gated on
-	 * {@link #declaresMvSpill}.
+	 * holding it must answer one value. The floor family's wrapper is the exception: it
+	 * is a producer, and its tail publishes the remainder as the interpreter's built-in
+	 * does. The compilers add the wrappers after {@link #injectMvSpillGlobal} ran, so
+	 * they settle them here, gated on {@link #declaresMvSpill}.
 	 * @param wrappers the wrapper forms
 	 * @return the wrappers with their lambda bodies settled
 	 */
@@ -34712,7 +34785,15 @@ public final class LispMacroExpander {
 					&& setq.toList().get(2) instanceof LispCons lambda && lambda.isProperList()
 					&& lambda.toList().size() >= 3) {
 				List<LispVal> lambdaParts = lambda.toList();
-				List<LispVal> body = settleFunctionBody(lambdaParts.subList(2, lambdaParts.size()));
+				List<LispVal> body = new java.util.ArrayList<>(lambdaParts.subList(2, lambdaParts.size()));
+				if (setq.toList().get(1) instanceof LispSymbol name && isFloorFamilyName(name.name())) {
+					// The floor family's wrapper is a multiple-value producer, as the
+					// interpreter's function is: its (op a b) / (op a) tail publishes the
+					// remainder, which the clear-only settle below passes along.
+					int last = body.size() - 1;
+					body.set(last, settleTail(body.get(last), TailMode.PUBLISH).form());
+				}
+				body = settleFunctionBody(body);
 				List<LispVal> newLambda = new java.util.ArrayList<>(lambdaParts.subList(0, 2));
 				newLambda.addAll(body);
 				List<LispVal> newSetq = new java.util.ArrayList<>(setq.toList());
@@ -34777,7 +34858,8 @@ public final class LispMacroExpander {
 		 * The compile paths' walk over a {@code lambda} body (a
 		 * {@code flet}/{@code labels} function, a built-in wrapper included): clear only.
 		 * A user lambda's producer tail was made to publish earlier, by
-		 * {@link #injectMvSpillGlobal}; a built-in wrapper's stays one value.
+		 * {@link #injectMvSpillGlobal}; a built-in wrapper's stays one value unless
+		 * {@link #settleWrapperLambdas} made it publish (the floor family).
 		 */
 		CLEAR;
 
@@ -34931,7 +35013,9 @@ public final class LispMacroExpander {
 				if (callee != null) {
 					name = callee;
 				}
-				if (passesMultipleValues(name)) {
+				if (passesMultipleValues(name) || callee != null && isFloorFamilyName(callee)) {
+					// The floor family through a designator runs its WRAPPER, which
+					// publishes the remainder (settleWrapperLambdas).
 					yield new SettledTail(form, false);
 				}
 				if (!isSingleValuedOperator(name, parts)) {

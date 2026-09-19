@@ -10715,6 +10715,48 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFloorFamilyFunctionObjectTakesADivisorAndAnswersBothValues() throws Exception {
+		// The floor family as a function object: an optional divisor, and both values
+		// through a funcall, an apply, a variable and a function return. Shared verbatim
+		// with LispEvaluatorTest.FLOOR_FAMILY_FUNCTION_OBJECT and the
+		// floor-family-function-object ci-spec case; every line is SBCL's.
+		assertThat(compileAndRun("""
+				(defun ci-ffo-call (g a b) (funcall g a b))
+				(defun ci-ffo-tail (x) (funcall #'floor x))
+				(print (funcall #'floor 7 2))
+				(print (mapcar #'truncate '(7 9) '(2 4)))
+				(print (multiple-value-list (funcall #'floor 7.5)))
+				(print (multiple-value-list (let ((g #'floor)) (funcall g 7.5))))
+				(print (multiple-value-list (let ((g #'floor)) (funcall g 7 2))))
+				(print (multiple-value-list (funcall #'round 5 2)))
+				(print (multiple-value-list (apply #'ceiling '(7 2))))
+				(print (mapcar #'ffloor '(7 9) '(2 4)))
+				(print (multiple-value-list (funcall #'ftruncate 7 2)))
+				(print (multiple-value-list (let ((g #'fround)) (funcall g 7.5))))
+				(print (multiple-value-list (ci-ffo-call #'floor -7 2)))
+				(print (multiple-value-list (ci-ffo-call #'round 7 2)))
+				(print (multiple-value-list (ci-ffo-call #'ceiling 7 2)))
+				(print (multiple-value-list (ci-ffo-tail 7.5)))
+				(print (multiple-value-list (funcall #'truncate 7/2)))
+				(print (multiple-value-list (car (mapcar #'floor '(7) '(2)))))
+				(print (multiple-value-list (1+ (funcall #'floor 7 2))))
+				(multiple-value-bind (q r) (funcall #'floor 17 5) (print (list q r)))
+				(print (mapcar (lambda (x) (multiple-value-list (funcall #'ceiling x))) '(-0.0 0.5 -2.5)))
+				(print (mapcar (lambda (x) (multiple-value-list (funcall #'fround x))) '(-0.0 2.5 -7/2)))
+				""")).isEqualTo(String.join("\n", "3", "(3 2)", "(7 0.5)", "(7 0.5)", "(3 1)", "(2 1)", "(4 -1)",
+				"(3.0 2.0)", "(3.0 1)", "(8.0 -0.5)", "(-4 1)", "(4 -1)", "(4 -1)", "(7 0.5)", "(3 1/2)", "(3)", "(4)",
+				"(3 2)", "((0 -0.0) (1 -0.5) (-2 -0.5))", "((0.0 -0.0) (2.0 0.5) (-4.0 1/2))"));
+		// Without a multiple-value operator anywhere in the program.
+		assertThat(compileAndRun("""
+				(print (funcall #'floor 7 2))
+				(print (mapcar #'truncate '(7 9) '(2 4)))
+				(print (mapcar #'fceiling '(7 9) '(2 4)))
+				(print (let ((g #'round)) (funcall g 7 2)))
+				(print (funcall #'floor 7.5))
+				""")).isEqualTo(String.join("\n", "3", "(3 2)", "(4.0 3.0)", "4", "7"));
+	}
+
+	@Test
 	void compileAndRunMultipleValueChannelIsExactInSingleValueContexts() throws Exception {
 		// The tail discipline (LispMacroExpander.settleMvTail): a single-valued tail --
 		// of a defun, a lambda, a flet function, a consumer's producer form -- clears
@@ -15271,6 +15313,24 @@ class JvmLispCompilerTest {
 				(defparameter *fv* (make-array 4 :fill-pointer 2 :initial-element 5))
 				(print (fill-pointer (adjust-array *fv* 8)))
 				""")).isEqualTo("(#(7 7 7 0 0) NIL)\n(T #(1 1 1 9 9))\n#2A((1 2 0) (3 4 0) (0 0 0))\n2");
+	}
+
+	@Test
+	void compileAdjustArrayInitialContentsAndDisplacedTo() throws Exception {
+		// :initial-contents fills the WHOLE result (like make-array); :displaced-to
+		// builds
+		// a FRESH displaced view over the target (a NON-adjustable source is left alone).
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 5 :initial-contents (list 'a 'b 'c 'd 'e)))
+				(print (adjust-array *v* 4 :initial-contents (list 'w 'x 'y 'z)))
+				(defparameter *a0* (make-array 7 :initial-contents (list 1 2 3 4 5 6 7)))
+				(defparameter *a1* (make-array 5 :initial-contents (list 'a 'b 'c 'd 'e)))
+				(defparameter *a2* (adjust-array *a1* 4 :displaced-to *a0*))
+				(print (list *a2* (eq (array-displacement *a2*) *a0*) (array-dimensions *a1*)))
+				(defparameter *s* (make-array 3 :element-type 'character :adjustable t
+				                             :initial-contents "abc"))
+				(print (adjust-array *s* 4 :initial-contents "wxyz"))
+				""")).isEqualTo("#(W X Y Z)\n(#(1 2 3 4) T (5))\n\"wxyz\"");
 	}
 
 	@Test

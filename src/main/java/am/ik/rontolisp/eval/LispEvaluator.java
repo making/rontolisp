@@ -6343,6 +6343,13 @@ public final class LispEvaluator {
 				if (operands != null) {
 					return singleValue(evalFloorFamilyDivision(name, operands[0], operands[1], env));
 				}
+				// The one-argument call rounds here too, one value: the FUNCTION
+				// publishes its remainder (a funcall, a mapcar), which a call in an
+				// ordinary position would only pay for -- a consumer or a function
+				// tail has lowered its producer before this dispatch.
+				if (cons.cdr() instanceof LispCons argCell && argCell.cdr() instanceof LispNil) {
+					return singleValue(Environment.roundToInteger(name, eval(argCell.car(), env)));
+				}
 				break;
 			}
 			case LispNames.FFLOOR:
@@ -6533,21 +6540,11 @@ public final class LispEvaluator {
 	private LispVal evalFloorFamilyDivision(String name, LispVal dividendForm, LispVal divisorForm, Environment env) {
 		LispVal dividend = eval(dividendForm, env);
 		LispVal divisor = eval(divisorForm, env);
-		LispVal exact = ExactRounding.quotient(dividend, divisor, floorFamilyMode(name));
+		LispVal exact = ExactRounding.quotient(dividend, divisor, ExactRounding.mode(name));
 		if (exact != null) {
 			return exact;
 		}
-		return applyGlobalFunction(name, applyGlobalFunction(LispNames.DIV, dividend, divisor));
-	}
-
-	/** The {@link ExactRounding} mode a floor-family operator names. */
-	private static int floorFamilyMode(String name) {
-		return switch (name) {
-			case LispNames.FLOOR -> ExactRounding.FLOOR;
-			case LispNames.CEILING -> ExactRounding.CEILING;
-			case LispNames.ROUND -> ExactRounding.ROUND;
-			default -> ExactRounding.TRUNCATE;
-		};
+		return Environment.roundToInteger(name, applyGlobalFunction(LispNames.DIV, dividend, divisor));
 	}
 
 	/** Calls a global built-in on already-evaluated arguments. */

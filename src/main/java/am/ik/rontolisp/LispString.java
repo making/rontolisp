@@ -480,6 +480,37 @@ public final class LispString implements LispVal {
 	}
 
 	/**
+	 * Replaces this string's content with {@code codePoints} and its fill pointer, as an
+	 * {@code adjust-array} on an {@code :adjustable} string does in place. Any existing
+	 * displacement is dropped first, so the string owns the new buffer.
+	 * @param codePoints the new backing content (its length is the capacity)
+	 * @param fillPointer the new active length, or {@code -1} for none
+	 */
+	public void adoptContent(int[] codePoints, int fillPointer) {
+		this.undisplace();
+		this.chars = codePoints;
+		this.viewLength = 0;
+		this.fillPointer = fillPointer;
+	}
+
+	/**
+	 * Replaces this string with a VIEW over {@code target} (the
+	 * {@code adjust-array ... :displaced-to} on an {@code :adjustable} string, which
+	 * keeps its identity): the view's own capacity and fill pointer, owning no buffer.
+	 * @param target the string supplying the storage
+	 * @param offset the character index in {@code target} where the view starts
+	 * @param length the view's capacity in characters
+	 * @param fillPointer the view's active length, or {@code -1} for none
+	 */
+	public void becomeDisplaced(LispString target, int offset, int length, int fillPointer) {
+		this.chars = NO_CHARS;
+		this.displacedTo = target;
+		this.displacedOffset = offset;
+		this.viewLength = length;
+		this.fillPointer = fillPointer;
+	}
+
+	/**
 	 * Resizes the backing buffer (the {@code adjust-array} operation), preserving the
 	 * existing content and the fill pointer (clamped to the new capacity).
 	 * @param newCapacity the new capacity (in code points)
