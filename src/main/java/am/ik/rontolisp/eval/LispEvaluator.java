@@ -3635,36 +3635,30 @@ public final class LispEvaluator {
 
 	/**
 	 * Evaluates {@code (tagbody {tag | form}...)}: symbols and integers are go-tag
-	 * labels, everything else evaluates in order for effect. A {@code (go tag)} thrown
-	 * anywhere inside (dynamically) resumes at that label; falling off the end returns
-	 * nil. The compilers support the lexical subset only: a compiled {@code go} must
-	 * target a lexically enclosing tagbody in the same function.
+	 * labels, everything else evaluates in order for effect. A {@code (go tag)} in a
+	 * statement's tail is answered by {@link #evalTagbodyStatement} without a throw; one
+	 * thrown anywhere else inside (dynamically) resumes at that label; falling off the
+	 * end returns nil. The compilers support the lexical subset only: a compiled
+	 * {@code go} must target a lexically enclosing tagbody in the same function.
 	 */
 	private LispVal evalTagbody(LispCons cons, Environment env) {
-		List<LispVal> body = cons.toList().subList(1, cons.toList().size());
-		java.util.Map<String, Integer> labels = new java.util.HashMap<>();
-		for (int i = 0; i < body.size(); i++) {
-			if (body.get(i) instanceof LispSymbol label) {
-				labels.put(plainName(label.name()), i);
-			}
-			else if (body.get(i) instanceof LispInteger label) {
-				labels.put(String.valueOf(label.value()), i);
-			}
-		}
+		List<LispVal> body = cons.cdr() instanceof LispCons items ? items.toList() : List.of();
+		TagbodyLabels labels = TagbodyLabels.of(body);
+		@org.jspecify.annotations.Nullable
+		String[] keys = labels.keys();
 		int pc = 0;
-		while (pc < body.size()) {
-			LispVal form = body.get(pc);
-			if (form instanceof LispSymbol || form instanceof LispInteger) {
+		while (pc < keys.length) {
+			if (keys[pc] != null) {
 				pc++;
 				continue;
 			}
 			try {
-				eval(form, env);
-				pc++;
+				int jump = evalTagbodyStatement(body.get(pc), env, labels);
+				pc = jump == NO_JUMP ? pc + 1 : jump + 1;
 			}
 			catch (GoSignal go) {
-				Integer target = labels.get(go.tag);
-				if (target == null) {
+				int target = labels.indexOf(go.tag);
+				if (target == NO_JUMP) {
 					// Not one of ours: an outer tagbody owns the tag.
 					throw go;
 				}
@@ -3672,6 +3666,157 @@ public final class LispEvaluator {
 			}
 		}
 		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * A tagbody's labels: the {@link #goTagKey} of every body item, null for a statement.
+	 * A tagbody holds a handful of labels, so a scan beats building a map per entry.
+	 */
+	record TagbodyLabels(@org.jspecify.annotations.Nullable String[] keys) {
+
+		/** The labels of a tagbody's body items. */
+		static TagbodyLabels of(List<LispVal> body) {
+			@org.jspecify.annotations.Nullable
+			String[] keys = new String[body.size()];
+			for (int i = 0; i < keys.length; i++) {
+				keys[i] = goTagKey(body.get(i));
+			}
+			return new TagbodyLabels(keys);
+		}
+
+		/**
+		 * The body index of the label {@code key} (the last one if repeated), or
+		 * {@link #NO_JUMP}.
+		 */
+		int indexOf(String key) {
+			for (int i = this.keys.length - 1; i >= 0; i--) {
+				if (key.equals(this.keys[i])) {
+					return i;
+				}
+			}
+			return NO_JUMP;
+		}
+
+	}
+
+	/**
+	 * What {@link #evalTagbodyStatement} answers when the statement completed normally.
+	 */
+	static final int NO_JUMP = -1;
+
+	/**
+	 * Evaluates one tagbody statement for effect and answers the body index of the label
+	 * a {@code go} in its TAIL jumps to, or {@link #NO_JUMP}. The tail is followed
+	 * through {@code if}, {@code progn}, {@code let}, {@code let*}, {@code when},
+	 * {@code unless} and {@code cond}: a {@code (go L)} there whose tag is one of
+	 * {@code labels} -- the innermost tagbody, since the walk never enters another one --
+	 * is answered, not thrown. Every other {@code go} (not in a tail, a tag of an outer
+	 * tagbody, one from a closure) is still a {@code GoSignal}. Any form the walk does
+	 * not take apart, or whose shape is not the plain one, is evaluated by {@link #eval}.
+	 * @param form the statement
+	 * @param env its environment
+	 * @param labels the tagbody's labels
+	 * @return the label index to resume after, or {@link #NO_JUMP}
+	 */
+	int evalTagbodyStatement(LispVal form, Environment env, TagbodyLabels labels) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
+			eval(form, env);
+			return NO_JUMP;
+		}
+		// The same classification evalConsClassifyingRawFailures gives a form eval takes
+		// apart itself: this walk stands in for that frame.
+		try {
+			return evalTagbodyStatementCons(cons, head.name(), env, labels);
+		}
+		catch (IllegalArgumentException | IndexOutOfBoundsException raw) {
+			throw rawEvaluationFailure(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, raw);
+		}
+		catch (ClassCastException | ArithmeticException | NegativeArraySizeException raw) {
+			throw rawEvaluationFailure(rawFailureConditionClass(raw), raw);
+		}
+	}
+
+	private int evalTagbodyStatementCons(LispCons cons, String head, Environment env, TagbodyLabels labels) {
+		int length = cons.properLength();
+		if (length < 0) {
+			// eval reports the improper list.
+			eval(cons, env);
+			return NO_JUMP;
+		}
+		switch (head) {
+			case LispNames.GO: {
+				if (length == 2) {
+					String key = goTagKey(((LispCons) cons.cdr()).car());
+					if (key != null) {
+						int target = labels.indexOf(key);
+						if (target != NO_JUMP) {
+							return target;
+						}
+						throw new GoSignal(key);
+					}
+				}
+				break;
+			}
+			case LispNames.IF: {
+				if (length == 3 || length == 4) {
+					LispCons rest = (LispCons) cons.cdr();
+					LispCons arms = (LispCons) rest.cdr();
+					if (isTruthy(eval(rest.car(), env))) {
+						return evalTagbodyStatement(arms.car(), env, labels);
+					}
+					if (length == 4) {
+						return evalTagbodyStatement(((LispCons) arms.cdr()).car(), env, labels);
+					}
+					singleValue(LispNil.INSTANCE);
+					return NO_JUMP;
+				}
+				break;
+			}
+			case LispNames.PROGN: {
+				if (length >= 2) {
+					LispCons cell = (LispCons) cons.cdr();
+					while (cell.cdr() instanceof LispCons next) {
+						eval(cell.car(), env);
+						cell = next;
+					}
+					return evalTagbodyStatement(cell.car(), env, labels);
+				}
+				break;
+			}
+			case LispNames.LET: {
+				if (length >= 2) {
+					return (Integer) evalLetIn(cons, env, labels);
+				}
+				break;
+			}
+			case LispNames.LET_STAR:
+				return evalTagbodyStatement(builtinMacroExpansion(cons, LispMacroExpander::expandLetStar), env, labels);
+			case LispNames.WHEN:
+				return evalTagbodyStatement(builtinMacroExpansion(cons, LispMacroExpander::expandWhen), env, labels);
+			case LispNames.UNLESS:
+				return evalTagbodyStatement(builtinMacroExpansion(cons, LispMacroExpander::expandUnless), env, labels);
+			case LispNames.COND:
+				return evalTagbodyStatement(builtinMacroExpansion(cons, LispMacroExpander::expandCond), env, labels);
+			default:
+				break;
+		}
+		eval(cons, env);
+		return NO_JUMP;
+	}
+
+	/**
+	 * The key a {@code go} tag has in a tagbody's label table -- a symbol by its plain
+	 * name, an integer by its digits (CLHS 5.3) -- or null when it is neither.
+	 */
+	@org.jspecify.annotations.Nullable
+	private static String goTagKey(@org.jspecify.annotations.Nullable LispVal tag) {
+		if (tag instanceof LispSymbol tagSym) {
+			return plainName(tagSym.name());
+		}
+		if (tag instanceof LispInteger tagInt) {
+			return String.valueOf(tagInt.value());
+		}
+		return null;
 	}
 
 	/**
@@ -6305,12 +6450,9 @@ public final class LispEvaluator {
 			case LispNames.GO: {
 				// A tag is a symbol or an integer (CLHS 5.3), keyed the way
 				// evalTagbody keys its label table.
-				LispVal tag = (cons.cdr() instanceof LispCons tagCons) ? tagCons.car() : null;
-				if (tag instanceof LispSymbol tagSym) {
-					throw new GoSignal(plainName(tagSym.name()));
-				}
-				if (tag instanceof LispInteger tagInt) {
-					throw new GoSignal(String.valueOf(tagInt.value()));
+				String key = goTagKey((cons.cdr() instanceof LispCons tagCons) ? tagCons.car() : null);
+				if (key != null) {
+					throw new GoSignal(key);
 				}
 				throw new LispEvalException(LispNames.GO + " expects a tag: " + cons.print());
 			}
@@ -6557,12 +6699,20 @@ public final class LispEvaluator {
 
 	private LispVal evalBuiltinMacro(LispCons cons, Environment env,
 			java.util.function.Function<LispCons, LispVal> expander) {
+		return eval(builtinMacroExpansion(cons, expander), env);
+	}
+
+	/**
+	 * The memoized expansion of a built-in macro form
+	 * (.kb/interpreter-expansion-memo.md).
+	 */
+	private LispVal builtinMacroExpansion(LispCons cons, java.util.function.Function<LispCons, LispVal> expander) {
 		LispVal cached;
 		synchronized (this.builtinMacroExpansions) {
 			cached = this.builtinMacroExpansions.get(cons);
 		}
 		if (cached != null) {
-			return eval(cached, env);
+			return cached;
 		}
 		LispVal expansion = expander.apply(cons);
 		synchronized (this.builtinMacroExpansions) {
@@ -6570,7 +6720,7 @@ public final class LispEvaluator {
 				this.builtinMacroExpansions.put(cons, expansion);
 			}
 		}
-		return eval(expansion, env);
+		return expansion;
 	}
 
 	/**
@@ -9282,6 +9432,17 @@ public final class LispEvaluator {
 	}
 
 	private LispVal evalLet(LispCons cons, Environment env) {
+		return (LispVal) evalLetIn(cons, env, null);
+	}
+
+	/**
+	 * A {@code let}: with {@code tagbodyLabels} null, as a form, answering its value;
+	 * otherwise as a tagbody statement ({@link #evalTagbodyStatement}), its last body
+	 * form walked for a tail {@code go} and the answer the boxed label index or
+	 * {@link #NO_JUMP}. The bindings are undone before either answer leaves.
+	 */
+	private Object evalLetIn(LispCons cons, Environment env,
+			@org.jspecify.annotations.Nullable TagbodyLabels tagbodyLabels) {
 		List<LispVal> parts = cons.toList();
 		Environment letEnv = new Environment(env);
 		// parts.get(1) is the bindings list: ((x 1) (y 2)); a bare symbol entry is
@@ -9349,6 +9510,13 @@ public final class LispEvaluator {
 			}
 		}
 		try {
+			if (tagbodyLabels != null) {
+				int last = parts.size() - 1;
+				for (int i = 2; i < last; i++) {
+					eval(parts.get(i), letEnv);
+				}
+				return last >= 2 ? evalTagbodyStatement(parts.get(last), letEnv, tagbodyLabels) : NO_JUMP;
+			}
 			LispVal result = LispNil.INSTANCE;
 			for (int i = 2; i < parts.size(); i++) {
 				result = eval(parts.get(i), letEnv);
