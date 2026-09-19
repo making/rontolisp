@@ -303,6 +303,47 @@ its record in `internalRecords` by datum identity and defines nothing twice.
   `infinities-and-nan-read-print-and-compare` and `read-knows-vertical-lines-and-infinities`
   cases of `scheme-spec.yaml` (all four backends, Gauche 0.9.15's output).
 
+## `string->number`'s radix and exactness prefixes (2026-09-19, `.todo/889`)
+
+- **Two independent parsers share the same grammar, never each other's code**:
+  `%scheme-string->number` (`scheme.lisp`, the run-time `string->number` builtin AND
+  `%scheme-hash-token-datum`, so a `#x10` token read from source or from `(read)` and a
+  `"#x10"` string given to `string->number` answer alike) and `SchemeReader.prefixedNumber`
+  (compile-time source literals, Java). Both read an R7RS `<prefix>`: a radix
+  (`#x`/`#b`/`#o`/`#d`, overriding the caller's own default radix argument) and an
+  exactness (`#e`/`#i`), each at most once, in EITHER order -- `#e#x10` and `#x#e10`
+  both answer `16`. A pair that repeats a kind already seen, or is not one of these six
+  letters, is left in the remainder rather than rejected up front: the leftover `#`
+  then fails the digit/infnan check downstream, so an invalid prefix answers `#f` (a
+  read error from source) exactly like an invalid number, with no separate validity
+  branch to keep in sync.
+- **`#e` on a decimal is the exact rational the digits spell, never a flonum rounding**:
+  `(string->number "#e1.1")` is `11/10`, not the double `1.1`'s nearest rational. Built
+  directly from the already-scanned mantissa/scale/exponent
+  (`mantissa * 10^(exponent-scale)`, Common Lisp's `/` and `expt` normalizing the ratio
+  or integer) rather than through `float`; `SchemeReader` does the equivalent with
+  `BigDecimal.unscaledValue()`/`scale()` so no `Double.parseDouble` rounding ever
+  touches it either. `#i` on an already-exact result (an integer, a ratio, or a decimal
+  answer without `#e`) is the plain `float`/nearest-double conversion
+  (`LispRatio.doubleValue()` on the Java side).
+- **An exactness prefix on an infinity or a NaN is a no-op**, matching Gauche:
+  `(string->number "#e+inf.0")` is `+inf.0`, not an error and not the interpreter's
+  `exact` procedure (which refuses an infinity, `.kb` "Vertical-line identifiers and the
+  infinities" above) -- the infnan check runs before exactness is ever applied and
+  answers as itself either way.
+- **Cost** (x86-64 Linux, Java 25, class / wasm, before -> after): byte-identical for a
+  program that calls no prefix -- the six `examples/scheme/*.scm` on both backends
+  measured directly (`collatz.scm`, `queens.scm`) and by construction for every other
+  program (the new helpers are unreachable, dropped like any other,
+  `.kb/library-defun-pruning.md`). Changed, using the feature: `(display (string->number "#x10"))` 56,625 ->
+  65,116 B of class, 32,685 -> 36,630 B of wasm.
+- Pinned by `SchemeReaderTest.radixAndExactnessPrefixesCombine`,
+  `.anExactnessPrefixOnAnInfinityOrANanIsANoOp`, `.aRepeatedOrUnrecognizedPrefixIsAReadError`,
+  and the `string-to-number-radix-and-exactness-prefixes` case of `scheme-spec.yaml` (all
+  four backends, `gosh -r7`'s output). `%scheme-number-prefix`'s tail is a three-value
+  `(values remainder radix exactness)`, so it is listed in
+  `SchemeValueCount.PASSING_HELPERS` (`.kb/multiple-values.md`).
+
 ## A file that reads an imported name before it redefines it
 
 - **Such a name is a variable, initialized to the import's value** by a second leading
@@ -1804,8 +1845,7 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 ## Not here yet (each its own follow-up)
 
 The other
-libraries, radix and exactness prefixes in `string->number` (`.todo/889`),
-re-entrant continuations, tail calls through a procedure value on the JVM (proper on both
+libraries, re-entrant continuations, tail calls through a procedure value on the JVM (proper on both
 wasm targets, `.kb/wasm-tail-calls.md`, and on the interpreter,
 `.kb/interpreter-tail-calls.md`). Each is refused by name where it can be.
 
