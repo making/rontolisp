@@ -19409,6 +19409,24 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileAdjustArrayInitialContentsAndDisplacedTo() throws Exception {
+		// :initial-contents fills the WHOLE result (like make-array); :displaced-to
+		// builds
+		// a FRESH displaced view over the target (a NON-adjustable source is left alone).
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 5 :initial-contents (list 'a 'b 'c 'd 'e)))
+				(print (adjust-array *v* 4 :initial-contents (list 'w 'x 'y 'z)))
+				(defparameter *a0* (make-array 7 :initial-contents (list 1 2 3 4 5 6 7)))
+				(defparameter *a1* (make-array 5 :initial-contents (list 'a 'b 'c 'd 'e)))
+				(defparameter *a2* (adjust-array *a1* 4 :displaced-to *a0*))
+				(print (list *a2* (eq (array-displacement *a2*) *a0*) (array-dimensions *a1*)))
+				(defparameter *s* (make-array 3 :element-type 'character :adjustable t
+				                             :initial-contents "abc"))
+				(print (adjust-array *s* 4 :initial-contents "wxyz"))
+				""")).isEqualTo("#(W X Y Z)\n(#(1 2 3 4) T (5))\n\"wxyz\"");
+	}
+
+	@Test
 	void compileAdjustArrayTrapsOnAPackedFloatArray() throws Exception {
 		// A packed float array has no fill-pointer/adjustability/displacement surface --
 		// the same shape a packed integer vector already traps on -- so adjust-array's
