@@ -11,6 +11,7 @@ example.
 | [(scheme base)](reference/library-base.md) | Numbers, pairs and lists, symbols, characters, strings, vectors, control, exceptions, ports, input and output |
 | [(scheme write)](reference/library-write.md) | `display`, `write` and their variants |
 | [(scheme read)](reference/library-read.md) | `read` |
+| [(scheme char)](reference/library-char.md) | Character classes, case mappings, `char-ci=?` and `string-ci=?` and their orderings |
 | [(scheme inexact)](reference/library-inexact.md) | Transcendental functions, `finite?`, `infinite?`, `nan?` |
 | [(scheme cxr)](reference/library-cxr.md) | The three- and four-deep `car`/`cdr` compositions |
 | [(scheme lazy)](reference/library-lazy.md) | Promises |

@@ -191,18 +191,18 @@ regions carry it.
   Refusing it on the compile path would cost the direct call of every procedure for a
   program that is wrong anyway; a session has the same order as the interpreter.
 
-## The library tags: `base`, `write`, `read`, `inexact`, `cxr`, `lazy`, `case-lambda`, `process-context`, `eval`, `repl`, `sicp` and `r5rs`
+## The library tags: `base`, `write`, `read`, `char`, `inexact`, `cxr`, `lazy`, `case-lambda`, `process-context`, `eval`, `repl`, `sicp` and `r5rs`
 
 `SchemeBuiltins` entries carry the R7RS library that exports them, checked entry by
 entry against Gauche 0.9.15's `(module-exports (find-module 'scheme.<lib>))`
 (2026-09-18). `base`, `write`, `read` (`read` alone: `eof-object`, `eof-object?`,
 `read-char`, `peek-char`, `read-line`, `char-ready?` and every other port procedure are
-`base`, as in R7RS), `inexact`,
+`base`, as in R7RS), `char` (all 22 `(scheme char)` exports, "`(scheme char)`" below), `inexact`,
 `cxr` (the whole `(scheme cxr)` set, `caaar` through `cddddr`: every one a
 standard Common Lisp function of the same name), `lazy`, `case-lambda` (the keyword
 alone), `process-context`, `eval` (`eval`, `environment`) and `repl`
 (`interaction-environment`) are `SchemeLowering.IMPORTABLE_LIBRARIES`: `(import (scheme
-<tag>))` names them, and a file with no import at all merges all ten. Keywords carry a
+<tag>))` names them, and a file with no import at all merges all eleven. Keywords carry a
 library too: `SYNTAX` is `base`, `LAZY_SYNTAX` (`delay`, `delay-force`) `lazy`,
 `CASE_LAMBDA_SYNTAX` `case-lambda`, `SICP_SYNTAX` (`cons-stream`) `sicp`.
 `sicp` (`true false nil the-empty-stream user-initial-environment
@@ -235,7 +235,7 @@ is R7RS-small within the implemented subset:
    first datum (`an R7RS program begins with an import declaration`, R7RS 5.1). Gauche
    instead starts empty and fails at the first unbound name.
 2. **`sicp` and `r5rs` names are never visible**: `SchemeLowering.imports()`'s no-import
-   branch (the session's) merges the ten libraries only.
+   branch (the session's) merges the eleven libraries only.
 3. **Redefining an imported binding in a file is refused** (R7RS 5.6.1 "it is an error";
    Gauche -r7 allows the `define` silently): a top-level `define`, `define-values`, or a
    `define-record-type` type or procedure name over a `Builtin` or `Syntax` binding
@@ -316,6 +316,68 @@ paths, REPL, unknown value), and the `standalone:` cases of `scheme-spec.yaml` w
 - Corpus (2026-09-17, `.todo/artefacts/828-sicp-sample-corpus-harness/run.py`): file mode
   1,307 -> 1,314 samples exiting 0, no regression; no sample still fails on an inexact
   name.
+
+## `(scheme char)` (2026-09-19, `.todo/879`)
+
+**Invariant: every answer is the JDK's Unicode data (Unicode 16 on Java 25), identical on
+all four backends by construction.** Common Lisp's classifiers are not: `alpha-char-p`
+and `digit-char-p` are ASCII-only on wasm (`.todo/269`; measured over every code point,
+2026-09-19: 141,028 alphabetic on the interpreter and the JVM, 52 on wasm), and
+`upper-case-p`/`lower-case-p` answer "has a mapping", which is not the Unicode
+`Uppercase`/`Lowercase` property (`ǅ` is both there, neither in Unicode; `ª`, `ℂ`, `𝐀`
+have no mapping and are cased). `char-upcase`/`char-downcase` ARE uniform (one fold table
+per backend, generated from the JDK: `.kb/characters-code-points.md`) and are used as is.
+
+- **Tables are generated, not written** (`scheme/SchemeCharacters`, appended by
+  `Scheme.runtimeForms` like the procedure table): `Alphabetic` (757 ranges), `Nd` (71;
+  adjacent runs of ten share a range, so `digit-value` is `(mod (- code from) 10)`), where
+  `Uppercase`/`Lowercase` disagree with "has a lowercase/uppercase mapping" (58 / 132),
+  `Case_Ignorable` (451, for the final sigma), and the 102 unconditional multi-character
+  uppercase mappings of `SpecialCasing.txt` as one-point ranges beside a vector of
+  strings. `White_Space` is spelled by value in the helper (stable since Unicode 6.3).
+  A table is a string of `[from, to]` bounds, four base-64 characters each (48 + d,
+  skipping the backslash; 11,752 characters in all), decoded into a simple vector on
+  first use and kept in a `defvar`. ASCII answers without a table. The pruner drops every
+  table a program does not reach.
+- **Folding** (`char-foldcase`: Unicode simple case folding) is the lowercase of the
+  uppercase, except that U+0130/U+0131 do not fold and Cherokee folds to its capitals
+  (U+13A0..U+13F5). **Full folding** (`string-foldcase`, the `-ci` string comparisons,
+  `#!fold-case`) is the simple folding of each character of the full uppercase, except
+  U+0130 -> `i` + U+0307, U+0131 unchanged, U+1E9E -> `ss`. Both rules were checked
+  against `CaseFolding.txt` (Unicode 15, Perl's `Unicode::UCD`) over every code point on
+  2026-09-19: identical except six Unicode 16 additions Perl's data lacks, which the rule
+  gets right. The rule is spelled twice -- `SchemeCharacters.foldcase` for the
+  compile-time `#!fold-case`, `%scheme-char-foldcase` / `%scheme-string-foldcase` at run
+  time -- and `SchemeCharactersTest` pins them to each other.
+- **`string-upcase` / `string-downcase` are the full mappings**, so the result may be
+  longer (`"straße"` -> `"STRASSE"`); downcase maps U+0130 to two characters and a capital
+  sigma by Unicode 3.13 `Final_Sigma` (a cased character before it and none after,
+  looking through `Case_Ignorable`), which is what `String.toLowerCase(Locale.ROOT)`
+  does. An ASCII string takes Common Lisp's `string-upcase`/`string-downcase`.
+- **Where Gauche 0.9.15 answers differently** (the oracle otherwise): `char-whitespace?`
+  of U+0085 (`#f` there); Cherokee (tables older than Unicode 8); `string-foldcase` of
+  `ẞ` (`ß`) and of `ı` (`i`, though its `char-foldcase` keeps `ı`); `#!fold-case` folds
+  ASCII only there; `string-downcase` of `"1Σ"` is `"1ς"` there. The
+  `char-library-follows-unicode` case of `scheme-spec.yaml` pins our side.
+- **Testing cost**: the interpreter sweeps every code point in about 200 s per property
+  (the full sweep was run once, 2026-09-19, and matched the JDK everywhere except
+  `digit-value` on merged runs, fixed then), so `SchemeCharactersTest` asks at the 7,000
+  code points where an answer can go wrong -- the first 1,024 and both sides of every
+  range bound and every departing mapping -- in about 10 s.
+- **Speed** (2026-09-19, x86-64 Linux, Java 25): a million `char-alphabetic?` calls on
+  non-ASCII characters take 0.34 s on the JVM and 0.92 s on wasm (a control loop with
+  `char<?` in their place, 0.16 / 0.08 s). Reading the four characters of each bound
+  straight from the string instead cost 24.5 s on wasm, and a generic `floor` for the
+  midpoint instead of `ash` 1.84 s on the JVM.
+- **Size** (same date; `-o P.class` / `-o p.wasm`): a program using no `(scheme char)`
+  name is byte-identical -- `hello` 1,661 / 510 B, a string program 80,935 / 18,333 B, an
+  `eval` program 127,708 / 82,101 B. A program calling `read` grows from 162,078 to
+  173,478 B of class and 99,724 to 117,507 B of wasm: the reader's `#!fold-case` now
+  folds through `%scheme-string-foldcase`. Alone, `char-upcase` costs 73,966 / 7,069 B,
+  `string-upcase` 98,569 / 41,042 B, and `char-alphabetic?` + `string-ci=?` +
+  `string-downcase` together 117,906 / 64,339 B.
+- No SICP sample spells a `(scheme char)` name (`sicp.zip` above, grep 2026-09-19), so the
+  no-import default growing by 22 names moves nothing in the corpus manifest.
 
 ## Promises and streams (`(scheme lazy)`, SICP streams)
 
@@ -430,7 +492,7 @@ paths, REPL, unknown value), and the `standalone:` cases of `scheme-spec.yaml` w
   `Ill-formed special form: (if)`, `Not supported inside eval: (define-record-type ..)`
   (also `define-values`, `let-values`, `import`, the syntax the reader refuses),
   `Wrong number of arguments: (a b) given (1)`, `The object is not applicable: 3`,
-  `eval: not an environment: 2`, `environment: library is not available: (scheme char)`,
+  `eval: not an environment: 2`, `environment: library is not available: (scheme time)`,
   `Syntactic keyword may not be used as an expression: if`. A first-class `values`
   (every `values` inside `eval` is one) answers its primary only on the compiled
   backends (`.kb/multiple-values.md`).
@@ -491,7 +553,10 @@ raises a read error (`read-error?`, "Exceptions" below).
   what was typed next. JLine (a real terminal, interactive) is unchanged.
 - **`#!fold-case` / `#!no-fold-case` (`.todo/858`)**: an R7RS `<directive>`, part of
   `<atmosphere>` like a comment -- no datum, only the side effect of folding
-  identifiers (`string-downcase`, never string literals) and `#\`-style character
+  identifiers (as `string-foldcase` does since 2026-09-19 -- the run-time reader through
+  `%scheme-string-foldcase`, `SchemeReader` through `SchemeCharacters.foldcase`; before,
+  the two lowercased, and differently: `String.toLowerCase` applies the final sigma,
+  `string-downcase` did not -- never string literals) and `#\`-style character
   NAMES (not the character a bare `#\A` names) until the counterpart directive. Kept
   keyed on `*standard-input*` the same way as the pushback cell above, so a rebind
   (a fresh "file") starts folding off again; `SchemeReader` keeps the same flag as an
@@ -1071,7 +1136,7 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 ## Not here yet (each its own follow-up)
 
-`define-library`, file ports (`(scheme file)`), `(scheme char)` and the other libraries, `|...|`
+`define-library`, file ports (`(scheme file)`), the other libraries, `|...|`
 identifiers, reading `+inf.0`/`+nan.0`, internal `define-record-type`, re-entrant continuations,
 proper tail calls in general. Each is refused by name where it can be.
 

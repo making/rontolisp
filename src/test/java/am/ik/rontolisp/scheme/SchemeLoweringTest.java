@@ -255,10 +255,14 @@ class SchemeLoweringTest {
 					+ " %SCM-EXIT-DONE1)))) (IF (EQ %SCM-EXIT-CODE2 %SCM-EXIT-DONE1) NIL"
 					+ " (RONTOLISP::%SCHEME-EXIT %SCM-EXIT-CODE2))))");
 		assertThat(lowered("(import (prefix (only (scheme base) car) s:)) (s:car x)")).isEqualTo("(CAR |x|)");
-		assertThatThrownBy(() -> lowered("(import (scheme char))")).isInstanceOf(LispReadException.class)
-			.hasMessage("test.scm:1:1: library (|scheme| |char|) is not available: this experimental front end has"
-					+ " (scheme base), (scheme write), (scheme read), (scheme inexact), (scheme cxr), (scheme lazy),"
-					+ " (scheme case-lambda), (scheme process-context), (scheme eval) and (scheme repl) only");
+		assertThatThrownBy(() -> lowered("(import (scheme time))")).isInstanceOf(LispReadException.class)
+			.hasMessage("test.scm:1:1: library (|scheme| |time|) is not available: this experimental front end has"
+					+ " (scheme base), (scheme write), (scheme read), (scheme char), (scheme inexact), (scheme cxr),"
+					+ " (scheme lazy), (scheme case-lambda), (scheme process-context), (scheme eval) and (scheme repl)"
+					+ " only");
+		assertThat(lowered("(import (scheme char)) (char-upcase x)")).isEqualTo("(CHAR-UPCASE |x|)");
+		assertThat(lowered("(import (scheme base)) (char-upcase x)")).isEqualTo("(|char-upcase| |x|)");
+		assertThat(lowered("(char-upcase x)")).isEqualTo("(CHAR-UPCASE |x|)");
 		assertThat(lowered("(import (scheme inexact)) (sqrt x)")).isEqualTo("(RONTOLISP::%SCHEME-SQRT |x|)");
 		assertThat(lowered("(import (scheme base)) (sqrt x)")).isEqualTo("(|sqrt| |x|)");
 		assertThat(lowered("(import (only (scheme cxr) caddr)) (caddr x)")).isEqualTo("(CADDR |x|)");
@@ -316,8 +320,8 @@ class SchemeLoweringTest {
 			.isEqualTo("(DEFUN RONTOLISP::%SCHEME-BUILTIN (NAME) (CASE NAME ((|s%+|) #'+) ((|car|) #'CAR)"
 					+ " ((|false|) RONTOLISP::%SCHEME-FALSE) (T 'RONTOLISP::%SCHEME-UNBOUND)))");
 		assertThat(Scheme.runtimeForms(name -> false, SchemeStandard.RONTOLISP).get(1).print()).isEqualTo(
-				"(DEFUN RONTOLISP::%SCHEME-LIBRARY-P (NAME) (IF (MEMBER NAME '(|base| |write| |read| |inexact| |cxr| |lazy|"
-						+ " |case-lambda| |process-context| |eval| |repl|)) T NIL))");
+				"(DEFUN RONTOLISP::%SCHEME-LIBRARY-P (NAME) (IF (MEMBER NAME '(|base| |write| |read| |char| |inexact| |cxr|"
+						+ " |lazy| |case-lambda| |process-context| |eval| |repl|)) T NIL))");
 	}
 
 	@Test

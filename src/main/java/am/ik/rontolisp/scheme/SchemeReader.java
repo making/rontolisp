@@ -5,7 +5,6 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 import am.ik.rontolisp.LispArray;
@@ -77,8 +76,8 @@ final class SchemeReader {
 	private int firstDatumOffset;
 
 	// R7RS 7.1.1 <directive>: #!fold-case / #!no-fold-case, toggled while reading this
-	// file. Off by default; folds identifiers and character NAMES with a simple
-	// lower-case, never string literals or the character itself.
+	// file. Off by default; folds identifiers and character NAMES as string-foldcase
+	// does (SchemeCharacters.foldcase), never string literals or the character itself.
 	private boolean foldCase;
 
 	SchemeReader(String input, @Nullable String file) {
@@ -348,7 +347,7 @@ final class SchemeReader {
 		String name = new StringBuilder().appendCodePoint(first).append(this.input, nameStart, this.pos).toString();
 		// #!fold-case folds the NAME, not the character it names (an unadorned #\A is
 		// untouched -- the single-codepoint case above never reaches here).
-		String lookup = this.foldCase ? name.toLowerCase(Locale.ROOT) : name;
+		String lookup = this.foldCase ? SchemeCharacters.foldcase(name) : name;
 		Integer named = CHARACTER_NAMES.get(lookup);
 		if (named != null) {
 			return new LispChar(named);
@@ -450,7 +449,7 @@ final class SchemeReader {
 		if (token.equals("+inf.0") || token.equals("-inf.0") || token.equals("+nan.0") || token.equals("-nan.0")) {
 			throw error("infinities and NaN are not supported: " + token, start);
 		}
-		return new LispSymbol(this.foldCase ? token.toLowerCase(Locale.ROOT) : token);
+		return new LispSymbol(this.foldCase ? SchemeCharacters.foldcase(token) : token);
 	}
 
 	private String token() {

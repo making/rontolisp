@@ -271,6 +271,31 @@ categories:
     index_page: scheme/reference/library-read.md
     functions:
       - { slug: read, name: "read" }
+  - title: "(scheme char)"
+    index_page: scheme/reference/library-char.md
+    functions:
+      - { slug: char-alphabetic-p, name: "char-alphabetic?" }
+      - { slug: char-numeric-p, name: "char-numeric?" }
+      - { slug: char-whitespace-p, name: "char-whitespace?" }
+      - { slug: char-upper-case-p, name: "char-upper-case?" }
+      - { slug: char-lower-case-p, name: "char-lower-case?" }
+      - { slug: digit-value, name: "digit-value" }
+      - { slug: char-upcase, name: "char-upcase" }
+      - { slug: char-downcase, name: "char-downcase" }
+      - { slug: char-foldcase, name: "char-foldcase" }
+      - { slug: char-ci-eq-p, name: "char-ci=?" }
+      - { slug: char-ci-lt-p, name: "char-ci<?" }
+      - { slug: char-ci-gt-p, name: "char-ci>?" }
+      - { slug: char-ci-le-p, name: "char-ci<=?" }
+      - { slug: char-ci-ge-p, name: "char-ci>=?" }
+      - { slug: string-ci-eq-p, name: "string-ci=?" }
+      - { slug: string-ci-lt-p, name: "string-ci<?" }
+      - { slug: string-ci-gt-p, name: "string-ci>?" }
+      - { slug: string-ci-le-p, name: "string-ci<=?" }
+      - { slug: string-ci-ge-p, name: "string-ci>=?" }
+      - { slug: string-upcase, name: "string-upcase" }
+      - { slug: string-downcase, name: "string-downcase" }
+      - { slug: string-foldcase, name: "string-foldcase" }
   - title: "(scheme inexact)"
     index_page: scheme/reference/library-inexact.md
     functions:

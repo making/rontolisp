@@ -62,7 +62,8 @@ public final class Scheme {
 	 * The definitions {@code scheme.lisp} needs from this package's tables, generated so
 	 * each table is spelled once: the run-time procedure table behind {@code eval}
 	 * ({@code rontolisp::%scheme-builtin}) and the library-name predicate behind
-	 * {@code (environment ...)} ({@code rontolisp::%scheme-library-p}). Appended to the
+	 * {@code (environment ...)} ({@code rontolisp::%scheme-library-p}), and the Unicode
+	 * tables {@code (scheme char)} reads ({@code SchemeCharacters}). Appended to the
 	 * library's forms by {@code eval/SchemeLibrary}, in the same canonical shape.
 	 * @param spelled whether the program the forms are for spells a (mangled) procedure
 	 * name -- the table holds only those entries; the interpreter, which loads the
@@ -76,6 +77,7 @@ public final class Scheme {
 		List<LispVal> forms = new ArrayList<>(SchemeBuiltins.runtimeForms(SchemeNames::mangle, spelled, standard));
 		forms.add(SchemeLowering.libraryPredicateForm());
 		forms.add(SchemeLowering.extensionKeywordForm(standard));
+		forms.addAll(SchemeCharacters.runtimeForms());
 		return List.copyOf(forms);
 	}
 

@@ -186,6 +186,8 @@ sections:
             title: "(scheme write)"
           - file: scheme/reference/library-read.md
             title: "(scheme read)"
+          - file: scheme/reference/library-char.md
+            title: "(scheme char)"
           - file: scheme/reference/library-inexact.md
             title: "(scheme inexact)"
           - file: scheme/reference/library-cxr.md
