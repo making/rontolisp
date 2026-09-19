@@ -1,11 +1,7 @@
 package am.ik.jvm;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.PrintStream;
-import java.lang.reflect.Method;
-import java.net.URL;
-import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -13,7 +9,6 @@ import java.util.List;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.compiler.OptimizeLevel;
-import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -27,17 +22,39 @@ import static org.assertj.core.api.Assertions.assertThat;
  * produce a class the JVM verifier rejects or that misbehaves. This test compiles the
  * whole {@code ci-spec.yaml} corpus (the cross-backend feature catalogue) with
  * {@code --optimize} and asserts that shaking never throws, strictly shrinks the class,
- * and that the optimized class runs with output identical to the unoptimized one (the
- * corpus is deterministic: its random/getenv cases assert only deterministic properties,
- * and its file-stream cases write scratch files relative to the process working
- * directory, which this test deletes afterwards by diffing a before/after snapshot of the
- * project root -- see {@code CorpusFixtures.snapshotTopLevel}/{@code
- * removeNewEntries}; a hand-maintained name list went stale as ci-spec.yaml grew).
+ * and that the optimized class runs with output identical to the unoptimized one.
+ *
+ * <p>
+ * <b>Each run gets its own working directory, and the corpus program runs in a SUBPROCESS
+ * to get one.</b> Dozens of ci-spec cases read and write scratch files at RELATIVE paths,
+ * and one of them ({@code wild-pathnames}) walks a harness-staged {@code wpc-sub/} tree,
+ * so what the program prints is a function of its working directory. A Java process
+ * cannot change its own, so an in-process run resolves those paths against the PROJECT
+ * ROOT -- a directory shared with the second surefire fork, with any other build on the
+ * box and with any orphaned one. This test used to run there and to clean up afterwards
+ * by deleting every top-level entry that was not in a before-snapshot, which made it
+ * flaky in both directions and was measured on 2026-09-19 ({@code .kb/test-execution.md},
+ * "A test that runs a program in the project root"):
+ *
+ * <ul>
+ * <li>Something removed {@code ./wpc-sub/} between the two in-process runs, so the walk
+ * answered {@code NIL} in the second and the two outputs differed on exactly one of 4519
+ * lines -- a red build that passed when the class was re-run alone.</li>
+ * <li>The cleanup deleted, recursively, whatever ANOTHER process had created in the
+ * project root inside the test's ~70 s window.</li>
+ * </ul>
+ *
+ * A subprocess per run removes both: the corpus writes into a fresh {@code @TempDir}
+ * child that nothing else can see, the project root is never touched, and the JVM
+ * verifier check the in-process loader gave is if anything stronger -- a real launch of
+ * the shaken class.
  */
 class JvmClassShakerCorpusTest {
 
 	@TempDir
 	Path workDir;
+
+	private int runs;
 
 	private static String corpusSource() throws IOException {
 		return am.ik.rontolisp.testsupport.YamlResources.corpusSource();
@@ -45,13 +62,11 @@ class JvmClassShakerCorpusTest {
 
 	@Test
 	void optimizesTheWholeCorpusWithoutDecoderGapsAndBehavesIdentically() throws Exception {
-		// Snapshot before staging or running anything, so every file or directory the
-		// corpus run creates at a relative path -- by name or not -- is caught below.
-		java.util.Set<String> before = am.ik.rontolisp.testsupport.CorpusFixtures.snapshotTopLevel(Path.of("."));
-		// The `wild-pathnames` case walks a bounded ./wpc-sub/ tree the driver must
-		// stage (see CorpusFixtures); this run's working directory is the project
-		// root, so the tree is removed again below.
-		am.ik.rontolisp.testsupport.CorpusFixtures.stageWildPathnameTree(Path.of("."));
+		// The corpus runs in a private directory, so the project root must come out of
+		// this test exactly as it went in. Entries that VANISH are not asserted on: a
+		// concurrent build in another fork owns its own files, and this test is no
+		// longer the one deleting them.
+		java.util.Set<String> rootBefore = am.ik.rontolisp.testsupport.CorpusFixtures.snapshotTopLevel(Path.of("."));
 		// The CLI's own pass pipeline, not a copy of it: CompileFrontendAccess calls
 		// CompileFrontend.expand, so the shaker decodes exactly the class the real CLI
 		// emits and no pass or ordering can drift out of this test again. It used to be
@@ -82,35 +97,43 @@ class JvmClassShakerCorpusTest {
 			.compile(program));
 
 		assertThat(optimized.length).as("optimized should shrink the class").isLessThan(plain.length);
-		try {
-			assertThat(run(optimized)).isEqualTo(run(plain));
-		}
-		finally {
-			am.ik.rontolisp.testsupport.CorpusFixtures.removeWildPathnameTree(Path.of("."));
-			am.ik.rontolisp.testsupport.CorpusFixtures.removeNewEntries(Path.of("."), before);
-		}
+		assertThat(run(optimized)).isEqualTo(run(plain));
+		assertThat(am.ik.rontolisp.testsupport.CorpusFixtures.snapshotTopLevel(Path.of(".")))
+			.as("the corpus runs in a private working directory, so the project root -- shared with "
+					+ "the other surefire fork and with every other build on the box -- gains nothing")
+			.containsExactlyInAnyOrderElementsOf(rootBefore);
 	}
 
-	// Loads the class in a fresh loader (the JVM verifier checks the shaken bytecode),
-	// runs its main, and returns the captured stdout.
+	/**
+	 * Runs the class in a JVM of its own, in a fresh working directory, and returns what
+	 * it wrote to standard output. The fresh directory is what makes the two runs
+	 * comparable: both see the same staged {@code wpc-sub/} tree and neither sees the
+	 * scratch files the other left.
+	 * @param classBytes the compiled program
+	 * @return its standard output
+	 * @throws Exception if the process cannot be started or does not finish
+	 */
 	private String run(byte[] classBytes) throws Exception {
-		Path classFile = this.workDir.resolve("Test.class");
-		Files.write(classFile, classBytes);
-		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.workDir.toUri().toURL() },
-				ClassLoader.getSystemClassLoader())) {
-			Class<?> clazz = loader.loadClass("Test");
-			Method main = clazz.getMethod("main", String[].class);
-			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(baos));
-			try {
-				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
-			}
-			return baos.toString();
-		}
+		Path runDir = Files.createDirectory(this.workDir.resolve("run" + (++this.runs)));
+		Files.write(runDir.resolve("Test.class"), classBytes);
+		// The `wild-pathnames` case walks a bounded wpc-sub/ tree the driver must stage
+		// (see CorpusFixtures); here it is staged inside the run directory, which goes
+		// away with the @TempDir.
+		am.ik.rontolisp.testsupport.CorpusFixtures.stageWildPathnameTree(runDir);
+		// The test's own classpath supplies what the in-process loader's parent used to:
+		// the emitted class embeds its runtime, but not the classes the compiler shares
+		// with it.
+		String classpath = runDir + java.io.File.pathSeparator + System.getProperty("java.class.path");
+		Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+				"--add-modules", "jdk.incubator.vector", "--enable-native-access=ALL-UNNAMED", "-cp", classpath, "Test")
+			.directory(runDir.toFile())
+			.start();
+		byte[] out = process.getInputStream().readAllBytes();
+		byte[] err = process.getErrorStream().readAllBytes();
+		int status = process.waitFor();
+		System.err.print(new String(err, StandardCharsets.UTF_8));
+		assertThat(status).as("the corpus program exited non-zero").isZero();
+		return new String(out, StandardCharsets.UTF_8);
 	}
 
 	/**

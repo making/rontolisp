@@ -63,6 +63,44 @@ Still on the weaker device without a retry: `e2e/ServeComponentE2eSupport#freePo
 the `ServerSocket(0)` helpers the Clack / Ningle / Lack E2Es each carry. They reserve much
 closer to the bind than the WASM class did, so the window is small rather than absent.
 
+## A test that runs a program in the project root
+
+The working directory is a shared constant too, and the worst one: a Java process cannot
+change its own, so a test that runs a program IN PROCESS runs it in the project root, where
+both surefire forks, every other build on the box and every orphaned one already live.
+
+**Measured 2026-09-19** on `JvmClassShakerCorpusTest`, which compiled the ci-spec corpus twice
+and compared the two runs' stdout:
+
+- **One in-process corpus run writes 37 top-level entries into the project root** (`dls-a.txt`,
+  `probe.dat`, `w257/`, `ci-model.gguf`, a `tmp<random>.tmp`, ...), because dozens of ci-spec
+  cases use RELATIVE paths.
+- Its cleanup was `snapshotTopLevel` before / delete-every-new-entry after. Demonstrated
+  deterministically: a file AND a directory created by another shell in the project root while
+  the class ran were both gone, recursively, when it finished. Anything the other fork wrote
+  there in that ~70 s window was collateral.
+- The other direction is the flake this was found through. A full run went red in that class
+  alone, passed it twice in isolation and passed the suite on a re-run, so it was landed as
+  noise (`.todo/914`). The recorded assertion message shows the two 4519-line outputs differing
+  on **exactly one line**: the `wild-pathnames` case answered
+  `(#P"./wpc-sub/wpc-a.txt" #P"./wpc-sub/wpc-b.txt")` in the first run and `NIL` in the second,
+  i.e. the harness-staged `./wpc-sub/` was gone by the time the second run walked it. Nothing
+  in the repo deletes that tree except this class's own cleanup, so the deleter was another
+  process sharing the directory -- a second fork, another checkout's build, or an orphaned one.
+  Reproduced exactly (one differing line, same text) by removing `./wpc-sub/` between the two
+  runs. `%list-directory` is `File.list()`, which answers `null` for anything unreadable and
+  never signals (`.kb/directory-listing.md`), so a vanished directory reads as an empty answer
+  rather than an error.
+
+**The rule: a test that RUNS a program gives it a working directory that run owns.** In
+process that is impossible, so the program goes in a SUBPROCESS with `ProcessBuilder#directory`
+-- which is what `JvmClassShakerCorpusTest` now does, one fresh `@TempDir` child per run
+(`CiSpecE2eTest` always did). Both runs then start from the same staged state instead of the
+second inheriting the first's scratch files, the verifier check is a real JVM launch rather
+than a `URLClassLoader`, and there is nothing to clean up: the class asserts the project root
+gained nothing, and `CorpusFixtures` no longer carries a remove-what-is-new pair for anyone to
+reach for. Cost, measured on this box: unchanged, 64 s against 69 s in process.
+
 ## Determinism a test assumes but the JVM does not owe it
 
 - **A test asserting an exact `residentBytes()` must KEEP ITS ARRAYS REACHABLE**
