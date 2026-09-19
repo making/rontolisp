@@ -596,28 +596,20 @@ final class WasmHashTableCompiler {
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQUAL);
 			return;
 		}
+		// eql (2) and eq (3) are one predicate (.kb/eq-numbers.md), so one arm serves
+		// both.
 		getTag(ctx, tagSlot);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(LispHashTable.TEST_EQL);
-		ctx.writer.write(Instruction.I32_EQ);
+		ctx.writer.write(Instruction.I32_GE_S);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.I32);
 		pushEntryKey(ctx, keySlot, curSlot);
 		WasmEmitHelper.emitEqlComparison(ctx);
 		ctx.writer.write(Instruction.ELSE);
-		getTag(ctx, tagSlot);
-		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(LispHashTable.TEST_EQ);
-		ctx.writer.write(Instruction.I32_EQ);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		pushEntryKey(ctx, keySlot, curSlot);
-		WasmEmitHelper.emitEqComparison(ctx);
-		ctx.writer.write(Instruction.ELSE);
 		pushEntryKey(ctx, keySlot, curSlot);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQUAL);
-		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
 

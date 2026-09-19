@@ -3504,8 +3504,8 @@ public final class Environment implements Scope {
 		}));
 	}
 
-	// eq: object identity. Like eql, but floats and ratios (which are distinct boxed
-	// objects, not interned like small integers or symbols) are never eq.
+	// eq: object identity for aggregates, value for numbers and characters -- the same
+	// predicate as eql (LispEquality.eq, .kb/eq-numbers.md).
 	private static LispVal eqValue(LispVal a, LispVal b) {
 		return isEqStrict(a, b) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 	}

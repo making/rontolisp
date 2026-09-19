@@ -3891,7 +3891,7 @@ cases:
       42
       99
       42
-  - name: eq-vs-eql-floats-ratios-are-eql-by-value
+  - name: eq-and-eql-floats-ratios-by-value
     source: |
       (print (if (eql 1.5 1.5) 42 99))
       (print (if (eq 1.5 1.5) 42 99))
@@ -3899,7 +3899,7 @@ cases:
       (print (member 1.0 (list 2.0 1.0)))
     expected: |
       42
-      99
+      42
       42
       (1.0)
   - name: equal-structural-equality-cons-cells
@@ -9652,7 +9652,7 @@ cases:
         1
         NIL
         NIL
-      wasm-component: |
+      wasm_component: |
         10
         0
         0
@@ -13399,11 +13399,11 @@ cases:
       ;; can collapse the two allocations to one.
       (let ((cp 128513))
         (print (eq (code-char cp) (code-char cp))))        ; T
-      ;; eq on non-characters unchanged: two freshly-consed cells are not eq,
-      ;; two boxed floats with the same value are not eq, but two equal small
-      ;; integers (i31) are (ref.eq on i31 already worked).
+      ;; Two freshly-consed cells are not eq; two floats with the same value are,
+      ;; since eq on numbers is eql (.kb/eq-numbers.md), and so are two equal
+      ;; small integers.
       (print (eq (list 1) (list 1)))                       ; NIL
-      (print (eq 1.5 1.5))                                 ; NIL
+      (print (eq 1.5 1.5))                                 ; T
       (print (eq 42 42))                                   ; T
       ;; eql / equal on characters unchanged (they already worked); pinned here
       ;; as a companion regression guard.
@@ -13416,7 +13416,7 @@ cases:
       NIL
       T
       NIL
-      NIL
+      T
       T
       T
       T
@@ -17502,6 +17502,33 @@ cases:
       (2 1)
       (2 1)
       (10 1)
+
+  # eq on NUMBERS is eql on every backend (.kb/eq-numbers.md): a float, ratio or
+  # complex compares by type and value, never by box identity, so no optimizer that
+  # unboxes or re-boxes can change the answer. -0.0 and 0.0 stay distinct, as for eql.
+  - name: eq-on-numbers-is-eql
+    source: |
+      (defvar *eqn-n* (length (list 1 2)))
+      (defvar *eqn-x* (* 1.5d0 *eqn-n*))
+      (print (list (eq *eqn-x* *eqn-x*) (let ((y *eqn-x*)) (eq y y))))
+      (print (list (eq (* 1.5d0 *eqn-n*) (* 1.5d0 *eqn-n*))
+                   (eq (float *eqn-n* 1.0f0) (float *eqn-n* 1.0f0))
+                   (eq (/ 1 *eqn-n*) (/ 1 *eqn-n*))
+                   (eq (complex 1 *eqn-n*) (complex 1 *eqn-n*))
+                   (eq (expt 2 (* 50 *eqn-n*)) (expt 2 (* 50 *eqn-n*)))))
+      (print (list (eq 0.0d0 (- 0.0d0)) (eq 3.0d0 3) (eq 1/2 0.5d0)))
+      (let ((eqn-h (make-hash-table :test 'eq)))
+        (setf (gethash (* 1.5d0 *eqn-n*) eqn-h) :found)
+        (setf (gethash (/ 1 *eqn-n*) eqn-h) :half)
+        (print (list (gethash (* 1.5d0 *eqn-n*) eqn-h) (gethash (/ 1 *eqn-n*) eqn-h))))
+      (print (list (member (* 1.5d0 *eqn-n*) (list 1 3.0d0) :test #'eq)
+                   (position (/ 1 *eqn-n*) (list 1 1/2) :test #'eq)))
+    expected: |
+      (T T)
+      (T T T T T)
+      (NIL NIL NIL)
+      (:FOUND :HALF)
+      ((3.0) 1)
 
 # Cases that cannot join the corpus above: one that ENDS the program, one whose
 # subject a backend does not have at all. Each is compiled and run on its own.

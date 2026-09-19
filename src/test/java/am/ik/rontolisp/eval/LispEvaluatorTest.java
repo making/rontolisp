@@ -3845,9 +3845,11 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalEqFloatsNotEq() {
-		// eq differs from eql: floats are distinct boxed objects, never eq
-		assertThat(eval("(eq 1.5 1.5)")).isSameAs(LispNil.INSTANCE);
+	void evalEqFloatsByValue() {
+		// eq is eql on every backend: a number compares by type and value
+		assertThat(eval("(eq 1.5 1.5)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(eq 0.0 -0.0)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(eq 3.0 3)")).isSameAs(LispNil.INSTANCE);
 	}
 
 	@Test
@@ -3856,8 +3858,8 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalEqRatiosNotEq() {
-		assertThat(eval("(eq 1/2 1/2)")).isSameAs(LispNil.INSTANCE);
+	void evalEqRatiosByValue() {
+		assertThat(eval("(eq 1/2 1/2)")).isSameAs(LispTrue.INSTANCE);
 	}
 
 	@Test

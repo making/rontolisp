@@ -98,7 +98,7 @@ final class WasmRemfTailCompiler {
 		ctx.writer.writeUnsignedLeb128(0); // car
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(indicatorSlot);
-		WasmEmitHelper.emitEqComparison(ctx);
+		WasmEmitHelper.emitEqlComparison(ctx);
 
 		ctx.writer.write(Instruction.IF, 0x40);
 		// Match! splice: rplacd(valueCell, cddr(nextKeyCell))

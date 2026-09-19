@@ -103,12 +103,8 @@ final class WasmConditionCompiler {
 				}
 				WasmExprCompiler.compileExpr(args.get(1), ctx);
 				WasmExprCompiler.compileExpr(args.get(2), ctx);
-				if (LispNames.EQL.equals(head.name())) {
-					WasmEmitHelper.emitEqlComparison(ctx);
-				}
-				else {
-					WasmEmitHelper.emitEqComparison(ctx);
-				}
+				// eq and eql are one predicate (.kb/eq-numbers.md)
+				WasmEmitHelper.emitEqlComparison(ctx);
 				if (negated) {
 					ctx.writer.write(Instruction.I32_EQZ);
 				}

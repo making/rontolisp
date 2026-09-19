@@ -6,35 +6,27 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 
 /**
- * Compiles the {@code eq} and {@code eql} built-in functions. Both use {@code ref.eq} for
- * identity comparison, falling back to string offset comparison for TYPE_STRING values
- * (since the StringTable deduplicates identical symbols/strings to the same offset). They
- * differ only on floats and ratios, which are {@code eql} (by value) but not {@code eq}.
+ * Compiles the {@code eq} and {@code eql} built-in functions, which are one predicate
+ * ({@code .kb/eq-numbers.md}): {@code ref.eq} inline, then {@code _eql_tail} for
+ * characters, numbers by type and value, and symbols/strings by interned offset
+ * ({@link WasmEmitHelper#emitEqlComparison}).
  */
 final class WasmEqGeneralCompiler {
 
 	private WasmEqGeneralCompiler() {
 	}
 
-	/** Compiles {@code eq} (floats and ratios are never equal). */
+	/**
+	 * Compiles {@code eq} or {@code eql}.
+	 * @param cons the call form
+	 * @param ctx the compilation context
+	 */
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		compileArgs(cons, ctx);
-		WasmEmitHelper.emitEqComparison(ctx);
-		WasmEmitHelper.emitBoolFromI32(ctx);
-	}
-
-	/** Compiles {@code eql} (floats and ratios compare by value). */
-	static void compileEql(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		compileArgs(cons, ctx);
-		WasmEmitHelper.emitEqlComparison(ctx);
-		WasmEmitHelper.emitBoolFromI32(ctx);
-	}
-
-	private static void compileArgs(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
-		// Evaluate both args (push onto stack)
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		WasmEmitHelper.emitEqlComparison(ctx);
+		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 
 }

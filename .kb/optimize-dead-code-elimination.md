@@ -335,6 +335,15 @@ falls by the same fraction.
   `WasmConditionCompiler` (below); this rule is what catches the predicates it does not name.
 - `i32.eqz; i32.eqz` in front of an `if` or `br_if` -> nothing (2 B): the branch asks only
   whether the operand is zero. Only there -- an `i32.and` would see the value.
+- `call F` -> one `drop` per parameter + `i32.const K`, when F's whole code entry is
+  `i32.const K` (no locals). A SECOND pass over the bodies the first pass left, since the fold's
+  debris is what hides the constant. The case is `_eql_tail` in a module with no boxed float,
+  character, integer, ratio or complex (`.kb/eq-numbers.md`): **a never-taken call still costs the
+  caller ~8-10% in a tight loop** (registers a call clobbers; measured 2026-09-19, a symbol-`eq`
+  search loop, wasmtime), which the byte count alone does not show.
+- `if (result T) X else X end` (X one pure instruction, the same in both arms) -> `drop; X`, and a
+  `ref.test`/`ref.is_null`/`i32.eqz` then `drop` -> `drop` -- what the rule above and the fold's
+  own `if (ref.test <dead type>) 0 else 0` leave; the operand's push then goes with the drop.
 - `br 0; end; unreachable; end` -> the `unreachable` goes (1 B). **Two conditions, and the pass is
   unsound without either.** The `end` must close a LOOP whose last instruction is that `br 0`, so
   nothing falls out of it and the trap is dynamically dead -- over a plain `block` the same `br 0`

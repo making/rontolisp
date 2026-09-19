@@ -1293,8 +1293,7 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandAdjoin(cons), ctx, className);
 				case LispNames.SUBSETP ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandSubsetp(cons), ctx, className);
-				case LispNames.EQ_GENERAL -> JvmEqGeneralCompiler.compileEq(cons, ctx, className);
-				case LispNames.EQL -> JvmEqGeneralCompiler.compile(cons, ctx, className);
+				case LispNames.EQ_GENERAL, LispNames.EQL -> JvmEqGeneralCompiler.compile(cons, ctx, className);
 				case LispNames.EQUAL -> JvmEqualCompiler.compile(cons, ctx, className);
 				case LispNames.REMF_TAIL -> JvmRemfTailCompiler.compile(cons, ctx, className);
 				case LispNames.MAKE_HASH_TABLE -> JvmHashTableCompiler.compileMake(cons, ctx, className);
