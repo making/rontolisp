@@ -2999,7 +2999,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				programUsesSymbol(program, LispNames.MAKE_DIRECTORIES),
 				programUsesSymbol(program, LispNames.FILE_LENGTH),
 				programUsesSymbol(program, LispNames.DELETE_FILE_INTERNAL),
-				programUsesSymbol(program, LispNames.RENAME_FILE_INTERNAL));
+				programUsesSymbol(program, LispNames.RENAME_FILE_INTERNAL),
+				programUsesSymbol(program, LispNames.FILE_POSITION));
 		List<JvmIoRuntimeBuilder.IoMethod> ioMethods = JvmIoRuntimeBuilder
 			.create(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue, stringLengthForIo,
 					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod, socketRuntime,
@@ -3008,10 +3009,14 @@ public final class JvmLispCompiler implements LispCompiler {
 			.methods();
 		Utf8Constant streamsFieldName = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_FIELD);
 		Utf8Constant streamsFieldDesc = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_DESC);
-		final @Nullable Utf8Constant streamPathsFieldName = fileMeta.fileLength()
+		final @Nullable Utf8Constant streamPathsFieldName = fileMeta.streamPaths()
 				? cp.addUtf8(JvmIoRuntimeBuilder.STREAM_PATHS_FIELD) : null;
-		final @Nullable Utf8Constant streamPathsFieldDesc = fileMeta.fileLength()
+		final @Nullable Utf8Constant streamPathsFieldDesc = fileMeta.streamPaths()
 				? cp.addUtf8(JvmIoRuntimeBuilder.STREAM_PATHS_DESC) : null;
+		final @Nullable Utf8Constant streamPositionsFieldName = fileMeta.position()
+				? cp.addUtf8(JvmIoRuntimeBuilder.STREAM_POSITIONS_FIELD) : null;
+		final @Nullable Utf8Constant streamPositionsFieldDesc = fileMeta.position()
+				? cp.addUtf8(JvmIoRuntimeBuilder.STREAM_POSITIONS_DESC) : null;
 		Utf8Constant streamCountFieldName = cp.addUtf8(JvmIoRuntimeBuilder.STREAM_COUNT_FIELD);
 		Utf8Constant streamCountFieldDesc = cp.addUtf8(JvmIoRuntimeBuilder.STREAM_COUNT_DESC);
 		// Tracks whether stdout is at the start of a line (0 = at line start), so
@@ -3329,6 +3334,14 @@ public final class JvmLispCompiler implements LispCompiler {
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE)
 						.writeU2(streamPathsFieldName)
 						.writeU2(java.util.Objects.requireNonNull(streamPathsFieldDesc))
+						.writeU2(0));
+				}
+				if (streamPositionsFieldName != null) {
+					// VOLATILE for the same reason _streams is: _storeStreamPosition is
+					// synchronized and its write-back publishes the table.
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE)
+						.writeU2(streamPositionsFieldName)
+						.writeU2(java.util.Objects.requireNonNull(streamPositionsFieldDesc))
 						.writeU2(0));
 				}
 				// The renderers' cycle guard: the current rendering path (lazily

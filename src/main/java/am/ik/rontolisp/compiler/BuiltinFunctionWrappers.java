@@ -147,6 +147,9 @@ public final class BuiltinFunctionWrappers {
 		// wrappers on the same reference puts both sides on one scan.
 		gated.add(LispNames.FILE_LENGTH);
 		gated.add(LispNames.FILE_WRITE_DATE);
+		// #'file-position joins them for the same reason: its wrapper body lowers to the
+		// gated _filePosition JVM helper.
+		gated.add(LispNames.FILE_POSITION);
 		// #'sleep for a sharper reason: under --component `sleep` lowers to
 		// (await (wait-for ms)), which puts the module in async (and therefore EH) mode.
 		// An ungated wrapper would do that to EVERY component -- changing the wasmtime
@@ -763,6 +766,19 @@ public final class BuiltinFunctionWrappers {
 
 	private static WrapperDef binary(String name) {
 		return new WrapperDef(name, List.of("a", "b"), List.of(call(name, "a", "b")));
+	}
+
+	// (lambda (a b &rest kw) (name a b :k1 (getf kw :k1) ...)) -- a two-operand operator
+	// whose keywords are all bounds, where nil means "the default" in the call-position
+	// lowering, so an absent keyword forwards as nil.
+	private static WrapperDef boundingKeywords(String name, String... keywords) {
+		List<LispVal> callParts = new ArrayList<>(
+				List.of(new LispSymbol(name), new LispSymbol("a"), new LispSymbol("b")));
+		for (String keyword : keywords) {
+			callParts.add(new LispSymbol(keyword));
+			callParts.add(getfKw(keyword));
+		}
+		return new WrapperDef(name, List.of("a", "b", LispNames.LAMBDA_REST, "kw"), List.of(listToCons(callParts)));
 	}
 
 	private static WrapperDef ternary(String name) {
@@ -1636,8 +1652,11 @@ public final class BuiltinFunctionWrappers {
 									new LispInteger(0))))),
 			// String operations
 			unary(LispNames.STRING), unary(LispNames.STRING_UPCASE), unary(LispNames.STRING_DOWNCASE),
-			unary(LispNames.STRING_CAPITALIZE), unary(LispNames.MAKE_STRING), binary(LispNames.REPLACE),
-			binary(LispNames.FILL), binaryOptionalThird(LispNames.SUBSEQ), stringEquality(LispNames.STRING_EQ),
+			unary(LispNames.STRING_CAPITALIZE), unary(LispNames.MAKE_STRING),
+			boundingKeywords(LispNames.REPLACE, LispNames.START1_KEYWORD, LispNames.END1_KEYWORD,
+					LispNames.START2_KEYWORD, LispNames.END2_KEYWORD),
+			boundingKeywords(LispNames.FILL, LispNames.START_KEYWORD, LispNames.END_KEYWORD),
+			binaryOptionalThird(LispNames.SUBSEQ), stringEquality(LispNames.STRING_EQ),
 			stringEquality(LispNames.STRING_EQUAL), binary(LispNames.STRING_TRIM), binary(LispNames.STRING_LEFT_TRIM),
 			binary(LispNames.STRING_RIGHT_TRIM),
 			// Character operations
