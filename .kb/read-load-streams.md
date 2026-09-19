@@ -449,6 +449,29 @@ Pinned by `LispEvaluatorTest#evalFileWriteDateAndFileLength`/`#fileLengthOverEve
 `file-length-of-a-file-of-a-known-size` and
 `filesystem-write-create-rename-delete-and-probe`.
 
+## `file-position` is REAL on the interpreter and the JVM for a BINARY file stream
+
+The byte primitives advance a per-handle position and the set re-opens the file at the
+offset, so a caller can seek and read the sought bytes rather than walk front to back.
+Interpreter: per-handle `streamPositions` map (`Environment`), advanced by the byte
+primitives through `merge` and repositioned by `binaryFileStreamSet`. JVM: the mirrored
+`Object[] _streamPositions` side table ([jvm-export.md](jvm-export.md) / this file's
+file-length section), advanced by `_bumpStreamPosition` (called by `_readByte`,
+`_writeByte`, `_readSeqPacked`, `_writeSeqPacked`) and queried/set through
+`_filePosition`, which re-opens via `FileChannel.position`. Both are gated per operator
+(interpreter: nothing; JVM: `JvmIoRuntimeBuilder.FileMeta.position`) so a program that
+never calls `file-position` pays nothing. A CHARACTER file stream, a socket, a string
+stream, a standard stream and a closed handle answer `nil` (Common Lisp's "cannot be
+determined") on both; the JVM `#'file-position` function-value wrapper is
+`REFERENCE_GATED` like `#'file-length`, because its body lowers to the gated
+`_filePosition`. The two WASM backends still answer `nil` on the set (`nil = cannot be
+determined` is CL-sanctioned); the served-request body keeps its own REAL `file-position`
+through `HttpRequestBodyStream` on all four.
+
+Pinned by `LispEvaluatorTest#binaryFileStreamPositionQueriesAndSeeks`,
+`JvmLispCompilerTest#compileAndRunBinaryFileStreamPositionQueriesAndSeeks`,
+`compileAndRunLiteStreamBuiltins` and the Gray rewrite case.
+
 ## A stream is a VALUE, not a handle
 **Every OPEN stream is an instance of the fixed `LispLayout.STREAM` layout** — tag `%STREAM`,
 declared slots `HANDLE` and `KIND` — so `streamp` answers off the value, and `file-stream` /

@@ -10956,6 +10956,32 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunBinaryFileStreamPositionQueriesAndSeeks() throws Exception {
+		// file-position is REAL for a binary file stream on the JVM backend: the query is
+		// the byte offset the byte primitives advanced, and the set reopens the file at
+		// the offset -- what uiop:parse-windows-shortcut needs. A CHARACTER file stream
+		// still answers nil: its offset is not a byte count the reader exposes.
+		String file = this.tempDir.resolve("pos.bin").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output :if-exists :supersede
+				                     :element-type '(unsigned-byte 8))
+				  (dotimes (i 10) (write-byte i out))
+				  (print (file-position out)))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (file-position in))
+				  (print (read-byte in))
+				  (print (file-position in))
+				  (print (file-position in 5))
+				  (print (file-position in))
+				  (print (read-byte in))
+				  (print (file-position in)))
+				;; A character file stream has no byte offset to report.
+				(with-open-file (in "%s")
+				  (print (file-position in)))
+				""".formatted(file, file, file))).isEqualTo("10\n0\n0\n1\nT\n5\n5\n6\nNIL");
+	}
+
+	@Test
 	void compileAndRunClassOf() throws Exception {
 		// class-of answers the metaobject view: class-name reads the name of the
 		// memoized standard-class instance, eq to what find-class yields -- for

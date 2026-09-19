@@ -162,6 +162,10 @@ final class JvmAsm {
 		this.code.add(Opcode.ARETURN);
 	}
 
+	void athrow() {
+		this.code.add(Opcode.ATHROW);
+	}
+
 	void ireturn() {
 		this.code.add(Opcode.IRETURN);
 	}
@@ -412,6 +416,28 @@ final class JvmAsm {
 
 	void swap() {
 		this.code.add(Opcode.SWAP);
+	}
+
+	void iadd() {
+		this.code.add(Opcode.IADD);
+	}
+
+	void imul() {
+		this.code.add(Opcode.IMUL);
+	}
+
+	/** Pushes the long constant {@code 0L}. */
+	void lconst0() {
+		this.code.add(Opcode.LCONST_0);
+	}
+
+	void ladd() {
+		this.code.add(Opcode.LADD);
+	}
+
+	/** The {@code lcmp} instruction that returns -1/0/1 for {@code long} comparison. */
+	void lcmp() {
+		this.code.add(Opcode.LCMP);
 	}
 
 	void dadd() {

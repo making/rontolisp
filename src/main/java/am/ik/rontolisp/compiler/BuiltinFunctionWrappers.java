@@ -147,6 +147,9 @@ public final class BuiltinFunctionWrappers {
 		// wrappers on the same reference puts both sides on one scan.
 		gated.add(LispNames.FILE_LENGTH);
 		gated.add(LispNames.FILE_WRITE_DATE);
+		// #'file-position joins them for the same reason: its wrapper body lowers to the
+		// gated _filePosition JVM helper.
+		gated.add(LispNames.FILE_POSITION);
 		// #'sleep for a sharper reason: under --component `sleep` lowers to
 		// (await (wait-for ms)), which puts the module in async (and therefore EH) mode.
 		// An ungated wrapper would do that to EVERY component -- changing the wasmtime

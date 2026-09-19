@@ -139,6 +139,46 @@ final class JvmIoRuntimeBuilder {
 
 	static final String STREAM_PATHS_DESC = "[Ljava/lang/Object;";
 
+	/**
+	 * The byte position of each BINARY file stream, indexed by handle exactly like
+	 * {@code _streams}, mirroring the interpreter's {@code streamPositions} map. Only
+	 * {@code _bumpStreamPosition}/{@code _filePosition} touch it, and only for a handle
+	 * whose {@code _streamPaths} entry names a real file, so a non-file stream (a socket,
+	 * a character file stream, a standard stream) is simply absent here and file-position
+	 * answers nil for it.
+	 */
+	static final String STREAM_POSITIONS_FIELD = "_streamPositions";
+
+	static final String STREAM_POSITIONS_DESC = "[Ljava/lang/Object;";
+
+	/**
+	 * {@code file-position}: the query (one argument) returns the boxed byte position of
+	 * the binary file stream, or null where it cannot be told; the set (two arguments)
+	 * re-opens the file at the offset and answers "T", or null where it cannot. Mirrors
+	 * {@code Environment}'s {@code binaryFileStreamSet} and {@code streamPositions}.
+	 */
+	static final String FILE_POSITION_METHOD = "_filePosition";
+
+	static final String FILE_POSITION_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/**
+	 * Records the boxed position of a handle, growing {@code _streamPositions} the way
+	 * {@code _setStreamPath} grows {@code _streamPaths}. Returns the handle so
+	 * {@code _filePosition} can call it from its set half.
+	 */
+	static final String STORE_STREAM_POSITION_METHOD = "_storeStreamPosition";
+
+	static final String STORE_STREAM_POSITION_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/**
+	 * Advances the boxed position of a binary file stream by {@code delta} bytes. A
+	 * self-contained guard (the handle must resolve to a real file) so the byte
+	 * primitives can call it unconditionally after a transfer.
+	 */
+	static final String BUMP_STREAM_POSITION_METHOD = "_bumpStreamPosition";
+
+	static final String BUMP_STREAM_POSITION_DESC = "(Ljava/lang/Object;I)Ljava/lang/Object;";
+
 	static final String WRITE_LINE_METHOD = "_writeLine";
 
 	static final String WRITE_LINE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
@@ -432,6 +472,40 @@ final class JvmIoRuntimeBuilder {
 	@Nullable private final MethodrefConstant forceOutputRef;
 
 	/**
+	 * The {@code _streamPositions} side table and the position helpers, non-null only for
+	 * a program that calls {@code file-position} at all, so every other artifact keeps
+	 * its bytes.
+	 */
+	@Nullable private final FieldrefConstant streamPositionsField;
+
+	@Nullable private final MethodrefConstant storeStreamPositionRef;
+
+	@Nullable private final MethodrefConstant bumpStreamPositionRef;
+
+	/**
+	 * The file re-open refs {@code _filePosition}'s set half needs, minted only with the
+	 * {@link #position} gate: {@code FileInputStream.getChannel()}, {@code Path.of},
+	 * {@code FileChannel.open} over {@code StandardOpenOption.WRITE},
+	 * {@code FileChannel.position(long)} and {@code Channels.newOutputStream}.
+	 */
+	@Nullable private final MethodrefConstant fileInputStreamGetChannel;
+
+	@Nullable private final MethodrefConstant pathOf;
+
+	@Nullable private final MethodrefConstant fileChannelOpen;
+
+	@Nullable private final MethodrefConstant fileChannelPosition;
+
+	@Nullable private final MethodrefConstant channelsNewOutputStream;
+
+	@Nullable private final ClassConstant openOptionClass;
+
+	@Nullable private final FieldrefConstant standardOpenOptionWrite;
+
+	/** The {@code file-position} set-half's negative-position error message. */
+	private final ConstantPool.@Nullable StringConstant negPositionMsg;
+
+	/**
 	 * Socket-runtime constants, non-null only when the program uses a tcp built-in; the
 	 * stream built-ins then grow socket branches (a socket entry is a raw
 	 * {@code java.net.Socket}/{@code ServerSocket}, not a reader/writer). Non-socket
@@ -652,30 +726,85 @@ final class JvmIoRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("renameTo"), cp.addUtf8("(Ljava/io/File;)Z"))) : null;
 		this.fileLengthRef = fileMeta.fileLength()
 				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()J"))) : null;
-		this.streamPathsField = fileMeta.fileLength() ? cp.addFieldref(thisClass,
+		// file-position needs the _streamPaths side table (to know a handle is a file
+		// stream and to re-open at an offset) exactly as file-length does, so the path
+		// refs are shared: minted for either operator.
+		final boolean streamPathsWanted = fileMeta.fileLength() || fileMeta.position();
+		this.streamPathsField = streamPathsWanted ? cp.addFieldref(thisClass,
 				cp.addNameAndType(cp.addUtf8(STREAM_PATHS_FIELD), cp.addUtf8(STREAM_PATHS_DESC))) : null;
-		this.setStreamPathRef = fileMeta.fileLength() ? cp.addMethodref(thisClass,
+		this.setStreamPathRef = streamPathsWanted ? cp.addMethodref(thisClass,
 				cp.addNameAndType(cp.addUtf8(SET_STREAM_PATH_METHOD), cp.addUtf8(SET_STREAM_PATH_DESC))) : null;
-		this.forceOutputRef = fileMeta.fileLength() ? cp.addMethodref(thisClass,
+		this.forceOutputRef = streamPathsWanted ? cp.addMethodref(thisClass,
 				cp.addNameAndType(cp.addUtf8(FORCE_OUTPUT_METHOD), cp.addUtf8(FORCE_OUTPUT_DESC))) : null;
+		// The file-position machinery is gated on its own operator so a program that only
+		// wants file-length pays nothing beyond what it already did.
+		this.streamPositionsField = fileMeta.position()
+				? cp.addFieldref(thisClass,
+						cp.addNameAndType(cp.addUtf8(STREAM_POSITIONS_FIELD), cp.addUtf8(STREAM_POSITIONS_DESC)))
+				: null;
+		this.storeStreamPositionRef = fileMeta.position() ? cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(STORE_STREAM_POSITION_METHOD), cp.addUtf8(STORE_STREAM_POSITION_DESC)))
+				: null;
+		this.bumpStreamPositionRef = fileMeta.position() ? cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(BUMP_STREAM_POSITION_METHOD), cp.addUtf8(BUMP_STREAM_POSITION_DESC)))
+				: null;
+		this.fileInputStreamGetChannel = fileMeta.position()
+				? cp.addMethodref(this.fileInputStreamClass,
+						cp.addNameAndType(cp.addUtf8("getChannel"), cp.addUtf8("()Ljava/nio/channels/FileChannel;")))
+				: null;
+		this.pathOf = fileMeta.position()
+				? cp.addMethodref(cp.addClass(cp.addUtf8("java/nio/file/Path")),
+						cp.addNameAndType(cp.addUtf8("of"), cp.addUtf8("(Ljava/lang/String;)Ljava/nio/file/Path;")))
+				: null;
+		this.fileChannelOpen = fileMeta.position()
+				? cp.addMethodref(cp.addClass(cp.addUtf8("java/nio/channels/FileChannel")),
+						cp.addNameAndType(cp.addUtf8("open"), cp.addUtf8(
+								"(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/nio/channels/FileChannel;")))
+				: null;
+		this.fileChannelPosition = fileMeta.position()
+				? cp.addMethodref(cp.addClass(cp.addUtf8("java/nio/channels/FileChannel")),
+						cp.addNameAndType(cp.addUtf8("position"), cp.addUtf8("(J)Ljava/nio/channels/FileChannel;")))
+				: null;
+		this.channelsNewOutputStream = fileMeta
+			.position()
+					? cp.addMethodref(cp.addClass(cp.addUtf8("java/nio/channels/Channels")),
+							cp.addNameAndType(cp.addUtf8("newOutputStream"),
+									cp.addUtf8("(Ljava/nio/channels/WritableByteChannel;)Ljava/io/OutputStream;")))
+					: null;
+		this.openOptionClass = fileMeta.position() ? cp.addClass(cp.addUtf8("java/nio/file/OpenOption")) : null;
+		this.standardOpenOptionWrite = fileMeta.position()
+				? cp.addFieldref(cp.addClass(cp.addUtf8("java/nio/file/StandardOpenOption")),
+						cp.addNameAndType(cp.addUtf8("WRITE"), cp.addUtf8("Ljava/nio/file/StandardOpenOption;")))
+				: null;
+		this.negPositionMsg = fileMeta.position() ? cp.addString("file-position: position must be non-negative") : null;
 	}
 
 	/**
-	 * Which of the three file-metadata helpers the program actually calls. They are gated
-	 * one by one rather than as a group so a program using only {@code file-write-date}
-	 * does not carry the {@code file-length} stream-path table, and every artifact
-	 * compiled before any of them existed keeps its exact bytes.
+	 * Which of the file-metadata helpers the program actually calls. They are gated one
+	 * by one rather than as a group so a program using only {@code file-write-date} does
+	 * not carry the {@code file-length} stream-path table, and every artifact compiled
+	 * before any of them existed keeps its exact bytes.
 	 *
 	 * @param writeDate whether {@code file-write-date} is called
 	 * @param makeDirectories whether {@code %make-directories} is called
 	 * @param fileLength whether {@code file-length} is called
 	 * @param deleteFile whether {@code %delete-file} is called
 	 * @param renameFile whether {@code %rename-file} is called
+	 * @param position whether {@code file-position} is called
 	 */
 	record FileMeta(boolean writeDate, boolean makeDirectories, boolean fileLength, boolean deleteFile,
-			boolean renameFile) {
+			boolean renameFile, boolean position) {
 
-		static final FileMeta NONE = new FileMeta(false, false, false, false, false);
+		static final FileMeta NONE = new FileMeta(false, false, false, false, false, false);
+
+		/**
+		 * Whether the {@code _streamPaths} side table must be present: both
+		 * {@code file-length} and {@code file-position} read it, so either operator
+		 * forces it.
+		 */
+		boolean streamPaths() {
+			return this.fileLength || this.position;
+		}
 
 	}
 
@@ -857,11 +986,23 @@ final class JvmIoRuntimeBuilder {
 			ms.add(new IoMethod(this.cp.addUtf8(RENAME_FILE_METHOD), this.cp.addUtf8(RENAME_FILE_DESC), 5, 4,
 					buildRenameFile()));
 		}
-		if (this.fileMeta.fileLength()) {
+		if (this.fileMeta.streamPaths()) {
 			ms.add(new IoMethod(this.cp.addUtf8(SET_STREAM_PATH_METHOD), this.cp.addUtf8(SET_STREAM_PATH_DESC), 4, 4,
 					buildSetStreamPath(), AccessFlag.ACC_SYNCHRONIZED));
+		}
+		if (this.fileMeta.fileLength()) {
 			ms.add(new IoMethod(this.cp.addUtf8(FILE_LENGTH_METHOD), this.cp.addUtf8(FILE_LENGTH_DESC), 4, 4,
 					buildFileLength()));
+		}
+		if (this.fileMeta.position()) {
+			ms.add(new IoMethod(this.cp.addUtf8(STORE_STREAM_POSITION_METHOD),
+					this.cp.addUtf8(STORE_STREAM_POSITION_DESC), 7, 4, buildStoreStreamPosition(),
+					AccessFlag.ACC_SYNCHRONIZED));
+			ms.add(new IoMethod(this.cp.addUtf8(BUMP_STREAM_POSITION_METHOD),
+					this.cp.addUtf8(BUMP_STREAM_POSITION_DESC), 7, 8, buildBumpStreamPosition(),
+					AccessFlag.ACC_SYNCHRONIZED));
+			ms.add(new IoMethod(this.cp.addUtf8(FILE_POSITION_METHOD), this.cp.addUtf8(FILE_POSITION_DESC), 12, 10,
+					buildFilePosition()));
 		}
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_LINE_METHOD), this.cp.addUtf8(WRITE_LINE_DESC), 5, 4,
 				buildWriteLine()));
@@ -1415,7 +1556,7 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.ALOAD_3);
 		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, this.addStreamRef.index());
-		if (this.fileMeta.fileLength()) {
+		if (this.fileMeta.streamPaths()) {
 			code.add(Opcode.ALOAD_2);
 			code.add(Opcode.INVOKESTATIC);
 			emitU2(code, Objects.requireNonNull(this.setStreamPathRef).index());
@@ -1751,6 +1892,336 @@ final class JvmIoRuntimeBuilder {
 	}
 
 	/**
+	 * {@code _storeStreamPosition(Object handle, Object pos) -> handle}. Records the
+	 * boxed {@code Long} position of a handle in {@code _streamPositions}, growing the
+	 * table the way {@code _setStreamPath} grows {@code _streamPaths}. Used by
+	 * {@code _filePosition}'s set half (an exact position) and by
+	 * {@code _bumpStreamPosition} (after it reads the current one).
+	 */
+	private List<Integer> buildStoreStreamPosition() {
+		JvmAsm a = new JvmAsm();
+		// Slots: 0=handle, 1=pos, 2=arr, 3=idx (int)
+		a.aload(0);
+		a.checkcast(this.longClass);
+		a.invokevirtual(this.longValue);
+		a.l2i();
+		a.istore(3);
+		a.getstatic(Objects.requireNonNull(this.streamPositionsField));
+		a.astore(2);
+		a.aload(2);
+		int have = a.label();
+		a.branch(Opcode.IFNONNULL, have);
+		a.iconst(16);
+		a.anewarray(this.objectClass);
+		a.astore(2);
+		a.bind(have);
+		a.iload(3);
+		a.aload(2);
+		a.arraylength();
+		int fits = a.label();
+		a.branch(Opcode.IF_ICMPLT, fits);
+		a.aload(2);
+		a.iload(3);
+		a.iconst(1);
+		a.iadd();
+		a.iconst(2);
+		a.imul();
+		a.invokestatic(this.arraysCopyOf);
+		a.astore(2);
+		a.bind(fits);
+		a.aload(2);
+		a.iload(3);
+		a.aload(1);
+		a.aastore();
+		a.aload(2);
+		a.putstatic(Objects.requireNonNull(this.streamPositionsField));
+		a.aload(0);
+		a.areturn();
+		return a.finish();
+	}
+
+	/**
+	 * {@code _bumpStreamPosition(Object handle, int delta) -> null}. Advances the boxed
+	 * position of a binary file stream by {@code delta} bytes, self-contained enough for
+	 * the byte primitives to call it unconditionally after a transfer: a non-file handle
+	 * (a socket, a character file stream, a standard stream, a closed slot) is a no-op.
+	 */
+	private List<Integer> buildBumpStreamPosition() {
+		JvmAsm a = new JvmAsm();
+		// Slots: 0=handle, 1=delta (int), 2=idx (int), 3=arr, 4=paths, 5=val, 6=cur
+		// (long)
+		a.aload(0);
+		a.instanceOf(this.longClass);
+		int notHandle = a.label();
+		a.branch(Opcode.IFEQ, notHandle);
+		a.aload(0);
+		a.checkcast(this.longClass);
+		a.invokevirtual(this.longValue);
+		a.l2i();
+		a.istore(2);
+		a.getstatic(Objects.requireNonNull(this.streamPathsField));
+		a.astore(4);
+		a.aload(4);
+		int noPaths = a.label();
+		a.branch(Opcode.IFNULL, noPaths);
+		a.iload(2);
+		int idxNeg = a.label();
+		a.branch(Opcode.IFLT, idxNeg);
+		a.iload(2);
+		a.aload(4);
+		a.arraylength();
+		int idxOob = a.label();
+		a.branch(Opcode.IF_ICMPGE, idxOob);
+		a.aload(4);
+		a.iload(2);
+		a.aaload();
+		int notFile = a.label();
+		a.branch(Opcode.IFNULL, notFile);
+		// cur = (arr = _streamPositions) != null && idx < arr.length
+		// && (val = arr[idx]) != null ? ((Long) val).longValue() : 0L
+		a.getstatic(Objects.requireNonNull(this.streamPositionsField));
+		a.astore(3);
+		a.lconst0();
+		a.lstore(6);
+		a.aload(3);
+		int noArr = a.label();
+		a.branch(Opcode.IFNULL, noArr);
+		a.iload(2);
+		a.aload(3);
+		a.arraylength();
+		int idxOob2 = a.label();
+		a.branch(Opcode.IF_ICMPGE, idxOob2);
+		a.aload(3);
+		a.iload(2);
+		a.aaload();
+		a.astore(5);
+		a.aload(5);
+		int curNull2 = a.label();
+		a.branch(Opcode.IFNULL, curNull2);
+		a.aload(5);
+		a.checkcast(this.longClass);
+		a.invokevirtual(this.longValue);
+		a.lstore(6);
+		a.bind(noArr);
+		a.bind(idxOob2);
+		a.bind(curNull2);
+		// cur += delta
+		a.lload(6);
+		a.iload(1);
+		a.i2l();
+		a.ladd();
+		a.invokestatic(this.longValueOf);
+		// _storeStreamPosition(handle, Long.valueOf(cur)); return null;
+		a.aload(0);
+		a.swap();
+		a.invokestatic(Objects.requireNonNull(this.storeStreamPositionRef));
+		a.pop();
+		int done = a.label();
+		a.branch(Opcode.GOTO, done);
+		a.bind(notHandle);
+		a.bind(noPaths);
+		a.bind(idxNeg);
+		a.bind(idxOob);
+		a.bind(notFile);
+		a.bind(done);
+		a.aconstNull();
+		a.areturn();
+		return a.finish();
+	}
+
+	/**
+	 * {@code _filePosition(Object handle, Object pos) -> Object}. {@code pos == null} is
+	 * the one-argument query: the boxed byte position of the binary file stream, or null
+	 * where it cannot be told (a character file stream, a socket, a string stream, a
+	 * closed handle -- Common Lisp's "cannot be determined"). A boxed {@code Long} is the
+	 * set: re-open the file at that offset (flushing an output stream first, keeping
+	 * everything before the offset), answer "T" on success, null where it cannot.
+	 */
+	private List<Integer> buildFilePosition() {
+		JvmAsm a = new JvmAsm();
+		// Slots: 0=handle, 1=pos, 2=idx (int), 3=paths, 4=p, 5=entry, 6=arr, 7=n (long,
+		// slots 7-8), 9=stream/val
+		a.aload(0);
+		a.instanceOf(this.longClass);
+		int notHandle = a.label();
+		a.branch(Opcode.IFEQ, notHandle);
+		a.aload(0);
+		a.checkcast(this.longClass);
+		a.invokevirtual(this.longValue);
+		a.l2i();
+		a.istore(2);
+		a.getstatic(Objects.requireNonNull(this.streamPathsField));
+		a.astore(3);
+		a.aload(3);
+		int noPaths = a.label();
+		a.branch(Opcode.IFNULL, noPaths);
+		a.iload(2);
+		int idxNeg = a.label();
+		a.branch(Opcode.IFLT, idxNeg);
+		a.iload(2);
+		a.aload(3);
+		a.arraylength();
+		int idxOob = a.label();
+		a.branch(Opcode.IF_ICMPGE, idxOob);
+		a.aload(3);
+		a.iload(2);
+		a.aaload();
+		a.astore(4);
+		a.aload(4);
+		int noPathVal = a.label();
+		a.branch(Opcode.IFNULL, noPathVal);
+		// entry = _streams[idx]
+		a.getstatic(Objects.requireNonNull(this.streamsField));
+		a.iload(2);
+		a.aaload();
+		a.astore(5);
+		// Only a BINARY entry (an InputStream/OutputStream) has a byte position.
+		a.aload(5);
+		a.instanceOf(this.inputStreamClass);
+		int notBinaryIn = a.label();
+		a.branch(Opcode.IFEQ, notBinaryIn);
+		int isBinary = a.label();
+		a.branch(Opcode.GOTO, isBinary);
+		a.bind(notBinaryIn);
+		a.aload(5);
+		a.instanceOf(this.outputStreamClass);
+		int notBinaryOut = a.label();
+		a.branch(Opcode.IFEQ, notBinaryOut);
+		a.bind(isBinary);
+		// pos == null -> query
+		a.aload(1);
+		int setPos = a.label();
+		a.branch(Opcode.IFNONNULL, setPos);
+		a.getstatic(Objects.requireNonNull(this.streamPositionsField));
+		a.astore(6);
+		// return arr != null && idx < arr.length && arr[idx] != null ? arr[idx]
+		// : Long.valueOf(0L)
+		a.aload(6);
+		int noPosArr = a.label();
+		a.branch(Opcode.IFNULL, noPosArr);
+		a.iload(2);
+		a.aload(6);
+		a.arraylength();
+		int posIdxOob = a.label();
+		a.branch(Opcode.IF_ICMPGE, posIdxOob);
+		a.aload(6);
+		a.iload(2);
+		a.aaload();
+		a.astore(9);
+		a.aload(9);
+		int posNull = a.label();
+		a.branch(Opcode.IFNULL, posNull);
+		a.aload(9);
+		a.areturn();
+		a.bind(noPosArr);
+		a.bind(posIdxOob);
+		a.bind(posNull);
+		a.lconst0();
+		a.invokestatic(this.longValueOf);
+		a.areturn();
+		// --- the set half -----------------------------------------------------
+		a.bind(setPos);
+		a.aload(1);
+		a.checkcast(this.longClass);
+		a.invokevirtual(this.longValue);
+		a.lstore(7);
+		a.lload(7);
+		a.lconst0();
+		a.lcmp();
+		int posNeg = a.label();
+		a.branch(Opcode.IFLT, posNeg);
+		a.aload(0);
+		a.invokestatic(Objects.requireNonNull(this.forceOutputRef));
+		a.pop();
+		// input arm
+		a.aload(5);
+		a.instanceOf(this.inputStreamClass);
+		int notInput = a.label();
+		a.branch(Opcode.IFEQ, notInput);
+		// fis = new FileInputStream(p); fis.getChannel().position(n)
+		a.anew(this.fileInputStreamClass);
+		a.dup();
+		a.aload(4);
+		a.checkcast(this.stringClass);
+		a.invokespecial(this.fileInputStreamInit);
+		a.astore(9);
+		a.aload(9);
+		a.invokevirtual(Objects.requireNonNull(this.fileInputStreamGetChannel));
+		a.lload(7);
+		a.invokevirtual(Objects.requireNonNull(this.fileChannelPosition));
+		a.pop();
+		// _streams[idx] = new BufferedInputStream(fis); close the old entry
+		a.getstatic(Objects.requireNonNull(this.streamsField));
+		a.iload(2);
+		a.anew(this.bufferedInputStreamClass);
+		a.dup();
+		a.aload(9);
+		a.invokespecial(this.bufferedInputStreamInit);
+		a.aastore();
+		a.aload(5);
+		a.checkcast(this.inputStreamClass);
+		a.invokevirtual(this.inputStreamClose);
+		int setDone = a.label();
+		a.branch(Opcode.GOTO, setDone);
+		a.bind(notInput);
+		// output arm: FileChannel.open(Path.of(p), WRITE).position(n)
+		a.aload(4);
+		a.checkcast(this.stringClass);
+		a.invokestatic(Objects.requireNonNull(this.pathOf));
+		a.iconst(1);
+		a.anewarray(Objects.requireNonNull(this.openOptionClass));
+		a.dup();
+		a.iconst(0);
+		a.getstatic(Objects.requireNonNull(this.standardOpenOptionWrite));
+		a.aastore();
+		a.invokestatic(Objects.requireNonNull(this.fileChannelOpen));
+		a.astore(9);
+		a.aload(9);
+		a.lload(7);
+		a.invokevirtual(Objects.requireNonNull(this.fileChannelPosition));
+		a.pop();
+		// _streams[idx] = new BufferedOutputStream(Channels.newOutputStream(ch))
+		a.getstatic(Objects.requireNonNull(this.streamsField));
+		a.iload(2);
+		a.anew(this.bufferedOutputStreamClass);
+		a.dup();
+		a.aload(9);
+		a.invokestatic(Objects.requireNonNull(this.channelsNewOutputStream));
+		a.invokespecial(this.bufferedOutputStreamInit);
+		a.aastore();
+		a.aload(5);
+		a.checkcast(this.outputStreamClass);
+		a.invokevirtual(this.outputStreamClose);
+		a.bind(setDone);
+		// _storeStreamPosition(handle, Long.valueOf(n)); return "T";
+		a.lload(7);
+		a.invokestatic(this.longValueOf);
+		a.aload(0);
+		a.swap();
+		a.invokestatic(Objects.requireNonNull(this.storeStreamPositionRef));
+		a.pop();
+		emitLdc(a.code, this.tStr.index());
+		a.areturn();
+		// --- the nil exits ----------------------------------------------------
+		a.bind(notHandle);
+		a.bind(noPaths);
+		a.bind(idxNeg);
+		a.bind(idxOob);
+		a.bind(noPathVal);
+		a.bind(notBinaryOut);
+		a.aconstNull();
+		a.areturn();
+		// the negative-position error
+		a.bind(posNeg);
+		a.anew(this.runtimeExceptionClass);
+		a.dup();
+		a.ldcString(java.util.Objects.requireNonNull(this.negPositionMsg));
+		a.invokespecial(this.runtimeExceptionInit);
+		a.athrow();
+		return a.finish();
+	}
+
+	/**
 	 * Emits {@code <store> = ((String) <load>).substring(1, length - 1)} -- the quote
 	 * stripping every path-taking helper starts with (a rontolisp string value carries
 	 * its quotes).
@@ -2063,8 +2534,9 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.AASTORE);
 		// The path side table is released with the entry, so file-length on a CLOSED
 		// handle answers nil rather than the length the file happens to have now -- the
-		// interpreter (which removes the map entry in close) says the same.
-		if (this.fileMeta.fileLength()) {
+		// interpreter (which removes the map entry in close) says the same. file-position
+		// runs the same rule, so its position table is cleared too.
+		if (this.fileMeta.streamPaths()) {
 			code.add(Opcode.GETSTATIC);
 			emitU2(code, Objects.requireNonNull(this.streamPathsField).index());
 			int ifNoPathsPos = code.size();
@@ -2084,6 +2556,27 @@ final class JvmIoRuntimeBuilder {
 			code.add(Opcode.AASTORE);
 			patchBranch(code, ifNoPathsPos, code.size());
 			patchBranch(code, ifOutOfRangePos, code.size());
+		}
+		if (this.fileMeta.position()) {
+			code.add(Opcode.GETSTATIC);
+			emitU2(code, Objects.requireNonNull(this.streamPositionsField).index());
+			int ifNoPositionsPos = code.size();
+			code.add(Opcode.IFNULL);
+			emitU2(code, 0);
+			code.add(Opcode.ILOAD_1);
+			code.add(Opcode.GETSTATIC);
+			emitU2(code, this.streamPositionsField.index());
+			code.add(Opcode.ARRAYLENGTH);
+			int ifOutOfRangePosPos = code.size();
+			code.add(Opcode.IF_ICMPGE);
+			emitU2(code, 0);
+			code.add(Opcode.GETSTATIC);
+			emitU2(code, this.streamPositionsField.index());
+			code.add(Opcode.ILOAD_1);
+			code.add(Opcode.ACONST_NULL);
+			code.add(Opcode.AASTORE);
+			patchBranch(code, ifNoPositionsPos, code.size());
+			patchBranch(code, ifOutOfRangePosPos, code.size());
 		}
 		emitLdc(code, this.tStr.index());
 		code.add(Opcode.ARETURN);
@@ -2344,12 +2837,14 @@ final class JvmIoRuntimeBuilder {
 		emitU2(code, this.inputStreamRead.index());
 		code.add(Opcode.ISTORE);
 		code.add(4);
-		// if (b >= 0) return Long.valueOf((long) b);
+		// if (b >= 0) { advance the file stream's position; return Long.valueOf((long)
+		// b); }
 		code.add(Opcode.ILOAD);
 		code.add(4);
 		int ifEofPos = code.size();
 		code.add(Opcode.IFLT);
 		emitU2(code, 0);
+		emitBumpPosition(code, 0, () -> code.add(Opcode.ICONST_1));
 		code.add(Opcode.ILOAD);
 		code.add(4);
 		code.add(Opcode.I2L);
@@ -2814,6 +3309,9 @@ final class JvmIoRuntimeBuilder {
 		emitByteValue(code);
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.outputStreamWrite.index());
+		// advance a file stream's position after the byte lands on it (stdout and any
+		// other non-file designator no-op inside _bumpStreamPosition)
+		emitBumpPosition(code, 1, () -> code.add(Opcode.ICONST_1));
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.ARETURN);
 		return code;
@@ -2829,6 +3327,24 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.longValue.index());
 		code.add(Opcode.L2I);
+	}
+
+	/**
+	 * Emits a {@code _bumpStreamPosition(handle, delta)} call after a byte transfer, when
+	 * the program has asked for {@code file-position} at all. {@code pushDelta} leaves
+	 * the {@code int} byte count on the stack; the helper itself no-ops for any stream
+	 * that is not a binary file stream, so the call sites need no guard.
+	 */
+	private void emitBumpPosition(List<Integer> code, int handleSlot, Runnable pushDelta) {
+		if (!this.fileMeta.position()) {
+			return;
+		}
+		code.add(Opcode.ALOAD);
+		code.add(handleSlot);
+		pushDelta.run();
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code, java.util.Objects.requireNonNull(this.bumpStreamPositionRef).index());
+		code.add(Opcode.POP);
 	}
 
 	/**
@@ -3693,7 +4209,13 @@ final class JvmIoRuntimeBuilder {
 			patchBranch(code, gotoMoved3, code.size());
 		}
 		if (read) {
-			// return Long.valueOf(s + n)
+			// advance a file stream's position by the bytes just read; return
+			// Long.valueOf(s + n)
+			emitBumpPosition(code, 1, () -> {
+				code.add(Opcode.ALOAD);
+				code.add(BYTES);
+				code.add(Opcode.ARRAYLENGTH);
+			});
 			code.add(Opcode.ILOAD);
 			code.add(S);
 			code.add(Opcode.ILOAD);
@@ -3739,6 +4261,12 @@ final class JvmIoRuntimeBuilder {
 			emitU2(code, this.colField.index());
 			patchBranch(code, ifHandleOut, code.size());
 			patchBranch(code, ifEmpty, code.size());
+			// advance a file stream's position; return seq
+			emitBumpPosition(code, 1, () -> {
+				code.add(Opcode.ALOAD);
+				code.add(BYTES);
+				code.add(Opcode.ARRAYLENGTH);
+			});
 			code.add(Opcode.ALOAD_0);
 			code.add(Opcode.ARETURN);
 		}
