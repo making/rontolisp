@@ -131,25 +131,19 @@ public final class LispEquality {
 	}
 
 	/**
-	 * The {@code eq} predicate as object identity, except that floats and ratios
-	 * (distinct boxed objects, not interned like small integers or symbols) are never
-	 * {@code eq}, even to themselves.
+	 * The {@code eq} predicate: {@link #eql}. CLHS leaves {@code eq} on numbers and
+	 * characters implementation-dependent (a number may be copied at any time); here it
+	 * compares them by type and value on every backend, because box identity is not
+	 * something the backends can agree on -- an unboxed double local re-boxes on each
+	 * read on the JVM and keeps one struct on WASM, so an identity answer would depend on
+	 * the optimizer ({@code .kb/eq-numbers.md}). Aggregates and symbols compare exactly
+	 * as {@code eql} compares them, so the two predicates are one.
 	 * @param a the first value
 	 * @param b the second value
 	 * @return whether the two values are {@code eq}
 	 */
 	public static boolean eq(LispVal a, LispVal b) {
-		if ((a instanceof LispDouble && b instanceof LispDouble)
-				|| (a instanceof LispRatio && b instanceof LispRatio)) {
-			return false;
-		}
-		if (isIdentityAggregate(a) || isIdentityAggregate(b)) {
-			return a == b;
-		}
-		if (a instanceof LispNil || b instanceof LispNil) {
-			return a instanceof LispNil && b instanceof LispNil;
-		}
-		return a.equals(b);
+		return eql(a, b);
 	}
 
 	/**

@@ -9006,8 +9006,8 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunEqFloatsNotEq() throws Exception {
-		assertThat(compileAndRun("(print (eq 1.5 1.5))")).isEqualTo("NIL");
+	void compileAndRunEqFloatsByValue() throws Exception {
+		assertThat(compileAndRun("(print (eq 1.5 1.5))")).isEqualTo("T");
 	}
 
 	@Test
@@ -12041,7 +12041,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (if (= 2/4 1/2) 1 0))")).isEqualTo("1");
 		assertThat(compileAndRun("(print (if (= 1/2 0.5) 1 0))")).isEqualTo("1");
 		assertThat(compileAndRun("(print (eql 1/2 1/2))")).isEqualTo("T");
-		assertThat(compileAndRun("(print (eq 1/2 1/2))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (eq 1/2 1/2))")).isEqualTo("T");
 		assertThat(compileAndRun("(print (max 1/2 1/3))")).isEqualTo("1/2");
 		assertThat(compileAndRun("(print (min 1/2 1/3))")).isEqualTo("1/3");
 		assertThat(compileAndRun("(print (abs -1/2))")).isEqualTo("1/2");
@@ -16322,7 +16322,7 @@ class JvmLispCompilerTest {
 			.isEqualTo("(T 1 2 NIL NIL 3)\n(NIL 1 2 NIL 1)\n(NIL T 2 2 5 B)\n(:A :OTHER :ATOM :ATOM)\n"
 					+ "((NIL T T NIL NIL) (NIL NIL T NIL T) (T T NIL T NIL))\n(3 1 0)\n(:STOPPED :END :END)\n"
 					+ "(:NIL :EARLY)\n(:AB :AB :OTHER)\n(1 1 2 3)\n(:LT :NOT :NOT :NOT)\n(1 4 5 NIL)\n(4 3 T)\n"
-					+ "(2 1 0)\n(T T T T T 1 2 1)\n(:HI :NO :ONETWO :ONETWO :NO)");
+					+ "(2 1 0)\n(T T T T T 1 1 1)\n(:HI :NO :ONETWO :ONETWO :NO)");
 	}
 
 	@Test

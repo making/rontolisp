@@ -2650,9 +2650,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<JvmHashRuntimeBuilder.HashMethod> hashMethods = usesHashTables
 				? JvmHashRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, longValueOf,
 						Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQUAL)),
-						Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQV)),
-						Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQ_STRICT)),
-						strvMethod, instanceLayoutClass, usesEqualpHashTables, usesIdentityHashTables)
+						Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQV)), strvMethod,
+						instanceLayoutClass, usesEqualpHashTables, usesIdentityHashTables)
 				: List.of();
 
 		// Build the array runtime helpers, only when the program uses arrays. Includes

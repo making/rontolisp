@@ -17448,6 +17448,33 @@ cases:
       (2 1)
       (10 1)
 
+  # eq on NUMBERS is eql on every backend (.kb/eq-numbers.md): a float, ratio or
+  # complex compares by type and value, never by box identity, so no optimizer that
+  # unboxes or re-boxes can change the answer. -0.0 and 0.0 stay distinct, as for eql.
+  - name: eq-on-numbers-is-eql
+    source: |
+      (defvar *eqn-n* (length (list 1 2)))
+      (defvar *eqn-x* (* 1.5d0 *eqn-n*))
+      (print (list (eq *eqn-x* *eqn-x*) (let ((y *eqn-x*)) (eq y y))))
+      (print (list (eq (* 1.5d0 *eqn-n*) (* 1.5d0 *eqn-n*))
+                   (eq (float *eqn-n* 1.0f0) (float *eqn-n* 1.0f0))
+                   (eq (/ 1 *eqn-n*) (/ 1 *eqn-n*))
+                   (eq (complex 1 *eqn-n*) (complex 1 *eqn-n*))
+                   (eq (expt 2 (* 50 *eqn-n*)) (expt 2 (* 50 *eqn-n*)))))
+      (print (list (eq 0.0d0 (- 0.0d0)) (eq 3.0d0 3) (eq 1/2 0.5d0)))
+      (let ((eqn-h (make-hash-table :test 'eq)))
+        (setf (gethash (* 1.5d0 *eqn-n*) eqn-h) :found)
+        (setf (gethash (/ 1 *eqn-n*) eqn-h) :half)
+        (print (list (gethash (* 1.5d0 *eqn-n*) eqn-h) (gethash (/ 1 *eqn-n*) eqn-h))))
+      (print (list (member (* 1.5d0 *eqn-n*) (list 1 3.0d0) :test #'eq)
+                   (position (/ 1 *eqn-n*) (list 1 1/2) :test #'eq)))
+    expected: |
+      (T T)
+      (T T T T T)
+      (NIL NIL NIL)
+      (:FOUND :HALF)
+      ((3.0) 1)
+
 # Cases that cannot join the corpus above: one that ENDS the program, one whose
 # subject a backend does not have at all. Each is compiled and run on its own.
 # What an ending case asserts is the standard-error report plus a non-zero exit

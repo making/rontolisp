@@ -66,6 +66,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [instance-syntax.md](instance-syntax.md) -- the one instance value model behind defstruct/CLOS/conditions, `%obj-*`, `#S(...)`/`#<...>`
 - [clos.md](clos.md) -- static CLOS subset: registry, dispatcher generation, initialization protocol, runtime `typep`
 - [characters-code-points.md](characters-code-points.md) -- character = Unicode code point on every backend
+- [eq-numbers.md](eq-numbers.md) -- `eq` is `eql` on every backend: numbers and characters by type and value, never box identity
 - [string-index-cost.md](string-index-cost.md) -- a character index costs the same wherever it lands; the per-string cursor
 - [string-accumulate-cost.md](string-accumulate-cost.md) -- building one string out of N pieces costs the total length, not the sum of the prefixes
 - [hash-tables.md](hash-tables.md) -- per-backend representation, `equalp` key fold, depth cap and work budget
