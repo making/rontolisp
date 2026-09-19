@@ -29,8 +29,6 @@
 - `with-input-from-file` and `with-output-to-file` close the file however the thunk is
   left, an escape or a raised object included (Gauche leaves it open). A file that cannot
   be opened for output raises an error `file-error?` answers `#t` for, as R7RS says.
-- Close an output file port before the program ends: on the interpreter and the JVM, what
-  a port left open still buffers is not written (WebAssembly writes it).
 - A record prints in Common Lisp's `#S(...)` syntax. `equal?` compares records by
   identity. A `define-record-type` in a body makes one type where it is written, not a
   new one each time the body runs (Gauche does the latter).

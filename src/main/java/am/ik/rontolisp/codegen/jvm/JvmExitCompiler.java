@@ -48,6 +48,13 @@ final class JvmExitCompiler {
 		ctx.emitU2(ctx.numberClass.index());
 		ctx.emit(Opcode.INVOKEVIRTUAL);
 		ctx.emitU2(intValue.index());
+		// System.exit runs no finally and main's return is never reached, so the output
+		// files the program never closed are flushed here (a program that opens none has
+		// no _flushStreams and keeps its bytes).
+		if (ctx.flushStreams != null) {
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(ctx.flushStreams.index());
+		}
 		MethodrefConstant exit = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8("java/lang/System")),
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("exit"), ctx.cp.addUtf8("(I)V")));
 		ctx.emit(Opcode.INVOKESTATIC);
