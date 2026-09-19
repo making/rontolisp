@@ -5618,18 +5618,35 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalIntegerDecodeFloat() {
-		assertThat(eval("(multiple-value-list (integer-decode-float 1.5))").print()).isEqualTo("(3 -1 1.0)");
-		assertThat(eval("(multiple-value-list (integer-decode-float -0.5))").print()).isEqualTo("(1 -1 -1.0)");
-		assertThat(eval("(multiple-value-list (integer-decode-float 0.0))").print()).isEqualTo("(0 0 1.0)");
-		assertThat(eval("(multiple-value-list (integer-decode-float 2.0))").print()).isEqualTo("(1 1 1.0)");
-		assertThat(eval("(multiple-value-list (integer-decode-float 6.5))").print()).isEqualTo("(13 -1 1.0)");
-		assertThat(eval("(nth-value 0 (integer-decode-float 1.5))").print()).isEqualTo("3");
-		assertThat(eval("(nth-value 1 (integer-decode-float 1.5))").print()).isEqualTo("-1");
-		assertThat(eval("(nth-value 2 (integer-decode-float -1.5))").print()).isEqualTo("-1.0");
-		// A subnormal decodes exactly; compared piece-wise so the exact
-		// significand never prints (the rational would hang the printer).
+		// CLHS: the sign is an INTEGER (a float only for decode-float), and the
+		// significand is the float's significand scaled to float-digits bits --
+		// 53 for a normal double, exactly as SBCL answers (checked against
+		// (integer-decode-float ...) in SBCL 2.2.9). rontolisp used to strip
+		// factors of two from the significand and answer a float sign
+		// (.todo/896); a stripped, odd significand is wrong for any of these
+		// forms whose true 53-bit significand happens to be even.
+		assertThat(eval("(multiple-value-list (integer-decode-float 1.0))").print())
+			.isEqualTo("(4503599627370496 -52 1)");
+		assertThat(eval("(multiple-value-list (integer-decode-float 2.0))").print())
+			.isEqualTo("(4503599627370496 -51 1)");
+		assertThat(eval("(multiple-value-list (integer-decode-float -0.5))").print())
+			.isEqualTo("(4503599627370496 -53 -1)");
+		assertThat(eval("(multiple-value-list (integer-decode-float 1.5))").print())
+			.isEqualTo("(6755399441055744 -52 1)");
+		assertThat(eval("(multiple-value-list (integer-decode-float 0.0))").print()).isEqualTo("(0 0 1)");
+		assertThat(eval("(multiple-value-list (integer-decode-float 6.5))").print())
+			.isEqualTo("(7318349394477056 -50 1)");
+		assertThat(eval("(nth-value 0 (integer-decode-float 1.5))").print()).isEqualTo("6755399441055744");
+		assertThat(eval("(nth-value 1 (integer-decode-float 1.5))").print()).isEqualTo("-52");
+		assertThat(eval("(nth-value 2 (integer-decode-float -1.5))").print()).isEqualTo("-1");
+		// A subnormal's significand is shorter than 53 bits (float-digits), so the raw
+		// mantissa is not padded with extra factors of two: the smallest positive
+		// subnormal decodes to a 1-bit significand, matching SBCL exactly.
 		assertThat(eval("(nth-value 0 (integer-decode-float 4.9406564584124654d-324))").print()).isEqualTo("1");
 		assertThat(eval("(nth-value 1 (integer-decode-float 4.9406564584124654d-324))").print()).isEqualTo("-1074");
+		// A subnormal whose mantissa is even is not stripped either.
+		assertThat(eval("(multiple-value-list (integer-decode-float 9.881312916824931d-324))").print())
+			.isEqualTo("(2 -1074 1)");
 		// The largest double: a 53-bit significand and a small exponent.
 		assertThat(eval("(nth-value 0 (integer-decode-float 1.7976931348623157d308))").print())
 			.isEqualTo("9007199254740991");
@@ -5637,7 +5654,7 @@ class LispEvaluatorTest {
 		// Recomposition is the identity, exactly.
 		assertThat(eval("(multiple-value-bind (s e sign) (integer-decode-float 6.5) (= (* s (expt 2 e) sign) 6.5))")
 			.print()).isEqualTo("T");
-		assertThat(eval("(funcall #'integer-decode-float 1.5)").print()).isEqualTo("3");
+		assertThat(eval("(funcall #'integer-decode-float 1.5)").print()).isEqualTo("6755399441055744");
 		assertThatThrownBy(() -> eval("(integer-decode-float)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("expects 1 argument");
 		assertThatThrownBy(() -> eval("(integer-decode-float 1.0 2.0)")).isInstanceOf(LispEvalException.class)

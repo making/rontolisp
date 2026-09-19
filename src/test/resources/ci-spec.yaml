@@ -4198,10 +4198,13 @@ cases:
   # Slice C (.todo/037): the logcount population count (negatives count 0
   # bits), integer-decode-float's three values, and rationalize. The
   # rationalize rows stay inside what every backend holds: integer-valued
-  # floats answer their exact integer through the fast path, integers and
-  # ratios pass through; a fractional float needs big-denominator interval
-  # fractions, which trap fail-stop on WASM-GC exactly as (/ 1 (ash 1 52))
-  # does, so 0.1-scale answers are pinned on the interpreter/JVM unit tests.
+  # floats answer their exact integer through a fast path that runs BEFORE
+  # integer-decode-float (.todo/896 -- that function's significand is now the
+  # full (float-digits ax)-bit value, so its exponent is no longer reliably
+  # non-negative for a whole-number float), integers and ratios pass through;
+  # a fractional float needs big-denominator interval fractions, which trap
+  # fail-stop on WASM-GC exactly as (/ 1 (ash 1 52)) does, so 0.1-scale
+  # answers are pinned on the interpreter/JVM unit tests.
   - name: slice-c-logcount
     source: |
       (print (logcount 0))
@@ -4232,14 +4235,16 @@ cases:
       (print (multiple-value-list (integer-decode-float 6.5)))
       (print (nth-value 1 (integer-decode-float 6.5)))
       (print (funcall #'integer-decode-float 1.5))
+      (print (multiple-value-list (integer-decode-float 4.9406564584124654d-324)))
     expected: |
-      (3 -1 1.0)
-      (1 -1 -1.0)
-      (0 0 1.0)
-      (1 1 1.0)
-      (13 -1 1.0)
-      -1
-      3
+      (6755399441055744 -52 1)
+      (4503599627370496 -53 -1)
+      (0 0 1)
+      (4503599627370496 -51 1)
+      (7318349394477056 -50 1)
+      -50
+      6755399441055744
+      (1 -1074 1)
   - name: slice-c-rationalize
     source: |
       (print (rationalize 2.0))
