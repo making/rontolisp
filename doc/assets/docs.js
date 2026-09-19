@@ -1,12 +1,13 @@
 /*
- * Runnable Lisp cells and the search dialog for the documentation site.
+ * Runnable Lisp and Scheme cells and the search dialog for the documentation site.
  *
  * Each ".code-cell" is an editable textarea plus a Run button. The rontolisp
  * runtime (the same WebAssembly build that powers the playground,
  * rontoplayground.js) is loaded lazily on the first Run click anywhere on the
  * page and shared by every cell -- nothing heavy loads on page view. One
- * persistent evaluator is shared across the page's cells, so a definition in an
- * earlier cell is visible to later ones (use "Reset runtime" to start over).
+ * persistent evaluator is shared across the page's Lisp cells, so a definition in
+ * an earlier cell is visible to later ones (use "Reset runtime" to start over); a
+ * Scheme cell is a program of its own (evalCell).
  *
  * The search (Ctrl+K or /) reads the two index files docgen writes beside the
  * pages of this language tree. Tier 1 (search-index.json -- titles, operator
@@ -66,6 +67,31 @@
 		out.classList.toggle("err", !!isErr);
 	}
 
+	// What a cell runs, as DocExamplesTest checks it. A lisp cell (and one from a site
+	// built before cells carried a language) shares the page's one interpreter. A scheme
+	// cell runs on a fresh interpreter reading the cell's stdin: a whole program, or,
+	// with a "; =>" annotation, a REPL session echoing every form. The page's
+	// "; file: NAME" blocks are the files it includes, handed over first.
+	function evalCell(cell, src) {
+		var lang = cell.getAttribute("data-lang") || "lisp";
+		globalThis.rontoSetLanguage(lang);
+		if (lang !== "scheme") return globalThis.rontoEval(src);
+		putPageFiles();
+		var stdinEl = cell.querySelector(".cell-stdin");
+		var stdin = stdinEl ? stdinEl.value : "";
+		return src.indexOf("; =>") >= 0 ? globalThis.rontoRunSession(src, stdin) : globalThis.rontoRunProgram(src, stdin);
+	}
+
+	var pageFilesPut = false;
+	function putPageFiles() {
+		if (pageFilesPut) return;
+		pageFilesPut = true;
+		Array.prototype.forEach.call(document.querySelectorAll("code.language-scheme"), function (code) {
+			var file = /^;+ file: (\S+)/.exec(code.textContent);
+			if (file) globalThis.rontoPutFile(file[1], code.textContent);
+		});
+	}
+
 	function runCell(cell) {
 		var button = cell.querySelector(".run");
 		var cellStatus = cell.querySelector(".cell-status");
@@ -77,7 +103,7 @@
 			function () {
 				var res;
 				try {
-					res = globalThis.rontoEval(src);
+					res = evalCell(cell, src);
 				} catch (e) {
 					showOutput(cell, String(e), true);
 					button.disabled = false;

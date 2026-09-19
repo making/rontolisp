@@ -13,8 +13,8 @@ names, so one program may mix languages file by file (`LoadInliner.spliceFile` o
 compile path, `LispEvaluator.loadFile` on the interpreter). The entry source's
 language is its extension or the override (`CompileFrontend.run`,
 `RontoLispCli.interpret`, `JvmSourceCompiler.sourceLanguage` for embedders). The REPL
-has no file: its language is the override, else the default. The browser playground has
-no language pick yet and reads the default; its compile buttons keep the error-mode read
+has no file: its language is the override, else the default. The browser playground's
+language is its page's pick ("The browser" below); its compile buttons keep the error-mode read
 (`readStrict`) because their reduced frontend has no marker-resolution pass.
 
 ## Reading without a file: `SourceSession`
@@ -24,9 +24,31 @@ A consumer that reads one buffer at a time asks the LANGUAGE four things, throug
 (core forms per top-level form, plus whether its value is worth echoing), `print` (the
 language's own `write`) and `prompt` (`CL-USER> ` follows the current package, `scheme> `
 has none). It is a session because a language may carry state between buffers; Scheme
-does (`.kb/scheme-frontend.md`, "A session"), Common Lisp keeps none here. `cli/ReplBuffer`
-is the one consumer today, shared by both REPL drivers; the playground's `evalLine` is the
-same shape and takes this seam when it gains a language pick.
+does (`.kb/scheme-frontend.md`, "A session"), Common Lisp keeps none here. Two consumers:
+`cli/ReplBuffer` (both CLI REPL drivers) and `eval/PlaygroundRepl` (the browser).
+
+## The browser (`eval/PlaygroundRepl`, 2026-09-19, `.todo/893`)
+
+The playground's REPL and the doc site's Run cells, in the language picked by
+`rontoSetLanguage` (`"lisp"`, `"scheme"`; `parse` names). In the main tree, not beside the
+`@JS` bootstrap (`src/web/java/.../RontoPlayground`, now a thin adapter), so the JVM suite
+runs what the browser runs (`PlaygroundReplTest`, and `DocExamplesTest.runScheme`).
+
+- One evaluator, one `SourceSession` per language made on first use: switching keeps every
+  definition, and a Scheme session keeps what its earlier buffers defined. The pick switches
+  the reader, not the names: Scheme's `(|TWICE| 21)` reaches `s%TWICE`, not the Common Lisp
+  `twice` (measured 2026-09-19).
+- `eval` echoes the LAST step's values only (`Step.echoes` of that step), not
+  `ReplBuffer`'s every-form loop: a Common Lisp Run cell is a setup plus an expression whose
+  FINAL value is the annotated one. Echo text is `SourceSession.echo` (the print-object
+  route for Common Lisp, as the CLI REPL; it was `print()` before).
+- `run` (a whole program read as a file) and `transcript` (every form echoed after a fresh
+  line, the piped CLI REPL) run on a FRESH instance with the cell's stdin: the doc site's
+  Scheme cells (`.kb/documentation-site.md`).
+- The compile buttons read the pick through `readStrict(source, features, loader)`; its
+  Scheme arm reads the uploaded files an `include` / `define-library` names.
+- JS calls exported with `Function` / `BiFunction` only; a three-argument call is avoided by
+  making the language a pick rather than a parameter.
 
 **How strictly a language is read is program-wide, not per file**, and travels with the
 seam: `eval/SourceStandards` (today one member, the `--scheme-standard` value,

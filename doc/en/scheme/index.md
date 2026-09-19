@@ -21,6 +21,10 @@ rontolisp prog.txt --source-language scheme        # any extension
 
 `--no-gc` is refused: that backend has no pairs, symbols or closures.
 
+The examples in this section run in your browser: **Run** runs each one as a program of its
+own, on a fresh interpreter. The [playground](../../../playground.html) reads Scheme when you
+pick it under **language**.
+
 ```scheme
 (import (scheme base) (scheme write))
 

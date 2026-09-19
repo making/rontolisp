@@ -228,7 +228,7 @@ the macro expander.
   cleared first and read back after, so a top-level `defun`/`in-package` still evaluates at top
   level. Resolution runs ONCE: package resolution is not idempotent under a `:shadow` package.
 - `ReplBuffer.eval` echoes EVERY form right after it runs (as SBCL does);
-  `RontoPlayground.evalLine` (`src/web/java`, also the doc site's "Run" cells) echoes the LAST.
+  `PlaygroundRepl.eval` (the browser REPL, also the doc site's Lisp "Run" cells) echoes the LAST.
 - Diffed against SBCL 2.2.9. Remaining difference: `print` omits CL's leading newline /
   trailing space. A helper answering `(values)` echoes nothing, a built-in whose callback
   published echoes its own one value. ([[gensym-macroexpand]] for

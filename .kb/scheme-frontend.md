@@ -26,7 +26,8 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
   `rontolisp::%scheme-` FUNCTION, `CompileFrontend.expand` splices it innermost (beside
   `TokenizersLibrary`, INSIDE the prelude whose string comparisons it uses) and
   `LibraryDefunPruner` drops what stays unreachable. The playground's chain has the splice
-  too; a `.scm` reaches the playground through `(load ...)` of an uploaded file. Some
+  too; the playground reads Scheme when its page picks it, and the doc site's
+  ```` ```scheme ```` fences are Run cells (`.kb/source-language.md`, "The browser"). Some
   definitions are GENERATED from the front end's tables and appended to the source's
   forms (`Scheme.runtimeForms`): `eval`'s procedure table and `environment`'s library
   predicate ("`eval`" below), the `(scheme char)` tables, and the feature list
@@ -1658,7 +1659,9 @@ leg in a child process, since `exit` there is `System.exit`; plus `emergency-exi
 legs asserting it did not),
 `DocExamplesTest` (a ```` ```scheme ```` fence is a
 whole program whose stdout is asserted; one with a `; =>` runs through a REPL session and
-each annotation is the form's echo), `SchemeReferenceTest` (the reference, below).
+each annotation is the form's echo; a whole-program block runs through `PlaygroundRepl.run`,
+what the site's Run cell runs), `PlaygroundReplTest` (the browser's REPL and cells in
+Scheme), `SchemeReferenceTest` (the reference, below).
 Probes behind the first version of this table: `.todo/artefacts/825-minimal-experimental-scheme-front-end/`.
 
 ## The reference (`doc/<lang>/scheme/reference/`, `.todo/860`)
