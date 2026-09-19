@@ -82,6 +82,12 @@ even though both WASM backends can create directories since `.todo/257` (the wal
 LISTING over a known tree, not creation). `wild-pathnames`' walk is the zero-level branch over a HARNESS-STAGED `./wpc-sub/`
 (`testsupport/CorpusFixtures`, driven by `CiSpecE2eTest` and `JvmClassShakerCorpusTest`): a corpus
 walk is BOUNDED BY CONSTRUCTION, because a `**/` anchored at the run directory reads EVERYTHING
-below the process CWD -- the project root for an in-process corpus run, and a filter fixes the
-assertion, not the work. The flat `./*.*` / `uiop:directory-files "."` reads of the sibling case are
-ONE listing of the run directory and deliberate.
+below the process CWD, and a filter fixes the assertion, not the work. The flat `./*.*` /
+`uiop:directory-files "."` reads of the sibling case are ONE listing of the run directory and
+deliberate. Both drivers now give the run directory to the run: `CiSpecE2eTest` runs every leg in
+its `@TempDir` and `JvmClassShakerCorpusTest` runs the program in a subprocess, one fresh directory
+each. It used to run in process, so in the PROJECT ROOT, and the day something else deleted
+`./wpc-sub/` between its two runs the walk answered `NIL` and the guard went red for a reason that
+was nowhere near the shaker (`.kb/test-execution.md`, "A test that runs a program in the project
+root"). That the answer is `NIL` rather than an error is this file's own contract: the primitive
+is `File.list()` and a directory it cannot read is a directory that is not there.

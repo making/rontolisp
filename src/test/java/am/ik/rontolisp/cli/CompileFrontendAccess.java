@@ -24,8 +24,14 @@ import org.jspecify.annotations.Nullable;
  * census of pass names could have caught. The {@code asdf:load-system} library E2Es
  * ({@code AsdfLibraryE2eSupport}, {@code JvmLibraryMethodSizeTest}) carried a third and a
  * fourth copy, stopped at six passes: the coverage for compiling a real third-party tree
- * was compiling a program no user could build. The order now lives once, in
- * {@link CompileFrontend#expand}, and every test reaches it through here.
+ * was compiling a program no user could build. A fifth survived all of that unnoticed --
+ * {@code JvmOsrBackedgeCorpusTest}, found on 2026-09-19 still building its own corpus,
+ * eleven splices behind and printing ten {@code TOKENIZER:... is undefined} warnings to
+ * the console on every green run, which is verbatim the shape .todo/688 was opened for.
+ * <b>A copy announces itself in the console output of a PASSING test, so the census that
+ * finds one is a grep for the pass names, not a reading of what each guard claims.</b>
+ * The order now lives once, in {@link CompileFrontend#expand}, and every test reaches it
+ * through here.
  *
  * <p>
  * This class lives in the {@code am.ik.rontolisp.cli} package so that
