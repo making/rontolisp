@@ -238,8 +238,6 @@ the macro expander.
   compile path, so a USER MACRO expanding to `(values ...)` yields all values only when compiled.
 - A program's own `defun` of a `cl` function name that answers several values is classified as
   one value on the compile paths ("A tail settles the channel", residue).
-- The Scheme front end's loops: a named `let` that exits through a CALL answers that call's
-  first value only ([[scheme-frontend]], "Destination-driven lowering").
 - `multiple-value-call` with a builtin `#'name` inherits the wrapper arity:
   `+`/`-`/`*`/`/`/`list`/`min`/`max` are variadic, every other multi-arg builtin is fixed
   unary/binary (a mismatched funcall yields nil on JVM, traps on WASM).
@@ -253,8 +251,8 @@ IntConv compilers, the fused-local-call clear in the FUNCALL arm); `Jvm`/`WasmLa
 `FreeVarAnalyzer` both walks (expand before walking, flet precedent);
 `UserMacroExpander.expandAll` + `LispMacroExpander.rewriteLocalCalls` keeping the mv-bind variable
 list verbatim; `BuiltinFunctionWrappers`; `SchemeLowering.exitGuardValue` (the session echo
-holds the entry's values as a list across the exit catch) and `ValueCount` (a loop with a
-`(values ...)` leaf carries a list and answers `values-list`).
+holds the entry's values as a list across the exit catch) and `SchemeValueCount` (a loop's
+leaf that may answer other than one value leaves through a `return-from`).
 
 ## Tests
 `LispEvaluatorTest` (`evalValues*`, `evalMultipleValue*`, `evalNthValue`,

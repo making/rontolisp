@@ -166,6 +166,18 @@ class SchemeLoweringTest {
 	}
 
 	@Test
+	void aLoopLeavesThroughItsBlockWhereTheLeafMayAnswerSeveralValues() {
+		// (setq R (f)) would keep f's first value: the call returns from the loop's
+		// block with all of them, while a one-valued leaf still stores.
+		assertThat(lowered("(define (last-or l) (let loop ((l l)) "
+				+ "(cond ((null? l) (f)) ((null? (cdr l)) (car l)) (else (loop (cdr l))))))"))
+			.isEqualTo("""
+					(DEFUN |last-or| (|l|) (BLOCK %SCM-B3 (LET ((|l| |l|) (%SCM-R3 NIL)) (TAGBODY %SCM-L2 \
+					(IF (NULL |l|) (RETURN-FROM %SCM-B3 (|f|)) (IF (NULL (CDR |l|)) (SETQ %SCM-R3 (CAR |l|)) \
+					(PROGN (SETQ |l| (CDR |l|)) (GO %SCM-L2))))) %SCM-R3)))""");
+	}
+
+	@Test
 	void aLoopWhoseBodyMakesAClosureRebindsItsVariablesPerIteration() {
 		assertThat(lowered("(let loop ((i 0)) (if (< i 3) (begin (keep (lambda () i)) (loop (+ i 1))) 'done))"))
 			.isEqualTo("""

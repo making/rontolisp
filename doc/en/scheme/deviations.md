@@ -10,10 +10,6 @@
   `dynamic-wind` runs its `before` exactly once.
 - `call-with-values` is a direct binding when both arguments are written as `lambda`
   expressions; any other shape goes through a list.
-- A loop -- a named `let`, a procedure whose only calls to itself are tail calls -- that
-  exits through a call answers that call's first value only: `(let loop ((l l)) (if (null?
-  l) (f) (loop (cdr l))))` answers one value however many `f` returns. A loop that exits
-  through `(values ...)` answers them all.
 - **Exceptions are caught after the unwinding.** A `guard` runs its clauses after its body
   has been left, so when none is taken the object is raised again from the `guard`: a
   handler outside it cannot resume a `raise-continuable` of the body. The handler of a
