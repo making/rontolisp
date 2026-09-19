@@ -500,9 +500,11 @@ per backend, generated from the JDK: `.kb/characters-code-points.md`) and are us
   (also `define-values`, `let-values`, `import`, the syntax the reader refuses),
   `Wrong number of arguments: (a b) given (1)`, `The object is not applicable: 3`,
   `eval: not an environment: 2`, `environment: library is not available: (scheme time)`,
-  `Syntactic keyword may not be used as an expression: if`. A first-class `values`
-  (every `values` inside `eval` is one) answers its primary only on the compiled
-  backends (`.kb/multiple-values.md`).
+  `Syntactic keyword may not be used as an expression: if`. **Superseded (2026-09-19):**
+  a first-class `values` inside `eval` was one value on the compiled backends; since the
+  `%mv-spill` channel became exact (`.kb/multiple-values.md`) it answers every value there
+  too, the same as the interpreter and the same as `(apply values ...)` or `values`
+  through a variable. Pinned by the `multiple-values` case of `scheme-spec.yaml`.
 - Corpus (2026-09-17, `run.py`): file mode 1,347 and REPL mode 1,347 samples exiting 0
   before and after, no exit or stdout change; the one `eval` sample
   (`chapter4/section4/subsection4/14_execute.scm`, the query system's `lisp-value`) is a
