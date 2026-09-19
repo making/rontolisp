@@ -1103,12 +1103,12 @@ binary output port's the bytes written, newest first. `close-port` clears `open`
 - **A failed open is a `file-error?` object on every backend**: the opener wraps `open`
   in `(handler-case .. (error () nil))` and raises `%scheme-file-error-condition`
   (`%scheme-error` + CL `file-error`, like the read error) with message `who: cannot open
-  file:` and the path as irritant. Needed because Common Lisp's `open` signals a
-  SIMPLE-ERROR on all four backends (measured 2026-09-19: interpreter
-  `OPEN: cannot open file ...`, JVM the raw `FileNotFoundException` text, wasm `open:
-  cannot open file`), and `delete-file` of a missing file too (`DELETE-FILE: cannot
-  delete ...`, prelude) -- ANSI says `file-error`; `.todo/890` has the CL fix. The
-  handler stays right after it.
+  file:` and the path as irritant. Common Lisp's `open` / `delete-file` signal a CL
+  `file-error` on all four backends now (`.kb/read-load-streams.md`), but the Scheme
+  object still has to be built for its message and irritants, and the clause stays
+  `error`, not `file-error`: a `--no-wasi` module stubs `open` to a plain
+  "requires WASI" error (`NoWasiFilesystemStubs`), which must still become a
+  `file-error?` object here.
 - **Closing really closes**: `%scheme-release-port` `close`s the stream of an open file
   port, from `close-port` & co and `call-with-port`. `with-input-from-file` /
   `with-output-to-file` are `%scheme-with-file`: `%scheme-parameterize` of the port

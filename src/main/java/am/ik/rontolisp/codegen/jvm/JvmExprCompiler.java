@@ -23,6 +23,7 @@ import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.MutableStringProducers;
+import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.rontolisp.compiler.StreamDesignators;
 
 import am.ik.jvm.Opcode;
@@ -779,9 +780,22 @@ final class JvmExprCompiler {
 				case LispNames.MAKE_SYNONYM_STREAM ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeSynonymStream(cons), ctx, className);
 				case LispNames.OPEN -> {
-					JvmOpenCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx, className);
+					// A failure signals a file-error (expandOpenFileErrorSignal), which
+					// unwraps a pathname designator itself. A computed option dispatches
+					// onto literal open leaves first, and each leaf lowers so.
+					LispVal checked = OpenModes.lowerRuntimeOptions(cons) == null
+							? LispMacroExpander.expandOpenFileErrorSignal(cons, ctx.mayUseInstances) : null;
+					if (checked != null) {
+						JvmExprCompiler.compileExpr(checked, ctx, className);
+					}
+					else {
+						JvmOpenCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx, className);
+					}
 					wrapStreamValue(ctx, className, am.ik.rontolisp.LispLayout.Kinds.FILE);
 				}
+				case LispNames.OPEN_OR_NIL_INTERNAL -> JvmOpenCompiler.compile(cons, ctx, className);
+				case LispNames.FILE_ERROR_INTERNAL -> JvmExprCompiler.compileExpr(LispMacroExpander.lowerFileError(cons,
+						ctx.closRegistry, ctx.hasLandingPad && ctx.mayUseInstances), ctx, className);
 				case LispNames.CLOSE -> {
 					// Closing a SYNONYM stream closes the synonym, not what it forwards
 					// to -- which is nothing to do; an OPEN stream resolves to its

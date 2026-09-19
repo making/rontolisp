@@ -3,9 +3,6 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.LispNames;
-import am.ik.rontolisp.LispString;
-import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.wasm.Instruction;
@@ -21,11 +18,11 @@ import am.ik.wasm.Instruction;
  * the raw binary modes 2/3 would mis-select the write oflags/rights.
  *
  * <p>
- * {@code _open} answers nil when {@code path_open} failed, and the null check + signal
- * live HERE rather than in the runtime helper: {@code %ERROR} compiles to a catchable
- * {@code throw} in EH mode (and to the same trap as before outside it), so
- * {@code (handler-case (open ...) (error () ...))} finally behaves on WASM the way it
- * does on the other three backends. See {@code .kb/read-load-streams.md}.
+ * What this compiles is {@code %open-or-nil}, the nil-answering half of {@code open}:
+ * {@code _open} answers nil when {@code path_open} failed and the nil is passed on, and
+ * the shared lowering around it ({@code LispMacroExpander.expandOpenFileErrorSignal})
+ * tests it and signals the {@code file-error}, identically on every backend. See
+ * {@code .kb/read-load-streams.md}.
  */
 final class WasmOpenCompiler {
 
@@ -53,21 +50,17 @@ final class WasmOpenCompiler {
 		int fd = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(fd);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(fd);
-		ctx.writer.write(Instruction.REF_IS_NULL);
-		ctx.writer.write(Instruction.IF, 0x40);
-		// Stack-polymorphic in both modes (unreachable / throw), so the void block type
-		// is correct either way.
-		WasmErrorCompiler.compile(new LispCons(new LispSymbol(LispNames.ERROR_INTERNAL),
-				new LispCons(new LispString("open: cannot open file"), am.ik.rontolisp.LispNil.INSTANCE)), ctx);
-		ctx.writer.write(Instruction.END);
 		// A binary (unsigned-byte 8) file stream carries a per-fd flag the _file_position
 		// runtime reads to answer nil for a character stream (mirroring the interpreter
-		// and
-		// the JVM). Only when the program both runs under --component and calls
-		// file-position at all, so every other program keeps its bytes.
+		// and the JVM) -- set only for a descriptor that exists. Only when the program
+		// both runs under --component and calls file-position at all, so every other
+		// program keeps its bytes.
 		if (ctx.componentFilePosition && (OpenModes.staticMode(parts) & OpenModes.BINARY_BIT) != 0) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(fd);
+			ctx.writer.write(Instruction.REF_IS_NULL);
+			ctx.writer.write(Instruction.I32_EQZ);
+			ctx.writer.write(Instruction.IF, 0x40);
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(fd);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
@@ -82,6 +75,7 @@ final class WasmOpenCompiler {
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(1);
 			ctx.writer.write(Instruction.I32_STORE8, 0x00, 0x00);
+			ctx.writer.write(Instruction.END);
 		}
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(fd);

@@ -11,3 +11,5 @@
 ```
 
 これは `data.txt` を入力用に開き、最初の行を読み込み、ストリームをクローズします。代わりに `:output` を渡すと、書き込み用にファイルを作成または切り詰めます。`(open "data.bin" :input '(unsigned-byte 8))` は同じ種類のハンドルをバイナリモードで開きます。
+
+開けないファイルはすべてのバックエンドで `file-error` を通知し、`OPEN: cannot open file <name>` を報告します。[`file-error-pathname`](file-error-pathname.md) は渡された指定子を返します。
