@@ -1266,7 +1266,7 @@ features (`gauche`, `srfi-N`, `posix`, ...); a program testing those takes its `
 - **Requirements** (`SchemeFeatures.clause`): an identifier, `(and ..)`, `(or ..)`,
   `(not x)`, `(library name)`, compared by NAME; a last `else`. `(library name)` holds
   when an import would find it (`SchemeLowering.libraryAvailable`): `(scheme <tag>)` of
-  `IMPORTABLE_LIBRARIES` (not `r5rs`, `file`, ...), a library declared already, or one
+  `IMPORTABLE_LIBRARIES` (not `r5rs`, `time`, ...), a library declared already, or one
   whose `.sld`/`.scm` file declares it -- that declares the file's libraries, as an import
   would, without lowering them. **No clause taken and no `else` is a positioned error**
   (Gauche: "Unfulfilled cond-expand"; R7RS: unspecified). A non-last `else`, a malformed

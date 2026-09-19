@@ -82,7 +82,7 @@ class SchemeCondExpandTest {
 				(display (list (cond-expand ((library (scheme base)) 'a) (else 'b))
 				               (cond-expand ((library (scheme char)) 'a) (else 'b))
 				               (cond-expand ((library (scheme r5rs)) 'a) (else 'b))
-				               (cond-expand ((library (scheme file)) 'a) (else 'b))
+				               (cond-expand ((library (scheme time)) 'a) (else 'b))
 				               (cond-expand ((library (m)) 'a) (else 'b))
 				               (cond-expand ((library (util strings)) 'a) (else 'b))
 				               (cond-expand ((library (util numbers)) 'a) (else 'b))))""";
