@@ -33,10 +33,10 @@ import org.jspecify.annotations.Nullable;
  * </pre>
  *
  * {@code library} is the R7RS library exporting the name ({@code base} / {@code write} /
- * {@code char} / {@code inexact} / {@code cxr} / {@code lazy} / {@code process-context} / {@code eval} /
- * {@code repl}, or {@code sicp} / {@code r5rs} for a name no import can reach),
- * {@code result} says what the template answers -- {@code value}, {@code pred} (a Common
- * Lisp boolean, {@code T}/{@code NIL}, which fuses into an {@code if} test and is
+ * {@code char} / {@code inexact} / {@code cxr} / {@code lazy} / {@code process-context} /
+ * {@code eval} / {@code repl}, or {@code sicp} / {@code r5rs} for a name no import can
+ * reach), {@code result} says what the template answers -- {@code value}, {@code pred} (a
+ * Common Lisp boolean, {@code T}/{@code NIL}, which fuses into an {@code if} test and is
  * converted to {@code #t}/{@code #f} anywhere else), {@code or-false} (a value, or
  * {@code NIL} meaning {@code #f}) or {@code effect} (the template's value is discarded
  * and the call answers the unspecified object, which a REPL does not echo). One
@@ -110,8 +110,8 @@ final class SchemeBuiltins {
 	 *
 	 * @param name the Scheme name
 	 * @param library the exporting library's last component ({@code base}, {@code write},
-	 * {@code char}, {@code inexact}, {@code cxr}, {@code lazy}, {@code process-context}, {@code eval},
-	 * {@code repl}), or a tag no import names ({@code sicp}, {@code r5rs})
+	 * {@code char}, {@code inexact}, {@code cxr}, {@code lazy}, {@code process-context},
+	 * {@code eval}, {@code repl}), or a tag no import names ({@code sicp}, {@code r5rs})
 	 * @param result what the templates answer
 	 * @param alternatives the accepted argument shapes
 	 * @param function the first-class value: a form answering a function that returns
