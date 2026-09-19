@@ -9086,13 +9086,18 @@ class LispEvaluatorTest {
 			(print (multiple-value-call #'list (values 1 2) (ci-svc-none) (ci-svc-two)))
 			(multiple-value-bind (a b) (ci-svc-none) (print (list a b)))
 			(print (multiple-value-list (multiple-value-prog1 (values 1 2) (ci-svc-two))))
+			(multiple-value-bind (p q) (loop for a = 3 for b = 5 until t finally (return (values a b)))
+			  (print (list p q)))
+			(print (multiple-value-list (block b (return-from b (values 1 2)))))
+			(print (multiple-value-list (catch 'c (throw 'c (values 1 2)))))
+			(print (multiple-value-list (dolist (x '(1 2)) (when (= x 2) (return (values x 9))))))
 			""";
 
 	/** What SBCL prints for {@link #MV_SINGLE_VALUE_CONTEXTS}, one line per print. */
 	static final String MV_SINGLE_VALUE_CONTEXTS_EXPECTED = String.join("\n", "(6)", "((3))", "(2)", "(6)", "(5)",
 			"(2)", "(1)", "(3)", "(1)", "(3)", "(1)", "(T)", "(NIL)", "(NIL)", "(5)", "(1)", "(1 2)", "(NIL)", "(10)",
 			"((1))", "((1 2 3))", "(1)", "(1 2)", "NIL", "NIL", "NIL", "(1 2)", "NIL", "NIL", "(1 2)", "NIL", "(1)",
-			"(1 2 5 6)", "(NIL NIL)", "(1 2)");
+			"(1 2 5 6)", "(NIL NIL)", "(1 2)", "(3 5)", "(1 2)", "(1 2)", "(2 9)");
 
 	@Test
 	void evalMultipleValueChannelIsExactInSingleValueContexts() {

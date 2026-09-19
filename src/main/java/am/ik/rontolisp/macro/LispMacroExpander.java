@@ -34630,7 +34630,9 @@ public final class LispMacroExpander {
 				List<LispVal> valuesParts = new java.util.ArrayList<>();
 				valuesParts.add(new LispSymbol(LispNames.VALUES));
 				valuesParts.addAll(lowered.values());
-				return new SettledTail(nestMvBindings(lowered.bindings(), listToCons(valuesParts)), false);
+				return new SettledTail(
+						SourceProvenance.inherit(producer, nestMvBindings(lowered.bindings(), listToCons(valuesParts))),
+						false);
 			}
 			// A lambda's tail: the producer is the one-value cl function call it also is
 			// on the interpreter, classified by name below.
@@ -34658,14 +34660,20 @@ public final class LispMacroExpander {
 			case LispNames.PROGN, LispNames.LOCALLY, LispNames.WITH_STANDARD_IO_SYNTAX ->
 				settleLast(cons, parts, 1, mode);
 			case LispNames.LET, LispNames.LET_STAR, LispNames.FLET, LispNames.LABELS, LispNames.MACROLET,
-					LispNames.SYMBOL_MACROLET, LispNames.BLOCK, LispNames.FN_BLOCK_INTERNAL, LispNames.CATCH,
-					LispNames.HANDLER_BIND, LispNames.EVAL_WHEN, LispNames.WITH_OPEN_FILE,
+					LispNames.SYMBOL_MACROLET, LispNames.HANDLER_BIND, LispNames.EVAL_WHEN, LispNames.WITH_OPEN_FILE,
 					LispNames.WITH_INPUT_FROM_STRING, LispNames.WITH_OPEN_STREAM, LispNames.WITH_HASH_TABLE_ITERATOR,
 					LispNames.WITH_PACKAGE_ITERATOR, LispNames.WITH_COMPILATION_UNIT, LispNames.WITH_SIMPLE_RESTART,
 					LispNames.WITH_MUTEX_QUALIFIED, LispNames.WITH_LOCK_HELD_QUALIFIED,
 					LispNames.WITH_RECURSIVE_LOCK_HELD_QUALIFIED, LispNames.WITH_ARENA_QUALIFIED ->
 				settleLast(cons, parts, 2, mode);
-			case LispNames.BLOCK_INTERNAL -> settleLast(cons, parts, 1, mode);
+			// A block or catch may answer through a return-from / throw fired anywhere
+			// inside it -- (loop ... finally (return (values a b c))) is one -- so it is
+			// never single-valued for sure however its tail classifies: the consumer
+			// reads the channel, which the exit left as the values published just before
+			// it (the tail's clear is skipped by the exit).
+			case LispNames.BLOCK, LispNames.FN_BLOCK_INTERNAL, LispNames.CATCH ->
+				notSingle(settleLast(cons, parts, 2, mode));
+			case LispNames.BLOCK_INTERNAL -> notSingle(settleLast(cons, parts, 1, mode));
 			case LispNames.PROGV, LispNames.MULTIPLE_VALUE_BIND, LispNames.DESTRUCTURING_BIND, LispNames.WITH_SLOTS,
 					LispNames.WITH_ACCESSORS ->
 				settleLast(cons, parts, 3, mode);
@@ -34674,10 +34682,11 @@ public final class LispMacroExpander {
 				parts.size() >= 2 ? settleAt(cons, parts, 1, mode) : new SettledTail(form, false);
 			case LispNames.RETURN ->
 				parts.size() == 2 ? settleAt(cons, parts, 1, mode) : parts.size() == 1 && mode.clears()
-						? new SettledTail(listToCons(List.of(op, clearedNil())), true) : new SettledTail(form, true);
+						? new SettledTail(SourceProvenance.inherit(cons, listToCons(List.of(op, clearedNil()))), true)
+						: new SettledTail(form, true);
 			case LispNames.RETURN_FROM -> parts.size() == 3 ? settleAt(cons, parts, 2, mode)
-					: parts.size() == 2 && mode.clears()
-							? new SettledTail(listToCons(List.of(op, parts.get(1), clearedNil())), true)
+					: parts.size() == 2 && mode.clears() ? new SettledTail(
+							SourceProvenance.inherit(cons, listToCons(List.of(op, parts.get(1), clearedNil()))), true)
 							: new SettledTail(form, true);
 			case LispNames.THROW, LispNames.THE ->
 				parts.size() == 3 ? settleAt(cons, parts, 2, mode) : new SettledTail(form, false);
@@ -34691,35 +34700,48 @@ public final class LispMacroExpander {
 			// its tails, the rest is left alone): a defun body it stores must stay the
 			// shape the source has, which the macro-time purity walks read
 			// (UserMacroExpander.isPure).
-			case LispNames.COND ->
-				mode.clears() ? settleTail(expandCond(cons), mode) : settleClauseTails(cons, parts, 1);
-			case LispNames.CASE ->
-				mode.clears() ? settleTail(expandCase(cons), mode) : settleClauseTails(cons, parts, 2);
-			case LispNames.ECASE ->
-				mode.clears() ? settleTail(expandEcase(cons), mode) : settleClauseTails(cons, parts, 2);
-			case LispNames.CCASE ->
-				mode.clears() ? settleTail(expandCcase(cons), mode) : settleClauseTails(cons, parts, 2);
-			case LispNames.AND -> mode.clears() ? settleTail(expandAnd(cons), mode) : settleLast(cons, parts, 1, mode);
-			case LispNames.OR -> mode.clears() ? settleTail(expandOr(cons), mode) : settleLast(cons, parts, 1, mode);
-			case LispNames.WHEN ->
-				mode.clears() ? settleTail(expandWhen(cons), mode) : settleLast(cons, parts, 2, mode);
+			case LispNames.COND -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandCond(cons)), mode)
+					: settleClauseTails(cons, parts, 1);
+			case LispNames.CASE -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandCase(cons)), mode)
+					: settleClauseTails(cons, parts, 2);
+			case LispNames.ECASE -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandEcase(cons)), mode)
+					: settleClauseTails(cons, parts, 2);
+			case LispNames.CCASE -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandCcase(cons)), mode)
+					: settleClauseTails(cons, parts, 2);
+			case LispNames.AND -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandAnd(cons)), mode)
+					: settleLast(cons, parts, 1, mode);
+			case LispNames.OR -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandOr(cons)), mode)
+					: settleLast(cons, parts, 1, mode);
+			case LispNames.WHEN -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandWhen(cons)), mode)
+					: settleLast(cons, parts, 2, mode);
 			case LispNames.UNLESS ->
-				mode.clears() ? settleTail(expandUnless(cons), mode) : settleLast(cons, parts, 2, mode);
+				mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandUnless(cons)), mode)
+						: settleLast(cons, parts, 2, mode);
 			case LispNames.DOLIST ->
-				mode.clears() ? settleTail(expandDolist(cons), mode) : new SettledTail(form, false);
-			case LispNames.DO -> mode.clears() ? settleTail(expandDo(cons), mode) : new SettledTail(form, false);
+				mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandDolist(cons)), mode)
+						: new SettledTail(form, false);
+			case LispNames.DO -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandDo(cons)), mode)
+					: new SettledTail(form, false);
 			case LispNames.DO_STAR ->
-				mode.clears() ? settleTail(expandDoStar(cons), mode) : new SettledTail(form, false);
-			case LispNames.LOOP -> mode.clears() ? settleTail(expandLoop(cons), mode) : new SettledTail(form, false);
-			case LispNames.PROG1 -> mode.clears() ? settleTail(expandProg1(cons), mode) : new SettledTail(form, false);
-			case LispNames.PROG2 -> mode.clears() ? settleTail(expandProg2(cons), mode) : new SettledTail(form, false);
+				mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandDoStar(cons)), mode)
+						: new SettledTail(form, false);
+			case LispNames.LOOP -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandLoop(cons)), mode)
+					: new SettledTail(form, false);
+			case LispNames.PROG1 -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandProg1(cons)), mode)
+					: new SettledTail(form, false);
+			case LispNames.PROG2 -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandProg2(cons)), mode)
+					: new SettledTail(form, false);
 			case LispNames.PROG ->
-				mode.clears() ? settleTail(expandProg(cons, false), mode) : new SettledTail(form, false);
+				mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandProg(cons, false)), mode)
+						: new SettledTail(form, false);
 			case LispNames.PROG_STAR ->
-				mode.clears() ? settleTail(expandProg(cons, true), mode) : new SettledTail(form, false);
+				mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandProg(cons, true)), mode)
+						: new SettledTail(form, false);
 			case LispNames.IGNORE_ERRORS ->
-				mode.clears() ? settleTail(expandIgnoreErrors(cons), mode) : new SettledTail(form, false);
-			case LispNames.TIME -> mode.clears() ? settleTail(expandTime(cons), mode) : new SettledTail(form, false);
+				mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandIgnoreErrors(cons)), mode)
+						: new SettledTail(form, false);
+			case LispNames.TIME -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandTime(cons)), mode)
+					: new SettledTail(form, false);
 			default -> {
 				// (funcall #'name ...) / (apply #'name ...) over a LITERAL designator
 				// answers what a direct call of the name does -- and the compile paths
@@ -34862,7 +34884,7 @@ public final class LispMacroExpander {
 
 	/** {@code (progn (setq %mv-spill nil) form)}: a clear in front of a quiet form. */
 	private static LispVal clearBefore(LispVal form) {
-		return makeProgn(List.of(setMvSpill(LispNil.INSTANCE), form));
+		return inheriting(form, makeProgn(List.of(setMvSpill(LispNil.INSTANCE), form)));
 	}
 
 	/**
@@ -34871,7 +34893,7 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal clearAfter(LispVal form) {
 		LispSymbol v = new LispSymbol("__mv" + MV_COUNTER.getAndIncrement() + "_v");
-		return makeLet(v.name(), form, makeProgn(List.of(setMvSpill(LispNil.INSTANCE), v)));
+		return inheriting(form, makeLet(v.name(), form, makeProgn(List.of(setMvSpill(LispNil.INSTANCE), v))));
 	}
 
 	/**
@@ -34880,7 +34902,28 @@ public final class LispMacroExpander {
 	 * its own values.
 	 */
 	private static LispVal clearAfterStatement(LispVal form) {
-		return makeProgn(List.of(form, setMvSpill(LispNil.INSTANCE), LispNil.INSTANCE));
+		return inheriting(form, makeProgn(List.of(form, setMvSpill(LispNil.INSTANCE), LispNil.INSTANCE)));
+	}
+
+	/**
+	 * A form the walk built in place of {@code original}, carrying its source position
+	 * (.kb/source-positions.md, "Half 2"): a compile error inside the rewritten tail
+	 * still names the line it came from.
+	 */
+	private static LispVal inheriting(LispVal original, LispVal rewritten) {
+		return original instanceof LispCons cons ? SourceProvenance.inherit(cons, rewritten) : rewritten;
+	}
+
+	/** {@link LispCons#rebuiltList} plus the source position when it did rebuild. */
+	private static LispVal rebuilt(LispCons original, List<LispVal> elements) {
+		return SourceProvenance.inherit(original, LispCons.rebuiltList(original, elements));
+	}
+
+	/**
+	 * The settled form, classified as possibly multiple-valued whatever its tail said.
+	 */
+	private static SettledTail notSingle(SettledTail settled) {
+		return settled.single() ? new SettledTail(settled.form(), false) : settled;
 	}
 
 	/** {@code (progn (setq %mv-spill nil) nil)}: the one value nil, cleared. */
@@ -34899,7 +34942,7 @@ public final class LispMacroExpander {
 			}
 			List<LispVal> out = new java.util.ArrayList<>(parts);
 			out.add(clearedNil());
-			return new SettledTail(listToCons(out), true);
+			return new SettledTail(SourceProvenance.inherit(original, listToCons(out)), true);
 		}
 		return settleAt(original, parts, parts.size() - 1, mode);
 	}
@@ -34912,7 +34955,7 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> out = new java.util.ArrayList<>(parts);
 		out.set(index, settled.form());
-		return new SettledTail(LispCons.rebuiltList(original, out), settled.single());
+		return new SettledTail(rebuilt(original, out), settled.single());
 	}
 
 	/** Both branches of an {@code if}; a missing else branch is the one value nil. */
@@ -34932,7 +34975,7 @@ public final class LispMacroExpander {
 		else if (mode.clears()) {
 			out.add(clearedNil());
 		}
-		return new SettledTail(LispCons.rebuiltList(original, out), single);
+		return new SettledTail(rebuilt(original, out), single);
 	}
 
 	/**
@@ -34956,8 +34999,8 @@ public final class LispMacroExpander {
 		List<LispVal> newSpec = new java.util.ArrayList<>(specParts);
 		newSpec.set(2, result.form());
 		List<LispVal> out = new java.util.ArrayList<>(parts);
-		out.set(1, LispCons.rebuiltList(spec, newSpec));
-		return new SettledTail(LispCons.rebuiltList(original, out), result.single());
+		out.set(1, rebuilt(spec, newSpec));
+		return new SettledTail(rebuilt(original, out), result.single());
 	}
 
 	/**
@@ -34980,7 +35023,7 @@ public final class LispMacroExpander {
 			out.set(i, body.form());
 			single = single && body.single();
 		}
-		return new SettledTail(LispCons.rebuiltList(original, out), single);
+		return new SettledTail(rebuilt(original, out), single);
 	}
 
 	/**
@@ -35005,7 +35048,7 @@ public final class LispMacroExpander {
 				changed = true;
 			}
 		}
-		return new SettledTail(changed ? LispCons.rebuiltList(original, out) : original, false);
+		return new SettledTail(changed ? rebuilt(original, out) : original, false);
 	}
 
 	/**
@@ -35035,7 +35078,7 @@ public final class LispMacroExpander {
 		if (!exhaustive && mode.clears()) {
 			out.add(listToCons(List.of(LispTrue.INSTANCE, clearedNil())));
 		}
-		return new SettledTail(LispCons.rebuiltList(original, out), single);
+		return new SettledTail(rebuilt(original, out), single);
 	}
 
 	/**

@@ -10568,6 +10568,14 @@ cases:
       (print (multiple-value-call #'list (values 1 2) (ci-svc-none) (ci-svc-two)))
       (multiple-value-bind (a b) (ci-svc-none) (print (list a b)))
       (print (multiple-value-list (multiple-value-prog1 (values 1 2) (ci-svc-two))))
+      ; A block answers through an exit fired anywhere inside it: the values
+      ; published just before a return / return-from / throw travel out
+      ; (ironclad's generate-key-pair binds three of them from a loop's finally).
+      (multiple-value-bind (p q) (loop for a = 3 for b = 5 until t finally (return (values a b)))
+        (print (list p q)))
+      (print (multiple-value-list (block b (return-from b (values 1 2)))))
+      (print (multiple-value-list (catch 'c (throw 'c (values 1 2)))))
+      (print (multiple-value-list (dolist (x '(1 2)) (when (= x 2) (return (values x 9))))))
     expected: |
       (6)
       ((3))
@@ -10604,6 +10612,10 @@ cases:
       (1 2 5 6)
       (NIL NIL)
       (1 2)
+      (3 5)
+      (1 2)
+      (1 2)
+      (2 9)
   - name: unwind-protect-values
     source: |
       ; An unwind-protect cleanup runs for effect: its values -- and its value

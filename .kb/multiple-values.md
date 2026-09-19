@@ -147,7 +147,10 @@ publish in a non-tail position -- an argument, a `let` initform, a form before t
   result-less `dotimes` get `(progn form (setq %mv-spill nil) nil)` (`clearAfterStatement`:
   a `return`/`go`/`throw` out of them skips the clear and keeps its own values).
 - **Tails of their own, settled each**: `progn`/`let`/`let*`/`flet`/`labels`/`block`/
-  `catch`/`progv`/`multiple-value-bind`/`destructuring-bind`/`with-*` bodies, `if` (a missing else
+  `catch`/`progv`/`multiple-value-bind`/`destructuring-bind`/`with-*` bodies -- a `block`
+  (`%block`, `%fn-block`) or `catch` is never single for sure, its value may come through a
+  `return`/`return-from`/`throw` fired anywhere inside it (ironclad's `generate-key-pair` binds
+  three values from a `loop ... finally (return (values a b c))`) --, `if` (a missing else
   branch is a cleared nil), `unwind-protect`'s protected form, `return`/`return-from`/`throw`/
   `the` values (a value-less `return` is a cleared nil), `handler-case`'s protected form and
   clause bodies, `typecase` clause bodies (a plain `typecase` with no `otherwise` gets one
@@ -168,6 +171,10 @@ publish in a non-tail position -- an argument, a `let` initform, a form before t
   a macro form keeps its shape -- the macro-time purity walks read stored bodies),
   `PUBLISH_AND_CLEAR` (`settleMvTail`: defuns, consumers, handler-case), `CLEAR`
   (`settleFunctionBody`: lambdas and wrappers).
+- Every rebuild carries the original's source position (`SourceProvenance.inherit`,
+  [[source-positions]] "Half 2"): the walk rebuilds the tail of EVERY defun in a program with
+  a multiple-value operator, so a compile error inside one must still name its line
+  (`RontoLispCliTest.aMalformedFormKeepsItsLineWhenTheProgramAlsoTriggersALibrarySplice`).
 - Residue, by construction: a program that REDEFINES a `cl` function to answer several values
   is classified by the name (one value) in tail positions and consumers; a `macrolet`
   expansion is produced after the walk and is not settled; an operator the walk does not know
