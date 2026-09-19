@@ -219,6 +219,77 @@ class SchemeLoweringTest {
 	}
 
 	@Test
+	void topLevelProceduresWhoseTailCallsFormACycleAreOneGroupEachEntersAtItsLabel() {
+		// A jump to another member sets W and goes back to the dispatch, the one entry
+		// of every cycle.
+		assertThat(lowered("""
+				(define (ev? n) (if (= n 0) #t (od? (- n 1))))
+				(define (od? n) (if (= n 0) #f (ev? (- n 1))))
+				(display (ev? 10))""")).isEqualTo("""
+				(DEFUN %SCM-G1 (%SCM-W2 %SCM-C3) (LET ((%SCM-R4 NIL)) (TAGBODY %SCM-L7 (IF (= %SCM-W2 1) (GO %SCM-L6)) \
+				%SCM-L5 (LET ((|n| %SCM-C3)) (IF (= |n| 0) (SETQ %SCM-R4 T) \
+				(PROGN (SETQ %SCM-C3 (- |n| 1) %SCM-W2 1) (GO %SCM-L7)))) \
+				(GO %SCM-L8) \
+				%SCM-L6 (LET ((|n| %SCM-C3)) (IF (= |n| 0) (SETQ %SCM-R4 RONTOLISP::%SCHEME-FALSE) \
+				(PROGN (SETQ %SCM-C3 (- |n| 1) %SCM-W2 0) (GO %SCM-L7)))) \
+				%SCM-L8) %SCM-R4))
+				(DEFUN |ev?| (|n|) (%SCM-G1 0 |n|))
+				(DEFUN |od?| (|n|) (%SCM-G1 1 |n|))
+				(RONTOLISP::%SCHEME-DISPLAY (|ev?| 10))""");
+		// A jump to itself goes to its own label, past the dispatch.
+		assertThat(lowered("""
+				(define (a n) (cond ((= n 0) 'a) ((odd? n) (a (- n 1))) (else (b (- n 1)))))
+				(define (b n) (if (= n 0) 'b (a (- n 1))))""")).contains("""
+				(PROGN (SETQ %SCM-C3 (- |n| 1)) (GO %SCM-L5)) \
+				(PROGN (SETQ %SCM-C3 (- |n| 1) %SCM-W2 1) (GO %SCM-L7))""");
+		// The carriers are shared by position; a rest formal's carrier holds its list.
+		assertThat(lowered("(define (p . r) (if (null? r) 'p (q 1 r))) (define (q a b) (p))")).isEqualTo(
+				"""
+						(DEFUN %SCM-G1 (%SCM-W2 %SCM-C3 %SCM-C4) (LET ((%SCM-R5 NIL)) (TAGBODY %SCM-L8 (IF (= %SCM-W2 1) (GO %SCM-L7)) \
+						%SCM-L6 (LET ((|r| %SCM-C3)) (IF (NULL |r|) (SETQ %SCM-R5 '|p|) \
+						(PROGN (SETQ %SCM-C3 1 %SCM-C4 |r| %SCM-W2 1) (GO %SCM-L8)))) \
+						(GO %SCM-L9) \
+						%SCM-L7 (LET ((|a| %SCM-C3) (|b| %SCM-C4)) (PROGN (SETQ %SCM-C3 (LIST) %SCM-W2 0) (GO %SCM-L8))) \
+						%SCM-L9) %SCM-R5))
+						(DEFUN |p| (&REST |r|) (%SCM-G1 0 |r| NIL))
+						(DEFUN |q| (|a| |b|) (%SCM-G1 1 |a| |b|))""");
+	}
+
+	@Test
+	void aCycleThroughANonTailCallIsNoGroupAndNumbersNothing() {
+		// The probe that found no cycle of jumps leaves the counter where it was.
+		assertThat(lowered("""
+				(define (f x) (g x))
+				(define (g x) (if (null? x) 0 (+ 1 (f (cdr x)))))
+				(define (down n) (if (= n 0) 'done (down (- n 1))))""")).isEqualTo(
+				"""
+						(DEFUN |f| (|x|) (|g| |x|))
+						(DEFUN |g| (|x|) (IF (NULL |x|) 0 (+ 1 (|f| (CDR |x|)))))
+						(DEFUN |down| (%SCM-C1) (LET ((|n| %SCM-C1) (%SCM-R3 NIL)) \
+						(TAGBODY %SCM-L2 (IF (= |n| 0) (SETQ %SCM-R3 '|done|) (PROGN (SETQ |n| (- |n| 1)) (GO %SCM-L2)))) %SCM-R3))""");
+		// Of three procedures calling each other, only the two whose TAIL calls cycle
+		// are a group; the third calls into it.
+		String lowered = lowered("""
+				(define (a n) (if (= n 0) 'a (b (- n 1))))
+				(define (b n) (if (= n 0) (c n) (a (- n 1))))
+				(define (c n) (list (a n)))""");
+		assertThat(lowered).contains("(DEFUN |a| (|n|) (%SCM-G1 0 |n|))", "(DEFUN |b| (|n|) (%SCM-G1 1 |n|))",
+				"(DEFUN |c| (|n|) (LIST (|a| |n|)))");
+	}
+
+	@Test
+	void anAssignedOrRedefinedProcedureIsNoMember() {
+		assertThat(lowered("""
+				(define (a n) (if (= n 0) 'a (b (- n 1))))
+				(define (b n) (if (= n 0) 'b (a (- n 1))))
+				(set! b a)""")).doesNotContain("%SCM-G");
+		assertThat(lowered("""
+				(define (a n) (if (= n 0) 'a (b (- n 1))))
+				(define (b n) (if (= n 0) 'b (a (- n 1))))
+				(define (b n) n)""")).doesNotContain("%SCM-G");
+	}
+
+	@Test
 	void internalDefinitionsAreLetrecStar() {
 		assertThat(lowered("(define (f x) (define a 1) (define (g y) (+ y a)) (g x))")).isEqualTo("""
 				(DEFUN |f| (|x|) (LET ((|a| NIL) (|g| NIL)) (SETQ |a| 1) (SETQ |g| (LAMBDA (|y|) (+ |y| |a|))) \
