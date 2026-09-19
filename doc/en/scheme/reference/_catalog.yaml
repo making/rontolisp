@@ -367,6 +367,19 @@ categories:
     index_page: scheme/reference/library-repl.md
     functions:
       - { slug: interaction-environment, name: "interaction-environment" }
+  - title: "(scheme file)"
+    index_page: scheme/reference/library-file.md
+    functions:
+      - { slug: open-input-file, name: "open-input-file" }
+      - { slug: open-output-file, name: "open-output-file" }
+      - { slug: open-binary-input-file, name: "open-binary-input-file" }
+      - { slug: open-binary-output-file, name: "open-binary-output-file" }
+      - { slug: call-with-input-file, name: "call-with-input-file" }
+      - { slug: call-with-output-file, name: "call-with-output-file" }
+      - { slug: with-input-from-file, name: "with-input-from-file" }
+      - { slug: with-output-to-file, name: "with-output-to-file" }
+      - { slug: file-exists-p, name: "file-exists?" }
+      - { slug: delete-file, name: "delete-file" }
   - title: "(scheme r5rs)"
     index_page: scheme/reference/library-r5rs.md
     functions:

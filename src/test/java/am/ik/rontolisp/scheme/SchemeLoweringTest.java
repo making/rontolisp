@@ -3,6 +3,7 @@ package am.ik.rontolisp.scheme;
 import java.util.List;
 import java.util.stream.Collectors;
 
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReadException;
 import org.junit.jupiter.api.Test;
@@ -128,6 +129,19 @@ class SchemeLoweringTest {
 	void anIdentifierThatCouldCollideIsEscaped() {
 		assertThat(lowered("(define (CAR X) (list X 'X 'a:b))")).isEqualTo("""
 				(DEFUN |s%CAR| (|s%X|) (LIST |s%X| '|s%X| '|s%a%cb|))""");
+	}
+
+	@Test
+	void aVerticalLineIdentifierLowersLikeAnyOtherAndIsNeverABoolean() {
+		assertThat(lowered("(define (|a b| |X|) (list |X| '|#t| '|#f| #t '|| |#f|))")).isEqualTo("""
+				(DEFUN |a b| (|s%X|) (LIST |s%X| '|#t| '|s%#f| T '|s%| |s%#f|))""");
+	}
+
+	@Test
+	void anInfinityIsAFlonumLiteral() {
+		assertThat(lowered("(list +inf.0 -inf.0)"))
+			.isEqualTo("(LIST " + new LispDouble(Double.POSITIVE_INFINITY).print() + " "
+					+ new LispDouble(Double.NEGATIVE_INFINITY).print() + ")");
 	}
 
 	@Test
@@ -342,14 +356,19 @@ class SchemeLoweringTest {
 		assertThatThrownBy(() -> lowered("(import (scheme time))")).isInstanceOf(LispReadException.class)
 			.hasMessage("test.scm:1:1: library (|scheme| |time|) is not available: this experimental front end has"
 					+ " (scheme base), (scheme write), (scheme read), (scheme char), (scheme inexact), (scheme cxr),"
-					+ " (scheme lazy), (scheme case-lambda), (scheme process-context), (scheme eval) and (scheme repl)"
-					+ " only");
+					+ " (scheme lazy), (scheme case-lambda), (scheme process-context), (scheme eval), (scheme repl)"
+					+ " and (scheme file) only");
 		assertThat(lowered("(import (scheme char)) (char-upcase x)")).isEqualTo("(CHAR-UPCASE |x|)");
 		assertThat(lowered("(import (scheme base)) (char-upcase x)")).isEqualTo("(|char-upcase| |x|)");
 		assertThat(lowered("(char-upcase x)")).isEqualTo("(CHAR-UPCASE |x|)");
 		assertThat(lowered("(import (scheme inexact)) (sqrt x)")).isEqualTo("(RONTOLISP::%SCHEME-SQRT |x|)");
 		assertThat(lowered("(import (scheme base)) (sqrt x)")).isEqualTo("(|sqrt| |x|)");
 		assertThat(lowered("(import (only (scheme cxr) caddr)) (caddr x)")).isEqualTo("(CADDR |x|)");
+		assertThat(lowered("(import (scheme file)) (file-exists? x)"))
+			.isEqualTo("(IF (PROBE-FILE |x|) T RONTOLISP::%SCHEME-FALSE)");
+		assertThat(lowered("(import (scheme base)) (open-input-file x)")).isEqualTo("(|open-input-file| |x|)");
+		assertThat(lowered("(open-input-file x)"))
+			.isEqualTo("(RONTOLISP::%SCHEME-OPEN-INPUT-FILE \"open-input-file\" |x|)");
 	}
 
 	@Test
@@ -405,7 +424,7 @@ class SchemeLoweringTest {
 					+ " ((|false|) RONTOLISP::%SCHEME-FALSE) (T 'RONTOLISP::%SCHEME-UNBOUND)))");
 		assertThat(Scheme.runtimeForms(name -> false, SchemeStandard.RONTOLISP).get(1).print()).isEqualTo(
 				"(DEFUN RONTOLISP::%SCHEME-LIBRARY-P (NAME) (IF (MEMBER NAME '(|base| |write| |read| |char| |inexact| |cxr|"
-						+ " |lazy| |case-lambda| |process-context| |eval| |repl|)) T NIL))");
+						+ " |lazy| |case-lambda| |process-context| |eval| |repl| |file|)) T NIL))");
 	}
 
 	@Test
@@ -613,13 +632,34 @@ class SchemeLoweringTest {
 		// one.
 		assertThat(lowered("(display (case-lambda (r r)))"))
 			.isEqualTo("(RONTOLISP::%SCHEME-DISPLAY (LAMBDA (&REST %SCM-A1) (LET ((|r| %SCM-A1)) |r|)))");
-		// Defined once, it is a defun called directly, and a self tail call through
-		// another clause is a jump.
+		// Defined once, each clause is a defun of its own that a direct call picks by
+		// its count, a self tail call picking the same clause is a jump, and the
+		// procedure's own defun dispatches for everything else.
 		assertThat(lowered("(define f (case-lambda ((n) (f n 0)) ((n acc) (if (= n 0) acc (f (- n 1) (+ acc n))))))"
 				+ " (display (f 3))"))
-			.startsWith("(DEFUN |f| (&REST %SCM-C")
+			.isEqualTo(
+					"""
+							(DEFUN |s%%{f 1}| (|n|) (|s%%{f 2}| |n| 0))
+							(DEFUN |s%%{f 2}| (%SCM-C6 %SCM-C7) (LET ((|n| %SCM-C6) (|acc| %SCM-C7) (%SCM-R9 NIL)) \
+							(TAGBODY %SCM-L8 (IF (= |n| 0) (SETQ %SCM-R9 |acc|) (PROGN (PSETQ |n| (- |n| 1) |acc| (+ |acc| |n|)) \
+							(GO %SCM-L8)))) %SCM-R9))
+							(DEFUN |f| (&REST %SCM-A10) (LET ((%SCM-N11 (LENGTH %SCM-A10))) \
+							(IF (= %SCM-N11 1) (|s%%{f 1}| (NTH 0 %SCM-A10)) (IF (= %SCM-N11 2) \
+							(|s%%{f 2}| (NTH 0 %SCM-A10) (NTH 1 %SCM-A10)) (RONTOLISP::%SCHEME-CASE-LAMBDA-ARITY %SCM-A10)))))
+							(RONTOLISP::%SCHEME-DISPLAY (|s%%{f 1}| 3))""");
+		// A rest clause is applied by the dispatch; a count only a later clause would
+		// accept picks the first one; a count none accepts calls the dispatch, which
+		// reports it at run time; a first-class use is the dispatch.
+		assertThat(lowered("(define g (case-lambda ((x . r) r) ((x y) y))) (display (list (g 1 2) (g) g))"))
+			.contains("(IF (>= %SCM-N4 1) (APPLY #'|s%%{g 1}| %SCM-A3) (IF (= %SCM-N4 2)")
+			.endsWith("(LIST (|s%%{g 1}| 1 2) (|g|) #'|g|))");
+		// A clause that may call another clause calling it back keeps the one
+		// dispatching lambda, so a tail call among them stays a jump.
+		assertThat(lowered("(define h (case-lambda ((n) (if (= n 0) 0 (h n 1))) ((n k) (h (- n k))))) (display (h 3))"))
+			.startsWith("(DEFUN |h| (&REST %SCM-C")
 			.contains("(GO %SCM-L")
-			.endsWith("(RONTOLISP::%SCHEME-DISPLAY (|f| 3))");
+			.doesNotContain("s%%{")
+			.endsWith("(RONTOLISP::%SCHEME-DISPLAY (|h| 3))");
 		// A user binding of the name, or of car, reaches neither the keyword nor the
 		// dispatch.
 		assertThat(lowered("(define (car x) x) (display (let ((case-lambda list)) (case-lambda 1 2)))"))

@@ -65,6 +65,62 @@ cases:
       (#t #t #t #f)
       (#t #t #t #f #f)
       (#f true)
+  # Gauche 0.9.15 -r7, except that it writes |+inf.0x| where R7RS reads an identifier.
+  - name: vertical-line-identifiers-are-symbols-of-any-spelling
+    source: |
+      (define |hello world| 42)
+      (define (|a.b;c[d]| x) (+ x 1))
+      (write (list |hello world| (|a.b;c[d]| 1) (eq? 'abc '|abc|) (eq? '|#t| #t) (symbol? '|#f|)))
+      (newline)
+      (write '(|foo bar| || |1| |.| |a\x41;b| |a\|b| |a\\b| |\t| ABC |+inf.0| + ... .a))
+      (newline)
+      (display '(|foo bar| || |1| |a\|b|))
+      (newline)
+      (write (map symbol->string '(|foo bar| || |A:b|)))
+      (newline)
+      (write (list (string->symbol "a b") (string->symbol "") (string->symbol "1+") (string->symbol "λx")))
+      (newline)
+      (let ((|#t| #f)) (write (if |#t| 'yes 'no)))
+      (newline)
+    expected: |
+      (42 2 #t #f #t)
+      (|foo bar| || |1| |.| aAb |a\|b| |a\\b| |\x09;| ABC |+inf.0| + ... .a)
+      (foo bar  1 a|b)
+      ("foo bar" "" "A:b")
+      (|a b| || |1+| λx)
+      no
+  # Gauche 0.9.15 -r7. (eqv? +nan.0 +nan.0) is left out: R7RS leaves it unspecified,
+  # Gauche answers #f and every backend here #t (Common Lisp's eql of one bit pattern).
+  - name: infinities-and-nan-read-print-and-compare
+    source: |
+      (write (list +inf.0 -inf.0 +nan.0 -nan.0 +INF.0 #x-inf.0))
+      (newline)
+      (write (list (= +nan.0 +nan.0) (< -inf.0 0 +inf.0) (> +nan.0 0) (< +nan.0 0) (= +inf.0 +inf.0)))
+      (newline)
+      (write (list (* 2 +inf.0) (/ 1. +inf.0) (- +inf.0 +inf.0) (max 1 +inf.0) (min 1 -inf.0) (abs -inf.0)))
+      (newline)
+      (write (list (nan? +nan.0) (infinite? -inf.0) (finite? +inf.0) (exact? +inf.0) (inexact? +nan.0)
+                   (integer? +inf.0) (rational? +nan.0) (real? -inf.0)))
+      (newline)
+      (write (list (floor +inf.0) (ceiling -inf.0) (round +nan.0) (truncate +inf.0) (floor 2.5) (round 2.5)
+                   (floor -2.5)))
+      (newline)
+      (write (list (number->string -inf.0) (string->number "+inf.0") (string->number "-Inf.0")
+                   (string->number "+nan.0") (string->number "inf.0") (string->number "+inf.0" 16)))
+      (newline)
+      (write (guard (e (#t (error-object? e))) (exact +inf.0)))
+      (newline)
+      (write (list (sqrt +inf.0) (exp -inf.0) (atan +inf.0) (eqv? +inf.0 +inf.0) (equal? -inf.0 -inf.0)))
+      (newline)
+    expected: |
+      (+inf.0 -inf.0 +nan.0 +nan.0 +inf.0 -inf.0)
+      (#f #t #f #f #t)
+      (+inf.0 0.0 +nan.0 +inf.0 -inf.0 +inf.0)
+      (#t #t #f #f #t #f #f #t)
+      (+inf.0 -inf.0 +nan.0 +inf.0 2.0 2.0 -3.0)
+      ("-inf.0" +inf.0 -inf.0 +nan.0 #f +inf.0)
+      #t
+      (+inf.0 0.0 1.5707963267948966 #t #t)
   - name: the-empty-list-is-true-and-false-is-its-own-value
     source: |
       (define (truthy x) (if x 'yes 'no))
@@ -863,7 +919,7 @@ cases:
       (write (apply char<? (list #\a #\b)))
       (newline)
     expected: |
-      (#t #f #f #f #f #f "hello" with space MiXed)
+      (#t #f #f #f #f #f "hello" |with space| MiXed)
       (#t #f 65 #\a #t #f #t #f #t #t #f)
       (#\a #\A #\space #\newline #\tab #\null #\A #\( #\0)
       (a   b s sym)
@@ -1589,6 +1645,20 @@ cases:
       255
       #u8(1 255)
       #u8()
+  # Gauche 0.9.15 -r7.
+  - name: read-knows-vertical-lines-and-infinities
+    stdin: |
+      |foo bar| || |a\x41;\|b| +inf.0 -INF.0 +nan.0 (a |b c| . |d|) #(|1| +inf.0)
+    source: |
+      (let* ((a (read)) (b (read)) (c (read)) (d (read)) (e (read)) (f (read)) (g (read)) (h (read)))
+        (write (list a b c d e f g h))
+        (newline)
+        (write (list (symbol->string c) (nan? f) (eq? a (string->symbol "foo bar"))))
+        (newline))
+      (read-line)
+    expected: |
+      (|foo bar| || |aA\|b| +inf.0 -inf.0 +nan.0 (a |b c| . d) #(|1| +inf.0))
+      ("aA|b" #t #t)
   # The current input port, read with and without a port argument, between reads of a
   # string port and a parameterized one: one pushback per port (Gauche 0.9.15 -r7).
   - name: the-current-input-port-mixes-with-string-ports
@@ -2074,6 +2144,10 @@ cases:
   # runs, a clause body is a <body>, a self tail call through another clause is a loop,
   # and a count no clause accepts is an error object (Gauche 0.9.15 -r7 output, except
   # that its message spells "case lambda"). A macro's template binder stays hygienic.
+  # A top-level one is a defun per clause a direct call picks statically: cl-count's
+  # first clause calls the second, whose self tail call is a loop; cl-pp's clauses call
+  # each other, which keeps the one dispatching procedure and its jumps; apply and a
+  # first-class use go through the dispatch.
   - name: case-lambda-takes-the-first-clause-that-accepts-the-arguments
     source: |
       (define cl-range
@@ -2095,6 +2169,20 @@ cases:
           ((n) (cl-count 0 n))
           ((i n) (if (= i n) i (cl-count (+ i 1) n)))))
       (write (cl-count 100000))
+      (newline)
+      (define cl-pp
+        (case-lambda
+          ((n) (if (= n 0) 'pp (cl-pp n 1)))
+          ((n k) (cl-pp (- n k)))))
+      (write (cl-pp 100000))
+      (newline)
+      (write (list (apply cl-kind '(1 2)) (apply cl-kind '()) (map cl-kind '(1 2) '(3 4))))
+      (newline)
+      (define cl-sum
+        (case-lambda
+          ((acc) acc)
+          ((acc x . xs) (apply cl-sum (+ acc x) xs))))
+      (write (cl-sum 0 1 2 3 4))
       (newline)
       (write (map (case-lambda ((x) (* x 2)) ((x y) (+ x y))) '(1 2) '(10 20)))
       (newline)
@@ -2149,6 +2237,9 @@ cases:
       ((0 1 2) (3 4))
       ((none ()) (one 1) (many 1 (2)) (many 1 (2 3)))
       100000
+      pp
+      ((many 1 (2)) (none ()) ((many 1 (3)) (many 2 (4))))
+      10
       (11 22)
       (3 2 1)
       12
@@ -2353,6 +2444,142 @@ cases:
       "current-output-port: not a textual output port: 5"
       "current-input-port: not a textual input port: #<textual-output-port>"
       (#<textual-output-port> #<binary-input-port> #<binary-output-port> #<textual-input-port>)
+  # (scheme file) (.todo/874). Every path is built at run time under a random prefix: a
+  # literal one would be folded at compile time (.kb/read-load-streams.md), and two runs
+  # of this corpus at once must not share a file. Gauche 0.9.15 -r7 output.
+  - name: file-ports-write-then-read
+    source: |
+      (define fp-dir (string-append "/tmp/rontolisp-scheme-spec-" (number->string (random 1000000000)) "-"))
+      (define fp-text (string-append fp-dir "text.txt"))
+      (define fp-out (open-output-file fp-text))
+      (write (list (port? fp-out) (output-port? fp-out) (textual-port? fp-out) (input-port? fp-out) (output-port-open? fp-out)))
+      (newline)
+      (write '(a "b" #\c 1.5) fp-out)
+      (newline fp-out)
+      (write-string "second line" fp-out)
+      (write-char #\! fp-out)
+      (close-port fp-out)
+      (close-output-port fp-out)
+      (write (list (output-port-open? fp-out) (file-exists? fp-text)))
+      (newline)
+      (define fp-in (open-input-file fp-text))
+      (write (list (input-port? fp-in) (read fp-in) (read-char fp-in) (peek-char fp-in) (read-line fp-in) (eof-object? (read-char fp-in))))
+      (close-input-port fp-in)
+      (newline)
+      (write (list (input-port-open? fp-in) (call-with-input-file fp-text read-line)))
+      (newline)
+      (write (call-with-output-file fp-text (lambda (p) (display "replaced" p) (output-port-open? p))))
+      (write (call-with-input-file fp-text (lambda (p) (list (read-string 3 p) (read-string 100 p) (eof-object? (read-string 1 p))))))
+      (newline)
+      (delete-file fp-text)
+      (write (file-exists? fp-text))
+      (newline)
+    expected: |
+      (#t #t #t #f #t)
+      (#f #t)
+      (#t (a "b" #\c 1.5) #\newline #\s "second line!" #t)
+      (#f "(a \"b\" #\\c 1.5)")
+      #t("rep" "laced" #t)
+      #f
+  # The current port is the file's for the thunk and is restored, and the file closed, on
+  # every way out. Gauche leaves the file open (and unflushed) on an escape, so it reads
+  # #<eof> where this reads "x".
+  - name: with-output-to-file-restores-the-current-port
+    source: |
+      (define fw-dir (string-append "/tmp/rontolisp-scheme-spec-" (number->string (random 1000000000)) "-"))
+      (define fw-file (string-append fw-dir "with.txt"))
+      (write (with-output-to-file fw-file (lambda () (display "to the file ") (write "q") (newline (current-output-port)) 'done)))
+      (newline)
+      (write (with-input-from-file fw-file (lambda () (list (read) (read) (read-char) (eof-object? (read-char))))))
+      (newline)
+      (display "standard output again")
+      (newline)
+      (write (call/cc (lambda (k) (with-output-to-file fw-file (lambda () (display "partial") (k 'escaped))))))
+      (newline)
+      (write (guard (e ((symbol? e) (list 'caught e))) (with-output-to-file fw-file (lambda () (display "x") (raise 'boom)))))
+      (newline)
+      (display "still standard output")
+      (newline)
+      (define fw-saved #f)
+      (write (with-input-from-file fw-file (lambda () (set! fw-saved (current-input-port)) (read-line))))
+      (write (input-port-open? fw-saved))
+      (newline)
+      (define (fw-values n) (if (= n 0) (with-input-from-file fw-file (lambda () (values (read-char) 2))) (fw-values (- n 1))))
+      (write (call-with-values (lambda () (fw-values 3)) list))
+      (newline)
+      (delete-file fw-file)
+    expected: |
+      done
+      (to the #\space #f)
+      standard output again
+      escaped
+      (caught boom)
+      still standard output
+      "x"#f
+      (#\x 2)
+  # A file port is textual or binary, never both (Gauche's are both). After the EOF peek
+  # Gauche's read-bytevector answers a bytevector; R7RS says the EOF object.
+  - name: binary-file-ports
+    source: |
+      (define fb-file (string-append "/tmp/rontolisp-scheme-spec-" (number->string (random 1000000000)) "-bytes.bin"))
+      (define fb-out (open-binary-output-file fb-file))
+      (write (list (binary-port? fb-out) (textual-port? fb-out) (output-port? fb-out)))
+      (newline)
+      (write-u8 0 fb-out)
+      (write-bytevector (bytevector 1 2 3 255) fb-out 1)
+      (write-bytevector (string->utf8 "hé") fb-out)
+      (close-port fb-out)
+      (define fb-in (open-binary-input-file fb-file))
+      (write (list (binary-port? fb-in) (peek-u8 fb-in) (read-u8 fb-in) (peek-u8 fb-in) (read-bytevector 2 fb-in) (u8-ready? fb-in)))
+      (newline)
+      (define fb-buf (make-bytevector 6 9))
+      (write (list (read-bytevector! fb-buf fb-in 1) fb-buf (eof-object? (read-u8 fb-in)) (eof-object? (peek-u8 fb-in))
+                   (eof-object? (read-bytevector 1 fb-in))))
+      (newline)
+      (write (read-bytevector! (make-bytevector 2 0) fb-in))
+      (newline)
+      (close-input-port fb-in)
+      (delete-file fb-file)
+    expected: |
+      (#t #f #t)
+      (#t 0 0 2 #u8(2 3) #t)
+      (4 #u8(9 255 104 195 169 9) #t #t #t)
+      #<eof>
+  # A failed open or delete raises an error object file-error? answers #t for. Gauche
+  # raises a plain error for an output file it cannot create; R7RS says a file error.
+  - name: a-failed-open-is-a-file-error
+    source: |
+      (define (fe-kind thunk)
+        (guard (e ((file-error? e) 'file-error) ((error-object? e) 'other-error) (#t 'not-an-error-object)) (thunk) 'no-error))
+      (define fe-missing (string-append "/tmp/rontolisp-scheme-spec-" (number->string (random 1000000000)) "-missing/none.txt"))
+      (for-each
+       (lambda (thunk) (write (fe-kind thunk)) (newline))
+       (list (lambda () (open-input-file fe-missing))
+             (lambda () (open-binary-input-file fe-missing))
+             (lambda () (open-output-file fe-missing))
+             (lambda () (open-binary-output-file fe-missing))
+             (lambda () (call-with-input-file fe-missing read))
+             (lambda () (with-input-from-file fe-missing read))
+             (lambda () (delete-file fe-missing))
+             (lambda () (read-char (open-output-string)))
+             (lambda () (raise 'not-a-file-error))))
+      (write (list (file-exists? fe-missing) (file-exists? "/tmp")))
+      (newline)
+      (write (guard (e ((file-error? e) (list (error-object-message e) (equal? (error-object-irritants e) (list fe-missing)))))
+               (open-input-file fe-missing)))
+      (newline)
+    expected: |
+      file-error
+      file-error
+      file-error
+      file-error
+      file-error
+      file-error
+      file-error
+      other-error
+      not-an-error-object
+      (#f #t)
+      ("open-input-file: cannot open file:" #t)
   # (scheme char): the Unicode answers are the JDK's (the backends' char-upcase tables
   # come from it), laid out by generated range tables so all four backends agree. The
   # expected text is Gauche 0.9.15's, except where .kb/scheme-frontend.md, "(scheme
@@ -2615,7 +2842,7 @@ standalone:
     stdout: |
       3
     stderr: |
-      Unhandled condition: Unbound variable: 1+
+      Unhandled condition: Unbound variable: |1+|
     fails: true
   - name: strict-r7rs-eval-knows-no-sicp-keyword
     standards: [r7rs]
@@ -2737,6 +2964,24 @@ standalone:
       (#t #f)
       (3 2 1)
       (0 3)
+  # A library's case-lambda export: the importer's direct calls pick the clauses.
+  - name: a-library-exports-a-case-lambda-called-directly
+    standards: [rontolisp, r7rs]
+    source: |
+      (define-library (range)
+        (export range)
+        (import (scheme base) (scheme case-lambda))
+        (begin
+          (define range
+            (case-lambda
+              ((e) (range 0 e))
+              ((b e) (range b e 1))
+              ((b e s) (if (>= b e) '() (cons b (range (+ b s) e s))))))))
+      (import (scheme base) (scheme write) (range))
+      (write (list (range 3) (range 2 4) (range 0 6 2) (apply range '(1 3)) (map range '(1 2))))
+      (newline)
+    stdout: |
+      ((0 1 2) (2 3) (0 2 4) (1 2) ((0) (0 1)))
   # A library found as a .sld file beside the program, its body included from another
   # file, its declarations from a third; one library two others import runs once.
   - name: libraries-and-includes-read-from-files

@@ -67,6 +67,20 @@ class SchemeLibrariesTest {
 	}
 
 	@Test
+	void aLibraryNamePartWithASpaceKeepsItsNamesApart() {
+		// (|a b|) and (a b) would both be s%%(a b) with the parts joined verbatim.
+		assertThat(lowered("""
+				(define-library (a b) (export f) (import (scheme base)) (begin (define (f) 1)))
+				(define-library (|a b|) (export f) (import (scheme base)) (begin (define (f) 2)))
+				(import (prefix (a b) x-) (prefix (|a b|) y-))
+				(x-f) (y-f)""")).isEqualTo("""
+				(DEFUN |s%%(a b)f| NIL 1)
+				(DEFUN |s%%(a\\|sb)f| NIL 2)
+				(|s%%(a b)f|)
+				(|s%%(a\\|sb)f|)""");
+	}
+
+	@Test
 	void aLibraryOfDefinitionsAloneNeedsNoInstantiationFlag() {
 		assertThat(lowered("""
 				(define-library (m) (export f) (import (scheme base)) (begin (define (f) 1)))

@@ -202,6 +202,8 @@ sections:
             title: "(scheme eval)"
           - file: scheme/reference/library-repl.md
             title: "(scheme repl)"
+          - file: scheme/reference/library-file.md
+            title: "(scheme file)"
           - file: scheme/reference/library-r5rs.md
             title: "(scheme r5rs)"
           - file: scheme/reference/library-sicp.md

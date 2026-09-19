@@ -19,6 +19,7 @@ example.
 | [(scheme process-context)](reference/library-process-context.md) | `exit`, `emergency-exit` |
 | [(scheme eval)](reference/library-eval.md) | `eval`, `environment` |
 | [(scheme repl)](reference/library-repl.md) | `interaction-environment` |
+| [(scheme file)](reference/library-file.md) | File ports, `file-exists?`, `delete-file` |
 | [(scheme r5rs)](reference/library-r5rs.md) | R5RS names outside the other libraries, visible with no `import` |
 | [SICP Names](reference/library-sicp.md) | The *[Structure and Interpretation of Computer Programs](sicp.md)* (SICP) / MIT Scheme names, visible with no `import` |
 

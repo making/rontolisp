@@ -40,6 +40,8 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `CAR`, `X`, `T`, `+` (no lowercase), `a:b`, `&rest`, `s%...`, `#f` | escaped: `s%` + name, `%`->`%%`, `:`->`%c` | `(defun \|CAR\| ...)` REPLACES the built-in; `a:b` is "symbol b of package a" to the resolver ("No such package: a"); `&rest` is a lambda-list keyword; the prefix and `#f` keep the map injective and the false value unforgeable. The rule is spelled twice (`SchemeNames.mangle`, `%scheme-needs-escape` in `scheme.lisp`) -- change both |
 | `'()` | `NIL` | `&rest` lists, `apply` and every list primitive end in it |
 | `#t` | `T` | |
+| `\|foo bar\|`, `\|\|`, `\|#t\|` | an identifier of that spelling, mangled like any other (`\|#f\|` -> `s%#f`) | "Vertical-line identifiers and the infinities" below; the reader's booleans are compared by IDENTITY, so `\|#t\|` is no boolean |
+| `+inf.0` `-inf.0` `+nan.0` `-nan.0` | a flonum literal | every backend already emits a non-finite double constant and prints it |
 | `#f` | the VALUE of `rontolisp::%scheme-false`, the symbol `\|#f\|`, bound by the first form of every lowered file | distinct from NIL; a symbol so quoted data, `case` and `equal?` need nothing special |
 | the unspecified value: an `effect` builtin, `set!`, the missing arm of `if`/`when`/`unless`, a `cond`/`case` with no clause taken, `(begin)` | the VALUE of `rontolisp::%scheme-unspecified`, the symbol `\|#!unspecific\|`, bound in the same first `setq`; `(progn effect U)` -- but the raw effect / `NIL` where the value is DISCARDED (`Context.discarded`: a body form before the last, a file's top-level form) | ONE object, so a REPL can skip it by value (`(define (g) (display "a"))` echoed `"a"`); not `NIL` (`(list (if #f #f))` has length 1) and true in a test. The spelling is escaped by `mangle` like `#f` and excluded by `symbol?`. Cost (2026-09-17): +93 B class / +26 B wasm per program (`hello`), nothing measurable on a 100M-iteration `when` loop. A missing arm is spelled `CORE_UNSPECIFIED` in desugarings |
 | `exit`, `emergency-exit` (`(scheme process-context)`, merged into the no-import default) | `exit` throws its code to `rontolisp::%scheme-exit-tag`; every file top-level form runs inside a `catch` for it that ends the process through `%scheme-exit` with the caught code ("`exit` runs ..." below). `emergency-exit` calls `%scheme-exit` directly: finish both output streams, then `%host-exit` with `#t`/none 0, `#f` 1, an integer's low 8 bits | the `uiop:quit` primitive (`.kb/uiop.md`); `exit` runs the outstanding `dynamic-wind` afters on its way out, only `emergency-exit` ends the process where the call stands |
@@ -55,7 +57,7 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `call/cc` | `block` + a closure doing `return-from` (`%scheme-call/cc`) | escape-only, one-shot; crosses lambdas through `CrossLambdaExitLowering` |
 | `(guard (v clause..) body..)` | `(%scheme-guard (lambda () body..) (lambda (C) (let ((v C)) (cond clause.. (else (%scheme-raise C))))))` | a Scheme-level handler stack plus `handler-case`, "Exceptions" below |
 | `dynamic-wind` | `before`, then `unwind-protect` | the exit half runs on every exit channel; re-entry does not exist |
-| `(case-lambda (formals body..)..)` | `(lambda (&rest A) (let ((N (length A))) (if (= N 1) (let ((x (nth 0 A))) body..) .. (%scheme-case-lambda-arity A))))`, spelled as a Scheme `lambda` datum with `raw` parts | "`case-lambda`" below |
+| `(case-lambda (formals body..)..)` | `(lambda (&rest A) (let ((N (length A))) (if (= N 1) (let ((x (nth 0 A))) body..) .. (%scheme-case-lambda-arity A))))`, spelled as a Scheme `lambda` datum with `raw` parts; a top-level procedure defined once by one: a `defun` per clause (`s%%{f 1}`, ..) that a direct call picks by its count, and `f` the dispatch | "`case-lambda`" below |
 | `(parameterize ((p v)..) body..)` | `(%scheme-parameterize (list p v ..) (lambda () body..))`; no binding: `(let () body..)` | a special `let` inside the helper, "Parameters" below |
 | `(call-with-values (lambda () ..) (lambda (a b) ..))`, `let-values`, `define-values` | `multiple-value-bind` | the syntactic tier (`.kb/multiple-values.md`). Any other shape: `(apply consumer (multiple-value-list (funcall producer)))`. A loop's leaf that may answer other than one value leaves through `(return-from B ..)` ("Destination-driven lowering") -- a `(setq R (values a b))` keeps one value, on every backend |
 | top-level `define-record-type` | `defstruct` with `(:conc-name nil)`, each slot NAMED after its accessor, a BOA constructor; the modifier a `defun` over `(setf (accessor r) v)` answering the unspecified object | `defstruct` is what registers the instance layout on every backend (`.kb/defstruct.md`); the accessor IS the generated one, no wrapper call. The predicate answers T/NIL and is a `pred` (`GlobalPredicate`) |
@@ -65,7 +67,7 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `(include "f")`, `(include-ci "f")` | `(begin <f's datums>)`, spliced before macro expansion | the same section |
 | `define-syntax` / `let-syntax` / `letrec-syntax` with `syntax-rules` | nothing: expanded away before the lowering (`SchemeExpander`); `let-syntax`'s body is `(let () body)` | hygiene by renaming, "Macros" below |
 | `#u8(...)`, `bytevector`, `make-bytevector`, `bytevector-append`, `string->utf8` | the `(unsigned-byte 8)` pack (`.kb/packed-integer-vectors.md`): the literal is an 8-bit `LispIntVector` datum, self-evaluating; the constructors are `%scheme-` helpers over `make-array :element-type '(unsigned-byte 8)` / `rontolisp:string-to-octets` | "Bytevectors" below |
-| a port procedure; the optional port argument of `display`, `read-char`, ...; `(current-output-port)` | a `%scheme-` helper over a `%scheme-port` record (`(display x p)` -> `(%scheme-display-to x p)`, which binds `*standard-output*` to the port's stream around the printer); with no port argument the template is what it always was. A current port's VALUE is `(%scheme-port-parameter 1)`, a parameter object | the standard streams are the `t` designator on the compiled backends, not values ("Ports" below) |
+| a port procedure (a `(scheme file)` one included); the optional port argument of `display`, `read-char`, ...; `(current-output-port)` | a `%scheme-` helper over a `%scheme-port` record (`(display x p)` -> `(%scheme-display-to x p)`, which binds `*standard-output*` to the port's stream around the printer); with no port argument the template is what it always was. A current port's VALUE is `(%scheme-port-parameter 1)`, a parameter object | the standard streams are the `t` designator on the compiled backends, not values ("Ports" below) |
 | `(eval datum env)`, `(interaction-environment)`, `(scheme-report-environment 5)`, `(environment sets..)`, `user-initial-environment`, `system-global-environment` | `(%scheme-eval-in datum '\|#[environment]\|)`: a Scheme evaluator over DATUMS in `scheme.lisp`; every specifier is the one global environment, a quoted symbol | the lowering is not inside a compiled program and the backends' run-time `eval` evaluates core forms, so one evaluator serves all four ("`eval`" below) |
 
 `symbol?` excludes `T`, `NIL` and the false value; `boolean?` is `#t`/`#f` only; `vector?`
@@ -235,6 +237,68 @@ its record in `internalRecords` by datum identity and defines nothing twice.
   backends, Gauche's output), and `JvmLispCompilerTest.
   bracketAndSemicolonInAFunctionNameAreMangledAway`.
 
+## Vertical-line identifiers and the infinities (2026-09-19, `.todo/886`)
+
+- **Reader**: `|...|` is an identifier of any characters, with `\|` `\\` `\"` `\xHH;` and the
+  mnemonic escapes; `|` delimits (`a|b c|` is two datums, as in Gauche) and `#!fold-case`
+  never folds it. `+inf.0` `-inf.0` `+nan.0` `-nan.0`, case-insensitive and in any radix,
+  are flonums (a NaN's sign is dropped: every NaN writes `+nan.0`); `+inf.00`, `inf.0` stay
+  symbols. Both readers (`SchemeReader`, the run-time `read`) and `string->number` agree.
+- **The booleans are identity symbols.** `SchemeReader.TRUE`/`FALSE` are `LispSymbol`s
+  named `#t`/`#f`, and a record compares by name, so `|#t|` WAS `#t` to every
+  `.equals(TRUE)` in the lowering. Every site now tests `==` / `SchemeReader.isBoolean`
+  (`SyntaxRules.datumEquals` too). A new site must do the same.
+- **`write` puts a symbol between vertical lines when its spelling would not read back**:
+  R7RS 7.1.1 `<identifier>` less the `<infnan>` spellings, every non-ASCII character a
+  letter (Gauche writes `λx` bare); `|` and `\` escaped, a control character as
+  `\x<2 hex>;` (Gauche's `|a\x09;b|`). The false value, the unspecified object and the
+  environment symbol have their own spellings and never take lines. One deviation from
+  Gauche: it writes `|+inf.0x|`, a valid R7RS identifier written bare here.
+  `(write (string->symbol "with space"))` was `with space` before -- a deviation the spec
+  pinned, now Gauche's `|with space|`; the strict-`r7rs` "Unbound variable: |1+|" matches
+  Gauche too.
+- **The grammar is spelled twice** -- `SchemeNames.writtenWithVerticalLines` (compile
+  time) and `%scheme-plain-identifier-p` (the printer) -- pinned against each other by
+  `SchemeBuiltinsTest.writePutsASymbolBetweenVerticalLinesExactlyWhenTheFrontEndSaysSo`.
+- **Gated like the bytevector arm** (`SchemeLibrary.BAR_SYMBOLS_FEATURE`): the printer's
+  symbol arm calls `%scheme-write-symbol` under `escape` only in a program that quotes a
+  symbol the grammar lines (a `QUOTE` or a vector literal) or can intern any name
+  (`intern`/`make-symbol`, or a library function reaching one -- `string->symbol`, `read`).
+  The writer walks the spelling as a character LIST, never a string: building one with
+  `%scheme-symbol->string` cost +13 KB of class and +4 KB of wasm more.
+- **Composed internal names escape their parts** (`SchemeNames.component`: ` `, `)`, `]`,
+  `|` -> `|s` `|p` `|b` `||`): `(define-library (|a b|) ..)` and `(a b)` were both
+  `s%%(a b)`. A name without those characters is unchanged.
+- **What infinities reached in the helpers**: `floor`/`ceiling`/`round`/`truncate` of a
+  flonum went through Common Lisp's `floor`, which clamps a non-finite float to a long on
+  every backend (`(floor +inf.0)` was `9223372036854776000.0`, Gauche `+inf.0`); they are
+  `%scheme-flonum-floor` & co. now, answering a flonum of magnitude >= 2^52 (the
+  infinities) and a NaN as itself. `exact` of an infinity or a NaN is refused with a
+  constant message (`%scheme-exact-flonum`; the irritant formatting of
+  `%scheme-error-message` cost +25 KB of wasm for a lone `(exact 2.5)`); before, the
+  interpreter and the JVM signalled and wasm trapped on `unreachable`. The Common Lisp
+  level is `.todo/888`.
+- **Left as found**: `(eqv? +nan.0 +nan.0)` is `#t` on every backend (Common Lisp's `eql`
+  of one bit pattern; R7RS leaves it unspecified, Gauche `#f`). `(eq? x x)` of a flonum
+  variable is `#f` on the interpreter and the JVM, `#t` on wasm -- a Common Lisp split,
+  `.todo/887`.
+- **Cost** (x86-64 Linux, Java 25, class / wasm / component, before -> after):
+  byte-identical -- `hello.scm`, the six `examples/scheme/*.scm`, `(display "...")` string
+  programs, `(scheme char)` programs, an `eval` program, `size-report/programs/hello_world`
+  and `pi_approx`. Changed, each using the feature: `(display (floor 2.5))` 76,250 -> 76,617
+  / 21,508 -> 21,569; `(display (string->number "12"))` 85,337 -> 87,487 / 30,543 ->
+  32,726; `(display (exact 2.5))` 74,241 -> 74,839 / 8,353 -> 9,835;
+  `(write (string->symbol "a b"))` 96,440 -> 109,422 / 25,803 -> 29,957;
+  `(write (read))` 175,552 -> 188,675 / 118,975 -> 123,748; the 67 concatenable
+  `scheme-spec.yaml` cases of before as one program 884,103 -> 896,686 / 1,936,768 ->
+  1,943,180. `(write '|a b|)`: 86,750 / 15,328.
+- Pinned by `SchemeReaderTest`, `SchemeNamesTest`, `SchemeLoweringTest.
+  aVerticalLineIdentifierLowersLikeAnyOtherAndIsNeverABoolean`, `SchemeLibraryTest`,
+  `SchemeLibrariesTest.aLibraryNamePartWithASpaceKeepsItsNamesApart`, and the
+  `vertical-line-identifiers-are-symbols-of-any-spelling`,
+  `infinities-and-nan-read-print-and-compare` and `read-knows-vertical-lines-and-infinities`
+  cases of `scheme-spec.yaml` (all four backends, Gauche 0.9.15's output).
+
 ## A file that reads an imported name before it redefines it
 
 - **Such a name is a variable, initialized to the import's value** by a second leading
@@ -261,7 +325,7 @@ its record in `internalRecords` by datum identity and defines nothing twice.
   Refusing it on the compile path would cost the direct call of every procedure for a
   program that is wrong anyway; a session has the same order as the interpreter.
 
-## The library tags: `base`, `write`, `read`, `char`, `inexact`, `cxr`, `lazy`, `case-lambda`, `process-context`, `eval`, `repl`, `sicp` and `r5rs`
+## The library tags: `base`, `write`, `read`, `char`, `inexact`, `cxr`, `lazy`, `case-lambda`, `process-context`, `eval`, `repl`, `file`, `sicp` and `r5rs`
 
 `SchemeBuiltins` entries carry the R7RS library that exports them, checked entry by
 entry against Gauche 0.9.15's `(module-exports (find-module 'scheme.<lib>))`
@@ -270,9 +334,9 @@ entry against Gauche 0.9.15's `(module-exports (find-module 'scheme.<lib>))`
 `base`, as in R7RS), `char` (all 22 `(scheme char)` exports, "`(scheme char)`" below), `inexact`,
 `cxr` (the whole `(scheme cxr)` set, `caaar` through `cddddr`: every one a
 standard Common Lisp function of the same name), `lazy`, `case-lambda` (the keyword
-alone), `process-context`, `eval` (`eval`, `environment`) and `repl`
-(`interaction-environment`) are `SchemeLowering.IMPORTABLE_LIBRARIES`: `(import (scheme
-<tag>))` names them, and a file with no import at all merges all eleven. Keywords carry a
+alone), `process-context`, `eval` (`eval`, `environment`), `repl`
+(`interaction-environment`) and `file` (all ten `(scheme file)` exports, "File ports" below) are `SchemeLowering.IMPORTABLE_LIBRARIES`: `(import (scheme
+<tag>))` names them, and a file with no import at all merges all twelve. Keywords carry a
 library too: `SYNTAX` is `base`, `LAZY_SYNTAX` (`delay`, `delay-force`) `lazy`,
 `CASE_LAMBDA_SYNTAX` `case-lambda`, `SICP_SYNTAX` (`cons-stream`) `sicp`.
 `sicp` (`true false nil the-empty-stream user-initial-environment
@@ -305,7 +369,7 @@ is R7RS-small within the implemented subset:
    first datum (`an R7RS program begins with an import declaration`, R7RS 5.1). Gauche
    instead starts empty and fails at the first unbound name.
 2. **`sicp` and `r5rs` names are never visible**: `SchemeLowering.imports()`'s no-import
-   branch (the session's) merges the eleven libraries only.
+   branch (the session's) merges the twelve libraries only.
 3. **Redefining an imported binding in a file is refused** (R7RS 5.6.1 "it is an error";
    Gauche -r7 allows the `define` silently): a top-level `define`, `define-values`, or a
    `define-record-type` type or procedure name over a `Builtin` or `Syntax` binding
@@ -376,7 +440,7 @@ paths, REPL, unknown value), and the `standalone:` cases of `scheme-spec.yaml` w
   first digit or fewer than 6 zeros left of it (`123456789.123`,
   `100000000000000000000.0`, `0.000001`), `<digits>e<exp>` otherwise (`1e21`, `1.5e-7`);
   the Common Lisp printer answered `1.0e21` and `1.23456789123e8`. `+inf.0` `-inf.0`
-  `+nan.0` print; READING them is still refused.
+  `+nan.0` print, and read since `.todo/886`.
 - `-0.0` is read with `Double.parseDouble` (`BigDecimal.doubleValue()` dropped the sign),
   and `string->number` negates after converting.
 - Cost (2026-09-17): `(display (list 1 'a "s"))` went from 58,745 to 72,993 B of `.class`
@@ -589,7 +653,9 @@ data lowers to (`SchemeLowering.datum`): identifiers via `SchemeNames.mangle`
 included), `'`/`` ` ``/`,`/`,@` as `quote`/`quasiquote`/`unquote`/`unquote-splicing`
 lists, `#( )`, dotted pairs, `;`/`#;`/`#| |#` skipped -- or `(eq? (read) 'quit)` is
 false. `#u8(` / `#U8(` reads a bytevector through `%scheme-bytevector`, refusing a
-non-byte element as a read error. Refusals match the frontend: `|...|`, `+inf.0`/`+nan.0`,
+non-byte element as a read error. `|...|` (`%scheme-read-bar-symbol`, the string escapes
+shared through `%scheme-read-escape`) and `+inf.0`/`+nan.0` (`%scheme-infnan`, inside
+`%scheme-string->number`) read as in source. Refusals match the frontend:
 `[`/`]`/`{`/`}`, unsupported `#`, `(|...|/|char|)` by name; an incomplete datum
 raises a read error (`read-error?`, "Exceptions" below).
 
@@ -843,14 +909,50 @@ formal**, then lowered like any lambda -- nothing new reaches a backend:
   `%scheme-error-message`'s string-stream machinery, as the `twice` probe's
   ensure-procedure does. Time, 20M calls of a two-clause `case-lambda` against a plain
   two-argument `defun` (single runs, incl. startup): JVM 0.20 vs 0.13 s, wasm 1.09 vs
-  0.26 s -- the rest list, `length` and `nth` per call. A direct call of a `defun` defined
-  by one could pick its clause statically: `.todo/870`.
+  0.26 s -- the rest list, `length` and `nth` per call. Hence the static pick below.
 - None of the SICP samples spells `case-lambda` (`sicp.zip` above), so the corpus
   classification (`providedNames`) is unmoved.
-- Pinned by `case-lambda-takes-the-first-clause-...` and the two `case-lambda` standalone
-  cases of `scheme-spec.yaml` (all four backends, Gauche 0.9.15 `-r7` output but the
-  message), `SchemeLoweringTest.caseLambdaIsOneRestLambda...` and
-  `caseLambdaIsImportedFromItsOwnLibraryOnly`.
+
+**A direct call picks its clause statically** (2026-09-19, `.todo/870`). A top-level
+procedure that is a `GlobalFunction` (defined once, never assigned) and whose value is a
+`case-lambda` is lowered by `caseLambdaDefuns` to one `defun` per clause plus the
+dispatching `defun f`:
+
+```lisp
+(defun |s%%{f 1}| (|n|) (|s%%{f 2}| |n| 0))
+(defun |s%%{f 2}| (C1 C2) ...self tail calls: psetq + go...)
+(defun |f| (&rest A) (let ((N (length A)))
+  (if (= N 1) (|s%%{f 1}| (nth 0 A)) (if (= N 2) (|s%%{f 2}| (nth 0 A) (nth 1 A)) (%scheme-case-lambda-arity A)))))
+```
+
+- `GlobalFunction.clauses` carries the clauses, so a call through a library export picks
+  them too. `call()` emits the first clause accepting the count; a count none accepts
+  calls `f`, which raises the same catchable error object at run time -- NOT a lowering
+  error as `(car 1 2)` is: R7RS only says "it is an error", Gauche raises it at run time
+  and the spec case catches it with `guard`, and a refusal would also reject a program
+  whose bad call is never reached. A rest clause is `apply`'d by the dispatch.
+- The names `s%%{<name> <n>}` (prefixed by a library's `s%%(lib)`) are unforgeable the way
+  internal record names `s%%[..]` are.
+- A clause's self tail call is a jump when its count picks THAT clause (`Target.accepts`
+  asks `GlobalFunction.clauseFor`); another count is a direct call of the other clause.
+  So a CYCLE among clauses (`((n) (if (= n 0) 'pp (f n 1))) ((n k) (f (- n k)))`) would
+  turn jumps into recursion: `clauses()` scans each clause body for calls headed by the
+  name (scope-blind, by count) and keeps the old single dispatching lambda when the
+  clause graph has a cycle through two clauses or more. `cl-pp 100000` in the spec case.
+- Not split: a `case-lambda` bound by an internal `define`, `letrec` or `let` (variables
+  and `funcall`, as before), and a session's (no `GlobalFunction` there).
+- Measured (2026-09-19, x86-64 Linux, Java 25, wasmtime 47; 20M calls `(area (remainder i 7)
+  3)` of a two-clause `case-lambda`, three runs each incl. startup): JVM 0.23 -> 0.16-0.17 s,
+  wasm 0.84-0.91 -> 0.36-0.44 s; the plain two-argument `defun` is 0.15-0.17 / 0.33-0.40 s.
+  Artifact 79,770 -> 77,450 B class, 24,833 -> 13,607 B wasm: nothing references the
+  dispatch once every call is direct, so the tree shaker drops it and the arity refusal's
+  string-stream machinery with it. Byte-identical: the 87 `scheme-spec.yaml` cases not
+  spelling `case-lambda` and `examples/scheme/*.scm`, both backends; the 4 that spell it
+  change (the no-matching-clause standalone +1 B wasm / +105 B class, the dispatch staying).
+- Pinned by `case-lambda-takes-the-first-clause-...`, `a-library-exports-a-case-lambda-...`
+  and the two `case-lambda` standalone cases of `scheme-spec.yaml` (all four backends,
+  Gauche 0.9.15 `-r7` output but the message), `SchemeLoweringTest.caseLambdaIsOneRestLambda...`
+  and `caseLambdaIsImportedFromItsOwnLibraryOnly`.
 
 ## Bytevectors (2026-09-18, `.todo/871`)
 
@@ -914,7 +1016,7 @@ all four and `open-stream-p` after `close` is T on wasm. Slots: `input`, `binary
 `string` (made by `open-...-string`), `stream`, `open`, `pushback`, `fold-case`. A
 textual port's `stream` is the CL stream it reads or writes (`t` for the standard ones);
 a binary input port's is the bytevector (a copy) with the position in `pushback`; a
-binary output port's the bytes written, newest first. `close-port` only clears `open`.
+binary output port's the bytes written, newest first. `close-port` clears `open` (and closes a file port's stream, "File ports" below).
 
 - **Output with a port** binds `*standard-output*` to the port's stream around the
   unchanged printer (`%scheme-display-to` & co), so the printer keeps its one shape.
@@ -950,7 +1052,7 @@ binary output port's the bytes written, newest first. `close-port` only clears `
   gets, so `LibraryDefunPruner`'s bundled-name sets read `SchemeLibrary.everyVariantForms()`;
   with `forms()` alone the no-port reader's four `defvar`s were not known as library
   definitions and stayed as roots (+580 B class in every printing program).
-- **Binary ports are over bytevectors only.** The standard ports are textual, so
+- **Binary ports are over bytevectors and files.** The standard ports are textual, so
   `read-u8`/`write-u8`/`read-bytevector`... with no port argument are refused by name
   (Gauche reads/writes the byte). A port is textual or binary, never both (Gauche's are
   both: `binary-port?` of a string port is `#t` there). `u8-ready?` and `char-ready?`
@@ -960,9 +1062,7 @@ binary output port's the bytes written, newest first. `close-port` only clears `
   byte: 256`), error objects a `guard` catches -- Gauche's texts differ.
 - `eval` reaches every port procedure through the generated table; a current port's
   table value is its parameter object.
-- Not here: file ports (`(scheme file)`: `open-input-file`, `with-output-to-file`, ...;
-  `.todo/874`),
-  and the non-R7RS `with-output-to-string` / `call-with-output-string` (no SICP sample
+- File ports: "File ports" below. Not here: the non-R7RS `with-output-to-string` / `call-with-output-string` (no SICP sample
   spells any port name).
 - Cost (2026-09-18, x86-64 Linux, Java 25; `-o P.class --class-name P` / `-o p.wasm`):
   every program spelling no port name is byte-identical before and after -- `hello`
@@ -982,6 +1082,76 @@ binary output port's the bytes written, newest first. `close-port` only clears `
   compiled backends) and `writing-to-a-closed-port-is-an-error`,
   `SchemeLoweringTest.aPortArgumentSelectsThePortHelperAndACurrentPortIsAParameterValue`,
   `LibraryDefunPrunerTest.thePortSectionFollowsOnlyAProgramThatUsesAPortProcedure`.
+
+## File ports (`(scheme file)`; 2026-09-19, `.todo/874`)
+
+**A file port is the `%scheme-port` record over a Common Lisp file stream**, with a
+`file` slot set; everything that reads or writes a textual port works on it unchanged.
+
+- **Each opener spells its own literal `open`** (`%scheme-open-input-file` & co in
+  `scheme.lisp`): `:direction` / `:element-type` must be literal
+  (`.kb/read-load-streams.md`, "Computed open options"). Output opens `:if-exists
+  :supersede :if-does-not-exist :create`. The path reaches `open` as a variable, so no
+  literal-path folding applies (`CompileTimePathnameFolder` folds `with-open-file` of a
+  literal only): a literal `"/tmp/x"` in the Scheme source is read at RUN time
+  (measured, JVM and wasm).
+- **A failed open is a `file-error?` object on every backend**: the opener wraps `open`
+  in `(handler-case .. (error () nil))` and raises `%scheme-file-error-condition`
+  (`%scheme-error` + CL `file-error`, like the read error) with message `who: cannot open
+  file:` and the path as irritant. Needed because Common Lisp's `open` signals a
+  SIMPLE-ERROR on all four backends (measured 2026-09-19: interpreter
+  `OPEN: cannot open file ...`, JVM the raw `FileNotFoundException` text, wasm `open:
+  cannot open file`), and `delete-file` of a missing file too (`DELETE-FILE: cannot
+  delete ...`, prelude) -- ANSI says `file-error`; `.todo/890` has the CL fix. The
+  handler stays right after it.
+- **Closing really closes**: `%scheme-release-port` `close`s the stream of an open file
+  port, from `close-port` & co and `call-with-port`. `with-input-from-file` /
+  `with-output-to-file` are `%scheme-with-file`: `%scheme-parameterize` of the port
+  parameter (so `(current-output-port)` IS the file port and Common Lisp code writes
+  there too) inside an `unwind-protect` that closes the file on every exit channel --
+  Gauche leaves it open (and unflushed) on an escape. It answers the thunk's values, so
+  it is in `SchemeValueCount.PASSING_HELPERS`. `call-with-input-file` /
+  `call-with-output-file` are `call-with-port` over the opener: closed on return only, as
+  R7RS says.
+- **Binary file ports**: `binary` and `file` set; `read-u8` & co test `file` first and
+  go to `%scheme-file-read-u8` (`read-byte`, the peeked byte or EOF in `pushback`),
+  `write-u8` / `write-bytevector` to `write-byte`. `get-output-bytevector` refuses a file
+  port. `read-bytevector` from a file builds its result through `%scheme-bytevector`, so
+  the bytevector feature's fixpoint counts it -- computed with the files feature only for
+  a program that has file ports (`SchemeLibrary.process`), so no other program's
+  bytevector decision moves.
+- **`file-exists?` is `(probe-file f)`, no helper**, so a program asking only that pulls
+  in no port machinery. `delete-file` is `%scheme-delete-file`: CL `delete-file` in a
+  `handler-case`, a file error on failure.
+- **Everything file-specific is behind a third reader feature**, `rontolisp-scheme-files`
+  (`SchemeLibrary.FILES_FEATURE`): the openers, the condition, the `file` slot itself and
+  the file arms of `close-port`, `call-with-port`, the binary procedures and
+  `get-output-bytevector`. `makesFiles` is `makesPorts`' derivation one feature up
+  (functions defined under ports+files minus ports); a file program implies the ports
+  feature. The interpreter always reads with all three.
+- **An output file port left open loses its buffered output on the interpreter and the
+  JVM** (a `BufferedWriter` / `BufferedOutputStream` nobody flushes at exit); wasm writes
+  through `fd_write` and keeps it (measured 2026-09-19, all four: a `display` to an
+  unclosed port). A Common Lisp stream behaves the same; stated in the docs as "close the
+  port", the flush-at-exit fix is `.todo/891`.
+- The spec cases build every path under `/tmp` from `(random 1000000000)` -- a literal
+  path would never test the preopen resolution, and two runs of the corpus at once (two
+  worktrees) must not share a file; the driver's wasm legs pass `--dir /tmp`. A wasm
+  program run without a preopen covering the path gets the file error (errno path).
+- Cost (2026-09-19, x86-64 Linux, Java 25; `-o P.class --class-name P` / `-o p.wasm`):
+  every program spelling no `(scheme file)` name is byte-identical before and after --
+  `hello` 1,666 / 510 B, `(display (list 1 'a "s"))` 74,026 / 11,549, the string-port
+  probe 83,882 / 25,913, the bytevector-port probe 98,075 / 39,604, a `parameterize` +
+  `read` + `close-port` + `call-with-port` probe 186,878 / 124,918, `(write (read))`
+  175,526 / 118,935, `eval` 128,025 / 82,618, a `file-error?` probe 106,447 / 47,759.
+  `(write (file-exists? "/tmp"))` 76,240 / 12,927 (the printer); `with-output-to-file` +
+  `display` 116,440 / 52,235; a `call-with-output-file` / `call-with-input-file` round
+  trip 128,454 / 58,277; a binary round trip 115,834 / 51,186.
+- Pinned by the `file-ports-write-then-read`, `with-output-to-file-restores-the-current-port`,
+  `binary-file-ports` and `a-failed-open-is-a-file-error` cases of `scheme-spec.yaml`
+  (all four backends; Gauche 0.9.15 `-r7` output but the deviations their comments state),
+  `SchemeLoweringTest.importsSelectWhatIsVisible`,
+  `LibraryDefunPrunerTest.theFileSectionFollowsOnlyAProgramThatUsesAFileProcedure`.
 
 ## Libraries and include (`define-library`, `include`; 2026-09-19, `.todo/882`)
 
@@ -1322,8 +1492,8 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 ## Not here yet (each its own follow-up)
 
-`cond-expand`, exporting syntax from a library, file ports (`(scheme file)`), the other
-libraries, `|...|` identifiers, reading `+inf.0`/`+nan.0`,
+`cond-expand`, exporting syntax from a library, the other
+libraries, radix and exactness prefixes in `string->number` (`.todo/889`),
 re-entrant continuations, proper tail calls in general. Each is refused by name where it
 can be.
 
@@ -1403,7 +1573,8 @@ group, all four backends in `./mvnw test`; the wasm legs need `wasmtime` on `PAT
 `SchemeLoweringTest` (the table as emitted forms), `SchemeSessionTest` (what a session emits,
 when a buffer is complete), `SchemeReaderTest`, `SchemeNamesTest`,
 `SchemeBuiltinsTest` (every `:function` evaluates, every helper a template names exists),
-`SchemeLibrariesTest` (`define-library` / `include`),
+`SchemeLibrariesTest` (`define-library` / `include`), `SchemeLibraryTest` (which programs
+get the printer's vertical-line arm),
 `RontoLispCliTest` (`aSchemeFileIsPickedByItsExtension`, `aCommonLispProgramLoadsASchemeFile`,
 `aSchemeSyntaxErrorNamesItsPositionOnEveryPath`, `aSchemeProgramIsRefusedByTheScalarBackend`,
 `anUncaughtSchemeErrorReportsItsMessageAndIrritants`,

@@ -1,7 +1,8 @@
 # 構文
 
 - **リーダー**（大文字小文字を区別）: `#t` `#f` `#true` `#false`、整数、小数、有理数、
-  `#x` `#b` `#o` `#d`、`#\a` `#\space` `#\newline` `#\x41`、
+  `+inf.0` `-inf.0` `+nan.0` `-nan.0`（大文字小文字を問わない）、`#x` `#b` `#o` `#d`、任意の文字からなる
+  `|...|` 識別子（`\|` と文字列のエスケープが使え、大文字小文字は畳み込まれない）、`#\a` `#\space` `#\newline` `#\x41`、
   `\n \t \" \\ \xHH;` を含む文字列、`#( )` ベクタ、`#u8( )` バイトベクタ、ドット対、`'` `` ` `` `,` `,@`、`;`、`#;`、
   `#| |#`、`#!fold-case` / `#!no-fold-case`（ファイル単位。識別子と文字名を
   [`string-foldcase`](reference/string-foldcase.md) と同じく畳み込む -- 文字列や文字そのものは
@@ -10,10 +11,10 @@
   （`delay` と `delay-force` は [(scheme lazy)](reference/library-lazy.md)、`case-lambda` は
   [(scheme case-lambda)](reference/library-case-lambda.md)）。および
   `(import (scheme base) (scheme write) (scheme read) (scheme char) (scheme inexact) (scheme cxr) (scheme lazy)
-  (scheme case-lambda) (scheme process-context) (scheme eval) (scheme repl))`（`only` / `except` /
+  (scheme case-lambda) (scheme process-context) (scheme eval) (scheme repl) (scheme file))`（`only` / `except` /
   `prefix` / `rename` 可）。
 
-11 のライブラリそれぞれが何をエクスポートするかは[ライブラリ](libraries.md)を、
+12 のライブラリそれぞれが何をエクスポートするかは[ライブラリ](libraries.md)を、
 `import` を一切書かない場合に見える名前は
 [*Structure and Interpretation of Computer Programs*（SICP）互換](sicp.md)を参照してください。
 

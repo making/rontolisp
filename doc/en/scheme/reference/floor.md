@@ -2,7 +2,7 @@
 
 `(floor x)`
 
-Returns the largest integer not greater than `x`. A flonum argument gives a flonum (`(floor 2.5)` is `2.0`); an exact argument gives an exact integer.
+Returns the largest integer not greater than `x`. A flonum argument gives a flonum (`(floor 2.5)` is `2.0`); an exact argument gives an exact integer. An infinity or a NaN gives itself.
 
 ```scheme
 (floor 2.5) ; => 2.0

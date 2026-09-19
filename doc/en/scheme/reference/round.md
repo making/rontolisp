@@ -2,7 +2,7 @@
 
 `(round x)`
 
-Returns the integer closest to `x`; a value exactly halfway rounds to the even integer. A flonum argument gives a flonum, an exact one an exact integer.
+Returns the integer closest to `x`; a value exactly halfway rounds to the even integer. A flonum argument gives a flonum, an exact one an exact integer. An infinity or a NaN gives itself.
 
 ```scheme
 (round 2.5) ; => 2.0

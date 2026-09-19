@@ -211,8 +211,45 @@ final class SchemeLowering {
 	private record Variable(LispSymbol symbol) implements Binding {
 	}
 
-	/** A top-level procedure lowered to a {@code defun}: called directly. */
-	private record GlobalFunction(LispSymbol symbol) implements Binding {
+	/**
+	 * A top-level procedure lowered to a {@code defun}: called directly.
+	 *
+	 * @param symbol the {@code defun}'s name
+	 * @param clauses a {@code case-lambda}'s clauses, each its own {@code defun}, in
+	 * order; empty for any other procedure
+	 */
+	private record GlobalFunction(LispSymbol symbol, List<Clause> clauses) implements Binding {
+
+		GlobalFunction(LispSymbol symbol) {
+			this(symbol, List.of());
+		}
+
+		// The first clause accepting the count, as the dispatching defun would pick it.
+		@Nullable Clause clauseFor(int argumentCount) {
+			for (Clause clause : this.clauses) {
+				if (clause.accepts(argumentCount)) {
+					return clause;
+				}
+			}
+			return null;
+		}
+
+	}
+
+	/**
+	 * One clause of a {@code case-lambda} a top-level procedure is defined by, lowered to
+	 * a {@code defun} of its own that a direct call reaches without the dispatch.
+	 *
+	 * @param symbol the clause's {@code defun}
+	 * @param required how many required formals it has
+	 * @param rest whether it has a rest formal
+	 */
+	private record Clause(LispSymbol symbol, int required, boolean rest) {
+
+		boolean accepts(int argumentCount) {
+			return this.rest ? argumentCount >= this.required : argumentCount == this.required;
+		}
+
 	}
 
 	/** A record type's predicate: a {@code defun} answering {@code T}/{@code NIL}. */
@@ -289,6 +326,9 @@ final class SchemeLowering {
 
 		private boolean shadowed;
 
+		// The case-lambda clause whose defun this loop is, or null.
+		private @Nullable LispSymbol clause;
+
 		Target(Binding binding, LoopShape shape, Scope home, List<String> names) {
 			this.binding = binding;
 			this.label = shape.label();
@@ -315,6 +355,12 @@ final class SchemeLowering {
 		}
 
 		boolean accepts(int argumentCount) {
+			if (this.binding instanceof GlobalFunction function && !function.clauses().isEmpty()) {
+				// A case-lambda clause's defun: only a count that picks THIS clause is a
+				// jump; any other is a direct call of the clause it picks.
+				Clause clause = function.clauseFor(argumentCount);
+				return clause != null && clause.symbol().equals(this.clause);
+			}
 			int required = this.rest ? this.assigned.size() - 1 : this.assigned.size();
 			return this.rest ? argumentCount >= required : argumentCount == required;
 		}
@@ -437,9 +483,16 @@ final class SchemeLowering {
 	 * @param body the body forms
 	 * @param self the binding a tail call to which is a jump, or {@code null}
 	 * @param selfName the identifier {@code self} is bound to, for the cheap pre-scan
+	 * @param clause the {@code case-lambda} clause of {@code self} this procedure is, or
+	 * {@code null}: a self call is a jump only when its count picks this clause
 	 */
 	private record ProcedureSpec(Formals formals, List<LispVal> body, @Nullable Binding self,
-			@Nullable LispSymbol selfName) {
+			@Nullable LispSymbol selfName, @Nullable LispSymbol clause) {
+
+		ProcedureSpec(Formals formals, List<LispVal> body, @Nullable Binding self, @Nullable LispSymbol selfName) {
+			this(formals, body, self, selfName, null);
+		}
+
 	}
 
 	private record Lowered(LispVal lambdaList, List<LispVal> body) {
@@ -875,7 +928,7 @@ final class SchemeLowering {
 
 	/** The R7RS libraries {@code (import (scheme <name>))} accepts. */
 	private static final List<String> IMPORTABLE_LIBRARIES = List.of("base", "write", "read", "char", "inexact", "cxr",
-			"lazy", "case-lambda", "process-context", "eval", "repl");
+			"lazy", "case-lambda", "process-context", "eval", "repl", "file");
 
 	/**
 	 * {@code (defun rontolisp::%scheme-library-p (name) ...)}: whether
@@ -1087,7 +1140,7 @@ final class SchemeLowering {
 		LispVal rest = datum;
 		while (rest instanceof LispCons cell) {
 			switch (cell.car()) {
-				case LispSymbol part when !part.equals(SchemeReader.TRUE) && !part.equals(SchemeReader.FALSE) ->
+				case LispSymbol part when part != SchemeReader.TRUE && part != SchemeReader.FALSE ->
 					name.add(part.name());
 				case LispInteger integer when integer.value() >= 0 -> name.add(Long.toString(integer.value()));
 				default -> throw error("malformed library name: " + SchemeExpander.written(datum), form);
@@ -1475,6 +1528,7 @@ final class SchemeLowering {
 	private void declareGlobals(List<LispVal> forms) {
 		Map<String, Integer> definitions = new HashMap<>();
 		Map<String, LispSymbol> procedures = new LinkedHashMap<>();
+		Map<String, LispCons> caseLambdas = new HashMap<>();
 		Map<String, LispSymbol> variables = new LinkedHashMap<>();
 		List<LispCons> records = new ArrayList<>();
 		for (LispVal datum : forms) {
@@ -1489,6 +1543,9 @@ final class SchemeLowering {
 				refuseRedefiningAnImport(definition.name(), form);
 				definitions.merge(name, 1, Integer::sum);
 				(definition.procedure() ? procedures : variables).putIfAbsent(name, definition.name());
+				if (definition.caseLambda() != null) {
+					caseLambdas.putIfAbsent(name, definition.caseLambda());
+				}
 			}
 			else if (core == Core.DEFINE_VALUES) {
 				for (LispSymbol variable : formals(second(form), form).all()) {
@@ -1512,8 +1569,10 @@ final class SchemeLowering {
 		procedures.forEach((name, identifier) -> {
 			boolean direct = !this.interactive && definitions.getOrDefault(name, 0) == 1
 					&& !this.assignedNames.contains(name) && !variables.containsKey(name) && !readEarly.contains(name);
+			LispCons caseLambda = caseLambdas.get(name);
 			this.global.bindings.put(name,
-					direct ? new GlobalFunction(global(identifier)) : new Variable(global(identifier)));
+					!direct ? new Variable(global(identifier)) : new GlobalFunction(global(identifier),
+							caseLambda == null ? List.of() : clauses(identifier, caseLambda)));
 		});
 		for (LispCons record : records) {
 			declareRecord(record, definitions);
@@ -1682,7 +1741,9 @@ final class SchemeLowering {
 			try {
 				switch (syntaxOf(form, this.global)) {
 					case DEFINE -> {
-						out.add(inherit(form, topLevelDefine(form)));
+						for (LispVal defined : topLevelDefine(form)) {
+							out.add(defined instanceof LispCons cons ? inherit(form, cons) : defined);
+						}
 						trampoline(definition(form).name(), out);
 					}
 					case DEFINE_VALUES -> {
@@ -1739,8 +1800,15 @@ final class SchemeLowering {
 	 * @param formals the parameters when the value is a syntactic {@code lambda}, else
 	 * {@code null}
 	 * @param body the procedure body, or the single value expression
+	 * @param caseLambda the {@code case-lambda} datum the value is, desugared into
+	 * {@code formals} and {@code body}, or {@code null}
 	 */
-	private record Definition(LispSymbol name, @Nullable LispVal formals, List<LispVal> body) {
+	private record Definition(LispSymbol name, @Nullable LispVal formals, List<LispVal> body,
+			@Nullable LispCons caseLambda) {
+
+		Definition(LispSymbol name, @Nullable LispVal formals, List<LispVal> body) {
+			this(name, formals, body, null);
+		}
 
 		boolean procedure() {
 			return this.formals != null;
@@ -1767,20 +1835,30 @@ final class SchemeLowering {
 			throw error("malformed define", form);
 		}
 		LispVal value = parts.size() == 3 ? parts.get(2) : LispNil.INSTANCE;
+		LispCons caseLambda = null;
 		if (value instanceof LispCons dispatch && syntaxOf(dispatch, this.global) == Core.CASE_LAMBDA) {
 			// A procedure all the same: a defun when the file defines it once.
+			caseLambda = dispatch;
 			value = caseLambda(dispatch);
 		}
 		if (value instanceof LispCons lambda && syntaxOf(lambda, this.global) == Core.LAMBDA
 				&& lambda.cdr() instanceof LispCons rest && rest.cdr() instanceof LispCons) {
-			return new Definition(name, rest.car(), elements(rest.cdr(), lambda));
+			return new Definition(name, rest.car(), elements(rest.cdr(), lambda), caseLambda);
 		}
 		return new Definition(name, null, List.of(value));
 	}
 
-	private LispVal topLevelDefine(LispCons form) {
+	private List<LispVal> topLevelDefine(LispCons form) {
 		Definition definition = definition(form);
 		Binding binding = this.global.find(name(definition.name()));
+		if (binding instanceof GlobalFunction function && !function.clauses().isEmpty()
+				&& definition.caseLambda() != null) {
+			return caseLambdaDefuns(function, definition, Objects.requireNonNull(definition.caseLambda()));
+		}
+		return List.of(topLevelDefinition(form, definition, binding));
+	}
+
+	private LispVal topLevelDefinition(LispCons form, Definition definition, @Nullable Binding binding) {
 		if (binding instanceof GlobalFunction function && definition.formals() != null) {
 			Lowered lowered = procedure(new ProcedureSpec(formals(definition.formals(), form), definition.body(),
 					function, definition.name()), this.global);
@@ -1799,6 +1877,125 @@ final class SchemeLowering {
 	}
 
 	private record DefinedIn(LispCons form, Scope scope, @Nullable Binding self) {
+	}
+
+	// A top-level procedure defined once by a case-lambda: one defun per clause, named
+	// s%%{<name> <n>} -- no identifier mangles to it (SchemeNames.libraryPrefix's
+	// argument) -- which a direct call picks by its argument count, and the procedure's
+	// own defun dispatching on the count at run time for everything else: a first-class
+	// use, apply, and a count no clause accepts, which it reports. Empty -- the
+	// procedure is lowered as one dispatching lambda -- when a clause may call ANOTHER
+	// clause that may call it back: the single procedure keeps every tail call among
+	// its clauses a jump, and separate defuns would turn such a cycle into recursion.
+	// The scan is by name and blind to scope, like collectAssigned: over-approximating
+	// only keeps the dispatch.
+	private List<Clause> clauses(LispSymbol identifier, LispCons caseLambda) {
+		List<Clause> clauses = new ArrayList<>();
+		List<List<LispVal>> bodies = new ArrayList<>();
+		String base = this.prefix + SchemeNames.PREFIX + "%{" + name(identifier) + " ";
+		for (LispVal clause : elements(caseLambda.cdr(), caseLambda)) {
+			// caseLambda() has checked every clause's shape by now.
+			List<LispVal> parts = elements(clause, (LispCons) clause);
+			Formals formals = formals(parts.get(0), (LispCons) clause);
+			clauses.add(new Clause(symbol(base + (clauses.size() + 1) + "}"), formals.required().size(),
+					formals.rest() != null));
+			bodies.add(parts.subList(1, parts.size()));
+		}
+		GlobalFunction probe = new GlobalFunction(identifier, clauses);
+		List<Set<Integer>> calls = new ArrayList<>();
+		for (int i = 0; i < bodies.size(); i++) {
+			Set<Integer> callees = new HashSet<>();
+			for (LispVal datum : bodies.get(i)) {
+				collectClauseCalls(datum, identifier.name(), probe, callees);
+			}
+			callees.remove(i);
+			calls.add(callees);
+		}
+		for (int start = 0; start < clauses.size(); start++) {
+			List<Integer> pending = new ArrayList<>(calls.get(start));
+			Set<Integer> reached = new HashSet<>();
+			while (!pending.isEmpty()) {
+				int next = pending.removeLast();
+				if (next == start) {
+					return List.of();
+				}
+				if (reached.add(next)) {
+					pending.addAll(calls.get(next));
+				}
+			}
+		}
+		return List.copyOf(clauses);
+	}
+
+	// The clauses the calls headed by the name pick, by argument count, as indexes.
+	private static void collectClauseCalls(LispVal datum, String name, GlobalFunction function, Set<Integer> out) {
+		if (datum instanceof LispArray array) {
+			for (LispVal element : array.data()) {
+				collectClauseCalls(element, name, function, out);
+			}
+		}
+		if (!(datum instanceof LispCons form)) {
+			return;
+		}
+		int operands = -1;
+		LispVal rest = form;
+		while (rest instanceof LispCons cell) {
+			collectClauseCalls(cell.car(), name, function, out);
+			operands++;
+			rest = cell.cdr();
+		}
+		if (form.car() instanceof LispSymbol head && head.name().equals(name) && rest == LispNil.INSTANCE) {
+			Clause clause = function.clauseFor(operands);
+			if (clause != null) {
+				out.add(function.clauses().indexOf(clause));
+			}
+		}
+	}
+
+	// The clauses' defuns, then the dispatching one: the shape caseLambda() desugars to,
+	// with each clause body a call of the clause's defun.
+	private List<LispVal> caseLambdaDefuns(GlobalFunction function, Definition definition, LispCons caseLambda) {
+		List<LispVal> defuns = new ArrayList<>();
+		List<LispVal> clauses = elements(caseLambda.cdr(), caseLambda);
+		for (int i = 0; i < clauses.size(); i++) {
+			LispCons where = (LispCons) clauses.get(i);
+			List<LispVal> parts = elements(where, where);
+			Clause clause = function.clauses().get(i);
+			Lowered lowered = procedure(new ProcedureSpec(formals(parts.get(0), where), parts.subList(1, parts.size()),
+					function, definition.name(), clause.symbol()), this.global);
+			defuns.add(inherit(where, new LispCons(symbol("DEFUN"),
+					new LispCons(clause.symbol(), new LispCons(lowered.lambdaList(), listOf(lowered.body()))))));
+		}
+		LispSymbol arguments = fresh("A");
+		LispSymbol count = fresh("N");
+		boolean counted = false;
+		LispVal chain = list(symbol("RONTOLISP::%SCHEME-CASE-LAMBDA-ARITY"), arguments);
+		for (int i = clauses.size() - 1; i >= 0; i--) {
+			Clause clause = function.clauses().get(i);
+			LispVal call;
+			if (clause.rest()) {
+				call = list(symbol("APPLY"), list(symbol("FUNCTION"), clause.symbol()), arguments);
+			}
+			else {
+				List<LispVal> taken = new ArrayList<>();
+				for (int j = 0; j < clause.required(); j++) {
+					taken.add(list(symbol("NTH"), new LispInteger(j), arguments));
+				}
+				call = new LispCons(clause.symbol(), listOf(taken));
+			}
+			if (clause.rest() && clause.required() == 0) {
+				// Takes every count: nothing after it is reachable.
+				chain = call;
+				continue;
+			}
+			counted = true;
+			chain = list(symbol("IF"),
+					list(symbol(clause.rest() ? ">=" : "="), count, new LispInteger(clause.required())), call, chain);
+		}
+		LispVal dispatch = counted ? list(symbol("LET"), list(list(count, list(symbol("LENGTH"), arguments))), chain)
+				: chain;
+		defuns.add(list(symbol("DEFUN"), function.symbol(), list(symbol("&REST"), arguments), dispatch));
+		return defuns;
 	}
 
 	private LispVal definedValue(Definition definition, DefinedIn where) {
@@ -1909,7 +2106,7 @@ final class SchemeLowering {
 				constructorFields.add(fieldName);
 			}
 		}
-		else if (parts.get(2) instanceof LispSymbol bare && !bare.equals(SchemeReader.FALSE)) {
+		else if (parts.get(2) instanceof LispSymbol bare && bare != SchemeReader.FALSE) {
 			constructor = bare;
 			constructorFields.addAll(fields);
 		}
@@ -1989,7 +2186,8 @@ final class SchemeLowering {
 			return known;
 		}
 		RecordType type = recordType(form);
-		String base = this.prefix + SchemeNames.PREFIX + "%[" + this.enclosing + " " + name(type.name());
+		String base = this.prefix + SchemeNames.PREFIX + "%[" + SchemeNames.component(this.enclosing) + " "
+				+ SchemeNames.component(name(type.name()));
 		String candidate = base + "]";
 		for (int ordinal = 2; !this.internalRecordNames.add(candidate); ordinal++) {
 			candidate = base + " " + ordinal + "]";
@@ -2102,10 +2300,10 @@ final class SchemeLowering {
 	private LispVal atom(LispVal expression, Scope scope) {
 		return switch (expression) {
 			case LispSymbol identifier -> {
-				if (identifier.equals(SchemeReader.TRUE)) {
+				if (identifier == SchemeReader.TRUE) {
 					yield LispTrue.INSTANCE;
 				}
-				yield identifier.equals(SchemeReader.FALSE) ? this.falseVariable : reference(identifier, scope);
+				yield identifier == SchemeReader.FALSE ? this.falseVariable : reference(identifier, scope);
 			}
 			case LispArray vector -> list(symbol("QUOTE"), datum(vector));
 			default -> expression;
@@ -2411,7 +2609,12 @@ final class SchemeLowering {
 		}
 		List<LispVal> arguments = values(call.operands(), scope);
 		return switch (call.binding()) {
-			case GlobalFunction function -> new LispCons(function.symbol(), listOf(arguments));
+			case GlobalFunction function -> {
+				// A case-lambda's clause is picked here when the count picks one; a count
+				// none accepts reaches the dispatch, which reports it at run time.
+				Clause clause = function.clauseFor(arguments.size());
+				yield new LispCons(clause != null ? clause.symbol() : function.symbol(), listOf(arguments));
+			}
 			case GlobalPredicate predicate -> SchemeBuiltins.toSchemeValue(SchemeBuiltins.Result.PREDICATE,
 					new LispCons(predicate.symbol(), listOf(arguments)));
 			case LoopName loop -> {
@@ -2422,11 +2625,11 @@ final class SchemeLowering {
 				new LispCons(symbol("FUNCALL"), new LispCons(ensure(variable.symbol()), listOf(arguments)));
 			case null, default -> {
 				if (call.operator() instanceof LispSymbol head) {
-					if (head.equals(SchemeReader.FALSE)) {
+					if (head == SchemeReader.FALSE) {
 						yield new LispCons(symbol("FUNCALL"),
 								new LispCons(ensure(this.falseVariable), listOf(arguments)));
 					}
-					if (head.equals(SchemeReader.TRUE)) {
+					if (head == SchemeReader.TRUE) {
 						yield new LispCons(symbol("FUNCALL"),
 								new LispCons(ensure(LispTrue.INSTANCE), listOf(arguments)));
 					}
@@ -2540,7 +2743,7 @@ final class SchemeLowering {
 	// ------------------------------------------------------------------ tests
 
 	private Test test(LispVal expression, Scope scope) {
-		if (expression.equals(SchemeReader.FALSE)) {
+		if (expression == SchemeReader.FALSE) {
 			return new Test(LispNil.INSTANCE, false);
 		}
 		if (!(expression instanceof LispCons form)) {
@@ -2563,7 +2766,7 @@ final class SchemeLowering {
 				return new Test(single(form), false);
 			}
 			case Syntax syntax when syntax.core() == Core.QUOTE -> {
-				return new Test(single(form).equals(SchemeReader.FALSE) ? LispNil.INSTANCE : LispTrue.INSTANCE, false);
+				return new Test(single(form) == SchemeReader.FALSE ? LispNil.INSTANCE : LispTrue.INSTANCE, false);
 			}
 			case Builtin builtin when builtin.entry().name().equals("not") && operands.size() == 1 -> {
 				Test inner = test(operands.get(0), scope);
@@ -2592,7 +2795,7 @@ final class SchemeLowering {
 	// Whether the expression can only answer #t or #f, so its VALUE is (if test t false)
 	// rather than a temporary per `or` operand.
 	private boolean isBoolean(LispVal expression, Scope scope) {
-		if (expression.equals(SchemeReader.TRUE) || expression.equals(SchemeReader.FALSE)) {
+		if (expression == SchemeReader.TRUE || expression == SchemeReader.FALSE) {
 			return true;
 		}
 		if (!(expression instanceof LispCons form && form.car() instanceof LispSymbol head)) {
@@ -3047,6 +3250,7 @@ final class SchemeLowering {
 		Target target = new Target(java.util.Objects.requireNonNull(spec.self()),
 				new LoopShape(fresh("L"), fresh ? carriers : variables, rest, !fresh), inner,
 				spec.formals().all().stream().map(this::name).toList());
+		target.clause = spec.clause();
 		LispSymbol result = fresh("R");
 		Exit exit = new Exit(result);
 		int closuresBefore = this.closures;
@@ -3205,10 +3409,10 @@ final class SchemeLowering {
 	private LispVal datum(LispVal datum) {
 		return switch (datum) {
 			case LispSymbol symbol -> {
-				if (symbol.equals(SchemeReader.TRUE)) {
+				if (symbol == SchemeReader.TRUE) {
 					yield LispTrue.INSTANCE;
 				}
-				yield symbol.equals(SchemeReader.FALSE) ? symbol("#f") : symbol(SchemeNames.mangle(symbol.name()));
+				yield symbol == SchemeReader.FALSE ? symbol("#f") : symbol(SchemeNames.mangle(symbol.name()));
 			}
 			case LispCons cons -> {
 				List<LispVal> elements = new ArrayList<>();
@@ -3368,8 +3572,7 @@ final class SchemeLowering {
 	}
 
 	private LispSymbol identifier(LispVal datum, LispCons form) {
-		if (datum instanceof LispSymbol symbol && !symbol.equals(SchemeReader.TRUE)
-				&& !symbol.equals(SchemeReader.FALSE)) {
+		if (datum instanceof LispSymbol symbol && symbol != SchemeReader.TRUE && symbol != SchemeReader.FALSE) {
 			return symbol;
 		}
 		throw error("expected an identifier, got " + datum.print(), form);

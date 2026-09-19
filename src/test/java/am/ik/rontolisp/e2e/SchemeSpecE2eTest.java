@@ -571,7 +571,10 @@ class SchemeSpecE2eTest {
 		Path outFile = Files.createTempFile(workDir, name + "-wasm", ".out");
 		Path errFile = Files.createTempFile(workDir, name + "-wasm", ".err");
 		try {
-			Process process = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", path)
+			// --dir /tmp: the (scheme file) cases open files there, and an absolute path
+			// resolves against the preopen that covers it (.kb/read-load-streams.md).
+			Process process = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--dir", "/tmp",
+					path)
 				.redirectInput(stdinFile.toFile())
 				.redirectOutput(outFile.toFile())
 				.redirectError(errFile.toFile())

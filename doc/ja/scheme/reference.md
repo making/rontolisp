@@ -18,6 +18,7 @@ Scheme フロントエンドが提供する名前ごとの 1 ページです。�
 | [(scheme process-context)](reference/library-process-context.md) | `exit`、`emergency-exit` |
 | [(scheme eval)](reference/library-eval.md) | `eval`、`environment` |
 | [(scheme repl)](reference/library-repl.md) | `interaction-environment` |
+| [(scheme file)](reference/library-file.md) | ファイルポート、`file-exists?`、`delete-file` |
 | [(scheme r5rs)](reference/library-r5rs.md) | ほかのライブラリにない R5RS の名前。`import` なしで見える |
 | [SICP 互換の名前](reference/library-sicp.md) | *[Structure and Interpretation of Computer Programs](sicp.md)*（SICP）/ MIT Scheme の名前。`import` なしで見える |
 
