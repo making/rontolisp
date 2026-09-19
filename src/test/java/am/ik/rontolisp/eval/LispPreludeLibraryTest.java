@@ -354,4 +354,42 @@ class LispPreludeLibraryTest {
 				"%PRINT-CASE-FOLD", "%PRINT-RADIXED");
 	}
 
+	@Test
+	void everyPreludeDefunOfAClFunctionThatAnswersSeveralValuesIsKnownToTheTailDiscipline() {
+		// The compile paths clear the multiple-value channel after a tail call of a cl
+		// FUNCTION, by name (.kb/multiple-values.md, "A tail settles the channel"), so
+		// a prelude defun of a cl name that answers other than one value -- a (values)
+		// or a (values a b ...) anywhere in its body -- must be listed in
+		// LispMacroExpander.passesMultipleValues, or its extra values die at every
+		// caller's tail.
+		List<String> unlisted = new ArrayList<>();
+		for (String source : LispPreludeLibrary.sources().values()) {
+			for (LispVal form : LispReader.readAllFromString(source)) {
+				String name = definitionName(form);
+				if (name != null && am.ik.rontolisp.PackageRegistry.isClFunctionName(name)
+						&& mentionsValuesOtherThanOne(form)
+						&& !am.ik.rontolisp.macro.LispMacroExpander.passesMultipleValues(name)) {
+					unlisted.add(name);
+				}
+			}
+		}
+		assertThat(unlisted).isEmpty();
+	}
+
+	private static boolean mentionsValuesOtherThanOne(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op && op.name().equals("VALUES") && cons.isProperList()
+				&& cons.toList().size() != 2) {
+			return true;
+		}
+		for (LispVal cur = cons; cur instanceof LispCons cell; cur = cell.cdr()) {
+			if (mentionsValuesOtherThanOne(cell.car())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 }

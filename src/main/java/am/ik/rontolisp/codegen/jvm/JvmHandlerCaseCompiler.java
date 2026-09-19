@@ -97,7 +97,7 @@ final class JvmHandlerCaseCompiler {
 				errorClauses.stream().map(clauseParts -> clauseParts.get(0)).toList(), ctx.closRegistry,
 				ctx.restartMode || ctx.signalClauseMatch);
 		if (noErrorClause != null) {
-			protectedForm = LispMacroExpander.spillEscapingMvProducers(protectedForm);
+			protectedForm = LispMacroExpander.settleMvTail(protectedForm);
 		}
 		JvmExprCompiler.compileExpr(protectedForm, ctx, className);
 		int end = ctx.code.size();
@@ -523,9 +523,10 @@ final class JvmHandlerCaseCompiler {
 				else {
 					slot = ctx.allocTemp();
 					// (nth (i-1) spill) -- nth on nil returns nil, the missing-value
-					// fill.
-					LispVal nthCall = new LispCons(new LispSymbol(LispNames.NTH), new LispCons(new LispInteger(i - 1),
-							new LispCons(new LispSymbol(spillVarName), LispNil.INSTANCE)));
+					// fill; the zero-values marker (t) reads as the empty list.
+					LispVal nthCall = new LispCons(new LispSymbol(LispNames.NTH),
+							new LispCons(new LispInteger(i - 1), new LispCons(
+									LispMacroExpander.spillAsList(new LispSymbol(spillVarName)), LispNil.INSTANCE)));
 					JvmExprCompiler.compileExpr(nthCall, ctx, className);
 					ctx.emit(Opcode.ASTORE);
 					ctx.emit(slot);

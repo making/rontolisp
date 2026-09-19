@@ -3,6 +3,13 @@
 The `multiple-value-bind`-over-`floor`/`gethash` idioms real CL code uses, WITHOUT a runtime
 multiple-value representation. A `%mv-spill` global carries the cases the syntactic tier cannot.
 
+**Invariant (2026-09-19): the channel is EXACT -- after any form a consumer can read it behind,
+it holds that form's own extra values and nothing older.** nil is one value, a fresh list the
+values after the primary, `t` (`LispMacroExpander.MV_ZERO_VALUES`) no value at all. The
+interpreter keeps it as a value-count register (every primitive step clears), the compile paths
+by settling every function tail ("A tail settles the channel", below); the four backends agree
+line for line with SBCL on the `multiple-values-single-value-contexts` ci-spec case.
+
 ## What ships
 - `values` is a CL **function** (`CL_FUNCTIONS`, `Environment`, a variadic `&rest`
   `BuiltinFunctionWrappers` entry, `expandValues` in call position). NOT in `expandBuiltinMacro`,
@@ -28,17 +35,31 @@ producers' temps, into one direct `funcall` -- static count, no runtime spreadin
 
 ## The `%mv-spill` runtime channel
 `values` PUBLISHES its extras to the `%mv-spill` global as it returns its primary, for consumers
-behind a call.
-- A consumer whose producer is an unrecognized CALL clears the spill, evaluates, then snapshots
-  it (`MvProducer.rest`). The snapshot `(prog1 %mv-spill (setq %mv-spill nil))` CLEARS the
-  channel, so an enclosing consumer cannot re-read what an inner one took.
+behind a call: nil for one value, a fresh list of the extras, `t` for `(values)` -- zero values
+are represented (`MV_ZERO_VALUES`), and `values-list` of nil says the same.
+- A consumer whose producer may pass values along (a call of a user function, a form whose tail
+  is one) clears the spill, evaluates the SETTLED form, then snapshots it (`MvProducer.rest`).
+  The snapshot `(prog1 %mv-spill (setq %mv-spill nil))` CLEARS the channel, so an enclosing
+  consumer cannot re-read what an inner one took. A producer the tail walk proves single-valued
+  (an atom, a `cl` function call, a `let`/`if`/`progn` whose every tail is one) takes the
+  temp-only path: no round-trip, extra variables read nil.
+- The zero-values marker is a non-list, so every read normalizes: `multiple-value-list` and a
+  `multiple-value-call` segment answer `(if (eq rest t) nil (cons primary rest))`
+  (`allValues`), `multiple-value-bind`/`nth-value` index `(if (eq rest t) nil rest)`
+  (`restAsList`/`spillAsList`, the `handler-case :no-error` compilers included), the
+  interpreter's `consumeValues` answers an empty list. `multiple-value-bind` cannot tell zero
+  from one (nil either way), which is CL.
 - `multiple-value-call` with any spill producer spreads at runtime via `(apply fn (append
   seg...))`, so MULTIPLE_VALUE_CALL forces the eval runtime (`usesEval`).
-- Interpreter predefines `%mv-spill` in `Environment.createGlobal`; compilers call
+- Interpreter keeps the channel as a FIELD of the global `Environment` (`mvSpill`, not a
+  binding: it is written on every primitive step, which a map put could not afford; the
+  variable `%mv-spill` resolves to it through `lookup`/`set`); compilers call
   `LispMacroExpander.injectMvSpillGlobal` AFTER lambda-list desugaring, gated on a name scan.
   Scalar `--no-gc` keeps `expandValuesPrimary` (no reference globals).
 - `values-list` is the spread operator; `parse-integer`'s stop position is a literal second
-  value, so PARSE_INTEGER and VALUES_LIST are in the `injectMvSpillGlobal` scan.
+  value, so PARSE_INTEGER and VALUES_LIST are in the `injectMvSpillGlobal` scan. The `#'values`
+  wrapper is `(values-list r)`, so `(funcall #'values 1 2)` and `(apply #'values '())` answer to
+  a consumer as `(values 1 2)` and `(values)` do on every backend.
 
 ## An unwind-protect cleanup may not clobber the channel
 **Invariant: a cleanup's values are DISCARDED and the protected form's value COUNT is restored.**
@@ -88,34 +109,107 @@ unconditional spill would tax the hottest built-ins on every call:
   `flet`/`labels`/`macrolet` bodies, `if`/`when`/`unless`, the last form of `and`/`or`, `cond`/`case`/`typecase` clause
   bodies (a bodyless `(test)` clause keeps primary-value-only semantics), `block` family,
   `multiple-value-bind` bodies, an `unwind-protect` protected form, `return`/`return-from`, `the`.
+- The publish is a `(values primary secondary)` CALL over the lowered temps, not a
+  `(progn (setq %mv-spill ...) primary)`: on the interpreter the step after a publish clears the
+  channel, so the publish must be the last step.
 - `injectMvSpillGlobal` applies it to every top-level `defun` body, gated on `usesMv`;
   interpreter `evalDefun`, ungated; `--no-gc` never. A producer LEXICALLY inside a consumer is
-  intercepted by the consumer's expansion first.
-- Deliberate gaps: a producer tail in a bare `lambda` or a `flet`/`labels` LOCAL function body is
-  not rewritten on any path; a non-tail `return-from`/`go` escape is not scanned; `handler-case`
-  and `multiple-value-prog1` are not tail contexts.
+  intercepted by the consumer's expansion first. `handler-case`'s protected form and clause
+  bodies are tail contexts too (`settleHandlerCase`).
+- Deliberate gap: a producer tail in a bare `lambda` or a `flet`/`labels` LOCAL function body is
+  not rewritten on any path -- the interpreter rewrites no lambda body, and the compile paths'
+  lambda walk (`TailMode.CLEAR`, below) treats the producer as the one-value `cl` call it is
+  there, so `(funcall (lambda () (gethash k h)))` answers one value everywhere. A non-tail
+  `return-from`/`go` escape is not scanned; `multiple-value-prog1` needs no walk (its expansion
+  ends in `values-list`).
 
-## An argument is a single-value context (interpreter)
-**Invariant: what an ARGUMENT published is discarded before the callee runs; what was published
-before the argument list is not touched.** `LispEvaluator.evalArgs` brackets the arguments with
-`Environment.beginArguments` / `endArguments`, so `(list (f))`, `(+ 1 (values 5 6))` and a
-callee whose tail is `(list (values x 2))` answer one value, `(values (f) 7)` still answers
-`5 7` (the callee publishes after the clear), and a tail's values survive a later all-quiet
-call on their way out -- the Scheme session guard's `(if (eq code done) value ...)` and the
-syntactic producers' `(progn (setq %mv-spill ...) (if (eq v s) d v))` depend on that.
-- Mechanism: a flag on the global `Environment` (`spillPublished`), saved and zeroed at
-  `beginArguments`, set by every Java publisher (`publishSpill`: `values`, `values-list`,
-  `parse-integer`, the unwind-protect restore, `macroexpand-1`'s flag) and by a Lisp `setq` of
-  the global to non-nil (`Environment.set`). `endArguments` clears the channel if it is set,
-  else restores the saved flag. A new Java writer of the channel must go through
-  `publishSpill`, or its values survive the next argument boundary (the old leak, not a crash).
-- Cost (2026-09-18, fib 27 + a 2M-call loop, 8 alternating process pairs x 4 steady-state
-  iterations, loaded host): a map probe per call measured +5-9%; the flag, 2168 -> 2163 ms
-  median, no measurable change. A non-local exit out of an argument leaves the flag zeroed,
-  which only means less clearing.
-- Compiled backends do NOT clear here yet: `(multiple-value-list (+ 1 (values 5 6)))` answers
-  `(6 6)` on JVM and both WASM targets, and cl-ppcre's `(scan "abc" "xyz")` answers
-  `(NIL NIL)` there against `(NIL)` on the interpreter and SBCL (`ClPpcreE2eTest` pins both).
+## A tail settles the channel (compile paths)
+**Invariant: once a function body's tail has run, the channel holds that body's extra values.
+The channel is read only by a consumer that cleared it first and then ran a settled form, so a
+publish in a non-tail position -- an argument, a `let` initform, a form before the last, a
+`setq` value, an `if` test, a loop body -- never reaches a consumer.**
+`LispMacroExpander.settleTail` walks a tail form and classifies it (`SettledTail.single`):
+- **Passes values along, untouched**: a `values` tail; a call of a user, local or generic
+  function or an internal helper (any operator that is not a `cl` function name); `funcall`,
+  `apply`, `eval`, `multiple-value-call`, `multiple-value-prog1`; the `cl` functions that answer
+  several values here -- `values-list`, `parse-integer`, `macroexpand(-1)` and the prelude's
+  multiple-value defuns (`passesMultipleValues`, pinned against the prelude source by
+  `LispPreludeLibraryTest`). `(funcall #'name ...)`/`(apply 'name ...)` over a LITERAL designator
+  is classified by `name` -- the compile paths call the built-in inline there.
+- **One value, cleared**: an atom, `quote`, `function`, a `lambda` expression,
+  `load-time-value` get `(progn (setq %mv-spill nil) form)` (`clearBefore`: nothing in them can
+  publish); a call of any other `cl` function, the assignment macros (`setq`/`setf`/`incf`/
+  `push`/..., except a `(setf (values ...) ...)` place), `multiple-value-list`, `nth-value`, the
+  definers, `format`/`error`/`warn`/`check-type`/... get `(let ((__mvN_v form)) (setq %mv-spill
+  nil) __mvN_v)` (`clearAfter`: an argument or a callback -- `sort`'s predicate, a `print-object`
+  method -- may have published), or `clearBefore` when the operator is one of the pure
+  primitives in `QUIET_OPERATORS` and every argument is quiet; `while`, `tagbody` and a
+  result-less `dotimes` get `(progn form (setq %mv-spill nil) nil)` (`clearAfterStatement`:
+  a `return`/`go`/`throw` out of them skips the clear and keeps its own values).
+- **Tails of their own, settled each**: `progn`/`let`/`let*`/`flet`/`labels`/`block`/
+  `catch`/`progv`/`multiple-value-bind`/`destructuring-bind`/`with-*` bodies, `if` (a missing else
+  branch is a cleared nil), `unwind-protect`'s protected form, `return`/`return-from`/`throw`/
+  `the` values (a value-less `return` is a cleared nil), `handler-case`'s protected form and
+  clause bodies, `typecase` clause bodies (a plain `typecase` with no `otherwise` gets one
+  answering a cleared nil), a `dotimes` result form. `cond`/`case`/`and`/`or`/`when`/`unless`/
+  `dolist`/`do`/`loop`/`prog1`/`prog2`/`prog`/`ignore-errors`/`time` are EXPANDED first -- both
+  backends compile them through the same expansion, and only the expansion shows a `cond`'s
+  fall-through nil or a `prog1`'s temporary -- while `dotimes` keeps its form (the wasm counted
+  loop and the JVM typed loop read it).
+- Where it runs: every top-level `defun` body (`settleDefunTails`, from `injectMvSpillGlobal`,
+  gated on `usesMv` -- a consumer-free program stays byte-identical); every `lambda` body as the
+  backends compile it (`Jvm`/`WasmLambdaCompiler.compileValue` and `compileCall`, gated on the
+  spill global's existence) and the built-in wrappers (`settleWrapperLambdas`, gated on
+  `declaresMvSpill`) -- `flet`/`labels` functions are lambdas by then; a local function the
+  int-fusion inlines instead (`tryCompileLocalCall`) gets its clear at the fused call site; every
+  consumer's producer form (`lowerMvProducer`); a `handler-case` protected form with a
+  `:no-error` clause. Three modes (`TailMode`): `PUBLISH` (the interpreter's `evalDefun`/
+  `evalHandlerCase`, `spillEscapingMvProducers`: syntactic producers publish, nothing clears, and
+  a macro form keeps its shape -- the macro-time purity walks read stored bodies),
+  `PUBLISH_AND_CLEAR` (`settleMvTail`: defuns, consumers, handler-case), `CLEAR`
+  (`settleFunctionBody`: lambdas and wrappers).
+- Residue, by construction: a program that REDEFINES a `cl` function to answer several values
+  is classified by the name (one value) in tail positions and consumers; a `macrolet`
+  expansion is produced after the walk and is not settled; an operator the walk does not know
+  passes values along, which is the leak-safe direction (a stale publish may travel, never a
+  value lost).
+- Cost (2026-09-19, x86-64 Linux, Java 25, wasmtime 47; `bench-report/programs/fib.lisp`
+  20 x fib 30 = 32M calls, 4 alternating process pairs): a program without a multiple-value
+  operator is byte-identical (13,220 B of class, 5,479 B of wasm). With one appended, class
+  14,106 -> 14,128 B (+22), wasm 7,203 -> 7,331 B (+128); JVM 167-200 -> 178-209 ms (noise),
+  wasm 703-715 -> 419-425 ms -- FASTER, the `let`-temporary tail lands on the unboxed local
+  path the bare `(+ ...)` branch did not. The mv-heavy probe programs grow 1.2-1.5%
+  (474,800 -> 480,681 B of class, 348,373 -> 353,587 B of wasm).
+
+## The interpreter's value-count register
+**Invariant: on the interpreter the channel reflects the LAST value-producing step, exactly --
+a native implementation's value-count register, kept as `Environment.mvSpill`.** Every
+primitive step that is not a publish and not a call of user code clears it
+(`Environment.clearSpill`, `LispEvaluator.singleValue`):
+- an atom or literal as `eval` answers it (a symbol read reads the channel first, which is how
+  the consumers' snapshot `%mv-spill` works);
+- a closed argument list (`evalArgs`: an argument is a single-value context);
+- a built-in's return (`apply` on a `LispFunction`), unless the built-in `passesValues` --
+  `values`, `values-list`, `parse-integer`, `macroexpand(-1)` publish themselves, `funcall`,
+  `apply`, `eval`, `uiop:symbol-call` hand on the values of the code they ran. A callback the
+  built-in ran (`sort`'s predicate, `mapcar`'s function, a `print-object` method) may have
+  published; the built-in's answer is one value regardless, which is what the clear after it
+  says. **A new `LispFunction` that publishes or passes values must say so**, or its extra
+  values die at its own return.
+- a constructing special form: `quote`, `function`, `lambda`, `setq` (an assignment answers ONE
+  value however many the value form produced), the definers, `while`, `tagbody`, `slot-value`,
+  `await`, a value-less `return`/`return-from`/`throw`, an empty `progn`/block/`catch`/clause
+  body, an `if` without an else branch taking it, a result-less `do-symbols`.
+A form that merely passes a sub-form's value on (`if`, `let`, `progn`, a block, `catch`,
+`handler-case` without `:no-error`, a user function's body) leaves the channel to that
+sub-form: a `(values ...)` tail reaches the consumer behind any number of returns, and a
+`values` whose value went into a variable or an argument never does.
+`unwind-protect` saves the channel around its cleanups and `publishSpill`s it back
+(`runUnwindCleanups`), `handler-case` with `:no-error` `consumeValues` it.
+- Cost (2026-09-19, fib 27 + a 2M-call loop, 5 alternating process pairs): 2,280-2,350 ->
+  2,254-2,344 ms, medians 2,317 -> 2,297, no measurable change. The old argument-boundary
+  flag (`beginArguments`/`endArguments`) is gone: it only cleared arguments, and left a
+  `let` initform, a `progn` body form and a callback's publish to leak.
 
 ## The REPL echo is a consumer
 `LispEvaluator.evalValues(form) -> List<LispVal>` is the ONLY multiple-value entry point outside
@@ -126,47 +220,52 @@ the macro expander.
   level. Resolution runs ONCE: package resolution is not idempotent under a `:shadow` package.
 - `ReplBuffer.eval` echoes EVERY form right after it runs (as SBCL does);
   `RontoPlayground.evalLine` (`src/web/java`, also the doc site's "Run" cells) echoes the LAST.
-- Diffed against SBCL 2.2.9. Remaining differences: a `values` in a non-tail, non-argument
-  position (a `progn` body form, a `let` init) nobody consumes leaks;
-  `print` omits CL's leading newline / trailing space. ([[gensym-macroexpand]] for
+- Diffed against SBCL 2.2.9. Remaining difference: `print` omits CL's leading newline /
+  trailing space. A helper answering `(values)` echoes nothing, a built-in whose callback
+  published echoes its own one value. ([[gensym-macroexpand]] for
   `macroexpand-1`/`macroexpand`, [[declarations-type-checks]] for `subtypep`'s valid-p,
   [[read-load-streams]] for `read-from-string`'s stop index.)
 
 ## Documented deviations
-- A `values` in a NON-tail position with no consumer leaves a stale spill -- on the interpreter
-  only outside argument positions (above), on the compiled backends everywhere.
-- Zero values are not represented: `(values)` publishes nil, so a consumer behind a call reads
-  ONE nil -- `(multiple-value-list (g))` with `(defun g () (values))` answers `(NIL)` and Scheme
-  `(call-with-values (lambda () (values)) list)` answers `(())` on every backend (R7RS/gosh:
-  `()`). A distinct zero-count spill value would make any stale one erase the primary of a
-  later consumer (a `(values)`-returning helper called in a loop body would blank the REPL echo
-  of the function around it), so it waits on the non-tail clears above. `funcall #'values`
-  through the compiled wrapper yields the primary only; the interpreter spills.
 - Producers are recognized before user-macro expansion on the interpreter but after it on the
   compile path, so a USER MACRO expanding to `(values ...)` yields all values only when compiled.
+- A program's own `defun` of a `cl` function name that answers several values is classified as
+  one value on the compile paths ("A tail settles the channel", residue).
+- The Scheme front end's loops: a named `let` that exits through a CALL answers that call's
+  first value only ([[scheme-frontend]], "Destination-driven lowering").
 - `multiple-value-call` with a builtin `#'name` inherits the wrapper arity:
   `+`/`-`/`*`/`/`/`list`/`min`/`max` are variadic, every other multi-arg builtin is fixed
   unary/binary (a mismatched funcall yields nil on JVM, traps on WASM).
 
 ## Wiring points
-`LispNames`; `PackageRegistry`; `LispEvaluator.evalCons`; `Environment`; `Jvm`/`WasmExprCompiler`
-(+ the floor-family branch around the IntConv compilers); `NoGcWasmCompiler.expandMacro`;
+`LispNames`; `PackageRegistry`; `LispEvaluator.evalCons`/`eval`/`evalArgs`/`apply`
+(`singleValue`); `Environment` (`mvSpill`, `publishSpill`, `clearSpill`, `spill`);
+`LispFunction.passesValues`; `Jvm`/`WasmExprCompiler` (+ the floor-family branch around the
+IntConv compilers, the fused-local-call clear in the FUNCALL arm); `Jvm`/`WasmLambdaCompiler`
+(the lambda hooks); `Jvm`/`WasmLispCompiler` (the wrapper settle); `NoGcWasmCompiler.expandMacro`;
 `FreeVarAnalyzer` both walks (expand before walking, flet precedent);
 `UserMacroExpander.expandAll` + `LispMacroExpander.rewriteLocalCalls` keeping the mv-bind variable
-list verbatim; `BuiltinFunctionWrappers`.
+list verbatim; `BuiltinFunctionWrappers`; `SchemeLowering.exitGuardValue` (the session echo
+holds the entry's values as a list across the exit catch) and `ValueCount` (a loop with a
+`(values ...)` leaf carries a list and answers `values-list`).
 
 ## Tests
 `LispEvaluatorTest` (`evalValues*`, `evalMultipleValue*`, `evalNthValue`,
 `evalUnwindProtectCleanupKeepsTheProtectedFormsValues`,
 `evalSyntacticMvProducerTailPublishesThroughAFunctionReturn`,
-`evalMultipleValueConsumerClearsTheSpillChannel`, `evalValuesAtTopLevelIgnoresValuesPassedAsAnArgument`);
-`RontoLispCliTest.theSchemeReplEchoesThroughTheSchemePrinter` (the argument case),
-`ClPpcreE2eTest.expectedOnTheInterpreter`;
+`evalMultipleValueConsumerClearsTheSpillChannel`, `evalValuesAtTopLevelIgnoresValuesPassedAsAnArgument`,
+`evalMultipleValueChannelIsExactInSingleValueContexts`);
+`LispPreludeLibraryTest.everyPreludeDefunOfAClFunctionThatAnswersSeveralValuesIsKnownToTheTailDiscipline`;
+`RontoLispCliTest.theSchemeReplEchoesThroughTheSchemePrinter` (the argument case), `ClPpcreE2eTest`
+(`(scan "abc" "xyz")` is `(NIL)` on every leg);
 `RontoLispCliTest.replEchoesEveryValueOnItsOwnLine`; `JvmLispCompilerTest.compileAndRun*` and
-`WasmLispCompilerIntegrationTest` twins; ci-spec `multiple-values-core`,
-`unwind-protect-values` (adds the `--component` leg), `mv-producer-function-return` (its
-`find-symbol`/`intern` rows probe a USER symbol because a non-literal name's runtime status
-diverges between interpreter and compile paths), `split-sequence-residue-features`,
-`rontolisp-package-introspection`. The unwind-protect pins run a cleanup-shape x exit-shape
-matrix. Caveats: compiled `print` returns nil; JVM argument evaluation order inside one call
-differs -- side-effect assertions go through `setq` in separate top-level forms.
+`WasmLispCompilerIntegrationTest` twins (`*MultipleValueChannelIsExactInSingleValueContexts` is the
+shared matrix); ci-spec `multiple-values-core`, `multiple-values-single-value-contexts` (the
+matrix, SBCL's answers), `unwind-protect-values` (adds the `--component` leg),
+`mv-producer-function-return` (its `find-symbol`/`intern` rows probe a USER symbol because a
+non-literal name's runtime status diverges between interpreter and compile paths),
+`split-sequence-residue-features`, `rontolisp-package-introspection`; scheme-spec
+`multiple-values` (zero values, a loop's values, an argument's). The unwind-protect pins run a
+cleanup-shape x exit-shape matrix. Caveats: compiled `print` returns nil; JVM argument evaluation
+order inside one call differs -- side-effect assertions go through `setq` in separate top-level
+forms.

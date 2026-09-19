@@ -3510,6 +3510,15 @@ public final class LispPreludeLibrary {
 
 	private static final Map<String, List<LispVal>> CACHE = new ConcurrentHashMap<>();
 
+	/**
+	 * The entries' source text, keyed by member name -- for the tests that pin what the
+	 * prelude spells (the multiple-value defuns {@code LispMacroExpander} must know).
+	 * @return the source table, unmodifiable
+	 */
+	static Map<String, String> sources() {
+		return java.util.Collections.unmodifiableMap(SOURCES);
+	}
+
 	// Entry key (member name) -> the name its own defun defines, in the spelling the
 	// program's resolved copy uses for the same symbol: RONTOLISP:ALIST-HASH-TABLE for a
 	// rontolisp: entry, bare EQUALP for a cl one (a bundled library source is a resolver

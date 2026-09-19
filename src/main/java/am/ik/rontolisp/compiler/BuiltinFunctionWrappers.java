@@ -1717,9 +1717,13 @@ public final class BuiltinFunctionWrappers {
 			// macroexpand/macroexpand-1 have no wrapper at all -- the macro table does
 			// not exist at runtime in compiled output)
 			new WrapperDef(LispNames.GENSYM, List.of(), List.of(call(LispNames.GENSYM))),
-			// values: variadic; with no runtime multiple-value representation the
-			// function value yields its primary value ((car nil) is nil for zero args)
-			new WrapperDef(LispNames.VALUES, List.of(LispNames.LAMBDA_REST, "r"), List.of(call(LispNames.CAR, "r"))),
+			// values: variadic; the function value spreads its arguments like the
+			// operator does -- values-list publishes the rest through %mv-spill and
+			// says "no value" for an empty list -- so (funcall #'values 1 2) and
+			// (apply #'values '()) answer to a consumer exactly as (values 1 2) and
+			// (values) do (.kb/multiple-values.md)
+			new WrapperDef(LispNames.VALUES, List.of(LispNames.LAMBDA_REST, "r"),
+					List.of(call(LispNames.VALUES_LIST, "r"))),
 			// write-string: the optional stream plus the :start / :end keyword bounds the
 			// interpreter's function accepts -- the same runtime keyword re-extraction
 			// boundedSequenceIo does for read-sequence / write-sequence, which

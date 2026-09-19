@@ -3518,6 +3518,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// (Ctx.injectedRuntimeBody).
 		Set<String> injectedRuntimeDefuns = new HashSet<>();
 		List<LispVal> wrappers = BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes);
+		if (LispMacroExpander.declaresMvSpill(program)) {
+			// A wrapper is a function body like any other: its tail settles the
+			// multiple-value channel (the defuns' tails were settled by
+			// injectMvSpillGlobal, which ran before the wrappers existed).
+			wrappers = LispMacroExpander.settleWrapperLambdas(wrappers);
+		}
 		for (LispVal wrapper : wrappers) {
 			DefunDecl decl = extractSetqLambda(wrapper);
 			injectedRuntimeDefuns.add(decl.name);

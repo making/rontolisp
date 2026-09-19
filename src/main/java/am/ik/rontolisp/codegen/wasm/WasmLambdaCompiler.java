@@ -10,8 +10,10 @@ import java.util.Set;
 
 import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -30,7 +32,13 @@ final class WasmLambdaCompiler {
 		List<LispVal> parts = cons.toList();
 		LambdaLists.NativeForm nf = LambdaLists.toNative(parts.get(1), parts.subList(2, parts.size()));
 		List<String> paramNames = nf.paramNames();
-		List<LispVal> bodyExprs = nf.body();
+		// A lambda body's tail settles the multiple-value channel like a defun's does
+		// (LispMacroExpander.settleDefunTails ran over those before Pass 1): a
+		// single-valued tail clears what an argument or a non-tail form published,
+		// so a consumer behind a funcall reads the closure's own values and nothing
+		// older. Only in a program whose spill global exists.
+		List<LispVal> bodyExprs = ctx.globalIndices.containsKey(LispNames.MV_SPILL)
+				? LispMacroExpander.settleFunctionBody(nf.body()) : nf.body();
 
 		// Free variable analysis. A global, function or built-in name shadowed by a
 		// lexical binding visible at this lambda's creation site (an enclosing let
@@ -117,7 +125,10 @@ final class WasmLambdaCompiler {
 		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1),
 				lambdaParts.subList(2, lambdaParts.size()));
 		List<String> paramNames = nf.paramNames();
-		List<LispVal> bodyExprs = nf.body();
+		// The body is a function body however it is called: its tail settles the
+		// multiple-value channel (see compileValue).
+		List<LispVal> bodyExprs = ctx.globalIndices.containsKey(LispNames.MV_SPILL)
+				? LispMacroExpander.settleFunctionBody(nf.body()) : nf.body();
 		List<LispVal> callArgs = call.toList();
 		int required = paramNames.size() - (nf.variadic() ? 1 : 0);
 		int supplied = callArgs.size() - 1;

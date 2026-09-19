@@ -200,15 +200,17 @@ public final class Environment implements Scope {
 	private final NameMap functions = new NameMap();
 
 	/**
-	 * Set on the GLOBAL environment whenever a non-nil value may have landed on the
-	 * {@code %mv-spill} channel ({@link LispNames#MV_SPILL}) within the current argument
-	 * list (see {@link #beginArguments}): every Java publisher goes through
-	 * {@link #publishSpill} and a Lisp {@code setq} of the global through {@link #set}.
-	 * It lets the interpreter clear what an argument published at the price of a field
-	 * read and write per call instead of a map lookup. Conservative: a {@code setq} of
-	 * nil leaves it as it was.
+	 * The {@code %mv-spill} channel ({@link LispNames#MV_SPILL}) of the GLOBAL
+	 * environment -- the interpreter's value-count register: nil while the last value
+	 * produced was one value, the extra values after it as a fresh list, or
+	 * {@code LispMacroExpander.MV_ZERO_VALUES} for no value at all. A field rather than a
+	 * binding because the evaluator writes it on every primitive step (an atom, a
+	 * built-in's return, an argument list), which a map put could not afford; the Lisp
+	 * variable {@code %mv-spill} the expansions read and assign resolves to it through
+	 * {@link #lookup}/{@link #set}. Every Java publisher goes through
+	 * {@link #publishSpill}, every clear through {@link #clearSpill}.
 	 */
-	private boolean spillPublished;
+	private LispVal mvSpill = LispNil.INSTANCE;
 
 	/**
 	 * Resolves the print family's default destination at call time. Set by the evaluator
@@ -467,6 +469,9 @@ public final class Environment implements Scope {
 		if (this.parent != null) {
 			return this.parent.lookup(name);
 		}
+		if (LispNames.MV_SPILL.equals(name)) {
+			return this.mvSpill;
+		}
 		throw LispEvalException.ofClass(ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME,
 				ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX + name + ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX);
 	}
@@ -490,7 +495,7 @@ public final class Environment implements Scope {
 		if (this.parent != null) {
 			return this.parent.lookupOrNull(name);
 		}
-		return null;
+		return LispNames.MV_SPILL.equals(name) ? this.mvSpill : null;
 	}
 
 	/**
@@ -645,13 +650,16 @@ public final class Environment implements Scope {
 				this.pending.remove(name);
 			}
 			this.bindings.put(name, value);
-			if (this.parent == null && value != LispNil.INSTANCE && LispNames.MV_SPILL.equals(name)) {
-				this.spillPublished = true;
-			}
 			return;
 		}
 		if (this.parent != null) {
 			this.parent.set(name, value);
+			return;
+		}
+		if (LispNames.MV_SPILL.equals(name)) {
+			// The expansions' (setq %mv-spill ...): a publish or a clear of the
+			// channel, never a binding.
+			this.mvSpill = value;
 			return;
 		}
 		// If not found anywhere, define in current scope
@@ -659,43 +667,32 @@ public final class Environment implements Scope {
 	}
 
 	/**
-	 * Publishes a producer's extra values (a fresh list, nil for none) to the
-	 * {@code %mv-spill} channel of this -- the global -- environment.
-	 * @param extras the values after the primary
+	 * Publishes a producer's values to the {@code %mv-spill} channel of this -- the
+	 * global -- environment: the values after the primary as a fresh list, nil for
+	 * exactly one value, {@code LispMacroExpander.MV_ZERO_VALUES} for none.
+	 * @param extras the channel value
 	 */
 	void publishSpill(LispVal extras) {
-		this.bindings.put(LispNames.MV_SPILL, extras);
-		if (extras != LispNil.INSTANCE) {
-			this.spillPublished = true;
-		}
+		this.mvSpill = extras;
 	}
 
 	/**
-	 * Opens an argument list on this -- the global -- environment: from here on the
-	 * publish flag records only what the arguments publish.
-	 * @return the flag as it was, for {@link #endArguments}
+	 * Clears the {@code %mv-spill} channel of this -- the global -- environment: the
+	 * value just produced is one value. The evaluator calls this on every primitive step
+	 * (an atom, a built-in's return, a closed argument list, a constructing special
+	 * form), which is what keeps a publish from travelling past the form that made it --
+	 * the value-count register of a native implementation, kept as a field.
 	 */
-	boolean beginArguments() {
-		boolean outer = this.spillPublished;
-		this.spillPublished = false;
-		return outer;
+	void clearSpill() {
+		this.mvSpill = LispNil.INSTANCE;
 	}
 
 	/**
-	 * Closes an argument list: an argument is a single-value context, so whatever an
-	 * argument published is discarded before the callee runs, while values published
-	 * BEFORE the argument list (a tail whose value is still on its way to a consumer) are
-	 * left alone when no argument published anything.
-	 * @param outer what {@link #beginArguments} returned
+	 * The {@code %mv-spill} channel of this -- the global -- environment.
+	 * @return nil, the extra values, or the zero-values marker
 	 */
-	void endArguments(boolean outer) {
-		if (this.spillPublished) {
-			this.spillPublished = false;
-			this.bindings.put(LispNames.MV_SPILL, LispNil.INSTANCE);
-		}
-		else {
-			this.spillPublished = outer;
-		}
+	LispVal spill() {
+		return this.mvSpill;
 	}
 
 	/**
@@ -730,9 +727,9 @@ public final class Environment implements Scope {
 		registerArrays(env);
 		registerPackages(env);
 		registerMutexes(env);
-		// The multiple-value spill channel (see LispNames.MV_SPILL): the compilers
-		// inject an equivalent top-level (setq %mv-spill nil) when needed.
-		env.define(LispNames.MV_SPILL, LispNil.INSTANCE);
+		// The multiple-value spill channel (see LispNames.MV_SPILL) is the mvSpill
+		// field, not a binding; the compilers inject a top-level (setq %mv-spill nil)
+		// global when needed.
 		// Informational (every float is the one double representation); predefined so
 		// library code reading it works. The compilers inject an equivalent setq.
 		env.define(LispNames.READ_DEFAULT_FLOAT_FORMAT, new LispSymbol("DOUBLE-FLOAT"));
@@ -6392,7 +6389,7 @@ public final class Environment implements Scope {
 			// first-class #'parse-integer matches the call-position expansion.
 			env.publishSpill(new LispCons(valueAndPos[1], LispNil.INSTANCE));
 			return valueAndPos[0];
-		}));
+		}, true));
 	}
 
 	/**
@@ -7228,24 +7225,31 @@ public final class Environment implements Scope {
 		// consumers still recognize a literal (values ...) producer before
 		// evaluation; the spill covers every other route, including funcall).
 		env.defineFunction(LispNames.VALUES, new LispFunction(LispNames.VALUES, args -> {
+			if (args.isEmpty()) {
+				// No value at all: the channel says so, the primary a one-value caller
+				// reads is nil.
+				env.publishSpill(LispMacroExpander.MV_ZERO_VALUES);
+				return LispNil.INSTANCE;
+			}
 			LispVal extras = LispNil.INSTANCE;
 			for (int i = args.size() - 1; i >= 1; i--) {
 				extras = new LispCons(args.get(i), extras);
 			}
 			env.publishSpill(extras);
-			return args.isEmpty() ? LispNil.INSTANCE : args.get(0);
-		}));
+			return args.get(0);
+		}, true));
 		// values-list: (values-list '(1 2)) == (values 1 2) -- the first element is
-		// the primary value, the rest go to the spill channel.
+		// the primary value, the rest go to the spill channel; an empty list is no
+		// value at all.
 		env.defineFunction(LispNames.VALUES_LIST, new LispFunction(LispNames.VALUES_LIST, args -> {
 			requireArgCount(LispNames.VALUES_LIST, args, 1);
 			if (args.get(0) instanceof LispCons cons) {
 				env.publishSpill(cons.cdr());
 				return cons.car();
 			}
-			env.define(LispNames.MV_SPILL, LispNil.INSTANCE);
+			env.publishSpill(LispMacroExpander.MV_ZERO_VALUES);
 			return LispNil.INSTANCE;
-		}));
+		}, true));
 		env.defineFunction(LispNames.NTHCDR, new LispFunction(LispNames.NTHCDR, args -> {
 			requireArgCount(LispNames.NTHCDR, args, 2);
 			long n = asLong(args.get(0));

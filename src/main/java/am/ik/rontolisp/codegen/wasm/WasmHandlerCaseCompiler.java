@@ -158,7 +158,7 @@ final class WasmHandlerCaseCompiler {
 				errorClauses.stream().map(clauseParts -> clauseParts.get(0)).toList(), ctx.closRegistry,
 				ctx.restartMode || ctx.signalClauseMatch);
 		if (noErrorClause != null) {
-			protectedForm = LispMacroExpander.spillEscapingMvProducers(protectedForm);
+			protectedForm = LispMacroExpander.settleMvTail(protectedForm);
 		}
 		WasmAsyncEmit.spine(protectedForm, ctx);
 		ctx.unwindScopes.pop();
@@ -421,8 +421,11 @@ final class WasmHandlerCaseCompiler {
 				}
 				else {
 					slot = ctx.allocTemp();
-					LispVal nthCall = new LispCons(new LispSymbol(LispNames.NTH), new LispCons(new LispInteger(i - 1),
-							new LispCons(new LispSymbol(spillVarName), LispNil.INSTANCE)));
+					// (nth (i-1) spill): nth on nil is the missing-value fill, and the
+					// zero-values marker (t) reads as the empty list.
+					LispVal nthCall = new LispCons(new LispSymbol(LispNames.NTH),
+							new LispCons(new LispInteger(i - 1), new LispCons(
+									LispMacroExpander.spillAsList(new LispSymbol(spillVarName)), LispNil.INSTANCE)));
 					WasmExprCompiler.compileExpr(nthCall, ctx);
 					ctx.writer.write(Instruction.SET_LOCAL);
 					ctx.writer.writeUnsignedLeb128(slot);
