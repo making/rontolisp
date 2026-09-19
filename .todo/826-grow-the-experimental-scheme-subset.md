@@ -20,7 +20,7 @@ backend, add its cases to `scheme-spec.yaml`.
 | `(scheme char)`, `(scheme cxr)`, `(scheme inexact)`, `(scheme lazy)` | table rows in `SchemeBuiltins` with their own `library` tag | `importSet` already keys visibility on the tag. Split off: `(scheme cxr)` -> `.todo/829`, `(scheme inexact)` -> `.todo/830`, `(scheme lazy)` -> `.todo/831` (those three done), `(scheme char)` -> `.todo/879` (all four done; `(scheme char)`: `.kb/scheme-frontend.md`, "`(scheme char)`") |
 | `define-library` / `include` | per-file lowering gets a library scope | Done in `.todo/882` (`.kb/scheme-frontend.md`, "Libraries and include"); exporting syntax from a library is `.todo/883` |
 | `cond-expand` (top level and as a library declaration) | a pre-pass beside `include`'s, over a feature list (`r7rs`, `rontolisp`, `(library ...)`, `and`/`or`/`not`, `else`) | refused by name today, in a program and in a `define-library` |
-| internal `define-record-type` | needs a non-top-level `defstruct`, which the compile path refuses (`.kb/defstruct.md`) | |
+| internal `define-record-type` | needs a non-top-level `defstruct`, which the compile path refuses (`.kb/defstruct.md`) | split off: `.todo/884` |
 | `|...|` identifiers, `+inf.0` / `+nan.0` | reader | check that every backend PRINTS infinities the same way first |
 
 Driven by a corpus rather than by the report: `.todo/828` (the SICP sample corpus) and its
