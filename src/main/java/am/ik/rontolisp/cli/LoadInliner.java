@@ -404,7 +404,8 @@ public final class LoadInliner {
 		// names its own line, not a line of the flattened entry program. The read is
 		// the source-language seam's, picked by THIS file's extension, so one program
 		// may mix languages file by file.
-		List<LispVal> forms = SourceLanguage.forFile(path, null).read(source, ctx.features(), path, ctx.standards());
+		List<LispVal> forms = SourceLanguage.forFile(path, null)
+			.read(source, ctx.features(), path, ctx.standards(), ctx.loader());
 		// A file that selects a package with a top-level (in-package ...) must not leak
 		// it
 		// past the load: bracket the spliced forms with package save/restore markers so

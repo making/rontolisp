@@ -712,6 +712,15 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * The loader {@code load} reads through -- and what a Scheme entry program's
+	 * {@code include} and library files are read through, so both name files alike.
+	 * @return the source loader
+	 */
+	public SourceLoader sourceLoader() {
+		return this.sourceLoader;
+	}
+
+	/**
 	 * Sets the base directory against which a top-level relative {@code load} path
 	 * resolves -- normally the directory of the entry file being interpreted, so that a
 	 * program run from anywhere can {@code (load "sibling.lisp")} its companions (like
@@ -3415,7 +3424,7 @@ public final class LispEvaluator {
 			// by THIS file's extension, so one program may mix languages file by file.
 			SourceLanguage language = SourceLanguage.forFile(resolved, null);
 			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
-			for (LispVal form : language.read(source, features, resolved, this.sourceStandards)) {
+			for (LispVal form : language.read(source, features, resolved, this.sourceStandards, this.sourceLoader)) {
 				eval(markers ? resolveReadTimeEvalInCode(form) : form);
 			}
 		}

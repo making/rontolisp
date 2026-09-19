@@ -38,6 +38,13 @@ A wrapper in `eval` rather than the enum itself, so `cli` names no `scheme` type
 three-argument `read` means the default and is for the sites that read no user source
 or have no option to honor (the playground).
 
+**The files a source names travel with the read too**: the five-argument
+`read(source, features, file, standards, loader)` hands a Scheme read the `SourceLoader`
+its site already reads through (`SourceLanguage.schemeFiles` adapts it, resolving against
+the naming file's directory like `load`), for `include` and `define-library` files
+(`.kb/scheme-frontend.md`, "Libraries and include"); `SourceSession` takes one the same
+way. A read with no loader names no file. A Common Lisp read ignores it.
+
 The entry-language override is validated where it is parsed (an unknown name fails
 fast); loaded files always pick by extension, so the override never leaks into them.
 `isSourceFile` answers the `rontolisp test` question (a missing `foo.lisp` is an error,

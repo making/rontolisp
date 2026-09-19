@@ -80,6 +80,10 @@ final class SchemeReader {
 	// does (SchemeCharacters.foldcase), never string literals or the character itself.
 	private boolean foldCase;
 
+	// The readers of the files this one's program named -- an include, a library found
+	// by name -- so a datum read from one of them is positioned in ITS file.
+	private final List<SchemeReader> others = new ArrayList<>();
+
 	SchemeReader(String input, @Nullable String file) {
 		this.input = input;
 		this.file = file;
@@ -87,14 +91,47 @@ final class SchemeReader {
 	}
 
 	/**
-	 * Where a datum this reader produced stands in the source.
+	 * The file this reader reads, as the program named it.
+	 * @return the path, or {@code null} for a buffer with no file
+	 */
+	@Nullable String file() {
+		return this.file;
+	}
+
+	/**
+	 * Reads another file of the same program, whose datums this reader then positions: an
+	 * {@code include}d file, a library file found by name.
+	 * @param text the file's contents
+	 * @param path the file
+	 * @param foldCase whether identifiers are folded from the start ({@code include-ci})
+	 * @return the other file's reader, its datums read
+	 */
+	SchemeReader other(String text, String path, boolean foldCase) {
+		SchemeReader other = new SchemeReader(text, path);
+		other.foldCase = foldCase;
+		this.others.add(other);
+		return other;
+	}
+
+	/**
+	 * Where a datum this reader (or one of its {@link #other} readers) produced stands in
+	 * the source.
 	 * @param datum a datum
 	 * @return its position, or {@code null} for an atom or a cons the reader did not
 	 * build
 	 */
 	@Nullable SourceLocation locate(LispVal datum) {
 		Integer offset = datum instanceof LispCons cons ? this.offsets.get(cons) : null;
-		return offset == null ? null : SourceLocation.at(this.file, offset, this.input);
+		if (offset != null) {
+			return SourceLocation.at(this.file, offset, this.input);
+		}
+		for (SchemeReader other : this.others) {
+			SourceLocation located = other.locate(datum);
+			if (located != null) {
+				return located;
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -107,6 +144,10 @@ final class SchemeReader {
 		Integer offset = this.offsets.get(original);
 		if (offset != null) {
 			this.offsets.putIfAbsent(rewritten, offset);
+			return;
+		}
+		for (SchemeReader other : this.others) {
+			other.inherit(original, rewritten);
 		}
 	}
 

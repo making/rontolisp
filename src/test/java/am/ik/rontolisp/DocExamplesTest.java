@@ -2,6 +2,7 @@ package am.ik.rontolisp;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
@@ -11,7 +12,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -20,7 +23,9 @@ import com.sun.net.httpserver.HttpServer;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.SourceSession;
+import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -63,6 +68,9 @@ import static org.assertj.core.api.Assertions.fail;
  * {@code ", "}. An {@code exit} ends the block's program, keeping what it printed.</li>
  * <li>A <code>```stdin</code> block is the standard input of the <code>```scheme</code>
  * block right after it (every other block reads an empty input).</li>
+ * <li>A <code>```scheme</code> block whose first line is <code>; file: NAME</code> is
+ * also the file {@code NAME} for the Scheme blocks after it on the page -- what they
+ * {@code include}, the {@code define-library} files they import -- and is not run.</li>
  * <li>REPL transcripts (<code>```console</code>) and shell blocks (<code>```bash</code>)
  * are static and not executed, and are where an example that cannot run headless (stdin,
  * files, a form that signals) belongs.</li>
@@ -229,6 +237,7 @@ class DocExamplesTest {
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(buffer, true, StandardCharsets.UTF_8));
 
 		String stdin = "";
+		Map<String, String> files = new HashMap<>();
 		for (int i = 0; i < blocks.size(); i++) {
 			Block block = blocks.get(i);
 			if (block.isStdin()) {
@@ -238,9 +247,12 @@ class DocExamplesTest {
 			String blockStdin = stdin;
 			stdin = "";
 			if (block.isScheme()) {
+				if (noteFile(block.content(), files)) {
+					continue;
+				}
 				String actual;
 				if (block.content().contains(ARROW)) {
-					SchemeRun run = runSchemeSession(block.content(), blockStdin, markdown);
+					SchemeRun run = runSchemeSession(block.content(), blockStdin, markdown, files);
 					for (int f = 0; f < run.forms().size(); f++) {
 						String source = String.join("\n", run.forms().get(f));
 						String annotation = lastArrowAnnotation(source);
@@ -252,7 +264,7 @@ class DocExamplesTest {
 					actual = run.stdout();
 				}
 				else {
-					actual = runScheme(block.content(), blockStdin, markdown);
+					actual = runScheme(block.content(), blockStdin, markdown, files);
 				}
 				Block expected = (i + 1 < blocks.size()) ? blocks.get(i + 1) : null;
 				if (expected != null && expected.isExpectedOutput()) {
@@ -293,11 +305,12 @@ class DocExamplesTest {
 
 	// A Scheme example is a whole program on a fresh evaluator: the front end decides
 	// defun-or-variable per FILE, so a block cannot lean on an earlier one.
-	static String runScheme(String source, String stdin, String page) {
+	static String runScheme(String source, String stdin, String page, Map<String, String> files) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		LispEvaluator evaluator = schemeEvaluator(out, stdin);
 		try {
-			for (LispVal form : SourceLanguage.SCHEME.read(source, evaluator.features(), null)) {
+			for (LispVal form : SourceLanguage.SCHEME.read(source, evaluator.features(), null, SourceStandards.DEFAULT,
+					pageFiles(files))) {
 				evaluator.eval(form);
 			}
 		}
@@ -308,6 +321,30 @@ class DocExamplesTest {
 			fail("Scheme example in %s failed to evaluate:%n%s%n-> %s".formatted(page, source, ex), ex);
 		}
 		return out.toString(StandardCharsets.UTF_8).strip();
+	}
+
+	private static final Pattern FILE_BLOCK = Pattern.compile("\\A;+ file: (\\S+)");
+
+	// A Scheme block that names itself a file becomes one for the blocks after it,
+	// instead of a program.
+	private static boolean noteFile(String content, Map<String, String> files) {
+		Matcher file = FILE_BLOCK.matcher(content);
+		if (!file.lookingAt()) {
+			return false;
+		}
+		files.put(file.group(1), content);
+		return true;
+	}
+
+	// The page's file blocks as the files a Scheme example reads.
+	private static SourceLoader pageFiles(Map<String, String> files) {
+		return path -> {
+			String text = files.get(path);
+			if (text == null) {
+				throw new FileNotFoundException(path);
+			}
+			return text;
+		};
 	}
 
 	private static LispEvaluator schemeEvaluator(ByteArrayOutputStream out, String stdin) {
@@ -333,10 +370,10 @@ class DocExamplesTest {
 	 * {@code ; =>} annotation states. An {@code exit} ends the block: the forms after it
 	 * show nothing.
 	 */
-	static SchemeRun runSchemeSession(String content, String stdin, String page) {
+	static SchemeRun runSchemeSession(String content, String stdin, String page, Map<String, String> files) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		LispEvaluator evaluator = schemeEvaluator(out, stdin);
-		SourceSession session = new SourceSession(SourceLanguage.SCHEME);
+		SourceSession session = new SourceSession(SourceLanguage.SCHEME, SourceStandards.DEFAULT, pageFiles(files));
 		List<List<String>> forms = splitSchemeForms(session, content);
 		List<String> shown = new ArrayList<>();
 		boolean exited = false;
@@ -442,6 +479,7 @@ class DocExamplesTest {
 		String pendingStdout = null; // stdout of the previous lisp block, awaiting an
 										// output fence
 		String stdin = "";
+		Map<String, String> files = new HashMap<>();
 
 		int i = 0;
 		while (i < lines.length) {
@@ -479,8 +517,11 @@ class DocExamplesTest {
 				}
 				else if (info.equals("scheme")) {
 					String source = String.join("\n", content);
-					if (source.contains(ARROW)) {
-						SchemeRun run = runSchemeSession(source, stdin, page.toString());
+					if (noteFile(source, files)) {
+						pendingStdout = null;
+					}
+					else if (source.contains(ARROW)) {
+						SchemeRun run = runSchemeSession(source, stdin, page.toString(), files);
 						List<String> rewritten = new ArrayList<>();
 						for (int f = 0; f < run.forms().size(); f++) {
 							rewritten.addAll(rewriteArrow(run.forms().get(f), run.shown().get(f)));
@@ -489,7 +530,7 @@ class DocExamplesTest {
 						pendingStdout = run.stdout();
 					}
 					else {
-						pendingStdout = runScheme(source, stdin, page.toString());
+						pendingStdout = runScheme(source, stdin, page.toString(), files);
 					}
 				}
 				else if (isOutputInfo(info) && pendingStdout != null) {

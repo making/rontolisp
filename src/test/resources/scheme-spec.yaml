@@ -2594,3 +2594,87 @@ standalone:
     stderr: |
       Unhandled condition: write: the port is closed: #<textual-output-port>
     fails: true
+  # A library stands before the program that imports it (Gauche -r7 accepts it there), so
+  # these cannot join the concatenated corpus: its leading forms are the program's own.
+  # Expected output Gauche 0.9.15's (gosh -r7 -I.).
+  - name: libraries-in-the-program-file-keep-their-names-private
+    standards: [rontolisp, r7rs]
+    source: |
+      (define-library (stack)
+        (export make-stack stack? push! pop! (rename size stack-size) pushes)
+        (import (scheme base))
+        (begin
+          (define-record-type stack (new-stack items) stack? (items items set-items!))
+          (define pushes 0)
+          (define (make-stack) (new-stack '()))
+          (define (size s) (length (items s)))
+          (define (push! s x) (set! pushes (+ pushes 1)) (set-items! s (cons x (items s))))
+          (define (pop! s) (let ((x (car (items s)))) (set-items! s (cdr (items s))) x))))
+      (define-library (stack util)
+        (export push-all! drain)
+        (import (scheme base) (stack))
+        (begin
+          (define (push-all! s xs) (for-each (lambda (x) (push! s x)) xs))
+          (define (drain s) (if (= (stack-size s) 0) '() (let ((x (pop! s))) (cons x (drain s)))))))
+      (import (scheme base) (scheme write) (stack) (only (stack util) push-all! drain))
+      (define (size x) 'mine)
+      (define s (make-stack))
+      (push-all! s '(1 2 3))
+      (write (list (stack-size s) (size s) pushes (stack? s) (stack? 5)))
+      (newline)
+      (write (map stack? (list s 's)))
+      (newline)
+      (write (drain s))
+      (newline)
+      (write (list (stack-size s) pushes))
+      (newline)
+    stdout: |
+      (3 mine 3 #t #f)
+      (#t #f)
+      (3 2 1)
+      (0 3)
+  # A library found as a .sld file beside the program, its body included from another
+  # file, its declarations from a third; one library two others import runs once.
+  - name: libraries-and-includes-read-from-files
+    standards: [rontolisp, r7rs]
+    files:
+      shapes/area.sld: |
+        (define-library (shapes area)
+          (export area describe)
+          (import (scheme base) (scheme write) (shapes common))
+          (include "area-body.scm"))
+      shapes/area-body.scm: |
+        (define (area shape)
+          (case (car shape)
+            ((square) (sq (cadr shape)))
+            ((rect) (* (cadr shape) (cadr (cdr shape))))
+            (else 0)))
+        (define (describe shape)
+          (display (car shape))
+          (display ": ")
+          (display (area shape))
+          (newline))
+      shapes/common.sld: |
+        (define-library (shapes common)
+          (export sq)
+          (import (scheme base) (scheme write))
+          (include-library-declarations "common-decls.scm")
+          (begin (display "common instantiated") (newline)))
+      shapes/common-decls.scm: |
+        (include-ci "common-body.scm")
+      shapes/common-body.scm: |
+        (DEFINE (SQ X) (* X X))
+      shapes-list.scm: |
+        (define shapes '((square 3) (rect 2 5) (circle 1)))
+    source: |
+      (import (scheme base) (scheme write) (prefix (shapes area) a:) (shapes common))
+      (include "shapes-list.scm")
+      (for-each a:describe shapes)
+      (write (list (sq 4) (map a:area shapes)))
+      (newline)
+    stdout: |
+      common instantiated
+      square: 9
+      rect: 10
+      circle: 0
+      (16 (9 10 0))

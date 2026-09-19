@@ -386,7 +386,8 @@ public final class RontoLispCli {
 			evaluator.setParallel(true);
 		}
 		// The REPL has no file to pick a language from: the override, else the default.
-		SourceSession session = new SourceSession(SourceLanguage.forFile(null, sourceLanguage), standards);
+		SourceSession session = new SourceSession(SourceLanguage.forFile(null, sourceLanguage), standards,
+				SourceLoader.fileSystem());
 		evaluator.setSourceStandards(standards);
 		boolean systemTerminal = this.in == System.in && System.console() != null && System.console().isTerminal();
 		boolean terminal = this.assumedTerminal != null ? this.assumedTerminal : systemTerminal;
@@ -563,7 +564,8 @@ public final class RontoLispCli {
 		// are the source-language seam's, in the entry file's language.
 		SourceLanguage language = SourceLanguage.forFile(entryFile, sourceLanguage);
 		evaluator.setSourceStandards(standards);
-		List<LispVal> exprs = language.read(source, evaluator.features(), entryFile, standards);
+		List<LispVal> exprs = language.read(source, evaluator.features(), entryFile, standards,
+				evaluator.sourceLoader());
 		boolean markers = SourceLanguage.usesReadEvalMarkers(source);
 		for (LispVal expr : exprs) {
 			evaluator.eval(markers ? evaluator.resolveReadTimeEvalInCode(expr) : expr);

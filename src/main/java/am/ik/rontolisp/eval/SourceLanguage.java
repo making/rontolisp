@@ -1,5 +1,6 @@
 package am.ik.rontolisp.eval;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Locale;
 
@@ -9,6 +10,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.scheme.Scheme;
+import am.ik.rontolisp.scheme.SchemeFiles;
 
 /**
  * The ONE seam between user source text and the core forms every pipeline consumes. A
@@ -86,11 +88,55 @@ public enum SourceLanguage {
 	 * @return the parsed top-level forms
 	 */
 	public List<LispVal> read(String source, Features features, @Nullable String file, SourceStandards standards) {
+		return read(source, features, file, standards, null);
+	}
+
+	/**
+	 * Reads user source text into core forms against the program's standards, with the
+	 * files the source names read through a loader: a Scheme {@code include} and the
+	 * {@code define-library} files a Scheme program imports, resolved against the
+	 * directory of {@code file} like {@code load} (a Common Lisp read names none).
+	 * @param source the program text
+	 * @param features the active reader features (the target backend's on the compile
+	 * path, the evaluator's on the interpreter)
+	 * @param file the origin file for diagnostics and for what the source's file names
+	 * are relative to, or {@code null} when unknown ({@code -e}, the REPL, the
+	 * playground)
+	 * @param standards what each language is read against ({@code --scheme-standard})
+	 * @param loader where named files are read from, or {@code null} when none can be
+	 * @return the parsed top-level forms
+	 */
+	public List<LispVal> read(String source, Features features, @Nullable String file, SourceStandards standards,
+			@Nullable SourceLoader loader) {
 		if (this == SCHEME) {
-			return Scheme.read(source, file, standards.scheme());
+			return Scheme.read(source, file, standards.scheme(), schemeFiles(loader));
 		}
 		return usesReadEvalMarkers(source) ? LispReader.readAllWithReadEvalMarkers(source, features, file)
 				: LispReader.readAllFromString(source, features, file);
+	}
+
+	/**
+	 * The files a Scheme program names, through a loader: a path relative to the naming
+	 * file's directory, as {@code load} resolves one ({@link SourceLoader#resolve}).
+	 * @param loader the loader, or {@code null} for none
+	 * @return the files
+	 */
+	static SchemeFiles schemeFiles(@Nullable SourceLoader loader) {
+		if (loader == null) {
+			return SchemeFiles.NONE;
+		}
+		return (from, path) -> {
+			String resolved = SourceLoader.resolve(from == null ? null : SourceLoader.parentDir(from), path);
+			if (!loader.exists(resolved)) {
+				return null;
+			}
+			try {
+				return new SchemeFiles.Source(resolved, loader.load(resolved));
+			}
+			catch (IOException ex) {
+				return null;
+			}
+		};
 	}
 
 	/**

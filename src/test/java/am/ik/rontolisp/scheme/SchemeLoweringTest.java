@@ -493,8 +493,8 @@ class SchemeLoweringTest {
 		assertThatThrownBy(() -> lowered("(car 1 2)")).hasMessage("test.scm:1:1: wrong number of arguments to car: 2");
 		assertThatThrownBy(() -> lowered("(f (define x 1))"))
 			.hasMessage("test.scm:1:4: a definition is only allowed at the top level or at the head of a body");
-		assertThatThrownBy(() -> lowered("(define-library (a) (begin))"))
-			.hasMessage("test.scm:1:1: define-library is not supported by this experimental front end yet");
+		assertThatThrownBy(() -> lowered("(cond-expand (else 1))"))
+			.hasMessage("test.scm:1:1: cond-expand is not supported by this experimental front end yet");
 		assertThatThrownBy(() -> lowered("(case-lambda ((x) x) (y))"))
 			.hasMessage("test.scm:1:22: a case-lambda clause is (formals body...)");
 		assertThatThrownBy(() -> lowered("(case-lambda ((x 1) x))"))

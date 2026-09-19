@@ -1597,6 +1597,35 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void aSchemeProgramReadsItsLibraryFilesAndIncludesBesideItOnEveryPath() throws Exception {
+		Files.createDirectories(this.tempDir.resolve("lib"));
+		Files.writeString(this.tempDir.resolve("lib/m.sld"), """
+				(define-library (lib m) (export twice) (import (scheme base) (scheme write))
+				  (include "m-body.scm"))
+				""");
+		Files.writeString(this.tempDir.resolve("lib/m-body.scm"),
+				"(define (twice x) (* 2 x))\n(display \"m\") (newline)\n");
+		Files.writeString(this.tempDir.resolve("a.scm"), "(import (scheme write) (lib m)) (display (twice 1))\n");
+		Files.writeString(this.tempDir.resolve("b.scm"), "(import (scheme write) (lib m)) (display (twice 2))\n");
+		Path program = this.tempDir.resolve("main.scm");
+		Files.writeString(this.tempDir.resolve("main-body.scm"), "(display (twice 1))\n");
+		Files.writeString(program, "(import (scheme base) (scheme write) (lib m))\n(include \"main-body.scm\")\n");
+		assertThat(runCli("", program.toString())).isEqualTo("m\n2");
+		Path compiled = this.tempDir.resolve("Libraries.class");
+		runCli("", program.toString(), "-o", compiled.toString());
+		assertThat(Files.size(compiled)).isPositive();
+		// Two separately lowered files importing one library: it runs once.
+		Path mixed = this.tempDir.resolve("mixed.lisp");
+		Files.writeString(mixed, "(load \"a.scm\")\n(load \"b.scm\")\n");
+		assertThat(runCli("", mixed.toString())).isEqualTo("m\n24");
+		// A session reads what it names relative to the working directory.
+		Files.writeString(this.tempDir.resolve("lib/pure.scm"), "(define (thrice x) (* 3 x))\n");
+		assertThat(runCli("(include \"" + this.tempDir.resolve("lib/pure.scm") + "\")\n(thrice 21)\n",
+				"--source-language", "scheme"))
+			.isEqualTo("63\n");
+	}
+
+	@Test
 	void schemeStandardR7rsIsStrictOnAFileOnEveryPath() throws Exception {
 		Path program = this.tempDir.resolve("sicp.scm");
 		Files.writeString(program, "; no import\n(display (1+ 1))\n");

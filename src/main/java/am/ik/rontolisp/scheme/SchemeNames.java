@@ -1,5 +1,7 @@
 package am.ik.rontolisp.scheme;
 
+import java.util.List;
+
 /**
  * How a Scheme identifier is spelled as a Common Lisp symbol name.
  *
@@ -62,6 +64,20 @@ final class SchemeNames {
 			}
 		}
 		return mangled.toString();
+	}
+
+	/**
+	 * What every top-level name a user library defines starts with: {@code s%%(} plus the
+	 * library's name, {@code s%%(mylib util)}. No identifier mangles to it -- an escaped
+	 * one continues its {@link #PREFIX} with {@code %%}, {@code %c} or a character that
+	 * is not {@code %}, and no identifier holds a parenthesis -- so a library's names
+	 * never collide with a program's or with another library's, and the space and the
+	 * closing parenthesis keep {@code (a b)}'s names apart from {@code (a)}'s.
+	 * @param library the library name's parts, as written
+	 * @return the prefix
+	 */
+	static String libraryPrefix(List<String> library) {
+		return PREFIX + "%(" + String.join(" ", library) + ")";
 	}
 
 	private static boolean needsEscape(String identifier) {

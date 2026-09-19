@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.stream.Stream;
 
@@ -20,10 +21,12 @@ import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.YamlResources;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DynamicContainer;
 import org.junit.jupiter.api.DynamicNode;
 import org.junit.jupiter.api.DynamicTest;
@@ -80,10 +83,13 @@ class SchemeSpecE2eTest {
 	 * stands alone when it must be read against a {@code --scheme-standard} other than
 	 * the corpus's default: {@code standards} lists every standard it runs under (the
 	 * default alone when absent), and each one must print the same. {@code stdin} is fed
-	 * to every leg, like a corpus case's.
+	 * to every leg, like a corpus case's. A case that {@code include}s a file or imports
+	 * a library file stands alone too: {@code files} maps each such file, relative to the
+	 * program, to its text, and every leg reads the program from a directory holding
+	 * them.
 	 */
 	record Standalone(String name, String source, String stdin, String stdout, String stderr, Boolean fails,
-			List<String> standards) {
+			List<String> standards, Map<String, String> files) {
 
 		String stdinOrEmpty() {
 			return this.stdin == null ? "" : this.stdin;
@@ -186,8 +192,9 @@ class SchemeSpecE2eTest {
 			SourceStandards standards = SourceStandards.parse(standard);
 			evaluator.setSourceStandards(standards);
 			try {
-				for (LispVal form : SourceLanguage.SCHEME.read(s.source(), Features.INTERPRETER, "standalone.scm",
-						standards)) {
+				String entry = entryFile(s, standard, "interpreter");
+				for (LispVal form : SourceLanguage.SCHEME.read(s.source(), Features.INTERPRETER,
+						entry != null ? entry : "standalone.scm", standards, SourceLoader.fileSystem())) {
 					evaluator.eval(form);
 				}
 			}
@@ -224,7 +231,7 @@ class SchemeSpecE2eTest {
 		Files.write(dir.resolve(stem + ".class"),
 				new JvmSourceCompiler(stem).sourceLanguage("scheme")
 					.schemeStandard(standard)
-					.compile(s.source(), null)
+					.compile(s.source(), entryFile(s, standard, "jvm"))
 					.classBytes());
 		Path outFile = Files.createTempFile(workDir, stem + "-jvm", ".out");
 		Path errFile = Files.createTempFile(workDir, stem + "-jvm", ".err");
@@ -264,7 +271,8 @@ class SchemeSpecE2eTest {
 	}
 
 	private static void runStandaloneWasm(Standalone s, String standard, boolean component) throws Exception {
-		HostWasmtime.ExecResult result = runWasmModule(s.source(), s.stdinOrEmpty(), component,
+		HostWasmtime.ExecResult result = runWasmModule(s.source(),
+				entryFile(s, standard, component ? "component" : "wasm"), s.stdinOrEmpty(), component,
 				"standalone-" + s.name().replaceAll("[^A-Za-z0-9]", "") + "-" + standard, standard);
 		String leg = component ? "WASM_COMPONENT" : "WASM";
 		String where = "standalone case '%s' [%s] on %s%n--- source ---%n%s--- end source ---%n--- stderr ---%n%s"
@@ -544,7 +552,13 @@ class SchemeSpecE2eTest {
 
 	private static HostWasmtime.ExecResult runWasmModule(String program, String stdin, boolean component, String name,
 			String standard) throws Exception {
-		CompileFrontendAccess.Program frontend = CompileFrontendAccess.scheme(program, true, component, standard);
+		return runWasmModule(program, null, stdin, component, name, standard);
+	}
+
+	private static HostWasmtime.ExecResult runWasmModule(String program, @Nullable String entryFile, String stdin,
+			boolean component, String name, String standard) throws Exception {
+		CompileFrontendAccess.Program frontend = CompileFrontendAccess.scheme(program, entryFile, true, component,
+				standard);
 		byte[] module = WasmLispCompiler.builder()
 			.component(component)
 			.runtimeFeatures(frontend.features().names())
@@ -574,6 +588,23 @@ class SchemeSpecE2eTest {
 			Files.deleteIfExists(outFile);
 			Files.deleteIfExists(errFile);
 		}
+	}
+
+	// Writes a case's files, and the program itself, into a directory of this leg's own
+	// and answers the program's path there; null for a case that names no file.
+	private static @Nullable String entryFile(Standalone s, String standard, String leg) throws IOException {
+		if (s.files() == null) {
+			return null;
+		}
+		Path dir = workDir.resolve("files-" + s.name().replaceAll("[^A-Za-z0-9]", "") + "-" + standard + "-" + leg);
+		for (Map.Entry<String, String> file : s.files().entrySet()) {
+			Path path = dir.resolve(file.getKey());
+			Files.createDirectories(path.getParent());
+			Files.writeString(path, file.getValue(), StandardCharsets.UTF_8);
+		}
+		Path entry = dir.resolve("standalone.scm");
+		Files.writeString(entry, s.source(), StandardCharsets.UTF_8);
+		return entry.toString();
 	}
 
 	// Runs the body on a thread with the CLI's program stack and rethrows what it threw.

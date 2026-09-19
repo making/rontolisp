@@ -59,8 +59,20 @@ public final class SourceSession {
 	 * @param standards what the typed text is read against ({@code --scheme-standard})
 	 */
 	public SourceSession(SourceLanguage language, SourceStandards standards) {
+		this(language, standards, null);
+	}
+
+	/**
+	 * Starts a session whose typed text may name files (a Scheme {@code include}, a
+	 * {@code define-library} file), relative to the working directory.
+	 * @param language the language typed at the prompt
+	 * @param standards what the typed text is read against ({@code --scheme-standard})
+	 * @param loader where named files are read from, or {@code null} for none
+	 */
+	public SourceSession(SourceLanguage language, SourceStandards standards, @Nullable SourceLoader loader) {
 		this.language = language;
-		this.scheme = language == SourceLanguage.SCHEME ? Scheme.session(standards.scheme()) : null;
+		this.scheme = language == SourceLanguage.SCHEME
+				? Scheme.session(standards.scheme(), SourceLanguage.schemeFiles(loader)) : null;
 	}
 
 	/**

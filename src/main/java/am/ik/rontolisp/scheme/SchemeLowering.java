@@ -22,6 +22,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.SourceLocation;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
@@ -96,9 +97,10 @@ final class SchemeLowering {
 		table.put("syntax-error", Core.SYNTAX_ERROR);
 		table.put("...", Core.ELLIPSIS);
 		table.put("_", Core.UNDERSCORE);
-		for (String unsupported : List.of("define-library", "include", "include-ci", "cond-expand")) {
-			table.put(unsupported, Core.UNSUPPORTED);
-		}
+		table.put("define-library", Core.DEFINE_LIBRARY);
+		table.put("include", Core.INCLUDE);
+		table.put("include-ci", Core.INCLUDE_CI);
+		table.put("cond-expand", Core.UNSUPPORTED);
 		return table;
 	}
 
@@ -197,7 +199,10 @@ final class SchemeLowering {
 		return CORE_BY_CORE.get(core);
 	}
 
-	/** What an identifier means at a point in the program. */
+	/**
+	 * What an identifier means at a point in the program; what a user library exports
+	 * ({@link SchemeLibraries}).
+	 */
 	private sealed interface Binding {
 
 	}
@@ -462,6 +467,17 @@ final class SchemeLowering {
 
 	private final Scope global = new Scope(null);
 
+	// The user libraries this lowering and the ones it imports know.
+	private final SchemeLibraries<Binding> libraries;
+
+	// What this lowering's top-level names start with: nothing for a program or a
+	// session, the library's private prefix for a library (SchemeNames.libraryPrefix).
+	private final String prefix;
+
+	// The bindings imported from a user library: an importer may not assign them, and
+	// under r7rs may not redefine them either.
+	private final Set<Binding> libraryImports = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+
 	private final LispSymbol falseVariable = symbol(SchemeBuiltins.FALSE_VARIABLE);
 
 	private final LispSymbol unspecifiedVariable = symbol(SchemeBuiltins.UNSPECIFIED_VARIABLE);
@@ -482,20 +498,24 @@ final class SchemeLowering {
 	// with it the macros of earlier buffers.
 	private @Nullable SchemeExpander expander;
 
-	private SchemeLowering(SchemeReader reader, boolean interactive, SchemeStandard standard) {
+	private SchemeLowering(SchemeReader reader, boolean interactive, SchemeStandard standard,
+			SchemeLibraries<Binding> libraries, String prefix) {
 		this.reader = reader;
 		this.interactive = interactive;
 		this.standard = standard;
+		this.libraries = libraries;
+		this.prefix = prefix;
 	}
 
 	/**
 	 * A lowering of one whole file.
 	 * @param reader the file's reader
 	 * @param standard the standard the file is read against
+	 * @param files where the files it includes and the libraries it imports are read from
 	 * @return the lowering
 	 */
-	static SchemeLowering ofFile(SchemeReader reader, SchemeStandard standard) {
-		return new SchemeLowering(reader, false, standard);
+	static SchemeLowering ofFile(SchemeReader reader, SchemeStandard standard, SchemeFiles files) {
+		return new SchemeLowering(reader, false, standard, new SchemeLibraries<>(files, reader.file()), "");
 	}
 
 	/**
@@ -503,11 +523,14 @@ final class SchemeLowering {
 	 * library is visible from the start, as in any R7RS REPL -- plus the {@code sicp} and
 	 * {@code r5rs} names under {@link SchemeStandard#RONTOLISP}.
 	 * @param standard the standard the session is read against
+	 * @param files where the files it includes and the libraries it imports are read
+	 * from, relative to the working directory
 	 * @return the lowering
 	 */
-	static SchemeLowering ofSession(SchemeStandard standard) {
-		SchemeLowering lowering = new SchemeLowering(new SchemeReader("", null), true, standard);
-		lowering.imports();
+	static SchemeLowering ofSession(SchemeStandard standard, SchemeFiles files) {
+		SchemeLowering lowering = new SchemeLowering(new SchemeReader("", null), true, standard,
+				new SchemeLibraries<>(files, null), "");
+		lowering.imports(0);
 		return lowering;
 	}
 
@@ -531,8 +554,18 @@ final class SchemeLowering {
 		// COUNTER is what must outlive the buffer, a record's generated slot being
 		// global.
 		this.generated.clear();
+		// A library typed at a prompt is declared, not lowered: a later import lowers it.
+		List<LispVal> program = new ArrayList<>();
+		for (LispVal datum : this.datums) {
+			if (isLibraryDefinition(datum)) {
+				declareLibrary((LispCons) datum, buffer, null);
+			}
+			else {
+				program.add(datum);
+			}
+		}
 		List<LispVal> forms = new ArrayList<>();
-		for (LispVal datum : expanded(this.datums)) {
+		for (LispVal datum : expanded(includes(program, null))) {
 			spliceBegins(datum, forms);
 		}
 		for (LispVal form : forms) {
@@ -549,6 +582,10 @@ final class SchemeLowering {
 		List<SchemeTopLevel> out = new ArrayList<>();
 		if (!this.falseBound) {
 			out.add(new SchemeTopLevel(List.of(falseBinding()), false));
+		}
+		List<LispVal> libraryForms = this.libraries.drain();
+		if (!libraryForms.isEmpty()) {
+			out.add(new SchemeTopLevel(libraryForms, false));
 		}
 		for (LispVal form : forms) {
 			List<LispVal> lowered = new ArrayList<>();
@@ -568,8 +605,8 @@ final class SchemeLowering {
 	List<LispVal> lower() {
 		this.datums = this.reader.readAll();
 		List<LispVal> forms = new ArrayList<>();
-		int start = imports();
-		for (LispVal datum : expanded(this.datums.subList(start, this.datums.size()))) {
+		int start = imports(declareLibraries());
+		for (LispVal datum : expanded(includes(this.datums.subList(start, this.datums.size()), this.reader.file()))) {
 			spliceBegins(datum, forms);
 		}
 		for (LispVal form : forms) {
@@ -581,6 +618,9 @@ final class SchemeLowering {
 		// working. It lives in a variable because a quoted symbol costs a lookup per
 		// evaluation on wasm (3x on a test-heavy loop, .kb/scheme-frontend.md).
 		out.add(falseBinding());
+		// The imported libraries, lowered on import, in dependency order; each guards its
+		// own statements, so they run once however many files import it.
+		out.addAll(this.libraries.drain());
 		if (!this.initialValues.isEmpty()) {
 			List<LispVal> assignment = new ArrayList<>(List.of(symbol("SETQ")));
 			this.initialValues.forEach((variable, value) -> {
@@ -629,6 +669,11 @@ final class SchemeLowering {
 		@Override
 		public @Nullable LispSymbol coreSymbol(Core core) {
 			return SchemeLowering.coreSymbol(core);
+		}
+
+		@Override
+		public @Nullable Core coreOf(LispSymbol identifier) {
+			return CORE_SYMBOLS.get(identifier);
 		}
 
 		@Override
@@ -850,10 +895,10 @@ final class SchemeLowering {
 						LispTrue.INSTANCE, LispNil.INSTANCE));
 	}
 
-	// Leading (import ...) forms pick what the global scope holds; a program with none
-	// sees everything, like a REPL.
-	private int imports() {
-		int index = 0;
+	// Leading (import ...) forms -- after the leading define-library forms, at `start` --
+	// pick what the global scope holds; a program with none sees everything, like a REPL.
+	private int imports(int start) {
+		int index = start;
 		Map<String, Binding> imported = new LinkedHashMap<>();
 		while (index < this.datums.size() && this.datums.get(index) instanceof LispCons form
 				&& form.car() instanceof LispSymbol head && head.name().equals("import")) {
@@ -862,30 +907,40 @@ final class SchemeLowering {
 			}
 			index++;
 		}
-		if (index == 0) {
+		if (index == start) {
 			// R7RS 5.1: a program begins with an import declaration. A session has no
-			// program to begin, and starts with every library instead.
-			if (this.standard == SchemeStandard.R7RS && !this.interactive) {
+			// program to begin, and starts with every library instead; a file of
+			// libraries alone has no program.
+			if (this.standard == SchemeStandard.R7RS && !this.interactive
+					&& (start == 0 || start < this.datums.size())) {
+				SourceLocation first = start < this.datums.size() ? this.reader.locate(this.datums.get(start)) : null;
 				throw new LispReadException("an R7RS program begins with an import declaration",
-						this.reader.locateFirstDatum());
+						first != null ? first : this.reader.locateFirstDatum());
 			}
-			for (String library : IMPORTABLE_LIBRARIES) {
-				imported.putAll(library(library));
-			}
-			// Not R7RS exports, so not reachable by name through (import ...): a REPL,
-			// and a file with no import at all, sees them anyway, the way an unqualified
-			// SICP sample -- written against an implementation that already had them --
-			// expects. r5rs is the same shape: (scheme r5rs) would promise all of R5RS.
-			// Strict R7RS sees neither.
-			if (this.standard == SchemeStandard.RONTOLISP) {
-				imported.putAll(library("sicp"));
-				imported.putAll(library("r5rs"));
-			}
+			imported.putAll(everything());
 		}
 		for (Map.Entry<String, Binding> entry : imported.entrySet()) {
 			this.global.bindings.put(SchemeNames.mangle(entry.getKey()), entry.getValue());
 		}
 		return index;
+	}
+
+	// What a program, a library or a session with no import declaration sees.
+	private Map<String, Binding> everything() {
+		Map<String, Binding> imported = new LinkedHashMap<>();
+		for (String library : IMPORTABLE_LIBRARIES) {
+			imported.putAll(library(library));
+		}
+		// Not R7RS exports, so not reachable by name through (import ...): a REPL, and a
+		// file with no import at all, sees them anyway, the way an unqualified SICP
+		// sample -- written against an implementation that already had them -- expects.
+		// r5rs is the same shape: (scheme r5rs) would promise all of R5RS. Strict R7RS
+		// sees neither.
+		if (this.standard == SchemeStandard.RONTOLISP) {
+			imported.putAll(library("sicp"));
+			imported.putAll(library("r5rs"));
+		}
+		return imported;
 	}
 
 	private Map<String, Binding> importSet(LispVal set, LispCons form) {
@@ -898,6 +953,9 @@ final class SchemeLowering {
 			if (parts.size() == 2 && head.name().equals("scheme") && parts.get(1) instanceof LispSymbol name
 					&& IMPORTABLE_LIBRARIES.contains(name.name())) {
 				return library(name.name());
+			}
+			if (!head.name().equals("scheme")) {
+				return userLibrary(libraryName(set, form), form);
 			}
 			List<String> names = IMPORTABLE_LIBRARIES.stream().map(library -> "(scheme " + library + ")").toList();
 			throw error("library " + set.print() + " is not available: this experimental front end has "
@@ -975,6 +1033,390 @@ final class SchemeLowering {
 		return exports;
 	}
 
+	// ------------------------------------------------------------------ libraries
+
+	private static boolean isLibraryDefinition(LispVal datum) {
+		return datum instanceof LispCons form && form.car() instanceof LispSymbol head
+				&& head.name().equals("define-library");
+	}
+
+	// The leading define-library forms of a file: declared here, lowered when imported.
+	private int declareLibraries() {
+		int index = 0;
+		while (index < this.datums.size() && isLibraryDefinition(this.datums.get(index))) {
+			declareLibrary((LispCons) this.datums.get(index), this.reader, this.reader.file());
+			index++;
+		}
+		return index;
+	}
+
+	private void declareLibrary(LispCons form, SchemeReader reader, @Nullable String file) {
+		List<String> name = libraryName(second(form), form);
+		if (name.getFirst().equals("scheme")) {
+			throw error("library names beginning with scheme are reserved: " + printed(name), form);
+		}
+		if (!this.libraries.declare(name, new SchemeLibraries.Declaration(form, reader, file))) {
+			throw error("library " + printed(name) + " is defined twice", form);
+		}
+	}
+
+	// A library name, R7RS 5.6.1: identifiers and exact non-negative integers.
+	private List<String> libraryName(LispVal datum, LispCons form) {
+		List<String> name = new ArrayList<>();
+		LispVal rest = datum;
+		while (rest instanceof LispCons cell) {
+			switch (cell.car()) {
+				case LispSymbol part when !part.equals(SchemeReader.TRUE) && !part.equals(SchemeReader.FALSE) ->
+					name.add(part.name());
+				case LispInteger integer when integer.value() >= 0 -> name.add(Long.toString(integer.value()));
+				default -> throw error("malformed library name: " + SchemeExpander.written(datum), form);
+			}
+			rest = cell.cdr();
+		}
+		if (name.isEmpty() || rest != LispNil.INSTANCE) {
+			throw error("malformed library name: " + SchemeExpander.written(datum), form);
+		}
+		return name;
+	}
+
+	private static String printed(List<String> name) {
+		return "(" + String.join(" ", name) + ")";
+	}
+
+	// An import of a user library: lowered the first time, its exports every time.
+	private Map<String, Binding> userLibrary(List<String> name, LispCons form) {
+		Map<String, Binding> exports = this.libraries.exports(name);
+		if (exports == null) {
+			exports = instantiate(name, form);
+		}
+		for (Binding binding : exports.values()) {
+			if (binding instanceof Variable || binding instanceof GlobalFunction
+					|| binding instanceof GlobalPredicate) {
+				this.libraryImports.add(binding);
+			}
+		}
+		return exports;
+	}
+
+	private Map<String, Binding> instantiate(List<String> name, LispCons form) {
+		SchemeLibraries.Declaration declaration = this.libraries.declared(name);
+		if (declaration == null) {
+			declaration = libraryFile(name, form);
+		}
+		List<List<String>> cycle = this.libraries.enter(name);
+		if (cycle != null) {
+			throw error("library import cycle: "
+					+ String.join(" -> ", cycle.stream().map(SchemeLowering::printed).toList()), form);
+		}
+		boolean done = false;
+		try {
+			SchemeLowering library = new SchemeLowering(declaration.reader(), false, this.standard, this.libraries,
+					SchemeNames.libraryPrefix(name));
+			Map<String, Binding> exports = library.lowerLibrary(declaration);
+			this.libraries.leave(name, exports, library.libraryForms);
+			done = true;
+			return exports;
+		}
+		finally {
+			if (!done) {
+				this.libraries.abandon(name);
+			}
+		}
+	}
+
+	// (a b) is a/b.sld (else a/b.scm) beside the file the lowering started from, the way
+	// Gauche finds it on its load path; every define-library in that file is declared.
+	private SchemeLibraries.Declaration libraryFile(List<String> name, LispCons form) {
+		String stem = String.join("/", name);
+		for (String extension : List.of(".sld", ".scm")) {
+			SchemeFiles.Source source = this.libraries.files().find(this.libraries.root(), stem + extension);
+			if (source == null) {
+				continue;
+			}
+			SchemeReader reader = new SchemeReader(source.text(), source.path());
+			for (LispVal datum : reader.readAll()) {
+				if (isLibraryDefinition(datum)) {
+					LispCons definition = (LispCons) datum;
+					this.libraries.declare(libraryName(second(definition), definition),
+							new SchemeLibraries.Declaration(definition, reader, source.path()));
+				}
+			}
+			SchemeLibraries.Declaration declaration = this.libraries.declared(name);
+			if (declaration == null) {
+				throw error(source.path() + " does not define library " + printed(name), form);
+			}
+			return declaration;
+		}
+		throw error("library " + printed(name) + " is not available: no define-library of it precedes the program"
+				+ " and there is no " + stem + ".sld", form);
+	}
+
+	// The lowered forms of a library: set by lowerLibrary.
+	private List<LispVal> libraryForms = List.of();
+
+	/**
+	 * Lowers a library's body as a whole file of its own: its imports are its scope, its
+	 * top-level names are private ({@link SchemeNames#libraryPrefix}), and what it
+	 * exports reaches an importer as the bindings themselves -- a {@code defun} stays a
+	 * direct call there.
+	 */
+	private Map<String, Binding> lowerLibrary(SchemeLibraries.Declaration declaration) {
+		List<LispCons> importForms = new ArrayList<>();
+		List<LispCons> exportForms = new ArrayList<>();
+		List<Chunk> chunks = new ArrayList<>();
+		LispCons form = declaration.form();
+		List<LispVal> parts = elements(form, form);
+		libraryDeclarations(parts.subList(2, parts.size()), declaration.file(), form,
+				new Declarations(importForms, exportForms, chunks), new java.util.ArrayDeque<>());
+		Map<String, Binding> imported = new LinkedHashMap<>();
+		for (LispCons importForm : importForms) {
+			for (LispVal set : elements(importForm.cdr(), importForm)) {
+				imported.putAll(importSet(set, importForm));
+			}
+		}
+		if (importForms.isEmpty()) {
+			if (this.standard == SchemeStandard.R7RS && !chunks.isEmpty()) {
+				throw error("a library that imports nothing binds nothing, not even define:"
+						+ " add (import (scheme base))", form);
+			}
+			imported.putAll(everything());
+		}
+		for (Map.Entry<String, Binding> entry : imported.entrySet()) {
+			this.global.bindings.put(SchemeNames.mangle(entry.getKey()), entry.getValue());
+		}
+		List<LispVal> body = new ArrayList<>();
+		for (Chunk chunk : chunks) {
+			body.addAll(includes(chunk.datums(), chunk.file()));
+		}
+		List<LispVal> forms = new ArrayList<>();
+		for (LispVal datum : expanded(body)) {
+			spliceBegins(datum, forms);
+		}
+		for (LispVal datum : forms) {
+			collectAssigned(datum);
+		}
+		declareGlobals(forms);
+		List<LispVal> out = new ArrayList<>();
+		for (LispVal datum : forms) {
+			topLevel(datum, out);
+		}
+		if (mayThrowExit(forms)) {
+			out.replaceAll(this::exitGuard);
+		}
+		this.libraryForms = instantiationGuarded(out);
+		return exports(exportForms);
+	}
+
+	/**
+	 * Body datums and the file they were read from, what an {@code include} in them is
+	 * relative to.
+	 *
+	 * @param datums the datums
+	 * @param file the file, or {@code null} for a session buffer
+	 */
+	private record Chunk(List<LispVal> datums, @Nullable String file) {
+	}
+
+	/**
+	 * What a library's declarations collect, in order.
+	 *
+	 * @param imports the {@code import} declarations
+	 * @param exports the {@code export} declarations
+	 * @param body the {@code begin} and {@code include} bodies
+	 */
+	private record Declarations(List<LispCons> imports, List<LispCons> exports, List<Chunk> body) {
+	}
+
+	private void libraryDeclarations(List<LispVal> declarations, @Nullable String file, LispCons library,
+			Declarations out, java.util.Deque<String> reading) {
+		for (LispVal datum : declarations) {
+			if (!(datum instanceof LispCons declaration) || !(declaration.car() instanceof LispSymbol head)) {
+				throw error("malformed library declaration: " + SchemeExpander.written(datum), library);
+			}
+			switch (head.name()) {
+				case "export" -> out.exports().add(declaration);
+				case "import" -> out.imports().add(declaration);
+				case "begin" -> out.body().add(new Chunk(elements(declaration.cdr(), declaration), file));
+				case "include", "include-ci" -> {
+					for (Included included : readIncluded(declaration, file, head.name().equals("include-ci"),
+							reading)) {
+						out.body().add(new Chunk(included.datums(), included.file()));
+					}
+				}
+				case "include-library-declarations" -> {
+					for (Included included : readIncluded(declaration, file, false, reading)) {
+						reading.push(included.file());
+						libraryDeclarations(included.datums(), included.file(), library, out, reading);
+						reading.pop();
+					}
+				}
+				case "cond-expand" ->
+					throw error("cond-expand is not supported by this experimental front end yet", declaration);
+				default -> throw error("unknown library declaration: " + head.name(), declaration);
+			}
+		}
+	}
+
+	// The exports: (export id (rename internal external) ...), each resolved in the
+	// library's own scope after its body is lowered.
+	private Map<String, Binding> exports(List<LispCons> exportForms) {
+		Map<String, Binding> exports = new LinkedHashMap<>();
+		for (LispCons exportForm : exportForms) {
+			for (LispVal spec : elements(exportForm.cdr(), exportForm)) {
+				LispSymbol internal;
+				LispSymbol external;
+				if (spec instanceof LispCons rename && rename.car() instanceof LispSymbol head
+						&& head.name().equals("rename")) {
+					List<LispVal> pair = elements(rename.cdr(), exportForm);
+					if (pair.size() != 2) {
+						throw error("malformed export rename: " + SchemeExpander.written(spec), exportForm);
+					}
+					internal = identifier(pair.get(0), exportForm);
+					external = identifier(pair.get(1), exportForm);
+				}
+				else {
+					internal = identifier(spec, exportForm);
+					external = internal;
+				}
+				Binding binding = this.global.find(name(internal));
+				if (binding == null) {
+					if (this.expander != null && this.expander.definesSyntax(internal.name())) {
+						throw error("exporting syntax from a library is not supported by this experimental front end"
+								+ " yet: " + internal.name(), exportForm);
+					}
+					throw error("the library exports " + internal.name() + ", which it neither defines nor imports",
+							exportForm);
+				}
+				if (exports.put(external.name(), binding) != null) {
+					throw error("the library exports " + external.name() + " twice", exportForm);
+				}
+			}
+		}
+		return exports;
+	}
+
+	// A library runs once per program, however many separately lowered files import it
+	// (R7RS 5.6.1): its definitions are idempotent and stay top-level forms (the
+	// backends hoist a defun or defstruct only as a direct child of the program), its
+	// statements run behind a flag the first instantiation sets.
+	private List<LispVal> instantiationGuarded(List<LispVal> forms) {
+		List<LispVal> definitions = new ArrayList<>();
+		List<LispVal> statements = new ArrayList<>();
+		if (!this.initialValues.isEmpty()) {
+			List<LispVal> assignment = new ArrayList<>(List.of(symbol("SETQ")));
+			this.initialValues.forEach((variable, value) -> {
+				assignment.add(variable);
+				assignment.add(value);
+			});
+			statements.add(listOf(assignment));
+		}
+		for (LispVal form : forms) {
+			boolean definition = form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+					&& ("DEFUN".equals(head.name()) || "DEFSTRUCT".equals(head.name()));
+			(definition ? definitions : statements).add(form);
+		}
+		if (statements.isEmpty()) {
+			return List.copyOf(definitions);
+		}
+		LispSymbol flag = symbol(this.prefix + "%SCM-INSTANTIATED");
+		List<LispVal> guarded = new ArrayList<>();
+		guarded.add(list(symbol("DEFVAR"), flag, LispNil.INSTANCE));
+		guarded.addAll(definitions);
+		List<LispVal> body = new ArrayList<>(List.of(symbol("PROGN"), list(symbol("SETQ"), flag, LispTrue.INSTANCE)));
+		body.addAll(statements);
+		guarded.add(list(symbol("IF"), flag, LispNil.INSTANCE, listOf(body)));
+		return List.copyOf(guarded);
+	}
+
+	/**
+	 * A file an {@code include} read.
+	 *
+	 * @param datums the file's datums
+	 * @param file the resolved path
+	 */
+	private record Included(List<LispVal> datums, String file) {
+	}
+
+	private List<Included> readIncluded(LispCons form, @Nullable String from, boolean foldCase,
+			java.util.Deque<String> reading) {
+		List<LispVal> names = elements(form.cdr(), form);
+		if (names.isEmpty()) {
+			throw error("include needs a file name", form);
+		}
+		List<Included> files = new ArrayList<>();
+		for (LispVal name : names) {
+			if (!(name instanceof LispString path)) {
+				throw error("include takes file names as strings, got " + SchemeExpander.written(name), form);
+			}
+			SchemeFiles.Source source = this.libraries.files().find(from, path.value());
+			if (source == null) {
+				throw error("include: cannot read " + path.value(), form);
+			}
+			if (reading.contains(source.path())) {
+				throw error("include: " + path.value() + " includes itself", form);
+			}
+			files.add(new Included(this.reader.other(source.text(), source.path(), foldCase).readAll(), source.path()));
+		}
+		return files;
+	}
+
+	// Splices every (include "file" ...) the datums spell as a (begin datums...) of the
+	// files' contents, recursively, BEFORE macros are expanded -- so an included
+	// definition or syntax definition is seen by every pre-scan. Quoted data is left
+	// alone. Datums that include nothing are returned as they are, the same objects.
+	private List<LispVal> includes(List<LispVal> datums, @Nullable String file) {
+		List<LispVal> out = new ArrayList<>(datums.size());
+		boolean changed = false;
+		for (LispVal datum : datums) {
+			LispVal resolved = included(datum, file, new java.util.ArrayDeque<>());
+			changed |= resolved != datum;
+			out.add(resolved);
+		}
+		return changed ? out : datums;
+	}
+
+	private LispVal included(LispVal datum, @Nullable String file, java.util.Deque<String> reading) {
+		if (!(datum instanceof LispCons form)) {
+			return datum;
+		}
+		Core core = syntaxOf(form, this.global);
+		if (core == Core.QUOTE || core == Core.QUASIQUOTE) {
+			return datum;
+		}
+		if (core == Core.INCLUDE || core == Core.INCLUDE_CI) {
+			List<LispVal> spliced = new ArrayList<>();
+			for (Included included : readIncluded(form, file, core == Core.INCLUDE_CI, reading)) {
+				reading.push(included.file());
+				for (LispVal inner : included.datums()) {
+					spliced.add(included(inner, included.file(), reading));
+				}
+				reading.pop();
+			}
+			LispCons begin = new LispCons(CORE_BEGIN, listOf(spliced));
+			this.reader.inherit(form, begin);
+			return inherit(form, begin);
+		}
+		List<LispVal> elements = new ArrayList<>();
+		boolean changed = false;
+		LispVal rest = form;
+		while (rest instanceof LispCons cell) {
+			LispVal element = included(cell.car(), file, reading);
+			changed |= element != cell.car();
+			elements.add(element);
+			rest = cell.cdr();
+		}
+		if (!changed) {
+			return datum;
+		}
+		LispVal rebuilt = rest;
+		for (int i = elements.size() - 1; i >= 0; i--) {
+			rebuilt = new LispCons(elements.get(i), rebuilt);
+		}
+		LispCons head = (LispCons) rebuilt;
+		this.reader.inherit(form, head);
+		return inherit(form, head);
+	}
+
 	// ------------------------------------------------------------------ top level
 
 	private void spliceBegins(LispVal datum, List<LispVal> out) {
@@ -1045,11 +1487,12 @@ final class SchemeLowering {
 			}
 		}
 		Set<String> readEarly = this.interactive ? Set.of() : readBeforeDefinition(forms);
-		variables.forEach((name, identifier) -> this.global.bindings.put(name, new Variable(cl(identifier))));
+		variables.forEach((name, identifier) -> this.global.bindings.put(name, new Variable(global(identifier))));
 		procedures.forEach((name, identifier) -> {
 			boolean direct = !this.interactive && definitions.getOrDefault(name, 0) == 1
 					&& !this.assignedNames.contains(name) && !variables.containsKey(name) && !readEarly.contains(name);
-			this.global.bindings.put(name, direct ? new GlobalFunction(cl(identifier)) : new Variable(cl(identifier)));
+			this.global.bindings.put(name,
+					direct ? new GlobalFunction(global(identifier)) : new Variable(global(identifier)));
 		});
 		for (LispCons record : records) {
 			declareRecord(record, definitions);
@@ -1095,7 +1538,8 @@ final class SchemeLowering {
 			mentioned.add(referenced);
 			for (String name : names) {
 				Binding imported = this.global.bindings.get(name);
-				if (imported instanceof Builtin || imported instanceof Constant) {
+				if (imported instanceof Builtin || imported instanceof Constant
+						|| this.libraryImports.contains(imported)) {
 					firstDefinition.putIfAbsent(name, i);
 				}
 			}
@@ -1133,9 +1577,12 @@ final class SchemeLowering {
 			LispVal value = switch (this.global.bindings.get(name)) {
 				case Builtin builtin -> builtin.entry().function();
 				case Constant constant -> constant.form();
+				case Variable variable -> variable.symbol();
+				case GlobalFunction function -> list(symbol("FUNCTION"), function.symbol());
+				case GlobalPredicate predicate -> predicateValue(predicate);
 				case null, default -> throw new IllegalStateException("not an imported value: " + name);
 			};
-			this.initialValues.put(symbol(name), value);
+			this.initialValues.put(symbol(this.prefix + name), value);
 		}
 		return early;
 	}
@@ -1170,7 +1617,7 @@ final class SchemeLowering {
 			return;
 		}
 		Binding imported = this.global.bindings.get(name(identifier));
-		if (imported instanceof Builtin || imported instanceof Syntax) {
+		if (imported instanceof Builtin || imported instanceof Syntax || this.libraryImports.contains(imported)) {
 			throw error("cannot redefine " + identifier.name() + ": it is imported (R7RS 5.6.1)", form);
 		}
 	}
@@ -1179,7 +1626,8 @@ final class SchemeLowering {
 	// definitions; a session meets the second one alone, against the scope it kept.
 	private void refuseARecordProcedure(LispSymbol identifier, LispCons form) {
 		Binding known = this.global.bindings.get(name(identifier));
-		if (known instanceof GlobalFunction || known instanceof GlobalPredicate) {
+		if ((known instanceof GlobalFunction || known instanceof GlobalPredicate)
+				&& !this.libraryImports.contains(known)) {
 			throw error("cannot redefine " + identifier.name() + ", a record procedure", form);
 		}
 	}
@@ -1348,8 +1796,8 @@ final class SchemeLowering {
 			if (definitions.merge(name, 1, Integer::sum) != 1 || this.assignedNames.contains(name)) {
 				throw error("a record procedure cannot be redefined or assigned: " + procedure.name(), form);
 			}
-			this.global.bindings.put(name, procedure == type.predicate() ? new GlobalPredicate(cl(procedure))
-					: new GlobalFunction(cl(procedure)));
+			this.global.bindings.put(name, procedure == type.predicate() ? new GlobalPredicate(global(procedure))
+					: new GlobalFunction(global(procedure)));
 		}
 	}
 
@@ -1436,7 +1884,7 @@ final class SchemeLowering {
 		List<LispVal> slotList = new ArrayList<>();
 		for (String field : type.fields()) {
 			LispSymbol accessor = type.accessors().get(field);
-			LispSymbol slot = accessor != null ? cl(accessor) : fresh("SLOT");
+			LispSymbol slot = accessor != null ? global(accessor) : fresh("SLOT");
 			slots.put(field, slot);
 			slotList.add(slot);
 		}
@@ -1444,9 +1892,10 @@ final class SchemeLowering {
 		for (String field : type.constructorFields()) {
 			constructorParams.add(slots.get(field));
 		}
-		LispSymbol constructor = type.constructor() != null ? cl(type.constructor()) : fresh("MAKE");
-		LispVal options = list(cl(type.name()), list(symbol(":CONSTRUCTOR"), constructor, listOf(constructorParams)),
-				list(symbol(":PREDICATE"), cl(type.predicate())), list(symbol(":COPIER"), LispNil.INSTANCE),
+		LispSymbol constructor = type.constructor() != null ? global(type.constructor()) : fresh("MAKE");
+		LispVal options = list(global(type.name()),
+				list(symbol(":CONSTRUCTOR"), constructor, listOf(constructorParams)),
+				list(symbol(":PREDICATE"), global(type.predicate())), list(symbol(":COPIER"), LispNil.INSTANCE),
 				list(symbol(":CONC-NAME"), LispNil.INSTANCE));
 		out.add(inherit(form, new LispCons(symbol("DEFSTRUCT"), new LispCons(options, listOf(slotList)))));
 		type.modifiers().forEach((field, modifier) -> {
@@ -1459,7 +1908,7 @@ final class SchemeLowering {
 			// A modifier answers the unspecified object, like set-car!, so a REPL does
 			// not
 			// echo the stored value.
-			out.add(inherit(form, list(symbol("DEFUN"), cl(modifier), list(record, newValue),
+			out.add(inherit(form, list(symbol("DEFUN"), global(modifier), list(record, newValue),
 					list(symbol("SETF"), list(slot, record), newValue), this.unspecifiedVariable)));
 		});
 	}
@@ -1545,16 +1994,19 @@ final class SchemeLowering {
 		};
 	}
 
+	// A record predicate as a first-class Scheme procedure: #t/#f, not T/NIL.
+	private LispVal predicateValue(GlobalPredicate predicate) {
+		LispSymbol argument = fresh("X");
+		return list(symbol("LAMBDA"), list(argument),
+				SchemeBuiltins.toSchemeValue(SchemeBuiltins.Result.PREDICATE, list(predicate.symbol(), argument)));
+	}
+
 	private LispVal reference(LispSymbol identifier, Scope scope) {
 		Binding binding = lookup(identifier, scope);
 		return switch (binding) {
 			case Variable variable -> variable.symbol();
 			case GlobalFunction function -> list(symbol("FUNCTION"), function.symbol());
-			case GlobalPredicate predicate -> {
-				LispSymbol argument = fresh("X");
-				yield list(symbol("LAMBDA"), list(argument), SchemeBuiltins
-					.toSchemeValue(SchemeBuiltins.Result.PREDICATE, list(predicate.symbol(), argument)));
-			}
+			case GlobalPredicate predicate -> predicateValue(predicate);
 			case Builtin builtin -> builtin.entry().function();
 			case Constant constant -> constant.form();
 			case LoopName loop -> {
@@ -1675,6 +2127,12 @@ final class SchemeLowering {
 				throw error("a definition is only allowed at the top level or at the head of a body", form);
 			case DEFINE_RECORD_TYPE -> throw error("define-record-type is only supported at the top level", form);
 			case IMPORT -> throw error("import must come before everything else", form);
+			case DEFINE_LIBRARY ->
+				throw error("define-library must come before the program's import declarations", form);
+			// Spliced before the lowering wherever the program spells one; only a macro
+			// can
+			// produce one after that.
+			case INCLUDE, INCLUDE_CI -> throw error(syntax.name() + " cannot be the expansion of a macro", form);
 			case ELSE, ARROW, UNQUOTE, UNQUOTE_SPLICING, ELLIPSIS, UNDERSCORE ->
 				throw error("misplaced " + syntax.name(), form);
 			// SchemeExpander consumes these before the lowering; one reaches here only
@@ -2731,6 +3189,12 @@ final class SchemeLowering {
 		return this.generated.contains(identifier) ? identifier : symbol(name(identifier));
 	}
 
+	// A top-level name this lowering defines: the user's spelling in a program, private
+	// to the library in a library (SchemeNames.libraryPrefix).
+	private LispSymbol global(LispSymbol identifier) {
+		return this.generated.contains(identifier) ? identifier : symbol(this.prefix + name(identifier));
+	}
+
 	private LispSymbol bind(LispSymbol identifier, Scope scope) {
 		LispSymbol variable = cl(identifier);
 		scope.bindings.put(name(identifier), new Variable(variable));
@@ -2739,6 +3203,8 @@ final class SchemeLowering {
 
 	private LispSymbol variableSymbol(LispSymbol identifier, Scope scope) {
 		return switch (lookup(identifier, scope)) {
+			case Variable variable when this.libraryImports.contains(variable) -> throw new IllegalArgumentException(
+					"cannot assign " + identifier.name() + ": it is imported from a library");
 			case Variable variable -> variable.symbol();
 			case null -> cl(identifier);
 			default -> throw new IllegalArgumentException(
@@ -2747,7 +3213,7 @@ final class SchemeLowering {
 	}
 
 	private LispSymbol fresh(String kind) {
-		LispSymbol temporary = new LispSymbol("%SCM-" + kind + (++this.counter));
+		LispSymbol temporary = new LispSymbol(this.prefix + "%SCM-" + kind + (++this.counter));
 		this.generated.add(temporary);
 		return temporary;
 	}

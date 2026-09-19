@@ -8,6 +8,7 @@ import am.ik.rontolisp.eval.DistClient;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The compile path's front end as a TEST runs it: one door onto {@link CompileFrontend},
@@ -163,8 +164,24 @@ public final class CompileFrontendAccess {
 	 * @return the expanded program and the feature set it was read with
 	 */
 	public static Program scheme(String source, boolean wasm, boolean component, String standard) {
+		return scheme(source, null, wasm, component, standard);
+	}
+
+	/**
+	 * {@link #scheme(String, boolean, boolean, String)} read from a file, which what the
+	 * program includes and imports is found beside.
+	 * @param source the Scheme program text
+	 * @param entryFile the path the text was read from, or {@code null}
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @param standard the {@code --scheme-standard} value
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program scheme(String source, @Nullable String entryFile, boolean wasm, boolean component,
+			String standard) {
 		CompileFrontend.Result result = CompileFrontend.run(CompileFrontend.Request.builder()
 			.source(source)
+			.entryFile(entryFile)
 			.sourceLanguage("scheme")
 			.standards(SourceStandards.parse(standard))
 			.options(CompileFrontend.Options.builder().wasm(wasm).component(component).build())

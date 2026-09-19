@@ -60,6 +60,14 @@ final class SchemeExpander {
 		 */
 		@Nullable LispSymbol coreSymbol(Core core);
 
+		/**
+		 * The keyword an identity-compared core symbol means, or {@code null} for any
+		 * other symbol.
+		 * @param identifier a symbol
+		 * @return its core, or {@code null}
+		 */
+		@Nullable Core coreOf(LispSymbol identifier);
+
 		LispSymbol fresh(String kind);
 
 		LispReadException error(String message, LispCons form);
@@ -131,6 +139,15 @@ final class SchemeExpander {
 
 	SchemeExpander(Host host) {
 		this.host = host;
+	}
+
+	/**
+	 * Whether a top-level syntax definition of this lowering defined the name.
+	 * @param name the identifier's spelling
+	 * @return whether it names a macro
+	 */
+	boolean definesSyntax(String name) {
+		return this.global.frame.get(name) instanceof Macro;
 	}
 
 	/**
@@ -221,7 +238,7 @@ final class SchemeExpander {
 			else if (core == Core.DEFINE_VALUES) {
 				out.add(defineValues(form, this.global, true));
 			}
-			else if (core == Core.DEFINE_RECORD_TYPE || core == Core.IMPORT) {
+			else if (core == Core.DEFINE_RECORD_TYPE || core == Core.IMPORT || core == Core.DEFINE_LIBRARY) {
 				out.add(strip(form));
 			}
 			else {
@@ -255,6 +272,12 @@ final class SchemeExpander {
 	}
 
 	private @Nullable Meaning resolve(LispSymbol identifier, Env env) {
+		// A keyword the lowering spliced in itself (an include's begin) means that
+		// keyword wherever it stands.
+		Core spliced = this.host.coreOf(identifier);
+		if (spliced != null) {
+			return new Keyword(spliced);
+		}
 		Object key = key(identifier);
 		for (Env scope = env; scope != null; scope = scope.parent) {
 			Meaning meaning = scope.frame.get(key);
@@ -530,7 +553,7 @@ final class SchemeExpander {
 				out.addAll(body(parts.subList(2, parts.size()), new Env(env)));
 				yield rebuild(form, head, out);
 			}
-			case DEFINE_RECORD_TYPE, IMPORT -> strip(form);
+			case DEFINE_RECORD_TYPE, IMPORT, DEFINE_LIBRARY, INCLUDE, INCLUDE_CI -> strip(form);
 			case DEFINE_SYNTAX -> throw this.host
 				.error("a syntax definition is only allowed at the top level or at the head of a body", form);
 			case LET_SYNTAX, LETREC_SYNTAX -> {
@@ -579,7 +602,7 @@ final class SchemeExpander {
 	}
 
 	// A datum as Scheme's write spells it, for a message.
-	private static String written(LispVal datum) {
+	static String written(LispVal datum) {
 		return switch (datum) {
 			case LispSymbol symbol -> symbol.name();
 			case LispNil nil -> "()";
