@@ -2434,6 +2434,9 @@ cases:
       (write (with-input-from-file fw-file (lambda () (set! fw-saved (current-input-port)) (read-line))))
       (write (input-port-open? fw-saved))
       (newline)
+      (define (fw-values n) (if (= n 0) (with-input-from-file fw-file (lambda () (values (read-char) 2))) (fw-values (- n 1))))
+      (write (call-with-values (lambda () (fw-values 3)) list))
+      (newline)
       (delete-file fw-file)
     expected: |
       done
@@ -2443,6 +2446,7 @@ cases:
       (caught boom)
       still standard output
       "x"#f
+      (#\x 2)
   # A file port is textual or binary, never both (Gauche's are both). After the EOF peek
   # Gauche's read-bytevector answers a bytevector; R7RS says the EOF object.
   - name: binary-file-ports

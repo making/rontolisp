@@ -1043,7 +1043,8 @@ binary output port's the bytes written, newest first. `close-port` clears `open`
   `with-output-to-file` are `%scheme-with-file`: `%scheme-parameterize` of the port
   parameter (so `(current-output-port)` IS the file port and Common Lisp code writes
   there too) inside an `unwind-protect` that closes the file on every exit channel --
-  Gauche leaves it open (and unflushed) on an escape. `call-with-input-file` /
+  Gauche leaves it open (and unflushed) on an escape. It answers the thunk's values, so
+  it is in `SchemeValueCount.PASSING_HELPERS`. `call-with-input-file` /
   `call-with-output-file` are `call-with-port` over the opener: closed on return only, as
   R7RS says.
 - **Binary file ports**: `binary` and `file` set; `read-u8` & co test `file` first and
