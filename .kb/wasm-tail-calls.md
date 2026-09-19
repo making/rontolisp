@@ -90,8 +90,10 @@ overflowed, 3,000,000 answer. Unchanged: JVM `java Prog` 1,844 (`-Xss16m` 17,677
 `-Xss256m` 8,000,000 passes, because after ~10k invocations the JIT's frames are a
 fraction of the interpreter's -- `.kb/interpreter-stack.md`), interpreter 15,497 (the
 16 MiB worker; 5,000,000 -- the probe's ceiling -- since the interpreter's own loop landed
-later the same day, `.kb/interpreter-tail-calls.md`). One Scheme call through a value is
-two JVM frames, `g` and `_invoke_2`;
+later the same day, `.kb/interpreter-tail-calls.md`). The JVM figure became 16,201 when
+the compiled `main` moved onto a 16 MiB worker the same day
+([interpreter-stack.md](interpreter-stack.md)). One Scheme call through a value is two JVM
+frames, `g` and `_invoke_2`;
 `%scheme-ensure-procedure` returns before the call. V8: a 1,000-deep `labels` loop (2,000
 frames) threw `Maximum call stack size exceeded` under node's WASI before and runs now.
 

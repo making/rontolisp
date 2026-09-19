@@ -222,6 +222,12 @@ Three differences from the `--gpu` blob:
 - **The gate is the nine verbs**, qualified, and `appkit.lisp` reaches them:
   `AppKitLibrary.process` splices the widget layer on the compile path (pruned to what the program
   calls), so an `appkit:` program compiles as ordinary Lisp whose `objc:send` gates the blob on.
+- **The same gate keeps the compiled `main` where it was.** Every other class with a `main` runs
+  its program on a sized worker thread ([interpreter-stack.md](interpreter-stack.md),
+  `JvmSizedMainBuilder`); a class with `usesObjc` does not, and its bytes are what they were
+  before the launcher existed (`counter.lisp` as `.class` and `.jar`, compared 2026-09-19).
+  `JvmSizedMainTest#anObjcProgramKeepsItsMainOnThreadZero` pins the absence. Moving an objc
+  program onto the worker is a GUI change needing the manual macOS check; it was not attempted.
 
 Under the `java` launcher thread 0 is already parked, so no hand-over arises. A bare `.class`
 without `--enable-native-access=ALL-UNNAMED` gets the JDK's one-time warning and works; a `.jar`

@@ -3094,6 +3094,25 @@ public final class JvmLispCompiler implements LispCompiler {
 								: null)
 				: null;
 
+		// The sized-stack launcher (.kb/interpreter-stack.md): main runs the program on a
+		// thread of its own, sized by -Drontolisp.stack, and the old main body becomes
+		// _main$body. Not where there is no main, not where the top level runs in
+		// <clinit> (a jvm-export library, a war: the JVM initializes the class on the
+		// caller's thread before main could move anything), and NOT for a program that
+		// reaches objc: -- AppKit belongs to thread 0 (.kb/objc.md), and those outputs
+		// stay byte-identical because a GUI change is verified only by hand on macOS.
+		final JvmSizedMainBuilder.@Nullable SizedMain sizedMain = !this.noMain && !topLevelInClinit && !usesObjc
+				? JvmSizedMainBuilder.build(cp, thisClass, this.className,
+						cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V"))),
+						cp.addUtf8("([Ljava/lang/String;)V"))
+				: null;
+		final MethodrefConstant ctorObjectInitRef = objectInitRef != null ? objectInitRef : sizedMain != null
+				? cp.addMethodref(objectClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V"))) : null;
+		final Utf8Constant ctorName = instanceInitName != null ? instanceInitName
+				: sizedMain != null ? cp.addUtf8("<init>") : null;
+		final Utf8Constant ctorDesc = instanceInitDesc != null ? instanceInitDesc
+				: sizedMain != null ? cp.addUtf8("()V") : null;
+
 		// The async/await runtime: %async-run + run() (the class implements Runnable),
 		// the generic _await, streams and predicates. It rides the condition channel
 		// (the error payload re-signals typed conditions across the await), so the
@@ -3106,13 +3125,17 @@ public final class JvmLispCompiler implements LispCompiler {
 					cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
 			asyncRuntimeBodies = JvmAsyncRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, stringClass,
 					mainCtx.conditionChannel, progInitForAsync, usesFetch, longValueOf, stringLength, stringSubstring,
-					stringConcat);
+					stringConcat, sizedMain != null ? sizedMain.runRef() : null);
 			runnableClass = cp.addClass(cp.addUtf8("java/lang/Runnable"));
 		}
 		else {
 			asyncRuntimeBodies = null;
-			runnableClass = null;
+			runnableClass = sizedMain != null ? sizedMain.runnableClass() : null;
 		}
+		// The launcher's instance run(): the async runtime's run() carries the same
+		// dispatch as a prefix when both exist.
+		final JvmSizedMainBuilder.@Nullable Method sizedMainInstanceRun = sizedMain != null
+				&& asyncRuntimeBodies == null ? sizedMain.instanceRun(cp) : null;
 		// The thread runtime: _thread_spawn + call() (the class implements Callable),
 		// join/alive/destroy/threadp and the _dtl name-to-ThreadLocal dispatch. It rides
 		// the condition channel (call()'s error payload re-signals typed conditions
@@ -3460,6 +3483,18 @@ public final class JvmLispCompiler implements LispCompiler {
 						.writeU2(httpHandlerRuntime.handlerFieldDesc())
 						.writeU2(0));
 				}
+				if (sizedMain != null) {
+					// The launcher instance's two fields: main's arguments in, the
+					// body's throwable out (published by Thread.join).
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE)
+						.writeU2(sizedMain.argsName())
+						.writeU2(sizedMain.argsDesc())
+						.writeU2(0));
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE)
+						.writeU2(sizedMain.thrownName())
+						.writeU2(sizedMain.thrownDesc())
+						.writeU2(0));
+				}
 				if (asyncRuntimeBodies != null) {
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 						.writeU2(java.util.Objects.requireNonNull(handoffFieldName))
@@ -3657,8 +3692,36 @@ public final class JvmLispCompiler implements LispCompiler {
 				}
 			})
 			.writeMethods(methods -> {
+				if (sizedMain != null) {
+					// The launcher is main; the program body keeps its code under
+					// _main$body, reached from the worker through run().
+					for (JvmSizedMainBuilder.Method sm : java.util.Arrays.asList(sizedMain.main(), sizedMain.run(),
+							sizedMainInstanceRun)) {
+						if (sm == null) {
+							continue;
+						}
+						int access = sm == sizedMain.main() ? AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC
+								: sm == sizedMain.run() ? AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC
+										: AccessFlag.ACC_PUBLIC;
+						methods.add(access, sm.name(), sm.desc(),
+								method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+									attr.writeU2(sm.maxStack())
+										.writeU2(sm.maxLocals())
+										.writeCode((Object[]) sm.code().toArray(new Integer[0]));
+									List<ByteCodeWriter.ExceptionTableEntry> entries = new ArrayList<>();
+									for (int[] e : sm.exceptionTable()) {
+										entries.add(new ByteCodeWriter.ExceptionTableEntry(e[0], e[1], e[2], e[3]));
+									}
+									attr.writeExceptionTable(entries);
+									attr.writeU2(0);
+								})));
+					}
+				}
 				if (!this.noMain) {
-					methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, mainUtf8, mainDesc,
+					methods.add(
+							sizedMain != null ? AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC
+									: AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC,
+							sizedMain != null ? sizedMain.bodyName() : mainUtf8, mainDesc,
 							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
 								attr.writeU2(mainCtx.maxStack())
 									.writeU2(mainCtx.maxLocals)
@@ -4301,13 +4364,14 @@ public final class JvmLispCompiler implements LispCompiler {
 								})));
 					}
 				}
-				if (needsInstanceCtor) {
+				if (ctorName != null) {
 					// No-arg constructor: super(). _tlsConnect does `new Prog()` for the
 					// :insecure trust-all manager; the http-handler directive does the
 					// same for the RontoHttpServer.Handler instance.
-					Utf8Constant initName = java.util.Objects.requireNonNull(instanceInitName);
-					Utf8Constant initDesc = java.util.Objects.requireNonNull(instanceInitDesc);
-					int objectInitIdx = java.util.Objects.requireNonNull(objectInitRef).index();
+					// The sized-stack launcher does it for its Runnable.
+					Utf8Constant initName = ctorName;
+					Utf8Constant initDesc = java.util.Objects.requireNonNull(ctorDesc);
+					int objectInitIdx = java.util.Objects.requireNonNull(ctorObjectInitRef).index();
 					List<Integer> instanceInitCode = new java.util.ArrayList<>(
 							List.of(Opcode.ALOAD_0, Opcode.INVOKESPECIAL));
 					JvmRuntimeBuilder.emitU2(instanceInitCode, objectInitIdx);
@@ -4635,7 +4699,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			// The async runtime's virtual thread invokes run() through the Runnable
 			// interface -- the same invisible edge; shaking it away would strand
 			// _async_run's eager-start latch forever.
-			if (usesAsyncRuntime) {
+			if (usesAsyncRuntime || sizedMain != null) {
 				roots.add("run");
 			}
 			// The thread runtime's FutureTask invokes call() through the Callable

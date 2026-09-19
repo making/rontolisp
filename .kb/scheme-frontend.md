@@ -1597,7 +1597,8 @@ outside such a cycle changes: a program with none lowers byte-identically.
   `return_call` made it moot. The JVM has no counterpart (`.todo/899` measured its
   options: a Scheme call through a value is two JVM frames, `g` and `_invoke_2`; a larger
   stack for compiled output's `main` raises the ceiling 1,844 -> 17,677 at 16 MiB and is a
-  Common Lisp-wide change of every emitted `main`, `.todo/911`). The interpreter's loop
+  Common Lisp-wide change of every emitted `main` -- landed the same day as the sized-main
+  launcher, `.todo/911`, `.kb/interpreter-stack.md`). The interpreter's loop
   in `eval`, the non-trampoline shape, landed 2026-09-19 (`.todo/912`,
   `.kb/interpreter-tail-calls.md`): a tail call through a value is proper there too, and
   the loop is faster than the recursion it replaced (`fib 32` 4.72-5.26 -> 4.49-4.68 s,
@@ -1722,7 +1723,8 @@ The nil-initialized shape loses the integer typing of the loop variables: 4x.
 
 **Tail-call depth that is NOT a loop**, default stacks, largest passing depth (2026-09-19,
 binary search): a tail call through a procedure VALUE, `(define (g self n) (if (= n 0) 'done
-(self self (- n 1))))`, JVM (`java Prog`) 1,716-1,844 (17,677 under `-Xss16m`), wasm and
+(self self (- n 1))))`, JVM (`java Prog`) 1,716-1,844 (17,677 under `-Xss16m`; 16,201 since the
+compiled `main` runs on a 16 MiB worker, `.kb/interpreter-stack.md`), wasm and
 component 2,693-2,975 before `return_call` and 5,000,000 (the probe's ceiling) after
 (`.kb/wasm-tail-calls.md`), interpreter 15,234-15,497 before the loop in `eval` and
 5,000,000 after (`.kb/interpreter-tail-calls.md`). Top-level `ev?`/`od?` was JVM 3,516

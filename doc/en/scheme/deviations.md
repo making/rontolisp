@@ -9,7 +9,8 @@
   top-level procedures of a file, the internal definitions of one body or the `lambda`
   bindings of one `letrec`; a tail call through a procedure value (an argument, a
   variable, `apply`) uses stack there: a procedure calling itself through an argument
-  overflows the JVM's default stack about 1,800 calls deep.
+  overflows about 16,000 calls deep compiled to the JVM, on its 16 MiB stack
+  (`-Drontolisp.stack` raises it).
 - **`call/cc` is escape-only.** A continuation can be called while its `call/cc` is still
   running, once. There is no re-entry, so no generators or coroutines through it, and
   `dynamic-wind` runs its `before` exactly once.

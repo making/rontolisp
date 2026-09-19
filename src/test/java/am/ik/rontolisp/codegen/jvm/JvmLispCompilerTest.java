@@ -15248,7 +15248,9 @@ class JvmLispCompilerTest {
 		// 8,604 since the dispatcher reports a non-function (_notFn and the
 		// representation
 		// test in front of the id read, .kb/error-handling.md): +309 B.
-		assertThat(classBytes.length).isLessThan(8_700);
+		// 9,421 since main runs the program on a sized worker thread
+		// (.kb/interpreter-stack.md): +817 B, in every class with a main.
+		assertThat(classBytes.length).isLessThan(9_500);
 		assertThat(runClass(classBytes)).isEqualTo("(1 4 9)");
 	}
 
