@@ -1430,7 +1430,8 @@ family, bodies) pass the destination down; every other form is a leaf `(setq R v
   compares the jump site's binding of each name with the loop's; a mismatch re-lowers the
   loop in the carrier shape, whose fresh names nothing can shadow. Found by
   `examples/scheme/collatz.scm`.
-- Mutual and higher-order tail calls are ordinary calls (depths below).
+- Mutual tail calls among top-level procedures are jumps too ("Tail-call groups" below);
+  higher-order ones and those among internal definitions are ordinary calls (depths below).
 - **A leaf stores ONE value** (`(setq R value)`), so a leaf that may answer other than one
   value leaves the loop instead: `(return-from B form)`, B the loop's `block`, named after
   R (`%SCM-B<n>` for `%SCM-R<n>`, never from the counter, so a discarded loop attempt
@@ -1453,6 +1454,86 @@ family, bodies) pass the destination down; every other form is a leaf `(setq R v
   into the wasm (+3.9 KB). Blast radius: 65 of 1,586 SICP corpus files and 1 of 6
   `examples/scheme` (`evaluator.scm`, +262 B of class, +8 B of wasm) change; every
   changed leaf is a user procedure call, `funcall` or `apply`. The rest lower byte-identically.
+
+## Tail-call groups (`SchemeLowering.declareGroups`; 2026-09-19, `.todo/897`)
+
+**Top-level procedures of a file whose TAIL calls to each other form a cycle are one
+`defun`, and every tail call among them is a jump.** `ev?`/`od?`, a state machine, SICP's
+`eval`/`apply`/`eval-sequence` all run in constant stack on the four backends. Nothing
+outside such a cycle changes: a program with none lowers byte-identically.
+
+```
+(defun G (W C1 .. Cn)
+  (let ((R nil))
+    (tagbody
+     TOP (if (= W 1) (go L1) (if (= W 2) (go L2)))
+     L0 (let ((a C1) ..) body0) (go END)
+     L1 (let ((b C1) ..) body1) (go END)
+     L2 ...
+     END)
+    R))
+(defun ev? (n) (G 0 n))   ; each member: its own defun, W = its index, nil padding
+```
+
+- **Members**: `GlobalFunction`s without `case-lambda` clauses -- defined once by a
+  `lambda`, never `set!`, not read before definition. A `case-lambda` procedure keeps its
+  own clause loop (`.todo/870`); a variable procedure is not a member.
+- **Finding them**: a cheap scan of call heads (blind to scope, like `collectAssigned`)
+  gives candidate cycles (Tarjan); each candidate is then lowered once as a PROBE with every
+  member a jump `Target`, and what the lowered bodies JUMP to -- `(go own-label)`, `(setq ..
+  W j ..)` -- is the real tail-call graph. A candidate the jumps do not hold together is
+  settled again as the cycles they do form. The probe restores the counter and every
+  memo it touched (`Snapshot`), so a program whose candidate turns out to be no cycle
+  numbers its temporaries exactly as before (pinned).
+- **Shape**: the carriers are shared by position (as many as the widest member); every
+  member rebinds its variables from them per entry, so a jump is sequential `setq`s of
+  carriers and a closure captures its own entry's binding (the `fresh` loop shape). A
+  jump to ITSELF goes to its own label; a jump to another member sets `W` too and goes
+  to `TOP`, which is the one entry of every cycle (`Target.presets`). The group's
+  `defun` stands at the first member's `define`; the others emit only their entry.
+- **Where the time went (measured before the shape was fixed).** `(eql W 1)` in the
+  dispatch is a generic call on the JVM: the metacircular evaluator (`evalfib`: the
+  `examples/scheme/evaluator.scm` evaluator running `(fib 27)`) ran 29-36% slower until
+  it became `(= W 1)`. The members as an `if` chain under `TOP` (no `(go END)`) ran it
+  15-17% slower on the JVM; a stub per member setting `W` cost wasm a dispatch round per
+  jump. Final shape against the plain defuns (2026-09-19, x86-64 Linux, GraalVM 25.0.4,
+  wasmtime 47, a loaded 64-core box, best of 5-7 alternating runs):
+
+  | program | JVM | wasm | component | interpreter |
+  |---|---|---|---|---|
+  | `evalfib` | 1043 -> 1088 ms | 1937 -> 2017 | 1956 -> 2006 | (`fib 24`) 31.1-33.9 -> 36.5-38.7 s |
+  | 10M shallow `(ev? (remainder k 4))` | 242 -> 228 | 271 -> 389 | 286 -> 334 | 37.8 -> 73.8 s |
+
+  The shallow row is the worst case -- a trivial body entered 10M times: on wasm it is
+  the tagbody's dispatch loop entering a function that had none (a hand-written group of
+  the same two bodies measured the same); on the interpreter every `go` inside a form is
+  a thrown `GoSignal` (a `go`-step costs 1.75x a call-step there, the same price every
+  self loop already pays), which is also the evaluator's +16% there. `.todo/901` is the
+  interpreter half: memoizing the label table per `tagbody` form alone bought nothing
+  measurable, so it was not kept.
+- **Depth, default stacks** (before -> after): `ev?`/`od?` JVM 3,516 / wasm and component
+  10,780 / interpreter 10,230 -> 1,000,000 on all four; `evalloop` (the evaluator running
+  a 1,000,000-iteration interpreted loop) overflowed on all four, now answers `done`.
+- **Blast radius**: of 1,586 SICP corpus files and the six `examples/scheme`, 20 SICP
+  files (the chapter-4.4 query system, the chapter-5.5.7 compile-and-go) and
+  `evaluator.scm` change; each prints the same on all four backends before and after.
+  Common Lisp programs never reach this pass.
+- **Not members** (ordinary calls, depths below): a tail call through a procedure VALUE
+  (an argument, a `lambda` in a variable, `apply` -- `.todo/899`), mutual recursion among
+  INTERNAL definitions (`.todo/898`), and every definition typed at the REPL (a session's
+  definitions are variables).
+- **Not a trampoline, and not `return_call`.** A hand-written trampoline (a tail call
+  answers a bounce, every non-tail call site drives them) measured, against plain calls:
+  `fib 32` JVM 43-45 vs 47-56 ms, wasm 85-107 vs 58-72, interpreter 12.2 vs 5.5 s; 3M
+  shallow `ev?`/`od?` calls JVM 720-914 vs 39-60 ms (15x), wasm 1.58-1.78 s vs 73-81 ms
+  (20x), interpreter 122 vs 7.6 s (16x). wasm's `return_call` (wasmtime 47 enables
+  `tail-call`) would make every tail call proper on the two wasm targets only; the JVM has
+  no counterpart. Both are `.todo/899`'s to weigh.
+
+Pinned by `SchemeLoweringTest.topLevelProceduresWhoseTailCallsFormACycleAreOneGroupEachEntersAtItsLabel`,
+`#aCycleThroughANonTailCallIsNoGroupAndNumbersNothing`, `#anAssignedOrRedefinedProcedureIsNoMember`
+and the `top-level-procedures-whose-tail-calls-cycle-run-in-constant-stack` case of
+`scheme-spec.yaml` (all four backends; Gauche 0.9.15 `-r7` prints the same).
 
 ## Traps
 
@@ -1516,9 +1597,11 @@ native NIL test. The singleton buys unforgeability the name escaping already giv
 
 The nil-initialized shape loses the integer typing of the loop variables: 4x.
 
-**Tail-call depth that is NOT a loop** (`ev?`/`od?`), default stacks: JVM (`java Prog`)
-passes 2,000 and overflows at 5,000; interpreter, wasm and component pass 10,000 and fail
-at 100,000 (`StackOverflowError` / `call stack exhausted`).
+**Tail-call depth that is NOT a loop**, default stacks, largest passing depth (2026-09-19,
+binary search): a tail call through a procedure VALUE, `(define (g self n) (if (= n 0) 'done
+(self self (- n 1))))`, JVM (`java Prog`) 1,716, wasm and component 2,693, interpreter
+15,234. Top-level `ev?`/`od?` was JVM 3,516 / wasm 10,780 / interpreter 10,230 before the
+tail-call groups and is unbounded now.
 
 **Size.** `(display "hello, world")` is 1,594 B of class and 498 B of wasm: `display` of a
 string, character or integer LITERAL lowers to `write-string` / `write-char` / `princ`.
@@ -1584,7 +1667,8 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 Exporting syntax from a library, the other
 libraries, radix and exactness prefixes in `string->number` (`.todo/889`),
-re-entrant continuations, proper tail calls in general. Each is refused by name where it
+re-entrant continuations, tail calls through a procedure value (`.todo/899`) and among
+internal definitions (`.todo/898`). Each is refused by name where it
 can be.
 
 ## The SICP sample corpus harness (`.todo/828`)

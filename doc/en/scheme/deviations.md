@@ -1,10 +1,12 @@
 # Deviations
 
-- **Tail calls are proper only where they become a loop**: a named `let` or `do`, and a
-  procedure calling itself in tail position. Mutual and higher-order tail calls use
-  stack: a pair of procedures calling each other overflows the JVM's default stack
-  between 2,000 and 5,000 calls deep, and the interpreter and WebAssembly between 10,000
-  and 100,000.
+- **Tail calls are proper only where they become a loop**: a named `let` or `do`, a
+  procedure calling itself in tail position, and top-level procedures of a file that
+  call each other in tail position (`even?`/`odd?`, a state machine, an evaluator's
+  `eval`/`apply`). A tail call through a procedure value (an argument, a variable, `apply`),
+  one among internal definitions, and any at the REPL uses stack: a procedure calling
+  itself through an argument overflows the JVM's default stack about 1,700 calls deep,
+  WebAssembly about 2,700 and the interpreter about 15,000.
 - **`call/cc` is escape-only.** A continuation can be called while its `call/cc` is still
   running, once. There is no re-entry, so no generators or coroutines through it, and
   `dynamic-wind` runs its `before` exactly once.
