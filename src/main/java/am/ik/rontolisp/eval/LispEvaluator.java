@@ -836,6 +836,17 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Flushes every output stream the program left open, as a process's end does on the
+	 * other backends (the wasm ones write through; the JVM backend flushes its stream
+	 * table on the way out). The caller that owns the program's end calls it -- the CLI
+	 * once the entry file has run, however it stopped -- because an embedded evaluator
+	 * cannot tell its last form from the next.
+	 */
+	public void flushOpenStreams() {
+		this.globalEnv.flushOpenStreams();
+	}
+
+	/**
 	 * Sets the program's argument vector, argv0 first -- the value the {@code uiop/image}
 	 * command-line family reads ({@code (uiop:command-line-arguments)} is its rest,
 	 * {@code (uiop:argv0)} its first). The CLI threads the input file and the arguments

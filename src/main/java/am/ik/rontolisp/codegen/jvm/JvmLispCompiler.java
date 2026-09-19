@@ -999,6 +999,16 @@ public final class JvmLispCompiler implements LispCompiler {
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.DRAIN_BODY_METHOD),
 						cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)))
 				: null;
+		// An output file the program never closes is flushed on every way out of it, as
+		// C's exit flushes stdio and both wasm backends write through. Gated on the
+		// program naming one of the two file-stream producers (the program is not
+		// macro-expanded yet: with-open-file becomes open later, and a quit inside its
+		// body skips the close), so every other artifact keeps its exact bytes.
+		final @Nullable MethodrefConstant flushStreamsMethod = programUsesSymbol(program, LispNames.OPEN)
+				|| programUsesSymbol(program, LispNames.WITH_OPEN_FILE)
+						? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmFlushStreamsBuilder.METHOD),
+								cp.addUtf8(JvmFlushStreamsBuilder.DESC)))
+						: null;
 		MethodrefConstant waitForHelperMethod = usesAsyncRuntime
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.WAIT_FOR_METHOD),
 						cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)))
@@ -2045,6 +2055,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.streamCloseHelper(streamCloseHelperMethod)
 			.drainBodyHelper(drainBodyHelperMethod)
 			.waitForHelper(waitForHelperMethod)
+			.flushStreams(flushStreamsMethod)
 			.tcpConnectHelper(tcpConnectHelperMethod)
 			.tcpListenHelper(tcpListenHelperMethod)
 			.tcpAcceptHelper(tcpAcceptHelperMethod)
@@ -2318,6 +2329,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			entryCtx.emitU2(cp.addMethodref(cp.addClass(cp.addUtf8("java/io/PrintStream")),
 					cp.addNameAndType(cp.addUtf8("flush"), cp.addUtf8("()V")))
 				.index());
+		}
+		if (flushStreamsMethod != null) {
+			entryCtx.emit(Opcode.INVOKESTATIC);
+			entryCtx.emitU2(flushStreamsMethod.index());
 		}
 		entryCtx.emit(Opcode.RETURN);
 		// A condition nobody caught reports itself on standard error instead of
@@ -3040,6 +3055,9 @@ public final class JvmLispCompiler implements LispCompiler {
 					usesErrorOutput, usesListDirectory, fileMeta, usesPackedSequenceIo, usesCharSequenceIo, usesArrays,
 					usesQuantized)
 			.methods();
+		if (flushStreamsMethod != null) {
+			ioMethods.add(JvmFlushStreamsBuilder.build(cp, thisClass));
+		}
 		Utf8Constant streamsFieldName = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_FIELD);
 		Utf8Constant streamsFieldDesc = cp.addUtf8(JvmIoRuntimeBuilder.STREAMS_DESC);
 		final @Nullable Utf8Constant streamPathsFieldName = fileMeta.streamPaths()
@@ -6016,6 +6034,14 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final @Nullable MethodrefConstant waitForHelper;
 
+		/**
+		 * {@code _flushStreams}, for a program that opens a file stream (null otherwise):
+		 * what every way out of the program -- {@code main}'s return, {@code %host-exit},
+		 * the uncaught-condition handler -- calls first, so an output file the program
+		 * never closed keeps what it still buffers ({@link JvmFlushStreamsBuilder}).
+		 */
+		final @Nullable MethodrefConstant flushStreams;
+
 		final @Nullable MethodrefConstant tcpConnectHelper;
 
 		final @Nullable MethodrefConstant tcpListenHelper;
@@ -6841,6 +6867,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.streamCloseHelper = builder.streamCloseHelper;
 			this.drainBodyHelper = builder.drainBodyHelper;
 			this.waitForHelper = builder.waitForHelper;
+			this.flushStreams = builder.flushStreams;
 			this.tcpConnectHelper = builder.tcpConnectHelper;
 			this.tcpListenHelper = builder.tcpListenHelper;
 			this.tcpAcceptHelper = builder.tcpAcceptHelper;
@@ -6988,6 +7015,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant drainBodyHelper;
 
 			private @Nullable MethodrefConstant waitForHelper;
+
+			private @Nullable MethodrefConstant flushStreams;
 
 			private @Nullable MethodrefConstant tcpConnectHelper;
 
@@ -7349,6 +7378,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder waitForHelper(@Nullable MethodrefConstant waitForHelper) {
 				this.waitForHelper = waitForHelper;
+				return this;
+			}
+
+			Builder flushStreams(@Nullable MethodrefConstant flushStreams) {
+				this.flushStreams = flushStreams;
 				return this;
 			}
 

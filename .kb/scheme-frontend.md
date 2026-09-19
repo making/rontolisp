@@ -1134,11 +1134,9 @@ binary output port's the bytes written, newest first. `close-port` clears `open`
   `get-output-bytevector`. `makesFiles` is `makesPorts`' derivation one feature up
   (functions defined under ports+files minus ports); a file program implies the ports
   feature. The interpreter always reads with all three.
-- **An output file port left open loses its buffered output on the interpreter and the
-  JVM** (a `BufferedWriter` / `BufferedOutputStream` nobody flushes at exit); wasm writes
-  through `fd_write` and keeps it (measured 2026-09-19, all four: a `display` to an
-  unclosed port). A Common Lisp stream behaves the same; stated in the docs as "close the
-  port", the flush-at-exit fix is `.todo/891`.
+- **An output file port left open keeps its output on all four backends**, as in Gauche:
+  the interpreter and the JVM flush the stream table where the program ends, wasm writes
+  through `fd_write` (`.kb/read-load-streams.md`, "Output left open at the end").
 - The spec cases build every path under `/tmp` from `(random 1000000000)` -- a literal
   path would never test the preopen resolution, and two runs of the corpus at once (two
   worktrees) must not share a file; the driver's wasm legs pass `--dir /tmp`. A wasm

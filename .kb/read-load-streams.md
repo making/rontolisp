@@ -168,6 +168,35 @@ Pinned by `LispEvaluatorTest#evalOpenAppendKeepsTheExistingContent`,
 `JvmLispCompilerTest#compileAndRunOpenAppend`, `LispEvaluatorTest#probeFile*` + twins, ci-spec
 `probe-file-existing-and-missing`, `open-if-exists-append-keeps-the-existing-content`.
 
+## Output left open at the end is WRITTEN, on all four backends
+
+A file output stream the program never closes keeps what it wrote, however the program ends
+(last form, `uiop:quit` / Scheme `exit` / `emergency-exit`, uncaught condition) -- C's `exit`
+and Gauche behave so. **SBCL does not** (measured 2026-09-19: an unclosed `open` + `write-line`
+leaves an EMPTY file under `--script`, `--non-interactive`, `sb-ext:exit` and an unhandled
+`error` alike); ANSI leaves it unspecified, and cross-backend identity decided, since wasm writes
+through `fd_write` and cannot lose it.
+
+- Interpreter: `Environment.flushOpenStreams` flushes every `Flushable` in the stream table
+  (a failing flush is skipped, as `exit` skips it). `RontoLispCli.interpret` calls it in a
+  `finally` round the form loop -- which `LispExitSignal` and an uncaught condition both
+  cross -- and `repl` likewise at the session's end. An embedder driving `LispEvaluator`
+  directly owns the program's end and calls `flushOpenStreams` itself.
+- JVM: `_flushStreams()V` (`JvmFlushStreamsBuilder`, same loop over `_streams`, `IOException`
+  skipped) is called before `main`'s `RETURN`, by `%host-exit` before `System.exit`
+  (`JvmExitCompiler`) and by the uncaught-condition handler before the rethrow
+  (`JvmUncaughtHandler`), reached through `Ctx.flushStreams`. **Gated on the unexpanded program
+  naming `open` or `with-open-file`** (the Scheme file ports splice Lisp that names `open`);
+  `with-open-file` must be in the gate because a quit in its body skips the close. Measured
+  2026-09-19 (default / `--optimize=off`): hello and `uiop:quit` keep their exact bytes, as
+  does a Scheme `display` program; `open` + `uiop:quit` 9,686 -> 9,874 / 372,771 -> 372,959,
+  `with-open-file` 8,411 -> 8,609 / 372,108 -> 372,293; a Scheme STRING-port program
+  54,231 -> 54,454 (its spliced port helpers name `open` for the file arms -- the gate
+  over-approximates, and a stray flush costs nothing else). Wasm outputs unchanged.
+
+Pinned by `UnclosedOutputFileE2eTest` (all four backends; reads the file after the process
+ends, since the spec corpora compare stdout only).
+
 ## Computed open options (the mode is still picked from a LITERAL)
 `(with-open-file (s path :element-type et) ...)` — options passed down as function arguments, as
 uiop's `call-with-input-file` does — lowers to `LispMacroExpander.lowerRuntimeOpenOptions`: path and

@@ -308,6 +308,26 @@ public final class Environment implements Scope {
 	private java.util.function.@Nullable LongConsumer httpBodyStreamCloser;
 
 	/**
+	 * Flushes every buffered output stream still open in the stream table. Installed by
+	 * {@code createGlobal} beside {@link #httpBodyStreamOpener}; see
+	 * {@link #flushOpenStreams}.
+	 */
+	private @Nullable Runnable openStreamFlusher;
+
+	/**
+	 * Flushes every output stream the program left open -- what C's {@code exit} does for
+	 * its stdio buffers, and what the wasm backends need not do because {@code fd_write}
+	 * writes through. Called where the program ends, however it ends; a stream that fails
+	 * to flush is skipped, as {@code exit} skips it.
+	 */
+	void flushOpenStreams() {
+		Runnable flusher = this.openStreamFlusher;
+		if (flusher != null) {
+			flusher.run();
+		}
+	}
+
+	/**
 	 * Opens a buffered served-request body stream and returns its stream-table handle.
 	 * @param octets the request body bytes
 	 * @return the stream handle
@@ -4779,6 +4799,18 @@ public final class Environment implements Scope {
 			return handle;
 		};
 		env.httpBodyStreamCloser = streams::remove;
+		env.openStreamFlusher = () -> {
+			for (Closeable entry : streams.values()) {
+				if (entry instanceof java.io.Flushable flushable) {
+					try {
+						flushable.flush();
+					}
+					catch (IOException ex) {
+						// exit's rule: the other streams still get their flush.
+					}
+				}
+			}
+		};
 		streams.put(StreamDesignators.STANDARD_ERROR_HANDLE, new Writer() {
 			@Override
 			public void write(char[] cbuf, int off, int len) {
