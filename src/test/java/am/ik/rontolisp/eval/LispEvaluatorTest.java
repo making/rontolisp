@@ -9022,6 +9022,109 @@ class LispEvaluatorTest {
 			.isEqualTo("((1))");
 	}
 
+	/**
+	 * The single-value-context matrix, shared verbatim with JvmLispCompilerTest /
+	 * WasmLispCompilerIntegrationTest and the
+	 * {@code multiple-values-single-value-contexts} ci-spec case; every line is what SBCL
+	 * prints.
+	 */
+	static final String MV_SINGLE_VALUE_CONTEXTS = """
+			(defvar ci-svc-q nil)
+			(defun ci-svc-floor () (floor 7 2))
+			(defun ci-svc-none () (values))
+			(defun ci-svc-inc (x) (+ x 1))
+			(defun ci-svc-two () (values 5 6))
+			(defun ci-svc-two1 (x) (values x 6))
+			(defun ci-svc-let () (let ((x (values 1 2))) x))
+			(defun ci-svc-progn () (progn (values 1 2) 3))
+			(defun ci-svc-setq () (setq ci-svc-q (values 1 2)))
+			(defun ci-svc-if () (if (values t 2) t nil))
+			(defun ci-svc-or () (or (values nil 2) nil))
+			(defun ci-svc-dotimes () (dotimes (i 2) (ci-svc-two)))
+			(defun ci-svc-dolist () (let ((r nil)) (dolist (x '(1 2) r) (setq r (ci-svc-two)))))
+			(defun ci-svc-cond () (cond ((values 1 2))))
+			(defun ci-svc-case (x) (case x (1 (values 1 2))))
+			(defun ci-svc-lambda () (funcall (lambda (x) (* x (values 2 3))) 5))
+			(defun ci-svc-mapcar () (mapcar #'ci-svc-two1 '(1)))
+			(defun ci-svc-sort () (sort (list 3 1 2) (lambda (a b) (values (< a b) 9))))
+			(defun ci-svc-prog1 () (prog1 (values 1 2) (ci-svc-two)))
+			(defun ci-svc-mvp1 () (multiple-value-prog1 (ci-svc-none) (ci-svc-two)))
+			(defun ci-svc-handler () (handler-case (values 1 2) (error () nil)))
+			(defun ci-svc-flet () (flet ((inner (x) (+ x 1))) (inner (values 1 2))))
+			(print (multiple-value-list (+ 1 (values 5 6))))
+			(print (multiple-value-list (list (ci-svc-floor))))
+			(print (multiple-value-list (ci-svc-inc (values 1 2))))
+			(print (multiple-value-list (funcall #'+ (values 5 6) 1)))
+			(print (multiple-value-list (car (list (values 5 6)))))
+			(print (multiple-value-list (ci-svc-flet)))
+			(print (multiple-value-list (let ((x (values 1 2))) x)))
+			(print (multiple-value-list (progn (values 1 2) 3)))
+			(print (multiple-value-list (ci-svc-let)))
+			(print (multiple-value-list (ci-svc-progn)))
+			(print (multiple-value-list (ci-svc-setq)))
+			(print (multiple-value-list (ci-svc-if)))
+			(print (multiple-value-list (ci-svc-or)))
+			(print (multiple-value-list (ci-svc-dotimes)))
+			(print (multiple-value-list (ci-svc-dolist)))
+			(print (multiple-value-list (ci-svc-cond)))
+			(print (multiple-value-list (ci-svc-case 1)))
+			(print (multiple-value-list (ci-svc-case 2)))
+			(print (multiple-value-list (ci-svc-lambda)))
+			(print (multiple-value-list (ci-svc-mapcar)))
+			(print (multiple-value-list (ci-svc-sort)))
+			(print (multiple-value-list (ci-svc-prog1)))
+			(print (multiple-value-list (ci-svc-handler)))
+			(print (multiple-value-list (ci-svc-none)))
+			(print (multiple-value-list (funcall #'values)))
+			(print (multiple-value-list (apply #'values '())))
+			(print (multiple-value-list (funcall #'values 1 2)))
+			(print (multiple-value-list (values-list nil)))
+			(print (multiple-value-list (ci-svc-mvp1)))
+			(print (multiple-value-list (eval '(values 1 2))))
+			(print (multiple-value-list (eval '(values))))
+			(print (multiple-value-call #'list (values) (ci-svc-none) 1))
+			(print (multiple-value-call #'list (values 1 2) (ci-svc-none) (ci-svc-two)))
+			(multiple-value-bind (a b) (ci-svc-none) (print (list a b)))
+			(print (multiple-value-list (multiple-value-prog1 (values 1 2) (ci-svc-two))))
+			(multiple-value-bind (p q) (loop for a = 3 for b = 5 until t finally (return (values a b)))
+			  (print (list p q)))
+			(print (multiple-value-list (block b (return-from b (values 1 2)))))
+			(print (multiple-value-list (catch 'c (throw 'c (values 1 2)))))
+			(print (multiple-value-list (dolist (x '(1 2)) (when (= x 2) (return (values x 9))))))
+			""";
+
+	/** What SBCL prints for {@link #MV_SINGLE_VALUE_CONTEXTS}, one line per print. */
+	static final String MV_SINGLE_VALUE_CONTEXTS_EXPECTED = String.join("\n", "(6)", "((3))", "(2)", "(6)", "(5)",
+			"(2)", "(1)", "(3)", "(1)", "(3)", "(1)", "(T)", "(NIL)", "(NIL)", "(5)", "(1)", "(1 2)", "(NIL)", "(10)",
+			"((1))", "((1 2 3))", "(1)", "(1 2)", "NIL", "NIL", "NIL", "(1 2)", "NIL", "NIL", "(1 2)", "NIL", "(1)",
+			"(1 2 5 6)", "(NIL NIL)", "(1 2)", "(3 5)", "(1 2)", "(1 2)", "(2 9)");
+
+	@Test
+	void evalMultipleValueChannelIsExactInSingleValueContexts() {
+		// The value-count register (Environment.clearSpill, LispEvaluator.singleValue):
+		// an argument, a let initform, a form before the last, a setq, a test, a loop
+		// body and a callback are single-value contexts, a single-valued tail answers
+		// one value however many a call before it published, and no value at all is
+		// no value however it travels -- SBCL's answers, line for line.
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal expr : LispReader.readAllFromString(MV_SINGLE_VALUE_CONTEXTS)) {
+			evaluator.eval(expr);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8)
+			.lines()
+			.map(String::trim)
+			.filter(line -> !line.isEmpty())
+			.collect(joining("\n"))).isEqualTo(MV_SINGLE_VALUE_CONTEXTS_EXPECTED);
+		// The REPL echo is a consumer too: a helper answering no value echoes nothing,
+		// a built-in whose callback published echoes its own one value.
+		assertThat(topLevelValues(evaluator, "(ci-svc-none)")).isEmpty();
+		assertThat(topLevelValues(evaluator, "(ci-svc-sort)")).isEqualTo("(1 2 3)");
+		assertThat(topLevelValues(evaluator, "(mapcar #'parse-integer '(\"1\" \"2\"))")).isEqualTo("(1 2)");
+		assertThat(topLevelValues(evaluator, "(ci-svc-let)")).isEqualTo("1");
+		assertThat(topLevelValues(evaluator, "(ci-svc-two)")).isEqualTo("5 6");
+	}
+
 	@Test
 	void evalMultipleValueConsumerClearsTheSpillChannel() {
 		// Pins the clear-after-snapshot half of the %mv-spill protocol.

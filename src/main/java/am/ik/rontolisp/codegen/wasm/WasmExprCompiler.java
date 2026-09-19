@@ -1764,7 +1764,20 @@ final class WasmExprCompiler {
 					// A direct (funcall __FLETn_f ...) of a registered local function in
 					// a non-fused position: substitute and fuse the body right here,
 					// mirroring the inlinable-defun direct-call path below.
-					if (!WasmIntFusionCompiler.tryCompileLocalCall(cons, ctx)) {
+					if (WasmIntFusionCompiler.tryCompileLocalCall(cons, ctx)) {
+						// The substituted body is an integer tree, one value; the
+						// lambda's own tail would have cleared what an argument
+						// published (LispMacroExpander.settleFunctionBody), so the
+						// fused call clears it here.
+						Integer spillGlobal = ctx.globalIndices.get(LispNames.MV_SPILL);
+						if (spillGlobal != null) {
+							ctx.writer.write(Instruction.REF_NULL);
+							ctx.writer.writeHeapType(Type.EQ.code());
+							ctx.writer.write(Instruction.SET_GLOBAL);
+							ctx.writer.writeUnsignedLeb128(spillGlobal);
+						}
+					}
+					else {
 						WasmFunctionCallCompiler.compileFuncall(cons, ctx);
 					}
 				}

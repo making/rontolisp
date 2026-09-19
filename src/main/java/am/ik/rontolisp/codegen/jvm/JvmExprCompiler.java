@@ -1428,7 +1428,19 @@ final class JvmExprCompiler {
 					// A funcall of a fusion-eligible flet lambda substitutes its body
 					// into a fused tree (.kb/jvm-int-fusion.md); anything else takes
 					// the ordinary dispatch.
-					if (!JvmIntFusionCompiler.tryCompileLocalCall(cons, ctx, className)) {
+					if (JvmIntFusionCompiler.tryCompileLocalCall(cons, ctx, className)) {
+						// The substituted body is an integer tree, one value; the
+						// lambda's own tail would have cleared what an argument
+						// published (LispMacroExpander.settleFunctionBody), so the
+						// fused call clears it here.
+						am.ik.jvm.ConstantPool.FieldrefConstant spillField = ctx.globalFields.get(LispNames.MV_SPILL);
+						if (spillField != null) {
+							ctx.emit(Opcode.ACONST_NULL);
+							ctx.emit(Opcode.PUTSTATIC);
+							ctx.emitU2(spillField.index());
+						}
+					}
+					else {
 						JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
 					}
 				}

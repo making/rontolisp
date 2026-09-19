@@ -34044,9 +34044,9 @@ public final class LispMacroExpander {
 	 * {@code i > 0} as {@code (nth i-1 rest)}. This is how {@code multiple-value-bind}
 	 * over a user function sees the callee's tail values. Snapshotting also CLEARS the
 	 * channel, so values one consumer took cannot be read a second time by an enclosing
-	 * one. Deviation from CL: a producer that calls {@code values} in a NON-tail position
-	 * with no consumer of its own and then returns normally leaves a stale spill behind,
-	 * so the extra variables may read leftover values instead of nil.
+	 * one. The producer form is SETTLED first ({@link #settleMvTail}), so a
+	 * {@code values} in a non-tail position of it never reaches the snapshot, and the
+	 * snapshot may hold {@link #MV_ZERO_VALUES}, which every reader normalizes.
 	 */
 	private record MvProducer(List<MvBinding> bindings, List<LispVal> values, @Nullable LispSymbol rest) {
 	}
@@ -34325,40 +34325,84 @@ public final class LispMacroExpander {
 					throw new IllegalStateException("unreachable: " + producer.print());
 			}
 		}
-		if (!(producer instanceof LispCons)) {
-			// An atom (a literal, a variable read) is a single-value producer for
-			// sure: no spill round-trip needed, extra variables read nil.
+		// Anything the tail discipline (settleTail) can prove single-valued -- an atom,
+		// a quote, a call of a single-valued built-in, a let/if/progn whose every tail
+		// is one -- needs no spill round-trip: the extra variables read nil, and the
+		// original form is kept, clears and all being pointless where nothing reads.
+		SettledTail settled = settleTail(producer, TailMode.PUBLISH_AND_CLEAR);
+		if (settled.single()) {
 			LispSymbol tmp = new LispSymbol(prefix + "_0");
 			bindings.add(new MvBinding(tmp, producer));
 			values.add(tmp);
 			return new MvProducer(bindings, values, null);
 		}
-		// Unknown call producer: read the callee's extra values back through the
-		// spill. The spill is cleared FIRST so a producer that never calls values
-		// leaves the extras nil, and snapshotted IMMEDIATELY after so a later
-		// producer (multiple-value-call) cannot overwrite it before the values are
-		// read. The snapshot also CLEARS the channel: values that this consumer has
-		// taken are consumed, so they cannot resurface as an enclosing consumer's
-		// (the REPL echo is one -- see LispEvaluator.evalValues -- and a function
-		// that internally consumes a callee's values must still look single-valued
-		// to ITS caller).
-		// The form's own TAIL is rewritten first: a recognized producer sitting at the
-		// end of a (let ...) / (progn ...) the consumer was handed publishes through the
-		// spill, exactly as it would from a defun body. Without this the tier boundary
-		// would be visible through a wrapper nobody wrote for that purpose --
-		// (multiple-value-list (let ((*read-suppress* t)) (read-from-string s))) would
-		// lose the second value that the bare call answers. It is the TAIL only, which
-		// is what keeps a producer whose value is DISCARDED (one step of a loop, a let
-		// initform) out of the channel -- publishing on every call instead makes the
-		// last such call's extras surface as the enclosing form's, which they are not.
+		// A producer that may pass values along (a call of a user function, a form
+		// whose tail is one): read the callee's extra values back through the spill.
+		// The spill is cleared FIRST so a producer that never publishes leaves the
+		// extras nil, and snapshotted IMMEDIATELY after so a later producer
+		// (multiple-value-call) cannot overwrite it before the values are read. The
+		// snapshot also CLEARS the channel: values that this consumer has taken are
+		// consumed, so they cannot resurface as an enclosing consumer's (the REPL echo
+		// is one -- see LispEvaluator.evalValues -- and a function that internally
+		// consumes a callee's values must still look single-valued to ITS caller).
+		// The form itself is the SETTLED one: a recognized producer at the end of a
+		// (let ...) / (progn ...) the consumer was handed publishes through the spill
+		// exactly as it would from a defun body, and a single-valued tail behind a
+		// publishing non-tail form ((let ((x (values 1 2))) x)) clears it, so the
+		// snapshot reads what the form's OWN tail produced and nothing else.
 		LispSymbol tmp = new LispSymbol(prefix + "_0");
-		bindings.add(new MvBinding(tmp,
-				makeProgn(List.of(setMvSpill(LispNil.INSTANCE), spillEscapingMvProducers(producer)))));
+		bindings.add(new MvBinding(tmp, makeProgn(List.of(setMvSpill(LispNil.INSTANCE), settled.form()))));
 		values.add(tmp);
 		LispSymbol rest = new LispSymbol(prefix + "_rest");
 		bindings.add(new MvBinding(rest, makeProg1(new LispSymbol(LispNames.MV_SPILL), setMvSpill(LispNil.INSTANCE))));
 		return new MvProducer(bindings, values, rest);
 	}
+
+	/**
+	 * The extra values of a spill producer as a LIST -- what {@code (nth i ...)} may
+	 * read: the snapshot holds the zero-values marker {@link #MV_ZERO_VALUES} when the
+	 * producer answered no value at all, and that marker is not a list.
+	 * @param rest the snapshot temporary of a spill producer
+	 * @return {@code (if (eq rest t) nil rest)}
+	 */
+	private static LispVal restAsList(LispSymbol rest) {
+		return spillAsList(rest);
+	}
+
+	/**
+	 * A snapshot of the {@code %mv-spill} channel as a LIST of extra values, for a
+	 * consumer that indexes it: the zero-values marker {@link #MV_ZERO_VALUES} reads as
+	 * the empty list. The {@code handler-case} {@code :no-error} compilers read their
+	 * snapshot through this.
+	 * @param snapshot a variable holding the snapshot
+	 * @return {@code (if (eq snapshot t) nil snapshot)}
+	 */
+	public static LispVal spillAsList(LispSymbol snapshot) {
+		return makeIf(mvCall(LispNames.EQ_GENERAL, snapshot, MV_ZERO_VALUES), LispNil.INSTANCE, snapshot);
+	}
+
+	/**
+	 * Every value of a spill producer as one list: {@code (cons primary rest)}, or nil
+	 * when the snapshot holds the zero-values marker (the primary is then the nil
+	 * {@code values} answered for want of a value, not a value).
+	 * @param primary the primary-value temporary
+	 * @param rest the snapshot temporary
+	 * @return the list form
+	 */
+	private static LispVal allValues(LispVal primary, LispSymbol rest) {
+		return makeIf(mvCall(LispNames.EQ_GENERAL, rest, MV_ZERO_VALUES), LispNil.INSTANCE,
+				mvCall(LispNames.CONS, primary, rest));
+	}
+
+	/**
+	 * The {@code %mv-spill} value that says the last producer answered ZERO values. The
+	 * channel holds nil for exactly one value (the primary alone) and a fresh list for
+	 * the values after the primary, so a third state needs a non-list: {@code t}, a
+	 * constant every backend spells and compares with {@code eq}. Only a consumer that
+	 * lists or spreads the values can tell zero from one -- {@code multiple-value-bind}
+	 * binds nil either way.
+	 */
+	public static final LispVal MV_ZERO_VALUES = LispTrue.INSTANCE;
 
 	/** Builds {@code (setq %mv-spill value)}. */
 	private static LispVal setMvSpill(LispVal value) {
@@ -34386,102 +34430,611 @@ public final class LispMacroExpander {
 	 * test's PRIMARY value only, so it is left alone), {@code block},
 	 * {@code multiple-value-bind} bodies, an {@code unwind-protect} protected form (whose
 	 * cleanups save/restore the channel), {@code return}/{@code return-from} and
-	 * {@code the}. A literal {@code (values ...)} tail already publishes through
-	 * {@link #expandValues} / the interpreter's {@code values} function and is left
-	 * untouched, keeping its emitted shape byte-identical. A producer lexically inside a
-	 * consumer is intercepted by the consumer's own expansion BEFORE this rewrite can see
-	 * it (the consumers take the producer form verbatim), so the temp-only fast path is
-	 * preserved there too.
+	 * {@code the}, {@code handler-case}'s protected form and clause bodies. A literal
+	 * {@code (values ...)} tail already publishes through {@link #expandValues} / the
+	 * interpreter's {@code values} function and is left untouched, keeping its emitted
+	 * shape byte-identical; a syntactic producer becomes a {@code values} CALL over its
+	 * lowered temps, so that the publish is the last step (on the interpreter the step
+	 * after a publish clears the channel). A producer lexically inside a consumer is
+	 * intercepted by the consumer's own expansion BEFORE this rewrite can see it (the
+	 * consumers take the producer form verbatim), so the temp-only fast path is preserved
+	 * there too.
 	 *
 	 * <p>
-	 * Callers: {@link #lowerMvProducer} applies it to a producer form it does not itself
-	 * recognize, so a recognized producer in the TAIL of the wrapper a consumer was
-	 * handed --
-	 * {@code (multiple-value-list (let ((*read-suppress* t)) (read-from-string s)))} --
-	 * publishes like the bare call does; the compile paths apply this to every top-level
-	 * {@code defun} body (see {@link #injectMvSpillGlobal}; {@code defmethod} bodies are
-	 * defuns by then), gated on the program using a multiple-value operator so a
-	 * consumer-free program stays byte-identical; the interpreter applies it in
-	 * {@code evalDefun}, where the spill global always exists. Unchanged subtrees keep
-	 * their cons identity (.kb/source-positions.md).
+	 * This is the interpreter's walk ({@code evalDefun}, {@code evalHandlerCase}, where
+	 * the spill global always exists and every primitive step clears it at run time); a
+	 * macro form keeps its shape here, because the macro-time purity walks read the
+	 * stored bodies. The compile paths take {@link #settleMvTail} /
+	 * {@link #settleFunctionBody}, which publish the same way and ALSO clear a
+	 * single-valued tail. Unchanged subtrees keep their cons identity
+	 * (.kb/source-positions.md).
 	 * @param form a function-body form in tail position
 	 * @return the rewritten form, or {@code form} itself when nothing changed
 	 */
 	public static LispVal spillEscapingMvProducers(LispVal form) {
+		return settleTail(form, TailMode.PUBLISH).form();
+	}
+
+	/**
+	 * Settles a tail form for the compile paths: {@link #spillEscapingMvProducers}'
+	 * publishing rewrite PLUS the clears that make {@code %mv-spill} exact after the form
+	 * -- a tail that is single-valued for sure (an atom, a quote, a call of a
+	 * single-valued built-in, a {@code setq}) clears the channel so that whatever a
+	 * non-tail form published earlier (an argument, a {@code let} initform, a form before
+	 * the last) does not travel out as the tail's own values; a tail that may pass values
+	 * along (a call of a user function, a {@code funcall}, a {@code values}) is left
+	 * alone, its callee's tail having settled the channel in turn; a form with tails of
+	 * its own ({@code if}, {@code let}, {@code progn}, a {@code cond}, a loop's result
+	 * form, {@code handler-case}'s protected form and clause bodies, ...) settles each of
+	 * them. The compiled backends apply this to every function body -- top-level defuns
+	 * through {@link #injectMvSpillGlobal}, lambdas as they compile them
+	 * ({@link #settleFunctionBody}) -- and every consumer applies it to the producer form
+	 * it reads the channel after ({@code lowerMvProducer}). The interpreter needs none of
+	 * it: there every primitive step clears the channel as it produces its value
+	 * ({@code LispEvaluator}, "the value-count register"), so it takes only the
+	 * publishing rewrite. See .kb/multiple-values.md, "A tail settles the channel".
+	 *
+	 * <p>
+	 * A call is classified by its operator NAME: a {@code cl} function is one value
+	 * unless {@link #passesMultipleValues} lists it (the prelude's multiple-value defuns
+	 * included, so a program that redefines a {@code cl} function to answer several
+	 * values is not honoured here), any other name -- a user or local function, a generic
+	 * function, an internal helper -- passes whatever it answered.
+	 * @param form a form in tail position
+	 * @return the settled form, or {@code form} itself when nothing changed
+	 */
+	public static LispVal settleMvTail(LispVal form) {
+		return settleTail(form, TailMode.PUBLISH_AND_CLEAR).form();
+	}
+
+	/**
+	 * Settles a LAMBDA body's tail for the compile paths -- a {@code flet}/{@code labels}
+	 * function and a built-in wrapper included -- so a closure answers one value where
+	 * its tail is one, whatever an argument published ({@link #settleMvTail}'s clears).
+	 * Unlike a {@code defun} body, a syntactic producer in the tail is NOT rewritten to
+	 * publish: the interpreter rewrites no lambda body, so
+	 * {@code (funcall (lambda () (gethash k h)))} answers one value on every backend
+	 * ({@link TailMode#CLEAR}). An empty body answers nil, which is one value: it gets a
+	 * clearing nil.
+	 * @param body the body forms
+	 * @return the body with its last form settled, or {@code body} itself when nothing
+	 * changed
+	 */
+	public static List<LispVal> settleFunctionBody(List<LispVal> body) {
+		if (body.isEmpty()) {
+			return List.of(clearedNil());
+		}
+		LispVal last = body.get(body.size() - 1);
+		LispVal settled = settleTail(last, TailMode.CLEAR).form();
+		if (settled == last) {
+			return body;
+		}
+		List<LispVal> out = new java.util.ArrayList<>(body);
+		out.set(out.size() - 1, settled);
+		return out;
+	}
+
+	/**
+	 * Settles the bodies of the built-in function wrappers
+	 * ({@code BuiltinFunctionWrappers.generate}'s {@code (setq name (lambda ...))} forms)
+	 * like any other function body ({@link #settleFunctionBody}): the wrapper of
+	 * {@code car} is a function, and {@code (funcall f (values '(1) 2))} with {@code f}
+	 * holding it must answer one value. The compilers add the wrappers after
+	 * {@link #injectMvSpillGlobal} ran, so they settle them here, gated on
+	 * {@link #declaresMvSpill}.
+	 * @param wrappers the wrapper forms
+	 * @return the wrappers with their lambda bodies settled
+	 */
+	public static List<LispVal> settleWrapperLambdas(List<LispVal> wrappers) {
+		List<LispVal> out = new java.util.ArrayList<>(wrappers.size());
+		for (LispVal wrapper : wrappers) {
+			LispVal settled = wrapper;
+			if (wrapper instanceof LispCons setq && setq.isProperList() && setq.toList().size() == 3
+					&& setq.toList().get(2) instanceof LispCons lambda && lambda.isProperList()
+					&& lambda.toList().size() >= 3) {
+				List<LispVal> lambdaParts = lambda.toList();
+				List<LispVal> body = settleFunctionBody(lambdaParts.subList(2, lambdaParts.size()));
+				List<LispVal> newLambda = new java.util.ArrayList<>(lambdaParts.subList(0, 2));
+				newLambda.addAll(body);
+				List<LispVal> newSetq = new java.util.ArrayList<>(setq.toList());
+				newSetq.set(2, LispCons.rebuiltList(lambda, newLambda));
+				settled = LispCons.rebuiltList(setq, newSetq);
+			}
+			out.add(settled);
+		}
+		return out;
+	}
+
+	/**
+	 * Whether {@link #injectMvSpillGlobal} gave the program its {@code %mv-spill} global
+	 * -- the top-level {@code (setq %mv-spill nil)} it prepends -- i.e. whether the
+	 * program uses a multiple-value operator and its function tails settle the channel.
+	 * @param program the top-level forms after {@link #injectMvSpillGlobal}
+	 * @return {@code true} when the spill global exists
+	 */
+	public static boolean declaresMvSpill(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.SETQ.equals(op.name())
+					&& cons.cdr() instanceof LispCons nameCell && nameCell.car() instanceof LispSymbol name
+					&& LispNames.MV_SPILL.equals(name.name())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * A settled tail form and whether it is single-valued for sure -- what lets a
+	 * consumer skip the spill round-trip altogether.
+	 */
+	private record SettledTail(LispVal form, boolean single) {
+	}
+
+	/**
+	 * The tail walk behind {@link #spillEscapingMvProducers} (publish only) and
+	 * {@link #settleMvTail} / {@link #settleFunctionBody} ({@link TailMode}). Unchanged
+	 * subtrees keep their cons identity (.kb/source-positions.md).
+	 */
+	/**
+	 * What a tail walk does to the forms it reaches. Every mode leaves a {@code values}
+	 * tail and a call that passes values along untouched.
+	 */
+	private enum TailMode {
+
+		/**
+		 * The interpreter's walk over a {@code defun} body or a {@code handler-case}
+		 * protected form: a syntactic producer in the tail publishes its secondary value;
+		 * nothing is cleared (the value-count register does that at run time).
+		 */
+		PUBLISH,
+
+		/**
+		 * The compile paths' walk over a {@code defun} body, a consumer's producer form
+		 * or a {@code handler-case} protected form: publish AND clear.
+		 */
+		PUBLISH_AND_CLEAR,
+
+		/**
+		 * The compile paths' walk over a {@code lambda} body (a
+		 * {@code flet}/{@code labels} function, a built-in wrapper included): clear only.
+		 * A syntactic producer in a lambda's tail stays ONE value, as it is on the
+		 * interpreter, which rewrites no lambda body -- the documented gap, kept the same
+		 * on every backend.
+		 */
+		CLEAR;
+
+		boolean publishes() {
+			return this != CLEAR;
+		}
+
+		boolean clears() {
+			return this != PUBLISH;
+		}
+
+	}
+
+	private static SettledTail settleTail(LispVal form, TailMode mode) {
 		if (isMvProducerForm(form)) {
 			LispCons producer = (LispCons) form;
 			if (LispNames.VALUES.equals(((LispSymbol) producer.car()).name())) {
-				return form;
+				// A literal values tail publishes through expandValues / the
+				// interpreter's values function; its emitted shape stays as is.
+				return new SettledTail(form, false);
 			}
-			MvProducer lowered = lowerMvProducer(producer, "__mv" + MV_COUNTER.getAndIncrement());
-			List<LispVal> listParts = new java.util.ArrayList<>();
-			listParts.add(new LispSymbol(LispNames.LIST));
-			listParts.addAll(lowered.values().subList(1, lowered.values().size()));
-			return nestMvBindings(lowered.bindings(),
-					makeProgn(List.of(setMvSpill(listToCons(listParts)), lowered.values().get(0))));
+			if (mode.publishes()) {
+				// A syntactic producer publishes its secondary value through a values
+				// call over its lowered temps -- a call, so that the publish is the LAST
+				// step on the interpreter too, where the step after a publish clears
+				// the channel.
+				MvProducer lowered = lowerMvProducer(producer, "__mv" + MV_COUNTER.getAndIncrement());
+				List<LispVal> valuesParts = new java.util.ArrayList<>();
+				valuesParts.add(new LispSymbol(LispNames.VALUES));
+				valuesParts.addAll(lowered.values());
+				return new SettledTail(
+						SourceProvenance.inherit(producer, nestMvBindings(lowered.bindings(), listToCons(valuesParts))),
+						false);
+			}
+			// A lambda's tail: the producer is the one-value cl function call it also is
+			// on the interpreter, classified by name below.
 		}
 		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
-			return form;
+			if (form instanceof LispCons) {
+				// ((lambda ...) args) and other non-symbol heads: a call.
+				return new SettledTail(form, false);
+			}
+			// An atom (a literal, a variable read): one value, and nothing between a
+			// clear and it can publish.
+			return new SettledTail(mode.clears() ? clearBefore(form) : form, true);
 		}
 		List<LispVal> parts = cons.toList();
-		int last = parts.size() - 1;
-		return switch (op.name()) {
-			case LispNames.PROGN, LispNames.LOCALLY, LispNames.AND, LispNames.OR, LispNames.WITH_STANDARD_IO_SYNTAX ->
-				spillTailAt(cons, parts, last, 1);
+		String name = op.name();
+		return switch (name) {
+			case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE, LispNames.FUNCTION, LispNames.LAMBDA,
+					LispNames.LOAD_TIME_VALUE ->
+				new SettledTail(mode.clears() ? clearBefore(form) : form, true);
+			// Statements that answer nil on their normal exit; a return/go/throw out of
+			// them carries its own values past the trailing clear.
+			case LispNames.WHILE, LispNames.TAGBODY ->
+				new SettledTail(mode.clears() ? clearAfterStatement(form) : form, true);
+			case LispNames.DOTIMES -> settleDotimes(cons, parts, mode);
+			case LispNames.PROGN, LispNames.LOCALLY, LispNames.WITH_STANDARD_IO_SYNTAX ->
+				settleLast(cons, parts, 1, mode);
 			case LispNames.LET, LispNames.LET_STAR, LispNames.FLET, LispNames.LABELS, LispNames.MACROLET,
-					LispNames.WHEN, LispNames.UNLESS, LispNames.BLOCK, LispNames.BLOCK_INTERNAL,
-					LispNames.FN_BLOCK_INTERNAL ->
-				spillTailAt(cons, parts, last, 2);
-			case LispNames.MULTIPLE_VALUE_BIND -> spillTailAt(cons, parts, last, 3);
-			case LispNames.IF -> {
-				if (parts.size() < 3) {
-					yield form;
+					LispNames.SYMBOL_MACROLET, LispNames.HANDLER_BIND, LispNames.EVAL_WHEN, LispNames.WITH_OPEN_FILE,
+					LispNames.WITH_INPUT_FROM_STRING, LispNames.WITH_OPEN_STREAM, LispNames.WITH_HASH_TABLE_ITERATOR,
+					LispNames.WITH_PACKAGE_ITERATOR, LispNames.WITH_COMPILATION_UNIT, LispNames.WITH_SIMPLE_RESTART,
+					LispNames.WITH_MUTEX_QUALIFIED, LispNames.WITH_LOCK_HELD_QUALIFIED,
+					LispNames.WITH_RECURSIVE_LOCK_HELD_QUALIFIED, LispNames.WITH_ARENA_QUALIFIED ->
+				settleLast(cons, parts, 2, mode);
+			// A block or catch may answer through a return-from / throw fired anywhere
+			// inside it -- (loop ... finally (return (values a b c))) is one -- so it is
+			// never single-valued for sure however its tail classifies: the consumer
+			// reads the channel, which the exit left as the values published just before
+			// it (the tail's clear is skipped by the exit).
+			case LispNames.BLOCK, LispNames.FN_BLOCK_INTERNAL, LispNames.CATCH ->
+				notSingle(settleLast(cons, parts, 2, mode));
+			case LispNames.BLOCK_INTERNAL -> notSingle(settleLast(cons, parts, 1, mode));
+			case LispNames.PROGV, LispNames.MULTIPLE_VALUE_BIND, LispNames.DESTRUCTURING_BIND, LispNames.WITH_SLOTS,
+					LispNames.WITH_ACCESSORS ->
+				settleLast(cons, parts, 3, mode);
+			case LispNames.IF -> settleIf(cons, parts, mode);
+			case LispNames.UNWIND_PROTECT, LispNames.RESTART_CASE ->
+				parts.size() >= 2 ? settleAt(cons, parts, 1, mode) : new SettledTail(form, false);
+			case LispNames.RETURN ->
+				parts.size() == 2 ? settleAt(cons, parts, 1, mode) : parts.size() == 1 && mode.clears()
+						? new SettledTail(SourceProvenance.inherit(cons, listToCons(List.of(op, clearedNil()))), true)
+						: new SettledTail(form, true);
+			case LispNames.RETURN_FROM -> parts.size() == 3 ? settleAt(cons, parts, 2, mode)
+					: parts.size() == 2 && mode.clears() ? new SettledTail(
+							SourceProvenance.inherit(cons, listToCons(List.of(op, parts.get(1), clearedNil()))), true)
+							: new SettledTail(form, true);
+			case LispNames.THROW, LispNames.THE ->
+				parts.size() == 3 ? settleAt(cons, parts, 2, mode) : new SettledTail(form, false);
+			case LispNames.HANDLER_CASE -> settleHandlerCase(cons, parts, mode);
+			case LispNames.TYPECASE, LispNames.ETYPECASE, LispNames.CTYPECASE -> settleTypecase(cons, parts, mode);
+			// Macros both compile backends expand exactly this way: in clear mode the
+			// expansion is what they would have compiled, with its tails settled -- the
+			// only way to reach a cond's fall-through nil or a prog1's temporary. The
+			// interpreter's publish-only walk keeps every macro form as written (the
+			// clause bodies of a cond/case and the last form of an and/or/when/unless are
+			// its tails, the rest is left alone): a defun body it stores must stay the
+			// shape the source has, which the macro-time purity walks read
+			// (UserMacroExpander.isPure).
+			case LispNames.COND -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandCond(cons)), mode)
+					: settleClauseTails(cons, parts, 1);
+			case LispNames.CASE -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandCase(cons)), mode)
+					: settleClauseTails(cons, parts, 2);
+			case LispNames.ECASE -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandEcase(cons)), mode)
+					: settleClauseTails(cons, parts, 2);
+			case LispNames.CCASE -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandCcase(cons)), mode)
+					: settleClauseTails(cons, parts, 2);
+			case LispNames.AND -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandAnd(cons)), mode)
+					: settleLast(cons, parts, 1, mode);
+			case LispNames.OR -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandOr(cons)), mode)
+					: settleLast(cons, parts, 1, mode);
+			case LispNames.WHEN -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandWhen(cons)), mode)
+					: settleLast(cons, parts, 2, mode);
+			case LispNames.UNLESS ->
+				mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandUnless(cons)), mode)
+						: settleLast(cons, parts, 2, mode);
+			case LispNames.DOLIST ->
+				mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandDolist(cons)), mode)
+						: new SettledTail(form, false);
+			case LispNames.DO -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandDo(cons)), mode)
+					: new SettledTail(form, false);
+			case LispNames.DO_STAR ->
+				mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandDoStar(cons)), mode)
+						: new SettledTail(form, false);
+			case LispNames.LOOP -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandLoop(cons)), mode)
+					: new SettledTail(form, false);
+			case LispNames.PROG1 -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandProg1(cons)), mode)
+					: new SettledTail(form, false);
+			case LispNames.PROG2 -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandProg2(cons)), mode)
+					: new SettledTail(form, false);
+			case LispNames.PROG ->
+				mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandProg(cons, false)), mode)
+						: new SettledTail(form, false);
+			case LispNames.PROG_STAR ->
+				mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandProg(cons, true)), mode)
+						: new SettledTail(form, false);
+			case LispNames.IGNORE_ERRORS ->
+				mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandIgnoreErrors(cons)), mode)
+						: new SettledTail(form, false);
+			case LispNames.TIME -> mode.clears() ? settleTail(SourceProvenance.inherit(cons, expandTime(cons)), mode)
+					: new SettledTail(form, false);
+			default -> {
+				// (funcall #'name ...) / (apply #'name ...) over a LITERAL designator
+				// answers what a direct call of the name does -- and the compile paths
+				// compile it as one, inline for a built-in, so it is classified by that
+				// name rather than by funcall/apply.
+				String callee = literalDesignatorCallee(name, parts);
+				if (callee != null) {
+					name = callee;
 				}
-				List<LispVal> out = new java.util.ArrayList<>(parts);
-				out.set(2, spillEscapingMvProducers(parts.get(2)));
-				if (parts.size() > 3) {
-					out.set(3, spillEscapingMvProducers(parts.get(3)));
+				if (passesMultipleValues(name)) {
+					yield new SettledTail(form, false);
 				}
-				yield LispCons.rebuiltList(cons, out);
+				if (!isSingleValuedOperator(name, parts)) {
+					// A user or local function, a generic function, an internal helper,
+					// a library macro: whatever it answers travels as is.
+					yield new SettledTail(form, false);
+				}
+				if (!mode.clears()) {
+					yield new SettledTail(form, true);
+				}
+				yield new SettledTail(quiet(form) ? clearBefore(form) : clearAfter(form), true);
 			}
-			case LispNames.COND -> spillClauseTails(cons, parts, 1);
-			case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE,
-					LispNames.CTYPECASE ->
-				spillClauseTails(cons, parts, 2);
-			case LispNames.UNWIND_PROTECT -> spillTailAt(cons, parts, 1, 1);
-			case LispNames.RETURN -> parts.size() == 2 ? spillTailAt(cons, parts, 1, 1) : form;
-			case LispNames.RETURN_FROM, LispNames.THE -> parts.size() == 3 ? spillTailAt(cons, parts, 2, 2) : form;
-			default -> form;
 		};
 	}
 
 	/**
-	 * Rewrites the element at {@code index} of the form through
-	 * {@link #spillEscapingMvProducers}, keeping the original cons when nothing changed
-	 * or when the form has no body ({@code index < firstBodyIndex}).
+	 * The name a {@code (funcall #'name ...)} / {@code (funcall 'name ...)} /
+	 * {@code (apply #'name ...)} form calls, or null when the operator is not one of the
+	 * two or the designator is computed.
 	 */
-	private static LispVal spillTailAt(LispCons original, List<LispVal> parts, int index, int firstBodyIndex) {
-		if (index < firstBodyIndex) {
-			return original;
+	private static @Nullable String literalDesignatorCallee(String operator, List<LispVal> parts) {
+		if (!(LispNames.FUNCALL.equals(operator) || LispNames.APPLY.equals(operator)) || parts.size() < 2
+				|| !(parts.get(1) instanceof LispCons designator) || !designator.isProperList()
+				|| designator.toList().size() != 2 || !(designator.car() instanceof LispSymbol head)
+				|| !(LispNames.FUNCTION.equals(head.name()) || LispNames.QUOTE.equals(head.name()))
+				|| !(designator.toList().get(1) instanceof LispSymbol callee)) {
+			return null;
 		}
-		LispVal rewritten = spillEscapingMvProducers(parts.get(index));
-		if (rewritten == parts.get(index)) {
-			return original;
-		}
-		List<LispVal> out = new java.util.ArrayList<>(parts);
-		out.set(index, rewritten);
-		return LispCons.rebuiltList(original, out);
+		return callee.name();
 	}
 
 	/**
-	 * Rewrites the last body form of every {@code cond}/{@code case}-family clause
-	 * through {@link #spillEscapingMvProducers}. A clause with no body forms is left
-	 * alone: {@code (cond (test))} answers the test's PRIMARY value only in CL.
+	 * Common Lisp function names whose call may answer other than exactly one value on
+	 * this implementation, so a tail call of one passes its values along untouched: the
+	 * spreaders and the publishers (Java built-ins that write the channel, prelude defuns
+	 * ending in a {@code values}), and the callers of arbitrary code.
+	 * {@code LispPreludeLibraryTest} pins the prelude half against the prelude source.
+	 * @param name a canonical operator name
+	 * @return {@code true} when a call of it must not be cleared after
 	 */
-	private static LispVal spillClauseTails(LispCons original, List<LispVal> parts, int firstClauseIndex) {
+	public static boolean passesMultipleValues(String name) {
+		return switch (name) {
+			case LispNames.VALUES, LispNames.VALUES_LIST, LispNames.FUNCALL, LispNames.APPLY, LispNames.EVAL,
+					LispNames.MULTIPLE_VALUE_CALL, LispNames.MULTIPLE_VALUE_PROG1, LispNames.PARSE_INTEGER,
+					LispNames.MACROEXPAND, LispNames.MACROEXPAND_1, LispNames.DECODE_FLOAT,
+					LispNames.INTEGER_DECODE_FLOAT, LispNames.DECODE_UNIVERSAL_TIME,
+					LispNames.FUNCTION_LAMBDA_EXPRESSION, LispNames.GET_PROPERTIES, LispNames.GET_SETF_EXPANSION,
+					LispNames.PARSE_NAMESTRING, LispNames.PPRINT_DISPATCH, LispNames.PPRINT ->
+				true;
+			default -> false;
+		};
+	}
+
+	/**
+	 * Whether a call of the operator answers exactly one value: a {@code cl} function
+	 * (other than {@link #passesMultipleValues}' -- the caller checks that first), the
+	 * assignment macros, the definers and the other single-valued macros this
+	 * implementation lowers itself. {@code (setf (values ...) form)} is the one
+	 * assignment that is not.
+	 */
+	private static boolean isSingleValuedOperator(String name, List<LispVal> parts) {
+		if (PackageRegistry.isClFunctionName(name)) {
+			return true;
+		}
+		return switch (name) {
+			case LispNames.SETF, LispNames.PSETF -> !(parts.size() >= 2 && parts.get(1) instanceof LispCons place
+					&& place.car() instanceof LispSymbol placeOp && LispNames.VALUES.equals(placeOp.name()));
+			case LispNames.SETQ, LispNames.PSETQ, LispNames.INCF, LispNames.DECF, LispNames.PUSH, LispNames.POP,
+					LispNames.PUSHNEW, LispNames.REMF, LispNames.ROTATEF, LispNames.SHIFTF,
+					LispNames.MULTIPLE_VALUE_SETQ, LispNames.MULTIPLE_VALUE_LIST, LispNames.NTH_VALUE, LispNames.DEFUN,
+					LispNames.DEFMACRO, LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT,
+					LispNames.DEFSTRUCT, LispNames.DEFCLASS, LispNames.DEFGENERIC, LispNames.DEFMETHOD,
+					LispNames.DEFTYPE, LispNames.DEFINE_CONDITION, LispNames.DEFINE_SETF_EXPANDER, LispNames.DEFSETF,
+					LispNames.DEFINE_COMPILER_MACRO, LispNames.DEFINE_SYMBOL_MACRO, LispNames.DEFINE_MODIFY_MACRO,
+					LispNames.DECLAIM, LispNames.DECLARE, LispNames.DEFPACKAGE, LispNames.IN_PACKAGE,
+					LispNames.CHECK_TYPE, LispNames.ASSERT, LispNames.PPRINT_LOGICAL_BLOCK,
+					LispNames.WITH_OUTPUT_TO_STRING, LispNames.PRINT_UNREADABLE_OBJECT, LispNames.DO_SYMBOLS,
+					LispNames.DO_EXTERNAL_SYMBOLS, LispNames.DO_ALL_SYMBOLS, LispNames.AWAIT_QUALIFIED ->
+				true;
+			default -> false;
+		};
+	}
+
+	/**
+	 * Operators whose call publishes nothing when its arguments publish nothing: pure
+	 * primitives that call no user code. A tail call of one over quiet arguments is
+	 * cleared BEFORE it runs (no temporary); anything else single-valued is cleared
+	 * after, through a temporary, because an argument -- or a callback a sequence
+	 * function or the printer runs -- may have published in between.
+	 */
+	private static final Set<String> QUIET_OPERATORS = Set.of(LispNames.ADD, LispNames.SUB, LispNames.MUL,
+			LispNames.DIV, LispNames.LT, LispNames.GT, LispNames.LE, LispNames.GE, LispNames.EQ, LispNames.NE,
+			LispNames.ONE_PLUS, LispNames.ONE_MINUS, LispNames.MOD, LispNames.REM, LispNames.ZEROP, LispNames.PLUSP,
+			LispNames.MINUSP, LispNames.EVENP, LispNames.ODDP, LispNames.CAR, LispNames.CDR, LispNames.CONS,
+			LispNames.LIST, LispNames.LIST_STAR, LispNames.FIRST, LispNames.REST, LispNames.SECOND, LispNames.THIRD,
+			LispNames.NTH, LispNames.NTHCDR, LispNames.LENGTH, LispNames.NOT, LispNames.NULL, LispNames.EQ_GENERAL,
+			LispNames.EQL, LispNames.CONSP, LispNames.ATOM, LispNames.LISTP, LispNames.SYMBOLP, LispNames.STRINGP,
+			LispNames.NUMBERP, LispNames.INTEGERP, LispNames.CHARACTERP, LispNames.AREF, LispNames.SVREF,
+			LispNames.CHAR, LispNames.SCHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR, LispNames.SYMBOL_NAME,
+			LispNames.IDENTITY, LispNames.VECTOR, LispNames.MAKE_ARRAY, LispNames.ABS, LispNames.MIN, LispNames.MAX,
+			LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR, LispNames.ASH, LispNames.FLOAT, LispNames.STRING_EQ,
+			LispNames.CHAR_EQ, LispNames.SETQ);
+
+	/** Whether evaluating the form cannot publish through the channel. */
+	private static boolean quiet(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return true;
+		}
+		if (!(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+			return false;
+		}
+		switch (op.name()) {
+			case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE, LispNames.FUNCTION, LispNames.LAMBDA,
+					LispNames.LOAD_TIME_VALUE -> {
+				return true;
+			}
+			default -> {
+			}
+		}
+		if (!QUIET_OPERATORS.contains(op.name())) {
+			return false;
+		}
+		for (LispVal cur = cons.cdr(); cur instanceof LispCons cell; cur = cell.cdr()) {
+			if (!quiet(cell.car())) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** {@code (progn (setq %mv-spill nil) form)}: a clear in front of a quiet form. */
+	private static LispVal clearBefore(LispVal form) {
+		return inheriting(form, makeProgn(List.of(setMvSpill(LispNil.INSTANCE), form)));
+	}
+
+	/**
+	 * {@code (let ((__mvN_v form)) (setq %mv-spill nil) __mvN_v)}: a clear behind a form
+	 * whose evaluation may publish (an argument, a callback).
+	 */
+	private static LispVal clearAfter(LispVal form) {
+		LispSymbol v = new LispSymbol("__mv" + MV_COUNTER.getAndIncrement() + "_v");
+		return inheriting(form, makeLet(v.name(), form, makeProgn(List.of(setMvSpill(LispNil.INSTANCE), v))));
+	}
+
+	/**
+	 * {@code (progn form (setq %mv-spill nil) nil)}: a statement that answers nil on its
+	 * normal exit, cleared behind; a non-local exit out of it skips the clear and keeps
+	 * its own values.
+	 */
+	private static LispVal clearAfterStatement(LispVal form) {
+		return inheriting(form, makeProgn(List.of(form, setMvSpill(LispNil.INSTANCE), LispNil.INSTANCE)));
+	}
+
+	/**
+	 * A form the walk built in place of {@code original}, carrying its source position
+	 * (.kb/source-positions.md, "Half 2"): a compile error inside the rewritten tail
+	 * still names the line it came from.
+	 */
+	private static LispVal inheriting(LispVal original, LispVal rewritten) {
+		return original instanceof LispCons cons ? SourceProvenance.inherit(cons, rewritten) : rewritten;
+	}
+
+	/** {@link LispCons#rebuiltList} plus the source position when it did rebuild. */
+	private static LispVal rebuilt(LispCons original, List<LispVal> elements) {
+		return SourceProvenance.inherit(original, LispCons.rebuiltList(original, elements));
+	}
+
+	/**
+	 * The settled form, classified as possibly multiple-valued whatever its tail said.
+	 */
+	private static SettledTail notSingle(SettledTail settled) {
+		return settled.single() ? new SettledTail(settled.form(), false) : settled;
+	}
+
+	/** {@code (progn (setq %mv-spill nil) nil)}: the one value nil, cleared. */
+	private static LispVal clearedNil() {
+		return clearBefore(LispNil.INSTANCE);
+	}
+
+	/**
+	 * Settles the last body form, {@code firstBody} being the index of the first one; a
+	 * bodyless form answers nil, which gets a clearing nil in clear mode.
+	 */
+	private static SettledTail settleLast(LispCons original, List<LispVal> parts, int firstBody, TailMode mode) {
+		if (parts.size() <= firstBody) {
+			if (!mode.clears()) {
+				return new SettledTail(original, true);
+			}
+			List<LispVal> out = new java.util.ArrayList<>(parts);
+			out.add(clearedNil());
+			return new SettledTail(SourceProvenance.inherit(original, listToCons(out)), true);
+		}
+		return settleAt(original, parts, parts.size() - 1, mode);
+	}
+
+	/** Settles the element at {@code index}, keeping the original cons when unchanged. */
+	private static SettledTail settleAt(LispCons original, List<LispVal> parts, int index, TailMode mode) {
+		SettledTail settled = settleTail(parts.get(index), mode);
+		if (settled.form() == parts.get(index)) {
+			return new SettledTail(original, settled.single());
+		}
+		List<LispVal> out = new java.util.ArrayList<>(parts);
+		out.set(index, settled.form());
+		return new SettledTail(rebuilt(original, out), settled.single());
+	}
+
+	/** Both branches of an {@code if}; a missing else branch is the one value nil. */
+	private static SettledTail settleIf(LispCons original, List<LispVal> parts, TailMode mode) {
+		if (parts.size() < 3 || parts.size() > 4) {
+			return new SettledTail(original, false);
+		}
+		List<LispVal> out = new java.util.ArrayList<>(parts);
+		SettledTail then = settleTail(parts.get(2), mode);
+		out.set(2, then.form());
+		boolean single = then.single();
+		if (parts.size() == 4) {
+			SettledTail otherwise = settleTail(parts.get(3), mode);
+			out.set(3, otherwise.form());
+			single = single && otherwise.single();
+		}
+		else if (mode.clears()) {
+			out.add(clearedNil());
+		}
+		return new SettledTail(rebuilt(original, out), single);
+	}
+
+	/**
+	 * A {@code dotimes} answers its result form on the normal exit (nil without one); the
+	 * result form is settled where it stands, a missing one becomes a clear behind the
+	 * whole loop, and the loop itself keeps its shape either way (the backends compile it
+	 * natively).
+	 */
+	private static SettledTail settleDotimes(LispCons original, List<LispVal> parts, TailMode mode) {
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec) || !spec.isProperList()) {
+			return new SettledTail(original, false);
+		}
+		List<LispVal> specParts = spec.toList();
+		if (specParts.size() < 3) {
+			return new SettledTail(mode.clears() ? clearAfterStatement(original) : original, true);
+		}
+		SettledTail result = settleTail(specParts.get(2), mode);
+		if (result.form() == specParts.get(2)) {
+			return new SettledTail(original, result.single());
+		}
+		List<LispVal> newSpec = new java.util.ArrayList<>(specParts);
+		newSpec.set(2, result.form());
+		List<LispVal> out = new java.util.ArrayList<>(parts);
+		out.set(1, rebuilt(spec, newSpec));
+		return new SettledTail(rebuilt(original, out), result.single());
+	}
+
+	/**
+	 * A {@code handler-case} answers its protected form or a clause body: both are tails,
+	 * and a bodyless clause answers nil.
+	 */
+	private static SettledTail settleHandlerCase(LispCons original, List<LispVal> parts, TailMode mode) {
+		if (parts.size() < 2) {
+			return new SettledTail(original, false);
+		}
+		List<LispVal> out = new java.util.ArrayList<>(parts);
+		SettledTail protectedForm = settleTail(parts.get(1), mode);
+		out.set(1, protectedForm.form());
+		boolean single = protectedForm.single();
+		for (int i = 2; i < parts.size(); i++) {
+			if (!(parts.get(i) instanceof LispCons clause) || !clause.isProperList()) {
+				continue;
+			}
+			SettledTail body = settleLast(clause, clause.toList(), 2, mode);
+			out.set(i, body.form());
+			single = single && body.single();
+		}
+		return new SettledTail(rebuilt(original, out), single);
+	}
+
+	/**
+	 * The publish-only walk over a {@code cond}/{@code case}-family form kept as written:
+	 * the last body form of every clause is a tail. A clause with no body forms is left
+	 * alone -- {@code (cond (test))} answers the test's PRIMARY value only in CL.
+	 */
+	private static SettledTail settleClauseTails(LispCons original, List<LispVal> parts, int firstClause) {
 		List<LispVal> out = new java.util.ArrayList<>(parts);
 		boolean changed = false;
-		for (int i = firstClauseIndex; i < parts.size(); i++) {
+		for (int i = firstClause; i < parts.size(); i++) {
 			if (!(parts.get(i) instanceof LispCons clause) || !clause.isProperList()) {
 				continue;
 			}
@@ -34489,26 +35042,52 @@ public final class LispMacroExpander {
 			if (clauseParts.size() < 2) {
 				continue;
 			}
-			LispVal lastForm = clauseParts.get(clauseParts.size() - 1);
-			LispVal rewritten = spillEscapingMvProducers(lastForm);
-			if (rewritten == lastForm) {
-				continue;
+			SettledTail body = settleAt(clause, clauseParts, clauseParts.size() - 1, TailMode.PUBLISH);
+			if (body.form() != clause) {
+				out.set(i, body.form());
+				changed = true;
 			}
-			List<LispVal> newClause = new java.util.ArrayList<>(clauseParts);
-			newClause.set(newClause.size() - 1, rewritten);
-			out.set(i, LispCons.rebuiltList(clause, newClause));
-			changed = true;
 		}
-		return changed ? LispCons.rebuiltList(original, out) : original;
+		return new SettledTail(changed ? rebuilt(original, out) : original, false);
 	}
 
 	/**
-	 * Applies {@link #spillEscapingMvProducers} to the tail of every top-level
-	 * {@code defun} body -- the compile paths' half of the wiring, run by
-	 * {@link #injectMvSpillGlobal} only when the program uses a multiple-value operator
-	 * (no consumer means no observer, and the emitted output stays byte-identical).
+	 * A {@code typecase} clause body is a tail; a bodyless clause answers nil, and so
+	 * does a plain {@code typecase} no clause of which matched, which gets an
+	 * {@code otherwise} clause answering a cleared nil. The form is not expanded here
+	 * because its expansion needs the class registry; the backends expand it.
 	 */
-	private static List<LispVal> spillDefunTails(List<LispVal> program) {
+	private static SettledTail settleTypecase(LispCons original, List<LispVal> parts, TailMode mode) {
+		List<LispVal> out = new java.util.ArrayList<>(parts);
+		boolean single = true;
+		boolean exhaustive = !LispNames.TYPECASE.equals(((LispSymbol) parts.get(0)).name());
+		for (int i = 2; i < parts.size(); i++) {
+			if (!(parts.get(i) instanceof LispCons clause) || !clause.isProperList()) {
+				continue;
+			}
+			List<LispVal> clauseParts = clause.toList();
+			LispVal key = clauseParts.get(0);
+			if (key == LispTrue.INSTANCE
+					|| (key instanceof LispSymbol keySym && LispNames.OTHERWISE.equals(keySym.name()))) {
+				exhaustive = true;
+			}
+			SettledTail body = settleLast(clause, clauseParts, 1, mode);
+			out.set(i, body.form());
+			single = single && body.single();
+		}
+		if (!exhaustive && mode.clears()) {
+			out.add(listToCons(List.of(LispTrue.INSTANCE, clearedNil())));
+		}
+		return new SettledTail(rebuilt(original, out), single);
+	}
+
+	/**
+	 * Settles the tail of every top-level {@code defun} body ({@link #settleMvTail}) --
+	 * the compile paths' half of the wiring, run by {@link #injectMvSpillGlobal} only
+	 * when the program uses a multiple-value operator (no consumer means no observer, and
+	 * the emitted output stays byte-identical).
+	 */
+	private static List<LispVal> settleDefunTails(List<LispVal> program) {
 		List<LispVal> out = new java.util.ArrayList<>(program.size());
 		boolean changed = false;
 		for (LispVal form : program) {
@@ -34517,7 +35096,7 @@ public final class LispMacroExpander {
 					&& LispNames.DEFUN.equals(head.name()) && cons.isProperList()) {
 				List<LispVal> parts = cons.toList();
 				if (parts.size() >= 4) {
-					rewritten = spillTailAt(cons, parts, parts.size() - 1, 3);
+					rewritten = settleAt(cons, parts, parts.size() - 1, TailMode.PUBLISH_AND_CLEAR).form();
 				}
 			}
 			changed = changed || rewritten != form;
@@ -34600,7 +35179,9 @@ public final class LispMacroExpander {
 	public static LispVal expandValues(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() == 1) {
-			return makeProgn(List.of(setMvSpill(LispNil.INSTANCE), LispNil.INSTANCE));
+			// No value at all: the channel says so (MV_ZERO_VALUES), and the primary
+			// a caller that wants one value reads is nil.
+			return makeProgn(List.of(setMvSpill(MV_ZERO_VALUES), LispNil.INSTANCE));
 		}
 		// Bind every argument in order, publish the extras to the spill (a fresh
 		// list; nil when there are none, so a stale spill cannot leak through this
@@ -35124,12 +35705,13 @@ public final class LispMacroExpander {
 	 * Expands {@code (values-list list)}: the list's first element is the primary value
 	 * and the rest are published to the {@code %mv-spill} channel, so the consumers see
 	 * every element as a value -- {@code (values-list '(1 2))} is {@code (values 1 2)}.
-	 * An empty list yields nil with no extra values.
+	 * An empty list yields no value at all ({@link #MV_ZERO_VALUES} on the channel, nil
+	 * for a caller that wants one value).
 	 *
 	 * <pre>
 	 * (values-list l) ->
 	 *   (let ((__mvN_l l))
-	 *     (setq %mv-spill (if (consp __mvN_l) (cdr __mvN_l) nil))
+	 *     (setq %mv-spill (if (consp __mvN_l) (cdr __mvN_l) t))
 	 *     (if (consp __mvN_l) (car __mvN_l) nil))
 	 * </pre>
 	 * @param cons the values-list expression
@@ -35142,7 +35724,7 @@ public final class LispMacroExpander {
 		}
 		LispSymbol l = new LispSymbol("__mv" + MV_COUNTER.getAndIncrement() + "_l");
 		LispVal isCons = mvCall(LispNames.CONSP, l);
-		LispVal spill = setMvSpill(makeIf(isCons, mvCall(LispNames.CDR, l), LispNil.INSTANCE));
+		LispVal spill = setMvSpill(makeIf(isCons, mvCall(LispNames.CDR, l), MV_ZERO_VALUES));
 		LispVal primary = makeIf(isCons, mvCall(LispNames.CAR, l), LispNil.INSTANCE);
 		return makeLet(l.name(), parts.get(1), makeProgn(List.of(spill, primary)));
 	}
@@ -35208,8 +35790,10 @@ public final class LispMacroExpander {
 			}
 			else if (producer.rest() != null) {
 				// The extra values of a spill producer live in the rest snapshot (a
-				// too-short spill reads nil through nth, CL's missing-value fill).
-				value = mvCall(LispNames.NTH, new LispInteger(i - producer.values().size()), producer.rest());
+				// too-short spill reads nil through nth, CL's missing-value fill; the
+				// zero-values marker reads as the empty list).
+				value = mvCall(LispNames.NTH, new LispInteger(i - producer.values().size()),
+						restAsList(producer.rest()));
 			}
 			else {
 				value = LispNil.INSTANCE;
@@ -38773,8 +39357,8 @@ public final class LispMacroExpander {
 		MvProducer lowered = lowerMvProducer(producer, "__mv" + MV_COUNTER.getAndIncrement());
 		if (lowered.rest() != null) {
 			// (cons primary rest): the spill list is freshly consed per values call,
-			// so sharing its tail is safe.
-			return nestMvBindings(lowered.bindings(), mvCall(LispNames.CONS, lowered.values().get(0), lowered.rest()));
+			// so sharing its tail is safe; the zero-values marker lists nothing.
+			return nestMvBindings(lowered.bindings(), allValues(lowered.values().get(0), lowered.rest()));
 		}
 		List<LispVal> listParts = new java.util.ArrayList<>();
 		listParts.add(new LispSymbol(LispNames.LIST));
@@ -39029,7 +39613,7 @@ public final class LispMacroExpander {
 			appendParts.add(new LispSymbol(LispNames.APPEND));
 			for (MvProducer producer : producers) {
 				if (producer.rest() != null) {
-					appendParts.add(mvCall(LispNames.CONS, producer.values().get(0), producer.rest()));
+					appendParts.add(allValues(producer.values().get(0), producer.rest()));
 				}
 				else {
 					List<LispVal> seg = new java.util.ArrayList<>();
@@ -39261,11 +39845,12 @@ public final class LispMacroExpander {
 			usesFloatFormat = usesFloatFormat || usesSymbol(form, LispNames.READ_DEFAULT_FLOAT_FORMAT);
 		}
 		if (usesMv) {
-			// A syntactic producer in a defun's tail publishes through the spill so
-			// its secondary value survives the function return (defmethod bodies are
-			// defuns by this point). Gated on usesMv: without a consumer nothing can
-			// observe the spill, and the emitted output stays byte-identical.
-			program = spillDefunTails(program);
+			// Every defun's tail settles the spill: a syntactic producer publishes its
+			// secondary value so it survives the function return (defmethod bodies are
+			// defuns by this point), a single-valued tail clears what a non-tail form
+			// published. Gated on usesMv: without a consumer nothing can observe the
+			// spill, and the emitted output stays byte-identical.
+			program = settleDefunTails(program);
 		}
 		for (String name : PRINTER_MODE_VARS.keySet()) {
 			// print-unreadable-object READS *print-escape* to decide how it spells the

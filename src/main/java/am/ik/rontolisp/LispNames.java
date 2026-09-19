@@ -3679,14 +3679,18 @@ public final class LispNames {
 	/**
 	 * The internal {@code %mv-spill} global variable carrying a producer's secondary
 	 * values across a function boundary: every {@code (values ...)} call stores its extra
-	 * values here (a fresh list) as it returns its primary, and a multiple-value consumer
-	 * whose producer form is not syntactically recognized clears the spill, evaluates the
-	 * producer, and reads the extras back -- clearing the spill again as it does, since
-	 * values one consumer took must not resurface as an enclosing consumer's (the REPL
-	 * echo, {@code LispEvaluator.evalValues}, is one such consumer). This is what makes
-	 * {@code multiple-value-bind} over a user function work; the compilers inject a
-	 * top-level {@code (setq %mv-spill nil)} to create the global when a program uses any
-	 * multiple-value operator (the interpreter predefines it).
+	 * values here as it returns its primary -- a fresh list, nil for exactly one value,
+	 * {@code t} for no value at all ({@code LispMacroExpander.MV_ZERO_VALUES}) -- and a
+	 * multiple-value consumer whose producer form may pass values along clears the spill,
+	 * evaluates the producer, and reads the extras back -- clearing the spill again as it
+	 * does, since values one consumer took must not resurface as an enclosing consumer's
+	 * (the REPL echo, {@code LispEvaluator.evalValues}, is one such consumer). The
+	 * channel is exact: a single-valued tail clears it (the compile paths settle every
+	 * function tail, the interpreter clears on every primitive step), so a publish in an
+	 * argument, a {@code let} initform or a form before the last never reaches a
+	 * consumer. The compilers inject a top-level {@code (setq %mv-spill nil)} to create
+	 * the global when a program uses any multiple-value operator; the interpreter keeps
+	 * it as a field of its global environment (.kb/multiple-values.md).
 	 */
 	public static final String MV_SPILL = "%MV-SPILL";
 

@@ -993,7 +993,7 @@ public final class LispEvaluator {
 						LispNames.EVAL + " expects 1 argument, got " + args.size());
 			}
 			return eval(args.get(0));
-		}));
+		}, true));
 		// compile: coerce a literal (lambda ...) definition to a function in the null
 		// lexical environment. A no-argument definition that DEFINES METHODS over class
 		// metaobjects -- postmodern's build-dao-methods (funcall (compile nil `(lambda ()
@@ -1052,14 +1052,14 @@ public final class LispEvaluator {
 						LispNames.MACROEXPAND_1 + " expects 1 or 2 arguments, got " + args.size());
 			}
 			return expandedWithFlag(args.get(0), macroexpand1(args.get(0)));
-		}));
+		}, true));
 		this.globalEnv.defineFunction(LispNames.MACROEXPAND, new LispFunction(LispNames.MACROEXPAND, args -> {
 			if (args.isEmpty() || args.size() > 2) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						LispNames.MACROEXPAND + " expects 1 or 2 arguments, got " + args.size());
 			}
 			return expandedWithFlag(args.get(0), macroexpand(args.get(0)));
-		}));
+		}, true));
 		// macro-function: the expander of a macro NAME, or nil for a function, a special
 		// operator and an unknown name -- what a caller asking "can I apply this" reads.
 		// It lives here (not in the prelude, which serves the compiled backends) because
@@ -2496,7 +2496,7 @@ public final class LispEvaluator {
 				throw new LispEvalException(LispNames.FUNCALL + " expects at least 1 argument");
 			}
 			return apply(args.get(0), args.subList(1, args.size()), this.globalEnv);
-		});
+		}, true);
 		this.globalEnv.defineFunction(LispNames.FUNCALL, this.funcallBuiltin);
 		// %async-run (the async-defun/async-lambda lowering primitive) lives here rather
 		// than in Environment because running the body thunk needs the evaluator's
@@ -3048,7 +3048,7 @@ public final class LispEvaluator {
 						LispNames.APPLY + " expects at least 2 arguments, got " + args.size());
 			}
 			return applyValues(args);
-		}));
+		}, true));
 		this.globalEnv.defineFunction(LispNames.LOAD, new LispFunction(LispNames.LOAD, args -> {
 			if (args.isEmpty() || args.size() % 2 == 0) {
 				throw new LispEvalException(LispNames.LOAD + " expects a pathname and :option value pairs, got "
@@ -3238,7 +3238,7 @@ public final class LispEvaluator {
 						LispNames.UIOP_SYMBOL_CALL + ": symbol " + member + " is not present in package " + designator);
 			}
 			return apply(resolveFunction(spelling), args.subList(2, args.size()), this.globalEnv);
-		}));
+		}, true));
 		// ql:quickload = auto-download (real Quicklisp dist) + asdf:load-system. It
 		// accepts a single system name or a list of names, downloads each (with its
 		// dependencies) into the cache, adds the extracted .asd directories to the search
@@ -4578,13 +4578,29 @@ public final class LispEvaluator {
 					new LispCons(resolved, LispNil.INSTANCE));
 			return spilledValues(evalResolved(capture));
 		}
-		this.globalEnv.define(LispNames.MV_SPILL, LispNil.INSTANCE);
+		this.globalEnv.clearSpill();
 		LispVal primary = evalResolved(resolved);
+		return consumeValues(primary);
+	}
+
+	/**
+	 * Reads the values a form just produced off the {@code %mv-spill} channel, clearing
+	 * it: the primary first, then what the channel holds -- nothing when the form
+	 * answered no value at all ({@code LispMacroExpander.MV_ZERO_VALUES}), where the
+	 * primary is only the nil {@code values} answers for want of one.
+	 * @param primary what the form answered
+	 * @return the form's values, primary first (empty for {@code (values)})
+	 */
+	private List<LispVal> consumeValues(LispVal primary) {
+		LispVal spill = this.globalEnv.spill();
+		// The values have been consumed: leave no leftovers for the next form's echo.
+		this.globalEnv.clearSpill();
+		if (spill == LispMacroExpander.MV_ZERO_VALUES) {
+			return List.of();
+		}
 		List<LispVal> values = new ArrayList<>();
 		values.add(primary);
-		values.addAll(spilledValues(this.globalEnv.lookup(LispNames.MV_SPILL)));
-		// The values have been consumed: leave no leftovers for the next form's echo.
-		this.globalEnv.define(LispNames.MV_SPILL, LispNil.INSTANCE);
+		values.addAll(spilledValues(spill));
 		return values;
 	}
 
@@ -4831,43 +4847,43 @@ public final class LispEvaluator {
 	 */
 	public LispVal eval(LispVal expr, Environment env) {
 		return switch (expr) {
-			case LispInteger i -> i;
-			case LispBigInteger b -> b;
-			case LispRatio r -> r;
-			case LispDouble d -> d;
-			// A complex literal is self-evaluating, like every other number.
-			case LispComplex c -> c;
-			case LispString s -> s;
-			case LispChar c -> c;
-			case LispNil n -> n;
-			case LispTrue t -> t;
-			case LispFunction f -> f;
-			case LispLambda l -> l;
-			case LispHashTable h -> h;
+			case LispCons cons -> evalConsClassifyingRawFailures(cons, env);
+			case LispSymbol sym -> singleValue(evalSymbolRef(sym, env));
 			// An array literal is a CONSTRUCTOR, not a constant: each evaluation answers
-			// a
-			// fresh, independently mutable array, which is what both compile backends
+			// a fresh, independently mutable array, which is what both compile backends
 			// already emit at the site (LiteralArrays).
-			case LispArray a -> LiteralArrays.materialize(a);
-			case LispFloatArray fa -> LiteralArrays.materialize(fa);
-			case am.ik.rontolisp.LispIntVector iv -> LiteralArrays.materialize(iv);
-			case LispJavaObject j -> j;
-			case LispObjcObject o -> o;
-			case am.ik.rontolisp.LispForeignPointer p -> p;
-			case LispFuture f -> f;
-			case am.ik.rontolisp.LispThread th -> th;
-			case LispStream s -> s;
-			case LispInstance inst -> inst;
-			// A quantized matrix has no literal syntax; one reaches eval only as a value
-			// a macro-time form handed back, and is itself.
-			case am.ik.rontolisp.LispQuantizedMatrix qm -> qm;
+			case LispArray a -> singleValue(LiteralArrays.materialize(a));
+			case LispFloatArray fa -> singleValue(LiteralArrays.materialize(fa));
+			case am.ik.rontolisp.LispIntVector iv -> singleValue(LiteralArrays.materialize(iv));
 			// A #S(...) literal the top-level fold did not reach (one produced by a
 			// runtime read, say) is folded here, so evaluating it always yields the
 			// instance rather than a carrier leaking into user data.
-			case LispStructLiteral literal -> StructLiteralFolder.fold(literal, this.closRegistry);
-			case LispSymbol sym -> evalSymbolRef(sym, env);
-			case LispCons cons -> evalConsClassifyingRawFailures(cons, env);
+			case LispStructLiteral literal -> singleValue(StructLiteralFolder.fold(literal, this.closRegistry));
+			// Every other value -- a number, a string, a character, nil and t, a
+			// function or closure, a stream, an instance, a quantized matrix a
+			// macro-time form handed back -- is self-evaluating.
+			default -> singleValue(expr);
 		};
+	}
+
+	/**
+	 * Marks the value just produced as ONE value: clears the {@code %mv-spill} channel --
+	 * the interpreter's value-count register ({@code Environment.clearSpill}) -- and
+	 * answers the value. Every primitive step that is not a publish or a call of user
+	 * code goes through here or through {@link #evalArgs}/{@link #apply}: an atom, a
+	 * literal, a constructing special form ({@code quote}, {@code setq}, a definer, a
+	 * loop's nil), a built-in's return. A form that merely passes a sub-form's value on
+	 * ({@code if}, {@code let}, {@code progn}, a block, a user function's body) leaves
+	 * the channel to that sub-form, which is how a {@code (values ...)} tail reaches the
+	 * consumer behind any number of returns while a {@code values} whose value went into
+	 * a variable, an argument or a discarded position never does (.kb/multiple-values.md,
+	 * "The interpreter's value-count register").
+	 * @param value the value produced
+	 * @return {@code value}
+	 */
+	private LispVal singleValue(LispVal value) {
+		this.globalEnv.clearSpill();
+		return value;
 	}
 
 	/**
@@ -5659,17 +5675,17 @@ public final class LispEvaluator {
 				case LispNames.DEFMACRO:
 					return evalDefmacro(cons, env);
 				case LispNames.DEFSTRUCT:
-					return evalDefstruct(cons, env);
+					return singleValue(evalDefstruct(cons, env));
 				case LispNames.DEFCLASS:
 					ensureAsdfClassesFor(cons);
 					ensureGeomClassesFor(cons);
-					return evalDefclass(cons, env);
+					return singleValue(evalDefclass(cons, env));
 				case LispNames.DEFGENERIC:
-					return evalDefgeneric(cons, env);
+					return singleValue(evalDefgeneric(cons, env));
 				case LispNames.DEFMETHOD:
 					ensureAsdfClassesFor(cons);
 					ensureGeomClassesFor(cons);
-					return evalDefmethod(cons, env);
+					return singleValue(evalDefmethod(cons, env));
 				case LispNames.MAKE_INSTANCE:
 					ensureAsdfClassesFor(cons);
 					ensureGeomClassesFor(cons);
@@ -5678,7 +5694,7 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandChangeClass(resolveChangeClassDesignator(cons, env),
 							this.closRegistry, false), env);
 				case LispNames.SLOT_VALUE:
-					return evalSlotValue(cons, env);
+					return singleValue(evalSlotValue(cons, env));
 				case LispNames.WITH_SLOTS:
 					return evalBuiltinMacro(cons, env, LispMacroExpander::expandWithSlots);
 				case LispNames.WITH_ACCESSORS:
@@ -5691,9 +5707,9 @@ public final class LispEvaluator {
 					return evalDefconstant(cons, env);
 				case LispNames.ASDF_DEFSYSTEM:
 					// A special form: the system options are plain data, not evaluated.
-					return evalDefsystem(cons);
+					return singleValue(evalDefsystem(cons));
 				case LispNames.FUNCTION:
-					return evalFunction(cons, env);
+					return singleValue(evalFunction(cons, env));
 				case LispNames.PROGN:
 					return evalProgn(cons, env);
 				case LispNames.SETQ:
@@ -5743,7 +5759,7 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandSignalMacro(cons, this.closRegistry, this.restartRuntimeLoaded),
 							env);
 				case LispNames.SIGNAL_COND_INTERNAL:
-					return evalSignalCond(cons, env);
+					return singleValue(evalSignalCond(cons, env));
 				case LispNames.HANDLER_CASE:
 					ensureWitLoadedForConditionClass(cons);
 					ensureConditionReportRuntimeLoaded();
@@ -5846,7 +5862,7 @@ public final class LispEvaluator {
 					// during evaluation instead of being expanded.
 					LispVal macroAlias = aliasMacroFunction(cons);
 					if (macroAlias != null) {
-						return macroAlias;
+						return singleValue(macroAlias);
 					}
 					// A prelude-provided (setf PLACE) writer (the (defun (setf get) ...)
 					// beside the get defun) registers its place only when the prelude
@@ -5894,9 +5910,9 @@ public final class LispEvaluator {
 					// recursive twin is the same again -- the shim's lock is reentrant.
 					return evalBuiltinMacro(cons, env, LispMacroExpander::expandWithMutex);
 				case LispNames.WIT_EXPORT_QUALIFIED:
-					return evalWitExport(cons);
+					return singleValue(evalWitExport(cons));
 				case LispNames.WIT_IMPORT_QUALIFIED:
-					return evalWitImport(cons);
+					return singleValue(evalWitImport(cons));
 				case LispNames.TORCH_NO_GRAD_QUALIFIED:
 					// The expansion let-binds torch::*grad-enabled*, so the library's
 					// defparameter must have declared it special BEFORE the let binds.
@@ -5916,7 +5932,7 @@ public final class LispEvaluator {
 				case LispNames.PUSHNEW:
 					return evalBuiltinMacro(cons, env, LispMacroExpander::expandPushnew);
 				case LispNames.DEFTYPE:
-					return evalDeftype(cons);
+					return singleValue(evalDeftype(cons));
 				case LispNames.DEFINE_CONDITION: {
 					// A condition type is an ordinary CLOS-subset class; the :report form
 					// is registered for the error/signal/warn message building.
@@ -5925,16 +5941,16 @@ public final class LispEvaluator {
 					// The report renderer partitions the registry, so a new condition
 					// class makes the loaded one stale; rebuilding here keeps it in step.
 					ensureConditionReportRuntimeLoaded();
-					return defined;
+					return singleValue(defined);
 				}
 				case LispNames.DEFINE_MODIFY_MACRO:
 					return evalBuiltinMacro(cons, env, LispMacroExpander::expandDefineModifyMacro);
 				case LispNames.DEFINE_SETF_EXPANDER:
-					return registerSetfExpander(cons);
+					return singleValue(registerSetfExpander(cons));
 				case LispNames.DEFSETF:
-					return registerDefsetf(cons);
+					return singleValue(registerDefsetf(cons));
 				case LispNames.DEFINE_COMPILER_MACRO:
-					return evalDefineCompilerMacro(cons, env);
+					return singleValue(evalDefineCompilerMacro(cons, env));
 				case LispNames.RESTART_CASE:
 					ensureRestartRuntimeLoaded();
 					return evalBuiltinMacro(cons, env, LispMacroExpander::expandRestartCase);
@@ -6118,9 +6134,9 @@ public final class LispEvaluator {
 			// over read-char / unread-char / read-from-string (LispPreludeLibrary), so
 			// an ordinary function resolution loads it and #'read is that same defun.
 			case LispNames.READ_SEQUENCE:
-				return evalSequenceWithGrayDispatch(cons, env, true);
+				return singleValue(evalSequenceWithGrayDispatch(cons, env, true));
 			case LispNames.WRITE_SEQUENCE:
-				return evalSequenceWithGrayDispatch(cons, env, false);
+				return singleValue(evalSequenceWithGrayDispatch(cons, env, false));
 			case LispNames.MAKE_STRING:
 				return evalBuiltinMacro(cons, env, LispMacroExpander::expandMakeString);
 			// REPLACE is intentionally NOT expanded here: the interpreter uses the
@@ -6188,7 +6204,7 @@ public final class LispEvaluator {
 			case LispNames.WITH_COMPILATION_UNIT:
 				return evalBuiltinMacro(cons, env, LispMacroExpander::expandWithCompilationUnit);
 			case LispNames.WRITE_CHAR:
-				return evalWriteCharWithGrayDispatch(cons, env);
+				return singleValue(evalWriteCharWithGrayDispatch(cons, env));
 			case LispNames.LOCALLY:
 				return evalBuiltinMacro(cons, env, LispMacroExpander::expandLocally);
 			case LispNames.WITH_STANDARD_IO_SYNTAX:
@@ -6214,7 +6230,7 @@ public final class LispEvaluator {
 			case LispNames.SHIFTF:
 				return evalBuiltinMacro(cons, env, LispMacroExpander::expandShiftf);
 			case LispNames.LOAD_TIME_VALUE:
-				return evalLoadTimeValue(cons, env);
+				return singleValue(evalLoadTimeValue(cons, env));
 			case LispNames.TYPEP:
 				seedMopClassesForTypepForm(cons);
 				ensureAsdfClassesFor(cons);
@@ -6241,7 +6257,7 @@ public final class LispEvaluator {
 			case LispNames.PROG_STAR:
 				return evalBuiltinMacro(cons, env, c -> LispMacroExpander.expandProg(c, true));
 			case LispNames.DEFINE_SYMBOL_MACRO:
-				return evalDefineSymbolMacro(cons);
+				return singleValue(evalDefineSymbolMacro(cons));
 			case LispNames.SYMBOL_MACROLET:
 				// The substitution walk expands a user macro it meets before substituting
 				// into its expansion (macro arguments may be data, the expansion is
@@ -6249,7 +6265,7 @@ public final class LispEvaluator {
 				// so it gets this evaluator's one-step expander as the hook.
 				return eval(LispMacroExpander.expandSymbolMacrolet(cons, this.symbolMacroUserMacroHook), env);
 			case LispNames.TAGBODY:
-				return evalTagbody(cons, env);
+				return singleValue(evalTagbody(cons, env));
 			case LispNames.GO: {
 				// A tag is a symbol or an integer (CLHS 5.3), keyed the way
 				// evalTagbody keys its label table.
@@ -6289,7 +6305,7 @@ public final class LispEvaluator {
 				// form falls through to the ordinary built-in function.
 				LispVal[] operands = floorFamilyOperands(cons);
 				if (operands != null) {
-					return evalFloorFamilyDivision(name, operands[0], operands[1], env);
+					return singleValue(evalFloorFamilyDivision(name, operands[0], operands[1], env));
 				}
 				break;
 			}
@@ -6333,7 +6349,7 @@ public final class LispEvaluator {
 				if (packed != null) {
 					return eval(packed, env);
 				}
-				return evalSequenceCoerce(cons, env);
+				return singleValue(evalSequenceCoerce(cons, env));
 			}
 			case LispNames.MAP_INTO:
 				return evalBuiltinMacro(cons, env, LispMacroExpander::expandMapInto);
@@ -6342,7 +6358,7 @@ public final class LispEvaluator {
 				// The ordinary function call, with a native scan in front of it: both are
 				// prelude defuns whose elt-per-element inner loop costs the interpreter
 				// ~2.5 us per element PAIR. The arm declines to this same call.
-				return evalSequenceScan(cons, env, name);
+				return singleValue(evalSequenceScan(cons, env, name));
 			case LispNames.RASSOC:
 				return evalBuiltinMacro(cons, env, LispMacroExpander::expandRassoc);
 			// The sequence/alist functions taking :test/:key evaluate through the
@@ -6666,7 +6682,7 @@ public final class LispEvaluator {
 		// lambda here, a funcId there -- the name is the one identity either keeps).
 		this.globalEnv.defineFunction(funcName,
 				new LispLambda(expanded.required(), expanded.rest(), List.of(blockForm), env, funcName));
-		return nameForm;
+		return singleValue(nameForm);
 	}
 
 	private LispVal evalDefstruct(LispCons cons, Environment env) {
@@ -6940,7 +6956,7 @@ public final class LispEvaluator {
 			resultEnv.define(var.name(), LispNil.INSTANCE);
 			return eval(spec.get(2), resultEnv);
 		}
-		return LispNil.INSTANCE;
+		return singleValue(LispNil.INSTANCE);
 	}
 
 	/**
@@ -6959,7 +6975,7 @@ public final class LispEvaluator {
 		}
 		putUserMacro(name.name(),
 				makeUserMacro(LispNames.DEFMACRO, name, parts.get(2), parts.subList(3, parts.size()), env));
-		return name;
+		return singleValue(name);
 	}
 
 	/**
@@ -8093,7 +8109,7 @@ public final class LispEvaluator {
 		if (parts.size() > 2 && (force || !this.globalEnv.isBound(name.name()))) {
 			this.globalEnv.define(name.name(), eval(parts.get(2), env));
 		}
-		return name;
+		return singleValue(name);
 	}
 
 	private LispVal evalFunction(LispCons cons, Environment env) {
@@ -8942,7 +8958,7 @@ public final class LispEvaluator {
 		// backends memoize a quoted datum to the same effect, so '#(1 2 3) is one
 		// shared constant everywhere while a bare #(1 2 3) is fresh everywhere --
 		// .kb/quoted-data.md.
-		return rest.car();
+		return singleValue(rest.car());
 	}
 
 	/**
@@ -9125,13 +9141,11 @@ public final class LispEvaluator {
 			return null;
 		}
 		LispVal call = consListOf(List.of(new LispSymbol(LispNames.MAKE_LOAD_FORM), instance));
-		this.globalEnv.define(LispNames.MV_SPILL, LispNil.INSTANCE);
+		this.globalEnv.clearSpill();
 		LispVal primary = evalResolved(call);
-		List<LispVal> values = new ArrayList<>();
-		values.add(primary);
-		values.addAll(spilledValues(this.globalEnv.lookup(LispNames.MV_SPILL)));
-		this.globalEnv.define(LispNames.MV_SPILL, LispNil.INSTANCE);
-		return values;
+		List<LispVal> values = consumeValues(primary);
+		// A method answering no value at all still names a creation form: nil.
+		return values.isEmpty() ? List.of(primary) : values;
 	}
 
 	/**
@@ -9231,7 +9245,7 @@ public final class LispEvaluator {
 		if (parts.size() > 3) {
 			return eval(parts.get(3), env);
 		}
-		return LispNil.INSTANCE;
+		return singleValue(LispNil.INSTANCE);
 	}
 
 	private LispVal evalLet(LispCons cons, Environment env) {
@@ -9437,6 +9451,9 @@ public final class LispEvaluator {
 
 	private LispVal evalProgn(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
+		if (parts.size() == 1) {
+			return singleValue(LispNil.INSTANCE);
+		}
 		LispVal result = LispNil.INSTANCE;
 		for (int i = 1; i < parts.size(); i++) {
 			result = eval(parts.get(i), env);
@@ -9465,7 +9482,9 @@ public final class LispEvaluator {
 			value = eval(parts.get(i + 1), env);
 			assignVariable(n, value, env);
 		}
-		return value;
+		// An assignment answers ONE value however many the value form produced: a
+		// (setq x (f)) in a function's tail returns f's primary alone, as in CL.
+		return singleValue(value);
 	}
 
 	/**
@@ -9523,7 +9542,7 @@ public final class LispEvaluator {
 		LispVal character = eval(parts.get(3), env);
 		Consumer<LispString> rebind = parts.get(1) instanceof LispSymbol place
 				? rebuilt -> assignVariable(place.name(), rebuilt, env) : null;
-		return Environment.scharSet(List.of(target, index, character), rebind);
+		return singleValue(Environment.scharSet(List.of(target, index, character), rebind));
 	}
 
 	private LispVal evalWhile(LispCons cons, Environment env) {
@@ -9534,7 +9553,7 @@ public final class LispEvaluator {
 				eval(parts.get(i), env);
 			}
 		}
-		return LispNil.INSTANCE;
+		return singleValue(LispNil.INSTANCE);
 	}
 
 	/**
@@ -9591,6 +9610,9 @@ public final class LispEvaluator {
 	 */
 	private LispVal runBlockIn(List<LispVal> parts, int bodyStart, Environment blockEnv) {
 		try {
+			if (parts.size() <= bodyStart) {
+				return singleValue(LispNil.INSTANCE);
+			}
 			LispVal result = LispNil.INSTANCE;
 			for (int i = bodyStart; i < parts.size(); i++) {
 				result = eval(parts.get(i), blockEnv);
@@ -9615,7 +9637,7 @@ public final class LispEvaluator {
 		if (parts.size() < 2 || parts.size() > 3) {
 			throw new LispEvalException(LispNames.RETURN_FROM + " expects (return-from name [value])");
 		}
-		LispVal value = parts.size() == 3 ? eval(parts.get(2), env) : LispNil.INSTANCE;
+		LispVal value = parts.size() == 3 ? eval(parts.get(2), env) : singleValue(LispNil.INSTANCE);
 		throw blockExit(blockName(parts.get(1)), value, env);
 	}
 
@@ -9657,7 +9679,7 @@ public final class LispEvaluator {
 			for (int i = 2; i < parts.size(); i++) {
 				result = eval(parts.get(i), env);
 			}
-			return result;
+			return parts.size() > 2 ? result : singleValue(result);
 		}
 		catch (ThrowSignal signal) {
 			if (Environment.isEqStrict(signal.tag(), tag)) {
@@ -9678,7 +9700,7 @@ public final class LispEvaluator {
 			throw new LispEvalException(LispNames.THROW + " expects (throw tag result)");
 		}
 		LispVal tag = eval(parts.get(1), env);
-		LispVal value = parts.size() == 3 ? eval(parts.get(2), env) : LispNil.INSTANCE;
+		LispVal value = parts.size() == 3 ? eval(parts.get(2), env) : singleValue(LispNil.INSTANCE);
 		throw new ThrowSignal(tag, value);
 	}
 
@@ -9745,7 +9767,7 @@ public final class LispEvaluator {
 			}
 		}
 		LispVal value;
-		List<LispVal> allValues = null;
+		List<LispVal> allValues = List.of();
 		try {
 			List<LispVal> clauseTypes = new ArrayList<>(errorClauses.size());
 			for (LispVal clauseVal : errorClauses) {
@@ -9772,14 +9794,14 @@ public final class LispEvaluator {
 				// lowering -- a direct eval of (gethash k h) returns one value. Apply the
 				// compiler's tail-position rewrite (spillEscapingMvProducers) so the
 				// protected form publishes them to spill just as the compile path does.
-				this.globalEnv.define(LispNames.MV_SPILL, LispNil.INSTANCE);
+				this.globalEnv.clearSpill();
 				LispVal protectedForEval = LispMacroExpander.spillEscapingMvProducers(protectedForm);
 				value = eval(protectedForEval, env);
-				List<LispVal> spilled = spilledValues(this.globalEnv.lookup(LispNames.MV_SPILL));
-				this.globalEnv.define(LispNames.MV_SPILL, LispNil.INSTANCE);
-				allValues = new ArrayList<>(spilled.size() + 1);
-				allValues.add(value);
-				allValues.addAll(spilled);
+				if (noErrorClause != null) {
+					allValues = consumeValues(value);
+				}
+				// Without a :no-error clause the form answers the protected form's
+				// values as they stand: the channel is left to the consumer behind it.
 			}
 			finally {
 				frames.removeLast();
@@ -9804,7 +9826,7 @@ public final class LispEvaluator {
 				for (int i = 2; i < clauseParts.size(); i++) {
 					result = eval(clauseParts.get(i), clauseEnv);
 				}
-				return result;
+				return clauseParts.size() > 2 ? result : singleValue(result);
 			}
 			throw e;
 		}
@@ -9832,7 +9854,7 @@ public final class LispEvaluator {
 			for (int i = 2; i < clauseParts.size(); i++) {
 				result = eval(clauseParts.get(i), clauseEnv);
 			}
-			return result;
+			return clauseParts.size() > 2 ? result : singleValue(result);
 		}
 		return value;
 	}
@@ -10069,19 +10091,17 @@ public final class LispEvaluator {
 		if (parts.size() < 3) {
 			return;
 		}
-		LispVal spill = this.globalEnv.lookupOrNull(LispNames.MV_SPILL);
+		LispVal spill = this.globalEnv.spill();
 		for (int i = 2; i < parts.size(); i++) {
 			eval(parts.get(i), env);
 		}
-		if (spill != null) {
-			this.globalEnv.publishSpill(spill);
-		}
+		this.globalEnv.publishSpill(spill);
 	}
 
 	/** Evaluates the optional value of a {@code return} form, defaulting to nil. */
 	private LispVal evalReturnValue(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
-		return parts.size() > 1 ? eval(parts.get(1), env) : LispNil.INSTANCE;
+		return parts.size() > 1 ? eval(parts.get(1), env) : singleValue(LispNil.INSTANCE);
 	}
 
 	private LispVal evalLambdaForm(LispCons cons, Environment env) {
@@ -10091,7 +10111,7 @@ public final class LispEvaluator {
 		// block, so a (return-from f v) inside a lambda called within f's dynamic
 		// extent exits F -- the named signal propagates through the call.
 		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(1), parts.subList(2, parts.size()), false);
-		return new LispLambda(expanded.required(), expanded.rest(), expanded.body(), env);
+		return singleValue(new LispLambda(expanded.required(), expanded.rest(), expanded.body(), env));
 	}
 
 	// The map* family (mapcar/mapc/mapcan/maplist/mapcon) operates on lists; passing a
@@ -10754,22 +10774,18 @@ public final class LispEvaluator {
 	// properness, so it knows the exact size); the loop still stops at the chain's
 	// actual end, so a form rewritten mid-evaluation merely re-grows the list.
 	//
-	// An argument is a single-value context, so the extra values an argument form left
-	// on the %mv-spill channel are discarded once every argument is in -- before the
-	// callee runs, which publishes its own. Without this, (list (f)) answered f's
-	// extras as the list's own to a consumer (the REPL echo above all). Only what the
-	// ARGUMENTS published is discarded, so a tail's values still on their way out
-	// survive a later call such as (eq code done) (Environment.endArguments).
+	// An argument is a single-value context: whatever the argument forms left on the
+	// %mv-spill channel is cleared once every argument is in -- before the callee
+	// runs, which publishes its own. Without this, (list (f)) answered f's extras as
+	// the list's own to a consumer (the REPL echo above all). See singleValue.
 	private List<LispVal> evalArgs(LispCons cons, Environment env, int count) {
 		List<LispVal> args = new ArrayList<>(Math.max(count, 0));
 		LispVal rest = cons.cdr();
-		Environment global = this.globalEnv;
-		boolean outer = global.beginArguments();
 		while (rest instanceof LispCons argCons) {
 			args.add(eval(argCons.car(), env));
 			rest = argCons.cdr();
 		}
-		global.endArguments(outer);
+		this.globalEnv.clearSpill();
 		return args;
 	}
 
@@ -10780,7 +10796,7 @@ public final class LispEvaluator {
 			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 					LispNames.AWAIT + " expects 1 argument, got " + (parts.size() - 1));
 		}
-		return awaitValue(eval(parts.get(1), env));
+		return singleValue(awaitValue(eval(parts.get(1), env)));
 	}
 
 	// Resolves a value like JavaScript await: a future joins its computation (releasing
@@ -11232,8 +11248,19 @@ public final class LispEvaluator {
 			// cast) is wrapped into a LispEvalException first, so handler-case sees it
 			// too. Zero cost until an exception escapes, and zero beyond one boolean
 			// read while the restart runtime is not loaded (no handler can exist).
+			//
+			// A built-in's answer is ONE value unless the built-in itself publishes
+			// or passes values along (LispFunction.passesValues): a callback it ran --
+			// sort's predicate, mapcar's function, a print-object method -- may have
+			// published, and that publish must not travel out as the built-in's own
+			// values. So the channel is cleared after every other built-in returns
+			// (see singleValue).
 			try {
-				return builtIn.body().apply(args);
+				LispVal result = builtIn.body().apply(args);
+				if (!builtIn.passesValues()) {
+					this.globalEnv.clearSpill();
+				}
+				return result;
 			}
 			catch (LispEvalException e) {
 				throw withHandlerBindHandlersRun(e);

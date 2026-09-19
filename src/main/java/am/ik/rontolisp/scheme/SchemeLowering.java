@@ -328,8 +328,35 @@ final class SchemeLowering {
 	private record LoopShape(LispSymbol label, List<LispSymbol> assigned, boolean rest, boolean parallel) {
 	}
 
-	/** Where a statement puts its value, and the labels it may jump to. */
-	private record Destination(LispSymbol result, List<Target> targets) {
+	/**
+	 * Where a statement puts its value, and the labels it may jump to.
+	 *
+	 * @param result the variable a leaf assigns
+	 * @param targets the loops a tail call may jump to
+	 * @param count whether the variable holds every value of a leaf or its primary
+	 */
+	private record Destination(LispSymbol result, List<Target> targets, ValueCount count) {
+	}
+
+	/**
+	 * How many values a destination carries. A result variable holds ONE value -- a
+	 * {@code (setq R (values a b))} keeps a's value alone, in Common Lisp and on every
+	 * backend (.kb/multiple-values.md) -- so a loop whose leaf is a {@code (values ...)}
+	 * of other than one value is lowered again with a {@code multi} destination: every
+	 * leaf stores its values as a LIST and the loop answers {@code (values-list R)}. The
+	 * first lowering notes such a leaf in {@code sawValues}; a loop with none keeps the
+	 * plain shape and the single value R7RS leaves it with too.
+	 */
+	private static final class ValueCount {
+
+		private final boolean multi;
+
+		private boolean sawValues;
+
+		ValueCount(boolean multi) {
+			this.multi = multi;
+		}
+
 	}
 
 	/**
@@ -723,17 +750,22 @@ final class SchemeLowering {
 		return List.copyOf(out);
 	}
 
-	// The session's value guard: like the file's, but answers the form's value.
+	// The session's value guard: like the file's, but answers the form's VALUES -- all
+	// of them, held as a list while the catch and the exit test run, because a value
+	// that went through a variable and an (eq ...) is one value in Common Lisp
+	// (.kb/multiple-values.md): (values 1 2) from a procedure echoes both lines, a
+	// (values) echoes none.
 	private LispVal exitGuardValue(LispVal form) {
 		LispSymbol done = fresh("EXIT-DONE");
-		LispSymbol value = fresh("EXIT-VALUE");
+		LispSymbol values = fresh("EXIT-VALUES");
 		LispSymbol code = fresh("EXIT-CODE");
 		LispVal caught = list(symbol("CATCH"), quotedExitTag(),
-				list(symbol("PROGN"), list(symbol("SETQ"), value, form), done));
+				list(symbol("PROGN"), list(symbol("SETQ"), values, list(symbol("MULTIPLE-VALUE-LIST"), form)), done));
 		LispVal guarded = list(symbol("LET"),
-				listOf(List.of(list(done, list(symbol("LIST"), LispNil.INSTANCE)), list(value, LispNil.INSTANCE))),
-				list(symbol("LET"), listOf(List.of(list(code, caught))), list(symbol("IF"),
-						list(symbol("EQ"), code, done), value, list(symbol(EXIT_FUNCTION_NAME), code))));
+				listOf(List.of(list(done, list(symbol("LIST"), LispNil.INSTANCE)), list(values, LispNil.INSTANCE))),
+				list(symbol("LET"), listOf(List.of(list(code, caught))),
+						list(symbol("IF"), list(symbol("EQ"), code, done), list(symbol("VALUES-LIST"), values),
+								list(symbol(EXIT_FUNCTION_NAME), code))));
 		return form instanceof LispCons lowered ? inherit(lowered, guarded) : guarded;
 	}
 
@@ -1462,7 +1494,27 @@ final class SchemeLowering {
 
 	private LispVal leaf(LispVal valueForm, Context context) {
 		Destination destination = context.destination();
-		return destination == null ? valueForm : list(symbol("SETQ"), destination.result(), valueForm);
+		if (destination == null) {
+			return valueForm;
+		}
+		if (valueForm instanceof LispCons cons && cons.car() instanceof LispSymbol head && "VALUES".equals(head.name())
+				&& cons.isProperList() && cons.toList().size() != 2) {
+			// In lowered code a VALUES head is always the operator: a user binding of
+			// values lowers to a distinct lowercase symbol.
+			destination.count().sawValues = true;
+		}
+		return list(symbol("SETQ"), destination.result(), destination.count().multi ? listed(valueForm) : valueForm);
+	}
+
+	// Every value of a leaf form as a list, for a multi destination: a (values ...)
+	// lists its arguments directly, anything else goes through multiple-value-list
+	// (which keeps a single-valued form a plain (list form)).
+	private static LispVal listed(LispVal valueForm) {
+		if (valueForm instanceof LispCons cons && cons.car() instanceof LispSymbol head && "VALUES".equals(head.name())
+				&& cons.isProperList()) {
+			return new LispCons(symbol("LIST"), cons.cdr());
+		}
+		return list(symbol("MULTIPLE-VALUE-LIST"), valueForm);
 	}
 
 	// A form run for its effect, whose Scheme value is the unspecified object: the raw
@@ -1475,7 +1527,9 @@ final class SchemeLowering {
 		if (destination == null) {
 			return list(symbol("PROGN"), effectForm, this.unspecifiedVariable);
 		}
-		return list(symbol("PROGN"), effectForm, list(symbol("SETQ"), destination.result(), this.unspecifiedVariable));
+		LispVal stored = destination.count().multi ? list(symbol("LIST"), this.unspecifiedVariable)
+				: this.unspecifiedVariable;
+		return list(symbol("PROGN"), effectForm, list(symbol("SETQ"), destination.result(), stored));
 	}
 
 	private LispVal atom(LispVal expression, Scope scope) {
@@ -2212,7 +2266,7 @@ final class SchemeLowering {
 		LispSymbol loopName = loop.name();
 		List<LispVal> inits = loop.inits();
 		if (!this.assignedNames.contains(name(loopName))) {
-			LispVal pure = pureLoop(loop, context, false);
+			LispVal pure = pureLoop(loop, context, false, false);
 			if (pure != null) {
 				return pure;
 			}
@@ -2239,7 +2293,7 @@ final class SchemeLowering {
 	 * closure must capture THIS iteration's variables, so that loop rebinds them per
 	 * iteration from carriers ({@code fresh}).
 	 */
-	private @Nullable LispVal pureLoop(NamedLet loop, Context context, boolean fresh) {
+	private @Nullable LispVal pureLoop(NamedLet loop, Context context, boolean fresh, boolean multi) {
 		LoopName binding = new LoopName();
 		Scope inner = new Scope(context.scope());
 		inner.bindings.put(name(loop.name()), binding);
@@ -2256,13 +2310,20 @@ final class SchemeLowering {
 		LispSymbol result = outer != null ? outer.result() : fresh("R");
 		List<Target> targets = new ArrayList<>(outer != null ? outer.targets() : List.of());
 		targets.add(target);
+		// An inner loop stores into the enclosing loop's destination, whose value count
+		// the enclosing loop owns.
+		ValueCount count = outer != null ? outer.count() : new ValueCount(multi);
 		int closuresBefore = this.closures;
-		List<LispVal> statements = body(loop.body(), Context.storing(bodyScope, new Destination(result, targets)));
+		List<LispVal> statements = body(loop.body(),
+				Context.storing(bodyScope, new Destination(result, targets, count)));
 		if (binding.escaped) {
 			return null;
 		}
 		if (!fresh && target.used && (this.closures != closuresBefore || target.shadowed)) {
-			return pureLoop(loop, context, true);
+			return pureLoop(loop, context, true, multi);
+		}
+		if (outer == null && count.sawValues && !multi) {
+			return pureLoop(loop, context, fresh, true);
 		}
 		List<LispVal> pairs = new ArrayList<>();
 		for (int i = 0; i < variables.size(); i++) {
@@ -2274,7 +2335,7 @@ final class SchemeLowering {
 		List<LispVal> forms = new ArrayList<>();
 		forms.add(loopBody(new LoopBody(target, fresh ? variables : List.of(), carriers, statements)));
 		if (outer == null) {
-			forms.add(result);
+			forms.add(multi ? list(symbol("VALUES-LIST"), result) : result);
 		}
 		return new LispCons(symbol("LET"), new LispCons(listOf(pairs), listOf(forms)));
 	}
@@ -2382,7 +2443,7 @@ final class SchemeLowering {
 
 	private Lowered procedure(ProcedureSpec spec, Scope scope) {
 		if (spec.self() != null && spec.selfName() != null && mentionsCall(spec.body(), spec.selfName().name())) {
-			Lowered loop = selfLoop(spec, scope, false);
+			Lowered loop = selfLoop(spec, scope, false, false);
 			if (loop != null) {
 				return loop;
 			}
@@ -2399,7 +2460,7 @@ final class SchemeLowering {
 	// A procedure whose tail calls to itself jump: the parameters arrive in carriers and
 	// the body runs inside (tagbody L ...), storing its value in a result variable. Null
 	// when no call turned out to be a self tail call, so the plain shape is used.
-	private @Nullable Lowered selfLoop(ProcedureSpec spec, Scope scope, boolean fresh) {
+	private @Nullable Lowered selfLoop(ProcedureSpec spec, Scope scope, boolean fresh, boolean multi) {
 		Scope inner = new Scope(scope);
 		List<LispSymbol> variables = new ArrayList<>();
 		List<LispSymbol> carriers = new ArrayList<>();
@@ -2412,14 +2473,18 @@ final class SchemeLowering {
 				new LoopShape(fresh("L"), fresh ? carriers : variables, rest, !fresh), inner,
 				spec.formals().all().stream().map(this::name).toList());
 		LispSymbol result = fresh("R");
+		ValueCount count = new ValueCount(multi);
 		int closuresBefore = this.closures;
 		List<LispVal> statements = body(spec.body(),
-				Context.storing(new Scope(inner), new Destination(result, List.of(target))));
+				Context.storing(new Scope(inner), new Destination(result, List.of(target), count)));
 		if (!target.used) {
 			return null;
 		}
 		if (!fresh && (this.closures != closuresBefore || target.shadowed)) {
-			return selfLoop(spec, scope, true);
+			return selfLoop(spec, scope, true, multi);
+		}
+		if (count.sawValues && !multi) {
+			return selfLoop(spec, scope, fresh, true);
 		}
 		List<LispVal> pairs = new ArrayList<>();
 		if (!fresh) {
@@ -2429,7 +2494,8 @@ final class SchemeLowering {
 		}
 		pairs.add(list(result, LispNil.INSTANCE));
 		LispVal loop = loopBody(new LoopBody(target, fresh ? variables : List.of(), carriers, statements));
-		return new Lowered(lambdaList(carriers, rest), List.of(list(symbol("LET"), listOf(pairs), loop, result)));
+		LispVal answer = multi ? list(symbol("VALUES-LIST"), result) : result;
+		return new Lowered(lambdaList(carriers, rest), List.of(list(symbol("LET"), listOf(pairs), loop, answer)));
 	}
 
 	private static LispVal lambdaList(List<LispSymbol> parameters, boolean rest) {

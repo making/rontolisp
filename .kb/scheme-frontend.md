@@ -55,7 +55,7 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `dynamic-wind` | `before`, then `unwind-protect` | the exit half runs on every exit channel; re-entry does not exist |
 | `(case-lambda (formals body..)..)` | `(lambda (&rest A) (let ((N (length A))) (if (= N 1) (let ((x (nth 0 A))) body..) .. (%scheme-case-lambda-arity A))))`, spelled as a Scheme `lambda` datum with `raw` parts | "`case-lambda`" below |
 | `(parameterize ((p v)..) body..)` | `(%scheme-parameterize (list p v ..) (lambda () body..))`; no binding: `(let () body..)` | a special `let` inside the helper, "Parameters" below |
-| `(call-with-values (lambda () ..) (lambda (a b) ..))`, `let-values`, `define-values` | `multiple-value-bind` | the syntactic tier (`.kb/multiple-values.md`). Any other shape: `(apply consumer (multiple-value-list (funcall producer)))`. A loop's `(values ..)` result survives the `setq` into the result variable because `values` publishes through `%mv-spill` |
+| `(call-with-values (lambda () ..) (lambda (a b) ..))`, `let-values`, `define-values` | `multiple-value-bind` | the syntactic tier (`.kb/multiple-values.md`). Any other shape: `(apply consumer (multiple-value-list (funcall producer)))`. A loop whose leaf is a `(values ..)` stores every leaf as a LIST and answers `(values-list R)` (`ValueCount`, "Destination-driven lowering") -- a `(setq R (values a b))` keeps one value, on every backend |
 | `define-record-type` (top level only) | `defstruct` with `(:conc-name nil)`, each slot NAMED after its accessor, a BOA constructor; the modifier a `defun` over `(setf (accessor r) v)` answering the unspecified object | `defstruct` is what registers the instance layout on every backend (`.kb/defstruct.md`); the accessor IS the generated one, no wrapper call. The predicate answers T/NIL and is a `pred` (`GlobalPredicate`) |
 | `quasiquote` | `cons`/`append`/`(coerce .. 'vector)`, constant parts quoted | depth-counted per R7RS: the innermost unquote of a nested template IS evaluated |
 | `define-syntax` / `let-syntax` / `letrec-syntax` with `syntax-rules` | nothing: expanded away before the lowering (`SchemeExpander`); `let-syntax`'s body is `(let () body)` | hygiene by renaming, "Macros" below |
@@ -142,13 +142,16 @@ could not tell apart.
   never quits compiles to the same bytes and pulls no exit machinery (`ExitLibrary`'s
   invariant, and a `--no-wasi` reactor stays acceptable).
 - **A session wraps every entry unconditionally** -- it has no whole file and no
-  artifact to keep small -- answering the entry's last form's value, which is what the
-  prompt echoes. Non-last forms take the statement guard, a `defun`/`defstruct` stays
-  bare as in a file (defining never throws), and a last form that is itself a syntactic
-  multiple-value producer -- in lowered code only `(VALUES ...)` can stand there alone
-  -- keeps its shape with its ARGUMENTS guarded instead: the prompt echoes through
-  `evalValues`, which takes the multi-value path only for that shape, so `(values)`
-  still echoes nothing and `(values 1 'a)` still echoes both.
+  artifact to keep small -- answering the entry's last form's VALUES, which is what the
+  prompt echoes: the guard stores `(multiple-value-list form)` and answers
+  `(values-list ..)` past the exit test, because a value that went through a variable and
+  an `(eq ..)` is one value (`.kb/multiple-values.md`), so `(two)` with `(define (two)
+  (values 1 2))` echoes both lines and a procedure answering `(values)` echoes none.
+  Non-last forms take the statement guard, a `defun`/`defstruct` stays bare as in a file
+  (defining never throws), and a last form that is itself a syntactic multiple-value
+  producer -- in lowered code only `(VALUES ...)` can stand there alone -- keeps its
+  shape with its ARGUMENTS guarded instead: the prompt echoes through `evalValues`, which
+  takes the multi-value path only for that shape.
 - **Residual**: an `exit` inside a file the entry file `load`s at run time is caught by
   the loaded file's own wrapper, which ends the process without running the loading
   file's afters (the compile path inlines the load, so the afters run there). Both
@@ -1026,6 +1029,15 @@ family, bodies) pass the destination down; every other form is a leaf `(setq R v
   loop in the carrier shape, whose fresh names nothing can shadow. Found by
   `examples/scheme/collatz.scm`.
 - Mutual and higher-order tail calls are ordinary calls (depths below).
+- **A leaf stores ONE value** (`(setq R value)`), so a loop whose leaf is a `(values ..)` of
+  other than one value is lowered again with a `multi` destination (`ValueCount`, the
+  `Destination`'s third component, shared by the loops nested in it): every leaf stores a
+  LIST -- `(values a b)` as `(list a b)`, anything else through `multiple-value-list`, an
+  effect as `(list unspecified)` -- and the loop answers `(values-list R)`. The first
+  lowering notes such a leaf (`sawValues`); a loop with none keeps the plain shape, so a
+  loop that exits through a CALL answers that call's first value only (documented in
+  `doc/*/scheme/deviations.md`; R7RS would pass them all, and the exact answer would cost
+  every loop exit a list).
 
 ## Traps
 

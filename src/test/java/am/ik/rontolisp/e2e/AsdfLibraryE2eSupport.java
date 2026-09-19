@@ -102,14 +102,6 @@ abstract class AsdfLibraryE2eSupport {
 	protected abstract List<String> expected();
 
 	/**
-	 * The interpreter leg's expected stdout, where it knowingly differs from the compiled
-	 * legs; {@link #expected()} by default.
-	 */
-	protected List<String> expectedOnTheInterpreter() {
-		return expected();
-	}
-
-	/**
 	 * Normalization applied to each trimmed actual line before comparison. The default is
 	 * identity; override for a library whose report carries values that legitimately
 	 * differ per run on one machine (RoveE2eTest strips rove's {@code  (Nms)} duration
@@ -152,7 +144,7 @@ abstract class AsdfLibraryE2eSupport {
 			}
 		});
 		assertThat(out.toString(StandardCharsets.UTF_8).trim().lines().map(String::trim).map(this::normalizeLine))
-			.containsExactlyElementsOf(expectedOnTheInterpreter());
+			.containsExactlyElementsOf(expected());
 	}
 
 	// Runs the body on a thread with the CLI's interpreter stack and rethrows whatever

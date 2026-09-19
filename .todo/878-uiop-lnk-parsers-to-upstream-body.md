@@ -22,9 +22,9 @@ upstream's body plus a `.lnk` fixture.
   `LispEvaluatorTest#evalUiopOsWorkingDirectoryAndTheWindowsShortcutFamily`,
   `JvmLispCompilerTest`'s `uiop:parse-windows-shortcut` pin, ci-spec `uiop-os` (the
   `:not-implemented` row).
-- Update `.kb/uiop.md`'s `not-implemented-error` row and
-  `doc/en/ja/reference/uiop/os.md`'s `.lnk` paragraph, removing the `file-position`
-  re-evaluation trigger.
+- Update `.kb/uiop.md`'s `not-implemented-error` row and the `.lnk` paragraph of
+  `doc/en/reference/uiop/os.md` / `doc/ja/reference/uiop/os.md`, removing the
+  `file-position` re-evaluation trigger.
 
 ## Gate
 
