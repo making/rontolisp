@@ -5384,8 +5384,11 @@ public final class Environment implements Scope {
 				return streamValue(handle, LispLayout.Kinds.FILE);
 			}
 			catch (IOException ex) {
-				throw new LispEvalException(
-						LispNames.OPEN + ": cannot open file " + path.value() + ": " + ex.getMessage());
+				// A file-error carrying the designator as given, with the message every
+				// backend spells identically (LispMacroExpander.openFailureMessage).
+				String message = LispNames.OPEN + ": cannot open file " + path.value();
+				throw new LispEvalException(message,
+						ClosRegistry.newFileErrorCondition(args.get(0), new LispString(message)));
 			}
 		}));
 		// %make-directories: the ONE directory-CREATING primitive, the write-side sibling

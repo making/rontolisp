@@ -1043,6 +1043,7 @@ categories:
       - { slug: type-error-expected-type, name: "type-error-expected-type" }
       - { slug: cell-error-name, name: "cell-error-name" }
       - { slug: unbound-slot-instance, name: "unbound-slot-instance" }
+      - { slug: file-error-pathname, name: "file-error-pathname" }
       - { slug: print-object, name: "print-object" }
       - { slug: simple-condition-format-arguments, name: "simple-condition-format-arguments" }
       - { slug: find-restart, name: "find-restart" }

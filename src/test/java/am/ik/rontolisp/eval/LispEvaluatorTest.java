@@ -21,6 +21,8 @@ import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispRatio;
+import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
@@ -10289,6 +10291,39 @@ class LispEvaluatorTest {
 		String missing = tempDir.resolve("nope.txt").toString().replace("\\", "\\\\");
 		assertThatThrownBy(() -> eval("(open \"" + missing + "\")")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("cannot open file");
+	}
+
+	@Test
+	void aFailedFileOperationSignalsFileErrorCarryingThePathname(@TempDir Path tempDir) {
+		// ANSI: open / delete-file / rename-file / truename of a missing file signal
+		// file-error, and file-error-pathname answers the pathname given (SBCL agrees on
+		// the class; it merges the pathname absolute, which rontolisp never does).
+		String missing = tempDir.resolve("gone/x.txt").toString().replace("\\", "\\\\");
+		assertThat(evalMulti("""
+				(defvar *fe-path* "%s")
+				(defun fe-probe (thunk)
+				  (handler-case (progn (funcall thunk) :no-error)
+				    (file-error (e) (equal (namestring (file-error-pathname e)) *fe-path*))
+				    (error () :other-error)))
+				(list (fe-probe (lambda () (open *fe-path*)))
+				      (fe-probe (lambda () (open *fe-path* :direction :output)))
+				      (fe-probe (lambda () (with-open-file (s *fe-path*) (read-line s))))
+				      (fe-probe (lambda () (delete-file *fe-path*)))
+				      (fe-probe (lambda () (rename-file *fe-path* "y.txt")))
+				      (fe-probe (lambda () (truename *fe-path*)))
+				      (handler-case (open *fe-path*) (file-error (e) (princ-to-string e))))
+				""".formatted(missing)).print()).isEqualTo("(T T T T T T \"OPEN: cannot open file " + missing + "\")");
+	}
+
+	@Test
+	void theInterpretersFileErrorInstanceMirrorsTheSeededLayout() {
+		// newFileErrorCondition builds the instance without a registry, so its layout
+		// must keep matching the seed a compiled program's %obj-new is laid out from.
+		ClosRegistry.ClassInfo seeded = java.util.Objects.requireNonNull(new ClosRegistry().findClass("FILE-ERROR"));
+		LispInstance built = (LispInstance) ClosRegistry.newFileErrorCondition(new LispString("p"),
+				new LispString("m"));
+		assertThat(built.layout().slotNames())
+			.isEqualTo(seeded.slots().stream().map(ClosRegistry.SlotSpec::baseName).toList());
 	}
 
 	@Test

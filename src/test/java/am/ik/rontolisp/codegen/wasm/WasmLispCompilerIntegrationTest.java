@@ -13671,6 +13671,46 @@ class WasmLispCompilerIntegrationTest {
 				  (princ (read-char s)))""")).isEqualTo("xxyy");
 	}
 
+	private static final String FILE_ERROR_PROGRAM = """
+			(defvar *fe-path* (concatenate 'string "fe890-missing/" "x.txt"))
+			(defun fe-probe (thunk)
+			  (handler-case (progn (funcall thunk) :no-error)
+			    (file-error (e) (list :file-error (namestring (file-error-pathname e))))
+			    (error () :other-error)))
+			(print (fe-probe (lambda () (open *fe-path*))))
+			(print (fe-probe (lambda () (open *fe-path* :direction :output))))
+			(print (fe-probe (lambda () (with-open-file (s *fe-path*) (read-line s)))))
+			(print (fe-probe (lambda () (delete-file *fe-path*))))
+			(print (fe-probe (lambda () (rename-file *fe-path* "y.txt"))))
+			(print (fe-probe (lambda () (truename *fe-path*))))
+			(terpri)
+			(handler-case (open *fe-path*) (file-error (e) (princ e) (terpri)))
+			(handler-case (delete-file *fe-path*) (file-error (e) (princ e) (terpri)))
+			(with-input-from-string (s "")
+			  (handler-case (read-char s) (end-of-file (e) (princ e) (terpri))))""";
+
+	private static final String FILE_ERROR_EXPECTED = """
+			(:FILE-ERROR "fe890-missing/x.txt")
+			(:FILE-ERROR "fe890-missing/x.txt")
+			(:FILE-ERROR "fe890-missing/x.txt")
+			(:FILE-ERROR "fe890-missing/x.txt")
+			(:FILE-ERROR "fe890-missing/x.txt")
+			(:FILE-ERROR "fe890-missing/x.txt")
+
+			OPEN: cannot open file fe890-missing/x.txt
+			DELETE-FILE: cannot delete fe890-missing/x.txt
+			end of file""";
+
+	@Test
+	void aFailedFileOperationSignalsFileErrorCarryingThePathname() throws Exception {
+		assertThat(compileAndRunWithDirs(FILE_ERROR_PROGRAM)).isEqualTo(FILE_ERROR_EXPECTED);
+	}
+
+	@Test
+	void aFailedFileOperationSignalsFileErrorCarryingThePathnameOnTheComponentPath() throws Exception {
+		assertThat(compileAndRunComponentWithDirs(FILE_ERROR_PROGRAM)).isEqualTo(FILE_ERROR_EXPECTED);
+	}
+
 	@Test
 	void readCharEndOfFileIsCatchableAsEndOfFile() throws Exception {
 		assertThat(compileAndRunEh("""

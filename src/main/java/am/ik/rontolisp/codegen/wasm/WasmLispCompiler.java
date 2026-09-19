@@ -10701,9 +10701,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// A read whose end of file SIGNALS constructs the end-of-file condition during
 		// the EXPRESSION expansion (expandReadEofSignal) -- after this scan -- so the
 		// operators' presence stands in for the tag.
-		for (String reader : List.of(LispNames.READ_CHAR, LispNames.READ_BYTE, LispNames.READ_LINE,
-				LispNames.PEEK_CHAR_INTERNAL, LispNames.READ_CHAR_RAW_INTERNAL, LispNames.READ_BYTE_RAW_INTERNAL,
-				LispNames.READ_LINE_RAW_INTERNAL)) {
+		for (String reader : LispMacroExpander.END_OF_FILE_SITES) {
 			if (symbols.contains(reader)) {
 				used.add(LispLayout.CLASS_TAG_PREFIX + "END-OF-FILE");
 				break;
@@ -10714,6 +10712,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// landing pad -- so the pad stands in for the tag.
 		if (LispMacroExpander.establishesLandingPad(program)) {
 			used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.PROGRAM_ERROR_CLASS_NAME);
+			// The same for a failed open's / %file-error's file-error (lowerFileError).
+			for (String site : LispMacroExpander.FILE_ERROR_SITES) {
+				if (symbols.contains(site)) {
+					used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.FILE_ERROR_CLASS_NAME);
+					break;
+				}
+			}
 		}
 		for (String tag : closRegistry.layouts().keySet()) {
 			String bare = tag.startsWith(LispLayout.CLASS_TAG_PREFIX)

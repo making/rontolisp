@@ -547,6 +547,9 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.STREAM_ERROR_STREAM, """
 				(defun stream-error-stream (condition) (slot-value condition 'stream))
 				""");
+		SOURCES.put(LispNames.FILE_ERROR_PATHNAME, """
+				(defun file-error-pathname (condition) (slot-value condition 'pathname))
+				""");
 		// Undoes the |...|-framing todo 626 gave prin1-to-string's spelling of a symbol
 		// whose name is not upcase-invariant. type-of and symbol-package both read a
 		// KNOWN internal tag's prefix or a qualifier's colon off prin1-to-string's text
@@ -1161,13 +1164,13 @@ public final class LispPreludeLibrary {
 				""");
 		// delete-file: the signalling ANSI surface over the %delete-file primitive (nil
 		// when the file is not there), so the "a missing file is a file-error" rule has
-		// one definition. mito's generate-migrations deletes superseded migration files
-		// with it.
+		// one definition -- %file-error, carrying the pathname as given. mito's
+		// generate-migrations deletes superseded migration files with it.
 		SOURCES.put(LispNames.DELETE_FILE, """
 				(defun delete-file (%dfl-path)
 				  (if (%delete-file (namestring %dfl-path))
 				      t
-				      (error "DELETE-FILE: cannot delete ~A" %dfl-path)))
+				      (%file-error %dfl-path (format nil "DELETE-FILE: cannot delete ~A" %dfl-path))))
 				""");
 		// rename-file: the signalling ANSI surface over the %rename-file primitive (nil
 		// when the source is not there or the host refused), the delete-file shape one
@@ -1182,7 +1185,8 @@ public final class LispPreludeLibrary {
 				        (%rnf-to (namestring (merge-pathnames %rnf-new-name %rnf-file))))
 				    (if (%rename-file %rnf-from %rnf-to)
 				        (pathname %rnf-to)
-				        (error "RENAME-FILE: cannot rename ~A to ~A" %rnf-from %rnf-to))))
+				        (%file-error %rnf-file
+				                     (format nil "RENAME-FILE: cannot rename ~A to ~A" %rnf-from %rnf-to)))))
 				""");
 		// y-or-n-p: prompt + a line of standard input, re-asking on anything that is
 		// neither y nor n. Lite: CL reads single characters without echo, and end of
@@ -1626,7 +1630,7 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.TRUENAME, """
 				(defun truename (%tn-path)
 				  (or (probe-file %tn-path)
-				      (error "TRUENAME: no such file")))
+				      (%file-error %tn-path (format nil "TRUENAME: no such file ~A" %tn-path))))
 				""");
 		// probe-file: the pathname VALUE over the namestring the %probe-file primitive
 		// answers (the primitive stays string-in/string-out per backend), nil when the

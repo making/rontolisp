@@ -11,3 +11,5 @@ Opens a file and returns a stream. The optional direction is `:input` (the defau
 ```
 
 This opens `data.txt` for input, reads its first line, and closes the stream. Passing `:output` instead would create or truncate the file for writing; `(open "data.bin" :input '(unsigned-byte 8))` opens the same kind of handle in binary mode.
+
+A file that cannot be opened signals a `file-error` on every backend, reporting `OPEN: cannot open file <name>`; [`file-error-pathname`](file-error-pathname.md) answers the designator that was passed.

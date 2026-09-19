@@ -4016,7 +4016,7 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(im.maxStack())
 									.writeU2(im.maxLocals())
 									.writeCode((Object[]) im.code().toArray(new Integer[0]))
-									.writeU2(0)
+									.writeExceptionTable(im.exceptionTable())
 									.writeU2(0);
 							})));
 				}

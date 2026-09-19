@@ -438,6 +438,7 @@
 | `type-error-expected-type` | `(type-error-expected-type c)` | `type-error` の `expected-type` スロット |
 | `cell-error-name` | `(cell-error-name c)` | `cell-error`(`unbound-variable`、`undefined-function`、`unbound-slot`)の `name` スロット |
 | `unbound-slot-instance` | `(unbound-slot-instance c)` | スロットが未束縛だったオブジェクト |
+| `file-error-pathname` | `(file-error-pathname c)` | 失敗したファイル操作に渡されたパス名 |
 | `print-object` | `(print-object obj stream)` | プリンタが参照するジェネリック関数。メソッドを定義すると、その型のインスタンスの出力を制御できます |
 | `find-restart` | `(find-restart 'retry c)` | その名前を持つ最内のアクティブなリスタートを第一級オブジェクトとして返します。なければ `nil`。lite: コンディション引数は無視されます |
 | `invoke-restart` | `(invoke-restart :reconnect host)` | 名前(シンボル/キーワード)またはオブジェクトでリスタートを引数付きで起動します。`restart-case` のリスタートなら制御はその節へ移ります |

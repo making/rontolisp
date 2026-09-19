@@ -103,6 +103,15 @@ public final class ClosRegistry {
 	public static final String READER_ERROR_CLASS_NAME = "READER-ERROR";
 
 	/**
+	 * The condition class a failed file operation signals ({@code open},
+	 * {@code delete-file}, {@code rename-file}, {@code truename}). Its layout is
+	 * {@code [PATHNAME, FORMAT-CONTROL, FORMAT-ARGUMENTS]}: the designator
+	 * {@code file-error-pathname} reads back, plus the message-carrying pair every
+	 * built-in-signaled class has.
+	 */
+	public static final String FILE_ERROR_CLASS_NAME = "FILE-ERROR";
+
+	/**
 	 * The registered {@code :report} of {@link #END_OF_FILE_CLASS_NAME} -- the message an
 	 * uncaught end of file prints on every backend.
 	 */
@@ -308,15 +317,15 @@ public final class ClosRegistry {
 	 * symbol by construction rather than by a second list somebody has to remember.
 	 *
 	 * <p>
-	 * Seven classes carry {@code format-control}/{@code format-arguments} beyond CLHS's
+	 * Eight classes carry {@code format-control}/{@code format-arguments} beyond CLHS's
 	 * slot lists ({@code type-error}, {@code arithmetic-error}, {@code program-error},
-	 * {@code package-error}, {@code reader-error} and the two {@code cell-error} leaves):
-	 * those are the classes a BUILT-IN error is synthesized as, and the two slots are how
-	 * the synthesized instance carries the message it reports -- the same
-	 * {@code simple-condition} report path every other message- bearing condition uses,
-	 * rather than a second message channel. {@code type-error} gaining them is what
-	 * leaves {@code simple-type-error} with the identical layout (it adds nothing now),
-	 * so the {@code %obj-ref} indexes of both are unchanged.
+	 * {@code package-error}, {@code reader-error}, {@code file-error} and the two
+	 * {@code cell-error} leaves): those are the classes a BUILT-IN error is synthesized
+	 * as, and the two slots are how the synthesized instance carries the message it
+	 * reports -- the same {@code simple-condition} report path every other message-
+	 * bearing condition uses, rather than a second message channel. {@code type-error}
+	 * gaining them is what leaves {@code simple-type-error} with the identical layout (it
+	 * adds nothing now), so the {@code %obj-ref} indexes of both are unchanged.
 	 */
 	private static final List<ConditionSeed> CONDITION_SEEDS = List.of(seed("CONDITION", null),
 			seed("SERIOUS-CONDITION", "CONDITION"), seed("ERROR", "SERIOUS-CONDITION"),
@@ -335,7 +344,11 @@ public final class ClosRegistry {
 			// reader-error inherit it, and stream-error-stream reads it back.
 			seed("STREAM-ERROR", "ERROR", "STREAM"), seed(END_OF_FILE_CLASS_NAME, "STREAM-ERROR"),
 			seed(READER_ERROR_CLASS_NAME, "PARSE-ERROR", "STREAM", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
-			seed("FILE-ERROR", "ERROR"),
+			// file-error carries the pathname the failed operation was given
+			// (file-error-pathname) plus the message-carrying pair: a built-in signals it
+			// (open, delete-file, rename-file, truename), so it reports like the other
+			// built-in-signaled classes.
+			seed(FILE_ERROR_CLASS_NAME, "ERROR", "PATHNAME", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
 			seed(ARITHMETIC_ERROR_CLASS_NAME, "ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
 			seed(DIVISION_BY_ZERO_CLASS_NAME, ARITHMETIC_ERROR_CLASS_NAME), seed("CONTROL-ERROR", "ERROR"),
 			seed(PROGRAM_ERROR_CLASS_NAME, "ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
@@ -564,6 +577,24 @@ public final class ClosRegistry {
 				LispLayout.ofClass(READER_ERROR_CLASS_NAME, List.of("STREAM", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
 						List.of(LispNil.INSTANCE, LispNil.INSTANCE, LispNil.INSTANCE)),
 				new LispVal[] { stream, message, LispNil.INSTANCE });
+	}
+
+	/**
+	 * A fresh {@code file-error} condition instance carrying the pathname and the
+	 * message, for the interpreter's file operations. The class is SEEDED, so its layout
+	 * is the same {@code [PATHNAME, FORMAT-CONTROL, FORMAT-ARGUMENTS]} shape in every
+	 * registry and can be built without one (a unit test pins it); the message rides
+	 * {@code format-control}, so the instance reports like the {@code simple-condition}
+	 * family.
+	 * @param pathname the designator the failed operation was given
+	 * @param message the reported message
+	 * @return the condition instance
+	 */
+	public static LispVal newFileErrorCondition(LispVal pathname, LispVal message) {
+		return new LispInstance(
+				LispLayout.ofClass(FILE_ERROR_CLASS_NAME, List.of("PATHNAME", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
+						List.of(LispNil.INSTANCE, LispNil.INSTANCE, LispNil.INSTANCE)),
+				new LispVal[] { pathname, message, LispNil.INSTANCE });
 	}
 
 	/**

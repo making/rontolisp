@@ -128,12 +128,23 @@ Pinned by `LispEvaluatorTest#readFromStringAnswersTheStopIndexAsItsSecondValue`,
   (`compiler.OpenModes.staticMode`, used by `Jvm/WasmOpenCompiler`); `open` therefore has no
   `BuiltinFunctionWrappers` entry. Modes 0 text-in / 1 text-out / 2 bin-in / 3 bin-out
   (`OUTPUT_BIT`/`BINARY_BIT`), plus `APPEND_BIT` (4) -> 5 / 7.
-- **A failed `open` SIGNALS on every backend.** WASM `_open` answers `ref.null eq` on a non-zero
-  errno; the null check and signal live at the call site (`WasmOpenCompiler`), catchable in EH mode.
-  It used to emit `unreachable`, uncatchable in any mode. **It signals a SIMPLE-ERROR, not a
-  `file-error`, on all four** (measured 2026-09-19; `handler-case` on `file-error` misses it) --
-  ANSI says `file-error`. The Scheme openers convert it (`.kb/scheme-frontend.md`, "File
-  ports"); the Common Lisp fix is `.todo/890`.
+- **A failed `open` signals a `file-error` on every backend**, carrying the designator as given
+  (`file-error-pathname`) and reporting `OPEN: cannot open file <namestring>` -- one text on all
+  four. Interpreter: the `open` built-in throws `ClosRegistry.newFileErrorCondition`. Compiled:
+  ONE shared call-site lowering, `LispMacroExpander.expandOpenFileErrorSignal` (the
+  `expandReadEofSignal` shape), applied by `Jvm/WasmExprCompiler`'s `open` case -- the backend
+  opens through the internal `%open-or-nil` (`Jvm/WasmOpenCompiler`), which answers nil on
+  failure, and the expansion tests it and calls `%file-error`. WASM `_open` answers
+  `ref.null eq` on a non-zero errno; JVM `_open` catches `IOException` in its own exception
+  table (`IoMethod.exceptionTable`, the one runtime method that has one) and answers null. A
+  computed option dispatches onto literal `open` leaves FIRST, each leaf lowering separately.
+  `%file-error` itself is the `%program-error` split (`lowerFileError`): a typed
+  `%error-cond` over a `%obj-new` behind a landing pad, plain `%error` otherwise -- so the
+  whole-program scans cannot see the construction and take `LispMacroExpander.FILE_ERROR_SITES`'
+  presence for the tag (`conditionNarrowing`, `WasmLispCompiler.usedLayoutTags`). Cost
+  (2026-09-19, `--optimize=size`): `with-open-file` + `read-line` without a handler +39 B P1
+  / +37 B component / +213 B JVM class; inside `handler-case` +172..+243 B WASM, +370..+501 B
+  JVM.
 - `--component`: `adapter.wat`'s `$ensure_preopen` read the first `get-directories` element
   unconditionally, handing `open-at` handle 0 with no `--dir` (`unknown handle index 0` trap); it now
   caches `-1` and `$path_open` turns that into an errno. Hit `probe-file` too.
@@ -418,7 +429,7 @@ paths (`.todo/212`).
   path as a directory, which turns "already there" into T whatever errno the host used.
 - `delete-file` over `%delete-file`, which answers nil rather than signalling when the file is absent
   or the host refused, so "a missing file is an error" lives once in the Lisp above it -- a
-  SIMPLE-ERROR today, not the `file-error` its comments claim (measured 2026-09-19, `.todo/890`). Both
+  `file-error` through `%file-error`, as are `rename-file`'s and `truename`'s. Both
   WASM backends unlink for real now (`_delete_file` over the FOURTEENTH preview1 import,
   `path_unlink_file`, called by `WasmDeleteFileCompiler`). mito's `generate-migrations`
   deletes superseded migration files on all four. Removing a DIRECTORY still signals:

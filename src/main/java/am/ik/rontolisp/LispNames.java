@@ -2588,6 +2588,29 @@ public final class LispNames {
 	public static final String PROGRAM_ERROR_INTERNAL = "%PROGRAM-ERROR";
 
 	/**
+	 * Internal two-argument primitive {@code (%file-error pathname message)} that signals
+	 * a {@code file-error} carrying the pathname and reporting the message: what a failed
+	 * {@code open} lowers to on the compiled backends
+	 * ({@code LispMacroExpander.expandOpenFileErrorSignal}) and what the prelude
+	 * {@code delete-file} / {@code rename-file} / {@code truename} call. The interpreter
+	 * throws the instance directly; the compiled backends lower it to
+	 * {@link #ERROR_COND_INTERNAL} over a fresh {@code file-error} instance where a
+	 * handler landing pad exists and to {@link #ERROR_INTERNAL} otherwise
+	 * ({@code LispMacroExpander.lowerFileError}), the {@link #PROGRAM_ERROR_INTERNAL}
+	 * split.
+	 */
+	public static final String FILE_ERROR_INTERNAL = "%FILE-ERROR";
+
+	/**
+	 * Internal {@code (%open-or-nil path direction [element-type])}: {@code open} in the
+	 * positional shape, answering nil where {@code open} would fail. Only the compiled
+	 * backends' {@code open} lowering produces it
+	 * ({@code LispMacroExpander.expandOpenFileErrorSignal}), which tests the nil and
+	 * signals the {@code file-error} itself.
+	 */
+	public static final String OPEN_OR_NIL_INTERNAL = "%OPEN-OR-NIL";
+
+	/**
 	 * The {@code signal} macro (signal a non-fatal condition). Same designator surface as
 	 * {@link #ERROR}; when no handler is established the signal returns nil (the CL
 	 * fall-through), which is the only behavior on the WASM backends.
@@ -8413,6 +8436,12 @@ public final class LispNames {
 	 * {@code stream-error} (so {@code end-of-file} and {@code reader-error}) carries.
 	 */
 	public static final String STREAM_ERROR_STREAM = "STREAM-ERROR-STREAM";
+
+	/**
+	 * The {@code file-error-pathname} condition reader: the {@code pathname} slot a
+	 * {@code file-error} carries -- the designator the failed operation was given.
+	 */
+	public static final String FILE_ERROR_PATHNAME = "FILE-ERROR-PATHNAME";
 
 	/** The {@code simple-condition-format-control} condition reader. */
 	public static final String SIMPLE_CONDITION_FORMAT_CONTROL = "SIMPLE-CONDITION-FORMAT-CONTROL";

@@ -6081,6 +6081,15 @@ public final class LispEvaluator {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						message instanceof LispString s ? s.value() : message.display());
 			}
+			case LispNames.FILE_ERROR_INTERNAL: {
+				// (%file-error pathname message): the prelude file operations' signal, a
+				// file-error instance carrying the pathname as given.
+				List<LispVal> args = ((LispCons) cons.cdr()).toList();
+				LispVal pathname = eval(args.get(0), env);
+				LispVal message = eval(args.get(1), env);
+				String text = message instanceof LispString s ? s.value() : message.display();
+				throw new LispEvalException(text, ClosRegistry.newFileErrorCondition(pathname, new LispString(text)));
+			}
 			case LispNames.PRINT, LispNames.PRINC, LispNames.PRIN1, LispNames.PRINC_TO_STRING,
 					LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING, LispNames.PRINC_PIECE_INTERNAL,
 					LispNames.PRIN1_PIECE_INTERNAL: {
