@@ -7899,6 +7899,89 @@ public final class LispNames {
 	public static final String BROADCAST_STREAM_COMPONENTS = "%BROADCAST-STREAM-COMPONENTS";
 
 	/**
+	 * The {@code make-two-way-stream} prelude function: one input + one output stream as
+	 * one. A Gray stream subclassing both
+	 * {@code rontolisp:fundamental-character-input-stream} and
+	 * {@code rontolisp:fundamental-character-output-stream}; reading comes from the input
+	 * component, writing goes to the output one, and the two accessors
+	 * {@link #TWO_WAY_STREAM_INPUT_STREAM} / {@link #TWO_WAY_STREAM_OUTPUT_STREAM}
+	 * recover them. Prelude Lisp, no backend learns a new stream kind.
+	 */
+	public static final String MAKE_TWO_WAY_STREAM = "MAKE-TWO-WAY-STREAM";
+
+	/** {@code two-way-stream-input-stream}, the input accessor of a two-way stream. */
+	public static final String TWO_WAY_STREAM_INPUT_STREAM = "TWO-WAY-STREAM-INPUT-STREAM";
+
+	/** {@code two-way-stream-output-stream}, the output accessor of a two-way stream. */
+	public static final String TWO_WAY_STREAM_OUTPUT_STREAM = "TWO-WAY-STREAM-OUTPUT-STREAM";
+
+	/**
+	 * The {@code make-echo-stream} prelude function: a two-way stream whose input reads
+	 * are echoed to the output component. Subclass of {@link #TWO_WAY_STREAM_CLASS}.
+	 */
+	public static final String MAKE_ECHO_STREAM = "MAKE-ECHO-STREAM";
+
+	/** {@code echo-stream-input-stream}, the input accessor of an echo stream. */
+	public static final String ECHO_STREAM_INPUT_STREAM = "ECHO-STREAM-INPUT-STREAM";
+
+	/** {@code echo-stream-output-stream}, the output accessor of an echo stream. */
+	public static final String ECHO_STREAM_OUTPUT_STREAM = "ECHO-STREAM-OUTPUT-STREAM";
+
+	/**
+	 * The {@code make-concatenated-stream} prelude function: read the component streams
+	 * in order, dropping each at its end of file.
+	 */
+	public static final String MAKE_CONCATENATED_STREAM = "MAKE-CONCATENATED-STREAM";
+
+	/**
+	 * {@code concatenated-stream-streams}, the accessor returning a concatenated stream's
+	 * component list.
+	 */
+	public static final String CONCATENATED_STREAM_STREAMS = "CONCATENATED-STREAM-STREAMS";
+
+	/**
+	 * The {@code %two-way-stream} internal Gray class {@link #MAKE_TWO_WAY_STREAM}
+	 * instantiates. Owned by {@code cl} so the spliced prelude forms and a user program
+	 * in any package name the same class.
+	 */
+	public static final String TWO_WAY_STREAM_CLASS = "%TWO-WAY-STREAM";
+
+	/**
+	 * The {@code %two-way-input} internal input reader of {@link #TWO_WAY_STREAM_CLASS}.
+	 */
+	public static final String TWO_WAY_STREAM_INPUT_INTERNAL = "%TWO-WAY-INPUT";
+
+	/**
+	 * The {@code %two-way-output} internal output reader of
+	 * {@link #TWO_WAY_STREAM_CLASS}.
+	 */
+	public static final String TWO_WAY_STREAM_OUTPUT_INTERNAL = "%TWO-WAY-OUTPUT";
+
+	/**
+	 * The {@code %echo-stream} internal Gray class {@link #MAKE_ECHO_STREAM}
+	 * instantiates.
+	 */
+	public static final String ECHO_STREAM_CLASS = "%ECHO-STREAM";
+
+	/** The {@code %echo-input} internal input reader of {@link #ECHO_STREAM_CLASS}. */
+	public static final String ECHO_STREAM_INPUT_INTERNAL = "%ECHO-INPUT";
+
+	/** The {@code %echo-output} internal output reader of {@link #ECHO_STREAM_CLASS}. */
+	public static final String ECHO_STREAM_OUTPUT_INTERNAL = "%ECHO-OUTPUT";
+
+	/**
+	 * The {@code %concatenated-stream} internal Gray class
+	 * {@link #MAKE_CONCATENATED_STREAM} instantiates.
+	 */
+	public static final String CONCATENATED_STREAM_CLASS = "%CONCATENATED-STREAM";
+
+	/**
+	 * The {@code %concatenated-stream-streams} internal accessor of
+	 * {@link #CONCATENATED_STREAM_CLASS}.
+	 */
+	public static final String CONCATENATED_STREAM_STREAMS_INTERNAL = "%CONCATENATED-STREAM-STREAMS";
+
+	/**
 	 * The {@code pathnamep} built-in function: whether the value is a pathname -- an
 	 * instance of the fixed {@code LispLayout.PATHNAME} layout, the value {@code #P"..."}
 	 * denotes. A string is NOT one (restoring CL's rule); it answers exactly what

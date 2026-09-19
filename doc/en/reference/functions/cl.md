@@ -418,6 +418,14 @@ page.
 | `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | a stream forwarding every operation to the stream the named variable holds AT THAT MOMENT, for any symbol -- so rebinding the variable afterwards redirects it |
 | `synonym-stream-symbol` | `(synonym-stream-symbol s)` | the symbol a synonym stream forwards to |
 | `make-broadcast-stream` | `(make-broadcast-stream a b)` | an output stream fanning every write out to each component, in order; with no components, a discarding sink. A stream WITH components is a Gray stream and takes the whole output protocol |
+| `make-two-way-stream` | `(make-two-way-stream in out)` | one stream over an input and an output component: reads come from `in`, writes reach `out`. A Gray stream, so the read and write protocols both dispatch on it |
+| `two-way-stream-input-stream` | `(two-way-stream-input-stream s)` | the input component of a two-way stream |
+| `two-way-stream-output-stream` | `(two-way-stream-output-stream s)` | the output component of a two-way stream |
+| `make-echo-stream` | `(make-echo-stream in out)` | a two-way stream that also writes what it reads to the output component (the interactive-echo idiom) |
+| `echo-stream-input-stream` | `(echo-stream-input-stream s)` | the input component of an echo stream |
+| `echo-stream-output-stream` | `(echo-stream-output-stream s)` | the output component of an echo stream |
+| `make-concatenated-stream` | `(make-concatenated-stream a b)` | an input stream reading its components in order, dropping each at its end of file |
+| `concatenated-stream-streams` | `(concatenated-stream-streams s)` | the component list of a concatenated stream |
 | `pathnamep` | `(pathnamep #P"/tmp/x")` | `t` — whether the value is a pathname (the value `#P"..."` denotes); a string is NOT one, and it agrees with `(typep x 'pathname)` |
 | `input-stream-p` | `(input-stream-p s)` | `t` for any stream handle |
 | `output-stream-p` | `(output-stream-p s)` | `t` for any stream handle |

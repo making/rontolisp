@@ -20683,6 +20683,89 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void makeTwoWayStreamReadsAndWritesItsComponents() {
+		// The composite-stream prelude: a two-way stream is a Gray stream reading the
+		// input component and writing the output one; the read side answers :eof, the
+		// write side walks the built-ins, and the accessors recover both components.
+		assertThat(evalMulti("""
+				(let ((o (make-string-output-stream)))
+				  (let ((tw (make-two-way-stream (make-string-input-stream "AB") o)))
+				    (write-string "hello" tw)
+				    (write-char #\\! tw))
+				  (get-output-stream-string o))
+				""").print()).isEqualTo("\"hello!\"");
+		assertThat(evalMulti("""
+				(let ((tw (make-two-way-stream (make-string-input-stream "AB")
+				                                (make-string-output-stream))))
+				  (list (read-char tw) (read-char tw) (read-char tw nil :eof)))
+				""").print()).isEqualTo("(#\\A #\\B :EOF)");
+		assertThat(evalMulti("""
+				(let ((i (make-string-input-stream "x")) (o (make-string-output-stream)))
+				  (let ((tw (make-two-way-stream i o)))
+				    (list (eq (two-way-stream-input-stream tw) i)
+				          (eq (two-way-stream-output-stream tw) o))))
+				""").print()).isEqualTo("(T T)");
+	}
+
+	@Test
+	void makeEchoStreamEchoesWhatItReads() {
+		// An echo stream writes everything it reads to the output component, even the
+		// trailing newline read-line pulls.
+		assertThat(evalMulti("""
+				(let ((o (make-string-output-stream)))
+				  (let ((es (make-echo-stream (make-string-input-stream "ab\\n") o)))
+				    (list (read-line es)
+				          (get-output-stream-string o))))
+				""").print()).isEqualTo("(\"ab\" \"ab\n\")");
+		assertThat(evalMulti("""
+				(let ((i (make-string-input-stream "x")) (o (make-string-output-stream)))
+				  (let ((es (make-echo-stream i o)))
+				    (read-char es)
+				    (list (eq (echo-stream-input-stream es) i)
+				          (eq (echo-stream-output-stream es) o))))
+				""").print()).isEqualTo("(T T)");
+	}
+
+	@Test
+	void makeConcatenatedStreamReadsItsComponentsInOrder() {
+		// Each component is dropped at its end of file; a component-less stream reads
+		// :eof immediately, and the accessor returns the original component list.
+		assertThat(evalMulti("""
+				(let ((cs (make-concatenated-stream (make-string-input-stream "AB")
+				                                    (make-string-input-stream "CD"))))
+				  (list (read-char cs) (read-char cs) (read-char cs) (read-char cs)
+				        (read-char cs nil :eof)))
+				""").print()).isEqualTo("(#\\A #\\B #\\C #\\D :EOF)");
+		assertThat(evalMulti("""
+				(let ((s1 (make-string-input-stream "AB")) (s2 (make-string-input-stream "CD")))
+				  (let ((cs (make-concatenated-stream s1 s2)))
+				    (list (length (concatenated-stream-streams cs))
+				          (eq (car (concatenated-stream-streams cs)) s1))))
+				""").print()).isEqualTo("(2 T)");
+		assertThat(evalMulti("""
+				(let ((cs (make-concatenated-stream)))
+				  (read-char cs nil :eof))
+				""").print()).isEqualTo(":EOF");
+	}
+
+	@Test
+	void compositeStreamConstructorsAreFirstClass() {
+		// Prelude defuns are first-class for free, so #' and apply reach them like any
+		// other function.
+		assertThat(evalMulti("""
+				(let ((tw (funcall #'make-two-way-stream
+				                   (make-string-input-stream "x")
+				                   (make-string-output-stream))))
+				  (read-char tw))
+				""").print()).isEqualTo("#\\x");
+		assertThat(evalMulti("""
+				(let ((cs (apply #'make-concatenated-stream
+				                 (list (make-string-input-stream "M")))))
+				  (read-char cs))
+				""").print()).isEqualTo("#\\M");
+	}
+
+	@Test
 	void grayCloseStandsDownForAProgramThatDefinesACloseMethod() {
 		// close is CL's own generic: a program that methods it owns the operator on
 		// every backend, and the Gray default must not get in front of it.

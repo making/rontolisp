@@ -11880,6 +11880,32 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compositeStreamConstructors() throws Exception {
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(print (let ((o (make-string-output-stream)))
+					         (let ((tw (make-two-way-stream (make-string-input-stream "AB") o)))
+					           (write-string "hi" tw)
+					           (write-char #\\! tw)
+					           (get-output-stream-string o))))
+					(print (let ((o (make-string-output-stream)))
+					         (let ((es (make-echo-stream (make-string-input-stream "ab") o)))
+					           (list (read-char es) (read-char es) (get-output-stream-string o)))))
+					(print (let ((cs (make-concatenated-stream (make-string-input-stream "AB")
+					                                            (make-string-input-stream "CD"))))
+					         (list (read-char cs) (read-char cs) (read-char cs) (read-char cs)
+					               (read-char cs nil :eof))))
+					(print (let ((i (make-string-input-stream "x")) (o (make-string-output-stream)))
+					         (let ((tw (make-two-way-stream i o)))
+					           (list (eq (two-way-stream-input-stream tw) i)
+					                 (eq (two-way-stream-output-stream tw) o)))))
+					(print (let ((tw (funcall #'make-two-way-stream (make-string-input-stream "x")
+					                           (make-string-output-stream))))
+					         (list (read-char tw) (read-char tw nil :eof))))
+					"""))))).isEqualTo("\"hi!\"\n(#\\a #\\b \"ab\")\n(#\\A #\\B #\\C #\\D :EOF)\n(T T)\n(#\\x :EOF)");
+	}
+
+	@Test
 	void grayStreamInstanceDispatch() throws Exception {
 		// The GrayStreamsLibrary pre-pass splices gray.lisp and rewrites the
 		// write-string/write-char call sites onto the dispatch helpers, mirroring the
@@ -11901,8 +11927,9 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void grayOutputProtocolWidening() throws Exception {
-		// the line-oriented and print-family operators reach a Gray
+	void grayOutputProtocolWidening() throws Exception { // the line-oriented and
+															// print-family operators
+															// reach a Gray
 		// instance on the WASM path too -- a class defining ONLY stream-write-char
 		// (rove's indent-stream shape) answers all of them, and only the dispatch
 		// helpers the rewrites produced are spliced.

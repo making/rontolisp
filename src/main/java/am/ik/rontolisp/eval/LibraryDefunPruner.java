@@ -284,17 +284,14 @@ public final class LibraryDefunPruner {
 		// which also runs inside the expression compilers.
 		// %call-with-input / %call-with-output are reached from uiop:with-input's /
 		// uiop:with-output's expansions the same way (.todo/359).
-		for (String synthesized : List.of(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, LispNames.TEMP_FILE_NAME,
-				LispNames.DELETE_FILE_IF_EXISTS, LispNames.STREAM_TARGET, LispNames.PRINT_CASED_INTERNAL,
-				LispNames.PRINT_CASE_FOLD_INTERNAL, LispNames.PRINT_RADIXED_INTERNAL, LispNames.PROBE_FILE,
-				LispNames.MAKE_ARRAY_ET_INTERNAL, LispNames.MAKE_ARRAY_ET_FP_INTERNAL,
-				LispNames.RUNTIME_PACKAGES_INTERNAL, LispNames.DO_SYMBOLS_LIST_INTERNAL,
-				LispNames.PACKAGE_SYMBOLS_WHERE_INTERNAL, LispNames.CALL_WITH_INPUT_INTERNAL,
-				LispNames.CALL_WITH_OUTPUT_INTERNAL)) {
-			if (LispPreludeLibrary.referencedBySurfaceForm(synthesized, resolved, true)) {
-				roots.add(LispPreludeLibrary.definedName(synthesized));
-			}
-		}
+		//
+		// The surface facts are read off the LIVE forms, not the whole spliced program:
+		// a library splices whole, so a dead library defun spelling, say,
+		// *error-output* would otherwise root %stream-target -- whose computed funcall
+		// then switches the JVM eval runtime on -- in a program that can never build a
+		// stream (every lowered Scheme program did: 74 KB of class for a lone display).
+		// Each check is monotonic in the forms it reads, so a fixpoint over the walk
+		// below is exact: see rootSynthesized.
 		for (String name : roots) {
 			if (live.add(name)) {
 				queue.add(name);
@@ -309,44 +306,49 @@ public final class LibraryDefunPruner {
 						gateContext(method.getKey(), provenance, instantiatorGates), armsByGate, allArms);
 			}
 		}
-		while (!queue.isEmpty()) {
-			String name = queue.remove();
-			List<Integer> indexes = defsByName.get(name);
-			if (indexes != null) {
-				for (int index : indexes) {
-					if (scanned.add(index)) {
-						// A kept form's references go live -- except a CLOS
-						// definition's OWN keys: its header spells its class name and
-						// accessors, and counting those as references would satisfy its
-						// own instantiator gate (an accessor-kept class would read as
-						// instantiable). References BETWEEN forms (a superclass list, an
-						// :include parent, a specializer) are not the form's own keys
-						// and still count.
-						List<String> ownKeys = closCandidates.keysAt(index);
-						enqueueReferences(resolved.get(index), prunable, live, queue,
-								ownKeys == null ? Set.of() : Set.copyOf(ownKeys),
-								gateContext(index, provenance, instantiatorGates), armsByGate, allArms);
+		do {
+			while (!queue.isEmpty()) {
+				String name = queue.remove();
+				List<Integer> indexes = defsByName.get(name);
+				if (indexes != null) {
+					for (int index : indexes) {
+						if (scanned.add(index)) {
+							// A kept form's references go live -- except a CLOS
+							// definition's OWN keys: its header spells its class name and
+							// accessors, and counting those as references would satisfy
+							// its
+							// own instantiator gate (an accessor-kept class would read as
+							// instantiable). References BETWEEN forms (a superclass list,
+							// an
+							// :include parent, a specializer) are not the form's own keys
+							// and still count.
+							List<String> ownKeys = closCandidates.keysAt(index);
+							enqueueReferences(resolved.get(index), prunable, live, queue,
+									ownKeys == null ? Set.of() : Set.copyOf(ownKeys),
+									gateContext(index, provenance, instantiatorGates), armsByGate, allArms);
+						}
 					}
 				}
-			}
-			List<Integer> gated = methodsByGateName.get(name);
-			if (gated != null) {
-				for (int index : gated) {
-					MethodGates gates = closCandidates.methodGates().get(index);
-					if (gates != null && !keptMethods.contains(index) && gates.satisfiedBy(live)) {
-						keptMethods.add(index);
-						enqueueReferences(resolved.get(index), prunable, live, queue, Set.of(),
-								gateContext(index, provenance, instantiatorGates), armsByGate, allArms);
+				List<Integer> gated = methodsByGateName.get(name);
+				if (gated != null) {
+					for (int index : gated) {
+						MethodGates gates = closCandidates.methodGates().get(index);
+						if (gates != null && !keptMethods.contains(index) && gates.satisfiedBy(live)) {
+							keptMethods.add(index);
+							enqueueReferences(resolved.get(index), prunable, live, queue, Set.of(),
+									gateContext(index, provenance, instantiatorGates), armsByGate, allArms);
+						}
 					}
 				}
-			}
-			List<GatedArm> armsOpened = armsByGate.get(name);
-			if (armsOpened != null) {
-				for (GatedArm arm : armsOpened) {
-					openArm(arm, live, queue);
+				List<GatedArm> armsOpened = armsByGate.get(name);
+				if (armsOpened != null) {
+					for (GatedArm arm : armsOpened) {
+						openArm(arm, live, queue);
+					}
 				}
 			}
 		}
+		while (rootSynthesized(resolved, keysByIndex, closCandidates, provenance, scanned, keptMethods, live, queue));
 		// An arm still closed at the end never runs (no instantiator of its head is
 		// live): delete it from its surviving form, because its body may name pruned
 		// definitions that would no longer compile.
@@ -381,6 +383,53 @@ public final class LibraryDefunPruner {
 			}
 		}
 		return out.size() == forms.size() && !rewritten ? forms : out;
+	}
+
+	/**
+	 * The prelude entries reached only from calls the expression compilers synthesize
+	 * after this pass (see the comment at the walk's roots): each is selected by a
+	 * surface fact of the program ({@link LispPreludeLibrary#referencedBySurfaceForm}).
+	 */
+	private static final List<String> SYNTHESIZED_ENTRIES = List.of(LispNames.MAKE_BROADCAST_STREAM_INTERNAL,
+			LispNames.TEMP_FILE_NAME, LispNames.DELETE_FILE_IF_EXISTS, LispNames.STREAM_TARGET,
+			LispNames.PRINT_CASED_INTERNAL, LispNames.PRINT_CASE_FOLD_INTERNAL, LispNames.PRINT_RADIXED_INTERNAL,
+			LispNames.PROBE_FILE, LispNames.MAKE_ARRAY_ET_INTERNAL, LispNames.MAKE_ARRAY_ET_FP_INTERNAL,
+			LispNames.RUNTIME_PACKAGES_INTERNAL, LispNames.DO_SYMBOLS_LIST_INTERNAL,
+			LispNames.PACKAGE_SYMBOLS_WHERE_INTERNAL, LispNames.CALL_WITH_INPUT_INTERNAL,
+			LispNames.CALL_WITH_OUTPUT_INTERNAL);
+
+	/**
+	 * Roots every synthesized-call entry whose surface fact the forms kept SO FAR show,
+	 * and answers whether one was added (the walk then runs again). Read off the live
+	 * forms only -- the roots, the scanned definitions and the kept methods -- because a
+	 * dead library definition's spelling says nothing about what the program can do.
+	 * Every check is "some form spells X", monotonic in the forms, so iterating to the
+	 * fixpoint roots exactly what a check over the final live set would.
+	 */
+	private static boolean rootSynthesized(List<LispVal> resolved, Map<Integer, List<String>> keysByIndex,
+			Candidates closCandidates, Provenance provenance, Set<Integer> scanned, Set<Integer> keptMethods,
+			Set<String> live, Deque<String> queue) {
+		List<LispVal> liveForms = new ArrayList<>();
+		for (int i = 0; i < resolved.size(); i++) {
+			boolean root = !keysByIndex.containsKey(i) && !closCandidates.methodGates().containsKey(i)
+					&& !provenance.isMarker(i);
+			if (root || scanned.contains(i) || keptMethods.contains(i)) {
+				liveForms.add(resolved.get(i));
+			}
+		}
+		boolean added = false;
+		for (String synthesized : SYNTHESIZED_ENTRIES) {
+			// The surface check first: definedName answers only for an entry the
+			// prelude defines.
+			if (LispPreludeLibrary.referencedBySurfaceForm(synthesized, liveForms, true)) {
+				String name = LispPreludeLibrary.definedName(synthesized);
+				if (live.add(name)) {
+					queue.add(name);
+					added = true;
+				}
+			}
+		}
+		return added;
 	}
 
 	/** The gate-scan context for a form, or null when arm gating cannot apply to it. */
