@@ -1087,7 +1087,7 @@ final class SchemeLowering {
 		LispVal rest = datum;
 		while (rest instanceof LispCons cell) {
 			switch (cell.car()) {
-				case LispSymbol part when !part.equals(SchemeReader.TRUE) && !part.equals(SchemeReader.FALSE) ->
+				case LispSymbol part when part != SchemeReader.TRUE && part != SchemeReader.FALSE ->
 					name.add(part.name());
 				case LispInteger integer when integer.value() >= 0 -> name.add(Long.toString(integer.value()));
 				default -> throw error("malformed library name: " + SchemeExpander.written(datum), form);
@@ -1909,7 +1909,7 @@ final class SchemeLowering {
 				constructorFields.add(fieldName);
 			}
 		}
-		else if (parts.get(2) instanceof LispSymbol bare && !bare.equals(SchemeReader.FALSE)) {
+		else if (parts.get(2) instanceof LispSymbol bare && bare != SchemeReader.FALSE) {
 			constructor = bare;
 			constructorFields.addAll(fields);
 		}
@@ -1989,7 +1989,8 @@ final class SchemeLowering {
 			return known;
 		}
 		RecordType type = recordType(form);
-		String base = this.prefix + SchemeNames.PREFIX + "%[" + this.enclosing + " " + name(type.name());
+		String base = this.prefix + SchemeNames.PREFIX + "%[" + SchemeNames.component(this.enclosing) + " "
+				+ SchemeNames.component(name(type.name()));
 		String candidate = base + "]";
 		for (int ordinal = 2; !this.internalRecordNames.add(candidate); ordinal++) {
 			candidate = base + " " + ordinal + "]";
@@ -2102,10 +2103,10 @@ final class SchemeLowering {
 	private LispVal atom(LispVal expression, Scope scope) {
 		return switch (expression) {
 			case LispSymbol identifier -> {
-				if (identifier.equals(SchemeReader.TRUE)) {
+				if (identifier == SchemeReader.TRUE) {
 					yield LispTrue.INSTANCE;
 				}
-				yield identifier.equals(SchemeReader.FALSE) ? this.falseVariable : reference(identifier, scope);
+				yield identifier == SchemeReader.FALSE ? this.falseVariable : reference(identifier, scope);
 			}
 			case LispArray vector -> list(symbol("QUOTE"), datum(vector));
 			default -> expression;
@@ -2422,11 +2423,11 @@ final class SchemeLowering {
 				new LispCons(symbol("FUNCALL"), new LispCons(ensure(variable.symbol()), listOf(arguments)));
 			case null, default -> {
 				if (call.operator() instanceof LispSymbol head) {
-					if (head.equals(SchemeReader.FALSE)) {
+					if (head == SchemeReader.FALSE) {
 						yield new LispCons(symbol("FUNCALL"),
 								new LispCons(ensure(this.falseVariable), listOf(arguments)));
 					}
-					if (head.equals(SchemeReader.TRUE)) {
+					if (head == SchemeReader.TRUE) {
 						yield new LispCons(symbol("FUNCALL"),
 								new LispCons(ensure(LispTrue.INSTANCE), listOf(arguments)));
 					}
@@ -2540,7 +2541,7 @@ final class SchemeLowering {
 	// ------------------------------------------------------------------ tests
 
 	private Test test(LispVal expression, Scope scope) {
-		if (expression.equals(SchemeReader.FALSE)) {
+		if (expression == SchemeReader.FALSE) {
 			return new Test(LispNil.INSTANCE, false);
 		}
 		if (!(expression instanceof LispCons form)) {
@@ -2563,7 +2564,7 @@ final class SchemeLowering {
 				return new Test(single(form), false);
 			}
 			case Syntax syntax when syntax.core() == Core.QUOTE -> {
-				return new Test(single(form).equals(SchemeReader.FALSE) ? LispNil.INSTANCE : LispTrue.INSTANCE, false);
+				return new Test(single(form) == SchemeReader.FALSE ? LispNil.INSTANCE : LispTrue.INSTANCE, false);
 			}
 			case Builtin builtin when builtin.entry().name().equals("not") && operands.size() == 1 -> {
 				Test inner = test(operands.get(0), scope);
@@ -2592,7 +2593,7 @@ final class SchemeLowering {
 	// Whether the expression can only answer #t or #f, so its VALUE is (if test t false)
 	// rather than a temporary per `or` operand.
 	private boolean isBoolean(LispVal expression, Scope scope) {
-		if (expression.equals(SchemeReader.TRUE) || expression.equals(SchemeReader.FALSE)) {
+		if (expression == SchemeReader.TRUE || expression == SchemeReader.FALSE) {
 			return true;
 		}
 		if (!(expression instanceof LispCons form && form.car() instanceof LispSymbol head)) {
@@ -3205,10 +3206,10 @@ final class SchemeLowering {
 	private LispVal datum(LispVal datum) {
 		return switch (datum) {
 			case LispSymbol symbol -> {
-				if (symbol.equals(SchemeReader.TRUE)) {
+				if (symbol == SchemeReader.TRUE) {
 					yield LispTrue.INSTANCE;
 				}
-				yield symbol.equals(SchemeReader.FALSE) ? symbol("#f") : symbol(SchemeNames.mangle(symbol.name()));
+				yield symbol == SchemeReader.FALSE ? symbol("#f") : symbol(SchemeNames.mangle(symbol.name()));
 			}
 			case LispCons cons -> {
 				List<LispVal> elements = new ArrayList<>();
@@ -3368,8 +3369,7 @@ final class SchemeLowering {
 	}
 
 	private LispSymbol identifier(LispVal datum, LispCons form) {
-		if (datum instanceof LispSymbol symbol && !symbol.equals(SchemeReader.TRUE)
-				&& !symbol.equals(SchemeReader.FALSE)) {
+		if (datum instanceof LispSymbol symbol && symbol != SchemeReader.TRUE && symbol != SchemeReader.FALSE) {
 			return symbol;
 		}
 		throw error("expected an identifier, got " + datum.print(), form);

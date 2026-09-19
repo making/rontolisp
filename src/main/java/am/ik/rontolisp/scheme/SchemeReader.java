@@ -5,6 +5,7 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import am.ik.rontolisp.LispArray;
@@ -36,8 +37,9 @@ import org.jspecify.annotations.Nullable;
  * other pass does: an identifier is a {@link LispSymbol} holding its spelling VERBATIM
  * (mangling is the lowering's job), the empty list is {@link LispNil}, a vector a
  * {@link LispArray}, a bytevector an 8-bit {@link LispIntVector}, and the two booleans
- * are the symbols {@link #TRUE} / {@link #FALSE}, whose {@code #} no identifier can start
- * with.
+ * are the symbols {@link #TRUE} / {@link #FALSE}, compared by IDENTITY
+ * ({@link #isBoolean}): {@code |#t|} is an identifier spelled like one, an equal but
+ * distinct symbol.
  *
  * <p>
  * Every list's head cons is recorded with {@link SourceProvenance}, like
@@ -56,10 +58,22 @@ final class SchemeReader {
 
 	private static final LispSymbol CLOSE = new LispSymbol(")");
 
+	private static final List<String> INFINITIES_AND_NANS = List.of("+inf.0", "-inf.0", "+nan.0", "-nan.0");
+
 	private static final Map<String, Integer> CHARACTER_NAMES = Map.ofEntries(Map.entry("alarm", 0x07),
 			Map.entry("backspace", 0x08), Map.entry("delete", 0x7f), Map.entry("escape", 0x1b),
 			Map.entry("newline", 0x0a), Map.entry("null", 0x00), Map.entry("nul", 0x00), Map.entry("return", 0x0d),
 			Map.entry("space", 0x20), Map.entry("tab", 0x09), Map.entry("linefeed", 0x0a));
+
+	/**
+	 * Whether the datum is one of the two booleans the reader answers, rather than an
+	 * identifier spelled {@code |#t|} or {@code |#f|}.
+	 * @param datum a datum
+	 * @return {@code true} for {@link #TRUE} and {@link #FALSE} themselves
+	 */
+	static boolean isBoolean(LispVal datum) {
+		return datum == TRUE || datum == FALSE;
+	}
 
 	private final String input;
 
@@ -224,7 +238,10 @@ final class SchemeReader {
 				this.pos++;
 				return readString(start);
 			}
-			case '|' -> throw error("|...| identifiers are not supported", start);
+			case '|' -> {
+				this.pos++;
+				return readVerticalLineIdentifier(start);
+			}
 			case '#' -> {
 				return readHash(start);
 			}
@@ -487,10 +504,41 @@ final class SchemeReader {
 		if (number != null) {
 			return number;
 		}
-		if (token.equals("+inf.0") || token.equals("-inf.0") || token.equals("+nan.0") || token.equals("-nan.0")) {
-			throw error("infinities and NaN are not supported: " + token, start);
-		}
 		return new LispSymbol(this.foldCase ? SchemeCharacters.foldcase(token) : token);
+	}
+
+	// |...|: any characters, with \| \\ \" \xHH; and the mnemonic escapes of a string.
+	// Never case-folded (Gauche leaves |ABC| alone under #!fold-case), and never a number
+	// or a dot: |1| and |.| are symbols.
+	private LispVal readVerticalLineIdentifier(int start) {
+		StringBuilder name = new StringBuilder();
+		while (true) {
+			if (this.pos >= this.input.length()) {
+				throw eof("unterminated '|' identifier", start);
+			}
+			char c = this.input.charAt(this.pos++);
+			if (c == '|') {
+				return new LispSymbol(name.toString());
+			}
+			if (c != '\\') {
+				name.append(c);
+				continue;
+			}
+			if (this.pos >= this.input.length()) {
+				throw eof("unterminated '|' identifier", start);
+			}
+			char escape = this.input.charAt(this.pos++);
+			switch (escape) {
+				case 'n' -> name.append('\n');
+				case 't' -> name.append('\t');
+				case 'r' -> name.append('\r');
+				case 'a' -> name.append((char) 0x07);
+				case 'b' -> name.append('\b');
+				case '|', '\\', '"' -> name.append(escape);
+				case 'x' -> name.appendCodePoint(hexEscape(start));
+				default -> throw error("unknown identifier escape: \\" + escape, this.pos - 2);
+			}
+		}
 	}
 
 	private String token() {
@@ -521,6 +569,15 @@ final class SchemeReader {
 	private static @Nullable LispVal number(String token, int radix) {
 		if (token.isEmpty()) {
 			return null;
+		}
+		if (INFINITIES_AND_NANS.contains(token.toLowerCase(Locale.ROOT))) {
+			// R7RS <infnan>, in any radix; case is insignificant in a number. A NaN's
+			// sign
+			// is not kept: every NaN is written +nan.0.
+			if (Character.toLowerCase(token.charAt(1)) == 'n') {
+				return new LispDouble(Double.NaN);
+			}
+			return new LispDouble(token.charAt(0) == '+' ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY);
 		}
 		char first = token.charAt(0);
 		boolean signed = first == '+' || first == '-';

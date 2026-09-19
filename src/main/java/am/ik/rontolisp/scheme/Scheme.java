@@ -108,6 +108,16 @@ public final class Scheme {
 	}
 
 	/**
+	 * Whether {@code write} puts a symbol between vertical lines ({@code |foo bar|}): its
+	 * Scheme spelling would not read back as that symbol.
+	 * @param symbolName the symbol's name as the lowering emits it
+	 * @return {@code true} when the printer needs its vertical-line arm for it
+	 */
+	public static boolean writtenWithVerticalLines(String symbolName) {
+		return SchemeNames.writtenWithVerticalLines(symbolName);
+	}
+
+	/**
 	 * Every name a file with no import resolves without defining: the procedure entries
 	 * and constants of the libraries the no-import default merges, plus the syntactic
 	 * keywords the lowering implements. A file that uses any other free name is a

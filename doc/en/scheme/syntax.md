@@ -1,7 +1,8 @@
 # Syntax
 
 - **Reader** (case-sensitive): `#t` `#f` `#true` `#false`, integers, decimals, rationals,
-  `#x` `#b` `#o` `#d`, `#\a` `#\space` `#\newline` `#\x41`, strings with
+  `+inf.0` `-inf.0` `+nan.0` `-nan.0` (in any case), `#x` `#b` `#o` `#d`, `|...|` identifiers
+  of any characters (with `\|` and the string escapes; never case-folded), `#\a` `#\space` `#\newline` `#\x41`, strings with
   `\n \t \" \\ \xHH;`, `#( )` vectors, `#u8( )` bytevectors, dotted pairs, `'` `` ` `` `,` `,@`, `;`, `#;`,
   `#| |#`, `#!fold-case` / `#!no-fold-case` (per file, folding identifiers and character
   names as [`string-foldcase`](reference/string-foldcase.md) does -- not strings, not the

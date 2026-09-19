@@ -151,7 +151,40 @@ class SchemeBuiltinsTest {
 				+ " (write (call-with-values (lambda () (string->symbol \"a b\")) list))", null)) {
 			evaluator.eval(form);
 		}
-		assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo("(abc)(a b)");
+		assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo("(abc)(|a b|)");
+	}
+
+	@Test
+	void writePutsASymbolBetweenVerticalLinesExactlyWhenTheFrontEndSaysSo() {
+		// The grammar is spelled twice: SchemeNames decides whether a program needs the
+		// printer's vertical-line arm, scheme.lisp's %scheme-plain-identifier-p prints.
+		List<String> spellings = List.of("abc", "ABC", "+", "-", "...", "..", "+a", "+@", "+.a", "-..", ".a", "a@",
+				"a.b", "!$%&*/:<=>?^_~", "λx", "+inf.0x", "", "a b", "1", "1+", "+1", "-1.5", ".5", ".", "+.", "@a",
+				"#foo", "a#", "a;b", "a|b", "a\\b", "{", "a'b", "a\"b", "+inf.0", "-INF.0", "+nan.0", "#t", "#f",
+				"#!unspecific", "a\tb", "a\u007fb", "a:b", "s%x");
+		StringBuilder source = new StringBuilder();
+		for (String spelling : spellings) {
+			String literal = spelling.replace("\\", "\\\\").replace("\"", "\\\"").replace("\t", "\\t");
+			source.append("(write (string->symbol \"").append(literal).append("\")) (newline)\n");
+		}
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal form : Scheme.read(source.toString(), null)) {
+			evaluator.eval(form);
+		}
+		List<String> written = List.of(out.toString(StandardCharsets.UTF_8).split("\n", -1))
+			.subList(0, spellings.size());
+		for (int i = 0; i < spellings.size(); i++) {
+			boolean barred = SchemeNames.writtenWithVerticalLines(SchemeNames.mangle(spellings.get(i)));
+			assertThat(written.get(i).startsWith("|")).as(spellings.get(i) + " written as " + written.get(i))
+				.isEqualTo(barred);
+		}
+		assertThat(written.get(spellings.indexOf("a|b"))).isEqualTo("|a\\|b|");
+		assertThat(written.get(spellings.indexOf("a\\b"))).isEqualTo("|a\\\\b|");
+		assertThat(written.get(spellings.indexOf("a\tb"))).isEqualTo("|a\\x09;b|");
+		assertThat(written.get(spellings.indexOf("a\u007fb"))).isEqualTo("|a\\x7f;b|");
+		assertThat(written.get(spellings.indexOf("a:b"))).isEqualTo("a:b");
+		assertThat(written.get(spellings.indexOf(""))).isEqualTo("||");
 	}
 
 	@ParameterizedTest
@@ -166,6 +199,9 @@ class SchemeBuiltinsTest {
 			(list->string (list #\\a 1)) | list->string: not a character: 1
 			(stream-car '())            | stream-car: not a stream pair: ()
 			(stream-cdr '())            | stream-cdr: not a stream pair: ()
+			(exact +inf.0)              | exact: +inf.0 has no exact representation
+			(exact -inf.0)              | exact: -inf.0 has no exact representation
+			(inexact->exact +nan.0)     | exact: +nan.0 has no exact representation
 			""")
 	void anArgumentR7rsMakesAnErrorIsRefusedByName(String program, String message) {
 		LispEvaluator evaluator = new LispEvaluator(

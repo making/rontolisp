@@ -112,6 +112,121 @@
                   (write-char c)))))
         (write-string name))))
 
+;; How write spells a symbol: between vertical lines when the spelling would not read
+;; back as that symbol (|foo bar|, ||, |1|, |+inf.0|, |a\x0a;b|), bare otherwise -- the
+;; lines Gauche writes. The printer calls it only in a program that can hold such a
+;; symbol (the rontolisp-scheme-bar-symbols feature, SchemeLibrary); SchemeNames spells
+;; the same grammar for that decision. Change the two together. The spelling is a list
+;; of characters, never a string: see %scheme-print-symbol.
+(defun rontolisp::%scheme-write-symbol (symbol)
+  (let ((chars (rontolisp::%scheme-symbol-chars symbol)))
+    ;; The unspecified object and the environment are symbols printed as themselves.
+    (if (or (eq symbol rontolisp::%scheme-unspecified)
+            (string= (symbol-name symbol) "#[environment]")
+            (rontolisp::%scheme-plain-identifier-p chars))
+        (rontolisp::%scheme-print-symbol symbol)
+        (progn
+          (write-char #\|)
+          (dolist (c chars)
+            (let ((code (char-code c)))
+              (cond ((= code 124) (write-string "\\|"))
+                    ((= code 92) (write-string "\\\\"))
+                    ((or (< code 32) (= code 127))
+                     (write-string "\\x")
+                     (write-char (char "01234567" (ash code -4)))
+                     (write-char (char "0123456789abcdef" (logand code 15)))
+                     (write-char #\;))
+                    (t (write-char c)))))
+          (write-char #\|)))))
+
+;; The Scheme spelling of SYMBOL (SchemeNames.mangle undone) as a list of characters.
+(defun rontolisp::%scheme-symbol-chars (symbol)
+  (let ((name (symbol-name symbol)) (backward nil) (chars nil))
+    (if (rontolisp::%scheme-escaped-p name)
+        (progn
+          (do ((i 2 (+ i 1)))
+              ((>= i (length name)))
+            (if (and (char= (char name i) #\%) (< (+ i 1) (length name)))
+                (progn
+                  (setq i (+ i 1))
+                  (setq backward
+                        (cons (if (char= (char name i) #\c) #\: (char name i))
+                              backward)))
+                (setq backward (cons (char name i) backward))))
+          (dolist (c backward chars) (setq chars (cons c chars))))
+        (do ((i (- (length name) 1) (- i 1)))
+            ((< i 0) chars)
+          (setq chars (cons (char name i) chars))))))
+
+;; R7RS 7.1.1 <initial>, every non-ASCII character counted as a letter (Gauche writes
+;; lambda bare).
+(defun rontolisp::%scheme-identifier-initial-p (c)
+  (let ((code (char-code c)))
+    (or (and (>= code 97) (<= code 122)) (and (>= code 65) (<= code 90))
+        (>= code 128) (= code 33) (and (>= code 36) (<= code 38)) (= code 42)
+        (= code 47) (= code 58) (and (>= code 60) (<= code 63)) (= code 94)
+        (= code 95) (= code 126))))
+
+(defun rontolisp::%scheme-sign-subsequent-p (c)
+  (let ((code (char-code c)))
+    (or (rontolisp::%scheme-identifier-initial-p c) (= code 43) (= code 45)
+        (= code 64))))
+
+(defun rontolisp::%scheme-identifier-subsequent-p (c)
+  (let ((code (char-code c)))
+    ;; . / and the digits; / is an initial anyway.
+    (or (rontolisp::%scheme-sign-subsequent-p c)
+        (and (>= code 46) (<= code 57)))))
+
+(defun rontolisp::%scheme-dot-subsequent-p (c)
+  (or (char= c #\.) (rontolisp::%scheme-sign-subsequent-p c)))
+
+;; Whether CHARS read back as the identifier they spell: R7RS <identifier> without the
+;; vertical lines, less the <infnan> spellings a reader takes for numbers.
+(defun rontolisp::%scheme-plain-identifier-p (chars)
+  (if (or (null chars) (rontolisp::%scheme-infnan-chars-p chars))
+      nil
+      (let ((c (car chars)) (rest (cdr chars)))
+        ;; The tail left for <subsequent>*, or T when the start is not an identifier's.
+        (let ((tail
+               (cond ((rontolisp::%scheme-identifier-initial-p c) rest)
+                     ((or (char= c #\+) (char= c #\-))
+                      (cond ((null rest) nil)
+                            ((rontolisp::%scheme-sign-subsequent-p (car rest))
+                             (cdr rest))
+                            ((and (char= (car rest) #\.) (cdr rest)
+                                  (rontolisp::%scheme-dot-subsequent-p
+                                   (car (cdr rest))))
+                             (cdr (cdr rest)))
+                            (t t)))
+                     ((and (char= c #\.) rest
+                           (rontolisp::%scheme-dot-subsequent-p (car rest)))
+                      (cdr rest))
+                     (t t))))
+          (and (not (eq tail t))
+               (do ((l tail (cdr l)))
+                   ((or (null l)
+                     (not (rontolisp::%scheme-identifier-subsequent-p (car l))))
+                    (null l))))))))
+
+;; Whether CHARS spell +inf.0 -inf.0 +nan.0 or -nan.0, ignoring ASCII case.
+(defun rontolisp::%scheme-infnan-chars-p (chars)
+  (and chars (or (char= (car chars) #\+) (char= (car chars) #\-))
+       (let ((inf t) (nan t) (i 0))
+         (dolist (c (cdr chars))
+           (if (>= i 5)
+               (progn
+                 (setq inf nil)
+                 (setq nan nil))
+               (let ((code (rontolisp::%scheme-ascii-downcase (char-code c))))
+                 (if (/= code (char-code (char "inf.0" i))) (setq inf nil))
+                 (if (/= code (char-code (char "nan.0" i))) (setq nan nil))))
+           (setq i (+ i 1)))
+         (and (= i 5) (or inf nan)))))
+
+(defun rontolisp::%scheme-ascii-downcase (code)
+  (if (and (>= code 65) (<= code 90)) (+ code 32) code))
+
 ;; write and display must terminate on a circular structure (R7RS 6.13.3): a node a
 ;; cycle closes on is written with a datum label, #0=(1 2 . #0#). Sharing without a
 ;; cycle is written out each time, as write does; write-shared instead labels every
@@ -270,7 +385,15 @@
         ((eq x rontolisp::%scheme-false) (write-string "#f"))
         ((null x) (write-string "()"))
         ((rontolisp::%scheme-eof-p x) (write-string "#<eof>"))
+        #-rontolisp-scheme-bar-symbols
         ((symbolp x) (rontolisp::%scheme-print-symbol x))
+        ;; Only a program that can hold a symbol write must put between vertical lines
+        ;; has this arm (SchemeLibrary), so every other printer keeps its bytes.
+        #+rontolisp-scheme-bar-symbols
+        ((symbolp x)
+         (if escape
+             (rontolisp::%scheme-write-symbol x)
+             (rontolisp::%scheme-print-symbol x)))
         ((stringp x)
          (if escape (rontolisp::%scheme-write-string-datum x) (write-string x)))
         ((characterp x)
@@ -603,9 +726,35 @@
            (rontolisp::%scheme-read-error
             "'}' is not a delimiter in R7RS; use parentheses" nil))
           ((= (char-code c) 124)
-           (rontolisp::%scheme-read-error "|...| identifiers are not supported"
-                                          nil))
+           (rontolisp::%scheme-next-char)
+           (rontolisp::%scheme-read-bar-symbol))
           (t (rontolisp::%scheme-read-atom)))))
+
+;; |...|, the opening line consumed: any characters up to the closing one, with the
+;; escapes of a string except the line continuation. Never case-folded, never a number.
+(defun rontolisp::%scheme-read-bar-symbol ()
+  (let ((chars nil))
+    (do ()
+        (nil)
+      (let ((c (rontolisp::%scheme-next-char)))
+        (cond ((rontolisp::%scheme-eof-p c)
+               (rontolisp::%scheme-read-error "unterminated '|' identifier"
+                                              nil))
+              ((= (char-code c) 124)
+               (return
+                (rontolisp::%scheme-string->symbol
+                 (coerce (nreverse chars) (quote string)))))
+              ((= (char-code c) 92)
+               (let ((e (rontolisp::%scheme-next-char)))
+                 (if (rontolisp::%scheme-eof-p e)
+                     (rontolisp::%scheme-read-error
+                      "unterminated '|' identifier" nil))
+                 (let ((escaped (rontolisp::%scheme-read-escape e)))
+                   (if (null escaped)
+                       (rontolisp::%scheme-read-error
+                        "unknown identifier escape" e))
+                   (setq chars (cons escaped chars)))))
+              (t (setq chars (cons c chars))))))))
 
 (defun rontolisp::%scheme-read-abbrev (operator)
   (rontolisp::%scheme-skip-atmosphere)
@@ -698,10 +847,6 @@
         (rontolisp::%scheme-read-error "unexpected end of input" nil)
         (let ((token (rontolisp::%scheme-accumulate-token c)))
           (cond ((string= token ".") rontolisp::%scheme-dot)
-                ((or (string= token "+inf.0") (string= token "-inf.0")
-                     (string= token "+nan.0") (string= token "-nan.0"))
-                 (rontolisp::%scheme-read-error
-                  "infinities and NaN are not supported" token))
                 (t (let ((number (rontolisp::%scheme-string->number token 10)))
                      (if (not (eq number rontolisp::%scheme-false))
                          number
@@ -831,47 +976,42 @@
                (return (coerce (nreverse chars) (quote string))))
               ((= (char-code c) 92)
                (let ((e (rontolisp::%scheme-next-char)))
-                 (cond
-                  ((rontolisp::%scheme-eof-p e)
-                   (rontolisp::%scheme-read-error "unterminated string" nil))
-                  ((= (char-code e) 110)
-                   (setq chars (cons (code-char 10) chars)))
-                  ((= (char-code e) 116)
-                   (setq chars (cons (code-char 9) chars)))
-                  ((= (char-code e) 114)
-                   (setq chars (cons (code-char 13) chars)))
-                  ((= (char-code e) 97) (setq chars (cons (code-char 7) chars)))
-                  ((= (char-code e) 98) (setq chars (cons (code-char 8) chars)))
-                  ((= (char-code e) 34)
-                   (setq chars (cons (code-char 34) chars)))
-                  ((= (char-code e) 92)
-                   (setq chars (cons (code-char 92) chars)))
-                  ((= (char-code e) 124)
-                   (setq chars (cons (code-char 124) chars)))
-                  ((= (char-code e) 120)
-                   (let ((hex nil))
-                     (do ((d
-                           (rontolisp::%scheme-peek-char)
-                           (rontolisp::%scheme-peek-char)))
-                         ((or (rontolisp::%scheme-eof-p d)
-                              (= (char-code d) 59)))
-                       (setq hex (cons (rontolisp::%scheme-next-char) hex)))
-                     (if (rontolisp::%scheme-eof-p
-                          (rontolisp::%scheme-peek-char))
-                         (rontolisp::%scheme-read-error
-                          "unterminated \\x escape" nil))
-                     (rontolisp::%scheme-next-char)
-                     (let ((value
-                            (rontolisp::%scheme-parse-hex
-                             (coerce (nreverse hex) (quote string)))))
-                       (if (null value)
-                           (rontolisp::%scheme-read-error "malformed \\x escape"
-                                                          nil)
-                           (setq chars (cons (code-char value) chars))))))
-                  (t (if (not (rontolisp::%scheme-string-continuation e))
-                         (rontolisp::%scheme-read-error "unknown string escape"
-                                                        e))))))
+                 (if (rontolisp::%scheme-eof-p e)
+                     (rontolisp::%scheme-read-error "unterminated string" nil))
+                 (let ((escaped (rontolisp::%scheme-read-escape e)))
+                   (cond (escaped (setq chars (cons escaped chars)))
+                         ((not (rontolisp::%scheme-string-continuation e))
+                          (rontolisp::%scheme-read-error "unknown string escape"
+                                                         e))))))
               (t (setq chars (cons c chars))))))))
+
+;; The character a backslash escape E stands for inside a string or a |...| identifier --
+;; \n \t \r \a \b \" \\ \| and \xHH; (reading the hex digits) -- or NIL for any other E.
+(defun rontolisp::%scheme-read-escape (e)
+  (let ((code (char-code e)))
+    (cond ((= code 110) (code-char 10))
+          ((= code 116) (code-char 9))
+          ((= code 114) (code-char 13))
+          ((= code 97) (code-char 7))
+          ((= code 98) (code-char 8))
+          ((or (= code 34) (= code 92) (= code 124)) e)
+          ((= code 120)
+           (let ((hex nil))
+             (do ((d
+                   (rontolisp::%scheme-peek-char)
+                   (rontolisp::%scheme-peek-char)))
+                 ((or (rontolisp::%scheme-eof-p d) (= (char-code d) 59)))
+               (setq hex (cons (rontolisp::%scheme-next-char) hex)))
+             (if (rontolisp::%scheme-eof-p (rontolisp::%scheme-peek-char))
+                 (rontolisp::%scheme-read-error "unterminated \\x escape" nil))
+             (rontolisp::%scheme-next-char)
+             (let ((value
+                    (rontolisp::%scheme-parse-hex
+                     (coerce (nreverse hex) (quote string)))))
+               (if (null value)
+                   (rontolisp::%scheme-read-error "malformed \\x escape" nil)
+                   (code-char value)))))
+          (t nil))))
 
 (defun rontolisp::%scheme-string-continuation (first)
   (let ((code (char-code first)))
@@ -1533,6 +1673,33 @@
 (defun rontolisp::%scheme-finite? (x)
   (not (or (rontolisp::%scheme-nan? x) (rontolisp::%scheme-infinite? x))))
 
+;; floor, ceiling, round and truncate of a flonum, as a flonum. One of magnitude 2^52 or
+;; more is integral already -- the infinities included -- and a NaN fails the test and
+;; answers itself: Common Lisp's floor of a non-finite float answers a clamped fixnum.
+(defun rontolisp::%scheme-flonum-floor (x)
+  (if (< (abs x) 4503599627370496.0d0) (float (floor x) 1.0d0) x))
+
+(defun rontolisp::%scheme-flonum-ceiling (x)
+  (if (< (abs x) 4503599627370496.0d0) (float (ceiling x) 1.0d0) x))
+
+(defun rontolisp::%scheme-flonum-round (x)
+  (if (< (abs x) 4503599627370496.0d0) (float (round x) 1.0d0) x))
+
+(defun rontolisp::%scheme-flonum-truncate (x)
+  (if (< (abs x) 4503599627370496.0d0) (float (truncate x) 1.0d0) x))
+
+;; exact of a flonum: an infinity or a NaN has no exact counterpart (R7RS 6.2.6 lets
+;; exact raise an implementation restriction), refused by name on every backend. The
+;; messages are constants: formatting the irritant would bring in the string-stream
+;; machinery of %scheme-error-message (+25 KB of wasm for a lone (exact 2.5)).
+(defun rontolisp::%scheme-exact-flonum (x)
+  (cond ((/= x x) (error "exact: +nan.0 has no exact representation"))
+        ((> x most-positive-double-float)
+         (error "exact: +inf.0 has no exact representation"))
+        ((< x most-negative-double-float)
+         (error "exact: -inf.0 has no exact representation"))
+        (t (rational x))))
+
 ;; The I-th significant digit of a printed float whose INTEGER-DIGITS digits start at
 ;; START and are followed by a point.
 (defun rontolisp::%scheme-flonum-digit (s start integer-digits i)
@@ -1667,6 +1834,29 @@
 ;; digits+]. The decimal is built EXACTLY and converted once, so the result is the
 ;; correctly rounded double the reader would have produced for the same text.
 (defun rontolisp::%scheme-string->number (s radix)
+  (let ((infnan (rontolisp::%scheme-infnan s)))
+    (if infnan infnan (rontolisp::%scheme-string->real s radix))))
+
+;; R7RS <infnan> -- +inf.0 -inf.0 +nan.0 -nan.0, case-insensitively and in any radix --
+;; or NIL. A NaN's sign is not kept: every NaN is written +nan.0.
+(defun rontolisp::%scheme-infnan (s)
+  (if (and (= (length s) 6) (or (char= (char s 0) #\+) (char= (char s 0) #\-)))
+      (let ((inf t) (nan t))
+        (do ((i 1 (+ i 1)))
+            ((>= i 6))
+          (let ((code
+                 (rontolisp::%scheme-ascii-downcase (char-code (char s i)))))
+            (if (/= code (char-code (char "inf.0" (- i 1)))) (setq inf nil))
+            (if (/= code (char-code (char "nan.0" (- i 1)))) (setq nan nil))))
+        (if (or inf nan)
+            (let ((infinity (* most-positive-double-float 2.0d0)))
+              (cond (nan (- infinity infinity))
+                    ((char= (char s 0) #\+) infinity)
+                    (t (- infinity))))
+            nil))
+      nil))
+
+(defun rontolisp::%scheme-string->real (s radix)
   (let ((n (length s)) (start 0) (sign 1))
     (if (and (> n 0) (or (char= (char s 0) #\+) (char= (char s 0) #\-)))
         (progn

@@ -40,6 +40,8 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `CAR`, `X`, `T`, `+` (no lowercase), `a:b`, `&rest`, `s%...`, `#f` | escaped: `s%` + name, `%`->`%%`, `:`->`%c` | `(defun \|CAR\| ...)` REPLACES the built-in; `a:b` is "symbol b of package a" to the resolver ("No such package: a"); `&rest` is a lambda-list keyword; the prefix and `#f` keep the map injective and the false value unforgeable. The rule is spelled twice (`SchemeNames.mangle`, `%scheme-needs-escape` in `scheme.lisp`) -- change both |
 | `'()` | `NIL` | `&rest` lists, `apply` and every list primitive end in it |
 | `#t` | `T` | |
+| `\|foo bar\|`, `\|\|`, `\|#t\|` | an identifier of that spelling, mangled like any other (`\|#f\|` -> `s%#f`) | "Vertical-line identifiers and the infinities" below; the reader's booleans are compared by IDENTITY, so `\|#t\|` is no boolean |
+| `+inf.0` `-inf.0` `+nan.0` `-nan.0` | a flonum literal | every backend already emits a non-finite double constant and prints it |
 | `#f` | the VALUE of `rontolisp::%scheme-false`, the symbol `\|#f\|`, bound by the first form of every lowered file | distinct from NIL; a symbol so quoted data, `case` and `equal?` need nothing special |
 | the unspecified value: an `effect` builtin, `set!`, the missing arm of `if`/`when`/`unless`, a `cond`/`case` with no clause taken, `(begin)` | the VALUE of `rontolisp::%scheme-unspecified`, the symbol `\|#!unspecific\|`, bound in the same first `setq`; `(progn effect U)` -- but the raw effect / `NIL` where the value is DISCARDED (`Context.discarded`: a body form before the last, a file's top-level form) | ONE object, so a REPL can skip it by value (`(define (g) (display "a"))` echoed `"a"`); not `NIL` (`(list (if #f #f))` has length 1) and true in a test. The spelling is escaped by `mangle` like `#f` and excluded by `symbol?`. Cost (2026-09-17): +93 B class / +26 B wasm per program (`hello`), nothing measurable on a 100M-iteration `when` loop. A missing arm is spelled `CORE_UNSPECIFIED` in desugarings |
 | `exit`, `emergency-exit` (`(scheme process-context)`, merged into the no-import default) | `exit` throws its code to `rontolisp::%scheme-exit-tag`; every file top-level form runs inside a `catch` for it that ends the process through `%scheme-exit` with the caught code ("`exit` runs ..." below). `emergency-exit` calls `%scheme-exit` directly: finish both output streams, then `%host-exit` with `#t`/none 0, `#f` 1, an integer's low 8 bits | the `uiop:quit` primitive (`.kb/uiop.md`); `exit` runs the outstanding `dynamic-wind` afters on its way out, only `emergency-exit` ends the process where the call stands |
@@ -235,6 +237,68 @@ its record in `internalRecords` by datum identity and defines nothing twice.
   backends, Gauche's output), and `JvmLispCompilerTest.
   bracketAndSemicolonInAFunctionNameAreMangledAway`.
 
+## Vertical-line identifiers and the infinities (2026-09-19, `.todo/886`)
+
+- **Reader**: `|...|` is an identifier of any characters, with `\|` `\\` `\"` `\xHH;` and the
+  mnemonic escapes; `|` delimits (`a|b c|` is two datums, as in Gauche) and `#!fold-case`
+  never folds it. `+inf.0` `-inf.0` `+nan.0` `-nan.0`, case-insensitive and in any radix,
+  are flonums (a NaN's sign is dropped: every NaN writes `+nan.0`); `+inf.00`, `inf.0` stay
+  symbols. Both readers (`SchemeReader`, the run-time `read`) and `string->number` agree.
+- **The booleans are identity symbols.** `SchemeReader.TRUE`/`FALSE` are `LispSymbol`s
+  named `#t`/`#f`, and a record compares by name, so `|#t|` WAS `#t` to every
+  `.equals(TRUE)` in the lowering. Every site now tests `==` / `SchemeReader.isBoolean`
+  (`SyntaxRules.datumEquals` too). A new site must do the same.
+- **`write` puts a symbol between vertical lines when its spelling would not read back**:
+  R7RS 7.1.1 `<identifier>` less the `<infnan>` spellings, every non-ASCII character a
+  letter (Gauche writes `λx` bare); `|` and `\` escaped, a control character as
+  `\x<2 hex>;` (Gauche's `|a\x09;b|`). The false value, the unspecified object and the
+  environment symbol have their own spellings and never take lines. One deviation from
+  Gauche: it writes `|+inf.0x|`, a valid R7RS identifier written bare here.
+  `(write (string->symbol "with space"))` was `with space` before -- a deviation the spec
+  pinned, now Gauche's `|with space|`; the strict-`r7rs` "Unbound variable: |1+|" matches
+  Gauche too.
+- **The grammar is spelled twice** -- `SchemeNames.writtenWithVerticalLines` (compile
+  time) and `%scheme-plain-identifier-p` (the printer) -- pinned against each other by
+  `SchemeBuiltinsTest.writePutsASymbolBetweenVerticalLinesExactlyWhenTheFrontEndSaysSo`.
+- **Gated like the bytevector arm** (`SchemeLibrary.BAR_SYMBOLS_FEATURE`): the printer's
+  symbol arm calls `%scheme-write-symbol` under `escape` only in a program that quotes a
+  symbol the grammar lines (a `QUOTE` or a vector literal) or can intern any name
+  (`intern`/`make-symbol`, or a library function reaching one -- `string->symbol`, `read`).
+  The writer walks the spelling as a character LIST, never a string: building one with
+  `%scheme-symbol->string` cost +13 KB of class and +4 KB of wasm more.
+- **Composed internal names escape their parts** (`SchemeNames.component`: ` `, `)`, `]`,
+  `|` -> `|s` `|p` `|b` `||`): `(define-library (|a b|) ..)` and `(a b)` were both
+  `s%%(a b)`. A name without those characters is unchanged.
+- **What infinities reached in the helpers**: `floor`/`ceiling`/`round`/`truncate` of a
+  flonum went through Common Lisp's `floor`, which clamps a non-finite float to a long on
+  every backend (`(floor +inf.0)` was `9223372036854776000.0`, Gauche `+inf.0`); they are
+  `%scheme-flonum-floor` & co. now, answering a flonum of magnitude >= 2^52 (the
+  infinities) and a NaN as itself. `exact` of an infinity or a NaN is refused with a
+  constant message (`%scheme-exact-flonum`; the irritant formatting of
+  `%scheme-error-message` cost +25 KB of wasm for a lone `(exact 2.5)`); before, the
+  interpreter and the JVM signalled and wasm trapped on `unreachable`. The Common Lisp
+  level is `.todo/888`.
+- **Left as found**: `(eqv? +nan.0 +nan.0)` is `#t` on every backend (Common Lisp's `eql`
+  of one bit pattern; R7RS leaves it unspecified, Gauche `#f`). `(eq? x x)` of a flonum
+  variable is `#f` on the interpreter and the JVM, `#t` on wasm -- a Common Lisp split,
+  `.todo/887`.
+- **Cost** (x86-64 Linux, Java 25, class / wasm / component, before -> after):
+  byte-identical -- `hello.scm`, the six `examples/scheme/*.scm`, `(display "...")` string
+  programs, `(scheme char)` programs, an `eval` program, `size-report/programs/hello_world`
+  and `pi_approx`. Changed, each using the feature: `(display (floor 2.5))` 76,250 -> 76,617
+  / 21,508 -> 21,569; `(display (string->number "12"))` 85,337 -> 87,487 / 30,543 ->
+  32,726; `(display (exact 2.5))` 74,241 -> 74,839 / 8,353 -> 9,835;
+  `(write (string->symbol "a b"))` 96,440 -> 109,422 / 25,803 -> 29,957;
+  `(write (read))` 175,552 -> 188,675 / 118,975 -> 123,748; the 67 concatenable
+  `scheme-spec.yaml` cases of before as one program 884,103 -> 896,686 / 1,936,768 ->
+  1,943,180. `(write '|a b|)`: 86,750 / 15,328.
+- Pinned by `SchemeReaderTest`, `SchemeNamesTest`, `SchemeLoweringTest.
+  aVerticalLineIdentifierLowersLikeAnyOtherAndIsNeverABoolean`, `SchemeLibraryTest`,
+  `SchemeLibrariesTest.aLibraryNamePartWithASpaceKeepsItsNamesApart`, and the
+  `vertical-line-identifiers-are-symbols-of-any-spelling`,
+  `infinities-and-nan-read-print-and-compare` and `read-knows-vertical-lines-and-infinities`
+  cases of `scheme-spec.yaml` (all four backends, Gauche 0.9.15's output).
+
 ## A file that reads an imported name before it redefines it
 
 - **Such a name is a variable, initialized to the import's value** by a second leading
@@ -376,7 +440,7 @@ paths, REPL, unknown value), and the `standalone:` cases of `scheme-spec.yaml` w
   first digit or fewer than 6 zeros left of it (`123456789.123`,
   `100000000000000000000.0`, `0.000001`), `<digits>e<exp>` otherwise (`1e21`, `1.5e-7`);
   the Common Lisp printer answered `1.0e21` and `1.23456789123e8`. `+inf.0` `-inf.0`
-  `+nan.0` print; READING them is still refused.
+  `+nan.0` print, and read since `.todo/886`.
 - `-0.0` is read with `Double.parseDouble` (`BigDecimal.doubleValue()` dropped the sign),
   and `string->number` negates after converting.
 - Cost (2026-09-17): `(display (list 1 'a "s"))` went from 58,745 to 72,993 B of `.class`
@@ -589,7 +653,9 @@ data lowers to (`SchemeLowering.datum`): identifiers via `SchemeNames.mangle`
 included), `'`/`` ` ``/`,`/`,@` as `quote`/`quasiquote`/`unquote`/`unquote-splicing`
 lists, `#( )`, dotted pairs, `;`/`#;`/`#| |#` skipped -- or `(eq? (read) 'quit)` is
 false. `#u8(` / `#U8(` reads a bytevector through `%scheme-bytevector`, refusing a
-non-byte element as a read error. Refusals match the frontend: `|...|`, `+inf.0`/`+nan.0`,
+non-byte element as a read error. `|...|` (`%scheme-read-bar-symbol`, the string escapes
+shared through `%scheme-read-escape`) and `+inf.0`/`+nan.0` (`%scheme-infnan`, inside
+`%scheme-string->number`) read as in source. Refusals match the frontend:
 `[`/`]`/`{`/`}`, unsupported `#`, `(|...|/|char|)` by name; an incomplete datum
 raises a read error (`read-error?`, "Exceptions" below).
 
@@ -1323,7 +1389,7 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 ## Not here yet (each its own follow-up)
 
 `cond-expand`, exporting syntax from a library, file ports (`(scheme file)`), the other
-libraries, `|...|` identifiers, reading `+inf.0`/`+nan.0`,
+libraries, radix and exactness prefixes in `string->number` (`.todo/889`),
 re-entrant continuations, proper tail calls in general. Each is refused by name where it
 can be.
 
@@ -1403,7 +1469,8 @@ group, all four backends in `./mvnw test`; the wasm legs need `wasmtime` on `PAT
 `SchemeLoweringTest` (the table as emitted forms), `SchemeSessionTest` (what a session emits,
 when a buffer is complete), `SchemeReaderTest`, `SchemeNamesTest`,
 `SchemeBuiltinsTest` (every `:function` evaluates, every helper a template names exists),
-`SchemeLibrariesTest` (`define-library` / `include`),
+`SchemeLibrariesTest` (`define-library` / `include`), `SchemeLibraryTest` (which programs
+get the printer's vertical-line arm),
 `RontoLispCliTest` (`aSchemeFileIsPickedByItsExtension`, `aCommonLispProgramLoadsASchemeFile`,
 `aSchemeSyntaxErrorNamesItsPositionOnEveryPath`, `aSchemeProgramIsRefusedByTheScalarBackend`,
 `anUncaughtSchemeErrorReportsItsMessageAndIrritants`,

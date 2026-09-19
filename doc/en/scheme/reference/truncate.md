@@ -2,7 +2,7 @@
 
 `(truncate x)`
 
-Returns the integer closest to `x` whose absolute value is not greater than that of `x`, a flonum for a flonum argument and exact for an exact one.
+Returns the integer closest to `x` whose absolute value is not greater than that of `x`, a flonum for a flonum argument and exact for an exact one. An infinity or a NaN gives itself.
 
 ```scheme
 (truncate -2.7) ; => -2.0

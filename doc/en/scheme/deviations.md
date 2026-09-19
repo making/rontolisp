@@ -47,6 +47,5 @@
 
 ## Not yet
 
-`cond-expand`, file ports (`(scheme file)`), the other libraries, `|...|` identifiers,
-reading `+inf.0` / `+nan.0`. The syntactic ones are refused by name when the file is
+`cond-expand`, file ports (`(scheme file)`), the other libraries. The syntactic ones are refused by name when the file is
 read.

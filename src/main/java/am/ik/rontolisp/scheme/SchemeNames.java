@@ -1,6 +1,7 @@
 package am.ik.rontolisp.scheme;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * How a Scheme identifier is spelled as a Common Lisp symbol name.
@@ -70,14 +71,132 @@ final class SchemeNames {
 	 * What every top-level name a user library defines starts with: {@code s%%(} plus the
 	 * library's name, {@code s%%(mylib util)}. No identifier mangles to it -- an escaped
 	 * one continues its {@link #PREFIX} with {@code %%}, {@code %c} or a character that
-	 * is not {@code %}, and no identifier holds a parenthesis -- so a library's names
-	 * never collide with a program's or with another library's, and the space and the
-	 * closing parenthesis keep {@code (a b)}'s names apart from {@code (a)}'s.
+	 * is not {@code %} -- so a library's names never collide with a program's, and the
+	 * space and the closing parenthesis, escaped inside a part ({@link #component}), keep
+	 * {@code (a b)}'s names apart from {@code (a)}'s and from {@code (|a b|)}'s.
 	 * @param library the library name's parts, as written
 	 * @return the prefix
 	 */
 	static String libraryPrefix(List<String> library) {
-		return PREFIX + "%(" + String.join(" ", library) + ")";
+		return PREFIX + "%(" + String.join(" ", library.stream().map(SchemeNames::component).toList()) + ")";
+	}
+
+	/**
+	 * A name as a part of a composed internal name -- a library prefix, an internal
+	 * record type's {@code s%%[<definition> <type>]}: the separators ({@code ' '},
+	 * {@code ')'}, {@code ']'}) and the escape character {@code |} itself spelled
+	 * {@code |s}, {@code |p}, {@code |b} and {@code ||}. A name without them -- every
+	 * identifier written without vertical lines but one holding a {@code )} or a
+	 * {@code ]} -- is unchanged.
+	 * @param part the name
+	 * @return the part as it stands in a composed name
+	 */
+	static String component(String part) {
+		if (part.indexOf(' ') < 0 && part.indexOf(')') < 0 && part.indexOf(']') < 0 && part.indexOf('|') < 0) {
+			return part;
+		}
+		StringBuilder escaped = new StringBuilder();
+		for (int i = 0; i < part.length(); i++) {
+			char c = part.charAt(i);
+			switch (c) {
+				case '|' -> escaped.append("||");
+				case ' ' -> escaped.append("|s");
+				case ')' -> escaped.append("|p");
+				case ']' -> escaped.append("|b");
+				default -> escaped.append(c);
+			}
+		}
+		return escaped.toString();
+	}
+
+	/**
+	 * The Scheme spelling of a symbol name, the inverse of {@link #mangle}.
+	 * @param symbolName the Common Lisp symbol name
+	 * @return the identifier it spells
+	 */
+	static String unmangle(String symbolName) {
+		if (!symbolName.startsWith(PREFIX)) {
+			return symbolName;
+		}
+		StringBuilder identifier = new StringBuilder();
+		for (int i = PREFIX.length(); i < symbolName.length(); i++) {
+			char c = symbolName.charAt(i);
+			if (c == '%' && i + 1 < symbolName.length()) {
+				i++;
+				identifier.append(symbolName.charAt(i) == 'c' ? ':' : symbolName.charAt(i));
+			}
+			else {
+				identifier.append(c);
+			}
+		}
+		return identifier.toString();
+	}
+
+	/**
+	 * Whether {@code write} puts the symbol between vertical lines: its spelling would
+	 * not read back as that symbol. The same grammar as
+	 * {@code %scheme-plain-identifier-p} in {@code scheme.lisp} -- change the two
+	 * together. The false value's, the unspecified object's and the environment's symbols
+	 * are printed as themselves.
+	 * @param symbolName the Common Lisp symbol name
+	 * @return {@code true} for {@code |foo bar|}, {@code ||}, {@code |1|},
+	 * {@code |+inf.0|}, ...
+	 */
+	static boolean writtenWithVerticalLines(String symbolName) {
+		if (symbolName.equals("#f") || symbolName.equals(UNSPECIFIED_NAME)
+				|| symbolName.equals(SchemeBuiltins.ENVIRONMENT_NAME)) {
+			return false;
+		}
+		return !isPlainIdentifier(unmangle(symbolName));
+	}
+
+	// R7RS 7.1.1 <identifier> without vertical lines, less the <infnan> spellings.
+	private static boolean isPlainIdentifier(String name) {
+		int n = name.length();
+		if (n == 0 || List.of("+inf.0", "-inf.0", "+nan.0", "-nan.0").contains(name.toLowerCase(Locale.ROOT))) {
+			return false;
+		}
+		char c = name.charAt(0);
+		int start;
+		if (isInitial(c)) {
+			start = 1;
+		}
+		else if ((c == '+' || c == '-') && n == 1) {
+			start = 1;
+		}
+		else if (c == '+' || c == '-') {
+			if (isSignSubsequent(name.charAt(1))) {
+				start = 2;
+			}
+			else if (name.charAt(1) == '.' && n > 2 && (name.charAt(2) == '.' || isSignSubsequent(name.charAt(2)))) {
+				start = 3;
+			}
+			else {
+				return false;
+			}
+		}
+		else if (c == '.' && n > 1 && (name.charAt(1) == '.' || isSignSubsequent(name.charAt(1)))) {
+			start = 2;
+		}
+		else {
+			return false;
+		}
+		for (int i = start; i < n; i++) {
+			char s = name.charAt(i);
+			if (!isSignSubsequent(s) && s != '.' && !(s >= '0' && s <= '9')) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// Every non-ASCII character counts as a letter, as Gauche writes one bare.
+	private static boolean isInitial(char c) {
+		return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c >= 128 || "!$%&*/:<=>?^_~".indexOf(c) >= 0;
+	}
+
+	private static boolean isSignSubsequent(char c) {
+		return isInitial(c) || c == '+' || c == '-' || c == '@';
 	}
 
 	private static boolean needsEscape(String identifier) {

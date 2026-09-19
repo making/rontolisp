@@ -3,6 +3,7 @@ package am.ik.rontolisp.scheme;
 import java.util.List;
 import java.util.stream.Collectors;
 
+import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReadException;
 import org.junit.jupiter.api.Test;
@@ -128,6 +129,19 @@ class SchemeLoweringTest {
 	void anIdentifierThatCouldCollideIsEscaped() {
 		assertThat(lowered("(define (CAR X) (list X 'X 'a:b))")).isEqualTo("""
 				(DEFUN |s%CAR| (|s%X|) (LIST |s%X| '|s%X| '|s%a%cb|))""");
+	}
+
+	@Test
+	void aVerticalLineIdentifierLowersLikeAnyOtherAndIsNeverABoolean() {
+		assertThat(lowered("(define (|a b| |X|) (list |X| '|#t| '|#f| #t '|| |#f|))")).isEqualTo("""
+				(DEFUN |a b| (|s%X|) (LIST |s%X| '|#t| '|s%#f| T '|s%| |s%#f|))""");
+	}
+
+	@Test
+	void anInfinityIsAFlonumLiteral() {
+		assertThat(lowered("(list +inf.0 -inf.0)"))
+			.isEqualTo("(LIST " + new LispDouble(Double.POSITIVE_INFINITY).print() + " "
+					+ new LispDouble(Double.NEGATIVE_INFINITY).print() + ")");
 	}
 
 	@Test
