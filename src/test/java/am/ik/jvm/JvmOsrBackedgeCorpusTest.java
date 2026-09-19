@@ -6,7 +6,6 @@ import java.util.List;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.compiler.OptimizeLevel;
-import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,28 +49,18 @@ class JvmOsrBackedgeCorpusTest {
 		}
 	}
 
-	/** The ci-spec corpus put through the same front end the CLI's compile path runs. */
+	/**
+	 * The ci-spec corpus put through the CLI's OWN front end, not a copy of it:
+	 * {@code CompileFrontendAccess} calls {@code CompileFrontend.expand}, so the class
+	 * analyzed here is the one the real CLI emits. This method used to spell the pass
+	 * pipeline out, and it was the last copy left after .todo/688 -- eleven splices
+	 * behind, including {@code TokenizersLibrary}, so every run printed ten
+	 * {@code TOKENIZER:... is undefined} warnings to the console and passed green, which
+	 * is the exact failure .todo/688 existed to end.
+	 */
 	private static List<LispVal> corpusProgram() throws Exception {
-		String source = corpusSource();
-		List<LispVal> read = source.contains("#.")
-				? LispReader.readAllWithReadEvalMarkers(source, am.ik.rontolisp.reader.Features.JVM)
-				: LispReader.readAllFromString(source, am.ik.rontolisp.reader.Features.JVM);
-		List<LispVal> inlined = am.ik.rontolisp.cli.LoadInliner.inline(read, path -> {
-			throw new java.io.FileNotFoundException(path);
-		}, null, List.of(), am.ik.rontolisp.reader.Features.JVM);
-		// JsonLibrary runs OUTSIDE GeomLibrary, like the CLI: geom:read-gltf parses
-		// through rontolisp:json-parse, so the geom splice introduces the reference.
-		List<LispVal> spliced = am.ik.rontolisp.eval.LispPreludeLibrary.process(
-				am.ik.rontolisp.eval.UrlLibrary
-					.process(am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.LinalgLibrary
-						.process(am.ik.rontolisp.eval.GeomLibrary.process(am.ik.rontolisp.eval.TorchLibrary.process(
-								am.ik.rontolisp.eval.UserMacroExpander.expand(am.ik.rontolisp.eval.HttpServerLibrary
-									.process(am.ik.rontolisp.eval.HttpReactorLibrary.process(inlined),
-											am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(inlined)))))))),
-				am.ik.rontolisp.reader.Features.JVM);
-		return am.ik.rontolisp.eval.LibraryDefunPruner.prune(am.ik.rontolisp.eval.UnreadCharLibrary
-			.process(am.ik.rontolisp.eval.UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary
-				.process(am.ik.rontolisp.eval.VecLibrary.process(spliced)))));
+		return am.ik.rontolisp.cli.CompileFrontendAccess.corpus(corpusSource(), am.ik.rontolisp.reader.Features.JVM,
+				false, false);
 	}
 
 }

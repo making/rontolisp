@@ -123,7 +123,9 @@ am.ik.objc -> (nothing)
   census of pass NAMES -- `VecLibrary` applied in the wrong POSITION, so a `vec:` reference
   introduced by the Gray-streams / usocket / unread-char rewrites was spliced by the CLI
   and missed by both guards. The `asdf:load-system` library E2Es carried the same copy,
-  stopped six passes in. Every test now reaches the front end through
+  stopped six passes in, and `JvmOsrBackedgeCorpusTest` kept a fifth until 2026-09-19 --
+  eleven splices behind, printing ten `TOKENIZER:... is undefined` warnings on every GREEN
+  run. Every test now reaches the front end through
   `src/test/.../cli/CompileFrontendAccess` (or, for a JVM target, `JvmSourceCompiler`).
   A list of libraries exported for a caller to fold is the same bug with more steps.
 
