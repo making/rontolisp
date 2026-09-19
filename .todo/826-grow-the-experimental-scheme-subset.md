@@ -42,7 +42,7 @@ Not a language feature, same area:
   Done in `.todo/894`: 31 KB of it was the JVM eval runtime, switched on by a stream resolver
   that dead library code rooted; now 43.1 KB / 8.4 KB (`.kb/scheme-frontend.md`, "Where the
   JVM bytes went"; the JVM apply tier, `.kb/eval-runtime.md`).
-- Proper tail calls beyond loops (mutual recursion overflows at 5,000 on the JVM). A
-  trampoline would tax every call; measure before proposing one.
+- Proper tail calls beyond loops (mutual recursion overflows at 5,000 on the JVM). Split
+  off: `.todo/897`. A trampoline would tax every call; measure before proposing one.
 - `(-)` on the interpreter reports `Index 0 out of bounds for length 0`; the compile path
   says `- requires at least one argument` (`compiler/ArithmeticIdentities`).
