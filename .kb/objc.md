@@ -228,6 +228,13 @@ Three differences from the `--gpu` blob:
   before the launcher existed (`counter.lisp` as `.class` and `.jar`, compared 2026-09-19).
   `JvmSizedMainTest#anObjcProgramKeepsItsMainOnThreadZero` pins the absence. Moving an objc
   program onto the worker is a GUI change needing the manual macOS check; it was not attempted.
+  The check the launcher itself needed has been run (macOS 26.3.1 aarch64, Oracle GraalVM 25.0.3,
+  2026-09-20): `counter.lisp` opens its window, counts clicks and exits 0 on closing under
+  `java -jar`, the native binary, `java Counter` and `java -jar counter.jar`. A NON-objc program
+  there -- where the `java` launcher already runs `main` off thread 0 while thread 0 parks in a
+  `CFRunLoop`, so the worker is a second hop -- is unaffected: `nqueens.lisp` prints byte for byte
+  what the interpreter does as both `.class` and `.jar` and exits 0, and an unhandled condition
+  still prints its report, echoes `Exception in thread "main"` and exits 1.
 
 Under the `java` launcher thread 0 is already parked, so no hand-over arises. A bare `.class`
 without `--enable-native-access=ALL-UNNAMED` gets the JDK's one-time warning and works; a `.jar`
