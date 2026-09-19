@@ -43,6 +43,10 @@ Not a language feature, same area:
   that dead library code rooted; now 43.1 KB / 8.4 KB (`.kb/scheme-frontend.md`, "Where the
   JVM bytes went"; the JVM apply tier, `.kb/eval-runtime.md`).
 - Proper tail calls beyond loops (mutual recursion overflows at 5,000 on the JVM). Split
-  off: `.todo/897`. A trampoline would tax every call; measure before proposing one.
+  off: `.todo/897`. Done in `.todo/897`: top-level procedures whose tail calls cycle are
+  one loop on all four backends (`.kb/scheme-frontend.md`, "Tail-call groups"; a
+  trampoline measured 15-20x per bounced call). Left: internal definitions (`.todo/898`),
+  tail calls through a procedure value (`.todo/899`), the interpreter's thrown `go`
+  (`.todo/901`).
 - `(-)` on the interpreter reports `Index 0 out of bounds for length 0`; the compile path
   says `- requires at least one argument` (`compiler/ArithmeticIdentities`).
