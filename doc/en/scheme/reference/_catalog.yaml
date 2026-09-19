@@ -36,6 +36,7 @@ categories:
       - { slug: define-library, name: "define-library" }
       - { slug: include, name: "include" }
       - { slug: include-ci, name: "include-ci" }
+      - { slug: cond-expand, name: "cond-expand" }
       - { slug: define-syntax, name: "define-syntax" }
       - { slug: let-syntax, name: "let-syntax" }
       - { slug: letrec-syntax, name: "letrec-syntax" }
@@ -263,6 +264,10 @@ categories:
       - { slug: read-bytevector-bang, name: "read-bytevector!" }
       - { slug: eof-object, name: "eof-object" }
       - { slug: eof-object-p, name: "eof-object?" }
+  - title: "(scheme base): system interface"
+    index_page: scheme/reference/library-base.md
+    functions:
+      - { slug: features, name: "features" }
   - title: "(scheme write)"
     index_page: scheme/reference/library-write.md
     functions:

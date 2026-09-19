@@ -16,6 +16,7 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
   "Macros" below), `SchemeLowering` (datums -> core forms), `SchemeBuiltins`
   (the procedure table), `SchemeNames` (identifier escaping), `SchemeLibraries` +
   `SchemeFiles` (`define-library` and `include`, "Libraries and include" below),
+  `SchemeFeatures` (`cond-expand`'s feature list and clause choice, "`cond-expand`" below),
   `Scheme` (the facade).
 - Reached ONLY through the seam: `eval/SourceLanguage.SCHEME`, picked for `.scm` or by
   `--source-language scheme` (`.kb/source-language.md`). Per FILE, so a Common Lisp file
@@ -25,10 +26,11 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
   `rontolisp::%scheme-` FUNCTION, `CompileFrontend.expand` splices it innermost (beside
   `TokenizersLibrary`, INSIDE the prelude whose string comparisons it uses) and
   `LibraryDefunPruner` drops what stays unreachable. The playground's chain has the splice
-  too; a `.scm` reaches the playground through `(load ...)` of an uploaded file. Two
+  too; a `.scm` reaches the playground through `(load ...)` of an uploaded file. Some
   definitions are GENERATED from the front end's tables and appended to the source's
   forms (`Scheme.runtimeForms`): `eval`'s procedure table and `environment`'s library
-  predicate ("`eval`" below).
+  predicate ("`eval`" below), the `(scheme char)` tables, and the feature list
+  ("`cond-expand`").
 - A whole FILE is lowered at once: defun-or-variable is decided by a pre-scan. A REPL has
   no whole program to scan and lowers through a session instead ("A session" below).
 
@@ -65,6 +67,7 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `quasiquote` | `cons`/`append`/`(coerce .. 'vector)`, constant parts quoted | depth-counted per R7RS: the innermost unquote of a nested template IS evaluated |
 | `(define-library (a b) ...)`, `(import (a b))` | the library body lowered once, before the importer's forms, with private top-level names (`s%%(a b)name`); an export is the library's binding, so a call stays direct | "Libraries and include" below |
 | `(include "f")`, `(include-ci "f")` | `(begin <f's datums>)`, spliced before macro expansion | the same section |
+| `(cond-expand (req body..)..)` | `(begin <the taken clause's body>)`, decided while lowering, spliced before macro expansion; at the leading declarations its datums replace it | "`cond-expand`" below |
 | `define-syntax` / `let-syntax` / `letrec-syntax` with `syntax-rules` | nothing: expanded away before the lowering (`SchemeExpander`); `let-syntax`'s body is `(let () body)` | hygiene by renaming, "Macros" below |
 | `#u8(...)`, `bytevector`, `make-bytevector`, `bytevector-append`, `string->utf8` | the `(unsigned-byte 8)` pack (`.kb/packed-integer-vectors.md`): the literal is an 8-bit `LispIntVector` datum, self-evaluating; the constructors are `%scheme-` helpers over `make-array :element-type '(unsigned-byte 8)` / `rontolisp:string-to-octets` | "Bytevectors" below |
 | a port procedure; the optional port argument of `display`, `read-char`, ...; `(current-output-port)` | a `%scheme-` helper over a `%scheme-port` record (`(display x p)` -> `(%scheme-display-to x p)`, which binds `*standard-output*` to the port's stream around the printer); with no port argument the template is what it always was. A current port's VALUE is `(%scheme-port-parameter 1)`, a parameter object | the standard streams are the `t` designator on the compiled backends, not values ("Ports" below) |
@@ -624,7 +627,8 @@ per backend, generated from the JDK: `.kb/characters-code-points.md`) and are us
   itself. Every other call recurses (`ev?`/`od?`).
 - Errors are Scheme-spelled through `%scheme-error-message`: `Unbound variable: x`,
   `Ill-formed special form: (if)`, `Not supported inside eval: (define-record-type ..)`
-  (also `define-values`, `let-values`, `import`, the syntax the reader refuses),
+  (also `define-values`, `let-values`, `import`, and a `cond-expand` a program that
+  spells none constructed -- "`cond-expand`" below),
   `Wrong number of arguments: (a b) given (1)`, `The object is not applicable: 3`,
   `eval: not an environment: 2`, `environment: library is not available: (scheme time)`,
   `Syntactic keyword may not be used as an expression: if`. **Superseded (2026-09-19):**
@@ -1136,8 +1140,9 @@ variable is read live (the library's `set!` shows). No backend learns anything.
   one name from two libraries is not refused (the later wins; Gauche is silent too).
 - **Library scope**: no `import` declaration sees everything under `rontolisp` (like a
   program) and is refused under `r7rs` when the library has a body. Declarations:
-  `export`, `import`, `begin`, `include`, `include-ci`, `include-library-declarations`;
-  `cond-expand` is refused by name, anything else is "unknown library declaration". A
+  `export`, `import`, `begin`, `include`, `include-ci`, `include-library-declarations`,
+  `cond-expand` (the taken clause's declarations, in place); anything else is "unknown
+  library declaration". A
   library is always lowered in FILE mode, also when a session imports it.
 - **`include` / `include-ci`** (`includes`/`included`): a datum pre-pass BEFORE macro
   expansion -- so an included definition or `define-syntax` is seen by every pre-scan
@@ -1176,6 +1181,71 @@ the `files:` field writes a case's other files beside it),
 `RontoLispCliTest.aSchemeProgramReadsItsLibraryFilesAndIncludesBesideItOnEveryPath` (CLI
 interpreter, `-o`, once-per-program across two loaded files, the REPL) and the reference
 pages' `; file: NAME` blocks (`DocExamplesTest`).
+
+## `cond-expand` (2026-09-19, `.todo/892`)
+
+**Decided while LOWERING, so a clause not taken never reaches a backend, and a feature is
+only one every backend shares.** `SchemeFeatures.FEATURES` -- `r7rs exact-closed
+ieee-float full-unicode ratios rontolisp`, R7RS appendix B's order -- is what
+`(features)` answers (`%scheme-features`, generated into `Scheme.runtimeForms` so the list
+is spelled once) and what a feature identifier is tested against. Checked on all four
+backends (2026-09-19): `(/ 1 3)` is `1/3`, `(expt 2 100)` exact, a string holds a code
+point above U+FFFF as one character, flonums are doubles. Never an OS, processor or
+backend name: the lowering is shared by the four backends and a compiled program runs
+elsewhere. `exact-complex` is absent (no complex numbers). Gauche 0.9.15 lists ~140
+features (`gauche`, `srfi-N`, `posix`, ...); a program testing those takes its `else`.
+
+- **Requirements** (`SchemeFeatures.clause`): an identifier, `(and ..)`, `(or ..)`,
+  `(not x)`, `(library name)`, compared by NAME; a last `else`. `(library name)` holds
+  when an import would find it (`SchemeLowering.libraryAvailable`): `(scheme <tag>)` of
+  `IMPORTABLE_LIBRARIES` (not `r5rs`, `file`, ...), a library declared already, or one
+  whose `.sld`/`.scm` file declares it -- that declares the file's libraries, as an import
+  would, without lowering them. **No clause taken and no `else` is a positioned error**
+  (Gauche: "Unfulfilled cond-expand"; R7RS: unspecified). A non-last `else`, a malformed
+  clause or requirement: positioned errors.
+- **Where it is taken**, four places, one choice:
+  1. The leading declarations (`resolveTopLevelCondExpand`): `declareLibraries` and
+     `imports` replace a top-level `cond-expand` at the index they scan by the taken
+     clause's datums, by SPELLING (no scope exists before the imports, as for `import`).
+     So a clause may hold `import`s (an R7RS program may begin with one, after its first
+     `import` for Gauche, whose initial module knows no `else`) or `define-library`
+     forms, and a `(library ..)` there sees the leading libraries above it. A session
+     does the same per buffer datum.
+  2. The `include` pre-pass (`includes`/`included`), by scope: every other occurrence, top
+     level, body and expression alike, becomes `(CORE_BEGIN body..)`, recursively.
+     `spliceBegins` / `spliceBodyBegins` then splice definitions; an empty clause at the
+     top level is nothing, in a body an empty `(begin)` (the body lowering accepts a
+     definition after it). Quoted data is not entered, nor a `syntax-rules` (so an unused
+     template is never decided).
+  3. `SchemeExpander.headExpanded` / `keywordForm`: a `cond-expand` a macro expanded into.
+     The requirements are decided on the STRIPPED form (a feature is a name; an alias
+     keeps its spelling), the body keeps its aliases.
+  4. `SchemeLowering.syntax`'s `COND_EXPAND` arm: what no walk enters -- a quasiquote's
+     unquoted expression.
+  As a library declaration, `libraryDeclarations` recurses into the taken clause.
+- **`eval`** takes one at run time (`%scheme-eval-cond-expand`, `%scheme-eval-feature-p`
+  in `scheme.lisp`): the same features, `(library (scheme <tag>))` through
+  `%scheme-library-p`, no user library (eval has none). The arm is behind the reader
+  feature `rontolisp-scheme-cond-expand`, selected by `SchemeLibrary.process` only for a
+  program that SPELLS `cond-expand` (a symbol, quoted data included, or inside a string)
+  -- the line the procedure table draws -- because it costs +2,455 B class / +1,900 B
+  wasm on every `eval` program (measured on a two-line `eval` program). Any other `eval`
+  keeps its bytes and still answers "Not supported inside eval" for a constructed one.
+
+Measured (2026-09-19, x86-64 Linux, Java 25): every program that spells no `cond-expand`
+compiles to byte-identical `.class` and `.wasm` before and after -- `hello`, the seven
+`examples/scheme/*.scm`, the concatenated `scheme-spec.yaml` corpus and its standalone
+cases, each under every standard it lists (74 of 74 artifacts; before the `eval` arm was
+gated, the ten artifacts of the five `eval` programs among them grew by about that
+figure). A program with a
+`cond-expand` compiles to exactly the bytes of the program spelling the clause it takes
+(checked on the `(define (third x) (cond-expand ...))` reference example).
+
+Pinned by `SchemeCondExpandTest` (each place, `library`, the errors, a session),
+`SchemeLibraryTest` (the `eval` arm's gate), the `cond-expand-...` case and standalone
+case of `scheme-spec.yaml` (all four backends, both standards, a library file whose
+declarations are `cond-expand`s; Gauche 0.9.15 prints the same but for its own
+feature names) and the reference pages (`DocExamplesTest`).
 
 ## A session (`SchemeSession`, `SchemeLowering.interact`)
 
@@ -1424,7 +1494,7 @@ the Brent pre-walk plus the mark-cycles pass it no longer pulls).
 
 ## Not here yet (each its own follow-up)
 
-`cond-expand`, exporting syntax from a library, file ports (`(scheme file)`), the other
+Exporting syntax from a library, file ports (`(scheme file)`), the other
 libraries, radix and exactness prefixes in `string->number` (`.todo/889`),
 re-entrant continuations, proper tail calls in general. Each is refused by name where it
 can be.
@@ -1505,8 +1575,8 @@ group, all four backends in `./mvnw test`; the wasm legs need `wasmtime` on `PAT
 `SchemeLoweringTest` (the table as emitted forms), `SchemeSessionTest` (what a session emits,
 when a buffer is complete), `SchemeReaderTest`, `SchemeNamesTest`,
 `SchemeBuiltinsTest` (every `:function` evaluates, every helper a template names exists),
-`SchemeLibrariesTest` (`define-library` / `include`), `SchemeLibraryTest` (which programs
-get the printer's vertical-line arm),
+`SchemeLibrariesTest` (`define-library` / `include`), `SchemeCondExpandTest`, `SchemeLibraryTest` (which programs
+get the printer's vertical-line arm and `eval`'s `cond-expand` arm),
 `RontoLispCliTest` (`aSchemeFileIsPickedByItsExtension`, `aCommonLispProgramLoadsASchemeFile`,
 `aSchemeSyntaxErrorNamesItsPositionOnEveryPath`, `aSchemeProgramIsRefusedByTheScalarBackend`,
 `anUncaughtSchemeErrorReportsItsMessageAndIrritants`,

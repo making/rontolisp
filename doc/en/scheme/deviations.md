@@ -44,8 +44,12 @@
   syntax. A record type a library defines prints its names with the library's name in
   front of them. Importing one name from two libraries is not refused; the later import
   wins.
+- A `cond-expand` is decided when the program is read, against the features every
+  backend shares; `(features)` names no operating system or processor. One no clause of
+  which holds, with no `else`, is an error. Inside `eval`, `(library ...)` holds for the
+  standard libraries only.
 
 ## Not yet
 
-`cond-expand`, file ports (`(scheme file)`), the other libraries. The syntactic ones are refused by name when the file is
-read.
+File ports (`(scheme file)`), the other libraries. Importing one is refused by name when
+the file is read.

@@ -170,8 +170,6 @@ class SchemeLibrariesTest {
 				"(define-library (m) (export m) (begin (define-syntax m (syntax-rules () ((_) 1)))))\n(import (m))"))
 			.hasMessage("main.scm:1:21: exporting syntax from a library is not supported by this experimental"
 					+ " front end yet: m");
-		assertThatThrownBy(() -> lowered("(define-library (m) (cond-expand (else)))\n(import (m))"))
-			.hasMessage("main.scm:1:21: cond-expand is not supported by this experimental front end yet");
 		assertThatThrownBy(() -> lowered("(define-library (m) (frob))\n(import (m))"))
 			.hasMessage("main.scm:1:21: unknown library declaration: frob");
 		assertThatThrownBy(() -> lowered("(define-library (m) (begin))\n(define-library (m) (begin))"))

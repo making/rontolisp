@@ -1,6 +1,6 @@
 # 構文
 
-フロントエンドが実装している構文キーワードです。`import` と `define-library` 以外はすべて `(scheme base)` がエクスポートします。この 2 つはプログラムの構文で、どのライブラリもエクスポートしません。`delay` と `delay-force` は [(scheme lazy)](library-lazy.md) に、`cons-stream` は [*Structure and Interpretation of Computer Programs*（SICP）互換の名前](library-sicp.md) に載っています。名前で拒否されるキーワードは[仕様との差異](../deviations.md)にあります。
+フロントエンドが実装している構文キーワードです。`import` と `define-library` 以外はすべて `(scheme base)` がエクスポートします。この 2 つはプログラムの構文で、どのライブラリもエクスポートしません。`delay` と `delay-force` は [(scheme lazy)](library-lazy.md) に、`cons-stream` は [*Structure and Interpretation of Computer Programs*（SICP）互換の名前](library-sicp.md) に載っています。
 
 | 名前 | 例 | 結果 |
 |---|---|---|
@@ -36,6 +36,7 @@
 | `define-library` | `(define-library (counter) (export next!) (import (scheme base)) (begin (define n 0) (define (next!) (set! n (+ n 1)) n)))` | `(import (counter))` で読めるライブラリ |
 | `include` | `(include "greet.scm")` | `include` の位置に置かれる `greet.scm` の定義 |
 | `include-ci` | `(include-ci "loud.scm")` | 同じく、ただし識別子は小文字に畳み込まれる |
+| `cond-expand` | `(cond-expand (ratios (/ 1 3)) (else 0.33))` | `1/3` |
 | `define-syntax` | `(let () (define-syntax two (syntax-rules () ((_) 2))) (* (two) 3))` | `6` |
 | `let-syntax` | `(let-syntax ((double (syntax-rules () ((_ e) (* 2 e))))) (double 21))` | `42` |
 | `letrec-syntax` | `(letrec-syntax ((my-or (syntax-rules () ((_) #f) ((_ e r ...) (let ((t e)) (if t t (my-or r ...))))))) (my-or #f 7))` | `7` |

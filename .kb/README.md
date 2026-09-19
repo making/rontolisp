@@ -53,7 +53,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [read-time-constants.md](read-time-constants.md) -- `pi`/float-range/fixnum/array limits as bound symbols, not reader substitutions; per-backend values
 - [source-positions.md](source-positions.md) -- `file:line:column` in reader and frontend errors; the cons-identity rule every AST pass honours
 - [source-language.md](source-language.md) -- the one seam from user source to core forms (`SourceLanguage`): per-file language pick, `--source-language`, the program-wide `SourceStandards`, what is NOT user source
-- [scheme-frontend.md](scheme-frontend.md) -- the EXPERIMENTAL Scheme front end: lowering table, library tags, `--scheme-standard`, destination-driven loops, identifier escaping, hygienic `syntax-rules` macros, `define-library` / `include`, `(scheme char)`'s generated Unicode tables, the `#f` / loop-shape / tail-depth / size measurements
+- [scheme-frontend.md](scheme-frontend.md) -- the EXPERIMENTAL Scheme front end: lowering table, library tags, `--scheme-standard`, destination-driven loops, identifier escaping, hygienic `syntax-rules` macros, `define-library` / `include`, `cond-expand` and its feature list, `(scheme char)`'s generated Unicode tables, the `#f` / loop-shape / tail-depth / size measurements
 - [format.md](format.md) -- `format`'s two renderings of one directive set, and the shared Schubfach float printer
 - [pretty-printer.md](pretty-printer.md) -- `write`/`pprint`, dispatch tables, `pprint-logical-block`, printer-control variables
 - [formatter.md](formatter.md) -- `rontolisp format`: the whitespace-only invariant and `IndentRules`

@@ -30,7 +30,7 @@ it: the program reads what `eval` wrote.
 
 Inside `eval`, a named `let`, a `do` and a procedure calling itself run in constant
 stack; every other call uses it. `define-record-type`, `define-values`, `let-values`,
-`import` and the syntax the reader refuses are refused by name inside `eval` too. A
+and `import` are refused by name inside `eval`. A
 compiled program's `eval` resolves a built-in procedure only when the program spells its
 name somewhere -- as a symbol, quoted data included, or inside a string -- while the
 interpreter resolves them all.

@@ -107,3 +107,23 @@
 ```
 (314 3)
 ```
+
+## 機能
+
+[cond-expand](reference/cond-expand.md) は、処理系の[機能](reference/features.md)と
+処理系にあるライブラリによって、プログラムを読む時点でコードを選びます: 複数の Scheme
+処理系向けに書いたプログラムがここで動き、選ばれなかった分岐はコンパイルされません。
+
+```scheme
+(import (scheme base) (scheme write))
+(cond-expand
+  (gauche (define (implementation) "Gauche"))
+  (rontolisp (define (implementation) "rontolisp"))
+  (else (define (implementation) "some Scheme")))
+(display (implementation))
+(newline)
+```
+
+```
+rontolisp
+```

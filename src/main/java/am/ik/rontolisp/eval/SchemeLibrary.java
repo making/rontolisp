@@ -75,7 +75,17 @@ public final class SchemeLibrary {
 	 */
 	static final String BAR_SYMBOLS_FEATURE = "rontolisp-scheme-bar-symbols";
 
-	private static final List<String> ALL_FEATURES = List.of(BYTEVECTORS_FEATURE, PORTS_FEATURE, BAR_SYMBOLS_FEATURE);
+	/**
+	 * The feature {@code scheme.lisp} is read with when the program spells
+	 * {@code cond-expand} -- as a symbol, quoted data included, or inside a string: it
+	 * gives {@code eval} its {@code cond-expand} arm, which no other program can reach,
+	 * so a program using {@code eval} without it keeps its bytes. The interpreter always
+	 * reads with it.
+	 */
+	static final String COND_EXPAND_FEATURE = "rontolisp-scheme-cond-expand";
+
+	private static final List<String> ALL_FEATURES = List.of(BYTEVECTORS_FEATURE, PORTS_FEATURE, BAR_SYMBOLS_FEATURE,
+			COND_EXPAND_FEATURE);
 
 	private static final Set<String> INTERNING = Set.of("INTERN", "MAKE-SYMBOL");
 
@@ -231,9 +241,9 @@ public final class SchemeLibrary {
 				for (LispVal spelled : program) {
 					collectSpellings(spelled, symbols, strings);
 				}
-				List<LispVal> generated = Scheme.runtimeForms(
-						name -> symbols.contains(name) || strings.stream().anyMatch(string -> string.contains(name)),
-						standards.scheme());
+				Predicate<String> spelled = name -> symbols.contains(name)
+						|| strings.stream().anyMatch(string -> string.contains(name));
+				List<LispVal> generated = Scheme.runtimeForms(spelled, standards.scheme());
 				List<String> selected = new ArrayList<>();
 				if (makesBytevectors(program, features) || makesBytevectors(generated, features)) {
 					selected.add(BYTEVECTORS_FEATURE);
@@ -243,6 +253,9 @@ public final class SchemeLibrary {
 				}
 				if (makesBarSymbols(program, features) || makesBarSymbols(generated, features)) {
 					selected.add(BAR_SYMBOLS_FEATURE);
+				}
+				if (spelled.test("cond-expand")) {
+					selected.add(COND_EXPAND_FEATURE);
 				}
 				List<LispVal> out = new ArrayList<>(
 						sourceForms(selected.isEmpty() ? features : features.with(selected)));
