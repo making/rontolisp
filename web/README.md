@@ -7,6 +7,9 @@ so the page has no server-side component.
 
 It offers:
 
+- **Language** — Common Lisp, or the experimental Scheme front end. The pick drives
+  the REPL, "Run source" and both compile buttons, and each language has its own
+  samples; switching keeps every definition made so far.
 - **REPL** — interpret expressions in a persistent environment (definitions and
   variables survive across inputs). Input history is kept in `localStorage`
   (it survives page reloads) and is navigated with the Up/Down arrow keys.
@@ -71,10 +74,10 @@ ronto-worker.js  (Web Worker hosting the runtime; blocks on Atomics.wait for fet
 rontoplayground.js + .wasm   (rontolisp compiled to WASM by Web Image)
    |  wraps
    v
-RontoPlayground.java   (@JS bootstrap that exports 3 functions to JS)
+RontoPlayground.java   (@JS bootstrap that exports the functions to JS)
    |  delegates to
    v
-LispEvaluator / JvmLispCompiler / WasmLispCompiler   (the existing core)
+PlaygroundRepl / JvmLispCompiler / WasmLispCompiler   (the existing core)
 ```
 
 The interpreter runs inside a **Web Worker** (`ronto-worker.js`), so long
@@ -111,7 +114,9 @@ GraalVM-only `org.graalvm.webimage.api` module, so it is kept in a separate
 source root. The `web` Maven profile adds `src/web/java` to the build (via
 `build-helper-maven-plugin`); the normal build and non-GraalVM JDKs never see it.
 
-`RontoPlayground` installs three callables on the JavaScript global scope using
+`RontoPlayground` installs its callables (`rontoSetLanguage`, `rontoEval`,
+`rontoRunProgram`, `rontoRunSession`, `rontoCompileJvm`, `rontoCompileWasm`,
+`rontoPutFile`) on the JavaScript global scope using
 the `@JS` annotation (`@JS.Export` is not implemented in Web Image yet, so the
 bootstrap-helper pattern is used). Compiled bytes cross the JS boundary as
 Base64 strings; the front-end decodes them into a `Blob` for download.
@@ -205,7 +210,7 @@ One-time repo setup: **Settings -> Pages -> Build and deployment -> Source:
   the playground does not emit.)
 - `load` works against uploaded files: pick (or drag-and-drop) `.lisp` files
   with the **load files** control, then `(load "name.lisp")` resolves them from
-  an in-memory map. The browser has no real filesystem, so the playground
+  an in-memory map (a Scheme `include` reads the same map). The browser has no real filesystem, so the playground
   installs an in-memory `SourceLoader` (`globalThis.rontoPutFile(name, content)`
   feeds it) instead of `Files.readString`.
 - Generated artifacts (`web/dist/`, and `target/rontoplayground.*`) are

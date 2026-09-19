@@ -399,6 +399,11 @@
 			<div class="pane-head">
 				<span>source</span>
 				<span class="spacer"></span>
+				<label for="language">language</label>
+				<select id="language" disabled>
+					<option value="lisp">Common Lisp</option>
+					<option value="scheme">Scheme (experimental)</option>
+				</select>
 				<label for="samples">sample</label>
 				<select id="samples">
 					<option value="">&mdash;</option>
@@ -414,7 +419,7 @@
 			<div class="toolbar">
 				<label for="file-upload">load files</label>
 				<input type="file" id="file-upload" multiple accept=".lisp,.lsp,.txt,.scm,.wit" disabled>
-				<span id="file-list" style="opacity:.7;font-size:.85em">none uploaded &mdash; then use <code>(load "name.lisp")</code></span>
+				<span id="file-list" style="opacity:.7;font-size:.85em">none uploaded &mdash; then use <code id="file-hint">(load "name.lisp")</code></span>
 			</div>
 			<div id="compile-status">Compile output appears here. The downloaded file runs on a real JVM / wasm runtime.</div>
 		</section>
@@ -454,7 +459,7 @@
 	     requests. -->
 	<script src="coi-serviceworker.min.js"></script>
 	<script>
-		const SAMPLES = {
+		const LISP_SAMPLES = {
 			"hello": '(print "hello, rontolisp")',
 			"factorial": '(defun fact (n)\n  (if (= n 0) 1 (* n (fact (- n 1)))))\n(print (fact 10))',
 			"fibonacci": '(defun fib (n)\n  (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(print (fib 20))',
@@ -472,20 +477,57 @@
 			"loop": '(dotimes (i 5)\n  (print (* i i)))\n(dolist (x (list "a" "b" "c"))\n  (princ x))\n(terpri)\n(let ((n 1))\n  (while (< n 100)\n    (setq n (* n 2)))\n  (print n))',
 		};
 
+		// The experimental Scheme front end (R7RS-small subset): see the docs' Scheme section.
+		const SCHEME_SAMPLES = {
+			"hello": '(display "hello, rontolisp")\n(newline)',
+			"factorial": '(define (fact n)\n  (if (= n 0) 1 (* n (fact (- n 1)))))\n(display (fact 20))\n(newline)',
+			"fibonacci": '(define (fib n)\n  (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(display (fib 20))\n(newline)',
+			"named-let": '(define (count-up n)\n  (let loop ((i 0) (acc \'()))\n    (if (= i n)\n        (reverse acc)\n        (loop (+ i 1) (cons (* i i) acc)))))\n(write (count-up 10))\n(newline)',
+			"higher-order": '(write (map (lambda (x) (* x x)) \'(1 2 3 4 5)))\n(newline)\n(write (apply + \'(1 2 3 4 5 6 7 8 9 10)))\n(newline)\n(for-each (lambda (s) (display (string-upcase s)) (newline)) \'("foo" "bar"))',
+			"closures": '(define (make-counter)\n  (let ((n 0))\n    (lambda () (set! n (+ n 1)) n)))\n(define c (make-counter))\n(c)\n(c)\n(display (c))\n(newline)',
+			"records": '(define-record-type point\n  (make-point x y)\n  point?\n  (x point-x)\n  (y point-y))\n(define p (make-point 3 4))\n(write (list (point? p) (point-x p) (point-y p)))\n(newline)',
+			"call/cc": '(define (find-first pred xs)\n  (call/cc\n    (lambda (return)\n      (for-each (lambda (x) (if (pred x) (return x))) xs)\n      #f)))\n(write (find-first even? \'(1 3 4 5 6)))\n(newline)',
+			"streams": '(define (integers-from n)\n  (cons-stream n (integers-from (+ n 1))))\n(define (take s k)\n  (if (= k 0) \'() (cons (stream-car s) (take (stream-cdr s) (- k 1)))))\n(write (take (integers-from 1) 10))\n(newline)',
+		};
+
+		// Per language: the samples, the REPL placeholder and how an uploaded file is used.
+		const LANGUAGES = {
+			lisp: { samples: LISP_SAMPLES, first: "fibonacci", placeholder: "(+ 1 2 3)", fileHint: '(load "name.lisp")' },
+			scheme: { samples: SCHEME_SAMPLES, first: "fibonacci", placeholder: "(+ 1 2 3)", fileHint: '(include "name.scm")' },
+		};
+		const LANGUAGE_KEY = "rontolisp-language";
+
 		const $ = (id) => document.getElementById(id);
 		const statusEl = $("status");
 		const log = $("repl-log");
 
-		// --- sample dropdown ---
+		// --- language pick and sample dropdown ---
+		// The pick is the runtime's (rontoSetLanguage): the REPL, "Run source" and both
+		// compile buttons read the picked language. Switching keeps every definition.
+		const languageSel = $("language");
 		const samplesSel = $("samples");
-		for (const name of Object.keys(SAMPLES)) {
-			const opt = document.createElement("option");
-			opt.value = name; opt.textContent = name;
-			samplesSel.appendChild(opt);
+		let language = "lisp";
+		try { if (LANGUAGES[localStorage.getItem(LANGUAGE_KEY)]) language = localStorage.getItem(LANGUAGE_KEY); } catch (e) { /* ignore */ }
+		languageSel.value = language;
+
+		function showLanguage(lang) {
+			const spec = LANGUAGES[lang];
+			samplesSel.innerHTML = "";
+			const none = document.createElement("option");
+			none.value = ""; none.innerHTML = "&mdash;";
+			samplesSel.appendChild(none);
+			for (const name of Object.keys(spec.samples)) {
+				const opt = document.createElement("option");
+				opt.value = name; opt.textContent = name;
+				samplesSel.appendChild(opt);
+			}
+			$("source").value = spec.samples[spec.first];
+			$("repl-input").placeholder = spec.placeholder;
+			$("file-hint").textContent = spec.fileHint;
 		}
-		$("source").value = SAMPLES["fibonacci"];
+		showLanguage(language);
 		samplesSel.addEventListener("change", () => {
-			if (samplesSel.value) $("source").value = SAMPLES[samplesSel.value];
+			if (samplesSel.value) $("source").value = LANGUAGES[language].samples[samplesSel.value];
 		});
 
 		// --- REPL log helpers ---
@@ -741,6 +783,8 @@
 			$("btn-wasm").disabled = false;
 			$("btn-run-source").disabled = false;
 			$("file-upload").disabled = false;
+			languageSel.disabled = false;
+			vmCall("rontoSetLanguage", language);
 			appendEntry(null, "rontolisp interpreter running in WebAssembly. Type an expression below.", false);
 			if (!readyMsg.crossOriginIsolated) {
 				appendEntry(null, "note: cross-origin isolation is unavailable, so rontolisp:fetch falls back to synchronous requests (promises settle at fetch time; no overlap).", false);
@@ -779,6 +823,16 @@
 						navigateHistory(el, 1);
 					}
 				}
+			});
+
+			languageSel.addEventListener("change", async () => {
+				const picked = languageSel.value;
+				const res = await vmCall("rontoSetLanguage", picked);
+				if (res.startsWith("ERROR:")) { appendEntry(null, res.slice(6).trim(), true); languageSel.value = language; return; }
+				language = picked;
+				try { localStorage.setItem(LANGUAGE_KEY, picked); } catch (e) { /* ignore */ }
+				showLanguage(picked);
+				appendEntry(null, "language: " + languageSel.options[languageSel.selectedIndex].textContent + " (definitions so far are kept)", false);
 			});
 
 			$("btn-run-source").addEventListener("click", () => {

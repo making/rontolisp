@@ -20,6 +20,10 @@ rontolisp prog.txt --source-language scheme        # any extension
 
 `--no-gc` は拒否されます。このバックエンドにはペア・シンボル・クロージャがありません。
 
+このセクションの例はブラウザ上で実行できます。**Run** はそれぞれを独立したプログラムとして、
+新しいインタプリタで実行します。[playground](../../../playground.html) は **language** で
+Scheme を選ぶと Scheme を読みます。
+
 ```scheme
 (import (scheme base) (scheme write))
 

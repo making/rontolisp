@@ -105,10 +105,34 @@ class DocGenTest {
 	void runnableLispBlockBecomesAnInteractiveCell() {
 		String html = "<pre><code class=\"language-lisp\">(print (+ 1 2))</code></pre>";
 		String out = RunnableBlockTransformer.transform(html);
-		assertThat(out).contains("class=\"code-cell\"")
+		assertThat(out).contains("<div class=\"code-cell\" data-lang=\"lisp\">")
 			.contains("<button class=\"run\"")
 			.contains("<textarea class=\"cell-src\"")
 			.contains("(print (+ 1 2))");
+	}
+
+	@Test
+	void aSchemeBlockBecomesASchemeCellCarryingTheStdinBlockBeforeIt() {
+		String html = """
+				<pre><code class="language-stdin">first &amp; line
+				</code></pre>
+				<p>Reads it:</p>
+				<pre><code class="language-scheme">(write (read-line))
+				</code></pre>
+				<pre><code class="language-scheme">(display &quot;no stdin&quot;)</code></pre>""";
+		String out = RunnableBlockTransformer.transform(html);
+		assertThat(out).contains("<pre><code class=\"language-stdin\">first &amp; line\n</code></pre>")
+			.contains("<div class=\"code-cell\" data-lang=\"scheme\">")
+			.contains("rows=\"1\">(write (read-line))</textarea>"
+					+ "<textarea class=\"cell-stdin\" hidden>first &amp; line\n</textarea>")
+			.contains("rows=\"1\">(display &quot;no stdin&quot;)</textarea><pre class=\"cell-out\" hidden>");
+		assertThat(out.split("cell-stdin", -1)).hasSize(2);
+	}
+
+	@Test
+	void aSchemeFileBlockStaysStatic() {
+		String html = "<pre><code class=\"language-scheme\">; file: greet.scm\n(define (greet) 1)</code></pre>";
+		assertThat(RunnableBlockTransformer.transform(html)).isEqualTo(html);
 	}
 
 	@Test

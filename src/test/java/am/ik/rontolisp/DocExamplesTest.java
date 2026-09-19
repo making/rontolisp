@@ -22,6 +22,7 @@ import java.util.stream.Stream;
 import com.sun.net.httpserver.HttpServer;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.LispExitSignal;
+import am.ik.rontolisp.eval.PlaygroundRepl;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.SourceSession;
@@ -60,12 +61,13 @@ import static org.assertj.core.api.Assertions.fail;
  * drifts.</li>
  * <li>A <code>```scheme</code> block is a WHOLE program for the experimental Scheme front
  * end (it is lowered a file at a time, so it shares nothing with its neighbours): it must
- * run, and a plain block right after it is its asserted standard output. It is static on
- * the site -- the runnable cells read Common Lisp. A <code>```scheme</code> block with a
- * <code>; =&gt;</code> annotation is instead read by a REPL session of its own, form by
- * form, and each annotation is compared with what that REPL echoes for its form: the
- * {@code write} text, nothing for a definition or an effect, several values joined by
- * {@code ", "}. An {@code exit} ends the block's program, keeping what it printed.</li>
+ * run, and a plain block right after it is its asserted standard output. On the site it
+ * is a Run cell running the same thing ({@code PlaygroundRepl}). A <code>```scheme</code>
+ * block with a <code>; =&gt;</code> annotation is instead read by a REPL session of its
+ * own, form by form, and each annotation is compared with what that REPL echoes for its
+ * form: the {@code write} text, nothing for a definition or an effect, several values
+ * joined by {@code ", "}. An {@code exit} ends the block's program, keeping what it
+ * printed.</li>
  * <li>A <code>```stdin</code> block is the standard input of the <code>```scheme</code>
  * block right after it (every other block reads an empty input).</li>
  * <li>A <code>```scheme</code> block whose first line is <code>; file: NAME</code> is
@@ -304,23 +306,15 @@ class DocExamplesTest {
 	}
 
 	// A Scheme example is a whole program on a fresh evaluator: the front end decides
-	// defun-or-variable per FILE, so a block cannot lean on an earlier one.
+	// defun-or-variable per FILE, so a block cannot lean on an earlier one. It runs
+	// through what the site's Run cell runs (PlaygroundRepl.run).
 	static String runScheme(String source, String stdin, String page, Map<String, String> files) {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		LispEvaluator evaluator = schemeEvaluator(out, stdin);
 		try {
-			for (LispVal form : SourceLanguage.SCHEME.read(source, evaluator.features(), null, SourceStandards.DEFAULT,
-					pageFiles(files))) {
-				evaluator.eval(form);
-			}
-		}
-		catch (LispExitSignal exit) {
-			// (exit) ends the program; what it printed before is its output.
+			return new PlaygroundRepl(pageFiles(files), stdin).pick(SourceLanguage.SCHEME).run(source).strip();
 		}
 		catch (RuntimeException ex) {
-			fail("Scheme example in %s failed to evaluate:%n%s%n-> %s".formatted(page, source, ex), ex);
+			return fail("Scheme example in %s failed to evaluate:%n%s%n-> %s".formatted(page, source, ex), ex);
 		}
-		return out.toString(StandardCharsets.UTF_8).strip();
 	}
 
 	private static final Pattern FILE_BLOCK = Pattern.compile("\\A;+ file: (\\S+)");

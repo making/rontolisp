@@ -38,8 +38,8 @@ import am.ik.rontolisp.scheme.SchemeFiles;
  * picks by the LOADED file's extension, while the entry source is picked by the entry
  * file's extension unless the {@code --source-language} CLI override names one. The REPL
  * has no file and reads the override's language, one buffer at a time, through
- * {@link SourceSession}; the browser playground has no language pick and reads the
- * default.
+ * {@link SourceSession}; the browser playground reads the language its page picks, the
+ * same way ({@link PlaygroundRepl}).
  */
 public enum SourceLanguage {
 
@@ -162,8 +162,21 @@ public enum SourceLanguage {
 	 * @return the parsed top-level forms
 	 */
 	public List<LispVal> readStrict(String source, Features features) {
+		return readStrict(source, features, null);
+	}
+
+	/**
+	 * {@link #readStrict(String, Features)} with the files the source names read through
+	 * a loader: a Scheme {@code include} and the {@code define-library} files a Scheme
+	 * program imports (Scheme has no {@code #.}, so its read is the ordinary one).
+	 * @param source the program text
+	 * @param features the active reader features
+	 * @param loader where named files are read from, or {@code null} when none can be
+	 * @return the parsed top-level forms
+	 */
+	public List<LispVal> readStrict(String source, Features features, @Nullable SourceLoader loader) {
 		if (this == SCHEME) {
-			return Scheme.read(source, null);
+			return read(source, features, null, SourceStandards.DEFAULT, loader);
 		}
 		return LispReader.readAllFromString(source, features);
 	}

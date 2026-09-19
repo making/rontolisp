@@ -1,14 +1,13 @@
 package am.ik.rontolisp.web;
 
-import java.io.ByteArrayOutputStream;
 import java.io.FileNotFoundException;
-import java.io.PrintStream;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import org.graalvm.webimage.api.JS;
 import org.graalvm.webimage.api.JSString;
@@ -29,8 +28,7 @@ import am.ik.rontolisp.eval.GgufLibrary;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.TokenizersLibrary;
 import am.ik.rontolisp.eval.TorchLibrary;
-import am.ik.rontolisp.eval.LispEvaluator;
-import am.ik.rontolisp.eval.LispExitSignal;
+import am.ik.rontolisp.eval.PlaygroundRepl;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.VecLibrary;
 import am.ik.rontolisp.eval.UrlLibrary;
@@ -41,18 +39,27 @@ import am.ik.rontolisp.reader.Features;
 
 /**
  * Web Image entry point that exposes the rontolisp interpreter and compilers to
- * the browser. The actual UI lives in {@code index.html}; this class only
- * installs three callables on the JavaScript global scope:
+ * the browser. The actual UI lives in {@code playground.html}; this class only
+ * installs callables on the JavaScript global scope:
  * <ul>
+ * <li>{@code rontoSetLanguage(name)} - pick the language every other call reads
+ * ({@code "lisp"}, the default, or {@code "scheme"}); answers the picked language's
+ * name.</li>
  * <li>{@code rontoEval(source)} - interpret source in a persistent REPL
- * environment and return the captured output plus the last value.</li>
+ * environment and return the captured output plus the last form's values.</li>
+ * <li>{@code rontoRunProgram(source, stdin)} / {@code rontoRunSession(source, stdin)} -
+ * run source on a FRESH interpreter reading {@code stdin}: as a whole program
+ * (its output), or form by form with every value echoed (the documentation site's
+ * Scheme cells).</li>
  * <li>{@code rontoCompileJvm(source, className)} - compile to a JVM
  * {@code .class} file, returned as a Base64 string.</li>
  * <li>{@code rontoCompileWasm(source)} - compile to a {@code .wasm} module,
  * returned as a Base64 string.</li>
+ * <li>{@code rontoPutFile(name, content)} - add an uploaded file.</li>
  * </ul>
- * Compilation errors are returned as a plain string prefixed with
- * {@code "ERROR:"} so the front-end can distinguish them from Base64 payloads.
+ * Errors are returned as a plain string prefixed with {@code "ERROR:"} so the
+ * front-end can distinguish them from a result. What the interpreter shows is
+ * {@link PlaygroundRepl}'s, which the JVM test suite runs.
  * <p>
  * This class depends on the GraalVM-only {@code org.graalvm.webimage.api} module
  * and is compiled only under the {@code web} Maven profile, which adds
@@ -62,12 +69,6 @@ public final class RontoPlayground {
 
 	private static final String ERROR_PREFIX = "ERROR:";
 
-	private static final ByteArrayOutputStream replBuffer = new ByteArrayOutputStream();
-
-	private static final PrintStream replOut = new PrintStream(replBuffer);
-
-	private static final LispEvaluator evaluator = new LispEvaluator(replOut);
-
 	/**
 	 * In-memory files uploaded from the browser, keyed by file name. There is no filesystem
 	 * in the WASM sandbox, so {@code (load "name.lisp")} resolves against this map.
@@ -75,9 +76,9 @@ public final class RontoPlayground {
 	private static final Map<String, String> uploadedFiles = new LinkedHashMap<>();
 
 	/**
-	 * Reads an uploaded file. Backs {@code (load "x.lisp")} on the REPL and
-	 * {@code (rontolisp:wit-export "w.wit")} on both compile paths, so a WIT world is
-	 * dropped onto the page like any other companion file.
+	 * Reads an uploaded file. Backs {@code (load "x.lisp")} and a Scheme {@code include}
+	 * on the REPL, and {@code (rontolisp:wit-export "w.wit")} on both compile paths, so a
+	 * WIT world is dropped onto the page like any other companion file.
 	 */
 	private static final SourceLoader uploads = path -> {
 		String content = uploadedFiles.get(path);
@@ -88,9 +89,8 @@ public final class RontoPlayground {
 		return content;
 	};
 
-	static {
-		evaluator.setSourceLoader(uploads);
-	}
+	/** The page's persistent interpreter, whose pick every call reads. */
+	private static final PlaygroundRepl repl = new PlaygroundRepl(uploads);
 
 	private RontoPlayground() {
 	}
@@ -101,45 +101,41 @@ public final class RontoPlayground {
 		return String.join("\n", uploadedFiles.keySet());
 	}
 
+	/** Pick the language the REPL, the fresh runs and the compile buttons read. */
+	static String setLanguage(String name) {
+		try {
+			return repl.pick(SourceLanguage.parse(name)).language().name();
+		}
+		catch (RuntimeException ex) {
+			return ERROR_PREFIX + ex.getMessage();
+		}
+	}
+
 	/** Interpret {@code source} in the persistent REPL environment. */
 	static String evalLine(String source) {
-		replBuffer.reset();
+		// #. resolves per form, as at the CLI REPL; the COMPILE buttons keep the
+		// error-mode read (frontend below). (uiop:quit code) / (exit): there is no
+		// process to end, so the run stops where it stood and its output is the answer.
+		return shown(() -> repl.eval(source));
+	}
+
+	/** Run {@code source} as a whole program on a fresh interpreter. */
+	static String runProgram(String source, String stdin) {
+		return shown(() -> fresh(stdin).run(source));
+	}
+
+	/** Run {@code source} form by form on a fresh interpreter, echoing every value. */
+	static String runSession(String source, String stdin) {
+		return shown(() -> fresh(stdin).transcript(source));
+	}
+
+	private static PlaygroundRepl fresh(String stdin) {
+		return new PlaygroundRepl(uploads, stdin).pick(repl.language());
+	}
+
+	private static String shown(Supplier<String> run) {
 		try {
-			// #. read-time eval, like the CLI REPL: only a source textually containing
-			// #. pays for the marker read; each form's markers resolve just before it
-			// runs. The COMPILE buttons keep the error-mode read (frontend below): their
-			// pipeline has no macro-time marker resolution pass.
-			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
-			List<LispVal> exprs = SourceLanguage.COMMON_LISP.read(source, Features.INTERPRETER, null);
-			// The last form's values are echoed one per line: (floor 10 3) echoes 3
-			// then 1. Deliberately only the LAST form, unlike the CLI REPL (which
-			// echoes every form, as SBCL does reading them one at a time): this same
-			// entry point backs the documentation site's "Run" cells, whose blocks are
-			// a setup-plus-expression whose FINAL value is the annotated one.
-			// See .kb/multiple-values.md.
-			List<LispVal> values = List.of();
-			for (int i = 0; i < exprs.size(); i++) {
-				LispVal expr = markers ? evaluator.resolveReadTimeEvalInCode(exprs.get(i)) : exprs.get(i);
-				if (i == exprs.size() - 1) {
-					values = evaluator.evalValues(expr);
-				}
-				else {
-					evaluator.eval(expr);
-				}
-			}
-			replOut.flush();
-			StringBuilder echoed = new StringBuilder(replBuffer.toString());
-			for (int i = 0; i < values.size(); i++) {
-				echoed.append(i == 0 ? "" : "\n").append(values.get(i).print());
-			}
-			return echoed.toString();
-		}
-		catch (LispExitSignal exit) {
-			// (uiop:quit code) in the browser: there is no process to end, so the run
-			// stops where it stood and the output it produced is the answer -- the same
-			// thing the CLI shows, minus the exit code the page cannot have.
-			replOut.flush();
-			return replBuffer.toString();
+			return run.get();
 		}
 		catch (RuntimeException ex) {
 			return ERROR_PREFIX + ex.getMessage();
@@ -185,8 +181,9 @@ public final class RontoPlayground {
 	private static List<LispVal> frontend(String source, Features features, WitExportDirective.Backend backend) {
 		// The strict (error-mode) read is deliberate here, not a leftover: this
 		// reduced frontend has no marker-resolution pass, so a #. must be a read
-		// error rather than a marker no pass resolves.
-		List<LispVal> read = WitImportInliner.inline(SourceLanguage.COMMON_LISP.readStrict(source, features), null,
+		// error rather than a marker no pass resolves. A Scheme source is read with
+		// the uploaded files its include / define-library name.
+		List<LispVal> read = WitImportInliner.inline(repl.language().readStrict(source, features, uploads), null,
 				backend, uploads);
 		// objc:, appkit:, metal: and scene: need the Objective-C runtime on the machine
 		// that RUNS the program, and the JVM output would need the binding's class
@@ -226,6 +223,15 @@ public final class RontoPlayground {
 	@JS(args = { "fn" }, value = "globalThis.rontoEval = fn;")
 	private static native void exportEval(Function<JSString, JSString> fn);
 
+	@JS(args = { "fn" }, value = "globalThis.rontoSetLanguage = fn;")
+	private static native void exportSetLanguage(Function<JSString, JSString> fn);
+
+	@JS(args = { "fn" }, value = "globalThis.rontoRunProgram = fn;")
+	private static native void exportRunProgram(BiFunction<JSString, JSString, JSString> fn);
+
+	@JS(args = { "fn" }, value = "globalThis.rontoRunSession = fn;")
+	private static native void exportRunSession(BiFunction<JSString, JSString, JSString> fn);
+
 	@JS(args = { "fn" }, value = "globalThis.rontoCompileJvm = fn;")
 	private static native void exportCompileJvm(BiFunction<JSString, JSString, JSString> fn);
 
@@ -236,7 +242,10 @@ public final class RontoPlayground {
 	private static native void exportPutFile(BiFunction<JSString, JSString, JSString> fn);
 
 	public static void main(String[] args) {
+		exportSetLanguage(name -> JSString.of(setLanguage(name.asString())));
 		exportEval(source -> JSString.of(evalLine(source.asString())));
+		exportRunProgram((source, stdin) -> JSString.of(runProgram(source.asString(), stdin.asString())));
+		exportRunSession((source, stdin) -> JSString.of(runSession(source.asString(), stdin.asString())));
 		exportCompileJvm((source, className) -> JSString.of(compileJvm(source.asString(), className.asString())));
 		exportCompileWasm(source -> JSString.of(compileWasm(source.asString())));
 		exportPutFile((name, content) -> JSString.of(putFile(name.asString(), content.asString())));

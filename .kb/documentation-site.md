@@ -2,7 +2,7 @@
 
 The manual is Markdown under `doc/<lang>/**`, rendered to `web/dist/docs` by the standalone
 `docs-tool/` generator and published by `.github/workflows/pages.yaml`. It reuses the browser
-playground's WebAssembly runtime, so `lisp` examples run in-page.
+playground's WebAssembly runtime, so `lisp` and `scheme` examples run in-page.
 
 ## Layout
 - `doc/<lang>/nav.yaml` = sidebar/order; `doc/assets/docs.css` + `docs.js` = theme and
@@ -43,11 +43,20 @@ playground's WebAssembly runtime, so `lisp` examples run in-page.
   (`PackageResolver.accessibleSymbols`); `intern` cannot help (no intern table,
   `.kb/symbol-runtime-api.md`) and `defpackage`'s `:intern` is unsupported.
 - ` ```scheme ` = a whole Scheme program on a fresh evaluator, stdout asserted by a following
-  plain block; static on the site. With any `; =>` in it, the block instead runs through a
+  plain block. With any `; =>` in it, the block instead runs through a
   REPL session of its own, form by form, and each annotation is what that REPL echoes (the
   `write` text; nothing for a definition or an effect; several values joined by `, `).
   `exit` ends the block keeping its output. A ` ```stdin ` block right before a ` ```scheme `
-  block is its standard input (every other block reads an empty one).
+  block is its standard input (every other block reads an empty one). A first line
+  `; file: NAME` makes the block the file `NAME` for the page's other Scheme blocks.
+- **Both kinds are Run cells, and the browser runs what the test checks.** `RunnableBlockTransformer`
+  tags a cell `data-lang`; a `scheme` cell carries its stdin block as a hidden
+  `textarea.cell-stdin` and a `; file:` block stays static. `docs.js`'s `evalCell` picks
+  `rontoSetLanguage`, then `rontoEval` (lisp: the page's shared interpreter) or, for scheme,
+  `rontoRunProgram` / `rontoRunSession` (a fresh interpreter; the `; =>` rule is restated
+  there) after `rontoPutFile`-ing the page's file blocks. Those calls are
+  `eval/PlaygroundRepl`'s `run` / `transcript`, and `DocExamplesTest.runScheme` runs through
+  `run` too (`.kb/source-language.md`, "The browser").
 - ` ```console ` = static transcript or anything needing stdin/files/network or that signals
   (`read`, `open`, `load`, `with-open-file`, `error`, `rontolisp:fetch`); not executed.
   ` ```bash ` = shell. Plain ` ``` ` = expected output.
@@ -84,6 +93,11 @@ java -jar docs-tool/target/rontolisp-docgen.jar --source doc --out web/dist/docs
 cd web/dist && jwebserver -p 8000                                 # http://localhost:8000/docs/
 ```
 `-Pweb -DskipTests package` refreshes the playground wasm (only needed to run cells).
+Without a system Binaryen, `npm exec binaryen` supplies `wasm-as` (130 worked, 2026-09-19; put
+its `bin` on `PATH`; the build takes ~3 min). The exports can be driven from node by
+`vm.runInThisContext` of `rontoplayground.js` with `config.wasm_path` set and `fetch` answering
+a file path; the cells and the playground page from `chrome-headless-shell` (Playwright's cache)
+over CDP against `jwebserver` -- how `.todo/893` was verified; no committed test does this.
 `-Drontolisp.doc.fix=true -Dtest=DocExamplesTest#fixShownResults` rewrites `; =>` / output
 blocks in both trees (manual-only). `docs-tool` is NOT in the root reactor, so its own tests
 run only in `pages.yaml` (which builds it WITHOUT `-DskipTests` on purpose) or via
