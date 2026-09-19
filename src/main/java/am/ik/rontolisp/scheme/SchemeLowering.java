@@ -329,6 +329,10 @@ final class SchemeLowering {
 		// The case-lambda clause whose defun this loop is, or null.
 		private @Nullable LispSymbol clause;
 
+		// What a jump assigns besides the arguments, as variable-value pairs: a
+		// tail-call group's member selector.
+		private List<LispVal> presets = List.of();
+
 		Target(Binding binding, LoopShape shape, Scope home, List<String> names) {
 			this.binding = binding;
 			this.label = shape.label();
@@ -498,6 +502,55 @@ final class SchemeLowering {
 	private record Lowered(LispVal lambdaList, List<LispVal> body) {
 	}
 
+	/**
+	 * A top-level procedure a tail-call group may hold: one defined once, by a
+	 * {@code lambda}, never assigned -- a {@link GlobalFunction} with no
+	 * {@code case-lambda} clauses.
+	 *
+	 * @param form the {@code define}
+	 * @param definition its parse
+	 * @param function its binding
+	 */
+	private record Member(LispCons form, Definition definition, GlobalFunction function) {
+	}
+
+	/**
+	 * Top-level procedures whose tail calls to each other form a cycle, lowered as ONE
+	 * {@code defun} holding each member's body under a label, so every tail call among
+	 * them is a jump; each member's own {@code defun} calls it with its index
+	 * (.kb/scheme-frontend.md, "Tail-call groups").
+	 */
+	private static final class Group {
+
+		// In file order; the first one's define emits the group's defun.
+		private final List<Member> members;
+
+		// The group's defun, once the first member's define has emitted it.
+		private @Nullable LispSymbol function;
+
+		Group(List<Member> members) {
+			this.members = members;
+		}
+
+	}
+
+	/**
+	 * A group's {@code defun} and, per member, the members its body jumps to.
+	 *
+	 * @param defun the group's {@code defun}
+	 * @param function its name
+	 * @param jumps per member, the indexes of the members a tail call in its body jumps
+	 * to
+	 */
+	private record LoweredGroup(LispVal defun, LispSymbol function, List<Set<Integer>> jumps) {
+	}
+
+	/** What a lowering attempt changes that a discarded one must put back. */
+	private record Snapshot(int counter, int closures, List<LispVal> hoisted,
+			Map<LispCons, InternalRecord> internalRecords, Set<String> internalRecordNames,
+			Map<LispCons, LispVal> caseLambdas, String enclosing) {
+	}
+
 	// The text being lowered: the file, or the buffer a session is reading now.
 	private SchemeReader reader;
 
@@ -549,6 +602,9 @@ final class SchemeLowering {
 	private int counter;
 
 	private int closures;
+
+	// The tail-call groups of a file, by member name (declareGroups).
+	private final Map<String, Group> groups = new HashMap<>();
 
 	// Each internal define-record-type datum's hoisted type, so a body lowered twice (a
 	// loop tried as a pure loop first) defines it once and binds the same names.
@@ -1661,6 +1717,328 @@ final class SchemeLowering {
 		for (LispCons record : records) {
 			declareRecord(record, definitions);
 		}
+		if (!this.interactive) {
+			declareGroups(forms);
+		}
+	}
+
+	// ------------------------------------------------------------------ tail-call groups
+
+	/**
+	 * Finds the tail-call groups. The top-level procedures that may call each other in a
+	 * cycle -- by a cheap scan of the call heads, blind to scope -- are lowered as a
+	 * group once, as a probe, and what their bodies actually JUMP to decides: a set the
+	 * jumps do not hold together is settled again as the cycles they do form. A program
+	 * with no such cycle is lowered exactly as before.
+	 */
+	private void declareGroups(List<LispVal> forms) {
+		List<Member> members = new ArrayList<>();
+		Map<String, Integer> index = new HashMap<>();
+		for (LispVal datum : forms) {
+			if (datum instanceof LispCons form && syntaxOf(form, this.global) == Core.DEFINE) {
+				Definition definition = definition(form);
+				if (definition.procedure() && definition.caseLambda() == null
+						&& this.global.bindings.get(name(definition.name())) instanceof GlobalFunction function
+						&& function.clauses().isEmpty()) {
+					index.putIfAbsent(definition.name().name(), members.size());
+					members.add(new Member(form, definition, function));
+				}
+			}
+		}
+		if (members.size() < 2) {
+			return;
+		}
+		List<Set<Integer>> mentions = new ArrayList<>();
+		for (Member member : members) {
+			Set<String> heads = new HashSet<>();
+			collectCallHeads(member.definition().body(), heads);
+			Set<Integer> callees = new HashSet<>();
+			for (String head : heads) {
+				Integer callee = index.get(head);
+				if (callee != null) {
+					callees.add(callee);
+				}
+			}
+			mentions.add(callees);
+		}
+		for (List<Integer> cycle : cycles(mentions)) {
+			settleGroup(cycle.stream().map(members::get).toList());
+		}
+	}
+
+	private void settleGroup(List<Member> candidate) {
+		Snapshot snapshot = snapshot();
+		LoweredGroup probe;
+		try {
+			probe = lowerGroup(candidate);
+		}
+		catch (RuntimeException ex) {
+			// The real lowering reports it, positioned, where the form stands.
+			return;
+		}
+		finally {
+			restore(snapshot);
+		}
+		List<List<Integer>> cycles = cycles(probe.jumps());
+		if (cycles.size() == 1 && cycles.get(0).size() == candidate.size()) {
+			Group group = new Group(candidate);
+			for (Member member : candidate) {
+				this.groups.put(name(member.definition().name()), group);
+			}
+			return;
+		}
+		for (List<Integer> cycle : cycles) {
+			settleGroup(cycle.stream().map(candidate::get).toList());
+		}
+	}
+
+	private Snapshot snapshot() {
+		return new Snapshot(this.counter, this.closures, new ArrayList<>(this.hoisted),
+				new IdentityHashMap<>(this.internalRecords), new HashSet<>(this.internalRecordNames),
+				new IdentityHashMap<>(this.caseLambdas), this.enclosing);
+	}
+
+	private void restore(Snapshot snapshot) {
+		this.counter = snapshot.counter();
+		this.closures = snapshot.closures();
+		this.hoisted.clear();
+		this.hoisted.addAll(snapshot.hoisted());
+		this.internalRecords.clear();
+		this.internalRecords.putAll(snapshot.internalRecords());
+		this.internalRecordNames.clear();
+		this.internalRecordNames.addAll(snapshot.internalRecordNames());
+		this.caseLambdas.clear();
+		this.caseLambdas.putAll(snapshot.caseLambdas());
+		this.enclosing = snapshot.enclosing();
+	}
+
+	/**
+	 * The group's {@code defun}: {@code (defun G (W C1 .. Cn) (let ((R nil)) (tagbody TOP
+	 * (if (= W 1) (go L1) ..) L0 (let ((a C1) ..) body0) (go END) L1 .. END) R))}.
+	 * {@code W} picks the member to run; the carriers are shared by position, as many as
+	 * the widest member takes. Every member rebinds its variables from them per entry, so
+	 * a jump is plain {@code setq}s of carriers no argument can mention, and a closure
+	 * captures its own entry's binding.
+	 *
+	 * <p>
+	 * A jump to itself goes to the member's label. A jump to another member also sets
+	 * {@code W} and goes to {@code TOP}, the one entry of every cycle: jumping straight
+	 * into another member's label would give the loop an entry per member. The layout is
+	 * measured (.kb/scheme-frontend.md, "Tail-call groups"): a stub per member that sets
+	 * {@code W} cost wasm a dispatch round per jump, and the members as an {@code if}
+	 * chain under {@code TOP} ran the metacircular evaluator 15% slower on the JVM.
+	 */
+	private LoweredGroup lowerGroup(List<Member> members) {
+		List<Formals> formals = new ArrayList<>();
+		int width = 0;
+		for (Member member : members) {
+			Formals parsed = formals(Objects.requireNonNull(member.definition().formals()), member.form());
+			formals.add(parsed);
+			width = Math.max(width, parsed.all().size());
+		}
+		LispSymbol function = fresh("G");
+		LispSymbol which = fresh("W");
+		List<LispSymbol> carriers = new ArrayList<>();
+		for (int i = 0; i < width; i++) {
+			carriers.add(fresh("C"));
+		}
+		LispSymbol result = fresh("R");
+		Exit exit = new Exit(result);
+		List<LispSymbol> labels = new ArrayList<>();
+		for (int i = 0; i < members.size(); i++) {
+			labels.add(fresh("L"));
+		}
+		LispSymbol top = fresh("L");
+		LispSymbol end = fresh("L");
+		LispVal dispatch = null;
+		for (int i = members.size() - 1; i >= 1; i--) {
+			// A numeric =, not EQL: the JVM backend compiles EQL on an untyped
+			// variable to a generic call, which cost the metacircular evaluator a third
+			// of its run time as the entry dispatch of every non-tail m-eval.
+			LispVal test = list(symbol("="), which, new LispInteger(i));
+			LispVal jump = list(symbol("GO"), labels.get(i));
+			dispatch = dispatch == null ? list(symbol("IF"), test, jump) : list(symbol("IF"), test, jump, dispatch);
+		}
+		List<LispVal> tagbody = new ArrayList<>(List.of(symbol("TAGBODY"), top, Objects.requireNonNull(dispatch)));
+		List<Set<Integer>> jumps = new ArrayList<>();
+		String enclosing = this.enclosing;
+		for (int i = 0; i < members.size(); i++) {
+			Member member = members.get(i);
+			List<Target> targets = new ArrayList<>();
+			for (int j = 0; j < members.size(); j++) {
+				Formals parsed = formals.get(j);
+				Target target = new Target(
+						members.get(j).function(), new LoopShape(i == j ? labels.get(j) : top,
+								carriers.subList(0, parsed.all().size()), parsed.rest() != null, false),
+						this.global, List.of());
+				if (i != j) {
+					target.presets = List.of(which, new LispInteger(j));
+				}
+				targets.add(target);
+			}
+			this.enclosing = name(member.definition().name());
+			Scope inner = new Scope(this.global);
+			List<LispVal> pairs = new ArrayList<>();
+			List<LispSymbol> all = formals.get(i).all();
+			for (int j = 0; j < all.size(); j++) {
+				pairs.add(list(bind(all.get(j), inner), carriers.get(j)));
+			}
+			List<LispVal> statements = body(member.definition().body(),
+					Context.storing(new Scope(inner), new Destination(result, targets, exit)));
+			Set<Integer> jumped = new HashSet<>();
+			collectJumps(listOf(statements), new GroupLabels(i, labels.get(i), which), jumped);
+			jumps.add(jumped);
+			tagbody.add(labels.get(i));
+			// A PROGN even around one statement: a bare symbol in a tagbody is a label.
+			tagbody.add(pairs.isEmpty() ? new LispCons(symbol("PROGN"), listOf(statements))
+					: new LispCons(symbol("LET"), new LispCons(listOf(pairs), listOf(statements))));
+			if (i < members.size() - 1) {
+				tagbody.add(list(symbol("GO"), end));
+			}
+		}
+		this.enclosing = enclosing;
+		tagbody.add(end);
+		List<LispVal> lambdaList = new ArrayList<>();
+		lambdaList.add(which);
+		lambdaList.addAll(carriers);
+		LispVal body = exiting(exit,
+				list(symbol("LET"), list(list(result, LispNil.INSTANCE)), listOf(tagbody), result));
+		LispVal defun = list(symbol("DEFUN"), function, listOf(lambdaList), body);
+		return new LoweredGroup(inherit(members.get(0).form(), defun), function, jumps);
+	}
+
+	// A member's own defun: enters the group at its label, nil in the carriers it does
+	// not take.
+	private LispVal groupEntry(Group group, Member member) {
+		int width = 0;
+		for (Member other : group.members) {
+			width = Math.max(width,
+					formals(Objects.requireNonNull(other.definition().formals()), other.form()).all().size());
+		}
+		Formals formals = formals(Objects.requireNonNull(member.definition().formals()), member.form());
+		List<LispSymbol> parameters = new ArrayList<>();
+		for (LispSymbol formal : formals.all()) {
+			parameters.add(cl(formal));
+		}
+		List<LispVal> arguments = new ArrayList<>();
+		arguments.add(Objects.requireNonNull(group.function));
+		arguments.add(new LispInteger(group.members.indexOf(member)));
+		arguments.addAll(parameters);
+		while (arguments.size() < width + 2) {
+			arguments.add(LispNil.INSTANCE);
+		}
+		return inherit(member.form(), list(symbol("DEFUN"), member.function().symbol(),
+				lambdaList(parameters, formals.rest() != null), listOf(arguments)));
+	}
+
+	/**
+	 * How a member's jumps are spelled: {@code (go self)} to itself, {@code (setq .. W j
+	 * ..)} before the {@code (go TOP)} to member {@code j}.
+	 */
+	private record GroupLabels(int member, LispSymbol self, LispSymbol which) {
+	}
+
+	// The members the jumps in the form go to.
+	private static void collectJumps(LispVal form, GroupLabels labels, Set<Integer> out) {
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		if (cons.car() instanceof LispSymbol head && head.name().equals("GO") && cons.cdr() instanceof LispCons rest
+				&& labels.self().equals(rest.car())) {
+			out.add(labels.member());
+			return;
+		}
+		if (cons.car() instanceof LispSymbol head && head.name().equals("SETQ")) {
+			LispVal pair = cons.cdr();
+			while (pair instanceof LispCons variable && variable.cdr() instanceof LispCons value) {
+				if (labels.which().equals(variable.car()) && value.car() instanceof LispInteger member) {
+					out.add((int) member.value());
+				}
+				pair = value.cdr();
+			}
+		}
+		LispVal rest = cons;
+		while (rest instanceof LispCons cell) {
+			collectJumps(cell.car(), labels, out);
+			rest = cell.cdr();
+		}
+	}
+
+	// Every symbol heading a call-shaped datum, by spelling: mentionsCall's walk.
+	private static void collectCallHeads(List<LispVal> body, Set<String> out) {
+		for (LispVal datum : body) {
+			LispVal rest = datum;
+			boolean head = true;
+			while (rest instanceof LispCons cell) {
+				if (head && cell.car() instanceof LispSymbol symbol) {
+					out.add(symbol.name());
+				}
+				if (cell.car() instanceof LispCons) {
+					collectCallHeads(List.of(cell.car()), out);
+				}
+				head = false;
+				rest = cell.cdr();
+			}
+		}
+	}
+
+	/**
+	 * The strongly connected sets of more than one node (Tarjan), each sorted, ordered by
+	 * their smallest node.
+	 */
+	private static List<List<Integer>> cycles(List<Set<Integer>> graph) {
+		int size = graph.size();
+		int[] order = new int[size];
+		int[] low = new int[size];
+		boolean[] onStack = new boolean[size];
+		java.util.Arrays.fill(order, -1);
+		java.util.ArrayDeque<Integer> stack = new java.util.ArrayDeque<>();
+		List<List<Integer>> out = new ArrayList<>();
+		int[] next = { 0 };
+		for (int node = 0; node < size; node++) {
+			if (order[node] < 0) {
+				connect(node, new Tarjan(graph, order, low, onStack, stack, next, out));
+			}
+		}
+		out.sort(java.util.Comparator.comparingInt(cycle -> cycle.get(0)));
+		return out;
+	}
+
+	private record Tarjan(List<Set<Integer>> graph, int[] order, int[] low, boolean[] onStack,
+			java.util.ArrayDeque<Integer> stack, int[] next, List<List<Integer>> out) {
+	}
+
+	private static void connect(int node, Tarjan state) {
+		int[] order = state.order();
+		int[] low = state.low();
+		order[node] = state.next()[0];
+		low[node] = state.next()[0];
+		state.next()[0]++;
+		state.stack().push(node);
+		state.onStack()[node] = true;
+		for (int successor : state.graph().get(node)) {
+			if (order[successor] < 0) {
+				connect(successor, state);
+				low[node] = Math.min(low[node], low[successor]);
+			}
+			else if (state.onStack()[successor]) {
+				low[node] = Math.min(low[node], order[successor]);
+			}
+		}
+		if (low[node] == order[node]) {
+			List<Integer> component = new ArrayList<>();
+			int member;
+			do {
+				member = state.stack().pop();
+				state.onStack()[member] = false;
+				component.add(member);
+			}
+			while (member != node);
+			if (component.size() > 1) {
+				component.sort(null);
+				state.out().add(component);
+			}
+		}
 	}
 
 	/**
@@ -1934,12 +2312,32 @@ final class SchemeLowering {
 
 	private List<LispVal> topLevelDefine(LispCons form) {
 		Definition definition = definition(form);
+		Group group = this.groups.get(name(definition.name()));
+		if (group != null) {
+			return groupDefinition(group, form);
+		}
 		Binding binding = this.global.find(name(definition.name()));
 		if (binding instanceof GlobalFunction function && !function.clauses().isEmpty()
 				&& definition.caseLambda() != null) {
 			return caseLambdaDefuns(function, definition, Objects.requireNonNull(definition.caseLambda()));
 		}
 		return List.of(topLevelDefinition(form, definition, binding));
+	}
+
+	// The first member's define emits the group's defun ahead of its own entry.
+	private List<LispVal> groupDefinition(Group group, LispCons form) {
+		Member member = group.members.stream()
+			.filter(candidate -> candidate.form() == form)
+			.findFirst()
+			.orElseThrow(() -> new IllegalStateException("not a member of its group"));
+		List<LispVal> out = new ArrayList<>();
+		if (group.function == null) {
+			LoweredGroup lowered = lowerGroup(group.members);
+			group.function = lowered.function();
+			out.add(lowered.defun());
+		}
+		out.add(groupEntry(group, member));
+		return out;
 	}
 
 	private LispVal topLevelDefinition(LispCons form, Definition definition, @Nullable Binding binding) {
@@ -2816,6 +3214,7 @@ final class SchemeLowering {
 			assignments.add(target.assigned.get(required));
 			assignments.add(new LispCons(symbol("LIST"), listOf(arguments.subList(required, arguments.size()))));
 		}
+		assignments.addAll(target.presets);
 		List<LispVal> forms = new ArrayList<>();
 		if (!assignments.isEmpty()) {
 			// The new values are computed from the OLD variables: a psetq when the jump
