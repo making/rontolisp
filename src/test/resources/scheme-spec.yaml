@@ -2074,6 +2074,10 @@ cases:
   # runs, a clause body is a <body>, a self tail call through another clause is a loop,
   # and a count no clause accepts is an error object (Gauche 0.9.15 -r7 output, except
   # that its message spells "case lambda"). A macro's template binder stays hygienic.
+  # A top-level one is a defun per clause a direct call picks statically: cl-count's
+  # first clause calls the second, whose self tail call is a loop; cl-pp's clauses call
+  # each other, which keeps the one dispatching procedure and its jumps; apply and a
+  # first-class use go through the dispatch.
   - name: case-lambda-takes-the-first-clause-that-accepts-the-arguments
     source: |
       (define cl-range
@@ -2095,6 +2099,20 @@ cases:
           ((n) (cl-count 0 n))
           ((i n) (if (= i n) i (cl-count (+ i 1) n)))))
       (write (cl-count 100000))
+      (newline)
+      (define cl-pp
+        (case-lambda
+          ((n) (if (= n 0) 'pp (cl-pp n 1)))
+          ((n k) (cl-pp (- n k)))))
+      (write (cl-pp 100000))
+      (newline)
+      (write (list (apply cl-kind '(1 2)) (apply cl-kind '()) (map cl-kind '(1 2) '(3 4))))
+      (newline)
+      (define cl-sum
+        (case-lambda
+          ((acc) acc)
+          ((acc x . xs) (apply cl-sum (+ acc x) xs))))
+      (write (cl-sum 0 1 2 3 4))
       (newline)
       (write (map (case-lambda ((x) (* x 2)) ((x y) (+ x y))) '(1 2) '(10 20)))
       (newline)
@@ -2149,6 +2167,9 @@ cases:
       ((0 1 2) (3 4))
       ((none ()) (one 1) (many 1 (2)) (many 1 (2 3)))
       100000
+      pp
+      ((many 1 (2)) (none ()) ((many 1 (3)) (many 2 (4))))
+      10
       (11 22)
       (3 2 1)
       12
@@ -2737,6 +2758,24 @@ standalone:
       (#t #f)
       (3 2 1)
       (0 3)
+  # A library's case-lambda export: the importer's direct calls pick the clauses.
+  - name: a-library-exports-a-case-lambda-called-directly
+    standards: [rontolisp, r7rs]
+    source: |
+      (define-library (range)
+        (export range)
+        (import (scheme base) (scheme case-lambda))
+        (begin
+          (define range
+            (case-lambda
+              ((e) (range 0 e))
+              ((b e) (range b e 1))
+              ((b e s) (if (>= b e) '() (cons b (range (+ b s) e s))))))))
+      (import (scheme base) (scheme write) (range))
+      (write (list (range 3) (range 2 4) (range 0 6 2) (apply range '(1 3)) (map range '(1 2))))
+      (newline)
+    stdout: |
+      ((0 1 2) (2 3) (0 2 4) (1 2) ((0) (0 1)))
   # A library found as a .sld file beside the program, its body included from another
   # file, its declarations from a third; one library two others import runs once.
   - name: libraries-and-includes-read-from-files

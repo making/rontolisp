@@ -55,7 +55,7 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
 | `call/cc` | `block` + a closure doing `return-from` (`%scheme-call/cc`) | escape-only, one-shot; crosses lambdas through `CrossLambdaExitLowering` |
 | `(guard (v clause..) body..)` | `(%scheme-guard (lambda () body..) (lambda (C) (let ((v C)) (cond clause.. (else (%scheme-raise C))))))` | a Scheme-level handler stack plus `handler-case`, "Exceptions" below |
 | `dynamic-wind` | `before`, then `unwind-protect` | the exit half runs on every exit channel; re-entry does not exist |
-| `(case-lambda (formals body..)..)` | `(lambda (&rest A) (let ((N (length A))) (if (= N 1) (let ((x (nth 0 A))) body..) .. (%scheme-case-lambda-arity A))))`, spelled as a Scheme `lambda` datum with `raw` parts | "`case-lambda`" below |
+| `(case-lambda (formals body..)..)` | `(lambda (&rest A) (let ((N (length A))) (if (= N 1) (let ((x (nth 0 A))) body..) .. (%scheme-case-lambda-arity A))))`, spelled as a Scheme `lambda` datum with `raw` parts; a top-level procedure defined once by one: a `defun` per clause (`s%%{f 1}`, ..) that a direct call picks by its count, and `f` the dispatch | "`case-lambda`" below |
 | `(parameterize ((p v)..) body..)` | `(%scheme-parameterize (list p v ..) (lambda () body..))`; no binding: `(let () body..)` | a special `let` inside the helper, "Parameters" below |
 | `(call-with-values (lambda () ..) (lambda (a b) ..))`, `let-values`, `define-values` | `multiple-value-bind` | the syntactic tier (`.kb/multiple-values.md`). Any other shape: `(apply consumer (multiple-value-list (funcall producer)))`. A loop's leaf that may answer other than one value leaves through `(return-from B ..)` ("Destination-driven lowering") -- a `(setq R (values a b))` keeps one value, on every backend |
 | top-level `define-record-type` | `defstruct` with `(:conc-name nil)`, each slot NAMED after its accessor, a BOA constructor; the modifier a `defun` over `(setf (accessor r) v)` answering the unspecified object | `defstruct` is what registers the instance layout on every backend (`.kb/defstruct.md`); the accessor IS the generated one, no wrapper call. The predicate answers T/NIL and is a `pred` (`GlobalPredicate`) |
@@ -843,14 +843,50 @@ formal**, then lowered like any lambda -- nothing new reaches a backend:
   `%scheme-error-message`'s string-stream machinery, as the `twice` probe's
   ensure-procedure does. Time, 20M calls of a two-clause `case-lambda` against a plain
   two-argument `defun` (single runs, incl. startup): JVM 0.20 vs 0.13 s, wasm 1.09 vs
-  0.26 s -- the rest list, `length` and `nth` per call. A direct call of a `defun` defined
-  by one could pick its clause statically: `.todo/870`.
+  0.26 s -- the rest list, `length` and `nth` per call. Hence the static pick below.
 - None of the SICP samples spells `case-lambda` (`sicp.zip` above), so the corpus
   classification (`providedNames`) is unmoved.
-- Pinned by `case-lambda-takes-the-first-clause-...` and the two `case-lambda` standalone
-  cases of `scheme-spec.yaml` (all four backends, Gauche 0.9.15 `-r7` output but the
-  message), `SchemeLoweringTest.caseLambdaIsOneRestLambda...` and
-  `caseLambdaIsImportedFromItsOwnLibraryOnly`.
+
+**A direct call picks its clause statically** (2026-09-19, `.todo/870`). A top-level
+procedure that is a `GlobalFunction` (defined once, never assigned) and whose value is a
+`case-lambda` is lowered by `caseLambdaDefuns` to one `defun` per clause plus the
+dispatching `defun f`:
+
+```lisp
+(defun |s%%{f 1}| (|n|) (|s%%{f 2}| |n| 0))
+(defun |s%%{f 2}| (C1 C2) ...self tail calls: psetq + go...)
+(defun |f| (&rest A) (let ((N (length A)))
+  (if (= N 1) (|s%%{f 1}| (nth 0 A)) (if (= N 2) (|s%%{f 2}| (nth 0 A) (nth 1 A)) (%scheme-case-lambda-arity A)))))
+```
+
+- `GlobalFunction.clauses` carries the clauses, so a call through a library export picks
+  them too. `call()` emits the first clause accepting the count; a count none accepts
+  calls `f`, which raises the same catchable error object at run time -- NOT a lowering
+  error as `(car 1 2)` is: R7RS only says "it is an error", Gauche raises it at run time
+  and the spec case catches it with `guard`, and a refusal would also reject a program
+  whose bad call is never reached. A rest clause is `apply`'d by the dispatch.
+- The names `s%%{<name> <n>}` (prefixed by a library's `s%%(lib)`) are unforgeable the way
+  internal record names `s%%[..]` are.
+- A clause's self tail call is a jump when its count picks THAT clause (`Target.accepts`
+  asks `GlobalFunction.clauseFor`); another count is a direct call of the other clause.
+  So a CYCLE among clauses (`((n) (if (= n 0) 'pp (f n 1))) ((n k) (f (- n k)))`) would
+  turn jumps into recursion: `clauses()` scans each clause body for calls headed by the
+  name (scope-blind, by count) and keeps the old single dispatching lambda when the
+  clause graph has a cycle through two clauses or more. `cl-pp 100000` in the spec case.
+- Not split: a `case-lambda` bound by an internal `define`, `letrec` or `let` (variables
+  and `funcall`, as before), and a session's (no `GlobalFunction` there).
+- Measured (2026-09-19, x86-64 Linux, Java 25, wasmtime 47; 20M calls `(area (remainder i 7)
+  3)` of a two-clause `case-lambda`, three runs each incl. startup): JVM 0.23 -> 0.16-0.17 s,
+  wasm 0.84-0.91 -> 0.36-0.44 s; the plain two-argument `defun` is 0.15-0.17 / 0.33-0.40 s.
+  Artifact 79,770 -> 77,450 B class, 24,833 -> 13,607 B wasm: nothing references the
+  dispatch once every call is direct, so the tree shaker drops it and the arity refusal's
+  string-stream machinery with it. Byte-identical: the 87 `scheme-spec.yaml` cases not
+  spelling `case-lambda` and `examples/scheme/*.scm`, both backends; the 4 that spell it
+  change (the no-matching-clause standalone +1 B wasm / +105 B class, the dispatch staying).
+- Pinned by `case-lambda-takes-the-first-clause-...`, `a-library-exports-a-case-lambda-...`
+  and the two `case-lambda` standalone cases of `scheme-spec.yaml` (all four backends,
+  Gauche 0.9.15 `-r7` output but the message), `SchemeLoweringTest.caseLambdaIsOneRestLambda...`
+  and `caseLambdaIsImportedFromItsOwnLibraryOnly`.
 
 ## Bytevectors (2026-09-18, `.todo/871`)
 
