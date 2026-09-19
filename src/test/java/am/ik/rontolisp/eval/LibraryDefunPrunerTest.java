@@ -1188,6 +1188,25 @@ class LibraryDefunPrunerTest {
 	}
 
 	@Test
+	void theFileSectionFollowsOnlyAProgramThatUsesAFileProcedure() {
+		// A string or bytevector port program gets the port section with no file arm:
+		// closing a port only marks it, and the binary procedures know no file stream.
+		List<LispVal> ports = LibraryDefunPruner.prune(SchemeLibrary.process(LispReader.readAllFromString(
+				"(rontolisp::%scheme-close-port \"close-port\" (rontolisp::%scheme-open-input-string \"1\") :any)"
+						+ " (rontolisp::%scheme-read-u8 (rontolisp::%scheme-open-input-bytevector nil) t)")));
+		assertThat(survivingPrintOf(ports, "%SCHEME-CLOSE-PORT")).isNotEmpty().doesNotContain("%SCHEME-RELEASE-PORT");
+		assertThat(survivingPrintOf(ports, "%SCHEME-READ-U8")).isNotEmpty().doesNotContain("%SCHEME-FILE-READ-U8");
+		assertThat(ports.toString()).doesNotContain("%SCHEME-FILE-ERROR-CONDITION");
+		// A file opener turns on the file arms and the port section it builds on.
+		List<LispVal> files = LibraryDefunPruner.prune(SchemeLibrary.process(LispReader
+			.readAllFromString("(rontolisp::%scheme-read-u8 (rontolisp::%scheme-open-binary-input-file \"f\") t)"
+					+ " (rontolisp::%scheme-close-port \"close-port\" (rontolisp::%scheme-open-input-string \"1\") :any)")));
+		assertThat(survivingPrintOf(files, "%SCHEME-CLOSE-PORT")).contains("%SCHEME-RELEASE-PORT");
+		assertThat(survivingPrintOf(files, "%SCHEME-READ-U8")).contains("%SCHEME-FILE-READ-U8");
+		assertThat(files.toString()).contains("%SCHEME-FILE-ERROR-CONDITION");
+	}
+
+	@Test
 	void aUserDefstructIsNeverExpandedOrPruned() {
 		// A user (or third-party) defstruct stays on the compilers' expansion path,
 		// which alone has the program's export oracle at the right time; here it rides

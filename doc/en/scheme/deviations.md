@@ -24,8 +24,13 @@
   object; `eval` refuses `case-lambda` by name.
 - A port is textual or binary, never both: `binary-port?` of a string port is `#f` (a
   Gauche port is both). The standard ports are textual, so `read-u8`, `write-u8` and the
-  other binary procedures need a bytevector port argument. `char-ready?` and `u8-ready?`
-  always answer `#t`.
+  other binary procedures need a bytevector or binary file port argument. `char-ready?` and
+  `u8-ready?` always answer `#t`.
+- `with-input-from-file` and `with-output-to-file` close the file however the thunk is
+  left, an escape or a raised object included (Gauche leaves it open). A file that cannot
+  be opened for output raises an error `file-error?` answers `#t` for, as R7RS says.
+- Close an output file port before the program ends: on the interpreter and the JVM, what
+  a port left open still buffers is not written (WebAssembly writes it).
 - A record prints in Common Lisp's `#S(...)` syntax. `equal?` compares records by
   identity. A `define-record-type` in a body makes one type where it is written, not a
   new one each time the body runs (Gauche does the latter).
@@ -51,5 +56,4 @@
 
 ## Not yet
 
-File ports (`(scheme file)`), the other libraries. Importing one is refused by name when
-the file is read.
+The other libraries. Importing one is refused by name when the file is read.

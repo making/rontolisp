@@ -25,7 +25,7 @@ done
 scheme> (exit)
 ```
 
-Everything those eleven libraries export -- plus the
+Everything those twelve libraries export -- plus the
 [*Structure and Interpretation of Computer Programs* (SICP)-compatibility names](sicp.md),
 which no `(import ...)` names, unless
 [`--scheme-standard r7rs`](standards.md) -- is visible from the

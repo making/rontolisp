@@ -76,6 +76,16 @@ public final class SchemeLibrary {
 	static final String BAR_SYMBOLS_FEATURE = "rontolisp-scheme-bar-symbols";
 
 	/**
+	 * The feature {@code scheme.lisp} is read with when the program uses a
+	 * {@code (scheme file)} procedure: it adds the file openers, the file-error condition
+	 * and the file arms of the binary port procedures and of closing a port. It implies
+	 * {@link #PORTS_FEATURE}. A program that uses no file procedure -- one using string
+	 * or bytevector ports included -- carries none of it. The interpreter always reads
+	 * with it.
+	 */
+	static final String FILES_FEATURE = "rontolisp-scheme-files";
+
+	/**
 	 * The feature {@code scheme.lisp} is read with when the program spells
 	 * {@code cond-expand} -- as a symbol, quoted data included, or inside a string: it
 	 * gives {@code eval} its {@code cond-expand} arm, which no other program can reach,
@@ -85,7 +95,7 @@ public final class SchemeLibrary {
 	static final String COND_EXPAND_FEATURE = "rontolisp-scheme-cond-expand";
 
 	private static final List<String> ALL_FEATURES = List.of(BYTEVECTORS_FEATURE, PORTS_FEATURE, BAR_SYMBOLS_FEATURE,
-			COND_EXPAND_FEATURE);
+			FILES_FEATURE, COND_EXPAND_FEATURE);
 
 	private static final Set<String> INTERNING = Set.of("INTERN", "MAKE-SYMBOL");
 
@@ -94,6 +104,8 @@ public final class SchemeLibrary {
 	private static final Map<String, Set<String>> BYTEVECTOR_FUNCTIONS = new ConcurrentHashMap<>();
 
 	private static final Map<String, Set<String>> PORT_FUNCTIONS = new ConcurrentHashMap<>();
+
+	private static final Map<String, Set<String>> FILE_FUNCTIONS = new ConcurrentHashMap<>();
 
 	private static final Map<String, Set<String>> INTERNING_FUNCTIONS = new ConcurrentHashMap<>();
 
@@ -245,11 +257,18 @@ public final class SchemeLibrary {
 						|| strings.stream().anyMatch(string -> string.contains(name));
 				List<LispVal> generated = Scheme.runtimeForms(spelled, standards.scheme());
 				List<String> selected = new ArrayList<>();
-				if (makesBytevectors(program, features) || makesBytevectors(generated, features)) {
+				boolean files = makesFiles(program, features) || makesFiles(generated, features);
+				// A file port's binary reads make a bytevector, so the fixpoint over the
+				// library's functions counts them only in a program that has file ports.
+				Features makers = files ? features.with(List.of(FILES_FEATURE)) : features;
+				if (makesBytevectors(program, makers) || makesBytevectors(generated, makers)) {
 					selected.add(BYTEVECTORS_FEATURE);
 				}
-				if (makesPorts(program, features) || makesPorts(generated, features)) {
+				if (files || makesPorts(program, features) || makesPorts(generated, features)) {
 					selected.add(PORTS_FEATURE);
+				}
+				if (files) {
+					selected.add(FILES_FEATURE);
 				}
 				if (makesBarSymbols(program, features) || makesBarSymbols(generated, features)) {
 					selected.add(BAR_SYMBOLS_FEATURE);
@@ -386,6 +405,29 @@ public final class SchemeLibrary {
 		});
 		for (LispVal form : forms) {
 			if (callsAny(form, portFunctions)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the forms use a {@code (scheme file)} procedure: they call a library
+	 * function that exists only under {@link #FILES_FEATURE}, derived like
+	 * {@link #makesPorts}.
+	 * @param forms the program's forms, or the forms generated for it
+	 * @param features the target backend's reader features
+	 * @return {@code true} when the program needs the library's file section
+	 */
+	static boolean makesFiles(List<LispVal> forms, Features features) {
+		Set<String> fileFunctions = FILE_FUNCTIONS.computeIfAbsent(String.join(",", features.names()), ignored -> {
+			Features ports = features.with(List.of(PORTS_FEATURE));
+			Set<String> names = definedFunctions(sourceForms(ports.with(List.of(FILES_FEATURE))));
+			names.removeAll(definedFunctions(sourceForms(ports)));
+			return Set.copyOf(names);
+		});
+		for (LispVal form : forms) {
+			if (callsAny(form, fileFunctions)) {
 				return true;
 			}
 		}
