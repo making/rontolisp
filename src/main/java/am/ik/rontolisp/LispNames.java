@@ -1268,6 +1268,13 @@ public final class LispNames {
 	public static final String COPY_LIST = "COPY-LIST";
 
 	/**
+	 * The {@code copy-structure} built-in function (CLHS 18.3): a fresh instance of the
+	 * same layout, sharing the slot VALUES with the original -- the generic counterpart
+	 * of the {@code copy-<name>} copier {@code defstruct} generates for one known type.
+	 */
+	public static final String COPY_STRUCTURE = "COPY-STRUCTURE";
+
+	/**
 	 * The {@code nreverse} built-in function (destructively reverses a list by rewiring
 	 * each {@code cdr} and returning the former last cell as the new head; use the return
 	 * value).

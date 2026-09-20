@@ -1574,6 +1574,7 @@ final class JvmExprCompiler {
 				case LispNames.OBJ_TAG -> JvmObjCompiler.compileTag(cons, ctx, className);
 				case LispNames.OBJ_P -> JvmObjCompiler.compileP(cons, ctx, className);
 				case LispNames.OBJ_SLOTS -> JvmObjCompiler.compileSlots(cons, ctx, className);
+				case LispNames.COPY_STRUCTURE -> JvmObjCompiler.compileCopyStructure(cons, ctx, className);
 				case LispNames.FUNCTIONP -> JvmFunctionpCompiler.compile(cons, ctx, className);
 				case LispNames.ARRAYP_INTERNAL -> JvmArraypCompiler.compile(cons, ctx, className);
 				case LispNames.SIMPLE_ARRAY_P_INTERNAL -> JvmSimpleArrayPCompiler.compile(cons, ctx, className);

@@ -1949,6 +1949,7 @@ final class WasmExprCompiler {
 				case LispNames.OBJ_TAG -> WasmInstanceCompiler.compileTag(cons, ctx);
 				case LispNames.OBJ_P -> WasmInstanceCompiler.compileP(cons, ctx);
 				case LispNames.OBJ_SLOTS -> WasmInstanceCompiler.compileSlots(cons, ctx);
+				case LispNames.COPY_STRUCTURE -> WasmInstanceCompiler.compileCopyStructure(cons, ctx);
 				case LispNames.FUNCTIONP -> WasmFunctionpCompiler.compile(cons, ctx);
 				case LispNames.ARRAYP_INTERNAL -> WasmArraypCompiler.compile(cons, ctx);
 				case LispNames.SIMPLE_ARRAY_P_INTERNAL -> WasmArrayCompiler.compileSimpleArrayP(cons, ctx);
