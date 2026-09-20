@@ -8525,6 +8525,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.VECTOR_PUSH_EXTEND)
 				|| programUsesSymbol(program, LispNames.ADJUST_ARRAY)
 				|| programUsesSymbol(program, LispNames.ARRAY_BECOME)
+				|| programUsesSymbol(program, LispNames.ARRAY_BECOME_DISPLACED)
 				|| programUsesSymbol(program, LispNames.ARRAY_DISPLACEMENT)
 				|| programUsesSymbol(program, LispNames.ARRAY_DISP_TARGET)
 				|| programUsesSymbol(program, LispNames.ARRAY_DISP_OFFSET)

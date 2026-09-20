@@ -19614,6 +19614,30 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileAdjustArrayDisplacedToKeepsAdjustableIdentity() throws Exception {
+		// adjust-array with :displaced-to on an :adjustable SOURCE turns the source
+		// into the displaced view IN PLACE (eq), like any other adjustable adjustment,
+		// matching the interpreter and SBCL -- a NON-adjustable source still answers a
+		// FRESH displaced array.
+		assertThat(compileAndRun("""
+				(defparameter *a0* (make-array 7 :initial-contents (list 1 2 3 4 5 6 7)))
+				(defparameter *a1* (make-array 5 :adjustable t :initial-contents (list 'a 'b 'c 'd 'e)))
+				(defparameter *a2* (adjust-array *a1* 4 :displaced-to *a0*))
+				(print (list (eq *a1* *a2*) (aref *a1* 3) (array-dimensions *a1*) (adjustable-array-p *a1*)
+				             (multiple-value-list (array-displacement *a1*))))
+				(defparameter *s* (make-array 3 :element-type 'character :adjustable t
+				                             :initial-contents "abc"))
+				(defparameter *tg* (make-array 4 :element-type 'character :initial-contents "wxyz"))
+				(defparameter *ss* (adjust-array *s* 2 :displaced-to *tg*))
+				(print (list (eq *s* *ss*) *ss* (stringp *ss*) (array-dimensions *s*)
+				             (adjustable-array-p *s*)
+				             (multiple-value-list (array-displacement *s*))))
+				""")).isEqualTo("""
+				(T 4 (4) T (#(1 2 3 4 5 6 7) 0))
+				(T "wx" T (2) T ("wxyz" 0))""");
+	}
+
+	@Test
 	void compileAdjustArrayTrapsOnAPackedFloatArray() throws Exception {
 		// A packed float array has no fill-pointer/adjustability/displacement surface --
 		// the same shape a packed integer vector already traps on -- so adjust-array's

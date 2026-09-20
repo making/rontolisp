@@ -1783,6 +1783,7 @@ final class WasmExprCompiler {
 				case LispNames.ADJUST_ARRAY ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandAdjustArray(cons), ctx);
 				case LispNames.ARRAY_BECOME -> WasmArrayCompiler.compileArrayBecome(cons, ctx);
+				case LispNames.ARRAY_BECOME_DISPLACED -> WasmArrayCompiler.compileArrayBecomeDisplaced(cons, ctx);
 				case LispNames.ARRAY_DEFAULT_ELEMENT -> WasmArrayCompiler.compileArrayDefaultElement(cons, ctx);
 				case LispNames.ARRAY_ADOPT_ELEMENT_TYPE -> WasmArrayCompiler.compileArrayAdoptElementType(cons, ctx);
 				case LispNames.ARRAY_ALIKE -> WasmArrayCompiler.compileArrayAlike(cons, ctx);

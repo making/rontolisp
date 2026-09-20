@@ -1676,6 +1676,16 @@ public final class LispNames {
 	public static final String ARRAY_BECOME = "%ARRAY-BECOME";
 
 	/**
+	 * The {@code %array-become-displaced} internal built-in function:
+	 * {@code (%array-become-displaced array dims target offset fill-pointer)} turns
+	 * {@code array} (an {@code :adjustable} array) into a DISPLACED view over
+	 * {@code target} in place and returns it (the in-place half of {@code adjust-array}
+	 * with {@code :displaced-to} on an adjustable array, which keeps its identity like
+	 * any other adjustable adjustment).
+	 */
+	public static final String ARRAY_BECOME_DISPLACED = "%ARRAY-BECOME-DISPLACED";
+
+	/**
 	 * The {@code %array-undisplace} internal built-in function:
 	 * {@code (%array-undisplace array)} copies a DISPLACED array's current view contents
 	 * into storage of its own and drops the displacement, keeping its dimensions, fill

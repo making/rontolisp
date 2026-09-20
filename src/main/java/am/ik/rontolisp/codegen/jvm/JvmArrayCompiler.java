@@ -221,6 +221,24 @@ final class JvmArrayCompiler {
 		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.ARRAY_BECOME, JvmArrayRuntimeBuilder.ARRAY_BECOME_DESC);
 	}
 
+	static void compileArrayBecomeDisplaced(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (%array-become-displaced a dims target offset fp): turn a (an adjustable
+		// array, guaranteed non-packed by the expansion's adjustable-array-p guard) in
+		// place into a displaced view over target and return a.
+		List<LispVal> args = cons.toList();
+		if (args.size() != 6) {
+			throw new UnsupportedOperationException(
+					"%array-become-displaced expects 5 arguments, got " + (args.size() - 1) + " argument(s)");
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(3), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(4), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(5), ctx, className);
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.ARRAY_BECOME_DISPLACED,
+				JvmArrayRuntimeBuilder.ARRAY_BECOME_DISPLACED_DESC);
+	}
+
 	static void compileArrayAdoptElementType(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		// (%array-adopt-element-type new old): make the freshly built copy remember the
 		// adjusted array's element type and answer the copy. adjust-array's expansion

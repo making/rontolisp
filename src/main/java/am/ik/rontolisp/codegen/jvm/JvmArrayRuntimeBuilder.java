@@ -181,6 +181,10 @@ final class JvmArrayRuntimeBuilder {
 
 	static final String ARRAY_BECOME_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
+	static final String ARRAY_BECOME_DISPLACED = "_arrayBecomeDisplaced";
+
+	static final String ARRAY_BECOME_DISPLACED_DESC = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
 	static final String DISP_TARGET = "_arrayDispTarget";
 
 	static final String DISP_TARGET_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
@@ -312,7 +316,7 @@ final class JvmArrayRuntimeBuilder {
 			TO_DISPLAY_STRING, FILL_POINTER, SET_FILL_POINTER, HAS_FILL_POINTER, ADJUSTABLE_ARRAY_P, VECTOR_PUSH,
 			VECTOR_POP, VECTOR_PUSH_EXTEND, MAKE_DISPLACED, UNDISPLACE, RM_GET, RM_SET, ARRAY_BECOME, DISP_TARGET,
 			DISP_OFFSET, CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, SUBSEQ_CV, TO_MUT_STR, WIDEN, MAKE_TYPED, ELEMENT_TYPE,
-			DEFAULT_ELEMENT, ADOPT_ELEMENT_TYPE, ALIKE, CHECK_RANK);
+			DEFAULT_ELEMENT, ADOPT_ELEMENT_TYPE, ALIKE, CHECK_RANK, ARRAY_BECOME_DISPLACED);
 
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Constant name, Utf8Constant desc, int maxStack, int maxLocals, List<Integer> code) {
@@ -350,6 +354,8 @@ final class JvmArrayRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8(RM_SET), cp.addUtf8(RM_SET_DESC)));
 		MethodrefConstant undisplace = cp.addMethodref(selfClass,
 				cp.addNameAndType(cp.addUtf8(UNDISPLACE), cp.addUtf8(UNDISPLACE_DESC)));
+		MethodrefConstant makeDisplaced = cp.addMethodref(selfClass,
+				cp.addNameAndType(cp.addUtf8(MAKE_DISPLACED), cp.addUtf8(MAKE_DISPLACED_DESC)));
 		MethodrefConstant widen = cp.addMethodref(selfClass,
 				cp.addNameAndType(cp.addUtf8(WIDEN), cp.addUtf8(WIDEN_DESC)));
 		MethodrefConstant defaultElement = cp.addMethodref(selfClass,
@@ -1707,6 +1713,63 @@ final class JvmArrayRuntimeBuilder {
 		bc.aload(0);
 		bc.areturn();
 		methods.add(new ArrayMethod(cp.addUtf8(ARRAY_BECOME), cp.addUtf8(ARRAY_BECOME_DESC), 5, 5, bc.finish()));
+
+		// _arrayBecomeDisplaced(a, dims, target, offset, fp): turn a (an adjustable
+		// array) IN PLACE into a displaced view over target and return a -- the in-place
+		// half of adjust-array with :displaced-to on an adjustable array, which keeps
+		// its identity (any other adjustable adjustment is a %array-become). The
+		// displaced header is the SAME one _arrayMakeDisplaced builds (5 slots, or 7 for
+		// a string target), reused verbatim: the adjustable slot is read out of a's own
+		// header, so the raw :adjustable argument survives. a's data slots are dropped
+		// and slot 0 replaced by the moved header; the ArrayList object IS a's identity,
+		// so eq holds. Locals: 0 = a, 1 = dims, 2 = target, 3 = offset, 4 = fp,
+		// 5 = headerA, 6 = hdr.
+		JvmAsm bd = new JvmAsm();
+		emitLoadHeader(bd, arrayListClass, objectArrayClass, alGet, 0);
+		bd.astore(5);
+		bd.aload(1);
+		bd.aload(2);
+		bd.aload(3);
+		bd.aload(4);
+		bd.aload(5);
+		bd.iconst(2);
+		bd.aaload();
+		bd.invokestatic(makeDisplaced);
+		bd.checkcast(arrayListClass);
+		bd.iconst(0);
+		bd.invokevirtual(alGet);
+		bd.astore(6);
+		// while (a.size() > 1) a.remove(a.size() - 1)
+		int bdShrink = bd.label();
+		int bdDone = bd.label();
+		bd.bind(bdShrink);
+		bd.aload(0);
+		bd.checkcast(arrayListClass);
+		bd.invokevirtual(alSize);
+		bd.iconst(1);
+		bd.branch(Opcode.IF_ICMPLE, bdDone);
+		bd.aload(0);
+		bd.checkcast(arrayListClass);
+		bd.aload(0);
+		bd.checkcast(arrayListClass);
+		bd.invokevirtual(alSize);
+		bd.iconst(1);
+		bd.op(Opcode.ISUB);
+		bd.invokevirtual(alRemove);
+		bd.pop();
+		bd.branch(Opcode.GOTO, bdShrink);
+		bd.bind(bdDone);
+		// a.set(0, hdr)
+		bd.aload(0);
+		bd.checkcast(arrayListClass);
+		bd.iconst(0);
+		bd.aload(6);
+		bd.invokevirtual(alSet);
+		bd.pop();
+		bd.aload(0);
+		bd.areturn();
+		methods.add(new ArrayMethod(cp.addUtf8(ARRAY_BECOME_DISPLACED), cp.addUtf8(ARRAY_BECOME_DISPLACED_DESC), 6, 7,
+				bd.finish()));
 
 		// _arrayDispTarget(arr): the displacement target, or null (nil).
 		// Locals: 0 = arr, 1 = header.
