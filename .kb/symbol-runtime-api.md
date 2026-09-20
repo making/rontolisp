@@ -47,8 +47,11 @@ literals.
   (`LispMacroExpander.isSupportedTypeSpecializer` + `makeTypeTest`), so `(typep x 'package)`, a
   `typecase` clause and a `((p package))` parameter are the same predicate on all four backends
   (`.kb/clos.md`). **Re-evaluate when** a consumer needs package objects DISTINCT from keywords.
-- `symbol-package`: registry-backed on the interpreter; elsewhere a `LispPreludeLibrary` defun
-  reading the qualifier off `prin1-to-string`, so it cannot tell `cl` from `cl-user`.
+- `symbol-package`: registry-backed on the interpreter (`PackageResolver.symbolPackageName`: the
+  home off the spelling -- `cl` for every standard name, `t`/`nil`/the exported-only ones
+  included -- minus the `unintern` tombstones, `.kb/packages.md` "The member table");
+  elsewhere a `LispPreludeLibrary` defun reading the qualifier off `prin1-to-string`, so it
+  cannot tell `cl` from `cl-user` and keeps an uninterned symbol's old home.
 - `type-of`: a prelude defun over the internal `%class-designator` (NOT `class-of`, which
   answers a metaobject), stripping the `%struct-`/`%class-` tag prefix. It `intern`s the
   remainder, so it is right only because `PackageResolver.internSpelling` routes a qualifier the
@@ -56,11 +59,16 @@ literals.
   package (which produced `APP::LIB:WIDGET`). Pinned by
   `LispEvaluatorTest#evalTypeOfAnswersAForeignPackageClassNameUnqualifiedByTheCurrentPackage`
   (+ twins) and ci-spec `type-of-foreign-package-class-name`.
-- **2-argument `find-symbol`**: interpreter = registry-backed, returning the canonical spelling;
-  on the compiled backends a symbol IS its canonical spelling, so `expandFindSymbolInPackage`
-  BUILDS it (`(intern (concatenate 'string "PKG:" name))`, or the same over `(string PKG)` when
-  computed). Two deviations: an unknown name yields a symbol instead of nil, and the qualifier
-  is the single-colon EXTERNAL spelling. **The first is NOT harmless in the `find-symbol` ->
+- **2-argument `find-symbol`**: interpreter = registry-backed
+  (`PackageResolver.accessible`: present member, inherited export, standard name, keyword --
+  `.kb/packages.md` "The member table"), returning the canonical spelling; on the compiled
+  backends a symbol IS its canonical spelling, so for a READ/COMPILE-TIME package
+  `expandFindSymbolInPackage` BUILDS it (`(intern (concatenate 'string "PKG:" name))`, or the
+  same over `(string PKG)` when computed), while a package the program created with
+  `make-package` answers from its `%runtime-packages%` member table (`runtimeMemberLookup`, so
+  nil before an intern and the symbol after hold there too). Two deviations for the baked
+  packages: an unknown name yields a symbol instead of nil, and the qualifier is the
+  single-colon EXTERNAL spelling. **The first is NOT harmless in the `find-symbol` ->
   `symbol-function` idiom**: sxql's `find-make-op` probes with `:errorp nil` expecting nil, so
   every sxql SQL FUNCTION operator dies on JVM and WASM while the interpreter is correct. The
   honest fix is symbol IDENTITY. Tripwire:
@@ -71,14 +79,18 @@ literals.
   template. Quoted LISTS stay untouched, and the `wasm-export`/`wasm-import` option tail is
   exempt (`inHostFacingData`) because its quoted values are host-facing data.
 - **`(let ((*package* X)) ...)`** is a genuine dynamic binding on every backend
-  (`.kb/packages.md`). The runtime package API is complete except for `unintern`,
-  a NON-GOAL (below): `make-package` / `delete-package` / `rename-package` /
-  `packagep` / `package-nicknames` / `find-all-symbols` / `do-all-symbols` /
-  `apropos` / `apropos-list` / `package-error-package` (.todo/741, `.kb/packages.md`
-  "Runtime tier").
+  (`.kb/packages.md`). The runtime package API: `make-package` / `delete-package` /
+  `rename-package` / `packagep` / `package-nicknames` / `find-all-symbols` /
+  `do-all-symbols` / `apropos` / `apropos-list` / `package-error-package` (.todo/741) and,
+  over the member table, `shadow` / `shadowing-import` / `unintern` (.todo/917,
+  `.kb/packages.md` "Runtime tier").
 
-## The no-intern-table model
-rontolisp symbols compare by name (no intern table), which shapes every deviation:
+## The spelling-identity model (with a member table)
+rontolisp symbols compare by name -- a symbol IS its canonical spelling, there are no symbol
+objects -- which shapes every deviation. What a package RECORDS is a separate question:
+since `.todo/917` a package keeps a MEMBER table of what `intern` / `export` / `import` /
+`shadowing-import` / `shadow` put into it (`.kb/packages.md`, "The member table"), so
+"interned in P" is answerable without symbol identity.
 
 - `symbol-name` returns the STORED spelling **without the package marker**
   (`LispSymbol.displayName`, shared with `princ`/`~A`/`string`; `prin1`/`print` keep the stored
@@ -87,10 +99,15 @@ rontolisp symbols compare by name (no intern table), which shapes every deviatio
 - `intern`/`find-symbol` take the name VERBATIM: `(find-symbol "car")` = `NIL`,
   `(intern "time")` = the distinct `time`.
 - 1-arg `intern` interns into the **current package** on the interpreter
-  (`PackageResolver.internSpelling`, the `LispEvaluator` override; the `Environment` converter
-  and the compiled backends stay package-blind). `(intern name :keyword)` builds a keyword; any
-  other package argument goes through `PackageResolver.internSpellingIn`, which throws
-  `No such package: X` on every backend.
+  (`PackageResolver.internSpelling(name, record)`, the `LispEvaluator` override; the
+  `Environment` converter and the compiled backends' 1-arg intern stay package-blind) and
+  RECORDS a fresh name in the package's member table (`recordInterned`). `(intern name
+  :keyword)` builds a keyword; any other package argument goes through
+  `PackageResolver.internSpellingIn`, which throws `No such package: X` on every backend.
+- `t` and `nil` are singletons, not `LispSymbol`s: everything that answers a symbol by NAME
+  (`find-symbol`, `intern`, the enumerations) maps the spellings `"T"`/`"NIL"` back to them
+  (`LispEvaluator.symbolOfSpelling`), so `(eq (find-symbol "T" :cl) t)` holds on the
+  interpreter. The compiled backends' `(intern "T")` is still the string symbol (`.todo/924`).
 - `make-symbol` prepends the `#:` uninterned marker (same string twice = `eq` symbols, unlike
   CL).
 
@@ -127,17 +144,23 @@ canonical-offset discipline** — env lookup and `eq` compare string-table offse
 future primitive that builds a symbol at runtime must route the bytes through `_intern` (reuse
 the `usesIntern` gate + `_intern_sym` rail) or it princs correctly and fails lookups/`eq`;
 **true uninterned identity is unrepresentable** (`(make-symbol "x")` twice is `eq`, and
-`copy-symbol` inherits that — code wanting a name nobody else uses wants `gensym`); and
-**`unintern` and shadowing can never be implemented**, the same line as `defpackage` rejecting
-`:shadow`. **Re-evaluate when** symbol IDENTITY lands; those become one item.
+`copy-symbol` inherits that — code wanting a name nobody else uses wants `gensym`; an
+uninterned symbol `import`ed into a package cannot gain that home, ANSI `import.5`); and
+**`unintern` cannot produce a DISTINCT symbol**: it is implemented (`.todo/917`) as a member
+removal plus a tombstone that makes `symbol-package` answer nil, but interning the name again
+homes the OLD symbol again where CL mints a new one. `.todo/917` weighed a real intern table
+against this model and kept the model (`.kb/packages.md`, "The member table"):
+**re-evaluate only when a consumer needs symbol OBJECTS**, not for a conformance count.
 
 ## A definition IS an interning: the find-symbol namespace probe
 - **Interpreter `find-symbol` probes the global namespaces under the canonical spelling**
-  (`LispEvaluator.definedInImage`: user macros, functions, global bindings) when the registry
-  misses. Both arities: 2-arg builds `qualifyInternal(pkg, name)`, 1-arg asks `internSpelling`.
-  Deliberately NOT done: a symbol merely READ is still invisible. `nil` is a SYMBOL to `fboundp`
-  now. Pinned by `LispEvaluatorTest#findSymbolSeesDefinitionsMadeInsideAUserPackage`; the
-  COMPILED 2-arg lowering keeps its unknown-name-yields-a-symbol deviation.
+  (`LispEvaluator.definedInImage`: user macros, functions, global bindings) as one arm of
+  `PackageResolver.accessible` -- after the member table's own/imported arms, before the
+  inherited one (`LispEvaluator.findSymbolAccessible` passes the probe; both arities go
+  through it, the 1-arg form against the current package). Deliberately NOT done: a symbol
+  merely READ is still invisible. `nil` is a SYMBOL to `fboundp` now. Pinned by
+  `LispEvaluatorTest#findSymbolSeesDefinitionsMadeInsideAUserPackage`; the COMPILED 2-arg
+  lowering keeps its unknown-name-yields-a-symbol deviation for read/compile-time packages.
 - **`#'find-symbol` is a reference-gated wrapper** (`BuiltinFunctionWrappers.findSymbolWrapper`)
   dispatching on argument count onto the two call-position lowerings; gated because the body
   lowers to `intern` and `usesIntern` counts a `find-symbol` reference.
@@ -353,19 +376,23 @@ symbol-to-function route (the interpreter resolves designators against the live 
 `%array-disp-target`/`%array-disp-offset` pattern (`LispMacroExpander.lowerMvProducer`): a
 `find-symbol`/`intern` producer lowers to the call itself plus a `%find-symbol-status` call over
 the SAME argument temps, so every backend gets the second value from its own compile path and
-nothing crosses a function boundary. Because there is no intern table, `intern` never mutates
-one, so the two may run in either order (unlike CL).
+nothing crosses a function boundary. `intern` RECORDS a fresh name in the member table, and
+CL's second value is the status from BEFORE the intern (nil for a fresh name), so for `intern`
+the status is bound FIRST and the call reads the temp (`find-symbol`'s two lookups are pure and
+run in either order); the interpreter's `#'intern` value computes it first the same way
+(`publishSecondValue(..., secondFirst)`).
 
 **A literal argument is passed through, never bound to a temp.** Load-bearing: the compile paths
 decide both values by folding the LITERAL name and the LITERAL package designator, and a
 temporary hides both (binding them turned `CAR :INHERITED` into a runtime-built
 `COMMON-LISP:CAR` with the can't-tell `:INTERNAL`).
 
-- **Interpreter**: `PackageResolver.memberStatus`, mirroring `memberSpelling` arm for arm — that
-  is what makes the pair nil TOGETHER (CL's invariant). `cl` owns the standard symbols and
-  exports all but the `%`-prefixed internals; `cl-user` uses `cl`, so a standard symbol read
-  through it is `:inherited`, and every other name is `:internal`. `%find-symbol-status` adds
-  the same definition-IS-an-interning probe.
+- **Interpreter**: the status half of `PackageResolver.accessible` (`memberStatus` is a view
+  of it), the same lookup as the value half — that is what makes the pair nil TOGETHER (CL's
+  invariant). `cl` owns the standard symbols and exports all but the `%`-prefixed internals;
+  `cl-user` uses `cl`, so a standard symbol read through it is `:inherited`; a recorded or
+  defined name is `:internal`; anything else nil (`cl-user` used to provide every name).
+  `%find-symbol-status` runs the same definition-IS-an-interning probe.
 
 **The `cl` arm admits the standard names `cl` exports WITHOUT implementing** (CLHS 11.1.2.1, the
 978): `PackageRegistry.isClMemberName`, not `isClSymbol`, in `memberSpelling`/`memberStatus` and
@@ -387,10 +414,12 @@ canonicalized before the keyword/cl/cl-user arms (`canonicalDesignator` ->
 `PackageRegistry.canonicalBuiltinName`); and `(find-symbol LITERAL 'cl)` took the
 build-a-spelling deviation instead of the answer the compile paths can compute.
 
-**Deviation**: a user package that uses `cl` answers nil for a standard symbol it does not own,
-where CL answers `:inherited`. The status is pinned to `memberSpelling`'s admission test, and
-widening THAT would hand sxql's `find-make-op` `CL:COUNT` (tripwire
-`MitoE2eTest#countDaoIsUndefinedOnTheCompiledBackends`). Revisit when symbol IDENTITY lands.
+**A user package that uses `cl` answers a standard symbol it does not own as `:inherited`**
+(CL's answer) since `.todo/917`: the inherited arm of `accessible` walks the use list, `cl`
+included. The old note that widening this would hand sxql's `find-make-op` `CL:COUNT` was
+about the compiled build-a-spelling path (the name probed there, `MAKE-COUNT-OP`, is no cl
+symbol), which is unchanged; the tripwire stays
+`MitoE2eTest#countDaoIsUndefinedOnTheCompiledBackends`.
 
 `symbol-plist` and `remprop` came with it: prelude entries over the same `%symbol-plists` store
 `get`/`(setf get)` use, each carrying its OWN copy of `(defvar %symbol-plists nil)` (`defvar`

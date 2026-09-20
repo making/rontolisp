@@ -5,9 +5,11 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 
 import org.jspecify.annotations.Nullable;
 
@@ -80,6 +82,15 @@ public final class PackageResolver {
 	 * evaluated one (see {@link #resolveUnqualified}).
 	 */
 	private boolean inQuotedData = false;
+
+	/**
+	 * Whether resolution is on behalf of the runtime {@code intern}, whose name is
+	 * VERBATIM: the reader's case-fold retries in {@link #resolveQualified} and
+	 * {@link #resolveUnqualified} (an upcased source spelling reaching a lower-kebab
+	 * wit-import member) must not apply, or an interned {@code "Abc"} would fold onto a
+	 * recorded {@code abc} -- the case-sensitive Scheme symbols live in one package.
+	 */
+	private boolean exactCase = false;
 
 	/**
 	 * The external set each package was DECLARED with -- its {@code defpackage}
@@ -368,7 +379,10 @@ public final class PackageResolver {
 		List<String> names = new ArrayList<>();
 		for (LispVal part : parts.subList(Math.min(2, parts.size()), parts.size())) {
 			if (part instanceof LispCons entry && entry.car() instanceof LispSymbol entrySym && !entrySym.isKeyword()) {
-				names.add(entrySym.name());
+				// The entry is read under the current package: a bare name is that
+				// package's symbol, the spelling the reader would have given it.
+				names.add(PackageRegistry.splitQualified(entrySym.name()) != null || entrySym.name().startsWith("#:")
+						? entrySym.name() : internSpellingOnly(entrySym.name()));
 			}
 		}
 		if (!names.isEmpty()) {
@@ -430,8 +444,9 @@ public final class PackageResolver {
 	private @Nullable LispVal tryConsumeUsePackage(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || parts.size() > 3) {
-			throw new LispPackageException(
-					LispNames.USE_PACKAGE + " expects a package designator (and optionally a target package)");
+			// Not consumable, and not this pass's error to raise: the arity belongs to
+			// the FUNCTION, which signals a catchable program-error.
+			return null;
 		}
 		List<String> used = literalDesignatorList(parts.get(1));
 		String target = this.currentPackage;
@@ -483,16 +498,66 @@ public final class PackageResolver {
 		if (parts.size() < 2 || parts.size() > 3) {
 			return null;
 		}
-		List<String> names = literalDesignatorList(parts.get(1));
 		String target = this.currentPackage;
 		if (parts.size() == 3) {
 			target = literalDesignator(parts.get(2));
 		}
-		if (names == null || target == null) {
+		if (target == null) {
+			return null;
+		}
+		List<String> names = literalSymbolSpellings(parts.get(1), target);
+		if (names == null) {
 			return null;
 		}
 		exportSymbols(names, target, export);
 		return LispTrue.INSTANCE;
+	}
+
+	/**
+	 * The symbol spellings a literal SYMBOL-list argument of {@code export} /
+	 * {@code unexport} / {@code import} names -- a quoted symbol or a quoted list of them
+	 * -- resolved the way the reader resolved them: a bare symbol is the CURRENT
+	 * package's (its accessible symbol of that name, or a fresh own one), a qualified one
+	 * is what it spells. A keyword, an uninterned symbol or a string is not a symbol of
+	 * any package; it names the target's own symbol, the permissive reading the
+	 * name-based export always had. Null when the argument is not literal (a runtime call
+	 * only the interpreter can serve).
+	 */
+	private @Nullable List<String> literalSymbolSpellings(LispVal arg, String targetPackage) {
+		LispVal datum = arg;
+		if (arg instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& cons.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil) {
+			datum = rest.car();
+		}
+		else if (!(arg instanceof LispString)) {
+			return null;
+		}
+		List<LispVal> elements = datum instanceof LispCons list ? list.toList() : List.of(datum);
+		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
+		List<String> spellings = new ArrayList<>(elements.size());
+		for (LispVal element : elements) {
+			switch (element) {
+				case LispString str -> spellings.add(ownSpellingOf(target, str.value()));
+				case LispSymbol sym when sym.isKeyword() ->
+					spellings.add(ownSpellingOf(target, sym.name().substring(1)));
+				case LispSymbol sym when sym.name().startsWith("#:") ->
+					spellings.add(ownSpellingOf(target, sym.name().substring(2)));
+				case LispSymbol sym -> spellings.add(PackageRegistry.splitQualified(sym.name()) != null ? sym.name()
+						: internSpellingOnly(sym.name()));
+				case LispTrue ignored -> spellings.add("T");
+				case LispNil ignored -> spellings.add("NIL");
+				default -> {
+					return null;
+				}
+			}
+		}
+		return spellings;
+	}
+
+	/** The spelling of a package's own symbol, the package given as a designator. */
+	private String ownSpellingOf(String pkg, String name) {
+		return LispNames.CL_USER_PKG.equals(pkg) || LispNames.CL_PKG.equals(pkg) ? name
+				: PackageRegistry.qualifyInternal(pkg, name);
 	}
 
 	/**
@@ -503,10 +568,24 @@ public final class PackageResolver {
 	 * re-exported through the same import redirect {@code defpackage}'s {@code :export}
 	 * clause records, so the exported symbol stays the used package's one rather than a
 	 * fresh symbol of the same name.
-	 * @param names the symbol names to export (a qualified spelling is reduced to its
-	 * member name)
+	 * <p>
+	 * The symbol has to be accessible in the target (CLHS: a {@code package-error}
+	 * otherwise): one the package owns is, whether or not the member table knows it yet
+	 * -- a symbol only READ under the package is never recorded (see
+	 * {@link #recordInterned}) -- so a symbol homed in the target is taken on its
+	 * spelling alone, and it is symbols homed ELSEWHERE that must be imported or
+	 * inherited. Two name conflicts signal the same way: a different symbol of that name
+	 * already accessible in the target, and a package USING the target that has its own
+	 * symbol of that name present (not shadowing). Every such failure is a
+	 * {@link RuntimePackageException}, which the runtime functions turn into a catchable
+	 * {@code package-error}.
+	 * @param names the symbol spellings to export ({@code pkg::name} / {@code pkg:name},
+	 * or a bare name for a {@code cl}/{@code cl-user} symbol; a plain STRING names the
+	 * target's own symbol)
 	 * @param targetPackage the package whose external set changes
 	 * @param export true to export, false to unexport
+	 * @throws RuntimePackageException when a symbol is not accessible in the target or
+	 * the export creates a name conflict
 	 */
 	public void exportSymbols(List<String> names, String targetPackage, boolean export) {
 		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
@@ -517,31 +596,318 @@ public final class PackageResolver {
 		// Pin the spelling before the accessibility changes: from here on the package's
 		// symbols keep the colon they were declared with, whichever way the external set
 		// moves (see declaredExternals).
-		this.declaredExternals.putIfAbsent(target, pkg.externals());
+		this.declaredExternals.putIfAbsent(target, Set.copyOf(pkg.externals()));
 		Set<String> externals = new HashSet<>(pkg.externals());
 		Set<String> owned = new HashSet<>(pkg.symbols());
 		Map<String, String> imports = new HashMap<>(pkg.imports());
+		String operator = export ? LispNames.EXPORT : LispNames.UNEXPORT;
 		for (String spelled : names) {
-			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(spelled);
-			String name = qn == null ? spelled : qn.member();
+			SymbolId id = symbolId(spelled);
+			String name = id.name();
+			boolean foreign = id.home() != null && !id.home().equals(target);
+			Accessible accessible = accessibleIn(target, name, s -> false);
+			if (foreign && (accessible == null || !sameSymbol(accessible.spelling(), id))) {
+				if (accessible == null) {
+					throw new RuntimePackageException(operator + ": the symbol " + spelled
+							+ " is not accessible in package " + target.toUpperCase(java.util.Locale.ROOT), target);
+				}
+				throw new RuntimePackageException(
+						operator + ": the symbol " + spelled + " conflicts with " + accessible.spelling()
+								+ ", which is accessible in package " + target.toUpperCase(java.util.Locale.ROOT),
+						target);
+			}
 			if (!export) {
-				// unexport leaves the symbol PRESENT, just no longer external.
-				externals.remove(name);
+				// unexport leaves the symbol PRESENT, just no longer external; an
+				// inherited one is not the target's to unexport and is left alone (SBCL).
+				if (accessible == null || !LispNames.STATUS_INHERITED.equals(accessible.status())) {
+					externals.remove(name);
+				}
 				continue;
+			}
+			SymbolId exported = new SymbolId(target, name);
+			if (accessible != null && LispNames.STATUS_INHERITED.equals(accessible.status())) {
+				// An inherited symbol becomes present (an import redirect to its home)
+				// before it is exported -- in CL the very same symbol object, so a user
+				// of the target inherits the home's symbol, not a fresh one.
+				exported = symbolId(accessible.spelling());
+				imports.put(name, java.util.Objects.requireNonNull(exported.home()));
+			}
+			else if (accessible != null && imports.containsKey(name)) {
+				exported = symbolId(accessible.spelling());
+			}
+			for (String user : this.registry.designatorTable().values()) {
+				if (user.equals(target) || !this.registry.contains(user)) {
+					continue;
+				}
+				LispPackage using = this.registry.get(user);
+				if (!using.uses(target) || using.shadows(name)) {
+					continue;
+				}
+				Accessible present = presentIn(user, name);
+				if (present != null && !sameSymbol(present.spelling(), exported)) {
+					throw new RuntimePackageException(
+							operator + ": the symbol " + spelled + " conflicts with " + present.spelling()
+									+ ", which is present in package " + user.toUpperCase(java.util.Locale.ROOT)
+									+ ", a user of " + target.toUpperCase(java.util.Locale.ROOT),
+							target);
+				}
 			}
 			externals.add(name);
 			owned.add(name);
-			if (!pkg.shadows().contains(name) && !imports.containsKey(name) && !PackageRegistry.isClSymbol(name)) {
-				for (String used : pkg.useList()) {
-					if (!LispNames.CL_PKG.equals(used) && this.registry.get(used).exports(name)) {
-						imports.put(name, trueHome(used, name));
-						break;
-					}
-				}
-			}
+			this.registry.rehome(target, name);
 		}
 		this.registry.define(new LispPackage(pkg.name(), pkg.useList(), Set.copyOf(owned), Set.copyOf(externals),
 				Map.copyOf(imports), pkg.shadows()));
+	}
+
+	/**
+	 * A symbol's identity for the package operators: its home package (the canonical
+	 * registered name; {@code keyword}; null for an uninterned symbol) and its member
+	 * name. Two spellings of one symbol ({@code pkg:name} and {@code pkg::name}) have the
+	 * same id, which is what the conflict checks compare.
+	 */
+	private record SymbolId(@Nullable String home, String name) {
+	}
+
+	private SymbolId symbolId(String spelling) {
+		return new SymbolId(homeOf(spelling), LispSymbol.memberName(spelling));
+	}
+
+	private boolean sameSymbol(String spelling, SymbolId id) {
+		SymbolId other = symbolId(spelling);
+		return other.name().equals(id.name()) && java.util.Objects.equals(other.home(), id.home());
+	}
+
+	/**
+	 * The home package a spelling names, before any {@code unintern} is considered: the
+	 * qualifier of a qualified spelling (resolved to the registered name when the
+	 * registry knows it), {@code keyword} for a keyword, {@code cl} for a standard name
+	 * (the exported-only ones included), {@code cl-user} for any other bare name, null
+	 * for an uninterned ({@code #:}) symbol.
+	 */
+	private @Nullable String homeOf(String spelling) {
+		if (spelling.startsWith("#:")) {
+			return null;
+		}
+		if (spelling.startsWith(":")) {
+			return "keyword";
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(spelling);
+		if (qn != null) {
+			String found = findPackageName(qn.pkg());
+			return found != null ? found : qn.pkg();
+		}
+		if (PackageRegistry.isClMemberName(spelling)) {
+			String cl = findPackageName(LispNames.CL_PKG);
+			return cl != null ? cl : LispNames.CL_PKG;
+		}
+		String clUser = findPackageName(LispNames.CL_USER_PKG);
+		return clUser != null ? clUser : LispNames.CL_USER_PKG;
+	}
+
+	/**
+	 * Imports the given symbols into the target package -- the {@code import} function
+	 * and the {@code defpackage} {@code :import-from} clause's runtime twin. An import
+	 * records a redirect from the member name to the symbol's home, so a bare reference
+	 * in the target resolves to the home's spelling. A different symbol of the same name
+	 * already PRESENT in the target (owned or imported, not merely inherited) is a name
+	 * conflict and signals; the target's own symbol is a no-op, as in CL.
+	 * @param spellings the symbol spellings to import
+	 * @param targetPackage the package that gains the redirects
+	 * @throws RuntimePackageException on a name conflict
+	 */
+	public void importSymbols(List<String> spellings, String targetPackage) {
+		importInto(spellings, targetPackage, false);
+	}
+
+	/**
+	 * Imports the given symbols into the target package SHADOWINGLY (the
+	 * {@code shadowing-import} function): a present symbol of the same name is uninterned
+	 * first -- an own one loses its home -- and each imported name joins the package's
+	 * shadowing symbols, so it stays the accessible one whatever the use list later
+	 * brings in.
+	 * @param spellings the symbol spellings to import
+	 * @param targetPackage the package that gains the redirects
+	 */
+	public void shadowingImportSymbols(List<String> spellings, String targetPackage) {
+		importInto(spellings, targetPackage, true);
+	}
+
+	private void importInto(List<String> spellings, String targetPackage, boolean shadowing) {
+		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
+		if (!this.registry.contains(target)) {
+			throw new LispPackageException("No such package: " + targetPackage);
+		}
+		LispPackage pkg = this.registry.get(target);
+		Set<String> owned = new HashSet<>(pkg.symbols());
+		Set<String> externals = new HashSet<>(pkg.externals());
+		Map<String, String> imports = new HashMap<>(pkg.imports());
+		Set<String> shadows = new HashSet<>(pkg.shadows());
+		String operator = shadowing ? LispNames.SHADOWING_IMPORT : LispNames.IMPORT;
+		for (String spelled : spellings) {
+			SymbolId id = symbolId(spelled);
+			String name = id.name();
+			if (id.home() != null && !this.registry.contains(id.home()) && !"keyword".equals(id.home())) {
+				throw new LispPackageException("No such package: " + id.home());
+			}
+			Accessible present = presentIn(target, name);
+			boolean own = id.home() == null || id.home().equals(target);
+			if (present != null && !sameSymbol(present.spelling(), own ? new SymbolId(target, name) : id)) {
+				if (!shadowing) {
+					throw new RuntimePackageException(
+							operator + ": the symbol " + spelled + " conflicts with " + present.spelling()
+									+ ", which is present in package " + target.toUpperCase(java.util.Locale.ROOT),
+							target);
+				}
+				// shadowing-import uninterns the present symbol: an own one loses its
+				// home, an imported one just its redirect; either way it stops being
+				// external.
+				if (!imports.containsKey(name)) {
+					this.registry.markUnhomed(target, name);
+				}
+				owned.remove(name);
+				imports.remove(name);
+				externals.remove(name);
+			}
+			if (own) {
+				// The package's own symbol (or an uninterned one, which CL homes here:
+				// a spelling cannot change its home, so it becomes an own symbol).
+				owned.add(name);
+				this.registry.rehome(target, name);
+			}
+			else {
+				imports.put(name, trueHome(java.util.Objects.requireNonNull(id.home()), name));
+			}
+			if (shadowing) {
+				shadows.add(name);
+			}
+		}
+		this.registry.define(new LispPackage(pkg.name(), pkg.useList(), Set.copyOf(owned), Set.copyOf(externals),
+				Map.copyOf(imports), Set.copyOf(shadows)));
+	}
+
+	/**
+	 * Makes the named symbols shadowing symbols of the target package (the {@code shadow}
+	 * function): a name already present (owned or imported) is marked as is, any other is
+	 * interned as a fresh own symbol first.
+	 * @param names the symbol names
+	 * @param targetPackage the package whose shadowing set grows
+	 */
+	public void shadowSymbols(List<String> names, String targetPackage) {
+		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
+		if (!this.registry.contains(target)) {
+			throw new LispPackageException("No such package: " + targetPackage);
+		}
+		LispPackage pkg = this.registry.get(target);
+		Set<String> owned = new HashSet<>(pkg.symbols());
+		Set<String> shadows = new HashSet<>(pkg.shadows());
+		for (String name : names) {
+			if (!pkg.imports().containsKey(name)) {
+				if (!owned.contains(name) || this.registry.isUnhomed(target, name)) {
+					this.registry.markRecorded(target, name);
+				}
+				owned.add(name);
+				this.registry.rehome(target, name);
+			}
+			shadows.add(name);
+		}
+		this.registry.define(new LispPackage(pkg.name(), pkg.useList(), Set.copyOf(owned), pkg.externals(),
+				pkg.imports(), Set.copyOf(shadows)));
+	}
+
+	/**
+	 * Removes a symbol from the target package's member table (the {@code unintern}
+	 * function): the package's own symbol loses its home
+	 * ({@link PackageRegistry#markUnhomed}), an imported one only its redirect; either
+	 * way it stops being external and shadowing. A symbol not present in the target --
+	 * inherited, or homed elsewhere and not imported -- is left alone and answers false.
+	 * Uninterning a shadowing symbol that hid two DIFFERENT inherited symbols of that
+	 * name would leave a name conflict, so it signals instead and changes nothing.
+	 * @param spelling the symbol spelling
+	 * @param targetPackage the package to remove it from
+	 * @return whether the symbol was present and has been removed
+	 * @throws RuntimePackageException when the removal would uncover a name conflict
+	 */
+	public boolean uninternSymbol(String spelling, String targetPackage) {
+		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
+		if (!this.registry.contains(target)) {
+			throw new LispPackageException("No such package: " + targetPackage);
+		}
+		LispPackage pkg = this.registry.get(target);
+		SymbolId id = symbolId(spelling);
+		String name = id.name();
+		String importHome = pkg.imports().get(name);
+		boolean present;
+		if (importHome != null) {
+			present = id.home() != null && sameSymbol(homeSpelling(importHome, name), id);
+		}
+		else {
+			// The package's own symbol, whether or not the table records it (a read-time
+			// symbol is present in CL too).
+			present = id.home() != null && id.home().equals(target) && !this.registry.isUnhomed(target, name);
+		}
+		if (!present) {
+			return false;
+		}
+		if (pkg.shadows(name)) {
+			Set<String> uncovered = new LinkedHashSet<>();
+			for (String used : pkg.useList()) {
+				Accessible inherited = inheritedFrom(used, name);
+				if (inherited != null) {
+					SymbolId candidate = symbolId(inherited.spelling());
+					uncovered.add(candidate.home() + "::" + candidate.name());
+				}
+			}
+			if (uncovered.size() > 1) {
+				throw new RuntimePackageException(LispNames.UNINTERN + ": uninterning " + spelling + " from package "
+						+ target.toUpperCase(java.util.Locale.ROOT) + " would leave a name conflict between "
+						+ String.join(" and ", uncovered), target);
+			}
+		}
+		Set<String> owned = new HashSet<>(pkg.symbols());
+		Set<String> externals = new HashSet<>(pkg.externals());
+		Map<String, String> imports = new HashMap<>(pkg.imports());
+		Set<String> shadows = new HashSet<>(pkg.shadows());
+		owned.remove(name);
+		externals.remove(name);
+		imports.remove(name);
+		shadows.remove(name);
+		if (importHome == null) {
+			this.registry.markUnhomed(target, name);
+			this.registry.unrecord(target, name);
+		}
+		this.registry.define(new LispPackage(pkg.name(), pkg.useList(), Set.copyOf(owned), Set.copyOf(externals),
+				Map.copyOf(imports), Set.copyOf(shadows)));
+		return true;
+	}
+
+	/**
+	 * The shadowing symbols of a package (the {@code package-shadowing-symbols}
+	 * function), as canonical spellings in name order: the {@code defpackage}
+	 * {@code :shadow} / {@code :shadowing-import-from} names and the runtime
+	 * {@code shadow} / {@code shadowing-import} ones, each spelled as the symbol the
+	 * package makes accessible under it.
+	 * @param packageDesignator the package name as given (any case, nickname allowed)
+	 * @return the shadowing symbols' spellings
+	 * @throws LispPackageException when no such package exists
+	 */
+	public List<String> shadowingSymbols(String packageDesignator) {
+		String pkg = findPackageName(packageDesignator);
+		if (pkg == null) {
+			throw new LispPackageException("No such package: " + packageDesignator);
+		}
+		if ("keyword".equals(pkg)) {
+			return List.of();
+		}
+		LispPackage p = this.registry.get(pkg);
+		List<String> names = new ArrayList<>(p.shadows());
+		java.util.Collections.sort(names);
+		List<String> out = new ArrayList<>(names.size());
+		for (String name : names) {
+			String home = p.imports().get(name);
+			out.add(home != null ? homeSpelling(home, name) : ownSpelling(pkg, name));
+		}
+		return out;
 	}
 
 	/**
@@ -555,53 +921,19 @@ public final class PackageResolver {
 		if (parts.size() < 2 || parts.size() > 3) {
 			return null;
 		}
-		List<String> names = literalDesignatorList(parts.get(1));
 		String target = this.currentPackage;
 		if (parts.size() == 3) {
 			target = literalDesignator(parts.get(2));
 		}
-		if (names == null || target == null) {
+		if (target == null) {
+			return null;
+		}
+		List<String> names = literalSymbolSpellings(parts.get(1), target);
+		if (names == null) {
 			return null;
 		}
 		importSymbols(names, target);
 		return LispTrue.INSTANCE;
-	}
-
-	/**
-	 * Makes the named symbols of other packages accessible UNQUALIFIED in the target
-	 * package -- the shared machinery behind the {@code import} directive and its
-	 * interpreter-side runtime function, and the same import redirect
-	 * {@code defpackage}'s {@code :import-from} clause records. Resolution here is
-	 * textual, so an imported name simply resolves to the source package's canonical
-	 * spelling. An UNQUALIFIED name is already a symbol of the current package and, as in
-	 * Common Lisp, importing it is a no-op.
-	 * @param spellings the symbol spellings to import ({@code pkg:name} /
-	 * {@code pkg::name})
-	 * @param targetPackage the package that gains the redirects
-	 */
-	public void importSymbols(List<String> spellings, String targetPackage) {
-		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
-		if (!this.registry.contains(target)) {
-			throw new LispPackageException("No such package: " + targetPackage);
-		}
-		LispPackage pkg = this.registry.get(target);
-		Map<String, String> imports = new HashMap<>(pkg.imports());
-		for (String spelled : spellings) {
-			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(spelled);
-			if (qn == null) {
-				continue;
-			}
-			String source = registeredPackageName(this.registry.canonicalName(qn.pkg()));
-			if (!this.registry.contains(source)) {
-				throw new LispPackageException("No such package: " + qn.pkg());
-			}
-			if (source.equals(target)) {
-				continue;
-			}
-			imports.put(qn.member(), trueHome(source, qn.member()));
-		}
-		this.registry.define(new LispPackage(pkg.name(), pkg.useList(), pkg.symbols(), pkg.externals(),
-				Map.copyOf(imports), pkg.shadows()));
 	}
 
 	/**
@@ -1026,8 +1358,11 @@ public final class PackageResolver {
 			}
 		}
 		// Shadowing imports win over plain imports of the same name (their whole
-		// point).
+		// point) -- and they are shadowing symbols, so package-shadowing-symbols lists
+		// them (the import map is consulted before the shadow set, so resolution does
+		// not change).
 		imports.putAll(shadowingImports);
+		shadows.addAll(shadowingImports.keySet());
 		// An :export of a name the package does not define but INHERITS through its use
 		// list is a re-export of the used package's symbol -- in Common Lisp the very
 		// same symbol object, so postmodern's (:use :s-sql) + (:export #:sql) exports
@@ -1069,7 +1404,9 @@ public final class PackageResolver {
 		if (!this.inProgramResolution && existing == null) {
 			this.registry.markRuntimePackage(name);
 		}
-		return quotedSymbol(name);
+		// The value is the package, which at run time is its keyword -- the same object
+		// make-package and find-package answer, so the three compare eq.
+		return new LispSymbol(":" + name.toUpperCase(java.util.Locale.ROOT));
 	}
 
 	private static String packageDesignator(String context, LispVal designator) {
@@ -1669,7 +2006,8 @@ public final class PackageResolver {
 		// lowercase (a wit-import package's defuns derive from the WIT's lower-kebab
 		// names): retry the lowercase spelling before judging externality.
 		String lower = member.toLowerCase(java.util.Locale.ROOT);
-		if (!lower.equals(member) && !providesMember(pkg, member) && providesMember(pkg, lower)) {
+		if (!this.exactCase && !lower.equals(member) && !providesMember(pkg, member) && providesMember(pkg, lower)
+				&& !this.registry.isRecorded(pkg, lower)) {
 			member = lower;
 		}
 		// A single colon only reaches external (exported) symbols, like Common Lisp; a
@@ -1802,13 +2140,16 @@ public final class PackageResolver {
 		// lower-kebab WIT labels (create-shader, not CREATE-SHADER), so a bare reference
 		// under (in-package :gl) retries its lowercase spelling against the current
 		// package and the use list before being interned as a fresh symbol.
+		// Both retries reach DECLARED members only: a name the runtime intern minted is
+		// verbatim and never a reader-case mismatch (PackageRegistry.isRecorded).
 		String lower = name.toLowerCase(java.util.Locale.ROOT);
-		if (!lower.equals(name)) {
-			if (current.owns(lower) || current.exports(lower)) {
+		if (!this.exactCase && !lower.equals(name)) {
+			if ((current.owns(lower) || current.exports(lower))
+					&& !this.registry.isRecorded(this.currentPackage, lower)) {
 				return canonical(this.currentPackage, lower);
 			}
 			for (String used : current.useList()) {
-				if (!LispNames.CL_PKG.equals(used)) {
+				if (!LispNames.CL_PKG.equals(used) && !this.registry.isRecorded(used, lower)) {
 					LispSymbol viaUsed = usedExport(used, lower);
 					if (viaUsed != null) {
 						return viaUsed;
@@ -1834,12 +2175,13 @@ public final class PackageResolver {
 		// neither retry, and the whole error path behind it was tree-shaken out of every
 		// browser demo without a word.
 		String upper = name.toUpperCase(java.util.Locale.ROOT);
-		if (!upper.equals(name)) {
-			if (current.owns(upper) || current.exports(upper)) {
+		if (!this.exactCase && !upper.equals(name)) {
+			if ((current.owns(upper) || current.exports(upper))
+					&& !this.registry.isRecorded(this.currentPackage, upper)) {
 				return canonical(this.currentPackage, upper);
 			}
 			for (String used : current.useList()) {
-				if (!LispNames.CL_PKG.equals(used)) {
+				if (!LispNames.CL_PKG.equals(used) && !this.registry.isRecorded(used, upper)) {
 					LispSymbol viaUsed = usedExport(used, upper);
 					if (viaUsed != null) {
 						return viaUsed;
@@ -1957,6 +2299,40 @@ public final class PackageResolver {
 	 * @return the canonical spelling for the current package
 	 */
 	public String internSpelling(String name) {
+		return internSpelling(name, false);
+	}
+
+	/**
+	 * As {@link #internSpelling(String)}, and with {@code record} true the runtime
+	 * {@code intern} itself: a name the current package did not make accessible is
+	 * RECORDED as its own symbol ({@link #recordInterned}), so {@code find-symbol}
+	 * answers it from then on. A spelling computed for any other purpose (the
+	 * {@code find-symbol} probe, a printer question) passes false and leaves the member
+	 * table alone.
+	 * @param name the bare name to intern
+	 * @param record whether to record a freshly minted name in its package
+	 * @return the canonical spelling for the current package
+	 */
+	public String internSpelling(String name, boolean record) {
+		String spelling = internSpellingOnly(name);
+		if (record) {
+			recordInterned(spelling);
+		}
+		return spelling;
+	}
+
+	private String internSpellingOnly(String name) {
+		boolean savedExactCase = this.exactCase;
+		this.exactCase = true;
+		try {
+			return internSpellingExact(name);
+		}
+		finally {
+			this.exactCase = savedExactCase;
+		}
+	}
+
+	private String internSpellingExact(String name) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
 		if (qn != null) {
 			String pkg = registeredPackageName(this.registry.canonicalName(qn.pkg()));
@@ -1989,63 +2365,205 @@ public final class PackageResolver {
 	}
 
 	/**
-	 * The spelling {@code intern} gives a bare name in a DESIGNATED package (the 2-arg
-	 * {@code (intern name package)} form): the same accessibility rules as
-	 * {@link #internSpelling}, evaluated with the designated package current. The
-	 * {@code keyword} pseudo-package builds a keyword.
-	 * @param packageDesignator the package name as given (any case, nickname allowed)
-	 * @param name the bare name to intern
-	 * @return the canonical spelling for that package
-	 * @throws LispPackageException when no such package exists
+	 * The member-table write of the runtime {@code intern}: the home package of the
+	 * spelling {@code intern} answered now OWNS the member name, unless it already
+	 * provides it (an own or imported symbol; a name {@code unintern} took out is homed
+	 * again). The package's own symbols are the member table (see {@link LispPackage}),
+	 * which is what lets {@code find-symbol} answer nil before an intern and the symbol
+	 * after, and {@code do-symbols} enumerate what a program interned. Only the runtime
+	 * {@code intern} writes it: a symbol merely READ under a package is not recorded,
+	 * deliberately -- recording every name the resolver mints would grow every package's
+	 * enumeration (and the compiled backends' baked tables) with every local variable
+	 * ever read, and the ANSI tests that would notice are the ones the driver cannot run
+	 * anyway (they need {@code in-package}).
+	 * @param spelling the canonical spelling {@code intern} answered
 	 */
+	private void recordInterned(String spelling) {
+		if (spelling.startsWith(":") || spelling.startsWith("#:")) {
+			return;
+		}
+		String home = homeOf(spelling);
+		if (home == null) {
+			return;
+		}
+		String pkg = registeredPackageName(this.registry.canonicalName(home));
+		if (!this.registry.contains(pkg)) {
+			return;
+		}
+		String member = LispSymbol.memberName(spelling);
+		LispPackage p = this.registry.get(pkg);
+		if (p.imports().containsKey(member)) {
+			return;
+		}
+		if (p.owns(member) && !this.registry.isUnhomed(pkg, member)) {
+			return;
+		}
+		p.addSymbol(member);
+		this.registry.rehome(pkg, member);
+		this.registry.markRecorded(pkg, member);
+	}
+
 	/**
-	 * The external symbols of a designated package, as canonically spelled symbols in a
-	 * stable (sorted) order -- the {@code do-external-symbols} iteration source. The
-	 * registry records exports from {@code defpackage}, so the listing reflects every
-	 * package registered so far.
-	 * @param packageDesignator the package name as given (any case, nickname allowed)
-	 * @return the external symbols, canonically spelled
+	 * The symbol a package makes accessible under a name, with its accessibility status
+	 * -- the single lookup behind {@code find-symbol}, its status value, the
+	 * {@code do-symbols} enumeration and the package operators' conflict checks, so they
+	 * cannot disagree.
+	 *
+	 * @param spelling the symbol's canonical spelling
+	 * @param status {@code :internal}, {@code :external} or {@code :inherited} (the
+	 * {@code LispNames.STATUS_*} spellings)
+	 */
+	public record Accessible(String spelling, String status) {
+	}
+
+	/**
+	 * The symbol a designated package makes accessible under a name, or null when the
+	 * package does not provide it. In order: the {@code keyword} pseudo-package builds
+	 * the keyword; {@code cl} answers every standard name (the exported-only ones
+	 * included, CLHS 11.1.2.1) plus whatever was interned into it; any other package
+	 * answers a PRESENT symbol first -- an import redirect (spelled at its home), an own
+	 * symbol (the member table, or a name {@code definedProbe} finds in the image: a
+	 * definition IS an interning) -- and then an INHERITED one, the first used package in
+	 * use order that exports the name, spelled at its home. A name {@code unintern} took
+	 * out of the package is not its own any more, so only the inherited arm can answer
+	 * it.
+	 * @param pkgDesignator the package name as given (any case, nickname allowed)
+	 * @param member the verbatim symbol name
+	 * @param definedProbe whether a canonical spelling names a definition in the image
+	 * (the interpreter's global namespaces; a constant false when there is no image)
+	 * @return the accessible symbol and its status, or null
 	 * @throws LispPackageException when no such package exists
 	 */
-	public java.util.List<LispSymbol> externalSymbols(String packageDesignator) {
-		String pkg = findPackageName(packageDesignator);
+	public @Nullable Accessible accessible(String pkgDesignator, String member, Predicate<String> definedProbe) {
+		String pkg = findPackageName(pkgDesignator);
 		if (pkg == null) {
-			throw new LispPackageException("No such package: " + packageDesignator);
+			throw new LispPackageException("No such package: " + pkgDesignator);
+		}
+		return accessibleIn(pkg, member, definedProbe);
+	}
+
+	private @Nullable Accessible accessibleIn(String pkg, String member, Predicate<String> definedProbe) {
+		if ("keyword".equals(pkg)) {
+			return new Accessible(":" + member, LispNames.STATUS_EXTERNAL);
 		}
 		LispPackage p;
 		try {
 			p = this.registry.get(pkg);
 		}
 		catch (LispPackageException ignored) {
-			// Findable but unregistered (the keyword pseudo-package): no symbols.
-			return java.util.List.of();
+			return null;
 		}
-		java.util.List<String> names = new java.util.ArrayList<>(p.externals());
-		java.util.Collections.sort(names);
-		java.util.List<LispSymbol> out = new java.util.ArrayList<>(names.size());
-		for (String name : names) {
-			out.add(canonical(pkg, name));
+		boolean unhomed = this.registry.isUnhomed(pkg, member);
+		if (LispNames.CL_PKG.equals(pkg)) {
+			if (PackageRegistry.isClMemberName(member)) {
+				return new Accessible(member, clSymbolStatus(member, false));
+			}
+			return !unhomed && p.owns(member) ? new Accessible(canonical(pkg, member).name(), LispNames.STATUS_INTERNAL)
+					: null;
 		}
-		return out;
+		Accessible present = presentIn(pkg, member);
+		if (present != null) {
+			return present;
+		}
+		if (!unhomed) {
+			if (LispNames.CL_USER_PKG.equals(pkg) && PackageRegistry.isClMemberName(member)) {
+				// A standard name reaches cl-user through its use of cl -- inherited,
+				// except for cl's %-prefixed helpers, which are internal wherever
+				// they are reached from.
+				return new Accessible(member, clSymbolStatus(member, true));
+			}
+			String defined = LispNames.CL_USER_PKG.equals(pkg) ? member : PackageRegistry.qualifyInternal(pkg, member);
+			if (definedProbe.test(defined)) {
+				return new Accessible(defined, LispNames.STATUS_INTERNAL);
+			}
+		}
+		for (String used : p.useList()) {
+			Accessible inherited = inheritedFrom(used, member);
+			if (inherited != null) {
+				return inherited;
+			}
+		}
+		return null;
 	}
 
 	/**
-	 * The symbols ACCESSIBLE in a designated package -- the ones it owns (external and
-	 * internal alike) plus the external symbols of every package it uses -- as
-	 * canonically spelled symbols in a stable (sorted) order, the {@code do-symbols}
-	 * iteration source.
-	 *
-	 * <p>
-	 * An inherited symbol is spelled against the package that OWNS it, which is the whole
-	 * difference from {@link #externalSymbols}: the same symbol is accessible from many
-	 * packages and has one home, so a {@code (do-symbols (s :my-pkg))} over a package
-	 * that uses {@code cl} yields {@code CAR}, not {@code MY-PKG::CAR}. A name accessible
-	 * along two routes is therefore listed once, under its home spelling.
+	 * The symbol PRESENT in a package under a name -- an import redirect or an own member
+	 * (the table, minus what {@code unintern} took out) -- or null. Inherited symbols and
+	 * image definitions are not present; this is the conflict checks' view.
+	 */
+	private @Nullable Accessible presentIn(String pkg, String member) {
+		LispPackage p;
+		try {
+			p = this.registry.get(pkg);
+		}
+		catch (LispPackageException ignored) {
+			return null;
+		}
+		String status = p.exports(member) ? LispNames.STATUS_EXTERNAL : LispNames.STATUS_INTERNAL;
+		String importHome = p.imports().get(member);
+		if (importHome != null) {
+			return new Accessible(homeSpelling(importHome, member), status);
+		}
+		if (p.owns(member) && !this.registry.isUnhomed(pkg, member)) {
+			return new Accessible(ownSpelling(pkg, member), status);
+		}
+		return null;
+	}
+
+	/**
+	 * The symbol a package EXPORTS under a name, as the packages using it inherit it, or
+	 * null: for {@code cl} the standard externals (bare), for any other package its
+	 * external set, a re-export redirected to its home ({@link #usedExport}). A used
+	 * package deleted since contributes nothing.
+	 */
+	private @Nullable Accessible inheritedFrom(String used, String member) {
+		LispPackage source;
+		try {
+			source = this.registry.get(used);
+		}
+		catch (LispPackageException ignored) {
+			return null;
+		}
+		if (LispNames.CL_PKG.equals(used)) {
+			return source.exports(member) && PackageRegistry.isClMemberName(member)
+					? new Accessible(member, LispNames.STATUS_INHERITED) : null;
+		}
+		LispSymbol viaUsed = usedExport(used, member);
+		return viaUsed == null ? null : new Accessible(viaUsed.name(), LispNames.STATUS_INHERITED);
+	}
+
+	/** The spelling of a package's OWN member: bare in cl-user, qualified elsewhere. */
+	private String ownSpelling(String pkg, String member) {
+		return LispNames.CL_USER_PKG.equals(pkg) ? member : canonical(pkg, member).name();
+	}
+
+	/**
+	 * The spelling of a symbol homed in {@code home}: bare for a {@code cl} / {@code
+	 * cl-user} home, a keyword for the keyword package, qualified otherwise.
+	 */
+	private String homeSpelling(String home, String member) {
+		if ("keyword".equals(home)) {
+			return ":" + member;
+		}
+		if (LispNames.CL_PKG.equals(home) || LispNames.CL_USER_PKG.equals(home)) {
+			return member;
+		}
+		return canonical(home, member).name();
+	}
+
+	/**
+	 * Every symbol accessible in a designated package with its status, in spelling order:
+	 * the present ones (imports at their home spelling, then the own members the table
+	 * holds), then the ones inherited through the use list -- a used package's externals,
+	 * each spelled at its home, skipping any name the package already has present (a
+	 * shadowing symbol, or the same symbol reached twice). The {@code do-symbols} /
+	 * {@code with-package-iterator} universe; every entry is what {@link #accessible}
+	 * answers for its name, so the two cannot disagree.
 	 * @param packageDesignator the package name as given (any case, nickname allowed)
-	 * @return the accessible symbols, canonically spelled
+	 * @return the accessible symbols with their statuses
 	 * @throws LispPackageException when no such package exists
 	 */
-	public java.util.List<LispSymbol> accessibleSymbols(String packageDesignator) {
+	public List<Accessible> accessibleEntries(String packageDesignator) {
 		String pkg = findPackageName(packageDesignator);
 		if (pkg == null) {
 			throw new LispPackageException("No such package: " + packageDesignator);
@@ -2056,15 +2574,39 @@ public final class PackageResolver {
 		}
 		catch (LispPackageException ignored) {
 			// Findable but unregistered: the keyword pseudo-package (its "symbols"
-			// are the keywords, enumerated nowhere), or a use entry left stale by
-			// a delete-package. Neither contributes symbols.
-			return java.util.List.of();
+			// are the keywords, enumerated nowhere).
+			return List.of();
 		}
-		// Home package -> the names homed there, so an inherited name keeps its owner's
-		// spelling. A LinkedHashMap of sets keeps the collection deterministic before the
-		// final sort.
-		java.util.Map<String, java.util.Set<String>> byHome = new java.util.LinkedHashMap<>();
-		byHome.computeIfAbsent(pkg, k -> new java.util.LinkedHashSet<>()).addAll(p.symbols());
+		Map<String, Accessible> bySpelling = new java.util.TreeMap<>();
+		Set<String> presentNames = new HashSet<>();
+		if (LispNames.CL_PKG.equals(pkg)) {
+			for (String name : p.symbols()) {
+				if (this.registry.isUnhomed(pkg, name)) {
+					continue;
+				}
+				String spelling = PackageRegistry.isClMemberName(name) ? name : canonical(pkg, name).name();
+				bySpelling.put(spelling, new Accessible(spelling,
+						p.exports(name) ? LispNames.STATUS_EXTERNAL : LispNames.STATUS_INTERNAL));
+			}
+			return new ArrayList<>(bySpelling.values());
+		}
+		for (String name : p.imports().keySet()) {
+			Accessible present = presentIn(pkg, name);
+			if (present != null) {
+				bySpelling.put(present.spelling(), present);
+				presentNames.add(name);
+			}
+		}
+		for (String name : p.symbols()) {
+			if (presentNames.contains(name)) {
+				continue;
+			}
+			Accessible present = presentIn(pkg, name);
+			if (present != null) {
+				bySpelling.put(present.spelling(), present);
+				presentNames.add(name);
+			}
+		}
 		for (String used : p.useList()) {
 			LispPackage source;
 			try {
@@ -2074,15 +2616,60 @@ public final class PackageResolver {
 				// A use entry left stale by a delete-package: contributes nothing.
 				continue;
 			}
-			byHome.computeIfAbsent(used, k -> new java.util.LinkedHashSet<>()).addAll(source.externals());
-		}
-		java.util.List<LispSymbol> out = new java.util.ArrayList<>();
-		for (java.util.Map.Entry<String, java.util.Set<String>> entry : byHome.entrySet()) {
-			for (String name : entry.getValue()) {
-				out.add(canonical(entry.getKey(), name));
+			for (String name : source.externals()) {
+				if (presentNames.contains(name)) {
+					continue;
+				}
+				Accessible inherited = inheritedFrom(used, name);
+				if (inherited != null) {
+					bySpelling.putIfAbsent(inherited.spelling(), inherited);
+				}
 			}
 		}
-		out.sort(java.util.Comparator.comparing(LispSymbol::name));
+		return new ArrayList<>(bySpelling.values());
+	}
+
+	/**
+	 * The external symbols of a designated package, as canonically spelled symbols in a
+	 * stable (sorted) order -- the {@code do-external-symbols} iteration source. A
+	 * re-exported symbol (an import redirect, or an {@code :export} of an inherited name)
+	 * is spelled at its HOME, as {@code find-symbol} answers it.
+	 * @param packageDesignator the package name as given (any case, nickname allowed)
+	 * @return the external symbols, canonically spelled
+	 * @throws LispPackageException when no such package exists
+	 */
+	public java.util.List<LispSymbol> externalSymbols(String packageDesignator) {
+		java.util.List<LispSymbol> out = new java.util.ArrayList<>();
+		for (Accessible entry : accessibleEntries(packageDesignator)) {
+			if (LispNames.STATUS_EXTERNAL.equals(entry.status())) {
+				out.add(new LispSymbol(entry.spelling()));
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * The symbols ACCESSIBLE in a designated package -- the ones it owns (external and
+	 * internal alike), the ones it imports, and the external symbols of every package it
+	 * uses -- as canonically spelled symbols in a stable (sorted) order, the
+	 * {@code do-symbols} iteration source.
+	 *
+	 * <p>
+	 * Every symbol is spelled the way code spells it -- at its HOME: a
+	 * {@code (do-symbols (s :my-pkg))} over a package that uses {@code cl} yields
+	 * {@code CAR}, not {@code MY-PKG::CAR} and not {@code cl:CAR}; a shadowing import
+	 * yields the imported package's symbol. That is what makes an enumerated symbol
+	 * {@code eq} to what {@code find-symbol} answers for its name. A name accessible
+	 * along two routes is listed once (see {@link #accessibleEntries}).
+	 * @param packageDesignator the package name as given (any case, nickname allowed)
+	 * @return the accessible symbols, canonically spelled
+	 * @throws LispPackageException when no such package exists
+	 */
+	public java.util.List<LispSymbol> accessibleSymbols(String packageDesignator) {
+		java.util.List<LispSymbol> out = new java.util.ArrayList<>();
+		for (Accessible entry : accessibleEntries(packageDesignator)) {
+			out.add(new LispSymbol(entry.spelling()));
+		}
 		return out;
 	}
 
@@ -2097,6 +2684,20 @@ public final class PackageResolver {
 	 * @throws LispPackageException if no such package exists
 	 */
 	public String internSpellingIn(String packageDesignator, String name) {
+		return internSpellingIn(packageDesignator, name, false);
+	}
+
+	/**
+	 * As {@link #internSpellingIn(String, String)}, recording a freshly minted name in
+	 * the designated package when {@code record} is true (see
+	 * {@link #internSpelling(String, boolean)}).
+	 * @param packageDesignator the package to intern into
+	 * @param name the bare name to intern
+	 * @param record whether to record a freshly minted name in its package
+	 * @return the canonical spelling for that package
+	 * @throws LispPackageException if no such package exists
+	 */
+	public String internSpellingIn(String packageDesignator, String name, boolean record) {
 		String pkg = findPackageName(packageDesignator);
 		if (pkg == null) {
 			throw new LispPackageException("No such package: " + packageDesignator);
@@ -2107,7 +2708,7 @@ public final class PackageResolver {
 		String saved = this.currentPackage;
 		this.currentPackage = pkg;
 		try {
-			return internSpelling(name);
+			return internSpelling(name, record);
 		}
 		finally {
 			this.currentPackage = saved;
@@ -2213,10 +2814,12 @@ public final class PackageResolver {
 	 * @param imports the recorded import redirects as {@code (member, home)} pairs
 	 * (member verbatim, home upcased) -- what spells an enumerated re-export at its true
 	 * home
+	 * @param shadows the canonically spelled shadowing symbols (the
+	 * {@code package-shadowing-symbols} answer)
 	 */
 	public record BakedPackage(String name, java.util.List<String> use, java.util.List<String> nicknames,
 			java.util.List<LispSymbol> accessible, java.util.List<LispSymbol> externals,
-			java.util.List<java.util.List<String>> imports) {
+			java.util.List<java.util.List<String>> imports, java.util.List<LispSymbol> shadows) {
 	}
 
 	/**
@@ -2247,9 +2850,13 @@ public final class PackageResolver {
 			}
 			java.util.List<LispSymbol> accessible;
 			java.util.List<LispSymbol> externals;
+			java.util.List<LispSymbol> shadows = new java.util.ArrayList<>();
 			try {
 				accessible = accessibleSymbols(canonical);
 				externals = externalSymbols(canonical);
+				for (String spelling : shadowingSymbols(canonical)) {
+					shadows.add(new LispSymbol(spelling));
+				}
 			}
 			catch (LispPackageException ignored) {
 				accessible = java.util.List.of();
@@ -2263,11 +2870,11 @@ public final class PackageResolver {
 					.add(java.util.List.of(member, home.toUpperCase(java.util.Locale.ROOT))));
 			}
 			out.add(new BakedPackage(upcased, java.util.List.copyOf(used), nicknames, accessible, externals,
-					java.util.List.copyOf(imports)));
+					java.util.List.copyOf(imports), java.util.List.copyOf(shadows)));
 		}
 		if (out.stream().noneMatch(entry -> "KEYWORD".equals(entry.name()))) {
 			out.add(new BakedPackage("KEYWORD", java.util.List.of(), java.util.List.of(), java.util.List.of(),
-					java.util.List.of(), java.util.List.of()));
+					java.util.List.of(), java.util.List.of(), java.util.List.of()));
 		}
 		return out;
 	}
@@ -2282,104 +2889,43 @@ public final class PackageResolver {
 	 * @return the canonical package name, or null
 	 */
 	public @Nullable String symbolPackageName(String symbolName) {
-		if (symbolName.startsWith("#:")) {
+		String home = homeOf(symbolName);
+		if (home == null || "keyword".equals(home)) {
+			return home;
+		}
+		// A symbol unintern took out of its home package has none (CL's symbol-package
+		// nil), until an intern of the name homes it again.
+		String registered = registeredPackageName(this.registry.canonicalName(home));
+		if (this.registry.isUnhomed(registered, LispSymbol.memberName(symbolName))) {
 			return null;
 		}
-		if (symbolName.startsWith(":")) {
-			return "keyword";
-		}
-		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(symbolName);
-		if (qn != null) {
-			String found = findPackageName(qn.pkg());
-			return found != null ? found : qn.pkg();
-		}
-		if (PackageRegistry.isClSymbol(symbolName)) {
-			String cl = findPackageName(LispNames.CL_PKG);
-			return cl != null ? cl : LispNames.CL_PKG;
-		}
-		String clUser = findPackageName(LispNames.CL_USER_PKG);
-		return clUser != null ? clUser : LispNames.CL_USER_PKG;
+		return home;
 	}
 
 	/**
 	 * The canonical spelling {@code (find-symbol name pkg)} yields, or null when the
-	 * package does not provide the name. Rontolisp has no intern table, so "interned in
-	 * the package" is judged by the registry: the package owns, exports or imports the
-	 * (verbatim) name. The keyword pseudo-package builds the keyword; the {@code cl}
-	 * package answers its static symbol set.
+	 * package does not provide the name -- {@link #accessible} without an image probe.
 	 * @param pkgDesignator the package name as given
 	 * @param member the verbatim symbol name
 	 * @return the canonical spelling, or null
 	 */
 	public @Nullable String memberSpelling(String pkgDesignator, String member) {
-		String pkg = findPackageName(pkgDesignator);
-		if (pkg == null) {
-			throw new LispPackageException("No such package: " + pkgDesignator);
-		}
-		if ("keyword".equals(pkg)) {
-			return ":" + member;
-		}
-		if (LispNames.CL_PKG.equals(pkg)) {
-			// The wider question: cl EXPORTS every standard name, implemented or not
-			// (CLHS 11.1.2.1), and find-symbol is where that shows.
-			return PackageRegistry.isClMemberName(member) ? member : null;
-		}
-		if (LispNames.CL_USER_PKG.equals(pkg)) {
-			return member;
-		}
-		LispPackage p = this.registry.get(pkg);
-		if (p.owns(member) || p.exports(member) || p.imports().containsKey(member)) {
-			// An imported (re-exported) member lives in its home package; redirect
-			// like resolveQualified so find-symbol answers the same spelling a call
-			// site resolves to (closer-common-lisp:class-slots IS
-			// closer-mop:class-slots).
-			String home = p.imports().get(member);
-			if (home != null) {
-				return LispNames.CL_PKG.equals(home) || LispNames.CL_USER_PKG.equals(home) ? member
-						: canonical(home, member).name();
-			}
-			return canonical(pkg, member).name();
-		}
-		return null;
+		Accessible found = accessible(pkgDesignator, member, s -> false);
+		return found == null ? null : found.spelling();
 	}
 
 	/**
 	 * The accessibility status {@code (find-symbol name pkg)} answers as its SECOND
 	 * value: {@code :external}, {@code :internal}, {@code :inherited}, or null when the
-	 * package does not provide the name. Decided by exactly the admission test
-	 * {@link #memberSpelling} uses, so the pair is null together -- CL's own invariant,
-	 * and what lets a consumer read the status instead of testing the symbol.
-	 * <p>
-	 * A {@code cl} symbol is external unless it is one of the {@code %}-prefixed
-	 * internals, and it is INHERITED rather than external when read through
-	 * {@code cl-user}, which uses {@code cl}. Deviation: a user package that uses
-	 * {@code cl} still answers null for a standard symbol it does not own, because
-	 * {@code memberSpelling} does -- see {@code .kb/symbol-runtime-api.md}.
+	 * package does not provide the name -- the status half of {@link #accessible}, so the
+	 * pair is null together (CL's own invariant).
 	 * @param pkgDesignator the package name as given
 	 * @param member the verbatim symbol name
 	 * @return the status keyword spelling (with its leading colon), or null
 	 */
 	public @Nullable String memberStatus(String pkgDesignator, String member) {
-		String pkg = findPackageName(pkgDesignator);
-		if (pkg == null) {
-			throw new LispPackageException("No such package: " + pkgDesignator);
-		}
-		if ("keyword".equals(pkg)) {
-			return LispNames.STATUS_EXTERNAL;
-		}
-		if (LispNames.CL_PKG.equals(pkg)) {
-			return PackageRegistry.isClMemberName(member) ? clSymbolStatus(member, false) : null;
-		}
-		if (LispNames.CL_USER_PKG.equals(pkg)) {
-			// cl-user provides every name (there is no intern table); a standard symbol
-			// reaches it through the use list, everything else is its own.
-			return PackageRegistry.isClSymbol(member) ? clSymbolStatus(member, true) : LispNames.STATUS_INTERNAL;
-		}
-		LispPackage p = this.registry.get(pkg);
-		if (p.exports(member)) {
-			return LispNames.STATUS_EXTERNAL;
-		}
-		return p.owns(member) || p.imports().containsKey(member) ? LispNames.STATUS_INTERNAL : null;
+		Accessible found = accessible(pkgDesignator, member, s -> false);
+		return found == null ? null : found.status();
 	}
 
 	/**

@@ -1928,19 +1928,18 @@ public final class LispEvaluator {
 					throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 							name + " expects 1 or 2 arguments, got " + args.size());
 				}
-				List<String> symbols = new ArrayList<>();
-				// A symbol or a LIST of symbols, like CL.
-				if (args.get(0) instanceof LispCons list) {
-					for (LispVal element : list.toList()) {
-						symbols.add(packageNameDesignator(name, element));
-					}
-				}
-				else if (!(args.get(0) instanceof LispNil)) {
-					symbols.add(packageNameDesignator(name, args.get(0)));
-				}
 				String target = args.size() == 2 ? packageNameDesignator(name, args.get(1))
 						: this.packageResolver.currentPackageName();
-				this.packageResolver.exportSymbols(symbols, target, export);
+				// A symbol or a LIST of symbols, like CL; a symbol homed elsewhere must
+				// be accessible in the target, and a name conflict signals, both as a
+				// catchable package-error.
+				try {
+					this.packageResolver.exportSymbols(symbolSpellings(name, args.get(0), target), target, export);
+				}
+				catch (am.ik.rontolisp.RuntimePackageException ex) {
+					return signalPackageError(java.util.Objects.requireNonNullElse(ex.getMessage(), name),
+							ex.designator());
+				}
 				return LispTrue.INSTANCE;
 			}));
 		}
@@ -2103,122 +2102,30 @@ public final class LispEvaluator {
 					}
 					return fn;
 				}));
-		// find-symbol never creates: the symbol comes back only when the name is already
-		// known to the image (a cl symbol, a keyword, or a user definition). The
-		// compilers
-		// fold a literal call against their compile-time view (cl symbols + user defuns).
+		// find-symbol never creates: the symbol comes back only when the package makes
+		// the name accessible -- a present member (the package's member table, or a
+		// definition made under it: a definition IS an interning), an inherited export
+		// of a used package, a standard name, a keyword. The compilers fold a literal
+		// call against their compile-time view (cl symbols + user defuns).
 		this.globalEnv.defineFunction(LispNames.FIND_SYMBOL, new LispFunction(LispNames.FIND_SYMBOL, args -> {
-			if (args.size() == 2) {
-				// (find-symbol name pkg): "interned in the package" is judged by the
-				// package registry (owns/exports/imports) -- no intern table exists.
-				// The result keeps the canonical qualified spelling, so plist/dispatch
-				// lookups keyed by a resolver-canonicalized quote match (ironclad's
-				// massage-symbol -> (get sym '%digest-length) chain).
-				if (!(args.get(0) instanceof LispString str)) {
-					throw new LispEvalException(
-							LispNames.FIND_SYMBOL + " expects a string, got " + args.get(0).print());
-				}
-				// A package that does not exist provides no symbol: nil, not an error.
-				// CL signals a package-error here, but the compile paths cannot (they
-				// have no registry at run time), and probing an OPTIONAL system with
-				// (find-symbol "TIMESTAMP" :simple-date) is exactly what libraries do
-				// (postmodern's json-encoder) -- so all four backends answer nil.
-				if (args.get(1) instanceof LispNil) {
-					return LispNil.INSTANCE;
-				}
-				String designator = packageDesignator(LispNames.FIND_SYMBOL, args.get(1));
-				String pkgName = this.packageResolver.findPackageName(designator);
-				if (pkgName == null) {
-					return LispNil.INSTANCE;
-				}
-				String spelling = this.packageResolver.memberSpelling(designator, str.value());
-				if (spelling != null) {
-					return new LispSymbol(spelling);
-				}
-				// A definition IS an interning: a defun (or a defstruct-GENERATED
-				// defun/defvar) under (in-package pkg) registers only in the global
-				// namespaces under its canonical spelling, never in the package
-				// registry (no intern table). Probe those namespaces so
-				// (find-symbol "POINT-P" pkg) finds a defstruct predicate (trivia
-				// level2's predicatep).
-				String candidate = LispNames.CL_USER_PKG.equals(pkgName) ? str.value()
-						: PackageRegistry.qualifyInternal(pkgName, str.value());
-				return definedInImage(candidate) ? new LispSymbol(candidate) : LispNil.INSTANCE;
-			}
-			requireSingleArg(LispNames.FIND_SYMBOL, args);
-			if (!(args.get(0) instanceof LispString str)) {
-				throw new LispEvalException(LispNames.FIND_SYMBOL + " expects a string, got " + args.get(0).print());
-			}
-			// intern/find-symbol take the name verbatim under the uppercase-canonical
-			// model -- (find-symbol "car") is NIL, (find-symbol "CAR") names CAR.
-			String name = str.value();
-			boolean known = PackageRegistry.isClSymbol(name) || (!name.isEmpty() && name.charAt(0) == ':')
-					|| definedInImage(name);
-			if (known) {
-				return new LispSymbol(name);
-			}
-			// The current-package half of the definition-is-an-interning probe above.
-			String spelling = this.packageResolver.internSpelling(name);
-			if (!spelling.equals(name) && definedInImage(spelling)) {
-				return new LispSymbol(spelling);
-			}
-			return LispNil.INSTANCE;
+			PackageResolver.Accessible found = findSymbolAccessible(args);
+			return found == null ? LispNil.INSTANCE : symbolOfSpelling(found.spelling());
 		}));
 		// The SECOND value of find-symbol/intern, lowered beside the primary one by a
-		// multiple-value consumer. Every arm mirrors an arm of find-symbol above, so the
-		// two answer nil on exactly the same names -- CL's invariant, and the reason this
-		// is one function rather than a status flag threaded through the spill.
+		// multiple-value consumer: the status half of the very same lookup, so the two
+		// answer nil on exactly the same names -- CL's invariant, and the reason this is
+		// one function rather than a status flag threaded through the spill.
 		this.globalEnv.defineFunction(LispNames.FIND_SYMBOL_STATUS,
 				new LispFunction(LispNames.FIND_SYMBOL_STATUS, args -> {
-					if (args.size() == 2) {
-						if (!(args.get(0) instanceof LispString str)) {
-							throw new LispEvalException(
-									LispNames.FIND_SYMBOL + " expects a string, got " + args.get(0).print());
-						}
-						if (args.get(1) instanceof LispNil) {
-							return LispNil.INSTANCE;
-						}
-						String designator = packageDesignator(LispNames.FIND_SYMBOL, args.get(1));
-						String pkgName = this.packageResolver.findPackageName(designator);
-						if (pkgName == null) {
-							return LispNil.INSTANCE;
-						}
-						String status = this.packageResolver.memberStatus(designator, str.value());
-						if (status != null) {
-							return new LispSymbol(status);
-						}
-						// A definition IS an interning: a defun registered under the
-						// package's canonical spelling is internal to it.
-						String candidate = LispNames.CL_USER_PKG.equals(pkgName) ? str.value()
-								: PackageRegistry.qualifyInternal(pkgName, str.value());
-						return definedInImage(candidate) ? new LispSymbol(LispNames.STATUS_INTERNAL) : LispNil.INSTANCE;
-					}
-					requireSingleArg(LispNames.FIND_SYMBOL, args);
-					if (!(args.get(0) instanceof LispString str)) {
-						throw new LispEvalException(
-								LispNames.FIND_SYMBOL + " expects a string, got " + args.get(0).print());
-					}
-					String name = str.value();
-					if (!name.isEmpty() && name.charAt(0) == ':') {
-						return new LispSymbol(LispNames.STATUS_EXTERNAL);
-					}
-					if (PackageRegistry.isClSymbol(name)) {
-						String status = this.packageResolver.memberStatus(this.packageResolver.currentPackageName(),
-								name);
-						return new LispSymbol(status != null ? status : LispNames.STATUS_INHERITED);
-					}
-					if (definedInImage(name)) {
-						return new LispSymbol(LispNames.STATUS_INTERNAL);
-					}
-					String spelling = this.packageResolver.internSpelling(name);
-					return !spelling.equals(name) && definedInImage(spelling)
-							? new LispSymbol(LispNames.STATUS_INTERNAL) : LispNil.INSTANCE;
+					PackageResolver.Accessible found = findSymbolAccessible(args);
+					return found == null ? LispNil.INSTANCE : new LispSymbol(found.status());
 				}));
 		// intern overrides the package-blind Environment converter: a bare name is
 		// interned into the CURRENT package (the resolver's in-package state), so a
 		// macro-time (intern (concatenate ...)) under (in-package p) names the same
-		// function as a literal defun in that file. The (intern name :keyword) form
-		// keeps the Environment behavior.
+		// function as a literal defun in that file -- and a name the package did not
+		// provide is RECORDED as its member, so find-symbol answers it from then on. The
+		// (intern name :keyword) form keeps the Environment behavior.
 		this.globalEnv.defineFunction(LispNames.INTERN, new LispFunction(LispNames.INTERN, args -> {
 			if (args.size() == 2) {
 				if (LispMacroExpander.isKeywordPackageDesignator(args.get(1))) {
@@ -2235,14 +2142,119 @@ public final class LispEvaluator {
 					throw new LispEvalException(LispNames.INTERN + " expects a string, got " + args.get(0).print());
 				}
 				String designator = packageDesignator(LispNames.INTERN, args.get(1));
-				return new LispSymbol(this.packageResolver.internSpellingIn(designator, str.value()));
+				return symbolOfSpelling(this.packageResolver.internSpellingIn(designator, str.value(), true));
 			}
 			requireSingleArg(LispNames.INTERN, args);
 			if (!(args.get(0) instanceof LispString str)) {
 				throw new LispEvalException(LispNames.INTERN + " expects a string, got " + args.get(0).print());
 			}
-			return new LispSymbol(this.packageResolver.internSpelling(str.value()));
+			return symbolOfSpelling(this.packageResolver.internSpelling(str.value(), true));
 		}));
+		// shadow / shadowing-import / unintern / package-shadowing-symbols: the
+		// member-table operators, over the LIVE registry like intern. The compiled
+		// backends serve the same four from prelude defuns over the %runtime-packages%
+		// member table (a read/compile-time package is frozen there).
+		this.globalEnv.defineFunction(LispNames.SHADOW, new LispFunction(LispNames.SHADOW, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.SHADOW + " expects 1 or 2 arguments, got " + args.size());
+			}
+			List<String> names = new ArrayList<>();
+			// A string designator or a LIST of them, like CL.
+			if (args.get(0) instanceof LispCons list) {
+				for (LispVal element : list.toList()) {
+					names.add(packageNameDesignator(LispNames.SHADOW, element));
+				}
+			}
+			else if (!(args.get(0) instanceof LispNil)) {
+				names.add(packageNameDesignator(LispNames.SHADOW, args.get(0)));
+			}
+			String target = args.size() == 2 ? packageDesignator(LispNames.SHADOW, args.get(1))
+					: this.packageResolver.currentPackageName();
+			this.packageResolver.shadowSymbols(names, packageName(LispNames.SHADOW, target));
+			return LispTrue.INSTANCE;
+		}));
+		this.globalEnv.defineFunction(LispNames.SHADOWING_IMPORT, new LispFunction(LispNames.SHADOWING_IMPORT, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.SHADOWING_IMPORT + " expects 1 or 2 arguments, got " + args.size());
+			}
+			String target = args.size() == 2 ? packageDesignator(LispNames.SHADOWING_IMPORT, args.get(1))
+					: this.packageResolver.currentPackageName();
+			target = packageName(LispNames.SHADOWING_IMPORT, target);
+			try {
+				this.packageResolver
+					.shadowingImportSymbols(symbolSpellings(LispNames.SHADOWING_IMPORT, args.get(0), target), target);
+			}
+			catch (am.ik.rontolisp.RuntimePackageException ex) {
+				return signalPackageError(
+						java.util.Objects.requireNonNullElse(ex.getMessage(), LispNames.SHADOWING_IMPORT),
+						ex.designator());
+			}
+			return LispTrue.INSTANCE;
+		}));
+		this.globalEnv.defineFunction(LispNames.UNINTERN, new LispFunction(LispNames.UNINTERN, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.UNINTERN + " expects 1 or 2 arguments, got " + args.size());
+			}
+			String target = args.size() == 2 ? packageDesignator(LispNames.UNINTERN, args.get(1))
+					: this.packageResolver.currentPackageName();
+			target = packageName(LispNames.UNINTERN, target);
+			String spelling = symbolSpelling(LispNames.UNINTERN, args.get(0), target);
+			try {
+				return this.packageResolver.uninternSymbol(spelling, target) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			catch (am.ik.rontolisp.RuntimePackageException ex) {
+				return signalPackageError(java.util.Objects.requireNonNullElse(ex.getMessage(), LispNames.UNINTERN),
+						ex.designator());
+			}
+		}));
+		this.globalEnv.defineFunction(LispNames.PACKAGE_SHADOWING_SYMBOLS,
+				new LispFunction(LispNames.PACKAGE_SHADOWING_SYMBOLS, args -> {
+					requireSingleArg(LispNames.PACKAGE_SHADOWING_SYMBOLS, args);
+					String designator = packageDesignator(LispNames.PACKAGE_SHADOWING_SYMBOLS, args.get(0));
+					List<String> spellings = this.packageResolver
+						.shadowingSymbols(packageName(LispNames.PACKAGE_SHADOWING_SYMBOLS, designator));
+					LispVal out = LispNil.INSTANCE;
+					for (int i = spellings.size() - 1; i >= 0; i--) {
+						out = new LispCons(symbolOfSpelling(spellings.get(i)), out);
+					}
+					return out;
+				}));
+		// %package-iterator-entries: the (symbol status package) triples behind
+		// with-package-iterator, over the LIVE registry (the same walk as do-symbols).
+		// Overrides the backend-neutral prelude defun, which reads the baked table
+		// plus the runtime member table instead (the %do-symbols-list precedent).
+		this.globalEnv.defineFunction(LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL,
+				new LispFunction(LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL, args -> {
+					if (args.size() != 2) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL + " expects 2 arguments, got "
+										+ args.size());
+					}
+					List<LispVal> packages = args.get(0) instanceof LispCons list ? list.toList()
+							: args.get(0) instanceof LispNil ? List.of() : List.of(args.get(0));
+					java.util.Set<String> types = new java.util.HashSet<>();
+					if (args.get(1) instanceof LispCons typeList) {
+						for (LispVal type : typeList.toList()) {
+							types.add(type.print());
+						}
+					}
+					List<LispVal> entries = new ArrayList<>();
+					for (LispVal designator : packages) {
+						String name = packageName(LispNames.WITH_PACKAGE_ITERATOR,
+								packageDesignator(LispNames.WITH_PACKAGE_ITERATOR, designator));
+						LispSymbol pkg = packageKeyword(name);
+						for (PackageResolver.Accessible entry : this.packageResolver.accessibleEntries(name)) {
+							if (types.contains(entry.status())) {
+								entries.add(valueList(List.of(symbolOfSpelling(entry.spelling()),
+										new LispSymbol(entry.status()), pkg)));
+							}
+						}
+					}
+					return valueList(entries);
+				}));
 		// find-package: rontolisp has no package objects, so a "package" at runtime is
 		// the UPCASED canonical package name as a keyword -- eq-comparable by name, and
 		// upcased so the compile paths' spelling (which comes from reader-upcased
@@ -2438,7 +2450,7 @@ public final class LispEvaluator {
 							: this.packageResolver.accessibleSymbols(designator);
 					LispVal out = LispNil.INSTANCE;
 					for (int i = symbols.size() - 1; i >= 0; i--) {
-						out = new LispCons(symbols.get(i), out);
+						out = new LispCons(symbolOfSpelling(symbols.get(i).name()), out);
 					}
 					return out;
 				}));
@@ -2450,6 +2462,10 @@ public final class LispEvaluator {
 		this.globalEnv.defineFunction(LispNames.PACKAGE_SPELLING_NORMALIZE_INTERNAL,
 				new LispFunction(LispNames.PACKAGE_SPELLING_NORMALIZE_INTERNAL, args -> {
 					requireSingleArg(LispNames.PACKAGE_SPELLING_NORMALIZE_INTERNAL, args);
+					if (args.get(0) instanceof LispTrue || args.get(0) instanceof LispNil) {
+						// t and nil are their own canonical spellings.
+						return args.get(0);
+					}
 					if (!(args.get(0) instanceof LispSymbol sym)) {
 						throw new LispEvalException(LispNames.PACKAGE_SPELLING_NORMALIZE_INTERNAL
 								+ " expects a symbol, got " + args.get(0).print());
@@ -2479,19 +2495,17 @@ public final class LispEvaluator {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						LispNames.IMPORT + " expects 1 or 2 arguments, got " + args.size());
 			}
-			List<String> symbols = new ArrayList<>();
-			// A symbol or a LIST of symbols, like CL.
-			if (args.get(0) instanceof LispCons list) {
-				for (LispVal element : list.toList()) {
-					symbols.add(importSpelling(element));
-				}
-			}
-			else if (!(args.get(0) instanceof LispNil)) {
-				symbols.add(importSpelling(args.get(0)));
-			}
 			String target = args.size() == 2 ? packageNameDesignator(LispNames.IMPORT, args.get(1))
 					: this.packageResolver.currentPackageName();
-			this.packageResolver.importSymbols(symbols, target);
+			// A symbol or a LIST of symbols, like CL; a different symbol of the same
+			// name already present in the target is a name conflict (package-error).
+			try {
+				this.packageResolver.importSymbols(symbolSpellings(LispNames.IMPORT, args.get(0), target), target);
+			}
+			catch (am.ik.rontolisp.RuntimePackageException ex) {
+				return signalPackageError(java.util.Objects.requireNonNullElse(ex.getMessage(), LispNames.IMPORT),
+						ex.designator());
+			}
 			return LispTrue.INSTANCE;
 		}));
 		// symbol-package: the same keyword shape find-package yields, so the two are
@@ -3402,7 +3416,7 @@ public final class LispEvaluator {
 			return present ? found : args.size() == 3 ? args.get(2) : LispNil.INSTANCE;
 		}, true));
 		publishSecondValue(LispNames.FIND_SYMBOL, LispNames.FIND_SYMBOL_STATUS, Integer.MAX_VALUE);
-		publishSecondValue(LispNames.INTERN, LispNames.FIND_SYMBOL_STATUS, Integer.MAX_VALUE);
+		publishSecondValue(LispNames.INTERN, LispNames.FIND_SYMBOL_STATUS, Integer.MAX_VALUE, true);
 		publishSecondValue(LispNames.SUBTYPEP, LispNames.SUBTYPEP_VALID, Integer.MAX_VALUE);
 		// Only the one-argument read-from-string has its stop index (the keyword and
 		// optional arguments are not implemented, .kb/read-load-streams.md): with more,
@@ -3417,9 +3431,26 @@ public final class LispEvaluator {
 	 * -- while it has at most {@code maxArgs} arguments; one value beyond that.
 	 */
 	private void publishSecondValue(String name, String secondName, int maxArgs) {
+		publishSecondValue(name, secondName, maxArgs, false);
+	}
+
+	/**
+	 * As {@link #publishSecondValue(String, String, int)}, computing the second value
+	 * BEFORE the primary when {@code secondFirst} is set: {@code intern}'s status is the
+	 * accessibility the name had before the intern (nil for a fresh name, CL's answer),
+	 * and the intern itself records the name.
+	 */
+	private void publishSecondValue(String name, String secondName, int maxArgs, boolean secondFirst) {
 		LispFunction primary = registeredBuiltin(name);
 		LispFunction second = registeredBuiltin(secondName);
 		installValuePublishing(primary, new LispFunction(name, args -> {
+			if (secondFirst) {
+				LispVal status = args.size() > maxArgs ? LispNil.INSTANCE : second.body().apply(args);
+				LispVal value = primary.body().apply(args);
+				this.globalEnv
+					.publishSpill(args.size() > maxArgs ? LispNil.INSTANCE : new LispCons(status, LispNil.INSTANCE));
+				return value;
+			}
 			LispVal value = primary.body().apply(args);
 			this.globalEnv.publishSpill(args.size() > maxArgs ? LispNil.INSTANCE
 					: new LispCons(second.body().apply(args), LispNil.INSTANCE));
@@ -7695,7 +7726,7 @@ public final class LispEvaluator {
 		try {
 			for (LispSymbol sym : symbols) {
 				Environment iterEnv = new Environment(blockEnv);
-				iterEnv.define(var.name(), sym);
+				iterEnv.define(var.name(), symbolOfSpelling(sym.name()));
 				for (LispVal bodyForm : parts.subList(2, parts.size())) {
 					eval(bodyForm, iterEnv);
 				}
@@ -8936,19 +8967,6 @@ public final class LispEvaluator {
 	private List<String> packageUseEntry(String operator, String designator) {
 		List<String> used = this.packageResolver.runtimePackageUseTable().get(packageName(operator, designator));
 		return used == null ? List.of() : used;
-	}
-
-	/**
-	 * The spelling an {@code import} argument names: a SYMBOL's stored spelling, verbatim
-	 * -- unlike a package designator, the qualifier is the whole point here (it says
-	 * which package the symbol comes from).
-	 */
-	private static String importSpelling(LispVal val) {
-		return switch (val) {
-			case LispString str -> str.value();
-			case LispSymbol sym -> sym.name().startsWith("#:") ? sym.name().substring(2) : sym.name();
-			default -> throw new LispEvalException(LispNames.IMPORT + " expects a symbol, got " + val.print());
-		};
 	}
 
 	/**
@@ -10774,11 +10792,104 @@ public final class LispEvaluator {
 	/**
 	 * Whether the (canonical-spelling) name is defined in any global namespace --
 	 * function, macro, or variable. The find-symbol "a definition is an interning" probe:
-	 * definitions register here, never in the package registry.
+	 * a definition registers here, and only the runtime {@code intern} writes the package
+	 * registry's member table.
 	 */
 	private boolean definedInImage(String name) {
 		return this.userMacros.containsKey(name) || this.globalEnv.lookupFunctionOrNull(name) != null
 				|| this.globalEnv.hasBinding(name);
+	}
+
+	/**
+	 * The one lookup behind {@code find-symbol} and its status value: the accessible
+	 * symbol of the (verbatim) name in the designated package -- the current one for the
+	 * one-argument form -- or null. A package that does not exist provides no symbol:
+	 * nil, not an error. CL signals a package-error here, but the compile paths cannot
+	 * (they have no registry at run time), and probing an OPTIONAL system with
+	 * {@code (find-symbol "TIMESTAMP" :simple-date)} is exactly what libraries do
+	 * (postmodern's json-encoder) -- so all four backends answer nil. The image probe
+	 * makes a defun (or a defstruct-GENERATED defun/defvar) under {@code (in-package
+	 * pkg)} count as a member, so {@code (find-symbol "POINT-P" pkg)} finds a defstruct
+	 * predicate (trivia level2's predicatep).
+	 */
+	private PackageResolver.@Nullable Accessible findSymbolAccessible(List<LispVal> args) {
+		if (args.size() == 2) {
+			if (!(args.get(0) instanceof LispString str)) {
+				throw new LispEvalException(LispNames.FIND_SYMBOL + " expects a string, got " + args.get(0).print());
+			}
+			if (args.get(1) instanceof LispNil) {
+				return null;
+			}
+			String designator = packageDesignator(LispNames.FIND_SYMBOL, args.get(1));
+			if (this.packageResolver.findPackageName(designator) == null) {
+				return null;
+			}
+			return this.packageResolver.accessible(designator, str.value(), this::definedInImage);
+		}
+		requireSingleArg(LispNames.FIND_SYMBOL, args);
+		if (!(args.get(0) instanceof LispString str)) {
+			throw new LispEvalException(LispNames.FIND_SYMBOL + " expects a string, got " + args.get(0).print());
+		}
+		// intern/find-symbol take the name verbatim under the uppercase-canonical
+		// model -- (find-symbol "car") is NIL, (find-symbol "CAR") names CAR. A
+		// ":"-prefixed name is a keyword spelling, kept for the programs that probe
+		// one this way.
+		String name = str.value();
+		if (!name.isEmpty() && name.charAt(0) == ':') {
+			return new PackageResolver.Accessible(name, LispNames.STATUS_EXTERNAL);
+		}
+		return this.packageResolver.accessible(this.packageResolver.currentPackageName(), name, this::definedInImage);
+	}
+
+	/**
+	 * The value a canonical symbol spelling denotes: {@code t} and {@code nil} are the
+	 * singletons (a {@code LispSymbol} spelled {@code "T"} would print as {@code t} and
+	 * not be {@code eq} to it), everything else the symbol of that spelling. Every
+	 * operator that ANSWERS a symbol it looked up by name goes through this --
+	 * {@code find-symbol}, {@code intern}, the enumerations -- so
+	 * {@code (eq (find-symbol "T" :cl) t)} holds.
+	 */
+	private static LispVal symbolOfSpelling(String spelling) {
+		return switch (spelling) {
+			case "T" -> LispTrue.INSTANCE;
+			case "NIL" -> LispNil.INSTANCE;
+			default -> new LispSymbol(spelling);
+		};
+	}
+
+	/**
+	 * The stored spelling of a SYMBOL argument of the package operators ({@code export} /
+	 * {@code import} / {@code shadowing-import} / {@code unintern}): {@code t} and
+	 * {@code nil} are the standard symbols of those names, and a STRING -- not a symbol
+	 * in CL, accepted here for the programs that spell one -- names the target package's
+	 * own symbol.
+	 */
+	private static String symbolSpelling(String operator, LispVal val, String targetPackage) {
+		return switch (val) {
+			case LispSymbol sym -> sym.name();
+			case LispTrue ignored -> "T";
+			case LispNil ignored -> "NIL";
+			case LispString str -> LispNames.CL_USER_PKG.equalsIgnoreCase(targetPackage) ? str.value()
+					: PackageRegistry.qualifyInternal(targetPackage, str.value());
+			default -> throw new LispEvalException(operator + " expects a symbol, got " + val.print());
+		};
+	}
+
+	/**
+	 * The spellings of a symbol-or-list-of-symbols argument (see
+	 * {@link #symbolSpelling}); a bare {@code nil} is the empty list.
+	 */
+	private static List<String> symbolSpellings(String operator, LispVal val, String targetPackage) {
+		List<String> out = new ArrayList<>();
+		if (val instanceof LispCons list) {
+			for (LispVal element : list.toList()) {
+				out.add(symbolSpelling(operator, element, targetPackage));
+			}
+		}
+		else if (!(val instanceof LispNil)) {
+			out.add(symbolSpelling(operator, val, targetPackage));
+		}
+		return out;
 	}
 
 	/**

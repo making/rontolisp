@@ -13103,6 +13103,71 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunRuntimePackageMemberTable() throws Exception {
+		// The runtime package MEMBER table on the JVM backend (.todo/917): the
+		// %runtime-packages% entry records what intern / export / shadowing-import /
+		// shadow put in it and what unintern takes out, and the find-symbol / intern /
+		// export / use-package lowerings consult it -- the same answers as the
+		// interpreter's live registry
+		// (LispEvaluatorTest#internRecordsAMemberOfARuntimePackage
+		// and its siblings) and the runtime-package-member-table ci-spec case.
+		assertThat(compileAndRun("""
+				(let ((p (make-package "JT-MT1" :use nil)))
+				  (print (multiple-value-list (find-symbol "FOO" p)))
+				  (print (multiple-value-list (intern "FOO" p)))
+				  (print (multiple-value-list (intern "FOO" p)))
+				  (print (eq (intern "FOO" p) (find-symbol "FOO" p)))
+				  (print (symbol-package (find-symbol "FOO" p)))
+				  (print (export (intern "FOO" p) p))
+				  (print (multiple-value-list (find-symbol "FOO" p)))
+				  (let ((q (make-package "JT-MT2" :use nil)))
+				    (print (use-package p q))
+				    (print (multiple-value-list (find-symbol "FOO" q)))
+				    (print (shadow "FOO" q))
+				    (print (multiple-value-list (find-symbol "FOO" q)))
+				    (print (package-shadowing-symbols q))
+				    (print (unintern (find-symbol "FOO" q) q))
+				    (print (multiple-value-list (find-symbol "FOO" q)))
+				    (print (unuse-package p q))
+				    (print (find-symbol "FOO" q))
+				    (print (shadowing-import (intern "BAR" p) q))
+				    (print (multiple-value-list (find-symbol "BAR" q)))
+				    (let (acc) (do-symbols (s q) (push s acc)) (print acc))
+				    (intern "BAZ" q)
+				    (let (acc)
+				      (with-package-iterator (next q :internal :external :inherited)
+				        (loop (multiple-value-bind (more sym status pkg) (next)
+				                (unless more (return))
+				                (push (list sym status pkg) acc))))
+				      (print (sort acc #'string< :key (lambda (e) (symbol-name (car e))))))
+				    (print (delete-package q)))
+				  (print (delete-package p)))
+				""")).isEqualTo("""
+				(NIL NIL)
+				(JT-MT1::FOO NIL)
+				(JT-MT1::FOO :INTERNAL)
+				T
+				:JT-MT1
+				T
+				(JT-MT1::FOO :EXTERNAL)
+				T
+				(JT-MT1::FOO :INHERITED)
+				T
+				(JT-MT2::FOO :INTERNAL)
+				(JT-MT2::FOO)
+				T
+				(JT-MT1::FOO :INHERITED)
+				T
+				NIL
+				T
+				(JT-MT1::BAR :INTERNAL)
+				(JT-MT1::BAR)
+				((JT-MT1::BAR :INTERNAL :JT-MT2) (JT-MT2::BAZ :INTERNAL :JT-MT2))
+				T
+				T""");
+	}
+
+	@Test
 	void compileAndRunDefpackageDefunAndCallAcrossPackages() throws Exception {
 		String code = """
 				(defpackage :mypkg (:use :cl) (:export :greet :twice))

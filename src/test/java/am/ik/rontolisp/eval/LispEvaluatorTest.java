@@ -15918,8 +15918,8 @@ class LispEvaluatorTest {
 				"(do-symbols (s :cl-user \"ds-done\") (when (string= (symbol-name s) \"CAR\") (return :found)))")
 			.print()).isEqualTo(":FOUND");
 		assertThat(evalMulti("(packagep (find-package :cl))")).isEqualTo(LispTrue.INSTANCE);
-		// unintern stays unimplemented: there is no intern table to remove from.
-		assertThat(eval("(fboundp 'unintern)")).isEqualTo(LispNil.INSTANCE);
+		// unintern exists now that a package keeps a member table.
+		assertThat(eval("(fboundp 'unintern)")).isEqualTo(LispTrue.INSTANCE);
 	}
 
 	@Test
@@ -15969,7 +15969,7 @@ class LispEvaluatorTest {
 				      (package-use-list "NPB")
 				      (np-set-up)
 				      (package-name (find-package "NPA")))
-				""").print()).isEqualTo("(NPB \"NPA\" (:NPA) NPB \"NPA\")");
+				""").print()).isEqualTo("(:NPB \"NPA\" (:NPA) :NPB \"NPA\")");
 		// The same registration through a runtime (eval ...), and the product is
 		// deletable for the same reason.
 		assertThat(evalMulti("""
@@ -15977,6 +15977,282 @@ class LispEvaluatorTest {
 				      (delete-package "NPE")
 				      (find-package "NPE"))
 				""").print()).isEqualTo("(\"NPE\" T NIL)");
+	}
+
+	@Test
+	void defpackageAnswersThePackageKeyword() {
+		// The value of a defpackage is the package, which at run time is its keyword --
+		// the same object make-package and find-package answer, so the three are eq.
+		assertThat(evalMulti("(defpackage \"DPK1\" (:use))").print()).isEqualTo(":DPK1");
+		assertThat(evalMulti(
+				"(list (defpackage \"DPK2\" (:use)) (eq (defpackage \"DPK3\" (:use)) (find-package \"DPK3\")))")
+			.print()).isEqualTo("(:DPK2 T)");
+	}
+
+	@Test
+	void internRecordsAMemberOfARuntimePackage() {
+		// A runtime package keeps a member table (SBCL-checked): find-symbol answers nil
+		// before the intern and the symbol after, the status flips from nil (a fresh
+		// name, CL's second value) to :internal, and a second intern is the same symbol.
+		assertThat(evalMulti("""
+				(let ((p (make-package "MT1" :use nil)))
+				  (list (multiple-value-list (find-symbol "FOO" p))
+				        (multiple-value-list (intern "FOO" p))
+				        (multiple-value-list (intern "FOO" p))
+				        (multiple-value-list (find-symbol "FOO" p))
+				        (symbol-package (find-symbol "FOO" p))
+				        (eq (intern "FOO" p) (find-symbol "FOO" p))
+				        (delete-package p)))
+				""").print())
+			.isEqualTo("((NIL NIL) (MT1::FOO NIL) (MT1::FOO :INTERNAL) (MT1::FOO :INTERNAL) :MT1 T T)");
+		// cl-user keeps one too: a name nothing interned or defined is not there.
+		assertThat(evalMulti(
+				"""
+						(list (find-symbol "MTZ-NEVER-SEEN" :cl-user)
+						      (progn (intern "MTZ-NEVER-SEEN" :cl-user) (multiple-value-list (find-symbol "MTZ-NEVER-SEEN" :cl-user))))
+						""")
+			.print()).isEqualTo("(NIL (MTZ-NEVER-SEEN :INTERNAL))");
+		// intern is case-EXACT: a recorded lowercase member must not catch a later
+		// mixed-case or upcased name through the reader's wit-import case-fold retry
+		// (Scheme's case-sensitive symbols all live in one package).
+		assertThat(evalMulti("""
+				(let ((p (make-package "MTCASE" :use nil)))
+				  (list (intern "abc" p) (intern "Abc" p) (intern "ABC" p)
+				        (eq (intern "Abc" p) (intern "abc" p))
+				        (progn (intern "s%a%cb") (eq (intern "s%A%cb") (intern "s%a%cb")))
+				        (delete-package p)))
+				""").print()).isEqualTo("(MTCASE::|abc| MTCASE::|Abc| MTCASE::ABC NIL NIL T)");
+	}
+
+	@Test
+	void usePackageInheritsARuntimePackagesExports() {
+		// The ANSI use-package.1 shape: an interned, exported symbol is inherited (the
+		// same symbol, :inherited) once the package is used, and gone once it is unused.
+		assertThat(evalMulti("""
+				(let* ((pg (make-package "MTG" :use nil))
+				       (ph (make-package "MTH" :use nil))
+				       (sym1 (intern "FOO" pg)))
+				  (list (export sym1 pg)
+				        (multiple-value-list (find-symbol "FOO" pg))
+				        (use-package pg ph)
+				        (multiple-value-list (find-symbol "FOO" ph))
+				        (eq sym1 (find-symbol "FOO" ph))
+				        (unuse-package pg ph)
+				        (find-symbol "FOO" ph)
+				        (delete-package ph)
+				        (delete-package pg)))
+				""").print()).isEqualTo("(T (MTG::FOO :EXTERNAL) T (MTG::FOO :INHERITED) T T NIL T T)");
+	}
+
+	@Test
+	void shadowMintsAPresentSymbolAheadOfTheInheritedOne() {
+		// The ANSI shadow.1 shape (SBCL-checked): shadow makes the package's own symbol
+		// the accessible one, lists it among the shadowing symbols, and accepts a list
+		// of string designators.
+		assertThat(evalMulti("""
+				(let* ((p1 (make-package "MTS1" :use nil))
+				       (p2 (progn (export (intern "A" "MTS1") "MTS1") (make-package "MTS2" :use '("MTS1")))))
+				  (list (package-shadowing-symbols p2)
+				        (multiple-value-list (find-symbol "A" p2))
+				        (shadow "A" p2)
+				        (multiple-value-list (find-symbol "A" p2))
+				        (package-shadowing-symbols p2)
+				        (symbol-package (find-symbol "A" p2))
+				        (shadow '("X" #\\Y) p2)
+				        (length (package-shadowing-symbols p2))
+				        (delete-package p2)
+				        (delete-package p1)))
+				""").print()).isEqualTo("(NIL (MTS1::A :INHERITED) T (MTS2::A :INTERNAL) (MTS2::A) :MTS2 T 3 T T)");
+	}
+
+	@Test
+	void shadowingImportDisplacesThePresentSymbol() {
+		// The ANSI shadowing-import.1 and .5 shapes (SBCL-checked): the imported symbol
+		// replaces the package's own one of that name, which loses its home; t is a
+		// symbol like any other.
+		assertThat(evalMulti("""
+				(let* ((p1 (make-package "MTI1" :use nil))
+				       (p2 (make-package "MTI2" :use nil))
+				       (s1 (intern "X" p1))
+				       (s2 (intern "X" p2)))
+				  (list (eq s1 s2)
+				        (eq (find-symbol "X" p2) s2)
+				        (shadowing-import s1 p2)
+				        (package-shadowing-symbols p2)
+				        (eq (find-symbol "X" p2) s1)
+				        (multiple-value-list (find-symbol "X" p2))
+				        (symbol-package s2)
+				        (shadowing-import t p1)
+				        (package-shadowing-symbols p1)
+				        (multiple-value-list (find-symbol "T" p1))
+				        (delete-package p2)
+				        (delete-package p1)))
+				""").print()).isEqualTo("(NIL T T (MTI1::X) T (MTI1::X :INTERNAL) NIL T (T) (T :INTERNAL) T T)");
+	}
+
+	@Test
+	void uninternRemovesAMemberAndUnhomesTheSymbol() {
+		// The ANSI unintern.1 shape: the member goes, the symbol answers no home, and a
+		// second unintern finds nothing. A symbol IS its spelling here, so interning
+		// the name again homes the old symbol again -- CL would mint a distinct one.
+		assertThat(evalMulti("""
+				(let ((p (make-package "MTU" :use nil)))
+				  (intern "FOO" p)
+				  (let ((sym (find-symbol "FOO" p)))
+				    (list (cadr (multiple-value-list (find-symbol "FOO" p)))
+				          (unintern sym p)
+				          (symbol-package sym)
+				          (find-symbol "FOO" p)
+				          (unintern sym p)
+				          (progn (intern "FOO" p) (symbol-package sym))
+				          (delete-package p))))
+				""").print()).isEqualTo("(:INTERNAL T NIL NIL NIL :MTU T)");
+		// unintern.7: uninterning a shadowing symbol uncovers the inherited one.
+		assertThat(evalMulti("""
+				(let* ((pg (make-package "MTUG" :use nil))
+				       (ph (make-package "MTUH" :use (list pg))))
+				  (shadow "FOO" ph)
+				  (export (intern "FOO" pg) pg)
+				  (let ((sym1 (find-symbol "FOO" ph)))
+				    (list (multiple-value-list (find-symbol "FOO" ph))
+				          (unintern sym1 ph)
+				          (multiple-value-list (find-symbol "FOO" ph))
+				          (symbol-package sym1)
+				          (package-shadowing-symbols ph)
+				          (delete-package ph)
+				          (delete-package pg))))
+				""").print()).isEqualTo("((MTUH::FOO :INTERNAL) T (MTUG::FOO :INHERITED) NIL NIL T T)");
+		// unintern.8: when the shadowing symbol hid two different inherited symbols,
+		// removing it would leave a name conflict, so it signals and changes nothing.
+		assertThat(evalMulti("""
+				(let* ((pg1 (make-package "MTC1" :use nil))
+				       (pg2 (make-package "MTC2" :use nil))
+				       (ph (make-package "MTCH" :use (list pg1 pg2))))
+				  (shadow "FOO" ph)
+				  (export (intern "FOO" pg1) pg1)
+				  (export (intern "FOO" pg2) pg2)
+				  (list (handler-case (unintern (find-symbol "FOO" ph) ph)
+				          (package-error (c) (package-error-package c)))
+				        (multiple-value-list (find-symbol "FOO" ph))
+				        (delete-package ph)
+				        (delete-package pg1)
+				        (delete-package pg2)))
+				""").print()).isEqualTo("(:MTCH (MTCH::FOO :INTERNAL) T T T)");
+	}
+
+	@Test
+	void exportAndImportCheckAccessibilityAndConflicts() {
+		// export.4 / unexport.5 / import.error.3 (SBCL-checked): a symbol homed
+		// elsewhere must be accessible in the package it is exported from, and an
+		// import over a different present symbol of the same name is a conflict.
+		assertThat(evalMulti("""
+				(let* ((pa (make-package "MTEA" :use nil))
+				       (pb (make-package "MTEB" :use nil)))
+				  (list (handler-case (export (intern "BAR" pb) pa) (package-error (c) (package-error-package c)))
+				        (handler-case (unexport 'mtea-foreign pa) (package-error (c) (package-error-package c)))
+				        (progn (intern "FOO" pa) (unexport (find-symbol "FOO" pa) pa))
+				        (multiple-value-list (find-symbol "FOO" pa))
+				        (handler-case (import 'foo pa) (package-error (c) (package-error-package c)))
+				        (import 'baz pa)
+				        (multiple-value-list (find-symbol "BAZ" pa))
+				        (symbol-package (find-symbol "BAZ" pa))
+				        (delete-package pa)
+				        (delete-package pb)))
+				""").print()).isEqualTo("(:MTEA :MTEA T (MTEA::FOO :INTERNAL) :MTEA T (BAZ :INTERNAL) :CL-USER T T)");
+		// export.5: exporting from a used package a name a user already has present.
+		assertThat(evalMulti("""
+				(progn
+				  (make-package "MTX1" :use nil)
+				  (make-package "MTX2" :use '("MTX1"))
+				  (export (intern "X" "MTX2") "MTX2")
+				  (list (handler-case (export (intern "X" "MTX1") "MTX1") (package-error (c) (package-error-package c)))
+				        (delete-package "MTX2")
+				        (delete-package "MTX1")))
+				""").print()).isEqualTo("(:MTX1 T T)");
+	}
+
+	@Test
+	void withPackageIteratorWalksTheMemberTable() {
+		// The iterator answers the four values CL specifies over the member table (the
+		// ANSI with-package-iterator.15 shape), and a missing symbol-type list is a
+		// program-error.
+		assertThat(evalMulti("""
+				(let* ((p (make-package "MTW" :use nil))
+				       (result nil))
+				  (intern "X" p)
+				  (with-package-iterator (next p :internal)
+				    (loop (multiple-value-bind (more sym access pkg) (next)
+				            (unless more (return))
+				            (push (list sym access pkg) result))))
+				  (list result
+				        (handler-case (with-package-iterator (nx p)) (program-error (c) :program-error))
+				        (delete-package p)))
+				""").print()).isEqualTo("(((MTW::X :INTERNAL :MTW)) :PROGRAM-ERROR T)");
+		assertThat(evalMulti("""
+				(let* ((pa (make-package "MTWA" :use nil))
+				       (pb (progn (export (intern "FOO" pa) pa) (make-package "MTWB" :use (list pa))))
+				       (acc nil))
+				  (intern "BAR" pb)
+				  (with-package-iterator (next (list pb) :internal :external :inherited)
+				    (loop (multiple-value-bind (more sym access) (next)
+				            (unless more (return))
+				            (push (list sym access) acc))))
+				  (list (sort acc #'string< :key (lambda (e) (symbol-name (car e))))
+				        (delete-package pb)
+				        (delete-package pa)))
+				""").print()).isEqualTo("(((MTWB::BAR :INTERNAL) (MTWA::FOO :INHERITED)) T T)");
+	}
+
+	@Test
+	void doSymbolsSpellsARedirectAtItsHomeAndAClNameBare() {
+		// The ANSI do-symbols.4 / do-external-symbols.3 shape: an enumerated symbol is
+		// spelled the way code spells it -- a shadowing import or a re-export at its
+		// home, a standard symbol bare -- so it is eq to what find-symbol answers.
+		assertThat(evalMulti("""
+				(progn
+				  (defpackage "MTD1" (:use) (:intern "C") (:export "A" "B"))
+				  (defpackage "MTD2" (:use) (:export "G" "A"))
+				  (defpackage "MTD3" (:shadow "B") (:shadowing-import-from "MTD1" "A") (:use "MTD1" "MTD2")
+				    (:export "A" "B" "G" "I") (:intern "L"))
+				  (let (all ext)
+				    (do-symbols (s "MTD3") (push s all))
+				    (do-external-symbols (s "MTD3") (push s ext))
+				    (list (sort all #'string< :key #'prin1-to-string)
+				          (sort ext #'string< :key #'prin1-to-string)
+				          (package-shadowing-symbols "MTD3")
+				          (multiple-value-list (find-symbol "A" "MTD3"))
+				          (multiple-value-list (find-symbol "B" "MTD3"))
+				          (multiple-value-list (find-symbol "G" "MTD3"))
+				          (find-symbol "C" "MTD3"))))
+				""").print())
+			.isEqualTo("((MTD1:A MTD2:G MTD3::L MTD3:B MTD3:I) (MTD1:A MTD2:G MTD3:B MTD3:I) (MTD1:A MTD3:B)"
+					+ " (MTD1:A :EXTERNAL) (MTD3:B :EXTERNAL) (MTD2:G :EXTERNAL) NIL)");
+		assertThat(evalMulti("(let (acc) (do-symbols (s :cl-user) (when (eq s 'car) (push s acc))) acc)").print())
+			.isEqualTo("(CAR)");
+	}
+
+	@Test
+	void findSymbolAnswersTheStandardSymbolsThroughAUsePackage() {
+		// The ANSI find-symbol.9 shape, and the two standard symbols that are singletons
+		// here: t and nil come back as themselves, homed in cl like every other
+		// standard name (including the exported-only ones).
+		assertThat(evalMulti("""
+				(progn
+				  (defpackage "MTF" (:use "COMMON-LISP"))
+				  (list (multiple-value-list (find-symbol "CAR" "MTF"))
+				        (multiple-value-list (find-symbol "FIND-METHOD" "MTF"))
+				        (multiple-value-list (find-symbol "NO-SUCH-MTF" "MTF"))
+				        (multiple-value-list (find-symbol "FIND-METHOD" :cl-user))
+				        (multiple-value-list (find-symbol "T" :cl-user))
+				        (eq (find-symbol "T" :cl) t)
+				        (eq (find-symbol "NIL" :cl) nil)
+				        (eq (intern "T") t)
+				        (symbol-package t)
+				        (symbol-package nil)
+				        (symbol-package 'find-method)))
+				""").print())
+			.isEqualTo("((CAR :INHERITED) (FIND-METHOD :INHERITED) (NIL NIL) (FIND-METHOD :INHERITED) (T :INHERITED)"
+					+ " T T T :CL :CL :CL)");
 	}
 
 	@Test
@@ -16134,7 +16410,11 @@ class LispEvaluatorTest {
 			.hasMessageContaining("SET expects a symbol");
 		assertThatThrownBy(() -> eval("(set :kw 1)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("SET cannot set");
+		// (intern "NIL") IS nil (the singleton, not a symbol spelled "NIL"), so it
+		// takes the same arm as the literal.
 		assertThatThrownBy(() -> eval("(set (intern \"NIL\") 1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("SET expects a symbol");
+		assertThatThrownBy(() -> eval("(set (intern \":KW\") 1)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("SET cannot set");
 		assertThatThrownBy(() -> eval("(set 5 1)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("SET expects a symbol");

@@ -2,7 +2,7 @@
 
 `(defpackage name (:use package...) (:export symbol...) (:nicknames name...) (:import-from package symbol...) (:local-nicknames (nick actual)...))`
 
-Defines a new package named `name` and returns the name symbol. Like `in-package`, it is a literal, top-level directive consumed at read/compile time, so packages are defined in source order. The name and the clause arguments are keywords, bare symbols, strings, or uninterned symbols (`:mypkg`, `mypkg`, `"mypkg"`, `#:mypkg` — the last is the portable defpackage idiom).
+Defines a new package named `name` and returns the package -- its keyword, the same object [`find-package`](../functions/find-package.md) and [`make-package`](../functions/make-package.md) answer. Like `in-package`, it is a literal, top-level directive consumed at read/compile time, so packages are defined in source order. The name and the clause arguments are keywords, bare symbols, strings, or uninterned symbols (`:mypkg`, `mypkg`, `"mypkg"`, `#:mypkg` — the last is the portable defpackage idiom).
 
 - `(:use package...)` makes the external (exported) symbols of the listed packages visible unqualified. The used packages must already exist. Without a `:use` clause **nothing** is visible unqualified — write `(:use :cl)` to use the standard symbols without a `cl:` prefix. `common-lisp` and `common-lisp-user` are built-in nicknames for `cl` and `cl-user`, so `(:use #:common-lisp)` works too.
 - `(:export symbol...)` declares the package's external symbols: they are reachable as `name:symbol` from other packages, and inherited by packages that use this one. Symbols interned later (for example `defun`s made under `(in-package name)` that are not in the `:export` clause) are internal and require the double colon, `name::symbol`.
@@ -15,7 +15,7 @@ Defines a new package named `name` and returns the name symbol. Like `in-package
 A `defpackage` naming a package that already exists **modifies** it, as Common Lisp requires: the clauses are merged into what is there, so nothing the earlier definition declared is lost. (A name that is another package's *nickname* is still an error — adjusting through it would silently apply the definition to a package of a different name.) Any other clause is an error. A `defpackage` that is **not** top-level registers its package when the form around it runs — on the interpreter only; the compiled backends have no registry at run time and refuse it. See [Packages](../packages.md#user-defined-packages-defpackage) for the full rules.
 
 ```lisp
-(defpackage :util (:use :cl) (:export :trim)) ; => UTIL
+(defpackage :util (:use :cl) (:export :trim)) ; => :UTIL
 ```
 
 ```lisp

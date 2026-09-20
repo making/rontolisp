@@ -1405,14 +1405,38 @@ public final class LispPreludeLibrary {
 				  (string (or (find-package %pn-pkg)
 				              (error "PACKAGE-NAME: no package named ~A" %pn-pkg))))
 				""");
-		// package-shadowing-symbols: always nil -- rontolisp has no symbol shadowing
-		// (defpackage's :shadow records names for RESOLUTION and mints no shadowing
-		// symbol; the runtime shadow/shadowing-import are documented non-goals,
-		// .kb/packages.md). The designator still goes through package-name, so an
-		// unknown package signals exactly as it does there.
+		// package-shadowing-symbols: a runtime package's shadowing members (its entry's
+		// fifth cell names them), a read/compile-time package's baked shadows (the
+		// defpackage :shadow / :shadowing-import-from names, spelled as the symbols
+		// they resolve to). The interpreter answers from its live registry instead. An
+		// unknown designator signals through package-name, exactly as it does there.
 		SOURCES.put(LispNames.PACKAGE_SHADOWING_SYMBOLS, """
 				(defun package-shadowing-symbols (%pss-pkg)
-				  (progn (package-name %pss-pkg) nil))
+				  (let* ((%pss-s (string %pss-pkg))
+				         (%pss-e (%runtime-package-find %pss-s)))
+				    (if %pss-e
+				        (mapcar (lambda (%pss-n) (cadr (assoc %pss-n (cadddr %pss-e) :test #'string=)))
+				                (sort (copy-list (nth 4 %pss-e)) #'string<))
+				        (let ((%pss-row (%baked-package-find %pss-s)))
+				          (if %pss-row
+				              (mapcar (lambda (%pss-sp) (intern %pss-sp)) (%split-packed (seventh %pss-row)))
+				              (progn (package-name %pss-pkg) nil))))))
+				""");
+		// shadow / shadowing-import / unintern: the member-table mutations, over the
+		// %runtime-packages% entries through %runtime-package-op (a read/compile-time
+		// package is frozen there and answers t -- nil for unintern -- without a
+		// change). The interpreter binds natives over its live registry instead.
+		SOURCES.put(LispNames.SHADOW, """
+				(defun shadow (%sh-names &optional %sh-pkg)
+				  (%runtime-package-op "SHADOW" %sh-names %sh-pkg))
+				""");
+		SOURCES.put(LispNames.SHADOWING_IMPORT, """
+				(defun shadowing-import (%si-syms &optional %si-pkg)
+				  (%runtime-package-op "SHADOWING-IMPORT" %si-syms %si-pkg))
+				""");
+		SOURCES.put(LispNames.UNINTERN, """
+				(defun unintern (%un-sym &optional %un-pkg)
+				  (%runtime-package-op "UNINTERN" (list %un-sym) %un-pkg))
 				""");
 		// The runtime-tier package API (see .kb/packages.md): make-package /
 		// delete-package / rename-package / package-nicknames as prelude defuns for
@@ -1425,12 +1449,160 @@ public final class LispPreludeLibrary {
 		// Entry layout, baked and runtime alike: (name use nicknames) with the name
 		// and use entries as keywords and the nicknames as upcased strings. Baked
 		// entries carry the symbol universes after that (accessible externals, as
-		// spelling strings) plus the import redirects (dotted (member . home)
-		// pairs); a runtime package records no members (there is no intern table),
-		// so its enumeration answers come from its static uses' baked rows.
+		// packed spelling strings), the import redirects (dotted (member . home)
+		// pairs) and the packed shadowing symbols. A runtime entry carries its MEMBER
+		// TABLE instead: a list of (name symbol status) triples -- the symbols intern,
+		// export, import, shadowing-import and shadow put there, status :internal or
+		// :external -- and the list of its shadowing names; what it inherits comes
+		// from its use list at lookup time (%runtime-member-find).
 		SOURCES.put(LispNames.RUNTIME_PACKAGES_INTERNAL, """
 				(defvar %runtime-packages% nil)
 				""");
+		SOURCES.put(LispNames.RUNTIME_EXTERNAL_FIND_INTERNAL, """
+				(defun %runtime-external-find (%ref-pkg %ref-name)
+				  (let* ((%ref-s (string %ref-pkg))
+				         (%ref-e (%runtime-package-find %ref-s)))
+				    (if %ref-e
+				        (let ((%ref-hit (assoc %ref-name (cadddr %ref-e) :test #'string=)))
+				          (if (and %ref-hit (eq (caddr %ref-hit) :external)) (cadr %ref-hit) nil))
+				        (let ((%ref-row (%baked-package-find %ref-s))
+				              (%ref-found nil))
+				          (when %ref-row
+				            (dolist (%ref-sp (%split-packed (fifth %ref-row)))
+				              (when (and (null %ref-found) (string= %ref-name (symbol-name (intern %ref-sp))))
+				                (setq %ref-found (intern %ref-sp)))))
+				          %ref-found))))
+				""");
+		SOURCES.put(LispNames.RUNTIME_MEMBER_FIND_INTERNAL, """
+				(defun %runtime-member-find (%rmf-e %rmf-name)
+				  (let ((%rmf-hit (assoc %rmf-name (cadddr %rmf-e) :test #'string=)))
+				    (if %rmf-hit
+				        (cadr %rmf-hit)
+				        (let ((%rmf-found nil))
+				          (dolist (%rmf-u (cadr %rmf-e) %rmf-found)
+				            (when (null %rmf-found)
+				              (setq %rmf-found (%runtime-external-find %rmf-u %rmf-name))))))))
+				""");
+		SOURCES.put(LispNames.RUNTIME_MEMBER_STATUS_INTERNAL, """
+				(defun %runtime-member-status (%rms-e %rms-name)
+				  (let ((%rms-hit (assoc %rms-name (cadddr %rms-e) :test #'string=)))
+				    (if %rms-hit
+				        (caddr %rms-hit)
+				        (if (%runtime-member-find %rms-e %rms-name) :inherited nil))))
+				""");
+		SOURCES.put(LispNames.RUNTIME_MEMBER_INTERN_INTERNAL, """
+				(defun %runtime-member-intern (%rmi-e %rmi-name)
+				  (or (%runtime-member-find %rmi-e %rmi-name)
+				      (let ((%rmi-sym (intern (concatenate 'string (string (car %rmi-e)) "::" %rmi-name))))
+				        (rplaca (nthcdr 3 %rmi-e) (cons (list %rmi-name %rmi-sym :internal) (cadddr %rmi-e)))
+				        %rmi-sym)))
+				""");
+		// The member-table mutations behind export / unexport / import /
+		// shadowing-import / shadow / unintern / use-package / unuse-package on a
+		// runtime package (the lowerings and the prelude defuns above route here). A
+		// designator naming a read/compile-time package answers t unchanged (nil for
+		// unintern): that registry is frozen. One naming nothing is a package-error.
+		SOURCES.put(LispNames.RUNTIME_PACKAGE_OP_INTERNAL,
+				"""
+						(defun %runtime-package-op (%rpo-op %rpo-syms %rpo-pkg)
+						  (let* ((%rpo-d (if (null %rpo-pkg) *package* %rpo-pkg))
+						         (%rpo-s (string %rpo-d))
+						         (%rpo-e (%runtime-package-find %rpo-s))
+						         (%rpo-list (if (listp %rpo-syms) %rpo-syms (list %rpo-syms)))
+						         (%rpo-r t))
+						    (cond ((null %rpo-e)
+						           (if (find-package %rpo-d)
+						               (if (string= %rpo-op "UNINTERN") nil t)
+						               (error 'package-error :package (intern (string-upcase %rpo-s) :keyword)
+						                      :format-control (concatenate 'string %rpo-op ": no such package: " %rpo-s))))
+						          ((string= %rpo-op "USE-PACKAGE")
+						           (dolist (%rpo-u %rpo-list t)
+						             (let ((%rpo-k (find-package %rpo-u)))
+						               (if (null %rpo-k)
+						                   (error 'package-error :package (intern (string-upcase (string %rpo-u)) :keyword)
+						                          :format-control (concatenate 'string "USE-PACKAGE: no such package: " (string %rpo-u))))
+						               (unless (member (string %rpo-k) (mapcar (lambda (%rpo-x) (string %rpo-x)) (cadr %rpo-e)) :test #'string=)
+						                 (rplaca (cdr %rpo-e) (append (cadr %rpo-e) (list %rpo-k)))))))
+						          ((string= %rpo-op "UNUSE-PACKAGE")
+						           (dolist (%rpo-u %rpo-list t)
+						             (let ((%rpo-us (string %rpo-u)))
+						               (rplaca (cdr %rpo-e)
+						                       (remove-if (lambda (%rpo-x) (string= %rpo-us (string %rpo-x))) (cadr %rpo-e))))))
+						          (t (dolist (%rpo-x %rpo-list %rpo-r)
+						               (setq %rpo-r (%runtime-member-op %rpo-op %rpo-e %rpo-x)))))))
+						(defun %runtime-member-op (%rmo-op %rmo-e %rmo-x)
+						  (let* ((%rmo-name (if (stringp %rmo-x) %rmo-x (symbol-name %rmo-x)))
+						         (%rmo-members (cadddr %rmo-e))
+						         (%rmo-hit (assoc %rmo-name %rmo-members :test #'string=)))
+						    (cond ((string= %rmo-op "EXPORT")
+						           (if %rmo-hit
+						               (rplaca (cddr %rmo-hit) :external)
+						               (let ((%rmo-inh (%runtime-member-find %rmo-e %rmo-name)))
+						                 (rplaca (nthcdr 3 %rmo-e)
+						                         (cons (list %rmo-name (if %rmo-inh %rmo-inh %rmo-x) :external) %rmo-members))))
+						           t)
+						          ((string= %rmo-op "UNEXPORT")
+						           (when %rmo-hit (rplaca (cddr %rmo-hit) :internal))
+						           t)
+						          ((string= %rmo-op "IMPORT")
+						           (if %rmo-hit
+						               (unless (eq (cadr %rmo-hit) %rmo-x)
+						                 (error 'package-error :package (car %rmo-e)
+						                        :format-control (concatenate 'string "IMPORT: the symbol " (prin1-to-string %rmo-x)
+						                                                     " conflicts with a symbol present in package " (string (car %rmo-e)))))
+						               (rplaca (nthcdr 3 %rmo-e) (cons (list %rmo-name %rmo-x :internal) %rmo-members)))
+						           t)
+						          ((string= %rmo-op "SHADOWING-IMPORT")
+						           (rplaca (nthcdr 3 %rmo-e)
+						                   (cons (list %rmo-name %rmo-x :internal)
+						                         (remove-if (lambda (%rmo-m) (string= %rmo-name (car %rmo-m))) %rmo-members)))
+						           (unless (member %rmo-name (nth 4 %rmo-e) :test #'string=)
+						             (rplaca (nthcdr 4 %rmo-e) (cons %rmo-name (nth 4 %rmo-e))))
+						           t)
+						          ((string= %rmo-op "SHADOW")
+						           (unless %rmo-hit
+						             (rplaca (nthcdr 3 %rmo-e)
+						                     (cons (list %rmo-name (intern (concatenate 'string (string (car %rmo-e)) "::" %rmo-name)) :internal)
+						                           %rmo-members)))
+						           (unless (member %rmo-name (nth 4 %rmo-e) :test #'string=)
+						             (rplaca (nthcdr 4 %rmo-e) (cons %rmo-name (nth 4 %rmo-e))))
+						           t)
+						          ((string= %rmo-op "UNINTERN")
+						           (if (and %rmo-hit (eq (cadr %rmo-hit) %rmo-x))
+						               (progn (rplaca (nthcdr 3 %rmo-e)
+						                              (remove-if (lambda (%rmo-m) (string= %rmo-name (car %rmo-m))) %rmo-members))
+						                      (rplaca (nthcdr 4 %rmo-e) (remove %rmo-name (nth 4 %rmo-e) :test #'string=))
+						                      t)
+						               nil))
+						          (t t))))
+						""");
+		// %package-iterator-entries: the (symbol status package) triples behind
+		// with-package-iterator, over the %do-symbols-list universe. A runtime entry's
+		// member table carries the status; a baked row answers :external from its
+		// external universe, :internal for a symbol homed in the package and
+		// :inherited otherwise (cl-user's standard names are inherited, whatever the
+		// compiled symbol-package says about a bare name). The interpreter binds a
+		// native over its live registry instead.
+		SOURCES.put(LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL,
+				"""
+						(defun %package-iterator-entries (%pie-pkgs %pie-types)
+						  (let ((%pie-acc nil))
+						    (dolist (%pie-p (if (listp %pie-pkgs) %pie-pkgs (list %pie-pkgs)) (nreverse %pie-acc))
+						      (let* ((%pie-k (find-package %pie-p))
+						             (%pie-e (if %pie-k (%runtime-package-find (string %pie-k)) nil))
+						             (%pie-ext (if %pie-k (%do-symbols-list %pie-k t "WITH-PACKAGE-ITERATOR") nil)))
+						        (if (null %pie-k)
+						            (error "WITH-PACKAGE-ITERATOR: no package named ~A" %pie-p))
+						        (dolist (%pie-s (%do-symbols-list %pie-k nil "WITH-PACKAGE-ITERATOR"))
+						          (let ((%pie-st (cond (%pie-e (%runtime-member-status %pie-e (symbol-name %pie-s)))
+						                               ((member %pie-s %pie-ext) :external)
+						                               ((and (string= (string %pie-k) "CL-USER") (find-symbol (symbol-name %pie-s) :cl))
+						                                :inherited)
+						                               ((string= (string (symbol-package %pie-s)) (string %pie-k)) :internal)
+						                               (t :inherited))))
+						            (when (member %pie-st %pie-types)
+						              (push (list %pie-s %pie-st %pie-k) %pie-acc))))))))
+						""");
 		SOURCES.put(LispNames.BAKED_IMPORT_REDIRECT_INTERNAL, """
 				(defun %baked-import-redirect (%bir-name %bir-home)
 				  (let ((%bir-imports nil))
@@ -1514,13 +1686,27 @@ public final class LispPreludeLibrary {
 						      (when (string= (string %dsl-p) (car %dsl-e))
 						        (setq %dsl-acc (append %dsl-acc (mapcar (lambda (%dsl-s) (intern %dsl-s))
 						                                               (%split-packed (if %dsl-ext-only (fifth %dsl-e) (cadddr %dsl-e))))))))
+						    ;; A runtime entry: its own and imported members (the external
+						    ;; ones alone for do-external-symbols), plus -- for do-symbols --
+						    ;; what it inherits: the externals of every package it uses, a
+						    ;; runtime entry's external members or a baked row's external
+						    ;; universe.
 						    (dolist (%dsl-r %runtime-packages%)
 						      (when (string= (string %dsl-p) (string (car %dsl-r)))
-						        (dolist (%dsl-u (cadr %dsl-r))
-						          (dolist (%dsl-e %baked-packages%)
-						            (when (string= (string %dsl-u) (car %dsl-e))
-						              (setq %dsl-acc (append %dsl-acc (mapcar (lambda (%dsl-s) (intern %dsl-s))
-						                                                     (%split-packed (if %dsl-ext-only (fifth %dsl-e) (cadddr %dsl-e)))))))))))
+						        (dolist (%dsl-m (cadddr %dsl-r))
+						          (when (or (not %dsl-ext-only) (eq (caddr %dsl-m) :external))
+						            (setq %dsl-acc (append %dsl-acc (list (cadr %dsl-m))))))
+						        (unless %dsl-ext-only
+						          (dolist (%dsl-u (cadr %dsl-r))
+						            (let ((%dsl-ue (%runtime-package-find (string %dsl-u))))
+						              (if %dsl-ue
+						                  (dolist (%dsl-m (cadddr %dsl-ue))
+						                    (when (eq (caddr %dsl-m) :external)
+						                      (setq %dsl-acc (append %dsl-acc (list (cadr %dsl-m))))))
+						                  (dolist (%dsl-e %baked-packages%)
+						                    (when (string= (string %dsl-u) (car %dsl-e))
+						                      (setq %dsl-acc (append %dsl-acc (mapcar (lambda (%dsl-s) (intern %dsl-s))
+						                                                             (%split-packed (fifth %dsl-e)))))))))))))
 						    (remove-duplicates %dsl-acc :test #'equal)))
 						""");
 		SOURCES.put(LispNames.PACKAGE_ERROR_PACKAGE, """
@@ -1550,7 +1736,7 @@ public final class LispPreludeLibrary {
 						                                 (error 'package-error :package (intern %mp-k :keyword) :format-control (concatenate 'string "MAKE-PACKAGE: package already exists: " %mp-k))
 						                                 %mp-k)))
 						                         %mp-nn) #'string<))
-						    (push (list (intern %mp-n :keyword) %mp-u %mp-nn) %runtime-packages%)
+						    (push (list (intern %mp-n :keyword) %mp-u %mp-nn nil nil) %runtime-packages%)
 						    (intern %mp-n :keyword)))
 						""");
 		SOURCES.put(LispNames.DELETE_PACKAGE,
@@ -1596,7 +1782,8 @@ public final class LispPreludeLibrary {
 						                         (or (string= %rp-s (string (car %rp-e)))
 						                             (member %rp-s (caddr %rp-e) :test #'string=)))
 						                       %runtime-packages%))
-						      (push (list (intern %rp-n :keyword) (cadr %rp-old) %rp-nn) %runtime-packages%)
+						      (push (list (intern %rp-n :keyword) (cadr %rp-old) %rp-nn (cadddr %rp-old) (nth 4 %rp-old))
+						            %runtime-packages%)
 						      (intern %rp-n :keyword))))
 						""");
 		SOURCES.put(LispNames.PACKAGE_NICKNAMES,
@@ -3949,10 +4136,26 @@ public final class LispPreludeLibrary {
 		// expression compilers -- long after this pass -- so the reference this
 		// selection would look for does not exist yet. The surface fact is the
 		// program naming a package-mutating operator.
-		if (LispNames.RUNTIME_PACKAGES_INTERNAL.equals(entry)) {
-			return referencesName(program, LispNames.MAKE_PACKAGE, canonical)
-					|| referencesName(program, LispNames.DELETE_PACKAGE, canonical)
-					|| referencesName(program, LispNames.RENAME_PACKAGE, canonical);
+		if (LispNames.RUNTIME_PACKAGES_INTERNAL.equals(entry) || LispNames.RUNTIME_MEMBER_FIND_INTERNAL.equals(entry)
+				|| LispNames.RUNTIME_MEMBER_STATUS_INTERNAL.equals(entry)
+				|| LispNames.RUNTIME_MEMBER_INTERN_INTERNAL.equals(entry)) {
+			return referencesRuntimePackageMutation(program, canonical);
+		}
+		// %runtime-package-op: the export / unexport / import / use-package /
+		// unuse-package lowerings route to it when the program can create packages
+		// (the shadow / shadowing-import / unintern defuns reference it directly).
+		if (LispNames.RUNTIME_PACKAGE_OP_INTERNAL.equals(entry)) {
+			return referencesRuntimePackageMutation(program, canonical)
+					&& (referencesName(program, LispNames.EXPORT, canonical)
+							|| referencesName(program, LispNames.UNEXPORT, canonical)
+							|| referencesName(program, LispNames.IMPORT, canonical)
+							|| referencesName(program, LispNames.USE_PACKAGE, canonical)
+							|| referencesName(program, LispNames.UNUSE_PACKAGE, canonical));
+		}
+		// %package-iterator-entries: the with-package-iterator expansion calls it, and
+		// the expansion happens inside the expression compilers, after this pass.
+		if (LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL.equals(entry)) {
+			return referencesName(program, LispNames.WITH_PACKAGE_ITERATOR, canonical);
 		}
 		// The %do-symbols-list universe helper: the do-symbols lowerings call it, from
 		// the expression compilers, after this pass -- and so do the find-all-symbols
@@ -3966,9 +4169,22 @@ public final class LispPreludeLibrary {
 					|| referencesName(program, LispNames.DO_ALL_SYMBOLS, canonical)
 					|| referencesName(program, LispNames.FIND_ALL_SYMBOLS, canonical)
 					|| referencesName(program, LispNames.APROPOS, canonical)
-					|| referencesName(program, LispNames.APROPOS_LIST, canonical);
+					|| referencesName(program, LispNames.APROPOS_LIST, canonical)
+					|| referencesName(program, LispNames.WITH_PACKAGE_ITERATOR, canonical);
 		}
 		return false;
+	}
+
+	/**
+	 * Whether the program names a runtime package-mutating operator ({@code make-package}
+	 * / {@code delete-package} / {@code rename-package}) -- the surface fact behind the
+	 * {@code %runtime-packages%} table and the member-table helpers the backends'
+	 * lowerings call when the program can create packages at run time.
+	 */
+	private static boolean referencesRuntimePackageMutation(List<LispVal> program, boolean canonical) {
+		return referencesName(program, LispNames.MAKE_PACKAGE, canonical)
+				|| referencesName(program, LispNames.DELETE_PACKAGE, canonical)
+				|| referencesName(program, LispNames.RENAME_PACKAGE, canonical);
 	}
 
 	/**

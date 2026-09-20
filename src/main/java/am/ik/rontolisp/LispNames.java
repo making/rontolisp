@@ -5081,6 +5081,82 @@ public final class LispNames {
 	public static final String IMPORT = "IMPORT";
 
 	/**
+	 * The {@code shadow} standard function: makes the named symbols the package's OWN
+	 * present symbols, ahead of anything a used package exports under those names, and
+	 * lists them among its shadowing symbols. A runtime function on every backend: the
+	 * interpreter writes the live registry, the compiled backends the
+	 * {@code %runtime-packages%} member table (a read/compile-time package is frozen
+	 * there and answers {@code t} without a change).
+	 */
+	public static final String SHADOW = "SHADOW";
+
+	/**
+	 * The {@code shadowing-import} standard function: imports the given symbols,
+	 * displacing a present symbol of the same name, and lists them among the package's
+	 * shadowing symbols. Same runtime split as {@link #SHADOW}.
+	 */
+	public static final String SHADOWING_IMPORT = "SHADOWING-IMPORT";
+
+	/**
+	 * The {@code unintern} standard function: removes a present symbol from a package's
+	 * member table, so {@code find-symbol} stops answering it and -- when the package was
+	 * its home -- {@code symbol-package} answers nil. Same runtime split as
+	 * {@link #SHADOW}.
+	 */
+	public static final String UNINTERN = "UNINTERN";
+
+	/**
+	 * The {@code %package-iterator-entries} helper behind {@code with-package-iterator}:
+	 * {@code (%package-iterator-entries package-list symbol-types)} answers the
+	 * {@code (symbol status package)} triples the iterator hands out, one per accessible
+	 * symbol whose status is in the list. The interpreter binds a native over its live
+	 * registry; the compiled backends a prelude defun over the baked table plus the
+	 * runtime member table.
+	 */
+	public static final String PACKAGE_ITERATOR_ENTRIES_INTERNAL = "%PACKAGE-ITERATOR-ENTRIES";
+
+	/**
+	 * The {@code %runtime-member-find} helper of the compiled backends: the symbol a
+	 * {@code %runtime-packages%} entry makes accessible under a name (a present member,
+	 * else one inherited through its use list), or nil. Read by the {@code find-symbol}
+	 * lowering when the designator names a runtime package.
+	 */
+	public static final String RUNTIME_MEMBER_FIND_INTERNAL = "%RUNTIME-MEMBER-FIND";
+
+	/**
+	 * The {@code %runtime-member-status} helper of the compiled backends: the
+	 * accessibility status ({@code :internal} / {@code :external} / {@code :inherited})
+	 * of a name in a {@code %runtime-packages%} entry, or nil -- the second value beside
+	 * {@link #RUNTIME_MEMBER_FIND_INTERNAL}.
+	 */
+	public static final String RUNTIME_MEMBER_STATUS_INTERNAL = "%RUNTIME-MEMBER-STATUS";
+
+	/**
+	 * The {@code %runtime-member-intern} helper of the compiled backends: the accessible
+	 * symbol of that name in a {@code %runtime-packages%} entry, or a fresh internal
+	 * member recorded in it -- the {@code intern} lowering's runtime-package arm.
+	 */
+	public static final String RUNTIME_MEMBER_INTERN_INTERNAL = "%RUNTIME-MEMBER-INTERN";
+
+	/**
+	 * The {@code %runtime-external-find} helper of the compiled backends: the symbol a
+	 * package (a runtime entry or a baked row) EXPORTS under a name, or nil -- what a
+	 * using package inherits.
+	 */
+	public static final String RUNTIME_EXTERNAL_FIND_INTERNAL = "%RUNTIME-EXTERNAL-FIND";
+
+	/**
+	 * The {@code %runtime-package-op} helper of the compiled backends:
+	 * {@code (%runtime-package-op operator symbols package)} runs one of the member-table
+	 * mutations ({@code export} / {@code unexport} / {@code import} /
+	 * {@code shadowing-import} / {@code shadow} / {@code unintern} / {@code use-package}
+	 * / {@code unuse-package}) against a {@code %runtime-packages%} entry, answering
+	 * {@code t} unchanged for a read/compile-time package (whose registry is frozen) and
+	 * signalling a {@code package-error} for a designator naming nothing.
+	 */
+	public static final String RUNTIME_PACKAGE_OP_INTERNAL = "%RUNTIME-PACKAGE-OP";
+
+	/**
 	 * Internal marker inserted by {@code LoadInliner} before the spliced forms of a
 	 * loaded file: it makes the {@code PackageResolver} save the current package so a
 	 * file's internal {@code in-package} cannot leak past the load, mirroring Common Lisp

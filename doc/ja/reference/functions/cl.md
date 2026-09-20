@@ -142,15 +142,18 @@
 | `make-symbol` | `(make-symbol "temp")` | `#:temp` -- 新しいアンインターンドシンボル(gensym の `#:` 規約、カウンタなし) |
 | `gentemp` | `(gentemp "Q")` | `Q1` -- prefix + カウンタの名前で intern される新しいシンボル(CLHS では非推奨。iterate が使用) |
 | `copy-symbol` | `(copy-symbol 'foo)` | `#:FOO` -- 同名のアンインターンドシンボル。属性リスト引数は無視され、コピーは `make-symbol` の同一性差異を引き継ぐ |
-| `intern` | `(intern "foo")` | シンボル `foo`。インタプリタでは名前はカレントパッケージ(`in-package` の状態)にインターンされます。`(intern name :keyword)` はキーワードを作り、それ以外のパッケージ引数はエラー |
-| `find-symbol` | `(find-symbol "car")` | 名前が既知(cl シンボル・キーワード・ユーザー定義)なら `car`、なければ `nil`。存在しないパッケージを指定した場合も `nil`(コンパイラ: `nil` を返せるのはリテラル文字列のときだけ) |
+| `intern` | `(intern "foo")` | シンボル `foo`。カレントパッケージ(`in-package` の状態)または指定したパッケージにインターンされ、そのメンバーテーブルに記録されます。`(intern name :keyword)` はキーワードを作ります。第 2 の値はインターン前にその名前が持っていたステータス(新しい名前なら `nil`) |
+| `find-symbol` | `(find-symbol "car")` | パッケージがその名前をアクセス可能にしていれば(存在するメンバー、継承したエクスポート、標準名、キーワード)`car`、なければ `nil`。存在しないパッケージを指定した場合も `nil`(コンパイラ: 読み込み/コンパイル時パッケージで `nil` を返せるのはリテラル文字列のときだけ。`make-package` の産物のメンバーテーブルはどこでも参照されます) |
 | `find-package` | `(find-package :cl)` | `:cl` -- lite 版: 大文字化されたパッケージ名のキーワード(パッケージオブジェクトはありません)。未知なら `nil`(コンパイラは計算された指定子をコンパイル時に埋め込んだ表から解決します) |
 | `symbol-name` | `(symbol-name 'foo)` | `"FOO"` -- シンボルは CL 同様大文字化されて読まれるので `(symbol-name 'car)` も `"CAR"` |
-| `symbol-package` | `(symbol-package :foo)` | `:keyword` -- `find-package` と同じキーワード形式(標準シンボルは `:cl`、それ以外は `:cl-user`、`#:` シンボルは `nil`)。コンパイラは `cl` と `cl-user` のどちらにも `:cl-user` を返します |
+| `symbol-package` | `(symbol-package :foo)` | `:keyword` -- `find-package` と同じキーワード形式(標準シンボルは `t` と `nil` も含めて `:cl`、それ以外は `:cl-user`、`#:` シンボルと `unintern` がホームから取り除いたシンボルは `nil`)。コンパイラは `cl` と `cl-user` のどちらにも `:cl-user` を返します |
 | `package-name` | `(package-name (find-package :cl-user))` | `"CL-USER"` -- パッケージ指示子の名前文字列。`find-package` で解決され、未知の指示子はシグナルします |
 | `package-use-list` | `(package-use-list :cl-user)` | `(:CL)` -- そのパッケージが use しているパッケージを `find-package` のキーワードで返します。未知の指示子はシグナルします |
 | `package-used-by-list` | `(package-used-by-list :cl)` | 逆向き: use リストにこのパッケージを含むすべてのパッケージ |
-| `package-shadowing-symbols` | `(package-shadowing-symbols :cl-user)` | 常に `nil`(シンボルのシャドーイングはありません)。指示子の検査は行います |
+| `package-shadowing-symbols` | `(package-shadowing-symbols :cl-user)` | `nil` -- パッケージのシャドーイングシンボル(`defpackage` の `:shadow` / `:shadowing-import-from` の名前に `shadow` / `shadowing-import` が加えたものを足したもの)を名前順に。指示子の検査は行います |
+| `shadow` | `(shadow "X" :pkg)` | `t` -- 名前をパッケージ自身のシャドーイングシンボルにします(その名前のものが存在しなければ新しくインターン) |
+| `shadowing-import` | `(shadowing-import 'other:x :pkg)` | `t` -- 同名の既存シンボルを押しのけてシンボルをインポートし、シャドーイングとして列挙します |
+| `unintern` | `(unintern sym :pkg)` | シンボルが存在してパッケージのメンバーテーブルから取り除かれたら `t`(自前のシンボルはホームを失います)、存在しなければ `nil` |
 | `make-package` | `(make-package :mypkg :use '(:cl))` | 実行時にパッケージを作成し、そのキーワードを返します。衝突や未知の `:use` 項目は捕捉可能な `package-error` を signal します |
 | `delete-package` | `(delete-package :mypkg)` | `t` -- `make-package` の成果物を削除します。読込/compile 時パッケージや未知の指示子は `package-error` を signal します |
 | `rename-package` | `(rename-package :mypkg :new :nick)` | `make-package` の成果物の名前を変更し、ニックネームを置換します。同じ失敗は signal します |

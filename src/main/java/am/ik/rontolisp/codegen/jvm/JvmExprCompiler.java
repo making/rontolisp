@@ -693,7 +693,8 @@ final class JvmExprCompiler {
 				// form here, so its inverse must not have one either.
 				case LispNames.EXPORT, LispNames.UNEXPORT, LispNames.IMPORT, LispNames.USE_PACKAGE,
 						LispNames.UNUSE_PACKAGE ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeExport(cons), ctx, className);
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeExport(cons, ctx.usesRuntimePackages),
+							ctx, className);
 				// The package-registry queries: answered from the use table baked in at
 				// compile time (the compiled runtimes have no registry), plus the
 				// runtime table when the program can create packages (see

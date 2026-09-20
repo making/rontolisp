@@ -3,6 +3,7 @@ package am.ik.rontolisp;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * A namespace (package) in the Lisp dialect. A package owns a set of symbol names and may
@@ -13,6 +14,14 @@ import java.util.Set;
  * This is a generic type with no hard-coded knowledge of the built-in packages, so
  * additional packages (or a future {@code defpackage}) can be registered without changing
  * the resolution logic.
+ *
+ * <p>
+ * The owned set doubles as the package's MEMBER table: a name the runtime {@code intern}
+ * mints in the package is {@linkplain #addSymbol recorded} there, so {@code find-symbol}
+ * can answer nil before the intern and the symbol after, and {@code unintern} can take it
+ * {@linkplain #removeSymbol out} again. The set is therefore a mutable, thread-safe one
+ * whatever the caller passed -- the canonical constructor copies it -- while the other
+ * components stay as given (the rarer package operations rebuild the record).
  *
  * @param name the package name (e.g. {@code cl}, {@code cl-user}, {@code rontolisp})
  * @param useList the names of packages this package uses (whose symbols are visible
@@ -31,6 +40,16 @@ import java.util.Set;
  */
 public record LispPackage(String name, List<String> useList, Set<String> symbols, Set<String> externals,
 		Map<String, String> imports, Set<String> shadows) {
+
+	/**
+	 * The canonical constructor: the owned set becomes this record's own mutable member
+	 * table (see the class comment).
+	 */
+	public LispPackage {
+		Set<String> members = ConcurrentHashMap.newKeySet();
+		members.addAll(symbols);
+		symbols = members;
+	}
 
 	/**
 	 * Creates a package with no shadowed symbols.
@@ -82,6 +101,23 @@ public record LispPackage(String name, List<String> useList, Set<String> symbols
 	 */
 	public boolean owns(String symbolName) {
 		return this.symbols.contains(symbolName);
+	}
+
+	/**
+	 * Records a name the runtime {@code intern} minted in this package as one of its own
+	 * symbols (the member table's write).
+	 * @param symbolName the symbol name
+	 */
+	public void addSymbol(String symbolName) {
+		this.symbols.add(symbolName);
+	}
+
+	/**
+	 * Drops a name from the owned set (the {@code unintern} half of the member table).
+	 * @param symbolName the symbol name
+	 */
+	public void removeSymbol(String symbolName) {
+		this.symbols.remove(symbolName);
 	}
 
 	/**

@@ -3850,9 +3850,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		// A program that can resolve ANY name at run time (eval, read, a runtime load,
 		// --dynamic) keeps every wrapper-catalog body reachable, the trig ones included.
 		boolean mayReachTrig = this.simd || this.dynamic || usesEval || anyNameResolvable(program, usesRead, usesLoad);
+		// With a symbol BUILDER in the program, a STRING literal spelling one of these
+		// names makes its wrapper dispatchable too (DesignatorSpellings.of's framed
+		// spellings, applied by dispatchableFuncIds after Pass 2) -- the baked package
+		// table's import-redirect cells spell every cl name that way -- so the tables
+		// must be placed for that shape as well, or the wrapper body compiles against
+		// an unplaced blob.
+		boolean symbolBuildersForTrig = RuntimeNameProducers.anySymbolBuilder(program);
 		for (String name : new String[] { LispNames.SIN, LispNames.COS, LispNames.TAN, LispNames.EXP, LispNames.EXPT,
 				LispNames.CIS, LispNames.SINH, LispNames.COSH, LispNames.TANH }) {
-			mayReachTrig |= programUsesSymbol(program, name);
+			mayReachTrig |= programUsesSymbol(program, name)
+					|| (symbolBuildersForTrig && programSpellsStringLiteral(program, name));
 		}
 		int fdlibmTablesBase = mayReachTrig
 				? stringTable.appendShakeableBlobProbedOnBase(WasmFdlibmRuntimeBuilder.tables()) : -1;
@@ -8400,6 +8408,34 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(FUNC_T_SYM);
+	}
+
+	/**
+	 * Whether a string literal anywhere in the program spells {@code name} exactly -- the
+	 * framed-string arm of {@code DesignatorSpellings.of}, which arms a function's
+	 * wrapper once a symbol builder is present.
+	 */
+	private static boolean programSpellsStringLiteral(List<LispVal> program, String name) {
+		for (LispVal expr : program) {
+			if (spellsStringLiteral(expr, name)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean spellsStringLiteral(LispVal val, String name) {
+		if (val instanceof am.ik.rontolisp.LispString str) {
+			return str.value().equals(name);
+		}
+		LispVal cur = val;
+		while (cur instanceof LispCons cell) {
+			if (spellsStringLiteral(cell.car(), name)) {
+				return true;
+			}
+			cur = cell.cdr();
+		}
+		return false;
 	}
 
 	private static boolean programUsesSymbol(List<LispVal> program, String name) {

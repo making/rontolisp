@@ -3276,6 +3276,71 @@ cases:
       CAR
       MAPCAR
       NIL
+  # The runtime package MEMBER table (.todo/917): a runtime package records what
+  # intern / export / import / shadowing-import / shadow put in it and what
+  # unintern takes out, so find-symbol answers nil before an intern and the
+  # symbol (with its status) after, use-package inherits an exported member, and
+  # do-symbols / with-package-iterator walk it. The interpreter keeps the table in
+  # its live registry, the compiled backends in the %runtime-packages% entries.
+  - name: runtime-package-member-table
+    source: |
+      (let ((p (make-package "CI-MT1" :use nil)))
+        (print (multiple-value-list (find-symbol "FOO" p)))
+        (print (multiple-value-list (intern "FOO" p)))
+        (print (multiple-value-list (intern "FOO" p)))
+        (print (multiple-value-list (find-symbol "FOO" p)))
+        (print (eq (intern "FOO" p) (find-symbol "FOO" p)))
+        (print (symbol-package (find-symbol "FOO" p)))
+        (print (export (intern "FOO" p) p))
+        (print (multiple-value-list (find-symbol "FOO" p)))
+        (let ((q (make-package "CI-MT2" :use nil)))
+          (print (use-package p q))
+          (print (multiple-value-list (find-symbol "FOO" q)))
+          (print (shadow "FOO" q))
+          (print (multiple-value-list (find-symbol "FOO" q)))
+          (print (package-shadowing-symbols q))
+          (print (unintern (find-symbol "FOO" q) q))
+          (print (multiple-value-list (find-symbol "FOO" q)))
+          (print (unuse-package p q))
+          (print (find-symbol "FOO" q))
+          (print (shadowing-import (intern "BAR" p) q))
+          (print (multiple-value-list (find-symbol "BAR" q)))
+          (print (package-shadowing-symbols q))
+          (let (acc) (do-symbols (s q) (push s acc)) (print acc))
+          (intern "BAZ" q)
+          (let (acc)
+            (with-package-iterator (next q :internal :external :inherited)
+              (loop (multiple-value-bind (more sym status pkg) (next)
+                      (unless more (return))
+                      (push (list sym status pkg) acc))))
+            (print (sort acc #'string< :key (lambda (e) (symbol-name (car e))))))
+          (print (delete-package q)))
+        (print (delete-package p)))
+    expected: |
+      (NIL NIL)
+      (CI-MT1::FOO NIL)
+      (CI-MT1::FOO :INTERNAL)
+      (CI-MT1::FOO :INTERNAL)
+      T
+      :CI-MT1
+      T
+      (CI-MT1::FOO :EXTERNAL)
+      T
+      (CI-MT1::FOO :INHERITED)
+      T
+      (CI-MT2::FOO :INTERNAL)
+      (CI-MT2::FOO)
+      T
+      (CI-MT1::FOO :INHERITED)
+      T
+      NIL
+      T
+      (CI-MT1::BAR :INTERNAL)
+      (CI-MT1::BAR)
+      (CI-MT1::BAR)
+      ((CI-MT1::BAR :INTERNAL :CI-MT2) (CI-MT2::BAZ :INTERNAL :CI-MT2))
+      T
+      T
   # remprop, the plist REMOVER: one prelude defun over the same %symbol-plists store
   # get / (setf get) / symbol-plist share.
   - name: symbol-plist-remprop

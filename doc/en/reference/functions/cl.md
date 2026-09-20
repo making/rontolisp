@@ -142,15 +142,18 @@ page.
 | `make-symbol` | `(make-symbol "temp")` | `#:temp` -- a fresh uninterned symbol (the gensym `#:` convention, no counter) |
 | `gentemp` | `(gentemp "Q")` | `Q1` -- a fresh INTERNED symbol named prefix + a counter (CLHS-deprecated; iterate uses it) |
 | `copy-symbol` | `(copy-symbol 'foo)` | `#:FOO` -- an uninterned symbol of the same name; the property-list argument is ignored, and the copy inherits `make-symbol`'s identity deviation |
-| `intern` | `(intern "foo")` | The symbol `foo`. On the interpreter the name is interned into the current package (`in-package` state); `(intern name :keyword)` builds a keyword, any other package argument is an error |
-| `find-symbol` | `(find-symbol "car")` | `car` when the name is known (cl symbol, keyword, or user definition), else `nil`; a package that does not exist yields `nil` too (compilers: only a literal string can answer `nil`) |
+| `intern` | `(intern "foo")` | The symbol `foo`, interned into the current package (`in-package` state) or the designated one and recorded in its member table; `(intern name :keyword)` builds a keyword. The second value is the status the name had before the intern (`nil` for a fresh one) |
+| `find-symbol` | `(find-symbol "car")` | `car` when the package makes the name accessible (a present member, an inherited export, a standard name, a keyword), else `nil`; a package that does not exist yields `nil` too (compilers: only a literal string can answer `nil` for a read/compile-time package; a `make-package` product's member table is consulted everywhere) |
 | `find-package` | `(find-package :cl)` | `:cl` -- lite: the upcased package name as a keyword (no package objects), `nil` when unknown (the compilers answer a computed designator from a table baked in at compile time) |
 | `symbol-name` | `(symbol-name 'foo)` | `"FOO"` -- symbols read upcased like CL, so `(symbol-name 'car)` is `"CAR"` too |
-| `symbol-package` | `(symbol-package :foo)` | `:keyword` -- the same keyword shape `find-package` returns (`:cl` for standard symbols, `:cl-user` otherwise, `nil` for `#:` symbols); the compilers answer `:cl-user` for both `cl` and `cl-user` |
+| `symbol-package` | `(symbol-package :foo)` | `:keyword` -- the same keyword shape `find-package` returns (`:cl` for standard symbols, `t` and `nil` included, `:cl-user` otherwise, `nil` for `#:` symbols and for a symbol `unintern` removed from its home); the compilers answer `:cl-user` for both `cl` and `cl-user` |
 | `package-name` | `(package-name (find-package :cl-user))` | `"CL-USER"` -- the name string of a package designator, resolved through `find-package`; an unknown designator signals |
 | `package-use-list` | `(package-use-list :cl-user)` | `(:CL)` -- the packages a package uses, as `find-package` keywords; an unknown designator signals |
 | `package-used-by-list` | `(package-used-by-list :cl)` | The inverse: every package whose use list names this one |
-| `package-shadowing-symbols` | `(package-shadowing-symbols :cl-user)` | Always `nil` (there is no symbol shadowing); the designator is still validated |
+| `package-shadowing-symbols` | `(package-shadowing-symbols :cl-user)` | `nil` -- the package's shadowing symbols (the `defpackage` `:shadow` / `:shadowing-import-from` names plus what `shadow` / `shadowing-import` added), in name order; the designator is validated |
+| `shadow` | `(shadow "X" :pkg)` | `t` -- make the names the package's own shadowing symbols (interning a fresh one when nothing of that name is present) |
+| `shadowing-import` | `(shadowing-import 'other:x :pkg)` | `t` -- import the symbols, displacing a present symbol of the same name, and list them as shadowing |
+| `unintern` | `(unintern sym :pkg)` | `t` when the symbol was present and has been removed from the package's member table (an own symbol loses its home), `nil` when it was not |
 | `make-package` | `(make-package :mypkg :use '(:cl))` | Create a package at run time, answering its keyword; collisions and unknown `:use` entries signal a catchable `package-error` |
 | `delete-package` | `(delete-package :mypkg)` | `t` -- drop a `make-package` product; a read/compile-time package or unknown designator signals a `package-error` |
 | `rename-package` | `(rename-package :mypkg :new :nick)` | Rename a `make-package` product, replacing its nicknames; the same failures signal |
