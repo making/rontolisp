@@ -2397,6 +2397,86 @@ final class WasmArrayCompiler {
 		getLocal(ctx, oldCellSlot);
 	}
 
+	static void compileArrayBecomeDisplaced(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		// (%array-become-displaced a dims target offset fp): turn a (an adjustable
+		// array) IN PLACE into a displaced view over target and return a -- the in-place
+		// half of adjust-array with :displaced-to on an adjustable array, which keeps
+		// its identity (any other adjustable adjustment is a %array-become). The
+		// displaced header is the SAME shape compileMakeDisplaced builds (dimsArr,
+		// (fp . (adj . offset)), target in the data slot), rebuilt and stored into a's
+		// CELL slot 0 -- the cell ref is a's identity, so eq holds. The adjustable slot
+		// is read back out of a's existing header meta, so the raw :adjustable argument
+		// survives.
+		requireArgs(cons, 6, "%array-become-displaced expects 5 arguments");
+		List<LispVal> args = cons.toList();
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int aSlot = setTemp(ctx);
+		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		int dimsSlot = setTemp(ctx);
+		int dimsArrSlot = ctx.allocTemp();
+		int totalSlot = ctx.allocTemp();
+		emitParseDims(ctx, dimsSlot, dimsArrSlot, totalSlot);
+		WasmExprCompiler.compileExpr(args.get(3), ctx);
+		int targetSlot = setTemp(ctx);
+		// offset -> offSlot (i31; 0 when absent or nil)
+		WasmExprCompiler.compileExpr(args.get(4), ctx);
+		int offSlot = setTemp(ctx);
+		getLocal(ctx, offSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.IF, 0x40);
+		i32Const(ctx, 0);
+		boxI31(ctx);
+		setLocal(ctx, offSlot);
+		ctx.writer.write(Instruction.END);
+		// trap unless 0 <= off and total + off <= targetTotal, as compileMakeDisplaced
+		int targetTotalSlot = ctx.allocTemp();
+		emitTargetDimsProduct(ctx, targetSlot, targetTotalSlot);
+		getLocal(ctx, offSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		i32Const(ctx, 0);
+		ctx.writer.write(Instruction.I32_LT_S);
+		ctx.writer.write(Instruction.IF, 0x40);
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.writer.write(Instruction.END);
+		getLocal(ctx, totalSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		getLocal(ctx, offSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		ctx.writer.write(Instruction.I32_ADD);
+		getLocal(ctx, targetTotalSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		ctx.writer.write(Instruction.I32_GT_S);
+		ctx.writer.write(Instruction.IF, 0x40);
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.writer.write(Instruction.END);
+		WasmExprCompiler.compileExpr(args.get(5), ctx);
+		int fpValSlot = setTemp(ctx);
+		// adj = a's header meta -> cdr -> car
+		int adjSlot = ctx.allocTemp();
+		getLocal(ctx, aSlot);
+		castCellGet0(ctx);
+		getMeta(ctx);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 0);
+		setLocal(ctx, adjSlot);
+		// a.cell0 = cons(dimsArr, cons(cons(fp, cons(adj, off)), targetCell))
+		getLocal(ctx, aSlot);
+		castCell(ctx);
+		getLocal(ctx, dimsArrSlot);
+		getLocal(ctx, fpValSlot);
+		getLocal(ctx, adjSlot);
+		getLocal(ctx, offSlot);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
+		getLocal(ctx, targetSlot);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
+		structSetCell(ctx, 0);
+		getLocal(ctx, aSlot);
+	}
+
 	static void compileArrayAdoptElementType(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		// (%array-adopt-element-type new old): make the freshly built general array new
 		// remember what old remembers, and answer new. adjust-array does not change an
@@ -3214,6 +3294,13 @@ final class WasmArrayCompiler {
 		ctx.writer.writeUnsignedLeb128(field);
 	}
 
+	// struct.set TYPE_CELL field: [cell, value] -> [].
+	private static void structSetCell(WasmLispCompiler.Ctx ctx, int field) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.writeUnsignedLeb128(field);
+	}
+
 	// Assumes the header cons (eqref) on the stack; replaces it with the data bucket
 	// array (cddr of the header), cast to TYPE_HASH_BUCKETS.
 	private static void getData(WasmLispCompiler.Ctx ctx) {
@@ -3243,6 +3330,13 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
 		ctx.writer.writeUnsignedLeb128(0);
+	}
+
+	// Casts the (ref null eq) on the stack to TYPE_CELL (for struct.set, whose ref
+	// operand must be exactly the struct type).
+	private static void castCell(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
 	}
 
 	// Assumes a cons (eqref) on the stack; replaces it with car (field 0) or cdr (field

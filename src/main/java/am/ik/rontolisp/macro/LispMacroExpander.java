@@ -22736,7 +22736,8 @@ public final class LispMacroExpander {
 						LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ADJUST_ARRAY,
 						LispNames.ARRAY_BECOME, LispNames.ARRAY_DISPLACEMENT, LispNames.ARRAY_DISP_TARGET,
 						LispNames.ARRAY_DISP_OFFSET, LispNames.ARRAY_ALIKE, LispNames.ARRAY_DEFAULT_ELEMENT,
-						LispNames.ARRAY_ADOPT_ELEMENT_TYPE, LispNames.ARRAY_UNDISPLACE, LispNames.COERCE,
+						LispNames.ARRAY_ADOPT_ELEMENT_TYPE, LispNames.ARRAY_BECOME_DISPLACED,
+						LispNames.ARRAY_UNDISPLACE, LispNames.COERCE,
 						// fill/read-sequence/write-sequence join the list for the same
 						// reason as make-string: each has an array-typed arm the JVM
 						// backend's array runtime gate must see coming, or the injected
@@ -26271,23 +26272,27 @@ public final class LispMacroExpander {
 						makeIf(callOf(LispNames.LISTP, nd), nd, mvCall(LispNames.CONS, nd, LispNil.INSTANCE)))),
 				listToCons(List.of(fp, fpInit)));
 		if (displaced) {
-			// :displaced-to on the compile path answers a FRESH displaced array built by
-			// make-array (which shares the whole displaced surface, fill pointer and
-			// :adjustable flag included). `a` is read only for the adjustable flag and
-			// the
-			// carried-over fill pointer, never undisplaced.
+			// :displaced-to now matches the interpreter: an :adjustable SOURCE is turned
+			// into the displaced view IN PLACE (eq, like any other adjustable adjustment)
+			// via %array-become-displaced; a NON-adjustable source still answers a FRESH
+			// displaced array built by make-array (which shares the whole displaced
+			// surface, fill pointer and :adjustable flag included). `a` is read only for
+			// the adjustable flag and the carried-over fill pointer, never undisplaced.
 			LispVal offset = displacedOffsetExpr != null ? displacedOffsetExpr : new LispInteger(0);
+			LispVal target = java.util.Objects.requireNonNull(displacedToExpr);
+			LispVal becomeDisplaced = mvCall(LispNames.ARRAY_BECOME_DISPLACED, a, ndl, target, offset, fp);
 			List<LispVal> makeParts = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.MAKE_ARRAY), ndl));
 			makeParts.add(new LispSymbol(LispNames.DISPLACED_TO_KEYWORD));
-			makeParts.add(displacedToExpr);
+			makeParts.add(target);
 			makeParts.add(new LispSymbol(LispNames.DISPLACED_INDEX_OFFSET_KEYWORD));
 			makeParts.add(offset);
 			makeParts.add(new LispSymbol(LispNames.FILL_POINTER_KEYWORD));
 			makeParts.add(fp);
 			makeParts.add(new LispSymbol(LispNames.ADJUSTABLE_KEYWORD));
 			makeParts.add(callOf(LispNames.ADJUSTABLE_ARRAY_P, a));
-			return listToCons(
-					List.of(new LispSymbol(LispNames.LET_STAR), listToCons(baseBindings), listToCons(makeParts)));
+			LispVal fresh = listToCons(makeParts);
+			LispVal result = makeIf(callOf(LispNames.ADJUSTABLE_ARRAY_P, a), becomeDisplaced, fresh);
+			return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(baseBindings), result));
 		}
 		LispSymbol od = new LispSymbol("__adj_od");
 		LispSymbol newArr = new LispSymbol("__adj_new");

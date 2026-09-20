@@ -1370,6 +1370,8 @@ final class JvmExprCompiler {
 				case LispNames.ADJUST_ARRAY ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandAdjustArray(cons), ctx, className);
 				case LispNames.ARRAY_BECOME -> JvmArrayCompiler.compileArrayBecome(cons, ctx, className);
+				case LispNames.ARRAY_BECOME_DISPLACED ->
+					JvmArrayCompiler.compileArrayBecomeDisplaced(cons, ctx, className);
 				case LispNames.ARRAY_DEFAULT_ELEMENT ->
 					JvmArrayCompiler.compileArrayDefaultElement(cons, ctx, className);
 				case LispNames.ARRAY_ADOPT_ELEMENT_TYPE ->

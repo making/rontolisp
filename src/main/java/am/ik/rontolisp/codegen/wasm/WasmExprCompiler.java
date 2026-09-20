@@ -1346,14 +1346,14 @@ final class WasmExprCompiler {
 				// non-handle designator) -- the same set the interpreter and the JVM
 				// answer nil for.
 				case LispNames.FILE_LENGTH -> WasmFileLengthCompiler.compile(cons, ctx);
-				// file-position is REAL on the --component backend: the query and the set
-				// talk to the adapter's tracked per-fd byte offset through the injected
-				// file_position_get / file_position_set imports
-				// (WasmFilePositionCompiler),
-				// so a binary file stream's position round-trips. Under Preview 1 it
-				// answers nil -- no fd_seek import exists there (todo 876) -- and
-				// file-write-date answers nil on both, with "cannot be determined" being
-				// what Common Lisp prescribes for exactly that. The three write-side
+				// file-position is REAL on both WASI backends: the query and the set talk
+				// to preview1's fd_seek, or to the adapter's tracked per-fd byte offset
+				// through the injected file_position_get / file_position_set imports
+				// (WasmFilePositionCompiler), so a binary file stream's position
+				// round-trips. A --no-wasi module has no filesystem, so it keeps the nil
+				// constant, and file-write-date answers nil everywhere -- "cannot be
+				// determined" being what Common Lisp prescribes for exactly that. The
+				// three write-side
 				// operators are REAL here -- %make-directories creates every missing
 				// level through path_create_directory (signalling on failure, since
 				// its contract has no "cannot be determined" answer),
@@ -1361,7 +1361,7 @@ final class WasmExprCompiler {
 				// through path_rename (both answering nil when there is nothing to do,
 				// with the file-error raised once in the Lisp above them).
 				case LispNames.FILE_POSITION -> {
-					if (ctx.component) {
+					if (ctx.filePosition) {
 						WasmFilePositionCompiler.compile(cons, ctx);
 					}
 					else {
@@ -1791,6 +1791,7 @@ final class WasmExprCompiler {
 				case LispNames.ADJUST_ARRAY ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandAdjustArray(cons), ctx);
 				case LispNames.ARRAY_BECOME -> WasmArrayCompiler.compileArrayBecome(cons, ctx);
+				case LispNames.ARRAY_BECOME_DISPLACED -> WasmArrayCompiler.compileArrayBecomeDisplaced(cons, ctx);
 				case LispNames.ARRAY_DEFAULT_ELEMENT -> WasmArrayCompiler.compileArrayDefaultElement(cons, ctx);
 				case LispNames.ARRAY_ADOPT_ELEMENT_TYPE -> WasmArrayCompiler.compileArrayAdoptElementType(cons, ctx);
 				case LispNames.ARRAY_ALIKE -> WasmArrayCompiler.compileArrayAlike(cons, ctx);

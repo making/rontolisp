@@ -2,9 +2,20 @@
 
 `(file-position stream [position])`
 
-Lite: always returns nil — streams do not support repositioning, so portable callers (which guard this with `ignore-errors`) take their non-seeking fallback path.
+With one argument, the current byte position of a **binary** file stream — one opened with `:element-type '(unsigned-byte 8)`. With two, it repositions the stream to `position` and answers `t`; the next `read-byte` or `write-byte` starts there.
+
+Anything whose position cannot be determined answers `nil`, which is what Common Lisp prescribes for exactly that: a character file stream, a string stream, a socket, one of the standard streams, and a handle that has already been closed. Portable callers guard the call with `ignore-errors` and take their non-seeking fallback path on `nil`.
+
+**All four backends answer for real.** The interpreter and the JVM keep a per-handle position that the byte primitives advance, and reopen the file at the offset for the set. Preview 1 WASM queries and moves the descriptor's own cursor through `fd_seek`; the component backend has no cursor — WASI 0.3 reads are offset-based — so it goes through a per-descriptor byte offset the adapter tracks.
 
 ```lisp
 (with-input-from-string (s "abc")
   (file-position s)) ; => NIL
+```
+
+```console
+(with-open-file (in "data.bin" :element-type '(unsigned-byte 8))
+  (print (file-position in 5))
+  (print (read-byte in))
+  (print (file-position in)))
 ```

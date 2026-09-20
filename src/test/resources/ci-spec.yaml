@@ -5880,7 +5880,20 @@ cases:
           (vector-push-extend 6 gv)
           (print (list (aref gv 0) (aref gv 1) (aref gv 2) (array-element-type gv)
                        (multiple-value-list (array-displacement gv))
-                       (coerce gb 'list) (length gv)))))
+                       (coerce gb 'list) (length gv))))
+        ;; adjust-array with :displaced-to on an :adjustable SOURCE turns the source
+        ;; into the displaced view IN PLACE (eq), like any other adjustable adjustment --
+        ;; the ANSI row exercises the same shape on the interpreter alone.
+        (let* ((ia (make-array 4 :adjustable t :initial-contents (list 10 20 30 40)))
+               (ib (make-array 6 :initial-contents (list 1 2 3 4 5 6)))
+               (ir (adjust-array ia 3 :displaced-to ib)))
+          (print (list (eq ia ir) (aref ia 2) (array-dimensions ia) (adjustable-array-p ia)
+                       (multiple-value-list (array-displacement ia)))))
+        (let* ((sa (make-array 3 :element-type 'character :adjustable t :initial-contents "abc"))
+               (sb (make-array 4 :element-type 'character :initial-contents "wxyz"))
+               (sr (adjust-array sa 2 :displaced-to sb)))
+          (print (list (eq sa sr) sr (stringp sr) (array-dimensions sa) (adjustable-array-p sa)
+                       (multiple-value-list (array-displacement sa))))))
       (ci-adjust-displaced)
     expected: |
       (#(7 7 7 0 0) NIL)
@@ -5895,6 +5908,8 @@ cases:
       (7 200 200 (UNSIGNED-BYTE 8) #(7 200))
       (1.5 2.5 DOUBLE-FLOAT)
       (7 5 6 (UNSIGNED-BYTE 8) (NIL 0) (7 7 5 7) 3)
+      (T 3 (3) T (#(1 2 3 4 5 6) 0))
+      (T "wx" T (2) T ("wxyz" 0))
   - name: displaced-string-views-cross-backend
     source: |
       (defun ci-string-views ()
@@ -9693,13 +9708,12 @@ cases:
       NIL
       300
   - name: file-position-round-trips-on-a-binary-file-stream
-    # .todo/877: file-position is REAL on the component backend. The query is the byte
-    # position the byte primitives advanced and the set seeks back through the adapter's
-    # tracked per-fd offset (the preview1 fd_seek stand-in -- WASI 0.3 reads are
-    # offset-based and have no moveable cursor). The interpreter, the JVM and the
-    # component answer the real positions; the Preview 1 WASM backend still answers nil
-    # everywhere (its fd_seek import is .todo/876, not landed), so a seek there is a
-    # no-op and the reads stay sequential from 0. A character stream answers nil.
+    # file-position is REAL on all four backends. Preview 1 queries and moves the
+    # descriptor's own cursor through fd_seek; the component has no cursor (WASI 0.3
+    # reads are offset-based) and goes through the adapter's tracked per-fd offset
+    # instead. A CHARACTER file stream answers nil everywhere -- the last form re-opens
+    # the same file after every binary handle is closed, so a WASM backend that let a
+    # reused descriptor keep a stale binary flag would print a number here.
     source: |
       (with-open-file (out "fp.bin" :direction :output :if-exists :supersede
                             :element-type '(unsigned-byte 8))
@@ -9725,27 +9739,6 @@ cases:
       5
       6
       NIL
-    expectedByBackend:
-      wasm: |
-        NIL
-        NIL
-        0
-        NIL
-        NIL
-        NIL
-        1
-        NIL
-        NIL
-      wasm_component: |
-        10
-        0
-        0
-        1
-        T
-        5
-        5
-        6
-        NIL
 
   - name: filesystem-write-create-rename-delete-and-probe
     # The three write-side operators are REAL on all four backends: the interpreter

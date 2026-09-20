@@ -9,8 +9,11 @@
 - `get-universal-time` = Unix seconds + 2208988800; `internal-time-units-per-second` is a
   reader constant **1000** beside `char-code-limit`.
 - WASM clock/environ *imports* exist in both modes to keep import indices identical; the
-  component's `environ_*` imports are DEAD WEIGHT kept because the eight preview1 slots are
-  index-pinned.
+  component's `environ_*` imports are DEAD WEIGHT kept because the fifteen preview1 slots
+  (`IMPORT_FUNC_COUNT`) are index-pinned. **Pinned does not mean closed**: a WASI function
+  the backend did not import before is added as an APPENDED import, not a sixteenth slot,
+  and then costs nothing on a program that does not reach it (`.kb/wasm-import.md`, "This,
+  not a new index-pinned preview1 slot" -- `args_sizes_get`/`args_get` and `fd_seek`).
 
 ## `uiop:getenv` is a LISP definition over a per-backend primitive
 - Public name = `uiop-os.lisp`'s defun: consults the `(setf (uiop:getenv x) v)` OVERRIDE map
