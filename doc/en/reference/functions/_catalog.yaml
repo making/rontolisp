@@ -478,6 +478,7 @@ categories:
       - { slug: force-output, name: "force-output" }
       - { slug: finish-output, name: "finish-output" }
       - { slug: clear-output, name: "clear-output" }
+      - { slug: clear-input, name: "clear-input" }
       - { slug: listen, name: "listen" }
       - { slug: write-line, name: "write-line" }
       - { slug: write-string, name: "write-string" }
@@ -505,6 +506,10 @@ categories:
       - { slug: echo-stream-output-stream, name: "echo-stream-output-stream" }
       - { slug: make-concatenated-stream, name: "make-concatenated-stream" }
       - { slug: concatenated-stream-streams, name: "concatenated-stream-streams" }
+      - { slug: broadcast-stream-streams, name: "broadcast-stream-streams" }
+      - { slug: file-string-length, name: "file-string-length" }
+      - { slug: interactive-stream-p, name: "interactive-stream-p" }
+      - { slug: stream-external-format, name: "stream-external-format" }
       - { slug: input-stream-p, name: "input-stream-p" }
       - { slug: output-stream-p, name: "output-stream-p" }
       - { slug: stream-element-type, name: "stream-element-type" }

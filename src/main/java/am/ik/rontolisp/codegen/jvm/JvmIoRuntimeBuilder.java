@@ -2473,6 +2473,17 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.ILOAD_1);
 		code.add(Opcode.AALOAD);
 		code.add(Opcode.ASTORE_2);
+		// if (stream == null) return "t"; -- closing an ALREADY-CLOSED stream is not an
+		// error in CL, it answers true and does nothing (the interpreter's close says the
+		// same). Without the guard the chain below reached the Writer arm with null and
+		// the close threw a NullPointerException.
+		code.add(Opcode.ALOAD_2);
+		int ifOpenPos = code.size();
+		code.add(Opcode.IFNONNULL);
+		emitU2(code, 0);
+		emitLdc(code, this.tStr.index());
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifOpenPos, code.size());
 		// Socket entries first (only when the program uses tcp built-ins): a Socket /
 		// ServerSocket is neither a reader/writer nor a raw byte stream, so the chain
 		// below would fail on it.

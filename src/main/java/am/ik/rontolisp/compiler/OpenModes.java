@@ -73,7 +73,7 @@ public final class OpenModes {
 			return null;
 		}
 		List<LispVal> options = parts.subList(2, parts.size());
-		if (!LispMacroExpander.hasRuntimeOpenOption(options)) {
+		if (!LispMacroExpander.hasRuntimeOpenOption(options) && !LispMacroExpander.needsOpenExistenceGuard(options)) {
 			return null;
 		}
 		return LispMacroExpander.lowerRuntimeOpenOptions(LispNames.OPEN, parts.get(1), options);
@@ -97,6 +97,15 @@ public final class OpenModes {
 		LispVal direction = new LispSymbol(LispNames.INPUT_KEYWORD);
 		LispVal elementType = null;
 		boolean append = false;
+		// The direction is read FIRST: :if-exists is consulted only on an output open,
+		// and it may be written before the :direction that decides that.
+		boolean outputDirection = false;
+		for (int i = 2; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispSymbol key && ":DIRECTION".equals(key.name())
+					&& parts.get(i + 1) instanceof LispSymbol dir) {
+				outputDirection = LispNames.OUTPUT_KEYWORD.equals(dir.name());
+			}
+		}
 		for (int i = 2; i < parts.size(); i += 2) {
 			if (i + 1 >= parts.size() || !(parts.get(i) instanceof LispSymbol key) || !key.name().startsWith(":")) {
 				throw new UnsupportedOperationException("open expects :option value pairs: " + cons.print());
@@ -105,10 +114,11 @@ public final class OpenModes {
 				case ":DIRECTION" -> direction = parts.get(i + 1);
 				case ":ELEMENT-TYPE" -> elementType = parts.get(i + 1);
 				case ":EXTERNAL-FORMAT", ":IF-EXISTS", ":IF-DOES-NOT-EXIST" -> {
-					if (LispMacroExpander.isAppendIfExists(key.name(), parts.get(i + 1))) {
+					if (outputDirection && LispMacroExpander.isAppendIfExists(key.name(), parts.get(i + 1))) {
 						append = true;
 					}
-					else if (!LispMacroExpander.ignorableOpenOptionValue(key.name(), parts.get(i + 1))) {
+					else if (!LispMacroExpander.ignorableOpenOptionValue(key.name(), parts.get(i + 1),
+							outputDirection)) {
 						throw new UnsupportedOperationException(
 								"open: " + key.name() + " supports only the native default value");
 					}

@@ -10495,11 +10495,12 @@ class LispEvaluatorTest {
 				(with-open-file (out "%s" :direction :output) (setq s out))
 				""".formatted(file));
 		assertThat(result.print()).isNotEmpty();
-		assertThatThrownBy(() -> evalMulti("""
+		// A second close is not an error in CL: it answers true and does nothing.
+		assertThat(evalMulti("""
 				(setq s (open "%s" :output))
 				(close s)
 				(close s)
-				""".formatted(file))).isInstanceOf(LispEvalException.class).hasMessageContaining("not an open stream");
+				""".formatted(file)).print()).isEqualTo("T");
 	}
 
 	@Test
@@ -10545,12 +10546,13 @@ class LispEvaluatorTest {
 	@Test
 	void withOpenFileUnsupportedOptionThrows(@TempDir Path tempDir) {
 		String file = tempDir.resolve("opt.txt").toString().replace("\\", "\\\\");
-		// :if-exists is accepted with the value the native behavior already implements
-		// (:supersede) and with :append, which is real (.kb/read-load-streams.md);
-		// anything else must not be silently reinterpreted. It signals at CALL time as
-		// a Lisp condition (was an expansion-time throw): the eager compile paths
-		// expand every branch of a spliced library.
-		assertThatThrownBy(() -> eval("(with-open-file (s \"" + file + "\" :if-exists :rename) s)"))
+		// The whole :if-exists table is read now except :overwrite, which needs an open
+		// mode no backend has (.todo/918); it must not be silently reinterpreted as the
+		// truncating open. It signals at CALL time as a Lisp condition (never an
+		// expansion-time throw): the eager compile paths expand every branch of a
+		// spliced library, and such a branch is often dead code.
+		assertThatThrownBy(
+				() -> eval("(with-open-file (s \"" + file + "\" :direction :output :if-exists :overwrite) s)"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining(":IF-EXISTS supports only the native default value");
 	}
@@ -22281,6 +22283,109 @@ class LispEvaluatorTest {
 				(with-open-file (out "%s" :direction :output :if-exists :append) (write-string "two" out))
 				(with-open-file (in "%s") (read-line in))
 				""".formatted(file, file, file)).print()).isEqualTo("\"onetwo\"");
+	}
+
+	@Test
+	void openReadsTheWholeIfExistsAndIfDoesNotExistTable(@TempDir Path tempDir) {
+		// CL's table, measured against sbcl 2026-09-20: :if-exists is consulted ONLY on
+		// an output open (an input open ignores whatever it says), the version spellings
+		// collapse onto :supersede, :error and nil answer instead of opening, and
+		// :if-does-not-exist defaults to :create for a superseding output open, :error
+		// for an input one and for an APPENDING output one.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(evalMulti("""
+				(defun p (n) (concatenate 'string "%s/" n))
+				(defun mk (n) (with-open-file (s (p n) :direction :output) (write-string "abc" s)) (p n))
+				(defun try (f) (handler-case (funcall f) (file-error () :file-error)))
+				(list (with-open-file (s (mk "a") :if-exists :error) (read-line s))
+				      (with-open-file (s (p "a") :if-exists :rename) (read-line s))
+				      (with-open-file (s (p "a") :if-exists nil) (read-line s))
+				      (try (lambda () (open (p "a") :direction :output :if-exists :error)))
+				      (open (p "a") :direction :output :if-exists nil)
+				      (try (lambda () (open (p "missing") :direction :input)))
+				      (open (p "missing") :direction :input :if-does-not-exist nil)
+				      (try (lambda () (open (p "missing") :direction :output :if-does-not-exist :error)))
+				      (try (lambda () (open (p "missing") :direction :output :if-exists :append)))
+				      (progn (with-open-file (s (p "made") :direction :output :if-exists :append
+				                                 :if-does-not-exist :create)
+				               (write-string "z" s))
+				             (with-open-file (s (p "made")) (read-line s))))
+				""".formatted(here)).print())
+			.isEqualTo("(\"abc\" \"abc\" \"abc\" :FILE-ERROR NIL :FILE-ERROR NIL :FILE-ERROR :FILE-ERROR \"z\")");
+	}
+
+	@Test
+	void openDirectionProbeAnswersAClosedFileStreamOrNil(@TempDir Path tempDir) {
+		// CL's probe open: a file stream that is already CLOSED when the file is there,
+		// nil when it is not, and :if-does-not-exist decides the missing case.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(evalMulti("""
+				(defun p (n) (concatenate 'string "%s/" n))
+				(with-open-file (s (p "there") :direction :output) (write-string "abc" s))
+				(let ((probed (open (p "there") :direction :probe)))
+				  (list (and probed t)
+				        (open-stream-p probed)
+				        (typep probed 'file-stream)
+				        (open (p "gone") :direction :probe)
+				        (and (open (p "gone") :direction :probe :if-does-not-exist :create) t)
+				        (and (probe-file (p "gone")) t)
+				        (handler-case (open (p "gone2") :direction :probe :if-does-not-exist :error)
+				          (file-error () :file-error))))
+				""".formatted(here)).print()).isEqualTo("(T NIL T NIL T T :FILE-ERROR)");
+	}
+
+	@Test
+	void closingAnAlreadyClosedStreamAnswersTrue(@TempDir Path tempDir) {
+		// CL: close on a closed stream is not an error. with-open-file's unwind-protect
+		// closes a stream the body may already have closed, so signalling here made a
+		// correct program fail on its way out.
+		String file = tempDir.resolve("twice.txt").toString().replace("\\", "\\\\");
+		assertThat(evalMulti("""
+				(let ((s (open "%s" :direction :output)))
+				  (list (close s) (close s) (open-stream-p s) (streamp s)))
+				""".formatted(file)).print()).isEqualTo("(T T NIL T)");
+	}
+
+	@Test
+	void theStreamOperatorsAddedWithTheOpenKeywords() {
+		// clear-input / file-string-length / interactive-stream-p /
+		// stream-external-format / broadcast-stream-streams: prelude Lisp over what the
+		// backends already have. file-string-length answers the UTF-8 byte length, the
+		// one external format every backend writes.
+		assertThat(evalMulti("""
+				(let ((o (make-string-output-stream)))
+				  (list (clear-input)
+				        (with-input-from-string (s "abc") (clear-input s))
+				        (interactive-stream-p o)
+				        (stream-external-format o)
+				        (file-string-length o #\\a)
+				        (file-string-length o "abc")
+				        (file-string-length o (string (code-char 233)))
+				        (broadcast-stream-streams (make-broadcast-stream o))))
+				""").print()).isEqualTo("(NIL NIL NIL :UTF-8 1 3 2 (#<STREAM>))");
+	}
+
+	@Test
+	void compositeStreamsMoveBytesAsWellAsCharacters(@TempDir Path tempDir) {
+		// .todo/387 gave the composite constructors their character methods; the byte
+		// methods are the same shape, so read-byte / write-byte reach the components.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(evalMulti("""
+				(defun p (n) (concatenate 'string "%s/" n))
+				(with-open-file (s (p "b.dat") :direction :output :element-type '(unsigned-byte 8))
+				  (write-byte 65 s))
+				(list (with-open-file (a (p "b.dat") :element-type '(unsigned-byte 8))
+				        (with-open-file (b (p "b.dat") :element-type '(unsigned-byte 8))
+				          (let ((c (make-concatenated-stream a b)))
+				            (list (read-byte c) (read-byte c) (read-byte c nil :eof)))))
+				      (with-open-file (a (p "b.dat") :element-type '(unsigned-byte 8))
+				        (with-open-file (o (p "c.dat") :direction :output
+				                           :element-type '(unsigned-byte 8))
+				          (let ((e (make-echo-stream a o)))
+				            (list (read-byte e) (write-byte 66 e)))))
+				      (with-open-file (s (p "c.dat") :element-type '(unsigned-byte 8))
+				        (list (read-byte s) (read-byte s))))
+				""".formatted(here)).print()).isEqualTo("((65 65 :EOF) (65 66) (65 66))");
 	}
 
 	@Test

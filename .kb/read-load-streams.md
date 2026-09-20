@@ -175,6 +175,66 @@ Pinned by `LispEvaluatorTest#evalOpenAppendKeepsTheExistingContent`,
 `JvmLispCompilerTest#compileAndRunOpenAppend`, `LispEvaluatorTest#probeFile*` + twins, ci-spec
 `probe-file-existing-and-missing`, `open-if-exists-append-keeps-the-existing-content`.
 
+## The `:if-exists` / `:if-does-not-exist` table is ONE lowering over `probe-file`
+
+**No backend learned a mode for it.** `.todo/906`: the whole table plus `:direction :probe`
+is a GUARD around the existing literal open, built once in
+`LispMacroExpander.lowerRuntimeOpenOptions` and reached by `open`'s two compilers (through
+`OpenModes.lowerRuntimeOptions`), `expandWithOpenFile` and the `#'open` wrapper. The
+interpreter's `open` built-in is the fourth reading, natively over `Files.exists`; the two
+must stay in step, and the cross-backend pin is ci-spec
+`open-if-exists-if-does-not-exist-and-probe`.
+
+- The guard reads `(probe-file path)` ONCE into `__open_act`, a keyword of `:open` /
+  `:create` / `:error-exists` / `:error-missing` / nil, and the base open appears once
+  below it -- a dispatch over six literal leaves is not duplicated. Both arms folding to
+  "just open" emits NO guard, so an existing program keeps its exact bytes
+  (`needsOpenExistenceGuard`, `aLiteralWithOpenFileSpecCompilesToTheSameBytesAsBefore`).
+  The `probe-file` prelude entry's splice gate therefore keys on the SURFACE option list
+  (`callsOpenWithExistenceGuard`, the `callsLoadWithIfDoesNotExist` pattern) -- `#'open`
+  counts, since its wrapper passes every option computed.
+- **`:if-exists` is read only on an OUTPUT open.** An input or probe open drops it whatever
+  it says, which is what makes `(open p :if-exists :rename)` the plain input open CL says
+  it is. `:supersede` / `:new-version` / `:rename` / `:rename-and-delete` all collapse onto
+  the truncating open (no version numbers here, and SBCL leaves the same content);
+  `:error` and nil answer instead of opening; `:append` is the pseudo-direction above.
+  **`:overwrite` is the one value still refused** -- it needs a write-without-truncate mode
+  on all four (`.todo/918`).
+- **`:if-does-not-exist` defaults per CLHS**: `:create` for a superseding output open, nil
+  for `:probe`, `:error` everywhere else -- INCLUDING an APPENDING output open, which
+  therefore no longer creates the file (measured against sbcl 2026-09-20; smart-buffer's
+  disk spill is unaffected because `uiop:with-temporary-file` creates the file first).
+  `:error` on a non-output direction is left to the open's OWN failure, so the one
+  "cannot open file" text still comes out and no guard is emitted.
+- **`:direction :probe` is an open followed by a close**, not a new kind: CL's probe stream
+  is a file stream that is already closed, so `(let ((s (open p :input))) (close s) s)` is
+  literally it, on every backend, with `%probe-file` deciding nil. `:direction :io` is
+  refused at CALL time (`.todo/918`).
+- **`close` on an already-closed stream answers `t`** rather than signalling (CL, and
+  SBCL): the `unwind-protect` shape `with-open-file` expands to closes a stream the body
+  may already have closed. Three of the four needed work for it. The JVM `_closeStream`
+  needed a null-entry guard -- without one the chain reached the `Writer` arm with null and
+  threw. `--component` TRAPPED (`unknown handle index`, the host refusing a second drop of
+  the same `descriptor` resource), so `adapter.wat`'s `$fd_close` now returns 0 when the
+  slot's live flag (offset 12) is already clear; regenerate `adapter.wasm` with
+  `src/wasm-component/regen.sh` after touching it. Preview 1 already ignored the EBADF.
+  **`open-stream-p` on a closed handle still answers `t` on BOTH WASM backends** -- a WASI
+  fd has no stream table behind it -- so the ci-spec case does not ask; the interpreter and
+  JVM pins are `LispEvaluatorTest#closingAnAlreadyClosedStreamAnswersTrue` and
+  `JvmLispCompilerTest#compileAndRunOpenExistenceOptions`.
+
+## Five stream operators that are prelude Lisp over what exists
+
+`clear-input` (the read-side `clear-output`: nothing here buffers input a program could
+throw away), `interactive-stream-p` (always nil -- no backend tells a terminal from a pipe),
+`stream-external-format` (always `:utf-8`), `file-string-length` (the UTF-8 byte length) and
+`broadcast-stream-streams`. All five validate a stream and answer; none needed a primitive,
+a per-backend compiler or a wrapper entry. The composite constructors gained the BYTE half
+of their Gray protocol the same way (`stream-read-byte` / `stream-write-byte` on
+`%two-way-stream`, `%echo-stream`, `%concatenated-stream`, `%broadcast-stream`), so
+`read-byte`/`write-byte` reach the components like `read-char`/`write-char` already did.
+Pinned by ci-spec `stream-operators-clear-input-and-friends`.
+
 ## Output left open at the end is WRITTEN, on all four backends
 
 A file output stream the program never closes keeps what it wrote, however the program ends
@@ -550,8 +610,17 @@ plus a non-zero errno.
 here). `nil` is CL-sanctioned -- "cannot be determined" -- and is at least the SAME answer on
 every backend, which a number would not be: a JVM `Reader` buffers and does not remember its
 path, and Preview 1's read buffer puts the descriptor ahead of the logical position. Closing
-the gap means all four learning the buffered offset at once, and it belongs with the rest of
-the `file-position` ANSI residue in `.todo/906`, not with one backend.
+the gap means all four learning the buffered offset at once.
+
+**Decided in `.todo/906` (2026-09-20), measured, not assumed**: on its own the gap is worth
+exactly ONE ANSI test (`FILE-POSITION.5`, `Expected integer, got: NIL`) -- every other
+character-stream `file-position` test in the chapter needs a file the suite does not ship,
+or `:direction :io`. It is a PREREQUISITE for `:io`, though, whose 38 tests all
+`(file-position s :start)` before reading back what they wrote. So the character-stream
+offset moves with `:io`, in `.todo/918`, and not on its own: the mechanism is the same on
+every backend (a per-handle logical offset the character reads and writes bump, the
+`_bumpStreamPosition` shape the byte primitives already use; on Preview 1 the exact answer
+is `fd_seek` minus the unread bytes still in `READ_CURSOR_ADDR`..`READ_END_ADDR`).
 
 **A CHARACTER file stream answers `nil` on both, off a per-fd binary flag byte written at
 the `open` call site** (the element type is a compile-time literal, so nothing else can

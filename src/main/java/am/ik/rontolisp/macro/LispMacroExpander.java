@@ -8363,19 +8363,31 @@ public final class LispMacroExpander {
 		LispVal var = specParts.get(0);
 		LispVal filename = specParts.get(1);
 		List<LispVal> options = specParts.subList(2, specParts.size());
-		if (hasRuntimeOpenOption(options)) {
+		if (hasRuntimeOpenOption(options) || needsOpenExistenceGuard(options)) {
 			// A COMPUTED option value -- a function taking the options as arguments and
 			// passing them down is how every portable file wrapper opens a file (uiop's
 			// call-with-input-file / call-with-output-file are exactly it) -- cannot be
 			// folded into the mode here, so the values are bound and dispatched onto the
-			// literal open shapes at run time. A spec whose values are all literal keeps
-			// the fold below, byte for byte.
+			// literal open shapes at run time. The same lowering carries the existence
+			// guard an :if-exists / :if-does-not-exist the mode cannot express asks for.
+			// A spec whose values are all literal and whose options the mode DOES express
+			// keeps the fold below, byte for byte.
 			return buildWithOpenFileFrom(var, lowerRuntimeOpenOptions(LispNames.WITH_OPEN_FILE, filename, options),
 					parts.subList(2, parts.size()), unwindProtect);
 		}
 		String direction = LispNames.INPUT_KEYWORD;
 		boolean binary = false;
 		boolean append = false;
+		// The direction is read FIRST: :if-exists is consulted only on an output open, so
+		// whether a value of it is ignorable depends on an option that may be written
+		// after it.
+		boolean outputDirection = false;
+		for (int i = 2; i + 1 < specParts.size(); i += 2) {
+			if (specParts.get(i) instanceof LispSymbol key && LispNames.DIRECTION_KEYWORD.equals(key.name())
+					&& specParts.get(i + 1) instanceof LispSymbol dir) {
+				outputDirection = LispNames.OUTPUT_KEYWORD.equals(dir.name());
+			}
+		}
 		for (int i = 2; i < specParts.size(); i += 2) {
 			if (specParts.get(i) instanceof LispSymbol key && LispNames.DIRECTION_KEYWORD.equals(key.name())) {
 				if (i + 1 >= specParts.size() || !(specParts.get(i + 1) instanceof LispSymbol dir)
@@ -8393,7 +8405,7 @@ public final class LispMacroExpander {
 				}
 				binary = isBinaryElementTypeLiteral(specParts.get(i + 1));
 			}
-			else if (specParts.get(i) instanceof LispSymbol key && i + 1 < specParts.size()
+			else if (specParts.get(i) instanceof LispSymbol key && i + 1 < specParts.size() && outputDirection
 					&& isAppendIfExists(key.name(), specParts.get(i + 1))) {
 				// :if-exists :append is REAL (smart-buffer's disk-spill path writes
 				// every chunk past the memory limit with it): it normalizes into the
@@ -8410,7 +8422,8 @@ public final class LispMacroExpander {
 				// branch of a spliced library, and lack-middleware-backtrace's
 				// file-output branch (:if-exists :append) is dead code in the default
 				// *error-output* configuration.
-				if (i + 1 >= specParts.size() || !ignorableOpenOptionValue(key.name(), specParts.get(i + 1))) {
+				if (i + 1 >= specParts.size()
+						|| !ignorableOpenOptionValue(key.name(), specParts.get(i + 1), outputDirection)) {
 					return callTimeUnsupportedStub(LispNames.WITH_OPEN_FILE + " " + key.name()
 							+ " supports only the native default value (" + (":EXTERNAL-FORMAT".equals(key.name())
 									? ":utf-8" : ":IF-EXISTS".equals(key.name()) ? ":supersede" : ":create or :error")
@@ -8485,13 +8498,33 @@ public final class LispMacroExpander {
 	 * @return {@code true} when dropping the pair preserves behavior
 	 */
 	public static boolean ignorableOpenOptionValue(String option, LispVal value) {
+		return ignorableOpenOptionValue(option, value, true);
+	}
+
+	/**
+	 * Like {@link #ignorableOpenOptionValue(String, LispVal)} with the direction known:
+	 * CL reads {@code :if-exists} only for an OUTPUT open, so on an input open ANY value
+	 * of it is dropped rather than refused -- which is what makes
+	 * {@code (open p :if-exists :rename)} the plain input open the standard says it is.
+	 * @param option the option keyword name
+	 * @param value the option value form
+	 * @param output whether the direction is {@code :output}
+	 * @return {@code true} when dropping the pair preserves behavior
+	 */
+	public static boolean ignorableOpenOptionValue(String option, LispVal value, boolean output) {
+		if (IF_EXISTS_KEYWORD.equals(option) && !output) {
+			return true;
+		}
 		if (!(value instanceof LispSymbol sym)) {
 			return false;
 		}
 		return switch (option) {
 			case ":EXTERNAL-FORMAT" -> ":UTF-8".equals(sym.name()) || ":DEFAULT".equals(sym.name());
-			case ":IF-EXISTS" -> ":SUPERSEDE".equals(sym.name());
-			case ":IF-DOES-NOT-EXIST" -> ":CREATE".equals(sym.name()) || ":ERROR".equals(sym.name());
+			// The three version spellings collapse onto :supersede on a filesystem with
+			// no version numbers: each leaves the caller writing over the old content.
+			case ":IF-EXISTS" -> ":SUPERSEDE".equals(sym.name()) || ":NEW-VERSION".equals(sym.name())
+					|| ":RENAME".equals(sym.name()) || ":RENAME-AND-DELETE".equals(sym.name());
+			case ":IF-DOES-NOT-EXIST" -> output ? ":CREATE".equals(sym.name()) : ":ERROR".equals(sym.name());
 			default -> false;
 		};
 	}
@@ -8550,7 +8583,10 @@ public final class LispMacroExpander {
 			return value instanceof LispCons cons && cons.car() instanceof LispSymbol quote
 					&& LispNames.QUOTE.equals(quote.name());
 		}
-		return value instanceof LispSymbol sym && sym.name().startsWith(":");
+		// A literal nil is a real :if-exists / :if-does-not-exist value ("answer nil
+		// instead of opening"), so it folds like a keyword rather than counting as a
+		// computed expression.
+		return value instanceof LispNil || (value instanceof LispSymbol sym && sym.name().startsWith(":"));
 	}
 
 	/**
@@ -8565,6 +8601,124 @@ public final class LispMacroExpander {
 		for (int i = 0; i + 1 < optionPairs.size(); i += 2) {
 			if (optionPairs.get(i) instanceof LispSymbol key && key.name().startsWith(":")
 					&& !isLiteralOpenOptionValue(key.name(), optionPairs.get(i + 1))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether an all-literal option list still needs {@link #lowerRuntimeOpenOptions}: it
+	 * asks for {@code :direction :probe} / {@code :io}, or for an {@code :if-exists} /
+	 * {@code :if-does-not-exist} whose answer is not simply "open the file". Those are
+	 * the options the file mode alone cannot express, and the lowering wraps the open in
+	 * the existence guard that does.
+	 *
+	 * <p>
+	 * Everything the mode DOES express -- {@code :supersede} and its version-less
+	 * synonyms, {@code :append}, the {@code :create}/{@code :error} pair that already
+	 * matches what an open of that direction does -- answers false here, so an existing
+	 * program keeps the folded lowering and its exact bytes.
+	 * @param optionPairs the flat option list
+	 * @return true when the guard is needed
+	 */
+	public static boolean needsOpenExistenceGuard(List<LispVal> optionPairs) {
+		String direction = LispNames.INPUT_KEYWORD;
+		String ifExists = null;
+		String ifDoesNotExist = null;
+		for (int i = 0; i + 1 < optionPairs.size(); i += 2) {
+			if (!(optionPairs.get(i) instanceof LispSymbol key)) {
+				continue;
+			}
+			LispVal value = optionPairs.get(i + 1);
+			String name = (value instanceof LispSymbol sym) ? sym.name() : (value instanceof LispNil) ? "NIL" : null;
+			switch (key.name()) {
+				case LispNames.DIRECTION_KEYWORD -> direction = name;
+				case IF_EXISTS_KEYWORD -> ifExists = name;
+				case IF_DOES_NOT_EXIST_KEYWORD -> ifDoesNotExist = name;
+				default -> {
+				}
+			}
+		}
+		if (LispNames.PROBE_KEYWORD.equals(direction) || LispNames.IO_KEYWORD.equals(direction)) {
+			return true;
+		}
+		// A COMPUTED :if-exists / :if-does-not-exist can only be read at run time, so
+		// the guard is emitted whatever it turns out to say.
+		if (hasComputedExistenceOption(optionPairs)) {
+			return true;
+		}
+		boolean output = LispNames.OUTPUT_KEYWORD.equals(direction);
+		// :if-exists is read only for an output direction.
+		if (output && ifExists != null && !":SUPERSEDE".equals(ifExists) && !":NEW-VERSION".equals(ifExists)
+				&& !":RENAME".equals(ifExists) && !":RENAME-AND-DELETE".equals(ifExists)) {
+			return true;
+		}
+		boolean append = output && LispNames.APPEND_KEYWORD.equals(ifExists);
+		if (ifDoesNotExist == null) {
+			// An appending open defaults to :error, which the mode cannot express; every
+			// other default is what the open already does.
+			return append;
+		}
+		return output ? !":CREATE".equals(ifDoesNotExist) : !":ERROR".equals(ifDoesNotExist);
+	}
+
+	/** Whether an {@code :if-exists} / {@code :if-does-not-exist} value is computed. */
+	private static boolean hasComputedExistenceOption(List<LispVal> optionPairs) {
+		for (int i = 0; i + 1 < optionPairs.size(); i += 2) {
+			if (optionPairs.get(i) instanceof LispSymbol key
+					&& (IF_EXISTS_KEYWORD.equals(key.name()) || IF_DOES_NOT_EXIST_KEYWORD.equals(key.name()))
+					&& !isLiteralOpenOptionValue(key.name(), optionPairs.get(i + 1))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the program contains an {@code open} / {@code with-open-file} whose options
+	 * make {@link #needsOpenExistenceGuard} true. The guard calls {@code probe-file}, and
+	 * it is built inside the expression compilers -- after the prelude selection pass --
+	 * so selection keys on the SURFACE form, the {@code callsLoadWithIfDoesNotExist}
+	 * pattern.
+	 * @param program the top-level forms
+	 * @return whether the guard can appear
+	 */
+	public static boolean callsOpenWithExistenceGuard(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (callsOpenWithExistenceGuard(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean callsOpenWithExistenceGuard(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		if (!parts.isEmpty() && parts.get(0) instanceof LispSymbol op) {
+			String member = unqualifiedClMember(op.name());
+			if (LispNames.OPEN.equals(member) && parts.size() > 2
+					&& needsOpenExistenceGuard(parts.subList(2, parts.size()))) {
+				return true;
+			}
+			// #'open: the wrapper hands its plist to the same lowering with every option
+			// COMPUTED, so the guard is always there.
+			if (LispNames.FUNCTION.equals(member) && parts.size() == 2 && parts.get(1) instanceof LispSymbol named
+					&& LispNames.OPEN.equals(unqualifiedClMember(named.name()))) {
+				return true;
+			}
+			if (LispNames.WITH_OPEN_FILE.equals(member) && parts.size() > 1 && parts.get(1) instanceof LispCons spec) {
+				List<LispVal> specParts = spec.toList();
+				if (specParts.size() > 2 && needsOpenExistenceGuard(specParts.subList(2, specParts.size()))) {
+					return true;
+				}
+			}
+		}
+		for (LispVal part : parts) {
+			if (callsOpenWithExistenceGuard(part)) {
 				return true;
 			}
 		}
@@ -8619,6 +8773,12 @@ public final class LispMacroExpander {
 		OpenModeTest binary = OpenModeTest.of(false);
 		OpenModeTest output = OpenModeTest.of(false);
 		OpenModeTest append = OpenModeTest.of(false);
+		boolean probe = false;
+		// The two arms of the existence guard: what to do when the file is already
+		// there, and what to do when it is not. Null means "not written": the direction
+		// decides the default once the whole option list has been read.
+		LispVal existsAction = null;
+		LispVal missingAction = null;
 		int temps = 0;
 		for (int i = 0; i + 1 < optionPairs.size(); i += 2) {
 			if (!(optionPairs.get(i) instanceof LispSymbol key) || !key.name().startsWith(":")) {
@@ -8637,13 +8797,23 @@ public final class LispMacroExpander {
 				case LispNames.DIRECTION_KEYWORD -> {
 					if (literal) {
 						String name = ((LispSymbol) value).name();
-						if (!LispNames.INPUT_KEYWORD.equals(name) && !LispNames.OUTPUT_KEYWORD.equals(name)) {
+						if (LispNames.PROBE_KEYWORD.equals(name)) {
+							probe = true;
+						}
+						else if (LispNames.IO_KEYWORD.equals(name)) {
+							return callTimeUnsupportedStub(operator + " :direction :io is not implemented");
+						}
+						else if (!LispNames.INPUT_KEYWORD.equals(name) && !LispNames.OUTPUT_KEYWORD.equals(name)) {
 							throw new UnsupportedOperationException(
-									operator + " :direction must be the literal :input or :output");
+									operator + " :direction must be the literal :input, :output or :probe");
 						}
 						output = OpenModeTest.of(LispNames.OUTPUT_KEYWORD.equals(name));
 					}
 					else {
+						// A COMPUTED direction still admits only the two that pick a
+						// mode: :probe is a whole different shape (a closed stream) and
+						// :io has no implementation, so neither can be chosen at run
+						// time.
 						checks.add(unlessValueIn(var, operator + " :direction supports only :input and :output, got ~s",
 								List.of(eqKeyword(var, LispNames.INPUT_KEYWORD),
 										eqKeyword(var, LispNames.OUTPUT_KEYWORD))));
@@ -8664,30 +8834,53 @@ public final class LispMacroExpander {
 				}
 				case IF_EXISTS_KEYWORD -> {
 					if (literal) {
-						if (isAppendIfExists(key.name(), value)) {
-							append = OpenModeTest.of(true);
-						}
-						else if (!ignorableOpenOptionValue(key.name(), value)) {
-							return unsupportedOpenOptionValueStub(operator, key.name());
+						String name = (value instanceof LispSymbol sym) ? sym.name() : "NIL";
+						switch (name) {
+							case LispNames.APPEND_KEYWORD -> append = OpenModeTest.of(true);
+							case ":ERROR" -> existsAction = new LispSymbol(OPEN_ACT_ERROR_EXISTS);
+							case "NIL" -> existsAction = LispNil.INSTANCE;
+							// :new-version / :rename / :rename-and-delete all leave the
+							// caller with a stream on a file whose old content is gone,
+							// which is what :supersede does on a filesystem with no
+							// version numbers -- CLHS lets an implementation collapse
+							// them, and SBCL's answer is the same content.
+							case ":SUPERSEDE", ":NEW-VERSION", ":RENAME", ":RENAME-AND-DELETE" -> {
+							}
+							default -> {
+								return unsupportedOpenOptionValueStub(operator, key.name());
+							}
 						}
 					}
 					else {
-						checks.add(unlessValueIn(var,
-								operator + " :if-exists supports only :supersede and :append, got ~s",
-								List.of(eqKeyword(var, ":SUPERSEDE"), eqKeyword(var, LispNames.APPEND_KEYWORD))));
+						checks.add(unlessValueIn(var, operator
+								+ " :if-exists supports only :supersede, :new-version, :rename, :rename-and-delete, :append, :error and nil, got ~s",
+								List.of(runtimeIfExistsAccepted(var))));
 						append = OpenModeTest.of(eqKeyword(var, LispNames.APPEND_KEYWORD));
+						existsAction = makeIf(eqKeyword(var, ":ERROR"), new LispSymbol(OPEN_ACT_ERROR_EXISTS),
+								makeIf(var, new LispSymbol(OPEN_ACT_OPEN), LispNil.INSTANCE));
 					}
 				}
 				case IF_DOES_NOT_EXIST_KEYWORD -> {
 					if (literal) {
-						if (!ignorableOpenOptionValue(key.name(), value)) {
+						String name = (value instanceof LispSymbol sym) ? sym.name() : "NIL";
+						missingAction = switch (name) {
+							case ":CREATE" -> new LispSymbol(OPEN_ACT_CREATE);
+							case ":ERROR" -> new LispSymbol(OPEN_ACT_ERROR_MISSING);
+							case "NIL" -> LispNil.INSTANCE;
+							default -> null;
+						};
+						if (missingAction == null) {
 							return unsupportedOpenOptionValueStub(operator, key.name());
 						}
 					}
 					else {
 						checks.add(unlessValueIn(var,
-								operator + " :if-does-not-exist supports only :create and :error, got ~s",
-								List.of(eqKeyword(var, ":CREATE"), eqKeyword(var, ":ERROR"))));
+								operator + " :if-does-not-exist supports only :create, :error and nil, got ~s",
+								List.of(listToCons(List.of(new LispSymbol(LispNames.OR), eqKeyword(var, ":CREATE"),
+										eqKeyword(var, ":ERROR"),
+										listToCons(List.of(new LispSymbol(LispNames.NULL), var)))))));
+						missingAction = makeIf(eqKeyword(var, ":ERROR"), new LispSymbol(OPEN_ACT_ERROR_MISSING),
+								makeIf(var, new LispSymbol(OPEN_ACT_CREATE), LispNil.INSTANCE));
 					}
 				}
 				case EXTERNAL_FORMAT_KEYWORD -> {
@@ -8705,12 +8898,196 @@ public final class LispMacroExpander {
 				default -> throw new UnsupportedOperationException(operator + ": unsupported option " + key.name());
 			}
 		}
+		// CL consults :if-exists only for an output direction -- an input (or probe)
+		// open leaves it entirely unread, whatever it says.
+		boolean neverOutput = probe || (output.isConstant() && !output.constant());
+		if (neverOutput) {
+			existsAction = null;
+			append = OpenModeTest.of(false);
+		}
+		else if (existsAction != null && !output.isConstant()) {
+			// A computed direction: the exists arm only applies on the output leg.
+			existsAction = makeIf(output.test(), existsAction, new LispSymbol(OPEN_ACT_OPEN));
+		}
+		// ":if-does-not-exist :error" is what an INPUT (or probe) open does by failing,
+		// and its file-error carries the one message every backend spells for a failed
+		// open -- so that leg runs the open rather than a second, differently worded
+		// refusal. Only an output open, which would have CREATED the file, needs one.
+		if (missingAction == null) {
+			missingAction = defaultMissingAction(probe, output, append);
+		}
+		if (!probe) {
+			missingAction = resolveMissingErrorArm(missingAction, output);
+		}
+		LispVal base = probe ? probeStreamShape() : dispatchOpenOnElementType(binary, output, append);
+		LispVal guarded = guardOpenOnExistence(base, existsAction, missingAction, probe, output);
 		List<LispVal> letParts = new java.util.ArrayList<>();
 		letParts.add(new LispSymbol(LispNames.LET_STAR));
 		letParts.add(listToCons(bindings));
 		letParts.addAll(checks);
-		letParts.add(dispatchOpenOnElementType(binary, output, append));
+		letParts.add(guarded);
 		return listToCons(letParts);
+	}
+
+	/** The action keyword meaning "run the open" in the existence guard. */
+	private static final String OPEN_ACT_OPEN = ":OPEN";
+
+	/** "Create the file first, then run the open." */
+	private static final String OPEN_ACT_CREATE = ":CREATE";
+
+	/** "Signal a file-error: the file is already there." */
+	private static final String OPEN_ACT_ERROR_EXISTS = ":ERROR-EXISTS";
+
+	/** "Signal a file-error: the file is not there." */
+	private static final String OPEN_ACT_ERROR_MISSING = ":ERROR-MISSING";
+
+	/** The temporary the existence guard binds its decision to. */
+	private static final String OPEN_ACTION_VAR = "__open_act";
+
+	/** The temporary the {@code :direction :probe} shape binds its closed stream to. */
+	private static final String OPEN_PROBE_VAR = "__open_probe";
+
+	/** The message a {@code :if-exists :error} refusal carries. */
+	public static final String OPEN_EXISTS_MESSAGE = "OPEN: the file already exists";
+
+	/** The message an {@code :if-does-not-exist :error} refusal carries. */
+	public static final String OPEN_MISSING_MESSAGE = "OPEN: the file does not exist";
+
+	/**
+	 * The {@code :direction :probe} shape: CL's probe open answers a file stream that is
+	 * already CLOSED, so the program can ask {@code typep}/{@code pathname} about it but
+	 * not read it. Opening for input and closing is exactly that, and it needs no new
+	 * runtime on any backend.
+	 */
+	private static LispVal probeStreamShape() {
+		LispSymbol streamVar = new LispSymbol(OPEN_PROBE_VAR);
+		LispVal bindings = new LispCons(listToCons(List.of(streamVar, listToCons(List.of(new LispSymbol(LispNames.OPEN),
+				new LispSymbol(OPEN_PATH_VAR), new LispSymbol(LispNames.INPUT_KEYWORD))))), LispNil.INSTANCE);
+		return listToCons(
+				List.of(new LispSymbol(LispNames.LET), bindings, callOf(LispNames.CLOSE, streamVar), streamVar));
+	}
+
+	/**
+	 * The {@code :if-does-not-exist} value CL defaults to when the caller wrote none:
+	 * {@code nil} for {@code :probe}, {@code :error} for {@code :input} and for an output
+	 * open that {@code :append}s (or overwrites) rather than superseding, and
+	 * {@code :create} for every other output open.
+	 *
+	 * <p>
+	 * Only {@code :probe} and the appending output open need a guard at all: an input
+	 * open already signals the same {@code file-error} by failing, and a superseding
+	 * output open creates the file itself -- so those two answer {@code :open}, which
+	 * {@link #guardOpenOnExistence} folds away and the emitted code stays what it was.
+	 */
+	/**
+	 * Turns the {@code :error} missing arm into the plain open on the legs where the open
+	 * ITSELF signals that error -- every non-output direction. A constant arm folds; a
+	 * computed one keeps both legs behind the direction test.
+	 */
+	private static LispVal resolveMissingErrorArm(LispVal missingAction, OpenModeTest output) {
+		if ((output.isConstant() && output.constant()) || isActionKeyword(missingAction, OPEN_ACT_OPEN)) {
+			return missingAction;
+		}
+		if (isActionKeyword(missingAction, OPEN_ACT_ERROR_MISSING)) {
+			return output.isConstant() ? new LispSymbol(OPEN_ACT_OPEN)
+					: makeIf(output.test(), missingAction, new LispSymbol(OPEN_ACT_OPEN));
+		}
+		if (output.isConstant()) {
+			// An input open: :create still creates, nil still answers nil, and :error is
+			// the open's own failure -- already handled above.
+			return missingAction;
+		}
+		// Both the direction and the arm are computed. The arm is a pure test chain over
+		// a bound temporary, so naming it twice costs nothing and needs no binding.
+		return makeIf(eqKeyword(missingAction, OPEN_ACT_ERROR_MISSING),
+				makeIf(output.test(), new LispSymbol(OPEN_ACT_ERROR_MISSING), new LispSymbol(OPEN_ACT_OPEN)),
+				missingAction);
+	}
+
+	private static LispVal defaultMissingAction(boolean probe, OpenModeTest output, OpenModeTest append) {
+		if (probe) {
+			return LispNil.INSTANCE;
+		}
+		if (append.isConstant()) {
+			return append.constant() ? new LispSymbol(OPEN_ACT_ERROR_MISSING) : new LispSymbol(OPEN_ACT_OPEN);
+		}
+		// A computed :if-exists: the append arm defaults to :error, every other arm to
+		// the create the open performs itself.
+		return makeIf(append.test(), new LispSymbol(OPEN_ACT_ERROR_MISSING), new LispSymbol(OPEN_ACT_OPEN));
+	}
+
+	/**
+	 * Wraps the base {@code open} in the existence guard the {@code :if-exists} /
+	 * {@code :if-does-not-exist} pair asks for. The base appears ONCE -- the two arms
+	 * pick an action keyword and the guard reads it -- so a dispatch over six literal
+	 * leaves is not duplicated.
+	 *
+	 * <pre>
+	 * (let ((__open_act (if (probe-file __open_path) &lt;exists&gt; &lt;missing&gt;)))
+	 *   (if (eq __open_act :error-exists)  (%file-error __open_path "...")
+	 *   (if (eq __open_act :error-missing) (%file-error __open_path "...")
+	 *   (if __open_act
+	 *       (progn (if (eq __open_act :create) (close (open __open_path :output)) nil) &lt;base&gt;)
+	 *       nil))))
+	 * </pre>
+	 *
+	 * Both arms folding to "just open" means no guard at all, and the caller's emitted
+	 * code is byte-identical to a build that never knew the option.
+	 * @param base the open expression (or the probe shape) the guard protects
+	 * @param existsAction the exists arm, or null for "open"
+	 * @param missingAction the missing arm
+	 * @param probe whether the direction is {@code :probe}
+	 * @param output whether the direction is {@code :output}
+	 * @return the guarded expression
+	 */
+	private static LispVal guardOpenOnExistence(LispVal base, @Nullable LispVal existsAction, LispVal missingAction,
+			boolean probe, OpenModeTest output) {
+		boolean existsIsOpen = existsAction == null || isActionKeyword(existsAction, OPEN_ACT_OPEN);
+		boolean missingIsOpen = isActionKeyword(missingAction, OPEN_ACT_OPEN);
+		if (existsIsOpen && missingIsOpen) {
+			return base;
+		}
+		LispSymbol act = new LispSymbol(OPEN_ACTION_VAR);
+		LispVal exists = existsIsOpen ? new LispSymbol(OPEN_ACT_OPEN) : existsAction;
+		LispVal decision = makeIf(callOf(LispNames.PROBE_FILE, new LispSymbol(OPEN_PATH_VAR)),
+				java.util.Objects.requireNonNull(exists), missingAction);
+		// The :create arm has to make the file itself for a direction whose open would
+		// not: an input open cannot create, and a probe open never opens for writing.
+		// For an output direction the open already creates, so the extra step is
+		// dropped rather than run for nothing.
+		boolean createOpens = !probe && output.isConstant() && output.constant();
+		LispVal body = base;
+		if (!createOpens) {
+			LispVal create = listToCons(List.of(new LispSymbol(LispNames.PROGN),
+					callOf(LispNames.CLOSE, listToCons(List.of(new LispSymbol(LispNames.OPEN),
+							new LispSymbol(OPEN_PATH_VAR), new LispSymbol(LispNames.OUTPUT_KEYWORD)))),
+					LispNil.INSTANCE));
+			body = listToCons(List.of(new LispSymbol(LispNames.PROGN),
+					makeIf(eqKeyword(act, OPEN_ACT_CREATE), create, LispNil.INSTANCE), base));
+		}
+		LispVal guard = makeIf(eqKeyword(act, OPEN_ACT_ERROR_EXISTS), fileErrorOn(OPEN_EXISTS_MESSAGE),
+				makeIf(eqKeyword(act, OPEN_ACT_ERROR_MISSING), fileErrorOn(OPEN_MISSING_MESSAGE),
+						makeIf(act, body, LispNil.INSTANCE)));
+		LispVal bindings = new LispCons(listToCons(List.of(act, decision)), LispNil.INSTANCE);
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, guard));
+	}
+
+	private static boolean isActionKeyword(LispVal action, String keyword) {
+		return action instanceof LispSymbol sym && keyword.equals(sym.name());
+	}
+
+	/** {@code (%file-error __open_path "<message>")} -- the guard's refusal. */
+	private static LispVal fileErrorOn(String message) {
+		return listToCons(List.of(new LispSymbol(LispNames.FILE_ERROR_INTERNAL), new LispSymbol(OPEN_PATH_VAR),
+				new LispString(message)));
+	}
+
+	/** The accepted-value test for a COMPUTED {@code :if-exists}. */
+	private static LispVal runtimeIfExistsAccepted(LispVal var) {
+		return listToCons(List.of(new LispSymbol(LispNames.OR),
+				listToCons(List.of(new LispSymbol(LispNames.NULL), var)), eqKeyword(var, ":SUPERSEDE"),
+				eqKeyword(var, ":NEW-VERSION"), eqKeyword(var, ":RENAME"), eqKeyword(var, ":RENAME-AND-DELETE"),
+				eqKeyword(var, LispNames.APPEND_KEYWORD), eqKeyword(var, ":ERROR")));
 	}
 
 	/** The {@code :if-exists} option keyword. */
@@ -13914,16 +14291,32 @@ public final class LispMacroExpander {
 		}
 		LispVal startExpr = null;
 		LispVal endExpr = null;
+		// CL: the FIRST occurrence of a keyword is the one that counts, and a true
+		// :allow-other-keys admits keywords this operator has no use for.
+		boolean allowOtherKeys = false;
+		for (int k = i; k + 1 < parts.size(); k += 2) {
+			if (parts.get(k) instanceof LispSymbol key && ":ALLOW-OTHER-KEYS".equals(key.name())
+					&& !(parts.get(k + 1) instanceof LispNil)) {
+				allowOtherKeys = true;
+				break;
+			}
+		}
 		for (; i + 1 < parts.size(); i += 2) {
 			if (!(parts.get(i) instanceof LispSymbol key)) {
 				throw new UnsupportedOperationException(
 						LispNames.WRITE_STRING + " supports only literal keyword arguments: " + cons.print());
 			}
 			switch (key.name()) {
-				case ":START" -> startExpr = parts.get(i + 1);
-				case ":END" -> endExpr = parts.get(i + 1);
-				default -> throw new UnsupportedOperationException(
-						LispNames.WRITE_STRING + ": unsupported keyword " + key.name());
+				case ":START" -> startExpr = startExpr == null ? parts.get(i + 1) : startExpr;
+				case ":END" -> endExpr = endExpr == null ? parts.get(i + 1) : endExpr;
+				case ":ALLOW-OTHER-KEYS" -> {
+				}
+				default -> {
+					if (!allowOtherKeys) {
+						throw new UnsupportedOperationException(
+								LispNames.WRITE_STRING + ": unsupported keyword " + key.name());
+					}
+				}
 			}
 		}
 		String prefix = "__ws" + MV_COUNTER.getAndIncrement();

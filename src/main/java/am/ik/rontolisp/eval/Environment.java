@@ -5144,13 +5144,41 @@ public final class Environment implements Scope {
 				stream = args.get(1);
 				i = 2;
 			}
+			// CL: the FIRST occurrence of a keyword is the one that counts, and
+			// :allow-other-keys (itself always accepted) decides whether an unknown one
+			// is a program-error or ignored.
+			boolean allowOtherKeys = false;
+			for (int k = i; k + 1 < args.size(); k += 2) {
+				if (args.get(k) instanceof LispSymbol kw && ":ALLOW-OTHER-KEYS".equals(kw.name())) {
+					allowOtherKeys = !(args.get(k + 1) instanceof LispNil);
+					break;
+				}
+			}
+			boolean sawStart = false;
+			boolean sawEnd = false;
 			for (; i + 1 < args.size(); i += 2) {
 				if (args.get(i) instanceof LispSymbol kw) {
 					switch (kw.name()) {
-						case ":START" -> start = (int) asLong(args.get(i + 1));
-						case ":END" -> end = args.get(i + 1) instanceof LispNil ? cpLen : (int) asLong(args.get(i + 1));
-						default ->
-							throw new LispEvalException(LispNames.WRITE_STRING + ": unsupported keyword " + kw.name());
+						case ":START" -> {
+							if (!sawStart) {
+								start = (int) asLong(args.get(i + 1));
+								sawStart = true;
+							}
+						}
+						case ":END" -> {
+							if (!sawEnd) {
+								end = args.get(i + 1) instanceof LispNil ? cpLen : (int) asLong(args.get(i + 1));
+								sawEnd = true;
+							}
+						}
+						case ":ALLOW-OTHER-KEYS" -> {
+						}
+						default -> {
+							if (!allowOtherKeys) {
+								throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+										LispNames.WRITE_STRING + ": unsupported keyword " + kw.name());
+							}
+						}
 					}
 				}
 			}
@@ -5550,28 +5578,36 @@ public final class Environment implements Scope {
 			}
 			LispString path = new LispString(openPath);
 			// The CL keyword-argument shape ((open path :direction :input :element-type
-			// 'character ...)) is normalized to the positional one; :external-format
-			// (UTF-8 is the native format), :if-exists and :if-does-not-exist (the
-			// create/supersede defaults already match) are accepted and dropped.
-			if (args.size() > 2 && args.get(1) instanceof LispSymbol first && first.name().startsWith(":")
-					&& !LispNames.INPUT_KEYWORD.equals(first.name()) && !LispNames.OUTPUT_KEYWORD.equals(first.name())
-					&& !LispNames.APPEND_KEYWORD.equals(first.name())) {
+			// 'character ...)) is normalized to the positional one; :external-format is
+			// accepted and dropped (UTF-8 is the native format) while :if-exists and
+			// :if-does-not-exist become the existence guard below -- the same table
+			// compiler/OpenModes and LispMacroExpander.lowerRuntimeOpenOptions read for
+			// the compile paths (.kb/read-load-streams.md; keep the readings in step).
+			boolean probe = false;
+			String ifExists = null;
+			String ifDoesNotExist = null;
+			// The POSITIONAL shape is the internal one the expansions produce -- its
+			// :append pseudo-direction has already absorbed the option pair -- so the
+			// guard applies to the keyword shape only.
+			boolean keywordForm = args.size() > 2 && args.get(1) instanceof LispSymbol first
+					&& first.name().startsWith(":") && !LispNames.INPUT_KEYWORD.equals(first.name())
+					&& !LispNames.OUTPUT_KEYWORD.equals(first.name()) && !LispNames.APPEND_KEYWORD.equals(first.name());
+			if (keywordForm) {
 				LispVal direction = new LispSymbol(LispNames.INPUT_KEYWORD);
 				LispVal elementType = null;
-				boolean appendOption = false;
 				for (int i = 1; i < args.size(); i += 2) {
 					if (i + 1 >= args.size() || !(args.get(i) instanceof LispSymbol key)
 							|| !key.name().startsWith(":")) {
 						throw new LispEvalException(LispNames.OPEN + " expects :option value pairs");
 					}
+					LispVal value = args.get(i + 1);
 					switch (key.name()) {
-						case ":DIRECTION" -> direction = args.get(i + 1);
-						case ":ELEMENT-TYPE" -> elementType = args.get(i + 1);
-						case ":EXTERNAL-FORMAT", ":IF-EXISTS", ":IF-DOES-NOT-EXIST" -> {
-							if (LispMacroExpander.isAppendIfExists(key.name(), args.get(i + 1))) {
-								appendOption = true;
-							}
-							else if (!LispMacroExpander.ignorableOpenOptionValue(key.name(), args.get(i + 1))) {
+						case ":DIRECTION" -> direction = value;
+						case ":ELEMENT-TYPE" -> elementType = value;
+						case ":IF-EXISTS" -> ifExists = openOptionName(value);
+						case ":IF-DOES-NOT-EXIST" -> ifDoesNotExist = openOptionName(value);
+						case ":EXTERNAL-FORMAT" -> {
+							if (!LispMacroExpander.ignorableOpenOptionValue(key.name(), value)) {
 								throw new LispEvalException(
 										LispNames.OPEN + ": " + key.name() + " supports only the native default value");
 							}
@@ -5579,8 +5615,17 @@ public final class Environment implements Scope {
 						default -> throw new LispEvalException(LispNames.OPEN + ": unsupported option " + key.name());
 					}
 				}
-				if (appendOption && direction instanceof LispSymbol dirSym
-						&& LispNames.OUTPUT_KEYWORD.equals(dirSym.name())) {
+				if (direction instanceof LispSymbol dirSym && LispNames.PROBE_KEYWORD.equals(dirSym.name())) {
+					probe = true;
+					direction = new LispSymbol(LispNames.INPUT_KEYWORD);
+				}
+				boolean outputDirection = direction instanceof LispSymbol dirSym
+						&& LispNames.OUTPUT_KEYWORD.equals(dirSym.name());
+				if (!outputDirection) {
+					// CL reads :if-exists only on an output open.
+					ifExists = null;
+				}
+				else if (LispNames.APPEND_KEYWORD.equals(ifExists)) {
 					direction = new LispSymbol(LispNames.APPEND_KEYWORD);
 				}
 				List<LispVal> positional = new ArrayList<>(List.of(args.get(0), direction));
@@ -5595,7 +5640,10 @@ public final class Environment implements Scope {
 				if (!(args.get(1) instanceof LispSymbol dir)
 						|| !(LispNames.INPUT_KEYWORD.equals(dir.name()) || LispNames.OUTPUT_KEYWORD.equals(dir.name())
 								|| LispNames.APPEND_KEYWORD.equals(dir.name()))) {
-					throw new LispEvalException(LispNames.OPEN + " supports :input and :output directions");
+					if (args.get(1) instanceof LispSymbol dirSym && LispNames.IO_KEYWORD.equals(dirSym.name())) {
+						throw new LispEvalException(LispNames.OPEN + " :direction :io is not implemented");
+					}
+					throw new LispEvalException(LispNames.OPEN + " supports :input, :output and :probe directions");
 				}
 				append = LispNames.APPEND_KEYWORD.equals(dir.name());
 				output = append || LispNames.OUTPUT_KEYWORD.equals(dir.name());
@@ -5605,6 +5653,55 @@ public final class Environment implements Scope {
 			boolean binary = false;
 			if (args.size() > 2) {
 				binary = isBinaryElementType(args.get(2));
+			}
+			// The existence guard. :if-exists is read only on an output open (it is
+			// already nil otherwise); :if-does-not-exist defaults to :create for an
+			// output open that supersedes, nil for :probe and :error everywhere else --
+			// including an APPENDING output open, which CLHS does not let create the
+			// file.
+			boolean exists = keywordForm && Files.exists(Path.of(path.value()));
+			if (exists && ifExists != null) {
+				switch (ifExists) {
+					case ":ERROR" -> throw openGuardError(args.get(0), LispMacroExpander.OPEN_EXISTS_MESSAGE);
+					case "NIL" -> {
+						return LispNil.INSTANCE;
+					}
+					// :supersede and the three version spellings all leave the caller
+					// writing over the old content, which is what the truncating open
+					// below does.
+					case ":SUPERSEDE", ":NEW-VERSION", ":RENAME", ":RENAME-AND-DELETE", ":APPEND" -> {
+					}
+					default -> throw new LispEvalException(
+							LispNames.OPEN + ": :IF-EXISTS supports only the native default value");
+				}
+			}
+			if (keywordForm && !exists) {
+				String missing = ifDoesNotExist != null ? ifDoesNotExist
+						: probe ? "NIL" : (output && !append) ? ":CREATE" : ":ERROR";
+				switch (missing) {
+					case "NIL" -> {
+						return LispNil.INSTANCE;
+					}
+					case ":ERROR" -> {
+						if (output) {
+							throw openGuardError(args.get(0), LispMacroExpander.OPEN_MISSING_MESSAGE);
+						}
+						// An input (or probe) open signals by failing, with the one
+						// message every backend spells for a failed open.
+					}
+					case ":CREATE" -> {
+						if (!output) {
+							try {
+								Files.newOutputStream(Path.of(path.value())).close();
+							}
+							catch (IOException ex) {
+								throw new UncheckedIOException(ex);
+							}
+						}
+					}
+					default -> throw new LispEvalException(
+							LispNames.OPEN + ": :IF-DOES-NOT-EXIST supports only the native default value");
+				}
 			}
 			try {
 				Closeable stream;
@@ -5625,6 +5722,15 @@ public final class Environment implements Scope {
 							: Files.newBufferedReader(Path.of(path.value()));
 				}
 				long handle = nextStreamHandle.getAndIncrement();
+				if (probe) {
+					// CL's probe open answers a file stream that is already CLOSED: the
+					// program may ask typep / pathname about it but not read it. The
+					// stream is opened for real first, so a file that exists but cannot
+					// be opened signals here exactly as it does on the compile paths,
+					// whose lowering is literally an open followed by a close.
+					stream.close();
+					return streamValue(handle, LispLayout.Kinds.FILE);
+				}
 				streams.put(handle, stream);
 				streamPaths.put(handle, path.value());
 				return streamValue(handle, LispLayout.Kinds.FILE);
@@ -5719,7 +5825,12 @@ public final class Environment implements Scope {
 			streamPaths.remove(handle.value());
 			streamPositions.remove(handle.value());
 			if (stream == null) {
-				throw new LispEvalException(LispNames.CLOSE + ": not an open stream: " + handle.value());
+				// CL: close on an ALREADY-CLOSED stream is not an error -- it answers
+				// true and does nothing (SBCL agrees). The unwind-protect idiom the ANSI
+				// suite is written in closes a stream the body already closed, and the
+				// same shape is what with-open-file expands to, so signalling here made
+				// a correct program fail on its way out.
+				return LispTrue.INSTANCE;
 			}
 			try {
 				stream.close();
@@ -5734,9 +5845,7 @@ public final class Environment implements Scope {
 		// CL operations coincide; both return nil. No argument (or nil/t) flushes
 		// standard output.
 		java.util.function.Function<List<LispVal>, LispVal> forceOutput = args -> {
-			if (args.size() > 1) {
-				throw new LispEvalException(LispNames.FORCE_OUTPUT + " expects 0 or 1 arguments");
-			}
+			requireArgCountBetween(LispNames.FORCE_OUTPUT, args, 0, 1);
 			try {
 				LispVal dest = resolveOutputDest.apply(args.isEmpty() ? null : args.get(0));
 				if (dest == null || dest instanceof LispNil || dest instanceof LispTrue) {
@@ -5768,9 +5877,7 @@ public final class Environment implements Scope {
 		// exists because the Gray protocol names stream-clear-output and a portable
 		// stream class implements it (.kb/gray-streams.md).
 		env.defineFunction(LispNames.CLEAR_OUTPUT, new LispFunction(LispNames.CLEAR_OUTPUT, args -> {
-			if (args.size() > 1) {
-				throw new LispEvalException(LispNames.CLEAR_OUTPUT + " expects 0 or 1 arguments");
-			}
+			requireArgCountBetween(LispNames.CLEAR_OUTPUT, args, 0, 1);
 			LispVal dest = resolveOutputDest.apply(args.isEmpty() ? null : args.get(0));
 			if (dest == null || dest instanceof LispNil || dest instanceof LispTrue) {
 				return LispNil.INSTANCE;
@@ -5785,9 +5892,7 @@ public final class Environment implements Scope {
 		// from the kernel receive buffer, which is what cl-postgres's
 		// man-in-the-middle probe relies on.
 		env.defineFunction(LispNames.LISTEN, new LispFunction(LispNames.LISTEN, args -> {
-			if (args.size() > 1) {
-				throw new LispEvalException(LispNames.LISTEN + " expects 0 or 1 arguments");
-			}
+			requireArgCountBetween(LispNames.LISTEN, args, 0, 1);
 			try {
 				LispVal src = resolveInputSrc.apply(args.isEmpty() ? null : args.get(0));
 				if (src == null || src instanceof LispNil || src instanceof LispTrue) {
@@ -5893,9 +5998,8 @@ public final class Environment implements Scope {
 			// rely on. The 3-arg (in nil nil) form is the standard "swallow EOF" idiom
 			// real libraries use to loop over a file's lines, and it works out of the
 			// box because both branches converge on the nil-at-EOF behavior.
-			if (args.size() > 3) {
-				throw new LispEvalException(LispNames.READ_LINE + " expects 0 to 3 arguments");
-			}
+			// 0 to 4: the fourth is CL's recursive-p, which nothing here reads.
+			requireArgCountBetween(LispNames.READ_LINE, args, 0, 4);
 			// A pushed-back character DRAINS into the line rather than signalling:
 			// peek-char is a read plus an unread, so a parked character before a line
 			// read is an ordinary shape, and answering the line without it would be
@@ -5989,9 +6093,7 @@ public final class Environment implements Scope {
 			return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
 		};
 		java.util.function.Function<List<LispVal>, LispVal> readChar = args -> {
-			if (args.size() > 3) {
-				throw new LispEvalException(LispNames.READ_CHAR + " expects 0 to 3 arguments");
-			}
+			requireArgCountBetween(LispNames.READ_CHAR, args, 0, 4);
 			LispVal pushed = pushbackTake.apply(args);
 			if (pushed instanceof LispChar) {
 				return pushed;
@@ -6080,9 +6182,7 @@ public final class Environment implements Scope {
 		// rontolisp:stream-read-char-no-hang through LispEvaluator's wrap instead, which
 		// is where a class with a genuinely non-blocking source gets its answer.
 		env.defineFunction(LispNames.READ_CHAR_NO_HANG, new LispFunction(LispNames.READ_CHAR_NO_HANG, args -> {
-			if (args.size() > 3) {
-				throw new LispEvalException(LispNames.READ_CHAR_NO_HANG + " expects 0 to 3 arguments");
-			}
+			requireArgCountBetween(LispNames.READ_CHAR_NO_HANG, args, 0, 4);
 			return readChar.apply(args);
 		}));
 		// unread-char: the Gray protocol's own one-slot pushback carries it for an
@@ -6091,9 +6191,7 @@ public final class Environment implements Scope {
 		// still full SIGNALS -- CL calls two unreads without an intervening read an
 		// error, and one slot is all the protocol's own default keeps either.
 		env.defineFunction(LispNames.UNREAD_CHAR, new LispFunction(LispNames.UNREAD_CHAR, args -> {
-			if (args.isEmpty() || args.size() > 2) {
-				throw new LispEvalException(LispNames.UNREAD_CHAR + " expects 1 or 2 arguments");
-			}
+			requireArgCountBetween(LispNames.UNREAD_CHAR, args, 1, 2);
 			if (!(args.get(0) instanceof LispChar parked)) {
 				throw new LispEvalException(LispNames.UNREAD_CHAR + " expects a character");
 			}
@@ -6149,9 +6247,7 @@ public final class Environment implements Scope {
 		// handle 0 -- and a rule that holds on one backend only is worse than none.
 		env.defineFunction(LispNames.READ_BYTE, new LispFunction(LispNames.READ_BYTE, args -> {
 			requireMinArgCount(LispNames.READ_BYTE, args, 1);
-			if (args.size() > 3) {
-				throw new LispEvalException(LispNames.READ_BYTE + " expects 1 to 3 arguments");
-			}
+			requireArgCountBetween(LispNames.READ_BYTE, args, 1, 3);
 			LispVal src = resolveInputSrc.apply(args.get(0));
 			int b;
 			if (src == null || src instanceof LispNil || src instanceof LispTrue) {
@@ -8918,6 +9014,31 @@ public final class Environment implements Scope {
 		}
 		throw new LispEvalException(
 				LispNames.OPEN + " supports only the 'character or '(unsigned-byte 8) element type");
+	}
+
+	/**
+	 * The name of an evaluated {@code :if-exists} / {@code :if-does-not-exist} value:
+	 * {@code "NIL"} for a false one, the keyword's own name otherwise.
+	 * @param value the evaluated option value
+	 * @return the name the guard switches on
+	 */
+	private static String openOptionName(LispVal value) {
+		if (value instanceof LispNil) {
+			return "NIL";
+		}
+		if (value instanceof LispSymbol sym) {
+			return sym.name();
+		}
+		throw new LispEvalException(LispNames.OPEN + ": unsupported option value " + value.print());
+	}
+
+	/**
+	 * The {@code file-error} an {@code :if-exists :error} / {@code :if-does-not-exist
+	 * :error} refusal signals, carrying the designator as given -- the same pair of texts
+	 * {@code LispMacroExpander}'s existence guard emits on the compile paths.
+	 */
+	private static LispEvalException openGuardError(LispVal designator, String message) {
+		return new LispEvalException(message, ClosRegistry.newFileErrorCondition(designator, new LispString(message)));
 	}
 
 	/**
