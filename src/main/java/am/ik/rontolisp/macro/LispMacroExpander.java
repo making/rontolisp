@@ -13057,8 +13057,9 @@ public final class LispMacroExpander {
 
 	/**
 	 * The compiled backends' lowering of a RUNTIME {@code (export ...)} /
-	 * {@code (unexport ...)} call (one inside a defun body -- a literal top-level call is
-	 * consumed by {@code PackageResolver} like {@code in-package}): evaluate the
+	 * {@code (unexport ...)} / {@code (import ...)} / {@code (use-package ...)} /
+	 * {@code (unuse-package ...)} call (one inside a defun body -- a literal top-level
+	 * call is consumed by {@code PackageResolver} like {@code in-package}): evaluate the
 	 * arguments for effect and yield {@code t}, CL's return value. The compiled package
 	 * registry is FROZEN at compile time -- symbols are their canonical spellings and
 	 * every reference already resolved -- so there is nothing left for the export to

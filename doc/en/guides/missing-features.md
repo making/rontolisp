@@ -155,11 +155,13 @@ program are fixed at compile time.
 
 ## User-defined packages
 
-[`defpackage`](../reference/special-forms/defpackage.md) is a literal,
-top-level, read/compile-time directive supporting `:use`, `:export`,
-`:nicknames` and `:import-from` (`:documentation`/`:size` are accepted and
-ignored). `:shadow` and `:shadowing-import-from` are errors (there is no symbol
-shadowing). `use-package`, [`export`](../reference/functions/export.md),
+[`defpackage`](../reference/special-forms/defpackage.md) is a read/compile-time
+directive supporting `:use`, `:export`, `:nicknames`, `:import-from`,
+`:shadowing-import-from`, `:shadow` and `:intern` (`:documentation`/`:size` are
+accepted and ignored); a `defpackage` that is *not* top-level registers its
+package when the form around it runs, on the interpreter only.
+`use-package`, [`unuse-package`](../reference/functions/unuse-package.md),
+[`export`](../reference/functions/export.md),
 `unexport` and [`import`](../reference/functions/import.md) exist as the same
 kind of read/compile-time directive `in-package` is: a literal top-level call
 takes effect for the forms that follow it, on every backend, and a
@@ -171,9 +173,11 @@ creates an empty package (upcased name, `:use` entries that must already exist),
 [`delete-package`](../reference/functions/delete-package.md) drops one, and the
 failures signal a catchable `package-error` carrying the offending designator
 for [`package-error-package`](../reference/functions/package-error-package.md).
-Read/compile-time packages (built-ins and `defpackage` products) are immutable
-at run time -- renaming or deleting one signals -- because every backend
-resolved against them. The queries cover both tiers:
+Read/compile-time packages (the built-ins, and the `defpackage` products of a
+*compiled* program) are immutable at run time -- renaming or deleting one
+signals -- because the compiled backends resolved against them; on the
+interpreter a `defpackage` product joins the runtime tier, so it may be renamed
+and deleted like any other. The queries cover both tiers:
 [`packagep`](../reference/functions/packagep.md),
 [`package-nicknames`](../reference/functions/package-nicknames.md),
 [`find-all-symbols`](../reference/functions/find-all-symbols.md),

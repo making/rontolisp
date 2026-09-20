@@ -5026,6 +5026,16 @@ public final class LispNames {
 	public static final String USE_PACKAGE = "USE-PACKAGE";
 
 	/**
+	 * The {@code unuse-package} standard function, the inverse of {@link #USE_PACKAGE}:
+	 * the named packages leave the target's use list, so their external symbols stop
+	 * being visible unqualified there. Same literal-consumption rule as
+	 * {@link #USE_PACKAGE} -- a literal top-level call is consumed by the
+	 * {@code PackageResolver}, a computed one runs as a function (the interpreter over
+	 * the live registry, the compiled backends over {@code %runtime-packages%}).
+	 */
+	public static final String UNUSE_PACKAGE = "UNUSE-PACKAGE";
+
+	/**
 	 * The {@code export} standard function, which makes symbols EXTERNAL in a package --
 	 * the runtime spelling of {@code defpackage}'s {@code :export} clause, used by
 	 * libraries that build their export list programmatically. Handled exactly like

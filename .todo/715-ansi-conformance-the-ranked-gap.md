@@ -65,7 +65,7 @@ may then fail.
 | the array surface: `adjust-array` 96 (`:displaced-to` 40, non-adjustable 18), `make-array` 10 | ~100 | `.todo/905` (`:displaced-to`/adjustability residue; `.todo/043`/`.todo/180` closed without covering it) |
 | `loop` | 97 | `.todo/029` (134 names left: validation ~30, hash/`across` destructuring, dotted `append`, typed init) |
 | the reader surface: `read-preserving-whitespace` 27, `set-syntax-from-char` 12, `get-macro-character` 9, `name-char` 9 | ~60 | `.todo/214`, `.todo/041` (readtable half) |
-| the runtime package API: `unuse-package` 25, `shadowing-import` 13, `delete-package` 12, plus `set-up-packages` 56 (an aux defun, not an operator) | ~120 | `.todo/904` (`.todo/741` closed covering only part) |
+| the runtime packages' missing MEMBER table -- `use-package` 21, `intern` 17, `with-package-iterator` 16, `unintern` 16, `find-symbol` 15, `shadowing-import` 13, `shadow` 12, `import` 14, all behind one cause | ~120 | `.todo/917` (`.todo/904` closed 2026-09-20 taking `packages` 35.2% -> 55.1% and measuring the rest down to this) |
 | the sequence surface: `make-sequence` 39, `write-sequence` 33, `read-sequence` 29, `fill` 23 | ~120 | `.todo/006` / `.todo/031` |
 | compile/loader introspection: `make-load-form` 41, `compile-file` 23, `disassemble` 14, `trace` 15 | ~90 | `.todo/042` |
 | condition restarts: `restart-case` 19, `with-condition-restarts` 8 | ~30 | `.todo/039` |
@@ -82,8 +82,10 @@ may then fail.
   `SLOT-VALUE is a macro or special operator` is the model working.
 - `compile-file`/`compile-file-pathname` (30): "no file compiler -- a program
   is compiled whole".
-- `class-precedence-list-foo` (70) and `set-up-packages` (56): aux forms the
-  suite builds with `#.` read-eval, not operators.
+- `class-precedence-list-foo` (70): an aux form the suite builds with `#.`
+  read-eval, not an operator. (`set-up-packages` was listed here too and was
+  wrong about WHY: it is a plain defun whose body holds `defpackage` forms, and
+  `.todo/904` made those evaluate.)
 - `packages` at 35.2% is partly the DRIVER: it skips every `(in-package ...)`
   (`.todo/739` section 3). Settle 739 before treating that rate as a capability.
 

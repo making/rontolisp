@@ -238,6 +238,15 @@ public final class PackageResolver {
 					return consumed;
 				}
 			}
+			// (unuse-package P) is the inverse, consumed for exactly the same reason:
+			// the use list is a read/compile-time notion here, so the removal has to
+			// take effect on THIS pass for the forms that follow.
+			if (LispNames.UNUSE_PACKAGE.equals(member)) {
+				LispVal consumed = tryConsumeUnusePackage(cons);
+				if (consumed != null) {
+					return consumed;
+				}
+			}
 			// A literal top-level (export '(a b)) / (unexport 'a) is consumed for the
 			// same
 			// reason use-package is: which symbols are external is a read/compile-time
@@ -437,6 +446,33 @@ public final class PackageResolver {
 	}
 
 	/**
+	 * Consumes a literal top-level {@code (unuse-package PACKAGES [PACKAGE])} call: the
+	 * named packages leave the target's use list and the form becomes {@code t}, the
+	 * standard function's return value. Returns null when an argument is not a literal
+	 * designator -- a runtime call the interpreter (and the compiled backends' prelude
+	 * defun) serve instead.
+	 */
+	private @Nullable LispVal tryConsumeUnusePackage(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() > 3) {
+			// Not consumable, and not this pass's error to raise: the arity belongs to
+			// the FUNCTION, which signals a catchable program-error -- what
+			// (signals-error (unuse-package) program-error) asks for.
+			return null;
+		}
+		List<String> used = literalDesignatorList(parts.get(1));
+		String target = this.currentPackage;
+		if (parts.size() == 3) {
+			target = literalDesignator(parts.get(2));
+		}
+		if (used == null || target == null) {
+			return null;
+		}
+		unusePackage(used, target);
+		return LispTrue.INSTANCE;
+	}
+
+	/**
 	 * Consumes a literal top-level {@code (export SYMBOLS [PACKAGE])} -- or its
 	 * {@code unexport} inverse -- call: rewrites the target package's external set and
 	 * returns {@code t}, the standard functions' return value. Returns null when an
@@ -630,6 +666,35 @@ public final class PackageResolver {
 					useList.add(use);
 				}
 			}
+		}
+		this.registry.define(new LispPackage(pkg.name(), List.copyOf(useList), pkg.symbols(), pkg.externals(),
+				pkg.imports(), pkg.shadows()));
+	}
+
+	/**
+	 * Removes the named packages from the use list of the target package -- the
+	 * {@code unuse-package} mirror of {@link #usePackage}, shared by the directive and
+	 * its runtime function. A package that is not used is a no-op, as in Common Lisp; an
+	 * unknown designator signals, like every other package operator here.
+	 * @param used the package names to stop using (any case, nicknames allowed)
+	 * @param targetPackage the package whose use list shrinks
+	 */
+	public void unusePackage(List<String> used, String targetPackage) {
+		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
+		if (!this.registry.contains(target)) {
+			throw new LispPackageException("No such package: " + targetPackage);
+		}
+		LispPackage pkg = this.registry.get(target);
+		List<String> useList = new ArrayList<>(pkg.useList());
+		for (String name : used) {
+			String canonical = registeredPackageName(this.registry.canonicalName(name));
+			if (!this.registry.contains(canonical)) {
+				throw new LispPackageException("No such package: " + name);
+			}
+			// The implied uses go with the package that implied them (a use of
+			// closer-common-lisp brought cl along), so the removal drops the same set
+			// the addition added.
+			useList.removeAll(withImpliedUses(canonical));
 		}
 		this.registry.define(new LispPackage(pkg.name(), List.copyOf(useList), pkg.symbols(), pkg.externals(),
 				pkg.imports(), pkg.shadows()));
@@ -843,6 +908,7 @@ public final class PackageResolver {
 		Map<String, String> imports = existing == null ? new HashMap<>() : new HashMap<>(existing.imports());
 		Map<String, String> shadowingImports = new HashMap<>();
 		Set<String> shadows = existing == null ? new HashSet<>() : new HashSet<>(existing.shadows());
+		Set<String> interned = new HashSet<>();
 		for (LispVal clause : parts.subList(2, parts.size())) {
 			if (!(clause instanceof LispCons clauseCons) || !(clauseCons.car() instanceof LispSymbol keyword)
 					|| !keyword.isKeyword()) {
@@ -929,6 +995,15 @@ public final class PackageResolver {
 				// database-error-message/-code from cl-postgres-error over the ones its
 				// use list inherits from dbi.error).
 				case ":SHADOWING-IMPORT-FROM" -> collectImportFrom(":shadowing-import-from", args, shadowingImports);
+				// (:intern name...): the names become the package's OWN symbols
+				// without being external -- the pkg::name spelling reaches them and
+				// pkg:name does not. Resolution here is textual, so owning a name is
+				// exactly what the clause has to record.
+				case ":INTERN" -> {
+					for (LispVal arg : args.subList(1, args.size())) {
+						interned.add(designator(":intern", "a symbol name", arg));
+					}
+				}
 				// Metadata: accepted for portability, not recorded anywhere.
 				case ":DOCUMENTATION", ":SIZE" -> {
 				}
@@ -974,6 +1049,7 @@ public final class PackageResolver {
 		}
 		Set<String> owned = new HashSet<>(exports);
 		owned.addAll(shadows);
+		owned.addAll(interned);
 		if (existing != null) {
 			owned.addAll(existing.symbols());
 		}
@@ -981,6 +1057,17 @@ public final class PackageResolver {
 				Map.copyOf(imports), Set.copyOf(shadows)));
 		for (String nickname : nicknames) {
 			this.registry.defineNickname(nickname, name);
+		}
+		// Tier (see .kb/packages.md, "Runtime tier"): a defpackage the COMPILE path
+		// resolves mints a read/compile-time package, because the backends bake its
+		// spellings and deleting or renaming it would orphan them. The interpreter
+		// resolves against the LIVE registry -- there is nothing baked -- so its
+		// defpackage products join the runtime tier and delete-package/rename-package
+		// accept them, which is what a program that defines a package, uses it and
+		// tears it down again expects. A defpackage MODIFYING an existing package keeps
+		// whatever tier that package already had.
+		if (!this.inProgramResolution && existing == null) {
+			this.registry.markRuntimePackage(name);
 		}
 		return quotedSymbol(name);
 	}
@@ -1208,6 +1295,10 @@ public final class PackageResolver {
 			case LispSymbol sym -> sym.name().startsWith("#:") ? sym.name().substring(2)
 					: sym.isKeyword() ? sym.name().substring(1) : sym.name();
 			case LispString str -> str.value();
+			// A CHARACTER is a string designator too (CLHS glossary), so #\A names the
+			// package -- or the symbol -- "A"; the defpackage tests spell every clause
+			// that way at least once.
+			case LispChar ch -> ch.display();
 			default -> throw new LispPackageException(context + " expects " + kind + ", got " + designator.print());
 		};
 	}
@@ -1294,8 +1385,13 @@ public final class PackageResolver {
 		}
 		if (cons.car() instanceof LispSymbol rawOp && LispNames.DEFPACKAGE.equals(operatorMember(rawOp))) {
 			// resolveCons only sees non-top-level forms (resolve() consumes the
-			// top-level directive), so a defpackage here is out of place.
-			throw new LispPackageException(LispNames.DEFPACKAGE + " is only supported as a literal top-level form");
+			// top-level directive), so this defpackage runs when its enclosing form
+			// runs: the interpreter registers it then, in the RUNTIME tier, and the
+			// clauses are literal data that must reach that registration as written --
+			// hence verbatim, with no walk into them. The compiled backends have no
+			// registry to register into and refuse the form where they meet it
+			// (Jvm/WasmExprCompiler), which is where the old hard error moved to.
+			return cons;
 		}
 		if (cons.car() instanceof LispSymbol macroOp && (LispNames.DEFMACRO.equals(operatorMember(macroOp))
 				|| LispNames.DEFINE_COMPILER_MACRO.equals(operatorMember(macroOp))

@@ -1023,9 +1023,10 @@ public final class UserMacroExpander {
 		// save/restore so a defmacro after a load resolves in the caller's package, and
 		// they are kept verbatim for the compilers' own resolution pass.
 		return LispNames.IN_PACKAGE.equals(member) || LispNames.DEFPACKAGE.equals(member)
-				|| LispNames.USE_PACKAGE.equals(member) || LispNames.EXPORT.equals(member)
-				|| LispNames.UNEXPORT.equals(member) || LispNames.IMPORT.equals(member)
-				|| LispNames.PUSH_PACKAGE.equals(member) || LispNames.POP_PACKAGE.equals(member);
+				|| LispNames.USE_PACKAGE.equals(member) || LispNames.UNUSE_PACKAGE.equals(member)
+				|| LispNames.EXPORT.equals(member) || LispNames.UNEXPORT.equals(member)
+				|| LispNames.IMPORT.equals(member) || LispNames.PUSH_PACKAGE.equals(member)
+				|| LispNames.POP_PACKAGE.equals(member);
 	}
 
 	private static boolean usesMacroexpand(LispVal form) {

@@ -3,8 +3,9 @@
 Three built-in packages: `cl`, `cl-user` (default, uses `cl`), `rontolisp` (does NOT use `cl`).
 One read/compile-time pass, `PackageResolver` (root `am.ik.rontolisp`), runs before the evaluator
 and both compilers and rewrites every form into a canonical shape. Packages come in
-two tiers: the read/compile-time tier (built-ins plus every `defpackage` -- resolved
-statically, immutable at run time) and the runtime tier (`make-package` products --
+two tiers: the read/compile-time tier (the built-ins, plus every `defpackage` the
+COMPILE path resolves -- resolved statically, immutable at run time) and the runtime
+tier (`make-package` products, and every `defpackage` the INTERPRETER resolves --
 a live table on every backend). The runtime tier is `.todo/741`'s design decision;
 its mechanics are the "Runtime tier" section below.
 
@@ -90,7 +91,12 @@ can arrive unnoticed.
 A literal, top-level directive like `in-package`. `PackageResolver.resolveDefpackage` registers a
 `LispPackage` (exports = owned + external) and replaces the form with a quoted package symbol; it
 does NOT switch the current package. It is in `CL_SPECIAL_FORMS`. Designators: keywords, bare
-symbols, strings, `#:name` (stripped in `designator`); `:documentation`/`:size` ignored.
+symbols, strings, `#:name` (stripped in `designator`) and CHARACTERS (`#\H` is the string
+designator for `"H"`, CLHS glossary -- the ANSI chapter spells every clause that way at least
+once); `:documentation`/`:size` ignored.
+- `(:intern name...)` adds the names to the package's OWN symbols without exporting them, so
+  `pkg::name` reaches them and `pkg:name` does not. Resolution here is textual, so owning the
+  name is the whole of the clause.
 - `(:shadow name...)` -> `LispPackage.shadows`; `resolveUnqualified` checks `current.shadows(name)`
   BEFORE the `isClSymbol` branch, and `evalCons` dispatches on the FULL resolved name, so a
   shadowed `pkg::defconstant` reaches the user macro, not the special form.
@@ -103,8 +109,16 @@ symbols, strings, `#:name` (stripped in `designator`); `:documentation`/`:size` 
   Required because rontolisp PRE-SEEDS its shim libraries' packages (`.kb/cffi.md`). A name that is
   another package's NICKNAME stays a hard error.
 - Hard errors: `:use`/`:import-from`/`:shadowing-import-from` of a nonexistent package;
-  `:nicknames` colliding with a DIFFERENT package/nickname; any other clause; a non-top-level
-  `defpackage`. No `:use` clause = empty use list (SBCL-like).
+  `:nicknames` colliding with a DIFFERENT package/nickname; any other clause. No `:use` clause =
+  empty use list (SBCL-like).
+- **A NON-top-level `defpackage` is left VERBATIM** by `resolveCons` -- clauses and all, since
+  they are literal data the registration reads rather than code -- and registers when its
+  enclosing form RUNS: `LispEvaluator`'s `rareOperatorExpansion` sends it back through
+  `resolve`, which is the same entry the top-level directive takes, and the product joins the
+  runtime tier. That is what makes the ANSI chapter's `set-up-packages` shape work (a defun that
+  deletes its packages and defines them again) and what `(eval '(defpackage "H"))` does. The
+  compiled backends have no registry to register into, so `Jvm`/`WasmExprCompiler` refuse the
+  form where they meet it, which is where the old resolver-time hard error moved to.
 
 ## `define-package` (uiop / mgl-pax variant)
 A literal top-level `(uiop:define-package ...)` / `(mgl-pax:define-package ...)` -- the qualifier is
@@ -188,13 +202,21 @@ computed call falls through to an interpreter-only runtime function using the SA
 | directive | resolver entry | notes |
 |---|---|---|
 | `use-package` (`LispNames.USE_PACKAGE`) | `usePackage` | replaced by `T`; only EXTERNAL symbols inherited; using a package in itself is an error |
+| `unuse-package` (`LispNames.UNUSE_PACKAGE`) | `unusePackage` | the inverse, replaced by `T`; unusing what is not used is a no-op; the implied uses go with the package that implied them |
 | `export` / `unexport` | `exportSymbols` | export also records the same re-export redirect the `:export` clause does |
 | `import` | `importSymbols` | same `imports` redirect (member -> `trueHome`) as `:import-from`; the argument keeps its QUALIFIER; an UNQUALIFIED argument is a no-op, as in CL |
 | `uiop:add-package-local-nickname` | `registerLocalNickname` | see Nicknames |
 | `uiop:remove-package-local-nickname` | `removeLocalNickname` | see Nicknames; replaced by `T`/`NIL` |
 
 All are CL FUNCTIONS, hence usable as function values. ci-spec `use-package`,
-`export-and-unexport`.
+`unuse-package`, `export-and-unexport`.
+
+**On the COMPILED backends the use-list pair has no runtime form**, and that is one decision,
+not two: a literal top-level `use-package` is consumed here, so a computed one has nothing left
+to do -- and `unuse-package` must match it or the halves disagree. Both lower through
+`LispMacroExpander.expandRuntimeExport` beside `export`/`unexport`/`import` (evaluate the
+arguments, answer `t`). `use-package` used to have no case at all there and signalled
+`undefined function`; it joined the group with `unuse-package`.
 
 **A directive changes ACCESSIBILITY, never IDENTITY. The SPELLING is the package's DECLARED
 external set.** A symbol IS its canonical spelling here, so deciding the colon from the LIVE set
@@ -352,7 +374,12 @@ by `RontoLispCliTest#{replEchoesEveryValueOnItsOwnLine,replPromptNamesTheCurrent
 - A runtime package is EMPTY with a use list and nicknames (upcased at creation,
   the reader-canonical rule). Only runtime-tier packages rename/delete;
   read/compile-time ones signal `package-error` (the baked spellings would orphan
-  otherwise). Names/nicknames colliding, unknown `:use` entries, unknown
+  otherwise) -- **and which tier a `defpackage` product lands in is decided by WHO
+  resolved it**: `resolveProgram` (the compile path, where the spellings are baked)
+  mints read/compile-time packages, a lone `resolve` (the interpreter, resolving one
+  top-level form at a time against a LIVE registry with nothing baked) mints runtime
+  ones, so an interpreted program may define a package, use it and tear it down again.
+  A `defpackage` MODIFYING an existing package keeps that package's tier. Names/nicknames colliding, unknown `:use` entries, unknown
   designators likewise. Every failure is handler-case-catchable, carrying the
   offending designator (upcased keyword, nil for an empty name) in the `package`
   slot -- the `PACKAGE-ERROR` seed carries `PACKAGE` + `FORMAT-CONTROL` /
@@ -396,10 +423,29 @@ by `RontoLispCliTest#{replEchoesEveryValueOnItsOwnLine,replPromptNamesTheCurrent
   tier (no conses); `unintern` stays unimplemented (no intern table to remove
   from -- the `unintern` ANSI hits are closed as cannot-exist, not fixed).
 
+**A runtime package has no MEMBER table, and that -- not a missing operator -- is what
+the ANSI `packages` chapter has left** (measured 2026-09-20, interpreter, suite `ca06bd9`,
+after the `unuse-package` / runtime-`defpackage` work of `.todo/904`: 173 -> 275 of 499,
+35.2% -> 55.1%, errors 204 -> 51, lost forms 30 -> 12). `.todo/904` planned
+`shadowing-import` (13 tests) and `shadow` (3) as missing operators; they are not. Every
+one of those tests opens with `(intern "X" p)` on a `make-package` product and then asks
+`(find-symbol "X" p)` to answer `nil` before and the interned symbol after -- a membership
+record rontolisp does not keep, because a symbol IS its spelling here. The same record is
+what `use-package.1`-`.23` (21 failures, they check the `:inherited` status of an interned
+symbol), `intern` (17), `find-symbol` (15), `with-package-iterator` (16) and `unintern`
+(16) want. Adding `shadow`/`shadowing-import` over the present model would move none of
+them, so they are NOT filed as operator gaps: the one item is the member table
+(`.todo/917`). The rest of what is left is small and independent: a deleted package object
+answering `nil` from `package-name` (11, unmodellable while a package IS its keyword) and
+`LispPackageException` not being a catchable `package-error` (2).
+
 ## Tests
 `PackageResolverTest` (the `::` cases, the defpackage clause/error cases, the json.lisp fixed-point
 pin, the `*package*` runtime-variable cases, the runtime-tier create/delete/rename/gate/baked-table
 cases), `LispEvaluatorTest#{packageDefaultsToClUser,packageVarIsReadWhenTheFormRunsNotWhenItIsResolved,setqOfPackageVarSwitchesTheCurrentPackage,withStandardIoSyntaxBindsPackageToClUser,runtimeMakeDeleteRenamePackage,runtimePackageFailuresSignalCatchablePackageErrors,runtimePackageEnumeration}`,
 `JvmLispCompilerTest#{compileAndRunPackageVarIsReadWhenTheFormRuns,compileAndRunRuntimePackageApi}`,
-`WasmLispCompilerIntegrationTest#{packageVarIsReadWhenTheFormRuns,runtimePackageApi}`, ci-spec
-`defpackage-use-export`, `packages-cl-user-default-uses-cl-and-the`, `runtime-package-api`. Limitations: README.
+`WasmLispCompilerIntegrationTest#{packageVarIsReadWhenTheFormRuns,runtimePackageApi}`,
+`PackageResolverTest#{unusePackageDirectiveNarrowsTheUseList,unusePackageAcceptsADesignatorListATargetAndRejectsUnknownNames,unusePackageWithAComputedDesignatorOrABadArityStaysARuntimeCall,defpackageNestedIsLeftVerbatimForTheRuntimeTier,defpackageInternClauseOwnsTheNamesWithoutExportingThem,defpackageDesignatorsAcceptCharacters,interpreterDefpackageProductsJoinTheRuntimeTier}`,
+`LispEvaluatorTest#{runtimeUnusePackageNarrowsTheUseList,nonTopLevelDefpackageRegistersARuntimePackage}`, ci-spec
+`defpackage-use-export`, `packages-cl-user-default-uses-cl-and-the`, `runtime-package-api`,
+`unuse-package`. Limitations: README.

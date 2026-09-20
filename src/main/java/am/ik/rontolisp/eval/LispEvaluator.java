@@ -1893,6 +1893,29 @@ public final class LispEvaluator {
 			this.packageResolver.usePackage(used, target);
 			return LispTrue.INSTANCE;
 		}));
+		// unuse-package: the inverse, with the same literal/computed split. The ANSI
+		// package chapter's own safely-delete-package helper drives it -- it unuses a
+		// package from every package that uses it before deleting it -- so the runtime
+		// binding carries most of the traffic.
+		this.globalEnv.defineFunction(LispNames.UNUSE_PACKAGE, new LispFunction(LispNames.UNUSE_PACKAGE, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.UNUSE_PACKAGE + " expects 1 or 2 arguments, got " + args.size());
+			}
+			List<String> used = new ArrayList<>();
+			if (args.get(0) instanceof LispCons list) {
+				for (LispVal element : list.toList()) {
+					used.add(packageNameDesignator(LispNames.UNUSE_PACKAGE, element));
+				}
+			}
+			else if (!(args.get(0) instanceof LispNil)) {
+				used.add(packageNameDesignator(LispNames.UNUSE_PACKAGE, args.get(0)));
+			}
+			String target = args.size() == 2 ? packageNameDesignator(LispNames.UNUSE_PACKAGE, args.get(1))
+					: this.packageResolver.currentPackageName();
+			this.packageResolver.unusePackage(used, target);
+			return LispTrue.INSTANCE;
+		}));
 		// export/unexport: the same split as use-package -- a literal top-level call is
 		// consumed by the PackageResolver (so it works on every backend), and these
 		// runtime bindings serve the computed calls only the interpreter can run,
@@ -3662,6 +3685,12 @@ public final class LispEvaluator {
 			case LispString str -> str.value();
 			case LispSymbol sym -> sym.name().startsWith("#:") ? sym.name().substring(2)
 					: sym.name().startsWith(":") ? sym.name().substring(1) : sym.name();
+			// CLHS glossary: a STRING DESIGNATOR is a character, a symbol or a string,
+			// and a package designator is a string designator (or a package). #\G names
+			// the package "G", and t/nil are the symbols named "T"/"NIL".
+			case LispChar ch -> ch.display();
+			case LispTrue ignored -> "T";
+			case LispNil ignored -> "NIL";
 			default ->
 				throw new LispEvalException(operator + " expects a package designator, got " + designator.print());
 		};
@@ -6857,6 +6886,16 @@ public final class LispEvaluator {
 				return builtinMacroExpansion(cons, LispMacroExpander::expandAssert);
 			case LispNames.DECLARE:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandDeclare);
+			case LispNames.DEFPACKAGE:
+				// A defpackage that is NOT a top-level form -- inside a defun body, an
+				// (eval-when ...), a macro expansion. The PackageResolver left it
+				// verbatim for exactly this moment: register it now, against the live
+				// registry, so the packages a helper function defines exist for
+				// everything evaluated after the call. resolve() is the whole
+				// registration (it is the same entry the top-level directive takes) and
+				// answers the quoted package symbol the standard returns, which is
+				// exactly the "expansion" this form has.
+				return this.packageResolver.resolve(cons);
 			case LispNames.DECLAIM:
 				// (declaim (special ...)) proclaims specialness before the form
 				// collapses to nil; other declarations remain no-ops.
@@ -8928,6 +8967,11 @@ public final class LispEvaluator {
 			// nil is the symbol named "NIL", so it designates a package by that name --
 			// which no image has, so (find-package nil) is nil rather than a type error.
 			case LispNil ignored -> "NIL";
+			// A CHARACTER is a string designator (CLHS glossary), hence a package
+			// designator: (find-package #\G) answers the package named "G". t is the
+			// symbol named "T", like nil above.
+			case LispChar ch -> ch.display();
+			case LispTrue ignored -> "T";
 			default -> throw new LispEvalException(operator + " expects a package designator, got " + val.print());
 		};
 	}

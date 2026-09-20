@@ -686,9 +686,13 @@ final class JvmExprCompiler {
 				case LispNames.INTERN -> JvmSymbolApiCompiler.compileIntern(cons, ctx, className);
 				case LispNames.FIND_SYMBOL -> JvmSymbolApiCompiler.compileFindSymbol(cons, ctx, className);
 				case LispNames.FIND_SYMBOL_STATUS -> JvmSymbolApiCompiler.compileFindSymbolStatus(cons, ctx, className);
-				// A runtime export/unexport (inside a defun body): the compiled package
-				// registry is frozen, so evaluate the arguments and yield t.
-				case LispNames.EXPORT, LispNames.UNEXPORT, LispNames.IMPORT ->
+				// A runtime export/unexport/import/use-package/unuse-package (inside a
+				// defun body): the compiled package registry is frozen, so evaluate the
+				// arguments and yield t. The use-list pair goes together -- a literal
+				// top-level use-package is consumed at compile time and has no runtime
+				// form here, so its inverse must not have one either.
+				case LispNames.EXPORT, LispNames.UNEXPORT, LispNames.IMPORT, LispNames.USE_PACKAGE,
+						LispNames.UNUSE_PACKAGE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeExport(cons), ctx, className);
 				// The package-registry queries: answered from the use table baked in at
 				// compile time (the compiled runtimes have no registry), plus the
@@ -1402,8 +1406,12 @@ final class JvmExprCompiler {
 				// Same for the dist directives: which dists ql:quickload downloads
 				// from is decided while the LoadInliner splices, so a nested/computed
 				// one has nothing left to configure by the time the program runs.
+				// defpackage is here for a different reason: a NESTED one registers a
+				// runtime-tier package on the interpreter, and a compiled program has
+				// no registry to register into -- every spelling it could affect was
+				// already baked. The resolver leaves the form for this refusal.
 				case LispNames.REQUIRE, LispNames.PROVIDE, LispNames.ASDF_DEFSYSTEM, LispNames.QL_DIST_INSTALL_DIST,
-						LispNames.QL_UPDATE_DIST ->
+						LispNames.QL_UPDATE_DIST, LispNames.DEFPACKAGE ->
 					throw new UnsupportedOperationException(
 							sym.name() + " is only supported as a literal top-level form on the compile path");
 				// A nested/computed load reached at run time: the CLI pipeline splices

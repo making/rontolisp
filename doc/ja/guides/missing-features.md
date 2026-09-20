@@ -157,10 +157,12 @@ CLOS は**静的なサブセット**です
 ## ユーザー定義パッケージ
 
 [`defpackage`](../reference/special-forms/defpackage.md) は `:use`、`:export`、
-`:nicknames`、`:import-from` をサポートする、リテラルなトップレベルの
-read/コンパイル時ディレクティブです（`:documentation`/`:size` は受理されるが
-無視されます）。`:shadow` と `:shadowing-import-from` はエラーで（シンボルの
-シャドウイングはありません）。`use-package`、
+`:nicknames`、`:import-from`、`:shadowing-import-from`、`:shadow`、`:intern` を
+サポートする read/コンパイル時ディレクティブです（`:documentation`/`:size` は
+受理されるが無視されます）。トップレベルでない `defpackage` は、それを囲む
+フォームが実行されたときにパッケージを登録します（インタープリタのみ）。
+`use-package`、
+[`unuse-package`](../reference/functions/unuse-package.md)、
 [`export`](../reference/functions/export.md)、`unexport`、
 [`import`](../reference/functions/import.md) は `in-package` と同じ読み込み/
 コンパイル時ディレクティブとして存在します: リテラルなトップレベル呼び出しは
@@ -176,9 +178,10 @@ read/コンパイル時ディレクティブです（`:documentation`/`:size` �
 を signal し、原因の指示子は
 [`package-error-package`](../reference/functions/package-error-package.md)
 で取り出せます。読込/compile
-時パッケージ(組込みと `defpackage`
+時パッケージ(組込みと、コンパイルされたプログラムの `defpackage`
 の成果物)は実行時に不変です -- 改名も削除も signal
-します(全 backend がそれに解決しているため)。問い合わせ系は両層に届きます:
+します(コンパイル済みバックエンドがそれに解決しているため)。インタープリタでは
+`defpackage` の成果物は実行時層に入るため、他と同様に改名も削除もできます。問い合わせ系は両層に届きます:
 [`packagep`](../reference/functions/packagep.md)、
 [`package-nicknames`](../reference/functions/package-nicknames.md)、
 [`find-all-symbols`](../reference/functions/find-all-symbols.md)、

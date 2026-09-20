@@ -119,14 +119,17 @@ Lisp との相違が1点あります: 最初に名前が現れた後で export �
 トップレベルディレクティブ** であり、パッケージは使用より前に、ソース順に
 定義されます。サポートされる clause は `(:use package...)`、
 `(:export symbol...)`、`(:nicknames name...)`、
-`(:import-from package symbol...)`、`(:shadow symbol...)`、および受理されるが
+`(:import-from package symbol...)`、`(:shadowing-import-from package symbol...)`、
+`(:shadow symbol...)`、`(:intern symbol...)`、および受理されるが
 無視される `(:documentation "...")`/`(:size n)` です。名前と clause の引数は
-キーワード、裸のシンボル、文字列、または uninterned シンボル(`#:name`、
+キーワード、裸のシンボル、文字列、文字(`#\H` は `"H"` を指します)、または
+uninterned シンボル(`#:name`、
 ポータブルな defpackage の慣用形)です。`:shadow` された名前はパッケージ内では
 常にそのパッケージ自身のシンボルに解決され、`cl`(や使用パッケージ)の同名
 シンボルには決して解決されません — これによりライブラリは独自の
-`digit-char-p` や `defconstant` を定義できます。`:shadowing-import-from` は
-エラーで、それ以外の clause、まだ存在しないパッケージの使用もエラーです。
+`digit-char-p` や `defconstant` を定義できます。`:intern` は export せずに
+パッケージが所有する名前を追加します。それ以外の clause、まだ存在しない
+パッケージの使用はエラーです。
 既に存在するパッケージを名前に指定した `defpackage` は、そのパッケージを
 変更します(Common Lisp のルール) — clause は既存の内容にマージされ、これに
 より rontolisp が既に seed 済みのパッケージをライブラリ側が宣言できます。
@@ -158,6 +161,7 @@ Lisp との相違が1点あります: 最初に名前が現れた後で export �
 トップレベルの `(use-package :mypkg)` は、それ以降のフォームに対して現在の
 パッケージの use リストを広げます(すべてのバックエンドで動作します)。
 
+[`unuse-package`](functions/unuse-package.md) はその逆操作で、
 [`export`](functions/export.md)、[`unexport`](functions/unexport.md)、
 [`import`](functions/import.md) も同じルールに従います。
 [`make-package`](functions/make-package.md)
@@ -169,8 +173,13 @@ Lisp との相違が1点あります: 最初に名前が現れた後で export �
 が削除します。失敗は捕捉可能な `package-error`
 を signal します。読込/compile
 時パッケージは実行時に不変です -- 改名も削除も signal
-します -- また(トップレベルでない)他のフォームの中の
-`defpackage` はエラーです。
+します。`defpackage` の成果物がどちらの層に入るかは、誰が解決したかで決まります:
+**コンパイル済み**プログラムは綴りを焼き込むためその成果物は読込/compile 時層、
+**インタープリタ**は生きたレジストリに対して解決するため実行時層に入り、改名も
+削除もできます。(トップレベルでない)他のフォームの中の `defpackage` は、その
+フォームが実行されたときに実行時層へパッケージを登録します -- インタープリタは
+これをサポートし、登録先のレジストリを持たないコンパイル済みバックエンドは
+拒否します。
 
 パッケージは読み込み/コンパイル時に(ソース順で)解決されるため、`in-package`
 はトップレベルのディレクティブです: ソース中のシンボルがどのパッケージに属するかは、その上にある `in-package` で決まり、実行時の `*package*` への `setq` では決まりません(コンパイル出力ではファイル全体が実行前に解決されます。インタプリタはトップレベルフォームに到達するたびに解決するため、そこでは実行時の代入が後続のフォームに影響します)。コンパイル出力では、実行時に読み込まれたファイルのパッケージディレクティブは処理されません。`rontolisp`
