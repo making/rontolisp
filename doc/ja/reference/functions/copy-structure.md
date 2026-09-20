@@ -8,6 +8,15 @@
 (defstruct point x y)
 (let* ((p (make-point :x 1 :y 2))
        (q (copy-structure p)))
+  (list (eq p q) (equal p q) (point-x q))) ; => (NIL T 1)
+```
+
+コピーを書き換えても元には影響しません。新しく確保されるのはスロットの格納領域だけだからです。
+
+```lisp
+(defstruct point x y)
+(let* ((p (make-point :x 1 :y 2))
+       (q (copy-structure p)))
   (setf (point-x q) 99)
-  (list (eq p q) (equal p q) (point-x p) (point-x q))) ; => (NIL T 1 99)
+  (list (point-x p) (point-x q))) ; => (1 99)
 ```
