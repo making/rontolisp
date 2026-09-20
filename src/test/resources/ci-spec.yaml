@@ -5863,7 +5863,20 @@ cases:
           (vector-push-extend 6 gv)
           (print (list (aref gv 0) (aref gv 1) (aref gv 2) (array-element-type gv)
                        (multiple-value-list (array-displacement gv))
-                       (coerce gb 'list) (length gv)))))
+                       (coerce gb 'list) (length gv))))
+        ;; adjust-array with :displaced-to on an :adjustable SOURCE turns the source
+        ;; into the displaced view IN PLACE (eq), like any other adjustable adjustment --
+        ;; the ANSI row exercises the same shape on the interpreter alone.
+        (let* ((ia (make-array 4 :adjustable t :initial-contents (list 10 20 30 40)))
+               (ib (make-array 6 :initial-contents (list 1 2 3 4 5 6)))
+               (ir (adjust-array ia 3 :displaced-to ib)))
+          (print (list (eq ia ir) (aref ia 2) (array-dimensions ia) (adjustable-array-p ia)
+                       (multiple-value-list (array-displacement ia)))))
+        (let* ((sa (make-array 3 :element-type 'character :adjustable t :initial-contents "abc"))
+               (sb (make-array 4 :element-type 'character :initial-contents "wxyz"))
+               (sr (adjust-array sa 2 :displaced-to sb)))
+          (print (list (eq sa sr) sr (stringp sr) (array-dimensions sa) (adjustable-array-p sa)
+                       (multiple-value-list (array-displacement sa))))))
       (ci-adjust-displaced)
     expected: |
       (#(7 7 7 0 0) NIL)
@@ -5878,6 +5891,8 @@ cases:
       (7 200 200 (UNSIGNED-BYTE 8) #(7 200))
       (1.5 2.5 DOUBLE-FLOAT)
       (7 5 6 (UNSIGNED-BYTE 8) (NIL 0) (7 7 5 7) 3)
+      (T 3 (3) T (#(1 2 3 4 5 6) 0))
+      (T "wx" T (2) T ("wxyz" 0))
   - name: displaced-string-views-cross-backend
     source: |
       (defun ci-string-views ()

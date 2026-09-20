@@ -19330,6 +19330,27 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void adjustArrayDisplacedToKeepsAdjustableIdentity() {
+		// adjust-array with :displaced-to on an :adjustable SOURCE turns the source
+		// into the displaced view IN PLACE (eq), like any other adjustable adjustment --
+		// matching the three compile paths, pinned by the ci-spec cross-backend twins.
+		assertThat(evalMulti("""
+				(setq a0 (make-array 7 :initial-contents (list 1 2 3 4 5 6 7)))
+				(setq a1 (make-array 5 :adjustable t :initial-contents (list 'a 'b 'c 'd 'e)))
+				(setq a2 (adjust-array a1 4 :displaced-to a0))
+				(list (eq a1 a2) (aref a1 3) (array-dimensions a1) (adjustable-array-p a1)
+				      (multiple-value-list (array-displacement a1)))
+				""").print()).isEqualTo("(T 4 (4) T (#(1 2 3 4 5 6 7) 0))");
+		assertThat(evalMulti("""
+				(setq s (make-array 3 :element-type 'character :adjustable t :initial-contents "abc"))
+				(setq tg (make-array 4 :element-type 'character :initial-contents "wxyz"))
+				(setq ss (adjust-array s 2 :displaced-to tg))
+				(list (eq s ss) ss (stringp ss) (array-dimensions s) (adjustable-array-p s)
+				      (multiple-value-list (array-displacement s)))
+				""").print()).isEqualTo("(T \"wx\" T (2) T (\"wxyz\" 0))");
+	}
+
+	@Test
 	void displacedArrayAliasesTheTargetStorage() {
 		assertThat(evalMulti("""
 				(setq base (make-array 6 :initial-element 0))
