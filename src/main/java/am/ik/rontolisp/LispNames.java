@@ -4735,6 +4735,17 @@ public final class LispNames {
 	public static final String OUTPUT_KEYWORD = ":OUTPUT";
 
 	/**
+	 * The {@code :probe} direction: {@code open} answers a file stream that is already
+	 * CLOSED (or nil when the file is not there), so a program can ask about the file
+	 * without reading it. It needs no mode of its own -- the lowering opens for input and
+	 * closes.
+	 */
+	public static final String PROBE_KEYWORD = ":PROBE";
+
+	/** The {@code :io} direction (bidirectional): not implemented on any backend. */
+	public static final String IO_KEYWORD = ":IO";
+
+	/**
 	 * The {@code :append} pseudo-direction: the NORMALIZED spelling of
 	 * {@code :direction :output :if-exists :append}, not a Common Lisp direction of its
 	 * own. {@code compiler.OpenModes.normalizeKeywordForm} and
@@ -4822,6 +4833,41 @@ public final class LispNames {
 	 * class implements it.
 	 */
 	public static final String CLEAR_OUTPUT = "CLEAR-OUTPUT";
+
+	/**
+	 * The {@code clear-input} function: discards whatever the input stream has buffered
+	 * but not yet delivered. Nothing on any backend buffers input a program could throw
+	 * away -- a read reaches the underlying source as it is made -- so this validates its
+	 * stream designator and answers nil, {@link #CLEAR_OUTPUT}'s shape on the read side.
+	 * Prelude Lisp, since there is no primitive underneath it.
+	 */
+	public static final String CLEAR_INPUT = "CLEAR-INPUT";
+
+	/**
+	 * The {@code file-string-length} function: how far writing the object would advance
+	 * {@code file-position} on the stream -- the object's UTF-8 byte length, the one
+	 * external format every backend writes.
+	 */
+	public static final String FILE_STRING_LENGTH = "FILE-STRING-LENGTH";
+
+	/**
+	 * The {@code interactive-stream-p} function: whether the stream is attached to an
+	 * interactive device. Nothing here can answer yes -- no backend distinguishes a
+	 * terminal from a pipe -- so it validates its argument and answers nil.
+	 */
+	public static final String INTERACTIVE_STREAM_P = "INTERACTIVE-STREAM-P";
+
+	/**
+	 * The {@code stream-external-format} function: {@code :utf-8} for every stream, the
+	 * one external format the reader and every writer use.
+	 */
+	public static final String STREAM_EXTERNAL_FORMAT = "STREAM-EXTERNAL-FORMAT";
+
+	/**
+	 * The {@code broadcast-stream-streams} accessor: a broadcast stream's component list,
+	 * the sibling of {@link #CONCATENATED_STREAM_STREAMS}.
+	 */
+	public static final String BROADCAST_STREAM_STREAMS = "BROADCAST-STREAM-STREAMS";
 
 	/**
 	 * The {@code listen} built-in function: whether a character/byte is immediately

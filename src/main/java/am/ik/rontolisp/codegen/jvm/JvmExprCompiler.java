@@ -785,10 +785,19 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeSynonymStream(cons), ctx, className);
 				case LispNames.OPEN -> {
 					// A failure signals a file-error (expandOpenFileErrorSignal), which
-					// unwraps a pathname designator itself. A computed option dispatches
-					// onto literal open leaves first, and each leaf lowers so.
-					LispVal checked = OpenModes.lowerRuntimeOptions(cons) == null
-							? LispMacroExpander.expandOpenFileErrorSignal(cons, ctx.mayUseInstances) : null;
+					// unwraps a pathname designator itself. A computed option -- or an
+					// :if-exists / :if-does-not-exist the mode cannot express -- lowers
+					// onto literal open LEAVES first, and each leaf comes back through
+					// this case, so that shape is already a stream value and must NOT be
+					// wrapped again: the existence guard around it answers nil or an
+					// already-wrapped closed stream, and a second wrap would turn the
+					// nil into a stream.
+					LispVal lowered = OpenModes.lowerRuntimeOptions(cons);
+					if (lowered != null) {
+						JvmExprCompiler.compileExpr(lowered, ctx, className);
+						break;
+					}
+					LispVal checked = LispMacroExpander.expandOpenFileErrorSignal(cons, ctx.mayUseInstances);
 					if (checked != null) {
 						JvmExprCompiler.compileExpr(checked, ctx, className);
 					}

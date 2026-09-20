@@ -79,6 +79,7 @@
 | `force-output` | `(force-output stream)` | 出力ストリームを書き出す (引数なしは標準出力)。nil を返す |
 | `finish-output` | `(finish-output stream)` | `force-output` と同じ操作。ここでは書き出し後の書き込みはすべて同期的 |
 | `clear-output` | `(clear-output stream)` | 出力ストリームの未書き込みバッファを捨てる。ここではその形でバッファしないため、指定子を検証して nil を返す |
+| `clear-input` | `(clear-input stream)` | 入力ストリームの未処理バッファを捨てます。ここではそのようなバッファを持たないため、指定子を検証して nil を返すだけです |
 | `listen` | `(listen stream)` | ブロックせずに入力を読めるなら `t`。Preview 1 の WASM にはこの問い合わせ手段がない |
 | `write-line` | `(write-line "hi" stream)`, `(write-line "hi")` | 文字列と改行を出力ストリーム(または標準出力)に書き込みます。文字列を返します |
 | `read-byte` | `(read-byte stream)`, `(read-byte *standard-input* nil nil)` | バイナリ入力ストリーム、または `t`/`nil` 指定子なら標準入力から 1 バイト(0-255)を読み込みます。EOF では `end-of-file` コンディションを通知し、`eof-error-p` が `nil` の場合は `eof-value` を返します |
@@ -427,6 +428,10 @@
 | `echo-stream-output-stream` | `(echo-stream-output-stream s)` | エコーストリームの出力コンポーネント |
 | `make-concatenated-stream` | `(make-concatenated-stream a b)` | コンポーネントを順に読み込む入力ストリーム。各コンポーネントは端に達すると捨てられます |
 | `concatenated-stream-streams` | `(concatenated-stream-streams s)` | 連結ストリームのコンポーネントリスト |
+| `broadcast-stream-streams` | `(broadcast-stream-streams s)` | ブロードキャストストリームのコンポーネントリスト |
+| `file-string-length` | `(file-string-length s obj)` | 文字または文字列を書き込んだときに `file-position` がどれだけ進むか。UTF-8 でのバイト長です |
+| `interactive-stream-p` | `(interactive-stream-p s)` | 常に `nil` -- 端末とパイプを区別できるバックエンドはありません |
+| `stream-external-format` | `(stream-external-format s)` | 常に `:utf-8` -- リーダーもすべてのライターもこの1つだけを使います |
 | `pathnamep` | `(pathnamep #P"/tmp/x")` | `t` — 値がパス名 (`#P"..."` が表す値) かどうか。文字列はパス名では**なく**、`(typep x 'pathname)` と一致します |
 | `input-stream-p` | `(input-stream-p s)` | 任意のストリームハンドルに `t` |
 | `output-stream-p` | `(output-stream-p s)` | 任意のストリームハンドルに `t` |

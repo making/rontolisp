@@ -79,6 +79,7 @@ page.
 | `force-output` | `(force-output stream)` | Flush an output stream (no argument = standard output). Returns nil |
 | `finish-output` | `(finish-output stream)` | The same operation as `force-output` -- every write here is synchronous once flushed |
 | `clear-output` | `(clear-output stream)` | Discard an output stream's unwritten buffer. Nothing is buffered that way here, so it validates the designator and returns nil |
+| `clear-input` | `(clear-input stream)` | Discard an input stream's undelivered buffer. Nothing is buffered that way here, so it validates the designator and returns nil |
 | `listen` | `(listen stream)` | `t` when input is immediately available without blocking; Preview 1 WASM has no such probe |
 | `write-line` | `(write-line "hi" stream)`, `(write-line "hi")` | Write the string plus a newline to an output stream (or to standard output). Returns the string |
 | `read-byte` | `(read-byte stream)`, `(read-byte *standard-input* nil nil)` | Read one byte (0-255) from a binary input stream, or from standard input for the `t`/`nil` designator. At EOF, signal an `end-of-file` condition, or return `eof-value` when `eof-error-p` is `nil` |
@@ -427,6 +428,10 @@ page.
 | `echo-stream-output-stream` | `(echo-stream-output-stream s)` | the output component of an echo stream |
 | `make-concatenated-stream` | `(make-concatenated-stream a b)` | an input stream reading its components in order, dropping each at its end of file |
 | `concatenated-stream-streams` | `(concatenated-stream-streams s)` | the component list of a concatenated stream |
+| `broadcast-stream-streams` | `(broadcast-stream-streams s)` | the component list of a broadcast stream |
+| `file-string-length` | `(file-string-length s obj)` | how far writing the character or string would move `file-position`: its UTF-8 byte length |
+| `interactive-stream-p` | `(interactive-stream-p s)` | always `nil` -- no backend distinguishes a terminal from a pipe |
+| `stream-external-format` | `(stream-external-format s)` | always `:utf-8` -- the one format the reader and every writer use |
 | `pathnamep` | `(pathnamep #P"/tmp/x")` | `t` — whether the value is a pathname (the value `#P"..."` denotes); a string is NOT one, and it agrees with `(typep x 'pathname)` |
 | `input-stream-p` | `(input-stream-p s)` | `t` for any stream handle |
 | `output-stream-p` | `(output-stream-p s)` | `t` for any stream handle |

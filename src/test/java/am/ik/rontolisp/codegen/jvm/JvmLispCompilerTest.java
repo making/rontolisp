@@ -18853,6 +18853,32 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunOpenExistenceOptions(@TempDir Path tempDir) throws Exception {
+		// The interpreter's twin is LispEvaluatorTest#openReadsTheWholeIfExistsAndIf
+		// DoesNotExistTable: :if-exists is read only on an output open, :error and nil
+		// answer instead of opening, and an appending output open does NOT create the
+		// file unless :if-does-not-exist :create says so. On the compile paths the
+		// whole table is one shared lowering over probe-file + %file-error
+		// (LispMacroExpander.lowerRuntimeOpenOptions), so there is no new runtime.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(defun p (n) (concatenate 'string "%s/" n))
+				(defun try (f) (handler-case (funcall f) (file-error () :file-error)))
+				(with-open-file (s (p "a") :direction :output) (write-string "abc" s))
+				(print (with-open-file (s (p "a") :if-exists :error) (read-line s)))
+				(print (try (lambda () (open (p "a") :direction :output :if-exists :error))))
+				(print (open (p "a") :direction :output :if-exists nil))
+				(print (try (lambda () (open (p "missing") :direction :input))))
+				(print (open (p "missing") :direction :input :if-does-not-exist nil))
+				(print (try (lambda () (open (p "missing") :direction :output :if-exists :append))))
+				(let ((probed (open (p "a") :direction :probe)))
+				  (print (list (and probed t) (open-stream-p probed) (typep probed 'file-stream))))
+				(print (open (p "missing") :direction :probe))
+				""".formatted(here)))
+			.isEqualTo("\"abc\"\n:FILE-ERROR\nNIL\n:FILE-ERROR\nNIL\n:FILE-ERROR\n(T NIL T)\nNIL");
+	}
+
+	@Test
 	void compileAndRunComputedOpenOptions(@TempDir Path tempDir) throws Exception {
 		String file = tempDir.resolve("computed.txt").toString().replace("\\", "\\\\");
 		// The options arrive as ARGUMENTS -- the shape a portable file wrapper has --

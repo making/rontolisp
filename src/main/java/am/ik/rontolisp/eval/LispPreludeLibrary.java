@@ -1259,6 +1259,10 @@ public final class LispPreludeLibrary {
 				    (dolist (%bs-x (%broadcast-stream-components %bs-s))
 				      (write-string %bs-part %bs-x)))
 				  %bs-str)
+				(defmethod rontolisp:stream-write-byte ((%bs-s %broadcast-stream) %bs-b)
+				  (dolist (%bs-x (%broadcast-stream-components %bs-s))
+				    (write-byte %bs-b %bs-x))
+				  %bs-b)
 				(defun %make-broadcast-stream (%mbs-components)
 				  (make-instance '%broadcast-stream :components %mbs-components))
 				""");
@@ -1287,6 +1291,11 @@ public final class LispPreludeLibrary {
 				  (write-string (subseq %tw-str %tw-start (or %tw-end (length %tw-str)))
 				                (%two-way-output %tw))
 				  %tw-str)
+				(defmethod rontolisp:stream-read-byte ((%tw %two-way-stream))
+				  (read-byte (%two-way-input %tw) nil :eof))
+				(defmethod rontolisp:stream-write-byte ((%tw %two-way-stream) %tw-b)
+				  (write-byte %tw-b (%two-way-output %tw))
+				  %tw-b)
 				(defun make-two-way-stream (input-stream output-stream)
 				  (make-instance '%two-way-stream :input input-stream :output output-stream))
 				""");
@@ -1329,6 +1338,16 @@ public final class LispPreludeLibrary {
 				  (write-string (subseq %es-str %es-start (or %es-end (length %es-str)))
 				                (%echo-output %es))
 				  %es-str)
+				(defmethod rontolisp:stream-read-byte ((%es %echo-stream))
+				  (let ((%es-b (read-byte (%echo-input %es) nil :eof)))
+				    (if (eq %es-b :eof)
+				        :eof
+				        (progn
+				          (write-byte %es-b (%echo-output %es))
+				          %es-b))))
+				(defmethod rontolisp:stream-write-byte ((%es %echo-stream) %es-b)
+				  (write-byte %es-b (%echo-output %es))
+				  %es-b)
 				(defun make-echo-stream (input-stream output-stream)
 				  (make-instance '%echo-stream :input input-stream :output output-stream))
 				""");
@@ -1359,12 +1378,75 @@ public final class LispPreludeLibrary {
 				                   (progn
 				                     (setq %cs-r %cs-c)
 				                     (setq %cs-done t)))))))))
+				(defmethod rontolisp:stream-read-byte ((%cs %concatenated-stream))
+				  (let ((%cs-st (%concatenated-stream-streams %cs)) (%cs-r :eof) (%cs-done nil))
+				    (do ()
+				        (%cs-done %cs-r)
+				      (cond ((null %cs-st)
+				             (setq %cs-r :eof)
+				             (setq %cs-done t))
+				            (t
+				             (let ((%cs-b (read-byte (car %cs-st) nil :eof)))
+				               (if (eq %cs-b :eof)
+				                   (setq %cs-st (cdr %cs-st))
+				                   (progn
+				                     (setq %cs-r %cs-b)
+				                     (setq %cs-done t)))))))))
 				(defun make-concatenated-stream (&rest %mcs-streams)
 				  (make-instance '%concatenated-stream :streams %mcs-streams))
 				""");
 		SOURCES.put(LispNames.CONCATENATED_STREAM_STREAMS, """
 				(defun concatenated-stream-streams (%css-s)
 				  (%concatenated-stream-streams %css-s))
+				""");
+		SOURCES.put(LispNames.BROADCAST_STREAM_STREAMS, """
+				(defun broadcast-stream-streams (%bss-s)
+				  (%broadcast-stream-components %bss-s))
+				""");
+		// clear-input: the read-side twin of clear-output. Nothing on any backend
+		// buffers input a program could throw away, so the operation validates its
+		// stream DESIGNATOR (nil and t are the standard input stream) and answers nil.
+		SOURCES.put(LispNames.CLEAR_INPUT, """
+				(defun clear-input (&optional %ci-s)
+				  (if (or (null %ci-s) (eq %ci-s t) (streamp %ci-s))
+				      nil
+				      (error 'type-error :datum %ci-s :expected-type 'stream)))
+				""");
+		// interactive-stream-p: no backend can tell a terminal from a pipe, so the
+		// answer is nil for every stream -- but the ARGUMENT is still a stream, not a
+		// designator, and a non-stream is a type-error.
+		SOURCES.put(LispNames.INTERACTIVE_STREAM_P, """
+				(defun interactive-stream-p (%isp-s)
+				  (if (streamp %isp-s)
+				      nil
+				      (error 'type-error :datum %isp-s :expected-type 'stream)))
+				""");
+		// stream-external-format: UTF-8 is the one format the reader and every writer
+		// use, on every backend, so there is nothing to select and nothing to remember.
+		SOURCES.put(LispNames.STREAM_EXTERNAL_FORMAT, """
+				(defun stream-external-format (%sef-s)
+				  (if (streamp %sef-s)
+				      :utf-8
+				      (error 'type-error :datum %sef-s :expected-type 'stream)))
+				""");
+		// file-string-length: how far writing the object would move file-position --
+		// the UTF-8 byte length, since that is what every backend writes. A character
+		// counts as the one-character string it is.
+		SOURCES.put(LispNames.FILE_STRING_LENGTH, """
+				(defun file-string-length (%fsl-s %fsl-obj)
+				  (let ((%fsl-str (if (characterp %fsl-obj) (string %fsl-obj) %fsl-obj))
+				        (%fsl-n 0))
+				    (if (streamp %fsl-s)
+				        nil
+				        (error 'type-error :datum %fsl-s :expected-type 'stream))
+				    (dotimes (%fsl-i (length %fsl-str) %fsl-n)
+				      (let ((%fsl-c (char-code (char %fsl-str %fsl-i))))
+				        (setq %fsl-n
+				              (+ %fsl-n
+				                 (cond ((< %fsl-c 128) 1)
+				                       ((< %fsl-c 2048) 2)
+				                       ((< %fsl-c 65536) 3)
+				                       (t 4))))))))
 				""");
 		// %stream-target: the ONE resolution of a stream DESIGNATOR down to the raw
 		// handle the I/O primitives act on. Two things are resolved, in this order.
@@ -3829,7 +3911,8 @@ public final class LispPreludeLibrary {
 
 	static boolean referencedBySurfaceForm(String entry, List<LispVal> program, boolean canonical) {
 		if (LispNames.MAKE_BROADCAST_STREAM_INTERNAL.equals(entry)) {
-			return callsWithArguments(program, LispNames.MAKE_BROADCAST_STREAM, canonical);
+			return callsWithArguments(program, LispNames.MAKE_BROADCAST_STREAM, canonical)
+					|| referencesName(program, LispNames.BROADCAST_STREAM_STREAMS, canonical);
 		}
 		// The composite-stream entries define a whole cluster -- the constructor, the
 		// accessors and the Gray class/methods. A program that names only an ACCESSOR
@@ -3936,8 +4019,12 @@ public final class LispPreludeLibrary {
 			// reads it is built by LispMacroExpander.lowerLoadOptions inside the
 			// expression compilers, after this pass, so the surface fact -- the option
 			// being written at all -- is what selection can see.
+			// The third is open's existence guard (:if-exists / :if-does-not-exist /
+			// :direction :probe), built by LispMacroExpander.lowerRuntimeOpenOptions in
+			// the same place and read the same way.
 			return referencesUiopMember(program, LispNames.FILE_EXISTS_P, canonical)
-					|| am.ik.rontolisp.macro.LispMacroExpander.callsLoadWithIfDoesNotExist(program);
+					|| am.ik.rontolisp.macro.LispMacroExpander.callsLoadWithIfDoesNotExist(program)
+					|| am.ik.rontolisp.macro.LispMacroExpander.callsOpenWithExistenceGuard(program);
 		}
 		if (LispNames.NAMESTRING_CL.equals(entry)) {
 			return referencesName(program, PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.NAMESTRING), canonical)

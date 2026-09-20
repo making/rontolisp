@@ -1515,7 +1515,16 @@ public final class BuiltinFunctionWrappers {
 						listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.CHARACTER_TYPE)))),
 				new LispSymbol(":IF-EXISTS"), getfWithDefault(opts, ":IF-EXISTS", new LispSymbol(":SUPERSEDE")),
 				new LispSymbol(":IF-DOES-NOT-EXIST"),
-				getfWithDefault(opts, ":IF-DOES-NOT-EXIST", new LispSymbol(":ERROR")),
+				// CL's default depends on the DIRECTION: an output open creates the file,
+				// an input open signals. Passing one fixed keyword down made the dispatch
+				// read the wrong half of the table for whichever direction it was not.
+				getfWithDefault(opts, ":IF-DOES-NOT-EXIST",
+						listToCons(List.of(new LispSymbol(LispNames.IF),
+								listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL),
+										getfWithDefault(opts, LispNames.DIRECTION_KEYWORD,
+												new LispSymbol(LispNames.INPUT_KEYWORD)),
+										new LispSymbol(LispNames.OUTPUT_KEYWORD))),
+								new LispSymbol(":CREATE"), new LispSymbol(":ERROR")))),
 				new LispSymbol(":EXTERNAL-FORMAT"),
 				getfWithDefault(opts, ":EXTERNAL-FORMAT", new LispSymbol(":UTF-8")));
 		LispVal body = LispMacroExpander.lowerRuntimeOpenOptions(LispNames.OPEN, new LispSymbol("p"), options);

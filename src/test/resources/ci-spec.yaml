@@ -9864,6 +9864,77 @@ cases:
       (T T)
       "ab"
 
+  - name: open-if-exists-if-does-not-exist-and-probe
+    # .todo/906: the whole :if-exists / :if-does-not-exist table plus :direction
+    # :probe, as ONE shared lowering over probe-file + %file-error
+    # (LispMacroExpander.lowerRuntimeOpenOptions) -- no backend learned a mode.
+    # :if-exists is read only on an output open; :error and nil answer instead of
+    # opening; an APPENDING output open does not create the file (CLHS's default
+    # :if-does-not-exist there is :error); a probe open answers a CLOSED file
+    # stream, or nil when the file is not there.
+    source: |
+      (defun ie-try (f) (handler-case (funcall f) (file-error () :file-error)))
+      (with-open-file (s "ie906.txt" :direction :output) (write-string "abc" s))
+      (print (with-open-file (s "ie906.txt" :if-exists :error) (read-line s)))
+      (print (with-open-file (s "ie906.txt" :if-exists :rename) (read-line s)))
+      (print (ie-try (lambda () (open "ie906.txt" :direction :output :if-exists :error))))
+      (print (open "ie906.txt" :direction :output :if-exists nil))
+      (print (ie-try (lambda () (open "gone906.txt" :direction :input))))
+      (print (open "gone906.txt" :direction :input :if-does-not-exist nil))
+      (print (ie-try (lambda () (open "gone906.txt" :direction :output :if-exists :append))))
+      (with-open-file (s "made906.txt" :direction :output :if-exists :append
+                         :if-does-not-exist :create)
+        (write-string "z" s))
+      (print (with-open-file (s "made906.txt") (read-line s)))
+      (let ((probed (open "ie906.txt" :direction :probe)))
+        (print (list (and probed t) (open-stream-p probed) (typep probed 'file-stream))))
+      (print (open "gone906.txt" :direction :probe))
+      (print (and (open "gone906.txt" :direction :probe :if-does-not-exist :create) t))
+      (print (and (probe-file "gone906.txt") t))
+    expected: |
+      "abc"
+      "abc"
+      :FILE-ERROR
+      NIL
+      :FILE-ERROR
+      NIL
+      :FILE-ERROR
+      "z"
+      (T NIL T)
+      NIL
+      T
+      T
+
+  - name: stream-operators-clear-input-and-friends
+    # .todo/906: clear-input / file-string-length / interactive-stream-p /
+    # stream-external-format / broadcast-stream-streams are prelude Lisp over what
+    # every backend already has, so one definition answers on all four.
+    # file-string-length is the UTF-8 byte length -- the one external format any of
+    # them writes.
+    source: |
+      (let ((o (make-string-output-stream)))
+        (print (list (clear-input)
+                     (with-input-from-string (s "abc") (clear-input s))
+                     (interactive-stream-p o)
+                     (stream-external-format o)
+                     (file-string-length o #\a)
+                     (file-string-length o "abc")
+                     (file-string-length o (string (code-char 233)))
+                     (length (broadcast-stream-streams (make-broadcast-stream o))))))
+      (with-open-file (s "bytes906.dat" :direction :output :element-type '(unsigned-byte 8))
+        (write-byte 65 s))
+      (with-open-file (a "bytes906.dat" :element-type '(unsigned-byte 8))
+        (with-open-file (b "bytes906.dat" :element-type '(unsigned-byte 8))
+          (let ((c (make-concatenated-stream a b)))
+            (print (list (read-byte c) (read-byte c) (read-byte c nil :eof))))))
+      (let ((s (open "bytes906.dat")))
+        (close s)
+        (print (list (close s) (open-stream-p s))))
+    expected: |
+      (NIL NIL NIL :UTF-8 1 3 2 1)
+      (65 65 :EOF)
+      (T NIL)
+
   - name: uiop-stream-file-contents-and-safe-io
     # .todo/359: the "give me the contents" half of uiop/stream -- write a file,
     # read it back through every slurper, and round-trip through with-output to a
