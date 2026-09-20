@@ -212,8 +212,16 @@ must stay in step, and the cross-backend pin is ci-spec
   refused at CALL time (`.todo/918`).
 - **`close` on an already-closed stream answers `t`** rather than signalling (CL, and
   SBCL): the `unwind-protect` shape `with-open-file` expands to closes a stream the body
-  may already have closed. The JVM `_closeStream` needed a null-entry guard for it --
-  without one the chain reached the `Writer` arm with null and threw.
+  may already have closed. Three of the four needed work for it. The JVM `_closeStream`
+  needed a null-entry guard -- without one the chain reached the `Writer` arm with null and
+  threw. `--component` TRAPPED (`unknown handle index`, the host refusing a second drop of
+  the same `descriptor` resource), so `adapter.wat`'s `$fd_close` now returns 0 when the
+  slot's live flag (offset 12) is already clear; regenerate `adapter.wasm` with
+  `src/wasm-component/regen.sh` after touching it. Preview 1 already ignored the EBADF.
+  **`open-stream-p` on a closed handle still answers `t` on BOTH WASM backends** -- a WASI
+  fd has no stream table behind it -- so the ci-spec case does not ask; the interpreter and
+  JVM pins are `LispEvaluatorTest#closingAnAlreadyClosedStreamAnswersTrue` and
+  `JvmLispCompilerTest#compileAndRunOpenExistenceOptions`.
 
 ## Five stream operators that are prelude Lisp over what exists
 

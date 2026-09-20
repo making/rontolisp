@@ -508,6 +508,11 @@
     (local $sl i32) (local $h i32)
     (if (i32.lt_u (local.get $fd) (i32.const 100)) (then (return (i32.const 0))))
     (local.set $sl (call $slot (local.get $fd)))
+    ;; The slot is already free: closing a CLOSED stream is not an error in CL, so it
+    ;; answers 0 like the other three backends. Dropping the descriptor a second time
+    ;; would trap in the host ("unknown handle index"), and the unwind-protect shape
+    ;; with-open-file expands to closes a stream the body may already have closed.
+    (if (i32.eqz (i32.load offset=12 (local.get $sl))) (then (return (i32.const 0))))
     (local.set $h (i32.load offset=4 (local.get $sl)))
     (if (i32.ne (local.get $h) (i32.const -1))
       (then (call $stream_drop_r (local.get $h))))
