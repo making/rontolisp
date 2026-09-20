@@ -126,6 +126,7 @@
 | `find-class` | `(find-class 'c)` | メモ化された(`eq` 安定な)クラスメタオブジェクト。`errorp` が `nil` でなければシグナル |
 | `allocate-instance` | `(allocate-instance (find-class 'c))` | すべてのスロットが未束縛の新しいインスタンス。initform も `initialize-instance` も実行しない |
 | `class-name` | `(class-name (class-of 42))` | クラスメタオブジェクトの名前シンボル |
+| `copy-structure` | `(copy-structure s)` | `s` の型を持つ新しいインスタンスをスロットの値を共有したまま生成する(浅いコピー)。`defstruct` が特定の型に対して生成する `copy-<name>` コピア関数の、型を問わない汎用版 |
 | `get` | `(get 'sym 'prop)`、`(setf (get 'sym 'prop) v)` | シンボル属性リスト(プログラム全体で 1 つの名前キーのストア) |
 | `symbol-plist` | `(symbol-plist 'sym)` | `get` が引く属性リスト全体(同じストアから)。`(setf symbol-plist)` はありません |
 | `remprop` | `(remprop 'sym 'prop)` | 同じストアから属性を 1 つ削除。存在すれば `t`、なければ `nil` |

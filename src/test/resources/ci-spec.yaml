@@ -9105,6 +9105,20 @@ cases:
       NIL
       1
       100
+  - name: copy-structure-shares-slot-values
+    source: |
+      (defstruct cps-point x y)
+      (defstruct (cps-point3 (:include cps-point)) z)
+      (setq cps-p (make-cps-point3 :x 1 :y 2 :z 3))
+      (setq cps-q (copy-structure cps-p))
+      (print (list (eq cps-p cps-q) (equal cps-p cps-q)))
+      (setf (cps-point3-z cps-q) 99)
+      (print (list (cps-point3-z cps-p) (cps-point3-z cps-q)))
+      (print (copy-structure (make-cps-point3 :x 1 :y 2 :z 3)))
+    expected: |
+      (NIL T)
+      (3 99)
+      #S(CPS-POINT3 :X 1 :Y 2 :Z 3)
   - name: defstruct-setf-places-and-first-class-accessors
     source: |
       (setf (cs-point-x cs-p) 99)

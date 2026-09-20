@@ -126,6 +126,7 @@ page.
 | `find-class` | `(find-class 'c)` | The memoized (`eq`-stable) class metaobject; signals unless `errorp` is `nil` |
 | `allocate-instance` | `(allocate-instance (find-class 'c))` | A fresh instance with every slot unbound; no initforms, no `initialize-instance` |
 | `class-name` | `(class-name (class-of 42))` | The name symbol of a class metaobject |
+| `copy-structure` | `(copy-structure s)` | A fresh instance of `s`'s type sharing its slot VALUES (shallow copy); the generic counterpart of the `copy-<name>` copier `defstruct` generates for one known type |
 | `get` | `(get 'sym 'prop)`, `(setf (get 'sym 'prop) v)` | Symbol property lists over one program-global name-keyed store |
 | `symbol-plist` | `(symbol-plist 'sym)` | The whole property list `get` indexes into, out of the same store; no `(setf symbol-plist)` |
 | `remprop` | `(remprop 'sym 'prop)` | Drop one property from the same store; `t` when it was there, `nil` when not |

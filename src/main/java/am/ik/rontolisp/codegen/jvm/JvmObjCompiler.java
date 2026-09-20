@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.jvm.ConstantPool.FieldrefConstant;
+import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
@@ -14,9 +15,10 @@ import am.ik.rontolisp.LispVal;
 
 /**
  * Compiles the instance primitives -- {@code %obj-new}, {@code %obj-ref},
- * {@code %obj-set}, {@code %obj-is}, {@code %obj-tag}, {@code %obj-p} and
- * {@code %obj-slots} -- through which every {@code defstruct}/{@code defclass}/condition
- * instance is built, read, written and type-tested.
+ * {@code %obj-set}, {@code %obj-is}, {@code %obj-tag}, {@code %obj-p}, {@code %obj-slots}
+ * and {@code copy-structure} -- through which every
+ * {@code defstruct}/{@code defclass}/condition instance is built, read, written,
+ * type-tested and (shallow-)copied.
  *
  * <p>
  * An instance is {@code Object[]{ String[] layout, v1, ..., vn }}. The {@code String[]}
@@ -176,6 +178,35 @@ final class JvmObjCompiler {
 		ctx.emitU2(ctx.objectArrayClass.index());
 		JvmEmitHelper.emitIntConst(ctx, 1 + literalIndex(args.get(2)));
 		ctx.emit(Opcode.AALOAD);
+	}
+
+	private static MethodrefConstant arraysCopyOfMethod(JvmLispCompiler.Ctx ctx) {
+		return ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8("java/util/Arrays")), ctx.cp
+			.addNameAndType(ctx.cp.addUtf8("copyOf"), ctx.cp.addUtf8("([Ljava/lang/Object;I)[Ljava/lang/Object;")));
+	}
+
+	/**
+	 * {@code (copy-structure s)} (CLHS 18.3): {@code java.util.Arrays.copyOf} over the
+	 * argument's {@code Object[]} representation -- a FRESH array carrying the same
+	 * layout constant and slot VALUES (a shallow copy). Unlike the {@code copy-<name>}
+	 * copier {@code expandDefstruct} generates per type, this argument's type is not
+	 * known until run time, so it cannot expand into a literal-tag {@code %obj-new} call
+	 * the way that copier does -- it clones the representation directly instead, the one
+	 * exception the instance-primitives file makes for a generic (not per-type) copy.
+	 */
+	static void compileCopyStructure(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		if (gateOff(ctx)) {
+			evaluateForEffectThenNil(args.get(1), ctx, className);
+			return;
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ARRAYLENGTH);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(arraysCopyOfMethod(ctx).index());
 	}
 
 	/**

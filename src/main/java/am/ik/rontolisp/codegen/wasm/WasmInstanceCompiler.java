@@ -13,9 +13,10 @@ import am.ik.wasm.Type;
 
 /**
  * Compiles the instance primitives -- {@code %obj-new}, {@code %obj-ref},
- * {@code %obj-set}, {@code %obj-is}, {@code %obj-tag}, {@code %obj-p} and
- * {@code %obj-slots} -- through which every {@code defstruct}/{@code defclass}/condition
- * instance is built, read, written and type-tested.
+ * {@code %obj-set}, {@code %obj-is}, {@code %obj-tag}, {@code %obj-p}, {@code %obj-slots}
+ * and {@code copy-structure} -- through which every
+ * {@code defstruct}/{@code defclass}/condition instance is built, read, written,
+ * type-tested and (shallow-)copied.
  *
  * <p>
  * An instance is a {@code TYPE_INSTANCE} struct: field 0 is the absolute linear address
@@ -132,6 +133,63 @@ final class WasmInstanceCompiler {
 		i32Const(ctx, literalIndex(args.get(2), LispNames.OBJ_REF));
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+	}
+
+	/**
+	 * {@code (copy-structure s)} (CLHS 18.3): a FRESH {@code TYPE_INSTANCE} struct
+	 * sharing the source's layout ADDRESS and an {@code array.copy} of its slots array --
+	 * shares slot VALUES, not slot storage, with the original. Unlike the
+	 * {@code copy-<name>} copier {@code expandDefstruct} generates per type, this
+	 * argument's type is not known until run time, so it cannot go through
+	 * {@code %obj-new}'s literal-tag path -- it reads the source's own layout address and
+	 * clones its slots array directly instead, the one case in this file building an
+	 * instance without a compile-time-known tag.
+	 */
+	static void compileCopyStructure(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		if (gateOff(ctx)) {
+			evaluateForEffectThenNil(args.get(1), ctx);
+			return;
+		}
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int objSlot = ctx.allocTemp();
+		setLocal(ctx, objSlot);
+		getLocal(ctx, objSlot);
+		pushSlots(ctx);
+		// srcSlot/dstSlot are declared eqref like every temp local here (`pushSlots`
+		// narrowed the value to $buckets only for the ONE instruction that consumed it
+		// off the stack); every later use re-narrows with `castBuckets`, exactly as
+		// `compileNew`'s `slotsSlot` does before each `ARRAY_SET`.
+		int srcSlot = ctx.allocTemp();
+		setLocal(ctx, srcSlot);
+		getLocal(ctx, srcSlot);
+		castBuckets(ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		refI31(ctx);
+		int lenSlot = ctx.allocTemp();
+		setLocal(ctx, lenSlot);
+		// dst = array.new $buckets (ref.null eq) len
+		refNull(ctx);
+		getIndex(ctx, lenSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		int dstSlot = ctx.allocTemp();
+		setLocal(ctx, dstSlot);
+		// array.copy $buckets $buckets dst 0 src 0 len
+		getLocal(ctx, dstSlot);
+		castBuckets(ctx);
+		i32Const(ctx, 0);
+		getLocal(ctx, srcSlot);
+		castBuckets(ctx);
+		i32Const(ctx, 0);
+		getIndex(ctx, lenSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_COPY);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		getLocal(ctx, objSlot);
+		pushLayoutAddress(ctx);
+		getLocal(ctx, dstSlot);
+		WasmEmitHelper.emitNewInstance(ctx);
 	}
 
 	/**

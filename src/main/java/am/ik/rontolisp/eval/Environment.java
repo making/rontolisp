@@ -4339,6 +4339,20 @@ public final class Environment implements Scope {
 			}
 			return result;
 		}));
+		// (copy-structure s): CLHS 18.3, the generic counterpart of the per-type
+		// `copy-<name>` copier `defstruct` generates -- a fresh instance of the same
+		// layout, sharing the slot VALUES (a shallow copy). Unlike the generated
+		// copier, the argument's type is not known until run time, so this cannot
+		// expand into a literal-tag `%obj-new` call the way `copy-<name>` does; it
+		// goes straight through `LispInstance.shallowCopy()` instead.
+		env.defineFunction(LispNames.COPY_STRUCTURE, new LispFunction(LispNames.COPY_STRUCTURE, args -> {
+			requireArgCount(LispNames.COPY_STRUCTURE, args, 1);
+			if (!(args.get(0) instanceof LispInstance inst)) {
+				throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+						"The value " + args.get(0).print() + " is not of type STRUCTURE-OBJECT");
+			}
+			return inst.shallowCopy();
+		}));
 		env.defineFunction(LispNames.NREVERSE, new LispFunction(LispNames.NREVERSE, args -> {
 			requireArgCount(LispNames.NREVERSE, args, 1);
 			// Destructive: rewire each cdr to its predecessor and return the former last
