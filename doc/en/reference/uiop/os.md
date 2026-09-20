@@ -143,7 +143,6 @@ generally useful:
 
 The two readers are real stream work and run everywhere `read-byte` does. The
 two parsers are upstream's bodies and seek a binary file stream with
-`file-position`, which every backend now supports for a binary file stream.
-They still signal `uiop:not-implemented-error` on the two WASM backends: the
-bodies have not been run against a real `.lnk` there, and a signal naming the
-operator is better than a silent misread.
+`file-position`, which every backend now supports for a binary file stream, so
+they run unguarded on all four backends and answer the linked pathname there
+too.

@@ -4847,21 +4847,37 @@ class WasmLispCompilerIntegrationTest {
 				(print (handler-case (uiop:getcwd) (uiop:not-implemented-error () :no-working-directory)))
 				(print (handler-case (uiop:chdir "/tmp") (uiop:not-implemented-error () :chdir-signals)))
 				;; The two .lnk parsers are upstream's bodies and seek a binary file
-				;; stream with file-position, which this backend answers nil for, so
-				;; behind the :rontolisp-wasm gate they signal naming the primitive
-				;; rather than misreading. The gate is the function's FIRST form, so no
-				;; .lnk file has to exist on disk.
-				(print (handler-case (uiop:parse-windows-shortcut "x.lnk")
-				         (uiop:not-implemented-error () :shortcut-signals)))
-				(print (handler-case (uiop:parse-file-location-info nil)
-				         (uiop:not-implemented-error () :fli-signals)))
+				;; stream with file-position, which this backend now supports for real
+				;; (.kb/read-load-streams.md, .todo/916), so they parse a real fixture
+				;; instead of signalling. The fixture is BUILT here with write-byte --
+				;; the fixed 76 / 16-byte header / flags word a shortcut needs, then a
+				;; FileLocationInfo block whose local-offset names an empty local
+				;; string and remaining-offset names "app.exe" -- rather than shipped
+				;; as a binary resource, so the same source runs unmodified on every
+				;; backend (src/test/resources/lnk/sample.lnk is the byte-identical
+				;; shipped twin the interpreter/JVM tests read from disk).
+				(with-open-file (out "x.lnk" :direction :output :if-exists :supersede
+				                     :element-type '(unsigned-byte 8))
+				  (dolist (b '(76 0 0 0
+				               1 20 2 0 0 0 0 0 192 0 0 0 0 0 0 70
+				               2 0 0 0))
+				    (write-byte b out))
+				  (dotimes (i 52) (write-byte 0 out))
+				  (dolist (b '(37 0 0 0 28 0 0 0 1 0 0 0 0 0 0 0 28 0 0 0 0 0 0 0 29 0 0 0
+				               0 97 112 112 46 101 120 101 0))
+				    (write-byte b out)))
+				(print (uiop:parse-windows-shortcut "x.lnk"))
+				(print (with-open-file (in "x.lnk" :element-type '(unsigned-byte 8))
+				         (file-position in 76)
+				         (uiop:parse-file-location-info in)))
 				""", Features.WASM), Features.WASM);
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		// --env RLENV: the override map must WIN over the host value, and the unset
-		// must hide it again.
-		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", "-W", "exceptions=y", "--env",
-				"RLENV=from-host", path("test.wasm"));
+		// must hide it again. --dir .: the fixture the program builds above is
+		// written and then reopened under the preopened working directory.
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"cd " + workDir() + " && wasmtime run -W gc -W exceptions=y --dir . --env RLENV=from-host test.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("""
 				(T T NIL T T)
@@ -4872,8 +4888,8 @@ class WasmLispCompilerIntegrationTest {
 				(NIL NIL)
 				:NO-WORKING-DIRECTORY
 				:CHDIR-SIGNALS
-				:SHORTCUT-SIGNALS
-				:FLI-SIGNALS""");
+				"app.exe"
+				"app.exe\"""");
 	}
 
 	@Test
