@@ -742,8 +742,8 @@ class PackageResolverTest {
 		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:shadowing-import-from :no-such-pkg :f))"))
 			.isInstanceOf(LispPackageException.class)
 			.hasMessageContaining("No such package");
-		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:intern :f))")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("Unsupported DEFPACKAGE clause: :INTERN");
+		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:mix :cl))")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("Unsupported DEFPACKAGE clause: :MIX");
 	}
 
 	@Test
@@ -895,9 +895,85 @@ class PackageResolverTest {
 	}
 
 	@Test
-	void defpackageNestedIsRejected() {
-		assertThatThrownBy(() -> resolve("(print (defpackage :mypkg))")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("DEFPACKAGE is only supported as a literal top-level form");
+	void defpackageNestedIsLeftVerbatimForTheRuntimeTier() {
+		// A non-top-level defpackage runs when its enclosing form runs, so the pass
+		// leaves it exactly as written -- clauses included, since they are literal
+		// data the registration reads, not code. The interpreter registers it then
+		// (LispEvaluatorTest#nonTopLevelDefpackageRegistersARuntimePackage); the
+		// compiled backends refuse it where they meet it.
+		assertThat(resolve("(print (defpackage :mypkg (:use :cl) (:export #:go)))"))
+			.isEqualTo("(PRINT (DEFPACKAGE :MYPKG (:USE :CL) (:EXPORT #:GO)))");
+	}
+
+	@Test
+	void defpackageInternClauseOwnsTheNamesWithoutExportingThem() {
+		PackageResolver resolver = new PackageResolver();
+		assertThat(resolve(resolver, "(defpackage :dspkg (:use) (:intern \"C\" \"D\") (:export \"A\"))"))
+			.isEqualTo("'DSPKG");
+		assertThat(resolver.memberStatus("DSPKG", "C")).isEqualTo(":INTERNAL");
+		assertThat(resolver.memberStatus("DSPKG", "A")).isEqualTo(":EXTERNAL");
+		assertThat(resolver.memberStatus("DSPKG", "ZZ")).isNull();
+	}
+
+	@Test
+	void defpackageDesignatorsAcceptCharacters() {
+		// CLHS glossary: a character is a string designator, so #\H names the
+		// package "H" and #\F the symbol "F" -- the spelling the defpackage tests
+		// of the ANSI suite use for every clause.
+		PackageResolver resolver = new PackageResolver();
+		assertThat(resolve(resolver, "(defpackage #\\H (:use) (:nicknames #\\J) (:export #\\F))")).isEqualTo("'H");
+		assertThat(resolver.findPackageName("J")).isEqualTo("H");
+		assertThat(resolver.memberStatus("H", "F")).isEqualTo(":EXTERNAL");
+	}
+
+	@Test
+	void interpreterDefpackageProductsJoinTheRuntimeTier() {
+		// Resolved one form at a time (the interpreter's live registry, nothing
+		// baked), so the package may be renamed and deleted again. The compile
+		// path's resolveProgram mints read/compile-time packages instead.
+		PackageResolver live = new PackageResolver();
+		resolve(live, "(defpackage :tearable)");
+		assertThat(live.deleteRuntimePackage("TEARABLE")).isEqualTo("TEARABLE");
+		PackageResolver compiled = new PackageResolver();
+		compiled.resolveProgram(LispReader.readAllFromString("(defpackage :baked)", Features.INTERPRETER));
+		assertThatThrownBy(() -> compiled.deleteRuntimePackage("BAKED")).isInstanceOf(RuntimePackageException.class)
+			.hasMessageContaining("DELETE-PACKAGE: cannot delete read/compile-time package: BAKED");
+	}
+
+	@Test
+	void unusePackageDirectiveNarrowsTheUseList() {
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :upkg (:use :cl) (:export #:foo))");
+		resolve(resolver, "(use-package :upkg)");
+		assertThat(resolve(resolver, "(foo)")).isEqualTo("(UPKG:FOO)");
+		assertThat(resolve(resolver, "(unuse-package :upkg)")).isEqualTo("T");
+		assertThat(resolve(resolver, "(foo)")).isEqualTo("(FOO)");
+		// Unusing something that is not used is a no-op, as in Common Lisp.
+		assertThat(resolve(resolver, "(unuse-package :upkg)")).isEqualTo("T");
+	}
+
+	@Test
+	void unusePackageAcceptsADesignatorListATargetAndRejectsUnknownNames() {
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :uapkg (:use :cl) (:export #:af))");
+		resolve(resolver, "(defpackage :ubpkg (:use :cl) (:export #:bf))");
+		resolve(resolver, "(defpackage :ucpkg (:use :cl :uapkg :ubpkg))");
+		resolve(resolver, "(in-package :ucpkg)");
+		assertThat(resolve(resolver, "(list (af) (bf))")).isEqualTo("(LIST (UAPKG:AF) (UBPKG:BF))");
+		resolve(resolver, "(in-package :cl-user)");
+		assertThat(resolve(resolver, "(unuse-package '(:uapkg \"UBPKG\") :ucpkg)")).isEqualTo("T");
+		resolve(resolver, "(in-package :ucpkg)");
+		assertThat(resolve(resolver, "(list (af) (bf))")).isEqualTo("(LIST (UCPKG::AF) (UCPKG::BF))");
+		assertThatThrownBy(() -> resolve("(unuse-package :nosuch)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("No such package: NOSUCH");
+	}
+
+	@Test
+	void unusePackageWithAComputedDesignatorOrABadArityStaysARuntimeCall() {
+		// Nothing to consume at compile time; and the arity is the FUNCTION's error
+		// to signal (a catchable program-error), not this pass's.
+		assertThat(resolve("(unuse-package (find-my-package))")).isEqualTo("(UNUSE-PACKAGE (FIND-MY-PACKAGE))");
+		assertThat(resolve("(unuse-package)")).isEqualTo("(UNUSE-PACKAGE)");
 	}
 
 	@Test

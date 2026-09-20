@@ -109,14 +109,16 @@ New packages are defined with [`defpackage`](special-forms/defpackage.md):
 Like `in-package`, `defpackage` is a **literal, top-level directive consumed at
 read/compile time**, so packages are defined in source order, before any use.
 The supported clauses are `(:use package...)`, `(:export symbol...)`,
-`(:nicknames name...)`, `(:import-from package symbol...)` and
-`(:shadow symbol...)`, plus `(:documentation "...")`/`(:size n)` which are
+`(:nicknames name...)`, `(:import-from package symbol...)`,
+`(:shadowing-import-from package symbol...)`, `(:shadow symbol...)` and
+`(:intern symbol...)`, plus `(:documentation "...")`/`(:size n)` which are
 accepted and ignored; the name and the clause arguments are keywords, bare
-symbols, strings, or uninterned symbols (`#:name`, the portable defpackage
-idiom). A `:shadow`ed name always resolves to the package's own symbol inside
-the package -- never to the `cl` (or any used package's) symbol of the same
-name -- so a library can define its own `digit-char-p` or `defconstant`.
-`:shadowing-import-from` is an error, and so is any other clause or using a
+symbols, strings, characters (`#\H` names `"H"`), or uninterned symbols
+(`#:name`, the portable defpackage idiom). A `:shadow`ed name always resolves to
+the package's own symbol inside the package -- never to the `cl` (or any used
+package's) symbol of the same name -- so a library can define its own
+`digit-char-p` or `defconstant`; `:intern` adds a name the package owns without
+exporting it. Any other clause is an error, and so is using a
 package that does not exist yet. A `defpackage` naming a package that already
 exists MODIFIES it (Common Lisp's rule): the clauses merge into what is there,
 which is what lets a library declare a package rontolisp has already seeded.
@@ -147,6 +149,7 @@ clause, and follows the same read/compile-time rule as `in-package`: a literal
 top-level `(use-package :mypkg)` widens the current package's use list for the
 forms that follow it, on every backend.
 
+[`unuse-package`](functions/unuse-package.md) is its inverse,
 [`export`](functions/export.md), [`unexport`](functions/unexport.md) and
 [`import`](functions/import.md) follow the same rule.
 [`make-package`](functions/make-package.md) is the runtime tier beside this
@@ -154,8 +157,14 @@ read/compile-time one: it creates an empty package (upcased name, `:use`
 entries that must already exist), [`rename-package`](functions/rename-package.md)
 renames one and [`delete-package`](functions/delete-package.md) drops one, with
 failures signalling a catchable `package-error`. Read/compile-time packages are
-immutable at run time -- renaming or deleting one signals -- and a `defpackage`
-inside another form (not top-level) is an error.
+immutable at run time -- renaming or deleting one signals. Which tier a
+`defpackage` product lands in depends on who resolved it: a **compiled** program
+bakes its spellings, so its packages are read/compile-time, while the
+**interpreter** resolves against a live registry, so its `defpackage` products
+join the runtime tier and may be renamed and deleted. A `defpackage` inside
+another form (not top-level) registers its package when that form runs, also in
+the runtime tier -- which the interpreter supports and the compiled backends
+refuse, having no registry to register into.
 
 Packages are resolved at read/compile time (in source order), so `in-package` is a top-level directive: which package a symbol in the source belongs to is decided by the `in-package` above it, not by a runtime `setq` of `*package*` (in compiled output the whole file is resolved before it runs; the interpreter resolves each top-level form as it reaches it, so a runtime assignment does affect the forms after it there). In compiled output a runtime-loaded file's package directives are not processed; the `rontolisp` package's functions (`version`, ...) are not available as first-class values (they cannot be passed to `mapcar`/`funcall`); and a `cl` symbol name must not be shadowed as a local variable inside a package that does not use `cl`.
 

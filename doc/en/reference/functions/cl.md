@@ -404,6 +404,7 @@ page.
 | `char-name` | `(char-name #\Space)` | `"Space"` -- `nil` for graphic characters |
 | `fdefinition` | `(fdefinition 'car)` | the function value, like `symbol-function` |
 | `use-package` | `(use-package :mypkg)` | add packages to a package's use list, so their external symbols are visible unqualified (a literal top-level call is a compile-time directive) |
+| `unuse-package` | `(unuse-package :mypkg)` | the inverse of `use-package`: the packages leave the use list, so their external symbols stop being visible unqualified |
 | `export` | `(export '(run))` | make symbols external in a package (a literal top-level call is a compile-time directive) |
 | `unexport` | `(unexport 'run)` | the inverse of `export`: the symbol stays present but is no longer visible unqualified |
 | `import` | `(import 'other:sym)` | make another package's symbol accessible unqualified -- the runtime form of `:import-from` (a literal top-level call is a compile-time directive) |

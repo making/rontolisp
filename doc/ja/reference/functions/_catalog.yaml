@@ -442,6 +442,7 @@ categories:
       - { slug: macroexpand, name: "macroexpand" }
       - { slug: fdefinition, name: "fdefinition" }
       - { slug: use-package, name: "use-package" }
+      - { slug: unuse-package, name: "unuse-package" }
       - { slug: export, name: "export" }
       - { slug: unexport, name: "unexport" }
       - { slug: import, name: "import" }

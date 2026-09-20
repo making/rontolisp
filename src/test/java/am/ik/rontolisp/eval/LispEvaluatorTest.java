@@ -15923,6 +15923,63 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void runtimeUnusePackageNarrowsTheUseList() {
+		// The runtime half of the pair (SBCL-checked): the use list shrinks, the
+		// used-by list with it, and unusing what is not used answers t all the same.
+		// A character designates the package "G", like every other string designator.
+		assertThat(evalMulti("""
+				(let ((pg (make-package "UUG" :use nil))
+				      (ph (make-package "UUH" :use '("UUG"))))
+				  (list (package-use-list ph)
+				        (package-used-by-list pg)
+				        (unuse-package pg ph)
+				        (package-use-list ph)
+				        (package-used-by-list pg)
+				        (unuse-package pg ph)
+				        (delete-package ph)
+				        (delete-package pg)))
+				""").print()).isEqualTo("((:UUG) (:UUH) T NIL NIL T T T)");
+		assertThat(evalMulti("""
+				(progn (make-package "G" :use nil)
+				       (make-package "H" :use '("G"))
+				       (list (unuse-package #\\G #\\H) (package-use-list "H")
+				             (delete-package "H") (delete-package "G")))
+				""").print()).isEqualTo("(T NIL T T)");
+		assertThatThrownBy(() -> evalMulti("(unuse-package)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("UNUSE-PACKAGE expects 1 or 2 arguments");
+	}
+
+	@Test
+	void nonTopLevelDefpackageRegistersARuntimePackage() {
+		// The ANSI package chapter's own set-up-packages shape: a helper defun that
+		// tears its packages down and defines them again. The defpackage forms run
+		// when the function runs, in the runtime tier, so delete-package accepts
+		// them and a second call is idempotent.
+		assertThat(evalMulti("""
+				(defun np-set-up ()
+				  (dolist (n '("NPA" "NPB"))
+				    (let ((p (find-package n)))
+				      (when p
+				        (dolist (u (package-used-by-list p)) (unuse-package p u))
+				        (delete-package p))))
+				  (defpackage "NPA" (:use) (:nicknames "NPQ") (:export "FOO"))
+				  (defpackage "NPB" (:use "NPA") (:export "BAR")))
+				(list (np-set-up)
+				      (package-name (find-package "NPQ"))
+				      (package-use-list "NPB")
+				      (np-set-up)
+				      (package-name (find-package "NPA")))
+				""").print()).isEqualTo("(NPB \"NPA\" (:NPA) NPB \"NPA\")");
+		// The same registration through a runtime (eval ...), and the product is
+		// deletable for the same reason.
+		assertThat(evalMulti("""
+				(list (package-name (eval '(defpackage "NPE")))
+				      (delete-package "NPE")
+				      (find-package "NPE"))
+				""").print()).isEqualTo("(\"NPE\" T NIL)");
+	}
+
+	@Test
 	void boundpChecksTheGlobalVariableNamespace() {
 		assertThat(evalMulti("(defvar *bp-var* 1) (boundp '*bp-var*)")).isEqualTo(LispTrue.INSTANCE);
 		assertThat(evalMulti("(boundp '*bp-nope*)")).isEqualTo(LispNil.INSTANCE);

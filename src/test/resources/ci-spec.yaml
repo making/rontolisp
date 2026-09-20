@@ -3109,6 +3109,23 @@ cases:
       (print (ci-use-hello))
     expected: |
       "hi"
+  # unuse-package is the inverse, consumed the same way: after it the bare name is the
+  # current package's own symbol again and the qualified one still reaches the definition.
+  - name: unuse-package
+    source: |
+      (defpackage :ci-unuse (:use :cl) (:export :ci-unuse-hi))
+      (in-package :ci-unuse)
+      (defun ci-unuse-hi () 7)
+      (in-package :cl-user)
+      (use-package :ci-unuse)
+      (print (ci-unuse-hi))
+      (unuse-package :ci-unuse)
+      (print (ci-unuse:ci-unuse-hi))
+      (print (unuse-package :ci-unuse))
+    expected: |
+      7
+      7
+      T
   # A runtime (export ...) is consumed by the PackageResolver like use-package, so the
   # names it publishes resolve on every backend, on either side of the definitions it
   # publishes (see export-after-the-definitions below).
