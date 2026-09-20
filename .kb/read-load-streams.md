@@ -503,7 +503,7 @@ Pinned by `LispEvaluatorTest#evalFileWriteDateAndFileLength`/`#fileLengthOverEve
 `file-length-of-a-file-of-a-known-size` and
 `filesystem-write-create-rename-delete-and-probe`.
 
-## `file-position` is REAL on the interpreter and the JVM for a BINARY file stream
+## `file-position` is REAL on ALL FOUR backends for a BINARY file stream
 
 The byte primitives advance a per-handle position and the set re-opens the file at the
 offset, so a caller can seek and read the sought bytes rather than walk front to back.
@@ -518,22 +518,71 @@ never calls `file-position` pays nothing. A CHARACTER file stream, a socket, a s
 stream, a standard stream and a closed handle answer `nil` (Common Lisp's "cannot be
 determined") on both; the JVM `#'file-position` function-value wrapper is
 `REFERENCE_GATED` like `#'file-length`, because its body lowers to the gated
-`_filePosition`. The **`--component` WASM backend** also answers real today (.todo/877):
-its fd-based reads are offset-based, so the adapter tracks a per-fd byte offset and the
-`_file_position` / `_file_position_set` runtime pair talks to it through two injected
-`file_position_get` / `file_position_set` imports (the preview1 `fd_seek` stand-in, since
-WASI 0.3 has no moveable cursor); a character stream there answers `nil` too, decided by
-a per-fd binary flag set when the stream is opened with an `(unsigned-byte 8)` element
-type. The **Preview 1** WASM backend still answers `nil` on both the query and the set
-(`nil = cannot be determined` is CL-sanctioned) -- its `fd_seek` import is `.todo/876`,
-not landed. The served-request body keeps its own REAL `file-position` through
+`_filePosition`. The served-request body keeps its own REAL `file-position` through
 `HttpRequestBodyStream` on all four.
+
+**Both WASM backends answer real too, through ONE injected import each** -- gated on the
+program naming `file-position`, so a program that does not is byte-identical to a build
+that never knew about the feature ([[wasm-import]], "This, not a new index-pinned preview1
+slot"). `WasmFilePositionCompiler` resolves the stream to its raw handle and calls the
+`_file_position` / `_file_position_set` pair (`FUNC_FILE_POSITION` after
+`FUNC_FILE_LENGTH`), which stage 8 bytes at `HEAP_PTR` with the `_open` advance-then-pop
+discipline and answer `nil` for the set of designators `_file_length` answers `nil` for,
+plus a non-zero errno.
+
+- **Preview 1** (`.todo/876`) has a real moveable cursor, so ONE appended
+  `wasi_snapshot_preview1.fd_seek` serves both directions: `(fd, 0, cur)` reads the
+  position, `(fd, n, set)` moves it. `fd_read`/`fd_write` advance that same cursor, so
+  nothing has to be tracked in-module. **The read-mode `path_open` asks for `FD_READ`
+  alone and `fd_seek` still works** -- wasmtime's preview1 does not enforce rights (the
+  `fd_filestat_get` behind `file-length` has been riding the same fd for longer); a host
+  that did would answer `ENOTCAPABLE`, which reads as `nil`, and the fix would be widening
+  the read rights to `FD_READ|FD_SEEK|FD_TELL` = 38.
+- **`--component`** (`.todo/877`) has NO cursor -- WASI 0.3 reads are offset-based -- so
+  the adapter tracks a per-fd byte offset and exports the `file_position_get` /
+  `file_position_set` pair over it. Serve implies `--component`, so the serve bridge sees
+  the same two.
+- **`--no-wasi`** has no filesystem, so the operator keeps compiling to the `nil` constant
+  and neither import nor flag table exists.
+
+**SBCL answers the byte offset for a character file stream where all four of ours answer
+`nil`** (2026-09-19: the ci-spec program's last form prints `0` under `sbcl --script`, `NIL`
+here). `nil` is CL-sanctioned -- "cannot be determined" -- and is at least the SAME answer on
+every backend, which a number would not be: a JVM `Reader` buffers and does not remember its
+path, and Preview 1's read buffer puts the descriptor ahead of the logical position. Closing
+the gap means all four learning the buffered offset at once, and it belongs with the rest of
+the `file-position` ANSI residue in `.todo/906`, not with one backend.
+
+**A CHARACTER file stream answers `nil` on both, off a per-fd binary flag byte written at
+the `open` call site** (the element type is a compile-time literal, so nothing else can
+know it). Preview 1's read buffer (`READ_CURSOR_ADDR`/`READ_END_ADDR`) puts the descriptor
+AHEAD of the logical character position, so a number there would be a wrong answer, not a
+useful one. The two backends differ in who owns the table:
+`--component` reads the adapter's (page 5, `STREAM_BINARY_FLAGS_ADDR`, indexed `fd - 100`),
+whose `path_open` resets a reused slot, so only a binary `open` writes. Preview 1 owns its
+whole linear memory and its heap grows through page 5, so the table is the module's own:
+`STREAM_BINARY_FLAGS_SLOTS` (1024) bytes at `DATA_BASE_OFFSET`, indexed by the RAW
+descriptor, with the interned-string base moved up by exactly that much. **That address has
+to be a constant known BEFORE Pass 2** -- `WasmOpenCompiler` emits the write while bodies
+compile, and the static-data END is not known until every string is interned, which is why
+it sits below the data rather than above it. Nothing seeds it: zero-initialized memory
+already means "a character stream". With no adapter to reset a slot, EVERY Preview 1 `open`
+writes its own byte (1 binary / 0 character) and a descriptor at or above the slot count
+answers `nil`; the ci-spec case re-opens the file as a character stream after every binary
+handle is closed, precisely so a stale flag on a reused descriptor prints a number.
 
 Pinned by `LispEvaluatorTest#binaryFileStreamPositionQueriesAndSeeks`,
 `JvmLispCompilerTest#compileAndRunBinaryFileStreamPositionQueriesAndSeeks`,
-`WasmLispCompilerIntegrationTest#componentFilePositionQueriesAndSeeks`,
+`WasmLispCompilerIntegrationTest#filePositionQueriesAndSeeksOnPreview1` /
+`#componentFilePositionQueriesAndSeeks` (one `FILE_POSITION_PROGRAM`),
 `compileAndRunLiteStreamBuiltins`, the Gray rewrite case and ci-spec
 `file-position-round-trips-on-a-binary-file-stream`.
+
+**Trigger**: `uiop/os:parse-windows-shortcut` / `parse-file-location-info` still signal
+`not-implemented-error` behind a `:rontolisp-wasm` feature test whose stated reason ("it
+seeks with file-position, which a WASI file stream does not support here") is now false on
+both WASM backends. Lifting the gate needs a `.lnk` fixture to verify against
+(`.todo/916`).
 
 ## A stream is a VALUE, not a handle
 **Every OPEN stream is an instance of the fixed `LispLayout.STREAM` layout** — tag `%STREAM`,

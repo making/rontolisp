@@ -933,6 +933,41 @@ final class WasmIoRuntimeBuilder {
 	/** The 8-byte scratch {@code file_position_*} writes/reads the tracked offset in. */
 	private static final int FILEPOS_BYTES = 8;
 
+	/** preview1 {@code whence::set} -- the offset is absolute. */
+	private static final int WHENCE_SET = 0;
+
+	/** preview1 {@code whence::cur} -- the offset is relative to the fd's cursor. */
+	private static final int WHENCE_CUR = 1;
+
+	/**
+	 * Where the two {@code file-position} runtime bodies find the host call that answers
+	 * for a descriptor, and the per-fd binary-stream flags that say whether the
+	 * descriptor has a byte position at all.
+	 *
+	 * <p>
+	 * The two WASI backends reach the same answer through different calls. Preview 1 has
+	 * a real moveable cursor, so ONE injected {@code wasi_snapshot_preview1.fd_seek}
+	 * serves both directions -- {@code (fd, 0, cur)} reads it, {@code (fd, n, set)} moves
+	 * it -- and the flag table is the module's own, indexed by the raw descriptor.
+	 * {@code --component} has no cursor (WASI 0.3 reads are offset-based), so the adapter
+	 * tracks a per-fd offset and exports the {@code file_position_get} /
+	 * {@code file_position_set} pair over it, with its own flag table indexed by its own
+	 * {@code 100 + slot} numbering.
+	 *
+	 * @param fdSeek whether {@code getFunc}/{@code setFunc} name preview1's
+	 * {@code fd_seek} (one function, the four-argument shape) rather than the adapter's
+	 * {@code (fd, ptr)} pair
+	 * @param getFunc the slot-encoded function index of the query import
+	 * @param setFunc the slot-encoded function index of the set import (the same function
+	 * as {@code getFunc} under {@code fdSeek})
+	 * @param flagsAddr the base of the per-fd binary-stream flag table
+	 * @param fdBias what is subtracted from a descriptor to index that table
+	 * @param flagsSlots how many slots the table has, or {@code <= 0} for a table whose
+	 * writer bounds the index for itself (the adapter's)
+	 */
+	record FilePositionAbi(boolean fdSeek, int getFunc, int setFunc, int flagsAddr, int fdBias, int flagsSlots) {
+	}
+
 	/**
 	 * Builds the _file_length(stream) function body: the byte length of the file the
 	 * stream is open on as an exact integer, or {@code ref.null eq} (nil) when the length
@@ -1057,29 +1092,29 @@ final class WasmIoRuntimeBuilder {
 	 * position cannot be determined.
 	 *
 	 * <p>
-	 * The fd is already in hand, so the position is one {@code file_position_get} away;
-	 * on the {@code --component} backend that import is the adapter's tracked per-fd byte
-	 * offset (the preview1 {@code fd_seek} stand-in, since WASI 0.3 reads are
+	 * The fd is already in hand, so the position is one host call away: preview1's
+	 * {@code fd_seek(fd, 0, cur)} reads the descriptor's own cursor, and on the
+	 * {@code --component} backend {@code file_position_get} reads the adapter's tracked
+	 * per-fd byte offset (the {@code fd_seek} stand-in, since WASI 0.3 reads are
 	 * offset-based and have no moveable cursor). The answer is REAL here exactly as it is
 	 * on the interpreter and the JVM. What still answers nil is what genuinely has no
 	 * position, the same set {@code _file_length} answers nil for: a non-handle
 	 * designator ({@code t}, nil, an unresolved synonym), a string stream (a negative
 	 * handle), a process standard stream (below {@code FIRST_USER_HANDLE}), and anything
-	 * the host cannot address as a file -- which the import answers as a non-zero errno.
+	 * the host cannot address as a file -- which the call answers as a non-zero errno.
 	 *
 	 * <p>
 	 * The 8-byte offset is staged at {@code HEAP_PTR}, advanced then popped back, exactly
 	 * the {@code _open} / {@code _file_length} discipline (load-bearing under
 	 * {@code --component}, where the adapter may allocate through {@code cabi_realloc}
 	 * while the call runs).
-	 *
-	 * <p>
-	 * {@code getImport} is the slot-encoded function index of the injected
-	 * {@code file_position_get} import ({@code PLACEHOLDER_FUNC_BASE + ordinal}),
-	 * resolved by the {@code WasmImportInjector} post-pass.
+	 * @param abi where the host call and the per-fd binary flags live
+	 * ({@link FilePositionAbi}); its function indices are slot-encoded
+	 * ({@code PLACEHOLDER_FUNC_BASE + ordinal}), resolved by the
+	 * {@code WasmImportInjector} post-pass
 	 * @return the function body bytes
 	 */
-	static byte[] buildFilePositionBody(int getImport) {
+	static byte[] buildFilePositionBody(FilePositionAbi abi) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: STREAM=0 (ref) ; i32 locals: FD=1, OFF=2, ERR=3
@@ -1111,18 +1146,9 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.END);
 		// A CHARACTER file stream has no byte position the reader exposes (mirroring the
 		// interpreter and the JVM): the per-fd binary flag is 0 unless the stream was
-		// opened with an (unsigned-byte 8) element type.
-		getLocal(w, FD);
-		i32(w, 100);
-		w.write(Instruction.I32_SUB);
-		i32(w, WasmLispCompiler.STREAM_BINARY_FLAGS_ADDR);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		emitNil(w);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
+		// opened with an (unsigned-byte 8) element type. Preview 1 reads the raw
+		// descriptor's slot and answers nil past the end of its own table.
+		emitBinaryFlagGuard(w, abi, FD);
 		// off = align8(HEAP_PTR); HEAP_PTR advanced over it, popped back after.
 		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		i32(w, 7);
@@ -1140,11 +1166,16 @@ final class WasmIoRuntimeBuilder {
 		i32(w, FILEPOS_BYTES);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// errno = file_position_get(fd, off)
+		// errno = fd_seek(fd, 0, cur, off) / file_position_get(fd, off)
 		getLocal(w, FD);
+		if (abi.fdSeek()) {
+			w.write(Instruction.I64_CONST);
+			w.writeSignedLeb128(0);
+			i32(w, WHENCE_CUR);
+		}
 		getLocal(w, OFF);
 		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(getImport);
+		w.writeUnsignedLeb128(abi.getFunc());
 		setLocal(w, ERR);
 		// pop the staged offset
 		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
@@ -1172,15 +1203,17 @@ final class WasmIoRuntimeBuilder {
 	 * streams answer (CL's "cannot be repositioned").
 	 *
 	 * <p>
-	 * The position argument is widened through {@code _int_val} and staged at
-	 * {@code HEAP_PTR}, then handed to the injected {@code file_position_set} import (the
-	 * adapter's tracked-offset rewrite). The staged 8 bytes use the same advance-then-pop
-	 * discipline as {@link #buildFilePositionBody}.
-	 * @param setImport the slot-encoded function index of the injected
-	 * {@code file_position_set} import ({@code PLACEHOLDER_FUNC_BASE + ordinal})
+	 * The position argument is widened through {@code _int_val} and handed to the host
+	 * call: preview1's {@code fd_seek(fd, n, set, out)} takes it as an i64 operand and
+	 * writes the resulting offset to {@code out}, which is discarded; the adapter's
+	 * {@code file_position_set(fd, ptr)} reads it out of the staged 8 bytes instead.
+	 * Either way the scratch uses the same advance-then-pop discipline as
+	 * {@link #buildFilePositionBody}.
+	 * @param abi where the host call and the per-fd binary flags live
+	 * ({@link FilePositionAbi})
 	 * @return the function body bytes
 	 */
-	static byte[] buildFilePositionSetBody(int setImport) {
+	static byte[] buildFilePositionSetBody(FilePositionAbi abi) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: STREAM=0 (ref), POS=1 (ref) ; i32 locals: FD=2, OFF=3, ERR=4
@@ -1211,17 +1244,7 @@ final class WasmIoRuntimeBuilder {
 		// A CHARACTER file stream cannot be repositioned through a byte offset (mirroring
 		// the interpreter and the JVM): the per-fd binary flag is 0 unless the stream was
 		// opened with an (unsigned-byte 8) element type.
-		getLocal(w, FD);
-		i32(w, 100);
-		w.write(Instruction.I32_SUB);
-		i32(w, WasmLispCompiler.STREAM_BINARY_FLAGS_ADDR);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		emitNil(w);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
+		emitBinaryFlagGuard(w, abi, FD);
 		// off = align8(HEAP_PTR); HEAP_PTR advanced over it, popped back after.
 		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		i32(w, 7);
@@ -1239,17 +1262,25 @@ final class WasmIoRuntimeBuilder {
 		i32(w, FILEPOS_BYTES);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// mem_i64[off] = _int_val(pos)
-		getLocal(w, OFF);
-		getLocal(w, POS);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
-		w.write(Instruction.I64_STORE, 0x03, 0x00);
-		// errno = file_position_set(fd, off)
+		if (!abi.fdSeek()) {
+			// mem_i64[off] = _int_val(pos)
+			getLocal(w, OFF);
+			getLocal(w, POS);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+			w.write(Instruction.I64_STORE, 0x03, 0x00);
+		}
+		// errno = fd_seek(fd, _int_val(pos), set, off) / file_position_set(fd, off)
 		getLocal(w, FD);
+		if (abi.fdSeek()) {
+			getLocal(w, POS);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+			i32(w, WHENCE_SET);
+		}
 		getLocal(w, OFF);
 		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(setImport);
+		w.writeUnsignedLeb128(abi.setFunc());
 		setLocal(w, ERR);
 		// pop the staged offset
 		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
@@ -1266,6 +1297,43 @@ final class WasmIoRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_T_SYM);
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	/**
+	 * Returns nil from the enclosing body unless the descriptor in {@code fdLocal} was
+	 * opened with an {@code (unsigned-byte 8)} element type. A descriptor past the end of
+	 * a bounded table is treated as a character stream: the flag was never written for
+	 * it, so nil -- "cannot be determined" -- is the only answer the module can stand
+	 * behind.
+	 */
+	private static void emitBinaryFlagGuard(WasmWriter w, FilePositionAbi abi, int fdLocal) {
+		if (abi.flagsSlots() > 0) {
+			emitFlagIndex(w, abi, fdLocal);
+			i32(w, abi.flagsSlots());
+			w.write(Instruction.I32_GE_U);
+			w.write(Instruction.IF, 0x40);
+			emitNil(w);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+		}
+		emitFlagIndex(w, abi, fdLocal);
+		i32(w, abi.flagsAddr());
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+	}
+
+	/** The descriptor's index into the per-fd binary-stream flag table. */
+	private static void emitFlagIndex(WasmWriter w, FilePositionAbi abi, int fdLocal) {
+		getLocal(w, fdLocal);
+		if (abi.fdBias() != 0) {
+			i32(w, abi.fdBias());
+			w.write(Instruction.I32_SUB);
+		}
 	}
 
 	private static void emitNil(WasmWriter w) {

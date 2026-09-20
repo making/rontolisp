@@ -770,7 +770,8 @@ final class WasmAsyncEmit {
 			// --optimize=size while the same form in a defun did not.
 			.optimize(proto.optimize)
 			.component(proto.component)
-			.componentFilePosition(proto.componentFilePosition)
+			.filePosition(proto.filePosition)
+			.binaryFlagsAddr(proto.binaryFlagsAddr)
 			.noWasi(proto.noWasi)
 			.hostRandom(proto.hostRandom)
 			.hostFetch(proto.hostFetch)

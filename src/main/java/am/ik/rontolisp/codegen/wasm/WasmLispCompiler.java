@@ -2630,6 +2630,21 @@ public final class WasmLispCompiler implements LispCompiler {
 	// (WasmOpenCompiler), and read by the _file_position query/set. Component mode only.
 	static final int STREAM_BINARY_FLAGS_ADDR = 0x51a00;
 
+	// Preview 1's twin of that table. It cannot live at a fixed page-5 address: a
+	// Preview 1 module owns its whole linear memory and its bump heap grows through
+	// page 5, and there is no adapter to reset a slot on path_open. So the table sits
+	// directly above the fixed low cells, at DATA_BASE_OFFSET, and the interned-string
+	// data base moves up by exactly this many bytes -- an address known BEFORE any body
+	// compiles, which is what WasmOpenCompiler needs (the static-data END is not known
+	// until Pass 2 has interned every string). One byte per WASI fd indexed by the RAW
+	// descriptor, because a preview1 fd is whatever the host hands back (4, 5, ...
+	// beside the preopens) and not the adapter's 100 + slot; a descriptor at or above
+	// the slot count answers nil rather than writing past the table. Nothing seeds it:
+	// zero-initialized memory already means "a character stream". Only a Preview 1
+	// program that calls file-position reserves it -- every other module keeps
+	// DATA_BASE_OFFSET as its data base and stays byte-identical.
+	static final int STREAM_BINARY_FLAGS_SLOTS = 1024;
+
 	// Minimum base address of the growable runtime intern table (8-byte (offset,len)
 	// records appended by _intern for symbols first seen at runtime). The actual base
 	// is computed per program -- max(this, 16-aligned end of the static string
@@ -3110,12 +3125,19 @@ public final class WasmLispCompiler implements LispCompiler {
 		// command line at all -- the expression compiler answers nil there, the way it
 		// does for %host-getcwd.
 		boolean usesHostArgv = !this.component && !this.noWasi && programUsesSymbol(program, LispNames.HOST_ARGV);
-		// file-position only needs the two injected file_position_* imports on the
-		// --component backend (the Preview 1 host would need the fd_seek import, todo
-		// 876); gated on both so a program that never calls file-position imports
-		// nothing new and every byte stays where it is.
-		boolean usesFilePosition = this.component && !this.noWasi
-				&& programUsesSymbol(program, LispNames.FILE_POSITION);
+		// file-position rides one injected import on either WASI backend -- the
+		// adapter's file_position_get / file_position_set pair under --component, the
+		// real wasi_snapshot_preview1.fd_seek under Preview 1 -- gated on the program
+		// naming file-position, so a program that never calls it imports nothing new,
+		// reserves no per-fd flag table and keeps every byte where it was. A --no-wasi
+		// module has no filesystem at all, so the operator keeps answering the nil
+		// constant there.
+		boolean usesFilePosition = !this.noWasi && programUsesSymbol(program, LispNames.FILE_POSITION);
+		// Preview 1 answers through fd_seek and carries its own per-fd binary-stream
+		// flag table below the static data (STREAM_BINARY_FLAGS_SLOTS); --component
+		// answers through the adapter, which owns both the tracked offset and the flag
+		// table.
+		boolean preview1FilePosition = usesFilePosition && !this.component;
 		// Whether anything the module emits can reach the WASI environ_get / args_get
 		// calls, and with them the env/argv scratch block. _getenv is emitted
 		// unconditionally but is only CALLED for %host-getenv, and only off
@@ -3789,7 +3811,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the serve cabi window); a --no-wasi reactor has no adapter and owns its whole
 		// memory, so it keeps the Preview 1 base and stops reserving 384 KB of address
 		// space per instance.
-		int dataBase = this.component && !this.noWasi ? COMPONENT_DATA_BASE_OFFSET : DATA_BASE_OFFSET;
+		// A Preview 1 file-position program reserves its per-fd binary-stream flag table
+		// between the fixed low cells and the string data, so the base moves up by the
+		// table's size and the table's own address stays the constant every emitted body
+		// (and every `open` call site) can name without knowing where the static data
+		// ends. See STREAM_BINARY_FLAGS_SLOTS.
+		int binaryFlagsAddr = preview1FilePosition ? DATA_BASE_OFFSET : -1;
+		int dataBase = this.component && !this.noWasi ? COMPONENT_DATA_BASE_OFFSET
+				: DATA_BASE_OFFSET + (preview1FilePosition ? STREAM_BINARY_FLAGS_SLOTS : 0);
 		StringTable stringTable = new StringTable(dataBase, this.usesEqualpHashTables, this.usesIdentityHashTables);
 		StringTable.StringEntry tSymEntry = stringTable.addBodyString("T");
 		// The _type_err_int/_type_err_num/_type_err_real message prefixes, interned
@@ -3995,7 +4024,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			// compilers see the Preview 1 answer; ctx.noWasi tells the reject sites the
 			// reason so their messages name the actual conflict.
 			.component(this.component && !this.noWasi)
-			.componentFilePosition(usesFilePosition)
+			.filePosition(usesFilePosition)
+			.binaryFlagsAddr(binaryFlagsAddr)
 			.noWasi(this.noWasi)
 			.reactorComponent(this.component && this.noWasi)
 			.hostRandom(this.hostRandom)
@@ -4857,8 +4887,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// The type entries appended after the fixed types, the export wrappers and the
 		// import signatures: the component string-ABI block, or (mutually exclusive,
 		// since
-		// the host arena is non-component only) the two arena signatures.
-		int abiTypeBase = fixedTypeCount() + exportPlans.size() + importSlots.size();
+		// the host arena is non-component only) the two arena signatures. Preview 1's
+		// fd_seek signature slots in between -- it is the one appended import whose
+		// shape (i32, i64, i32, i32) -> i32 no fixed type already has, so it is also the
+		// one that has to be counted here.
+		int fdSeekTypeIndex = preview1FilePosition ? fixedTypeCount() + exportPlans.size() + importSlots.size() : -1;
+		int abiTypeBase = fixedTypeCount() + exportPlans.size() + importSlots.size() + (preview1FilePosition ? 1 : 0);
 		int abiFuncBase = exportHelperBase + helperFuncCount + exportPlans.size();
 		int cabiReallocFuncIndex = abiFuncBase;
 		int cabiPostFuncBase = cabiReallocFuncIndex + 1;
@@ -4906,21 +4940,32 @@ public final class WasmLispCompiler implements LispCompiler {
 			hostImports
 				.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "args_get", TYPE_INTERN));
 		}
-		// file-position: the two adapter exports the _file_position runtime calls. Both
-		// are
-		// (i32, i32) -> i32 -- the fd plus a memory pointer to the tracked 8-byte offset,
-		// the fd_filestat_get shape -- so each is TYPE_INTERN and no type entry is
-		// appended. Component only, gated on the program using file-position (see
-		// usesFilePosition above); when absent the runtime bodies are stubs and nothing
-		// is
-		// injected.
+		// file-position rides the same ordinal space LAST, for the same reason
+		// --host-random and %host-argv do. Under --component it is the two adapter
+		// exports the _file_position runtime calls, both (i32, i32) -> i32 -- the fd plus
+		// a memory pointer to the tracked 8-byte offset, the fd_filestat_get shape -- so
+		// each is TYPE_INTERN and no type entry is appended. Under Preview 1 it is ONE
+		// import, the real wasi_snapshot_preview1 fd_seek, which serves both directions:
+		// (fd, 0, cur) reads the descriptor's cursor and (fd, n, set) moves it. Its
+		// (i32, i64, i32, i32) -> i32 shape is the one appended type (fdSeekTypeIndex
+		// above). Adding it here rather than as a SIXTEENTH index-pinned preview1 slot is
+		// what keeps IMPORT_FUNC_COUNT, every emitted function index, the --no-wasi stub
+		// block and both component adapter blobs untouched.
+		// Gated on the program using file-position (see usesFilePosition above); when
+		// absent the runtime bodies are nil stubs and nothing is injected.
 		final int @Nullable [] filePosOrdinals = usesFilePosition
-				? new int[] { hostImports.size(), hostImports.size() + 1 } : null;
+				? new int[] { hostImports.size(), hostImports.size() + (preview1FilePosition ? 0 : 1) } : null;
 		if (filePosOrdinals != null) {
-			hostImports.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "file_position_get",
-					TYPE_INTERN));
-			hostImports.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "file_position_set",
-					TYPE_INTERN));
+			if (preview1FilePosition) {
+				hostImports.add(
+						new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "fd_seek", fdSeekTypeIndex));
+			}
+			else {
+				hostImports.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "file_position_get",
+						TYPE_INTERN));
+				hostImports.add(new am.ik.wasm.WasmImportInjector.HostImport(WASI_PREVIEW1_MODULE, "file_position_set",
+						TYPE_INTERN));
+			}
 		}
 
 		// Which funcIds the arity ladders (and the name registry below) must carry a case
@@ -6148,6 +6193,15 @@ public final class WasmLispCompiler implements LispCompiler {
 				// share a slot, so its type is written once.
 				for (ImportSlot slot : importSlots) {
 					types.addFunc(slot.params(), slot.results());
+				}
+				// Preview 1's fd_seek(fd, offset, whence, newoffset_ptr) -> errno, the
+				// one
+				// appended import whose shape no fixed type already carries. Emitted only
+				// for a Preview 1 program that calls file-position, so every other
+				// module's type section -- and the abiTypeBase computed over it -- is
+				// untouched.
+				if (preview1FilePosition) {
+					types.addFunc(new Type[] { Type.I32, Type.I64, Type.I32, Type.I32 }, new Type[] { Type.I32 });
 				}
 				// Component string-ABI signatures (todo 92 Tier 2), from abiTypeBase:
 				// cabi_realloc, one cabi_post_* per flat-result signature, then one
@@ -7442,16 +7496,20 @@ public final class WasmLispCompiler implements LispCompiler {
 				// file-length body (FUNC_FILE_LENGTH), over the fd_filestat_get import.
 				code.addFunction(WasmIoRuntimeBuilder.buildFileLengthBody());
 				// file-position bodies (FUNC_FILE_POSITION / FUNC_FILE_POSITION_SET),
-				// over
-				// the injected file_position_get / file_position_set imports; a nil
-				// double-stubbed pair unless --component and the program calls
-				// file-position, since elsewhere the operator compiles to the nil
-				// constant
-				// and nothing calls them.
-				code.addFunction(filePosOrdinals == null ? WasmEmitHelper.buildNilBody() : WasmIoRuntimeBuilder
-					.buildFilePositionBody(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + filePosOrdinals[0]));
-				code.addFunction(filePosOrdinals == null ? WasmEmitHelper.buildNilBody() : WasmIoRuntimeBuilder
-					.buildFilePositionSetBody(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + filePosOrdinals[1]));
+				// over the injected preview1 fd_seek or the adapter's
+				// file_position_get / file_position_set pair; a nil double-stubbed pair
+				// unless the program calls file-position under WASI, since elsewhere the
+				// operator compiles to the nil constant and nothing calls them.
+				WasmIoRuntimeBuilder.@Nullable FilePositionAbi filePosAbi = filePosOrdinals == null ? null
+						: new WasmIoRuntimeBuilder.FilePositionAbi(preview1FilePosition,
+								WasmImportCompiler.PLACEHOLDER_FUNC_BASE + filePosOrdinals[0],
+								WasmImportCompiler.PLACEHOLDER_FUNC_BASE + filePosOrdinals[1],
+								preview1FilePosition ? binaryFlagsAddr : STREAM_BINARY_FLAGS_ADDR,
+								preview1FilePosition ? 0 : 100, preview1FilePosition ? STREAM_BINARY_FLAGS_SLOTS : -1);
+				code.addFunction(filePosAbi == null ? WasmEmitHelper.buildNilBody()
+						: WasmIoRuntimeBuilder.buildFilePositionBody(filePosAbi));
+				code.addFunction(filePosAbi == null ? WasmEmitHelper.buildNilBody()
+						: WasmIoRuntimeBuilder.buildFilePositionSetBody(filePosAbi));
 				// arithmetic non-number landing bodies (FUNC_TYPE_ERR_INT,
 				// FUNC_TYPE_ERR_NUM): a catchable $lisp-cond throw in EH mode, a bare
 				// `unreachable` outside it (no tag section exists there, and referencing
@@ -9260,13 +9318,24 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean component = false;
 
 		/**
-		 * True when the program is a {@code --component} build that calls
+		 * True when the program is a WASI build (either backend) that calls
 		 * {@code file-position} at all -- the one fact {@code WasmOpenCompiler} needs to
-		 * mark a binary (unsigned-byte 8) file stream's per-fd flag, which the
-		 * {@code _file_position} runtime then reads to answer nil for a character stream
-		 * (mirroring the interpreter and the JVM).
+		 * mark a file stream's per-fd binary flag, which the {@code _file_position}
+		 * runtime then reads to answer nil for a character stream (mirroring the
+		 * interpreter and the JVM). False under {@code --no-wasi}, where the operator
+		 * compiles to the nil constant.
 		 */
-		boolean componentFilePosition = false;
+		boolean filePosition = false;
+
+		/**
+		 * The base address of the per-fd binary-stream flag table on the PREVIEW 1
+		 * backend, or {@code -1} elsewhere ({@code --component} reads the adapter's own
+		 * table at {@link WasmLispCompiler#STREAM_BINARY_FLAGS_ADDR}, which the adapter's
+		 * {@code path_open} resets, and a {@code --no-wasi} module has no table at all).
+		 * Preview 1 indexes it by the RAW descriptor and has no adapter to reset a reused
+		 * slot, so every {@code open} writes its own byte.
+		 */
+		int binaryFlagsAddr = -1;
 
 		/**
 		 * True under {@code --no-wasi} (Preview 1 reactor or reactor component): the WASI
@@ -9932,7 +10001,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.dynamic = builder.dynamic;
 			this.optimize = builder.optimize;
 			this.component = builder.component;
-			this.componentFilePosition = builder.componentFilePosition;
+			this.filePosition = builder.filePosition;
+			this.binaryFlagsAddr = builder.binaryFlagsAddr;
 			this.noWasi = builder.noWasi;
 			this.reactorComponent = builder.reactorComponent;
 			this.hostRandom = builder.hostRandom;
@@ -10051,7 +10121,9 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private boolean component = false;
 
-			private boolean componentFilePosition = false;
+			private boolean filePosition = false;
+
+			private int binaryFlagsAddr = -1;
 
 			private boolean noWasi = false;
 
@@ -10289,8 +10361,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				return this;
 			}
 
-			Builder componentFilePosition(boolean componentFilePosition) {
-				this.componentFilePosition = componentFilePosition;
+			Builder filePosition(boolean filePosition) {
+				this.filePosition = filePosition;
+				return this;
+			}
+
+			Builder binaryFlagsAddr(int binaryFlagsAddr) {
+				this.binaryFlagsAddr = binaryFlagsAddr;
 				return this;
 			}
 
