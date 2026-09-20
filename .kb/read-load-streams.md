@@ -639,11 +639,16 @@ Pinned by `LispEvaluatorTest#binaryFileStreamPositionQueriesAndSeeks`,
 `compileAndRunLiteStreamBuiltins`, the Gray rewrite case and ci-spec
 `file-position-round-trips-on-a-binary-file-stream`.
 
-**Trigger**: `uiop/os:parse-windows-shortcut` / `parse-file-location-info` still signal
-`not-implemented-error` behind a `:rontolisp-wasm` feature test whose stated reason ("it
-seeks with file-position, which a WASI file stream does not support here") is now false on
-both WASM backends. Lifting the gate needs a `.lnk` fixture to verify against
-(`.todo/916`).
+**`uiop/os:parse-windows-shortcut` / `parse-file-location-info` run unguarded on all four
+backends (`.todo/916`)**: the `:rontolisp-wasm` gate they used to open with was checking a
+premise this section already disproves, so both parsers now navigate the `.lnk` with
+`file-position` on every backend, WASI included. Pinned against a fixture built at run time
+with `write-byte` (no shipped binary needed for the WASM leg) by
+`WasmLispCompilerIntegrationTest#uiopOsHostIdentityAndGetenvOverrideCompileAndRun`, and
+against the shipped `src/test/resources/lnk/sample.lnk` by
+`LispEvaluatorTest#evalUiopOsWorkingDirectoryAndTheWindowsShortcutFamily`,
+`JvmLispCompilerTest#compileAndRunUiopOsHostIdentityAndGetenvOverride` and ci-spec
+`uiop-os-host-identity`.
 
 ## A stream is a VALUE, not a handle
 **Every OPEN stream is an instance of the fixed `LispLayout.STREAM` layout** — tag `%STREAM`,

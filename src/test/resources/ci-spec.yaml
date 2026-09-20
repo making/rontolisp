@@ -16424,10 +16424,10 @@ cases:
       (print (handler-case (if (pathnamep (uiop:getcwd)) :working-directory :not-a-pathname)
                (error () :no-working-directory)))
       ;; The two octet readers are real; the two .lnk parsers are upstream's bodies
-      ;; and seek a binary file stream with file-position, which the host backends
-      ;; support -- so over the staged x.lnk (CorpusFixtures.stageLnkFixture) they
-      ;; answer upstream's structure -- but both WASI backends still answer nil for
-      ;; file-position, so there they signal instead of misreading.
+      ;; and seek a binary file stream with file-position, which every backend
+      ;; supports now (.todo/916) -- so over the staged x.lnk
+      ;; (CorpusFixtures.stageLnkFixture) they all answer upstream's structure,
+      ;; WASI included.
       (print (handler-case (uiop:parse-windows-shortcut "x.lnk")
                (error () :not-implemented)))
     expected: |
@@ -16457,7 +16457,7 @@ cases:
         NIL
         :CHDIR-SIGNALS
         :NO-WORKING-DIRECTORY
-        :NOT-IMPLEMENTED
+        "app.exe"
   - name: namestring-halves-nstring-case-and-environment-enquiry
     source: |
       ;; The string-valued halves of a namestring: complements, split where
