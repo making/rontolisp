@@ -5,9 +5,13 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
@@ -98,6 +102,14 @@ class PathCitationTest {
 	/** A citation may carry a line or a range: {@code Foo.java:120-134}. */
 	private static final Pattern TRAILING_LINES = Pattern.compile(":\\d+(-\\d+)?$");
 
+	/**
+	 * A {@code .kb/README.md} index line: {@code [name.md](name.md)}. Excludes the header
+	 * paragraph's prose mentions and the "evidence" filenames -- neither is a link, so
+	 * neither carries the {@code [x](y)} shape this pattern requires.
+	 */
+	private static final Pattern KB_INDEX_LINK = Pattern
+		.compile("\\[([a-zA-Z0-9._-]+\\.md)]\\(([a-zA-Z0-9._-]+\\.md)\\)");
+
 	@Test
 	void everyCitedRepositoryPathResolves() throws IOException {
 		List<String> broken = new ArrayList<>();
@@ -171,6 +183,49 @@ class PathCitationTest {
 						+ "says an item is open.")
 				.isEmpty();
 		}
+	}
+
+	/**
+	 * {@link #everyCitedRepositoryPathResolves()} and
+	 * {@link #everyRelativeLinkInTheNotesResolves()} fail when a link points at nothing;
+	 * neither fails when a topic file has no line pointing AT it, so a file added without
+	 * an index line breaks no link and the index silently stops being an index. This pins
+	 * the other direction: a bijection between the topic files {@code .kb} actually has
+	 * and the files {@code .kb/README.md} links, in one assertion, both ways.
+	 */
+	@Test
+	void kbReadmeIndexesEveryTopicFileExactlyOnce() throws IOException {
+		List<String> topicFiles = filesUnder(Path.of(".kb"), ".md").stream()
+			.map(path -> path.getFileName().toString())
+			.filter(name -> !name.equals("README.md"))
+			.sorted()
+			.toList();
+
+		List<String> linkedTopics = new ArrayList<>();
+		Matcher matcher = KB_INDEX_LINK.matcher(Files.readString(Path.of(".kb", "README.md")));
+		while (matcher.find()) {
+			String linkText = matcher.group(1);
+			String target = matcher.group(2);
+			assertThat(target).as("Index link text must name the same file as its target: " + matcher.group())
+				.isEqualTo(linkText);
+			linkedTopics.add(target);
+		}
+
+		Set<String> distinctLinked = new HashSet<>(linkedTopics);
+		List<String> unlisted = topicFiles.stream().filter(name -> !distinctLinked.contains(name)).toList();
+		List<String> dangling = distinctLinked.stream().filter(name -> !topicFiles.contains(name)).sorted().toList();
+		Map<String, Long> occurrences = linkedTopics.stream()
+			.collect(Collectors.groupingBy(name -> name, Collectors.counting()));
+		List<String> duplicated = occurrences.entrySet()
+			.stream()
+			.filter(entry -> entry.getValue() > 1)
+			.map(Map.Entry::getKey)
+			.sorted()
+			.toList();
+
+		assertThat(unlisted).as("Topic file(s) under .kb/ with no [name.md](name.md) line in .kb/README.md").isEmpty();
+		assertThat(dangling).as("Index line(s) in .kb/README.md pointing at a file .kb/ does not have").isEmpty();
+		assertThat(duplicated).as("Topic file(s) indexed by more than one line in .kb/README.md").isEmpty();
 	}
 
 	@Test
