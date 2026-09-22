@@ -178,14 +178,12 @@ final class WasmSymbolApiCompiler {
 			WasmExprCompiler.compileExpr(LispMacroExpander.computedFindSymbol(parts.get(1)), ctx);
 			return;
 		}
-		String name = str.value();
-		boolean known = PackageRegistry.isClSymbol(name) || (!name.isEmpty() && name.charAt(0) == ':')
-				|| ctx.userDefunNames.contains(name);
-		if (known) {
-			WasmEmitHelper.compileStringLiteral(name, ctx);
+		LispVal found = LispMacroExpander.foldLiteralFindSymbol(str.value(), ctx.userDefunNames);
+		if (found instanceof LispSymbol sym) {
+			WasmEmitHelper.compileStringLiteral(sym.name(), ctx);
 		}
 		else {
-			emitNil(ctx);
+			WasmExprCompiler.compileExpr(found, ctx);
 		}
 	}
 

@@ -13082,6 +13082,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunSymbolBuildersAnswerTheTAndNilSingletons() throws Exception {
+		// t and nil are singletons, not symbols spelled "T" / "NIL": every operator that
+		// answers a symbol by NAME maps those spellings back, as the interpreter does.
+		// The WasmLispCompilerIntegrationTest twin pins the same lines; every one is
+		// SBCL's.
+		assertThat(compileAndRun(am.ik.rontolisp.TAndNilSingletonCorpus.SOURCE))
+			.isEqualTo(am.ik.rontolisp.TAndNilSingletonCorpus.EXPECTED);
+	}
+
+	@Test
 	void compileAndRunRuntimePackageApi() throws Exception {
 		// The runtime tier (.todo/741) on the JVM backend: the prelude defuns over
 		// the injected baked table plus the mutable runtime table answer exactly

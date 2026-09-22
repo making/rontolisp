@@ -128,8 +128,15 @@ final class WasmSymbolApiRuntimeBuilder {
 
 	/**
 	 * {@code _intern_sym(str) -> (ref null eq)}: canonical symbol via {@code _intern}.
+	 * The spelling {@code NIL} names the {@code nil} singleton -- the null ref, not a
+	 * symbol struct -- so the interned offset is compared against NIL's, the way the
+	 * reader's symbol path does; {@code T} needs no arm, since {@code t} IS the interned
+	 * symbol {@code "T"}.
+	 * @param nilOffset the string-table offset of {@code NIL} in the runtime intern
+	 * table, or -1 when the program never interns (the body is then unreachable and stays
+	 * the plain canonicalization)
 	 */
-	static byte[] buildInternSym() {
+	static byte[] buildInternSym(int nilOffset) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int STR = 0, OFF = 1, LEN = 2;
@@ -164,6 +171,18 @@ final class WasmSymbolApiRuntimeBuilder {
 		get(w, LEN);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INTERN);
+		if (nilOffset >= 0) {
+			// off = _intern(...); off == NIL's offset -> the null ref
+			set(w, OFF);
+			get(w, OFF);
+			i32(w, nilOffset);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF, 0x40);
+			emitNull(w);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+			get(w, OFF);
+		}
 		get(w, LEN);
 		WasmEmitHelper.emitStrBuildCall(w);
 		w.write(Instruction.END);

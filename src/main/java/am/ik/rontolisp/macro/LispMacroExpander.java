@@ -11258,6 +11258,19 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(name)));
 	}
 
+	/**
+	 * The form evaluating to the symbol a spelling names: the spellings {@code T} and
+	 * {@code NIL} are the self-evaluating singletons, not symbols of those names; any
+	 * other is {@code (quote NAME)}.
+	 */
+	private static LispVal symbolFormOfSpelling(String name) {
+		return switch (name) {
+			case "T" -> LispTrue.INSTANCE;
+			case "NIL" -> LispNil.INSTANCE;
+			default -> quoteOf(name);
+		};
+	}
+
 	/** Builds a {@code (quote value)} form around an already-built datum. */
 	private static LispVal quotedValue(LispVal value) {
 		return listToCons(List.of(new LispSymbol(LispNames.QUOTE), value));
@@ -12810,7 +12823,7 @@ public final class LispMacroExpander {
 			// build-a-spelling deviation: nil for a name cl does not own, which is what
 			// keeps this value and %find-symbol-status nil together. "Owns" is the wide
 			// reading: cl exports every standard name, implemented or not.
-			return PackageRegistry.isClMemberName(str.value()) ? quoteOf(str.value()) : LispNil.INSTANCE;
+			return PackageRegistry.isClMemberName(str.value()) ? symbolFormOfSpelling(str.value()) : LispNil.INSTANCE;
 		}
 		if (LispNames.CL_PKG.equalsIgnoreCase(pkg) || LispNames.CL_USER_PKG.equalsIgnoreCase(pkg)) {
 			return listToCons(List.of(new LispSymbol(LispNames.INTERN), name));
@@ -12989,7 +13002,7 @@ public final class LispMacroExpander {
 		if (LispNames.CL_USER_PKG.equalsIgnoreCase(pkg)) {
 			// cl-user provides every name (no intern table), so this arm never answers
 			// nil.
-			return literal != null && PackageRegistry.isClSymbol(literal) ? clUserStatus(literal)
+			return literal != null && PackageRegistry.isClMemberName(literal) ? clUserStatus(literal)
 					: new LispSymbol(LispNames.STATUS_INTERNAL);
 		}
 		return new LispSymbol(LispNames.STATUS_EXTERNAL);
@@ -13009,6 +13022,23 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The compilers' literal 1-arg {@code find-symbol} fold: the symbol the name finds
+	 * against the compile-time view of the image, decided by the same arms as
+	 * {@link #imageStatus} so value and status agree on which names are absent. The
+	 * spellings {@code T} / {@code NIL} answer the singletons, as the interpreter does.
+	 * @param name the literal name
+	 * @param userDefunNames the Pass-1 user definition names
+	 * @return {@code t}, {@code nil} (also for an absent name), or the symbol
+	 */
+	public static LispVal foldLiteralFindSymbol(String name, java.util.Set<String> userDefunNames) {
+		if (imageStatus(name, LispNames.STATUS_INHERITED, userDefunNames) instanceof LispNil) {
+			return LispNil.INSTANCE;
+		}
+		LispVal form = symbolFormOfSpelling(name);
+		return form instanceof LispCons ? new LispSymbol(name) : form;
+	}
+
+	/**
 	 * The status of a literal name against the compile-time view of the image: the arms
 	 * of the compilers' literal {@code find-symbol} fold, in the same order, so the two
 	 * agree on which names are absent.
@@ -13017,7 +13047,7 @@ public final class LispMacroExpander {
 		if (!name.isEmpty() && name.charAt(0) == ':') {
 			return new LispSymbol(LispNames.STATUS_EXTERNAL);
 		}
-		if (PackageRegistry.isClSymbol(name)) {
+		if (PackageRegistry.isClMemberName(name)) {
 			return new LispSymbol(name.startsWith("%") ? LispNames.STATUS_INTERNAL : standardStatus);
 		}
 		return userDefunNames.contains(name) ? new LispSymbol(LispNames.STATUS_INTERNAL) : LispNil.INSTANCE;

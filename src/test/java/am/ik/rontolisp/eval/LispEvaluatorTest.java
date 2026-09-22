@@ -15918,6 +15918,14 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void symbolBuildersAnswerTheTAndNilSingletons() {
+		// The compiled harnesses pin the same line; (intern "T" "CL") reaches the
+		// singleton through the designated-package arm too.
+		assertThat(evalMulti(am.ik.rontolisp.TAndNilSingletonCorpus.FORM).print())
+			.isEqualTo(am.ik.rontolisp.TAndNilSingletonCorpus.EXPECTED);
+	}
+
+	@Test
 	void runtimePackageEnumeration() {
 		// find-all-symbols / apropos-list / do-all-symbols share one universe walk:
 		// a cl symbol is visited once, spelled the way code spells it, and the
