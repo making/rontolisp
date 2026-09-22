@@ -8649,11 +8649,67 @@ class LispEvaluatorTest {
 		assertThat(eval("(destructuring-bind (a b) '(1 2) (list a b))").print()).isEqualTo("(1 2)");
 		assertThat(eval("(destructuring-bind (a (b c) d) '(1 (2 3) 4) (+ a b c d))")).isEqualTo(new LispInteger(10));
 		assertThat(eval("(destructuring-bind (a (b (c))) '(1 (2 (3))) (list a b c))").print()).isEqualTo("(1 2 3)");
-		// Lite semantics: a missing position binds to nil, surplus elements are
-		// ignored.
+		// Lite semantics for a MISSING position: it binds to nil.
 		assertThat(eval("(destructuring-bind (a b) '(1) (list a b))").print()).isEqualTo("(1 NIL)");
-		assertThat(eval("(destructuring-bind (a) '(1 2 3) a)")).isEqualTo(new LispInteger(1));
-		assertThat(eval("(destructuring-bind () '(1) 'ok)").print()).isEqualTo("OK");
+	}
+
+	@Test
+	void evalDestructuringBindSurplusElementsSignalProgramError() {
+		// An element past the pattern is a program-error, not silently dropped: a
+		// required-only pattern, a nested one, an &optional / &aux tail, a keyword only
+		// inside a sub-pattern, a pattern after &body, and the empty pattern.
+		String pe = "(program-error () :pe)";
+		assertThat(eval("(handler-case (destructuring-bind (a b) '(1 2 3) (list a b)) " + pe + ")").print())
+			.isEqualTo(":PE");
+		assertThat(eval("(handler-case (destructuring-bind (a) '(1 2 3) a) " + pe + ")").print()).isEqualTo(":PE");
+		assertThat(eval("(handler-case (destructuring-bind () '(1) 'ok) " + pe + ")").print()).isEqualTo(":PE");
+		assertThat(eval("(handler-case (destructuring-bind (a (b c)) '(1 (2 3 4)) (list a b c)) " + pe + ")").print())
+			.isEqualTo(":PE");
+		assertThat(eval("(handler-case (destructuring-bind (a &optional b) '(1 2 3) (list a b)) " + pe + ")").print())
+			.isEqualTo(":PE");
+		assertThat(
+				eval("(handler-case (destructuring-bind (a &optional b c d e) '(1 2 3 4 5 6) a) " + pe + ")").print())
+			.isEqualTo(":PE");
+		assertThat(eval("(handler-case (destructuring-bind (a &aux (x 2)) '(1 2) (list a x)) " + pe + ")").print())
+			.isEqualTo(":PE");
+		assertThat(
+				eval("(handler-case (destructuring-bind ((a &key k) b) '((1) 2 3) (list a k b)) " + pe + ")").print())
+			.isEqualTo(":PE");
+		assertThat(
+				eval("(handler-case (destructuring-bind (a &body (b &optional c)) '(1 2 3 4) (list a b c)) " + pe + ")")
+					.print())
+			.isEqualTo(":PE");
+		// The message is the surplus-argument one, counted over the whole list.
+		assertThat(eval("(handler-case (destructuring-bind (a &optional b) '(1 2 3 4) a) "
+				+ "(program-error (e) (princ-to-string e)))")
+			.print()).isEqualTo("\"Function expects at most 2 arguments, got 4\"");
+		// The count is checked before an &optional default runs.
+		assertThat(evalMulti("""
+				(defvar *db-ran* nil)
+				(list (handler-case (destructuring-bind (a &optional (b (setq *db-ran* t))) '(1 2 3) (list a b))
+				        (program-error () :pe))
+				      *db-ran*)""").print()).isEqualTo("(:PE NIL)");
+		// What consumes the rest of the list still does.
+		assertThat(eval("(destructuring-bind (a . b) '(1 2 3) (list a b))").print()).isEqualTo("(1 (2 3))");
+		assertThat(eval("(destructuring-bind (a &rest r) '(1 2 3) (list a r))").print()).isEqualTo("(1 (2 3))");
+		assertThat(eval("(destructuring-bind (a &key b) '(1 :b 2) (list a b))").print()).isEqualTo("(1 2)");
+		assertThat(eval("(destructuring-bind (a &optional (b 7)) '(1) (list a b))").print()).isEqualTo("(1 7)");
+		assertThat(eval("(destructuring-bind (a &body (b &optional c)) '(1 2 3) (list a b c))").print())
+			.isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void defmacroSurplusArgumentsPastADestructuringLambdaListSignalProgramError() {
+		// A macro whose lambda list goes beyond required + &rest destructures its call
+		// through destructuring-bind: a surplus argument signals there too.
+		assertThat(evalMulti("""
+				(defmacro db-m1 (a &optional b) `'(,a ,b))
+				(defmacro db-m2 ((a b) c) `'(,a ,b ,c))
+				(list (db-m1 1 2)
+				      (handler-case (macroexpand '(db-m1 1 2 3)) (program-error () :pe))
+				      (db-m2 (1 2) 3)
+				      (handler-case (macroexpand '(db-m2 (1 2 9) 3)) (program-error () :pe)))""").print())
+			.isEqualTo("((1 2) :PE (1 2 3) :PE)");
 	}
 
 	@Test

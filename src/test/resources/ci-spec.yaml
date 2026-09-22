@@ -11545,6 +11545,19 @@ cases:
       3
       15
       (11 3)
+  # An element past a destructuring pattern is the surplus-argument program-error
+  # (LispMacroExpander.destructuringBindings, LambdaLists.destructuringSurplusCheck).
+  - name: destructuring-bind-surplus-elements-signal-program-error
+    source: |
+      (print (handler-case (destructuring-bind (a b) '(1 2 3) (list a b)) (program-error () :pe)))
+      (print (handler-case (destructuring-bind (a (b c)) '(1 (2 3 4)) (list a b c)) (program-error () :pe)))
+      (print (handler-case (destructuring-bind (a &optional b) '(1 2 3 4) a) (error (e) (princ-to-string e))))
+      (print (destructuring-bind (a . b) '(1 2 3) (list a b)))
+    expected: |
+      :PE
+      :PE
+      "Function expects at most 2 arguments, got 4"
+      (1 (2 3))
   # symbol-macrolet: shadow-aware substitution shared by every backend
   # (LispMacroExpander.expandSymbolMacrolet) -- substitution, let-shadowing,
   # nesting, setq write-through, the dbi setf-through-slot-value shape, and a

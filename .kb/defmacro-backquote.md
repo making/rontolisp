@@ -77,7 +77,9 @@ binds the required prefix positionally then calls `LambdaLists.appendTailBinding
 unknown-`&key` check as a `__ll_check` throwaway) over `__db<N>_r<i>`. Nested sub-patterns
 recurse through `__db<N>_g<i>`; a dotted tail normalizes to `&rest`.
 
-- **Lite semantics: NO mismatch errors** (missing -> nil, surplus ignored).
+- **A surplus element signals; a missing one binds nil.** The surplus half is the function
+  lambda lists' `program-error` on the same message rail ([lambda-lists.md](lambda-lists.md),
+  "A surplus element in a destructuring pattern"); a missing position is still lenient.
 - **`&whole` works in BOTH forms**: first pattern element binds the whole source list and the
   rest destructures it again; in a `defmacro` lambda list `evalDefmacro` binds
   `(cons 'name args)` and forces the destructuring path.

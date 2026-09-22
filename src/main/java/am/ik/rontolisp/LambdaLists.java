@@ -194,7 +194,7 @@ public final class LambdaLists {
 	 * ({@code .kb/lambda-lists.md}). The message is computed, so the compilers' static
 	 * program-error warning (literal messages only) never fires for it.
 	 */
-	private static LispVal tooManyArgsCheck(LispSymbol restVar, int required, int optionals) {
+	private static LispVal tooManyArgsCheck(LispVal restVar, int required, int optionals) {
 		// Nested cdrs for a short tail: on the JVM each is a few inline bytes, where
 		// nthcdr brings its runtime helper into a program that may not otherwise have it.
 		LispVal beyond = restVar;
@@ -208,6 +208,26 @@ public final class LambdaLists {
 		}
 		LispVal message = list(new LispSymbol(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL),
 				new LispInteger(required + optionals), new LispInteger(required), restVar);
+		LispVal signal = list(new LispSymbol(LispNames.PROGRAM_ERROR_INTERNAL), message);
+		return list(new LispSymbol(ARITY_VAR), list(new LispSymbol(LispNames.IF), beyond, signal, LispNil.INSTANCE));
+	}
+
+	/**
+	 * The throwaway {@code let*} binding that signals when a destructured list is longer
+	 * than a pattern of {@code required} plain elements with nothing after them: the
+	 * {@link #tooManyArgsCheck} shape, always over nested {@code cdr}s (the pattern's
+	 * {@code car} accessors walk the same chain, so nothing new is pulled in).
+	 * @param source the (side-effect-free) expression holding the destructured list
+	 * @param required the pattern's element count
+	 * @return the binding
+	 */
+	public static LispVal destructuringSurplusCheck(LispVal source, int required) {
+		LispVal beyond = source;
+		for (int i = 0; i < required; i++) {
+			beyond = call(LispNames.CDR, beyond);
+		}
+		LispVal message = list(new LispSymbol(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL), new LispInteger(required),
+				new LispInteger(0), source);
 		LispVal signal = list(new LispSymbol(LispNames.PROGRAM_ERROR_INTERNAL), message);
 		return list(new LispSymbol(ARITY_VAR), list(new LispSymbol(LispNames.IF), beyond, signal, LispNil.INSTANCE));
 	}
@@ -587,15 +607,23 @@ public final class LambdaLists {
 	/**
 	 * Appends the {@code let*} bindings destructuring a lambda-list tail (the elements
 	 * from the first lambda-list keyword on) over {@code restVar}, for
-	 * {@code destructuring-bind} and macro lambda lists. The unknown-keyword check (a
-	 * {@code do} loop signalling on an undeclared keyword) is appended as a throwaway
-	 * binding so the whole tail stays a flat binding list.
+	 * {@code destructuring-bind} and macro lambda lists. The surplus-element check (a
+	 * tail with neither {@code &rest}/{@code &body} nor {@code &key}) and the
+	 * unknown-keyword check are appended as throwaway bindings so the whole tail stays a
+	 * flat binding list.
 	 * @param tailParams the tail elements, starting with a lambda-list keyword
+	 * @param required how many required elements precede the tail (the message's count)
 	 * @param restVar the variable holding the remaining list
 	 * @param out the binding list to append to
 	 */
-	public static void appendTailBindings(List<LispVal> tailParams, LispSymbol restVar, List<LispVal> out) {
+	public static void appendTailBindings(List<LispVal> tailParams, int required, LispSymbol restVar,
+			List<LispVal> out) {
 		Parsed parsed = parse(tailParams);
+		if (parsed.rest() == null && !parsed.sawKey()) {
+			// Nothing consumes the list past the optionals: a surplus element signals,
+			// before any default runs -- the function lambda lists' check.
+			out.add(tooManyArgsCheck(restVar, required, parsed.optionals().size()));
+		}
 		appendPrologueBindings(parsed, restVar, true, out);
 		if (parsed.sawKey() && !parsed.allowOtherKeys()) {
 			LispSymbol keySource = parsed.rest() != null ? parsed.rest() : restVar;
