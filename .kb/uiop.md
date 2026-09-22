@@ -260,7 +260,7 @@ lowering refuses `:error` loudly); `slurp-stream-forms` reads with `read`
 (no `read-preserving-whitespace` exists); `safe-read-from-string` reads
 through `with-input-from-string` + `read` (compile-path `read-from-string`
 takes one argument) and answers the object only; `call-with-output` over a
-string signals (`with-output-to-string` is fresh-string only); `:linewise`
+string appends through its fill pointer when the function returns; `:linewise`
 copy always ends lines with `terpri` (`read-line` answers one value);
 `*read-eval*` nil is honored on the interpreter while the compiled runtime
 readers refuse `#.` unconditionally (stricter, therefore safe).

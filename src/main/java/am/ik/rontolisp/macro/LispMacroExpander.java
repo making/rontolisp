@@ -9487,20 +9487,32 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(
 					LispNames.WITH_OUTPUT_TO_STRING + " expects a (var ...) spec as the first argument");
 		}
-		// CL spec is (var &optional string-form &key element-type). The fresh-string
-		// behaviour (string-form nil/absent) is the supported case; :element-type is
-		// accepted and ignored (lite -- cl-who passes (s nil :element-type 'character)).
-		// A non-nil string-form (append to an existing fill-pointered string) is not
-		// supported.
+		// CL spec is (var &optional string-form &key element-type). Every rontolisp
+		// stream
+		// is a character stream, so :element-type is evaluated (when it is not a
+		// literal) and otherwise dropped -- cl-who passes (s nil :element-type
+		// 'character). A non-nil string-form is a string with a fill pointer that the
+		// output is appended to (the form then returns the body's values).
 		List<LispVal> specParts = spec.toList();
-		if (specParts.size() >= 2 && specParts.get(1) != LispNil.INSTANCE) {
-			throw new UnsupportedOperationException(
-					LispNames.WITH_OUTPUT_TO_STRING + " supports only a nil string-form (fresh-string) spec");
+		LispVal stringForm = specParts.size() >= 2 ? specParts.get(1) : LispNil.INSTANCE;
+		LispVal elementType = null;
+		for (int i = 2; i < specParts.size(); i += 2) {
+			if (i + 1 >= specParts.size() || !(specParts.get(i) instanceof LispSymbol key)
+					|| !LispNames.ELEMENT_TYPE_KEYWORD.equals(key.name()) || elementType != null) {
+				return callTimeUnsupportedStub(LispNames.WITH_OUTPUT_TO_STRING
+						+ " expects a (var &optional string-form &key element-type) spec, got " + spec.print());
+			}
+			elementType = specParts.get(i + 1);
 		}
-		LispVal bindings = new LispCons(
-				listToCons(List.of(var,
-						listToCons(List.of(new LispSymbol(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL))))),
-				LispNil.INSTANCE);
+		LispVal openCall = listToCons(List.of(new LispSymbol(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL)));
+		if (stringForm != LispNil.INSTANCE) {
+			return withOutputToFillPointerString(var, stringForm, elementType, openCall, parts.subList(2, parts.size()),
+					unwindProtect);
+		}
+		if (elementType != null && !isLiteralTypeForm(elementType)) {
+			openCall = listToCons(List.of(new LispSymbol(LispNames.PROGN), elementType, openCall));
+		}
+		LispVal bindings = new LispCons(listToCons(List.of(var, openCall)), LispNil.INSTANCE);
 		if (unwindProtect) {
 			// (let ((var (%make-string-output-stream)))
 			// (unwind-protect (progn body... (%string-stream-contents var)) (close var)))
@@ -9520,6 +9532,66 @@ public final class LispMacroExpander {
 				List.of(new LispSymbol(LispNames.LET), innerBindings, callOf(LispNames.CLOSE, var), result));
 		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, bodyExpr, innerLet));
 	}
+
+	/**
+	 * The {@code with-output-to-string} arm whose spec names a STRING: the body writes
+	 * into an ordinary string output stream and what it wrote is appended to the string
+	 * (with {@code vector-push-extend}, so through its fill pointer) when the body exits
+	 * -- on every exit where {@code unwind-protect} compiles -- and the form returns the
+	 * body's values, per CLHS.
+	 *
+	 * <pre>
+	 * (with-output-to-string (s str) body...) ->
+	 *   (let ((__wots_string str) (s (%make-string-output-stream)))
+	 *     (unwind-protect (progn body...)
+	 *       (let ((__wots_contents (%string-stream-contents s)))
+	 *         (dotimes (__wots_i (length __wots_contents))
+	 *           (vector-push-extend (char __wots_contents __wots_i) __wots_string)))
+	 *       (close s)))
+	 * </pre>
+	 *
+	 * The string sees the output when the body EXITS, not character by character as it is
+	 * written: no rontolisp stream writes through to a caller's vector.
+	 */
+	private static LispVal withOutputToFillPointerString(LispSymbol var, LispVal stringForm,
+			@Nullable LispVal elementType, LispVal openCall, List<LispVal> body, boolean unwindProtect) {
+		LispSymbol target = new LispSymbol(WOTS_STRING_VAR);
+		LispSymbol contents = new LispSymbol(WOTS_CONTENTS_VAR);
+		LispSymbol index = new LispSymbol(WOTS_INDEX_VAR);
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(listToCons(List.of(target, stringForm)));
+		if (elementType != null && !isLiteralTypeForm(elementType)) {
+			openCall = listToCons(List.of(new LispSymbol(LispNames.PROGN), elementType, openCall));
+		}
+		bindings.add(listToCons(List.of(var, openCall)));
+		LispVal append = makeLet(WOTS_CONTENTS_VAR, callOf(LispNames.STRING_STREAM_CONTENTS_INTERNAL, var),
+				listToCons(List.of(new LispSymbol(LispNames.DOTIMES),
+						listToCons(List.of(index, callOf(LispNames.LENGTH, contents))),
+						listToCons(List.of(new LispSymbol(LispNames.VECTOR_PUSH_EXTEND),
+								listToCons(List.of(new LispSymbol(LispNames.CHAR), contents, index)), target)))));
+		LispVal bodyExpr = prognOrNil(body);
+		LispVal guarded = unwindProtect
+				? listToCons(List.of(new LispSymbol(LispNames.UNWIND_PROTECT), bodyExpr, append,
+						callOf(LispNames.CLOSE, var)))
+				: listToCons(List.of(new LispSymbol(LispNames.MULTIPLE_VALUE_PROG1), bodyExpr, append,
+						callOf(LispNames.CLOSE, var)));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(bindings), guarded));
+	}
+
+	/**
+	 * Whether an {@code :element-type} form is a literal whose evaluation has no effect
+	 * -- a quoted type or a self-evaluating atom -- so that dropping it changes nothing.
+	 */
+	private static boolean isLiteralTypeForm(LispVal form) {
+		return isSelfEvaluatingLiteral(form) || (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.QUOTE.equals(op.name()));
+	}
+
+	private static final String WOTS_STRING_VAR = "__wots_string";
+
+	private static final String WOTS_CONTENTS_VAR = "__wots_contents";
+
+	private static final String WOTS_INDEX_VAR = "__wots_i";
 
 	private static final String WOTS_RESULT_VAR = "__wots_result";
 
@@ -9638,15 +9710,102 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(
 					LispNames.WITH_INPUT_FROM_STRING + " expects a (var string) spec as the first argument");
 		}
+		// CL spec is (var string &key index start end).
 		List<LispVal> specParts = spec.toList();
-		if (specParts.size() != 2 || !(specParts.get(0) instanceof LispSymbol var)) {
-			throw new UnsupportedOperationException(
-					LispNames.WITH_INPUT_FROM_STRING + " supports only a (var string) spec");
+		if (specParts.size() < 2 || !(specParts.get(0) instanceof LispSymbol var)) {
+			return callTimeUnsupportedStub(LispNames.WITH_INPUT_FROM_STRING
+					+ " expects a (var string &key index start end) spec, got " + spec.print());
+		}
+		LispVal index = null;
+		LispVal start = null;
+		LispVal end = null;
+		for (int i = 2; i < specParts.size(); i += 2) {
+			String key = i + 1 < specParts.size() && specParts.get(i) instanceof LispSymbol sym ? sym.name() : "";
+			boolean rejected = switch (key) {
+				case ":INDEX" -> index != null;
+				case ":START" -> start != null;
+				case ":END" -> end != null;
+				default -> true;
+			};
+			if (rejected) {
+				return callTimeUnsupportedStub(LispNames.WITH_INPUT_FROM_STRING
+						+ " expects a (var string &key index start end) spec, got " + spec.print());
+			}
+			LispVal value = specParts.get(i + 1);
+			switch (key) {
+				case ":INDEX" -> index = value;
+				case ":START" -> start = value;
+				default -> end = value;
+			}
+		}
+		LispVal bodyExpr = prognOrNil(parts.subList(2, parts.size()));
+		if (index != null) {
+			return withInputFromStringIndexed(var, specParts.get(1), index, start, end, bodyExpr, unwindProtect);
 		}
 		LispVal string = specParts.get(1);
-		LispVal bodyExpr = prognOrNil(parts.subList(2, parts.size()));
+		if (start != null || end != null) {
+			string = listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), string,
+					start != null ? start : new LispInteger(0), end != null ? end : LispNil.INSTANCE));
+		}
+		return withInputStream(var, string, bodyExpr, null, unwindProtect);
+	}
+
+	/**
+	 * The {@code with-input-from-string} arm with an {@code :index} place: on a NORMAL
+	 * exit the place receives the index into the string of the first character the body
+	 * did not read. A string input stream has no position to ask (its
+	 * {@code file-position} answers nil on every backend), so the index is the bound end
+	 * minus the characters still unread, counted by draining the stream just before it is
+	 * closed.
+	 *
+	 * <pre>
+	 * (with-input-from-string (s str :index place :start a :end b) body...) ->
+	 *   (let* ((__wifs_string str) (__wifs_start a) (__wifs_end b))
+	 *     (let ((s (%make-string-input-stream (subseq __wifs_string __wifs_start __wifs_end))))
+	 *       (unwind-protect
+	 *           (multiple-value-prog1 (progn body...)
+	 *             (setf place (- (or __wifs_end (length __wifs_string))
+	 *                            (do ((__wifs_n 0 (+ __wifs_n 1)))
+	 *                                ((null (read-char s nil nil)) __wifs_n)))))
+	 *         (close s))))
+	 * </pre>
+	 */
+	private static LispVal withInputFromStringIndexed(LispSymbol var, LispVal stringForm, LispVal index,
+			@Nullable LispVal start, @Nullable LispVal end, LispVal bodyExpr, boolean unwindProtect) {
+		LispSymbol string = new LispSymbol(WIFS_STRING_VAR);
+		LispSymbol startVar = new LispSymbol(WIFS_START_VAR);
+		LispSymbol endVar = new LispSymbol(WIFS_END_VAR);
+		LispSymbol unread = new LispSymbol(WIFS_UNREAD_VAR);
+		LispVal bindings = listToCons(List.of(listToCons(List.of(string, stringForm)),
+				listToCons(List.of(startVar, start != null ? start : new LispInteger(0))),
+				listToCons(List.of(endVar, end != null ? end : LispNil.INSTANCE))));
+		LispVal drain = listToCons(List.of(new LispSymbol(LispNames.DO),
+				listToCons(List.of(listToCons(List.of(unread, new LispInteger(0),
+						listToCons(List.of(new LispSymbol(LispNames.ADD), unread, new LispInteger(1))))))),
+				listToCons(List.of(
+						callOf(LispNames.NULL, listToCons(
+								List.of(new LispSymbol(LispNames.READ_CHAR), var, LispNil.INSTANCE, LispNil.INSTANCE))),
+						unread))));
+		LispVal bound = listToCons(List.of(new LispSymbol(LispNames.OR), endVar, callOf(LispNames.LENGTH, string)));
+		LispVal store = listToCons(List.of(new LispSymbol(LispNames.SETF), index,
+				listToCons(List.of(new LispSymbol(LispNames.SUB), bound, drain))));
+		LispVal substring = listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), string, startVar, endVar));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings,
+				withInputStream(var, substring, bodyExpr, store, unwindProtect)));
+	}
+
+	/**
+	 * {@code (let ((var (%make-string-input-stream string))) ...)} running
+	 * {@code bodyExpr}, then {@code onNormalExit} when non-null, and closing the stream
+	 * -- on every exit when {@code unwindProtect}, else after a normal return.
+	 */
+	private static LispVal withInputStream(LispSymbol var, LispVal string, LispVal bodyExpr,
+			@Nullable LispVal onNormalExit, boolean unwindProtect) {
 		LispVal openCall = listToCons(List.of(new LispSymbol(LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL), string));
 		LispVal outerBindings = new LispCons(listToCons(List.of(var, openCall)), LispNil.INSTANCE);
+		if (onNormalExit != null) {
+			bodyExpr = listToCons(List.of(new LispSymbol(LispNames.MULTIPLE_VALUE_PROG1), bodyExpr, onNormalExit));
+		}
 		if (unwindProtect) {
 			// (let ((var (%make-string-input-stream string)))
 			// (unwind-protect body-expr (close var)))
@@ -9660,6 +9819,14 @@ public final class LispMacroExpander {
 				List.of(new LispSymbol(LispNames.LET), innerBindings, callOf(LispNames.CLOSE, var), result));
 		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, innerLet));
 	}
+
+	private static final String WIFS_STRING_VAR = "__wifs_string";
+
+	private static final String WIFS_START_VAR = "__wifs_start";
+
+	private static final String WIFS_END_VAR = "__wifs_end";
+
+	private static final String WIFS_UNREAD_VAR = "__wifs_n";
 
 	private static final String WIFS_RESULT_VAR = "__wifs_result";
 
@@ -35913,9 +36080,13 @@ public final class LispMacroExpander {
 					LispNames.DEFINE_COMPILER_MACRO, LispNames.DEFINE_SYMBOL_MACRO, LispNames.DEFINE_MODIFY_MACRO,
 					LispNames.DECLAIM, LispNames.DECLARE, LispNames.DEFPACKAGE, LispNames.IN_PACKAGE,
 					LispNames.CHECK_TYPE, LispNames.ASSERT, LispNames.PPRINT_LOGICAL_BLOCK,
-					LispNames.WITH_OUTPUT_TO_STRING, LispNames.PRINT_UNREADABLE_OBJECT, LispNames.DO_SYMBOLS,
-					LispNames.DO_EXTERNAL_SYMBOLS, LispNames.DO_ALL_SYMBOLS, LispNames.AWAIT_QUALIFIED ->
+					LispNames.PRINT_UNREADABLE_OBJECT, LispNames.DO_SYMBOLS, LispNames.DO_EXTERNAL_SYMBOLS,
+					LispNames.DO_ALL_SYMBOLS, LispNames.AWAIT_QUALIFIED ->
 				true;
+			// The fresh-string form answers its string; one that names a string to append
+			// to answers the body's values.
+			case LispNames.WITH_OUTPUT_TO_STRING -> !(parts.size() >= 2 && parts.get(1) instanceof LispCons spec
+					&& spec.cdr() instanceof LispCons tail && tail.car() != LispNil.INSTANCE);
 			default -> false;
 		};
 	}

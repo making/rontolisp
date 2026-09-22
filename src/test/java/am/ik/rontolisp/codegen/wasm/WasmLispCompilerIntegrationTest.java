@@ -4496,6 +4496,28 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void stringStreamMacroOptionsCompileAndRun() throws Exception {
+		// with-input-from-string's :index/:start/:end and with-output-to-string's
+		// fill-pointer string and :element-type, which used to be refused at expansion.
+		assertThat(compileAndRun("""
+				(defvar *wi* nil)
+				(print (list (with-input-from-string (s "abcdef" :index *wi* :start 1 :end 5)
+				               (list (read-char s) (read-char s) *wi*))
+				             *wi*))
+				(print (with-input-from-string (s "abcdef" :start 1 :end nil) (read-line s)))
+				(let ((i 2))
+				  (print (list (with-input-from-string (s "abcdef" :index i :start i) (read-char s)) i)))
+				(let ((str (make-array 10 :fill-pointer 0 :element-type 'character)))
+				  (print (with-output-to-string (s str) (write-string "abc" s) (princ 12 s) :body))
+				  (with-output-to-string (s str :element-type 'character) (write-char #\\! s))
+				  (print str))
+				(print (multiple-value-list
+				        (with-output-to-string (s (make-array 4 :fill-pointer 0 :element-type 'character))
+				          (values 'a 'b))))
+				""")).isEqualTo("((#\\b #\\c NIL) 3)\n\"bcdef\"\n(#\\c 3)\n:BODY\n\"abc12!\"\n(A B)");
+	}
+
+	@Test
 	void readSequenceIntoACharacterBufferCompilesAndRuns() throws Exception {
 		assertThat(compileAndRun("""
 				(with-input-from-string (s "abcdef")

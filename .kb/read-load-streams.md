@@ -370,6 +370,29 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   `400 Bad Request` to every JSON body (every `ningle` application). `&optional start end` routes
   through `(subseq string start end)`. **Trigger**: if another CL stream constructor is withheld for
   "the internal one covers every consumer", check whether a library now needs it as a VALUE.
+- **The two macros take their full CL spec, as ONE expansion every backend shares** (2026-09-22).
+  `with-input-from-string (var string &key index start end)`: `:start`/`:end` become the
+  `subseq` above; `:index` binds string/start/end once (`let*`, source order) and, on a NORMAL exit
+  only (`multiple-value-prog1` inside the `unwind-protect`), stores `(- (or end (length string))
+  <chars still unread>)` -- counted by DRAINING the stream with `read-char` just before the close,
+  because a string input stream's `file-position` answers nil on all four. `with-output-to-string
+  (var &optional string &key element-type)`: a non-nil string gets the body's output appended with
+  `vector-push-extend` when the body exits (in the `unwind-protect` cleanup, so on every exit where
+  it compiles), and the form answers the BODY's values -- which is why
+  `isSingleValuedOperator` classifies `with-output-to-string` by its spec, not by name (it used to
+  clear the second value). The string does not see the output character by character.
+  `:element-type` is evaluated when it is not a literal and otherwise dropped. A malformed spec is a
+  CALL-time stub (`callTimeUnsupportedStub`), never an expansion-time throw, so a dead branch
+  compiles. A spec without the new options expands byte for byte as before. Measured, ANSI `streams`
+  (interpreter, suite `ca06bd9`): 447 -> 462 of 758 pass, errors 205 -> 186, lost forms 55 -> 55, no
+  test regressed. **The premise that these refusals were LOST top-level forms was stale**: since the
+  driver charges a raw exception inside a `deftest` to that test, all 19 were already counted
+  ERRORS, so turning them into stubs moved nothing. Seven `WITH-INPUT-FROM-STRING` tests still fail
+  on the lite `output-stream-p` (every stream answers t for both directions).
+  Pinned by `LispEvaluatorTest#evalStringStreamMacroOptions`,
+  `JvmLispCompilerTest#compileAndRunStringStreamMacroOptions`,
+  `WasmLispCompilerIntegrationTest#stringStreamMacroOptionsCompileAndRun` and ci-spec
+  `string-stream-macro-index-bounds-and-fill-pointer-string`.
 - `print`/`prin1`/`princ`/`terpri` take an optional stream on all three backends (interpreter shared
   `emitTo`; JVM `_writeStr(String, Object)`, where non-`Long` handles go to `System.out` and update
   `_col`; WASM `_write_stream_str`, whose stdout path delegates to `_write_str` keeping
