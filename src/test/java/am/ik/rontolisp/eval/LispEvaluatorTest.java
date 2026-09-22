@@ -11112,6 +11112,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void withOpenFileUnsupportedLiteralElementTypeSignalsAtCallTime(@TempDir Path tempDir) {
+		String file = tempDir.resolve("float.dat").toString().replace("\\", "\\\\");
+		// An element type no stream can carry is refused when the open RUNS, not when the
+		// form expands: the refusal is a catchable error, and a definition that merely
+		// contains the form still defines.
+		assertThat(evalMulti("""
+				(defun never-called () (with-open-file (s "%s" :element-type 'single-float) (read-byte s)))
+				(list (fboundp 'never-called)
+				      (handler-case (with-open-file (s "%s" :direction :output :element-type 'single-float) 1)
+				        (error () :refused)))
+				""".formatted(file, file)).print()).isEqualTo("(T :REFUSED)");
+	}
+
+	@Test
 	void withOpenFileComputedOptionValueOutsideTheSupportedSetSignals(@TempDir Path tempDir) {
 		String file = tempDir.resolve("bad.dat").toString().replace("\\", "\\\\");
 		// The accepted value set is the literal path's, refused at the only time a

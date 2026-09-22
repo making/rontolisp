@@ -8399,11 +8399,12 @@ public final class LispMacroExpander {
 				direction = dir.name();
 			}
 			else if (specParts.get(i) instanceof LispSymbol key && LispNames.ELEMENT_TYPE_KEYWORD.equals(key.name())) {
-				if (i + 1 >= specParts.size()) {
-					throw new UnsupportedOperationException(LispNames.WITH_OPEN_FILE
-							+ " :element-type must be the literal 'character or '(unsigned-byte 8)");
+				Boolean elementBinary = i + 1 < specParts.size() ? isBinaryElementTypeLiteral(specParts.get(i + 1))
+						: null;
+				if (elementBinary == null) {
+					return unsupportedElementTypeStub(LispNames.WITH_OPEN_FILE);
 				}
-				binary = isBinaryElementTypeLiteral(specParts.get(i + 1));
+				binary = elementBinary;
 			}
 			else if (specParts.get(i) instanceof LispSymbol key && i + 1 < specParts.size() && outputDirection
 					&& isAppendIfExists(key.name(), specParts.get(i + 1))) {
@@ -8895,7 +8896,11 @@ public final class LispMacroExpander {
 				}
 				case LispNames.ELEMENT_TYPE_KEYWORD -> {
 					if (literal) {
-						binary = OpenModeTest.of(isBinaryElementTypeLiteral(value));
+						Boolean elementBinary = isBinaryElementTypeLiteral(value);
+						if (elementBinary == null) {
+							return unsupportedElementTypeStub(operator);
+						}
+						binary = OpenModeTest.of(elementBinary);
 					}
 					else {
 						LispVal binaryTest = binaryElementTypeTest(var);
@@ -10299,9 +10304,12 @@ public final class LispMacroExpander {
 	 * non-literal expression) is rejected so the compilers can resolve the file mode at
 	 * compile time.
 	 * @param val the element-type argument as it appears in the source
-	 * @return true for the binary element type
+	 * @return true for the binary element type, false for text, null for a value no
+	 * stream here carries -- which the caller turns into a CALL-time refusal
+	 * ({@link #callTimeUnsupportedStub}), so the form still expands and only running the
+	 * open signals
 	 */
-	private static boolean isBinaryElementTypeLiteral(LispVal val) {
+	private static @Nullable Boolean isBinaryElementTypeLiteral(LispVal val) {
 		if (val instanceof LispCons quoteForm) {
 			List<LispVal> quoteParts = quoteForm.toList();
 			if (quoteParts.size() == 2 && quoteParts.get(0) instanceof LispSymbol q
@@ -10325,8 +10333,17 @@ public final class LispMacroExpander {
 				}
 			}
 		}
-		throw new UnsupportedOperationException(
-				LispNames.WITH_OPEN_FILE + " :element-type must be the literal 'character or '(unsigned-byte 8)");
+		return null;
+	}
+
+	/**
+	 * The call-time refusal of a literal {@code :element-type} no stream here carries.
+	 * @param operator the surface operator, for the message
+	 * @return the signaling expression
+	 */
+	private static LispVal unsupportedElementTypeStub(String operator) {
+		return callTimeUnsupportedStub(
+				operator + " :element-type must be the literal 'character or '(unsigned-byte 8)");
 	}
 
 	/**
@@ -11646,7 +11663,13 @@ public final class LispMacroExpander {
 					}
 					direction = dir.name();
 				}
-				case ":ELEMENT-TYPE" -> binary = isBinaryElementTypeLiteral(value);
+				case ":ELEMENT-TYPE" -> {
+					Boolean elementBinary = isBinaryElementTypeLiteral(value);
+					if (elementBinary == null) {
+						return unsupportedElementTypeStub(LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED);
+					}
+					binary = elementBinary;
+				}
 				default -> throw new UnsupportedOperationException(
 						LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED + ": unsupported option " + key.name());
 			}
