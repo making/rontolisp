@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.macro.StreamElementType;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispRatio;
@@ -799,6 +800,12 @@ final class JvmExprCompiler {
 						break;
 					}
 					LispVal checked = LispMacroExpander.expandOpenFileErrorSignal(cons, ctx.mayUseInstances);
+					LispVal registered = registeredOpenLeaf(cons, checked, ctx);
+					if (registered != null) {
+						// Already the stream VALUE (%file-stream-register answers it).
+						JvmExprCompiler.compileExpr(registered, ctx, className);
+						break;
+					}
 					if (checked != null) {
 						JvmExprCompiler.compileExpr(checked, ctx, className);
 					}
@@ -928,7 +935,9 @@ final class JvmExprCompiler {
 				case LispNames.WITH_OPEN_FILE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenFile(cons), ctx, className);
 				case LispNames.READ_BYTE -> {
-					LispVal typed = LispMacroExpander.expandReadEofSignal(cons, true);
+					LispVal wide = ctx.functions.containsKey(LispNames.WIDE_READ_BYTE_INTERNAL)
+							? LispMacroExpander.expandWideReadByte(cons) : null;
+					LispVal typed = wide != null ? wide : LispMacroExpander.expandReadEofSignal(cons, true);
 					if (typed != null) {
 						JvmExprCompiler.compileExpr(typed, ctx, className);
 					}
@@ -936,7 +945,21 @@ final class JvmExprCompiler {
 						JvmReadByteCompiler.compile(cons, ctx, className);
 					}
 				}
-				case LispNames.WRITE_BYTE -> JvmWriteByteCompiler.compile(cons, ctx, className);
+				// The one-octet primitives the wide-element helpers compose from: the
+				// unlowered read-byte / write-byte (.kb/read-load-streams.md, "Element
+				// types wider and narrower than one octet").
+				case LispNames.READ_OCTET_INTERNAL -> JvmReadByteCompiler.compile(cons, ctx, className);
+				case LispNames.WRITE_BYTE -> {
+					LispVal wide = ctx.functions.containsKey(LispNames.WIDE_WRITE_BYTE_INTERNAL)
+							? LispMacroExpander.expandWideWriteByte(cons) : null;
+					if (wide != null) {
+						JvmExprCompiler.compileExpr(wide, ctx, className);
+					}
+					else {
+						JvmWriteByteCompiler.compile(cons, ctx, className);
+					}
+				}
+				case LispNames.WRITE_OCTET_INTERNAL -> JvmWriteByteCompiler.compile(cons, ctx, className);
 				case LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT ->
 					JvmForceOutputCompiler.compile(cons, ctx, className);
 				case LispNames.CLEAR_OUTPUT ->
@@ -947,10 +970,10 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandClearOutput(cons), ctx, className);
 				case LispNames.LISTEN -> JvmListenCompiler.compile(cons, ctx, className);
 				case LispNames.OPEN_STREAM_P -> JvmOpenStreamPCompiler.compile(cons, ctx, className);
-				case LispNames.READ_SEQUENCE ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandReadSequence(cons), ctx, className);
-				case LispNames.WRITE_SEQUENCE ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandWriteSequence(cons), ctx, className);
+				case LispNames.READ_SEQUENCE -> JvmExprCompiler.compileExpr(
+						guardPackedForWideStreams(LispMacroExpander.expandReadSequence(cons), ctx), ctx, className);
+				case LispNames.WRITE_SEQUENCE -> JvmExprCompiler.compileExpr(
+						guardPackedForWideStreams(LispMacroExpander.expandWriteSequence(cons), ctx), ctx, className);
 				case LispNames.READ_SEQUENCE_PACKED, LispNames.WRITE_SEQUENCE_PACKED ->
 					JvmSequencePackedCompiler.compile(cons, ctx, className);
 				case LispNames.READ_SEQUENCE_CHARS -> JvmSequenceCharsCompiler.compile(cons, ctx, className);
@@ -980,23 +1003,41 @@ final class JvmExprCompiler {
 					// CL's two position DESIGNATORS are a call-site rewrite shared with
 					// the WASM backends, so no primitive learns a keyword.
 					LispVal positioned = LispMacroExpander.rewriteFilePositionArg(cons);
-					if (positioned == cons) {
+					LispVal wide = positioned == cons && ctx.functions.containsKey(LispNames.WIDE_ELEMENTS_INTERNAL)
+							? LispMacroExpander.expandWideFilePosition(cons) : null;
+					if (wide != null) {
+						JvmExprCompiler.compileExpr(wide, ctx, className);
+					}
+					else if (positioned == cons) {
 						JvmFilePositionCompiler.compile(cons, ctx, className);
 					}
 					else {
 						JvmExprCompiler.compileExpr(positioned, ctx, className);
 					}
 				}
+				case LispNames.FILE_OCTET_POSITION_INTERNAL -> JvmFilePositionCompiler.compile(cons, ctx, className);
 				case LispNames.PATHNAMEP ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandPathnamep(cons), ctx, className);
 				case LispNames.FILE_WRITE_DATE ->
 					JvmFileMetaCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx, className, sym.name());
-				case LispNames.MAKE_DIRECTORIES, LispNames.DELETE_FILE_INTERNAL, LispNames.FILE_LENGTH,
-						LispNames.RENAME_FILE_INTERNAL ->
+				case LispNames.MAKE_DIRECTORIES, LispNames.DELETE_FILE_INTERNAL, LispNames.RENAME_FILE_INTERNAL ->
 					JvmFileMetaCompiler.compile(cons, ctx, className, sym.name());
+				case LispNames.FILE_LENGTH -> {
+					LispVal wide = ctx.functions.containsKey(LispNames.WIDE_ELEMENTS_INTERNAL)
+							? LispMacroExpander.expandWideFileLength(cons) : null;
+					if (wide != null) {
+						JvmExprCompiler.compileExpr(wide, ctx, className);
+					}
+					else {
+						JvmFileMetaCompiler.compile(cons, ctx, className, LispNames.FILE_LENGTH);
+					}
+				}
+				case LispNames.FILE_OCTET_LENGTH_INTERNAL ->
+					JvmFileMetaCompiler.compile(cons, ctx, className, LispNames.FILE_LENGTH);
 				case LispNames.STREAM_ELEMENT_TYPE -> JvmExprCompiler.compileExpr(
-						LispMacroExpander.expandConstantResult(cons, LispMacroExpander.quotedCharacterTypeName()), ctx,
-						className);
+						LispMacroExpander.expandStreamElementType(cons,
+								ctx.functions.containsKey(LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL)),
+						ctx, className);
 				case LispNames.MAKE_BROADCAST_STREAM ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeBroadcastStream(cons), ctx, className);
 				case LispNames.FDEFINITION ->
@@ -2095,6 +2136,35 @@ final class JvmExprCompiler {
 	 * producer is wrapped and no consumer unwraps, so such a program keeps raw handles --
 	 * and its exact bytes.
 	 */
+	/**
+	 * The registering shape of a literal BINARY {@code open} leaf, or null when the leaf
+	 * compiles as it always did: a character leaf, a program that never asks about
+	 * element types (no {@code %file-stream-register} spliced), or no stream values. A
+	 * WIDE leaf in a program without the registry is refused at call time rather than
+	 * silently opened as octets.
+	 */
+	private static @Nullable LispVal registeredOpenLeaf(LispCons cons, @Nullable LispVal checked,
+			JvmLispCompiler.Ctx ctx) {
+		StreamElementType type = OpenModes.staticElementType(OpenModes.normalizeKeywordForm(cons).toList());
+		if (type == null || type.isCharacter()) {
+			return null;
+		}
+		if (checked == null || !ctx.usesStreamValues
+				|| !ctx.functions.containsKey(LispNames.FILE_STREAM_REGISTER_INTERNAL)) {
+			return type.isWide() ? LispMacroExpander.wideElementTypeUnavailableStub() : null;
+		}
+		return LispMacroExpander.registeredOpen(checked, type);
+	}
+
+	/**
+	 * {@link LispMacroExpander#guardPackedSequenceForWideStreams} when the program opens
+	 * a wide stream.
+	 */
+	private static LispVal guardPackedForWideStreams(LispVal expansion, JvmLispCompiler.Ctx ctx) {
+		return ctx.functions.containsKey(LispNames.WIDE_WIDTH_INTERNAL)
+				? LispMacroExpander.guardPackedSequenceForWideStreams(expansion) : expansion;
+	}
+
 	private static void wrapStreamValue(JvmLispCompiler.Ctx ctx, String className, String kind) {
 		if (ctx.usesStreamValues) {
 			JvmObjCompiler.emitWrapStream(ctx, className, kind);

@@ -3,12 +3,12 @@ package am.ik.rontolisp.compiler;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.macro.StreamElementType;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -225,24 +225,31 @@ public final class OpenModes {
 	}
 
 	/**
-	 * Classifies an element type specifier: {@code (unsigned-byte 8)} is binary,
-	 * {@code character} is text, anything else is rejected.
+	 * Classifies an element type specifier ({@link StreamElementType#of}): a character
+	 * type is text, an integer type binary -- the backend's descriptor moves OCTETS
+	 * whatever the width, and a wide element is composed above it
+	 * ({@code .kb/read-load-streams.md}, "Element types wider and narrower than one
+	 * octet"). Anything else is rejected.
 	 * @param spec the unquoted type specifier
-	 * @return true for the binary element type
+	 * @return true for a binary element type
 	 */
 	public static boolean isBinaryElementType(LispVal spec) {
-		if (spec instanceof LispSymbol sym && LispNames.CHARACTER_TYPE.equals(sym.name())) {
-			return false;
+		StreamElementType type = StreamElementType.of(spec);
+		if (type == null) {
+			throw new UnsupportedOperationException(
+					"open requires a literal character or bounded integer element type, got " + spec.print());
 		}
-		if (spec instanceof LispCons cons) {
-			List<LispVal> list = cons.toList();
-			if (list.size() == 2 && list.get(0) instanceof LispSymbol sym && LispNames.UNSIGNED_BYTE.equals(sym.name())
-					&& list.get(1) instanceof LispInteger bits && bits.value() == 8) {
-				return true;
-			}
-		}
-		throw new UnsupportedOperationException(
-				"open requires a literal 'character or '(unsigned-byte 8) element type");
+		return !type.isCharacter();
+	}
+
+	/**
+	 * The element type a literal positional {@code open} leaf names, or null when it
+	 * names none (a character stream).
+	 * @param parts the positional open form parts
+	 * @return the classification of the third argument, or null
+	 */
+	public static @Nullable StreamElementType staticElementType(List<LispVal> parts) {
+		return parts.size() > 3 ? StreamElementType.of(unquote(parts.get(3))) : null;
 	}
 
 }

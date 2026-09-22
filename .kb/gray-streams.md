@@ -48,6 +48,9 @@ default T; read/write-sequence's missing end -> `(length sequence)`).
   `rontolisp:stream-close` generic** (`GrayStreamsLibrary.ownsClose` /
   `closRegistry.findGeneric(CLOSE)`). With none, `close`/`open-stream-p` = `t` and
   `stream-element-type` = `character` / `(unsigned-byte 8)` by `typep` on the base classes.
+  A Gray base class carries no width, so this stays the octet even though a built-in FILE stream
+  now answers its real widened type (`read-load-streams.md`, "Element types wider and narrower
+  than one octet"); the built-in answer is what a Gray dispatcher's non-instance arm reaches.
 - **A BIVALENT class answers `character`** — the order of the two `typep`s in
   `%gray-stream-element-type-dispatch`. The answer is the buffer to allocate;
   `read-sequence`/`write-sequence` pick bytes vs. chars off the SEQUENCE (`stringp`). The

@@ -2,7 +2,7 @@
 
 `(file-position stream [position])`
 
-With one argument, the current byte position of a **binary** file stream — one opened with `:element-type '(unsigned-byte 8)` — or of a **bidirectional** one (`:direction :io`, or `:if-exists :overwrite`) of either element type. With two, it repositions the stream to `position` and answers `t`; the next read or write starts there. `position` may also be `:start` or `:end`.
+With one argument, the current position of a **binary** file stream — one opened with an integer `:element-type`, counted in its elements (bytes for `'(unsigned-byte 8)`) — or of a **bidirectional** one (`:direction :io`, or `:if-exists :overwrite`) of either element type. With two, it repositions the stream to `position` and answers `t`; the next read or write starts there. `position` may also be `:start` or `:end`.
 
 Anything whose position cannot be determined answers `nil`, which is what Common Lisp prescribes for exactly that: a character file stream opened `:input` or `:output`, a string stream, a socket, one of the standard streams, and a handle that has already been closed. Portable callers guard the call with `ignore-errors` and take their non-seeking fallback path on `nil`.
 

@@ -2,7 +2,7 @@
 
 `(read-byte stream &optional eof-error-p eof-value)`
 
-Reads one byte from a binary input stream -- a stream opened with `:element-type '(unsigned-byte 8)` -- and returns it as an integer between 0 and 255. At end of file it signals an `end-of-file` condition by default (catchable as `end-of-file`, or as `error`); passing `nil` as `eof-error-p` makes it return `eof-value` (default `nil`) instead. Works in all four backends. Bytes pass through raw: values such as 0 (NUL), 10 (LF) and 34 (`"`) are not interpreted.
+Reads one element from a binary input stream -- a stream opened with an integer `:element-type` -- and returns it as an integer: one byte between 0 and 255 for `'(unsigned-byte 8)`, and for a wider or signed type the element [`open`](open.md) describes, assembled from its little-endian octets (`'(signed-byte 16)` reads two octets and answers -32768 to 32767). At end of file it signals an `end-of-file` condition by default (catchable as `end-of-file`, or as `error`); passing `nil` as `eof-error-p` makes it return `eof-value` (default `nil`) instead. Works in all four backends. Bytes pass through raw: values such as 0 (NUL), 10 (LF) and 34 (`"`) are not interpreted.
 
 `stream` takes the same designators every other stream operation takes: `t` is the process standard input, and `nil` means the current `*standard-input*` -- which holds `t` unless you bind it. `(read-byte *standard-input*)` therefore reads raw octets from standard input, which is how a byte-oriented filter reads its input.
 

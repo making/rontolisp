@@ -277,9 +277,12 @@ mechanism.
   existing output stays byte-identical
   (`JvmLispCompilerTest#aLiteralWithOpenFileSpecCompilesToTheSameBytesAsBefore`).
 - **The path is bound once** — six leaves name it.
-- **The accepted value SET is the literal path's minus two, and only the time of the refusal
-  moves.** `:direction` `:input`/`:output`; `:element-type` `character` / `(unsigned-byte 8)`
-  (plus unsized `unsigned-byte`, `(unsigned-byte *)`); `:if-exists` `:supersede` and its
+- **The accepted value SET is the literal path's minus the bidirectional modes and every integer
+  type but the octet, and only the time of the refusal moves.** `:direction` `:input`/`:output`;
+  `:element-type` `character` / `(unsigned-byte 8)` (plus unsized `unsigned-byte`,
+  `(unsigned-byte *)`) -- a COMPUTED wide type is refused at call time, the `:io` trade again
+  (section "Element types wider and narrower than one octet"); the interpreter's own `open`
+  built-in cannot tell computed from literal and takes every element type; `:if-exists` `:supersede` and its
   version synonyms, `:append`, `:error`, nil; `:if-does-not-exist` `:create`/`:error`/nil;
   `:external-format` `:utf-8`/`:default`. A COMPUTED `:io` / `:overwrite` is refused at call
   time although the literal works -- the measured trade in the next section.
@@ -378,8 +381,10 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   return values stay nil. Runtime `_eval` interpreters and `--no-gc` do not know string streams.
 
 ## Binary streams and binary standard I/O
-`open` takes an optional third literal argument — `'character` (default) or `'(unsigned-byte 8)`;
-unparameterized `'unsigned-byte` is the same binary type. Interpreter: `BufferedInputStream`/
+`open` takes an optional third literal argument — `'character` (default) or an integer type; the
+octet `'(unsigned-byte 8)` (and every spelling that is one unsigned octet: `'unsigned-byte`, `'bit`,
+`'(unsigned-byte 3)`) is what this section describes, a wider or signed type the next section's.
+Interpreter: `BufferedInputStream`/
 `BufferedOutputStream` in the same table, `read-byte`/`write-byte` real `LispFunction`s with no
 `BuiltinFunctionWrappers` entries. JVM: `_open`'s 4-way mode branch, `_readByte(handle, eofErrorP,
 eofValue)`/`_writeByte`, a byte as a boxed `Long`. WASM: a WASI fd is element-type-agnostic, so
@@ -438,6 +443,87 @@ mean `read-byte` on a text-opened stream "works" there while interpreter/JVM sig
 - The `_eval` interpreters know none of this, nor `require`/`provide` (a file read by the runtime
   `load` of compiled output must not contain them — `.kb/load-inliner.md`). The `CiSpecE2eTest`
   driver passes `--dir . --dir /tmp` to both wasmtime invocations.
+
+## Element types wider and narrower than one octet
+
+`.todo/919`. An integer `:element-type` opens a binary stream whose ELEMENT is a fixed number of
+little-endian octets, two's complement when the type admits negatives; `stream-element-type`
+answers the widened type; `file-length` / `file-position` count elements. One classification,
+`macro/StreamElementType` (over `macro/IntegerTypeRange`), read by all four backends.
+
+**Measured against sbcl 2026-09-22, and it overturned the plan's premise.** The todo assumed sbcl
+PACKS a sub-octet type (N <= 8 several per octet) and biases `(integer lo hi)`. It does neither:
+a type needing b bits takes 1 / 2 / 4 / 8 octets for b <= 8 / 16 / 32 / 64 and `ceil(b/8)` beyond
+(`(unsigned-byte 100)` -> 13 octets, answered as `(unsigned-byte 104)`); `(unsigned-byte 1)` and
+`(integer 100 200)` both write the raw value in one octet; `bit`, `unsigned-byte` and `(mod n)` are
+`(unsigned-byte 8)`, `signed-byte` is `(signed-byte 8)`, an `(or ...)` of integer types takes its
+hull. `file-length` / `file-position` are in elements (3 two-octet elements -> 3). So no
+bit-packing stream exists anywhere: every backend's descriptor keeps moving octets and the element
+is composed above it. sbcl signals on `stream-element-type` of a CLOSED stream; ours answers the
+type (a narrower-than-sbcl refusal is not worth a table walk at close).
+
+- **Interpreter** (`Environment`): `open` classifies the EVALUATED type and records it per handle
+  (`streamElementTypes`, never cleared -- handles are never reused here). `read-byte`,
+  `write-byte`, `file-length`, `file-position` and the two packed sequence primitives are
+  re-defined as wrappers over the octet built-ins: a wide handle composes / scales / declines, any
+  other passes straight through. `stream-element-type` reads the table.
+- **Compile paths: a REGISTRY in prelude Lisp, not a runtime mode.** No backend learned a width.
+  `LispPreludeLibrary` entries `%file-stream-entry` / `%file-stream-register` /
+  `%file-stream-element-type` (a hash table keyed by the handle, entry = `(stream octets signed
+  spec)`, VALIDATED against the stream value with `eq` -- a WASM descriptor is reused after close,
+  and a socket on a reused fd must not inherit a file's width) and `%wide-width` /
+  `%wide-read-byte` / `%wide-write-byte` / `%wide-elements` / `%wide-position-octets`. The
+  backends (`Jvm/WasmExprCompiler`) lower ONLY when the entry is spliced (`ctx.functions`): a
+  literal binary `open` leaf becomes `(%file-stream-register (%obj-new '%STREAM <checked open>
+  :FILE) n signed 'spec)` (`LispMacroExpander.registeredOpen`), `read-byte` / `write-byte`
+  (and the component socket aliases `%read-byte-raw` / `%write-byte-raw`) call the wide helpers,
+  `file-length` / `file-position` go through the scaling call-site shapes
+  (`expandWideFileLength` / `expandWideFilePosition`, after `rewriteFilePositionArg`), and the
+  packed arm of every `read-sequence` / `write-sequence` expansion -- the backends' own and
+  `SequenceIoNarrowing`'s -- is guarded by `%wide-width` (`guardPackedSequenceForWideStreams`),
+  because the packed primitive moves raw octets. The helpers reach the primitive through four
+  internal names the lowering does not rewrite again: `%read-octet`, `%write-octet`,
+  `%file-octet-length`, `%file-octet-position`. **Every name-keyed runtime gate still sees the
+  public name** (the JVM `FileMeta` / stdout-flush gates, the WASM `file-position` import), because
+  a raw call appears only in the lowering of a call the source wrote.
+- **Two selection facts, both SURFACE** (`referencedBySurfaceForm`, `LibraryDefunPruner`'s
+  synthesized list): the wide half on `LispMacroExpander.opensWideElementStream` (a literal wide
+  `:element-type` on an `open` / `with-open-file`); the registry also on "names
+  `stream-element-type` AND names `open` / `with-open-file`" -- which is what makes an octet
+  stream answer `(unsigned-byte 8)` instead of the old `CHARACTER` constant. A wide leaf compiled
+  without the registry (a pipeline that skipped prelude selection) signals at call time
+  (`wideElementTypeUnavailableStub`) rather than open octets.
+- **Literal-only on the compile paths, by the `:io` trade.** A computed wide type would put every
+  uiop wrapper and `#'open` behind the helpers. `uiop:with-temporary-file` opens through a computed
+  element type, so a wide literal there is refused at call time too.
+- **An octet spelling emits exactly `'(unsigned-byte 8)`** (`elementTypeLiteral` writes the widened
+  spec), so `bit` / `(unsigned-byte 3)` / `(integer 0 200)` compile to the class the octet always
+  did (`JvmLispCompilerTest#theOctetElementTypeSpellingsCompileToTheSameBytesAsUnsignedByte8`).
+
+Cost and identity (2026-09-22, bytes JVM / Preview 1 / component, default optimize): every program
+without a wide literal and without the `stream-element-type` + `open` pair is byte-identical --
+measured over the 94 ci-spec cases and 33 examples that name a stream/byte/subtypep operator and
+the size-report corpus, 357 artifacts. A two-line ub8 write + read 38,994 / 19,735 / 25,360; the
+same at `(unsigned-byte 16)` 47,613 / 27,709 / 33,353 (+8.6K / +8.0K / +8.0K, the helpers); a
+`stream-element-type` of an ub8 file stream 9,128 / 5,556 / 10,516 -> 12,871 / 9,455 / 14,455 (the
+registry).
+
+ANSI `streams` (interpreter, suite `ca06bd9`), 2026-09-22: the call-time `with-open-file` refusal
+(commit 1) 758 -> 789 tests counted, lost forms 55 -> 24, passes 447 unchanged; then 447 -> 530 of
+789 (56.7% -> 67.2%), 83 fixed, 0 regressed -- `OPEN.4 .29-.58 .61 .62`, `OPEN.OUTPUT.5-.19`,
+`OPEN.IO.5-.19`, `OPEN.PROBE.25-.27 .29-.36`, `FILE-LENGTH.2-.5`, `READ-BYTE.3 .4`,
+`STREAM-ELEMENT-TYPE.2-.4` (the integer-interval `subtypep` rule in
+[declarations-type-checks.md](declarations-type-checks.md) is what their `(subtypep etype
+(stream-element-type s))` assertions needed). Still failing and this area's: `FILE-POSITION.7
+.8`, `OPEN.65`, `MAKE-TWO-WAY-STREAM.13` -- a COMPUTED wide type in `with-open-file`, refused on
+every backend by the literal-only rule above.
+
+Pinned by `LispEvaluatorTest#wideAndNarrowElementTypesRoundTripTheWaySbclStoresThem`,
+`JvmLispCompilerTest#compileAndRunWideAndNarrowElementTypes` /
+`#compileAndRunStreamElementTypeOfAnOctetFileStream`,
+`WasmLispCompilerIntegrationTest#wideAndNarrowElementTypesOnPreview1` /
+`#componentWideAndNarrowElementTypes` / `#streamElementTypeOfAnOctetFileStreamOnPreview1`,
+`StreamElementTypeTest`, ci-spec `wide-and-narrow-stream-element-types`.
 
 ## Component stdin (stdin.lisp over wit-imported `wasi:cli/stdin@0.3.0`)
 On `--component`, an ASYNC program that reads stdin (a read referenced + an async form referenced +

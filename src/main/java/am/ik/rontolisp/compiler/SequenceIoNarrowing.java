@@ -87,7 +87,12 @@ public final class SequenceIoNarrowing {
 		for (LispVal form : program) {
 			collectSpecials(form, specials);
 		}
-		Narrower narrower = new Narrower(specials);
+		// A program that opens a WIDE element stream keeps the packed arm guarded, as the
+		// backends' own read-sequence / write-sequence cases do: the packed primitive
+		// moves raw octets (.kb/read-load-streams.md, "Element types wider and narrower
+		// than one octet"). The spliced %wide-width defun is the fact the backends read.
+		boolean wide = definesFunction(program, LispNames.WIDE_WIDTH_INTERNAL);
+		Narrower narrower = new Narrower(specials, wide);
 		List<LispVal> out = new ArrayList<>(program.size());
 		boolean changed = false;
 		for (LispVal form : program) {
@@ -96,6 +101,17 @@ public final class SequenceIoNarrowing {
 			out.add(rewritten);
 		}
 		return changed ? out : program;
+	}
+
+	private static boolean definesFunction(List<LispVal> program, String name) {
+		for (LispVal form : program) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+					&& LispNames.DEFUN.equals(head.name()) && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol defined && name.equals(defined.name())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** Globally special names: {@code defvar} / {@code defparameter} anywhere. */
@@ -121,8 +137,11 @@ public final class SequenceIoNarrowing {
 
 		private final Set<String> specials;
 
-		private Narrower(Set<String> specials) {
+		private final boolean wide;
+
+		private Narrower(Set<String> specials, boolean wide) {
 			this.specials = specials;
+			this.wide = wide;
 		}
 
 		private LispVal form(LispVal val, Map<String, Shape> env) {
@@ -179,6 +198,9 @@ public final class SequenceIoNarrowing {
 					|| LispNames.READ_SEQUENCE_RAW_INTERNAL.equals(head.name());
 			LispVal expanded = read ? LispMacroExpander.expandReadSequence(cons, true)
 					: LispMacroExpander.expandWriteSequence(cons, true);
+			if (this.wide) {
+				expanded = LispMacroExpander.guardPackedSequenceForWideStreams(expanded);
+			}
 			return SourceProvenance.inherit(cons, expanded);
 		}
 

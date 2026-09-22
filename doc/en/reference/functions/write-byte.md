@@ -18,4 +18,4 @@ Because it touches the filesystem, `write-byte` is shown here statically rather 
 (write-byte 137 *standard-output*)  ; one raw octet on stdout
 ```
 
-This writes the four bytes `89 50 4E 47` (the start of a PNG signature) to `data.bin`. The interpreter and JVM signal an error for a value outside 0-255.
+This writes the four bytes `89 50 4E 47` (the start of a PNG signature) to `data.bin`. The interpreter and JVM signal an error for a value outside 0-255. On a stream opened with a wider or signed integer `:element-type` (see [`open`](open.md)) one call writes one ELEMENT, as its little-endian octets in two's complement, and a value outside the widened type signals on every backend.

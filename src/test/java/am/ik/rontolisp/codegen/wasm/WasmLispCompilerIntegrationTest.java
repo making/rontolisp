@@ -13242,6 +13242,104 @@ class WasmLispCompilerIntegrationTest {
 	 * truncating. The JVM twin is
 	 * {@code JvmLispCompilerTest#compileAndRunOpenDirectionIoAndOverwrite}.
 	 */
+	/**
+	 * .todo/919: element types wider and narrower than one octet, the twin of
+	 * LispEvaluatorTest#wideAndNarrowElementTypesRoundTripTheWaySbclStoresThem (and of
+	 * JvmLispCompilerTest#compileAndRunWideAndNarrowElementTypes and ci-spec
+	 * wide-and-narrow-stream-element-types). Measured against sbcl.
+	 */
+	private static final String WIDE_ELEMENT_PROGRAM = """
+			(defun w919-drain (s)
+			  (do ((b (read-byte s nil :eof) (read-byte s nil :eof)) (r nil (cons b r)))
+			      ((eq b :eof) (nreverse r))))
+			(defun w919-octets ()
+			  (with-open-file (i "w919.bin" :element-type '(unsigned-byte 8)) (w919-drain i)))
+			(with-open-file (o "w919.bin" :direction :output :element-type '(unsigned-byte 1) :if-exists :supersede)
+			  (dolist (v '(0 1 1)) (write-byte v o)))
+			(print (list (with-open-file (i "w919.bin" :element-type '(unsigned-byte 1))
+			               (list (stream-element-type i) (file-length i) (w919-drain i)))
+			             (w919-octets)))
+			(with-open-file (o "w919.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
+			  (dolist (v '(1 258)) (write-byte v o)))
+			(print (list (with-open-file (i "w919.bin" :element-type '(unsigned-byte 16))
+			               (list (stream-element-type i) (file-length i) (w919-drain i)))
+			             (w919-octets)))
+			(with-open-file (o "w919.bin" :direction :output :element-type '(signed-byte 8) :if-exists :supersede)
+			  (dolist (v '(-1 5)) (write-byte v o)))
+			(print (list (with-open-file (i "w919.bin" :element-type '(signed-byte 8))
+			               (list (stream-element-type i) (file-length i) (w919-drain i)))
+			             (w919-octets)))
+			(with-open-file (o "w919.bin" :direction :output :element-type '(signed-byte 64) :if-exists :supersede)
+			  (dolist (v '(-9223372036854775808 9223372036854775807)) (write-byte v o)))
+			(print (list (with-open-file (i "w919.bin" :element-type '(signed-byte 64))
+			               (list (stream-element-type i) (file-length i) (w919-drain i)))
+			             (w919-octets)))
+			(with-open-file (o "w919.bin" :direction :output :element-type '(integer 100 200) :if-exists :supersede)
+			  (write-byte 150 o))
+			(print (list (with-open-file (i "w919.bin" :element-type '(integer 100 200))
+			               (list (stream-element-type i) (file-length i) (w919-drain i)))
+			             (w919-octets)))
+			(print (with-open-file (i "w919.bin" :element-type '(unsigned-byte 16))
+			         (list (file-length i) (read-byte i nil :partial))))
+			(with-open-file (o "w919.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
+			  (write-sequence (vector 1 2 65535) o))
+			(print (with-open-file (i "w919.bin" :element-type '(unsigned-byte 16))
+			         (list (read-byte i) (file-position i) (file-position i 0) (read-byte i)
+			               (file-position i :end) (read-byte i nil :eof))))
+			(print (with-open-file (i "w919.bin" :element-type '(unsigned-byte 16))
+			         (let ((v (make-array 3 :element-type '(unsigned-byte 16))))
+			           (list (read-sequence v i) (aref v 0) (aref v 2)))))
+			(print (with-open-file (s "w919.bin" :direction :io :element-type '(signed-byte 16) :if-exists :overwrite)
+			         (list (read-byte s) (progn (write-byte -2 s) (file-position s)) (file-position s 1) (read-byte s))))
+			(print (with-open-file (s "w919.bin") (stream-element-type s)))
+			""";
+
+	private static final String WIDE_ELEMENT_EXPECTED = """
+			(((UNSIGNED-BYTE 8) 3 (0 1 1)) (0 1 1))
+			(((UNSIGNED-BYTE 16) 2 (1 258)) (1 0 2 1))
+			(((SIGNED-BYTE 8) 2 (-1 5)) (255 5))
+			(((SIGNED-BYTE 64) 2 (-9223372036854775808 9223372036854775807)) (0 0 0 0 0 0 0 128 255 255 255 255 255 255 255 127))
+			(((UNSIGNED-BYTE 8) 1 (150)) (150))
+			(0 :PARTIAL)
+			(1 1 T 1 T :EOF)
+			(3 1 65535)
+			(1 2 T -2)
+			CHARACTER""";
+
+	@Test
+	void streamElementTypeOfAnOctetFileStreamOnPreview1() throws Exception {
+		// A program that asks stream-element-type and can open a file registers its
+		// binary opens, so an (unsigned-byte 8) stream answers its type rather than the
+		// CHARACTER constant; with no wide element type, read-byte stays the primitive.
+		assertThat(compileAndRunWithDir("""
+				(with-open-file (o "e919.bin" :direction :output :element-type '(unsigned-byte 8) :if-exists :supersede)
+				  (write-byte 7 o)
+				  (print (list (stream-element-type o) (typep o 'file-stream))))
+				(with-open-file (i "e919.bin" :element-type 'unsigned-byte)
+				  (print (list (stream-element-type i) (read-byte i) (read-byte i nil :eof))))
+				(with-open-file (i "e919.bin")
+				  (print (stream-element-type i)))
+				(print (with-output-to-string (s) (princ (stream-element-type s) s)))
+				""")).isEqualTo("""
+				((UNSIGNED-BYTE 8) T)
+				((UNSIGNED-BYTE 8) 7 :EOF)
+				CHARACTER
+				\"CHARACTER\"""");
+	}
+
+	@Test
+	void wideAndNarrowElementTypesOnPreview1() throws Exception {
+		// The descriptor moves octets; a wide element composes above %read-octet /
+		// %write-octet through the prelude registry, and file-length / file-position
+		// count elements.
+		assertThat(compileAndRunWithDir(WIDE_ELEMENT_PROGRAM)).isEqualTo(WIDE_ELEMENT_EXPECTED);
+	}
+
+	@Test
+	void componentWideAndNarrowElementTypes() throws Exception {
+		assertThat(compileAndRunComponentWithDir(WIDE_ELEMENT_PROGRAM)).isEqualTo(WIDE_ELEMENT_EXPECTED);
+	}
+
 	private static final String OPEN_IO_PROGRAM = """
 			(with-open-file (out "io918.txt" :direction :output) (write-string "abcdefghij" out))
 			(let ((s (open "io918.txt" :direction :io :if-exists :overwrite)))

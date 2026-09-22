@@ -5709,6 +5709,53 @@ public final class LispNames {
 	/** See {@link #READ_LINE_RAW_INTERNAL}. */
 	public static final String CLOSE_RAW_INTERNAL = "%CLOSE-RAW";
 
+	/**
+	 * The compile paths' per-file-stream element-type registry: a prelude defun that
+	 * records a binary {@code open}'s element type against its stream and answers the
+	 * stream. Called around every literal binary {@code open} leaf once the program can
+	 * ask about an element type ({@code .kb/read-load-streams.md}, "Element types wider
+	 * and narrower than one octet").
+	 */
+	public static final String FILE_STREAM_REGISTER_INTERNAL = "%FILE-STREAM-REGISTER";
+
+	/** The registry lookup: a stream's entry, or nil. */
+	public static final String FILE_STREAM_ENTRY_INTERNAL = "%FILE-STREAM-ENTRY";
+
+	/** The registry read behind a compiled {@code stream-element-type}. */
+	public static final String FILE_STREAM_ELEMENT_TYPE_INTERNAL = "%FILE-STREAM-ELEMENT-TYPE";
+
+	/** The prelude {@code read-byte} a program with a WIDE element type reads through. */
+	public static final String WIDE_READ_BYTE_INTERNAL = "%WIDE-READ-BYTE";
+
+	/** The prelude {@code write-byte} twin of {@link #WIDE_READ_BYTE_INTERNAL}. */
+	public static final String WIDE_WRITE_BYTE_INTERNAL = "%WIDE-WRITE-BYTE";
+
+	/**
+	 * Octets to elements: {@code file-length} / {@code file-position} on a wide stream.
+	 */
+	public static final String WIDE_ELEMENTS_INTERNAL = "%WIDE-ELEMENTS";
+
+	/** Elements to octets: the {@code file-position} set on a wide stream. */
+	public static final String WIDE_POSITION_OCTETS_INTERNAL = "%WIDE-POSITION-OCTETS";
+
+	/** The registry entry of a wide stream, nil for any other. */
+	public static final String WIDE_WIDTH_INTERNAL = "%WIDE-WIDTH";
+
+	/**
+	 * The one-octet {@code read-byte} the wide helpers compose from: the backend's own
+	 * primitive, reached under a name the wide lowering does not rewrite again.
+	 */
+	public static final String READ_OCTET_INTERNAL = "%READ-OCTET";
+
+	/** See {@link #READ_OCTET_INTERNAL}: the one-octet {@code write-byte}. */
+	public static final String WRITE_OCTET_INTERNAL = "%WRITE-OCTET";
+
+	/** See {@link #READ_OCTET_INTERNAL}: {@code file-length} in octets. */
+	public static final String FILE_OCTET_LENGTH_INTERNAL = "%FILE-OCTET-LENGTH";
+
+	/** See {@link #READ_OCTET_INTERNAL}: {@code file-position} in octets. */
+	public static final String FILE_OCTET_POSITION_INTERNAL = "%FILE-OCTET-POSITION";
+
 	/** See {@link #READ_LINE_RAW_INTERNAL}. */
 	public static final String READ_SEQUENCE_RAW_INTERNAL = "%READ-SEQUENCE-RAW";
 

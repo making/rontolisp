@@ -1467,6 +1467,99 @@ public final class LispPreludeLibrary {
 				          (%obj-ref %st-s 0)
 				          %st-s)))
 				""");
+		// The compile paths' element-type registry (.kb/read-load-streams.md, "Element
+		// types wider and narrower than one octet"). A backend's file descriptor moves
+		// octets whatever the element type, so the TYPE rides beside the stream: every
+		// literal binary open leaf is wrapped in %file-stream-register, keyed by the
+		// handle and checked against the stream VALUE (a WASM descriptor is reused after
+		// close, so a later stream on the same number must not inherit the entry).
+		// Entries survive close, as the interpreter's do. The backends call these only
+		// when the entry is spliced (ctx.functions), and selection keys on the SURFACE
+		// fact (referencedBySurfaceForm), because the calls are synthesized inside the
+		// expression compilers. Each helper is its own entry (the pruner roots entries
+		// by name), and the two that touch the table carry their own copy of its defvar
+		// -- defvar assigns only when unbound, the %symbol-plists precedent.
+		SOURCES.put(LispNames.FILE_STREAM_ENTRY_INTERNAL, """
+				(defvar %file-stream-types (make-hash-table))
+				(defun %file-stream-entry (%fse-s)
+				  (if (%obj-is %fse-s '%SYNONYM-STREAM)
+				      (%file-stream-entry (funcall (%obj-ref %fse-s 1)))
+				      (if (%obj-is %fse-s '%STREAM)
+				          (let ((%fse-e (gethash (%obj-ref %fse-s 0) %file-stream-types)))
+				            (if %fse-e (if (eq (car %fse-e) %fse-s) %fse-e nil) nil))
+				          nil)))
+				""");
+		SOURCES.put(LispNames.FILE_STREAM_REGISTER_INTERNAL, """
+				(defvar %file-stream-types (make-hash-table))
+				(defun %file-stream-register (%fsr-s %fsr-n %fsr-signed %fsr-spec)
+				  (setf (gethash (%obj-ref %fsr-s 0) %file-stream-types) (list %fsr-s %fsr-n %fsr-signed %fsr-spec))
+				  %fsr-s)
+				""");
+		SOURCES.put(LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL, """
+				(defun %file-stream-element-type (%fset-s)
+				  (let ((%fset-e (%file-stream-entry %fset-s)))
+				    (if %fset-e (car (cdr (cdr (cdr %fset-e)))) 'character)))
+				""");
+		// The WIDE element: more than one octet, or a signed one. The backends lower
+		// read-byte / write-byte onto these, and file-length / file-position through the
+		// two scaling helpers, only when these entries are spliced -- a program that
+		// opens no wide stream keeps every byte it had. An element is little-endian,
+		// two's complement when signed, composed from the backend's one-octet primitive
+		// (%read-octet / %write-octet, the unlowered read-byte / write-byte).
+		SOURCES.put(LispNames.WIDE_WIDTH_INTERNAL, """
+				(defun %wide-width (%ww-s)
+				  (let ((%ww-e (%file-stream-entry %ww-s)))
+				    (if %ww-e (if (or (> (car (cdr %ww-e)) 1) (car (cdr (cdr %ww-e)))) %ww-e nil) nil)))
+				""");
+		SOURCES.put(LispNames.WIDE_READ_BYTE_INTERNAL, """
+				(defun %wide-read-byte (%wrb-s %wrb-errp %wrb-v)
+				  (let* ((%wrb-st (if %wrb-s %wrb-s *standard-input*))
+				         (%wrb-e (%wide-width %wrb-st))
+				         (%wrb-n (if %wrb-e (car (cdr %wrb-e)) 1))
+				         (%wrb-acc 0)
+				         (%wrb-i 0)
+				         (%wrb-b 0))
+				    (while (if %wrb-b (< %wrb-i %wrb-n) nil)
+				      (setq %wrb-b (%read-octet %wrb-st nil nil))
+				      (if %wrb-b
+				          (progn (setq %wrb-acc (logior %wrb-acc (ash %wrb-b (* 8 %wrb-i))))
+				                 (setq %wrb-i (+ %wrb-i 1)))
+				          nil))
+				    (if (< %wrb-i %wrb-n)
+				        (if %wrb-errp (error 'end-of-file :stream %wrb-st) %wrb-v)
+				        (if (if %wrb-e (if (car (cdr (cdr %wrb-e))) (logbitp (- (* 8 %wrb-n) 1) %wrb-acc) nil) nil)
+				            (- %wrb-acc (ash 1 (* 8 %wrb-n)))
+				            %wrb-acc))))
+				""");
+		SOURCES.put(LispNames.WIDE_WRITE_BYTE_INTERNAL, """
+				(defun %wide-write-byte (%wwb-i %wwb-s)
+				  (let ((%wwb-e (%wide-width %wwb-s)))
+				    (if (null %wwb-e)
+				        (%write-octet %wwb-i %wwb-s)
+				        (let* ((%wwb-n (car (cdr %wwb-e)))
+				               (%wwb-bits (* 8 %wwb-n))
+				               (%wwb-signed (car (cdr (cdr %wwb-e))))
+				               (%wwb-lo (if %wwb-signed (- (ash 1 (- %wwb-bits 1))) 0))
+				               (%wwb-hi (- (if %wwb-signed (ash 1 (- %wwb-bits 1)) (ash 1 %wwb-bits)) 1))
+				               (%wwb-k 0))
+				          (if (if (integerp %wwb-i) (if (>= %wwb-i %wwb-lo) (<= %wwb-i %wwb-hi) nil) nil)
+				              (let ((%wwb-u (if (< %wwb-i 0) (+ %wwb-i (ash 1 %wwb-bits)) %wwb-i)))
+				                (while (< %wwb-k %wwb-n)
+				                  (%write-octet (logand (ash %wwb-u (- (* 8 %wwb-k))) 255) %wwb-s)
+				                  (setq %wwb-k (+ %wwb-k 1)))
+				                %wwb-i)
+				              (error "WRITE-BYTE expects an integer between ~a and ~a" %wwb-lo %wwb-hi))))))
+				""");
+		SOURCES.put(LispNames.WIDE_ELEMENTS_INTERNAL, """
+				(defun %wide-elements (%we-s %we-n)
+				  (let ((%we-e (%wide-width %we-s)))
+				    (if (if %we-e (integerp %we-n) nil) (values (floor %we-n (car (cdr %we-e)))) %we-n)))
+				""");
+		SOURCES.put(LispNames.WIDE_POSITION_OCTETS_INTERNAL, """
+				(defun %wide-position-octets (%wpo-s %wpo-p)
+				  (let ((%wpo-e (%wide-width %wpo-s)))
+				    (if (if %wpo-e (integerp %wpo-p) nil) (* %wpo-p (car (cdr %wpo-e))) %wpo-p)))
+				""");
 		SOURCES.put(LispNames.SYNONYM_STREAM_SYMBOL, """
 				(defun synonym-stream-symbol (%sss-s)
 				  (if (%obj-is %sss-s '%SYNONYM-STREAM)
@@ -4170,6 +4263,24 @@ public final class LispPreludeLibrary {
 		// print-object seam both open a string output stream), which nothing here can
 		// see. That is why the compile-path seams fall back to the INLINE unwrap when
 		// the defun is absent -- see StreamDesignators.throughStreamInline.
+		// The element-type registry and the wide-element helpers: every call to them is
+		// synthesized by the expression compilers (the open leaf's registration, the
+		// read-byte / write-byte / file-length / file-position / stream-element-type
+		// lowerings), long after this pass. The wide half keys on a literal wide
+		// element type being opened at all; the registry also serves a program that
+		// asks stream-element-type and can open a file.
+		if (LispNames.WIDE_READ_BYTE_INTERNAL.equals(entry) || LispNames.WIDE_WRITE_BYTE_INTERNAL.equals(entry)
+				|| LispNames.WIDE_ELEMENTS_INTERNAL.equals(entry)
+				|| LispNames.WIDE_POSITION_OCTETS_INTERNAL.equals(entry)) {
+			return am.ik.rontolisp.macro.LispMacroExpander.opensWideElementStream(program);
+		}
+		if (LispNames.FILE_STREAM_REGISTER_INTERNAL.equals(entry)
+				|| LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL.equals(entry)) {
+			return am.ik.rontolisp.macro.LispMacroExpander.opensWideElementStream(program)
+					|| (referencesName(program, LispNames.STREAM_ELEMENT_TYPE, canonical)
+							&& (referencesName(program, LispNames.OPEN, canonical)
+									|| referencesName(program, LispNames.WITH_OPEN_FILE, canonical)));
+		}
 		if (LispNames.STREAM_TARGET.equals(entry)) {
 			return am.ik.rontolisp.macro.LispMacroExpander.mayCreateStreamValues(program)
 					|| referencesName(program, LispNames.MAKE_SYNONYM_STREAM, canonical)

@@ -19022,6 +19022,120 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunStreamElementTypeOfAnOctetFileStream(@TempDir Path tempDir) throws Exception {
+		// The registry without the wide helpers: a program that asks
+		// stream-element-type and opens a file answers (unsigned-byte 8) for an octet
+		// stream, CHARACTER for every other (the WASM twin is
+		// streamElementTypeOfAnOctetFileStreamOnPreview1).
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(
+				"""
+						(with-open-file (o "%1$s/e919.bin" :direction :output :element-type '(unsigned-byte 8) :if-exists :supersede)
+						  (write-byte 7 o)
+						  (print (list (stream-element-type o) (typep o 'file-stream))))
+						(with-open-file (i "%1$s/e919.bin" :element-type 'unsigned-byte)
+						  (print (list (stream-element-type i) (read-byte i) (read-byte i nil :eof))))
+						(with-open-file (i "%1$s/e919.bin")
+						  (print (stream-element-type i)))
+						(print (with-output-to-string (s) (princ (stream-element-type s) s)))
+						"""
+					.formatted(here)))
+			.isEqualTo("""
+					((UNSIGNED-BYTE 8) T)
+					((UNSIGNED-BYTE 8) 7 :EOF)
+					CHARACTER
+					\"CHARACTER\"""");
+	}
+
+	@Test
+	void compileAndRunWideAndNarrowElementTypes(@TempDir Path tempDir) throws Exception {
+		// .todo/919: the twin of
+		// LispEvaluatorTest#wideAndNarrowElementTypesRoundTripTheWaySbclStoresThem and
+		// WasmLispCompilerIntegrationTest#wideAndNarrowElementTypesOnPreview1. A wide
+		// element composes above the octet primitive through the prelude registry; the
+		// output is sbcl's.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(
+				"""
+						(defun w919-drain (s)
+						  (do ((b (read-byte s nil :eof) (read-byte s nil :eof)) (r nil (cons b r)))
+						      ((eq b :eof) (nreverse r))))
+						(defun w919-octets ()
+						  (with-open-file (i "%1$s/w919.bin" :element-type '(unsigned-byte 8)) (w919-drain i)))
+						(with-open-file (o "%1$s/w919.bin" :direction :output :element-type '(unsigned-byte 1) :if-exists :supersede)
+						  (dolist (v '(0 1 1)) (write-byte v o)))
+						(print (list (with-open-file (i "%1$s/w919.bin" :element-type '(unsigned-byte 1))
+						               (list (stream-element-type i) (file-length i) (w919-drain i)))
+						             (w919-octets)))
+						(with-open-file (o "%1$s/w919.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
+						  (dolist (v '(1 258)) (write-byte v o)))
+						(print (list (with-open-file (i "%1$s/w919.bin" :element-type '(unsigned-byte 16))
+						               (list (stream-element-type i) (file-length i) (w919-drain i)))
+						             (w919-octets)))
+						(with-open-file (o "%1$s/w919.bin" :direction :output :element-type '(signed-byte 8) :if-exists :supersede)
+						  (dolist (v '(-1 5)) (write-byte v o)))
+						(print (list (with-open-file (i "%1$s/w919.bin" :element-type '(signed-byte 8))
+						               (list (stream-element-type i) (file-length i) (w919-drain i)))
+						             (w919-octets)))
+						(with-open-file (o "%1$s/w919.bin" :direction :output :element-type '(signed-byte 64) :if-exists :supersede)
+						  (dolist (v '(-9223372036854775808 9223372036854775807)) (write-byte v o)))
+						(print (list (with-open-file (i "%1$s/w919.bin" :element-type '(signed-byte 64))
+						               (list (stream-element-type i) (file-length i) (w919-drain i)))
+						             (w919-octets)))
+						(with-open-file (o "%1$s/w919.bin" :direction :output :element-type '(integer 100 200) :if-exists :supersede)
+						  (write-byte 150 o))
+						(print (list (with-open-file (i "%1$s/w919.bin" :element-type '(integer 100 200))
+						               (list (stream-element-type i) (file-length i) (w919-drain i)))
+						             (w919-octets)))
+						(print (with-open-file (i "%1$s/w919.bin" :element-type '(unsigned-byte 16))
+						         (list (file-length i) (read-byte i nil :partial))))
+						(with-open-file (o "%1$s/w919.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
+						  (write-sequence (vector 1 2 65535) o))
+						(print (with-open-file (i "%1$s/w919.bin" :element-type '(unsigned-byte 16))
+						         (list (read-byte i) (file-position i) (file-position i 0) (read-byte i)
+						               (file-position i :end) (read-byte i nil :eof))))
+						(print (with-open-file (i "%1$s/w919.bin" :element-type '(unsigned-byte 16))
+						         (let ((v (make-array 3 :element-type '(unsigned-byte 16))))
+						           (list (read-sequence v i) (aref v 0) (aref v 2)))))
+						(print (with-open-file (s "%1$s/w919.bin" :direction :io :element-type '(signed-byte 16) :if-exists :overwrite)
+						         (list (read-byte s) (progn (write-byte -2 s) (file-position s)) (file-position s 1) (read-byte s))))
+						(print (with-open-file (s "%1$s/w919.bin") (stream-element-type s)))
+						"""
+					.formatted(here)))
+			.isEqualTo(
+					"""
+							(((UNSIGNED-BYTE 8) 3 (0 1 1)) (0 1 1))
+							(((UNSIGNED-BYTE 16) 2 (1 258)) (1 0 2 1))
+							(((SIGNED-BYTE 8) 2 (-1 5)) (255 5))
+							(((SIGNED-BYTE 64) 2 (-9223372036854775808 9223372036854775807)) (0 0 0 0 0 0 0 128 255 255 255 255 255 255 255 127))
+							(((UNSIGNED-BYTE 8) 1 (150)) (150))
+							(0 :PARTIAL)
+							(1 1 T 1 T :EOF)
+							(3 1 65535)
+							(1 2 T -2)
+							CHARACTER""");
+	}
+
+	@Test
+	void theOctetElementTypeSpellingsCompileToTheSameBytesAsUnsignedByte8() {
+		// bit, unsigned-byte, (unsigned-byte 3) and (integer 0 200) are all ONE octet,
+		// unsigned (StreamElementType): the leaf carries the widened '(unsigned-byte 8)
+		// and the class is the one the octet spelling always compiled to.
+		byte[] octet = JvmLispCompiler.builder().className("SameOctet").build().compile(LispReader.readAllFromString("""
+				(with-open-file (s "f.bin" :direction :output :element-type '(unsigned-byte 8)) (write-byte 65 s))
+				"""));
+		for (String spelling : List.of("'bit", "'unsigned-byte", "'(unsigned-byte 3)", "'(integer 0 200)")) {
+			assertThat(JvmLispCompiler.builder()
+				.className("SameOctet")
+				.build()
+				.compile(LispReader.readAllFromString("(with-open-file (s \"f.bin\" :direction :output :element-type "
+						+ spelling + ") (write-byte 65 s))")))
+				.as(spelling)
+				.isEqualTo(octet);
+		}
+	}
+
+	@Test
 	void aLiteralWithOpenFileSpecCompilesToTheSameBytesAsBefore(@TempDir Path tempDir) {
 		// The runtime dispatch must cost a LITERAL spec nothing: the fold is what every
 		// existing program and every size-report number was measured on. A spec of

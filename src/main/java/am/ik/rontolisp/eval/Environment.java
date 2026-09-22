@@ -85,6 +85,7 @@ import am.ik.rontolisp.compiler.FixedDecimal;
 import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.macro.StreamElementType;
 import am.ik.rontolisp.reader.LispLexer;
 import am.ik.rontolisp.runtime.RontoIoFileStream;
 import am.ik.rontolisp.reader.LispReader;
@@ -4948,6 +4949,13 @@ public final class Environment implements Scope {
 		// Concurrent for the same reason the table above is (one virtual thread per
 		// served request).
 		Map<Long, Long> streamPositions = new ConcurrentHashMap<>();
+		// The element type of each BINARY file stream, keyed by the same handle: what
+		// read-byte / write-byte move per element (octets, sign), what
+		// stream-element-type answers, and what file-length / file-position count in
+		// (.kb/read-load-streams.md, "Element types wider and narrower than one octet").
+		// NOT cleared by close: a closed stream still answers its element type, and a
+		// handle is never reused here.
+		Map<Long, StreamElementType> streamElementTypes = new ConcurrentHashMap<>();
 		// The set half of file-position for a BINARY file stream: reposition the file at
 		// the given byte offset and answer T, or nil if the stream was not a file
 		// stream or has left the table. An input stream re-opens the file (which also
@@ -5437,11 +5445,6 @@ public final class Environment implements Scope {
 				default -> LispNil.INSTANCE;
 			};
 		}));
-		env.defineFunction(LispNames.STREAM_ELEMENT_TYPE, new LispFunction(LispNames.STREAM_ELEMENT_TYPE, args -> {
-			requireArgCount(LispNames.STREAM_ELEMENT_TYPE, args, 1);
-			// Every stream is a character stream.
-			return new LispSymbol("CHARACTER");
-		}));
 		// CL's get-output-stream-string CLEARS the stream as it answers, so a second call
 		// sees only what was written after the first; with-output-to-string fetches once
 		// and then closes, so it cannot tell the difference.
@@ -5698,12 +5701,14 @@ public final class Environment implements Scope {
 			boolean overwrite = (directionMode & OpenModes.OVERWRITE_BIT) != 0;
 			boolean bidirectional = (directionMode & OpenModes.IO_BIT) != 0;
 			boolean output = (directionMode & OpenModes.OUTPUT_BIT) != 0;
-			// The optional third argument is the element type: '(unsigned-byte 8) opens a
-			// binary stream, 'character (the default) a text stream.
-			boolean binary = false;
+			// The optional third argument is the element type: any integer type opens a
+			// binary stream of the width StreamElementType decides, 'character (the
+			// default) a text stream.
+			StreamElementType elementType = StreamElementType.CHARACTER;
 			if (args.size() > 2) {
-				binary = isBinaryElementType(args.get(2));
+				elementType = streamElementType(args.get(2));
 			}
+			boolean binary = !elementType.isCharacter();
 			// The existence guard. :if-exists is read only on an output open (it is
 			// already nil otherwise); :if-does-not-exist defaults to :create for an
 			// output open that supersedes, nil for :probe and :error everywhere else --
@@ -5781,6 +5786,9 @@ public final class Environment implements Scope {
 							: Files.newBufferedReader(Path.of(path.value()));
 				}
 				long handle = nextStreamHandle.getAndIncrement();
+				if (binary) {
+					streamElementTypes.put(handle, elementType);
+				}
 				if (probe) {
 					// CL's probe open answers a file stream that is already CLOSED: the
 					// program may ask typep / pathname about it but not read it. The
@@ -6554,6 +6562,112 @@ public final class Environment implements Scope {
 				throw new UncheckedIOException(ex);
 			}
 			return args.get(0);
+		}));
+		// Element types beyond character and (unsigned-byte 8): the octet primitives
+		// above stay exactly what they were, and these wrappers compose a WIDE element
+		// -- more than one octet, or a signed one -- out of them, little-endian and
+		// two's complement (StreamElementType; .kb/read-load-streams.md, "Element types
+		// wider and narrower than one octet"). file-length and file-position count
+		// ELEMENTS, so they divide (and a set multiplies) by the width; the packed bulk
+		// path declines a wide stream so the per-element loop composes. The compile
+		// paths run the same rules in Lisp (the %wide-* prelude entries).
+		java.util.function.Function<@Nullable LispVal, @Nullable StreamElementType> wideElementType = target -> {
+			if (target instanceof LispInteger handle) {
+				StreamElementType type = streamElementTypes.get(handle.value());
+				return type != null && type.isWide() ? type : null;
+			}
+			return null;
+		};
+		java.util.function.Function<List<LispVal>, LispVal> octetReadByte = ((LispFunction) env
+			.lookupFunction(LispNames.READ_BYTE)).body();
+		env.defineFunction(LispNames.READ_BYTE, new LispFunction(LispNames.READ_BYTE, args -> {
+			requireArgCountBetween(LispNames.READ_BYTE, args, 1, 3);
+			StreamElementType type = wideElementType.apply(resolveInputSrc.apply(args.get(0)));
+			if (type == null) {
+				return octetReadByte.apply(args);
+			}
+			byte[] octets = new byte[type.octets()];
+			List<LispVal> raw = List.of(args.get(0), LispNil.INSTANCE, LispNil.INSTANCE);
+			for (int i = 0; i < octets.length; i++) {
+				if (!(octetReadByte.apply(raw) instanceof LispInteger b)) {
+					// End of file, before the element or inside it: CL has no partial
+					// element to hand back, so both are the stream's end.
+					boolean eofError = args.size() < 2 || args.get(1) != LispNil.INSTANCE;
+					if (eofError) {
+						throw endOfFile(eofStream.apply(args));
+					}
+					return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
+				}
+				octets[i] = (byte) b.value();
+			}
+			return composeElement(octets, type.signed());
+		}));
+		java.util.function.Function<List<LispVal>, LispVal> octetWriteByte = ((LispFunction) env
+			.lookupFunction(LispNames.WRITE_BYTE)).body();
+		env.defineFunction(LispNames.WRITE_BYTE, new LispFunction(LispNames.WRITE_BYTE, args -> {
+			requireArgCount(LispNames.WRITE_BYTE, args, 2);
+			StreamElementType type = wideElementType.apply(resolveOutputDest.apply(args.get(1)));
+			if (type == null) {
+				return octetWriteByte.apply(args);
+			}
+			BigInteger value = switch (args.get(0)) {
+				case LispInteger i -> BigInteger.valueOf(i.value());
+				case LispBigInteger b -> b.value();
+				default -> null;
+			};
+			int bits = 8 * type.octets();
+			BigInteger lo = type.signed() ? BigInteger.ONE.shiftLeft(bits - 1).negate() : BigInteger.ZERO;
+			BigInteger hi = (type.signed() ? BigInteger.ONE.shiftLeft(bits - 1) : BigInteger.ONE.shiftLeft(bits))
+				.subtract(BigInteger.ONE);
+			if (value == null || value.compareTo(lo) < 0 || value.compareTo(hi) > 0) {
+				throw new LispEvalException(LispNames.WRITE_BYTE + " expects an integer between " + lo + " and " + hi);
+			}
+			for (int i = 0; i < type.octets(); i++) {
+				octetWriteByte.apply(List.of(new LispInteger(value.shiftRight(8 * i).intValue() & 0xFF), args.get(1)));
+			}
+			return args.get(0);
+		}));
+		java.util.function.Function<List<LispVal>, LispVal> octetFileLength = ((LispFunction) env
+			.lookupFunction(LispNames.FILE_LENGTH)).body();
+		env.defineFunction(LispNames.FILE_LENGTH, new LispFunction(LispNames.FILE_LENGTH, args -> {
+			LispVal octets = octetFileLength.apply(args);
+			StreamElementType type = wideElementType.apply(streamTarget(args.get(0)));
+			return type != null && octets instanceof LispInteger n ? new LispInteger(n.value() / type.octets())
+					: octets;
+		}));
+		java.util.function.Function<List<LispVal>, LispVal> octetFilePosition = ((LispFunction) env
+			.lookupFunction(LispNames.FILE_POSITION)).body();
+		env.defineFunction(LispNames.FILE_POSITION, new LispFunction(LispNames.FILE_POSITION, args -> {
+			StreamElementType type = args.isEmpty() ? null : wideElementType.apply(streamTarget(args.get(0)));
+			if (type == null) {
+				return octetFilePosition.apply(args);
+			}
+			if (args.size() >= 2) {
+				// :start / :end name the same octet as the same element; an index is
+				// scaled to its first octet.
+				return octetFilePosition.apply(args.get(1) instanceof LispInteger n
+						? List.of(args.get(0), new LispInteger(n.value() * type.octets())) : args);
+			}
+			LispVal octets = octetFilePosition.apply(args);
+			return octets instanceof LispInteger n ? new LispInteger(n.value() / type.octets()) : octets;
+		}));
+		for (String packed : List.of(LispNames.READ_SEQUENCE_PACKED, LispNames.WRITE_SEQUENCE_PACKED)) {
+			java.util.function.Function<List<LispVal>, LispVal> octetPacked = ((LispFunction) env
+				.lookupFunction(packed)).body();
+			env.defineFunction(packed,
+					new LispFunction(packed,
+							args -> args.size() == 4 && wideElementType.apply(streamTarget(args.get(1))) != null
+									? LispNil.INSTANCE : octetPacked.apply(args)));
+		}
+		env.defineFunction(LispNames.STREAM_ELEMENT_TYPE, new LispFunction(LispNames.STREAM_ELEMENT_TYPE, args -> {
+			requireArgCount(LispNames.STREAM_ELEMENT_TYPE, args, 1);
+			// A binary FILE stream answers the type it was opened with, widened the way
+			// SBCL widens it; every other stream is a character stream.
+			if (streamTarget(args.get(0)) instanceof LispInteger handle
+					&& streamElementTypes.get(handle.value()) instanceof StreamElementType type) {
+				return type.spec();
+			}
+			return new LispSymbol(LispNames.CHARACTER_TYPE);
 		}));
 		// TCP sockets (rontolisp package). A socket or listener handle lives in the same
 		// stream table as file streams: read-line/write-line/read-byte/write-byte
@@ -9086,34 +9200,37 @@ public final class Environment implements Scope {
 	}
 
 	/**
-	 * Classifies an evaluated {@code open} element-type argument: the list
-	 * {@code (unsigned-byte 8)} is binary, the symbol {@code character} is text; anything
-	 * else is rejected.
+	 * Classifies an evaluated {@code open} element-type argument
+	 * ({@link StreamElementType#of}): a character type opens a text stream, an integer
+	 * type a binary stream of the width SBCL gives it; anything else is rejected. The
+	 * interpreter reads EVERY element type this way, computed or literal -- the compile
+	 * paths take a wide one only as a literal ({@code .kb/read-load-streams.md}).
 	 * @param spec the evaluated element type specifier
-	 * @return true for the binary element type
+	 * @return the classification
 	 */
-	private static boolean isBinaryElementType(LispVal spec) {
-		if (spec instanceof LispSymbol sym && LispNames.CHARACTER_TYPE.equals(sym.name())) {
-			return false;
+	private static StreamElementType streamElementType(LispVal spec) {
+		StreamElementType type = StreamElementType.of(spec);
+		if (type == null) {
+			throw new LispEvalException(LispNames.OPEN
+					+ " :element-type supports character and bounded integer types, got " + spec.print());
 		}
-		// The UNSIZED spelling is the same byte stream: (unsigned-byte) reads as
-		// (unsigned-byte *), and rontolisp has exactly one byte width. Kept in step with
-		// LispMacroExpander.isBinaryElementTypeLiteral and the runtime dispatch it
-		// builds -- an evaluated designator must classify the way a literal one does.
-		if (spec instanceof LispSymbol sym && LispNames.UNSIGNED_BYTE.equals(sym.name())) {
-			return true;
+		return type;
+	}
+
+	/**
+	 * The integer a wide element's octets spell: little-endian, two's complement when
+	 * signed.
+	 */
+	private static LispVal composeElement(byte[] octets, boolean signed) {
+		byte[] bigEndian = new byte[octets.length + 1];
+		for (int i = 0; i < octets.length; i++) {
+			bigEndian[octets.length - i] = octets[i];
 		}
-		if (spec instanceof LispCons cons) {
-			List<LispVal> parts = cons.toList();
-			if (parts.size() == 2 && parts.get(0) instanceof LispSymbol sym
-					&& LispNames.UNSIGNED_BYTE.equals(sym.name())
-					&& (parts.get(1) instanceof LispInteger bits && bits.value() == 8
-							|| parts.get(1) instanceof LispSymbol star && "*".equals(star.name()))) {
-				return true;
-			}
+		BigInteger value = new BigInteger(bigEndian);
+		if (signed && value.testBit(8 * octets.length - 1)) {
+			value = value.subtract(BigInteger.ONE.shiftLeft(8 * octets.length));
 		}
-		throw new LispEvalException(
-				LispNames.OPEN + " supports only the 'character or '(unsigned-byte 8) element type");
+		return value.bitLength() < 64 ? new LispInteger(value.longValue()) : new LispBigInteger(value);
 	}
 
 	/**

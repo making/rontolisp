@@ -11112,6 +11112,56 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void wideAndNarrowElementTypesRoundTripTheWaySbclStoresThem(@TempDir Path tempDir) {
+		String here = tempDir.toString().replace("\\", "\\\\");
+		// An integer element type opens a binary stream of SBCL's width (measured): 1,
+		// 2, 4 or 8 octets, ceil(bits/8) past 64, little-endian, two's complement when
+		// signed, no packing below an octet and no bias. stream-element-type answers
+		// the widened type; file-length and file-position count ELEMENTS.
+		assertThat(evalMulti(
+				"""
+						(defun p (n) (concatenate 'string "%s/" n))
+						(defun drain (s)
+						  (do ((b (read-byte s nil :eof) (read-byte s nil :eof)) (r nil (cons b r))) ((eq b :eof) (nreverse r))))
+						(defmacro rt (et vals)
+						  `(progn
+						    (with-open-file (o (p "w.bin") :direction :output :element-type ,et :if-exists :supersede)
+						      (dolist (v ,vals) (write-byte v o)))
+						    (list (with-open-file (i (p "w.bin") :element-type ,et)
+						            (list (stream-element-type i) (file-length i) (drain i)))
+						          (with-open-file (i (p "w.bin") :element-type '(unsigned-byte 8)) (drain i)))))
+						(list (rt '(unsigned-byte 1) '(0 1 1))
+						      (rt '(unsigned-byte 16) '(1 258))
+						      (rt '(signed-byte 8) '(-1 5))
+						      (rt '(signed-byte 32) '(-2))
+						      (rt '(unsigned-byte 64) '(18446744073709551615))
+						      (rt '(integer 100 200) '(150))
+						      (with-open-file (i (p "w.bin") :element-type '(unsigned-byte 16))
+						        (list (file-length i) (read-byte i nil :partial)))
+						      (progn
+						        (with-open-file (o (p "w.bin") :direction :output :element-type '(unsigned-byte 16)
+						                           :if-exists :supersede)
+						          (write-byte 1 o) (write-byte 2 o))
+						        (with-open-file (i (p "w.bin") :element-type '(unsigned-byte 16))
+						          (list (read-byte i) (file-position i) (file-position i 0) (read-byte i)
+						                (file-position i :end) (read-byte i nil :eof))))
+						      (with-open-file (s (p "w.bin")) (stream-element-type s))
+						      (handler-case (with-open-file (o (p "w.bin") :direction :output :element-type '(unsigned-byte 16)
+						                                      :if-exists :supersede)
+						                      (write-byte 65536 o))
+						        (error () :out-of-range)))
+						"""
+					.formatted(here))
+			.print())
+			.isEqualTo("(" + String.join(" ", "(((UNSIGNED-BYTE 8) 3 (0 1 1)) (0 1 1))",
+					"(((UNSIGNED-BYTE 16) 2 (1 258)) (1 0 2 1))", "(((SIGNED-BYTE 8) 2 (-1 5)) (255 5))",
+					"(((SIGNED-BYTE 32) 1 (-2)) (254 255 255 255))",
+					"(((UNSIGNED-BYTE 64) 1 (18446744073709551615)) (255 255 255 255 255 255 255 255))",
+					"(((UNSIGNED-BYTE 8) 1 (150)) (150))", "(0 :PARTIAL)", "(1 1 T 1 T :EOF)", "CHARACTER",
+					":OUT-OF-RANGE") + ")");
+	}
+
+	@Test
 	void withOpenFileUnsupportedLiteralElementTypeSignalsAtCallTime(@TempDir Path tempDir) {
 		String file = tempDir.resolve("float.dat").toString().replace("\\", "\\\\");
 		// An element type no stream can carry is refused when the open RUNS, not when the
