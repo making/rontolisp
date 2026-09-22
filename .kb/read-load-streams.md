@@ -533,7 +533,8 @@ byte-identical, 224 differ -- 166 SMALLER (the wrapper change, up to -4.1 KB JVM
 carrying the builtin wrapper table), 58 larger, all naming `read-sequence`/`write-sequence`; the
 largest `read-sequence-and-write-sequence-round-trip` +8.6 / +3.7 / +3.7 KB (untyped buffers that
 no longer narrow), the packed-buffer case +5.3 / +2.6 / +2.6 KB, gguf +3.2 / +1.4 / +1.4 KB, zlib
-+480 / +117 / +117 B.
++480 / +117 / +117 B. The Gray dispatcher change on top: of the 10 corpus programs that use the
+Gray protocol, one (`http-buffered-body-stream`) changes, at the same size.
 
 ANSI `streams` (interpreter, suite `ca06bd9`), 2026-09-22: the keyword tail (above) 789 -> 797
 tests counted, lost forms 24 -> 16, 530 -> 545 passing (15 fixed: `READ-`/`WRITE-SEQUENCE.STRING.8-.12`,
