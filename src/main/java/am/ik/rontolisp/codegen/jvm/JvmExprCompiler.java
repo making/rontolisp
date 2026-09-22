@@ -1044,7 +1044,7 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(
 							LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams, ctx.usesStreamValues,
 									ctx.asksStreamDirection,
-									ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_REGISTER_INTERNAL)),
+									ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_REGISTER_SYMBOL)),
 							ctx, className);
 				case LispNames.FILE_POSITION -> {
 					// CL's two position DESIGNATORS are a call-site rewrite shared with
@@ -2193,7 +2193,7 @@ final class JvmExprCompiler {
 	private static @Nullable LispVal directedOpenLeaf(LispCons cons, @Nullable LispVal checked,
 			@Nullable LispVal registered, JvmLispCompiler.Ctx ctx) {
 		if (checked == null || !ctx.usesStreamValues
-				|| !ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_REGISTER_INTERNAL)) {
+				|| !ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_REGISTER_SYMBOL)) {
 			return null;
 		}
 		return LispMacroExpander.directedOpen(
@@ -2211,8 +2211,8 @@ final class JvmExprCompiler {
 		if (ctx.functions.containsKey(LispNames.FILE_STREAM_FORGET_INTERNAL)) {
 			forgetters.add(LispNames.FILE_STREAM_FORGET_INTERNAL);
 		}
-		if (ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_FORGET_INTERNAL)) {
-			forgetters.add(LispNames.FILE_STREAM_DIRECTION_FORGET_INTERNAL);
+		if (ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_FORGET_SYMBOL)) {
+			forgetters.add(LispNames.FILE_STREAM_DIRECTION_FORGET_SYMBOL);
 		}
 		return forgetters;
 	}

@@ -426,7 +426,17 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   instead of the inline test cost +6.2 KB JVM / +0.9 KB wasm for one `output-stream-p` of a
   string stream (a first defun's function machinery on the JVM), a HASH-TABLE record +14.7 KB and
   a second class file (`RontoHashTable` travels); the inline test is +654 B JVM / +7 B P1 / +8 B
-  component. The composite constructors now check their components' direction
+  component, the record on top of it (one `output-stream-p` of a file stream) +5,389 / +1,787 /
+  +1,805 B. **The record's three names are `rontolisp::` internals** (the `%octets-join`
+  shape: a prelude key without the package, a defined symbol with it), NOT `CL_INTERNALS`
+  entries: `CL_SYMBOLS` is baked into every program that asks the runtime package API, and
+  listing them there grew each such program by 92 bytes (`runtime-package-api`,
+  `uiop-package-surgery`, the cffi-sqlite example). Identity, measured over 819 programs (every
+  ci-spec case and every non-GUI example, JVM / Preview 1 / component, against develop at
+  `241ced1`): 803 byte-identical; the 16 that differ all name a direction predicate,
+  `file-position` or a composite constructor (13 ci-spec cases, the httpbin-jzon example --
+  jzon asks `input-stream-p`), except two that print `rontolisp:version`'s build timestamp.
+  The composite constructors now check their components' direction
   (`make-two-way-stream`, `make-echo-stream`, `make-concatenated-stream` signal `type-error`):
   with the lite answer every stream was an input stream, so ANSI `MAKE-TWO-WAY-STREAM.ERROR.5`
   and `MAKE-CONCATENATED-STREAM.ERROR.2` passed only by accident and REGRESSED when the answer

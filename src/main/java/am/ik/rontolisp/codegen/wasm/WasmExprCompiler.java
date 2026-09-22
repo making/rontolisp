@@ -1414,7 +1414,7 @@ final class WasmExprCompiler {
 						LispNames.OUTPUT_STREAM_P ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams,
 							ctx.usesStreamValues, ctx.asksStreamDirection,
-							ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_REGISTER_INTERNAL)), ctx);
+							ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_REGISTER_SYMBOL)), ctx);
 				// file-length is REAL here: it stats the stream's descriptor through the
 				// fd_filestat_get import and answers nil only for what genuinely has no
 				// length (a string stream, a standard stream, a socket, a closed or
@@ -2533,7 +2533,7 @@ final class WasmExprCompiler {
 			@org.jspecify.annotations.Nullable LispVal checked, @org.jspecify.annotations.Nullable LispVal registered,
 			WasmLispCompiler.Ctx ctx) {
 		if (checked == null || !ctx.usesStreamValues
-				|| !ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_REGISTER_INTERNAL)) {
+				|| !ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_REGISTER_SYMBOL)) {
 			return null;
 		}
 		return LispMacroExpander.directedOpen(
@@ -2550,8 +2550,8 @@ final class WasmExprCompiler {
 		if (ctx.functions.containsKey(LispNames.FILE_STREAM_FORGET_INTERNAL)) {
 			forgetters.add(LispNames.FILE_STREAM_FORGET_INTERNAL);
 		}
-		if (ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_FORGET_INTERNAL)) {
-			forgetters.add(LispNames.FILE_STREAM_DIRECTION_FORGET_INTERNAL);
+		if (ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_FORGET_SYMBOL)) {
+			forgetters.add(LispNames.FILE_STREAM_DIRECTION_FORGET_SYMBOL);
 		}
 		if (!(ctx.usesSynonymStreams || ctx.usesStreamValues) || forgetters.isEmpty()) {
 			return null;

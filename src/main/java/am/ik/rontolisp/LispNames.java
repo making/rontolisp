@@ -5747,9 +5747,11 @@ public final class LispNames {
 	 * The compile paths' record of FILE-stream directions: an alist of
 	 * {@code (handle . bits)}, 1 input and 2 output, which a compiled
 	 * {@code input-stream-p} / {@code output-stream-p} reads inline
-	 * ({@code .kb/read-load-streams.md}, "String streams").
+	 * ({@code .kb/read-load-streams.md}, "String streams"). A {@code rontolisp} internal,
+	 * like the two defuns beside it, so the {@code cl} symbol table every
+	 * package-introspecting program bakes does not grow by their names.
 	 */
-	public static final String FILE_STREAM_DIRECTIONS_VAR = "%FILE-STREAM-DIRECTIONS";
+	public static final String FILE_STREAM_DIRECTIONS_VAR = "RONTOLISP::%FILE-STREAM-DIRECTIONS";
 
 	/**
 	 * Records the direction of a FILE stream an {@code open} leaf just made, keyed by its
@@ -5757,10 +5759,16 @@ public final class LispNames {
 	 */
 	public static final String FILE_STREAM_DIRECTION_REGISTER_INTERNAL = "%FILE-STREAM-DIRECTION-REGISTER";
 
+	/** The symbol {@link #FILE_STREAM_DIRECTION_REGISTER_INTERNAL}'s defun defines. */
+	public static final String FILE_STREAM_DIRECTION_REGISTER_SYMBOL = "RONTOLISP::%FILE-STREAM-DIRECTION-REGISTER";
+
 	/**
 	 * Forgets a FILE stream's recorded direction; every compiled {@code close} runs it.
 	 */
 	public static final String FILE_STREAM_DIRECTION_FORGET_INTERNAL = "%FILE-STREAM-DIRECTION-FORGET";
+
+	/** The symbol {@link #FILE_STREAM_DIRECTION_FORGET_INTERNAL}'s defun defines. */
+	public static final String FILE_STREAM_DIRECTION_FORGET_SYMBOL = "RONTOLISP::%FILE-STREAM-DIRECTION-FORGET";
 
 	/** The registry read behind a compiled {@code stream-element-type}. */
 	public static final String FILE_STREAM_ELEMENT_TYPE_INTERNAL = "%FILE-STREAM-ELEMENT-TYPE";

@@ -1551,25 +1551,27 @@ public final class LispPreludeLibrary {
 		// +14.7 KB and a second class file on the JVM, and the entries are the file
 		// streams open at once.
 		SOURCES.put(LispNames.FILE_STREAM_DIRECTION_REGISTER_INTERNAL, """
-				(defvar %file-stream-directions nil)
-				(defun %file-stream-direction-register (%fsdr-s %fsdr-d)
-				  (setq %file-stream-directions (cons (cons (%obj-ref %fsdr-s 0) %fsdr-d) %file-stream-directions))
+				(defvar rontolisp::%file-stream-directions nil)
+				(defun rontolisp::%file-stream-direction-register (%fsdr-s %fsdr-d)
+				  (setq rontolisp::%file-stream-directions
+				        (cons (cons (%obj-ref %fsdr-s 0) %fsdr-d) rontolisp::%file-stream-directions))
 				  %fsdr-s)
 				""");
-		SOURCES.put(LispNames.FILE_STREAM_DIRECTION_FORGET_INTERNAL,
-				"""
-						(defvar %file-stream-directions nil)
-						(defun %file-stream-direction-forget (%fsdf-s)
-						  (let ((%fsdf-h (if (%obj-is %fsdf-s '%STREAM) (%obj-ref %fsdf-s 0) (if (integerp %fsdf-s) %fsdf-s nil)))
-						        (%fsdf-kept nil))
-						    (if %fsdf-h
-						        (progn
-						          (dolist (%fsdf-e %file-stream-directions)
-						            (if (eql (car %fsdf-e) %fsdf-h) nil (setq %fsdf-kept (cons %fsdf-e %fsdf-kept))))
-						          (setq %file-stream-directions %fsdf-kept))
-						        nil)
-						    nil))
-						""");
+		SOURCES.put(LispNames.FILE_STREAM_DIRECTION_FORGET_INTERNAL, """
+				(defvar rontolisp::%file-stream-directions nil)
+				(defun rontolisp::%file-stream-direction-forget (%fsdf-s)
+				  (let ((%fsdf-h (if (%obj-is %fsdf-s '%STREAM)
+				                     (%obj-ref %fsdf-s 0)
+				                     (if (integerp %fsdf-s) %fsdf-s nil)))
+				        (%fsdf-kept nil))
+				    (if %fsdf-h
+				        (progn
+				          (dolist (%fsdf-e rontolisp::%file-stream-directions)
+				            (if (eql (car %fsdf-e) %fsdf-h) nil (setq %fsdf-kept (cons %fsdf-e %fsdf-kept))))
+				          (setq rontolisp::%file-stream-directions %fsdf-kept))
+				        nil)
+				    nil))
+				""");
 		SOURCES.put(LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL, """
 				(defun %file-stream-element-type (%fset-s)
 				  (let ((%fset-e (%file-stream-entry %fset-s)))

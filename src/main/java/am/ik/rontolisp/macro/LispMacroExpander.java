@@ -10758,7 +10758,7 @@ public final class LispMacroExpander {
 	 * @return the registering expression, answering the stream value
 	 */
 	public static LispVal directedOpen(LispVal streamValue, int direction) {
-		return listToCons(List.of(new LispSymbol(LispNames.FILE_STREAM_DIRECTION_REGISTER_INTERNAL), streamValue,
+		return listToCons(List.of(new LispSymbol(LispNames.FILE_STREAM_DIRECTION_REGISTER_SYMBOL), streamValue,
 				new LispInteger(direction)));
 	}
 

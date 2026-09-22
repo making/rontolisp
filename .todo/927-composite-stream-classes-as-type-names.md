@@ -11,7 +11,7 @@ plan did not cover it.
 | test | reason |
 |---|---|
 | `MAKE-BROADCAST-STREAM.1 .2 .3`, `MAKE-TWO-WAY-STREAM.1` | `(typep s 'broadcast-stream)` / `'two-way-stream` is false: the composite classes are not CL type names |
-| `MAKE-BROADCAST-STREAM.5 .6 .7 .8` | a ZERO-component broadcast stream: `file-length` / `file-position` want 0, `file-string-length` 1, `stream-external-format` `:default` -- ours is the string-output sink, so NIL / NIL / 28 / `:UTF-8` |
+| `MAKE-BROADCAST-STREAM.5 .7 .8` | a ZERO-component broadcast stream: `file-length` wants 0, `file-string-length` 1, `stream-external-format` `:default` -- ours is the string-output sink, so NIL / 28 / `:UTF-8` (`.6`, `file-position` 0, passes since `.todo/929` gave a string output stream its position) |
 | `BROADCAST-STREAM-STREAMS.1 .3 .4` | the zero-component sink is a `%STREAM`, so `%broadcast-stream-components` has no method; `.3`/`.4` then read NIL as an integer |
 
 ## What it needs
@@ -26,6 +26,7 @@ plan did not cover it.
   zero-component broadcast stream; the ANSI special cases need the latter's
   answers, which can also be given by the sink if it is told apart.
 - The other composite-stream failures in the same chapter (`MAKE-ECHO-STREAM.*`,
-  `MAKE-CONCATENATED-STREAM.*`, `MAKE-TWO-WAY-STREAM.2 .5 .6 .10`,
-  `MAKE-SYNONYM-STREAM.1 .3`) are direction predicates and `listen` / `unread-char`
-  semantics, not type names -- measure before bundling them in.
+  `MAKE-CONCATENATED-STREAM.*`, `MAKE-TWO-WAY-STREAM.2 .5 .6 .10`) are `listen` /
+  `unread-char` / `open-stream-p` semantics, not type names -- measure before bundling
+  them in. The direction predicates are real since `.todo/929` (`MAKE-SYNONYM-STREAM.1 .3`
+  pass).
