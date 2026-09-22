@@ -40,6 +40,59 @@ User docs: `doc/en/reference/special-forms/defun.md`, `lambda.md`.
   untouched, so forms headed for the runtime `eval` get NO lambda-list support
   (`doc/en/guides/eval-limitations.md`).
 
+## A surplus argument is a program-error (2026-09-22)
+**Invariant: a call with more arguments than the lambda list takes signals the catchable
+`program-error` `Function expects at most N argument(s), got M` on all four backends** --
+where the list ends in `&optional` and has no `&rest`/`&key` (those consume every argument;
+the key check already refuses a stray one). The desugared function is physically variadic,
+so neither the native count check nor a dispatcher's shape could see it: before this,
+`(defun f (&optional a) a) (f 1 2 3)` answered 1 everywhere.
+
+- **The check is the FIRST `let*` binding, before any default runs** (CL signals before
+  binding): `(__ll_arity (if (nthcdr k rest) (%program-error (%string-concat "..."
+  (prin1-to-string (+ req (length rest))))) nil))`, `cdr` for a single optional
+  (`LambdaLists.tooManyArgsCheck`).
+- **INLINE, not a helper defun like `%ll-check-keys`.** The first cut prepended a
+  `%ll-too-many-args` defun on a program that spells `&optional`; seven JVM tests went red
+  with `the function %LL-TOO-MANY-ARGS is undefined`, because `BuiltinFunctionWrappers`
+  (`#'terpri`, `#'read-line`, ...) and several expansions build `&optional` lambdas while the
+  backend compiles, after any program scan. The message is computed, which also keeps
+  `CompileWarnings.warnStaticProgramError` (literal messages only) quiet.
+- **`(a &aux x)` is now FIXED arity** (`Expanded.rest` null): it used to be desugared through a
+  rest parameter it never read, so it silently dropped a surplus argument too.
+- **A lambda list shorter than CL's is now a refusal of a LEGAL call** -- the real blast
+  radius. Audited against `sb-introspect:function-lambda-list` for every `&optional` defun
+  in the sources (111): `merge-pathnames` lacked `default-version` (ANSI
+  `MERGE-PATHNAMES.1` went PASS -> ERROR until it took it), `parse-namestring` lacked
+  `&key start end junk-allowed`; `apropos`/`apropos-list` match CLHS (SBCL's third argument
+  is an extension). The first-class wrappers `#'read-line`/`#'read-char`/`#'peek-char` took
+  one/one/two arguments and now take CL's whole optional tail; `#'read-line`'s body keeps a
+  literal eof-error-p (`(read-line s)` or `(read-line s nil v)`), because its wrapper is not
+  reference-gated and a computed one constructs an end-of-file instance the instance gate
+  (decided before the wrappers exist) cannot see -- that first cut failed EVERY wasm
+  compile with `%OBJ-NEW reached the compiler with no instance type emitted`.
+  `#'write-line` still takes `(string &optional stream)` without CL's `&key start end`.
+- `complement`'s lambda (arities 0-3, `expandComplement`) now REFUSES a fourth argument
+  instead of dropping it; ANSI `COMPLEMENT.4` moved FAIL -> ERROR.
+- **Measured**, interpreter, whole ANSI suite (suite `ca06bd9`, test NAMES diffed across every
+  chapter): 37 tests fixed (`*.ERROR.N` rows: `BIT-*`, `CLEAR-INPUT`, `PPRINT*`,
+  `DIGIT-CHAR`, `GET`, `GENTEMP`, `ENCODE/DECODE-UNIVERSAL-TIME`, ...), 0 regressed, lost
+  forms 424 -> 424. The full `./mvnw test` corpus (the vendored quicklisp libraries on every
+  backend) had no call that relied on the dropped argument.
+- **Sizes** (bytes, JVM `.class` / Preview 1 / component, default `-o`):
+
+  | program | before | after |
+  |---|---|---|
+  | `(print (+ 1 2))`, hello_world, pi_approx, a `handler-case`, a `mapcar` | | identical |
+  | `(defun f (a &optional (b 2)) ...) (print (f 1))` | 5,177 / 1,193 / 2,357 | 12,414 / 1,193 / 2,357 |
+  | two `&optional` defuns (one with 2 optionals) | 5,458 / 1,218 / 2,383 | 13,029 / 1,249 / 2,414 |
+  | `(a &aux (b 2))` | 4,924 / 1,535 / 2,699 | 4,901 / 1,535 / 2,699 |
+  | `merge-pathnames` (prelude) | 31,310 / 19,388 / 20,634 | 31,979 / 19,502 / 20,748 |
+  | zlib | 159,290 / 106,621 / 110,637 | 159,639 / 106,855 / 110,872 |
+
+  The JVM's +7 KB on a tiny `&optional` program is `prin1-to-string` pulling the printer in
+  (the count in the message); a program that already prints pays ~+350 B.
+
 ## Variadic calling convention (both compilers)
 Physically fixed-arity: required params plus one trailing rest-list param
 (`DefunDecl`/`LambdaInfo`/`FunctionInfo`/`WasmFunctionInfo` carry `variadic`), reusing
@@ -63,8 +116,14 @@ required params for a variadic.
 
 ## Tests
 `LambdaListsTest` (the expansion shape and the two helper bodies);
-`LispEvaluatorTest#defun{Rest,Optional,Keyword,Aux}`, `#defunEmptyKeySection`;
+`LispEvaluatorTest#defun{Rest,Optional,Keyword,Aux}`, `#defunEmptyKeySection`,
+`#defunExtraArgumentsPastTheLambdaListSignalProgramError`;
+`JvmLispCompilerTest#compileAndRunExtraArgumentsPastAnOptionalTailSignalProgramError`,
+`#compileAndRunALegalCallAtTheFullClArityStillRuns` and their `WasmLispCompilerIntegrationTest`
+twins;
 `JvmLispCompilerTest#compileAndRunDefun{Rest,Optional,KeywordArguments}`;
 `WasmLispCompilerIntegrationTest#compileAndRunDefun{RestAndOptional,KeywordArguments}`,
-`#compileAndRunVariadicFirstClass`; ci-spec `lambda-list-*`,
+`#compileAndRunVariadicFirstClass`; ci-spec `lambda-list-*` (incl.
+`lambda-list-extra-arguments-signal-program-error`),
+`a-legal-call-at-the-full-cl-arity-still-runs`,
 `trivia-enablement-language-group`.

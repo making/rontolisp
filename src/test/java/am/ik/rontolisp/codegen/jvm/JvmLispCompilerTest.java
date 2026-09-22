@@ -3996,6 +3996,28 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunStringStreamMacroOptions() throws Exception {
+		// with-input-from-string's :index/:start/:end and with-output-to-string's
+		// fill-pointer string and :element-type, which used to be refused at expansion.
+		assertThat(compileAndRun("""
+				(defvar *wi* nil)
+				(print (list (with-input-from-string (s "abcdef" :index *wi* :start 1 :end 5)
+				               (list (read-char s) (read-char s) *wi*))
+				             *wi*))
+				(print (with-input-from-string (s "abcdef" :start 1 :end nil) (read-line s)))
+				(let ((i 2))
+				  (print (list (with-input-from-string (s "abcdef" :index i :start i) (read-char s)) i)))
+				(let ((str (make-array 10 :fill-pointer 0 :element-type 'character)))
+				  (print (with-output-to-string (s str) (write-string "abc" s) (princ 12 s) :body))
+				  (with-output-to-string (s str :element-type 'character) (write-char #\\! s))
+				  (print str))
+				(print (multiple-value-list
+				        (with-output-to-string (s (make-array 4 :fill-pointer 0 :element-type 'character))
+				          (values 'a 'b))))
+				""")).isEqualTo("((#\\b #\\c NIL) 3)\n\"bcdef\"\n(#\\c 3)\n:BODY\n\"abc12!\"\n(A B)");
+	}
+
+	@Test
 	void compileAndRunWithInputFromStringOverAMutableCharacterVector() throws Exception {
 		// The string handed to with-input-from-string may be a MUTABLE character vector
 		// (make-string + setf char), which is a different runtime representation here --
@@ -16724,6 +16746,47 @@ class JvmLispCompilerTest {
 				(print (f 1 2 3))
 				(print (f 1))
 				""")).isEqualTo("(1 (2 3))\n(1 NIL)");
+	}
+
+	@Test
+	void compileAndRunExtraArgumentsPastAnOptionalTailSignalProgramError() throws Exception {
+		// Arguments past the lambda list are a program-error, not silently dropped --
+		// through a direct call, funcall, apply, a lambda, &aux and a built-in wrapper.
+		assertThat(compileAndRun(
+				"""
+						(defun ll-extra-opt (a &optional (b 2)) (list a b))
+						(print (ll-extra-opt 1 5))
+						(print (handler-case (ll-extra-opt 1 2 3) (program-error () :program-error)))
+						(print (handler-case (funcall #'ll-extra-opt 1 2 3) (program-error () :program-error)))
+						(print (handler-case (apply #'ll-extra-opt '(1 2 3)) (program-error () :program-error)))
+						(print (handler-case (funcall (lambda (&optional x y) (list x y)) 1 2 3) (program-error () :program-error)))
+						(print (handler-case (ll-extra-opt 1 2 3 4) (error (e) (princ-to-string e))))
+						(defun ll-extra-aux (a &aux (b (+ a 1))) (list a b))
+						(print (ll-extra-aux 1))
+						(print (handler-case (funcall #'ll-extra-aux 1 2) (program-error () :program-error)))
+						(print (handler-case (funcall #'princ 1 t 3) (program-error () :program-error)))
+						"""))
+			.isEqualTo(
+					"(1 5)\n:PROGRAM-ERROR\n:PROGRAM-ERROR\n:PROGRAM-ERROR\n:PROGRAM-ERROR\n\"Function expects at most 2 arguments, got 4\"\n(1 2)\n:PROGRAM-ERROR\n:PROGRAM-ERROR");
+	}
+
+	@Test
+	void compileAndRunALegalCallAtTheFullClArityStillRuns() throws Exception {
+		// Now that a surplus argument signals, a wrapper or prelude defun SHORTER than
+		// CL's lambda list would refuse a legal call: the read family's first-class
+		// wrappers take the whole optional tail, merge-pathnames its default-version,
+		// parse-namestring its keywords.
+		assertThat(compileAndRun("""
+				(with-input-from-string (s "ab")
+				  (print (list (funcall #'read-line s nil :eof) (funcall #'read-line s nil :eof)
+				               (funcall #'read-char s nil :done) (funcall #'peek-char nil s nil :peof))))
+				(with-input-from-string (s "xy")
+				  (print (list (funcall #'read-char s) (funcall #'peek-char nil s) (funcall #'read-line s)
+				               (handler-case (funcall #'read-char s) (end-of-file () :eof-signalled)))))
+				(print (namestring (merge-pathnames "a.txt" "/tmp/" nil)))
+				(print (multiple-value-list (parse-namestring "xx/tmp/abc.lisp" nil nil :start 2)))
+				""")).isEqualTo(
+				"(\"ab\" :EOF :DONE :PEOF)\n(#\\x #\\y \"y\" :EOF-SIGNALLED)\n\"/tmp/a.txt\"\n(#P\"/tmp/abc.lisp\" 15)");
 	}
 
 	@Test

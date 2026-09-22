@@ -280,6 +280,12 @@ public final class ClosRegistry {
 	/** What {@link #arityMessage} puts between the expectation and the actual count. */
 	public static final String ARITY_MESSAGE_INFIX = ", got ";
 
+	/**
+	 * How the {@code &optional} too-many-arguments check marks its bound
+	 * ({@code LambdaLists}).
+	 */
+	public static final String ARITY_AT_MOST = "at most ";
+
 	/** How {@link #arityExpectation} marks a callee with a {@code &rest} tail. */
 	public static final String ARITY_AT_LEAST = "at least ";
 

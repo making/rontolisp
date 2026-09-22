@@ -733,7 +733,8 @@ public final class LispPreludeLibrary {
 		// PathnameOps.mergePathnames implements; the two are pinned against each other
 		// by LispPreludeLibraryTest.
 		SOURCES.put(LispNames.MERGE_PATHNAMES, """
-				(defun merge-pathnames (%mp-path &optional %mp-defaults)
+				(defun merge-pathnames (%mp-path &optional %mp-defaults %mp-default-version)
+				  (declare (ignore %mp-default-version))
 				  (let* ((%mp-pp (%path-ns %mp-path))
 				         (%mp-dd (%path-ns %mp-defaults))
 				         (p (if (stringp %mp-pp) %mp-pp ""))
@@ -771,9 +772,12 @@ public final class LispPreludeLibrary {
 		// host), so the value is the pathname over the whole namestring and the
 		// second value is its length, like CL's success case.
 		SOURCES.put(LispNames.PARSE_NAMESTRING, """
-				(defun parse-namestring (%psn-thing &optional %psn-host %psn-defaults)
-				  (let ((%psn-s (namestring %psn-thing)))
-				    (values (pathname %psn-s) (length %psn-s))))
+				(defun parse-namestring (%psn-thing &optional %psn-host %psn-defaults
+				                         &key ((:start %psn-start) 0) ((:end %psn-end)) ((:junk-allowed %psn-junk)))
+				  (declare (ignore %psn-host %psn-defaults %psn-junk))
+				  (let* ((%psn-s (namestring %psn-thing))
+				         (%psn-e (or %psn-end (length %psn-s))))
+				    (values (pathname (subseq %psn-s %psn-start %psn-e)) %psn-e)))
 				""");
 		// %pathname-split: the ONE rendering of CL's "the LAST dot separates the type,
 		// and a dot at position 0 does not" rule -- (directory name type), with name and
@@ -2243,9 +2247,8 @@ public final class LispPreludeLibrary {
 		// readers (input-string, output-string, eval-input) in uiop-stream.lisp.
 		// A stream is used as-is, nil is the standard stream, t is the
 		// terminal/console stream, a string is a string stream, a pathname is
-		// opened. The string arm of the output side refuses loudly:
-		// with-output-to-string is fresh-string only (no fill-pointer append
-		// surface), so there is nothing honest to append to.
+		// opened. The string arm of the output side appends through the string's fill
+		// pointer, as upstream's does.
 		SOURCES.put(LispNames.CALL_WITH_INPUT_INTERNAL, """
 				(defun %call-with-input (%cwi-input %cwi-function &key ((:keys %cwi-keys)))
 				  (cond ((null %cwi-input) (funcall %cwi-function *standard-input*))
@@ -2265,8 +2268,7 @@ public final class LispPreludeLibrary {
 				        ((eql %cwo-output t) (funcall %cwo-function *standard-output*))
 				        ((streamp %cwo-output) (funcall %cwo-function %cwo-output))
 				        ((stringp %cwo-output)
-				         (error "CALL-WITH-OUTPUT: writing into a string is not supported on rontolisp: ~S"
-				                %cwo-output))
+				         (with-output-to-string (%cwo-s %cwo-output) (funcall %cwo-function %cwo-s)))
 				        ((pathnamep %cwo-output)
 				         (uiop/stream:call-with-output-file %cwo-output %cwo-function
 				                                            :element-type %cwo-element-type))

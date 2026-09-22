@@ -680,7 +680,9 @@ report's two top rows: 370 + 299 lost forms) and to fail the COMPILE on the comp
   interpreted and a compile-time `error:` compiled -- the CL-conformant asymmetry: a compiler may
   reject at compile time what the evaluator signals at run time. `handler-bind` handlers for these
   run at the pad, not at the signal point (the compiled-backend semantics).
-- **Arity**: the interpreter's `Function expects N argument(s), got M` (lambda application), `Macro X
+- **Arity**: a surplus argument past an `&optional` tail is `Function expects at most N ...`, a
+  check the lambda-list desugaring emits on every backend ([lambda-lists.md](lambda-lists.md)).
+  The interpreter's `Function expects N argument(s), got M` (lambda application), `Macro X
   expects ...`, `Environment.requireArgCount*` and every inline `X expects N arguments, got M` built-in
   check are `program-error`s (the ANSI suite's next six rows). The compiled backends signal the same
   through a function VALUE ("A wrong argument COUNT" below), `apply` included since 2026-09-12.

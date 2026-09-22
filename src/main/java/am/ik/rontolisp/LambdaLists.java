@@ -53,6 +53,8 @@ public final class LambdaLists {
 
 	private static final String KNOWN_PARAM = "__ll_known";
 
+	private static final String ARITY_VAR = "__ll_arity";
+
 	private LambdaLists() {
 	}
 
@@ -138,20 +140,69 @@ public final class LambdaLists {
 			// Pure (a b &rest r): already native, no prologue needed.
 			return new Expanded(parsed.required(), parsed.rest(), body);
 		}
+		boolean bounded = parsed.rest() == null && !parsed.sawKey();
+		if (bounded && parsed.optionals().isEmpty()) {
+			// (a &aux x): FIXED arity -- the native shape checks the count, so an extra
+			// argument signals like any other wrong count.
+			List<LispVal> bindings = new ArrayList<>();
+			appendPrologueBindings(parsed, new LispSymbol(REST_VAR), false, bindings);
+			return new Expanded(parsed.required(), null, List.of(letStar(bindings, body)));
+		}
 		LispSymbol restVar = parsed.rest() != null && parsed.optionals().isEmpty() ? parsed.rest()
 				: new LispSymbol(REST_VAR);
 		List<LispVal> bindings = new ArrayList<>();
+		if (bounded) {
+			// (a &optional b): variadic physically, bounded logically. The check comes
+			// FIRST, before any default form runs -- CL signals a wrong count before
+			// binding anything.
+			bindings.add(tooManyArgsCheck(restVar, parsed.required().size(), parsed.optionals().size()));
+		}
 		appendPrologueBindings(parsed, restVar, false, bindings);
 		List<LispVal> letBody = new ArrayList<>();
 		if (parsed.sawKey() && !parsed.allowOtherKeys()) {
 			letBody.add(unknownKeyCheck(parsed.rest() != null ? parsed.rest() : restVar, parsed.keys()));
 		}
 		letBody.addAll(body);
+		return new Expanded(parsed.required(), restVar, List.of(letStar(bindings, letBody)));
+	}
+
+	private static LispVal letStar(List<LispVal> bindings, List<LispVal> body) {
 		List<LispVal> letParts = new ArrayList<>();
 		letParts.add(new LispSymbol(LispNames.LET_STAR));
 		letParts.add(list(bindings.toArray(LispVal[]::new)));
-		letParts.addAll(letBody);
-		return new Expanded(parsed.required(), restVar, List.of(list(letParts.toArray(LispVal[]::new))));
+		letParts.addAll(body);
+		return list(letParts.toArray(LispVal[]::new));
+	}
+
+	/**
+	 * The throwaway {@code let*} binding that signals when arguments remain past the last
+	 * optional -- {@code cdr} for the common single optional:
+	 *
+	 * <pre>
+	 * (__ll_arity (if (nthcdr k rest)
+	 *                 (%program-error (%string-concat "Function expects at most N arguments, got "
+	 *                                                 (prin1-to-string (+ req (length rest)))))))
+	 * </pre>
+	 *
+	 * INLINE, not a helper call like the keyword check: first-class built-in wrappers
+	 * ({@code BuiltinFunctionWrappers}) and several expansions build {@code &optional}
+	 * lambdas while the backend compiles, long after any program scan could prepend a
+	 * helper. The message is computed, so the compilers' static program-error warning
+	 * (literal messages only) never fires for it; its text is
+	 * {@code ClosRegistry.arityMessage}'s shape.
+	 */
+	private static LispVal tooManyArgsCheck(LispSymbol restVar, int required, int optionals) {
+		LispVal beyond = optionals == 1 ? call(LispNames.CDR, restVar)
+				: list(new LispSymbol(LispNames.NTHCDR), new LispInteger(optionals), restVar);
+		int max = required + optionals;
+		LispVal got = call(LispNames.PRIN1_TO_STRING, required == 0 ? call(LispNames.LENGTH, restVar)
+				: list(new LispSymbol(LispNames.ADD), new LispInteger(required), call(LispNames.LENGTH, restVar)));
+		LispVal message = list(new LispSymbol(LispNames.STRING_CONCAT),
+				new LispString(ClosRegistry.ARITY_MESSAGE_PREFIX + ClosRegistry.ARITY_AT_MOST
+						+ ClosRegistry.arityExpectation(max, false) + ClosRegistry.ARITY_MESSAGE_INFIX),
+				got);
+		LispVal signal = list(new LispSymbol(LispNames.PROGRAM_ERROR_INTERNAL), message);
+		return list(new LispSymbol(ARITY_VAR), list(new LispSymbol(LispNames.IF), beyond, signal, LispNil.INSTANCE));
 	}
 
 	/**

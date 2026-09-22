@@ -59,6 +59,16 @@ Function expects 2 arguments, got 1
 ; => "Function expects 2 arguments, got 1"
 ```
 
+ラムダリストが `&optional` パラメータで終わる関数(`&rest` も `&key` もない)が受け取れるのは、
+必須と省略可能の個数の合計までです。余分な引数は、どのバックエンドでも、デフォルト式を
+評価する前に実行時の捕捉可能な `program-error` を通知します。
+
+```lisp
+(defun g (a &optional b) (list a b))
+(handler-case (g 1 2 3) (program-error (c) (princ-to-string c)))
+; => "Function expects at most 2 arguments, got 3"
+```
+
 ## setf 関数名
 
 `name` にはプレーンなシンボルの代わりに `(setf name)` のリストを指定できます。これは *setf 関数* を定義します。すなわち、`name` を `setf` のプレースとして使ったときに呼び出される書き込み用の関数です。新しい値は最初の引数として渡されます(Common Lisp の慣習どおり、setf ラムダリストの最後の必須パラメータになります)。したがって `(setf (name arg...) value)` は書き込み関数を `value` に続いて `arg...` の順で呼び出します。`#'(setf name)` を通じてファーストクラス値としても扱えます。

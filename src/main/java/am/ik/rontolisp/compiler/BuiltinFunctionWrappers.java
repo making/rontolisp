@@ -447,17 +447,51 @@ public final class BuiltinFunctionWrappers {
 		return wrappers;
 	}
 
+	private static final String DEFAULT_TRUE = "=t";
+
+	// (read-char &optional s (e t) v r) -- CL's whole optional tail: the eof-error-p
+	// default is true and recursive-p is accepted and dropped. read-char's wrapper is
+	// REFERENCE_GATED, so the end-of-file construction a computed eof-error-p implies
+	// is gated with it.
+	private static WrapperDef optionalStreamEof(String name) {
+		return new WrapperDef(name, List.of(LispNames.LAMBDA_OPTIONAL, "s", "e" + DEFAULT_TRUE, "v", "r"),
+				List.of(call(name, "s", "e", "v")));
+	}
+
+	// (read-line &optional s (e t) v r): read-line's wrapper is NOT reference-gated, so a
+	// computed eof-error-p -- an end-of-file construction the instance gate cannot see
+	// coming -- must not reach its body. A true one keeps the one-argument call (the
+	// wrapper's shape before it took the tail), a false one the literal-nil call that
+	// answers the eof-value.
+	private static WrapperDef readLineWrapper() {
+		LispVal dispatch = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("e"),
+				call(LispNames.READ_LINE, "s"), listToCons(List.of(new LispSymbol(LispNames.READ_LINE),
+						new LispSymbol("s"), LispNil.INSTANCE, new LispSymbol("v")))));
+		return new WrapperDef(LispNames.READ_LINE,
+				List.of(LispNames.LAMBDA_OPTIONAL, "s", "e" + DEFAULT_TRUE, "v", "r"), List.of(dispatch));
+	}
+
 	private record WrapperDef(String name, List<String> params, List<LispVal> body) {
 
 		// (lambda (params...) body...) -- the function VALUE itself, without the setq
 		// that binds it to the operator's name on the compile paths.
 		LispVal toLambda() {
-			LispVal paramList = listToCons(params.stream().map(p -> (LispVal) new LispSymbol(p)).toList());
+			LispVal paramList = listToCons(params.stream().map(WrapperDef::param).toList());
 			List<LispVal> lambdaParts = new ArrayList<>();
 			lambdaParts.add(new LispSymbol(LispNames.LAMBDA));
 			lambdaParts.add(paramList);
 			lambdaParts.addAll(body);
 			return listToCons(lambdaParts);
+		}
+
+		// A parameter spelled "name=t" is the optional (name t): the read family's
+		// eof-error-p, whose omitted default is TRUE, unlike a bound nil.
+		private static LispVal param(String p) {
+			if (p.endsWith(DEFAULT_TRUE)) {
+				return listToCons(
+						List.of(new LispSymbol(p.substring(0, p.length() - DEFAULT_TRUE.length())), LispTrue.INSTANCE));
+			}
+			return new LispSymbol(p);
 		}
 
 		LispVal toSetqLambda() {
@@ -1822,7 +1856,7 @@ public final class BuiltinFunctionWrappers {
 			binary(LispNames.ADJUST_ARRAY), unary(LispNames.ARRAY_DISPLACEMENT), variadicMakeArray(),
 			// terpri / fresh-line / read-line: the optional stream, forwarded
 			// unconditionally (omitted == nil == the standard stream designator).
-			optionalStream(LispNames.TERPRI), optionalStream(LispNames.FRESH_LINE), optionalStream(LispNames.READ_LINE),
+			optionalStream(LispNames.TERPRI), optionalStream(LispNames.FRESH_LINE), readLineWrapper(),
 			// write-line / force-output / finish-output / clear-output: the same optional
 			// stream. WASM flushes nothing (every write goes out synchronously) and
 			// clear-output evaluates its designator for effect, but every backend accepts
@@ -1836,13 +1870,15 @@ public final class BuiltinFunctionWrappers {
 			// #'listen reaches that stub on WASM even where (listen s) in call position
 			// would reach %io-listen (the same WASM-side limit as the read family).
 			optionalStream(LispNames.LISTEN),
-			// The signalling read family (all three REFERENCE_GATED_FUNCTIONS): read-char
-			// carries the optional stream like its stdin-shaped peers, peek-char carries
-			// the peek-type + stream a funcall would pass, read-byte's stream argument is
+			// The signalling read family (all three REFERENCE_GATED_FUNCTIONS): read-line
+			// and read-char carry CL's whole optional tail, peek-char the peek-type in
+			// front of it -- a wrapper shorter than the operator's lambda list is a
+			// program-error on a legal funcall -- and read-byte's stream argument is
 			// mandatory.
-			optionalStream(LispNames.READ_CHAR),
-			new WrapperDef(LispNames.PEEK_CHAR, List.of(LispNames.LAMBDA_OPTIONAL, "a", "b"),
-					List.of(call(LispNames.PEEK_CHAR, "a", "b"))),
+			optionalStreamEof(LispNames.READ_CHAR),
+			new WrapperDef(LispNames.PEEK_CHAR,
+					List.of(LispNames.LAMBDA_OPTIONAL, "a", "b", "e" + DEFAULT_TRUE, "v", "r"),
+					List.of(call(LispNames.PEEK_CHAR, "a", "b", "e", "v"))),
 			// read-char-no-hang keeps its 0-arity stdin shape (the non-blocking probe has
 			// no stream-forwarded implementation behind the wrapper); unread-char is
 			// binary (character + stream) -- its body signals on a handle, and a Gray

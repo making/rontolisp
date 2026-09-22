@@ -59,6 +59,16 @@ Only a call that names the function directly can be checked at compile time. A c
 ; => "Function expects 2 arguments, got 1"
 ```
 
+A function whose lambda list ends in `&optional` parameters (no `&rest` or `&key`) takes
+at most its required plus optional count: a surplus argument signals the same catchable
+`program-error` at run time, on every backend, before any default form is evaluated.
+
+```lisp
+(defun g (a &optional b) (list a b))
+(handler-case (g 1 2 3) (program-error (c) (princ-to-string c)))
+; => "Function expects at most 2 arguments, got 3"
+```
+
 ## setf-function names
 
 The `name` may be a `(setf name)` list instead of a plain symbol. This defines a *setf-function*: the writer invoked when `name` is used as a `setf` place. The new value is passed as the first argument (it is the last required parameter of the setf lambda list, per the Common Lisp convention), so `(setf (name arg...) value)` calls the writer with `value` followed by `arg...`. The function is also first-class through `#'(setf name)`.

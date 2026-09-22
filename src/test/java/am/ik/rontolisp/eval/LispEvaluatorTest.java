@@ -748,6 +748,39 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalStringStreamMacroOptions() {
+		// with-input-from-string (var string &key index start end): the index place is
+		// set on a NORMAL exit only, to the position of the first unread character.
+		assertThat(eval("""
+				(let ((i nil))
+				  (list (with-input-from-string (s "abcdef" :index i :start 1 :end 5)
+				          (list (read-char s) (read-char s) i))
+				        i))""").print()).isEqualTo("((#\\b #\\c NIL) 3)");
+		assertThat(eval("""
+				(let ((cell (list nil)))
+				  (with-input-from-string (s "xyz" :index (car cell)) (read-char s))
+				  cell)""").print()).isEqualTo("(1)");
+		assertThat(eval("""
+				(let ((i nil))
+				  (list (block done
+				          (with-input-from-string (s "abcde" :index i) (return-from done (read-char s))))
+				        i))""").print()).isEqualTo("(#\\a NIL)");
+		assertThat(eval("(with-input-from-string (s \"abcdef\" :end 3) (read-line s))"))
+			.isEqualTo(new LispString("abc"));
+		// with-output-to-string (var &optional string-form &key element-type): a string
+		// with a fill pointer receives the output and the form answers the body's values.
+		assertThat(eval("""
+				(let ((str (make-array 10 :fill-pointer 0 :element-type 'character)))
+				  (list (multiple-value-list (with-output-to-string (s str) (write-string "ab" s) (values 1 2)))
+				        str))""").print()).isEqualTo("((1 2) \"ab\")");
+		assertThat(eval("(with-output-to-string (s nil :element-type 'base-char) (write-char #\\8 s))"))
+			.isEqualTo(new LispString("8"));
+		// A malformed spec is refused when the form RUNS, not when it is expanded.
+		assertThat(eval("(if nil (with-input-from-string (s \"a\" :bogus 1) s) :skipped)").print())
+			.isEqualTo(":SKIPPED");
+	}
+
+	@Test
 	void evalPeekCharLeavesTheCharacterInTheStream() {
 		assertThat(eval("""
 				(with-input-from-string (s "ab")
@@ -17332,6 +17365,25 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void defunExtraArgumentsPastTheLambdaListSignalProgramError() {
+		String def = "(defun f (x &optional (y 10)) (list x y)) ";
+		assertThat(evalMulti(def + "(handler-case (f 1 2 3) (program-error (e) (princ-to-string e)))").print())
+			.isEqualTo("\"Function expects at most 2 arguments, got 3\"");
+		// The count is checked before a default runs.
+		assertThat(evalMulti("""
+				(defvar *ran* nil)
+				(defun g (&optional (y (setq *ran* t))) y)
+				(list (handler-case (g 1 2) (program-error () :pe)) *ran*)""").print()).isEqualTo("(:PE NIL)");
+		assertThat(
+				evalMulti("(defun h (x &aux (y 1)) (list x y)) (handler-case (h 1 2) (program-error () :pe))").print())
+			.isEqualTo(":PE");
+		assertThat(eval("(handler-case (funcall (lambda (&optional a) a) 1 2) (program-error () :pe))").print())
+			.isEqualTo(":PE");
+		// A prelude defun is an ordinary defun: clear-input takes one optional.
+		assertThat(eval("(handler-case (clear-input t nil) (program-error () :pe))").print()).isEqualTo(":PE");
+	}
+
+	@Test
 	void defunKeywordArguments() {
 		String def = "(defun f (a &key (k 1 kp) m) (list a k kp m)) ";
 		assertThat(evalMulti(def + "(f 0)").print()).isEqualTo("(0 1 NIL NIL)");
@@ -23048,10 +23100,13 @@ class LispEvaluatorTest {
 				      (uiop:with-output (o nil) (write-string "q" o))
 				      (with-output-to-string (s) (uiop:with-output (o s) (write-string "w" o))))
 				""").print()).isEqualTo("(\"xyz\" #\\a \"abc\" \"abc\" \"abc\" \"q\" \"w\")");
-		// A string has no honest append target (with-output-to-string is
-		// fresh-string only), so the string arm refuses loudly (.todo/359 lite).
-		assertThat(eval("(handler-case (uiop:with-output (o \"s\") o) (error () :signalled))").print())
-			.isEqualTo(":SIGNALLED");
+		// A string with a fill pointer is appended to, as upstream's call-with-output
+		// does through with-output-to-string's string argument.
+		assertThat(evalMulti("""
+				(let ((str (make-array 8 :fill-pointer 0 :element-type 'character)))
+				  (uiop:with-output (o str) (write-string "ab" o))
+				  str)
+				""").print()).isEqualTo("\"ab\"");
 		// The macros are thin over the functions: with-input-file and
 		// with-output-file thread keys through, with-input and with-output reuse a
 		// binding when the value is absent.

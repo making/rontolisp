@@ -1,6 +1,6 @@
 # with-output-to-string
 
-`(with-output-to-string (stream) body...)`
+`(with-output-to-string (stream &optional string &key element-type) body...)`
 
 Binds `stream` to a string output stream, evaluates the body forms, and returns everything written to the stream as a string. `princ`, `prin1`, `print`, `terpri`, `fresh-line`, `write-line`, `write-char` and `write-string` accept the stream as their optional stream argument, and `format` accepts it as the destination; each call appends to the stream. Works in all three backends.
 
@@ -8,6 +8,18 @@ Binds `stream` to a string output stream, evaluates the body forms, and returns 
 (with-output-to-string (s)
   (princ "1 + 2 = " s)
   (princ (+ 1 2) s)) ; => "1 + 2 = 3"
+```
+
+Given a `string` with a fill pointer, the output is appended to it through the fill
+pointer instead, and the form returns the values of the last body form. The string
+receives the output when the body exits, not character by character. `:element-type`
+is accepted and has no effect: every stream here is a character stream.
+
+```lisp
+(let ((str (make-array 10 :fill-pointer 0 :element-type 'character)))
+  (with-output-to-string (s str)
+    (write-string "abc" s))
+  str) ; => "abc"
 ```
 
 Naming the bound variable `*standard-output*` redirects the whole
