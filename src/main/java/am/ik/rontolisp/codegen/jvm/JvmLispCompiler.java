@@ -6316,10 +6316,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		/**
 		 * The one local {@code %error}'s message rides in, allocated on first use. The
 		 * value is written and read five instructions later with no control flow in
-		 * between and the throw never returns, so every {@code error} site in the method
-		 * shares it rather than burning a slot each. Past slot 255 every load and store
-		 * of it would cost the three extra bytes of a {@code wide} prefix, and
-		 * {@code max_locals} sizes every frame the method carries.
+		 * between, so every {@code error} site in the method shares it rather than
+		 * burning a slot each -- until {@link #allocTemp} hands the slot to a variable
+		 * (its reserving scope ended), which drops the cache: a handler-case in the same
+		 * method resumes after the throw, and a live variable in the slot would read the
+		 * message. Past slot 255 every load and store of it would cost the three extra
+		 * bytes of a {@code wide} prefix, and {@code max_locals} sizes every frame the
+		 * method carries.
 		 */
 		private int errorMessageSlot = -1;
 
@@ -8076,6 +8079,12 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		int allocTemp() {
 			int slot = this.nextLocal++;
+			if (slot == this.errorMessageSlot) {
+				// The scope that reserved the %error message slot has ended and the slot
+				// is being handed to a live variable: an error caught in THIS method
+				// would overwrite it, so the next error site takes a fresh slot.
+				this.errorMessageSlot = -1;
+			}
 			if (slot > MAX_LOCAL_SLOT) {
 				// max_locals is a u2: no load or store, `wide` included, can name a
 				// higher slot. Say so instead of writing an index that wraps.

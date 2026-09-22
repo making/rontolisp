@@ -5718,6 +5718,11 @@ public final class LispNames {
 	 */
 	public static final String FILE_STREAM_REGISTER_INTERNAL = "%FILE-STREAM-REGISTER";
 
+	/**
+	 * The registry removal every compiled {@code close} runs once the registry exists.
+	 */
+	public static final String FILE_STREAM_FORGET_INTERNAL = "%FILE-STREAM-FORGET";
+
 	/** The registry lookup: a stream's entry, or nil. */
 	public static final String FILE_STREAM_ENTRY_INTERNAL = "%FILE-STREAM-ENTRY";
 

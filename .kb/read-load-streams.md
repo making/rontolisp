@@ -459,24 +459,24 @@ a type needing b bits takes 1 / 2 / 4 / 8 octets for b <= 8 / 16 / 32 / 64 and `
 `(unsigned-byte 8)`, `signed-byte` is `(signed-byte 8)`, an `(or ...)` of integer types takes its
 hull. `file-length` / `file-position` are in elements (3 two-octet elements -> 3). So no
 bit-packing stream exists anywhere: every backend's descriptor keeps moving octets and the element
-is composed above it. sbcl signals on `stream-element-type` of a CLOSED stream; ours answers the
-type (a narrower-than-sbcl refusal is not worth a table walk at close).
+is composed above it. sbcl signals on `stream-element-type` of a CLOSED stream; ours answers
+`character` on all four, because close forgets the entry (below).
 
 - **Interpreter** (`Environment`): `open` classifies the EVALUATED type and records it per handle
-  (`streamElementTypes`, never cleared -- handles are never reused here). `read-byte`,
+  (`streamElementTypes`, removed by `close`, in step with the compile paths). `read-byte`,
   `write-byte`, `file-length`, `file-position` and the two packed sequence primitives are
   re-defined as wrappers over the octet built-ins: a wide handle composes / scales / declines, any
   other passes straight through. `stream-element-type` reads the table.
 - **Compile paths: a REGISTRY in prelude Lisp, not a runtime mode.** No backend learned a width.
   `LispPreludeLibrary` entries `%file-stream-entry` / `%file-stream-register` /
-  `%file-stream-element-type` (a hash table keyed by the handle, entry = `(stream octets signed
-  spec)`, VALIDATED against the stream value with `eq` -- a WASM descriptor is reused after close,
-  and a socket on a reused fd must not inherit a file's width) and `%wide-width` /
+  `%file-stream-element-type` / `%file-stream-forget` (a hash table keyed by the HANDLE, entry =
+  `(octets signed spec)`) and `%wide-width` /
   `%wide-read-byte` / `%wide-write-byte` / `%wide-elements` / `%wide-position-octets`. The
   backends (`Jvm/WasmExprCompiler`) lower ONLY when the entry is spliced (`ctx.functions`): a
   literal binary `open` leaf becomes `(%file-stream-register (%obj-new '%STREAM <checked open>
   :FILE) n signed 'spec)` (`LispMacroExpander.registeredOpen`), `read-byte` / `write-byte`
   (and the component socket aliases `%read-byte-raw` / `%write-byte-raw`) call the wide helpers,
+  every `close` (and `%close-raw`) forgets the entry first (`LispMacroExpander.forgettingClose`),
   `file-length` / `file-position` go through the scaling call-site shapes
   (`expandWideFileLength` / `expandWideFilePosition`, after `rewriteFilePositionArg`), and the
   packed arm of every `read-sequence` / `write-sequence` expansion -- the backends' own and
@@ -486,6 +486,14 @@ type (a narrower-than-sbcl refusal is not worth a table walk at close).
   `%file-octet-length`, `%file-octet-position`. **Every name-keyed runtime gate still sees the
   public name** (the JVM `FileMeta` / stdout-flush gates, the WASM `file-position` import), because
   a raw call appears only in the lowering of a call the source wrote.
+- **Keyed by the handle, forgotten at close -- both measured, not chosen.** The first cut keyed
+  entries by handle AND checked the stream VALUE with `eq` (to survive a reused WASM descriptor
+  without a close hook). It went red in the ci-spec E2E corpus only: a program that uses the Gray
+  protocol reaches every built-in through gray.lisp's dispatchers, which resolve `%stream-target`
+  FIRST and pass the raw handle -- no value to compare. So the lookup takes the handle alone, and
+  a stale entry on a reused descriptor is prevented where it arises: close. Closing a SYNONYM
+  forgets nothing (its target stays open); a raw handle, which the Gray close dispatcher can pass,
+  forgets.
 - **Two selection facts, both SURFACE** (`referencedBySurfaceForm`, `LibraryDefunPruner`'s
   synthesized list): the wide half on `LispMacroExpander.opensWideElementStream` (a literal wide
   `:element-type` on an `open` / `with-open-file`); the registry also on "names
@@ -519,8 +527,9 @@ ANSI `streams` (interpreter, suite `ca06bd9`), 2026-09-22: the call-time `with-o
 every backend by the literal-only rule above.
 
 Pinned by `LispEvaluatorTest#wideAndNarrowElementTypesRoundTripTheWaySbclStoresThem`,
+`#aClosedFileStreamForgetsItsElementTypeButClosingASynonymDoesNot`,
 `JvmLispCompilerTest#compileAndRunWideAndNarrowElementTypes` /
-`#compileAndRunStreamElementTypeOfAnOctetFileStream`,
+`#compileAndRunStreamElementTypeOfAnOctetFileStream` / `#compileAndRunWideElementTypesThroughTheGrayDispatchers`,
 `WasmLispCompilerIntegrationTest#wideAndNarrowElementTypesOnPreview1` /
 `#componentWideAndNarrowElementTypes` / `#streamElementTypeOfAnOctetFileStreamOnPreview1`,
 `StreamElementTypeTest`, ci-spec `wide-and-narrow-stream-element-types`.

@@ -4953,8 +4953,8 @@ public final class Environment implements Scope {
 		// read-byte / write-byte move per element (octets, sign), what
 		// stream-element-type answers, and what file-length / file-position count in
 		// (.kb/read-load-streams.md, "Element types wider and narrower than one octet").
-		// NOT cleared by close: a closed stream still answers its element type, and a
-		// handle is never reused here.
+		// Cleared by close, as the compile paths' registry is (a WASM descriptor is
+		// reused), so a closed stream answers character on all four.
 		Map<Long, StreamElementType> streamElementTypes = new ConcurrentHashMap<>();
 		// The set half of file-position for a BINARY file stream: reposition the file at
 		// the given byte offset and answer T, or nil if the stream was not a file
@@ -5891,6 +5891,7 @@ public final class Environment implements Scope {
 			Closeable stream = streams.remove(handle.value());
 			streamPaths.remove(handle.value());
 			streamPositions.remove(handle.value());
+			streamElementTypes.remove(handle.value());
 			if (stream == null) {
 				// CL: close on an ALREADY-CLOSED stream is not an error -- it answers
 				// true and does nothing (SBCL agrees). The unwind-protect idiom the ANSI

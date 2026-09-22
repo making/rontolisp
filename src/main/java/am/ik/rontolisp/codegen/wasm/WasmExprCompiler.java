@@ -534,7 +534,11 @@ final class WasmExprCompiler {
 						// nothing -- they share the compilers whose designator seam
 						// already resolves it.
 						default -> {
-							if (ctx.usesSynonymStreams || ctx.usesStreamValues) {
+							LispVal forgetting = forgettingClose(cons, ctx);
+							if (forgetting != null) {
+								WasmExprCompiler.compileExpr(forgetting, ctx);
+							}
+							else if (ctx.usesSynonymStreams || ctx.usesStreamValues) {
 								WasmExprCompiler.compileExpr(LispMacroExpander.expandCloseOverStream(cons,
 										ctx.usesSynonymStreams, ctx.functions.containsKey(LispNames.STREAM_TARGET)),
 										ctx);
@@ -1139,7 +1143,14 @@ final class WasmExprCompiler {
 					// to -- which is nothing to do; an OPEN stream resolves to its
 					// handle. The guard is emitted only when the program can build one
 					// of the two; %close is the raw-handle close it falls through to.
-					if (ctx.usesSynonymStreams || ctx.usesStreamValues) {
+					LispVal forgetting = forgettingClose(cons, ctx);
+					if (forgetting != null) {
+						// The element-type registry forgets the stream first
+						// (.kb/read-load-streams.md, "Element types wider and narrower
+						// than one octet").
+						WasmExprCompiler.compileExpr(forgetting, ctx);
+					}
+					else if (ctx.usesSynonymStreams || ctx.usesStreamValues) {
 						WasmExprCompiler.compileExpr(LispMacroExpander.expandCloseOverStream(cons,
 								ctx.usesSynonymStreams, ctx.functions.containsKey(LispNames.STREAM_TARGET)), ctx);
 					}
@@ -2491,6 +2502,19 @@ final class WasmExprCompiler {
 			return type.isWide() ? LispMacroExpander.wideElementTypeUnavailableStub() : null;
 		}
 		return LispMacroExpander.registeredOpen(checked, type);
+	}
+
+	/**
+	 * The registry-forgetting {@code close} (LispMacroExpander.forgettingClose), or null
+	 * when the program has no element-type registry.
+	 */
+	private static @org.jspecify.annotations.Nullable LispVal forgettingClose(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		if (!(ctx.usesSynonymStreams || ctx.usesStreamValues)
+				|| !ctx.functions.containsKey(LispNames.FILE_STREAM_FORGET_INTERNAL)) {
+			return null;
+		}
+		return LispMacroExpander.forgettingClose(cons, c -> LispMacroExpander.expandCloseOverStream(c,
+				ctx.usesSynonymStreams, ctx.functions.containsKey(LispNames.STREAM_TARGET)));
 	}
 
 	/**

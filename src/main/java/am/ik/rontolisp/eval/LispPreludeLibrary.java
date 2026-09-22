@@ -1476,9 +1476,10 @@ public final class LispPreludeLibrary {
 		// types wider and narrower than one octet"). A backend's file descriptor moves
 		// octets whatever the element type, so the TYPE rides beside the stream: every
 		// literal binary open leaf is wrapped in %file-stream-register, keyed by the
-		// handle and checked against the stream VALUE (a WASM descriptor is reused after
-		// close, so a later stream on the same number must not inherit the entry).
-		// Entries survive close, as the interpreter's do. The backends call these only
+		// HANDLE -- the Gray dispatchers hand the built-ins a resolved handle, not the
+		// stream value -- and every close forgets its entry (%file-stream-forget), so a
+		// WASM descriptor reused after close never inherits one. An entry is
+		// (octets signed spec). The backends call these only
 		// when the entry is spliced (ctx.functions), and selection keys on the SURFACE
 		// fact (referencedBySurfaceForm), because the calls are synthesized inside the
 		// expression compilers. Each helper is its own entry (the pruner roots entries
@@ -1487,23 +1488,27 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.FILE_STREAM_ENTRY_INTERNAL, """
 				(defvar %file-stream-types (make-hash-table))
 				(defun %file-stream-entry (%fse-s)
-				  (if (%obj-is %fse-s '%SYNONYM-STREAM)
-				      (%file-stream-entry (funcall (%obj-ref %fse-s 1)))
-				      (if (%obj-is %fse-s '%STREAM)
-				          (let ((%fse-e (gethash (%obj-ref %fse-s 0) %file-stream-types)))
-				            (if %fse-e (if (eq (car %fse-e) %fse-s) %fse-e nil) nil))
-				          nil)))
+				  (gethash (%stream-target %fse-s) %file-stream-types))
 				""");
 		SOURCES.put(LispNames.FILE_STREAM_REGISTER_INTERNAL, """
 				(defvar %file-stream-types (make-hash-table))
 				(defun %file-stream-register (%fsr-s %fsr-n %fsr-signed %fsr-spec)
-				  (setf (gethash (%obj-ref %fsr-s 0) %file-stream-types) (list %fsr-s %fsr-n %fsr-signed %fsr-spec))
+				  (setf (gethash (%obj-ref %fsr-s 0) %file-stream-types) (list %fsr-n %fsr-signed %fsr-spec))
 				  %fsr-s)
+				""");
+		// Closing a SYNONYM closes the synonym, not its target, so only an open stream
+		// value (or a raw handle, which the Gray close dispatcher can pass) forgets.
+		SOURCES.put(LispNames.FILE_STREAM_FORGET_INTERNAL, """
+				(defvar %file-stream-types (make-hash-table))
+				(defun %file-stream-forget (%fsf-s)
+				  (if (%obj-is %fsf-s '%STREAM)
+				      (remhash (%obj-ref %fsf-s 0) %file-stream-types)
+				      (if (integerp %fsf-s) (remhash %fsf-s %file-stream-types) nil)))
 				""");
 		SOURCES.put(LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL, """
 				(defun %file-stream-element-type (%fset-s)
 				  (let ((%fset-e (%file-stream-entry %fset-s)))
-				    (if %fset-e (car (cdr (cdr (cdr %fset-e)))) 'character)))
+				    (if %fset-e (car (cdr (cdr %fset-e))) 'character)))
 				""");
 		// The WIDE element: more than one octet, or a signed one. The backends lower
 		// read-byte / write-byte onto these, and file-length / file-position through the
@@ -1514,13 +1519,13 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.WIDE_WIDTH_INTERNAL, """
 				(defun %wide-width (%ww-s)
 				  (let ((%ww-e (%file-stream-entry %ww-s)))
-				    (if %ww-e (if (or (> (car (cdr %ww-e)) 1) (car (cdr (cdr %ww-e)))) %ww-e nil) nil)))
+				    (if %ww-e (if (or (> (car %ww-e) 1) (car (cdr %ww-e))) %ww-e nil) nil)))
 				""");
 		SOURCES.put(LispNames.WIDE_READ_BYTE_INTERNAL, """
 				(defun %wide-read-byte (%wrb-s %wrb-errp %wrb-v)
 				  (let* ((%wrb-st (if %wrb-s %wrb-s *standard-input*))
 				         (%wrb-e (%wide-width %wrb-st))
-				         (%wrb-n (if %wrb-e (car (cdr %wrb-e)) 1))
+				         (%wrb-n (if %wrb-e (car %wrb-e) 1))
 				         (%wrb-acc 0)
 				         (%wrb-i 0)
 				         (%wrb-b 0))
@@ -1532,7 +1537,7 @@ public final class LispPreludeLibrary {
 				          nil))
 				    (if (< %wrb-i %wrb-n)
 				        (if %wrb-errp (error 'end-of-file :stream %wrb-st) %wrb-v)
-				        (if (if %wrb-e (if (car (cdr (cdr %wrb-e))) (logbitp (- (* 8 %wrb-n) 1) %wrb-acc) nil) nil)
+				        (if (if %wrb-e (if (car (cdr %wrb-e)) (logbitp (- (* 8 %wrb-n) 1) %wrb-acc) nil) nil)
 				            (- %wrb-acc (ash 1 (* 8 %wrb-n)))
 				            %wrb-acc))))
 				""");
@@ -1541,9 +1546,9 @@ public final class LispPreludeLibrary {
 				  (let ((%wwb-e (%wide-width %wwb-s)))
 				    (if (null %wwb-e)
 				        (%write-octet %wwb-i %wwb-s)
-				        (let* ((%wwb-n (car (cdr %wwb-e)))
+				        (let* ((%wwb-n (car %wwb-e))
 				               (%wwb-bits (* 8 %wwb-n))
-				               (%wwb-signed (car (cdr (cdr %wwb-e))))
+				               (%wwb-signed (car (cdr %wwb-e)))
 				               (%wwb-lo (if %wwb-signed (- (ash 1 (- %wwb-bits 1))) 0))
 				               (%wwb-hi (- (if %wwb-signed (ash 1 (- %wwb-bits 1)) (ash 1 %wwb-bits)) 1))
 				               (%wwb-k 0))
@@ -1558,12 +1563,12 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.WIDE_ELEMENTS_INTERNAL, """
 				(defun %wide-elements (%we-s %we-n)
 				  (let ((%we-e (%wide-width %we-s)))
-				    (if (if %we-e (integerp %we-n) nil) (values (floor %we-n (car (cdr %we-e)))) %we-n)))
+				    (if (if %we-e (integerp %we-n) nil) (values (floor %we-n (car %we-e))) %we-n)))
 				""");
 		SOURCES.put(LispNames.WIDE_POSITION_OCTETS_INTERNAL, """
 				(defun %wide-position-octets (%wpo-s %wpo-p)
 				  (let ((%wpo-e (%wide-width %wpo-s)))
-				    (if (if %wpo-e (integerp %wpo-p) nil) (* %wpo-p (car (cdr %wpo-e))) %wpo-p)))
+				    (if (if %wpo-e (integerp %wpo-p) nil) (* %wpo-p (car %wpo-e)) %wpo-p)))
 				""");
 		SOURCES.put(LispNames.SYNONYM_STREAM_SYMBOL, """
 				(defun synonym-stream-symbol (%sss-s)
@@ -4280,7 +4285,8 @@ public final class LispPreludeLibrary {
 			return am.ik.rontolisp.macro.LispMacroExpander.opensWideElementStream(program);
 		}
 		if (LispNames.FILE_STREAM_REGISTER_INTERNAL.equals(entry)
-				|| LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL.equals(entry)) {
+				|| LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL.equals(entry)
+				|| LispNames.FILE_STREAM_FORGET_INTERNAL.equals(entry)) {
 			return am.ik.rontolisp.macro.LispMacroExpander.opensWideElementStream(program)
 					|| (referencesName(program, LispNames.STREAM_ELEMENT_TYPE, canonical)
 							&& (referencesName(program, LispNames.OPEN, canonical)

@@ -19046,6 +19046,24 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void anErrorCaughtInTheSameMethodLeavesTheSpilledArgumentsAlone() throws Exception {
+		// The %error message rides in ONE cached local per method. It was allocated on
+		// first use and then handed out again after its scope ended, so a later
+		// argument spilled around a handler-case could land in the same slot -- and the
+		// error inside that handler-case, caught IN THE SAME METHOD, overwrote the
+		// argument with its message before the list was built. First seen as the
+		// ci-spec find-class-metaobject-substrate case printing its condition report
+		// in place of a T.
+		assertThat(compileAndRun("""
+				(define-condition zz-error (error) ((code :initarg :code :reader zz-code)))
+				(defun zz-id (x) x)
+				(print (let ((q 5)) (handler-case (error "first ~a" q) (error () q))))
+				(print (list (zz-id 1) (zz-id 2) (zz-id 3) (zz-id 4) (zz-id 5) (zz-id 6) (zz-id 7) (zz-id 8)
+				             (handler-case (error 'zz-error :code 42) (zz-error (e) (zz-code e)))))
+				""")).isEqualTo("5\n(1 2 3 4 5 6 7 8 42)");
+	}
+
+	@Test
 	void compileAndRunStreamElementTypeOfAnOctetFileStream(@TempDir Path tempDir) throws Exception {
 		// The registry without the wide helpers: a program that asks
 		// stream-element-type and opens a file answers (unsigned-byte 8) for an octet
@@ -19069,6 +19087,37 @@ class JvmLispCompilerTest {
 					((UNSIGNED-BYTE 8) 7 :EOF)
 					CHARACTER
 					\"CHARACTER\"""");
+	}
+
+	@Test
+	void compileAndRunWideElementTypesThroughTheGrayDispatchers(@TempDir Path tempDir) throws Exception {
+		// A program that uses the Gray protocol reaches read-byte / stream-element-type /
+		// file-length / file-position through gray.lisp's dispatchers, which hand the
+		// built-in a RESOLVED HANDLE rather than the stream value -- so the registry is
+		// keyed by the handle, and a close forgets the entry (closing a SYNONYM does
+		// not). First seen red in the ci-spec E2E corpus, whose concatenated program
+		// defines Gray classes.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(compileAndRunGray(
+				"""
+						(defclass w919-sink (rontolisp:fundamental-character-output-stream) ())
+						(with-open-file (o "%1$s/g919.bin" :direction :output :element-type '(signed-byte 16) :if-exists :supersede)
+						  (write-byte -2 o)
+						  (write-byte 513 o))
+						(print (with-open-file (i "%1$s/g919.bin" :element-type '(signed-byte 16))
+						         (list (stream-element-type i) (read-byte i) (read-byte i) (file-length i) (file-position i))))
+						(defvar *g919* (open "%1$s/g919.bin" :element-type '(unsigned-byte 16)))
+						(defvar *g919-syn* (make-synonym-stream '*g919*))
+						(close *g919-syn*)
+						(print (list (stream-element-type *g919*) (read-byte *g919*)))
+						(close *g919*)
+						(print (stream-element-type *g919*))
+						"""
+					.formatted(here)))
+			.isEqualTo("""
+					((SIGNED-BYTE 16) -2 513 2 2)
+					((UNSIGNED-BYTE 16) 65534)
+					CHARACTER""");
 	}
 
 	@Test

@@ -822,7 +822,19 @@ final class JvmExprCompiler {
 					// to -- which is nothing to do; an OPEN stream resolves to its
 					// handle. The guard is emitted only when the program can build one
 					// of the two; %close is the raw-handle close it falls through to.
-					if (ctx.usesSynonymStreams || ctx.usesStreamValues) {
+					LispVal forgetting = (ctx.usesSynonymStreams || ctx.usesStreamValues)
+							&& ctx.functions.containsKey(LispNames.FILE_STREAM_FORGET_INTERNAL)
+									? LispMacroExpander.forgettingClose(cons,
+											c -> LispMacroExpander.expandCloseOverStream(c, ctx.usesSynonymStreams,
+													ctx.functions.containsKey(LispNames.STREAM_TARGET)))
+									: null;
+					if (forgetting != null) {
+						// The element-type registry forgets the stream first
+						// (.kb/read-load-streams.md, "Element types wider and narrower
+						// than one octet").
+						JvmExprCompiler.compileExpr(forgetting, ctx, className);
+					}
+					else if (ctx.usesSynonymStreams || ctx.usesStreamValues) {
 						JvmExprCompiler.compileExpr(LispMacroExpander.expandCloseOverStream(cons,
 								ctx.usesSynonymStreams, ctx.functions.containsKey(LispNames.STREAM_TARGET)), ctx,
 								className);

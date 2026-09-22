@@ -11177,6 +11177,22 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aClosedFileStreamForgetsItsElementTypeButClosingASynonymDoesNot(@TempDir Path tempDir) {
+		// The twin of
+		// JvmLispCompilerTest#compileAndRunWideElementTypesThroughTheGrayDispatchers:
+		// close drops the element type on all four backends (a WASM descriptor is reused
+		// after close), and closing a synonym stream leaves its target alone.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(evalMulti("""
+				(defvar *g919* (open "%1$s/g919.bin" :direction :output :element-type '(unsigned-byte 16)))
+				(defvar *g919-syn* (make-synonym-stream '*g919*))
+				(close *g919-syn*)
+				(list (stream-element-type *g919*)
+				      (progn (close *g919*) (stream-element-type *g919*)))
+				""".formatted(here)).print()).isEqualTo("((UNSIGNED-BYTE 16) CHARACTER)");
+	}
+
+	@Test
 	void withOpenFileUnsupportedLiteralElementTypeSignalsAtCallTime(@TempDir Path tempDir) {
 		String file = tempDir.resolve("float.dat").toString().replace("\\", "\\\\");
 		// An element type no stream can carry is refused when the open RUNS, not when the

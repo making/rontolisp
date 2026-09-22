@@ -10458,6 +10458,32 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * A compiled {@code close} once the element-type registry exists: the stream's entry
+	 * is forgotten first, so a descriptor reused after the close never inherits the
+	 * closed stream's element type.
+	 *
+	 * <pre>
+	 * (let ((__fsf_s s)) (%file-stream-forget __fsf_s) &lt;close of __fsf_s&gt;)
+	 * </pre>
+	 * @param cons the close call
+	 * @param close builds the backend's own close of the bound temporary
+	 * @return the forgetting form, or null for a malformed call
+	 */
+	public static @Nullable LispVal forgettingClose(LispCons cons,
+			java.util.function.Function<LispCons, LispVal> close) {
+		LispCons stripped = stripCloseAbort(cons) instanceof LispCons s ? s : cons;
+		List<LispVal> parts = stripped.toList();
+		if (parts.size() != 2) {
+			return null;
+		}
+		LispSymbol var = new LispSymbol("__fsf_s");
+		LispCons inner = (LispCons) listToCons(List.of(parts.get(0), var));
+		return listToCons(
+				List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(var, parts.get(1))))),
+						callOf(LispNames.FILE_STREAM_FORGET_INTERNAL, var), close.apply(inner)));
+	}
+
+	/**
 	 * The call-time refusal of a wide {@code open} leaf compiled without the element-type
 	 * registry -- a pipeline that skipped the prelude selection. Opening it as octets
 	 * would read and write the wrong elements silently.
