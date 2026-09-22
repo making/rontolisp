@@ -18,3 +18,6 @@ component along the way; `write-char` / `write-string` reach the output side
 directly. The components are recoverable with
 [`echo-stream-input-stream`](echo-stream-input-stream.md) and
 [`echo-stream-output-stream`](echo-stream-output-stream.md).
+
+Each component must stream in the right direction: an input stream that is not
+one, or an output stream that is not one, signals a `type-error`.

@@ -18,3 +18,6 @@ work over its input side, and `write-char` / `write-string` / `format` / the
 print family reach the output side. The components are recoverable with
 [`two-way-stream-input-stream`](two-way-stream-input-stream.md) and
 [`two-way-stream-output-stream`](two-way-stream-output-stream.md).
+
+Each component must stream in the right direction: an input stream that is not
+one, or an output stream that is not one, signals a `type-error`.

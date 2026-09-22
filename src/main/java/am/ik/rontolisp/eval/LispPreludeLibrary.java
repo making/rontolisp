@@ -1306,6 +1306,12 @@ public final class LispPreludeLibrary {
 				  (write-byte %tw-b (%two-way-output %tw))
 				  %tw-b)
 				(defun make-two-way-stream (input-stream output-stream)
+				  (if (input-stream-p input-stream)
+				      nil
+				      (error 'type-error :datum input-stream :expected-type '(satisfies input-stream-p)))
+				  (if (output-stream-p output-stream)
+				      nil
+				      (error 'type-error :datum output-stream :expected-type '(satisfies output-stream-p)))
 				  (make-instance '%two-way-stream :input input-stream :output output-stream))
 				""");
 		// The two-way-stream accessors are their OWN prelude defuns (not part of the
@@ -1358,6 +1364,12 @@ public final class LispPreludeLibrary {
 				  (write-byte %es-b (%echo-output %es))
 				  %es-b)
 				(defun make-echo-stream (input-stream output-stream)
+				  (if (input-stream-p input-stream)
+				      nil
+				      (error 'type-error :datum input-stream :expected-type '(satisfies input-stream-p)))
+				  (if (output-stream-p output-stream)
+				      nil
+				      (error 'type-error :datum output-stream :expected-type '(satisfies output-stream-p)))
 				  (make-instance '%echo-stream :input input-stream :output output-stream))
 				""");
 		SOURCES.put(LispNames.ECHO_STREAM_INPUT_STREAM, """
@@ -1369,7 +1381,10 @@ public final class LispPreludeLibrary {
 				  (%echo-output %es2o-s))
 				""");
 		// make-concatenated-stream: a character input stream whose read walks the
-		// component list, dropping each at its end of file.
+		// component list, dropping each at its end of file. Like make-two-way-stream and
+		// make-echo-stream, the constructor refuses a component of the wrong DIRECTION
+		// with a type-error -- which the direction predicates can tell only since they
+		// answer the real direction (.kb/read-load-streams.md, "String streams").
 		SOURCES.put(LispNames.MAKE_CONCATENATED_STREAM, """
 				(defclass %concatenated-stream (rontolisp:fundamental-character-input-stream)
 				  ((streams :initarg :streams :reader %concatenated-stream-streams)))
@@ -1402,6 +1417,10 @@ public final class LispPreludeLibrary {
 				                     (setq %cs-r %cs-b)
 				                     (setq %cs-done t)))))))))
 				(defun make-concatenated-stream (&rest %mcs-streams)
+				  (dolist (%mcs-s %mcs-streams)
+				    (if (input-stream-p %mcs-s)
+				        nil
+				        (error 'type-error :datum %mcs-s :expected-type '(satisfies input-stream-p))))
 				  (make-instance '%concatenated-stream :streams %mcs-streams))
 				""");
 		SOURCES.put(LispNames.CONCATENATED_STREAM_STREAMS, """
@@ -1521,6 +1540,36 @@ public final class LispPreludeLibrary {
 				        (if (equal %csp-k :string-input) t (equal %csp-k :string-output)))
 				      nil))
 				""");
+		// The compile paths' FILE-stream direction record (.kb/read-load-streams.md,
+		// "String streams"): every literal open leaf registers its direction bits (1
+		// input, 2 output, 3 both) under its HANDLE -- the element-type registry's key
+		// -- and every close forgets it, so a closed file stream is neither, as the
+		// interpreter's emptied table entry says. The direction predicates read it
+		// INLINE (LispMacroExpander.expandStreamDirectionP); a classifier defun cost
+		// +6.2 KB on the JVM for one output-stream-p of a string stream, where the
+		// inline test costs +0.6 KB. An ALIST, not a hash table: the table runtime was
+		// +14.7 KB and a second class file on the JVM, and the entries are the file
+		// streams open at once.
+		SOURCES.put(LispNames.FILE_STREAM_DIRECTION_REGISTER_INTERNAL, """
+				(defvar %file-stream-directions nil)
+				(defun %file-stream-direction-register (%fsdr-s %fsdr-d)
+				  (setq %file-stream-directions (cons (cons (%obj-ref %fsdr-s 0) %fsdr-d) %file-stream-directions))
+				  %fsdr-s)
+				""");
+		SOURCES.put(LispNames.FILE_STREAM_DIRECTION_FORGET_INTERNAL,
+				"""
+						(defvar %file-stream-directions nil)
+						(defun %file-stream-direction-forget (%fsdf-s)
+						  (let ((%fsdf-h (if (%obj-is %fsdf-s '%STREAM) (%obj-ref %fsdf-s 0) (if (integerp %fsdf-s) %fsdf-s nil)))
+						        (%fsdf-kept nil))
+						    (if %fsdf-h
+						        (progn
+						          (dolist (%fsdf-e %file-stream-directions)
+						            (if (eql (car %fsdf-e) %fsdf-h) nil (setq %fsdf-kept (cons %fsdf-e %fsdf-kept))))
+						          (setq %file-stream-directions %fsdf-kept))
+						        nil)
+						    nil))
+						""");
 		SOURCES.put(LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL, """
 				(defun %file-stream-element-type (%fset-s)
 				  (let ((%fset-e (%file-stream-entry %fset-s)))
@@ -4306,6 +4355,16 @@ public final class LispPreludeLibrary {
 							&& (referencesName(program, LispNames.OPEN, canonical)
 									|| referencesName(program, LispNames.WITH_OPEN_FILE, canonical)));
 		}
+		// The file-stream direction record: its register is synthesized at every open
+		// leaf and its forget at every close, and only a program that asks a direction
+		// predicate, can build a stream value and can open a file needs either.
+		if (LispNames.FILE_STREAM_DIRECTION_REGISTER_INTERNAL.equals(entry)
+				|| LispNames.FILE_STREAM_DIRECTION_FORGET_INTERNAL.equals(entry)) {
+			return namesADirectionPredicate(program, canonical)
+					&& am.ik.rontolisp.macro.LispMacroExpander.mayCreateStreamValues(program)
+					&& (referencesName(program, LispNames.OPEN, canonical)
+							|| referencesName(program, LispNames.WITH_OPEN_FILE, canonical));
+		}
 		// %character-stream-p: called from the read-sequence / write-sequence expansions
 		// the expression compilers build, and only needed where a string stream VALUE can
 		// exist at all -- without one every stream is a bivalent standard stream and the
@@ -4502,6 +4561,11 @@ public final class LispPreludeLibrary {
 			}
 		}
 		return false;
+	}
+
+	private static boolean namesADirectionPredicate(List<LispVal> program, boolean canonical) {
+		return referencesName(program, LispNames.INPUT_STREAM_P, canonical)
+				|| referencesName(program, LispNames.OUTPUT_STREAM_P, canonical);
 	}
 
 	private static boolean referencesName(List<LispVal> program, String name, boolean canonical) {

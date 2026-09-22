@@ -464,6 +464,18 @@ final class JvmIoRuntimeBuilder {
 	 */
 	private final @Nullable IoStreams ioStreams;
 
+	/** The string-stream arms of {@code _filePosition}, minted with it. */
+	private final @Nullable JvmStringStreamPositions stringPositions;
+
+	/**
+	 * {@code RontoStringInputStream(String)}, when a string input stream's position can
+	 * be asked ({@link FileMeta#stringInputPositions}).
+	 */
+	private final @Nullable MethodrefConstant stringInputStreamInit;
+
+	/** {@code RontoStringInputStream}, beside {@link #stringInputStreamInit}. */
+	private final @Nullable ClassConstant stringInputStreamClass;
+
 	/**
 	 * Whether a quantized matrix -- a {@code byte[]} of ggml blocks behind an int header
 	 * ({@link JvmQuantizedMatrixRuntimeBuilder}) -- can exist in the program, so the bulk
@@ -671,6 +683,12 @@ final class JvmIoRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("getBuffer"), cp.addUtf8("()Ljava/lang/StringBuffer;")));
 		this.stringBufferSetLength = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/StringBuffer")),
 				cp.addNameAndType(cp.addUtf8("setLength"), cp.addUtf8("(I)V")));
+		this.stringPositions = fileMeta.position() ? JvmStringStreamPositions.mint(cp, fileMeta.stringInputPositions(),
+				this.stringWriterClass, this.stringWriterGetBuffer) : null;
+		this.stringInputStreamClass = fileMeta.stringInputPositions()
+				? cp.addClass(cp.addUtf8(JvmStringStreamPositions.STRING_INPUT_STREAM_CLASS)) : null;
+		this.stringInputStreamInit = this.stringInputStreamClass != null ? cp.addMethodref(this.stringInputStreamClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V"))) : null;
 		this.stringReaderClass = cp.addClass(cp.addUtf8("java/io/StringReader"));
 		this.stringReaderInit = cp.addMethodref(this.stringReaderClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
@@ -812,11 +830,14 @@ final class JvmIoRuntimeBuilder {
 	 * @param deleteFile whether {@code %delete-file} is called
 	 * @param renameFile whether {@code %rename-file} is called
 	 * @param position whether {@code file-position} is called
+	 * @param stringInputPositions whether {@code file-position} can be asked of a string
+	 * INPUT stream -- it is called and the program can make one -- so that stream is
+	 * built as the travelling {@code RontoStringInputStream}
 	 */
 	record FileMeta(boolean writeDate, boolean makeDirectories, boolean fileLength, boolean deleteFile,
-			boolean renameFile, boolean position) {
+			boolean renameFile, boolean position, boolean stringInputPositions) {
 
-		static final FileMeta NONE = new FileMeta(false, false, false, false, false, false);
+		static final FileMeta NONE = new FileMeta(false, false, false, false, false, false, false);
 
 		/**
 		 * Whether the {@code _streamPaths} side table must be present: both
@@ -902,6 +923,13 @@ final class JvmIoRuntimeBuilder {
 	 * can open one; every other program still compiles to exactly one file.
 	 */
 	static final List<String> RUNTIME_CLASS_FILES = List.of(IO_FILE_STREAM_CLASS + ".class");
+
+	/**
+	 * The travelling class list of a string input stream whose position can be asked
+	 * ({@link FileMeta#stringInputPositions}): {@code runtime.RontoStringInputStream}.
+	 */
+	static final List<String> STRING_INPUT_RUNTIME_CLASS_FILES = List
+		.of(JvmStringStreamPositions.STRING_INPUT_STREAM_CLASS + ".class");
 
 	private record IoStreams(ClassConstant type, MethodrefConstant init, MethodrefConstant readByte,
 			MethodrefConstant writeByte, MethodrefConstant readCodePoint, MethodrefConstant peekCodePoint,
@@ -2205,6 +2233,22 @@ final class JvmIoRuntimeBuilder {
 		a.invokevirtual(this.longValue);
 		a.l2i();
 		a.istore(2);
+		if (this.stringPositions != null) {
+			// A STRING stream answers first (JvmStringStreamPositions); it has no path.
+			a.iload(2);
+			int notInTable = a.label();
+			a.branch(Opcode.IFLT, notInTable);
+			a.iload(2);
+			a.getstatic(Objects.requireNonNull(this.streamsField));
+			a.arraylength();
+			a.branch(Opcode.IF_ICMPGE, notInTable);
+			a.getstatic(Objects.requireNonNull(this.streamsField));
+			a.iload(2);
+			a.aaload();
+			a.astore(5);
+			this.stringPositions.emit(a, 5, 1, 7, this.longClass, this.longValue, this.longValueOf, this.tStr);
+			a.bind(notInTable);
+		}
 		a.getstatic(Objects.requireNonNull(this.streamPathsField));
 		a.astore(3);
 		a.aload(3);
@@ -4957,6 +5001,20 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.stringSubstring.index());
 		code.add(Opcode.ASTORE_1);
+		if (this.stringInputStreamInit != null) {
+			// return _addStream(new RontoStringInputStream(content)) -- the reader that
+			// knows its position, where file-position can ask for it.
+			code.add(Opcode.NEW);
+			emitU2(code, Objects.requireNonNull(this.stringInputStreamClass).index());
+			code.add(Opcode.DUP);
+			code.add(Opcode.ALOAD_1);
+			code.add(Opcode.INVOKESPECIAL);
+			emitU2(code, this.stringInputStreamInit.index());
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, this.addStreamRef.index());
+			code.add(Opcode.ARETURN);
+			return code;
+		}
 		// return _addStream(new BufferedReader(new StringReader(content)));
 		code.add(Opcode.NEW);
 		emitU2(code, this.bufferedReaderClass.index());

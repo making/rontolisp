@@ -1174,10 +1174,13 @@ final class WasmIoRuntimeBuilder {
 	static byte[] buildFilePositionBody(FilePositionAbi abi) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// param: STREAM=0 (ref) ; i32 locals: FD=1, OFF=2, ERR=3
-		w.write(1);
-		w.write(3);
+		// param: STREAM=0 (ref) ; i32 locals: FD=1, OFF=2, ERR=3, then the string arm's
+		// REC=4, P=5, N=6, END=7, BOUND=8 ; ref local: BUF=9
+		w.write(2);
+		w.write(8);
 		w.write(Type.I32);
+		w.write(1);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
 		final int STREAM = 0, FD = 1, OFF = 2, ERR = 3;
 
 		// A non-handle designator has no file behind it.
@@ -1193,7 +1196,10 @@ final class WasmIoRuntimeBuilder {
 		refCast(w, Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
 		setLocal(w, FD);
-		// A negative handle is a string stream; 0/1/2 are the process standard streams.
+		// A negative handle is a string stream, which answers its character position.
+		WasmStringStreamRuntimeBuilder.emitPositionQueryArm(w, FD,
+				new WasmStringStreamRuntimeBuilder.PositionLocals(4, 5, 6, 7, 8, 9));
+		// 0/1/2 are the process standard streams.
 		getLocal(w, FD);
 		i32(w, (int) am.ik.rontolisp.compiler.StreamDesignators.FIRST_USER_HANDLE);
 		w.write(Instruction.I32_LT_S);
@@ -1273,10 +1279,13 @@ final class WasmIoRuntimeBuilder {
 	static byte[] buildFilePositionSetBody(FilePositionAbi abi) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// params: STREAM=0 (ref), POS=1 (ref) ; i32 locals: FD=2, OFF=3, ERR=4
-		w.write(1);
-		w.write(3);
+		// params: STREAM=0 (ref), POS=1 (ref) ; i32 locals: FD=2, OFF=3, ERR=4, then the
+		// string arm's REC=5, P=6, N=7, END=8, BOUND=9 ; ref local: BUF=10
+		w.write(2);
+		w.write(8);
 		w.write(Type.I32);
+		w.write(1);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
 		final int STREAM = 0, POS = 1, FD = 2, OFF = 3, ERR = 4;
 
 		getLocal(w, STREAM);
@@ -1291,6 +1300,9 @@ final class WasmIoRuntimeBuilder {
 		refCast(w, Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
 		setLocal(w, FD);
+		// A negative handle is a string stream, which repositions by character.
+		WasmStringStreamRuntimeBuilder.emitPositionSetArm(w, POS, FD,
+				new WasmStringStreamRuntimeBuilder.PositionLocals(5, 6, 7, 8, 9, 10));
 		getLocal(w, FD);
 		i32(w, (int) am.ik.rontolisp.compiler.StreamDesignators.FIRST_USER_HANDLE);
 		w.write(Instruction.I32_LT_S);

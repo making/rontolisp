@@ -20,6 +20,7 @@ import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.CorpusFixtures;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
+import am.ik.rontolisp.testsupport.StringStreamPrograms;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -3993,6 +3994,23 @@ class JvmLispCompilerTest {
 				  (let ((buf (make-array 3 :element-type (stream-element-type s))))
 				    (print (list (read-sequence buf s) buf))))
 				""")).isEqualTo("(3 \"xyz\")");
+	}
+
+	@Test
+	void compileAndRunDirectionPredicatesAnswerTheStreamsRealDirection() throws Exception {
+		// The interpreter twin is
+		// LispEvaluatorTest#directionPredicatesAnswerTheStreamsRealDirection.
+		String program = StringStreamPrograms.directionProgram(this.tempDir.resolve("dir.txt").toString());
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(StringStreamPrograms.DIRECTION_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunFilePositionOfAStringStreamQueriesAndSeeks() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(StringStreamPrograms.POSITION_PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(StringStreamPrograms.POSITION_EXPECTED);
 	}
 
 	@Test
@@ -11710,7 +11728,7 @@ class JvmLispCompilerTest {
 	void compileAndRunGrayStreamDirectionPredicates() throws Exception {
 		// input-stream-p / output-stream-p reach a Gray instance on the compile path
 		// too, through the same typep-against-the-base-class helpers the interpreter
-		// wraps. A stream HANDLE keeps the bidirectional-lite answer.
+		// wraps. A string input stream answers its real direction.
 		assertThat(compileAndRunGray("""
 				(defclass gdp-in (rontolisp:fundamental-character-input-stream) ())
 				(defclass gdp-out (rontolisp:fundamental-character-output-stream) ())
@@ -11725,7 +11743,7 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("""
 				(T NIL)
 				(NIL T)
-				(T T)
+				(T NIL)
 				(NIL NIL)""");
 	}
 

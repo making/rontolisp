@@ -412,7 +412,7 @@
 | `export` | `(export '(run))` | シンボルをパッケージの外部シンボルにします（リテラルなトップレベル呼び出しはコンパイル時ディレクティブ） |
 | `unexport` | `(unexport 'run)` | `export` の逆操作。シンボルは残りますが修飾なしでは見えなくなります |
 | `import` | `(import 'other:sym)` | 他パッケージのシンボルを修飾なしでアクセスできるようにします -- `:import-from` の実行時版（リテラルなトップレベル呼び出しはコンパイル時ディレクティブ） |
-| `file-position` | `(file-position s)` | バイナリファイルストリームのバイト位置。第2引数を与えると位置を移動します。位置を判定できないストリームでは `nil` |
+| `file-position` | `(file-position s)` | バイナリファイルストリームのバイト位置、文字列ストリームの文字位置。第2引数を与えると位置を移動します。位置を判定できないストリームでは `nil` |
 | `file-length` | `(file-length s)` | ファイルストリームが開いているファイルのバイト長。他のストリームでは `nil` |
 | `file-write-date` | `(file-write-date "x.txt")` | ファイルの更新時刻をユニバーサルタイムで返します。判定できない場合は `nil`(2つのWASMバックエンドでは常に `nil`) |
 | `ensure-directories-exist` | `(ensure-directories-exist "logs/app.log")` | pathspec のディレクトリ部分を作成して pathspec を返します(2つのWASMバックエンドではシグナルを発生させます) |
@@ -437,8 +437,8 @@
 | `interactive-stream-p` | `(interactive-stream-p s)` | 常に `nil` -- 端末とパイプを区別できるバックエンドはありません |
 | `stream-external-format` | `(stream-external-format s)` | 常に `:utf-8` -- リーダーもすべてのライターもこの1つだけを使います |
 | `pathnamep` | `(pathnamep #P"/tmp/x")` | `t` — 値がパス名 (`#P"..."` が表す値) かどうか。文字列はパス名では**なく**、`(typep x 'pathname)` と一致します |
-| `input-stream-p` | `(input-stream-p s)` | 任意のストリームハンドルに `t` |
-| `output-stream-p` | `(output-stream-p s)` | 任意のストリームハンドルに `t` |
+| `input-stream-p` | `(input-stream-p s)` | ストリームから読み込めるときに `t` |
+| `output-stream-p` | `(output-stream-p s)` | ストリームへ書き込めるときに `t` |
 | `stream-element-type` | `(stream-element-type s)` | 常に `character` -- すべてのストリームは文字ストリーム |
 | `class-of` | `(class-of 42)` | 値のクラスメタオブジェクト。`(find-class 'integer)` と `eq`。組み込み値・CLOS・構造体インスタンスのいずれも |
 | `type-of` | `(type-of 42)` | `integer` -- 型「名」のシンボル。構造体/CLOS インスタンスには構造体/クラスの名前を返し、`(class-name (class-of x))` と一致します |

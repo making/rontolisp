@@ -25,7 +25,10 @@ import am.ik.wasm.WasmWriter;
  * costs is GC-heap bytes the engine reclaims, and the arena sees only the 12-byte record.
  * An input record is {@code [kind=0][cursor][end]} over a persistent linear COPY of the
  * source string's content bytes (one copy per stream, not per read); {@code _read_line}
- * (and therefore {@code _read}, which loops over it) consumes it line by line.
+ * (and therefore {@code _read}, which loops over it) consumes it line by line. In a
+ * program that asks {@code file-position}, the input record is 16 bytes,
+ * {@code [kind=0][cursor][end][start]}: the start is what a character position counts
+ * from, and nothing else can recover it ({@link #emitPositionQueryArm}).
  *
  * <p>
  * {@code _close} hands an output record's slot back to a free list threaded through the
@@ -280,6 +283,16 @@ final class WasmStringStreamRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildMakeInputStreamBody() {
+		return buildMakeInputStreamBody(false);
+	}
+
+	/**
+	 * {@link #buildMakeInputStreamBody()}, with the record's START kept in a fourth field
+	 * when {@code file-position} can be asked of the stream.
+	 * @param withStart whether the record is {@code [kind][cursor][end][start]}
+	 * @return the function body bytes
+	 */
+	static byte[] buildMakeInputStreamBody(boolean withStart) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: STR=0 (ref) ; i32 locals: REC=1, OFF=2, LEN=3
@@ -306,7 +319,17 @@ final class WasmStringStreamRuntimeBuilder {
 		getLocal(w, LEN);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		emitAllocRecord(w, REC);
+		emitAllocRecord(w, REC, withStart ? 16 : 12);
+		if (withStart) {
+			// start = off + 1
+			getLocal(w, REC);
+			i32(w, 12);
+			w.write(Instruction.I32_ADD);
+			getLocal(w, OFF);
+			i32(w, 1);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.I32_STORE, 0x02, 0x00);
+		}
 		// kind = 0 (input), cursor = off + 1, end = off + len - 1
 		getLocal(w, REC);
 		i32(w, 0);
@@ -585,18 +608,320 @@ final class WasmStringStreamRuntimeBuilder {
 	 * record allocation.
 	 */
 	private static void emitAllocRecord(WasmWriter w, int recLocal) {
+		emitAllocRecord(w, recLocal, 12);
+	}
+
+	/**
+	 * Emits {@code rec = heap; grow(rec + size); heap = rec + size}.
+	 */
+	private static void emitAllocRecord(WasmWriter w, int recLocal, int size) {
 		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		setLocal(w, recLocal);
 		WasmEmitHelper.emitGrowHeapTo(w, () -> {
 			getLocal(w, recLocal);
-			i32(w, 12);
+			i32(w, size);
 			w.write(Instruction.I32_ADD);
 		});
 		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		getLocal(w, recLocal);
-		i32(w, 12);
+		i32(w, size);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
+	}
+
+	/**
+	 * The locals the two {@code file-position} arms work in: five i32 scratch locals and
+	 * one {@code (ref null $str_bytes)} for an output record's buffer. The arms answer
+	 * and RETURN from the enclosing body, or fall through when the handle is not a string
+	 * stream's.
+	 *
+	 * @param rec the record address
+	 * @param p a byte cursor
+	 * @param n a character count
+	 * @param end a byte bound, or the target index of a set
+	 * @param bound the byte bound of an output record's buffer
+	 * @param buf an output record's buffer
+	 */
+	record PositionLocals(int rec, int p, int n, int end, int bound, int buf) {
+	}
+
+	/**
+	 * Emits {@code _file_position}'s string-stream arm ({@code .kb/read-load-streams.md},
+	 * "String streams"): for a NEGATIVE handle, an input record answers the characters
+	 * between its start and its cursor, an output record the characters written since it
+	 * was last emptied, a closed output record nil. A character is every byte that is not
+	 * a UTF-8 continuation byte.
+	 * @param w the body being emitted
+	 * @param fdLocal the i32 local holding the handle
+	 * @param l the scratch locals
+	 */
+	static void emitPositionQueryArm(WasmWriter w, int fdLocal, PositionLocals l) {
+		getLocal(w, fdLocal);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		getLocal(w, fdLocal);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, l.rec());
+		// kind 0: count [start, cursor)
+		getLocal(w, l.rec());
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitLoadField(w, l.rec(), 12);
+		setLocal(w, l.p());
+		emitLoadField(w, l.rec(), 4);
+		setLocal(w, l.end());
+		emitCountLinearChars(w, l);
+		emitReturnCount(w, l.n());
+		w.write(Instruction.END);
+		// kind 1: count the buffer's content bytes [1, 1 + len)
+		getLocal(w, l.rec());
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		emitCountBufferChars(w, l);
+		emitReturnCount(w, l.n());
+		w.write(Instruction.END);
+		emitReturnNil(w);
+		w.write(Instruction.END);
+	}
+
+	/**
+	 * Emits {@code _file_position_set}'s string-stream arm: an input record moves its
+	 * cursor to the character index -- {@code -1} is the end, what {@code :end} is
+	 * rewritten to -- and answers t, or nil for an index past the end; an output record
+	 * answers t only where it already is (its length, or {@code -1}); anything else, and
+	 * a position that is not a fixnum, nil.
+	 * @param w the body being emitted
+	 * @param posLocal the ref local holding the position argument
+	 * @param fdLocal the i32 local holding the handle
+	 * @param l the scratch locals
+	 */
+	static void emitPositionSetArm(WasmWriter w, int posLocal, int fdLocal, PositionLocals l) {
+		getLocal(w, fdLocal);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		getLocal(w, fdLocal);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, l.rec());
+		// the target index; a position that is not a fixnum cannot be one
+		getLocal(w, posLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitReturnNil(w);
+		w.write(Instruction.END);
+		getLocal(w, posLocal);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		setLocal(w, l.end());
+		// kind 0: walk from the start to the index
+		getLocal(w, l.rec());
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		// -1: cursor = end
+		getLocal(w, l.end());
+		i32(w, -1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, l.rec());
+		i32(w, 4);
+		w.write(Instruction.I32_ADD);
+		emitLoadField(w, l.rec(), 8);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		emitReturnT(w);
+		w.write(Instruction.END);
+		getLocal(w, l.end());
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		emitReturnNil(w);
+		w.write(Instruction.END);
+		// n = the index still to walk ; p = start
+		getLocal(w, l.end());
+		setLocal(w, l.n());
+		emitLoadField(w, l.rec(), 12);
+		setLocal(w, l.p());
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, l.n());
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		// past the end with characters still to go: nil
+		getLocal(w, l.p());
+		emitLoadField(w, l.rec(), 8);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.IF, 0x40);
+		emitReturnNil(w);
+		w.write(Instruction.END);
+		// one character: the lead byte, then its continuation bytes
+		emitIncrement(w, l.p());
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, l.p());
+		emitLoadField(w, l.rec(), 8);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, l.p());
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, 0xC0);
+		w.write(Instruction.I32_AND);
+		i32(w, 0x80);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		emitIncrement(w, l.p());
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		getLocal(w, l.n());
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, l.n());
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		getLocal(w, l.rec());
+		i32(w, 4);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, l.p());
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		emitReturnT(w);
+		w.write(Instruction.END);
+		// kind 1: t at its own length or at -1
+		getLocal(w, l.rec());
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, l.end());
+		i32(w, -1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		emitReturnT(w);
+		w.write(Instruction.END);
+		emitCountBufferChars(w, l);
+		getLocal(w, l.n());
+		getLocal(w, l.end());
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		emitReturnT(w);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		emitReturnNil(w);
+		w.write(Instruction.END);
+	}
+
+	/** n = the characters of linear bytes [p, end); p is consumed. */
+	private static void emitCountLinearChars(WasmWriter w, PositionLocals l) {
+		i32(w, 0);
+		setLocal(w, l.n());
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, l.p());
+		getLocal(w, l.end());
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, l.n());
+		getLocal(w, l.p());
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		emitIsLeadByte(w);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, l.n());
+		emitIncrement(w, l.p());
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	/** n = the characters of an output record's content, buffer bytes [1, 1 + len). */
+	private static void emitCountBufferChars(WasmWriter w, PositionLocals l) {
+		// The buffer, asked for room for nothing (the _str_stream_contents idiom).
+		getLocal(w, l.rec());
+		i32(w, 0);
+		emitRoomCall(w);
+		refCast(w, WasmLispCompiler.TYPE_STR_BYTES);
+		setLocal(w, l.buf());
+		i32(w, 1);
+		setLocal(w, l.p());
+		loadRecLen(w, l.rec());
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, l.bound());
+		i32(w, 0);
+		setLocal(w, l.n());
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, l.p());
+		getLocal(w, l.bound());
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, l.n());
+		getLocal(w, l.buf());
+		getLocal(w, l.p());
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		emitIsLeadByte(w);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, l.n());
+		emitIncrement(w, l.p());
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	private static void emitIsLeadByte(WasmWriter w) {
+		i32(w, 0xC0);
+		w.write(Instruction.I32_AND);
+		i32(w, 0x80);
+		w.write(Instruction.I32_NE);
+	}
+
+	private static void emitIncrement(WasmWriter w, int local) {
+		getLocal(w, local);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, local);
+	}
+
+	private static void emitLoadField(WasmWriter w, int recLocal, int offset) {
+		getLocal(w, recLocal);
+		i32(w, offset);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+	}
+
+	private static void emitReturnCount(WasmWriter w, int nLocal) {
+		getLocal(w, nLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.RETURN);
+	}
+
+	private static void emitReturnNil(WasmWriter w) {
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.RETURN);
+	}
+
+	private static void emitReturnT(WasmWriter w) {
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_T_SYM);
+		w.write(Instruction.RETURN);
 	}
 
 	/** Emits {@code return ref.i31(0 - rec)} -- the negative string-stream handle. */

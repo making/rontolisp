@@ -5743,6 +5743,25 @@ public final class LispNames {
 	 */
 	public static final String CHARACTER_STREAM_P_INTERNAL = "%CHARACTER-STREAM-P";
 
+	/**
+	 * The compile paths' record of FILE-stream directions: an alist of
+	 * {@code (handle . bits)}, 1 input and 2 output, which a compiled
+	 * {@code input-stream-p} / {@code output-stream-p} reads inline
+	 * ({@code .kb/read-load-streams.md}, "String streams").
+	 */
+	public static final String FILE_STREAM_DIRECTIONS_VAR = "%FILE-STREAM-DIRECTIONS";
+
+	/**
+	 * Records the direction of a FILE stream an {@code open} leaf just made, keyed by its
+	 * handle, into {@link #FILE_STREAM_DIRECTIONS_VAR}. A prelude defun.
+	 */
+	public static final String FILE_STREAM_DIRECTION_REGISTER_INTERNAL = "%FILE-STREAM-DIRECTION-REGISTER";
+
+	/**
+	 * Forgets a FILE stream's recorded direction; every compiled {@code close} runs it.
+	 */
+	public static final String FILE_STREAM_DIRECTION_FORGET_INTERNAL = "%FILE-STREAM-DIRECTION-FORGET";
+
 	/** The registry read behind a compiled {@code stream-element-type}. */
 	public static final String FILE_STREAM_ELEMENT_TYPE_INTERNAL = "%FILE-STREAM-ELEMENT-TYPE";
 

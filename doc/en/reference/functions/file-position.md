@@ -4,13 +4,17 @@
 
 With one argument, the current position of a **binary** file stream — one opened with an integer `:element-type`, counted in its elements (bytes for `'(unsigned-byte 8)`) — or of a **bidirectional** one (`:direction :io`, or `:if-exists :overwrite`) of either element type. With two, it repositions the stream to `position` and answers `t`; the next read or write starts there. `position` may also be `:start` or `:end`.
 
-Anything whose position cannot be determined answers `nil`, which is what Common Lisp prescribes for exactly that: a character file stream opened `:input` or `:output`, a string stream, a socket, one of the standard streams, and a handle that has already been closed. Portable callers guard the call with `ignore-errors` and take their non-seeking fallback path on `nil`.
+A **string** stream has a position too, counted in characters. An input stream counts the characters read from its own start -- a stream over part of a string starts at 0 -- and repositions to an index, `:start` or `:end`; an index past the end answers nil and leaves the stream where it was. A character given back with `unread-char` counts as not yet read. An output stream counts the characters written since `get-output-stream-string` last emptied it, and cannot be repositioned anywhere but where it already is.
+
+Anything whose position cannot be determined answers `nil`, which is what Common Lisp prescribes for exactly that: a character file stream opened `:input` or `:output`, a socket, one of the standard streams, and a handle that has already been closed. Portable callers guard the call with `ignore-errors` and take their non-seeking fallback path on `nil`.
 
 **All four backends answer for real.** The interpreter and the JVM keep a per-handle position that the byte primitives advance, and reopen the file at the offset for the set. Preview 1 WASM queries and moves the descriptor's own cursor through `fd_seek`; the component backend has no cursor — WASI 0.3 reads are offset-based — so it goes through a per-descriptor byte offset the adapter tracks.
 
 ```lisp
-(with-input-from-string (s "abc")
-  (file-position s)) ; => NIL
+(with-input-from-string (s "abcdef" :start 1)
+  (read-char s)
+  (let ((p (file-position s)))
+    (list p (read-char s)))) ; => (1 #\c)
 ```
 
 ```console

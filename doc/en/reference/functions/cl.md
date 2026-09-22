@@ -412,7 +412,7 @@ page.
 | `export` | `(export '(run))` | make symbols external in a package (a literal top-level call is a compile-time directive) |
 | `unexport` | `(unexport 'run)` | the inverse of `export`: the symbol stays present but is no longer visible unqualified |
 | `import` | `(import 'other:sym)` | make another package's symbol accessible unqualified -- the runtime form of `:import-from` (a literal top-level call is a compile-time directive) |
-| `file-position` | `(file-position s)` | the byte position of a binary file stream, or the reposition when a second argument is given; `nil` for any stream whose position cannot be determined |
+| `file-position` | `(file-position s)` | the byte position of a binary file stream, the character position of a string stream, or the reposition when a second argument is given; `nil` for any stream whose position cannot be determined |
 | `file-length` | `(file-length s)` | the byte length of the file a file stream is open on; `nil` for any other stream |
 | `file-write-date` | `(file-write-date "x.txt")` | the file's modification time as a universal time; `nil` when it cannot be determined (always `nil` on both WASM backends) |
 | `ensure-directories-exist` | `(ensure-directories-exist "logs/app.log")` | create the pathspec's directory component and return the pathspec (signals on both WASM backends) |
@@ -437,8 +437,8 @@ page.
 | `interactive-stream-p` | `(interactive-stream-p s)` | always `nil` -- no backend distinguishes a terminal from a pipe |
 | `stream-external-format` | `(stream-external-format s)` | always `:utf-8` -- the one format the reader and every writer use |
 | `pathnamep` | `(pathnamep #P"/tmp/x")` | `t` — whether the value is a pathname (the value `#P"..."` denotes); a string is NOT one, and it agrees with `(typep x 'pathname)` |
-| `input-stream-p` | `(input-stream-p s)` | `t` for any stream handle |
-| `output-stream-p` | `(output-stream-p s)` | `t` for any stream handle |
+| `input-stream-p` | `(input-stream-p s)` | `t` when the stream can be read from |
+| `output-stream-p` | `(output-stream-p s)` | `t` when the stream can be written to |
 | `stream-element-type` | `(stream-element-type s)` | always `character` -- every stream is a character stream |
 | `class-of` | `(class-of 42)` | The value's class metaobject, `eq` to `(find-class 'integer)`; built-ins, CLOS and struct instances alike |
 | `type-of` | `(type-of 42)` | `integer` -- the type NAME symbol: a struct/CLOS instance answers its structure/class name, agreeing with `(class-name (class-of x))` |

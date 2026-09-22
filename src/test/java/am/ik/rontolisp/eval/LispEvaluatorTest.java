@@ -33,6 +33,7 @@ import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.CorpusFixtures;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
+import am.ik.rontolisp.testsupport.StringStreamPrograms;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -778,6 +779,48 @@ class LispEvaluatorTest {
 		// A malformed spec is refused when the form RUNS, not when it is expanded.
 		assertThat(eval("(if nil (with-input-from-string (s \"a\" :bogus 1) s) :skipped)").print())
 			.isEqualTo(":SKIPPED");
+	}
+
+	@Test
+	void directionPredicatesAnswerTheStreamsRealDirection(@TempDir Path tempDir) {
+		// A string input stream is not an output stream and the reverse; a file stream
+		// answers the direction it was opened with, a closed one neither; a synonym
+		// answers its target's (.kb/read-load-streams.md, "String streams").
+		assertThat(printedOutput(StringStreamPrograms.directionProgram(tempDir.resolve("dir.txt").toString())))
+			.isEqualTo(StringStreamPrograms.DIRECTION_EXPECTED);
+	}
+
+	@Test
+	void compositeStreamConstructorsRefuseAComponentOfTheWrongDirection() {
+		// With every stream answering both directions, a string OUTPUT stream passed as
+		// the input half went through; the ANSI MAKE-TWO-WAY-STREAM.ERROR.5 and
+		// MAKE-CONCATENATED-STREAM.ERROR.2 expect a type-error.
+		assertThat(evalMulti(
+				"""
+						(list (handler-case (make-two-way-stream (make-string-output-stream) (make-string-output-stream))
+						        (type-error () :type-error))
+						      (handler-case (make-echo-stream (make-string-input-stream "a") (make-string-input-stream "b"))
+						        (type-error () :type-error))
+						      (handler-case (make-concatenated-stream (make-string-input-stream "a") (make-string-output-stream))
+						        (type-error () :type-error))
+						      (read-char (make-two-way-stream (make-string-input-stream "x") (make-string-output-stream))))
+						""")
+			.print()).isEqualTo("(:TYPE-ERROR :TYPE-ERROR :TYPE-ERROR #\\x)");
+	}
+
+	@Test
+	void filePositionOfAStringStreamQueriesAndSeeks() {
+		assertThat(printedOutput(StringStreamPrograms.POSITION_PROGRAM))
+			.isEqualTo(StringStreamPrograms.POSITION_EXPECTED);
+	}
+
+	private static String printedOutput(String program) {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(program)) {
+			evaluator.eval(expr);
+		}
+		return baos.toString(StandardCharsets.UTF_8).trim();
 	}
 
 	@Test
@@ -22206,7 +22249,7 @@ class LispEvaluatorTest {
 		// input-stream-p / output-stream-p on a Gray instance answer the DIRECTION the
 		// class was built with -- a typep against the two direction base classes rather
 		// than a predicate generic per class. A bare fundamental-stream subclass is
-		// neither; a stream HANDLE stays bidirectional-lite.
+		// neither; a string input stream answers its real direction.
 		assertThat(evalMulti("""
 				(defclass gdp-in (rontolisp:fundamental-character-input-stream) ())
 				(defclass gdp-out (rontolisp:fundamental-character-output-stream) ())
@@ -22222,7 +22265,7 @@ class LispEvaluatorTest {
 				      (input-stream-p (make-string-input-stream "z"))
 				      (output-stream-p (make-string-input-stream "z"))
 				      (input-stream-p 3))
-				""").print()).isEqualTo("(T NIL NIL T NIL NIL T T NIL)");
+				""").print()).isEqualTo("(T NIL NIL T NIL NIL T NIL NIL)");
 	}
 
 	@Test

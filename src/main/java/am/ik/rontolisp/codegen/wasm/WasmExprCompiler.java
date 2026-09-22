@@ -1126,6 +1126,13 @@ final class WasmExprCompiler {
 					}
 					LispVal checked = LispMacroExpander.expandOpenFileErrorSignal(cons, ctx.instanceTypeIndex >= 0);
 					LispVal registered = registeredOpenLeaf(cons, checked, ctx);
+					LispVal directed = directedOpenLeaf(cons, checked, registered, ctx);
+					if (directed != null) {
+						// The stream VALUE, its direction recorded
+						// (%file-stream-direction-register answers it).
+						WasmExprCompiler.compileExpr(directed, ctx);
+						break;
+					}
 					if (registered != null) {
 						// Already the stream VALUE (%file-stream-register answers it).
 						WasmExprCompiler.compileExpr(registered, ctx);
@@ -1403,9 +1410,11 @@ final class WasmExprCompiler {
 						ctx.usesSynonymStreams, ctx.usesStreamValues, ctx.closRegistry), ctx);
 				case LispNames.SIMPLE_STRING_P ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandSimpleStringP(cons), ctx);
-				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P -> WasmExprCompiler.compileExpr(
-						LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams, ctx.usesStreamValues),
-						ctx);
+				case LispNames.INPUT_STREAM_P,
+						LispNames.OUTPUT_STREAM_P ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams,
+							ctx.usesStreamValues, ctx.asksStreamDirection,
+							ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_REGISTER_INTERNAL)), ctx);
 				// file-length is REAL here: it stats the stream's descriptor through the
 				// fd_filestat_get import and answers nil only for what genuinely has no
 				// length (a string stream, a standard stream, a socket, a closed or
@@ -2517,16 +2526,38 @@ final class WasmExprCompiler {
 	}
 
 	/**
+	 * The registering shape of a literal open leaf once the program can ask a file
+	 * stream's direction -- the JVM twin's rule (JvmExprCompiler.directedOpenLeaf).
+	 */
+	private static @org.jspecify.annotations.Nullable LispVal directedOpenLeaf(LispCons cons,
+			@org.jspecify.annotations.Nullable LispVal checked, @org.jspecify.annotations.Nullable LispVal registered,
+			WasmLispCompiler.Ctx ctx) {
+		if (checked == null || !ctx.usesStreamValues
+				|| !ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_REGISTER_INTERNAL)) {
+			return null;
+		}
+		return LispMacroExpander.directedOpen(
+				registered != null ? registered : LispMacroExpander.fileStreamValue(checked),
+				OpenModes.direction(OpenModes.staticMode(OpenModes.normalizeKeywordForm(cons).toList())));
+	}
+
+	/**
 	 * The registry-forgetting {@code close} (LispMacroExpander.forgettingClose), or null
-	 * when the program has no element-type registry.
+	 * when the program has neither the element-type nor the direction registry.
 	 */
 	private static @org.jspecify.annotations.Nullable LispVal forgettingClose(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		if (!(ctx.usesSynonymStreams || ctx.usesStreamValues)
-				|| !ctx.functions.containsKey(LispNames.FILE_STREAM_FORGET_INTERNAL)) {
+		java.util.List<String> forgetters = new java.util.ArrayList<>(2);
+		if (ctx.functions.containsKey(LispNames.FILE_STREAM_FORGET_INTERNAL)) {
+			forgetters.add(LispNames.FILE_STREAM_FORGET_INTERNAL);
+		}
+		if (ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_FORGET_INTERNAL)) {
+			forgetters.add(LispNames.FILE_STREAM_DIRECTION_FORGET_INTERNAL);
+		}
+		if (!(ctx.usesSynonymStreams || ctx.usesStreamValues) || forgetters.isEmpty()) {
 			return null;
 		}
 		return LispMacroExpander.forgettingClose(cons, c -> LispMacroExpander.expandCloseOverStream(c,
-				ctx.usesSynonymStreams, ctx.functions.containsKey(LispNames.STREAM_TARGET)));
+				ctx.usesSynonymStreams, ctx.functions.containsKey(LispNames.STREAM_TARGET)), forgetters);
 	}
 
 	/**

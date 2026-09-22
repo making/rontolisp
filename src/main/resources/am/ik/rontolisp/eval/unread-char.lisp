@@ -84,3 +84,22 @@
             (let ((rest (read-line stream nil nil)))
               (if rest (concatenate 'string (string c) rest) (string c))))
         (read-line stream eof-error-p eof-value))))
+
+;; file-position: a parked character has been given back, so the position a
+;; query answers does not count it, and a repositioning drops it -- the next
+;; read starts where the set put the stream.
+(defun rontolisp::%unread-file-position (stream)
+  (let ((p (file-position stream)))
+    (if (if p
+            (eql rontolisp::*unread-stream* (rontolisp::%unread-key stream))
+            nil)
+        (- p 1)
+        p)))
+
+(defun rontolisp::%unread-file-position-set (stream position)
+  (if (eql rontolisp::*unread-stream* (rontolisp::%unread-key stream))
+      (progn
+        (setq rontolisp::*unread-stream* nil)
+        (setq rontolisp::*unread-char* nil))
+      nil)
+  (file-position stream position))

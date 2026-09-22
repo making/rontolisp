@@ -15,3 +15,5 @@
 入力側は [Gray ストリーム](../../guides/gray-streams.md)なので、`read-line` や
 `read-char` がコンポーネントをまたいで動作します。コンポーネントは
 [`concatenated-stream-streams`](concatenated-stream-streams.md) で取り出せます。
+
+すべてのコンポーネントは入力ストリームでなければなりません。そうでないものは `type-error` を通知します。

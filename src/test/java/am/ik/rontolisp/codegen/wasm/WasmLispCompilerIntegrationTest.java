@@ -21,6 +21,7 @@ import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
+import am.ik.rontolisp.testsupport.StringStreamPrograms;
 import am.ik.rontolisp.testsupport.HostWasmtime.ExecResult;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
@@ -12193,8 +12194,8 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void grayStreamDirectionPredicates() throws Exception {
 		// input-stream-p / output-stream-p on a Gray instance answer the DIRECTION base
-		// class (a typep, not a predicate generic per class); a stream HANDLE keeps the
-		// bidirectional-lite answer. Same answers as the interpreter and the JVM.
+		// class (a typep, not a predicate generic per class); a string input stream
+		// answers its real direction. Same answers as the interpreter and the JVM.
 		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
 			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
 					(defclass gdp-in (rontolisp:fundamental-character-input-stream) ())
@@ -12206,7 +12207,7 @@ class WasmLispCompilerIntegrationTest {
 					  (print (list (input-stream-p in) (output-stream-p in)))
 					  (print (list (input-stream-p out) (output-stream-p out)))
 					  (print (list (input-stream-p handle) (output-stream-p handle))))
-					"""))))).isEqualTo("(T NIL)\n(NIL T)\n(T T)");
+					"""))))).isEqualTo("(T NIL)\n(NIL T)\n(T NIL)");
 	}
 
 	@Test
@@ -13251,6 +13252,48 @@ class WasmLispCompilerIntegrationTest {
 			""";
 
 	private static final String FILE_POSITION_EXPECTED = "10\n0\n0\n1\nT\n5\n5\n6\nNIL";
+
+	@Test
+	void directionPredicatesAnswerTheStreamsRealDirectionOnPreview1() throws Exception {
+		// The interpreter twin is
+		// LispEvaluatorTest#directionPredicatesAnswerTheStreamsRealDirection.
+		assertThat(runFrontendProgramWithDir(StringStreamPrograms.directionProgram("dir.txt"), false))
+			.isEqualTo(StringStreamPrograms.DIRECTION_EXPECTED);
+	}
+
+	@Test
+	void componentDirectionPredicatesAnswerTheStreamsRealDirection() throws Exception {
+		assertThat(runFrontendProgramWithDir(StringStreamPrograms.directionProgram("dir.txt"), true))
+			.isEqualTo(StringStreamPrograms.DIRECTION_EXPECTED);
+	}
+
+	@Test
+	void filePositionOfAStringStreamQueriesAndSeeksOnPreview1() throws Exception {
+		assertThat(runFrontendProgramWithDir(StringStreamPrograms.POSITION_PROGRAM, false))
+			.isEqualTo(StringStreamPrograms.POSITION_EXPECTED);
+	}
+
+	@Test
+	void componentFilePositionOfAStringStreamQueriesAndSeeks() throws Exception {
+		assertThat(runFrontendProgramWithDir(StringStreamPrograms.POSITION_PROGRAM, true))
+			.isEqualTo(StringStreamPrograms.POSITION_EXPECTED);
+	}
+
+	/**
+	 * Runs a program the way the CLI builds it (the whole front end) under wasmtime with
+	 * the work directory preopened, as a Preview 1 module or a component.
+	 */
+	private static String runFrontendProgramWithDir(String source, boolean component) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess.corpus(source,
+				am.ik.rontolisp.reader.Features.WASM, true, false);
+		byte[] wasmBytes = WasmLispCompiler.builder().component(component).build().compile(program);
+		String file = component ? "test.component.wasm" : "test.wasm";
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path(file));
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"cd " + workDir() + " && wasmtime run -W gc=y -W exceptions=y --dir . " + file);
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", source, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
 
 	@Test
 	void filePositionQueriesAndSeeksOnPreview1() throws Exception {

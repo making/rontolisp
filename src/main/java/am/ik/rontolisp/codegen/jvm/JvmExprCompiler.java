@@ -819,6 +819,13 @@ final class JvmExprCompiler {
 					}
 					LispVal checked = LispMacroExpander.expandOpenFileErrorSignal(cons, ctx.mayUseInstances);
 					LispVal registered = registeredOpenLeaf(cons, checked, ctx);
+					LispVal directed = directedOpenLeaf(cons, checked, registered, ctx);
+					if (directed != null) {
+						// The stream VALUE, its direction recorded
+						// (%file-stream-direction-register answers it).
+						JvmExprCompiler.compileExpr(directed, ctx, className);
+						break;
+					}
 					if (registered != null) {
 						// Already the stream VALUE (%file-stream-register answers it).
 						JvmExprCompiler.compileExpr(registered, ctx, className);
@@ -840,11 +847,13 @@ final class JvmExprCompiler {
 					// to -- which is nothing to do; an OPEN stream resolves to its
 					// handle. The guard is emitted only when the program can build one
 					// of the two; %close is the raw-handle close it falls through to.
+					List<String> forgetters = registryForgetters(ctx);
 					LispVal forgetting = (ctx.usesSynonymStreams || ctx.usesStreamValues)
-							&& ctx.functions.containsKey(LispNames.FILE_STREAM_FORGET_INTERNAL)
+							&& !forgetters.isEmpty()
 									? LispMacroExpander.forgettingClose(cons,
 											c -> LispMacroExpander.expandCloseOverStream(c, ctx.usesSynonymStreams,
-													ctx.functions.containsKey(LispNames.STREAM_TARGET)))
+													ctx.functions.containsKey(LispNames.STREAM_TARGET)),
+											forgetters)
 									: null;
 					if (forgetting != null) {
 						// The element-type registry forgets the stream first
@@ -1030,9 +1039,13 @@ final class JvmExprCompiler {
 						ctx.usesSynonymStreams, ctx.usesStreamValues, ctx.closRegistry), ctx, className);
 				case LispNames.SIMPLE_STRING_P ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandSimpleStringP(cons), ctx, className);
-				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P -> JvmExprCompiler.compileExpr(
-						LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams, ctx.usesStreamValues),
-						ctx, className);
+				case LispNames.INPUT_STREAM_P,
+						LispNames.OUTPUT_STREAM_P ->
+					JvmExprCompiler.compileExpr(
+							LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams, ctx.usesStreamValues,
+									ctx.asksStreamDirection,
+									ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_REGISTER_INTERNAL)),
+							ctx, className);
 				case LispNames.FILE_POSITION -> {
 					// CL's two position DESIGNATORS are a call-site rewrite shared with
 					// the WASM backends, so no primitive learns a keyword.
@@ -2171,6 +2184,39 @@ final class JvmExprCompiler {
 	 * producer is wrapped and no consumer unwraps, so such a program keeps raw handles --
 	 * and its exact bytes.
 	 */
+	/**
+	 * The registering shape of a literal open leaf once the program can ask a file
+	 * stream's direction: the leaf's stream value -- the element-type registration when
+	 * there is one -- wrapped in {@code %file-stream-direction-register}; null when the
+	 * leaf compiles as it did.
+	 */
+	private static @Nullable LispVal directedOpenLeaf(LispCons cons, @Nullable LispVal checked,
+			@Nullable LispVal registered, JvmLispCompiler.Ctx ctx) {
+		if (checked == null || !ctx.usesStreamValues
+				|| !ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_REGISTER_INTERNAL)) {
+			return null;
+		}
+		return LispMacroExpander.directedOpen(
+				registered != null ? registered : LispMacroExpander.fileStreamValue(checked),
+				OpenModes.direction(OpenModes.staticMode(OpenModes.normalizeKeywordForm(cons).toList())));
+	}
+
+	/**
+	 * The registries a compiled {@code close} forgets the stream in, in order: the
+	 * element-type registry, then the direction registry
+	 * ({@code .kb/read-load-streams.md}).
+	 */
+	private static List<String> registryForgetters(JvmLispCompiler.Ctx ctx) {
+		List<String> forgetters = new java.util.ArrayList<>(2);
+		if (ctx.functions.containsKey(LispNames.FILE_STREAM_FORGET_INTERNAL)) {
+			forgetters.add(LispNames.FILE_STREAM_FORGET_INTERNAL);
+		}
+		if (ctx.functions.containsKey(LispNames.FILE_STREAM_DIRECTION_FORGET_INTERNAL)) {
+			forgetters.add(LispNames.FILE_STREAM_DIRECTION_FORGET_INTERNAL);
+		}
+		return forgetters;
+	}
+
 	/**
 	 * The registering shape of a literal BINARY {@code open} leaf, or null when the leaf
 	 * compiles as it always did: a character leaf, a program that never asks about

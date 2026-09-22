@@ -60,12 +60,18 @@ public final class UnreadCharLibrary {
 	/** The pushback defun a rewritten {@code read-line} call site names. */
 	static final String READ_LINE = "%UNREAD-READ-LINE";
 
+	/** The pushback defun a rewritten one-argument {@code file-position} names. */
+	static final String FILE_POSITION = "%UNREAD-FILE-POSITION";
+
+	/** The pushback defun a rewritten two-argument {@code file-position} names. */
+	static final String FILE_POSITION_SET = "%UNREAD-FILE-POSITION-SET";
+
 	/**
 	 * The library's own defuns, whose bodies call the very built-ins the rewrite targets:
 	 * rewriting those into the pushback defuns again would recurse forever.
 	 */
-	private static final Set<String> LIBRARY_DEFUNS = Set.of(PUSH, READ_CHAR, PEEK_CHAR, READ_LINE, "%UNREAD-KEY",
-			"%UNREAD-CHAR-TAKE", "%UNREAD-PEEK-STOPS-P");
+	private static final Set<String> LIBRARY_DEFUNS = Set.of(PUSH, READ_CHAR, PEEK_CHAR, READ_LINE, FILE_POSITION,
+			FILE_POSITION_SET, "%UNREAD-KEY", "%UNREAD-CHAR-TAKE", "%UNREAD-PEEK-STOPS-P");
 
 	/**
 	 * Returns the parsed pushback definitions. Parsed once and cached.
@@ -107,7 +113,17 @@ public final class UnreadCharLibrary {
 		if (!usesUnreadChar(program)) {
 			return program;
 		}
-		List<LispVal> out = new ArrayList<>(forms());
+		// The two file-position defuns name file-position, which is a name-keyed
+		// runtime gate on the compile paths (the JVM FileMeta helpers, the WASM
+		// injected import): spliced only for a program that calls it, so every other
+		// unread-char program keeps its bytes.
+		boolean filePosition = namesFilePosition(program);
+		List<LispVal> out = new ArrayList<>();
+		for (LispVal form : forms()) {
+			if (filePosition || !definesFilePositionDefun(form)) {
+				out.add(form);
+			}
+		}
 		for (LispVal form : program) {
 			out.add(rewrite(form));
 		}
@@ -128,6 +144,32 @@ public final class UnreadCharLibrary {
 			}
 		}
 		return false;
+	}
+
+	private static boolean namesFilePosition(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (namesFilePosition(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean namesFilePosition(LispVal form) {
+		if (form instanceof LispSymbol sym) {
+			return LispNames.FILE_POSITION.equals(member(sym.name()));
+		}
+		if (form instanceof LispCons cons) {
+			return namesFilePosition(cons.car()) || namesFilePosition(cons.cdr());
+		}
+		return false;
+	}
+
+	private static boolean definesFilePositionDefun(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.DEFUN.equals(member(op.name())) && cons.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol name
+				&& (FILE_POSITION.equals(member(name.name())) || FILE_POSITION_SET.equals(member(name.name())));
 	}
 
 	private static boolean names(LispVal form) {
@@ -196,6 +238,16 @@ public final class UnreadCharLibrary {
 				if (args <= 3) {
 					return listOf(defunSymbol(READ_LINE), arg(parts, 1, LispNil.INSTANCE),
 							arg(parts, 2, LispNil.INSTANCE), arg(parts, 3, LispNil.INSTANCE));
+				}
+			}
+			// file-position counts a parked character as not yet read, and a
+			// repositioning drops it (the interpreter's twin wraps its built-in).
+			case LispNames.FILE_POSITION -> {
+				if (args == 1) {
+					return listOf(defunSymbol(FILE_POSITION), rewrite(parts.get(1)));
+				}
+				if (args == 2) {
+					return listOf(defunSymbol(FILE_POSITION_SET), rewrite(parts.get(1)), rewrite(parts.get(2)));
 				}
 			}
 			case LispNames.PEEK_CHAR -> {

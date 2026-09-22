@@ -17,3 +17,6 @@
 されます。`write-char` / `write-string` は出力側へ直接届きます。コンポーネントは
 [`echo-stream-input-stream`](echo-stream-input-stream.md) と
 [`echo-stream-output-stream`](echo-stream-output-stream.md) で取り出せます。
+
+各コンポーネントは正しい方向のストリームでなければなりません。入力側が入力ストリームでない場合、
+または出力側が出力ストリームでない場合は `type-error` を通知します。

@@ -15,3 +15,5 @@ file.
 The input side is a [Gray stream](../../guides/gray-streams.md), so `read-line`
 and `read-char` walk the components seamlessly. The components are recoverable
 with [`concatenated-stream-streams`](concatenated-stream-streams.md).
+
+Every component must be an input stream; one that is not signals a `type-error`.

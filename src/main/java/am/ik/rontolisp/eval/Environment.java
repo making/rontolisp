@@ -11,7 +11,6 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.PrintStream;
 import java.io.Reader;
-import java.io.StringReader;
 import java.io.StringWriter;
 import java.io.UncheckedIOException;
 import java.io.Writer;
@@ -88,6 +87,7 @@ import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.macro.StreamElementType;
 import am.ik.rontolisp.reader.LispLexer;
 import am.ik.rontolisp.runtime.RontoIoFileStream;
+import am.ik.rontolisp.runtime.RontoStringInputStream;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -4956,6 +4956,10 @@ public final class Environment implements Scope {
 		// Cleared by close, as the compile paths' registry is (a WASM descriptor is
 		// reused), so a closed stream answers character on all four.
 		Map<Long, StreamElementType> streamElementTypes = new ConcurrentHashMap<>();
+		// The handles of the :overwrite streams opened for OUTPUT alone: they run the one
+		// bidirectional class (RontoIoFileStream) with the read half unused, so the class
+		// cannot tell output-stream-p's caller which direction was asked for.
+		Set<Long> outputOnlyCursorStreams = ConcurrentHashMap.newKeySet();
 		// The set half of file-position for a BINARY file stream: reposition the file at
 		// the given byte offset and answer T, or nil if the stream was not a file
 		// stream or has left the table. An input stream re-opens the file (which also
@@ -5244,7 +5248,7 @@ public final class Environment implements Scope {
 						throw new LispEvalException(LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL + " expects a string");
 					}
 					long handle = nextStreamHandle.getAndIncrement();
-					streams.put(handle, new BufferedReader(new StringReader(str.value())));
+					streams.put(handle, new RontoStringInputStream(str.value()));
 					return streamValue(handle, LispLayout.Kinds.STRING_INPUT);
 				}));
 		// The public spelling. CL's lambda list is (string &optional start end); the
@@ -5273,7 +5277,7 @@ public final class Environment implements Scope {
 					}
 					String bounded = text.substring(text.offsetByCodePoints(0, start), text.offsetByCodePoints(0, end));
 					long handle = nextStreamHandle.getAndIncrement();
-					streams.put(handle, new BufferedReader(new StringReader(bounded)));
+					streams.put(handle, new RontoStringInputStream(bounded));
 					return streamValue(handle, LispLayout.Kinds.STRING_INPUT);
 				}));
 		// Lite: with no component streams a broadcast stream is a discarding sink -- a
@@ -5305,6 +5309,10 @@ public final class Environment implements Scope {
 				return LispNil.INSTANCE;
 			}
 			long h = handle.value();
+			LispVal stringPosition = stringStreamPosition(streams.get(h), args);
+			if (stringPosition != null) {
+				return stringPosition;
+			}
 			// CL's two position DESIGNATORS. The compile paths rewrite a literal
 			// :start / :end at the call site (LispMacroExpander.rewriteFilePositionArg);
 			// here the keyword is read at run time, so #'file-position answers too.
@@ -5408,19 +5416,18 @@ public final class Environment implements Scope {
 				return LispNil.INSTANCE;
 			}
 		}));
+		// The REAL direction (.kb/read-load-streams.md, "String streams"), read the way
+		// the compile paths' %stream-direction reads it: off the stream value's KIND, and
+		// for a FILE stream off what the table holds -- a closed one holds nothing and is
+		// neither. The t designator is both.
 		env.defineFunction(LispNames.INPUT_STREAM_P, new LispFunction(LispNames.INPUT_STREAM_P, args -> {
 			requireArgCount(LispNames.INPUT_STREAM_P, args, 1);
-			// Lite: any stream answers t for both directions; the t designator
-			// (standard output, what *standard-output* is bound to) and a synonym stream
-			// VALUE also pass -- both coincide with streamp.
-			LispVal inArg = args.get(0);
-			return (isStreamValue(inArg) || inArg instanceof LispTrue || isSynonymStream(inArg)) ? LispTrue.INSTANCE
+			return (streamDirection(args.get(0), streams, outputOnlyCursorStreams) & 1) != 0 ? LispTrue.INSTANCE
 					: LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.OUTPUT_STREAM_P, new LispFunction(LispNames.OUTPUT_STREAM_P, args -> {
 			requireArgCount(LispNames.OUTPUT_STREAM_P, args, 1);
-			LispVal out2 = args.get(0);
-			return (isStreamValue(out2) || out2 instanceof LispTrue || isSynonymStream(out2)) ? LispTrue.INSTANCE
+			return (streamDirection(args.get(0), streams, outputOnlyCursorStreams) & 2) != 0 ? LispTrue.INSTANCE
 					: LispNil.INSTANCE;
 		}));
 		// open-stream-p: REAL against the stream table (close removes the entry), so
@@ -5812,6 +5819,9 @@ public final class Environment implements Scope {
 				}
 				streams.put(handle, stream);
 				streamPaths.put(handle, path.value());
+				if (overwrite && !bidirectional) {
+					outputOnlyCursorStreams.add(handle);
+				}
 				return streamValue(handle, LispLayout.Kinds.FILE);
 			}
 			catch (IOException ex) {
@@ -5904,6 +5914,7 @@ public final class Environment implements Scope {
 			streamPaths.remove(handle.value());
 			streamPositions.remove(handle.value());
 			streamElementTypes.remove(handle.value());
+			outputOnlyCursorStreams.remove(handle.value());
 			if (stream == null) {
 				// CL: close on an ALREADY-CLOSED stream is not an error -- it answers
 				// true and does nothing (SBCL agrees). The unwind-protect idiom the ANSI
@@ -6305,6 +6316,24 @@ public final class Environment implements Scope {
 			pushbackChar[0] = parked;
 			pushbackStream[0] = pushbackKey.apply(args.size() >= 2 ? args.get(1) : LispNil.INSTANCE);
 			return LispNil.INSTANCE;
+		}));
+		// file-position sees the cell too: a character parked in it has been given
+		// back, so the query counts it as unread, and a repositioning drops it -- the
+		// next read starts where the set put the stream. unread-char.lisp's
+		// %unread-file-position is the compile paths' twin.
+		java.util.function.Function<List<LispVal>, LispVal> cellBlindFilePosition = ((LispFunction) env
+			.lookupFunction(LispNames.FILE_POSITION)).body();
+		env.defineFunction(LispNames.FILE_POSITION, new LispFunction(LispNames.FILE_POSITION, args -> {
+			if (args.isEmpty() || !pushbackStream[0].equals(pushbackKey.apply(args.get(0)))) {
+				return cellBlindFilePosition.apply(args);
+			}
+			if (args.size() >= 2) {
+				pushbackStream[0] = LispNil.INSTANCE;
+				pushbackChar[0] = LispNil.INSTANCE;
+				return cellBlindFilePosition.apply(args);
+			}
+			LispVal position = cellBlindFilePosition.apply(args);
+			return position instanceof LispInteger n && n.value() > 0 ? new LispInteger(n.value() - 1) : position;
 		}));
 		// (peek-char [peek-type [stream [eof-error-p [eof-value]]]]): the peek-type
 		// skipping forms of CL 21.2 -- nil peeks, t skips whitespace, a character skips
@@ -9304,7 +9333,7 @@ public final class Environment implements Scope {
 	 */
 	private static LispVal errorStream(Map<Long, Closeable> streams, AtomicLong nextStreamHandle, String input) {
 		long handle = nextStreamHandle.getAndIncrement();
-		streams.put(handle, new BufferedReader(new StringReader(input)));
+		streams.put(handle, new RontoStringInputStream(input));
 		return streamValue(handle, LispLayout.Kinds.STRING_INPUT);
 	}
 
@@ -9334,6 +9363,91 @@ public final class Environment implements Scope {
 	 * @param designator the stream designator as written, possibly null (omitted)
 	 * @return the resolved designator
 	 */
+	/**
+	 * {@code file-position} of a STRING stream, or null when the entry is not one
+	 * ({@code .kb/read-load-streams.md}, "String streams"). An input stream counts the
+	 * characters read from its own start and seeks to a character index, {@code :start}
+	 * or {@code :end} -- never past the end, which answers nil. An output stream counts
+	 * the characters written since it was last emptied and cannot be repositioned except
+	 * where it already is.
+	 * @param entry the stream-table entry
+	 * @param args the {@code file-position} arguments
+	 * @return the answer, or null for any other stream
+	 */
+	static @Nullable LispVal stringStreamPosition(@Nullable Closeable entry, List<LispVal> args) {
+		if (entry instanceof RontoStringInputStream input) {
+			if (args.size() < 2) {
+				return new LispInteger(input.position());
+			}
+			LispVal spec = args.get(1);
+			long target = spec instanceof LispSymbol s && ":START".equals(s.name()) ? 0
+					: spec instanceof LispSymbol s && ":END".equals(s.name()) ? -1
+							: spec instanceof LispInteger n ? requireNonNegativePosition(n.value()) : -2;
+			if (target == -2) {
+				throw new LispEvalException(LispNames.FILE_POSITION + " expects an integer position");
+			}
+			return input.seek(target) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}
+		if (entry instanceof StringWriter output) {
+			StringBuffer written = output.getBuffer();
+			long length = written.codePointCount(0, written.length());
+			if (args.size() < 2) {
+				return new LispInteger(length);
+			}
+			LispVal spec = args.get(1);
+			boolean here = spec instanceof LispSymbol s
+					&& (":START".equals(s.name()) ? length == 0 : ":END".equals(s.name()))
+					|| spec instanceof LispInteger n && requireNonNegativePosition(n.value()) == length;
+			return here ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}
+		return null;
+	}
+
+	/**
+	 * A stream designator's direction as a bit set -- 1 input, 2 output -- resolved
+	 * through synonym streams. The interpreter's reading of the compile paths'
+	 * {@code %stream-direction}: a string stream, a request body and a standard stream
+	 * answer their kind's direction, a socket both, a FILE stream what its table entry
+	 * can do (nothing once closed), the {@code t} designator both, and anything that is
+	 * not a stream neither.
+	 * @param designator the argument as given
+	 * @param streams the stream table
+	 * @param outputOnlyCursorStreams the {@code :overwrite} handles opened for output
+	 * alone
+	 * @return the direction bits
+	 */
+	static int streamDirection(LispVal designator, Map<Long, Closeable> streams, Set<Long> outputOnlyCursorStreams) {
+		LispVal target = synonymTarget(designator);
+		if (target instanceof LispTrue) {
+			return 3;
+		}
+		if (!(target instanceof LispInstance inst && inst.hasTag(LispLayout.STREAM_TAG)
+				&& inst.slot(0) instanceof LispInteger handle && inst.slot(1) instanceof LispSymbol kind)) {
+			return 0;
+		}
+		return switch (kind.name()) {
+			case LispLayout.Kinds.STRING_INPUT, LispLayout.Kinds.BODY -> 1;
+			case LispLayout.Kinds.STRING_OUTPUT -> 2;
+			case LispLayout.Kinds.STANDARD -> handle.value() == 0 ? 1 : 2;
+			case LispLayout.Kinds.FILE -> switch (streams.get(handle.value())) {
+				case RontoIoFileStream ignored -> outputOnlyCursorStreams.contains(handle.value()) ? 2 : 3;
+				case Reader ignored -> 1;
+				case InputStream ignored -> 1;
+				case Writer ignored -> 2;
+				case OutputStream ignored -> 2;
+				case null, default -> 0;
+			};
+			default -> 3;
+		};
+	}
+
+	private static long requireNonNegativePosition(long position) {
+		if (position < 0) {
+			throw new LispEvalException(LispNames.FILE_POSITION + ": position must be non-negative");
+		}
+		return position;
+	}
+
 	static LispVal streamTarget(LispVal designator) {
 		LispVal resolved = synonymTarget(designator);
 		return resolved instanceof LispInstance inst && inst.hasTag(LispLayout.STREAM_TAG) ? inst.slot(0) : resolved;

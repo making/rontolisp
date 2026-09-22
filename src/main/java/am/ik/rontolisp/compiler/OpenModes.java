@@ -210,6 +210,17 @@ public final class OpenModes {
 	}
 
 	/**
+	 * A mode's DIRECTION as the bit set {@code input-stream-p} / {@code output-stream-p}
+	 * read: 1 input, 2 output, 3 both ({@code :io}, and the {@code :overwrite} open that
+	 * shares its stream kind).
+	 * @param mode the file mode
+	 * @return the direction bits
+	 */
+	public static int direction(int mode) {
+		return (mode & IO_BIT) != 0 ? 3 : (mode & OUTPUT_BIT) != 0 ? 2 : 1;
+	}
+
+	/**
 	 * Strips a literal {@code (quote x)} wrapper, leaving the type specifier form.
 	 * @param val the element-type argument as it appears in the source
 	 * @return the quoted form, or the value itself when not a quote form

@@ -163,6 +163,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	private boolean needsIoStreamRuntime;
 
+	/**
+	 * Whether the program carries {@code runtime.RontoStringInputStream}: it asks
+	 * {@code file-position} and can make a string input stream.
+	 */
+	private boolean needsStringInputRuntime;
+
 	/** The array runtime helper group ({@link JvmArrayRuntimeBuilder}). */
 	private static final String GROUP_ARRAYS = "arrays";
 
@@ -555,12 +561,15 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsHashTableRuntime
-				&& !this.needsComplexRuntime && !this.needsIoStreamRuntime) {
+				&& !this.needsComplexRuntime && !this.needsIoStreamRuntime && !this.needsStringInputRuntime) {
 			return Map.of();
 		}
 		Map<String, byte[]> files = new LinkedHashMap<>();
 		if (this.needsIoStreamRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES));
+		}
+		if (this.needsStringInputRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(JvmIoRuntimeBuilder.STRING_INPUT_RUNTIME_CLASS_FILES));
 		}
 		if (this.needsHandleRuntime) {
 			files.putAll(JvmExportRuntimeBuilder.runtimeClassFiles());
@@ -2112,6 +2121,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			.hasLandingPad(hasLandingPad)
 			.usesSynonymStreams(programUsesSymbol(program, LispNames.MAKE_SYNONYM_STREAM))
 			.usesStreamValues(usesStreamValues)
+			.asksStreamDirection(programUsesSymbol(program, LispNames.INPUT_STREAM_P)
+					|| programUsesSymbol(program, LispNames.OUTPUT_STREAM_P))
 			.mayUseAsyncValues(usesAsyncRuntime)
 			.simdOps(simdRuntime != null ? simdRuntime.ops() : null)
 			.blasOps(blasRuntime != null ? blasRuntime.ops() : null)
@@ -3068,11 +3079,18 @@ public final class JvmLispCompiler implements LispCompiler {
 						|| LispMacroExpander.filePositionMayNeedLength(program),
 				programUsesSymbol(program, LispNames.DELETE_FILE_INTERNAL),
 				programUsesSymbol(program, LispNames.RENAME_FILE_INTERNAL),
-				programUsesSymbol(program, LispNames.FILE_POSITION));
+				programUsesSymbol(program, LispNames.FILE_POSITION),
+				// A string INPUT stream answers file-position only as the travelling
+				// RontoStringInputStream, so both facts gate it (and the class file).
+				programUsesSymbol(program, LispNames.FILE_POSITION)
+						&& (programUsesSymbol(program, LispNames.WITH_INPUT_FROM_STRING)
+								|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM)
+								|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL)));
 		// The BIDIRECTIONAL stream arm of _open, and with it the travelling
 		// RontoIoFileStream class file, ride the surface fact that the program can ask
 		// for one: every other artifact stays exactly one class file.
 		this.needsIoStreamRuntime = LispMacroExpander.opensBidirectionally(program);
+		this.needsStringInputRuntime = fileMeta.stringInputPositions();
 		List<JvmIoRuntimeBuilder.IoMethod> ioMethods = JvmIoRuntimeBuilder
 			.create(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue, stringLengthForIo,
 					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod, socketRuntime,
@@ -6622,6 +6640,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesSynonymStreams = false;
 
 		/**
+		 * True when the program names {@code input-stream-p} or {@code output-stream-p}:
+		 * only then do they answer the REAL direction
+		 * ({@code LispMacroExpander.expandStreamDirectionP}).
+		 */
+		boolean asksStreamDirection = false;
+
+		/**
 		 * True when an OPEN stream VALUE ({@code LispLayout.STREAM}) can exist in this
 		 * class -- the program spells a stream constructor, or names
 		 * {@code *error-output*} whose seeded default is one
@@ -6915,6 +6940,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.usesComplex = builder.usesComplex;
 			this.hasLandingPad = builder.hasLandingPad;
 			this.usesSynonymStreams = builder.usesSynonymStreams;
+			this.asksStreamDirection = builder.asksStreamDirection;
 			this.usesStreamValues = builder.usesStreamValues;
 			this.mayUseAsyncValues = builder.mayUseAsyncValues;
 			this.className = builder.className;
@@ -7240,6 +7266,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean hasLandingPad = false;
 
 			private boolean usesSynonymStreams = false;
+
+			private boolean asksStreamDirection = false;
 
 			private boolean usesStreamValues = false;
 
@@ -7762,6 +7790,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder usesSynonymStreams(boolean usesSynonymStreams) {
 				this.usesSynonymStreams = usesSynonymStreams;
+				return this;
+			}
+
+			Builder asksStreamDirection(boolean asksStreamDirection) {
+				this.asksStreamDirection = asksStreamDirection;
 				return this;
 			}
 

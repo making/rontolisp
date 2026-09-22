@@ -4079,6 +4079,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			.p1StreamFuncBase(this.usesP1Streams ? p1StreamFuncBase() : -1)
 			.instanceTypeIndex(this.usesInstances ? instanceTypeBase() : -1)
 			.usesSynonymStreams(programUsesSymbol(program, LispNames.MAKE_SYNONYM_STREAM))
+			.asksStreamDirection(programUsesSymbol(program, LispNames.INPUT_STREAM_P)
+					|| programUsesSymbol(program, LispNames.OUTPUT_STREAM_P))
 			.usesEqualpHashTables(this.usesEqualpHashTables)
 			.usesIdentityHashTables(this.usesIdentityHashTables)
 			.usesStreamValues(usesStreamValues)
@@ -7351,7 +7353,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				// FUNC_MAKE_STR_OSTREAM, FUNC_MAKE_STR_ISTREAM, FUNC_STR_STREAM_CONTENTS)
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildWriteStreamStrBody(this.charvecPossible));
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildMakeOutputStreamBody(ostreamTableGlobalIndex));
-				code.addFunction(WasmStringStreamRuntimeBuilder.buildMakeInputStreamBody());
+				// A program that asks file-position keeps each input record's START,
+				// which a character position counts from.
+				code.addFunction(WasmStringStreamRuntimeBuilder.buildMakeInputStreamBody(filePosOrdinals != null));
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildContentsBody());
 				// symbol-API helper bodies (FUNC_MAKE_SYMBOL .. FUNC_FMAKUNBOUND)
 				code.addFunction(makeSymbolBody);
@@ -9520,6 +9524,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean usesSynonymStreams = false;
 
 		/**
+		 * True when the program names {@code input-stream-p} or {@code output-stream-p}:
+		 * only then do they answer the REAL direction
+		 * ({@code LispMacroExpander.expandStreamDirectionP}).
+		 */
+		boolean asksStreamDirection = false;
+
+		/**
 		 * True when the program writes {@code (make-hash-table :test 'equalp)} somewhere,
 		 * so a table can carry the FOLD FLAG in its header count and the three table
 		 * primitives run a key through {@code _equalp_key} before placing it. A program
@@ -10073,6 +10084,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.printControls = builder.printControls;
 			this.printControlVariables = builder.printControlVariables;
 			this.usesSynonymStreams = builder.usesSynonymStreams;
+			this.asksStreamDirection = builder.asksStreamDirection;
 			this.usesEqualpHashTables = builder.usesEqualpHashTables;
 			this.usesIdentityHashTables = builder.usesIdentityHashTables;
 			this.usesStreamValues = builder.usesStreamValues;
@@ -10210,6 +10222,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean printControlVariables = false;
 
 			private boolean usesSynonymStreams = false;
+
+			private boolean asksStreamDirection = false;
 
 			private boolean usesEqualpHashTables = false;
 
@@ -10531,6 +10545,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder usesSynonymStreams(boolean usesSynonymStreams) {
 				this.usesSynonymStreams = usesSynonymStreams;
+				return this;
+			}
+
+			Builder asksStreamDirection(boolean asksStreamDirection) {
+				this.asksStreamDirection = asksStreamDirection;
 				return this;
 			}
 

@@ -10499,6 +10499,86 @@ cases:
       :BODY
       "abc12!"
       (A B)
+  - name: string-stream-direction-and-file-position
+    source: |
+      ; The direction predicates answer the stream's REAL direction: a string
+      ; input stream is not an output stream, a file stream answers the direction
+      ; it was opened with and a closed one neither, a synonym its target's; the
+      ; t designator stays both (.kb/read-load-streams.md, "String streams").
+      (defun sdp-dir (s) (list (input-stream-p s) (output-stream-p s)))
+      (print (sdp-dir (make-string-input-stream "abc")))
+      (print (sdp-dir (make-string-output-stream)))
+      (with-open-file (o "sdp-dir.txt" :direction :output :if-exists :supersede)
+        (print (sdp-dir o))
+        (write-line "hello" o))
+      (with-open-file (i "sdp-dir.txt") (print (sdp-dir i)))
+      (with-open-file (i "sdp-dir.txt" :direction :io :if-exists :overwrite) (print (sdp-dir i)))
+      (let ((i (open "sdp-dir.txt"))) (close i) (print (sdp-dir i)))
+      (defvar *sdp-out* (make-string-output-stream))
+      (print (sdp-dir (make-synonym-stream '*sdp-out*)))
+      (print (sdp-dir t))
+      ; which is what lets the composite constructors refuse a component of the
+      ; wrong direction.
+      (print (handler-case (make-two-way-stream (make-string-output-stream) *sdp-out*)
+               (type-error () :type-error)))
+      (print (handler-case (make-concatenated-stream (make-string-input-stream "a") *sdp-out*)
+               (type-error () :type-error)))
+      ; file-position of a string stream: characters from the stream's own start,
+      ; a set to an index / :start / :end, never past the end; a character
+      ; unread-char parked is not consumed; an output stream counts what was
+      ; written and get-output-stream-string empties it.
+      (let ((s (make-string-input-stream "abcdef" 1 5)))
+        (read-char s)
+        (read-char s)
+        (print (file-position s))
+        (print (file-position s 1))
+        (print (read-char s))
+        (print (file-position s 9))
+        (print (file-position s :end))
+        (print (file-position s))
+        (print (read-char s nil :eof)))
+      (with-input-from-string (s "héllo")
+        (read-char s)
+        (read-char s)
+        (print (file-position s)))
+      (let ((s (make-string-input-stream "xyz")))
+        (read-char s)
+        (read-char s)
+        (unread-char #\y s)
+        (print (file-position s))
+        (print (read-char s)))
+      (let ((s (make-string-output-stream)))
+        (write-string "abé" s)
+        (print (file-position s))
+        (print (file-position s 3))
+        (print (file-position s 1))
+        (get-output-stream-string s)
+        (print (file-position s)))
+    expected: |
+      (T NIL)
+      (NIL T)
+      (NIL T)
+      (T NIL)
+      (T T)
+      (NIL NIL)
+      (NIL T)
+      (T T)
+      :TYPE-ERROR
+      :TYPE-ERROR
+      2
+      T
+      #\c
+      NIL
+      T
+      4
+      :EOF
+      2
+      1
+      #\y
+      3
+      T
+      NIL
+      0
   - name: write-string-and-write-to-string
     source: |
       (write-string "no")
@@ -12960,7 +13040,7 @@ cases:
       "b"
       "cd"
       "UNREAD-CHAR without an intervening READ-CHAR"
-      (T T)
+      (T NIL)
   - name: gray-stream-is-a-stream
     source: |
       ; A Gray stream IS a stream in Common Lisp, so streamp and

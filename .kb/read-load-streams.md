@@ -383,7 +383,8 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   `vector-push-extend` when the body exits (in the `unwind-protect` cleanup, so on every exit where
   it compiles), and the form answers the BODY's values -- which is why
   `isSingleValuedOperator` classifies `with-output-to-string` by its spec, not by name (it used to
-  clear the second value). The string does not see the output character by character.
+  clear the second value). The string does not see the output character by character -- see
+  "Write-through: measured, not built" below.
   `:element-type` is evaluated when it is not a literal and otherwise dropped. A malformed spec is a
   CALL-time stub (`callTimeUnsupportedStub`), never an expansion-time throw, so a dead branch
   compiles. A spec without the new options expands byte for byte as before. Measured, ANSI `streams`
@@ -391,11 +392,106 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   test regressed. **The premise that these refusals were LOST top-level forms was stale**: since the
   driver charges a raw exception inside a `deftest` to that test, all 19 were already counted
   ERRORS, so turning them into stubs moved nothing. Seven `WITH-INPUT-FROM-STRING` tests still fail
-  on the lite `output-stream-p` (every stream answers t for both directions).
+  on the lite `output-stream-p` (every stream answers t for both directions) -- fixed since, next
+  bullet.
   Pinned by `LispEvaluatorTest#evalStringStreamMacroOptions`,
   `JvmLispCompilerTest#compileAndRunStringStreamMacroOptions`,
   `WasmLispCompilerIntegrationTest#stringStreamMacroOptionsCompileAndRun` and ci-spec
   `string-stream-macro-index-bounds-and-fill-pointer-string`.
+- **The direction predicates answer the REAL direction on all four** (`.todo/929`, 2026-09-22;
+  answers checked against sbcl). A string input stream, a request body and standard input are
+  input; a string output stream, standard output and `*error-output*` output; a socket and an
+  `:io` file stream both; an `:input` file stream input and an `:output` / `:append` /
+  `:overwrite` one output (sbcl: an `:overwrite` output open is output only, although it runs the
+  bidirectional stream kind); a CLOSED file stream neither (sbcl says the same); a synonym what
+  its target says. **Kept lite**: the `t` designator answers both (it is a designator, not a
+  stream: `*standard-output*` holds it, so `(input-stream-p *standard-output*)` stays t where sbcl
+  says nil), and a closed STRING stream still answers its kind's direction on the compile paths
+  (the kind is on the value; the interpreter's emptied table entry says neither -- untested,
+  CL leaves a closed stream's direction open). Interpreter: `Environment.streamDirection`, off the
+  value's KIND and, for a `:FILE`, off what the table holds (`RontoIoFileStream` both unless the
+  handle is in `outputOnlyCursorStreams`, a `Reader` / `InputStream` input, a `Writer` /
+  `OutputStream` output, nothing -- closed -- neither). Compile paths: `expandStreamDirectionP`
+  lowers INLINE to a test of the value's kind keywords (a `while` resolving synonyms first, only
+  where the program builds them), and a `:FILE` reads an ALIST, `%file-stream-directions` of
+  `(handle . bits)`, that every literal open leaf registers into
+  (`%file-stream-direction-register` around the leaf's stream value, `OpenModes.direction`) and
+  every close forgets (`forgettingClose` with both registries' forgetters, element types first).
+  **Three gates, each measured**: the inline test only in a program that NAMES a predicate
+  (`Ctx.asksStreamDirection`) -- the dead `#'input-stream-p` wrapper every WASM module compiles
+  and drops interned the kind keywords and moved every later string of every string-stream
+  program by up to 8 bytes (`drain-by-hand` 5,972 -> 5,979 wasm) until the gate; gating the two
+  WRAPPERS instead (`REFERENCE_GATED_FUNCTIONS`) also moved them, by -2 / -4 bytes (zlib), so it
+  was not taken. The record only where the program can also open a file. A classifier DEFUN
+  instead of the inline test cost +6.2 KB JVM / +0.9 KB wasm for one `output-stream-p` of a
+  string stream (a first defun's function machinery on the JVM), a HASH-TABLE record +14.7 KB and
+  a second class file (`RontoHashTable` travels); the inline test is +654 B JVM / +7 B P1 / +8 B
+  component. The composite constructors now check their components' direction
+  (`make-two-way-stream`, `make-echo-stream`, `make-concatenated-stream` signal `type-error`):
+  with the lite answer every stream was an input stream, so ANSI `MAKE-TWO-WAY-STREAM.ERROR.5`
+  and `MAKE-CONCATENATED-STREAM.ERROR.2` passed only by accident and REGRESSED when the answer
+  became real, until the check.
+- **`file-position` of a STRING stream is real on all four** (`.todo/929`), in characters. Input:
+  counted from the stream's own start (a bounded stream starts at 0, as in sbcl), set to an
+  index / `:start` / `:end`, an index past the end answering nil and leaving the cursor (sbcl
+  moves past the end; CL says an error or false). Output: the characters written since
+  `get-output-stream-string` last emptied it; a set succeeds only where the stream already is (so
+  ANSI `FILE-POSITION.10` holds). A character `unread-char` parked counts as unread and a set
+  drops it: interpreter, a wrapper round the built-in over the pushback cell; compile paths,
+  `UnreadCharLibrary` rewrites `file-position` onto `%unread-file-position(-set)`
+  (`unread-char.lisp`), spliced only for a program that names `file-position` (both are
+  name-keyed runtime gates, and every other unread-char program keeps its bytes). Per backend:
+  the interpreter's string input stream IS `runtime.RontoStringInputStream`, a `BufferedReader`
+  subclass working on the string itself so its cursor is the logical position; the JVM builds
+  that class only when the program calls `file-position` and can make a string input stream
+  (`FileMeta.stringInputPositions`), and it then TRAVELS (+2.9 KB, a second class file) -- the
+  `_filePosition` arms are `JvmStringStreamPositions`, ahead of the file arms (an output
+  stream's position is the `StringWriter`'s code-point count, no class needed); both WASM
+  backends answer in `_file_position` / `_file_position_set`'s string arm
+  (`WasmStringStreamRuntimeBuilder.emitPositionQueryArm` / `emitPositionSetArm`), counting
+  non-continuation bytes, and an input record keeps its START in a fourth word
+  (`[kind][cursor][end][start]`, 16 bytes) only in a program that calls `file-position`.
+  **`:end` on the compile paths is `(or (file-length s) -1)`** (`rewriteFilePositionArg`), and
+  every string arm reads -1 as its own end: a string stream has no `file-length`, and the old
+  fold handed the primitive nil -- a QUERY on the JVM. So a user's literal
+  `(file-position s -1)` seeks a string stream's end on the compile paths where the interpreter
+  signals; nothing else passes -1. **Limits**: `--no-wasi` keeps `file-position` the nil
+  constant for every stream; a CLOSED string input stream still answers on both WASM backends
+  (its record is never marked closed), nil elsewhere. The ANSI tests it fixed are OUTPUT ones --
+  `PEEK-CHAR.18 .19` and `MAKE-BROADCAST-STREAM.6` (the zero-argument broadcast is a string
+  output sink on the interpreter); `PEEK-CHAR.17` moved from error to fail (an echo stream
+  echoes a PEEKED character, sbcl does not).
+- **`:index` keeps DRAINING -- measured, not assumed** (2026-09-22). The premise was that a real
+  position would make `:index` a read. Hand-written equivalents of the two lowerings, bytes
+  JVM / Preview 1 / component: drain 38,085 / 5,972 / 9,496, position 42,579 (2 files) / 4,618 /
+  8,226 -- the JVM grows +4.5 KB and gains the travelling class (plus the `_filePosition`
+  machinery) where WASM saves 1.3 KB, and `--no-wasi` has no position at all, so it would need
+  the drain anyway. Both answer the same index; the drain only consumes a stream that is closed
+  right after. **Trigger**: a JVM string input stream that knows its position without a
+  travelling class.
+- **Write-through: measured, not built** (2026-09-22). A fill-pointer string that sees the output
+  as it is written needs a stream kind of its own on every backend (a JVM `Writer` over the
+  Lisp vector representation that travels, a WASM record kind every string-output write path
+  branches on). Its benefit, counted: ZERO ANSI tests in the whole suite depend on it (the only
+  string-argument tests, `WITH-OUTPUT-TO-STRING.3 .5 .6 .10`, read the string after the form and
+  pass; `.4` / `.9` are `:nil-vectors-are-strings` notes), and no program in the corpus
+  (examples, size-report, the library trees under `src/test/resources`) reads the string before
+  the body exits -- cl-who's `with-html-output-to-string` passes its string through and reads it
+  after. Also still sbcl-divergent for the same reason: `file-position` of that stream starts at
+  0, where sbcl starts at the fill pointer. **Trigger**: a caller that reads the string mid-body.
+- ANSI `streams` (interpreter, suite `ca06bd9`), 2026-09-22 (`.todo/929`): 599 -> 619 of 797
+  (75.2% -> 77.7%), 20 fixed, 0 regressed: `WITH-INPUT-FROM-STRING.9 .11-.16`,
+  `MAKE-STRING-INPUT-STREAM.1 .2`, `MAKE-STRING-OUTPUT-STREAM.1-.3 .5-.7`,
+  `MAKE-SYNONYM-STREAM.1 .3`, `PEEK-CHAR.18 .19`, `MAKE-BROADCAST-STREAM.6`. The 599 is today's
+  baseline, not the 582 recorded above: the code moved in between.
+  Pinned by `LispEvaluatorTest#directionPredicatesAnswerTheStreamsRealDirection` /
+  `#filePositionOfAStringStreamQueriesAndSeeks` /
+  `#compositeStreamConstructorsRefuseAComponentOfTheWrongDirection`, their JVM twins,
+  `WasmLispCompilerIntegrationTest#directionPredicatesAnswerTheStreamsRealDirectionOnPreview1` /
+  `#componentDirectionPredicatesAnswerTheStreamsRealDirection` /
+  `#filePositionOfAStringStreamQueriesAndSeeksOnPreview1` /
+  `#componentFilePositionOfAStringStreamQueriesAndSeeks` (one text, `testsupport/StringStreamPrograms`),
+  `JvmRuntimeClassFilesTest`, ci-spec `string-stream-direction-and-file-position`.
 - `print`/`prin1`/`princ`/`terpri` take an optional stream on all three backends (interpreter shared
   `emitTo`; JVM `_writeStr(String, Object)`, where non-`Long` handles go to `System.out` and update
   `_col`; WASM `_write_stream_str`, whose stdout path delegates to `_write_str` keeping
@@ -778,9 +874,10 @@ file-length section), advanced by `_bumpStreamPosition` (called by `_readByte`,
 `_writeByte`, `_readSeqPacked`, `_writeSeqPacked`) and queried/set through
 `_filePosition`, which re-opens via `FileChannel.position`. Both are gated per operator
 (interpreter: nothing; JVM: `JvmIoRuntimeBuilder.FileMeta.position`) so a program that
-never calls `file-position` pays nothing. A CHARACTER file stream, a socket, a string
-stream, a standard stream and a closed handle answer `nil` (Common Lisp's "cannot be
-determined") on both; the JVM `#'file-position` function-value wrapper is
+never calls `file-position` pays nothing. A CHARACTER file stream, a socket, a standard
+stream and a closed handle answer `nil` (Common Lisp's "cannot be determined") on both
+(a STRING stream answers its character position since `.todo/929` -- section "String
+streams"); the JVM `#'file-position` function-value wrapper is
 `REFERENCE_GATED` like `#'file-length`, because its body lowers to the gated
 `_filePosition`. The served-request body keeps its own REAL `file-position` through
 `HttpRequestBodyStream` on all four.

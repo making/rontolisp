@@ -17,3 +17,6 @@
 `write-char` / `write-string` / `format` / print 系は出力側へ届きます。コンポーネントは
 [`two-way-stream-input-stream`](two-way-stream-input-stream.md) と
 [`two-way-stream-output-stream`](two-way-stream-output-stream.md) で取り出せます。
+
+各コンポーネントは正しい方向のストリームでなければなりません。入力側が入力ストリームでない場合、
+または出力側が出力ストリームでない場合は `type-error` を通知します。
