@@ -97,7 +97,8 @@ designator for `"H"`, CLHS glossary -- the ANSI chapter spells every clause that
 once); `:documentation`/`:size` ignored.
 - `(:intern name...)` adds the names to the package's OWN symbols without exporting them, so
   `pkg::name` reaches them and `pkg:name` does not. Resolution here is textual, so owning the
-  name is the whole of the clause.
+  name is the whole of the clause -- except a name a used package exports, which stays
+  inherited (below).
 - `(:shadow name...)` -> `LispPackage.shadows`; `resolveUnqualified` checks `current.shadows(name)`
   BEFORE the `isClSymbol` branch, and `evalCons` dispatches on the FULL resolved name, so a
   shadowed `pkg::defconstant` reaches the user macro, not the special form.
@@ -113,6 +114,34 @@ once); `:documentation`/`:size` ignored.
 - Hard errors: `:use`/`:import-from`/`:shadowing-import-from` of a nonexistent package;
   `:nicknames` colliding with a DIFFERENT package/nickname; any other clause. No `:use` clause =
   empty use list (SBCL-like).
+- **Clause validation (`.todo/923`, SBCL-checked)**: `validateDefpackageShape` runs on the FORM
+  before any lookup (SBCL does it at macroexpansion) -- every option a known keyword clause,
+  `:size`/`:documentation` at most once with one argument, and the names of `:shadow`,
+  `:shadowing-import-from`, `:import-from`, `:intern` pairwise disjoint, `:intern` and `:export`
+  too. Every clause failure is a `DefpackageException` (a `LispPackageException`, so top-level
+  callers and the prelude's fallback see no change) typed `PROGRAM_ERROR` (the shape rows) or
+  `PACKAGE_ERROR` with a designator (missing package; nickname collision, slot = the package
+  being defined, as SBCL).
+- **`:intern` of an INHERITED name finds it** (CLHS: `:intern` runs after `:use`, "found or
+  created"): a name some used package exports is dropped from the owned set after the clause
+  loop, whatever the clause order. `pkg::name` still mints `PKG::NAME` for any inherited non-cl
+  name (the pre-existing `resolveQualified` rule); `find-symbol` answers the inherited one.
+- **An `:import-from`/`:shadowing-import-from` of a name the source lacks is refused only for a
+  SEALED source** (`PackageRegistry.sealed`): made by `defpackage`/`make-package` and never read
+  into since. A symbol merely READ is not recorded ("The member table"), so once source minted an
+  unrecorded name in a package (`resolveUnqualified`'s final intern, a quoted cl name in a non-cl
+  package, a `pkg::name` the package does not provide -- all skipped under `exactCase`, i.e. the
+  runtime `intern` and `find-symbol` probes) its table no longer answers "no such symbol" and
+  the check is off. Built-in / pre-seeded packages are never sealed. The failure carries the
+  source package and name (`DefpackageException.missingSymbol`).
+- **At run time the failures are conditions**: a nested `defpackage` (`rareOperatorExpansion`)
+  and `(eval '(defpackage ...))` (the `eval` native, which would otherwise take the top-level
+  directive path) both go through `LispEvaluator.registerRuntimeDefpackage`: `PROGRAM_ERROR` ->
+  `program-error`, `PACKAGE_ERROR` -> `signalPackageError`, and the missing-symbol case signals
+  inside `(restart-case ... (continue () :report "INTERN it." nil))` -- continuing interns the
+  name in the source (recorded) and retries the registration, SBCL's behaviour. A program's own
+  TOP-LEVEL `defpackage` stays a hard error. The compiled backends refuse a non-top-level
+  `defpackage` anyway, so the conditions are interpreter-only by construction.
 - **A NON-top-level `defpackage` is left VERBATIM** by `resolveCons` -- clauses and all, since
   they are literal data the registration reads rather than code -- and registers when its
   enclosing form RUNS: `LispEvaluator`'s `rareOperatorExpansion` sends it back through
@@ -545,7 +574,7 @@ package keyword value), `import` 3, `export` 2, `unexport` 2, `do-symbols` 2,
 this table: 31 package IDENTITY (`package-name` 11 / `delete-package` 11 /
 `rename-package` 9 -- a deleted package object answering nil, `eq` across a rename;
 unmodellable while a package IS its keyword); 15 `defpackage` clause validation and
-catchable clause errors (`.todo/923`); 12 `import` (10 need the driver's skipped
+catchable clause errors (`.todo/923`, closed: see below); 12 `import` (10 need the driver's skipped
 `in-package` -- the tests compare against `cl-test`'s home -- plus `import.5`'s
 uninterned-symbol home and `import.error.4`'s restarts); 7 `def-macro-test` rows
 (`macro-function` arity, `.todo/922`); 6 `in-package` as a function; 6 `%READ-EVAL`
@@ -554,14 +583,23 @@ declaration scope inside `do-symbols` bodies; `find-symbol.4` (no keyword table)
 `find-symbol.11` (read-time recording, above), `find-all-symbols.error.2` (the optional
 package argument is a documented extension).
 
+**Clause validation measured (2026-09-22, interpreter, suite `ca06bd9`, `measure.sh packages`):
+416 -> 430 of 499 (83.4% -> 86.2%), fail 50 -> 38, errors 33 -> 31, lost forms 12 -> 12. By
+test NAME: 14 fixed (`defpackage.13`-`.26`), 0 regressed.** (The 416 baseline is develop's on
+that day; 410 above is the count at `.todo/917`'s close.) Premise correction: the item's plan put
+the conversion in the nested-`defpackage` seam only, but `signals-error` and
+`handle-non-abort-restart` run the form through `(eval 'FORM)`, which reaches the TOP-LEVEL
+directive path -- the `eval` native had to route a `defpackage` datum to the same seam.
+`defpackage.26` was not validation but `:intern` of an inherited name (above).
+
 ## Tests
 `PackageResolverTest` (the `::` cases, the defpackage clause/error cases, the json.lisp fixed-point
 pin, the `*package*` runtime-variable cases, the runtime-tier create/delete/rename/gate/baked-table
 cases), `LispEvaluatorTest#{packageDefaultsToClUser,packageVarIsReadWhenTheFormRunsNotWhenItIsResolved,setqOfPackageVarSwitchesTheCurrentPackage,withStandardIoSyntaxBindsPackageToClUser,runtimeMakeDeleteRenamePackage,runtimePackageFailuresSignalCatchablePackageErrors,runtimePackageEnumeration}`,
 `JvmLispCompilerTest#{compileAndRunPackageVarIsReadWhenTheFormRuns,compileAndRunRuntimePackageApi}`,
 `WasmLispCompilerIntegrationTest#{packageVarIsReadWhenTheFormRuns,runtimePackageApi}`,
-`PackageResolverTest#{unusePackageDirectiveNarrowsTheUseList,unusePackageAcceptsADesignatorListATargetAndRejectsUnknownNames,unusePackageWithAComputedDesignatorOrABadArityStaysARuntimeCall,defpackageNestedIsLeftVerbatimForTheRuntimeTier,defpackageInternClauseOwnsTheNamesWithoutExportingThem,defpackageDesignatorsAcceptCharacters,interpreterDefpackageProductsJoinTheRuntimeTier}`,
-`LispEvaluatorTest#{runtimeUnusePackageNarrowsTheUseList,nonTopLevelDefpackageRegistersARuntimePackage}`,
+`PackageResolverTest#{unusePackageDirectiveNarrowsTheUseList,unusePackageAcceptsADesignatorListATargetAndRejectsUnknownNames,unusePackageWithAComputedDesignatorOrABadArityStaysARuntimeCall,defpackageNestedIsLeftVerbatimForTheRuntimeTier,defpackageInternClauseOwnsTheNamesWithoutExportingThem,defpackageDesignatorsAcceptCharacters,interpreterDefpackageProductsJoinTheRuntimeTier,defpackageClauseViolationsAreHardErrorsAtTopLevel}`,
+`LispEvaluatorTest#{runtimeUnusePackageNarrowsTheUseList,nonTopLevelDefpackageRegistersARuntimePackage,defpackageClauseViolationsSignalProgramError,defpackageNicknameAndPackageErrorsArePackageErrors,defpackageImportOfAMissingSymbolOffersAContinueRestartThatInternsIt,defpackageInternOfAnInheritedNameFindsTheInheritedSymbol}`,
 the member table: `LispEvaluatorTest#{internRecordsAMemberOfARuntimePackage,usePackageInheritsARuntimePackagesExports,shadowMintsAPresentSymbolAheadOfTheInheritedOne,shadowingImportDisplacesThePresentSymbol,uninternRemovesAMemberAndUnhomesTheSymbol,exportAndImportCheckAccessibilityAndConflicts,withPackageIteratorWalksTheMemberTable,doSymbolsSpellsARedirectAtItsHomeAndAClNameBare,findSymbolAnswersTheStandardSymbolsThroughAUsePackage,defpackageAnswersThePackageKeyword}`,
 `JvmLispCompilerTest#compileAndRunRuntimePackageMemberTable`,
 `WasmLispCompilerIntegrationTest#runtimePackageMemberTable`, ci-spec

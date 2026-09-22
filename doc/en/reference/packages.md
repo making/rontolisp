@@ -118,8 +118,18 @@ symbols, strings, characters (`#\H` names `"H"`), or uninterned symbols
 the package's own symbol inside the package -- never to the `cl` (or any used
 package's) symbol of the same name -- so a library can define its own
 `digit-char-p` or `defconstant`; `:intern` adds a name the package owns without
-exporting it. Any other clause is an error, and so is using a
-package that does not exist yet. A `defpackage` naming a package that already
+exporting it -- unless a used package exports the name, in which case the
+package inherits that symbol, as in Common Lisp. Any other clause is an error, and so is using a
+package that does not exist yet. `:size` and `:documentation` may each appear
+once; the names given to `:shadow`, `:shadowing-import-from`, `:import-from`
+and `:intern` must be pairwise disjoint, as must those of `:intern` and
+`:export` (a `program-error`). Importing a name the source package does not
+have is a `package-error` whose `continue` restart interns the name there;
+since rontolisp does not record the symbols a program merely reads, this is
+checked only for a package made by `defpackage`/`make-package` that no source
+has been read into yet. A `defpackage` that runs at run time (inside a function
+body, or through `eval`) signals these as conditions a handler can catch; a
+top-level one fails at read/compile time. A `defpackage` naming a package that already
 exists MODIFIES it (Common Lisp's rule): the clauses merge into what is there,
 which is what lets a library declare a package rontolisp has already seeded.
 A name that is another package's nickname stays an error.
