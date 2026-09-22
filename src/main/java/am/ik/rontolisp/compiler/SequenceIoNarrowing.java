@@ -80,19 +80,25 @@ public final class SequenceIoNarrowing {
 	/**
 	 * Rewrites the program with every provably byte-only sequence-I/O site narrowed.
 	 * @param program the top-level forms
+	 * @param characterStreams whether a string stream can reach a site (the backend
+	 * builds stream values and {@code %character-stream-p} is spliced): a string stream
+	 * moves characters into a buffer of element type {@code t}, so then only a buffer
+	 * that cannot hold a character -- a numeric-typed one -- is proven byte-only
+	 * @param wide whether the program opens a WIDE element stream ({@code %wide-width} is
+	 * spliced): a narrowed site then keeps its packed arm guarded, as the backends' own
+	 * read-sequence / write-sequence cases do, because the packed primitive moves raw
+	 * octets (.kb/read-load-streams.md, "Element types wider and narrower than one
+	 * octet")
 	 * @return the rewritten program, or {@code program} itself when nothing narrowed
 	 */
-	public static List<LispVal> narrow(List<LispVal> program) {
+	public static List<LispVal> narrow(List<LispVal> program, boolean characterStreams, boolean wide) {
+		// Both facts come from the backend's function table: the top-level forms this
+		// pass sees exclude every defun, the spliced ones included.
 		Set<String> specials = new HashSet<>();
 		for (LispVal form : program) {
 			collectSpecials(form, specials);
 		}
-		// A program that opens a WIDE element stream keeps the packed arm guarded, as the
-		// backends' own read-sequence / write-sequence cases do: the packed primitive
-		// moves raw octets (.kb/read-load-streams.md, "Element types wider and narrower
-		// than one octet"). The spliced %wide-width defun is the fact the backends read.
-		boolean wide = definesFunction(program, LispNames.WIDE_WIDTH_INTERNAL);
-		Narrower narrower = new Narrower(specials, wide);
+		Narrower narrower = new Narrower(specials, wide, characterStreams);
 		List<LispVal> out = new ArrayList<>(program.size());
 		boolean changed = false;
 		for (LispVal form : program) {
@@ -101,17 +107,6 @@ public final class SequenceIoNarrowing {
 			out.add(rewritten);
 		}
 		return changed ? out : program;
-	}
-
-	private static boolean definesFunction(List<LispVal> program, String name) {
-		for (LispVal form : program) {
-			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
-					&& LispNames.DEFUN.equals(head.name()) && cons.cdr() instanceof LispCons rest
-					&& rest.car() instanceof LispSymbol defined && name.equals(defined.name())) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	/** Globally special names: {@code defvar} / {@code defparameter} anywhere. */
@@ -139,10 +134,66 @@ public final class SequenceIoNarrowing {
 
 		private final boolean wide;
 
-		private Narrower(Set<String> specials, boolean wide) {
+		private final boolean characterStreams;
+
+		private Narrower(Set<String> specials, boolean wide, boolean characterStreams) {
 			this.specials = specials;
 			this.wide = wide;
+			this.characterStreams = characterStreams;
 		}
+
+		/**
+		 * Whether the form is a proven byte buffer. Without character streams that is any
+		 * rank-1 non-string vector ({@link Shape#VECTOR}); with them a buffer of element
+		 * type {@code t} may receive characters, so only a NUMERIC-typed one -- a literal
+		 * numeric {@code :element-type}, directly, through a {@code subseq} /
+		 * {@code copy-seq}, or through a binding this walk recorded (which, in this mode,
+		 * records numeric buffers only) -- qualifies.
+		 */
+		private boolean byteBuffer(LispVal form, Map<String, Shape> env) {
+			if (ArgumentShapes.of(form, env, Map.of()) != Shape.VECTOR) {
+				return false;
+			}
+			return !this.characterStreams || numericBuffer(form, env);
+		}
+
+		private static boolean numericBuffer(LispVal form, Map<String, Shape> env) {
+			if (form instanceof LispSymbol sym) {
+				return env.containsKey(sym.name());
+			}
+			if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
+				return false;
+			}
+			if ((LispNames.SUBSEQ.equals(head.name()) || LispNames.COPY_SEQ.equals(head.name()))
+					&& cons.cdr() instanceof LispCons seqCell) {
+				return numericBuffer(seqCell.car(), env);
+			}
+			if (!LispNames.MAKE_ARRAY.equals(head.name())) {
+				return false;
+			}
+			LispVal rest = cons.cdr() instanceof LispCons dims ? dims.cdr() : LispNil.INSTANCE;
+			while (rest instanceof LispCons keyCell && keyCell.cdr() instanceof LispCons valueCell) {
+				if (keyCell.car() instanceof LispSymbol key && ":ELEMENT-TYPE".equals(key.name())) {
+					return numericElementType(valueCell.car());
+				}
+				rest = valueCell.cdr();
+			}
+			return false;
+		}
+
+		/** A quoted numeric type: {@code '(unsigned-byte 8)}, {@code 'single-float}. */
+		private static boolean numericElementType(LispVal spec) {
+			if (!(spec instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+					&& LispNames.QUOTE.equals(q.name()) && quoted.cdr() instanceof LispCons cell)) {
+				return false;
+			}
+			LispVal datum = cell.car();
+			LispVal head = datum instanceof LispCons compound ? compound.car() : datum;
+			return head instanceof LispSymbol sym && NUMERIC_ELEMENT_TYPES.contains(sym.name());
+		}
+
+		private static final Set<String> NUMERIC_ELEMENT_TYPES = Set.of("UNSIGNED-BYTE", "SIGNED-BYTE", "INTEGER",
+				"FIXNUM", "FLOAT", "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT", "REAL", "NUMBER");
 
 		private LispVal form(LispVal val, Map<String, Shape> env) {
 			if (!(val instanceof LispCons cons) || !cons.isProperList()) {
@@ -191,13 +242,13 @@ public final class SequenceIoNarrowing {
 			if (parts.size() < 3) {
 				return cons;
 			}
-			if (ArgumentShapes.of(parts.get(1), env, Map.of()) != Shape.VECTOR) {
+			if (!this.byteBuffer(parts.get(1), env)) {
 				return cons;
 			}
 			boolean read = LispNames.READ_SEQUENCE.equals(head.name())
 					|| LispNames.READ_SEQUENCE_RAW_INTERNAL.equals(head.name());
-			LispVal expanded = read ? LispMacroExpander.expandReadSequence(cons, true)
-					: LispMacroExpander.expandWriteSequence(cons, true);
+			LispVal expanded = read ? LispMacroExpander.expandReadSequence(cons, true, false)
+					: LispMacroExpander.expandWriteSequence(cons, true, false);
 			if (this.wide) {
 				expanded = LispMacroExpander.guardPackedSequenceForWideStreams(expanded);
 			}
@@ -218,10 +269,10 @@ public final class SequenceIoNarrowing {
 				if (binding instanceof LispCons pair && pair.car() instanceof LispSymbol var
 						&& pair.cdr() instanceof LispCons initCell) {
 					LispVal init = this.form(initCell.car(), evalEnv);
-					Shape shape = ArgumentShapes.of(initCell.car(), evalEnv, Map.of());
-					if (shape == Shape.VECTOR && !this.specials.contains(var.name())
+					boolean byteBuffer = this.byteBuffer(initCell.car(), evalEnv);
+					if (byteBuffer && !this.specials.contains(var.name())
 							&& this.stableIn(var.name(), initCell.cdr(), parts.subList(2, parts.size()))) {
-						inner.put(var.name(), shape);
+						inner.put(var.name(), Shape.VECTOR);
 					}
 					else {
 						inner.remove(var.name());

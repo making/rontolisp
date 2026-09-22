@@ -5726,6 +5726,13 @@ public final class LispNames {
 	/** The registry lookup: a stream's entry, or nil. */
 	public static final String FILE_STREAM_ENTRY_INTERNAL = "%FILE-STREAM-ENTRY";
 
+	/**
+	 * Whether a stream value is a CHARACTER stream (a string stream): the question
+	 * {@code read-sequence} / {@code write-sequence} ask when the buffer is not a string
+	 * ({@code LispMacroExpander.expandReadSequence}). A prelude defun.
+	 */
+	public static final String CHARACTER_STREAM_P_INTERNAL = "%CHARACTER-STREAM-P";
+
 	/** The registry read behind a compiled {@code stream-element-type}. */
 	public static final String FILE_STREAM_ELEMENT_TYPE_INTERNAL = "%FILE-STREAM-ELEMENT-TYPE";
 

@@ -2,14 +2,17 @@
 
 `(read-sequence sequence stream &key start end)`
 
-Fills `sequence` -- a one-dimensional array created with `make-array` -- with elements read from `stream`, and returns the index of the first element that was not filled (the fill position). Reading starts at index `:start` (default 0) and stops before index `:end` (default the array length) or at end of file, whichever comes first. The `:start`/`:end` keywords must be literal; their values may be arbitrary expressions.
+Fills `sequence` -- a one-dimensional array or a list -- with elements read from `stream`, and returns the index of the first element that was not filled (the fill position). Reading starts at index `:start` (default 0) and stops before index `:end` (default the array length) or at end of file, whichever comes first. The keywords are read like any keyword arguments: the first `:start`/`:end` counts, `:allow-other-keys t` admits others, and an unknown keyword signals a `program-error`.
 
-The BUFFER decides which element is read: a character vector -- what `(make-array n :element-type 'character)` and `make-string` build -- is filled with characters from a text stream, and any other array is filled with bytes from a stream opened with `:element-type '(unsigned-byte 8)`. The element type may itself be computed, as in `(make-array n :element-type (stream-element-type s))`.
+The STREAM decides which element is read. A string stream fills any sequence -- a general vector, a list -- with characters. A character vector -- what `(make-array n :element-type 'character)` and `make-string` build -- is filled with characters from any text stream, and any other sequence is filled with bytes from a stream opened with `:element-type '(unsigned-byte 8)` (a file stream opened `character` and the standard input still fill a non-string sequence with bytes). The element type may itself be computed, as in `(make-array n :element-type (stream-element-type s))`.
 
 ```lisp
 (with-input-from-string (s "abcdef")
   (let ((buf (make-array 4 :element-type 'character)))
     (list (read-sequence buf s) buf))) ; => (4 "abcd")
+(with-input-from-string (s "abc")
+  (let ((buf (list nil nil nil nil)))
+    (list (read-sequence buf s :start 1) buf))) ; => (4 (NIL #\a #\b #\c))
 ```
 
 Because it touches the filesystem, the binary form is shown here statically rather than as a runnable example:

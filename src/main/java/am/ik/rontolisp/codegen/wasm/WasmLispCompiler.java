@@ -4293,7 +4293,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// character arm leaves the artifact (compiler/SequenceIoNarrowing). After every
 		// gate scan: the narrowed expansion still attempts %read-sequence-packed first,
 		// and the gates that emit that runtime key on the unexpanded spelling.
-		topLevelExprs = SequenceIoNarrowing.narrow(topLevelExprs);
+		topLevelExprs = SequenceIoNarrowing.narrow(topLevelExprs,
+				usesStreamValues && functions.containsKey(LispNames.CHARACTER_STREAM_P_INTERNAL),
+				functions.containsKey(LispNames.WIDE_WIDTH_INTERNAL));
 		if (this.asyncMode) {
 			for (LispVal expr : topLevelExprs) {
 				topLevelAwaits += WasmAwaitAnalysis.countAwaits(expr);

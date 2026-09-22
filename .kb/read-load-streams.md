@@ -427,27 +427,98 @@ mean `read-byte` on a text-opened stream "works" there while interpreter/JVM sig
   `%read-sequence-packed`/`%write-sequence-packed` (raw little-endian, any rank;
   `.kb/binary-sequence-io.md`), a character buffer one `or` further along to
   `%read-sequence-chars` (a block of storage units per host read; `.kb/character-sequence-io.md`).
-  **The BUFFER, not the stream, picks the element**: both dispatch on
-  `(stringp seq)`, so a character vector moves CHARACTERS and anything else moves bytes — a RUNTIME
-  test because the buffer arrives in a variable, which is also why `make-array`'s `:element-type`
-  accepts a computed designator (`lowerRuntimeElementTypeMakeArray`).
+  A LIST is a sequence too: the element loop stores through `rplaca`/`nthcdr` and fetches
+  through `nth` when the buffer is a cons (a byte-only site, a proven vector, has no list arm).
+  **The stream picks the element** -- see the section of that name below.
 - **A provably byte-only buffer skips the dispatch** (`compiler/SequenceIoNarrowing`,
   `.todo/338`): a sequence with `ArgumentShapes` `VECTOR` shape -- a numeric-typed or untyped
   `make-array`, a `(vector ...)`, a `subseq`/`copy-seq` preserving one, directly or through a
   `let`/`let*` binding with no rebinding, capture, shadowing or dynamic scope in between -- expands
   through the byte-only lowering (`expandReadSequence`/`expandWriteSequence` with `byteOnly`),
-  which has no `read-char` arm and no `write-string` branch. The packed fast path stays first, so a
-  packed buffer still moves in one transfer. A parameter, a `setq`'d variable, a captured or
-  shadowed one, a special, a character buffer and a `stream-element-type`-derived buffer all stand
-  down to the runtime test (ci-spec `read-sequence-into-a-character-buffer`). Runs backend-locally
-  after the gate scans (the JVM and wasm-GC compile paths, next to `DeadTypeBranchPruner`), never
-  in `CompileFrontend`: the narrowed expansion still attempts the packed primitive first, and the
-  gates that emit that runtime key on the unexpanded spelling. Measured 2026-09-09: a byte-only
-  read loop 6,744 -> 5,735 B (`-1,009`), the zlib `--optimize=size` row 125,738 -> 125,081
-  (`-657`, the `FUNC_READ_CHAR` the todo estimated at 649).
+  which has no `read-char` arm and no `write-string` branch. **When a string stream can reach the
+  site** (the program builds stream values and `%character-stream-p` is spliced) an element-type-`t`
+  buffer may receive characters, so only a NUMERIC-typed buffer (a literal numeric
+  `:element-type`, or a `subseq`/`copy-seq` of one) still narrows. The packed fast path stays
+  first, so a packed buffer still moves in one transfer. A parameter, a `setq`'d variable, a
+  captured or shadowed one, a special, a character buffer and a `stream-element-type`-derived
+  buffer all stand down to the runtime test (ci-spec `read-sequence-into-a-character-buffer`).
+  Runs backend-locally after the gate scans (the JVM and wasm-GC compile paths, next to
+  `DeadTypeBranchPruner`), never in `CompileFrontend`: the narrowed expansion still attempts the
+  packed primitive first, and the gates that emit that runtime key on the unexpanded spelling.
+  **It sees only the top-level forms, never a defun** -- the spliced `%character-stream-p` and
+  `%wide-width` included -- so both facts come from the backend's function table
+  (`narrow(forms, characterStreams, wide)`). Reading `wide` off the forms made it always false,
+  and a narrowed octet buffer read from an `(unsigned-byte 16)` stream answered its raw octets
+  `(1 0)` on the three compile paths where the interpreter answers `(1 2)`
+  (`JvmLispCompilerTest#compileAndRunANarrowedSiteKeepsTheWideGuard`, its WASM twin).
+  Measured 2026-09-09: a byte-only read loop 6,744 -> 5,735 B (`-1,009`), the zlib
+  `--optimize=size` row 125,738 -> 125,081 (`-657`, the `FUNC_READ_CHAR` the todo estimated at
+  649). The same two on 2026-09-22 (the code has moved since): 7,126 B, unchanged by the stream
+  rule below; zlib `--optimize=size` 80,863 -> 80,962 (`+99`).
 - The `_eval` interpreters know none of this, nor `require`/`provide` (a file read by the runtime
   `load` of compiled output must not contain them — `.kb/load-inliner.md`). The `CiSpecE2eTest`
   driver passes `--dir . --dir /tmp` to both wasmtime invocations.
+
+## The stream picks the element
+
+`.todo/920`. CLHS: `read-sequence` / `write-sequence` move elements of the STREAM's element type.
+The rule the expansions implement, on all four backends:
+
+- a STRING buffer moves characters on any stream (unchanged: `(stringp seq)`);
+- any other buffer -- a general vector, a fill-pointer vector, a LIST -- moves characters on a
+  STRING stream (`%character-stream-p`: the open stream value's kind slot is `:STRING-INPUT` or
+  `:STRING-OUTPUT`), bytes on every other stream.
+
+Answers checked against sbcl 2026-09-22. It replaces "**the BUFFER, not the stream, picks the
+element**", under which a general vector or a list read from a string stream signalled
+`READ-BYTE expects a binary input stream` on the interpreter and the JVM and read GARBAGE on
+wasm (`(0 #(0 0 0))`, `(3 #(108 108 108))` -- the string-stream record's bytes).
+
+- **One prelude defun, not an inline test.** `LispPreludeLibrary` `%character-stream-p`, selected
+  (synthesized entry, `LibraryDefunPruner.SYNTHESIZED_ENTRIES`) when the program names
+  `read-sequence`/`write-sequence` (or the `%read-sequence-raw`/`%write-sequence-raw` aliases) AND
+  can build a stream value (`mayCreateStreamValues`). The expansion calls it only when it is
+  spliced and the backend builds stream values (`JvmExprCompiler`/`WasmExprCompiler`
+  `characterStreams`); otherwise every stream is a bivalent standard stream, the buffer alone
+  decides, and the expansion is the one it always was. The interpreter always asks (it loads the
+  defun on first resolution), and keeps the stream VALUE for it: `evalSequenceWithGrayDispatch`
+  quotes `synonymTarget`, not the unwrapped handle. Inlined per site the kind test cost ~400 B
+  of wasm and ~1 KB of JVM bytecode a site (gguf +3.0 KB, geom +4.0 KB wasm); out of line
+  +1.4 / +1.5 KB.
+- **A standard stream keeps the buffer rule.** It is bivalent (sbcl answers characters for a
+  general vector from `*standard-input*` and bytes for an octet vector); keeping the buffer rule
+  there left every stdin/stdout program's behaviour, and its bytes, where they were.
+- **A FILE stream keeps the buffer rule -- measured, not chosen.** Telling a character file from a
+  binary one needs the element-type registry (next section), which is spliced only for a program
+  that asks `stream-element-type` or opens a wide stream. The first cut spliced it for every
+  program naming `read-sequence`/`write-sequence` and `open`: a binary loader with a parameter
+  buffer grew +3.2 KB wasm / +4.5 KB JVM (registry +1.7 / +3.6 KB, the rest the inline test), the
+  gguf corpus case +7.0 KB, geom +9.5 KB -- for ZERO ANSI tests (every failing test in the chapter
+  reads a string stream). The cheaper shape to measure is `.todo/931`.
+- The first-class `#'read-sequence` / `#'write-sequence` / `#'write-string` wrappers
+  (`BuiltinFunctionWrappers.boundedSequenceIo`) now expand ONE call with `:end (getf kw :end)` --
+  a nil `:end` is the whole sequence -- instead of two copies of the inline expansion.
+
+Cost and identity (2026-09-22, JVM / Preview 1 / component bytes, default optimize, over 778
+programs: every ci-spec case, every non-GUI example, the size-report corpus): 1,965 artifacts
+byte-identical, 224 differ -- 166 SMALLER (the wrapper change, up to -4.1 KB JVM on a program
+carrying the builtin wrapper table), 58 larger, all naming `read-sequence`/`write-sequence`; the
+largest `read-sequence-and-write-sequence-round-trip` +8.6 / +3.7 / +3.7 KB (untyped buffers that
+no longer narrow), the packed-buffer case +5.3 / +2.6 / +2.6 KB, gguf +3.2 / +1.4 / +1.4 KB, zlib
++480 / +117 / +117 B.
+
+ANSI `streams` (interpreter, suite `ca06bd9`), 2026-09-22: the keyword tail (above) 789 -> 797
+tests counted, lost forms 24 -> 16, 530 -> 545 passing (15 fixed: `READ-`/`WRITE-SEQUENCE.STRING.8-.12`,
+`.ERROR.4 .5 .11 .12`, `WRITE-SEQUENCE.BV.6`); then the stream rule 545 -> 582 (68.4% -> 73.0%),
+37 fixed, 0 regressed: `READ-SEQUENCE.LIST.1-.5 .7`, `.VECTOR.1-.5 .7`, `.FILL-VECTOR.1-.6 .8`,
+`WRITE-SEQUENCE.LIST.1-.5 .7`, `.SIMPLE-VECTOR.1-.5 .7`, `.FILL-VECTOR.1-.5 .7`.
+`READ-SEQUENCE.ERROR.7` (a dotted-list buffer must signal `type-error`) moved from error to fail.
+
+Pinned by `LispEvaluatorTest#readAndWriteSequenceMoveTheElementTheStreamCarries`,
+`#readAndWriteSequenceReadTheirKeywordTailTheWayALambdaListDoes`, their JVM twins,
+`WasmLispCompilerIntegrationTest#readAndWriteSequenceMoveTheElementTheStreamCarriesOnPreview1` /
+`#componentReadAndWriteSequenceMoveTheElementTheStreamCarries`, `SequenceIoNarrowingTest`, ci-spec
+`read-and-write-sequence-move-the-element-a-string-stream-carries`.
 
 ## Element types wider and narrower than one octet
 

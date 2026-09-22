@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SequenceIoNarrowingTest {
 
 	private static String narrowed(String source) {
-		List<LispVal> program = SequenceIoNarrowing.narrow(LispReader.readAllFromString(source));
+		List<LispVal> program = SequenceIoNarrowing.narrow(LispReader.readAllFromString(source), false, false);
 		StringBuilder out = new StringBuilder();
 		program.forEach(form -> out.append(form.print()).append('\n'));
 		return out.toString();
@@ -94,6 +94,30 @@ class SequenceIoNarrowingTest {
 				  (read-sequence buf *standard-input*))
 				""");
 		assertThat(result).contains("(READ-SEQUENCE ");
+	}
+
+	// With a character stream possible, a buffer of element type t may receive
+	// characters: only a buffer that cannot hold one stays proven byte-only.
+	@Test
+	void withCharacterStreamsAnUntypedBufferKeepsTheRuntimeTest() {
+		List<LispVal> program = SequenceIoNarrowing.narrow(LispReader.readAllFromString("""
+				(let ((buf (make-array 8)) (v (vector 0 0)))
+				  (read-sequence buf s)
+				  (write-sequence v s))
+				"""), true, false);
+		String result = program.get(0).print();
+		assertThat(result).contains("(READ-SEQUENCE ").contains("(WRITE-SEQUENCE ");
+	}
+
+	@Test
+	void withCharacterStreamsANumericBufferStillNarrows() {
+		List<LispVal> program = SequenceIoNarrowing.narrow(LispReader.readAllFromString("""
+				(let* ((buf (make-array 8 :element-type '(unsigned-byte 8))) (part (subseq buf 0 4)))
+				  (read-sequence buf s)
+				  (write-sequence part s))
+				"""), true, false);
+		String result = program.get(0).print();
+		assertThat(result).doesNotContain("(READ-SEQUENCE ").doesNotContain("(WRITE-SEQUENCE ");
 	}
 
 	@Test

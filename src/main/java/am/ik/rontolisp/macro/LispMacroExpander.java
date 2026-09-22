@@ -10626,20 +10626,37 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The test that the bound stream temporary is a CHARACTER stream -- a string stream
+	 * (the prelude's {@code %character-stream-p}) -- or null when the site cannot be
+	 * handed one ({@code characterStreams} false: a compile path whose program builds no
+	 * stream value, so every stream is a bivalent standard stream and the buffer alone
+	 * decides, with the expansion exactly the one it always was). A standard stream, a
+	 * socket, a file stream, a Gray instance and a raw handle answer nil, leaving the
+	 * buffer to decide ({@code .kb/read-load-streams.md}, "The stream picks the
+	 * element").
+	 */
+	private static @Nullable LispVal characterStreamTest(LispSymbol st, boolean characterStreams) {
+		return characterStreams ? callOf(LispNames.CHARACTER_STREAM_P_INTERNAL, st) : null;
+	}
+
+	/**
 	 * Expands {@code (read-sequence seq stream [:start s] [:end e])} into a read loop
 	 * over the sequence, yielding the position of the first element not filled (the fill
-	 * position). The keywords must be literal; their values are arbitrary expressions.
-	 * The sequence must be a rank-1 array.
+	 * position). The sequence is a rank-1 array or a list.
 	 *
 	 * <p>
-	 * CL fills ANY sequence from a stream of the matching element type, so the element
-	 * read is chosen by the BUFFER: a character vector -- what {@code (make-array n
-	 * :element-type 'character)} and {@code make-string} build, and the one rank-1 array
-	 * that answers {@code stringp} on every backend ({@code .kb/adjustable-arrays.md}) --
-	 * reads characters, anything else reads bytes. The test is a runtime one because the
-	 * buffer arrives in a variable: {@code alexandria:read-stream-content-into-string}
-	 * allocates it from {@code (stream-element-type stream)}, so no expansion-time
-	 * inspection could see it.
+	 * The element read is the STREAM's where the stream says (CLHS): a string stream
+	 * fills any buffer with characters ({@link #characterStreamTest}). A character vector
+	 * -- what {@code (make-array n :element-type 'character)} and {@code make-string}
+	 * build, and the one rank-1 array that answers {@code stringp} on every backend
+	 * ({@code .kb/adjustable-arrays.md}) -- reads characters from any stream, and every
+	 * other buffer reads bytes from any other stream (a file stream still leaves the
+	 * choice to the buffer: telling a character file from a binary one needs the
+	 * element-type registry, and the measured cost of splicing it into every binary
+	 * loader is recorded in {@code .kb/read-load-streams.md}). The test is a runtime one
+	 * because the buffer and the stream arrive in variables:
+	 * {@code alexandria:read-stream-content-into-string} allocates its buffer from
+	 * {@code (stream-element-type stream)}, so no expansion-time inspection could see it.
 	 *
 	 * <p>
 	 * A PACKED buffer -- a packed float array of any rank, or a packed
@@ -10666,12 +10683,16 @@ public final class LispMacroExpander {
 	 *     (or (%read-sequence-packed __rseq_seq __rseq_st __rseq_i __rseq_end)
 	 *         (%read-sequence-chars __rseq_seq __rseq_st __rseq_i __rseq_end)
 	 *         (let ((__rseq_end (if __rseq_end __rseq_end (length __rseq_seq)))
-	 *               (__rseq_b nil) (__rseq_eof nil) (__rseq_ch (stringp __rseq_seq)))
+	 *               (__rseq_b nil) (__rseq_eof nil)
+	 *               (__rseq_ch (or (stringp __rseq_seq) (%character-stream-p __rseq_st))))
 	 *           (while (if __rseq_eof nil (&lt; __rseq_i __rseq_end))
 	 *             (setq __rseq_b (if __rseq_ch (read-char __rseq_st nil nil)
 	 *                                          (read-byte __rseq_st nil nil)))
 	 *             (if __rseq_b
-	 *                 (progn (%aset __rseq_seq __rseq_i __rseq_b) (setq __rseq_i (+ __rseq_i 1)))
+	 *                 (progn (if (consp __rseq_seq)
+	 *                            (rplaca (nthcdr __rseq_i __rseq_seq) __rseq_b)
+	 *                            (%aset __rseq_seq __rseq_i __rseq_b))
+	 *                        (setq __rseq_i (+ __rseq_i 1)))
 	 *                 (setq __rseq_eof t)))
 	 *           __rseq_i))))
 	 * </pre>
@@ -10679,20 +10700,21 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandReadSequence(LispCons cons) {
-		return expandReadSequence(cons, false);
+		return expandReadSequence(cons, false, true);
 	}
 
 	/**
-	 * Like {@link #expandReadSequence(LispCons)}, but with the sequence proven not to be
-	 * a string ({@code compiler.SequenceIoNarrowing}): the runtime {@code (stringp seq)}
-	 * test and the whole {@code read-char} arm are gone, so the loop reads bytes
-	 * unconditionally. The packed fast path stays -- a packed buffer still moves in one
-	 * transfer.
+	 * Like {@link #expandReadSequence(LispCons)}, but saying whether a string stream can
+	 * reach the site at all, and optionally with the sequence proven to be a byte buffer
+	 * ({@code compiler.SequenceIoNarrowing}): then the runtime character test and the
+	 * whole {@code read-char} arm are gone, so the loop reads bytes unconditionally. The
+	 * packed fast path stays -- a packed buffer still moves in one transfer.
 	 * @param cons the read-sequence expression
-	 * @param byteOnly whether the sequence is certainly not a string
+	 * @param byteOnly whether the sequence is certainly a byte buffer
+	 * @param characterStreams whether a string stream can reach the site
 	 * @return the expanded expression
 	 */
-	public static LispVal expandReadSequence(LispCons cons, boolean byteOnly) {
+	public static LispVal expandReadSequence(LispCons cons, boolean byteOnly, boolean characterStreams) {
 		SequenceArgs args = parseSequenceArgs(cons, LispNames.READ_SEQUENCE);
 		if (args.tailError() != null) {
 			return args.tailError();
@@ -10711,10 +10733,13 @@ public final class LispMacroExpander {
 		LispVal readChar = listToCons(
 				List.of(new LispSymbol(LispNames.READ_CHAR), st, LispNil.INSTANCE, LispNil.INSTANCE));
 		LispVal readElement = byteOnly ? readByte : makeIf(chars, readChar, readByte);
-		LispVal store = listToCons(
-				List.of(new LispSymbol(LispNames.PROGN), listToCons(List.of(new LispSymbol(LispNames.ASET), seq, i, b)),
-						listToCons(List.of(new LispSymbol(LispNames.SETQ), i,
-								listToCons(List.of(new LispSymbol(LispNames.ADD), i, new LispInteger(1)))))));
+		LispVal arrayStore = listToCons(List.of(new LispSymbol(LispNames.ASET), seq, i, b));
+		// A LIST is a sequence too; a byte-only site is a proven vector.
+		LispVal elementStore = byteOnly ? arrayStore : makeIf(callOf(LispNames.CONSP, seq),
+				fmtCall(LispNames.RPLACA, fmtCall(LispNames.NTHCDR, i, seq), b), arrayStore);
+		LispVal store = listToCons(List.of(new LispSymbol(LispNames.PROGN), elementStore,
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), i,
+						listToCons(List.of(new LispSymbol(LispNames.ADD), i, new LispInteger(1)))))));
 		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.WHILE), test,
 				listToCons(List.of(new LispSymbol(LispNames.SETQ), b, readElement)),
 				listToCons(List.of(new LispSymbol(LispNames.IF), b, store,
@@ -10723,7 +10748,10 @@ public final class LispMacroExpander {
 				List.of(listToCons(List.of(end, makeIf(end, end, callOf(LispNames.LENGTH, seq)))),
 						listToCons(List.of(b, LispNil.INSTANCE)), listToCons(List.of(eof, LispNil.INSTANCE))));
 		if (!byteOnly) {
-			charsBinding.add(listToCons(List.of(chars, callOf(LispNames.STRINGP, seq))));
+			LispVal stringBuffer = callOf(LispNames.STRINGP, seq);
+			LispVal characterStream = characterStreamTest(st, characterStreams);
+			charsBinding.add(listToCons(List.of(chars, characterStream == null ? stringBuffer
+					: listToCons(List.of(new LispSymbol(LispNames.OR), stringBuffer, characterStream)))));
 		}
 		LispVal loopBindings = listToCons(charsBinding);
 		LispVal loopLet = listToCons(List.of(new LispSymbol(LispNames.LET), loopBindings, loop, i));
@@ -10767,29 +10795,39 @@ public final class LispMacroExpander {
 	 *                                          (if __wseq_end __wseq_end (length __wseq_seq)))
 	 *                                  __wseq_st)
 	 *                    __wseq_seq)
-	 *             (let ((__wseq_end (if __wseq_end __wseq_end (length __wseq_seq))))
+	 *             (let ((__wseq_end (if __wseq_end __wseq_end (length __wseq_seq)))
+	 *                   (__wseq_ch (%character-stream-p __wseq_st)))
 	 *               (while (&lt; __wseq_i __wseq_end)
-	 *                 (write-byte (aref __wseq_seq __wseq_i) __wseq_st)
+	 *                 (let ((__wseq_x (if (consp __wseq_seq) (nth __wseq_i __wseq_seq)
+	 *                                     (aref __wseq_seq __wseq_i))))
+	 *                   (if __wseq_ch (write-char __wseq_x __wseq_st) (write-byte __wseq_x __wseq_st)))
 	 *                 (setq __wseq_i (+ __wseq_i 1)))
 	 *               __wseq_seq)))))
 	 * </pre>
+	 *
+	 * A string buffer is written as characters to any stream; any other buffer writes
+	 * characters to a CHARACTER stream ({@link #characterStreamTest}) and bytes to the
+	 * rest. Without {@code characterStreams} the {@code __wseq_ch} binding and the
+	 * {@code write-char} arm are absent.
 	 * @param cons the write-sequence expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandWriteSequence(LispCons cons) {
-		return expandWriteSequence(cons, false);
+		return expandWriteSequence(cons, false, true);
 	}
 
 	/**
-	 * Like {@link #expandWriteSequence(LispCons)}, but with the sequence proven not to be
-	 * a string ({@code compiler.SequenceIoNarrowing}): the runtime {@code (stringp seq)}
-	 * test and the whole {@code write-string} branch are gone, so the write-byte loop
+	 * Like {@link #expandWriteSequence(LispCons)}, but saying whether a string stream can
+	 * reach the site at all, and optionally with the sequence proven to be a byte buffer
+	 * ({@code compiler.SequenceIoNarrowing}): then the runtime tests and the whole
+	 * {@code write-string} / {@code write-char} arms are gone, so the write-byte loop
 	 * runs unconditionally. The packed fast path stays.
 	 * @param cons the write-sequence expression
-	 * @param byteOnly whether the sequence is certainly not a string
+	 * @param byteOnly whether the sequence is certainly a byte buffer
+	 * @param characterStreams whether a string stream can reach the site
 	 * @return the expanded expression
 	 */
-	public static LispVal expandWriteSequence(LispCons cons, boolean byteOnly) {
+	public static LispVal expandWriteSequence(LispCons cons, boolean byteOnly, boolean characterStreams) {
 		SequenceArgs args = parseSequenceArgs(cons, LispNames.WRITE_SEQUENCE);
 		if (args.tailError() != null) {
 			return args.tailError();
@@ -10805,12 +10843,33 @@ public final class LispMacroExpander {
 		LispVal stringBranch = makeProgn(List.of(writeStr, seq));
 		// Array branch: the write-byte loop over the (start,end) range.
 		LispVal test = listToCons(List.of(new LispSymbol(LispNames.LT), i, end));
-		LispVal writeByte = listToCons(List.of(new LispSymbol(LispNames.WRITE_BYTE),
-				listToCons(List.of(new LispSymbol(LispNames.AREF), seq, i)), st));
+		LispVal arrayElement = listToCons(List.of(new LispSymbol(LispNames.AREF), seq, i));
+		LispVal characterStream = byteOnly ? null : characterStreamTest(st, characterStreams);
+		LispSymbol chars = new LispSymbol("__wseq_ch");
+		LispVal writeElement;
+		if (byteOnly) {
+			writeElement = fmtCall(LispNames.WRITE_BYTE, arrayElement, st);
+		}
+		else {
+			// A LIST is a sequence too; a byte-only site is a proven vector.
+			LispVal element = makeIf(callOf(LispNames.CONSP, seq), fmtCall(LispNames.NTH, i, seq), arrayElement);
+			if (characterStream == null) {
+				writeElement = fmtCall(LispNames.WRITE_BYTE, element, st);
+			}
+			else {
+				LispSymbol x = new LispSymbol("__wseq_x");
+				writeElement = makeLet(x.name(), element,
+						makeIf(chars, fmtCall(LispNames.WRITE_CHAR, x, st), fmtCall(LispNames.WRITE_BYTE, x, st)));
+			}
+		}
 		LispVal step = listToCons(List.of(new LispSymbol(LispNames.SETQ), i,
 				listToCons(List.of(new LispSymbol(LispNames.ADD), i, new LispInteger(1)))));
-		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.WHILE), test, writeByte, step));
-		LispVal loopBindings = listToCons(List.of(listToCons(List.of(end, wholeEnd))));
+		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.WHILE), test, writeElement, step));
+		List<LispVal> loopBindingList = new java.util.ArrayList<>(List.of(listToCons(List.of(end, wholeEnd))));
+		if (characterStream != null) {
+			loopBindingList.add(listToCons(List.of(chars, characterStream)));
+		}
+		LispVal loopBindings = listToCons(loopBindingList);
 		LispVal arrayBranch = listToCons(List.of(new LispSymbol(LispNames.LET), loopBindings, loop, seq));
 		LispVal dispatch = byteOnly ? arrayBranch : makeIf(callOf(LispNames.STRINGP, seq), stringBranch, arrayBranch);
 		LispVal packed = listToCons(List.of(new LispSymbol(LispNames.WRITE_SEQUENCE_PACKED), seq, st, i, end));

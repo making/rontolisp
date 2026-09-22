@@ -2,12 +2,18 @@
 
 `(write-sequence sequence stream &key start end)`
 
-Writes the elements of `sequence` to `stream` and returns the sequence. Writing starts at index `:start` (default 0) and stops before index `:end` (default the sequence length). The `:start`/`:end` keywords must be literal; their values may be arbitrary expressions. Works in all three backends.
+Writes the elements of `sequence` to `stream` and returns the sequence. Writing starts at index `:start` (default 0) and stops before index `:end` (default the sequence length). The keywords are read like any keyword arguments: the first `:start`/`:end` counts, `:allow-other-keys t` admits others, and an unknown keyword signals a `program-error`. Works in all three backends.
 
 When `sequence` is a string, the bounded slice is written as characters (like `write-string`), so it works with a text output stream such as the one from `with-output-to-string`:
 
 ```lisp
 (with-output-to-string (s) (write-sequence "abcd" s :start 1 :end 3)) ; => "bc"
+```
+
+A string stream takes characters from any sequence, a general vector or a list of characters included:
+
+```lisp
+(with-output-to-string (s) (write-sequence (list #\a #\b #\c) s :end 2)) ; => "ab"
 ```
 
 When `sequence` is a one-dimensional array of integers between 0 and 255, it expands into a `write-byte` loop, so it requires a stream opened with `:direction :output :element-type '(unsigned-byte 8)`.

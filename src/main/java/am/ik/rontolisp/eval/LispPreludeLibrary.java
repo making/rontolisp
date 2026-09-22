@@ -1505,6 +1505,18 @@ public final class LispPreludeLibrary {
 				      (remhash (%obj-ref %fsf-s 0) %file-stream-types)
 				      (if (integerp %fsf-s) (remhash %fsf-s %file-stream-types) nil)))
 				""");
+		// Whether read-sequence / write-sequence move CHARACTERS through a buffer that is
+		// not a string: the STREAM picks the element, and a string stream is a character
+		// stream (.kb/read-load-streams.md, "The stream picks the element"). ONE defun
+		// every site calls, rather than the kind test inline at each: inline it cost
+		// ~400 B of wasm and ~1 KB of JVM bytecode per site.
+		SOURCES.put(LispNames.CHARACTER_STREAM_P_INTERNAL, """
+				(defun %character-stream-p (%csp-s)
+				  (if (%obj-is %csp-s '%STREAM)
+				      (let ((%csp-k (%obj-ref %csp-s 1)))
+				        (if (equal %csp-k :string-input) t (equal %csp-k :string-output)))
+				      nil))
+				""");
 		SOURCES.put(LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL, """
 				(defun %file-stream-element-type (%fset-s)
 				  (let ((%fset-e (%file-stream-entry %fset-s)))
@@ -4291,6 +4303,17 @@ public final class LispPreludeLibrary {
 					|| (referencesName(program, LispNames.STREAM_ELEMENT_TYPE, canonical)
 							&& (referencesName(program, LispNames.OPEN, canonical)
 									|| referencesName(program, LispNames.WITH_OPEN_FILE, canonical)));
+		}
+		// %character-stream-p: called from the read-sequence / write-sequence expansions
+		// the expression compilers build, and only needed where a string stream VALUE can
+		// exist at all -- without one every stream is a bivalent standard stream and the
+		// buffer alone decides.
+		if (LispNames.CHARACTER_STREAM_P_INTERNAL.equals(entry)) {
+			return (referencesName(program, LispNames.READ_SEQUENCE, canonical)
+					|| referencesName(program, LispNames.WRITE_SEQUENCE, canonical)
+					|| referencesName(program, LispNames.READ_SEQUENCE_RAW_INTERNAL, canonical)
+					|| referencesName(program, LispNames.WRITE_SEQUENCE_RAW_INTERNAL, canonical))
+					&& am.ik.rontolisp.macro.LispMacroExpander.mayCreateStreamValues(program);
 		}
 		if (LispNames.STREAM_TARGET.equals(entry)) {
 			return am.ik.rontolisp.macro.LispMacroExpander.mayCreateStreamValues(program)

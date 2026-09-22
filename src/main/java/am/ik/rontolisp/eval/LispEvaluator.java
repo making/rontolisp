@@ -5687,8 +5687,10 @@ public final class LispEvaluator {
 					env);
 		}
 		LispVal seq = eval(parts.get(1), env);
-		LispVal stream = Environment.streamTarget(eval(parts.get(2), env));
-		if (stream instanceof LispInstance) {
+		// The synonym resolved but an open stream value KEPT: the expansion reads its
+		// kind to tell a character stream (LispMacroExpander.CharacterStreams).
+		LispVal stream = Environment.synonymTarget(eval(parts.get(2), env));
+		if (stream instanceof LispInstance inst && !inst.hasTag(am.ik.rontolisp.LispLayout.STREAM_TAG)) {
 			// The first occurrence of a keyword counts (CLHS 3.4.1.4), as in the
 			// expansion.
 			LispVal start = null;

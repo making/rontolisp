@@ -2238,7 +2238,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// (compiler/SequenceIoNarrowing). After every gate scan, like the WASM twin:
 		// the narrowed expansion keeps the operator spellings the scans key on out of
 		// the way by running once they have all read the program.
-		topLevelExprs = SequenceIoNarrowing.narrow(topLevelExprs);
+		topLevelExprs = SequenceIoNarrowing.narrow(topLevelExprs,
+				usesStreamValues && functions.containsKey(LispNames.CHARACTER_STREAM_P_INTERNAL),
+				functions.containsKey(LispNames.WIDE_WIDTH_INTERNAL));
 		Ctx chunkCtx = null;
 		for (LispVal expr : topLevelExprs) {
 			if (chunkCtx == null || chunkCtx.code.size() >= chunkCodeBudget) {

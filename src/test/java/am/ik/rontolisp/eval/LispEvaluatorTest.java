@@ -11518,6 +11518,46 @@ class LispEvaluatorTest {
 			.isEqualTo("((5 \"abcde\") (5 \"abcde\") :PROGRAM-ERROR :PROGRAM-ERROR \"bcd\" :PROGRAM-ERROR)");
 	}
 
+	// The STREAM picks the element (CLHS): a string stream moves characters into and out
+	// of any buffer, a general vector and a LIST included; a binary stream moves bytes,
+	// into a list too. The answers are sbcl's (.kb/read-load-streams.md, "The stream
+	// picks the element").
+	private static final String STREAM_PICKS_THE_ELEMENT_PROGRAM = """
+			(print (let ((v (vector nil nil nil nil nil)))
+			         (with-input-from-string (is "abc") (list (read-sequence v is :start 1) v))))
+			(print (let ((l (make-list 5)))
+			         (with-input-from-string (is "abcdefg") (list (read-sequence l is :start 1 :end 4) l))))
+			(print (let ((f (make-array 10 :initial-element nil :fill-pointer 3)))
+			         (with-input-from-string (is "xyz!") (list (read-sequence f is) f))))
+			(print (with-output-to-string (os)
+			         (write-sequence (vector #\\a #\\b #\\c) os :start 1)
+			         (write-sequence (list #\\d #\\e #\\f) os :end 2)))
+			(with-open-file (o "%1$s/rs.dat" :direction :output :element-type '(unsigned-byte 8)
+			                 :if-exists :supersede)
+			  (write-sequence (list 1 2 3) o))
+			(print (with-open-file (i "%1$s/rs.dat" :element-type '(unsigned-byte 8))
+			         (let ((v (make-array 3 :initial-element 0)) (l (make-list 2)))
+			           (list (read-sequence v i :end 1) v (read-sequence l i) l))))
+			""";
+
+	private static final String STREAM_PICKS_THE_ELEMENT_EXPECTED = """
+			(4 #(NIL #\\a #\\b #\\c NIL))
+			(4 (NIL #\\a #\\b #\\c NIL))
+			(3 #(#\\x #\\y #\\z))
+			"bcde"
+			(1 #(1 0 0) 2 (2 3))""";
+
+	@Test
+	void readAndWriteSequenceMoveTheElementTheStreamCarries(@TempDir Path tempDir) {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		String dir = tempDir.toString().replace("\\", "\\\\");
+		for (LispVal expr : LispReader.readAllFromString(STREAM_PICKS_THE_ELEMENT_PROGRAM.formatted(dir))) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(STREAM_PICKS_THE_ELEMENT_EXPECTED);
+	}
+
 	@Test
 	void readWriteSequenceStartEnd(@TempDir Path tempDir) {
 		String file = tempDir.resolve("se.dat").toString().replace("\\", "\\\\");
