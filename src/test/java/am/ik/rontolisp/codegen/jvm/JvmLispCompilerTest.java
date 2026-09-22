@@ -5852,6 +5852,21 @@ class JvmLispCompilerTest {
 				(1 #(1 0 0) 2 (2 3))""");
 	}
 
+	// A program using the Gray protocol reaches every read-sequence / write-sequence
+	// through gray.lisp's dispatchers, which must hand the built-in the stream VALUE --
+	// its kind is what says "string stream" -- not the resolved handle (the ci-spec
+	// corpus went red on exactly this).
+	@Test
+	void compileAndRunAStringStreamPicksTheElementThroughTheGrayDispatchers() throws Exception {
+		assertThat(compileAndRunGray("""
+				(defclass upcaser (rontolisp:fundamental-character-output-stream) ())
+				(defmethod rontolisp:stream-write-string ((s upcaser) str) str)
+				(print (let ((l (make-list 3)))
+				         (with-input-from-string (is "abc") (list (read-sequence l is) l))))
+				(print (with-output-to-string (os) (write-sequence (vector #\\x #\\y) os)))
+				""")).isEqualTo("(3 (#\\a #\\b #\\c))\n\"xy\"");
+	}
+
 	// A NARROWED site (a let-bound byte buffer) in a program that opens a wide stream:
 	// its packed arm moves raw octets, so it must be guarded by %wide-width like every
 	// other site. The narrowing pass sees only the top-level forms -- never the spliced

@@ -505,7 +505,12 @@ wasm (`(0 #(0 0 0))`, `(3 #(108 108 108))` -- the string-stream record's bytes).
   `characterStreams`); otherwise every stream is a bivalent standard stream, the buffer alone
   decides, and the expansion is the one it always was. The interpreter always asks (it loads the
   defun on first resolution), and keeps the stream VALUE for it: `evalSequenceWithGrayDispatch`
-  quotes `synonymTarget`, not the unwrapped handle. Inlined per site the kind test cost ~400 B
+  quotes `synonymTarget`, not the unwrapped handle. So do gray.lisp's
+  `%gray-read-sequence-dispatch` / `%gray-write-sequence-dispatch`, through which a program
+  using the Gray protocol reaches EVERY site: they test the resolved target for an instance but
+  hand the built-in the stream as given (handing it the handle made the ci-spec corpus red on the
+  JVM, `JvmLispCompilerTest#compileAndRunAStringStreamPicksTheElementThroughTheGrayDispatchers`).
+  Inlined per site the kind test cost ~400 B
   of wasm and ~1 KB of JVM bytecode a site (gguf +3.0 KB, geom +4.0 KB wasm); out of line
   +1.4 / +1.5 KB.
 - **A standard stream keeps the buffer rule.** It is bivalent (sbcl answers characters for a
