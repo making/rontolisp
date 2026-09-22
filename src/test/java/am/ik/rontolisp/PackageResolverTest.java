@@ -917,6 +917,34 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void defpackageClauseViolationsAreHardErrorsAtTopLevel() {
+		// A TOP-LEVEL defpackage is the read/compile-time directive: its clause
+		// violations stay LispPackageException (no handler exists yet), now typed so
+		// a non-top-level one can become the condition CL names.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :dcv-g (:use) (:export \"A\"))");
+		assertThatThrownBy(() -> resolve(resolver, "(defpackage :dcv1 (:use) (:size 1) (:size 2))"))
+			.isInstanceOf(DefpackageException.class)
+			.hasMessageContaining(":SIZE");
+		assertThatThrownBy(
+				() -> resolve(resolver, "(defpackage :dcv2 (:use) (:shadow \"A\") (:import-from :dcv-g \"A\"))"))
+			.isInstanceOfSatisfying(DefpackageException.class,
+					ex -> assertThat(ex.kind()).isEqualTo(DefpackageException.Kind.PROGRAM_ERROR))
+			.hasMessageContaining("disjoint");
+		assertThatThrownBy(() -> resolve(resolver, "(defpackage :dcv3 (:use) (:import-from :dcv-g \"NOPE\"))"))
+			.isInstanceOfSatisfying(DefpackageException.class, ex -> {
+				assertThat(ex.kind()).isEqualTo(DefpackageException.Kind.PACKAGE_ERROR);
+				assertThat(ex.designator()).isEqualTo("DCV-G");
+				assertThat(ex.missingSymbol()).isEqualTo("NOPE");
+			});
+		assertThat(resolver.findPackageName("DCV2")).isNull();
+		// A built-in (pre-seeded) package is never checked: its declared members are
+		// not the whole of it.
+		assertThat(resolve(resolver, "(defpackage :dcv4 (:use) (:import-from :cl-user #:dcv-anything))"))
+			.isEqualTo(":DCV4");
+	}
+
+	@Test
 	void defpackageDesignatorsAcceptCharacters() {
 		// CLHS glossary: a character is a string designator, so #\H names the
 		// package "H" and #\F the symbol "F" -- the spelling the defpackage tests
@@ -1146,7 +1174,7 @@ class PackageResolverTest {
 		// name in the current package resolves to it.
 		PackageResolver resolver = new PackageResolver();
 		resolver.resolveProgram(LispReader.readAllFromString("""
-				(defpackage :spa-lib (:use :cl) (:export #:fn))
+				(defpackage :spa-lib (:use :cl) (:export #:fn) (:intern #:helper))
 				(defpackage :spa-lib2 (:use :cl) (:export #:other))
 				(defpackage :spa-mid (:use :cl :spa-lib) (:export #:fn))
 				(defpackage :spa-app (:use :cl :spa-lib :spa-lib2) (:import-from :spa-lib #:helper) (:shadow #:other))
@@ -1178,7 +1206,7 @@ class PackageResolverTest {
 		// name is EXCLUDED. Computed over the symbols that occur in the resolved program.
 		PackageResolver resolver = new PackageResolver();
 		List<LispVal> resolved = resolver.resolveProgram(LispReader.readAllFromString("""
-				(defpackage :spa-lib (:use :cl) (:export #:fn))
+				(defpackage :spa-lib (:use :cl) (:export #:fn) (:intern #:helper))
 				(defpackage :spa-lib2 (:use :cl) (:export #:other))
 				(defpackage :spa-mid (:use :cl :spa-lib) (:export #:fn))
 				(defpackage :spa-app (:use :cl :spa-lib :spa-lib2) (:import-from :spa-lib #:helper) (:shadow #:other))

@@ -16005,6 +16005,93 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void defpackageClauseViolationsSignalProgramError() {
+		// CLHS defpackage, SBCL-checked: a repeated :size / :documentation, an
+		// ill-formed :size, an unknown option and any two of :shadow /
+		// :shadowing-import-from / :import-from / :intern (and :intern / :export)
+		// naming one symbol are program-errors a handler catches.
+		assertThat(evalMulti("""
+				(defpackage "DPV-G" (:use) (:export "A"))
+				(defmacro dpv (form)
+				  `(handler-case (progn ,form :none)
+				     (program-error () :pe)
+				     (error () :other)))
+				(list (dpv (defpackage "DPV1" (:use) (:size 10) (:size 20)))
+				      (dpv (defpackage "DPV2" (:use) (:documentation "a") (:documentation "b")))
+				      (dpv (defpackage "DPV3" (:use) (:size 1 2)))
+				      (dpv (defpackage "DPV4" (:use) (:bogus 1)))
+				      (dpv (defpackage "DPV5" (:use) (:shadow "A") (:shadowing-import-from "DPV-G" "A")))
+				      (dpv (defpackage "DPV6" (:use) (:shadow "A") (:import-from "DPV-G" "A")))
+				      (dpv (defpackage "DPV7" (:use) (:shadow "A") (:intern "A")))
+				      (dpv (defpackage "DPV8" (:use) (:shadowing-import-from "DPV-G" "A") (:import-from "DPV-G" "A")))
+				      (dpv (defpackage "DPV9" (:use) (:shadowing-import-from "DPV-G" "A") (:intern "A")))
+				      (dpv (defpackage "DPV10" (:use) (:import-from "DPV-G" "A") (:intern "A")))
+				      (dpv (defpackage "DPV11" (:use) (:export "A") (:intern "A")))
+				      (find-package "DPV7")
+				      (dpv (defpackage "DPV12" (:use) (:shadow "A" "A") (:export "B") (:export "B"))))
+				""").print()).isEqualTo("(:PE :PE :PE :PE :PE :PE :PE :PE :PE :PE :PE NIL :NONE)");
+	}
+
+	@Test
+	void defpackageNicknameAndPackageErrorsArePackageErrors() {
+		// A nickname naming another package (or its nickname) and a :use /
+		// :import-from of a package that does not exist are package-errors (SBCL:
+		// the package slot is the package being defined / the missing name).
+		assertThat(evalMulti("""
+				(defpackage "DPN-A" (:use) (:nicknames "DPN-Q"))
+				(defmacro dpn (form)
+				  `(handler-case (progn ,form :none)
+				     (package-error (c) (list :pkg (package-error-package c)))
+				     (error () :other)))
+				(list (dpn (defpackage "DPN1" (:use) (:nicknames "DPN-A")))
+				      (dpn (defpackage "DPN2" (:use) (:nicknames "DPN-Q")))
+				      (dpn (defpackage "DPN3" (:use "DPN-NOPE")))
+				      (dpn (defpackage "DPN4" (:use) (:import-from "DPN-NOPE" "X")))
+				      (find-package "DPN1"))
+				""").print()).isEqualTo("((:PKG :DPN1) (:PKG :DPN2) (:PKG :DPN-NOPE) (:PKG :DPN-NOPE) NIL)");
+	}
+
+	@Test
+	void defpackageImportOfAMissingSymbolOffersAContinueRestartThatInternsIt() {
+		// SBCL: a package-error on the SOURCE package with a CONTINUE restart ("INTERN
+		// it.") that interns the name there and imports it.
+		assertThat(evalMulti("""
+				(defpackage "DPM-G" (:use) (:export "A"))
+				(list (handler-case (progn (defpackage "DPM1" (:use) (:import-from "DPM-G" "NOT-THERE")) :none)
+				        (package-error (c) (list :pkg (package-error-package c))))
+				      (find-package "DPM1")
+				      (handler-bind ((package-error
+				                       (lambda (c)
+				                         (declare (ignore c))
+				                         (invoke-restart (find 'continue (compute-restarts) :key #'restart-name)))))
+				        (defpackage "DPM2" (:use) (:shadowing-import-from "DPM-G" "NOT-THERE" "A")))
+				      (multiple-value-list (find-symbol "NOT-THERE" "DPM2"))
+				      (multiple-value-list (find-symbol "NOT-THERE" "DPM-G")))
+				""").print())
+			.isEqualTo("((:PKG :DPM-G) NIL :DPM2 (DPM-G::NOT-THERE :INTERNAL) (DPM-G::NOT-THERE :INTERNAL))");
+		// A package code was read into is not fully described by its member table (a
+		// symbol merely read is not recorded), so an import from it is not refused.
+		assertThat(evalMulti("""
+				(defpackage "DPM-OPEN" (:use))
+				(list 'dpm-open::helper
+				      (progn (defpackage "DPM3" (:use) (:import-from "DPM-OPEN" "HELPER")) :ok))
+				""").print()).isEqualTo("(DPM-OPEN::HELPER :OK)");
+	}
+
+	@Test
+	void defpackageInternOfAnInheritedNameFindsTheInheritedSymbol() {
+		// CLHS: :intern names are "found or created" AFTER :use, so a name a used
+		// package exports stays the inherited symbol (the ANSI defpackage.26 row),
+		// whichever order the clauses come in.
+		assertThat(evalMulti("""
+				(defpackage "DPI-G" (:use) (:export "D"))
+				(defpackage "DPI1" (:intern "D" "H") (:use "DPI-G"))
+				(list (multiple-value-list (find-symbol "D" "DPI1"))
+				      (multiple-value-list (find-symbol "H" "DPI1")))
+				""").print()).isEqualTo("((DPI-G:D :INHERITED) (DPI1::H :INTERNAL))");
+	}
+
+	@Test
 	void internRecordsAMemberOfARuntimePackage() {
 		// A runtime package keeps a member table (SBCL-checked): find-symbol answers nil
 		// before the intern and the symbol after, the status flips from nil (a fresh

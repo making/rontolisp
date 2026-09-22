@@ -128,8 +128,19 @@ uninterned シンボル(`#:name`、
 常にそのパッケージ自身のシンボルに解決され、`cl`(や使用パッケージ)の同名
 シンボルには決して解決されません — これによりライブラリは独自の
 `digit-char-p` や `defconstant` を定義できます。`:intern` は export せずに
-パッケージが所有する名前を追加します。それ以外の clause、まだ存在しない
-パッケージの使用はエラーです。
+パッケージが所有する名前を追加します — ただし使用先パッケージがその名前を
+export している場合は、Common Lisp と同様にそのシンボルを継承します。
+それ以外の clause、まだ存在しない
+パッケージの使用はエラーです。`:size` と `:documentation` はそれぞれ一度だけ
+指定できます。`:shadow`、`:shadowing-import-from`、`:import-from`、`:intern` に
+与える名前は互いに素でなければならず、`:intern` と `:export` も同様です
+(違反は `program-error`)。import 元パッケージにない名前の import は
+`package-error` で、その `continue` restart は名前を import 元に intern します。
+rontolisp はプログラムが読んだだけのシンボルを記録しないため、この検査は
+`defpackage`/`make-package` で作られ、まだどのソースも読み込まれていない
+パッケージに限られます。実行時に走る `defpackage`(関数本体の中、または `eval`
+経由)はこれらを handler が捕捉できるコンディションとしてシグナルし、
+トップレベルのものは read/コンパイル時に失敗します。
 既に存在するパッケージを名前に指定した `defpackage` は、そのパッケージを
 変更します(Common Lisp のルール) — clause は既存の内容にマージされ、これに
 より rontolisp が既に seed 済みのパッケージをライブラリ側が宣言できます。

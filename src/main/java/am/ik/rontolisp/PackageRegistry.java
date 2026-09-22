@@ -755,6 +755,18 @@ public final class PackageRegistry {
 	private final Map<String, Set<String>> recorded = new HashMap<>();
 
 	/**
+	 * The canonical names of the packages whose member table is the WHOLE of them: made
+	 * by a {@code defpackage} or {@code make-package} and never read into since. A symbol
+	 * merely READ under a package is not recorded (the resolver mints its spelling
+	 * without writing the table), so once any source minted a name there -- an
+	 * {@code in-package} region, a {@code pkg::name} reference -- a name absent from the
+	 * table may still be one CL would have interned, and only a sealed package may answer
+	 * "no such symbol" (the {@code defpackage} {@code :import-from} check). Travels with
+	 * a {@link #rename}, goes with a {@link #remove}.
+	 */
+	private final Set<String> sealed = new HashSet<>();
+
+	/**
 	 * The canonical names of the packages the constructor seeds (plus {@code keyword},
 	 * the designator of the keyword package accepted by {@code intern}). Kept in sync
 	 * with the constructor by hand -- except the 15 uiop sub-packages, which come from
@@ -1482,7 +1494,37 @@ public final class PackageRegistry {
 		this.runtimePackages.remove(canonicalName);
 		this.unhomed.remove(canonicalName);
 		this.recorded.remove(canonicalName);
+		this.sealed.remove(canonicalName);
 		return true;
+	}
+
+	/**
+	 * Marks a freshly created package as fully described by its member table (see
+	 * {@link #sealed}).
+	 * @param canonicalName the canonical package name
+	 */
+	public void markSealed(String canonicalName) {
+		this.sealed.add(canonicalName);
+	}
+
+	/**
+	 * Records that source minted a name in the package without recording it: its member
+	 * table no longer answers for every symbol CL would find there.
+	 * @param canonicalName the canonical package name
+	 */
+	public void unseal(String canonicalName) {
+		if (!this.sealed.isEmpty()) {
+			this.sealed.remove(canonicalName);
+		}
+	}
+
+	/**
+	 * Whether the package's member table is the whole of it (see {@link #sealed}).
+	 * @param canonicalName the canonical package name
+	 * @return {@code true} when a name absent from the table is absent from the package
+	 */
+	public boolean isSealed(String canonicalName) {
+		return this.sealed.contains(canonicalName);
 	}
 
 	/**
@@ -1584,6 +1626,9 @@ public final class PackageRegistry {
 		Set<String> minted = this.recorded.remove(oldName);
 		if (minted != null) {
 			this.recorded.put(newName, minted);
+		}
+		if (this.sealed.remove(oldName)) {
+			this.sealed.add(newName);
 		}
 	}
 

@@ -1032,6 +1032,13 @@ public final class LispEvaluator {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						LispNames.EVAL + " expects 1 argument, got " + args.size());
 			}
+			// (eval '(defpackage ...)) makes the form top-level, but it runs at run
+			// time under the caller's handlers: register it the way a nested
+			// defpackage does, so its clause errors are catchable conditions.
+			if (args.get(0) instanceof LispCons form && form.car() instanceof LispSymbol head
+					&& LispNames.DEFPACKAGE.equals(LispSymbol.memberName(head.name()))) {
+				return registerRuntimeDefpackage(form);
+			}
 			return eval(args.get(0));
 		}, true));
 		// compile: coerce a literal (lambda ...) definition to a function in the null
@@ -6928,9 +6935,10 @@ public final class LispEvaluator {
 				// registry, so the packages a helper function defines exist for
 				// everything evaluated after the call. resolve() is the whole
 				// registration (it is the same entry the top-level directive takes) and
-				// answers the quoted package symbol the standard returns, which is
-				// exactly the "expansion" this form has.
-				return this.packageResolver.resolve(cons);
+				// answers the package keyword the standard returns, which is exactly
+				// the "expansion" this form has. Its clause errors become the
+				// conditions CL names, which a handler around the form can catch.
+				return registerRuntimeDefpackage(cons);
 			case LispNames.DECLAIM:
 				// (declaim (special ...)) proclaims specialness before the form
 				// collapses to nil; other declarations remain no-ops.
@@ -9017,6 +9025,38 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Registers a {@code defpackage} at RUN time -- one nested in code, or handed to
+	 * {@code eval} -- turning its clause errors into the conditions CL names: a
+	 * {@code program-error} for a malformed form, a {@code package-error} otherwise, and
+	 * for an import of a name the source package lacks a {@code package-error} with a
+	 * {@code continue} restart that interns the name there and tries again.
+	 * @param cons the {@code defpackage} form
+	 * @return the package keyword
+	 */
+	private LispVal registerRuntimeDefpackage(LispCons cons) {
+		while (true) {
+			try {
+				return this.packageResolver.resolve(cons);
+			}
+			catch (am.ik.rontolisp.DefpackageException ex) {
+				String message = java.util.Objects.requireNonNullElse(ex.getMessage(), LispNames.DEFPACKAGE);
+				if (ex.kind() == am.ik.rontolisp.DefpackageException.Kind.PROGRAM_ERROR) {
+					throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, message);
+				}
+				String missing = ex.missingSymbol();
+				if (missing == null) {
+					return signalPackageError(message, ex.designator());
+				}
+				// The correctable case (SBCL's "INTERN it."): a CONTINUE restart that
+				// interns the name in the source package, after which the definition
+				// is tried again and finds it.
+				eval(packageErrorForm(message, ex.designator(), true), this.globalEnv);
+				this.packageResolver.internSpellingIn(ex.designator(), missing, true);
+			}
+		}
+	}
+
+	/**
 	 * Signals a catchable {@code package-error} carrying the reason in its message and
 	 * the offending designator (upcased, keyword-shaped like {@code find-package}
 	 * answers; nil for an empty designator, which designates no package anywhere) in its
@@ -9028,6 +9068,15 @@ public final class LispEvaluator {
 	 * @return nothing (always throws)
 	 */
 	private LispVal signalPackageError(String message, String designator) {
+		return eval(packageErrorForm(message, designator, false), this.globalEnv);
+	}
+
+	/**
+	 * The {@code (error 'package-error ...)} form {@link #signalPackageError} evaluates;
+	 * with {@code continuable} it is wrapped in a {@code restart-case} offering
+	 * {@code continue}, which returns normally.
+	 */
+	private LispVal packageErrorForm(String message, String designator, boolean continuable) {
 		List<LispVal> parts = new ArrayList<>();
 		parts.add(new LispSymbol(LispNames.ERROR));
 		parts.add(quoteValue(new LispSymbol(ClosRegistry.PACKAGE_ERROR_CLASS_NAME)));
@@ -9036,11 +9085,23 @@ public final class LispEvaluator {
 				: quoteValue(packageKeyword(designator.toUpperCase(java.util.Locale.ROOT))));
 		parts.add(new LispSymbol(":FORMAT-CONTROL"));
 		parts.add(quoteValue(new LispString(message)));
+		if (continuable) {
+			LispVal form = LispNil.INSTANCE;
+			for (int i = parts.size() - 1; i >= 0; i--) {
+				form = new LispCons(parts.get(i), form);
+			}
+			parts.clear();
+			parts.add(new LispSymbol(LispNames.RESTART_CASE));
+			parts.add(form);
+			parts.add(new LispCons(new LispSymbol(LispNames.CONTINUE), new LispCons(LispNil.INSTANCE, new LispCons(
+					new LispSymbol(":REPORT"),
+					new LispCons(new LispString("INTERN it."), new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))))));
+		}
 		LispVal form = LispNil.INSTANCE;
 		for (int i = parts.size() - 1; i >= 0; i--) {
 			form = new LispCons(parts.get(i), form);
 		}
-		return eval(form, this.globalEnv);
+		return form;
 	}
 
 	private static void requireSingleArg(String name, List<LispVal> args) {

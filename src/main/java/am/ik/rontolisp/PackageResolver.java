@@ -1219,6 +1219,7 @@ public final class PackageResolver {
 			throw new LispPackageException(LispNames.DEFPACKAGE + " expects a package name");
 		}
 		String name = designator(LispNames.DEFPACKAGE, "a package name", parts.get(1));
+		validateDefpackageShape(parts.subList(2, parts.size()), definePackageVariant);
 		// CLHS 11.1.2.1: defpackage over an EXISTING package modifies it -- the new
 		// definition is merged into what is already there rather than replacing it or
 		// signalling. That is what lets a library declare a package rontolisp has
@@ -1230,7 +1231,7 @@ public final class PackageResolver {
 		LispPackage existing = null;
 		if (this.registry.contains(name)) {
 			if (!this.registry.canonicalName(name).equals(name)) {
-				throw new LispPackageException("Package already exists: " + name);
+				throw DefpackageException.packageError("Package already exists: " + name, name);
 			}
 			existing = this.registry.get(name);
 		}
@@ -1254,7 +1255,7 @@ public final class PackageResolver {
 						String used = registeredPackageName(
 								this.registry.canonicalName(designator(LispNames.USE_KEYWORD, "a package name", arg)));
 						if (!this.registry.contains(used)) {
-							throw new LispPackageException("No such package: " + used);
+							throw DefpackageException.packageError("No such package: " + used, used);
 						}
 						for (String use : withImpliedUses(used)) {
 							if (!useList.contains(use)) {
@@ -1273,15 +1274,11 @@ public final class PackageResolver {
 					// re-export their external symbols. The exports ride the same
 					// import-redirect the export-of-an-inherited-name pass below records,
 					// so each re-exported name stays the used package's symbol.
-					if (!definePackageVariant) {
-						throw new LispPackageException(
-								"Unsupported " + LispNames.DEFPACKAGE + " clause: " + keyword.name());
-					}
 					for (LispVal arg : args.subList(1, args.size())) {
 						String used = registeredPackageName(
 								this.registry.canonicalName(designator(":use-reexport", "a package name", arg)));
 						if (!this.registry.contains(used)) {
-							throw new LispPackageException("No such package: " + used);
+							throw DefpackageException.packageError("No such package: " + used, used);
 						}
 						for (String use : withImpliedUses(used)) {
 							if (!useList.contains(use)) {
@@ -1298,7 +1295,7 @@ public final class PackageResolver {
 						// re-declaration, not a collision (a modifying defpackage
 						// repeats its own :nicknames clause).
 						if (this.registry.contains(nickname) && !this.registry.canonicalName(nickname).equals(name)) {
-							throw new LispPackageException("Package already exists: " + nickname);
+							throw DefpackageException.packageError("Package already exists: " + nickname, name);
 						}
 						nicknames.add(nickname);
 					}
@@ -1353,8 +1350,8 @@ public final class PackageResolver {
 						shadows.add(PackageRegistry.isClSymbol(shadowedLower) ? shadowedLower : shadowed);
 					}
 				}
-				default -> throw new LispPackageException(
-						"Unsupported " + LispNames.DEFPACKAGE + " clause: " + keyword.name());
+				default -> throw DefpackageException
+					.programError("Unsupported " + LispNames.DEFPACKAGE + " clause: " + keyword.name());
 			}
 		}
 		// Shadowing imports win over plain imports of the same name (their whole
@@ -1382,6 +1379,9 @@ public final class PackageResolver {
 				}
 			}
 		}
+		// CLHS defpackage: :intern runs AFTER :use, and "finds or creates" -- a name some
+		// used package exports is found there (inherited), not minted as an own symbol.
+		interned.removeIf(internedName -> useList.stream().anyMatch(used -> inheritedFrom(used, internedName) != null));
 		Set<String> owned = new HashSet<>(exports);
 		owned.addAll(shadows);
 		owned.addAll(interned);
@@ -1404,9 +1404,78 @@ public final class PackageResolver {
 		if (!this.inProgramResolution && existing == null) {
 			this.registry.markRuntimePackage(name);
 		}
+		if (existing == null) {
+			this.registry.markSealed(name);
+		}
 		// The value is the package, which at run time is its keyword -- the same object
 		// make-package and find-package answer, so the three compare eq.
 		return new LispSymbol(":" + name.toUpperCase(java.util.Locale.ROOT));
+	}
+
+	/**
+	 * The {@code defpackage} checks CLHS puts on the FORM, before any package is looked
+	 * up (SBCL makes them at macroexpansion): every option is a known keyword clause,
+	 * {@code :size} and {@code :documentation} appear at most once with one argument, and
+	 * the names of {@code :shadow}, {@code :shadowing-import-from}, {@code :import-from}
+	 * and {@code :intern} are pairwise disjoint, as are those of {@code :intern} and
+	 * {@code :export}. Each violation is a {@code program-error}.
+	 */
+	private static void validateDefpackageShape(List<LispVal> clauses, boolean definePackageVariant) {
+		Map<String, Set<String>> names = new HashMap<>();
+		Set<String> singletons = new HashSet<>();
+		for (LispVal clause : clauses) {
+			if (!(clause instanceof LispCons clauseCons) || !(clauseCons.car() instanceof LispSymbol keyword)
+					|| !keyword.isKeyword()) {
+				throw DefpackageException.programError(
+						LispNames.DEFPACKAGE + " expects (:use ...) / (:export ...) clauses, got " + clause.print());
+			}
+			List<LispVal> args = clauseCons.toList();
+			String option = keyword.name();
+			switch (option) {
+				case ":SIZE", ":DOCUMENTATION" -> {
+					if (!singletons.add(option)) {
+						throw DefpackageException
+							.programError(LispNames.DEFPACKAGE + ": can't specify " + option + " more than once");
+					}
+					if (args.size() != 2) {
+						throw DefpackageException.programError(LispNames.DEFPACKAGE + ": " + option
+								+ " expects a single argument, got " + clause.print());
+					}
+				}
+				case ":SHADOW", ":INTERN", LispNames.EXPORT_KEYWORD -> collectNames(names, option, args, 1);
+				case LispNames.IMPORT_FROM_KEYWORD, ":SHADOWING-IMPORT-FROM" -> collectNames(names, option, args, 2);
+				case LispNames.USE_KEYWORD, LispNames.NICKNAMES_KEYWORD, LispNames.LOCAL_NICKNAMES_KEYWORD -> {
+				}
+				case ":USE-REEXPORT" -> {
+					if (!definePackageVariant) {
+						throw DefpackageException
+							.programError("Unsupported " + LispNames.DEFPACKAGE + " clause: " + option);
+					}
+				}
+				default -> throw DefpackageException
+					.programError("Unsupported " + LispNames.DEFPACKAGE + " clause: " + option);
+			}
+		}
+		String[][] disjoint = { { ":SHADOW", ":SHADOWING-IMPORT-FROM" }, { ":SHADOW", LispNames.IMPORT_FROM_KEYWORD },
+				{ ":SHADOW", ":INTERN" }, { ":SHADOWING-IMPORT-FROM", LispNames.IMPORT_FROM_KEYWORD },
+				{ ":SHADOWING-IMPORT-FROM", ":INTERN" }, { LispNames.IMPORT_FROM_KEYWORD, ":INTERN" },
+				{ ":INTERN", LispNames.EXPORT_KEYWORD } };
+		for (String[] pair : disjoint) {
+			Set<String> common = new java.util.TreeSet<>(names.getOrDefault(pair[0], Set.of()));
+			common.retainAll(names.getOrDefault(pair[1], Set.of()));
+			if (!common.isEmpty()) {
+				throw DefpackageException.programError(LispNames.DEFPACKAGE + ": parameters " + pair[0] + " and "
+						+ pair[1] + " must be disjoint but have common elements " + common);
+			}
+		}
+	}
+
+	// The symbol names of one clause (from argument index `from`), keyed by option.
+	private static void collectNames(Map<String, Set<String>> names, String option, List<LispVal> args, int from) {
+		Set<String> into = names.computeIfAbsent(option, k -> new HashSet<>());
+		for (LispVal arg : args.subList(Math.min(from, args.size()), args.size())) {
+			into.add(designator(option.toLowerCase(java.util.Locale.ROOT), "a symbol name", arg));
+		}
 	}
 
 	private static String packageDesignator(String context, LispVal designator) {
@@ -1425,7 +1494,7 @@ public final class PackageResolver {
 		String source = registeredPackageName(
 				this.registry.canonicalName(designator(clauseName, "a package name", args.get(1))));
 		if (!this.registry.contains(source)) {
-			throw new LispPackageException("No such package: " + source);
+			throw DefpackageException.packageError("No such package: " + source, source);
 		}
 		for (LispVal arg : args.subList(2, args.size())) {
 			String member = designator(clauseName, "a symbol name", arg);
@@ -1436,6 +1505,12 @@ public final class PackageResolver {
 			String lower = member.toLowerCase(java.util.Locale.ROOT);
 			if (!member.equals(lower) && sourceProvides(source, lower) && !sourceProvides(source, member)) {
 				member = lower;
+			}
+			// Only a SEALED source answers "no such symbol": one source was read into
+			// may hold names the reader interned and the table never saw.
+			if (this.registry.isSealed(source) && accessibleIn(source, member, spelling -> false) == null) {
+				throw DefpackageException.missingSymbol(clauseName + ": no symbol named " + member + " in " + source,
+						source, member);
 			}
 			target.put(member, trueHome(source, member));
 		}
@@ -1543,6 +1618,7 @@ public final class PackageResolver {
 			this.registry.defineNickname(nick, canonical);
 		}
 		this.registry.markRuntimePackage(canonical);
+		this.registry.markSealed(canonical);
 		return canonical;
 	}
 
@@ -2039,6 +2115,10 @@ public final class PackageResolver {
 		if (LispNames.CL_PKG.equals(pkg) || LispNames.CL_USER_PKG.equals(pkg)) {
 			return new LispSymbol(member);
 		}
+		if (!this.exactCase && !providesMember(pkg, member)) {
+			// Source minted a name the table does not hold (see PackageRegistry.sealed).
+			this.registry.unseal(pkg);
+		}
 		return canonical(pkg, member);
 	}
 
@@ -2117,6 +2197,7 @@ public final class PackageResolver {
 			// the reader interns it in the current package, exactly like any other
 			// unknown name below.
 			if (this.inQuotedData) {
+				unsealCurrent();
 				return canonical(this.currentPackage, name);
 			}
 			throw new LispPackageException(
@@ -2190,7 +2271,17 @@ public final class PackageResolver {
 			}
 		}
 		// Unknown symbol: a user definition or forward reference in the current package.
+		unsealCurrent();
 		return canonical(this.currentPackage, name);
+	}
+
+	// Source minted an unrecorded name in the current package (see
+	// PackageRegistry.sealed); a runtime intern or find-symbol probe (exactCase) does
+	// not: the first records what it mints, the second mints nothing in CL.
+	private void unsealCurrent() {
+		if (!this.exactCase) {
+			this.registry.unseal(this.currentPackage);
+		}
 	}
 
 	/**
