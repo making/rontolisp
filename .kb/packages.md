@@ -89,8 +89,9 @@ can arrive unnoticed.
 
 ## `defpackage`
 A literal, top-level directive like `in-package`. `PackageResolver.resolveDefpackage` registers a
-`LispPackage` (exports = owned + external) and replaces the form with a quoted package symbol; it
-does NOT switch the current package. It is in `CL_SPECIAL_FORMS`. Designators: keywords, bare
+`LispPackage` (exports = owned + external) and replaces the form with the package KEYWORD
+(`:NAME` -- the value `make-package` and `find-package` answer, so the three are `eq`; it was a
+quoted `NAME` symbol until `.todo/917`); it does NOT switch the current package. It is in `CL_SPECIAL_FORMS`. Designators: keywords, bare
 symbols, strings, `#:name` (stripped in `designator`) and CHARACTERS (`#\H` is the string
 designator for `"H"`, CLHS glossary -- the ANSI chapter spells every clause that way at least
 once); `:documentation`/`:size` ignored.
@@ -101,7 +102,8 @@ once); `:documentation`/`:size` ignored.
   BEFORE the `isClSymbol` branch, and `evalCons` dispatches on the FULL resolved name, so a
   shadowed `pkg::defconstant` reaches the user macro, not the special form.
 - `(:shadowing-import-from PKG name...)` is recorded as an IMPORT (shares `collectImportFrom` with
-  `:import-from`, shadowing entries merged LAST). **The imports map is the FIRST thing
+  `:import-from`, shadowing entries merged LAST) and its names join `shadows`, so
+  `package-shadowing-symbols` lists them. **The imports map is the FIRST thing
   `resolveUnqualified` consults** -- before the shadow set, the cl table and the use list -- which
   is CL's always-wins precedence. Pinned by `shadowingImportFromWinsOverTheUseList`.
 - **A `defpackage` over an EXISTING package MODIFIES it** (CLHS 11.1.2.1): use list, exports, owned
@@ -240,9 +242,11 @@ is purely compile-time spelling; deliberately not widened, because the widening 
 paths bake it into `Ctx.packageUseTable` beside `packageTable` and lower the calls in
 `LispMacroExpander.expandPackageQuery` -- a constant for `list-all-packages` and a LITERAL
 designator, otherwise an `assoc` keyed by the name `find-package` answers. A "package" is its
-keyword, so all three answer lists of keywords. `package-shadowing-symbols` is a
-`LispPreludeLibrary` defun answering nil (runtime `shadow`/`shadowing-import`/`unintern` are
-documented non-goals). All five are CL FUNCTIONS. When the program can create packages
+keyword, so all three answer lists of keywords. `package-shadowing-symbols` answers the package's
+shadowing symbols in name order -- a native over the live registry on the interpreter
+(`PackageResolver.shadowingSymbols`), a `LispPreludeLibrary` defun over the baked row's packed
+shadows or the runtime entry's shadow list on the compiled backends ("Runtime tier"). All five
+are CL FUNCTIONS. When the program can create packages
 at run time the three lowerings union the `%runtime-packages%` table in (sorted, like
 the interpreter's registry order); a literal `package-use-list` of a static package
 still folds, but a literal `package-used-by-list` stays a call -- runtime users would
@@ -353,13 +357,21 @@ by `RontoLispCliTest#{replEchoesEveryValueOnItsOwnLine,replPromptNamesTheCurrent
   (nil); constants `most-positive-fixnum`/`most-negative-fixnum`; CL TYPES `file-stream`,
   `synonym-stream`, `readtable`.
 - `do-symbols` / `do-external-symbols` read `PackageResolver.accessibleSymbols` /
-  `externalSymbols` on the interpreter (own names plus the externals of every used
-  package, each canonicalized against the OWNING package, so a name accessible two
-  ways is listed once); on the compiled backends they lower through the
-  `%do-symbols-list` prelude helper over the baked table plus the runtime table
-  (`LispMacroExpander.expandDoSymbols`, a cursor loop in the `dolist` shape with the
-  implicit nil block). Both establish the implicit nil block now (the interpreter's
-  `evalDoSymbols` installs it around its loop); `return` used to die there.
+  `externalSymbols` on the interpreter -- two views of `accessibleEntries`: the PRESENT
+  members (imports spelled at their home, then the own members the table holds), then
+  the externals of every used package that are not present, **every symbol spelled the
+  way code spells it** (bare for a `cl`/`cl-user` home, a re-export or shadowing import at
+  its home), so an enumerated symbol is `eq` to what `find-symbol` answers for its name
+  and a name accessible two ways is listed once. Until `.todo/917` the walk spelled cl
+  names `cl:CAR` and re-exports under the re-exporting package, which is what
+  `%package-spelling-normalize` existed to undo; the baked rows now carry the code
+  spellings and the normalizer is an idempotent no-op for them. On the compiled backends
+  they lower through the `%do-symbols-list` prelude helper over the baked table plus the
+  runtime table (`LispMacroExpander.expandDoSymbols`, a cursor loop in the `dolist`
+  shape with the implicit nil block). Both establish the implicit nil block now (the
+  interpreter's `evalDoSymbols` installs it around its loop); `return` used to die there.
+  `t` and `nil` come back as the singletons wherever a symbol is answered by name
+  (`LispEvaluator.symbolOfSpelling`: `find-symbol`, `intern`, the enumerations).
 - **A `cl:`-qualified read-time constant**: `LispReader.readSymbol` substitutes
   `nil`/`t`/`pi`/`most-*-fixnum`/`array-*-limit`/`char-code-limit`/
   `internal-time-units-per-second`/`lambda-list-keywords` before ANY package resolution, so `cl:pi`
@@ -369,10 +381,15 @@ by `RontoLispCliTest#{replEchoesEveryValueOnItsOwnLine,replPromptNamesTheCurrent
 ## Runtime tier (`.todo/741`)
 `make-package` / `delete-package` / `rename-package` / `packagep` /
 `package-nicknames` / `find-all-symbols` / `do-all-symbols` / `apropos` /
-`apropos-list` / `package-error-package` (9 CL FUNCTIONS + the macro). The model:
+`apropos-list` / `package-error-package` (9 CL FUNCTIONS + the macro), and since
+`.todo/917` the member-table operators `shadow` / `shadowing-import` / `unintern` (3
+more CL FUNCTIONS, out of `CL_EXPORTED_ONLY`) with `export` / `unexport` / `import` /
+`use-package` / `unuse-package` / `package-shadowing-symbols` / `with-package-iterator`
+made table-aware. The model:
 
-- A runtime package is EMPTY with a use list and nicknames (upcased at creation,
-  the reader-canonical rule). Only runtime-tier packages rename/delete;
+- A runtime package is created EMPTY with a use list and nicknames (upcased at creation,
+  the reader-canonical rule) and grows a MEMBER TABLE ("The member table" below).
+  Only runtime-tier packages rename/delete;
   read/compile-time ones signal `package-error` (the baked spellings would orphan
   otherwise) -- **and which tier a `defpackage` product lands in is decided by WHO
   resolved it**: `resolveProgram` (the compile path, where the spellings are baked)
@@ -407,37 +424,135 @@ by `RontoLispCliTest#{replEchoesEveryValueOnItsOwnLine,replPromptNamesTheCurrent
   (`referencedBySurfaceForm`) and rooted in `LibraryDefunPruner` the same way,
   so a lowering's helper can never be missing.
 - The enumeration universe (`do-symbols` lowering, `find-all-symbols`,
-  `apropos-list`, `do-all-symbols` expansion) is one walk:
-  `%package-symbols-where` over `%do-symbols-list` rows, normalized to code
-  spellings (`%package-spelling-normalize`: re-export redirects to their home,
-  a `cl` home reading bare; internal spellings untouched, since a computed
-  `find-symbol` can only build the external shape), deduplicated by content.
-  Keywords are never listed (no intern table); runtime-interned members are not
-  recorded anywhere, so a runtime package enumerates its static uses' rows.
+  `apropos-list`, `do-all-symbols` expansion, `with-package-iterator` through
+  `%package-iterator-entries`) is one walk: `%package-symbols-where` over
+  `%do-symbols-list` rows, deduplicated by content. The rows carry code spellings
+  (`accessibleSymbols`, above), so `%package-spelling-normalize` no longer changes
+  anything for them. Keywords are never listed (no keyword table). A runtime entry
+  enumerates its member table plus the externals of its uses (a baked row's packed
+  externals, a runtime entry's `:external` members).
 - Residual divergences, all documented on the reference pages: `find-symbol` /
-  `intern` over a runtime package build the permissive `PKG:NAME` spelling on
-  the compiled backends (the unknown-name deviation's sibling); a computed
-  package designator naming nothing answers nil / signals only when gated;
-  `do-symbols` yields the raw enumeration spellings (`cl:CAR`) while the
-  search family answers normalized ones (`CAR`); `--no-gc` refuses the whole
-  tier (no conses); `unintern` stays unimplemented (no intern table to remove
-  from -- the `unintern` ANSI hits are closed as cannot-exist, not fixed).
+  `intern` over a computed designator naming a READ/COMPILE-TIME package build the
+  permissive `PKG:NAME` spelling on the compiled backends (the unknown-name
+  deviation's sibling; a runtime package answers from its member table instead); a
+  computed package designator naming nothing answers nil / signals only when gated;
+  `symbol-package` on the compiled backends reads the qualifier off the spelling, so
+  an uninterned symbol keeps its old home there; `unintern`'s name-conflict check
+  runs on the interpreter only; `--no-gc` refuses the whole tier (no conses).
 
-**A runtime package has no MEMBER table, and that -- not a missing operator -- is what
-the ANSI `packages` chapter has left** (measured 2026-09-20, interpreter, suite `ca06bd9`,
-after the `unuse-package` / runtime-`defpackage` work of `.todo/904`: 173 -> 275 of 499,
-35.2% -> 55.1%, errors 204 -> 51, lost forms 30 -> 12). `.todo/904` planned
-`shadowing-import` (13 tests) and `shadow` (3) as missing operators; they are not. Every
-one of those tests opens with `(intern "X" p)` on a `make-package` product and then asks
-`(find-symbol "X" p)` to answer `nil` before and the interned symbol after -- a membership
-record rontolisp does not keep, because a symbol IS its spelling here. The same record is
-what `use-package.1`-`.23` (21 failures, they check the `:inherited` status of an interned
-symbol), `intern` (17), `find-symbol` (15), `with-package-iterator` (16) and `unintern`
-(16) want. Adding `shadow`/`shadowing-import` over the present model would move none of
-them, so they are NOT filed as operator gaps: the one item is the member table
-(`.todo/917`). The rest of what is left is small and independent: a deleted package object
-answering `nil` from `package-name` (11, unmodellable while a package IS its keyword) and
-`LispPackageException` not being a catchable `package-error` (2).
+### The member table (`.todo/917`)
+
+**A runtime package records its members, and a symbol is STILL its spelling.** The
+decision the item opened -- (a) a member table beside the spelling model, or (b) a real
+intern table with symbol identity everywhere -- was taken from the measurement below
+and the cost of (b), which was rejected: symbol identity would touch the reader, `eq`,
+every baked spelling on the JVM and both WASM backends (a WASM symbol is a string-table
+OFFSET, `.kb/symbol-runtime-api.md`) and every printer table, to move the ONE test in
+the chapter that (a) cannot (`import.5`, an uninterned symbol gaining a home) plus the
+identity-after-`unintern` corner. `.kb/symbol-runtime-api.md`, "Is identity-by-name
+stable?", stays the standing answer; re-evaluate only when a consumer needs symbol
+objects.
+
+The table IS `LispPackage.symbols` (the own present names; a mutable concurrent set
+the canonical constructor makes its own, so `intern`'s write is O(1)) plus
+`LispPackage.imports` (the present names homed elsewhere). Who writes it, all on the
+interpreter's live registry and mirrored for the compiled backends' runtime entries:
+
+- `intern` (`PackageResolver.internSpelling(name, record=true)` -> `recordInterned`):
+  the home package of the spelling answered OWNS the member unless it already provides
+  it. Only the runtime `intern` writes; **a symbol merely READ under a package is not
+  recorded, deliberately** -- recording every name the resolver mints would grow every
+  package's enumeration (and the baked tables) with every local variable ever read, and
+  the chapter's tests that would notice (`find-symbol.11`, the `cl-user` iterator
+  cases) need `in-package`, which the ANSI driver skips.
+- `export` (`exportSymbols`): a symbol homed ELSEWHERE must be accessible in the target
+  (imported, or inherited -- an inherited one becomes an import redirect to its home as
+  it is exported); a symbol homed in the target is taken on its spelling alone (it may
+  be a read-time symbol the table never saw). Two conflicts signal: a different
+  accessible symbol of that name, and a USER of the target with its own symbol of that
+  name present and not shadowing. `unexport` leaves an inherited symbol alone (SBCL).
+- `import` / `shadowing-import` (`importInto`): an import redirect to the symbol's home
+  (a bare symbol's home is `cl-user`, or `cl` for a standard name -- the old code skipped
+  unqualified names); a different PRESENT symbol of that name is a conflict for `import`
+  and is uninterned by `shadowing-import`, whose names also join `shadows`.
+- `shadow` (`shadowSymbols`): present -> marked; absent -> a fresh own member, marked.
+- `unintern` (`uninternSymbol`): removes own/import/external/shadow; an own symbol is
+  TOMBSTONED (`PackageRegistry.markUnhomed`), which is what makes `symbol-package`
+  answer nil and `find-symbol` stop answering it as the package's own until an `intern`
+  of the name `rehome`s it (CL would mint a distinct symbol -- the documented
+  deviation). A shadowing symbol hiding two different inherited symbols refuses
+  (`package-error`).
+- **A runtime-minted member is verbatim and never a reader-case mismatch.** The
+  resolver's case-fold retries (`resolveQualified` / `resolveUnqualified`: an upcased
+  source spelling reaching a lower-kebab wit-import member, `.kb/wit.md`) used to see
+  only DECLARED members; with `intern` writing the owned set they would fold a later
+  `Abc` or `ABC` onto a recorded `abc` -- every case-sensitive Scheme symbol lives in one
+  package, and `SchemeSpecE2eTest`'s `|A:b|` came back as `a:b`. Two guards: the runtime
+  `intern` resolves with `exactCase` set (no retry at all), and the retries skip members
+  `PackageRegistry.isRecorded` (`intern` and `shadow` mark what they mint; `unintern`
+  unmarks). Pinned by `LispEvaluatorTest#internRecordsAMemberOfARuntimePackage`.
+- The literal-consumption path (`tryConsumeExport` / `tryConsumeImport` /
+  `consumeDefsectionExports`) spells a bare quoted symbol the way the READER did --
+  `internSpellingOnly` under the current package -- before handing it to the same
+  methods; a keyword, `#:` or string designator names the target's own symbol (the
+  permissive reading the name-based export always had). Every semantic failure is a
+  `RuntimePackageException`, which the natives turn into a catchable `package-error`
+  (`signalPackageError`).
+
+Who reads it -- ONE lookup, `PackageResolver.accessible(pkg, name, definedProbe)`
+(`Accessible(spelling, status)`), so `find-symbol`, its status, the enumerations and the
+conflict checks cannot disagree: keyword; `cl` (every standard name, exported-only ones
+included, plus what was interned into it); then a PRESENT symbol (`presentIn`: import
+redirect at its home, own member, the interpreter's `definedInImage` probe -- a
+definition is an interning); then INHERITED, the first used package in use order that
+exports the name (`inheritedFrom`: cl bare, others through `usedExport`'s redirect).
+`cl-user` is honest now: a standard name is `:inherited` (the exported-only ones too),
+a recorded or defined name `:internal`, anything else nil -- it used to "provide every
+name". `memberSpelling` / `memberStatus` are thin views of it. `accessibleEntries` is
+the same rule run over the whole package (the `do-symbols` / `with-package-iterator`
+universe). `symbolPackageName` reads the home off the spelling (`isClMemberName`, so
+`t`, `nil` and `find-method` are `cl`'s) minus the tombstones.
+
+On the COMPILED backends the `%runtime-packages%` entry is
+`(name use nicknames members shadows)`, members a list of `(NAME SYMBOL STATUS)`
+triples; the `find-symbol` / `intern` / `%find-symbol-status` lowerings route a
+designator that names a runtime entry to `%runtime-member-find` / `-intern` /
+`-status` (`LispMacroExpander.runtimeMemberLookup`, only under
+`runtimePackagesMutable`), `export` and friends to `%runtime-package-op` (a baked
+package answers `t` unchanged, `unintern` nil), and `%do-symbols-list` /
+`%package-iterator-entries` walk the members. A runtime package's own symbols spell
+`PKG::NAME` there, as the interpreter spells a `make-package` product's (its declared
+external set is empty and pinned). `intern`'s second value is the status from BEFORE
+the intern on every backend: `lowerMvProducer` binds it first for `intern`, the
+interpreter's `publishSecondValue(..., secondFirst)` computes it first for `#'intern`.
+`with-package-iterator` is a real iterator everywhere (`expandWithPackageIterator`: the
+triples collected up front, an `flet` popping a cons-cell cursor and answering CL's four
+values; no symbol type is a `program-error`). Two consumers of the consumed
+`defpackage`'s new value had to learn it: `NoGcWasmCompiler.isConsumedPackageResidue`
+drops a bare top-level keyword as it dropped the quoted name, and the REPL echoes
+`:APP`. And `package-shadowing-symbols` joining `BAKED_PACKAGE_TABLE_USERS` exposed a
+latent WASM gate gap -- the baked table plus a symbol builder in one program tripped
+`fdlibm trig reached without its tables placed` -- fixed in the pre-scan
+(`.kb/transcendentals.md`).
+
+**Measured (2026-09-20, interpreter, suite `ca06bd9`, `ansi-test/measure.sh packages`):
+275 -> 410 of 499 (55.1% -> 82.2%), errors 51 -> 33, fail 173 -> 56, lost forms 12 -> 12.
+By test NAME: 135 fixed, 0 regressed** -- `use-package` 23, `unintern` 18,
+`with-package-iterator` 16, `intern` 16, `shadowing-import` 13, `find-symbol` 13,
+`shadow` 12, `find-all-symbols` 7 (the `t`/`nil` singletons), `defpackage` 6 (the
+package keyword value), `import` 3, `export` 2, `unexport` 2, `do-symbols` 2,
+`do-external-symbols` 1, `do-all-symbols` 1. What is left (89) and why, none of it
+this table: 31 package IDENTITY (`package-name` 11 / `delete-package` 11 /
+`rename-package` 9 -- a deleted package object answering nil, `eq` across a rename;
+unmodellable while a package IS its keyword); 15 `defpackage` clause validation and
+catchable clause errors (`.todo/923`); 12 `import` (10 need the driver's skipped
+`in-package` -- the tests compare against `cl-test`'s home -- plus `import.5`'s
+uninterned-symbol home and `import.error.4`'s restarts); 7 `def-macro-test` rows
+(`macro-function` arity, `.todo/922`); 6 `in-package` as a function; 6 `%READ-EVAL`
+/ `*universe*` driver artefacts; 4 restarts (`make-package.error`); 4 `go` / special
+declaration scope inside `do-symbols` bodies; `find-symbol.4` (no keyword table),
+`find-symbol.11` (read-time recording, above), `find-all-symbols.error.2` (the optional
+package argument is a documented extension).
 
 ## Tests
 `PackageResolverTest` (the `::` cases, the defpackage clause/error cases, the json.lisp fixed-point
@@ -446,6 +561,9 @@ cases), `LispEvaluatorTest#{packageDefaultsToClUser,packageVarIsReadWhenTheFormR
 `JvmLispCompilerTest#{compileAndRunPackageVarIsReadWhenTheFormRuns,compileAndRunRuntimePackageApi}`,
 `WasmLispCompilerIntegrationTest#{packageVarIsReadWhenTheFormRuns,runtimePackageApi}`,
 `PackageResolverTest#{unusePackageDirectiveNarrowsTheUseList,unusePackageAcceptsADesignatorListATargetAndRejectsUnknownNames,unusePackageWithAComputedDesignatorOrABadArityStaysARuntimeCall,defpackageNestedIsLeftVerbatimForTheRuntimeTier,defpackageInternClauseOwnsTheNamesWithoutExportingThem,defpackageDesignatorsAcceptCharacters,interpreterDefpackageProductsJoinTheRuntimeTier}`,
-`LispEvaluatorTest#{runtimeUnusePackageNarrowsTheUseList,nonTopLevelDefpackageRegistersARuntimePackage}`, ci-spec
+`LispEvaluatorTest#{runtimeUnusePackageNarrowsTheUseList,nonTopLevelDefpackageRegistersARuntimePackage}`,
+the member table: `LispEvaluatorTest#{internRecordsAMemberOfARuntimePackage,usePackageInheritsARuntimePackagesExports,shadowMintsAPresentSymbolAheadOfTheInheritedOne,shadowingImportDisplacesThePresentSymbol,uninternRemovesAMemberAndUnhomesTheSymbol,exportAndImportCheckAccessibilityAndConflicts,withPackageIteratorWalksTheMemberTable,doSymbolsSpellsARedirectAtItsHomeAndAClNameBare,findSymbolAnswersTheStandardSymbolsThroughAUsePackage,defpackageAnswersThePackageKeyword}`,
+`JvmLispCompilerTest#compileAndRunRuntimePackageMemberTable`,
+`WasmLispCompilerIntegrationTest#runtimePackageMemberTable`, ci-spec
 `defpackage-use-export`, `packages-cl-user-default-uses-cl-and-the`, `runtime-package-api`,
-`unuse-package`. Limitations: README.
+`runtime-package-member-table`, `unuse-package`. Limitations: README.

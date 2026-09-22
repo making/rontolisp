@@ -690,8 +690,9 @@ class RontoLispCliTest {
 		// The prompt is the current package, as in any CL REPL: an (in-package ...)
 		// typed at one prompt shows at the next, so which package a bare symbol
 		// interns into is never invisible.
+		// defpackage answers the package (its keyword, what find-package answers).
 		assertThat(runSession(true, "(defpackage :app (:use :cl))\n(in-package :app)\n(+ 1 2)\n")[1])
-			.isEqualTo("CL-USER> APP\nCL-USER> :APP\nAPP> 3\nAPP> ");
+			.isEqualTo("CL-USER> :APP\nCL-USER> :APP\nAPP> 3\nAPP> ");
 		// A form typed over two lines is answered at one prompt.
 		assertThat(runSession(true, "(+ 1\n 2)\n(define x 1)\n", "--source-language", "scheme")[1])
 			.isEqualTo("scheme> 3\nscheme> scheme> ");

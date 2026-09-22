@@ -181,6 +181,22 @@ uninterned シンボル(`#:name`、
 これをサポートし、登録先のレジストリを持たないコンパイル済みバックエンドは
 拒否します。
 
+パッケージは**メンバーテーブル**を持ちます。[`intern`](functions/intern.md)、
+[`export`](functions/export.md)、[`import`](functions/import.md)、
+[`shadowing-import`](functions/shadowing-import.md)、[`shadow`](functions/shadow.md)
+がそこに入れたものと、[`unintern`](functions/unintern.md) が取り除いたものです。
+[`find-symbol`](functions/find-symbol.md) はインターン前の名前には `nil` を、
+インターン後にはそのシンボル(と `:internal` / `:external` / `:inherited`
+のステータス)を返し、`use-package` はエクスポートされたメンバーを継承させ、
+[`do-symbols`](macros/do-symbols.md) / [`with-package-iterator`](macros/with-package-iterator.md)
+はテーブルと use リストが持ち込むものを、それぞれコードが綴るとおりの綴りで
+走査します。ソース中でパッケージの下に読まれただけのシンボルは記録されません --
+その下で行われた定義は数えます(`defun` はインターンです)。インタープリタでは
+すべてのパッケージのテーブルが生きています。コンパイル済みバックエンドでは、
+プログラムが `make-package` で作ったパッケージのテーブルは生きており、
+読込/compile 時パッケージは凍結されています(変更系の操作はそこでは何も
+変えずに `t` を返します)。
+
 パッケージは読み込み/コンパイル時に(ソース順で)解決されるため、`in-package`
 はトップレベルのディレクティブです: ソース中のシンボルがどのパッケージに属するかは、その上にある `in-package` で決まり、実行時の `*package*` への `setq` では決まりません(コンパイル出力ではファイル全体が実行前に解決されます。インタプリタはトップレベルフォームに到達するたびに解決するため、そこでは実行時の代入が後続のフォームに影響します)。コンパイル出力では、実行時に読み込まれたファイルのパッケージディレクティブは処理されません。`rontolisp`
 パッケージの関数(`version` ...)は第一級の値として利用できません(`mapcar`/`funcall`

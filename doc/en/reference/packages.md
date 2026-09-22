@@ -166,6 +166,23 @@ another form (not top-level) registers its package when that form runs, also in
 the runtime tier -- which the interpreter supports and the compiled backends
 refuse, having no registry to register into.
 
+A package keeps a **member table**: what [`intern`](functions/intern.md),
+[`export`](functions/export.md), [`import`](functions/import.md),
+[`shadowing-import`](functions/shadowing-import.md) and
+[`shadow`](functions/shadow.md) put into it, and what
+[`unintern`](functions/unintern.md) takes out. [`find-symbol`](functions/find-symbol.md)
+answers `nil` for a name before it is interned and the symbol (with its
+`:internal` / `:external` / `:inherited` status) after, `use-package` makes an
+exported member inherited, and [`do-symbols`](macros/do-symbols.md) /
+[`with-package-iterator`](macros/with-package-iterator.md) walk the table plus
+what the use list brings in, every symbol spelled the way code spells it. A
+symbol merely read in the source under a package is not recorded -- a
+definition made under it counts, since a `defun` is an interning. On the
+interpreter every package's table is live; on the compiled backends the
+packages the program creates with `make-package` keep a live table while the
+read/compile-time ones are frozen (the mutators answer `t` there without a
+change).
+
 Packages are resolved at read/compile time (in source order), so `in-package` is a top-level directive: which package a symbol in the source belongs to is decided by the `in-package` above it, not by a runtime `setq` of `*package*` (in compiled output the whole file is resolved before it runs; the interpreter resolves each top-level form as it reaches it, so a runtime assignment does affect the forms after it there). In compiled output a runtime-loaded file's package directives are not processed; the `rontolisp` package's functions (`version`, ...) are not available as first-class values (they cannot be passed to `mapcar`/`funcall`); and a `cl` symbol name must not be shadowed as a local variable inside a package that does not use `cl`.
 
 ## rontolisp Package Extensions

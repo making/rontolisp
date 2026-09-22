@@ -343,7 +343,7 @@ class PackageResolverTest {
 	@Test
 	void defpackageRegistersPackageAndResolvesQuoted() {
 		PackageResolver resolver = new PackageResolver();
-		assertThat(resolve(resolver, "(defpackage :mypkg (:use :cl) (:export :greet))")).isEqualTo("'MYPKG");
+		assertThat(resolve(resolver, "(defpackage :mypkg (:use :cl) (:export :greet))")).isEqualTo(":MYPKG");
 		// defpackage does not switch the current package.
 		assertThat(resolve(resolver, "(f)")).isEqualTo("(F)");
 		assertThat(resolve(resolver, "(in-package :mypkg)")).isEqualTo("(SETQ *PACKAGE* :MYPKG)");
@@ -356,8 +356,8 @@ class PackageResolverTest {
 		// pax:define-package -- both are defpackage in the variant's clothing and are
 		// consumed exactly like one.
 		PackageResolver resolver = new PackageResolver();
-		assertThat(resolve(resolver, "(uiop:define-package :dp1 (:use :cl) (:export :f))")).isEqualTo("'DP1");
-		assertThat(resolve(resolver, "(pax:define-package :dp2 (:use :cl))")).isEqualTo("'DP2");
+		assertThat(resolve(resolver, "(uiop:define-package :dp1 (:use :cl) (:export :f))")).isEqualTo(":DP1");
+		assertThat(resolve(resolver, "(pax:define-package :dp2 (:use :cl))")).isEqualTo(":DP2");
 		resolve(resolver, "(in-package :dp1)");
 		assertThat(resolve(resolver, "(defun f (x) x)")).isEqualTo("(DEFUN DP1:F (DP1::X) DP1::X)");
 	}
@@ -564,7 +564,7 @@ class PackageResolverTest {
 	@Test
 	void defpackageAcceptsStringAndBareSymbolDesignators() {
 		PackageResolver resolver = new PackageResolver();
-		assertThat(resolve(resolver, "(defpackage \"STRPKG\" (:use cl) (:export \"F\" g :h))")).isEqualTo("'STRPKG");
+		assertThat(resolve(resolver, "(defpackage \"STRPKG\" (:use cl) (:export \"F\" g :h))")).isEqualTo(":STRPKG");
 		resolve(resolver, "(in-package :strpkg)");
 		assertThat(resolve(resolver, "(defun f () 1)")).isEqualTo("(DEFUN STRPKG:F NIL 1)");
 		assertThat(resolve(resolver, "(defun g () 2)")).isEqualTo("(DEFUN STRPKG:G NIL 2)");
@@ -579,7 +579,7 @@ class PackageResolverTest {
 		// declares its package twice.
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(defpackage :mypkg (:use :cl) (:export #:foo))");
-		assertThat(resolve(resolver, "(defpackage :mypkg (:export #:bar))")).isEqualTo("'MYPKG");
+		assertThat(resolve(resolver, "(defpackage :mypkg (:export #:bar))")).isEqualTo(":MYPKG");
 		// Both the first definition's export and the second's are external.
 		assertThat(resolve(resolver, "(mypkg:foo)")).isEqualTo("(MYPKG:FOO)");
 		assertThat(resolve(resolver, "(mypkg:bar)")).isEqualTo("(MYPKG:BAR)");
@@ -592,7 +592,7 @@ class PackageResolverTest {
 	void defpackageRepeatingItsOwnNicknameIsAccepted() {
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(defpackage :mypackage (:nicknames :mp) (:export :greet))");
-		assertThat(resolve(resolver, "(defpackage :mypackage (:nicknames :mp))")).isEqualTo("'MYPACKAGE");
+		assertThat(resolve(resolver, "(defpackage :mypackage (:nicknames :mp))")).isEqualTo(":MYPACKAGE");
 		assertThat(resolve(resolver, "(mp:greet)")).isEqualTo("(MYPACKAGE:GREET)");
 	}
 
@@ -640,8 +640,9 @@ class PackageResolverTest {
 			.hasMessageContaining("No such package: NOSUCH");
 		assertThatThrownBy(() -> resolve("(use-package :cl-user)")).isInstanceOf(LispPackageException.class)
 			.hasMessageContaining("Cannot USE-PACKAGE CL-USER in itself");
-		assertThatThrownBy(() -> resolve("(use-package)")).isInstanceOf(LispPackageException.class)
-			.hasMessageContaining("USE-PACKAGE expects a package designator");
+		// The arity is the FUNCTION's to check (a catchable program-error at run
+		// time), so a bad-arity call is left alone here, like unuse-package's.
+		assertThat(resolve("(use-package)")).isEqualTo("(USE-PACKAGE)");
 	}
 
 	@Test
@@ -750,7 +751,7 @@ class PackageResolverTest {
 	void defpackageDocumentationAndSizeAreIgnored() {
 		PackageResolver resolver = new PackageResolver();
 		assertThat(resolve(resolver, "(defpackage :mypkg (:use :cl) (:documentation \"doc\") (:size 10))"))
-			.isEqualTo("'MYPKG");
+			.isEqualTo(":MYPKG");
 	}
 
 	@Test
@@ -909,7 +910,7 @@ class PackageResolverTest {
 	void defpackageInternClauseOwnsTheNamesWithoutExportingThem() {
 		PackageResolver resolver = new PackageResolver();
 		assertThat(resolve(resolver, "(defpackage :dspkg (:use) (:intern \"C\" \"D\") (:export \"A\"))"))
-			.isEqualTo("'DSPKG");
+			.isEqualTo(":DSPKG");
 		assertThat(resolver.memberStatus("DSPKG", "C")).isEqualTo(":INTERNAL");
 		assertThat(resolver.memberStatus("DSPKG", "A")).isEqualTo(":EXTERNAL");
 		assertThat(resolver.memberStatus("DSPKG", "ZZ")).isNull();
@@ -921,7 +922,7 @@ class PackageResolverTest {
 		// package "H" and #\F the symbol "F" -- the spelling the defpackage tests
 		// of the ANSI suite use for every clause.
 		PackageResolver resolver = new PackageResolver();
-		assertThat(resolve(resolver, "(defpackage #\\H (:use) (:nicknames #\\J) (:export #\\F))")).isEqualTo("'H");
+		assertThat(resolve(resolver, "(defpackage #\\H (:use) (:nicknames #\\J) (:export #\\F))")).isEqualTo(":H");
 		assertThat(resolver.findPackageName("J")).isEqualTo("H");
 		assertThat(resolver.memberStatus("H", "F")).isEqualTo(":EXTERNAL");
 	}
@@ -1269,7 +1270,7 @@ class PackageResolverTest {
 			.orElseThrow();
 		assertThat(cl.use()).isEmpty();
 		assertThat(cl.nicknames()).contains("COMMON-LISP");
-		assertThat(cl.accessible()).contains(new LispSymbol("CL:CAR"));
+		assertThat(cl.accessible()).contains(new LispSymbol("CAR"));
 		PackageResolver.BakedPackage c2cl = baked.stream()
 			.filter(entry -> "CLOSER-COMMON-LISP".equals(entry.name()))
 			.findFirst()

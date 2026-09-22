@@ -198,7 +198,7 @@ public final class PackageRegistry {
 			LispNames.INVOKE_DEBUGGER, LispNames.REMOVE_METHOD, LispNames.COMPILE_FILE, LispNames.COMPILE_FILE_PATHNAME,
 			LispNames.MAKE_PACKAGE, LispNames.DELETE_PACKAGE, LispNames.RENAME_PACKAGE, LispNames.PACKAGEP,
 			LispNames.PACKAGE_NICKNAMES, LispNames.FIND_ALL_SYMBOLS, LispNames.APROPOS, LispNames.APROPOS_LIST,
-			LispNames.PACKAGE_ERROR_PACKAGE);
+			LispNames.PACKAGE_ERROR_PACKAGE, LispNames.SHADOW, LispNames.SHADOWING_IMPORT, LispNames.UNINTERN);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = union(Set.of(LispNames.PACKAGE_VAR,
@@ -340,7 +340,10 @@ public final class PackageRegistry {
 			LispNames.BAKED_PACKAGES_INTERNAL, LispNames.DO_SYMBOLS_LIST_INTERNAL,
 			LispNames.BAKED_PACKAGE_FIND_INTERNAL, LispNames.RUNTIME_PACKAGE_FIND_INTERNAL,
 			LispNames.PACKAGE_SYMBOLS_WHERE_INTERNAL, LispNames.PACKAGE_SPELLING_NORMALIZE_INTERNAL,
-			LispNames.BAKED_IMPORT_REDIRECT_INTERNAL, LispNames.SPLIT_PACKED_INTERNAL);
+			LispNames.BAKED_IMPORT_REDIRECT_INTERNAL, LispNames.SPLIT_PACKED_INTERNAL,
+			LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL, LispNames.RUNTIME_MEMBER_FIND_INTERNAL,
+			LispNames.RUNTIME_MEMBER_STATUS_INTERNAL, LispNames.RUNTIME_MEMBER_INTERN_INTERNAL,
+			LispNames.RUNTIME_EXTERNAL_FIND_INTERNAL, LispNames.RUNTIME_PACKAGE_OP_INTERNAL);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of
@@ -386,11 +389,10 @@ public final class PackageRegistry {
 			"PPRINT-EXIT-IF-LIST-EXHAUSTED", "PPRINT-FILL", "PPRINT-LINEAR", "PPRINT-POP", "PPRINT-TABULAR",
 			"PRINT-NOT-READABLE", "PRINT-NOT-READABLE-OBJECT", "RANDOM-STATE", "RANDOM-STATE-P", "READ-DELIMITED-LIST",
 			"READ-PRESERVING-WHITESPACE", "READTABLEP", "RESTART", "ROOM", "SAFETY", "SET-MACRO-CHARACTER",
-			"SET-SYNTAX-FROM-CHAR", "SHADOW", "SHADOWING-IMPORT", "SIMPLE-BASE-STRING", "SLOT-MISSING", "SLOT-UNBOUND",
-			"SPACE", "SPECIAL", "SPEED", "STANDARD", "STANDARD-METHOD", "STEP", "STORAGE-CONDITION", "STRUCTURE-OBJECT",
-			"SYMBOL", "T", "TRACE", "TWO-WAY-STREAM", "UNINTERN", "UNTRACE", "UPDATE-INSTANCE-FOR-DIFFERENT-CLASS",
-			"UPDATE-INSTANCE-FOR-REDEFINED-CLASS", "UPGRADED-ARRAY-ELEMENT-TYPE", "VARIABLE", "WITH-CONDITION-RESTARTS",
-			"YES-OR-NO-P");
+			"SET-SYNTAX-FROM-CHAR", "SIMPLE-BASE-STRING", "SLOT-MISSING", "SLOT-UNBOUND", "SPACE", "SPECIAL", "SPEED",
+			"STANDARD", "STANDARD-METHOD", "STEP", "STORAGE-CONDITION", "STRUCTURE-OBJECT", "SYMBOL", "T", "TRACE",
+			"TWO-WAY-STREAM", "UNTRACE", "UPDATE-INSTANCE-FOR-DIFFERENT-CLASS", "UPDATE-INSTANCE-FOR-REDEFINED-CLASS",
+			"UPGRADED-ARRAY-ELEMENT-TYPE", "VARIABLE", "WITH-CONDITION-RESTARTS", "YES-OR-NO-P");
 
 	/**
 	 * The exported {@code cl} symbols: everything but the {@code %}-prefixed internals
@@ -730,6 +732,27 @@ public final class PackageRegistry {
 	 * {@code delete-package} may touch.
 	 */
 	private final Set<String> runtimePackages = new HashSet<>();
+
+	/**
+	 * The member names {@code unintern} removed from each package, keyed by canonical
+	 * package name. A symbol IS its spelling here, so the uninterned symbol cannot lose
+	 * its qualifier the way a CL symbol object loses its home; this record is what makes
+	 * {@code symbol-package} answer nil for it and {@code find-symbol} stop finding it as
+	 * the package's own -- until an {@code intern} of the name homes it again. An entry
+	 * travels with a {@link #rename} and goes with a {@link #remove}.
+	 */
+	private final Map<String, Set<String>> unhomed = new HashMap<>();
+
+	/**
+	 * The member names the runtime {@code intern} (and {@code shadow}) minted in each
+	 * package, keyed by canonical package name -- a subset of the package's owned set.
+	 * The resolver's case-fold retries (an upcased source spelling reaching a lower-kebab
+	 * wit-import member) consult only the DECLARED members, so a runtime-minted
+	 * {@code abc} never catches a later {@code Abc} or {@code ABC}: the case-sensitive
+	 * Scheme symbols all live in one package. Travels with a {@link #rename}, goes with a
+	 * {@link #remove}.
+	 */
+	private final Map<String, Set<String>> recorded = new HashMap<>();
 
 	/**
 	 * The canonical names of the packages the constructor seeds (plus {@code keyword},
@@ -1457,7 +1480,77 @@ public final class PackageRegistry {
 		}
 		this.nicknames.entrySet().removeIf(entry -> entry.getValue().equals(canonicalName));
 		this.runtimePackages.remove(canonicalName);
+		this.unhomed.remove(canonicalName);
+		this.recorded.remove(canonicalName);
 		return true;
+	}
+
+	/**
+	 * Records that the runtime {@code intern} (or {@code shadow}) minted the member
+	 * {@code name} in the package (see {@link #recorded}).
+	 * @param canonicalName the canonical package name
+	 * @param name the member name
+	 */
+	public void markRecorded(String canonicalName, String name) {
+		this.recorded.computeIfAbsent(canonicalName, k -> new HashSet<>()).add(name);
+	}
+
+	/**
+	 * Forgets a runtime-minted member ({@code unintern} took it out).
+	 * @param canonicalName the canonical package name
+	 * @param name the member name
+	 */
+	public void unrecord(String canonicalName, String name) {
+		Set<String> names = this.recorded.get(canonicalName);
+		if (names != null) {
+			names.remove(name);
+		}
+	}
+
+	/**
+	 * Whether the member was minted by the runtime {@code intern} (or {@code shadow})
+	 * rather than declared -- the names the case-fold retries must not reach.
+	 * @param canonicalName the canonical package name
+	 * @param name the member name
+	 * @return {@code true} for a runtime-minted member
+	 */
+	public boolean isRecorded(String canonicalName, String name) {
+		Set<String> names = this.recorded.get(canonicalName);
+		return names != null && names.contains(name);
+	}
+
+	/**
+	 * Records that {@code unintern} removed the package's own member {@code name}: the
+	 * symbol spelled with that home is no longer homed there (see {@link #unhomed}).
+	 * @param canonicalName the canonical package name
+	 * @param name the member name
+	 */
+	public void markUnhomed(String canonicalName, String name) {
+		this.unhomed.computeIfAbsent(canonicalName, k -> new HashSet<>()).add(name);
+	}
+
+	/**
+	 * Homes a member again (an {@code intern} of the name after an {@code unintern}).
+	 * @param canonicalName the canonical package name
+	 * @param name the member name
+	 */
+	public void rehome(String canonicalName, String name) {
+		Set<String> names = this.unhomed.get(canonicalName);
+		if (names != null) {
+			names.remove(name);
+		}
+	}
+
+	/**
+	 * Whether {@code unintern} removed the package's own member {@code name} and nothing
+	 * has interned it since.
+	 * @param canonicalName the canonical package name
+	 * @param name the member name
+	 * @return {@code true} when the symbol spelled with that home has no home
+	 */
+	public boolean isUnhomed(String canonicalName, String name) {
+		Set<String> names = this.unhomed.get(canonicalName);
+		return names != null && names.contains(name);
 	}
 
 	/**
@@ -1483,6 +1576,14 @@ public final class PackageRegistry {
 		}
 		if (runtime) {
 			this.runtimePackages.add(newName);
+		}
+		Set<String> names = this.unhomed.remove(oldName);
+		if (names != null) {
+			this.unhomed.put(newName, names);
+		}
+		Set<String> minted = this.recorded.remove(oldName);
+		if (minted != null) {
+			this.recorded.put(newName, minted);
 		}
 	}
 

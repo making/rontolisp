@@ -424,6 +424,9 @@ categories:
       - { slug: package-use-list, name: "package-use-list" }
       - { slug: package-used-by-list, name: "package-used-by-list" }
       - { slug: package-shadowing-symbols, name: "package-shadowing-symbols" }
+      - { slug: shadow, name: "shadow" }
+      - { slug: shadowing-import, name: "shadowing-import" }
+      - { slug: unintern, name: "unintern" }
       - { slug: make-package, name: "make-package" }
       - { slug: delete-package, name: "delete-package" }
       - { slug: rename-package, name: "rename-package" }

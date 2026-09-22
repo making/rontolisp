@@ -892,12 +892,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	/**
 	 * Whether the top-level form is the residue a consumed package declaration leaves
-	 * behind: the quoted package name a {@code defpackage} resolves to, or the
-	 * {@code (setq *package* :P)} an {@code in-package} resolves to.
+	 * behind: the package keyword a {@code defpackage} resolves to (a quoted package name
+	 * before {@code .todo/917}), or the {@code (setq *package* :P)} an {@code in-package}
+	 * resolves to.
 	 * @param expr the top-level form
 	 * @return whether it can be dropped
 	 */
 	private static boolean isConsumedPackageResidue(LispVal expr) {
+		if (expr instanceof LispSymbol keyword && keyword.isKeyword()) {
+			return true;
+		}
 		if (!(expr instanceof LispCons cons && cons.car() instanceof LispSymbol op
 				&& cons.cdr() instanceof LispCons rest)) {
 			return false;

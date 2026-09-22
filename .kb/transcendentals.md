@@ -104,7 +104,17 @@ The one stated exception is `--gpu`'s transcendental tier (`.kb/linalg-simd.md`)
   step over float immediates and read the user's body only
   (`NoGcWasmCompilerTest.containsSimdPrefixInUserFunction`).
 - A `mayReachTrig` pre-scan that misses a path is a compile-time `IllegalStateException`,
-  never a wrong number: extend the name list rather than the exception.
+  never a wrong number: extend the name list rather than the exception. The pre-scan
+  has to be at least as wide as `dispatchableFuncIds`' arming of the trig WRAPPERS, and
+  one arm of that is not a symbol mention: with a symbol BUILDER in the program
+  (`RuntimeNameProducers.anySymbolBuilder`), a STRING literal spelling a function's
+  name arms its wrapper (`DesignatorSpellings.of`'s framed spellings). The baked package
+  table spells every cl name that way (the `closer-common-lisp` row's import redirects
+  are one string per member), so `(package-nicknames :cl)` beside a computed
+  `(intern s)` used to trip the exception (found 2026-09-20 when
+  `package-shadowing-symbols` joined the table's users); the pre-scan now also places
+  the tables for a trig name spelled as a string literal when a builder is present
+  (`programSpellsStringLiteral`).
 - `Math.scalb` in `Pow`'s subnormal tail is `(z * 2^-1000) * 2^(n+1000)` in the source:
   exact steps and one rounding, the same double `scalb`'s stepped multiply lands on.
 
