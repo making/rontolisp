@@ -8688,10 +8688,9 @@ public final class LispMacroExpander {
 	 * Whether the program can open a BIDIRECTIONAL (or {@code :overwrite}) file stream --
 	 * the gate the JVM backend's {@code _open} arm and the travelling
 	 * {@code RontoIoFileStream} class hang off, and the WASM backends' {@code path_open}
-	 * rights. True for a literal {@code :direction :io} / {@code :if-exists :overwrite},
-	 * and -- over-approximating, the {@link #callsOpenWithExistenceGuard} rule -- for a
-	 * COMPUTED {@code :direction} / {@code :if-exists}, whose value only the run time
-	 * knows, {@code #'open} included (its wrapper passes every option computed).
+	 * rights. True exactly for a LITERAL {@code :direction :io} / {@code :if-exists
+	 * :overwrite}: a computed value never selects either (the dispatch refuses both at
+	 * call time), so {@code #'open} and uiop's option-passing wrappers stay out.
 	 * @param program the top-level forms, BEFORE expansion
 	 * @return whether an {@code :io} / {@code :overwrite} open can happen
 	 */
@@ -8711,10 +8710,6 @@ public final class LispMacroExpander {
 		List<LispVal> parts = cons.toList();
 		if (!parts.isEmpty() && parts.get(0) instanceof LispSymbol op) {
 			String member = unqualifiedClMember(op.name());
-			if (LispNames.FUNCTION.equals(member) && parts.size() == 2 && parts.get(1) instanceof LispSymbol named
-					&& LispNames.OPEN.equals(unqualifiedClMember(named.name()))) {
-				return true;
-			}
 			if (LispNames.OPEN.equals(member) && parts.size() > 2
 					&& opensBidirectionallyByOptions(parts.subList(2, parts.size()))) {
 				return true;
@@ -8745,9 +8740,6 @@ public final class LispMacroExpander {
 				continue;
 			}
 			LispVal value = optionPairs.get(i + 1);
-			if (!isLiteralOpenOptionValue(key.name(), value)) {
-				return true;
-			}
 			if (value instanceof LispSymbol sym
 					&& (LispNames.IO_KEYWORD.equals(sym.name()) || LispNames.OVERWRITE_KEYWORD.equals(sym.name()))) {
 				return true;
@@ -8887,17 +8879,18 @@ public final class LispMacroExpander {
 						output = OpenModeTest.of(!LispNames.INPUT_KEYWORD.equals(name) && !probe);
 					}
 					else {
-						// A COMPUTED direction admits the three that pick a mode;
-						// :probe is a whole different shape (a closed stream), so it
-						// cannot be chosen at run time.
-						checks.add(unlessValueIn(var,
-								operator + " :direction supports only :input, :output and :io, got ~s",
+						// A COMPUTED direction admits only the two the literal-free
+						// dispatch has leaves for. :probe is a whole different shape (a
+						// closed stream); :io is LITERAL-only by a measured trade
+						// (.kb/read-load-streams.md, "`:direction :io` and `:if-exists
+						// :overwrite`"): admitting it here grows the dispatch from six
+						// leaves to fourteen and drags the travelling stream class into
+						// every program that passes its options down (uiop's file
+						// wrappers, #'open).
+						checks.add(unlessValueIn(var, operator + " :direction supports only :input and :output, got ~s",
 								List.of(eqKeyword(var, LispNames.INPUT_KEYWORD),
-										eqKeyword(var, LispNames.OUTPUT_KEYWORD),
-										eqKeyword(var, LispNames.IO_KEYWORD))));
-						io = OpenModeTest.of(eqKeyword(var, LispNames.IO_KEYWORD));
-						output = OpenModeTest.of(listToCons(
-								List.of(new LispSymbol(LispNames.NOT), eqKeyword(var, LispNames.INPUT_KEYWORD))));
+										eqKeyword(var, LispNames.OUTPUT_KEYWORD))));
+						output = OpenModeTest.of(eqKeyword(var, LispNames.OUTPUT_KEYWORD));
 					}
 				}
 				case LispNames.ELEMENT_TYPE_KEYWORD -> {
@@ -8934,10 +8927,11 @@ public final class LispMacroExpander {
 					}
 					else {
 						checks.add(unlessValueIn(var, operator
-								+ " :if-exists supports only :supersede, :new-version, :rename, :rename-and-delete, :append, :overwrite, :error and nil, got ~s",
+								+ " :if-exists supports only :supersede, :new-version, :rename, :rename-and-delete, :append, :error and nil, got ~s",
 								List.of(runtimeIfExistsAccepted(var))));
+						// :overwrite stays LITERAL-only, for the reason a computed :io
+						// does (above).
 						append = OpenModeTest.of(eqKeyword(var, LispNames.APPEND_KEYWORD));
-						overwrite = OpenModeTest.of(eqKeyword(var, LispNames.OVERWRITE_KEYWORD));
 						existsAction = makeIf(eqKeyword(var, ":ERROR"), new LispSymbol(OPEN_ACT_ERROR_EXISTS),
 								makeIf(var, new LispSymbol(OPEN_ACT_OPEN), LispNil.INSTANCE));
 					}
@@ -9197,11 +9191,10 @@ public final class LispMacroExpander {
 
 	/** The accepted-value test for a COMPUTED {@code :if-exists}. */
 	private static LispVal runtimeIfExistsAccepted(LispVal var) {
-		return listToCons(
-				List.of(new LispSymbol(LispNames.OR), listToCons(List.of(new LispSymbol(LispNames.NULL), var)),
-						eqKeyword(var, ":SUPERSEDE"), eqKeyword(var, ":NEW-VERSION"), eqKeyword(var, ":RENAME"),
-						eqKeyword(var, ":RENAME-AND-DELETE"), eqKeyword(var, LispNames.APPEND_KEYWORD),
-						eqKeyword(var, LispNames.OVERWRITE_KEYWORD), eqKeyword(var, ":ERROR")));
+		return listToCons(List.of(new LispSymbol(LispNames.OR),
+				listToCons(List.of(new LispSymbol(LispNames.NULL), var)), eqKeyword(var, ":SUPERSEDE"),
+				eqKeyword(var, ":NEW-VERSION"), eqKeyword(var, ":RENAME"), eqKeyword(var, ":RENAME-AND-DELETE"),
+				eqKeyword(var, LispNames.APPEND_KEYWORD), eqKeyword(var, ":ERROR")));
 	}
 
 	/** The {@code :if-exists} option keyword. */

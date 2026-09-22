@@ -18879,6 +18879,40 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunOpenDirectionIoAndOverwrite(@TempDir Path tempDir) throws Exception {
+		// .todo/918: the interpreter's twin is
+		// LispEvaluatorTest#openDirectionIoReadsBackWhatItJustWroteThroughOneCursor.
+		// Both run the SAME class -- runtime/RontoIoFileStream, which travels beside the
+		// compiled output -- so the two readings of :direction :io cannot drift.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(defun p (n) (concatenate 'string "%s/" n))
+				(with-open-file (out (p "io.txt") :direction :output) (write-string "abcdefghij" out))
+				(let ((s (open (p "io.txt") :direction :io :if-exists :overwrite)))
+				  (write-string "wxyz" s)
+				  (print (file-position s))
+				  (file-position s :start)
+				  (print (read-line s nil))
+				  (print (file-length s))
+				  (close s))
+				(let ((s (open (p "io.txt") :direction :io)))
+				  (write-string "abc" s)
+				  (file-position s :start)
+				  (print (read-line s nil))
+				  (close s))
+				(let ((s (open (p "io.dat") :direction :io :element-type '(unsigned-byte 8))))
+				  (dotimes (i 4) (write-byte (+ 65 i) s))
+				  (file-position s :start)
+				  (print (list (read-byte s) (read-byte s) (file-position s)))
+				  (close s))
+				(let ((s (open (p "io.txt") :direction :output :if-exists :overwrite)))
+				  (write-string "Z" s)
+				  (close s))
+				(print (with-open-file (in (p "io.txt")) (read-line in)))
+				""".formatted(here))).isEqualTo("4\n\"wxyzefghij\"\n10\n\"abc\"\n(65 66 2)\n\"Zbc\"");
+	}
+
+	@Test
 	void compileAndRunComputedOpenOptions(@TempDir Path tempDir) throws Exception {
 		String file = tempDir.resolve("computed.txt").toString().replace("\\", "\\\\");
 		// The options arrive as ARGUMENTS -- the shape a portable file wrapper has --

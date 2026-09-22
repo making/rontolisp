@@ -67,7 +67,7 @@ BY NAME instead of failing later in a component lift.
 
 ## What travels
 
-`am.ik.rontolisp.runtime` is THE package that ships inside someone else's artifact; four
+`am.ik.rontolisp.runtime` is THE package that ships inside someone else's artifact; five
 hand-kept lists:
 
 | list | travels when | what it is |
@@ -76,6 +76,7 @@ hand-kept lists:
 | `JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES` | `rontolisp:http-handler` / `%http-server-start` | `RontoHttpServer`, `RontoHttpClack`, `RontoClackEnv`, `RontoHashTable` |
 | `JvmHttpHandlerRuntimeBuilder.WAR_RUNTIME_CLASS_FILES` | a `.war` or `<servlet>true</servlet>`, IN ADDITION to the served list | `RontoHttpServlet` + `RontoHttpServletInitializer` |
 | `JvmHashRuntimeBuilder.RUNTIME_CLASS_FILES` | any hash-table use (`equalpKey` for an `equalp` table, the tombstone machinery for every table -- `.kb/hash-tables.md`) | `RontoHashTable` again |
+| `JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES` | an `open` that can ask for `:direction :io` / `:if-exists :overwrite` (`LispMacroExpander.opensBidirectionally`, `.kb/read-load-streams.md`) | `RontoIoFileStream` -- the interpreter runs the same class |
 
 Path: `JvmRuntimeClassFiles.read` -> `JvmLispCompiler.runtimeClassFiles()` -> `RontoLispCli`
 (beside `-o X.class`, INSIDE `-o X.jar`) and `LispSourceSet` (plugin, `target/classes`);

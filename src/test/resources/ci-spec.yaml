@@ -9927,6 +9927,46 @@ cases:
       T
       T
 
+  - name: open-direction-io-and-if-exists-overwrite
+    # .todo/918: the two open MODES the existence guard could not express. An :io
+    # stream is ONE cursor for reads, writes and file-position, so write + seek to
+    # :start + read-line answers what was just written; :if-exists :overwrite writes
+    # from 0 WITHOUT truncating. The interpreter and the JVM share
+    # runtime/RontoIoFileStream, Preview 1 opens one fd with both rights, and the
+    # component adapter writes through write-via-stream at its tracked offset.
+    source: |
+      (with-open-file (out "io918.txt" :direction :output) (write-string "abcdefghij" out))
+      (let ((s (open "io918.txt" :direction :io :if-exists :overwrite)))
+        (write-string "wxyz" s)
+        (print (file-position s))
+        (file-position s :start)
+        (print (read-line s nil))
+        (print (file-length s))
+        (close s))
+      (let ((s (open "io918.txt" :direction :io)))
+        (write-string "abc" s)
+        (file-position s :start)
+        (print (read-line s nil))
+        (close s))
+      (let ((s (open "io918.dat" :direction :io :element-type '(unsigned-byte 8))))
+        (dotimes (i 4) (write-byte (+ 65 i) s))
+        (file-position s :start)
+        (print (list (read-byte s) (read-byte s) (file-position s)))
+        (close s))
+      (let ((s (open "io918.txt" :direction :output :if-exists :overwrite)))
+        (write-string "Z" s)
+        (close s))
+      (print (with-open-file (in "io918.txt") (read-line in)))
+      (print (open "io918.txt" :direction :io :if-exists nil))
+    expected: |
+      4
+      "wxyzefghij"
+      10
+      "abc"
+      (65 66 2)
+      "Zbc"
+      NIL
+
   - name: stream-operators-clear-input-and-friends
     # .todo/906: clear-input / file-string-length / interactive-stream-p /
     # stream-external-format / broadcast-stream-streams are prelude Lisp over what

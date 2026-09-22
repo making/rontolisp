@@ -13236,6 +13236,56 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunComponentWithDir(FILE_POSITION_PROGRAM)).isEqualTo(FILE_POSITION_EXPECTED);
 	}
 
+	/**
+	 * .todo/918: a bidirectional ({@code :direction :io}) stream reads back what it just
+	 * wrote through one cursor, and {@code :if-exists :overwrite} writes from 0 without
+	 * truncating. The JVM twin is
+	 * {@code JvmLispCompilerTest#compileAndRunOpenDirectionIoAndOverwrite}.
+	 */
+	private static final String OPEN_IO_PROGRAM = """
+			(with-open-file (out "io918.txt" :direction :output) (write-string "abcdefghij" out))
+			(let ((s (open "io918.txt" :direction :io :if-exists :overwrite)))
+			  (write-string "wxyz" s)
+			  (print (file-position s))
+			  (file-position s :start)
+			  (print (read-line s nil))
+			  (print (file-length s))
+			  (close s))
+			(let ((s (open "io918.txt" :direction :io)))
+			  (write-string "abc" s)
+			  (file-position s :start)
+			  (print (read-line s nil))
+			  (close s))
+			(let ((s (open "io918.dat" :direction :io :element-type '(unsigned-byte 8))))
+			  (dotimes (i 4) (write-byte (+ 65 i) s))
+			  (file-position s :start)
+			  (print (list (read-byte s) (read-byte s) (file-position s)))
+			  (close s))
+			(let ((s (open "io918.txt" :direction :output :if-exists :overwrite)))
+			  (write-string "Z" s)
+			  (close s))
+			(print (with-open-file (in "io918.txt") (read-line in)))
+			""";
+
+	private static final String OPEN_IO_EXPECTED = "4\n\"wxyzefghij\"\n10\n\"abc\"\n(65 66 2)\n\"Zbc\"";
+
+	@Test
+	void openDirectionIoAndOverwriteOnPreview1() throws Exception {
+		// One path_open with FD_READ and the write rights: reads and writes share the
+		// descriptor's cursor, which fd_seek moves; :overwrite opens with neither
+		// O_CREAT nor O_TRUNC.
+		assertThat(compileAndRunWithDir(OPEN_IO_PROGRAM)).isEqualTo(OPEN_IO_EXPECTED);
+	}
+
+	@Test
+	void componentOpenDirectionIoAndOverwrite() throws Exception {
+		// WASI 0.3 has no cursor: the adapter writes through write-via-stream AT its
+		// tracked per-fd offset (append-via-stream only for an appending fd) and drops a
+		// cached readable stream after each write, so the read that follows a seek sees
+		// the new bytes.
+		assertThat(compileAndRunComponentWithDir(OPEN_IO_PROGRAM)).isEqualTo(OPEN_IO_EXPECTED);
+	}
+
 	@Test
 	void uiopStreamFileContentsAndSafeIoCompilesAndRuns() throws Exception {
 		// .todo/359: the "give me the contents" half of uiop/stream on this backend

@@ -22035,6 +22035,51 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void openDirectionIoReadsBackWhatItJustWroteThroughOneCursor(@TempDir Path tempDir) {
+		// .todo/918: :direction :io is ONE stream whose reads, writes and file-position
+		// share a cursor -- so write, seek to the start, read gives back what was
+		// written. :if-exists :overwrite is the same stream with the read half unused:
+		// it opens for writing at 0 WITHOUT truncating, so the tail survives. Measured
+		// against sbcl 2026-09-20.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(evalMulti("""
+				(defun p (n) (concatenate 'string "%s/" n))
+				(with-open-file (out (p "io.txt") :direction :output) (write-string "abcdefghij" out))
+				(let ((s (open (p "io.txt") :direction :io :if-exists :overwrite)))
+				  (write-string "wxyz" s)
+				  (let ((at (file-position s)))
+				    (file-position s :start)
+				    (list at (read-line s nil) (file-position s) (file-length s)
+				          (progn (close s)
+				                 (with-open-file (in (p "io.txt")) (read-line in))))))
+				""".formatted(here)).print()).isEqualTo("(4 \"wxyzefghij\" 10 10 \"wxyzefghij\")");
+	}
+
+	@Test
+	void openDirectionIoTruncatesByDefaultAndCarriesTheByteHalf(@TempDir Path tempDir) {
+		// The other two dispositions of an :io open, and its BINARY element type: the
+		// default :if-exists truncates like a superseding output open, and read-byte /
+		// write-byte move through the same cursor file-position answers.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(evalMulti("""
+				(defun p (n) (concatenate 'string "%s/" n))
+				(with-open-file (out (p "io2.txt") :direction :output) (write-string "abcdefghij" out))
+				(let ((s (open (p "io2.txt") :direction :io)))
+				  (write-string "abc" s)
+				  (file-position s :start)
+				  (list (read-line s nil)
+				        (progn (close s) nil)
+				        (let ((b (open (p "io2.dat") :direction :io :element-type '(unsigned-byte 8))))
+				          (dotimes (i 4) (write-byte (+ 65 i) b))
+				          (file-position b :start)
+				          (prog1 (list (read-byte b) (read-byte b) (file-position b) (file-length b))
+				            (close b)))
+				        (open (p "io2.txt") :direction :io :if-exists nil)
+				        (input-stream-p (open (p "io2.txt") :direction :io :if-exists :overwrite))))
+				""".formatted(here)).print()).isEqualTo("(\"abc\" NIL (65 66 2 4) NIL T)");
+	}
+
+	@Test
 	void openDirectionProbeAnswersAClosedFileStreamOrNil(@TempDir Path tempDir) {
 		// CL's probe open: a file stream that is already CLOSED when the file is there,
 		// nil when it is not, and :if-does-not-exist decides the missing case.

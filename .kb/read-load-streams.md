@@ -131,10 +131,13 @@ Pinned by `LispEvaluatorTest#readFromStringAnswersTheStopIndexAsItsSecondValue`,
 
 ## `open` / `with-open-file` / `%probe-file`
 - `with-open-file` is a plain macro (`expandWithOpenFile`) over `open`/`close`.
-- `:direction` must be a literal `:input`/`:output` so both compilers resolve the mode at compile time
-  (`compiler.OpenModes.staticMode`, used by `Jvm/WasmOpenCompiler`); `open` therefore has no
-  `BuiltinFunctionWrappers` entry. Modes 0 text-in / 1 text-out / 2 bin-in / 3 bin-out
-  (`OUTPUT_BIT`/`BINARY_BIT`), plus `APPEND_BIT` (4) -> 5 / 7.
+- The positional form's direction is ONE literal token so both compilers resolve the mode at
+  compile time (`compiler.OpenModes.directionMode` / `staticMode`, used by `Jvm/WasmOpenCompiler`):
+  `:input`, `:output`, `:io`, and the four normalized direction + `:if-exists` spellings
+  `:append`, `:overwrite`, `:io-append`, `:io-overwrite` (`LispNames.outputDirectionToken`).
+  Mode bits `OUTPUT_BIT` 1, `BINARY_BIT` 2, `APPEND_BIT` 4, `OVERWRITE_BIT` 8, `IO_BIT` 16
+  (`:io` sets `OUTPUT_BIT` too): 0/1/2/3 text-in/text-out/bin-in/bin-out, 5/7 append, 9/11
+  overwrite, 17..27 the three `:io` dispositions x element type.
 - **A failed `open` signals a `file-error` on every backend**, carrying the designator as given
   (`file-error-pathname`) and reporting `OPEN: cannot open file <namestring>` -- one text on all
   four. Interpreter: the `open` built-in throws `ClosRegistry.newFileErrorCondition`. Compiled:
@@ -197,19 +200,18 @@ must stay in step, and the cross-backend pin is ci-spec
   it says, which is what makes `(open p :if-exists :rename)` the plain input open CL says
   it is. `:supersede` / `:new-version` / `:rename` / `:rename-and-delete` all collapse onto
   the truncating open (no version numbers here, and SBCL leaves the same content);
-  `:error` and nil answer instead of opening; `:append` is the pseudo-direction above.
-  **`:overwrite` is the one value still refused** -- it needs a write-without-truncate mode
-  on all four (`.todo/918`).
-- **`:if-does-not-exist` defaults per CLHS**: `:create` for a superseding output open, nil
-  for `:probe`, `:error` everywhere else -- INCLUDING an APPENDING output open, which
+  `:error` and nil answer instead of opening; `:append` and `:overwrite` are the
+  pseudo-directions above (section "`:direction :io` and `:if-exists :overwrite`").
+- **`:if-does-not-exist` defaults per CLHS**: `:create` for a superseding output or `:io`
+  open, nil for `:probe`, `:error` everywhere else -- INCLUDING an APPENDING or OVERWRITING
+  open, which
   therefore no longer creates the file (measured against sbcl 2026-09-20; smart-buffer's
   disk spill is unaffected because `uiop:with-temporary-file` creates the file first).
   `:error` on a non-output direction is left to the open's OWN failure, so the one
   "cannot open file" text still comes out and no guard is emitted.
 - **`:direction :probe` is an open followed by a close**, not a new kind: CL's probe stream
   is a file stream that is already closed, so `(let ((s (open p :input))) (close s) s)` is
-  literally it, on every backend, with `%probe-file` deciding nil. `:direction :io` is
-  refused at CALL time (`.todo/918`).
+  literally it, on every backend, with `%probe-file` deciding nil.
 - **`close` on an already-closed stream answers `t`** rather than signalling (CL, and
   SBCL): the `unwind-protect` shape `with-open-file` expands to closes a stream the body
   may already have closed. Three of the four needed work for it. The JVM `_closeStream`
@@ -275,10 +277,12 @@ mechanism.
   existing output stays byte-identical
   (`JvmLispCompilerTest#aLiteralWithOpenFileSpecCompilesToTheSameBytesAsBefore`).
 - **The path is bound once** — six leaves name it.
-- **The accepted value SET is unchanged; only the time of the refusal moves.** `:direction`
-  `:input`/`:output`; `:element-type` `character` / `(unsigned-byte 8)` (plus unsized
-  `unsigned-byte`, `(unsigned-byte *)`); `:if-exists` `:supersede`/`:append`; `:if-does-not-exist`
-  `:create`/`:error`; `:external-format` `:utf-8`/`:default`.
+- **The accepted value SET is the literal path's minus two, and only the time of the refusal
+  moves.** `:direction` `:input`/`:output`; `:element-type` `character` / `(unsigned-byte 8)`
+  (plus unsized `unsigned-byte`, `(unsigned-byte *)`); `:if-exists` `:supersede` and its
+  version synonyms, `:append`, `:error`, nil; `:if-does-not-exist` `:create`/`:error`/nil;
+  `:external-format` `:utf-8`/`:default`. A COMPUTED `:io` / `:overwrite` is refused at call
+  time although the literal works -- the measured trade in the next section.
 - **Three entries, one lowering**: `expandWithOpenFile`, `OpenModes.lowerRuntimeOptions` in front of
   `Jvm/WasmOpenCompiler`, and `BuiltinFunctionWrappers.openWrapper` — which is what gave
   `(apply #'open p '(:direction :output :if-exists :append))` the append it used to drop silently.
@@ -614,13 +618,18 @@ the gap means all four learning the buffered offset at once.
 
 **Decided in `.todo/906` (2026-09-20), measured, not assumed**: on its own the gap is worth
 exactly ONE ANSI test (`FILE-POSITION.5`, `Expected integer, got: NIL`) -- every other
-character-stream `file-position` test in the chapter needs a file the suite does not ship,
-or `:direction :io`. It is a PREREQUISITE for `:io`, though, whose 38 tests all
-`(file-position s :start)` before reading back what they wrote. So the character-stream
-offset moves with `:io`, in `.todo/918`, and not on its own: the mechanism is the same on
-every backend (a per-handle logical offset the character reads and writes bump, the
-`_bumpStreamPosition` shape the byte primitives already use; on Preview 1 the exact answer
-is `fd_seek` minus the unread bytes still in `READ_CURSOR_ADDR`..`READ_END_ADDR`).
+character-stream `file-position` test in the chapter needs a file the suite does not ship.
+
+**The premise that tied it to `:io` did not survive `.todo/918` (2026-09-22).** It assumed
+an `:io` stream would be a character stream of the existing kind and so need the logical
+offset first. It is not: `:io` is its own stream kind that owns its cursor (next section),
+so its character `file-position` is real on all four with no offset tracking at all, and
+the ordinary `:input` / `:output` character stream keeps answering nil -- still worth that
+one test, split out on its own. Two corrections to the old mechanism note while measuring:
+Preview 1's `_read_line` / `_read_char` read ONE BYTE per `fd_read`, so the descriptor
+offset already IS the logical position for them (`READ_CURSOR_ADDR`..`READ_END_ADDR` belong
+to the READER over `load` / `read-from-string`, not to a stream); the one read-ahead on a
+character stream is `read-sequence`'s 64 KiB bulk path (`WasmCharIoRuntimeBuilder`).
 
 **A CHARACTER file stream answers `nil` on both, off a per-fd binary flag byte written at
 the `open` call site** (the element type is a compile-time literal, so nothing else can
@@ -646,6 +655,85 @@ Pinned by `LispEvaluatorTest#binaryFileStreamPositionQueriesAndSeeks`,
 `#componentFilePositionQueriesAndSeeks` (one `FILE_POSITION_PROGRAM`),
 `compileAndRunLiteStreamBuiltins`, the Gray rewrite case and ci-spec
 `file-position-round-trips-on-a-binary-file-stream`.
+
+## `:direction :io` and `:if-exists :overwrite`: ONE stream kind that owns its cursor
+
+`.todo/918`. The two open modes the existence guard could not express, because each opens
+the file DIFFERENTLY: `:io` reads and writes one file through one cursor, `:overwrite`
+writes from 0 without truncating. Both are the same stream (an `:overwrite` open is an
+`:io` one whose read half goes unused), and `file-position` on it -- query, set, `:start`,
+`:end` -- is real whatever its element type. Measured against sbcl 2026-09-20: a fresh `:io`
+open answers position 0, element type `CHARACTER`, `input-stream-p` and `output-stream-p`
+both `t`; `write-sequence "wxyz"` over `abcdefghij` under `:overwrite` leaves `wxyzefghij`;
+a character's position advances by its UTF-8 length (`file-position` after one 3-byte
+character is 3).
+
+- **Interpreter and JVM run ONE class**, `runtime/RontoIoFileStream` (a `RandomAccessFile`,
+  UTF-8 decoded and encoded by hand so the byte cursor is never ahead of what was consumed).
+  It extends `Writer`, so every OUTPUT dispatch (print family, `write-string`,
+  `write-line`, `fresh-line`, `force-output`, `close`, the end-of-program flush) takes it
+  with no arm; the read, byte and position sides are explicit arms (interpreter:
+  `read-line`, `read-char`, `%peek-char`, `read-byte`, `write-byte`, `listen`,
+  `file-position`; JVM: `_readLineStream`, `emitIoCharArm` ahead of `emitResolveReader` in
+  `_readChar`/`_peekChar`, `_readByte`, `_writeByte`, `_listen`, `_filePosition`, and one
+  `IO_BIT|OVERWRITE_BIT` test at the head of `_open`'s mode chain). End of file is
+  `ready()`, never a null line: the class cannot spell `@Nullable`. The JVM backend calls
+  the class and it TRAVELS (`JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES`, 3,592 bytes).
+- **Preview 1** opens ONE descriptor: `WasmOpenCompiler.wasmMode` 0 read / 1 write / 2
+  append / 3 overwrite (neither `O_CREAT` nor `O_TRUNC`) / 4-6 the same three for `:io`,
+  which adds `FD_READ` to the write rights (102). Reads and writes share the fd cursor and
+  `fd_seek` moves it; the per-fd flag byte `_file_position` reads now means "position is
+  real" (binary OR `:io`/`:overwrite`), not "binary".
+- **`--component`** has no cursor, so the adapter writes through
+  `descriptor.write-via-stream` AT its tracked per-fd offset (a new `"w"` member
+  `file-write`, a `BLOCK_FUNCS` entry and a `core.wat` import; `adapter.wasm` and
+  `import-block.bin` regenerated by `regen.sh`, every other blob came out byte-identical).
+  Only an fd opened with fdflags APPEND keeps `append-via-stream` (the page-5
+  `$append_cell` table at `0x51b00`). After every write the cached readable stream is
+  dropped and the EOF latch cleared, as `$file_position_set` does, or the read after a seek
+  replays stale bytes. `$path_open` now derives descriptor-flags from the requested RIGHTS
+  (FD_READ -> read, FD_WRITE -> write, both -> 3) rather than from oflags, since
+  `:overwrite` writes with oflags 0.
+- **`:io :append` only STARTS the cursor at the end** on the interpreter/JVM (one cursor
+  serves the reads too, and `file-position` moves it), where CL's `:append` sends every
+  write to the end; the two WASM backends append for real (fdflags APPEND). No test writes
+  after seeking an appending `:io` stream.
+
+**Gate, and the measured trade that made computed values literal-only.** The JVM arm, the
+travelling class and the WASM `_open` body key on `LispMacroExpander.opensBidirectionally`:
+a LITERAL `:direction :io` / `:if-exists :overwrite` on an `open` / `with-open-file`. The
+first cut also accepted a COMPUTED `:io` / `:overwrite`, which made every computed spec and
+`#'open` open bidirectionally-maybe. Measured 2026-09-22 (bytes, JVM / Preview 1 /
+component, `-o` default optimize):
+
+| program | before | computed accepted | literal-only (landed) |
+|---|---|---|---|
+| literal `with-open-file` write + read | 14,267 / 12,627 / 17,979 | 14,267 / 12,627 / 18,237 | 14,267 / 12,627 / 18,237 |
+| options passed as arguments | 18,334 / 15,381 / 20,794 | 23,579 (2 files) / 16,696 / 22,388 | 18,334 / 15,381 / 21,052 |
+| `uiop:with-output-file` + `read-file-string` | 45,793 / 31,940 / 37,379 | 50,416 (2 files) / 32,582 / 38,287 | 45,793 / 31,940 / 37,637 |
+| binary `file-position` | 11,155 / 6,134 / 10,886 | -- | 11,155 / 6,134 / 11,144 |
+
+The dispatch grows from six literal leaves to fourteen and every uiop file wrapper would
+carry the class; nothing observed passes `:io` or `:overwrite` as a computed value. So a
+computed one is refused at call time, like any other unsupported value. The +258 bytes on
+every component program that writes a file is the adapter's write path -- the price of
+positioned writes, not of the gate. **Trigger**: a real caller that computes `:io` /
+`:overwrite` -- widen the two `unlessValueIn` sets and the gate together.
+
+ANSI `streams` (interpreter, suite `ca06bd9`), 2026-09-22: 423 -> 447 of 758 (55.8% ->
+59.0%), fixed `OPEN.IO.1 .2 .4 .20 .22-.29 .28A .31-.35`, `OPEN.OUTPUT.24`,
+`OPEN.ERROR.3 .9 .11 .13 .14`; regressed none. Still failing and NOT this mode's: `OPEN.IO.5
+-.19` except 13 (element types beyond `(unsigned-byte 8)`, and `OPEN.IO.13`'s
+`stream-element-type` answering `CHARACTER` for a binary stream -- `.todo/919`), `.3` (logical
+pathnames), `.21` / `.30` (`:notes`), `OPEN.66` (a stream as the filespec).
+
+Pinned by `LispEvaluatorTest#openDirectionIoReadsBackWhatItJustWroteThroughOneCursor` /
+`#openDirectionIoTruncatesByDefaultAndCarriesTheByteHalf`,
+`JvmLispCompilerTest#compileAndRunOpenDirectionIoAndOverwrite`,
+`WasmLispCompilerIntegrationTest#openDirectionIoAndOverwriteOnPreview1` /
+`#componentOpenDirectionIoAndOverwrite`, `JvmRuntimeClassFilesTest`, ci-spec
+`open-direction-io-and-if-exists-overwrite`; byte identity of the rest by
+`JvmLispCompilerTest#aLiteralWithOpenFileSpecCompilesToTheSameBytesAsBefore`.
 
 **`uiop/os:parse-windows-shortcut` / `parse-file-location-info` run unguarded on all four
 backends (`.todo/916`)**: the `:rontolisp-wasm` gate they used to open with was checking a
