@@ -694,6 +694,15 @@ character is 3).
   replays stale bytes. `$path_open` now derives descriptor-flags from the requested RIGHTS
   (FD_READ -> read, FD_WRITE -> write, both -> 3) rather than from oflags, since
   `:overwrite` writes with oflags 0.
+- **`file-position`'s `:start` / `:end` are ONE shared call-site rewrite on the compile
+  paths** (`LispMacroExpander.rewriteFilePositionArg`, applied by both `Jvm/WasmExprCompiler`
+  `file-position` cases); the interpreter's primitive reads the keywords at run time. A
+  literal folds (`:start` -> 0, `:end` -> `file-length`); a COMPUTED position is bound and
+  resolved at run time, because the Gray streams dispatcher and `#'file-position` pass the
+  designator down as a value -- the literal-only first cut threw `ClassCastException`
+  (String -> Long) inside `_filePosition` in `JvmClassShakerCorpusTest`, whose corpus
+  splices gray.lisp. `:end` introduces a `file-length` call the source never names, so the
+  JVM's `FileMeta.fileLength` gate also keys on `filePositionMayNeedLength`.
 - **`:io :append` only STARTS the cursor at the end** on the interpreter/JVM (one cursor
   serves the reads too, and `file-position` moves it), where CL's `:append` sends every
   write to the end; the two WASM backends append for real (fdflags APPEND). No test writes

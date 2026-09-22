@@ -10546,13 +10546,11 @@ class LispEvaluatorTest {
 	@Test
 	void withOpenFileUnsupportedOptionThrows(@TempDir Path tempDir) {
 		String file = tempDir.resolve("opt.txt").toString().replace("\\", "\\\\");
-		// The whole :if-exists table is read now except :overwrite, which needs an open
-		// mode no backend has (.todo/918); it must not be silently reinterpreted as the
-		// truncating open. It signals at CALL time as a Lisp condition (never an
-		// expansion-time throw): the eager compile paths expand every branch of a
-		// spliced library, and such a branch is often dead code.
-		assertThatThrownBy(
-				() -> eval("(with-open-file (s \"" + file + "\" :direction :output :if-exists :overwrite) s)"))
+		// The whole :if-exists table is read now; a value outside it must not be silently
+		// reinterpreted as the truncating open. It signals at CALL time as a Lisp
+		// condition (never an expansion-time throw): the eager compile paths expand every
+		// branch of a spliced library, and such a branch is often dead code.
+		assertThatThrownBy(() -> eval("(with-open-file (s \"" + file + "\" :direction :output :if-exists :bogus) s)"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining(":IF-EXISTS supports only the native default value");
 	}

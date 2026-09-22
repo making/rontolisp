@@ -3060,7 +3060,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		final JvmIoRuntimeBuilder.FileMeta fileMeta = new JvmIoRuntimeBuilder.FileMeta(
 				programUsesSymbol(program, LispNames.FILE_WRITE_DATE),
 				programUsesSymbol(program, LispNames.MAKE_DIRECTORIES),
-				programUsesSymbol(program, LispNames.FILE_LENGTH),
+				// file-position's :end (or a computed position that may be :end) resolves
+				// through file-length (LispMacroExpander.rewriteFilePositionArg).
+				programUsesSymbol(program, LispNames.FILE_LENGTH)
+						|| LispMacroExpander.filePositionMayNeedLength(program),
 				programUsesSymbol(program, LispNames.DELETE_FILE_INTERNAL),
 				programUsesSymbol(program, LispNames.RENAME_FILE_INTERNAL),
 				programUsesSymbol(program, LispNames.FILE_POSITION));

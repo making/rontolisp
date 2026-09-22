@@ -34101,31 +34101,99 @@ public final class LispMacroExpander {
 	 */
 	private static final String FILE_POSITION_STREAM_VAR = "__fp_stream";
 
+	/** The temporary a COMPUTED position is bound to, then resolved in place. */
+	private static final String FILE_POSITION_POS_VAR = "__fp_pos";
+
 	/**
 	 * Rewrites the two POSITION DESIGNATORS CL allows in {@code (file-position stream
 	 * position-spec)} onto the integer every backend's primitive takes: {@code :start} is
-	 * {@code 0} and {@code :end} is the stream's {@code file-length}. Literal-only, and
-	 * the same rewrite on every compile path -- the interpreter's own primitive reads the
-	 * two keywords at run time instead, which is what also gives {@code (funcall
-	 * #'file-position s :start)} the answer there.
+	 * {@code 0} and {@code :end} is the stream's {@code file-length}. A literal keyword
+	 * folds at the call site; a COMPUTED position is bound and resolved at run time,
+	 * because a caller that passes the designator down -- the Gray streams layer's
+	 * dispatcher, the {@code #'file-position} wrapper -- hands the primitive a keyword it
+	 * does not take. The interpreter's own primitive reads the two keywords at run time
+	 * instead. An integer literal, and the call this rewrite itself produces, pass
+	 * through.
 	 * @param cons the {@code file-position} form as written
-	 * @return the rewritten form, or {@code cons} when the position is not one of the two
-	 * keywords
+	 * @return the rewritten form, or {@code cons} when nothing needs resolving
 	 */
 	public static LispVal rewriteFilePositionArg(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		if (parts.size() != 3 || !(parts.get(2) instanceof LispSymbol spec)) {
-			return cons;
-		}
-		if (":START".equals(spec.name())) {
-			return listToCons(List.of(parts.get(0), parts.get(1), new LispInteger(0)));
-		}
-		if (!":END".equals(spec.name())) {
+		if (parts.size() != 3 || !filePositionArgNeedsResolving(parts.get(2))) {
 			return cons;
 		}
 		LispSymbol streamVar = new LispSymbol(FILE_POSITION_STREAM_VAR);
-		return makeLet(streamVar.name(), parts.get(1),
-				listToCons(List.of(parts.get(0), streamVar, callOf(LispNames.FILE_LENGTH, streamVar))));
+		if (parts.get(2) instanceof LispSymbol spec && ":START".equals(spec.name())) {
+			return listToCons(List.of(parts.get(0), parts.get(1), new LispInteger(0)));
+		}
+		if (parts.get(2) instanceof LispSymbol spec && ":END".equals(spec.name())) {
+			return makeLet(streamVar.name(), parts.get(1),
+					listToCons(List.of(parts.get(0), streamVar, callOf(LispNames.FILE_LENGTH, streamVar))));
+		}
+		LispSymbol posVar = new LispSymbol(FILE_POSITION_POS_VAR);
+		LispVal resolved = makeIf(eqKeyword(posVar, ":START"), new LispInteger(0),
+				makeIf(eqKeyword(posVar, ":END"), callOf(LispNames.FILE_LENGTH, streamVar), posVar));
+		LispVal bindings = listToCons(List.of(listToCons(List.of(streamVar, parts.get(1))),
+				listToCons(List.of(posVar, parts.get(2))), listToCons(List.of(posVar, resolved))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings,
+				listToCons(List.of(parts.get(0), streamVar, posVar))));
+	}
+
+	/**
+	 * Whether a {@code file-position} position argument is one
+	 * {@link #rewriteFilePositionArg} resolves: {@code :start}, {@code :end}, or anything
+	 * computed. An integer literal is already what the primitive takes, and the
+	 * {@code __fp_pos} temporary is the rewrite's own output.
+	 */
+	private static boolean filePositionArgNeedsResolving(LispVal position) {
+		if (position instanceof LispInteger || position instanceof LispBigInteger) {
+			return false;
+		}
+		if (position instanceof LispSymbol sym) {
+			if (FILE_POSITION_POS_VAR.equals(sym.name())) {
+				return false;
+			}
+			if (sym.name().startsWith(":")) {
+				return ":START".equals(sym.name()) || ":END".equals(sym.name());
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Whether any {@code file-position} call in the program reaches for the stream's
+	 * {@code file-length} through {@link #rewriteFilePositionArg} (a {@code :end}, or a
+	 * computed position that may be one) -- the JVM backend's {@code _fileLength} gate
+	 * must then be on although the source never names {@code file-length}.
+	 * @param program the forms the backend compiles
+	 * @return whether the rewrite can introduce a {@code file-length} call
+	 */
+	public static boolean filePositionMayNeedLength(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (filePositionMayNeedLength(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean filePositionMayNeedLength(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() == 3 && parts.get(0) instanceof LispSymbol op
+				&& LispNames.FILE_POSITION.equals(unqualifiedClMember(op.name()))
+				&& filePositionArgNeedsResolving(parts.get(2))
+				&& !(parts.get(2) instanceof LispSymbol spec && ":START".equals(spec.name()))) {
+			return true;
+		}
+		for (LispVal part : parts) {
+			if (filePositionMayNeedLength(part)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	public static LispVal expandWriteChar(LispCons cons) {

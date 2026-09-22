@@ -9957,6 +9957,13 @@ cases:
         (write-string "Z" s)
         (close s))
       (print (with-open-file (in "io918.txt") (read-line in)))
+      ;; A COMPUTED position designator resolves at run time -- the shape the Gray
+      ;; streams dispatcher and #'file-position hand the primitive.
+      (let ((s (open "io918.txt" :direction :io :if-exists :overwrite))
+            (where :end))
+        (let* ((moved (file-position s where)) (at (file-position s)))
+          (print (list moved at)))
+        (close s))
       (print (open "io918.txt" :direction :io :if-exists nil))
     expected: |
       4
@@ -9965,6 +9972,7 @@ cases:
       "abc"
       (65 66 2)
       "Zbc"
+      (T 3)
       NIL
 
   - name: stream-operators-clear-input-and-friends
