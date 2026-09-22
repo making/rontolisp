@@ -169,6 +169,13 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	private boolean needsStringInputRuntime;
 
+	/**
+	 * Whether the positioned character file streams ({@code RontoCharFileReader} /
+	 * {@code RontoCharFileWriter}) go beside the output: a program that names
+	 * {@code file-position} and can open a character file stream.
+	 */
+	private boolean needsCharFileRuntime;
+
 	/** The array runtime helper group ({@link JvmArrayRuntimeBuilder}). */
 	private static final String GROUP_ARRAYS = "arrays";
 
@@ -561,12 +568,16 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsHashTableRuntime
-				&& !this.needsComplexRuntime && !this.needsIoStreamRuntime && !this.needsStringInputRuntime) {
+				&& !this.needsComplexRuntime && !this.needsIoStreamRuntime && !this.needsCharFileRuntime
+				&& !this.needsStringInputRuntime) {
 			return Map.of();
 		}
 		Map<String, byte[]> files = new LinkedHashMap<>();
 		if (this.needsIoStreamRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES));
+		}
+		if (this.needsCharFileRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(JvmIoRuntimeBuilder.CHAR_FILE_RUNTIME_CLASS_FILES));
 		}
 		if (this.needsStringInputRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(JvmIoRuntimeBuilder.STRING_INPUT_RUNTIME_CLASS_FILES));
@@ -3080,12 +3091,18 @@ public final class JvmLispCompiler implements LispCompiler {
 				programUsesSymbol(program, LispNames.DELETE_FILE_INTERNAL),
 				programUsesSymbol(program, LispNames.RENAME_FILE_INTERNAL),
 				programUsesSymbol(program, LispNames.FILE_POSITION),
+				// A character file stream's position is real only through the travelling
+				// positioned reader/writer, which a program whose every open is binary
+				// does not need.
+				programUsesSymbol(program, LispNames.FILE_POSITION)
+						&& LispMacroExpander.mayOpenCharacterFileStream(program),
 				// A string INPUT stream answers file-position only as the travelling
 				// RontoStringInputStream, so both facts gate it (and the class file).
 				programUsesSymbol(program, LispNames.FILE_POSITION)
 						&& (programUsesSymbol(program, LispNames.WITH_INPUT_FROM_STRING)
 								|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM)
 								|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL)));
+		this.needsCharFileRuntime = fileMeta.characterPosition();
 		// The BIDIRECTIONAL stream arm of _open, and with it the travelling
 		// RontoIoFileStream class file, ride the surface fact that the program can ask
 		// for one: every other artifact stays exactly one class file.

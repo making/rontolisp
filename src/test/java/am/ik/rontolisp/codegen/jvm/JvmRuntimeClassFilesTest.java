@@ -44,6 +44,7 @@ class JvmRuntimeClassFilesTest {
 				.of(JvmExportRuntimeBuilder.RUNTIME_CLASS_FILES, JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES,
 						JvmHttpHandlerRuntimeBuilder.WAR_RUNTIME_CLASS_FILES, JvmHashRuntimeBuilder.RUNTIME_CLASS_FILES,
 						JvmComplexRuntimeBuilder.RUNTIME_CLASS_FILES, JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES,
+						JvmIoRuntimeBuilder.CHAR_FILE_RUNTIME_CLASS_FILES,
 						JvmIoRuntimeBuilder.STRING_INPUT_RUNTIME_CLASS_FILES)
 				.flatMap(List::stream)
 				.map(path -> path.substring(path.lastIndexOf('/') + 1))

@@ -998,18 +998,16 @@ final class WasmIoRuntimeBuilder {
 
 	/**
 	 * Where the two {@code file-position} runtime bodies find the host call that answers
-	 * for a descriptor, and the per-fd binary-stream flags that say whether the
-	 * descriptor has a byte position at all.
+	 * for a descriptor.
 	 *
 	 * <p>
 	 * The two WASI backends reach the same answer through different calls. Preview 1 has
 	 * a real moveable cursor, so ONE injected {@code wasi_snapshot_preview1.fd_seek}
 	 * serves both directions -- {@code (fd, 0, cur)} reads it, {@code (fd, n, set)} moves
-	 * it -- and the flag table is the module's own, indexed by the raw descriptor.
-	 * {@code --component} has no cursor (WASI 0.3 reads are offset-based), so the adapter
-	 * tracks a per-fd offset and exports the {@code file_position_get} /
-	 * {@code file_position_set} pair over it, with its own flag table indexed by its own
-	 * {@code 100 + slot} numbering.
+	 * it. {@code --component} has no cursor (WASI 0.3 reads are offset-based), so the
+	 * adapter tracks a per-fd offset and exports the {@code file_position_get} /
+	 * {@code file_position_set} pair over it. Either way the descriptor offset is the
+	 * stream's position for a character stream as much as for a binary one.
 	 *
 	 * @param fdSeek whether {@code getFunc}/{@code setFunc} name preview1's
 	 * {@code fd_seek} (one function, the four-argument shape) rather than the adapter's
@@ -1017,12 +1015,8 @@ final class WasmIoRuntimeBuilder {
 	 * @param getFunc the slot-encoded function index of the query import
 	 * @param setFunc the slot-encoded function index of the set import (the same function
 	 * as {@code getFunc} under {@code fdSeek})
-	 * @param flagsAddr the base of the per-fd binary-stream flag table
-	 * @param fdBias what is subtracted from a descriptor to index that table
-	 * @param flagsSlots how many slots the table has, or {@code <= 0} for a table whose
-	 * writer bounds the index for itself (the adapter's)
 	 */
-	record FilePositionAbi(boolean fdSeek, int getFunc, int setFunc, int flagsAddr, int fdBias, int flagsSlots) {
+	record FilePositionAbi(boolean fdSeek, int getFunc, int setFunc) {
 	}
 
 	/**
@@ -1165,9 +1159,8 @@ final class WasmIoRuntimeBuilder {
 	 * the {@code _open} / {@code _file_length} discipline (load-bearing under
 	 * {@code --component}, where the adapter may allocate through {@code cabi_realloc}
 	 * while the call runs).
-	 * @param abi where the host call and the per-fd binary flags live
-	 * ({@link FilePositionAbi}); its function indices are slot-encoded
-	 * ({@code PLACEHOLDER_FUNC_BASE + ordinal}), resolved by the
+	 * @param abi where the host call lives ({@link FilePositionAbi}); its function
+	 * indices are slot-encoded ({@code PLACEHOLDER_FUNC_BASE + ordinal}), resolved by the
 	 * {@code WasmImportInjector} post-pass
 	 * @return the function body bytes
 	 */
@@ -1207,11 +1200,6 @@ final class WasmIoRuntimeBuilder {
 		emitNil(w);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		// A CHARACTER file stream has no byte position the reader exposes (mirroring the
-		// interpreter and the JVM): the per-fd binary flag is 0 unless the stream was
-		// opened with an (unsigned-byte 8) element type. Preview 1 reads the raw
-		// descriptor's slot and answers nil past the end of its own table.
-		emitBinaryFlagGuard(w, abi, FD);
 		// off = align8(HEAP_PTR); HEAP_PTR advanced over it, popped back after.
 		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		i32(w, 7);
@@ -1250,9 +1238,30 @@ final class WasmIoRuntimeBuilder {
 		emitNil(w);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		// return _int_new(mem_i64[off])
+		// A character peek-char parked on this fd was read from the descriptor but not
+		// consumed: err = its UTF-8 length when the one-slot pushback holds this fd's
+		// code point, else 0.
+		i32(w, 0);
+		setLocal(w, ERR);
+		emitPeekParkedOn(w, FD);
+		w.write(Instruction.IF, 0x40);
+		loadMem32(w, WasmLispCompiler.PEEK_CP_ADDR);
+		setLocal(w, ERR);
+		i32(w, 1);
+		for (int bound : new int[] { 0x80, 0x800, 0x10000 }) {
+			getLocal(w, ERR);
+			i32(w, bound);
+			w.write(Instruction.I32_GE_U);
+			w.write(Instruction.I32_ADD);
+		}
+		setLocal(w, ERR);
+		w.write(Instruction.END);
+		// return _int_new(mem_i64[off] - err)
 		getLocal(w, OFF);
 		w.write(Instruction.I64_LOAD, 0x03, 0x00);
+		getLocal(w, ERR);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		w.write(Instruction.I64_SUB);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 		w.write(Instruction.END);
@@ -1262,8 +1271,7 @@ final class WasmIoRuntimeBuilder {
 	/**
 	 * Builds the _file_position_set(stream, position) function body: repositions the file
 	 * behind the stream and answers the symbol {@code t} on success, or {@code ref.null
-	 * eq} (nil) when the position cannot be set -- the same nil answer the character
-	 * streams answer (CL's "cannot be repositioned").
+	 * eq} (nil) when the position cannot be set (CL's "cannot be repositioned").
 	 *
 	 * <p>
 	 * The position argument is widened through {@code _int_val} and handed to the host
@@ -1272,8 +1280,7 @@ final class WasmIoRuntimeBuilder {
 	 * {@code file_position_set(fd, ptr)} reads it out of the staged 8 bytes instead.
 	 * Either way the scratch uses the same advance-then-pop discipline as
 	 * {@link #buildFilePositionBody}.
-	 * @param abi where the host call and the per-fd binary flags live
-	 * ({@link FilePositionAbi})
+	 * @param abi where the host call lives ({@link FilePositionAbi})
 	 * @return the function body bytes
 	 */
 	static byte[] buildFilePositionSetBody(FilePositionAbi abi) {
@@ -1310,10 +1317,6 @@ final class WasmIoRuntimeBuilder {
 		emitNil(w);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		// A CHARACTER file stream cannot be repositioned through a byte offset (mirroring
-		// the interpreter and the JVM): the per-fd binary flag is 0 unless the stream was
-		// opened with an (unsigned-byte 8) element type.
-		emitBinaryFlagGuard(w, abi, FD);
 		// off = align8(HEAP_PTR); HEAP_PTR advanced over it, popped back after.
 		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		i32(w, 7);
@@ -1361,6 +1364,13 @@ final class WasmIoRuntimeBuilder {
 		emitNil(w);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
+		// A character a peek parked on this fd belongs to the old position: drop it.
+		emitPeekParkedOn(w, FD);
+		w.write(Instruction.IF, 0x40);
+		i32(w, WasmLispCompiler.PEEK_FD_ADDR);
+		i32(w, 0);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.END);
 		// return t
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_T_SYM);
@@ -1369,40 +1379,15 @@ final class WasmIoRuntimeBuilder {
 	}
 
 	/**
-	 * Returns nil from the enclosing body unless the descriptor in {@code fdLocal} was
-	 * opened with an {@code (unsigned-byte 8)} element type. A descriptor past the end of
-	 * a bounded table is treated as a character stream: the flag was never written for
-	 * it, so nil -- "cannot be determined" -- is the only answer the module can stand
-	 * behind.
+	 * Pushes whether peek-char's one-slot pushback holds a code point read from the
+	 * descriptor in {@code fdLocal} ({@code PEEK_FD_ADDR} holds fd + 1).
 	 */
-	private static void emitBinaryFlagGuard(WasmWriter w, FilePositionAbi abi, int fdLocal) {
-		if (abi.flagsSlots() > 0) {
-			emitFlagIndex(w, abi, fdLocal);
-			i32(w, abi.flagsSlots());
-			w.write(Instruction.I32_GE_U);
-			w.write(Instruction.IF, 0x40);
-			emitNil(w);
-			w.write(Instruction.RETURN);
-			w.write(Instruction.END);
-		}
-		emitFlagIndex(w, abi, fdLocal);
-		i32(w, abi.flagsAddr());
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		emitNil(w);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
-	}
-
-	/** The descriptor's index into the per-fd binary-stream flag table. */
-	private static void emitFlagIndex(WasmWriter w, FilePositionAbi abi, int fdLocal) {
+	private static void emitPeekParkedOn(WasmWriter w, int fdLocal) {
+		loadMem32(w, WasmLispCompiler.PEEK_FD_ADDR);
 		getLocal(w, fdLocal);
-		if (abi.fdBias() != 0) {
-			i32(w, abi.fdBias());
-			w.write(Instruction.I32_SUB);
-		}
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_EQ);
 	}
 
 	private static void emitNil(WasmWriter w) {

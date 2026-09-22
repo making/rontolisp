@@ -412,7 +412,7 @@ page.
 | `export` | `(export '(run))` | make symbols external in a package (a literal top-level call is a compile-time directive) |
 | `unexport` | `(unexport 'run)` | the inverse of `export`: the symbol stays present but is no longer visible unqualified |
 | `import` | `(import 'other:sym)` | make another package's symbol accessible unqualified -- the runtime form of `:import-from` (a literal top-level call is a compile-time directive) |
-| `file-position` | `(file-position s)` | the byte position of a binary file stream, the character position of a string stream, or the reposition when a second argument is given; `nil` for any stream whose position cannot be determined |
+| `file-position` | `(file-position s)` | the position of a file stream (elements of a binary one, bytes of a character one) or of a string stream (characters), or the reposition when a second argument is given; `nil` for any stream whose position cannot be determined |
 | `file-length` | `(file-length s)` | the byte length of the file a file stream is open on; `nil` for any other stream |
 | `file-write-date` | `(file-write-date "x.txt")` | the file's modification time as a universal time; `nil` when it cannot be determined (always `nil` on both WASM backends) |
 | `ensure-directories-exist` | `(ensure-directories-exist "logs/app.log")` | create the pathspec's directory component and return the pathspec (signals on both WASM backends) |

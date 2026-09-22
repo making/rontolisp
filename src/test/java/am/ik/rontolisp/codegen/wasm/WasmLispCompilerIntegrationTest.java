@@ -14,6 +14,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.stream.Stream;
 
+import am.ik.rontolisp.CharacterFilePositionFixture;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.macro.FoldDifferential;
@@ -13230,9 +13231,7 @@ class WasmLispCompilerIntegrationTest {
 	 * runs
 	 * ({@code JvmLispCompilerTest#compileAndRunBinaryFileStreamPositionQueriesAndSeeks}):
 	 * write a known byte pattern, read to a midpoint, seek back, re-read. The last form
-	 * re-opens the same file as a CHARACTER stream -- which answers nil -- and does it
-	 * AFTER every binary handle is closed, so the host hands the same descriptor number
-	 * back and a stale per-fd binary flag would show up as a number here.
+	 * re-opens the same file as a CHARACTER stream, whose position is real too.
 	 */
 	private static final String FILE_POSITION_PROGRAM = """
 			(with-open-file (out "pos.bin" :direction :output :if-exists :supersede
@@ -13251,7 +13250,7 @@ class WasmLispCompilerIntegrationTest {
 			  (print (file-position in)))
 			""";
 
-	private static final String FILE_POSITION_EXPECTED = "10\n0\n0\n1\nT\n5\n5\n6\nNIL";
+	private static final String FILE_POSITION_EXPECTED = "10\n0\n0\n1\nT\n5\n5\n6\n0";
 
 	@Test
 	void directionPredicatesAnswerTheStreamsRealDirectionOnPreview1() throws Exception {
@@ -13304,6 +13303,37 @@ class WasmLispCompilerIntegrationTest {
 		// And under --optimize, where the shaker has to keep an APPENDED import alive
 		// off the two runtime bodies that reach it.
 		assertThat(compileAndRunWithDirs(FILE_POSITION_PROGRAM)).isEqualTo(FILE_POSITION_EXPECTED);
+	}
+
+	@Test
+	void characterFileStreamPositionIsTheByteOffsetOnPreview1() throws Exception {
+		// The Preview 1 twin of
+		// LispEvaluatorTest#characterFileStreamPositionIsTheByteOffset,
+		// through the CLI's front end (the program uses unread-char).
+		assertThat(compileAndRunFrontEndWithDir(CharacterFilePositionFixture.program("pos.txt"), false))
+			.isEqualTo(CharacterFilePositionFixture.EXPECTED);
+	}
+
+	@Test
+	void componentCharacterFileStreamPositionIsTheByteOffset() throws Exception {
+		assertThat(compileAndRunFrontEndWithDir(CharacterFilePositionFixture.program("pos.txt"), true))
+			.isEqualTo(CharacterFilePositionFixture.EXPECTED);
+	}
+
+	/**
+	 * Compiles a source through the CLI's whole front end and runs it with the working
+	 * directory preopened, as Preview 1 or as a component.
+	 */
+	private static String compileAndRunFrontEndWithDir(String source, boolean component) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(source, List.of(), true, component)
+			.forms();
+		byte[] wasmBytes = WasmLispCompiler.builder().component(component).build().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("frontend.wasm"));
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"cd " + workDir() + " && wasmtime run -W gc=y -W exceptions=y --dir . frontend.wasm");
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", source, result.getStderr()).isZero();
+		return result.getStdout().trim();
 	}
 
 	@Test

@@ -771,7 +771,6 @@ final class WasmAsyncEmit {
 			.optimize(proto.optimize)
 			.component(proto.component)
 			.filePosition(proto.filePosition)
-			.binaryFlagsAddr(proto.binaryFlagsAddr)
 			.noWasi(proto.noWasi)
 			.hostRandom(proto.hostRandom)
 			.hostFetch(proto.hostFetch)

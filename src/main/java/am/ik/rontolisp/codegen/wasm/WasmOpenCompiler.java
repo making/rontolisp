@@ -52,72 +52,32 @@ final class WasmOpenCompiler {
 		int fd = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(fd);
-		// A file stream carries a per-fd flag the _file_position runtime reads to answer
-		// nil for a CHARACTER stream (mirroring the interpreter and the JVM) -- written
-		// only for a descriptor that exists, and only when the program calls
-		// file-position at all under WASI, so every other program keeps its bytes.
-		//
-		// The two backends differ in who OWNS the table. Under --component the adapter
-		// does: it resets a slot on every path_open, so only a POSITIONED open writes
-		// here, and the index is the adapter's own numbering (100 + slot). Under
-		// Preview 1 the module owns it and the host reuses descriptor numbers freely, so
-		// EVERY open writes -- 1 positioned, 0 not -- and the index is the raw fd,
-		// bounded by the table's slot count so an unexpectedly high descriptor cannot
-		// write past it.
-		//
-		// The flag says "this descriptor's file-position is REAL", which a binary stream
-		// and a BIDIRECTIONAL one both are: a bidirectional character stream reads and
-		// writes the same cursor byte for byte, so the descriptor offset IS the logical
-		// position (an ordinary character stream's is not -- .kb/read-load-streams.md).
-		int mode = OpenModes.staticMode(parts);
-		boolean binary = (mode & OpenModes.BINARY_BIT) != 0;
-		boolean positioned = binary || (mode & (OpenModes.IO_BIT | OpenModes.OVERWRITE_BIT)) != 0;
-		boolean preview1 = ctx.binaryFlagsAddr >= 0;
-		if (ctx.filePosition && (positioned || preview1)) {
+		// An APPENDING stream starts at the end of its file (sbcl): a descriptor opened
+		// for append sits at 0 until its first write, so a program that calls
+		// file-position moves it there -- _file_position_set(fd, _file_length(fd)).
+		// Every other stream's descriptor offset already IS its position, character or
+		// binary: Preview 1 reads one byte per fd_read and writes straight through, and
+		// the adapter tracks what was read and written.
+		int disposition = wasmMode(OpenModes.staticMode(parts));
+		if (ctx.filePosition && (disposition == 2 || disposition == 5)) {
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(fd);
 			ctx.writer.write(Instruction.REF_IS_NULL);
 			ctx.writer.write(Instruction.I32_EQZ);
 			ctx.writer.write(Instruction.IF, 0x40);
-			if (preview1) {
-				// Nested rather than and-ed: the cast that reads the descriptor is only
-				// legal once nil is ruled out.
-				emitRawFd(ctx, fd);
-				ctx.writer.write(Instruction.I32_CONST);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.STREAM_BINARY_FLAGS_SLOTS);
-				ctx.writer.write(Instruction.I32_LT_U);
-				ctx.writer.write(Instruction.IF, 0x40);
-			}
-			emitRawFd(ctx, fd);
-			if (!preview1) {
-				ctx.writer.write(Instruction.I32_CONST);
-				ctx.writer.writeSignedLeb128(100);
-				ctx.writer.write(Instruction.I32_SUB);
-			}
-			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(preview1 ? ctx.binaryFlagsAddr : WasmLispCompiler.STREAM_BINARY_FLAGS_ADDR);
-			ctx.writer.write(Instruction.I32_ADD);
-			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(positioned ? 1 : 0);
-			ctx.writer.write(Instruction.I32_STORE8, 0x00, 0x00);
-			if (preview1) {
-				ctx.writer.write(Instruction.END);
-			}
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(fd);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(fd);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_FILE_LENGTH);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_FILE_POSITION_SET);
+			ctx.writer.write(Instruction.DROP);
 			ctx.writer.write(Instruction.END);
 		}
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(fd);
-	}
-
-	/**
-	 * Pushes the raw i32 descriptor held in the {@code fd} temp (nil already ruled out).
-	 */
-	private static void emitRawFd(WasmLispCompiler.Ctx ctx, int fd) {
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(fd);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(am.ik.wasm.Type.I31.code());
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
 	}
 
 	/**

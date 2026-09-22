@@ -74,6 +74,14 @@ public final class UnreadCharLibrary {
 			FILE_POSITION_SET, "%UNREAD-KEY", "%UNREAD-CHAR-TAKE", "%UNREAD-PEEK-STOPS-P");
 
 	/**
+	 * The two {@code file-position} defuns, spliced only for a program that names
+	 * {@code file-position} itself: their bodies name it, and a backend gates its
+	 * position runtime on that name, so splicing them into every unread-char program
+	 * would grow each one by a runtime it never calls.
+	 */
+	private static final Set<String> FILE_POSITION_DEFUNS = Set.of(FILE_POSITION, FILE_POSITION_SET);
+
+	/**
 	 * Returns the parsed pushback definitions. Parsed once and cached.
 	 * @return the library forms
 	 */
@@ -113,14 +121,11 @@ public final class UnreadCharLibrary {
 		if (!usesUnreadChar(program)) {
 			return program;
 		}
-		// The two file-position defuns name file-position, which is a name-keyed
-		// runtime gate on the compile paths (the JVM FileMeta helpers, the WASM
-		// injected import): spliced only for a program that calls it, so every other
-		// unread-char program keeps its bytes.
 		boolean filePosition = namesFilePosition(program);
 		List<LispVal> out = new ArrayList<>();
 		for (LispVal form : forms()) {
-			if (filePosition || !definesFilePositionDefun(form)) {
+			if (filePosition || !(form instanceof LispCons defun && defun.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol name && FILE_POSITION_DEFUNS.contains(member(name.name())))) {
 				out.add(form);
 			}
 		}
@@ -163,13 +168,6 @@ public final class UnreadCharLibrary {
 			return namesFilePosition(cons.car()) || namesFilePosition(cons.cdr());
 		}
 		return false;
-	}
-
-	private static boolean definesFilePositionDefun(LispVal form) {
-		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
-				&& LispNames.DEFUN.equals(member(op.name())) && cons.cdr() instanceof LispCons rest
-				&& rest.car() instanceof LispSymbol name
-				&& (FILE_POSITION.equals(member(name.name())) || FILE_POSITION_SET.equals(member(name.name())));
 	}
 
 	private static boolean names(LispVal form) {
@@ -240,8 +238,8 @@ public final class UnreadCharLibrary {
 							arg(parts, 2, LispNil.INSTANCE), arg(parts, 3, LispNil.INSTANCE));
 				}
 			}
-			// file-position counts a parked character as not yet read, and a
-			// repositioning drops it (the interpreter's twin wraps its built-in).
+			// A parked character is not consumed yet: the query answers the offset
+			// before it, and a set drops it.
 			case LispNames.FILE_POSITION -> {
 				if (args == 1) {
 					return listOf(defunSymbol(FILE_POSITION), rewrite(parts.get(1)));
