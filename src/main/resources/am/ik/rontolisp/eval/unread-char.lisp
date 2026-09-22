@@ -98,9 +98,13 @@
         (let ((code (char-code rontolisp::*unread-char*)))
           (- position
              ;; A STRING stream counts characters, a file stream octets.
-             (if (if (%obj-is stream '%STREAM) (equal (%obj-ref stream 1) :string-input) nil)
+             (if (if (%obj-is stream '%STREAM)
+                     (equal (%obj-ref stream 1) :string-input)
+                     nil)
                  1
-                 (if (< code 128) 1 (if (< code 2048) 2 (if (< code 65536) 3 4))))))
+                 (if (< code 128)
+                     1
+                     (if (< code 2048) 2 (if (< code 65536) 3 4))))))
         position)))
 
 (defun rontolisp::%unread-file-position-set (stream position)
