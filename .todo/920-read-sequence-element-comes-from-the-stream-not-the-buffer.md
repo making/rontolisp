@@ -50,3 +50,10 @@ a byte-only read loop 6,744 -> 5,735 B, the zlib `--optimize=size` row
   `read-sequence-into-a-character-buffer` is the one that names it).
 - **If the measurement says the size cost is not worth the 39 tests, that IS the
   result**: land the numbers in `.kb` and say so, rather than forcing the change.
+- `.todo/919` (2026-09-22) landed the "what is this stream's element type"
+  primitive the runtime dispatch needs: interpreter `streamElementTypes`,
+  compile paths the prelude registry `%file-stream-entry` /
+  `%file-stream-element-type`, spliced only for a program that asks
+  `stream-element-type` (or opens a wide stream) -- reuse it and its gate rather
+  than a second mechanism (`.kb/read-load-streams.md`, "Element types wider and
+  narrower than one octet").

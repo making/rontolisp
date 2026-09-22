@@ -14805,6 +14805,67 @@ cases:
       4
       #(0 0 192 63)
 
+  - name: wide-and-narrow-stream-element-types
+    source: |
+      ;; .todo/919: an integer element type opens a binary stream of sbcl's width
+      ;; (1/2/4/8 octets, ceil(bits/8) past 64; no packing, no bias), little-endian
+      ;; and two's complement; stream-element-type answers the widened type and
+      ;; file-length / file-position count elements. The output is sbcl's.
+      (defun w919-drain (s)
+        (do ((b (read-byte s nil :eof) (read-byte s nil :eof)) (r nil (cons b r)))
+            ((eq b :eof) (nreverse r))))
+      (defun w919-octets ()
+        (with-open-file (i "w919.bin" :element-type '(unsigned-byte 8)) (w919-drain i)))
+      (with-open-file (o "w919.bin" :direction :output :element-type '(unsigned-byte 1) :if-exists :supersede)
+        (dolist (v '(0 1 1)) (write-byte v o)))
+      (print (list (with-open-file (i "w919.bin" :element-type '(unsigned-byte 1))
+                     (list (stream-element-type i) (file-length i) (w919-drain i)))
+                   (w919-octets)))
+      (with-open-file (o "w919.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
+        (dolist (v '(1 258)) (write-byte v o)))
+      (print (list (with-open-file (i "w919.bin" :element-type '(unsigned-byte 16))
+                     (list (stream-element-type i) (file-length i) (w919-drain i)))
+                   (w919-octets)))
+      (with-open-file (o "w919.bin" :direction :output :element-type '(signed-byte 8) :if-exists :supersede)
+        (dolist (v '(-1 5)) (write-byte v o)))
+      (print (list (with-open-file (i "w919.bin" :element-type '(signed-byte 8))
+                     (list (stream-element-type i) (file-length i) (w919-drain i)))
+                   (w919-octets)))
+      (with-open-file (o "w919.bin" :direction :output :element-type '(signed-byte 64) :if-exists :supersede)
+        (dolist (v '(-9223372036854775808 9223372036854775807)) (write-byte v o)))
+      (print (list (with-open-file (i "w919.bin" :element-type '(signed-byte 64))
+                     (list (stream-element-type i) (file-length i) (w919-drain i)))
+                   (w919-octets)))
+      (with-open-file (o "w919.bin" :direction :output :element-type '(integer 100 200) :if-exists :supersede)
+        (write-byte 150 o))
+      (print (list (with-open-file (i "w919.bin" :element-type '(integer 100 200))
+                     (list (stream-element-type i) (file-length i) (w919-drain i)))
+                   (w919-octets)))
+      (print (with-open-file (i "w919.bin" :element-type '(unsigned-byte 16))
+               (list (file-length i) (read-byte i nil :partial))))
+      (with-open-file (o "w919.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
+        (write-sequence (vector 1 2 65535) o))
+      (print (with-open-file (i "w919.bin" :element-type '(unsigned-byte 16))
+               (list (read-byte i) (file-position i) (file-position i 0) (read-byte i)
+                     (file-position i :end) (read-byte i nil :eof))))
+      (print (with-open-file (i "w919.bin" :element-type '(unsigned-byte 16))
+               (let ((v (make-array 3 :element-type '(unsigned-byte 16))))
+                 (list (read-sequence v i) (aref v 0) (aref v 2)))))
+      (print (with-open-file (s "w919.bin" :direction :io :element-type '(signed-byte 16) :if-exists :overwrite)
+               (list (read-byte s) (progn (write-byte -2 s) (file-position s)) (file-position s 1) (read-byte s))))
+      (print (with-open-file (s "w919.bin") (stream-element-type s)))
+    expected: |
+      (((UNSIGNED-BYTE 8) 3 (0 1 1)) (0 1 1))
+      (((UNSIGNED-BYTE 16) 2 (1 258)) (1 0 2 1))
+      (((SIGNED-BYTE 8) 2 (-1 5)) (255 5))
+      (((SIGNED-BYTE 64) 2 (-9223372036854775808 9223372036854775807)) (0 0 0 0 0 0 0 128 255 255 255 255 255 255 255 127))
+      (((UNSIGNED-BYTE 8) 1 (150)) (150))
+      (0 :PARTIAL)
+      (1 1 T 1 T :EOF)
+      (3 1 65535)
+      (1 2 T -2)
+      CHARACTER
+
   - name: read-sequence-into-a-character-buffer
     source: |
       ;; The BUFFER decides which element is read: a character vector -- the one

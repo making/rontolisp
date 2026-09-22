@@ -98,7 +98,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 ## I/O and streams
 
-- [read-load-streams.md](read-load-streams.md) -- `read`/`load`/`read-line`/file streams; a stream is a self-describing value; synonym streams; output left open is flushed at the end
+- [read-load-streams.md](read-load-streams.md) -- `read`/`load`/`read-line`/file streams; a stream is a self-describing value; synonym streams; output left open is flushed at the end; element types wider and narrower than one octet
 - [standard-output-redirect.md](standard-output-redirect.md) -- stream designators resolve through `*standard-output*`/`*standard-input*` at call time; `*error-output*`
 - [gray-streams.md](gray-streams.md) -- the Gray-stream protocol, the compile-path splice, the flexi-streams wrapper
 - [binary-sequence-io.md](binary-sequence-io.md) -- `read-sequence`/`write-sequence` over a packed buffer in one native transfer

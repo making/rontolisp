@@ -240,6 +240,20 @@ table is GENERATED from it. **Change them together.**
   the same reduction on the SUPER would be unsound, so `(subtypep 'integer '(integer 0 10))` stays
   nil (SBCL agrees). `(not ...)`/`(member ...)`/`(eql ...)`/`(satisfies ...)` stay unknown
   (`OPAQUE_COMPOUND_TYPE_HEADS`), which the VALID-P below reports as such.
+- **Integer INTERVALS decide by containment** (`.todo/919`): `(unsigned-byte n)`, `(signed-byte n)`,
+  `(integer lo hi)` (exclusive `(k)` bounds, `*`), `(mod n)` and the names `bit` / `unsigned-byte`
+  / `signed-byte` / `integer` each read as one interval (`macro/IntegerTypeRange`), and with a
+  COMPOUND on at least one side two intervals answer containment -- exact, so a nil there is still
+  `nil nil` only because the valid-p rule below says compound. An `(or ...)` SUB is covered by its
+  branches' hull (sound; the super is read exactly). Runtime twin: `%subtypep-interval` /
+  `-covering` / `-in` (`RUNTIME_SUBTYPEP_INTERVAL_SOURCE`), an arm ahead of the compound template,
+  injected only when the program spells an interval type (`mentionsIntegerIntervalType`), so a
+  computed-`subtypep` program without one keeps its bytes. Two plain NAMES stay the lattice's on
+  purpose: `bit <= unsigned-byte <= signed-byte = integer` is true and missing there, but adding the
+  edges regenerates the ancestor table of every computed-`subtypep` program. ANSI
+  `types-and-classes` 2026-09-22: +18 (`SUBTYPEP.INTEGER.*`), 0 regressed. Pins
+  `LispEvaluatorTest#subtypepDecidesIntegerIntervals` + the JVM / WASM
+  `compileSubtypepIntegerIntervals` twins.
 - **Trap:** a lattice LEAF with no `SUBTYPEP_PARENTS` entry (`hash-table`, `function`, `package`,
   `stream`, `atom`) had no ancestor-table row, so a runtime `(subtypep 'hash-table 'hash-table)`
   answered nil on the compile paths and `T` on the interpreter. `subtypepUniverse` now adds every

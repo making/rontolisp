@@ -39,6 +39,10 @@ along: `.kb/character-sequence-io.md`.
   a 64 KiB `CHUNK_BYTES` reserved at `HEAP_PTR` and popped after (the `_open` discipline -- the
   component adapter may `cabi_realloc` there); short `fd_read`/`fd_write` are refilled/drained to
   completion. `--no-gc` has no streams.
+- **A WIDE element stream declines too** (`.todo/919`): the packed arm moves raw octets, so an
+  `(unsigned-byte 16)` stream read into a `(unsigned-byte 8)` buffer must go element by element.
+  Interpreter: the primitive answers nil for a wide handle; compile paths: the expansion's packed
+  call is guarded by `%wide-width` when the program opens a wide stream (`read-load-streams.md`).
 - Sockets decline on all three backends; bulk socket reads would fit the same
   declined-or-handled shape (`Socket.getInputStream()`, `sockets.socketGetInputStream()`).
 

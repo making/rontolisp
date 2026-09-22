@@ -15588,6 +15588,29 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileSubtypepIntegerIntervals() throws Exception {
+		// subtypep decides INTEGER INTERVALS: (unsigned-byte n), (signed-byte n),
+		// (integer lo hi), (mod n), bit and the unsized byte names each denote an
+		// interval, and one interval is a subtype of another exactly when it is
+		// contained -- literal or computed, identical on all four backends.
+		assertThat(compileAndRun(
+				"""
+						(defun probe (a b) (subtypep a b))
+						(print (list (subtypep '(unsigned-byte 1) '(unsigned-byte 8)) (subtypep '(unsigned-byte 9) '(unsigned-byte 8))
+						             (subtypep '(signed-byte 5) '(signed-byte 8)) (subtypep '(integer 0 5) '(unsigned-byte 8))
+						             (subtypep 'bit '(unsigned-byte 8)) (subtypep '(or (integer 0 1) (integer 100 200)) '(unsigned-byte 8))
+						             (subtypep '(integer -1 5) '(unsigned-byte 8)) (subtypep '(mod 256) '(unsigned-byte 8))
+						             (subtypep '(unsigned-byte 8) '(integer 0 (256)))))
+						(print (list (probe '(unsigned-byte 1) '(unsigned-byte 8)) (probe '(unsigned-byte 9) '(unsigned-byte 8))
+						             (probe '(integer 0 5) '(signed-byte 8)) (probe 'bit '(integer 0 1))
+						             (probe '(signed-byte 8) 'unsigned-byte)
+						           (probe '(or (integer 0 1) (integer 100 200)) '(unsigned-byte 8))
+						           (probe '(integer 2 99) '(or (integer 0 1) (integer 100 200)))))
+						"""))
+			.isEqualTo("(T NIL T T T T NIL T T)\n(T NIL T T NIL T NIL)");
+	}
+
+	@Test
 	void compileSubtypepValidP() throws Exception {
 		// The valid-p twin of LispEvaluatorTest.subtypepAnswersCommonLispValidP: a
 		// LITERAL pair folds to a constant here, a COMPUTED one goes through the
@@ -19093,6 +19116,169 @@ class JvmLispCompilerTest {
 				(print (rd "%s" 'character))
 				(print (rd1 "%s" (list 'unsigned-byte 8)))
 				""".formatted(file, file, file, file))).isEqualTo("\"onetwo\"\n111");
+	}
+
+	@Test
+	void anErrorCaughtInTheSameMethodLeavesTheSpilledArgumentsAlone() throws Exception {
+		// The %error message rides in ONE cached local per method. It was allocated on
+		// first use and then handed out again after its scope ended, so a later
+		// argument spilled around a handler-case could land in the same slot -- and the
+		// error inside that handler-case, caught IN THE SAME METHOD, overwrote the
+		// argument with its message before the list was built. First seen as the
+		// ci-spec find-class-metaobject-substrate case printing its condition report
+		// in place of a T.
+		assertThat(compileAndRun("""
+				(define-condition zz-error (error) ((code :initarg :code :reader zz-code)))
+				(defun zz-id (x) x)
+				(print (let ((q 5)) (handler-case (error "first ~a" q) (error () q))))
+				(print (list (zz-id 1) (zz-id 2) (zz-id 3) (zz-id 4) (zz-id 5) (zz-id 6) (zz-id 7) (zz-id 8)
+				             (handler-case (error 'zz-error :code 42) (zz-error (e) (zz-code e)))))
+				""")).isEqualTo("5\n(1 2 3 4 5 6 7 8 42)");
+	}
+
+	@Test
+	void compileAndRunStreamElementTypeOfAnOctetFileStream(@TempDir Path tempDir) throws Exception {
+		// The registry without the wide helpers: a program that asks
+		// stream-element-type and opens a file answers (unsigned-byte 8) for an octet
+		// stream, CHARACTER for every other (the WASM twin is
+		// streamElementTypeOfAnOctetFileStreamOnPreview1).
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(
+				"""
+						(with-open-file (o "%1$s/e919.bin" :direction :output :element-type '(unsigned-byte 8) :if-exists :supersede)
+						  (write-byte 7 o)
+						  (print (list (stream-element-type o) (typep o 'file-stream))))
+						(with-open-file (i "%1$s/e919.bin" :element-type 'unsigned-byte)
+						  (print (list (stream-element-type i) (read-byte i) (read-byte i nil :eof))))
+						(with-open-file (i "%1$s/e919.bin")
+						  (print (stream-element-type i)))
+						(print (with-output-to-string (s) (princ (stream-element-type s) s)))
+						"""
+					.formatted(here)))
+			.isEqualTo("""
+					((UNSIGNED-BYTE 8) T)
+					((UNSIGNED-BYTE 8) 7 :EOF)
+					CHARACTER
+					\"CHARACTER\"""");
+	}
+
+	@Test
+	void compileAndRunWideElementTypesThroughTheGrayDispatchers(@TempDir Path tempDir) throws Exception {
+		// A program that uses the Gray protocol reaches read-byte / stream-element-type /
+		// file-length / file-position through gray.lisp's dispatchers, which hand the
+		// built-in a RESOLVED HANDLE rather than the stream value -- so the registry is
+		// keyed by the handle, and a close forgets the entry (closing a SYNONYM does
+		// not). First seen red in the ci-spec E2E corpus, whose concatenated program
+		// defines Gray classes.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(compileAndRunGray(
+				"""
+						(defclass w919-sink (rontolisp:fundamental-character-output-stream) ())
+						(with-open-file (o "%1$s/g919.bin" :direction :output :element-type '(signed-byte 16) :if-exists :supersede)
+						  (write-byte -2 o)
+						  (write-byte 513 o))
+						(print (with-open-file (i "%1$s/g919.bin" :element-type '(signed-byte 16))
+						         (list (stream-element-type i) (read-byte i) (read-byte i) (file-length i) (file-position i))))
+						(defvar *g919* (open "%1$s/g919.bin" :element-type '(unsigned-byte 16)))
+						(defvar *g919-syn* (make-synonym-stream '*g919*))
+						(close *g919-syn*)
+						(print (list (stream-element-type *g919*) (read-byte *g919*)))
+						(close *g919*)
+						(print (stream-element-type *g919*))
+						"""
+					.formatted(here)))
+			.isEqualTo("""
+					((SIGNED-BYTE 16) -2 513 2 2)
+					((UNSIGNED-BYTE 16) 65534)
+					CHARACTER""");
+	}
+
+	@Test
+	void compileAndRunWideAndNarrowElementTypes(@TempDir Path tempDir) throws Exception {
+		// .todo/919: the twin of
+		// LispEvaluatorTest#wideAndNarrowElementTypesRoundTripTheWaySbclStoresThem and
+		// WasmLispCompilerIntegrationTest#wideAndNarrowElementTypesOnPreview1. A wide
+		// element composes above the octet primitive through the prelude registry; the
+		// output is sbcl's.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(
+				"""
+						(defun w919-drain (s)
+						  (do ((b (read-byte s nil :eof) (read-byte s nil :eof)) (r nil (cons b r)))
+						      ((eq b :eof) (nreverse r))))
+						(defun w919-octets ()
+						  (with-open-file (i "%1$s/w919.bin" :element-type '(unsigned-byte 8)) (w919-drain i)))
+						(with-open-file (o "%1$s/w919.bin" :direction :output :element-type '(unsigned-byte 1) :if-exists :supersede)
+						  (dolist (v '(0 1 1)) (write-byte v o)))
+						(print (list (with-open-file (i "%1$s/w919.bin" :element-type '(unsigned-byte 1))
+						               (list (stream-element-type i) (file-length i) (w919-drain i)))
+						             (w919-octets)))
+						(with-open-file (o "%1$s/w919.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
+						  (dolist (v '(1 258)) (write-byte v o)))
+						(print (list (with-open-file (i "%1$s/w919.bin" :element-type '(unsigned-byte 16))
+						               (list (stream-element-type i) (file-length i) (w919-drain i)))
+						             (w919-octets)))
+						(with-open-file (o "%1$s/w919.bin" :direction :output :element-type '(signed-byte 8) :if-exists :supersede)
+						  (dolist (v '(-1 5)) (write-byte v o)))
+						(print (list (with-open-file (i "%1$s/w919.bin" :element-type '(signed-byte 8))
+						               (list (stream-element-type i) (file-length i) (w919-drain i)))
+						             (w919-octets)))
+						(with-open-file (o "%1$s/w919.bin" :direction :output :element-type '(signed-byte 64) :if-exists :supersede)
+						  (dolist (v '(-9223372036854775808 9223372036854775807)) (write-byte v o)))
+						(print (list (with-open-file (i "%1$s/w919.bin" :element-type '(signed-byte 64))
+						               (list (stream-element-type i) (file-length i) (w919-drain i)))
+						             (w919-octets)))
+						(with-open-file (o "%1$s/w919.bin" :direction :output :element-type '(integer 100 200) :if-exists :supersede)
+						  (write-byte 150 o))
+						(print (list (with-open-file (i "%1$s/w919.bin" :element-type '(integer 100 200))
+						               (list (stream-element-type i) (file-length i) (w919-drain i)))
+						             (w919-octets)))
+						(print (with-open-file (i "%1$s/w919.bin" :element-type '(unsigned-byte 16))
+						         (list (file-length i) (read-byte i nil :partial))))
+						(with-open-file (o "%1$s/w919.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
+						  (write-sequence (vector 1 2 65535) o))
+						(print (with-open-file (i "%1$s/w919.bin" :element-type '(unsigned-byte 16))
+						         (list (read-byte i) (file-position i) (file-position i 0) (read-byte i)
+						               (file-position i :end) (read-byte i nil :eof))))
+						(print (with-open-file (i "%1$s/w919.bin" :element-type '(unsigned-byte 16))
+						         (let ((v (make-array 3 :element-type '(unsigned-byte 16))))
+						           (list (read-sequence v i) (aref v 0) (aref v 2)))))
+						(print (with-open-file (s "%1$s/w919.bin" :direction :io :element-type '(signed-byte 16) :if-exists :overwrite)
+						         (list (read-byte s) (progn (write-byte -2 s) (file-position s)) (file-position s 1) (read-byte s))))
+						(print (with-open-file (s "%1$s/w919.bin") (stream-element-type s)))
+						"""
+					.formatted(here)))
+			.isEqualTo(
+					"""
+							(((UNSIGNED-BYTE 8) 3 (0 1 1)) (0 1 1))
+							(((UNSIGNED-BYTE 16) 2 (1 258)) (1 0 2 1))
+							(((SIGNED-BYTE 8) 2 (-1 5)) (255 5))
+							(((SIGNED-BYTE 64) 2 (-9223372036854775808 9223372036854775807)) (0 0 0 0 0 0 0 128 255 255 255 255 255 255 255 127))
+							(((UNSIGNED-BYTE 8) 1 (150)) (150))
+							(0 :PARTIAL)
+							(1 1 T 1 T :EOF)
+							(3 1 65535)
+							(1 2 T -2)
+							CHARACTER""");
+	}
+
+	@Test
+	void theOctetElementTypeSpellingsCompileToTheSameBytesAsUnsignedByte8() {
+		// bit, unsigned-byte, (unsigned-byte 3) and (integer 0 200) are all ONE octet,
+		// unsigned (StreamElementType): the leaf carries the widened '(unsigned-byte 8)
+		// and the class is the one the octet spelling always compiled to.
+		byte[] octet = JvmLispCompiler.builder().className("SameOctet").build().compile(LispReader.readAllFromString("""
+				(with-open-file (s "f.bin" :direction :output :element-type '(unsigned-byte 8)) (write-byte 65 s))
+				"""));
+		for (String spelling : List.of("'bit", "'unsigned-byte", "'(unsigned-byte 3)", "'(integer 0 200)")) {
+			assertThat(JvmLispCompiler.builder()
+				.className("SameOctet")
+				.build()
+				.compile(LispReader.readAllFromString("(with-open-file (s \"f.bin\" :direction :output :element-type "
+						+ spelling + ") (write-byte 65 s))")))
+				.as(spelling)
+				.isEqualTo(octet);
+		}
 	}
 
 	@Test

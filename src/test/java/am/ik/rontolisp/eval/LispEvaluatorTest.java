@@ -11160,6 +11160,86 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void wideAndNarrowElementTypesRoundTripTheWaySbclStoresThem(@TempDir Path tempDir) {
+		String here = tempDir.toString().replace("\\", "\\\\");
+		// An integer element type opens a binary stream of SBCL's width (measured): 1,
+		// 2, 4 or 8 octets, ceil(bits/8) past 64, little-endian, two's complement when
+		// signed, no packing below an octet and no bias. stream-element-type answers
+		// the widened type; file-length and file-position count ELEMENTS.
+		assertThat(evalMulti(
+				"""
+						(defun p (n) (concatenate 'string "%s/" n))
+						(defun drain (s)
+						  (do ((b (read-byte s nil :eof) (read-byte s nil :eof)) (r nil (cons b r))) ((eq b :eof) (nreverse r))))
+						(defmacro rt (et vals)
+						  `(progn
+						    (with-open-file (o (p "w.bin") :direction :output :element-type ,et :if-exists :supersede)
+						      (dolist (v ,vals) (write-byte v o)))
+						    (list (with-open-file (i (p "w.bin") :element-type ,et)
+						            (list (stream-element-type i) (file-length i) (drain i)))
+						          (with-open-file (i (p "w.bin") :element-type '(unsigned-byte 8)) (drain i)))))
+						(list (rt '(unsigned-byte 1) '(0 1 1))
+						      (rt '(unsigned-byte 16) '(1 258))
+						      (rt '(signed-byte 8) '(-1 5))
+						      (rt '(signed-byte 32) '(-2))
+						      (rt '(unsigned-byte 64) '(18446744073709551615))
+						      (rt '(integer 100 200) '(150))
+						      (with-open-file (i (p "w.bin") :element-type '(unsigned-byte 16))
+						        (list (file-length i) (read-byte i nil :partial)))
+						      (progn
+						        (with-open-file (o (p "w.bin") :direction :output :element-type '(unsigned-byte 16)
+						                           :if-exists :supersede)
+						          (write-byte 1 o) (write-byte 2 o))
+						        (with-open-file (i (p "w.bin") :element-type '(unsigned-byte 16))
+						          (list (read-byte i) (file-position i) (file-position i 0) (read-byte i)
+						                (file-position i :end) (read-byte i nil :eof))))
+						      (with-open-file (s (p "w.bin")) (stream-element-type s))
+						      (handler-case (with-open-file (o (p "w.bin") :direction :output :element-type '(unsigned-byte 16)
+						                                      :if-exists :supersede)
+						                      (write-byte 65536 o))
+						        (error () :out-of-range)))
+						"""
+					.formatted(here))
+			.print())
+			.isEqualTo("(" + String.join(" ", "(((UNSIGNED-BYTE 8) 3 (0 1 1)) (0 1 1))",
+					"(((UNSIGNED-BYTE 16) 2 (1 258)) (1 0 2 1))", "(((SIGNED-BYTE 8) 2 (-1 5)) (255 5))",
+					"(((SIGNED-BYTE 32) 1 (-2)) (254 255 255 255))",
+					"(((UNSIGNED-BYTE 64) 1 (18446744073709551615)) (255 255 255 255 255 255 255 255))",
+					"(((UNSIGNED-BYTE 8) 1 (150)) (150))", "(0 :PARTIAL)", "(1 1 T 1 T :EOF)", "CHARACTER",
+					":OUT-OF-RANGE") + ")");
+	}
+
+	@Test
+	void aClosedFileStreamForgetsItsElementTypeButClosingASynonymDoesNot(@TempDir Path tempDir) {
+		// The twin of
+		// JvmLispCompilerTest#compileAndRunWideElementTypesThroughTheGrayDispatchers:
+		// close drops the element type on all four backends (a WASM descriptor is reused
+		// after close), and closing a synonym stream leaves its target alone.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(evalMulti("""
+				(defvar *g919* (open "%1$s/g919.bin" :direction :output :element-type '(unsigned-byte 16)))
+				(defvar *g919-syn* (make-synonym-stream '*g919*))
+				(close *g919-syn*)
+				(list (stream-element-type *g919*)
+				      (progn (close *g919*) (stream-element-type *g919*)))
+				""".formatted(here)).print()).isEqualTo("((UNSIGNED-BYTE 16) CHARACTER)");
+	}
+
+	@Test
+	void withOpenFileUnsupportedLiteralElementTypeSignalsAtCallTime(@TempDir Path tempDir) {
+		String file = tempDir.resolve("float.dat").toString().replace("\\", "\\\\");
+		// An element type no stream can carry is refused when the open RUNS, not when the
+		// form expands: the refusal is a catchable error, and a definition that merely
+		// contains the form still defines.
+		assertThat(evalMulti("""
+				(defun never-called () (with-open-file (s "%s" :element-type 'single-float) (read-byte s)))
+				(list (fboundp 'never-called)
+				      (handler-case (with-open-file (s "%s" :direction :output :element-type 'single-float) 1)
+				        (error () :refused)))
+				""".formatted(file, file)).print()).isEqualTo("(T :REFUSED)");
+	}
+
+	@Test
 	void withOpenFileComputedOptionValueOutsideTheSupportedSetSignals(@TempDir Path tempDir) {
 		String file = tempDir.resolve("bad.dat").toString().replace("\\", "\\\\");
 		// The accepted value set is the literal path's, refused at the only time a
@@ -19896,6 +19976,33 @@ class LispEvaluatorTest {
 				(multiple-value-bind (tgt off) (array-displacement (make-array 2))
 				  (list tgt off))
 				""").print()).isEqualTo("(NIL 0)");
+	}
+
+	@Test
+	void subtypepDecidesIntegerIntervals() {
+		// subtypep decides INTEGER INTERVALS: (unsigned-byte n), (signed-byte n),
+		// (integer lo hi), (mod n), bit and the unsized byte names each denote an
+		// interval, and one interval is a subtype of another exactly when it is
+		// contained -- literal or computed, identical on all four backends.
+		assertThat(
+				capture("""
+						(defun probe (a b) (subtypep a b))
+						(print (list (subtypep '(unsigned-byte 1) '(unsigned-byte 8)) (subtypep '(unsigned-byte 9) '(unsigned-byte 8))
+						             (subtypep '(signed-byte 5) '(signed-byte 8)) (subtypep '(integer 0 5) '(unsigned-byte 8))
+						             (subtypep 'bit '(unsigned-byte 8)) (subtypep '(or (integer 0 1) (integer 100 200)) '(unsigned-byte 8))
+						             (subtypep '(integer -1 5) '(unsigned-byte 8)) (subtypep '(mod 256) '(unsigned-byte 8))
+						             (subtypep '(unsigned-byte 8) '(integer 0 (256)))))
+						(print (list (probe '(unsigned-byte 1) '(unsigned-byte 8)) (probe '(unsigned-byte 9) '(unsigned-byte 8))
+						             (probe '(integer 0 5) '(signed-byte 8)) (probe 'bit '(integer 0 1))
+						             (probe '(signed-byte 8) 'unsigned-byte)
+						           (probe '(or (integer 0 1) (integer 100 200)) '(unsigned-byte 8))
+						           (probe '(integer 2 99) '(or (integer 0 1) (integer 100 200)))))
+						""")
+					.lines()
+					.map(String::strip)
+					.filter(l -> !l.isEmpty())
+					.collect(joining("\n")))
+			.isEqualTo("(T NIL T T T T NIL T T)\n(T NIL T T NIL T NIL)");
 	}
 
 	@Test

@@ -99,6 +99,13 @@ A condition is a CLOS-subset instance ([instance-syntax.md](instance-syntax.md))
   stores the instance into the emitted `private static ThreadLocal _condTl` and throws
   `RuntimeException(message)` (that field plus `_hcDepthTl` emitted only when used,
   `JvmLispCompiler.ConditionChannel`); WASM `%error-cond` traps like `%error`.
+- **The JVM message local is shared per method but NOT past its scope** (`Ctx.errorMessageSlot`):
+  once `allocTemp` hands that slot to a variable, the cache drops and the next error site takes a
+  fresh one. A handler-case in the SAME method resumes after the throw, so a live variable in the
+  slot read the message instead of its value -- ci-spec `find-class-metaobject-substrate` printed
+  its condition report in place of a `T` once `.todo/919`'s corpus case shifted the slot layout
+  (2026-09-22). Pinned by `JvmLispCompilerTest#anErrorCaughtInTheSameMethodLeavesTheSpilledArgumentsAlone`;
+  the fix moved 26 of 375 measured JVM artifacts (slot indices, at most +183 bytes of `max_locals`).
 - `makeTypeTest` takes a `ClosRegistry` and has a class branch (descendant-tag membership, `equal`
   on the car -- WASM content-safe). `with-slots` is read-only; assignment does NOT write back.
 

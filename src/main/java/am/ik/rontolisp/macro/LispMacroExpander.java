@@ -8376,7 +8376,7 @@ public final class LispMacroExpander {
 					parts.subList(2, parts.size()), unwindProtect);
 		}
 		String direction = LispNames.INPUT_KEYWORD;
-		boolean binary = false;
+		StreamElementType elementType = StreamElementType.CHARACTER;
 		boolean append = false;
 		// The direction is read FIRST: :if-exists is consulted only on an output open, so
 		// whether a value of it is ignorable depends on an option that may be written
@@ -8399,11 +8399,12 @@ public final class LispMacroExpander {
 				direction = dir.name();
 			}
 			else if (specParts.get(i) instanceof LispSymbol key && LispNames.ELEMENT_TYPE_KEYWORD.equals(key.name())) {
-				if (i + 1 >= specParts.size()) {
-					throw new UnsupportedOperationException(LispNames.WITH_OPEN_FILE
-							+ " :element-type must be the literal 'character or '(unsigned-byte 8)");
+				StreamElementType literalType = i + 1 < specParts.size() ? literalElementType(specParts.get(i + 1))
+						: null;
+				if (literalType == null) {
+					return unsupportedElementTypeStub(LispNames.WITH_OPEN_FILE);
 				}
-				binary = isBinaryElementTypeLiteral(specParts.get(i + 1));
+				elementType = literalType;
 			}
 			else if (specParts.get(i) instanceof LispSymbol key && i + 1 < specParts.size() && outputDirection
 					&& isAppendIfExists(key.name(), specParts.get(i + 1))) {
@@ -8441,7 +8442,7 @@ public final class LispMacroExpander {
 		List<LispVal> body = parts.subList(2, parts.size());
 		List<LispVal> openParts = new java.util.ArrayList<>(
 				List.of(new LispSymbol(LispNames.OPEN), filename, new LispSymbol(direction)));
-		return buildWithOpenFile(var, openParts, binary, body, unwindProtect);
+		return buildWithOpenFile(var, openParts, elementType, body, unwindProtect);
 	}
 
 	/**
@@ -8580,8 +8581,8 @@ public final class LispMacroExpander {
 	 */
 	public static boolean isLiteralOpenOptionValue(String option, LispVal value) {
 		if (LispNames.ELEMENT_TYPE_KEYWORD.equals(option)) {
-			return value instanceof LispCons cons && cons.car() instanceof LispSymbol quote
-					&& LispNames.QUOTE.equals(quote.name());
+			return (value instanceof LispCons cons && cons.car() instanceof LispSymbol quote
+					&& LispNames.QUOTE.equals(quote.name())) || (value instanceof LispSymbol sym && sym.isKeyword());
 		}
 		// A literal nil is a real :if-exists / :if-does-not-exist value ("answer nil
 		// instead of opening"), so it folds like a keyword rather than counting as a
@@ -8835,6 +8836,9 @@ public final class LispMacroExpander {
 		bindings.add(listToCons(List.of(new LispSymbol(OPEN_PATH_VAR), pathExpr)));
 		List<LispVal> checks = new java.util.ArrayList<>();
 		OpenModeTest binary = OpenModeTest.of(false);
+		// The one binary element type a LITERAL :element-type names; a computed one is
+		// always the octet (the only binary value the runtime test below admits).
+		StreamElementType binaryType = StreamElementType.OCTET;
 		OpenModeTest output = OpenModeTest.of(false);
 		OpenModeTest append = OpenModeTest.of(false);
 		OpenModeTest overwrite = OpenModeTest.of(false);
@@ -8895,7 +8899,14 @@ public final class LispMacroExpander {
 				}
 				case LispNames.ELEMENT_TYPE_KEYWORD -> {
 					if (literal) {
-						binary = OpenModeTest.of(isBinaryElementTypeLiteral(value));
+						StreamElementType literalType = literalElementType(value);
+						if (literalType == null) {
+							return unsupportedElementTypeStub(operator);
+						}
+						binary = OpenModeTest.of(!literalType.isCharacter());
+						if (!literalType.isCharacter()) {
+							binaryType = literalType;
+						}
 					}
 					else {
 						LispVal binaryTest = binaryElementTypeTest(var);
@@ -8997,7 +9008,8 @@ public final class LispMacroExpander {
 		if (!probe) {
 			missingAction = resolveMissingErrorArm(missingAction, output);
 		}
-		LispVal base = probe ? probeStreamShape() : dispatchOpenOnElementType(binary, output, io, append, overwrite);
+		LispVal base = probe ? probeStreamShape()
+				: dispatchOpenOnElementType(binary, binaryType, output, io, append, overwrite);
 		LispVal guarded = guardOpenOnExistence(base, existsAction, missingAction, probe, output);
 		List<LispVal> letParts = new java.util.ArrayList<>();
 		letParts.add(new LispSymbol(LispNames.LET_STAR));
@@ -9219,16 +9231,17 @@ public final class LispMacroExpander {
 				+ ")");
 	}
 
-	private static LispVal dispatchOpenOnElementType(OpenModeTest binary, OpenModeTest output, OpenModeTest io,
-			OpenModeTest append, OpenModeTest overwrite) {
+	private static LispVal dispatchOpenOnElementType(OpenModeTest binary, StreamElementType binaryType,
+			OpenModeTest output, OpenModeTest io, OpenModeTest append, OpenModeTest overwrite) {
 		if (binary.isConstant()) {
-			return dispatchOpenOnDirection(binary.constant(), output, io, append, overwrite);
+			return dispatchOpenOnDirection(binary.constant() ? binaryType : StreamElementType.CHARACTER, output, io,
+					append, overwrite);
 		}
-		return makeIf(binary.test(), dispatchOpenOnDirection(true, output, io, append, overwrite),
-				dispatchOpenOnDirection(false, output, io, append, overwrite));
+		return makeIf(binary.test(), dispatchOpenOnDirection(binaryType, output, io, append, overwrite),
+				dispatchOpenOnDirection(StreamElementType.CHARACTER, output, io, append, overwrite));
 	}
 
-	private static LispVal dispatchOpenOnDirection(boolean binary, OpenModeTest output, OpenModeTest io,
+	private static LispVal dispatchOpenOnDirection(StreamElementType binary, OpenModeTest output, OpenModeTest io,
 			OpenModeTest append, OpenModeTest overwrite) {
 		LispVal input = openLeaf(LispNames.INPUT_KEYWORD, binary);
 		if (output.isConstant() && !output.constant()) {
@@ -9238,7 +9251,7 @@ public final class LispMacroExpander {
 		return output.isConstant() ? writing : makeIf(output.test(), writing, input);
 	}
 
-	private static LispVal dispatchOpenOnIo(boolean binary, OpenModeTest io, OpenModeTest append,
+	private static LispVal dispatchOpenOnIo(StreamElementType binary, OpenModeTest io, OpenModeTest append,
 			OpenModeTest overwrite) {
 		if (io.isConstant()) {
 			return dispatchOpenOnDisposition(binary, io.constant(), append, overwrite);
@@ -9247,7 +9260,7 @@ public final class LispMacroExpander {
 				dispatchOpenOnDisposition(binary, false, append, overwrite));
 	}
 
-	private static LispVal dispatchOpenOnDisposition(boolean binary, boolean io, OpenModeTest append,
+	private static LispVal dispatchOpenOnDisposition(StreamElementType binary, boolean io, OpenModeTest append,
 			OpenModeTest overwrite) {
 		LispVal truncating = openLeaf(LispNames.outputDirectionToken(io, false, false), binary);
 		LispVal appending = openLeaf(LispNames.outputDirectionToken(io, true, false), binary);
@@ -9261,11 +9274,11 @@ public final class LispMacroExpander {
 	}
 
 	/** One leaf of the dispatch: the literal {@code open} shape the backends compile. */
-	private static LispVal openLeaf(String direction, boolean binary) {
+	private static LispVal openLeaf(String direction, StreamElementType elementType) {
 		List<LispVal> parts = new java.util.ArrayList<>(
 				List.of(new LispSymbol(LispNames.OPEN), new LispSymbol(OPEN_PATH_VAR), new LispSymbol(direction)));
-		if (binary) {
-			parts.add(unsignedByte8Literal());
+		if (!elementType.isCharacter()) {
+			parts.add(elementTypeLiteral(elementType));
 		}
 		return listToCons(parts);
 	}
@@ -9273,7 +9286,7 @@ public final class LispMacroExpander {
 	/**
 	 * The runtime binary-element-type test: the sized {@code (unsigned-byte 8)}, the
 	 * unsized {@code unsigned-byte} and {@code (unsigned-byte *)} spellings, matching
-	 * {@link #isBinaryElementTypeLiteral}.
+	 * {@link #literalElementType}'s octet spellings.
 	 */
 	private static LispVal binaryElementTypeTest(LispVal var) {
 		LispVal unsized = listToCons(List.of(new LispSymbol(LispNames.QUOTE),
@@ -9402,10 +9415,10 @@ public final class LispMacroExpander {
 		return false;
 	}
 
-	private static LispVal buildWithOpenFile(LispVal var, List<LispVal> openParts, boolean binary, List<LispVal> body,
-			boolean unwindProtect) {
-		if (binary) {
-			openParts.add(unsignedByte8Literal());
+	private static LispVal buildWithOpenFile(LispVal var, List<LispVal> openParts, StreamElementType elementType,
+			List<LispVal> body, boolean unwindProtect) {
+		if (!elementType.isCharacter()) {
+			openParts.add(elementTypeLiteral(elementType));
 		}
 		return buildWithOpenFileFrom(var, listToCons(openParts), body, unwindProtect);
 	}
@@ -10460,40 +10473,313 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Classifies a literal {@code :element-type} argument: {@code '(unsigned-byte 8)} --
-	 * or its unparameterized spelling {@code 'unsigned-byte}, which local-time's timezone
-	 * reader uses -- is binary, {@code 'character} is text; anything else (including a
-	 * non-literal expression) is rejected so the compilers can resolve the file mode at
-	 * compile time.
+	 * Classifies a literal {@code :element-type} argument -- a {@code (quote spec)} form,
+	 * or the keyword {@code :default} -- through {@link StreamElementType#of}: a
+	 * character type, the octet, or a wide integer element. Null for a value no stream
+	 * here carries, which the caller turns into a CALL-time refusal
+	 * ({@link #callTimeUnsupportedStub}), so the form still expands and only running the
+	 * open signals.
 	 * @param val the element-type argument as it appears in the source
-	 * @return true for the binary element type
+	 * @return the classification, or null
 	 */
-	private static boolean isBinaryElementTypeLiteral(LispVal val) {
+	private static @Nullable StreamElementType literalElementType(LispVal val) {
+		if (val instanceof LispSymbol sym && sym.name().startsWith(":")) {
+			return StreamElementType.of(sym);
+		}
 		if (val instanceof LispCons quoteForm) {
 			List<LispVal> quoteParts = quoteForm.toList();
 			if (quoteParts.size() == 2 && quoteParts.get(0) instanceof LispSymbol q
 					&& LispNames.QUOTE.equals(q.name())) {
-				LispVal spec = quoteParts.get(1);
-				if (spec instanceof LispSymbol sym && LispNames.CHARACTER_TYPE.equals(sym.name())) {
-					return false;
+				return StreamElementType.of(quoteParts.get(1));
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The element-type literal a positional {@code open} leaf carries: the widened type
+	 * ({@link StreamElementType#spec}), so the octet spellings -- {@code unsigned-byte},
+	 * {@code (unsigned-byte 3)}, {@code bit} -- all emit the {@code '(unsigned-byte 8)}
+	 * every backend has always compiled, byte for byte.
+	 */
+	private static LispVal elementTypeLiteral(StreamElementType elementType) {
+		return listToCons(List.of(new LispSymbol(LispNames.QUOTE), elementType.spec()));
+	}
+
+	/**
+	 * Whether the program opens a stream of a WIDE element type -- more than one octet,
+	 * or signed ({@link StreamElementType#isWide}) -- through a LITERAL
+	 * {@code :element-type} on an {@code open} (keyword or positional shape) or a
+	 * {@code with-open-file}. The gate on the compile paths' wide-element helpers
+	 * ({@code LispPreludeLibrary}'s {@code %wide-*} entries): a computed element type
+	 * admits only character and the octet, so no other program can reach a wide stream,
+	 * and every other program keeps its exact bytes.
+	 * @param program the top-level forms
+	 * @return whether a wide stream can be opened
+	 */
+	public static boolean opensWideElementStream(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (opensWideElementStream(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean opensWideElementStream(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.get(0) instanceof LispSymbol op) {
+			if (LispNames.QUOTE.equals(op.name())) {
+				return false;
+			}
+			String member = unqualifiedClMember(op.name());
+			List<LispVal> options = null;
+			if (LispNames.OPEN.equals(member) && parts.size() > 2) {
+				if (parts.get(2) instanceof LispSymbol dir && compiler_directionToken(dir.name())) {
+					// The positional shape: (open path direction 'element-type).
+					if (parts.size() > 3 && wideLiteral(parts.get(3))) {
+						return true;
+					}
 				}
-				// (unsigned-byte) with no size is (unsigned-byte *); every CL opens such
-				// a stream as a byte stream, which for rontolisp is the one 8-bit shape.
-				if (spec instanceof LispSymbol sym && LispNames.UNSIGNED_BYTE.equals(sym.name())) {
-					return true;
+				else {
+					options = parts.subList(2, parts.size());
 				}
-				if (spec instanceof LispCons specCons) {
-					List<LispVal> specParts = specCons.toList();
-					if (specParts.size() == 2 && specParts.get(0) instanceof LispSymbol ub
-							&& LispNames.UNSIGNED_BYTE.equals(ub.name()) && specParts.get(1) instanceof LispInteger bits
-							&& bits.value() == 8) {
+			}
+			else if (LispNames.WITH_OPEN_FILE.equals(member) && parts.size() > 1
+					&& parts.get(1) instanceof LispCons spec && spec.isProperList()) {
+				List<LispVal> specParts = spec.toList();
+				options = specParts.size() > 2 ? specParts.subList(2, specParts.size()) : null;
+			}
+			if (options != null) {
+				for (int i = 0; i + 1 < options.size(); i += 2) {
+					if (options.get(i) instanceof LispSymbol key && LispNames.ELEMENT_TYPE_KEYWORD.equals(key.name())
+							&& wideLiteral(options.get(i + 1))) {
 						return true;
 					}
 				}
 			}
 		}
-		throw new UnsupportedOperationException(
-				LispNames.WITH_OPEN_FILE + " :element-type must be the literal 'character or '(unsigned-byte 8)");
+		for (LispVal part : parts) {
+			if (opensWideElementStream(part)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Whether a direction token is one of the positional {@code open} shape's. */
+	private static boolean compiler_directionToken(String name) {
+		return switch (name) {
+			case LispNames.INPUT_KEYWORD, LispNames.OUTPUT_KEYWORD, LispNames.APPEND_KEYWORD,
+					LispNames.OVERWRITE_KEYWORD, LispNames.IO_KEYWORD, LispNames.IO_APPEND_KEYWORD,
+					LispNames.IO_OVERWRITE_KEYWORD ->
+				true;
+			default -> false;
+		};
+	}
+
+	private static boolean wideLiteral(LispVal value) {
+		StreamElementType type = literalElementType(value);
+		return type != null && type.isWide();
+	}
+
+	/**
+	 * The registration around a literal BINARY {@code open} leaf on a compile path whose
+	 * program can ask about element types: the backend's own failure-signalling open
+	 * ({@link #expandOpenFileErrorSignal}), wrapped into the stream value and recorded
+	 * with its element type.
+	 *
+	 * <pre>
+	 * (%file-stream-register (%obj-new '%STREAM &lt;checked open&gt; :FILE) octets signed 'spec)
+	 * </pre>
+	 * @param checked the failure-signalling open expression (answers the raw handle)
+	 * @param elementType the leaf's element type
+	 * @return the registering expression, answering the stream value
+	 */
+	public static LispVal registeredOpen(LispVal checked, StreamElementType elementType) {
+		LispVal stream = listToCons(List.of(new LispSymbol(LispNames.OBJ_NEW), quoteOf(LispLayout.STREAM_TAG), checked,
+				new LispSymbol(LispLayout.Kinds.FILE)));
+		return listToCons(List.of(new LispSymbol(LispNames.FILE_STREAM_REGISTER_INTERNAL), stream,
+				new LispInteger(elementType.octets()), elementType.signed() ? LispTrue.INSTANCE : LispNil.INSTANCE,
+				elementTypeLiteral(elementType)));
+	}
+
+	/**
+	 * {@code (stream-element-type s)} on a compile path: the registry read
+	 * ({@code %file-stream-element-type}) when the program can ask about a binary file
+	 * stream's type, the {@code character} constant it always was otherwise -- which is
+	 * what every program that never opens a binary file keeps, byte for byte.
+	 * @param cons the stream-element-type call
+	 * @param registry whether the registry entry is spliced
+	 * @return the lowered form
+	 */
+	public static LispVal expandStreamElementType(LispCons cons, boolean registry) {
+		List<LispVal> parts = cons.toList();
+		if (registry && parts.size() == 2) {
+			return callOf(LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL, parts.get(1));
+		}
+		return expandConstantResult(cons, quotedCharacterTypeName());
+	}
+
+	/**
+	 * A compiled {@code close} once the element-type registry exists: the stream's entry
+	 * is forgotten first, so a descriptor reused after the close never inherits the
+	 * closed stream's element type.
+	 *
+	 * <pre>
+	 * (let ((__fsf_s s)) (%file-stream-forget __fsf_s) &lt;close of __fsf_s&gt;)
+	 * </pre>
+	 * @param cons the close call
+	 * @param close builds the backend's own close of the bound temporary
+	 * @return the forgetting form, or null for a malformed call
+	 */
+	public static @Nullable LispVal forgettingClose(LispCons cons,
+			java.util.function.Function<LispCons, LispVal> close) {
+		LispCons stripped = stripCloseAbort(cons) instanceof LispCons s ? s : cons;
+		List<LispVal> parts = stripped.toList();
+		if (parts.size() != 2) {
+			return null;
+		}
+		LispSymbol var = new LispSymbol("__fsf_s");
+		LispCons inner = (LispCons) listToCons(List.of(parts.get(0), var));
+		return listToCons(
+				List.of(new LispSymbol(LispNames.LET), listToCons(List.of(listToCons(List.of(var, parts.get(1))))),
+						callOf(LispNames.FILE_STREAM_FORGET_INTERNAL, var), close.apply(inner)));
+	}
+
+	/**
+	 * The call-time refusal of a wide {@code open} leaf compiled without the element-type
+	 * registry -- a pipeline that skipped the prelude selection. Opening it as octets
+	 * would read and write the wrong elements silently.
+	 * @return the signalling form
+	 */
+	public static LispVal wideElementTypeUnavailableStub() {
+		return callTimeUnsupportedStub(LispNames.OPEN
+				+ ": a :element-type wider than one octet needs the element-type registry (%file-stream-register)");
+	}
+
+	/**
+	 * {@code (read-byte s [eof-error-p [eof-value]])} on a program that opens a wide
+	 * stream: {@code (%wide-read-byte s eof-error-p eof-value)}, the defaults spelled
+	 * out. Null for a malformed call, which then compiles (and fails) as before.
+	 * @param cons the read-byte call
+	 * @return the lowered call, or null
+	 */
+	public static @Nullable LispVal expandWideReadByte(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() > 4) {
+			return null;
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.WIDE_READ_BYTE_INTERNAL), parts.get(1),
+				parts.size() > 2 ? parts.get(2) : LispTrue.INSTANCE,
+				parts.size() > 3 ? parts.get(3) : LispNil.INSTANCE));
+	}
+
+	/**
+	 * {@code (write-byte i s)} on a program that opens a wide stream:
+	 * {@code (%wide-write-byte i s)}. Null for a malformed call.
+	 * @param cons the write-byte call
+	 * @return the lowered call, or null
+	 */
+	public static @Nullable LispVal expandWideWriteByte(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			return null;
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.WIDE_WRITE_BYTE_INTERNAL), parts.get(1), parts.get(2)));
+	}
+
+	/**
+	 * {@code (file-length s)} on a program that opens a wide stream: the octet length
+	 * scaled to ELEMENTS.
+	 *
+	 * <pre>
+	 * (let ((__wfl_s s)) (%wide-elements __wfl_s (%file-octet-length __wfl_s)))
+	 * </pre>
+	 * @param cons the file-length call
+	 * @return the lowered form, or null for a malformed call
+	 */
+	public static @Nullable LispVal expandWideFileLength(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			return null;
+		}
+		LispSymbol var = new LispSymbol("__wfl_s");
+		return makeLet("__wfl_s", parts.get(1),
+				fmtCall(LispNames.WIDE_ELEMENTS_INTERNAL, var, callOf(LispNames.FILE_OCTET_LENGTH_INTERNAL, var)));
+	}
+
+	/**
+	 * {@code (file-position s [p])} -- after {@link #rewriteFilePositionArg} has resolved
+	 * {@code :start} / {@code :end} -- on a program that opens a wide stream: the query
+	 * scaled to ELEMENTS, the set scaled to octets.
+	 *
+	 * <pre>
+	 * (let ((__wfp_s s)) (%wide-elements __wfp_s (%file-octet-position __wfp_s)))
+	 * (let* ((__wfp_s s) (__wfp_p p)) (%file-octet-position __wfp_s (%wide-position-octets __wfp_s __wfp_p)))
+	 * </pre>
+	 * @param cons the file-position call
+	 * @return the lowered form, or null for a malformed call
+	 */
+	public static @Nullable LispVal expandWideFilePosition(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol var = new LispSymbol("__wfp_s");
+		if (parts.size() == 2) {
+			return makeLet("__wfp_s", parts.get(1), fmtCall(LispNames.WIDE_ELEMENTS_INTERNAL, var,
+					callOf(LispNames.FILE_OCTET_POSITION_INTERNAL, var)));
+		}
+		if (parts.size() == 3) {
+			LispSymbol pos = new LispSymbol("__wfp_p");
+			LispVal bindings = listToCons(
+					List.of(listToCons(List.of(var, parts.get(1))), listToCons(List.of(pos, parts.get(2)))));
+			return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings,
+					fmtCall(LispNames.FILE_OCTET_POSITION_INTERNAL, var,
+							fmtCall(LispNames.WIDE_POSITION_OCTETS_INTERNAL, var, pos))));
+		}
+		return null;
+	}
+
+	/**
+	 * Guards the packed bulk arm of a {@code read-sequence} / {@code write-sequence}
+	 * expansion on a program that opens a wide stream: the packed primitive moves raw
+	 * octets, so a wide stream must decline it and take the per-element loop, whose
+	 * {@code read-byte} / {@code write-byte} compose the element.
+	 *
+	 * <pre>
+	 * (%read-sequence-packed seq st i end) -> (if (%wide-width st) nil (%read-sequence-packed seq st i end))
+	 * </pre>
+	 * @param expansion the read-sequence / write-sequence expansion
+	 * @return the expansion with every packed call guarded
+	 */
+	public static LispVal guardPackedSequenceForWideStreams(LispVal expansion) {
+		if (!(expansion instanceof LispCons cons)) {
+			return expansion;
+		}
+		if (cons.car() instanceof LispSymbol op && cons.isProperList()
+				&& (LispNames.READ_SEQUENCE_PACKED.equals(op.name())
+						|| LispNames.WRITE_SEQUENCE_PACKED.equals(op.name()))) {
+			List<LispVal> parts = cons.toList();
+			if (parts.size() == 5) {
+				return makeIf(callOf(LispNames.WIDE_WIDTH_INTERNAL, parts.get(2)), LispNil.INSTANCE, cons);
+			}
+			return cons;
+		}
+		LispVal car = guardPackedSequenceForWideStreams(cons.car());
+		LispVal cdr = guardPackedSequenceForWideStreams(cons.cdr());
+		return car == cons.car() && cdr == cons.cdr() ? cons : new LispCons(car, cdr);
+	}
+
+	/**
+	 * The call-time refusal of a literal {@code :element-type} no stream here carries.
+	 * @param operator the surface operator, for the message
+	 * @return the signaling expression
+	 */
+	private static LispVal unsupportedElementTypeStub(String operator) {
+		return callTimeUnsupportedStub(
+				operator + " :element-type must be the literal 'character or '(unsigned-byte 8)");
 	}
 
 	/**
@@ -11826,7 +12112,16 @@ public final class LispMacroExpander {
 					}
 					direction = dir.name();
 				}
-				case ":ELEMENT-TYPE" -> binary = isBinaryElementTypeLiteral(value);
+				case ":ELEMENT-TYPE" -> {
+					// The file is opened by call-with-temporary-file, which passes the
+					// element type down COMPUTED -- so only the octet spellings reach a
+					// stream (.kb/read-load-streams.md, "Computed open options").
+					StreamElementType literalType = literalElementType(value);
+					if (literalType == null || literalType.isWide()) {
+						return unsupportedElementTypeStub(LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED);
+					}
+					binary = !literalType.isCharacter();
+				}
 				default -> throw new UnsupportedOperationException(
 						LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED + ": unsupported option " + key.name());
 			}
@@ -23134,7 +23429,11 @@ public final class LispMacroExpander {
 			// position-independent pass, so appending is safe. The data table is a
 			// top-level defvar and must run before any top-level subtypep call, so it
 			// goes FIRST (after the dispatcher slots above were filled by index).
-			out.add(runtimeSubtypepDefun(closRegistry));
+			boolean intervals = mentionsIntegerIntervalType(program);
+			out.add(runtimeSubtypepDefun(closRegistry, intervals));
+			if (intervals) {
+				out.addAll(LispReader.readAllFromString(RUNTIME_SUBTYPEP_INTERVAL_SOURCE, Features.INTERPRETER));
+			}
 			out.addAll(0, subtypepAncestorTableForms(closRegistry));
 		}
 		if (runtimeSubtypepValid) {
@@ -38011,6 +38310,20 @@ public final class LispMacroExpander {
 			// below decide nothing about a RESTRICTING compound super.
 			return true;
 		}
+		if (subV instanceof LispCons || superV instanceof LispCons) {
+			// Two INTEGER INTERVALS -- (unsigned-byte n), (signed-byte n), (integer lo
+			// hi), (mod n) and the names bit / unsigned-byte / signed-byte / integer --
+			// decide by containment, which is exact for them. Only with a compound on
+			// one side: two NAMES stay the lattice's (whose edges the runtime ancestor
+			// table is generated from), and the runtime twin reaches this arm only
+			// through a cons as well (RUNTIME_SUBTYPEP_INTERVAL_SOURCE). An (or ...)
+			// SUB of intervals is covered by their hull; the super is read exactly.
+			IntegerTypeRange superRange = IntegerTypeRange.of(superV);
+			IntegerTypeRange subRange = superRange == null ? null : IntegerTypeRange.covering(subV);
+			if (superRange != null && subRange != null) {
+				return superRange.contains(subRange);
+			}
+		}
 		if (superV instanceof LispCons supCons) {
 			// A COMPOUND super: only the logical connectives decide anything here.
 			// (or A B ...) holds when the sub is a subtype of ANY branch, (and A B ...)
@@ -38675,12 +38988,123 @@ public final class LispMacroExpander {
 	 * Builds the shared {@code (defun %subtypep-runtime (a b) ...)} dispatch defun; see
 	 * {@link #expandRuntimeSubtypep}.
 	 */
-	private static LispVal runtimeSubtypepDefun(ClosRegistry closRegistry) {
+	private static LispVal runtimeSubtypepDefun(ClosRegistry closRegistry, boolean intervals) {
 		LispSymbol a = new LispSymbol("%st_ra");
 		LispSymbol b = new LispSymbol("%st_rb");
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.SUBTYPEP_RUNTIME),
-				listToCons(List.of(a, b)), expandRuntimeSubtypep(a, b, closRegistry)));
+				listToCons(List.of(a, b)), expandRuntimeSubtypep(a, b, closRegistry, intervals)));
 	}
+
+	/**
+	 * The runtime twin of {@link #subtypep}'s INTEGER INTERVAL rule
+	 * ({@link IntegerTypeRange}): {@code %subtypep-interval} reads a specifier VALUE as
+	 * {@code (lo . hi)} (a nil bound is unbounded) or {@code :none}, and
+	 * {@code %subtypep-interval-in} is the containment test. Reached from the compound
+	 * arm of the {@code %subtypep-runtime} dispatch, so only when one side is a cons --
+	 * the same scope the Java rule has. Change the two together.
+	 */
+	private static final String RUNTIME_SUBTYPEP_INTERVAL_SOURCE = """
+			(defun %subtypep-interval-bound (%stb-b %stb-lower)
+			  (cond ((integerp %stb-b) %stb-b)
+			        ((and (symbolp %stb-b) (string= (symbol-name %stb-b) "*")) nil)
+			        ((and (consp %stb-b) (integerp (car %stb-b)) (null (cdr %stb-b)))
+			         (if %stb-lower (+ (car %stb-b) 1) (- (car %stb-b) 1)))
+			        (t :none)))
+			(defun %subtypep-interval (%sti-s)
+			  (let ((%sti-n (cond ((symbolp %sti-s) (symbol-name %sti-s))
+			                      ((and (consp %sti-s) (symbolp (car %sti-s))) (symbol-name (car %sti-s)))
+			                      (t ""))))
+			    (cond ((symbolp %sti-s)
+			           (cond ((string= %sti-n "BIT") (cons 0 1))
+			                 ((string= %sti-n "UNSIGNED-BYTE") (cons 0 nil))
+			                 ((or (string= %sti-n "SIGNED-BYTE") (string= %sti-n "INTEGER")) (cons nil nil))
+			                 (t :none)))
+			          ((not (consp %sti-s)) :none)
+			          ((or (string= %sti-n "UNSIGNED-BYTE") (string= %sti-n "SIGNED-BYTE"))
+			           (let ((%sti-b (if (consp (cdr %sti-s)) (car (cdr %sti-s)) '*)))
+			             (cond ((and (consp (cdr %sti-s)) (cdr (cdr %sti-s))) :none)
+			                   ((and (symbolp %sti-b) (string= (symbol-name %sti-b) "*"))
+			                    (%subtypep-interval (car %sti-s)))
+			                   ((not (and (integerp %sti-b) (> %sti-b 0))) :none)
+			                   ((string= %sti-n "UNSIGNED-BYTE") (cons 0 (- (ash 1 %sti-b) 1)))
+			                   (t (cons (- (ash 1 (- %sti-b 1))) (- (ash 1 (- %sti-b 1)) 1))))))
+			          ((string= %sti-n "MOD")
+			           (let ((%sti-b (if (consp (cdr %sti-s)) (car (cdr %sti-s)) nil)))
+			             (if (and (integerp %sti-b) (> %sti-b 0) (null (cdr (cdr %sti-s))))
+			                 (cons 0 (- %sti-b 1))
+			                 :none)))
+			          ((string= %sti-n "INTEGER")
+			           (let* ((%sti-r (cdr %sti-s))
+			                  (%sti-lo (if (consp %sti-r) (%subtypep-interval-bound (car %sti-r) t) nil))
+			                  (%sti-hi (if (and (consp %sti-r) (consp (cdr %sti-r)))
+			                               (%subtypep-interval-bound (car (cdr %sti-r)) nil)
+			                               nil)))
+			             (if (or (eq %sti-lo :none) (eq %sti-hi :none)
+			                     (and (consp %sti-r) (consp (cdr %sti-r)) (cdr (cdr %sti-r))))
+			                 :none
+			                 (cons %sti-lo %sti-hi))))
+			          (t :none))))
+			(defun %subtypep-interval-covering (%stc-s)
+			  (if (and (consp %stc-s) (symbolp (car %stc-s)) (string= (symbol-name (car %stc-s)) "OR"))
+			      (let ((%stc-lo 1) (%stc-hi 0) (%stc-any nil) (%stc-r nil))
+			        (dolist (%stc-e (cdr %stc-s) (if %stc-any (cons %stc-lo %stc-hi) (cons 1 0)))
+			          (setq %stc-r (%subtypep-interval-covering %stc-e))
+			          (if (eq %stc-r :none)
+			              (return :none)
+			              (if (if (car %stc-r) (if (cdr %stc-r) (> (car %stc-r) (cdr %stc-r)) nil) nil)
+			                  nil
+			                  (progn
+			                    (setq %stc-lo (if %stc-any
+			                                      (if (and %stc-lo (car %stc-r)) (min %stc-lo (car %stc-r)) nil)
+			                                      (car %stc-r)))
+			                    (setq %stc-hi (if %stc-any
+			                                      (if (and %stc-hi (cdr %stc-r)) (max %stc-hi (cdr %stc-r)) nil)
+			                                      (cdr %stc-r)))
+			                    (setq %stc-any t))))))
+			      (%subtypep-interval %stc-s)))
+			(defun %subtypep-interval-in (%sti-a %sti-b)
+			  (let ((%sti-al (car %sti-a)) (%sti-ah (cdr %sti-a))
+			        (%sti-bl (car %sti-b)) (%sti-bh (cdr %sti-b)))
+			    (if (if (and %sti-al %sti-ah) (> %sti-al %sti-ah) nil)
+			        t
+			        (if (and (or (null %sti-bl) (and %sti-al (<= %sti-bl %sti-al)))
+			                 (or (null %sti-bh) (and %sti-ah (>= %sti-bh %sti-ah))))
+			            t
+			            nil))))
+			""";
+
+	/**
+	 * Whether the program spells an integer INTERVAL type anywhere -- a {@code bit} /
+	 * {@code unsigned-byte} / {@code signed-byte} / {@code mod} symbol or an
+	 * {@code (integer ...)} compound -- the gate on the runtime interval arm of
+	 * {@code %subtypep-runtime} ({@link #RUNTIME_SUBTYPEP_INTERVAL_SOURCE}), so a program
+	 * that never names one keeps the dispatch it had.
+	 * @param program the top-level forms
+	 * @return whether an interval type can reach a computed {@code subtypep}
+	 */
+	static boolean mentionsIntegerIntervalType(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (mentionsIntegerIntervalType(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean mentionsIntegerIntervalType(LispVal form) {
+		if (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && cons.cdr() instanceof LispCons
+					&& INTERVAL_HEADS.contains(IntegerTypeRange.plainName(head)) && IntegerTypeRange.of(cons) != null) {
+				return true;
+			}
+			return mentionsIntegerIntervalType(cons.car()) || mentionsIntegerIntervalType(cons.cdr());
+		}
+		return false;
+	}
+
+	/** The compound heads {@link IntegerTypeRange} reads as an interval. */
+	private static final java.util.Set<String> INTERVAL_HEADS = java.util.Set.of("UNSIGNED-BYTE", "SIGNED-BYTE",
+			"INTEGER", "MOD");
 
 	/**
 	 * Whether the program can call a function through a RUNTIME designator -- a
@@ -40486,7 +40910,8 @@ public final class LispMacroExpander {
 				COMPOUND_SUBTYPEP_RECUR, new LispSymbol(recurOperator)));
 	}
 
-	private static LispVal expandRuntimeSubtypep(LispVal subExpr, LispVal supExpr, ClosRegistry closRegistry) {
+	private static LispVal expandRuntimeSubtypep(LispVal subExpr, LispVal supExpr, ClosRegistry closRegistry,
+			boolean intervals) {
 		String prefix = "__st" + MV_COUNTER.getAndIncrement();
 		LispSymbol a = new LispSymbol(prefix + "_a");
 		LispSymbol b = new LispSymbol(prefix + "_b");
@@ -40505,10 +40930,25 @@ public final class LispMacroExpander {
 		// keyed
 		// by type NAME -- can never match. One shared Lisp source reads the head out of
 		// the specifier value, exactly as the static subtypep reads it out of the AST.
+		LispVal compound = runtimeCompoundSubtypepBody(a, b, LispNames.SUBTYPEP_RUNTIME);
+		if (intervals) {
+			// Two integer INTERVALS decide by containment ahead of the compound rules,
+			// the twin of the Java arm in subtypep.
+			LispSymbol ra = new LispSymbol(prefix + "_ia");
+			LispSymbol rb = new LispSymbol(prefix + "_ib");
+			LispVal none = new LispSymbol(":NONE");
+			compound = listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
+					listToCons(List.of(listToCons(List.of(rb, mvCall("%SUBTYPEP-INTERVAL", b))),
+							listToCons(List.of(ra,
+									makeIf(fmtCall(LispNames.EQ_GENERAL, rb, none), none,
+											mvCall("%SUBTYPEP-INTERVAL-COVERING", a)))))),
+					makeIf(fmtCall(LispNames.EQ_GENERAL, ra, none), compound,
+							mvCall("%SUBTYPEP-INTERVAL-IN", ra, rb))));
+		}
 		clauses.add(listToCons(List.of(
 				listToCons(
 						List.of(new LispSymbol(LispNames.OR), mvCall(LispNames.CONSP, a), mvCall(LispNames.CONSP, b))),
-				runtimeCompoundSubtypepBody(a, b, LispNames.SUBTYPEP_RUNTIME))));
+				compound)));
 		clauses.add(listToCons(List.of(LispTrue.INSTANCE, memberTest)));
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));
