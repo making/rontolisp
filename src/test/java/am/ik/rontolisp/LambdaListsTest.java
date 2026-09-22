@@ -46,6 +46,33 @@ class LambdaListsTest {
 	}
 
 	@Test
+	void anOptionalTailWithNoRestOrKeyChecksTheCountFirst() {
+		// The bound is checked BEFORE any default runs, inline (no helper defun: a
+		// wrapper built while the backend compiles has &optional too).
+		List<LispVal> out = LambdaLists.desugarProgram(read("(defun f (a &optional (b 2) c) (list a b c))"));
+		assertThat(out).hasSize(1);
+		assertThat(out.get(0).print()).isEqualTo(printed("""
+				(defun f (a &rest |__ll_rest|)
+				  (let* ((|__ll_arity| (if (nthcdr 2 |__ll_rest|)
+				                           (%program-error
+				                            (%string-concat "Function expects at most 3 arguments, got "
+				                                            (prin1-to-string (+ 1 (length |__ll_rest|)))))
+				                           nil))
+				         (b (if (consp |__ll_rest|) (car |__ll_rest|) 2))
+				         (|__ll_rest| (if (consp |__ll_rest|) (cdr |__ll_rest|) nil))
+				         (c (if (consp |__ll_rest|) (car |__ll_rest|) nil))
+				         (|__ll_rest| (if (consp |__ll_rest|) (cdr |__ll_rest|) nil)))
+				    (list a b c)))
+				"""));
+		// An &aux-only list stays FIXED arity, so the native count check covers it.
+		assertThat(LambdaLists.desugarProgram(read("(defun g (a &aux (b 1)) (list a b))")).get(0).print())
+			.isEqualTo(printed("(defun g (a) (let* ((b 1)) (list a b)))"));
+		// &rest and &key already consume every argument: no check.
+		assertThat(LambdaLists.desugarProgram(read("(defun h (&optional a &rest r) (list a r))")).get(0).print())
+			.doesNotContain("__ll_arity");
+	}
+
+	@Test
 	void aLowercaseAuthoredKeywordPassesItsUpcasedTwinAndTheCheckKnowsBoth() {
 		// An internal lowercase-authored library's (&key foo) is called by user code
 		// whose reader upcased the keyword: the cell scan takes either spelling, and the

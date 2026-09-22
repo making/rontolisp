@@ -733,7 +733,8 @@ public final class LispPreludeLibrary {
 		// PathnameOps.mergePathnames implements; the two are pinned against each other
 		// by LispPreludeLibraryTest.
 		SOURCES.put(LispNames.MERGE_PATHNAMES, """
-				(defun merge-pathnames (%mp-path &optional %mp-defaults)
+				(defun merge-pathnames (%mp-path &optional %mp-defaults %mp-default-version)
+				  (declare (ignore %mp-default-version))
 				  (let* ((%mp-pp (%path-ns %mp-path))
 				         (%mp-dd (%path-ns %mp-defaults))
 				         (p (if (stringp %mp-pp) %mp-pp ""))
@@ -771,9 +772,12 @@ public final class LispPreludeLibrary {
 		// host), so the value is the pathname over the whole namestring and the
 		// second value is its length, like CL's success case.
 		SOURCES.put(LispNames.PARSE_NAMESTRING, """
-				(defun parse-namestring (%psn-thing &optional %psn-host %psn-defaults)
-				  (let ((%psn-s (namestring %psn-thing)))
-				    (values (pathname %psn-s) (length %psn-s))))
+				(defun parse-namestring (%psn-thing &optional %psn-host %psn-defaults
+				                         &key ((:start %psn-start) 0) ((:end %psn-end)) ((:junk-allowed %psn-junk)))
+				  (declare (ignore %psn-host %psn-defaults %psn-junk))
+				  (let* ((%psn-s (namestring %psn-thing))
+				         (%psn-e (or %psn-end (length %psn-s))))
+				    (values (pathname (subseq %psn-s %psn-start %psn-e)) %psn-e)))
 				""");
 		// %pathname-split: the ONE rendering of CL's "the LAST dot separates the type,
 		// and a dot at position 0 does not" rule -- (directory name type), with name and

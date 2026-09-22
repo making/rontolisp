@@ -20787,6 +20787,44 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void extraArgumentsPastAnOptionalTailSignalProgramError() throws Exception {
+		// Arguments past the lambda list are a program-error, not silently dropped --
+		// through a direct call, funcall, apply, a lambda, &aux and a built-in wrapper.
+		assertThat(compileAndRun(
+				"""
+						(defun ll-extra-opt (a &optional (b 2)) (list a b))
+						(print (ll-extra-opt 1 5))
+						(print (handler-case (ll-extra-opt 1 2 3) (program-error () :program-error)))
+						(print (handler-case (funcall #'ll-extra-opt 1 2 3) (program-error () :program-error)))
+						(print (handler-case (apply #'ll-extra-opt '(1 2 3)) (program-error () :program-error)))
+						(print (handler-case (funcall (lambda (&optional x y) (list x y)) 1 2 3) (program-error () :program-error)))
+						(print (handler-case (ll-extra-opt 1 2 3 4) (error (e) (princ-to-string e))))
+						(defun ll-extra-aux (a &aux (b (+ a 1))) (list a b))
+						(print (ll-extra-aux 1))
+						(print (handler-case (funcall #'ll-extra-aux 1 2) (program-error () :program-error)))
+						(print (handler-case (funcall #'princ 1 t 3) (program-error () :program-error)))
+						"""))
+			.isEqualTo(
+					"(1 5)\n:PROGRAM-ERROR\n:PROGRAM-ERROR\n:PROGRAM-ERROR\n:PROGRAM-ERROR\n\"Function expects at most 2 arguments, got 4\"\n(1 2)\n:PROGRAM-ERROR\n:PROGRAM-ERROR");
+	}
+
+	@Test
+	void aLegalCallAtTheFullClArityStillRuns() throws Exception {
+		// Now that a surplus argument signals, a wrapper SHORTER than CL's lambda list
+		// would refuse a legal call: the read family's first-class wrappers take the
+		// whole optional tail. (The prelude half -- merge-pathnames, parse-namestring --
+		// needs the library splice this harness does not run; ci-spec covers it.)
+		assertThat(compileAndRun("""
+				(with-input-from-string (s "ab")
+				  (print (list (funcall #'read-line s nil :eof) (funcall #'read-line s nil :eof)
+				               (funcall #'read-char s nil :done) (funcall #'peek-char nil s nil :peof))))
+				(with-input-from-string (s "xy")
+				  (print (list (funcall #'read-char s) (funcall #'peek-char nil s) (funcall #'read-line s)
+				               (handler-case (funcall #'read-char s) (end-of-file () :eof-signalled)))))
+				""")).isEqualTo("(\"ab\" :EOF :DONE :PEOF)\n(#\\x #\\y \"y\" :EOF-SIGNALLED)");
+	}
+
+	@Test
 	void compileAndRunDefunRestAndOptional() throws Exception {
 		assertThat(compileAndRun("""
 				(defun f (a &rest r) (list a r))

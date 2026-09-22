@@ -9183,6 +9183,44 @@ cases:
       (101 102 103)
       (1 (2 3))
       (1 (2 3))
+  - name: lambda-list-extra-arguments-signal-program-error
+    source: |
+      (defun ll-extra-opt (a &optional (b 2)) (list a b))
+      (print (ll-extra-opt 1 5))
+      (print (handler-case (ll-extra-opt 1 2 3) (program-error () :program-error)))
+      (print (handler-case (funcall #'ll-extra-opt 1 2 3) (program-error () :program-error)))
+      (print (handler-case (apply #'ll-extra-opt '(1 2 3)) (program-error () :program-error)))
+      (print (handler-case (funcall (lambda (&optional x y) (list x y)) 1 2 3) (program-error () :program-error)))
+      (print (handler-case (ll-extra-opt 1 2 3 4) (error (e) (princ-to-string e))))
+      (defun ll-extra-aux (a &aux (b (+ a 1))) (list a b))
+      (print (ll-extra-aux 1))
+      (print (handler-case (funcall #'ll-extra-aux 1 2) (program-error () :program-error)))
+      (print (handler-case (funcall #'princ 1 t 3) (program-error () :program-error)))
+    expected: |
+      (1 5)
+      :PROGRAM-ERROR
+      :PROGRAM-ERROR
+      :PROGRAM-ERROR
+      :PROGRAM-ERROR
+      "Function expects at most 2 arguments, got 4"
+      (1 2)
+      :PROGRAM-ERROR
+      :PROGRAM-ERROR
+  - name: a-legal-call-at-the-full-cl-arity-still-runs
+    source: |
+      (with-input-from-string (s "ab")
+        (print (list (funcall #'read-line s nil :eof) (funcall #'read-line s nil :eof)
+                     (funcall #'read-char s nil :done) (funcall #'peek-char nil s nil :peof))))
+      (with-input-from-string (s "xy")
+        (print (list (funcall #'read-char s) (funcall #'peek-char nil s) (funcall #'read-line s)
+                     (handler-case (funcall #'read-char s) (end-of-file () :eof-signalled)))))
+      (print (namestring (merge-pathnames "a.txt" "/tmp/" nil)))
+      (print (multiple-value-list (parse-namestring "xx/tmp/abc.lisp" nil nil :start 2)))
+    expected: |
+      ("ab" :EOF :DONE :PEOF)
+      (#\x #\y "y" :EOF-SIGNALLED)
+      "/tmp/a.txt"
+      (#P"/tmp/abc.lisp" 15)
   - name: defstruct-constructor-accessors-predicate-copier
     source: |
       (defstruct cs-point x (y 10))

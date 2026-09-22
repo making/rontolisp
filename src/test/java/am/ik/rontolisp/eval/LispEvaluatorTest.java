@@ -17221,6 +17221,25 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void defunExtraArgumentsPastTheLambdaListSignalProgramError() {
+		String def = "(defun f (x &optional (y 10)) (list x y)) ";
+		assertThat(evalMulti(def + "(handler-case (f 1 2 3) (program-error (e) (princ-to-string e)))").print())
+			.isEqualTo("\"Function expects at most 2 arguments, got 3\"");
+		// The count is checked before a default runs.
+		assertThat(evalMulti("""
+				(defvar *ran* nil)
+				(defun g (&optional (y (setq *ran* t))) y)
+				(list (handler-case (g 1 2) (program-error () :pe)) *ran*)""").print()).isEqualTo("(:PE NIL)");
+		assertThat(
+				evalMulti("(defun h (x &aux (y 1)) (list x y)) (handler-case (h 1 2) (program-error () :pe))").print())
+			.isEqualTo(":PE");
+		assertThat(eval("(handler-case (funcall (lambda (&optional a) a) 1 2) (program-error () :pe))").print())
+			.isEqualTo(":PE");
+		// A prelude defun is an ordinary defun: clear-input takes one optional.
+		assertThat(eval("(handler-case (clear-input t nil) (program-error () :pe))").print()).isEqualTo(":PE");
+	}
+
+	@Test
 	void defunKeywordArguments() {
 		String def = "(defun f (a &key (k 1 kp) m) (list a k kp m)) ";
 		assertThat(evalMulti(def + "(f 0)").print()).isEqualTo("(0 1 NIL NIL)");
