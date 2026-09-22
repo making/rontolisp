@@ -9206,6 +9206,19 @@ cases:
       (1 2)
       :PROGRAM-ERROR
       :PROGRAM-ERROR
+  - name: the-surplus-argument-message
+    source: |
+      (defun ll-four (a &optional b c d e) (list a b c d e))
+      (print (handler-case (funcall (lambda (&optional a) a) 1 2 3) (error (e) (princ-to-string e))))
+      (print (handler-case (ll-four 1 2 3 4 5 6) (error (e) (princ-to-string e))))
+      (print (let ((*print-base* 16))
+               (handler-case (ll-four 1 2 3 4 5 6 7 8 9 10 11 12) (error (e) (princ-to-string e)))))
+      (print (ll-four 1 2 3 4 5))
+    expected: |
+      "Function expects at most 1 argument, got 3"
+      "Function expects at most 5 arguments, got 6"
+      "Function expects at most 5 arguments, got 12"
+      (1 2 3 4 5)
   - name: a-legal-call-at-the-full-cl-arity-still-runs
     source: |
       (with-input-from-string (s "ab")

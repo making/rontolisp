@@ -17384,6 +17384,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void theSurplusArgumentMessage() {
+		// The surplus-argument message on the singular bound, a tail long enough for
+		// nthcdr, and a count rendered in decimal whatever *print-base* says.
+		assertThat(evalMulti("""
+				(defun ll-four (a &optional b c d e) (list a b c d e))
+				(list (handler-case (funcall (lambda (&optional a) a) 1 2 3) (error (e) (princ-to-string e)))
+				      (handler-case (ll-four 1 2 3 4 5 6) (error (e) (princ-to-string e)))
+				      (let ((*print-base* 16))
+				        (handler-case (ll-four 1 2 3 4 5 6 7 8 9 10 11 12) (error (e) (princ-to-string e)))))""")
+			.print()).isEqualTo(
+					"(\"Function expects at most 1 argument, got 3\" \"Function expects at most 5 arguments, got 6\" \"Function expects at most 5 arguments, got 12\")");
+	}
+
+	@Test
 	void defunKeywordArguments() {
 		String def = "(defun f (a &key (k 1 kp) m) (list a k kp m)) ";
 		assertThat(evalMulti(def + "(f 0)").print()).isEqualTo("(0 1 NIL NIL)");

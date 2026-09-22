@@ -53,10 +53,8 @@ class LambdaListsTest {
 		assertThat(out).hasSize(1);
 		assertThat(out.get(0).print()).isEqualTo(printed("""
 				(defun f (a &rest |__ll_rest|)
-				  (let* ((|__ll_arity| (if (nthcdr 2 |__ll_rest|)
-				                           (%program-error
-				                            (%string-concat "Function expects at most 3 arguments, got "
-				                                            (prin1-to-string (+ 1 (length |__ll_rest|)))))
+				  (let* ((|__ll_arity| (if (cdr (cdr |__ll_rest|))
+				                           (%program-error (%arity-surplus-message 3 1 |__ll_rest|))
 				                           nil))
 				         (b (if (consp |__ll_rest|) (car |__ll_rest|) 2))
 				         (|__ll_rest| (if (consp |__ll_rest|) (cdr |__ll_rest|) nil))
@@ -157,10 +155,10 @@ class LambdaListsTest {
 				            (getf |__ll_plist| :|allow-other-keys|))
 				        (if (atom (cdr |__ll_cur|))
 				            (%program-error (%string-concat "Odd number of keyword arguments: "
-				                                            (prin1-to-string (car |__ll_cur|))))
+				                                            (%prin1-piece (car |__ll_cur|))))
 				            nil)
 				        (%program-error (%string-concat "Unknown keyword argument: "
-				                                        (prin1-to-string (car |__ll_cur|)))))))
+				                                        (%prin1-piece (car |__ll_cur|)))))))
 				"""));
 		assertThat(LambdaLists.isRuntimeHelper(LispNames.LL_KEY_CELL)).isTrue();
 		assertThat(LambdaLists.isRuntimeHelper(LispNames.LL_CHECK_KEYS)).isTrue();

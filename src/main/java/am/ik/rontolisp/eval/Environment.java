@@ -5504,6 +5504,18 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.PRIN1_TO_STRING_RAW, args, 1);
 			return new LispString(printString(args.get(0)));
 		}));
+		// The &optional surplus-argument message (LambdaLists): max and required are
+		// literals, the count is required plus the rest list's length.
+		env.defineFunction(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL,
+				new LispFunction(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL, args -> {
+					requireArgCount(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL, args, 3);
+					int got = (int) ((LispInteger) args.get(1)).value();
+					for (LispVal l = args.get(2); l instanceof LispCons c; l = c.cdr()) {
+						got++;
+					}
+					return new LispString(
+							ClosRegistry.aritySurplusMessage((int) ((LispInteger) args.get(0)).value(), got));
+				}));
 		// The piece aliases the expander builds format directives, map 'string
 		// accumulators and condition messages with: on the compile backends they are the
 		// public conversions minus the mutable-result wrap; here every string is mutable

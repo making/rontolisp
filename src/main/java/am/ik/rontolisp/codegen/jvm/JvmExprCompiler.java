@@ -27,6 +27,7 @@ import am.ik.rontolisp.compiler.MutableStringProducers;
 import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.rontolisp.compiler.StreamDesignators;
 
+import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
 import org.jspecify.annotations.Nullable;
 
@@ -52,6 +53,23 @@ final class JvmExprCompiler {
 			return;
 		}
 		compileExpr(hooked, ctx, className);
+	}
+
+	/**
+	 * {@code (%arity-surplus-message max required rest)}: the two literal counts and the
+	 * rest list handed to the shared {@code _aritySurplus} helper
+	 * ({@link JvmAritySurplusRuntimeBuilder}).
+	 */
+	private static void compileAritySurplusMessage(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		JvmEmitHelper.emitIntConst(ctx, (int) ((LispInteger) args.get(1)).value());
+		JvmEmitHelper.emitIntConst(ctx, (int) ((LispInteger) args.get(2)).value());
+		compileExpr(args.get(3), ctx, className);
+		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
+				ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmAritySurplusRuntimeBuilder.METHOD),
+						ctx.cp.addUtf8(JvmAritySurplusRuntimeBuilder.DESC)));
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ref.index());
 	}
 
 	/**
@@ -1699,6 +1717,7 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.lowerProgramError(cons, ctx.closRegistry,
 							ctx.hasLandingPad && ctx.mayUseInstances), ctx, className);
 				}
+				case LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL -> compileAritySurplusMessage(cons, ctx, className);
 				case LispNames.AND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx, className);
 				case LispNames.OR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx, className);
 				case LispNames.WHEN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx, className);

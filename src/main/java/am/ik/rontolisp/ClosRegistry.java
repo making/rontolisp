@@ -277,6 +277,17 @@ public final class ClosRegistry {
 		return (variadic ? ARITY_AT_LEAST : "") + required + ARITY_ARGUMENT + (required == 1 ? "" : ARITY_PLURAL);
 	}
 
+	/**
+	 * The message of a call past an {@code &optional} tail ({@code LambdaLists}): the
+	 * {@link #arityMessage} shape with the count as an upper bound.
+	 * @param max the callee's required plus optional parameter count
+	 * @param got the number of arguments the call passed
+	 * @return the message
+	 */
+	public static String aritySurplusMessage(int max, int got) {
+		return ARITY_MESSAGE_PREFIX + ARITY_AT_MOST + arityExpectation(max, false) + ARITY_MESSAGE_INFIX + got;
+	}
+
 	/** What {@link #arityMessage} puts between the expectation and the actual count. */
 	public static final String ARITY_MESSAGE_INFIX = ", got ";
 

@@ -55,6 +55,9 @@ public final class LambdaLists {
 
 	private static final String ARITY_VAR = "__ll_arity";
 
+	/** The longest optional tail whose surplus test is spelled as nested {@code cdr}s. */
+	private static final int NESTED_CDR_MAX = 3;
+
 	private LambdaLists() {
 	}
 
@@ -176,33 +179,58 @@ public final class LambdaLists {
 
 	/**
 	 * The throwaway {@code let*} binding that signals when arguments remain past the last
-	 * optional -- {@code cdr} for the common single optional:
+	 * optional -- nested {@code cdr}s for a tail of up to {@value #NESTED_CDR_MAX}:
 	 *
 	 * <pre>
-	 * (__ll_arity (if (nthcdr k rest)
-	 *                 (%program-error (%string-concat "Function expects at most N arguments, got "
-	 *                                                 (prin1-to-string (+ req (length rest)))))))
+	 * (__ll_arity (if (nthcdr k rest) (%program-error (%arity-surplus-message max req rest)) nil))
 	 * </pre>
 	 *
 	 * INLINE, not a helper call like the keyword check: first-class built-in wrappers
 	 * ({@code BuiltinFunctionWrappers}) and several expansions build {@code &optional}
 	 * lambdas while the backend compiles, long after any program scan could prepend a
-	 * helper. The message is computed, so the compilers' static program-error warning
-	 * (literal messages only) never fires for it; its text is
-	 * {@code ClosRegistry.arityMessage}'s shape.
+	 * helper. The message is a primitive rather than Lisp over {@code prin1-to-string}:
+	 * on the JVM that spelling pulled the mutable-string wrap, the generic {@code length}
+	 * and the code-point helpers into every program with an {@code &optional} function
+	 * ({@code .kb/lambda-lists.md}). The message is computed, so the compilers' static
+	 * program-error warning (literal messages only) never fires for it.
 	 */
 	private static LispVal tooManyArgsCheck(LispSymbol restVar, int required, int optionals) {
-		LispVal beyond = optionals == 1 ? call(LispNames.CDR, restVar)
-				: list(new LispSymbol(LispNames.NTHCDR), new LispInteger(optionals), restVar);
-		int max = required + optionals;
-		LispVal got = call(LispNames.PRIN1_TO_STRING, required == 0 ? call(LispNames.LENGTH, restVar)
-				: list(new LispSymbol(LispNames.ADD), new LispInteger(required), call(LispNames.LENGTH, restVar)));
-		LispVal message = list(new LispSymbol(LispNames.STRING_CONCAT),
-				new LispString(ClosRegistry.ARITY_MESSAGE_PREFIX + ClosRegistry.ARITY_AT_MOST
-						+ ClosRegistry.arityExpectation(max, false) + ClosRegistry.ARITY_MESSAGE_INFIX),
-				got);
+		// Nested cdrs for a short tail: on the JVM each is a few inline bytes, where
+		// nthcdr brings its runtime helper into a program that may not otherwise have it.
+		LispVal beyond = restVar;
+		if (optionals <= NESTED_CDR_MAX) {
+			for (int i = 0; i < optionals; i++) {
+				beyond = call(LispNames.CDR, beyond);
+			}
+		}
+		else {
+			beyond = list(new LispSymbol(LispNames.NTHCDR), new LispInteger(optionals), restVar);
+		}
+		LispVal message = list(new LispSymbol(LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL),
+				new LispInteger(required + optionals), new LispInteger(required), restVar);
 		LispVal signal = list(new LispSymbol(LispNames.PROGRAM_ERROR_INTERNAL), message);
 		return list(new LispSymbol(ARITY_VAR), list(new LispSymbol(LispNames.IF), beyond, signal, LispNil.INSTANCE));
+	}
+
+	/**
+	 * Lowers {@code (%arity-surplus-message max req rest)} for a backend without a
+	 * runtime helper for it (WASM) to
+	 * {@code (%string-concat "Function expects at most MAX argument(s), got " (%prin1-to-string (+ req (length rest))))}
+	 * -- the non-consulting conversion, since the count is decimal whatever
+	 * {@code *print-base*} says.
+	 * @param form the {@code %arity-surplus-message} form
+	 * @return the lowered form
+	 */
+	public static LispVal lowerAritySurplusMessage(LispCons form) {
+		List<LispVal> args = form.toList();
+		int max = (int) ((LispInteger) args.get(1)).value();
+		long required = ((LispInteger) args.get(2)).value();
+		LispVal rest = args.get(3);
+		LispVal count = required == 0 ? call(LispNames.LENGTH, rest)
+				: list(new LispSymbol(LispNames.ADD), new LispInteger(required), call(LispNames.LENGTH, rest));
+		String zero = ClosRegistry.aritySurplusMessage(max, 0);
+		return list(new LispSymbol(LispNames.STRING_CONCAT), new LispString(zero.substring(0, zero.length() - 1)),
+				call(LispNames.PRIN1_TO_STRING_RAW, count));
 	}
 
 	/**
@@ -356,10 +384,10 @@ public final class LambdaLists {
 		// check every &key function carries.
 		LispVal signal = list(new LispSymbol(LispNames.PROGRAM_ERROR_INTERNAL),
 				list(new LispSymbol(LispNames.STRING_CONCAT), new LispString("Unknown keyword argument: "),
-						call(LispNames.PRIN1_TO_STRING, indicator)));
+						call(LispNames.PRIN1_PIECE_INTERNAL, indicator)));
 		LispVal oddSignal = list(new LispSymbol(LispNames.PROGRAM_ERROR_INTERNAL),
 				list(new LispSymbol(LispNames.STRING_CONCAT), new LispString("Odd number of keyword arguments: "),
-						call(LispNames.PRIN1_TO_STRING, indicator)));
+						call(LispNames.PRIN1_PIECE_INTERNAL, indicator)));
 		LispVal odd = list(new LispSymbol(LispNames.IF), call(LispNames.ATOM, call(LispNames.CDR, cur)), oddSignal,
 				LispNil.INSTANCE);
 		LispVal body = list(new LispSymbol(LispNames.IF), accepted, odd, signal);
