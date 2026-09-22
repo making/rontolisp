@@ -163,6 +163,13 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	private boolean needsIoStreamRuntime;
 
+	/**
+	 * Whether the positioned character file streams ({@code RontoCharFileReader} /
+	 * {@code RontoCharFileWriter}) go beside the output: a program that names
+	 * {@code file-position} and can open a character file stream.
+	 */
+	private boolean needsCharFileRuntime;
+
 	/** The array runtime helper group ({@link JvmArrayRuntimeBuilder}). */
 	private static final String GROUP_ARRAYS = "arrays";
 
@@ -555,12 +562,15 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsHashTableRuntime
-				&& !this.needsComplexRuntime && !this.needsIoStreamRuntime) {
+				&& !this.needsComplexRuntime && !this.needsIoStreamRuntime && !this.needsCharFileRuntime) {
 			return Map.of();
 		}
 		Map<String, byte[]> files = new LinkedHashMap<>();
 		if (this.needsIoStreamRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES));
+		}
+		if (this.needsCharFileRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(JvmIoRuntimeBuilder.CHAR_FILE_RUNTIME_CLASS_FILES));
 		}
 		if (this.needsHandleRuntime) {
 			files.putAll(JvmExportRuntimeBuilder.runtimeClassFiles());
@@ -3068,7 +3078,13 @@ public final class JvmLispCompiler implements LispCompiler {
 						|| LispMacroExpander.filePositionMayNeedLength(program),
 				programUsesSymbol(program, LispNames.DELETE_FILE_INTERNAL),
 				programUsesSymbol(program, LispNames.RENAME_FILE_INTERNAL),
-				programUsesSymbol(program, LispNames.FILE_POSITION));
+				programUsesSymbol(program, LispNames.FILE_POSITION),
+				// A character file stream's position is real only through the travelling
+				// positioned reader/writer, which a program whose every open is binary
+				// does not need.
+				programUsesSymbol(program, LispNames.FILE_POSITION)
+						&& LispMacroExpander.mayOpenCharacterFileStream(program));
+		this.needsCharFileRuntime = fileMeta.characterPosition();
 		// The BIDIRECTIONAL stream arm of _open, and with it the travelling
 		// RontoIoFileStream class file, ride the surface fact that the program can ask
 		// for one: every other artifact stays exactly one class file.

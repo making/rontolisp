@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import am.ik.rontolisp.CharacterFilePositionFixture;
 import am.ik.rontolisp.runtime.RontoHttpServer;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -11295,8 +11296,7 @@ class JvmLispCompilerTest {
 	void compileAndRunBinaryFileStreamPositionQueriesAndSeeks() throws Exception {
 		// file-position is REAL for a binary file stream on the JVM backend: the query is
 		// the byte offset the byte primitives advanced, and the set reopens the file at
-		// the offset -- what uiop:parse-windows-shortcut needs. A CHARACTER file stream
-		// still answers nil: its offset is not a byte count the reader exposes.
+		// the offset -- what uiop:parse-windows-shortcut needs.
 		String file = this.tempDir.resolve("pos.bin").toString().replace("\\", "\\\\");
 		assertThat(compileAndRun("""
 				(with-open-file (out "%s" :direction :output :if-exists :supersede
@@ -11311,10 +11311,20 @@ class JvmLispCompilerTest {
 				  (print (file-position in))
 				  (print (read-byte in))
 				  (print (file-position in)))
-				;; A character file stream has no byte offset to report.
+				;; A character file stream answers its byte offset too.
 				(with-open-file (in "%s")
 				  (print (file-position in)))
-				""".formatted(file, file, file))).isEqualTo("10\n0\n0\n1\nT\n5\n5\n6\nNIL");
+				""".formatted(file, file, file))).isEqualTo("10\n0\n0\n1\nT\n5\n5\n6\n0");
+	}
+
+	@Test
+	void compileAndRunCharacterFileStreamPositionIsTheByteOffset() throws Exception {
+		// The JVM twin of LispEvaluatorTest#characterFileStreamPositionIsTheByteOffset,
+		// through the CLI's front end (the program uses unread-char).
+		String file = this.tempDir.resolve("pos.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(CharacterFilePositionFixture.program(file), List.of(), false, false)
+			.forms())).isEqualTo(CharacterFilePositionFixture.EXPECTED);
 	}
 
 	@Test

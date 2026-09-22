@@ -9841,9 +9841,8 @@ cases:
     # file-position is REAL on all four backends. Preview 1 queries and moves the
     # descriptor's own cursor through fd_seek; the component has no cursor (WASI 0.3
     # reads are offset-based) and goes through the adapter's tracked per-fd offset
-    # instead. A CHARACTER file stream answers nil everywhere -- the last form re-opens
-    # the same file after every binary handle is closed, so a WASM backend that let a
-    # reused descriptor keep a stale binary flag would print a number here.
+    # instead. The last form re-opens the same file as a CHARACTER stream, whose
+    # position is real too (next case).
     source: |
       (with-open-file (out "fp.bin" :direction :output :if-exists :supersede
                             :element-type '(unsigned-byte 8))
@@ -9868,7 +9867,98 @@ cases:
       5
       5
       6
-      NIL
+      0
+
+  - name: file-position-of-a-character-file-stream-is-its-byte-offset
+    # A CHARACTER file stream's file-position is its byte offset on all four backends,
+    # as sbcl answers: a character advances it by its UTF-8 length, a CRLF line ends
+    # after its LF, a peeked or un-read character is not consumed yet, and an appending
+    # stream starts at the end of the file. The interpreter and the JVM read and write
+    # through runtime/RontoCharFileReader / RontoCharFileWriter (the JVM only in a
+    # program that names file-position); both WASM backends ask the descriptor.
+    source: |
+      (with-open-file (out "fpc.txt" :direction :output :if-exists :supersede)
+        (print (file-position out))
+        (write-char #\a out)
+        (print (file-position out))
+        (write-string (format nil "~C~C" (code-char 233) (code-char 8364)) out)
+        (print (file-position out))
+        (write-string (format nil "~C~C" #\Return #\Newline) out)
+        (print (file-position out))
+        (write-line "xyz" out)
+        (print (file-position out))
+        (print (file-position out 0))
+        (write-char #\A out)
+        (print (file-position out))
+        (print (file-position out :end))
+        (print (file-position out)))
+      (with-open-file (in "fpc.txt")
+        (print (file-position in))
+        (print (read-char in))
+        (print (file-position in))
+        (print (char-code (peek-char nil in)))
+        (print (file-position in))
+        (print (char-code (read-char in)))
+        (print (file-position in))
+        (print (char-code (char (read-line in) 0)))
+        (print (file-position in))
+        (print (file-position in 1))
+        (print (char-code (read-char in)))
+        (print (file-position in))
+        (let ((buf (make-string 2)))
+          (print (read-sequence buf in))
+          (print (file-position in)))
+        (print (file-position in :end))
+        (print (read-line in nil :eof))
+        (print (file-position in)))
+      (with-open-file (app "fpc.txt" :direction :output :if-exists :append)
+        (print (file-position app))
+        (write-char #\q app)
+        (print (file-position app)))
+      (with-open-file (in "fpc.txt")
+        (read-char in)
+        (let ((c (read-char in)))
+          (unread-char c in)
+          (print (file-position in))
+          (print (char-code (read-char in)))
+          (print (file-position in))
+          (unread-char c in)
+          (print (file-position in 0))
+          (print (read-char in))))
+    expected: |
+      0
+      1
+      6
+      8
+      12
+      T
+      1
+      T
+      12
+      0
+      #\A
+      1
+      233
+      1
+      233
+      3
+      8364
+      8
+      T
+      233
+      3
+      2
+      7
+      T
+      :EOF
+      12
+      12
+      13
+      1
+      233
+      3
+      T
+      #\A
 
   - name: filesystem-write-create-rename-delete-and-probe
     # The three write-side operators are REAL on all four backends: the interpreter

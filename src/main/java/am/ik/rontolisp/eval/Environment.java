@@ -87,6 +87,8 @@ import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.macro.StreamElementType;
 import am.ik.rontolisp.reader.LispLexer;
+import am.ik.rontolisp.runtime.RontoCharFileReader;
+import am.ik.rontolisp.runtime.RontoCharFileWriter;
 import am.ik.rontolisp.runtime.RontoIoFileStream;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -5319,6 +5321,10 @@ public final class Environment implements Scope {
 							length = sized.length();
 						}
 						else if (streamPaths.get(h) instanceof String named) {
+							// What is still buffered counts: it lands before the end.
+							if (streams.get(h) instanceof java.io.Flushable buffered) {
+								buffered.flush();
+							}
 							length = Files.size(Path.of(named));
 						}
 					}
@@ -5344,6 +5350,32 @@ public final class Environment implements Scope {
 						return LispTrue.INSTANCE;
 					}
 					return new LispInteger(io.position());
+				}
+				catch (IOException ex) {
+					throw new UncheckedIOException(ex);
+				}
+			}
+			Closeable charEntry = streams.get(h);
+			if (charEntry instanceof RontoCharFileReader || charEntry instanceof RontoCharFileWriter) {
+				// A character file stream: the byte offset its own buffer accounts for.
+				try {
+					if (args.size() >= 2) {
+						if (!(args.get(1) instanceof LispInteger position)) {
+							throw new LispEvalException(LispNames.FILE_POSITION + " expects an integer position");
+						}
+						if (position.value() < 0) {
+							throw new LispEvalException(LispNames.FILE_POSITION + ": position must be non-negative");
+						}
+						if (charEntry instanceof RontoCharFileReader reader) {
+							reader.position(position.value());
+						}
+						else {
+							((RontoCharFileWriter) charEntry).position(position.value());
+						}
+						return LispTrue.INSTANCE;
+					}
+					return new LispInteger(charEntry instanceof RontoCharFileReader reader ? reader.position()
+							: ((RontoCharFileWriter) charEntry).position());
 				}
 				catch (IOException ex) {
 					throw new UncheckedIOException(ex);
@@ -5794,12 +5826,18 @@ public final class Environment implements Scope {
 							: new BufferedInputStream(Files.newInputStream(Path.of(path.value())));
 				}
 				else {
-					stream = output ? Files.newBufferedWriter(Path.of(path.value()), writeOptions)
-							: Files.newBufferedReader(Path.of(path.value()));
+					// A character stream that knows its BYTE offset, so file-position is
+					// real for it (the compile paths run these very classes on the JVM).
+					stream = output ? new RontoCharFileWriter(path.value(), append)
+							: new RontoCharFileReader(path.value());
 				}
 				long handle = nextStreamHandle.getAndIncrement();
 				if (binary) {
 					streamElementTypes.put(handle, elementType);
+					if (append && output) {
+						// An appending stream starts at the end of the file (sbcl).
+						streamPositions.put(handle, Files.size(Path.of(path.value())));
+					}
 				}
 				if (probe) {
 					// CL's probe open answers a file stream that is already CLOSED: the
@@ -6663,6 +6701,27 @@ public final class Environment implements Scope {
 			}
 			LispVal octets = octetFilePosition.apply(args);
 			return octets instanceof LispInteger n ? new LispInteger(n.value() / type.octets()) : octets;
+		}));
+		// A character parked in the unread-char cell is not consumed yet (sbcl), so the
+		// query answers the offset BEFORE it and a set drops it. unread-char.lisp's
+		// %unread-file-position / %unread-file-position-set are the compile paths' twins.
+		java.util.function.Function<List<LispVal>, LispVal> unparkedFilePosition = ((LispFunction) env
+			.lookupFunction(LispNames.FILE_POSITION)).body();
+		env.defineFunction(LispNames.FILE_POSITION, new LispFunction(LispNames.FILE_POSITION, args -> {
+			if (args.isEmpty() || !pushbackStream[0].equals(pushbackKey.apply(args.get(0)))) {
+				return unparkedFilePosition.apply(args);
+			}
+			if (args.size() >= 2) {
+				pushbackStream[0] = LispNil.INSTANCE;
+				pushbackChar[0] = LispNil.INSTANCE;
+				return unparkedFilePosition.apply(args);
+			}
+			LispVal position = unparkedFilePosition.apply(args);
+			if (position instanceof LispInteger n && pushbackChar[0] instanceof LispChar parked) {
+				int cp = parked.codePoint();
+				return new LispInteger(n.value() - ((cp < 0x80) ? 1 : (cp < 0x800) ? 2 : (cp < 0x10000) ? 3 : 4));
+			}
+			return position;
 		}));
 		for (String packed : List.of(LispNames.READ_SEQUENCE_PACKED, LispNames.WRITE_SEQUENCE_PACKED)) {
 			java.util.function.Function<List<LispVal>, LispVal> octetPacked = ((LispFunction) env

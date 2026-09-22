@@ -10570,6 +10570,81 @@ public final class LispMacroExpander {
 		return false;
 	}
 
+	/**
+	 * Whether the program can open a CHARACTER file stream: an {@code open} /
+	 * {@code with-open-file} whose element type is absent, {@code character} or computed,
+	 * or {@code #'open}, which passes its options computed. Only an element type every
+	 * such form spells as a literal binary type rules it out. The JVM backend's gate for
+	 * the positioned character streams ({@code runtime/RontoCharFileReader} /
+	 * {@code RontoCharFileWriter}) in a program that names {@code file-position}, so a
+	 * program whose every open is binary keeps its bytes.
+	 * @param program the top-level forms, BEFORE expansion
+	 * @return whether a character file stream can be opened
+	 */
+	public static boolean mayOpenCharacterFileStream(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (mayOpenCharacterFileStream(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean mayOpenCharacterFileStream(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.get(0) instanceof LispSymbol op) {
+			if (LispNames.QUOTE.equals(op.name())) {
+				return false;
+			}
+			String member = unqualifiedClMember(op.name());
+			if (LispNames.FUNCTION.equals(op.name()) && parts.size() == 2 && parts.get(1) instanceof LispSymbol fn
+					&& LispNames.OPEN.equals(unqualifiedClMember(fn.name()))) {
+				return true;
+			}
+			if (LispNames.OPEN.equals(member)) {
+				if (parts.size() > 2 && parts.get(2) instanceof LispSymbol dir && compiler_directionToken(dir.name())) {
+					if (parts.size() <= 3 || !binaryLiteral(parts.get(3))) {
+						return true;
+					}
+				}
+				else if (!binaryByOptions(parts.subList(Math.min(2, parts.size()), parts.size()))) {
+					return true;
+				}
+			}
+			else if (LispNames.WITH_OPEN_FILE.equals(member) && parts.size() > 1
+					&& parts.get(1) instanceof LispCons spec && spec.isProperList()) {
+				List<LispVal> specParts = spec.toList();
+				if (!binaryByOptions(specParts.subList(Math.min(2, specParts.size()), specParts.size()))) {
+					return true;
+				}
+			}
+		}
+		for (LispVal part : parts) {
+			if (mayOpenCharacterFileStream(part)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Whether an option list spells a literal binary {@code :element-type}. */
+	private static boolean binaryByOptions(List<LispVal> options) {
+		for (int i = 0; i + 1 < options.size(); i += 2) {
+			if (options.get(i) instanceof LispSymbol key && LispNames.ELEMENT_TYPE_KEYWORD.equals(key.name())) {
+				return binaryLiteral(options.get(i + 1));
+			}
+		}
+		return false;
+	}
+
+	private static boolean binaryLiteral(LispVal value) {
+		StreamElementType type = literalElementType(value);
+		return type != null && type.octets() > 0;
+	}
+
 	/** Whether a direction token is one of the positional {@code open} shape's. */
 	private static boolean compiler_directionToken(String name) {
 		return switch (name) {

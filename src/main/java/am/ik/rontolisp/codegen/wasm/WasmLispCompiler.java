@@ -2621,30 +2621,6 @@ public final class WasmLispCompiler implements LispCompiler {
 	// adapter's scratch.)
 	static final int SOCK_FD_ADDR = 0x40018;
 
-	// The per-fd binary-stream flag table (page 5, beside the adapter's file-offset table
-	// at 0x51800): one byte per preview1 file fd, indexed as STREAM_BINARY_FLAGS_ADDR +
-	// (fd - 100). 0 = a character stream (whose byte position file-position cannot
-	// report, so it answers nil, mirroring the interpreter and the JVM), 1 = a stream
-	// opened with an (unsigned-byte 8) element type. Reset to 0 by the adapter's
-	// path_open, set to 1 by the _file_position runtime's _mark call after a binary open
-	// (WasmOpenCompiler), and read by the _file_position query/set. Component mode only.
-	static final int STREAM_BINARY_FLAGS_ADDR = 0x51a00;
-
-	// Preview 1's twin of that table. It cannot live at a fixed page-5 address: a
-	// Preview 1 module owns its whole linear memory and its bump heap grows through
-	// page 5, and there is no adapter to reset a slot on path_open. So the table sits
-	// directly above the fixed low cells, at DATA_BASE_OFFSET, and the interned-string
-	// data base moves up by exactly this many bytes -- an address known BEFORE any body
-	// compiles, which is what WasmOpenCompiler needs (the static-data END is not known
-	// until Pass 2 has interned every string). One byte per WASI fd indexed by the RAW
-	// descriptor, because a preview1 fd is whatever the host hands back (4, 5, ...
-	// beside the preopens) and not the adapter's 100 + slot; a descriptor at or above
-	// the slot count answers nil rather than writing past the table. Nothing seeds it:
-	// zero-initialized memory already means "a character stream". Only a Preview 1
-	// program that calls file-position reserves it -- every other module keeps
-	// DATA_BASE_OFFSET as its data base and stays byte-identical.
-	static final int STREAM_BINARY_FLAGS_SLOTS = 1024;
-
 	// Minimum base address of the growable runtime intern table (8-byte (offset,len)
 	// records appended by _intern for symbols first seen at runtime). The actual base
 	// is computed per program -- max(this, 16-aligned end of the static string
@@ -3128,15 +3104,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// file-position rides one injected import on either WASI backend -- the
 		// adapter's file_position_get / file_position_set pair under --component, the
 		// real wasi_snapshot_preview1.fd_seek under Preview 1 -- gated on the program
-		// naming file-position, so a program that never calls it imports nothing new,
-		// reserves no per-fd flag table and keeps every byte where it was. A --no-wasi
+		// naming file-position, so a program that never calls it imports nothing new
+		// and keeps every byte where it was. A --no-wasi
 		// module has no filesystem at all, so the operator keeps answering the nil
 		// constant there.
 		boolean usesFilePosition = !this.noWasi && programUsesSymbol(program, LispNames.FILE_POSITION);
-		// Preview 1 answers through fd_seek and carries its own per-fd binary-stream
-		// flag table below the static data (STREAM_BINARY_FLAGS_SLOTS); --component
-		// answers through the adapter, which owns both the tracked offset and the flag
-		// table.
+		// Preview 1 answers through fd_seek; --component answers through the adapter,
+		// which owns the tracked offset.
 		boolean preview1FilePosition = usesFilePosition && !this.component;
 		// The BIDIRECTIONAL open (:direction :io) and its :if-exists :overwrite sibling
 		// need path_open to ask for BOTH rights and to skip O_TRUNC, which is a different
@@ -3815,14 +3789,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the serve cabi window); a --no-wasi reactor has no adapter and owns its whole
 		// memory, so it keeps the Preview 1 base and stops reserving 384 KB of address
 		// space per instance.
-		// A Preview 1 file-position program reserves its per-fd binary-stream flag table
-		// between the fixed low cells and the string data, so the base moves up by the
-		// table's size and the table's own address stays the constant every emitted body
-		// (and every `open` call site) can name without knowing where the static data
-		// ends. See STREAM_BINARY_FLAGS_SLOTS.
-		int binaryFlagsAddr = preview1FilePosition ? DATA_BASE_OFFSET : -1;
-		int dataBase = this.component && !this.noWasi ? COMPONENT_DATA_BASE_OFFSET
-				: DATA_BASE_OFFSET + (preview1FilePosition ? STREAM_BINARY_FLAGS_SLOTS : 0);
+		int dataBase = this.component && !this.noWasi ? COMPONENT_DATA_BASE_OFFSET : DATA_BASE_OFFSET;
 		StringTable stringTable = new StringTable(dataBase, this.usesEqualpHashTables, this.usesIdentityHashTables);
 		StringTable.StringEntry tSymEntry = stringTable.addBodyString("T");
 		// The _type_err_int/_type_err_num/_type_err_real message prefixes, interned
@@ -4038,7 +4005,6 @@ public final class WasmLispCompiler implements LispCompiler {
 			.component(this.component && !this.noWasi)
 			.filePosition(usesFilePosition)
 			.bidirectionalStreams(usesBidirectionalOpen)
-			.binaryFlagsAddr(binaryFlagsAddr)
 			.noWasi(this.noWasi)
 			.reactorComponent(this.component && this.noWasi)
 			.hostRandom(this.hostRandom)
@@ -7522,9 +7488,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				WasmIoRuntimeBuilder.@Nullable FilePositionAbi filePosAbi = filePosOrdinals == null ? null
 						: new WasmIoRuntimeBuilder.FilePositionAbi(preview1FilePosition,
 								WasmImportCompiler.PLACEHOLDER_FUNC_BASE + filePosOrdinals[0],
-								WasmImportCompiler.PLACEHOLDER_FUNC_BASE + filePosOrdinals[1],
-								preview1FilePosition ? binaryFlagsAddr : STREAM_BINARY_FLAGS_ADDR,
-								preview1FilePosition ? 0 : 100, preview1FilePosition ? STREAM_BINARY_FLAGS_SLOTS : -1);
+								WasmImportCompiler.PLACEHOLDER_FUNC_BASE + filePosOrdinals[1]);
 				code.addFunction(filePosAbi == null ? WasmEmitHelper.buildNilBody()
 						: WasmIoRuntimeBuilder.buildFilePositionBody(filePosAbi));
 				code.addFunction(filePosAbi == null ? WasmEmitHelper.buildNilBody()
@@ -9367,10 +9331,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		/**
 		 * True when the program is a WASI build (either backend) that calls
 		 * {@code file-position} at all -- the one fact {@code WasmOpenCompiler} needs to
-		 * mark a file stream's per-fd binary flag, which the {@code _file_position}
-		 * runtime then reads to answer nil for a character stream (mirroring the
-		 * interpreter and the JVM). False under {@code --no-wasi}, where the operator
-		 * compiles to the nil constant.
+		 * start an APPENDING stream's position at the end of its file. False under
+		 * {@code --no-wasi}, where the operator compiles to the nil constant.
 		 */
 		boolean filePosition = false;
 
@@ -9381,16 +9343,6 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * {@code file-position} is real whatever its element type.
 		 */
 		boolean bidirectionalStreams = false;
-
-		/**
-		 * The base address of the per-fd binary-stream flag table on the PREVIEW 1
-		 * backend, or {@code -1} elsewhere ({@code --component} reads the adapter's own
-		 * table at {@link WasmLispCompiler#STREAM_BINARY_FLAGS_ADDR}, which the adapter's
-		 * {@code path_open} resets, and a {@code --no-wasi} module has no table at all).
-		 * Preview 1 indexes it by the RAW descriptor and has no adapter to reset a reused
-		 * slot, so every {@code open} writes its own byte.
-		 */
-		int binaryFlagsAddr = -1;
 
 		/**
 		 * True under {@code --no-wasi} (Preview 1 reactor or reactor component): the WASI
@@ -10058,7 +10010,6 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.component = builder.component;
 			this.filePosition = builder.filePosition;
 			this.bidirectionalStreams = builder.bidirectionalStreams;
-			this.binaryFlagsAddr = builder.binaryFlagsAddr;
 			this.noWasi = builder.noWasi;
 			this.reactorComponent = builder.reactorComponent;
 			this.hostRandom = builder.hostRandom;
@@ -10180,8 +10131,6 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean filePosition = false;
 
 			private boolean bidirectionalStreams = false;
-
-			private int binaryFlagsAddr = -1;
 
 			private boolean noWasi = false;
 
@@ -10426,11 +10375,6 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder bidirectionalStreams(boolean bidirectionalStreams) {
 				this.bidirectionalStreams = bidirectionalStreams;
-				return this;
-			}
-
-			Builder binaryFlagsAddr(int binaryFlagsAddr) {
-				this.binaryFlagsAddr = binaryFlagsAddr;
 				return this;
 			}
 

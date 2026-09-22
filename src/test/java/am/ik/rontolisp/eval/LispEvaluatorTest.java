@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 
+import am.ik.rontolisp.CharacterFilePositionFixture;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.ArrayElementTypes;
@@ -9868,8 +9869,7 @@ class LispEvaluatorTest {
 		// file-position is REAL for a binary file stream (.kb/read-load-streams.md): the
 		// query is the byte offset the byte primitives advanced, and the set repositions
 		// the file -- so a caller can seek and read the sought bytes rather than walk
-		// front to back (what uiop:parse-windows-shortcut does). A CHARACTER file stream
-		// still answers nil: its offset is not a byte count the reader exposes.
+		// front to back (what uiop:parse-windows-shortcut does).
 		String file = tempDir.resolve("pos.bin").toString().replace("\\", "\\\\");
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
@@ -9886,13 +9886,27 @@ class LispEvaluatorTest {
 				  (print (file-position in))
 				  (print (read-byte in))
 				  (print (file-position in)))
-				;; A character file stream has no byte offset to report.
+				;; A character file stream answers its byte offset too.
 				(with-open-file (in "%s")
 				  (print (file-position in)))
 				""".formatted(file, file, file))) {
 			evaluator.eval(expr);
 		}
-		assertThat(baos.toString().trim()).isEqualTo("10\n0\n0\n1\nT\n5\n5\n6\nNIL");
+		assertThat(baos.toString().trim()).isEqualTo("10\n0\n0\n1\nT\n5\n5\n6\n0");
+	}
+
+	@Test
+	void characterFileStreamPositionIsTheByteOffset(@TempDir Path tempDir) {
+		// A CHARACTER file stream's file-position is its byte offset, as sbcl answers:
+		// UTF-8 lengths, a CRLF line ending after its LF, a peeked or un-read character
+		// not yet consumed, an appending stream starting at the end.
+		String file = tempDir.resolve("pos.txt").toString().replace("\\", "\\\\");
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(CharacterFilePositionFixture.program(file))) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(CharacterFilePositionFixture.EXPECTED);
 	}
 
 	@Test

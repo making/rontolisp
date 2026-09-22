@@ -767,94 +767,128 @@ Pinned by `LispEvaluatorTest#evalFileWriteDateAndFileLength`/`#fileLengthOverEve
 `file-length-of-a-file-of-a-known-size` and
 `filesystem-write-create-rename-delete-and-probe`.
 
-## `file-position` is REAL on ALL FOUR backends for a BINARY file stream
+## `file-position` is REAL on ALL FOUR backends for every FILE stream
 
-The byte primitives advance a per-handle position and the set re-opens the file at the
-offset, so a caller can seek and read the sought bytes rather than walk front to back.
-Interpreter: per-handle `streamPositions` map (`Environment`), advanced by the byte
-primitives through `merge` and repositioned by `binaryFileStreamSet`. JVM: the mirrored
-`Object[] _streamPositions` side table ([jvm-export.md](jvm-export.md) / this file's
-file-length section), advanced by `_bumpStreamPosition` (called by `_readByte`,
-`_writeByte`, `_readSeqPacked`, `_writeSeqPacked`) and queried/set through
-`_filePosition`, which re-opens via `FileChannel.position`. Both are gated per operator
-(interpreter: nothing; JVM: `JvmIoRuntimeBuilder.FileMeta.position`) so a program that
-never calls `file-position` pays nothing. A CHARACTER file stream, a socket, a string
-stream, a standard stream and a closed handle answer `nil` (Common Lisp's "cannot be
-determined") on both; the JVM `#'file-position` function-value wrapper is
-`REFERENCE_GATED` like `#'file-length`, because its body lowers to the gated
-`_filePosition`. The served-request body keeps its own REAL `file-position` through
-`HttpRequestBodyStream` on all four.
+Binary, character and bidirectional alike: the query answers the offset and the set moves
+it, so a caller can seek and read the sought bytes rather than walk front to back. A
+binary stream counts in elements (next-but-one section), a character stream in BYTES --
+sbcl's answer, measured 2026-09-22: a character advances it by its UTF-8 length, a line
+`read-line` returned ends after its terminator (both bytes of a CRLF, although the line
+itself drops the CR), a character `peek-char` looked at or `unread-char` pushed back is
+not consumed yet, and an `:if-exists :append` stream starts at the end of the file (a
+binary one too). A socket, a string stream, a standard stream and a closed handle answer
+`nil` (Common Lisp's "cannot be determined"). The served-request body keeps its own REAL
+`file-position` through `HttpRequestBodyStream` on all four.
 
-**Both WASM backends answer real too, through ONE injected import each** -- gated on the
-program naming `file-position`, so a program that does not is byte-identical to a build
-that never knew about the feature ([[wasm-import]], "This, not a new index-pinned preview1
-slot"). `WasmFilePositionCompiler` resolves the stream to its raw handle and calls the
-`_file_position` / `_file_position_set` pair (`FUNC_FILE_POSITION` after
-`FUNC_FILE_LENGTH`), which stage 8 bytes at `HEAP_PTR` with the `_open` advance-then-pop
-discipline and answer `nil` for the set of designators `_file_length` answers `nil` for,
-plus a non-zero errno.
-
+- **Interpreter.** A binary stream: the per-handle `streamPositions` map (`Environment`),
+  advanced by the byte primitives through `merge` and repositioned by `binaryFileStreamSet`
+  (re-open at the offset). A character stream: `open` builds `runtime/RontoCharFileReader`
+  / `RontoCharFileWriter` for EVERY character file (no gate -- an interpreter has no size),
+  and `file-position` asks them. A `:io` / `:overwrite` stream: `RontoIoFileStream`
+  (section after next). Then two wrappers: the wide element types scale, and a character
+  parked in the `unread-char` cell is subtracted (the query) or dropped (the set).
+- **JVM.** Binary: the mirrored `Object[] _streamPositions` side table, advanced by
+  `_bumpStreamPosition` (called by `_readByte`, `_writeByte`, `_readSeqPacked`,
+  `_writeSeqPacked`), queried/set through `_filePosition`, which re-opens via
+  `FileChannel.position`. Character: `_open`'s modes 0/1/5 construct the SAME two runtime
+  classes the interpreter runs, and `_filePosition` has one own-cursor arm each
+  (`emitOwnCursorArm`, shared with the `:io` arm's shape). Gated on
+  `JvmIoRuntimeBuilder.FileMeta`: `position` for the side table and the binary arms,
+  `characterPosition` (= names `file-position` AND `LispMacroExpander.mayOpenCharacterFileStream`)
+  for the two classes, which TRAVEL (`CHAR_FILE_RUNTIME_CLASS_FILES`). The `#'file-position`
+  wrapper is `REFERENCE_GATED` like `#'file-length`.
+- **The two classes carry the whole mechanism**: each extends `BufferedReader` /
+  `BufferedWriter`, so every existing dispatch (`read-line`, `read-char`, `peek-char`'s
+  `mark`/`reset`, `listen`'s `ready`, `read-sequence`'s block read, the print family, the
+  end-of-program flush, `close`) takes them with no arm, but never uses the superclass's
+  buffer: each decodes / encodes UTF-8 over its OWN byte buffer, so the position is the
+  channel's less (reader) or plus (writer) what is buffered. There is no per-character
+  counter anywhere. A `BufferedReader` over an `InputStreamReader` cannot answer this: the
+  decoder reads ahead and neither layer says how many bytes the characters handed out took,
+  and `readLine` hides whether the terminator was `\n` or `\r\n`. The reader consumes a CRLF
+  WHOLE (it looks at the byte after a CR), decodes a malformed sequence to U+FFFD over its
+  valid prefix, and drops its mark past the limit a `mark(n)` asked for (else a `peek-char`
+  would pin every later byte in the buffer); the writer encodes an unpaired surrogate as
+  `?` -- `FileReader` / `FileWriter`'s replacements.
+- **Both WASM backends: the descriptor offset IS the position**, through ONE injected
+  import each -- gated on the program naming `file-position`, so a program that does not is
+  byte-identical to a build that never knew about the feature ([[wasm-import]], "This, not
+  a new index-pinned preview1 slot"). `WasmFilePositionCompiler` calls the
+  `_file_position` / `_file_position_set` pair (`FUNC_FILE_POSITION` after
+  `FUNC_FILE_LENGTH`), which stage 8 bytes at `HEAP_PTR` with the `_open` advance-then-pop
+  discipline and answer `nil` for what `_file_length` answers `nil` for, plus a non-zero
+  errno. Nothing buffers ahead of it: `_read_line` / `_read_char` read ONE BYTE per
+  `fd_read`, writes go straight through, and `read-sequence`'s bulk character path asks
+  for at most one byte per character still wanted and completes a split sequence with
+  exactly its missing bytes (`WasmCharIoRuntimeBuilder`). Two corrections remain: the
+  query subtracts the UTF-8 length of a code point `peek-char` parked on this fd
+  (`PEEK_FD_ADDR` = fd + 1) and the set drops it; and an APPENDING open moves the
+  descriptor to the end at the `open` call site (`WasmOpenCompiler`:
+  `_file_position_set(fd, _file_length(fd))`), because an append descriptor sits at 0
+  until its first write.
 - **Preview 1** (`.todo/876`) has a real moveable cursor, so ONE appended
   `wasi_snapshot_preview1.fd_seek` serves both directions: `(fd, 0, cur)` reads the
-  position, `(fd, n, set)` moves it. `fd_read`/`fd_write` advance that same cursor, so
-  nothing has to be tracked in-module. **The read-mode `path_open` asks for `FD_READ`
+  position, `(fd, n, set)` moves it. **The read-mode `path_open` asks for `FD_READ`
   alone and `fd_seek` still works** -- wasmtime's preview1 does not enforce rights (the
   `fd_filestat_get` behind `file-length` has been riding the same fd for longer); a host
   that did would answer `ENOTCAPABLE`, which reads as `nil`, and the fix would be widening
   the read rights to `FD_READ|FD_SEEK|FD_TELL` = 38.
 - **`--component`** (`.todo/877`) has NO cursor -- WASI 0.3 reads are offset-based -- so
-  the adapter tracks a per-fd byte offset and exports the `file_position_get` /
-  `file_position_set` pair over it. Serve implies `--component`, so the serve bridge sees
-  the same two.
-- **`--no-wasi`** has no filesystem, so the operator keeps compiling to the `nil` constant
-  and neither import nor flag table exists.
+  the adapter tracks a per-fd byte offset (advanced by every read and write) and exports
+  the `file_position_get` / `file_position_set` pair over it, answering EBADF for a
+  descriptor below 100 or a slot that is not live. Serve implies `--component`, so the
+  serve bridge sees the same two.
+- **`--no-wasi`** has no filesystem, so the operator keeps compiling to the `nil` constant.
 
-**SBCL answers the byte offset for a character file stream where all four of ours answer
-`nil`** (2026-09-19: the ci-spec program's last form prints `0` under `sbcl --script`, `NIL`
-here). `nil` is CL-sanctioned -- "cannot be determined" -- and is at least the SAME answer on
-every backend, which a number would not be: a JVM `Reader` buffers and does not remember its
-path, and Preview 1's read buffer puts the descriptor ahead of the logical position. Closing
-the gap means all four learning the buffered offset at once.
+**The per-fd "binary" flag table is gone (`.todo/925`).** Both WASM backends used to write
+a byte per descriptor at every `open` call site -- Preview 1 into a 1024-byte table the
+module reserved at `DATA_BASE_OFFSET`, `--component` into the adapter's page-5 table at
+`0x51a00` -- so that `_file_position` could answer `nil` for a character stream. With every
+file descriptor's offset real there is nothing to tell apart: the guard, the call-site
+writes and the Preview 1 reservation were removed. The adapter's `path_open` still resets
+its (now unread) slot; that is left alone because touching `adapter.wat` means
+regenerating the adapter blobs for no behavioral change.
 
-**Decided in `.todo/906` (2026-09-20), measured, not assumed**: on its own the gap is worth
-exactly ONE ANSI test (`FILE-POSITION.5`, `Expected integer, got: NIL`) -- every other
-character-stream `file-position` test in the chapter needs a file the suite does not ship.
+**Size, measured 2026-09-22** (bytes JVM / Preview 1 / component, default optimize).
+Every program that does not name `file-position` is byte-identical on all three targets --
+over every ci-spec case, every example in `examples/examples.yaml` and the size-report
+corpus, 707 programs and 2,121 artifacts: 2,092 identical, 6 differing only in the jar's
+embedded build timestamp (two cases that print `lisp-implementation-version`), and 23 from
+the 9 programs whose COMPILED program names `file-position` -- the 8 ci-spec cases that
+call it and `examples/net/httpbin-jzon.lisp`, through jzon's own call (+8.2 KB JVM, the
+classes; -510 / +38 B WASM). The WASM side of those moved by the removed flag writes,
+mostly down (`wide-and-narrow-stream-element-types` -638 / -429 B). The cost therefore
+falls only on a program that names `file-position`: a character write + read with two `file-position` calls 15,832 / 13,067 /
+18,681 -> 24,067 / 13,073 / 18,717 -- the JVM's +8,235 is the two travelling classes
+(4,788 + 3,267 bytes, the output goes from one class file to three) plus 180 bytes of
+`_open` / `_filePosition` arms; a binary-only one 40,870 / 20,236 / 25,957 -> 40,932 /
+20,231 / 25,937 (the JVM's `:append` start, and the flag writes the WASM backends no longer
+make). That is why the JVM gate is two facts rather than one: a program whose every `open`
+spells a literal binary `:element-type` keeps its single class file.
 
-**The premise that tied it to `:io` did not survive `.todo/918` (2026-09-22).** It assumed
-an `:io` stream would be a character stream of the existing kind and so need the logical
-offset first. It is not: `:io` is its own stream kind that owns its cursor (next section),
-so its character `file-position` is real on all four with no offset tracking at all, and
-the ordinary `:input` / `:output` character stream keeps answering nil -- still worth that
-one test, split out on its own. Two corrections to the old mechanism note while measuring:
-Preview 1's `_read_line` / `_read_char` read ONE BYTE per `fd_read`, so the descriptor
-offset already IS the logical position for them (`READ_CURSOR_ADDR`..`READ_END_ADDR` belong
-to the READER over `load` / `read-from-string`, not to a stream); the one read-ahead on a
-character stream is `read-sequence`'s 64 KiB bulk path (`WasmCharIoRuntimeBuilder`).
+**Worth it -- decided on both halves, not output only.** The ANSI value is one test
+(`FILE-POSITION.5`, output side; `.1`-`.4` need a `file-position.txt` the suite does not
+ship), but the output half alone would have left the four backends DISAGREEING on the input
+side of the same stream, the cost is paid only by programs that name the operator, and the
+input half costs nothing extra on WASM and one class on the JVM. ANSI `streams`
+(interpreter, suite `ca06bd9`), 2026-09-22: 599 -> 600 of 797, fixed `FILE-POSITION.5`,
+regressed none; `files` and `reader` unchanged (402 / 662 both ways).
 
-**A CHARACTER file stream answers `nil` on both, off a per-fd binary flag byte written at
-the `open` call site** (the element type is a compile-time literal, so nothing else can
-know it). Preview 1's read buffer (`READ_CURSOR_ADDR`/`READ_END_ADDR`) puts the descriptor
-AHEAD of the logical character position, so a number there would be a wrong answer, not a
-useful one. The two backends differ in who owns the table:
-`--component` reads the adapter's (page 5, `STREAM_BINARY_FLAGS_ADDR`, indexed `fd - 100`),
-whose `path_open` resets a reused slot, so only a binary `open` writes. Preview 1 owns its
-whole linear memory and its heap grows through page 5, so the table is the module's own:
-`STREAM_BINARY_FLAGS_SLOTS` (1024) bytes at `DATA_BASE_OFFSET`, indexed by the RAW
-descriptor, with the interned-string base moved up by exactly that much. **That address has
-to be a constant known BEFORE Pass 2** -- `WasmOpenCompiler` emits the write while bodies
-compile, and the static-data END is not known until every string is interned, which is why
-it sits below the data rather than above it. Nothing seeds it: zero-initialized memory
-already means "a character stream". With no adapter to reset a slot, EVERY Preview 1 `open`
-writes its own byte (1 binary / 0 character) and a descriptor at or above the slot count
-answers `nil`; the ci-spec case re-opens the file as a character stream after every binary
-handle is closed, precisely so a stale flag on a reused descriptor prints a number.
-
-Pinned by `LispEvaluatorTest#binaryFileStreamPositionQueriesAndSeeks`,
-`JvmLispCompilerTest#compileAndRunBinaryFileStreamPositionQueriesAndSeeks`,
+Pinned by `LispEvaluatorTest#binaryFileStreamPositionQueriesAndSeeks` /
+`#characterFileStreamPositionIsTheByteOffset`,
+`JvmLispCompilerTest#compileAndRunBinaryFileStreamPositionQueriesAndSeeks` /
+`#compileAndRunCharacterFileStreamPositionIsTheByteOffset`,
 `WasmLispCompilerIntegrationTest#filePositionQueriesAndSeeksOnPreview1` /
-`#componentFilePositionQueriesAndSeeks` (one `FILE_POSITION_PROGRAM`),
-`compileAndRunLiteStreamBuiltins`, the Gray rewrite case and ci-spec
-`file-position-round-trips-on-a-binary-file-stream`.
+`#componentFilePositionQueriesAndSeeks` (one `FILE_POSITION_PROGRAM`) /
+`#characterFileStreamPositionIsTheByteOffsetOnPreview1` /
+`#componentCharacterFileStreamPositionIsTheByteOffset` (the character program is ONE
+`CharacterFilePositionFixture`, sbcl's answers), `compileAndRunLiteStreamBuiltins`, the
+Gray rewrite case, `JvmRuntimeClassFilesTest`, and ci-spec
+`file-position-round-trips-on-a-binary-file-stream` /
+`file-position-of-a-character-file-stream-is-its-byte-offset`. **Test trap**: a
+compiled test of a program that uses `unread-char` must go through the front end
+(`CompileFrontendAccess.withSystemPath`) -- the pushback is a library splice, and the
+bare compiler refuses `unread-char` as "not supported as a function value".
 
 ## `:direction :io` and `:if-exists :overwrite`: ONE stream kind that owns its cursor
 
@@ -882,8 +916,7 @@ character is 3).
 - **Preview 1** opens ONE descriptor: `WasmOpenCompiler.wasmMode` 0 read / 1 write / 2
   append / 3 overwrite (neither `O_CREAT` nor `O_TRUNC`) / 4-6 the same three for `:io`,
   which adds `FD_READ` to the write rights (102). Reads and writes share the fd cursor and
-  `fd_seek` moves it; the per-fd flag byte `_file_position` reads now means "position is
-  real" (binary OR `:io`/`:overwrite`), not "binary".
+  `fd_seek` moves it.
 - **`--component`** has no cursor, so the adapter writes through
   `descriptor.write-via-stream` AT its tracked per-fd offset (a new `"w"` member
   `file-write`, a `BLOCK_FUNCS` entry and a `core.wat` import; `adapter.wasm` and

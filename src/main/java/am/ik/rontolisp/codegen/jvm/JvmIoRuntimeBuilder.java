@@ -151,9 +151,9 @@ final class JvmIoRuntimeBuilder {
 	 * The byte position of each BINARY file stream, indexed by handle exactly like
 	 * {@code _streams}, mirroring the interpreter's {@code streamPositions} map. Only
 	 * {@code _bumpStreamPosition}/{@code _filePosition} touch it, and only for a handle
-	 * whose {@code _streamPaths} entry names a real file, so a non-file stream (a socket,
-	 * a character file stream, a standard stream) is simply absent here and file-position
-	 * answers nil for it.
+	 * whose {@code _streamPaths} entry names a real file and is a binary stream; a
+	 * character or bidirectional file stream answers from its own channel instead, and a
+	 * non-file stream (a socket, a standard stream) answers nil.
 	 */
 	static final String STREAM_POSITIONS_FIELD = "_streamPositions";
 
@@ -465,6 +465,16 @@ final class JvmIoRuntimeBuilder {
 	private final @Nullable IoStreams ioStreams;
 
 	/**
+	 * The positioned CHARACTER file streams ({@code runtime/RontoCharFileReader} /
+	 * {@code RontoCharFileWriter}), minted only for a program that names
+	 * {@code file-position} and can open a character file stream
+	 * ({@link FileMeta#characterPosition}). Null everywhere else, so a character stream
+	 * stays a {@code BufferedReader} over a {@code FileReader} and the artifact a single
+	 * class file.
+	 */
+	private final @Nullable CharFileStreams charFileStreams;
+
+	/**
 	 * Whether a quantized matrix -- a {@code byte[]} of ggml blocks behind an int header
 	 * ({@link JvmQuantizedMatrixRuntimeBuilder}) -- can exist in the program, so the bulk
 	 * transfer takes it as a buffer of bytes ({@code .kb/quantized-matrix.md}).
@@ -568,6 +578,7 @@ final class JvmIoRuntimeBuilder {
 			boolean charSequenceIo, boolean arrayRuntime, boolean quantizedBuffer, boolean bidirectionalStreams) {
 		this.sockets = sockets;
 		this.ioStreams = bidirectionalStreams ? IoStreams.mint(cp) : null;
+		this.charFileStreams = fileMeta.characterPosition() ? CharFileStreams.mint(cp) : null;
 		this.quantizedBuffer = quantizedBuffer;
 		this.errorOutput = errorOutput;
 		this.listDirectory = listDirectory;
@@ -745,7 +756,7 @@ final class JvmIoRuntimeBuilder {
 				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("delete"), cp.addUtf8("()Z"))) : null;
 		this.fileRenameTo = fileMeta.renameFile() ? cp.addMethodref(this.fileClass,
 				cp.addNameAndType(cp.addUtf8("renameTo"), cp.addUtf8("(Ljava/io/File;)Z"))) : null;
-		this.fileLengthRef = fileMeta.fileLength()
+		this.fileLengthRef = (fileMeta.fileLength() || fileMeta.position())
 				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()J"))) : null;
 		// file-position needs the _streamPaths side table (to know a handle is a file
 		// stream and to re-open at an offset) exactly as file-length does, so the path
@@ -812,11 +823,13 @@ final class JvmIoRuntimeBuilder {
 	 * @param deleteFile whether {@code %delete-file} is called
 	 * @param renameFile whether {@code %rename-file} is called
 	 * @param position whether {@code file-position} is called
+	 * @param characterPosition whether {@code file-position} is called AND a character
+	 * file stream can be opened, so character streams open positioned
 	 */
 	record FileMeta(boolean writeDate, boolean makeDirectories, boolean fileLength, boolean deleteFile,
-			boolean renameFile, boolean position) {
+			boolean renameFile, boolean position, boolean characterPosition) {
 
-		static final FileMeta NONE = new FileMeta(false, false, false, false, false, false);
+		static final FileMeta NONE = new FileMeta(false, false, false, false, false, false, false);
 
 		/**
 		 * Whether the {@code _streamPaths} side table must be present: both
@@ -902,6 +915,54 @@ final class JvmIoRuntimeBuilder {
 	 * can open one; every other program still compiles to exactly one file.
 	 */
 	static final List<String> RUNTIME_CLASS_FILES = List.of(IO_FILE_STREAM_CLASS + ".class");
+
+	/** The travelling class a positioned character INPUT file stream is written in. */
+	static final String CHAR_FILE_READER_CLASS = "am/ik/rontolisp/runtime/RontoCharFileReader";
+
+	/** The travelling class a positioned character OUTPUT file stream is written in. */
+	static final String CHAR_FILE_WRITER_CLASS = "am/ik/rontolisp/runtime/RontoCharFileWriter";
+
+	/**
+	 * The travelling class list of the positioned character file streams: a
+	 * {@code BufferedReader} / {@code BufferedWriter} that decodes / encodes UTF-8 over
+	 * its own byte buffer, so {@code file-position} is the channel offset corrected by
+	 * what is buffered. It goes beside a compiled program that names
+	 * {@code file-position} and can open a character file stream.
+	 */
+	static final List<String> CHAR_FILE_RUNTIME_CLASS_FILES = List.of(CHAR_FILE_READER_CLASS + ".class",
+			CHAR_FILE_WRITER_CLASS + ".class");
+
+	/**
+	 * The constant-pool entries of the positioned character file streams.
+	 *
+	 * @param reader the input class
+	 * @param readerInit {@code (String path)}
+	 * @param readerPosition {@code ()J}
+	 * @param readerSeek {@code (J)V}
+	 * @param writer the output class
+	 * @param writerInit {@code (String path, boolean append)}
+	 * @param writerPosition {@code ()J}
+	 * @param writerSeek {@code (J)V}
+	 */
+	private record CharFileStreams(ClassConstant reader, MethodrefConstant readerInit, MethodrefConstant readerPosition,
+			MethodrefConstant readerSeek, ClassConstant writer, MethodrefConstant writerInit,
+			MethodrefConstant writerPosition, MethodrefConstant writerSeek) {
+
+		static CharFileStreams mint(ConstantPool cp) {
+			ClassConstant reader = cp.addClass(cp.addUtf8(CHAR_FILE_READER_CLASS));
+			ClassConstant writer = cp.addClass(cp.addUtf8(CHAR_FILE_WRITER_CLASS));
+			return new CharFileStreams(reader,
+					cp.addMethodref(reader,
+							cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V"))),
+					cp.addMethodref(reader, cp.addNameAndType(cp.addUtf8("position"), cp.addUtf8("()J"))),
+					cp.addMethodref(reader, cp.addNameAndType(cp.addUtf8("position"), cp.addUtf8("(J)V"))), writer,
+					cp.addMethodref(writer,
+							cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;Z)V"))),
+					cp.addMethodref(writer, cp.addNameAndType(cp.addUtf8("position"), cp.addUtf8("()J"))),
+					cp.addMethodref(writer, cp.addNameAndType(cp.addUtf8("position"), cp.addUtf8("(J)V"))));
+		}
+
+	}
 
 	private record IoStreams(ClassConstant type, MethodrefConstant init, MethodrefConstant readByte,
 			MethodrefConstant writeByte, MethodrefConstant readCodePoint, MethodrefConstant peekCodePoint,
@@ -1658,17 +1719,50 @@ final class JvmIoRuntimeBuilder {
 			nextTestPos = code.size();
 			code.add(Opcode.IF_ICMPNE);
 			emitU2(code, 0);
+			CharFileStreams chars = this.charFileStreams;
 			switch (mode) {
-				case 0 -> emitOpenStream(code, this.bufferedReaderClass, this.fileReaderClass, this.fileReaderInit,
-						this.bufferedReaderInit, false);
-				case 1 -> emitOpenStream(code, this.bufferedWriterClass, this.fileWriterClass, this.fileWriterInit,
-						this.bufferedWriterInit, false);
+				case 0 -> {
+					if (chars != null) {
+						// stream = new RontoCharFileReader(p)
+						code.add(Opcode.NEW);
+						emitU2(code, chars.reader().index());
+						code.add(Opcode.DUP);
+						code.add(Opcode.ALOAD_2);
+						code.add(Opcode.INVOKESPECIAL);
+						emitU2(code, chars.readerInit().index());
+						code.add(Opcode.ASTORE_3);
+					}
+					else {
+						emitOpenStream(code, this.bufferedReaderClass, this.fileReaderClass, this.fileReaderInit,
+								this.bufferedReaderInit, false);
+					}
+				}
+				case 1, 5 -> {
+					if (chars != null) {
+						// stream = new RontoCharFileWriter(p, append)
+						code.add(Opcode.NEW);
+						emitU2(code, chars.writer().index());
+						code.add(Opcode.DUP);
+						code.add(Opcode.ALOAD_2);
+						code.add((mode == 5) ? Opcode.ICONST_1 : Opcode.ICONST_0);
+						code.add(Opcode.INVOKESPECIAL);
+						emitU2(code, chars.writerInit().index());
+						code.add(Opcode.ASTORE_3);
+					}
+					else if (mode == 1) {
+						emitOpenStream(code, this.bufferedWriterClass, this.fileWriterClass, this.fileWriterInit,
+								this.bufferedWriterInit, false);
+					}
+					else {
+						emitOpenStream(code, this.bufferedWriterClass, this.fileWriterClass, this.fileWriterAppendInit,
+								this.bufferedWriterInit, true);
+					}
+				}
 				case 2 -> emitOpenStream(code, this.bufferedInputStreamClass, this.fileInputStreamClass,
 						this.fileInputStreamInit, this.bufferedInputStreamInit, false);
 				case 3 -> emitOpenStream(code, this.bufferedOutputStreamClass, this.fileOutputStreamClass,
 						this.fileOutputStreamInit, this.bufferedOutputStreamInit, false);
-				default -> emitOpenStream(code, this.bufferedWriterClass, this.fileWriterClass,
-						this.fileWriterAppendInit, this.bufferedWriterInit, true);
+				default -> throw new IllegalStateException("unreachable open mode " + mode);
 			}
 			gotoStorePositions.add(code.size());
 			code.add(Opcode.GOTO);
@@ -1691,6 +1785,31 @@ final class JvmIoRuntimeBuilder {
 			code.add(Opcode.ALOAD_2);
 			code.add(Opcode.INVOKESTATIC);
 			emitU2(code, Objects.requireNonNull(this.setStreamPathRef).index());
+		}
+		if (this.fileMeta.position()) {
+			// An appending BINARY stream starts at the end of the file (sbcl), so its
+			// counter starts there: if (mode == 7) _storeStreamPosition(handle,
+			// Long.valueOf(new File(p).length())). A character one asks its channel.
+			code.add(Opcode.ILOAD_1);
+			emitIntConst(code, OpenModes.OUTPUT_BIT | OpenModes.BINARY_BIT | OpenModes.APPEND_BIT);
+			int notBinaryAppend = code.size();
+			code.add(Opcode.IF_ICMPNE);
+			emitU2(code, 0);
+			code.add(Opcode.DUP);
+			code.add(Opcode.NEW);
+			emitU2(code, this.fileClass.index());
+			code.add(Opcode.DUP);
+			code.add(Opcode.ALOAD_2);
+			code.add(Opcode.INVOKESPECIAL);
+			emitU2(code, this.fileInit.index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, Objects.requireNonNull(this.fileLengthRef).index());
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, this.longValueOf.index());
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, Objects.requireNonNull(this.storeStreamPositionRef).index());
+			code.add(Opcode.POP);
+			patchBranch(code, notBinaryAppend, code.size());
 		}
 		code.add(Opcode.ARETURN);
 		// catch (IOException e) { return null; }
@@ -2186,11 +2305,12 @@ final class JvmIoRuntimeBuilder {
 
 	/**
 	 * {@code _filePosition(Object handle, Object pos) -> Object}. {@code pos == null} is
-	 * the one-argument query: the boxed byte position of the binary file stream, or null
-	 * where it cannot be told (a character file stream, a socket, a string stream, a
-	 * closed handle -- Common Lisp's "cannot be determined"). A boxed {@code Long} is the
-	 * set: re-open the file at that offset (flushing an output stream first, keeping
-	 * everything before the offset), answer "T" on success, null where it cannot.
+	 * the one-argument query: the boxed byte position of the file stream, or null where
+	 * it cannot be told (a socket, a string stream, a closed handle -- Common Lisp's
+	 * "cannot be determined"). A boxed {@code Long} is the set: a bidirectional or
+	 * positioned character entry moves its own cursor; a binary one re-opens the file at
+	 * that offset (flushing an output stream first, keeping everything before the
+	 * offset). Either answers "T" on success, null where it cannot.
 	 */
 	private List<Integer> buildFilePosition() {
 		JvmAsm a = new JvmAsm();
@@ -2265,6 +2385,15 @@ final class JvmIoRuntimeBuilder {
 			emitLdc(a.code, this.tStr.index());
 			a.areturn();
 			a.bind(notIoPos);
+		}
+		List<Integer> charNegs = new ArrayList<>();
+		if (this.charFileStreams != null) {
+			// A positioned CHARACTER entry answers its own byte offset, and a set moves
+			// it (dropping what it had buffered): no side table, no re-open.
+			emitOwnCursorArm(a, this.charFileStreams.reader(), this.charFileStreams.readerPosition(),
+					this.charFileStreams.readerSeek(), charNegs);
+			emitOwnCursorArm(a, this.charFileStreams.writer(), this.charFileStreams.writerPosition(),
+					this.charFileStreams.writerSeek(), charNegs);
 		}
 		// Only a BINARY entry (an InputStream/OutputStream) has a byte position.
 		a.aload(5);
@@ -2407,12 +2536,55 @@ final class JvmIoRuntimeBuilder {
 		if (ioNeg >= 0) {
 			a.bind(ioNeg);
 		}
+		for (int charNeg : charNegs) {
+			a.bind(charNeg);
+		}
 		a.anew(this.runtimeExceptionClass);
 		a.dup();
 		a.ldcString(java.util.Objects.requireNonNull(this.negPositionMsg));
 		a.invokespecial(this.runtimeExceptionInit);
 		a.athrow();
 		return a.finish();
+	}
+
+	/**
+	 * One {@code _filePosition} arm for an entry that owns its cursor: {@code entry}
+	 * (slot 5) of the given type answers {@code position()} for the query ({@code pos},
+	 * slot 1, null) and {@code position(n)} then "T" for the set. A negative position
+	 * branches to the label added to {@code negs}, bound by the caller at its error.
+	 */
+	private void emitOwnCursorArm(JvmAsm a, ClassConstant type, MethodrefConstant position, MethodrefConstant seek,
+			List<Integer> negs) {
+		a.aload(5);
+		a.instanceOf(type);
+		int notThis = a.label();
+		a.branch(Opcode.IFEQ, notThis);
+		a.aload(1);
+		int set = a.label();
+		a.branch(Opcode.IFNONNULL, set);
+		a.aload(5);
+		a.checkcast(type);
+		a.invokevirtual(position);
+		a.invokestatic(this.longValueOf);
+		a.areturn();
+		a.bind(set);
+		a.aload(1);
+		a.checkcast(this.longClass);
+		a.invokevirtual(this.longValue);
+		a.lstore(7);
+		a.lload(7);
+		a.lconst0();
+		a.lcmp();
+		int neg = a.label();
+		a.branch(Opcode.IFLT, neg);
+		negs.add(neg);
+		a.aload(5);
+		a.checkcast(type);
+		a.lload(7);
+		a.invokevirtual(seek);
+		emitLdc(a.code, this.tStr.index());
+		a.areturn();
+		a.bind(notThis);
 	}
 
 	/**

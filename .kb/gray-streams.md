@@ -172,6 +172,12 @@ Contract, identical on all four:
 - A second `unread-char` with the cell full SIGNALS
   (`LispMacroExpander.UNREAD_CHAR_TWICE_MESSAGE`, shared verbatim with `unread-char.lisp` and
   `Environment`).
+- `file-position` counts a parked character as NOT consumed (sbcl): the query subtracts its
+  UTF-8 length, the set drops it. Compile paths: `%unread-file-position` /
+  `%unread-file-position-set`, spliced only when the program also names `file-position` --
+  their bodies name it, and the backends gate their position runtime on that name, so
+  splicing them into every `unread-char` program would grow each by a runtime it never
+  calls. Interpreter: the outermost `file-position` wrapper in `Environment`.
 - `read-byte`, `read-sequence`, `read` do NOT consult it on any backend: their loops are
   generated inside the expression compilers, after this pass could walk them.
 - **A `#'unread-char` FUNCTION VALUE still signals on the compile backends**

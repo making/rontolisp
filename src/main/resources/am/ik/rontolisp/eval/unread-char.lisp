@@ -12,6 +12,10 @@
 ;; %peek-char / read-line / unread-char definitions), because its built-ins are
 ;; functions rather than call sites a pre-pass could rewrite.
 ;;
+;; file-position counts a parked character as not consumed yet (sbcl): the
+;; query answers the offset before it and a set drops it. Those two defuns are
+;; spliced only for a program that names file-position itself.
+;;
 ;; What the cell does NOT reach, identically on all four backends: read-byte,
 ;; read-sequence and read. A character pushed back before a BYTE read has no
 ;; meaning, and the other two expand into their loops long after this pass.
@@ -84,3 +88,20 @@
             (let ((rest (read-line stream nil nil)))
               (if rest (concatenate 'string (string c) rest) (string c))))
         (read-line stream eof-error-p eof-value))))
+
+(defun rontolisp::%unread-file-position (stream)
+  (let ((position (file-position stream)))
+    (if (if position
+            (eql rontolisp::*unread-stream* (rontolisp::%unread-key stream))
+            nil)
+        (let ((code (char-code rontolisp::*unread-char*)))
+          (- position
+             (if (< code 128) 1 (if (< code 2048) 2 (if (< code 65536) 3 4)))))
+        position)))
+
+(defun rontolisp::%unread-file-position-set (stream position)
+  (if (eql rontolisp::*unread-stream* (rontolisp::%unread-key stream))
+      (progn
+        (setq rontolisp::*unread-stream* nil)
+        (setq rontolisp::*unread-char* nil)))
+  (file-position stream position))

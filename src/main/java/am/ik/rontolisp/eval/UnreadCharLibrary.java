@@ -60,12 +60,26 @@ public final class UnreadCharLibrary {
 	/** The pushback defun a rewritten {@code read-line} call site names. */
 	static final String READ_LINE = "%UNREAD-READ-LINE";
 
+	/** The pushback defun a rewritten one-argument {@code file-position} names. */
+	static final String FILE_POSITION = "%UNREAD-FILE-POSITION";
+
+	/** The pushback defun a rewritten two-argument {@code file-position} names. */
+	static final String FILE_POSITION_SET = "%UNREAD-FILE-POSITION-SET";
+
 	/**
 	 * The library's own defuns, whose bodies call the very built-ins the rewrite targets:
 	 * rewriting those into the pushback defuns again would recurse forever.
 	 */
-	private static final Set<String> LIBRARY_DEFUNS = Set.of(PUSH, READ_CHAR, PEEK_CHAR, READ_LINE, "%UNREAD-KEY",
-			"%UNREAD-CHAR-TAKE", "%UNREAD-PEEK-STOPS-P");
+	private static final Set<String> LIBRARY_DEFUNS = Set.of(PUSH, READ_CHAR, PEEK_CHAR, READ_LINE, FILE_POSITION,
+			FILE_POSITION_SET, "%UNREAD-KEY", "%UNREAD-CHAR-TAKE", "%UNREAD-PEEK-STOPS-P");
+
+	/**
+	 * The two {@code file-position} defuns, spliced only for a program that names
+	 * {@code file-position} itself: their bodies name it, and a backend gates its
+	 * position runtime on that name, so splicing them into every unread-char program
+	 * would grow each one by a runtime it never calls.
+	 */
+	private static final Set<String> FILE_POSITION_DEFUNS = Set.of(FILE_POSITION, FILE_POSITION_SET);
 
 	/**
 	 * Returns the parsed pushback definitions. Parsed once and cached.
@@ -107,7 +121,14 @@ public final class UnreadCharLibrary {
 		if (!usesUnreadChar(program)) {
 			return program;
 		}
-		List<LispVal> out = new ArrayList<>(forms());
+		boolean filePosition = namesFilePosition(program);
+		List<LispVal> out = new ArrayList<>();
+		for (LispVal form : forms()) {
+			if (filePosition || !(form instanceof LispCons defun && defun.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol name && FILE_POSITION_DEFUNS.contains(member(name.name())))) {
+				out.add(form);
+			}
+		}
 		for (LispVal form : program) {
 			out.add(rewrite(form));
 		}
@@ -126,6 +147,25 @@ public final class UnreadCharLibrary {
 			if (names(form)) {
 				return true;
 			}
+		}
+		return false;
+	}
+
+	private static boolean namesFilePosition(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (namesFilePosition(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean namesFilePosition(LispVal form) {
+		if (form instanceof LispSymbol sym) {
+			return LispNames.FILE_POSITION.equals(member(sym.name()));
+		}
+		if (form instanceof LispCons cons) {
+			return namesFilePosition(cons.car()) || namesFilePosition(cons.cdr());
 		}
 		return false;
 	}
@@ -196,6 +236,16 @@ public final class UnreadCharLibrary {
 				if (args <= 3) {
 					return listOf(defunSymbol(READ_LINE), arg(parts, 1, LispNil.INSTANCE),
 							arg(parts, 2, LispNil.INSTANCE), arg(parts, 3, LispNil.INSTANCE));
+				}
+			}
+			// A parked character is not consumed yet: the query answers the offset
+			// before it, and a set drops it.
+			case LispNames.FILE_POSITION -> {
+				if (args == 1) {
+					return listOf(defunSymbol(FILE_POSITION), rewrite(parts.get(1)));
+				}
+				if (args == 2) {
+					return listOf(defunSymbol(FILE_POSITION_SET), rewrite(parts.get(1)), rewrite(parts.get(2)));
 				}
 			}
 			case LispNames.PEEK_CHAR -> {
