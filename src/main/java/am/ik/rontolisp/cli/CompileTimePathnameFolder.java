@@ -21,6 +21,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.eval.AsdfSystems;
 import am.ik.rontolisp.eval.PathnameOps;
@@ -229,15 +230,16 @@ final class CompileTimePathnameFolder {
 	}
 
 	/**
-	 * Whether an {@code open}/{@code with-open-file} option or positional tail selects an
-	 * output direction -- {@code :output} / {@code :append} as a bare positional or as
-	 * the value of {@code :direction}. Deliberately loose: a false positive only costs
-	 * the bundling of one file.
+	 * Whether an {@code open}/{@code with-open-file} option or positional tail selects a
+	 * WRITING direction -- {@code :output} / {@code :append} / {@code :overwrite} /
+	 * {@code :io} and its two variants, as a bare positional or as the value of
+	 * {@code :direction}. Deliberately loose: a false positive only costs the bundling of
+	 * one file.
 	 */
 	private static boolean namesAnOutputDirection(List<LispVal> tail) {
 		for (LispVal item : tail) {
-			if (item instanceof LispSymbol sym
-					&& (LispNames.OUTPUT_KEYWORD.equals(sym.name()) || LispNames.APPEND_KEYWORD.equals(sym.name()))) {
+			if (item instanceof LispSymbol sym && !LispNames.INPUT_KEYWORD.equals(sym.name())
+					&& OpenModes.directionMode(sym.name()) > 0) {
 				return true;
 			}
 		}

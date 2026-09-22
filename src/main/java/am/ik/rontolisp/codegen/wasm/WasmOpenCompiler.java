@@ -8,14 +8,16 @@ import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.wasm.Instruction;
 
 /**
- * Compiles the {@code open} built-in. The direction must be the literal {@code :input}
- * (default) or {@code :output} keyword and the optional element type the literal
- * {@code 'character} (default) or {@code '(unsigned-byte 8)} (binary) so the file mode is
- * known at compile time; the path argument is compiled to a runtime string and passed to
- * the {@code _open} stream runtime, which returns the WASI file descriptor boxed as an
- * i31 integer. A WASI file descriptor is element-type-agnostic, so the binary bit of the
- * mode is dropped here ({@code & 1}) and {@code _open} only sees the direction -- passing
- * the raw binary modes 2/3 would mis-select the write oflags/rights.
+ * Compiles the {@code open} built-in. The direction must be one of the literal tokens
+ * {@code OpenModes.directionMode} resolves ({@code :input}, {@code :output}, {@code :io}
+ * and the four normalized {@code :if-exists} spellings) and the optional element type the
+ * literal {@code 'character} (default) or {@code '(unsigned-byte 8)} (binary) so the file
+ * mode is known at compile time; the path argument is compiled to a runtime string and
+ * passed to the {@code _open} stream runtime, which returns the WASI file descriptor
+ * boxed as an i31 integer. A WASI file descriptor is element-type-agnostic, so the binary
+ * bit of the mode is dropped here ({@link #wasmMode}) and {@code _open} only sees the
+ * direction and disposition -- passing the raw mode would mis-select the write
+ * oflags/rights.
  *
  * <p>
  * What this compiles is {@code %open-or-nil}, the nil-answering half of {@code open}:
@@ -56,15 +58,22 @@ final class WasmOpenCompiler {
 		// file-position at all under WASI, so every other program keeps its bytes.
 		//
 		// The two backends differ in who OWNS the table. Under --component the adapter
-		// does: it resets a slot on every path_open, so only a binary open writes here,
-		// and the index is the adapter's own numbering (100 + slot). Under Preview 1 the
-		// module owns it and the host reuses descriptor numbers freely, so EVERY open
-		// writes -- 1 for binary, 0 for character -- and the index is the raw fd, bounded
-		// by the table's slot count so an unexpectedly high descriptor cannot write past
-		// it.
-		boolean binary = (OpenModes.staticMode(parts) & OpenModes.BINARY_BIT) != 0;
+		// does: it resets a slot on every path_open, so only a POSITIONED open writes
+		// here, and the index is the adapter's own numbering (100 + slot). Under
+		// Preview 1 the module owns it and the host reuses descriptor numbers freely, so
+		// EVERY open writes -- 1 positioned, 0 not -- and the index is the raw fd,
+		// bounded by the table's slot count so an unexpectedly high descriptor cannot
+		// write past it.
+		//
+		// The flag says "this descriptor's file-position is REAL", which a binary stream
+		// and a BIDIRECTIONAL one both are: a bidirectional character stream reads and
+		// writes the same cursor byte for byte, so the descriptor offset IS the logical
+		// position (an ordinary character stream's is not -- .kb/read-load-streams.md).
+		int mode = OpenModes.staticMode(parts);
+		boolean binary = (mode & OpenModes.BINARY_BIT) != 0;
+		boolean positioned = binary || (mode & (OpenModes.IO_BIT | OpenModes.OVERWRITE_BIT)) != 0;
 		boolean preview1 = ctx.binaryFlagsAddr >= 0;
-		if (ctx.filePosition && (binary || preview1)) {
+		if (ctx.filePosition && (positioned || preview1)) {
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(fd);
 			ctx.writer.write(Instruction.REF_IS_NULL);
@@ -89,7 +98,7 @@ final class WasmOpenCompiler {
 			ctx.writer.writeSignedLeb128(preview1 ? ctx.binaryFlagsAddr : WasmLispCompiler.STREAM_BINARY_FLAGS_ADDR);
 			ctx.writer.write(Instruction.I32_ADD);
 			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(binary ? 1 : 0);
+			ctx.writer.writeSignedLeb128(positioned ? 1 : 0);
 			ctx.writer.write(Instruction.I32_STORE8, 0x00, 0x00);
 			if (preview1) {
 				ctx.writer.write(Instruction.END);
@@ -113,17 +122,22 @@ final class WasmOpenCompiler {
 
 	/**
 	 * The {@code _open} mode a WASI descriptor actually distinguishes: {@code 0} = read,
-	 * {@code 1} = write (CREAT|TRUNC), {@code 2} = APPEND (CREAT, fdflags APPEND). The
-	 * element type is dropped -- a WASI fd is element-type-agnostic, and passing the raw
-	 * {@link OpenModes#BINARY_BIT} would mis-select the write oflags/rights.
+	 * {@code 1} = write (CREAT|TRUNC), {@code 2} = APPEND (CREAT, fdflags APPEND),
+	 * {@code 3} = OVERWRITE (neither CREAT nor TRUNC), and {@code 4}/{@code 5}/{@code 6}
+	 * the same three dispositions for a BIDIRECTIONAL {@code :io} descriptor, which asks
+	 * for FD_READ on top of the write rights. The element type is dropped -- a WASI fd is
+	 * element-type-agnostic, and passing the raw {@link OpenModes#BINARY_BIT} would
+	 * mis-select the write oflags/rights.
 	 * @param staticMode the {@link OpenModes} mode
-	 * @return 0, 1 or 2
+	 * @return 0 to 6
 	 */
 	static int wasmMode(int staticMode) {
 		if ((staticMode & OpenModes.OUTPUT_BIT) == 0) {
 			return 0;
 		}
-		return (staticMode & OpenModes.APPEND_BIT) != 0 ? 2 : 1;
+		int disposition = (staticMode & OpenModes.APPEND_BIT) != 0 ? 2
+				: (staticMode & OpenModes.OVERWRITE_BIT) != 0 ? 3 : 1;
+		return (staticMode & OpenModes.IO_BIT) != 0 ? disposition + 3 : disposition;
 	}
 
 }

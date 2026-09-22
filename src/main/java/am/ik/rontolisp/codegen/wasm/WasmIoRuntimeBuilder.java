@@ -390,7 +390,7 @@ final class WasmIoRuntimeBuilder {
 	 * on the one backend that has no filesystem.
 	 * @return the function body bytes
 	 */
-	static byte[] buildOpenBody() {
+	static byte[] buildOpenBody(boolean bidirectional) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: PATH=0 (ref), MODE=1 (i32) ; i32 locals: OFF=2, PLEN=3
@@ -438,17 +438,38 @@ final class WasmIoRuntimeBuilder {
 		w.write(Type.I32);
 		i32(w, 0);
 		w.write(Instruction.ELSE);
-		// mode 2 = :append -- O_CREAT alone, because O_TRUNC would discard exactly the
-		// content the append is there to keep.
-		getLocal(w, MODE);
-		i32(w, 2);
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.IF);
-		w.write(Type.I32);
-		i32(w, 1);
-		w.write(Instruction.ELSE);
-		i32(w, 9);
-		w.write(Instruction.END);
+		if (bidirectional) {
+			// The two content-KEEPING dispositions: :append (mode 2 / 5) opens O_CREAT
+			// alone, because O_TRUNC would discard exactly what the append keeps, and
+			// :overwrite (mode 3 / 6) opens with NEITHER -- the file must already be
+			// there and everything past the write survives.
+			emitModeIsOneOf(w, MODE, 3, 6);
+			w.write(Instruction.IF);
+			w.write(Type.I32);
+			i32(w, 0);
+			w.write(Instruction.ELSE);
+			emitModeIsOneOf(w, MODE, 2, 5);
+			w.write(Instruction.IF);
+			w.write(Type.I32);
+			i32(w, 1);
+			w.write(Instruction.ELSE);
+			i32(w, 9);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+		}
+		else {
+			// mode 2 = :append -- O_CREAT alone, because O_TRUNC would discard exactly
+			// the content the append is there to keep.
+			getLocal(w, MODE);
+			i32(w, 2);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF);
+			w.write(Type.I32);
+			i32(w, 1);
+			w.write(Instruction.ELSE);
+			i32(w, 9);
+			w.write(Instruction.END);
+		}
 		w.write(Instruction.END);
 		getLocal(w, MODE);
 		w.write(Instruction.I32_EQZ);
@@ -457,16 +478,38 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.I64_CONST);
 		w.writeSignedLeb128(2);
 		w.write(Instruction.ELSE);
-		w.write(Instruction.I64_CONST);
-		w.writeSignedLeb128(100);
+		if (bidirectional) {
+			// An :io descriptor (mode 4, 5 or 6) asks for FD_READ too: one fd, one
+			// cursor, both directions.
+			getLocal(w, MODE);
+			i32(w, 4);
+			w.write(Instruction.I32_GE_S);
+			w.write(Instruction.IF);
+			w.write(Type.I64);
+			w.write(Instruction.I64_CONST);
+			w.writeSignedLeb128(102);
+			w.write(Instruction.ELSE);
+			w.write(Instruction.I64_CONST);
+			w.writeSignedLeb128(100);
+			w.write(Instruction.END);
+		}
+		else {
+			w.write(Instruction.I64_CONST);
+			w.writeSignedLeb128(100);
+		}
 		w.write(Instruction.END);
 		w.write(Instruction.I64_CONST);
 		w.writeSignedLeb128(0);
-		// fdflags = FDFLAGS_APPEND (1) for mode 2, 0 otherwise -- the i32.eq result IS
-		// the flag value.
-		getLocal(w, MODE);
-		i32(w, 2);
-		w.write(Instruction.I32_EQ);
+		// fdflags = FDFLAGS_APPEND (1) for the appending modes, 0 otherwise -- the
+		// comparison result IS the flag value.
+		if (bidirectional) {
+			emitModeIsOneOf(w, MODE, 2, 5);
+		}
+		else {
+			getLocal(w, MODE);
+			i32(w, 2);
+			w.write(Instruction.I32_EQ);
+		}
 		i32(w, WasmLispCompiler.OPEN_FD_ADDR);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
@@ -487,6 +530,20 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	/**
+	 * Pushes {@code mode == a || mode == b} as an i32 -- the {@code _open} mode tests
+	 * that pair an {@code :output} disposition with its {@code :io} twin.
+	 */
+	private static void emitModeIsOneOf(WasmWriter w, int mode, int a, int b) {
+		getLocal(w, mode);
+		i32(w, a);
+		w.write(Instruction.I32_EQ);
+		getLocal(w, mode);
+		i32(w, b);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
 	}
 
 	/**
