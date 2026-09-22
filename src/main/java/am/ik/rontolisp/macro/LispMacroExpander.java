@@ -10694,6 +10694,9 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandReadSequence(LispCons cons, boolean byteOnly) {
 		SequenceArgs args = parseSequenceArgs(cons, LispNames.READ_SEQUENCE);
+		if (args.tailError() != null) {
+			return args.tailError();
+		}
 		LispSymbol seq = new LispSymbol("__rseq_seq");
 		LispSymbol st = new LispSymbol("__rseq_st");
 		LispSymbol i = new LispSymbol("__rseq_i");
@@ -10788,6 +10791,9 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandWriteSequence(LispCons cons, boolean byteOnly) {
 		SequenceArgs args = parseSequenceArgs(cons, LispNames.WRITE_SEQUENCE);
+		if (args.tailError() != null) {
+			return args.tailError();
+		}
 		LispSymbol seq = new LispSymbol("__wseq_seq");
 		LispSymbol st = new LispSymbol("__wseq_st");
 		LispSymbol i = new LispSymbol("__wseq_i");
@@ -14793,28 +14799,42 @@ public final class LispMacroExpander {
 	 * to the whole buffer AFTER the packed primitive has had its look (a rank-n packed
 	 * array has no {@code length}, and the primitive takes nil as "the total size").
 	 */
-	private record SequenceArgs(LispVal seq, LispVal stream, LispVal start, LispVal end) {
+	private record SequenceArgs(LispVal seq, LispVal stream, LispVal start, LispVal end, @Nullable LispVal tailError) {
 	}
 
+	/**
+	 * Reads the call's keyword tail the way a lambda list reads it (CLHS 3.4.1.4): the
+	 * FIRST occurrence of {@code :start} / {@code :end} counts, a true
+	 * {@code :allow-other-keys} admits any other indicator, and an unknown indicator
+	 * without it -- or an odd tail -- is a {@code program-error} the CALL signals
+	 * ({@link #keywordTailProblem}). An indicator that is not a literal symbol cannot be
+	 * matched at expansion time, so the call signals that it is unsupported. Neither is
+	 * an expansion-time refusal, which would lose the whole enclosing top-level form.
+	 * {@code tailError} is the form the whole call then lowers to.
+	 */
 	private static SequenceArgs parseSequenceArgs(LispCons cons, String op) {
 		List<LispVal> parts = cons.toList();
-		if (parts.size() < 3 || parts.size() % 2 == 0) {
+		if (parts.size() < 3) {
 			throw new IllegalArgumentException(op + " expects (sequence stream [:start s] [:end e])");
 		}
-		LispVal start = new LispInteger(0);
-		LispVal end = LispNil.INSTANCE;
-		for (int i = 3; i < parts.size(); i += 2) {
-			if (parts.get(i) instanceof LispSymbol key && LispNames.START_KEYWORD.equals(key.name())) {
-				start = parts.get(i + 1);
+		LispVal start = null;
+		LispVal end = null;
+		String problem = keywordTailProblem(op, parts, 3, List.of(LispNames.START_KEYWORD, LispNames.END_KEYWORD));
+		LispVal tailError = problem == null ? null : programErrorForm(cons, problem);
+		for (int i = 3; tailError == null && i + 1 < parts.size(); i += 2) {
+			if (!(parts.get(i) instanceof LispSymbol key)) {
+				tailError = callTimeUnsupportedStub(
+						op + " supports only literal keyword indicators, got: " + parts.get(i).print());
 			}
-			else if (parts.get(i) instanceof LispSymbol key && LispNames.END_KEYWORD.equals(key.name())) {
-				end = parts.get(i + 1);
+			else if (LispNames.START_KEYWORD.equals(key.name())) {
+				start = start == null ? parts.get(i + 1) : start;
 			}
-			else {
-				throw new UnsupportedOperationException(op + " supports only the literal :start and :end keywords");
+			else if (LispNames.END_KEYWORD.equals(key.name())) {
+				end = end == null ? parts.get(i + 1) : end;
 			}
 		}
-		return new SequenceArgs(parts.get(1), parts.get(2), start, end);
+		return new SequenceArgs(parts.get(1), parts.get(2), start == null ? new LispInteger(0) : start,
+				end == null ? LispNil.INSTANCE : end, tailError);
 	}
 
 	private static LispVal callOf(String op, LispVal arg) {

@@ -5782,6 +5782,25 @@ class JvmLispCompilerTest {
 				""".formatted(file, file))).isEqualTo("4\n2\n3");
 	}
 
+	// The compile-path twin of
+	// LispEvaluatorTest#readAndWriteSequenceReadTheirKeywordTailTheWayALambdaListDoes.
+	@Test
+	void compileAndRunReadAndWriteSequenceKeywordTails() throws Exception {
+		assertThat(compileAndRunExpanded("""
+				(defmacro pe (form) `(handler-case ,form (program-error () :program-error)))
+				(print (list (let ((s (copy-seq "     ")))
+				               (with-input-from-string (is "abcdefghijk")
+				                 (list (read-sequence s is :allow-other-keys t :foo 'bar) s)))
+				             (let ((s (copy-seq "     ")))
+				               (with-input-from-string (is "abcdefghijk")
+				                 (list (read-sequence s is :end 5 :end 3 :start 0 :start 1) s)))
+				             (pe (read-sequence (make-string 5) (make-string-input-stream "abc") :foo 1))
+				             (with-output-to-string (os)
+				               (write-sequence "abcde" os :start 1 :end 4 :start 3 :allow-other-keys t :x 1))
+				             (pe (write-sequence "abcde" (make-string-output-stream) :foo 1))))
+				""")).isEqualTo("((5 \"abcde\") (5 \"abcde\") :PROGRAM-ERROR \"bcd\" :PROGRAM-ERROR)");
+	}
+
 	@Test
 	void readWriteSequenceOverLetBoundByteBuffersTakesTheByteArm() throws Exception {
 		// compiler/SequenceIoNarrowing (.todo/338): a let-bound non-string buffer

@@ -417,8 +417,13 @@ mean `read-byte` on a text-opened stream "works" there while interpreter/JVM sig
   **Trigger**: if a pending BYTE read must suspend, route that nil designator to
   `%stdin-read-byte-f`.
 - `read-sequence`/`write-sequence` are shared macro expansions into a `while` loop over
-  `aref`/`%aset`/`length` with fixed `__rseq_`/`__wseq_` temp names and literal-only `:start`/`:end`,
-  so no per-backend codegen exists for the loop. A packed buffer is first offered to
+  `aref`/`%aset`/`length` with fixed `__rseq_`/`__wseq_` temp names, so no per-backend codegen
+  exists for the loop. The keyword tail is read the way a lambda list reads one (CLHS 3.4.1.4,
+  `parseSequenceArgs` over `keywordTailProblem`): the first `:start`/`:end` counts, a true
+  `:allow-other-keys` admits other indicators, an unknown one without it is a `program-error`
+  the CALL signals, and a non-symbol indicator a call-time "unsupported" -- never an
+  expansion-time refusal, which lost the whole enclosing form (ANSI `streams` 2026-09-22:
+  8 forms, `READ-`/`WRITE-SEQUENCE.STRING.8-.12` and `.ERROR.4 .5 .11 .12`). A packed buffer is first offered to
   `%read-sequence-packed`/`%write-sequence-packed` (raw little-endian, any rank;
   `.kb/binary-sequence-io.md`), a character buffer one `or` further along to
   `%read-sequence-chars` (a block of storage units per host read; `.kb/character-sequence-io.md`).

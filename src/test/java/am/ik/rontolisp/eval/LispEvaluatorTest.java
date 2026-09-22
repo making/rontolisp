@@ -11495,6 +11495,30 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void readAndWriteSequenceReadTheirKeywordTailTheWayALambdaListDoes() {
+		// CLHS 3.4.1.4: the FIRST occurrence of a keyword counts, a true
+		// :allow-other-keys admits any other indicator, and an unknown one without it is
+		// a program-error the CALL signals -- not an expansion-time refusal that loses
+		// the whole enclosing form.
+		assertThat(evalMulti("""
+				(defmacro pe (form) `(handler-case ,form (program-error () :program-error)))
+				(list (let ((s (copy-seq "     ")))
+				        (with-input-from-string (is "abcdefghijk")
+				          (list (read-sequence s is :allow-other-keys t :foo 'bar) s)))
+				      (let ((s (copy-seq "     ")))
+				        (with-input-from-string (is "abcdefghijk")
+				          (list (read-sequence s is :end 5 :end 3 :start 0 :start 1) s)))
+				      (pe (read-sequence (make-string 5) (make-string-input-stream "abc") :foo 1))
+				      (pe (read-sequence (make-string 5) (make-string-input-stream "abc")
+				                         :allow-other-keys nil :bar 2))
+				      (with-output-to-string (os)
+				        (write-sequence "abcde" os :start 1 :end 4 :start 3 :allow-other-keys t :x 1))
+				      (pe (write-sequence "abcde" (make-string-output-stream) :foo 1)))
+				""").print())
+			.isEqualTo("((5 \"abcde\") (5 \"abcde\") :PROGRAM-ERROR :PROGRAM-ERROR \"bcd\" :PROGRAM-ERROR)");
+	}
+
+	@Test
 	void readWriteSequenceStartEnd(@TempDir Path tempDir) {
 		String file = tempDir.resolve("se.dat").toString().replace("\\", "\\\\");
 		LispVal result = evalMulti("""

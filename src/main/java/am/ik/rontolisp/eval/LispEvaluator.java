@@ -5689,20 +5689,22 @@ public final class LispEvaluator {
 		LispVal seq = eval(parts.get(1), env);
 		LispVal stream = Environment.streamTarget(eval(parts.get(2), env));
 		if (stream instanceof LispInstance) {
-			LispVal start = new LispInteger(0);
-			LispVal end = LispNil.INSTANCE;
+			// The first occurrence of a keyword counts (CLHS 3.4.1.4), as in the
+			// expansion.
+			LispVal start = null;
+			LispVal end = null;
 			for (int i = 3; i + 1 < parts.size(); i += 2) {
 				if (parts.get(i) instanceof LispSymbol kw) {
-					if (":START".equals(kw.name())) {
+					if (":START".equals(kw.name()) && start == null) {
 						start = eval(parts.get(i + 1), env);
 					}
-					else if (":END".equals(kw.name())) {
+					else if (":END".equals(kw.name()) && end == null) {
 						end = eval(parts.get(i + 1), env);
 					}
 				}
 			}
-			return applyGrayDispatch(read ? GRAY_READ_SEQUENCE_DISPATCH : GRAY_WRITE_SEQUENCE_DISPATCH,
-					List.of(seq, stream, start, end));
+			return applyGrayDispatch(read ? GRAY_READ_SEQUENCE_DISPATCH : GRAY_WRITE_SEQUENCE_DISPATCH, List.of(seq,
+					stream, start == null ? new LispInteger(0) : start, end == null ? LispNil.INSTANCE : end));
 		}
 		java.util.List<LispVal> rebuilt = new java.util.ArrayList<>();
 		rebuilt.add(parts.get(0));
