@@ -22960,7 +22960,11 @@ public final class LispMacroExpander {
 			// position-independent pass, so appending is safe. The data table is a
 			// top-level defvar and must run before any top-level subtypep call, so it
 			// goes FIRST (after the dispatcher slots above were filled by index).
-			out.add(runtimeSubtypepDefun(closRegistry));
+			boolean intervals = mentionsIntegerIntervalType(program);
+			out.add(runtimeSubtypepDefun(closRegistry, intervals));
+			if (intervals) {
+				out.addAll(LispReader.readAllFromString(RUNTIME_SUBTYPEP_INTERVAL_SOURCE, Features.INTERPRETER));
+			}
 			out.addAll(0, subtypepAncestorTableForms(closRegistry));
 		}
 		if (runtimeSubtypepValid) {
@@ -37833,6 +37837,20 @@ public final class LispMacroExpander {
 			// below decide nothing about a RESTRICTING compound super.
 			return true;
 		}
+		if (subV instanceof LispCons || superV instanceof LispCons) {
+			// Two INTEGER INTERVALS -- (unsigned-byte n), (signed-byte n), (integer lo
+			// hi), (mod n) and the names bit / unsigned-byte / signed-byte / integer --
+			// decide by containment, which is exact for them. Only with a compound on
+			// one side: two NAMES stay the lattice's (whose edges the runtime ancestor
+			// table is generated from), and the runtime twin reaches this arm only
+			// through a cons as well (RUNTIME_SUBTYPEP_INTERVAL_SOURCE). An (or ...)
+			// SUB of intervals is covered by their hull; the super is read exactly.
+			IntegerTypeRange superRange = IntegerTypeRange.of(superV);
+			IntegerTypeRange subRange = superRange == null ? null : IntegerTypeRange.covering(subV);
+			if (superRange != null && subRange != null) {
+				return superRange.contains(subRange);
+			}
+		}
 		if (superV instanceof LispCons supCons) {
 			// A COMPOUND super: only the logical connectives decide anything here.
 			// (or A B ...) holds when the sub is a subtype of ANY branch, (and A B ...)
@@ -38497,11 +38515,124 @@ public final class LispMacroExpander {
 	 * Builds the shared {@code (defun %subtypep-runtime (a b) ...)} dispatch defun; see
 	 * {@link #expandRuntimeSubtypep}.
 	 */
-	private static LispVal runtimeSubtypepDefun(ClosRegistry closRegistry) {
+	private static LispVal runtimeSubtypepDefun(ClosRegistry closRegistry, boolean intervals) {
 		LispSymbol a = new LispSymbol("%st_ra");
 		LispSymbol b = new LispSymbol("%st_rb");
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.SUBTYPEP_RUNTIME),
-				listToCons(List.of(a, b)), expandRuntimeSubtypep(a, b, closRegistry)));
+				listToCons(List.of(a, b)), expandRuntimeSubtypep(a, b, closRegistry, intervals)));
+	}
+
+	/**
+	 * The runtime twin of {@link #subtypep}'s INTEGER INTERVAL rule
+	 * ({@link IntegerTypeRange}): {@code %subtypep-interval} reads a specifier VALUE as
+	 * {@code (lo . hi)} (a nil bound is unbounded) or {@code :none}, and
+	 * {@code %subtypep-interval-in} is the containment test. Reached from the compound
+	 * arm of the {@code %subtypep-runtime} dispatch, so only when one side is a cons --
+	 * the same scope the Java rule has. Change the two together.
+	 */
+	private static final String RUNTIME_SUBTYPEP_INTERVAL_SOURCE = """
+			(defun %subtypep-interval-bound (%stb-b %stb-lower)
+			  (cond ((integerp %stb-b) %stb-b)
+			        ((and (symbolp %stb-b) (string= (symbol-name %stb-b) "*")) nil)
+			        ((and (consp %stb-b) (integerp (car %stb-b)) (null (cdr %stb-b)))
+			         (if %stb-lower (+ (car %stb-b) 1) (- (car %stb-b) 1)))
+			        (t :none)))
+			(defun %subtypep-interval (%sti-s)
+			  (let ((%sti-n (cond ((symbolp %sti-s) (symbol-name %sti-s))
+			                      ((and (consp %sti-s) (symbolp (car %sti-s))) (symbol-name (car %sti-s)))
+			                      (t ""))))
+			    (cond ((symbolp %sti-s)
+			           (cond ((string= %sti-n "BIT") (cons 0 1))
+			                 ((string= %sti-n "UNSIGNED-BYTE") (cons 0 nil))
+			                 ((or (string= %sti-n "SIGNED-BYTE") (string= %sti-n "INTEGER")) (cons nil nil))
+			                 (t :none)))
+			          ((not (consp %sti-s)) :none)
+			          ((or (string= %sti-n "UNSIGNED-BYTE") (string= %sti-n "SIGNED-BYTE"))
+			           (let ((%sti-b (if (consp (cdr %sti-s)) (car (cdr %sti-s)) '*)))
+			             (cond ((and (consp (cdr %sti-s)) (cdr (cdr %sti-s))) :none)
+			                   ((and (symbolp %sti-b) (string= (symbol-name %sti-b) "*"))
+			                    (%subtypep-interval (car %sti-s)))
+			                   ((not (and (integerp %sti-b) (> %sti-b 0))) :none)
+			                   ((string= %sti-n "UNSIGNED-BYTE") (cons 0 (- (ash 1 %sti-b) 1)))
+			                   (t (cons (- (ash 1 (- %sti-b 1))) (- (ash 1 (- %sti-b 1)) 1))))))
+			          ((string= %sti-n "MOD")
+			           (let ((%sti-b (if (consp (cdr %sti-s)) (car (cdr %sti-s)) nil)))
+			             (if (and (integerp %sti-b) (> %sti-b 0) (null (cdr (cdr %sti-s))))
+			                 (cons 0 (- %sti-b 1))
+			                 :none)))
+			          ((string= %sti-n "INTEGER")
+			           (let* ((%sti-r (cdr %sti-s))
+			                  (%sti-lo (if (consp %sti-r) (%subtypep-interval-bound (car %sti-r) t) nil))
+			                  (%sti-hi (if (and (consp %sti-r) (consp (cdr %sti-r)))
+			                               (%subtypep-interval-bound (car (cdr %sti-r)) nil)
+			                               nil)))
+			             (if (or (eq %sti-lo :none) (eq %sti-hi :none)
+			                     (and (consp %sti-r) (consp (cdr %sti-r)) (cdr (cdr %sti-r))))
+			                 :none
+			                 (cons %sti-lo %sti-hi))))
+			          (t :none))))
+			(defun %subtypep-interval-covering (%stc-s)
+			  (if (and (consp %stc-s) (symbolp (car %stc-s)) (string= (symbol-name (car %stc-s)) "OR"))
+			      (let ((%stc-lo 1) (%stc-hi 0) (%stc-any nil) (%stc-r nil))
+			        (dolist (%stc-e (cdr %stc-s) (if %stc-any (cons %stc-lo %stc-hi) (cons 1 0)))
+			          (setq %stc-r (%subtypep-interval-covering %stc-e))
+			          (if (eq %stc-r :none)
+			              (return :none)
+			              (if (if (car %stc-r) (if (cdr %stc-r) (> (car %stc-r) (cdr %stc-r)) nil) nil)
+			                  nil
+			                  (progn
+			                    (setq %stc-lo (if %stc-any
+			                                      (if (and %stc-lo (car %stc-r)) (min %stc-lo (car %stc-r)) nil)
+			                                      (car %stc-r)))
+			                    (setq %stc-hi (if %stc-any
+			                                      (if (and %stc-hi (cdr %stc-r)) (max %stc-hi (cdr %stc-r)) nil)
+			                                      (cdr %stc-r)))
+			                    (setq %stc-any t))))))
+			      (%subtypep-interval %stc-s)))
+			(defun %subtypep-interval-in (%sti-a %sti-b)
+			  (let ((%sti-al (car %sti-a)) (%sti-ah (cdr %sti-a))
+			        (%sti-bl (car %sti-b)) (%sti-bh (cdr %sti-b)))
+			    (if (if (and %sti-al %sti-ah) (> %sti-al %sti-ah) nil)
+			        t
+			        (if (and (or (null %sti-bl) (and %sti-al (<= %sti-bl %sti-al)))
+			                 (or (null %sti-bh) (and %sti-ah (>= %sti-bh %sti-ah))))
+			            t
+			            nil))))
+			""";
+
+	/**
+	 * Whether the program spells an integer INTERVAL type anywhere -- a {@code bit} /
+	 * {@code unsigned-byte} / {@code signed-byte} / {@code mod} symbol or an
+	 * {@code (integer ...)} compound -- the gate on the runtime interval arm of
+	 * {@code %subtypep-runtime} ({@link #RUNTIME_SUBTYPEP_INTERVAL_SOURCE}), so a program
+	 * that never names one keeps the dispatch it had.
+	 * @param program the top-level forms
+	 * @return whether an interval type can reach a computed {@code subtypep}
+	 */
+	static boolean mentionsIntegerIntervalType(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (mentionsIntegerIntervalType(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean mentionsIntegerIntervalType(LispVal form) {
+		if (form instanceof LispSymbol sym) {
+			return switch (IntegerTypeRange.plainName(sym)) {
+				case "BIT", "UNSIGNED-BYTE", "SIGNED-BYTE", "MOD" -> true;
+				default -> false;
+			};
+		}
+		if (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && "INTEGER".equals(IntegerTypeRange.plainName(head))
+					&& cons.cdr() instanceof LispCons) {
+				return true;
+			}
+			return mentionsIntegerIntervalType(cons.car()) || mentionsIntegerIntervalType(cons.cdr());
+		}
+		return false;
 	}
 
 	/**
@@ -40308,7 +40439,8 @@ public final class LispMacroExpander {
 				COMPOUND_SUBTYPEP_RECUR, new LispSymbol(recurOperator)));
 	}
 
-	private static LispVal expandRuntimeSubtypep(LispVal subExpr, LispVal supExpr, ClosRegistry closRegistry) {
+	private static LispVal expandRuntimeSubtypep(LispVal subExpr, LispVal supExpr, ClosRegistry closRegistry,
+			boolean intervals) {
 		String prefix = "__st" + MV_COUNTER.getAndIncrement();
 		LispSymbol a = new LispSymbol(prefix + "_a");
 		LispSymbol b = new LispSymbol(prefix + "_b");
@@ -40327,10 +40459,25 @@ public final class LispMacroExpander {
 		// keyed
 		// by type NAME -- can never match. One shared Lisp source reads the head out of
 		// the specifier value, exactly as the static subtypep reads it out of the AST.
+		LispVal compound = runtimeCompoundSubtypepBody(a, b, LispNames.SUBTYPEP_RUNTIME);
+		if (intervals) {
+			// Two integer INTERVALS decide by containment ahead of the compound rules,
+			// the twin of the Java arm in subtypep.
+			LispSymbol ra = new LispSymbol(prefix + "_ia");
+			LispSymbol rb = new LispSymbol(prefix + "_ib");
+			LispVal none = new LispSymbol(":NONE");
+			compound = listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
+					listToCons(List.of(listToCons(List.of(rb, mvCall("%SUBTYPEP-INTERVAL", b))),
+							listToCons(List.of(ra,
+									makeIf(fmtCall(LispNames.EQ_GENERAL, rb, none), none,
+											mvCall("%SUBTYPEP-INTERVAL-COVERING", a)))))),
+					makeIf(fmtCall(LispNames.EQ_GENERAL, ra, none), compound,
+							mvCall("%SUBTYPEP-INTERVAL-IN", ra, rb))));
+		}
 		clauses.add(listToCons(List.of(
 				listToCons(
 						List.of(new LispSymbol(LispNames.OR), mvCall(LispNames.CONSP, a), mvCall(LispNames.CONSP, b))),
-				runtimeCompoundSubtypepBody(a, b, LispNames.SUBTYPEP_RUNTIME))));
+				compound)));
 		clauses.add(listToCons(List.of(LispTrue.INSTANCE, memberTest)));
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));

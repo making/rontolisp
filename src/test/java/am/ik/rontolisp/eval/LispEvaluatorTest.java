@@ -19751,6 +19751,33 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void subtypepDecidesIntegerIntervals() {
+		// subtypep decides INTEGER INTERVALS: (unsigned-byte n), (signed-byte n),
+		// (integer lo hi), (mod n), bit and the unsized byte names each denote an
+		// interval, and one interval is a subtype of another exactly when it is
+		// contained -- literal or computed, identical on all four backends.
+		assertThat(
+				capture("""
+						(defun probe (a b) (subtypep a b))
+						(print (list (subtypep '(unsigned-byte 1) '(unsigned-byte 8)) (subtypep '(unsigned-byte 9) '(unsigned-byte 8))
+						             (subtypep '(signed-byte 5) '(signed-byte 8)) (subtypep '(integer 0 5) '(unsigned-byte 8))
+						             (subtypep 'bit '(unsigned-byte 8)) (subtypep '(or (integer 0 1) (integer 100 200)) '(unsigned-byte 8))
+						             (subtypep '(integer -1 5) '(unsigned-byte 8)) (subtypep '(mod 256) '(unsigned-byte 8))
+						             (subtypep '(unsigned-byte 8) '(integer 0 (256)))))
+						(print (list (probe '(unsigned-byte 1) '(unsigned-byte 8)) (probe '(unsigned-byte 9) '(unsigned-byte 8))
+						             (probe '(integer 0 5) '(signed-byte 8)) (probe 'bit '(integer 0 1))
+						             (probe '(signed-byte 8) 'unsigned-byte)
+						           (probe '(or (integer 0 1) (integer 100 200)) '(unsigned-byte 8))
+						           (probe '(integer 2 99) '(or (integer 0 1) (integer 100 200)))))
+						""")
+					.lines()
+					.map(String::strip)
+					.filter(l -> !l.isEmpty())
+					.collect(joining("\n")))
+			.isEqualTo("(T NIL T T T T NIL T T)\n(T NIL T T NIL T NIL)");
+	}
+
+	@Test
 	void subtypepAnswersCommonLispValidP() {
 		// subtypep's SECOND value: whether the answer is a DECISION. A t primary always
 		// is; a nil primary is only between two plain type NAMES, which the name lattice
