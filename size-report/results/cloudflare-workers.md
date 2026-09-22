@@ -5,28 +5,28 @@ the prose below it is [`../notes/cloudflare-workers.md`](../notes/cloudflare-wor
 What each Worker is: [examples/cloudflare-workers/](../../examples/cloudflare-workers/).
 How the report is built and run: [../README.md](../README.md).
 
-- measured: 2026-09-19
-- rontolisp: 0.1.0-SNAPSHOT (`8db71e9`)
+- measured: 2026-09-20
+- rontolisp: 0.1.0-SNAPSHOT (`32571d2`)
 - gzip: `gzip -9 -n` (what Cloudflare counts against the 3 MB compressed bundle limit)
 
 | Worker | Flags | raw (B) | gzip (B) | % of the 3 MB limit |
 | --- | --- | ---: | ---: | ---: |
 | hello | `--no-gc --optimize` | 465 | 379 | 0.0% |
-| hello-clack | `--no-wasi --optimize=size` | 663,037 | 184,463 | 5.9% |
-| hello-tiny-routes | `--no-wasi --optimize=size` | 738,128 | 201,410 | 6.4% |
-| hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 1,179,722 | 295,528 | 9.4% |
-| hello-ningle | `--no-wasi --optimize=size` | 2,981,474 | 571,343 | 18.2% |
-| httpbin | `--no-wasi --host-boundary=streaming --optimize=size` | 154,300 | 52,837 | 1.7% |
-| httpbin-clack | `--no-wasi --host-boundary=streaming --optimize=size` | 677,044 | 188,058 | 6.0% |
-| httpbin-clack-one-source | `--no-wasi --host-boundary=streaming --optimize=size` | 678,549 | 188,881 | 6.0% |
-| httpbin-tiny-routes | `--no-wasi --host-boundary=streaming --optimize=size` | 749,412 | 204,673 | 6.5% |
-| httpbin-tiny-routes (full tiny-routes) | `--no-wasi --host-boundary=streaming --optimize=size` | 1,192,238 | 297,564 | 9.5% |
-| httpbin-ningle | `--no-wasi --host-boundary=streaming --optimize=size` | 2,987,646 | 572,414 | 18.2% |
-| dog-fetcher | `--no-wasi --host-fetch --host-boundary=streaming --optimize=size` | 755,099 | 205,838 | 6.5% |
-| dog-relay | `--no-wasi --host-fetch --host-boundary=streaming --reentrant --optimize=size` | 743,959 | 203,641 | 6.5% |
-| btc-ticker | `--no-wasi --host-fetch --optimize=size` | 670,306 | 187,184 | 6.0% |
-| btc-ticker (streaming boundary) | `--no-wasi --host-fetch --host-boundary=streaming --optimize=size` | 672,429 | 187,398 | 6.0% |
-| httpbin-component (core module) | `--component --no-wasi --optimize=size` | 148,032 | 50,789 | 1.6% |
+| hello-clack | `--no-wasi --optimize=size` | 609,538 | 160,738 | 5.1% |
+| hello-tiny-routes | `--no-wasi --optimize=size` | 678,089 | 177,363 | 5.6% |
+| hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 1,110,269 | 268,689 | 8.5% |
+| hello-ningle | `--no-wasi --optimize=size` | 2,705,360 | 505,604 | 16.1% |
+| httpbin | `--no-wasi --host-boundary=streaming --optimize=size` | 153,658 | 52,348 | 1.7% |
+| httpbin-clack | `--no-wasi --host-boundary=streaming --optimize=size` | 622,931 | 165,023 | 5.2% |
+| httpbin-clack-one-source | `--no-wasi --host-boundary=streaming --optimize=size` | 624,372 | 165,767 | 5.3% |
+| httpbin-tiny-routes | `--no-wasi --host-boundary=streaming --optimize=size` | 705,839 | 185,947 | 5.9% |
+| httpbin-tiny-routes (full tiny-routes) | `--no-wasi --host-boundary=streaming --optimize=size` | 1,124,452 | 272,321 | 8.7% |
+| httpbin-ningle | `--no-wasi --host-boundary=streaming --optimize=size` | 2,710,739 | 506,863 | 16.1% |
+| dog-fetcher | `--no-wasi --host-fetch --host-boundary=streaming --optimize=size` | 692,591 | 181,930 | 5.8% |
+| dog-relay | `--no-wasi --host-fetch --host-boundary=streaming --reentrant --optimize=size` | 683,703 | 179,876 | 5.7% |
+| btc-ticker | `--no-wasi --host-fetch --optimize=size` | 617,203 | 163,354 | 5.2% |
+| btc-ticker (streaming boundary) | `--no-wasi --host-fetch --host-boundary=streaming --optimize=size` | 619,121 | 164,164 | 5.2% |
+| httpbin-component (core module) | `--component --no-wasi --optimize=size` | 147,619 | 50,414 | 1.6% |
 
 The component row is the core module alone. Reached through `jco transpile`
 a Worker also imports the generated JavaScript: **93,989 B** of it.
