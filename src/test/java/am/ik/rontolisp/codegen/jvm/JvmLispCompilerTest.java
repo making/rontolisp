@@ -11885,6 +11885,31 @@ class JvmLispCompilerTest {
 			.isEqualTo("3\n(2 12)");
 	}
 
+	@Test
+	void compileAndRunDestructuringBindSurplusElementsSignalProgramError() throws Exception {
+		assertThat(compileAndRun("""
+				(print (handler-case (destructuring-bind (a b) '(1 2 3) (list a b)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a (b c)) '(1 (2 3 4)) (list a b c)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a &optional b) '(1 2 3) (list a b)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a &aux (x 2)) '(1 2) (list a x)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a &optional b) '(1 2 3 4) a) (error (e) (princ-to-string e))))
+				(print (destructuring-bind (a . b) '(1 2 3) (list a b)))
+				(print (destructuring-bind (a &optional (b 7)) '(1) (list a b)))
+				"""))
+			.isEqualTo(":PE\n:PE\n:PE\n:PE\n\"Function expects at most 2 arguments, got 4\"\n(1 (2 3))\n(1 7)");
+	}
+
+	@Test
+	void theDestructuringSurplusCheckCarriesNeitherTheStringRuntimeNorGenericLength() throws Exception {
+		// The destructuring surplus check reuses the &optional check's shared message
+		// helper: no mutable-string wrap, no generic length, no nthcdr runtime.
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader
+			.readAllFromString("(defun f (l) (destructuring-bind (a &optional (b 2)) l (+ a b))) (print (f '(1)))"));
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_toMutStr", "_strToCharVec", "_length", "_scount",
+				"_nthcdr");
+		assertThat(runClass(classBytes)).isEqualTo("3");
+	}
+
 	// defmacro destructuring/extended lambda lists go through the same compile-path
 	// pass as plain defmacro (eval.UserMacroExpander).
 	@Test

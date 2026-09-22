@@ -121,6 +121,40 @@ so neither the native count check nor a dispatcher's shape could see it: before 
   The remaining ~+400 B on the JVM is `_aritySurplus` (~250 B) plus ~50 B of check and
   `%error` throw per function.
 
+## A surplus element in a destructuring pattern (2026-09-22)
+**Invariant: `destructuring-bind` -- and therefore every `defmacro` lambda list beyond
+"required + one `&rest`" ([defmacro-backquote.md](defmacro-backquote.md)) -- signals the same
+`program-error` as a function when a list level has an element past the pattern and nothing
+(dotted tail, `&rest`/`&body`, `&key`) takes it; all four backends.** A missing position still
+binds nil (SBCL signals that too; not done).
+
+- Same throwaway `__ll_arity` binding and `%arity-surplus-message` rail as the function check, so
+  the message is `Function expects at most N argument(s), got M` (SBCL words it as a
+  DESTRUCTURING-BIND parse error; the type is what programs test). No `prin1-to-string`,
+  `length` or `nthcdr` in the error path.
+- Where: `LambdaLists.appendTailBindings` (a tail with neither `&rest` nor `&key`: the check comes
+  first, before any `&optional` default); `LambdaLists.destructuringSurplusCheck` for a
+  required-only level -- nested `cdr`s over the level's source, which the level's `car`
+  accessors already walk -- emitted per level by `LispMacroExpander.appendSurplusChecks`
+  (keyword-free patterns), by `destructuringBindings` for a level whose keyword sits only in a
+  sub-pattern, and for the empty pattern. **Not in `destructurePairs`**: `loop`'s destructuring
+  shares it and discards a surplus value by definition (CLHS 6.1.1.7).
+- **Blast radius, measured before landing**: the whole ANSI suite (interpreter, suite
+  `ca06bd9`, test NAMES diffed across every chapter) moved 0 tests either way -- its
+  `DESTRUCTURING-BIND.ERROR.*` cases are commented out upstream -- apart from the random-input
+  `REMOVE-IF-RANDOM`; 19,513 test names before and after. The full `./mvnw test` corpus (every
+  spliced library's `defmacro`/`destructuring-bind` on every backend) had no caller relying on a
+  dropped element.
+- **Sizes** (bytes, JVM `.class` / Preview 1 / component, default `-o`):
+
+  | program | before | after |
+  |---|---|---|
+  | hello_world, zlib, a `defmacro` with `&optional` (expanded at compile time) | | identical |
+  | `(defun f (l) (destructuring-bind (a b) l (+ a b))) (print (f '(1 2)))` | 7,671 / 2,275 / 3,422 | 8,100 / 2,320 / 3,467 |
+  | the same with `(a &optional (b 2))` | 7,862 / 1,379 / 2,526 | 8,282 / 1,378 / 2,525 |
+
+  The JVM's ~+420 B is `_aritySurplus` (~250 B, shared with every `&optional` defun) plus the check.
+
 ## Variadic calling convention (both compilers)
 Physically fixed-arity: required params plus one trailing rest-list param
 (`DefunDecl`/`LambdaInfo`/`FunctionInfo`/`WasmFunctionInfo` carry `variadic`), reusing
@@ -135,6 +169,7 @@ required params for a variadic.
   forms (`buildArgList`), non-negative = exactly arity (`buildNArgs`, nil-padded).
 
 ## Gaps
+- A missing required element in a destructuring pattern binds nil instead of signalling.
 - `defmacro` beyond "required + one `&rest`/`&body`" goes through `destructuring-bind`
   wrapping in `LispEvaluator.evalDefmacro` (`.kb/defmacro-backquote.md`); `&environment`
   is MACRO-only (`makeUserMacro`), rejected for functions.
@@ -148,7 +183,13 @@ required params for a variadic.
 `#defunExtraArgumentsPastTheLambdaListSignalProgramError`;
 `JvmLispCompilerTest#compileAndRunExtraArgumentsPastAnOptionalTailSignalProgramError`,
 `#compileAndRunALegalCallAtTheFullClArityStillRuns` and their `WasmLispCompilerIntegrationTest`
-twins;
+twins; the destructuring surplus: `LispEvaluatorTest#evalDestructuringBindSurplusElementsSignalProgramError`,
+`#defmacroSurplusArgumentsPastADestructuringLambdaListSignalProgramError`,
+`UserMacroExpanderTest#macroArgumentErrorsSurfaceAtCompileTime`,
+`JvmLispCompilerTest#compileAndRunDestructuringBindSurplusElementsSignalProgramError`,
+`#theDestructuringSurplusCheckCarriesNeitherTheStringRuntimeNorGenericLength`,
+`WasmLispCompilerIntegrationTest#destructuringBindSurplusElementsSignalProgramError`, ci-spec
+`destructuring-bind-surplus-elements-signal-program-error`;
 `JvmLispCompilerTest#compileAndRunDefun{Rest,Optional,KeywordArguments}`;
 `WasmLispCompilerIntegrationTest#compileAndRunDefun{RestAndOptional,KeywordArguments}`,
 `#compileAndRunVariadicFirstClass`; ci-spec `lambda-list-*` (incl.

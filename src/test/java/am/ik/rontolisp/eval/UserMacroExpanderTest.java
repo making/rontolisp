@@ -140,6 +140,11 @@ class UserMacroExpanderTest {
 				(defmacro m (a b) `(+ ,a ,b))
 				(print (m 1))
 				""")).isInstanceOf(LispEvalException.class).hasMessageContaining("expects 2 arguments");
+		// A destructuring lambda list refuses a surplus argument the same way.
+		assertThatThrownBy(() -> expand("""
+				(defmacro m (a &optional b) `(+ ,a ,b))
+				(print (m 1 2 3))
+				""")).hasMessageContaining("Function expects at most 2 arguments, got 3");
 	}
 
 	@Test

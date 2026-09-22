@@ -12378,6 +12378,20 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void destructuringBindSurplusElementsSignalProgramError() throws Exception {
+		assertThat(compileAndRun("""
+				(print (handler-case (destructuring-bind (a b) '(1 2 3) (list a b)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a (b c)) '(1 (2 3 4)) (list a b c)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a &optional b) '(1 2 3) (list a b)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a &aux (x 2)) '(1 2) (list a x)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a &optional b) '(1 2 3 4) a) (error (e) (princ-to-string e))))
+				(print (destructuring-bind (a . b) '(1 2 3) (list a b)))
+				(print (destructuring-bind (a &optional (b 7)) '(1) (list a b)))
+				"""))
+			.isEqualTo(":PE\n:PE\n:PE\n:PE\n\"Function expects at most 2 arguments, got 4\"\n(1 (2 3))\n(1 7)");
+	}
+
+	@Test
 	void everyFunction() throws Exception {
 		assertThat(compileAndRun("(print (every #'evenp '(2 4 6))) (print (every #'evenp '(2 3 6)))"))
 			.isEqualTo("T\nNIL");

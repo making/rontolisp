@@ -2549,9 +2549,9 @@ public final class LispNames {
 	 * pattern to the corresponding parts of the evaluated form, supporting
 	 * {@code &optional}/{@code &rest}/{@code &body}/{@code &key}/{@code &aux} inside the
 	 * pattern; expands to a {@code let*} of car/cdr chains (see
-	 * {@code LispMacroExpander.expandDestructuringBind}). Lite semantics: a mismatch
-	 * between the pattern and the value does not signal (missing positions bind to nil,
-	 * surplus elements are ignored); {@code &whole}/{@code &environment} are unsupported.
+	 * {@code LispMacroExpander.expandDestructuringBind}). A surplus element signals a
+	 * {@code program-error}; a missing position binds to nil; {@code &environment} is
+	 * unsupported.
 	 */
 	public static final String DESTRUCTURING_BIND = "DESTRUCTURING-BIND";
 

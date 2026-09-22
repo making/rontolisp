@@ -41195,9 +41195,9 @@ public final class LispMacroExpander {
 	 * macro-style lambda list: nested patterns in required positions and
 	 * {@code &optional}/{@code &rest}/{@code &body}/{@code &key}/{@code &aux} (also
 	 * inside nested patterns) are supported; {@code &whole}/{@code &environment} are not.
-	 * Lite semantics: a mismatch between the pattern and the value does not signal -- a
-	 * missing position binds to nil and surplus elements are ignored (only an undeclared
-	 * keyword under {@code &key} signals, as in the function lambda lists).
+	 * An element past the pattern (at any level with neither a dotted tail, {@code &rest}
+	 * nor {@code &key}) signals the surplus-argument {@code program-error}, and so does
+	 * an undeclared keyword under {@code &key}; a MISSING position still binds to nil.
 	 *
 	 * <pre>
 	 * (destructuring-bind (a (b) &amp;optional (c 9)) '(1 (2)) (list a b c))
@@ -41222,6 +41222,10 @@ public final class LispMacroExpander {
 		LispSymbol whole = new LispSymbol(prefix + "_whole");
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		bindings.add(listToCons(List.of(whole, parts.get(2))));
+		if (parts.get(1) instanceof LispNil) {
+			// The empty pattern binds nothing and takes nothing.
+			bindings.add(LambdaLists.destructuringSurplusCheck(whole, 0));
+		}
 		destructuringBindings(parts.get(1), whole, prefix, new int[] { 0 }, bindings);
 		List<LispVal> letParts = new java.util.ArrayList<>();
 		letParts.add(new LispSymbol(LispNames.LET_STAR));
@@ -41253,6 +41257,7 @@ public final class LispMacroExpander {
 			for (LispVal[] p : pairs) {
 				out.add(listToCons(List.of(p[0], p[1])));
 			}
+			appendSurplusChecks(pattern, source, out);
 			return;
 		}
 		if (pattern instanceof LispCons dotted && !dotted.isProperList()) {
@@ -41311,6 +41316,11 @@ public final class LispMacroExpander {
 			}
 			cursor = mvCall(LispNames.CDR, cursor);
 		}
+		if (firstKeyword == elements.size()) {
+			// The keyword sits only inside a nested sub-pattern: this level is
+			// required-only and must exhaust its list.
+			out.add(LambdaLists.destructuringSurplusCheck(source, firstKeyword));
+		}
 		if (firstKeyword < elements.size()) {
 			// The keyword may also sit only inside a nested sub-pattern (handled above).
 			LispSymbol restTmp = new LispSymbol(prefix + "_r" + counter[0]++);
@@ -41332,10 +41342,34 @@ public final class LispMacroExpander {
 					break;
 				}
 			}
-			LambdaLists.appendTailBindings(tail, restTmp, out);
+			LambdaLists.appendTailBindings(tail, firstKeyword, restTmp, out);
 			if (restPattern != null && restPatternTmp != null) {
 				destructuringBindings(restPattern, restPatternTmp, prefix, counter, out);
 			}
+		}
+	}
+
+	/**
+	 * Appends a surplus-element check for every level of a keyword-free pattern that ends
+	 * in nil (a dotted tail consumes the rest of its list): the list at that level must
+	 * be exhausted by the pattern's elements. Kept apart from {@link #destructurePairs},
+	 * which {@code loop}'s destructuring shares -- there a surplus value is discarded
+	 * (CLHS 6.1.1.7).
+	 */
+	private static void appendSurplusChecks(LispVal pattern, LispVal source, List<LispVal> out) {
+		int count = 0;
+		LispVal cursor = source;
+		LispVal tail = pattern;
+		while (tail instanceof LispCons c) {
+			if (c.car() instanceof LispCons nested) {
+				appendSurplusChecks(nested, mvCall(LispNames.CAR, cursor), out);
+			}
+			cursor = mvCall(LispNames.CDR, cursor);
+			count++;
+			tail = c.cdr();
+		}
+		if (tail instanceof LispNil) {
+			out.add(LambdaLists.destructuringSurplusCheck(source, count));
 		}
 	}
 
