@@ -1369,7 +1369,13 @@ final class WasmExprCompiler {
 				// through path_rename (both answering nil when there is nothing to do,
 				// with the file-error raised once in the Lisp above them).
 				case LispNames.FILE_POSITION -> {
-					if (ctx.filePosition) {
+					// CL's two position DESIGNATORS are a call-site rewrite shared with
+					// the JVM backend, so no primitive learns a keyword.
+					LispVal positioned = LispMacroExpander.rewriteFilePositionArg(cons);
+					if (positioned != cons) {
+						WasmExprCompiler.compileExpr(positioned, ctx);
+					}
+					else if (ctx.filePosition) {
 						WasmFilePositionCompiler.compile(cons, ctx);
 					}
 					else {

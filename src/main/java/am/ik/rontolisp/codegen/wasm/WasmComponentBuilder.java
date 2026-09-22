@@ -218,6 +218,7 @@ public final class WasmComponentBuilder {
 		funcs.put("mono-now", new BlockFunc(IFACE_MONO_CLOCK, "now"));
 		funcs.put("file-read", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.read-via-stream"));
 		funcs.put("file-append", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.append-via-stream"));
+		funcs.put("file-write", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.write-via-stream"));
 		funcs.put("open-at", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.open-at"));
 		funcs.put("get-directories", new BlockFunc(IFACE_FS_PREOPENS, "get-directories"));
 		funcs.put("get-random-u64", new BlockFunc(IFACE_RANDOM, "get-random-u64"));
@@ -337,6 +338,9 @@ public final class WasmComponentBuilder {
 		w.put("mono-now", lower("mono-now", ComponentWriter::canonLower));
 		w.put("file-read", lower("file-read", f -> ComponentWriter.canonLowerMemory(f, 0)));
 		w.put("file-append", lower("file-append", ComponentWriter::canonLower));
+		// write-via-stream: the OFFSET-taking write an :io / :if-exists :overwrite stream
+		// needs (append-via-stream cannot say where the bytes go).
+		w.put("file-write", lower("file-write", ComponentWriter::canonLower));
 		w.put("open-at", lowerRealloc("open-at", (f, r) -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, r)));
 		w.put("get-directories",
 				lowerRealloc("get-directories", (f, r) -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, r)));

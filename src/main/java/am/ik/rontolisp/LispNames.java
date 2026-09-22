@@ -4749,7 +4749,12 @@ public final class LispNames {
 	 */
 	public static final String PROBE_KEYWORD = ":PROBE";
 
-	/** The {@code :io} direction (bidirectional): not implemented on any backend. */
+	/**
+	 * The {@code :io} direction: one BIDIRECTIONAL file stream, reads and writes sharing
+	 * one cursor. It is a real Common Lisp direction and also the normalized spelling of
+	 * the truncating variant; {@link #IO_APPEND_KEYWORD} and
+	 * {@link #IO_OVERWRITE_KEYWORD} are its two {@code :if-exists} variants.
+	 */
 	public static final String IO_KEYWORD = ":IO";
 
 	/**
@@ -4760,6 +4765,43 @@ public final class LispNames {
 	 * reads one literal token where the source wrote an option pair.
 	 */
 	public static final String APPEND_KEYWORD = ":APPEND";
+
+	/**
+	 * The {@code :overwrite} pseudo-direction: the NORMALIZED spelling of
+	 * {@code :direction :output :if-exists :overwrite} -- open for writing WITHOUT
+	 * truncating, positioned at 0, so the bytes past what is written survive. The
+	 * {@link #APPEND_KEYWORD} shape exactly, one disposition over.
+	 */
+	public static final String OVERWRITE_KEYWORD = ":OVERWRITE";
+
+	/**
+	 * The {@code :io-append} pseudo-direction: {@code :direction :io :if-exists :append}
+	 * as one literal token.
+	 */
+	public static final String IO_APPEND_KEYWORD = ":IO-APPEND";
+
+	/**
+	 * The {@code :io-overwrite} pseudo-direction: {@code :direction :io :if-exists
+	 * :overwrite} as one literal token.
+	 */
+	public static final String IO_OVERWRITE_KEYWORD = ":IO-OVERWRITE";
+
+	/**
+	 * The one direction token naming a WRITING open of the given direction and
+	 * {@code :if-exists} disposition -- what {@code open}'s lowerings put in the
+	 * positional form so that every backend resolves the whole mode from ONE literal
+	 * ({@code compiler.OpenModes.directionMode} is the mapping to the mode bits).
+	 * @param io whether the direction is {@code :io} rather than {@code :output}
+	 * @param append whether the disposition is {@code :append}
+	 * @param overwrite whether the disposition is {@code :overwrite}
+	 * @return the direction keyword name
+	 */
+	public static String outputDirectionToken(boolean io, boolean append, boolean overwrite) {
+		if (io) {
+			return append ? IO_APPEND_KEYWORD : overwrite ? IO_OVERWRITE_KEYWORD : IO_KEYWORD;
+		}
+		return append ? APPEND_KEYWORD : overwrite ? OVERWRITE_KEYWORD : OUTPUT_KEYWORD;
+	}
 
 	/**
 	 * The {@code :element-type} keyword recognized by {@code with-open-file} (and as the

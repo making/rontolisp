@@ -3138,6 +3138,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// answers through the adapter, which owns both the tracked offset and the flag
 		// table.
 		boolean preview1FilePosition = usesFilePosition && !this.component;
+		// The BIDIRECTIONAL open (:direction :io) and its :if-exists :overwrite sibling
+		// need path_open to ask for BOTH rights and to skip O_TRUNC, which is a different
+		// _open body -- gated on the surface fact so every other module keeps its bytes.
+		boolean usesBidirectionalOpen = !this.noWasi && LispMacroExpander.opensBidirectionally(program);
 		// Whether anything the module emits can reach the WASI environ_get / args_get
 		// calls, and with them the env/argv scratch block. _getenv is emitted
 		// unconditionally but is only CALLED for %host-getenv, and only off
@@ -4033,6 +4037,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			// reason so their messages name the actual conflict.
 			.component(this.component && !this.noWasi)
 			.filePosition(usesFilePosition)
+			.bidirectionalStreams(usesBidirectionalOpen)
 			.binaryFlagsAddr(binaryFlagsAddr)
 			.noWasi(this.noWasi)
 			.reactorComponent(this.component && this.noWasi)
@@ -7309,7 +7314,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(false, stringTable))
 					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(true, stringTable))
 					.addFunction(WasmStringRuntimeBuilder.buildTrimBody())
-					.addFunction(WasmIoRuntimeBuilder.buildOpenBody())
+					.addFunction(WasmIoRuntimeBuilder.buildOpenBody(usesBidirectionalOpen))
 					.addFunction(WasmIoRuntimeBuilder.buildCloseBody(stringTable, ostreamTableGlobalIndex))
 					.addFunction(WasmIoRuntimeBuilder.buildWriteLineBody(stringTable, this.charvecPossible))
 					.addFunction(WasmRuntimeBuilder.buildEqualBody(this.usesInstances ? instanceTypeBase() : -1,
@@ -9364,6 +9369,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean filePosition = false;
 
 		/**
+		 * Whether the program can open a BIDIRECTIONAL ({@code :direction :io}) or
+		 * {@code :if-exists :overwrite} stream, so {@code _open} asks {@code path_open}
+		 * for both rights and the right {@code oflags}, and so such a stream's
+		 * {@code file-position} is real whatever its element type.
+		 */
+		boolean bidirectionalStreams = false;
+
+		/**
 		 * The base address of the per-fd binary-stream flag table on the PREVIEW 1
 		 * backend, or {@code -1} elsewhere ({@code --component} reads the adapter's own
 		 * table at {@link WasmLispCompiler#STREAM_BINARY_FLAGS_ADDR}, which the adapter's
@@ -10038,6 +10051,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.optimize = builder.optimize;
 			this.component = builder.component;
 			this.filePosition = builder.filePosition;
+			this.bidirectionalStreams = builder.bidirectionalStreams;
 			this.binaryFlagsAddr = builder.binaryFlagsAddr;
 			this.noWasi = builder.noWasi;
 			this.reactorComponent = builder.reactorComponent;
@@ -10158,6 +10172,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean component = false;
 
 			private boolean filePosition = false;
+
+			private boolean bidirectionalStreams = false;
 
 			private int binaryFlagsAddr = -1;
 
@@ -10399,6 +10415,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder filePosition(boolean filePosition) {
 				this.filePosition = filePosition;
+				return this;
+			}
+
+			Builder bidirectionalStreams(boolean bidirectionalStreams) {
+				this.bidirectionalStreams = bidirectionalStreams;
 				return this;
 			}
 

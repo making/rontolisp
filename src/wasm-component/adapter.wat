@@ -48,6 +48,9 @@
 ;;   0x50500 preopen table: 16 slots x 264 bytes {descriptor@0, name-len@4, name@8..}
 ;;   0x51600 descriptor.stat result scratch: result<descriptor-stat, error-code>, 112
 ;;           bytes -- disc byte @0, descriptor-stat @8 (type @8, link-count @24, size @32)
+;;   0x51b00 file-append table: 64 slots x 1 byte -- 1 when the fd was opened with
+;;           fdflags APPEND, which is the ONE disposition that must keep writing at the
+;;           file's end rather than at the tracked offset.
 ;; A preview1 file fd is 100 + slotIndex (so it never clashes with stdout=1 or a
 ;; preopen dirfd, which is 3 + preopen index).
 ;; The preopen table is a COPY, taken once at the first $ensure_preopens: the
@@ -55,8 +58,9 @@
 ;; allocates at the CORE's HEAP_PTR -- and the core pops that cell back after every
 ;; path resolution, so anything still pointing into the lifted list would be handed
 ;; out again as heap. The descriptors are copied for the same reason.
-;; Writes use append-via-stream (each fd_write is a full append cycle, so no per-fd write
-;; offset needs tracking) and await the write future; reads cache the readable stream per fd
+;; Writes use write-via-stream at the fd's tracked offset (append-via-stream for an fd opened
+;; with fdflags APPEND), each fd_write a full write cycle that awaits its future and drops
+;; the fd's cached readable stream; reads cache the readable stream per fd
 ;; and let it advance, dropping the read future immediately (EOF is signalled by the stream
 ;; status, not the future, and is LATCHED per stream -- see $read_iov). wasi:cli and
 ;; wasi:filesystem expose DISTINCT error-code enums, so their
@@ -79,6 +83,7 @@
   (import "w" "mono-now" (func $mono_now (result i64)))
   (import "w" "file-read" (func $file_read (param i32 i64 i32)))
   (import "w" "file-append" (func $file_append (param i32 i32) (result i32)))
+  (import "w" "file-write" (func $file_write (param i32 i32 i64) (result i32)))
   (import "w" "open-at" (func $open_at (param i32 i32 i32 i32 i32 i32 i32)))
   (import "w" "create-dir" (func $create_dir (param i32 i32 i32 i32)))
   (import "w" "unlink-file" (func $unlink_file (param i32 i32 i32 i32)))
@@ -260,6 +265,15 @@
     (i32.add (i32.const 0x51a00)
       (i32.sub (local.get $fd) (i32.const 100))))
 
+  ;; the per-fd APPEND flag: 1 when path_open was given fdflags APPEND (:if-exists
+  ;; :append). Every other writing fd writes AT the tracked offset, which is what makes
+  ;; :if-exists :overwrite and a bidirectional (:direction :io) stream land their bytes
+  ;; where file-position says they go; an appending one must land them at the end
+  ;; whatever the read cursor says, so it keeps append-via-stream.
+  (func $append_cell (param $fd i32) (result i32)
+    (i32.add (i32.const 0x51b00)
+      (i32.sub (local.get $fd) (i32.const 100))))
+
   ;; Push every iovec through the writable end, signal EOF by dropping it, and answer the
   ;; total byte count. Shared by the stdio and the file half of fd_write.
   (func $push_iovs (param $tx i32) (param $iov i32) (param $cnt i32) (result i32)
@@ -338,20 +352,39 @@
   ;; The file half of fd_write: append-via-stream on the slot's descriptor, awaited through
   ;; the wasi:filesystem built-ins (its error-code is a different type from wasi:cli's).
   (func $fd_write_file (param $fd i32) (param $iov i32) (param $cnt i32) (param $nw i32) (result i32)
-    (local $r64 i64) (local $rx i32) (local $tx i32) (local $fut i32) (local $sl i32)
+    (local $r64 i64) (local $rx i32) (local $tx i32) (local $fut i32) (local $sl i32) (local $h i32)
     (local.set $r64 (call $stream_new))
     (local.set $rx (i32.wrap_i64 (local.get $r64)))
     (local.set $tx (i32.wrap_i64 (i64.shr_u (local.get $r64) (i64.const 32))))
     (local.set $sl (call $slot (local.get $fd)))
-    (local.set $fut (call $file_append (i32.load (local.get $sl)) (local.get $rx)))
+    ;; An APPENDING fd keeps append-via-stream (its bytes go to the end whatever the
+    ;; tracked offset says); every other one writes AT the tracked offset, which is what
+    ;; :if-exists :overwrite and a bidirectional stream need and what a plain truncating
+    ;; output stream gets for free (its offset starts at 0 and advances by every write).
+    (local.set $fut (if (result i32) (i32.load8_u (call $append_cell (local.get $fd)))
+      (then (call $file_append (i32.load (local.get $sl)) (local.get $rx)))
+      (else (call $file_write (i32.load (local.get $sl)) (local.get $rx)
+              (i64.load (call $offset_cell (local.get $fd)))))))
     (i32.store (local.get $nw) (call $push_iovs (local.get $tx) (local.get $iov) (local.get $cnt)))
     (drop (call $future_read_fs (local.get $fut) (i32.const 0x50000)))
     (call $future_drop_fs (local.get $fut))
-    ;; append-via-stream lands bytes at the file's current end, so the tracked byte
-    ;; position advances by what was written -- file-position on a write stream.
+    ;; The tracked byte position advances by what was written: for an append that is the
+    ;; file's new end, for a positioned write the byte after it -- file-position on a
+    ;; write stream, and the offset the next read of a bidirectional stream starts at.
     (i64.store (call $offset_cell (local.get $fd))
       (i64.add (i64.load (call $offset_cell (local.get $fd)))
         (i64.extend_i32_u (i32.load (local.get $nw)))))
+    ;; A cached readable stream was opened at an OLDER offset over content this write has
+    ;; just changed, so it is dropped (and the EOF latch cleared) exactly as
+    ;; $file_position_set does: the next read reopens at the offset above. Without it a
+    ;; (write-string ...) (file-position s 0) (read-line s) round trip -- every OPEN.IO
+    ;; test -- would replay stale bytes.
+    (local.set $h (i32.load offset=4 (local.get $sl)))
+    (if (i32.ne (local.get $h) (i32.const -1))
+      (then
+        (call $stream_drop_r (local.get $h))
+        (i32.store offset=4 (local.get $sl) (i32.const -1))
+        (i32.store offset=8 (local.get $sl) (i32.const 0))))
     (i32.const 0))
 
   ;; fd_write(fd, iov, cnt, nwritten) -> errno. fd==1 is stdout, fd==2 is stderr; otherwise
@@ -475,12 +508,19 @@
     ;; No such preopened directory: nothing can be opened, so report the failure as an
     ;; errno.
     (if (i32.eq (local.get $pre) (i32.const -1)) (then (return (i32.const 76))))
-    ;; descriptor-flags: write only when the caller asked to create or truncate
-    ;; (oflags 9). A plain read is 1, and so is a DIRECTORY open (oflags 2) -- asking
-    ;; for write on a directory fails, which is what an `(i32.eqz oflags)` test used to
-    ;; do the moment %list-directory started opening one.
-    (local.set $df (if (result i32) (i32.and (local.get $oflags) (i32.const 9))
-      (then (i32.const 2)) (else (i32.const 1))))
+    ;; descriptor-flags come from the RIGHTS the caller asked for, not from the oflags:
+    ;; FD_READ (2) -> read (1), FD_WRITE (64) -> write (2), both -> 3, which is what a
+    ;; bidirectional (:direction :io) open needs and what an oflags test cannot express
+    ;; (:if-exists :overwrite writes with oflags 0). A DIRECTORY open (oflags 2) asks for
+    ;; neither and falls back to read, as does anything else -- asking for write on a
+    ;; directory fails, which is what an `(i32.eqz oflags)` test used to do the moment
+    ;; %list-directory started opening one.
+    (local.set $df (i32.or
+      (if (result i32) (i32.wrap_i64 (i64.and (local.get $rb) (i64.const 2)))
+        (then (i32.const 1)) (else (i32.const 0)))
+      (if (result i32) (i32.wrap_i64 (i64.and (local.get $rb) (i64.const 64)))
+        (then (i32.const 2)) (else (i32.const 0)))))
+    (if (i32.eqz (local.get $df)) (then (local.set $df (i32.const 1))))
     (call $open_at (local.get $pre) (i32.const 0) (local.get $pptr) (local.get $plen)
       (local.get $oflags) (local.get $df) (i32.const 0x50050))
     (if (i32.load8_u (i32.const 0x50050)) (then (return (i32.const 76))))
@@ -498,6 +538,8 @@
     (local.set $idx (i32.add (i32.const 100) (local.get $idx)))
     (i64.store (call $offset_cell (local.get $idx)) (i64.const 0))
     (i32.store8 (call $binary_cell (local.get $idx)) (i32.const 0))
+    (i32.store8 (call $append_cell (local.get $idx))
+      (i32.and (local.get $fdflags) (i32.const 1)))
     (i32.store (local.get $fdout) (local.get $idx))
     (i32.const 0))
 

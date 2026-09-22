@@ -43,7 +43,50 @@ public final class OpenModes {
 	 */
 	public static final int APPEND_BIT = 4;
 
+	/**
+	 * Bit set in the mode when an output stream OVERWRITES instead of truncating
+	 * ({@code :if-exists :overwrite}): the file is opened for writing at position 0 and
+	 * whatever is not written over survives. Never set without {@link #OUTPUT_BIT}, and
+	 * never together with {@link #APPEND_BIT}.
+	 */
+	public static final int OVERWRITE_BIT = 8;
+
+	/**
+	 * Bit set in the mode when the stream is BIDIRECTIONAL ({@code :direction :io}):
+	 * reads and writes share one cursor, which {@code file-position} moves. Always set
+	 * together with {@link #OUTPUT_BIT} -- an {@code :io} stream is an output stream that
+	 * can also be read.
+	 */
+	public static final int IO_BIT = 16;
+
+	/** The number of distinct modes, i.e. one past the largest {@link #staticMode}. */
+	public static final int MODE_COUNT = 32;
+
 	private OpenModes() {
+	}
+
+	/**
+	 * Resolves one of the seven literal direction tokens the backends compile to its
+	 * mode, WITHOUT the element type. The four beyond Common Lisp's own
+	 * {@code :input}/{@code :output}/{@code :io} are normalized spellings of a direction
+	 * plus an {@code :if-exists} value ({@link LispNames#APPEND_KEYWORD},
+	 * {@link LispNames#OVERWRITE_KEYWORD}, {@link LispNames#IO_APPEND_KEYWORD},
+	 * {@link LispNames#IO_OVERWRITE_KEYWORD}), so that every backend reads ONE token
+	 * where the source wrote an option pair.
+	 * @param direction the literal direction keyword name
+	 * @return the mode, or {@code -1} when the token is not a direction
+	 */
+	public static int directionMode(String direction) {
+		return switch (direction) {
+			case LispNames.INPUT_KEYWORD -> 0;
+			case LispNames.OUTPUT_KEYWORD -> OUTPUT_BIT;
+			case LispNames.APPEND_KEYWORD -> OUTPUT_BIT | APPEND_BIT;
+			case LispNames.OVERWRITE_KEYWORD -> OUTPUT_BIT | OVERWRITE_BIT;
+			case LispNames.IO_KEYWORD -> OUTPUT_BIT | IO_BIT;
+			case LispNames.IO_APPEND_KEYWORD -> OUTPUT_BIT | IO_BIT | APPEND_BIT;
+			case LispNames.IO_OVERWRITE_KEYWORD -> OUTPUT_BIT | IO_BIT | OVERWRITE_BIT;
+			default -> -1;
+		};
 	}
 
 	/**
@@ -53,8 +96,7 @@ public final class OpenModes {
 	 */
 	private static boolean isKeywordForm(List<LispVal> parts) {
 		return parts.size() >= 3 && parts.get(2) instanceof LispSymbol first && first.name().startsWith(":")
-				&& !LispNames.INPUT_KEYWORD.equals(first.name()) && !LispNames.OUTPUT_KEYWORD.equals(first.name())
-				&& !LispNames.APPEND_KEYWORD.equals(first.name());
+				&& directionMode(first.name()) < 0;
 	}
 
 	/**
@@ -155,17 +197,8 @@ public final class OpenModes {
 		if (parts.size() < 3) {
 			return 0;
 		}
-		int mode;
-		if (parts.get(2) instanceof LispSymbol dir && LispNames.INPUT_KEYWORD.equals(dir.name())) {
-			mode = 0;
-		}
-		else if (parts.get(2) instanceof LispSymbol dir && LispNames.OUTPUT_KEYWORD.equals(dir.name())) {
-			mode = OUTPUT_BIT;
-		}
-		else if (parts.get(2) instanceof LispSymbol dir && LispNames.APPEND_KEYWORD.equals(dir.name())) {
-			mode = OUTPUT_BIT | APPEND_BIT;
-		}
-		else {
+		int mode = parts.get(2) instanceof LispSymbol dir ? directionMode(dir.name()) : -1;
+		if (mode < 0) {
 			throw new UnsupportedOperationException("open requires a literal :input, :output or :append direction");
 		}
 		if (parts.size() > 3) {

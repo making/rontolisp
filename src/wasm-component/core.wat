@@ -15,6 +15,10 @@
   (import "wasi:clocks/monotonic-clock@0.3.0" "[async-lower]wait-for" (func (param i64) (result i32)))
   (import "wasi:filesystem/types@0.3.0" "[method]descriptor.read-via-stream" (func (param i32 i64 i32)))
   (import "wasi:filesystem/types@0.3.0" "[method]descriptor.append-via-stream" (func (param i32 i32) (result i32)))
+  ;; write-via-stream is what an :io / :if-exists :overwrite stream writes through:
+  ;; it takes the byte OFFSET, which append-via-stream cannot express, and the
+  ;; adapter tracks that offset per fd anyway for the read side.
+  (import "wasi:filesystem/types@0.3.0" "[method]descriptor.write-via-stream" (func (param i32 i32 i64) (result i32)))
   (import "wasi:filesystem/types@0.3.0" "[method]descriptor.open-at" (func (param i32 i32 i32 i32 i32 i32 i32)))
   (import "wasi:filesystem/types@0.3.0" "[method]descriptor.read-directory" (func (param i32 i32)))
   ;; descriptor.stat is an async func with no params; the SYNC (blocking) lowering

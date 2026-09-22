@@ -10561,13 +10561,11 @@ class LispEvaluatorTest {
 	@Test
 	void withOpenFileUnsupportedOptionThrows(@TempDir Path tempDir) {
 		String file = tempDir.resolve("opt.txt").toString().replace("\\", "\\\\");
-		// The whole :if-exists table is read now except :overwrite, which needs an open
-		// mode no backend has (.todo/918); it must not be silently reinterpreted as the
-		// truncating open. It signals at CALL time as a Lisp condition (never an
-		// expansion-time throw): the eager compile paths expand every branch of a
-		// spliced library, and such a branch is often dead code.
-		assertThatThrownBy(
-				() -> eval("(with-open-file (s \"" + file + "\" :direction :output :if-exists :overwrite) s)"))
+		// The whole :if-exists table is read now; a value outside it must not be silently
+		// reinterpreted as the truncating open. It signals at CALL time as a Lisp
+		// condition (never an expansion-time throw): the eager compile paths expand every
+		// branch of a spliced library, and such a branch is often dead code.
+		assertThatThrownBy(() -> eval("(with-open-file (s \"" + file + "\" :direction :output :if-exists :bogus) s)"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining(":IF-EXISTS supports only the native default value");
 	}
@@ -22327,6 +22325,51 @@ class LispEvaluatorTest {
 				             (with-open-file (s (p "made")) (read-line s))))
 				""".formatted(here)).print())
 			.isEqualTo("(\"abc\" \"abc\" \"abc\" :FILE-ERROR NIL :FILE-ERROR NIL :FILE-ERROR :FILE-ERROR \"z\")");
+	}
+
+	@Test
+	void openDirectionIoReadsBackWhatItJustWroteThroughOneCursor(@TempDir Path tempDir) {
+		// .todo/918: :direction :io is ONE stream whose reads, writes and file-position
+		// share a cursor -- so write, seek to the start, read gives back what was
+		// written. :if-exists :overwrite is the same stream with the read half unused:
+		// it opens for writing at 0 WITHOUT truncating, so the tail survives. Measured
+		// against sbcl 2026-09-20.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(evalMulti("""
+				(defun p (n) (concatenate 'string "%s/" n))
+				(with-open-file (out (p "io.txt") :direction :output) (write-string "abcdefghij" out))
+				(let ((s (open (p "io.txt") :direction :io :if-exists :overwrite)))
+				  (write-string "wxyz" s)
+				  (let ((at (file-position s)))
+				    (file-position s :start)
+				    (list at (read-line s nil) (file-position s) (file-length s)
+				          (progn (close s)
+				                 (with-open-file (in (p "io.txt")) (read-line in))))))
+				""".formatted(here)).print()).isEqualTo("(4 \"wxyzefghij\" 10 10 \"wxyzefghij\")");
+	}
+
+	@Test
+	void openDirectionIoTruncatesByDefaultAndCarriesTheByteHalf(@TempDir Path tempDir) {
+		// The other two dispositions of an :io open, and its BINARY element type: the
+		// default :if-exists truncates like a superseding output open, and read-byte /
+		// write-byte move through the same cursor file-position answers.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(evalMulti("""
+				(defun p (n) (concatenate 'string "%s/" n))
+				(with-open-file (out (p "io2.txt") :direction :output) (write-string "abcdefghij" out))
+				(let ((s (open (p "io2.txt") :direction :io)))
+				  (write-string "abc" s)
+				  (file-position s :start)
+				  (list (read-line s nil)
+				        (progn (close s) nil)
+				        (let ((b (open (p "io2.dat") :direction :io :element-type '(unsigned-byte 8))))
+				          (dotimes (i 4) (write-byte (+ 65 i) b))
+				          (file-position b :start)
+				          (prog1 (list (read-byte b) (read-byte b) (file-position b) (file-length b))
+				            (close b)))
+				        (open (p "io2.txt") :direction :io :if-exists nil)
+				        (input-stream-p (open (p "io2.txt") :direction :io :if-exists :overwrite))))
+				""".formatted(here)).print()).isEqualTo("(\"abc\" NIL (65 66 2 4) NIL T)");
 	}
 
 	@Test

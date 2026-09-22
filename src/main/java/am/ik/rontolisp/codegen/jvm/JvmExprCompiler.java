@@ -976,7 +976,17 @@ final class JvmExprCompiler {
 				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P -> JvmExprCompiler.compileExpr(
 						LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams, ctx.usesStreamValues),
 						ctx, className);
-				case LispNames.FILE_POSITION -> JvmFilePositionCompiler.compile(cons, ctx, className);
+				case LispNames.FILE_POSITION -> {
+					// CL's two position DESIGNATORS are a call-site rewrite shared with
+					// the WASM backends, so no primitive learns a keyword.
+					LispVal positioned = LispMacroExpander.rewriteFilePositionArg(cons);
+					if (positioned == cons) {
+						JvmFilePositionCompiler.compile(cons, ctx, className);
+					}
+					else {
+						JvmExprCompiler.compileExpr(positioned, ctx, className);
+					}
+				}
 				case LispNames.PATHNAMEP ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandPathnamep(cons), ctx, className);
 				case LispNames.FILE_WRITE_DATE ->

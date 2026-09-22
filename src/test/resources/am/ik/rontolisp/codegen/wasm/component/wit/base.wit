@@ -79,6 +79,7 @@ package wasi:filesystem@0.3.0 {
 
     resource descriptor {
       read-via-stream: func(offset: filesize) -> tuple<stream<u8>, future<result<_, error-code>>>;
+      write-via-stream: func(data: stream<u8>, offset: filesize) -> future<result<_, error-code>>;
       append-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>;
       read-directory: func() -> tuple<stream<directory-entry>, future<result<_, error-code>>>;
       create-directory-at: async func(path: string) -> result<_, error-code>;

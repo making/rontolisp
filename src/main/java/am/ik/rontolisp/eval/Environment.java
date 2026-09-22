@@ -82,9 +82,11 @@ import am.ik.rontolisp.VersionInfo;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.FixedDecimal;
+import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.reader.LispLexer;
+import am.ik.rontolisp.runtime.RontoIoFileStream;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -5295,6 +5297,50 @@ public final class Environment implements Scope {
 				return LispNil.INSTANCE;
 			}
 			long h = handle.value();
+			// CL's two position DESIGNATORS. The compile paths rewrite a literal
+			// :start / :end at the call site (LispMacroExpander.rewriteFilePositionArg);
+			// here the keyword is read at run time, so #'file-position answers too.
+			if (args.size() >= 2 && args.get(1) instanceof LispSymbol spec && spec.name().startsWith(":")) {
+				if (":START".equals(spec.name())) {
+					args = List.of(args.get(0), new LispInteger(0));
+				}
+				else if (":END".equals(spec.name())) {
+					long length = 0;
+					try {
+						if (streams.get(h) instanceof RontoIoFileStream sized) {
+							length = sized.length();
+						}
+						else if (streamPaths.get(h) instanceof String named) {
+							length = Files.size(Path.of(named));
+						}
+					}
+					catch (IOException ignored) {
+						// A stream whose length cannot be read seeks to 0, which is the
+						// same answer file-length gives for it (nil -> nothing to seek).
+					}
+					args = List.of(args.get(0), new LispInteger(length));
+				}
+			}
+			if (streams.get(h) instanceof RontoIoFileStream io) {
+				// A bidirectional (or :overwrite) file stream owns its cursor, so both
+				// halves are the RandomAccessFile's own -- no side table, no re-open.
+				try {
+					if (args.size() >= 2) {
+						if (!(args.get(1) instanceof LispInteger position)) {
+							throw new LispEvalException(LispNames.FILE_POSITION + " expects an integer position");
+						}
+						if (position.value() < 0) {
+							throw new LispEvalException(LispNames.FILE_POSITION + ": position must be non-negative");
+						}
+						io.position(position.value());
+						return LispTrue.INSTANCE;
+					}
+					return new LispInteger(io.position());
+				}
+				catch (IOException ex) {
+					throw new UncheckedIOException(ex);
+				}
+			}
 			if (streams.get(h) instanceof HttpRequestBodyStream body) {
 				if (args.size() >= 2) {
 					if (!(args.get(1) instanceof LispInteger position)) {
@@ -5590,8 +5636,7 @@ public final class Environment implements Scope {
 			// :append pseudo-direction has already absorbed the option pair -- so the
 			// guard applies to the keyword shape only.
 			boolean keywordForm = args.size() > 2 && args.get(1) instanceof LispSymbol first
-					&& first.name().startsWith(":") && !LispNames.INPUT_KEYWORD.equals(first.name())
-					&& !LispNames.OUTPUT_KEYWORD.equals(first.name()) && !LispNames.APPEND_KEYWORD.equals(first.name());
+					&& first.name().startsWith(":") && OpenModes.directionMode(first.name()) < 0;
 			if (keywordForm) {
 				LispVal direction = new LispSymbol(LispNames.INPUT_KEYWORD);
 				LispVal elementType = null;
@@ -5619,14 +5664,21 @@ public final class Environment implements Scope {
 					probe = true;
 					direction = new LispSymbol(LispNames.INPUT_KEYWORD);
 				}
-				boolean outputDirection = direction instanceof LispSymbol dirSym
-						&& LispNames.OUTPUT_KEYWORD.equals(dirSym.name());
+				boolean ioDirection = direction instanceof LispSymbol dirSym
+						&& LispNames.IO_KEYWORD.equals(dirSym.name());
+				boolean outputDirection = ioDirection
+						|| (direction instanceof LispSymbol dirSym && LispNames.OUTPUT_KEYWORD.equals(dirSym.name()));
 				if (!outputDirection) {
 					// CL reads :if-exists only on an output open.
 					ifExists = null;
 				}
-				else if (LispNames.APPEND_KEYWORD.equals(ifExists)) {
-					direction = new LispSymbol(LispNames.APPEND_KEYWORD);
+				else {
+					// The direction and the :if-exists disposition normalize into ONE
+					// token, exactly as the compile paths' lowering does (LispNames
+					// .outputDirectionToken): an :io stream that keeps the file's
+					// content is a different open, not a different flag.
+					direction = new LispSymbol(LispNames.outputDirectionToken(ioDirection,
+							LispNames.APPEND_KEYWORD.equals(ifExists), LispNames.OVERWRITE_KEYWORD.equals(ifExists)));
 				}
 				List<LispVal> positional = new ArrayList<>(List.of(args.get(0), direction));
 				if (elementType != null) {
@@ -5634,20 +5686,18 @@ public final class Environment implements Scope {
 				}
 				args = positional;
 			}
-			boolean output = false;
-			boolean append = false;
+			int directionMode = 0;
 			if (args.size() > 1) {
-				if (!(args.get(1) instanceof LispSymbol dir)
-						|| !(LispNames.INPUT_KEYWORD.equals(dir.name()) || LispNames.OUTPUT_KEYWORD.equals(dir.name())
-								|| LispNames.APPEND_KEYWORD.equals(dir.name()))) {
-					if (args.get(1) instanceof LispSymbol dirSym && LispNames.IO_KEYWORD.equals(dirSym.name())) {
-						throw new LispEvalException(LispNames.OPEN + " :direction :io is not implemented");
-					}
-					throw new LispEvalException(LispNames.OPEN + " supports :input, :output and :probe directions");
+				directionMode = args.get(1) instanceof LispSymbol dir ? OpenModes.directionMode(dir.name()) : -1;
+				if (directionMode < 0) {
+					throw new LispEvalException(
+							LispNames.OPEN + " supports :input, :output, :io and :probe directions");
 				}
-				append = LispNames.APPEND_KEYWORD.equals(dir.name());
-				output = append || LispNames.OUTPUT_KEYWORD.equals(dir.name());
 			}
+			boolean append = (directionMode & OpenModes.APPEND_BIT) != 0;
+			boolean overwrite = (directionMode & OpenModes.OVERWRITE_BIT) != 0;
+			boolean bidirectional = (directionMode & OpenModes.IO_BIT) != 0;
+			boolean output = (directionMode & OpenModes.OUTPUT_BIT) != 0;
 			// The optional third argument is the element type: '(unsigned-byte 8) opens a
 			// binary stream, 'character (the default) a text stream.
 			boolean binary = false;
@@ -5668,8 +5718,9 @@ public final class Environment implements Scope {
 					}
 					// :supersede and the three version spellings all leave the caller
 					// writing over the old content, which is what the truncating open
-					// below does.
-					case ":SUPERSEDE", ":NEW-VERSION", ":RENAME", ":RENAME-AND-DELETE", ":APPEND" -> {
+					// below does; :append and :overwrite are the two dispositions the
+					// direction token above absorbed.
+					case ":SUPERSEDE", ":NEW-VERSION", ":RENAME", ":RENAME-AND-DELETE", ":APPEND", ":OVERWRITE" -> {
 					}
 					default -> throw new LispEvalException(
 							LispNames.OPEN + ": :IF-EXISTS supports only the native default value");
@@ -5677,7 +5728,7 @@ public final class Environment implements Scope {
 			}
 			if (keywordForm && !exists) {
 				String missing = ifDoesNotExist != null ? ifDoesNotExist
-						: probe ? "NIL" : (output && !append) ? ":CREATE" : ":ERROR";
+						: probe ? "NIL" : (output && !append && !overwrite) ? ":CREATE" : ":ERROR";
 				switch (missing) {
 					case "NIL" -> {
 						return LispNil.INSTANCE;
@@ -5712,7 +5763,15 @@ public final class Environment implements Scope {
 						? new java.nio.file.OpenOption[] { java.nio.file.StandardOpenOption.CREATE,
 								java.nio.file.StandardOpenOption.WRITE, java.nio.file.StandardOpenOption.APPEND }
 						: new java.nio.file.OpenOption[0];
-				if (binary) {
+				if (bidirectional || overwrite) {
+					// One cursor for both directions and for file-position: a
+					// Reader/Writer pair over the same path cannot answer what was just
+					// written, and an :overwrite open is the same "write where the
+					// cursor is, keep the rest" stream with the read half unused. The
+					// compile paths run this very class (runtime/RontoIoFileStream).
+					stream = new RontoIoFileStream(path.value(), directionMode);
+				}
+				else if (binary) {
 					stream = output
 							? new BufferedOutputStream(Files.newOutputStream(Path.of(path.value()), writeOptions))
 							: new BufferedInputStream(Files.newInputStream(Path.of(path.value())));
@@ -5904,6 +5963,7 @@ public final class Environment implements Scope {
 				Closeable entry = streams.get(handle.value());
 				boolean ready = switch (entry) {
 					case Socket socket -> socket.getInputStream().available() > 0;
+					case RontoIoFileStream io -> io.ready();
 					case BufferedReader reader -> reader.ready();
 					case InputStream in2 -> in2.available() > 0;
 					case null, default ->
@@ -6031,6 +6091,11 @@ public final class Environment implements Scope {
 					else if (entry instanceof HttpRequestBodyStream body) {
 						line = body.readLine();
 					}
+					else if (entry instanceof RontoIoFileStream io) {
+						// End of file is ready()'s answer here: the travelling class
+						// cannot spell @Nullable (.kb/jvm-export.md).
+						line = io.ready() ? io.readLine() : null;
+					}
 					else {
 						throw new LispEvalException(LispNames.READ_LINE + " expects an input stream");
 					}
@@ -6082,6 +6147,14 @@ public final class Environment implements Scope {
 			return src instanceof LispInteger handle
 					&& streams.get(handle.value()) instanceof HttpRequestBodyStream body ? body : null;
 		};
+		// A BIDIRECTIONAL (:io) or :overwrite file stream reads off the same cursor it
+		// writes and file-position moves, so it cannot ride the Reader path either --
+		// the same reason the buffered body cannot.
+		java.util.function.Function<List<LispVal>, @Nullable RontoIoFileStream> ioStreamArg = args -> {
+			LispVal src = resolveInputSrc.apply(args.isEmpty() ? null : args.get(0));
+			return src instanceof LispInteger handle && streams.get(handle.value()) instanceof RontoIoFileStream io ? io
+					: null;
+		};
 		// The shared end-of-file answer of the character reads (read-char / %peek-char,
 		// every stream kind): signal unless eof-error-p is explicitly nil, in which case
 		// the eof-value -- CL's default, unlike read-line's lite nil-at-EOF convention.
@@ -6112,6 +6185,11 @@ public final class Environment implements Scope {
 				return (cp < 0) ? charEof.apply(args) : new LispChar(cp);
 			}
 			try {
+				RontoIoFileStream ioSource = ioStreamArg.apply(args);
+				if (ioSource != null) {
+					int cp = ioSource.readCodePoint();
+					return (cp < 0) ? charEof.apply(args) : new LispChar(cp);
+				}
 				Reader reader = inputReader.apply(LispNames.READ_CHAR, args);
 				int c = reader.read();
 				if (c < 0) {
@@ -6155,6 +6233,11 @@ public final class Environment implements Scope {
 				return (cp < 0) ? charEof.apply(args) : new LispChar(cp);
 			}
 			try {
+				RontoIoFileStream ioSource = ioStreamArg.apply(args);
+				if (ioSource != null) {
+					int cp = ioSource.peekCodePoint();
+					return (cp < 0) ? charEof.apply(args) : new LispChar(cp);
+				}
 				Reader reader = inputReader.apply(LispNames.PEEK_CHAR, args);
 				reader.mark(2);
 				int c = reader.read();
@@ -6266,6 +6349,14 @@ public final class Environment implements Scope {
 				if (byteEntry instanceof Socket socket) {
 					b = SocketSupport.readByte(socket);
 				}
+				else if (byteEntry instanceof RontoIoFileStream io) {
+					try {
+						b = io.readByte();
+					}
+					catch (IOException ex) {
+						throw new UncheckedIOException(ex);
+					}
+				}
 				else if (byteEntry instanceof InputStream in2) {
 					try {
 						b = in2.read();
@@ -6314,6 +6405,15 @@ public final class Environment implements Scope {
 			Closeable byteEntry = streams.get(handle.value());
 			if (byteEntry instanceof Socket socket) {
 				SocketSupport.writeByte(socket, (int) value.value());
+				return value;
+			}
+			if (byteEntry instanceof RontoIoFileStream io) {
+				try {
+					io.writeByte((int) value.value());
+				}
+				catch (IOException ex) {
+					throw new UncheckedIOException(ex);
+				}
 				return value;
 			}
 			if (!(byteEntry instanceof OutputStream out2)) {

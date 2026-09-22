@@ -8684,6 +8684,70 @@ public final class LispMacroExpander {
 	 * @param program the top-level forms
 	 * @return whether the guard can appear
 	 */
+	/**
+	 * Whether the program can open a BIDIRECTIONAL (or {@code :overwrite}) file stream --
+	 * the gate the JVM backend's {@code _open} arm and the travelling
+	 * {@code RontoIoFileStream} class hang off, and the WASM backends' {@code path_open}
+	 * rights. True exactly for a LITERAL {@code :direction :io} / {@code :if-exists
+	 * :overwrite}: a computed value never selects either (the dispatch refuses both at
+	 * call time), so {@code #'open} and uiop's option-passing wrappers stay out.
+	 * @param program the top-level forms, BEFORE expansion
+	 * @return whether an {@code :io} / {@code :overwrite} open can happen
+	 */
+	public static boolean opensBidirectionally(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (opensBidirectionally(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean opensBidirectionally(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		if (!parts.isEmpty() && parts.get(0) instanceof LispSymbol op) {
+			String member = unqualifiedClMember(op.name());
+			if (LispNames.OPEN.equals(member) && parts.size() > 2
+					&& opensBidirectionallyByOptions(parts.subList(2, parts.size()))) {
+				return true;
+			}
+			if (LispNames.WITH_OPEN_FILE.equals(member) && parts.size() > 1 && parts.get(1) instanceof LispCons spec) {
+				List<LispVal> specParts = spec.toList();
+				if (specParts.size() > 2 && opensBidirectionallyByOptions(specParts.subList(2, specParts.size()))) {
+					return true;
+				}
+			}
+		}
+		for (LispVal part : parts) {
+			if (opensBidirectionally(part)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean opensBidirectionallyByOptions(List<LispVal> optionPairs) {
+		for (int i = 0; i + 1 < optionPairs.size(); i += 2) {
+			if (!(optionPairs.get(i) instanceof LispSymbol key)) {
+				continue;
+			}
+			boolean directional = LispNames.DIRECTION_KEYWORD.equals(key.name())
+					|| IF_EXISTS_KEYWORD.equals(key.name());
+			if (!directional) {
+				continue;
+			}
+			LispVal value = optionPairs.get(i + 1);
+			if (value instanceof LispSymbol sym
+					&& (LispNames.IO_KEYWORD.equals(sym.name()) || LispNames.OVERWRITE_KEYWORD.equals(sym.name()))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	public static boolean callsOpenWithExistenceGuard(List<LispVal> program) {
 		for (LispVal form : program) {
 			if (callsOpenWithExistenceGuard(form)) {
@@ -8773,6 +8837,8 @@ public final class LispMacroExpander {
 		OpenModeTest binary = OpenModeTest.of(false);
 		OpenModeTest output = OpenModeTest.of(false);
 		OpenModeTest append = OpenModeTest.of(false);
+		OpenModeTest overwrite = OpenModeTest.of(false);
+		OpenModeTest io = OpenModeTest.of(false);
 		boolean probe = false;
 		// The two arms of the existence guard: what to do when the file is already
 		// there, and what to do when it is not. Null means "not written": the direction
@@ -8800,20 +8866,27 @@ public final class LispMacroExpander {
 						if (LispNames.PROBE_KEYWORD.equals(name)) {
 							probe = true;
 						}
-						else if (LispNames.IO_KEYWORD.equals(name)) {
-							return callTimeUnsupportedStub(operator + " :direction :io is not implemented");
-						}
-						else if (!LispNames.INPUT_KEYWORD.equals(name) && !LispNames.OUTPUT_KEYWORD.equals(name)) {
+						else if (!LispNames.INPUT_KEYWORD.equals(name) && !LispNames.OUTPUT_KEYWORD.equals(name)
+								&& !LispNames.IO_KEYWORD.equals(name)) {
 							throw new UnsupportedOperationException(
-									operator + " :direction must be the literal :input, :output or :probe");
+									operator + " :direction must be the literal :input, :output, :io or :probe");
 						}
-						output = OpenModeTest.of(LispNames.OUTPUT_KEYWORD.equals(name));
+						io = OpenModeTest.of(LispNames.IO_KEYWORD.equals(name));
+						// An :io stream is an output stream that can also be read, so it
+						// takes the output half of every decision below -- the
+						// :if-exists table, the :if-does-not-exist default, the mode's
+						// OUTPUT_BIT.
+						output = OpenModeTest.of(!LispNames.INPUT_KEYWORD.equals(name) && !probe);
 					}
 					else {
-						// A COMPUTED direction still admits only the two that pick a
-						// mode: :probe is a whole different shape (a closed stream) and
-						// :io has no implementation, so neither can be chosen at run
-						// time.
+						// A COMPUTED direction admits only the two the literal-free
+						// dispatch has leaves for. :probe is a whole different shape (a
+						// closed stream); :io is LITERAL-only by a measured trade
+						// (.kb/read-load-streams.md, "`:direction :io` and `:if-exists
+						// :overwrite`"): admitting it here grows the dispatch from six
+						// leaves to fourteen and drags the travelling stream class into
+						// every program that passes its options down (uiop's file
+						// wrappers, #'open).
 						checks.add(unlessValueIn(var, operator + " :direction supports only :input and :output, got ~s",
 								List.of(eqKeyword(var, LispNames.INPUT_KEYWORD),
 										eqKeyword(var, LispNames.OUTPUT_KEYWORD))));
@@ -8837,6 +8910,7 @@ public final class LispMacroExpander {
 						String name = (value instanceof LispSymbol sym) ? sym.name() : "NIL";
 						switch (name) {
 							case LispNames.APPEND_KEYWORD -> append = OpenModeTest.of(true);
+							case LispNames.OVERWRITE_KEYWORD -> overwrite = OpenModeTest.of(true);
 							case ":ERROR" -> existsAction = new LispSymbol(OPEN_ACT_ERROR_EXISTS);
 							case "NIL" -> existsAction = LispNil.INSTANCE;
 							// :new-version / :rename / :rename-and-delete all leave the
@@ -8855,6 +8929,8 @@ public final class LispMacroExpander {
 						checks.add(unlessValueIn(var, operator
 								+ " :if-exists supports only :supersede, :new-version, :rename, :rename-and-delete, :append, :error and nil, got ~s",
 								List.of(runtimeIfExistsAccepted(var))));
+						// :overwrite stays LITERAL-only, for the reason a computed :io
+						// does (above).
 						append = OpenModeTest.of(eqKeyword(var, LispNames.APPEND_KEYWORD));
 						existsAction = makeIf(eqKeyword(var, ":ERROR"), new LispSymbol(OPEN_ACT_ERROR_EXISTS),
 								makeIf(var, new LispSymbol(OPEN_ACT_OPEN), LispNil.INSTANCE));
@@ -8904,6 +8980,8 @@ public final class LispMacroExpander {
 		if (neverOutput) {
 			existsAction = null;
 			append = OpenModeTest.of(false);
+			overwrite = OpenModeTest.of(false);
+			io = OpenModeTest.of(false);
 		}
 		else if (existsAction != null && !output.isConstant()) {
 			// A computed direction: the exists arm only applies on the output leg.
@@ -8914,12 +8992,12 @@ public final class LispMacroExpander {
 		// open -- so that leg runs the open rather than a second, differently worded
 		// refusal. Only an output open, which would have CREATED the file, needs one.
 		if (missingAction == null) {
-			missingAction = defaultMissingAction(probe, output, append);
+			missingAction = defaultMissingAction(probe, output, append, overwrite);
 		}
 		if (!probe) {
 			missingAction = resolveMissingErrorArm(missingAction, output);
 		}
-		LispVal base = probe ? probeStreamShape() : dispatchOpenOnElementType(binary, output, append);
+		LispVal base = probe ? probeStreamShape() : dispatchOpenOnElementType(binary, output, io, append, overwrite);
 		LispVal guarded = guardOpenOnExistence(base, existsAction, missingAction, probe, output);
 		List<LispVal> letParts = new java.util.ArrayList<>();
 		letParts.add(new LispSymbol(LispNames.LET_STAR));
@@ -9004,16 +9082,45 @@ public final class LispMacroExpander {
 				missingAction);
 	}
 
-	private static LispVal defaultMissingAction(boolean probe, OpenModeTest output, OpenModeTest append) {
+	private static LispVal defaultMissingAction(boolean probe, OpenModeTest output, OpenModeTest append,
+			OpenModeTest overwrite) {
 		if (probe) {
 			return LispNil.INSTANCE;
 		}
-		if (append.isConstant()) {
-			return append.constant() ? new LispSymbol(OPEN_ACT_ERROR_MISSING) : new LispSymbol(OPEN_ACT_OPEN);
+		// CLHS: :if-does-not-exist defaults to :error when :if-exists is :overwrite or
+		// :append -- both keep content the file has to have -- and to the create the
+		// open performs itself otherwise.
+		LispVal keepsContent = orOfModeTests(append, overwrite);
+		if (keepsContent instanceof LispTrue) {
+			return new LispSymbol(OPEN_ACT_ERROR_MISSING);
 		}
-		// A computed :if-exists: the append arm defaults to :error, every other arm to
-		// the create the open performs itself.
-		return makeIf(append.test(), new LispSymbol(OPEN_ACT_ERROR_MISSING), new LispSymbol(OPEN_ACT_OPEN));
+		if (keepsContent instanceof LispNil) {
+			return new LispSymbol(OPEN_ACT_OPEN);
+		}
+		return makeIf(keepsContent, new LispSymbol(OPEN_ACT_ERROR_MISSING), new LispSymbol(OPEN_ACT_OPEN));
+	}
+
+	/**
+	 * The disjunction of two mode dimensions as a form: {@code t} / {@code nil} when both
+	 * are constant, otherwise an {@code or} over the tests that are not.
+	 */
+	private static LispVal orOfModeTests(OpenModeTest left, OpenModeTest right) {
+		if (left.isConstant() && left.constant()) {
+			return LispTrue.INSTANCE;
+		}
+		if (right.isConstant() && right.constant()) {
+			return LispTrue.INSTANCE;
+		}
+		if (left.isConstant() && right.isConstant()) {
+			return LispNil.INSTANCE;
+		}
+		if (left.isConstant()) {
+			return right.test();
+		}
+		if (right.isConstant()) {
+			return left.test();
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.OR), left.test(), right.test()));
 	}
 
 	/**
@@ -9112,29 +9219,45 @@ public final class LispMacroExpander {
 				+ ")");
 	}
 
-	private static LispVal dispatchOpenOnElementType(OpenModeTest binary, OpenModeTest output, OpenModeTest append) {
+	private static LispVal dispatchOpenOnElementType(OpenModeTest binary, OpenModeTest output, OpenModeTest io,
+			OpenModeTest append, OpenModeTest overwrite) {
 		if (binary.isConstant()) {
-			return dispatchOpenOnDirection(binary.constant(), output, append);
+			return dispatchOpenOnDirection(binary.constant(), output, io, append, overwrite);
 		}
-		return makeIf(binary.test(), dispatchOpenOnDirection(true, output, append),
-				dispatchOpenOnDirection(false, output, append));
+		return makeIf(binary.test(), dispatchOpenOnDirection(true, output, io, append, overwrite),
+				dispatchOpenOnDirection(false, output, io, append, overwrite));
 	}
 
-	private static LispVal dispatchOpenOnDirection(boolean binary, OpenModeTest output, OpenModeTest append) {
+	private static LispVal dispatchOpenOnDirection(boolean binary, OpenModeTest output, OpenModeTest io,
+			OpenModeTest append, OpenModeTest overwrite) {
 		LispVal input = openLeaf(LispNames.INPUT_KEYWORD, binary);
-		if (output.isConstant()) {
-			return output.constant() ? dispatchOpenOnAppend(binary, append) : input;
+		if (output.isConstant() && !output.constant()) {
+			return input;
 		}
-		return makeIf(output.test(), dispatchOpenOnAppend(binary, append), input);
+		LispVal writing = dispatchOpenOnIo(binary, io, append, overwrite);
+		return output.isConstant() ? writing : makeIf(output.test(), writing, input);
 	}
 
-	private static LispVal dispatchOpenOnAppend(boolean binary, OpenModeTest append) {
-		LispVal appending = openLeaf(LispNames.APPEND_KEYWORD, binary);
-		LispVal truncating = openLeaf(LispNames.OUTPUT_KEYWORD, binary);
-		if (append.isConstant()) {
-			return append.constant() ? appending : truncating;
+	private static LispVal dispatchOpenOnIo(boolean binary, OpenModeTest io, OpenModeTest append,
+			OpenModeTest overwrite) {
+		if (io.isConstant()) {
+			return dispatchOpenOnDisposition(binary, io.constant(), append, overwrite);
 		}
-		return makeIf(append.test(), appending, truncating);
+		return makeIf(io.test(), dispatchOpenOnDisposition(binary, true, append, overwrite),
+				dispatchOpenOnDisposition(binary, false, append, overwrite));
+	}
+
+	private static LispVal dispatchOpenOnDisposition(boolean binary, boolean io, OpenModeTest append,
+			OpenModeTest overwrite) {
+		LispVal truncating = openLeaf(LispNames.outputDirectionToken(io, false, false), binary);
+		LispVal appending = openLeaf(LispNames.outputDirectionToken(io, true, false), binary);
+		LispVal overwriting = openLeaf(LispNames.outputDirectionToken(io, false, true), binary);
+		LispVal keptOrTruncating = overwrite.isConstant() ? (overwrite.constant() ? overwriting : truncating)
+				: makeIf(overwrite.test(), overwriting, truncating);
+		if (append.isConstant()) {
+			return append.constant() ? appending : keptOrTruncating;
+		}
+		return makeIf(append.test(), appending, keptOrTruncating);
 	}
 
 	/** One leaf of the dispatch: the literal {@code open} shape the backends compile. */
@@ -34093,6 +34216,107 @@ public final class LispMacroExpander {
 	 * @param cons the write-char expression
 	 * @return the expanded expression
 	 */
+	/**
+	 * The temporary {@code (file-position s :end)} binds its stream to, so the designator
+	 * expression is evaluated once for both the length and the seek.
+	 */
+	private static final String FILE_POSITION_STREAM_VAR = "__fp_stream";
+
+	/** The temporary a COMPUTED position is bound to, then resolved in place. */
+	private static final String FILE_POSITION_POS_VAR = "__fp_pos";
+
+	/**
+	 * Rewrites the two POSITION DESIGNATORS CL allows in {@code (file-position stream
+	 * position-spec)} onto the integer every backend's primitive takes: {@code :start} is
+	 * {@code 0} and {@code :end} is the stream's {@code file-length}. A literal keyword
+	 * folds at the call site; a COMPUTED position is bound and resolved at run time,
+	 * because a caller that passes the designator down -- the Gray streams layer's
+	 * dispatcher, the {@code #'file-position} wrapper -- hands the primitive a keyword it
+	 * does not take. The interpreter's own primitive reads the two keywords at run time
+	 * instead. An integer literal, and the call this rewrite itself produces, pass
+	 * through.
+	 * @param cons the {@code file-position} form as written
+	 * @return the rewritten form, or {@code cons} when nothing needs resolving
+	 */
+	public static LispVal rewriteFilePositionArg(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3 || !filePositionArgNeedsResolving(parts.get(2))) {
+			return cons;
+		}
+		LispSymbol streamVar = new LispSymbol(FILE_POSITION_STREAM_VAR);
+		if (parts.get(2) instanceof LispSymbol spec && ":START".equals(spec.name())) {
+			return listToCons(List.of(parts.get(0), parts.get(1), new LispInteger(0)));
+		}
+		if (parts.get(2) instanceof LispSymbol spec && ":END".equals(spec.name())) {
+			return makeLet(streamVar.name(), parts.get(1),
+					listToCons(List.of(parts.get(0), streamVar, callOf(LispNames.FILE_LENGTH, streamVar))));
+		}
+		LispSymbol posVar = new LispSymbol(FILE_POSITION_POS_VAR);
+		LispVal resolved = makeIf(eqKeyword(posVar, ":START"), new LispInteger(0),
+				makeIf(eqKeyword(posVar, ":END"), callOf(LispNames.FILE_LENGTH, streamVar), posVar));
+		LispVal bindings = listToCons(List.of(listToCons(List.of(streamVar, parts.get(1))),
+				listToCons(List.of(posVar, parts.get(2))), listToCons(List.of(posVar, resolved))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings,
+				listToCons(List.of(parts.get(0), streamVar, posVar))));
+	}
+
+	/**
+	 * Whether a {@code file-position} position argument is one
+	 * {@link #rewriteFilePositionArg} resolves: {@code :start}, {@code :end}, or anything
+	 * computed. An integer literal is already what the primitive takes, and the
+	 * {@code __fp_pos} temporary is the rewrite's own output.
+	 */
+	private static boolean filePositionArgNeedsResolving(LispVal position) {
+		if (position instanceof LispInteger || position instanceof LispBigInteger) {
+			return false;
+		}
+		if (position instanceof LispSymbol sym) {
+			if (FILE_POSITION_POS_VAR.equals(sym.name())) {
+				return false;
+			}
+			if (sym.name().startsWith(":")) {
+				return ":START".equals(sym.name()) || ":END".equals(sym.name());
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Whether any {@code file-position} call in the program reaches for the stream's
+	 * {@code file-length} through {@link #rewriteFilePositionArg} (a {@code :end}, or a
+	 * computed position that may be one) -- the JVM backend's {@code _fileLength} gate
+	 * must then be on although the source never names {@code file-length}.
+	 * @param program the forms the backend compiles
+	 * @return whether the rewrite can introduce a {@code file-length} call
+	 */
+	public static boolean filePositionMayNeedLength(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (filePositionMayNeedLength(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean filePositionMayNeedLength(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() == 3 && parts.get(0) instanceof LispSymbol op
+				&& LispNames.FILE_POSITION.equals(unqualifiedClMember(op.name()))
+				&& filePositionArgNeedsResolving(parts.get(2))
+				&& !(parts.get(2) instanceof LispSymbol spec && ":START".equals(spec.name()))) {
+			return true;
+		}
+		for (LispVal part : parts) {
+			if (filePositionMayNeedLength(part)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	public static LispVal expandWriteChar(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2 || parts.size() > 3) {

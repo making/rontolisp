@@ -156,6 +156,13 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	private boolean needsComplexRuntime;
 
+	/**
+	 * Whether the compiled program can open a BIDIRECTIONAL ({@code :direction :io}) or
+	 * {@code :if-exists :overwrite} file stream, so the travelling
+	 * {@code RontoIoFileStream} goes beside the output.
+	 */
+	private boolean needsIoStreamRuntime;
+
 	/** The array runtime helper group ({@link JvmArrayRuntimeBuilder}). */
 	private static final String GROUP_ARRAYS = "arrays";
 
@@ -548,10 +555,13 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsHashTableRuntime
-				&& !this.needsComplexRuntime) {
+				&& !this.needsComplexRuntime && !this.needsIoStreamRuntime) {
 			return Map.of();
 		}
 		Map<String, byte[]> files = new LinkedHashMap<>();
+		if (this.needsIoStreamRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES));
+		}
 		if (this.needsHandleRuntime) {
 			files.putAll(JvmExportRuntimeBuilder.runtimeClassFiles());
 		}
@@ -3050,15 +3060,22 @@ public final class JvmLispCompiler implements LispCompiler {
 		final JvmIoRuntimeBuilder.FileMeta fileMeta = new JvmIoRuntimeBuilder.FileMeta(
 				programUsesSymbol(program, LispNames.FILE_WRITE_DATE),
 				programUsesSymbol(program, LispNames.MAKE_DIRECTORIES),
-				programUsesSymbol(program, LispNames.FILE_LENGTH),
+				// file-position's :end (or a computed position that may be :end) resolves
+				// through file-length (LispMacroExpander.rewriteFilePositionArg).
+				programUsesSymbol(program, LispNames.FILE_LENGTH)
+						|| LispMacroExpander.filePositionMayNeedLength(program),
 				programUsesSymbol(program, LispNames.DELETE_FILE_INTERNAL),
 				programUsesSymbol(program, LispNames.RENAME_FILE_INTERNAL),
 				programUsesSymbol(program, LispNames.FILE_POSITION));
+		// The BIDIRECTIONAL stream arm of _open, and with it the travelling
+		// RontoIoFileStream class file, ride the surface fact that the program can ask
+		// for one: every other artifact stays exactly one class file.
+		this.needsIoStreamRuntime = LispMacroExpander.opensBidirectionally(program);
 		List<JvmIoRuntimeBuilder.IoMethod> ioMethods = JvmIoRuntimeBuilder
 			.create(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue, stringLengthForIo,
 					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod, socketRuntime,
 					usesErrorOutput, usesListDirectory, fileMeta, usesPackedSequenceIo, usesCharSequenceIo, usesArrays,
-					usesQuantized)
+					usesQuantized, this.needsIoStreamRuntime)
 			.methods();
 		if (flushStreamsMethod != null) {
 			ioMethods.add(JvmFlushStreamsBuilder.build(cp, thisClass));

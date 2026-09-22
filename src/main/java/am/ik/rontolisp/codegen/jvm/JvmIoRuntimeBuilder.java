@@ -13,6 +13,7 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.StringConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
+import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.rontolisp.compiler.StreamDesignators;
 
 import org.jspecify.annotations.Nullable;
@@ -456,6 +457,14 @@ final class JvmIoRuntimeBuilder {
 	private final @Nullable PackedSequenceIo packedSequenceIo;
 
 	/**
+	 * The BIDIRECTIONAL file-stream entries, minted only for a program whose {@code open}
+	 * can ask for one ({@code :direction :io} / {@code :if-exists :overwrite}). Null
+	 * everywhere else, so every other artifact keeps its exact bytes AND its single class
+	 * file -- the stream is a travelling runtime class, not emitted bytecode.
+	 */
+	private final @Nullable IoStreams ioStreams;
+
+	/**
 	 * Whether a quantized matrix -- a {@code byte[]} of ggml blocks behind an int header
 	 * ({@link JvmQuantizedMatrixRuntimeBuilder}) -- can exist in the program, so the bulk
 	 * transfer takes it as a buffer of bytes ({@code .kb/quantized-matrix.md}).
@@ -556,8 +565,9 @@ final class JvmIoRuntimeBuilder {
 			MethodrefConstant stringConcat, FieldrefConstant systemOut, MethodrefConstant printlnStr,
 			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets,
 			boolean errorOutput, boolean listDirectory, FileMeta fileMeta, boolean packedSequenceIo,
-			boolean charSequenceIo, boolean arrayRuntime, boolean quantizedBuffer) {
+			boolean charSequenceIo, boolean arrayRuntime, boolean quantizedBuffer, boolean bidirectionalStreams) {
 		this.sockets = sockets;
+		this.ioStreams = bidirectionalStreams ? IoStreams.mint(cp) : null;
 		this.quantizedBuffer = quantizedBuffer;
 		this.errorOutput = errorOutput;
 		this.listDirectory = listDirectory;
@@ -825,10 +835,11 @@ final class JvmIoRuntimeBuilder {
 			MethodrefConstant stringConcat, FieldrefConstant systemOut, MethodrefConstant printlnStr,
 			MethodrefConstant readLineHelper, JvmSocketRuntimeBuilder.@Nullable SocketRuntime sockets,
 			boolean errorOutput, boolean listDirectory, FileMeta fileMeta, boolean packedSequenceIo,
-			boolean charSequenceIo, boolean arrayRuntime, boolean quantizedBuffer) {
+			boolean charSequenceIo, boolean arrayRuntime, boolean quantizedBuffer, boolean bidirectionalStreams) {
 		return new JvmIoRuntimeBuilder(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue,
 				stringLength, stringSubstring, stringConcat, systemOut, printlnStr, readLineHelper, sockets,
-				errorOutput, listDirectory, fileMeta, packedSequenceIo, charSequenceIo, arrayRuntime, quantizedBuffer);
+				errorOutput, listDirectory, fileMeta, packedSequenceIo, charSequenceIo, arrayRuntime, quantizedBuffer,
+				bidirectionalStreams);
 	}
 
 	/**
@@ -860,6 +871,62 @@ final class JvmIoRuntimeBuilder {
 	 * program that calls {@code read-sequence} / {@code write-sequence} over a packed
 	 * buffer, so every other artifact keeps its original bytes.
 	 */
+	/**
+	 * The constant-pool entries of {@code am.ik.rontolisp.runtime.RontoIoFileStream}, the
+	 * ONE bidirectional file stream the interpreter and a compiled program share. The JVM
+	 * backend calls it rather than transcribing the UTF-8 walk into bytecode, so the two
+	 * readings of {@code :direction :io} cannot drift; the class TRAVELS beside the
+	 * output ({@link #RUNTIME_CLASS_FILES}).
+	 * @param type the class itself
+	 * @param init {@code (String path, int mode)}
+	 * @param readByte {@code ()I}, -1 at end of file
+	 * @param writeByte {@code (I)V}
+	 * @param readCodePoint {@code ()I}, -1 at end of file
+	 * @param peekCodePoint {@code ()I}, -1 at end of file
+	 * @param readLine {@code ()Ljava/lang/String;}, "" once {@code ready} answers false
+	 * @param position {@code ()J}
+	 * @param seek {@code (J)V}
+	 * @param length {@code ()J}
+	 * @param ready {@code ()Z} -- the end-of-file test, since the class cannot say
+	 * {@code @Nullable}
+	 */
+	/** The travelling class the bidirectional file stream is written in. */
+	static final String IO_FILE_STREAM_CLASS = "am/ik/rontolisp/runtime/RontoIoFileStream";
+
+	/**
+	 * The travelling class list of {@code :direction :io} /
+	 * {@code :if-exists :overwrite}: plain Java over a {@code RandomAccessFile}, which a
+	 * bytecode transcription of the UTF-8 walk would only make harder to keep in step
+	 * with the interpreter's -- the {@code RontoHashTable} precedent
+	 * ({@code .kb/jvm-export.md}, "What travels"). It goes beside a compiled program that
+	 * can open one; every other program still compiles to exactly one file.
+	 */
+	static final List<String> RUNTIME_CLASS_FILES = List.of(IO_FILE_STREAM_CLASS + ".class");
+
+	private record IoStreams(ClassConstant type, MethodrefConstant init, MethodrefConstant readByte,
+			MethodrefConstant writeByte, MethodrefConstant readCodePoint, MethodrefConstant peekCodePoint,
+			MethodrefConstant readLine, MethodrefConstant position, MethodrefConstant seek, MethodrefConstant length,
+			MethodrefConstant ready) {
+
+		static IoStreams mint(ConstantPool cp) {
+			ClassConstant type = cp.addClass(cp.addUtf8(IO_FILE_STREAM_CLASS));
+			return new IoStreams(type,
+					cp.addMethodref(type,
+							cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;I)V"))),
+					cp.addMethodref(type, cp.addNameAndType(cp.addUtf8("readByte"), cp.addUtf8("()I"))),
+					cp.addMethodref(type, cp.addNameAndType(cp.addUtf8("writeByte"), cp.addUtf8("(I)V"))),
+					cp.addMethodref(type, cp.addNameAndType(cp.addUtf8("readCodePoint"), cp.addUtf8("()I"))),
+					cp.addMethodref(type, cp.addNameAndType(cp.addUtf8("peekCodePoint"), cp.addUtf8("()I"))),
+					cp.addMethodref(type,
+							cp.addNameAndType(cp.addUtf8("readLine"), cp.addUtf8("()Ljava/lang/String;"))),
+					cp.addMethodref(type, cp.addNameAndType(cp.addUtf8("position"), cp.addUtf8("()J"))),
+					cp.addMethodref(type, cp.addNameAndType(cp.addUtf8("position"), cp.addUtf8("(J)V"))),
+					cp.addMethodref(type, cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()J"))),
+					cp.addMethodref(type, cp.addNameAndType(cp.addUtf8("ready"), cp.addUtf8("()Z"))));
+		}
+
+	}
+
 	private record PackedSequenceIo(ClassConstant floatArrayClass, ClassConstant doubleArrayClass,
 			ClassConstant shortArrayClass, ClassConstant longArrayClass, ClassConstant byteBufferClass,
 			MethodrefConstant readNBytes, MethodrefConstant byteBufferWrap, MethodrefConstant byteBufferOrder,
@@ -1019,8 +1086,8 @@ final class JvmIoRuntimeBuilder {
 		}
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_LINE_METHOD), this.cp.addUtf8(WRITE_LINE_DESC), 5, 4,
 				buildWriteLine()));
-		ms.add(new IoMethod(this.cp.addUtf8(READ_LINE_STREAM_METHOD), this.cp.addUtf8(READ_LINE_STREAM_DESC), 4, 2,
-				buildReadLineStream()));
+		ms.add(new IoMethod(this.cp.addUtf8(READ_LINE_STREAM_METHOD), this.cp.addUtf8(READ_LINE_STREAM_DESC), 4,
+				this.ioStreams != null ? 3 : 2, buildReadLineStream()));
 		ms.add(new IoMethod(this.cp.addUtf8(READ_BYTE_METHOD), this.cp.addUtf8(READ_BYTE_DESC), 4, 5, buildReadByte()));
 		// The socket arms below take one extra local each (the table entry), so a
 		// socket-free program keeps the exact frame sizes it always had.
@@ -1448,6 +1515,27 @@ final class JvmIoRuntimeBuilder {
 			emitU2(code, 0);
 			patchBranch(code, ifNotSocketPos, code.size());
 		}
+		if (this.ioStreams != null) {
+			// A bidirectional stream is ready while its cursor is before the end.
+			code.add(Opcode.ALOAD_1);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.ioStreams.type().index());
+			int ifNotIoPos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_1);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.ioStreams.type().index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.ioStreams.ready().index());
+			gotoNils.add(code.size());
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			gotoTs.add(code.size());
+			code.add(Opcode.GOTO);
+			emitU2(code, 0);
+			patchBranch(code, ifNotIoPos, code.size());
+		}
 		// if (entry instanceof BufferedReader) return ready() ? "T" : null;
 		code.add(Opcode.ALOAD_1);
 		code.add(Opcode.INSTANCEOF);
@@ -1537,6 +1625,30 @@ final class JvmIoRuntimeBuilder {
 		int tryStart = code.size();
 		List<Integer> gotoStorePositions = new ArrayList<>();
 		int nextTestPos = -1;
+		if (this.ioStreams != null) {
+			// The BIDIRECTIONAL arm comes FIRST and tests the two bits rather than the
+			// whole mode, because :io and :overwrite multiply out with the element type
+			// and the disposition into eight of them and all eight are the same object:
+			// stream = new RontoIoFileStream(p, mode).
+			code.add(Opcode.ILOAD_1);
+			emitIntConst(code, OpenModes.IO_BIT | OpenModes.OVERWRITE_BIT);
+			code.add(Opcode.IAND);
+			int notBidirectional = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.NEW);
+			emitU2(code, this.ioStreams.type().index());
+			code.add(Opcode.DUP);
+			code.add(Opcode.ALOAD_2);
+			code.add(Opcode.ILOAD_1);
+			code.add(Opcode.INVOKESPECIAL);
+			emitU2(code, this.ioStreams.init().index());
+			code.add(Opcode.ASTORE_3);
+			gotoStorePositions.add(code.size());
+			code.add(Opcode.GOTO);
+			emitU2(code, 0);
+			patchBranch(code, notBidirectional, code.size());
+		}
 		for (int mode : modes) {
 			if (nextTestPos >= 0) {
 				patchBranch(code, nextTestPos, code.size());
@@ -2118,6 +2230,42 @@ final class JvmIoRuntimeBuilder {
 		a.iload(2);
 		a.aaload();
 		a.astore(5);
+		int ioNeg = -1;
+		if (this.ioStreams != null) {
+			// A BIDIRECTIONAL entry owns its cursor: both halves are the
+			// RandomAccessFile's own, with no side table and no re-open. This is what
+			// makes file-position real for a CHARACTER :io stream, which the
+			// Reader/Writer arms below cannot answer for.
+			a.aload(5);
+			a.instanceOf(this.ioStreams.type());
+			int notIoPos = a.label();
+			a.branch(Opcode.IFEQ, notIoPos);
+			a.aload(1);
+			int ioSet = a.label();
+			a.branch(Opcode.IFNONNULL, ioSet);
+			a.aload(5);
+			a.checkcast(this.ioStreams.type());
+			a.invokevirtual(this.ioStreams.position());
+			a.invokestatic(this.longValueOf);
+			a.areturn();
+			a.bind(ioSet);
+			a.aload(1);
+			a.checkcast(this.longClass);
+			a.invokevirtual(this.longValue);
+			a.lstore(7);
+			a.lload(7);
+			a.lconst0();
+			a.lcmp();
+			ioNeg = a.label();
+			a.branch(Opcode.IFLT, ioNeg);
+			a.aload(5);
+			a.checkcast(this.ioStreams.type());
+			a.lload(7);
+			a.invokevirtual(this.ioStreams.seek());
+			emitLdc(a.code, this.tStr.index());
+			a.areturn();
+			a.bind(notIoPos);
+		}
 		// Only a BINARY entry (an InputStream/OutputStream) has a byte position.
 		a.aload(5);
 		a.instanceOf(this.inputStreamClass);
@@ -2256,6 +2404,9 @@ final class JvmIoRuntimeBuilder {
 		a.areturn();
 		// the negative-position error
 		a.bind(posNeg);
+		if (ioNeg >= 0) {
+			a.bind(ioNeg);
+		}
 		a.anew(this.runtimeExceptionClass);
 		a.dup();
 		a.ldcString(java.util.Objects.requireNonNull(this.negPositionMsg));
@@ -2780,11 +2931,49 @@ final class JvmIoRuntimeBuilder {
 			patchBranch(code, ifNotSocketPos, code.size());
 			code.add(Opcode.ALOAD_1);
 		}
+		int afterIoLine = -1;
+		if (this.ioStreams != null) {
+			// A bidirectional stream reads its line off the shared cursor. End of file
+			// is ready()'s answer, not a null line: the travelling class cannot spell
+			// @Nullable (.kb/jvm-export.md).
+			code.add(Opcode.ASTORE_2);
+			code.add(Opcode.ALOAD_2);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.ioStreams.type().index());
+			int notIo = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_2);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.ioStreams.type().index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.ioStreams.ready().index());
+			int haveLine = code.size();
+			code.add(Opcode.IFNE);
+			emitU2(code, 0);
+			code.add(Opcode.ACONST_NULL);
+			code.add(Opcode.ARETURN);
+			patchBranch(code, haveLine, code.size());
+			code.add(Opcode.ALOAD_2);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.ioStreams.type().index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.ioStreams.readLine().index());
+			code.add(Opcode.ASTORE_1);
+			afterIoLine = code.size();
+			code.add(Opcode.GOTO);
+			emitU2(code, 0);
+			patchBranch(code, notIo, code.size());
+			code.add(Opcode.ALOAD_2);
+		}
 		code.add(Opcode.CHECKCAST);
 		emitU2(code, this.bufferedReaderClass.index());
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.bufferedReaderReadLine.index());
 		code.add(Opcode.ASTORE_1);
+		if (afterIoLine >= 0) {
+			patchBranch(code, afterIoLine, code.size());
+		}
 		// if (line == null) return null;
 		code.add(Opcode.ALOAD_1);
 		int ifLinePos = code.size();
@@ -2848,6 +3037,30 @@ final class JvmIoRuntimeBuilder {
 		emitU2(code, this.longValue.index());
 		code.add(Opcode.L2I);
 		code.add(Opcode.AALOAD);
+		int afterIoByte = -1;
+		if (this.ioStreams != null) {
+			// A bidirectional stream is neither an InputStream nor an OutputStream: the
+			// octet comes off the one cursor its character reads and writes share.
+			code.add(Opcode.ASTORE_3);
+			code.add(Opcode.ALOAD_3);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.ioStreams.type().index());
+			int notIoByte = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_3);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.ioStreams.type().index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.ioStreams.readByte().index());
+			code.add(Opcode.ISTORE);
+			code.add(4);
+			afterIoByte = code.size();
+			code.add(Opcode.GOTO);
+			emitU2(code, 0);
+			patchBranch(code, notIoByte, code.size());
+			code.add(Opcode.ALOAD_3);
+		}
 		if (this.sockets != null) {
 			code.add(Opcode.ASTORE_3);
 			code.add(Opcode.ALOAD_3);
@@ -2891,6 +3104,9 @@ final class JvmIoRuntimeBuilder {
 		emitU2(code, this.inputStreamRead.index());
 		code.add(Opcode.ISTORE);
 		code.add(4);
+		if (afterIoByte >= 0) {
+			patchBranch(code, afterIoByte, code.size());
+		}
 		// if (b >= 0) { advance the file stream's position; return Long.valueOf((long)
 		// b); }
 		code.add(Opcode.ILOAD);
@@ -2992,6 +3208,7 @@ final class JvmIoRuntimeBuilder {
 			patchBranch(code, ifNotHandlePos, code.size());
 			patchBranch(code, ifNotSocketPos, code.size());
 		}
+		emitIoCharArm(code, false, 4);
 		emitResolveReader(code);
 		// READ: c = r.read();
 		code.add(Opcode.ALOAD_3);
@@ -3086,6 +3303,7 @@ final class JvmIoRuntimeBuilder {
 		// Slots: 0=handle, 1=eofErrorP, 2=eofValue, 3=r (BufferedReader), 4=c (int),
 		// 5=low (int)
 		List<Integer> code = new ArrayList<>();
+		emitIoCharArm(code, true, 4);
 		emitResolveReader(code);
 		// r.mark(2);
 		code.add(Opcode.ALOAD_3);
@@ -3201,6 +3419,60 @@ final class JvmIoRuntimeBuilder {
 	}
 
 	/**
+	 * The BIDIRECTIONAL arm of {@code _readChar} / {@code _peekChar}, emitted ahead of
+	 * {@link #emitResolveReader} because such a stream is not a {@code BufferedReader}:
+	 * it decodes the UTF-8 sequence at the one cursor its writes and
+	 * {@code file-position} share. Falls through with an empty stack when the handle is
+	 * anything else.
+	 * @param code the body being built
+	 * @param peek whether the character is left in place
+	 * @param cpSlot the local the code point goes in
+	 */
+	private void emitIoCharArm(List<Integer> code, boolean peek, int cpSlot) {
+		if (this.ioStreams == null) {
+			return;
+		}
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.longClass.index());
+		int notHandle = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.streamsField.index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.longClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.longValue.index());
+		code.add(Opcode.L2I);
+		code.add(Opcode.AALOAD);
+		code.add(Opcode.DUP);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.ioStreams.type().index());
+		int notIo = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.ioStreams.type().index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, (peek ? this.ioStreams.peekCodePoint() : this.ioStreams.readCodePoint()).index());
+		code.add(Opcode.ISTORE);
+		code.add(cpSlot);
+		code.add(Opcode.ILOAD);
+		code.add(cpSlot);
+		int ioEof = code.size();
+		code.add(Opcode.IFLT);
+		emitU2(code, 0);
+		emitBoxCodePoint(code, cpSlot);
+		patchBranch(code, ioEof, code.size());
+		emitCharEof(code);
+		patchBranch(code, notIo, code.size());
+		code.add(Opcode.POP);
+		patchBranch(code, notHandle, code.size());
+	}
+
+	/**
 	 * Resolves the stream argument in slot 0 into a {@code BufferedReader} in slot 3: a
 	 * non-handle designator ({@code null} = nil, {@code "T"} = t) is standard input
 	 * (lazily initializing the {@code _stdinReader} field the {@code _readLine} helper
@@ -3305,6 +3577,26 @@ final class JvmIoRuntimeBuilder {
 		emitU2(code, this.longValue.index());
 		code.add(Opcode.L2I);
 		code.add(Opcode.AALOAD);
+		if (this.ioStreams != null) {
+			// A bidirectional stream writes the octet at its own cursor and answers.
+			code.add(Opcode.ASTORE_2);
+			code.add(Opcode.ALOAD_2);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.ioStreams.type().index());
+			int notIoByte = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_2);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.ioStreams.type().index());
+			emitByteValue(code);
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.ioStreams.writeByte().index());
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.ARETURN);
+			patchBranch(code, notIoByte, code.size());
+			code.add(Opcode.ALOAD_2);
+		}
 		if (this.sockets != null) {
 			code.add(Opcode.ASTORE_2);
 			code.add(Opcode.ALOAD_2);
