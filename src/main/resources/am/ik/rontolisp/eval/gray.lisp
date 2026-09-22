@@ -620,10 +620,14 @@
         (if (rontolisp:stream-listen stream) t nil)
         (listen stream))))
 
+;; The built-in gets the stream AS GIVEN, not its resolved handle: it resolves the
+;; designator itself, and it reads the open stream value's kind to tell a string
+;; stream, which moves characters into any buffer (.kb/read-load-streams.md, "The
+;; stream picks the element").
 (defun rontolisp::%gray-read-sequence-dispatch (sequence stream start end)
-  (let ((stream (%stream-target stream)))
-    (if (%obj-p stream)
-        (rontolisp:stream-read-sequence stream sequence start
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
+        (rontolisp:stream-read-sequence target sequence start
                                         (if end end (length sequence)))
         ;; :end stays nil for the built-in: a rank-2 packed buffer has no length,
         ;; and the expansion resolves nil to the whole buffer itself
@@ -631,10 +635,10 @@
         (read-sequence sequence stream :start start :end end))))
 
 (defun rontolisp::%gray-write-sequence-dispatch (sequence stream start end)
-  (let ((stream (%stream-target stream)))
-    (if (%obj-p stream)
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
         (progn
-          (rontolisp:stream-write-sequence stream sequence start
+          (rontolisp:stream-write-sequence target sequence start
                                            (if end end (length sequence)))
           sequence)
         (write-sequence sequence stream :start start :end end))))

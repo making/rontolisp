@@ -13376,6 +13376,59 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunComponentWithDir(WIDE_ELEMENT_PROGRAM)).isEqualTo(WIDE_ELEMENT_EXPECTED);
 	}
 
+	// The twin of LispEvaluatorTest#readAndWriteSequenceMoveTheElementTheStreamCarries:
+	// the STREAM picks the element (.kb/read-load-streams.md, "The stream picks the
+	// element").
+	private static final String STREAM_PICKS_THE_ELEMENT_PROGRAM = """
+			(print (let ((v (vector nil nil nil nil nil)))
+			         (with-input-from-string (is "abc") (list (read-sequence v is :start 1) v))))
+			(print (let ((l (make-list 5)))
+			         (with-input-from-string (is "abcdefg") (list (read-sequence l is :start 1 :end 4) l))))
+			(print (let ((f (make-array 10 :initial-element nil :fill-pointer 3)))
+			         (with-input-from-string (is "xyz!") (list (read-sequence f is) f))))
+			(print (with-output-to-string (os)
+			         (write-sequence (vector #\\a #\\b #\\c) os :start 1)
+			         (write-sequence (list #\\d #\\e #\\f) os :end 2)))
+			(with-open-file (o "rs.dat" :direction :output :element-type '(unsigned-byte 8)
+			                 :if-exists :supersede)
+			  (write-sequence (list 1 2 3) o))
+			(print (with-open-file (i "rs.dat" :element-type '(unsigned-byte 8))
+			         (let ((v (make-array 3 :initial-element 0)) (l (make-list 2)))
+			           (list (read-sequence v i :end 1) v (read-sequence l i) l))))
+			""";
+
+	private static final String STREAM_PICKS_THE_ELEMENT_EXPECTED = """
+			(4 #(NIL #\\a #\\b #\\c NIL))
+			(4 (NIL #\\a #\\b #\\c NIL))
+			(3 #(#\\x #\\y #\\z))
+			"bcde"
+			(1 #(1 0 0) 2 (2 3))""";
+
+	@Test
+	void readAndWriteSequenceMoveTheElementTheStreamCarriesOnPreview1() throws Exception {
+		assertThat(compileAndRunWithDir(STREAM_PICKS_THE_ELEMENT_PROGRAM)).isEqualTo(STREAM_PICKS_THE_ELEMENT_EXPECTED);
+	}
+
+	@Test
+	void componentReadAndWriteSequenceMoveTheElementTheStreamCarries() throws Exception {
+		assertThat(compileAndRunComponentWithDir(STREAM_PICKS_THE_ELEMENT_PROGRAM))
+			.isEqualTo(STREAM_PICKS_THE_ELEMENT_EXPECTED);
+	}
+
+	// The twin of JvmLispCompilerTest#compileAndRunANarrowedSiteKeepsTheWideGuard.
+	@Test
+	void aNarrowedSiteKeepsTheWideGuardOnPreview1() throws Exception {
+		assertThat(compileAndRunWithDir("""
+				(with-open-file (o "w16.dat" :direction :output :element-type '(unsigned-byte 16)
+				                 :if-exists :supersede)
+				  (write-byte 1 o)
+				  (write-byte 2 o))
+				(let ((buf (make-array 2 :element-type '(unsigned-byte 8) :initial-element 9)))
+				  (with-open-file (s "w16.dat" :element-type '(unsigned-byte 16))
+				    (print (list (read-sequence buf s) buf))))
+				""")).isEqualTo("(2 #(1 2))");
+	}
+
 	private static final String OPEN_IO_PROGRAM = """
 			(with-open-file (out "io918.txt" :direction :output) (write-string "abcdefghij" out))
 			(let ((s (open "io918.txt" :direction :io :if-exists :overwrite)))

@@ -523,9 +523,13 @@ final class WasmExprCompiler {
 						case LispNames.WRITE_STRING_RAW_INTERNAL ->
 							WasmWriteStringCompiler.compileWriteString(cons, ctx);
 						case LispNames.READ_SEQUENCE_RAW_INTERNAL -> WasmExprCompiler.compileExpr(
-								guardPackedForWideStreams(LispMacroExpander.expandReadSequence(cons), ctx), ctx);
+								guardPackedForWideStreams(
+										LispMacroExpander.expandReadSequence(cons, false, characterStreams(ctx)), ctx),
+								ctx);
 						case LispNames.WRITE_SEQUENCE_RAW_INTERNAL -> WasmExprCompiler.compileExpr(
-								guardPackedForWideStreams(LispMacroExpander.expandWriteSequence(cons), ctx), ctx);
+								guardPackedForWideStreams(
+										LispMacroExpander.expandWriteSequence(cons, false, characterStreams(ctx)), ctx),
+								ctx);
 						// The designator resolution has to apply under the alias too:
 						// the socket rewrite maps (close s) to (%io-close s), whose
 						// non-socket arm lands here, so without it a component would
@@ -1363,10 +1367,16 @@ final class WasmExprCompiler {
 						.callTimeUnsupportedStub("listen requires the interpreter, the JVM backend or a --component"
 								+ " socket stream (no non-blocking input probe exists on this" + " WASM target)")),
 							ctx);
-				case LispNames.READ_SEQUENCE -> WasmExprCompiler
-					.compileExpr(guardPackedForWideStreams(LispMacroExpander.expandReadSequence(cons), ctx), ctx);
-				case LispNames.WRITE_SEQUENCE -> WasmExprCompiler
-					.compileExpr(guardPackedForWideStreams(LispMacroExpander.expandWriteSequence(cons), ctx), ctx);
+				case LispNames.READ_SEQUENCE ->
+					WasmExprCompiler.compileExpr(
+							guardPackedForWideStreams(
+									LispMacroExpander.expandReadSequence(cons, false, characterStreams(ctx)), ctx),
+							ctx);
+				case LispNames.WRITE_SEQUENCE ->
+					WasmExprCompiler.compileExpr(
+							guardPackedForWideStreams(
+									LispMacroExpander.expandWriteSequence(cons, false, characterStreams(ctx)), ctx),
+							ctx);
 				case LispNames.READ_SEQUENCE_PACKED, LispNames.WRITE_SEQUENCE_PACKED ->
 					WasmSequencePackedCompiler.compile(cons, ctx);
 				case LispNames.READ_SEQUENCE_CHARS -> WasmSequenceCharsCompiler.compile(cons, ctx);
@@ -2523,6 +2533,13 @@ final class WasmExprCompiler {
 	 * {@link LispMacroExpander#guardPackedSequenceForWideStreams} when the program opens
 	 * a wide stream.
 	 */
+	// Whether a string stream can reach a read-sequence / write-sequence site, so the
+	// expansion asks %character-stream-p (.kb/read-load-streams.md, "The stream picks
+	// the element").
+	private static boolean characterStreams(WasmLispCompiler.Ctx ctx) {
+		return ctx.usesStreamValues && ctx.functions.containsKey(LispNames.CHARACTER_STREAM_P_INTERNAL);
+	}
+
 	private static LispVal guardPackedForWideStreams(LispVal expansion, WasmLispCompiler.Ctx ctx) {
 		return ctx.functions.containsKey(LispNames.WIDE_WIDTH_INTERNAL)
 				? LispMacroExpander.guardPackedSequenceForWideStreams(expansion) : expansion;

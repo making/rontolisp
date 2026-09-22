@@ -14894,9 +14894,10 @@ cases:
 
   - name: read-sequence-into-a-character-buffer
     source: |
-      ;; The BUFFER decides which element is read: a character vector -- the one
-      ;; rank-1 array that answers stringp -- reads characters, not bytes. The
-      ;; element type may be COMPUTED, which is how alexandria allocates it.
+      ;; A character vector -- the one rank-1 array that answers stringp -- reads
+      ;; characters from any stream. The element type may be COMPUTED, which is how
+      ;; alexandria allocates it. (Any other buffer takes the STREAM's element: the
+      ;; next case.)
       (print (with-input-from-string (s "abcdef")
                (let ((buf (make-array 4 :element-type 'character)))
                  (list (read-sequence buf s) buf))))
@@ -14910,6 +14911,33 @@ cases:
       (4 "abcd")
       (2 "ab")
       (3 "xyz")
+
+  - name: read-and-write-sequence-move-the-element-a-string-stream-carries
+    source: |
+      ;; The STREAM picks the element (CLHS): a string stream moves characters into
+      ;; and out of any buffer -- a general vector, a fill-pointer vector, a LIST --
+      ;; and a binary file stream moves bytes, into a list too. sbcl's answers.
+      (print (let ((v (vector nil nil nil nil nil)))
+               (with-input-from-string (is "abc") (list (read-sequence v is :start 1) v))))
+      (print (let ((l (make-list 5)))
+               (with-input-from-string (is "abcdefg") (list (read-sequence l is :start 1 :end 4) l))))
+      (print (let ((f (make-array 10 :initial-element nil :fill-pointer 3)))
+               (with-input-from-string (is "xyz!") (list (read-sequence f is) f))))
+      (print (with-output-to-string (os)
+               (write-sequence (vector #\a #\b #\c) os :start 1)
+               (write-sequence (list #\d #\e #\f) os :end 2)))
+      (with-open-file (o "rwse.dat" :direction :output :element-type '(unsigned-byte 8)
+                       :if-exists :supersede)
+        (write-sequence (list 1 2 3) o))
+      (print (with-open-file (i "rwse.dat" :element-type '(unsigned-byte 8))
+               (let ((v (make-array 3 :initial-element 0)) (l (make-list 2)))
+                 (list (read-sequence v i :end 1) v (read-sequence l i) l))))
+    expected: |
+      (4 #(NIL #\a #\b #\c NIL))
+      (4 (NIL #\a #\b #\c NIL))
+      (3 #(#\x #\y #\z))
+      "bcde"
+      (1 #(1 0 0) 2 (2 3))
 
   - name: read-sequence-over-a-file-decodes-a-block-of-characters-at-a-time
     source: |

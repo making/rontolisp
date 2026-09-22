@@ -5804,6 +5804,89 @@ class JvmLispCompilerTest {
 				""".formatted(file, file))).isEqualTo("4\n2\n3");
 	}
 
+	// The compile-path twin of
+	// LispEvaluatorTest#readAndWriteSequenceReadTheirKeywordTailTheWayALambdaListDoes.
+	@Test
+	void compileAndRunReadAndWriteSequenceKeywordTails() throws Exception {
+		assertThat(compileAndRunExpanded("""
+				(defmacro pe (form) `(handler-case ,form (program-error () :program-error)))
+				(print (list (let ((s (copy-seq "     ")))
+				               (with-input-from-string (is "abcdefghijk")
+				                 (list (read-sequence s is :allow-other-keys t :foo 'bar) s)))
+				             (let ((s (copy-seq "     ")))
+				               (with-input-from-string (is "abcdefghijk")
+				                 (list (read-sequence s is :end 5 :end 3 :start 0 :start 1) s)))
+				             (pe (read-sequence (make-string 5) (make-string-input-stream "abc") :foo 1))
+				             (with-output-to-string (os)
+				               (write-sequence "abcde" os :start 1 :end 4 :start 3 :allow-other-keys t :x 1))
+				             (pe (write-sequence "abcde" (make-string-output-stream) :foo 1))))
+				""")).isEqualTo("((5 \"abcde\") (5 \"abcde\") :PROGRAM-ERROR \"bcd\" :PROGRAM-ERROR)");
+	}
+
+	// The compile-path twin of
+	// LispEvaluatorTest#readAndWriteSequenceMoveTheElementTheStreamCarries.
+	@Test
+	void compileAndRunReadAndWriteSequenceMoveTheElementTheStreamCarries() throws Exception {
+		String dir = this.tempDir.toString().replace("\\", "\\\\");
+		assertThat(compileAndRunExpanded("""
+				(print (let ((v (vector nil nil nil nil nil)))
+				         (with-input-from-string (is "abc") (list (read-sequence v is :start 1) v))))
+				(print (let ((l (make-list 5)))
+				         (with-input-from-string (is "abcdefg") (list (read-sequence l is :start 1 :end 4) l))))
+				(print (let ((f (make-array 10 :initial-element nil :fill-pointer 3)))
+				         (with-input-from-string (is "xyz!") (list (read-sequence f is) f))))
+				(print (with-output-to-string (os)
+				         (write-sequence (vector #\\a #\\b #\\c) os :start 1)
+				         (write-sequence (list #\\d #\\e #\\f) os :end 2)))
+				(with-open-file (o "%1$s/rs.dat" :direction :output :element-type '(unsigned-byte 8)
+				                 :if-exists :supersede)
+				  (write-sequence (list 1 2 3) o))
+				(print (with-open-file (i "%1$s/rs.dat" :element-type '(unsigned-byte 8))
+				         (let ((v (make-array 3 :initial-element 0)) (l (make-list 2)))
+				           (list (read-sequence v i :end 1) v (read-sequence l i) l))))
+				""".formatted(dir))).isEqualTo("""
+				(4 #(NIL #\\a #\\b #\\c NIL))
+				(4 (NIL #\\a #\\b #\\c NIL))
+				(3 #(#\\x #\\y #\\z))
+				"bcde"
+				(1 #(1 0 0) 2 (2 3))""");
+	}
+
+	// A program using the Gray protocol reaches every read-sequence / write-sequence
+	// through gray.lisp's dispatchers, which must hand the built-in the stream VALUE --
+	// its kind is what says "string stream" -- not the resolved handle (the ci-spec
+	// corpus went red on exactly this).
+	@Test
+	void compileAndRunAStringStreamPicksTheElementThroughTheGrayDispatchers() throws Exception {
+		assertThat(compileAndRunGray("""
+				(defclass upcaser (rontolisp:fundamental-character-output-stream) ())
+				(defmethod rontolisp:stream-write-string ((s upcaser) str) str)
+				(print (let ((l (make-list 3)))
+				         (with-input-from-string (is "abc") (list (read-sequence l is) l))))
+				(print (with-output-to-string (os) (write-sequence (vector #\\x #\\y) os)))
+				""")).isEqualTo("(3 (#\\a #\\b #\\c))\n\"xy\"");
+	}
+
+	// A NARROWED site (a let-bound byte buffer) in a program that opens a wide stream:
+	// its packed arm moves raw octets, so it must be guarded by %wide-width like every
+	// other site. The narrowing pass sees only the top-level forms -- never the spliced
+	// %wide-width defun -- so it has to be told the program is wide, or an
+	// (unsigned-byte 16) stream read into an octet buffer answered its raw octets (1 0)
+	// where the interpreter answers the elements (1 2).
+	@Test
+	void compileAndRunANarrowedSiteKeepsTheWideGuard() throws Exception {
+		String file = this.tempDir.resolve("w16.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRunExpanded("""
+				(with-open-file (o "%1$s" :direction :output :element-type '(unsigned-byte 16)
+				                 :if-exists :supersede)
+				  (write-byte 1 o)
+				  (write-byte 2 o))
+				(let ((buf (make-array 2 :element-type '(unsigned-byte 8) :initial-element 9)))
+				  (with-open-file (s "%1$s" :element-type '(unsigned-byte 16))
+				    (print (list (read-sequence buf s) buf))))
+				""".formatted(file))).isEqualTo("(2 #(1 2))");
+	}
+
 	@Test
 	void readWriteSequenceOverLetBoundByteBuffersTakesTheByteArm() throws Exception {
 		// compiler/SequenceIoNarrowing (.todo/338): a let-bound non-string buffer

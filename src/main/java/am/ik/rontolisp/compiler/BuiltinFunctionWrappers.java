@@ -720,13 +720,12 @@ public final class BuiltinFunctionWrappers {
 	// An absent :end must not become an explicit nil -- the expansion defaults it to
 	// (length seq) -- so it selects a different call shape rather than a nil argument.
 	private static WrapperDef boundedSequenceIo(String name) {
+		// ONE call: an :end of nil is the whole sequence in every expansion this reaches,
+		// so the absent keyword needs no second copy of the (large) inline expansion.
 		LispVal start = getfKwOr(LispNames.START_KEYWORD, new LispInteger(0));
-		LispVal bounded = listToCons(List.of(new LispSymbol(name), new LispSymbol("seq"), new LispSymbol("st"),
+		LispVal body = listToCons(List.of(new LispSymbol(name), new LispSymbol("seq"), new LispSymbol("st"),
 				new LispSymbol(LispNames.START_KEYWORD), start, new LispSymbol(LispNames.END_KEYWORD),
 				getfKw(LispNames.END_KEYWORD)));
-		LispVal open = listToCons(List.of(new LispSymbol(name), new LispSymbol("seq"), new LispSymbol("st"),
-				new LispSymbol(LispNames.START_KEYWORD), start));
-		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), getfKw(LispNames.END_KEYWORD), bounded, open));
 		return new WrapperDef(name, List.of("seq", "st", LispNames.LAMBDA_REST, "kw"), List.of(body));
 	}
 

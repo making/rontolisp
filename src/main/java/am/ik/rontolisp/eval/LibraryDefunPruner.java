@@ -402,7 +402,7 @@ public final class LibraryDefunPruner {
 			LispNames.FILE_STREAM_REGISTER_INTERNAL, LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL,
 			LispNames.FILE_STREAM_FORGET_INTERNAL, LispNames.WIDE_READ_BYTE_INTERNAL,
 			LispNames.WIDE_WRITE_BYTE_INTERNAL, LispNames.WIDE_ELEMENTS_INTERNAL,
-			LispNames.WIDE_POSITION_OCTETS_INTERNAL);
+			LispNames.WIDE_POSITION_OCTETS_INTERNAL, LispNames.CHARACTER_STREAM_P_INTERNAL);
 
 	/**
 	 * Roots every synthesized-call entry whose surface fact the forms kept SO FAR show,

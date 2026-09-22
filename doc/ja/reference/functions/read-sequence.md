@@ -2,14 +2,17 @@
 
 `(read-sequence sequence stream &key start end)`
 
-`stream` から読み込んだ要素で `sequence`（`make-array` で作成した 1 次元配列）を埋め、埋められなかった最初の要素のインデックス（充填位置）を返します。読み込みはインデックス `:start`（デフォルト 0）から始まり、インデックス `:end`（デフォルトは配列長）の手前、またはファイル終端のいずれか早い方で止まります。`:start`/`:end` キーワードはリテラルでなければなりませんが、その値は任意の式で構いません。
+`stream` から読み込んだ要素で `sequence`（1 次元配列またはリスト）を埋め、埋められなかった最初の要素のインデックス（充填位置）を返します。読み込みはインデックス `:start`（デフォルト 0）から始まり、インデックス `:end`（デフォルトは配列長）の手前、またはファイル終端のいずれか早い方で止まります。キーワードは通常のキーワード引数と同じく読まれます。最初の `:start`/`:end` が有効で、`:allow-other-keys t` があれば他のキーワードも受け付け、未知のキーワードは `program-error` を通知します。
 
-どの要素を読むかは**バッファ**が決めます。文字ベクタ（`(make-array n :element-type 'character)` や `make-string` が作るもの）はテキストストリームから文字で埋められ、それ以外の配列は `:element-type '(unsigned-byte 8)` で開いたストリームからバイトで埋められます。要素型は `(make-array n :element-type (stream-element-type s))` のように計算された値でも構いません。
+どの要素を読むかは**ストリーム**が決めます。文字列ストリームは、一般ベクタやリストを含むあらゆるシーケンスを文字で埋めます。文字ベクタ（`(make-array n :element-type 'character)` や `make-string` が作るもの）はどのテキストストリームからも文字で埋められ、それ以外のシーケンスは `:element-type '(unsigned-byte 8)` で開いたストリームからバイトで埋められます（`character` で開いたファイルストリームと標準入力は、文字列以外のシーケンスを引き続きバイトで埋めます）。要素型は `(make-array n :element-type (stream-element-type s))` のように計算された値でも構いません。
 
 ```lisp
 (with-input-from-string (s "abcdef")
   (let ((buf (make-array 4 :element-type 'character)))
     (list (read-sequence buf s) buf))) ; => (4 "abcd")
+(with-input-from-string (s "abc")
+  (let ((buf (list nil nil nil nil)))
+    (list (read-sequence buf s :start 1) buf))) ; => (4 (NIL #\a #\b #\c))
 ```
 
 ファイルシステムに触れるため、バイナリ形式はここでは実行可能な例ではなく静的に示します。

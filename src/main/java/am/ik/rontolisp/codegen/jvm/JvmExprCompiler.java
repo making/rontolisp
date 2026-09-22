@@ -1001,9 +1001,13 @@ final class JvmExprCompiler {
 				case LispNames.LISTEN -> JvmListenCompiler.compile(cons, ctx, className);
 				case LispNames.OPEN_STREAM_P -> JvmOpenStreamPCompiler.compile(cons, ctx, className);
 				case LispNames.READ_SEQUENCE -> JvmExprCompiler.compileExpr(
-						guardPackedForWideStreams(LispMacroExpander.expandReadSequence(cons), ctx), ctx, className);
+						guardPackedForWideStreams(
+								LispMacroExpander.expandReadSequence(cons, false, characterStreams(ctx)), ctx),
+						ctx, className);
 				case LispNames.WRITE_SEQUENCE -> JvmExprCompiler.compileExpr(
-						guardPackedForWideStreams(LispMacroExpander.expandWriteSequence(cons), ctx), ctx, className);
+						guardPackedForWideStreams(
+								LispMacroExpander.expandWriteSequence(cons, false, characterStreams(ctx)), ctx),
+						ctx, className);
 				case LispNames.READ_SEQUENCE_PACKED, LispNames.WRITE_SEQUENCE_PACKED ->
 					JvmSequencePackedCompiler.compile(cons, ctx, className);
 				case LispNames.READ_SEQUENCE_CHARS -> JvmSequenceCharsCompiler.compile(cons, ctx, className);
@@ -2191,6 +2195,13 @@ final class JvmExprCompiler {
 	 * {@link LispMacroExpander#guardPackedSequenceForWideStreams} when the program opens
 	 * a wide stream.
 	 */
+	// Whether a string stream can reach a read-sequence / write-sequence site, so the
+	// expansion asks %character-stream-p (.kb/read-load-streams.md, "The stream picks
+	// the element").
+	private static boolean characterStreams(JvmLispCompiler.Ctx ctx) {
+		return ctx.usesStreamValues && ctx.functions.containsKey(LispNames.CHARACTER_STREAM_P_INTERNAL);
+	}
+
 	private static LispVal guardPackedForWideStreams(LispVal expansion, JvmLispCompiler.Ctx ctx) {
 		return ctx.functions.containsKey(LispNames.WIDE_WIDTH_INTERNAL)
 				? LispMacroExpander.guardPackedSequenceForWideStreams(expansion) : expansion;
