@@ -3223,6 +3223,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		final JvmNthcdrRuntimeBuilder.NthcdrMethod nthcdrMethodBody = JvmNthcdrRuntimeBuilder.build(cp,
 				objectArrayClass);
 
+		// The &optional surplus-argument message (%arity-surplus-message). Emitted
+		// unconditionally like _nthcdr: its sites are the lambda-list prologue, which the
+		// built-in wrappers and several expansions produce while this backend compiles,
+		// and the class shaker drops it from a program that never checks.
+		final JvmAritySurplusRuntimeBuilder.AritySurplusMethod aritySurplusMethodBody = JvmAritySurplusRuntimeBuilder
+			.build(cp, objectArrayClass);
+
 		// The character-index helpers (_cpoff / _scount) every string index and every
 		// string length reads through. Emitted unconditionally for the same reason
 		// _length is: the sites are generated internally too, and the pair is ~60 bytes.
@@ -4459,6 +4466,17 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(nthcdrMethodBody.maxStack())
 									.writeU2(nthcdrMethodBody.maxLocals())
 									.writeCode((Object[]) nthcdrMethodBody.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
+				{
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, aritySurplusMethodBody.name(),
+							aritySurplusMethodBody.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(aritySurplusMethodBody.maxStack())
+									.writeU2(aritySurplusMethodBody.maxLocals())
+									.writeCode((Object[]) aritySurplusMethodBody.code().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));

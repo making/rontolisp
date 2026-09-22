@@ -20930,6 +20930,20 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void theSurplusArgumentMessage() throws Exception {
+		// The surplus-argument message on the singular bound and a tail long enough for
+		// nthcdr. (*print-base* needs the prelude splice this harness does not run;
+		// ci-spec covers it.)
+		assertThat(compileAndRun("""
+				(defun ll-four (a &optional b c d e) (list a b c d e))
+				(print (handler-case (funcall (lambda (&optional a) a) 1 2 3) (error (e) (princ-to-string e))))
+				(print (handler-case (ll-four 1 2 3 4 5 6) (error (e) (princ-to-string e))))
+				(print (ll-four 1 2 3 4 5))
+				""")).isEqualTo(
+				"\"Function expects at most 1 argument, got 3\"\n\"Function expects at most 5 arguments, got 6\"\n(1 2 3 4 5)");
+	}
+
+	@Test
 	void aLegalCallAtTheFullClArityStillRuns() throws Exception {
 		// Now that a surplus argument signals, a wrapper SHORTER than CL's lambda list
 		// would refuse a legal call: the read family's first-class wrappers take the

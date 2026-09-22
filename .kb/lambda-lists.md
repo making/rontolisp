@@ -8,7 +8,10 @@ User docs: `doc/en/reference/special-forms/defun.md`, `lambda.md`.
 - Unknown keywords signal `Unknown keyword argument: <prin1>` -- a `program-error`, through
   the `%program-error` primitive of [error-handling.md](error-handling.md) ("Argument-shape
   errors") -- unless `&allow-other-keys` is declared or the caller passes
-  `:allow-other-keys t`; `&whole` is rejected.
+  `:allow-other-keys t`; `&whole` is rejected. The key is rendered with `%prin1-piece`
+  (routed, escaped, NOT mutable-wrapped: the text only feeds `%string-concat`); with
+  `prin1-to-string` a `(defun k (a &key (b 2)) ...)` program carried the JVM array runtime
+  for the wrap, 14,218 -> 10,138 B (2026-09-22), WASM unchanged.
 - **The keyword scan is a CALL, not an inline loop.** A keyword parameter binds
   `(%ll-key-cell rest :kw upper)` (the plist cell or nil; `upper` is the upcased twin a
   lowercase-authored keyword also accepts, nil when the spellings coincide) and a function
@@ -49,9 +52,21 @@ so neither the native count check nor a dispatcher's shape could see it: before 
 `(defun f (&optional a) a) (f 1 2 3)` answered 1 everywhere.
 
 - **The check is the FIRST `let*` binding, before any default runs** (CL signals before
-  binding): `(__ll_arity (if (nthcdr k rest) (%program-error (%string-concat "..."
-  (prin1-to-string (+ req (length rest))))) nil))`, `cdr` for a single optional
+  binding): `(__ll_arity (if (cdr ... rest) (%program-error (%arity-surplus-message max req
+  rest)) nil))` -- nested `cdr`s for up to three optionals, `nthcdr` past that
   (`LambdaLists.tooManyArgsCheck`).
+- **The message is the internal primitive `%arity-surplus-message`**, text
+  `ClosRegistry.aritySurplusMessage`: an `Environment` function on the interpreter, ONE shared
+  runtime method `_aritySurplus(max, req, rest)` on the JVM (`JvmAritySurplusRuntimeBuilder`,
+  emitted unconditionally like `_nthcdr`, dropped by the class shaker when unused), and on
+  WASM `LambdaLists.lowerAritySurplusMessage` -- `%string-concat` over the non-consulting
+  `%prin1-to-string`, so the count is decimal under any `*print-base*` (ci-spec
+  `the-surplus-argument-message`). The first cut spelled it in Lisp as `prin1-to-string` over
+  `(+ req (length rest))`; on the JVM that was NOT the printer (`_lispToString` is in every
+  class already) but `prin1-to-string`'s mutable-result wrap (`_toMutStr`, `_strToCharVec`,
+  `_arrayToString`, `_rmGet`, ...), the generic `_length` with the code-point helpers
+  (`_cpidx`, `_scount`, `_cpsimple*`/`_cpwide*`) and a `_fx` adder -- +4.7 KB on a one-defun
+  program. `nthcdr` for two optionals brought `_nthcdr` in too, hence the nested `cdr`s.
 - **INLINE, not a helper defun like `%ll-check-keys`.** The first cut prepended a
   `%ll-too-many-args` defun on a program that spells `&optional`; seven JVM tests went red
   with `the function %LL-TOO-MANY-ARGS is undefined`, because `BuiltinFunctionWrappers`
@@ -90,8 +105,21 @@ so neither the native count check nor a dispatcher's shape could see it: before 
   | `merge-pathnames` (prelude) | 31,310 / 19,388 / 20,634 | 31,979 / 19,502 / 20,748 |
   | zlib | 159,290 / 106,621 / 110,637 | 159,639 / 106,855 / 110,872 |
 
-  The JVM's +7 KB on a tiny `&optional` program is `prin1-to-string` pulling the printer in
-  (the count in the message); a program that already prints pays ~+350 B.
+  The JVM's +7 KB on a tiny `&optional` program was the Lisp-spelled message (above), not the
+  count's printer. With `%arity-surplus-message` (2026-09-22; own programs, so the numbers
+  differ from the table above; pre-921 = `10ff1ae31~`):
+
+  | program | pre-921 | 921 | now |
+  |---|---|---|---|
+  | hello_world, pi_approx, `(print (+ 1 2))`, a `handler-case`, a `mapcar` | | identical | identical |
+  | `(defun f (a &optional (b 2)) (+ a b)) (print (f 1))` | 7,708 / 981 / 2,126 | 12,394 / 981 / 2,126 | 8,112 / 981 / 2,126 |
+  | the same without `print` | 7,664 / 194 / 402 | 12,350 / 194 / 402 | 8,068 / 194 / 402 |
+  | two `&optional` defuns (one with 2 optionals) | 8,043 / 1,589 / 2,754 | 13,008 / 1,661 / 2,826 | 8,552 / 1,635 / 2,800 |
+  | `merge-pathnames` | 31,347 / 19,389 / 20,635 | 32,016 / 19,503 / 20,749 | 32,039 / 19,477 / 20,723 |
+  | zlib | 159,304 / 106,621 / 110,637 | 159,653 / 106,855 / 110,872 | 159,651 / 106,810 / 110,827 |
+
+  The remaining ~+400 B on the JVM is `_aritySurplus` (~250 B) plus ~50 B of check and
+  `%error` throw per function.
 
 ## Variadic calling convention (both compilers)
 Physically fixed-arity: required params plus one trailing rest-list param

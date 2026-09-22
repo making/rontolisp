@@ -16703,6 +16703,52 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void theSurplusArgumentCheckCarriesNeitherTheStringRuntimeNorGenericLength() throws Exception {
+		// The &optional surplus-argument check renders its count through one shared
+		// runtime helper; spelled as prin1-to-string over (+ req (length rest)) it pulled
+		// the mutable-string wrap, the generic length and the code-point helpers into
+		// a program that uses none of them: 7,708 -> 12,394 B for this program (CLI
+		// -o). The helper costs 8,112 there, 8,102 here.
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(defun f (a &optional (b 2)) (+ a b)) (print (f 1))"));
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_toMutStr", "_strToCharVec", "_length", "_scount");
+		assertThat(classBytes.length).isLessThan(8_200);
+		assertThat(runClass(classBytes)).isEqualTo("3");
+	}
+
+	@Test
+	void theUnknownKeywordCheckCarriesNoMutableStringWrap() throws Exception {
+		// %ll-check-keys renders the offending key with the unwrapped %prin1-piece: its
+		// text only feeds %string-concat, and prin1-to-string's mutable-result wrap
+		// brought the array runtime along -- 14,218 -> 10,138 B for this program (CLI
+		// -o).
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(defun k (a &key (b 2)) (+ a b)) (print (k 1 :b 3))"));
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_toMutStr", "_strToCharVec");
+		assertThat(runClass(classBytes)).isEqualTo("4");
+		assertThat(compileAndRun("""
+				(defun k (a &key (b 2)) (+ a b))
+				(print (handler-case (k 1 :c 3) (program-error (e) (princ-to-string e))))
+				(print (handler-case (k 1 :b) (program-error (e) (princ-to-string e))))
+				""")).isEqualTo("\"Unknown keyword argument: :C\"\n\"Odd number of keyword arguments: :B\"");
+	}
+
+	@Test
+	void compileAndRunTheSurplusArgumentMessage() throws Exception {
+		// The surplus-argument message on the singular bound, a tail long enough for
+		// nthcdr, and a count rendered in decimal whatever *print-base* says.
+		assertThat(compileAndRun("""
+				(defun ll-four (a &optional b c d e) (list a b c d e))
+				(print (handler-case (funcall (lambda (&optional a) a) 1 2 3) (error (e) (princ-to-string e))))
+				(print (handler-case (ll-four 1 2 3 4 5 6) (error (e) (princ-to-string e))))
+				(print (let ((*print-base* 16))
+				         (handler-case (ll-four 1 2 3 4 5 6 7 8 9 10 11 12) (error (e) (princ-to-string e)))))
+				(print (ll-four 1 2 3 4 5))
+				""")).isEqualTo(
+				"\"Function expects at most 1 argument, got 3\"\n\"Function expects at most 5 arguments, got 6\"\n\"Function expects at most 5 arguments, got 12\"\n(1 2 3 4 5)");
+	}
+
+	@Test
 	void compileAndRunALegalCallAtTheFullClArityStillRuns() throws Exception {
 		// Now that a surplus argument signals, a wrapper or prelude defun SHORTER than
 		// CL's lambda list would refuse a legal call: the read family's first-class

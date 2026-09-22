@@ -2614,6 +2614,16 @@ public final class LispNames {
 	public static final String PROGRAM_ERROR_INTERNAL = "%PROGRAM-ERROR";
 
 	/**
+	 * Internal primitive {@code (%arity-surplus-message max required rest)}: the message
+	 * of the {@code &optional} surplus-argument check ({@code LambdaLists}),
+	 * {@code ClosRegistry.aritySurplusMessage(max, required + (length rest))}.
+	 * {@code max} and {@code required} are integer literals. The JVM answers it from one
+	 * shared runtime helper; the other backends lower it
+	 * ({@code LambdaLists.lowerAritySurplusMessage}).
+	 */
+	public static final String ARITY_SURPLUS_MESSAGE_INTERNAL = "%ARITY-SURPLUS-MESSAGE";
+
+	/**
 	 * Internal two-argument primitive {@code (%file-error pathname message)} that signals
 	 * a {@code file-error} carrying the pathname and reporting the message: what a failed
 	 * {@code open} lowers to on the compiled backends
