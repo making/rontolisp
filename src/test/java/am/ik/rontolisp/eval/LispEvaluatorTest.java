@@ -8276,9 +8276,24 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("""
 				(defmacro mfe-mac (x) `(list ,x))
 				(list (funcall (macro-function 'when) '(when t 1) nil)
-				      (funcall (macro-function 'mfe-mac) '(mfe-mac 2))
+				      (funcall (macro-function 'mfe-mac) '(mfe-mac 2) nil)
 				      (funcall (macro-function 'when) '(foo t 3) nil))
 				""").print()).isEqualTo("((IF T 1 NIL) (LIST 2) (IF T 3 NIL))");
+		// A macro function takes EXACTLY two arguments -- the form and the environment
+		// (CLHS 3.2.1) -- so 0, 1 or 4 arguments is a program-error, not a value.
+		// Verified against SBCL 2.2.9: (funcall (macro-function 'name) ...) with one
+		// argument used to expand happily here instead of signalling.
+		assertThat(evalMulti("""
+				(defmacro mfe-arity (x) `(list ,x))
+				(list (handler-case (progn (funcall (macro-function 'mfe-arity)) :no-error)
+				        (program-error (c) :program-error))
+				      (handler-case (progn (funcall (macro-function 'mfe-arity) '(mfe-arity 1)) :no-error)
+				        (program-error (c) :program-error))
+				      (handler-case (progn (funcall (macro-function 'mfe-arity) '(mfe-arity 1) nil) :ok)
+				        (program-error (c) :program-error))
+				      (handler-case (progn (funcall (macro-function 'mfe-arity) '(mfe-arity 1) nil 2 3) :no-error)
+				        (program-error (c) :program-error)))
+				""").print()).isEqualTo("(:PROGRAM-ERROR :PROGRAM-ERROR :OK :PROGRAM-ERROR)");
 	}
 
 	@Test

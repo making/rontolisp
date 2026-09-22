@@ -493,9 +493,14 @@ public final class LispPreludeLibrary {
 				""".formatted(nameTable(PackageRegistry.runtimeMacroNames())));
 		// What macro-function answers with on the compiled backends: non-nil (which is
 		// all a caller deciding "can I apply this" reads) and a signal when CALLED,
-		// because the expander it stands for is gone.
+		// because the expander it stands for is gone. A macro function takes EXACTLY
+		// two arguments (CLHS 3.2.1: the form and the environment), so the lambda list
+		// is NOT optional -- calling this with 0, 1 or 4 arguments must reach the
+		// ordinary arity check (a program-error on every backend,
+		// .kb/symbol-runtime-api.md)
+		// before the body's own signal, exactly like SBCL 2.2.9's answer.
 		SOURCES.put(LispNames.MACRO_EXPANDER_STUB, """
-				(defun %macro-expander-stub (form &optional environment)
+				(defun %macro-expander-stub (form environment)
 				  (error "macro-function: a compiled program cannot expand a macro at run time"))
 				""");
 		// A compiled image has no macro table, so a form built at RUNTIME that is not a

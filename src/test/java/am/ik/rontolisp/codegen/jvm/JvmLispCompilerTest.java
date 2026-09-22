@@ -2396,6 +2396,30 @@ class JvmLispCompilerTest {
 				+ "(NIL T T NIL NIL)\n" + "(((LIST 1) T) ((+ 1 2) NIL))");
 	}
 
+	// The compiled stub's arity check is the ORDINARY lambda-list check every compiled
+	// function gets, not a bespoke one: %macro-expander-stub's lambda list carries no
+	// &optional, so 0, 1 or 4 arguments signal a program-error before the body's own
+	// "cannot expand at run time" is ever reached for the correct 2-argument call --
+	// pinned the same way as the interpreter's real expander
+	// (LispEvaluatorTest#macroFunctionIsTheRealExpanderOnTheInterpreter, SBCL-checked).
+	@Test
+	void compileAndRunMacroFunctionValueArityMismatch() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString(
+					"""
+							(defmacro mfva-mac (x) `(list ,x))
+							(print (list (handler-case (progn (funcall (macro-function 'mfva-mac)) :no-error)
+							               (program-error (c) :program-error))
+							             (handler-case (progn (funcall (macro-function 'mfva-mac) '(mfva-mac 1)) :no-error)
+							               (program-error (c) :program-error))
+							             (handler-case (funcall (macro-function 'mfva-mac) '(mfva-mac 1) nil)
+							               (error (c) :signalled))
+							             (handler-case (progn (funcall (macro-function 'mfva-mac) '(mfva-mac 1) nil 2 3) :no-error)
+							               (program-error (c) :program-error))))
+							""")));
+		assertThat(compileAndRun(program)).isEqualTo("(:PROGRAM-ERROR :PROGRAM-ERROR :SIGNALLED :PROGRAM-ERROR)");
+	}
+
 	// A COMPUTED macroexpand-1 argument is the one shape the fold cannot decide, and the
 	// answer has to agree with macro-function's: a macro call signals (a compiled program
 	// has no macro table left), anything else comes back unchanged with expanded-p nil.

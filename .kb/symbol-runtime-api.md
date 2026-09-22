@@ -464,6 +464,19 @@ cannot be in a static table, so `UserMacroExpander.emitMacroFunctionTable` APPEN
 `(defun macro-function (symbol &optional environment) (%macro-fn symbol '(names...)))` when the
 program names `macro-function` at all, suppressing the prelude entry.
 
+**The VALUE `macro-function` answers is a function of EXACTLY two arguments** (CLHS 3.2.1: the
+form and the environment) — `macro-function` itself takes an optional environment for the
+LOOKUP, but the expander it returns does not: `(funcall (macro-function 'name))`,
+`(funcall (macro-function 'name) form)` and a call with more than two arguments all signal a
+`program-error`, verified against SBCL 2.2.9 (2026-09-22; `.todo/922` split this off `.todo/917`
+after `def-macro-test`'s middle probe read `got (T NIL T) want (T T T)` in 24 rows across the
+suite). The interpreter's expander checks `callArgs.size() != 2` explicitly (it has no ordinary
+lambda list to lean on — it is a raw `LispFunction`); the compiled stub gets the same answer for
+free by DROPPING the `&optional` from `%macro-expander-stub`'s lambda list, so the ordinary
+arity check every compiled function has already covers 0/1/4 arguments as a program-error before
+the body's own "cannot expand at run time" signal is ever reached for the correct 2-argument
+call (`ClosRegistry.arityMessage`, the same mechanism `defun`'s own mismatches use).
+
 **Two load-bearing emission details, both because the BACKENDS resolve the program a second
 time**: it is APPENDED (by the end every `defpackage` has been seen), and an unqualified name is
 spelled `cl-user::name` (`CL-USER::X` canonicalizes back to bare `X` under any current package,
@@ -488,9 +501,10 @@ recognized syntactically (`.kb/defmacro-backquote.md`); `expandAll`'s `SETF` cas
 verbatim.
 
 Tests: `LispEvaluatorTest#macroFunctionAndSpecialOperatorPPartitionTheOperators` (incl. the
-`while` leg) / `#macroFunctionIsTheRealExpanderOnTheInterpreter` /
+`while` leg) / `#macroFunctionIsTheRealExpanderOnTheInterpreter` (incl. the arity probes) /
 `#macroexpand1AnswersTheExpandedPFlag`, the matching pairs in `JvmLispCompilerTest` and
-`WasmLispCompilerIntegrationTest`, and the `macro-function` ci-spec case.
+`WasmLispCompilerIntegrationTest` (incl. `{compileAndRun,compile}MacroFunctionValueArityMismatch`),
+and the `macro-function` ci-spec case.
 
 Function-count pins (ci-spec + LispEvaluatorTest + JvmLispCompilerTest x2 +
 WasmLispCompilerIntegrationTest) move with each group: 210 -> 217 (the symbol API), 324 -> 325

@@ -1119,9 +1119,13 @@ public final class LispEvaluator {
 			}
 			String name = sym.name();
 			return new LispFunction(LispNames.MACRO_FUNCTION + " " + name, callArgs -> {
-				if (callArgs.isEmpty() || callArgs.size() > 2) {
+				// CLHS 3.2.1: a macro function takes EXACTLY two arguments (the form and
+				// the environment) -- not "1 or 2" like macro-function itself, which
+				// merely accepts an optional environment for the LOOKUP. SBCL 2.2.9
+				// signals a program-error for 0, 1 or 4 arguments here.
+				if (callArgs.size() != 2) {
 					throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
-							"a macro function expects 1 or 2 arguments, got " + callArgs.size());
+							"a macro function expects 2 arguments, got " + callArgs.size());
 				}
 				return macroexpand1(macroCallForm(name, callArgs.get(0)));
 			});
