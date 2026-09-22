@@ -2443,6 +2443,15 @@ public final class PackageResolver {
 				return canonical(pkg, qn.member()).name();
 			}
 		}
+		if (("T".equals(name) || "NIL".equals(name)) && currentUsesCl()) {
+			// The reader never mints PKG::T -- t and nil read as the singletons in every
+			// cl-using package -- so intern answers them too, bare, rather than the
+			// qualified spelling the resolver would give a name cl owns (CL:T under cl).
+			LispPackage current = this.registry.get(this.currentPackage);
+			if (current == null || (!current.shadows(name) && !current.imports().containsKey(name))) {
+				return name;
+			}
+		}
 		try {
 			if (resolveUnqualified(name) instanceof LispSymbol sym) {
 				return sym.name();

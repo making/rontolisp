@@ -105,9 +105,28 @@ since `.todo/917` a package keeps a MEMBER table of what `intern` / `export` / `
   :keyword)` builds a keyword; any other package argument goes through
   `PackageResolver.internSpellingIn`, which throws `No such package: X` on every backend.
 - `t` and `nil` are singletons, not `LispSymbol`s: everything that answers a symbol by NAME
-  (`find-symbol`, `intern`, the enumerations) maps the spellings `"T"`/`"NIL"` back to them
-  (`LispEvaluator.symbolOfSpelling`), so `(eq (find-symbol "T" :cl) t)` holds on the
-  interpreter. The compiled backends' `(intern "T")` is still the string symbol (`.todo/924`).
+  (`find-symbol`, `intern`, the enumerations) maps the spellings `"T"`/`"NIL"` back to them,
+  on EVERY backend. Interpreter: `LispEvaluator.symbolOfSpelling`, plus
+  `PackageResolver.internSpellingExact` answering bare `T`/`NIL` in a cl-using package (the
+  resolver gave `(intern "T" "CL")` the cl-owned spelling `CL:T`). Compiled: only NIL needs an
+  arm, because `t` already IS the symbol `"T"` there (the JVM string `"T"`, `eq` by content;
+  the WASM interned symbol at T's offset) -- the JVM's 1-arg intern goes through the shared
+  `_internName` helper (quote strip, then `"NIL"` -> `null`), WASM's `_intern_sym` compares the
+  interned offset against NIL's and returns the null ref (the reader's own rule); the cl arm
+  of a literal 2-arg `find-symbol` folds through `symbolFormOfSpelling`. Pinned by
+  `TAndNilSingletonCorpus` (`LispEvaluatorTest` / `JvmLispCompilerTest` /
+  `WasmLispCompilerIntegrationTest#...TAndNilSingletons`) and the ci-spec `symbol-runtime-api`
+  case. **Measured 2026-09-22** (premise correction of `.todo/924`, which said the compiled
+  `(intern "T")` was not `t`): `(eq (intern "T") t)` was already T on JVM, WASM and the
+  component; what diverged was NIL (`(intern "NIL")`, `(find-symbol "NIL" "CL")`, a computed
+  `find-symbol`, `do-external-symbols` over cl and `find-all-symbols` yielding a non-nil `NIL`)
+  and the literal 1-arg fold (`(find-symbol "T")` -> NIL). Size of the rail: a program that
+  never interns is byte-identical (the WASM arm is emitted only under `usesIntern`); a
+  one-`intern` program grows JVM +88 B (the helper method), WASM +156 B / component +160 B
+  (the arm, plus the print path's nil branch the non-null `_intern_sym` had let the shaker
+  drop); a five-`intern` program +55 B JVM / +14 B WASM. ANSI `packages` / `symbols`
+  (interpreter): 0 fixed, 0 regressed -- `.todo/917` had already fixed every row the suite
+  reads.
 - `make-symbol` prepends the `#:` uninterned marker (same string twice = `eq` symbols, unlike
   CL).
 
@@ -133,7 +152,9 @@ offset matches literals in the offset-based `_env_lookup`/`eq`**; a `usesIntern`
 reader. Unbound symbol-value traps (`unreachable`, the `%error` convention).
 
 **Compile-path folds and limits**: `find-symbol` requires a literal string and matches its
-VERBATIM name against `isClSymbol` + keyword + Pass-1 `userDefunNames`; a literal `(fboundp 'x)`
+VERBATIM name against `isClMemberName` (every name cl exports, implemented or not -- `T`,
+`NIL`, `DEBUG` included, as the interpreter answers) + keyword + Pass-1 `userDefunNames`
+(`LispMacroExpander.foldLiteralFindSymbol`, the same arms as its status); a literal `(fboundp 'x)`
 folds with full knowledge, a computed one sees functions only. `#'symbol-name`/`#'intern`/
 `#'make-symbol` have wrappers; find-symbol/boundp/fboundp/fmakunbound/symbol-value have none.
 

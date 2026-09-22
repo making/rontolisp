@@ -11544,6 +11544,11 @@ cases:
       (print (multiple-value-list (find-symbol "CAR")))
       (print (multiple-value-list (find-symbol "SYM-API-KW" :keyword)))
       (print (multiple-value-list (intern "CAR" "COMMON-LISP")))
+      ;; t and nil are singletons, not symbols spelled "T" / "NIL": the symbol
+      ;; builders answer them by name on every backend, as SBCL does.
+      (print (list (eq (intern "T") t) (eq (intern "NIL") nil)
+                   (eq (find-symbol "NIL" "CL") nil) (eq (find-symbol "T") t)
+                   (multiple-value-list (find-symbol "NIL"))))
       (print (symbol-plist 'sym-api-no-plist))
       (setf (get 'sym-api-plist 'a) 1)
       (print (symbol-plist 'sym-api-plist))
@@ -11582,6 +11587,7 @@ cases:
       (CAR :INHERITED)
       (:SYM-API-KW :EXTERNAL)
       (CAR :EXTERNAL)
+      (T T T T (NIL :INHERITED))
       NIL
       (A 1)
   - name: macro-function-and-special-operator-p

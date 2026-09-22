@@ -400,7 +400,8 @@ by `RontoLispCliTest#{replEchoesEveryValueOnItsOwnLine,replPromptNamesTheCurrent
   shape with the implicit nil block). Both establish the implicit nil block now (the
   interpreter's `evalDoSymbols` installs it around its loop); `return` used to die there.
   `t` and `nil` come back as the singletons wherever a symbol is answered by name
-  (`LispEvaluator.symbolOfSpelling`: `find-symbol`, `intern`, the enumerations).
+  (`LispEvaluator.symbolOfSpelling`: `find-symbol`, `intern`, the enumerations), on the
+  compiled backends too (`.kb/symbol-runtime-api.md`, "The spelling-identity model").
 - **A `cl:`-qualified read-time constant**: `LispReader.readSymbol` substitutes
   `nil`/`t`/`pi`/`most-*-fixnum`/`array-*-limit`/`char-code-limit`/
   `internal-time-units-per-second`/`lambda-list-keywords` before ANY package resolution, so `cl:pi`

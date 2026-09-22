@@ -176,7 +176,31 @@ final class JvmSymbolApiCompiler {
 		// A mutable character vector is a string here ((intern (make-string n)) after
 		// the buffer is filled), so normalize before the quote strip casts to String.
 		JvmArrayCompiler.emitStrvNormalize(ctx, className);
-		emitStripQuotes(ctx);
+		JvmEmitHelper.emitSharedCall(ctx, className, "_internName", 1, helper -> {
+			helper.emit(Opcode.ALOAD_0);
+			emitStripQuotes(helper);
+			emitNilSpellingToNil(helper);
+		});
+	}
+
+	/**
+	 * Maps the stripped name on the stack to the symbol it names: the spelling
+	 * {@code NIL} is the {@code nil} singleton ({@code null}), not a symbol of that name.
+	 * {@code T} needs no arm -- {@code t} IS the string {@code "T"} on this backend, and
+	 * {@code eq} compares strings by content.
+	 */
+	private static void emitNilSpellingToNil(JvmLispCompiler.Ctx ctx) {
+		ctx.emit(Opcode.DUP);
+		// The literal is compared, never produced, so it is no designator the
+		// dispatch gate's name probes must see.
+		JvmEmitHelper.compileUnspelledLiteral("NIL", ctx);
+		ctx.emit(Opcode.SWAP);
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(ctx.objectEquals.index());
+		int keep = emitBranch(ctx, Opcode.IFEQ);
+		ctx.emit(Opcode.POP);
+		ctx.emit(Opcode.ACONST_NULL);
+		JvmEmitHelper.patchBranch(ctx, keep, ctx.code.size());
 	}
 
 	/** make-symbol: {@code "#:".concat(content)} -- the gensym uninterned convention. */
@@ -212,14 +236,12 @@ final class JvmSymbolApiCompiler {
 			JvmExprCompiler.compileExpr(LispMacroExpander.computedFindSymbol(parts.get(1)), ctx, className);
 			return;
 		}
-		String name = str.value();
-		boolean known = PackageRegistry.isClSymbol(name) || (!name.isEmpty() && name.charAt(0) == ':')
-				|| ctx.userDefunNames.contains(name);
-		if (known) {
-			JvmEmitHelper.compileStringLiteral(name, ctx);
+		LispVal found = LispMacroExpander.foldLiteralFindSymbol(str.value(), ctx.userDefunNames);
+		if (found instanceof LispSymbol sym) {
+			JvmEmitHelper.compileStringLiteral(sym.name(), ctx);
 		}
 		else {
-			ctx.emit(Opcode.ACONST_NULL);
+			JvmExprCompiler.compileExpr(found, ctx, className);
 		}
 	}
 

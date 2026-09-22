@@ -5391,6 +5391,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// droppable ranges at all (see the stringRanges computation below).
 		final List<StringTable.StringEntry> internRows;
 		final int internBase;
+		// NIL's offset in the runtime intern table (-1 without one): _intern_sym maps a
+		// runtime spelling NIL to the null ref by it.
+		int internNilOffset = -1;
 		if (usesIntern) {
 			// Intern NIL/quote/function before snapshotting so the runtime resolves them
 			// to the same offsets the eval runtime uses (uppercase-canonical: the
@@ -5400,6 +5403,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			// ordinary interned symbol T -- no t special-case in the reader). T itself is
 			// interned above via symbolTOffset.
 			int nilOffset = stringTable.addString("NIL").offset();
+			internNilOffset = nilOffset;
 			int quoteOffset = stringTable.addString(LispNames.QUOTE).offset();
 			int functionOffset = stringTable.addString(LispNames.FUNCTION).offset();
 			List<StringTable.StringEntry> internEntries = new ArrayList<>(stringTable.entries());
@@ -5487,7 +5491,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the
 		// string table is serialized because they embed the offset of the symbol t.
 		final byte[] makeSymbolBody = WasmSymbolApiRuntimeBuilder.buildMakeSymbol();
-		final byte[] internSymBody = WasmSymbolApiRuntimeBuilder.buildInternSym();
+		final byte[] internSymBody = WasmSymbolApiRuntimeBuilder.buildInternSym(internNilOffset);
 		final byte[] boundpBody = WasmSymbolApiRuntimeBuilder.buildBoundp(symbolTOffset);
 		final byte[] symbolValueBody = WasmSymbolApiRuntimeBuilder.buildSymbolValue(symbolTOffset);
 		final byte[] fboundpBody = WasmSymbolApiRuntimeBuilder.buildFboundp(symbolTOffset);

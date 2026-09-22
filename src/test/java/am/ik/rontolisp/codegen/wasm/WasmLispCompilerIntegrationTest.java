@@ -16157,6 +16157,14 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void symbolBuildersAnswerTheTAndNilSingletons() throws Exception {
+		// The JvmLispCompilerTest.compileAndRunSymbolBuildersAnswerTheTAndNilSingletons
+		// twin: _intern_sym maps the runtime spelling NIL to the null ref.
+		assertThat(compileAndRunPrelude(am.ik.rontolisp.TAndNilSingletonCorpus.SOURCE))
+			.isEqualTo(am.ik.rontolisp.TAndNilSingletonCorpus.EXPECTED);
+	}
+
+	@Test
 	void runtimePackageApi() throws Exception {
 		// The JvmLispCompilerTest.compileAndRunRuntimePackageApi twin: the same
 		// prelude defuns over the injected baked table plus the mutable runtime
