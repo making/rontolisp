@@ -732,7 +732,16 @@ is composed above it. sbcl signals on `stream-element-type` of a CLOSED stream; 
   (`wideElementTypeUnavailableStub`) rather than open octets.
 - **Literal-only on the compile paths, by the `:io` trade.** A computed wide type would put every
   uiop wrapper and `#'open` behind the helpers. `uiop:with-temporary-file` opens through a computed
-  element type, so a wide literal there is refused at call time too.
+  element type, so a wide literal there is refused at call time too. Measured 2026-09-23
+  (`.todo/926`): forcing the wide helpers + the registry into computed-`:element-type`
+  programs costs +17.0K JVM / +14.4K Preview 1 on the `computed-stream-options` corpus program
+  (which passes only `'character` and `(unsigned-byte 8)` down) and +9.3K / +6.8K on an
+  `(apply #'open ...)` wrapper -- and that is WITHOUT the runtime twin of
+  `macro/StreamElementType.of` the lowering would also splice (the `covering` interval logic
+  over every integer spelling, plus the per-site binary-or-not dispatch growth). Four ANSI
+  tests want it (`FILE-POSITION.7` `.8`, `OPEN.65`, `MAKE-TWO-WAY-STREAM.13`); no corpus caller
+  passes a wide type computed. Declined like the computed `:io` before it.
+  **Trigger**: a real caller that computes a wide `:element-type`.
 - **An octet spelling emits exactly `'(unsigned-byte 8)`** (`elementTypeLiteral` writes the widened
   spec), so `bit` / `(unsigned-byte 3)` / `(integer 0 200)` compile to the class the octet always
   did (`JvmLispCompilerTest#theOctetElementTypeSpellingsCompileToTheSameBytesAsUnsignedByte8`).
