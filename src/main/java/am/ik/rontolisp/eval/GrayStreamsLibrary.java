@@ -620,6 +620,34 @@ public final class GrayStreamsLibrary {
 				return listOf(dispatchSymbol(valueStreamHelper, ctx), rewrite(parts.get(1), ctx),
 						rewrite(parts.get(2), ctx));
 			}
+			if (LispNames.WRITE_LINE.equals(opName) && parts.size() > 3 && streamArgMayBeInstance(parts.get(2))) {
+				// (write-line value stream [:start s] [:end e]) -- like the
+				// read/write-sequence precedent below, only the two bounding keywords
+				// ride the dispatch; anything else is left for the lowering (whose
+				// call-site program-error keeps :allow-other-keys working). A missing
+				// :end stays nil and the helper defaults it.
+				LispVal start = new am.ik.rontolisp.LispInteger(0);
+				LispVal end = am.ik.rontolisp.LispNil.INSTANCE;
+				boolean literalKeywords = (parts.size() - 3) % 2 == 0;
+				if (literalKeywords) {
+					for (int k = 3; k + 1 < parts.size(); k += 2) {
+						if (parts.get(k) instanceof am.ik.rontolisp.LispSymbol kw && ":START".equals(kw.name())) {
+							start = rewrite(parts.get(k + 1), ctx);
+						}
+						else if (parts.get(k) instanceof am.ik.rontolisp.LispSymbol kw && ":END".equals(kw.name())) {
+							end = rewrite(parts.get(k + 1), ctx);
+						}
+						else {
+							literalKeywords = false;
+							break;
+						}
+					}
+				}
+				if (literalKeywords) {
+					return listOf(dispatchSymbol(WRITE_LINE_DISPATCH, ctx), rewrite(parts.get(1), ctx),
+							rewrite(parts.get(2), ctx), start, end);
+				}
+			}
 			if (LispNames.FILE_POSITION.equals(opName) && parts.size() == 2 && streamArgMayBeInstance(parts.get(1))) {
 				return listOf(dispatchSymbol(FILE_POSITION_DISPATCH, ctx), rewrite(parts.get(1), ctx));
 			}

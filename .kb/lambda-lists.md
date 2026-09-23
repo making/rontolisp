@@ -86,7 +86,8 @@ so neither the native count check nor a dispatcher's shape could see it: before 
   reference-gated and a computed one constructs an end-of-file instance the instance gate
   (decided before the wrappers exist) cannot see -- that first cut failed EVERY wasm
   compile with `%OBJ-NEW reached the compiler with no instance type emitted`.
-  `#'write-line` still takes `(string &optional stream)` without CL's `&key start end`.
+  `#'write-line` takes the whole `(string &optional stream &key start end)` tail since
+  2026-09-23 (`.kb/read-load-streams.md`, "`write-line` takes `:start` / `:end`").
 - `complement`'s lambda (arities 0-3, `expandComplement`) now REFUSES a fourth argument
   instead of dropping it; ANSI `COMPLEMENT.4` moved FAIL -> ERROR.
 - **Measured**, interpreter, whole ANSI suite (suite `ca06bd9`, test NAMES diffed across every

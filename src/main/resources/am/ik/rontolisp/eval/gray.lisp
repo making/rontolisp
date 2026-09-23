@@ -427,14 +427,22 @@
           nil)
         (fresh-line stream))))
 
-(defun rontolisp::%gray-write-line-dispatch (s stream)
+(defun rontolisp::%gray-write-line-dispatch (s stream &optional start end)
+  ;; A nil bound is ABSENT, never an explicit nil: user methods default start to
+  ;; 0 (the echo stream does), and an explicit nil would override that default.
   (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
-          (rontolisp:stream-write-string stream s)
+          (if start
+              (if end
+                  (rontolisp:stream-write-string stream s start end)
+                  (rontolisp:stream-write-string stream s start))
+              (if end
+                  (rontolisp:stream-write-string stream s 0 end)
+                  (rontolisp:stream-write-string stream s)))
           (rontolisp:stream-terpri stream)
           s)
-        (write-line s stream))))
+        (write-line s stream :start (or start 0) :end end))))
 
 (defun rontolisp::%gray-force-output-dispatch (stream)
   (let ((stream (%stream-target stream)))

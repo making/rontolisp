@@ -1133,6 +1133,78 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalWriteLineTakesStartAndEnd() {
+		// Call position bounds the written substring; the return is the whole string.
+		assertThat(evalMulti("""
+				(let ((s (make-string-output-stream)))
+				  (list (write-line "hello" s :start 1 :end 3)
+				        (get-output-stream-string s)))""").print()).isEqualTo("(\"hello\" \"el\n\")");
+		assertThat(evalMulti("""
+				(let ((s (make-string-output-stream)))
+				  (list (write-line "hello" s :start 2)
+				        (get-output-stream-string s)))""").print()).isEqualTo("(\"hello\" \"llo\n\")");
+		assertThat(evalMulti("""
+				(let ((s (make-string-output-stream)))
+				  (list (write-line "hello" s :start 0 :end nil)
+				        (get-output-stream-string s)))""").print()).isEqualTo("(\"hello\" \"hello\n\")");
+		assertThat(evalMulti("""
+				(let ((s (make-string-output-stream)))
+				  (list (write-line "hello" s)
+				        (get-output-stream-string s)))""").print()).isEqualTo("(\"hello\" \"hello\n\")");
+		// The first occurrence of a keyword is the one that counts.
+		assertThat(evalMulti("""
+				(let ((s (make-string-output-stream)))
+				  (list (write-line "abcde" s :end 3 :end 2)
+				        (get-output-stream-string s)))""").print()).isEqualTo("(\"abcde\" \"abc\n\")");
+		// First class takes the same keywords.
+		assertThat(evalMulti("""
+				(let ((s (make-string-output-stream)))
+				  (list (funcall #'write-line "abcdef" s :end 2)
+				        (get-output-stream-string s)))""").print()).isEqualTo("(\"abcdef\" \"ab\n\")");
+		assertThat(evalMulti("""
+				(let ((s (make-string-output-stream)))
+				  (list (funcall #'write-line "hi" s)
+				        (get-output-stream-string s)))""").print()).isEqualTo("(\"hi\" \"hi\n\")");
+		// A keyword in stream position means no stream: standard output.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		LispVal result = evaluator.eval(LispReader.readFromString("(write-line \"hello\" :start 1 :end 3)"));
+		assertThat(baos.toString()).isEqualTo("el" + System.lineSeparator());
+		assertThat(result).isEqualTo(new LispString("hello"));
+		// An unknown keyword, an odd tail, and an unknown keyword under an explicit
+		// nil :allow-other-keys are program-errors; a true one admits the unknown.
+		String pe = "(program-error () :pe)";
+		assertThat(
+				eval("(let ((s (make-string-output-stream))) (handler-case (write-line \"a\" s :foo nil) " + pe + "))")
+					.print())
+			.isEqualTo(":PE");
+		assertThat(eval("(let ((s (make-string-output-stream))) (handler-case (write-line \"a\" s :start) " + pe + "))")
+			.print()).isEqualTo(":PE");
+		assertThat(eval("(let ((s (make-string-output-stream))) (handler-case "
+				+ "(write-line \"a\" s :allow-other-keys nil :foo nil) " + pe + "))")
+			.print()).isEqualTo(":PE");
+		assertThat(evalMulti("""
+				(let ((s (make-string-output-stream)))
+				  (list (write-line "abcde" s :end 3 :allow-other-keys t :foo 'bar)
+				        (get-output-stream-string s)))""").print()).isEqualTo("(\"abcde\" \"abc\n\")");
+		// A Gray instance honors the bounds through the generic's own optionals --
+		// on every path, since the wrappers forward them and the call position
+		// reaches the same wrapper.
+		assertThat(evalMulti("""
+				(defclass gw-wlb (rontolisp:fundamental-character-output-stream) ((acc :initform "")))
+				(defmethod rontolisp:stream-write-string ((s gw-wlb) str &optional start end)
+				  (setf (slot-value s 'acc)
+				        (concatenate 'string (slot-value s 'acc) (subseq str (or start 0) (or end (length str)))))
+				  str)
+				(defvar *wl-seen* nil)
+				(let ((s (make-instance 'gw-wlb)))
+				  (list (write-line "hello" s :start (progn (setq *wl-seen* t) 1) :end 3)
+				        (write-string "hello" s :start 1 :end 3)
+				        (slot-value s 'acc)
+				        *wl-seen*))""").print()).isEqualTo("(\"hello\" \"hello\" \"el\nel\" T)");
+	}
+
+	@Test
 	void evalWriteToString() {
 		assertThat(eval("(write-to-string '(a \"b\" 3))")).isEqualTo(new LispString("(A \"b\" 3)"));
 	}

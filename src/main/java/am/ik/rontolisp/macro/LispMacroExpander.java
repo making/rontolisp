@@ -15268,6 +15268,56 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Lowers a {@code (write-line str [stream] :start s :end e)} call carrying bounding
+	 * keywords into {@code (let ((s_ str) (st_ stream))) (write-string s_ st_ :start s
+	 * :end e) (terpri st_) s_)} over once-evaluated temps -- the Gray protocol's own
+	 * write-line shape ({@code gray.lisp}'s {@code %gray-write-line-dispatch} is a
+	 * write-string plus a terpri returning the string). The inner call carries the
+	 * ORIGINAL keyword tail, so its own lowering ({@link #lowerWriteStringBounds}) owns
+	 * the bounds once more: first-wins, {@code :allow-other-keys}, the unknown-keyword
+	 * refusal. A malformed tail (an unknown indicator, an odd tail) lowers to the
+	 * call-site {@code program-error} instead ({@link #keywordTailError}), so the
+	 * interpreter's handler-case sees it and the compiled backends stay compilable.
+	 * Returns null for the plain keyword-free shape, which keeps its dedicated code path
+	 * (including the backends' literal-print fold and socket writes).
+	 * @param cons the write-line expression
+	 * @return the lowered expression, or null when no bounding keywords are present
+	 */
+	public static @Nullable LispVal lowerWriteLineBounds(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		int i = 2;
+		boolean hasStream = parts.size() > 2
+				&& !(parts.get(2) instanceof LispSymbol streamKw && streamKw.name().startsWith(":"));
+		if (hasStream) {
+			i = 3;
+		}
+		if (parts.size() <= i) {
+			return null;
+		}
+		LispVal tailError = keywordTailError(cons, LispNames.WRITE_LINE, parts, i, LispNames.START_KEYWORD,
+				LispNames.END_KEYWORD);
+		if (tailError != null) {
+			return tailError;
+		}
+		String prefix = "__wl" + MV_COUNTER.getAndIncrement();
+		LispSymbol s = new LispSymbol(prefix + "_s");
+		LispSymbol st = new LispSymbol(prefix + "_t");
+		List<LispVal> inner = new java.util.ArrayList<>();
+		inner.add(new LispSymbol(LispNames.WRITE_STRING));
+		inner.add(s);
+		inner.add(st);
+		inner.addAll(parts.subList(i, parts.size()));
+		List<LispVal> body = new java.util.ArrayList<>();
+		body.add(new LispSymbol(LispNames.PROGN));
+		body.add(listToCons(inner));
+		body.add(listToCons(List.of(new LispSymbol(LispNames.TERPRI), st)));
+		body.add(s);
+		return nestMvBindings(
+				List.of(new MvBinding(s, parts.get(1)), new MvBinding(st, hasStream ? parts.get(2) : LispNil.INSTANCE)),
+				listToCons(body));
+	}
+
+	/**
 	 * The parsed {@code (op seq stream [:start s] [:end e])} arguments. {@code start}
 	 * defaults to {@code 0} and {@code end} to {@code nil}, which the expansions resolve
 	 * to the whole buffer AFTER the packed primitive has had its look (a rank-n packed

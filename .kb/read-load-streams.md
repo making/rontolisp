@@ -703,6 +703,62 @@ site ~+0.1 KB. Real programs already carry the machinery: `checkpoint-tokenizer`
 No narrower gate exists without losing the guarantee -- any call can receive a bad sequence or
 bound at runtime -- so the numbers above are the accepted shape, not a problem to fix.
 
+## `write-line` takes `:start` / `:end` (2026-09-23)
+
+**Invariant: `(write-line string [stream] :start s :end e)` writes the bounded
+substring plus the newline and returns the whole string, in call position and
+first class, on all four backends.** First-wins duplicates, an explicit nil `:end`,
+`:allow-other-keys`, and the `program-error` on an unknown indicator or an odd tail
+all follow the `read-sequence`/`write-sequence` tail rule
+(`LispMacroExpander.keywordTailProblem`, shared with the interpreter's first-class
+validator so the two cannot disagree on the rule or the text).
+
+- One lowering, three front ends: `LispMacroExpander.lowerWriteLineBounds` rewrites a
+  keyword call into `(write-string s_ st_ <original tail>)` plus `(terpri st_)` over
+  once-evaluated temps -- the Gray protocol's own write-line shape -- returning the
+  string. The inner call carries the original tail, so `lowerWriteStringBounds` owns
+  the bounds once more; a malformed tail lowers to the call-site `program-error`
+  instead, so the interpreter's handler-case sees it and the compiled backends stay
+  compilable. The keyword-free shape keeps its dedicated path (the WASM literal-print
+  fold, the socket writes), byte-identical.
+- First class (`BuiltinFunctionWrappers.writeLineWrapper`, ungated): `(s &optional st
+  &rest kw)` re-extracting the runtime keywords into one literal call, the
+  `boundedSequenceIo` model with the stream still optional.
+- A Gray instance honors the bounds through the generic's own `&optional start end`.
+  On the compile paths the call-site rewrite forwards them onto the dispatch helper
+  (which carries them back into `write-line` for any other stream, so a variable
+  stream keeps them exactly as the lowering does); on the interpreter the wrappers
+  forward them to the generic. A nil bound is never passed explicitly -- user methods
+  default start to 0 (the echo stream does) and an explicit nil would override that
+  default, which is also what fixed `MAKE-ECHO-STREAM.20` as a side effect (it wrote
+  the whole string before). The `write-string` wrapper learned the same forwarding
+  for this; a keyword `write-string` to an instance on the compile paths is still the
+  handle path (its rewrite matches the plain shape only) -- a separate gap.
+- A socket keeps the DEDICATED path for the plain shape only: a bounded `write-line`
+  to a socket rides the lowering and stops at `terpri`, which has no socket arm on
+  any backend (interpreter: `not an output stream`; JVM: `Socket cannot be cast to
+  Writer`; `.todo/940`).
+- **Sizes** (JVM `.class`, same harness as the lambda-list tables): a plain
+  `(write-line ...)` call is byte-identical; a two-argument `funcall` goes 6,325 ->
+  23,150 B -- the variadic-wrapper price, at parity with `#'write-string` (22,511 B
+  on the same shape).
+- **ANSI `streams`** (interpreter, suite `ca06bd9`, names diffed before/after):
+  `WRITE-LINE.ERROR.2/.3/.4` FAIL -> PASS; `WRITE-LINE.4-.10` still FAIL but print
+  the right bytes now -- they fail on the `#.(concatenate ...)` expectation form,
+  which the runner compares unevaluated (the `.todo/739` harness gap, not behavior;
+  `WRITE-STRING.4-.10` pass only because their expectations are plain strings).
+  `WRITE-LINE.1/.3/.12` fail identically before/after on the same `#.` shape,
+  `.11` on the two-way stream (`.todo/927`), `.2` on `:notes`. Note the new
+  asymmetry this leaves: `WRITE-STRING.ERROR.2` (an odd tail, silently dropped)
+  still fails while `WRITE-LINE.ERROR.2` passes -- write-string's drop is its own
+  gap, not this change's.
+- Pinned by `LispEvaluatorTest#evalWriteLineTakesStartAndEnd` (bounds, first-wins,
+  first class, the stdout keyword position, the three error shapes, the Gray drop),
+  `JvmLispCompilerTest#writeLineTakesStartAndEnd` /
+  `#compileAndRunGrayWriteLineBoundsAreEvaluatedAndDropped`,
+  `WasmLispCompilerIntegrationTest#writeLineTakesStartAndEnd`, ci-spec
+  `write-line-start-end-keywords`; docs `reference/functions/write-line.md` (en+ja).
+
 ## Element types wider and narrower than one octet
 
 `.todo/919`. An integer `:element-type` opens a binary stream whose ELEMENT is a fixed number of

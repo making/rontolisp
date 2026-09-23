@@ -5209,6 +5209,34 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void writeLineTakesStartAndEnd() throws Exception {
+		// :start / :end bound the written substring, in call position and first
+		// class; the return is the whole string, like write-string's.
+		assertThat(compileAndRun("""
+				(let ((s (make-string-output-stream)))
+				  (prin1 (write-line "hello" s :start 1 :end 3))
+				  (terpri)
+				  (princ (get-output-stream-string s)))
+				(let ((s (make-string-output-stream)))
+				  (prin1 (funcall #'write-line "abcdef" s :end 2))
+				  (terpri)
+				  (princ (get-output-stream-string s)))
+				(let ((s (make-string-output-stream)))
+				  (prin1 (write-line "hello" s :start 2))
+				  (terpri)
+				  (princ (get-output-stream-string s)))
+				(let ((s (make-string-output-stream)))
+				  (prin1 (write-line "hello" s :start 0 :end nil))
+				  (terpri)
+				  (princ (get-output-stream-string s)))
+				(let ((s (make-string-output-stream)))
+				  (prin1 (write-line "hello" s))
+				  (terpri)
+				  (princ (get-output-stream-string s)))
+				""")).isEqualTo("\"hello\"\nel\n\"abcdef\"\nab\n\"hello\"\nllo\n\"hello\"\nhello\n\"hello\"\nhello");
+	}
+
+	@Test
 	void withOutputToStringCollectsPrintFamilyOutput() throws Exception {
 		assertThat(compileAndRun("""
 				(print (with-output-to-string (s)
@@ -13635,8 +13663,11 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileAndRunTcpEchoRoundTripOnLoopback() throws Exception {
-		// Single-threaded choreography on port 0: connect before accept (the connection
+	void compileAndRunTcpEchoRoundTripOnLoopback() throws Exception { // Single-threaded
+																		// choreography on
+																		// port 0: connect
+																		// before accept
+																		// (the connection
 		// sits in the listen backlog) and write before the peer reads (small payloads
 		// sit in the kernel socket buffers), so nothing deadlocks.
 		assertThat(compileAndRun("""
@@ -13653,6 +13684,25 @@ class JvmLispCompilerTest {
 				      (close listener)
 				      (print reply))))
 				""")).isEqualTo("\"hello\"");
+	}
+
+	@Test
+	void compileAndRunGrayWriteLineHonorsItsBounds() throws Exception {
+		// The Gray rewriter forwards :start / :end onto the dispatch helper, which
+		// honors them for an instance and carries them back into write-line for any
+		// other stream.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gw-wl (rontolisp:fundamental-character-output-stream) ((acc :initform "")))
+					(defmethod rontolisp:stream-write-string ((s gw-wl) str &optional start end)
+					  (setf (slot-value s 'acc)
+					        (concatenate 'string (slot-value s 'acc)
+					                     (subseq str (or start 0) (or end (length str)))))
+					  str)
+					(let ((s (make-instance 'gw-wl)))
+					  (print (write-line "hello" s :start 1 :end 3))
+					  (print (slot-value s 'acc)))
+					"""))))).isEqualTo("\"hello\"\n\"el\n\"");
 	}
 
 	@Test

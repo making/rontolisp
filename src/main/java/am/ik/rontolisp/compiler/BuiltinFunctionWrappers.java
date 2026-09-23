@@ -738,6 +738,19 @@ public final class BuiltinFunctionWrappers {
 		return new WrapperDef(name, List.of("seq", "st", LispNames.LAMBDA_REST, "kw"), List.of(body));
 	}
 
+	// write-line: the same runtime keyword re-extraction boundedSequenceIo does for
+	// write-string, but the stream stays optional -- a one-argument funcall keeps
+	// working, and an omitted stream forwards as nil, the standard-output designator
+	// the call position treats like the omitted argument.
+	private static WrapperDef writeLineWrapper() {
+		LispVal start = getfKwOr(LispNames.START_KEYWORD, new LispInteger(0));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.WRITE_LINE), new LispSymbol("s"),
+				new LispSymbol("st"), new LispSymbol(LispNames.START_KEYWORD), start,
+				new LispSymbol(LispNames.END_KEYWORD), getfKw(LispNames.END_KEYWORD)));
+		return new WrapperDef(LispNames.WRITE_LINE,
+				List.of("s", LispNames.LAMBDA_OPTIONAL, "st", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
 	// The readtable trio, whose call-position lowering is a no-op returning the lite
 	// answer (nil / :upcase / t -- .kb/reader-case-upcase.md): the wrapper takes any
 	// arity and answers the same constant, because the arguments cannot have an effect
@@ -1866,12 +1879,15 @@ public final class BuiltinFunctionWrappers {
 			// terpri / fresh-line / read-line: the optional stream, forwarded
 			// unconditionally (omitted == nil == the standard stream designator).
 			optionalStream(LispNames.TERPRI), optionalStream(LispNames.FRESH_LINE), readLineWrapper(),
-			// write-line / force-output / finish-output / clear-output: the same optional
-			// stream. WASM flushes nothing (every write goes out synchronously) and
-			// clear-output evaluates its designator for effect, but every backend accepts
-			// the argument in call position, so the wrapper body compiles everywhere.
-			unaryOptionalStream(LispNames.WRITE_LINE), optionalStream(LispNames.FORCE_OUTPUT),
-			optionalStream(LispNames.FINISH_OUTPUT), optionalStream(LispNames.CLEAR_OUTPUT),
+			// write-line: the optional stream plus the :start / :end keyword bounds,
+			// the same runtime keyword re-extraction boundedSequenceIo does for
+			// write-string. force-output / finish-output / clear-output keep the
+			// plain optional stream. WASM flushes nothing (every write goes out
+			// synchronously) and clear-output evaluates its designator for effect,
+			// but every backend accepts the argument in call position, so the
+			// wrapper body compiles everywhere.
+			writeLineWrapper(), optionalStream(LispNames.FORCE_OUTPUT), optionalStream(LispNames.FINISH_OUTPUT),
+			optionalStream(LispNames.CLEAR_OUTPUT),
 			// listen: the interpreter and the JVM probe the designator. On WASM any
 			// listen
 			// CALL SITE lowers to the compiler's call-time unsupported stub, and the

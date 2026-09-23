@@ -1234,7 +1234,15 @@ final class WasmExprCompiler {
 				// program can see -- is the answer, matching uiop:architecture.
 				case LispNames.TARGET_MACHINE_TYPE -> WasmExprCompiler.compileExpr(new LispString("WASM32"), ctx);
 				case LispNames.LIST_DIRECTORY -> WasmListDirectoryCompiler.compile(cons, ctx);
-				case LispNames.WRITE_LINE -> WasmWriteLineCompiler.compile(cons, ctx);
+				case LispNames.WRITE_LINE -> {
+					LispVal bounded = LispMacroExpander.lowerWriteLineBounds(cons);
+					if (bounded != null) {
+						WasmExprCompiler.compileExpr(bounded, ctx);
+					}
+					else {
+						WasmWriteLineCompiler.compile(cons, ctx);
+					}
+				}
 				case LispNames.WRITE_STRING -> {
 					LispVal bounded = LispMacroExpander.lowerWriteStringBounds(cons);
 					if (bounded != null) {

@@ -1596,7 +1596,11 @@ public final class LispEvaluator {
 				ensureGrayStreamsLoaded();
 				LispVal generic = resolveFunction(
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.GRAY_STREAM_WRITE_STRING));
-				return apply(generic, List.of(args.get(1), args.get(0)), this.globalEnv);
+				List<LispVal> forwarded = new java.util.ArrayList<>(List.of(args.get(1), args.get(0)));
+				// A Gray instance honors :start / :end through the generic's own
+				// optionals; anything else in the tail keeps today's leniency.
+				forwarded.addAll(grayStreamBounds(args, 2));
+				return apply(generic, forwarded, this.globalEnv);
 			}
 			return apply(baseWriteString, args, this.globalEnv);
 		}));
@@ -1736,7 +1740,22 @@ public final class LispEvaluator {
 		wrapGrayOutputOperator(LispNames.FORCE_OUTPUT, 0, GRAY_FORCE_OUTPUT_DISPATCH);
 		wrapGrayOutputOperator(LispNames.FINISH_OUTPUT, 0, GRAY_FINISH_OUTPUT_DISPATCH);
 		wrapGrayOutputOperator(LispNames.CLEAR_OUTPUT, 0, GRAY_CLEAR_OUTPUT_DISPATCH);
-		wrapGrayOutputOperator(LispNames.WRITE_LINE, 1, GRAY_WRITE_LINE_DISPATCH);
+		// write-line: the Gray dispatch must survive a keyword tail -- the bounds are
+		// evaluated, then dropped, the same answer write-string's wrapper gives its
+		// own bounds. The stream sits at index 1, or there is none when the second
+		// argument is a keyword (or absent); anything else reaches the base built-in,
+		// which owns the bounds and the errors.
+		LispVal baseWriteLine = this.globalEnv.lookupFunction(LispNames.WRITE_LINE);
+		this.globalEnv.defineFunction(LispNames.WRITE_LINE, new LispFunction(LispNames.WRITE_LINE, rawArgs -> {
+			List<LispVal> args = resolveStreamArg(rawArgs, 1);
+			if (args.size() > 1 && !(args.get(1) instanceof LispSymbol kw && kw.name().startsWith(":"))
+					&& dispatchesToGray(args.get(1))) {
+				List<LispVal> forwarded = new java.util.ArrayList<>(List.of(args.get(0), args.get(1)));
+				forwarded.addAll(grayStreamBounds(args, 2));
+				return applyGrayDispatch(GRAY_WRITE_LINE_DISPATCH, forwarded);
+			}
+			return apply(baseWriteLine, args, this.globalEnv);
+		}));
 		wrapGrayOutputOperator(LispNames.PRINC, 1, GRAY_PRINC_DISPATCH);
 		wrapGrayOutputOperator(LispNames.PRIN1, 1, GRAY_PRIN1_DISPATCH);
 		wrapGrayOutputOperator(LispNames.PRINT, 1, GRAY_PRINT_DISPATCH);
@@ -6890,6 +6909,12 @@ public final class LispEvaluator {
 			// an ordinary function resolution loads it and #'read is that same defun.
 			case LispNames.MAKE_STRING:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandMakeString);
+			case LispNames.WRITE_LINE:
+				// The shared bounds lowering carries :start / :end (the Environment
+				// function remains for the plain shape and for first-class use). No
+				// memo: the lowering mints fresh temps per call, and a bounded
+				// write-line is not hot enough to cache.
+				return LispMacroExpander.lowerWriteLineBounds(cons);
 			// REPLACE is intentionally NOT expanded here: the interpreter uses the
 			// destructive built-in (Environment) so a make-string buffer filled by
 			// successive replaces (cl-who's string-list-to-string) mutates in place.
@@ -9186,6 +9211,39 @@ public final class LispEvaluator {
 	 */
 	private static boolean dispatchesToGray(LispVal value) {
 		return value instanceof LispInstance && !Environment.isStreamValue(value);
+	}
+
+	/**
+	 * The first {@code :start} / {@code :end} values of a runtime keyword tail, for the
+	 * Gray dispatchers that forward bounds to the generics' own optionals -- or the empty
+	 * list when neither appears, keeping the two-argument dispatch. Anything else in the
+	 * tail keeps the dispatchers' leniency (only the base built-ins validate).
+	 * @param args the call's argument values
+	 * @param from the index the keyword tail begins at
+	 * @return the argument suffix to append (at most start and end), possibly empty
+	 */
+	private static List<LispVal> grayStreamBounds(List<LispVal> args, int from) {
+		LispVal start = null;
+		LispVal end = null;
+		for (int k = from; k + 1 < args.size(); k += 2) {
+			if (args.get(k) instanceof LispSymbol kw) {
+				if (":START".equals(kw.name()) && start == null) {
+					start = args.get(k + 1);
+				}
+				else if (":END".equals(kw.name()) && end == null) {
+					end = args.get(k + 1);
+				}
+			}
+		}
+		if (start == null && end == null) {
+			return List.of();
+		}
+		// A nil bound is ABSENT, never an explicit nil: user methods default start
+		// to 0 (the echo stream does), and an explicit nil would override that.
+		if (end == null || end instanceof LispNil) {
+			return start == null || start instanceof LispNil ? List.of() : List.of(start);
+		}
+		return start == null || start instanceof LispNil ? List.of(new LispInteger(0), end) : List.of(start, end);
 	}
 
 	private static int requireSlotIndex(String name, LispInstance inst, List<LispVal> args) {

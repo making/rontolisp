@@ -10730,6 +10730,28 @@ cases:
       "(A \"b\" 3)"
       x
       done
+  # :start / :end bound the written substring; the return is the whole string.
+  - name: write-line-start-end-keywords
+    source: |
+      (let ((s (make-string-output-stream)))
+        (prin1 (write-line "hello" s :start 1 :end 3))
+        (terpri)
+        (princ (get-output-stream-string s)))
+      (let ((s (make-string-output-stream)))
+        (prin1 (funcall #'write-line "abcdef" s :end 2))
+        (terpri)
+        (princ (get-output-stream-string s)))
+      (let ((s (make-string-output-stream)))
+        (prin1 (write-line "hello" s :start 2))
+        (terpri)
+        (princ (get-output-stream-string s)))
+    expected: |
+      "hello"
+      el
+      "abcdef"
+      ab
+      "hello"
+      llo
   - name: sequence-and-alist-test-key-keywords
     source: |
       (print (assoc "b" '(("a" . 1) ("b" . 2)) :test #'string=))

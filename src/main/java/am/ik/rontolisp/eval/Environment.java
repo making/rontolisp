@@ -6058,13 +6058,68 @@ public final class Environment implements Scope {
 			if (!(args.get(0) instanceof LispString str)) {
 				throw new LispEvalException(LispNames.WRITE_LINE + " expects a string");
 			}
+			// (write-line string [stream] [:start s] [:end e]): the keywords bound
+			// the written substring (a nil :end means the string's length), the same
+			// rule write-string applies -- call position usually arrives lowered
+			// (LispMacroExpander.lowerWriteLineBounds), but first-class use and an
+			// odd tail the lowering leaves alone reach this function directly.
+			String full = str.value();
+			int cpLen = full.codePointCount(0, full.length());
+			int start = 0;
+			int end = cpLen;
+			LispVal streamArg = null;
+			int i = 1;
+			if (args.size() > 1 && !(args.get(1) instanceof LispSymbol kw && kw.name().startsWith(":"))) {
+				streamArg = args.get(1);
+				i = 2;
+			}
+			String text = full;
+			if (args.size() > i) {
+				// The tail rule is the expansion's
+				// (LispMacroExpander.keywordTailProblem), over values here instead of
+				// forms: first occurrence wins, a true :allow-other-keys admits the
+				// unknown, an unknown indicator or an odd tail is a program-error.
+				String problem = am.ik.rontolisp.macro.LispMacroExpander.keywordTailProblem(LispNames.WRITE_LINE, args,
+						i, java.util.List.of(LispNames.START_KEYWORD, LispNames.END_KEYWORD));
+				if (problem != null) {
+					throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, problem);
+				}
+				boolean sawStart = false;
+				boolean sawEnd = false;
+				for (; i + 1 < args.size(); i += 2) {
+					if (args.get(i) instanceof LispSymbol kw) {
+						switch (kw.name()) {
+							case ":START" -> {
+								if (!sawStart) {
+									start = (int) asLong(args.get(i + 1));
+									sawStart = true;
+								}
+							}
+							case ":END" -> {
+								if (!sawEnd) {
+									end = args.get(i + 1) instanceof LispNil ? cpLen : (int) asLong(args.get(i + 1));
+									sawEnd = true;
+								}
+							}
+							default -> {
+							}
+						}
+					}
+				}
+				if (start < 0 || end > cpLen || start > end) {
+					throw new LispEvalException(LispNames.WRITE_LINE + ": bad bounding indices " + start + ".." + end);
+				}
+				if (start != 0 || end != cpLen) {
+					text = full.substring(full.offsetByCodePoints(0, start), full.offsetByCodePoints(0, end));
+				}
+			}
 			// nil and t are the standard-output DESIGNATORS, not stream handles -- the
 			// same rule the JVM and both wasm backends already applied (their stdout
 			// test is "not a handle"). An absent argument and an explicit nil resolve
 			// through *standard-output*; t is the process standard output.
-			LispVal dest = resolveOutputDest.apply(args.size() == 1 ? null : args.get(1));
+			LispVal dest = resolveOutputDest.apply(streamArg);
 			if (dest == null || dest instanceof LispNil || dest instanceof LispTrue) {
-				out.println(str.value());
+				out.println(text);
 				return str;
 			}
 			if (!(dest instanceof LispInteger handle)) {
@@ -6073,14 +6128,14 @@ public final class Environment implements Scope {
 			Closeable entry = streams.get(handle.value());
 			if (entry instanceof Socket socket) {
 				// Socket writes are unbuffered: the line goes out immediately.
-				SocketSupport.writeLine(socket, str.value());
+				SocketSupport.writeLine(socket, text);
 				return str;
 			}
 			if (!(entry instanceof Writer writer)) {
 				throw new LispEvalException(LispNames.WRITE_LINE + " expects an output stream");
 			}
 			try {
-				writer.write(str.value());
+				writer.write(text);
 				writer.write("\n");
 			}
 			catch (IOException ex) {

@@ -923,7 +923,15 @@ final class JvmExprCompiler {
 				case LispNames.SLEEP ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandSleep(cons, false), ctx, className);
 				case LispNames.SLEEP_MS -> JvmSleepCompiler.compile(cons, ctx, className);
-				case LispNames.WRITE_LINE -> JvmWriteLineCompiler.compile(cons, ctx, className);
+				case LispNames.WRITE_LINE -> {
+					LispVal bounded = LispMacroExpander.lowerWriteLineBounds(cons);
+					if (bounded != null) {
+						JvmExprCompiler.compileExpr(bounded, ctx, className);
+					}
+					else {
+						JvmWriteLineCompiler.compile(cons, ctx, className);
+					}
+				}
 				case LispNames.WRITE_STRING -> {
 					LispVal bounded = LispMacroExpander.lowerWriteStringBounds(cons);
 					if (bounded != null) {
