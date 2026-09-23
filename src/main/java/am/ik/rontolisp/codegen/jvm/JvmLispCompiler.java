@@ -2262,7 +2262,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// the way by running once they have all read the program.
 		topLevelExprs = SequenceIoNarrowing.narrow(topLevelExprs,
 				usesStreamValues && functions.containsKey(LispNames.CHARACTER_STREAM_P_INTERNAL),
-				functions.containsKey(LispNames.WIDE_WIDTH_INTERNAL));
+				functions.containsKey(LispNames.WIDE_WIDTH_INTERNAL),
+				functions.containsKey(LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL));
 		Ctx chunkCtx = null;
 		for (LispVal expr : topLevelExprs) {
 			if (chunkCtx == null || chunkCtx.code.size() >= chunkCodeBudget) {

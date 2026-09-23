@@ -1009,14 +1009,12 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandClearOutput(cons), ctx, className);
 				case LispNames.LISTEN -> JvmListenCompiler.compile(cons, ctx, className);
 				case LispNames.OPEN_STREAM_P -> JvmOpenStreamPCompiler.compile(cons, ctx, className);
-				case LispNames.READ_SEQUENCE -> JvmExprCompiler.compileExpr(
-						guardPackedForWideStreams(
-								LispMacroExpander.expandReadSequence(cons, false, characterStreams(ctx)), ctx),
-						ctx, className);
-				case LispNames.WRITE_SEQUENCE -> JvmExprCompiler.compileExpr(
-						guardPackedForWideStreams(
-								LispMacroExpander.expandWriteSequence(cons, false, characterStreams(ctx)), ctx),
-						ctx, className);
+				case LispNames.READ_SEQUENCE -> JvmExprCompiler.compileExpr(guardPackedForWideStreams(
+						LispMacroExpander.expandReadSequence(cons, false, characterStreams(ctx), boundsCheck(ctx)),
+						ctx), ctx, className);
+				case LispNames.WRITE_SEQUENCE -> JvmExprCompiler.compileExpr(guardPackedForWideStreams(
+						LispMacroExpander.expandWriteSequence(cons, false, characterStreams(ctx), boundsCheck(ctx)),
+						ctx), ctx, className);
 				case LispNames.READ_SEQUENCE_PACKED, LispNames.WRITE_SEQUENCE_PACKED ->
 					JvmSequencePackedCompiler.compile(cons, ctx, className);
 				case LispNames.READ_SEQUENCE_CHARS -> JvmSequenceCharsCompiler.compile(cons, ctx, className);
@@ -2246,6 +2244,14 @@ final class JvmExprCompiler {
 	// the element").
 	private static boolean characterStreams(JvmLispCompiler.Ctx ctx) {
 		return ctx.usesStreamValues && ctx.functions.containsKey(LispNames.CHARACTER_STREAM_P_INTERNAL);
+	}
+
+	// Whether the read-sequence / write-sequence expansion runs its
+	// %check-sequence-bounds call: only when the prelude defun is spliced into the
+	// program -- a direct compile of reader output (a backend unit test without the
+	// front end) never spliced it, and the call would dangle.
+	private static boolean boundsCheck(JvmLispCompiler.Ctx ctx) {
+		return ctx.functions.containsKey(LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL);
 	}
 
 	private static LispVal guardPackedForWideStreams(LispVal expansion, JvmLispCompiler.Ctx ctx) {

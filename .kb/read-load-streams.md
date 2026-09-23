@@ -703,6 +703,18 @@ site ~+0.1 KB. Real programs already carry the machinery: `checkpoint-tokenizer`
 No narrower gate exists without losing the guarantee -- any call can receive a bad sequence or
 bound at runtime -- so the numbers above are the accepted shape, not a problem to fix.
 
+Two follow-ups the full suite caught on 2026-09-23 (the check as first written broke five
+suites: the direct-compile `binaryStandardStreamDesignators` on JVM and Preview 1, and the three
+quantized-matrix transfers). First, the call runs only where the defun is spliced: a direct
+backend compile of reader output (a backend unit test without the front end) never spliced it,
+so the expansion keeps the `__rseq_chk` / `__wseq_chk` binding only when
+`%check-sequence-bounds` is in the function table -- the `%character-stream-p` shape, absent
+rather than dangling. Every front-end program splices it, so the four backends still check as
+one. Second, a quantized-matrix buffer is neither `stringp` nor `arrayp` and fell into
+`list-length`: the defun now answers it a nil length, like a circular list's -- its transfers
+move block bytes (`:start`/`:end` count bytes) no Lisp-level reader measures, so the range
+check stays the transfer arm's while a bad bound type still signals `type-error` here.
+
 ## Element types wider and narrower than one octet
 
 `.todo/919`. An integer `:element-type` opens a binary stream whose ELEMENT is a fixed number of

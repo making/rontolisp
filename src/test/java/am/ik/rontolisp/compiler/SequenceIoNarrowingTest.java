@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SequenceIoNarrowingTest {
 
 	private static String narrowed(String source) {
-		List<LispVal> program = SequenceIoNarrowing.narrow(LispReader.readAllFromString(source), false, false);
+		List<LispVal> program = SequenceIoNarrowing.narrow(LispReader.readAllFromString(source), false, false, true);
 		StringBuilder out = new StringBuilder();
 		program.forEach(form -> out.append(form.print()).append('\n'));
 		return out.toString();
@@ -104,7 +104,7 @@ class SequenceIoNarrowingTest {
 				(let ((buf (make-array 8)) (v (vector 0 0)))
 				  (read-sequence buf s)
 				  (write-sequence v s))
-				"""), true, false);
+				"""), true, false, true);
 		String result = program.get(0).print();
 		assertThat(result).contains("(READ-SEQUENCE ").contains("(WRITE-SEQUENCE ");
 	}
@@ -115,7 +115,7 @@ class SequenceIoNarrowingTest {
 				(let* ((buf (make-array 8 :element-type '(unsigned-byte 8))) (part (subseq buf 0 4)))
 				  (read-sequence buf s)
 				  (write-sequence part s))
-				"""), true, false);
+				"""), true, false, true);
 		String result = program.get(0).print();
 		assertThat(result).doesNotContain("(READ-SEQUENCE ").doesNotContain("(WRITE-SEQUENCE ");
 	}
