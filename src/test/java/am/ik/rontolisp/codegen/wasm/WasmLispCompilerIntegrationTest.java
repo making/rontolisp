@@ -15,6 +15,7 @@ import java.util.concurrent.Future;
 import java.util.stream.Stream;
 
 import am.ik.rontolisp.CharacterFilePositionFixture;
+import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.macro.FoldDifferential;
@@ -13318,6 +13319,20 @@ class WasmLispCompilerIntegrationTest {
 	void componentCharacterFileStreamPositionIsTheByteOffset() throws Exception {
 		assertThat(compileAndRunFrontEndWithDir(CharacterFilePositionFixture.program("pos.txt"), true))
 			.isEqualTo(CharacterFilePositionFixture.EXPECTED);
+	}
+
+	@Test
+	void peekCharPushbackSurvivesReadLineAndReadOnPreview1() throws Exception {
+		// .todo/936: _read_line drains the peek-char pushback the way _read_char does;
+		// read already does (the whole %rd-* family scans through read-char).
+		assertThat(compileAndRunFrontEndWithDir(PeekPushbackFixture.program("peek.txt", "peek-rd.txt"), false))
+			.isEqualTo(PeekPushbackFixture.EXPECTED);
+	}
+
+	@Test
+	void componentPeekCharPushbackSurvivesReadLineAndRead() throws Exception {
+		assertThat(compileAndRunFrontEndWithDir(PeekPushbackFixture.program("peek.txt", "peek-rd.txt"), true))
+			.isEqualTo(PeekPushbackFixture.EXPECTED);
 	}
 
 	/**

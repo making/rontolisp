@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 
 import am.ik.rontolisp.CharacterFilePositionFixture;
+import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.ArrayElementTypes;
@@ -10006,6 +10007,21 @@ class LispEvaluatorTest {
 			evaluator.eval(expr);
 		}
 		assertThat(baos.toString().trim()).isEqualTo(CharacterFilePositionFixture.EXPECTED);
+	}
+
+	@Test
+	void peekCharPushbackSurvivesReadLineAndRead(@TempDir Path tempDir) {
+		// A peeked character opens the next read-line instead of being dropped, and a
+		// peeked datum opener is still there for read -- sbcl's answers, pinned on all
+		// four backends (.todo/936).
+		String file = tempDir.resolve("peek.txt").toString().replace("\\", "\\\\");
+		String rdFile = tempDir.resolve("peek-rd.txt").toString().replace("\\", "\\\\");
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(PeekPushbackFixture.program(file, rdFile))) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(PeekPushbackFixture.EXPECTED);
 	}
 
 	@Test

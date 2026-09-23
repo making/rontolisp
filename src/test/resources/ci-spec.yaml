@@ -9960,6 +9960,52 @@ cases:
       T
       #\A
 
+  - name: peek-char-pushback-survives-read-line-and-read
+    # A peek-char pushback opens the next read-line instead of being dropped, on all
+    # four backends: the WASM _read_line drains the one-slot pushback the way
+    # _read_char (and the bulk read-sequence character path) does (.todo/936). read
+    # already does -- the whole prelude %rd-* family scans through read-char. The
+    # file-position after the peeked line ends where the descriptor is.
+    source: |
+      (with-open-file (o "peek936.txt" :direction :output :if-exists :supersede)
+        (write-string "ab" o)
+        (write-char #\Return o)
+        (write-char #\Newline o)
+        (write-string "cd" o)
+        (write-char #\Newline o)
+        (write-string "ef" o))
+      (with-open-file (s "peek936.txt")
+        (print (read-char s))
+        (print (peek-char nil s))
+        (print (read-line s))
+        (print (file-position s))
+        (print (read-char s))
+        (print (peek-char nil s))
+        (print (read-line s))
+        (print (file-position s))
+        (print (read-line s))
+        (print (read-line s nil :eof)))
+      (with-open-file (o "peek936-rd.txt" :direction :output :if-exists :supersede)
+        (write-string "(a b) (c)" o))
+      (with-open-file (s "peek936-rd.txt")
+        (print (peek-char nil s))
+        (print (read s))
+        (print (read s)))
+    expected: |
+      #\a
+      #\b
+      "b"
+      4
+      #\c
+      #\d
+      "d"
+      7
+      "ef"
+      :EOF
+      #\(
+      (A B)
+      (C)
+
   - name: filesystem-write-create-rename-delete-and-probe
     # The three write-side operators are REAL on all four backends: the interpreter
     # and the JVM create/remove/move through java.nio, both WASM backends through

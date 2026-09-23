@@ -1,6 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import am.ik.rontolisp.CharacterFilePositionFixture;
+import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.runtime.RontoHttpServer;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -11343,6 +11344,17 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
 			.withSystemPath(CharacterFilePositionFixture.program(file), List.of(), false, false)
 			.forms())).isEqualTo(CharacterFilePositionFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunPeekCharPushbackSurvivesReadLineAndRead() throws Exception {
+		// The JVM twin of LispEvaluatorTest#peekCharPushbackSurvivesReadLineAndRead,
+		// through the CLI's front end (the program uses unread-char through read).
+		String file = this.tempDir.resolve("peek.txt").toString().replace("\\", "\\\\");
+		String rdFile = this.tempDir.resolve("peek-rd.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(PeekPushbackFixture.program(file, rdFile), List.of(), false, false)
+			.forms())).isEqualTo(PeekPushbackFixture.EXPECTED);
 	}
 
 	@Test
