@@ -89,16 +89,20 @@ public final class SequenceIoNarrowing {
 	 * read-sequence / write-sequence cases do, because the packed primitive moves raw
 	 * octets (.kb/read-load-streams.md, "Element types wider and narrower than one
 	 * octet")
+	 * @param boundsCheck whether the {@code %check-sequence-bounds} prelude defun is
+	 * spliced: a narrowed site keeps the check only then, as the backends' own
+	 * read-sequence / write-sequence cases do
 	 * @return the rewritten program, or {@code program} itself when nothing narrowed
 	 */
-	public static List<LispVal> narrow(List<LispVal> program, boolean characterStreams, boolean wide) {
+	public static List<LispVal> narrow(List<LispVal> program, boolean characterStreams, boolean wide,
+			boolean boundsCheck) {
 		// Both facts come from the backend's function table: the top-level forms this
 		// pass sees exclude every defun, the spliced ones included.
 		Set<String> specials = new HashSet<>();
 		for (LispVal form : program) {
 			collectSpecials(form, specials);
 		}
-		Narrower narrower = new Narrower(specials, wide, characterStreams);
+		Narrower narrower = new Narrower(specials, wide, characterStreams, boundsCheck);
 		List<LispVal> out = new ArrayList<>(program.size());
 		boolean changed = false;
 		for (LispVal form : program) {
@@ -136,10 +140,13 @@ public final class SequenceIoNarrowing {
 
 		private final boolean characterStreams;
 
-		private Narrower(Set<String> specials, boolean wide, boolean characterStreams) {
+		private final boolean boundsCheck;
+
+		private Narrower(Set<String> specials, boolean wide, boolean characterStreams, boolean boundsCheck) {
 			this.specials = specials;
 			this.wide = wide;
 			this.characterStreams = characterStreams;
+			this.boundsCheck = boundsCheck;
 		}
 
 		/**
@@ -247,8 +254,8 @@ public final class SequenceIoNarrowing {
 			}
 			boolean read = LispNames.READ_SEQUENCE.equals(head.name())
 					|| LispNames.READ_SEQUENCE_RAW_INTERNAL.equals(head.name());
-			LispVal expanded = read ? LispMacroExpander.expandReadSequence(cons, true, false)
-					: LispMacroExpander.expandWriteSequence(cons, true, false);
+			LispVal expanded = read ? LispMacroExpander.expandReadSequence(cons, true, false, this.boundsCheck)
+					: LispMacroExpander.expandWriteSequence(cons, true, false, this.boundsCheck);
 			if (this.wide) {
 				expanded = LispMacroExpander.guardPackedSequenceForWideStreams(expanded);
 			}

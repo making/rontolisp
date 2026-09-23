@@ -522,14 +522,12 @@ final class WasmExprCompiler {
 						case LispNames.WRITE_BYTE_RAW_INTERNAL -> WasmWriteByteCompiler.compile(cons, ctx);
 						case LispNames.WRITE_STRING_RAW_INTERNAL ->
 							WasmWriteStringCompiler.compileWriteString(cons, ctx);
-						case LispNames.READ_SEQUENCE_RAW_INTERNAL -> WasmExprCompiler.compileExpr(
-								guardPackedForWideStreams(
-										LispMacroExpander.expandReadSequence(cons, false, characterStreams(ctx)), ctx),
-								ctx);
-						case LispNames.WRITE_SEQUENCE_RAW_INTERNAL -> WasmExprCompiler.compileExpr(
-								guardPackedForWideStreams(
-										LispMacroExpander.expandWriteSequence(cons, false, characterStreams(ctx)), ctx),
-								ctx);
+						case LispNames.READ_SEQUENCE_RAW_INTERNAL ->
+							WasmExprCompiler.compileExpr(guardPackedForWideStreams(LispMacroExpander
+								.expandReadSequence(cons, false, characterStreams(ctx), boundsCheck(ctx)), ctx), ctx);
+						case LispNames.WRITE_SEQUENCE_RAW_INTERNAL ->
+							WasmExprCompiler.compileExpr(guardPackedForWideStreams(LispMacroExpander
+								.expandWriteSequence(cons, false, characterStreams(ctx), boundsCheck(ctx)), ctx), ctx);
 						// The designator resolution has to apply under the alias too:
 						// the socket rewrite maps (close s) to (%io-close s), whose
 						// non-socket arm lands here, so without it a component would
@@ -1382,16 +1380,12 @@ final class WasmExprCompiler {
 						.callTimeUnsupportedStub("listen requires the interpreter, the JVM backend or a --component"
 								+ " socket stream (no non-blocking input probe exists on this" + " WASM target)")),
 							ctx);
-				case LispNames.READ_SEQUENCE ->
-					WasmExprCompiler.compileExpr(
-							guardPackedForWideStreams(
-									LispMacroExpander.expandReadSequence(cons, false, characterStreams(ctx)), ctx),
-							ctx);
-				case LispNames.WRITE_SEQUENCE ->
-					WasmExprCompiler.compileExpr(
-							guardPackedForWideStreams(
-									LispMacroExpander.expandWriteSequence(cons, false, characterStreams(ctx)), ctx),
-							ctx);
+				case LispNames.READ_SEQUENCE -> WasmExprCompiler.compileExpr(guardPackedForWideStreams(
+						LispMacroExpander.expandReadSequence(cons, false, characterStreams(ctx), boundsCheck(ctx)),
+						ctx), ctx);
+				case LispNames.WRITE_SEQUENCE -> WasmExprCompiler.compileExpr(guardPackedForWideStreams(
+						LispMacroExpander.expandWriteSequence(cons, false, characterStreams(ctx), boundsCheck(ctx)),
+						ctx), ctx);
 				case LispNames.READ_SEQUENCE_PACKED, LispNames.WRITE_SEQUENCE_PACKED ->
 					WasmSequencePackedCompiler.compile(cons, ctx);
 				case LispNames.READ_SEQUENCE_CHARS -> WasmSequenceCharsCompiler.compile(cons, ctx);
@@ -2579,6 +2573,14 @@ final class WasmExprCompiler {
 	// the element").
 	private static boolean characterStreams(WasmLispCompiler.Ctx ctx) {
 		return ctx.usesStreamValues && ctx.functions.containsKey(LispNames.CHARACTER_STREAM_P_INTERNAL);
+	}
+
+	// Whether the read-sequence / write-sequence expansion runs its
+	// %check-sequence-bounds call: only when the prelude defun is spliced into the
+	// program -- a direct compile of reader output (a backend unit test without the
+	// front end) never spliced it, and the call would dangle.
+	private static boolean boundsCheck(WasmLispCompiler.Ctx ctx) {
+		return ctx.functions.containsKey(LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL);
 	}
 
 	private static LispVal guardPackedForWideStreams(LispVal expansion, WasmLispCompiler.Ctx ctx) {

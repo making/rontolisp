@@ -11031,6 +11031,23 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandReadSequence(LispCons cons, boolean byteOnly, boolean characterStreams) {
+		return expandReadSequence(cons, byteOnly, characterStreams, true);
+	}
+
+	/**
+	 * Like {@link #expandReadSequence(LispCons, boolean, boolean)}, saying whether the
+	 * {@code %check-sequence-bounds} prelude defun is spliced into the program: a direct
+	 * backend path that never spliced it (a backend unit test compiling reader output
+	 * without the front end) carries no check -- the {@code %character-stream-p} shape,
+	 * the binding absent rather than dangling -- while every front-end program does.
+	 * @param cons the read-sequence expression
+	 * @param byteOnly whether the sequence is certainly a byte buffer
+	 * @param characterStreams whether a string stream can reach the site at all
+	 * @param boundsCheck whether the {@code %check-sequence-bounds} defun is present
+	 * @return the expanded expression
+	 */
+	public static LispVal expandReadSequence(LispCons cons, boolean byteOnly, boolean characterStreams,
+			boolean boundsCheck) {
 		SequenceArgs args = parseSequenceArgs(cons, LispNames.READ_SEQUENCE);
 		if (args.tailError() != null) {
 			return args.tailError();
@@ -11088,9 +11105,13 @@ public final class LispMacroExpander {
 		// expects -- the position a bound opaque call is cheapest in (the
 		// %character-stream-p binding costs ~0.5 KB a site; an or arm cost ~4.5 KB).
 		// A nested let, not a let* tail: the start/end initforms keep the evaluation
-		// order the plain let always gave them.
-		LispVal checkedBody = listToCons(List.of(new LispSymbol(LispNames.LET),
-				listToCons(List.of(listToCons(List.of(chk, sequenceBoundsCheck(seq, i, end))))), listToCons(arms)));
+		// order the plain let always gave them. Without the defun the binding is
+		// absent, not dangling (see the boundsCheck parameter).
+		LispVal armsOr = listToCons(arms);
+		LispVal checkedBody = boundsCheck
+				? listToCons(List.of(new LispSymbol(LispNames.LET),
+						listToCons(List.of(listToCons(List.of(chk, sequenceBoundsCheck(seq, i, end))))), armsOr))
+				: armsOr;
 		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings, checkedBody));
 		LispVal outerBindings = listToCons(
 				List.of(listToCons(List.of(seq, args.seq())), listToCons(List.of(st, args.stream()))));
@@ -11156,6 +11177,21 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandWriteSequence(LispCons cons, boolean byteOnly, boolean characterStreams) {
+		return expandWriteSequence(cons, byteOnly, characterStreams, true);
+	}
+
+	/**
+	 * Like {@link #expandWriteSequence(LispCons, boolean, boolean)}, saying whether the
+	 * {@code %check-sequence-bounds} prelude defun is spliced into the program -- the
+	 * read-sequence twin's {@code boundsCheck} contract.
+	 * @param cons the write-sequence expression
+	 * @param byteOnly whether the sequence is certainly a byte buffer
+	 * @param characterStreams whether a string stream can reach the site
+	 * @param boundsCheck whether the {@code %check-sequence-bounds} defun is present
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWriteSequence(LispCons cons, boolean byteOnly, boolean characterStreams,
+			boolean boundsCheck) {
 		SequenceArgs args = parseSequenceArgs(cons, LispNames.WRITE_SEQUENCE);
 		if (args.tailError() != null) {
 			return args.tailError();
@@ -11204,9 +11240,11 @@ public final class LispMacroExpander {
 		LispSymbol wchk = new LispSymbol("__wseq_chk");
 		LispVal innerBindings = listToCons(
 				List.of(listToCons(List.of(i, args.start())), listToCons(List.of(end, args.end()))));
-		LispVal checkedBody = listToCons(List.of(new LispSymbol(LispNames.LET),
-				listToCons(List.of(listToCons(List.of(wchk, sequenceBoundsCheck(seq, i, end))))),
-				listToCons(List.of(new LispSymbol(LispNames.OR), packed, dispatch))));
+		LispVal orBody = listToCons(List.of(new LispSymbol(LispNames.OR), packed, dispatch));
+		LispVal checkedBody = boundsCheck
+				? listToCons(List.of(new LispSymbol(LispNames.LET),
+						listToCons(List.of(listToCons(List.of(wchk, sequenceBoundsCheck(seq, i, end))))), orBody))
+				: orBody;
 		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings, checkedBody));
 		LispVal outerBindings = listToCons(
 				List.of(listToCons(List.of(seq, args.seq())), listToCons(List.of(st, args.stream()))));

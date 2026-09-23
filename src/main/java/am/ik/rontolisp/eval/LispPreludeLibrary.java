@@ -1547,15 +1547,23 @@ public final class LispPreludeLibrary {
 		// %character-stream-p shape, for the same per-site reason. The
 		// signals carry static messages (a runtime datum in the message pulled the
 		// ~s printer, +17 KB of wasm); the datum and expected type ride the instance.
+		// A quantized-matrix buffer is neither stringp nor arrayp, so without its own
+		// arm it would fall into list-length and spuriously fail: its transfers move
+		// block BYTES (:start/:end count bytes, .kb/quantized-matrix.md) and no
+		// Lisp-level reader measures them, so its length is nil -- like a circular
+		// list's, the range check stays the transfer arm's while the bound types
+		// still check here.
 		SOURCES.put(LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL, """
 				(defun %check-sequence-bounds (%csq-seq %csq-start %csq-end)
-				  (let ((%csq-len (if (stringp %csq-seq)
-				                      (length %csq-seq)
-				                      (if (arrayp %csq-seq)
-				                          (if (= (array-rank %csq-seq) 1)
-				                              (length %csq-seq)
-				                              (array-total-size %csq-seq))
-				                          (list-length %csq-seq)))))
+				  (let ((%csq-len (if (rontolisp:quantized-matrix-p %csq-seq)
+				                      nil
+				                      (if (stringp %csq-seq)
+				                          (length %csq-seq)
+				                          (if (arrayp %csq-seq)
+				                              (if (= (array-rank %csq-seq) 1)
+				                                  (length %csq-seq)
+				                                  (array-total-size %csq-seq))
+				                              (list-length %csq-seq))))))
 				    (if (or (not (integerp %csq-start)) (< %csq-start 0))
 				        (error 'type-error :datum %csq-start :expected-type '(integer 0 *)
 				               :format-control "Invalid sequence bound.")

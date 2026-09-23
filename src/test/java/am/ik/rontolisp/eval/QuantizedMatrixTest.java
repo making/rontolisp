@@ -286,6 +286,27 @@ class QuantizedMatrixTest {
 		assertThat(b.format()).isEqualTo(QuantizedFormat.Q8_0);
 	}
 
+	@Test
+	void readSequenceOnAQuantizedMatrixStillValidatesItsBoundTypes() {
+		// .todo/932's check defun measures its own length: a quantized matrix is
+		// neither stringp nor arrayp, so without its own arm it fell into list-length
+		// and spuriously failed. Its transfers move block bytes no Lisp-level reader
+		// measures, so the range check stays the transfer arm's -- but a bad bound
+		// TYPE still signals type-error here rather than in the transfer.
+		String program = fixture(3, 64, "single-float") + """
+				(print (handler-case (with-input-from-string (s "abc") (read-sequence *m* s :start -1))
+				         (type-error () :type-error) (error () :other-error)))
+				(print (handler-case (with-input-from-string (s "abc") (read-sequence *m* s :end 'x))
+				         (type-error () :type-error) (error () :other-error)))
+				""";
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(program)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(":TYPE-ERROR\n:TYPE-ERROR");
+	}
+
 	// --- the row gather ----------------------------------------------------------------
 
 	@Test
