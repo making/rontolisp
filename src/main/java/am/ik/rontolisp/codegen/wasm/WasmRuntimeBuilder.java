@@ -3396,6 +3396,265 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.SET_LOCAL);
 		w.writeUnsignedLeb128(4);
 
+		// A peek on this fd may have parked a whole code point in the one-slot
+		// pushback (a fd cannot be un-read): it opens the line, exactly as _read_char
+		// drains it (and _read_seq_chars does, .todo/936). The parked code point is
+		// UTF-8-encoded into the staging area ahead of the fd bytes; a parked newline
+		// ends the (empty) line here instead, the way the loop's own newline break
+		// leaves the terminator out of the answer. Local 5 is the string-stream
+		// record cursor, reused here as the parked code point: the fd path never
+		// touches it.
+		w.write(Instruction.BLOCK, 0x40); // block $drained
+		// if (memory[PEEK_FD_ADDR] == fd + 1)
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PEEK_FD_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		// memory[PEEK_FD_ADDR] = 0: the character is consumed whatever follows
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PEEK_FD_ADDR);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// cp = memory[PEEK_CP_ADDR]
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PEEK_CP_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(5);
+		// if (cp == 0x0A): past $drained, where pos == 1 with eof_flag == 0 answers ""
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(5);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x0A);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.BR, 2);
+		w.write(Instruction.END);
+		// if (cp < 0x80): memory[heap_ptr + pos] = cp; pos += 1
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(5);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x80);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(5);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.ELSE);
+		// else if (cp < 0x800): the two-byte sequence; pos += 2
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(5);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x800);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(5);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(6);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0xC0);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(5);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x80);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.ELSE);
+		// else if (cp < 0x10000): the three-byte sequence; pos += 3
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(5);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x10000);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(5);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(12);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0xE0);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(5);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(6);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x80);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(5);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x80);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(3);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.ELSE);
+		// else: the four-byte sequence; pos += 4
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(5);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(18);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0xF0);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(5);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(12);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x80);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(5);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(6);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x80);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(3);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(5);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0x80);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(4);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.END); // end four-byte else
+		w.write(Instruction.END); // end three-byte if/else
+		w.write(Instruction.END); // end two-byte if/else
+		w.write(Instruction.END); // end drain if
 		// Loop: read one byte at a time
 		w.write(Instruction.BLOCK, 0x40); // block $break
 		w.write(Instruction.LOOP, 0x40); // loop $continue
@@ -3476,6 +3735,7 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.BR, 0); // continue loop
 		w.write(Instruction.END); // end loop
 		w.write(Instruction.END); // end block
+		w.write(Instruction.END); // end $drained: a drained pushback rejoins here
 
 		// if pos > 1 && memory[heap_ptr + pos - 1] == 0x0D: pos-- -- strip one
 		// trailing carriage return for CRLF parity with BufferedReader.readLine

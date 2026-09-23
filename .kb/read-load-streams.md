@@ -124,10 +124,15 @@ Pinned by `LispEvaluatorTest#readFromStringAnswersTheStopIndexAsItsSecondValue`,
   `PEEK_CHAR_INTERNAL`); the SKIPPING forms are one shared `LispMacroExpander.expandPeekChar`
   lowering, kept behind a runtime `(null ...)` test for a non-literal peek-type. **The `characterp`
   guard in the loop's end test is load-bearing**: with a nil `eof-error-p` it ends the loop on the
-  eof-value instead of skipping forever. Interpreter/JVM `mark(2)`/`reset()`; WASM has no reset, so a
-  WASI fd parks the code point in a ONE-SLOT pushback keyed on the fd (`PEEK_FD_ADDR` = fd+1,
-  `PEEK_CP_ADDR`). **WASM-only limit, documented not fixed**: only `read-char` drains it, so mixing
-  `peek-char` with `read-line`/`read` on a FILE or STDIN stream loses the peeked character.
+   eof-value instead of skipping forever. Interpreter/JVM `mark(2)`/`reset()`; WASM has no reset, so a
+   WASI fd parks the code point in a ONE-SLOT pushback keyed on the fd (`PEEK_FD_ADDR` = fd+1,
+   `PEEK_CP_ADDR`). `_read_char`, `_read_line` and the bulk `read-sequence` character path all
+   drain it first (`.todo/936`); `read` never needed a drain of its own -- the whole prelude
+   `%rd-*` scanner family consumes through `read-char`. A parked newline ends the next `read-line`
+   as an empty line, the loop's own newline-break shape; any other parked code point is
+   UTF-8-encoded into the line's staging ahead of the fd bytes. Cost (2026-09-23): a `read-line`
+   program +291 B Preview 1, a program without one byte-identical; the `_read_line` core body is
+   one build shared by both WASM backends.
 
 ## `open` / `with-open-file` / `%probe-file`
 - `with-open-file` is a plain macro (`expandWithOpenFile`) over `open`/`close`.
