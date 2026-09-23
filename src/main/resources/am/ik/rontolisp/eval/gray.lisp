@@ -430,6 +430,8 @@
 (defun rontolisp::%gray-write-line-dispatch (s stream &optional start end)
   ;; A nil bound is ABSENT, never an explicit nil: user methods default start to
   ;; 0 (the echo stream does), and an explicit nil would override that default.
+  ;; The no-bounds fallback keeps the exact old two-argument shape, which the
+  ;; component socket rewrite matches by arity.
   (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (progn
@@ -442,7 +444,9 @@
                   (rontolisp:stream-write-string stream s)))
           (rontolisp:stream-terpri stream)
           s)
-        (write-line s stream :start (or start 0) :end end))))
+        (if (and (null start) (null end))
+            (write-line s stream)
+            (write-line s stream :start (or start 0) :end end)))))
 
 (defun rontolisp::%gray-force-output-dispatch (stream)
   (let ((stream (%stream-target stream)))
@@ -655,11 +659,13 @@
 
 (defun rontolisp::%gray-file-position-dispatch (stream)
   (let ((stream (%stream-target stream)))
+    ;; A broadcast stream answers for its last component, or 0 with none. The
+    ;; components are slot 0 (the base classes hold no slots), read directly:
+    ;; these helpers travel without the broadcast class entry, so the reader
+    ;; may not be defined where they run.
     (if (%obj-is stream '|%class-%BROADCAST-STREAM|)
-        (let ((cs (%broadcast-stream-components stream)))
-          (if cs
-              (rontolisp::%gray-file-position-dispatch (car (last cs)))
-              0))
+        (let ((cs (%obj-ref stream 0)))
+          (if cs (rontolisp::%gray-file-position-dispatch (car (last cs))) 0))
         (if (%obj-p stream)
             (rontolisp:stream-file-position stream)
             (file-position stream)))))
@@ -678,10 +684,7 @@
 (defun rontolisp::%gray-broadcast-file-length (s)
   (let ((s (%stream-target s)))
     (if (%obj-is s '|%class-%BROADCAST-STREAM|)
-        (let ((cs (%broadcast-stream-components s)))
-          (if cs
-              (rontolisp::%gray-broadcast-file-length (car (last cs)))
-              0))
-        (if (%obj-p s)
-            nil
-            (file-length s)))))
+        ;; Slot 0 (see above): no reader dependency.
+        (let ((cs (%obj-ref s 0)))
+          (if cs (rontolisp::%gray-broadcast-file-length (car (last cs))) 0))
+        (if (%obj-p s) nil (file-length s)))))

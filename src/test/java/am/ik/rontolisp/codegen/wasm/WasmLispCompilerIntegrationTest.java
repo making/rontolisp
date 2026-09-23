@@ -11405,12 +11405,15 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void liteBuiltinsResidue() throws Exception {
+		// A zero-argument make-broadcast-stream is a Gray class now, so it cannot
+		// spell the lite output stream here; a string output stream is the
+		// primitive one.
 		assertThat(compileAndRun("(print (mask-field (byte 4 4) 255))" + " (print (mask-field (byte 8 0) 300))"
 				+ " (print (scale-float 1.5 3))" + " (print (scale-float 1.0 -100000))"
 				+ " (defun fd-doubler (x) (* x 2)) (print (funcall (fdefinition 'fd-doubler) 21))"
 				+ " (print (file-position t)) (print (file-length t)) (print (pathnamep \"/tmp/x\"))"
 				+ " (print (pathnamep #P\"/tmp/x\"))" + " (print (stream-element-type t))"
-				+ " (print (input-stream-p t))" + " (print (output-stream-p (make-broadcast-stream)))"
+				+ " (print (input-stream-p t))" + " (print (output-stream-p (make-string-output-stream)))"
 				+ " (print (input-stream-p \"s\"))"))
 			.isEqualTo("240\n44\n12.0\n0.0\n42\nNIL\nNIL\nNIL\nT\nCHARACTER\nT\nT\nNIL");
 	}
@@ -13803,7 +13806,8 @@ class WasmLispCompilerIntegrationTest {
 		// over relative names in the preopened working directory. The passes are the
 		// CLI pipeline's: read is prelude rontolisp over read-char / unread-char, so
 		// the program needs the prelude splice AND the pushback-cell rewrite, in
-		// CompileFrontend's order -- then the --dir . run of compileAndRunWithDir.
+		// CompileFrontend's order -- plus the Gray pre-pass, since the null streams
+		// are broadcast streams -- then the --dir . run of compileAndRunWithDir.
 		String code = """
 				(print (let ((p (uiop:with-temporary-file (:stream s :pathname p :directory "" :keep t)
 				                    (write-string "kept" s) p)))
@@ -13841,7 +13845,20 @@ class WasmLispCompilerIntegrationTest {
 				"gone"
 				#P"/dev/null"
 				""".stripTrailing();
-		assertThat(compileAndRunWithDir(code)).isEqualTo(expected);
+		assertThat(compileAndRunWithDirGray(code)).isEqualTo(expected);
+	}
+
+	// compileAndRunWithDir plus the Gray pre-pass, in the CLI's order: a program
+	// naming a composite stream needs the protocol the composite classes subclass.
+	private static String compileAndRunWithDirGray(String lispCode) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
+		byte[] wasmBytes = WasmLispCompiler.builder().optimize(OptimizeLevel.NONE).build().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"cd " + workDir() + " && wasmtime --wasm gc --wasm exceptions=y --dir . test.wasm");
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
+		return result.getStdout().trim();
 	}
 
 	@Test

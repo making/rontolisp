@@ -1253,7 +1253,8 @@
   ;; instead of reading through (a set drops any parked input); otherwise walk in
   ;; bounded reads through BUF, as before. See checkpoint:skip-bytes.
   (let ((pos (ignore-errors (file-position in))))
-    (if (and (integerp pos) (plusp bytes) (ignore-errors (file-position in (+ pos bytes))))
+    (if (and (integerp pos) (plusp bytes)
+             (ignore-errors (file-position in (+ pos bytes))))
         nil
         (do ((left bytes))
             ((<= left 0))

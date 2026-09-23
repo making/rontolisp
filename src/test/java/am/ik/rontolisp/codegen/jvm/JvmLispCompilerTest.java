@@ -4982,7 +4982,7 @@ class JvmLispCompilerTest {
 		// built at run time so no literal absolute path is bundled at compile time.
 		java.nio.file.Path root = java.nio.file.Files.createDirectory(tempDir.resolve("u360"));
 		String dir = root.toString().replace("\\", "\\\\");
-		assertThat(compileAndRunRead("""
+		assertThat(compileAndRunUnread("""
 				(let ((base "%1$s/"))
 				  (print (let ((p (uiop:with-temporary-file (:stream s :pathname p :directory base :keep t)
 				                    (write-string "kept" s) p)))

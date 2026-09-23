@@ -1462,8 +1462,11 @@ public final class LispPreludeLibrary {
 		// none), the same last-component rule its file queries follow.
 		SOURCES.put(LispNames.STREAM_EXTERNAL_FORMAT, """
 				(defun stream-external-format (%sef-s)
+				  ;; A broadcast stream answers its last component (or :default with
+				  ;; none). Slot 0 directly: these defuns travel without the broadcast
+				  ;; class entry, so the reader may not be defined where they run.
 				  (if (%obj-is %sef-s '|%class-%BROADCAST-STREAM|)
-				      (let ((%sef-cs (%broadcast-stream-components %sef-s)))
+				      (let ((%sef-cs (%obj-ref %sef-s 0)))
 				        (if %sef-cs
 				            (stream-external-format (car (last %sef-cs)))
 				            :default))
@@ -1477,8 +1480,9 @@ public final class LispPreludeLibrary {
 		// component (or 1 with none).
 		SOURCES.put(LispNames.FILE_STRING_LENGTH, """
 				(defun file-string-length (%fsl-s %fsl-obj)
+				  ;; Slot 0 directly (see stream-external-format above).
 				  (if (%obj-is %fsl-s '|%class-%BROADCAST-STREAM|)
-				      (let ((%fsl-cs (%broadcast-stream-components %fsl-s)))
+				      (let ((%fsl-cs (%obj-ref %fsl-s 0)))
 				        (if %fsl-cs
 				            (file-string-length (car (last %fsl-cs)) %fsl-obj)
 				            1))

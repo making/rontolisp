@@ -462,9 +462,9 @@
 ;;;; Null device (.todo/360). null-device-pathname is /dev/null on unix (the
 ;;;; one os-cond arm that exists here); the with-null-* family is implemented
 ;;;; over streams rather than the device -- a string stream that always returns
-;;;; EOF, and the discarding sink make-broadcast-stream returns -- which is
-;;;; faster and portable (on WASM the device is only openable if the host
-;;;; preopened it).
+;;;; EOF, and the zero-component broadcast stream make-broadcast-stream returns
+;;;; -- which is faster and portable (on WASM the device is only openable if the
+;;;; host preopened it).
 (defun uiop/stream:null-device-pathname () #p"/dev/null")
 
 (defun uiop/stream:call-with-null-input (%cw-ni-fun &key

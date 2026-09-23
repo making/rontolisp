@@ -145,7 +145,8 @@
   ;; without a position -- walk in bounded reads through a scratch buffer, as
   ;; before.
   (let ((pos (ignore-errors (file-position stream))))
-    (if (and (integerp pos) (plusp n) (ignore-errors (file-position stream (+ pos n))))
+    (if (and (integerp pos) (plusp n)
+             (ignore-errors (file-position stream (+ pos n))))
         n
         (let ((buf
                (or checkpoint::%skip-buffer
