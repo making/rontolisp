@@ -3565,8 +3565,8 @@ public final class JvmLispCompiler implements LispCompiler {
 							java.util.Objects.requireNonNull(asyncFutureFieldName),
 							java.util.Objects.requireNonNull(asyncLatchFieldName))) {
 						f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE)
-							.writeU2(instField)
-							.writeU2(java.util.Objects.requireNonNull(asyncInstanceFieldDesc))
+							.writeU2(Objects.requireNonNull(instField))
+							.writeU2(Objects.requireNonNull(asyncInstanceFieldDesc))
 							.writeU2(0));
 					}
 				}
@@ -3574,8 +3574,8 @@ public final class JvmLispCompiler implements LispCompiler {
 					for (Utf8Constant instField : List.of(java.util.Objects.requireNonNull(threadFnFieldName),
 							java.util.Objects.requireNonNull(threadBindingsFieldName))) {
 						f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE)
-							.writeU2(instField)
-							.writeU2(java.util.Objects.requireNonNull(threadInstanceFieldDesc))
+							.writeU2(Objects.requireNonNull(instField))
+							.writeU2(Objects.requireNonNull(threadInstanceFieldDesc))
 							.writeU2(0));
 					}
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
