@@ -3268,6 +3268,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		final JvmAritySurplusRuntimeBuilder.AritySurplusMethod aritySurplusMethodBody = JvmAritySurplusRuntimeBuilder
 			.build(cp, objectArrayClass);
 
+		// The destructuring missing-element message (%arity-missing-message). Emitted
+		// unconditionally beside _aritySurplus: its sites are the destructuring
+		// prologue, which destructuring-bind expansions produce while this backend
+		// compiles, and the class shaker drops it from a program that never checks.
+		final JvmAritySurplusRuntimeBuilder.ArityMissingMethod arityMissingMethodBody = JvmAritySurplusRuntimeBuilder
+			.buildMissing(cp);
+
 		// The character-index helpers (_cpoff / _scount) every string index and every
 		// string length reads through. Emitted unconditionally for the same reason
 		// _length is: the sites are generated internally too, and the pair is ~60 bytes.
@@ -4515,6 +4522,17 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(aritySurplusMethodBody.maxStack())
 									.writeU2(aritySurplusMethodBody.maxLocals())
 									.writeCode((Object[]) aritySurplusMethodBody.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
+				{
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, arityMissingMethodBody.name(),
+							arityMissingMethodBody.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(arityMissingMethodBody.maxStack())
+									.writeU2(arityMissingMethodBody.maxLocals())
+									.writeCode((Object[]) arityMissingMethodBody.code().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));

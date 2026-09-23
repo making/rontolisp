@@ -5555,6 +5555,14 @@ public final class Environment implements Scope {
 					return new LispString(
 							ClosRegistry.aritySurplusMessage((int) ((LispInteger) args.get(0)).value(), got));
 				}));
+		// The destructuring missing-element message (LambdaLists): required and got
+		// are literals, the message the lower-bound half of the arity report.
+		env.defineFunction(LispNames.ARITY_MISSING_MESSAGE_INTERNAL,
+				new LispFunction(LispNames.ARITY_MISSING_MESSAGE_INTERNAL, args -> {
+					requireArgCount(LispNames.ARITY_MISSING_MESSAGE_INTERNAL, args, 2);
+					return new LispString(ClosRegistry.arityMessage((int) ((LispInteger) args.get(0)).value(), true,
+							(int) ((LispInteger) args.get(1)).value()));
+				}));
 		// The piece aliases the expander builds format directives, map 'string
 		// accumulators and condition messages with: on the compile backends they are the
 		// public conversions minus the mutable-result wrap; here every string is mutable

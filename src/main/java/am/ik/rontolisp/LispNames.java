@@ -2624,6 +2624,19 @@ public final class LispNames {
 	public static final String ARITY_SURPLUS_MESSAGE_INTERNAL = "%ARITY-SURPLUS-MESSAGE";
 
 	/**
+	 * Internal primitive {@code (%arity-missing-message required got)}: the message of
+	 * the destructuring missing-element check ({@code LambdaLists}), the
+	 * {@link am.ik.rontolisp.ClosRegistry#arityMessage(int, boolean, int)} shape with a
+	 * lower bound ({@code required} expected at least, {@code got} present). Both are
+	 * integer literals. The JVM answers it from the shared {@code _arityMissing} helper
+	 * (the quote-framed twin of {@code _aritySurplus}, not the dispatchers'
+	 * {@code _arityMsg}: the message lands in a condition's {@code format-control} slot
+	 * and an unframed string would fail {@code stringp}); the other backends lower it
+	 * ({@code LambdaLists.lowerArityMissingMessage}).
+	 */
+	public static final String ARITY_MISSING_MESSAGE_INTERNAL = "%ARITY-MISSING-MESSAGE";
+
+	/**
 	 * Internal two-argument primitive {@code (%file-error pathname message)} that signals
 	 * a {@code file-error} carrying the pathname and reporting the message: what a failed
 	 * {@code open} lowers to on the compiled backends

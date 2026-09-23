@@ -41595,7 +41595,8 @@ public final class LispMacroExpander {
 	 * inside nested patterns) are supported; {@code &whole}/{@code &environment} are not.
 	 * An element past the pattern (at any level with neither a dotted tail, {@code &rest}
 	 * nor {@code &key}) signals the surplus-argument {@code program-error}, and so does
-	 * an undeclared keyword under {@code &key}; a MISSING position still binds to nil.
+	 * an undeclared keyword under {@code &key}; a REQUIRED element the list runs out
+	 * before signals the same class through the missing-element check.
 	 *
 	 * <pre>
 	 * (destructuring-bind (a (b) &amp;optional (c 9)) '(1 (2)) (list a b c))
@@ -41714,6 +41715,12 @@ public final class LispMacroExpander {
 			}
 			cursor = mvCall(LispNames.CDR, cursor);
 		}
+		if (firstKeyword > 0) {
+			// The required prefix must be present whatever the tail is: a short list
+			// binds no nil here. Placed before the tail bindings so an &optional
+			// default never runs for a call that is already short.
+			out.add(LambdaLists.destructuringMissingCheck(source, firstKeyword));
+		}
 		if (firstKeyword == elements.size()) {
 			// The keyword sits only inside a nested sub-pattern: this level is
 			// required-only and must exhaust its list.
@@ -41750,9 +41757,11 @@ public final class LispMacroExpander {
 	/**
 	 * Appends a surplus-element check for every level of a keyword-free pattern that ends
 	 * in nil (a dotted tail consumes the rest of its list): the list at that level must
-	 * be exhausted by the pattern's elements. Kept apart from {@link #destructurePairs},
-	 * which {@code loop}'s destructuring shares -- there a surplus value is discarded
-	 * (CLHS 6.1.1.7).
+	 * be exhausted by the pattern's elements. Every level with an element also gets a
+	 * missing-element check first -- a dotted tail excuses only what follows it, never
+	 * the elements before it. Kept apart from {@link #destructurePairs}, which
+	 * {@code loop}'s destructuring shares -- there a surplus value is discarded (CLHS
+	 * 6.1.1.7) and a short list still binds nil.
 	 */
 	private static void appendSurplusChecks(LispVal pattern, LispVal source, List<LispVal> out) {
 		int count = 0;
@@ -41765,6 +41774,9 @@ public final class LispMacroExpander {
 			cursor = mvCall(LispNames.CDR, cursor);
 			count++;
 			tail = c.cdr();
+		}
+		if (count > 0) {
+			out.add(LambdaLists.destructuringMissingCheck(source, count));
 		}
 		if (tail instanceof LispNil) {
 			out.add(LambdaLists.destructuringSurplusCheck(source, count));

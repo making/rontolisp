@@ -73,6 +73,27 @@ final class JvmExprCompiler {
 	}
 
 	/**
+	 * {@code (%arity-missing-message required got)}: both counts are literals, answered
+	 * by the shared {@code _arityMissing} helper ({@link JvmAritySurplusRuntimeBuilder},
+	 * emitted unconditionally and shaken out when unused) -- no printer, no length walk.
+	 * The helper answers the QUOTE-FRAMED string, the same convention as
+	 * {@code _aritySurplus}: the message lands in a condition's {@code format-control}
+	 * slot, and an unframed {@code java.lang.String} fails {@code stringp} on this
+	 * backend, which would route the report through the function-control arm and invoke
+	 * the message as a function.
+	 */
+	private static void compileArityMissingMessage(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		JvmEmitHelper.emitIntConst(ctx, (int) ((LispInteger) args.get(1)).value());
+		JvmEmitHelper.emitIntConst(ctx, (int) ((LispInteger) args.get(2)).value());
+		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
+				ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmAritySurplusRuntimeBuilder.MISSING_METHOD),
+						ctx.cp.addUtf8(JvmAritySurplusRuntimeBuilder.MISSING_DESC)));
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ref.index());
+	}
+
+	/**
 	 * Compiles a form in STATEMENT position -- a body form that is not the body's last, a
 	 * tagbody form, a cleanup -- leaving nothing on the operand stack. The default is the
 	 * value emission plus a {@code pop}; a form that can skip pushing the value skips it
@@ -1729,6 +1750,7 @@ final class JvmExprCompiler {
 							ctx.hasLandingPad && ctx.mayUseInstances), ctx, className);
 				}
 				case LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL -> compileAritySurplusMessage(cons, ctx, className);
+				case LispNames.ARITY_MISSING_MESSAGE_INTERNAL -> compileArityMissingMessage(cons, ctx, className);
 				case LispNames.AND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx, className);
 				case LispNames.OR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx, className);
 				case LispNames.WHEN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx, className);

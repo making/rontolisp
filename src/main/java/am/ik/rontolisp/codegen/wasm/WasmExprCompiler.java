@@ -1676,6 +1676,8 @@ final class WasmExprCompiler {
 				}
 				case LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL ->
 					WasmExprCompiler.compileExpr(am.ik.rontolisp.LambdaLists.lowerAritySurplusMessage(cons), ctx);
+				case LispNames.ARITY_MISSING_MESSAGE_INTERNAL ->
+					WasmExprCompiler.compileExpr(am.ik.rontolisp.LambdaLists.lowerArityMissingMessage(cons), ctx);
 				case LispNames.HANDLER_BIND ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandHandlerBind(cons, ctx.closRegistry), ctx);
 				case LispNames.IGNORE_ERRORS ->

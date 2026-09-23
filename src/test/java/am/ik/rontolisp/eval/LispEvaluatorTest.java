@@ -8694,8 +8694,6 @@ class LispEvaluatorTest {
 		assertThat(eval("(destructuring-bind (a b) '(1 2) (list a b))").print()).isEqualTo("(1 2)");
 		assertThat(eval("(destructuring-bind (a (b c) d) '(1 (2 3) 4) (+ a b c d))")).isEqualTo(new LispInteger(10));
 		assertThat(eval("(destructuring-bind (a (b (c))) '(1 (2 (3))) (list a b c))").print()).isEqualTo("(1 2 3)");
-		// Lite semantics for a MISSING position: it binds to nil.
-		assertThat(eval("(destructuring-bind (a b) '(1) (list a b))").print()).isEqualTo("(1 NIL)");
 	}
 
 	@Test
@@ -8741,6 +8739,49 @@ class LispEvaluatorTest {
 		assertThat(eval("(destructuring-bind (a &optional (b 7)) '(1) (list a b))").print()).isEqualTo("(1 7)");
 		assertThat(eval("(destructuring-bind (a &body (b &optional c)) '(1 2 3) (list a b c))").print())
 			.isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void evalDestructuringBindMissingElementsSignalProgramError() {
+		// A required element the list runs out before is a program-error, not a nil
+		// binding: a required-only pattern, a nested one, a dotted tail's head, and a
+		// required prefix before &optional / &rest / &key.
+		String pe = "(program-error () :pe)";
+		assertThat(eval("(handler-case (destructuring-bind (a b) '(1) (list a b)) " + pe + ")").print())
+			.isEqualTo(":PE");
+		assertThat(eval("(handler-case (destructuring-bind (a (b c)) '(1 (2)) (list a b c)) " + pe + ")").print())
+			.isEqualTo(":PE");
+		assertThat(eval("(handler-case (destructuring-bind (a . b) '() (list a b)) " + pe + ")").print())
+			.isEqualTo(":PE");
+		assertThat(eval("(handler-case (destructuring-bind (a b &optional c) '(1) (list a b c)) " + pe + ")").print())
+			.isEqualTo(":PE");
+		assertThat(eval("(handler-case (destructuring-bind (a &rest r) '() (list a r)) " + pe + ")").print())
+			.isEqualTo(":PE");
+		assertThat(eval("(handler-case (destructuring-bind (a &key b) '(:b 2) (list a b)) " + pe + ")").print())
+			.isEqualTo(":PE");
+		assertThat(eval("(handler-case (destructuring-bind ((a &key k) b) '(() 2) (list a k b)) " + pe + ")").print())
+			.isEqualTo(":PE");
+		// The message is the arity one, as a lower bound over the elements present.
+		assertThat(eval("(handler-case (destructuring-bind (a b) '(1) a) " + "(program-error (e) (princ-to-string e)))")
+			.print()).isEqualTo("\"Function expects at least 2 arguments, got 1\"");
+		// The check runs before an &optional default in the tail.
+		assertThat(evalMulti("""
+				(defvar *db-missing-ran* nil)
+				(list (handler-case (destructuring-bind (a b &optional (c (setq *db-missing-ran* t))) '(1) (list a b c))
+				        (program-error () :pe))
+				      *db-missing-ran*)""").print()).isEqualTo("(:PE NIL)");
+		// A non-list source still signals (car of an atom on this backend).
+		assertThat(eval("(handler-case (destructuring-bind (a) 5 a) (error () :signalled))").print())
+			.isEqualTo(":SIGNALLED");
+		// A defmacro lambda list beyond required + &rest destructures the same way.
+		assertThat(evalMulti("""
+				(defmacro db-mm (a (b c) &optional d) `'(,a ,b ,c ,d))
+				(list (db-mm 1 (2 3))
+				      (handler-case (macroexpand '(db-mm 1 (2))) (program-error () :pe)))""").print())
+			.isEqualTo("((1 2 3 NIL) :PE)");
+		// What is present still binds.
+		assertThat(eval("(destructuring-bind (a &optional (b 7)) '(1) (list a b))").print()).isEqualTo("(1 7)");
+		assertThat(eval("(destructuring-bind (a &rest r) '(1 2 3) (list a r))").print()).isEqualTo("(1 (2 3))");
 	}
 
 	@Test
