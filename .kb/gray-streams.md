@@ -186,11 +186,13 @@ Contract, identical on all four:
 
 ## `make-broadcast-stream` is a Gray stream
 Prelude Lisp (`LispPreludeLibrary.MAKE_BROADCAST_STREAM`) defines a
-`rontolisp:fundamental-character-output-stream` subclass looping the components. **A broadcast
-stream with components is a Gray stream, so exactly the operators that dispatch on one work
-with it.** A component-LESS `(make-broadcast-stream)` is still the discarding
-`%make-string-output-stream` handle but rides the same prelude entry, so a sink-only program
-also carries gray.lisp.
+`rontolisp:fundamental-character-output-stream` subclass looping the components. **Every
+broadcast stream is that class, with components or without**: a component-less
+`(make-broadcast-stream)` is the same class over an empty list (not the discarding
+sink), so the file queries answer for it. The class carries a `stream-fresh-line`
+method answering the last component (nil with none).
+**So exactly the operators that dispatch on one work
+with it.**
 
 ## The composite-stream constructors are Gray streams too
 `make-two-way-stream` / `make-echo-stream` / `make-concatenated-stream` (`.todo/387`,
@@ -251,3 +253,40 @@ splices the whole entry.
   `FastIoCircularStreamsE2eTest`, the two `LackEcosystem*E2eTest` classes.
 - ci-spec: `gray-stream-instance-dispatch`, `gray-stream-binary-round-trip-and-file-position`,
   `gray-stream-input-protocol-widening`, `gray-stream-is-a-stream`.
+
+## The composite stream classes as CL type names, and the zero-component broadcast stream (2026-09-23, `.todo/927`)
+
+**`broadcast-stream`, `two-way-stream`, `echo-stream` and `concatenated-stream` are CL
+type names over the prelude Gray classes** (`PackageRegistry.CL_TYPES` +
+`LispMacroExpander.makeTypeTest`): the test is the class tag (`%class-%<NAME>`), exact
+on all four backends like `synonym-stream`'s. A Lisp source spells the tag
+bar-quoted (`'|%class-%BROADCAST-STREAM|`): the tag's `%class-` prefix is lowercase
+and the reader would upcase it.
+
+**A broadcast stream answers the file queries for its LAST component, or for an
+empty list when it has none** (length 0, position 0, string-length 1,
+external-format `:default`): `file-length` rides a new Gray dispatch
+(`%gray-broadcast-file-length`, recursive so a nested broadcast works, nil for a
+non-broadcast instance the same answer the built-in gives one);
+`file-position`'s existing dispatch grew the same arm; `file-string-length` and
+`stream-external-format` -- prelude defuns, so one change covers every backend --
+test the tag inline. A nil bound is never passed explicitly to the generic (user
+methods default start to 0, and an explicit nil would override that).
+
+- A zero-component `(make-broadcast-stream)` program now carries the Gray
+  broadcast entry: JVM `.class` 5,896 -> 12,717 B (+6.8 KB); with a write,
+  9,816 -> 42,135 B (the protocol's first-use cost, at parity with a
+  one-component broadcast at 42,179 B). Anything else is byte-identical.
+- `#'make-broadcast-stream` (and the compile-path wrapper) keeps the OLD sink
+  shape: a zero-component broadcast as a VALUE is still the discarding sink --
+  the instance needs class machinery no first-class value can reach.
+- **ANSI `streams`** (interpreter, suite `ca06bd9`, names diffed): 13 fixed, 0
+  regressed -- `BROADCAST-STREAM-STREAMS.1/.3/.4`, `MAKE-BROADCAST-STREAM.1/.2/.3`
+  (whose element-type asserts behind the typep ones pass too), `.5/.7/.8`,
+  `MAKE-TWO-WAY-STREAM.1`, `MAKE-CONCATENATED-STREAM.6`, `MAKE-ECHO-STREAM.12`,
+  `FILE-LENGTH.ERROR.8` (a broadcast of a file answers the file's length).
+  `WRITE-LINE.4-.10` still fail on the `#.` expectation harness gap.
+- Pinned by `LispEvaluatorTest#theCompositeStreamTypeNamesResolve`,
+  `JvmLispCompilerTest#compileAndRunCompositeStreamTypeNames`,
+  `WasmLispCompilerIntegrationTest#compositeStreamClassesAreTypeNames`, ci-spec
+  `composite-stream-classes-are-type-names`.

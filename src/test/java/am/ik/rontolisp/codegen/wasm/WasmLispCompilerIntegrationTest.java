@@ -13550,6 +13550,40 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compositeStreamClassesAreTypeNames() throws Exception {
+		// broadcast-stream / two-way-stream / echo-stream / concatenated-stream are
+		// CL type names over the prelude Gray classes -- and a zero-component
+		// broadcast stream is a real broadcast stream, not the discarding sink.
+		// The Gray pre-pass splices the protocol the composite classes subclass,
+		// mirroring the CLI pipeline.
+		assertThat(compileAndRunGray("""
+				(let ((b0 (make-broadcast-stream))
+				      (b1 (make-broadcast-stream (make-string-output-stream)))
+				      (tw (make-two-way-stream (make-string-input-stream "a")
+				                               (make-string-output-stream)))
+				      (es (make-echo-stream (make-string-input-stream "a")
+				                            (make-string-output-stream)))
+				      (cs (make-concatenated-stream (make-string-input-stream "a"))))
+				  (print (list (typep b0 'broadcast-stream)
+				               (typep b1 'broadcast-stream)
+				               (typep tw 'two-way-stream)
+				               (typep es 'echo-stream)
+				               (typep cs 'concatenated-stream)
+				               (typep b0 'two-way-stream)
+				               (typep tw 'broadcast-stream)
+				               (typep "s" 'broadcast-stream)
+				               (typep b0 'stream)
+				               (typep tw 'stream)
+				               (broadcast-stream-streams b0))))
+				(let ((b0 (make-broadcast-stream)))
+				  (print (list (file-length b0)
+				               (file-position b0)
+				               (file-string-length b0 "antidisestablishmentarianism")
+				               (stream-external-format b0))))
+				""")).isEqualTo("(T T T T T NIL NIL NIL T T NIL)\n(0 0 1 :DEFAULT)");
+	}
+
+	@Test
 	void wideAndNarrowElementTypesOnPreview1() throws Exception {
 		// The descriptor moves octets; a wide element composes above %read-octet /
 		// %write-octet through the prelude registry, and file-length / file-position

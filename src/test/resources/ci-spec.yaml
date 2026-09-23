@@ -13284,6 +13284,29 @@ cases:
       (T NIL)
       :SV-FD
       :SV-STREAM
+  # The composite stream classes are CL type names over the prelude Gray
+  # classes, and a zero-component broadcast stream is a real broadcast stream
+  # with nothing behind it: the file queries answer for an empty list.
+  - name: composite-stream-classes-are-type-names
+    source: |
+      (let ((b0 (make-broadcast-stream))
+            (b1 (make-broadcast-stream (make-string-output-stream)))
+            (tw (make-two-way-stream (make-string-input-stream "a")
+                                     (make-string-output-stream))))
+        (print (list (typep b0 'broadcast-stream)
+                     (typep b1 'broadcast-stream)
+                     (typep tw 'two-way-stream)
+                     (typep b0 'two-way-stream)
+                     (typep tw 'broadcast-stream)
+                     (broadcast-stream-streams b0))))
+      (let ((b0 (make-broadcast-stream)))
+        (print (list (file-length b0)
+                     (file-position b0)
+                     (file-string-length b0 "antidisestablishmentarianism")
+                     (stream-external-format b0))))
+    expected: |
+      (T T T NIL NIL NIL)
+      (0 0 1 :DEFAULT)
   - name: uiop-add-package-local-nickname
     source: |
       (defpackage #:com.example.apn.deep (:use #:cl) (:export #:apn-answer))

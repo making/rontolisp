@@ -1795,7 +1795,12 @@ public final class BuiltinFunctionWrappers {
 			// resolves to the real definition.
 			unary(LispNames.SLEEP), unary(LispNames.FILE_POSITION), unary(LispNames.FILE_LENGTH),
 			unary(LispNames.FILE_WRITE_DATE), unary(LispNames.PATHNAMEP),
-			new WrapperDef(LispNames.MAKE_BROADCAST_STREAM, List.of(), List.of(call(LispNames.MAKE_BROADCAST_STREAM))),
+			// make-broadcast-stream as a VALUE stays the discarding sink: the call
+			// position expands to the Gray class, but this body is injected into
+			// every program (ungated) and must not pull the broadcast prelude entry
+			// along -- the interpreter's Java built-in answers the same sink.
+			new WrapperDef(LispNames.MAKE_BROADCAST_STREAM, List.of(),
+					List.of(call(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL))),
 			unary(LispNames.INPUT_STREAM_P), unary(LispNames.OUTPUT_STREAM_P), unary(LispNames.STREAM_ELEMENT_TYPE),
 			unary(LispNames.CLASS_OF), unary(LispNames.SIMPLE_CONDITION_FORMAT_CONTROL),
 			unary(LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS),

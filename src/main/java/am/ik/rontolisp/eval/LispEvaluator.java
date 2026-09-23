@@ -1729,6 +1729,16 @@ public final class LispEvaluator {
 			}
 			return apply(baseFilePosition, args, this.globalEnv);
 		}));
+		// file-length: a broadcast stream answers for its last component (or 0 with
+		// none) through the shared helper; anything else reaches the base built-in.
+		LispVal baseFileLength = this.globalEnv.lookupFunction(LispNames.FILE_LENGTH);
+		this.globalEnv.defineFunction(LispNames.FILE_LENGTH, new LispFunction(LispNames.FILE_LENGTH, rawArgs -> {
+			List<LispVal> args = resolveStreamArg(rawArgs, 0);
+			if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
+				return applyGrayDispatch(GrayStreamsLibrary.BROADCAST_FILE_LENGTH_DISPATCH, List.of(args.get(0)));
+			}
+			return apply(baseFileLength, args, this.globalEnv);
+		}));
 		// The line-oriented and print-family output operators: the same
 		// instance test, the same helpers the compile-path rewrite targets. Without
 		// these, exactly the two write generics reached a Gray instance and everything
@@ -6931,11 +6941,11 @@ public final class LispEvaluator {
 			case LispNames.SIMPLE_STRING_P:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandSimpleStringP);
 			// make-broadcast-stream goes through the SAME expansion the compile paths
-			// use, so the component form (a Gray output stream looping its components)
-			// exists on every backend from one definition. The component-less form
-			// expands to %make-string-output-stream, which is the very primitive the
-			// Java built-in below it calls -- that one stays only so
-			// #'make-broadcast-stream remains a value.
+			// use, so every broadcast stream -- with components or without -- is the
+			// Gray class on every backend from one definition. The Java built-in
+			// below stays only so #'make-broadcast-stream remains a value; it keeps
+			// the old sink shape (a zero-component broadcast as a VALUE is still
+			// the discarding sink -- .kb/read-load-streams.md).
 			case LispNames.MAKE_BROADCAST_STREAM:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandMakeBroadcastStream);
 			case LispNames.PROG2:

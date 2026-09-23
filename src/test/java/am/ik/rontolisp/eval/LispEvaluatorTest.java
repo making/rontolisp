@@ -19232,6 +19232,55 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void theCompositeStreamTypeNamesResolve() {
+		// broadcast-stream / two-way-stream / echo-stream / concatenated-stream are
+		// CL type names over the prelude Gray classes -- and a zero-component
+		// broadcast stream is a real broadcast stream, not the discarding sink.
+		assertThat(evalMulti("""
+				(let ((b0 (make-broadcast-stream))
+				      (b1 (make-broadcast-stream (make-string-output-stream)))
+				      (tw (make-two-way-stream (make-string-input-stream "a")
+				                               (make-string-output-stream)))
+				      (es (make-echo-stream (make-string-input-stream "a")
+				                            (make-string-output-stream)))
+				      (cs (make-concatenated-stream (make-string-input-stream "a"))))
+				  (list (typep b0 'broadcast-stream)
+				        (typep b1 'broadcast-stream)
+				        (typep tw 'two-way-stream)
+				        (typep es 'echo-stream)
+				        (typep cs 'concatenated-stream)
+				        (typep b0 'two-way-stream)
+				        (typep tw 'broadcast-stream)
+				        (typep "s" 'broadcast-stream)
+				        (typep b0 'stream)
+				        (typep tw 'stream)
+				        (broadcast-stream-streams b0)))
+				""").print()).isEqualTo("(T T T T T NIL NIL NIL T T NIL)");
+		// The names work in typecase too (a CL_TYPES name without a makeTypeTest
+		// case is a hard expansion error, not a silent nil).
+		assertThat(evalMulti("""
+				(let ((b0 (make-broadcast-stream))
+				      (tw (make-two-way-stream (make-string-input-stream "a")
+				                               (make-string-output-stream))))
+				  (list (typecase b0 (broadcast-stream :b) (t :other))
+				        (typecase tw (two-way-stream :t) (broadcast-stream :b) (t :other))
+				        (typecase "s" (echo-stream :e) (concatenated-stream :c) (t :other))))
+				""").print()).isEqualTo("(:B :T :OTHER)");
+		// The zero-component answers: no sink to discard to, so the queries answer
+		// for an empty component list -- and the last component answers them else.
+		assertThat(evalMulti("""
+				(let ((b0 (make-broadcast-stream)))
+				  (list (file-length b0)
+				        (file-position b0)
+				        (file-string-length b0 "antidisestablishmentarianism")
+				        (stream-external-format b0)
+				        (streamp b0)
+				        (output-stream-p b0)
+				        (open-stream-p b0)))
+				""").print()).isEqualTo("(0 0 1 :DEFAULT T T T)");
+	}
+
+	@Test
 	void userHomedirPathnameIsADirectoryPathname() {
 		assertThat(evalMulti("""
 				(let ((h (user-homedir-pathname)))

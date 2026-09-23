@@ -1220,12 +1220,10 @@ public final class LispPreludeLibrary {
 		// A broadcast stream WITH components is a Gray output stream whose two write
 		// generics loop the components (.kb/gray-streams.md): no runtime learns a new
 		// stream kind, the dispatch that already exists carries it, and the four backends
-		// therefore cannot drift. Reached only through
-		// LispMacroExpander.expandMakeBroadcastStream's multi-argument branch -- a
-		// component-LESS (make-broadcast-stream) still lowers to the discarding
-		// %make-string-output-stream sink and pulls NONE of this in, which is what keeps
-		// every existing sink program's bytes (and keeps the entry from dragging the Gray
-		// protocol into pipelines that never run GrayStreamsLibrary.process).
+		// therefore cannot drift -- and a component-LESS call is the same class over an
+		// empty list, so the file queries answer for it (length 0, external-format
+		// :default) instead of the discarding sink's. Reached only through
+		// LispMacroExpander.expandMakeBroadcastStream.
 		// %make-array-et: make-array whose :element-type is only known at RUN time.
 		// Every backend but the interpreter decides an array's representation from the
 		// literal designator at the call site, so a designator held in a variable has to
@@ -1272,6 +1270,11 @@ public final class LispPreludeLibrary {
 				  (dolist (%bs-x (%broadcast-stream-components %bs-s))
 				    (write-byte %bs-b %bs-x))
 				  %bs-b)
+				(defmethod rontolisp:stream-fresh-line ((%bs-s %broadcast-stream))
+				  (let ((%bs-cs (%broadcast-stream-components %bs-s)))
+				    (if %bs-cs
+				        (fresh-line (car (last %bs-cs)))
+				        nil)))
 				(defun %make-broadcast-stream (%mbs-components)
 				  (make-instance '%broadcast-stream :components %mbs-components))
 				""");
@@ -1450,31 +1453,44 @@ public final class LispPreludeLibrary {
 				      (error 'type-error :datum %isp-s :expected-type 'stream)))
 				""");
 		// stream-external-format: UTF-8 is the one format the reader and every writer
-		// use, on every backend, so there is nothing to select and nothing to remember.
+		// use, on every backend, so there is nothing to select and nothing to remember --
+		// except a broadcast stream, which answers its last component (or :default with
+		// none), the same last-component rule its file queries follow.
 		SOURCES.put(LispNames.STREAM_EXTERNAL_FORMAT, """
 				(defun stream-external-format (%sef-s)
-				  (if (streamp %sef-s)
-				      :utf-8
-				      (error 'type-error :datum %sef-s :expected-type 'stream)))
+				  (if (%obj-is %sef-s '|%class-%BROADCAST-STREAM|)
+				      (let ((%sef-cs (%broadcast-stream-components %sef-s)))
+				        (if %sef-cs
+				            (stream-external-format (car (last %sef-cs)))
+				            :default))
+				      (if (streamp %sef-s)
+				          :utf-8
+				          (error 'type-error :datum %sef-s :expected-type 'stream))))
 				""");
 		// file-string-length: how far writing the object would move file-position --
 		// the UTF-8 byte length, since that is what every backend writes. A character
-		// counts as the one-character string it is.
+		// counts as the one-character string it is. A broadcast stream answers its last
+		// component (or 1 with none).
 		SOURCES.put(LispNames.FILE_STRING_LENGTH, """
 				(defun file-string-length (%fsl-s %fsl-obj)
-				  (let ((%fsl-str (if (characterp %fsl-obj) (string %fsl-obj) %fsl-obj))
-				        (%fsl-n 0))
-				    (if (streamp %fsl-s)
-				        nil
-				        (error 'type-error :datum %fsl-s :expected-type 'stream))
-				    (dotimes (%fsl-i (length %fsl-str) %fsl-n)
-				      (let ((%fsl-c (char-code (char %fsl-str %fsl-i))))
-				        (setq %fsl-n
-				              (+ %fsl-n
-				                 (cond ((< %fsl-c 128) 1)
-				                       ((< %fsl-c 2048) 2)
-				                       ((< %fsl-c 65536) 3)
-				                       (t 4))))))))
+				  (if (%obj-is %fsl-s '|%class-%BROADCAST-STREAM|)
+				      (let ((%fsl-cs (%broadcast-stream-components %fsl-s)))
+				        (if %fsl-cs
+				            (file-string-length (car (last %fsl-cs)) %fsl-obj)
+				            1))
+				      (let ((%fsl-str (if (characterp %fsl-obj) (string %fsl-obj) %fsl-obj))
+				            (%fsl-n 0))
+				        (if (streamp %fsl-s)
+				            nil
+				            (error 'type-error :datum %fsl-s :expected-type 'stream))
+				        (dotimes (%fsl-i (length %fsl-str) %fsl-n)
+				          (let ((%fsl-c (char-code (char %fsl-str %fsl-i))))
+				            (setq %fsl-n
+				                  (+ %fsl-n
+				                     (cond ((< %fsl-c 128) 1)
+				                           ((< %fsl-c 2048) 2)
+				                           ((< %fsl-c 65536) 3)
+				                           (t 4)))))))))
 				""");
 		// %stream-target: the ONE resolution of a stream DESIGNATOR down to the raw
 		// handle the I/O primitives act on. Two things are resolved, in this order.
@@ -4305,7 +4321,7 @@ public final class LispPreludeLibrary {
 
 	static boolean referencedBySurfaceForm(String entry, List<LispVal> program, boolean canonical) {
 		if (LispNames.MAKE_BROADCAST_STREAM_INTERNAL.equals(entry)) {
-			return callsWithArguments(program, LispNames.MAKE_BROADCAST_STREAM, canonical)
+			return referencesName(program, LispNames.MAKE_BROADCAST_STREAM, canonical)
 					|| referencesName(program, LispNames.BROADCAST_STREAM_STREAMS, canonical);
 		}
 		// The composite-stream entries define a whole cluster -- the constructor, the

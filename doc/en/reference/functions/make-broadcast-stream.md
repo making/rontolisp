@@ -3,8 +3,11 @@
 `(make-broadcast-stream &rest streams)`
 
 An output stream that fans every write out to each component stream, in the order
-given. With no components it is the discarding sink instead: writes to it are
-dropped (the CL idiom for a null output stream).
+given. With no components it is a broadcast stream over an empty list instead:
+writes to it are dropped (the CL idiom for a null output stream), and the file
+queries answer for nothing -- `file-length` 0, `file-position` 0,
+`file-string-length` 1, `stream-external-format` `:default`. With components the
+same queries answer the last component.
 
 ```lisp
 (let ((a (make-string-output-stream))
@@ -27,5 +30,4 @@ so it takes the whole output protocol: [`format`](../macros/format.md),
 [`fresh-line`](fresh-line.md), [`write-line`](write-line.md),
 [`force-output`](force-output.md), [`finish-output`](finish-output.md),
 [`clear-output`](clear-output.md) and [`close`](close.md).
-`fresh-line` always writes a newline on one: a broadcast stream tracks no
-column, so it cannot tell whether it is already at the start of a line.
+`fresh-line` answers the last component, or nil with no components.

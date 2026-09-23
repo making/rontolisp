@@ -12178,20 +12178,17 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (make-broadcast-stream ...)}. With NO components the discarding sink
-	 * ({@code %make-string-output-stream}), unchanged since before broadcast streams
-	 * existed; with components {@code (%make-broadcast-stream (list ...))}, the Gray
-	 * output stream prelude entry that loops them. The choice is by ARGUMENT COUNT here,
-	 * at expansion time, which is what keeps a sink-only program from carrying the Gray
-	 * protocol.
+	 * Expands {@code (make-broadcast-stream ...)} into
+	 * {@code (%make-broadcast-stream (list ...))}, the Gray output stream prelude entry
+	 * that loops the components -- the list is empty for a component-less call, which is
+	 * a real zero-component broadcast stream, not a sink. Every broadcast stream is
+	 * therefore the same class on every backend, answering the same component and file
+	 * queries.
 	 * @param cons the make-broadcast-stream expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandMakeBroadcastStream(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		if (parts.size() == 1) {
-			return fmtCall(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL);
-		}
 		List<LispVal> components = new ArrayList<>(parts.subList(1, parts.size()));
 		components.add(0, new LispSymbol(LispNames.LIST));
 		return fmtCall(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, listToCons(components));
@@ -31769,6 +31766,11 @@ public final class LispMacroExpander {
 				// implementation classes, so one test over both kinds is the whole type.
 				return makeStreamKindTest(value,
 						List.of(LispLayout.Kinds.STRING_INPUT, LispLayout.Kinds.STRING_OUTPUT));
+			case "BROADCAST-STREAM", "TWO-WAY-STREAM", "ECHO-STREAM", "CONCATENATED-STREAM":
+				// The composite streams are prelude Gray classes named %<CL-NAME>, so
+				// the test is the class tag -- exact on all four backends, like
+				// synonym-stream's.
+				return objIs(value, List.of(LispLayout.CLASS_TAG_PREFIX + "%" + name));
 			case "READTABLE":
 				// A readtable is the opaque nil token: the reader is not
 				// readtable-driven,

@@ -655,12 +655,33 @@
 
 (defun rontolisp::%gray-file-position-dispatch (stream)
   (let ((stream (%stream-target stream)))
-    (if (%obj-p stream)
-        (rontolisp:stream-file-position stream)
-        (file-position stream))))
+    (if (%obj-is stream '|%class-%BROADCAST-STREAM|)
+        (let ((cs (%broadcast-stream-components stream)))
+          (if cs
+              (rontolisp::%gray-file-position-dispatch (car (last cs)))
+              0))
+        (if (%obj-p stream)
+            (rontolisp:stream-file-position stream)
+            (file-position stream)))))
 
 (defun rontolisp::%gray-file-position-set-dispatch (stream position)
   (let ((stream (%stream-target stream)))
     (if (%obj-p stream)
         (setf (rontolisp:stream-file-position stream) position)
         (file-position stream position))))
+
+;; A broadcast stream answers the file queries for its LAST component, or for
+;; an empty list when it has none. The recursion carries a nested broadcast;
+;; a non-broadcast instance answers nil (what the built-in answers one), and
+;; anything else falls back to the built-in -- the fallback must not see an
+;; instance, or the interpreter's wrapper would send it straight back here.
+(defun rontolisp::%gray-broadcast-file-length (s)
+  (let ((s (%stream-target s)))
+    (if (%obj-is s '|%class-%BROADCAST-STREAM|)
+        (let ((cs (%broadcast-stream-components s)))
+          (if cs
+              (rontolisp::%gray-broadcast-file-length (car (last cs)))
+              0))
+        (if (%obj-p s)
+            nil
+            (file-length s)))))

@@ -239,10 +239,12 @@ public final class PackageRegistry {
 			"BASE-STRING", "CHARACTER", "BASE-CHAR", "STANDARD-CHAR", "SATISFIES", "OTHERWISE", "STREAM",
 			// The stream SUBtypes and the readtable type. Every stream is a
 			// self-describing value carrying its KIND, so `file-stream`,
-			// `string-stream` and `synonym-stream` all have exact tests; a "readtable"
-			// is the nil token the non-readtable-driven reader hands out. See
-			// LispMacroExpander.makeTypeTest.
-			"FILE-STREAM", "STRING-STREAM", "SYNONYM-STREAM", "READTABLE",
+			// `string-stream` and `synonym-stream` all have exact tests; the
+			// composite streams are prelude Gray classes, tested by class tag; a
+			// "readtable" is the nil token the non-readtable-driven reader hands
+			// out. See LispMacroExpander.makeTypeTest.
+			"FILE-STREAM", "STRING-STREAM", "SYNONYM-STREAM", "BROADCAST-STREAM", "TWO-WAY-STREAM", "ECHO-STREAM",
+			"CONCATENATED-STREAM", "READTABLE",
 			// Bit-vector types (no longer empty: since .todo/043 a bit vector is the
 			// general array stamped with the remembered element type bit, with its
 			// lattice edges in LispMacroExpander.SUBTYPEP_PARENTS). The remaining four

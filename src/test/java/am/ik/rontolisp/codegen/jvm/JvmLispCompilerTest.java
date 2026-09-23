@@ -17546,6 +17546,41 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunCompositeStreamTypeNames() throws Exception {
+		// broadcast-stream / two-way-stream / echo-stream / concatenated-stream are
+		// CL type names over the prelude Gray classes -- and a zero-component
+		// broadcast stream is a real broadcast stream, not the discarding sink.
+		// The Gray pre-pass splices the protocol the composite classes subclass,
+		// mirroring the CLI pipeline.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(let ((b0 (make-broadcast-stream))
+					      (b1 (make-broadcast-stream (make-string-output-stream)))
+					      (tw (make-two-way-stream (make-string-input-stream "a")
+					                               (make-string-output-stream)))
+					      (es (make-echo-stream (make-string-input-stream "a")
+					                            (make-string-output-stream)))
+					      (cs (make-concatenated-stream (make-string-input-stream "a"))))
+					  (print (list (typep b0 'broadcast-stream)
+					               (typep b1 'broadcast-stream)
+					               (typep tw 'two-way-stream)
+					               (typep es 'echo-stream)
+					               (typep cs 'concatenated-stream)
+					               (typep b0 'two-way-stream)
+					               (typep tw 'broadcast-stream)
+					               (typep "s" 'broadcast-stream)
+					               (typep b0 'stream)
+					               (typep tw 'stream)
+					               (broadcast-stream-streams b0))))
+					(let ((b0 (make-broadcast-stream)))
+					  (print (list (file-length b0)
+					               (file-position b0)
+					               (file-string-length b0 "antidisestablishmentarianism")
+					               (stream-external-format b0))))
+					"""))))).isEqualTo("(T T T T T NIL NIL NIL T T NIL)\n(0 0 1 :DEFAULT)");
+	}
+
+	@Test
 	void compileAndRunPrintObjectCalledDirectly() throws Exception {
 		// print-object is callable directly with no user method anywhere (CL supplies a
 		// system method for every object), and defining one on a class must not lose

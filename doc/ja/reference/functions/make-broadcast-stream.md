@@ -3,8 +3,11 @@
 `(make-broadcast-stream &rest streams)`
 
 書き込みのすべてを、指定した順に各コンポーネントストリームへ配る出力ストリームを
-返します。コンポーネントがない場合は書き込みを捨てるシンクになります (null 出力
-ストリームの CL イディオム)。
+返します。コンポーネントがない場合は空リスト上のブロードキャストストリームに
+なります。書き込みは捨てられ (null 出力ストリームの CL イディオム)、ファイル
+問い合わせは「何もない」ことへの答えを返します (`file-length` 0、
+`file-position` 0、`file-string-length` 1、`stream-external-format` `:default`)。
+コンポーネントがある場合は同じ問い合わせが最後のコンポーネントの答えを返します。
 
 ```lisp
 (let ((a (make-string-output-stream))
@@ -28,4 +31,5 @@
 [`force-output`](force-output.md)、[`finish-output`](finish-output.md)、
 [`clear-output`](clear-output.md)、[`close`](close.md) です。
 ブロードキャストストリームは桁位置を追跡しないため行頭かどうかを判断できず、
-`fresh-line` は常に改行を書き込みます。
+`fresh-line` は最後のコンポーネントの答えを返し、コンポーネントがない場合は
+nil を返します。
