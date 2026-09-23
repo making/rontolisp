@@ -94,10 +94,10 @@ class PathCitationTest {
 	private static final Pattern MARKDOWN_LINK = Pattern.compile("]\\(([^)\\s]+)\\)");
 
 	/**
-	 * {@code .todo/671}, {@code .todo/682-what-a-rename-breaks.md} -- an item, not a
-	 * path.
+	 * {@code .todo/671}, {@code .todo/682-what-a-rename-breaks.md}, {@code .todo/a00} --
+	 * an item, not a path.
 	 */
-	private static final Pattern TODO_ITEM_REFERENCE = Pattern.compile("\\.todo/\\d+(-[^/]*\\.md)?");
+	private static final Pattern TODO_ITEM_REFERENCE = Pattern.compile("\\.todo/[0-9a-z]\\d{2}(-[^/]*\\.md)?");
 
 	/** A citation may carry a line or a range: {@code Foo.java:120-134}. */
 	private static final Pattern TRAILING_LINES = Pattern.compile(":\\d+(-\\d+)?$");
@@ -183,6 +183,18 @@ class PathCitationTest {
 						+ "says an item is open.")
 				.isEmpty();
 		}
+	}
+
+	/**
+	 * Past 999 an item number's first character continues 0-9 with a-z
+	 * ({@code .todo/claim-number.sh}), so {@code a00} is an item number, not a path.
+	 */
+	@Test
+	void anItemNumberPast999IsAnItemReference() {
+		assertThat(isCitation(".todo/999")).isFalse();
+		assertThat(isCitation(".todo/a00")).isFalse();
+		assertThat(isCitation(".todo/z99-the-last-number.md")).isFalse();
+		assertThat(isCitation(".todo/artefacts/a00-title")).isTrue();
 	}
 
 	/**
