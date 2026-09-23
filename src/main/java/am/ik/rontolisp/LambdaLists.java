@@ -55,6 +55,14 @@ public final class LambdaLists {
 
 	private static final String ARITY_VAR = "__ll_arity";
 
+	/**
+	 * The throwaway {@code let*} variable of the destructuring missing-element check
+	 * ({@link #destructuringMissingCheck}). A name of its own rather than
+	 * {@link #ARITY_VAR}: a required-only level carries both checks in one binding list,
+	 * and two same-named entries would only shadow.
+	 */
+	private static final String MISSING_VAR = "__ll_missing";
+
 	/** The longest optional tail whose surplus test is spelled as nested {@code cdr}s. */
 	private static final int NESTED_CDR_MAX = 3;
 
@@ -233,6 +241,41 @@ public final class LambdaLists {
 	}
 
 	/**
+	 * The throwaway {@code let*} binding that signals when a destructured list runs out
+	 * before a pattern of {@code required} plain elements: one
+	 * {@code (consp <cdr chain>)} test per element, inside out, so the depth that runs
+	 * out reports its own literal count --
+	 *
+	 * <pre>
+	 * (__ll_missing (if (consp source) (if (consp (cdr source)) nil (%program-error (%arity-missing-message 2 1))) (%program-error (%arity-missing-message 2 0))))
+	 * </pre>
+	 *
+	 * The message is the lower-bound half of the arity report
+	 * ({@code Function expects at least N argument(s), got M}), the twin of the surplus
+	 * check's upper bound. Both counts are literals, so no {@code prin1-to-string},
+	 * {@code length} or {@code nthcdr} rides the error path; the message stays a computed
+	 * call, keeping the compilers' static program-error warning (literal messages only)
+	 * quiet.
+	 * @param source the (side-effect-free) expression holding the destructured list
+	 * @param required the pattern's element count
+	 * @return the binding
+	 */
+	public static LispVal destructuringMissingCheck(LispVal source, int required) {
+		LispVal form = LispNil.INSTANCE;
+		for (int got = required - 1; got >= 0; got--) {
+			LispVal chain = source;
+			for (int i = 0; i < got; i++) {
+				chain = call(LispNames.CDR, chain);
+			}
+			LispVal message = list(new LispSymbol(LispNames.ARITY_MISSING_MESSAGE_INTERNAL), new LispInteger(required),
+					new LispInteger(got));
+			LispVal signal = list(new LispSymbol(LispNames.PROGRAM_ERROR_INTERNAL), message);
+			form = list(new LispSymbol(LispNames.IF), list(new LispSymbol(LispNames.CONSP), chain), form, signal);
+		}
+		return list(new LispSymbol(MISSING_VAR), form);
+	}
+
+	/**
 	 * Lowers {@code (%arity-surplus-message max req rest)} for a backend without a
 	 * runtime helper for it (WASM) to
 	 * {@code (%string-concat "Function expects at most MAX argument(s), got " (%prin1-to-string (+ req (length rest))))}
@@ -251,6 +294,26 @@ public final class LambdaLists {
 		String zero = ClosRegistry.aritySurplusMessage(max, 0);
 		return list(new LispSymbol(LispNames.STRING_CONCAT), new LispString(zero.substring(0, zero.length() - 1)),
 				call(LispNames.PRIN1_TO_STRING_RAW, count));
+	}
+
+	/**
+	 * Lowers {@code (%arity-missing-message required got)} for a backend without a
+	 * runtime helper for it (WASM) to
+	 * {@code (%string-concat "Function expects at least N argument(s), got " (%prin1-to-string-raw GOT))}
+	 * -- both counts are literals, so unlike the surplus lowering no {@code length} rides
+	 * along. The prefix is sliced off the zero-count rendering, keeping the plural with
+	 * the required count; the conversion is the non-consulting one, decimal whatever
+	 * {@code *print-base*} says.
+	 * @param form the {@code %arity-missing-message} form
+	 * @return the lowered form
+	 */
+	public static LispVal lowerArityMissingMessage(LispCons form) {
+		List<LispVal> args = form.toList();
+		int required = (int) ((LispInteger) args.get(1)).value();
+		LispVal got = args.get(2);
+		String zero = ClosRegistry.arityMessage(required, true, 0);
+		return list(new LispSymbol(LispNames.STRING_CONCAT), new LispString(zero.substring(0, zero.length() - 1)),
+				call(LispNames.PRIN1_TO_STRING_RAW, got));
 	}
 
 	/**

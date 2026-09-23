@@ -11684,6 +11684,21 @@ cases:
       :PE
       "Function expects at most 2 arguments, got 4"
       (1 (2 3))
+  # A required element the list runs out before is the arity program-error as a
+  # lower bound (LambdaLists.destructuringMissingCheck).
+  - name: destructuring-bind-missing-elements-signal-program-error
+    source: |
+      (print (handler-case (destructuring-bind (a b) '(1) (list a b)) (program-error () :pe)))
+      (print (handler-case (destructuring-bind (a (b c)) '(1 (2)) (list a b c)) (program-error () :pe)))
+      (print (handler-case (destructuring-bind (a b) '(1) a) (error (e) (princ-to-string e))))
+      (print (destructuring-bind (a &optional (b 7)) '(1) (list a b)))
+      (print (destructuring-bind (a &rest r) '(1 2 3) (list a r)))
+    expected: |
+      :PE
+      :PE
+      "Function expects at least 2 arguments, got 1"
+      (1 7)
+      (1 (2 3))
   # symbol-macrolet: shadow-aware substitution shared by every backend
   # (LispMacroExpander.expandSymbolMacrolet) -- substitution, let-shadowing,
   # nesting, setq write-through, the dbi setf-through-slot-value shape, and a

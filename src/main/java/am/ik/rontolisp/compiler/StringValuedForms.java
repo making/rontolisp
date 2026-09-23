@@ -38,7 +38,8 @@ public final class StringValuedForms {
 
 	private static final Set<String> ALWAYS_STRING = Set.of(LispNames.FIXED_DECIMAL, LispNames.STRING_CONCAT,
 			LispNames.PRINC_PIECE_INTERNAL, LispNames.PRIN1_PIECE_INTERNAL, LispNames.PRINC_TO_STRING_RAW,
-			LispNames.PRIN1_TO_STRING_RAW, LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL);
+			LispNames.PRIN1_TO_STRING_RAW, LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL,
+			LispNames.ARITY_MISSING_MESSAGE_INTERNAL);
 
 	private StringValuedForms() {
 	}

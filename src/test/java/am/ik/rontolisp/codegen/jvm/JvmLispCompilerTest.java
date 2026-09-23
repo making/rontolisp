@@ -12053,6 +12053,25 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunDestructuringBindMissingElementsSignalProgramError() throws Exception {
+		assertThat(compileAndRun("""
+				(print (handler-case (destructuring-bind (a b) '(1) (list a b)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a (b c)) '(1 (2)) (list a b c)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a . b) '() (list a b)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a b &optional c) '(1) (list a b c)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a &rest r) '() (list a r)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a &key b) '(:b 2) (list a b)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a b) '(1) a) (error (e) (princ-to-string e))))
+				;; A non-list source signals here (car of an atom); on WASM the same
+				;; form traps -- car parity, unchanged by the check, so not pinned there.
+				(print (handler-case (destructuring-bind (a) 5 a) (error () :signalled)))
+				(print (destructuring-bind (a &optional (b 7)) '(1) (list a b)))
+				(print (destructuring-bind (a &rest r) '(1 2 3) (list a r)))
+				""")).isEqualTo(
+				":PE\n:PE\n:PE\n:PE\n:PE\n:PE\n\"Function expects at least 2 arguments, got 1\"\n:SIGNALLED\n(1 7)\n(1 (2 3))");
+	}
+
+	@Test
 	void theDestructuringSurplusCheckCarriesNeitherTheStringRuntimeNorGenericLength() throws Exception {
 		// The destructuring surplus check reuses the &optional check's shared message
 		// helper: no mutable-string wrap, no generic length, no nthcdr runtime.
@@ -12061,6 +12080,27 @@ class JvmLispCompilerTest {
 		assertThat(declaredMethodNames(classBytes)).doesNotContain("_toMutStr", "_strToCharVec", "_length", "_scount",
 				"_nthcdr");
 		assertThat(runClass(classBytes)).isEqualTo("3");
+	}
+
+	@Test
+	void theDestructuringMissingCheckCarriesNeitherTheStringRuntimeNorGenericLength() throws Exception {
+		// The destructuring missing-element check reports through the shared
+		// _arityMissing helper (the framed twin of _aritySurplus, not the dispatchers'
+		// _arityMsg: the message lands in a condition's format-control slot and an
+		// unframed string fails stringp, which routes the report into a funcall of the
+		// message). No mutable-string wrap, no generic length, no nthcdr runtime -- and
+		// a program that never destructures keeps neither helper (the shaker drops
+		// both), so it stays byte-identical.
+		byte[] classBytes = new JvmLispCompiler("Test").compile(
+				LispReader.readAllFromString("(defun f (l) (destructuring-bind (a b) l (+ a b))) (print (f '(1 2)))"));
+		assertThat(declaredMethodNames(classBytes)).contains("_arityMissing");
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_toMutStr", "_strToCharVec", "_length", "_scount",
+				"_nthcdr");
+		assertThat(runClass(classBytes)).isEqualTo("3");
+		byte[] plainBytes = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(defun f (a b) (+ a b)) (print (f 1 2))"));
+		assertThat(declaredMethodNames(plainBytes)).doesNotContain("_arityMissing", "_aritySurplus");
+		assertThat(runClass(plainBytes)).isEqualTo("3");
 	}
 
 	// defmacro destructuring/extended lambda lists go through the same compile-path
