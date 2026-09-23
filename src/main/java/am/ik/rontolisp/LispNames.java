@@ -5744,6 +5744,15 @@ public final class LispNames {
 	public static final String CHARACTER_STREAM_P_INTERNAL = "%CHARACTER-STREAM-P";
 
 	/**
+	 * The argument check {@code read-sequence} / {@code write-sequence} run before their
+	 * packed / chars / element arms ({@code LispMacroExpander.expandReadSequence}): a
+	 * dotted-list buffer, a negative, non-integer or symbolic bound, and a range outside
+	 * the buffer are {@code type-error}s. One prelude defun, not an inline test -- the
+	 * {@code %character-stream-p} shape, for the same per-site reason. A prelude defun.
+	 */
+	public static final String CHECK_SEQUENCE_BOUNDS_INTERNAL = "%CHECK-SEQUENCE-BOUNDS";
+
+	/**
 	 * The compile paths' record of FILE-stream directions: an alist of
 	 * {@code (handle . bits)}, 1 input and 2 output, which a compiled
 	 * {@code input-stream-p} / {@code output-stream-p} reads inline

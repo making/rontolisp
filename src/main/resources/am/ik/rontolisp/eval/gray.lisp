@@ -625,6 +625,7 @@
 ;; stream, which moves characters into any buffer (.kb/read-load-streams.md, "The
 ;; stream picks the element").
 (defun rontolisp::%gray-read-sequence-dispatch (sequence stream start end)
+  (%check-sequence-bounds sequence start end)
   (let ((target (%stream-target stream)))
     (if (%obj-p target)
         (rontolisp:stream-read-sequence target sequence start
@@ -635,6 +636,7 @@
         (read-sequence sequence stream :start start :end end))))
 
 (defun rontolisp::%gray-write-sequence-dispatch (sequence stream start end)
+  (%check-sequence-bounds sequence start end)
   (let ((target (%stream-target stream)))
     (if (%obj-p target)
         (progn

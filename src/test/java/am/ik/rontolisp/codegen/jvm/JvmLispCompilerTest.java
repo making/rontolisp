@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.jvm;
 
 import am.ik.rontolisp.CharacterFilePositionFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
+import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.runtime.RontoHttpServer;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -11355,6 +11356,35 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
 			.withSystemPath(PeekPushbackFixture.program(file, rdFile), List.of(), false, false)
 			.forms())).isEqualTo(PeekPushbackFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadAndWriteSequenceSignalTypeErrorForABadSequenceOrBound() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#readAndWriteSequenceSignalTypeErrorForABadSequenceOrBound.
+		assertThat(compileAndRunExpanded(SequenceBoundsFixture.PROGRAM)).isEqualTo(SequenceBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadSequenceOnAGrayStreamValidatesItsBoundsToo() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#readSequenceOnAGrayStreamValidatesItsBoundsToo,
+		// through the Gray splices (the expansion check runs before the dispatch).
+		assertThat(compileAndRunGray("""
+				(defclass gw-in932 (rontolisp:fundamental-character-input-stream)
+				  ((s :initarg :s)))
+				(defmethod rontolisp:stream-read-char ((s gw-in932))
+				  (read-char (slot-value s 's)))
+				(print (list (handler-case
+				                 (read-sequence (make-array 3)
+				                                (make-instance 'gw-in932 :s (make-string-input-stream "abc"))
+				                                :start -1)
+				               (type-error () :type-error) (error () :other-error))
+				             (handler-case
+				                 (read-sequence '(a . b)
+				                                (make-instance 'gw-in932 :s (make-string-input-stream "abc")))
+				               (type-error () :type-error) (error () :other-error))))
+				""")).isEqualTo("(:TYPE-ERROR :TYPE-ERROR)");
 	}
 
 	@Test

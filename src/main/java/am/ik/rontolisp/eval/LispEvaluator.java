@@ -5705,6 +5705,14 @@ public final class LispEvaluator {
 					}
 				}
 			}
+			// A Gray stream bypasses the shared expansion below, so the bounds check
+			// runs here instead -- the same defun, over the same evaluated values
+			// (.todo/932).
+			LispVal grayCheckEnd = end == null ? LispNil.INSTANCE : end;
+			LispVal grayCheckCall = new LispCons(new LispSymbol(LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL),
+					new LispCons(quoteValue(seq), new LispCons(quoteValue(start == null ? new LispInteger(0) : start),
+							new LispCons(quoteValue(grayCheckEnd), LispNil.INSTANCE))));
+			eval(grayCheckCall, env);
 			return applyGrayDispatch(read ? GRAY_READ_SEQUENCE_DISPATCH : GRAY_WRITE_SEQUENCE_DISPATCH, List.of(seq,
 					stream, start == null ? new LispInteger(0) : start, end == null ? LispNil.INSTANCE : end));
 		}

@@ -131,6 +131,15 @@ public final class BuiltinFunctionWrappers {
 		gated.add(LispNames.READ_CHAR_NO_HANG);
 		gated.add(LispNames.PEEK_CHAR);
 		gated.add(LispNames.READ_BYTE);
+		// #'read-sequence / #'write-sequence for the same reason: their
+		// boundedSequenceIo bodies re-enter the operator's own expansion, whose bounds
+		// check constructs a type-error instance -- machinery a program that never
+		// takes them as values should not carry (and which the mayCreateInstances
+		// gate would not see coming -- it scans the source program, not the injected
+		// wrappers; taking one as a value forces instances through the FUNCTION
+		// case of constructsInstance instead).
+		gated.add(LispNames.READ_SEQUENCE);
+		gated.add(LispNames.WRITE_SEQUENCE);
 		// #'class-of resolves through the generated %find-class metaobject runtime,
 		// which LispMacroExpander injects only for a program that references class-of
 		// (or find-class) itself -- the injected wrapper body is outside that scan.

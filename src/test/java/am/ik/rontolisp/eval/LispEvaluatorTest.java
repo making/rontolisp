@@ -13,6 +13,7 @@ import java.util.concurrent.CountDownLatch;
 
 import am.ik.rontolisp.CharacterFilePositionFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
+import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.ArrayElementTypes;
@@ -10022,6 +10023,41 @@ class LispEvaluatorTest {
 			evaluator.eval(expr);
 		}
 		assertThat(baos.toString().trim()).isEqualTo(PeekPushbackFixture.EXPECTED);
+	}
+
+	@Test
+	void readAndWriteSequenceSignalTypeErrorForABadSequenceOrBound() {
+		// A dotted-list buffer, a negative, non-integer or symbolic bound, and a range
+		// outside the buffer are type-errors -- sbcl's answers, pinned on all four
+		// backends (.todo/932).
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(SequenceBoundsFixture.PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(SequenceBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void readSequenceOnAGrayStreamValidatesItsBoundsToo() {
+		// A Gray stream bypasses the shared expansion, so the interpreter validates
+		// in the dispatch branch instead -- the same defun over the same values
+		// (.todo/932).
+		assertThat(evalMulti("""
+				(defclass gw-in932 (rontolisp:fundamental-character-input-stream)
+				  ((s :initarg :s)))
+				(defmethod rontolisp:stream-read-char ((s gw-in932))
+				  (read-char (slot-value s 's)))
+				(list (handler-case
+				          (read-sequence (make-array 3)
+				                         (make-instance 'gw-in932 :s (make-string-input-stream "abc"))
+				                         :start -1)
+				        (type-error () :type-error) (error () :other-error))
+				      (handler-case
+				          (read-sequence '(a . b)
+				                         (make-instance 'gw-in932 :s (make-string-input-stream "abc")))
+				        (type-error () :type-error) (error () :other-error)))
+				""").print()).isEqualTo("(:TYPE-ERROR :TYPE-ERROR)");
 	}
 
 	@Test

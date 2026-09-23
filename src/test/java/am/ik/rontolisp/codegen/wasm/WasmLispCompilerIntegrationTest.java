@@ -16,6 +16,7 @@ import java.util.stream.Stream;
 
 import am.ik.rontolisp.CharacterFilePositionFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
+import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.macro.FoldDifferential;
@@ -4522,13 +4523,15 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void readSequenceIntoACharacterBufferCompilesAndRuns() throws Exception {
-		assertThat(compileAndRun("""
+		// Through the prelude splice: read-sequence reaches the %check-sequence-bounds
+		// prelude defun (.todo/932).
+		assertThat(compileAndRunPrelude("""
 				(with-input-from-string (s "abcdef")
 				  (let ((buf (make-array 4 :element-type 'character)))
 				    (print (list (read-sequence buf s) buf))))
 				""")).isEqualTo("(4 \"abcd\")");
 		// The element type may be COMPUTED, which is how alexandria allocates the buffer.
-		assertThat(compileAndRun("""
+		assertThat(compileAndRunPrelude("""
 				(with-input-from-string (s "xyz")
 				  (let ((buf (make-array 3 :element-type (stream-element-type s))))
 				    (print (list (read-sequence buf s) buf))))
@@ -8185,7 +8188,10 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void writeSequenceString() throws Exception {
-		assertThat(compileAndRun("(princ (with-output-to-string (s) (write-sequence \"abcd\" s :start 1 :end 3)))"))
+		// Through the prelude splice: write-sequence reaches the %check-sequence-bounds
+		// prelude defun (.todo/932).
+		assertThat(
+				compileAndRunPrelude("(princ (with-output-to-string (s) (write-sequence \"abcd\" s :start 1 :end 3)))"))
 			.isEqualTo("bc");
 	}
 
@@ -13333,6 +13339,20 @@ class WasmLispCompilerIntegrationTest {
 	void componentPeekCharPushbackSurvivesReadLineAndRead() throws Exception {
 		assertThat(compileAndRunFrontEndWithDir(PeekPushbackFixture.program("peek.txt", "peek-rd.txt"), true))
 			.isEqualTo(PeekPushbackFixture.EXPECTED);
+	}
+
+	@Test
+	void readAndWriteSequenceSignalTypeErrorForABadSequenceOrBoundOnPreview1() throws Exception {
+		// The Preview 1 twin of
+		// LispEvaluatorTest#readAndWriteSequenceSignalTypeErrorForABadSequenceOrBound
+		// (.todo/932).
+		assertThat(compileAndRunWithDir(SequenceBoundsFixture.PROGRAM)).isEqualTo(SequenceBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void componentReadAndWriteSequenceSignalTypeErrorForABadSequenceOrBound() throws Exception {
+		assertThat(compileAndRunComponentWithDir(SequenceBoundsFixture.PROGRAM))
+			.isEqualTo(SequenceBoundsFixture.EXPECTED);
 	}
 
 	/**

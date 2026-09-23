@@ -10994,11 +10994,37 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The argument check the {@code read-sequence} / {@code write-sequence} expansions
+	 * run before their packed / chars / element arms, on all four backends at once
+	 * ({@code .kb/read-load-streams.md}, "The stream picks the element"): a dotted-list
+	 * buffer, a negative, non-integer or symbolic bound, and a range outside the buffer
+	 * are {@code type-error}s, as in SBCL.
+	 *
+	 * <p>
+	 * One prelude call ({@code %check-sequence-bounds}), not an inline test: the inline
+	 * check cost ~8 KB of wasm per site, the defun call ~0.2 KB -- the
+	 * {@code %character-stream-p} shape, for the same per-site reason. The call rides as
+	 * a nested let's binding (never an or arm, which cost ~4.5 KB a site), and the defun
+	 * is selected by surface reference ({@code LibraryDefunPruner.SYNTHESIZED_ENTRIES}),
+	 * like that one; a first-class reference counts, since the injected wrapper body
+	 * re-enters this same expansion after selection.
+	 * @param seq the bound sequence temporary
+	 * @param i the bound start temporary
+	 * @param end the bound end temporary (nil for the whole buffer)
+	 * @return the checking form, answering nil when every argument is valid
+	 */
+	private static LispVal sequenceBoundsCheck(LispSymbol seq, LispSymbol i, LispSymbol end) {
+		return listToCons(List.of(new LispSymbol(LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL), seq, i, end));
+	}
+
+	/**
 	 * Like {@link #expandReadSequence(LispCons)}, but saying whether a string stream can
 	 * reach the site at all, and optionally with the sequence proven to be a byte buffer
 	 * ({@code compiler.SequenceIoNarrowing}): then the runtime character test and the
 	 * whole {@code read-char} arm are gone, so the loop reads bytes unconditionally. The
-	 * packed fast path stays -- a packed buffer still moves in one transfer.
+	 * packed fast path stays -- a packed buffer still moves in one transfer. Both shapes
+	 * run {@link #sequenceBoundsCheck} before the packed / chars / element arms, so a bad
+	 * sequence or bound signals {@code type-error} on every backend.
 	 * @param cons the read-sequence expression
 	 * @param byteOnly whether the sequence is certainly a byte buffer
 	 * @param characterStreams whether a string stream can reach the site
@@ -11046,6 +11072,7 @@ public final class LispMacroExpander {
 		LispVal loopBindings = listToCons(charsBinding);
 		LispVal loopLet = listToCons(List.of(new LispSymbol(LispNames.LET), loopBindings, loop, i));
 		LispVal packed = listToCons(List.of(new LispSymbol(LispNames.READ_SEQUENCE_PACKED), seq, st, i, end));
+		LispSymbol chk = new LispSymbol("__rseq_chk");
 		LispVal innerBindings = listToCons(
 				List.of(listToCons(List.of(i, args.start())), listToCons(List.of(end, args.end()))));
 		List<LispVal> arms = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.OR), packed));
@@ -11055,7 +11082,16 @@ public final class LispMacroExpander {
 			arms.add(listToCons(List.of(new LispSymbol(LispNames.READ_SEQUENCE_CHARS), seq, st, i, end)));
 		}
 		arms.add(loopLet);
-		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings, listToCons(arms)));
+		// The bounds check rides as a nested let's single binding after the start/end
+		// initializations, so it runs before the packed / chars / element arms below
+		// while the inner let's body stays the direct or every downstream shape match
+		// expects -- the position a bound opaque call is cheapest in (the
+		// %character-stream-p binding costs ~0.5 KB a site; an or arm cost ~4.5 KB).
+		// A nested let, not a let* tail: the start/end initforms keep the evaluation
+		// order the plain let always gave them.
+		LispVal checkedBody = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(chk, sequenceBoundsCheck(seq, i, end))))), listToCons(arms)));
+		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings, checkedBody));
 		LispVal outerBindings = listToCons(
 				List.of(listToCons(List.of(seq, args.seq())), listToCons(List.of(st, args.stream()))));
 		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, innerLet));
@@ -11111,7 +11147,9 @@ public final class LispMacroExpander {
 	 * reach the site at all, and optionally with the sequence proven to be a byte buffer
 	 * ({@code compiler.SequenceIoNarrowing}): then the runtime tests and the whole
 	 * {@code write-string} / {@code write-char} arms are gone, so the write-byte loop
-	 * runs unconditionally. The packed fast path stays.
+	 * runs unconditionally. The packed fast path stays. Both shapes run
+	 * {@link #sequenceBoundsCheck} before the packed / string / element arms, so a bad
+	 * sequence or bound signals {@code type-error} on every backend.
 	 * @param cons the write-sequence expression
 	 * @param byteOnly whether the sequence is certainly a byte buffer
 	 * @param characterStreams whether a string stream can reach the site
@@ -11163,10 +11201,13 @@ public final class LispMacroExpander {
 		LispVal arrayBranch = listToCons(List.of(new LispSymbol(LispNames.LET), loopBindings, loop, seq));
 		LispVal dispatch = byteOnly ? arrayBranch : makeIf(callOf(LispNames.STRINGP, seq), stringBranch, arrayBranch);
 		LispVal packed = listToCons(List.of(new LispSymbol(LispNames.WRITE_SEQUENCE_PACKED), seq, st, i, end));
+		LispSymbol wchk = new LispSymbol("__wseq_chk");
 		LispVal innerBindings = listToCons(
 				List.of(listToCons(List.of(i, args.start())), listToCons(List.of(end, args.end()))));
-		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings,
+		LispVal checkedBody = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(wchk, sequenceBoundsCheck(seq, i, end))))),
 				listToCons(List.of(new LispSymbol(LispNames.OR), packed, dispatch))));
+		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET), innerBindings, checkedBody));
 		LispVal outerBindings = listToCons(
 				List.of(listToCons(List.of(seq, args.seq())), listToCons(List.of(st, args.stream()))));
 		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, innerLet));
@@ -19540,6 +19581,14 @@ public final class LispMacroExpander {
 				return expandReadEofSignal(form, true) != null;
 			case "RONTOLISP::" + LispNames.READ_LINE_RAW_INTERNAL:
 				return expandReadEofSignal(form, false) != null;
+			case LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE,
+					"RONTOLISP::" + LispNames.READ_SEQUENCE_RAW_INTERNAL,
+					"RONTOLISP::" + LispNames.WRITE_SEQUENCE_RAW_INTERNAL:
+				// The bounds check every read-sequence / write-sequence expansion runs
+				// (sequenceBoundsCheck) signals a type-error instance on a bad sequence
+				// or bound -- the arguments are runtime values, so any call can reach
+				// it.
+				return true;
 			case LispNames.PEEK_CHAR: {
 				// Same, one argument later: peek-char's peek-type comes first, and the
 				// scan runs on the source program, before expandPeekChar rewrites it.
@@ -19551,12 +19600,16 @@ public final class LispMacroExpander {
 				// expansion, whose every signal arm builds a simple-condition.
 				// #'read-char / #'peek-char / #'read-byte: their wrappers signal
 				// end-of-file, and (being REFERENCE_GATED_FUNCTIONS) are injected only
-				// because of this very reference. #'read / #'read-from-string: their
+				// because of this very reference. #'read-sequence / #'write-sequence:
+				// their wrappers run the bounds check, which signals type-error for
+				// the same reason. #'read / #'read-from-string: their
 				// wrappers can read a #P"..." pathname instance, like the head case.
 				return form.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol fn
 						&& (LispNames.SIGNAL.equals(fn.name()) || LispNames.READ_CHAR.equals(fn.name())
 								|| LispNames.PEEK_CHAR.equals(fn.name()) || LispNames.READ_BYTE.equals(fn.name())
-								|| LispNames.READ.equals(fn.name()) || LispNames.READ_FROM_STRING.equals(fn.name()));
+								|| LispNames.READ_SEQUENCE.equals(fn.name())
+								|| LispNames.WRITE_SEQUENCE.equals(fn.name()) || LispNames.READ.equals(fn.name())
+								|| LispNames.READ_FROM_STRING.equals(fn.name()));
 			case LispNames.ERROR, LispNames.WARN, LispNames.CERROR: {
 				List<LispVal> parts = form.toList();
 				// (cerror continue-control datum args...) drops its first argument.
@@ -30352,6 +30405,17 @@ public final class LispMacroExpander {
 	public static final java.util.Set<String> END_OF_FILE_SITES = java.util.Set.of(LispNames.READ_CHAR,
 			LispNames.READ_BYTE, LispNames.READ_LINE, LispNames.PEEK_CHAR, LispNames.PEEK_CHAR_INTERNAL,
 			LispNames.READ_CHAR_RAW_INTERNAL, LispNames.READ_BYTE_RAW_INTERNAL, LispNames.READ_LINE_RAW_INTERNAL);
+
+	/**
+	 * The sequence operators whose compiled form can construct a {@code type-error}
+	 * instance in the expression expansion ({@code sequenceBoundsCheck} in
+	 * {@link #expandReadSequence} / {@link #expandWriteSequence}), after the
+	 * whole-program scans -- the {@link #FILE_ERROR_SITES} situation. A
+	 * {@code #'read-sequence} / {@code #'write-sequence} spelling names the operator too,
+	 * so the injected reference-gated wrapper's construction is covered.
+	 */
+	public static final java.util.Set<String> TYPE_ERROR_SITES = java.util.Set.of(LispNames.READ_SEQUENCE,
+			LispNames.WRITE_SEQUENCE, LispNames.READ_SEQUENCE_RAW_INTERNAL, LispNames.WRITE_SEQUENCE_RAW_INTERNAL);
 
 	private static final java.util.Set<String> CONDITION_SIGNAL_FAMILY = java.util.Set.of(LispNames.ERROR,
 			LispNames.WARN, LispNames.CERROR, LispNames.SIGNAL, LispNames.MAKE_CONDITION);

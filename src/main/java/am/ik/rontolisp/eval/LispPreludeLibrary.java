@@ -1540,6 +1540,37 @@ public final class LispPreludeLibrary {
 				        (if (equal %csp-k :string-input) t (equal %csp-k :string-output)))
 				      nil))
 				""");
+		// The read-sequence / write-sequence argument check (.todo/932): a dotted-list
+		// buffer, a negative, non-integer or symbolic bound, and a range outside the
+		// buffer are type-errors. ONE defun every site calls, not an inline test: the
+		// inline check cost ~8 KB of wasm per site, the defun call ~0.2 KB -- the
+		// %character-stream-p shape, for the same per-site reason. The
+		// signals carry static messages (a runtime datum in the message pulled the
+		// ~s printer, +17 KB of wasm); the datum and expected type ride the instance.
+		SOURCES.put(LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL, """
+				(defun %check-sequence-bounds (%csq-seq %csq-start %csq-end)
+				  (let ((%csq-len (if (stringp %csq-seq)
+				                      (length %csq-seq)
+				                      (if (arrayp %csq-seq)
+				                          (if (= (array-rank %csq-seq) 1)
+				                              (length %csq-seq)
+				                              (array-total-size %csq-seq))
+				                          (list-length %csq-seq)))))
+				    (if (or (not (integerp %csq-start)) (< %csq-start 0))
+				        (error 'type-error :datum %csq-start :expected-type '(integer 0 *)
+				               :format-control "Invalid sequence bound.")
+				        (if (and %csq-end (or (not (integerp %csq-end)) (< %csq-end 0)))
+				            (error 'type-error :datum %csq-end :expected-type '(integer 0 *)
+				                   :format-control "Invalid sequence bound.")
+				            (if (and %csq-len (or (> %csq-start %csq-len)
+				                                  (and %csq-end (or (> %csq-end %csq-len)
+				                                                     (< %csq-end %csq-start)))))
+				                (error 'type-error
+				                       :datum (if (and %csq-end (> %csq-end %csq-len)) %csq-end %csq-start)
+				                       :expected-type '(integer 0 *)
+				                       :format-control "Sequence bounds out of range.")
+				                nil)))))
+				""");
 		// The compile paths' FILE-stream direction record (.kb/read-load-streams.md,
 		// "String streams"): every literal open leaf registers its direction bits (1
 		// input, 2 output, 3 both) under its HANDLE -- the element-type registry's key
@@ -4377,6 +4408,20 @@ public final class LispPreludeLibrary {
 					|| referencesName(program, LispNames.READ_SEQUENCE_RAW_INTERNAL, canonical)
 					|| referencesName(program, LispNames.WRITE_SEQUENCE_RAW_INTERNAL, canonical))
 					&& am.ik.rontolisp.macro.LispMacroExpander.mayCreateStreamValues(program);
+		}
+		// %check-sequence-bounds: called from every read-sequence / write-sequence
+		// expansion the expression compilers build, so it is needed wherever such a
+		// call can reach -- a direct call, a raw-alias call, or a first-class
+		// reference (whose injected wrapper body re-enters the expansion after this
+		// selection; referencesName sees the (function name) spelling's symbol).
+		// The Gray sequence dispatchers call it too, so a program using the Gray
+		// protocol carries it like %stream-target below.
+		if (LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL.equals(entry)) {
+			return referencesName(program, LispNames.READ_SEQUENCE, canonical)
+					|| referencesName(program, LispNames.WRITE_SEQUENCE, canonical)
+					|| referencesName(program, LispNames.READ_SEQUENCE_RAW_INTERNAL, canonical)
+					|| referencesName(program, LispNames.WRITE_SEQUENCE_RAW_INTERNAL, canonical)
+					|| GrayStreamsLibrary.usesProtocol(program);
 		}
 		if (LispNames.STREAM_TARGET.equals(entry)) {
 			return am.ik.rontolisp.macro.LispMacroExpander.mayCreateStreamValues(program)

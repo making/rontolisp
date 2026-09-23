@@ -650,6 +650,19 @@ wasm (`(0 #(0 0 0))`, `(3 #(108 108 108))` -- the string-stream record's bytes).
 - The first-class `#'read-sequence` / `#'write-sequence` / `#'write-string` wrappers
   (`BuiltinFunctionWrappers.boundedSequenceIo`) now expand ONE call with `:end (getf kw :end)` --
   a nil `:end` is the whole sequence -- instead of two copies of the inline expansion.
+- **The argument check** (`.todo/932`): every `read-sequence` / `write-sequence` expansion runs
+  one prelude call, `%check-sequence-bounds`, before its packed / chars / element arms, on all
+  four backends at once -- a dotted-list buffer, a negative, non-integer or symbolic bound, and
+  a range outside the buffer are `type-error`s, as in SBCL. The defun measures its own length
+  (`stringp` -> `length`, rank-1 `arrayp` -> `length`, else `list-length`, which signals
+  `type-error` on a dotted or non-list buffer itself) and signals static-message `type-error`s.
+  One defun, not an inline test, for the same per-site reason as `%character-stream-p`; the
+  Gray dispatchers (`gray.lisp`, and the interpreter's `evalSequenceWithGrayDispatch` branch,
+  which bypasses the shared expansion) call the same defun. `constructsInstance` counts the two
+  operators (and their raw aliases, and the `#'` spellings, which are reference-gated for the
+  same reason), and wasm's layout scan keeps the `type-error` tag on their presence -- the
+  `FILE_ERROR_SITES` situation. The hold-side gate needs nothing: the check constructs only
+  to throw.
 
 Cost and identity (2026-09-22, JVM / Preview 1 / component bytes, default optimize, over 778
 programs: every ci-spec case, every non-GUI example, the size-report corpus): 1,965 artifacts
@@ -671,7 +684,24 @@ Pinned by `LispEvaluatorTest#readAndWriteSequenceMoveTheElementTheStreamCarries`
 `#readAndWriteSequenceReadTheirKeywordTailTheWayALambdaListDoes`, their JVM twins,
 `WasmLispCompilerIntegrationTest#readAndWriteSequenceMoveTheElementTheStreamCarriesOnPreview1` /
 `#componentReadAndWriteSequenceMoveTheElementTheStreamCarries`, `SequenceIoNarrowingTest`, ci-spec
-`read-and-write-sequence-move-the-element-a-string-stream-carries`.
+`read-and-write-sequence-move-the-element-a-string-stream-carries`. The argument check by
+`LispEvaluatorTest#readAndWriteSequenceSignalTypeErrorForABadSequenceOrBound` /
+`#readSequenceOnAGrayStreamValidatesItsBoundsToo`, their JVM twins, the Preview 1 and component
+twins of the first, `SequenceBoundsFixture`, and ci-spec
+`read-and-write-sequence-signal-type-error-for-a-bad-sequence-or-bound` -- the shapes
+`READ-SEQUENCE.ERROR.7 .8 .10` and `WRITE-SEQUENCE.ERROR.3-.10` failed on.
+
+Cost of the argument check (2026-09-23, JVM / Preview 1 / component bytes, default optimize
+unless noted; base = the same tree with the check stashed): the cost is almost entirely a FIXED
+per-program one -- the `type-error` signal machinery plus the defun and its callees -- into
+programs that never otherwise create a condition. A one-site micro program: +28.4 / +19.3 KB;
+the ci-spec round-trip shape +24.7 / +19.0 / +19.2 KB, the packed shape +25.9 / +20.2 / +20.4 KB,
+the character-buffer shape +28.0 / +19.0 / +19.2 KB; `hello` unchanged. The same program with a
+pre-existing `type-error` signal elsewhere pays only the defun: +3.6 / +1.3 KB, and each further
+site ~+0.1 KB. Real programs already carry the machinery: `checkpoint-tokenizer` +478 B JVM /
++335 B P1 (`--optimize`), `llm` -804 B P1 (tree-shake noise), `zlib` +4.9 KB JVM / +3.1 KB P1.
+No narrower gate exists without losing the guarantee -- any call can receive a bad sequence or
+bound at runtime -- so the numbers above are the accepted shape, not a problem to fix.
 
 ## Element types wider and narrower than one octet
 

@@ -10848,6 +10848,15 @@ public final class WasmLispCompiler implements LispCompiler {
 				break;
 			}
 		}
+		// A read-sequence / write-sequence bounds check constructs its type-error
+		// condition during the EXPRESSION expansion (sequenceBoundsCheck) -- after
+		// this scan -- so the operators' presence stands in for the tag.
+		for (String site : LispMacroExpander.TYPE_ERROR_SITES) {
+			if (symbols.contains(site)) {
+				used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.TYPE_ERROR_CLASS_NAME);
+				break;
+			}
+		}
 		// A %program-error signal constructs its program-error instance during BODY
 		// compilation (lowerProgramError) -- after this scan, and only behind a handler
 		// landing pad -- so the pad stands in for the tag.
