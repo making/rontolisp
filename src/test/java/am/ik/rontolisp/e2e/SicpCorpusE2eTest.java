@@ -957,7 +957,7 @@ class SicpCorpusE2eTest {
 							}
 						}
 						else {
-							bind(binding, bound);
+							bind(java.util.Objects.requireNonNull(binding), bound);
 						}
 					}
 					index++;
@@ -980,7 +980,7 @@ class SicpCorpusE2eTest {
 			}
 			else if (form instanceof List<?> parts) {
 				for (Object part : parts) {
-					bind(part, bound);
+					bind(java.util.Objects.requireNonNull(part), bound);
 				}
 			}
 		}
