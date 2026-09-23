@@ -1249,11 +1249,17 @@
 
 ;; BYTES read past in bounded transfers, since file-position cannot seek here.
 (defun geom::%skip-bytes (in bytes buf)
-  (do ((left bytes))
-      ((<= left 0))
-    (let ((chunk (if (> left (length buf)) (length buf) left)))
-      (read-sequence buf in :end chunk)
-      (setq left (- left chunk)))))
+  ;; Pass over BYTES bytes of IN. When the stream tells its position, seek there
+  ;; instead of reading through (a set drops any parked input); otherwise walk in
+  ;; bounded reads through BUF, as before. See checkpoint:skip-bytes.
+  (let ((pos (ignore-errors (file-position in))))
+    (if (and (integerp pos) (plusp bytes) (ignore-errors (file-position in (+ pos bytes))))
+        nil
+        (do ((left bytes))
+            ((<= left 0))
+          (let ((chunk (if (> left (length buf)) (length buf) left)))
+            (read-sequence buf in :end chunk)
+            (setq left (- left chunk)))))))
 
 ;; One scalar of TY out of IN through the per-width scratch buffers SCR --
 ;; (f32 f64 u8 u16 u32) -- with a signed value's two's complement folded back.

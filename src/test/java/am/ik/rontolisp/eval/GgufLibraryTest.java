@@ -189,6 +189,28 @@ class GgufLibraryTest {
 	}
 
 	@Test
+	void skipBytesSeeksWhenTheStreamTellsItsPosition() throws IOException {
+		// checkpoint:skip-bytes seeks past unwanted bytes when the stream tells its
+		// position (a set drops parked input), and walks otherwise: the position
+		// advances, the bytes after it read back, the return is n -- including n = 0.
+		Path file = tempDir.resolve("skip.bin");
+		byte[] bytes = new byte[70000];
+		for (int i = 0; i < bytes.length; i++) {
+			bytes[i] = (byte) (i % 251);
+		}
+		Files.write(file, bytes);
+		String path = file.toString().replace("\\", "\\\\");
+		assertThat(eval("""
+				(with-open-file (s "%s" :element-type '(unsigned-byte 8))
+				  (list (checkpoint:skip-bytes s 65540)
+				        (file-position s)
+				        (read-byte s)
+				        (checkpoint:skip-bytes s 0)
+				        (file-position s)))
+				""".formatted(path))).isEqualTo("(65540 65540 29 0 65541)");
+	}
+
+	@Test
 	void theElementTypeChoosesTheWidth() {
 		assertThat(eval("""
 				(gguf:tensor (gguf:read "%s" :only '("t.vec") :element-type 'double-float) "t.vec")

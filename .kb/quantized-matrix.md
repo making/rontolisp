@@ -163,7 +163,7 @@ four wrappers on the reference for the same reason.
   that compiles to WASM as well (`examples/llm`) therefore cannot NAME `quantize` /
   `dequantize` even in a guarded arm -- its Q8_0 split is a `quantized-rows` gather a half
   (`split-gated-q-blocks`; until 2026-09-08 a byte copy through a scratch file in `$TMPDIR`,
-  `file-position` not seeking).
+  when `file-position` could not seek yet).
 - `--blas`: silent decline. `--gpu`: the rank-2-against-`#f` GEMV is taken on CUDA (the
   defun's bits, above); every other pairing and Metal decline silently.
   `rontolisp:jvm-export`: not a boundary type.

@@ -46,9 +46,10 @@ Both formats are a header followed by tensor bytes at offsets from the end of
 that header. A GGUF's header is a key/value block and then a tensor directory;
 a safetensors file's is a little-endian `u64` length and that many bytes of
 JSON, `{ "<name>": { "dtype": "BF16", "shape": [rows, cols], "data_offsets":
-[begin, end] }, ... }`. Both readers walk their file front to back, because a
-rontolisp stream cannot reposition (`file-position` answers `nil`), and pass
-over what they were not asked for with `checkpoint:skip-bytes`.
+[begin, end] }, ... }`. Both readers walk their file front to back, and pass
+over what they were not asked for with `checkpoint:skip-bytes` -- which seeks
+past the bytes when the stream tells its position, and reads through them
+otherwise.
 
 ## Reading the metadata is free
 
@@ -81,12 +82,12 @@ parses the JSON header and says where the data starts, and
 turns it into `(name dtype shape begin end)` in file order. The hyperparameters
 are a separate `rontolisp:json-parse` of `config.json`.
 
-**Skipping a tensor saves memory, not I/O.** `gguf:read`'s `:only` is a list of
+**Skipping a tensor saves memory, and -- when the stream tells its position -- I/O too.** `gguf:read`'s `:only` is a list of
 tensor names; `safetensors:read`'s `:only` is a predicate over the name. Either
-way a tensor that is not wanted is passed over in bounded reads rather than
-staged and converted, so a multimodal checkpoint's vision tower costs its bytes
-of reading and nothing else -- but it does cost them, because the stream cannot
-seek past them.
+way a tensor that is not wanted is never staged and never converted, and on a
+seekable stream never even read: a multimodal checkpoint's vision tower costs
+nothing when it is skipped -- but on a stream without a position it still costs
+its bytes of reading, walked in bounded reads.
 
 ## The tokenizer the checkpoint carries
 

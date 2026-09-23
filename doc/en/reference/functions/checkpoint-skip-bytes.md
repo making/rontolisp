@@ -2,7 +2,7 @@
 
 `(checkpoint:skip-bytes stream n)`
 
-Passes over `n` bytes of the byte `stream`, in bounded reads through a 64 KB scratch buffer. Returns `n`. `file-position` answers `nil` on every backend -- a stream cannot seek -- so a reader walks its file front to back and skips what it was told not to load this way: the tensor's bytes cost their I/O and nothing else, and nothing is staged.
+Passes over `n` bytes of the byte `stream`, and returns `n`. When the stream tells its position, it seeks there instead of reading through -- a set drops any parked input -- so skipping a large unwanted tensor costs no I/O at all; otherwise (a socket, a pipe, any stream without a position) it walks in bounded reads through a 64 KB scratch buffer. Either way the tensor's bytes are never staged.
 
 ```console
 CL-USER> (with-open-file (s "model.safetensors" :element-type '(unsigned-byte 8))

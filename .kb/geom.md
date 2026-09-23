@@ -218,8 +218,9 @@ equivalent (no `float[]` to pack into; Preview 1 reads through its own stream la
   read past by its declared width, never guessed. Binary vertex blocks have three shapes, fastest
   first: all float32 -> ONE `read-sequence`, columns sliced; float32 x y z FIRST with fixed-width
   extras -> one three-float read plus a skip per row; anything else -> `geom::%ply-scalar`. Skipping
-  is `geom::%skip-bytes` -- bounded reads through a scratch buffer, `file-position` answering nil by
-  design on this build.
+  is `geom::%skip-bytes` -- a seek past the bytes when the stream tells its position
+  (`file-position` seeks binary file streams on every backend), bounded reads through
+  a scratch buffer otherwise.
 - `geom:read-gltf` handles `.glb` and `.gltf` with `.bin` files beside it or base64 `data:` uris; a
   remote uri is refused. One glTF node -> one `geom:node` posed by its TRS or matrix, one primitive
   -> one `geom:solid` under it, the answer the FLAT LIST under one shared root. **A node's scale is

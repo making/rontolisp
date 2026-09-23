@@ -18174,6 +18174,18 @@ cases:
       "gguf: the tensor q40 is Q4_0; this reader loads F32, F16 and BF16. Take the publisher's BF16 or F16 file, or read this one with :metadata-only t or with :only naming the tensors you want."
       (2)
       "ab"
+  # checkpoint:skip-bytes seeks past unwanted bytes when the stream tells its
+  # position (a set drops parked input), and walks otherwise: the position
+  # advances, the bytes after it read back, the return is n.
+  - name: checkpoint-skip-bytes-seeks-past-unwanted-bytes
+    source: |
+      (with-open-file (o "ci-skip-bytes.bin" :direction :output :element-type '(unsigned-byte 8)
+                         :if-exists :supersede)
+        (write-sequence #(0 1 2 3 4 5 6 7 8 9) o))
+      (with-open-file (s "ci-skip-bytes.bin" :element-type '(unsigned-byte 8))
+        (print (list (checkpoint:skip-bytes s 4) (file-position s) (read-byte s) (file-position s))))
+    expected: |
+      (4 4 4 5)
   - name: standard-limits-and-boole-constants
     source: |
       (print array-rank-limit)

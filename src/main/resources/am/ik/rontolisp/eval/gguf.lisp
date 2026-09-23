@@ -144,9 +144,9 @@
           (rontolisp:octets-to-string (subseq buf 0 n))))))
 
 (defun gguf::%skip (rd n)
-  ;; Pass over N bytes: the only way past a region on a stream that cannot seek.
-  ;; checkpoint:skip-bytes does it in bounded reads and never stages what it
-  ;; discards; this wrapper is here only to keep our own byte position honest.
+  ;; Pass over N bytes: checkpoint:skip-bytes seeks when the stream tells its
+  ;; position and walks otherwise, never staging what it discards; this wrapper
+  ;; is here only to keep our own byte position honest.
   (when (> n 0)
     (checkpoint:skip-bytes (gguf::%rd-stream rd) n)
     (gguf::%advance rd n))

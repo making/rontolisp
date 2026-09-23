@@ -20,11 +20,14 @@ string is a u64 length plus UTF-8 bytes, an array a u32 element type, u64 count 
 is row-major and `read-sequence` fills a packed float array in one transfer
 (`.kb/binary-sequence-io.md`).
 
-## No seeking
+## Seeking past what is not loaded
 
-**`file-position` repositions nothing** on any backend: it answers `NIL` and the next read
-continues where it left off. `file-length` is real. Open item: `.todo/390`. Data is therefore
-walked SEQUENTIALLY in ascending offset order through a 64 KB scratch buffer.
+**`file-position` seeks binary file streams on every backend** (`.kb/read-load-streams.md`,
+"file-position is REAL"), so `checkpoint:skip-bytes` seeks past an unwanted tensor
+when the stream tells its position and walks otherwise. Measured 2026-09-23:
+skipping 256 MB is 1 ms seeking against 1,931 ms walked (interpreter). `file-length`
+is real. Data is therefore still walked front to back in ascending offset order --
+the seek only skips the read-through, never the order.
 
 - `:metadata-only` is free (the KV block is at the FRONT); `:only` saves memory, not I/O.
 - Non-ascending tensor offsets are refused by name rather than read wrongly.

@@ -47,9 +47,11 @@ whole reason the width exists on the load path:
   `CheckpointLibrary.process`, both BEFORE `JsonLibrary` and the prelude.**
 
 ## Traps
-- `file-position` answers nil on every backend: a reader WALKS front to back in
-  tensor-offset order, passing unwanted tensors with `checkpoint:skip-bytes` (64 KB
-  scratch); a sharded checkpoint walks each needed shard once.
+- A reader WALKS front to back in tensor-offset order, passing unwanted tensors
+  with `checkpoint:skip-bytes` -- which seeks past them when the stream tells its
+  position (`file-position` seeks binary file streams on every backend) and walks
+  them in bounded reads through a 64 KB scratch otherwise; a sharded checkpoint
+  walks each needed shard once.
 - A packed `(unsigned-byte 16)` vector costs 8 bytes/element on interpreter and JVM
   (`.kb/binary-sequence-io.md`), so `checkpoint:stage-float-bits` takes the STREAM and
   widens 1M-element chunks with `widen-float-bits ... :start`. The last chunk needs a
