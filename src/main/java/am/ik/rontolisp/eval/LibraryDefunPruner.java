@@ -366,6 +366,20 @@ public final class LibraryDefunPruner {
 			}
 			List<String> keys = keysByIndex.get(i);
 			if (keys != null && keys.stream().noneMatch(live::contains)) {
+				// A DROPPED third-party defstruct leaves its %struct-definition marker
+				// behind (no generated defuns -- the struct is dead): the compilers'
+				// re-resolution replays the pruned program in a fresh registry, and the
+				// defpackage forms the pruner always keeps may import the struct's SLOT
+				// names (quri.uri.http imports quri.uri's scheme/port) -- names only the
+				// defstruct's evaluation would have interned. Resolving the marker's
+				// payload mints them exactly as evaluating the defstruct would have,
+				// while expandTopLevelDefinitions re-runs only the registration side
+				// effects (the generated forms are discarded) and the emitted program is
+				// byte-identical to dropping the form outright.
+				if (provenance.isPrunableSystem(i) && forms.get(i) instanceof LispCons original
+						&& LispMacroExpander.defstructDefinedNames(original) != null) {
+					out.add(LispMacroExpander.structDefinitionMarker(original));
+				}
 				continue;
 			}
 			if (closCandidates.methodGates().containsKey(i) && !keptMethods.contains(i)) {

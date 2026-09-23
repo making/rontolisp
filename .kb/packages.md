@@ -133,7 +133,9 @@ once); `:documentation`/`:size` ignored.
   package, a `pkg::name` the package does not provide -- all skipped under `exactCase`, i.e. the
   runtime `intern` and `find-symbol` probes) its table no longer answers "no such symbol" and
   the check is off. Built-in / pre-seeded packages are never sealed. The failure carries the
-  source package and name (`DefpackageException.missingSymbol`).
+  source package and name (`DefpackageException.missingSymbol`). A pruned third-party
+  `defstruct` leaves its `%struct-definition` marker in the stream so this check stays off for
+  a kept defpackage that imports one of the struct's slot names (.kb/library-defun-pruning.md).
 - **At run time the failures are conditions**: a nested `defpackage` (`rareOperatorExpansion`)
   and `(eval '(defpackage ...))` (the `eval` native, which would otherwise take the top-level
   directive path) both go through `LispEvaluator.registerRuntimeDefpackage`: `PROGRAM_ERROR` ->

@@ -145,6 +145,14 @@ guess.
   `:include`d ones resolved through the candidate chain; a parent outside the candidate set
   roots the child); `defgeneric` under its setf-normalized name. Generated names carry BOTH
   colon spellings.
+- **A dropped third-party `defstruct` leaves its `(%struct-definition ...)` marker** (no
+  generated defuns -- the struct is dead): the compilers' re-resolution replays the pruned
+  program in a fresh `PackageResolver`, whose defpackage re-creation re-seals every package,
+  and a kept defpackage may `:import-from` one of the struct's SLOT names (quri.uri.http
+  imports quri.uri's `scheme`/`port`) -- a name only the defstruct's evaluation interns, so
+  without the payload the sealed-source check refuses the import and the compile fails
+  (2026-09-23). The marker is codegen-inert: `expandTopLevelDefinitions` re-runs only the
+  registration side effects and discards the regenerated forms.
 - **`defmethod` is gated, per method**: the GENERIC gate (some spelling of the generic name is
   live) plus one SPECIALIZER gate per required parameter naming a candidate class/condition/
   struct, satisfied when an INSTANTIATOR name is live -- an instance can only be made through a

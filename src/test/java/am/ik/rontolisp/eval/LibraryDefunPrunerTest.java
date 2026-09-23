@@ -7,6 +7,7 @@ import java.util.Map;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.cli.LoadInliner;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -1251,6 +1252,37 @@ class LibraryDefunPrunerTest {
 		List<LispVal> program = LispReader
 			.readAllFromString("(defstruct torch::rec a)\n(print (torch::rec-a (car (list 1))))");
 		assertThat(LibraryDefunPruner.stripSystemMarkers(program)).isSameAs(program);
+	}
+
+	@Test
+	void aPrunedThirdPartyDefstructKeepsItsSlotNamesResolvableToALaterImportFrom() {
+		// quri's shape: a later file's defpackage :import-from names a DEFPACKAGE SLOT
+		// name of the struct defined earlier in the system -- internal in CL because
+		// defstruct interned it. When nothing references the struct, pruning drops the
+		// defstruct form, and the compilers' own re-resolution (a fresh PackageResolver
+		// over the pruned program) would re-create the struct's package SEALED and
+		// refuse the import. The dropped defstruct therefore leaves a
+		// %struct-definition marker: the compilers re-run the expansion's registration
+		// side effects from it, and the replay's resolution mints the slot names
+		// exactly as evaluating the defstruct would have.
+		Map<String, String> files = Map.of("demo.asd",
+				"(defsystem :demo :components ((:file \"demo\") (:file \"lib\")))", "demo.lisp", """
+						(defpackage :demo (:use :cl) (:export :used))
+						(in-package :demo)
+						(defun used () 1)
+						(defstruct point x)
+						""", "lib.lisp", """
+						(defpackage :demo.lib (:use :cl) (:import-from :demo :x))
+						(in-package :demo.lib)
+						(defun libfn () 1)
+						""");
+		List<LispVal> pruned = LibraryDefunPruner
+			.prune(UserMacroExpander.expand(spliceSystem("(asdf:load-system :demo) (print (demo:used))", files)));
+		assertThat(pruned.stream().filter(LibraryDefunPrunerTest::isStructDefinitionMarker)).hasSize(1);
+		// The compiler's re-resolution over the pruned program must answer the import:
+		// a sealed QURI.URI-like source with the slot name minted by the marker's
+		// payload, not a "no symbol named X" package error.
+		new PackageResolver().resolveProgram(pruned);
 	}
 
 }
