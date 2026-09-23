@@ -629,7 +629,19 @@ wasm (`(0 #(0 0 0))`, `(3 #(108 108 108))` -- the string-stream record's bytes).
   program naming `read-sequence`/`write-sequence` and `open`: a binary loader with a parameter
   buffer grew +3.2 KB wasm / +4.5 KB JVM (registry +1.7 / +3.6 KB, the rest the inline test), the
   gguf corpus case +7.0 KB, geom +9.5 KB -- for ZERO ANSI tests (every failing test in the chapter
-  reads a string stream). The cheaper shape to measure is `.todo/931`.
+  reads a string stream). The cheaper shape -- a distinct kind keyword for a binary file stream,
+  read by `%character-stream-p` -- was measured 2026-09-23 (`.todo/931`) and likewise declined:
+  the kind rides in the value so a COMPUTED `:element-type` open can set it (the dispatch is
+  already onto literal leaves; a computed-options probe emitted both kinds, one per leaf), but
+  every program opening a binary file still changes bytes (two binary leaves: +7 B JVM / +4 B
+  P1, the longer keyword alone), every `read-sequence`/`write-sequence` program naming a stream
+  value changes (`%character-stream-p`'s third arm: +33 B JVM / +18 B P1), and every
+  `typep 'file-stream` / direction-predicate site over a file stream changes (second kind arm:
+  +510 B JVM / +47 B P1, the direction arm duplicating the assoc read) -- corpus-wide byte
+  churn, again for zero ANSI tests. The interpreter (signals `READ-BYTE expects a binary input
+  stream`) and the WASM bulk octet path underneath would need their own arms on top.
+  **Trigger**: an ANSI test, or any corpus program, reading a general vector or a list from a
+  character FILE stream.
 - The first-class `#'read-sequence` / `#'write-sequence` / `#'write-string` wrappers
   (`BuiltinFunctionWrappers.boundedSequenceIo`) now expand ONE call with `:end (getf kw :end)` --
   a nil `:end` is the whole sequence -- instead of two copies of the inline expansion.
