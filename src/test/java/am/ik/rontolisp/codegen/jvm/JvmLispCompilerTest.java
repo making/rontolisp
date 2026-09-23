@@ -7465,6 +7465,22 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunComplementAppliesBeyondThreeArguments() throws Exception {
+		// The 0-3 arms stay funcall-dispatch; a fourth argument takes the &rest arm
+		// through apply, and apply spreads any count through the negation. The
+		// callee is a true &rest defun: n-ary spellings of binary built-ins (like
+		// <) expand pairwise at the call site, which apply bypasses.
+		assertThat(compileAndRun("""
+				(defun ci-cpl-fourp (&rest xs) (eql (length xs) 4))
+				(print (funcall (complement #'ci-cpl-fourp) 1 2 3 4))
+				(print (funcall (complement #'ci-cpl-fourp) 1 2 3))
+				(print (apply (complement #'ci-cpl-fourp) (list 1 2 3 4 5)))
+				(print (apply (complement #'ci-cpl-fourp) (list 1 2 3 4)))
+				(print (funcall (complement #'evenp) 3))
+				""")).isEqualTo("NIL\nT\nT\nNIL\nT");
+	}
+
+	@Test
 	void compileAndRunRemoveDuplicatesBoundingKeywords() throws Exception {
 		// remove-duplicates takes the same 17.2.1 set, but its window bounds which
 		// elements are CONSIDERED: one outside :start/:end is kept verbatim rather than

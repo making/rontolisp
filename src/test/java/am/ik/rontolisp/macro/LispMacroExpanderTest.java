@@ -755,10 +755,11 @@ class LispMacroExpanderTest {
 			.print();
 		assertThat(expansion).startsWith("(LET ((|__complement_fn| (MK)))");
 		assertThat(expansion.indexOf("(MK)")).isEqualTo(expansion.lastIndexOf("(MK)"));
-		// &optional with supplied-p flags, not &rest: a complemented :test-not runs once
-		// per element of the sequence being scanned, and a rest list would cons there.
+		// &optional with supplied-p flags plus an &rest arm: a complemented :test-not
+		// runs once per element of the sequence being scanned, and a rest list would
+		// cons there -- so only the fourth-argument-and-beyond arm applies.
 		assertThat(expansion).contains(
-				"(LAMBDA (&OPTIONAL (|__complement_a0| NIL |__complement_p0|) (|__complement_a1| NIL |__complement_p1|) (|__complement_a2| NIL |__complement_p2|))");
+				"(LAMBDA (&OPTIONAL (|__complement_a0| NIL |__complement_p0|) (|__complement_a1| NIL |__complement_p1|) (|__complement_a2| NIL |__complement_p2|) &REST |__complement_more|)");
 		// One funcall arm per arity, the widest tested first -- an equality designator
 		// (two arguments) is the common one and used to be an arity error.
 		assertThat(expansion)
@@ -767,7 +768,10 @@ class LispMacroExpanderTest {
 			.contains("(IF |__complement_p1| (FUNCALL |__complement_fn| |__complement_a0| |__complement_a1|)")
 			.contains("(IF |__complement_p0| (FUNCALL |__complement_fn| |__complement_a0|)")
 			.contains("(FUNCALL |__complement_fn|)");
-		assertThat(expansion).doesNotContain("APPLY");
+		// The &rest arm applies past the fixed set -- the only APPLY in the expansion.
+		assertThat(expansion).contains("(IF |__complement_more| (APPLY |__complement_fn| |__complement_a0| "
+				+ "|__complement_a1| |__complement_a2| |__complement_more|)");
+		assertThat(expansion.indexOf("APPLY")).isEqualTo(expansion.lastIndexOf("APPLY"));
 		// A site whose arity is statically two spells the two, rather than paying the
 		// dispatch per element: the first-class remove/position wrappers and KeywordTail.
 		assertThat(LispMacroExpander.twoArgumentComplement(LispReader.readAllFromString("(mk)").get(0)).print())

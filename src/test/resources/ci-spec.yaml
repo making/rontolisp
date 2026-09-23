@@ -860,8 +860,7 @@ cases:
   # the one-argument predicate case: ANSI's remove.order.2 / delete.order.2 /
   # adjoin.order.2 pass (complement #'eq) as a two-argument :test-not, and the
   # first-class #'remove / #'position wrappers build their :test on the same negation.
-  # An unbounded lowering would need apply, which opens the eval gate
-  # (.kb/sequence-designator-evaluation.md, "What a variadic complement costs").
+  # A fourth argument takes the &rest arm through apply; apply spreads any count.
   - name: complement-designator-arity
     source: |
       (defun ci-cpl-3 (a b c) (and (eql a b) (eql b c)))
@@ -886,6 +885,9 @@ cases:
       (print (apply #'position 3 (list 1 2 3 4) (list :test-not #'eql)))
       (print (funcall (ci-cpl-defaulted 7)))
       (print (funcall (ci-cpl-defaulted 7) 9))
+      (defun ci-cpl-fourp (&rest xs) (eql (length xs) 4))
+      (print (funcall (complement #'ci-cpl-fourp) 1 2 3 4))
+      (print (apply (complement #'ci-cpl-fourp) (list 1 2 3 4 5)))
     expected: |
       T
       (T NIL)
@@ -899,6 +901,8 @@ cases:
       0
       7
       9
+      NIL
+      T
   # remove-duplicates / delete-duplicates take the same 17.2.1 keywords, but their
   # window bounds which elements are CONSIDERED: one outside :start/:end is kept
   # VERBATIM rather than dropped (.kb/sequence-bounding-keywords.md). The duplicate is

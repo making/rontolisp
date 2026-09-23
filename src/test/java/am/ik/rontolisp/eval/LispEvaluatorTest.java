@@ -5105,6 +5105,12 @@ class LispEvaluatorTest {
 		// the same negation (BuiltinFunctionWrappers.sequenceScanFamily/positionFamily).
 		assertThat(eval("(apply #'remove 3 (list 1 2 3 4) (list :test-not #'eql))").print()).isEqualTo("(3)");
 		assertThat(eval("(apply #'position 3 (list 1 2 3 4) (list :test-not #'eql))").print()).isEqualTo("0");
+		// Beyond three arguments the &rest arm applies: a fourth argument is a call,
+		// not an arity error, and apply spreads any count through the negation.
+		assertThat(eval("(funcall (complement #'<) 1 2 3 4)").print()).isEqualTo("NIL");
+		assertThat(eval("(funcall (complement #'char/=) #\\a #\\b #\\c #\\d)").print()).isEqualTo("NIL");
+		assertThat(eval("(apply (complement #'char=) (list #\\a #\\b #\\c #\\d #\\e))").print()).isEqualTo("T");
+		assertThat(eval("(apply (complement #'char=) (list #\\a #\\a #\\c))").print()).isEqualTo("T");
 	}
 
 	@Test

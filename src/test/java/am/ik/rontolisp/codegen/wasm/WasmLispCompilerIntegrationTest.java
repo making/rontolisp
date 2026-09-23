@@ -8054,6 +8054,22 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void complementAppliesBeyondThreeArguments() throws Exception {
+		// The 0-3 arms stay funcall-dispatch; a fourth argument takes the &rest arm
+		// through apply, and apply spreads any count through the negation. The
+		// callee is a true &rest defun: n-ary spellings of binary built-ins (like
+		// <) expand pairwise at the call site, which apply bypasses.
+		assertThat(compileAndRun("""
+				(defun ci-cpl-fourp (&rest xs) (eql (length xs) 4))
+				(print (funcall (complement #'ci-cpl-fourp) 1 2 3 4))
+				(print (funcall (complement #'ci-cpl-fourp) 1 2 3))
+				(print (apply (complement #'ci-cpl-fourp) (list 1 2 3 4 5)))
+				(print (apply (complement #'ci-cpl-fourp) (list 1 2 3 4)))
+				(print (funcall (complement #'evenp) 3))
+				""")).isEqualTo("NIL\nT\nT\nNIL\nT");
+	}
+
+	@Test
 	void sequenceBoundingKeywords() throws Exception {
 		// CLHS 17.2.1's :start/:end/:count/:from-end over the count/remove/substitute
 		// family (.kb/sequence-bounding-keywords.md). :from-end is the interesting half:

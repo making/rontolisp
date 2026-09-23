@@ -5367,38 +5367,41 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * How many arguments {@link #expandComplement}'s lambda accepts. CL's
-	 * {@code complement} is variadic without bound, and the only lowering that is too is
-	 * {@code (lambda (&rest args) (not (apply f args)))} -- {@code apply} opens the eval
-	 * gate on the JVM and the apply tier on WASM. So the lowering dispatches a fixed set
-	 * of arities with {@code funcall} instead, and this is where the set stops: three
-	 * covers every designator position CL actually has -- a predicate (one argument), an
-	 * equality test (two) and the odd ternary. The measurement behind the number is in
+	 * How many arguments {@link #expandComplement}'s lambda takes by fixed dispatch. CL's
+	 * {@code complement} is variadic without bound, and the only lowering past this set
+	 * is {@code (apply f ...)} -- {@code apply} opens the eval gate on the JVM and the
+	 * apply tier on WASM. So the lowering dispatches a fixed set of arities with
+	 * {@code funcall} instead, and this is where the fixed set stops: three covers every
+	 * designator position CL actually has -- a predicate (one argument), an equality test
+	 * (two) and the odd ternary -- and a fourth argument takes the {@code &rest} arm
+	 * through {@code apply}. The measurement behind the number is in
 	 * {@code .kb/sequence-designator-evaluation.md}, "What a variadic complement costs".
 	 */
 	private static final int COMPLEMENT_MAX_ARITY = 3;
 
 	/**
 	 * Expands {@code (complement fn)} into a lambda answering the opposite of the given
-	 * predicate for any call of up to {@link #COMPLEMENT_MAX_ARITY} arguments. The
-	 * function form is evaluated once. Lite: CL's {@code complement} is variadic without
-	 * bound and this one stops at three, so a fourth argument is an arity error at the
-	 * call site. And because this is an expansion, not a function, {@code #'complement}
-	 * is not available.
+	 * predicate for a call of any arity. The function form is evaluated once. Lite in one
+	 * direction only: arities 0-3 dispatch on {@code &optional} supplied-p flags through
+	 * {@code funcall}, and a fourth argument takes the {@code &rest} arm through
+	 * {@code (apply fn a0 a1 a2 rest)} -- {@code apply} opens the eval gate on the JVM
+	 * and the apply tier on WASM, so a program that spells {@code complement} pays it
+	 * even when no call ever reaches the arm. And because this is an expansion, not a
+	 * function, {@code #'complement} is not available.
 	 *
 	 * <p>
-	 * The arguments are {@code &optional} with supplied-p flags rather than a
-	 * {@code &rest} list, so a call conses nothing -- a complemented {@code :test-not}
-	 * designator runs once per ELEMENT of the sequence being scanned.
+	 * The fixed arguments are {@code &optional} with supplied-p flags rather than a
+	 * {@code &rest} list, so a call conses nothing on the arities a complemented
+	 * {@code :test-not} designator actually runs at -- once per ELEMENT of the sequence
+	 * being scanned.
 	 *
 	 * <pre>
 	 * (complement fn) ->
 	 *   (let ((__complement_fn fn))
-	 *     (lambda (&amp;optional (__complement_a0 nil __complement_p0) ...)
-	 *       (not (if __complement_p2 (funcall __complement_fn __complement_a0 __complement_a1 __complement_a2)
-	 *              (if __complement_p1 (funcall __complement_fn __complement_a0 __complement_a1)
-	 *                (if __complement_p0 (funcall __complement_fn __complement_a0)
-	 *                  (funcall __complement_fn)))))))
+	 *     (lambda (&amp;optional (__complement_a0 nil __complement_p0) ... &amp;rest __complement_more)
+	 *       (not (if __complement_more (apply __complement_fn __complement_a0 __complement_a1 __complement_a2 __complement_more)
+	 *              (if __complement_p2 (funcall __complement_fn __complement_a0 __complement_a1 __complement_a2)
+	 *                ...)))))
 	 * </pre>
 	 * @param cons the complement expression
 	 * @return the expanded expression
@@ -5420,10 +5423,19 @@ public final class LispMacroExpander {
 			supplied.add(flag);
 			lambdaList.add(listToCons(List.of(arg, LispNil.INSTANCE, flag)));
 		}
+		LispSymbol more = new LispSymbol("__complement_more");
+		lambdaList.add(new LispSymbol(LispNames.LAMBDA_REST));
+		lambdaList.add(more);
 		LispVal body = complementCall(fn, args, 0);
 		for (int arity = 1; arity <= COMPLEMENT_MAX_ARITY; arity++) {
 			body = makeIf(supplied.get(arity - 1), complementCall(fn, args, arity), body);
 		}
+		List<LispVal> applyCall = new java.util.ArrayList<>();
+		applyCall.add(new LispSymbol(LispNames.APPLY));
+		applyCall.add(fn);
+		applyCall.addAll(args);
+		applyCall.add(more);
+		body = makeIf(more, listToCons(applyCall), body);
 		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(lambdaList), makeNot(body)));
 		return makeLet(fn.name(), normalizeFunctionDesignator(parts.get(1)), lambda);
 	}

@@ -2,7 +2,7 @@
 
 `(complement function)`
 
-Returns a predicate answering the opposite of `function`: the result is `t` where `function` returns `nil` and vice versa. The returned predicate accepts any call of up to three arguments, so it serves an equality designator (`:test` / `:test-not`) as well as a one-argument predicate. Lite: Common Lisp's `complement` is variadic without bound and this one stops at three arguments, and `complement` expands inline so `#'complement` is not available.
+Returns a predicate answering the opposite of `function`: the result is `t` where `function` returns `nil` and vice versa. The returned predicate takes any number of arguments -- calls of up to three go through a `funcall` dispatch, a fourth and beyond through `apply`, so spelling `complement` pulls in the apply runtime on the compiled backends. It serves an equality designator (`:test` / `:test-not`) as well as a one-argument predicate. Lite: `complement` expands inline so `#'complement` is not available.
 
 ```lisp
 (funcall (complement #'evenp) 3) ; => T

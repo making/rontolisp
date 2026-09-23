@@ -88,8 +88,10 @@ so neither the native count check nor a dispatcher's shape could see it: before 
   compile with `%OBJ-NEW reached the compiler with no instance type emitted`.
   `#'write-line` takes the whole `(string &optional stream &key start end)` tail since
   2026-09-23 (`.kb/read-load-streams.md`, "`write-line` takes `:start` / `:end`").
-- `complement`'s lambda (arities 0-3, `expandComplement`) now REFUSES a fourth argument
-  instead of dropping it; ANSI `COMPLEMENT.4` moved FAIL -> ERROR.
+- `complement`'s lambda (arities 0-3, `expandComplement`) takes a fourth argument
+  through an `&rest` arm since 2026-09-23 (`.kb/sequence-designator-evaluation.md`,
+  "What a variadic complement costs"); ANSI `COMPLEMENT.4`/`COMPLEMENT.8` moved ERROR
+  -> PASS on the interpreter.
 - **Measured**, interpreter, whole ANSI suite (suite `ca06bd9`, test NAMES diffed across every
   chapter): 37 tests fixed (`*.ERROR.N` rows: `BIT-*`, `CLEAR-INPUT`, `PPRINT*`,
   `DIGIT-CHAR`, `GET`, `GENTEMP`, `ENCODE/DECODE-UNIVERSAL-TIME`, ...), 0 regressed, lost

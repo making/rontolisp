@@ -225,6 +225,37 @@ Landing it uncovered one more thing: a nested lambda whose `&optional` carries a
 time -- `compiler/FreeVarAnalyzer.extractParamNames` read only the bare-symbol parameter
 shape. The ci-spec case below covers it.
 
+## The `&rest` arm landed (2026-09-23, `.todo/934`)
+
+The 0-3 `funcall` arms stay; a fourth argument takes `&rest more` through
+`(apply fn a0 a1 a2 more)`. `twoArgumentComplement`'s known-arity sites are untouched,
+so a program that never spells `complement` is byte-identical.
+
+- **The arm alone opens the gate, as feared.** `needsApplyRuntime` scans the
+  unexpanded program and misses it, but the gate is a prediction with a self-check:
+  the emitted `invokestatic _apply` fails the post-compile `unresolvedSelfMethods`
+  check and the build retries with the apply group forced
+  (`JvmLispCompiler.compile`, "The gate is a consequence, not a prediction" is the
+  array version of the same loop). Verified directly: `needsApplyRuntime` answers
+  false on `(print (funcall (complement #'evenp) 3))` and true on its expansion, and
+  the compiled class carries `_apply`.
+- **Measured** (same minimal program, raw backend harness): JVM `.class`
+  19,843 -> 25,796 B (+5,953, +30%); WASM 10,007 -> 12,009 B (+2,002, +20%). A
+  program that never spells `complement` is unchanged (the `#'remove` /
+  `#'position` `:test-not` wrappers ride `twoArgumentComplement`, and neither the
+  examples, the size-report corpus, the shipped libraries nor the e2e sources spell
+  it).
+- Landed anyway: the cost hits only explicit spellings (rare), while the alternative
+  is a permanent program-error on legal calls and two ANSI ERRORs. A subtlety the
+  measurement surfaced: on the compiled backends an n-ary spelling of a binary
+  built-in (`<`, `char=`) expands pairwise at the call site, which `apply` bypasses,
+  so `(funcall (complement #'<) 1 2 3 4)` still fails there with the callee's arity
+  error -- the callee's own gap, not this one's. The unit tests pin the arm with
+  true `&rest` defuns for that reason.
+- **ANSI** (`data-and-control-flow`, interpreter, suite `ca06bd9`, names diffed):
+  `COMPLEMENT.4`/`COMPLEMENT.8` ERROR -> PASS, zero regressed (`COMPLEMENT.3` stays
+  ERROR on the unbound `*UNIVERSE*`, a harness gap).
+
 ## Pinning tests
 
 - `LispMacroExpanderTest.aComputedSequenceDesignatorBindsOnceBeforeTheScan` -- the literal
@@ -236,9 +267,13 @@ shape. The ci-spec case below covers it.
   first-class.
 - ci-spec `sequence-designator-order` -- the same counters on all four backends.
 - `LispMacroExpanderTest.complementAnswersALambdaThatCoversEveryDesignatorArity` -- the
-  arity arms, the once-evaluated function form, the absence of `apply`, and the
+  arity arms, the once-evaluated function form, the `apply` confined to the `&rest`
+  arm (exactly one occurrence), and the
   two-argument shape the known-arity sites spell instead.
 - `LispEvaluatorTest.complementServesEveryDesignatorArityItsCallersUse` and ci-spec
   `complement-designator-arity` -- the behaviour, in the interpreter and on all four
-  backends, including the first-class `(apply #'remove ... :test-not ...)` path and the
-  defaulted-`&optional` nested lambda.
+  backends, including the first-class `(apply #'remove ... :test-not ...)` path,
+  the defaulted-`&optional` nested lambda, and the 4+-argument `&rest` arm over a
+  true `&rest` defun -- with
+  `JvmLispCompilerTest#compileAndRunComplementAppliesBeyondThreeArguments` and
+  `WasmLispCompilerIntegrationTest#complementAppliesBeyondThreeArguments`.
