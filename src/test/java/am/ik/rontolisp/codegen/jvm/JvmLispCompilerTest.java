@@ -11387,7 +11387,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (file-position t)) (print (file-length t)) (print (pathnamep \"/tmp/x\"))"
 				+ " (print (pathnamep #P\"/tmp/x\")) (print (stream-element-type t))"))
 			.isEqualTo("NIL\nNIL\nNIL\nT\nCHARACTER");
-		assertThat(compileAndRun("(print (input-stream-p t)) (print (output-stream-p (make-broadcast-stream)))"
+		assertThat(compileAndRun("(print (input-stream-p t)) (print (output-stream-p (make-string-output-stream)))"
 				+ " (print (input-stream-p \"s\"))"))
 			.isEqualTo("T\nT\nNIL");
 	}
