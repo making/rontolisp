@@ -1366,20 +1366,7 @@ final class WasmExprCompiler {
 					// table-backed dispatch defun) there is no per-fd open/closed record
 					// here: a non-nil stream designator answers t.
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandOpenStreamPLite(cons), ctx);
-				case LispNames.LISTEN ->
-					// Under --component with sockets spliced, listen is rewritten to the
-					// %io-listen dispatch defun before compilation (WasmSocketsRewrite);
-					// one reaching this compiler has no non-blocking probe behind it. A
-					// CALL-time error rather than a compile error (the socket policy):
-					// the
-					// usocket shim's wait-for-input polls through listen,
-					// so every spliced usocket program carries a listen call site that
-					// is dead code on Preview 1 -- it must compile, and a program that
-					// actually calls it gets this message.
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantResult(cons, LispMacroExpander
-						.callTimeUnsupportedStub("listen requires the interpreter, the JVM backend or a --component"
-								+ " socket stream (no non-blocking input probe exists on this" + " WASM target)")),
-							ctx);
+				case LispNames.LISTEN -> WasmListenCompiler.compile(cons, ctx);
 				case LispNames.READ_SEQUENCE -> WasmExprCompiler.compileExpr(guardPackedForWideStreams(
 						LispMacroExpander.expandReadSequence(cons, false, characterStreams(ctx), boundsCheck(ctx)),
 						ctx), ctx);

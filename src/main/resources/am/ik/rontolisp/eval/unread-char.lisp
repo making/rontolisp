@@ -90,6 +90,12 @@
               (if rest (concatenate 'string (string c) rest) (string c))))
         (read-line stream eof-error-p eof-value))))
 
+(defun rontolisp::%unread-listen (stream)
+  ;; A parked character counts as one that remains; otherwise the stream itself.
+  (if (eql rontolisp::*unread-stream* (rontolisp::%unread-key stream))
+      t
+      (listen stream)))
+
 (defun rontolisp::%unread-file-position (stream)
   (let ((position (file-position stream)))
     (if (if position

@@ -15,7 +15,8 @@ the interactive-echo idiom.
 The input side is a [Gray stream](../../guides/gray-streams.md), so `read-line`
 and `read-char` dispatch over it and each character read is echoed to the output
 component along the way; `write-char` / `write-string` reach the output side
-directly. The components are recoverable with
+directly. Only what is read echoes: `peek-char` looks at the input component
+without writing. The components are recoverable with
 [`echo-stream-input-stream`](echo-stream-input-stream.md) and
 [`echo-stream-output-stream`](echo-stream-output-stream.md).
 

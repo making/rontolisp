@@ -459,9 +459,9 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   first wrote their own copy of that wrapper, and the two stacked subtract twice. Per backend:
   the interpreter's string input stream IS `runtime.RontoStringInputStream`, a `BufferedReader`
   subclass working on the string itself so its cursor is the logical position; the JVM builds
-  that class only when the program calls `file-position` and can make a string input stream
-  (`FileMeta.stringInputPositions`), and it then TRAVELS (+2.9 KB, a second class file) -- the
-  `_filePosition` arms are `JvmStringStreamPositions`, ahead of the file arms (an output
+  that class for EVERY string input stream (so `listen` answers uniformly -- see below),
+  and it then TRAVELS (+2.9 KB, a second class file) -- the `_filePosition` arms are
+  `JvmStringStreamPositions`, ahead of the file arms (an output
   stream's position is the `StringWriter`'s code-point count, no class needed); both WASM
   backends answer in `_file_position` / `_file_position_set`'s string arm
   (`WasmStringStreamRuntimeBuilder.emitPositionQueryArm` / `emitPositionSetArm`), counting
@@ -474,17 +474,15 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   signals; nothing else passes -1. **Limits**: `--no-wasi` keeps `file-position` the nil
   constant for every stream; a CLOSED string input stream still answers on both WASM backends
   (its record is never marked closed), nil elsewhere. The ANSI tests it fixed are OUTPUT ones --
-  `PEEK-CHAR.18 .19` and `MAKE-BROADCAST-STREAM.6` (the zero-argument broadcast is a string
-  output sink on the interpreter); `PEEK-CHAR.17` moved from error to fail (an echo stream
-  echoes a PEEKED character, sbcl does not).
+  `PEEK-CHAR.18 .19` and `MAKE-BROADCAST-STREAM.6`.
 - **`:index` keeps DRAINING -- measured, not assumed** (2026-09-22). The premise was that a real
   position would make `:index` a read. Hand-written equivalents of the two lowerings, bytes
   JVM / Preview 1 / component: drain 38,085 / 5,972 / 9,496, position 42,579 (2 files) / 4,618 /
   8,226 -- the JVM grows +4.5 KB and gains the travelling class (plus the `_filePosition`
   machinery) where WASM saves 1.3 KB, and `--no-wasi` has no position at all, so it would need
   the drain anyway. Both answer the same index; the drain only consumes a stream that is closed
-  right after. **Trigger**: a JVM string input stream that knows its position without a
-  travelling class.
+  right after. (Every JVM string input stream has known its position without extra cost since
+  2026-09-23 -- see below -- so the trigger is gone; the numbers stand.)
 - **Write-through: measured, not built** (2026-09-22). A fill-pointer string that sees the output
   as it is written needs a stream kind of its own on every backend (a JVM `Writer` over the
   Lisp vector representation that travels, a WASM record kind every string-output write path
@@ -514,6 +512,34 @@ streams. Interpreter `StringWriter` / `BufferedReader(StringReader)`; JVM the sa
   `LINE_START_ADDR`). `expandFormat` accepts a non-literal destination by building the string like
   `format nil` and emitting one `(write-string <string> __format_stream)`. Compiled print-family
   return values stay nil. Runtime `_eval` interpreters and `--no-gc` do not know string streams.
+- **`listen` answers whether a character remains on a string input stream, on all four
+  backends** (2026-09-23, `.todo/939`) -- at the end, with nothing parked, there is nothing
+  to listen to, not `BufferedReader.ready()`. Per backend: the interpreter consults the
+  pushback cell first, then `RontoStringInputStream.hasRemaining()` (`ready()` still answers
+  true until close -- the `BufferedReader` contract); the JVM builds that class for EVERY
+  string input (no longer only where `file-position` is named, so the answer never depends
+  on that) and `_listen` reads the same method ahead of the `ready()` arm; the compile
+  paths' `%unread-listen` rewrite (in `UnreadCharLibrary`, only where `unread-char` is
+  named) consults the Lisp cell ahead of the built-in; WASM answers its record's
+  `cursor < end` inline (`WasmListenCompiler`, no new runtime index), keeping the
+  call-time stub for everything else. An unread character counts as one that remains
+  everywhere. An echo stream echoes only what is READ: its `stream-peek-char` looks at
+  the input component without writing (the default read-plus-unread would move the
+  output position).
+- **Sizes** (same harness): a JVM string-input program without `listen` grows +19 B
+  (the positioned construction); with `listen` +65 B (the `_listen` arm). WASM string
+  `listen` costs what `file-position` does (both branch the record): +1.6 KB on a
+  minimal program. Anything else is byte-identical.
+- **ANSI `streams`** (interpreter, suite `ca06bd9`, names diffed): `LISTEN.1/.3/.6`
+  and `PEEK-CHAR.17` FAIL -> PASS, 0 regressed.
+- Pinned by `LispEvaluatorTest#listenAtTheEndOfAStringStreamAnswersNil` /
+  `#echoStreamPeekDoesNotEcho`,
+  `JvmLispCompilerTest#listenAtTheEndOfAStringStreamAnswersNil` /
+  `#echoStreamPeekDoesNotEcho`,
+  `WasmLispCompilerIntegrationTest#listenAtTheEndOfAStringStreamAnswersNil` /
+  `#echoStreamPeekDoesNotEcho`, ci-spec
+  `listen-at-the-end-of-a-string-stream-and-echo-peek`; docs
+  `reference/functions/{listen,make-echo-stream}.md` (en+ja).
 
 ## Binary streams and binary standard I/O
 `open` takes an optional third literal argument — `'character` (default) or an integer type; the

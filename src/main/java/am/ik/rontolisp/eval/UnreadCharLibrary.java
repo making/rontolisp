@@ -66,12 +66,15 @@ public final class UnreadCharLibrary {
 	/** The pushback defun a rewritten two-argument {@code file-position} names. */
 	static final String FILE_POSITION_SET = "%UNREAD-FILE-POSITION-SET";
 
+	/** The pushback defun a rewritten {@code listen} call site names. */
+	static final String LISTEN = "%UNREAD-LISTEN";
+
 	/**
 	 * The library's own defuns, whose bodies call the very built-ins the rewrite targets:
 	 * rewriting those into the pushback defuns again would recurse forever.
 	 */
 	private static final Set<String> LIBRARY_DEFUNS = Set.of(PUSH, READ_CHAR, PEEK_CHAR, READ_LINE, FILE_POSITION,
-			FILE_POSITION_SET, "%UNREAD-KEY", "%UNREAD-CHAR-TAKE", "%UNREAD-PEEK-STOPS-P");
+			FILE_POSITION_SET, LISTEN, "%UNREAD-KEY", "%UNREAD-CHAR-TAKE", "%UNREAD-PEEK-STOPS-P");
 
 	/**
 	 * The two {@code file-position} defuns, spliced only for a program that names
@@ -253,6 +256,14 @@ public final class UnreadCharLibrary {
 					return listOf(defunSymbol(PEEK_CHAR), arg(parts, 1, LispNil.INSTANCE),
 							arg(parts, 2, LispNil.INSTANCE), arg(parts, 3, LispTrue.INSTANCE),
 							arg(parts, 4, LispNil.INSTANCE));
+				}
+			}
+			// A parked character counts as one that remains: listen consults the
+			// cell first, then the stream. Only where unread-char is named, like
+			// every other rewrite here.
+			case LispNames.LISTEN -> {
+				if (args <= 1) {
+					return listOf(defunSymbol(LISTEN), arg(parts, 1, LispNil.INSTANCE));
 				}
 			}
 			default -> {

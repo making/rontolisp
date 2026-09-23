@@ -7225,6 +7225,43 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void listenAtTheEndOfAStringStreamAnswersNil() throws Exception {
+		// A character remains, or it does not -- answered off the string record's
+		// cursor and end, without consuming anything. The unread half rides the
+		// %unread-listen rewrite, like every other read-side operator.
+		assertThat(compileAndRun("""
+				(print (with-input-from-string (s "") (listen s)))
+				(print (with-input-from-string (s "x") (listen s)))
+				(print (with-input-from-string (s "x") (read-char s) (listen s)))
+				""")).isEqualTo("NIL\nT\nNIL");
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.UnreadCharLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(print (with-input-from-string (s "x")
+					         (list (read-char s)
+					               (listen s)
+					               (unread-char #\\x s)
+					               (not (not (listen s)))
+					               (read-char s))))
+					"""))))).isEqualTo("(#\\x NIL NIL T #\\x)");
+	}
+
+	@Test
+	void echoStreamPeekDoesNotEcho() throws Exception {
+		// Only what is READ echoes -- a peek looks at the input component without
+		// writing, so the output stream's position does not move.
+		assertThat(compileAndRunGray("""
+				(let ((o (make-string-output-stream)))
+				  (let ((es (make-echo-stream (make-string-input-stream "ab") o)))
+				    (print (list (file-position o)
+				                 (peek-char nil es nil)
+				                 (file-position o)
+				                 (read-char es)
+				                 (file-position o)
+				                 (get-output-stream-string o)))))
+				""")).isEqualTo("(0 #\\a 0 #\\a 1 \"a\")");
+	}
+
+	@Test
 	void writeLineTakesStartAndEnd() throws Exception {
 		// :start / :end bound the written substring, in call position and first
 		// class; the return is the whole string, like write-string's.

@@ -6024,6 +6024,14 @@ public final class Environment implements Scope {
 			}
 			return LispNil.INSTANCE;
 		}));
+		// The handle-side one-slot pushback of unread-char: ONE character for ONE
+		// stream at a time (declared here, ahead of listen, which consults it).
+		// An EMPTY cell is nil in both slots: the KEY nil folds onto t, so no live
+		// key is ever nil and the two states cannot be confused.
+		final LispVal[] pushbackStream = { LispNil.INSTANCE };
+		final LispVal[] pushbackChar = { LispNil.INSTANCE };
+		java.util.function.UnaryOperator<LispVal> pushbackKey = stream -> stream instanceof LispNil ? LispTrue.INSTANCE
+				: stream;
 		// (listen &optional stream): whether input is immediately available without
 		// blocking -- InputStream.available() / Reader.ready() semantics. Sockets answer
 		// from the kernel receive buffer, which is what cl-postgres's
@@ -6038,10 +6046,20 @@ public final class Environment implements Scope {
 				if (!(src instanceof LispInteger handle)) {
 					throw new LispEvalException(LispNames.LISTEN + " expects an input stream");
 				}
+				// A parked unread-char counts as a character that remains, whatever
+				// the stream itself says.
+				LispVal listenKey = pushbackKey.apply(args.isEmpty() ? LispNil.INSTANCE : args.get(0));
+				if (pushbackStream[0].equals(listenKey)) {
+					return LispTrue.INSTANCE;
+				}
 				Closeable entry = streams.get(handle.value());
 				boolean ready = switch (entry) {
 					case Socket socket -> socket.getInputStream().available() > 0;
 					case RontoIoFileStream io -> io.ready();
+					// A string input stream answers whether a character remains,
+					// not Reader.ready() (true until close): at the end, with
+					// nothing parked, there is nothing to listen to.
+					case RontoStringInputStream stringIn -> stringIn.hasRemaining();
 					case BufferedReader reader -> reader.ready();
 					case InputStream in2 -> in2.available() > 0;
 					case null, default ->
@@ -6160,11 +6178,8 @@ public final class Environment implements Scope {
 		// their loops long after the compile paths' rewrite), so all four backends
 		// agree about that too.
 		// An EMPTY cell is nil in both slots: the KEY nil folds onto t, so no live key
-		// is ever nil and the two states cannot be confused.
-		final LispVal[] pushbackStream = { LispNil.INSTANCE };
-		final LispVal[] pushbackChar = { LispNil.INSTANCE };
-		java.util.function.UnaryOperator<LispVal> pushbackKey = stream -> stream instanceof LispNil ? LispTrue.INSTANCE
-				: stream;
+		// is ever nil and the two states cannot be confused. (The cells themselves
+		// are declared ahead of listen, which consults them.)
 		// The parked character of this stream, draining the cell -- nil when the cell is
 		// empty or holds another stream's character.
 		java.util.function.Function<List<LispVal>, LispVal> pushbackTake = args -> {

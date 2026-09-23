@@ -7,23 +7,26 @@ import java.io.StringReader;
 /**
  * A string INPUT stream that knows its position: the reader
  * {@code make-string-input-stream} / {@code with-input-from-string} put in the stream
- * table wherever {@code file-position} can be asked of one.
+ * table wherever {@code file-position} can be asked of one -- and, since every string
+ * input stream is built as this class, wherever {@code listen} can be asked whether a
+ * character remains, uniformly.
  *
  * <p>
  * It extends {@link BufferedReader} so that every read dispatch a stream table already
  * has -- {@code read-line}, {@code read-char}, the {@code mark}/{@code reset} peek,
  * {@code read-sequence}'s block read, {@code listen}, {@code close} -- takes it with no
  * arm of its own; only {@code file-position} asks for {@link #position()} and
- * {@link #seek(long)}. Every method works on the string directly (the superclass is
- * handed an empty reader it never reads), so the cursor IS the logical position: nothing
- * reads ahead of what was consumed.
+ * {@link #seek(long)}, and only {@code listen} asks for {@link #hasRemaining()}. Every
+ * method works on the string directly (the superclass is handed an empty reader it never
+ * reads), so the cursor IS the logical position: nothing reads ahead of what was
+ * consumed.
  *
  * <p>
  * It behaves exactly as the {@code BufferedReader} over a {@code StringReader} it stands
  * in for, down to {@link #ready()} answering {@code true} until it is closed. It lives in
- * {@code runtime} because it TRAVELS beside a compiled JVM program that asks for a string
- * stream's position ({@code .kb/jvm-export.md}, "What travels"), so, like every class
- * here, it imports nothing but the JDK.
+ * {@code runtime} because it TRAVELS beside a compiled JVM program that makes a string
+ * input stream ({@code .kb/jvm-export.md}, "What travels"), so, like every class here, it
+ * imports nothing but the JDK.
  */
 public final class RontoStringInputStream extends BufferedReader {
 
@@ -50,6 +53,16 @@ public final class RontoStringInputStream extends BufferedReader {
 	 */
 	public long position() {
 		return this.text.codePointCount(0, this.cursor);
+	}
+
+	/**
+	 * Whether a character remains to be read: what {@code listen} answers a string input
+	 * stream with. Kept apart from {@link #ready()}, which answers {@code true} until
+	 * close -- the {@code BufferedReader} contract the class stands in for.
+	 * @return true when the cursor is before the end
+	 */
+	public boolean hasRemaining() {
+		return this.cursor < this.text.length();
 	}
 
 	/**

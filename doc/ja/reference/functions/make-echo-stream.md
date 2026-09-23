@@ -14,7 +14,8 @@
 
 入力側は [Gray ストリーム](../../guides/gray-streams.md)なので、`read-line` や
 `read-char` でディスパッチされ、読み取った各文字は途中で出力コンポーネントにもエコー
-されます。`write-char` / `write-string` は出力側へ直接届きます。コンポーネントは
+されます。`write-char` / `write-string` は出力側へ直接届きます。エコーされるのは読み
+取ったものだけで、`peek-char` は書き込まずに入力コンポーネントを覗きます。コンポーネントは
 [`echo-stream-input-stream`](echo-stream-input-stream.md) と
 [`echo-stream-output-stream`](echo-stream-output-stream.md) で取り出せます。
 

@@ -22205,6 +22205,39 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void listenAtTheEndOfAStringStreamAnswersNil() {
+		// LISTEN.1/.2/.3/.6: a character remains, or it does not -- and an
+		// unread character counts as one that remains.
+		assertThat(eval("(with-input-from-string (s \"\") (listen s))").print()).isEqualTo("NIL");
+		assertThat(eval("(with-input-from-string (s \"x\") (listen s))").print()).isEqualTo("T");
+		assertThat(eval("(with-input-from-string (*standard-input* \"\") (listen))").print()).isEqualTo("NIL");
+		assertThat(evalMulti("""
+				(with-input-from-string (s "x")
+				  (list (read-char s)
+				        (listen s)
+				        (unread-char #\\x s)
+				        (not (not (listen s)))
+				        (read-char s)))
+				""").print()).isEqualTo("(#\\x NIL NIL T #\\x)");
+	}
+
+	@Test
+	void echoStreamPeekDoesNotEcho() {
+		// PEEK-CHAR.17: only what is READ echoes -- a peek leaves the output
+		// stream's position where it was, and the peeked character reads next.
+		assertThat(evalMulti("""
+				(let ((o (make-string-output-stream)))
+				  (let ((es (make-echo-stream (make-string-input-stream "ab") o)))
+				    (list (file-position o)
+				          (peek-char nil es nil)
+				          (file-position o)
+				          (read-char es)
+				          (file-position o)
+				          (get-output-stream-string o))))
+				""").print()).isEqualTo("(0 #\\a 0 #\\a 1 \"a\")");
+	}
+
+	@Test
 	void makeEchoStreamEchoesWhatItReads() {
 		// An echo stream writes everything it reads to the output component, even the
 		// trailing newline read-line pulls.

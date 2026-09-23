@@ -468,13 +468,19 @@ final class JvmIoRuntimeBuilder {
 	private final @Nullable JvmStringStreamPositions stringPositions;
 
 	/**
-	 * {@code RontoStringInputStream(String)}, when a string input stream's position can
-	 * be asked ({@link FileMeta#stringInputPositions}).
+	 * {@code RontoStringInputStream(String)}: every string input stream is built
+	 * positioned, so {@code listen} answers uniformly.
 	 */
 	private final @Nullable MethodrefConstant stringInputStreamInit;
 
 	/** {@code RontoStringInputStream}, beside {@link #stringInputStreamInit}. */
 	private final @Nullable ClassConstant stringInputStreamClass;
+
+	/**
+	 * {@code RontoStringInputStream.hasRemaining()}, beside
+	 * {@link #stringInputStreamInit}.
+	 */
+	private final @Nullable MethodrefConstant stringInputHasRemaining;
 
 	/**
 	 * The positioned CHARACTER file streams ({@code runtime/RontoCharFileReader} /
@@ -696,10 +702,12 @@ final class JvmIoRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("setLength"), cp.addUtf8("(I)V")));
 		this.stringPositions = fileMeta.position() ? JvmStringStreamPositions.mint(cp, fileMeta.stringInputPositions(),
 				this.stringWriterClass, this.stringWriterGetBuffer) : null;
-		this.stringInputStreamClass = fileMeta.stringInputPositions()
+		this.stringInputStreamClass = fileMeta.stringInputs()
 				? cp.addClass(cp.addUtf8(JvmStringStreamPositions.STRING_INPUT_STREAM_CLASS)) : null;
 		this.stringInputStreamInit = this.stringInputStreamClass != null ? cp.addMethodref(this.stringInputStreamClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V"))) : null;
+		this.stringInputHasRemaining = this.stringInputStreamClass != null ? cp.addMethodref(
+				this.stringInputStreamClass, cp.addNameAndType(cp.addUtf8("hasRemaining"), cp.addUtf8("()Z"))) : null;
 		this.stringReaderClass = cp.addClass(cp.addUtf8("java/io/StringReader"));
 		this.stringReaderInit = cp.addMethodref(this.stringReaderClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
@@ -844,13 +852,19 @@ final class JvmIoRuntimeBuilder {
 	 * @param characterPosition whether {@code file-position} is called AND a character
 	 * file stream can be opened, so character streams open positioned
 	 * @param stringInputPositions whether {@code file-position} can be asked of a string
-	 * INPUT stream -- it is called and the program can make one -- so that stream is
-	 * built as the travelling {@code RontoStringInputStream}
+	 * INPUT stream -- it is called and the program can make one -- so the position
+	 * machinery knows the travelling {@code RontoStringInputStream}
+	 * @param stringInputs whether the program can make a string INPUT stream, which is
+	 * therefore always built as the travelling {@code RontoStringInputStream} (so
+	 * {@code listen} answers whether a character remains rather than
+	 * {@code BufferedReader.ready()}, uniformly whether or not the program names
+	 * {@code file-position})
 	 */
 	record FileMeta(boolean writeDate, boolean makeDirectories, boolean fileLength, boolean deleteFile,
-			boolean renameFile, boolean position, boolean characterPosition, boolean stringInputPositions) {
+			boolean renameFile, boolean position, boolean characterPosition, boolean stringInputPositions,
+			boolean stringInputs) {
 
-		static final FileMeta NONE = new FileMeta(false, false, false, false, false, false, false, false);
+		static final FileMeta NONE = new FileMeta(false, false, false, false, false, false, false, false, false);
 
 		/**
 		 * Whether the {@code _streamPaths} side table must be present: both
@@ -1624,6 +1638,32 @@ final class JvmIoRuntimeBuilder {
 			code.add(Opcode.GOTO);
 			emitU2(code, 0);
 			patchBranch(code, ifNotIoPos, code.size());
+		}
+		// if (entry instanceof RontoStringInputStream) return hasRemaining() ? "T" :
+		// null. A string input stream answers whether a character remains, not
+		// Reader.ready() (true until close): at the end, with nothing parked, there
+		// is nothing to listen to. Every string input is built positioned, so this
+		// never depends on whether the program names file-position; the
+		// unread-char cell rides ahead of this helper (the %unread-listen rewrite).
+		if (this.stringInputStreamClass != null && this.stringInputHasRemaining != null) {
+			code.add(Opcode.ALOAD_1);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.stringInputStreamClass.index());
+			int ifNotStringInputPos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_1);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.stringInputStreamClass.index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.stringInputHasRemaining.index());
+			gotoNils.add(code.size());
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			gotoTs.add(code.size());
+			code.add(Opcode.GOTO);
+			emitU2(code, 0);
+			patchBranch(code, ifNotStringInputPos, code.size());
 		}
 		// if (entry instanceof BufferedReader) return ready() ? "T" : null;
 		code.add(Opcode.ALOAD_1);
@@ -5174,8 +5214,9 @@ final class JvmIoRuntimeBuilder {
 		emitU2(code, this.stringSubstring.index());
 		code.add(Opcode.ASTORE_1);
 		if (this.stringInputStreamInit != null) {
-			// return _addStream(new RontoStringInputStream(content)) -- the reader that
-			// knows its position, where file-position can ask for it.
+			// return _addStream(new RontoStringInputStream(content)) -- the reader
+			// that knows its position and its remainder, which file-position and
+			// listen ask for.
 			code.add(Opcode.NEW);
 			emitU2(code, Objects.requireNonNull(this.stringInputStreamClass).index());
 			code.add(Opcode.DUP);

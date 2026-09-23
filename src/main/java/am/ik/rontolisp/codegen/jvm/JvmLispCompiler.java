@@ -164,8 +164,9 @@ public final class JvmLispCompiler implements LispCompiler {
 	private boolean needsIoStreamRuntime;
 
 	/**
-	 * Whether the program carries {@code runtime.RontoStringInputStream}: it asks
-	 * {@code file-position} and can make a string input stream.
+	 * Whether the program carries {@code runtime.RontoStringInputStream}: it can make a
+	 * string input stream, which is always built positioned (so {@code listen} answers
+	 * uniformly).
 	 */
 	private boolean needsStringInputRuntime;
 
@@ -3098,17 +3099,21 @@ public final class JvmLispCompiler implements LispCompiler {
 				programUsesSymbol(program, LispNames.FILE_POSITION)
 						&& LispMacroExpander.mayOpenCharacterFileStream(program),
 				// A string INPUT stream answers file-position only as the travelling
-				// RontoStringInputStream, so both facts gate it (and the class file).
+				// RontoStringInputStream, so both facts gate the position machinery
+				// (and the class file travels with any string input stream, below).
 				programUsesSymbol(program, LispNames.FILE_POSITION)
 						&& (programUsesSymbol(program, LispNames.WITH_INPUT_FROM_STRING)
 								|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM)
-								|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL)));
+								|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL)),
+				programUsesSymbol(program, LispNames.WITH_INPUT_FROM_STRING)
+						|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM)
+						|| programUsesSymbol(program, LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL));
 		this.needsCharFileRuntime = fileMeta.characterPosition();
 		// The BIDIRECTIONAL stream arm of _open, and with it the travelling
 		// RontoIoFileStream class file, ride the surface fact that the program can ask
 		// for one: every other artifact stays exactly one class file.
 		this.needsIoStreamRuntime = LispMacroExpander.opensBidirectionally(program);
-		this.needsStringInputRuntime = fileMeta.stringInputPositions();
+		this.needsStringInputRuntime = fileMeta.stringInputs();
 		List<JvmIoRuntimeBuilder.IoMethod> ioMethods = JvmIoRuntimeBuilder
 			.create(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue, stringLengthForIo,
 					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod, socketRuntime,

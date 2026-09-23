@@ -10756,6 +10756,30 @@ cases:
       ab
       "hello"
       llo
+  # listen answers whether a character remains on a string input stream (an
+  # unread character counts), and an echo stream echoes only what is read.
+  - name: listen-at-the-end-of-a-string-stream-and-echo-peek
+    source: |
+      (print (with-input-from-string (s "") (listen s)))
+      (print (with-input-from-string (s "x") (listen s)))
+      (print (with-input-from-string (s "x") (read-char s) (listen s)))
+      (print (with-input-from-string (s "x")
+               (read-char s)
+               (unread-char #\x s)
+               (not (not (listen s)))))
+      (let ((o (make-string-output-stream)))
+        (let ((es (make-echo-stream (make-string-input-stream "ab") o)))
+          (print (list (file-position o)
+                       (peek-char nil es nil)
+                       (file-position o)
+                       (read-char es)
+                       (get-output-stream-string o)))))
+    expected: |
+      NIL
+      T
+      NIL
+      T
+      (0 #\a 0 #\a "a")
   - name: sequence-and-alist-test-key-keywords
     source: |
       (print (assoc "b" '(("a" . 1) ("b" . 2)) :test #'string=))

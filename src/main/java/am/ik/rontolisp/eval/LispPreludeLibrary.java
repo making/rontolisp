@@ -1366,6 +1366,10 @@ public final class LispPreludeLibrary {
 				(defmethod rontolisp:stream-write-byte ((%es %echo-stream) %es-b)
 				  (write-byte %es-b (%echo-output %es))
 				  %es-b)
+				(defmethod rontolisp:stream-peek-char ((%es %echo-stream))
+				  ;; Only what is READ echoes: a peek looks at the input component
+				  ;; without writing, so the output stream's position does not move.
+				  (peek-char nil (%echo-input %es) nil :eof))
 				(defun make-echo-stream (input-stream output-stream)
 				  (if (input-stream-p input-stream)
 				      nil
