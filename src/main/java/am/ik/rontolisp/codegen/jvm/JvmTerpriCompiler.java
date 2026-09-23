@@ -18,10 +18,14 @@ final class JvmTerpriCompiler {
 		// *standard-output* (JvmStringStreamCompiler.streamArg).
 		am.ik.rontolisp.LispVal stream = JvmStringStreamCompiler.streamArg(ctx, args.size() > 1 ? args.get(1) : null);
 		if (stream != null) {
-			// (terpri stream): route a newline through _writeStr.
-			JvmEmitHelper.compileStringLiteral("\n", ctx);
+			// (terpri stream): the newline routes through _writeString -- NOT _writeStr,
+			// which the print family shares and which deliberately has no socket arm
+			// (see .kb/tcp-sockets.md); _writeString's own socket arm sends it out the
+			// socket. _writeString answers its string; terpri answers nil.
+			JvmEmitHelper.compileStringLiteral("\"\n\"", ctx);
 			JvmExprCompiler.compileExpr(stream, ctx, className);
-			JvmStringStreamCompiler.emitWriteStr(ctx, className);
+			JvmStringStreamCompiler.emitWriteString(ctx, className);
+			ctx.emit(Opcode.POP);
 			ctx.emit(Opcode.ACONST_NULL);
 			return;
 		}

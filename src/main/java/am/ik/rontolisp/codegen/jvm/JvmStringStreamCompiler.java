@@ -104,6 +104,19 @@ final class JvmStringStreamCompiler {
 	}
 
 	/**
+	 * Emits an {@code invokestatic _writeString(Object, Object) -> Object} call; the
+	 * caller must have pushed the quote-framed string value and the stream handle. The
+	 * write-string/terpri route: unlike {@link #emitWriteStr}, this helper carries the
+	 * socket arm (see .kb/tcp-sockets.md).
+	 */
+	static void emitWriteString(JvmLispCompiler.Ctx ctx, String className) {
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(methodRef(ctx, className, JvmIoRuntimeBuilder.WRITE_STRING_METHOD,
+				JvmIoRuntimeBuilder.WRITE_STRING_DESC)
+			.index());
+	}
+
+	/**
 	 * Compiles {@code (write-string str [stream])} via the {@code _writeString} helper.
 	 */
 	static void compileWriteString(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {

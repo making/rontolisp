@@ -12288,6 +12288,28 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void tcpTerpriOnSocket() {
+		// terpri carries the socket arm write-string and write-line already had: a
+		// bounded write-line lowers to write-string plus terpri, so a bounded
+		// write-line to a socket needs BOTH halves on the wire. terpri answers nil.
+		String program = """
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (write-string "a" client)
+				  (let ((ret (terpri client)))
+				    (let ((b1 (read-byte server))
+				          (b2 (read-byte server)))
+				      (close client)
+				      (close server)
+				      (close listener)
+				      (list ret b1 b2))))
+				""";
+		assertThat(eval(program).print()).isEqualTo("(NIL 97 10)");
+	}
+
+	@Test
 	void tcpReadCharAtPeerCloseHonoursTheEofArguments() {
 		// The socket read answers nil at peer close, and read-char turns that into the
 		// SAME eof contract a file stream gets: the 3-arg form yields the eof value,

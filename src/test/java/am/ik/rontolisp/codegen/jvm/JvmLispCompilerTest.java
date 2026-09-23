@@ -13806,6 +13806,28 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunTcpTerpriOnSocket() throws Exception {
+		// terpri carries the socket arm write-string and write-line already had: a
+		// bounded write-line lowers to write-string plus terpri, so a bounded
+		// write-line to a socket needs BOTH halves on the wire. Same answer as
+		// LispEvaluatorTest#tcpTerpriOnSocket; the _writeString route -- not
+		// _writeStr, which the print family shares -- is what grows the arm.
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (write-string "a" client)
+				  (print (terpri client))
+				  (print (read-byte server))
+				  (print (read-byte server))
+				  (close client)
+				  (close server)
+				  (close listener))
+				""")).isEqualTo("NIL\n97\n10");
+	}
+
+	@Test
 	void compileAndRunTcpReadCharAtPeerCloseHonoursTheEofArguments() throws Exception {
 		assertThat(compileAndRun("""
 				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))

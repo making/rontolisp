@@ -303,6 +303,22 @@ final class WasmSocketsRewrite {
 				return rewriteForm(bounded, asyncContext);
 			}
 		}
+		// (terpri [stream]) lowers onto write-string's dispatch: write-string owns the
+		// socket arm, and a terpri on a socket would otherwise reach the NATIVE terpri
+		// compiler and fd_write the newline past the preview 1 adapter's fd table. The
+		// progn restores the nil terpri answers (write-string answers its string). The
+		// stream-less form resolves through *standard-output* at the ORIGINAL call
+		// site, the same rule the write-string/write-line defaulting applies.
+		if (LispNames.TERPRI.equals(head) && (parts.size() == 1 || parts.size() == 2)) {
+			LispVal stream = parts.size() == 2 ? parts.get(1) : new LispSymbol(LispNames.STANDARD_OUTPUT_VAR);
+			return rewriteForm(
+					properList(
+							List.of(new LispSymbol(LispNames.PROGN),
+									properList(List.of(new LispSymbol(LispNames.WRITE_STRING),
+											new am.ik.rontolisp.LispString("\n"), stream)),
+									LispNil.INSTANCE)),
+					asyncContext);
+		}
 		// The eof-tolerant reads (2-3 args) and the sequence ops (bounded or not) take
 		// their own dispatch targets; reads promote in async context like the 1-arg
 		// reads, writes never do.

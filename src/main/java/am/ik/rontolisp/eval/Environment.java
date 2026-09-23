@@ -5136,7 +5136,14 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.TERPRI, new LispFunction(LispNames.TERPRI, args -> {
 			requireArgCountBetween(LispNames.TERPRI, args, 0, 1);
-			emitTo.accept("\n", args.isEmpty() ? null : args.get(0));
+			LispVal dest = resolveOutputDest.apply(args.isEmpty() ? null : args.get(0));
+			Socket socket = socketEntry.apply(dest);
+			if (socket != null) {
+				// The socket arm: the entry is a raw Socket, not a Writer.
+				SocketSupport.writeString(socket, "\n");
+				return LispNil.INSTANCE;
+			}
+			emitTo.accept("\n", dest);
 			return LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.WRITE_STRING, new LispFunction(LispNames.WRITE_STRING, args -> {

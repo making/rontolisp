@@ -92,6 +92,26 @@ class WasmSocketsRewriteTest {
 	}
 
 	@Test
+	void terpriLowersOntoTheWriteStringDispatchAndKeepsTheNilAnswer() {
+		// terpri has no dispatch defun of its own: it lowers onto write-string (which
+		// owns the socket arm), the same shared-lowering rule write-char follows. A
+		// terpri on a socket would otherwise reach the NATIVE terpri compiler and
+		// fd_write the newline past the preview 1 adapter's fd table. The progn
+		// restores the nil terpri answers (write-string answers its string); the
+		// stream-less form resolves through *standard-output* at the original call
+		// site, like the write-string/write-line defaulting.
+		assertThat(rewriteInDefun("(terpri s)")).contains("RONTOLISP::%IO-WRITE-STRING", "(PROGN")
+			.doesNotContain("(TERPRI ");
+		assertThat(rewriteInDefun("(terpri)")).contains("*STANDARD-OUTPUT*", "RONTOLISP::%IO-WRITE-STRING");
+		// Writes never promote to a future + await in async context.
+		assertThat(rewriteTopLevel("(terpri s)")).contains("RONTOLISP::%IO-WRITE-STRING")
+			.doesNotContain("RONTOLISP:AWAIT");
+		// An explicit nil keeps flowing through the dispatch defun's non-socket arm,
+		// whose designator rule answers stdout -- same as write-string's.
+		assertThat(rewriteInDefun("(terpri nil)")).contains("RONTOLISP::%IO-WRITE-STRING");
+	}
+
+	@Test
 	void anUnknownShapeIsLeftForThePublicNameToReport() {
 		// A non-literal keyword (or a stray positional argument) is NOT quietly routed
 		// somewhere: the call keeps its public head so the error names the built-in the

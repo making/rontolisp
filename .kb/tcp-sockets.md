@@ -7,7 +7,7 @@ ALREADY-CONNECTED handle — the cl+ssl shim's substrate), `tls-listen` (keystor
 
 They return bidirectional stream VALUES in the same handle space as file streams
 (`LispLayout.Kinds.SOCKET` / `:SOCKET-SERVER`, `.kb/read-load-streams.md`), so
-`read-line`/`write-line`/`write-string`/`write-char`/`read-char`/`read-byte`/`write-byte`/`close`
+`read-line`/`write-line`/`write-string`/`write-char`/`read-char`/`read-byte`/`write-byte`/`close`/`terpri`
 work on sockets on every backend. The print family to a socket is deliberately NOT part of that
 surface anywhere. Blocking and synchronous, except that on `--component` a read inside an ASYNC body
 is promoted to a real suspension point. Reads are byte-at-a-time on interpreter/JVM; the component
@@ -172,8 +172,10 @@ so fetch+tcp and serve+tcp compose in one component.
   `wasi:io` resource. The exotic shapes are load-bearing because of pass ORDER:
   `GrayStreamsLibrary.process` runs BEFORE this rewrite and re-spells every stream call site with
   EVERY optional argument filled in. Two shapes have no dispatch defun and are LOWERED inside the
-  rewrite onto `write-string` — `(write-char c [s])` and bounded
-  `(write-string s stream :start a :end b)` (`lowerWriteStringBounds`) — both had that lowering, but
+  rewrite onto `write-string` — `(write-char c [s])`, bounded
+  `(write-string s stream :start a :end b)` (`lowerWriteStringBounds`) and `(terpri [s])`
+  (wrapped in a progn so terpri keeps answering nil, the stream-less form defaulting to
+  `*standard-output*` at the original call site) — the first two had that lowering, but
   it ran at `WasmExprCompiler` time, AFTER this pass. An unrecognized shape is deliberately left
   UNREWRITTEN so the error names the built-in the program wrote.
 - **Two alternative dispatch providers; widening one without the other breaks every program on the
@@ -182,6 +184,11 @@ so fetch+tcp and serve+tcp compose in one component.
   without knowing which it got. `./mvnw test` does NOT catch it;
   `StdinLibraryTest#theTwoDispatchSplicesDefineTheSameNamesAndShapes` compares the two
   name -> (required/optional) maps.
+- **`terpri` on a socket carries the same arm** (measured 2026-09-23, all four): the
+  interpreter branches on `socketEntry` inside the `terpri` built-in, the JVM routes
+  through `_writeString` (`JvmTerpriCompiler` — NOT `_writeStr`, the print-family sink),
+  and the component lowers onto `%io-write-string`. It answers nil and puts one `0a` on
+  the wire; bounded `write-line`'s lowering (write-string + terpri) needs both halves.
 - **`write-string`/`write-char`/`read-char` on a socket are real on all four backends**, all
   treating socket I/O as BYTES — never through a `Reader`/decoder that would buffer ahead and swallow
   bytes a following `read-byte`/`read-line` owes the caller; an invalid lead byte stands alone as
