@@ -245,7 +245,7 @@ public final class JvmSourceCompiler {
 		// whatever thread it has -- 1 MiB for Maven's main thread on linux-x64 -- and the
 		// program's nesting must meet the ceiling the command line gives it
 		// (.kb/interpreter-stack.md).
-		return SizedThread.call("rontolisp-compile", RontoLispCli.WORKER_STACK_BYTES,
+		return SizedThread.call("rontolisp-compile", SizedThread.WORKER_STACK_BYTES,
 				() -> compileRecording(source, entryFile, onlyIfExported));
 	}
 

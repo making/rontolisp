@@ -113,6 +113,18 @@ class WideListStackTest {
 	}
 
 	@Test
+	void aCircularListEvaluatedAtRunTimeIsAnErrorTheProgramCanHandle() throws Exception {
+		Path file = this.dir.resolve("runtime-circular.lisp");
+		Files.writeString(file, """
+				(defvar *x* (list 1 2))
+				(setf (cddr *x*) *x*)
+				(print (handler-case (eval (list 'quote *x*)) (error () :caught)))
+				(print (handler-case (equal *x* (let ((y (list 1 2))) (setf (cddr y) y) y)) (error () :caught)))
+				""");
+		assertThat(runOnSmallStack(List.of(file.toString())).strip()).isEqualTo(":CAUGHT\n:CAUGHT");
+	}
+
+	@Test
 	void aLabelThatOnlySharesStructureStillReads() throws Exception {
 		Path file = this.dir.resolve("shared.lisp");
 		Files.writeString(file, "(defvar *s* '(#1=(a b) #1#))\n(print (eq (first *s*) (second *s*)))\n");

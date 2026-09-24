@@ -29,6 +29,22 @@ public final class LispTrees {
 	}
 
 	/**
+	 * A walk met a list whose tail leads back into itself. The recursive walks the loops
+	 * replaced overflowed the stack on one; a loop reports it instead of running without
+	 * end.
+	 */
+	public static final class CircularListException extends IllegalArgumentException {
+
+		private static final long serialVersionUID = 1L;
+
+		/** Reports a list whose tail leads back into itself. */
+		public CircularListException() {
+			super("a circular list cannot be walked: its tail leads back into itself");
+		}
+
+	}
+
+	/**
 	 * How one walked cell is put back together.
 	 */
 	@FunctionalInterface
@@ -82,6 +98,12 @@ public final class LispTrees {
 		List<LispVal> cars = new ArrayList<>();
 		LispVal node = form;
 		LispVal tail;
+		// Brent's cycle check: a cell remembered at every power of two is met again only
+		// on a spine that closes into itself, where the walk would otherwise collect
+		// cells until memory runs out.
+		LispCons remembered = null;
+		int power = 1;
+		int steps = 0;
 		while (true) {
 			LispVal stopped = stop.apply(node);
 			if (stopped != null) {
@@ -91,6 +113,14 @@ public final class LispTrees {
 			if (!(node instanceof LispCons cell)) {
 				tail = node;
 				break;
+			}
+			if (cell == remembered) {
+				throw new CircularListException();
+			}
+			if (++steps == power) {
+				remembered = cell;
+				power <<= 1;
+				steps = 0;
 			}
 			cells.add(cell);
 			cars.add(element.apply(cell.car()));

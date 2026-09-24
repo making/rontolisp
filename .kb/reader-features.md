@@ -245,6 +245,10 @@ Traps:
   replaces every reference by identity afterwards, so `#1=(A B . #1#)` is the circular list it
   says. `StructLiteralFolder` therefore carries the aggregates on the CURRENT PATH and returns a
   back edge unwalked -- it rebuilds what it changes, and a circular datum cannot be rebuilt.
+  In PROGRAM SOURCE a label that closes a list into its own TAIL is a read error
+  (`SourceLanguage.read`): the passes loop down the cdr and would never finish on one
+  ([interpreter-stack.md](interpreter-stack.md), "Depth is NESTING"). `read` at run time
+  still returns it.
 
 ## Tests
 ci-spec `reader-block-comments`, `reader-feature-conditionals`, `reader-per-backend-features`

@@ -13,7 +13,7 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * The CLI runs the whole command line -- the interpreter AND the compile path's front end
- * and backend -- on a thread of its own ({@code RontoLispCli.WORKER_STACK_BYTES}, 16 MiB,
+ * and backend -- on a thread of its own ({@code SizedThread.WORKER_STACK_BYTES}, 16 MiB,
  * .kb/interpreter-stack.md). A JUnit worker carries the JVM default, 1 MiB on linux-x64,
  * and how much of it a given depth costs depends on how warm the JIT is: a leg that
  * passes alone overflows when its class runs concurrently and meets the deep program

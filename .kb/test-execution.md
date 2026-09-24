@@ -258,7 +258,7 @@ Traps met doing it:
 ## In-process program work runs on the CLI's stack, not JUnit's
 
 The CLI runs the whole command line -- the interpreter AND the compile path's passes and
-backend -- on a thread of 16 MiB (`RontoLispCli`'s `WORKER_STACK_BYTES`,
+backend -- on a thread of 16 MiB (`SizedThread.WORKER_STACK_BYTES`,
 [interpreter-stack.md](interpreter-stack.md)). A JUnit worker carries the JVM default, 1 MiB
 on linux-x64, so a test that interprets or compiles IN PROCESS would measure the harness's
 ceiling instead of the product's. `testsupport/CliStack` runs a body on a thread of
@@ -285,11 +285,10 @@ and an interpreted frame is several times a compiled one. Measured on a fresh JV
 of the given size compiling that program through `JvmLispCompiler`: 256 KiB overflows in
 `PackageResolver.referencesRuntimePackageMutation` (~920 frames), 512 KiB in
 `UiopLibrary.collectSymbols` (~1,020), 1 MiB in `CompileTimeBoundp.scan` (~1,020), 2 MiB
-passes. Every one of them recurses on the cdr, so the depth is the LIST's LENGTH, not the
-program's nesting; `src/main/java` has ~216 such self-recursive `.cdr()` walks. Through the
-full front end (`JvmSourceCompiler`, what an embedder such as the Maven plugin calls on its own
-thread) at 1 MiB: 700 and 1,400 forms pass, 2,800 overflows (`JsonLibrary$Walker.rewrite`),
-20,000 overflows first in `AsdfRuntimeLibrary.referencesRuntime`.
+passes. Every one of them recursed on the cdr, so the depth was the LIST's LENGTH, not the
+program's nesting. Since 2026-09-24 those walks loop down the spine and an embedder compiles
+on the CLI's stack ([interpreter-stack.md](interpreter-stack.md), "Depth is NESTING");
+`WideListStackTest` compiles 50,000-element lists on 1 MiB.
 
 The evaluator's own per-form scans stay off that budget too: the typecase arm's uiop /
 asdf / geom name scans (`LispEvaluator#collectUiopNames`,

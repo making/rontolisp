@@ -20,6 +20,13 @@ import org.jspecify.annotations.Nullable;
  */
 final class SizedThread {
 
+	/**
+	 * The stack of the thread the CLI runs on, and an embedder's compile with it:
+	 * comfortably more than the 8 MiB the most generous platform gives the first thread,
+	 * since the interpreter's recursion depth is the program's.
+	 */
+	static final long WORKER_STACK_BYTES = 16L << 20;
+
 	private SizedThread() {
 	}
 
