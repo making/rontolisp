@@ -66,7 +66,7 @@ count (add a throwaway third permit, `./mvnw compile`), never count by hand.
   a boxed `Long 0` passes. Grep the ARITY of a member on this wire, never its name.
 - **The one width test that cannot be a compile error** is the NAME -> width direction: a new
   width's name is new source text, and no switch can demand it. It is now DERIVED, not
-  transcribed: `LispFloatArray.WIDTHS` holds one zero-length prototype per permit and
+  transcribed: `LispFloatArray.widths()` holds one zero-length prototype per permit and
   `LispFloatArray.prototypeFor` resolves a `:element-type` designator (quoted or bare,
   qualifier stripped) by matching the permits' own `elementType()` answers, so the name
   `make-array` accepts is by construction the name `array-element-type` reports back. Every

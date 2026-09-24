@@ -314,7 +314,7 @@ needed"). No `linalg:` acceleration seam takes it: `--simd`, `--blas` and `--gpu
   is why `.todo/488`'s fused kernels landed with `.kb` coverage and no `doc/` change.
 - Printing is `_bf16Print` over `FloatText.bfloat16Text`. A program that `read`s or defines a
   `print-object` method goes through `LispMacroExpander.printObjectVectorArm()`, whose
-  exclusions are DERIVED from `LispFloatArray.WIDTHS` per permit's own `elementType()` answer
+  exclusions are DERIVED from `LispFloatArray.widths()` per permit's own `elementType()` answer
   (2026-09-05) -- spelling them by hand is what let bfloat16 render as a general `#(...)` of
   widened doubles, found only in an `-o Prog.class` E2E.
 - **`read-sequence` / `write-sequence` move a bf16 array in ONE bulk transfer** of its STORED
