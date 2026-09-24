@@ -3,8 +3,10 @@ package am.ik.rontolisp.eval;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.Callable;
 
 import am.ik.rontolisp.BFloat16;
 import am.ik.rontolisp.LispBFloat16Array;
@@ -15,6 +17,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.QuantizedFormat;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.Concurrently;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -350,24 +353,35 @@ class QuantizedMatrixTest {
 
 	@Test
 	void theIntegerDotGemvIsTheDefunBitForBitAtEveryShapeAndWidth() {
+		// Sixty evaluators that share nothing, so they run at once; the six of each
+		// shape and width land at [6k, 6k + 6) in the order the assertions read them.
+		List<String> cases = new ArrayList<>();
+		List<Callable<String>> runs = new ArrayList<>();
 		for (String xType : new String[] { "single-float", "double-float" }) {
 			for (int[] shape : new int[][] { { 1, 32 }, { 3, 64 }, { 17, 256 }, { 64, 1024 }, { 300, 512 } }) {
 				String program = fixture(shape[0], shape[1], xType) + "(vec:matvec *m* *x*)";
-				String defun = eval(program, false, false).print();
-				assertThat(defun).startsWith(xType.equals("single-float") ? "#f(" : "#d(");
-				assertThat(eval(program, true, false).print()).as("--simd, %dx%d %s", shape[0], shape[1], xType)
-					.isEqualTo(defun);
-				assertThat(eval(program, true, true).print())
-					.as("--simd --parallel, %dx%d %s", shape[0], shape[1], xType)
-					.isEqualTo(defun);
 				String into = fixture(shape[0], shape[1], xType)
 						+ "(defparameter *out* (make-array %d :element-type '%s :initial-element 0.0))"
 							.formatted(shape[0], xType)
 						+ "(vec:matvec-into *out* *m* *x*)";
-				assertThat(eval(into, false, false).print()).isEqualTo(defun);
-				assertThat(eval(into, true, false).print()).as("-into --simd").isEqualTo(defun);
-				assertThat(eval(into, true, true).print()).as("-into --simd --parallel").isEqualTo(defun);
+				cases.add("%dx%d %s".formatted(shape[0], shape[1], xType));
+				for (String source : new String[] { program, into }) {
+					runs.add(() -> eval(source, false, false).print());
+					runs.add(() -> eval(source, true, false).print());
+					runs.add(() -> eval(source, true, true).print());
+				}
 			}
+		}
+		List<String> printed = Concurrently.all(runs);
+		for (int k = 0; k < cases.size(); k++) {
+			String name = cases.get(k);
+			String defun = printed.get(6 * k);
+			assertThat(defun).startsWith(name.endsWith("single-float") ? "#f(" : "#d(");
+			assertThat(printed.get(6 * k + 1)).as("--simd, %s", name).isEqualTo(defun);
+			assertThat(printed.get(6 * k + 2)).as("--simd --parallel, %s", name).isEqualTo(defun);
+			assertThat(printed.get(6 * k + 3)).as("-into, %s", name).isEqualTo(defun);
+			assertThat(printed.get(6 * k + 4)).as("-into --simd, %s", name).isEqualTo(defun);
+			assertThat(printed.get(6 * k + 5)).as("-into --simd --parallel, %s", name).isEqualTo(defun);
 		}
 	}
 

@@ -2,11 +2,17 @@ package am.ik.rontolisp.eval;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Callable;
 
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.Concurrently;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -22,10 +28,30 @@ import static org.assertj.core.api.Assertions.assertThatCode;
  * {@code am.ik.gpu.GpuDeclineTest} one layer down: that one pins that the LIBRARY answers
  * without throwing, this one pins that the INTERCEPTOR built on it changes nothing
  * observable.
+ *
+ * <p>
+ * Every evaluation builds its own evaluator, so the methods, the two runs of one program
+ * and the calls of one table all run at once: the class is the scalar defun over
+ * six-digit element counts, minutes when serial. The one shared thing is the DEVICE --
+ * {@code am.ik.gpu.DeviceResidency} is not thread-safe (.kb/gpu.md, "Threads") -- so
+ * where a device answered the probe, the flag-on runs still take it one at a time.
  */
+@Execution(ExecutionMode.CONCURRENT)
 class LinalgGpuDeclineTest {
 
+	/** Held by every flag-on evaluation on a machine with a device. */
+	private static final Object DEVICE = new Object();
+
 	private String eval(String input, boolean gpu) {
+		if (gpu && LinalgGpu.available()) {
+			synchronized (DEVICE) {
+				return evaluate(input, true);
+			}
+		}
+		return evaluate(input, gpu);
+	}
+
+	private static String evaluate(String input, boolean gpu) {
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
 		evaluator.setGpu(gpu);
 		LispVal result = LispNil.INSTANCE;
@@ -33,6 +59,16 @@ class LinalgGpuDeclineTest {
 			result = evaluator.eval(expr);
 		}
 		return result.print();
+	}
+
+	/** The program's print with the flag on and with it off, evaluated at once. */
+	private List<String> onAndOff(String program) {
+		return Concurrently.all(List.<Callable<String>>of(() -> eval(program, true), () -> eval(program, false)));
+	}
+
+	private void assertTheFlagChangesNothing(String program) {
+		List<String> both = onAndOff(program);
+		assertThat(both.get(0)).isEqualTo(both.get(1));
 	}
 
 	@Test
@@ -52,7 +88,7 @@ class LinalgGpuDeclineTest {
 				(defparameter *b* (linalg:reshape (linalg:arange 1 4097) '(64 64)))
 				(linalg:to-list (linalg:matmul *a* *b*))
 				""";
-		assertThat(eval(product, true)).isEqualTo(eval(product, false));
+		assertTheFlagChangesNothing(product);
 	}
 
 	@Test
@@ -63,7 +99,7 @@ class LinalgGpuDeclineTest {
 				(defparameter *a* (linalg:reshape (linalg:arange 1 65) '(8 8)))
 				(linalg:matmul *a* *a*)
 				""";
-		assertThat(eval(product, true)).isEqualTo(eval(product, false));
+		assertTheFlagChangesNothing(product);
 	}
 
 	@Test
@@ -84,7 +120,7 @@ class LinalgGpuDeclineTest {
 				      (linalg:shape (linalg:matmul *r4* *s4*))
 				      (linalg:sum (linalg:matmul *r4* *s4*)))
 				""";
-		assertThat(eval(stack, true)).isEqualTo(eval(stack, false));
+		assertTheFlagChangesNothing(stack);
 	}
 
 	@Test
@@ -109,7 +145,7 @@ class LinalgGpuDeclineTest {
 				      (linalg:sum (linalg::%la-matmul-nd-tb *r4* *s4*))
 				      (linalg:sum (linalg::%la-matmul-nd-ta *m* *m*)))
 				""";
-		assertThat(eval(transposed, true)).isEqualTo(eval(transposed, false));
+		assertTheFlagChangesNothing(transposed);
 	}
 
 	@Test
@@ -120,7 +156,7 @@ class LinalgGpuDeclineTest {
 				(defparameter *a* (linalg:reshape (linalg:arange 1 257) '(4 8 8)))
 				(linalg:sum (linalg:matmul *a* *a*))
 				""";
-		assertThat(eval(product, true)).isEqualTo(eval(product, false));
+		assertTheFlagChangesNothing(product);
 	}
 
 	@Test
@@ -133,7 +169,7 @@ class LinalgGpuDeclineTest {
 				(list (linalg:sum (linalg:erf *a*)) (linalg:sum (linalg:exp *a*))
 				      (linalg:sum (linalg:tanh *a*)) (linalg:sum (linalg:sin *a*)))
 				""";
-		assertThat(eval(program, true)).isEqualTo(eval(program, false));
+		assertTheFlagChangesNothing(program);
 	}
 
 	@Test
@@ -149,7 +185,7 @@ class LinalgGpuDeclineTest {
 				      (linalg:sum (linalg:negative *a*)) (linalg:sum (linalg:sign *a*))
 				      (linalg:sum (linalg:add *a* *b*)) (linalg:sum (linalg:mul *a* *b*)))
 				""";
-		assertThat(eval(program, true)).isEqualTo(eval(program, false));
+		assertTheFlagChangesNothing(program);
 	}
 
 	@Test
@@ -176,7 +212,7 @@ class LinalgGpuDeclineTest {
 				      (linalg:sum (linalg:transpose *x* '(1 0)))
 				      (linalg:sum (linalg:var *x* :axis 1 :keepdims t)))
 				""";
-		assertThat(eval(program, true)).isEqualTo(eval(program, false));
+		assertTheFlagChangesNothing(program);
 	}
 
 	@Test
@@ -195,7 +231,7 @@ class LinalgGpuDeclineTest {
 				      (linalg:sum (linalg:mul *a* *b*)) (linalg:sum (linalg:div *a* *b*))
 				      (linalg:sum (linalg:maximum *a* *b*)) (linalg:sum (linalg:minimum *a* *b*)))
 				""";
-		assertThat(eval(program, true)).isEqualTo(eval(program, false));
+		assertTheFlagChangesNothing(program);
 	}
 
 	@Test
@@ -210,7 +246,7 @@ class LinalgGpuDeclineTest {
 				      (linalg:to-list (linalg:flatten (linalg:sum *x* :axis 1 :keepdims t)))
 				      (linalg:sum (linalg:transpose *x* '(1 0))))
 				""";
-		assertThat(eval(program, true)).isEqualTo(eval(program, false));
+		assertTheFlagChangesNothing(program);
 	}
 
 	@Test
@@ -226,8 +262,9 @@ class LinalgGpuDeclineTest {
 				(defparameter *a* (linalg:linspace -3.0 3.0 20000))
 				(linalg:to-list (linalg:erf *a*))
 				""";
-		double[] accelerated = doubles(eval(program, true));
-		double[] oracle = doubles(eval(program, false));
+		List<String> both = onAndOff(program);
+		double[] accelerated = doubles(both.get(0));
+		double[] oracle = doubles(both.get(1));
 		assertThat(accelerated).hasSameSizeAs(oracle);
 		for (int i = 0; i < oracle.length; i++) {
 			if (oracle[i] != 0) {
@@ -251,15 +288,22 @@ class LinalgGpuDeclineTest {
 				(defparameter *w* (linalg:linspace 0.5 1.5 384))
 				(defparameter *b* (linalg:linspace -0.3 0.3 384))
 				""";
-		for (String call : new String[] { "(linalg::%la-layer-norm *x* 1.0e-5)",
-				"(linalg::%la-layer-norm-grad *g* *x* 1.0e-5 *g*)", "(linalg::%la-softmax-grad *g* *x* -1)",
+		String[] calls = { "(linalg::%la-layer-norm *x* 1.0e-5)", "(linalg::%la-layer-norm-grad *g* *x* 1.0e-5 *g*)",
+				"(linalg::%la-softmax-grad *g* *x* -1)",
 				// Layer-norm's affine and its two-array adjoint (todo-634).
 				"(linalg::%la-layer-norm-affine *x* *w* *b* 1.0e-5)",
 				"(linalg::%la-layer-norm-affine-grad *g* *x* *w* 1.0e-5 nil)",
 				"(linalg::%la-layer-norm-affine-grad *g* *x* *w* 1.0e-5 *g*)",
 				"(linalg::%la-scaled-masked-softmax-grad *g* *x* -1 8.0 (linalg:greater (linalg:arange 384) 200.0))",
-				"(linalg:seed 9) (linalg::%la-dropout-mask '(384 384) 0.25 (linalg::%la-rng-state) 1)" }) {
-			assertThat(eval(operands + call, true)).as(call).isEqualTo(eval(operands + call, false));
+				"(linalg:seed 9) (linalg::%la-dropout-mask '(384 384) 0.25 (linalg::%la-rng-state) 1)" };
+		List<Callable<String>> runs = new ArrayList<>();
+		for (String call : calls) {
+			runs.add(() -> eval(operands + call, true));
+			runs.add(() -> eval(operands + call, false));
+		}
+		List<String> printed = Concurrently.all(runs);
+		for (int i = 0; i < calls.length; i++) {
+			assertThat(printed.get(2 * i)).as(calls[i]).isEqualTo(printed.get(2 * i + 1));
 		}
 	}
 
@@ -324,7 +368,7 @@ class LinalgGpuDeclineTest {
 				      (linalg:to-list (linalg:add *a* *a*))
 				      (linalg:to-list (linalg:outer (linalg:arange 1 4) (linalg:arange 1 4))))
 				""";
-		assertThat(eval(program, true)).isEqualTo(eval(program, false));
+		assertTheFlagChangesNothing(program);
 	}
 
 }

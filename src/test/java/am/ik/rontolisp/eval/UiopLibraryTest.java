@@ -1,5 +1,6 @@
 package am.ik.rontolisp.eval;
 
+import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -11,6 +12,7 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class UiopLibraryTest {
 
@@ -187,6 +189,25 @@ class UiopLibraryTest {
 			}
 		}
 		assertThat(names).contains("UIOP/PATHNAME:MERGE-PATHNAMES*", "MERGE-PATHNAMES", "%PATH-NS");
+	}
+
+	@Test
+	void aNameLookupAllocatesNothing() {
+		// The interpreter asks definesName on EVERY setf evaluation (the uiop place
+		// trigger, re-run because setf re-expands per evaluation), so the lookup is on
+		// the hottest loop a linalg defun has: (setf (aref out i) x). It used to join the
+		// feature names into a cache key per call -- measured 8% of an interpreted
+		// linalg:arange. An allocation budget pins the fix without a timing.
+		com.sun.management.ThreadMXBean threads = (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
+		assumeTrue(threads.isThreadAllocatedMemorySupported() && threads.isThreadAllocatedMemoryEnabled());
+		boolean seen = UiopLibrary.definesName("AREF");
+		long before = threads.getCurrentThreadAllocatedBytes();
+		for (int i = 0; i < 100_000; i++) {
+			seen |= UiopLibrary.definesName("AREF");
+		}
+		long allocated = threads.getCurrentThreadAllocatedBytes() - before;
+		assertThat(seen).isFalse();
+		assertThat(allocated).as("bytes allocated by 100000 lookups").isLessThan(1_000_000);
 	}
 
 }
