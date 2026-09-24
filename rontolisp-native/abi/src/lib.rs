@@ -23,7 +23,7 @@ macro_rules! wasmtime_version {
 macro_rules! fingerprint {
     () => {
         concat!(
-            "rlnative-abi=1;wasmtime=",
+            "rlnative-abi=2;wasmtime=",
             $crate::wasmtime_version!(),
             ";wasm=gc,function-references,exceptions,tail-call;collector=copying"
         )

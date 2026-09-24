@@ -47,9 +47,9 @@ class NativeExecutableTest {
 
 	@Test
 	void theStubFingerprintIsReadUpToItsNul() {
-		byte[] stub = concat(ascii("\u007fELF..."), ascii("RLNATIVE-FINGERPRINT=rlnative-abi=1;wasmtime=49.0.0"),
+		byte[] stub = concat(ascii("\u007fELF..."), ascii("RLNATIVE-FINGERPRINT=rlnative-abi=2;wasmtime=49.0.0"),
 				new byte[] { 0 }, ascii("rest"));
-		assertThat(NativeExecutable.stubFingerprints(stub)).containsExactly("rlnative-abi=1;wasmtime=49.0.0");
+		assertThat(NativeExecutable.stubFingerprints(stub)).containsExactly("rlnative-abi=2;wasmtime=49.0.0");
 	}
 
 	@Test

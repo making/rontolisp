@@ -192,7 +192,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [linalg-blas.md](linalg-blas.md) -- `--blas`: the matrix product on a tuned CBLAS from the OS
 - [simd-parallel.md](simd-parallel.md) -- `--parallel` over the `--simd` matrix products
 - [gpu.md](gpu.md) -- `--gpu` and `am.ik.gpu`, the never-throwing declining device layer
-- [native-output.md](native-output.md) -- `--native -o prog`: the wasmtime precompile shim and the runner stub (`rontolisp-native/`) and the Java side that loads, checks and assembles them (`cli/NativeToolchain`, `cli/NativeExecutable`); the one shared engine config, the fingerprint, the payload trailer, the resource layout and cache, the refusals, the separate-build trap, the numbers
+- [native-output.md](native-output.md) -- `--native -o prog`: the wasmtime precompile shim and the runner stub (`rontolisp-native/`) and the Java side that loads, checks and assembles them (`cli/NativeToolchain`, `cli/NativeExecutable`); the one shared engine config, the fingerprint, the payload trailer, the resource layout and cache, the refusals, the separate-build trap, the CPU baseline and `--native-target` (and why SSE2 / Armv8.0 cost nothing), the numbers
 - [native-downcalls.md](native-downcalls.md) -- `src/native/java`: the binary's downcalls through SubstrateVM's AOT route instead of the interpreted FFM handle; what took it (`--blas`) and what was measured not to (`--gpu`, objc)
 - [vec.md](vec.md) -- the `vec` package, the packed float-array type, and its `--simd`/`--no-gc` acceleration layers
 - [quantized-matrix.md](quantized-matrix.md) -- `rontolisp:quantized-matrix`: ggml's Q8_0 held verbatim, and the integer-dot GEMV that is the defun bit for bit

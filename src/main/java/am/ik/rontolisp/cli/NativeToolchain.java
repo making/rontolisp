@@ -19,14 +19,17 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.jspecify.annotations.Nullable;
 
 /**
- * The two native halves of {@code --native} for the host: the precompile shim
- * ({@code librlprecomp}, wasmtime + Cranelift behind a C ABI, called here through FFM)
- * and the runner stub every output starts with. Both are classpath resources under
- * {@code am/ik/rontolisp/native/<os>-<arch>/}, laid out by
+ * The two native halves of {@code --native}: the host's precompile shim
+ * ({@code librlprecomp}, wasmtime + Cranelift behind a C ABI, called here through FFM),
+ * which precompiles for any {@link NativeTarget}, and the runner stub every output starts
+ * with -- the target platform's, which need not be the host's. Both are classpath
+ * resources under {@code am/ik/rontolisp/native/<os>-<arch>/}, laid out by
  * {@code rontolisp-native/build.sh} (.kb/native-output.md).
  *
  * <p>
@@ -48,9 +51,12 @@ final class NativeToolchain {
 	/** The system property that overrides the extraction cache. */
 	static final String CACHE_PROPERTY = "rontolisp.native.cache";
 
-	/** {@code int32_t rl_precompile(const uint8_t*, size_t, uint8_t**, size_t*)}. */
+	/**
+	 * {@code int32_t rl_precompile(const uint8_t *wasm, size_t len, const char *platform,
+	 * const char *cpu, uint8_t **out, size_t *out_len)}.
+	 */
 	static final FunctionDescriptor PRECOMPILE = FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
-			ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.ADDRESS);
+			ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS);
 
 	/** {@code void rl_free(uint8_t*, size_t)}. */
 	static final FunctionDescriptor FREE = FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.JAVA_LONG);
@@ -61,16 +67,26 @@ final class NativeToolchain {
 	/** Every shape this class asks the linker for, for the native-image metadata test. */
 	static final List<FunctionDescriptor> DOWNCALLS = List.of(PRECOMPILE, FREE, VERSION);
 
+	/** The C ABI revision this class calls, the first field of the shim's fingerprint. */
+	static final String ABI = "rlnative-abi=2";
+
+	/** {@code (module)}: what {@link #check} precompiles to try a target. */
+	private static final byte[] EMPTY_MODULE = { 0, 'a', 's', 'm', 1, 0, 0, 0 };
+
 	private static @Nullable NativeToolchain loaded;
 
-	private final byte[] stub;
+	/** The shim's engine fingerprint, which every stub it is paired with must carry. */
+	private final String fingerprint;
+
+	/** Runner stubs by platform, each checked against {@link #fingerprint}. */
+	private final Map<String, byte[]> stubs = new ConcurrentHashMap<>();
 
 	private final MethodHandle precompile;
 
 	private final MethodHandle free;
 
-	private NativeToolchain(byte[] stub, MethodHandle precompile, MethodHandle free) {
-		this.stub = stub;
+	private NativeToolchain(String fingerprint, MethodHandle precompile, MethodHandle free) {
+		this.fingerprint = fingerprint;
 		this.precompile = precompile;
 		this.free = free;
 	}
@@ -104,37 +120,101 @@ final class NativeToolchain {
 				&& loader.getResource(RESOURCE_ROOT + platform + "/rlrun") != null;
 	}
 
-	/** The runner stub's bytes; an output starts with them. */
-	byte[] stub() {
-		return this.stub;
+	/**
+	 * The runner stub of {@code platform}; an output for it starts with these bytes.
+	 * @param platform one of {@link NativeTarget#PLATFORMS}
+	 * @return the stub's bytes
+	 * @throws UnsupportedOperationException when this build carries no stub for it
+	 * @throws IllegalStateException when the stub was built for another engine than the
+	 * shim precompiles for
+	 */
+	byte[] stub(String platform) {
+		return this.stubs.computeIfAbsent(platform, this::loadStub);
+	}
+
+	private byte[] loadStub(String platform) {
+		byte[] stub = resource(platform + "/rlrun");
+		if (stub == null) {
+			List<String> carried = NativeTarget.PLATFORMS.stream()
+				.filter(p -> NativeToolchain.class.getClassLoader().getResource(RESOURCE_ROOT + p + "/rlrun") != null)
+				.toList();
+			throw new UnsupportedOperationException("--native-target " + platform
+					+ ": this build of rontolisp carries no runner stub for it (it carries "
+					+ (carried.isEmpty() ? "none" : String.join(", ", carried))
+					+ "); `rontolisp-native/build.sh --stub " + platform + "` builds it on that platform");
+		}
+		// A module precompiled for one engine is refused by any other at start-up, so a
+		// mismatched pair would write outputs that never run: refuse before writing one.
+		List<String> fingerprints = NativeExecutable.stubFingerprints(stub);
+		if (!fingerprints.contains(this.fingerprint)) {
+			throw new IllegalStateException("--native: the runner stub for " + platform + " was built for "
+					+ (fingerprints.isEmpty() ? "an unknown engine (no RLNATIVE-FINGERPRINT marker)"
+							: fingerprints.getFirst())
+					+ " but the precompile shim for " + this.fingerprint
+					+ "; rebuild both with rontolisp-native/build.sh");
+		}
+		return stub;
 	}
 
 	/**
-	 * Precompiles a Preview 1 module for the engine the stub runs.
+	 * Checks that an output for {@code target} can be written -- its platform's stub is
+	 * here and pairs with the shim, and the shim knows its CPU level -- before any work
+	 * is done for it.
+	 * @param target the output's platform and CPU level
+	 * @throws UnsupportedOperationException when this build carries no stub for the
+	 * platform
+	 * @throws IllegalArgumentException when the shim refuses the CPU level for it
+	 */
+	void check(NativeTarget target) {
+		Precompiled trial = call(EMPTY_MODULE, target);
+		if (trial.rc() != 0) {
+			throw new IllegalArgumentException("--native: " + trial.text());
+		}
+		stub(target.platform());
+	}
+
+	/**
+	 * Precompiles a Preview 1 module for the engine the stub runs, on {@code target}.
 	 * @param wasm the wasm-GC backend's module
+	 * @param target the output's platform and CPU level
 	 * @return the precompiled module
 	 * @throws IllegalStateException when wasmtime refuses the module
 	 */
-	byte[] precompile(byte[] wasm) {
+	byte[] precompile(byte[] wasm, NativeTarget target) {
+		Precompiled result = call(wasm, target);
+		if (result.rc() != 0) {
+			throw new IllegalStateException("--native: wasmtime could not precompile the module: " + result.text());
+		}
+		return result.bytes();
+	}
+
+	/**
+	 * What {@code rl_precompile} answered: 0 and the module, or an error and its message.
+	 */
+	private record Precompiled(int rc, byte[] bytes) {
+
+		String text() {
+			return new String(this.bytes, StandardCharsets.UTF_8);
+		}
+
+	}
+
+	private Precompiled call(byte[] wasm, NativeTarget target) {
 		try (Arena arena = Arena.ofConfined()) {
 			MemorySegment in = arena.allocateFrom(ValueLayout.JAVA_BYTE, wasm);
+			MemorySegment platform = arena.allocateFrom(target.platform());
+			MemorySegment cpu = arena.allocateFrom(target.cpu());
 			MemorySegment outPointer = arena.allocate(ValueLayout.ADDRESS);
 			MemorySegment outLength = arena.allocate(ValueLayout.JAVA_LONG);
-			int rc = (int) this.precompile.invokeExact(in, (long) wasm.length, outPointer, outLength);
+			int rc = (int) this.precompile.invokeExact(in, (long) wasm.length, platform, cpu, outPointer, outLength);
 			long length = outLength.get(ValueLayout.JAVA_LONG, 0);
 			MemorySegment result = outPointer.get(ValueLayout.ADDRESS, 0).reinterpret(length);
-			byte[] bytes;
 			try {
-				bytes = result.toArray(ValueLayout.JAVA_BYTE);
+				return new Precompiled(rc, result.toArray(ValueLayout.JAVA_BYTE));
 			}
 			finally {
 				this.free.invokeExact(result, length);
 			}
-			if (rc != 0) {
-				throw new IllegalStateException("--native: wasmtime could not precompile the module: "
-						+ new String(bytes, StandardCharsets.UTF_8));
-			}
-			return bytes;
 		}
 		catch (RuntimeException | Error ex) {
 			throw ex;
@@ -145,9 +225,9 @@ final class NativeToolchain {
 	}
 
 	/**
-	 * Loads the pair for {@code platform}: reads both resources, extracts the shim under
-	 * {@code cacheRoot}, binds it and checks that it precompiles for the engine the stub
-	 * runs.
+	 * Loads the pair for {@code platform}, the host's: reads both resources, extracts the
+	 * shim under {@code cacheRoot}, binds it and checks that it precompiles for the
+	 * engine the stub runs.
 	 */
 	static NativeToolchain open(@Nullable String platform, Path cacheRoot) {
 		if (platform == null) {
@@ -156,8 +236,8 @@ final class NativeToolchain {
 		}
 		String shimName = shimName(platform);
 		byte[] shim = resource(platform + "/" + shimName);
-		byte[] stub = resource(platform + "/rlrun");
-		if (shim == null || stub == null) {
+		if (shim == null
+				|| NativeToolchain.class.getClassLoader().getResource(RESOURCE_ROOT + platform + "/rlrun") == null) {
 			throw new UnsupportedOperationException("--native is not available for " + platform
 					+ ": this build of rontolisp carries no precompile shim and runner stub for it"
 					+ " (rontolisp-native/build.sh builds them)");
@@ -178,15 +258,16 @@ final class NativeToolchain {
 		catch (Throwable ex) {
 			throw new IllegalStateException("--native: rl_version failed", ex);
 		}
-		// A module precompiled for one engine is refused by any other at start-up, so a
-		// mismatched pair would write outputs that never run: refuse before writing one.
-		List<String> carried = NativeExecutable.stubFingerprints(stub);
-		if (!carried.contains(fingerprint)) {
-			throw new IllegalStateException("--native: the runner stub for " + platform + " was built for "
-					+ (carried.isEmpty() ? "an unknown engine (no RLNATIVE-FINGERPRINT marker)" : carried.getFirst())
-					+ " but the precompile shim for " + fingerprint + "; rebuild both with rontolisp-native/build.sh");
+		// The C ABI's revision leads the fingerprint: rl_precompile of another revision
+		// takes
+		// other arguments, so calling it would write through them.
+		if (!fingerprint.startsWith(ABI + ";")) {
+			throw new IllegalStateException("--native: the precompile shim for " + platform + " speaks " + fingerprint
+					+ ", this rontolisp " + ABI + "; rebuild it with rontolisp-native/build.sh");
 		}
-		return new NativeToolchain(stub, precompile, free);
+		NativeToolchain toolchain = new NativeToolchain(fingerprint, precompile, free);
+		toolchain.stub(platform);
+		return toolchain;
 	}
 
 	private static MemorySegment find(SymbolLookup lookup, String name) {
@@ -195,7 +276,7 @@ final class NativeToolchain {
 	}
 
 	private static @Nullable String hostPlatform() {
-		return NativeExecutable.platform(System.getProperty("os.name", ""), System.getProperty("os.arch", ""));
+		return NativeTarget.hostPlatform();
 	}
 
 	private static String shimName(String platform) {

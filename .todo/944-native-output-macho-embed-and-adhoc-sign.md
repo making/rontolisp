@@ -20,3 +20,9 @@ to build on, and any distribution or notarization path needs a valid signature.
 - The runner reads the payload from its section instead of the file tail (no
   self-`read` of the whole executable).
 - Test: `codesign -v --strict` passes on the output (skipped off macOS); the output runs.
+
+## Note from 946 (2026-09-24)
+
+`--native-target macos-aarch64` now writes a macOS output on Linux too (the release binary
+and jar carry the macOS stub), so the signature cannot come from `codesign` on the
+compiling host: the pure-Java signer above is the only path that covers it.

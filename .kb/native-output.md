@@ -13,10 +13,14 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
 
 ## The two halves
 
-- **Shim** `librlprecomp.{so,dylib}`: `rl_precompile(wasm, len, &out, &out_len) -> i32`
-  (0 = module, 1 = compile error, 2 = caught panic; `*out` holds the module or the UTF-8
-  message either way), `rl_free(out, out_len)`, `rl_version() -> const char*` (static
-  `FINGERPRINT`). Features `cranelift` + `parallel-compilation`. The release profile keeps
+- **Shim** `librlprecomp.{so,dylib}`: `rl_precompile(wasm, len, platform, cpu, &out, &out_len) -> i32`
+  (`platform`, `cpu`: NUL-terminated, see "CPU baseline and cross-targets"; 0 = module,
+  1 = compile error -- an unknown platform or CPU level included --, 2 = caught panic;
+  `*out` holds the module or the UTF-8 message either way), `rl_free(out, out_len)`,
+  `rl_version() -> const char*` (static `FINGERPRINT`). Features `cranelift` +
+  `parallel-compilation`, plus Cranelift's `x86` and `arm64` backends through a direct
+  `cranelift-codegen` dependency whose features unify into wasmtime's (its version moves
+  with the wasmtime pin). The release profile keeps
   `panic = unwind` and `rl_precompile` catches at the boundary: it runs inside a JVM.
   `install_name @rpath/librlprecomp.dylib` / `soname librlprecomp.so` via `precomp/build.rs`.
 - **Stub** `rlrun`: runtime-only wasmtime (`runtime std gc gc-copying`, no Cranelift) +
@@ -34,10 +38,12 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   resolves it through `/`. Exit: the
   `proc_exit` code, 0 on return, **134 after a trap** (what `wasmtime run` answers on Unix,
   `Error: <trap>` on stderr), 1 when the module cannot load (no trailer, refused engine).
-- **Fingerprint** `rlnative-abi=1;wasmtime=49.0.0;wasm=gc,function-references,exceptions,tail-call;collector=copying`.
+- **Fingerprint** `rlnative-abi=2;wasmtime=49.0.0;wasm=gc,function-references,exceptions,tail-call;collector=copying`.
   The stub carries `RLNATIVE-FINGERPRINT=<fingerprint>\0` in its read-only data (kept by a
   `black_box` in `main`); the assembler scans the stub for it and compares with
-  `rl_version()`. Bump `rlnative-abi` when the trailer or the C ABI changes; edit the
+  `rl_version()`. Bump `rlnative-abi` when the trailer or the C ABI changes (2: `platform`
+  and `cpu` joined `rl_precompile`, 2026-09-24), together with `NativeToolchain.ABI`, which
+  refuses a shim of another revision before calling it; edit the
   fingerprint together with `rlabi::config`.
 
 ## The Java side (`--native -o prog`)
@@ -45,9 +51,12 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
 `RontoLispCli.compileRecorded`: `refuseNativeConflicts` first (`--component`, `--no-wasi`,
 `--no-gc`, `--host-random`, `--host-fetch`, `--host-boundary`, `--reentrant`,
 `--emit-js-glue`, and an `-o` ending in `.wasm`/`.class`/`.jar`/`.war`), then
-`NativeToolchain.load()` so a host without a shim fails before the front end runs. The
-module is the ordinary wasm-GC Preview 1 path (`wasmOutput` = `--native` or `.wasm`);
-only the write differs: `NativeExecutable.assemble(stub, precompile(wasm))`, written to a
+`NativeToolchain.load().check(target)` -- the host's shim, a trial precompile of the empty
+module for the `NativeTarget` (`--native-target`, `--native-cpu`) and the target's stub --
+so a host without a shim, an unknown CPU level or a platform without a stub fails before
+the front end runs. The module is the ordinary wasm-GC Preview 1 path (`wasmOutput` =
+`--native` or `.wasm`); only the write differs:
+`NativeExecutable.assemble(stub(platform), precompile(wasm, target))`, written to a
 temp file beside `-o`, chmod 0755, atomically moved over it (writing in place fails with
 ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches disk.
 
@@ -59,16 +68,25 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   `false`, `true` under `-Pnative`) builds the pair when `cargo` is on `PATH` or in
   `~/.cargo/bin`, else warns and goes on; `required` (CI) fails unless the host's pair is
   there afterwards and, on Linux, its stub is static. A static link that fails (no `libc.a`)
-  falls back to a dynamic stub with a warning, except under `required`.
+  falls back to a dynamic stub with a warning, except under `required`. "Static" is read
+  from the ELF program headers (no `PT_INTERP`, `build.sh --is-static`), never from `ldd`:
+  ldd calls any foreign-architecture file "not a dynamic executable" and, on the aarch64
+  runner, reported the static-pie stub as dynamic (CI run 36008491295, 2026-09-24).
+  `build-sh-test.sh` (run by `--test`) pins the check on known static/dynamic executables.
 - **Packaging** (decided 2026-09-24 from the sizes below): each `-Pnative` binary carries its
-  HOST pair only (it is per-platform already); the release exec jar carries all three
-  release platforms (~11.4 MB compressed; 8.1 MB jar -> ~19.5 MB), so `java -jar` compiles
-  `--native` on any of them; the Maven Central jar (the `deploy` job) carries none. CI
-  (`ci.yaml`): each `native-image` leg builds its pair through `-Pnative
-  -Drontolisp.native.required=true`, runs `build.sh --test`, runs `NativeOutputE2eTest` and
-  `NativeToolchainTest` against the binary (`-Drontolisp.binary`; `required` turns their
-  skips into failures) and uploads `native-shims-<platform>`; `release` merges the three
-  into `rontolisp-native/target/resources` and checks the exec jar lists each `rlrun`.
+  HOST pair plus the other two release platforms' STUBS (for `--native-target`; +4.1 MB on
+  linux-x86_64, +5.4 MB on macOS, uncompressed as native-image stores resources, against a
+  ~102 MB binary); the release exec jar carries all three pairs (~11.4 MB compressed; 8.1 MB
+  jar -> ~19.5 MB), so `java -jar` compiles `--native` on any of them; the Maven Central jar
+  (the `deploy` job) carries none. CI (`ci.yaml`): `native-stubs` (not on pull requests)
+  builds each platform's stub (`build.sh --stub <platform>`); each `native-image` leg
+  downloads them into `rontolisp-native/target/resources`, builds its pair through
+  `-Pnative -Drontolisp.native.required=true`, runs `build.sh --test` (with qemu user mode
+  on Linux, `RLNATIVE_REQUIRE_QEMU=1`), runs `NativeOutputE2eTest` and `NativeToolchainTest`
+  against the binary (`-Drontolisp.binary`; `required` turns their skips into failures)
+  and uploads `native-shims-<platform>`; `release` merges them into
+  `rontolisp-native/target/resources` and checks the exec jar lists each `rlrun`. A pull
+  request's binary carries its own pair only; its cross-target tests skip.
 - **Cache**: `dlopen` needs a file. The shim is extracted to
   `<cache>/native/<sha256 16 hex>/<lib>` via temp file + atomic move; a file of the right
   size there is reused. `<cache>` = `-Drontolisp.native.cache`, else an absolute
@@ -82,10 +100,11 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   `NativeToolchainTest`; `resource-config.json` includes `am/ik/rontolisp/native/.*` when
   `NativeToolchain` is reachable. `-Pweb` never reaches `cli`.
 - **Tests**: `NativeExecutableTest` (layout, marker scan, write), `NativeToolchainTest`,
-  `RontoLispCliTest.nativeRefuses...`, and `NativeOutputE2eTest` (a ci-spec slice + argv,
-  and a trap's exit status, diffed against `wasmtime run --dir . --dir /tmp`; and a `../`
-  read from a subdirectory, which wasmtime refuses), which skips
-  without wasmtime on `PATH` or without the host's resources.
+  `RontoLispCliTest.nativeRefuses...` / `nativeTargetAndCpu...`, and `NativeOutputE2eTest`
+  (a ci-spec slice + argv, and a trap's exit status, diffed against
+  `wasmtime run --dir . --dir /tmp`; a `../` read from a subdirectory, which wasmtime
+  refuses; the baseline and cross-target runs under qemu), which skips without wasmtime or
+  qemu on `PATH` or without the resources it needs.
 
 ## Traps
 
@@ -112,7 +131,9 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
 - **ETXTBSY in a multi-threaded test**: exec of a just-written output fails while another
   thread's fork still holds the write descriptor (until that child's exec). `stub.rs`
   retries the spawn; a Java E2E that writes and runs outputs in parallel needs the same.
-- **CPU features**: the shim targets the HOST CPU; an output may not run on an older one.
+- **An explicit target turns host detection off.** `Config::target` set (even to the host's
+  triple) makes Cranelift start from no ISA flags; unset, it infers the host's. `host` is the
+  only CPU level that leaves it unset, so it is refused for another platform.
 - **musl is slower, not smaller-and-equal**: a musl stub (2.12 MB) ran `gc.lisp` at 14.0-14.3
   G user cycles against 12.2-12.5 for glibc, dynamic or static (+13-15%, same instruction
   count, pinned to one core, 2026-09-24, Xeon E5-2697A v4). It is the string functions:
@@ -120,6 +141,43 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   musl stub with mimalloc stayed at 14.0. Static glibc costs size instead (+0.98 MB on
   x86_64); a musl stub with its own `memmove`/`memcpy`/`memset` could have both, at the
   price of owning those routines (`.todo/956`).
+
+## CPU baseline and cross-targets
+
+`rlprecomp::PLATFORMS` owns both: `linux-x86_64`, `linux-aarch64`, `macos-aarch64`,
+`macos-x86_64` (no release stub), each with its triple, its baseline flags and its extra
+levels. `--native-cpu`: `baseline` (default), `host` (host detection; the host's platform
+only), or a level (`x86-64-v2|v3|v4`, x86_64 only). Baselines: x86_64 = SSE2 (no flag);
+Linux aarch64 = Armv8.0 (no flag); macOS aarch64 = the Apple M1's set as Cranelift's host
+detection reports it (`has_lse`, `has_pauth`, `has_fp16`, `has_dotprod`,
+`sign_return_address`, `sign_return_address_with_bkey`). The stub needs neither: wasmtime
+checks the module's triple (architecture and OS) and each enabled ISA flag against the
+running CPU at load (`Engine::check_compatible_with_isa_flag`), so an output on a CPU that
+lacks a feature exits 1 with `compilation setting "has_ssse3" is enabled, but not available
+on the host` -- refused, never faulting.
+
+Measured 2026-09-24 (Xeon E5-2697A v4, `rlpack`, min user time of 5 interleaved runs pinned
+to one core): the ten bench programs and the `gc` fixture ran within noise at `baseline`,
+`x86-64-v2`, `x86-64-v3` and `host` (largest spread: `matmul` 0.84 / 0.84 / 0.82 / 0.82 s,
+`gc` 3.47 / 3.53 / 3.43 / 3.48 s); the ci corpus 16.48 / 16.61 / 16.49 / 16.47 s with
+identical output, precompile 9.2-9.9 s for all, output 81.67 MB vs 81.63 MB. Host code
+differs by <1% of instructions (`lzcnt` for `bsr`, `mulx`, VEX float ops; SSE4.1 `roundsd`
+where baseline calls out for floor/ceil). aarch64 (cross-compiled): `.text` of every bench
+program and `gc` is byte-identical between the Armv8.0 baseline and all of LSE, FP16,
+DotProd, I8MM, PAuth -- those only change atomics and SIMD, which the backend does not emit
+without `--simd`. Hence SSE2 / Armv8.0: the floor costs nothing.
+
+Shim size for cross-targets (linux-x86_64, stripped): host backend only 10,242,120 B (3.46 MB
+gz); + `x86`/`arm64` 10,961,864 B (+0.72 MB; 3.75 MB gz); wasmtime `all-arch` (adds s390x,
+riscv64, Pulley) 12,432,056 B (+2.19 MB; 4.30 MB gz). A local `-Pnative` binary carrying the
+x86_64 pair and the aarch64 stub: 108,464,392 B; `--native -o` 0.63 s for a one-liner.
+
+Tests: `precomp/tests/stub.rs` runs a baseline output under `qemu-<arch> -cpu` Opteron_G1
+(SSE2, no SSE3) / cortex-a53 (Armv8.0) and checks a `host` one is refused there; checks
+every platform's module is its architecture's ELF whose `.wasmtime.engine` names the
+triple, and runs the other Linux architecture's under qemu when `build.sh --stub` left its
+stub in `target/resources` (or `$RLNATIVE_STUBS`). `NativeOutputE2eTest` does both through
+the CLI; `NativeToolchainTest` precompiles for every platform through the shim.
 
 ## Numbers
 

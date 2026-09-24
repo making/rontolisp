@@ -28,7 +28,15 @@ rontolisp hello.lisp --native -o hello
 
 ## 動作環境
 
-実行ファイルはコンパイラを動かしているプラットフォーム(Linux または macOS、x86_64 または aarch64)向けに作られ、そのマシンの CPU 機能を必要とする場合があります。Linux では静的リンクされるので、同じアーキテクチャならC ライブラリを問わずどのディストリビューションでも動きます。リリースのバイナリと実行可能 JAR はプリコンパイラを含みます。ホスト向けのプリコンパイラを含まない rontolisp のビルドは `--native is not available for <os>-<arch>` と答えます(ソースからのビルド: [ビルドとインストール](../getting-started/build.md))。
+実行ファイルはデフォルトでコンパイラを動かしているプラットフォーム(Linux または macOS、x86_64 または aarch64)向けに作られ、そのプラットフォームのすべてのプロセッサが持つ CPU 機能だけを使うので、どれほど古くても同じプラットフォームのマシンなら動きます。Linux では静的リンクされるので、同じアーキテクチャならC ライブラリを問わずどのディストリビューションでも動きます。リリースのバイナリと実行可能 JAR はプリコンパイラを含みます。ホスト向けのプリコンパイラを含まない rontolisp のビルドは `--native is not available for <os>-<arch>` と答えます(ソースからのビルド: [ビルドとインストール](../getting-started/build.md))。
+
+`--native-target` は別のプラットフォーム向けに作ります: `linux-x86_64`、`linux-aarch64`、`macos-aarch64`。リリースのバイナリと実行可能 JAR はそれぞれのランナーを含みます。ソースからのビルドは自分のプラットフォームのランナーだけを含み、別のものを求められると含んでいるものを挙げて答えます。
+
+```bash
+rontolisp hello.lisp --native --native-target linux-aarch64 -o hello-arm64
+```
+
+`--native-cpu` はマシンコードが使ってよい CPU 機能を選びます: `baseline`(デフォルト)、`host`(コンパイルするマシンの CPU のすべての機能)、x86_64 ではレベル `x86-64-v2`、`x86-64-v3`、`x86-64-v4`。実行ファイルは、その機能のどれかを持たない CPU で起動されると実行を拒否し、欠けている機能を挙げます。ベンチマークプログラムで測ったところ、新しい機能を使っても rontolisp が生成するコードは速くならなかったので、デフォルトのままで実質的な損はありません。
 
 プリコンパイラは共有ライブラリで、`rontolisp` が一度だけ `$XDG_CACHE_HOME/rontolisp`(なければ `~/.cache/rontolisp`、macOS では `~/Library/Caches/rontolisp`)へ展開します。システムプロパティ `rontolisp.native.cache` で場所を変えられます(`-Drontolisp.native.cache=DIR`)。
 

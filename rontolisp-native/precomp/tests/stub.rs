@@ -194,3 +194,181 @@ fn module_precompiled_under_another_config_is_refused_at_start() {
         "{out:?}"
     );
 }
+
+/// The runner stub of `platform`: the one this test runs against for the host, else what
+/// `build.sh --stub` laid out under `$RLNATIVE_STUBS` (default `target/resources`), if any.
+fn stub_for(platform: &rlprecomp::Platform) -> Option<PathBuf> {
+    if rlprecomp::host_platform() == Some(platform) {
+        return Some(stub());
+    }
+    let root = std::env::var_os("RLNATIVE_STUBS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/resources"));
+    let path = root.join("am/ik/rontolisp/native").join(platform.name).join("rlrun");
+    path.is_file().then_some(path)
+}
+
+/// `qemu-<arch>` (user mode) when it is installed; a non-empty `RLNATIVE_REQUIRE_QEMU` (CI)
+/// turns its absence into a failure instead of a skipped check.
+fn qemu(arch: &str) -> Option<PathBuf> {
+    let found = [format!("qemu-{arch}-static"), format!("qemu-{arch}")]
+        .into_iter()
+        .filter_map(|name| {
+            std::env::split_paths(&std::env::var_os("PATH")?)
+                .map(|dir| dir.join(&name))
+                .find(|p| p.is_file())
+        })
+        .next();
+    if found.is_none() {
+        assert!(
+            !std::env::var("RLNATIVE_REQUIRE_QEMU").is_ok_and(|v| !v.is_empty()),
+            "RLNATIVE_REQUIRE_QEMU is set but qemu-{arch} is not on PATH"
+        );
+        eprintln!("qemu-{arch} not on PATH: skipped");
+    }
+    found
+}
+
+/// The oldest CPU qemu emulates that is still a CPU of the platform: SSE2 and nothing
+/// newer (no SSE3) for x86_64, Armv8.0 (no LSE) for aarch64.
+fn oldest_cpu(arch: &str) -> &'static str {
+    match arch {
+        "x86_64" => "Opteron_G1",
+        "aarch64" => "cortex-a53",
+        other => panic!("no oldest CPU for {other}"),
+    }
+}
+
+/// Runs `stub ++ module` under `qemu-<arch> -cpu <cpu>` from a fresh directory.
+fn run_under_qemu(qemu: &Path, cpu: &str, stub: &Path, module: &[u8], name: &str) -> Output {
+    let dir = TempDir::new(name);
+    let exe = dir.0.join("prog");
+    std::fs::write(&exe, rlabi::payload::assemble(&std::fs::read(stub).unwrap(), module)).unwrap();
+    make_executable(&exe);
+    let mut command = Command::new(qemu);
+    command
+        .args(["-cpu", cpu])
+        .arg(&exe)
+        .current_dir(&dir.0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    spawn_fresh_executable(&mut command).wait_with_output().unwrap()
+}
+
+/// Linux only: the stub reads its module from `/proc/self/exe`, which qemu user mode
+/// answers with the guest executable.
+#[test]
+#[cfg(target_os = "linux")]
+fn baseline_output_runs_on_the_oldest_cpu_of_its_platform_and_a_host_output_is_refused_there() {
+    let host = rlprecomp::host_platform().unwrap();
+    let arch = std::env::consts::ARCH;
+    let Some(qemu) = qemu(arch) else { return };
+    let wasm = std::fs::read(fixtures().join("fib.wasm")).unwrap();
+    let expected = std::fs::read_to_string(fixtures().join("fib.out")).unwrap();
+
+    let baseline = rlprecomp::precompile_for(&wasm, host, rlprecomp::Cpu::Baseline).unwrap();
+    let out = run_under_qemu(&qemu, oldest_cpu(arch), &stub(), &baseline, "oldest-baseline");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), expected, "stderr:\n{stderr}");
+    assert_eq!(out.status.code(), Some(0), "stderr:\n{stderr}");
+
+    // Refused, not faulting: wasmtime checks every CPU feature the module was compiled
+    // with before running it. Only meaningful where the host has a feature the oldest CPU
+    // lacks, which every CI runner does.
+    #[cfg(target_arch = "x86_64")]
+    let newer = std::arch::is_x86_feature_detected!("sse3");
+    #[cfg(target_arch = "aarch64")]
+    let newer = std::arch::is_aarch64_feature_detected!("lse");
+    if newer {
+        let native = rlprecomp::precompile_for(&wasm, host, rlprecomp::Cpu::Host).unwrap();
+        let out = run_under_qemu(&qemu, oldest_cpu(arch), &stub(), &native, "oldest-host");
+        assert_eq!(out.status.code(), Some(1), "{out:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("but not available on the host"),
+            "{out:?}"
+        );
+    }
+}
+
+/// The section `name` of the ELF image `elf` (64-bit, little-endian: what wasmtime writes
+/// on every platform, macOS included).
+fn elf_section<'a>(elf: &'a [u8], name: &str) -> Option<&'a [u8]> {
+    let u16_at = |at: usize| u16::from_le_bytes(elf[at..at + 2].try_into().unwrap()) as usize;
+    let u64_at = |at: usize| u64::from_le_bytes(elf[at..at + 8].try_into().unwrap()) as usize;
+    assert_eq!(&elf[..4], b"\x7fELF");
+    let (shoff, shentsize, shnum, shstrndx) = (u64_at(0x28), u16_at(0x3a), u16_at(0x3c), u16_at(0x3e));
+    let header = |i: usize| shoff + i * shentsize;
+    let strtab = u64_at(header(shstrndx) + 0x18);
+    (0..shnum).find_map(|i| {
+        let h = header(i);
+        let name_at = strtab + u32::from_le_bytes(elf[h..h + 4].try_into().unwrap()) as usize;
+        let end = name_at + elf[name_at..].iter().position(|b| *b == 0)?;
+        (&elf[name_at..end] == name.as_bytes()).then(|| {
+            let (offset, size) = (u64_at(h + 0x18), u64_at(h + 0x20));
+            &elf[offset..offset + size]
+        })
+    })
+}
+
+/// A module precompiled for another platform is machine code of that platform's
+/// architecture, and its engine header names that platform's triple -- what the target's
+/// stub checks before running it. Where the other platform's stub is present and qemu can
+/// run it (the other Linux architecture), the output also has to print what the host's
+/// does.
+#[test]
+fn cross_target_module_names_the_requested_triple_and_runs_there() {
+    let wasm = std::fs::read(fixtures().join("fib.wasm")).unwrap();
+    let expected = std::fs::read_to_string(fixtures().join("fib.out")).unwrap();
+    for platform in rlprecomp::PLATFORMS {
+        let module = rlprecomp::precompile_for(&wasm, platform, rlprecomp::Cpu::Baseline).unwrap();
+        let machine = u16::from_le_bytes(module[18..20].try_into().unwrap());
+        let arch = platform.name.split_once('-').unwrap().1;
+        assert_eq!(
+            machine,
+            match arch {
+                "x86_64" => 62,
+                "aarch64" => 183,
+                other => panic!("{other}"),
+            },
+            "{}: ELF e_machine",
+            platform.name
+        );
+        let engine = elf_section(&module, ".wasmtime.engine").expect(".wasmtime.engine");
+        assert!(
+            engine
+                .windows(platform.triple.len())
+                .any(|w| w == platform.triple.as_bytes()),
+            "{}: .wasmtime.engine does not name {}",
+            platform.name,
+            platform.triple
+        );
+
+        if rlprecomp::host_platform() == Some(platform)
+            || !cfg!(target_os = "linux")
+            || !platform.name.starts_with("linux-")
+        {
+            continue;
+        }
+        let Some(stub) = stub_for(platform) else {
+            eprintln!("no {} stub (build.sh --stub {}): not run", platform.name, platform.name);
+            continue;
+        };
+        let Some(qemu) = qemu(arch) else { continue };
+        let out = run_under_qemu(
+            &qemu,
+            oldest_cpu(arch),
+            &stub,
+            &module,
+            &format!("cross-{}", platform.name),
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            expected,
+            "{}; stderr:\n{stderr}",
+            platform.name
+        );
+        assert_eq!(out.status.code(), Some(0), "{}; stderr:\n{stderr}", platform.name);
+    }
+}

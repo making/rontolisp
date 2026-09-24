@@ -448,6 +448,31 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void nativeTargetAndCpuDescribeANativeOutputAndNameAKnownPlatform() throws Exception {
+		Path program = this.tempDir.resolve("hello.lisp");
+		Files.writeString(program, "(print 1)\n");
+		String output = this.tempDir.resolve("hello").toString();
+		for (String flag : List.of("--native-target=linux-aarch64", "--native-cpu=host")) {
+			assertThatThrownBy(() -> runCli("", program.toString(), flag, "-o", output + ".wasm"))
+				.isInstanceOf(UnsupportedOperationException.class)
+				.hasMessage(flag.split("=")[0] + " describes a native executable, so it needs --native -o <file>");
+			assertThatThrownBy(() -> runCli("", program.toString(), flag))
+				.isInstanceOf(UnsupportedOperationException.class)
+				.hasMessageContaining("needs --native -o <file>");
+		}
+		assertThatThrownBy(
+				() -> runCli("", program.toString(), "--native", "--native-target", "windows-x86_64", "-o", output))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessage("--native-target windows-x86_64: expected one of linux-x86_64, linux-aarch64, macos-aarch64,"
+					+ " macos-x86_64");
+		assertThatThrownBy(() -> runCli("", program.toString(), "--native", "--native-cpu=", "-o", output))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageStartingWith("--native-cpu needs a value");
+		assertThat(this.tempDir).isDirectoryNotContaining(
+				path -> path.getFileName().toString().startsWith("hello") && !path.equals(program));
+	}
+
+	@Test
 	void emitPomWritesThePomBesideTheJarAndRefusesToOverwriteAFileItDidNotWrite() throws Exception {
 		Path program = kernelsLibrary();
 		Path jar = this.tempDir.resolve("kernels-1.0.0.jar");
