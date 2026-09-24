@@ -968,10 +968,15 @@ final class SchemeLowering {
 	}
 
 	private static boolean spellsExitOrEval(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (spellsExitOrEval(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
 		return switch (form) {
 			case LispSymbol symbol -> symbol.name().equals("exit") || symbol.name().equals("eval");
 			case LispString string -> string.value().contains("exit");
-			case LispCons cons -> spellsExitOrEval(cons.car()) || spellsExitOrEval(cons.cdr());
 			case LispArray array -> {
 				for (LispVal element : array.data()) {
 					if (spellsExitOrEval(element)) {
@@ -4177,17 +4182,52 @@ final class SchemeLowering {
 
 	}
 
+	// Walks the cdr spine in a loop, so a long template costs no stack per element: an
+	// ordinary cell's car is expanded on the way down, as the recursive walk did before
+	// descending, and a splice's own element on the way back up, after its tail.
 	private LispVal quasi(LispVal template, Quasi quasi) {
-		if (template instanceof LispArray vector) {
-			if (!hasUnquote(template)) {
-				return quoted(template);
+		List<LispCons> cells = new ArrayList<>();
+		List<@Nullable LispVal> cars = new ArrayList<>();
+		LispVal node = template;
+		LispVal result;
+		while (true) {
+			if (node instanceof LispArray vector) {
+				result = !hasUnquote(node) ? quoted(node) : list(symbol("COERCE"),
+						quasi(listOf(List.of(vector.data())), quasi), list(symbol("QUOTE"), symbol("VECTOR")));
+				break;
 			}
-			return list(symbol("COERCE"), quasi(listOf(List.of(vector.data())), quasi),
-					list(symbol("QUOTE"), symbol("VECTOR")));
+			if (!(node instanceof LispCons cons) || !hasUnquote(node)) {
+				result = quoted(node);
+				break;
+			}
+			LispVal unquoted = quasiUnquote(cons, quasi);
+			if (unquoted != null) {
+				result = unquoted;
+				break;
+			}
+			cells.add(cons);
+			cars.add(spliceOf(cons) != null ? null : quasi(cons.car(), quasi));
+			node = cons.cdr();
 		}
-		if (!(template instanceof LispCons cons) || !hasUnquote(template)) {
-			return quoted(template);
+		for (int i = cells.size() - 1; i >= 0; i--) {
+			LispCons cons = cells.get(i);
+			LispVal car = cars.get(i);
+			LispCons splice = spliceOf(cons);
+			if (car != null || splice == null) {
+				result = list(symbol("CONS"), Objects.requireNonNull(car), result);
+				continue;
+			}
+			LispSymbol head = (LispSymbol) splice.car();
+			LispVal element = ((LispCons) splice.cdr()).car();
+			result = quasi.depth() == 1 ? list(symbol("APPEND"), value(element, quasi.scope()), result) : list(
+					symbol("CONS"), list(symbol("LIST"), quoted(head), quasi(element, quasi.shallower())), result);
 		}
+		return result;
+	}
+
+	// An (unquote x) or (quasiquote x) cell -- the whole cell, which ends the walk down a
+	// template's spine -- or null for any other cell.
+	private @Nullable LispVal quasiUnquote(LispCons cons, Quasi quasi) {
 		if (cons.car() instanceof LispSymbol head && cons.cdr() instanceof LispCons rest
 				&& rest.cdr() == LispNil.INSTANCE) {
 			if (head.name().equals("unquote")) {
@@ -4198,16 +4238,17 @@ final class SchemeLowering {
 				return list(symbol("LIST"), quoted(head), quasi(rest.car(), quasi.deeper()));
 			}
 		}
+		return null;
+	}
+
+	// The (unquote-splicing x) a cell holds as its car, or null.
+	private static @Nullable LispCons spliceOf(LispCons cons) {
 		if (cons.car() instanceof LispCons splice && splice.car() instanceof LispSymbol head
 				&& head.name().equals("unquote-splicing") && splice.cdr() instanceof LispCons rest
 				&& rest.cdr() == LispNil.INSTANCE) {
-			LispVal tail = quasi(cons.cdr(), quasi);
-			if (quasi.depth() == 1) {
-				return list(symbol("APPEND"), value(rest.car(), quasi.scope()), tail);
-			}
-			return list(symbol("CONS"), list(symbol("LIST"), quoted(head), quasi(rest.car(), quasi.shallower())), tail);
+			return splice;
 		}
-		return list(symbol("CONS"), quasi(cons.car(), quasi), quasi(cons.cdr(), quasi));
+		return null;
 	}
 
 	private static boolean hasUnquote(LispVal template) {

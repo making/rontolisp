@@ -347,15 +347,19 @@ public final class ArgumentShapes {
 	 * Whether a body exits through {@code (return-from name ...)} rather than its end.
 	 */
 	private static boolean returnsEarly(LispVal form, String name) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && LispNames.RETURN_FROM.equals(head.name())
+					&& cons.cdr() instanceof LispCons target && target.car() instanceof LispSymbol block
+					&& name.equals(block.name())) {
+				return true;
+			}
+			if (returnsEarly(cons.car(), name)) {
+				return true;
+			}
+			node = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol head && LispNames.RETURN_FROM.equals(head.name())
-				&& cons.cdr() instanceof LispCons target && target.car() instanceof LispSymbol block
-				&& name.equals(block.name())) {
-			return true;
-		}
-		return returnsEarly(cons.car(), name) || returnsEarly(cons.cdr(), name);
+		return false;
 	}
 
 	/**
@@ -641,13 +645,13 @@ public final class ArgumentShapes {
 
 	/** Every symbol anywhere in a tree. */
 	private static void collectSymbols(LispVal form, java.util.Set<String> out) {
-		if (form instanceof LispSymbol sym) {
-			out.add(sym.name());
-			return;
-		}
-		if (form instanceof LispCons cons) {
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
 			collectSymbols(cons.car(), out);
-			collectSymbols(cons.cdr(), out);
+			node = cons.cdr();
+		}
+		if (node instanceof LispSymbol sym) {
+			out.add(sym.name());
 		}
 	}
 

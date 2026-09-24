@@ -157,16 +157,16 @@ public final class SuspendingImports {
 	// not stop a program from later applying what it holds, and this is the conservative
 	// side of the question.
 	private static void collectFunctionValues(LispVal form, Set<String> into) {
-		if (!(form instanceof LispCons cons)) {
-			return;
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && LispNames.FUNCTION.equals(head.name())
+					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
+				into.add(name.name());
+				return;
+			}
+			collectFunctionValues(cons.car(), into);
+			node = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol head && LispNames.FUNCTION.equals(head.name())
-				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
-			into.add(name.name());
-			return;
-		}
-		collectFunctionValues(cons.car(), into);
-		collectFunctionValues(cons.cdr(), into);
 	}
 
 }

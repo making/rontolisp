@@ -477,14 +477,18 @@ public final class UiopLibrary {
 	}
 
 	private static void collectSymbols(LispVal form, Set<String> into) {
-		switch (form) {
-			case LispSymbol sym -> into.add(sym.name());
-			case LispCons cons -> {
-				collectSymbols(cons.car(), into);
-				collectSymbols(cons.cdr(), into);
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> into.add(sym.name());
+				case LispCons cons -> {
+					collectSymbols(cons.car(), into);
+					form = cons.cdr();
+					continue;
+				}
+				default -> {
+				}
 			}
-			default -> {
-			}
+			return;
 		}
 	}
 

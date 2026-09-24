@@ -307,16 +307,20 @@ public final class BuiltinFunctionWrappers {
 	 * @return {@code true} when a {@code (function name)} or {@code (quote name)} occurs
 	 */
 	public static boolean referencesFunctionDesignator(LispVal expr, String name) {
-		if (!(expr instanceof LispCons cons)) {
-			return false;
+		LispVal node = expr;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op
+					&& (LispNames.FUNCTION.equals(op.name()) || LispNames.QUOTE.equals(op.name()))
+					&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol sym
+					&& name.equals(sym.name())) {
+				return true;
+			}
+			if (referencesFunctionDesignator(cons.car(), name)) {
+				return true;
+			}
+			node = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol op
-				&& (LispNames.FUNCTION.equals(op.name()) || LispNames.QUOTE.equals(op.name()))
-				&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol sym
-				&& name.equals(sym.name())) {
-			return true;
-		}
-		return referencesFunctionDesignator(cons.car(), name) || referencesFunctionDesignator(cons.cdr(), name);
+		return false;
 	}
 
 	/**
@@ -332,22 +336,29 @@ public final class BuiltinFunctionWrappers {
 	 * @return {@code true} when one of the names occurs as a symbol constant
 	 */
 	public static boolean spellsSymbolConstant(LispVal expr, Set<String> names) {
-		if (!(expr instanceof LispCons cons)) {
-			return false;
+		LispVal node = expr;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op
+					&& (LispNames.QUOTE.equals(op.name()) || LispNames.FUNCTION.equals(op.name()))) {
+				return mentionsSymbol(cons.cdr(), names);
+			}
+			if (spellsSymbolConstant(cons.car(), names)) {
+				return true;
+			}
+			node = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol op
-				&& (LispNames.QUOTE.equals(op.name()) || LispNames.FUNCTION.equals(op.name()))) {
-			return mentionsSymbol(cons.cdr(), names);
-		}
-		return spellsSymbolConstant(cons.car(), names) || spellsSymbolConstant(cons.cdr(), names);
+		return false;
 	}
 
 	private static boolean mentionsSymbol(LispVal datum, Set<String> names) {
+		while (datum instanceof LispCons cons) {
+			if (mentionsSymbol(cons.car(), names)) {
+				return true;
+			}
+			datum = cons.cdr();
+		}
 		if (datum instanceof LispSymbol sym) {
 			return names.contains(sym.name());
-		}
-		if (datum instanceof LispCons cons) {
-			return mentionsSymbol(cons.car(), names) || mentionsSymbol(cons.cdr(), names);
 		}
 		if (datum instanceof am.ik.rontolisp.LispArray array) {
 			for (LispVal element : array.data()) {
@@ -367,15 +378,19 @@ public final class BuiltinFunctionWrappers {
 	 * @return {@code true} when a {@code (function name)} reference occurs
 	 */
 	public static boolean referencesFunctionValue(LispVal expr, String name) {
-		if (!(expr instanceof LispCons cons)) {
-			return false;
+		LispVal node = expr;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op && LispNames.FUNCTION.equals(op.name())
+					&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol sym
+					&& name.equals(sym.name())) {
+				return true;
+			}
+			if (referencesFunctionValue(cons.car(), name)) {
+				return true;
+			}
+			node = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol op && LispNames.FUNCTION.equals(op.name())
-				&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol sym
-				&& name.equals(sym.name())) {
-			return true;
-		}
-		return referencesFunctionValue(cons.car(), name) || referencesFunctionValue(cons.cdr(), name);
+		return false;
 	}
 
 	/**

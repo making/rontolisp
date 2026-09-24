@@ -76,11 +76,17 @@ public final class LispEquality {
 	 * @return whether the two values are {@code equal}
 	 */
 	public static boolean equal(LispVal a, LispVal b) {
+		// Two lists are compared down their cdr spines in a loop, so a long list costs
+		// no stack; only nesting recurses.
+		while (a != b && a instanceof LispCons consA) {
+			if (!(b instanceof LispCons consB) || !equal(consA.car(), consB.car())) {
+				return false;
+			}
+			a = consA.cdr();
+			b = consB.cdr();
+		}
 		if (a == b) {
 			return true;
-		}
-		if (a instanceof LispCons consA) {
-			return b instanceof LispCons consB && equal(consA.car(), consB.car()) && equal(consA.cdr(), consB.cdr());
 		}
 		if (b instanceof LispCons) {
 			return false;

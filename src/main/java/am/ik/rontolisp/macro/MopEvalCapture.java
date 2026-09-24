@@ -9,8 +9,10 @@ import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The definition-time capture of the {@code (funcall (compile nil `(lambda () ,code)))}
@@ -52,19 +54,22 @@ public final class MopEvalCapture {
 	 * @return true when a defmethod is present
 	 */
 	public static boolean definesMethods(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			String member = memberOf(op.name());
-			if (LispNames.QUOTE.equals(member)) {
-				return false;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String member = memberOf(op.name());
+				if (LispNames.QUOTE.equals(member)) {
+					return false;
+				}
+				if (LispNames.DEFMETHOD.equals(member)) {
+					return true;
+				}
 			}
-			if (LispNames.DEFMETHOD.equals(member)) {
+			if (definesMethods(cons.car())) {
 				return true;
 			}
+			form = cons.cdr();
 		}
-		return definesMethods(cons.car()) || definesMethods(cons.cdr());
+		return false;
 	}
 
 	/**
@@ -76,6 +81,15 @@ public final class MopEvalCapture {
 	 * @return the folded form
 	 */
 	public static LispVal foldClassMetaobjects(LispVal form, ClosRegistry closRegistry) {
+		return LispTrees.rebuildSpine(form, node -> foldedWhole(node, closRegistry),
+				car -> foldClassMetaobjects(car, closRegistry), (cell, car, cdr) -> new LispCons(car, cdr));
+	}
+
+	/**
+	 * What {@link #foldClassMetaobjects} makes of a node it does not split into car and
+	 * cdr, or {@code null} for an ordinary cell of a list's spine.
+	 */
+	private static @Nullable LispVal foldedWhole(LispVal form, ClosRegistry closRegistry) {
 		if (form instanceof LispInstance inst && closRegistry.isClassMetaobject(inst)) {
 			return findClassForm(inst);
 		}
@@ -91,8 +105,7 @@ public final class MopEvalCapture {
 				return foldDefmethod(cons, closRegistry);
 			}
 		}
-		return new LispCons(foldClassMetaobjects(cons.car(), closRegistry),
-				foldClassMetaobjects(cons.cdr(), closRegistry));
+		return null;
 	}
 
 	// (defmethod name [qualifier] (params...) body...): fold the lambda list's

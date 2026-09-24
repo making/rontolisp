@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
@@ -410,11 +411,22 @@ public final class GrayStreamsLibrary {
 	}
 
 	private static boolean referencesProtocol(LispVal form) {
-		return switch (form) {
-			case am.ik.rontolisp.LispSymbol sym -> PROTOCOL_NAMES.contains(member(sym.name()));
-			case am.ik.rontolisp.LispCons cons -> referencesProtocol(cons.car()) || referencesProtocol(cons.cdr());
-			default -> false;
-		};
+		while (true) {
+			switch (form) {
+				case am.ik.rontolisp.LispSymbol sym -> {
+					return PROTOCOL_NAMES.contains(member(sym.name()));
+				}
+				case am.ik.rontolisp.LispCons cons -> {
+					if (referencesProtocol(cons.car())) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
 	}
 
 	/** Whether the form is gray.lisp's own base-class defclass (already spliced). */
@@ -870,15 +882,8 @@ public final class GrayStreamsLibrary {
 	}
 
 	private static LispVal rewriteTail(LispVal tail, RewriteContext ctx) {
-		if (!(tail instanceof am.ik.rontolisp.LispCons cons)) {
-			return tail;
-		}
-		LispVal car = rewrite(cons.car(), ctx);
-		LispVal cdr = rewriteTail(cons.cdr(), ctx);
-		if (car == cons.car() && cdr == cons.cdr()) {
-			return tail;
-		}
-		return new am.ik.rontolisp.LispCons(car, cdr);
+		return LispTrees.rebuildSpine(tail, node -> node instanceof am.ik.rontolisp.LispCons ? null : node,
+				car -> rewrite(car, ctx));
 	}
 
 	/**

@@ -518,10 +518,20 @@ final class WasmQuoteCompiler {
 		}
 	}
 
+	// Every car in order, then the tail, then one cons per cell: the bytes the recursive
+	// car / cdr / cons emission produced, without a Java frame per element.
 	private static void compileQuotedCons(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		compileQuotedVal(cons.car(), ctx);
-		compileQuotedVal(cons.cdr(), ctx);
-		WasmEmitHelper.emitNewCons(ctx);
+		int cells = 0;
+		LispVal rest = cons;
+		while (rest instanceof LispCons cell) {
+			compileQuotedVal(cell.car(), ctx);
+			cells++;
+			rest = cell.cdr();
+		}
+		compileQuotedVal(rest, ctx);
+		for (int i = 0; i < cells; i++) {
+			WasmEmitHelper.emitNewCons(ctx);
+		}
 	}
 
 	// Builds the runtime array representation: a TYPE_CELL box wrapping a header

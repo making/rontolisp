@@ -9,6 +9,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.eval.TlsPemSupport;
@@ -55,18 +56,19 @@ public final class TlsPemInliner {
 	}
 
 	private static LispVal rewrite(LispVal form, @Nullable String baseDir) {
-		if (!(form instanceof LispCons cons)) {
-			return form;
-		}
-		if (cons.car() instanceof LispSymbol op && LispNames.TLS_LISTEN_PEM.equals(member(op.name()))) {
-			return rewriteCall(cons.toList(), baseDir);
-		}
-		LispVal car = rewrite(cons.car(), baseDir);
-		LispVal cdr = rewrite(cons.cdr(), baseDir);
 		// Almost no program contains a tls-listen-pem at all: hand the form back as it
 		// was, so its SourceProvenance position (keyed on cons identity) survives this
-		// pass and the whole AST is not copied for nothing.
-		return car == cons.car() && cdr == cons.cdr() ? cons : new LispCons(car, cdr);
+		// pass and the whole AST is not copied for nothing. The cdr spine is walked in a
+		// loop, so a long list costs no stack.
+		return LispTrees.rebuildSpine(form, node -> {
+			if (!(node instanceof LispCons cons)) {
+				return node;
+			}
+			if (cons.car() instanceof LispSymbol op && LispNames.TLS_LISTEN_PEM.equals(member(op.name()))) {
+				return rewriteCall(cons.toList(), baseDir);
+			}
+			return null;
+		}, element -> rewrite(element, baseDir));
 	}
 
 	private static LispVal rewriteCall(List<LispVal> elements, @Nullable String baseDir) {

@@ -104,11 +104,22 @@ public final class SocketsLibrary {
 	}
 
 	private static boolean references(LispVal form) {
-		return switch (form) {
-			case LispSymbol sym -> namesTcp(sym.name());
-			case LispCons cons -> references(cons.car()) || references(cons.cdr());
-			default -> false;
-		};
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return namesTcp(sym.name());
+				}
+				case LispCons cons -> {
+					if (references(cons.car())) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
 	}
 
 	// Whether the symbol names a rontolisp tcp built-in or ANY usocket-package member,
@@ -156,26 +167,30 @@ public final class SocketsLibrary {
 	}
 
 	private static void collectNames(@Nullable LispVal form, Set<String> names) {
-		switch (form) {
-			case LispSymbol sym -> {
-				names.add(sym.name());
-				// The reader upcases user spellings while WIT member names are
-				// lower-kebab:
-				// record the lowercase twin too, so the member filter matches every
-				// referenced binding (mirrors WitImportInliner.collectNames).
-				names.add(sym.name().toLowerCase(java.util.Locale.ROOT));
-				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-				if (qn != null) {
-					names.add(qn.member());
-					names.add(qn.member().toLowerCase(java.util.Locale.ROOT));
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					names.add(sym.name());
+					// The reader upcases user spellings while WIT member names are
+					// lower-kebab:
+					// record the lowercase twin too, so the member filter matches every
+					// referenced binding (mirrors WitImportInliner.collectNames).
+					names.add(sym.name().toLowerCase(java.util.Locale.ROOT));
+					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+					if (qn != null) {
+						names.add(qn.member());
+						names.add(qn.member().toLowerCase(java.util.Locale.ROOT));
+					}
+				}
+				case LispCons cons -> {
+					collectNames(cons.car(), names);
+					form = cons.cdr();
+					continue;
+				}
+				case null, default -> {
 				}
 			}
-			case LispCons cons -> {
-				collectNames(cons.car(), names);
-				collectNames(cons.cdr(), names);
-			}
-			case null, default -> {
-			}
+			return;
 		}
 	}
 

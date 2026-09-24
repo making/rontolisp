@@ -137,11 +137,22 @@ public final class EnvironmentLibrary {
 	}
 
 	private static boolean references(LispVal form, String primitive) {
-		return switch (form) {
-			case LispSymbol sym -> primitive.equals(sym.name());
-			case LispCons cons -> references(cons.car(), primitive) || references(cons.cdr(), primitive);
-			default -> false;
-		};
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return primitive.equals(sym.name());
+				}
+				case LispCons cons -> {
+					if (references(cons.car(), primitive)) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
 	}
 
 	// A defun head in any source spelling: bare defun, cl:defun and
@@ -168,26 +179,30 @@ public final class EnvironmentLibrary {
 	}
 
 	private static void collectNames(@Nullable LispVal form, Set<String> names) {
-		switch (form) {
-			case LispSymbol sym -> {
-				names.add(sym.name());
-				// The reader upcases user spellings while WIT member names are
-				// lower-kebab: record the lowercase twin too, so the member filter
-				// matches every referenced binding (mirrors
-				// WitImportInliner.collectNames).
-				names.add(sym.name().toLowerCase(java.util.Locale.ROOT));
-				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-				if (qn != null) {
-					names.add(qn.member());
-					names.add(qn.member().toLowerCase(java.util.Locale.ROOT));
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					names.add(sym.name());
+					// The reader upcases user spellings while WIT member names are
+					// lower-kebab: record the lowercase twin too, so the member filter
+					// matches every referenced binding (mirrors
+					// WitImportInliner.collectNames).
+					names.add(sym.name().toLowerCase(java.util.Locale.ROOT));
+					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+					if (qn != null) {
+						names.add(qn.member());
+						names.add(qn.member().toLowerCase(java.util.Locale.ROOT));
+					}
+				}
+				case LispCons cons -> {
+					collectNames(cons.car(), names);
+					form = cons.cdr();
+					continue;
+				}
+				case null, default -> {
 				}
 			}
-			case LispCons cons -> {
-				collectNames(cons.car(), names);
-				collectNames(cons.cdr(), names);
-			}
-			case null, default -> {
-			}
+			return;
 		}
 	}
 

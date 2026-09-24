@@ -5143,16 +5143,19 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	private static boolean buildsConcatenateSequence(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol op && LispNames.CONCATENATE.equals(op.name())) {
-			LispVal typeForm = (cons.cdr() instanceof LispCons rest) ? rest.car() : LispNil.INSTANCE;
-			if (ConcatenateForms.literalResultFamily(typeForm) != ConcatenateForms.ResultFamily.STRING) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op && LispNames.CONCATENATE.equals(op.name())) {
+				LispVal typeForm = (cons.cdr() instanceof LispCons rest) ? rest.car() : LispNil.INSTANCE;
+				if (ConcatenateForms.literalResultFamily(typeForm) != ConcatenateForms.ResultFamily.STRING) {
+					return true;
+				}
+			}
+			if (buildsConcatenateSequence(cons.car())) {
 				return true;
 			}
+			form = cons.cdr();
 		}
-		return buildsConcatenateSequence(cons.car()) || buildsConcatenateSequence(cons.cdr());
+		return false;
 	}
 
 	// True when the program can produce a packed float array: a #d(...) literal
@@ -5169,17 +5172,22 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	private static boolean usesFloatArray(LispVal val, ClosRegistry closRegistry) {
-		if (val instanceof am.ik.rontolisp.LispFloatArray) {
-			return true;
-		}
-		if (val instanceof LispCons cons) {
+		while (true) {
+			if (val instanceof am.ik.rontolisp.LispFloatArray) {
+				return true;
+			}
+			if (!(val instanceof LispCons cons)) {
+				return false;
+			}
 			if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(head.name())
 					&& makeArrayIsPackedFloat(cons, closRegistry)) {
 				return true;
 			}
-			return usesFloatArray(cons.car(), closRegistry) || usesFloatArray(cons.cdr(), closRegistry);
+			if (usesFloatArray(cons.car(), closRegistry)) {
+				return true;
+			}
+			val = cons.cdr();
 		}
-		return false;
 	}
 
 	// True when the program can produce a packed integer vector: a #N@(...) literal
@@ -5197,17 +5205,22 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	private static boolean usesIntArray(LispVal val, ClosRegistry closRegistry) {
-		if (val instanceof am.ik.rontolisp.LispIntVector) {
-			return true;
-		}
-		if (val instanceof LispCons cons) {
+		while (true) {
+			if (val instanceof am.ik.rontolisp.LispIntVector) {
+				return true;
+			}
+			if (!(val instanceof LispCons cons)) {
+				return false;
+			}
 			if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(head.name())
 					&& makeArrayIsPackedInt(cons, closRegistry)) {
 				return true;
 			}
-			return usesIntArray(cons.car(), closRegistry) || usesIntArray(cons.cdr(), closRegistry);
+			if (usesIntArray(cons.car(), closRegistry)) {
+				return true;
+			}
+			val = cons.cdr();
 		}
-		return false;
 	}
 
 	// Whether a (make-array ...) call carries :element-type '(unsigned-byte 8|16|32) --
@@ -5245,13 +5258,16 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	private static boolean usesSymbol(LispVal val, String name) {
-		if (!(val instanceof LispCons cons)) {
-			return false;
+		while (val instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol sym && name.equals(sym.name())) {
+				return true;
+			}
+			if (usesSymbol(cons.car(), name)) {
+				return true;
+			}
+			val = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol sym && name.equals(sym.name())) {
-			return true;
-		}
-		return usesSymbol(cons.car(), name) || usesSymbol(cons.cdr(), name);
+		return false;
 	}
 
 	/**
@@ -5333,13 +5349,16 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	private static boolean usesEval(LispVal val) {
-		if (!(val instanceof LispCons cons)) {
-			return false;
+		while (val instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol sym && LispNames.EVAL.equals(sym.name())) {
+				return true;
+			}
+			if (usesEval(cons.car())) {
+				return true;
+			}
+			val = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol sym && LispNames.EVAL.equals(sym.name())) {
-			return true;
-		}
-		return usesEval(cons.car()) || usesEval(cons.cdr());
+		return false;
 	}
 
 	static boolean hasDoubleLiteral(List<LispVal> args, Ctx ctx) {

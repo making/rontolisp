@@ -117,25 +117,23 @@ public final class FfiInterop {
 	}
 
 	private static @Nullable String detect(LispVal form, String currentPackage) {
-		switch (form) {
-			case LispSymbol sym -> {
-				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-				if (qn != null && LispNames.FFI_PKG.equals(qn.pkg())) {
-					return sym.name();
-				}
-				if (qn == null && LispNames.FFI_PKG.equals(currentPackage)
-						&& FFI_VERBS.contains(sym.name().toUpperCase(Locale.ROOT))) {
-					return currentPackage + ":" + sym.name();
-				}
+		// Down the cdr in a loop, so a long list costs no stack (LispTrees).
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			String found = detect(cons.car(), currentPackage);
+			if (found != null) {
+				return found;
 			}
-			case LispCons cons -> {
-				String found = detect(cons.car(), currentPackage);
-				if (found != null) {
-					return found;
-				}
-				return detect(cons.cdr(), currentPackage);
+			node = cons.cdr();
+		}
+		if (node instanceof LispSymbol sym) {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+			if (qn != null && LispNames.FFI_PKG.equals(qn.pkg())) {
+				return sym.name();
 			}
-			default -> {
+			if (qn == null && LispNames.FFI_PKG.equals(currentPackage)
+					&& FFI_VERBS.contains(sym.name().toUpperCase(Locale.ROOT))) {
+				return currentPackage + ":" + sym.name();
 			}
 		}
 		return null;

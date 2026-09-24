@@ -45,6 +45,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispStructLiteral;
 import am.ik.rontolisp.StructLiteralFolder;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.PackageResolver;
@@ -3727,16 +3728,20 @@ public final class LispEvaluator {
 	 * ...)} datum cannot trigger it.
 	 */
 	private void seedMopClassesForTypeSpecifier(LispVal specifier) {
-		switch (specifier) {
-			case LispSymbol sym -> this.closRegistry.ensureMopClassesSeededFor(sym.name());
-			case LispCons cons -> {
-				if (!(cons.car() instanceof LispSymbol head) || !LispNames.QUOTE.equals(plainName(head.name()))) {
-					seedMopClassesForTypeSpecifier(cons.car());
-					seedMopClassesForTypeSpecifier(cons.cdr());
+		while (true) {
+			switch (specifier) {
+				case LispSymbol sym -> this.closRegistry.ensureMopClassesSeededFor(sym.name());
+				case LispCons cons -> {
+					if (!(cons.car() instanceof LispSymbol head) || !LispNames.QUOTE.equals(plainName(head.name()))) {
+						seedMopClassesForTypeSpecifier(cons.car());
+						specifier = cons.cdr();
+						continue;
+					}
+				}
+				default -> {
 				}
 			}
-			default -> {
-			}
+			return;
 		}
 	}
 
@@ -4306,6 +4311,16 @@ public final class LispEvaluator {
 	}
 
 	private LispVal resolveReadTimeEval(LispVal form, boolean inCode) {
+		return LispTrees.rebuildSpine(form, node -> resolvedReadTimeEvalNode(node, inCode),
+				car -> resolveReadTimeEval(car, inCode));
+	}
+
+	/**
+	 * What a node {@link #resolveReadTimeEval} does not walk into becomes -- an atom
+	 * stays, a marker is its value, a quoted datum and a {@code defpackage}'s clauses are
+	 * resolved as data -- or {@code null} for an ordinary cell.
+	 */
+	private @Nullable LispVal resolvedReadTimeEvalNode(LispVal form, boolean inCode) {
 		if (!(form instanceof LispCons cons)) {
 			return form;
 		}
@@ -4354,12 +4369,7 @@ public final class LispEvaluator {
 			}
 			return new LispCons(cons.car(), rest);
 		}
-		LispVal car = resolveReadTimeEval(cons.car(), inCode);
-		LispVal cdr = resolveReadTimeEval(cons.cdr(), inCode);
-		if (car == cons.car() && cdr == cons.cdr()) {
-			return form;
-		}
-		return new LispCons(car, cdr);
+		return null;
 	}
 
 	/**
@@ -5462,11 +5472,22 @@ public final class LispEvaluator {
 	 * @return whether a torch-qualified symbol occurs in it
 	 */
 	private static boolean referencesTorch(LispVal form) {
-		return switch (form) {
-			case LispSymbol sym -> TorchLibrary.isTorchQualified(sym.name());
-			case LispCons cons -> referencesTorch(cons.car()) || referencesTorch(cons.cdr());
-			default -> false;
-		};
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return TorchLibrary.isTorchQualified(sym.name());
+				}
+				case LispCons cons -> {
+					if (referencesTorch(cons.car())) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
 	}
 
 	/**
@@ -5478,11 +5499,22 @@ public final class LispEvaluator {
 	 * @return whether a geom-qualified symbol occurs in it
 	 */
 	private static boolean referencesGeom(LispVal form) {
-		return switch (form) {
-			case LispSymbol sym -> GeomLibrary.isGeomQualified(sym.name());
-			case LispCons cons -> referencesGeom(cons.car()) || referencesGeom(cons.cdr());
-			default -> false;
-		};
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return GeomLibrary.isGeomQualified(sym.name());
+				}
+				case LispCons cons -> {
+					if (referencesGeom(cons.car())) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
 	}
 
 	private void ensureUsocketLoaded() {

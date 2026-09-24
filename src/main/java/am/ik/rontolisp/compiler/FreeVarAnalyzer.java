@@ -850,11 +850,14 @@ public final class FreeVarAnalyzer {
 	}
 
 	private static boolean mentionsClosureOperator(LispVal expr) {
-		return switch (expr) {
-			case LispSymbol sym -> CLOSURE_OPERATORS.contains(sym.name());
-			case LispCons cons -> mentionsClosureOperator(cons.car()) || mentionsClosureOperator(cons.cdr());
-			default -> false;
-		};
+		LispVal node = expr;
+		while (node instanceof LispCons cons) {
+			if (mentionsClosureOperator(cons.car())) {
+				return true;
+			}
+			node = cons.cdr();
+		}
+		return node instanceof LispSymbol sym && CLOSURE_OPERATORS.contains(sym.name());
 	}
 
 }

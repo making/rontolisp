@@ -19,6 +19,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
@@ -2412,22 +2413,16 @@ public final class LispMacroExpander {
 		 */
 		private static LispVal substituteTree(LispVal tree, java.util.Set<String> skipHeads,
 				java.util.function.Function<LispVal, @Nullable LispVal> replacer) {
-			LispVal replaced = replacer.apply(tree);
-			if (replaced != null) {
-				return replaced;
-			}
-			if (tree instanceof LispCons cons) {
-				if (cons.car() instanceof LispSymbol head && skipHeads.contains(head.name())) {
-					return tree;
+			return LispTrees.rebuildSpine(tree, node -> {
+				LispVal replaced = replacer.apply(node);
+				if (replaced != null) {
+					return replaced;
 				}
-				LispVal car = substituteTree(cons.car(), skipHeads, replacer);
-				LispVal cdr = substituteTree(cons.cdr(), skipHeads, replacer);
-				if (car == cons.car() && cdr == cons.cdr()) {
-					return tree;
+				if (node instanceof LispCons cons) {
+					return cons.car() instanceof LispSymbol head && skipHeads.contains(head.name()) ? node : null;
 				}
-				return new LispCons(car, cdr);
-			}
-			return tree;
+				return node;
+			}, car -> substituteTree(car, skipHeads, replacer));
 		}
 
 		// --- small token / form helpers ---
@@ -2570,16 +2565,16 @@ public final class LispMacroExpander {
 
 		/** Whether the form references (outside quote) any symbol in the name set. */
 		private static boolean formReferences(LispVal form, java.util.Set<String> names) {
-			if (form instanceof LispSymbol sym) {
-				return names.contains(sym.name());
-			}
-			if (form instanceof LispCons cons) {
+			while (form instanceof LispCons cons) {
 				if (cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name())) {
 					return false;
 				}
-				return formReferences(cons.car(), names) || formReferences(cons.cdr(), names);
+				if (formReferences(cons.car(), names)) {
+					return true;
+				}
+				form = cons.cdr();
 			}
-			return false;
+			return form instanceof LispSymbol sym && names.contains(sym.name());
 		}
 
 		/** Replaces bare symbol references (outside quote) per the given map. */
@@ -2587,18 +2582,16 @@ public final class LispMacroExpander {
 			if (replacements.isEmpty()) {
 				return form;
 			}
-			if (form instanceof LispSymbol sym) {
-				LispSymbol replacement = replacements.get(sym.name());
-				return replacement != null ? replacement : form;
-			}
-			if (form instanceof LispCons cons) {
-				if (cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name())) {
-					return form;
+			return LispTrees.rebuildSpine(form, node -> {
+				if (node instanceof LispSymbol sym) {
+					LispSymbol replacement = replacements.get(sym.name());
+					return replacement != null ? replacement : node;
 				}
-				return new LispCons(substituteSymbols(cons.car(), replacements),
-						substituteSymbols(cons.cdr(), replacements));
-			}
-			return form;
+				if (node instanceof LispCons cons) {
+					return cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name()) ? node : null;
+				}
+				return node;
+			}, car -> substituteSymbols(car, replacements), (cell, car, cdr) -> new LispCons(car, cdr));
 		}
 
 		private List<LispVal> sequentialBodyPrefix(List<ForEqualsRecord> records) {
@@ -10890,21 +10883,21 @@ public final class LispMacroExpander {
 	 * @return the expansion with every packed call guarded
 	 */
 	public static LispVal guardPackedSequenceForWideStreams(LispVal expansion) {
-		if (!(expansion instanceof LispCons cons)) {
-			return expansion;
-		}
-		if (cons.car() instanceof LispSymbol op && cons.isProperList()
-				&& (LispNames.READ_SEQUENCE_PACKED.equals(op.name())
-						|| LispNames.WRITE_SEQUENCE_PACKED.equals(op.name()))) {
-			List<LispVal> parts = cons.toList();
-			if (parts.size() == 5) {
-				return makeIf(callOf(LispNames.WIDE_WIDTH_INTERNAL, parts.get(2)), LispNil.INSTANCE, cons);
+		return LispTrees.rebuildSpine(expansion, node -> {
+			if (!(node instanceof LispCons cons)) {
+				return node;
 			}
-			return cons;
-		}
-		LispVal car = guardPackedSequenceForWideStreams(cons.car());
-		LispVal cdr = guardPackedSequenceForWideStreams(cons.cdr());
-		return car == cons.car() && cdr == cons.cdr() ? cons : new LispCons(car, cdr);
+			if (cons.car() instanceof LispSymbol op && cons.isProperList()
+					&& (LispNames.READ_SEQUENCE_PACKED.equals(op.name())
+							|| LispNames.WRITE_SEQUENCE_PACKED.equals(op.name()))) {
+				List<LispVal> parts = cons.toList();
+				if (parts.size() == 5) {
+					return makeIf(callOf(LispNames.WIDE_WIDTH_INTERNAL, parts.get(2)), LispNil.INSTANCE, cons);
+				}
+				return cons;
+			}
+			return null;
+		}, LispMacroExpander::guardPackedSequenceForWideStreams);
 	}
 
 	/**
@@ -15069,17 +15062,16 @@ public final class LispMacroExpander {
 
 	// Every (map-into result fn s0 ...) site's source-sequence count.
 	private static void collectMapIntoArities(LispVal form, java.util.Set<Integer> arities) {
-		if (!(form instanceof LispCons cons)) {
-			return;
-		}
-		if (cons.car() instanceof LispSymbol op && LispNames.MAP_INTO.equals(op.name()) && cons.isProperList()) {
-			int sources = cons.toList().size() - 3;
-			if (sources >= 0 && sources <= MAX_MAP_INTO_SOURCES) {
-				arities.add(sources);
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op && LispNames.MAP_INTO.equals(op.name()) && cons.isProperList()) {
+				int sources = cons.toList().size() - 3;
+				if (sources >= 0 && sources <= MAX_MAP_INTO_SOURCES) {
+					arities.add(sources);
+				}
 			}
+			collectMapIntoArities(cons.car(), arities);
+			form = cons.cdr();
 		}
-		collectMapIntoArities(cons.car(), arities);
-		collectMapIntoArities(cons.cdr(), arities);
 	}
 
 	// namesSymbol over several form groups.
@@ -15097,13 +15089,13 @@ public final class LispMacroExpander {
 
 	// namesSymbol over a set: any symbol anywhere in the form that is a member.
 	private static boolean namesAnySymbol(LispVal form, java.util.Set<String> names) {
-		if (form instanceof LispSymbol sym) {
-			return names.contains(sym.name());
+		while (form instanceof LispCons cons) {
+			if (namesAnySymbol(cons.car(), names)) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		return namesAnySymbol(cons.car(), names) || namesAnySymbol(cons.cdr(), names);
+		return form instanceof LispSymbol sym && names.contains(sym.name());
 	}
 
 	// The string / general-array / cons-chain dispatch shared by the inline lowering and
@@ -18675,22 +18667,25 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean containsRuntimeSlotNameCall(LispVal form, String opName) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			String member = memberOf(op.name());
-			if (LispNames.QUOTE.equals(member)) {
-				return false;
-			}
-			if (opName.equals(member) && cons.isProperList()) {
-				List<LispVal> parts = cons.toList();
-				if (parts.size() == 3 && quotedSymbol(parts.get(2)) == null) {
-					return true;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String member = memberOf(op.name());
+				if (LispNames.QUOTE.equals(member)) {
+					return false;
+				}
+				if (opName.equals(member) && cons.isProperList()) {
+					List<LispVal> parts = cons.toList();
+					if (parts.size() == 3 && quotedSymbol(parts.get(2)) == null) {
+						return true;
+					}
 				}
 			}
+			if (containsRuntimeSlotNameCall(cons.car(), opName)) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		return containsRuntimeSlotNameCall(cons.car(), opName) || containsRuntimeSlotNameCall(cons.cdr(), opName);
+		return false;
 	}
 
 	/**
@@ -18718,73 +18713,81 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean containsRuntimeSlotSet(LispVal form, ClosRegistry closRegistry) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			String member = memberOf(op.name());
-			if (LispNames.QUOTE.equals(member)) {
-				return false;
-			}
-			if (LispNames.SETF.equals(member) && cons.cdr() instanceof LispCons rest
-					&& rest.car() instanceof LispCons place && place.car() instanceof LispSymbol placeOp
-					&& LispNames.SLOT_VALUE.equals(memberOf(placeOp.name())) && place.isProperList()) {
-				List<LispVal> parts = place.toList();
-				if (parts.size() == 3) {
-					LispSymbol litSlot = quotedSymbol(parts.get(2));
-					// An AMBIGUOUS literal write outlines onto the same shared
-					// dispatch as a runtime name (expandAmbiguousSlotSet).
-					if (litSlot == null || ambiguousSlotPosition(litSlot, closRegistry)) {
-						return true;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String member = memberOf(op.name());
+				if (LispNames.QUOTE.equals(member)) {
+					return false;
+				}
+				if (LispNames.SETF.equals(member) && cons.cdr() instanceof LispCons rest
+						&& rest.car() instanceof LispCons place && place.car() instanceof LispSymbol placeOp
+						&& LispNames.SLOT_VALUE.equals(memberOf(placeOp.name())) && place.isProperList()) {
+					List<LispVal> parts = place.toList();
+					if (parts.size() == 3) {
+						LispSymbol litSlot = quotedSymbol(parts.get(2));
+						// An AMBIGUOUS literal write outlines onto the same shared
+						// dispatch as a runtime name (expandAmbiguousSlotSet).
+						if (litSlot == null || ambiguousSlotPosition(litSlot, closRegistry)) {
+							return true;
+						}
 					}
 				}
-			}
-			// slot-makunbound stores through the setf slot-value place, and a
-			// with-slots body may write through its symbol-macrolet -- both reach the
-			// ambiguous write expansion without a surface (setf (slot-value ...)).
-			if (LispNames.SLOT_MAKUNBOUND.equals(member) && cons.isProperList()) {
-				List<LispVal> parts = cons.toList();
-				if (parts.size() == 3) {
-					LispSymbol litSlot = quotedSymbol(parts.get(2));
-					if (litSlot == null || ambiguousSlotPosition(litSlot, closRegistry)) {
-						return true;
+				// slot-makunbound stores through the setf slot-value place, and a
+				// with-slots body may write through its symbol-macrolet -- both reach the
+				// ambiguous write expansion without a surface (setf (slot-value ...)).
+				if (LispNames.SLOT_MAKUNBOUND.equals(member) && cons.isProperList()) {
+					List<LispVal> parts = cons.toList();
+					if (parts.size() == 3) {
+						LispSymbol litSlot = quotedSymbol(parts.get(2));
+						if (litSlot == null || ambiguousSlotPosition(litSlot, closRegistry)) {
+							return true;
+						}
 					}
 				}
+				if (LispNames.WITH_SLOTS.equals(member) && withSlotsNamesAmbiguousSlot(cons, closRegistry)) {
+					return true;
+				}
 			}
-			if (LispNames.WITH_SLOTS.equals(member) && withSlotsNamesAmbiguousSlot(cons, closRegistry)) {
+			if (containsRuntimeSlotSet(cons.car(), closRegistry)) {
 				return true;
 			}
+			form = cons.cdr();
 		}
-		return containsRuntimeSlotSet(cons.car(), closRegistry) || containsRuntimeSlotSet(cons.cdr(), closRegistry);
+		return false;
 	}
 
 	private static boolean containsRuntimeSlotName(LispVal form, ClosRegistry closRegistry) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			String member = memberOf(op.name());
-			if (LispNames.QUOTE.equals(member)) {
-				return false;
-			}
-			if ((LispNames.SLOT_VALUE.equals(member) || LispNames.SLOT_BOUNDP.equals(member)) && cons.isProperList()) {
-				List<LispVal> parts = cons.toList();
-				if (parts.size() == 3) {
-					LispSymbol litSlot = quotedSymbol(parts.get(2));
-					if (litSlot == null
-							|| (LispNames.SLOT_VALUE.equals(member) && ambiguousSlotPosition(litSlot, closRegistry))) {
-						return true;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String member = memberOf(op.name());
+				if (LispNames.QUOTE.equals(member)) {
+					return false;
+				}
+				if ((LispNames.SLOT_VALUE.equals(member) || LispNames.SLOT_BOUNDP.equals(member))
+						&& cons.isProperList()) {
+					List<LispVal> parts = cons.toList();
+					if (parts.size() == 3) {
+						LispSymbol litSlot = quotedSymbol(parts.get(2));
+						if (litSlot == null || (LispNames.SLOT_VALUE.equals(member)
+								&& ambiguousSlotPosition(litSlot, closRegistry))) {
+							return true;
+						}
 					}
 				}
+				// with-slots expands to slot-value reads during BODY compilation,
+				// invisible
+				// to this surface scan -- but its slot NAMES are right in the spec list
+				// (cl-ppcre's compute-offsets methods over ambiguous names).
+				if (LispNames.WITH_SLOTS.equals(member) && withSlotsNamesAmbiguousSlot(cons, closRegistry)) {
+					return true;
+				}
 			}
-			// with-slots expands to slot-value reads during BODY compilation, invisible
-			// to this surface scan -- but its slot NAMES are right in the spec list
-			// (cl-ppcre's compute-offsets methods over ambiguous names).
-			if (LispNames.WITH_SLOTS.equals(member) && withSlotsNamesAmbiguousSlot(cons, closRegistry)) {
+			if (containsRuntimeSlotName(cons.car(), closRegistry)) {
 				return true;
 			}
+			form = cons.cdr();
 		}
-		return containsRuntimeSlotName(cons.car(), closRegistry) || containsRuntimeSlotName(cons.cdr(), closRegistry);
+		return false;
 	}
 
 	/**
@@ -18987,19 +18990,22 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean referencesClassSlotDefs(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			String member = memberOf(op.name());
-			if (LispNames.QUOTE.equals(member)) {
-				return false;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String member = memberOf(op.name());
+				if (LispNames.QUOTE.equals(member)) {
+					return false;
+				}
+				if (LispNames.CLASS_SLOT_DEFS_INTERNAL.equals(member)) {
+					return true;
+				}
 			}
-			if (LispNames.CLASS_SLOT_DEFS_INTERNAL.equals(member)) {
+			if (referencesClassSlotDefs(cons.car())) {
 				return true;
 			}
+			form = cons.cdr();
 		}
-		return referencesClassSlotDefs(cons.car()) || referencesClassSlotDefs(cons.cdr());
+		return false;
 	}
 
 	// --- the instance seam -----------------------------------------------------------
@@ -19418,11 +19424,14 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean mentionsStreamProducer(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (mentionsStreamProducer(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
 		if (form instanceof LispSymbol sym) {
 			return STREAM_VALUE_PRODUCERS.contains(sym.name());
-		}
-		if (form instanceof LispCons cons) {
-			return mentionsStreamProducer(cons.car()) || mentionsStreamProducer(cons.cdr());
 		}
 		if (form instanceof LispArray array) {
 			for (LispVal element : array.data()) {
@@ -19456,6 +19465,15 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean mayCreateInstance(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && constructsInstance(head.name(), cons)) {
+				return true;
+			}
+			if (mayCreateInstance(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
 		if (form instanceof LispInstance) {
 			return true;
 		}
@@ -19476,13 +19494,7 @@ public final class LispMacroExpander {
 			}
 			return false;
 		}
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol head && constructsInstance(head.name(), cons)) {
-			return true;
-		}
-		return mayCreateInstance(cons.car()) || mayCreateInstance(cons.cdr());
+		return false;
 	}
 
 	/**
@@ -19521,22 +19533,22 @@ public final class LispMacroExpander {
 	 * @return whether a complex value is syntactically visible
 	 */
 	public static boolean containsComplex(LispVal form) {
-		if (form instanceof am.ik.rontolisp.LispComplex) {
-			return true;
-		}
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol head) {
-			if (LispNames.COMPLEX.equals(head.name()) || LispNames.CONJUGATE.equals(head.name())) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head) {
+				if (LispNames.COMPLEX.equals(head.name()) || LispNames.CONJUGATE.equals(head.name())) {
+					return true;
+				}
+				if (LispNames.ROUND.equals(head.name()) || LispNames.TRUNCATE.equals(head.name())
+						|| LispNames.FLOOR.equals(head.name()) || LispNames.CEILING.equals(head.name())) {
+					return false;
+				}
+			}
+			if (containsComplex(cons.car())) {
 				return true;
 			}
-			if (LispNames.ROUND.equals(head.name()) || LispNames.TRUNCATE.equals(head.name())
-					|| LispNames.FLOOR.equals(head.name()) || LispNames.CEILING.equals(head.name())) {
-				return false;
-			}
+			form = cons.cdr();
 		}
-		return containsComplex(cons.car()) || containsComplex(cons.cdr());
+		return form instanceof am.ik.rontolisp.LispComplex;
 	}
 
 	/**
@@ -19602,20 +19614,23 @@ public final class LispMacroExpander {
 
 	/** The tree walk behind {@link #mayEscapeToComplex}. */
 	private static boolean escapesToComplex(LispVal form) {
-		if (form instanceof LispSymbol sym) {
-			// A bare mention is a first-class reference (#'log, (funcall 'acos x)) --
-			// the wrapper's body is the complex-capable one.
-			return REAL_DOMAIN_ESCAPES.contains(sym.name());
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && REAL_DOMAIN_ESCAPES.contains(head.name())
+					&& cons.isProperList()) {
+				// The head is this call's operator, not a mention: only the arguments
+				// below it can carry another escape.
+				if (escapesToComplex(head.name(), cons.toList())) {
+					return true;
+				}
+			}
+			else if (escapesToComplex(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol head && REAL_DOMAIN_ESCAPES.contains(head.name()) && cons.isProperList()) {
-			// The head is this call's operator, not a mention: only the arguments
-			// below it can carry another escape.
-			return escapesToComplex(head.name(), cons.toList()) || escapesToComplex(cons.cdr());
-		}
-		return escapesToComplex(cons.car()) || escapesToComplex(cons.cdr());
+		// A bare mention is a first-class reference (#'log, (funcall 'acos x)) -- the
+		// wrapper's body is the complex-capable one.
+		return form instanceof LispSymbol sym && REAL_DOMAIN_ESCAPES.contains(sym.name());
 	}
 
 	/** Whether the form is a literal real number that is not negative. */
@@ -19879,34 +19894,42 @@ public final class LispMacroExpander {
 
 	private static boolean mayCreateCondition(LispVal form, ClosRegistry closRegistry, boolean multipleValues,
 			boolean holdOnly) {
-		if (form instanceof LispArray array) {
-			for (LispVal element : array.data()) {
-				if (mayCreateCondition(element, closRegistry, multipleValues, holdOnly)) {
+		// The cdr spine is walked in the loop, so a long list costs no stack.
+		while (true) {
+			if (form instanceof LispArray array) {
+				for (LispVal element : array.data()) {
+					if (mayCreateCondition(element, closRegistry, multipleValues, holdOnly)) {
+						return true;
+					}
+				}
+				return false;
+			}
+			if (!(form instanceof LispCons cons)) {
+				// A folded #S(...) literal is a struct instance -- #S reads defstruct
+				// types
+				// only -- so it can never be a condition.
+				return false;
+			}
+			if (cons.car() instanceof LispSymbol head) {
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(head.name());
+				String member = qn == null ? head.name() : qn.member();
+				if (constructsCondition(head.name(), member, cons, closRegistry, multipleValues, holdOnly)) {
 					return true;
 				}
+				List<LispVal> evaluated = evaluatedClauseForms(member, cons);
+				if (evaluated != null) {
+					// Without the skip, a (error (e) ...) CLAUSE reads as a signal call
+					// with
+					// initargs and every handler-case routes reports.
+					return evaluated.stream()
+						.anyMatch(f -> mayCreateCondition(f, closRegistry, multipleValues, holdOnly));
+				}
 			}
-			return false;
-		}
-		if (!(form instanceof LispCons cons)) {
-			// A folded #S(...) literal is a struct instance -- #S reads defstruct types
-			// only -- so it can never be a condition.
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol head) {
-			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(head.name());
-			String member = qn == null ? head.name() : qn.member();
-			if (constructsCondition(head.name(), member, cons, closRegistry, multipleValues, holdOnly)) {
+			if (mayCreateCondition(cons.car(), closRegistry, multipleValues, holdOnly)) {
 				return true;
 			}
-			List<LispVal> evaluated = evaluatedClauseForms(member, cons);
-			if (evaluated != null) {
-				// Without the skip, a (error (e) ...) CLAUSE reads as a signal call with
-				// initargs and every handler-case routes reports.
-				return evaluated.stream().anyMatch(f -> mayCreateCondition(f, closRegistry, multipleValues, holdOnly));
-			}
+			form = cons.cdr();
 		}
-		return mayCreateCondition(cons.car(), closRegistry, multipleValues, holdOnly)
-				|| mayCreateCondition(cons.cdr(), closRegistry, multipleValues, holdOnly);
 	}
 
 	/**
@@ -20180,13 +20203,13 @@ public final class LispMacroExpander {
 
 	/** Whether {@code form} mentions the named symbol anywhere, quoted data included. */
 	private static boolean mentionsSymbol(LispVal form, String name) {
-		if (form instanceof LispSymbol sym) {
-			return name.equals(sym.name());
+		while (form instanceof LispCons cons) {
+			if (mentionsSymbol(cons.car(), name)) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		if (form instanceof LispCons cons) {
-			return mentionsSymbol(cons.car(), name) || mentionsSymbol(cons.cdr(), name);
-		}
-		return false;
+		return form instanceof LispSymbol sym && name.equals(sym.name());
 	}
 
 	/**
@@ -20277,6 +20300,15 @@ public final class LispMacroExpander {
 	 * {@code with-slots}.
 	 */
 	private static LispVal substituteSymbols(LispVal form, java.util.Map<String, LispVal> substitutions) {
+		return LispTrees.rebuildSpine(form, node -> substitutedWhole(node, substitutions),
+				car -> substituteSymbols(car, substitutions));
+	}
+
+	/**
+	 * What {@link #substituteSymbols(LispVal, java.util.Map)} makes of a node it does not
+	 * split into car and cdr, or {@code null} for an ordinary cell of a list's spine.
+	 */
+	private static @Nullable LispVal substitutedWhole(LispVal form, java.util.Map<String, LispVal> substitutions) {
 		if (form instanceof LispSymbol sym) {
 			LispVal replacement = substitutions.get(sym.name());
 			return replacement != null ? replacement : form;
@@ -20307,12 +20339,7 @@ public final class LispMacroExpander {
 			}
 			return listToCons(out);
 		}
-		LispVal car = substituteSymbols(cons.car(), substitutions);
-		LispVal cdr = substituteSymbols(cons.cdr(), substitutions);
-		if (car == cons.car() && cdr == cons.cdr()) {
-			return form;
-		}
-		return new LispCons(car, cdr);
+		return null;
 	}
 
 	/**
@@ -21076,15 +21103,12 @@ public final class LispMacroExpander {
 	 * too, which can only over-shadow, never mis-substitute.
 	 */
 	private static void collectPatternNames(LispVal pattern, java.util.Set<String> names) {
-		if (pattern instanceof LispSymbol sym) {
-			if (!sym.name().startsWith("&")) {
-				names.add(sym.name());
-			}
-			return;
-		}
-		if (pattern instanceof LispCons cons) {
+		while (pattern instanceof LispCons cons) {
 			collectPatternNames(cons.car(), names);
-			collectPatternNames(cons.cdr(), names);
+			pattern = cons.cdr();
+		}
+		if (pattern instanceof LispSymbol sym && !sym.name().startsWith("&")) {
+			names.add(sym.name());
 		}
 	}
 
@@ -23331,51 +23355,58 @@ public final class LispMacroExpander {
 	// A #'make-instance VALUE reference anywhere outside quoted data -- a literal
 	// (make-instance ...) call keeps the static expansion and does not count.
 	private static boolean referencesMakeInstanceValue(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			String member = memberOf(op.name());
-			if (LispNames.QUOTE.equals(member)) {
-				return false;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String member = memberOf(op.name());
+				if (LispNames.QUOTE.equals(member)) {
+					return false;
+				}
+				if (LispNames.FUNCTION.equals(member) && cons.cdr() instanceof LispCons rest
+						&& rest.car() instanceof LispSymbol named
+						&& LispNames.MAKE_INSTANCE.equals(memberOf(named.name()))) {
+					return true;
+				}
+				// A DIRECT call whose class argument is computed ((make-instance driver)
+				// --
+				// dbi's connect instantiates the class metaobject find-driver returned)
+				// lowers to %mop-make-instance like the #'make-instance value does, so it
+				// flips the same gate. A literal (make-instance 'name ...) keeps the
+				// static expansion and never flips this.
+				if (LispNames.MAKE_INSTANCE.equals(member) && cons.cdr() instanceof LispCons argCell
+						&& quotedSymbol(argCell.car()) == null) {
+					return true;
+				}
 			}
-			if (LispNames.FUNCTION.equals(member) && cons.cdr() instanceof LispCons rest
-					&& rest.car() instanceof LispSymbol named
-					&& LispNames.MAKE_INSTANCE.equals(memberOf(named.name()))) {
+			if (referencesMakeInstanceValue(cons.car())) {
 				return true;
 			}
-			// A DIRECT call whose class argument is computed ((make-instance driver) --
-			// dbi's connect instantiates the class metaobject find-driver returned)
-			// lowers to %mop-make-instance like the #'make-instance value does, so it
-			// flips the same gate. A literal (make-instance 'name ...) keeps the
-			// static expansion and never flips this.
-			if (LispNames.MAKE_INSTANCE.equals(member) && cons.cdr() instanceof LispCons argCell
-					&& quotedSymbol(argCell.car()) == null) {
-				return true;
-			}
+			form = cons.cdr();
 		}
-		return referencesMakeInstanceValue(cons.car()) || referencesMakeInstanceValue(cons.cdr());
+		return false;
 	}
 
 	// A call of the named function, or a #'name reference, anywhere outside quoted data.
 	private static boolean referencesFunction(LispVal form, String functionName) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			String member = memberOf(op.name());
-			if (LispNames.QUOTE.equals(member)) {
-				return false;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String member = memberOf(op.name());
+				if (LispNames.QUOTE.equals(member)) {
+					return false;
+				}
+				if (functionName.equals(member)) {
+					return true;
+				}
+				if (LispNames.FUNCTION.equals(member) && cons.cdr() instanceof LispCons rest
+						&& rest.car() instanceof LispSymbol named && functionName.equals(memberOf(named.name()))) {
+					return true;
+				}
 			}
-			if (functionName.equals(member)) {
+			if (referencesFunction(cons.car(), functionName)) {
 				return true;
 			}
-			if (LispNames.FUNCTION.equals(member) && cons.cdr() instanceof LispCons rest
-					&& rest.car() instanceof LispSymbol named && functionName.equals(memberOf(named.name()))) {
-				return true;
-			}
+			form = cons.cdr();
 		}
-		return referencesFunction(cons.car(), functionName) || referencesFunction(cons.cdr(), functionName);
+		return false;
 	}
 
 	/**
@@ -24054,23 +24085,29 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean reachesScharSet(LispVal form) {
-		if (form instanceof LispSymbol sym) {
-			return switch (sym.name()) {
-				// map-into is on the list although it names no place itself: its
-				// expansion STORES through the (setf (elt ...)) place, and that
-				// expansion runs per form, long after this scan -- so a
-				// (map-into "..." ...) whose result is a string used to reach a helper
-				// the scan never injected.
-				case LispNames.AREF, LispNames.SVREF, LispNames.ELT, LispNames.CHAR, LispNames.SCHAR,
-						LispNames.SCHAR_SET, LispNames.MAP_INTO, LispNames.ROW_MAJOR_AREF ->
-					true;
-				default -> false;
-			};
+		while (true) {
+			if (form instanceof LispSymbol sym) {
+				return switch (sym.name()) {
+					// map-into is on the list although it names no place itself: its
+					// expansion STORES through the (setf (elt ...)) place, and that
+					// expansion runs per form, long after this scan -- so a
+					// (map-into "..." ...) whose result is a string used to reach a
+					// helper
+					// the scan never injected.
+					case LispNames.AREF, LispNames.SVREF, LispNames.ELT, LispNames.CHAR, LispNames.SCHAR,
+							LispNames.SCHAR_SET, LispNames.MAP_INTO, LispNames.ROW_MAJOR_AREF ->
+						true;
+					default -> false;
+				};
+			}
+			if (!(form instanceof LispCons cons)) {
+				return false;
+			}
+			if (reachesScharSet(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		return reachesScharSet(cons.car()) || reachesScharSet(cons.cdr());
 	}
 
 	/**
@@ -24096,13 +24133,18 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean namesSymbol(LispVal form, String name) {
-		if (form instanceof LispSymbol sym) {
-			return name.equals(sym.name());
+		while (true) {
+			if (form instanceof LispSymbol sym) {
+				return name.equals(sym.name());
+			}
+			if (!(form instanceof LispCons cons)) {
+				return false;
+			}
+			if (namesSymbol(cons.car(), name)) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		return namesSymbol(cons.car(), name) || namesSymbol(cons.cdr(), name);
 	}
 
 	/**
@@ -24156,14 +24198,17 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean makesEqualpHashTable(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && LispNames.MAKE_HASH_TABLE.equals(head.name())
+					&& isEqualpHashTableMake(cons)) {
+				return true;
+			}
+			if (makesEqualpHashTable(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol head && LispNames.MAKE_HASH_TABLE.equals(head.name())
-				&& isEqualpHashTableMake(cons)) {
-			return true;
-		}
-		return makesEqualpHashTable(cons.car()) || makesEqualpHashTable(cons.cdr());
+		return false;
 	}
 
 	/**
@@ -24185,16 +24230,19 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean makesIdentityHashTable(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol head && LispNames.MAKE_HASH_TABLE.equals(head.name())) {
-			int testCode = hashTableTestCode(cons);
-			if (testCode == LispHashTable.TEST_EQ || testCode == LispHashTable.TEST_EQL) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && LispNames.MAKE_HASH_TABLE.equals(head.name())) {
+				int testCode = hashTableTestCode(cons);
+				if (testCode == LispHashTable.TEST_EQ || testCode == LispHashTable.TEST_EQL) {
+					return true;
+				}
+			}
+			if (makesIdentityHashTable(cons.car())) {
 				return true;
 			}
+			form = cons.cdr();
 		}
-		return makesIdentityHashTable(cons.car()) || makesIdentityHashTable(cons.cdr());
+		return false;
 	}
 
 	/**
@@ -24244,56 +24292,66 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean usesGeneralArrayOp(LispVal form) {
-		if (form instanceof LispArray || form instanceof LispFloatArray) {
-			return true;
+		while (true) {
+			if (form instanceof LispArray || form instanceof LispFloatArray) {
+				return true;
+			}
+			if (form instanceof LispSymbol sym) {
+				return switch (sym.name()) {
+					case LispNames.MAKE_ARRAY, LispNames.MAKE_STRING, LispNames.MAKE_SEQUENCE, LispNames.AREF,
+							LispNames.ASET, LispNames.ARRAY_DIMENSIONS, LispNames.VECTOR, LispNames.SVREF,
+							LispNames.ARRAY_RANK, LispNames.ARRAY_DIMENSION, LispNames.ARRAY_TOTAL_SIZE,
+							LispNames.ROW_MAJOR_AREF, LispNames.ROW_MAJOR_ASET, LispNames.ARRAY_ROW_MAJOR_INDEX,
+							LispNames.FILL_POINTER, LispNames.SET_FILL_POINTER, LispNames.ARRAY_HAS_FILL_POINTER_P,
+							LispNames.ADJUSTABLE_ARRAY_P, LispNames.ARRAY_ELEMENT_TYPE, LispNames.VECTOR_PUSH,
+							LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ADJUST_ARRAY,
+							LispNames.ARRAY_BECOME, LispNames.ARRAY_DISPLACEMENT, LispNames.ARRAY_DISP_TARGET,
+							LispNames.ARRAY_DISP_OFFSET, LispNames.ARRAY_ALIKE, LispNames.ARRAY_DEFAULT_ELEMENT,
+							LispNames.ARRAY_ADOPT_ELEMENT_TYPE, LispNames.ARRAY_BECOME_DISPLACED,
+							LispNames.ARRAY_UNDISPLACE, LispNames.COERCE,
+							// fill/read-sequence/write-sequence join the list for the
+							// same
+							// reason as make-string: each has an array-typed arm the JVM
+							// backend's array runtime gate must see coming, or the
+							// injected
+							// #'fill / #'read-sequence / #'write-sequence wrapper reaches
+							// _aset1/_charVecMake/_aref1 the array gate never predicted
+							// (BuiltinFunctionWrappers.ARRAY_FILL_POINTER_FUNCTIONS).
+							LispNames.FILL, LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE ->
+						true;
+					default -> false;
+				};
+			}
+			if (!(form instanceof LispCons cons)) {
+				return false;
+			}
+			if (usesGeneralArrayOp(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		if (form instanceof LispSymbol sym) {
-			return switch (sym.name()) {
-				case LispNames.MAKE_ARRAY, LispNames.MAKE_STRING, LispNames.MAKE_SEQUENCE, LispNames.AREF,
-						LispNames.ASET, LispNames.ARRAY_DIMENSIONS, LispNames.VECTOR, LispNames.SVREF,
-						LispNames.ARRAY_RANK, LispNames.ARRAY_DIMENSION, LispNames.ARRAY_TOTAL_SIZE,
-						LispNames.ROW_MAJOR_AREF, LispNames.ROW_MAJOR_ASET, LispNames.ARRAY_ROW_MAJOR_INDEX,
-						LispNames.FILL_POINTER, LispNames.SET_FILL_POINTER, LispNames.ARRAY_HAS_FILL_POINTER_P,
-						LispNames.ADJUSTABLE_ARRAY_P, LispNames.ARRAY_ELEMENT_TYPE, LispNames.VECTOR_PUSH,
-						LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ADJUST_ARRAY,
-						LispNames.ARRAY_BECOME, LispNames.ARRAY_DISPLACEMENT, LispNames.ARRAY_DISP_TARGET,
-						LispNames.ARRAY_DISP_OFFSET, LispNames.ARRAY_ALIKE, LispNames.ARRAY_DEFAULT_ELEMENT,
-						LispNames.ARRAY_ADOPT_ELEMENT_TYPE, LispNames.ARRAY_BECOME_DISPLACED,
-						LispNames.ARRAY_UNDISPLACE, LispNames.COERCE,
-						// fill/read-sequence/write-sequence join the list for the same
-						// reason as make-string: each has an array-typed arm the JVM
-						// backend's array runtime gate must see coming, or the injected
-						// #'fill / #'read-sequence / #'write-sequence wrapper reaches
-						// _aset1/_charVecMake/_aref1 the array gate never predicted
-						// (BuiltinFunctionWrappers.ARRAY_FILL_POINTER_FUNCTIONS).
-						LispNames.FILL, LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE ->
-					true;
-				default -> false;
-			};
-		}
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		return usesGeneralArrayOp(cons.car()) || usesGeneralArrayOp(cons.cdr());
 	}
 
 	private static boolean reachesFormatRenderer(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head) {
+				if (LispNames.FUNCTION.equals(head.name()) && cons.cdr() instanceof LispCons quoted
+						&& quoted.car() instanceof LispSymbol named && LispNames.FORMAT.equals(named.name())) {
+					return true;
+				}
+				if (LispNames.FORMAT.equals(head.name()) && formatUsesRenderer(cons)) {
+					return true;
+				}
+				if (signalRendersRuntimeControl(head.name(), cons)) {
+					return true;
+				}
+			}
+			if (reachesFormatRenderer(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol head) {
-			if (LispNames.FUNCTION.equals(head.name()) && cons.cdr() instanceof LispCons quoted
-					&& quoted.car() instanceof LispSymbol named && LispNames.FORMAT.equals(named.name())) {
-				return true;
-			}
-			if (LispNames.FORMAT.equals(head.name()) && formatUsesRenderer(cons)) {
-				return true;
-			}
-			if (signalRendersRuntimeControl(head.name(), cons)) {
-				return true;
-			}
-		}
-		return reachesFormatRenderer(cons.car()) || reachesFormatRenderer(cons.cdr());
+		return false;
 	}
 
 	/**
@@ -24561,23 +24619,26 @@ public final class LispMacroExpander {
 	// compiles to a global-closure setq exactly like the direct-member case.
 	private static LispVal rewriteNestedDefmethods(LispVal form, ClosRegistry closRegistry, List<String> generics,
 			java.util.Map<String, Integer> structAccessors, List<LispVal> hoisted) {
-		if (!(form instanceof LispCons cons)) {
-			return form;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			String member = memberOf(op.name());
-			if (LispNames.QUOTE.equals(member)) {
-				return form;
+		return LispTrees.rebuildSpine(form, node -> {
+			if (!(node instanceof LispCons cons)) {
+				return node;
 			}
-			if (LispNames.DEFMETHOD.equals(member) && cons.isProperList()) {
-				LispCons normalized = normalizeSetfMethodForm(cons, structAccessors);
-				LispVal inPlace = splitNestedMethodExpansion(expandDefmethod(normalized, closRegistry, true), hoisted);
-				generics.add(ClosRegistry.normalize(((LispSymbol) normalized.toList().get(1)).name()));
-				return inPlace;
+			if (cons.car() instanceof LispSymbol op) {
+				String member = memberOf(op.name());
+				if (LispNames.QUOTE.equals(member)) {
+					return node;
+				}
+				if (LispNames.DEFMETHOD.equals(member) && cons.isProperList()) {
+					LispCons normalized = normalizeSetfMethodForm(cons, structAccessors);
+					LispVal inPlace = splitNestedMethodExpansion(expandDefmethod(normalized, closRegistry, true),
+							hoisted);
+					generics.add(ClosRegistry.normalize(((LispSymbol) normalized.toList().get(1)).name()));
+					return inPlace;
+				}
 			}
-		}
-		return new LispCons(rewriteNestedDefmethods(cons.car(), closRegistry, generics, structAccessors, hoisted),
-				rewriteNestedDefmethods(cons.cdr(), closRegistry, generics, structAccessors, hoisted));
+			return null;
+		}, car -> rewriteNestedDefmethods(car, closRegistry, generics, structAccessors, hoisted),
+				(cell, car, cdr) -> new LispCons(car, cdr));
 	}
 
 	private static LispVal rewriteSetfFunctionDefun(LispCons cons, java.util.Map<String, Integer> structAccessors) {
@@ -24637,24 +24698,27 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean containsSymbolFunctionWrite(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			String member = memberOf(op.name());
-			if (LispNames.QUOTE.equals(member)) {
-				return false;
-			}
-			if (LispNames.SETF.equals(member) && cons.isProperList()) {
-				List<LispVal> parts = cons.toList();
-				for (int i = 1; i + 1 < parts.size(); i += 2) {
-					if (isSymbolFunctionPlace(parts.get(i))) {
-						return true;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String member = memberOf(op.name());
+				if (LispNames.QUOTE.equals(member)) {
+					return false;
+				}
+				if (LispNames.SETF.equals(member) && cons.isProperList()) {
+					List<LispVal> parts = cons.toList();
+					for (int i = 1; i + 1 < parts.size(); i += 2) {
+						if (isSymbolFunctionPlace(parts.get(i))) {
+							return true;
+						}
 					}
 				}
 			}
+			if (containsSymbolFunctionWrite(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		return containsSymbolFunctionWrite(cons.car()) || containsSymbolFunctionWrite(cons.cdr());
+		return false;
 	}
 
 	private static boolean isSymbolFunctionPlace(LispVal place) {
@@ -24679,24 +24743,27 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean containsSymbolValueWrite(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			String member = memberOf(op.name());
-			if (LispNames.QUOTE.equals(member)) {
-				return false;
-			}
-			if (LispNames.SETF.equals(member) && cons.isProperList()) {
-				List<LispVal> parts = cons.toList();
-				for (int i = 1; i + 1 < parts.size(); i += 2) {
-					if (isSymbolValuePlace(parts.get(i))) {
-						return true;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String member = memberOf(op.name());
+				if (LispNames.QUOTE.equals(member)) {
+					return false;
+				}
+				if (LispNames.SETF.equals(member) && cons.isProperList()) {
+					List<LispVal> parts = cons.toList();
+					for (int i = 1; i + 1 < parts.size(); i += 2) {
+						if (isSymbolValuePlace(parts.get(i))) {
+							return true;
+						}
 					}
 				}
 			}
+			if (containsSymbolValueWrite(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		return containsSymbolValueWrite(cons.car()) || containsSymbolValueWrite(cons.cdr());
+		return false;
 	}
 
 	private static boolean isSymbolValuePlace(LispVal place) {
@@ -24736,27 +24803,26 @@ public final class LispMacroExpander {
 	}
 
 	private static void collectSetfSymbolFunctionNames(LispVal form, java.util.Set<String> names) {
-		if (!(form instanceof LispCons cons)) {
-			return;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			String member = memberOf(op.name());
-			if (LispNames.QUOTE.equals(member)) {
-				return;
-			}
-			if (LispNames.SETF.equals(member) && cons.isProperList()) {
-				List<LispVal> parts = cons.toList();
-				for (int i = 1; i + 1 < parts.size(); i += 2) {
-					if (isSymbolFunctionPlace(parts.get(i)) && parts.get(i) instanceof LispCons place
-							&& place.isProperList() && place.toList().size() > 1
-							&& quotedSymbol(place.toList().get(1)) instanceof LispSymbol nameSym) {
-						names.add(nameSym.name());
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String member = memberOf(op.name());
+				if (LispNames.QUOTE.equals(member)) {
+					return;
+				}
+				if (LispNames.SETF.equals(member) && cons.isProperList()) {
+					List<LispVal> parts = cons.toList();
+					for (int i = 1; i + 1 < parts.size(); i += 2) {
+						if (isSymbolFunctionPlace(parts.get(i)) && parts.get(i) instanceof LispCons place
+								&& place.isProperList() && place.toList().size() > 1
+								&& quotedSymbol(place.toList().get(1)) instanceof LispSymbol nameSym) {
+							names.add(nameSym.name());
+						}
 					}
 				}
 			}
+			collectSetfSymbolFunctionNames(cons.car(), names);
+			form = cons.cdr();
 		}
-		collectSetfSymbolFunctionNames(cons.car(), names);
-		collectSetfSymbolFunctionNames(cons.cdr(), names);
 	}
 
 	/** The forwarder defuns of {@link #setfOnlyFunctionAliasNames}. */
@@ -34622,6 +34688,13 @@ public final class LispMacroExpander {
 	}
 
 	private static int makeArrayElementTypeCodes(LispVal val, @Nullable ClosRegistry registry) {
+		// The cdr spine is walked in the loop, so a long list costs no stack.
+		int spineMask = 0;
+		while (val instanceof LispCons cons) {
+			spineMask |= makeArrayElementTypeCodesOfCall(cons, registry)
+					| makeArrayElementTypeCodes(cons.car(), registry);
+			val = cons.cdr();
+		}
 		if (val instanceof LispArray array) {
 			// An array LITERAL carrying a remembered element type (#*1011 is stamped
 			// bit): the stamp is read back through the same gated dispatch a
@@ -34638,11 +34711,15 @@ public final class LispMacroExpander {
 					mask |= makeArrayElementTypeCodes(element, registry);
 				}
 			}
-			return mask;
+			return spineMask | mask;
 		}
-		if (!(val instanceof LispCons cons)) {
-			return 0;
-		}
+		return spineMask;
+	}
+
+	/**
+	 * The element-type codes one cell of a list contributes when it is a make-array call.
+	 */
+	private static int makeArrayElementTypeCodesOfCall(LispCons cons, @Nullable ClosRegistry registry) {
 		int mask = 0;
 		if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(head.name())) {
 			List<LispVal> args = cons.toList();
@@ -34659,7 +34736,7 @@ public final class LispMacroExpander {
 				}
 			}
 		}
-		return mask | makeArrayElementTypeCodes(cons.car(), registry) | makeArrayElementTypeCodes(cons.cdr(), registry);
+		return mask;
 	}
 
 	@Nullable public static LispVal resolveElementTypeAlias(@Nullable LispVal elementType, @Nullable ClosRegistry registry) {
@@ -34950,32 +35027,34 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean callsMakeArrayWithRuntimeElementType(LispVal val, boolean fillPointerShape) {
-		if (!(val instanceof LispCons cons)) {
-			return false;
-		}
-		// The prelude resolves the program before asking, so make-array can arrive
-		// package-QUALIFIED here (cl:make-array) while the keyword, being a keyword,
-		// never does.
-		if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(memberName(head.name()))) {
-			List<LispVal> parts = cons.toList();
-			LispVal elementType = null;
-			List<LispVal> others = new java.util.ArrayList<>();
-			for (int i = 2; i + 1 < parts.size(); i += 2) {
-				if (parts.get(i) instanceof LispSymbol kw && LispNames.ELEMENT_TYPE_KEYWORD.equals(kw.name())) {
-					elementType = parts.get(i + 1);
+		while (val instanceof LispCons cons) {
+			// The prelude resolves the program before asking, so make-array can arrive
+			// package-QUALIFIED here (cl:make-array) while the keyword, being a keyword,
+			// never does.
+			if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(memberName(head.name()))) {
+				List<LispVal> parts = cons.toList();
+				LispVal elementType = null;
+				List<LispVal> others = new java.util.ArrayList<>();
+				for (int i = 2; i + 1 < parts.size(); i += 2) {
+					if (parts.get(i) instanceof LispSymbol kw && LispNames.ELEMENT_TYPE_KEYWORD.equals(kw.name())) {
+						elementType = parts.get(i + 1);
+					}
+					else {
+						others.add(parts.get(i));
+						others.add(parts.get(i + 1));
+					}
 				}
-				else {
-					others.add(parts.get(i));
-					others.add(parts.get(i + 1));
+				if (elementType != null && isRuntimeElementType(elementType) && helperServesRuntimeElementType(others)
+						&& helperShapeIsFillPointer(others) == fillPointerShape) {
+					return true;
 				}
 			}
-			if (elementType != null && isRuntimeElementType(elementType) && helperServesRuntimeElementType(others)
-					&& helperShapeIsFillPointer(others) == fillPointerShape) {
+			if (callsMakeArrayWithRuntimeElementType(cons.car(), fillPointerShape)) {
 				return true;
 			}
+			val = cons.cdr();
 		}
-		return callsMakeArrayWithRuntimeElementType(cons.car(), fillPointerShape)
-				|| callsMakeArrayWithRuntimeElementType(cons.cdr(), fillPointerShape);
+		return false;
 	}
 
 	/**
@@ -34996,20 +35075,22 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean callsMakeArrayWithAnyRuntimeElementType(LispVal val) {
-		if (!(val instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(memberName(head.name()))) {
-			List<LispVal> parts = cons.toList();
-			for (int i = 2; i + 1 < parts.size(); i += 2) {
-				if (parts.get(i) instanceof LispSymbol kw && LispNames.ELEMENT_TYPE_KEYWORD.equals(kw.name())
-						&& isRuntimeElementType(parts.get(i + 1))) {
-					return true;
+		while (val instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(memberName(head.name()))) {
+				List<LispVal> parts = cons.toList();
+				for (int i = 2; i + 1 < parts.size(); i += 2) {
+					if (parts.get(i) instanceof LispSymbol kw && LispNames.ELEMENT_TYPE_KEYWORD.equals(kw.name())
+							&& isRuntimeElementType(parts.get(i + 1))) {
+						return true;
+					}
 				}
 			}
+			if (callsMakeArrayWithAnyRuntimeElementType(cons.car())) {
+				return true;
+			}
+			val = cons.cdr();
 		}
-		return callsMakeArrayWithAnyRuntimeElementType(cons.car())
-				|| callsMakeArrayWithAnyRuntimeElementType(cons.cdr());
+		return false;
 	}
 
 	/** The member half of a possibly package-qualified symbol name. */
@@ -35629,15 +35710,12 @@ public final class LispMacroExpander {
 
 	/** Records which of the given names occur as a symbol anywhere in the tree. */
 	private static void collectMentionedNames(LispVal form, java.util.Set<String> names, java.util.Set<String> out) {
-		if (form instanceof LispSymbol sym) {
-			if (names.contains(sym.name())) {
-				out.add(sym.name());
-			}
-			return;
-		}
-		if (form instanceof LispCons cons) {
+		while (form instanceof LispCons cons) {
 			collectMentionedNames(cons.car(), names, out);
-			collectMentionedNames(cons.cdr(), names, out);
+			form = cons.cdr();
+		}
+		if (form instanceof LispSymbol sym && names.contains(sym.name())) {
+			out.add(sym.name());
 		}
 	}
 
@@ -38124,6 +38202,14 @@ public final class LispMacroExpander {
 	}
 
 	private static LispVal hoistLoadTimeValues(LispVal form, List<LispVal> slots) {
+		return LispTrees.rebuildSpine(form, node -> hoistedWhole(node, slots), car -> hoistLoadTimeValues(car, slots));
+	}
+
+	/**
+	 * What {@link #hoistLoadTimeValues(LispVal, List)} makes of a node it does not split
+	 * into car and cdr, or {@code null} for an ordinary cell of a list's spine.
+	 */
+	private static @Nullable LispVal hoistedWhole(LispVal form, List<LispVal> slots) {
 		if (!(form instanceof LispCons cons)) {
 			return form;
 		}
@@ -38144,9 +38230,7 @@ public final class LispMacroExpander {
 						listToCons(List.of(new LispSymbol(LispNames.OR), slot, fill))));
 			}
 		}
-		LispVal car = hoistLoadTimeValues(cons.car(), slots);
-		LispVal cdr = hoistLoadTimeValues(cons.cdr(), slots);
-		return car == cons.car() && cdr == cons.cdr() ? form : new LispCons(car, cdr);
+		return null;
 	}
 
 	/**
@@ -39377,45 +39461,51 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean containsRuntimeSubtypep(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			if (LispNames.QUOTE.equals(op.name())) {
-				// Quoted DATA is not a call -- but a #'typep / #'coerce inside it still
-				// injects the wrapper (the reference scan that gates the wrapper walks
-				// into quotes), so the two scans have to agree about exactly that; and
-				// a #'subtypep injects its wrapper the same way.
-				return containsWrapperInjectingReference(cons.cdr())
-						|| containsFunctionReference(cons.cdr(), LispNames.SUBTYPEP);
-			}
-			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
-			String member = qn == null ? op.name() : qn.member();
-			if (LispNames.SUBTYPEP.equals(member) && cons.isProperList()) {
-				List<LispVal> parts = cons.toList();
-				if (parts.size() == 3
-						&& (literalTypeSpecifier(parts.get(1)) == null || literalTypeSpecifier(parts.get(2)) == null)) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				if (LispNames.QUOTE.equals(op.name())) {
+					// Quoted DATA is not a call -- but a #'typep / #'coerce inside it
+					// still
+					// injects the wrapper (the reference scan that gates the wrapper
+					// walks
+					// into quotes), so the two scans have to agree about exactly that;
+					// and
+					// a #'subtypep injects its wrapper the same way.
+					return containsWrapperInjectingReference(cons.cdr())
+							|| containsFunctionReference(cons.cdr(), LispNames.SUBTYPEP);
+				}
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+				String member = qn == null ? op.name() : qn.member();
+				if (LispNames.SUBTYPEP.equals(member) && cons.isProperList()) {
+					List<LispVal> parts = cons.toList();
+					if (parts.size() == 3 && (literalTypeSpecifier(parts.get(1)) == null
+							|| literalTypeSpecifier(parts.get(2)) == null)) {
+						return true;
+					}
+				}
+				if (LispNames.UPGRADED_COMPLEX_PART_TYPE.equals(member) && cons.isProperList()) {
+					// The expansion probes (subtypep <var> 'real) with a computed
+					// specifier, emitted long after this scan runs -- like a computed
+					// coerce's trailing typep, the call site is what has to be counted
+					// here.
+					return true;
+				}
+				if (LispNames.FUNCTION.equals(op.name()) && cons.cdr() instanceof LispCons named
+						&& named.car() instanceof LispSymbol target
+						&& (LispNames.UPGRADED_COMPLEX_PART_TYPE.equals(memberOf(target.name()))
+								|| LispNames.SUBTYPEP.equals(memberOf(target.name())))) {
+					// #'upgraded-complex-part-type / #'subtypep: the injected wrapper's
+					// body is a call site, so the reference counts like one (the
+					// #'typep/#'coerce rule in containsRuntimeTypep).
 					return true;
 				}
 			}
-			if (LispNames.UPGRADED_COMPLEX_PART_TYPE.equals(member) && cons.isProperList()) {
-				// The expansion probes (subtypep <var> 'real) with a computed
-				// specifier, emitted long after this scan runs -- like a computed
-				// coerce's trailing typep, the call site is what has to be counted
-				// here.
+			if (containsRuntimeSubtypep(cons.car())) {
 				return true;
 			}
-			if (LispNames.FUNCTION.equals(op.name()) && cons.cdr() instanceof LispCons named
-					&& named.car() instanceof LispSymbol target
-					&& (LispNames.UPGRADED_COMPLEX_PART_TYPE.equals(memberOf(target.name()))
-							|| LispNames.SUBTYPEP.equals(memberOf(target.name())))) {
-				// #'upgraded-complex-part-type / #'subtypep: the injected wrapper's
-				// body is a call site, so the reference counts like one (the
-				// #'typep/#'coerce rule in containsRuntimeTypep).
-				return true;
-			}
+			form = cons.cdr();
 		}
-		return containsRuntimeSubtypep(cons.car()) || containsRuntimeSubtypep(cons.cdr());
+		return false;
 	}
 
 	/**
@@ -39526,12 +39616,15 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean mentionsIntegerIntervalType(LispVal form) {
-		if (form instanceof LispCons cons) {
+		while (form instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol head && cons.cdr() instanceof LispCons
 					&& INTERVAL_HEADS.contains(IntegerTypeRange.plainName(head)) && IntegerTypeRange.of(cons) != null) {
 				return true;
 			}
-			return mentionsIntegerIntervalType(cons.car()) || mentionsIntegerIntervalType(cons.cdr());
+			if (mentionsIntegerIntervalType(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
 		}
 		return false;
 	}
@@ -39590,92 +39683,101 @@ public final class LispMacroExpander {
 
 	private static boolean containsApplyRuntimeUse(LispVal form, java.util.Set<String> defuns,
 			java.util.Set<String> wrappers, java.util.Set<String> localFns) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			String opName = op.name();
-			if (LispNames.QUOTE.equals(opName)) {
-				return false;
-			}
-			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(opName);
-			String member = qn == null ? opName : qn.member();
-			if ((LispNames.FLET.equals(member) || LispNames.LABELS.equals(member))
-					&& cons.cdr() instanceof LispCons rest) {
-				// The call-site rewrite turns #'local into a let-bound variable, so an
-				// apply of a local name is a computed designator whatever the outer
-				// scope knows under that name. Scanning the binding bodies with the
-				// extended set too (flet bodies cannot see the names) only
-				// over-approximates, which is the safe direction.
-				java.util.Set<String> extended = new java.util.HashSet<>(localFns);
-				if (rest.car() instanceof LispCons bindings) {
-					for (LispVal b = bindings; b instanceof LispCons cell; b = cell.cdr()) {
-						if (cell.car() instanceof LispCons binding && binding.car() instanceof LispSymbol local) {
-							extended.add(local.name());
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String opName = op.name();
+				if (LispNames.QUOTE.equals(opName)) {
+					return false;
+				}
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(opName);
+				String member = qn == null ? opName : qn.member();
+				if ((LispNames.FLET.equals(member) || LispNames.LABELS.equals(member))
+						&& cons.cdr() instanceof LispCons rest) {
+					// The call-site rewrite turns #'local into a let-bound variable, so
+					// an
+					// apply of a local name is a computed designator whatever the outer
+					// scope knows under that name. Scanning the binding bodies with the
+					// extended set too (flet bodies cannot see the names) only
+					// over-approximates, which is the safe direction.
+					java.util.Set<String> extended = new java.util.HashSet<>(localFns);
+					if (rest.car() instanceof LispCons bindings) {
+						for (LispVal b = bindings; b instanceof LispCons cell; b = cell.cdr()) {
+							if (cell.car() instanceof LispCons binding && binding.car() instanceof LispSymbol local) {
+								extended.add(local.name());
+							}
+						}
+					}
+					for (LispVal r = rest; r instanceof LispCons cell; r = cell.cdr()) {
+						if (containsApplyRuntimeUse(cell.car(), defuns, wrappers, extended)) {
+							return true;
+						}
+					}
+					return false;
+				}
+				if ((LispNames.APPLY.equals(member) || LispNames.MULTIPLE_VALUE_CALL.equals(member))
+						&& cons.isProperList()) {
+					List<LispVal> parts = cons.toList();
+					if (parts.size() < 3 && LispNames.APPLY.equals(member)) {
+						return true;
+					}
+					if (parts.size() >= 2) {
+						LispVal desig = parts.get(1);
+						String target = applyLiteralTargetName(desig);
+						// A wrapper is only guaranteed injected when the site spells the
+						// reference as #'name (the injection gate scans (function name));
+						// the 'name spelling counts only against the program's own
+						// defuns.
+						boolean viaFunction = desig instanceof LispCons dc && dc.car() instanceof LispSymbol dh
+								&& LispNames.FUNCTION.equals(dh.name());
+						boolean knownTarget = target != null && !localFns.contains(target)
+								&& (defuns.contains(target) || (viaFunction && wrappers.contains(target)));
+						if (!knownTarget) {
+							return true;
 						}
 					}
 				}
-				for (LispVal r = rest; r instanceof LispCons cell; r = cell.cdr()) {
-					if (containsApplyRuntimeUse(cell.car(), defuns, wrappers, extended)) {
-						return true;
-					}
-				}
-				return false;
 			}
-			if ((LispNames.APPLY.equals(member) || LispNames.MULTIPLE_VALUE_CALL.equals(member))
-					&& cons.isProperList()) {
-				List<LispVal> parts = cons.toList();
-				if (parts.size() < 3 && LispNames.APPLY.equals(member)) {
-					return true;
-				}
-				if (parts.size() >= 2) {
-					LispVal desig = parts.get(1);
-					String target = applyLiteralTargetName(desig);
-					// A wrapper is only guaranteed injected when the site spells the
-					// reference as #'name (the injection gate scans (function name));
-					// the 'name spelling counts only against the program's own defuns.
-					boolean viaFunction = desig instanceof LispCons dc && dc.car() instanceof LispSymbol dh
-							&& LispNames.FUNCTION.equals(dh.name());
-					boolean knownTarget = target != null && !localFns.contains(target)
-							&& (defuns.contains(target) || (viaFunction && wrappers.contains(target)));
-					if (!knownTarget) {
-						return true;
-					}
-				}
+			if (containsApplyRuntimeUse(cons.car(), defuns, wrappers, localFns)) {
+				return true;
 			}
+			form = cons.cdr();
 		}
-		return containsApplyRuntimeUse(cons.car(), defuns, wrappers, localFns)
-				|| containsApplyRuntimeUse(cons.cdr(), defuns, wrappers, localFns);
+		return false;
 	}
 
 	private static boolean containsRuntimeFunctionDesignator(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			if (LispNames.QUOTE.equals(op.name())) {
-				// Quoted DATA is not a call -- but a #'typep / #'coerce inside it still
-				// injects the wrapper (the reference scan that gates the wrapper walks
-				// into quotes), so the two scans have to agree about exactly that.
-				return containsWrapperInjectingReference(cons.cdr());
-			}
-			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
-			String member = qn == null ? op.name() : qn.member();
-			if ((LispNames.FUNCALL.equals(member) || LispNames.APPLY.equals(member)) && cons.isProperList()) {
-				List<LispVal> parts = cons.toList();
-				if (parts.size() >= 2 && !isStaticFunctionDesignator(parts.get(1))) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				if (LispNames.QUOTE.equals(op.name())) {
+					// Quoted DATA is not a call -- but a #'typep / #'coerce inside it
+					// still
+					// injects the wrapper (the reference scan that gates the wrapper
+					// walks
+					// into quotes), so the two scans have to agree about exactly that.
+					return containsWrapperInjectingReference(cons.cdr());
+				}
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+				String member = qn == null ? op.name() : qn.member();
+				if ((LispNames.FUNCALL.equals(member) || LispNames.APPLY.equals(member)) && cons.isProperList()) {
+					List<LispVal> parts = cons.toList();
+					if (parts.size() >= 2 && !isStaticFunctionDesignator(parts.get(1))) {
+						return true;
+					}
+				}
+				// uiop:symbol-call lowers to (funcall (intern ...) ...) INSIDE the
+				// per-expression compilers, after this scan ran -- so the pre-lowering
+				// spelling must count as a runtime-designator use itself.
+				if (qn != null && UiopExports.denotes(qn.pkg(), member, LispNames.SYMBOL_CALL) && cons.isProperList()
+						&& cons.toList().size() >= 3) {
 					return true;
 				}
 			}
-			// uiop:symbol-call lowers to (funcall (intern ...) ...) INSIDE the
-			// per-expression compilers, after this scan ran -- so the pre-lowering
-			// spelling must count as a runtime-designator use itself.
-			if (qn != null && UiopExports.denotes(qn.pkg(), member, LispNames.SYMBOL_CALL) && cons.isProperList()
-					&& cons.toList().size() >= 3) {
+			if (containsRuntimeFunctionDesignator(cons.car())) {
 				return true;
 			}
+			form = cons.cdr();
 		}
-		return containsRuntimeFunctionDesignator(cons.car()) || containsRuntimeFunctionDesignator(cons.cdr());
+		return false;
 	}
 
 	/**
@@ -39697,39 +39799,42 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean containsRuntimeFunctionBox(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			if (LispNames.QUOTE.equals(op.name())) {
-				return false;
-			}
-			String member = memberOf(op.name());
-			if ((LispNames.SYMBOL_FUNCTION.equals(member) || LispNames.FDEFINITION.equals(member))
-					&& cons.isProperList()) {
-				List<LispVal> parts = cons.toList();
-				if (parts.size() == 2 && !isQuotedSymbol(parts.get(1))) {
-					return true;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				if (LispNames.QUOTE.equals(op.name())) {
+					return false;
 				}
-			}
-			if (LispNames.COERCE.equals(member) && cons.isProperList()) {
-				List<LispVal> parts = cons.toList();
-				if (parts.size() == 3) {
-					String type = quotedSymbolName(parts.get(2));
-					if (type != null) {
-						String typeMember = memberOf(type);
-						if ("FUNCTION".equals(typeMember)) {
-							return true;
-						}
-					}
-					else if (!(parts.get(2) instanceof LispString)) {
-						// A computed result type can name FUNCTION at run time.
+				String member = memberOf(op.name());
+				if ((LispNames.SYMBOL_FUNCTION.equals(member) || LispNames.FDEFINITION.equals(member))
+						&& cons.isProperList()) {
+					List<LispVal> parts = cons.toList();
+					if (parts.size() == 2 && !isQuotedSymbol(parts.get(1))) {
 						return true;
 					}
 				}
+				if (LispNames.COERCE.equals(member) && cons.isProperList()) {
+					List<LispVal> parts = cons.toList();
+					if (parts.size() == 3) {
+						String type = quotedSymbolName(parts.get(2));
+						if (type != null) {
+							String typeMember = memberOf(type);
+							if ("FUNCTION".equals(typeMember)) {
+								return true;
+							}
+						}
+						else if (!(parts.get(2) instanceof LispString)) {
+							// A computed result type can name FUNCTION at run time.
+							return true;
+						}
+					}
+				}
 			}
+			if (containsRuntimeFunctionBox(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		return containsRuntimeFunctionBox(cons.car()) || containsRuntimeFunctionBox(cons.cdr());
+		return false;
 	}
 
 	private static boolean isQuotedSymbol(LispVal form) {
@@ -39773,30 +39878,35 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean containsRuntimeErrorDispatch(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			if (LispNames.QUOTE.equals(op.name())) {
-				// Quoted DATA is not a call -- but a #'typep / #'coerce inside it still
-				// injects the wrapper (the reference scan that gates the wrapper walks
-				// into quotes), so the two scans have to agree about exactly that.
-				return containsWrapperInjectingReference(cons.cdr());
-			}
-			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
-			String member = qn == null ? op.name() : qn.member();
-			if (LispNames.ERROR.equals(member) && cons.isProperList()) {
-				List<LispVal> parts = cons.toList();
-				if (parts.size() > 2 && isRuntimeErrorDatum(parts.get(1))) {
-					return true;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				if (LispNames.QUOTE.equals(op.name())) {
+					// Quoted DATA is not a call -- but a #'typep / #'coerce inside it
+					// still
+					// injects the wrapper (the reference scan that gates the wrapper
+					// walks
+					// into quotes), so the two scans have to agree about exactly that.
+					return containsWrapperInjectingReference(cons.cdr());
+				}
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+				String member = qn == null ? op.name() : qn.member();
+				if (LispNames.ERROR.equals(member) && cons.isProperList()) {
+					List<LispVal> parts = cons.toList();
+					if (parts.size() > 2 && isRuntimeErrorDatum(parts.get(1))) {
+						return true;
+					}
+				}
+				List<LispVal> evaluated = evaluatedClauseForms(member, cons);
+				if (evaluated != null) {
+					return evaluated.stream().anyMatch(LispMacroExpander::containsRuntimeErrorDispatch);
 				}
 			}
-			List<LispVal> evaluated = evaluatedClauseForms(member, cons);
-			if (evaluated != null) {
-				return evaluated.stream().anyMatch(LispMacroExpander::containsRuntimeErrorDispatch);
+			if (containsRuntimeErrorDispatch(cons.car())) {
+				return true;
 			}
+			form = cons.cdr();
 		}
-		return containsRuntimeErrorDispatch(cons.car()) || containsRuntimeErrorDispatch(cons.cdr());
+		return false;
 	}
 
 	/**
@@ -39963,43 +40073,50 @@ public final class LispMacroExpander {
 	}
 
 	private static boolean containsRuntimeTypep(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			if (LispNames.QUOTE.equals(op.name())) {
-				// Quoted DATA is not a call -- but a #'typep / #'coerce inside it still
-				// injects the wrapper (the reference scan that gates the wrapper walks
-				// into quotes), so the two scans have to agree about exactly that.
-				return containsWrapperInjectingReference(cons.cdr());
-			}
-			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
-			String member = qn == null ? op.name() : qn.member();
-			if (LispNames.TYPEP.equals(member) && cons.isProperList()) {
-				List<LispVal> parts = cons.toList();
-				if (parts.size() == 3 && isComputedTypepSpec(parts.get(2))) {
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				if (LispNames.QUOTE.equals(op.name())) {
+					// Quoted DATA is not a call -- but a #'typep / #'coerce inside it
+					// still
+					// injects the wrapper (the reference scan that gates the wrapper
+					// walks
+					// into quotes), so the two scans have to agree about exactly that.
+					return containsWrapperInjectingReference(cons.cdr());
+				}
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+				String member = qn == null ? op.name() : qn.member();
+				if (LispNames.TYPEP.equals(member) && cons.isProperList()) {
+					List<LispVal> parts = cons.toList();
+					if (parts.size() == 3 && isComputedTypepSpec(parts.get(2))) {
+						return true;
+					}
+				}
+				if (LispNames.FUNCTION.equals(op.name()) && cons.cdr() instanceof LispCons named
+						&& named.car() instanceof LispSymbol target && (LispNames.TYPEP.equals(memberOf(target.name()))
+								|| LispNames.COERCE.equals(memberOf(target.name())))) {
+					// #'typep: the wrapper's specifier is a parameter, i.e. computed.
+					// #'coerce: its wrapper's result type is a parameter too, and the
+					// computed-coerce dispatch ends in a computed typep.
 					return true;
 				}
+				if (LispNames.COERCE.equals(member) && cons.isProperList()) {
+					// A COMPUTED coerce type ends in the "already of that type" arm,
+					// which
+					// is a computed typep -- emitted by expandComputedCoerce long after
+					// this
+					// scan runs, so the coerce site is what has to be counted here.
+					List<LispVal> parts = cons.toList();
+					if (parts.size() == 3 && isComputedTypepSpec(parts.get(2))) {
+						return true;
+					}
+				}
 			}
-			if (LispNames.FUNCTION.equals(op.name()) && cons.cdr() instanceof LispCons named
-					&& named.car() instanceof LispSymbol target && (LispNames.TYPEP.equals(memberOf(target.name()))
-							|| LispNames.COERCE.equals(memberOf(target.name())))) {
-				// #'typep: the wrapper's specifier is a parameter, i.e. computed.
-				// #'coerce: its wrapper's result type is a parameter too, and the
-				// computed-coerce dispatch ends in a computed typep.
+			if (containsRuntimeTypep(cons.car())) {
 				return true;
 			}
-			if (LispNames.COERCE.equals(member) && cons.isProperList()) {
-				// A COMPUTED coerce type ends in the "already of that type" arm, which
-				// is a computed typep -- emitted by expandComputedCoerce long after this
-				// scan runs, so the coerce site is what has to be counted here.
-				List<LispVal> parts = cons.toList();
-				if (parts.size() == 3 && isComputedTypepSpec(parts.get(2))) {
-					return true;
-				}
-			}
+			form = cons.cdr();
 		}
-		return containsRuntimeTypep(cons.car()) || containsRuntimeTypep(cons.cdr());
+		return false;
 	}
 
 	/**
@@ -40008,16 +40125,19 @@ public final class LispMacroExpander {
 	 * call. Walks quoted data, because the wrapper's own gate does.
 	 */
 	private static boolean containsWrapperInjectingReference(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op && LispNames.FUNCTION.equals(op.name())
+					&& cons.cdr() instanceof LispCons named && named.car() instanceof LispSymbol target
+					&& (LispNames.TYPEP.equals(memberOf(target.name()))
+							|| LispNames.COERCE.equals(memberOf(target.name())))) {
+				return true;
+			}
+			if (containsWrapperInjectingReference(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol op && LispNames.FUNCTION.equals(op.name())
-				&& cons.cdr() instanceof LispCons named && named.car() instanceof LispSymbol target
-				&& (LispNames.TYPEP.equals(memberOf(target.name()))
-						|| LispNames.COERCE.equals(memberOf(target.name())))) {
-			return true;
-		}
-		return containsWrapperInjectingReference(cons.car()) || containsWrapperInjectingReference(cons.cdr());
+		return false;
 	}
 
 	/**
@@ -40026,15 +40146,18 @@ public final class LispMacroExpander {
 	 * wrapper on.
 	 */
 	private static boolean containsFunctionReference(LispVal form, String name) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op && LispNames.FUNCTION.equals(op.name())
+					&& cons.cdr() instanceof LispCons named && named.car() instanceof LispSymbol target
+					&& name.equals(target.name())) {
+				return true;
+			}
+			if (containsFunctionReference(cons.car(), name)) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol op && LispNames.FUNCTION.equals(op.name())
-				&& cons.cdr() instanceof LispCons named && named.car() instanceof LispSymbol target
-				&& name.equals(target.name())) {
-			return true;
-		}
-		return containsFunctionReference(cons.car(), name) || containsFunctionReference(cons.cdr(), name);
+		return false;
 	}
 
 	/** Whether a typep specifier argument takes the computed-specifier dispatch path. */
@@ -40381,10 +40504,12 @@ public final class LispMacroExpander {
 
 	/** The cons-cell count of a tree -- the size measure of quoted-data construction. */
 	private static int consNodeCount(LispVal value) {
-		if (!(value instanceof LispCons cons)) {
-			return 0;
+		int count = 0;
+		while (value instanceof LispCons cons) {
+			count += 1 + consNodeCount(cons.car());
+			value = cons.cdr();
 		}
-		return 1 + consNodeCount(cons.car()) + consNodeCount(cons.cdr());
+		return count;
 	}
 
 	/**
@@ -41824,13 +41949,13 @@ public final class LispMacroExpander {
 	 * depth.
 	 */
 	private static boolean containsLambdaListKeyword(LispVal pattern) {
-		if (pattern instanceof LispSymbol sym) {
-			return sym.name().startsWith("&");
+		while (pattern instanceof LispCons cons) {
+			if (containsLambdaListKeyword(cons.car())) {
+				return true;
+			}
+			pattern = cons.cdr();
 		}
-		if (pattern instanceof LispCons cons) {
-			return containsLambdaListKeyword(cons.car()) || containsLambdaListKeyword(cons.cdr());
-		}
-		return false;
+		return pattern instanceof LispSymbol sym && sym.name().startsWith("&");
 	}
 
 	/**
@@ -41840,16 +41965,16 @@ public final class LispMacroExpander {
 	 * destructuring clauses and {@code destructuring-bind}.
 	 */
 	private static void destructurePairs(LispVal pattern, LispVal source, List<LispVal[]> out) {
+		while (pattern instanceof LispCons c) {
+			destructurePairs(c.car(), mvCall(LispNames.CAR, source), out);
+			pattern = c.cdr();
+			source = mvCall(LispNames.CDR, source);
+		}
 		if (pattern instanceof LispNil) {
 			return;
 		}
 		if (pattern instanceof LispSymbol s) {
 			out.add(new LispVal[] { s, source });
-			return;
-		}
-		if (pattern instanceof LispCons c) {
-			destructurePairs(c.car(), mvCall(LispNames.CAR, source), out);
-			destructurePairs(c.cdr(), mvCall(LispNames.CDR, source), out);
 			return;
 		}
 		throw new IllegalArgumentException("invalid destructuring pattern: " + pattern.print());

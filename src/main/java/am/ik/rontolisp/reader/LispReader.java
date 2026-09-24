@@ -24,6 +24,7 @@ import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispSingleFloatArray;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
@@ -487,39 +488,36 @@ public final class LispReader {
 	 * cells.
 	 */
 	private void patchLabel(LispVal node, LispCons placeholder, LispVal value, java.util.Set<LispVal> seen) {
-		switch (node) {
-			case LispCons cons -> {
-				if (!seen.add(cons)) {
-					return;
-				}
-				if (cons.car() == placeholder) {
-					cons.setCar(value);
+		// The cdr spine is walked in a loop, so a long list costs no stack.
+		LispVal cur = node;
+		while (cur instanceof LispCons cons) {
+			if (!seen.add(cons)) {
+				return;
+			}
+			if (cons.car() == placeholder) {
+				cons.setCar(value);
+			}
+			else {
+				patchLabel(cons.car(), placeholder, value, seen);
+			}
+			if (cons.cdr() == placeholder) {
+				cons.setCdr(value);
+				return;
+			}
+			cur = cons.cdr();
+		}
+		if (cur instanceof am.ik.rontolisp.LispArray array) {
+			if (!seen.add(array)) {
+				return;
+			}
+			LispVal[] data = array.data();
+			for (int i = 0; i < data.length; i++) {
+				if (data[i] == placeholder) {
+					data[i] = value;
 				}
 				else {
-					patchLabel(cons.car(), placeholder, value, seen);
+					patchLabel(data[i], placeholder, value, seen);
 				}
-				if (cons.cdr() == placeholder) {
-					cons.setCdr(value);
-				}
-				else {
-					patchLabel(cons.cdr(), placeholder, value, seen);
-				}
-			}
-			case am.ik.rontolisp.LispArray array -> {
-				if (!seen.add(array)) {
-					return;
-				}
-				LispVal[] data = array.data();
-				for (int i = 0; i < data.length; i++) {
-					if (data[i] == placeholder) {
-						data[i] = value;
-					}
-					else {
-						patchLabel(data[i], placeholder, value, seen);
-					}
-				}
-			}
-			default -> {
 			}
 		}
 	}
@@ -1061,10 +1059,9 @@ public final class LispReader {
 
 	/** Records every {@code !n} argument symbol reachable in a {@code #L} body. */
 	private static void collectBangVars(LispVal form, java.util.Set<Integer> into) {
-		if (form instanceof LispCons cons) {
+		while (form instanceof LispCons cons) {
 			collectBangVars(cons.car(), into);
-			collectBangVars(cons.cdr(), into);
-			return;
+			form = cons.cdr();
 		}
 		if (form instanceof LispSymbol symbol) {
 			String name = LispSymbol.memberName(symbol.name());
@@ -1474,13 +1471,12 @@ public final class LispReader {
 	// inner backquotes are expanded here. Comma markers belonging to an outer level
 	// are preserved for the enclosing bqProcess pass.
 	private LispVal bqExpandEscaped(LispVal x) {
-		if (!(x instanceof LispCons cons)) {
-			return x;
-		}
-		if (cons.car() == BQ_BACKQUOTE) {
-			return bqCompletelyProcess(cadr(x));
-		}
-		return new LispCons(bqExpandEscaped(cons.car()), bqExpandEscaped(cons.cdr()));
+		return LispTrees.rebuildSpine(x, node -> {
+			if (!(node instanceof LispCons cons)) {
+				return node;
+			}
+			return cons.car() == BQ_BACKQUOTE ? bqCompletelyProcess(cadr(node)) : null;
+		}, this::bqExpandEscaped, (cell, car, cdr) -> new LispCons(car, cdr));
 	}
 
 	private boolean bqSplicingFrob(LispVal x) {
@@ -1505,15 +1501,7 @@ public final class LispReader {
 
 	// maptree of bqSimplify over the arguments of a marker form (car unchanged).
 	private LispVal bqMaptreeSimplify(LispVal x) {
-		if (!(x instanceof LispCons cons)) {
-			return bqSimplify(x);
-		}
-		LispVal a = bqSimplify(cons.car());
-		LispVal d = bqMaptreeSimplify(cons.cdr());
-		if (a == cons.car() && d == cons.cdr()) {
-			return x;
-		}
-		return new LispCons(a, d);
+		return LispTrees.rebuildSpine(x, node -> node instanceof LispCons ? null : bqSimplify(node), this::bqSimplify);
 	}
 
 	private LispVal bqSimplifyArgs(LispVal x) {
@@ -1637,15 +1625,8 @@ public final class LispReader {
 	}
 
 	private LispVal bqMaptreeRemove(LispVal x) {
-		if (!(x instanceof LispCons cons)) {
-			return bqRemoveTokens(x);
-		}
-		LispVal a = bqRemoveTokens(cons.car());
-		LispVal d = bqMaptreeRemove(cons.cdr());
-		if (a == cons.car() && d == cons.cdr()) {
-			return x;
-		}
-		return new LispCons(a, d);
+		return LispTrees.rebuildSpine(x, node -> node instanceof LispCons ? null : bqRemoveTokens(node),
+				this::bqRemoveTokens);
 	}
 
 	// --- small cons/list helpers for the CLtL2 port -----------------------------

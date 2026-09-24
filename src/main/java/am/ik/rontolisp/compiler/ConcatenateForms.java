@@ -450,19 +450,24 @@ public final class ConcatenateForms {
 	}
 
 	private static boolean needsSeqString(LispVal form, @Nullable ClosRegistry closRegistry) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		List<LispVal> parts = cons.toList();
-		if (parts.size() >= 3 && parts.get(0) instanceof LispSymbol op && LispNames.CONCATENATE.equals(op.name())
-				&& literalResultFamily(parts.get(1), closRegistry) == ResultFamily.STRING) {
-			for (LispVal arg : parts.subList(2, parts.size())) {
-				if (!isKnownString(arg)) {
-					return true;
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op && LispNames.CONCATENATE.equals(op.name())) {
+				List<LispVal> parts = cons.toList();
+				if (parts.size() >= 3 && literalResultFamily(parts.get(1), closRegistry) == ResultFamily.STRING) {
+					for (LispVal arg : parts.subList(2, parts.size())) {
+						if (!isKnownString(arg)) {
+							return true;
+						}
+					}
 				}
 			}
+			if (needsSeqString(cons.car(), closRegistry)) {
+				return true;
+			}
+			node = cons.cdr();
 		}
-		return needsSeqString(cons.car(), closRegistry) || needsSeqString(cons.cdr(), closRegistry);
+		return false;
 	}
 
 	/**
@@ -514,25 +519,28 @@ public final class ConcatenateForms {
 
 	private static boolean needsPackedVector(LispVal form, @Nullable ClosRegistry closRegistry,
 			java.util.function.Predicate<ResultSpec> wanted) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		List<LispVal> parts = cons.toList();
-		// (concatenate 'TYPE ...) reads its designator at index 1, (coerce value 'TYPE)
-		// at index 2; both lower through a packed builder when it spells a packed
-		// element type.
-		if (parts.size() >= 2 && parts.get(0) instanceof LispSymbol op) {
-			int designator = LispNames.CONCATENATE.equals(op.name()) ? 1
-					: (LispNames.COERCE.equals(op.name()) && parts.size() == 3) ? 2 : -1;
-			if (designator > 0) {
-				ResultSpec spec = literalResultSpec(parts.get(designator), closRegistry);
-				if (spec != null && wanted.test(spec)) {
-					return true;
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			// (concatenate 'TYPE ...) reads its designator at index 1, (coerce value
+			// 'TYPE) at index 2; both lower through a packed builder when it spells a
+			// packed element type.
+			if (cons.car() instanceof LispSymbol op
+					&& (LispNames.CONCATENATE.equals(op.name()) || LispNames.COERCE.equals(op.name()))) {
+				List<LispVal> parts = cons.toList();
+				int designator = LispNames.CONCATENATE.equals(op.name()) ? 1 : parts.size() == 3 ? 2 : -1;
+				if (parts.size() >= 2 && designator > 0) {
+					ResultSpec spec = literalResultSpec(parts.get(designator), closRegistry);
+					if (spec != null && wanted.test(spec)) {
+						return true;
+					}
 				}
 			}
+			if (needsPackedVector(cons.car(), closRegistry, wanted)) {
+				return true;
+			}
+			node = cons.cdr();
 		}
-		return needsPackedVector(cons.car(), closRegistry, wanted)
-				|| needsPackedVector(cons.cdr(), closRegistry, wanted);
+		return false;
 	}
 
 	// Nested binary %string-concat calls; a lone argument is concatenated with "" so the

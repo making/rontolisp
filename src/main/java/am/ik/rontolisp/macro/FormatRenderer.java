@@ -204,13 +204,13 @@ public final class FormatRenderer {
 	 * @return true when {@code %fmt-render} appears anywhere in it
 	 */
 	public static boolean isUsed(LispVal form) {
-		if (form instanceof LispSymbol sym) {
-			return RENDER.equals(sym.name());
+		while (form instanceof LispCons cons) {
+			if (isUsed(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		if (form instanceof LispCons cons) {
-			return isUsed(cons.car()) || isUsed(cons.cdr());
-		}
-		return false;
+		return form instanceof LispSymbol sym && RENDER.equals(sym.name());
 	}
 
 	/**
@@ -232,13 +232,14 @@ public final class FormatRenderer {
 	}
 
 	private static boolean namesFunctionDesignator(LispVal form) {
-		if (form instanceof LispString literal) {
-			return !functionDesignatorNames(literal.value().toUpperCase(java.util.Locale.ROOT)).isEmpty();
+		while (form instanceof LispCons cons) {
+			if (namesFunctionDesignator(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		if (form instanceof LispCons cons) {
-			return namesFunctionDesignator(cons.car()) || namesFunctionDesignator(cons.cdr());
-		}
-		return false;
+		return form instanceof LispString literal
+				&& !functionDesignatorNames(literal.value().toUpperCase(java.util.Locale.ROOT)).isEmpty();
 	}
 
 	/**

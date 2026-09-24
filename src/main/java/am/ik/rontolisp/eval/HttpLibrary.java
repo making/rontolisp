@@ -16,6 +16,7 @@ import java.util.Set;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.ClackEnv;
@@ -214,11 +215,22 @@ public final class HttpLibrary {
 	}
 
 	private static boolean references(LispVal form, String member) {
-		return switch (form) {
-			case LispSymbol sym -> namesRontolispMember(sym.name(), member);
-			case LispCons cons -> references(cons.car(), member) || references(cons.cdr(), member);
-			default -> false;
-		};
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return namesRontolispMember(sym.name(), member);
+				}
+				case LispCons cons -> {
+					if (references(cons.car(), member)) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
 	}
 
 	// Whether the symbol names the given rontolisp-package member, in any source
@@ -289,24 +301,21 @@ public final class HttpLibrary {
 	// untouched; unchanged subtrees keep their identity (no needless rebuild of the
 	// whole spliced program).
 	private static LispVal rewriteNestedHandlerCalls(LispVal form, String[] holder) {
-		if (!(form instanceof LispCons cons)) {
-			return form;
-		}
-		if (cons.car() instanceof LispSymbol sym && LispNames.QUOTE.equals(sym.name())) {
-			return form;
-		}
-		if (isHttpHandlerForm(form)) {
-			if (holder[0] == null) {
-				holder[0] = handlerName(cons);
+		return LispTrees.rebuildSpine(form, node -> {
+			if (!(node instanceof LispCons cons)) {
+				return node;
 			}
-			return am.ik.rontolisp.LispNil.INSTANCE;
-		}
-		LispVal car = rewriteNestedHandlerCalls(cons.car(), holder);
-		LispVal cdr = rewriteNestedHandlerCalls(cons.cdr(), holder);
-		if (car == cons.car() && cdr == cons.cdr()) {
-			return form;
-		}
-		return new LispCons(car, cdr);
+			if (cons.car() instanceof LispSymbol sym && LispNames.QUOTE.equals(sym.name())) {
+				return node;
+			}
+			if (isHttpHandlerForm(node)) {
+				if (holder[0] == null) {
+					holder[0] = handlerName(cons);
+				}
+				return am.ik.rontolisp.LispNil.INSTANCE;
+			}
+			return null;
+		}, car -> rewriteNestedHandlerCalls(car, holder));
 	}
 
 	// Extracts the handler function name from (rontolisp:http-handler 'name [port]).
@@ -350,26 +359,30 @@ public final class HttpLibrary {
 	}
 
 	private static void collectNames(@Nullable LispVal form, Set<String> names) {
-		switch (form) {
-			case LispSymbol sym -> {
-				names.add(sym.name());
-				// The reader upcases user spellings while WIT member names are
-				// lower-kebab:
-				// record the lowercase twin too, so the member filter matches every
-				// referenced binding (mirrors WitImportInliner.collectNames).
-				names.add(sym.name().toLowerCase(java.util.Locale.ROOT));
-				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-				if (qn != null) {
-					names.add(qn.member());
-					names.add(qn.member().toLowerCase(java.util.Locale.ROOT));
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					names.add(sym.name());
+					// The reader upcases user spellings while WIT member names are
+					// lower-kebab:
+					// record the lowercase twin too, so the member filter matches every
+					// referenced binding (mirrors WitImportInliner.collectNames).
+					names.add(sym.name().toLowerCase(java.util.Locale.ROOT));
+					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+					if (qn != null) {
+						names.add(qn.member());
+						names.add(qn.member().toLowerCase(java.util.Locale.ROOT));
+					}
+				}
+				case LispCons cons -> {
+					collectNames(cons.car(), names);
+					form = cons.cdr();
+					continue;
+				}
+				case null, default -> {
 				}
 			}
-			case LispCons cons -> {
-				collectNames(cons.car(), names);
-				collectNames(cons.cdr(), names);
-			}
-			case null, default -> {
-			}
+			return;
 		}
 	}
 

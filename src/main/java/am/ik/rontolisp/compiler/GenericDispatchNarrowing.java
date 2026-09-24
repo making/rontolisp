@@ -153,17 +153,21 @@ public final class GenericDispatchNarrowing implements DispatchNarrower {
 	}
 
 	private static boolean mentionsAsyncHead(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol head) {
-			String member = memberOf(head.name());
-			if (LispNames.ASYNC_DEFUN.equals(member) || LispNames.ASYNC_LAMBDA.equals(member)
-					|| LispNames.AWAIT.equals(member)) {
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head) {
+				String member = memberOf(head.name());
+				if (LispNames.ASYNC_DEFUN.equals(member) || LispNames.ASYNC_LAMBDA.equals(member)
+						|| LispNames.AWAIT.equals(member)) {
+					return true;
+				}
+			}
+			if (mentionsAsyncHead(cons.car())) {
 				return true;
 			}
+			node = cons.cdr();
 		}
-		return mentionsAsyncHead(cons.car()) || mentionsAsyncHead(cons.cdr());
+		return false;
 	}
 
 	private static String memberOf(String name) {
@@ -545,6 +549,11 @@ public final class GenericDispatchNarrowing implements DispatchNarrower {
 
 		/** Every symbol/string in a quoted datum could reach funcall as a designator. */
 		private void escapeQuotedData(LispVal datum) {
+			// The cdr spine in a loop, so a long quoted list costs no stack.
+			while (datum instanceof LispCons cons) {
+				this.escapeQuotedData(cons.car());
+				datum = cons.cdr();
+			}
 			if (datum instanceof LispSymbol sym) {
 				if (sym.isKeyword()) {
 					if (this.symbolBuilder) {
@@ -572,11 +581,6 @@ public final class GenericDispatchNarrowing implements DispatchNarrower {
 				for (int i = 0; i < instance.slotCount(); i++) {
 					this.escapeQuotedData(instance.slot(i));
 				}
-				return;
-			}
-			if (datum instanceof LispCons cons) {
-				this.escapeQuotedData(cons.car());
-				this.escapeQuotedData(cons.cdr());
 			}
 		}
 

@@ -11,6 +11,7 @@ import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.LispMacroExpander;
 
@@ -384,15 +385,8 @@ public final class ShadowedBuiltins {
 	}
 
 	private static LispVal rewriteTail(LispVal tail, Map<String, String> shadowed, boolean closeShadowed) {
-		if (!(tail instanceof LispCons cons)) {
-			return tail;
-		}
-		LispVal car = rewrite(cons.car(), shadowed, closeShadowed);
-		LispVal cdr = rewriteTail(cons.cdr(), shadowed, closeShadowed);
-		if (car == cons.car() && cdr == cons.cdr()) {
-			return tail;
-		}
-		return new LispCons(car, cdr);
+		return LispTrees.rebuildSpine(tail, node -> node instanceof LispCons ? null : node,
+				element -> rewrite(element, shadowed, closeShadowed));
 	}
 
 	/** A lambda list: parameter names stay, only default-value forms evaluate. */

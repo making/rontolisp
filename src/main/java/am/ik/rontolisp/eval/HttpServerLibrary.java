@@ -170,12 +170,22 @@ public final class HttpServerLibrary {
 	}
 
 	private static boolean mentionsBufferedConstructor(LispVal form) {
-		return switch (form) {
-			case LispSymbol sym ->
-				BODY_STREAM.equals(member(sym.name())) || "%HTTP-UTF8-ENCODE".equals(member(sym.name()));
-			case LispCons cons -> mentionsBufferedConstructor(cons.car()) || mentionsBufferedConstructor(cons.cdr());
-			default -> false;
-		};
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return BODY_STREAM.equals(member(sym.name())) || "%HTTP-UTF8-ENCODE".equals(member(sym.name()));
+				}
+				case LispCons cons -> {
+					if (mentionsBufferedConstructor(cons.car())) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
 	}
 
 	// The buffered-body half of the library: the Gray stream class with its methods and
@@ -191,11 +201,22 @@ public final class HttpServerLibrary {
 	}
 
 	private static boolean mentionsBodyStreamClass(LispVal form) {
-		return switch (form) {
-			case LispSymbol sym -> "HTTP-REQUEST-BODY-STREAM".equals(member(sym.name()));
-			case LispCons cons -> mentionsBodyStreamClass(cons.car()) || mentionsBodyStreamClass(cons.cdr());
-			default -> false;
-		};
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return "HTTP-REQUEST-BODY-STREAM".equals(member(sym.name()));
+				}
+				case LispCons cons -> {
+					if (mentionsBodyStreamClass(cons.car())) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
 	}
 
 	/**
@@ -251,26 +272,30 @@ public final class HttpServerLibrary {
 		}
 
 		private void detect(LispVal form) {
-			if (this.found) {
-				return;
-			}
-			switch (form) {
-				case LispSymbol sym -> {
-					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-					String name = qn == null ? sym.name() : qn.member();
-					boolean rontolispQualified = qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg());
-					boolean inRontolisp = qn == null && LispNames.RONTOLISP_PKG.equals(this.currentPackage);
-					if ((rontolispQualified || inRontolisp) && (LispNames.HTTP_HANDLER.equals(name)
-							|| LispNames.HTTP_SERVER_START.equals(name) || ENTRY_POINTS.contains(name))) {
-						this.found = true;
+			while (true) {
+				if (this.found) {
+					return;
+				}
+				switch (form) {
+					case LispSymbol sym -> {
+						PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+						String name = qn == null ? sym.name() : qn.member();
+						boolean rontolispQualified = qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg());
+						boolean inRontolisp = qn == null && LispNames.RONTOLISP_PKG.equals(this.currentPackage);
+						if ((rontolispQualified || inRontolisp) && (LispNames.HTTP_HANDLER.equals(name)
+								|| LispNames.HTTP_SERVER_START.equals(name) || ENTRY_POINTS.contains(name))) {
+							this.found = true;
+						}
+					}
+					case LispCons cons -> {
+						detect(cons.car());
+						form = cons.cdr();
+						continue;
+					}
+					default -> {
 					}
 				}
-				case LispCons cons -> {
-					detect(cons.car());
-					detect(cons.cdr());
-				}
-				default -> {
-				}
+				return;
 			}
 		}
 

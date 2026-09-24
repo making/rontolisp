@@ -156,13 +156,17 @@ public final class CompileTimeBoundp {
 	}
 
 	private static boolean calls(LispVal form, String name) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && name.equals(member(head.name()))) {
+				return true;
+			}
+			if (calls(cons.car(), name)) {
+				return true;
+			}
+			node = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol head && name.equals(member(head.name()))) {
-			return true;
-		}
-		return calls(cons.car(), name) || calls(cons.cdr(), name);
+		return false;
 	}
 
 	// -- what a form makes a global ------------------------------------------------
@@ -181,70 +185,78 @@ public final class CompileTimeBoundp {
 	 * @param poisoned collects the names this pass must never answer for
 	 */
 	private static void scan(LispVal form, boolean deferred, boolean topLevel, Names bound, Names poisoned) {
-		if (!(form instanceof LispCons cons)) {
-			return;
-		}
-		String op = cons.car() instanceof LispSymbol head ? member(head.name()) : null;
-		if (LispNames.QUOTE.equals(op)) {
-			return;
-		}
-		if (op != null) {
-			List<LispVal> parts = cons.isProperList() ? cons.toList() : List.of();
-			switch (op) {
-				case LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT -> {
-					if (parts.size() >= 2 && parts.get(1) instanceof LispSymbol name) {
-						// (defvar x) with no value proclaims x special and binds
-						// NOTHING, so a later (let ((x ...)) ...) is what makes boundp
-						// answer t for its extent -- an order this pass does not model.
-						boolean binds = !LispNames.DEFVAR.equals(op) || parts.size() >= 3;
-						(binds && !deferred ? bound : poisoned).add(name.name());
-					}
-				}
-				case LispNames.SETQ, LispNames.SETF -> {
-					for (int i = 1; i + 1 < parts.size(); i += 2) {
-						if (parts.get(i) instanceof LispSymbol place && !place.isKeyword()) {
-							(deferred ? poisoned : bound).add(place.name());
+		// The cdr spine is walked in a loop -- every tail scanned as the recursive walk
+		// did, deferred as its parent -- so a long list costs no stack.
+		LispVal node = form;
+		boolean nodeDeferred = deferred;
+		boolean nodeTopLevel = topLevel;
+		while (node instanceof LispCons cons) {
+			String op = cons.car() instanceof LispSymbol head ? member(head.name()) : null;
+			if (LispNames.QUOTE.equals(op)) {
+				return;
+			}
+			if (op != null) {
+				switch (op) {
+					case LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT -> {
+						List<LispVal> parts = cons.isProperList() ? cons.toList() : List.of();
+						if (parts.size() >= 2 && parts.get(1) instanceof LispSymbol name) {
+							// (defvar x) with no value proclaims x special and binds
+							// NOTHING, so a later (let ((x ...)) ...) is what makes
+							// boundp answer t for its extent -- an order this pass does
+							// not model.
+							boolean binds = !LispNames.DEFVAR.equals(op) || parts.size() >= 3;
+							(binds && !nodeDeferred ? bound : poisoned).add(name.name());
 						}
 					}
-				}
-				case LispNames.DEFUN -> {
-					if (!topLevel && cons.cdr() instanceof LispCons nameCell
-							&& nameCell.car() instanceof LispSymbol name) {
-						(deferred ? poisoned : bound).add(name.name());
+					case LispNames.SETQ, LispNames.SETF -> {
+						List<LispVal> parts = cons.isProperList() ? cons.toList() : List.of();
+						for (int i = 1; i + 1 < parts.size(); i += 2) {
+							if (parts.get(i) instanceof LispSymbol place && !place.isKeyword()) {
+								(nodeDeferred ? poisoned : bound).add(place.name());
+							}
+						}
+					}
+					case LispNames.DEFUN -> {
+						if (!nodeTopLevel && cons.cdr() instanceof LispCons nameCell
+								&& nameCell.car() instanceof LispSymbol name) {
+							(nodeDeferred ? poisoned : bound).add(name.name());
+						}
+					}
+					case LispNames.DECLAIM, LispNames.PROCLAIM, LispNames.DECLARE -> {
+						// A special proclamation binds nothing by itself, but it is what
+						// lets a let of the name bind it dynamically.
+						collectSpecials(cons.cdr(), poisoned);
+						return;
+					}
+					default -> {
 					}
 				}
-				case LispNames.DECLAIM, LispNames.PROCLAIM, LispNames.DECLARE -> {
-					// A special proclamation binds nothing by itself, but it is what
-					// lets a let of the name bind it dynamically.
-					collectSpecials(cons.cdr(), poisoned);
-					return;
-				}
-				default -> {
-				}
 			}
+			boolean nowDeferred = nodeDeferred || (op != null && DEFERRING.contains(op));
+			scan(cons.car(), nowDeferred, false, bound, poisoned);
+			node = cons.cdr();
+			nodeDeferred = nowDeferred;
+			nodeTopLevel = false;
 		}
-		boolean nowDeferred = deferred || (op != null && DEFERRING.contains(op));
-		scan(cons.car(), nowDeferred, false, bound, poisoned);
-		scan(cons.cdr(), nowDeferred, false, bound, poisoned);
 	}
 
 	/**
 	 * Collects the names of every {@code (special ...)} declaration in the given tail.
 	 */
 	private static void collectSpecials(LispVal form, Names poisoned) {
-		if (!(form instanceof LispCons cons)) {
-			return;
-		}
-		if (cons.car() instanceof LispSymbol head && LispNames.SPECIAL.equals(member(head.name()))) {
-			for (LispVal rest = cons.cdr(); rest instanceof LispCons cell; rest = cell.cdr()) {
-				if (cell.car() instanceof LispSymbol name) {
-					poisoned.add(name.name());
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && LispNames.SPECIAL.equals(member(head.name()))) {
+				for (LispVal rest = cons.cdr(); rest instanceof LispCons cell; rest = cell.cdr()) {
+					if (cell.car() instanceof LispSymbol name) {
+						poisoned.add(name.name());
+					}
 				}
+				return;
 			}
-			return;
+			collectSpecials(cons.car(), poisoned);
+			node = cons.cdr();
 		}
-		collectSpecials(cons.car(), poisoned);
-		collectSpecials(cons.cdr(), poisoned);
 	}
 
 	/**
@@ -322,27 +334,53 @@ public final class CompileTimeBoundp {
 	}
 
 	private static LispVal rewrite(LispVal form, State state, boolean deferred, boolean topLevelForm) {
-		if (!(form instanceof LispCons cons)) {
-			return form;
-		}
-		String op = cons.car() instanceof LispSymbol head ? member(head.name()) : null;
-		if (LispNames.QUOTE.equals(op)) {
-			return form;
-		}
-		if (LispNames.BOUNDP.equals(op) && cons.cdr() instanceof LispCons argCell && argCell.cdr() instanceof LispNil) {
-			LispVal answer = decide(argCell.car(), state, deferred);
-			if (answer != null) {
-				return SourceProvenance.inherit(cons, answer);
+		// The cdr spine is walked in a loop and its cells finished from the tail back --
+		// the order the recursive walk ran them in -- so a long list costs no stack.
+		List<LispCons> cells = new ArrayList<>();
+		List<@Nullable String> ops = new ArrayList<>();
+		List<LispVal> cars = new ArrayList<>();
+		LispVal node = form;
+		boolean nodeDeferred = deferred;
+		LispVal tail;
+		while (true) {
+			if (!(node instanceof LispCons cons)) {
+				tail = node;
+				break;
 			}
+			String op = cons.car() instanceof LispSymbol head ? member(head.name()) : null;
+			if (LispNames.QUOTE.equals(op)) {
+				tail = node;
+				break;
+			}
+			if (LispNames.BOUNDP.equals(op) && cons.cdr() instanceof LispCons argCell
+					&& argCell.cdr() instanceof LispNil) {
+				LispVal answer = decide(argCell.car(), state, nodeDeferred);
+				if (answer != null) {
+					tail = SourceProvenance.inherit(cons, answer);
+					break;
+				}
+			}
+			if (op != null && (DEFERRING.contains(op) || REPEATING.contains(op))) {
+				state.prefixClean = false;
+			}
+			boolean nowDeferred = nodeDeferred || (op != null && DEFERRING.contains(op));
+			// car before cdr is the head, then the arguments left to right: the source
+			// order the prefix flag reads as evaluation order.
+			cells.add(cons);
+			ops.add(op);
+			cars.add(rewrite(cons.car(), state, nowDeferred, false));
+			node = cons.cdr();
+			nodeDeferred = nowDeferred;
 		}
-		if (op != null && (DEFERRING.contains(op) || REPEATING.contains(op))) {
-			state.prefixClean = false;
+		for (int i = cells.size() - 1; i >= 0; i--) {
+			tail = finishCell(cells.get(i), ops.get(i), cars.get(i), tail, state, i == 0 && topLevelForm);
 		}
-		boolean nowDeferred = deferred || (op != null && DEFERRING.contains(op));
-		// car before cdr is the head, then the arguments left to right: the source order
-		// the prefix flag reads as evaluation order.
-		LispVal car = rewrite(cons.car(), state, nowDeferred, false);
-		LispVal cdr = rewrite(cons.cdr(), state, nowDeferred, false);
+		return tail;
+	}
+
+	/** One spine cell of {@link #rewrite}, once its car and its tail are rewritten. */
+	private static LispVal finishCell(LispCons cons, @Nullable String op, LispVal car, LispVal cdr, State state,
+			boolean topLevelForm) {
 		if (op != null && (LispNames.DEFVAR.equals(op) || LispNames.DEFPARAMETER.equals(op)
 				|| LispNames.DEFCONSTANT.equals(op) || LispNames.SETQ.equals(op) || LispNames.SETF.equals(op))) {
 			state.prefixClean = false;

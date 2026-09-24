@@ -1767,53 +1767,52 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// non-float fails to COMPILE (compileExpt), so reserving the slot is never
 	// wasted in a module that actually finishes compiling.
 	private static void collectFdlibmRoots(LispVal v, Set<WasmFdlibmRuntimeBuilder.Fn> out) {
-		if (!(v instanceof LispCons c)) {
-			return;
-		}
-		if (c.car() instanceof LispSymbol s) {
-			if (isSimdCall(s.name())) {
-				String member = simdMember(s.name());
-				if (member.endsWith("-INTO")) {
-					member = member.substring(0, member.length() - "-INTO".length());
+		while (v instanceof LispCons c) {
+			if (c.car() instanceof LispSymbol s) {
+				if (isSimdCall(s.name())) {
+					String member = simdMember(s.name());
+					if (member.endsWith("-INTO")) {
+						member = member.substring(0, member.length() - "-INTO".length());
+					}
+					switch (member) {
+						case LispNames.VEC_EXP -> out.add(WasmFdlibmRuntimeBuilder.Fn.EXP);
+						case LispNames.VEC_LOG -> out.add(WasmFdlibmRuntimeBuilder.Fn.LOG);
+						case LispNames.VEC_TANH -> out.add(WasmFdlibmRuntimeBuilder.Fn.TANH);
+						case LispNames.VEC_SIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.SIN);
+						case LispNames.VEC_COS -> out.add(WasmFdlibmRuntimeBuilder.Fn.COS);
+						case LispNames.VEC_TAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.TAN);
+						case LispNames.VEC_ASIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ASIN);
+						case LispNames.VEC_ACOS -> out.add(WasmFdlibmRuntimeBuilder.Fn.ACOS);
+						case LispNames.VEC_ATAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ATAN);
+						case LispNames.VEC_SINH -> out.add(WasmFdlibmRuntimeBuilder.Fn.SINH);
+						case LispNames.VEC_COSH -> out.add(WasmFdlibmRuntimeBuilder.Fn.COSH);
+						default -> {
+						}
+					}
 				}
-				switch (member) {
-					case LispNames.VEC_EXP -> out.add(WasmFdlibmRuntimeBuilder.Fn.EXP);
-					case LispNames.VEC_LOG -> out.add(WasmFdlibmRuntimeBuilder.Fn.LOG);
-					case LispNames.VEC_TANH -> out.add(WasmFdlibmRuntimeBuilder.Fn.TANH);
-					case LispNames.VEC_SIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.SIN);
-					case LispNames.VEC_COS -> out.add(WasmFdlibmRuntimeBuilder.Fn.COS);
-					case LispNames.VEC_TAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.TAN);
-					case LispNames.VEC_ASIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ASIN);
-					case LispNames.VEC_ACOS -> out.add(WasmFdlibmRuntimeBuilder.Fn.ACOS);
-					case LispNames.VEC_ATAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ATAN);
-					case LispNames.VEC_SINH -> out.add(WasmFdlibmRuntimeBuilder.Fn.SINH);
-					case LispNames.VEC_COSH -> out.add(WasmFdlibmRuntimeBuilder.Fn.COSH);
-					default -> {
+				else {
+					switch (s.name()) {
+						case LispNames.EXP -> out.add(WasmFdlibmRuntimeBuilder.Fn.EXP);
+						case LispNames.LOG -> out.add(WasmFdlibmRuntimeBuilder.Fn.LOG);
+						case LispNames.SIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.SIN);
+						case LispNames.COS -> out.add(WasmFdlibmRuntimeBuilder.Fn.COS);
+						case LispNames.TAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.TAN);
+						case LispNames.ASIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ASIN);
+						case LispNames.ACOS -> out.add(WasmFdlibmRuntimeBuilder.Fn.ACOS);
+						case LispNames.ATAN -> out.add(c.toList().size() == 3 ? WasmFdlibmRuntimeBuilder.Fn.ATAN2
+								: WasmFdlibmRuntimeBuilder.Fn.ATAN);
+						case LispNames.SINH -> out.add(WasmFdlibmRuntimeBuilder.Fn.SINH);
+						case LispNames.COSH -> out.add(WasmFdlibmRuntimeBuilder.Fn.COSH);
+						case LispNames.TANH -> out.add(WasmFdlibmRuntimeBuilder.Fn.TANH);
+						case LispNames.EXPT -> out.add(WasmFdlibmRuntimeBuilder.Fn.POW);
+						default -> {
+						}
 					}
 				}
 			}
-			else {
-				switch (s.name()) {
-					case LispNames.EXP -> out.add(WasmFdlibmRuntimeBuilder.Fn.EXP);
-					case LispNames.LOG -> out.add(WasmFdlibmRuntimeBuilder.Fn.LOG);
-					case LispNames.SIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.SIN);
-					case LispNames.COS -> out.add(WasmFdlibmRuntimeBuilder.Fn.COS);
-					case LispNames.TAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.TAN);
-					case LispNames.ASIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ASIN);
-					case LispNames.ACOS -> out.add(WasmFdlibmRuntimeBuilder.Fn.ACOS);
-					case LispNames.ATAN -> out.add(c.toList().size() == 3 ? WasmFdlibmRuntimeBuilder.Fn.ATAN2
-							: WasmFdlibmRuntimeBuilder.Fn.ATAN);
-					case LispNames.SINH -> out.add(WasmFdlibmRuntimeBuilder.Fn.SINH);
-					case LispNames.COSH -> out.add(WasmFdlibmRuntimeBuilder.Fn.COSH);
-					case LispNames.TANH -> out.add(WasmFdlibmRuntimeBuilder.Fn.TANH);
-					case LispNames.EXPT -> out.add(WasmFdlibmRuntimeBuilder.Fn.POW);
-					default -> {
-					}
-				}
-			}
+			collectFdlibmRoots(c.car(), out);
+			v = c.cdr();
 		}
-		collectFdlibmRoots(c.car(), out);
-		collectFdlibmRoots(c.cdr(), out);
 	}
 
 	/**
@@ -2122,11 +2121,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	private static final Set<String> PRINT_OPS = Set.of(LispNames.PRINT, LispNames.PRINC, LispNames.TERPRI);
 
 	private static boolean usesPrintOp(LispVal v) {
-		if (v instanceof LispCons c) {
+		while (v instanceof LispCons c) {
 			if (c.car() instanceof LispSymbol s && PRINT_OPS.contains(s.name())) {
 				return true;
 			}
-			return usesPrintOp(c.car()) || usesPrintOp(c.cdr());
+			if (usesPrintOp(c.car())) {
+				return true;
+			}
+			v = c.cdr();
 		}
 		return false;
 	}
@@ -2145,17 +2147,20 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	private boolean rendersFloatWalk(LispVal v, Map<String, Ty> env, TC tc) {
-		if (!(v instanceof LispCons c)) {
-			return false;
-		}
-		if (c.car() instanceof LispSymbol s
-				&& (PRINT_OPS.contains(s.name()) || LispNames.PRINC_TO_STRING.equals(s.name()))) {
-			List<LispVal> args = c.toList();
-			if (args.size() == 2 && typeOf(args.get(1), new HashMap<>(env), tc) == Ty.FLOAT) {
+		while (v instanceof LispCons c) {
+			if (c.car() instanceof LispSymbol s
+					&& (PRINT_OPS.contains(s.name()) || LispNames.PRINC_TO_STRING.equals(s.name()))) {
+				List<LispVal> args = c.toList();
+				if (args.size() == 2 && typeOf(args.get(1), new HashMap<>(env), tc) == Ty.FLOAT) {
+					return true;
+				}
+			}
+			if (rendersFloatWalk(c.car(), env, tc)) {
 				return true;
 			}
+			v = c.cdr();
 		}
-		return rendersFloatWalk(c.car(), env, tc) || rendersFloatWalk(c.cdr(), env, tc);
+		return false;
 	}
 
 	/**
@@ -2254,13 +2259,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	/** Every {@code print}/{@code princ}/{@code terpri}/{@code princ-to-string} form. */
 	private static void collectPrintForms(LispVal v, List<LispVal> out) {
-		if (v instanceof LispCons c) {
+		while (v instanceof LispCons c) {
 			if (c.car() instanceof LispSymbol s
 					&& (PRINT_OPS.contains(s.name()) || LispNames.PRINC_TO_STRING.equals(s.name()))) {
 				out.add(c);
 			}
 			collectPrintForms(c.car(), out);
-			collectPrintForms(c.cdr(), out);
+			v = c.cdr();
 		}
 	}
 
@@ -2269,22 +2274,28 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			LispNames.PRINC_TO_STRING);
 
 	private static boolean usesStringOp(LispVal v) {
-		if (v instanceof LispCons c) {
+		while (v instanceof LispCons c) {
 			if (c.car() instanceof LispSymbol s && STRING_PRODUCING_OPS.contains(s.name())) {
 				return true;
 			}
-			return usesStringOp(c.car()) || usesStringOp(c.cdr());
+			if (usesStringOp(c.car())) {
+				return true;
+			}
+			v = c.cdr();
 		}
 		return false;
 	}
 
 	/** Whether a body calls the named operator (a {@code (name ...)} form) anywhere. */
 	private static boolean usesOp(LispVal v, String op) {
-		if (v instanceof LispCons c) {
+		while (v instanceof LispCons c) {
 			if (c.car() instanceof LispSymbol s && op.equals(s.name())) {
 				return true;
 			}
-			return usesOp(c.car(), op) || usesOp(c.cdr(), op);
+			if (usesOp(c.car(), op)) {
+				return true;
+			}
+			v = c.cdr();
 		}
 		return false;
 	}
@@ -2330,7 +2341,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	/** Collects the single argument of every {@code (length arg)} form in the body. */
 	private static void collectLengthArgs(LispVal v, List<LispVal> out) {
-		if (v instanceof LispCons c) {
+		while (v instanceof LispCons c) {
 			if (c.car() instanceof LispSymbol s && LispNames.LENGTH.equals(s.name())) {
 				List<LispVal> args = c.toList();
 				if (args.size() == 2 && !(args.get(1) instanceof LispNil)) {
@@ -2340,7 +2351,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			else {
 				collectLengthArgs(c.car(), out);
 			}
-			collectLengthArgs(c.cdr(), out);
+			v = c.cdr();
 		}
 	}
 
@@ -2351,25 +2362,25 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * an otherwise pure-numeric program.
 	 */
 	private static boolean usesFloatArray(LispVal v) {
-		if (v instanceof LispFloatArray) {
-			return true;
-		}
-		if (v instanceof LispCons c) {
+		while (v instanceof LispCons c) {
 			if (c.car() instanceof LispSymbol s && (LispNames.MAKE_ARRAY.equals(s.name()) || isSimdCall(s.name()))) {
 				return true;
 			}
-			return usesFloatArray(c.car()) || usesFloatArray(c.cdr());
+			if (usesFloatArray(c.car())) {
+				return true;
+			}
+			v = c.cdr();
 		}
-		return false;
+		return v instanceof LispFloatArray;
 	}
 
 	private static void collectLiterals(LispVal v, Set<String> out) {
+		while (v instanceof LispCons c) {
+			collectLiterals(c.car(), out);
+			v = c.cdr();
+		}
 		if (v instanceof LispString s) {
 			out.add(s.value());
-		}
-		else if (v instanceof LispCons c) {
-			collectLiterals(c.car(), out);
-			collectLiterals(c.cdr(), out);
 		}
 	}
 
@@ -8588,11 +8599,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	private static boolean referencesSymbol(LispVal form, String name) {
-		return switch (form) {
-			case LispSymbol sym -> name.equals(sym.name());
-			case LispCons cons -> referencesSymbol(cons.car(), name) || referencesSymbol(cons.cdr(), name);
-			default -> false;
-		};
+		while (form instanceof LispCons cons) {
+			if (referencesSymbol(cons.car(), name)) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return form instanceof LispSymbol sym && name.equals(sym.name());
 	}
 
 	private static Defun extractDefun(LispVal setqLambda) {

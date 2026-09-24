@@ -11,6 +11,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.ArgumentShapes.Shape;
@@ -237,10 +238,8 @@ public final class SequenceIoNarrowing {
 		}
 
 		private LispVal forms(LispVal tail, Map<String, Shape> env) {
-			if (!(tail instanceof LispCons cons)) {
-				return tail;
-			}
-			return LispCons.rebuilt(cons, this.form(cons.car(), env), this.forms(cons.cdr(), env));
+			return LispTrees.rebuildSpine(tail, node -> node instanceof LispCons ? null : node,
+					element -> this.form(element, env));
 		}
 
 		/** Narrows one sequence-I/O call when its sequence proves non-string. */
@@ -339,7 +338,15 @@ public final class SequenceIoNarrowing {
 				return false;
 			}
 			if (!cons.isProperList()) {
-				return this.invalidated(cons.car(), name, inCapture) || this.invalidated(cons.cdr(), name, inCapture);
+				// Every tail of a dotted list is dotted too: walk the spine in a loop.
+				LispVal node = cons;
+				while (node instanceof LispCons cell) {
+					if (this.invalidated(cell.car(), name, inCapture)) {
+						return true;
+					}
+					node = cell.cdr();
+				}
+				return this.invalidated(node, name, inCapture);
 			}
 			List<LispVal> parts = cons.toList();
 			if (!(parts.get(0) instanceof LispSymbol head)) {
@@ -396,13 +403,14 @@ public final class SequenceIoNarrowing {
 		 * Every occurrence of the symbol, shape-blind like the certified count it guards.
 		 */
 		private boolean occurs(LispVal val, String name) {
-			if (val instanceof LispSymbol sym) {
-				return name.equals(sym.name());
+			LispVal node = val;
+			while (node instanceof LispCons cons) {
+				if (this.occurs(cons.car(), name)) {
+					return true;
+				}
+				node = cons.cdr();
 			}
-			if (!(val instanceof LispCons cons)) {
-				return false;
-			}
-			return this.occurs(cons.car(), name) || this.occurs(cons.cdr(), name);
+			return node instanceof LispSymbol sym && name.equals(sym.name());
 		}
 
 		private boolean anyOccurs(List<LispVal> parts, String name) {

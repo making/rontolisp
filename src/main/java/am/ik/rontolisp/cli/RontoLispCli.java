@@ -1457,40 +1457,7 @@ public final class RontoLispCli {
 	 * exactly as it did when launch ran on thread 0.
 	 */
 	private static int joinLaunch(String[] args, long stackBytes) {
-		int[] code = new int[1];
-		Throwable[] thrown = new Throwable[1];
-		Thread worker = new Thread(null, () -> {
-			try {
-				code[0] = launch(args);
-			}
-			catch (Throwable ex) {
-				thrown[0] = ex;
-			}
-		}, "main", stackBytes);
-		worker.start();
-		boolean interrupted = false;
-		while (true) {
-			try {
-				worker.join();
-				break;
-			}
-			catch (InterruptedException ex) {
-				// Thread 0 is not the CLI any more, so an interrupt aimed at it answers
-				// nothing: remember it for whoever sent it and keep waiting for the run.
-				interrupted = true;
-			}
-		}
-		if (interrupted) {
-			Thread.currentThread().interrupt();
-		}
-		switch (thrown[0]) {
-			case null -> {
-			}
-			case Error error -> throw error;
-			case RuntimeException runtime -> throw runtime;
-			default -> throw new IllegalStateException(thrown[0]);
-		}
-		return code[0];
+		return SizedThread.call("main", stackBytes, () -> launch(args));
 	}
 
 	/**
@@ -1498,7 +1465,7 @@ public final class RontoLispCli {
 	 * generous platform gives the first thread, since the interpreter's recursion depth
 	 * is the program's.
 	 */
-	private static final long WORKER_STACK_BYTES = 16L << 20;
+	static final long WORKER_STACK_BYTES = 16L << 20;
 
 	/** The largest {@code --stack} accepted, in MiB. */
 	private static final long MAX_STACK_MIB = 65536L;

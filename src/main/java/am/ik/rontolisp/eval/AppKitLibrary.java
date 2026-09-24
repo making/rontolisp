@@ -133,27 +133,31 @@ public final class AppKitLibrary {
 		}
 
 		private void detect(LispVal form) {
-			if (this.found != null) {
-				return;
-			}
-			switch (form) {
-				case LispSymbol sym -> {
-					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-					if (qn != null) {
-						if (MACOS_PACKAGES.contains(qn.pkg())) {
-							this.found = sym.name();
+			while (true) {
+				if (this.found != null) {
+					return;
+				}
+				switch (form) {
+					case LispSymbol sym -> {
+						PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+						if (qn != null) {
+							if (MACOS_PACKAGES.contains(qn.pkg())) {
+								this.found = sym.name();
+							}
+						}
+						else if (exportedBy(this.currentPackage, sym.name())) {
+							this.found = this.currentPackage + ":" + sym.name();
 						}
 					}
-					else if (exportedBy(this.currentPackage, sym.name())) {
-						this.found = this.currentPackage + ":" + sym.name();
+					case LispCons cons -> {
+						detect(cons.car());
+						form = cons.cdr();
+						continue;
+					}
+					default -> {
 					}
 				}
-				case LispCons cons -> {
-					detect(cons.car());
-					detect(cons.cdr());
-				}
-				default -> {
-				}
+				return;
 			}
 		}
 
@@ -238,29 +242,34 @@ public final class AppKitLibrary {
 		}
 
 		private void detect(LispVal form) {
-			if (this.appkit) {
-				// Nothing left to learn: the library is needed.
-				return;
-			}
-			switch (form) {
-				case LispSymbol sym -> {
-					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-					if (qn != null) {
-						if (LispNames.APPKIT_PKG.equals(qn.pkg())) {
+			while (true) {
+				if (this.appkit) {
+					// Nothing left to learn: the library is needed.
+					return;
+				}
+				switch (form) {
+					case LispSymbol sym -> {
+						PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+						if (qn != null) {
+							if (LispNames.APPKIT_PKG.equals(qn.pkg())) {
+								this.appkit = true;
+							}
+						}
+						else if (LispNames.APPKIT_PKG.equals(this.currentPackage)
+								&& PackageRegistry.appkitFunctionNames()
+									.contains(sym.name().toUpperCase(Locale.ROOT))) {
 							this.appkit = true;
 						}
 					}
-					else if (LispNames.APPKIT_PKG.equals(this.currentPackage)
-							&& PackageRegistry.appkitFunctionNames().contains(sym.name().toUpperCase(Locale.ROOT))) {
-						this.appkit = true;
+					case LispCons cons -> {
+						detect(cons.car());
+						form = cons.cdr();
+						continue;
+					}
+					default -> {
 					}
 				}
-				case LispCons cons -> {
-					detect(cons.car());
-					detect(cons.cdr());
-				}
-				default -> {
-				}
+				return;
 			}
 		}
 

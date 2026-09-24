@@ -183,22 +183,26 @@ public final class GeomLibrary {
 		}
 
 		private void detect(LispVal form) {
-			if (this.found) {
-				return;
-			}
-			switch (form) {
-				case LispSymbol sym -> {
-					if (isGeomQualified(sym.name()) || (LispNames.GEOM_PKG.equals(this.currentPackage)
-							&& PackageRegistry.geomFunctionNames().contains(sym.name().toUpperCase(Locale.ROOT)))) {
-						this.found = true;
+			while (true) {
+				if (this.found) {
+					return;
+				}
+				switch (form) {
+					case LispSymbol sym -> {
+						if (isGeomQualified(sym.name()) || (LispNames.GEOM_PKG.equals(this.currentPackage)
+								&& PackageRegistry.geomFunctionNames().contains(sym.name().toUpperCase(Locale.ROOT)))) {
+							this.found = true;
+						}
+					}
+					case LispCons cons -> {
+						detect(cons.car());
+						form = cons.cdr();
+						continue;
+					}
+					default -> {
 					}
 				}
-				case LispCons cons -> {
-					detect(cons.car());
-					detect(cons.cdr());
-				}
-				default -> {
-				}
+				return;
 			}
 		}
 

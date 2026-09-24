@@ -8349,13 +8349,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	private static boolean usesEval(LispVal val) {
-		if (!(val instanceof LispCons cons)) {
-			return false;
+		while (val instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol sym && LispNames.EVAL.equals(sym.name())) {
+				return true;
+			}
+			if (usesEval(cons.car())) {
+				return true;
+			}
+			val = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol sym && LispNames.EVAL.equals(sym.name())) {
-			return true;
-		}
-		return usesEval(cons.car()) || usesEval(cons.cdr());
+		return false;
 	}
 
 	/**
@@ -8478,38 +8481,42 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	private static boolean usesEhForm(LispVal val) {
-		if (!(val instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol sym) {
-			switch (sym.name()) {
-				case LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.UNWIND_PROTECT,
-						LispNames.WITH_OPEN_FILE, LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING,
-						LispNames.CATCH, LispNames.THROW,
-						// progv's lowering rides unwind-protect for its restores
-						// (LispMacroExpander.expandProgvForCompile), so it needs the EH
-						// machinery -- and the `wasmtime -W exceptions=y` run flag --
-						// exactly like a written-out unwind-protect.
-						LispNames.PROGV -> {
-					return true;
-				}
-				default -> {
-					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-					if (qn != null && LispNames.USOCKET_PKG.equals(qn.pkg())) {
-						switch (qn.member()) {
-							case LispNames.USOCKET_WITH_CLIENT_SOCKET, LispNames.USOCKET_WITH_CONNECTED_SOCKET,
-									LispNames.USOCKET_WITH_SERVER_SOCKET, LispNames.USOCKET_WITH_SOCKET_LISTENER,
-									LispNames.USOCKET_GUARD -> {
-								return true;
-							}
-							default -> {
+		while (val instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol sym) {
+				switch (sym.name()) {
+					case LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.UNWIND_PROTECT,
+							LispNames.WITH_OPEN_FILE, LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING,
+							LispNames.CATCH, LispNames.THROW,
+							// progv's lowering rides unwind-protect for its restores
+							// (LispMacroExpander.expandProgvForCompile), so it needs the
+							// EH
+							// machinery -- and the `wasmtime -W exceptions=y` run flag --
+							// exactly like a written-out unwind-protect.
+							LispNames.PROGV -> {
+						return true;
+					}
+					default -> {
+						PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+						if (qn != null && LispNames.USOCKET_PKG.equals(qn.pkg())) {
+							switch (qn.member()) {
+								case LispNames.USOCKET_WITH_CLIENT_SOCKET, LispNames.USOCKET_WITH_CONNECTED_SOCKET,
+										LispNames.USOCKET_WITH_SERVER_SOCKET, LispNames.USOCKET_WITH_SOCKET_LISTENER,
+										LispNames.USOCKET_GUARD -> {
+									return true;
+								}
+								default -> {
+								}
 							}
 						}
 					}
 				}
 			}
+			if (usesEhForm(cons.car())) {
+				return true;
+			}
+			val = cons.cdr();
 		}
-		return usesEhForm(cons.car()) || usesEhForm(cons.cdr());
+		return false;
 	}
 
 	// True when the program references any hash-table operator (including (setf (gethash
@@ -8749,11 +8756,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	// Quoted data: every symbol in it is a designator the program could funcall.
 	private static boolean charvecFreeData(LispVal data, Set<String> defined) {
-		return switch (data) {
-			case LispSymbol sym -> charvecFreeName(sym.name()) || defined.contains(sym.name());
-			case LispCons cons -> charvecFreeData(cons.car(), defined) && charvecFreeData(cons.cdr(), defined);
-			default -> true;
-		};
+		while (data instanceof LispCons cons) {
+			if (!charvecFreeData(cons.car(), defined)) {
+				return false;
+			}
+			data = cons.cdr();
+		}
+		if (data instanceof LispSymbol sym) {
+			return charvecFreeName(sym.name()) || defined.contains(sym.name());
+		}
+		return true;
 	}
 
 	// True when a self-evaluating array literal (#(...)) appears anywhere in the
@@ -8768,23 +8780,26 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	private static boolean containsArrayLiteral(LispVal val) {
-		if (val instanceof am.ik.rontolisp.LispArray) {
-			return true;
+		while (val instanceof LispCons cons) {
+			if (containsArrayLiteral(cons.car())) {
+				return true;
+			}
+			val = cons.cdr();
 		}
-		if (val instanceof LispCons cons) {
-			return containsArrayLiteral(cons.car()) || containsArrayLiteral(cons.cdr());
-		}
-		return false;
+		return val instanceof am.ik.rontolisp.LispArray;
 	}
 
 	private static boolean usesSymbol(LispVal val, String name) {
-		if (!(val instanceof LispCons cons)) {
-			return false;
+		while (val instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol sym && name.equals(sym.name())) {
+				return true;
+			}
+			if (usesSymbol(cons.car(), name)) {
+				return true;
+			}
+			val = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol sym && name.equals(sym.name())) {
-			return true;
-		}
-		return usesSymbol(cons.car(), name) || usesSymbol(cons.cdr(), name);
+		return false;
 	}
 
 	/**
@@ -10908,8 +10923,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			}
 			case LispCons cons -> {
-				collectSymbolNames(cons.car(), out);
-				collectSymbolNames(cons.cdr(), out);
+				LispVal rest = cons;
+				while (rest instanceof LispCons cell) {
+					collectSymbolNames(cell.car(), out);
+					rest = cell.cdr();
+				}
+				collectSymbolNames(rest, out);
 			}
 			case LispArray array -> {
 				for (LispVal element : array.data()) {

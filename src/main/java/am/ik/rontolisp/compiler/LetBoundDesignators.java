@@ -13,6 +13,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceProvenance;
 
@@ -241,15 +242,14 @@ public final class LetBoundDesignators {
 	 * that the only occurrences left are the certified ones.
 	 */
 	private static LispVal substitute(LispVal form, Map<String, LispVal> propagated) {
-		if (form instanceof LispSymbol sym) {
-			LispVal designator = propagated.get(sym.name());
-			return designator == null ? form : designator;
-		}
-		if (!(form instanceof LispCons cons)) {
-			return form;
-		}
-		return SourceProvenance.inherit(cons,
-				LispCons.rebuilt(cons, substitute(cons.car(), propagated), substitute(cons.cdr(), propagated)));
+		return LispTrees.rebuildSpine(form, node -> {
+			if (node instanceof LispSymbol sym) {
+				LispVal designator = propagated.get(sym.name());
+				return designator == null ? node : designator;
+			}
+			return node instanceof LispCons ? null : node;
+		}, element -> substitute(element, propagated),
+				(cell, car, cdr) -> SourceProvenance.inherit(cell, LispCons.rebuilt(cell, car, cdr)));
 	}
 
 }

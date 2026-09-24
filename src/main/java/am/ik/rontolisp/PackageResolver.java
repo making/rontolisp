@@ -191,18 +191,31 @@ public final class PackageResolver {
 	}
 
 	private static boolean referencesRuntimePackageMutation(LispVal form, boolean quoted) {
-		return switch (form) {
-			case LispSymbol sym -> !quoted && (LispNames.MAKE_PACKAGE.equals(operatorMember(sym))
-					|| LispNames.DELETE_PACKAGE.equals(operatorMember(sym))
-					|| LispNames.RENAME_PACKAGE.equals(operatorMember(sym)));
-			case LispCons cons -> {
-				boolean quoteHead = cons.car() instanceof LispSymbol head
-						&& LispNames.QUOTE.equals(operatorMember(head));
-				yield referencesRuntimePackageMutation(cons.car(), quoted)
-						|| referencesRuntimePackageMutation(cons.cdr(), quoted || quoteHead);
+		// The cdr spine is walked in a loop: a frame per element would make the stack
+		// ceiling the program's longest list.
+		LispVal node = form;
+		boolean inQuote = quoted;
+		while (true) {
+			switch (node) {
+				case LispSymbol sym -> {
+					return !inQuote && (LispNames.MAKE_PACKAGE.equals(operatorMember(sym))
+							|| LispNames.DELETE_PACKAGE.equals(operatorMember(sym))
+							|| LispNames.RENAME_PACKAGE.equals(operatorMember(sym)));
+				}
+				case LispCons cons -> {
+					boolean quoteHead = cons.car() instanceof LispSymbol head
+							&& LispNames.QUOTE.equals(operatorMember(head));
+					if (referencesRuntimePackageMutation(cons.car(), inQuote)) {
+						return true;
+					}
+					node = cons.cdr();
+					inQuote = inQuote || quoteHead;
+				}
+				default -> {
+					return false;
+				}
 			}
-			default -> false;
-		};
+		}
 	}
 
 	/**
@@ -2026,8 +2039,9 @@ public final class PackageResolver {
 			// all resolve to themselves is EVERY quoted list of an ordinary cl-user
 			// file, and rebuilding one used to make its (quote ...) form -- and every
 			// ancestor of that -- a fresh cons the provenance table has never seen.
-			case LispCons c -> SourceProvenance.inherit(c,
-					LispCons.rebuilt(c, resolveQuotedDatum(c.car()), resolveQuotedDatum(c.cdr())));
+			case LispCons c -> LispTrees.rebuildSpine(c,
+					node -> node instanceof LispCons ? null : resolveQuotedDatum(node), this::resolveQuotedDatum,
+					(cell, car, cdr) -> SourceProvenance.inherit(cell, LispCons.rebuilt(cell, car, cdr)));
 			default -> datum;
 		};
 	}

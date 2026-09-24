@@ -357,13 +357,16 @@ final class ConstantCaseArmPruner {
 		}
 
 		private static boolean mentionsRuntimeRead(LispVal form) {
+			while (form instanceof LispCons cons) {
+				if (mentionsRuntimeRead(cons.car())) {
+					return true;
+				}
+				form = cons.cdr();
+			}
 			if (form instanceof LispSymbol sym) {
 				String member = LispSymbol.memberName(sym.name());
 				return "READ".equals(member) || "READ-FROM-STRING".equals(member)
 						|| "READ-PRESERVING-WHITESPACE".equals(member);
-			}
-			if (form instanceof LispCons cons) {
-				return mentionsRuntimeRead(cons.car()) || mentionsRuntimeRead(cons.cdr());
 			}
 			return false;
 		}
@@ -1551,14 +1554,18 @@ final class ConstantCaseArmPruner {
 		}
 
 		private static void bindAllSymbols(LispVal pattern, Env env) {
-			switch (pattern) {
-				case LispSymbol sym -> env.bindTop(sym.name());
-				case LispCons cons -> {
-					bindAllSymbols(cons.car(), env);
-					bindAllSymbols(cons.cdr(), env);
+			while (true) {
+				switch (pattern) {
+					case LispSymbol sym -> env.bindTop(sym.name());
+					case LispCons cons -> {
+						bindAllSymbols(cons.car(), env);
+						pattern = cons.cdr();
+						continue;
+					}
+					default -> {
+					}
 				}
-				default -> {
-				}
+				return;
 			}
 		}
 
@@ -1594,52 +1601,52 @@ final class ConstantCaseArmPruner {
 		 * argument. A non-symbol place mutates an object, not a lexical binding.
 		 */
 		private static void poisonSetqTargets(LispVal form, Env env) {
-			if (!(form instanceof LispCons cons)) {
-				return;
-			}
-			if (cons.car() instanceof LispSymbol op && cons.isProperList()) {
-				String member = LispSymbol.memberName(op.name());
-				List<LispVal> parts = cons.toList();
-				switch (member) {
-					case LispNames.QUOTE -> {
-						return;
-					}
-					// A CONS place can still assign a variable inside it: setf-of-ldb
-					// is read-modify-write over its integer argument -- cl-postgres's
-					// generated read-uint4 does (setf (ldb (byte 8 24) result) ...) --
-					// and setf-of-getf rewrites its plist variable. Poison every
-					// symbol inside a non-symbol place.
-					case LispNames.SETQ, LispNames.PSETQ, "SETF", "PSETF" -> {
-						for (int i = 1; i < parts.size(); i += 2) {
-							poisonPlace(parts.get(i), env);
+			while (form instanceof LispCons cons) {
+				if (cons.car() instanceof LispSymbol op && cons.isProperList()) {
+					String member = LispSymbol.memberName(op.name());
+					List<LispVal> parts = cons.toList();
+					switch (member) {
+						case LispNames.QUOTE -> {
+							return;
 						}
-					}
-					case "MULTIPLE-VALUE-SETQ" -> {
-						if (parts.size() > 1) {
-							poisonAllSymbols(parts.get(1), env);
+						// A CONS place can still assign a variable inside it: setf-of-ldb
+						// is read-modify-write over its integer argument -- cl-postgres's
+						// generated read-uint4 does (setf (ldb (byte 8 24) result) ...)
+						// --
+						// and setf-of-getf rewrites its plist variable. Poison every
+						// symbol inside a non-symbol place.
+						case LispNames.SETQ, LispNames.PSETQ, "SETF", "PSETF" -> {
+							for (int i = 1; i < parts.size(); i += 2) {
+								poisonPlace(parts.get(i), env);
+							}
 						}
-					}
-					case "INCF", "DECF", "POP" -> {
-						if (parts.size() > 1) {
-							poisonPlace(parts.get(1), env);
+						case "MULTIPLE-VALUE-SETQ" -> {
+							if (parts.size() > 1) {
+								poisonAllSymbols(parts.get(1), env);
+							}
 						}
-					}
-					case "PUSH", "PUSHNEW" -> {
-						if (parts.size() > 2) {
-							poisonPlace(parts.get(2), env);
+						case "INCF", "DECF", "POP" -> {
+							if (parts.size() > 1) {
+								poisonPlace(parts.get(1), env);
+							}
 						}
-					}
-					case "ROTATEF", "SHIFTF" -> {
-						for (int i = 1; i < parts.size(); i++) {
-							poisonPlace(parts.get(i), env);
+						case "PUSH", "PUSHNEW" -> {
+							if (parts.size() > 2) {
+								poisonPlace(parts.get(2), env);
+							}
 						}
-					}
-					default -> {
+						case "ROTATEF", "SHIFTF" -> {
+							for (int i = 1; i < parts.size(); i++) {
+								poisonPlace(parts.get(i), env);
+							}
+						}
+						default -> {
+						}
 					}
 				}
+				poisonSetqTargets(cons.car(), env);
+				form = cons.cdr();
 			}
-			poisonSetqTargets(cons.car(), env);
-			poisonSetqTargets(cons.cdr(), env);
 		}
 
 		/**
@@ -1684,25 +1691,40 @@ final class ConstantCaseArmPruner {
 		}
 
 		private static void poisonAllSymbols(LispVal pattern, Env env) {
-			switch (pattern) {
-				case LispSymbol sym -> env.poison(sym.name());
-				case LispCons cons -> {
-					poisonAllSymbols(cons.car(), env);
-					poisonAllSymbols(cons.cdr(), env);
+			while (true) {
+				switch (pattern) {
+					case LispSymbol sym -> env.poison(sym.name());
+					case LispCons cons -> {
+						poisonAllSymbols(cons.car(), env);
+						pattern = cons.cdr();
+						continue;
+					}
+					default -> {
+					}
 				}
-				default -> {
-				}
+				return;
 			}
 		}
 
 		private static final Set<String> RETURN_NAMES = Set.of(LispNames.RETURN, LispNames.RETURN_FROM);
 
 		private static boolean containsAnySymbol(LispVal form, Set<String> names) {
-			return switch (form) {
-				case LispSymbol sym -> names.contains(LispSymbol.memberName(sym.name()));
-				case LispCons cons -> containsAnySymbol(cons.car(), names) || containsAnySymbol(cons.cdr(), names);
-				default -> false;
-			};
+			while (true) {
+				switch (form) {
+					case LispSymbol sym -> {
+						return names.contains(LispSymbol.memberName(sym.name()));
+					}
+					case LispCons cons -> {
+						if (containsAnySymbol(cons.car(), names)) {
+							return true;
+						}
+						form = cons.cdr();
+					}
+					default -> {
+						return false;
+					}
+				}
+			}
 		}
 
 		/** {@code #'f} or {@code 'f} in funcall/apply head position, or null. */
@@ -1833,28 +1855,51 @@ final class ConstantCaseArmPruner {
 		}
 
 		static LispVal withoutArms(LispVal resolved, Set<LispCons> deadArms) {
-			if (!(resolved instanceof LispCons cons)) {
-				return resolved;
+			// The spine is walked in a loop and rebuilt from its end, which is the order
+			// the tail-first recursion visited it in.
+			List<LispCons> cells = new ArrayList<>();
+			LispVal node = resolved;
+			while (node instanceof LispCons cons) {
+				cells.add(cons);
+				node = cons.cdr();
 			}
-			LispVal cdr = withoutArms(cons.cdr(), deadArms);
-			if (cons.car() instanceof LispCons carCons && deadArms.contains(carCons)) {
-				// The element itself is deleted: splice the cell out.
-				return cdr;
+			LispVal cdr = node;
+			for (int i = cells.size() - 1; i >= 0; i--) {
+				LispCons cons = cells.get(i);
+				if (cons.car() instanceof LispCons carCons && deadArms.contains(carCons)) {
+					// The element itself is deleted: splice the cell out.
+					continue;
+				}
+				LispVal car = withoutArms(cons.car(), deadArms);
+				cdr = SourceProvenance.inherit(cons, LispCons.rebuilt(cons, car, cdr));
 			}
-			LispVal car = withoutArms(cons.car(), deadArms);
-			return SourceProvenance.inherit(cons, LispCons.rebuilt(cons, car, cdr));
+			return cdr;
 		}
 
 		static LispVal withoutArmsParallel(LispVal original, LispVal resolved, Set<LispCons> deadArms) {
-			if (!(original instanceof LispCons origCons) || !(resolved instanceof LispCons resCons)) {
-				return original;
+			// Both spines are walked in a loop and rebuilt from their end, as
+			// withoutArms.
+			List<LispCons> origCells = new ArrayList<>();
+			List<LispCons> resCells = new ArrayList<>();
+			LispVal orig = original;
+			LispVal res = resolved;
+			while (orig instanceof LispCons origCons && res instanceof LispCons resCons) {
+				origCells.add(origCons);
+				resCells.add(resCons);
+				orig = origCons.cdr();
+				res = resCons.cdr();
 			}
-			LispVal cdr = withoutArmsParallel(origCons.cdr(), resCons.cdr(), deadArms);
-			if (resCons.car() instanceof LispCons carCons && deadArms.contains(carCons)) {
-				return cdr;
+			LispVal cdr = orig;
+			for (int i = origCells.size() - 1; i >= 0; i--) {
+				LispCons origCons = origCells.get(i);
+				LispCons resCons = resCells.get(i);
+				if (resCons.car() instanceof LispCons carCons && deadArms.contains(carCons)) {
+					continue;
+				}
+				LispVal car = withoutArmsParallel(origCons.car(), resCons.car(), deadArms);
+				cdr = SourceProvenance.inherit(origCons, LispCons.rebuilt(origCons, car, cdr));
 			}
-			LispVal car = withoutArmsParallel(origCons.car(), resCons.car(), deadArms);
-			return SourceProvenance.inherit(origCons, LispCons.rebuilt(origCons, car, cdr));
+			return cdr;
 		}
 
 	}

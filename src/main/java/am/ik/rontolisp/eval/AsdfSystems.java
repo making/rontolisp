@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
@@ -887,6 +888,15 @@ public final class AsdfSystems {
 	 * ({@code .kb/source-positions.md}).
 	 */
 	private static LispVal resolveReadEval(AsdContext asd, String context, LispVal form) {
+		return LispTrees.rebuildSpine(form, node -> resolvedReadEvalNode(asd, context, node),
+				car -> resolveReadEval(asd, context, car));
+	}
+
+	/**
+	 * What a node {@link #resolveReadEval} does not walk into becomes -- an atom stays, a
+	 * marker is its value -- or {@code null} for an ordinary cell.
+	 */
+	private static @Nullable LispVal resolvedReadEvalNode(AsdContext asd, String context, LispVal form) {
 		if (!(form instanceof LispCons cons)) {
 			return form;
 		}
@@ -908,9 +918,7 @@ public final class AsdfSystems {
 			// -- only the raw source text it carried here for this message.
 			throw unresolvableReadEval(asd, context, unreadableReadEvalText(cons), "the datum could not be read");
 		}
-		LispVal car = resolveReadEval(asd, context, cons.car());
-		LispVal cdr = resolveReadEval(asd, context, cons.cdr());
-		return car == cons.car() && cdr == cons.cdr() ? cons : new LispCons(car, cdr);
+		return null;
 	}
 
 	private static IllegalStateException unresolvableReadEval(AsdContext asd, String context, String datum,
@@ -1212,11 +1220,14 @@ public final class AsdfSystems {
 	}
 
 	private static boolean containsReadEvalMarker(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (containsReadEvalMarker(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
 		if (form instanceof LispSymbol sym) {
 			return LispNames.READ_EVAL.equals(sym.name()) || LispNames.READ_EVAL_UNREADABLE.equals(sym.name());
-		}
-		if (form instanceof LispCons cons) {
-			return containsReadEvalMarker(cons.car()) || containsReadEvalMarker(cons.cdr());
 		}
 		return false;
 	}
@@ -1319,10 +1330,10 @@ public final class AsdfSystems {
 			}
 			return form;
 		}
-		if (form instanceof LispCons cons) {
-			LispVal car = normalizeAsdUserForm(cons.car(), bound);
-			LispVal cdr = normalizeAsdUserForm(cons.cdr(), bound);
-			return car == cons.car() && cdr == cons.cdr() ? form : new LispCons(car, cdr);
+		if (form instanceof LispCons) {
+			return LispTrees.rebuildSpine(form,
+					node -> node instanceof LispCons ? null : normalizeAsdUserForm(node, bound),
+					car -> normalizeAsdUserForm(car, bound));
 		}
 		return form;
 	}

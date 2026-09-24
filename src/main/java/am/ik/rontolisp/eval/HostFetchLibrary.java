@@ -162,11 +162,17 @@ public final class HostFetchLibrary {
 	}
 
 	private static boolean references(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (references(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
 		if (form instanceof LispSymbol sym) {
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
 			return qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && LispNames.FETCH.equals(qn.member());
 		}
-		return form instanceof LispCons cons && (references(cons.car()) || references(cons.cdr()));
+		return false;
 	}
 
 	/**

@@ -1372,138 +1372,163 @@ public final class LibraryDefunPruner {
 	}
 
 	private static void collectReferences(LispVal form, Prunable prunable, Set<String> out, @Nullable GateContext ctx) {
-		switch (form) {
-			case LispSymbol sym -> {
-				String name = sym.name();
-				if (prunable.exact().contains(name)) {
-					out.add(name);
-				}
-				if (name.startsWith("#:")) {
-					// An uninterned symbol is never a variable or a call; it is a string
-					// designator on its way to intern/find-symbol/format, and it names no
-					// package (cl-postgres writes (intern (string
-					// '#:make-ssl-client-stream)
-					// :cl+ssl)). Match it by member name against every third-party
-					// definition spelled that way. A KEYWORD deliberately does NOT widen
-					// like this: in third-party CL a keyword is overwhelmingly data
-					// (plist
-					// keys, loop keywords, case labels), and allowing it was measured to
-					// rescue exactly one definition across the whole vendored corpus
-					// while
-					// colliding with seven unrelated keywords.
-					addAll(prunable.thirdPartyByMember().get(name.substring(2)), out);
-				}
-				if (LispNames.VEC_QUALIFIED_AREF.equals(name)) {
-					out.add(LispNames.VEC_QUALIFIED_ASET);
-				}
-				if (LispNames.TORCH_NO_GRAD_QUALIFIED.equals(name)) {
-					// (torch:no-grad ...) expands to a let over torch::*grad-enabled*
-					// AFTER the pruner runs (LispMacroExpander.expandTorchNoGrad), so
-					// the variable is a hardcoded edge of the macro name -- the
-					// vec:aref -> vec:aset pattern.
-					out.add(LispNames.TORCH_GRAD_ENABLED_QUALIFIED);
-				}
-			}
-			case LispString str -> {
-				// Match case-insensitively: the reader upcases, so a lowercase source
-				// string like "linalg:ndim" fed to read-from-string names LINALG:NDIM.
-				String value = str.value().toUpperCase(java.util.Locale.ROOT);
-				for (String name : prunable.substringScanned()) {
-					if (value.contains(name)) {
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					String name = sym.name();
+					if (prunable.exact().contains(name)) {
 						out.add(name);
 					}
-				}
-				// A WHOLE string literal naming a definition, qualified or not: the
-				// (find-symbol "NAME" :pkg) / (intern "PKG:NAME") idioms. find-symbol is
-				// folded at codegen time -- after this pass -- so the literal is the only
-				// trace of the call it becomes.
-				if (prunable.exact().contains(value)) {
-					out.add(value);
-				}
-				addAll(prunable.thirdPartyByMember().get(value), out);
-				// A ~/name/ directive inside a FORMAT control is a function reference and
-				// the only trace of one: the renderer resolves the name at run time
-				// (.kb/format.md), so nothing else in the program mentions it. esrap's
-				// parse-error report is built entirely out of ~/esrap:print-terminal/ and
-				// ~/esrap::print-result/. Matched like the uninterned-designator case
-				// above -- the whole spelling and, for a qualified one, the member name.
-				// The scanner is the renderer's own, so "the pruner kept this function"
-				// and "the renderer's arm that calls it was injected" cannot disagree.
-				for (String directive : FormatRenderer.functionDesignatorNames(value)) {
-					if (prunable.exact().contains(directive)) {
-						out.add(directive);
+					if (name.startsWith("#:")) {
+						// An uninterned symbol is never a variable or a call; it is a
+						// string
+						// designator on its way to intern/find-symbol/format, and it
+						// names no
+						// package (cl-postgres writes (intern (string
+						// '#:make-ssl-client-stream)
+						// :cl+ssl)). Match it by member name against every third-party
+						// definition spelled that way. A KEYWORD deliberately does NOT
+						// widen
+						// like this: in third-party CL a keyword is overwhelmingly data
+						// (plist
+						// keys, loop keywords, case labels), and allowing it was measured
+						// to
+						// rescue exactly one definition across the whole vendored corpus
+						// while
+						// colliding with seven unrelated keywords.
+						addAll(prunable.thirdPartyByMember().get(name.substring(2)), out);
 					}
-					String member = LispSymbol.memberName(directive);
-					if (prunable.exact().contains(member)) {
-						out.add(member);
+					if (LispNames.VEC_QUALIFIED_AREF.equals(name)) {
+						out.add(LispNames.VEC_QUALIFIED_ASET);
 					}
-					addAll(prunable.thirdPartyByMember().get(member), out);
-				}
-			}
-			case LispCons cons when ctx != null && isTypecaseForm(cons) -> {
-				List<LispVal> parts = cons.toList();
-				// Head and subject scan normally; each clause whose head names a
-				// candidate becomes a GatedArm (see the class comment), the rest scan
-				// normally. Nested gatable arms inside an arm's body register
-				// independently -- an inner arm's own gate still applies even when the
-				// outer one opens.
-				collectReferences(parts.get(0), prunable, out, ctx);
-				if (parts.size() > 1) {
-					collectReferences(parts.get(1), prunable, out, ctx);
-				}
-				for (int i = 2; i < parts.size(); i++) {
-					LispVal clause = parts.get(i);
-					if (clause instanceof LispCons clauseCons && clauseCons.car() instanceof LispSymbol head
-							&& !isTypecaseDefaultHead(head) && ctx.gates.containsKey(head.name())) {
-						Set<String> armRefs = new LinkedHashSet<>();
-						collectReferences(clause, prunable, armRefs, ctx);
-						ctx.collected.add(new GatedArm(ctx.formIndex, clauseCons, ctx.gates.get(head.name()), armRefs));
-					}
-					else {
-						collectReferences(clause, prunable, out, ctx);
+					if (LispNames.TORCH_NO_GRAD_QUALIFIED.equals(name)) {
+						// (torch:no-grad ...) expands to a let over torch::*grad-enabled*
+						// AFTER the pruner runs (LispMacroExpander.expandTorchNoGrad), so
+						// the variable is a hardcoded edge of the macro name -- the
+						// vec:aref -> vec:aset pattern.
+						out.add(LispNames.TORCH_GRAD_ENABLED_QUALIFIED);
 					}
 				}
-			}
-			case LispCons cons when isNameForgingCall(cons) -> {
-				// (intern (concatenate 'string "MAKE-" (symbol-name x) suffix) pkg) --
-				// sxql's find-constructor -- assembles a NAME out of literal pieces and
-				// computed holes and resolves it at run time. The literal pieces form a
-				// template; every third-party member name the template can produce
-				// counts as referenced. A piece-less assembly (all holes) stays the
-				// documented computed-name carve-out.
-				java.util.regex.Pattern template = cons.cdr() instanceof LispCons argCell ? nameTemplate(argCell.car())
-						: null;
-				if (template != null) {
-					for (Map.Entry<String, List<String>> entry : prunable.thirdPartyByMember().entrySet()) {
-						if (template.matcher(entry.getKey()).matches()) {
-							out.addAll(entry.getValue());
+				case LispString str -> {
+					// Match case-insensitively: the reader upcases, so a lowercase source
+					// string like "linalg:ndim" fed to read-from-string names
+					// LINALG:NDIM.
+					String value = str.value().toUpperCase(java.util.Locale.ROOT);
+					for (String name : prunable.substringScanned()) {
+						if (value.contains(name)) {
+							out.add(name);
+						}
+					}
+					// A WHOLE string literal naming a definition, qualified or not: the
+					// (find-symbol "NAME" :pkg) / (intern "PKG:NAME") idioms. find-symbol
+					// is
+					// folded at codegen time -- after this pass -- so the literal is the
+					// only
+					// trace of the call it becomes.
+					if (prunable.exact().contains(value)) {
+						out.add(value);
+					}
+					addAll(prunable.thirdPartyByMember().get(value), out);
+					// A ~/name/ directive inside a FORMAT control is a function reference
+					// and
+					// the only trace of one: the renderer resolves the name at run time
+					// (.kb/format.md), so nothing else in the program mentions it.
+					// esrap's
+					// parse-error report is built entirely out of ~/esrap:print-terminal/
+					// and
+					// ~/esrap::print-result/. Matched like the uninterned-designator case
+					// above -- the whole spelling and, for a qualified one, the member
+					// name.
+					// The scanner is the renderer's own, so "the pruner kept this
+					// function"
+					// and "the renderer's arm that calls it was injected" cannot
+					// disagree.
+					for (String directive : FormatRenderer.functionDesignatorNames(value)) {
+						if (prunable.exact().contains(directive)) {
+							out.add(directive);
+						}
+						String member = LispSymbol.memberName(directive);
+						if (prunable.exact().contains(member)) {
+							out.add(member);
+						}
+						addAll(prunable.thirdPartyByMember().get(member), out);
+					}
+				}
+				case LispCons cons when ctx != null && isTypecaseForm(cons) -> {
+					List<LispVal> parts = cons.toList();
+					// Head and subject scan normally; each clause whose head names a
+					// candidate becomes a GatedArm (see the class comment), the rest scan
+					// normally. Nested gatable arms inside an arm's body register
+					// independently -- an inner arm's own gate still applies even when
+					// the
+					// outer one opens.
+					collectReferences(parts.get(0), prunable, out, ctx);
+					if (parts.size() > 1) {
+						collectReferences(parts.get(1), prunable, out, ctx);
+					}
+					for (int i = 2; i < parts.size(); i++) {
+						LispVal clause = parts.get(i);
+						if (clause instanceof LispCons clauseCons && clauseCons.car() instanceof LispSymbol head
+								&& !isTypecaseDefaultHead(head) && ctx.gates.containsKey(head.name())) {
+							Set<String> armRefs = new LinkedHashSet<>();
+							collectReferences(clause, prunable, armRefs, ctx);
+							ctx.collected
+								.add(new GatedArm(ctx.formIndex, clauseCons, ctx.gates.get(head.name()), armRefs));
+						}
+						else {
+							collectReferences(clause, prunable, out, ctx);
 						}
 					}
 				}
-				collectReferences(cons.car(), prunable, out, ctx);
-				collectReferences(cons.cdr(), prunable, out, ctx);
-			}
-			case LispCons cons when LispMacroExpander.isReadtableHookRegistration(cons) && cons.isProperList() -> {
-				// A reader hook rontolisp's reader can never fire: the registration
-				// lowers to a no-op that does not even evaluate the hook, so the #'name
-				// naming it is not a reference. ironclad registers its #@ reader this
-				// way, and that one defun -- whose body calls read -- was the only read
-				// in a whole postmodern program.
-				List<LispVal> parts = cons.toList();
-				for (LispVal arg : parts.subList(1, parts.size())) {
-					if (!LispMacroExpander.isDeadReadtableHook(arg)) {
-						collectReferences(arg, prunable, out, ctx);
+				case LispCons cons when isNameForgingCall(cons) -> {
+					// (intern (concatenate 'string "MAKE-" (symbol-name x) suffix) pkg)
+					// --
+					// sxql's find-constructor -- assembles a NAME out of literal pieces
+					// and
+					// computed holes and resolves it at run time. The literal pieces form
+					// a
+					// template; every third-party member name the template can produce
+					// counts as referenced. A piece-less assembly (all holes) stays the
+					// documented computed-name carve-out.
+					java.util.regex.Pattern template = cons.cdr() instanceof LispCons argCell
+							? nameTemplate(argCell.car()) : null;
+					if (template != null) {
+						for (Map.Entry<String, List<String>> entry : prunable.thirdPartyByMember().entrySet()) {
+							if (template.matcher(entry.getKey()).matches()) {
+								out.addAll(entry.getValue());
+							}
+						}
+					}
+					collectReferences(cons.car(), prunable, out, ctx);
+					form = cons.cdr();
+					continue;
+				}
+				case LispCons cons when LispMacroExpander.isReadtableHookRegistration(cons) && cons.isProperList() -> {
+					// A reader hook rontolisp's reader can never fire: the registration
+					// lowers to a no-op that does not even evaluate the hook, so the
+					// #'name
+					// naming it is not a reference. ironclad registers its #@ reader this
+					// way, and that one defun -- whose body calls read -- was the only
+					// read
+					// in a whole postmodern program.
+					List<LispVal> parts = cons.toList();
+					for (LispVal arg : parts.subList(1, parts.size())) {
+						if (!LispMacroExpander.isDeadReadtableHook(arg)) {
+							collectReferences(arg, prunable, out, ctx);
+						}
 					}
 				}
+				case LispCons cons when isStructuralClassForm(cons) ->
+					collectClassDefinitionReferences(cons, prunable, out, ctx);
+				case LispCons cons -> {
+					collectReferences(cons.car(), prunable, out, ctx);
+					form = cons.cdr();
+					continue;
+				}
+				default -> {
+				}
 			}
-			case LispCons cons when isStructuralClassForm(cons) ->
-				collectClassDefinitionReferences(cons, prunable, out, ctx);
-			case LispCons cons -> {
-				collectReferences(cons.car(), prunable, out, ctx);
-				collectReferences(cons.cdr(), prunable, out, ctx);
-			}
-			default -> {
-			}
+			return;
 		}
 	}
 
@@ -1717,11 +1742,22 @@ public final class LibraryDefunPruner {
 	}
 
 	private static boolean usesAnySymbol(LispVal form, Set<String> names) {
-		return switch (form) {
-			case LispSymbol sym -> names.contains(member(sym.name()));
-			case LispCons cons -> usesAnySymbol(cons.car(), names) || usesAnySymbol(cons.cdr(), names);
-			default -> false;
-		};
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return names.contains(member(sym.name()));
+				}
+				case LispCons cons -> {
+					if (usesAnySymbol(cons.car(), names)) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
 	}
 
 	private static String member(String name) {
