@@ -127,10 +127,17 @@ public final class WasmPeephole {
 		}
 		List<byte[]> rewritten = new ArrayList<>(entries.size());
 		boolean changed = false;
+		// The functions each body the first pass left alone calls (null for a body it
+		// changed): such a body can only change again at a call of a constant function.
+		int @Nullable [][] untouchedCallees = new int[entries.size()][];
 		for (int d = 0; d < entries.size(); d++) {
 			byte[] entry = entries.get(d);
-			byte[] out = rewriteEntry(entry, types, types.func(defTypeIdx[d]).results().isEmpty(), pureNonNullCall,
+			Body body = WasmCodeModel.decode(entry, types);
+			byte[] out = rewriteEntry(entry, body, types.func(defTypeIdx[d]).results().isEmpty(), pureNonNullCall,
 					NO_CONSTANTS);
+			if (out == entry) {
+				untouchedCallees[d] = callees(body);
+			}
 			changed |= out != entry;
 			rewritten.add(out);
 		}
@@ -148,9 +155,15 @@ public final class WasmPeephole {
 			ConstantCalls calls = new ConstantCalls(constants,
 					f -> types.func(defTypeIdx[f - numImports]).params().size());
 			for (int d = 0; d < rewritten.size(); d++) {
+				// A body the first pass left alone that calls no constant function is
+				// the same input to the same rules, so it comes out the same again.
+				int @Nullable [] callees = untouchedCallees[d];
+				if (callees != null && !callsAny(callees, constants)) {
+					continue;
+				}
 				byte[] entry = rewritten.get(d);
-				byte[] out = rewriteEntry(entry, types, types.func(defTypeIdx[d]).results().isEmpty(), pureNonNullCall,
-						calls);
+				byte[] out = rewriteEntry(entry, WasmCodeModel.decode(entry, types),
+						types.func(defTypeIdx[d]).results().isEmpty(), pureNonNullCall, calls);
 				changed |= out != entry;
 				rewritten.set(d, out);
 			}
@@ -227,9 +240,35 @@ public final class WasmPeephole {
 		return WasmSections.slice(entry, 1, entry.length - 1);
 	}
 
-	private static byte[] rewriteEntry(byte[] entry, TypeSection types, boolean funcResultsEmpty,
+	// The targets of the body's calls.
+	private static int[] callees(Body body) {
+		int count = 0;
+		for (Instr in : body.code()) {
+			if (in.op == Instruction.CALL) {
+				count++;
+			}
+		}
+		int[] out = new int[count];
+		int k = 0;
+		for (Instr in : body.code()) {
+			if (in.op == Instruction.CALL) {
+				out[k++] = (int) in.a;
+			}
+		}
+		return out;
+	}
+
+	private static boolean callsAny(int[] callees, Map<Integer, byte[]> constants) {
+		for (int callee : callees) {
+			if (constants.containsKey(callee)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static byte[] rewriteEntry(byte[] entry, Body body, boolean funcResultsEmpty,
 			java.util.function.IntPredicate pureNonNullCall, ConstantCalls calls) {
-		Body body = WasmCodeModel.decode(entry, types);
 		List<Instr> code = body.code();
 		if (code.isEmpty()) {
 			return entry;
