@@ -25,7 +25,7 @@ a 60 MB array of its own.
 
 ## What to do
 
-1. Reproduce: `.todo/artefacts/784-wasmtime-semi-space-bug/repro.sh <workdir> <size>`
+1. Reproduce: `.todo/artefacts/784-shrink-the-wasmtime-semi-space-bug-to-a-wat-and-report-it/repro.sh <workdir> <size>`
    builds `a34942ace~` in a worktree, compiles that commit's `ci-spec` corpus `--simd` (its
    pre-grow is 65,259,152 as emitted, no override) and runs a copy with the pre-grow
    patched to `<size>`. 65,259,152 panics (`VMGcKind`) and 65,300,000 traps (semi-space BUG),

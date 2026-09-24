@@ -24,6 +24,9 @@ interpreter and JVM too, so wasmtime is not involved.
 | `LackEcosystemWasmE2eTest` `lackRequestParsesBodies...` (P1 + component) | `wasm trap: call stack exhausted` |
 | `ClackE2eTest.tinyRoutesServesOnWasmComponentUnderWasmtimeServe`, `NingleE2eTest.ningleServesOnWasmComponentUnderWasmtimeServe` | `wasmtime serve` answers no bytes (`HTTP/1.1 header parser received no bytes`) |
 
+Re-run after merging upstream (`5977c479e`, which includes the list-spine and CLI-stack
+fixes of `951`/`952`): the same 17 failures and 5 errors.
+
 Not yet established: whether the jar driver (no `-Drontolisp.binary`) shows the same, and
 which commit turned each one red. Bisect one suite at a time; the stack overflow and
 `call stack exhausted` may be one cause (a deeper compile-time or run-time recursion).
