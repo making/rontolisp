@@ -27,6 +27,7 @@ import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.testsupport.HostWasmtime;
+import am.ik.rontolisp.testsupport.ThreadStdio;
 import am.ik.rontolisp.testsupport.YamlResources;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DynamicContainer;
@@ -36,8 +37,6 @@ import org.junit.jupiter.api.TestFactory;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
-import org.junit.jupiter.api.parallel.ResourceLock;
-import org.junit.jupiter.api.parallel.Resources;
 import org.testcontainers.images.builder.Transferable;
 import tools.jackson.dataformat.yaml.YAMLMapper;
 
@@ -64,10 +63,9 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * <p>
  * The factories and their legs run CONCURRENTLY: every staged file is named after its
  * case, standard and leg under {@link #workDir}, and each in-process interpreter gets
- * streams of its own. The exception is {@link #runOnJvm}, which runs the compiled
- * program's {@code main} in THIS process and so swaps {@code System.out} /
- * {@code System.in}: the two factories that reach it hold the {@code SYSTEM_OUT} lock
- * (JUnit names no {@code System.in} resource; nothing else here touches either).
+ * streams of its own. {@link #runOnJvm} runs the compiled program's {@code main} in THIS
+ * process, so its {@code System.out} / {@code System.in} go through {@link ThreadStdio}'s
+ * per-thread slots rather than a process-wide swap.
  */
 @Execution(ExecutionMode.CONCURRENT)
 class SchemeSpecE2eTest {
@@ -159,7 +157,6 @@ class SchemeSpecE2eTest {
 	static Path workDir;
 
 	@TestFactory
-	@ResourceLock(Resources.SYSTEM_OUT)
 	Stream<DynamicNode> e2e() throws Exception {
 		Spec spec = loadSpec();
 		String program = spec.program();
@@ -419,7 +416,6 @@ class SchemeSpecE2eTest {
 	 * corpus ships).
 	 */
 	@TestFactory
-	@ResourceLock(Resources.SYSTEM_OUT)
 	Stream<DynamicNode> driverLoopReadsThreeExpressionsFromStdinOnEveryBackend() {
 		String program = """
 				;; A read-eval-print loop over stdin, the shape the book's chapter 4
@@ -576,16 +572,9 @@ class SchemeSpecE2eTest {
 		};
 		Method main = loader.loadClass(name).getMethod("main", String[].class);
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		PrintStream previousOut = System.out;
-		java.io.InputStream previousIn = System.in;
-		System.setOut(new PrintStream(out, true, StandardCharsets.UTF_8));
-		System.setIn(new java.io.ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8)));
-		try {
+		try (var _ = ThreadStdio.out(out);
+				var _ = ThreadStdio.in(new java.io.ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8)))) {
 			onAProgramStack(() -> main.invoke(null, (Object) new String[0]));
-		}
-		finally {
-			System.setOut(previousOut);
-			System.setIn(previousIn);
 		}
 		return out.toString(StandardCharsets.UTF_8);
 	}

@@ -13,8 +13,7 @@
   `SchemeSpecE2eTest`, `UnclosedOutputFileE2eTest`, and the in-process JVM-backend classes
   of the next section. The price of admission is that no
   two legs share a file, a table or a process-global: `SchemeSpecE2eTest` runs a compiled
-  `main` in process, so the factories that swap `System.out`/`System.in` hold
-  `@ResourceLock(Resources.SYSTEM_OUT)`; the `ql:quickload` cache every
+  `main` in process, so its streams go through `ThreadStdio` (next section); the `ql:quickload` cache every
   `ClPostgresE2eTest` leg fills is safe because installs are atomic (`.kb/dists.md`).
   Measured alone 2026-09-24 (64 cores): `ClPostgresE2eTest` 292 s -> 57 s (cold cache
   58 s), `SchemeSpecE2eTest` 176 s -> 81 s (its four corpus runs also start at once;
