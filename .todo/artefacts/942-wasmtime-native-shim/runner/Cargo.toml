@@ -1,0 +1,19 @@
+[package]
+name = "rlrun"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+compiler = ["wasmtime/cranelift"]
+
+[dependencies]
+wasmtime = { version = "=47.0.3", default-features = false, features = ["runtime", "std", "gc", "gc-copying", "anyhow", "gc-drc"] }
+wasmtime-wasi = { version = "=47.0.3", default-features = false, features = ["p1"] }
+anyhow = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

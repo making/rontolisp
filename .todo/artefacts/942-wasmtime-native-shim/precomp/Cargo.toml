@@ -1,0 +1,16 @@
+[package]
+name = "rlprecomp"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasmtime = { version = "=47.0.3", default-features = false, features = ["runtime", "std", "gc", "gc-copying", "cranelift"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

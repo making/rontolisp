@@ -1,0 +1,6 @@
+(defun build (n) (let ((acc nil)) (dotimes (i n) (push (format nil "item-~a" i) acc)) acc))
+(defun total (l) (let ((s 0)) (dolist (x l) (incf s (length x))) s))
+(let ((sum 0)) (dotimes (k 30) (incf sum (total (build 100000)))) (print sum))
+(print (handler-case (error "boom ~a" 42) (error (e) (format nil "caught: ~a" e))))
+(let ((h (make-hash-table :test 'equal))) (setf (gethash "a" h) 1) (print (gethash "a" h)))
+(print (expt 2 100))
