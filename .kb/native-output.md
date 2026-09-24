@@ -59,7 +59,11 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   `false`, `true` under `-Pnative`) builds the pair when `cargo` is on `PATH` or in
   `~/.cargo/bin`, else warns and goes on; `required` (CI) fails unless the host's pair is
   there afterwards and, on Linux, its stub is static. A static link that fails (no `libc.a`)
-  falls back to a dynamic stub with a warning, except under `required`.
+  falls back to a dynamic stub with a warning, except under `required`. "Static" is read
+  from the ELF program headers (no `PT_INTERP`, `build.sh --is-static`), never from `ldd`:
+  ldd calls any foreign-architecture file "not a dynamic executable" and, on the aarch64
+  runner, reported the static-pie stub as dynamic (CI run 36008491295, 2026-09-24).
+  `build-sh-test.sh` (run by `--test`) pins the check on known static/dynamic executables.
 - **Packaging** (decided 2026-09-24 from the sizes below): each `-Pnative` binary carries its
   HOST pair only (it is per-platform already); the release exec jar carries all three
   release platforms (~11.4 MB compressed; 8.1 MB jar -> ~19.5 MB), so `java -jar` compiles

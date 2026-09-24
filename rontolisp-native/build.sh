@@ -4,6 +4,7 @@
 # (<out> defaults to target/resources), the classpath layout the Java side loads.
 #
 #   ./build.sh [--test] [out-dir]    --test: then run the workspace tests against the stub
+#   ./build.sh --is-static FILE      exit 0 iff FILE is an ELF executable with no interpreter
 #   ./build.sh --maven BUILD REQUIRED
 #       what pom.xml runs in generate-resources, with the values of the properties
 #       rontolisp.native.build and rontolisp.native.required (true|false):
@@ -69,8 +70,14 @@ install_pair() {
   ls -l "$dest"
 }
 
+# From the ELF program headers, not ldd: ldd calls every foreign-architecture file "not a
+# dynamic executable" and, on aarch64, reports a static-pie as dynamic. Static means no
+# PT_INTERP (a static-pie still has a DYNAMIC segment for its own relocations).
 statically_linked() {
-  ldd "$1" 2>&1 | grep -Eq 'statically linked|not a dynamic executable'
+  command -v readelf >/dev/null || { echo "error: readelf (binutils) not found" >&2; return 2; }
+  local headers
+  headers=$(readelf -lW "$1") || return
+  ! grep -q 'INTERP' <<<"$headers"
 }
 
 find_cargo() {
@@ -79,6 +86,13 @@ find_cargo() {
   fi
   command -v cargo >/dev/null
 }
+
+if [[ ${1:-} == --is-static ]]; then
+  file=${2:?FILE}
+  [[ $file == /* ]] || file=$OLDPWD/$file # relative to the caller, not to this directory
+  statically_linked "$file"
+  exit
+fi
 
 if [[ ${1:-} == --maven ]]; then
   build=${2:?BUILD}
@@ -121,5 +135,6 @@ stub=$(build_pair false)
 install_pair "$stub" "$out/am/ik/rontolisp/native/$os-$arch"
 
 if $run_tests; then
+  ./build-sh-test.sh
   RLNATIVE_STUB=$PWD/$stub cargo test --locked --workspace
 fi
