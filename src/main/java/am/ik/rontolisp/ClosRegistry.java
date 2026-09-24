@@ -1286,6 +1286,22 @@ public final class ClosRegistry {
 	private boolean classMetaTableEmitted = false;
 
 	/**
+	 * Bumped by every registration that can move a class or struct's descendant set, or
+	 * which generic is {@code print-object}: the validity stamp of
+	 * {@link #printObjectTags}'s memo. {@link #classes()} and {@link #generics()} hand
+	 * out the live maps, but nothing writes through them -- every write goes through
+	 * {@link #registerClass}, {@link #registerStruct} or {@link #registerGeneric}.
+	 */
+	private int hierarchyVersion;
+
+	/** The last {@link #printObjectTags} answer and the state it was computed from. */
+	private @Nullable PrintObjectTags printObjectTagsMemo;
+
+	private record PrintObjectTags(int hierarchyVersion, @Nullable GenericInfo generic, int methodCount,
+			List<String> tags) {
+	}
+
+	/**
 	 * The classes by normalized name, in definition order.
 	 * @return the class registry
 	 */
@@ -1486,6 +1502,7 @@ public final class ClosRegistry {
 	 */
 	public void registerStruct(String structName, @Nullable String parentName, List<String> slotBaseNames,
 			List<LispVal> initforms) {
+		this.hierarchyVersion++;
 		String key = normalize(structName);
 		this.structTags.put(key, LispLayout.STRUCT_TAG_PREFIX + structName);
 		// A redefinition invalidates the memoized metaobject, like registerClass.
@@ -2080,6 +2097,7 @@ public final class ClosRegistry {
 	 * @param info the class record
 	 */
 	public void registerClass(ClassInfo info) {
+		this.hierarchyVersion++;
 		String key = normalize(info.name());
 		Set<String> extras = this.pendingExtraAncestors.get(key);
 		if (extras != null) {
@@ -2227,6 +2245,7 @@ public final class ClosRegistry {
 	 * @param info the generic record
 	 */
 	public void registerGeneric(GenericInfo info) {
+		this.hierarchyVersion++;
 		this.generics.put(normalize(info.name()), info);
 	}
 
@@ -2273,6 +2292,63 @@ public final class ClosRegistry {
 	 */
 	public boolean hasMultipleInheritance() {
 		return this.classes.values().stream().anyMatch(c -> c.superclasses().size() > 1);
+	}
+
+	/**
+	 * The instance tags a user {@code print-object} method specializes on, in
+	 * registration order -- the exact set the printer has to route through the generic.
+	 * Empty when the program defines no {@code print-object} method, which is the gate:
+	 * with no method, every printing operator keeps the shape (and the output bytes) it
+	 * always had.
+	 *
+	 * <p>
+	 * Every printing operator a compile meets asks this, several times, and the answer
+	 * walks every class once per specializer -- measured 2026-09-24 at 10-14% of a
+	 * ci-spec corpus compile on either backend when it was recomputed per call. It is
+	 * memoized against {@link #hierarchyVersion} and the generic's method count: a method
+	 * is only ever added (a redefinition replaces the entry under the same specializer
+	 * key, so the specializer set cannot change without the count moving).
+	 * @return the instance tags with a user print-object method, unmodifiable
+	 */
+	public List<String> printObjectTags() {
+		PrintObjectTags memo = this.printObjectTagsMemo;
+		if (memo != null && memo.hierarchyVersion() == this.hierarchyVersion
+				&& (memo.generic() == null || memo.generic().methods().size() == memo.methodCount())) {
+			return memo.tags();
+		}
+		GenericInfo generic = null;
+		for (GenericInfo candidate : this.generics.values()) {
+			if (LispNames.PRINT_OBJECT.equals(plainNameOf(candidate.name()))) {
+				generic = candidate;
+				break;
+			}
+		}
+		List<String> tags = new java.util.ArrayList<>();
+		if (generic != null) {
+			for (MethodInfo method : generic.methods().values()) {
+				for (Specializer specializer : method.specializers()) {
+					// A defclass name is a CLASS specializer, a defstruct name a TYPE one
+					// carrying the struct name (parseSpecializer); both route the
+					// printer,
+					// so both descendant-tag families are collected.
+					if (specializer.name() == null || (specializer.kind() != SpecializerKind.CLASS
+							&& specializer.kind() != SpecializerKind.TYPE)) {
+						continue;
+					}
+					List<String> descendants = new java.util.ArrayList<>(descendantTags(specializer.name()));
+					descendants.addAll(descendantStructTags(specializer.name()));
+					for (String tag : descendants) {
+						if (tag != null && !tags.contains(tag)) {
+							tags.add(tag);
+						}
+					}
+				}
+			}
+		}
+		List<String> answer = List.copyOf(tags);
+		this.printObjectTagsMemo = new PrintObjectTags(this.hierarchyVersion, generic,
+				generic == null ? 0 : generic.methods().size(), answer);
+		return answer;
 	}
 
 	/**

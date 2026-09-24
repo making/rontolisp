@@ -1,9 +1,13 @@
 package am.ik.rontolisp;
 
+import java.util.AbstractSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+
+import org.jspecify.annotations.Nullable;
 
 /**
  * A namespace (package) in the Lisp dialect. A package owns a set of symbol names and may
@@ -21,7 +25,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * can answer nil before the intern and the symbol after, and {@code unintern} can take it
  * {@linkplain #removeSymbol out} again. The set is therefore a mutable, thread-safe one
  * whatever the caller passed -- the canonical constructor copies it -- while the other
- * components stay as given (the rarer package operations rebuild the record).
+ * components stay as given (the rarer package operations rebuild the record). The copy is
+ * a {@link MemberTable}: an immutable base plus what was interned and uninterned since,
+ * so copying a package with a thousand symbols -- every registry does it for every
+ * built-in package -- costs nothing until the program interns.
  *
  * @param name the package name (e.g. {@code cl}, {@code cl-user}, {@code rontolisp})
  * @param useList the names of packages this package uses (whose symbols are visible
@@ -46,9 +53,7 @@ public record LispPackage(String name, List<String> useList, Set<String> symbols
 	 * table (see the class comment).
 	 */
 	public LispPackage {
-		Set<String> members = ConcurrentHashMap.newKeySet();
-		members.addAll(symbols);
-		symbols = members;
+		symbols = MemberTable.copyOf(symbols);
 	}
 
 	/**
@@ -138,6 +143,103 @@ public record LispPackage(String name, List<String> useList, Set<String> symbols
 	 */
 	public boolean shadows(String symbolName) {
 		return this.shadows.contains(symbolName);
+	}
+
+	/**
+	 * A package's member table: an immutable base set plus the names interned since
+	 * ({@code added}, never base members) and the base names uninterned since
+	 * ({@code removed}, only base members). A copy shares the base, so the built-in
+	 * packages every registry starts from are never copied name by name. Each operation
+	 * is thread-safe, like the concurrent set it replaces.
+	 */
+	static final class MemberTable extends AbstractSet<String> {
+
+		private final Set<String> base;
+
+		private final Set<String> added = ConcurrentHashMap.newKeySet();
+
+		private final Set<String> removed = ConcurrentHashMap.newKeySet();
+
+		private MemberTable(Set<String> base) {
+			this.base = base;
+		}
+
+		/**
+		 * An independent member table holding exactly the given names.
+		 * @param names the names, a member table or any set
+		 * @return the new table
+		 */
+		static MemberTable copyOf(Set<String> names) {
+			if (names instanceof MemberTable table) {
+				MemberTable copy = new MemberTable(table.base);
+				copy.added.addAll(table.added);
+				copy.removed.addAll(table.removed);
+				return copy;
+			}
+			// Set.copyOf answers an already-immutable set as itself.
+			return new MemberTable(Set.copyOf(names));
+		}
+
+		@Override
+		public boolean contains(Object name) {
+			return this.added.contains(name) || (this.base.contains(name) && !this.removed.contains(name));
+		}
+
+		@Override
+		public boolean add(String name) {
+			if (this.base.contains(name)) {
+				return this.removed.remove(name);
+			}
+			return this.added.add(name);
+		}
+
+		@Override
+		public boolean remove(Object name) {
+			if (this.base.contains(name)) {
+				return this.removed.add((String) name);
+			}
+			return this.added.remove(name);
+		}
+
+		@Override
+		public int size() {
+			return this.base.size() - this.removed.size() + this.added.size();
+		}
+
+		@Override
+		public Iterator<String> iterator() {
+			Iterator<String> names = java.util.stream.Stream
+				.concat(this.base.stream().filter(name -> !this.removed.contains(name)), this.added.stream())
+				.iterator();
+			return new Iterator<>() {
+
+				private @Nullable String last;
+
+				@Override
+				public boolean hasNext() {
+					return names.hasNext();
+				}
+
+				@Override
+				public String next() {
+					String name = names.next();
+					this.last = name;
+					return name;
+				}
+
+				@Override
+				public void remove() {
+					String name = this.last;
+					if (name == null) {
+						throw new IllegalStateException();
+					}
+					MemberTable.this.remove(name);
+					this.last = null;
+				}
+
+			};
+		}
+
 	}
 
 }
