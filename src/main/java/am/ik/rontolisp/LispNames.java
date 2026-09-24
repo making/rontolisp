@@ -5732,6 +5732,9 @@ public final class LispNames {
 	/** See {@link #READ_LINE_RAW_INTERNAL}. */
 	public static final String CLOSE_RAW_INTERNAL = "%CLOSE-RAW";
 
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String LISTEN_RAW_INTERNAL = "%LISTEN-RAW";
+
 	/**
 	 * The compile paths' per-file-stream element-type registry: a prelude defun that
 	 * records a binary {@code open}'s element type against its stream and answers the

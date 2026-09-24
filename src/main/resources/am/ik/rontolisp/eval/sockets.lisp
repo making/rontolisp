@@ -617,9 +617,14 @@
   ;; buffer. The host kernel's receive buffer is not observable without
   ;; blocking on this backend, so a drained chunk answers nil even when bytes
   ;; wait host-side (documented divergence -- the chunk IS the readahead
-  ;; buffer here). A non-socket designator answers nil.
+  ;; buffer here). A non-socket designator falls through to the native listen
+  ;; under its %listen-raw alias -- the same shape %io-read-char's raw twin
+  ;; uses: a string input stream answers from its record, and the alias keeps
+  ;; the compile-time socket rewrite of the public name from recursing.
   (let ((e (rontolisp::%sock-entry s)))
-    (if e (if (rontolisp::%sock-buf-ready e) t nil) nil)))
+    (if e
+        (if (rontolisp::%sock-buf-ready e) t nil)
+        (rontolisp::%listen-raw s))))
 
 (defun rontolisp::%io-open-stream-p (s)
   ;; A socket entry lives in *sock-table* until %io-close drops it, so table

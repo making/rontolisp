@@ -54,14 +54,17 @@
 ;;; open-stream-p and listen are redirected by the same rewrite, so they need
 ;;; definitions here too or the call compiles to a call-time error and TRAPS --
 ;;; which is what (open-stream-p *error-output*) used to do in a socket-free
-;;; component. No socket can exist in this splice, so each answers exactly what
-;;; sockets.lisp's dispatcher gives a file/stdin handle: t for any non-nil
-;;; designator, and nil for the immediately-available probe (the host receive
-;;; buffer is not observable without blocking on this backend -- the same
-;;; documented divergence, see .kb/tcp-sockets.md).
+;;; component. No socket can exist in this splice, so open-stream-p answers
+;;; exactly what sockets.lisp's dispatcher gives a file/stdin handle: t for any
+;;; non-nil designator. listen falls through to the native built-in under its
+;;; %listen-raw alias, the same answer sockets.lisp's dispatcher gives a
+;;; non-socket since the string-record probe landed: a string input stream
+;;; answers from its record, and anything else reaches the call-time
+;;; unsupported stub -- the same "no non-blocking probe" trap the wasm backend
+;;; always gave.
 (defun rontolisp::%io-open-stream-p (s) (if s t nil))
 
-(defun rontolisp::%io-listen (&optional s) (if s nil nil))
+(defun rontolisp::%io-listen (&optional s) (rontolisp::%listen-raw s))
 
 ;;; The bounded sequence ops and the eof-tolerant reads the rewrite also
 ;;; redirects: raw passthroughs here (no socket can exist). The %...-future twins

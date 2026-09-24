@@ -37,10 +37,15 @@ through `WasmEmitHelper.streamFdOrStdin`.
   the native built-in: `sockets.lisp` / `stdin-dispatch.lisp`'s `%io-read-line` /
   `%io-read-char` and `stdin.lisp`'s `%stdin-read-*-or-raw-f` bind `(or s *standard-input*)`
   and dispatch on `(integerp in)`. Do NOT turn either back into a null test.
-- `listen` has no WASM implementation outside a `--component` socket stream, so the input
-  redirect covers it on interpreter + JVM only. `WasmSocketsRewrite` redirects `open-stream-p`
-  onto `%IO-OPEN-STREAM-P` whenever it runs, so `stdin-dispatch.lisp` must define it;
-  **`%IO-LISTEN` is still missing there** — the same landmine for `(listen ...)`.
+- `listen` has no WASM implementation outside a string-stream record and a
+  `--component` socket stream, so the input redirect covers it on interpreter + JVM only.
+  `WasmSocketsRewrite` redirects `open-stream-p` and `listen` onto `%IO-OPEN-STREAM-P` /
+  `%IO-LISTEN` whenever it runs, so `stdin-dispatch.lisp` must define both; `%IO-LISTEN`
+  there falls through to the native `listen` under its `%LISTEN-RAW` alias (the
+  `%...-raw` family, so the rewrite cannot recurse), whose record probe answers a string input
+  stream and whose stub traps anything else (measured 2026-09-24: the earlier
+  always-nil body made `(listen <string-input-stream>)` answer nil on `--component`
+  while the other three backends answered t — ci-spec `listen-at-the-end-of-a-string-stream-and-echo-peek`).
 - **`--component` limit**: a dynamic binding may not span an `await` (`WasmLetCompiler`
   rejects it) and the rewrite promotes top-level reads to awaits, so
   `(with-input-from-string (*standard-input* ...) (read-line))` must sit inside a plain

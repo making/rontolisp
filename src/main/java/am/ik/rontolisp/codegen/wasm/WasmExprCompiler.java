@@ -460,7 +460,8 @@ final class WasmExprCompiler {
 						|| LispNames.WRITE_STRING_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.READ_SEQUENCE_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.WRITE_SEQUENCE_RAW_INTERNAL.equals(qn.member())
-						|| LispNames.CLOSE_RAW_INTERNAL.equals(qn.member())) {
+						|| LispNames.CLOSE_RAW_INTERNAL.equals(qn.member())
+						|| LispNames.LISTEN_RAW_INTERNAL.equals(qn.member())) {
 					// The NATIVE stream built-ins under their internal alias names: the
 					// %io-* socket-dispatch defuns sockets.lisp splices fall back through
 					// these, so the compile-time socket rewrite of the public names
@@ -517,6 +518,7 @@ final class WasmExprCompiler {
 							}
 						}
 						case LispNames.READ_CHAR_RAW_INTERNAL -> WasmReadCharCompiler.compile(cons, ctx);
+						case LispNames.LISTEN_RAW_INTERNAL -> WasmListenCompiler.compile(cons, ctx);
 						case LispNames.READ_BYTE_RAW_INTERNAL -> WasmReadByteCompiler.compile(cons, ctx);
 						case LispNames.WRITE_LINE_RAW_INTERNAL -> WasmWriteLineCompiler.compile(cons, ctx);
 						case LispNames.WRITE_BYTE_RAW_INTERNAL -> WasmWriteByteCompiler.compile(cons, ctx);

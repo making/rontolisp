@@ -9541,8 +9541,9 @@ cases:
         (write-string "out
       " b)
         (print (get-output-stream-string s)))
-      ;; and with NO components: the discarding sink, a string-stream VALUE (it is
-      ;; a fresh string output stream nobody reads) and not an integer.
+      ;; and with NO components: a real broadcast stream over an empty list --
+      ;; not an integer and, since .todo/927 retired the discarding-sink
+      ;; representation, no longer a string-stream either.
       (print (list (typep (make-broadcast-stream) 'integer)
                    (streamp (make-broadcast-stream))
                    (typep (make-broadcast-stream) 'string-stream)))
@@ -9566,7 +9567,7 @@ cases:
       "fan1
       out
       "
-      (NIL T T)
+      (NIL T NIL)
   - name: pathname-algebra-over-the-flat-namestring
     source: |
       ;; The pathname operators that are pure computation over the namestring, so
@@ -13117,7 +13118,6 @@ cases:
       f1"
       "a
       b
-
       :C
       "
       gow-past
