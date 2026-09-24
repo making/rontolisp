@@ -188,11 +188,14 @@ gitBranch=${git.branch}
 						     tests start, not the cores the machine has: several builds share
 						     one development box, so a count derived from the core count alone
 						     oversubscribes it the moment a second suite runs. Free cores are
-						     availableProcessors minus the 1-minute load average; a fork gets two
-						     of them (its JIT, GC and the guest processes it spawns), capped at
-						     half the machine and floored at 2, the count CI was tuned on. The
-						     load average is -1 where the OS has none (Windows), which reads as
-						     an idle machine. -Drontolisp.test.forkCount=N pins it. -->
+						     availableProcessors minus the 1-minute load average; a fork gets
+						     eight of them, floored at 2 (the count CI was tuned on). Eight, not
+						     fewer, because the heavy classes run their own methods on up to 16
+						     threads and every fork pays its own JIT warm-up: on the idle 64-thread
+						     (32-core) box the test phase took 408 s at 29 forks, 372 s at 16,
+						     268 s at 8 and 332 s at 4. The load average is -1 where the OS has
+						     none (Windows), which reads as an idle machine.
+						     -Drontolisp.test.forkCount=N pins it. -->
 						<id>size-test-forks</id>
 						<phase>process-test-classes</phase>
 						<goals>
@@ -208,7 +211,7 @@ gitBranch=${git.branch}
 								double load = java.lang.management.ManagementFactory.getOperatingSystemMXBean()
 									.getSystemLoadAverage();
 								int free = cores - (int) Math.round(Math.max(load, 0.0));
-								int forks = Math.max(2, Math.min(cores / 2, free / 2));
+								int forks = Math.max(2, free / 8);
 								rontolisp.test.forkCount = pinned != null ? pinned : String.valueOf(forks);
 								System.out.println("[rontolisp] surefire forkCount = " + rontolisp.test.forkCount
 										+ " (availableProcessors = " + cores + ", load average = " + load + ")");
@@ -263,7 +266,7 @@ gitBranch=${git.branch}
 					<!-- Forked JVMs run different test classes in parallel, reused across
 					     classes so JVM startup is paid once per fork. The count is set by
 					     build-helper's size-test-forks execution from the free cores at test
-					     time: 2 on the CI runner's 4 vCPU, up to half the cores on an idle
+					     time: 2 on the CI runner's 4 vCPU, 8 on the idle 64-thread
 					     development machine. With many forks the wall clock is bounded by the
 					     longest single class, which is why the heavy classes run their own
 					     methods concurrently (.kb/test-execution.md). Each fork gets its own

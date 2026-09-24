@@ -176,7 +176,7 @@ Three ways a run reports green when it is not:
   Freeze the sources until it finishes.
 - **A truncated run looks clean**: an orphaned build from an earlier interrupted turn can
   kill it early, leaving zero failures and a short report set. Count
-  `target/surefire-reports/*.txt` -- a full `./mvnw test` writes ~218 -- and check the exit
+  `target/surefire-reports/*.txt` -- a full `./mvnw test` writes ~280 -- and check the exit
   code, not just the failure counts.
 
 When a session driving subagents hits this, the reliable division of labour is for the
