@@ -49,6 +49,15 @@ off for that module** -- silently, by design; the loss is size, never an answer.
   2026-09-24) for bodies no walk reached. A dead body is copied as it is, so the output is
   unchanged; the one difference is that an undecodable DEAD body no longer throws here (the
   shake's `scanInstr` still refuses an unknown opcode in any body).
+- **A worklist, not full rounds.** A walk reads its own local/parameter/loop sets, its callees'
+  return sets and the module-wide field/element/global/tag sets, so a function is walked again
+  only when one of those grew since its last walk: `joinOwn` marks the function itself,
+  `joinReturn` its recorded callers, `joinShared` moves `globalEpoch` past every function's
+  `lastEpoch`. The least fixpoint of a monotone analysis does not depend on the order it is
+  reached in, and each function's last walk saw the final sets (else it would be dirty again),
+  so `targeted` and the rewrite are unchanged. Measured 2026-09-24: analysis walks 252 -> 133 on
+  a 3-line program's core, 32,507 -> 19,762 on the `ci-spec` corpus core; most of what is left
+  follows a shared (field) set growing, which still re-walks every live function.
 - **Bottom is dead code, not false.** A test on a value NO source produces marks the rest
   of the block unreachable. Folding it to 0 was the first version's bug: it selected the
   `else` arm of `_rat_add`'s "both exact integers" guard, counted the rational path's
