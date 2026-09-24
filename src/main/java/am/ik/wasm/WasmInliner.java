@@ -51,9 +51,10 @@ import org.jspecify.annotations.Nullable;
  * {@code .kb/optimize-dead-code-elimination.md}, "The single-call-site move".
  * <p>
  * Out of scope: a callee that is exported, named by the start section, pinned by the
- * caller, recursive, or its own caller. A callee reached through {@code ref.func} would
- * be too -- {@link WasmCodeModel} refuses to decode one, which takes the whole module
- * out.
+ * caller, recursive, its own caller, or holding a {@code try_table} (the caller's live
+ * locals would cross its catch edge, see {@code shapeOf}). A callee reached through
+ * {@code ref.func} would be too -- {@link WasmCodeModel} refuses to decode one, which
+ * takes the whole module out.
  * <p>
  * Chains are handled bottom-up: the candidate set is computed ONCE, from the untouched
  * module, and ordered so that a callee is filled in before it is itself moved. The stale
@@ -514,10 +515,14 @@ public final class WasmInliner {
 						needsBlock |= label >= depth;
 					}
 				}
+				// A body with a try_table stays out of line: moved, it would put
+				// every caller local live across the call site across its catch
+				// edge, where wasmtime's Cranelift can hand the landing pad a value
+				// from BEFORE a call that moved the object (rontolisp's
+				// .kb/wasm-landing-pad-refresh.md). The body's own pad refreshes
+				// its own locals, never the caller's.
 				case OP_TRY_TABLE -> {
-					for (WasmCodeModel.Catch c : java.util.Objects.requireNonNull(in.catches)) {
-						needsBlock |= c.label() >= depth;
-					}
+					return null;
 				}
 				case OP_CALL -> {
 					if (in.a == callee) {

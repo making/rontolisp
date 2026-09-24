@@ -107,7 +107,7 @@ final class WasmHandlerCaseCompiler {
 		}
 		// The landing-pad discipline (WasmLandingPad): the live locals ride the operand
 		// stack beneath block $h and the pad pops them back before it reads anything.
-		int kept = WasmLandingPad.keepLocalsAlive(ctx);
+		WasmLandingPad.Kept kept = WasmLandingPad.keepLocalsAlive(ctx);
 		// Allocated AFTER the push: a slot among the kept ones would be popped back over
 		// the payload just stashed in it.
 		int payloadSlot = ctx.allocTemp();
@@ -183,7 +183,7 @@ final class WasmHandlerCaseCompiler {
 		// (cdr), synthesize a simple-error from the message when the instance is nil.
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
-		WasmLandingPad.refreshLocals(ctx, kept);
+		WasmLandingPad.refresh(ctx, kept);
 		emitDepthAdjust(ctx, false);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
@@ -289,7 +289,7 @@ final class WasmHandlerCaseCompiler {
 		int doneDepth = ctx.wasmCtrlDepth;
 		// The landing-pad discipline (WasmLandingPad), as in compile(); the payload and
 		// condition temps are allocated after the push so the pops leave them alone.
-		int kept = WasmLandingPad.keepLocalsAlive(ctx);
+		WasmLandingPad.Kept kept = WasmLandingPad.keepLocalsAlive(ctx);
 		int payloadSlot = ctx.allocTemp();
 		int condSlot = ctx.allocTemp();
 		// block $h (result (ref null eq)) -- the landing pad, receiving the payload.
@@ -316,7 +316,7 @@ final class WasmHandlerCaseCompiler {
 		// synthesize when the instance is nil.
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
-		WasmLandingPad.refreshLocals(ctx, kept);
+		WasmLandingPad.refresh(ctx, kept);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);

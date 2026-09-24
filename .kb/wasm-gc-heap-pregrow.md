@@ -30,6 +30,10 @@ on measurement alone.
 - Not one constant: the live set follows what the program LOADS. 16 MiB covers
   cl-postgres alone, not `rove` on top; on cl-postgres + rove (3.3 MB of emitted defuns)
   26.5 MiB still collects and 32 MiB does not, so factor 16 gives a ~2x margin.
+- The emitted bytes stopped counting dead landing-pad refreshes on 2026-09-24
+  (`.kb/wasm-landing-pad-refresh.md`, "Cost"). cl-postgres + rove hardly moved (module
+  4,714,328 -> 4,678,214 B, still 64 MiB); the ningle Worker's `check.lisp --optimize`, whose
+  largest function was 92% refresh runs, went from 64 to 32 MiB and runs green.
 
 ## The size is drawn from a lottery, and on 2026-09-11 it lost
 Measured 2026-09-11/12 (linux-x86-64, 64 cores, wasmtime 47.0.3 `5554cc1a6`). The

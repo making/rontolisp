@@ -1,23 +1,30 @@
-# A wasm landing pad refreshes every local before it reads one
+# A wasm landing pad refreshes every local live after it
 
 **Invariant**: on the wasm-GC backend, no wasm local's value may reach a `try_table`
 landing pad through the catch block. Every region whose landing runs user code -- or
-continues into it -- pushes the live locals onto the operand stack immediately before
-its landing block (`WasmLandingPad.keepLocalsAlive`) and pops them back into the locals
-as the pad's first act (`WasmLandingPad.refreshLocals`). A variable the protected body
+continues into it -- pushes locals onto the operand stack immediately before its landing
+block (`WasmLandingPad.keepLocalsAlive`: every local declared so far) and pops them back
+into the locals as the pad's first act (`WasmLandingPad.refresh`). Once the body is a
+complete code entry, both runs are narrowed to the locals LIVE after the pad
+(`WasmLandingPad.narrowCarries` -> `am.ik.wasm.WasmCarriedLocals`, from `buildLocalsAndPatch`
+and from `WasmAsyncEmit.compileResume`'s assembly). A variable the protected body
 assigns is boxed (`WasmLandingPad.regionAssignedVars`, folded into every binder's boxed
 set beside the closure-capture answer). Regions: `WasmUnwindProtectCompiler`,
 `WasmHandlerCaseCompiler.compile` and `compileGuard` (`%hb-guard`),
 `WasmNlxCompiler.emitCatch` (`catch`, `%nlx-catch`), and a special `let`'s binding-restore region
-(`WasmLetCompiler` through `WasmUnwindProtectCompiler.compileRegion`), whose pad refreshes ONLY its
-save slots (`WasmLandingPad.keepSlotsAlive`/`refreshSlots`): it reads nothing else, rethrows, and
+(`WasmLetCompiler` through `WasmUnwindProtectCompiler.compileRegion`), whose pad pushes ONLY its
+save slots (`WasmLandingPad.keepSlotsAlive`): it reads nothing else, rethrows, and
 no user code runs in or after it, so the invariant is kept at a fraction of the push
-(`.kb/dynamic-special-variables.md`). Pinned by
+(`.kb/dynamic-special-variables.md`). `am.ik.wasm.WasmInliner` never moves a body that holds a
+`try_table`: moved, it would put the caller's live locals across the catch edge, and the body's
+pad refreshes only its own. Pinned by
 `WasmLispCompilerIntegrationTest.landingPadsReadFreshReferencesAfterACollectionDuringTheUnwind`
 (Preview 1 and component) and ci-spec `landing-pads-read-fresh-references-after-a-collection`
-(all four backends). Compiler-internal pads whose body is a single call (the async entry
-wrapper, the future runtime's resume, the export prologues) are exempt by construction:
-one predecessor, no block parameter.
+(all four backends); the narrowing by `WasmCarriedLocalsTest` (hand-assembled pads, and
+`aCompiledPadAfterManyDeadLetScopesRefreshesOnlyWhatItReads` end to end), the inliner rule by
+`WasmInlinerTest.aBodyHoldingATryTableStaysOutOfLine`. Compiler-internal pads whose body is a
+single call (the async entry wrapper, the future runtime's resume, the export prologues) are
+exempt by construction: one predecessor, no block parameter.
 
 ## Why: the exceptional edge carries a pre-call value
 
@@ -108,6 +115,21 @@ pushed outside an enclosing block are unreachable within it. The payload temp is
 allocated AFTER the push: a slot among the kept ones would be popped back over the
 payload just stashed in it.
 
+**Only a local LIVE after the pad needs the round trip.** Cranelift resolves a variable
+where it is used, so a local that every path from the pad writes before it reads is never
+looked up through the catch block and gets no block parameter. What is live is known only
+once the body is complete, so emission pushes every local declared so far and
+`WasmCarriedLocals` narrows both runs afterwards: a backward liveness over the whole body,
+with an edge from every call and throw inside a `try_table` to every enclosing catch
+target. A kept local is READ by its push, so keeping it at one pad can make it live after
+an earlier one whose continuation reaches that region's entry: the kept set is the least
+fixed point. Push and refresh drop the same locals, so the operand stack stays balanced.
+The full push was worse than wasteful: a pad's push READ locals that had reached an
+earlier pad without being refreshed there (declared after that pad's push), the very read
+the invariant forbids. 586 of the ci-spec corpus module's 1,777 pads had a reference-typed
+local live on entry that way. The narrowed module has none, and neither do the ningle
+modules below (`padcheck.py` in the artefacts).
+
 The snapshot is entry-time, so a variable the body assigns must not be refreshed from it
 -- boxing keeps the local (the cell reference) constant and reads the latest value through
 the heap. Alternatives weighed and rejected: a shadow table or per-task array (a second
@@ -120,25 +142,31 @@ eqref local or cell, and the module throws no other tag.
 
 ## Cost
 
-A region entry emits one `local.get` per declared local and the pad one `local.set` each;
+A region entry emits one `local.get` per kept local and the pad one `local.set` each;
 the values are already SSA values, so the normal path gains no instructions -- only the
 liveness (and stack-map entries) of locals that would otherwise be dead across the body.
 On the ci-spec corpus module every one of the 19 functions that carried a handler-block
 argument lost it and nothing else changed.
 
-**That is the run-time cost only. In a large function the push and pop cost bytes and compile
-time** (measured 2026-09-24, wasmtime 49.0.0). `keepLocalsAlive` pushes every local declared
-so far, whether or not it is live. Take the hello-ningle Worker's fast-http `parse-request`
-(size-report row, `--no-wasi --optimize=size`), which has its parser helpers inlined, 1,838
-locals and 120 pads:
+**Unnarrowed, the push and the refresh were most of a large function** (measured
+2026-09-24, wasmtime 49.0.0, 64 cores). The hello-ningle Worker's fast-http
+`parse-request` has its parser helpers inlined and 120 pads, with 1,599 locals in the
+size-report build and 1,848 in the `--optimize` one:
 
-- The pads restore 101,756 locals, and only 156 of them are live after their pad.
-- The function is 624,468 of the module's 2,749,384 bytes (22.7%).
-- It takes 28.6 s of serial Cranelift time, and the module's `wasmtime compile` takes 34 s.
+| build | pushed and refreshed | function bytes | module bytes | function, serial Cranelift | `wasmtime compile`, wall |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `worker.lisp --no-wasi --optimize=size` (size-report row), every declared local | 101,636 | 624,468 | 2,749,384 | 30.6 s | 30.3 s |
+| the same, narrowed | 80 | 42,975 | 2,073,313 | 0.41 s | 1.8 s |
+| `check.lisp --optimize` (examples `wasm` leg), every declared local | 119,360 | 749,554 | 3,354,877 | 45.0 s | 52.1 s |
+| the same, narrowed | 80 | 61,011 | 2,578,987 | 0.54 s | 1.9 s |
 
-A positional rule (keep a local read after the pad or inside an enclosing loop) does not help,
-because the parser's state loop encloses every pad. Narrowing to the live set needs real
-liveness: `.todo/957`, with the measuring tools in
+`wasmtime run` of the check program went from 59.8 s to 2.4 s, nearly all of it compile time,
+which a `--native` build pays too (its shim precompiles with Cranelift). The ci-spec corpus
+module went from 7,594,940 to 6,011,558 bytes. A positional rule (keep a local read after the
+pad or inside an enclosing loop) does not find the 80: the parser's state loop encloses every
+pad. The count first recorded as live, 156, came from a tool that took wasm-tools' `@N` labels
+-- nesting depths -- for unique names. An independent Python fixed point over the printed
+function agrees with the pass on 80. Tools and how to run them:
 `.todo/artefacts/957-landing-pad-refresh-pushes-every-declared-local/`.
 
 ## Upstream

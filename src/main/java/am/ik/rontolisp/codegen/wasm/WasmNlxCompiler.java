@@ -164,7 +164,7 @@ final class WasmNlxCompiler {
 		// The landing-pad discipline (WasmLandingPad): the live locals -- the tag
 		// snapshot among them -- ride the operand stack beneath block $h and the pad
 		// pops them back before it reads anything.
-		int kept = WasmLandingPad.keepLocalsAlive(ctx);
+		WasmLandingPad.Kept kept = WasmLandingPad.keepLocalsAlive(ctx);
 		// Allocated AFTER the push: a slot among the kept ones would be popped back over
 		// the payload just stashed in it.
 		int payloadSlot = ctx.allocTemp();
@@ -206,7 +206,7 @@ final class WasmNlxCompiler {
 		ctx.writer.write(Instruction.END); // block $h -- the payload cons is on the stack
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
-		WasmLandingPad.refreshLocals(ctx, kept);
+		WasmLandingPad.refresh(ctx, kept);
 		// car(payload) is the block-instance id (an i31) for %nlx-catch and the (tag)
 		// wrapper cons for catch; either way, when it is ours deliver cdr(payload).
 		if (eqTags) {

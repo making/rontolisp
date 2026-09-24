@@ -76,13 +76,20 @@ time. Across every GC-wasm leg of `examples/`:
 - The HTTP Worker family goes higher, because its baked data is one function per datum:
   5,813 in the ningle Worker's `%asdf-registry%` (1.8 s on one core), 4,692 in its
   `%class-meta-table`, and 3,493 in tiny-routes (0.67 s).
-- In every one of these modules a different function compiles for as long or longer. Tiny-routes'
-  largest function takes 0.69 s. In ningle, fast-http's `parse-request` takes 46.6 s, which is
-  the landing-pad refresh (`.kb/wasm-landing-pad-refresh.md`, "Cost").
+- In tiny-routes and clack a different function compiles for as long or longer: tiny-routes'
+  largest takes 0.69 s. In ningle that was fast-http's `parse-request`, at 46.6 s, until the
+  landing-pad refresh was narrowed to the live locals (`.kb/wasm-landing-pad-refresh.md`,
+  "Cost"). Since then (re-measured the same day, `check.lisp --optimize`, serial, three runs)
+  ningle's slowest function IS the `%asdf-registry%` datum, 1.0-1.1 s, then `%class-meta-table`
+  0.9 s, then `parse-request` 0.5-0.6 s. The datum's body did not change; the 1.8 s above was
+  measured with the unnarrowed `parse-request` compiled before it in the same process. The
+  module compiles in 1.9 s wall on 64 cores and 30 s of CPU.
 
-Parallel compilation hides the datum's cost, so the split would save no wall time on any
-measured artifact. It becomes worth building when a datum's function is a module's slowest.
-Past about 10,000 cells that is 5 s. The split then builds such a datum in helper functions,
+Parallel compilation hides the datum's cost. On ningle the split would take at most ~0.6 s
+off a 1.9 s wall on 64 cores, and nothing on a machine whose cores are all busy (the datum is
+under 4% of the CPU). That is not worth a new emission shape, so the split is not built. It becomes
+worth building when a datum's function sets a module's wall time by seconds: past about
+10,000 cells that is 5 s. The split then builds such a datum in helper functions,
 one per run, each taking the tail and returning the list; a tree splits per subtree. A helper
 is larger than `WasmInliner.MAX_MOVED_BODY`, so the inliner leaves it out of line.
 

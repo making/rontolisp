@@ -345,6 +345,40 @@ class WasmInlinerTest {
 	}
 
 	@Test
+	void aBodyHoldingATryTableStaysOutOfLine() {
+		// Moved, the try_table's catch edge would carry every caller local that is live
+		// across the call site, and the body's own landing pad refreshes only its own
+		// (.kb/wasm-landing-pad-refresh.md). The same body without it moves.
+		byte[] guarded = body(0, w -> {
+			w.write(Instruction.BLOCK, 0x40);
+			w.write(Instruction.TRY_TABLE, 0x40);
+			w.writeUnsignedLeb128(1);
+			w.write(Instruction.CATCH_ALL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+			op(w, Instruction.GET_LOCAL, 0);
+		});
+		byte[] plain = body(0, w -> {
+			w.write(Instruction.BLOCK, 0x40);
+			w.write(Instruction.END);
+			op(w, Instruction.GET_LOCAL, 0);
+		});
+		byte[] caller = body(0, w -> {
+			constant(w, 7);
+			op(w, Instruction.CALL, 0);
+		});
+		byte[] module = module(new int[] { 1, 2 }, List.of(guarded, caller), Map.of("g", 1));
+		assertThat(WasmInliner.inline(module)).isSameAs(module);
+
+		// The control: the constant argument substituted for the parameter read, the call
+		// gone.
+		byte[] control = module(new int[] { 1, 2 }, List.of(plain, caller), Map.of("g", 1));
+		assertThat(opcodes(inlineAndValidate(control), 1)).containsExactly(Instruction.BLOCK, Instruction.END,
+				Instruction.I32_CONST, Instruction.END);
+	}
+
+	@Test
 	void aChainIsFilledInFromTheBottomUp() {
 		// 0: add; 1: calls 0 once; 2: the export, calling 1 once. Everything collapses
 		// into the export.

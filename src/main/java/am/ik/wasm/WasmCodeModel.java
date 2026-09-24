@@ -329,6 +329,22 @@ final class WasmCodeModel {
 	 * @return the decoded body
 	 */
 	static Body decode(byte[] entry, TypeSection types) {
+		return decodeEntry(entry, types);
+	}
+
+	/**
+	 * Decodes one code entry for a pass that reads its control structure and its locals
+	 * only, before the module it goes into has a type section: a {@code typeidx} block
+	 * type decodes with NO parameters and NO results, so such a caller must not read a
+	 * block's signature.
+	 * @param entry the code entry (locals + instruction stream)
+	 * @return the decoded body
+	 */
+	static Body decodeStructure(byte[] entry) {
+		return decodeEntry(entry, null);
+	}
+
+	private static Body decodeEntry(byte[] entry, @Nullable TypeSection types) {
 		int[] p = { 0 };
 		int groups = WasmSections.readU(entry, p);
 		List<ValType> locals = new ArrayList<>();
@@ -399,7 +415,7 @@ final class WasmCodeModel {
 		}
 	}
 
-	private static Instr decodeInstr(byte[] buf, int[] p, TypeSection types) {
+	private static Instr decodeInstr(byte[] buf, int[] p, @Nullable TypeSection types) {
 		int start = p[0];
 		int op = buf[p[0]++] & 0xff;
 		Instr in;
@@ -622,7 +638,7 @@ final class WasmCodeModel {
 				|| (op >= 0xAE && op <= 0xB1);
 	}
 
-	private static BlockType readBlockType(byte[] buf, int[] p, TypeSection types) {
+	private static BlockType readBlockType(byte[] buf, int[] p, @Nullable TypeSection types) {
 		int rawStart = p[0];
 		int b = buf[p[0]] & 0xff;
 		if (b == 0x40) {
@@ -634,6 +650,10 @@ final class WasmCodeModel {
 			return new BlockType(List.of(), List.of(t), rawStart, p[0]);
 		}
 		int index = WasmSections.readS(buf, p);
+		if (types == null) {
+			// A structure-only decode (decodeStructure): the signature is not read.
+			return new BlockType(List.of(), List.of(), rawStart, p[0]);
+		}
 		FuncType f = types.func(index);
 		return new BlockType(f.params(), f.results(), rawStart, p[0]);
 	}

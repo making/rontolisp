@@ -140,6 +140,9 @@ final class WasmUnwindProtectCompiler {
 		int rethrowDepth = -1;
 		int blockExitDepth = -1;
 		int[] kept = keptSlots != null ? keptSlots : WasmLandingPad.allSlots(ctx);
+		// Each landing block's own push, popped by that block's pad.
+		WasmLandingPad.@Nullable Kept blockExitKept = null;
+		WasmLandingPad.@Nullable Kept condKept = null;
 		int payloadSlot = -1;
 		int landingDepth = -1;
 		if (catching) {
@@ -148,13 +151,13 @@ final class WasmUnwindProtectCompiler {
 				ctx.writer.write(Type.I32);
 				ctx.wasmCtrlDepth++;
 				rethrowDepth = ctx.wasmCtrlDepth;
-				WasmLandingPad.keepSlotsAlive(ctx, kept);
+				blockExitKept = WasmLandingPad.keepSlotsAlive(ctx, kept);
 				ctx.writer.write(Instruction.BLOCK);
 				ctx.writer.writeRefType(true, Type.EQ.code());
 				ctx.wasmCtrlDepth++;
 				blockExitDepth = ctx.wasmCtrlDepth;
 			}
-			WasmLandingPad.keepSlotsAlive(ctx, kept);
+			condKept = WasmLandingPad.keepSlotsAlive(ctx, kept);
 			// Allocated AFTER the pushes: a slot among the kept ones would be popped
 			// back over the payload just stashed in it.
 			payloadSlot = ctx.allocTemp();
@@ -207,7 +210,7 @@ final class WasmUnwindProtectCompiler {
 			// exited).
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(payloadSlot);
-			WasmLandingPad.refreshSlots(ctx, kept);
+			WasmLandingPad.refresh(ctx, java.util.Objects.requireNonNull(condKept));
 			if (twoTags) {
 				ctx.writer.write(Instruction.I32_CONST);
 				ctx.writer.writeSignedLeb128(0);
@@ -217,7 +220,7 @@ final class WasmUnwindProtectCompiler {
 													// stack
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(payloadSlot);
-				WasmLandingPad.refreshSlots(ctx, kept);
+				WasmLandingPad.refresh(ctx, java.util.Objects.requireNonNull(blockExitKept));
 				ctx.writer.write(Instruction.I32_CONST);
 				ctx.writer.writeSignedLeb128(1);
 				ctx.wasmCtrlDepth--;

@@ -1,130 +1,59 @@
-"""Backward local liveness over one function's `wasm-tools print` text, to size how many of
-the locals each landing-pad refresh (a run of >= 8 local.set, WasmLandingPad.refreshLocals)
-restores are live after it. Exceptional edges: every call/throw inside a try_table may jump to
-each of its catch labels (and those of enclosing try_tables).
-usage: padlive.py func.wat"""
-import re
+"""Per refresh run (the local.set run right after a landing block's payload set), how many of
+the restored locals are live after it -- labels resolved by the control stack (wat_cfg), and
+the push runs NOT counted as uses (they are what is being sized). padfix.py is the same count
+at the least fixed point, where a kept push does count. The first version of this tool keyed
+labels by wasm-tools' `@N` annotation, which is a nesting DEPTH, and reported 156 for what is
+80. usage: padlive.py func.wat"""
 import sys
 
-lines = [l for l in open(sys.argv[1]).read().splitlines()[1:]]
-ops = []
-for l in lines:
-    s = l.strip()
-    if not s or s.startswith("(local") or s == ")":
-        continue
-    ops.append(s)
-n = len(ops)
-LABEL = re.compile(r";; label = @(\d+)")
-REF = re.compile(r"\(;@(\d+);\)")
+from wat_cfg import cfg, liveness, ops_of
 
-label_start = {}  # label -> (kind, index)
-label_end = {}
+ops = ops_of(open(sys.argv[1]).read().splitlines())
+succ, pads, _ = cfg(ops)
+n = len(ops)
+
+
+def run_at(i, op):
+    j = i
+    while j < n and ops[j].split()[0] == op:
+        j += 1
+    return j
+
+
+# push runs: the local.get run right before a landing block (a catch target's opener)
+push_uses = set()
+refresh = []
+for entry, t in pads:
+    # entry = the instruction after the landing block's end: local.set payload, then pops
+    if entry >= n or ops[entry].split()[0] != "local.set":
+        continue
+    j = run_at(entry + 1, "local.set")
+    refresh.append((entry + 1, j))
+# the push runs: gets immediately before each landing block opener
 stack = []
-else_of = {}
+match = {}
 for i, s in enumerate(ops):
     op = s.split()[0]
     if op in ("block", "loop", "if", "try_table"):
-        m = LABEL.search(s)
-        lab = int(m.group(1)) if m else None
-        stack.append((op, i, lab))
-        label_start[lab] = (op, i)
-    elif op == "else":
-        else_of[stack[-1][1]] = i
+        stack.append(i)
     elif op == "end" and stack:
-        kind, start, lab = stack.pop()
-        label_end[lab] = i
-        if kind == "if" and start in else_of:
-            else_of[else_of[start]] = i  # else -> its end
-
-
-def target(lab):
-    kind, start = label_start[lab]
-    return start + 1 if kind == "loop" else label_end[lab] + 1
-
-
-# the enclosing try_table catch targets per instruction
-succ = [[] for _ in range(n)]
-tstack = []  # list of lists of catch labels
-ctrl = []
-for i, s in enumerate(ops):
-    parts = s.split()
-    op = parts[0]
-    nxt = [i + 1] if i + 1 < n else []
-    if op in ("block", "loop", "try_table"):
-        succ[i] = nxt
-        ctrl.append(op)
-        if op == "try_table":
-            head = s.split(";;")[0]
-            tstack.append([int(x) for x in REF.findall(head)])
-    elif op == "if":
-        ctrl.append(op)
-        el = else_of.get(i)
-        lab = int(LABEL.search(s).group(1))
-        succ[i] = nxt + [el + 1 if el is not None else label_end[lab]]
-    elif op == "else":
-        succ[i] = [else_of[i]]
-    elif op == "end":
-        if ctrl:
-            k = ctrl.pop()
-            if k == "try_table":
-                tstack.pop()
-        succ[i] = nxt
-    elif op in ("br",):
-        succ[i] = [target(int(REF.search(s).group(1)))]
-    elif op in ("br_if", "br_on_null", "br_on_non_null", "br_on_cast", "br_on_cast_fail"):
-        succ[i] = nxt + [target(int(REF.search(s).group(1)))]
-    elif op == "br_table":
-        succ[i] = [target(int(x)) for x in REF.findall(s)]
-    elif op in ("return", "unreachable", "return_call", "return_call_ref", "return_call_indirect"):
-        succ[i] = []
-    elif op in ("throw", "throw_ref"):
-        succ[i] = []
-    else:
-        succ[i] = nxt
-    if op.startswith("call") or op.startswith("return_call") or op.startswith("throw"):
-        for cl in tstack:
-            succ[i] += [target(l) for l in cl]
-
-gen = [0] * n
-kill = [0] * n
-for i, s in enumerate(ops):
-    parts = s.split()
-    if parts[0] == "local.get":
-        gen[i] = 1 << int(parts[1])
-    elif parts[0] in ("local.set", "local.tee"):
-        kill[i] = 1 << int(parts[1])
-
-live_in = [0] * n
-changed = True
-rounds = 0
-while changed:
-    changed = False
-    rounds += 1
-    for i in range(n - 1, -1, -1):
-        out = 0
-        for j in succ[i]:
-            if j < n:
-                out |= live_in[j]
-        v = gen[i] | (out & ~kill[i])
-        if v != live_in[i]:
-            live_in[i] = v
-            changed = True
-
-refreshed = kept = runs = 0
-i = 0
-while i < n:
-    if ops[i].startswith("local.set"):
-        j = i
-        while j < n and ops[j].startswith("local.set"):
-            j += 1
-        if j - i >= 8:
-            runs += 1
-            after = live_in[j] if j < n else 0
-            for k in range(i, j):
-                refreshed += 1
-                if after >> int(ops[k].split()[1]) & 1:
-                    kept += 1
-        i = j
+        o = stack.pop()
+        match[i] = o
+for entry, t in pads:
+    o = match.get(entry - 1)
+    if o is None:
         continue
-    i += 1
-print("instrs", n, "rounds", rounds, "refresh runs", runs, "restored", refreshed, "live after", kept)
+    k = o - 1
+    while k >= 0 and ops[k].split()[0] == "local.get":
+        push_uses.add(k)
+        k -= 1
+live_in = liveness(ops, succ, push_uses)
+restored = kept = 0
+for a, b in sorted(set(refresh)):
+    after = live_in[b] if b < n else 0
+    for k in range(a, b):
+        restored += 1
+        if after >> int(ops[k].split()[1]) & 1:
+            kept += 1
+print("instrs", n, "refresh runs", len(set(refresh)), "restored", restored,
+      "live after (push reads not counted)", kept)

@@ -181,8 +181,11 @@ final class WasmAsyncEmit {
 			w.write(Type.I32);
 		}
 		w.write((Object) prologueBuf.toByteArray());
+		int bodyAt = out.size();
 		w.write((Object) bodyBuf.toByteArray());
-		byte[] bytes = out.toByteArray();
+		// Now that the entry is complete, its landing-pad pushes narrow to the locals
+		// live after each pad (WasmLandingPad.narrowCarries).
+		byte[] bytes = WasmLandingPad.narrowCarries(out.toByteArray(), ctx, offset -> bodyAt + offset);
 		proto.lambdaDecls.set(lambdaIdx, new WasmLispCompiler.LambdaInfo(funcId, "_async_resume_" + funcId,
 				List.of("%resume-value"), false, List.of(), List.of(), funcIndex, bytes));
 		return new Resume(funcId, funcIndex, ctx.nextLocal);

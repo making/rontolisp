@@ -12,10 +12,11 @@ report is left, and it is on hold.
 - **Real programs reach it, but it does not decide their compile time.** The largest count is
   5,813, in the hello-ningle Worker's baked `%asdf-registry%` datum, which costs 1.8 s on one
   core. Every example outside the ningle/tiny-routes/clack Worker family stays at or below
-  317. In each of those Workers another function compiles as long or longer. In ningle it is
-  fast-http's `parse-request`: 46.6 s, the landing-pad refresh, now `.todo/957`. So splitting
-  quoted data into helper functions would save no wall time on any measured artifact. Why it
-  is not built, and when to build it: `.kb/quoted-data.md`.
+  317. In tiny-routes and clack another function compiles as long or longer. In ningle that
+  was fast-http's `parse-request` (46.6 s) until `.todo/957` narrowed its landing-pad
+  refresh. Since then the datum IS ningle's slowest function, at 1.0-1.1 s against a 1.9 s
+  wall on 64 cores. Splitting quoted data into helper functions would save at most ~0.6 s of
+  that, so it stays unbuilt. Why, and when to build it: `.kb/quoted-data.md`.
 
 Numbers, the reducer and the census tools: `.todo/artefacts/955-wasmtime-compile-quadratic-in-allocations-per-function/`.
 

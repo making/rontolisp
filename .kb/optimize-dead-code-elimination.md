@@ -521,8 +521,12 @@ any type only that entry named. Nothing is renumbered here, so an `OwnedDataSegm
 `-Drontolisp.wasm.debug-func-sizes` name map still reads in the module's own indices. Out of scope:
 a callee that is exported, named by the start section, recursive, its own caller, or PINNED by the
 backend (`WasmLispCompiler` pins the three case-fold owners: their segment claim names them by
-index, so a moved body would take the table with it). A module with a table or element section is
-declined wholesale; `ref.func` takes it out through `WasmCodeModel`, which refuses to decode one.
+index, so a moved body would take the table with it). A callee holding a `try_table` is declined
+too: moved, its catch edge would carry every caller local live across the call site, which its pad
+does not refresh (`.kb/wasm-landing-pad-refresh.md`). Measured 2026-09-24 over the `ci-spec`
+corpus, the size-report programs and the Worker family, no build moved one, so the rule costs no
+byte. A module with a table or element section is declined wholesale; `ref.func` takes it out
+through `WasmCodeModel`, which refuses to decode one.
 
 **The move alone is a LOSS** -- `wasm-opt --inlining` makes `zlib` 15,214 B BIGGER, because handed-
 over arguments become `local.set`/`local.get` pairs the caller never had and every local index past

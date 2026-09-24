@@ -9113,6 +9113,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * instead of the fixed placeholder width. That is what makes the emitted encoding
 	 * minimal, and it is why the references must be ascending -- they are, being appended
 	 * by one forward emission walk, and the loop says so rather than trusting it.
+	 * <p>
+	 * Last, the landing-pad pushes and refreshes the body recorded are narrowed to the
+	 * locals live after each pad ({@link WasmLandingPad#narrowCarries}) -- on the
+	 * finished entry, where an i64 reference names its real local rather than a
+	 * placeholder that decodes as local 0, so the recorded offsets are carried through
+	 * the splice.
 	 * @param ctx the function's compilation context after its body was emitted
 	 * @param predeclaredSlots slots covered by the signature (params, closure env),
 	 * excluded from the declared runs
@@ -9134,18 +9140,33 @@ public final class WasmLispCompiler implements LispCompiler {
 			writer.writeUnsignedLeb128(numI64);
 			writer.write(Type.I64);
 		}
+		int header = out.size();
+		// Per placeholder: its body offset, and the bytes the splice has saved up to and
+		// including it -- what moves a later body offset in the entry.
+		int[] placeholderAt = new int[ctx.i64LocalRefs.size()];
+		int[] savedThrough = new int[placeholderAt.length];
+		int saved = 0;
 		int cursor = 0;
-		for (int[] ref : ctx.i64LocalRefs) {
+		for (int r = 0; r < placeholderAt.length; r++) {
+			int[] ref = ctx.i64LocalRefs.get(r);
 			if (ref[0] < cursor) {
 				throw new IllegalStateException(
 						"i64 local placeholders out of order at " + ref[0] + " (cursor " + cursor + ")");
 			}
 			writer.write((Object) Arrays.copyOfRange(body, cursor, ref[0]));
+			int before = out.size();
 			writer.writeUnsignedLeb128(ctx.nextLocal + ref[1]);
+			saved += Ctx.I64_LOCAL_PLACEHOLDER_WIDTH - (out.size() - before);
+			placeholderAt[r] = ref[0];
+			savedThrough[r] = saved;
 			cursor = ref[0] + Ctx.I64_LOCAL_PLACEHOLDER_WIDTH;
 		}
 		writer.write((Object) Arrays.copyOfRange(body, cursor, body.length));
-		return out.toByteArray();
+		return WasmLandingPad.narrowCarries(out.toByteArray(), ctx, offset -> {
+			int found = Arrays.binarySearch(placeholderAt, offset);
+			int before = found >= 0 ? found : -found - 1;
+			return header + offset - (before == 0 ? 0 : savedThrough[before - 1]);
+		});
 	}
 
 	/**
@@ -10914,6 +10935,14 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.i64LocalRefs.add(new int[] { this.bodyStream.size(), slot });
 			this.writer.write(0x80, 0x80, 0x00);
 		}
+
+		/**
+		 * The landing-pad push/refresh pairs this body emitted
+		 * ({@link WasmLandingPad#refresh}): {pushStart, pushEnd, popStart, popEnd} as
+		 * {@link #bodyStream} offsets, narrowed to the locals live after each pad once
+		 * the body is a complete code entry ({@link WasmLandingPad#narrowCarries}).
+		 */
+		final List<int[]> carries = new ArrayList<>();
 
 	}
 
