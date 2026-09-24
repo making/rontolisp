@@ -23,16 +23,22 @@ class CoreCountParallelismStrategyTest {
 
 	@ParameterizedTest
 	@CsvSource({ "1, 2", "2, 2", "3, 3", "4, 4", "8, 8", "16, 16", "17, 16", "64, 16", "256, 16" })
-	void scalesWithTheCoreCountBetweenTheBounds(int availableProcessors, int expected) {
-		assertThat(CoreCountParallelismStrategy.parallelismFor(availableProcessors)).isEqualTo(expected);
+	void scalesWithTheCoreCountBetweenTheBoundsOnAnIdleMachine(int availableProcessors, int expected) {
+		assertThat(CoreCountParallelismStrategy.parallelismFor(availableProcessors, 0.0)).isEqualTo(expected);
+	}
+
+	@ParameterizedTest
+	@CsvSource({ "64, 50.0, 14", "64, 49.6, 14", "64, 63.0, 2", "64, 200.0, 2", "4, 1.2, 3", "64, -1.0, 16" })
+	void countsOnlyTheCoresTheLoadLeavesFree(int availableProcessors, double loadAverage, int expected) {
+		assertThat(CoreCountParallelismStrategy.parallelismFor(availableProcessors, loadAverage)).isEqualTo(expected);
 	}
 
 	@Test
-	void defaultsToTheCoreCountOfThisMachine() {
+	void defaultsToABoundedCountOnThisMachine() {
 		ParallelExecutionConfiguration configuration = new CoreCountParallelismStrategy()
 			.createConfiguration(parameters(Map.of()));
-		assertThat(configuration.getParallelism())
-			.isEqualTo(CoreCountParallelismStrategy.parallelismFor(Runtime.getRuntime().availableProcessors()));
+		assertThat(configuration.getParallelism()).isBetween(CoreCountParallelismStrategy.MINIMUM,
+				CoreCountParallelismStrategy.MAXIMUM);
 	}
 
 	/**

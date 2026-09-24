@@ -1,5 +1,6 @@
 package am.ik.rontolisp.testsupport;
 
+import java.lang.management.ManagementFactory;
 import java.util.concurrent.ForkJoinPool;
 import java.util.function.Predicate;
 
@@ -19,6 +20,13 @@ import org.junit.platform.engine.support.hierarchical.ParallelExecutionConfigura
  * parallelism. The rule here is a clamped core count, which reproduces both numbers the
  * build was previously tuned to by hand: {@value #MAXIMUM} on the 64-core development
  * machine, and 4 on the 4 vCPU CI runner.
+ *
+ * <p>
+ * The core count is what is FREE when the fork starts -- the processors minus the
+ * 1-minute load average -- because several builds share one development machine and a
+ * count taken from the hardware alone oversubscribes it the moment a second suite runs.
+ * The load average is -1 where the OS has none, which reads as an idle machine. The
+ * surefire fork count is sized the same way ({@code size-test-forks} in {@code pom.xml}).
  *
  * <p>
  * The bounds. The work these threads do is a compile plus a {@code wasmtime} run per
@@ -62,17 +70,19 @@ public final class CoreCountParallelismStrategy implements ParallelExecutionConf
 	@Override
 	public ParallelExecutionConfiguration createConfiguration(ConfigurationParameters configurationParameters) {
 		int availableProcessors = Runtime.getRuntime().availableProcessors();
+		double loadAverage = ManagementFactory.getOperatingSystemMXBean().getSystemLoadAverage();
 		int parallelism = configurationParameters.get(OVERRIDE_PROPERTY, Integer::valueOf)
-			.orElseGet(() -> parallelismFor(availableProcessors));
-		// The value now differs per machine, and the CI notes warn against comparing runs
-		// that disagree on it, so every run has to say which one it used.
-		System.out.println("[rontolisp] JUnit parallelism = %d (availableProcessors = %d)".formatted(parallelism,
-				availableProcessors));
+			.orElseGet(() -> parallelismFor(availableProcessors, loadAverage));
+		// The value now differs per machine and per moment, and the CI notes warn against
+		// comparing runs that disagree on it, so every run has to say which one it used.
+		System.out.println("[rontolisp] JUnit parallelism = %d (availableProcessors = %d, load average = %.2f)"
+			.formatted(parallelism, availableProcessors, loadAverage));
 		return new CoreCountConfiguration(parallelism);
 	}
 
-	static int parallelismFor(int availableProcessors) {
-		return Math.clamp(availableProcessors, MINIMUM, MAXIMUM);
+	static int parallelismFor(int availableProcessors, double loadAverage) {
+		long free = availableProcessors - Math.round(Math.max(loadAverage, 0.0));
+		return Math.clamp(free, MINIMUM, MAXIMUM);
 	}
 
 	/**

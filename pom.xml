@@ -183,6 +183,38 @@ gitBranch=${git.branch}
 							</resources>
 						</configuration>
 					</execution>
+					<execution>
+						<!-- Sizes surefire's forkCount from the cores that are FREE when the
+						     tests start, not the cores the machine has: several builds share
+						     one development box, so a count derived from the core count alone
+						     oversubscribes it the moment a second suite runs. Free cores are
+						     availableProcessors minus the 1-minute load average; a fork gets two
+						     of them (its JIT, GC and the guest processes it spawns), capped at
+						     half the machine and floored at 2, the count CI was tuned on. The
+						     load average is -1 where the OS has none (Windows), which reads as
+						     an idle machine. -Drontolisp.test.forkCount=N pins it. -->
+						<id>size-test-forks</id>
+						<phase>process-test-classes</phase>
+						<goals>
+							<goal>bsh-property</goal>
+						</goals>
+						<configuration>
+							<properties>
+								<property>rontolisp.test.forkCount</property>
+							</properties>
+							<source><![CDATA[
+								String pinned = System.getProperty("rontolisp.test.forkCount");
+								int cores = Runtime.getRuntime().availableProcessors();
+								double load = java.lang.management.ManagementFactory.getOperatingSystemMXBean()
+									.getSystemLoadAverage();
+								int free = cores - (int) Math.round(Math.max(load, 0.0));
+								int forks = Math.max(2, Math.min(cores / 2, free / 2));
+								rontolisp.test.forkCount = pinned != null ? pinned : String.valueOf(forks);
+								System.out.println("[rontolisp] surefire forkCount = " + rontolisp.test.forkCount
+										+ " (availableProcessors = " + cores + ", load average = " + load + ")");
+							]]></source>
+						</configuration>
+					</execution>
 				</executions>
 			</plugin>
 			<plugin>
@@ -228,20 +260,15 @@ gitBranch=${git.branch}
 					     is a restricted method: without the second flag every such test
 					     prints a multi-line warning to stderr. -->
 					<argLine>--add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED</argLine>
-					<!-- Two forked JVMs run different test classes in parallel. The wall
-					     clock is bounded by WasmLispCompilerIntegrationTest, which is
-					     longer than every other class combined even after it was made
-					     internally concurrent (junit-platform.properties), so the second
-					     fork's job is to retire the whole rest of the suite inside that
-					     window rather than to pair two comparable classes. Two forks fit
-					     comfortably on the CI runner's 4 vCPU / 16 GB and reuse across
-					     classes so JVM startup is paid once per fork. Each fork gets
-					     its own static wasmtime container instance for the Docker-based
-					     tests (WasmLispCompilerIntegrationTest and the
-					     AsdfLibraryE2eSupport subclasses); the container image is a
-					     GHCR-pinned Debian+wasmtime with :latest re-pull, so cost of
-					     starting two of them is one extra "docker run" per fork. -->
-					<forkCount>2</forkCount>
+					<!-- Forked JVMs run different test classes in parallel, reused across
+					     classes so JVM startup is paid once per fork. The count is set by
+					     build-helper's size-test-forks execution from the free cores at test
+					     time: 2 on the CI runner's 4 vCPU, up to half the cores on an idle
+					     development machine. With many forks the wall clock is bounded by the
+					     longest single class, which is why the heavy classes run their own
+					     methods concurrently (.kb/test-execution.md). Each fork gets its own
+					     static wasmtime container for the Docker-based tests. -->
+					<forkCount>${rontolisp.test.forkCount}</forkCount>
 					<reuseForks>true</reuseForks>
 				</configuration>
 			</plugin>

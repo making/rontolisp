@@ -15,7 +15,13 @@
   parallel test execution.** It is `CoreCountParallelismStrategy` printing the value it
   derived for `junit.jupiter.execution.parallel.config.custom.class`, which governs
   intra-class parallelism only for a class that opted in.
-- `pom.xml` surefire runs `forkCount=2`, `reuseForks=true`. A fork is a separate JVM PROCESS,
+- `pom.xml` surefire runs `reuseForks=true` with a fork count sized at test time from the
+  FREE cores (processors minus the 1-minute load average, two per fork, floor 2, cap half
+  the cores; the `size-test-forks` execution prints it, `-Drontolisp.test.forkCount=N`
+  pins it). `CoreCountParallelismStrategy` subtracts the load the same way. Measured
+  2026-09-24 on the idle 64-core box: 2 forks 20m51s, 32 forks 9m00s -- and with that
+  many forks the wall clock is the longest single class, so heavy classes run their own
+  methods concurrently. A fork is a separate JVM PROCESS,
   so nothing in one process's heap (a weakly-keyed cache, a static counter,
   `am.ik.gpu.DeviceResidency`'s live set) is visible across forks; surefire guarantees neither
   which fork nor what order.
