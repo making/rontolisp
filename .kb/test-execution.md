@@ -148,7 +148,11 @@ The rules that follow, and which device to reach for:
   and the real bind then spans a whole compile, and it is wide enough to lose -- measured
   2026-09-12, three concurrent runs of that serve family lost it **once in 45 cases**.
   Such cases go through `#overAReservedPort`, which re-runs on a fresh port when the
-  output says `Address already in use`.
+  output says `Address already in use`. The script must also WAIT FOR ITS OWN BIND
+  (`#awaitServeBound`, the server's `Serving HTTP on` line) before any readiness curl:
+  wasmtime compiles before it binds, a loaded suite outlasts any fixed sleep, and the
+  port's new owner answers the curl instead (2026-09-24, at 6 forks: a proxy case relayed
+  another server's empty 200 and printed `proxied  200`).
 - A server whose bind failure is not checked turns this into something worse than a red
   test: the losing run connects to the WINNER's server and asserts against it. The TLS
   case did exactly that until its `openssl s_server` log was read back.

@@ -154,6 +154,25 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	/**
+	 * The bash that waits until a {@code wasmtime serve} started on a RESERVED port has
+	 * bound it, reading its own {@code Serving HTTP on} line in {@code log}. Checking
+	 * that the process is still alive is not enough: wasmtime compiles the component
+	 * before it binds, which under a loaded suite outlasts any fixed sleep, and meanwhile
+	 * whoever took the port answers the readiness curl in its place (seen 2026-09-24: a
+	 * proxy test printed {@code "proxied  200"} relaying another server's empty reply). A
+	 * lost bind is echoed with wasmtime's {@code Address already in use}, so
+	 * {@link #overAReservedPort(PortBoundScript)} retries it.
+	 * @param log the file the server's output is redirected to
+	 * @return a bash fragment to concatenate into the script, after the server is started
+	 */
+	private static String awaitServeBound(String log) {
+		return " for i in $(seq 1 120); do grep -q 'Serving HTTP on' " + log + " && break;"
+				+ " grep -q 'Address already in use' " + log + " && { cat " + log + " 1>&2; exit 1; };"
+				+ " sleep 0.25; done;" + " grep -q 'Serving HTTP on' " + log
+				+ " || { echo 'wasmtime serve never bound its port; log:' 1>&2; cat " + log + " 1>&2; exit 1; };";
+	}
+
+	/**
 	 * A script that binds a port it was handed. Implemented by the cases that cannot use
 	 * {@link #awaitServePort(String, String)} because the number has to exist before the
 	 * server does.
@@ -6029,6 +6048,37 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aReservedPortSomeoneElseHoldsIsReportedAsTakenNotAnsweredByTheImposter() throws Exception {
+		// The imposter answers every request 200 with an empty body, which is exactly
+		// what a readiness curl accepts; the serve on the same port must be reported as a
+		// lost bind (so overAReservedPort retries) rather than as ready.
+		byte[] componentBytes = compileServeComponent("""
+				(defun handle (env) (list 200 nil (list "mine")))
+				(rontolisp:http-handler 'handle)
+				""", null);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("serve-taken.wasm"));
+		com.sun.net.httpserver.HttpServer imposter = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress(java.net.InetAddress.getLoopbackAddress(), 0), 0);
+		imposter.createContext("/", exchange -> {
+			exchange.sendResponseHeaders(200, -1);
+			exchange.close();
+		});
+		imposter.start();
+		try {
+			int port = imposter.getAddress().getPort();
+			ExecResult result = wasmtime.execInContainer("bash", "-c",
+					"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:" + port + " " + path("serve-taken.wasm")
+							+ " >" + path("serve-taken.log") + " 2>&1 & pid=$!; trap 'kill $pid 2>/dev/null' EXIT;"
+							+ awaitServeBound(path("serve-taken.log")) + " echo ready");
+			assertThat(result.getExitCode()).isNotZero();
+			assertThat(result.getStdout() + result.getStderr()).contains("Address already in use");
+		}
+		finally {
+			imposter.stop(0);
+		}
+	}
+
+	@Test
 	void httpHandlerFetchInsideServeUnderWasmtimeServe() throws Exception {
 		// A proxy-style handler: rontolisp:fetch inside a served handler. Both halves are
 		// Lisp over wit-imported wasi:http now -- serve.lisp (incoming-handler) and
@@ -6070,6 +6120,7 @@ class WasmLispCompilerIntegrationTest {
 					+ " pid2=$!; trap 'kill $pid1 $pid2 2>/dev/null' EXIT;" + " sleep 0.3;"
 					+ " kill -0 $pid1 2>/dev/null || { echo 'backend wasmtime serve exited immediately; log:' 1>&2;"
 					+ " cat " + path("serve-backend.log") + " 1>&2; exit 1; };"
+					+ awaitServeBound(path("serve-backend.log"))
 					+ " kill -0 $pid2 2>/dev/null || { echo 'proxy wasmtime serve exited immediately; log:' 1>&2;"
 					+ " cat " + path("serve-proxy.log") + " 1>&2; exit 1; };"
 					+ awaitServePort("proxy", path("serve-proxy.log"))
@@ -6132,6 +6183,7 @@ class WasmLispCompilerIntegrationTest {
 					+ " pid2=$!; trap 'kill $pid1 $pid2 2>/dev/null' EXIT;" + " sleep 0.3;"
 					+ " kill -0 $pid1 2>/dev/null || { echo 'backend wasmtime serve exited immediately; log:' 1>&2;"
 					+ " cat " + path("relay-backend.log") + " 1>&2; exit 1; };"
+					+ awaitServeBound(path("relay-backend.log"))
 					+ " kill -0 $pid2 2>/dev/null || { echo 'proxy wasmtime serve exited immediately; log:' 1>&2;"
 					+ " cat " + path("relay-proxy.log") + " 1>&2; exit 1; };"
 					+ awaitServePort("proxy", path("relay-proxy.log"))
@@ -6302,6 +6354,7 @@ class WasmLispCompilerIntegrationTest {
 							+ " 2>&1 &" + " pid=$!; trap 'kill $pid 2>/dev/null' EXIT;"
 							+ " sleep 0.3; kill -0 $pid 2>/dev/null || { echo 'wasmtime serve exited immediately; log:' 1>&2;"
 							+ " cat " + path("serve-tcp.log") + " 1>&2; exit 1; };"
+							+ awaitServeBound(path("serve-tcp.log"))
 							+ " for i in $(seq 1 60); do out=$(curl -sf http://127.0.0.1:" + port
 							+ "/) && [ -n \"$out\" ]" + " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat "
 							+ path("serve-tcp.log") + " 1>&2; exit 1");
@@ -6336,7 +6389,7 @@ class WasmLispCompilerIntegrationTest {
 					+ port + " " + path("serve-leak.wasm") + " >" + path("serve-leak.log")
 					+ " 2>&1 & pid=$!; trap 'kill $pid 2>/dev/null' EXIT;"
 					+ " sleep 0.3; kill -0 $pid 2>/dev/null || { echo 'wasmtime serve exited immediately; log:' 1>&2;"
-					+ " cat " + path("serve-leak.log") + " 1>&2; exit 1; };"
+					+ " cat " + path("serve-leak.log") + " 1>&2; exit 1; };" + awaitServeBound(path("serve-leak.log"))
 					+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:" + port + "/hello) && [ -n \"$out\" ]"
 					+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat " + path("serve-leak.log") + "; exit 1");
 		});
@@ -25104,6 +25157,7 @@ class WasmLispCompilerIntegrationTest {
 					+ " pid=$!; trap 'kill $pid 2>/dev/null' EXIT;"
 					+ " sleep 0.3; kill -0 $pid 2>/dev/null || { echo 'backend wasmtime serve exited immediately; log:' 1>&2;"
 					+ " cat " + path("wit-fetch-backend.log") + " 1>&2; exit 1; };"
+					+ awaitServeBound(path("wit-fetch-backend.log"))
 					+ " for i in $(seq 1 60); do curl -sf http://127.0.0.1:" + port
 					+ "/hello >/dev/null && break; sleep 0.25; done;" + " curl -sf http://127.0.0.1:" + port
 					+ "/hello >/dev/null" + " || { echo 'backend never came up' 1>&2; cat "
@@ -25194,6 +25248,7 @@ class WasmLispCompilerIntegrationTest {
 					+ " pid=$!; trap 'kill $pid 2>/dev/null' EXIT;"
 					+ " sleep 0.3; kill -0 $pid 2>/dev/null || { echo 'backend wasmtime serve exited immediately; log:' 1>&2;"
 					+ " cat " + path("wit-post-backend.log") + " 1>&2; exit 1; };"
+					+ awaitServeBound(path("wit-post-backend.log"))
 					+ " for i in $(seq 1 60); do curl -sf http://127.0.0.1:" + port
 					+ "/echo -d probe >/dev/null && break; sleep 0.25; done;" + " curl -sf http://127.0.0.1:" + port
 					+ "/echo -d probe >/dev/null" + " || { echo 'backend never came up' 1>&2; cat "
