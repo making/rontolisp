@@ -86,6 +86,19 @@ static data / intern table / heap.
 - **Serve is NOT unified**: `mem-http-client.wat` keeps its per-request-reset cabi cell/window
   at 0x10000 (`CABI_HP_CELL_ADDR`); it can still collide with the core's page-3/4 scratch past
   ~128 KB of per-request ABI traffic (open residual).
+- **Every memory module is sized for its core** (`WasmComponentBuilder.memModuleFor(mem,
+  core)`): raised to the core's `"mem"/"memory"` import minimum when that is larger, never
+  shrunk below the module's own (the bridges import it at that). The core's minimum grows with
+  its static data (`WasmLispCompiler.memoryMinPages`, since `1db4ba176`, 2026-08-28), and the
+  serve builder embedded its 16-page module as shipped, so a served program past 16 pages --
+  tiny-routes over lack-request asks 20 -- failed to load ("mismatch in memory limits") and
+  `wasmtime serve` answered no bytes. Pins `WasmComponentHelperModulesTest`.
+- **The serve preview1 bridge exports every `PREVIEW1_FUNCS` name**, stubbed (EBADF / errno
+  76) where the service world has no counterpart: it is the instantiation argument the core's
+  preview1 imports resolve against, so a missing one fails the whole component.
+  `file_position_get`/`_set` joined the list with `0738287fc` (2026-09-19) and the bridge
+  lacked them until 2026-09-24 -- ningle's served app, which names `file-position`, never
+  started (`WasmComponentHelperModulesTest#theServeBridgeExportsEveryPreview1FunctionACoreCanImport`).
 
 ## Component-model function exports
 `rontolisp:wasm-export` types: `:int`->`s32`, `:float`->`f64` (VT_F64 = 0x75; 0x74 is

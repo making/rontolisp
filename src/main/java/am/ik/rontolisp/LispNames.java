@@ -2592,6 +2592,14 @@ public final class LispNames {
 	public static final String WARN_INTERNAL = "%WARN";
 
 	/**
+	 * The Gray write-line dispatch helper ({@code rontolisp::%gray-write-line-dispatch},
+	 * {@code gray.lisp}), as the compile paths register it: {@link #WARN_INTERNAL}'s
+	 * lowering writes through it when the program carries it, so a report reaches an
+	 * {@code *error-output*} bound to a Gray instance.
+	 */
+	public static final String GRAY_WRITE_LINE_DISPATCH = "RONTOLISP::%GRAY-WRITE-LINE-DISPATCH";
+
+	/**
 	 * Internal two-argument primitive {@code (%error-cond condition message)} that
 	 * signals a fatal error carrying a condition object (a CLOS-subset tagged-list
 	 * instance) alongside the pre-built message string. Produced by the {@code error}

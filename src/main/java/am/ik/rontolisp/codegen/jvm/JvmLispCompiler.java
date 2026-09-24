@@ -673,6 +673,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// the rest of compilation sees canonical names.
 		PackageResolver packageResolver = new PackageResolver();
 		program = packageResolver.resolveProgram(program);
+		// A quoted designator of a wrapped built-in becomes #'name before any wrapper
+		// gate scans the program for that spelling (compiler/FunctionDesignators).
+		program = am.ik.rontolisp.compiler.FunctionDesignators.normalizeBuiltinDesignators(program);
 		// The printer's accessibility table (.kb/pretty-printer.md): baked from the
 		// final registry over the resolved program, only for a program that can print
 		// under a package other than cl-user -- every other program keeps its raw
@@ -3082,8 +3085,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// *error-output* is the reserved stream handle 2 (the process standard error), so
 		// a program that can name it -- explicitly, or through the warn redirect -- gets
 		// the stream built-ins' stderr branch and the reserved table handles; one that
-		// never mentions it keeps its original bytes.
-		final boolean usesErrorOutput = programUsesSymbol(program, LispNames.ERROR_OUTPUT_VAR);
+		// never mentions it keeps its original bytes. The warn redirect is taken whenever
+		// the variable is a GLOBAL, which a thread-using program forces without naming it
+		// (the make-thread bindings above), so that counts too: otherwise a warn wrote
+		// through a stream table and a stderr branch this gate had left out.
+		final boolean usesErrorOutput = programUsesSymbol(program, LispNames.ERROR_OUTPUT_VAR)
+				|| globals.contains(LispNames.ERROR_OUTPUT_VAR);
 		// The directory-LISTING helper joins the stream runtime only for a program that
 		// calls the primitive, so every artifact compiled without one keeps its bytes.
 		final boolean usesListDirectory = programUsesSymbol(program, LispNames.LIST_DIRECTORY);

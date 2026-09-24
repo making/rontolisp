@@ -153,7 +153,7 @@ final class WasmServeComponentBuilder {
 		// Core modules: 0 = shared memory, 1 = preview1 bridge, 2 = rontolisp core (serve
 		// mode). The handler function IS the core's `handle` wasm-export (http.lisp),
 		// lifted directly.
-		c.rawSection(ComponentWriter.SEC_CORE_MODULE, MEM_MODULE);
+		c.rawSection(ComponentWriter.SEC_CORE_MODULE, WasmComponentBuilder.memModuleFor(MEM_MODULE, coreModule));
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_HTTP_SERVER_P1);
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, coreModule);
 		// Instantiate the shared memory module (core instance 0).

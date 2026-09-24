@@ -21,6 +21,15 @@ expansion) first when a large program trips the guard.
   Emit sites write `(short) index`, so crossing used to alias an unrelated entry and surface far
   away (`operand-stack model: underflow`). `ConstantPool.add` now refuses the crossing entry
   (counting both slots of a long/double first); `OperandStack.invoke` is the backstop.
+  **A real program is over it** (measured 2026-09-24, the refusal lifted to count): mito's
+  `MitoE2eTest` probe (mito-core + migration + dbd-postgres, no `--optimize`) needs **83,456**
+  entries -- Utf8 33,089, String 18,775, NameAndType 14,322, Methodref 9,217, Fieldref 5,129,
+  Long 1,283. Of the Fieldrefs, 3,747 are `QuotePool` fields (`.kb/quoted-data.md`, one
+  field = Utf8 + NameAndType + Fieldref per datum) and 47 `BigIntPool` ones. It first crossed
+  the limit at `af1c467fe` (2026-08-28, the bignum pool's 141 entries tipped it, bisected) and
+  grew ~18k past it since, the quote pool (2026-08-30) the largest single share. Holding the
+  quote and bignum values in one array field each would save ~11.4k and still leave it ~6.5k
+  over, so the program's JVM legs stay red until one class stops having to hold it all.
 
 ## Bodies bounded by construction
 - Registry-proportional expansions (computed `typep` 37 KB/site, runtime `subtypep` 59 KB,

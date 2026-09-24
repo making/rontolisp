@@ -517,6 +517,12 @@ public final class GrayStreamsLibrary {
 			if (bindingForm != null) {
 				return bindingForm;
 			}
+			if (LispNames.WARN.equals(opName)) {
+				// warn writes its report to the current *error-output*, which may hold
+				// a Gray instance (a broadcast stream): the backends' %warn lowering
+				// routes through the write-line dispatch whenever the program has it.
+				dispatchSymbol(WRITE_LINE_DISPATCH, ctx);
+			}
 			List<LispVal> parts = cons.toList();
 			if (parts.size() == 3 && (LispNames.WRITE_STRING.equals(opName) || LispNames.WRITE_CHAR.equals(opName))
 					&& streamArgMayBeInstance(parts.get(2))) {

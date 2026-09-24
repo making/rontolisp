@@ -28,8 +28,24 @@ final class WasmWarnCompiler {
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
-		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		Integer errorOutputGlobal = ctx.globalIndices.get(am.ik.rontolisp.LispNames.ERROR_OUTPUT_VAR);
+		if (errorOutputGlobal != null
+				&& ctx.functions.containsKey(am.ik.rontolisp.LispNames.GRAY_WRITE_LINE_DISPATCH)) {
+			// The variable may hold a Gray instance (a broadcast stream), which only the
+			// Gray dispatch writes to; it falls back to the built-in write-line for
+			// everything else.
+			WasmExprCompiler.compileExpr(
+					new LispCons(new am.ik.rontolisp.LispSymbol(am.ik.rontolisp.LispNames.GRAY_WRITE_LINE_DISPATCH),
+							new LispCons(args.get(1),
+									new LispCons(am.ik.rontolisp.compiler.StreamDesignators.errorOutput(),
+											am.ik.rontolisp.LispNil.INSTANCE))),
+					ctx);
+			ctx.writer.write(Instruction.DROP);
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+			return;
+		}
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		if (errorOutputGlobal != null) {
 			// The redirect is active: the destination is the variable's current value.
 			WasmExprCompiler.compileExpr(java.util.Objects.requireNonNull(

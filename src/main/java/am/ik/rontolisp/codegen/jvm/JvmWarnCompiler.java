@@ -6,6 +6,8 @@ import am.ik.jvm.ConstantPool;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.StreamDesignators;
 
@@ -27,7 +29,8 @@ import am.ik.rontolisp.compiler.StreamDesignators;
  * warning-capture idiom -- the report goes through the {@code _writeLine} runtime helper
  * with the variable's current (dynamic-first) value as the destination, so a string
  * stream captures it and the seeded handle 2 still reaches stderr. That helper strips the
- * quotes itself.
+ * quotes itself. A program that carries the Gray write-line dispatch writes through it
+ * instead, because the variable can then hold a Gray instance the helper cannot reach.
  */
 final class JvmWarnCompiler {
 
@@ -36,6 +39,21 @@ final class JvmWarnCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
+		if (ctx.globals.contains(LispNames.ERROR_OUTPUT_VAR)
+				&& ctx.functions.containsKey(LispNames.GRAY_WRITE_LINE_DISPATCH)) {
+			// The variable may hold a Gray instance (a broadcast stream), which only the
+			// Gray dispatch writes to; it falls back to the built-in write-line for
+			// everything else.
+			JvmExprCompiler
+				.compileExpr(
+						new LispCons(new LispSymbol(LispNames.GRAY_WRITE_LINE_DISPATCH),
+								new LispCons(args.get(1),
+										new LispCons(StreamDesignators.errorOutput(), LispNil.INSTANCE))),
+						ctx, className);
+			ctx.emit(Opcode.POP);
+			ctx.emit(Opcode.ACONST_NULL);
+			return;
+		}
 		if (ctx.globals.contains(LispNames.ERROR_OUTPUT_VAR)) {
 			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 			JvmExprCompiler.compileExpr(

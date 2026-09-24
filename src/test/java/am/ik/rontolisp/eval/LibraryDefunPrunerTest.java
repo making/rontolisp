@@ -615,6 +615,35 @@ class LibraryDefunPrunerTest {
 	}
 
 	@Test
+	void aMetaclassProtocolMethodHasNoGenericGate() {
+		// The ensure-class driver calls the metaclass protocol generics itself, with no
+		// textual reference in the program -- postmodern's dao-class slot methods were
+		// pruned, so every DAO slot became a standard one on the compile paths ("Class
+		// FRUIT has a key that is not also a slot"). Like a CL protocol name, only the
+		// specializer gates such a method.
+		List<String> heads = systemSurvivingHeads("""
+				(asdf:load-system :demo)
+				(defclass thing () ((x :initarg :x)) (:metaclass demo::meta))
+				(print (make-instance 'thing :x 1))
+				""", demoSystem("""
+				(defclass meta (standard-class) ())
+				(defclass dead-meta (standard-class) ())
+				(defmethod closer-mop:validate-superclass ((c meta) (s standard-class)) t)
+				(defmethod closer-mop:direct-slot-definition-class ((c meta) &rest initargs)
+				  (declare (ignore initargs)) (call-next-method))
+				(defmethod closer-mop:effective-slot-definition-class ((c meta) &rest initargs)
+				  (declare (ignore initargs)) (call-next-method))
+				(defmethod closer-mop:compute-effective-slot-definition ((c meta) name slots)
+				  (declare (ignore name slots)) (call-next-method))
+				(defmethod closer-mop:effective-slot-definition-class ((c dead-meta) &rest initargs)
+				  (declare (ignore initargs)) (call-next-method))
+				"""));
+		assertThat(heads.stream().filter(head -> head.startsWith("DEFMETHOD "))).containsExactlyInAnyOrder(
+				"DEFMETHOD VALIDATE-SUPERCLASS", "DEFMETHOD DIRECT-SLOT-DEFINITION-CLASS",
+				"DEFMETHOD EFFECTIVE-SLOT-DEFINITION-CLASS", "DEFMETHOD COMPUTE-EFFECTIVE-SLOT-DEFINITION");
+	}
+
+	@Test
 	void aSetfMethodIsKeyedUnderItsPlaceName() {
 		// The place reference (setf (width ...)) is what keeps the writer generic: the
 		// defgeneric survives (so the place stays registrable and dispatchable), and

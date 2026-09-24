@@ -563,6 +563,49 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileQuotedDesignatorsOfReferenceGatedBuiltins() throws Exception {
+		// 'concatenate and 'format are the same designators as #'concatenate and
+		// #'format, but only the #' spelling used to open their wrappers' gate: the
+		// quoted one failed with "Cannot compile: CONCATENATE" (postmodern's
+		// escape-sql-expression). A case clause's keys stay data.
+		assertThat(compileAndRun("""
+				(defun qd-cat (parts) (apply 'concatenate 'string parts))
+				(defun qd-fmt (args) (apply 'format nil "~a-~a" args))
+				(defun qd-key (op) (case op (funcall 'format) (t 'other)))
+				(print (list (qd-cat '("a" "b")) (qd-fmt '(1 2)) (mapcar 'class-of '()) (qd-key 'funcall)))
+				""")).isEqualTo("(\"ab\" \"1-2\" NIL FORMAT)");
+	}
+
+	@Test
+	void compileWarnOfAConditionClassInAThreadUsingProgram() throws Exception {
+		// A thread-using program makes *error-output* a global without naming it, which
+		// routes warn through the stream table -- that the stream gate had left out
+		// ("_streams is null"; cl-postgres's postgresql-warning under postmodern).
+		assertThat(compileAndRun("""
+				(define-condition tw-warning (simple-warning) ())
+				(defun tw-warn () (warn 'tw-warning :format-control "x ~a" :format-arguments (list 1)))
+				(rontolisp:join-thread (rontolisp:make-thread (lambda () 1)))
+				(tw-warn)
+				(print :done)
+				""")).isEqualTo(":DONE");
+	}
+
+	@Test
+	void compileRuntimeSubtypepBesideCircularDeftypes() throws Exception {
+		// The runtime subtypep table asks about EVERY registered deftype name, so one
+		// circular deftype (postmodern's (deftype tsvector () 'tsvector)) overflowed the
+		// stack of the whole compile. A circular name answers as an unknown type.
+		assertThat(compileAndRun("""
+				(deftype sc-self () 'sc-self)
+				(deftype sc-ping () '(or sc-pong integer))
+				(deftype sc-pong () '(or sc-ping string))
+				(defun stp (a b) (subtypep a b))
+				(print (list (stp 'fixnum 'sc-self) (stp 'sc-self 'sc-self)
+				             (stp 'fixnum 'sc-ping) (stp 'character 'sc-ping)))
+				""")).isEqualTo("(NIL T T NIL)");
+	}
+
+	@Test
 	void compileComputedCompoundSubtypepSpecifiers() throws Exception {
 		// The JVM half of the compound subtypep: %subtypep-runtime routes a CONS on
 		// either side through the head reduction before scanning the by-NAME ancestor
@@ -17532,6 +17575,22 @@ class JvmLispCompilerTest {
 				             (handler-case (invoke-debugger (make-condition 'simple-error :format-control "b"))
 				               (error (e) :dbg))))
 				""")).isEqualTo("3\n(NIL NIL)\nT\n(T T NIL NIL)\n(NIL T T)\n\"JCS-NAME\"\nT\n(:CF :CFP :RM :DBG)");
+	}
+
+	@Test
+	void compileWarnWritesToAGrayErrorOutput() throws Exception {
+		// A broadcast stream is a Gray instance, and mito silences a statement by binding
+		// *error-output* to (make-broadcast-stream): the report went past it to standard
+		// output. Same program, same answer, as
+		// LispEvaluatorTest#warnWritesToAGrayErrorOutput and
+		// WasmLispCompilerIntegrationTest#warnWritesToAGrayErrorOutput.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defun quiet () (let ((*error-output* (make-broadcast-stream))) (warn "dropped") :quiet))
+					(print (quiet))
+					(print (with-output-to-string (s)
+					         (let ((*error-output* (make-broadcast-stream s))) (warn "kept ~a" 1))))
+					"""))))).isEqualTo(":QUIET\n\"WARNING: kept 1\n\"");
 	}
 
 	@Test

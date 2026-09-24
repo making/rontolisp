@@ -11752,6 +11752,32 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void quotedDesignatorsOfReferenceGatedBuiltins() throws Exception {
+		// The WASM twin of
+		// JvmLispCompilerTest#compileQuotedDesignatorsOfReferenceGatedBuiltins.
+		assertThat(compileAndRun("""
+				(defun qd-cat (parts) (apply 'concatenate 'string parts))
+				(defun qd-fmt (args) (apply 'format nil "~a-~a" args))
+				(defun qd-key (op) (case op (funcall 'format) (t 'other)))
+				(print (list (qd-cat '("a" "b")) (qd-fmt '(1 2)) (qd-key 'funcall)))
+				""")).isEqualTo("(\"ab\" \"1-2\" FORMAT)");
+	}
+
+	@Test
+	void runtimeSubtypepBesideCircularDeftypes() throws Exception {
+		// The WASM twin of
+		// JvmLispCompilerTest#compileRuntimeSubtypepBesideCircularDeftypes.
+		assertThat(compileAndRun("""
+				(deftype sc-self () 'sc-self)
+				(deftype sc-ping () '(or sc-pong integer))
+				(deftype sc-pong () '(or sc-ping string))
+				(defun stp (a b) (subtypep a b))
+				(print (list (stp 'fixnum 'sc-self) (stp 'sc-self 'sc-self)
+				             (stp 'fixnum 'sc-ping) (stp 'character 'sc-ping)))
+				""")).isEqualTo("(NIL T T NIL)");
+	}
+
+	@Test
 	void computedCompoundSubtypepSpecifiers() throws Exception {
 		// The WASM twin of JvmLispCompilerTest#compileComputedCompoundSubtypepSpecifiers:
 		// type-of is a prelude defun, so the program needs the CLI pipeline's splice.
@@ -13657,6 +13683,28 @@ class WasmLispCompilerIntegrationTest {
 				((UNSIGNED-BYTE 8) 7 :EOF)
 				CHARACTER
 				\"CHARACTER\"""");
+	}
+
+	@Test
+	void anOutlinedDecisionTreeDefunStillAnswers() throws Exception {
+		// The 1.2 MB decision tree of WasmToplevelChunkingTest, cut into pieces by the
+		// AstOutliner retry: every leaf still answers what the whole body did.
+		assertThat(compileAndRun(WasmToplevelChunkingTest.decisionTreeDefun("big-tree", 4096) + """
+
+				(print (list (big-tree 0) (big-tree 17) (big-tree 2048) (big-tree 4000) (big-tree 4095)))
+				"""))
+			.isEqualTo("((0 0 7 0) (17 289 41 0) (2048 4194304 4103 0) (4000 16000000 8007 0) (4095 16769025 8197 0))");
+	}
+
+	@Test
+	void warnWritesToAGrayErrorOutput() throws Exception {
+		// The WASM twin of JvmLispCompilerTest#compileWarnWritesToAGrayErrorOutput.
+		assertThat(compileAndRunGray("""
+				(defun quiet () (let ((*error-output* (make-broadcast-stream))) (warn "dropped") :quiet))
+				(print (quiet))
+				(print (with-output-to-string (s)
+				         (let ((*error-output* (make-broadcast-stream s))) (warn "kept ~a" 1))))
+				""")).isEqualTo(":QUIET\n\"WARNING: kept 1\n\"");
 	}
 
 	@Test

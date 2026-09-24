@@ -53,4 +53,10 @@ Each checked against SBCL 2.2.9 on the same sources; rontolisp fails identically
 `PostmodernE2eTest` shape: DAO round trip and DB-side migration diff cycle asserted
 BYTE-IDENTICAL on all three in-scope backends, plus the Preview 1 compile-error pin and the
 `count-dao` tripwire. `lack-middleware-mito`'s three branches covered (`.kb/clack.md`).
+Every exercise sets `mito:*mito-migration-logger-stream*` to nil: `ensure-table-exists` /
+`migrate-table` log each statement to `*standard-output*` with its wall-clock time (twice --
+`with-sql-logging` and `execute-sql` each push a trace hook), which no expected output can
+pin. **The three JVM legs are red since
+2026-08-28**: the program no longer fits one class's constant pool
+(`.kb/jvm-method-size-limits.md`, `.todo/958`); interpreter and component legs are green.
 Docs: `doc/{en,ja}/guides/mito.md`, the mito row in `guides/asdf-systems.md`.

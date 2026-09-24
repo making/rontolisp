@@ -2995,6 +2995,22 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalSubtypepOverCircularDeftypes() {
+		// postmodern's s-sql declares (deftype tsvector () 'tsvector); a circular name
+		// is an unknown type, not an endless expansion.
+		String defs = """
+				(deftype sc-self () 'sc-self)
+				(deftype sc-ping () '(or sc-pong integer))
+				(deftype sc-pong () '(or sc-ping string))
+				""";
+		assertThat(evalMulti(defs + "(subtypep 'fixnum 'sc-self)")).isSameAs(LispNil.INSTANCE);
+		assertThat(evalMulti(defs + "(subtypep 'sc-self 'integer)")).isSameAs(LispNil.INSTANCE);
+		assertThat(evalMulti(defs + "(subtypep 'sc-self 'sc-self)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(evalMulti(defs + "(subtypep 'fixnum 'sc-ping)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(evalMulti(defs + "(subtypep 'character 'sc-ping)")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
 	void evalUpgradedComplexPartType() {
 		// SBCL parity (.todo/754, host 2.2.9): a real-subtype name answers itself, a
 		// compound real specifier answers its head's name, anything else signals.
@@ -19251,6 +19267,18 @@ class LispEvaluatorTest {
 				      (let ((s (make-string-output-stream)))
 				        (list (typep s 'file-stream) (typep s 'string-stream))))
 				""").print()).isEqualTo("(T NIL T NIL NIL (T NIL) (NIL T) (NIL T))");
+	}
+
+	@Test
+	void warnWritesToAGrayErrorOutput() {
+		// A broadcast stream is a Gray instance: warn signalled "not an output stream"
+		// for mito's (let ((*error-output* (make-broadcast-stream))) ...).
+		assertThat(evalMulti("""
+				(defun quiet () (let ((*error-output* (make-broadcast-stream))) (warn "dropped") :quiet))
+				(list (quiet)
+				      (with-output-to-string (s)
+				        (let ((*error-output* (make-broadcast-stream s))) (warn "kept ~a" 1))))
+				""").print()).isEqualTo("(:QUIET \"WARNING: kept 1\n\")");
 	}
 
 	@Test

@@ -986,13 +986,7 @@ public final class LispEvaluator {
 		// warn resolves its destination through the current value of *error-output* (the
 		// seeded handle 2 = the process standard error unless the program rebound it),
 		// so (let ((*error-output* s)) (warn ...)) captures the report.
-		this.globalEnv.setDefaultError(() -> {
-			if ((!this.specialVars.isEmpty() || this.progvUsed)
-					&& this.dynamicBindings.isBound(LispNames.ERROR_OUTPUT_VAR)) {
-				return this.dynamicBindings.get(LispNames.ERROR_OUTPUT_VAR);
-			}
-			return this.globalEnv.lookupOrNull(LispNames.ERROR_OUTPUT_VAR);
-		});
+		this.globalEnv.setDefaultError(this::currentErrorOutput);
 		// The same rule on the input side: the stream-argument-less read family resolves
 		// its source through the current value of *standard-input*.
 		this.globalEnv.setDefaultInput(() -> {
@@ -1770,6 +1764,26 @@ public final class LispEvaluator {
 		wrapGrayOutputOperator(LispNames.PRINC, 1, GRAY_PRINC_DISPATCH);
 		wrapGrayOutputOperator(LispNames.PRIN1, 1, GRAY_PRIN1_DISPATCH);
 		wrapGrayOutputOperator(LispNames.PRINT, 1, GRAY_PRINT_DISPATCH);
+		// warn's report goes to the current *error-output*, which may be a Gray instance
+		// -- mito silences a statement with (let ((*error-output*
+		// (make-broadcast-stream)))
+		// ...), and a broadcast stream is one -- so it takes the write-line dispatch like
+		// any other write to the stream; the handle-based %warn signalled "not an output
+		// stream" there.
+		LispVal baseWarn = this.globalEnv.lookupFunction(LispNames.WARN_INTERNAL);
+		this.globalEnv.defineFunction(LispNames.WARN_INTERNAL, new LispFunction(LispNames.WARN_INTERNAL, args -> {
+			LispVal destination = currentErrorOutput();
+			if (args.size() == 1 && destination != null) {
+				destination = resolveStreamArg(List.of(args.get(0), destination), 1).get(1);
+				if (dispatchesToGray(destination)) {
+					LispVal message = args.get(0) instanceof LispString ? args.get(0)
+							: new LispString(args.get(0).display());
+					applyGrayDispatch(GRAY_WRITE_LINE_DISPATCH, List.of(message, destination));
+					return LispNil.INSTANCE;
+				}
+			}
+			return apply(baseWarn, args, this.globalEnv);
+		}));
 		// *print-case* as a FIRST-CLASS value: (mapcar #'princ-to-string names) under a
 		// :downcase binding never reaches the operator seam in evalConsRareOperator, so
 		// the case route has to sit in the function value too -- the compile paths get it
@@ -9232,6 +9246,18 @@ public final class LispEvaluator {
 	 * @return the same list when nothing forwards, else a copy with the resolved
 	 * designator
 	 */
+	/**
+	 * The current -- dynamic-first -- value of {@code *error-output*}: the seeded handle
+	 * 2 (the process standard error) unless the program rebound it.
+	 */
+	private @Nullable LispVal currentErrorOutput() {
+		if ((!this.specialVars.isEmpty() || this.progvUsed)
+				&& this.dynamicBindings.isBound(LispNames.ERROR_OUTPUT_VAR)) {
+			return this.dynamicBindings.get(LispNames.ERROR_OUTPUT_VAR);
+		}
+		return this.globalEnv.lookupOrNull(LispNames.ERROR_OUTPUT_VAR);
+	}
+
 	private static List<LispVal> resolveStreamArg(List<LispVal> args, int index) {
 		if (index >= args.size() || !Environment.isSynonymStream(args.get(index))) {
 			return args;

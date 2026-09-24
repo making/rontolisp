@@ -38814,6 +38814,21 @@ public final class LispMacroExpander {
 	 * @return whether {@code sub} is a subtype of {@code super}
 	 */
 	public static boolean subtypep(LispVal subV, LispVal superV, ClosRegistry closRegistry) {
+		return subtypep(subV, superV, closRegistry, java.util.Set.of());
+	}
+
+	/**
+	 * {@link #subtypep(LispVal, LispVal, ClosRegistry)} with the {@code deftype} names
+	 * being expanded on the current path. A name already on the path is CIRCULAR --
+	 * postmodern's {@code (deftype tsvector () 'tsvector)} names itself, and
+	 * {@code (deftype a () '(or b integer))} beside {@code (deftype b () '(or a string))}
+	 * closes a loop through a compound -- so it is not expanded again and answers as an
+	 * unknown type name: nil, except against itself. Unguarded, one such name overflowed
+	 * the stack of every compile that builds the runtime subtypep table, because the
+	 * table asks about every registered name.
+	 */
+	private static boolean subtypep(LispVal subV, LispVal superV, ClosRegistry closRegistry,
+			java.util.Set<String> expanding) {
 		subV = classMetaobjectDesignator(subV, closRegistry);
 		superV = classMetaobjectDesignator(superV, closRegistry);
 		if (superV instanceof LispTrue) {
@@ -38852,7 +38867,7 @@ public final class LispMacroExpander {
 			if (LispNames.OR.equals(supHead)) {
 				List<LispVal> parts = supCons.toList();
 				for (int i = 1; i < parts.size(); i++) {
-					if (subtypep(subV, parts.get(i), closRegistry)) {
+					if (subtypep(subV, parts.get(i), closRegistry, expanding)) {
 						return true;
 					}
 				}
@@ -38860,7 +38875,7 @@ public final class LispMacroExpander {
 			else if (LispNames.AND.equals(supHead)) {
 				List<LispVal> parts = supCons.toList();
 				for (int i = 1; i < parts.size(); i++) {
-					if (!subtypep(subV, parts.get(i), closRegistry)) {
+					if (!subtypep(subV, parts.get(i), closRegistry, expanding)) {
 						return false;
 					}
 				}
@@ -38870,7 +38885,7 @@ public final class LispMacroExpander {
 				// (complex Y) as the super: only a (complex X) sub qualifies, with X
 				// a subtype of Y (a missing or * part is the whole complex type, so
 				// it qualifies only as the SUPER side).
-				return complexSubtypep(subV, supCons, closRegistry);
+				return complexSubtypep(subV, supCons, closRegistry, expanding);
 			}
 			return false;
 		}
@@ -38883,7 +38898,7 @@ public final class LispMacroExpander {
 			if (LispNames.OR.equals(subHead)) {
 				// (or A B ...) as the sub: a subtype when EVERY branch is.
 				for (int i = 1; i < parts.size(); i++) {
-					if (!subtypep(parts.get(i), superV, closRegistry)) {
+					if (!subtypep(parts.get(i), superV, closRegistry, expanding)) {
 						return false;
 					}
 				}
@@ -38892,7 +38907,7 @@ public final class LispMacroExpander {
 			if (LispNames.AND.equals(subHead)) {
 				// (and A B ...) as the sub: a subtype when ANY conjunct is.
 				for (int i = 1; i < parts.size(); i++) {
-					if (subtypep(parts.get(i), superV, closRegistry)) {
+					if (subtypep(parts.get(i), superV, closRegistry, expanding)) {
 						return true;
 					}
 				}
@@ -38904,7 +38919,7 @@ public final class LispMacroExpander {
 			// A RESTRICTING compound denotes a subset of its own head, so it is a
 			// subtype of everything the head is a subtype of: (integer 0 10) <= integer,
 			// (simple-array t (2 2)) <= array, (string 2) <= string. Re-test the head.
-			return subtypep(subCons.car(), superV, closRegistry);
+			return subtypep(subCons.car(), superV, closRegistry, expanding);
 		}
 		if (!(subV instanceof LispSymbol subSym) || !(superV instanceof LispSymbol superSym)) {
 			return false;
@@ -38936,11 +38951,21 @@ public final class LispMacroExpander {
 			}
 		}
 		// A user deftype on either side resolves to its expansion and re-tests.
-		LispVal subExpansion = closRegistry.findDeftype(subSym.name());
-		LispVal supExpansion = closRegistry.findDeftype(superSym.name());
+		// A name already being expanded on this path is circular and stays unexpanded.
+		String subKey = ClosRegistry.normalize(subSym.name());
+		String supKey = ClosRegistry.normalize(superSym.name());
+		LispVal subExpansion = expanding.contains(subKey) ? null : closRegistry.findDeftype(subSym.name());
+		LispVal supExpansion = expanding.contains(supKey) ? null : closRegistry.findDeftype(superSym.name());
 		if (subExpansion != null || supExpansion != null) {
+			java.util.Set<String> deeper = new java.util.HashSet<>(expanding);
+			if (subExpansion != null) {
+				deeper.add(subKey);
+			}
+			if (supExpansion != null) {
+				deeper.add(supKey);
+			}
 			return subtypep(subExpansion != null ? subExpansion : subV, supExpansion != null ? supExpansion : superV,
-					closRegistry);
+					closRegistry, deeper);
 		}
 		if (subStructTag != null) {
 			return false;
@@ -38969,9 +38994,11 @@ public final class LispMacroExpander {
 	 * @param subV the sub type designator
 	 * @param supCons the compound super specifier, headed by {@code complex}
 	 * @param closRegistry the class registry for class-name part types
+	 * @param expanding the deftype names being expanded on the current path
 	 * @return whether the sub denotes a subtype of the super
 	 */
-	private static boolean complexSubtypep(LispVal subV, LispCons supCons, ClosRegistry closRegistry) {
+	private static boolean complexSubtypep(LispVal subV, LispCons supCons, ClosRegistry closRegistry,
+			java.util.Set<String> expanding) {
 		if (!(subV instanceof LispCons subCons) || !"COMPLEX".equals(compoundTypeHead(subCons))) {
 			return false;
 		}
@@ -38988,7 +39015,7 @@ public final class LispMacroExpander {
 		if (subPart == null || isWildcardTypeArgument(subPart)) {
 			return false;
 		}
-		return subtypep(subPart, supPart, closRegistry);
+		return subtypep(subPart, supPart, closRegistry, expanding);
 	}
 
 	/**
