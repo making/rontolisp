@@ -413,17 +413,23 @@ public final class WasmRefTypeFolder {
 		boolean changed;
 
 		// The worklist (.kb/wasm-ref-type-fold.md, "The analysis"): a walk reads its own
-		// local, parameter and loop sets, its callees' return sets, and the module-wide
-		// field, global and tag sets. A function is walked again only when one of those
-		// grew since its last walk -- its own (dirty), a callee's returns (dirty through
-		// callers), or a module-wide one (globalEpoch moves past lastEpoch).
+		// local, parameter and loop sets, its callees' return sets, and the field, global
+		// and tag sets of the instructions it walks. A function is walked again only when
+		// one of those grew since its last walk: each such set knows the functions that
+		// read it (callers for a return set, readers for the rest) and marks them dirty.
+		// The global initializers read only other globals, so any global's growth
+		// re-walks them all (globalInitEpoch).
 		final boolean[] dirty;
 
 		final @Nullable BitSet[] callers;
 
-		int globalEpoch = 1;
+		final @Nullable BitSet[] fieldReaders;
 
-		final int[] lastEpoch;
+		final @Nullable BitSet[] globalReaders;
+
+		final @Nullable BitSet[] tagReaders;
+
+		int globalInitEpoch = 1;
 
 		final int[] lastGlobalInitEpoch;
 
@@ -510,7 +516,9 @@ public final class WasmRefTypeFolder {
 			this.live = new boolean[this.numFuncs];
 			this.dirty = new boolean[this.numFuncs];
 			this.callers = new BitSet[this.numFuncs];
-			this.lastEpoch = new int[this.numFuncs];
+			this.fieldReaders = new BitSet[this.numTypes];
+			this.globalReaders = new BitSet[this.globalTypes.length];
+			this.tagReaders = new BitSet[this.tagTypes.size()];
 			this.lastGlobalInitEpoch = new int[this.globalInits.size()];
 			this.localSets = new @Nullable BitSet[this.bodies.length][];
 			this.assignPositions = new int[this.bodies.length][][];
@@ -742,20 +750,22 @@ public final class WasmRefTypeFolder {
 				int[] p = { 0 };
 				this.live[WasmSections.readU(startSec.payload(), p)] = true;
 			}
+			for (int f = this.numImports; f < this.numFuncs; f++) {
+				this.dirty[f] = this.live[f];
+			}
 			byte @Nullable [] @Nullable [] rewritten;
 			while (true) {
 				do {
 					this.changed = false;
 					for (int g = 0; g < this.globalInits.size(); g++) {
-						if (!this.globalInits.get(g).isEmpty() && this.lastGlobalInitEpoch[g] != this.globalEpoch) {
-							this.lastGlobalInitEpoch[g] = this.globalEpoch;
+						if (!this.globalInits.get(g).isEmpty() && this.lastGlobalInitEpoch[g] != this.globalInitEpoch) {
+							this.lastGlobalInitEpoch[g] = this.globalInitEpoch;
 							new Walk(this, -1, g, false).run();
 						}
 					}
 					for (int f = this.numImports; f < this.numFuncs; f++) {
-						if (this.live[f] && (this.dirty[f] || this.lastEpoch[f] != this.globalEpoch)) {
+						if (this.live[f] && this.dirty[f]) {
 							this.dirty[f] = false;
-							this.lastEpoch[f] = this.globalEpoch;
 							new Walk(this, f, -1, false).run();
 						}
 					}
@@ -806,11 +816,47 @@ public final class WasmRefTypeFolder {
 			}
 		}
 
-		// A module-wide set (field, element, global, tag) grew: every walk reads those.
-		void joinShared(@Nullable BitSet target, @Nullable BitSet src) {
+		// A field (or element) set of type t grew: walk its readers again.
+		void joinField(int t, @Nullable BitSet target, @Nullable BitSet src) {
 			if (join(target, src)) {
-				this.globalEpoch++;
+				markAll(this.fieldReaders[t]);
 			}
+		}
+
+		// Global g's set grew: walk its readers and the global initializers again.
+		void joinGlobal(int g, @Nullable BitSet target, @Nullable BitSet src) {
+			if (join(target, src)) {
+				markAll(this.globalReaders[g]);
+				this.globalInitEpoch++;
+			}
+		}
+
+		// A payload set of tag x grew: walk the functions that catch it again.
+		void joinTag(int x, @Nullable BitSet target, @Nullable BitSet src) {
+			if (join(target, src)) {
+				markAll(this.tagReaders[x]);
+			}
+		}
+
+		private void markAll(@Nullable BitSet functions) {
+			if (functions != null) {
+				for (int g = functions.nextSetBit(0); g >= 0; g = functions.nextSetBit(g + 1)) {
+					this.dirty[g] = true;
+				}
+			}
+		}
+
+		// A walk of function f read entry `index` of a reader table.
+		static void reads(@Nullable BitSet[] readers, int index, int f) {
+			if (f < 0) {
+				return;
+			}
+			@Nullable BitSet fs = readers[index];
+			if (fs == null) {
+				fs = new BitSet();
+				readers[index] = fs;
+			}
+			fs.set(f);
 		}
 
 		// Function f's return set grew: walk every function that called it again.
@@ -989,6 +1035,8 @@ public final class WasmRefTypeFolder {
 
 		final int def; // defined-function ordinal, or -1
 
+		final int global; // the global whose initializer this walks, or -1
+
 		final List<Instr> code;
 
 		final byte[] entry;
@@ -1018,6 +1066,7 @@ public final class WasmRefTypeFolder {
 		Walk(Model m, int f, int global, boolean emitting) {
 			this.m = m;
 			this.f = f;
+			this.global = global;
 			if (f >= 0) {
 				this.def = f - m.numImports;
 				Body body = m.materialize(this.def);
@@ -1376,7 +1425,7 @@ public final class WasmRefTypeFolder {
 					List<Val> args = popN(tag.params().size());
 					for (int k = 0; k < args.size(); k++) {
 						if (args.get(k).ref()) {
-							this.m.joinShared(this.m.tagSets[(int) in.a][k], args.get(k).refSet());
+							this.m.joinTag((int) in.a, this.m.tagSets[(int) in.a][k], args.get(k).refSet());
 						}
 					}
 					emit(in);
@@ -1526,6 +1575,7 @@ public final class WasmRefTypeFolder {
 							FuncType tag = this.m.tagTypes.get(c.tag());
 							for (int k = 0; k < tag.params().size(); k++) {
 								delivered.add(this.m.tagSets[c.tag()][k]);
+								Model.reads(this.m.tagReaders, c.tag(), this.f);
 							}
 						}
 						if (c.kind() == 0x01 || c.kind() == 0x03) {
@@ -1588,6 +1638,7 @@ public final class WasmRefTypeFolder {
 				case 0x23 -> { // global.get
 					int g = (int) in.a;
 					if (this.m.globalTypes[g].isRef()) {
+						Model.reads(this.m.globalReaders, g, this.f);
 						push(Val.ref((BitSet) java.util.Objects.requireNonNull(this.m.globalSets[g]).clone(), i));
 					}
 					else {
@@ -1600,7 +1651,7 @@ public final class WasmRefTypeFolder {
 					int g = (int) in.a;
 					Val v = pop();
 					if (this.m.globalTypes[g].isRef()) {
-						this.m.joinShared(this.m.globalSets[g], v.refSet());
+						this.m.joinGlobal(g, this.m.globalSets[g], v.refSet());
 					}
 					emit(in);
 					return i + 1;
@@ -1937,7 +1988,7 @@ public final class WasmRefTypeFolder {
 					this.m.joinReturn(this.f, carried, src);
 				}
 				else {
-					this.m.joinShared(carried, src);
+					this.m.joinGlobal(this.global, carried, src);
 				}
 			}
 			else {
@@ -1977,7 +2028,7 @@ public final class WasmRefTypeFolder {
 					List<Val> args = popN(st.fields().size());
 					for (int k = 0; k < args.size(); k++) {
 						if (args.get(k).ref()) {
-							this.m.joinShared(this.m.fieldSets[t][k], args.get(k).refSet());
+							this.m.joinField(t, this.m.fieldSets[t][k], args.get(k).refSet());
 						}
 					}
 					push(Val.ref(this.m.typeClassSet[t], args.isEmpty() ? i : args.get(0).spanStart()));
@@ -1985,12 +2036,13 @@ public final class WasmRefTypeFolder {
 				case 0x01 -> { // struct.new_default
 					for (@Nullable
 					BitSet field : this.m.fieldSets[t]) {
-						this.m.joinShared(field, this.m.nullSet);
+						this.m.joinField(t, field, this.m.nullSet);
 					}
 					push(Val.ref(this.m.typeClassSet[t], i));
 				}
 				case 0x02, 0x03, 0x04 -> { // struct.get(_s|_u)
 					Val ref = pop();
+					Model.reads(this.m.fieldReaders, t, this.f);
 					@Nullable BitSet field = this.m.fieldSets[t][(int) in.b];
 					push(field != null ? Val.ref((BitSet) field.clone(), ref.spanStart())
 							: Val.scalar(ref.spanStart()));
@@ -1999,27 +2051,27 @@ public final class WasmRefTypeFolder {
 					Val v = pop();
 					pop();
 					if (v.ref()) {
-						this.m.joinShared(this.m.fieldSets[t][(int) in.b], v.refSet());
+						this.m.joinField(t, this.m.fieldSets[t][(int) in.b], v.refSet());
 					}
 				}
 				case 0x06 -> { // array.new
 					pop();
 					Val init = pop();
 					if (init.ref()) {
-						this.m.joinShared(this.m.fieldSets[t][0], init.refSet());
+						this.m.joinField(t, this.m.fieldSets[t][0], init.refSet());
 					}
 					push(Val.ref(this.m.typeClassSet[t], init.spanStart()));
 				}
 				case 0x07 -> { // array.new_default
 					Val len = pop();
-					this.m.joinShared(this.m.fieldSets[t][0], this.m.nullSet);
+					this.m.joinField(t, this.m.fieldSets[t][0], this.m.nullSet);
 					push(Val.ref(this.m.typeClassSet[t], len.spanStart()));
 				}
 				case 0x08 -> { // array.new_fixed
 					List<Val> args = popN((int) in.b);
 					for (Val a : args) {
 						if (a.ref()) {
-							this.m.joinShared(this.m.fieldSets[t][0], a.refSet());
+							this.m.joinField(t, this.m.fieldSets[t][0], a.refSet());
 						}
 					}
 					push(Val.ref(this.m.typeClassSet[t], args.isEmpty() ? i : args.get(0).spanStart()));
@@ -2027,6 +2079,7 @@ public final class WasmRefTypeFolder {
 				case 0x0B, 0x0C, 0x0D -> { // array.get(_s|_u)
 					pop();
 					Val arr = pop();
+					Model.reads(this.m.fieldReaders, t, this.f);
 					@Nullable BitSet elem = this.m.fieldSets[t][0];
 					push(elem != null ? Val.ref((BitSet) elem.clone(), arr.spanStart()) : Val.scalar(arr.spanStart()));
 				}
@@ -2035,7 +2088,7 @@ public final class WasmRefTypeFolder {
 					pop();
 					pop();
 					if (v.ref()) {
-						this.m.joinShared(this.m.fieldSets[t][0], v.refSet());
+						this.m.joinField(t, this.m.fieldSets[t][0], v.refSet());
 					}
 				}
 				case 0x0F -> { // array.len
@@ -2048,14 +2101,15 @@ public final class WasmRefTypeFolder {
 					pop();
 					pop();
 					if (v.ref()) {
-						this.m.joinShared(this.m.fieldSets[t][0], v.refSet());
+						this.m.joinField(t, this.m.fieldSets[t][0], v.refSet());
 					}
 				}
 				case 0x11 -> { // array.copy dst src
 					for (int k = 0; k < 5; k++) {
 						pop();
 					}
-					this.m.joinShared(this.m.fieldSets[t][0], this.m.fieldSets[(int) in.b][0]);
+					Model.reads(this.m.fieldReaders, (int) in.b, this.f);
+					this.m.joinField(t, this.m.fieldSets[t][0], this.m.fieldSets[(int) in.b][0]);
 				}
 				case 0x14, 0x15 -> { // ref.test
 					Val v = pop();

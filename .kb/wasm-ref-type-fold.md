@@ -50,14 +50,16 @@ off for that module** -- silently, by design; the loss is size, never an answer.
   unchanged; the one difference is that an undecodable DEAD body no longer throws here (the
   shake's `scanInstr` still refuses an unknown opcode in any body).
 - **A worklist, not full rounds.** A walk reads its own local/parameter/loop sets, its callees'
-  return sets and the module-wide field/element/global/tag sets, so a function is walked again
-  only when one of those grew since its last walk: `joinOwn` marks the function itself,
-  `joinReturn` its recorded callers, `joinShared` moves `globalEpoch` past every function's
-  `lastEpoch`. The least fixpoint of a monotone analysis does not depend on the order it is
-  reached in, and each function's last walk saw the final sets (else it would be dirty again),
-  so `targeted` and the rewrite are unchanged. Measured 2026-09-24: analysis walks 252 -> 133 on
-  a 3-line program's core, 32,507 -> 19,762 on the `ci-spec` corpus core; most of what is left
-  follows a shared (field) set growing, which still re-walks every live function.
+  return sets and the field/element/global/tag sets of the instructions it walks, so a function
+  is walked again only when one of those grew since its last walk: `joinOwn` marks the function
+  itself, `joinReturn` the callers recorded on earlier walks, `joinField`/`joinGlobal`/`joinTag`
+  the functions recorded reading that type/global/tag (`Model.reads`); a global's growth also
+  re-walks the global initializers. **A new read of a shared set must call `Model.reads`**, or
+  its function misses the set's later growth. The least fixpoint of a monotone analysis does
+  not depend on the order it is reached in, and each function's last walk saw the final sets
+  (else it would be dirty again), so `targeted` and the rewrite are unchanged. Measured
+  2026-09-24, analysis walks: a 3-line program's core 252 -> 93, the `ci-spec` corpus core
+  32,507 -> 18,349 (most functions there read the cons fields, whose sets keep growing).
 - **Bottom is dead code, not false.** A test on a value NO source produces marks the rest
   of the block unreachable. Folding it to 0 was the first version's bug: it selected the
   `else` arm of `_rat_add`'s "both exact integers" guard, counted the rational path's
