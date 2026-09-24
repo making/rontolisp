@@ -43,7 +43,7 @@ final class WasmExportRuntimeBuilder {
 	 * @return the function body bytes (signature {@code (i32,i32,i32,i32) -> i32})
 	 */
 	static byte[] buildCabiReallocBody(int allocFuncIndex) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // no locals
 		// if (!MARK_ACTIVE) { MARK_ACTIVE = 1; MARK_HEAP = HEAP_PTR;
@@ -88,7 +88,7 @@ final class WasmExportRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildCabiPostReturnBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // no locals
 		w.write(Instruction.BLOCK);
@@ -136,7 +136,7 @@ final class WasmExportRuntimeBuilder {
 	 * @return the function body bytes (signature: the wrapper's params {@code -> i32})
 	 */
 	static byte[] buildRetptrShimBody(int wrapperFuncIndex, int cabiReallocFuncIndex, int paramSlots) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		int ptr = paramSlots;
 		int len = paramSlots + 1;
@@ -202,7 +202,7 @@ final class WasmExportRuntimeBuilder {
 	 * TYPE_LOOKUP)
 	 */
 	static byte[] buildAllocBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param0 = size; local1 = old pointer
 		w.write(1);
@@ -256,7 +256,7 @@ final class WasmExportRuntimeBuilder {
 	 * @return the function body bytes (signature {@code () -> i32})
 	 */
 	static byte[] buildAllocMarkBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // no locals
 		loadCell(w, WasmLispCompiler.HEAP_PTR_ADDR);
@@ -283,7 +283,7 @@ final class WasmExportRuntimeBuilder {
 	 * @return the function body bytes (signature {@code (i32) -> ()})
 	 */
 	static byte[] buildAllocResetBody(boolean clampParkFloor) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int mark = 0;
 		final int water = 1;
@@ -333,7 +333,7 @@ final class WasmExportRuntimeBuilder {
 	 * reuses TYPE_RAT_NEW)
 	 */
 	static byte[] buildStrFromMemBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int ptr = 0;
 		final int len = 1;
@@ -455,7 +455,7 @@ final class WasmExportRuntimeBuilder {
 	 * reuses TYPE_RAT_NEW)
 	 */
 	static byte[] buildBytesFromMemBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int ptr = 0;
 		final int len = 1;
@@ -529,7 +529,7 @@ final class WasmExportRuntimeBuilder {
 	 * @return the function body bytes (signature {@code ((ref null eq),i32,i32) -> i32})
 	 */
 	static byte[] buildBytesCopyBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int v = 0;
 		final int ptr = 1;
@@ -612,7 +612,7 @@ final class WasmExportRuntimeBuilder {
 	 * @return the function body bytes (signature {@code ((ref null eq),i32,i32) -> i32})
 	 */
 	static byte[] buildBytesFillBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int v = 0;
 		final int ptr = 1;
@@ -703,7 +703,7 @@ final class WasmExportRuntimeBuilder {
 	 * TYPE_LOOKUP)
 	 */
 	static byte[] buildParkAllocBody(int allocFuncIndex) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int n = 0;
 		final int p = 1;
@@ -822,7 +822,7 @@ final class WasmExportRuntimeBuilder {
 	 * @return the function body bytes (signature {@code (i32) -> ()})
 	 */
 	static byte[] buildParkFreeBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int ptr = 0;
 		final int blk = 1;
@@ -864,7 +864,7 @@ final class WasmExportRuntimeBuilder {
 	 * @return the function body bytes (signature {@code ((ref null eq)) -> (i32,i32)})
 	 */
 	static byte[] buildParkStrResultBody(int parkAllocFuncIndex) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int v = 0;
 		final int base = 1;

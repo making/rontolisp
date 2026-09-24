@@ -62,7 +62,7 @@ public final class WasmShimModules {
 	public static byte[] shim(List<Type[]> params, List<Type[]> results) {
 		requireSameLength(params, results);
 		final int n = params.size();
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		w.write("\0asm").writeLittleEndian4(1).writeTypeSection(types -> {
 			for (int k = 0; k < n; k++) {
@@ -85,7 +85,7 @@ public final class WasmShimModules {
 			exports.addExport(TABLE_EXPORT, ExternalKind.TABLE, 0);
 		}).writeCode(code -> {
 			for (int k = 0; k < n; k++) {
-				ByteArrayOutputStream body = new ByteArrayOutputStream();
+				ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 				WasmWriter b = new WasmWriter(body);
 				b.writeUnsignedLeb128(0); // no locals
 				for (int p = 0; p < params.get(k).length; p++) {
@@ -112,7 +112,7 @@ public final class WasmShimModules {
 	public static byte[] fixup(List<Type[]> params, List<Type[]> results) {
 		requireSameLength(params, results);
 		final int n = params.size();
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		w.write("\0asm").writeLittleEndian4(1).writeTypeSection(types -> {
 			for (int k = 0; k < n; k++) {

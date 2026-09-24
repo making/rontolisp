@@ -147,8 +147,8 @@ final class WasmLambdaCompiler {
 		// with it hands the closure a private snapshot cell instead of the binding
 		// (.kb/core-representation.md).
 		Set<String> capturedParams = FreeVarAnalyzer.findCapturedVars(bodyExprs, new HashSet<>(paramNames),
-				ctx.functions.keySet());
-		capturedParams.addAll(WasmLandingPad.regionAssignedVars(bodyExprs, new HashSet<>(paramNames)));
+				ctx.functions.keySet(), ctx.captureMemo);
+		capturedParams.addAll(WasmLandingPad.regionAssignedVars(bodyExprs, new HashSet<>(paramNames), ctx.regionMemo));
 		ctx.boxedVars = new HashSet<>(savedBoxed);
 		// The maps are keyed on names, so an outer unboxed dual-representation local or
 		// local integer lambda the parameters SHADOW must stop answering for the body.

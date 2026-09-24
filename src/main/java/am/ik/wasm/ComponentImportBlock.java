@@ -231,7 +231,7 @@ public final class ComponentImportBlock {
 				typeRemap.put(g.firstTypeIndex() + t, nextType++);
 			}
 		}
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new UnsynchronizedByteArrayOutputStream();
 		for (Group g : this.groups) {
 			if (!live.contains(g.interfaceId())) {
 				continue;

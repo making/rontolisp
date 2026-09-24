@@ -1,14 +1,18 @@
 package am.ik.rontolisp.codegen.wasm;
 
 import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The landing-pad discipline every {@code try_table} region with user-visible landing
@@ -127,44 +131,108 @@ final class WasmLandingPad {
 	 * bare variable -- and which therefore must be boxed. Blind to lexical scope on
 	 * purpose: an inner binding's assignment of the same name also lands here, which only
 	 * adds a cell.
+	 * <p>
+	 * Every binder asks about its whole body, so {@code memo} keeps what each form
+	 * assigns (whichever names are asked about): a nest of lets used to rescan its
+	 * innermost forms once per level.
 	 * @param body the forms a binder is about to compile
 	 * @param localVars the names the binder binds
+	 * @param memo the answers so far, one per compilation
 	 * @return the subset to box
 	 */
-	static Set<String> regionAssignedVars(List<LispVal> body, Set<String> localVars) {
+	static Set<String> regionAssignedVars(List<LispVal> body, Set<String> localVars, RegionMemo memo) {
 		Set<String> found = new HashSet<>();
 		if (localVars.isEmpty()) {
 			return found;
 		}
 		for (LispVal form : body) {
-			scan(form, localVars, found, false);
+			for (String name : assignedRoot(form, false, memo)) {
+				if (localVars.contains(name)) {
+					found.add(name);
+				}
+			}
 		}
 		return found;
 	}
 
-	private static void scan(LispVal form, Set<String> localVars, Set<String> found, boolean inRegion) {
+	/**
+	 * What {@link #regionAssignedVars} has scanned, per form (by identity) and per
+	 * whether it sits inside a region. Not thread-safe: one per compilation.
+	 */
+	static final class RegionMemo {
+
+		final IdentityHashMap<LispCons, List<String>> outside = new IdentityHashMap<>();
+
+		final IdentityHashMap<LispCons, List<String>> inside = new IdentityHashMap<>();
+
+	}
+
+	// assigned, through the memo: for a form a binder will ask about on its own -- one
+	// statement of a let, lambda or defun body -- so the memo holds those rather than
+	// every cons the scan passes.
+	private static List<String> assignedRoot(LispVal form, boolean inRegion, RegionMemo memo) {
 		if (!(form instanceof LispCons cons)) {
-			return;
+			return List.of();
 		}
+		IdentityHashMap<LispCons, List<String>> answers = inRegion ? memo.inside : memo.outside;
+		List<String> known = answers.get(cons);
+		if (known != null) {
+			return known;
+		}
+		List<String> found = assigned(cons, inRegion, memo);
+		answers.put(cons, found);
+		return found;
+	}
+
+	// Every bare-symbol place a modify form inside a region assigns under this form, in
+	// order of first occurrence -- whichever locals are asked about, so the answer can
+	// be kept per form.
+	private static List<String> assigned(LispVal form, boolean inRegion, RegionMemo memo) {
+		if (!(form instanceof LispCons cons)) {
+			return List.of();
+		}
+		List<String> single = List.of();
+		@Nullable LinkedHashSet<String> merged = null;
+		boolean region = inRegion;
+		boolean quoted = false;
+		// The first body statement of a binder, counting the operator as element 0.
+		int firstStatement = Integer.MAX_VALUE;
 		if (cons.car() instanceof LispSymbol head) {
 			String name = head.name();
-			if (LispNames.QUOTE.equals(name)) {
-				return;
-			}
-			if (inRegion && WasmCountedLoopCompiler.MODIFY_OPERATORS.contains(name) && cons.isProperList()) {
+			firstStatement = switch (name) {
+				case LispNames.LET, LispNames.LET_STAR, LispNames.LAMBDA -> 2;
+				case LispNames.DEFUN -> 3;
+				default -> Integer.MAX_VALUE;
+			};
+			quoted = LispNames.QUOTE.equals(name);
+			if (!quoted && inRegion && WasmCountedLoopCompiler.MODIFY_OPERATORS.contains(name) && cons.isProperList()) {
+				merged = new LinkedHashSet<>();
 				for (LispVal place : symbolPlaces(name, cons.toList())) {
-					if (localVars.contains(((LispSymbol) place).name())) {
-						found.add(((LispSymbol) place).name());
-					}
+					merged.add(((LispSymbol) place).name());
 				}
 			}
-			inRegion = inRegion || isRegionHead(name);
+			region = inRegion || isRegionHead(name);
 		}
-		LispVal cur = cons;
+		LispVal cur = quoted ? LispNil.INSTANCE : cons;
+		int element = 0;
 		while (cur instanceof LispCons cell) {
-			scan(cell.car(), localVars, found, inRegion);
+			List<String> names = element++ >= firstStatement ? assignedRoot(cell.car(), region, memo)
+					: assigned(cell.car(), region, memo);
+			if (!names.isEmpty()) {
+				if (merged != null) {
+					merged.addAll(names);
+				}
+				else if (single.isEmpty()) {
+					single = names;
+				}
+				else {
+					merged = new LinkedHashSet<>(single);
+					merged.addAll(names);
+				}
+			}
 			cur = cell.cdr();
 		}
+		return merged != null ? List.copyOf(merged) : single;
 	}
 
 	/**

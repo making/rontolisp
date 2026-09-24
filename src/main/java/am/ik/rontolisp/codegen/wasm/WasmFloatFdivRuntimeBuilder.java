@@ -49,7 +49,7 @@ final class WasmFloatFdivRuntimeBuilder {
 	 * @return the encoded function body
 	 */
 	static byte[] buildBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// 1 x f64, 2 x i64, 2 x i32, 6 x (ref null eq)
 		w.write(4);

@@ -232,7 +232,7 @@ final class WasmFdlibmRuntimeBuilder {
 	 * @return the body
 	 */
 	static byte[] stub(Fn fn) {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.UNREACHABLE);
@@ -251,7 +251,7 @@ final class WasmFdlibmRuntimeBuilder {
 	 */
 	static byte[] build(Fn fn, ToIntFunction<Fn> indexOf, int tablesBase) {
 		Function parsed = Parsed.of(fn);
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		new Emitter(w, parsed, indexOf, tablesBase).emit();
 		return out.toByteArray();

@@ -34,7 +34,7 @@ final class WasmComplexRuntimeBuilder {
 	// always builds (a float zero never demotes); otherwise a rational-zero
 	// imaginary part demotes to the real itself.
 	static byte[] buildComplexBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// Locals: 0=re, 1=im (params), 2-3=f64 scratch for the float path.
@@ -135,7 +135,7 @@ final class WasmComplexRuntimeBuilder {
 	}
 
 	private static byte[] buildLinearBody(int ratFunc) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// Locals: 0=a, 1=b (params), 2=re, 3=im.
@@ -164,7 +164,7 @@ final class WasmComplexRuntimeBuilder {
 	// _cmul((ref null eq) a, (ref null eq) b) -> (ref null eq): (ac-bd) + (ad+bc)i
 	// over the exact _rat_* helpers, canonicalized.
 	static byte[] buildMulBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// Locals: 0=a, 1=b (params), 2=ra, 3=ia, 4=rb, 5=ib, 6=re, 7=im.
@@ -221,7 +221,7 @@ final class WasmComplexRuntimeBuilder {
 	// divisor must cost ONE rounding per part, not three). The JVM twin is
 	// JvmComplexRuntimeBuilder.buildDiv's float tail; all three must agree.
 	static byte[] buildDivBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// Locals: 0=a, 1=b (params), 2=ra, 3=ia, 4=rb, 5=ib, 6=denom, 7=re, 8=im,
@@ -415,7 +415,7 @@ final class WasmComplexRuntimeBuilder {
 	// float-zero-imagined complex -- the steering over-approximation both compiled
 	// backends share (the JVM's _cneg ends in _ccomplex the same way).
 	static byte[] buildNegBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// Locals: 0=a (param), 1=re, 2=im, 3=re', 4=im'.
@@ -473,7 +473,7 @@ final class WasmComplexRuntimeBuilder {
 	// is scaled (m * sqrt((re/m)^2 + (im/m)^2)) so huge parts do not overflow to
 	// infinity the way a naive sqrt(re^2+im^2) would.
 	static byte[] buildCsignumBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// Locals: 0=a (param), 1=re, 2=im, 3=m, 4=r1, 5=r2, 6=abs (f64).

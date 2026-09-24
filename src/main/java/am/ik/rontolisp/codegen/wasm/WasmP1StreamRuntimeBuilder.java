@@ -76,7 +76,7 @@ final class WasmP1StreamRuntimeBuilder {
 
 	// _p1_stream_read (stream) -> a settled future of the next chunk (nil = EOF).
 	private static byte[] buildRead(int streamType) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int S = 0, CHUNK = 1;
 		// locals: 1x (ref null eq)
@@ -111,7 +111,7 @@ final class WasmP1StreamRuntimeBuilder {
 
 	// _p1_stream_close (stream) -> nil: run the close protocol once.
 	private static byte[] buildClose(int streamType) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int S = 0;
 		w.write(0); // no locals

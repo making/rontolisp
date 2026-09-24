@@ -138,7 +138,7 @@ final class WasmInstanceLayouts {
 				.stream()
 				.map(stringTable::addString)
 				.toList();
-			ByteArrayOutputStream record = new ByteArrayOutputStream();
+			ByteArrayOutputStream record = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 			write32(record, switch (layout.kind()) {
 				case STRUCT -> KIND_STRUCT;
 				case CLASS -> KIND_CLASS;

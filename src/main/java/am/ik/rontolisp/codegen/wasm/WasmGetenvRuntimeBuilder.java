@@ -56,7 +56,7 @@ final class WasmGetenvRuntimeBuilder {
 	 * @return the encoded function body
 	 */
 	static byte[] build(int scratchBase) {
-		final ByteArrayOutputStream body = new ByteArrayOutputStream();
+		final ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		final WasmWriter w = new WasmWriter(body);
 
 		// 10 i32 locals (indices 1..10; index 0 is the name parameter) + one $str_bytes

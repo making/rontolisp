@@ -62,7 +62,7 @@ final class WasmFixedDecimalRuntimeBuilder {
 	 * {@code TYPE_CALLABLE_BASE + 3})
 	 */
 	static byte[] build() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(4); // four local groups
 		w.write(1);

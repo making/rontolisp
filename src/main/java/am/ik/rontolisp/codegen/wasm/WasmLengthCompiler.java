@@ -62,7 +62,7 @@ final class WasmLengthCompiler {
 	 * {@code TYPE_CALLABLE_BASE + 0})
 	 */
 	static byte[] buildSeqLenBody() {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		// Two scratch (ref null eq) locals: slot 1 holds the dims array of whichever
 		// array branch runs, slot 2 the fill pointer / the list-walk counter. The

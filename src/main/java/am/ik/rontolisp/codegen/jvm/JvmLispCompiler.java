@@ -1509,8 +1509,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		// live only in the class registry (define-condition is rewritten out of the
 		// program) but are re-injected by the error/signal expansions, so they count as
 		// references too.
+		// One walk for every gated operator (a condition's :report lambda counts: it
+		// lives
+		// only in the registry, but the error/signal expansions inject it back).
+		Set<String> takenAsValues = BuiltinFunctionWrappers.functionValueNames(program);
+		takenAsValues.addAll(BuiltinFunctionWrappers.functionValueNames(closRegistry.conditionReports().values()));
 		for (String op : BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS) {
-			if (!referencesFunctionValue(program, closRegistry, op)) {
+			if (!takenAsValues.contains(op)) {
 				wrapperExcludes.add(op);
 			}
 		}
@@ -1526,10 +1531,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// their wrapper bodies take the argument from a PARAMETER, which no literal can
 		// prove inside the real domain, so an ungated wrapper would open the complex
 		// gate for every program in the world -- (print 1) included.
+		Set<String> designated = BuiltinFunctionWrappers.functionDesignatorNames(program);
+		designated.addAll(BuiltinFunctionWrappers.functionDesignatorNames(closRegistry.conditionReports().values()));
 		for (String op : List.of(LispNames.COMPLEX, LispNames.CONJUGATE, LispNames.SQRT, LispNames.PHASE,
 				LispNames.UPGRADED_COMPLEX_PART_TYPE, LispNames.CIS, LispNames.ASINH, LispNames.ACOSH, LispNames.ATANH,
 				LispNames.LOG, LispNames.ASIN, LispNames.ACOS, LispNames.EXPT)) {
-			if (!referencesFunctionDesignator(program, closRegistry, op)) {
+			if (!designated.contains(op)) {
 				wrapperExcludes.add(op);
 			}
 		}
@@ -2181,7 +2188,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 			// Determine which params are captured by nested lambdas
 			Set<String> capturedVars = FreeVarAnalyzer.findCapturedVars(defun.bodyExprs,
-					new HashSet<>(defun.paramNames), functions.keySet());
+					new HashSet<>(defun.paramNames), functions.keySet(), funcCtx.captureMemo);
 			funcCtx.boxedVars = capturedVars;
 			// The body-head float declarations (behind the sole %fn-block/block wrapper
 			// too) route the body's arithmetic onto the unboxed IEEE path
@@ -2424,7 +2431,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			// Determine which locals are captured by further nested lambdas
 			Set<String> lambdaLocalVars = new HashSet<>(lambda.paramNames);
 			Set<String> capturedVars = FreeVarAnalyzer.findCapturedVars(lambda.bodyExprs, lambdaLocalVars,
-					functions.keySet());
+					functions.keySet(), lambdaCtx.captureMemo);
 			lambdaCtx.boxedVars = capturedVars;
 			// Body-head float declarations, as in Pass 2a (.kb/jvm-double-arithmetic.md).
 			Set<String> lambdaDeclaredDoubles = new HashSet<>(am.ik.rontolisp.compiler.DeclaredScalarTypes
@@ -5291,26 +5298,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	/**
-	 * Whether the program takes the named built-in as a first-class function value, i.e.
-	 * whether its injected wrapper can be reached at all. A condition's {@code :report}
-	 * lambda counts: {@code define-condition} is rewritten out of the program, so the
-	 * lambda lives only in the registry, but the error/signal expansions inject it back.
-	 * @param program the resolved top-level forms
-	 * @param closRegistry the registry holding the condition reports
-	 * @param op the built-in's name
-	 * @return {@code true} when a {@code (function op)} reference occurs
-	 */
-	private static boolean referencesFunctionValue(List<LispVal> program, ClosRegistry closRegistry, String op) {
-		return program.stream().anyMatch(expr -> BuiltinFunctionWrappers.referencesFunctionValue(expr, op))
-				|| closRegistry.conditionReports()
-					.values()
-					.stream()
-					.anyMatch(report -> BuiltinFunctionWrappers.referencesFunctionValue(report, op));
-	}
-
-	/**
-	 * As {@link #referencesFunctionValue}, but counting the {@code 'op} spelling too --
-	 * see {@link BuiltinFunctionWrappers#referencesFunctionDesignator}.
+	 * Whether the program names the built-in as a function designator -- {@code #'op} or
+	 * {@code 'op}, see {@link BuiltinFunctionWrappers#referencesFunctionDesignator} --
+	 * i.e. whether its injected wrapper can be reached at all. A condition's
+	 * {@code :report} lambda counts: {@code define-condition} is rewritten out of the
+	 * program, so the lambda lives only in the registry, but the error/signal expansions
+	 * inject it back.
 	 * @param program the resolved top-level forms
 	 * @param closRegistry the registry holding the condition reports
 	 * @param op the built-in's name
@@ -6811,8 +6804,18 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * The CLOS registry (classes, generics, slot positions), collected by the
 		 * pre-pass in {@link JvmLispCompiler#compile}; {@code make-instance}/
 		 * {@code slot-value} expansion resolves through it. Shared across every context.
+		 * Assigned in the constructor only: a registry is pre-seeded with the condition
+		 * hierarchy, and a context is built per compiled body, so a field initializer
+		 * here seeded one per body only for the constructor to discard it.
 		 */
-		ClosRegistry closRegistry = new ClosRegistry();
+		ClosRegistry closRegistry;
+
+		/**
+		 * The capture walk's answers so far ({@link FreeVarAnalyzer.CaptureMemo}): every
+		 * scope asks, and an enclosing scope's walk has covered a nested one's body.
+		 * Shared across every context of one compilation.
+		 */
+		final FreeVarAnalyzer.CaptureMemo captureMemo;
 
 		/**
 		 * Names of top-level global variables (defvar/defparameter/defconstant and
@@ -6994,7 +6997,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.packageUseTable = builder.packageUseTable;
 			this.symbolPrintTable = builder.symbolPrintTable;
 			this.structAccessors = builder.structAccessors;
-			this.closRegistry = builder.closRegistry;
+			this.closRegistry = builder.closRegistry != null ? builder.closRegistry : new ClosRegistry();
+			this.captureMemo = builder.captureMemo;
 			this.globals = builder.globals;
 			this.nestedDefunNames = builder.nestedDefunNames;
 			this.specialVars = builder.specialVars;
@@ -7334,7 +7338,9 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			private Map<String, Integer> structAccessors = Map.of();
 
-			private ClosRegistry closRegistry = new ClosRegistry();
+			private @Nullable ClosRegistry closRegistry;
+
+			private final FreeVarAnalyzer.CaptureMemo captureMemo = new FreeVarAnalyzer.CaptureMemo();
 
 			private Set<String> globals = Set.of();
 

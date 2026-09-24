@@ -279,10 +279,11 @@ public final class BuiltinFunctionWrappers {
 	 */
 	public static Set<String> designatedValueProducers(List<LispVal> program,
 			java.util.Collection<LispVal> extraForms) {
+		Set<String> spelled = functionDesignatorNames(program);
+		spelled.addAll(functionDesignatorNames(extraForms));
 		Set<String> named = new java.util.HashSet<>();
 		for (String op : VALUE_PUBLISHING_PRODUCERS) {
-			if (program.stream().anyMatch(expr -> referencesFunctionDesignator(expr, op))
-					|| extraForms.stream().anyMatch(expr -> referencesFunctionDesignator(expr, op))) {
+			if (spelled.contains(op)) {
 				named.add(op);
 			}
 		}
@@ -357,6 +358,50 @@ public final class BuiltinFunctionWrappers {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Every name the forms take as a first-class function value: the answers of
+	 * {@link #referencesFunctionValue} for all names in one walk, for a gate that asks
+	 * about many operators (each asking walked the whole program again).
+	 * @param forms the expressions to scan
+	 * @return the names some {@code (function name)} form spells
+	 */
+	public static Set<String> functionValueNames(Iterable<? extends LispVal> forms) {
+		Set<String> names = new java.util.HashSet<>();
+		for (LispVal form : forms) {
+			collectDesignatorNames(form, false, names);
+		}
+		return names;
+	}
+
+	/**
+	 * Every name the forms spell as a function designator: the answers of
+	 * {@link #referencesFunctionDesignator} for all names in one walk.
+	 * @param forms the expressions to scan
+	 * @return the names some {@code (function name)} or {@code (quote name)} form spells
+	 */
+	public static Set<String> functionDesignatorNames(Iterable<? extends LispVal> forms) {
+		Set<String> names = new java.util.HashSet<>();
+		for (LispVal form : forms) {
+			collectDesignatorNames(form, true, names);
+		}
+		return names;
+	}
+
+	// The walk of referencesFunctionValue / referencesFunctionDesignator (every cons
+	// reachable through car and cdr), collecting instead of matching one name.
+	private static void collectDesignatorNames(LispVal expr, boolean quoted, Set<String> names) {
+		LispVal x = expr;
+		while (x instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op
+					&& (LispNames.FUNCTION.equals(op.name()) || quoted && LispNames.QUOTE.equals(op.name()))
+					&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol sym) {
+				names.add(sym.name());
+			}
+			collectDesignatorNames(cons.car(), quoted, names);
+			x = cons.cdr();
+		}
 	}
 
 	/**

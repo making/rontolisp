@@ -113,7 +113,7 @@ public final class WasmImportInjector {
 	// payload when the module had none), so the new imports occupy function indices
 	// 0..shift-1 ahead of any existing function imports.
 	private static byte[] prependImports(byte @Nullable [] existingPayload, List<HostImport> hostImports) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		int existingCount = 0;
 		byte[] existingEntries = new byte[0];
 		if (existingPayload != null) {
@@ -136,7 +136,7 @@ public final class WasmImportInjector {
 	// index, everything else shifts past the injected imports.
 	private static byte[] rewriteCode(byte[] payload, int shift, int placeholderBase) {
 		List<byte[]> entries = WasmSections.parseCodeEntries(payload);
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		WasmSections.writeU(body, entries.size());
 		for (byte[] entry : entries) {
 			byte[] rewritten = rewriteBody(entry, shift, placeholderBase);
@@ -151,7 +151,7 @@ public final class WasmImportInjector {
 		if (sites.isEmpty()) {
 			return entry;
 		}
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new UnsynchronizedByteArrayOutputStream();
 		int cursor = 0;
 		for (WasmSections.CallSite cs : sites) {
 			WasmSections.writeRaw(out, WasmSections.slice(entry, cursor, cs.operandStart()));
@@ -166,7 +166,7 @@ public final class WasmImportInjector {
 	private static byte[] shiftExports(byte[] payload, int shift) {
 		int[] p = { 0 };
 		int count = WasmSections.readU(payload, p);
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		WasmSections.writeU(body, count);
 		for (int i = 0; i < count; i++) {
 			int nameStart = p[0];
@@ -183,7 +183,7 @@ public final class WasmImportInjector {
 	private static byte[] shiftStart(byte[] payload, int shift) {
 		int[] p = { 0 };
 		int index = WasmSections.readU(payload, p);
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		WasmSections.writeU(body, index + shift);
 		return body.toByteArray();
 	}

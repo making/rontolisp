@@ -344,7 +344,7 @@ final class WasmVecSimdRuntimeBuilder {
 	// =
 	// count, 1 = kind. Locals: 2 = shift (i32).
 	private static byte[] buildVNewBody() {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int count = 0, kind = 1, shift = 2;
 		// shift = kind + 1 (1 = f64x2, 2 = f32x4)
@@ -380,7 +380,7 @@ final class WasmVecSimdRuntimeBuilder {
 	// immediates, so they cannot be computed). Params: 0 = vb, 1 = idx.
 	// Locals: 2 = lane (i32), 3 = v (v128), 4 = groups.
 	private static byte[] buildVGetBody() {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int vb = 0, idx = 1, lane = 2, v = 3, groups = 4;
 		vblockGroups(w, vb, groups);
@@ -421,7 +421,7 @@ final class WasmVecSimdRuntimeBuilder {
 	// the interpreter and the JVM produce). Params: 0 = vb, 1 = idx, 2 = val.
 	// Locals: 3 = g, 4 = lane (i32); 5 = fv (f32); 6 = v (v128); 7 = groups.
 	private static byte[] buildVSetBody() {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int vb = 0, idx = 1, val = 2, g = 3, lane = 4, fv = 5, v = 6, groups = 7;
 		vblockGroups(w, vb, groups);
@@ -515,7 +515,7 @@ final class WasmVecSimdRuntimeBuilder {
 		int params = into ? 3 : 2;
 		int a = into ? 1 : 0;
 		int bArg = into ? 2 : 1;
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int count = params, kind = params + 1, shift = params + 2, ng = params + 3, g = params + 4, rem = params + 5;
 		int old = params + 6, cur = params + 7; // v128
@@ -550,7 +550,7 @@ final class WasmVecSimdRuntimeBuilder {
 		int params = into ? 3 : 2;
 		int a = into ? 1 : 0;
 		int bArg = into ? 2 : 1;
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int count = params, kind = params + 1, shift = params + 2, ng = params + 3, g = params + 4, rem = params + 5;
 		int old = params + 6, cur = params + 7; // v128
@@ -587,7 +587,7 @@ final class WasmVecSimdRuntimeBuilder {
 		int v = into ? 1 : 0;
 		int loArg = into ? 2 : 1;
 		int hiArg = into ? 3 : 2;
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int count = params, kind = params + 1, shift = params + 2, ng = params + 3, i = params + 4;
 		int lo = params + 5, hi = params + 6, t = params + 7; // f64
@@ -652,7 +652,7 @@ final class WasmVecSimdRuntimeBuilder {
 		int params = into ? 3 : 2;
 		int v = into ? 1 : 0;
 		int sArg = into ? 2 : 1;
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int count = params, kind = params + 1, shift = params + 2, ng = params + 3, g = params + 4, rem = params + 5;
 		int s = params + 6; // f64
@@ -691,7 +691,7 @@ final class WasmVecSimdRuntimeBuilder {
 	private static byte[] buildUnaryLane(int uop, boolean into, int vecBase, int scalar) {
 		int params = into ? 2 : 1;
 		int v = into ? 1 : 0;
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int count = params, kind = params + 1, shift = params + 2, ng = params + 3, g = params + 4, rem = params + 5;
 		int old = params + 6, cur = params + 7; // v128
@@ -799,7 +799,7 @@ final class WasmVecSimdRuntimeBuilder {
 	private static byte[] buildUnaryElement(int scalarOp, boolean into, int vecBase, int scalar) {
 		int params = into ? 2 : 1;
 		int v = into ? 1 : 0;
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int count = params, kind = params + 1, shift = params + 2, ng = params + 3, i = params + 4;
 		int f64Base = params + 5; // f64 scratch
@@ -872,7 +872,7 @@ final class WasmVecSimdRuntimeBuilder {
 	// (vec:sum v) -> a boxed TYPE_FLOAT.
 	// i32: count, kind, shift, ng, g. f64: sum. f32: sumF. v128: acc. $v128arr: gv.
 	private static byte[] buildSum() {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int count = 1, kind = 2, shift = 3, ng = 4, g = 5;
 		int sum = 6; // f64
@@ -898,7 +898,7 @@ final class WasmVecSimdRuntimeBuilder {
 	// (vec:dot a b) -> a boxed TYPE_FLOAT.
 	// i32: count, kind, shift, ng, g. f64: sum. f32: sumF. v128: acc. $v128arr: ga, gb.
 	private static byte[] buildDot(int scalar) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int count = 2, kind = 3, shift = 4, ng = 5, g = 6;
 		int sum = 7; // f64
@@ -962,7 +962,7 @@ final class WasmVecSimdRuntimeBuilder {
 		int params = into ? 3 : 2;
 		int mat = into ? 1 : 0;
 		int vec = into ? 2 : 1;
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int d = params, n = params + 1, kind = params + 2, shift = params + 3, nrg = params + 4;
 		int row = params + 5, flat = params + 6, base = params + 7, off = params + 8, k = params + 9;
@@ -1524,7 +1524,7 @@ final class WasmVecSimdRuntimeBuilder {
 	// above assumes: i32, f64, f32, v128, (ref null eq), (ref null $v128arr).
 	static byte[] withLocals(byte[] body, int i32Count, int f64Count, int f32Count, int v128Count, int eqCount,
 			int groupsCount) {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		int groups = (i32Count > 0 ? 1 : 0) + (f64Count > 0 ? 1 : 0) + (f32Count > 0 ? 1 : 0) + (v128Count > 0 ? 1 : 0)
 				+ (eqCount > 0 ? 1 : 0) + (groupsCount > 0 ? 1 : 0);

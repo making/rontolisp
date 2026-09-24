@@ -103,7 +103,7 @@ public final class ComponentWriter {
 	/** Primitive value type code for {@code string}. */
 	public static final int VT_STRING = 0x73;
 
-	private final ByteArrayOutputStream out = new ByteArrayOutputStream();
+	private final ByteArrayOutputStream out = new UnsynchronizedByteArrayOutputStream();
 
 	private final WasmWriter writer = new WasmWriter(this.out);
 
@@ -225,7 +225,7 @@ public final class ComponentWriter {
 	 * @return the encoded bytes
 	 */
 	public static byte[] enc(Consumer<WasmWriter> consumer) {
-		final ByteArrayOutputStream buf = new ByteArrayOutputStream();
+		final ByteArrayOutputStream buf = new UnsynchronizedByteArrayOutputStream();
 		consumer.accept(new WasmWriter(buf));
 		return buf.toByteArray();
 	}

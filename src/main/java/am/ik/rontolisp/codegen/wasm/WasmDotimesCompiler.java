@@ -107,7 +107,8 @@ final class WasmDotimesCompiler {
 			return false;
 		}
 		if (WasmCountedLoopCompiler.assignsName(scoped, name)
-				|| FreeVarAnalyzer.findCapturedVars(scoped, Set.of(name), ctx.functions.keySet()).contains(name)) {
+				|| FreeVarAnalyzer.findCapturedVars(scoped, Set.of(name), ctx.functions.keySet(), ctx.captureMemo)
+					.contains(name)) {
 			// A captured counter needs a cell a nested lambda can read; an assigned one
 			// needs somewhere to put a value that is not a fixnum. Either way the
 			// ordinary expansion owns the shape.

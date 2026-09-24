@@ -20,7 +20,7 @@ final class WasmGensymRuntimeBuilder {
 	}
 
 	static byte[] build() {
-		final ByteArrayOutputStream body = new ByteArrayOutputStream();
+		final ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		final WasmWriter w = new WasmWriter(body);
 		final int OFF = 0, LEN = 1, N = 2, START = 3, CUR = 4, T = 5, D = 6, K = 7;
 		// six extra i32 locals

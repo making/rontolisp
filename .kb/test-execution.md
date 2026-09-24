@@ -98,6 +98,19 @@ suite time, sequential -> concurrent (range of four concurrent runs, all green):
 | `JvmBFloat16ArrayTest` | 30 | 24 s | 8 s |
 | `JvmQuantizedMatrixTest` | 10 | 24 s | 14-15 s |
 
+## What `WasmLispCompilerIntegrationTest` spends its CPU on
+
+Its ~3,100 `WasmLispCompiler.compile` calls, not wasmtime: measured 2026-09-24 with a
+per-thread CPU probe around `compile`, 713-728 CPU-s of the class's ~1,650 (user+sys), and a
+JFR profile put ~40% of that in `shakeCore`'s passes over the pre-shake module (which carries
+the whole runtime: ~240 KB for a 3-line program, ~5.6 KB after the shake). After the
+compile-CPU series (dead-body skipping in the sink and the fold, the JIT-sized operator
+dispatch, the worklist fold, the scope memos -- `.kb/wasm-ref-type-fold.md`,
+`.kb/optimize-dead-code-elimination.md`, `.kb/adding-primitives.md`): **427 CPU-s** of
+compile, the class 1,320-1,390 -> ~1,025 CPU-s and 54-61 s -> 40-42 s of its own elapsed
+time on the same machine. **A hot method past 8,000 bytes of bytecode runs interpreted**
+(`HugeMethodTest`); that alone was 12% of a WASM compile.
+
 ## Two builds on one machine: every shared constant collides
 
 Several sessions build this repo at once, one worktree each, and `/tmp` and the port space
