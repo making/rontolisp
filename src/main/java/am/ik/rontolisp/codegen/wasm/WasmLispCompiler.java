@@ -32,6 +32,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.PackageResolver;
+import am.ik.rontolisp.compiler.AstOutliner;
 import am.ik.rontolisp.compiler.DeadTypeBranchPruner;
 import am.ik.rontolisp.compiler.ToplevelStatements;
 import am.ik.rontolisp.compiler.BoundaryType;
@@ -2668,18 +2669,74 @@ public final class WasmLispCompiler implements LispCompiler {
 	// shared monotonic allocator, see src/wasm-component/mem.wat).
 	private static final int COMPONENT_DATA_BASE_OFFSET = 0x60000;
 
+	/**
+	 * A defun body over this is cut into pieces ({@link AstOutliner}): the bound of
+	 * {@code .kb/wasm-function-body-size.md}. Past it a body costs Cranelift gigabytes to
+	 * compile, and its native frame alone can exhaust wasmtime's default 512 KiB stack --
+	 * fast-http's {@code parse-header-field-and-value} came out at 748 KB and trapped
+	 * with "call stack exhausted" nine frames deep.
+	 */
+	static final int FUNCTION_BODY_LIMIT_BYTES = 256 * 1024;
+
+	/** What an outlined piece should come in at: the top-level chunk target. */
+	private static final int OUTLINE_TARGET_BYTES = 48 * 1024;
+
+	/**
+	 * Below this another whole compile is not worth it: the function is one the pass
+	 * cannot cut small enough, and it stays over the limit.
+	 */
+	private static final int OUTLINE_TARGET_FLOOR_BYTES = 16 * 1024;
+
+	/**
+	 * An attempt measured a defun body over {@link #FUNCTION_BODY_LIMIT_BYTES}; the next
+	 * one cuts it at the AST level. Never escapes {@link #compile(List)}.
+	 */
+	private static final class FunctionTooLarge extends RuntimeException {
+
+		private final Map<String, Integer> oversized;
+
+		private FunctionTooLarge(Map<String, Integer> oversized) {
+			super(null, null, false, false);
+			this.oversized = oversized;
+		}
+
+	}
+
 	@Override
 	public byte[] compile(List<LispVal> program) {
-		try {
-			return compileProgram(program);
-		}
-		finally {
-			// The census is a per-compilation answer; do not keep the program alive.
-			SymbolCensus.LAST.remove();
+		// The JVM backend's outlining loop (JvmLispCompiler.compile): a function
+		// measured over the limit is cut by the backend-shared AstOutliner and the
+		// program compiled again. The map strictly grows -- a name is added, or its
+		// target shrinks toward the floor -- so the loop terminates. An attempt's
+		// warnings print only when it is the one that ships.
+		Map<String, AstOutliner.Budget> outline = new LinkedHashMap<>();
+		while (true) {
+			CompileWarnings.startAttempt();
+			try {
+				byte[] bytes = compileProgram(program, outline);
+				CompileWarnings.flushAttempt();
+				return bytes;
+			}
+			catch (FunctionTooLarge signal) {
+				CompileWarnings.discardAttempt();
+				signal.oversized.forEach((name, size) -> {
+					AstOutliner.Budget known = outline.get(name);
+					outline.put(name, known == null ? new AstOutliner.Budget(size, OUTLINE_TARGET_BYTES)
+							: new AstOutliner.Budget(known.measuredBytes(), known.targetBytes() * 2 / 3));
+				});
+			}
+			catch (RuntimeException | Error ex) {
+				CompileWarnings.flushAttempt();
+				throw ex;
+			}
+			finally {
+				// The census is a per-compilation answer; do not keep the program alive.
+				SymbolCensus.LAST.remove();
+			}
 		}
 	}
 
-	private byte[] compileProgram(List<LispVal> program) {
+	private byte[] compileProgram(List<LispVal> program, Map<String, AstOutliner.Budget> outlineBudgets) {
 		// The load-context brackets LoadInliner put around each spliced file become
 		// assignments of *load-pathname* / *load-truename* -- when the program reads
 		// either; otherwise they are dropped here and nothing downstream sees them.
@@ -2691,6 +2748,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the rest of compilation sees canonical names.
 		PackageResolver packageResolver = new PackageResolver();
 		program = packageResolver.resolveProgram(program);
+		// A quoted designator of a wrapped built-in becomes #'name before any wrapper
+		// gate scans the program for that spelling (compiler/FunctionDesignators).
+		program = am.ik.rontolisp.compiler.FunctionDesignators.normalizeBuiltinDesignators(program);
 		// The printer's accessibility table (.kb/pretty-printer.md), as on the JVM
 		// backend: baked only for a program that can print under a package other than
 		// cl-user.
@@ -3068,6 +3128,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// desugaring could turn one on without the other, which is a %obj-new with no
 		// instance type behind it.
 		final boolean usesStreamValues = LispMacroExpander.mayCreateStreamValues(program);
+		// Cut a defun an earlier attempt measured over FUNCTION_BODY_LIMIT_BYTES into
+		// pieces, exactly where the JVM backend cuts one over HotSpot's limit: before
+		// the lowering below, which turns a go/return-from LEAVING an outlined form into
+		// a non-local exit. Empty (a no-op) on a first attempt.
+		AstOutliner.Result astOutlined = AstOutliner.outline(program, outlineBudgets);
+		program = astOutlined.program();
 		// Lower a return-from that crosses a lambda boundary into an EH-based non-local
 		// exit (before desugarProgram, so the %fn-block wrap for a same-function
 		// return-from naturally nests around the injected let/%nlx-catch).
@@ -4179,6 +4245,29 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			// Rebuild with correct local declarations (extra locals beyond env+params)
 			userFunctionBodies.add(buildLocalsAndPatch(funcCtx, defun.paramNames.size() + 1, funcBody));
+		}
+
+		// Every defun body exists now, so this is where a REAL size exists to check (a
+		// body's bytes per AST node vary by an order of magnitude, because the surface
+		// macros expand during this pass). Only a defun is reported: a lambda's
+		// generated name cannot be pointed back at a form for the next attempt to cut.
+		Map<String, Integer> tooLarge = new LinkedHashMap<>();
+		for (int i = 0; i < defuns.size(); i++) {
+			byte[] body = userFunctionBodies.get(i);
+			if (body == null || body.length <= FUNCTION_BODY_LIMIT_BYTES) {
+				continue;
+			}
+			String name = defuns.get(i).name;
+			AstOutliner.Budget budget = outlineBudgets.get(name);
+			// Ask again only when there is something new to ask: an untried function,
+			// or one this attempt really did cut and whose target can still shrink.
+			if (budget == null
+					|| (astOutlined.outlined().contains(name) && budget.targetBytes() > OUTLINE_TARGET_FLOOR_BYTES)) {
+				tooLarge.put(name, body.length);
+			}
+		}
+		if (!tooLarge.isEmpty()) {
+			throw new FunctionTooLarge(tooLarge);
 		}
 
 		// Every body from here on is the user's program again (the lambda pass included:

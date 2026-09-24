@@ -18,7 +18,12 @@ compile and covers every leg of the backend x `--simd` matrix. Raise it only wit
 on the smallest CI runner, updating these numbers in the same change.
 
 - **Two bodies grow with the program**: the top level (with source length) and the
-  DISPATCH LADDER (with function COUNT).
+  DISPATCH LADDER (with function COUNT). **A third grows with one definition: a DEFUN whose
+  body is one big form** -- fast-http's `parse-header-field-and-value`, a `match-i-case`
+  decision tree, came out at 748 KB (1,842 locals), and its native frame alone overflowed
+  wasmtime's default 512 KiB stack: `wasm trap: call stack exhausted` NINE frames deep
+  (between 512 KiB and 700 KiB of `-W max-wasm-stack` ran it). Every lack-request body parse
+  on WASM died there (2026-09-24). Bounded by outlining, below.
 - **The guard must measure the `--component` build separately** — an async top level
   compiles as an entry+resume pair, so either build can be larger.
   `WasmModuleInspector.largestFunctionBodySize` walks a component's embedded core modules.
@@ -27,6 +32,20 @@ on the smallest CI runner, updating these numbers in the same change.
   error but a reclaimed 16 GB runner (`The runner has received a shutdown signal.`, no
   stderr, zero exit, peers cancelled), and macOS runners survive the same corpus;
   `ulimit -v` cannot bound it (wasmtime reserves 9-17 GB of address space).
+
+## Keeping a defun bounded
+`WasmLispCompiler.compile` runs the JVM backend's outlining loop: after Pass 2a every defun
+body over `FUNCTION_BODY_LIMIT_BYTES` (the 256 KiB bound) is reported, and the compile runs
+again with `AstOutliner` cutting it (`Budget(measured, 48 KiB)`, the target shrinking by 2/3
+per retry down to a 16 KiB floor; a function the pass does not cut is left over the limit
+rather than retried). Same cut, same position (before `CrossLambdaExitLowering`) as the JVM
+(`.kb/hot-path-method-size.md`); warnings buffer per attempt (`CompileWarnings`). The 748 KB
+function becomes pieces under 107 KB (the next body in that program); a 1.2 MB balanced
+decision tree, pieces of ~26 KB. Cost: one extra compile for a program that has such a defun
+(lack.lisp 14 s -> 31 s). **Gap:** there is no WASM tail-spine splitter (`JvmBodyOutliner`), so
+a defun that is one long RUN of statements stays whole. Pins
+`WasmToplevelChunkingTest#aDecisionTreeDefunIsNotEmittedAsOneFunctionBody`,
+`WasmLispCompilerIntegrationTest#anOutlinedDecisionTreeDefunStillAnswers`.
 
 ## Keeping the top level bounded
 `WasmToplevelEmit.emit` (Pass 2b) closes a chunk once its body passes

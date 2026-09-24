@@ -1,6 +1,6 @@
 ;; Preview-1 bridge core module for serve components (rontolisp:http-handler +
 ;; --component), on WASI 0.3. Instantiated between the shared memory and the rontolisp
-;; core, it exports the fifteen preview1 functions the core imports, implemented over the
+;; core, it exports the seventeen preview1 functions the core imports, implemented over the
 ;; interfaces the wasi:http@0.3 service world provides:
 ;;
 ;;   random_get       -> wasi:random/random@0.3.0 get-random-u64 (8 bytes at a time)
@@ -26,6 +26,8 @@
 ;;                       filesystem either: %delete-file / %rename-file read it as
 ;;                       nil, and %make-directories signals through its call-site
 ;;                       error like _open does)
+;;   file_position_get / file_position_set -> errno 8 (EBADF), for the same reason:
+;;                       file-position answers nil for a descriptor
 ;;   fd_filestat_get  -> errno 8 (EBADF): no fd here names a file, so file-length reads
 ;;                       it as "cannot be determined" and answers nil
 ;;   fd_prestat_get / fd_prestat_dir_name -> errno 8 (EBADF): no preopen exists, and
@@ -177,6 +179,15 @@
   (func $fd_filestat_get (param $fd i32) (param $buf i32) (result i32)
     (i32.const 8))
 
+  ;; file_position_get(fd, off) / file_position_set(fd, off) -> errno 8 (EBADF): the
+  ;; base adapter's tracked-offset pair, which a core imports whenever the program calls
+  ;; file-position. No fd here names a file, so the core answers nil for a descriptor --
+  ;; a string stream's position never reaches these, the core answers it itself.
+  (func $file_position_get (param $fd i32) (param $off i32) (result i32)
+    (i32.const 8))
+  (func $file_position_set (param $fd i32) (param $off i32) (result i32)
+    (i32.const 8))
+
   ;; path_create_directory(fd, path, len) -> errno 76: no filesystem in the service
   ;; world. The core's _make_directories verifies by opening, which fails here too,
   ;; so %make-directories signals through its call-site error.
@@ -244,4 +255,6 @@
   (export "fd_filestat_get" (func $fd_filestat_get))
   (export "path_create_directory" (func $path_create_directory))
   (export "path_unlink_file" (func $path_unlink_file))
-  (export "path_rename" (func $path_rename)))
+  (export "path_rename" (func $path_rename))
+  (export "file_position_get" (func $file_position_get))
+  (export "file_position_set" (func $file_position_set)))

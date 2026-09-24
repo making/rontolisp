@@ -300,7 +300,7 @@ class PostmodernE2eTest {
 		String table = "runtime_sql_" + backend.name().toLowerCase(Locale.ROOT);
 		return (host, port) -> """
 				(ql:quickload "postmodern")
-				(format t "~a~%" (pomo:sql (:insert-rows-into 'fruits :columns 'id :values '((1) (2)))))
+				(format t "~a~%%" (pomo:sql (:insert-rows-into 'fruits :columns 'id :values '((1) (2)))))
 				(pomo:with-connection '("%s" "%s" "%s" "%s" :port %d)
 				  (pomo:execute (:drop-table :if-exists '%s))
 				  (pomo:execute (:create-table '%s ((id :type integer :primary-key t)

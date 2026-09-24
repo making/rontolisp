@@ -125,14 +125,17 @@ public final class WasmComponentBuilder {
 	private static final String IFACE_STDERR = "wasi:cli/stderr@0.3.0";
 
 	/**
-	 * The fifteen {@code wasi_snapshot_preview1} functions the adapter implements, in its
-	 * own export order. A core module imports a subset of them (after {@code --optimize},
-	 * only what it reaches), and that subset drives everything below.
+	 * The seventeen {@code wasi_snapshot_preview1} functions the adapter implements, in
+	 * its own export order. A core module imports a subset of them (after
+	 * {@code --optimize}, only what it reaches), and that subset drives everything below.
+	 * The serve component's preview1 bridge ({@code adapter-http-server-p1.wat}) must
+	 * export every one of them too, stubbed where the service world has no counterpart:
+	 * it is the instantiation argument the same core imports resolve against.
 	 */
-	private static final List<String> PREVIEW1_FUNCS = List.of("fd_write", "fd_read", "path_open", "fd_readdir",
-			"fd_close", "random_get", "clock_time_get", "environ_sizes_get", "environ_get", "fd_prestat_get",
-			"fd_prestat_dir_name", "fd_filestat_get", "path_create_directory", "path_unlink_file", "path_rename",
-			"file_position_get", "file_position_set");
+	static final List<String> PREVIEW1_FUNCS = List.of("fd_write", "fd_read", "path_open", "fd_readdir", "fd_close",
+			"random_get", "clock_time_get", "environ_sizes_get", "environ_get", "fd_prestat_get", "fd_prestat_dir_name",
+			"fd_filestat_get", "path_create_directory", "path_unlink_file", "path_rename", "file_position_get",
+			"file_position_set");
 
 	/**
 	 * The adapter's NARROW implementations of the two fd-polymorphic entry points,
@@ -1764,11 +1767,49 @@ public final class WasmComponentBuilder {
 	static byte[] memModuleFor(byte[] coreModule, boolean realloc) {
 		byte[] mem = realloc ? MEM_MODULE
 				: WasmTreeShaker.shake(WasmExports.retain(MEM_MODULE, java.util.Map.of("memory", "memory")));
-		int needed = requiredMemPagesFromCore(coreModule);
-		if (needed <= 6) {
-			return mem;
+		return memModuleAtLeast(mem, requiredMemPagesFromCore(coreModule));
+	}
+
+	/**
+	 * A memory module sized for the core module it serves: {@code mem} itself when its
+	 * memory already declares at least the pages the core's {@code "mem"/"memory"} import
+	 * asks for, otherwise a copy with the minimum raised to that. Every component whose
+	 * core imports its memory from such a module needs this -- the core's minimum grows
+	 * with its static data ({@code WasmLispCompiler.memoryMinPages}), and a module
+	 * declaring less fails instantiation with "mismatch in memory limits".
+	 * @param mem the memory module's bytes
+	 * @param coreModule the rontolisp core module importing the memory
+	 * @return the memory module to embed
+	 */
+	static byte[] memModuleFor(byte[] mem, byte[] coreModule) {
+		return memModuleAtLeast(mem, requiredMemPagesFromCore(coreModule));
+	}
+
+	private static byte[] memModuleAtLeast(byte[] mem, int pages) {
+		return pages <= memoryMinPagesOf(mem) ? mem : patchMemModuleMinPages(mem, pages);
+	}
+
+	/**
+	 * The minimum page count of the first memory a module's memory section declares, or
+	 * zero when it declares none.
+	 */
+	static int memoryMinPagesOf(byte[] module) {
+		int pos = 8; // \0asm + version
+		while (pos < module.length) {
+			int id = module[pos] & 0xFF;
+			long[] sz = readLeb128(module, pos + 1);
+			int bodyPos = (int) sz[1];
+			if (id == 5) {
+				long[] count = readLeb128(module, bodyPos);
+				if (count[0] == 0) {
+					return 0;
+				}
+				// limits: a flags byte, then the minimum.
+				return (int) readLeb128(module, (int) count[1] + 1)[0];
+			}
+			pos = bodyPos + (int) sz[0];
 		}
-		return patchMemModuleMinPages(mem, needed);
+		return 0;
 	}
 
 	/**

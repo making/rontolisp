@@ -174,6 +174,37 @@ class WasmToplevelChunkingTest {
 	}
 
 	/**
+	 * A defun whose body is one DECISION TREE -- the shape fast-http's
+	 * {@code match-i-case} header parser expands to -- with a leaf per value below
+	 * {@code leaves}, balanced so the nesting stays shallow.
+	 */
+	static String decisionTreeDefun(String name, int leaves) {
+		return "(defun %s (x) %s)".formatted(name, decisionTree(0, leaves));
+	}
+
+	private static String decisionTree(int lo, int hi) {
+		if (hi - lo == 1) {
+			return "(list %d (* x %d) (+ x %d 7) (- x %d))".formatted(lo, lo, lo, lo);
+		}
+		int mid = (lo + hi) / 2;
+		return "(if (< x %d) %s %s)".formatted(mid, decisionTree(lo, mid), decisionTree(mid, hi));
+	}
+
+	@Test
+	void aDecisionTreeDefunIsNotEmittedAsOneFunctionBody() {
+		// One defun, no top-level length at all: the body is a single branch form, which
+		// no top-level chunker reaches. fast-http's parse-header-field-and-value came out
+		// at 748 KB this way, and its native frame alone exhausted wasmtime's default
+		// stack. This one is 1.2 MB emitted whole.
+		String source = decisionTreeDefun("big-tree", 4096) + "\n(print (big-tree 4000))\n";
+
+		int largest = WasmModuleInspector.largestFunctionBodySize(compile(source));
+
+		assertThat(largest).as("largest emitted function body of a program with one oversized decision-tree defun")
+			.isLessThanOrEqualTo(MAX_FUNCTION_BODY_BYTES);
+	}
+
+	/**
 	 * The cut rule itself: a cut waits while a name bound in the current chunk is still
 	 * read by a later form, and closes past the last such reader. A quoted occurrence is
 	 * not a read.

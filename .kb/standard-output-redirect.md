@@ -65,6 +65,11 @@ their own stream tables, so both **reserve handles 0/1/2** (`Environment.registe
   `_freshLine`, `_forceOutput`, `_close`, `_openStreamP`. Branches AND the table reservation
   gate on `programUsesSymbol(program, *ERROR-OUTPUT*)`; `JvmWarnCompiler` keeps its direct
   `System.err.println` unless the program BINDS the variable.
+  **The gate is "named OR a global"**: `warn` takes the `_writeLine` redirect whenever the
+  variable is in `ctx.globals`, and a thread-using program puts it there without naming it
+  (the make-thread stream specials), so a `(warn 'cond-class ...)` there once wrote through a
+  null `_streams` (cl-postgres' `postgresql-warning` under postmodern, 2026-09-24).
+  `JvmLispCompilerTest#compileWarnOfAConditionClassInAThreadUsingProgram`.
   **Trap: the reserved SLOTS must exist from the start, not just the count** -- a lazy
   `_streams` left the table null while handle 2 was live and `_writeString`'s socket probe
   dereferenced it. `<clinit>` allocates them whenever `usesErrorOutput`.

@@ -160,7 +160,15 @@ guess.
   form's OWN keys are excluded from the references it contributes.
 - **The generic gate is absent for a CL protocol name** (`PackageRegistry.CL_SYMBOLS`):
   `initialize-instance`/`print-object`/`close`/... are called by SYNTHESIZED code, so those
-  methods are kept on the specializer gate alone.
+  methods are kept on the specializer gate alone. **So are the `closer-mop` metaclass protocol
+  generics the ensure-class driver calls** (`METACLASS_PROTOCOL_GENERICS`: the six
+  `macro/mop-protocol.lisp` gives a system default method -- `validate-superclass`,
+  `direct-`/`effective-slot-definition-class`, `compute-effective-slot-definition`,
+  `finalize-inheritance`, `ensure-class-using-class`). Until 2026-09-24 they were gated on a
+  name no program spells, so postmodern's `dao-class` slot methods were pruned since
+  `dc2a009de` (2026-08-09): every DAO slot came out a standard one on the compile paths and
+  the class failed "has a key that is not also a slot"
+  (`LibraryDefunPrunerTest#aMetaclassProtocolMethodHasNoGenericGate`).
 - **The specializer gate applies only when the generic's method set stays closed**: an OWNED
   generic or a CL protocol name. A METHOD-ONLY local generic keeps its methods once the name is
   live, or a kept call site compiles against no definition.

@@ -138,6 +138,22 @@ first-class values -- internal encoding, not a real user definition (Lisp-2).
   `LispMacroExpander.needsRuntimeTypep` and `reachesScharSet` see the `(function name)`
   spelling. `#'map` / `#'map-into` force the JVM array gate
   (`JvmLispCompiler.programUsesAnyArrayOp`).
+- **Every such gate reads ONE spelling, `(function name)`, because both backends rewrite a
+  quoted designator of a wrapped built-in into it first**
+  (`FunctionDesignators.normalizeBuiltinDesignators`, right after package resolution in
+  `Jvm`/`WasmLispCompiler.compile`). The code generators always treated `'name` in a designator
+  position as `#'name` (`FunctionDesignators.normalize`), but only at emission -- after the
+  gates -- so `(apply 'concatenate 'string parts)` (postmodern's `escape-sql-expression`) or
+  `(apply 'format nil ...)` failed with `Cannot compile: CONCATENATE` whenever nothing else in
+  the program spelled `#'concatenate` (2026-09-24, `.todo/954`). Scope: the designator argument
+  of the standard operators that call one (`funcall`/`apply`/`multiple-value-call`, the map and
+  `every` families, `reduce`, `sort`/`stable-sort`, `maphash`, the `-if`/`-if-not` sequence and
+  tree functions), names in `BuiltinFunctionWrappers.names()` or `REFERENCE_GATED_FUNCTIONS`
+  only (a standard function cannot be bound locally, CLHS 11.1.2.1.2), not under a local
+  `flet`/`labels`/`macrolet` of the name, not in quoted data, not in a `case`-family clause's
+  keys. `:key`/`:test` keyword values are NOT rewritten (a plist datum spells the same shape).
+  Pins `JvmLispCompilerTest#compileQuotedDesignatorsOfReferenceGatedBuiltins` and
+  `WasmLispCompilerIntegrationTest#quotedDesignatorsOfReferenceGatedBuiltins`.
 - **A wrapper's arity is the OPERATOR's arity**, not the convenient shape: anything the operator
   decides STATICALLY (argument count, result type, file mode) is fixed while the caller's
   arguments are runtime values. Trap: a narrower wrapper does not signal -- surplus arguments go

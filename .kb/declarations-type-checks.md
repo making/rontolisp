@@ -254,6 +254,17 @@ table is GENERATED from it. **Change them together.**
   `types-and-classes` 2026-09-22: +18 (`SUBTYPEP.INTEGER.*`), 0 regressed. Pins
   `LispEvaluatorTest#subtypepDecidesIntegerIntervals` + the JVM / WASM
   `compileSubtypepIntegerIntervals` twins.
+- **A CIRCULAR `deftype` is an unknown type name, never an endless expansion** (2026-09-24,
+  `.todo/954`). `subtypep` threads the deftype names being expanded on the current path and does
+  not expand one again, so postmodern's `(deftype tsvector () 'tsvector)` answers nil against
+  everything but itself, and a loop through a compound (`a` -> `(or b integer)`, `b` ->
+  `(or a string)`) still finds the `integer` branch. SBCL hangs on the same query. Load-bearing
+  because `subtypepAncestorTableForms` asks about EVERY registered deftype name: one circular
+  name overflowed the stack of every JVM/WASM compile of a program with a computed `subtypep`
+  (all of postmodern). `typep` over such a name still recurses (undefined in CL; nothing loads
+  one into a `typep`). Pins `LispEvaluatorTest#evalSubtypepOverCircularDeftypes`,
+  `JvmLispCompilerTest#compileRuntimeSubtypepBesideCircularDeftypes`,
+  `WasmLispCompilerIntegrationTest#runtimeSubtypepBesideCircularDeftypes`.
 - **Trap:** a lattice LEAF with no `SUBTYPEP_PARENTS` entry (`hash-table`, `function`, `package`,
   `stream`, `atom`) had no ancestor-table row, so a runtime `(subtypep 'hash-table 'hash-table)`
   answered nil on the compile paths and `T` on the interpreter. `subtypepUniverse` now adds every

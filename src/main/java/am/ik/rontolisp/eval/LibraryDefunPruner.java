@@ -554,6 +554,15 @@ public final class LibraryDefunPruner {
 			LispNames.VEC_PKG);
 
 	/**
+	 * The {@code closer-mop} generics the metaclass driver calls on a user metaclass --
+	 * exactly the ones {@code macro/mop-protocol.lisp} gives a system default method.
+	 */
+	private static final Set<String> METACLASS_PROTOCOL_GENERICS = Set.of(LispNames.VALIDATE_SUPERCLASS,
+			LispNames.DIRECT_SLOT_DEFINITION_CLASS, LispNames.EFFECTIVE_SLOT_DEFINITION_CLASS,
+			LispNames.COMPUTE_EFFECTIVE_SLOT_DEFINITION, LispNames.FINALIZE_INHERITANCE,
+			LispNames.ENSURE_CLASS_USING_CLASS);
+
+	/**
 	 * Whether any top-level form is a bundled-library {@code defstruct} (a defstruct
 	 * whose struct name lives in one of {@link #BUNDLED_STRUCT_PACKAGES}). Bundled
 	 * library sources are canonical, so like {@link #hasBundledDefinition} this pre-check
@@ -1045,7 +1054,8 @@ public final class LibraryDefunPruner {
 				if (generic == null) {
 					continue;
 				}
-				boolean clProtocolName = PackageRegistry.isClSymbol(LispSymbol.memberName(generic));
+				boolean clProtocolName = PackageRegistry.isClSymbol(LispSymbol.memberName(generic))
+						|| isMetaclassProtocolGeneric(generic);
 				List<String> genericGate = clProtocolName ? List.of() : PackageRegistry.spellings(generic);
 				// The specializer gate needs the generic's method set to be closed: it
 				// holds for a generic the trees own (its defgeneric is a candidate, so a
@@ -1098,6 +1108,18 @@ public final class LibraryDefunPruner {
 				}
 				current = parentStruct;
 			}
+		}
+
+		/**
+		 * Whether the generic is one of the {@code closer-mop} metaclass protocol
+		 * generics the ensure-class driver ({@code macro/mop-protocol.lisp}) calls
+		 * itself. Like a CL protocol name, no textual reference reaches them, so a method
+		 * on one is gated by its specializers alone.
+		 */
+		private static boolean isMetaclassProtocolGeneric(String generic) {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(generic);
+			return qn != null && LispNames.CLOSER_MOP_PKG.equals(qn.pkg())
+					&& METACLASS_PROTOCOL_GENERICS.contains(qn.member());
 		}
 
 		private static boolean isOperatorForm(LispVal form, String operator) {

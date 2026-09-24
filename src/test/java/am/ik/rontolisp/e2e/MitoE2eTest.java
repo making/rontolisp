@@ -242,10 +242,16 @@ class MitoE2eTest {
 	// keeps the assertion backend-independent while `article` carries the per-backend
 	// name the three legs need to stay out of each other's way. Accessors are NOT
 	// generated from a deftable's :conc-name (.kb/mito.md), hence slot-value.
+	//
+	// Every exercise switches mito's SQL logging off: ensure-table-exists and
+	// migrate-table log each statement to *standard-output* with its wall-clock time
+	// (twice: with-sql-logging and execute-sql each push a with-trace-sql hook), which no
+	// expected output can pin.
 	private static Exercise crud(Backend backend) {
 		String table = "mito_article_" + backend.name().toLowerCase(Locale.ROOT);
 		return (host, port) -> """
 				(ql:quickload '("mito" "dbd-postgres"))
+				(setf mito:*mito-migration-logger-stream* nil)
 				(mito:deftable spec ()
 				  ((title :col-type (:varchar 64))
 				   (body :col-type (or :text :null)))
@@ -287,6 +293,7 @@ class MitoE2eTest {
 		String table = "mito_note_" + backend.name().toLowerCase(Locale.ROOT);
 		return (host, port) -> """
 				(ql:quickload '("mito" "dbd-postgres"))
+				(setf mito:*mito-migration-logger-stream* nil)
 				(mito:connect-toplevel :postgres :database-name "%s" :username "%s"
 				                       :password "%s" :host "%s" :port %d)
 				(mito:execute-sql "DROP TABLE IF EXISTS %s")
@@ -325,6 +332,7 @@ class MitoE2eTest {
 		String table = "mito_tally_" + backend.name().toLowerCase(Locale.ROOT);
 		return (host, port) -> """
 				(ql:quickload '("mito" "dbd-postgres"))
+				(setf mito:*mito-migration-logger-stream* nil)
 				(mito:deftable tally ()
 				  ((label :col-type (:varchar 16)))
 				  (:table-name "%s"))

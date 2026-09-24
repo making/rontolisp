@@ -25,10 +25,11 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * <b>Buffering is opt-in, per thread.</b> Without an open attempt {@link #warn} prints
- * straight through, which is what every other caller (the WASM backends, which never
- * re-run a compile) wants and keeps their output byte-identical. Within an attempt the
- * messages are deduplicated, so a call site reached twice by one attempt's own passes
- * says it once.
+ * straight through, which is what every other caller (the {@code --no-gc} backend, which
+ * never re-runs a compile) wants and keeps its output byte-identical; the GC WASM backend
+ * re-runs a compile to outline an oversized function and opens attempts like the JVM
+ * backend. Within an attempt the messages are deduplicated, so a call site reached twice
+ * by one attempt's own passes says it once.
  */
 public final class CompileWarnings {
 

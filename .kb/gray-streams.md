@@ -67,6 +67,20 @@ default T; read/write-sequence's missing end -> `(length sequence)`).
 - A `defclass` naming a Gray base class eager-loads gray.lisp
   (`referencesGrayBaseClass`/`GRAY_BASE_CLASSES`) — else "unknown superclass".
 
+## `warn` writes to a Gray `*error-output*`
+`warn` has no stream argument for either seam to see: its report is written by `%warn` to the
+CURRENT `*error-output*`, which may be a Gray instance -- mito silences a statement with
+`(let ((*error-output* (make-broadcast-stream))) ...)`, and every broadcast stream is one. It
+signalled "not an output stream" on the interpreter and printed PAST the instance to standard
+output on both compile paths (2026-09-24). Now: the interpreter wraps `%warn`
+(`LispEvaluator`, the write-line wrappers' twin) and routes an instance to
+`%gray-write-line-dispatch`; on the compile paths a `warn` call site marks that dispatch used
+(`GrayStreamsLibrary.rewrite`, so it is spliced), and `Jvm`/`WasmWarnCompiler` call it
+(`LispNames.GRAY_WRITE_LINE_DISPATCH`) whenever the redirect is active and the program carries
+it -- its fallback is the built-in write-line, so a handle or string stream is unchanged. Pins
+`warnWritesToAGrayErrorOutput` in `LispEvaluatorTest` / `WasmLispCompilerIntegrationTest`,
+`JvmLispCompilerTest#compileWarnWritesToAGrayErrorOutput`.
+
 ## Compile path: `GrayStreamsLibrary.process`
 Runs after `UserMacroExpander`; triggered by any protocol name (`splitQualified` member match,
 so `trivial-gray-streams:` counts; the match set is ALL-UPPERCASE).
