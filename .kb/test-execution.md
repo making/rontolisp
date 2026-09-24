@@ -135,6 +135,9 @@ The rules that follow, and which device to reach for:
 
 - **Every staged file goes through the per-thread, per-PID scratch directory**
   (`WasmLispCompilerIntegrationTest#path`). A `/tmp/...` literal in a test is the bug.
+  The per-PID root is `testsupport/ProcessScratch`: deleted at JVM exit, and a killed
+  JVM's leftovers are swept by the next one (before it, 10,150 stale directories, 6.7 GB,
+  filled the development machine's disk on 2026-09-24).
 - **A listening port is the kernel's to choose, not the test's.** `wasmtime serve --addr
   127.0.0.1:0` binds an ephemeral port and prints `Serving HTTP on http://127.0.0.1:PORT/`;
   the script reads the port back out of the log (`#awaitServePort`) and nothing is ever

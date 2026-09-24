@@ -26,6 +26,7 @@ import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import am.ik.rontolisp.testsupport.StringStreamPrograms;
 import am.ik.rontolisp.testsupport.HostWasmtime.ExecResult;
+import am.ik.rontolisp.testsupport.ProcessScratch;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.junit.jupiter.api.parallel.Execution;
@@ -83,15 +84,11 @@ class WasmLispCompilerIntegrationTest {
 	// gives
 	// the `--dir .` tests -- whose guest programs open relative names like "lib.lisp" or
 	// "wof.txt" -- a working directory no concurrently running test can write into.
+	// A thread id is unique inside this JVM only, and two `./mvnw test` runs on one
+	// machine would race each other's test.wasm under the same "w<id>" (measured
+	// 2026-09-11: 39 unrelated failures from a second run in another worktree), so the
+	// directories live under ProcessScratch's per-PID root.
 	private static final ConcurrentHashMap<Long, String> WORK_DIRS = new ConcurrentHashMap<>();
-
-	// A thread id is unique inside this JVM only. Two `./mvnw test` runs on the same
-	// machine -- the normal state of this repo, one worktree per session -- otherwise
-	// hand out the SAME "w<id>" name to two different JVMs' worker threads and race each
-	// other's test.wasm underneath it (measured 2026-09-11: 39 unrelated failures in this
-	// class from a second, independent run started in another worktree). The PID makes
-	// the scratch root unique per process as well as per thread.
-	private static final long PID = ProcessHandle.current().pid();
 
 	// Workers for the second half of a two-module comparison (see
 	// assertLinalgMatchesTheScalarPath). A fixed pool rather than a virtual-thread
@@ -231,7 +228,7 @@ class WasmLispCompilerIntegrationTest {
 	// choke on.
 	private static String workDir() {
 		return WORK_DIRS.computeIfAbsent(Thread.currentThread().threadId(), id -> {
-			Path dir = Path.of(System.getProperty("java.io.tmpdir"), "rontolisp-wasmtime", "p" + PID + "-w" + id);
+			Path dir = ProcessScratch.root().resolve("w" + id);
 			try {
 				if (Files.isDirectory(dir)) {
 					try (Stream<Path> stale = Files.walk(dir)) {
@@ -13913,8 +13910,7 @@ class WasmLispCompilerIntegrationTest {
 	 * @throws Exception if the tree cannot be staged
 	 */
 	private static String stageAbsolutePathTree() throws Exception {
-		Path root = Path.of(System.getProperty("java.io.tmpdir"), "rontolisp-wasmtime",
-				"p" + PID + "-abs" + Thread.currentThread().threadId());
+		Path root = ProcessScratch.root().resolve("abs" + Thread.currentThread().threadId());
 		try (Stream<Path> stale = Files.isDirectory(root) ? Files.walk(root) : Stream.<Path>empty()) {
 			for (Path entry : stale.sorted(java.util.Comparator.reverseOrder()).toList()) {
 				Files.deleteIfExists(entry);
@@ -13988,8 +13984,7 @@ class WasmLispCompilerIntegrationTest {
 	 * @throws Exception if the tree cannot be staged
 	 */
 	private static String stageParentDirectoryTree() throws Exception {
-		Path root = Path.of(System.getProperty("java.io.tmpdir"), "rontolisp-wasmtime",
-				"p" + PID + "-up" + Thread.currentThread().threadId());
+		Path root = ProcessScratch.root().resolve("up" + Thread.currentThread().threadId());
 		try (Stream<Path> stale = Files.isDirectory(root) ? Files.walk(root) : Stream.<Path>empty()) {
 			for (Path entry : stale.sorted(java.util.Comparator.reverseOrder()).toList()) {
 				Files.deleteIfExists(entry);
