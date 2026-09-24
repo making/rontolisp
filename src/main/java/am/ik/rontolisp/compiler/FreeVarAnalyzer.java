@@ -139,7 +139,7 @@ public final class FreeVarAnalyzer {
 			CaptureMemo memo) {
 		Set<String> captured = new HashSet<>();
 		for (LispVal expr : body) {
-			for (String name : reach(expr, false, memo)) {
+			for (String name : reachRoot(expr, false, memo)) {
 				if (localVars.contains(name)) {
 					captured.add(name);
 				}
@@ -537,14 +537,8 @@ public final class FreeVarAnalyzer {
 		if (!(expr instanceof LispCons cons)) {
 			return List.of();
 		}
-		java.util.Map<LispCons, List<String>> answers = insideLambda ? memo.inside : memo.outside;
-		List<String> known = answers.get(cons);
-		if (known != null) {
-			return known;
-		}
-		List<String> found;
 		try {
-			found = reachCons(cons, insideLambda, memo);
+			return reachCons(cons, insideLambda, memo);
 		}
 		catch (RuntimeException ex) {
 			// This walk casts binding lists and parameter lists to their expected shapes,
@@ -552,6 +546,21 @@ public final class FreeVarAnalyzer {
 			// backend gets to reject it by name -- worth a position more than most.
 			throw SourceProvenance.noteFailure(cons, ex);
 		}
+	}
+
+	// reach, through the memo: for a form a compiler will ask about on its own -- one
+	// statement of a let, lambda or defun body, the scopes that ask -- so that the
+	// memo holds the few forms worth keeping rather than every cons the walk passes.
+	private static List<String> reachRoot(LispVal expr, boolean insideLambda, CaptureMemo memo) {
+		if (!(expr instanceof LispCons cons)) {
+			return reach(expr, insideLambda, memo);
+		}
+		java.util.Map<LispCons, List<String>> answers = insideLambda ? memo.inside : memo.outside;
+		List<String> known = answers.get(cons);
+		if (known != null) {
+			return known;
+		}
+		List<String> found = reach(cons, insideLambda, memo);
 		answers.put(cons, found);
 		return found;
 	}
@@ -619,7 +628,7 @@ public final class FreeVarAnalyzer {
 					Set<String> lambdaParams = extractParamNames(parts.get(1));
 					Names inner = new Names();
 					for (int i = 2; i < parts.size(); i++) {
-						inner.add(reach(parts.get(i), true, memo));
+						inner.add(reachRoot(parts.get(i), true, memo));
 					}
 					acc.add(without(inner.result(), lambdaParams));
 				}
@@ -634,7 +643,7 @@ public final class FreeVarAnalyzer {
 						}
 					}
 					for (int i = 2; i < parts.size(); i++) {
-						acc.add(reach(parts.get(i), insideLambda, memo));
+						acc.add(reachRoot(parts.get(i), insideLambda, memo));
 					}
 				}
 				case LispNames.DEFUN -> {
@@ -655,7 +664,7 @@ public final class FreeVarAnalyzer {
 						Set<String> defunParams = extractParamNames(parts.get(2));
 						Names inner = new Names();
 						for (int i = 3; i < parts.size(); i++) {
-							inner.add(reach(parts.get(i), true, memo));
+							inner.add(reachRoot(parts.get(i), true, memo));
 						}
 						acc.add(without(inner.result(), defunParams));
 					}

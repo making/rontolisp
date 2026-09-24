@@ -146,7 +146,7 @@ final class WasmLandingPad {
 			return found;
 		}
 		for (LispVal form : body) {
-			for (String name : assigned(form, false, memo)) {
+			for (String name : assignedRoot(form, false, memo)) {
 				if (localVars.contains(name)) {
 					found.add(name);
 				}
@@ -167,10 +167,10 @@ final class WasmLandingPad {
 
 	}
 
-	// Every bare-symbol place a modify form inside a region assigns under this form, in
-	// order of first occurrence -- whichever locals are asked about, so the answer can
-	// be kept per form.
-	private static List<String> assigned(LispVal form, boolean inRegion, RegionMemo memo) {
+	// assigned, through the memo: for a form a binder will ask about on its own -- one
+	// statement of a let, lambda or defun body -- so the memo holds those rather than
+	// every cons the scan passes.
+	private static List<String> assignedRoot(LispVal form, boolean inRegion, RegionMemo memo) {
 		if (!(form instanceof LispCons cons)) {
 			return List.of();
 		}
@@ -179,12 +179,31 @@ final class WasmLandingPad {
 		if (known != null) {
 			return known;
 		}
+		List<String> found = assigned(cons, inRegion, memo);
+		answers.put(cons, found);
+		return found;
+	}
+
+	// Every bare-symbol place a modify form inside a region assigns under this form, in
+	// order of first occurrence -- whichever locals are asked about, so the answer can
+	// be kept per form.
+	private static List<String> assigned(LispVal form, boolean inRegion, RegionMemo memo) {
+		if (!(form instanceof LispCons cons)) {
+			return List.of();
+		}
 		List<String> single = List.of();
 		@Nullable LinkedHashSet<String> merged = null;
 		boolean region = inRegion;
 		boolean quoted = false;
+		// The first body statement of a binder, counting the operator as element 0.
+		int firstStatement = Integer.MAX_VALUE;
 		if (cons.car() instanceof LispSymbol head) {
 			String name = head.name();
+			firstStatement = switch (name) {
+				case LispNames.LET, LispNames.LET_STAR, LispNames.LAMBDA -> 2;
+				case LispNames.DEFUN -> 3;
+				default -> Integer.MAX_VALUE;
+			};
 			quoted = LispNames.QUOTE.equals(name);
 			if (!quoted && inRegion && WasmCountedLoopCompiler.MODIFY_OPERATORS.contains(name) && cons.isProperList()) {
 				merged = new LinkedHashSet<>();
@@ -195,8 +214,10 @@ final class WasmLandingPad {
 			region = inRegion || isRegionHead(name);
 		}
 		LispVal cur = quoted ? LispNil.INSTANCE : cons;
+		int element = 0;
 		while (cur instanceof LispCons cell) {
-			List<String> names = assigned(cell.car(), region, memo);
+			List<String> names = element++ >= firstStatement ? assignedRoot(cell.car(), region, memo)
+					: assigned(cell.car(), region, memo);
 			if (!names.isEmpty()) {
 				if (merged != null) {
 					merged.addAll(names);
@@ -211,9 +232,7 @@ final class WasmLandingPad {
 			}
 			cur = cell.cdr();
 		}
-		List<String> found = merged != null ? List.copyOf(merged) : single;
-		answers.put(cons, found);
-		return found;
+		return merged != null ? List.copyOf(merged) : single;
 	}
 
 	/**
