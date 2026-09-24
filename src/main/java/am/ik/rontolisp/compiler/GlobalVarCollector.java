@@ -137,20 +137,20 @@ public final class GlobalVarCollector {
 	}
 
 	private static void collectNestedDefunNames(LispVal form, Set<String> globals) {
-		if (!(form instanceof LispCons cons)) {
-			return;
-		}
-		if (cons.car() instanceof LispSymbol head) {
-			if (LispNames.QUOTE.equals(head.name())) {
-				return;
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head) {
+				if (LispNames.QUOTE.equals(head.name())) {
+					return;
+				}
+				if (LispNames.DEFUN.equals(head.name()) && cons.cdr() instanceof LispCons nameCell
+						&& nameCell.car() instanceof LispSymbol name) {
+					globals.add(name.name());
+				}
 			}
-			if (LispNames.DEFUN.equals(head.name()) && cons.cdr() instanceof LispCons nameCell
-					&& nameCell.car() instanceof LispSymbol name) {
-				globals.add(name.name());
-			}
+			collectNestedDefunNames(cons.car(), globals);
+			node = cons.cdr();
 		}
-		collectNestedDefunNames(cons.car(), globals);
-		collectNestedDefunNames(cons.cdr(), globals);
 	}
 
 	/**
@@ -165,33 +165,34 @@ public final class GlobalVarCollector {
 	 * read.
 	 */
 	private static void collectNestedAssignedNames(LispVal form, Set<String> globals) {
-		if (!(form instanceof LispCons cons)) {
-			return;
-		}
-		if (cons.car() instanceof LispSymbol head) {
-			if (LispNames.QUOTE.equals(head.name())) {
-				return;
-			}
-			List<LispVal> parts = cons.toList();
-			switch (head.name()) {
-				case LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT -> {
-					if (parts.size() >= 2 && parts.get(1) instanceof LispSymbol name) {
-						globals.add(name.name());
-					}
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head) {
+				if (LispNames.QUOTE.equals(head.name())) {
+					return;
 				}
-				case LispNames.SETQ, LispNames.SETF -> {
-					for (int i = 1; i + 1 < parts.size(); i += 2) {
-						if (parts.get(i) instanceof LispSymbol place && !place.isKeyword()) {
-							globals.add(place.name());
+				switch (head.name()) {
+					case LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT -> {
+						List<LispVal> parts = cons.toList();
+						if (parts.size() >= 2 && parts.get(1) instanceof LispSymbol name) {
+							globals.add(name.name());
 						}
 					}
-				}
-				default -> {
+					case LispNames.SETQ, LispNames.SETF -> {
+						List<LispVal> parts = cons.toList();
+						for (int i = 1; i + 1 < parts.size(); i += 2) {
+							if (parts.get(i) instanceof LispSymbol place && !place.isKeyword()) {
+								globals.add(place.name());
+							}
+						}
+					}
+					default -> {
+					}
 				}
 			}
+			collectNestedAssignedNames(cons.car(), globals);
+			node = cons.cdr();
 		}
-		collectNestedAssignedNames(cons.car(), globals);
-		collectNestedAssignedNames(cons.cdr(), globals);
 	}
 
 }

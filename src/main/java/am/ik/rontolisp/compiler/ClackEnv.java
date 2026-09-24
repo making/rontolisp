@@ -155,25 +155,29 @@ public final class ClackEnv {
 	}
 
 	private static boolean bufferedBodyIn(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol sym && LispNames.QUOTE.equals(sym.name())) {
-			return false;
-		}
-		if (isServeForm(form)) {
-			List<LispVal> args = cons.toList();
-			for (int i = 1; i + 1 < args.size(); i++) {
-				if (args.get(i) instanceof LispSymbol key && key.isKeyword()
-						&& LispNames.RAW_BODY_KEYWORD.equalsIgnoreCase(key.name())
-						&& args.get(i + 1) instanceof LispSymbol mode
-						&& LispNames.BUFFERED_KEYWORD.equalsIgnoreCase(mode.name())) {
-					return true;
-				}
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol sym && LispNames.QUOTE.equals(sym.name())) {
+				return false;
 			}
-			return false;
+			if (isServeForm(node)) {
+				List<LispVal> args = cons.toList();
+				for (int i = 1; i + 1 < args.size(); i++) {
+					if (args.get(i) instanceof LispSymbol key && key.isKeyword()
+							&& LispNames.RAW_BODY_KEYWORD.equalsIgnoreCase(key.name())
+							&& args.get(i + 1) instanceof LispSymbol mode
+							&& LispNames.BUFFERED_KEYWORD.equalsIgnoreCase(mode.name())) {
+						return true;
+					}
+				}
+				return false;
+			}
+			if (bufferedBodyIn(cons.car())) {
+				return true;
+			}
+			node = cons.cdr();
 		}
-		return bufferedBodyIn(cons.car()) || bufferedBodyIn(cons.cdr());
+		return false;
 	}
 
 	private static boolean isServeForm(LispVal form) {

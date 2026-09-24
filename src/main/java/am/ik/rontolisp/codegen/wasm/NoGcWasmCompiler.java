@@ -761,7 +761,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// the emitter's own temporaries leave, in front of the shake so the
 			// renumbering LAST sees the frames it has left.
 			module = am.ik.wasm.WasmLocalOrder.reorder(am.ik.wasm.WasmTreeShaker.shake(am.ik.wasm.WasmLocalSink
-				.sink(am.ik.wasm.WasmInliner.inline(am.ik.wasm.WasmPeephole.rewrite(module)))));
+				.sink(am.ik.wasm.WasmInliner.inline(am.ik.wasm.WasmPeephole.rewrite(module)), true)));
 		}
 		if (this.component) {
 			// Post-stage wrap: the core module is byte-identical to the non-component
@@ -1685,7 +1685,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			boolean printUsed, boolean fdlibmTables) {
 		LinkedHashMap<String, Integer> offsets = new LinkedHashMap<>();
 		LinkedHashMap<String, Integer> regions = new LinkedHashMap<>();
-		ByteArrayOutputStream data = new ByteArrayOutputStream();
+		ByteArrayOutputStream data = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		int cursor = STR_DATA_BASE;
 		for (String s : literals) {
 			// Blocks are packed, not 4-byte aligned. The only aligned access into one is
@@ -1767,53 +1767,52 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// non-float fails to COMPILE (compileExpt), so reserving the slot is never
 	// wasted in a module that actually finishes compiling.
 	private static void collectFdlibmRoots(LispVal v, Set<WasmFdlibmRuntimeBuilder.Fn> out) {
-		if (!(v instanceof LispCons c)) {
-			return;
-		}
-		if (c.car() instanceof LispSymbol s) {
-			if (isSimdCall(s.name())) {
-				String member = simdMember(s.name());
-				if (member.endsWith("-INTO")) {
-					member = member.substring(0, member.length() - "-INTO".length());
+		while (v instanceof LispCons c) {
+			if (c.car() instanceof LispSymbol s) {
+				if (isSimdCall(s.name())) {
+					String member = simdMember(s.name());
+					if (member.endsWith("-INTO")) {
+						member = member.substring(0, member.length() - "-INTO".length());
+					}
+					switch (member) {
+						case LispNames.VEC_EXP -> out.add(WasmFdlibmRuntimeBuilder.Fn.EXP);
+						case LispNames.VEC_LOG -> out.add(WasmFdlibmRuntimeBuilder.Fn.LOG);
+						case LispNames.VEC_TANH -> out.add(WasmFdlibmRuntimeBuilder.Fn.TANH);
+						case LispNames.VEC_SIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.SIN);
+						case LispNames.VEC_COS -> out.add(WasmFdlibmRuntimeBuilder.Fn.COS);
+						case LispNames.VEC_TAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.TAN);
+						case LispNames.VEC_ASIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ASIN);
+						case LispNames.VEC_ACOS -> out.add(WasmFdlibmRuntimeBuilder.Fn.ACOS);
+						case LispNames.VEC_ATAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ATAN);
+						case LispNames.VEC_SINH -> out.add(WasmFdlibmRuntimeBuilder.Fn.SINH);
+						case LispNames.VEC_COSH -> out.add(WasmFdlibmRuntimeBuilder.Fn.COSH);
+						default -> {
+						}
+					}
 				}
-				switch (member) {
-					case LispNames.VEC_EXP -> out.add(WasmFdlibmRuntimeBuilder.Fn.EXP);
-					case LispNames.VEC_LOG -> out.add(WasmFdlibmRuntimeBuilder.Fn.LOG);
-					case LispNames.VEC_TANH -> out.add(WasmFdlibmRuntimeBuilder.Fn.TANH);
-					case LispNames.VEC_SIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.SIN);
-					case LispNames.VEC_COS -> out.add(WasmFdlibmRuntimeBuilder.Fn.COS);
-					case LispNames.VEC_TAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.TAN);
-					case LispNames.VEC_ASIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ASIN);
-					case LispNames.VEC_ACOS -> out.add(WasmFdlibmRuntimeBuilder.Fn.ACOS);
-					case LispNames.VEC_ATAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ATAN);
-					case LispNames.VEC_SINH -> out.add(WasmFdlibmRuntimeBuilder.Fn.SINH);
-					case LispNames.VEC_COSH -> out.add(WasmFdlibmRuntimeBuilder.Fn.COSH);
-					default -> {
+				else {
+					switch (s.name()) {
+						case LispNames.EXP -> out.add(WasmFdlibmRuntimeBuilder.Fn.EXP);
+						case LispNames.LOG -> out.add(WasmFdlibmRuntimeBuilder.Fn.LOG);
+						case LispNames.SIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.SIN);
+						case LispNames.COS -> out.add(WasmFdlibmRuntimeBuilder.Fn.COS);
+						case LispNames.TAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.TAN);
+						case LispNames.ASIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ASIN);
+						case LispNames.ACOS -> out.add(WasmFdlibmRuntimeBuilder.Fn.ACOS);
+						case LispNames.ATAN -> out.add(c.toList().size() == 3 ? WasmFdlibmRuntimeBuilder.Fn.ATAN2
+								: WasmFdlibmRuntimeBuilder.Fn.ATAN);
+						case LispNames.SINH -> out.add(WasmFdlibmRuntimeBuilder.Fn.SINH);
+						case LispNames.COSH -> out.add(WasmFdlibmRuntimeBuilder.Fn.COSH);
+						case LispNames.TANH -> out.add(WasmFdlibmRuntimeBuilder.Fn.TANH);
+						case LispNames.EXPT -> out.add(WasmFdlibmRuntimeBuilder.Fn.POW);
+						default -> {
+						}
 					}
 				}
 			}
-			else {
-				switch (s.name()) {
-					case LispNames.EXP -> out.add(WasmFdlibmRuntimeBuilder.Fn.EXP);
-					case LispNames.LOG -> out.add(WasmFdlibmRuntimeBuilder.Fn.LOG);
-					case LispNames.SIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.SIN);
-					case LispNames.COS -> out.add(WasmFdlibmRuntimeBuilder.Fn.COS);
-					case LispNames.TAN -> out.add(WasmFdlibmRuntimeBuilder.Fn.TAN);
-					case LispNames.ASIN -> out.add(WasmFdlibmRuntimeBuilder.Fn.ASIN);
-					case LispNames.ACOS -> out.add(WasmFdlibmRuntimeBuilder.Fn.ACOS);
-					case LispNames.ATAN -> out.add(c.toList().size() == 3 ? WasmFdlibmRuntimeBuilder.Fn.ATAN2
-							: WasmFdlibmRuntimeBuilder.Fn.ATAN);
-					case LispNames.SINH -> out.add(WasmFdlibmRuntimeBuilder.Fn.SINH);
-					case LispNames.COSH -> out.add(WasmFdlibmRuntimeBuilder.Fn.COSH);
-					case LispNames.TANH -> out.add(WasmFdlibmRuntimeBuilder.Fn.TANH);
-					case LispNames.EXPT -> out.add(WasmFdlibmRuntimeBuilder.Fn.POW);
-					default -> {
-					}
-				}
-			}
+			collectFdlibmRoots(c.car(), out);
+			v = c.cdr();
 		}
-		collectFdlibmRoots(c.car(), out);
-		collectFdlibmRoots(c.cdr(), out);
 	}
 
 	/**
@@ -2122,11 +2121,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	private static final Set<String> PRINT_OPS = Set.of(LispNames.PRINT, LispNames.PRINC, LispNames.TERPRI);
 
 	private static boolean usesPrintOp(LispVal v) {
-		if (v instanceof LispCons c) {
+		while (v instanceof LispCons c) {
 			if (c.car() instanceof LispSymbol s && PRINT_OPS.contains(s.name())) {
 				return true;
 			}
-			return usesPrintOp(c.car()) || usesPrintOp(c.cdr());
+			if (usesPrintOp(c.car())) {
+				return true;
+			}
+			v = c.cdr();
 		}
 		return false;
 	}
@@ -2145,17 +2147,20 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	private boolean rendersFloatWalk(LispVal v, Map<String, Ty> env, TC tc) {
-		if (!(v instanceof LispCons c)) {
-			return false;
-		}
-		if (c.car() instanceof LispSymbol s
-				&& (PRINT_OPS.contains(s.name()) || LispNames.PRINC_TO_STRING.equals(s.name()))) {
-			List<LispVal> args = c.toList();
-			if (args.size() == 2 && typeOf(args.get(1), new HashMap<>(env), tc) == Ty.FLOAT) {
+		while (v instanceof LispCons c) {
+			if (c.car() instanceof LispSymbol s
+					&& (PRINT_OPS.contains(s.name()) || LispNames.PRINC_TO_STRING.equals(s.name()))) {
+				List<LispVal> args = c.toList();
+				if (args.size() == 2 && typeOf(args.get(1), new HashMap<>(env), tc) == Ty.FLOAT) {
+					return true;
+				}
+			}
+			if (rendersFloatWalk(c.car(), env, tc)) {
 				return true;
 			}
+			v = c.cdr();
 		}
-		return rendersFloatWalk(c.car(), env, tc) || rendersFloatWalk(c.cdr(), env, tc);
+		return false;
 	}
 
 	/**
@@ -2254,13 +2259,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	/** Every {@code print}/{@code princ}/{@code terpri}/{@code princ-to-string} form. */
 	private static void collectPrintForms(LispVal v, List<LispVal> out) {
-		if (v instanceof LispCons c) {
+		while (v instanceof LispCons c) {
 			if (c.car() instanceof LispSymbol s
 					&& (PRINT_OPS.contains(s.name()) || LispNames.PRINC_TO_STRING.equals(s.name()))) {
 				out.add(c);
 			}
 			collectPrintForms(c.car(), out);
-			collectPrintForms(c.cdr(), out);
+			v = c.cdr();
 		}
 	}
 
@@ -2269,22 +2274,28 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			LispNames.PRINC_TO_STRING);
 
 	private static boolean usesStringOp(LispVal v) {
-		if (v instanceof LispCons c) {
+		while (v instanceof LispCons c) {
 			if (c.car() instanceof LispSymbol s && STRING_PRODUCING_OPS.contains(s.name())) {
 				return true;
 			}
-			return usesStringOp(c.car()) || usesStringOp(c.cdr());
+			if (usesStringOp(c.car())) {
+				return true;
+			}
+			v = c.cdr();
 		}
 		return false;
 	}
 
 	/** Whether a body calls the named operator (a {@code (name ...)} form) anywhere. */
 	private static boolean usesOp(LispVal v, String op) {
-		if (v instanceof LispCons c) {
+		while (v instanceof LispCons c) {
 			if (c.car() instanceof LispSymbol s && op.equals(s.name())) {
 				return true;
 			}
-			return usesOp(c.car(), op) || usesOp(c.cdr(), op);
+			if (usesOp(c.car(), op)) {
+				return true;
+			}
+			v = c.cdr();
 		}
 		return false;
 	}
@@ -2330,7 +2341,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	/** Collects the single argument of every {@code (length arg)} form in the body. */
 	private static void collectLengthArgs(LispVal v, List<LispVal> out) {
-		if (v instanceof LispCons c) {
+		while (v instanceof LispCons c) {
 			if (c.car() instanceof LispSymbol s && LispNames.LENGTH.equals(s.name())) {
 				List<LispVal> args = c.toList();
 				if (args.size() == 2 && !(args.get(1) instanceof LispNil)) {
@@ -2340,7 +2351,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			else {
 				collectLengthArgs(c.car(), out);
 			}
-			collectLengthArgs(c.cdr(), out);
+			v = c.cdr();
 		}
 	}
 
@@ -2351,25 +2362,25 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * an otherwise pure-numeric program.
 	 */
 	private static boolean usesFloatArray(LispVal v) {
-		if (v instanceof LispFloatArray) {
-			return true;
-		}
-		if (v instanceof LispCons c) {
+		while (v instanceof LispCons c) {
 			if (c.car() instanceof LispSymbol s && (LispNames.MAKE_ARRAY.equals(s.name()) || isSimdCall(s.name()))) {
 				return true;
 			}
-			return usesFloatArray(c.car()) || usesFloatArray(c.cdr());
+			if (usesFloatArray(c.car())) {
+				return true;
+			}
+			v = c.cdr();
 		}
-		return false;
+		return v instanceof LispFloatArray;
 	}
 
 	private static void collectLiterals(LispVal v, Set<String> out) {
+		while (v instanceof LispCons c) {
+			collectLiterals(c.car(), out);
+			v = c.cdr();
+		}
 		if (v instanceof LispString s) {
 			out.add(s.value());
-		}
-		else if (v instanceof LispCons c) {
-			collectLiterals(c.car(), out);
-			collectLiterals(c.cdr(), out);
 		}
 	}
 
@@ -2578,7 +2589,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			WasmImportCompiler.Decl decl = hostImports.get(i);
 			importTypes[i] = typeTable.intern(importParamTypes(decl), importResultTypes(decl));
 		}
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		w.write("\0asm").writeLittleEndian4(1).writeTypeSection(typeTable::writeTo);
 		// Import section: exactly the one fd_write, and only when the program prints.
@@ -2753,7 +2764,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// 4-byte-aligns the bump, grows linear memory by whole pages when the new top exceeds
 	// the current size, and returns the old pointer. Locals: 1=old, 2=end, 3=need(pages).
 	private static byte[] allocBody() {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		// old = heap
 		w.write(Instruction.GET_GLOBAL, 0x00).write(Instruction.SET_LOCAL).writeUnsignedLeb128(1);
@@ -2791,7 +2802,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// __memcpy(dst i32, src i32, n i32): copy n bytes one at a time (no bulk-memory
 	// dependency, so the module stays plain MVP). Params 0=dst, 1=src, 2=n.
 	private static byte[] memcpyBody() {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
@@ -2819,7 +2830,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// __streq(a i32, b i32) -> i32: 1 iff the two [len][bytes] strings have identical
 	// content. Params 0=a, 1=b; locals 2=la (length of a), 3=i.
 	private static byte[] streqBody() {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		// if a == b return 1 (same header address, e.g. the same interned literal)
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
@@ -2878,7 +2889,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// bytes); only length derives characters from it. Params 0=s; locals 1=len (byte
 	// count), 2=i, 3=n, 4=b.
 	private static byte[] strlenCpBody() {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
@@ -2924,7 +2935,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// on a character boundary (a too-large index answers the byte length; a negative
 	// one answers 0). Params 0=s, 1=target; locals 2=len, 3=pos, 4=cp, 5=b.
 	private static byte[] byteOffsetBody() {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
@@ -2999,7 +3010,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// octets-to-string pair documents (.kb/characters-code-points.md). Params 0=s,
 	// 1=idx; locals 2=pos (byte offset), 3=b0.
 	private static byte[] charAtBody(int byteOffsetIndex) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		// pos = __byte_offset(s, idx)
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
@@ -3087,7 +3098,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// 2=count (i32), 3=p (i32 result), 4=idx (i32 write cursor). Note: Long.MIN_VALUE
 	// negation wraps, matching the backend's documented 2^63 integer range.
 	private static byte[] itoaBody(int allocIndex) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		Runnable loadMagnitude = () -> {
 			// t = v < 0 ? -v : v
@@ -3192,7 +3203,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// reclaims the host's pre-call buffer too). See .kb/wasm-export-no-wasi.md. No
 	// locals.
 	private static byte[] markBody() {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.GET_GLOBAL, 0x00);
 		w.write(Instruction.END);
@@ -3205,7 +3216,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// AFTER live data (or reading a :string result whose bytes sit above the mark) is
 	// caller error; see the --no-gc docs. Param 0 = mark, no locals.
 	private static byte[] resetBody() {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
 		w.write(Instruction.SET_GLOBAL, 0x00);
@@ -3222,7 +3233,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// 4-aligns the bump, and old + 4 keeps it), so the header load stays on the
 	// alignment the block had. Param 0 = size, no locals.
 	private static byte[] rontoAllocBody(int allocIndex) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
@@ -3257,7 +3268,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// size), and the returned pointer keeps __alloc's 4-byte alignment, which
 	// satisfies the string encoding's align 1.
 	private static byte[] cabiReallocBody(int allocIndex) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
@@ -3277,7 +3288,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// copies and the result string -- and a resident instance stays flat. The flat-result
 	// parameters are ignored.
 	private static byte[] postReturnBody(int heapBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(heapBase);
 		w.write(Instruction.SET_GLOBAL, 0x00);
@@ -3292,7 +3303,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// by the post-return above) and stores the pair. Locals: ptr, len, ret (i32 each,
 	// after the host parameter slots).
 	private static byte[] retptrShimBody(int wrapperIndex, int allocIndex, int paramSlots) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int ptr = paramSlots;
 		int len = paramSlots + 1;
@@ -3326,7 +3337,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// 3=len (i32), 4=digits (i64), 5=k (i32).
 	private static byte[] ftoaBody(Mem mem) {
 		final int P = 1, C = 2, LEN = 3, DIGITS = 4, K = 5;
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		Runnable getV = () -> w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
 		// NaN: value != value -> the static "NaN" literal (no allocation).
@@ -3419,7 +3430,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// component variant swaps this implementation, never the print ops). Fills the iov
 	// scratch (iovAddr = ptr/len, iovAddr+8 = nwritten) and writes to fd 1 (stdout).
 	private static byte[] writeStdoutBody(Mem mem) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(mem.iovAddr());
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
@@ -3550,7 +3561,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * @return the code entry bytes
 	 */
 	private byte[] compileImportWrapperBody(WasmImportCompiler.Decl decl, int ordinal, Mem mem) {
-		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
+		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(bodyStream);
 		List<Ty> locals = new ArrayList<>();
 		int nextLocal = decl.paramTypes().size();
@@ -3960,8 +3971,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		if (args.size() - 1 != decl.paramTypes().size()) {
 			return null;
 		}
-		ByteArrayOutputStream loweredBytes = new ByteArrayOutputStream();
-		ByteArrayOutputStream wrappedBytes = new ByteArrayOutputStream();
+		ByteArrayOutputStream loweredBytes = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		ByteArrayOutputStream wrappedBytes = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter lowered = new WasmWriter(loweredBytes);
 		WasmWriter wrapped = new WasmWriter(wrappedBytes);
 		for (int p = 0; p < decl.paramTypes().size(); p++) {
@@ -4026,7 +4037,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	private byte[] compileWrapperBody(WasmExportCompiler.Decl decl, int targetIndex, Types types, Mem mem) {
-		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
+		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(bodyStream);
 		String name = decl.name();
 		Ty[] internalParams = Objects.requireNonNull(types.params().get(name));
@@ -4343,7 +4354,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				runs.add(new int[] { 1, t });
 			}
 		}
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		w.writeUnsignedLeb128(runs.size());
 		for (int[] run : runs) {
@@ -8588,11 +8599,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	private static boolean referencesSymbol(LispVal form, String name) {
-		return switch (form) {
-			case LispSymbol sym -> name.equals(sym.name());
-			case LispCons cons -> referencesSymbol(cons.car(), name) || referencesSymbol(cons.cdr(), name);
-			default -> false;
-		};
+		while (form instanceof LispCons cons) {
+			if (referencesSymbol(cons.car(), name)) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return form instanceof LispSymbol sym && name.equals(sym.name());
 	}
 
 	private static Defun extractDefun(LispVal setqLambda) {

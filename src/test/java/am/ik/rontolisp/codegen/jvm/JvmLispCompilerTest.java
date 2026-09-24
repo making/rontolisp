@@ -20,11 +20,13 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.CliStackExtension;
 import am.ik.rontolisp.testsupport.CorpusFixtures;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import am.ik.rontolisp.testsupport.StringStreamPrograms;
 import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
@@ -38,6 +40,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.api.Assertions.within;
 
 @Execution(ExecutionMode.CONCURRENT)
+@ExtendWith(CliStackExtension.class)
 class JvmLispCompilerTest {
 
 	@TempDir

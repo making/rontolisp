@@ -4614,14 +4614,17 @@ public final class LispPreludeLibrary {
 	}
 
 	private static boolean callsWithArguments(LispVal form, String name, boolean canonical) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && matches(head.name(), name, canonical)
+					&& cons.cdr() instanceof LispCons) {
+				return true;
+			}
+			if (callsWithArguments(cons.car(), name, canonical)) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol head && matches(head.name(), name, canonical)
-				&& cons.cdr() instanceof LispCons) {
-			return true;
-		}
-		return callsWithArguments(cons.car(), name, canonical) || callsWithArguments(cons.cdr(), name, canonical);
+		return false;
 	}
 
 	/**
@@ -4703,12 +4706,22 @@ public final class LispPreludeLibrary {
 	}
 
 	private static boolean referencesName(LispVal form, String name, boolean canonical) {
-		return switch (form) {
-			case LispSymbol sym -> matches(sym.name(), name, canonical);
-			case LispCons cons ->
-				referencesName(cons.car(), name, canonical) || referencesName(cons.cdr(), name, canonical);
-			default -> false;
-		};
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return matches(sym.name(), name, canonical);
+				}
+				case LispCons cons -> {
+					if (referencesName(cons.car(), name, canonical)) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
 	}
 
 	/**

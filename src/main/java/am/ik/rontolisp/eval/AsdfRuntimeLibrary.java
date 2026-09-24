@@ -174,11 +174,14 @@ public final class AsdfRuntimeLibrary {
 	}
 
 	private static boolean referencesRuntime(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (referencesRuntime(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
 		if (form instanceof LispSymbol sym) {
 			return TRIGGER_NAMES.contains(sym.name());
-		}
-		if (form instanceof LispCons cons) {
-			return referencesRuntime(cons.car()) || referencesRuntime(cons.cdr());
 		}
 		return false;
 	}

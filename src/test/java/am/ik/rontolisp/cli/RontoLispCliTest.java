@@ -28,6 +28,7 @@ import java.util.zip.ZipInputStream;
 
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.HostGlueEmitter;
+import am.ik.rontolisp.testsupport.CliStack;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.Execution;
@@ -1742,6 +1743,8 @@ class RontoLispCliTest {
 		stack = RontoLispCli.LaunchStack.of(new String[] { "prog.lisp" });
 		assertThat(stack.bytes()).isEqualTo(16L << 20);
 		assertThat(stack.args()).containsExactly("prog.lisp");
+		// The in-process test legs run on the same ceiling.
+		assertThat(CliStack.BYTES).isEqualTo(stack.bytes());
 		// Everything after the bare -- is the interpreted program's own argument vector,
 		// including a word that would otherwise be this option.
 		stack = RontoLispCli.LaunchStack.of(new String[] { "prog.lisp", "--", "--stack", "9" });

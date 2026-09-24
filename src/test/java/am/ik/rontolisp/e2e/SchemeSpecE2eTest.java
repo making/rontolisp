@@ -26,6 +26,7 @@ import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.testsupport.CliStack;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.ThreadStdio;
 import am.ik.rontolisp.testsupport.YamlResources;
@@ -71,10 +72,6 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
 class SchemeSpecE2eTest {
 
 	private static final String SPEC_RESOURCE = "/scheme-spec.yaml";
-
-	// The CLI hands every program 16 MiB (RontoLispCli.WORKER_STACK_BYTES); the
-	// in-process legs measure the same ceiling rather than JUnit's.
-	private static final long PROGRAM_STACK_BYTES = 16L << 20;
 
 	record Case(String name, String source, String expected, String stdin) {
 
@@ -207,7 +204,7 @@ class SchemeSpecE2eTest {
 	private static void runStandaloneInterpreter(Standalone s, String standard) throws Exception {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		Throwable[] thrown = new Throwable[1];
-		onAProgramStack(() -> {
+		CliStack.call("scheme-spec", () -> {
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8),
 					new java.io.ByteArrayInputStream(s.stdinOrEmpty().getBytes(StandardCharsets.UTF_8)));
 			SourceStandards standards = SourceStandards.parse(standard);
@@ -547,7 +544,7 @@ class SchemeSpecE2eTest {
 	private static String interpret(String program, String stdin) throws Exception {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		byte[] input = stdin.getBytes(StandardCharsets.UTF_8);
-		onAProgramStack(() -> {
+		CliStack.call("scheme-spec", () -> {
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8),
 					new java.io.ByteArrayInputStream(input));
 			for (LispVal form : SourceLanguage.SCHEME.read(program, Features.INTERPRETER, "spec.scm")) {
@@ -574,7 +571,7 @@ class SchemeSpecE2eTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		try (var _ = ThreadStdio.out(out);
 				var _ = ThreadStdio.in(new java.io.ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8)))) {
-			onAProgramStack(() -> main.invoke(null, (Object) new String[0]));
+			CliStack.call("scheme-spec", () -> main.invoke(null, (Object) new String[0]));
 		}
 		return out.toString(StandardCharsets.UTF_8);
 	}
@@ -643,27 +640,6 @@ class SchemeSpecE2eTest {
 		Path entry = dir.resolve("standalone.scm");
 		Files.writeString(entry, s.source(), StandardCharsets.UTF_8);
 		return entry.toString();
-	}
-
-	// Runs the body on a thread with the CLI's program stack and rethrows what it threw.
-	private static void onAProgramStack(Callable<?> body) throws Exception {
-		Throwable[] thrown = new Throwable[1];
-		Thread worker = new Thread(null, () -> {
-			try {
-				body.call();
-			}
-			catch (Throwable ex) {
-				thrown[0] = ex;
-			}
-		}, "scheme-spec", PROGRAM_STACK_BYTES);
-		worker.start();
-		worker.join();
-		if (thrown[0] instanceof Error error) {
-			throw error;
-		}
-		if (thrown[0] instanceof Exception exception) {
-			throw exception;
-		}
 	}
 
 	private static Spec loadSpec() throws IOException {

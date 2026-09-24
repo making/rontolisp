@@ -12,6 +12,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.reader.Features;
@@ -168,7 +169,15 @@ public final class JsonLibrary {
 			return qn == null ? name : qn.member();
 		}
 
+		// Identity-preserving: a form this walk did not rewrite is handed back as it came
+		// in, so its SourceProvenance position survives (see LispCons.rebuilt). The cdr
+		// spine is walked in a loop, so a long list costs no stack (LispTrees).
 		private LispVal rewrite(LispVal form) {
+			return LispTrees.rebuildSpine(form, this::rewriteNode, this::rewrite);
+		}
+
+		/** A node the walk ends at, rewritten; {@code null} for an ordinary cell. */
+		private @Nullable LispVal rewriteNode(LispVal form) {
 			return switch (form) {
 				case LispSymbol sym -> {
 					if (matches(sym.name(), LispNames.JSON_PARSE) || matches(sym.name(), LispNames.JSON_STRINGIFY)) {
@@ -181,7 +190,7 @@ public final class JsonLibrary {
 			};
 		}
 
-		private LispVal rewriteCons(LispCons cons) {
+		private @Nullable LispVal rewriteCons(LispCons cons) {
 			if (cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(member(op.name()))) {
 				// Quoted data is never rewritten, but a mention still triggers the
 				// splice (e.g. (symbol-function 'rontolisp:json-parse)).
@@ -205,11 +214,7 @@ public final class JsonLibrary {
 					return rewriteCall(cons, QUALIFIED_STRINGIFY, HELPER_STRINGIFY, 1, 1, false);
 				}
 			}
-			LispVal car = rewrite(cons.car());
-			LispVal cdr = rewrite(cons.cdr());
-			// Identity-preserving: a form this walk did not rewrite is handed back as it
-			// came in, so its SourceProvenance position survives (see LispCons.rebuilt).
-			return LispCons.rebuilt(cons, car, cdr);
+			return null;
 		}
 
 		private LispVal rewriteCall(LispCons cons, String publicName, String helperName, int minArgs, int maxArgs,
@@ -237,18 +242,23 @@ public final class JsonLibrary {
 		}
 
 		private void detect(LispVal form) {
-			switch (form) {
-				case LispSymbol sym -> {
-					if (matches(sym.name(), LispNames.JSON_PARSE) || matches(sym.name(), LispNames.JSON_STRINGIFY)) {
-						this.found = true;
+			while (true) {
+				switch (form) {
+					case LispSymbol sym -> {
+						if (matches(sym.name(), LispNames.JSON_PARSE)
+								|| matches(sym.name(), LispNames.JSON_STRINGIFY)) {
+							this.found = true;
+						}
+					}
+					case LispCons cons -> {
+						detect(cons.car());
+						form = cons.cdr();
+						continue;
+					}
+					default -> {
 					}
 				}
-				case LispCons cons -> {
-					detect(cons.car());
-					detect(cons.cdr());
-				}
-				default -> {
-				}
+				return;
 			}
 		}
 

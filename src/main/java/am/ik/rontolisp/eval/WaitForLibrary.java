@@ -106,11 +106,22 @@ public final class WaitForLibrary {
 	}
 
 	private static boolean references(LispVal form, String member) {
-		return switch (form) {
-			case LispSymbol sym -> namesRontolispMember(sym.name(), member);
-			case LispCons cons -> references(cons.car(), member) || references(cons.cdr(), member);
-			default -> false;
-		};
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return namesRontolispMember(sym.name(), member);
+				}
+				case LispCons cons -> {
+					if (references(cons.car(), member)) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
 	}
 
 	// Whether the form mentions cl:sleep, in either source spelling (bare or cl:sleep --
@@ -118,28 +129,48 @@ public final class WaitForLibrary {
 	// (function sleep) contains the symbol, and its wrapper body compiles through the
 	// same lowering.
 	private static boolean referencesSleep(LispVal form) {
-		return switch (form) {
-			case LispSymbol sym -> {
-				if (LispNames.SLEEP.equals(sym.name())) {
-					yield true;
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					if (LispNames.SLEEP.equals(sym.name())) {
+						return true;
+					}
+					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+					return qn != null && LispNames.CL_PKG.equals(qn.pkg()) && LispNames.SLEEP.equals(qn.member());
 				}
-				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-				yield qn != null && LispNames.CL_PKG.equals(qn.pkg()) && LispNames.SLEEP.equals(qn.member());
+				case LispCons cons -> {
+					if (referencesSleep(cons.car())) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
 			}
-			case LispCons cons -> referencesSleep(cons.car()) || referencesSleep(cons.cdr());
-			default -> false;
-		};
+		}
 	}
 
 	// Whether the form mentions ANY usocket-package member (usocket:socket-connect,
 	// usocket::%usock-guard, ...) -- the shim these names load carries an unconditional
 	// sleep call site, so the trigger must fire before that splice runs.
 	private static boolean referencesUsocket(LispVal form) {
-		return switch (form) {
-			case LispSymbol sym -> UsocketLibrary.isUsocketQualified(sym.name());
-			case LispCons cons -> referencesUsocket(cons.car()) || referencesUsocket(cons.cdr());
-			default -> false;
-		};
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return UsocketLibrary.isUsocketQualified(sym.name());
+				}
+				case LispCons cons -> {
+					if (referencesUsocket(cons.car())) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
 	}
 
 	// Whether the symbol names the given rontolisp-package member, in any source
@@ -178,26 +209,30 @@ public final class WaitForLibrary {
 	}
 
 	private static void collectNames(@Nullable LispVal form, Set<String> names) {
-		switch (form) {
-			case LispSymbol sym -> {
-				names.add(sym.name());
-				// The reader upcases user spellings while WIT member names are
-				// lower-kebab:
-				// record the lowercase twin too, so the member filter matches every
-				// referenced binding (mirrors WitImportInliner.collectNames).
-				names.add(sym.name().toLowerCase(java.util.Locale.ROOT));
-				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-				if (qn != null) {
-					names.add(qn.member());
-					names.add(qn.member().toLowerCase(java.util.Locale.ROOT));
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					names.add(sym.name());
+					// The reader upcases user spellings while WIT member names are
+					// lower-kebab:
+					// record the lowercase twin too, so the member filter matches every
+					// referenced binding (mirrors WitImportInliner.collectNames).
+					names.add(sym.name().toLowerCase(java.util.Locale.ROOT));
+					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+					if (qn != null) {
+						names.add(qn.member());
+						names.add(qn.member().toLowerCase(java.util.Locale.ROOT));
+					}
+				}
+				case LispCons cons -> {
+					collectNames(cons.car(), names);
+					form = cons.cdr();
+					continue;
+				}
+				case null, default -> {
 				}
 			}
-			case LispCons cons -> {
-				collectNames(cons.car(), names);
-				collectNames(cons.cdr(), names);
-			}
-			case null, default -> {
-			}
+			return;
 		}
 	}
 

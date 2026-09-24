@@ -1875,7 +1875,7 @@ public final class WasmComponentBuilder {
 
 	// Encodes an unsigned integer as LEB128.
 	private static byte[] encodeLeb128(int value) {
-		java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+		java.io.ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		int v = value;
 		while (true) {
 			int b = v & 0x7F;

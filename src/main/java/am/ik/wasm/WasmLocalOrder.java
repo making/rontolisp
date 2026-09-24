@@ -85,7 +85,7 @@ public final class WasmLocalOrder {
 		if (!changed) {
 			return module;
 		}
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		WasmSections.writeU(body, rewritten.size());
 		for (byte[] entry : rewritten) {
 			WasmSections.writeU(body, entry.length);
@@ -164,7 +164,7 @@ public final class WasmLocalOrder {
 		for (int old : order) {
 			reordered.add(locals.get(old));
 		}
-		ByteArrayOutputStream out = new ByteArrayOutputStream(entry.length);
+		ByteArrayOutputStream out = new UnsynchronizedByteArrayOutputStream(entry.length);
 		WasmCodeModel.writeLocals(out, reordered);
 		for (Instr in : code) {
 			if (isLocalOp(in.op)) {

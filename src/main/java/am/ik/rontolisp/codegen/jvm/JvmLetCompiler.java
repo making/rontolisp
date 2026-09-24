@@ -111,7 +111,7 @@ final class JvmLetCompiler {
 			}
 		}
 		Set<String> capturedInLet = FreeVarAnalyzer.findCapturedVars(parts.subList(2, parts.size()), letVarNames,
-				ctx.functions.keySet());
+				ctx.functions.keySet(), ctx.captureMemo);
 		ctx.boxedVars = new HashSet<>(ctx.boxedVars);
 		// Each dynamic (special) binding established here: {tlFieldIndex, saveSlot}.
 		// Restored (reverse order) after the body, before the scope is popped.

@@ -9,6 +9,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.HostBoundary;
@@ -171,28 +172,25 @@ public final class HttpReactorInliner {
 	}
 
 	private static LispVal lowerDirective(LispVal form, boolean[] found) {
-		if (!(form instanceof LispCons cons)) {
-			return form;
-		}
-		if (cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name())) {
-			return form;
-		}
-		if (isHttpHandlerDirective(cons)) {
-			found[0] = true;
-			return LispReader
-				.readAllFromString("""
-						(progn (rontolisp::%%http-reactor-register (function %s)%s)
-						       (rontolisp::%%http-reactor 'rontolisp::%s "%s"))
-						""".formatted(directiveHandlerName(cons), directiveRawBodyMode(cons),
-						HttpReactorLibrary.DISPATCH, EXPORT_NAME), Features.INTERPRETER)
-				.get(0);
-		}
-		LispVal car = lowerDirective(cons.car(), found);
-		LispVal cdr = lowerDirective(cons.cdr(), found);
-		if (car == cons.car() && cdr == cons.cdr()) {
-			return form;
-		}
-		return new LispCons(car, cdr);
+		return LispTrees.rebuildSpine(form, node -> {
+			if (!(node instanceof LispCons cons)) {
+				return node;
+			}
+			if (cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name())) {
+				return node;
+			}
+			if (isHttpHandlerDirective(cons)) {
+				found[0] = true;
+				return LispReader
+					.readAllFromString("""
+							(progn (rontolisp::%%http-reactor-register (function %s)%s)
+							       (rontolisp::%%http-reactor 'rontolisp::%s "%s"))
+							""".formatted(directiveHandlerName(cons), directiveRawBodyMode(cons),
+							HttpReactorLibrary.DISPATCH, EXPORT_NAME), Features.INTERPRETER)
+					.get(0);
+			}
+			return null;
+		}, car -> lowerDirective(car, found));
 	}
 
 	private static boolean isHttpHandlerDirective(LispCons cons) {
@@ -385,24 +383,21 @@ public final class HttpReactorInliner {
 	// form to nil, recording the first one's arguments into holder. Quoted data is left
 	// untouched; unchanged subtrees keep their identity (no needless rebuild).
 	private static LispVal lower(LispVal form, String[] holder) {
-		if (!(form instanceof LispCons cons)) {
-			return form;
-		}
-		if (cons.car() instanceof LispSymbol sym && LispNames.QUOTE.equals(sym.name())) {
-			return form;
-		}
-		if (isMarker(cons)) {
-			if (holder[0] == null) {
-				parse(cons, holder);
+		return LispTrees.rebuildSpine(form, node -> {
+			if (!(node instanceof LispCons cons)) {
+				return node;
 			}
-			return LispNil.INSTANCE;
-		}
-		LispVal car = lower(cons.car(), holder);
-		LispVal cdr = lower(cons.cdr(), holder);
-		if (car == cons.car() && cdr == cons.cdr()) {
-			return form;
-		}
-		return new LispCons(car, cdr);
+			if (cons.car() instanceof LispSymbol sym && LispNames.QUOTE.equals(sym.name())) {
+				return node;
+			}
+			if (isMarker(cons)) {
+				if (holder[0] == null) {
+					parse(cons, holder);
+				}
+				return LispNil.INSTANCE;
+			}
+			return null;
+		}, car -> lower(car, holder));
 	}
 
 	// Whether a top-level rontolisp:wasm-export directive already claims the export

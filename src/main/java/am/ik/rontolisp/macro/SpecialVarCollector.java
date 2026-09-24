@@ -163,86 +163,92 @@ public final class SpecialVarCollector {
 
 	/** Whether the form contains a {@code progv} head anywhere outside quoted data. */
 	private static boolean usesProgv(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol head) {
-			String h = head.name();
-			if (LispNames.QUOTE.equals(h)) {
-				return false;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head) {
+				String h = head.name();
+				if (LispNames.QUOTE.equals(h)) {
+					return false;
+				}
+				if (LispNames.PROGV.equals(h)) {
+					return true;
+				}
 			}
-			if (LispNames.PROGV.equals(h)) {
+			if (usesProgv(cons.car())) {
 				return true;
 			}
+			form = cons.cdr();
 		}
-		return usesProgv(cons.car()) || usesProgv(cons.cdr());
+		return false;
 	}
 
 	private static void collectBoundForm(LispVal form, Set<String> specials, Set<String> out) {
-		if (!(form instanceof LispCons cons)) {
-			return;
-		}
-		if (cons.car() instanceof LispSymbol head) {
-			String h = head.name();
-			if (LispNames.QUOTE.equals(h)) {
-				return;
-			}
-			if (LispNames.LET.equals(h) || LispNames.LET_STAR.equals(h)) {
-				List<LispVal> parts = cons.toList();
-				if (parts.size() >= 2) {
-					LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));
-					if (bindings instanceof LispCons bindingsCons) {
-						for (LispVal binding : bindingsCons.toList()) {
-							if (binding instanceof LispCons pair && pair.car() instanceof LispSymbol name) {
-								if (specials.contains(name.name())) {
-									out.add(name.name());
+		// The cdr is walked in the loop, so a long list costs no stack.
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head) {
+				String h = head.name();
+				if (LispNames.QUOTE.equals(h)) {
+					return;
+				}
+				if (LispNames.LET.equals(h) || LispNames.LET_STAR.equals(h)) {
+					List<LispVal> parts = cons.toList();
+					if (parts.size() >= 2) {
+						LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));
+						if (bindings instanceof LispCons bindingsCons) {
+							for (LispVal binding : bindingsCons.toList()) {
+								if (binding instanceof LispCons pair && pair.car() instanceof LispSymbol name) {
+									if (specials.contains(name.name())) {
+										out.add(name.name());
+									}
+									collectBoundForm(pair.cdr(), specials, out);
 								}
-								collectBoundForm(pair.cdr(), specials, out);
 							}
 						}
+						for (int i = 2; i < parts.size(); i++) {
+							collectBoundForm(parts.get(i), specials, out);
+						}
 					}
-					for (int i = 2; i < parts.size(); i++) {
-						collectBoundForm(parts.get(i), specials, out);
+					return;
+				}
+				// A write-to-string keyword BINDS the printer variable it names: the
+				// Pass-2
+				// lowering (LispMacroExpander.expandWriteToStringKeywords) turns the call
+				// into a let of the variable, which this walk must see -- the one binding
+				// form no expansion step above reveals. Without this, a program whose
+				// only
+				// binding of *print-length* is (write-to-string x :length 1) failed the
+				// JVM compile with "dynamically bound here but has no thread-local
+				// store".
+				if (LispNames.WRITE_TO_STRING.equals(h) && cons.isProperList() && cons.toList().size() > 2) {
+					LispVal lowered = null;
+					try {
+						lowered = LispMacroExpander.expandWriteToStringKeywords(cons);
+					}
+					catch (RuntimeException ignored) {
+						// A malformed call is the expression compiler's error to report.
+					}
+					if (lowered != null) {
+						collectBoundForm(lowered, specials, out);
+						return;
 					}
 				}
-				return;
-			}
-			// A write-to-string keyword BINDS the printer variable it names: the Pass-2
-			// lowering (LispMacroExpander.expandWriteToStringKeywords) turns the call
-			// into a let of the variable, which this walk must see -- the one binding
-			// form no expansion step above reveals. Without this, a program whose only
-			// binding of *print-length* is (write-to-string x :length 1) failed the
-			// JVM compile with "dynamically bound here but has no thread-local store".
-			if (LispNames.WRITE_TO_STRING.equals(h) && cons.isProperList() && cons.toList().size() > 2) {
-				LispVal lowered = null;
+				// Binding sugar (do/dolist/dotimes/loop/multiple-value-bind/with-*/...)
+				// reveals its lets one expansion step at a time; a form the expander
+				// rejects (it may validate shapes the compiler checks later) is walked
+				// raw instead -- no binding macro both fails to expand AND binds.
+				LispVal expansion = null;
 				try {
-					lowered = LispMacroExpander.expandWriteToStringKeywords(cons);
+					expansion = LispMacroExpander.expandBuiltinMacro(cons);
 				}
 				catch (RuntimeException ignored) {
-					// A malformed call is the expression compiler's error to report.
 				}
-				if (lowered != null) {
-					collectBoundForm(lowered, specials, out);
+				if (expansion != null && expansion != cons) {
+					collectBoundForm(expansion, specials, out);
 					return;
 				}
 			}
-			// Binding sugar (do/dolist/dotimes/loop/multiple-value-bind/with-*/...)
-			// reveals its lets one expansion step at a time; a form the expander
-			// rejects (it may validate shapes the compiler checks later) is walked
-			// raw instead -- no binding macro both fails to expand AND binds.
-			LispVal expansion = null;
-			try {
-				expansion = LispMacroExpander.expandBuiltinMacro(cons);
-			}
-			catch (RuntimeException ignored) {
-			}
-			if (expansion != null && expansion != cons) {
-				collectBoundForm(expansion, specials, out);
-				return;
-			}
+			collectBoundForm(cons.car(), specials, out);
+			form = cons.cdr();
 		}
-		collectBoundForm(cons.car(), specials, out);
-		collectBoundForm(cons.cdr(), specials, out);
 	}
 
 	/**
@@ -251,23 +257,22 @@ public final class SpecialVarCollector {
 	 * comment.
 	 */
 	private static void collectLocalDeclares(LispVal form, Set<String> out) {
-		if (!(form instanceof LispCons cons)) {
-			return;
-		}
-		if (cons.car() instanceof LispSymbol head) {
-			if (LispNames.QUOTE.equals(head.name())) {
-				return;
-			}
-			if (LispNames.DECLARE.equals(member(head.name()))) {
-				List<LispVal> parts = cons.toList();
-				for (int i = 1; i < parts.size(); i++) {
-					addSpecialClause(parts.get(i), out);
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head) {
+				if (LispNames.QUOTE.equals(head.name())) {
+					return;
 				}
-				return;
+				if (LispNames.DECLARE.equals(member(head.name()))) {
+					List<LispVal> parts = cons.toList();
+					for (int i = 1; i < parts.size(); i++) {
+						addSpecialClause(parts.get(i), out);
+					}
+					return;
+				}
 			}
+			collectLocalDeclares(cons.car(), out);
+			form = cons.cdr();
 		}
-		collectLocalDeclares(cons.car(), out);
-		collectLocalDeclares(cons.cdr(), out);
 	}
 
 	/** Strips a package qualifier: {@code pkg::special} matches like {@code special}. */

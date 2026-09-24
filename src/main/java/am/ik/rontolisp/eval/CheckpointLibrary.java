@@ -159,24 +159,28 @@ public final class CheckpointLibrary {
 		}
 
 		private void detect(LispVal form) {
-			if (this.found) {
-				return;
-			}
-			switch (form) {
-				case LispSymbol sym -> {
-					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-					boolean qualified = qn != null && this.pkg.equals(qn.pkg());
-					if (qualified || (this.pkg.equals(this.currentPackage)
-							&& this.exportedNames.contains(sym.name().toUpperCase(Locale.ROOT)))) {
-						this.found = true;
+			while (true) {
+				if (this.found) {
+					return;
+				}
+				switch (form) {
+					case LispSymbol sym -> {
+						PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+						boolean qualified = qn != null && this.pkg.equals(qn.pkg());
+						if (qualified || (this.pkg.equals(this.currentPackage)
+								&& this.exportedNames.contains(sym.name().toUpperCase(Locale.ROOT)))) {
+							this.found = true;
+						}
+					}
+					case LispCons cons -> {
+						detect(cons.car());
+						form = cons.cdr();
+						continue;
+					}
+					default -> {
 					}
 				}
-				case LispCons cons -> {
-					detect(cons.car());
-					detect(cons.cdr());
-				}
-				default -> {
-				}
+				return;
 			}
 		}
 

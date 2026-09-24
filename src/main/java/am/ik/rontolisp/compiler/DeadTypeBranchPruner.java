@@ -11,6 +11,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.ArgumentShapes.Shape;
@@ -231,13 +232,13 @@ public final class DeadTypeBranchPruner {
 
 	/** Every symbol anywhere in a tree. */
 	private static void collectSymbols(LispVal form, Set<String> out) {
-		if (form instanceof LispSymbol sym) {
-			out.add(sym.name());
-			return;
-		}
-		if (form instanceof LispCons cons) {
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
 			collectSymbols(cons.car(), out);
-			collectSymbols(cons.cdr(), out);
+			node = cons.cdr();
+		}
+		if (node instanceof LispSymbol sym) {
+			out.add(sym.name());
 		}
 	}
 
@@ -377,10 +378,8 @@ public final class DeadTypeBranchPruner {
 
 		/** Rewrites every element of a list, improper tail included. */
 		private LispVal forms(LispVal tail, Env env) {
-			if (!(tail instanceof LispCons cons)) {
-				return tail;
-			}
-			return LispCons.rebuilt(cons, this.form(cons.car(), env), this.forms(cons.cdr(), env));
+			return LispTrees.rebuildSpine(tail, node -> node instanceof LispCons ? null : node,
+					element -> this.form(element, env));
 		}
 
 		private List<Shape> shapes(LispVal tail, Env env) {

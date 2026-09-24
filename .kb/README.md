@@ -135,10 +135,10 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [library-defun-pruning.md](library-defun-pruning.md) -- AST pruning of spliced library defuns, rontolisp's own and ASDF-spliced; the JVM-lived parse caches the splice reads from
 - [emitted-output-determinism.md](emitted-output-determinism.md) -- the same program compiles to the same bytes on every run
 - [default-run-path.md](default-run-path.md) -- flagless `rontolisp app.lisp` runs the interpreter by decision
-- [interpreter-stack.md](interpreter-stack.md) -- the CLI and a compiled JVM `main` run every program on a stack they chose; `--stack`, `-Drontolisp.stack`
+- [interpreter-stack.md](interpreter-stack.md) -- the CLI, an embedder's `JvmSourceCompiler` and a compiled JVM `main` run every program on a stack they chose; `--stack`, `-Drontolisp.stack`; every walk loops down the cdr so depth is nesting, never a list's length (`LispTrees`, circular tails refused)
 - [interpreter-tail-calls.md](interpreter-tail-calls.md) -- the interpreter's `eval` is a loop: a form in tail position replaces the frame, so a tail call through a value, `apply`, mutual defuns runs in constant stack; the block-owner identity, the depth and time numbers, `or`'s last form
 - [measurement-probes.md](measurement-probes.md) -- whether a performance number answers the question that was asked
-- [test-execution.md](test-execution.md) -- how the test suite actually runs (surefire forks, which classes run methods concurrently and the per-thread stdio device that lets an in-process program run that way), and the rule that no test may name a scratch path or a port from a constant: two builds share one machine
+- [test-execution.md](test-execution.md) -- how the test suite actually runs (surefire forks, which classes run methods concurrently, the per-thread stdio device that lets an in-process program run that way, and the CLI-sized stack in-process program work runs on), and the rule that no test may name a scratch path or a port from a constant: two builds share one machine
 - [running-backends.md](running-backends.md) -- running a program on all four backends by hand, the native-image E2E leg, the examples suite
 - [adding-primitives.md](adding-primitives.md) -- the per-surface checklists for a new built-in function, macro or special form, and the two silent-failure traps
 - [hot-path-method-size.md](hot-path-method-size.md) -- HotSpot's 8000-bytecode HugeMethodLimit and the splits that stay under it

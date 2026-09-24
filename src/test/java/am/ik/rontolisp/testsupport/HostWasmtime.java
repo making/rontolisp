@@ -49,8 +49,7 @@ public final class HostWasmtime {
 	// scratch dirs are: a bare "rontolisp-wasmtime" is one directory for every JVM on
 	// the machine, and two concurrent `./mvnw test` runs (one worktree each, the normal
 	// state of this repo) would share the exec/err staging files and the process's cwd.
-	private static final Path ROOT = Path.of(System.getProperty("java.io.tmpdir"), "rontolisp-wasmtime",
-			"p" + ProcessHandle.current().pid());
+	private static final Path ROOT = ProcessScratch.root();
 
 	private static final String VERSION = readVersion();
 

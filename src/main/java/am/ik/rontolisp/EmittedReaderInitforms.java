@@ -99,7 +99,7 @@ public final class EmittedReaderInitforms {
 			case LispString ignored -> true;
 			case LispChar c -> isReadableChar(c.codePoint());
 			case LispSymbol sym -> !sym.name().isEmpty() && sym.name().charAt(0) != '#';
-			case LispCons cons -> isReadable(cons.car(), wasmLimits) && isReadable(cons.cdr(), wasmLimits);
+			case LispCons cons -> isReadableList(cons, wasmLimits);
 			case LispNil ignored -> true;
 			case LispArray array -> {
 				if (array.fillPointer() >= 0 || array.adjustable() || array.displacedTo() != null) {
@@ -125,6 +125,18 @@ public final class EmittedReaderInitforms {
 			}
 			default -> false;
 		};
+	}
+
+	/** Every element and the tail of a list, down the cdr spine in a loop. */
+	private static boolean isReadableList(LispCons list, boolean wasmLimits) {
+		LispVal node = list;
+		while (node instanceof LispCons cell) {
+			if (!isReadable(cell.car(), wasmLimits)) {
+				return false;
+			}
+			node = cell.cdr();
+		}
+		return isReadable(node, wasmLimits);
 	}
 
 	private static boolean fitsI31(BigInteger v) {

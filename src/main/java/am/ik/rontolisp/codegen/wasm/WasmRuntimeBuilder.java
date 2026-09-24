@@ -39,7 +39,7 @@ final class WasmRuntimeBuilder {
 	 * improper first argument still traps at the same {@code ref.cast}.
 	 */
 	static byte[] buildAppendBody(boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// 4 extra locals, all (ref null eq): 2=head, 3=tail, 4=cursor, 5=fresh.
@@ -144,7 +144,7 @@ final class WasmRuntimeBuilder {
 	 * @return the function body
 	 */
 	static byte[] buildEqualBody(int instanceTypeIndex, boolean charvecPossible) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		if (instanceTypeIndex < 0) {
@@ -322,7 +322,7 @@ final class WasmRuntimeBuilder {
 	 * @return the function body
 	 */
 	static byte[] buildEqlTailBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // 0 extra locals
 		// both floats -> equal bit patterns or both NaN (-0.0 and 0.0 are not eql)
@@ -546,7 +546,7 @@ final class WasmRuntimeBuilder {
 	 */
 	static byte[] buildHashBody(int instanceTypeIndex, int depthGlobalIndex, int gasGlobalIndex,
 			boolean charvecPossible, boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// one i64 local (index 1) used to fold a float's 64-bit pattern into i32,
@@ -875,7 +875,7 @@ final class WasmRuntimeBuilder {
 	 * @return the function body
 	 */
 	static byte[] buildHashResizeBody(boolean identityTables, int instanceTypeIndex) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// locals: 4 x (ref null eq) [1=oldArr 2=newArr 3=cur 4=entry] + the entry key
@@ -2088,7 +2088,7 @@ final class WasmRuntimeBuilder {
 		// 2^24, the value one full `./mvnw test` once reached
 		// (`.kb/wasm-function-body-size.md`).
 		if (maxFuncId < DISPATCH_PAGE_BUDGET_BYTES) {
-			ByteArrayOutputStream body = new ByteArrayOutputStream();
+			ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 			WasmWriter w = new WasmWriter(body);
 			emitDispatchPrologue(w, arity, dispatchArgs, spread, usesEval, report != null, notFunction, identityHash);
 			emitDispatchCases(w, targets, missShapes, arity, dispatchArgs, spread, 0, report, arityChkIndex,
@@ -2139,7 +2139,7 @@ final class WasmRuntimeBuilder {
 
 		// The root keeps the fixed index every call site already wrote: the prologue as
 		// before, then the top digit selects a page instead of a case.
-		ByteArrayOutputStream rootBody = new ByteArrayOutputStream();
+		ByteArrayOutputStream rootBody = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter rw = new WasmWriter(rootBody);
 		emitDispatchPrologue(rw, arity, dispatchArgs, spread, usesEval, report != null, notFunction, identityHash);
 		int funcIdLocal = dispatchArgs + 1;
@@ -2459,7 +2459,7 @@ final class WasmRuntimeBuilder {
 	 * @return the function body
 	 */
 	static byte[] buildArityChkBody(ArityReport report) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// Params: 0 = argList, 1 = shape. Locals: 2 = got (i32), 3 = cursor, 4 = slots,
 		// 5 = msg.
@@ -2530,7 +2530,7 @@ final class WasmRuntimeBuilder {
 	 * @return the function body
 	 */
 	static byte[] buildArityChkStubBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // 0 locals
 		w.write(Instruction.I32_CONST);
@@ -3137,7 +3137,7 @@ final class WasmRuntimeBuilder {
 	private static byte[] buildDispatchLeafPage(List<DispatchTarget> targets, SortedMap<Integer, Integer> missShapes,
 			int page, int arity, int dispatchArgs, boolean spread, @Nullable ArityReport report, int arityChkIndex,
 			boolean sharedConsReaders, boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		emitPageLocals(w, report != null);
 		emitPageFuncIdDigit(w, dispatchArgs, 0);
@@ -3152,7 +3152,7 @@ final class WasmRuntimeBuilder {
 	 * it with the arguments untouched.
 	 */
 	private static byte[] buildDispatchNodePage(Map<Integer, Integer> children, int dispatchArgs, int level) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		emitPageLocals(w, false);
 		emitPageFuncIdDigit(w, dispatchArgs, level);
@@ -3354,7 +3354,7 @@ final class WasmRuntimeBuilder {
 	 * '"' prefix/suffix (internal string format), or ref.null eq on EOF.
 	 */
 	static byte[] buildReadLineBody(WasmLispCompiler.StringTable st) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// Param: 0=fd (i32)
@@ -4038,7 +4038,7 @@ final class WasmRuntimeBuilder {
 	 * Builds the print_i32 helper function body.
 	 */
 	static byte[] buildPrintI32Core(boolean appendNewline) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// Locals 1-3: is_neg, digit count, reverse cursor -- one run, not three: adjacent
@@ -4227,7 +4227,7 @@ final class WasmRuntimeBuilder {
 	}
 
 	static byte[] buildWriteStrBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// Locals: 2=capture cursor (i32), 3=copy index (i32); params: 0=ptr, 1=len
@@ -4374,7 +4374,7 @@ final class WasmRuntimeBuilder {
 	 * @return the function body
 	 */
 	static byte[] buildToStringBody(int renderFunc, int argCount) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// Locals: argCount=start (i32), argCount+1=cur (i32)
@@ -4500,7 +4500,7 @@ final class WasmRuntimeBuilder {
 	 * @return the function body
 	 */
 	static byte[] buildFunNameBody(WasmLispCompiler.StringTable st, int tableBase, int count) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// Locals: slot 0 = funcId (parameter), slots 1-2 = the scan bounds, slot 3 =
 		// the midpoint, slot 4 = the address of the row under test.
@@ -4613,7 +4613,7 @@ final class WasmRuntimeBuilder {
 	static byte[] buildPrintValBody(WasmLispCompiler.StringTable st, boolean simd, int futureTypeIndex,
 			int p1StreamTypeIndex, int instanceTypeIndex, int renderPathGlobalIndex, int renderDepthGlobalIndex,
 			boolean charvecPossible, boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// Locals: slot 1 = (ref null eq) cons cursor, slot 2 = i32 cons first-flag (both
@@ -4849,7 +4849,7 @@ final class WasmRuntimeBuilder {
 	static byte[] buildPrincValBody(WasmLispCompiler.StringTable st, boolean simd, int futureTypeIndex,
 			int p1StreamTypeIndex, int instanceTypeIndex, int renderPathGlobalIndex, int renderDepthGlobalIndex,
 			boolean charvecPossible, boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// Local declarations: slot 1 = ref null eq, slot 2 = i32 (offset), slot 3 = i32
@@ -6540,7 +6540,7 @@ final class WasmRuntimeBuilder {
 	 * FloatText.doubleText answers on the interpreter and the JVM.
 	 */
 	static byte[] buildPrintF64Core(boolean appendNewline, WasmLispCompiler.StringTable st) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.writeUnsignedLeb128(0); // no locals
 
@@ -6627,7 +6627,7 @@ final class WasmRuntimeBuilder {
 	 * (identical text); everything else selects the shortest f32 decimal.
 	 */
 	static byte[] buildPrintF32Core(WasmLispCompiler.StringTable st) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.writeUnsignedLeb128(0); // no locals
 

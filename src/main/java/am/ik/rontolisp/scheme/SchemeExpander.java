@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
@@ -242,6 +243,12 @@ final class SchemeExpander {
 	private static boolean spellsSyntaxDefinition(LispVal datum,
 			java.util.function.Function<LispSymbol, @Nullable Core> keyword,
 			java.util.function.Predicate<LispSymbol> importedMacro) {
+		while (datum instanceof LispCons cons) {
+			if (spellsSyntaxDefinition(cons.car(), keyword, importedMacro)) {
+				return true;
+			}
+			datum = cons.cdr();
+		}
 		return switch (datum) {
 			case LispSymbol symbol -> {
 				Core core = keyword.apply(symbol);
@@ -250,8 +257,6 @@ final class SchemeExpander {
 						|| symbol.name().equals("let-syntax") || symbol.name().equals("letrec-syntax")
 						|| importedMacro.test(symbol);
 			}
-			case LispCons cons -> spellsSyntaxDefinition(cons.car(), keyword, importedMacro)
-					|| spellsSyntaxDefinition(cons.cdr(), keyword, importedMacro);
 			case LispArray array -> {
 				for (LispVal element : array.data()) {
 					if (spellsSyntaxDefinition(element, keyword, importedMacro)) {
@@ -867,6 +872,13 @@ final class SchemeExpander {
 
 	// Quasiquote: data but for the unquoted expressions of the outermost level.
 	private LispVal quasi(LispVal template, int depth, Env env) {
+		return LispTrees.rebuildSpine(template, node -> quasiStop(node, depth, env),
+				element -> quasi(element, depth, env), this::inheritCons);
+	}
+
+	// What the quasiquote walk turns a node into when it does not walk on down a cdr: a
+	// vector, an atom, or an unquote / quasiquote cell. Null for an ordinary cell.
+	private @Nullable LispVal quasiStop(LispVal template, int depth, Env env) {
 		if (template instanceof LispArray vector) {
 			List<LispVal> elements = new ArrayList<>();
 			for (LispVal element : vector.data()) {
@@ -888,7 +900,12 @@ final class SchemeExpander {
 				return this.host.inherit(cons, SchemeBuiltins.list(base(head), quasi(rest.car(), depth + 1, env)));
 			}
 		}
-		return this.host.inherit(cons, new LispCons(quasi(cons.car(), depth, env), quasi(cons.cdr(), depth, env)));
+		return null;
+	}
+
+	// A walked cell put back together as a fresh cons carrying the original's position.
+	private LispVal inheritCons(LispCons original, LispVal car, LispVal cdr) {
+		return this.host.inherit(original, new LispCons(car, cdr));
 	}
 
 	// ------------------------------------------------------------------ bodies
@@ -1099,21 +1116,19 @@ final class SchemeExpander {
 	}
 
 	private LispVal topLevelFormals(LispVal datum, LispCons form) {
-		if (datum instanceof LispCons cons) {
-			return this.host.inherit(cons,
-					new LispCons(topLevelFormals(cons.car(), form), topLevelFormals(cons.cdr(), form)));
-		}
-		return isPlainIdentifier(datum) ? bindTopLevel((LispSymbol) datum, form) : datum;
+		return LispTrees.rebuildSpine(datum,
+				node -> node instanceof LispCons ? null
+						: isPlainIdentifier(node) ? bindTopLevel((LispSymbol) node, form) : node,
+				element -> topLevelFormals(element, form), this::inheritCons);
 	}
 
 	// The formals of a define-values in a body, bound during the scan: their emitted
 	// names.
 	private LispVal renamedFormals(LispVal datum, Env env) {
-		if (datum instanceof LispCons cons) {
-			return this.host.inherit(cons,
-					new LispCons(renamedFormals(cons.car(), env), renamedFormals(cons.cdr(), env)));
-		}
-		return isPlainIdentifier(datum) ? reference((LispSymbol) datum, env, null) : datum;
+		return LispTrees.rebuildSpine(datum,
+				node -> node instanceof LispCons ? null
+						: isPlainIdentifier(node) ? reference((LispSymbol) node, env, null) : node,
+				element -> renamedFormals(element, env), this::inheritCons);
 	}
 
 	private void defineSyntax(LispCons form, Env env, boolean topLevel) {
@@ -1200,11 +1215,10 @@ final class SchemeExpander {
 
 	// Binds every identifier of a formals list (proper, dotted or a lone rest symbol).
 	private LispVal formals(LispVal datum, Env env) {
-		if (datum instanceof LispCons cons) {
-			LispVal car = isPlainIdentifier(cons.car()) ? bind((LispSymbol) cons.car(), env) : strip(cons.car());
-			return this.host.inherit(cons, new LispCons(car, formals(cons.cdr(), env)));
-		}
-		return isPlainIdentifier(datum) ? bind((LispSymbol) datum, env) : datum;
+		return LispTrees.rebuildSpine(datum,
+				node -> node instanceof LispCons ? null : isPlainIdentifier(node) ? bind((LispSymbol) node, env) : node,
+				element -> isPlainIdentifier(element) ? bind((LispSymbol) element, env) : strip(element),
+				this::inheritCons);
 	}
 
 	private LispVal bindIdentifier(LispVal datum, Env env) {
@@ -1218,7 +1232,8 @@ final class SchemeExpander {
 	private LispVal strip(LispVal datum) {
 		return switch (datum) {
 			case LispSymbol symbol -> base(symbol);
-			case LispCons cons -> this.host.inherit(cons, new LispCons(strip(cons.car()), strip(cons.cdr())));
+			case LispCons cons -> LispTrees.rebuildSpine(cons, node -> node instanceof LispCons ? null : strip(node),
+					this::strip, this::inheritCons);
 			case LispArray vector -> {
 				LispVal[] elements = new LispVal[vector.data().length];
 				boolean changed = false;

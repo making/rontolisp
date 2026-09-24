@@ -39,7 +39,7 @@ final class WasmSymbolApiRuntimeBuilder {
 
 	/** {@code _make_symbol(str) -> (ref null eq)}: heap copy of {@code #:} + content. */
 	static byte[] buildMakeSymbol() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int STR = 0, LEN = 1, START = 2, K = 3, ARR = 4;
 		// three i32 locals + one $str_bytes ref (the content read source)
@@ -137,7 +137,7 @@ final class WasmSymbolApiRuntimeBuilder {
 	 * the plain canonicalization)
 	 */
 	static byte[] buildInternSym(int nilOffset) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int STR = 0, OFF = 1, LEN = 2;
 		w.write(1);
@@ -194,7 +194,7 @@ final class WasmSymbolApiRuntimeBuilder {
 	 * @param tOffset the string-table offset of the symbol {@code t}
 	 */
 	static byte[] buildBoundp(int tOffset) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int SYM = 0, OFF = 1;
 		w.write(1);
@@ -231,7 +231,7 @@ final class WasmSymbolApiRuntimeBuilder {
 	 * @param tOffset the string-table offset of the symbol {@code t}
 	 */
 	static byte[] buildSymbolValue(int tOffset) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int SYM = 0, OFF = 1;
 		w.write(1);
@@ -268,7 +268,7 @@ final class WasmSymbolApiRuntimeBuilder {
 
 	/** {@code _fboundp(sym) -> (ref null eq)}: GLOBAL_FENV, then the defun registry. */
 	static byte[] buildFboundp(int tOffset) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int SYM = 0, OFF = 1, BIND = 2;
 		w.write(2);
@@ -349,7 +349,7 @@ final class WasmSymbolApiRuntimeBuilder {
 	 * working (eager compilation cannot be undone). Returns the symbol, like CL.
 	 */
 	static byte[] buildFmakunbound(boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int SYM = 0, OFF = 1, BIND = 2;
 		w.write(2);
@@ -424,7 +424,7 @@ final class WasmSymbolApiRuntimeBuilder {
 	 * {@code _fmakunbound}'s non-name tolerance.
 	 */
 	static byte[] buildSetSymbolFunction(boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int SYM = 0, VALUE = 1, OFF = 2, BIND = 3;
 		w.write(2);
@@ -498,7 +498,7 @@ final class WasmSymbolApiRuntimeBuilder {
 	 * assignment ran).
 	 */
 	static byte[] buildFenvFunction() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int SYM = 0, OFF = 1, VALUE = 2;
 		w.write(2);

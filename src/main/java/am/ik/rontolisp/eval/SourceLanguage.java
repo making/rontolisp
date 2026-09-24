@@ -3,11 +3,14 @@ package am.ik.rontolisp.eval;
 import java.io.IOException;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 import org.jspecify.annotations.Nullable;
 
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.scheme.Scheme;
 import am.ik.rontolisp.scheme.SchemeFiles;
@@ -109,11 +112,36 @@ public enum SourceLanguage {
 	public List<LispVal> read(String source, Features features, @Nullable String file, SourceStandards standards,
 			@Nullable SourceLoader loader) {
 		if (this == SCHEME) {
-			return Scheme.read(source, file, standards.scheme(), schemeFiles(loader));
+			return refuseCircularLists(Scheme.read(source, file, standards.scheme(), schemeFiles(loader)), source,
+					file);
 		}
-		return usesReadEvalMarkers(source) ? LispReader.readAllWithReadEvalMarkers(source, features, file)
-				: LispReader.readAllFromString(source, features, file);
+		return refuseCircularLists(
+				usesReadEvalMarkers(source) ? LispReader.readAllWithReadEvalMarkers(source, features, file)
+						: LispReader.readAllFromString(source, features, file),
+				source, file);
 	}
+
+	/**
+	 * Refuses a program whose source closes a list back into its own tail with a reader
+	 * label ({@code '#1=(a b . #1#)}). The passes walk a list's spine in a loop
+	 * ({@link LispTrees}), which on such a list would never end; a label that only shares
+	 * structure, or closes a cycle through a car, is left alone. Only a source that
+	 * defines a label pays for the check.
+	 */
+	private static List<LispVal> refuseCircularLists(List<LispVal> forms, String source, @Nullable String file) {
+		if (!LABEL_DEFINITION.matcher(source).find()) {
+			return forms;
+		}
+		for (LispVal form : forms) {
+			if (LispTrees.circularSpine(form) != null) {
+				throw new LispReadException((file == null ? "" : file + ": ")
+						+ "a circular list literal (a #n= label referenced in its own tail) is not supported in program source");
+			}
+		}
+		return forms;
+	}
+
+	private static final Pattern LABEL_DEFINITION = Pattern.compile("#[0-9]+=");
 
 	/**
 	 * The files a Scheme program names, through a loader: a path relative to the naming

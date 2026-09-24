@@ -2,7 +2,7 @@
 
 **Invariant: `RontoLispCli.main` NEVER interprets on the thread the launcher called it on.**
 It reads `--stack`, then runs the whole command line on a thread of its own
-(`WORKER_STACK_BYTES`, 16 MiB) and waits for it. The interpreter's recursion depth is the
+(`SizedThread.WORKER_STACK_BYTES`, 16 MiB) and waits for it. The interpreter's recursion depth is the
 PROGRAM's, so a ceiling inherited from the platform is a different product on each one.
 
 ## The numbers (measured 2026-09-11, aarch64)
@@ -130,7 +130,53 @@ unchanged as `private static _main$body(String[])`; the class itself is the `Run
   41,692 -> 42,379), +380-480 B of jar. `size-report` measures wasm only, so none of its
   numbers move.
 
+## An embedder compiles on the same stack
+
+`JvmSourceCompiler.compile` / `compileIfExported` (the Maven plugin's `LispSourceSet`) hand
+the front end and the backend to a thread of `WORKER_STACK_BYTES` through `cli/SizedThread`
+-- the same helper `joinLaunch` uses -- and wait: before 2026-09-24 they ran on the caller's
+thread, 1 MiB for Maven's main thread on linux-x64. What crosses: the context class loader
+and inheritable thread locals (the `Thread` constructor copies both); `SourceProvenance` and
+`CompileWarnings` state is opened and closed inside the body; an `Error` or
+`RuntimeException` is rethrown as itself. There is no WASM embedder seam; the playground runs
+no threads. `compileProgram` (the CLI's `-o` path) stays on the CLI's own worker.
+
+## Depth is NESTING, never a list's length
+
+Every walk over program forms -- the front end's passes and splice detectors, the reader's
+label patch and backquote expanders, the Scheme front end, both WASM backends' scans and
+`WasmQuoteCompiler`, `LispEquality.equal` -- recurses on the car and LOOPS down the cdr. A
+predicate or collector turns its tail call into a loop by hand, keeping every head check
+the recursion applied to each sub-tail; a rewrite goes through `LispTrees.rebuildSpine`
+(identity per cell as `LispCons.rebuilt`, the recursive walk's call order). Before
+2026-09-24 ~216 walks recursed per element: through `JvmSourceCompiler` on 1 MiB a
+`(progn ...)` of 1,400 forms compiled and 2,800 overflowed (`JsonLibrary$Walker.rewrite`);
+on the CLI's 16 MiB a quoted list of 100,000 numbers overflowed even interpreted (60,000
+ran) and a 400,000-form `progn` overflowed the compile path. After: 50,000 elements on
+1 MiB, every backend (`WideListStackTest`).
+
+A list whose tail closes into itself would now loop where it overflowed:
+- A `#n=` label that does so in PROGRAM SOURCE is refused at the read
+  (`SourceLanguage.read`, only when the text contains `#<digits>=`; `LispTrees.circularSpine`).
+  A shared label and a cycle through a car stay legal (the latter still overflows).
+- At run time (`eval`, `compile`, a macro expansion of a circular constant) `rebuildSpine`
+  and `equal` run Brent's check and throw `LispTrees.CircularListException`, a program-error
+  a `handler-case` catches -- the overflow before was not catchable.
+
+What still recurses per element, by design: `LispEquality.equalpKey`/`hash` (capped at depth
+64), the fdlibm tables, `JvmRuntimeBuilder`'s halving dispatch trees. Nesting still costs a
+frame per level: `(g (g ... x))` 2,000 deep overflows `--stack 1` in the reader and 4,000
+compiles on 16 MiB in ~6 s.
+
 ## Pinning tests
+
+`WideListStackTest` runs the whole command line in process on a 1 MiB thread over
+50,000-element lists (a `progn`, quoted numbers, quoted symbols on interpret / `.class` /
+`.wasm` / `--component`; a backquote template interpreted; a 50,000-form defun body on
+`--no-gc`), the source refusal, the run-time `CircularListException`, and
+`anEmbedderCompilesOnTheCliStackNotItsOwn` (the CLI on 1 MiB must overflow on the nesting the
+embedder then compiles from a 1 MiB caller). `LispTreesTest` pins `rebuildSpine`'s identity
+and order and the cycle checks.
 
 `RontoLispCliStreamsTest#mainRunsTheProgramOnItsOwnStackNotTheLaunchersOne` calls `main` on a
 1 MiB thread and, right after at the same depth, the CONTROL: `run` on the same thread, which
@@ -150,6 +196,6 @@ default and at `-Drontolisp.stack=1`/`=0`, the one-line report and exit 1 from t
 thread's name, and the ABSENCE of the launcher from an `objc:`/`appkit:` class and a
 jvm-export class.
 
-The in-process E2E interpreter leg mirrors the constant rather than the mechanism:
-`AsdfLibraryE2eSupport`'s `INTERPRETER_STACK_BYTES` must track `WORKER_STACK_BYTES`, or the
-leg measures JUnit's ceiling instead of the product's ([test-execution.md](test-execution.md)).
+The in-process test legs mirror the constant rather than the mechanism:
+`testsupport/CliStack.BYTES` must track `WORKER_STACK_BYTES` (`RontoLispCliTest` pins it), or
+a leg measures JUnit's ceiling instead of the product's ([test-execution.md](test-execution.md)).

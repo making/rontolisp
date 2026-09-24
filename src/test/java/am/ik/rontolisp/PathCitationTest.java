@@ -5,6 +5,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -275,6 +276,11 @@ class PathCitationTest {
 			}
 		}
 		if (TODO_ITEM_REFERENCE.matcher(token).matches()) {
+			return false;
+		}
+		// A build's output (rontolisp-native/target/resources) exists only in a tree that
+		// ran that build, so whether it resolves says nothing about the citation.
+		if (Arrays.asList(token.split("/")).contains("target")) {
 			return false;
 		}
 		return ABSENT_ON_PURPOSE.stream().noneMatch(absent -> token.equals(absent) || token.startsWith(absent + "/"));

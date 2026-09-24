@@ -111,22 +111,26 @@ public final class MutableStringProducers {
 	}
 
 	private static boolean usesAny(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol sym) {
+				String name = sym.name();
+				if (PRODUCER_NAMES.contains(name)) {
+					return true;
+				}
+				if (LispNames.FORMAT.equals(name) && isFormatToString(cons)) {
+					return true;
+				}
+				if (isMapToString(cons) || isCoerceToString(cons)) {
+					return true;
+				}
+			}
+			if (usesAny(cons.car())) {
+				return true;
+			}
+			node = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol sym) {
-			String name = sym.name();
-			if (PRODUCER_NAMES.contains(name)) {
-				return true;
-			}
-			if (LispNames.FORMAT.equals(name) && isFormatToString(cons)) {
-				return true;
-			}
-			if (isMapToString(cons) || isCoerceToString(cons)) {
-				return true;
-			}
-		}
-		return usesAny(cons.car()) || usesAny(cons.cdr());
+		return false;
 	}
 
 	/**

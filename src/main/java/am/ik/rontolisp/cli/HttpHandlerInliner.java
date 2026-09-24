@@ -44,20 +44,25 @@ public final class HttpHandlerInliner {
 	}
 
 	private static boolean containsHttpHandlerCall(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol sym) {
-			if (LispNames.QUOTE.equals(sym.name())) {
-				// Quoted data is not a call site.
-				return false;
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol sym) {
+				if (LispNames.QUOTE.equals(sym.name())) {
+					// Quoted data is not a call site.
+					return false;
+				}
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+				if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg())
+						&& LispNames.HTTP_HANDLER.equals(qn.member())) {
+					return true;
+				}
 			}
-			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-			if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && LispNames.HTTP_HANDLER.equals(qn.member())) {
+			if (containsHttpHandlerCall(cons.car())) {
 				return true;
 			}
+			node = cons.cdr();
 		}
-		return containsHttpHandlerCall(cons.car()) || containsHttpHandlerCall(cons.cdr());
+		return false;
 	}
 
 }

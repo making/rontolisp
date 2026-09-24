@@ -165,16 +165,21 @@ final class WasmToplevelEmit {
 
 	/** Whether the form mentions any of the names outside of quoted data. */
 	private static boolean mentions(LispVal form, Set<String> names) {
-		if (form instanceof LispSymbol s) {
-			return names.contains(s.name());
-		}
-		if (form instanceof LispCons cons) {
+		while (true) {
+			if (form instanceof LispSymbol s) {
+				return names.contains(s.name());
+			}
+			if (!(form instanceof LispCons cons)) {
+				return false;
+			}
 			if (cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name())) {
 				return false;
 			}
-			return mentions(cons.car(), names) || mentions(cons.cdr(), names);
+			if (mentions(cons.car(), names)) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		return false;
 	}
 
 	private record Chunk(WasmLispCompiler.Ctx ctx, WasmWriter writer, ByteArrayOutputStream body, int lambdaIdx,
@@ -191,7 +196,7 @@ final class WasmToplevelEmit {
 		int funcIndex = start.userFuncBase + start.numDefuns + start.lambdaDecls.size();
 		int lambdaIdx = start.lambdaDecls.size();
 		start.lambdaDecls.add(placeholder(funcId, funcIndex));
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter writer = new WasmWriter(body);
 		WasmLispCompiler.Ctx ctx = WasmAsyncEmit.freshCtx(start, writer, body);
 		// topLevel/usesEval carry over so eval-global mirroring keeps working inside a

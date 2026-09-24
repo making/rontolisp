@@ -153,11 +153,22 @@ public final class WitLibrary {
 	}
 
 	private static boolean references(LispVal form) {
-		return switch (form) {
-			case LispSymbol sym -> isWitRuntimeName(sym.name());
-			case LispCons cons -> references(cons.car()) || references(cons.cdr());
-			default -> false;
-		};
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return isWitRuntimeName(sym.name());
+				}
+				case LispCons cons -> {
+					if (references(cons.car())) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
 	}
 
 	// The marker that the library is already present (the forms() splice defines it), so

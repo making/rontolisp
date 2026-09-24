@@ -12,6 +12,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
@@ -164,21 +165,27 @@ public final class UnreadCharLibrary {
 	}
 
 	private static boolean namesFilePosition(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (namesFilePosition(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
 		if (form instanceof LispSymbol sym) {
 			return LispNames.FILE_POSITION.equals(member(sym.name()));
-		}
-		if (form instanceof LispCons cons) {
-			return namesFilePosition(cons.car()) || namesFilePosition(cons.cdr());
 		}
 		return false;
 	}
 
 	private static boolean names(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (names(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
 		if (form instanceof LispSymbol sym) {
 			return LispNames.UNREAD_CHAR.equals(member(sym.name()));
-		}
-		if (form instanceof LispCons cons) {
-			return names(cons.car()) || names(cons.cdr());
 		}
 		return false;
 	}
@@ -373,9 +380,8 @@ public final class UnreadCharLibrary {
 
 	// The generic recursion rewrites list ELEMENTS; a dotted tail is data, never a call.
 	private static LispVal rewriteElements(LispCons cons) {
-		LispVal car = rewrite(cons.car());
-		LispVal cdr = cons.cdr() instanceof LispCons tail ? rewriteElements(tail) : cons.cdr();
-		return new LispCons(car, cdr);
+		return LispTrees.rebuildSpine(cons, node -> node instanceof LispCons ? null : node, UnreadCharLibrary::rewrite,
+				(cell, car, cdr) -> new LispCons(car, cdr));
 	}
 
 	private static LispSymbol defunSymbol(String name) {

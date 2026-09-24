@@ -308,8 +308,12 @@ final class SyntaxRules {
 					}
 				}
 				case LispCons cons -> {
-					collectVariables(cons.car(), out);
-					collectVariables(cons.cdr(), out);
+					LispVal rest = cons;
+					while (rest instanceof LispCons cell) {
+						collectVariables(cell.car(), out);
+						rest = cell.cdr();
+					}
+					collectVariables(rest, out);
 				}
 				case LispArray vector -> {
 					for (LispVal element : vector.data()) {
@@ -435,8 +439,12 @@ final class SyntaxRules {
 					}
 				}
 				case LispCons cons -> {
-					collectTemplateVariables(cons.car(), bindings, out);
-					collectTemplateVariables(cons.cdr(), bindings, out);
+					LispVal rest = cons;
+					while (rest instanceof LispCons cell) {
+						collectTemplateVariables(cell.car(), bindings, out);
+						rest = cell.cdr();
+					}
+					collectTemplateVariables(rest, bindings, out);
 				}
 				case LispArray vector -> {
 					for (LispVal element : vector.data()) {

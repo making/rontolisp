@@ -659,7 +659,18 @@ all a `call` result or a block result stored and used once, which no pure-expres
 reaches). The post-pipeline residue on `zlib` is now 218: 131 `call` results, 29 block results,
 17 `array.new` of a computed length.
 
-Pins: `WasmLocalSinkTest` (the sink, the gap, the renumbering, the loop-carried input, the
+**Only the bodies the shake will keep are sunk** (`sink(module, true)`, both backends): a body
+no export or start function reaches through `call` edges (`WasmTreeShaker.reachableBodies`, a
+superset of the shake's own roots, which additionally drop dead host-cell hooks) is copied as it
+is. Output-identical because the sink never adds a call, so nothing it leaves becomes reachable,
+and the shake reads no byte of a body it drops. The backends emit the whole runtime (a 3-line
+program's core is ~240 KB before the shake, ~5.6 KB after), so this was nearly all the pass's
+time: 14% of `WasmLispCompilerIntegrationTest`'s compile CPU (JFR, 2026-09-24). The peepholes and
+the move in front of it cannot skip the same bodies: the move counts call sites and looks for
+byte-identical twins in EVERY body, dead ones included, so what they leave there reaches its
+decisions.
+
+Pins: `WasmLocalSinkTest` (the unreachable body left alone, the sink, the gap, the renumbering, the loop-carried input, the
 undominated read, the global across a call, the tee copy, the allocation that is never copied nor
 sunk into a loop, the dead writes, the chained round, the adjacent pair),
 `WasmTreeShakerCorpusTest` (the whole `ci-spec` corpus at every level validates and round-trips

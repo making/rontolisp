@@ -98,6 +98,19 @@ suite time, sequential -> concurrent (range of four concurrent runs, all green):
 | `JvmBFloat16ArrayTest` | 30 | 24 s | 8 s |
 | `JvmQuantizedMatrixTest` | 10 | 24 s | 14-15 s |
 
+## What `WasmLispCompilerIntegrationTest` spends its CPU on
+
+Its ~3,100 `WasmLispCompiler.compile` calls, not wasmtime: measured 2026-09-24 with a
+per-thread CPU probe around `compile`, 713-728 CPU-s of the class's ~1,650 (user+sys), and a
+JFR profile put ~40% of that in `shakeCore`'s passes over the pre-shake module (which carries
+the whole runtime: ~240 KB for a 3-line program, ~5.6 KB after the shake). After the
+compile-CPU series (dead-body skipping in the sink and the fold, the JIT-sized operator
+dispatch, the worklist fold, the scope memos -- `.kb/wasm-ref-type-fold.md`,
+`.kb/optimize-dead-code-elimination.md`, `.kb/adding-primitives.md`): **427 CPU-s** of
+compile, the class 1,320-1,390 -> ~1,025 CPU-s and 54-61 s -> 40-42 s of its own elapsed
+time on the same machine. **A hot method past 8,000 bytes of bytecode runs interpreted**
+(`HugeMethodTest`); that alone was 12% of a WASM compile.
+
 ## Two builds on one machine: every shared constant collides
 
 Several sessions build this repo at once, one worktree each, and `/tmp` and the port space
@@ -122,6 +135,9 @@ The rules that follow, and which device to reach for:
 
 - **Every staged file goes through the per-thread, per-PID scratch directory**
   (`WasmLispCompilerIntegrationTest#path`). A `/tmp/...` literal in a test is the bug.
+  The per-PID root is `testsupport/ProcessScratch`: deleted at JVM exit, and a killed
+  JVM's leftovers are swept by the next one (before it, 10,150 stale directories, 6.7 GB,
+  filled the development machine's disk on 2026-09-24).
 - **A listening port is the kernel's to choose, not the test's.** `wasmtime serve --addr
   127.0.0.1:0` binds an ephemeral port and prints `Serving HTTP on http://127.0.0.1:PORT/`;
   the script reads the port back out of the log (`#awaitServePort`) and nothing is ever
@@ -132,7 +148,11 @@ The rules that follow, and which device to reach for:
   and the real bind then spans a whole compile, and it is wide enough to lose -- measured
   2026-09-12, three concurrent runs of that serve family lost it **once in 45 cases**.
   Such cases go through `#overAReservedPort`, which re-runs on a fresh port when the
-  output says `Address already in use`.
+  output says `Address already in use`. The script must also WAIT FOR ITS OWN BIND
+  (`#awaitServeBound`, the server's `Serving HTTP on` line) before any readiness curl:
+  wasmtime compiles before it binds, a loaded suite outlasts any fixed sleep, and the
+  port's new owner answers the curl instead (2026-09-24, at 6 forks: a proxy case relayed
+  another server's empty 200 and printed `proxied  200`).
 - A server whose bind failure is not checked turns this into something worse than a red
   test: the losing run connects to the WINNER's server and asserts against it. The TLS
   case did exactly that until its `openssl s_server` log was read back.
@@ -235,17 +255,40 @@ Traps met doing it:
   `DeviceResidency.dirty(Object)`/`.backed(Object)`, exposed as
   `GpuThresholds.isDirty(Object)`/`.isBacked(Object)`.
 
-## The in-process interpreter leg runs on the CLI's stack, not JUnit's
+## In-process program work runs on the CLI's stack, not JUnit's
 
-`AsdfLibraryE2eSupport#loadsAndRunsOnTheInterpreter` drives `LispEvaluator` IN PROCESS,
-so without help it recurses on the JUnit worker thread -- the JVM default stack, 1 MiB on
-linux-x64, which cl-mustache's spec suite alone recurses past
-([interpreter-stack.md](interpreter-stack.md) has the numbers). The leg therefore runs its
-body on a thread with the stack the CLI hands every program (16 MiB,
-`RontoLispCli`'s `WORKER_STACK_BYTES`, which `INTERPRETER_STACK_BYTES` must track) and
-rethrows what that thread threw, so the leg measures the product's ceiling rather than the
-harness's. A `StackOverflowError` from this leg is a real depth regression, not a
-stack-size accident.
+The CLI runs the whole command line -- the interpreter AND the compile path's passes and
+backend -- on a thread of 16 MiB (`SizedThread.WORKER_STACK_BYTES`,
+[interpreter-stack.md](interpreter-stack.md)). A JUnit worker carries the JVM default, 1 MiB
+on linux-x64, so a test that interprets or compiles IN PROCESS would measure the harness's
+ceiling instead of the product's. `testsupport/CliStack` runs a body on a thread of
+`CliStack.BYTES` and rethrows what it threw as itself (`call`; `callWithin` adds a wall-clock
+cap and abandons a body still running); `testsupport/CliStackExtension`
+(`@ExtendWith(CliStackExtension.class)`) moves every test method body of a class there, with
+lifecycle methods and resource locks left on the JUnit worker. `RontoLispCliTest` pins
+`CliStack.BYTES` to the CLI's default. A `StackOverflowError` from a leg on this stack is a
+real depth regression, not a stack-size accident.
+
+Users: the interpreter legs of `AsdfLibraryE2eSupport` (cl-mustache's spec suite alone
+recurses past 1 MiB), `SchemeSpecE2eTest` and `SicpCorpusE2eTest`, and -- by the extension --
+the in-process JVM-backend classes `JvmLispCompilerTest`, `JvmBFloat16ArrayTest`,
+`JvmLinalgGpuAccelCompilerTest`, `JvmLinalgSimdAccelCompilerTest`, `JvmQuantizedMatrixTest`,
+`JvmSimdAccelCompilerTest` and `JvmSimdParallelCompilerTest`.
+
+**How much stack a depth costs depends on the JIT, so the failure is order-dependent.**
+Seen 2026-09-24: `JvmLispCompilerTest#compileAndRunABranchSpanningPastTheSigned16BitOffset`
+(one `progn` of 2,800 forms) overflowed in `CompileTimeBoundp.scan` in a full run and passed
+alone. The stack had not changed -- with parallel execution enabled every test, `SAME_THREAD`
+or not, runs on a ForkJoin worker of the default size -- but once the class ran its methods
+concurrently the wide program could meet the recursing pass before the JIT had compiled it,
+and an interpreted frame is several times a compiled one. Measured on a fresh JVM, a thread
+of the given size compiling that program through `JvmLispCompiler`: 256 KiB overflows in
+`PackageResolver.referencesRuntimePackageMutation` (~920 frames), 512 KiB in
+`UiopLibrary.collectSymbols` (~1,020), 1 MiB in `CompileTimeBoundp.scan` (~1,020), 2 MiB
+passes. Every one of them recursed on the cdr, so the depth was the LIST's LENGTH, not the
+program's nesting. Since 2026-09-24 those walks loop down the spine and an embedder compiles
+on the CLI's stack ([interpreter-stack.md](interpreter-stack.md), "Depth is NESTING");
+`WideListStackTest` compiles 50,000-element lists on 1 MiB.
 
 The evaluator's own per-form scans stay off that budget too: the typecase arm's uiop /
 asdf / geom name scans (`LispEvaluator#collectUiopNames`,

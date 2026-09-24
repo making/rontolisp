@@ -1,5 +1,6 @@
 package am.ik.rontolisp.eval;
 
+import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -9,6 +10,7 @@ import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import org.jspecify.annotations.Nullable;
 
@@ -96,6 +98,11 @@ final class LoadFormSubstituter {
 		 * cannot spell one.
 		 */
 		private LispVal code(LispVal form) {
+			return LispTrees.rebuildSpine(form, this::codeNode, this::code);
+		}
+
+		// What a node code() does not walk into becomes, or null for an ordinary cell.
+		private @Nullable LispVal codeNode(LispVal form) {
 			if (form instanceof LispInstance instance) {
 				LispVal replacement = loadForm(instance);
 				return replacement == null ? form : replacement;
@@ -108,9 +115,7 @@ final class LoadFormSubstituter {
 				LispVal rebuilt = quotedConstant(rest.car());
 				return rebuilt == null ? form : rebuilt;
 			}
-			LispVal car = code(cons.car());
-			LispVal cdr = code(cons.cdr());
-			return car == cons.car() && cdr == cons.cdr() ? form : new LispCons(car, cdr);
+			return null;
 		}
 
 		/**
@@ -133,13 +138,26 @@ final class LoadFormSubstituter {
 			if (!(datum instanceof LispCons cons)) {
 				return null;
 			}
-			LispVal car = rebuild(cons.car());
-			LispVal cdr = rebuild(cons.cdr());
-			if (car == null && cdr == null) {
-				return null;
+			// The cars in order, then the tail, then the cells from the tail back: the
+			// recursive car / cdr walk's order, without a Java frame per element.
+			List<LispCons> cells = new ArrayList<>();
+			List<@Nullable LispVal> cars = new ArrayList<>();
+			LispVal rest = cons;
+			while (rest instanceof LispCons cell) {
+				cells.add(cell);
+				cars.add(rebuild(cell.car()));
+				rest = cell.cdr();
 			}
-			return listOf(new LispSymbol(LispNames.CONS), car == null ? quoted(cons.car()) : car,
-					cdr == null ? quoted(cons.cdr()) : cdr);
+			LispVal cdr = rest instanceof LispInstance instance ? loadForm(instance) : null;
+			for (int i = cells.size() - 1; i >= 0; i--) {
+				LispCons cell = cells.get(i);
+				LispVal car = cars.get(i);
+				if (car != null || cdr != null) {
+					cdr = listOf(new LispSymbol(LispNames.CONS), car == null ? quoted(cell.car()) : car,
+							cdr == null ? quoted(cell.cdr()) : cdr);
+				}
+			}
+			return cdr;
 		}
 
 		/**
@@ -190,15 +208,12 @@ final class LoadFormSubstituter {
 		}
 
 		private LispVal replaceObject(LispVal form, LispInstance instance, LispSymbol name) {
-			if (form == instance) {
-				return name;
-			}
-			if (!(form instanceof LispCons cons)) {
-				return form;
-			}
-			LispVal car = replaceObject(cons.car(), instance, name);
-			LispVal cdr = replaceObject(cons.cdr(), instance, name);
-			return car == cons.car() && cdr == cons.cdr() ? form : new LispCons(car, cdr);
+			return LispTrees.rebuildSpine(form, node -> {
+				if (node == instance) {
+					return name;
+				}
+				return node instanceof LispCons ? null : node;
+			}, car -> replaceObject(car, instance, name));
 		}
 
 	}

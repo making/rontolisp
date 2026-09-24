@@ -18,10 +18,12 @@ import am.ik.rontolisp.eval.LinalgGpu;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.VecLibrary;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.CliStackExtension;
 import am.ik.rontolisp.testsupport.GpuDeviceLock;
 import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
@@ -46,6 +48,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * device runs the same programs to the same output -- and the half that needs a device.
  */
 @Execution(ExecutionMode.CONCURRENT)
+@ExtendWith(CliStackExtension.class)
 @ResourceLock(providers = GpuDeviceLock.class)
 class JvmLinalgGpuAccelCompilerTest {
 

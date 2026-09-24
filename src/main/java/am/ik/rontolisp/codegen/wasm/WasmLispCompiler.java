@@ -2670,6 +2670,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	@Override
 	public byte[] compile(List<LispVal> program) {
+		try {
+			return compileProgram(program);
+		}
+		finally {
+			// The census is a per-compilation answer; do not keep the program alive.
+			SymbolCensus.LAST.remove();
+		}
+	}
+
+	private byte[] compileProgram(List<LispVal> program) {
 		// The load-context brackets LoadInliner put around each spliced file become
 		// assignments of *load-pathname* / *load-truename* -- when the program reads
 		// either; otherwise they are dropped here and nothing downstream sees them.
@@ -3174,7 +3184,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// scan, so without this clause _apply stayed a nil-answering stub and
 		// (funcall #'mapcar #'list '(1 2) '(3 4)) answered (NIL NIL) here while
 		// the interpreter and the JVM answered ((1 3) (2 4)).
-				|| program.stream().anyMatch(BuiltinFunctionWrappers::referencesApplyingWrapper);
+				|| !java.util.Collections.disjoint(BuiltinFunctionWrappers.functionValueNames(program),
+						BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS);
 		// A funcall/apply through a RUNTIME designator resolves a symbol late through
 		// the name registry (see the _lookup emission gate below).
 		boolean usesRuntimeDesignator = LispMacroExpander.usesRuntimeFunctionDesignator(program);
@@ -3535,12 +3546,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// in the class registry (define-condition is rewritten out of the program) but
 		// are re-injected by the error/signal expansions, so they count as references
 		// too.
+		Set<String> takenAsValues = BuiltinFunctionWrappers.functionValueNames(program);
+		takenAsValues.addAll(BuiltinFunctionWrappers.functionValueNames(closRegistry.conditionReports().values()));
 		for (String op : BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS) {
-			if (program.stream().noneMatch(expr -> BuiltinFunctionWrappers.referencesFunctionValue(expr, op))
-					&& closRegistry.conditionReports()
-						.values()
-						.stream()
-						.noneMatch(report -> BuiltinFunctionWrappers.referencesFunctionValue(report, op))) {
+			if (!takenAsValues.contains(op)) {
 				wrapperExcludes.add(op);
 			}
 		}
@@ -3548,14 +3557,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// compiles to the gated %subtypep-runtime -- inject it only when the program
 		// takes the operator as a first-class value (the JVM complex-wrapper gate
 		// mirrored).
-		if (program.stream()
-			.noneMatch(
-					expr -> BuiltinFunctionWrappers.referencesFunctionValue(expr, LispNames.UPGRADED_COMPLEX_PART_TYPE))
-				&& closRegistry.conditionReports()
-					.values()
-					.stream()
-					.noneMatch(report -> BuiltinFunctionWrappers.referencesFunctionValue(report,
-							LispNames.UPGRADED_COMPLEX_PART_TYPE))) {
+		if (!takenAsValues.contains(LispNames.UPGRADED_COMPLEX_PART_TYPE)) {
 			wrapperExcludes.add(LispNames.UPGRADED_COMPLEX_PART_TYPE);
 		}
 		// The defuns from here down are INJECTED runtime, not the user's program: the
@@ -4115,14 +4117,14 @@ public final class WasmLispCompiler implements LispCompiler {
 			if (this.asyncMode && asyncDefunNames.contains(defun.name)) {
 				// entry + resume state machine (WasmAsyncEmit): the resume registers
 				// itself in the lambda table; the entry is the defun's own function.
-				ByteArrayOutputStream protoBuf = new ByteArrayOutputStream();
+				ByteArrayOutputStream protoBuf = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 				Ctx protoCtx = ctxBuilder.writer(new WasmWriter(protoBuf)).bodyStream(protoBuf).build();
 				WasmAsyncEmit.Resume resume = WasmAsyncEmit.compileResume(protoCtx, defun.paramNames, defun.bodyExprs,
 						List.of(), false, false);
 				userFunctionBodies.add(WasmAsyncEmit.buildEntryBody(protoCtx, defun.paramNames.size(), false, resume));
 				continue;
 			}
-			ByteArrayOutputStream funcBody = new ByteArrayOutputStream();
+			ByteArrayOutputStream funcBody = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 			WasmWriter funcWriter = new WasmWriter(funcBody);
 			Ctx funcCtx = ctxBuilder.writer(funcWriter).bodyStream(funcBody).build();
 
@@ -4140,8 +4142,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			// Determine which params are captured by nested lambdas, or assigned inside
 			// a landing-pad region (WasmLandingPad): either way they live in a cell.
 			Set<String> capturedVars = FreeVarAnalyzer.findCapturedVars(defun.bodyExprs,
-					new HashSet<>(defun.paramNames), functions.keySet());
-			capturedVars.addAll(WasmLandingPad.regionAssignedVars(defun.bodyExprs, new HashSet<>(defun.paramNames)));
+					new HashSet<>(defun.paramNames), functions.keySet(), funcCtx.captureMemo);
+			capturedVars.addAll(WasmLandingPad.regionAssignedVars(defun.bodyExprs, new HashSet<>(defun.paramNames),
+					funcCtx.regionMemo));
 			funcCtx.boxedVars = capturedVars;
 			// Box captured params
 			for (String paramName : defun.paramNames) {
@@ -4186,7 +4189,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		ctxBuilder.charvecPossible(this.charvecPossible);
 
 		// Pass 2b: Build _start function body
-		ByteArrayOutputStream startBody = new ByteArrayOutputStream();
+		ByteArrayOutputStream startBody = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter startWriter = new WasmWriter(startBody);
 		Ctx ctx = ctxBuilder.writer(startWriter).bodyStream(startBody).build();
 		ctx.topLevel = true;
@@ -4323,7 +4326,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						+ MAX_CALLABLE_ARITY + " parameters, got " + lambda.paramNames().size()
 						+ " (bundle the extra arguments into a list)");
 			}
-			ByteArrayOutputStream lambdaBody = new ByteArrayOutputStream();
+			ByteArrayOutputStream lambdaBody = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 			WasmWriter lambdaWriter = new WasmWriter(lambdaBody);
 			// A lambda an injected wrapper body built is injected runtime too (see
 			// Ctx.injectedRuntimeLambdas); a nested one inherits it through this ctx.
@@ -4353,8 +4356,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			// Determine which locals are captured by further nested lambdas
 			Set<String> lambdaLocalVars = new HashSet<>(lambda.paramNames);
 			Set<String> capturedVars = FreeVarAnalyzer.findCapturedVars(lambda.bodyExprs, lambdaLocalVars,
-					functions.keySet());
-			capturedVars.addAll(WasmLandingPad.regionAssignedVars(lambda.bodyExprs, lambdaLocalVars));
+					functions.keySet(), lambdaCtx.captureMemo);
+			capturedVars
+				.addAll(WasmLandingPad.regionAssignedVars(lambda.bodyExprs, lambdaLocalVars, lambdaCtx.regionMemo));
 			lambdaCtx.boxedVars = capturedVars;
 			// Box captured params of this lambda
 			for (String paramName : lambda.paramNames) {
@@ -4740,7 +4744,7 @@ public final class WasmLispCompiler implements LispCompiler {
 							+ "': declared " + decl.paramTypes().size() + " params, but the function takes "
 							+ target.paramCount());
 				}
-				ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
+				ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 				WasmWriter bodyWriter = new WasmWriter(bodyStream);
 				Ctx wrapperCtx = ctxBuilder.writer(bodyWriter).bodyStream(bodyStream).build();
 				int paramSlots = WasmExportCompiler.paramSlotCount(decl);
@@ -4756,7 +4760,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// the
 				// declaration order matches the slot order), then the (ref null eq)
 				// temps.
-				ByteArrayOutputStream finalBody = new ByteArrayOutputStream();
+				ByteArrayOutputStream finalBody = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 				WasmWriter finalWriter = new WasmWriter(finalBody);
 				int extraLocals = wrapperCtx.nextLocal - paramSlots - scratch.size();
 				finalWriter.writeUnsignedLeb128(scratch.size() + (extraLocals > 0 ? 1 : 0));
@@ -5003,12 +5007,24 @@ public final class WasmLispCompiler implements LispCompiler {
 		// registry, or named as #'op in the user's program (the apply-direct-call
 		// shape). Every other wrapper is dead code the shaker drops, and its callees
 		// keep their stubs.
+		// The program's #'name references, walked once and only when a wrapper asks.
+		Set<String> programFunctionValues = Set.of();
+		boolean programFunctionValuesScanned = false;
 		for (int i = 0; i < defuns.size(); i++) {
 			String name = defuns.get(i).name;
 			Set<WasmFdlibmRuntimeBuilder.Fn> uses = injectedFdlibmUses.get(name);
-			if (uses != null && !uses.isEmpty()
-					&& (valueFuncIds.contains(i) || dispatchableFuncIds.contains(i) || program.stream()
-						.anyMatch(expr -> BuiltinFunctionWrappers.referencesFunctionValue(expr, name)))) {
+			if (uses == null || uses.isEmpty()) {
+				continue;
+			}
+			if (valueFuncIds.contains(i) || dispatchableFuncIds.contains(i)) {
+				fdlibmUsed.addAll(uses);
+				continue;
+			}
+			if (!programFunctionValuesScanned) {
+				programFunctionValues = BuiltinFunctionWrappers.functionValueNames(program);
+				programFunctionValuesScanned = true;
+			}
+			if (programFunctionValues.contains(name)) {
 				fdlibmUsed.addAll(uses);
 			}
 		}
@@ -5066,7 +5082,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			else {
 				// Unused arity: unreachable body
-				ByteArrayOutputStream db = new ByteArrayOutputStream();
+				ByteArrayOutputStream db = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 				WasmWriter dw = new WasmWriter(db);
 				dw.write(0); // 0 locals
 				dw.write(Instruction.UNREACHABLE);
@@ -5091,7 +5107,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 		else {
-			ByteArrayOutputStream db = new ByteArrayOutputStream();
+			ByteArrayOutputStream db = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 			WasmWriter dw = new WasmWriter(db);
 			dw.write(0);
 			dw.write(Instruction.UNREACHABLE);
@@ -5118,7 +5134,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			}
 			else {
-				ByteArrayOutputStream db = new ByteArrayOutputStream();
+				ByteArrayOutputStream db = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 				WasmWriter dw = new WasmWriter(db);
 				dw.write(0);
 				dw.write(Instruction.UNREACHABLE);
@@ -5178,7 +5194,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// emitting it unconditionally would make two programs with identical CODE
 		// differ in bytes (the wit-import byte-identity pins).
 		if (registryLive) {
-			ByteArrayOutputStream registry = new ByteArrayOutputStream();
+			ByteArrayOutputStream registry = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 			int registryCount = 0;
 			for (int i = 0; i < defuns.size(); i++) {
 				DefunDecl defun = defuns.get(i);
@@ -5260,7 +5276,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// would charge a quoted u16/u8 vector's next element for the pad it shifts,
 		// breaking the per-element cost pin
 		// (WasmLispCompilerTest#aLiteralLookupTableCostsItsOwnBytesAndNotThreeTimesThem).
-		ByteArrayOutputStream funNameRows = new ByteArrayOutputStream();
+		ByteArrayOutputStream funNameRows = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		Set<Integer> funNameIds = runtimeFunctionBox ? dispatchableFuncIds : valueFuncIds;
 		for (int i = 0; i < defuns.size(); i++) {
 			if (!funNameIds.contains(i)) {
@@ -5527,7 +5543,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		int rtInternBase = Math.max(RT_INTERN_MIN_BASE, (litStageEnd + 15) & ~15);
 		int heapBase = rtInternBase + RT_INTERN_REGION_SIZE;
 
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter mainWriter = new WasmWriter(out);
 		mainWriter //
 			.write("\0asm")
@@ -7970,7 +7986,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Then the single-use local sink, over the residue the move's argument hand-over
 		// and the emitter's own temporaries leave: a function's own locals only, so it
 		// is invisible to every index-addressed claim the shake reads.
-		coreModule = am.ik.wasm.WasmLocalSink.sink(coreModule);
+		coreModule = am.ik.wasm.WasmLocalSink.sink(coreModule, true);
 		// Last, over the shaken bodies, the local renumbering: a function with more than
 		// 128 locals (Ctx.allocTemp never recycles one) gets its one-byte indices for
 		// the locals it uses most. A permutation inside each function, so it can follow
@@ -8349,13 +8365,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	private static boolean usesEval(LispVal val) {
-		if (!(val instanceof LispCons cons)) {
-			return false;
+		while (val instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol sym && LispNames.EVAL.equals(sym.name())) {
+				return true;
+			}
+			if (usesEval(cons.car())) {
+				return true;
+			}
+			val = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol sym && LispNames.EVAL.equals(sym.name())) {
-			return true;
-		}
-		return usesEval(cons.car()) || usesEval(cons.cdr());
+		return false;
 	}
 
 	/**
@@ -8424,13 +8443,67 @@ public final class WasmLispCompiler implements LispCompiler {
 		return false;
 	}
 
+	// Whether some cons of the program -- any list element, at any depth, quoted data
+	// included -- is the named symbol.
 	private static boolean programUsesSymbol(List<LispVal> program, String name) {
-		for (LispVal expr : program) {
-			if (usesSymbol(expr, name)) {
-				return true;
+		return SymbolCensus.of(program).names().contains(name);
+	}
+
+	/**
+	 * Every name {@link #programUsesSymbol} can find in a program, from one walk: the
+	 * compile asks it some seventy questions, and each used to walk the whole program
+	 * again. Kept for the last program asked about on this thread, and reused only while
+	 * that list still holds the very same forms -- the forms themselves are never mutated
+	 * during a compilation.
+	 *
+	 * @param program the list the census was taken of
+	 * @param forms its elements when the census was taken
+	 * @param names every symbol name some cons of the program has as its car
+	 */
+	private record SymbolCensus(List<LispVal> program, LispVal[] forms, Set<String> names) {
+
+		static final ThreadLocal<@Nullable SymbolCensus> LAST = new ThreadLocal<>();
+
+		static SymbolCensus of(List<LispVal> program) {
+			@Nullable SymbolCensus last = LAST.get();
+			if (last != null && last.describes(program)) {
+				return last;
+			}
+			Set<String> names = new HashSet<>();
+			for (LispVal form : program) {
+				collect(form, names);
+			}
+			SymbolCensus census = new SymbolCensus(program, program.toArray(new LispVal[0]), names);
+			LAST.set(census);
+			return census;
+		}
+
+		private boolean describes(List<LispVal> list) {
+			if (list != this.program || list.size() != this.forms.length) {
+				return false;
+			}
+			for (int i = 0; i < this.forms.length; i++) {
+				if (list.get(i) != this.forms[i]) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+		// Every cons reachable through car and cdr.
+		private static void collect(LispVal val, Set<String> names) {
+			LispVal cur = val;
+			while (cur instanceof LispCons cons) {
+				if (cons.car() instanceof LispSymbol sym) {
+					names.add(sym.name());
+				}
+				else {
+					collect(cons.car(), names);
+				}
+				cur = cons.cdr();
 			}
 		}
-		return false;
+
 	}
 
 	/**
@@ -8478,38 +8551,42 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	private static boolean usesEhForm(LispVal val) {
-		if (!(val instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol sym) {
-			switch (sym.name()) {
-				case LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.UNWIND_PROTECT,
-						LispNames.WITH_OPEN_FILE, LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING,
-						LispNames.CATCH, LispNames.THROW,
-						// progv's lowering rides unwind-protect for its restores
-						// (LispMacroExpander.expandProgvForCompile), so it needs the EH
-						// machinery -- and the `wasmtime -W exceptions=y` run flag --
-						// exactly like a written-out unwind-protect.
-						LispNames.PROGV -> {
-					return true;
-				}
-				default -> {
-					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-					if (qn != null && LispNames.USOCKET_PKG.equals(qn.pkg())) {
-						switch (qn.member()) {
-							case LispNames.USOCKET_WITH_CLIENT_SOCKET, LispNames.USOCKET_WITH_CONNECTED_SOCKET,
-									LispNames.USOCKET_WITH_SERVER_SOCKET, LispNames.USOCKET_WITH_SOCKET_LISTENER,
-									LispNames.USOCKET_GUARD -> {
-								return true;
-							}
-							default -> {
+		while (val instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol sym) {
+				switch (sym.name()) {
+					case LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.UNWIND_PROTECT,
+							LispNames.WITH_OPEN_FILE, LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING,
+							LispNames.CATCH, LispNames.THROW,
+							// progv's lowering rides unwind-protect for its restores
+							// (LispMacroExpander.expandProgvForCompile), so it needs the
+							// EH
+							// machinery -- and the `wasmtime -W exceptions=y` run flag --
+							// exactly like a written-out unwind-protect.
+							LispNames.PROGV -> {
+						return true;
+					}
+					default -> {
+						PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+						if (qn != null && LispNames.USOCKET_PKG.equals(qn.pkg())) {
+							switch (qn.member()) {
+								case LispNames.USOCKET_WITH_CLIENT_SOCKET, LispNames.USOCKET_WITH_CONNECTED_SOCKET,
+										LispNames.USOCKET_WITH_SERVER_SOCKET, LispNames.USOCKET_WITH_SOCKET_LISTENER,
+										LispNames.USOCKET_GUARD -> {
+									return true;
+								}
+								default -> {
+								}
 							}
 						}
 					}
 				}
 			}
+			if (usesEhForm(cons.car())) {
+				return true;
+			}
+			val = cons.cdr();
 		}
-		return usesEhForm(cons.car()) || usesEhForm(cons.cdr());
+		return false;
 	}
 
 	// True when the program references any hash-table operator (including (setf (gethash
@@ -8749,11 +8826,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	// Quoted data: every symbol in it is a designator the program could funcall.
 	private static boolean charvecFreeData(LispVal data, Set<String> defined) {
-		return switch (data) {
-			case LispSymbol sym -> charvecFreeName(sym.name()) || defined.contains(sym.name());
-			case LispCons cons -> charvecFreeData(cons.car(), defined) && charvecFreeData(cons.cdr(), defined);
-			default -> true;
-		};
+		while (data instanceof LispCons cons) {
+			if (!charvecFreeData(cons.car(), defined)) {
+				return false;
+			}
+			data = cons.cdr();
+		}
+		if (data instanceof LispSymbol sym) {
+			return charvecFreeName(sym.name()) || defined.contains(sym.name());
+		}
+		return true;
 	}
 
 	// True when a self-evaluating array literal (#(...)) appears anywhere in the
@@ -8768,23 +8850,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	private static boolean containsArrayLiteral(LispVal val) {
-		if (val instanceof am.ik.rontolisp.LispArray) {
-			return true;
+		while (val instanceof LispCons cons) {
+			if (containsArrayLiteral(cons.car())) {
+				return true;
+			}
+			val = cons.cdr();
 		}
-		if (val instanceof LispCons cons) {
-			return containsArrayLiteral(cons.car()) || containsArrayLiteral(cons.cdr());
-		}
-		return false;
-	}
-
-	private static boolean usesSymbol(LispVal val, String name) {
-		if (!(val instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol sym && name.equals(sym.name())) {
-			return true;
-		}
-		return usesSymbol(cons.car(), name) || usesSymbol(cons.cdr(), name);
+		return val instanceof am.ik.rontolisp.LispArray;
 	}
 
 	/**
@@ -8796,7 +8868,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @return the little-endian blob
 	 */
 	private static byte[] buildInternBlob(java.util.Collection<StringTable.StringEntry> entries) {
-		ByteArrayOutputStream blob = new ByteArrayOutputStream();
+		ByteArrayOutputStream blob = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		for (StringTable.StringEntry e : entries) {
 			writeLittleEndian32(blob, e.offset());
 			writeLittleEndian32(blob, e.length());
@@ -9051,7 +9123,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		byte[] body = funcBody.toByteArray();
 		int extraEq = ctx.nextLocal - predeclaredSlots;
 		int numI64 = ctx.maxI64Locals;
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter writer = new WasmWriter(out);
 		writer.write((extraEq > 0 ? 1 : 0) + (numI64 > 0 ? 1 : 0));
 		if (extraEq > 0) {
@@ -9730,8 +9802,24 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * The CLOS registry (classes, generics, slot positions), collected by the
 		 * pre-pass in {@link WasmLispCompiler#compile}; {@code make-instance}/
 		 * {@code slot-value} expansion resolves through it. Shared across every context.
+		 * Assigned in the constructor only: a registry is pre-seeded with the condition
+		 * hierarchy, and a context is built per compiled body, so a field initializer
+		 * here seeded one per body only for the constructor to discard it.
 		 */
-		ClosRegistry closRegistry = new ClosRegistry();
+		ClosRegistry closRegistry;
+
+		/**
+		 * The capture walk's answers so far ({@link FreeVarAnalyzer.CaptureMemo}): every
+		 * scope asks, and an enclosing scope's walk has covered a nested one's body.
+		 * Shared across every context of one compilation.
+		 */
+		final FreeVarAnalyzer.CaptureMemo captureMemo;
+
+		/**
+		 * {@link WasmLandingPad#regionAssignedVars}' answers so far, shared across every
+		 * context of one compilation for the same reason as {@link #captureMemo}.
+		 */
+		final WasmLandingPad.RegionMemo regionMemo;
 
 		/**
 		 * Names of top-level global variables; each has a wasm global in
@@ -10072,7 +10160,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.packageUseTable = builder.packageUseTable;
 			this.symbolPrintTable = builder.symbolPrintTable;
 			this.structAccessors = builder.structAccessors;
-			this.closRegistry = builder.closRegistry;
+			this.closRegistry = builder.closRegistry != null ? builder.closRegistry : new ClosRegistry();
+			this.captureMemo = builder.captureMemo;
+			this.regionMemo = builder.regionMemo;
 			this.globals = builder.globals;
 			this.nestedDefunNames = builder.nestedDefunNames;
 			this.specialVars = builder.specialVars;
@@ -10238,7 +10328,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private Map<String, Integer> structAccessors = Map.of();
 
-			private ClosRegistry closRegistry = new ClosRegistry();
+			private @Nullable ClosRegistry closRegistry;
+
+			private FreeVarAnalyzer.CaptureMemo captureMemo = new FreeVarAnalyzer.CaptureMemo();
+
+			private WasmLandingPad.RegionMemo regionMemo = new WasmLandingPad.RegionMemo();
 
 			private Set<String> globals = Set.of();
 
@@ -10615,6 +10709,16 @@ public final class WasmLispCompiler implements LispCompiler {
 				return this;
 			}
 
+			Builder captureMemo(FreeVarAnalyzer.CaptureMemo captureMemo) {
+				this.captureMemo = captureMemo;
+				return this;
+			}
+
+			Builder regionMemo(WasmLandingPad.RegionMemo regionMemo) {
+				this.regionMemo = regionMemo;
+				return this;
+			}
+
 			Builder closRegistry(ClosRegistry closRegistry) {
 				this.closRegistry = closRegistry;
 				return this;
@@ -10909,8 +11013,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			}
 			case LispCons cons -> {
-				collectSymbolNames(cons.car(), out);
-				collectSymbolNames(cons.cdr(), out);
+				LispVal rest = cons;
+				while (rest instanceof LispCons cell) {
+					collectSymbolNames(cell.car(), out);
+					rest = cell.cdr();
+				}
+				collectSymbolNames(rest, out);
 			}
 			case LispArray array -> {
 				for (LispVal element : array.data()) {
@@ -10930,7 +11038,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final class StringTable {
 
-		private final ByteArrayOutputStream data = new ByteArrayOutputStream();
+		private final ByteArrayOutputStream data = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 
 		private final Map<String, StringEntry> cache = new HashMap<>();
 

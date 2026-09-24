@@ -155,7 +155,7 @@ final class WasmCaseFoldRuntimeBuilder {
 	// returns cp + delta (foldOnHit) or 1 (a membership test); on a miss cp unchanged, or
 	// 0 respectively.
 	private static byte[] buildSearchBody(int tableOffset, int rangeCount, int stride, boolean foldOnHit) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: cp = 0. locals: lo = 1, hi = 2, mid = 3, entry = 4, from = 5, to = 6.
 		w.write(1);
@@ -341,7 +341,7 @@ final class WasmCaseFoldRuntimeBuilder {
 	// Serializes the ranges as little-endian (from:u32, to:u32, delta:i32) triples.
 	// The runtime helper's i32.load matches this ordering (WASM linear memory is LE).
 	private static byte[] serialize(List<Range> ranges) {
-		ByteArrayOutputStream out = new ByteArrayOutputStream(ranges.size() * TRIPLE_BYTES);
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream(ranges.size() * TRIPLE_BYTES);
 		for (Range r : ranges) {
 			writeLE32(out, r.from);
 			writeLE32(out, r.to);
@@ -353,7 +353,7 @@ final class WasmCaseFoldRuntimeBuilder {
 	// Serializes the ranges as little-endian (from:u32, to:u32) pairs -- a membership
 	// table carries no delta.
 	private static byte[] serializePairs(List<Range> ranges) {
-		ByteArrayOutputStream out = new ByteArrayOutputStream(ranges.size() * PAIR_BYTES);
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream(ranges.size() * PAIR_BYTES);
 		for (Range r : ranges) {
 			writeLE32(out, r.from);
 			writeLE32(out, r.to);

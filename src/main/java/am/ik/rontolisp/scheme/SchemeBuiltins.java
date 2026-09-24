@@ -13,6 +13,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.Features;
@@ -987,21 +988,22 @@ final class SchemeBuiltins {
 	}
 
 	private static LispVal substituteArguments(LispVal arguments, Substitution substitution) {
-		if (arguments instanceof LispCons cons) {
-			return new LispCons(substitute(cons.car(), substitution), substituteArguments(cons.cdr(), substitution));
-		}
 		// The dotted tail: the &rest parameter, spliced.
-		return substitute(arguments, substitution);
+		return LispTrees.rebuildSpine(arguments,
+				node -> node instanceof LispCons ? null : substitute(node, substitution),
+				element -> substitute(element, substitution), (cell, car, cdr) -> new LispCons(car, cdr));
 	}
 
 	private static int occurrences(LispVal template, String param) {
-		if (template instanceof LispSymbol symbol) {
-			return symbol.name().equals(param) ? 1 : 0;
+		int count = 0;
+		while (template instanceof LispCons cons) {
+			count += occurrences(cons.car(), param);
+			template = cons.cdr();
 		}
-		if (template instanceof LispCons cons) {
-			return occurrences(cons.car(), param) + occurrences(cons.cdr(), param);
+		if (template instanceof LispSymbol symbol && symbol.name().equals(param)) {
+			count++;
 		}
-		return 0;
+		return count;
 	}
 
 	static LispVal list(LispVal... elements) {

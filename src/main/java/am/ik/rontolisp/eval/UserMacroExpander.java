@@ -13,6 +13,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
@@ -377,13 +378,18 @@ public final class UserMacroExpander {
 	 * call, {@code #'} it) -- they share the one answer, so they share the trigger.
 	 */
 	private static boolean usesMacroIntrospection(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (usesMacroIntrospection(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
 		if (form instanceof LispSymbol sym) {
 			String name = member(sym.name());
 			return LispNames.MACRO_FUNCTION.equals(name) || LispNames.MACROEXPAND.equals(name)
 					|| LispNames.MACROEXPAND_1.equals(name);
 		}
-		return form instanceof LispCons cons
-				&& (usesMacroIntrospection(cons.car()) || usesMacroIntrospection(cons.cdr()));
+		return false;
 	}
 
 	/** Whether the top-level form is the program's OWN {@code macro-function} defun. */
@@ -479,19 +485,14 @@ public final class UserMacroExpander {
 	 * under the shadowing package resolved to the package's own qualified symbol.
 	 */
 	private static LispVal requalifyShadowedClNames(LispVal form, LispEvaluator macroEval) {
-		return switch (form) {
+		return LispTrees.rebuildSpine(form, node -> switch (node) {
 			case LispSymbol sym -> PackageRegistry.splitQualified(sym.name()) == null
 					&& PackageRegistry.isClSymbol(sym.name()) && macroEval.currentPackageShadows(sym.name())
 							? new LispSymbol(PackageRegistry.qualify(LispNames.CL_PKG, sym.name())) : sym;
-			case LispCons cons -> {
-				if (cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name())) {
-					yield cons;
-				}
-				yield new LispCons(requalifyShadowedClNames(cons.car(), macroEval),
-						requalifyShadowedClNames(cons.cdr(), macroEval));
-			}
-			default -> form;
-		};
+			case LispCons cons when cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name()) -> cons;
+			case LispCons cons -> null;
+			default -> node;
+		}, car -> requalifyShadowedClNames(car, macroEval), (cell, car, cdr) -> new LispCons(car, cdr));
 	}
 
 	/**
@@ -504,6 +505,23 @@ public final class UserMacroExpander {
 	 * function, which stays a runtime question.
 	 */
 	private static LispVal foldMacroFboundp(LispVal form, LispEvaluator macroEval) {
+		return LispTrees.rebuildSpine(form, node -> foldedMacroFboundpNode(node, macroEval),
+				car -> foldMacroFboundp(car, macroEval), (cell, car, cdr) -> {
+					if (car == cell.car() && cdr == cell.cdr()) {
+						return cell;
+					}
+					LispCons rebuilt = new LispCons(car, cdr);
+					LispVal collapsed = collapseDecidedTest(rebuilt);
+					return SourceProvenance.inherit(cell, collapsed != null ? collapsed : rebuilt);
+				});
+	}
+
+	/**
+	 * What a node {@link #foldMacroFboundp} does not walk into becomes -- an atom and a
+	 * quoted datum stay, a decided {@code (fboundp 'name)} is {@code t} -- or
+	 * {@code null} for an ordinary cell.
+	 */
+	private static @Nullable LispVal foldedMacroFboundpNode(LispVal form, LispEvaluator macroEval) {
 		if (!(form instanceof LispCons cons)) {
 			return form;
 		}
@@ -517,14 +535,7 @@ public final class UserMacroExpander {
 				&& quotedCell.car() instanceof LispSymbol probed && macroEval.isUserMacro(probed.name())) {
 			return SourceProvenance.inherit(cons, LispTrue.INSTANCE);
 		}
-		LispVal car = foldMacroFboundp(cons.car(), macroEval);
-		LispVal cdr = foldMacroFboundp(cons.cdr(), macroEval);
-		if (car == cons.car() && cdr == cons.cdr()) {
-			return form;
-		}
-		LispCons rebuilt = new LispCons(car, cdr);
-		LispVal collapsed = collapseDecidedTest(rebuilt);
-		return SourceProvenance.inherit(cons, collapsed != null ? collapsed : rebuilt);
+		return null;
 	}
 
 	/**
@@ -768,12 +779,22 @@ public final class UserMacroExpander {
 
 	/** Whether the form contains a {@code %read-eval} marker symbol anywhere. */
 	private static boolean usesReadEvalMarker(LispVal form) {
-		return switch (form) {
-			case LispSymbol sym ->
-				LispNames.READ_EVAL.equals(sym.name()) || LispNames.READ_EVAL_TEMPLATE.equals(sym.name());
-			case LispCons cons -> usesReadEvalMarker(cons.car()) || usesReadEvalMarker(cons.cdr());
-			default -> false;
-		};
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return LispNames.READ_EVAL.equals(sym.name()) || LispNames.READ_EVAL_TEMPLATE.equals(sym.name());
+				}
+				case LispCons cons -> {
+					if (usesReadEvalMarker(cons.car())) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
 	}
 
 	// --- Pure-config-setter detection ------------------------------------------------
@@ -1030,14 +1051,17 @@ public final class UserMacroExpander {
 	}
 
 	private static boolean usesMacroexpand(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol sym
+					&& (LispNames.MACROEXPAND.equals(sym.name()) || LispNames.MACROEXPAND_1.equals(sym.name()))) {
+				return true;
+			}
+			if (usesMacroexpand(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol sym
-				&& (LispNames.MACROEXPAND.equals(sym.name()) || LispNames.MACROEXPAND_1.equals(sym.name()))) {
-			return true;
-		}
-		return usesMacroexpand(cons.car()) || usesMacroexpand(cons.cdr());
+		return false;
 	}
 
 	// A macrolet anywhere (top level or nested in a body) forces the pass to run so its
@@ -1253,21 +1277,35 @@ public final class UserMacroExpander {
 
 	/** Whether the form mentions {@code define-symbol-macro} anywhere. */
 	private static boolean usesDefineSymbolMacro(LispVal form) {
-		return switch (form) {
-			case LispSymbol sym -> LispNames.DEFINE_SYMBOL_MACRO.equals(memberName(sym.name()));
-			case LispCons cons -> usesDefineSymbolMacro(cons.car()) || usesDefineSymbolMacro(cons.cdr());
-			default -> false;
-		};
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return LispNames.DEFINE_SYMBOL_MACRO.equals(memberName(sym.name()));
+				}
+				case LispCons cons -> {
+					if (usesDefineSymbolMacro(cons.car())) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
 	}
 
 	private static boolean usesMacrolet(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol sym && LispNames.MACROLET.equals(sym.name())) {
+				return true;
+			}
+			if (usesMacrolet(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol sym && LispNames.MACROLET.equals(sym.name())) {
-			return true;
-		}
-		return usesMacrolet(cons.car()) || usesMacrolet(cons.cdr());
+		return false;
 	}
 
 	/**

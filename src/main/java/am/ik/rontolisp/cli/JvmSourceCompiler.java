@@ -29,6 +29,9 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * Fluent like {@link JvmLispCompiler} itself: every setter is one flag that reaches the
  * JVM backend, and the defaults are the CLI's defaults.
+ * <p>
+ * A compile runs on a thread of its own with the CLI's stack and the caller waits for it,
+ * so a program compiles in an embedder exactly when it compiles on the command line.
  */
 public final class JvmSourceCompiler {
 
@@ -238,6 +241,15 @@ public final class JvmSourceCompiler {
 	}
 
 	private Optional<Result> run(String source, @Nullable String entryFile, boolean onlyIfExported) {
+		// On a thread of the CLI's stack, not the caller's: an embedder compiles on
+		// whatever thread it has -- 1 MiB for Maven's main thread on linux-x64 -- and the
+		// program's nesting must meet the ceiling the command line gives it
+		// (.kb/interpreter-stack.md).
+		return SizedThread.call("rontolisp-compile", SizedThread.WORKER_STACK_BYTES,
+				() -> compileRecording(source, entryFile, onlyIfExported));
+	}
+
+	private Optional<Result> compileRecording(String source, @Nullable String entryFile, boolean onlyIfExported) {
 		return CompileDiagnostics.recording(() -> {
 			CompileFrontend.Result frontend = CompileFrontend.run(CompileFrontend.Request.builder()
 				.source(source)

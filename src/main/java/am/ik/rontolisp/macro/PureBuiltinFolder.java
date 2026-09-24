@@ -343,46 +343,50 @@ public final class PureBuiltinFolder {
 
 	/** Walks a form recording definitions; false when the pass must stand down. */
 	private static boolean collectShadowed(LispVal form, Set<String> blocked) {
-		if (!(form instanceof LispCons cons)) {
-			return true;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			switch (op.name()) {
-				case LispNames.QUOTE -> {
-					return true;
-				}
-				case LispNames.DEFUN, LispNames.DEFMETHOD, LispNames.DEFGENERIC, LispNames.DEFMACRO,
-						LispNames.DEFINE_COMPILER_MACRO -> {
-					if (cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
-						block(name, blocked);
+		while (form instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				switch (op.name()) {
+					case LispNames.QUOTE -> {
+						return true;
 					}
-				}
-				case LispNames.FLET, LispNames.LABELS, LispNames.MACROLET -> {
-					if (cons.cdr() instanceof LispCons rest && rest.car() instanceof LispCons defs
-							&& defs.isProperList()) {
-						for (LispVal def : defs.toList()) {
-							if (def instanceof LispCons defCons && defCons.car() instanceof LispSymbol name) {
-								block(name, blocked);
+					case LispNames.DEFUN, LispNames.DEFMETHOD, LispNames.DEFGENERIC, LispNames.DEFMACRO,
+							LispNames.DEFINE_COMPILER_MACRO -> {
+						if (cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
+							block(name, blocked);
+						}
+					}
+					case LispNames.FLET, LispNames.LABELS, LispNames.MACROLET -> {
+						if (cons.cdr() instanceof LispCons rest && rest.car() instanceof LispCons defs
+								&& defs.isProperList()) {
+							for (LispVal def : defs.toList()) {
+								if (def instanceof LispCons defCons && defCons.car() instanceof LispSymbol name) {
+									block(name, blocked);
+								}
 							}
 						}
 					}
-				}
-				case LispNames.SETF, LispNames.PSETF -> {
-					// (setf (symbol-function 'f) g) installs a function binding the
-					// compile path cannot see through. A literal name blocks that name;
-					// a computed one blocks the pass.
-					List<LispVal> parts = cons.isProperList() ? cons.toList() : List.of();
-					for (int i = 1; i + 1 < parts.size(); i += 2) {
-						if (!collectFunctionBindingPlace(parts.get(i), blocked)) {
-							return false;
+					case LispNames.SETF, LispNames.PSETF -> {
+						// (setf (symbol-function 'f) g) installs a function binding the
+						// compile path cannot see through. A literal name blocks that
+						// name;
+						// a computed one blocks the pass.
+						List<LispVal> parts = cons.isProperList() ? cons.toList() : List.of();
+						for (int i = 1; i + 1 < parts.size(); i += 2) {
+							if (!collectFunctionBindingPlace(parts.get(i), blocked)) {
+								return false;
+							}
 						}
 					}
-				}
-				default -> {
+					default -> {
+					}
 				}
 			}
+			if (!collectShadowed(cons.car(), blocked)) {
+				return false;
+			}
+			form = cons.cdr();
 		}
-		return collectShadowed(cons.car(), blocked) && collectShadowed(cons.cdr(), blocked);
+		return true;
 	}
 
 	/**

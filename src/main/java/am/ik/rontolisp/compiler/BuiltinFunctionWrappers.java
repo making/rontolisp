@@ -279,10 +279,11 @@ public final class BuiltinFunctionWrappers {
 	 */
 	public static Set<String> designatedValueProducers(List<LispVal> program,
 			java.util.Collection<LispVal> extraForms) {
+		Set<String> spelled = functionDesignatorNames(program);
+		spelled.addAll(functionDesignatorNames(extraForms));
 		Set<String> named = new java.util.HashSet<>();
 		for (String op : VALUE_PUBLISHING_PRODUCERS) {
-			if (program.stream().anyMatch(expr -> referencesFunctionDesignator(expr, op))
-					|| extraForms.stream().anyMatch(expr -> referencesFunctionDesignator(expr, op))) {
+			if (spelled.contains(op)) {
 				named.add(op);
 			}
 		}
@@ -307,16 +308,20 @@ public final class BuiltinFunctionWrappers {
 	 * @return {@code true} when a {@code (function name)} or {@code (quote name)} occurs
 	 */
 	public static boolean referencesFunctionDesignator(LispVal expr, String name) {
-		if (!(expr instanceof LispCons cons)) {
-			return false;
+		LispVal node = expr;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op
+					&& (LispNames.FUNCTION.equals(op.name()) || LispNames.QUOTE.equals(op.name()))
+					&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol sym
+					&& name.equals(sym.name())) {
+				return true;
+			}
+			if (referencesFunctionDesignator(cons.car(), name)) {
+				return true;
+			}
+			node = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol op
-				&& (LispNames.FUNCTION.equals(op.name()) || LispNames.QUOTE.equals(op.name()))
-				&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol sym
-				&& name.equals(sym.name())) {
-			return true;
-		}
-		return referencesFunctionDesignator(cons.car(), name) || referencesFunctionDesignator(cons.cdr(), name);
+		return false;
 	}
 
 	/**
@@ -332,22 +337,29 @@ public final class BuiltinFunctionWrappers {
 	 * @return {@code true} when one of the names occurs as a symbol constant
 	 */
 	public static boolean spellsSymbolConstant(LispVal expr, Set<String> names) {
-		if (!(expr instanceof LispCons cons)) {
-			return false;
+		LispVal node = expr;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op
+					&& (LispNames.QUOTE.equals(op.name()) || LispNames.FUNCTION.equals(op.name()))) {
+				return mentionsSymbol(cons.cdr(), names);
+			}
+			if (spellsSymbolConstant(cons.car(), names)) {
+				return true;
+			}
+			node = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol op
-				&& (LispNames.QUOTE.equals(op.name()) || LispNames.FUNCTION.equals(op.name()))) {
-			return mentionsSymbol(cons.cdr(), names);
-		}
-		return spellsSymbolConstant(cons.car(), names) || spellsSymbolConstant(cons.cdr(), names);
+		return false;
 	}
 
 	private static boolean mentionsSymbol(LispVal datum, Set<String> names) {
+		while (datum instanceof LispCons cons) {
+			if (mentionsSymbol(cons.car(), names)) {
+				return true;
+			}
+			datum = cons.cdr();
+		}
 		if (datum instanceof LispSymbol sym) {
 			return names.contains(sym.name());
-		}
-		if (datum instanceof LispCons cons) {
-			return mentionsSymbol(cons.car(), names) || mentionsSymbol(cons.cdr(), names);
 		}
 		if (datum instanceof am.ik.rontolisp.LispArray array) {
 			for (LispVal element : array.data()) {
@@ -360,6 +372,50 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	/**
+	 * Every name the forms take as a first-class function value: the answers of
+	 * {@link #referencesFunctionValue} for all names in one walk, for a gate that asks
+	 * about many operators (each asking walked the whole program again).
+	 * @param forms the expressions to scan
+	 * @return the names some {@code (function name)} form spells
+	 */
+	public static Set<String> functionValueNames(Iterable<? extends LispVal> forms) {
+		Set<String> names = new java.util.HashSet<>();
+		for (LispVal form : forms) {
+			collectDesignatorNames(form, false, names);
+		}
+		return names;
+	}
+
+	/**
+	 * Every name the forms spell as a function designator: the answers of
+	 * {@link #referencesFunctionDesignator} for all names in one walk.
+	 * @param forms the expressions to scan
+	 * @return the names some {@code (function name)} or {@code (quote name)} form spells
+	 */
+	public static Set<String> functionDesignatorNames(Iterable<? extends LispVal> forms) {
+		Set<String> names = new java.util.HashSet<>();
+		for (LispVal form : forms) {
+			collectDesignatorNames(form, true, names);
+		}
+		return names;
+	}
+
+	// The walk of referencesFunctionValue / referencesFunctionDesignator (every cons
+	// reachable through car and cdr), collecting instead of matching one name.
+	private static void collectDesignatorNames(LispVal expr, boolean quoted, Set<String> names) {
+		LispVal x = expr;
+		while (x instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op
+					&& (LispNames.FUNCTION.equals(op.name()) || quoted && LispNames.QUOTE.equals(op.name()))
+					&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol sym) {
+				names.add(sym.name());
+			}
+			collectDesignatorNames(cons.car(), quoted, names);
+			x = cons.cdr();
+		}
+	}
+
+	/**
 	 * Whether the expression takes the named operator as a first-class function value --
 	 * a {@code (function name)} form (the {@code #'name} reader shape).
 	 * @param expr the expression to scan
@@ -367,15 +423,19 @@ public final class BuiltinFunctionWrappers {
 	 * @return {@code true} when a {@code (function name)} reference occurs
 	 */
 	public static boolean referencesFunctionValue(LispVal expr, String name) {
-		if (!(expr instanceof LispCons cons)) {
-			return false;
+		LispVal node = expr;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op && LispNames.FUNCTION.equals(op.name())
+					&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol sym
+					&& name.equals(sym.name())) {
+				return true;
+			}
+			if (referencesFunctionValue(cons.car(), name)) {
+				return true;
+			}
+			node = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol op && LispNames.FUNCTION.equals(op.name())
-				&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol sym
-				&& name.equals(sym.name())) {
-			return true;
-		}
-		return referencesFunctionValue(cons.car(), name) || referencesFunctionValue(cons.cdr(), name);
+		return false;
 	}
 
 	/**

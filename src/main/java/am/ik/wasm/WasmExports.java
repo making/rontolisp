@@ -92,7 +92,7 @@ public final class WasmExports {
 						"WasmExports: the module does not export '" + from + "' (it exports " + declaredNames + ")");
 			}
 		}
-		ByteArrayOutputStream entries = new ByteArrayOutputStream();
+		ByteArrayOutputStream entries = new UnsynchronizedByteArrayOutputStream();
 		for (Map.Entry<String, String> entry : keepAs.entrySet()) {
 			Export e = declared.stream()
 				.filter(d -> d.name().equals(entry.getKey()))
@@ -102,7 +102,7 @@ public final class WasmExports {
 			entries.write(e.kind());
 			writeU(entries, e.index());
 		}
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		writeU(body, keepAs.size());
 		body.writeBytes(entries.toByteArray());
 		byte[] newPayload = body.toByteArray();
@@ -126,7 +126,7 @@ public final class WasmExports {
 	}
 
 	private static byte[] replaceExportSection(byte[] module, byte[] newPayload) {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new UnsynchronizedByteArrayOutputStream();
 		out.write(module, 0, 8);
 		int[] p = { 8 };
 		while (p[0] < module.length) {

@@ -3,6 +3,7 @@ package am.ik.wasm;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.Deque;
 import java.util.List;
 import java.util.Objects;
@@ -590,7 +591,7 @@ public final class WasmTreeShaker {
 		if (refs.isEmpty()) {
 			return buf;
 		}
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new UnsynchronizedByteArrayOutputStream();
 		int cursor = 0;
 		for (Ref r : refs) {
 			WasmSections.writeRaw(out, WasmSections.slice(buf, cursor, r.start()));
@@ -736,7 +737,7 @@ public final class WasmTreeShaker {
 			}
 			kept.add(applyRefs(raw, refs, funcRemap, typeRemap, globalRemap));
 		}
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		WasmSections.writeU(body, kept.size());
 		for (byte[] entry : kept) {
 			WasmSections.writeRaw(body, entry);
@@ -826,7 +827,7 @@ public final class WasmTreeShaker {
 			}
 			kept.add(applyRefs(raw, refs, funcRemap, typeRemap, globalRemap));
 		}
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		WasmSections.writeU(body, kept.size());
 		for (byte[] entry : kept) {
 			WasmSections.writeRaw(body, entry);
@@ -838,7 +839,7 @@ public final class WasmTreeShaker {
 
 	private static byte[] rebuildImports(List<ImportEntry> imports, boolean[] reachable, int[] funcRemap,
 			int[] typeRemap, int[] globalRemap) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		List<ImportEntry> kept = new ArrayList<>();
 		int funcOrdinal = 0;
 		for (ImportEntry e : imports) {
@@ -863,7 +864,7 @@ public final class WasmTreeShaker {
 
 	private static byte[] rebuildFunctionSection(int[] defTypeIdx, int numImportedFuncs, boolean[] reachable,
 			int[] typeRemap) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		List<Integer> kept = new ArrayList<>();
 		for (int i = 0; i < defTypeIdx.length; i++) {
 			if (reachable[numImportedFuncs + i]) {
@@ -881,7 +882,7 @@ public final class WasmTreeShaker {
 
 	private static byte[] rebuildCodeSection(List<byte[]> codeEntries, List<List<Ref>> bodyRefs, int numImportedFuncs,
 			boolean[] reachable, int[] funcRemap, int[] typeRemap, int[] globalRemap) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		List<byte[]> kept = new ArrayList<>();
 		for (int i = 0; i < codeEntries.size(); i++) {
 			if (reachable[numImportedFuncs + i]) {
@@ -1026,7 +1027,7 @@ public final class WasmTreeShaker {
 				kept.add(activeSegment(segment.offset() + cursor, WasmSections.slice(segment.bytes(), cursor, len)));
 			}
 		}
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		WasmSections.writeU(body, kept.size());
 		for (byte[] segment : kept) {
 			WasmSections.writeRaw(body, segment);
@@ -1037,7 +1038,7 @@ public final class WasmTreeShaker {
 	// One active mode-0 data segment: flags 0, an i32.const offset expression, then the
 	// bytes.
 	private static byte[] activeSegment(int offset, byte[] bytes) {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new UnsynchronizedByteArrayOutputStream();
 		WasmSections.writeU(out, 0); // flags: active, memory 0
 		out.write(0x41); // i32.const
 		WasmSections.writeS(out, offset);
@@ -1045,6 +1046,60 @@ public final class WasmTreeShaker {
 		WasmSections.writeU(out, bytes.length);
 		WasmSections.writeRaw(out, bytes);
 		return out.toByteArray();
+	}
+
+	/**
+	 * The defined functions any export or the start function reaches through call edges,
+	 * indexed by DEFINED ordinal. A superset of what {@link #shake} keeps: the shake
+	 * roots the same set minus the host-cell hooks it proves dead, so a function outside
+	 * this set is dropped whatever its body says. That is what lets a pass that runs in
+	 * front of the shake, rewrites a body only in isolation and never adds a call
+	 * ({@link WasmLocalSink}) leave the others as they are.
+	 * @param sections the module's parsed sections
+	 * @param bodies the code entries, as {@link WasmSections#parseCodeEntries} returns
+	 * them
+	 * @return one flag per code entry
+	 */
+	static boolean[] reachableBodies(List<Section> sections, List<byte[]> bodies) {
+		@Nullable Section importSec = WasmSections.find(sections, SEC_IMPORT);
+		int numImportedFuncs = 0;
+		if (importSec != null) {
+			for (ImportEntry e : WasmSections.parseImports(importSec.payload())) {
+				if (e.kind() == WasmSections.KIND_FUNC) {
+					numImportedFuncs++;
+				}
+			}
+		}
+		int totalFuncs = numImportedFuncs + bodies.size();
+		boolean[] reachable = new boolean[totalFuncs];
+		Deque<Integer> work = new ArrayDeque<>();
+		for (int root : exportFuncRoots(WasmSections.find(sections, SEC_EXPORT))) {
+			if (root >= 0 && root < totalFuncs && !reachable[root]) {
+				reachable[root] = true;
+				work.push(root);
+			}
+		}
+		@Nullable Section startSec = WasmSections.find(sections, SEC_START);
+		if (startSec != null) {
+			int root = WasmSections.readU(startSec.payload(), new int[] { 0 });
+			if (root >= 0 && root < totalFuncs && !reachable[root]) {
+				reachable[root] = true;
+				work.push(root);
+			}
+		}
+		while (!work.isEmpty()) {
+			int defIndex = work.pop() - numImportedFuncs;
+			if (defIndex < 0) {
+				continue;
+			}
+			for (Ref r : WasmSections.scanBody(bodies.get(defIndex))) {
+				if (r.kind() == RefKind.FUNC && r.index() >= 0 && r.index() < totalFuncs && !reachable[r.index()]) {
+					reachable[r.index()] = true;
+					work.push(r.index());
+				}
+			}
+		}
+		return Arrays.copyOfRange(reachable, numImportedFuncs, totalFuncs);
 	}
 
 	// --- Export / start sections ---

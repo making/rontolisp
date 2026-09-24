@@ -23,7 +23,7 @@ final class WasmPlistRuntimeBuilder {
 	 * TYPE_OPEN).
 	 */
 	static byte[] buildPlistGet() {
-		final ByteArrayOutputStream body = new ByteArrayOutputStream();
+		final ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		final WasmWriter w = new WasmWriter(body);
 		final int CUR = 0, KEY_OFF = 1; // reuse the plist param as the cursor
 		w.write(0); // no extra locals

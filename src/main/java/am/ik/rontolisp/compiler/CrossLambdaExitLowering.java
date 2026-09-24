@@ -14,6 +14,7 @@ import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import org.jspecify.annotations.Nullable;
@@ -202,10 +203,20 @@ public final class CrossLambdaExitLowering {
 			if (!(form instanceof LispCons cons)) {
 				return form;
 			}
+			LispVal special = transformSpecial(cons, lambdaDepth);
+			return special != null ? special : structural(cons, lambdaDepth);
+		}
+
+		/**
+		 * What {@link #transform} makes of a form whose head is one of the operators this
+		 * pass lowers, or {@code null} for any other cons -- which is walked
+		 * structurally.
+		 */
+		private @Nullable LispVal transformSpecial(LispCons cons, int lambdaDepth) {
 			if (cons.car() instanceof LispSymbol op) {
 				switch (op.name()) {
 					case LispNames.QUOTE -> {
-						return form;
+						return cons;
 					}
 					case LispNames.LAMBDA -> {
 						return transformLambda(cons, lambdaDepth);
@@ -246,7 +257,7 @@ public final class CrossLambdaExitLowering {
 					}
 				}
 			}
-			return structural(cons, lambdaDepth);
+			return null;
 		}
 
 		// Preserve the cons spine, transforming each element. Operators (symbols) pass
@@ -257,13 +268,17 @@ public final class CrossLambdaExitLowering {
 		// whose variable happens to be named `block` -- so those are traversed, not
 		// mis-parsed as the special form (md5 binds a variable named `block`).
 		private LispVal structural(LispCons cons, int lambdaDepth) {
-			LispVal car = transform(cons.car(), lambdaDepth);
-			LispVal cdr = transform(cons.cdr(), lambdaDepth);
 			// Nothing lowered means nothing rebuilt: a program with no cross-lambda exit
 			// (nearly every program) must come out of this pass with the cons identity it
 			// went in with, since that is what SourceProvenance keys a form's source
-			// position on.
-			return car == cons.car() && cdr == cons.cdr() ? cons : new LispCons(car, cdr);
+			// position on. Every tail is still transformed as a form of its own, as the
+			// recursive walk did, but down the spine in a loop.
+			return LispTrees.rebuildSpine(cons, node -> {
+				if (node == cons) {
+					return null;
+				}
+				return node instanceof LispCons tail ? transformSpecial(tail, lambdaDepth) : node;
+			}, element -> transform(element, lambdaDepth));
 		}
 
 		// A well-formed block/return-from name: a non-keyword symbol or nil. Anything

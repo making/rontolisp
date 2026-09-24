@@ -92,17 +92,7 @@ public final class StructLiteralFolder {
 				return foldLiteral(literal, registry, active);
 			}
 			case LispCons cons -> {
-				if (!active.add(cons)) {
-					return form;
-				}
-				try {
-					LispVal car = fold(cons.car(), registry, active);
-					LispVal cdr = fold(cons.cdr(), registry, active);
-					return car == cons.car() && cdr == cons.cdr() ? form : new LispCons(car, cdr);
-				}
-				finally {
-					active.remove(cons);
-				}
+				return foldSpine(cons, registry, active);
 			}
 			case LispArray array -> {
 				// A #(...) / #nA(...) literal may hold struct literals; the packed float
@@ -131,6 +121,44 @@ public final class StructLiteralFolder {
 			}
 			default -> {
 				return form;
+			}
+		}
+	}
+
+	/**
+	 * A list, walked down its cdr spine in a loop so the stack is spent per level of
+	 * nesting rather than per element. Every cell of the spine stays on the path until
+	 * the whole spine is done, as it did when the walk recursed on the cdr.
+	 */
+	private static LispVal foldSpine(LispCons head, ClosRegistry registry, Set<LispVal> active) {
+		List<LispCons> cells = new ArrayList<>();
+		List<LispVal> cars = new ArrayList<>();
+		try {
+			LispVal node = head;
+			LispVal tail;
+			while (true) {
+				if (node instanceof LispCons cell) {
+					if (!active.add(cell)) {
+						tail = cell;
+						break;
+					}
+					cells.add(cell);
+					cars.add(fold(cell.car(), registry, active));
+					node = cell.cdr();
+				}
+				else {
+					tail = fold(node, registry, active);
+					break;
+				}
+			}
+			for (int i = cells.size() - 1; i >= 0; i--) {
+				tail = LispCons.rebuilt(cells.get(i), cars.get(i), tail);
+			}
+			return tail;
+		}
+		finally {
+			for (LispCons cell : cells) {
+				active.remove(cell);
 			}
 		}
 	}

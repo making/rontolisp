@@ -32,7 +32,7 @@ final class WasmBignumRuntimeBuilder {
 	// _int_new(i64 v) -> (ref null eq): ref.i31 when v fits the 31-bit fixnum range,
 	// else a fresh TYPE_BIGNUM box.
 	static byte[] buildIntNewBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		w.write(0); // no extra locals
@@ -73,7 +73,7 @@ final class WasmBignumRuntimeBuilder {
 	// cast replaced the uncatchable cast-failure trap; they cost one ref.test on the
 	// boxed (out-of-i31) arm only -- the i31 fast arm is byte-identical.
 	static byte[] buildIntValBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		w.write(0); // no extra locals
@@ -128,7 +128,7 @@ final class WasmBignumRuntimeBuilder {
 	// the unsigned remainder loop (rem_u/div_u after the flip), matching two's
 	// complement magnitude for every representable magnitude.
 	static byte[] buildPrintI64NoNlBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// locals: 1 = i32 negative flag, 2 = i32 digit count, 3 = i32 reverse cursor

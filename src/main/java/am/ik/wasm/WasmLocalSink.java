@@ -84,6 +84,23 @@ public final class WasmLocalSink {
 	 * @return the module with those locals removed; the input itself when none was
 	 */
 	public static byte[] sink(byte[] module) {
+		return sink(module, false);
+	}
+
+	/**
+	 * Sinks every single-use local of every code entry of a core module that
+	 * {@link WasmTreeShaker} is going to keep, when {@code reachableOnly} says the module
+	 * is on its way there. A body no export or start function reaches is left as it is:
+	 * the shake drops it whatever it holds, and this pass never adds a call to a body it
+	 * does rewrite, so nothing it leaves becomes reachable. The rontolisp backends emit
+	 * their whole runtime and let the shake cut it, so that is most of the module -- and
+	 * was most of this pass's time (.kb/optimize-dead-code-elimination.md, "The
+	 * single-use local").
+	 * @param module a core WASM module (the 8-byte header followed by sections)
+	 * @param reachableOnly whether to leave the bodies no root reaches untouched
+	 * @return the module with those locals removed; the input itself when none was
+	 */
+	public static byte[] sink(byte[] module, boolean reachableOnly) {
 		List<Section> sections = WasmSections.parseSections(module);
 		@Nullable Section typeSec = null;
 		@Nullable Section functionSec = null;
@@ -108,10 +125,15 @@ public final class WasmLocalSink {
 		if (entries.size() != defTypeIdx.length) {
 			return module;
 		}
+		boolean @Nullable [] reachable = reachableOnly ? WasmTreeShaker.reachableBodies(sections, entries) : null;
 		List<byte[]> rewritten = new ArrayList<>(entries.size());
 		boolean changed = false;
 		for (int d = 0; d < entries.size(); d++) {
 			byte[] entry = entries.get(d);
+			if (reachable != null && !reachable[d]) {
+				rewritten.add(entry);
+				continue;
+			}
 			int params = types.func(defTypeIdx[d]).params().size();
 			byte[] out = entry;
 			try {
@@ -131,7 +153,7 @@ public final class WasmLocalSink {
 		if (!changed) {
 			return module;
 		}
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		WasmSections.writeU(body, rewritten.size());
 		for (byte[] entry : rewritten) {
 			WasmSections.writeU(body, entry.length);
@@ -572,7 +594,7 @@ public final class WasmLocalSink {
 		private int lastSetAt;
 
 		Encoder(byte[] entry, int[] newIndex) {
-			this.bytes = new ByteArrayOutputStream(entry.length);
+			this.bytes = new UnsynchronizedByteArrayOutputStream(entry.length);
 			this.entry = entry;
 			this.newIndex = newIndex;
 		}

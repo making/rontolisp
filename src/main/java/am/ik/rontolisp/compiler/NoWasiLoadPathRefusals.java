@@ -825,15 +825,19 @@ public final class NoWasiLoadPathRefusals {
 	 * Whether {@code #'name} appears anywhere in a form -- a local escaping as a value.
 	 */
 	static boolean takenAsValue(LispVal form, String name) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && LispNames.FUNCTION.equals(head.name())
+					&& cons.cdr() instanceof LispCons target && target.car() instanceof LispSymbol referenced
+					&& name.equals(referenced.name())) {
+				return true;
+			}
+			if (takenAsValue(cons.car(), name)) {
+				return true;
+			}
+			node = cons.cdr();
 		}
-		if (cons.car() instanceof LispSymbol head && LispNames.FUNCTION.equals(head.name())
-				&& cons.cdr() instanceof LispCons target && target.car() instanceof LispSymbol referenced
-				&& name.equals(referenced.name())) {
-			return true;
-		}
-		return takenAsValue(cons.car(), name) || takenAsValue(cons.cdr(), name);
+		return false;
 	}
 
 	/** Which refusal this operator is, or {@code null} when it is not one. */

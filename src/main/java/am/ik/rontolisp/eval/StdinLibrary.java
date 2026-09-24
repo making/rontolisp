@@ -142,14 +142,23 @@ public final class StdinLibrary {
 	// source spelling: this scan runs before PackageResolver normalizes the program, so
 	// it must normalize itself -- splitQualified resolves the built-in nicknames.
 	private static boolean referencesAny(LispVal form, String pkg, List<String> members) {
-		return switch (form) {
-			case LispSymbol sym -> {
-				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-				yield qn != null && pkg.equals(qn.pkg()) && members.contains(qn.member());
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+					return qn != null && pkg.equals(qn.pkg()) && members.contains(qn.member());
+				}
+				case LispCons cons -> {
+					if (referencesAny(cons.car(), pkg, members)) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
 			}
-			case LispCons cons -> referencesAny(cons.car(), pkg, members) || referencesAny(cons.cdr(), pkg, members);
-			default -> false;
-		};
+		}
 	}
 
 	private static boolean referencesAny(List<LispVal> program, String pkg, List<String> members) {
@@ -175,17 +184,26 @@ public final class StdinLibrary {
 	}
 
 	private static boolean referencesRead(LispVal form) {
-		return switch (form) {
-			case LispSymbol sym -> {
-				if (READ_NAMES.contains(sym.name())) {
-					yield true;
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					if (READ_NAMES.contains(sym.name())) {
+						return true;
+					}
+					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+					return qn != null && LispNames.CL_PKG.equals(qn.pkg()) && READ_NAMES.contains(qn.member());
 				}
-				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-				yield qn != null && LispNames.CL_PKG.equals(qn.pkg()) && READ_NAMES.contains(qn.member());
+				case LispCons cons -> {
+					if (referencesRead(cons.car())) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
 			}
-			case LispCons cons -> referencesRead(cons.car()) || referencesRead(cons.cdr());
-			default -> false;
-		};
+		}
 	}
 
 	// A defun head in any source spelling: bare defun, cl:defun and
@@ -216,26 +234,30 @@ public final class StdinLibrary {
 	}
 
 	private static void collectNames(@Nullable LispVal form, Set<String> names) {
-		switch (form) {
-			case LispSymbol sym -> {
-				names.add(sym.name());
-				// The reader upcases user spellings while WIT member names are
-				// lower-kebab:
-				// record the lowercase twin too, so the member filter matches every
-				// referenced binding (mirrors WitImportInliner.collectNames).
-				names.add(sym.name().toLowerCase(java.util.Locale.ROOT));
-				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-				if (qn != null) {
-					names.add(qn.member());
-					names.add(qn.member().toLowerCase(java.util.Locale.ROOT));
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					names.add(sym.name());
+					// The reader upcases user spellings while WIT member names are
+					// lower-kebab:
+					// record the lowercase twin too, so the member filter matches every
+					// referenced binding (mirrors WitImportInliner.collectNames).
+					names.add(sym.name().toLowerCase(java.util.Locale.ROOT));
+					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+					if (qn != null) {
+						names.add(qn.member());
+						names.add(qn.member().toLowerCase(java.util.Locale.ROOT));
+					}
+				}
+				case LispCons cons -> {
+					collectNames(cons.car(), names);
+					form = cons.cdr();
+					continue;
+				}
+				case null, default -> {
 				}
 			}
-			case LispCons cons -> {
-				collectNames(cons.car(), names);
-				collectNames(cons.cdr(), names);
-			}
-			case null, default -> {
-			}
+			return;
 		}
 	}
 

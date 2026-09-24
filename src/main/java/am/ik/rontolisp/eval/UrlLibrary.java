@@ -142,22 +142,26 @@ public final class UrlLibrary {
 		}
 
 		private void detect(LispVal form) {
-			if (this.found) {
-				return;
-			}
-			switch (form) {
-				case LispSymbol sym -> {
-					if (isUrlFunction(sym.name()) || (LispNames.RONTOLISP_PKG.equals(this.currentPackage)
-							&& URL_FUNCTIONS.contains(sym.name()))) {
-						this.found = true;
+			while (true) {
+				if (this.found) {
+					return;
+				}
+				switch (form) {
+					case LispSymbol sym -> {
+						if (isUrlFunction(sym.name()) || (LispNames.RONTOLISP_PKG.equals(this.currentPackage)
+								&& URL_FUNCTIONS.contains(sym.name()))) {
+							this.found = true;
+						}
+					}
+					case LispCons cons -> {
+						detect(cons.car());
+						form = cons.cdr();
+						continue;
+					}
+					default -> {
 					}
 				}
-				case LispCons cons -> {
-					detect(cons.car());
-					detect(cons.cdr());
-				}
-				default -> {
-				}
+				return;
 			}
 		}
 

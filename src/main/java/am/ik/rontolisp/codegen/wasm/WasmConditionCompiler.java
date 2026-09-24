@@ -137,34 +137,38 @@ final class WasmConditionCompiler {
 	// (or a b c) -> a; if (result i32) 1 else [b; if (result i32) 1 else c end] end. An
 	// operand is compiled as a test itself, so nothing along the chain is boxed; the
 	// control depth is tracked through each arm so a return inside an operand finds its
-	// block.
+	// block. The nesting is emitted in a loop -- every operand but the last opens an if
+	// on
+	// the way down, and the ifs close on the way back -- so a long chain costs no Java
+	// stack per operand.
 	private static void compileChain(List<LispVal> operands, boolean conjunction, WasmLispCompiler.Ctx ctx) {
 		if (operands.isEmpty()) {
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(conjunction ? 1 : 0);
 			return;
 		}
-		compile(operands.get(0), ctx, false);
-		if (operands.size() == 1) {
-			return;
+		int last = operands.size() - 1;
+		for (int i = 0; i < last; i++) {
+			compile(operands.get(i), ctx, false);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.write(Type.I32);
+			ctx.wasmCtrlDepth++;
+			if (!conjunction) {
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(1);
+				ctx.writer.write(Instruction.ELSE);
+			}
 		}
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.I32);
-		ctx.wasmCtrlDepth++;
-		if (conjunction) {
-			compileChain(operands.subList(1, operands.size()), true, ctx);
-			ctx.writer.write(Instruction.ELSE);
-			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(0);
+		compile(operands.get(last), ctx, false);
+		for (int i = 0; i < last; i++) {
+			if (conjunction) {
+				ctx.writer.write(Instruction.ELSE);
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(0);
+			}
+			ctx.wasmCtrlDepth--;
+			ctx.writer.write(Instruction.END);
 		}
-		else {
-			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(1);
-			ctx.writer.write(Instruction.ELSE);
-			compileChain(operands.subList(1, operands.size()), false, ctx);
-		}
-		ctx.wasmCtrlDepth--;
-		ctx.writer.write(Instruction.END);
 	}
 
 }

@@ -256,7 +256,7 @@ public final class WasmInliner {
 		if (!changed) {
 			return module;
 		}
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		WasmSections.writeU(body, entries.size());
 		for (byte[] entry : entries) {
 			WasmSections.writeU(body, entry.length);
@@ -407,7 +407,7 @@ public final class WasmInliner {
 		int localBase = base + added.size();
 		added.addAll(calleeBody.locals());
 
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new UnsynchronizedByteArrayOutputStream();
 		writeLocals(out, callerBody.locals(), added);
 		int instrStart = callerCode.get(0).start;
 		boolean rewritesArgs = !shape.stackHandOver() && argsArePushers && params > 0;

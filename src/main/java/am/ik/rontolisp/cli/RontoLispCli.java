@@ -1408,7 +1408,7 @@ public final class RontoLispCli {
 		// and thread 0 carries whatever stack the platform gives it -- about 8 MiB on
 		// macOS, 1 MiB on linux-x64, which an ordinary vendored library's own test suite
 		// already recurses past. The depth ceiling is therefore one number everywhere,
-		// WORKER_STACK_BYTES or --stack (.kb/interpreter-stack.md).
+		// SizedThread.WORKER_STACK_BYTES or --stack (.kb/interpreter-stack.md).
 		LaunchStack stack;
 		try {
 			stack = LaunchStack.of(args);
@@ -1457,48 +1457,8 @@ public final class RontoLispCli {
 	 * exactly as it did when launch ran on thread 0.
 	 */
 	private static int joinLaunch(String[] args, long stackBytes) {
-		int[] code = new int[1];
-		Throwable[] thrown = new Throwable[1];
-		Thread worker = new Thread(null, () -> {
-			try {
-				code[0] = launch(args);
-			}
-			catch (Throwable ex) {
-				thrown[0] = ex;
-			}
-		}, "main", stackBytes);
-		worker.start();
-		boolean interrupted = false;
-		while (true) {
-			try {
-				worker.join();
-				break;
-			}
-			catch (InterruptedException ex) {
-				// Thread 0 is not the CLI any more, so an interrupt aimed at it answers
-				// nothing: remember it for whoever sent it and keep waiting for the run.
-				interrupted = true;
-			}
-		}
-		if (interrupted) {
-			Thread.currentThread().interrupt();
-		}
-		switch (thrown[0]) {
-			case null -> {
-			}
-			case Error error -> throw error;
-			case RuntimeException runtime -> throw runtime;
-			default -> throw new IllegalStateException(thrown[0]);
-		}
-		return code[0];
+		return SizedThread.call("main", stackBytes, () -> launch(args));
 	}
-
-	/**
-	 * The stack of the thread the CLI runs on: comfortably more than the 8 MiB the most
-	 * generous platform gives the first thread, since the interpreter's recursion depth
-	 * is the program's.
-	 */
-	private static final long WORKER_STACK_BYTES = 16L << 20;
 
 	/** The largest {@code --stack} accepted, in MiB. */
 	private static final long MAX_STACK_MIB = 65536L;
@@ -1554,7 +1514,7 @@ public final class RontoLispCli {
 
 		private static long bytes(@Nullable String value) {
 			if (value == null) {
-				return WORKER_STACK_BYTES;
+				return SizedThread.WORKER_STACK_BYTES;
 			}
 			long mib;
 			try {

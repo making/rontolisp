@@ -76,11 +76,30 @@ public final class LispEquality {
 	 * @return whether the two values are {@code equal}
 	 */
 	public static boolean equal(LispVal a, LispVal b) {
+		// Two lists are compared down their cdr spines in a loop, so a long list costs
+		// no stack; only nesting recurses. Two distinct circular lists that agree
+		// element for element would keep the loop going for ever: a cell remembered at
+		// every power of two (Brent) reports one instead.
+		LispCons remembered = null;
+		int power = 1;
+		int steps = 0;
+		while (a != b && a instanceof LispCons consA) {
+			if (!(b instanceof LispCons consB) || !equal(consA.car(), consB.car())) {
+				return false;
+			}
+			if (consA == remembered) {
+				throw new LispTrees.CircularListException();
+			}
+			if (++steps == power) {
+				remembered = consA;
+				power <<= 1;
+				steps = 0;
+			}
+			a = consA.cdr();
+			b = consB.cdr();
+		}
 		if (a == b) {
 			return true;
-		}
-		if (a instanceof LispCons consA) {
-			return b instanceof LispCons consB && equal(consA.car(), consB.car()) && equal(consA.cdr(), consB.cdr());
 		}
 		if (b instanceof LispCons) {
 			return false;

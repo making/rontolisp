@@ -7,6 +7,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -126,9 +127,8 @@ public final class NoWasiFilesystemStubs {
 	}
 
 	private static LispVal rewriteElements(LispCons cons, boolean userOpen) {
-		LispVal car = rewriteForm(cons.car(), userOpen);
-		LispVal cdr = cons.cdr() instanceof LispCons rest ? rewriteElements(rest, userOpen) : cons.cdr();
-		return LispCons.rebuilt(cons, car, cdr);
+		return LispTrees.rebuildSpine(cons, node -> node instanceof LispCons ? null : node,
+				element -> rewriteForm(element, userOpen));
 	}
 
 	/** {@code (progn args... (error "OPERATOR requires WASI; ..."))}. */

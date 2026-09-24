@@ -479,6 +479,20 @@ public final class LambdaLists {
 	}
 
 	private static LispVal desugar(LispVal form) {
+		// A form with no lambda-list keyword and no return-from anywhere under it -- most
+		// of every program -- comes back AS IT WAS READ. Cons identity is what
+		// {@link SourceProvenance} keys a form's source position on, so a rebuild here
+		// would drop every position below the top level of a program that has nothing to
+		// desugar. The cdr spine is walked in a loop, so a long list costs no stack.
+		return LispTrees.rebuildSpine(form, LambdaLists::desugarHead, LambdaLists::desugar);
+	}
+
+	/**
+	 * What {@link #desugar} makes of a node without splitting it into car and cdr: an
+	 * atom, a quoted form, a rebuilt lambda/defun -- or {@code null} for an ordinary
+	 * cell.
+	 */
+	private static @Nullable LispVal desugarHead(LispVal form) {
 		if (!(form instanceof LispCons cons)) {
 			return form;
 		}
@@ -502,14 +516,7 @@ public final class LambdaLists {
 				return rebuildFunction(sym, parts.get(1), e);
 			}
 		}
-		LispVal car = desugar(cons.car());
-		LispVal cdr = desugar(cons.cdr());
-		// A form with no lambda-list keyword and no return-from anywhere under it -- most
-		// of every program -- comes back AS IT WAS READ. Cons identity is what
-		// {@link SourceProvenance} keys a form's source position on, so a rebuild here
-		// would drop every position below the top level of a program that has nothing to
-		// desugar.
-		return car == cons.car() && cdr == cons.cdr() ? cons : new LispCons(car, cdr);
+		return null;
 	}
 
 	/**
@@ -589,18 +596,22 @@ public final class LambdaLists {
 	// map*/reduce exits the lambda, not the outer defun -- a goto cannot cross into the
 	// lambda's separately compiled method).
 	private static boolean containsReturnFrom(LispVal form) {
-		if (!(form instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol op) {
-			if (LispNames.QUOTE.equals(op.name()) || isNestedFunction(op.name())) {
-				return false;
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				if (LispNames.QUOTE.equals(op.name()) || isNestedFunction(op.name())) {
+					return false;
+				}
+				if (LispNames.RETURN_FROM.equals(op.name())) {
+					return true;
+				}
 			}
-			if (LispNames.RETURN_FROM.equals(op.name())) {
+			if (containsReturnFrom(cons.car())) {
 				return true;
 			}
+			node = cons.cdr();
 		}
-		return containsReturnFrom(cons.car()) || containsReturnFrom(cons.cdr());
+		return false;
 	}
 
 	private static boolean isNestedFunction(String op) {

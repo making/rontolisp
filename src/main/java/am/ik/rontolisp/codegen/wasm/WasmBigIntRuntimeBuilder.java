@@ -2545,7 +2545,7 @@ final class WasmBigIntRuntimeBuilder {
 	// The stack-machine building block for the little emission DSL below.
 	private static final class BodyWriter {
 
-		final ByteArrayOutputStream out = new ByteArrayOutputStream();
+		final ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 
 		final WasmWriter w = new WasmWriter(this.out);
 

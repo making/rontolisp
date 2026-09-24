@@ -25,6 +25,7 @@ import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.scheme.Scheme;
+import am.ik.rontolisp.testsupport.CliStack;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import org.junit.jupiter.api.DynamicContainer;
 import org.junit.jupiter.api.DynamicNode;
@@ -141,10 +142,6 @@ class SicpCorpusE2eTest {
 	private static final String AMB_GLUE_RESOURCE = "/sicp-amb-glue.scm";
 
 	private static final long LEG_TIMEOUT_SECONDS = 90;
-
-	// The CLI hands every program 16 MiB (RontoLispCli.WORKER_STACK_BYTES); the
-	// in-process legs measure the same ceiling rather than JUnit's.
-	private static final long PROGRAM_STACK_BYTES = 16L << 20;
 
 	@TempDir
 	static Path workDir;
@@ -643,33 +640,8 @@ class SicpCorpusE2eTest {
 	 */
 	private static Outcome onAProgramStack(java.util.concurrent.Callable<Outcome> body, long timeoutSeconds)
 			throws Exception {
-		Outcome[] result = new Outcome[1];
-		Throwable[] thrown = new Throwable[1];
-		Thread worker = new Thread(null, () -> {
-			try {
-				result[0] = body.call();
-			}
-			catch (Throwable ex) {
-				thrown[0] = ex;
-			}
-		}, "sicp-corpus", PROGRAM_STACK_BYTES);
-		worker.setDaemon(true);
-		worker.start();
-		worker.join(TimeUnit.SECONDS.toMillis(timeoutSeconds));
-		if (worker.isAlive()) {
-			worker.interrupt();
-			return new Outcome(1, "", true);
-		}
-		if (thrown[0] instanceof Error error) {
-			throw error;
-		}
-		if (thrown[0] instanceof Exception exception) {
-			throw exception;
-		}
-		if (thrown[0] != null) {
-			return new Outcome(1, "[" + thrown[0] + "]", false);
-		}
-		return result[0];
+		return CliStack.callWithin("sicp-corpus", body, java.time.Duration.ofSeconds(timeoutSeconds))
+			.orElseGet(() -> new Outcome(1, "", true));
 	}
 
 	private static @org.jspecify.annotations.Nullable Path corpusRoot() {
