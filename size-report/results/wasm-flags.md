@@ -5,26 +5,26 @@ the prose below it is [`../notes/wasm-flags.md`](../notes/wasm-flags.md).
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-09-24
-- rontolisp: 0.1.0-SNAPSHOT (`23359a8`)
-- validated on: wasmtime 47.0.3 (5554cc1a6 2026-07-31)
+- rontolisp: 0.1.0-SNAPSHOT (`6a0aafc`)
+- validated on: wasmtime 49.0.0 (17830bd3c 2026-09-21)
 
 | Program | Flags | Module | WASI | Size (bytes) |
 | --- | --- | --- | --- | ---: |
-| hello_world | `--optimize=off` | core (command) | Preview 1 | 241,789 |
+| hello_world | `--optimize=off` | core (command) | Preview 1 | 242,149 |
 | hello_world | `--optimize` | core (command) | Preview 1 | 480 |
 | hello_world | `--optimize=size` | core (command) | Preview 1 | 480 |
 | hello_world | `--component --optimize=size` | component (command) | Preview 3 | 1,635 |
 | hello_world (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 166 |
-| pi_approx | `--optimize=off` | core (command) | Preview 1 | 242,157 |
+| pi_approx | `--optimize=off` | core (command) | Preview 1 | 242,517 |
 | pi_approx | `--optimize` | core (command) | Preview 1 | 2,410 |
 | pi_approx | `--optimize=size` | core (command) | Preview 1 | 1,489 |
 | pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 2,644 |
 | pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 3,254 |
-| zlib | `--optimize=off` | core (command) | Preview 1 | 436,831 |
+| zlib | `--optimize=off` | core (command) | Preview 1 | 437,191 |
 | zlib | `--optimize` | core (command) | Preview 1 | 111,001 |
 | zlib | `--optimize=size` | core (command) | Preview 1 | 84,557 |
 | zlib | `--component --optimize=size` | component (command) | Preview 3 | 88,763 |
-| dom_reactor | `--no-wasi --optimize=off` | core (reactor) | none | 243,477 |
+| dom_reactor | `--no-wasi --optimize=off` | core (reactor) | none | 243,837 |
 | dom_reactor | `--no-wasi --optimize` | core (reactor) | none | 2,956 |
 | dom_reactor | `--no-wasi --optimize=size` | core (reactor) | none | 2,585 |
 | dom_reactor | `--no-gc --no-wasi --optimize=size` | core (reactor) | none | 847 |
