@@ -6,7 +6,6 @@ import am.ik.rontolisp.SequenceBoundsFixture;
 import am.ik.rontolisp.runtime.RontoHttpServer;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
 import java.io.PrintStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -24,14 +23,21 @@ import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.CorpusFixtures;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import am.ik.rontolisp.testsupport.StringStreamPrograms;
+import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.api.parallel.ResourceAccessMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.api.Assertions.within;
 
+@Execution(ExecutionMode.CONCURRENT)
 class JvmLispCompilerTest {
 
 	@TempDir
@@ -178,13 +184,8 @@ class JvmLispCompilerTest {
 			Method main = clazz.getMethod("main", String[].class);
 
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(baos));
-			try {
+			try (var _ = ThreadStdio.out(baos)) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
 			}
 			return baos.toString().trim();
 		}
@@ -213,13 +214,8 @@ class JvmLispCompilerTest {
 	// warn writes its "WARNING: ..." line to standard ERROR, which compileAndRun drops.
 	private String compileAndRunCapturingErr(String lispCode) throws Exception {
 		ByteArrayOutputStream err = new ByteArrayOutputStream();
-		PrintStream oldErr = System.err;
-		System.setErr(new PrintStream(err));
-		try {
+		try (var _ = ThreadStdio.err(err)) {
 			compileAndRun(lispCode);
-		}
-		finally {
-			System.setErr(oldErr);
 		}
 		return err.toString().trim();
 	}
@@ -231,18 +227,13 @@ class JvmLispCompilerTest {
 		// SAME exception rethrown with an emptied trace, so the launcher's echo is one
 		// line and an in-process caller still observes the failure.
 		ByteArrayOutputStream err = new ByteArrayOutputStream();
-		PrintStream oldErr = System.err;
-		System.setErr(new PrintStream(err));
 		Throwable cause;
-		try {
+		try (var _ = ThreadStdio.err(err)) {
 			cause = catchThrowable(() -> compileAndRun("""
 					(define-condition uc-db (error) ((text :initarg :text :reader uc-db-text))
 					  (:report (lambda (c s) (format s "database error: ~a" (uc-db-text c)))))
 					(error 'uc-db :text "password authentication failed")
 					"""));
-		}
-		finally {
-			System.setErr(oldErr);
 		}
 		assertThat(err.toString().trim())
 			.isEqualTo("Unhandled condition: database error: password authentication failed");
@@ -1462,16 +1453,11 @@ class JvmLispCompilerTest {
 		// channel, and the top level prints the cross-backend line -- after the
 		// compile-time warning the lowering leaves behind.
 		ByteArrayOutputStream err = new ByteArrayOutputStream();
-		PrintStream oldErr = System.err;
-		System.setErr(new PrintStream(err));
 		Throwable cause;
-		try {
+		try (var _ = ThreadStdio.err(err)) {
 			cause = catchThrowable(() -> compileAndRun("""
 					(print (length (remove 1 '(1 2 3) :bogus 4)))
 					"""));
-		}
-		finally {
-			System.setErr(oldErr);
 		}
 		assertThat(err.toString().trim()).isEqualTo(
 				"""
@@ -2167,13 +2153,8 @@ class JvmLispCompilerTest {
 			Class<?> clazz = loader.loadClass("Test");
 			Method main = clazz.getMethod("main", String[].class);
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(baos));
-			try {
+			try (var _ = ThreadStdio.out(baos)) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
 			}
 			assertThat(baos.toString().trim()).isEqualTo("(9 0)\n16");
 		}
@@ -2199,13 +2180,8 @@ class JvmLispCompilerTest {
 			Class<?> clazz = loader.loadClass("Test");
 			Method main = clazz.getMethod("main", String[].class);
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(baos));
-			try {
+			try (var _ = ThreadStdio.out(baos)) {
 				assertThatThrownBy(() -> main.invoke(null, (Object) new String[0])).hasRootCauseMessage("boom");
-			}
-			finally {
-				System.setOut(oldOut);
 			}
 			assertThat(baos.toString().trim()).isEqualTo(":CLEANED");
 		}
@@ -2360,13 +2336,8 @@ class JvmLispCompilerTest {
 			Class<?> clazz = loader.loadClass("Test");
 			Method main = clazz.getMethod("main", String[].class);
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(baos));
-			try {
+			try (var _ = ThreadStdio.out(baos)) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
 			}
 			assertThat(baos.toString().trim()).isEqualTo("20\n(2 1)");
 		}
@@ -2467,13 +2438,8 @@ class JvmLispCompilerTest {
 			Class<?> clazz = loader.loadClass("Test");
 			Method main = clazz.getMethod("main", String[].class);
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(baos));
-			try {
+			try (var _ = ThreadStdio.out(baos)) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
 			}
 			assertThat(baos.toString().trim()).isEqualTo("(:HELLO 1)\n(:HELLO 2)");
 		}
@@ -2498,13 +2464,8 @@ class JvmLispCompilerTest {
 			Class<?> clazz = loader.loadClass("Test");
 			Method main = clazz.getMethod("main", String[].class);
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(baos));
-			try {
+			try (var _ = ThreadStdio.out(baos)) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
 			}
 			assertThat(baos.toString().trim()).isEqualTo("(1 2 1 3 4 0)");
 		}
@@ -2539,13 +2500,8 @@ class JvmLispCompilerTest {
 			Class<?> clazz = loader.loadClass("Test");
 			Method main = clazz.getMethod("main", String[].class);
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(baos));
-			try {
+			try (var _ = ThreadStdio.out(baos)) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
 			}
 			assertThat(baos.toString().trim()).isEqualTo("(1 4 9)\n(B C)\n(F 1 2 G)\n(1 2 3 4)\n(1 B)\n(T A 1)");
 		}
@@ -2579,13 +2535,8 @@ class JvmLispCompilerTest {
 			Class<?> clazz = loader.loadClass("Test");
 			Method main = clazz.getMethod("main", String[].class);
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(baos));
-			try {
+			try (var _ = ThreadStdio.out(baos)) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
 			}
 			assertThat(baos.toString().trim()).isEqualTo("25\n1");
 		}
@@ -3546,13 +3497,8 @@ class JvmLispCompilerTest {
 			Class<?> clazz = loader.loadClass("Test");
 			Method main = clazz.getMethod("main", String[].class);
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(baos));
-			try {
+			try (var _ = ThreadStdio.out(baos)) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
 			}
 			assertThat(baos.toString().trim()).isEqualTo("(IF (> 2 1) (PROGN 'A 'B) NIL)\n(IF C NIL X)\n(+ 1 2)");
 		}
@@ -5824,16 +5770,8 @@ class JvmLispCompilerTest {
 				ClassLoader.getSystemClassLoader())) {
 			Method main = loader.loadClass("Test").getMethod("main", String[].class);
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			InputStream oldIn = System.in;
-			System.setOut(new PrintStream(baos));
-			System.setIn(new ByteArrayInputStream(stdin));
-			try {
+			try (var _ = ThreadStdio.out(baos); var _ = ThreadStdio.in(new ByteArrayInputStream(stdin))) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
-				System.setIn(oldIn);
 			}
 			return baos.toByteArray();
 		}
@@ -12202,13 +12140,8 @@ class JvmLispCompilerTest {
 			Class<?> clazz = loader.loadClass("Test");
 			Method main = clazz.getMethod("main", String[].class);
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(baos));
-			try {
+			try (var _ = ThreadStdio.out(baos)) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
 			}
 			assertThat(baos.toString().trim()).isEqualTo("3\n15");
 		}
@@ -12681,16 +12614,9 @@ class JvmLispCompilerTest {
 			Method main = clazz.getMethod("main", String[].class);
 
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			InputStream oldIn = System.in;
-			System.setOut(new PrintStream(baos));
-			System.setIn(new ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8)));
-			try {
+			try (var _ = ThreadStdio.out(baos);
+					var _ = ThreadStdio.in(new ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8)))) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
-				System.setIn(oldIn);
 			}
 			return baos.toString().trim();
 		}
@@ -12905,13 +12831,8 @@ class JvmLispCompilerTest {
 			Method main = clazz.getMethod("main", String[].class);
 
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(baos));
-			try {
+			try (var _ = ThreadStdio.out(baos)) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
 			}
 			return baos.toString().trim();
 		}
@@ -14027,6 +13948,7 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	@ResourceLock(Resources.SYSTEM_PROPERTIES)
 	void compileAndRunTlsEchoRoundTripOnLoopback() throws Exception {
 		// A TLS handshake needs the server to participate concurrently, so the echo
 		// peer runs on a background thread. The compiled class runs in-process, so
@@ -14049,9 +13971,12 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
 	void compileAndRunTlsUntrustedCertificateThrows() throws Exception {
 		// Without the trust-store override the JDK default trust store does not trust
-		// the self-signed server certificate, so the handshake must fail.
+		// the self-signed server certificate, so the handshake must fail. The override is
+		// a process-wide system property, hence the lock: its writers take it
+		// exclusively.
 		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
 			am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
 			assertThatThrownBy(
@@ -14061,6 +13986,7 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
 	void compileAndRunTlsListenEchoRoundTripOnLoopback() throws Exception {
 		// The compiled program is the TLS *server* (tls-listen + the plain
 		// tcp-accept); the peer is a Java client thread that trusts the self-signed
@@ -14082,6 +14008,7 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
 	void compileAndRunTlsListenP12EchoRoundTripOnLoopback() throws Exception {
 		// The compiled program is the TLS server configured from an embedded PKCS12
 		// keystore (the shape the tls-listen-pem inliner produces). The keystore is
@@ -14120,6 +14047,7 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
 	void compileAndRunTlsInsecureSkipsCertificateVerification() throws Exception {
 		// The self-signed server certificate is NOT trusted here; :insecure t makes
 		// the emitted _tlsConnect trust any chain (the generated class itself is the
@@ -14138,6 +14066,7 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
 	void compileAndRunTlsInsecureNilStillVerifies() throws Exception {
 		// :insecure nil is the verifying default, so the untrusted certificate must
 		// still fail the handshake.
@@ -14150,6 +14079,7 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	@ResourceLock(Resources.SYSTEM_PROPERTIES)
 	void compileAndRunTlsUpgradeEchoRoundTripOnLoopback() throws Exception {
 		// _tlsUpgrade wraps an ALREADY-CONNECTED _streams entry (the cl+ssl
 		// make-ssl-client-stream shape): plain _tcpConnect first, then the upgrade
@@ -14171,6 +14101,7 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
 	void compileAndRunTlsUpgradeInsecureSkipsCertificateVerification() throws Exception {
 		// No trust store here; :insecure t makes _tlsUpgrade install the generated
 		// class as the trust-all X509TrustManager (the _tlsConnect mechanism).
@@ -14199,6 +14130,7 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	@ResourceLock(Resources.SYSTEM_PROPERTIES)
 	void compileAndRunClSslShimHttpsRequestAgainstLocalTlsServer() throws Exception {
 		// The cl+ssl shim on the compile path, the dexador shape: the shim is
 		// spliced by LoadInliner (like the closer-mop test above), usocket by the
@@ -14233,6 +14165,7 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
 	void compileAndRunTlsInsecureSurvivesOptimize() throws Exception {
 		// --optimize (JvmClassShaker) must keep the X509TrustManager methods of the
 		// generated class: JSSE invokes them through the interface, which the shaker
@@ -14258,13 +14191,8 @@ class JvmLispCompilerTest {
 				Class<?> clazz = loader.loadClass("Test");
 				Method main = clazz.getMethod("main", String[].class);
 				ByteArrayOutputStream baos = new ByteArrayOutputStream();
-				PrintStream oldOut = System.out;
-				System.setOut(new PrintStream(baos));
-				try {
+				try (var _ = ThreadStdio.out(baos)) {
 					main.invoke(null, (Object) new String[0]);
-				}
-				finally {
-					System.setOut(oldOut);
 				}
 				assertThat(baos.toString().trim()).isEqualTo("\"hello optimized\"");
 			}
@@ -20662,13 +20590,8 @@ class JvmLispCompilerTest {
 			Class<?> clazz = loader.loadClass("Test");
 			Method main = clazz.getMethod("main", String[].class);
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(baos));
-			try {
+			try (var _ = ThreadStdio.out(baos)) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
 			}
 			return baos.toString().trim();
 		}

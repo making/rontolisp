@@ -5,9 +5,10 @@
 - `src/test/resources/junit-platform.properties` sets `parallel.mode.default` and
   `parallel.mode.classes.default` to `same_thread`. A class opts its OWN methods into
   concurrency only with class-level `@Execution(ExecutionMode.CONCURRENT)`: today
-  `WasmLispCompilerIntegrationTest`, `RoveTestCommandE2eTest`, and every subclass of
-  `AsdfLibraryE2eSupport`. Everything else -- including all of `am.ik.gpu` /
-  `eval.LinalgGpuTest` -- runs one method at a time in one thread. `eval.LinalgGpuTest`
+  `WasmLispCompilerIntegrationTest`, `RoveTestCommandE2eTest`, every subclass of
+  `AsdfLibraryE2eSupport`, and the in-process JVM-backend classes of the next section.
+  Everything else -- including all of `am.ik.gpu` / `eval.LinalgGpuTest` -- runs one
+  method at a time in one thread. `eval.LinalgGpuTest`
   costs MINUTES that way on a Mac and carries a `@Timeout` so that a run which is merely
   slow cannot be mistaken for one that stopped (`.kb/gpu.md`, "What `eval/LinalgGpuTest`
   costs").
@@ -19,6 +20,59 @@
   so nothing in one process's heap (a weakly-keyed cache, a static counter,
   `am.ik.gpu.DeviceResidency`'s live set) is visible across forks; surefire guarantees neither
   which fork nor what order.
+
+## Running a compiled class in process, concurrently
+
+`JvmLispCompilerTest`, `JvmLinalgSimdAccelCompilerTest`, `JvmSimdAccelCompilerTest`,
+`JvmLinalgGpuAccelCompilerTest`, `JvmSimdParallelCompilerTest`, `JvmBFloat16ArrayTest` and
+`JvmQuantizedMatrixTest` load each compiled class into its own `URLClassLoader` and call its
+`main` in the test JVM, with methods CONCURRENT. What makes that safe:
+
+- **Standard streams: `testsupport/ThreadStdio`.** A compiled class reads
+  `System.out`/`err`/`in` with a `getstatic` at every use, so `System.setOut` around
+  `main.invoke` is process-wide and two concurrent methods read each other's output.
+  `ThreadStdio` installs one routing stream per slot, once, and
+  `try (var _ = ThreadStdio.out(baos)) { main.invoke(...); }` points the calling thread's
+  slot at a target. The slots are `InheritableThreadLocal`s: a thread the program STARTS
+  (the sized-stack main, `make-thread`, the `--parallel` workers) writes where its creator
+  does. A REUSED thread does not -- the ForkJoin common pool's workers inherit nothing -- and
+  its output reaches the process's real stream: missing from the capture, never in another
+  test's. **A `System.setOut`/`setIn`/`setErr` in a concurrent class is the bug.**
+- Per-method state: scratch files go through the `@TempDir` field (per method under the
+  default lifecycle; a full run leaves nothing in the project root), and each program's
+  statics -- `_stdinReader`, the embedded SIMD pool, the embedded GPU residency -- live in
+  its own loader.
+- Process-wide state, locked: `TlsTestSupport.withTrustStore` sets `javax.net.ssl.trustStore*`,
+  so its callers hold `@ResourceLock(Resources.SYSTEM_PROPERTIES)` and every other TLS run
+  holds it `READ`. A `--gpu` run takes `testsupport/GpuDeviceLock`, a provider that
+  serializes while `LinalgGpu.available()` and hands out nothing without a device:
+  concurrent use of one device from several embedded `am.ik.gpu` copies is unmeasured.
+- Still exposed: the two `tls-listen` tests reserve a port with `TlsTestSupport.freePort`
+  (the weaker device of the next section), now with same-JVM competitors; the cost-ratio
+  pins (`assertScanIsFlat` and siblings) compare two halves of ONE run, with 500 ms + 6x
+  slack.
+
+Found on the way, **2026-09-24**: the first concurrent run of `JvmLinalgSimdAccelCompilerTest`
+hung forever on a class-initialization deadlock in production code. `LispFloatArray` (a
+sealed interface with default methods, so initialized before any permit, JLS 12.4.2) held a
+`WIDTHS` field constructing its permits; one thread reading a `#bf16(...)` literal and one
+compiling a `concatenate` entered the cycle from opposite ends. Now `LispFloatArray.widths()`
+over a holder class, pinned by `LispFloatArrayInitTest`. **A static field on a supertype
+that constructs a subtype is the same bug**; a hang in a concurrent class is a `jstack`
+away from its cause.
+
+Measured 2026-09-24 on this box (64 cores, parallelism 16), each class alone, surefire's
+suite time, sequential -> concurrent (range of four concurrent runs, all green):
+
+| class | tests | sequential | concurrent |
+|---|---|---|---|
+| `JvmLispCompilerTest` | 1354 | 282 s | 28-30 s |
+| `JvmLinalgSimdAccelCompilerTest` | 37 | 171 s | 44-47 s |
+| `JvmSimdAccelCompilerTest` | 40 | 62 s | 20-22 s |
+| `JvmLinalgGpuAccelCompilerTest` (no device) | 44 | 54 s | 14-16 s |
+| `JvmSimdParallelCompilerTest` | 9 | 26 s | 8-10 s |
+| `JvmBFloat16ArrayTest` | 30 | 24 s | 8 s |
+| `JvmQuantizedMatrixTest` | 10 | 24 s | 14-15 s |
 
 ## Two builds on one machine: every shared constant collides
 

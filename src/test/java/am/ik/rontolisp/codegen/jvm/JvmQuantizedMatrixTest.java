@@ -16,8 +16,11 @@ import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.VecLibrary;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -38,6 +41,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * that a program which can build no matrix compiles the dead arms to a call-time signal
  * and {@code quantized-matrix-p} to nil.
  */
+@Execution(ExecutionMode.CONCURRENT)
 class JvmQuantizedMatrixTest {
 
 	@TempDir
@@ -80,13 +84,8 @@ class JvmQuantizedMatrixTest {
 			Class<?> clazz = loader.loadClass("Test");
 			Method main = clazz.getMethod("main", String[].class);
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(baos));
-			try {
+			try (var _ = ThreadStdio.out(baos)) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
 			}
 			return baos.toString().trim();
 		}
