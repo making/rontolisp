@@ -9,7 +9,7 @@
     "schema, which is why the two groups are described here instead.",
     "",
     "The FIRST TWO are the --native precompile shim's (.kb/native-output.md): rl_precompile",
-    "(void*, jlong, void*, void*) -> jint and rl_free (void*, jlong) -> void; its third,",
+    "(void*, jlong, void*, void*, void*, void*) -> jint and rl_free (void*, jlong) -> void; its third,",
     "rl_version () -> void*, is Metal's MTLCreateSystemDefaultDevice shape and registered below.",
     "NativeToolchainTest pins them.",
     "",
@@ -154,7 +154,7 @@
     "downcalls": [
       {
         "returnType": "jint",
-        "parameterTypes": ["void*", "jlong", "void*", "void*"]
+        "parameterTypes": ["void*", "jlong", "void*", "void*", "void*", "void*"]
       },
       {
         "returnType": "void",

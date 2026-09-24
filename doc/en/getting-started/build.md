@@ -84,6 +84,12 @@ This produces `target/rontolisp`, a standalone native binary with instant startu
 
 **Requirements:**
 - GraalVM 25+ (with `native-image` tool)
+- For [`--native`](../compiling/native.md): Rust 1.96+ (`cargo` on `PATH` or in
+  `~/.cargo/bin`), and on Linux glibc's static libraries (`libc6-dev` on
+  Debian/Ubuntu, `glibc-static` on Fedora/RHEL). The build compiles the
+  precompiler into the binary; without `cargo` it warns and the binary answers
+  `--native is not available`. `-Drontolisp.native.build=true` does the same for
+  the JAR build above.
 
 **Usage:**
 

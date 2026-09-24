@@ -10,12 +10,14 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import am.ik.rontolisp.cli.RontoLispCli;
 import am.ik.rontolisp.testsupport.HostWasmtime;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import tools.jackson.databind.JsonNode;
@@ -33,11 +35,22 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * and exit as it exits (.kb/native-output.md).
  *
  * <p>
- * Runs where a usable {@code wasmtime} is on {@code PATH} and this build carries the
- * host's precompile shim and runner stub ({@code rontolisp-native/build.sh}); anywhere
- * else it is skipped.
+ * The compiler is this JVM's {@link RontoLispCli}, or the binary
+ * {@code -Drontolisp.binary=<path>} names (the native-image legs of CI: the binary's own
+ * resources and FFM downcalls are what is under test there). Runs where a usable
+ * {@code wasmtime} is on {@code PATH} and the compiler carries the host's precompile shim
+ * and runner stub ({@code rontolisp-native/build.sh}); elsewhere it is skipped, unless
+ * {@code -Drontolisp.native.required=true} makes a missing pair a failure.
  */
 class NativeOutputE2eTest {
+
+	/** The native binary that compiles, or {@code null} for this JVM. */
+	private static final @Nullable String BINARY = System.getProperty("rontolisp.binary");
+
+	/** A build that must carry the pair fails here instead of skipping. */
+	private static final boolean REQUIRED = Boolean.getBoolean("rontolisp.native.required");
+
+	private static final String NOT_AVAILABLE = "--native is not available for ";
 
 	/** ci-spec cases the slice is made of, in corpus order. */
 	private static final List<String> CASES = List.of("arithmetic", "exact-integers-beyond-the-i64-range",
@@ -102,6 +115,89 @@ class NativeOutputE2eTest {
 		assertThat(new String(bytes, bytes.length - 8, 8, StandardCharsets.US_ASCII)).isEqualTo("RLNATIVE");
 	}
 
+	/**
+	 * The default {@code --native-cpu} is the platform's baseline: the output runs on the
+	 * oldest CPU of its architecture (qemu's SSE2-only Opteron G1 on x86_64, Armv8.0
+	 * Cortex-A53 on aarch64), where a {@code --native-cpu=host} output is refused with a
+	 * message rather than faulting. The program floors a double, which Cranelift compiles
+	 * to an SSE4.1 instruction when it may and to a call when it may not.
+	 */
+	@Test
+	void theDefaultOutputRunsOnTheOldestCpuOfItsPlatform() throws Exception {
+		String arch = linuxArch();
+		Path qemu = qemu(arch);
+		String source = "(print (floor 7.5d0))\n(print (+ 1 2))\n";
+		Path dir = Files.createDirectories(this.tempDir.resolve("oldest"));
+		Path src = dir.resolve("prog.lisp");
+		Files.writeString(src, source);
+		compileNative(src, dir.resolve("baseline"));
+		Run baseline = exec(dir, List.of(qemu.toString(), "-cpu", oldestCpu(arch), "./baseline"));
+		assertThat(baseline.exit()).as("stderr: %s", baseline.stderr()).isZero();
+		assertThat(baseline.stdout()).isEqualTo("7\n3\n");
+
+		compileNative(src, dir.resolve("host"), "--native-cpu=host");
+		Run host = exec(dir, List.of(qemu.toString(), "-cpu", oldestCpu(arch), "./host"));
+		assertThat(host.exit()).as("stdout: %s", host.stdout()).isEqualTo(1);
+		assertThat(host.stderr()).contains("is enabled, but not available on the host");
+	}
+
+	/**
+	 * {@code --native-target} for the other Linux architecture: the output starts with
+	 * that platform's stub and runs under qemu there. Skipped where the compiler carries
+	 * no stub for it (a build from source, or a pull request's binary).
+	 */
+	@Test
+	void aCrossTargetOutputRunsOnTheOtherLinuxArchitecture() throws Exception {
+		String other = "x86_64".equals(linuxArch()) ? "aarch64" : "x86_64";
+		Path qemu = qemu(other);
+		Path dir = Files.createDirectories(this.tempDir.resolve("cross"));
+		Path src = dir.resolve("prog.lisp");
+		Files.writeString(src, "(print (uiop:command-line-arguments))\n(print (floor 7.5d0))\n");
+		try {
+			compileNative(src, dir.resolve("prog"), "--native-target", "linux-" + other);
+		}
+		catch (RuntimeException ex) {
+			String message = String.valueOf(ex.getMessage());
+			if (message.contains("carries no runner stub")) {
+				abort(message);
+			}
+			throw ex;
+		}
+		byte[] exe = Files.readAllBytes(dir.resolve("prog"));
+		// e_machine of the stub's ELF header: EM_X86_64 or EM_AARCH64.
+		assertThat((exe[18] & 0xff) | (exe[19] & 0xff) << 8).isEqualTo("x86_64".equals(other) ? 62 : 183);
+		Run run = exec(dir, List.of(qemu.toString(), "-cpu", oldestCpu(other), "./prog", "a b"));
+		assertThat(run.exit()).as("stderr: %s", run.stderr()).isZero();
+		assertThat(run.stdout()).isEqualTo("(\"a b\")\n7\n");
+	}
+
+	/** The host's architecture on Linux; the test is skipped elsewhere. */
+	private static String linuxArch() {
+		assumeTrue(System.getProperty("os.name", "").startsWith("Linux"), "qemu user mode runs Linux executables");
+		return switch (System.getProperty("os.arch", "")) {
+			case "amd64", "x86_64" -> "x86_64";
+			case "aarch64", "arm64" -> "aarch64";
+			default -> abort("no --native build for this host");
+		};
+	}
+
+	private static Path qemu(String arch) {
+		for (String dir : System.getenv().getOrDefault("PATH", "").split(java.io.File.pathSeparator)) {
+			for (String name : List.of("qemu-" + arch + "-static", "qemu-" + arch)) {
+				Path candidate = Path.of(dir, name);
+				if (Files.isExecutable(candidate)) {
+					return candidate;
+				}
+			}
+		}
+		return abort("qemu-" + arch + " (user mode) is not on PATH");
+	}
+
+	/** SSE2 and nothing newer; Armv8.0 without LSE. */
+	private static String oldestCpu(String arch) {
+		return "x86_64".equals(arch) ? "Opteron_G1" : "cortex-a53";
+	}
+
 	private Run wasmtime(String source, String... args) throws Exception {
 		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
 		Path dir = Files.createDirectories(this.tempDir.resolve("wasmtime"));
@@ -145,28 +241,43 @@ class NativeOutputE2eTest {
 	}
 
 	/**
-	 * Compiles with --native, skipping the test where this build has no shim for the
-	 * host.
+	 * Compiles with --native, skipping the test where the compiler has no shim for the
+	 * host (failing it under {@link #REQUIRED}).
 	 */
-	private static void compileNative(Path src, Path output) {
+	private static void compileNative(Path src, Path output, String... flags) throws Exception {
+		List<String> all = new ArrayList<>(List.of("--native"));
+		all.addAll(List.of(flags));
 		try {
-			compile(src, output, "--native");
+			compile(src, output, all.toArray(String[]::new));
 		}
 		catch (UnsupportedOperationException ex) {
 			String message = String.valueOf(ex.getMessage());
-			if (message.startsWith("--native is not available for ")) {
+			if (message.contains(NOT_AVAILABLE) && !REQUIRED) {
 				abort(message);
 			}
 			throw ex;
 		}
 	}
 
-	private static void compile(Path src, Path output, String... flags) {
+	private static void compile(Path src, Path output, String... flags) throws Exception {
 		List<String> args = new ArrayList<>(List.of(src.toString(), "-o", output.toString()));
 		args.addAll(List.of(flags));
-		new RontoLispCli(new ByteArrayInputStream(new byte[0]),
-				new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8))
-			.run(args.toArray(String[]::new));
+		if (BINARY == null) {
+			new RontoLispCli(new ByteArrayInputStream(new byte[0]),
+					new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8))
+				.run(args.toArray(String[]::new));
+			return;
+		}
+		args.addFirst(Path.of(BINARY).toAbsolutePath().toString());
+		Run run = exec(Objects.requireNonNull(src.toAbsolutePath().getParent()), args);
+		if (run.exit() != 0) {
+			// The binary reports the in-process exception on stderr; raise it as one so
+			// both drivers skip (or fail) alike.
+			if (run.stderr().contains(NOT_AVAILABLE)) {
+				throw new UnsupportedOperationException(run.stderr().strip());
+			}
+			throw new IllegalStateException("compile failed (" + run.exit() + "): " + run.stderr());
+		}
 	}
 
 	private static Run exec(Path dir, List<String> command) throws Exception {

@@ -12,6 +12,7 @@ import am.ik.rontolisp.eval.StdinLibrary;
 import am.ik.rontolisp.eval.TlsLibrary;
 import am.ik.rontolisp.eval.WitLibrary;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.wasm.Instruction;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
@@ -1434,6 +1435,42 @@ class WasmLispCompilerTest {
 			.optimize(OptimizeLevel.SIZE)
 			.build()
 			.compile(LispReader.readAllFromString(source.toString()));
+	}
+
+	@Test
+	void aLongQuotedListKeepsNoMoreThanOneRunOfCellsOnTheOperandStack() {
+		// Every car before the first cons left a list's whole length live across the
+		// call each symbol makes, and Cranelift's time grew with the square of it:
+		// `wasmtime compile` of 5,000 quoted symbols took 9.9 s, 20,000 took 161 s
+		// (.kb/quoted-data.md, "A long list is built in runs"). A run of conses is the
+		// longest stretch of the list the stack holds at once.
+		StringBuilder source = new StringBuilder("(defparameter *table* '(");
+		for (int k = 0; k < 1000; k++) {
+			source.append('s').append(k).append(' ');
+		}
+		source.append("))\n(print (length *table*))\n");
+		byte[] module = WasmLispCompiler.builder().build().compile(LispReader.readAllFromString(source.toString()));
+
+		assertThat(longestRun(module,
+				new byte[] { (byte) Instruction.GC_PREFIX, (byte) Instruction.STRUCT_NEW,
+						(byte) WasmLispCompiler.TYPE_CONS }))
+			.isBetween(WasmQuoteCompiler.QUOTED_RUN / 2, WasmQuoteCompiler.QUOTED_RUN);
+	}
+
+	// The most back-to-back repetitions of `pattern` anywhere in `bytes`.
+	private static int longestRun(byte[] bytes, byte[] pattern) {
+		int longest = 0;
+		for (int start = 0; start < bytes.length; start++) {
+			int run = 0;
+			int at = start;
+			while (at + pattern.length <= bytes.length
+					&& Arrays.equals(bytes, at, at + pattern.length, pattern, 0, pattern.length)) {
+				run++;
+				at += pattern.length;
+			}
+			longest = Math.max(longest, run);
+		}
+		return longest;
 	}
 
 	@Test

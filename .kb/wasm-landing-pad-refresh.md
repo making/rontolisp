@@ -126,6 +126,21 @@ liveness (and stack-map entries) of locals that would otherwise be dead across t
 On the ci-spec corpus module every one of the 19 functions that carried a handler-block
 argument lost it and nothing else changed.
 
+**That is the run-time cost only. In a large function the push and pop cost bytes and compile
+time** (measured 2026-09-24, wasmtime 49.0.0). `keepLocalsAlive` pushes every local declared
+so far, whether or not it is live. Take the hello-ningle Worker's fast-http `parse-request`
+(size-report row, `--no-wasi --optimize=size`), which has its parser helpers inlined, 1,838
+locals and 120 pads:
+
+- The pads restore 101,756 locals, and only 156 of them are live after their pad.
+- The function is 624,468 of the module's 2,749,384 bytes (22.7%).
+- It takes 28.6 s of serial Cranelift time, and the module's `wasmtime compile` takes 34 s.
+
+A positional rule (keep a local read after the pad or inside an enclosing loop) does not help,
+because the parser's state loop encloses every pad. Narrowing to the live set needs real
+liveness: `.todo/957`, with the measuring tools in
+`.todo/artefacts/957-landing-pad-refresh-pushes-every-declared-local/`.
+
 ## Upstream
 
 The wat above is the report to file against `bytecodealliance/wasmtime`: exceptional-edge

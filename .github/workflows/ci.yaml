@@ -10,6 +10,7 @@ on:
     - examples/**
     - pom.xml
     - rontolisp-maven-plugin/**
+    - rontolisp-native/**
     # The wrapper's Maven version names the default lifecycle bindings the
     # plugin's offline fixture must match, so a bump needs this workflow.
     - .mvn/**
@@ -22,6 +23,7 @@ on:
     - src/**
     - pom.xml
     - rontolisp-maven-plugin/**
+    - rontolisp-native/**
     - .mvn/**
     - .github/workflows/ci.yaml
   # On demand, so the suite can be re-run against an unchanged tree. Timing work needs
@@ -94,11 +96,42 @@ jobs:
     - name: Report the wasmtime cache size
       if: always()
       run: du -sh ~/.cache/wasmtime || true
-  native-image:
+  # Each platform's runner stub, for every native binary to carry beside its own pair:
+  # a --native-target output starts with the TARGET's stub, and only a runner of that
+  # platform can build it (.kb/native-output.md, "Packaging").
+  native-stubs:
     needs: test
+    if: github.event_name != 'pull_request'
     strategy:
       matrix:
-        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"os":"ubuntu-latest","artifact-name":"rontolisp-linux-amd64"}]') || fromJSON('[{"os":"ubuntu-latest","artifact-name":"rontolisp-linux-amd64"},{"os":"ubuntu-24.04-arm","artifact-name":"rontolisp-linux-arm64"},{"os":"macos-latest","artifact-name":"rontolisp-darwin-arm64"}]') }}
+        include:
+        - { os: ubuntu-latest, platform: linux-x86_64 }
+        - { os: ubuntu-24.04-arm, platform: linux-aarch64 }
+        - { os: macos-latest, platform: macos-aarch64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache the Rust build
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: rontolisp-native
+        key: stub
+    - name: Build the runner stub
+      run: rontolisp-native/build.sh --stub ${{ matrix.platform }}
+    - name: Upload the runner stub
+      uses: actions/upload-artifact@v7
+      with:
+        name: native-stub-${{ matrix.platform }}
+        path: rontolisp-native/target/resources/
+  native-image:
+    needs: [test, native-stubs]
+    # native-stubs is skipped on a pull request, which would skip this job too.
+    if: ${{ !cancelled() && needs.test.result == 'success' && needs.native-stubs.result != 'failure' }}
+    strategy:
+      matrix:
+        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"os":"ubuntu-latest","artifact-name":"rontolisp-linux-amd64","platform":"linux-x86_64"}]') || fromJSON('[{"os":"ubuntu-latest","artifact-name":"rontolisp-linux-amd64","platform":"linux-x86_64"},{"os":"ubuntu-24.04-arm","artifact-name":"rontolisp-linux-arm64","platform":"linux-aarch64"},{"os":"macos-latest","artifact-name":"rontolisp-darwin-arm64","platform":"macos-aarch64"}]') }}
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v7
@@ -108,8 +141,39 @@ jobs:
         java-version: '25'
         distribution: 'graalvm'
         cache: maven
+    # The --native precompile shim and runner stub (.kb/native-output.md) are Rust,
+    # built for this platform by rontolisp-native/build.sh, which -Pnative runs. The
+    # module pins wasmtime 49, whose MSRV is 1.96.
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache the Rust build
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: rontolisp-native
+    # The other platforms' stubs, which the binary carries for --native-target. A pull
+    # request builds without them; its cross-target tests skip.
+    - name: Download every platform's runner stub
+      if: github.event_name != 'pull_request'
+      uses: actions/download-artifact@v8
+      with:
+        pattern: native-stub-*
+        path: rontolisp-native/target/resources
+        merge-multiple: true
+    # The baseline tests run an output on the oldest CPU of its architecture, and the
+    # cross-target ones the other Linux architecture's output, under qemu user mode.
+    - name: Install qemu
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+    # -Drontolisp.native.required=true: a binary without the host's pair (or, on
+    # Linux, with a stub that links glibc dynamically) fails here instead of shipping
+    # a --native that says "not available".
     - name: Build native image
-      run: ./mvnw -V --no-transfer-progress -Pnative clean package -DskipTests
+      run: ./mvnw -V --no-transfer-progress -Pnative -Drontolisp.native.required=true clean package -DskipTests
+    - name: Test the shim and the stub
+      working-directory: rontolisp-native
+      env:
+        RLNATIVE_REQUIRE_QEMU: ${{ runner.os == 'Linux' && '1' || '' }}
+      run: ./build.sh --test
     - name: Install wasmtime
       uses: bytecodealliance/actions/wasmtime/setup@v1
       with:
@@ -118,16 +182,32 @@ jobs:
       run: |
         set -e
         ./target/rontolisp -v
+        if [[ ${{ github.event_name }} != pull_request ]]; then
+          for platform in linux-x86_64 linux-aarch64 macos-aarch64; do
+            [[ -f rontolisp-native/target/resources/am/ik/rontolisp/native/$platform/rlrun ]] \
+              || { echo "the native binary carries no $platform stub" >&2; exit 1; }
+          done
+        fi
         # Run the ci-spec.yaml cases through the native binary in all four
         # backend modes (interpreter / JVM / WASM Preview 1 / WASM as a WASI 0.2
         # component), each of them twice: default kernels and --simd, which is a
         # different packed-array representation rather than a faster route to the
         # same one (.kb/vec.md). The driver reports the exact failing case by
         # name and leg, so there is no positional expected file to keep in sync.
+        # NativeOutputE2eTest compiles through the binary's --native (its resources
+        # and FFM downcalls) and diffs the output against wasmtime run.
         ./mvnw -V --no-transfer-progress \
-          -Dtest=CiSpecE2eTest -DfailIfNoTests=false \
+          -Dtest='CiSpecE2eTest,NativeOutputE2eTest,NativeToolchainTest' -DfailIfNoTests=false \
           -Drontolisp.binary="$PWD/target/rontolisp" \
+          -Drontolisp.native.required=true \
           test
+    # The release job folds every platform's pair into the executable jar.
+    - name: Upload the --native pair
+      if: github.event_name != 'pull_request'
+      uses: actions/upload-artifact@v7
+      with:
+        name: native-shims-${{ matrix.platform }}
+        path: rontolisp-native/target/resources/
     - name: Rename binary
       if: github.event_name != 'pull_request'
       run: mv target/rontolisp target/${{ matrix.artifact-name }}
@@ -162,12 +242,28 @@ jobs:
         fi
         echo "version=$VERSION" >> "$GITHUB_OUTPUT"
         echo "is_snapshot=$IS_SNAPSHOT" >> "$GITHUB_OUTPUT"
-    - name: Download all artifacts
+    - name: Download the native binaries
       uses: actions/download-artifact@v8
       with:
+        pattern: rontolisp-*
         path: artifacts
+    # Every platform's --native pair goes into the executable jar, which runs on any
+    # of them (~11 MB compressed for the three; .kb/native-output.md, "Packaging").
+    # The Maven Central jar (the deploy job) carries none.
+    - name: Download every platform's --native pair
+      uses: actions/download-artifact@v8
+      with:
+        pattern: native-shims-*
+        path: rontolisp-native/target/resources
+        merge-multiple: true
     - name: Build executable JAR
-      run: ./mvnw -V --no-transfer-progress -DskipTests clean package
+      run: |
+        set -e
+        ./mvnw -V --no-transfer-progress -Drontolisp.native.required=true -DskipTests clean package
+        for platform in linux-x86_64 linux-aarch64 macos-aarch64; do
+          unzip -l target/rontolisp-*-exec.jar | grep -q "am/ik/rontolisp/native/$platform/rlrun" \
+            || { echo "the executable jar has no --native pair for $platform" >&2; exit 1; }
+        done
     # Move the snapshot tag onto this commit and leave the release itself alone, so
     # the action below UPDATES it in place (it overwrites the assets) instead of the
     # release being recreated from scratch.

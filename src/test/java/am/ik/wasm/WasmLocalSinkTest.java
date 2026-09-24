@@ -60,7 +60,7 @@ class WasmLocalSinkTest {
 		}
 		else {
 			w.write(1);
-			w.write(locals);
+			w.writeUnsignedLeb128(locals);
 			w.write(type);
 		}
 		instructions.accept(w);
@@ -458,6 +458,42 @@ class WasmLocalSinkTest {
 
 		assertThat(code(sunk, 0)).containsExactly("20:0", "1A", "20:0", "1A", "20:0", "0B");
 		assertThat(decode(sunk, 0).locals()).isEmpty();
+	}
+
+	@Test
+	void aChainOfHandOversIsCollectedInOneRoundWhateverItsLength() {
+		// The inliner's hand-over of a two-argument call whose first argument is the
+		// previous call's result -- what a backquote template of N elements becomes, one
+		// cons per element: `acc; car; set b; set a; get b; get a; op`. Each level's
+		// expression reads the two locals the level before it sinks, so a round that
+		// waits for those to settle collects ONE level and the body takes N rounds of a
+		// whole-body walk each (a 4,000-element template spent 8.6 s here). Nested in
+		// one round, the chain is left in runs the walk-back length bounds, and a second
+		// round has nothing to do.
+		int levels = 2_000;
+		byte[] module = module(new int[] { 2 }, List.of(body(2 * levels, w -> {
+			constant(w, 0);
+			for (int k = 0; k < levels; k++) {
+				constant(w, k);
+				op(w, Instruction.SET_LOCAL, 2 * k + 1);
+				op(w, Instruction.SET_LOCAL, 2 * k);
+				op(w, Instruction.GET_LOCAL, 2 * k + 1);
+				op(w, Instruction.GET_LOCAL, 2 * k);
+				w.write(Instruction.I32_ADD);
+			}
+		})));
+		List<WasmSections.Section> sections = WasmSections.parseSections(module);
+		WasmCodeModel.TypeSection types = WasmCodeModel
+			.parseTypeSection(Objects.requireNonNull(WasmSections.find(sections, 1)).payload());
+		byte[] entry = WasmSections.parseCodeEntries(Objects.requireNonNull(WasmSections.find(sections, 10)).payload())
+			.get(0);
+
+		byte[] once = WasmLocalSink.sinkEntry(entry, types, 0);
+
+		assertThat(WasmCodeModel.decode(once, types).locals()).hasSizeLessThan(levels / 10);
+		assertThat(WasmLocalSink.sinkEntry(once, types, 0)).isSameAs(once);
+		byte[] sunk = sinkAndValidate(module);
+		assertThat(decode(sunk, 0).locals()).hasSameSizeAs(WasmCodeModel.decode(once, types).locals());
 	}
 
 	@Test

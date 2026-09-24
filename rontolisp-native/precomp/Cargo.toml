@@ -13,6 +13,12 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 rlabi.workspace = true
 wasmtime = { workspace = true, features = ["cranelift", "parallel-compilation"] }
+# Not used directly: its features unify into the Cranelift wasmtime 49 builds (0.136.0),
+# adding the x86_64 and aarch64 backends to the host's so that one shim precompiles for
+# every --native-target (+0.72 MB, where wasmtime's `all-arch` adds s390x, riscv64 and
+# Pulley for +2.19 MB). Moves with the wasmtime pin; a mismatch leaves the other
+# architecture out, which `every_platform_precompiles_at_every_cpu` catches.
+cranelift-codegen = { version = "=0.136.0", default-features = false, features = ["x86", "arm64"] }
 
 [[bin]]
 name = "rlpack"

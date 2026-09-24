@@ -40,10 +40,30 @@ refused by name: `--component`, `--no-wasi`, `--no-gc`, `--host-random`,
 
 ## Where It Runs
 
-The executable is built for the platform the compiler runs on (Linux or macOS,
-x86_64 or aarch64) and may need that machine's CPU features. A build of
-rontolisp that carries no precompiler for the host says
-`--native is not available for <os>-<arch>`.
+By default the executable is built for the platform the compiler runs on (Linux
+or macOS, x86_64 or aarch64) and uses only the CPU features every processor of
+that platform has, so it runs on any machine of the platform however old. On
+Linux it is statically linked, so it runs on any distribution of that
+architecture, whatever its C library. The released binaries and the executable JAR carry the
+precompiler; a build of rontolisp that carries none for the host says
+`--native is not available for <os>-<arch>` (building it from source:
+[Build & Install](../getting-started/build.md)).
+
+`--native-target` builds for another platform: `linux-x86_64`, `linux-aarch64`
+or `macos-aarch64`. The released binaries and the executable JAR carry the
+runner of each; a build from source carries its own platform's only, and names
+what it carries when asked for another.
+
+```bash
+rontolisp hello.lisp --native --native-target linux-aarch64 -o hello-arm64
+```
+
+`--native-cpu` chooses the CPU features the machine code may use: `baseline`
+(the default), `host` (every feature of the compiling machine's CPU), or on
+x86_64 a level, `x86-64-v2`, `x86-64-v3` or `x86-64-v4`. An executable started
+on a CPU that lacks one of its features refuses to run and names the feature.
+Measured on the benchmark programs, the newer features did not make the code
+rontolisp generates faster, so the default costs nothing in practice.
 
 The precompiler is a shared library that `rontolisp` extracts once to
 `$XDG_CACHE_HOME/rontolisp` (else `~/.cache/rontolisp`, or
@@ -52,6 +72,7 @@ The precompiler is a shared library that `rontolisp` extracts once to
 
 ## Size and Speed
 
-An executable is about 2 MB of runner plus roughly 11 times the `.wasm`: 2.0 MB
-for `hello`, 2.2 MB for a 28 KB module. It starts in about 10 ms and runs at
+An executable is a runner (3.0 MB on Linux x86_64, 2.4 MB on Linux aarch64,
+1.7 MB on macOS) plus roughly 11 times the `.wasm`: 3.0 MB for `hello` on Linux
+x86_64, 3.2 MB for a 28 KB module. It starts in about 10 ms and runs at
 about the speed of `wasmtime run` on the same module.

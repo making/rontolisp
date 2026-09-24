@@ -2,6 +2,7 @@ package am.ik.wasm;
 
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import am.ik.wasm.WasmCodeModel.Body;
@@ -53,9 +54,13 @@ import org.jspecify.annotations.Nullable;
  * replaces. Two degenerate cases ride along because the renumbering is already paid for:
  * a local nothing reads has its {@code tee}s deleted and its {@code set}s turned into
  * {@code drop} -- or deleted together with the pure expression that fed them -- and a
- * local nothing touches leaves the declaration. Bodies are re-decoded and re-sunk to a
- * fixpoint, so a local whose expression reads a local sunk this round is collected on the
- * next round rather than reasoned about.
+ * local nothing touches leaves the declaration.
+ * <p>
+ * An expression that reads a local the same round moves takes that local's expression
+ * NESTED in place of the read, so a chain of hand-overs -- one per element of a long list
+ * -- goes in one round rather than one link per round; a round costs the same however far
+ * apart a write and its read are. Bodies are re-decoded and re-sunk to a fixpoint for
+ * what a round leaves: a copy or a dead write that read a moved local.
  * <p>
  * The pass renumbers a function's OWN locals only -- nothing that another section or an
  * out-of-band claim addresses -- so it runs anywhere after the peepholes and the inliner
@@ -171,8 +176,21 @@ public final class WasmLocalSink {
 	 * (empty when the write becomes a {@code drop}), the write itself, the read the
 	 * expression goes to (-1 when nothing reads the local), and whether the expression is
 	 * copied there rather than moved (a {@code tee}, whose value stays on the stack).
+	 * <p>
+	 * A moved expression may read a local that another sink of the same round moves: that
+	 * read is where the other expression goes, so the two NEST, and the three facts the
+	 * legality argument needs are carried up through the nesting -- {@code size}, the
+	 * instructions the expression is once every nested one is in place;
+	 * {@code firstChange}, the first position at or after the expression where anything
+	 * it transitively reads is written (or a global it reads may be); and
+	 * {@code allocates}.
 	 */
-	private record Sink(int local, int from, int to, int def, int use, boolean copy) {
+	private record Sink(int local, int from, int to, int def, int use, boolean copy, int size, int firstChange,
+			boolean allocates) {
+
+		static Sink drop(int local, int from, int to, int def, boolean copy) {
+			return new Sink(local, from, to, def, -1, copy, 0, 0, false);
+		}
 
 		boolean drops() {
 			return this.from == this.to;
@@ -180,7 +198,143 @@ public final class WasmLocalSink {
 
 	}
 
-	private static byte[] sinkEntry(byte[] entry, TypeSection types, int params) {
+	/**
+	 * What every legality question asks of a body, answered once per round so that each
+	 * question costs the same however far apart its write and read are: a sink per write
+	 * would otherwise rescan the stretch between them, and a list of N elements built
+	 * through N hand-overs is N such stretches over one body.
+	 */
+	private static final class Layout {
+
+		/** Per position: the {@code else}/{@code end} closing its innermost region. */
+		final int[] regionEnd;
+
+		/**
+		 * Per position: the innermost block opener enclosing it, -1 at the top level. An
+		 * opener's own entry is the block around it.
+		 */
+		final int[] block;
+
+		/** Per position: the first {@code global.set} or call at or after it. */
+		final int[] nextClobber;
+
+		/**
+		 * Per local: where its writes are, ascending, in
+		 * {@code writeAt[writeStart[n]..]}.
+		 */
+		private final int[] writeStart;
+
+		private final int[] writeAt;
+
+		Layout(List<Instr> code, int[] writes) {
+			int n = code.size();
+			int[] regionOf = new int[n];
+			int[] endOfRegion = new int[n + 1];
+			Arrays.fill(endOfRegion, n);
+			this.block = new int[n];
+			int[] regions = new int[16];
+			int[] openers = new int[16];
+			int depth = 0;
+			int next = 1;
+			for (int k = 0; k < n; k++) {
+				Instr in = code.get(k);
+				regionOf[k] = regions[depth];
+				this.block[k] = depth == 0 ? -1 : openers[depth - 1];
+				if (in.isOpener()) {
+					if (depth + 1 == regions.length) {
+						regions = Arrays.copyOf(regions, regions.length * 2);
+						openers = Arrays.copyOf(openers, openers.length * 2);
+					}
+					openers[depth++] = k;
+					regions[depth] = next++;
+				}
+				else if (in.op == Instruction.ELSE) {
+					endOfRegion[regions[depth]] = k;
+					regions[depth] = next++;
+				}
+				else if (in.op == Instruction.END) {
+					endOfRegion[regions[depth]] = k;
+					if (depth > 0) {
+						depth--;
+					}
+				}
+			}
+			this.regionEnd = new int[n];
+			for (int k = 0; k < n; k++) {
+				this.regionEnd[k] = endOfRegion[regionOf[k]];
+			}
+			this.nextClobber = new int[n + 1];
+			this.nextClobber[n] = n;
+			for (int k = n - 1; k >= 0; k--) {
+				int op = code.get(k).op;
+				boolean clobbers = op == Instruction.SET_GLOBAL || op == Instruction.CALL
+						|| op == Instruction.RETURN_CALL;
+				this.nextClobber[k] = clobbers ? k : this.nextClobber[k + 1];
+			}
+			this.writeStart = new int[writes.length + 1];
+			for (int local = 0; local < writes.length; local++) {
+				this.writeStart[local + 1] = this.writeStart[local] + writes[local];
+			}
+			this.writeAt = new int[this.writeStart[writes.length]];
+			int[] filled = new int[writes.length];
+			for (int k = 0; k < n; k++) {
+				Instr in = code.get(k);
+				if (in.op == Instruction.SET_LOCAL || in.op == Instruction.TEE_LOCAL) {
+					int local = (int) in.a;
+					this.writeAt[this.writeStart[local] + filled[local]++] = k;
+				}
+			}
+		}
+
+		// Under structured control flow the write at `def` dominates the read at `use`
+		// when no `else`/`end` between them closes a block that was open at `def` -- and
+		// the first such would close the innermost region `def` is in.
+		boolean dominates(int def, int use) {
+			return this.regionEnd[def] > use;
+		}
+
+		// The last instruction whose execution can separate the expression from the read:
+		// the read itself, or the `end` of the outermost loop opened after the write that
+		// is still open at the read -- its next iteration reaches the read without
+		// passing the write. The blocks open at the read and not at the write are the
+		// read's enclosing openers after `def`, walked up as deep as the read is nested
+		// past the write.
+		int rangeEnd(List<Instr> code, int def, int use) {
+			int outermost = -1;
+			for (int b = this.block[use]; b > def; b = this.block[b]) {
+				if (code.get(b).op == Instruction.LOOP) {
+					outermost = b;
+				}
+			}
+			return outermost < 0 ? use : code.get(outermost).match;
+		}
+
+		/** The first write of {@code local} at or after {@code from}. */
+		int firstWrite(int local, int from) {
+			int lo = this.writeStart[local];
+			int hi = this.writeStart[local + 1];
+			while (lo < hi) {
+				int mid = (lo + hi) >>> 1;
+				if (this.writeAt[mid] < from) {
+					lo = mid + 1;
+				}
+				else {
+					hi = mid;
+				}
+			}
+			return lo < this.writeStart[local + 1] ? this.writeAt[lo] : Integer.MAX_VALUE;
+		}
+
+	}
+
+	/**
+	 * One round over one code entry: every write this round's verdicts take out.
+	 * @param entry the code entry (locals vector and instructions)
+	 * @param types the module's types
+	 * @param params how many of the entry's locals are its parameters
+	 * @return the rewritten entry; the input itself when the round changes nothing
+	 */
+	static byte[] sinkEntry(byte[] entry, TypeSection types, int params) {
 		Body body = WasmCodeModel.decode(entry, types);
 		List<Instr> code = body.code();
 		int total = params + body.locals().size();
@@ -202,7 +356,14 @@ public final class WasmLocalSink {
 				writes[(int) in.a]++;
 			}
 		}
-		List<Sink> sinks = new ArrayList<>();
+		Layout layout = new Layout(code, writes);
+		// Writes are decided in order, so a read inside an expression meets the verdict
+		// on the local it reads: every read in an expression comes after that local's
+		// write. A moved local read by a later expression nests into it; one whose
+		// expression must be copied, or whose value is dropped, waits for the next round
+		// instead, which sees the moved expression in the read's place.
+		@Nullable Sink[] moved = new Sink[total];
+		List<Sink> applied = new ArrayList<>();
 		for (int def = 0; def < code.size(); def++) {
 			Instr in = code.get(def);
 			if ((in.op != Instruction.SET_LOCAL && in.op != Instruction.TEE_LOCAL) || in.a < params) {
@@ -214,77 +375,33 @@ public final class WasmLocalSink {
 				// Nothing reads the local: a `tee` goes, a `set` becomes a `drop` -- or
 				// goes with the pure expression that fed it.
 				int[] span = tee ? null : expressionBefore(code, def, types);
-				sinks.add(span == null ? new Sink(n, def, def, def, -1, tee)
-						: new Sink(n, span[0], span[1], def, -1, false));
+				if (span != null && readsMoved(code, span, moved)) {
+					continue;
+				}
+				applied
+					.add(span == null ? Sink.drop(n, def, def, def, tee) : Sink.drop(n, span[0], span[1], def, false));
 				continue;
 			}
 			if (writes[n] != 1 || gets[n] != 1) {
 				continue;
 			}
 			int use = getAt[n];
-			if (use <= def || !dominates(code, def, use)) {
+			if (use <= def || !layout.dominates(def, use)) {
 				continue;
 			}
 			int[] span = expressionBefore(code, def, types);
 			if (span == null) {
 				continue;
 			}
-			boolean readsGlobal = false;
-			boolean allocates = false;
-			int expression = 0;
-			boolean[] readsLocal = new boolean[total];
-			for (int k = span[0]; k < span[1]; k++) {
-				Instr e = code.get(k);
-				expression += e.end - e.start;
-				if (e.op == Instruction.GET_LOCAL) {
-					readsLocal[(int) e.a] = true;
-				}
-				else if (e.op == Instruction.GET_GLOBAL) {
-					readsGlobal = true;
-				}
-				else if (e.op == Instruction.GC_PREFIX && e.sub <= 0x08) {
-					allocates = true;
-				}
+			Sink sink = judge(code, layout, moved, n, span, def, use, tee);
+			if (sink != null) {
+				applied.add(sink);
+				moved[n] = sink;
 			}
-			int rangeEnd = rangeEnd(code, def, use);
-			if (!inputsUnchanged(code, span[1], rangeEnd, readsLocal, readsGlobal)) {
-				continue;
-			}
-			// An allocation evaluated again is a SECOND object, not the one every other
-			// path holds: never as a copy, and never into a loop the write is not in --
-			// a closure built once and called per iteration would be rebuilt, cell and
-			// all, on every iteration.
-			if (allocates && (tee || rangeEnd != use)) {
-				continue;
-			}
-			if (tee) {
-				int replaced = (in.end - in.start) + (code.get(use).end - code.get(use).start);
-				if (expression >= replaced) {
-					continue;
-				}
-			}
-			sinks.add(new Sink(n, span[0], span[1], def, use, tee));
-		}
-		// A sink whose expression reads a local sunk this round waits for the next one,
-		// which sees that local's expression in its place.
-		boolean[] sunk = new boolean[total];
-		for (Sink s : sinks) {
-			sunk[s.local] = true;
 		}
 		boolean[] removed = new boolean[total];
 		for (int n = params; n < total; n++) {
 			removed[n] = writes[n] == 0 && gets[n] == 0;
-		}
-		List<Sink> applied = new ArrayList<>(sinks.size());
-		for (Sink s : sinks) {
-			boolean deferred = false;
-			for (int k = s.from; k < s.to && !deferred; k++) {
-				Instr e = code.get(k);
-				deferred = e.op == Instruction.GET_LOCAL && sunk[(int) e.a];
-			}
-			if (!deferred) {
-				applied.add(s);
-			}
 		}
 		// A `drop` is the fallback for a dead write whose expression the walk could not
 		// see through, and is irreversible; when this round takes anything else out --
@@ -316,52 +433,78 @@ public final class WasmLocalSink {
 		return encode(entry, body, params, removed, applied);
 	}
 
-	// Under structured control flow the write at `def` dominates the read at `use` when
-	// no `else`/`end` between them closes a block that was open at `def`.
-	private static boolean dominates(List<Instr> code, int def, int use) {
-		for (int k = def + 1; k < use; k++) {
-			Instr in = code.get(k);
-			if ((in.op == Instruction.END || in.op == Instruction.ELSE) && in.match < def) {
-				return false;
+	// Whether the expression reads a local this round moves.
+	private static boolean readsMoved(List<Instr> code, int[] span, @Nullable Sink[] moved) {
+		for (int k = span[0]; k < span[1]; k++) {
+			Instr e = code.get(k);
+			if (e.op == Instruction.GET_LOCAL && moved[(int) e.a] != null) {
+				return true;
 			}
 		}
-		return true;
+		return false;
 	}
 
-	// The last instruction whose execution can separate the expression from the read: the
-	// read itself, or the `end` of the outermost loop opened after the write that is
-	// still
-	// open at the read -- its next iteration reaches the read without passing the write.
-	private static int rangeEnd(List<Instr> code, int def, int use) {
-		for (int k = def + 1; k < use; k++) {
-			Instr in = code.get(k);
-			if (in.op == Instruction.LOOP && in.match > use) {
-				return in.match;
+	// The sink of the one read of local `n` written at `def`, or null when the legality
+	// argument declines it this round.
+	private static @Nullable Sink judge(List<Instr> code, Layout layout, @Nullable Sink[] moved, int n, int[] span,
+			int def, int use, boolean tee) {
+		boolean readsGlobal = false;
+		boolean allocates = false;
+		int bytes = 0;
+		int size = 0;
+		int firstChange = Integer.MAX_VALUE;
+		for (int k = span[0]; k < span[1]; k++) {
+			Instr e = code.get(k);
+			bytes += e.end - e.start;
+			if (e.op == Instruction.GET_LOCAL) {
+				Sink nested = moved[(int) e.a];
+				if (nested != null) {
+					// A copy would evaluate the nested expression twice.
+					if (tee) {
+						return null;
+					}
+					size += nested.size;
+					firstChange = Math.min(firstChange, nested.firstChange);
+					allocates |= nested.allocates;
+					continue;
+				}
+				firstChange = Math.min(firstChange, layout.firstWrite((int) e.a, span[1]));
+			}
+			else if (e.op == Instruction.GET_GLOBAL) {
+				readsGlobal = true;
+			}
+			else if (e.op == Instruction.GC_PREFIX && e.sub <= 0x08) {
+				allocates = true;
+			}
+			size++;
+		}
+		// Nesting builds one expression out of many; its operands stay on the stack
+		// together, so it is held to the length the walk back would accept.
+		if (size > MAX_WALK) {
+			return null;
+		}
+		if (readsGlobal) {
+			firstChange = Math.min(firstChange, layout.nextClobber[span[1]]);
+		}
+		int rangeEnd = layout.rangeEnd(code, def, use);
+		if (firstChange <= rangeEnd) {
+			return null;
+		}
+		// An allocation evaluated again is a SECOND object, not the one every other
+		// path holds: never as a copy, and never into a loop the write is not in -- a
+		// closure built once and called per iteration would be rebuilt, cell and all, on
+		// every iteration.
+		if (allocates && (tee || rangeEnd != use)) {
+			return null;
+		}
+		if (tee) {
+			Instr write = code.get(def);
+			Instr read = code.get(use);
+			if (bytes >= (write.end - write.start) + (read.end - read.start)) {
+				return null;
 			}
 		}
-		return use;
-	}
-
-	private static boolean inputsUnchanged(List<Instr> code, int from, int to, boolean[] readsLocal,
-			boolean readsGlobal) {
-		for (int k = from; k <= to; k++) {
-			Instr in = code.get(k);
-			switch (in.op) {
-				case Instruction.SET_LOCAL, Instruction.TEE_LOCAL -> {
-					if (readsLocal[(int) in.a]) {
-						return false;
-					}
-				}
-				case Instruction.SET_GLOBAL, Instruction.CALL, Instruction.RETURN_CALL -> {
-					if (readsGlobal) {
-						return false;
-					}
-				}
-				default -> {
-				}
-			}
-		}
-		return true;
+		return new Sink(n, span[0], span[1], def, use, tee, size, firstChange, allocates);
 	}
 
 	// The pure expression whose value the write at `def` stores, as the span [from, to)
@@ -535,6 +678,7 @@ public final class WasmLocalSink {
 			}
 		}
 		// Per instruction: skipped, turned into a `drop`, or replaced by an expression.
+		// A read skipped as part of a moved expression is where a nested one goes.
 		boolean[] skip = new boolean[code.size()];
 		boolean[] drop = new boolean[code.size()];
 		@Nullable Sink[] at = new Sink[code.size()];
@@ -560,10 +704,8 @@ public final class WasmLocalSink {
 		WasmCodeModel.writeLocals(out.bytes, kept);
 		for (int k = 0; k < code.size(); k++) {
 			Sink s = at[k];
-			if (s != null) {
-				for (int e = s.from; e < s.to; e++) {
-					out.write(code.get(e));
-				}
+			if (s != null && !skip[k]) {
+				writeExpression(out, code, at, s);
 			}
 			else if (drop[k]) {
 				out.bytes.write(Instruction.DROP);
@@ -576,13 +718,41 @@ public final class WasmLocalSink {
 		return out.bytes.toByteArray();
 	}
 
+	// Writes a moved expression at its read, each nested one at the read inside it -- on
+	// an explicit stack, since a chain of copies nests without growing.
+	private static void writeExpression(Encoder out, List<Instr> code, @Nullable Sink[] at, Sink root) {
+		List<Sink> open = new ArrayList<>();
+		List<Integer> next = new ArrayList<>();
+		open.add(root);
+		next.add(root.from);
+		while (!open.isEmpty()) {
+			int top = open.size() - 1;
+			Sink s = open.get(top);
+			int k = next.get(top);
+			if (k == s.to) {
+				open.remove(top);
+				next.remove(top);
+				continue;
+			}
+			next.set(top, k + 1);
+			Sink nested = at[k];
+			if (nested != null) {
+				open.add(nested);
+				next.add(nested.from);
+			}
+			else {
+				out.write(code.get(k));
+			}
+		}
+	}
+
 	// The instruction stream on its way out, with the one adjacency the deletions above
 	// create folded as it is written: a `local.set N` that a deleted expression used to
 	// separate from its `local.get N` becomes `local.tee N` -- the peephole that ran in
 	// front of this pass would have, and it does not run again.
 	private static final class Encoder {
 
-		final ByteArrayOutputStream bytes;
+		final UnsynchronizedByteArrayOutputStream bytes;
 
 		private final byte[] entry;
 
@@ -603,10 +773,7 @@ public final class WasmLocalSink {
 			if (in.op == Instruction.GET_LOCAL || in.op == Instruction.SET_LOCAL || in.op == Instruction.TEE_LOCAL) {
 				int index = this.newIndex[(int) in.a];
 				if (in.op == Instruction.GET_LOCAL && index == this.lastSet) {
-					byte[] sofar = this.bytes.toByteArray();
-					sofar[this.lastSetAt] = (byte) Instruction.TEE_LOCAL;
-					this.bytes.reset();
-					this.bytes.write(sofar, 0, sofar.length);
+					this.bytes.overwrite(this.lastSetAt, Instruction.TEE_LOCAL);
 					this.lastSet = -1;
 					return;
 				}
@@ -617,7 +784,7 @@ public final class WasmLocalSink {
 			}
 			else {
 				this.lastSet = -1;
-				WasmSections.writeRaw(this.bytes, WasmSections.slice(this.entry, in.start, in.end));
+				this.bytes.write(this.entry, in.start, in.end - in.start);
 			}
 		}
 

@@ -54,7 +54,8 @@ Or build from source (produces `target/rontolisp-0.1.0-SNAPSHOT-exec.jar`):
 ./mvnw clean package
 ```
 
-Build a native executable with GraalVM yourself (`target/rontolisp`, instant startup):
+Build a native executable with GraalVM yourself (`target/rontolisp`, instant startup;
+with Rust 1.96+ installed it also carries the `--native` precompiler):
 
 ```bash
 ./mvnw -Pnative clean package

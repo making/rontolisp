@@ -1151,6 +1151,26 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aQuotedListLongerThanOneRunIsTheSameListAndStillOneConstant() throws Exception {
+		// Built from its tail a run at a time through a local (.kb/quoted-data.md): the
+		// cells either side of a run boundary, a nested list, a dotted tail and the
+		// element order all come out as written, and the site still answers one object.
+		int length = WasmQuoteCompiler.QUOTED_RUN * 3 + 5;
+		StringBuilder list = new StringBuilder("(defun %long () '(");
+		for (int k = 0; k < length; k++) {
+			list.append(k % 7 == 3 ? "(n " + k + ")" : "s" + k).append(' ');
+		}
+		list.append(". end))\n");
+		int boundary = length - WasmQuoteCompiler.QUOTED_RUN;
+		String program = list + "(print (eq (%long) (%long)))\n" + "(print (list (first (%long)) (nth " + (boundary - 1)
+				+ " (%long)) (nth " + boundary + " (%long)) (nth 3 (%long)) (cdr (last (%long)))))\n"
+				+ "(print (loop for x on (%long) while (consp x) count t))\n";
+		String expected = "T\n(S0 S" + (boundary - 1) + " S" + boundary + " (N 3) END)\n" + length;
+		assertThat(compileAndRun(program)).isEqualTo(expected);
+		assertThat(compileComponentAndRun(program)).isEqualTo(expected);
+	}
+
+	@Test
 	void aBareInstanceLiteralIsOneSharedConstantAcrossEvaluations() throws Exception {
 		// A bare #P"..." / #S(...) in code position is a CONSTANT, not a constructor:
 		// the interpreter's self-evaluating LispInstance arm hands the reader's own

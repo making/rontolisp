@@ -71,7 +71,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [string-accumulate-cost.md](string-accumulate-cost.md) -- building one string out of N pieces costs the total length, not the sum of the prefixes
 - [hash-tables.md](hash-tables.md) -- per-backend representation, `equalp` key fold, depth cap and work budget
 - [array-literals.md](array-literals.md) -- an array literal is a constructor, not a constant; rank-0 arrays; when `:element-type` specializes
-- [quoted-data.md](quoted-data.md) -- a quoted datum is one shared constant per quote site on all four backends
+- [quoted-data.md](quoted-data.md) -- a quoted datum is one shared constant per quote site on all four backends; a long list is built in runs of 16 on wasm-GC (Cranelift time vs. live values across calls)
 - [adjustable-arrays.md](adjustable-arrays.md) -- fill pointers, `:adjustable`, displaced arrays, `vector-push*`, `adjust-array`
 - [packed-integer-vectors.md](packed-integer-vectors.md) -- `(unsigned-byte 8|16|32)` rank-1 packs, `#N@(...)`, per-backend raw paths
 - [bfloat16.md](bfloat16.md) -- bfloat16 conversion pair, the packed `#bf16` width, and the width's account (why bf16, the name, the prefix, the lattice entry)
@@ -192,7 +192,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [linalg-blas.md](linalg-blas.md) -- `--blas`: the matrix product on a tuned CBLAS from the OS
 - [simd-parallel.md](simd-parallel.md) -- `--parallel` over the `--simd` matrix products
 - [gpu.md](gpu.md) -- `--gpu` and `am.ik.gpu`, the never-throwing declining device layer
-- [native-output.md](native-output.md) -- `--native -o prog`: the wasmtime precompile shim and the runner stub (`rontolisp-native/`) and the Java side that loads, checks and assembles them (`cli/NativeToolchain`, `cli/NativeExecutable`); the one shared engine config, the fingerprint, the payload trailer, the resource layout and cache, the refusals, the separate-build trap, the numbers
+- [native-output.md](native-output.md) -- `--native -o prog`: the wasmtime precompile shim and the runner stub (`rontolisp-native/`) and the Java side that loads, checks and assembles them (`cli/NativeToolchain`, `cli/NativeExecutable`); the one shared engine config, the fingerprint, the payload trailer, the resource layout and cache, the refusals, the separate-build trap, the CPU baseline and `--native-target` (and why SSE2 / Armv8.0 cost nothing), the numbers
 - [native-downcalls.md](native-downcalls.md) -- `src/native/java`: the binary's downcalls through SubstrateVM's AOT route instead of the interpreted FFM handle; what took it (`--blas`) and what was measured not to (`--gpu`, objc)
 - [vec.md](vec.md) -- the `vec` package, the packed float-array type, and its `--simd`/`--no-gc` acceleration layers
 - [quantized-matrix.md](quantized-matrix.md) -- `rontolisp:quantized-matrix`: ggml's Q8_0 held verbatim, and the integer-dot GEMV that is the defun bit for bit

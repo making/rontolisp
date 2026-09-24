@@ -1,5 +1,8 @@
 package am.ik.rontolisp.codegen.wasm;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
@@ -518,19 +521,49 @@ final class WasmQuoteCompiler {
 		}
 	}
 
+	/**
+	 * The most cells one run of a quoted list keeps on the operand stack
+	 * (.kb/quoted-data.md, "A long list is built in runs").
+	 */
+	static final int QUOTED_RUN = 16;
+
 	// Every car in order, then the tail, then one cons per cell: the bytes the recursive
-	// car / cdr / cons emission produced, without a Java frame per element.
+	// car / cdr / cons emission produced, without a Java frame per element. A list
+	// longer than one run is built from its tail, a run at a time, the list so far
+	// carried through a local -- so no more than a run's cars are live across the calls
+	// a symbol or a string makes, whatever the list's length.
 	private static void compileQuotedCons(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		int cells = 0;
+		List<LispVal> cars = new ArrayList<>();
 		LispVal rest = cons;
 		while (rest instanceof LispCons cell) {
-			compileQuotedVal(cell.car(), ctx);
-			cells++;
+			cars.add(cell.car());
 			rest = cell.cdr();
 		}
+		if (cars.size() <= QUOTED_RUN) {
+			for (LispVal car : cars) {
+				compileQuotedVal(car, ctx);
+			}
+			compileQuotedVal(rest, ctx);
+			for (int i = 0; i < cars.size(); i++) {
+				WasmEmitHelper.emitNewCons(ctx);
+			}
+			return;
+		}
 		compileQuotedVal(rest, ctx);
-		for (int i = 0; i < cells; i++) {
-			WasmEmitHelper.emitNewCons(ctx);
+		int tail = ctx.allocTemp();
+		setLocal(ctx, tail);
+		for (int end = cars.size(); end > 0; end -= QUOTED_RUN) {
+			int start = Math.max(0, end - QUOTED_RUN);
+			for (int i = start; i < end; i++) {
+				compileQuotedVal(cars.get(i), ctx);
+			}
+			getLocal(ctx, tail);
+			for (int i = start; i < end; i++) {
+				WasmEmitHelper.emitNewCons(ctx);
+			}
+			if (start > 0) {
+				setLocal(ctx, tail);
+			}
 		}
 	}
 

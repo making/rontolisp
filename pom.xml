@@ -18,6 +18,12 @@
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<spring-boot.version>4.1.1</spring-boot.version>
 		<version-generate-skip>false</version-generate-skip>
+		<!-- The native executable output's precompile shim and runner stub
+		     (.kb/native-output.md): build them with rontolisp-native/build.sh during
+		     generate-resources when cargo is found (-Pnative turns this on), and fail
+		     unless the host's pair ends up on the classpath (CI turns this on). -->
+		<rontolisp.native.build>false</rontolisp.native.build>
+		<rontolisp.native.required>false</rontolisp.native.required>
 	</properties>
 	<licenses>
 		<license>
@@ -162,6 +168,32 @@ gitBranch=${git.branch}
 							</target>
 						</configuration>
 					</execution>
+					<!-- Runs before process-resources copies rontolisp-native/target/resources
+					     (registered below), so a pair built here is in this build's jar and
+					     native image. Unix only: build.sh is a bash script. -->
+					<execution>
+						<id>native-shims</id>
+						<phase>generate-resources</phase>
+						<goals>
+							<goal>run</goal>
+						</goals>
+						<configuration>
+							<target xmlns:if="ant:if">
+								<condition property="native.shims">
+									<or>
+										<istrue value="${rontolisp.native.build}"/>
+										<istrue value="${rontolisp.native.required}"/>
+									</or>
+								</condition>
+								<exec if:set="native.shims" executable="bash" osfamily="unix" failonerror="true">
+									<arg value="${project.basedir}/rontolisp-native/build.sh"/>
+									<arg value="--maven"/>
+									<arg value="${rontolisp.native.build}"/>
+									<arg value="${rontolisp.native.required}"/>
+								</exec>
+							</target>
+						</configuration>
+					</execution>
 				</executions>
 			</plugin>
 			<plugin>
@@ -180,11 +212,11 @@ gitBranch=${git.branch}
 								<resource>
 									<directory>${project.build.directory}/generated-resources/version</directory>
 								</resource>
-								<!-- The host's precompile shim and runner stub of the native
-								     executable output (.kb/native-output.md), when
-								     rontolisp-native/build.sh has built them. Absent, the build
-								     is the same and the CLI says the output is not available
-								     for the host. -->
+								<!-- The precompile shims and runner stubs of the native
+								     executable output (.kb/native-output.md): the host's pair
+								     when rontolisp-native/build.sh has built it, every release
+								     platform's in CI's jar. Absent, the build is the same and the
+								     CLI says the output is not available for the host. -->
 								<resource>
 									<directory>${project.basedir}/rontolisp-native/target/resources</directory>
 								</resource>
@@ -339,6 +371,11 @@ gitBranch=${git.branch}
 	<profiles>
 		<profile>
 			<id>native</id>
+			<properties>
+				<!-- A native binary carries the host's native-output pair whenever cargo is
+				     there to build it (-Drontolisp.native.build=false opts out). -->
+				<rontolisp.native.build>true</rontolisp.native.build>
+			</properties>
 			<dependencies>
 				<!-- The SubstrateVM API (@TargetClass / @Substitute, @InvokeCFunctionPointer,
 				     PinnedObject) that src/native/java compiles against: provided, so it is
