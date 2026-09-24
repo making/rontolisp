@@ -97,10 +97,13 @@ backends: the non-BMP character sits ON the block boundary of every one of them)
 `readSequenceIntoAStringCostsAboutWhatTheSameFileCostsAsBytes`, which read the same 1,048,576
 characters as bytes and as characters off one file and bound the second by the first -- a
 self-calibrating ratio, so no machine-dependent millisecond budget is written down. The
-wasm pin retries the timed pair up to three times against the UNCHANGED bound (`.todo/822`):
-the string leg's loaded-machine spread crosses it intermittently on CI, while a
-per-character `fd_read` regression would miss it on every attempt, so a retry cannot hide
-one.
+wasm pin runs the timed pair three times and pools the attempts -- cheapest string leg
+against the most generous byte leg, bound formula unchanged (2026-09-24, after the plain
+any-attempt-passes retry of `.todo/822` still failed once on CI with 786 ms against a
+734 ms bound): contention only ever ADDS to a leg's time, so the min string leg is that
+leg's true cost and the max byte leg is the loosest honest denominator, while a
+per-character `fd_read` regression raises every attempt by ~1000x and its min still
+misses the bound by three orders of magnitude.
 
 Related: `.kb/binary-sequence-io.md`, `.kb/string-accumulate-cost.md`,
 `.kb/string-index-cost.md`, `.kb/read-load-streams.md`, `.kb/adjustable-arrays.md`.
