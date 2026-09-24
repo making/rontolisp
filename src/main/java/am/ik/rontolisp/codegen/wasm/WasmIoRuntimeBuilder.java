@@ -49,18 +49,19 @@ final class WasmIoRuntimeBuilder {
 
 	/**
 	 * Builds the _path_dirfd(ptr, len) function body: the directory descriptor the staged
-	 * path at {@code [ptr, ptr+len)} must be opened relative to, with the number of
-	 * leading bytes that descriptor already accounts for left in the
-	 * {@link WasmLispCompiler#PATH_SKIP_ADDR} cell. The front end of EVERY
-	 * {@code path_open} call on this backend -- {@code _open}, {@code _probe_file},
-	 * {@code _list_directory} and {@code _load} -- so the resolution rule has one
-	 * definition rather than four.
+	 * path at {@code [ptr, ptr+len)} must be opened relative to, with the path that
+	 * descriptor is to see left in the {@link WasmLispCompiler#PATH_PTR_ADDR} /
+	 * {@link WasmLispCompiler#PATH_LEN_ADDR} cells. The front end of EVERY {@code path_*}
+	 * call on this backend -- {@code _open}, {@code _probe_file},
+	 * {@code _list_directory}, {@code _load}, {@code _make_directories},
+	 * {@code _delete_file}, {@code _rename_file} -- so the resolution rule has one
+	 * definition.
 	 *
 	 * <p>
-	 * A RELATIVE path answers fd 3 with skip 0: the first preopened directory, exactly
-	 * what every site hard-coded before, so nothing that worked moves. An ABSOLUTE one (a
-	 * leading {@code /}) is matched against the preopen NAMES, which is the whole point:
-	 * {@code fd_prestat_get} answers a preopened fd's name length and
+	 * A RELATIVE path answers fd 3 and the path unchanged: the first preopened directory,
+	 * exactly what every site hard-coded before, so nothing that worked moves. An
+	 * ABSOLUTE one (a leading {@code /}) is matched against the preopen NAMES, which is
+	 * the whole point: {@code fd_prestat_get} answers a preopened fd's name length and
 	 * {@code fd_prestat_dir_name} the name itself, and without them nothing here can
 	 * learn that fd 3 IS {@code /tmp} -- so {@code "/tmp/x.txt"} went to
 	 * {@code path_open} whole and WASI rejected it, which is why a runtime-computed
@@ -78,38 +79,232 @@ final class WasmIoRuntimeBuilder {
 	 * empty path, and the staging is scratch the caller pops right after.
 	 *
 	 * <p>
-	 * When NO preopen covers an absolute path the answer is fd 3 with skip 0, i.e. the
-	 * call the site would have made anyway, so the failure surfaces as the ordinary
-	 * "cannot open" errno each caller already turns into nil -- an errno, never a trap.
+	 * A path with a {@code ..} component CLIMBS, and a preopen is a sandbox that refuses
+	 * a {@code ..} escaping it: such a path resolves against the SHORTEST covering
+	 * preopen instead, the one with the most room above the path ({@code /} when it is
+	 * preopened). A relative climbing path is first JOINED onto fd 3's name when that
+	 * name is absolute -- a host that names fd 3 after the absolute current directory
+	 * (the {@code --native} runner stub, {@code .kb/native-output.md}) has told the
+	 * module where it runs, so {@code ../x} from {@code /a/b} opens {@code a/b/../x}
+	 * under {@code /}, which the host resolves physically, as the kernel resolves a
+	 * native program's {@code ..}. The joined bytes stay allocated above HEAP_PTR until
+	 * the caller pops its own staging. {@code wasmtime run --dir .} names fd 3
+	 * {@code "."}, so it keeps the old answer.
+	 *
+	 * <p>
+	 * When NO preopen covers an absolute path the answer is fd 3 with the path whole,
+	 * i.e. the call the site would have made anyway, so the failure surfaces as the
+	 * ordinary "cannot open" errno each caller already turns into nil -- an errno, never
+	 * a trap.
 	 * @return the function body bytes
 	 */
 	static byte[] buildPathDirFdBody() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: PTR=0 (i32), LEN=1 (i32) ; i32 locals: SCR=2, FD=3, NLEN=4, BFD=5,
-		// BSKIP=6, T=7, I=8
+		// BSKIP=6, T=7, I=8, UP=9
 		w.write(1);
-		w.write(7);
+		w.write(8);
 		w.write(Type.I32);
-		final int PTR = 0, LEN = 1, SCR = 2, FD = 3, NLEN = 4, BFD = 5, BSKIP = 6, T = 7, I = 8;
+		final int PTR = 0, LEN = 1, SCR = 2, FD = 3, NLEN = 4, BFD = 5, BSKIP = 6, T = 7, I = 8, UP = 9;
 		final int SLASH = '/', DOT = '.';
 
-		// mem[PATH_SKIP_ADDR] = 0 -- the answer for every path that is not absolute.
-		i32(w, WasmLispCompiler.PATH_SKIP_ADDR);
+		// up = the path has a ".." component. Every probe is in bounds: the caller's
+		// staging frames the path with a quote byte on each side.
 		i32(w, 0);
-		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// if (len == 0 || mem8[ptr] != '/') return 3
+		setLocal(w, UP);
+		i32(w, 0);
+		setLocal(w, I);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, I);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
 		getLocal(w, LEN);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		// mem8[ptr+i] == '.' && mem8[ptr+i+1] == '.'
+		getLocal(w, PTR);
+		getLocal(w, I);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, DOT);
+		w.write(Instruction.I32_EQ);
+		getLocal(w, PTR);
+		getLocal(w, I);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x01);
+		i32(w, DOT);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_AND);
+		// && (i == 0 || mem8[ptr+i-1] == '/')
+		getLocal(w, I);
 		w.write(Instruction.I32_EQZ);
+		getLocal(w, PTR);
+		getLocal(w, I);
+		w.write(Instruction.I32_ADD);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, SLASH);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_AND);
+		// && (i + 2 == len || mem8[ptr+i+2] == '/')
+		getLocal(w, I);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_EQ);
+		getLocal(w, PTR);
+		getLocal(w, I);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x02);
+		i32(w, SLASH);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 1);
+		setLocal(w, UP);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.END);
+		getLocal(w, I);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, I);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+
+		w.write(Instruction.BLOCK, 0x40); // $walk: left with an absolute path in PTR/LEN
+		// an absolute path goes straight to the walk (len == 0 reads the closing quote)
+		getLocal(w, LEN);
+		i32(w, 0);
+		w.write(Instruction.I32_NE);
 		getLocal(w, PTR);
 		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
 		i32(w, SLASH);
-		w.write(Instruction.I32_NE);
-		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		// a relative path that does not climb: fd 3, the path unchanged
+		getLocal(w, UP);
+		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);
+		emitStoreResolvedPath(w, PTR, LEN);
 		i32(w, 3);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
+		// A relative path that climbs: join it onto fd 3's name when that name is
+		// absolute. scr = HEAP_PTR, advanced over the prestat record, the name, the
+		// separator and the path BEFORE fd_prestat_get (under --component its first call
+		// allocates at HEAP_PTR).
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, SCR);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, SCR);
+			i32(w, PRESTAT_SCRATCH_BYTES + 1);
+			w.write(Instruction.I32_ADD);
+			getLocal(w, LEN);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, SCR);
+		i32(w, PRESTAT_SCRATCH_BYTES + 1 + 7);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.BLOCK, 0x40); // $unjoinable
+		i32(w, 3);
+		getLocal(w, SCR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_PRESTAT_GET);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		getLocal(w, SCR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		setLocal(w, NLEN);
+		getLocal(w, NLEN);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		getLocal(w, NLEN);
+		i32(w, PRESTAT_NAME_MAX);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		i32(w, 3);
+		getLocal(w, SCR);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, NLEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_PRESTAT_DIR_NAME);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		// a relative name ("." under `wasmtime run --dir .`) says nothing about where
+		// the program runs
+		getLocal(w, SCR);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x08);
+		i32(w, SLASH);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		emitStripTrailingSlashes(w, SCR, NLEN);
+		// the root's name contributes no bytes: "/" + path, not "//" + path
+		getLocal(w, NLEN);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		setLocal(w, NLEN);
+		w.write(Instruction.END);
+		// mem8[scr+8+nlen] = '/' ; memory.copy(scr+9+nlen, ptr, len)
+		getLocal(w, SCR);
+		getLocal(w, NLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, SLASH);
+		w.write(Instruction.I32_STORE8, 0x00, 0x08);
+		getLocal(w, SCR);
+		getLocal(w, NLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 9);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, PTR);
+		getLocal(w, LEN);
+		w.write(Instruction.MISC_PREFIX);
+		w.writeUnsignedLeb128(Instruction.MEMORY_COPY);
+		w.write(0x00, 0x00);
+		// ptr = scr + 8 ; len = nlen + 1 + len
+		getLocal(w, SCR);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, PTR);
+		getLocal(w, NLEN);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, LEN);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(1); // -> after $walk, the joined path kept allocated
+		w.write(Instruction.END); // $unjoinable
+		// fd 3 has no absolute name: release the reservation; fd 3, the path unchanged
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, SCR);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		emitStoreResolvedPath(w, PTR, LEN);
+		i32(w, 3);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // $walk
 
 		// scr = HEAP_PTR, reserved over the walk and popped after it. Under --component
 		// the first fd_prestat_get lifts the preopen list through cabi_realloc, which
@@ -171,30 +366,7 @@ final class WasmIoRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_PRESTAT_DIR_NAME);
 		w.write(Instruction.BR_IF);
 		w.writeUnsignedLeb128(0);
-		// strip trailing slashes: a host may spell the root "/" and a directory "/tmp/"
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		getLocal(w, NLEN);
-		i32(w, 1);
-		w.write(Instruction.I32_LE_U);
-		w.write(Instruction.BR_IF);
-		w.writeUnsignedLeb128(1);
-		getLocal(w, SCR);
-		getLocal(w, NLEN);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_LOAD8_U, 0x00, 0x07);
-		i32(w, SLASH);
-		w.write(Instruction.I32_NE);
-		w.write(Instruction.BR_IF);
-		w.writeUnsignedLeb128(1);
-		getLocal(w, NLEN);
-		i32(w, 1);
-		w.write(Instruction.I32_SUB);
-		setLocal(w, NLEN);
-		w.write(Instruction.BR);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.END); // loop
-		w.write(Instruction.END); // block
+		emitStripTrailingSlashes(w, SCR, NLEN);
 		// a preopen whose own name is relative (wasmtime's `--dir .` spells it ".") can
 		// never cover an absolute path
 		getLocal(w, SCR);
@@ -284,10 +456,23 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.END); // if (the name matched)
 		w.write(Instruction.END); // if (nlen <= len)
 		w.write(Instruction.END); // if (nlen == 1)
-		// longest prefix wins
+		// longest prefix wins; for a climbing path the SHORTEST covering one does, with
+		// bskip == 0 standing for "none yet": t != 0 && (up ? bskip - 1 >=u t : t >u
+		// bskip)
+		getLocal(w, T);
+		i32(w, 0);
+		w.write(Instruction.I32_NE);
+		getLocal(w, BSKIP);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		getLocal(w, T);
+		w.write(Instruction.I32_GE_U);
 		getLocal(w, T);
 		getLocal(w, BSKIP);
 		w.write(Instruction.I32_GT_U);
+		getLocal(w, UP);
+		w.write(Instruction.SELECT);
+		w.write(Instruction.I32_AND);
 		w.write(Instruction.IF, 0x40);
 		getLocal(w, T);
 		setLocal(w, BSKIP);
@@ -307,7 +492,7 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.END); // $scan
 		w.write(Instruction.END); // $done
 
-		// pop the prestat scratch
+		// pop the prestat scratch (a joined path lies below it and stays)
 		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		getLocal(w, SCR);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
@@ -316,6 +501,7 @@ final class WasmIoRuntimeBuilder {
 		getLocal(w, BSKIP);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);
+		emitStoreResolvedPath(w, PTR, LEN);
 		i32(w, 3);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -338,12 +524,70 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.I32_SUB);
 		setLocal(w, BSKIP);
 		w.write(Instruction.END);
-		i32(w, WasmLispCompiler.PATH_SKIP_ADDR);
+		// the resolved path: ptr + bskip, len - bskip
+		getLocal(w, PTR);
 		getLocal(w, BSKIP);
-		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, PTR);
+		getLocal(w, LEN);
+		getLocal(w, BSKIP);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, LEN);
+		emitStoreResolvedPath(w, PTR, LEN);
 		getLocal(w, BFD);
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	/** Stores {@code _path_dirfd}'s answer path into its two out-cells. */
+	private static void emitStoreResolvedPath(WasmWriter w, int ptr, int len) {
+		i32(w, WasmLispCompiler.PATH_PTR_ADDR);
+		getLocal(w, ptr);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		i32(w, WasmLispCompiler.PATH_LEN_ADDR);
+		getLocal(w, len);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+	}
+
+	/**
+	 * Strips trailing slashes from the preopen name at {@code scr + 8} (keeping at least
+	 * one byte): a host may spell the root {@code "/"} and a directory {@code "/tmp/"}.
+	 */
+	private static void emitStripTrailingSlashes(WasmWriter w, int scr, int nlen) {
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, nlen);
+		i32(w, 1);
+		w.write(Instruction.I32_LE_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, scr);
+		getLocal(w, nlen);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x07);
+		i32(w, '/');
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, nlen);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, nlen);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+	}
+
+	/**
+	 * Emits the {@code path_ptr, path_len} pair {@code _path_dirfd} just resolved -- the
+	 * two arguments after {@code dirfd} (and {@code dirflags}, where the call has one) of
+	 * every {@code path_*} import.
+	 * @param w the writer
+	 */
+	static void emitResolvedPath(WasmWriter w) {
+		loadMem32(w, WasmLispCompiler.PATH_PTR_ADDR);
+		loadMem32(w, WasmLispCompiler.PATH_LEN_ADDR);
 	}
 
 	/**
@@ -358,7 +602,7 @@ final class WasmIoRuntimeBuilder {
 	 * @param plen the local holding the staged path's content length
 	 */
 	static void emitDirFdAndPath(WasmWriter w, int off, int plen) {
-		// dirfd = _path_dirfd(off + 1, plen) -- it also writes PATH_SKIP_ADDR
+		// dirfd = _path_dirfd(off + 1, plen) -- it also writes the resolved path cells
 		getLocal(w, off);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
@@ -367,16 +611,7 @@ final class WasmIoRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
 		// dirflags = 0 (no symlink following, as before)
 		i32(w, 0);
-		// path_ptr = off + 1 + skip
-		getLocal(w, off);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		loadMem32(w, WasmLispCompiler.PATH_SKIP_ADDR);
-		w.write(Instruction.I32_ADD);
-		// path_len = plen - skip
-		getLocal(w, plen);
-		loadMem32(w, WasmLispCompiler.PATH_SKIP_ADDR);
-		w.write(Instruction.I32_SUB);
+		emitResolvedPath(w);
 	}
 
 	/**
@@ -1464,7 +1699,7 @@ final class WasmIoRuntimeBuilder {
 		i32(w, -8);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// dirfd = _path_dirfd(off + 1, plen); base = off + 1 + skip; n = plen - skip.
+		// dirfd = _path_dirfd(off + 1, plen); base, n = the path it resolved.
 		getLocal(w, OFF);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
@@ -1472,16 +1707,9 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
 		setLocal(w, DIRFD);
-		getLocal(w, OFF);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		loadMem32(w, WasmLispCompiler.PATH_SKIP_ADDR);
-		w.write(Instruction.I32_ADD);
-		setLocal(w, BASE);
-		getLocal(w, PLEN);
-		loadMem32(w, WasmLispCompiler.PATH_SKIP_ADDR);
-		w.write(Instruction.I32_SUB);
+		emitResolvedPath(w);
 		setLocal(w, N);
+		setLocal(w, BASE);
 		// Strip trailing slashes: the final prefix must not name the directory with
 		// one.
 		w.write(Instruction.BLOCK);
@@ -1666,23 +1894,15 @@ final class WasmIoRuntimeBuilder {
 		i32(w, -8);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// path_unlink_file(dirfd, path_ptr, path_len): the dirfd comes from
-		// _path_dirfd over the staged path, the pointer and length skip what the
-		// descriptor already accounts for.
+		// path_unlink_file(dirfd, path_ptr, path_len): all three from _path_dirfd over
+		// the staged path.
 		getLocal(w, OFF);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		getLocal(w, PLEN);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
-		getLocal(w, OFF);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		loadMem32(w, WasmLispCompiler.PATH_SKIP_ADDR);
-		w.write(Instruction.I32_ADD);
-		getLocal(w, PLEN);
-		loadMem32(w, WasmLispCompiler.PATH_SKIP_ADDR);
-		w.write(Instruction.I32_SUB);
+		emitResolvedPath(w);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_UNLINK_FILE);
 		// pop the staged path (PLEN is free now: reuse it for the errno)
@@ -1707,7 +1927,8 @@ final class WasmIoRuntimeBuilder {
 	 * refused, over the {@code path_rename} import. Both paths are staged and each is
 	 * resolved against the preopen table on its own -- the two may live under different
 	 * preopens -- so the staging of the first survives the resolution of the second
-	 * ({@code _path_dirfd} pops only its own scratch).
+	 * ({@code _path_dirfd} pops only its own scratch, and a path it JOINS stays allocated
+	 * above both stagings until the pop at the end).
 	 * @param st the string table (for the {@code T} symbol)
 	 * @return the function body bytes
 	 */
@@ -1760,8 +1981,8 @@ final class WasmIoRuntimeBuilder {
 		i32(w, -8);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// Resolve the source: dirfd, then the skip-adjusted pointer and length into
-		// locals (the destination resolution below overwrites PATH_SKIP_ADDR).
+		// Resolve the source: dirfd, then the resolved pointer and length into locals
+		// (the destination resolution below overwrites the cells).
 		getLocal(w, OFF1);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
@@ -1769,16 +1990,9 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
 		setLocal(w, D1);
-		getLocal(w, OFF1);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		loadMem32(w, WasmLispCompiler.PATH_SKIP_ADDR);
-		w.write(Instruction.I32_ADD);
-		setLocal(w, P1);
-		getLocal(w, LEN1);
-		loadMem32(w, WasmLispCompiler.PATH_SKIP_ADDR);
-		w.write(Instruction.I32_SUB);
+		emitResolvedPath(w);
 		setLocal(w, N1);
+		setLocal(w, P1);
 		// Resolve the destination the same way.
 		getLocal(w, OFF2);
 		i32(w, 1);
@@ -1787,19 +2001,12 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
 		setLocal(w, D2);
-		// path_rename(d1, p1, n1, d2, off2 + 1 + skip, len2 - skip)
+		// path_rename(d1, p1, n1, d2, resolved destination)
 		getLocal(w, D1);
 		getLocal(w, P1);
 		getLocal(w, N1);
 		getLocal(w, D2);
-		getLocal(w, OFF2);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		loadMem32(w, WasmLispCompiler.PATH_SKIP_ADDR);
-		w.write(Instruction.I32_ADD);
-		getLocal(w, LEN2);
-		loadMem32(w, WasmLispCompiler.PATH_SKIP_ADDR);
-		w.write(Instruction.I32_SUB);
+		emitResolvedPath(w);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_RENAME);
 		setLocal(w, ERR);

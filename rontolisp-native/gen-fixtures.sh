@@ -2,8 +2,9 @@
 # Regenerates precomp/tests/fixtures/*.{wasm,out,status}: ci-slice.lisp is cut from
 # ci-spec.yaml (the cases named below, verbatim, concatenated as CiSpecE2eTest does),
 # every .lisp there is compiled by the rontolisp jar, and every .wasm is run under
-# `wasmtime run` the way tests/stub.rs runs the stub. What wasmtime prints is what the
-# stub must print.
+# `wasmtime run` the way tests/stub.rs runs the stub: from <tmp>/cwd, beside <tmp>/up.txt,
+# with the preopens the stub makes (the current directory under its absolute name, then
+# `/`). What wasmtime prints is what the stub must print.
 #
 #   RONTOLISP_JAR   the -exec jar (default: ../target/rontolisp-*-exec.jar)
 set -euo pipefail
@@ -31,9 +32,12 @@ for src in "$fx"/*.lisp; do
   name=${src%.lisp}
   java -jar "$jar" "$src" -o "$name.wasm"
   work=$(mktemp -d)
+  mkdir "$work/cwd"
+  printf 'up\n' > "$work/up.txt"
+  cwd=$(cd "$work/cwd" && pwd -P)
   set +e
-  (cd "$work" && printf 'from stdin\n' | RLNATIVE_TEST=hello RLNATIVE_DIR=$work \
-    wasmtime run --env RLNATIVE_TEST --env RLNATIVE_DIR --dir . --dir / "$name.wasm" alpha 'beta gamma' \
+  (cd "$cwd" && printf 'from stdin\n' | RLNATIVE_TEST=hello RLNATIVE_DIR=$cwd \
+    wasmtime run --env RLNATIVE_TEST --env RLNATIVE_DIR --dir "$cwd::$cwd" --dir / "$name.wasm" alpha 'beta gamma' \
     > "$name.out" 2> /dev/null)
   echo $? > "$name.status"
   set -e

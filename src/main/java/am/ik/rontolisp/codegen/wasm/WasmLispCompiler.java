@@ -1540,12 +1540,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	static final int FUNC_IV_UTF8_STR = FUNC_OSTREAM_ROOM + 1;
 
 	// _path_dirfd (i32 ptr, i32 len) -> i32: the directory fd a path is opened relative
-	// to, and the number of leading bytes path_open must NOT see (written to
-	// PATH_SKIP_ADDR). Every path_open call site -- _open, _probe_file, _list_directory,
-	// _load -- goes through it, which is what makes an ABSOLUTE runtime path openable:
-	// it walks the preopen table (fd_prestat_get / fd_prestat_dir_name) and picks the
-	// LONGEST matching prefix. A relative path answers fd 3 / skip 0, today's behavior
-	// byte for byte. Reuses the (i32,i32) -> i32 signature (TYPE_INTERN), so no new type
+	// to, and the path that fd is to see (written to PATH_PTR_ADDR / PATH_LEN_ADDR).
+	// Every path_* call site goes through it, which is what makes an ABSOLUTE runtime
+	// path openable: it walks the preopen table (fd_prestat_get / fd_prestat_dir_name)
+	// and picks the LONGEST matching prefix (the SHORTEST for a path with a ".."
+	// component, which a relative path is first joined onto an absolutely-named fd 3
+	// for). Any other relative path answers fd 3 and itself. Reuses the (i32,i32) -> i32
+	// signature (TYPE_INTERN), so no new type
 	// entry; appended after the last fixed helper so no index above shifts.
 	static final int FUNC_PATH_DIRFD = FUNC_IV_UTF8_STR + 1;
 
@@ -2490,6 +2491,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	// interned string bytes are clobbered.
 	static final int READDIR_USED_ADDR = 208;
 
+	// _path_dirfd's second out-cell, the length of the path it resolved (212..215, the
+	// word left free between READDIR_USED_ADDR and the 8-aligned RANDOM_STATE_ADDR); the
+	// pointer is PATH_PTR_ADDR.
+	static final int PATH_LEN_ADDR = 212;
+
 	// The PRNG's 64-bit state cell (8-aligned at 216..223, still below the
 	// DATA_BASE_OFFSET=256 headroom). EVERY build reads and writes it: `random` is a
 	// SplitMix64 step over this cell inlined at the call site (WasmRandomCompiler), not
@@ -2536,12 +2542,12 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int PARK_FLOOR_ADDR = 244;
 
-	// _path_dirfd's out-parameter: how many leading bytes of the staged path the
-	// preopen it resolved against already accounts for, so the pointer path_open sees is
-	// `ptr + mem[PATH_SKIP_ADDR]` and its length `len - mem[PATH_SKIP_ADDR]`. Zero for a
-	// relative path (the whole path goes to fd 3, as it always did). A second cell is
-	// not needed: the fd is the function's result.
-	static final int PATH_SKIP_ADDR = 248;
+	// _path_dirfd's out-cell for the pointer of the path the fd it answers is to see
+	// (its length is PATH_LEN_ADDR). Usually a suffix of the staged path -- the staged
+	// pointer itself for a relative one, past the preopen's name for an absolute one --
+	// but a relative path with a ".." component may be JOINED onto fd 3's name in fresh
+	// scratch, which is why the answer is a pointer and a length rather than a skip.
+	static final int PATH_PTR_ADDR = 248;
 
 	// "The PRNG has been seeded" flag (252..255, the last word below the
 	// DATA_BASE_OFFSET=256 headroom): zero-initialized memory means "not yet", so the
