@@ -94,7 +94,7 @@ final class WasmLetCompiler {
 		// A binding some landing-pad region in the body assigns lives in a cell too, so
 		// the pad's refresh restores the cell and reads the latest value through it
 		// (WasmLandingPad).
-		capturedInLet.addAll(WasmLandingPad.regionAssignedVars(bodyExprs, letVarNames));
+		capturedInLet.addAll(WasmLandingPad.regionAssignedVars(bodyExprs, letVarNames, ctx.regionMemo));
 
 		// Unboxed (dual-representation) locals, todo 194 stage 3: a binding that is
 		// never captured or special and has at least one integer-tree-shaped assignment

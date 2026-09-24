@@ -111,7 +111,8 @@ final class WasmAsyncEmit {
 		else {
 			ctx.closureEnvSlot = -1;
 		}
-		Set<String> capturedVars = WasmLandingPad.regionAssignedVars(bodyExprs, new HashSet<>(paramNames));
+		Set<String> capturedVars = WasmLandingPad.regionAssignedVars(bodyExprs, new HashSet<>(paramNames),
+				ctx.regionMemo);
 		capturedVars.addAll(FreeVarAnalyzer.findCapturedVars(bodyExprs, new HashSet<>(paramNames),
 				proto.functions.keySet(), ctx.captureMemo));
 		ctx.boxedVars = capturedVars;
@@ -850,6 +851,7 @@ final class WasmAsyncEmit {
 			.structAccessors(proto.structAccessors)
 			.closRegistry(proto.closRegistry)
 			.captureMemo(proto.captureMemo)
+			.regionMemo(proto.regionMemo)
 			.globals(proto.globals)
 			// NOT optional: a chunk built here compiles call sites too, and a name whose
 			// only definition is its global variable must dispatch through it there as

@@ -4127,7 +4127,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			// a landing-pad region (WasmLandingPad): either way they live in a cell.
 			Set<String> capturedVars = FreeVarAnalyzer.findCapturedVars(defun.bodyExprs,
 					new HashSet<>(defun.paramNames), functions.keySet(), funcCtx.captureMemo);
-			capturedVars.addAll(WasmLandingPad.regionAssignedVars(defun.bodyExprs, new HashSet<>(defun.paramNames)));
+			capturedVars.addAll(WasmLandingPad.regionAssignedVars(defun.bodyExprs, new HashSet<>(defun.paramNames),
+					funcCtx.regionMemo));
 			funcCtx.boxedVars = capturedVars;
 			// Box captured params
 			for (String paramName : defun.paramNames) {
@@ -4340,7 +4341,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			Set<String> lambdaLocalVars = new HashSet<>(lambda.paramNames);
 			Set<String> capturedVars = FreeVarAnalyzer.findCapturedVars(lambda.bodyExprs, lambdaLocalVars,
 					functions.keySet(), lambdaCtx.captureMemo);
-			capturedVars.addAll(WasmLandingPad.regionAssignedVars(lambda.bodyExprs, lambdaLocalVars));
+			capturedVars
+				.addAll(WasmLandingPad.regionAssignedVars(lambda.bodyExprs, lambdaLocalVars, lambdaCtx.regionMemo));
 			lambdaCtx.boxedVars = capturedVars;
 			// Box captured params of this lambda
 			for (String paramName : lambda.paramNames) {
@@ -9741,6 +9743,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		final FreeVarAnalyzer.CaptureMemo captureMemo;
 
 		/**
+		 * {@link WasmLandingPad#regionAssignedVars}' answers so far, shared across every
+		 * context of one compilation for the same reason as {@link #captureMemo}.
+		 */
+		final WasmLandingPad.RegionMemo regionMemo;
+
+		/**
 		 * Names of top-level global variables; each has a wasm global in
 		 * {@link #globalIndices}.
 		 */
@@ -10081,6 +10089,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.structAccessors = builder.structAccessors;
 			this.closRegistry = builder.closRegistry != null ? builder.closRegistry : new ClosRegistry();
 			this.captureMemo = builder.captureMemo;
+			this.regionMemo = builder.regionMemo;
 			this.globals = builder.globals;
 			this.nestedDefunNames = builder.nestedDefunNames;
 			this.specialVars = builder.specialVars;
@@ -10249,6 +10258,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private @Nullable ClosRegistry closRegistry;
 
 			private FreeVarAnalyzer.CaptureMemo captureMemo = new FreeVarAnalyzer.CaptureMemo();
+
+			private WasmLandingPad.RegionMemo regionMemo = new WasmLandingPad.RegionMemo();
 
 			private Set<String> globals = Set.of();
 
@@ -10627,6 +10638,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder captureMemo(FreeVarAnalyzer.CaptureMemo captureMemo) {
 				this.captureMemo = captureMemo;
+				return this;
+			}
+
+			Builder regionMemo(WasmLandingPad.RegionMemo regionMemo) {
+				this.regionMemo = regionMemo;
 				return this;
 			}
 
