@@ -65,7 +65,8 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   `NativeToolchain` is reachable. `-Pweb` never reaches `cli`.
 - **Tests**: `NativeExecutableTest` (layout, marker scan, write), `NativeToolchainTest`,
   `RontoLispCliTest.nativeRefuses...`, and `NativeOutputE2eTest` (a ci-spec slice + argv,
-  and a trap's exit status, diffed against `wasmtime run --dir . --dir /tmp`), which skips
+  and a trap's exit status, diffed against `wasmtime run --dir . --dir /tmp`; and a `../`
+  read from a subdirectory, which wasmtime refuses), which skips
   without wasmtime on `PATH` or without the host's resources.
 
 ## Traps

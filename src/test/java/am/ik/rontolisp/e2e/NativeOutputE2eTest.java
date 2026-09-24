@@ -75,6 +75,20 @@ class NativeOutputE2eTest {
 	}
 
 	@Test
+	void aRelativePathClimbsAboveTheDirectoryItRunsIn() throws Exception {
+		// Where `wasmtime run --dir .` refuses `../x`, the runner answers as a native
+		// program does; there is no wasmtime run to diff against here. The program runs
+		// in native/run, so ../up.txt is native/up.txt.
+		Files.writeString(Files.createDirectories(this.tempDir.resolve("native")).resolve("up.txt"), "from above\n");
+		Run run = nativeOutput("""
+				(with-open-file (in "../up.txt") (print (read-line in)))
+				(print (probe-file "../missing.txt"))
+				""");
+		assertThat(run.exit()).as("stderr: %s", run.stderr()).isZero();
+		assertThat(run.stdout()).isEqualTo("\"from above\"\nNIL\n");
+	}
+
+	@Test
 	void onlyTheExecutableIsWritten() throws Exception {
 		Path out = Files.createDirectories(this.tempDir.resolve("only"));
 		Path src = this.tempDir.resolve("hello.lisp");
