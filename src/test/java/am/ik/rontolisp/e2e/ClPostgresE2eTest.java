@@ -12,6 +12,8 @@ import java.util.concurrent.TimeUnit;
 import am.ik.rontolisp.testsupport.WasmtimeSupport;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.testcontainers.containers.Container.ExecResult;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
@@ -91,8 +93,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code :start} / {@code :end} keywords filled in and that shape fell out of the
  * component socket rewrite onto the NATIVE built-in. All four run now; see
  * {@code .kb/tcp-sockets.md}.
+ *
+ * <p>
+ * The legs run CONCURRENTLY: each owns its {@code @TempDir}, its table (per backend) and
+ * its module path in the wasmtime container (named after that directory). The one thing
+ * they share is the quicklisp cache, and a cold one is filled by up to thirteen CLI
+ * processes at once -- safe because {@code DistClient} installs a release by atomic
+ * rename ({@code .kb/dists.md}).
  */
 @Testcontainers(disabledWithoutDocker = true)
+@Execution(ExecutionMode.CONCURRENT)
 class ClPostgresE2eTest {
 
 	/** The database the probes connect to (the image's default). */

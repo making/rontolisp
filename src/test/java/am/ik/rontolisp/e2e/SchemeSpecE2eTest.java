@@ -12,6 +12,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
 import java.util.stream.Stream;
 
 import am.ik.rontolisp.LispVal;
@@ -32,6 +34,10 @@ import org.junit.jupiter.api.DynamicNode;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.TestFactory;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 import org.testcontainers.images.builder.Transferable;
 import tools.jackson.dataformat.yaml.YAMLMapper;
 
@@ -54,7 +60,16 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * same front end the CLI runs ({@code SourceLanguage.SCHEME}, {@code JvmSourceCompiler},
  * {@code CompileFrontendAccess}), in process, so it is part of {@code ./mvnw test}. The
  * two wasm legs need a {@code wasmtime} on {@code PATH} and are skipped without one.
+ *
+ * <p>
+ * The factories and their legs run CONCURRENTLY: every staged file is named after its
+ * case, standard and leg under {@link #workDir}, and each in-process interpreter gets
+ * streams of its own. The exception is {@link #runOnJvm}, which runs the compiled
+ * program's {@code main} in THIS process and so swaps {@code System.out} /
+ * {@code System.in}: the two factories that reach it hold the {@code SYSTEM_OUT} lock
+ * (JUnit names no {@code System.in} resource; nothing else here touches either).
  */
+@Execution(ExecutionMode.CONCURRENT)
 class SchemeSpecE2eTest {
 
 	private static final String SPEC_RESOURCE = "/scheme-spec.yaml";
@@ -144,15 +159,24 @@ class SchemeSpecE2eTest {
 	static Path workDir;
 
 	@TestFactory
+	@ResourceLock(Resources.SYSTEM_OUT)
 	Stream<DynamicNode> e2e() throws Exception {
 		Spec spec = loadSpec();
 		String program = spec.program();
 		String stdin = spec.stdin();
+		// The four corpus runs are the bulk of this class and share nothing but the
+		// read-only program -- the corpus's file cases pick a random /tmp prefix per run
+		// -- so they run at once; the slices are built once all four have answered.
+		boolean wasm = HostWasmtime.isAvailable();
+		Callable<String> interpreter = started(() -> interpret(program, stdin));
+		Callable<String> jvm = started(() -> runOnJvm(program, stdin));
+		Callable<String> wasmPreview1 = wasm ? started(() -> runOnWasm(program, stdin, false)) : null;
+		Callable<String> wasmComponent = wasm ? started(() -> runOnWasm(program, stdin, true)) : null;
 		List<DynamicNode> backends = new ArrayList<>();
-		backends.add(backend("INTERPRETER", spec, () -> interpret(program, stdin)));
-		backends.add(backend("JVM", spec, () -> runOnJvm(program, stdin)));
-		backends.add(wasmBackend("WASM", spec, stdin, false));
-		backends.add(wasmBackend("WASM_COMPONENT", spec, stdin, true));
+		backends.add(backend("INTERPRETER", spec, interpreter));
+		backends.add(backend("JVM", spec, jvm));
+		backends.add(wasmBackend("WASM", spec, wasmPreview1));
+		backends.add(wasmBackend("WASM_COMPONENT", spec, wasmComponent));
 		return backends.stream();
 	}
 
@@ -395,6 +419,7 @@ class SchemeSpecE2eTest {
 	 * corpus ships).
 	 */
 	@TestFactory
+	@ResourceLock(Resources.SYSTEM_OUT)
 	Stream<DynamicNode> driverLoopReadsThreeExpressionsFromStdinOnEveryBackend() {
 		String program = """
 				;; A read-eval-print loop over stdin, the shape the book's chapter 4
@@ -467,12 +492,33 @@ class SchemeSpecE2eTest {
 		return legs.stream();
 	}
 
-	private static DynamicContainer wasmBackend(String leg, Spec spec, String stdin, boolean component) {
-		if (!HostWasmtime.isAvailable()) {
+	// run is null when there is no wasmtime to run it on.
+	private static DynamicContainer wasmBackend(String leg, Spec spec, @Nullable Callable<String> run) {
+		if (run == null) {
 			return dynamicContainer(leg,
 					Stream.of(dynamicTest("(skipped)", () -> abort("no usable wasmtime on PATH"))));
 		}
-		return backend(leg, spec, () -> runOnWasm(spec.program(), stdin, component));
+		return backend(leg, spec, run);
+	}
+
+	// Starts run on a thread of its own and answers its result, rethrowing what it threw.
+	private static Callable<String> started(Callable<String> run) {
+		FutureTask<String> task = new FutureTask<>(run);
+		Thread.ofPlatform().name("scheme-spec-corpus").start(task);
+		return () -> {
+			try {
+				return task.get();
+			}
+			catch (ExecutionException ex) {
+				if (ex.getCause() instanceof Exception cause) {
+					throw cause;
+				}
+				if (ex.getCause() instanceof Error cause) {
+					throw cause;
+				}
+				throw ex;
+			}
+		};
 	}
 
 	private static DynamicContainer backend(String leg, Spec spec, Callable<String> run) {
