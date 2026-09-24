@@ -6,7 +6,6 @@ import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -76,18 +75,14 @@ public final class WasmWriter {
 	public WasmWriter writeSignedLeb128(int i) {
 		// https://en.wikipedia.org/wiki/LEB128#Encode_signed_32-bit_integer
 		int value = i;
-		value |= 0;
-		final List<Byte> result = new ArrayList<>();
 		while (true) {
 			final int b = value & 0x7f;
 			value >>= 7;
 			if ((value == 0 && (b & 0x40) == 0) || (value == -1 && (b & 0x40) != 0)) {
-				result.add((byte) b);
-				break;
+				return this.write(b);
 			}
-			result.add((byte) (b | 0x80));
+			this.write(b | 0x80);
 		}
-		return this.write(result);
 	}
 
 	/**
@@ -98,17 +93,14 @@ public final class WasmWriter {
 	 */
 	public WasmWriter writeSignedLeb128(long i) {
 		long value = i;
-		final List<Byte> result = new ArrayList<>();
 		while (true) {
 			final int b = (int) (value & 0x7f);
 			value >>= 7;
 			if ((value == 0 && (b & 0x40) == 0) || (value == -1 && (b & 0x40) != 0)) {
-				result.add((byte) b);
-				break;
+				return this.write(b);
 			}
-			result.add((byte) (b | 0x80));
+			this.write(b | 0x80);
 		}
-		return this.write(result);
 	}
 
 	/**
@@ -120,17 +112,16 @@ public final class WasmWriter {
 	 */
 	public WasmWriter writeUnsignedLeb128(int i) {
 		int value = i;
-		final List<Byte> result = new ArrayList<>();
 		do {
 			int b = value & 0x7f;
 			value >>>= 7;
 			if (value != 0) {
 				b |= 0x80;
 			}
-			result.add((byte) b);
+			this.write(b);
 		}
 		while (value != 0);
-		return this.write(result);
+		return this;
 	}
 
 	/**
@@ -194,6 +185,47 @@ public final class WasmWriter {
 		}
 		// Concrete type index
 		return this.writeSignedLeb128(heapType);
+	}
+
+	/**
+	 * Write one byte: the low eight bits of {@code b}. The common case of
+	 * {@link #write(Object...)} without its array and its type dispatch -- an emitter
+	 * writes most of a module one opcode or LEB byte at a time.
+	 * @param b the byte to write
+	 * @return this instance for chaining
+	 */
+	public WasmWriter write(int b) {
+		try {
+			this.out.write(b);
+		}
+		catch (IOException e) {
+			throw new UncheckedIOException(e);
+		}
+		return this;
+	}
+
+	/**
+	 * Write the bytes of {@code bytes}, as {@link #write(Object...)} does for one array.
+	 * @param bytes the bytes to write
+	 * @return this instance for chaining
+	 */
+	public WasmWriter write(byte[] bytes) {
+		try {
+			this.out.write(bytes);
+		}
+		catch (IOException e) {
+			throw new UncheckedIOException(e);
+		}
+		return this;
+	}
+
+	/**
+	 * Write the code of {@code codable}, as {@link #write(Object...)} does for one.
+	 * @param codable the value whose code to write
+	 * @return this instance for chaining
+	 */
+	public WasmWriter write(Codable codable) {
+		return this.write(codable.code());
 	}
 
 	/**
