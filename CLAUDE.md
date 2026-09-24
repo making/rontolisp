@@ -18,6 +18,13 @@ a dependency the core libraries may not have. `./mvnw test` does not build eithe
 build needs `./mvnw install -DskipTests` first, and its own `install` is what
 `MavenBuildE2eTest` (`-Drontolisp.plugin.e2e=true`) needs.
 
+A third, `rontolisp-native/`, is a Cargo workspace (rustc >= 1.96): the wasmtime
+precompile shim and the runner stub a native executable is made of (`.kb/native-output.md`).
+
+```bash
+rontolisp-native/build.sh --test   # host shim + stub into its target/resources, then the Rust tests
+```
+
 Three documentation layers, no duplication between them:
 
 - `doc/en/**` + `doc/ja/**` -- user-facing behavior and examples (rendered by `docs-tool/`,

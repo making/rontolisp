@@ -2,7 +2,8 @@
 
 Measured 2026-09-24 on macOS 26 / arm64 (Darwin 25.3), Java 25.0.3, Oracle GraalVM
 25.0.3, wasmtime CLI 47.0.3. Nothing here is wired into the build; each directory is
-a standalone reproduction.
+a standalone reproduction. `precomp/` and `runner/` are superseded by the maintained
+workspace `rontolisp-native/` (`.kb/native-output.md`), whose trailer adds an 8-byte magic.
 
 ## Layout
 

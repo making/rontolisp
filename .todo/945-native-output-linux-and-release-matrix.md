@@ -2,7 +2,9 @@
 
 Difficulty: Medium
 
-Depends on .todo/942 and .todo/943. Only macOS arm64 was measured.
+Depends on .todo/942 and .todo/943. `rontolisp-native/build.sh` builds for the host and
+ran on macOS arm64 (spike) and Linux x86_64 (2026-09-24: shim 10.0 MB, stub 2.0 MB,
+glibc-dynamic -- `.kb/native-output.md`).
 
 ## What is needed
 

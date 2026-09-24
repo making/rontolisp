@@ -1,0 +1,19 @@
+[package]
+name = "rlprecomp"
+description = "C ABI: .wasm bytes in, wasmtime-precompiled (Cranelift) module bytes out"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rlabi.workspace = true
+wasmtime = { workspace = true, features = ["cranelift", "parallel-compilation"] }
+
+[[bin]]
+name = "rlpack"
+path = "src/bin/rlpack.rs"

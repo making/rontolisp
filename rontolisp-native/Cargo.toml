@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["abi", "precomp", "runner"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# wasmtime 47's MSRV; an older toolchain resolves at most wasmtime 45, whose copying
+# collector cannot satisfy the wasm-GC backend's 16 MiB heap pregrow.
+rust-version = "1.96"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+# Pinned EXACTLY: a module precompiled by one wasmtime version is refused by every other.
+wasmtime = { version = "=47.0.3", default-features = false, features = ["runtime", "std", "gc", "gc-copying"] }
+wasmtime-wasi = { version = "=47.0.3", default-features = false, features = ["p1"] }
+rlabi = { path = "abi" }
+
+# The precompile shim is loaded into the JVM: a panic must unwind to its catch_unwind
+# and come back as an error code, never abort the host process.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+# The runner stub has no host to protect; abort keeps it small.
+[profile.release-runner]
+inherits = "release"
+panic = "abort"
+
+# Tests precompile in-process: an unoptimized Cranelift would dominate their run time.
+[profile.dev.package."*"]
+opt-level = 3

@@ -60,8 +60,9 @@ class PathCitationTest {
 	 * naive check produces is entirely paths that LOOK repository-rooted and are not.
 	 */
 	private static final List<String> CHECKED_PREFIXES = List.of(".kb/", ".todo/", "doc/", "examples/", "docs-tool/",
-			"bench-report/", "size-report/", "rontolisp-maven-plugin/", "src/main/java/", "src/main/resources/",
-			"src/test/java/", "src/test/resources/", "src/web/java/", "src/native/java/", "src/wasm-component/");
+			"bench-report/", "size-report/", "rontolisp-maven-plugin/", "rontolisp-native/", "src/main/java/",
+			"src/main/resources/", "src/test/java/", "src/test/resources/", "src/web/java/", "src/native/java/",
+			"src/wasm-component/");
 
 	/**
 	 * Paths this tree does not have and names on purpose: a record whose subject is a

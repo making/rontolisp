@@ -1,0 +1,11 @@
+[package]
+name = "rlabi"
+description = "What the precompile shim and the runner stub must agree on: the wasmtime Config, the fingerprint, the payload layout"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+wasmtime.workspace = true
