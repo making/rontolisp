@@ -45,7 +45,7 @@ final class WasmCharIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildReadSeqCharsBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: SEQ=0, STREAM=1, START=2, END=3 (ref) ; i32 locals: FD=4, LEN=5, S=6,
 		// E=7, I=8, BUF=9, SAVED_HP=10, WANT=11, GOT=12, P=13, B0=14, NEEDED=15, B1=16,
@@ -339,7 +339,7 @@ final class WasmCharIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildStub() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0);
 		w.write(Instruction.REF_NULL);

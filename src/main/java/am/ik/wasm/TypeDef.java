@@ -1,6 +1,5 @@
 package am.ik.wasm;
 
-import java.io.ByteArrayOutputStream;
 import java.util.function.Consumer;
 
 /**

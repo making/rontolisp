@@ -110,7 +110,7 @@ final class WasmReadRuntimeBuilder {
 			nameRefs[i][1] = name.length();
 			nameRefs[i][2] = (Integer) CHAR_NAMES[i][1];
 		}
-		ByteArrayOutputStream names = new ByteArrayOutputStream();
+		ByteArrayOutputStream names = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		for (int[] ref : nameRefs) {
 			writeI32(names, ref[0]);
 			writeI32(names, ref[1]);
@@ -137,7 +137,7 @@ final class WasmReadRuntimeBuilder {
 			structDirCount = layouts.size();
 			int headerSize = 4 + 28 * layouts.size();
 			List<int[]> entries = new ArrayList<>();
-			ByteArrayOutputStream inits = new ByteArrayOutputStream();
+			ByteArrayOutputStream inits = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 			for (LispLayout layout : layouts) {
 				boolean isStruct = layout.kind() == LispLayout.Kind.STRUCT;
 				String prefix = isStruct ? LispLayout.STRUCT_TAG_PREFIX : LispLayout.CLASS_TAG_PREFIX;
@@ -175,7 +175,7 @@ final class WasmReadRuntimeBuilder {
 				entries.add(new int[] { layoutAddr, pkgOff, utf8Len(pkg), memberOff, utf8Len(member), isStruct ? 0 : 1,
 						initsRel });
 			}
-			ByteArrayOutputStream dir = new ByteArrayOutputStream();
+			ByteArrayOutputStream dir = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 			writeI32(dir, structDirCount);
 			for (int[] entry : entries) {
 				for (int v : entry) {
@@ -514,7 +514,7 @@ final class WasmReadRuntimeBuilder {
 
 	/** {@code _intern} stub: {@code (i32, i32) -> i32}, returns its offset argument. */
 	static byte[] buildInternStub() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0);
 		getLocal(w, 0);
@@ -539,7 +539,7 @@ final class WasmReadRuntimeBuilder {
 	}
 
 	private static byte[] refNullStub() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0);
 		emitNull(w);
@@ -563,7 +563,7 @@ final class WasmReadRuntimeBuilder {
 	 * byte-identical.
 	 */
 	static byte[] buildInternBody(int internBase, int internCount, boolean recordHighWater) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: off=0, len=1 ; locals: IDX=2, EOFF=3, ELEN=4, K=5, COUNT=6, POOL=7,
 		// CK=8
@@ -759,7 +759,7 @@ final class WasmReadRuntimeBuilder {
 	// === _read_expr() -> value ===
 
 	static byte[] buildReadExprBody(ReadCtx ctx) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// ref locals: CAR=0, CDR=1 ; i32 locals: BYTE=2, START=3, LEN=4, OFF=5, POS=6,
 		// ESC=7, HP=8, NEG=9, ACC=10, VALID=11, SAWDOT=12, C2=13, SAWE=14, EXPVAL=15,
@@ -1858,7 +1858,7 @@ final class WasmReadRuntimeBuilder {
 	// === _read_list() -> value ===
 
 	static byte[] buildReadListBody(ReadCtx ctx) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// ref locals: CAR=0, CDR=1 ; i32 locals: ISDOT=2, CH2=3
 		w.write(2);
@@ -2198,7 +2198,7 @@ final class WasmReadRuntimeBuilder {
 	 * {@code t}; on a failed open returns nil.
 	 */
 	static byte[] buildLoadBody(ReadCtx ctx) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: PATH=0 (ref) ; i32 locals: OFF=1, PLEN=2, FD=3, BUF=4, TOTAL=5, NREAD=6
 		w.write(1);
@@ -2352,7 +2352,7 @@ final class WasmReadRuntimeBuilder {
 
 	/** {@code ... -> i32} stub for an unused reader helper. */
 	static byte[] buildRdI32Stub() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0);
 		i32(w, 0);
@@ -2364,7 +2364,7 @@ final class WasmReadRuntimeBuilder {
 	// a-z bytes in place (uppercase-canonical), and returns the start offset; the end is
 	// the cursor.
 	static byte[] buildRdTokenBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(1);
 		w.write(2);
@@ -2415,7 +2415,7 @@ final class WasmReadRuntimeBuilder {
 
 	// _rd_memeq (a, b, len) -> i32: byte-range equality.
 	static byte[] buildRdMemeqBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(1);
 		w.write(1);
@@ -2459,7 +2459,7 @@ final class WasmReadRuntimeBuilder {
 	// scan; a token of exactly one character is that character verbatim; a longer token
 	// resolves through the case-insensitive name table.
 	static byte[] buildRdCharlitBody(ReadCtx ctx) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(1);
 		w.write(8);
@@ -2708,7 +2708,7 @@ final class WasmReadRuntimeBuilder {
 	// (so #xEFCDAB89 reads as the boxed integer and a 256-bit constant as a limb
 	// integer, not a wraparound).
 	static byte[] buildRdRadixBody(ReadCtx ctx) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(2);
 		w.write(4);
@@ -2861,7 +2861,7 @@ final class WasmReadRuntimeBuilder {
 	// runtime array shape (the frontend's bit-vector lowering -- no packed bits),
 	// stamped with the remembered element type bit.
 	static byte[] buildRdBitsBody(ReadCtx ctx) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(2);
 		w.write(2);
@@ -2975,7 +2975,7 @@ final class WasmReadRuntimeBuilder {
 
 	// _rd_len (v) -> i32: proper-list length; an improper tail signals.
 	static byte[] buildRdLenBody(ReadCtx ctx) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(2);
 		w.write(1);
@@ -3017,7 +3017,7 @@ final class WasmReadRuntimeBuilder {
 	// _rd_level (v) -> value: one nested level of array contents -- nil or a cons;
 	// anything else is the "expected a nested list" error.
 	static byte[] buildRdLevelBody(ReadCtx ctx) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0);
 		final int V = 0;
@@ -3041,7 +3041,7 @@ final class WasmReadRuntimeBuilder {
 	// _rd_dims (rows, rank) -> dims buckets: the dimension sizes from the first-element
 	// chain, as the i31 buckets array every array header stores.
 	static byte[] buildRdDimsBody(ReadCtx ctx) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(2);
 		w.write(2);
@@ -3102,7 +3102,7 @@ final class WasmReadRuntimeBuilder {
 	// _rd_flat (items, depth, dims, out, idx) -> idx: validates one level against dims
 	// and stores the leaves into `out` in row-major order, recursing into nested levels.
 	static byte[] buildRdFlatBody(ReadCtx ctx) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(2);
 		w.write(1);
@@ -3196,7 +3196,7 @@ final class WasmReadRuntimeBuilder {
 	// _rd_infer_rank (rows) -> i32: 1 + the depth of the first-element chain (numpy
 	// style), mirroring the frontend's inferFloatArrayRank.
 	static byte[] buildRdInferBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(2);
 		w.write(1);
@@ -3251,7 +3251,7 @@ final class WasmReadRuntimeBuilder {
 	// contents as a list, computes/validates dims like the frontend, and builds the
 	// general runtime array. #( is rank 1.
 	static byte[] buildRdArrayNBody(ReadCtx ctx) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(2);
 		w.write(3);
@@ -3323,7 +3323,7 @@ final class WasmReadRuntimeBuilder {
 	// packed TYPE_FARRAY -- an F64ARR/F32ARR data array, or a _v_new'd TYPE_VBLOCK
 	// under --simd.
 	static byte[] buildRdPackedBody(ReadCtx ctx) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(2);
 		w.write(5);
@@ -3769,7 +3769,7 @@ final class WasmReadRuntimeBuilder {
 	// A first unknown slot is recorded, not signalled: a later :allow-other-keys may
 	// license it, keeping the single pass order-independent.
 	static byte[] buildRdStructBody(ReadCtx ctx) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		if (ctx.instanceTypeIndex() < 0) {
 			// no instance can exist, so no defstruct exists: any #S(...) is the

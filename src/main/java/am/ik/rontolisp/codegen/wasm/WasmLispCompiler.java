@@ -4109,14 +4109,14 @@ public final class WasmLispCompiler implements LispCompiler {
 			if (this.asyncMode && asyncDefunNames.contains(defun.name)) {
 				// entry + resume state machine (WasmAsyncEmit): the resume registers
 				// itself in the lambda table; the entry is the defun's own function.
-				ByteArrayOutputStream protoBuf = new ByteArrayOutputStream();
+				ByteArrayOutputStream protoBuf = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 				Ctx protoCtx = ctxBuilder.writer(new WasmWriter(protoBuf)).bodyStream(protoBuf).build();
 				WasmAsyncEmit.Resume resume = WasmAsyncEmit.compileResume(protoCtx, defun.paramNames, defun.bodyExprs,
 						List.of(), false, false);
 				userFunctionBodies.add(WasmAsyncEmit.buildEntryBody(protoCtx, defun.paramNames.size(), false, resume));
 				continue;
 			}
-			ByteArrayOutputStream funcBody = new ByteArrayOutputStream();
+			ByteArrayOutputStream funcBody = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 			WasmWriter funcWriter = new WasmWriter(funcBody);
 			Ctx funcCtx = ctxBuilder.writer(funcWriter).bodyStream(funcBody).build();
 
@@ -4180,7 +4180,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		ctxBuilder.charvecPossible(this.charvecPossible);
 
 		// Pass 2b: Build _start function body
-		ByteArrayOutputStream startBody = new ByteArrayOutputStream();
+		ByteArrayOutputStream startBody = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter startWriter = new WasmWriter(startBody);
 		Ctx ctx = ctxBuilder.writer(startWriter).bodyStream(startBody).build();
 		ctx.topLevel = true;
@@ -4317,7 +4317,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						+ MAX_CALLABLE_ARITY + " parameters, got " + lambda.paramNames().size()
 						+ " (bundle the extra arguments into a list)");
 			}
-			ByteArrayOutputStream lambdaBody = new ByteArrayOutputStream();
+			ByteArrayOutputStream lambdaBody = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 			WasmWriter lambdaWriter = new WasmWriter(lambdaBody);
 			// A lambda an injected wrapper body built is injected runtime too (see
 			// Ctx.injectedRuntimeLambdas); a nested one inherits it through this ctx.
@@ -4734,7 +4734,7 @@ public final class WasmLispCompiler implements LispCompiler {
 							+ "': declared " + decl.paramTypes().size() + " params, but the function takes "
 							+ target.paramCount());
 				}
-				ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
+				ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 				WasmWriter bodyWriter = new WasmWriter(bodyStream);
 				Ctx wrapperCtx = ctxBuilder.writer(bodyWriter).bodyStream(bodyStream).build();
 				int paramSlots = WasmExportCompiler.paramSlotCount(decl);
@@ -4750,7 +4750,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// the
 				// declaration order matches the slot order), then the (ref null eq)
 				// temps.
-				ByteArrayOutputStream finalBody = new ByteArrayOutputStream();
+				ByteArrayOutputStream finalBody = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 				WasmWriter finalWriter = new WasmWriter(finalBody);
 				int extraLocals = wrapperCtx.nextLocal - paramSlots - scratch.size();
 				finalWriter.writeUnsignedLeb128(scratch.size() + (extraLocals > 0 ? 1 : 0));
@@ -5060,7 +5060,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			else {
 				// Unused arity: unreachable body
-				ByteArrayOutputStream db = new ByteArrayOutputStream();
+				ByteArrayOutputStream db = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 				WasmWriter dw = new WasmWriter(db);
 				dw.write(0); // 0 locals
 				dw.write(Instruction.UNREACHABLE);
@@ -5085,7 +5085,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 		else {
-			ByteArrayOutputStream db = new ByteArrayOutputStream();
+			ByteArrayOutputStream db = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 			WasmWriter dw = new WasmWriter(db);
 			dw.write(0);
 			dw.write(Instruction.UNREACHABLE);
@@ -5112,7 +5112,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			}
 			else {
-				ByteArrayOutputStream db = new ByteArrayOutputStream();
+				ByteArrayOutputStream db = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 				WasmWriter dw = new WasmWriter(db);
 				dw.write(0);
 				dw.write(Instruction.UNREACHABLE);
@@ -5172,7 +5172,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// emitting it unconditionally would make two programs with identical CODE
 		// differ in bytes (the wit-import byte-identity pins).
 		if (registryLive) {
-			ByteArrayOutputStream registry = new ByteArrayOutputStream();
+			ByteArrayOutputStream registry = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 			int registryCount = 0;
 			for (int i = 0; i < defuns.size(); i++) {
 				DefunDecl defun = defuns.get(i);
@@ -5254,7 +5254,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// would charge a quoted u16/u8 vector's next element for the pad it shifts,
 		// breaking the per-element cost pin
 		// (WasmLispCompilerTest#aLiteralLookupTableCostsItsOwnBytesAndNotThreeTimesThem).
-		ByteArrayOutputStream funNameRows = new ByteArrayOutputStream();
+		ByteArrayOutputStream funNameRows = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		Set<Integer> funNameIds = runtimeFunctionBox ? dispatchableFuncIds : valueFuncIds;
 		for (int i = 0; i < defuns.size(); i++) {
 			if (!funNameIds.contains(i)) {
@@ -5521,7 +5521,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		int rtInternBase = Math.max(RT_INTERN_MIN_BASE, (litStageEnd + 15) & ~15);
 		int heapBase = rtInternBase + RT_INTERN_REGION_SIZE;
 
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter mainWriter = new WasmWriter(out);
 		mainWriter //
 			.write("\0asm")
@@ -8790,7 +8790,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @return the little-endian blob
 	 */
 	private static byte[] buildInternBlob(java.util.Collection<StringTable.StringEntry> entries) {
-		ByteArrayOutputStream blob = new ByteArrayOutputStream();
+		ByteArrayOutputStream blob = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		for (StringTable.StringEntry e : entries) {
 			writeLittleEndian32(blob, e.offset());
 			writeLittleEndian32(blob, e.length());
@@ -9044,7 +9044,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		byte[] body = funcBody.toByteArray();
 		int extraEq = ctx.nextLocal - predeclaredSlots;
 		int numI64 = ctx.maxI64Locals;
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter writer = new WasmWriter(out);
 		writer.write((extraEq > 0 ? 1 : 0) + (numI64 > 0 ? 1 : 0));
 		if (extraEq > 0) {
@@ -10926,7 +10926,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final class StringTable {
 
-		private final ByteArrayOutputStream data = new ByteArrayOutputStream();
+		private final ByteArrayOutputStream data = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 
 		private final Map<String, StringEntry> cache = new HashMap<>();
 

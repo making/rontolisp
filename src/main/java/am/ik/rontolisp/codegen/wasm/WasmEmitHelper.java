@@ -552,7 +552,7 @@ final class WasmEmitHelper {
 	 * @return the function body (signature {@code (eqref) -> f64}, TYPE_BIG_TO_F64)
 	 */
 	static byte[] buildAsF64Body() {
-		java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
+		java.io.ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // no extra locals: the parameter IS the slot the ladder reads
 		emitAsF64FromLocal(w, 0);
@@ -585,7 +585,7 @@ final class WasmEmitHelper {
 	 */
 	static byte[] buildTypeErrBody(boolean ehMode,
 			WasmLispCompiler.StringTable.@org.jspecify.annotations.Nullable StringEntry prefix, boolean identityHash) {
-		java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
+		java.io.ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // no extra locals
 		if (!ehMode || prefix == null) {
@@ -636,7 +636,7 @@ final class WasmEmitHelper {
 	 * @return the encoded body bytes
 	 */
 	static byte[] buildNilBody() {
-		java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
+		java.io.ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // no locals
 		w.write(Instruction.REF_NULL);

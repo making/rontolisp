@@ -57,7 +57,7 @@ final class WasmEqualpKeyRuntimeBuilder {
 	 * @return the stub body
 	 */
 	static byte[] buildStub() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // no locals
 		getLocal(w, 0);
@@ -72,7 +72,7 @@ final class WasmEqualpKeyRuntimeBuilder {
 	 * @return the function body
 	 */
 	static byte[] build(int depthGlobalIndex, int gasGlobalIndex, boolean charvecPossible, boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// locals: 1 = the float's bit pattern, 2 = its mantissa (both i64); 3 = its

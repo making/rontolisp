@@ -97,7 +97,7 @@ final class WasmStringRuntimeBuilder {
 	 * @return the function body
 	 */
 	static byte[] buildLitStageBody(int stageBase) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: src = 0, len = 1, delta = 2. locals: dst = 3 (i32).
 		w.write(1); // 1 local group
@@ -122,7 +122,7 @@ final class WasmStringRuntimeBuilder {
 	}
 
 	static byte[] buildStrBuildBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: off = 0, len = 1. locals: arr = 2 (ref null $str_bytes), i = 3 (i32).
 		w.write(2); // 2 local groups
@@ -186,7 +186,7 @@ final class WasmStringRuntimeBuilder {
 	 * TYPE_RAT_NEW)
 	 */
 	static byte[] buildStrFreshBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: off = 0, len = 1. locals: arr = 2 ($str_bytes), i = 3, id = 4 (i32).
 		w.write(2);
@@ -255,7 +255,7 @@ final class WasmStringRuntimeBuilder {
 	 * TYPE_STR_TO_MEM)
 	 */
 	static byte[] buildStrToMemBody(boolean charvecPossible) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: str = 0 (ref null eq), ptr = 1. locals: arr = 2 ($str_bytes), len = 3,
 		// i = 4 (i32).
@@ -342,7 +342,7 @@ final class WasmStringRuntimeBuilder {
 	 * TYPE_WRITE_STR_GC)
 	 */
 	static byte[] buildWriteStrGcBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: str = 0, from = 1, to = 2, esc = 3. locals: arr = 4 ($str_bytes),
 		// dst = 5, i = 6, n = 7, b = 8 (i32). `n` is the worst-case byte count while
@@ -492,7 +492,7 @@ final class WasmStringRuntimeBuilder {
 	 * @return the function body (signature reuses TYPE_WRITE_STR_GC)
 	 */
 	static byte[] buildSymEscGcBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: str = 0, from = 1, to = 2, unused = 3. locals: arr = 4 ($str_bytes,
 		// ref), dst = 5, i = 6, n = 7, b = 8, needsPipes = 9, prefixEnd = 10, idx = 11,
@@ -822,7 +822,7 @@ final class WasmStringRuntimeBuilder {
 	 * @return the function body (signature {@code ((ref null eq))->i32}, TYPE_RAT_GET)
 	 */
 	static byte[] buildCharvecPBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: v = 0. locals: header = 1, meta = 2 (ref null eq).
 		w.write(1);
@@ -957,7 +957,7 @@ final class WasmStringRuntimeBuilder {
 	 * TYPE_CALLABLE_BASE + 0)
 	 */
 	static byte[] buildCharvecToStrBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: v = 0. locals: header = 1, meta = 2, data = 3 (ref null eq);
 		// n = 4, start = 5, i = 6, cur = 7, code = 8 (i32).
@@ -1145,7 +1145,7 @@ final class WasmStringRuntimeBuilder {
 	 * null eq)}, the two-string concatenation type)
 	 */
 	static byte[] buildStringConcatBody(boolean charvecPossible) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: a = 0, b = 1. locals: lenA = 2, lenB = 3, total = 4, start = 5,
 		// cur = 6, i = 7 (i32); arrA = 8, arrB = 9 (ref $str_bytes).
@@ -1400,7 +1400,7 @@ final class WasmStringRuntimeBuilder {
 	 * @return the function body (signature {@code ((ref null eq)) -> i32}, TYPE_RAT_GET)
 	 */
 	static byte[] buildStrCharCountBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: str = 0. locals: s = 1 (TYPE_STRING), arr = 2 ($str_bytes); len = 3,
 		// pos = 4, count = 5, b = 6, step = 7 (i32).
@@ -1510,7 +1510,7 @@ final class WasmStringRuntimeBuilder {
 	 * TYPE_STR_TO_MEM)
 	 */
 	static byte[] buildStrCharByteOffsetBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: str = 0, i = 1. locals: s = 2 (TYPE_STRING), arr = 3 ($str_bytes);
 		// len = 4, pos = 5, remaining = 6, b = 7, step = 8, ci = 9, cb = 10 (i32).
@@ -1703,7 +1703,7 @@ final class WasmStringRuntimeBuilder {
 	 * TYPE_STR_TO_MEM)
 	 */
 	static byte[] buildStrCharAtBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: str = 0, i = 1. locals: arr = 2 ($str_bytes);
 		// len = 3, pos = 4, b0 = 5, b1 = 6, b2 = 7, b3 = 8 (i32).
@@ -1864,7 +1864,7 @@ final class WasmStringRuntimeBuilder {
 	 * TYPE_STR_TO_MEM)
 	 */
 	static byte[] buildStrCharRefBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: v = 0, i = 1. No locals.
 		w.write(0);
@@ -1904,7 +1904,7 @@ final class WasmStringRuntimeBuilder {
 	 * TYPE_CALLABLE_BASE + 0)
 	 */
 	static byte[] buildStrToCvBody(boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: str = 0. locals: buckets = 1 (eqref); n = 2, i = 3 (i32).
 		w.write(2);
@@ -1931,7 +1931,7 @@ final class WasmStringRuntimeBuilder {
 	 * TYPE_CALLABLE_BASE + 2)
 	 */
 	static byte[] buildSubseqStrBody(boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: seq = 0, start = 1, end = 2 (eqref).
 		// locals: st = 3, n = 4, i = 5 (i32); buckets = 6, scratch = 7 (eqref).
@@ -2042,7 +2042,7 @@ final class WasmStringRuntimeBuilder {
 	 * TYPE_CALLABLE_BASE + 0)
 	 */
 	static byte[] buildToMutStrBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: v = 0. locals: bytes = 1 (ref null $str_bytes).
 		w.write(1);
@@ -2111,7 +2111,7 @@ final class WasmStringRuntimeBuilder {
 	 * @return the function body
 	 */
 	static byte[] buildCaseConvertBody(boolean upcase) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// Locals 1..7: pos, end, start, cur, cp, step, k (i32); 8: inArr ($str_bytes).
 		// cp doubles as the scratch the designator scan needs before the loop starts.
@@ -2129,7 +2129,7 @@ final class WasmStringRuntimeBuilder {
 	 * @return the function body
 	 */
 	static byte[] buildCapitalizeBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// Locals 1..8: pos, end, start, cur, cp, step, k, atWordStart (i32); 9: inArr
 		// ($str_bytes).
@@ -2152,7 +2152,7 @@ final class WasmStringRuntimeBuilder {
 	 * @return the function body
 	 */
 	static byte[] buildSubseqBody(boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// ref locals 3..6: node, head, tail, newc.
 		// i32 locals 7..14: pos, end, start, cur, b, startIdx, endIdx, ii.
@@ -2344,7 +2344,7 @@ final class WasmStringRuntimeBuilder {
 	 */
 	static byte[] buildStringEqBody(boolean ignoreCase, WasmLispCompiler.StringTable st) {
 		WasmLispCompiler.StringTable.StringEntry t = st.addBodyString("T");
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// Locals 2..5: i, n, ca, cb (i32); 6..7: aArr, bArr ($str_bytes).
 		declareI32AndStrArrayLocals(w, 4, 2);
@@ -2410,7 +2410,7 @@ final class WasmStringRuntimeBuilder {
 	 * @return the function body
 	 */
 	static byte[] buildTrimBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// Locals 3..13: bagStart, bagEnd, lo, hi, mode, c, found, scan, start, cur, b
 		// (i32);
@@ -2527,7 +2527,7 @@ final class WasmStringRuntimeBuilder {
 	 * TYPE_CALLABLE_BASE + 0)
 	 */
 	static byte[] buildIvUtf8StrBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: v = 0. locals: arr = 1 (TYPE_I8ARR), out = 2 ($str_bytes);
 		// n = 3, i = 4, b = 5, c = 6, k = 7, lo = 8, hi = 9, id = 10 (i32).

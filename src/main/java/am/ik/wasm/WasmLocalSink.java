@@ -153,7 +153,7 @@ public final class WasmLocalSink {
 		if (!changed) {
 			return module;
 		}
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		WasmSections.writeU(body, rewritten.size());
 		for (byte[] entry : rewritten) {
 			WasmSections.writeU(body, entry.length);
@@ -594,7 +594,7 @@ public final class WasmLocalSink {
 		private int lastSetAt;
 
 		Encoder(byte[] entry, int[] newIndex) {
-			this.bytes = new ByteArrayOutputStream(entry.length);
+			this.bytes = new UnsynchronizedByteArrayOutputStream(entry.length);
 			this.entry = entry;
 			this.newIndex = newIndex;
 		}

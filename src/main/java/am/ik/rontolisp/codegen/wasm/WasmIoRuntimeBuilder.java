@@ -84,7 +84,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildPathDirFdBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: PTR=0 (i32), LEN=1 (i32) ; i32 locals: SCR=2, FD=3, NLEN=4, BFD=5,
 		// BSKIP=6, T=7, I=8
@@ -391,7 +391,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildOpenBody(boolean bidirectional) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: PATH=0 (ref), MODE=1 (i32) ; i32 locals: OFF=2, PLEN=3
 		w.write(1);
@@ -557,7 +557,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildProbeFileBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: PATH=0 (ref) ; i32 locals: OFF=1, PLEN=2
 		w.write(1);
@@ -655,7 +655,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildListDirectoryBody(boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: PATH=0 (ref) ; i32 locals 1..9, i64 local 10, ref local 11
 		final int PATH = 0, OFF = 1, PLEN = 2, FD = 3, BUF = 4, END = 5, P = 6, NAMLEN = 7, DST = 8, I = 9;
@@ -1051,7 +1051,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildFileLengthBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: STREAM=0 (ref) ; i32 locals: FD=1, OFF=2, ERR=3
 		w.write(1);
@@ -1165,7 +1165,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildFilePositionBody(FilePositionAbi abi) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: STREAM=0 (ref) ; i32 locals: FD=1, OFF=2, ERR=3, then the string arm's
 		// REC=4, P=5, N=6, END=7, BOUND=8 ; ref local: BUF=9
@@ -1284,7 +1284,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildFilePositionSetBody(FilePositionAbi abi) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: STREAM=0 (ref), POS=1 (ref) ; i32 locals: FD=2, OFF=3, ERR=4, then the
 		// string arm's REC=5, P=6, N=7, END=8, BOUND=9 ; ref local: BUF=10
@@ -1434,7 +1434,7 @@ final class WasmIoRuntimeBuilder {
 	 */
 	static byte[] buildMakeDirectoriesBody(WasmLispCompiler.StringTable st) {
 		WasmLispCompiler.StringTable.StringEntry t = st.addBodyString("T");
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: PATH=0 (ref) ; i32 locals: OFF=1, PLEN=2, DIRFD=3, BASE=4, N=5,
 		// I=6, J=7, ERR=8
@@ -1639,7 +1639,7 @@ final class WasmIoRuntimeBuilder {
 	 */
 	static byte[] buildDeleteFileBody(WasmLispCompiler.StringTable st) {
 		WasmLispCompiler.StringTable.StringEntry t = st.addBodyString("T");
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: PATH=0 (ref) ; i32 locals: OFF=1, PLEN=2
 		w.write(1);
@@ -1713,7 +1713,7 @@ final class WasmIoRuntimeBuilder {
 	 */
 	static byte[] buildRenameFileBody(WasmLispCompiler.StringTable st) {
 		WasmLispCompiler.StringTable.StringEntry t = st.addBodyString("T");
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: FROM=0 (ref), TO=1 (ref) ; i32 locals: OFF1=2, LEN1=3, OFF2=4,
 		// LEN2=5, D1=6, P1=7, N1=8, D2=9, ERR=10
@@ -1828,7 +1828,7 @@ final class WasmIoRuntimeBuilder {
 	 */
 	static byte[] buildCloseBody(WasmLispCompiler.StringTable st, int ostreamTableGlobal) {
 		WasmLispCompiler.StringTable.StringEntry t = st.addBodyString("T");
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: FD_VAL=0 (ref) ; i32 locals: FD=1, REC=2, SLOT=3
 		w.write(1);
@@ -1882,7 +1882,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildWriteLineBody(WasmLispCompiler.StringTable st, boolean charvecPossible) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: STR=0 (ref), FD_VAL=1 (ref) ; i32 locals: OFF=2, LEN=3, FD=4, REC=5
 		// (the last only for the string-stream branch); ref local NSTR=6 (the rendered
@@ -2014,7 +2014,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildReadByteBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: STREAM=0 (ref), EOF_ERROR_P=1 (ref), EOF_VALUE=2 (ref) ; i32 local:
 		// FD=3
@@ -2092,7 +2092,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildReadCharBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: STREAM=0 (ref), EOF_ERROR_P=1 (ref), EOF_VALUE=2 (ref) ; i32 locals:
 		// FD=3, REC=4, CUR=5, END=6, NEEDED=7, B0=8, B1=9, B2=10, B3=11, I=12
@@ -2348,7 +2348,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildPeekCharBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: STREAM=0 (ref), EOF_ERROR_P=1 (ref), EOF_VALUE=2 (ref) ; i32 locals:
 		// FD=3, REC=4, CUR=5, END=6, NEEDED=7, B0=8, B1=9, B2=10, B3=11 ; ref local:
@@ -2628,7 +2628,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildWriteByteBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: BYTE=0 (ref), STREAM=1 (ref) ; i32 local: FD=2
 		w.write(1);
@@ -2719,7 +2719,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildNoWasiFdWriteSinkBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: FD=0, IOVS=1, IOVS_LEN=2, NWRITTEN=3 (all i32); no locals.
 		w.write(0);
@@ -2760,7 +2760,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildNoWasiEnvironSizesGetBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: COUNT_OUT=0, BUFSIZE_OUT=1 (both i32); no locals.
 		w.write(0);
@@ -2820,7 +2820,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildNoWasiErrnoBody(int errno) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// no locals; the parameters (whatever the signature has) are ignored.
 		w.write(0);
@@ -2859,7 +2859,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildSeedRandomBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: SEED=0 (i64); no locals.
 		w.write(0);
@@ -2909,7 +2909,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildSetTimeBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: NANOS=0 (i64); no locals.
 		w.write(0);
@@ -2948,7 +2948,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildNoWasiHostRandomGetBody(int placeholderFuncIndex) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: BUF=0, LEN=1 (both i32); no locals.
 		w.write(0);
@@ -3007,7 +3007,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildNoWasiRandomGetBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: BUF=0, LEN=1 (both i32); i64 locals: S=2 (the generator's scratch),
 		// T=3 (the tail's byte shifter).

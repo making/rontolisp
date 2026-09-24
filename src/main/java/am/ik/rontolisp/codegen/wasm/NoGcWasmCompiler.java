@@ -1685,7 +1685,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			boolean printUsed, boolean fdlibmTables) {
 		LinkedHashMap<String, Integer> offsets = new LinkedHashMap<>();
 		LinkedHashMap<String, Integer> regions = new LinkedHashMap<>();
-		ByteArrayOutputStream data = new ByteArrayOutputStream();
+		ByteArrayOutputStream data = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		int cursor = STR_DATA_BASE;
 		for (String s : literals) {
 			// Blocks are packed, not 4-byte aligned. The only aligned access into one is
@@ -2578,7 +2578,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			WasmImportCompiler.Decl decl = hostImports.get(i);
 			importTypes[i] = typeTable.intern(importParamTypes(decl), importResultTypes(decl));
 		}
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		w.write("\0asm").writeLittleEndian4(1).writeTypeSection(typeTable::writeTo);
 		// Import section: exactly the one fd_write, and only when the program prints.
@@ -2753,7 +2753,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// 4-byte-aligns the bump, grows linear memory by whole pages when the new top exceeds
 	// the current size, and returns the old pointer. Locals: 1=old, 2=end, 3=need(pages).
 	private static byte[] allocBody() {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		// old = heap
 		w.write(Instruction.GET_GLOBAL, 0x00).write(Instruction.SET_LOCAL).writeUnsignedLeb128(1);
@@ -2791,7 +2791,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// __memcpy(dst i32, src i32, n i32): copy n bytes one at a time (no bulk-memory
 	// dependency, so the module stays plain MVP). Params 0=dst, 1=src, 2=n.
 	private static byte[] memcpyBody() {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
@@ -2819,7 +2819,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// __streq(a i32, b i32) -> i32: 1 iff the two [len][bytes] strings have identical
 	// content. Params 0=a, 1=b; locals 2=la (length of a), 3=i.
 	private static byte[] streqBody() {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		// if a == b return 1 (same header address, e.g. the same interned literal)
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
@@ -2878,7 +2878,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// bytes); only length derives characters from it. Params 0=s; locals 1=len (byte
 	// count), 2=i, 3=n, 4=b.
 	private static byte[] strlenCpBody() {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
@@ -2924,7 +2924,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// on a character boundary (a too-large index answers the byte length; a negative
 	// one answers 0). Params 0=s, 1=target; locals 2=len, 3=pos, 4=cp, 5=b.
 	private static byte[] byteOffsetBody() {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
@@ -2999,7 +2999,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// octets-to-string pair documents (.kb/characters-code-points.md). Params 0=s,
 	// 1=idx; locals 2=pos (byte offset), 3=b0.
 	private static byte[] charAtBody(int byteOffsetIndex) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		// pos = __byte_offset(s, idx)
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
@@ -3087,7 +3087,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// 2=count (i32), 3=p (i32 result), 4=idx (i32 write cursor). Note: Long.MIN_VALUE
 	// negation wraps, matching the backend's documented 2^63 integer range.
 	private static byte[] itoaBody(int allocIndex) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		Runnable loadMagnitude = () -> {
 			// t = v < 0 ? -v : v
@@ -3192,7 +3192,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// reclaims the host's pre-call buffer too). See .kb/wasm-export-no-wasi.md. No
 	// locals.
 	private static byte[] markBody() {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.GET_GLOBAL, 0x00);
 		w.write(Instruction.END);
@@ -3205,7 +3205,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// AFTER live data (or reading a :string result whose bytes sit above the mark) is
 	// caller error; see the --no-gc docs. Param 0 = mark, no locals.
 	private static byte[] resetBody() {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
 		w.write(Instruction.SET_GLOBAL, 0x00);
@@ -3222,7 +3222,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// 4-aligns the bump, and old + 4 keeps it), so the header load stays on the
 	// alignment the block had. Param 0 = size, no locals.
 	private static byte[] rontoAllocBody(int allocIndex) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
@@ -3257,7 +3257,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// size), and the returned pointer keeps __alloc's 4-byte alignment, which
 	// satisfies the string encoding's align 1.
 	private static byte[] cabiReallocBody(int allocIndex) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
@@ -3277,7 +3277,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// copies and the result string -- and a resident instance stays flat. The flat-result
 	// parameters are ignored.
 	private static byte[] postReturnBody(int heapBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(heapBase);
 		w.write(Instruction.SET_GLOBAL, 0x00);
@@ -3292,7 +3292,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// by the post-return above) and stores the pair. Locals: ptr, len, ret (i32 each,
 	// after the host parameter slots).
 	private static byte[] retptrShimBody(int wrapperIndex, int allocIndex, int paramSlots) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int ptr = paramSlots;
 		int len = paramSlots + 1;
@@ -3326,7 +3326,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// 3=len (i32), 4=digits (i64), 5=k (i32).
 	private static byte[] ftoaBody(Mem mem) {
 		final int P = 1, C = 2, LEN = 3, DIGITS = 4, K = 5;
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		Runnable getV = () -> w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
 		// NaN: value != value -> the static "NaN" literal (no allocation).
@@ -3419,7 +3419,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// component variant swaps this implementation, never the print ops). Fills the iov
 	// scratch (iovAddr = ptr/len, iovAddr+8 = nwritten) and writes to fd 1 (stdout).
 	private static byte[] writeStdoutBody(Mem mem) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(mem.iovAddr());
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
@@ -3550,7 +3550,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * @return the code entry bytes
 	 */
 	private byte[] compileImportWrapperBody(WasmImportCompiler.Decl decl, int ordinal, Mem mem) {
-		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
+		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(bodyStream);
 		List<Ty> locals = new ArrayList<>();
 		int nextLocal = decl.paramTypes().size();
@@ -3960,8 +3960,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		if (args.size() - 1 != decl.paramTypes().size()) {
 			return null;
 		}
-		ByteArrayOutputStream loweredBytes = new ByteArrayOutputStream();
-		ByteArrayOutputStream wrappedBytes = new ByteArrayOutputStream();
+		ByteArrayOutputStream loweredBytes = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		ByteArrayOutputStream wrappedBytes = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter lowered = new WasmWriter(loweredBytes);
 		WasmWriter wrapped = new WasmWriter(wrappedBytes);
 		for (int p = 0; p < decl.paramTypes().size(); p++) {
@@ -4026,7 +4026,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	private byte[] compileWrapperBody(WasmExportCompiler.Decl decl, int targetIndex, Types types, Mem mem) {
-		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
+		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(bodyStream);
 		String name = decl.name();
 		Ty[] internalParams = Objects.requireNonNull(types.params().get(name));
@@ -4343,7 +4343,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				runs.add(new int[] { 1, t });
 			}
 		}
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		w.writeUnsignedLeb128(runs.size());
 		for (int[] run : runs) {

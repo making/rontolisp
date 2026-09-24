@@ -63,7 +63,7 @@ final class WasmStringStreamRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildWriteStreamStrBody(boolean charvecPossible) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: STR=0 (ref), STREAM=1 (ref) ; i32 locals: OFF=2, LEN=3, H=4, REC=5,
 		// ISFD=6 ; ref local NSTR=7 (the rendered form the write reads -- STR itself is
@@ -168,7 +168,7 @@ final class WasmStringStreamRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildMakeOutputStreamBody(int tableGlobal) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// no params ; i32 locals: REC=0, SLOT=1, HEAD=2 ; TBL=3, NEWTBL=4 (the table) ;
 		// BUF=5 (the stream's bytes)
@@ -293,7 +293,7 @@ final class WasmStringStreamRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildMakeInputStreamBody(boolean withStart) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: STR=0 (ref) ; i32 locals: REC=1, OFF=2, LEN=3
 		w.write(1);
@@ -363,7 +363,7 @@ final class WasmStringStreamRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildContentsBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: STREAM=0 (ref) ; i32 locals: REC=1, LEN=2, ID=3 ; BUF=4, OUT=5
 		w.write(2);
@@ -449,7 +449,7 @@ final class WasmStringStreamRuntimeBuilder {
 	 * TYPE_RAT_NEW)
 	 */
 	static byte[] buildOstreamRoomBody(int tableGlobal) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: REC=0, N=1 ; i32 locals: NEED=2, CAP=3 ; BUF=4, NEW=5
 		w.write(2);
@@ -943,7 +943,7 @@ final class WasmStringStreamRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildFreshLineStreamBody(int newlineOff) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: DEST=0 (ref) ; i32 locals: H=1, REC=2, LEN=3
 		w.write(1);

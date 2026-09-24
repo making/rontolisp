@@ -285,7 +285,7 @@ final class WasmEvalRuntimeBuilder {
 
 	/** {@code _lookup} stub: {@code (i32) -> i32}, always -1. */
 	static byte[] buildLookupStub() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0);
 		i32(w, -1);
@@ -295,7 +295,7 @@ final class WasmEvalRuntimeBuilder {
 
 	/** {@code _env_lookup} stub: {@code (i32, ref) -> ref}, always null. */
 	static byte[] buildEnvLookupStub() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0);
 		emitNull(w);
@@ -305,7 +305,7 @@ final class WasmEvalRuntimeBuilder {
 
 	/** {@code _eval} stub: {@code (ref, ref) -> ref}, returns its first argument. */
 	static byte[] buildEvalStub() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0);
 		getLocal(w, 0);
@@ -315,7 +315,7 @@ final class WasmEvalRuntimeBuilder {
 
 	/** {@code _apply} stub: {@code (ref, ref) -> ref}, always null. */
 	static byte[] buildApplyStub() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0);
 		emitNull(w);
@@ -327,7 +327,7 @@ final class WasmEvalRuntimeBuilder {
 	 * {@code _store} stub: {@code (ref, ref, ref) -> ref}, returns its value argument.
 	 */
 	static byte[] buildStoreStub() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0);
 		getLocal(w, 1);
@@ -347,7 +347,7 @@ final class WasmEvalRuntimeBuilder {
 	 * @return the encoded function body
 	 */
 	static byte[] buildLookupBody(int registryBase, int registryCount) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// locals: slot1 = i (i32), slot2 = addr (i32); param0 = nameOffset
@@ -411,7 +411,7 @@ final class WasmEvalRuntimeBuilder {
 	 * @return the encoded function body
 	 */
 	static byte[] buildEnvLookupBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// params: 0 = off (i32), 1 = env (ref); locals: 2 = pair, 3 = name
@@ -485,7 +485,7 @@ final class WasmEvalRuntimeBuilder {
 	 * @return the encoded function body
 	 */
 	static byte[] buildEvalBody(SpecialFormOffsets off, boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// params: 0 = VAL (form), 1 = ENV
@@ -1767,7 +1767,7 @@ final class WasmEvalRuntimeBuilder {
 	 * @return the encoded function body
 	 */
 	static byte[] buildApplyBody(boolean usesEval, boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// params: 0 = FN, 1 = ARGLIST
@@ -1995,7 +1995,7 @@ final class WasmEvalRuntimeBuilder {
 	 * @return the encoded function body
 	 */
 	static byte[] buildStoreBody(SpecialFormOffsets off, boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// params: 0 = PLACE, 1 = VALUE, 2 = ENV

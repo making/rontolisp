@@ -491,7 +491,7 @@ final class WasmImportCompiler {
 		boolean memStaging = stagesMemoryParams(decl);
 		int numMemParams = memStaging ? memoryParamCount(decl) : 0;
 		boolean staging = bytesStaging || memStaging;
-		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
+		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter writer = new WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
 		boolean reentrant = ctx.reentrant;
@@ -664,7 +664,7 @@ final class WasmImportCompiler {
 		// Local declarations: the i32 scratch run (when present), then the
 		// (ref null eq) temps allocated by allocTemp during unboxing.
 		int numEqTemps = ctx.nextLocal - (numLispParams + 1 + numI32Temps);
-		ByteArrayOutputStream entry = new ByteArrayOutputStream();
+		ByteArrayOutputStream entry = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter entryWriter = new WasmWriter(entry);
 		int groups = (numI32Temps > 0 ? 1 : 0) + (numEqTemps > 0 ? 1 : 0);
 		entryWriter.write(groups);

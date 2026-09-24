@@ -122,7 +122,7 @@ public final class WasmSections {
 	}
 
 	static byte[] assemble(List<Section> sections) {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new UnsynchronizedByteArrayOutputStream();
 		out.write('\0');
 		writeRaw(out, "asm".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 		writeRaw(out, new byte[] { 1, 0, 0, 0 });
@@ -361,7 +361,7 @@ public final class WasmSections {
 			Set<String> droppedNames) {
 		int[] p = { 0 };
 		int count = readU(payload, p);
-		ByteArrayOutputStream entries = new ByteArrayOutputStream();
+		ByteArrayOutputStream entries = new UnsynchronizedByteArrayOutputStream();
 		int kept = 0;
 		for (int i = 0; i < count; i++) {
 			int nameStart = p[0];
@@ -384,7 +384,7 @@ public final class WasmSections {
 			}
 			writeU(entries, rewritten);
 		}
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		writeU(body, kept);
 		writeRaw(body, entries.toByteArray());
 		return body.toByteArray();
@@ -393,7 +393,7 @@ public final class WasmSections {
 	static byte[] rebuildStartSection(byte[] payload, int[] remap) {
 		int[] p = { 0 };
 		int index = readU(payload, p);
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		writeU(body, remap[index]);
 		return body.toByteArray();
 	}

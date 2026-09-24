@@ -20,7 +20,7 @@ public class GlobalDef extends CountingDef<GlobalDef> {
 	 * @return this instance for chaining
 	 */
 	public GlobalDef addGlobal(Type type, Mutability mutability, Consumer<WasmWriter> consumer) {
-		final ByteArrayOutputStream stream = new ByteArrayOutputStream();
+		final ByteArrayOutputStream stream = new UnsynchronizedByteArrayOutputStream();
 		consumer.accept(new WasmWriter(stream));
 		return this.add(global -> global.write(type, mutability, stream.toByteArray(), Instruction.END));
 	}

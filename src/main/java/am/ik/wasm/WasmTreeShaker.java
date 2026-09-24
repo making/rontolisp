@@ -591,7 +591,7 @@ public final class WasmTreeShaker {
 		if (refs.isEmpty()) {
 			return buf;
 		}
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new UnsynchronizedByteArrayOutputStream();
 		int cursor = 0;
 		for (Ref r : refs) {
 			WasmSections.writeRaw(out, WasmSections.slice(buf, cursor, r.start()));
@@ -737,7 +737,7 @@ public final class WasmTreeShaker {
 			}
 			kept.add(applyRefs(raw, refs, funcRemap, typeRemap, globalRemap));
 		}
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		WasmSections.writeU(body, kept.size());
 		for (byte[] entry : kept) {
 			WasmSections.writeRaw(body, entry);
@@ -827,7 +827,7 @@ public final class WasmTreeShaker {
 			}
 			kept.add(applyRefs(raw, refs, funcRemap, typeRemap, globalRemap));
 		}
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		WasmSections.writeU(body, kept.size());
 		for (byte[] entry : kept) {
 			WasmSections.writeRaw(body, entry);
@@ -839,7 +839,7 @@ public final class WasmTreeShaker {
 
 	private static byte[] rebuildImports(List<ImportEntry> imports, boolean[] reachable, int[] funcRemap,
 			int[] typeRemap, int[] globalRemap) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		List<ImportEntry> kept = new ArrayList<>();
 		int funcOrdinal = 0;
 		for (ImportEntry e : imports) {
@@ -864,7 +864,7 @@ public final class WasmTreeShaker {
 
 	private static byte[] rebuildFunctionSection(int[] defTypeIdx, int numImportedFuncs, boolean[] reachable,
 			int[] typeRemap) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		List<Integer> kept = new ArrayList<>();
 		for (int i = 0; i < defTypeIdx.length; i++) {
 			if (reachable[numImportedFuncs + i]) {
@@ -882,7 +882,7 @@ public final class WasmTreeShaker {
 
 	private static byte[] rebuildCodeSection(List<byte[]> codeEntries, List<List<Ref>> bodyRefs, int numImportedFuncs,
 			boolean[] reachable, int[] funcRemap, int[] typeRemap, int[] globalRemap) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		List<byte[]> kept = new ArrayList<>();
 		for (int i = 0; i < codeEntries.size(); i++) {
 			if (reachable[numImportedFuncs + i]) {
@@ -1027,7 +1027,7 @@ public final class WasmTreeShaker {
 				kept.add(activeSegment(segment.offset() + cursor, WasmSections.slice(segment.bytes(), cursor, len)));
 			}
 		}
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		WasmSections.writeU(body, kept.size());
 		for (byte[] segment : kept) {
 			WasmSections.writeRaw(body, segment);
@@ -1038,7 +1038,7 @@ public final class WasmTreeShaker {
 	// One active mode-0 data segment: flags 0, an i32.const offset expression, then the
 	// bytes.
 	private static byte[] activeSegment(int offset, byte[] bytes) {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new UnsynchronizedByteArrayOutputStream();
 		WasmSections.writeU(out, 0); // flags: active, memory 0
 		out.write(0x41); // i32.const
 		WasmSections.writeS(out, offset);

@@ -378,7 +378,7 @@ public final class WasmWriter {
 	 * @return this instance for chaining
 	 */
 	public WasmWriter writeStartSection(int funcIndex) {
-		final java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
+		final java.io.ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		new WasmWriter(body).writeUnsignedLeb128(funcIndex);
 		final byte[] bytes = body.toByteArray();
 		return this.write(Section.START).writeUnsignedLeb128(bytes.length).write(bytes);

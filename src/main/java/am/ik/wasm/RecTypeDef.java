@@ -23,7 +23,7 @@ public class RecTypeDef {
 	public RecTypeDef() {
 	}
 
-	private final ByteArrayOutputStream out = new ByteArrayOutputStream();
+	private final ByteArrayOutputStream out = new UnsynchronizedByteArrayOutputStream();
 
 	private int count = 0;
 
@@ -36,7 +36,7 @@ public class RecTypeDef {
 	 */
 	public RecTypeDef addSubFinalFunc(Type[] params, Type[] results) {
 		this.count++;
-		ByteArrayOutputStream stream = new ByteArrayOutputStream();
+		ByteArrayOutputStream stream = new UnsynchronizedByteArrayOutputStream();
 		WasmWriter writer = new WasmWriter(stream);
 		writer.write(Type.FUNC, params.length);
 		writer.write((Object) params);
@@ -60,7 +60,7 @@ public class RecTypeDef {
 	 */
 	public RecTypeDef addSubFinalArray(Consumer<WasmWriter> consumer) {
 		this.count++;
-		ByteArrayOutputStream stream = new ByteArrayOutputStream();
+		ByteArrayOutputStream stream = new UnsynchronizedByteArrayOutputStream();
 		WasmWriter writer = new WasmWriter(stream);
 		writer.write(Type.ARRAY_TYPE);
 		consumer.accept(writer);
@@ -83,7 +83,7 @@ public class RecTypeDef {
 		this.count++;
 		StructFieldWriter fieldWriter = new StructFieldWriter();
 		consumer.accept(fieldWriter);
-		ByteArrayOutputStream stream = new ByteArrayOutputStream();
+		ByteArrayOutputStream stream = new UnsynchronizedByteArrayOutputStream();
 		WasmWriter writer = new WasmWriter(stream);
 		writer.write(Type.STRUCT_TYPE);
 		writer.write((Object) fieldWriter.toByteArray());
@@ -117,7 +117,7 @@ public class RecTypeDef {
 	 */
 	public static class StructFieldWriter {
 
-		private final ByteArrayOutputStream out = new ByteArrayOutputStream();
+		private final ByteArrayOutputStream out = new UnsynchronizedByteArrayOutputStream();
 
 		private int count = 0;
 
@@ -133,7 +133,7 @@ public class RecTypeDef {
 		 */
 		public StructFieldWriter addField(boolean mutable, Consumer<WasmWriter> fieldTypeWriter) {
 			this.count++;
-			ByteArrayOutputStream stream = new ByteArrayOutputStream();
+			ByteArrayOutputStream stream = new UnsynchronizedByteArrayOutputStream();
 			WasmWriter writer = new WasmWriter(stream);
 			fieldTypeWriter.accept(writer);
 			writer.write(mutable ? Mutability.VAR : Mutability.CONST);
@@ -151,7 +151,7 @@ public class RecTypeDef {
 		 * @return the serialized bytes
 		 */
 		public byte[] toByteArray() {
-			ByteArrayOutputStream stream = new ByteArrayOutputStream();
+			ByteArrayOutputStream stream = new UnsynchronizedByteArrayOutputStream();
 			WasmWriter writer = new WasmWriter(stream);
 			writer.write(this.count);
 			writer.write((Object) this.out.toByteArray());

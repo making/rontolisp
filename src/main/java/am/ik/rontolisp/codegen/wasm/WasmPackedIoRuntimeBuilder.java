@@ -67,7 +67,7 @@ final class WasmPackedIoRuntimeBuilder {
 	}
 
 	private static byte[] build(boolean read, boolean simd) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: SEQ=0, STREAM=1, START=2, END=3 (ref) ; i32 locals: FD=4, KIND=5,
 		// WIDTH=6, SIZE=7, S=8, E=9, I=10, BUF=11, SAVED_HP=12, NEED=13, POS=14, GOT=15,

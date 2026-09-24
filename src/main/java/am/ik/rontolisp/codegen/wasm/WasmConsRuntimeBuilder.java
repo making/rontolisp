@@ -25,7 +25,7 @@ final class WasmConsRuntimeBuilder {
 	 * @return the code entry
 	 */
 	static byte[] buildFieldBody(int field) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // no locals: the one parameter is the list
 		WasmEmitHelper.emitInlineConsField(w, 0, field);

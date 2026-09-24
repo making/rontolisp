@@ -118,7 +118,7 @@ public final class WasmCallForwarding {
 		if (!changed) {
 			return module;
 		}
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		WasmSections.writeU(body, rewritten.size());
 		for (byte[] entry : rewritten) {
 			WasmSections.writeU(body, entry.length);
@@ -157,7 +157,7 @@ public final class WasmCallForwarding {
 	}
 
 	private static byte[] redirectCalls(byte[] entry, int[] resolved) {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new UnsynchronizedByteArrayOutputStream();
 		int cursor = 0;
 		boolean any = false;
 		for (Ref r : WasmSections.scanBody(entry)) {

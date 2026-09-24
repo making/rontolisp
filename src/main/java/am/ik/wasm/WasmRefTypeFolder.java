@@ -763,7 +763,7 @@ public final class WasmRefTypeFolder {
 			if (!any) {
 				return this.module;
 			}
-			java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
+			java.io.ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 			WasmSections.writeU(body, this.bodies.length);
 			for (int d = 0; d < this.bodies.length; d++) {
 				byte[] entry = rewritten[d] != null ? rewritten[d] : this.codeEntries[d];

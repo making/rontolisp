@@ -407,7 +407,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// eq: res 14, vbD 15, vbA 16, da 17, db 18, nd 19, box 20
 	// $v128arr: ga 21, gb 22, gd 23
 	private static byte[] buildElementwise(int lane64Op, int scalar64Op, int bop, int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0, bArg = 1;
 		int count = 2, kind = 3, shift = 4, ng = 5, g = 6, rem = 7, ok = 8, i = 9, len = 10;
@@ -513,7 +513,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// eq: res 15, vbD 16, vbA 17, da 18, db 19, nd 20, box 21
 	// $v128arr: ga 22, gb 23, gd 24
 	private static byte[] buildSelectElementwise(boolean greater, int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0, bArg = 1;
 		int count = 2, kind = 3, shift = 4, ng = 5, g = 6, rem = 7, ok = 8, i = 9, len = 10;
@@ -714,7 +714,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// eq: res 16, vbD 17, vbA 18, nd 19, da 20
 	// $v128arr: gv 21, gd 22
 	private static byte[] buildUnary(int laneUop, int scalarOp, int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0;
 		int count = 1, kind = 2, shift = 3, ng = 4, g = 5, rem = 6, i = 7, len = 8;
@@ -787,7 +787,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// three are spare since exp became a call)
 	// eq: res 16, vbD 17, vbA 18, nd 19, da 20
 	private static byte[] buildErf(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0;
 		int count = 1, kind = 2, shift = 3, ng = 4, i = 5, len = 6, n = 7;
@@ -842,7 +842,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// f64: lo 20, span 21, u 22, acc 23, d 24.
 	// eq: res 25, vbO 26, vbS 27, vbR 28, nd 29, box 30.
 	private static byte[] buildRngFill(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int out = 0, st = 1, modeA = 2, loA = 3, spanA = 4;
 		int count = 5, kind = 6, shift = 7, ng = 8, i = 9, mode = 10, s1 = 11, s2 = 12, s3 = 13, j = 14, twelve = 15,
@@ -1084,7 +1084,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// x0 22, xv 23, gv 24, mk 25, vk 26, md 27.
 	// eq: res 28, vbX 29, vbG 30, vbM 31, vbV 32, vbP 33.
 	private static byte[] buildAdamStep(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int x = 0, g = 1, m = 2, v = 3, ps = 4;
 		int count = 5, kind = 6, shift = 7, ng = 8, i = 9, mode = 10, idx = 11;
@@ -1388,7 +1388,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// An EMPTY array declines: the defun folds from the integer 0 and answers 0, not 0.0.
 	// params: 0 = a. i32: count 1. eq: res 2.
 	private static byte[] buildSum(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0, count = 1, res = 2;
 		block(w);
@@ -1412,7 +1412,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// (sqrt (sum (emap square a))) and allocates an intermediate array per call.
 	// params: 0 = a. i32: count 1. eq: res 2.
 	private static byte[] buildNorm(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0, count = 1, res = 2;
 		block(w);
@@ -1450,7 +1450,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	//
 	// params: 0 = a. i32: count 1, i 2, bi 3. f64: best 4, x 5. eq: res 6, vbA 7.
 	private static byte[] buildExtremum(boolean max, boolean index, int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0, count = 1, i = 2, bi = 3;
 		int best = 4, x = 5;
@@ -1523,7 +1523,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// both widths -- the defun reads elements widened, so this is bit-identical.
 	// params: 0 = a. i32: n 1, i 2, k 3. f64: acc 4. eq: res 5, vbA 6.
 	private static byte[] buildTrace(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0, n = 1, i = 2, k = 3;
 		int acc = 4;
@@ -1584,7 +1584,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// eq: res 18, vbA 19, vbD 20, nd 21.
 	// $v128arr: ga 22, gd 23.
 	private static byte[] buildTranspose(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0, r = 1, c = 2, i = 3, j = 4, src = 5, dst = 6, kind = 7, cg = 8, rg = 9;
 		int va = 10, vb = 11, vc = 12, vd = 13, t0 = 14, t1 = 15, t2 = 16, t3 = 17;
@@ -1815,7 +1815,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// eq: res 10, vbA 11, vbD 12, nd 13, cur 14.
 	// $v128arr: gs 15, gd 16.
 	private static byte[] buildReshape(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0, shape = 1;
 		int count = 2, kind = 3, shift = 4, ng = 5, g = 6, rank = 7, prod = 8, d = 9;
@@ -2021,7 +2021,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// eq: res 19, vbA 20, vbB 21, vbD 22, nd 23, acc 24.
 	// $v128arr: gb 25, gacc 26.
 	private static byte[] buildDot(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0, bArg = 1;
 		int ra = 2, rb = 3, n = 4, m = 5, p = 6, i = 7, j = 8, k = 9, kind = 10, t = 11, base = 12, off = 13, pg = 14,
@@ -2280,7 +2280,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// sb 45, idx 46.
 	// $v128arr: gb 47, gacc 48.
 	private static byte[] buildMatmulNd(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0, bArg = 1;
 		int ra = 2, rb = 3, n = 4, m = 5, p = 6, i = 7, j = 8, k = 9, kind = 10, t = 11, base = 12, off = 13, pg = 14,
@@ -2569,7 +2569,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// eq: res 12, vbU 13, vbV 14, vbD 15, nd 16.
 	// $v128arr: gv 17, gd 18.
 	private static byte[] buildOuter(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int u = 0, v = 1;
 		int n = 2, m = 3, i = 4, j = 5, kind = 6, t = 7, mg = 8, rowBase = 9;
@@ -2702,7 +2702,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// fx 26, iy 27, ix0 28, ix 29, base 30, cursor 31, t 32.
 	// eq: res 33, vbX 34, vbD 35, nd 36.
 	private static byte[] buildIm2col(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int x = 0, fhA = 1, fwA = 2, strideA = 3, padA = 4;
 		int fh = 5, fw = 6, stride = 7, pad = 8, n = 9, c = 10, h = 11, wl = 12, eh = 13, ew = 14, oh = 15, ow = 16,
@@ -2770,7 +2770,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// xo 27, ci 28, fy 29, fx 30, iy 31, ix0 32, ix 33, base 34, cursor 35, t 36.
 	// eq: res 37, vbC 38, vbD 39, nd 40, cur 41.
 	private static byte[] buildCol2im(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int col = 0, dimsA = 1, fhA = 2, fwA = 3, strideA = 4, padA = 5;
 		int fh = 6, fw = 7, stride = 8, pad = 9, n = 10, c = 11, h = 12, wl = 13, eh = 14, ew = 15, oh = 16, ow = 17,
@@ -3050,7 +3050,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// params: 0 = a, 1 = b. i32: count 2, kind 3, i 4, len 5, ok 6. f64: s 7.
 	// eq: res 8, da 9, db 10, nd 11, vbD 12, vbA 13, vbB 14, box 15.
 	private static byte[] buildCompare(int bop, int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0, bArg = 1;
 		int count = 2, kind = 3, i = 4, len = 5, ok = 6;
@@ -3196,7 +3196,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// eq: res 28, od 29, od2 30, dd 31, sm 32, sx 33, sy 34, idx 35, vbM 36, vbX 37,
 	// vbY 38, vbD 39, box 40.
 	private static byte[] buildWhere(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int m = 0, x = 1, y = 2;
 		int rank = 3, k = 4, ai = 5, dxa = 6, dxb = 7, total = 8, tmp = 9, ax = 10, om = 11, ox = 12, oy = 13,
@@ -3366,7 +3366,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// f64: tf 15, lo 16, hi 17, travel 18.
 	// eq: res 19, od 20, rs 21, s 22, idx 23, cur 24, vbA 25, vbD 26.
 	private static byte[] buildGatherStrided(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0, odl = 1, rsl = 2, basev = 3, singlev = 4;
 		int rank = 5, n = 6, k = 7, d = 8, src = 9, base = 10, kind = 11, tmp = 12, ax = 13, count = 14;
@@ -3571,7 +3571,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// count 13.
 	// f64: v 14. eq: res 15, od 16, vbA 17, vbI 18, vbD 19, da 20.
 	private static byte[] buildTakeRows(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0, idx = 1;
 		int rows = 2, slab = 3, m = 4, i = 5, k = 6, r = 7, total = 8, kind = 9, dst = 10, src = 11, len = 12,
@@ -3658,7 +3658,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// i32: rows 3, slab 4, m 5, i 6, k 7, r 8, dst 9, src 10, count 11, kind 12.
 	// f64: v 13. eq: res 14, vbZ 15, vbG 16, vbI 17.
 	private static byte[] buildScatterRows(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int z = 0, g = 1, idx = 2;
 		int rows = 3, slab = 4, m = 5, i = 6, k = 7, r = 8, dst = 9, src = 10, count = 11, kind = 12;
@@ -3737,7 +3737,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// params: 0 = g, 1 = accv. i32: count 2, i 3. f64: total 4, v 5.
 	// eq: res 6, vbG 7, box 8.
 	private static byte[] buildSumSquares(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int g = 0, accv = 1;
 		int count = 2, i = 3;
@@ -3780,7 +3780,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	//
 	// params: 0 = g, 1 = sv. i32: count 2, i 3. f64: s 4. eq: res 5, vbG 6, box 7.
 	private static byte[] buildScale(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int g = 0, sv = 1;
 		int count = 2, i = 3;
@@ -3835,7 +3835,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// f64: vx 18, vy 19, tf 20.
 	// eq: res 21, da 22, db 23, od 24, sx 25, sy 26, idx 27, vbA 28, vbB 29, vbD 30.
 	private static byte[] buildBcast(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0, bArg = 1, opRef = 2;
 		int op = 3, ra = 4, rb = 5, rank = 6, k = 7, ai = 8, dxa = 9, dxb = 10, total = 11, acc = 12, kind = 13,
@@ -4031,7 +4031,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// eq: res 11, da 12, perm 13, seen 14, st 15, od 16, os 17, idx 18, vbA 19,
 	// vbD 20, cur 21.
 	private static byte[] buildTransposeAxes(int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0, axes = 1;
 		int rank = 2, k = 3, axv = 4, count = 5, kind = 6, tmp = 7, src = 8, acc = 9, ax = 10;
@@ -4158,7 +4158,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// f64: accF 17, vf 18.
 	// eq: res 19, da 20, od 21, vbA 22, vbD 23.
 	private static byte[] buildFoldAxis(int bop, int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0, axisRef = 1, keep = 2;
 		int rank = 3, ax = 4, axlen = 5, outer = 6, inner = 7, o = 8, i = 9, j = 10, base = 11, kind = 12, k = 13,
@@ -4314,7 +4314,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	// f64: best 15, vf 16.
 	// eq: res 17, da 18, od 19, vbA 20, vbD 21.
 	private static byte[] buildArgFoldAxis(boolean max, int vecBase) {
-		ByteArrayOutputStream b = new ByteArrayOutputStream();
+		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		int a = 0, axisRef = 1;
 		int rank = 2, ax = 3, axlen = 4, outer = 5, inner = 6, o = 7, i = 8, j = 9, base = 10, k = 11, bi = 12,

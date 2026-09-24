@@ -68,7 +68,7 @@ final class WasmArrayRuntimeBuilder {
 	 * {@code TYPE_BIG_SHIFT})
 	 */
 	static byte[] buildArrGetBody(boolean simd) {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		// Two extra locals: the walk cursor (the header currently being examined) and
 		// the PACKED target the chain may end on.
@@ -120,7 +120,7 @@ final class WasmArrayRuntimeBuilder {
 	 * {@link WasmLispCompiler#TYPE_ARR_SET})
 	 */
 	static byte[] buildArrSetBody(boolean simd, boolean identityHash) {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		// locals: 3 = cur, 4 = promoted, 5 = str, 6 = buckets, 7 = packed target
 		// (ref null eq); 8 = n, 9 = i, 10 = the index as it arrived (i32).
@@ -215,7 +215,7 @@ final class WasmArrayRuntimeBuilder {
 	 * {@code TYPE_CALLABLE_BASE + 0})
 	 */
 	static byte[] buildArrDimsBody() {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		// locals: 1 = cur, 2 = buckets (ref null eq); 3 = n, 4 = idx (i32).
 		w.write(2);
@@ -303,7 +303,7 @@ final class WasmArrayRuntimeBuilder {
 	 * {@code TYPE_CALLABLE_BASE + 0})
 	 */
 	static byte[] buildArrTotalBody() {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		// locals: 1 = product, 2 = i (i32).
 		w.write(1);
@@ -353,7 +353,7 @@ final class WasmArrayRuntimeBuilder {
 	 * {@code TYPE_CALLABLE_BASE + 1})
 	 */
 	static byte[] buildArrFpBody() {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		// local 2 = the resolved value (ref null eq), null until proven otherwise.
 		declareOneEqrefLocal(w);
@@ -427,7 +427,7 @@ final class WasmArrayRuntimeBuilder {
 	 * {@code TYPE_BIG_SHIFT})
 	 */
 	static byte[] buildArrCheckRankBody() {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		w.write(0); // no extra locals -- every value here lives on the operand stack
 		get(w, 0);
@@ -508,7 +508,7 @@ final class WasmArrayRuntimeBuilder {
 	 * {@code TYPE_CALLABLE_BASE + 0})
 	 */
 	static byte[] buildArrUndisplaceBody(boolean simd) {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		// locals: 1 = cur, 2 = newData (ref null eq); 3 = n, 4 = i, 5 = marker (i32).
 		w.write(2);

@@ -721,7 +721,7 @@ final class WasmComponentImportCompiler {
 	// The code-entry framing shared by every wrapper kind: the i32 scratch pool, the i64
 	// scratch pool, then the eq temps handed out during emission.
 	private static byte[] wrapEntry(Body body) {
-		ByteArrayOutputStream entry = new ByteArrayOutputStream();
+		ByteArrayOutputStream entry = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		am.ik.wasm.WasmWriter entryWriter = new am.ik.wasm.WasmWriter(entry);
 		entryWriter.write(body.eqTemps() > 0 ? 3 : 2);
 		entryWriter.writeUnsignedLeb128(body.i32Pool());
@@ -746,7 +746,7 @@ final class WasmComponentImportCompiler {
 	 * @return the code entry bytes
 	 */
 	static byte[] buildDropBody(WasmLispCompiler.Ctx.Builder ctxBuilder, Drop drop, int ordinal) {
-		ByteArrayOutputStream entry = new ByteArrayOutputStream();
+		ByteArrayOutputStream entry = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(entry);
 		writer.write(0); // no local groups
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(entry).build();
@@ -890,7 +890,7 @@ final class WasmComponentImportCompiler {
 
 	private static Body emitAsyncStart(WasmLispCompiler.Ctx.Builder ctxBuilder, AsyncCall call, int numParams,
 			int ordinal, int allocFuncIndex, int strFromMemFuncIndex, int i32Pool, int i64Pool) {
-		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
+		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
 		Gen gen = new Gen(ctx, call.startName(), numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, i32Pool,
@@ -921,7 +921,7 @@ final class WasmComponentImportCompiler {
 
 	private static Body emitAsyncLift(WasmLispCompiler.Ctx.Builder ctxBuilder, AsyncCall call, int allocFuncIndex,
 			int strFromMemFuncIndex, int i32Pool, int i64Pool) {
-		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
+		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
 		Gen gen = new Gen(ctx, call.liftName(), 1, -1, allocFuncIndex, strFromMemFuncIndex, i32Pool, i64Pool);
@@ -952,7 +952,7 @@ final class WasmComponentImportCompiler {
 
 	private static Body emitTaskReturn(WasmLispCompiler.Ctx.Builder ctxBuilder, TaskReturn tr, int ordinal,
 			int allocFuncIndex, int strFromMemFuncIndex, int i32Pool, int i64Pool) {
-		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
+		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
 		Gen gen = new Gen(ctx, tr.lispName(), 1, ordinal, allocFuncIndex, strFromMemFuncIndex, i32Pool, i64Pool);
@@ -964,7 +964,7 @@ final class WasmComponentImportCompiler {
 	private static Body emitAsync(WasmLispCompiler.Ctx.Builder ctxBuilder, Async async, int numParams, int ordinal,
 			WaitOrdinals waitOrdinals, int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex,
 			WasmFutureRuntimeBuilder.@Nullable Sched sched, int i32Pool, int i64Pool) {
-		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
+		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
 		Gen gen = new Gen(ctx, async.lispName(), numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, i32Pool,
@@ -989,7 +989,7 @@ final class WasmComponentImportCompiler {
 	// twice yields the same offset).
 	private static Body emitBody(WasmLispCompiler.Ctx.Builder ctxBuilder, Decl decl, int numParams, int ordinal,
 			int allocFuncIndex, int strFromMemFuncIndex, int i32Pool, int i64Pool) {
-		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
+		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
 		Gen gen = new Gen(ctx, decl.lispName(), numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, i32Pool,

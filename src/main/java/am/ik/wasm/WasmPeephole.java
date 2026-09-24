@@ -158,7 +158,7 @@ public final class WasmPeephole {
 		if (!changed) {
 			return module;
 		}
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		WasmSections.writeU(body, rewritten.size());
 		for (byte[] entry : rewritten) {
 			WasmSections.writeU(body, entry.length);
@@ -246,7 +246,7 @@ public final class WasmPeephole {
 			return entry;
 		}
 		int localsEnd = code.get(0).start;
-		ByteArrayOutputStream buf = new ByteArrayOutputStream(entry.length);
+		ByteArrayOutputStream buf = new UnsynchronizedByteArrayOutputStream(entry.length);
 		WasmSections.writeRaw(buf, WasmSections.slice(entry, 0, localsEnd));
 		for (Op op : out) {
 			if (op.bytes != null) {

@@ -88,7 +88,7 @@ final class WasmAsyncEmit {
 				List.of("%resume-value"), false, List.of(), List.of(), funcIndex, new byte[] { 0x00, 0x00, 0x0b }));
 		proto.indirectCallArities.add(1);
 
-		ByteArrayOutputStream bodyBuf = new ByteArrayOutputStream();
+		ByteArrayOutputStream bodyBuf = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter bodyWriter = new WasmWriter(bodyBuf);
 		WasmLispCompiler.Ctx ctx = freshCtx(proto, bodyWriter, bodyBuf);
 		ctx.asyncResume = new WasmLispCompiler.AsyncResume(funcId);
@@ -121,7 +121,7 @@ final class WasmAsyncEmit {
 		// Prologue, built now that the local count is final: $rt = frame.state, restore
 		// every mirrored local from the spill, re-load the closure environment, and box
 		// the captured parameters on the very first segment only.
-		ByteArrayOutputStream prologueBuf = new ByteArrayOutputStream();
+		ByteArrayOutputStream prologueBuf = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter p = new WasmWriter(prologueBuf);
 		WasmLispCompiler.Ctx prologueCtx = freshCtx(proto, p, prologueBuf);
 		frameField(p, ctx, 0);
@@ -164,7 +164,7 @@ final class WasmAsyncEmit {
 		}
 
 		// Assemble: local declaration ([1 x i32][N x (ref null eq)]) + prologue + body.
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		int eqLocals = ctx.nextLocal - SPILL_BASE;
 		if (eqLocals > 0) {
@@ -198,7 +198,7 @@ final class WasmAsyncEmit {
 	 * @return the function body bytes
 	 */
 	static byte[] buildEntryBody(WasmLispCompiler.Ctx proto, int paramCount, boolean envFromLocal0, Resume resume) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		int spillArr = paramCount + 1;
 		int fut = paramCount + 2;
