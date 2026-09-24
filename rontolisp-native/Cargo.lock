@@ -1015,6 +1015,7 @@ dependencies = [
 name = "rlprecomp"
 version = "0.1.0"
 dependencies = [
+ "cranelift-codegen",
  "rlabi",
  "wasmtime",
 ]

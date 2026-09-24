@@ -213,10 +213,10 @@ public final class RontoLispCli {
 			}
 			compileToFile(source, baseDir, systemPath, dists, features, outputFile, options.contains("--dynamic"),
 					options.contains("--component"), options.contains("--no-wasi"),
-					OptimizeLevel.parse(options.get("--optimize")), options.contains("--no-gc"),
-					options.contains("--native"), options.contains("--simd"), options.contains("--blas"),
-					options.contains("--gpu"), options.contains("--parallel"), options.contains("--no-prune"),
-					options.contains("--no-main"), options.contains("--emit-wit"), options.contains("--emit-js-glue"),
+					OptimizeLevel.parse(options.get("--optimize")), options.contains("--no-gc"), nativeTarget(options),
+					options.contains("--simd"), options.contains("--blas"), options.contains("--gpu"),
+					options.contains("--parallel"), options.contains("--no-prune"), options.contains("--no-main"),
+					options.contains("--emit-wit"), options.contains("--emit-js-glue"),
 					options.contains("--host-random"), options.contains("--host-fetch"),
 					options.contains("--reentrant"),
 					options.contains("--host-boundary") ? HostBoundary.parse(options.get("--host-boundary")) : null,
@@ -241,6 +241,7 @@ public final class RontoLispCli {
 				throw new UnsupportedOperationException(
 						"--native writes a native executable, so it needs -o <file> (e.g. -o hello)");
 			}
+			nativeTarget(options);
 			if (options.contains("--no-main")) {
 				throw new UnsupportedOperationException("--no-main compiles a JVM library class (no main method), so"
 						+ " it needs -o <file>.class or -o <file>.jar");
@@ -596,13 +597,14 @@ public final class RontoLispCli {
 
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
 			List<String> declaredFeatures, String outputFile, boolean dynamic, boolean component, boolean noWasi,
-			OptimizeLevel optimize, boolean noGc, boolean nativeOutput, boolean simd, boolean blas, boolean gpu,
-			boolean parallel, boolean noPrune, boolean noMain, boolean wit, boolean jsGlue, boolean hostRandom,
-			boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary, JvmArtifactOptions jvmArtifact,
-			@Nullable String entryFile, @Nullable String sourceLanguage, SourceStandards standards) {
+			OptimizeLevel optimize, boolean noGc, @Nullable NativeTarget nativeTarget, boolean simd, boolean blas,
+			boolean gpu, boolean parallel, boolean noPrune, boolean noMain, boolean wit, boolean jsGlue,
+			boolean hostRandom, boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary,
+			JvmArtifactOptions jvmArtifact, @Nullable String entryFile, @Nullable String sourceLanguage,
+			SourceStandards standards) {
 		CompileDiagnostics.recording(() -> {
 			compileRecorded(source, baseDir, systemPath, dists, declaredFeatures, outputFile, dynamic, component,
-					noWasi, optimize, noGc, nativeOutput, simd, blas, gpu, parallel, noPrune, noMain, wit, jsGlue,
+					noWasi, optimize, noGc, nativeTarget, simd, blas, gpu, parallel, noPrune, noMain, wit, jsGlue,
 					hostRandom, hostFetch, reentrant, hostBoundary, jvmArtifact, entryFile, sourceLanguage, standards);
 			return null;
 		});
@@ -610,21 +612,23 @@ public final class RontoLispCli {
 
 	private void compileRecorded(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
 			List<String> declaredFeatures, String outputFile, boolean dynamic, boolean component, boolean noWasi,
-			OptimizeLevel optimize, boolean noGc, boolean nativeOutput, boolean simd, boolean blas, boolean gpu,
-			boolean parallel, boolean noPrune, boolean noMain, boolean wit, boolean jsGlue, boolean hostRandom,
-			boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary, JvmArtifactOptions jvmArtifact,
-			@Nullable String entryFile, @Nullable String sourceLanguage, SourceStandards standards) {
+			OptimizeLevel optimize, boolean noGc, @Nullable NativeTarget nativeTarget, boolean simd, boolean blas,
+			boolean gpu, boolean parallel, boolean noPrune, boolean noMain, boolean wit, boolean jsGlue,
+			boolean hostRandom, boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary,
+			JvmArtifactOptions jvmArtifact, @Nullable String entryFile, @Nullable String sourceLanguage,
+			SourceStandards standards) {
 		// --native is the wasm-GC backend's WASI Preview 1 command module, precompiled
 		// and appended to a runner stub: every flag that asks for a DIFFERENT module is
 		// refused by name rather than half-honoured, and so is an -o name that says
-		// another output. The shim is loaded before the front end runs, so a host this
-		// build has no shim for fails before any work.
-		if (nativeOutput) {
+		// another output. The shim is loaded and the target tried before the front end
+		// runs, so a host this build has no shim for, a platform it has no stub for or a
+		// CPU level the shim does not know fails before any work.
+		if (nativeTarget != null) {
 			refuseNativeConflicts(outputFile, component, noWasi, noGc, hostRandom, hostFetch, hostBoundary, reentrant,
 					jsGlue);
-			NativeToolchain.load();
+			NativeToolchain.load().check(nativeTarget);
 		}
-		boolean wasmOutput = nativeOutput || outputFile.endsWith(".wasm");
+		boolean wasmOutput = nativeTarget != null || outputFile.endsWith(".wasm");
 		// --emit-wit describes a component's typed world, so it is meaningless for any
 		// other
 		// output; fail fast instead of silently ignoring the request.
@@ -930,12 +934,12 @@ public final class RontoLispCli {
 					writePom(outputFile, Objects.requireNonNull(jvmArtifact.coordinates()), simd);
 				}
 			}
-			else if (nativeOutput) {
+			else if (nativeTarget != null) {
 				// Only the executable is written: the .wasm and its precompiled form
 				// never leave memory.
 				NativeToolchain toolchain = NativeToolchain.load();
-				NativeExecutable.write(outputPath,
-						NativeExecutable.assemble(toolchain.stub(), toolchain.precompile(bytes)));
+				NativeExecutable.write(outputPath, NativeExecutable.assemble(toolchain.stub(nativeTarget.platform()),
+						toolchain.precompile(bytes, nativeTarget)));
 			}
 			else {
 				Files.write(outputPath, bytes);
@@ -1017,6 +1021,24 @@ public final class RontoLispCli {
 			// given.
 			return witFile;
 		}
+	}
+
+	/**
+	 * The target of a {@code --native} output, or {@code null} for any other: its two
+	 * options describe the executable, so either one without {@code --native} is refused
+	 * rather than ignored.
+	 */
+	private static @Nullable NativeTarget nativeTarget(CliOptions options) {
+		if (!options.contains("--native")) {
+			for (String flag : List.of("--native-target", "--native-cpu")) {
+				if (options.contains(flag)) {
+					throw new UnsupportedOperationException(
+							flag + " describes a native executable, so it needs --native -o <file>");
+				}
+			}
+			return null;
+		}
+		return NativeTarget.of(options.get("--native-target"), options.get("--native-cpu"));
 	}
 
 	/**
@@ -1105,8 +1127,15 @@ public final class RontoLispCli {
 		this.out.println("                     Compile to ONE self-contained native executable: the");
 		this.out.println("                     WASM output, precompiled by wasmtime and appended to a");
 		this.out.println("                     small runner (no wasmtime needed to run it; ./out ARG...).");
-		this.out.println("                     Host platform only; refuses --component, --no-wasi,");
-		this.out.println("                     --no-gc, --host-*, --reentrant and --emit-js-glue");
+		this.out.println("                     Refuses --component, --no-wasi, --no-gc, --host-*,");
+		this.out.println("                     --reentrant and --emit-js-glue");
+		this.out.println("    --native-target PLATFORM");
+		this.out.println("                     Build for linux-x86_64, linux-aarch64 or macos-aarch64");
+		this.out.println("                     instead of this machine's platform");
+		this.out.println("    --native-cpu LEVEL");
+		this.out.println("                     baseline (default: runs on every CPU of the platform),");
+		this.out.println("                     host (every feature of this machine's CPU), or");
+		this.out.println("                     x86-64-v2, x86-64-v3, x86-64-v4 on x86_64");
 		this.out.println("  file -- ARG...     Interpret the file with ARG... as the PROGRAM's own");
 		this.out.println("                     arguments: everything after -- is (uiop:command-line-");
 		this.out.println("                     arguments), never a rontolisp option. A compiled");

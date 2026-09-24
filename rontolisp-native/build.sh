@@ -4,6 +4,11 @@
 # (<out> defaults to target/resources), the classpath layout the Java side loads.
 #
 #   ./build.sh [--test] [out-dir]    --test: then run the workspace tests against the stub
+#   ./build.sh --stub PLATFORM [out-dir]
+#       only the runner stub of PLATFORM (<os>-<arch>), laid out the same way: what a
+#       --native-target output for PLATFORM starts with. The host's platform, or on Linux
+#       the other Linux architecture, cross-built with <arch>-linux-gnu-gcc (Debian/Ubuntu:
+#       gcc-aarch64-linux-gnu / gcc-x86-64-linux-gnu) and the rustup target
 #   ./build.sh --is-static FILE      exit 0 iff FILE is an ELF executable with no interpreter
 #   ./build.sh --maven BUILD REQUIRED
 #       what pom.xml runs in generate-resources, with the values of the properties
@@ -39,12 +44,28 @@ esac
 build_pair() {
   local static_required=$1
   cargo build --locked --release -p rlprecomp >&2 || return
+  build_stub "$arch" "$static_required"
+}
+
+# Builds the stub for <os>-$1 (on Linux, $1 may be the other architecture) and prints its
+# path.
+build_stub() {
+  local stub_arch=$1 static_required=$2
   if [[ $os == linux ]]; then
-    local triple=$arch-unknown-linux-gnu
-    local flags_var
-    flags_var=CARGO_TARGET_$(tr 'a-z-' 'A-Z_' <<<"$triple")_RUSTFLAGS
+    local triple=$stub_arch-unknown-linux-gnu
+    local var
+    var=$(tr 'a-z-' 'A-Z_' <<<"$triple")
+    local -a cross=()
+    if [[ $stub_arch != "$arch" ]]; then
+      local cc=$stub_arch-linux-gnu-gcc
+      command -v "$cc" >/dev/null || {
+        echo "error: cross-building the $stub_arch stub needs $cc" >&2
+        return 1
+      }
+      cross=("CARGO_TARGET_${var}_LINKER=$cc" "CC_${triple//-/_}=$cc")
+    fi
     # --target keeps the static flag off the build scripts and proc macros.
-    if ! env "$flags_var=-C target-feature=+crt-static" \
+    if ! env "${cross[@]}" "CARGO_TARGET_${var}_RUSTFLAGS=-C target-feature=+crt-static" \
       cargo build --locked --profile release-runner -p rlrun --target "$triple" >&2; then
       if $static_required; then
         echo "error: the runner stub did not link statically; install glibc's static" \
@@ -54,10 +75,14 @@ build_pair() {
       echo "WARNING: the runner stub did not link statically (no libc.a? install libc6-dev" \
         "or glibc-static); linking glibc dynamically, so --native outputs need this" \
         "host's glibc or newer" >&2
-      cargo build --locked --profile release-runner -p rlrun --target "$triple" >&2 || return
+      env "${cross[@]}" cargo build --locked --profile release-runner -p rlrun --target "$triple" >&2 || return
     fi
     echo "target/$triple/release-runner/rlrun"
   else
+    [[ $stub_arch == "$arch" ]] || {
+      echo "error: on macOS the stub is built for the host's architecture only" >&2
+      return 1
+    }
     cargo build --locked --profile release-runner -p rlrun >&2 || return
     echo "target/release-runner/rlrun"
   fi
@@ -92,6 +117,23 @@ if [[ ${1:-} == --is-static ]]; then
   [[ $file == /* ]] || file=$OLDPWD/$file # relative to the caller, not to this directory
   statically_linked "$file"
   exit
+fi
+
+if [[ ${1:-} == --stub ]]; then
+  platform=${2:?PLATFORM}
+  out=${3:-target/resources}
+  [[ $platform == "$os"-* ]] || { echo "error: a $os host cannot build the $platform stub" >&2; exit 1; }
+  find_cargo || { echo "error: cargo (Rust >= 1.96) not found" >&2; exit 1; }
+  stub=$(build_stub "${platform#*-}" true)
+  if [[ $os == linux ]] && ! statically_linked "$stub"; then
+    echo "error: $stub links glibc dynamically" >&2
+    exit 1
+  fi
+  dest=$out/am/ik/rontolisp/native/$platform
+  mkdir -p "$dest"
+  cp "$stub" "$dest/"
+  ls -l "$dest"
+  exit 0
 fi
 
 if [[ ${1:-} == --maven ]]; then

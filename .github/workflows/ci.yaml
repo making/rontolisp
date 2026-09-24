@@ -96,8 +96,39 @@ jobs:
     - name: Report the wasmtime cache size
       if: always()
       run: du -sh ~/.cache/wasmtime || true
-  native-image:
+  # Each platform's runner stub, for every native binary to carry beside its own pair:
+  # a --native-target output starts with the TARGET's stub, and only a runner of that
+  # platform can build it (.kb/native-output.md, "Packaging").
+  native-stubs:
     needs: test
+    if: github.event_name != 'pull_request'
+    strategy:
+      matrix:
+        include:
+        - { os: ubuntu-latest, platform: linux-x86_64 }
+        - { os: ubuntu-24.04-arm, platform: linux-aarch64 }
+        - { os: macos-latest, platform: macos-aarch64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache the Rust build
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: rontolisp-native
+        key: stub
+    - name: Build the runner stub
+      run: rontolisp-native/build.sh --stub ${{ matrix.platform }}
+    - name: Upload the runner stub
+      uses: actions/upload-artifact@v7
+      with:
+        name: native-stub-${{ matrix.platform }}
+        path: rontolisp-native/target/resources/
+  native-image:
+    needs: [test, native-stubs]
+    # native-stubs is skipped on a pull request, which would skip this job too.
+    if: ${{ !cancelled() && needs.test.result == 'success' && needs.native-stubs.result != 'failure' }}
     strategy:
       matrix:
         include: ${{ github.event_name == 'pull_request' && fromJSON('[{"os":"ubuntu-latest","artifact-name":"rontolisp-linux-amd64","platform":"linux-x86_64"}]') || fromJSON('[{"os":"ubuntu-latest","artifact-name":"rontolisp-linux-amd64","platform":"linux-x86_64"},{"os":"ubuntu-24.04-arm","artifact-name":"rontolisp-linux-arm64","platform":"linux-aarch64"},{"os":"macos-latest","artifact-name":"rontolisp-darwin-arm64","platform":"macos-aarch64"}]') }}
@@ -119,6 +150,20 @@ jobs:
       uses: Swatinem/rust-cache@v2
       with:
         workspaces: rontolisp-native
+    # The other platforms' stubs, which the binary carries for --native-target. A pull
+    # request builds without them; its cross-target tests skip.
+    - name: Download every platform's runner stub
+      if: github.event_name != 'pull_request'
+      uses: actions/download-artifact@v8
+      with:
+        pattern: native-stub-*
+        path: rontolisp-native/target/resources
+        merge-multiple: true
+    # The baseline tests run an output on the oldest CPU of its architecture, and the
+    # cross-target ones the other Linux architecture's output, under qemu user mode.
+    - name: Install qemu
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y qemu-user-static
     # -Drontolisp.native.required=true: a binary without the host's pair (or, on
     # Linux, with a stub that links glibc dynamically) fails here instead of shipping
     # a --native that says "not available".
@@ -126,6 +171,8 @@ jobs:
       run: ./mvnw -V --no-transfer-progress -Pnative -Drontolisp.native.required=true clean package -DskipTests
     - name: Test the shim and the stub
       working-directory: rontolisp-native
+      env:
+        RLNATIVE_REQUIRE_QEMU: ${{ runner.os == 'Linux' && '1' || '' }}
       run: ./build.sh --test
     - name: Install wasmtime
       uses: bytecodealliance/actions/wasmtime/setup@v1
@@ -135,6 +182,12 @@ jobs:
       run: |
         set -e
         ./target/rontolisp -v
+        if [[ ${{ github.event_name }} != pull_request ]]; then
+          for platform in linux-x86_64 linux-aarch64 macos-aarch64; do
+            [[ -f rontolisp-native/target/resources/am/ik/rontolisp/native/$platform/rlrun ]] \
+              || { echo "the native binary carries no $platform stub" >&2; exit 1; }
+          done
+        fi
         # Run the ci-spec.yaml cases through the native binary in all four
         # backend modes (interpreter / JVM / WASM Preview 1 / WASM as a WASI 0.2
         # component), each of them twice: default kernels and --simd, which is a

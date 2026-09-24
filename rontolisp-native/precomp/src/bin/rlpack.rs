@@ -1,21 +1,41 @@
-//! `rlpack STUB IN.wasm OUT`: precompiles IN.wasm and writes STUB + module + trailer to OUT
-//! (mode 0755) -- what `--native -o OUT` does, without the JVM. For scripts and tests.
+//! `rlpack [--platform P] [--cpu C] STUB IN.wasm OUT`: precompiles IN.wasm and writes
+//! STUB + module + trailer to OUT (mode 0755) -- what `--native -o OUT` does, without the
+//! JVM. `P` defaults to the host's platform, `C` to `baseline` (`rlprecomp::Cpu`). STUB must
+//! be the runner stub built for `P`. For scripts and tests.
 
 use std::process::exit;
 
+const USAGE: &str = "usage: rlpack [--platform P] [--cpu baseline|host|LEVEL] STUB IN.wasm OUT";
+
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() != 4 {
-        eprintln!("usage: rlpack STUB IN.wasm OUT");
-        exit(2);
+    let mut args = std::env::args().skip(1);
+    let mut platform = None;
+    let mut cpu = "baseline".to_string();
+    let mut files = Vec::new();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--platform" => platform = Some(args.next().unwrap_or_else(|| usage())),
+            "--cpu" => cpu = args.next().unwrap_or_else(|| usage()),
+            _ => files.push(arg),
+        }
     }
-    if let Err(e) = pack(&args[1], &args[2], &args[3]) {
+    let [stub, wasm, out] = files.as_slice() else { usage() };
+    if let Err(e) = pack(platform.as_deref(), &cpu, stub, wasm, out) {
         eprintln!("rlpack: {e:?}");
         exit(1);
     }
 }
 
-fn pack(stub: &str, wasm: &str, out: &str) -> wasmtime::Result<()> {
+fn usage() -> ! {
+    eprintln!("{USAGE}");
+    exit(2);
+}
+
+fn pack(platform: Option<&str>, cpu: &str, stub: &str, wasm: &str, out: &str) -> wasmtime::Result<()> {
+    let platform = match platform {
+        Some(name) => rlprecomp::platform(name)?,
+        None => rlprecomp::host_platform().ok_or_else(|| wasmtime::format_err!("pass --platform"))?,
+    };
     let stub = std::fs::read(stub)?;
     let marker = rlabi::STUB_MARKER.as_bytes();
     if !stub.windows(marker.len()).any(|w| w == marker) {
@@ -24,7 +44,7 @@ fn pack(stub: &str, wasm: &str, out: &str) -> wasmtime::Result<()> {
             rlabi::FINGERPRINT
         );
     }
-    let module = rlprecomp::precompile(&std::fs::read(wasm)?)?;
+    let module = rlprecomp::precompile_for(&std::fs::read(wasm)?, platform, rlprecomp::Cpu::parse(cpu))?;
     std::fs::write(out, rlabi::payload::assemble(&stub, &module))?;
     #[cfg(unix)]
     {
