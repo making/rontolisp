@@ -6811,8 +6811,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * The CLOS registry (classes, generics, slot positions), collected by the
 		 * pre-pass in {@link JvmLispCompiler#compile}; {@code make-instance}/
 		 * {@code slot-value} expansion resolves through it. Shared across every context.
+		 * Assigned in the constructor only: a registry is pre-seeded with the condition
+		 * hierarchy, and a context is built per compiled body, so a field initializer
+		 * here seeded one per body only for the constructor to discard it.
 		 */
-		ClosRegistry closRegistry = new ClosRegistry();
+		ClosRegistry closRegistry;
 
 		/**
 		 * Names of top-level global variables (defvar/defparameter/defconstant and
@@ -6994,7 +6997,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.packageUseTable = builder.packageUseTable;
 			this.symbolPrintTable = builder.symbolPrintTable;
 			this.structAccessors = builder.structAccessors;
-			this.closRegistry = builder.closRegistry;
+			this.closRegistry = builder.closRegistry != null ? builder.closRegistry : new ClosRegistry();
 			this.globals = builder.globals;
 			this.nestedDefunNames = builder.nestedDefunNames;
 			this.specialVars = builder.specialVars;
@@ -7334,7 +7337,7 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			private Map<String, Integer> structAccessors = Map.of();
 
-			private ClosRegistry closRegistry = new ClosRegistry();
+			private @Nullable ClosRegistry closRegistry;
 
 			private Set<String> globals = Set.of();
 
