@@ -4256,22 +4256,46 @@ public final class LispPreludeLibrary {
 		// a name pulled in for its own sake drags in whatever IT references. The
 		// interpreter gets this for free -- it resolves prelude names lazily at call
 		// time, one at a time.
+		//
+		// The program does not change while the fixpoint runs, so what it names, what it
+		// defines and what it answers for each entry are computed ONCE: asking each entry
+		// as a walk of the whole program, every round, was measured (2026-09-24) at 64%
+		// of
+		// the front end of a program that loads an ASDF system: hundreds of entries,
+		// almost all of them absent, times a program of tens of thousands of conses.
+		java.util.Set<String> programNames = symbolNames(resolved, canonical);
+		java.util.Set<String> programDefines = new java.util.HashSet<>();
+		for (LispVal form : resolved) {
+			String definedHere = defunName(form);
+			if (definedHere != null) {
+				programDefines.add(canonical ? definedHere : member(definedHere));
+			}
+		}
+		Map<String, Boolean> usedByProgram = new java.util.HashMap<>();
 		java.util.Set<String> referenced = new java.util.LinkedHashSet<>();
 		boolean grew = true;
 		while (grew) {
 			grew = false;
 			for (String name : SOURCES.keySet()) {
 				String defined = definedName(name);
-				if (referenced.contains(name) || definesName(resolved, defined, canonical)) {
+				if (referenced.contains(name) || programDefines.contains(canonical ? defined : member(defined))) {
 					continue;
 				}
-				boolean used = referencesName(resolved, defined, canonical)
-						|| referencedBySurfaceForm(name, resolved, canonical);
+				Boolean known = usedByProgram.get(name);
+				boolean used;
+				if (known != null) {
+					used = known;
+				}
+				else {
+					used = programNames.contains(canonical ? defined : member(defined))
+							|| referencedBySurfaceForm(name, resolved, canonical);
+					usedByProgram.put(name, used);
+				}
 				for (String pulled : referenced) {
 					// Prelude sources spell each other exactly as they define
 					// themselves, so the entry-to-entry edges stay member-matched:
 					// they carry no package ambiguity to resolve.
-					used = used || referencesName(formsFor(pulled), name, false)
+					used = used || entryMemberNames(pulled).contains(member(name))
 							|| (PRINT_CONTROL_ENTRIES.contains(name)
 									&& referencedBySurfaceForm(name, formsFor(pulled), false));
 				}
@@ -4632,19 +4656,41 @@ public final class LispPreludeLibrary {
 		return null;
 	}
 
-	private static boolean definesName(List<LispVal> program, String name, boolean canonical) {
-		for (LispVal form : program) {
-			String defined = defunName(form);
-			if (defined != null && matches(defined, name, canonical)) {
-				return true;
-			}
-		}
-		return false;
-	}
-
 	private static boolean namesADirectionPredicate(List<LispVal> program, boolean canonical) {
 		return referencesName(program, LispNames.INPUT_STREAM_P, canonical)
 				|| referencesName(program, LispNames.OUTPUT_STREAM_P, canonical);
+	}
+
+	/** Per entry, the member names of every symbol its forms spell. */
+	private static final Map<String, java.util.Set<String>> ENTRY_MEMBER_NAMES = new ConcurrentHashMap<>();
+
+	private static java.util.Set<String> entryMemberNames(String entry) {
+		return ENTRY_MEMBER_NAMES.computeIfAbsent(member(entry), n -> symbolNames(formsFor(n), false));
+	}
+
+	/**
+	 * The name of every symbol anywhere in the program -- exactly what
+	 * {@link #referencesName(List, String, boolean)} can match, as the symbols themselves
+	 * when {@code canonical}, as member names otherwise -- so that one walk answers any
+	 * number of its questions.
+	 */
+	private static java.util.Set<String> symbolNames(List<LispVal> program, boolean canonical) {
+		java.util.Set<String> names = new java.util.HashSet<>();
+		for (LispVal form : program) {
+			collectSymbolNames(form, canonical, names);
+		}
+		return java.util.Set.copyOf(names);
+	}
+
+	private static void collectSymbolNames(LispVal form, boolean canonical, java.util.Set<String> names) {
+		LispVal cur = form;
+		while (cur instanceof LispCons cons) {
+			collectSymbolNames(cons.car(), canonical, names);
+			cur = cons.cdr();
+		}
+		if (cur instanceof LispSymbol sym) {
+			names.add(canonical ? sym.name() : member(sym.name()));
+		}
 	}
 
 	private static boolean referencesName(List<LispVal> program, String name, boolean canonical) {

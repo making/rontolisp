@@ -13,10 +13,19 @@ import am.ik.rontolisp.eval.TlsLibrary;
 import am.ik.rontolisp.eval.WitLibrary;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+/**
+ * In-memory compiles, no files, no streams: the methods run concurrently. That a compile
+ * answers the same bytes whatever else the JVM compiles alongside it is itself pinned
+ * ({@code cli/CompileIndependenceTest}), which is what the byte-identity assertions here
+ * lean on.
+ */
+@Execution(ExecutionMode.CONCURRENT)
 class WasmLispCompilerTest {
 
 	private byte[] compile(String lispCode) {

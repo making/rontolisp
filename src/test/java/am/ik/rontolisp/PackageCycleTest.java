@@ -18,6 +18,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -149,7 +150,19 @@ class PackageCycleTest {
 				+ (cycle.size() > 20 ? " ... (" + cycle.size() + " classes)" : "");
 	}
 
-	private static Map<Path, String> strippedSources() throws IOException {
+	private static @Nullable Map<Path, String> strippedSources;
+
+	// Every test reads the same tree, so it is read and stripped once per class.
+	private static synchronized Map<Path, String> strippedSources() throws IOException {
+		Map<Path, String> cached = strippedSources;
+		if (cached == null) {
+			cached = readStrippedSources();
+			strippedSources = cached;
+		}
+		return cached;
+	}
+
+	private static Map<Path, String> readStrippedSources() throws IOException {
 		Map<Path, String> bodies = new LinkedHashMap<>();
 		for (Path root : SOURCE_ROOTS) {
 			try (Stream<Path> tree = Files.walk(root)) {
@@ -158,7 +171,7 @@ class PackageCycleTest {
 				}
 			}
 		}
-		return bodies;
+		return java.util.Collections.unmodifiableMap(bodies);
 	}
 
 	private static Map<String, Set<String>> packageGraph() throws IOException {
@@ -231,18 +244,29 @@ class PackageCycleTest {
 					shadowedByImport.add(imported.group(2));
 				}
 			}
+			// A neighbour is mentioned when its simple name is a whole word of the body
+			// (what \bName\b finds, since a class name is all word characters). One pass
+			// collects the words; matching a regex per neighbour instead was quadratic in
+			// the package's class count, most of this test's 12 s (2026-09-24).
+			Set<String> words = new HashSet<>();
+			Matcher word = WORD.matcher(body);
+			while (word.find()) {
+				words.add(word.group());
+			}
 			for (String neighbour : simpleNamesByPackage.getOrDefault(ownPackage, Set.of())) {
 				String to = ownPackage + "." + neighbour;
 				if (to.equals(from) || shadowedByImport.contains(neighbour)) {
 					continue;
 				}
-				if (Pattern.compile("\\b" + Pattern.quote(neighbour) + "\\b").matcher(body).find()) {
+				if (words.contains(neighbour)) {
 					edges.add(to);
 				}
 			}
 		}
 		return graph;
 	}
+
+	private static final Pattern WORD = Pattern.compile("\\w+");
 
 	private static final Pattern IMPORT_DECLARATION = Pattern
 		.compile("(?m)^\\s*import\\s+(?:static\\s+)?([\\w.]+)\\.(\\w+)\\s*;");

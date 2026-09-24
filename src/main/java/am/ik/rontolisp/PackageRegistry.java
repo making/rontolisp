@@ -797,8 +797,41 @@ public final class PackageRegistry {
 
 	/**
 	 * Creates a registry seeded with the built-in packages.
+	 *
+	 * <p>
+	 * Every evaluator and every compile builds one, and the built-in packages are the
+	 * same every time, so they are built ONCE ({@link Seed}) and each registry starts
+	 * from copies whose member tables share the seed's owned set and record only what the
+	 * program itself interns or uninterns ({@code LispPackage.MemberTable}). Building
+	 * them per registry -- a thousand-name copy for {@code cl} and again for
+	 * {@code closer-common-lisp}, the uiop sub-package tables recomputed -- was measured
+	 * (2026-09-24) at ~1.5 ms per registry, 12% of {@code DocExamplesTest}, which builds
+	 * one per page.
 	 */
 	public PackageRegistry() {
+		for (LispPackage seeded : Seed.PACKAGES) {
+			define(new LispPackage(seeded.name(), seeded.useList(), seeded.symbols(), seeded.externals(),
+					seeded.imports(), seeded.shadows()));
+		}
+	}
+
+	/** The built-in packages, built once and frozen: every component immutable. */
+	private static final class Seed {
+
+		static final List<LispPackage> PACKAGES = new PackageRegistry(true).packages.values()
+			.stream()
+			.map(p -> new LispPackage(p.name(), List.copyOf(p.useList()), Set.copyOf(p.symbols()),
+					Set.copyOf(p.externals()), Map.copyOf(p.imports()), Set.copyOf(p.shadows())))
+			.toList();
+
+	}
+
+	/**
+	 * Builds the built-in packages from scratch -- what {@link Seed} runs once.
+	 * @param seeding marks the seeding constructor apart from the public one
+	 */
+	@SuppressWarnings("unused")
+	private PackageRegistry(boolean seeding) {
 		// The owned set is the implemented symbols PLUS the export-only standard names,
 		// so the package's externals stay a subset of its symbols; the resolution
 		// predicate isClSymbol still reads CL_SYMBOLS alone.

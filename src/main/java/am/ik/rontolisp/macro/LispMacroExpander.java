@@ -30067,35 +30067,7 @@ public final class LispMacroExpander {
 	 * @return the instance tags with a user print-object method
 	 */
 	public static List<String> printObjectTags(ClosRegistry closRegistry) {
-		ClosRegistry.GenericInfo generic = closRegistry.generics()
-			.values()
-			.stream()
-			.filter(g -> LispNames.PRINT_OBJECT.equals(plainName(g.name())))
-			.findFirst()
-			.orElse(null);
-		if (generic == null) {
-			return List.of();
-		}
-		List<String> tags = new java.util.ArrayList<>();
-		for (ClosRegistry.MethodInfo method : generic.methods().values()) {
-			for (ClosRegistry.Specializer specializer : method.specializers()) {
-				// A defclass name is a CLASS specializer, a defstruct name a TYPE one
-				// carrying the struct name (parseSpecializer); both route the printer, so
-				// both descendant-tag families are collected.
-				if (specializer.name() == null || (specializer.kind() != ClosRegistry.SpecializerKind.CLASS
-						&& specializer.kind() != ClosRegistry.SpecializerKind.TYPE)) {
-					continue;
-				}
-				List<String> descendants = new java.util.ArrayList<>(closRegistry.descendantTags(specializer.name()));
-				descendants.addAll(closRegistry.descendantStructTags(specializer.name()));
-				for (String tag : descendants) {
-					if (tag != null && !tags.contains(tag)) {
-						tags.add(tag);
-					}
-				}
-			}
-		}
-		return tags;
+		return closRegistry.printObjectTags();
 	}
 
 	/**
@@ -42170,6 +42142,11 @@ public final class LispMacroExpander {
 			}
 			program = lambdaSettled;
 		}
+		// Every symbol name the program mentions, collected in ONE walk: each question
+		// below is "does the program name X anywhere", asked for some forty names, and
+		// asking each as its own whole-program walk was measured (2026-09-24) at ~5% of
+		// a ci-spec corpus compile -- almost all of it walks for names that are absent.
+		java.util.Set<String> mentioned = symbolNames(program);
 		for (String name : PRINTER_MODE_VARS.keySet()) {
 			// print-unreadable-object READS *print-escape* to decide how it spells the
 			// :type designator, and its expansion happens in Pass 2 -- long after this
@@ -42181,6 +42158,15 @@ public final class LispMacroExpander {
 			// A write-to-string keyword is a binding the Pass-2 lowering
 			// (expandWriteToStringKeywords) has not written yet, so it counts here too.
 			boolean escapeReader = LispNames.PRINT_ESCAPE_VAR.equals(name);
+			if (mentioned.contains(name) || (escapeReader && (mentioned.contains(LispNames.PRINT_UNREADABLE_OBJECT)
+					|| mentioned.contains(LispNames.PRINT_OBJECT)))) {
+				printerVars.add(name);
+				continue;
+			}
+			// Short of the name itself, only a write-to-string keyword mentions it.
+			if (!mentioned.contains(LispNames.WRITE_TO_STRING)) {
+				continue;
+			}
 			for (LispVal form : program) {
 				if (mentionsPrinterVariable(form, name)
 						|| (escapeReader && (usesSymbol(form, LispNames.PRINT_UNREADABLE_OBJECT)
@@ -42194,11 +42180,8 @@ public final class LispMacroExpander {
 				LispNames.COMPILE_FILE_PATHNAME_VAR, LispNames.COMPILE_FILE_TRUENAME_VAR, LispNames.READTABLE_VAR,
 				LispNames.MODULES_VAR, LispNames.LOAD_VERBOSE_VAR, LispNames.LOAD_PRINT_VAR,
 				LispNames.COMPILE_VERBOSE_VAR, LispNames.COMPILE_PRINT_VAR)) {
-			for (LispVal form : program) {
-				if (usesSymbol(form, name)) {
-					loadContextVars.add(name);
-					break;
-				}
+			if (mentioned.contains(name)) {
+				loadContextVars.add(name);
 			}
 		}
 		// *features*: an ordinary special holding a list, exactly as it is on the
@@ -42209,25 +42192,15 @@ public final class LispMacroExpander {
 		// (let* ((*features* (cons :clackup *features*))) ...)). Seeded with the names
 		// the frontend READ the program with, so the value the program sees is the set
 		// its own #+ conditionals were resolved against.
-		boolean usesFeatures = false;
-		for (LispVal form : program) {
-			if (usesSymbol(form, LispNames.FEATURES_VAR)) {
-				usesFeatures = true;
-				break;
-			}
-		}
+		boolean usesFeatures = mentioned.contains(LispNames.FEATURES_VAR);
 		// *gensym-counter* and *random-state*: bound on the interpreter so a reference is
 		// not unbound (Environment.createGlobal). The interpreter never reads them --
 		// gensym counts on a private counter and random draws from the in-program
 		// generator (.kb/random.md) -- so their values are the initial ones. The compile
 		// paths seed the same initial values with defvar: a reference answers what the
 		// interpreter answers, and a setq works on both.
-		boolean usesGensymCounter = false;
-		boolean usesRandomState = false;
-		for (LispVal form : program) {
-			usesGensymCounter = usesGensymCounter || usesSymbol(form, LispNames.GENSYM_COUNTER_VAR);
-			usesRandomState = usesRandomState || usesSymbol(form, LispNames.RANDOM_STATE_VAR);
-		}
+		boolean usesGensymCounter = mentioned.contains(LispNames.GENSYM_COUNTER_VAR);
+		boolean usesRandomState = mentioned.contains(LispNames.RANDOM_STATE_VAR);
 
 		// The standard constant variables (pi, the float-range names, the fixnum and
 		// array limits, char-code-limit, internal-time-units-per-second,
@@ -42242,11 +42215,8 @@ public final class LispMacroExpander {
 		boolean wasm = runtimeFeatures.contains("rontolisp-wasm");
 		java.util.List<String> constantNames = new java.util.ArrayList<>();
 		for (String name : ClConstants.sortedNames()) {
-			for (LispVal form : program) {
-				if (usesSymbol(form, name)) {
-					constantNames.add(name);
-					break;
-				}
+			if (mentioned.contains(name)) {
+				constantNames.add(name);
 			}
 		}
 		// *package*: a genuine dynamic variable on every backend (PackageResolver
@@ -42265,7 +42235,10 @@ public final class LispMacroExpander {
 		// prints its symbols against the current package, so the variable and its
 		// assignments are kept for it.
 		boolean readsPackage = false;
-		for (LispVal form : program) {
+		// The top-level assignments do not count, so a mention is only a candidate.
+		boolean packageCandidate = mentioned.contains(LispNames.PACKAGE_VAR)
+				|| mentioned.contains(LispNames.WITH_STANDARD_IO_SYNTAX);
+		for (LispVal form : packageCandidate ? program : List.<LispVal>of()) {
 			if (!isTopLevelPackageAssignment(form) && (usesSymbol(form, LispNames.PACKAGE_VAR)
 					|| usesSymbol(form, LispNames.WITH_STANDARD_IO_SYNTAX))) {
 				readsPackage = true;
@@ -42376,6 +42349,31 @@ public final class LispMacroExpander {
 	}
 
 	/** True when the form mentions the symbol name anywhere (quote included). */
+	/**
+	 * Every symbol name {@code usesSymbol} can find in the program, so that one walk
+	 * answers any number of its questions.
+	 */
+	private static java.util.Set<String> symbolNames(List<LispVal> program) {
+		java.util.Set<String> names = new java.util.HashSet<>();
+		for (LispVal form : program) {
+			collectSymbolNames(form, names);
+		}
+		return names;
+	}
+
+	private static void collectSymbolNames(LispVal form, java.util.Set<String> names) {
+		if (form instanceof LispSymbol sym) {
+			names.add(sym.name());
+			return;
+		}
+		for (LispVal cur = form; cur instanceof LispCons cell; cur = cell.cdr()) {
+			collectSymbolNames(cell.car(), names);
+			if (!(cell.cdr() instanceof LispCons)) {
+				collectSymbolNames(cell.cdr(), names);
+			}
+		}
+	}
+
 	private static boolean usesSymbol(LispVal form, String name) {
 		if (form instanceof LispSymbol sym) {
 			return name.equals(sym.name());
