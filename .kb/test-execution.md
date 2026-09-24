@@ -235,17 +235,41 @@ Traps met doing it:
   `DeviceResidency.dirty(Object)`/`.backed(Object)`, exposed as
   `GpuThresholds.isDirty(Object)`/`.isBacked(Object)`.
 
-## The in-process interpreter leg runs on the CLI's stack, not JUnit's
+## In-process program work runs on the CLI's stack, not JUnit's
 
-`AsdfLibraryE2eSupport#loadsAndRunsOnTheInterpreter` drives `LispEvaluator` IN PROCESS,
-so without help it recurses on the JUnit worker thread -- the JVM default stack, 1 MiB on
-linux-x64, which cl-mustache's spec suite alone recurses past
-([interpreter-stack.md](interpreter-stack.md) has the numbers). The leg therefore runs its
-body on a thread with the stack the CLI hands every program (16 MiB,
-`RontoLispCli`'s `WORKER_STACK_BYTES`, which `INTERPRETER_STACK_BYTES` must track) and
-rethrows what that thread threw, so the leg measures the product's ceiling rather than the
-harness's. A `StackOverflowError` from this leg is a real depth regression, not a
-stack-size accident.
+The CLI runs the whole command line -- the interpreter AND the compile path's passes and
+backend -- on a thread of 16 MiB (`RontoLispCli`'s `WORKER_STACK_BYTES`,
+[interpreter-stack.md](interpreter-stack.md)). A JUnit worker carries the JVM default, 1 MiB
+on linux-x64, so a test that interprets or compiles IN PROCESS would measure the harness's
+ceiling instead of the product's. `testsupport/CliStack` runs a body on a thread of
+`CliStack.BYTES` and rethrows what it threw as itself (`call`; `callWithin` adds a wall-clock
+cap and abandons a body still running); `testsupport/CliStackExtension`
+(`@ExtendWith(CliStackExtension.class)`) moves every test method body of a class there, with
+lifecycle methods and resource locks left on the JUnit worker. `RontoLispCliTest` pins
+`CliStack.BYTES` to the CLI's default. A `StackOverflowError` from a leg on this stack is a
+real depth regression, not a stack-size accident.
+
+Users: the interpreter legs of `AsdfLibraryE2eSupport` (cl-mustache's spec suite alone
+recurses past 1 MiB), `SchemeSpecE2eTest` and `SicpCorpusE2eTest`, and -- by the extension --
+the in-process JVM-backend classes `JvmLispCompilerTest`, `JvmBFloat16ArrayTest`,
+`JvmLinalgGpuAccelCompilerTest`, `JvmLinalgSimdAccelCompilerTest`, `JvmQuantizedMatrixTest`,
+`JvmSimdAccelCompilerTest` and `JvmSimdParallelCompilerTest`.
+
+**How much stack a depth costs depends on the JIT, so the failure is order-dependent.**
+Seen 2026-09-24: `JvmLispCompilerTest#compileAndRunABranchSpanningPastTheSigned16BitOffset`
+(one `progn` of 2,800 forms) overflowed in `CompileTimeBoundp.scan` in a full run and passed
+alone. The stack had not changed -- with parallel execution enabled every test, `SAME_THREAD`
+or not, runs on a ForkJoin worker of the default size -- but once the class ran its methods
+concurrently the wide program could meet the recursing pass before the JIT had compiled it,
+and an interpreted frame is several times a compiled one. Measured on a fresh JVM, a thread
+of the given size compiling that program through `JvmLispCompiler`: 256 KiB overflows in
+`PackageResolver.referencesRuntimePackageMutation` (~920 frames), 512 KiB in
+`UiopLibrary.collectSymbols` (~1,020), 1 MiB in `CompileTimeBoundp.scan` (~1,020), 2 MiB
+passes. Every one of them recurses on the cdr, so the depth is the LIST's LENGTH, not the
+program's nesting; `src/main/java` has ~216 such self-recursive `.cdr()` walks. Through the
+full front end (`JvmSourceCompiler`, what an embedder such as the Maven plugin calls on its own
+thread) at 1 MiB: 700 and 1,400 forms pass, 2,800 overflows (`JsonLibrary$Walker.rewrite`),
+20,000 overflows first in `AsdfRuntimeLibrary.referencesRuntime`.
 
 The evaluator's own per-form scans stay off that budget too: the typecase arm's uiop /
 asdf / geom name scans (`LispEvaluator#collectUiopNames`,

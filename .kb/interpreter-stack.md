@@ -150,6 +150,6 @@ default and at `-Drontolisp.stack=1`/`=0`, the one-line report and exit 1 from t
 thread's name, and the ABSENCE of the launcher from an `objc:`/`appkit:` class and a
 jvm-export class.
 
-The in-process E2E interpreter leg mirrors the constant rather than the mechanism:
-`AsdfLibraryE2eSupport`'s `INTERPRETER_STACK_BYTES` must track `WORKER_STACK_BYTES`, or the
-leg measures JUnit's ceiling instead of the product's ([test-execution.md](test-execution.md)).
+The in-process test legs mirror the constant rather than the mechanism:
+`testsupport/CliStack.BYTES` must track `WORKER_STACK_BYTES` (`RontoLispCliTest` pins it), or
+a leg measures JUnit's ceiling instead of the product's ([test-execution.md](test-execution.md)).

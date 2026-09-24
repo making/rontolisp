@@ -13,8 +13,10 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.eval.VecLibrary;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.CliStackExtension;
 import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
@@ -35,6 +37,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * package is used) and interop with the ordinary packed-array surface.
  */
 @Execution(ExecutionMode.CONCURRENT)
+@ExtendWith(CliStackExtension.class)
 class JvmSimdAccelCompilerTest {
 
 	@TempDir
