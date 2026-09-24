@@ -774,7 +774,7 @@ class ExamplesE2eTest {
 	 * operand stack is empty, and a method entered once -- every top-level form, every
 	 * {@code defun} called once with a long loop inside -- has no other route into a
 	 * compiled version, so such a loop runs in the bytecode interpreter forever
-	 * ({@code .kb/jvm-osr-backedges.md}). {@code JvmOsrBackedgeCorpusTest} pins the same
+	 * ({@code .kb/jvm-osr-backedges.md}). {@code JvmClassShakerCorpusTest} pins the same
 	 * invariant over {@code ci-spec.yaml}; this leg covers the examples.
 	 */
 	private static void assertNoOsrHostileBackedges(Path runDir, Example example, String leg) throws IOException {

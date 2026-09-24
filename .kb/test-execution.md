@@ -5,8 +5,10 @@
 - `src/test/resources/junit-platform.properties` sets `parallel.mode.default` and
   `parallel.mode.classes.default` to `same_thread`. A class opts its OWN methods into
   concurrency only with class-level `@Execution(ExecutionMode.CONCURRENT)`: today
-  `WasmLispCompilerIntegrationTest`, `RoveTestCommandE2eTest`, and every subclass of
-  `AsdfLibraryE2eSupport`. Everything else -- including all of `am.ik.gpu` /
+  `WasmLispCompilerIntegrationTest`, `RoveTestCommandE2eTest`, every subclass of
+  `AsdfLibraryE2eSupport`, `WasmLispCompilerTest`, `cli/RontoLispCliTest`,
+  `WasmTreeShakerCorpusTest` and `JvmClassShakerCorpusTest` ("Concurrent methods" below).
+  Everything else -- including all of `am.ik.gpu` /
   `eval.LinalgGpuTest` -- runs one method at a time in one thread. `eval.LinalgGpuTest`
   costs MINUTES that way on a Mac and carries a `@Timeout` so that a run which is merely
   slow cannot be mistaken for one that stopped (`.kb/gpu.md`, "What `eval/LinalgGpuTest`
@@ -100,6 +102,50 @@ second inheriting the first's scratch files, the verifier check is a real JVM la
 than a `URLClassLoader`, and there is nothing to clean up: the class asserts the project root
 gained nothing, and `CorpusFixtures` no longer carries a remove-what-is-new pair for anyone to
 reach for. Cost, measured on this box: unchanged, 64 s against 69 s in process.
+
+## Concurrent methods (2026-09-24)
+
+The slowest classes were each one long method, so neither fork could overlap their work.
+Measured alone on this box (64 cores, shared with other builds), before -> after:
+
+| Class | Before | After | What changed |
+|---|---|---|---|
+| `WasmTreeShakerCorpusTest` | 91-100 s | 30 s | a parameterized method per WASI mode, concurrent; the three levels compile side by side (`COMPILE_THREADS`, a quarter of the cores, 1..3) and every `wasm-tools` check is its own child process |
+| `JvmClassShakerCorpusTest` + `JvmOsrBackedgeCorpusTest` | 69-73 s + 37-39 s | 40 s | merged: the OSR guard compiled the identical program at the identical two levels; one front end, the two compiles side by side, the two runs side by side (each owns its directory) |
+| `DocExamplesTest` | 75 s | 34 s | `scheme/eval.md` looped 100,000 times inside Scheme `eval` on the interpreter, 20 s per language (`scheme-spec.yaml` pins the 100,000 on all four backends); plus `PackageRegistry` below |
+| `cli/RontoLispCliTest` | 15-17 s | 6 s + 5 s | concurrent; the 30 methods that capture `System.err`/`System.out` moved to `cli/RontoLispCliStreamsTest`, which stays sequential |
+| `WasmLispCompilerTest` | 26-29 s | 9 s | concurrent (in-memory compiles only) |
+| `PackageCycleTest` | 12-14 s | 1.2 s | a regex compiled and run per same-package neighbour per class (quadratic) replaced by one word set per class |
+| `cli/CompileIndependenceTest` | 24-29 s | 25 s | the prelude fix below; its phases stay as designed |
+
+Product fixes found on the way (each measured by JFR on the corpus compile or the test):
+`ClosRegistry.printObjectTags` memoized (10-14% of a corpus compile, recomputed per print
+site); `LispMacroExpander.injectMvSpillGlobal` answers its ~40 "does the program name X"
+questions from one symbol census (~5%); `LispPreludeLibrary.process` does the same across its
+selection fixpoint (64% of the front end of an ASDF program; the corpus front end went from
+~2 s to ~0.7 s warm); `PackageRegistry` builds the built-in packages once and hands each
+registry copy-on-write member tables (`LispPackage.MemberTable`; 12% of `DocExamplesTest`).
+
+Not changed, measured: `WasmRefTypeFolder.fold` is ~55% of a DEFAULT-level corpus WASM
+compile (3-4 s): 8 round-robin rounds over ~4,700 functions to its fixpoint. A worklist is
+the fix; the final full rewrite walk already re-verifies the fixpoint, so an incomplete
+dependency index would cost rounds, not answers.
+
+Traps met doing it:
+
+- **`System.err` is one slot.** A capture by `setErr` in a concurrent method sees every other
+  method's output and restores over another's capture. `testsupport/UndefinedWarnings`
+  routes by THREAD instead (a compile runs on its caller's thread). A method that must read
+  the process stream belongs in a sequential class of its own.
+- **`@Isolated` on a `@Nested` class serializes the WHOLE enclosing class**, not just the nested
+  one: JUnit moves the global read-write lock to the top-level class and forces its
+  descendants to `SAME_THREAD`. Measured: 119 methods, 23.5 s wall = the sum of the methods.
+  Class-level `READ` locks with method-level `READ_WRITE` on `System.err` convoyed nearly as
+  badly (20 s). A separate top-level class costs nothing: classes run one at a time per fork.
+- **A `@TempDir` FIELD under `@TestInstance(PER_CLASS)` is re-injected and deleted per method.**
+  Concurrent methods share the field, so one method's cleanup deletes the directory another is
+  running in (seen as `NoSuchFileException` on a file the test had just created). Take it as a
+  method parameter.
 
 ## Determinism a test assumes but the JVM does not owe it
 

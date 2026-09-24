@@ -132,16 +132,16 @@ unchanged as `private static _main$body(String[])`; the class itself is the `Run
 
 ## Pinning tests
 
-`RontoLispCliTest#mainRunsTheProgramOnItsOwnStackNotTheLaunchersOne` calls `main` on a
+`RontoLispCliStreamsTest#mainRunsTheProgramOnItsOwnStackNotTheLaunchersOne` calls `main` on a
 1 MiB thread and, right after at the same depth, the CONTROL: `run` on the same thread, which
 must overflow, so the test cannot pass on a stack it never needed. A control that fits
 doubles the depth and pairs again. The pair used to be two tests sharing a depth searched
 once per JVM; the depth was found cold and asserted on warm, and the control failed once under
 parallel load (2026-09-17). In the same JVM after warm-up, 200 re-runs at the found depth
 all overflowed locally -- the failure needs a JIT whose warm limit crosses the found depth,
-which is why the pairing, not a margin, is the fix. `#theStackOptionIsReadOffTheRawArgumentsAndConsumed`
-and `#theStackOptionRefusesASizeNoThreadCanBeGiven` pin the flag;
-`#anUncaughtStackOverflowInAFileIsOneLineAndExitOne` the report and
+which is why the pairing, not a margin, is the fix. `RontoLispCliTest#theStackOptionIsReadOffTheRawArgumentsAndConsumed`
+and `RontoLispCliTest#theStackOptionRefusesASizeNoThreadCanBeGiven` pin the flag;
+`RontoLispCliStreamsTest#anUncaughtStackOverflowInAFileIsOneLineAndExitOne` the report and
 `#aStackOverflowAtTheReplIsReportedAndTheSessionKeepsItsDefinitions` the recovery, in both
 languages.
 

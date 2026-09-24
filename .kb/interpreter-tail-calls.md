@@ -121,9 +121,9 @@ defuns, `apply`, a lambda head, `labels`, `return-from`, and `progn`/`let`/`let*
 `#aReturnFromReachesTheActivationWhoseBlockTheClosureCaptured` (SBCL prints the same),
 `#aFuncallInTailPositionKeepsTheBuiltInsHandlerBindSeam`,
 `#aGoInTheTailOfAFunctionCalledFromAStatementJumpsToTheStatementsTagbody`, and the
-`.todo/901` trio; `RontoLispCliTest.aSchemeTailCallThroughAProcedureValueRunsInConstantStackOnTheInterpreter`
+`.todo/901` trio; `RontoLispCliStreamsTest.aSchemeTailCallThroughAProcedureValueRunsInConstantStackOnTheInterpreter`
 (a session and a file, 300,000 deep); `LispEvaluatorHotMethodSizeTest`. The REPL's
 recovery after an overflow stays pinned by
-`RontoLispCliTest.aStackOverflowAtTheReplIsReportedAndTheSessionKeepsItsDefinitions`. The
+`RontoLispCliStreamsTest.aStackOverflowAtTheReplIsReportedAndTheSessionKeepsItsDefinitions`. The
 wasm side of the same programs: `.kb/wasm-tail-calls.md`; compiled JVM output stays
 bounded by its 16 MiB worker, about 16,000 such calls (`.kb/interpreter-stack.md`).

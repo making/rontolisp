@@ -14,14 +14,14 @@
 (display (execute '(> 5 3))) (newline)
 (eval '(define (fact n) (if (= n 0) 1 (* n (fact (- n 1))))) (interaction-environment))
 (display (list (eval '(fact 10) (interaction-environment))
-               (eval '(let loop ((i 0)) (if (= i 100000) i (loop (+ i 1))))
+               (eval '(let loop ((i 0)) (if (= i 10000) i (loop (+ i 1))))
                      (interaction-environment))))
 (newline)
 ```
 
 ```
 #t
-(3628800 100000)
+(3628800 10000)
 ```
 
 `eval` の中では、名前付き `let`、`do`、自分自身を呼ぶ手続きは一定のスタックで動きます。

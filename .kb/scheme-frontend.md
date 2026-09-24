@@ -664,7 +664,9 @@ per backend, generated from the JDK: `.kb/characters-code-points.md`) and are us
   position, the same value a call gives anywhere else, so no tail-position analysis is
   needed. 100,000 iterations of a named let, of a self-calling `define` and of a `do` run
   on all four backends; before the loop frames a named let of 1,000 exhausted wasm's
-  stack (2026-09-17). A closure made in an iteration keeps its iteration's frame. Stated
+  stack (2026-09-17). The interpreter runs this evaluator as interpreted Lisp: ~200 us an
+  iteration (100,000 took 20 s, 2026-09-24), which is why `doc/*/scheme/eval.md` loops
+  10,000 -- still past the ~10,000-deep non-tail recursion that overflows the CLI's 16 MiB. A closure made in an iteration keeps its iteration's frame. Stated
   deviation, the session's too: an old closure of a name `set!` later keeps jumping to
   itself. Every other call recurses (`ev?`/`od?`).
 - Errors are Scheme-spelled through `%scheme-error-message`: `Unbound variable: x`,
@@ -686,7 +688,7 @@ per backend, generated from the JDK: `.kb/characters-code-points.md`) and are us
   `SchemeLoweringTest.evalAndEveryEnvironmentSpecifierLowerToTheRunTimeEvaluator`,
   `SchemeBuiltinsTest.theRunTimeTableAnswersEveryProcedureAndConstantByItsMangledName`,
   `LibraryDefunPrunerTest.theSchemeEvaluatorAndItsProcedureTableFollowOnlyAProgramThatEvals`,
-  `RontoLispCliTest.anErrorInsideSchemeEvalIsReportedInSchemeTerms`.
+  `RontoLispCliStreamsTest.anErrorInsideSchemeEvalIsReportedInSchemeTerms`.
 
 ## `(scheme read)` (the current input port, or a port argument)
 
@@ -871,7 +873,7 @@ reports and what a Common Lisp `handler-case` around Scheme code catches.
 - Pinned by the `guard-...`, `with-exception-handler-...`, `read-raises-a-read-error`
   cases of `scheme-spec.yaml` (all four backends, Gauche 0.9.15 `-r7` output), its three
   exception `standalone:` cases, `SchemeLoweringTest.aGuardIsABodyThunk...`,
-  `RontoLispCliTest.theSchemeReplCatchesAndReportsRaisedObjects`.
+  `RontoLispCliStreamsTest.theSchemeReplCatchesAndReportsRaisedObjects`.
 
 ## Parameters (`make-parameter`, `parameterize`; 2026-09-18, `.todo/867`)
 
@@ -1478,7 +1480,7 @@ names outlive each buffer; everything else is per buffer.
   The REPL used to reword it (`#f is not a procedure; operands: (2 3)`, 2026-09-17,
   removed the same day): a rewording only the interpreter REPL could produce split one
   failure into two texts ([error-handling.md](error-handling.md), "Applying a value
-  that names no function"). Pinned by `RontoLispCliTest.theSchemeReplReportsANonProcedureAsAFileDoes`
+  that names no function"). Pinned by `RontoLispCliStreamsTest.theSchemeReplReportsANonProcedureAsAFileDoes`
   and the `standalone:` cases of `scheme-spec.yaml` (all four backends).
 - **Cost** (2026-09-18, x86-64 Linux, Java 25): a program with no indirect call is
   byte-identical (`hello.scm`: 1,665 B of class / 510 B of wasm before and after).
@@ -1928,12 +1930,14 @@ when a buffer is complete), `SchemeReaderTest`, `SchemeNamesTest`,
 `SchemeLibrariesTest` (`define-library` / `include`), `SchemeCondExpandTest`, `SchemeLibraryTest` (which programs
 get the printer's vertical-line arm and `eval`'s `cond-expand` arm),
 `RontoLispCliTest` (`aSchemeFileIsPickedByItsExtension`, `aCommonLispProgramLoadsASchemeFile`,
-`aSchemeSyntaxErrorNamesItsPositionOnEveryPath`, `aSchemeProgramIsRefusedByTheScalarBackend`,
+the `theSchemeRepl...` transcripts, the
+first of which replays its input as a FILE and compares, `aPipedReplWritesNoPromptForEitherLanguage`),
+`RontoLispCliStreamsTest` -- the ones that read standard error --
+(`aSchemeSyntaxErrorNamesItsPositionOnEveryPath`, `aSchemeProgramIsRefusedByTheScalarBackend`,
 `anUncaughtSchemeErrorReportsItsMessageAndIrritants`,
 `aSchemeTranscendentalWithAComplexAnswerIsRefusedByName`, `anErrorInsideSchemeEvalIsReportedInSchemeTerms`,
-the `theSchemeRepl...` transcripts, the
-first of which replays its input as a FILE and compares, `aCyclicValueIsEchoedWithoutKillingTheSession`,
-`aPipedReplWritesNoPromptForEitherLanguage`, `aTerminalReplPromptsOncePerFreshForm`,
+the `theSchemeRepl...` transcripts that report an error, `aCyclicValueIsEchoedWithoutKillingTheSession`,
+`aTerminalReplPromptsOncePerFreshForm`,
 `aPipedReplReportsFailuresOnStandardErrorAndEndsNonZero`, `exitEndsTheSessionWithItsStatusInEitherLanguage`),
 `SchemeSpecE2eTest.exitEndsTheProcessWithItsStatusOnEveryBackend` (one program per status, each asserting the `after` thunk ran; the JVM
 leg in a child process, since `exit` there is `System.exit`; plus `emergency-exit`
