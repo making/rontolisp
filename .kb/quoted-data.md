@@ -59,11 +59,32 @@ unchanged.
 
 **What is left is not the stack.** Wasmtime's time grows with the square of the GC
 allocations in ONE function, whatever the stack does: N x `ref.i31; ref.null; struct.new;
-drop` compiles in 1.4 / 4.5 / 18.8 s at 5,000 / 10,000 / 20,000 (`-C collector=null` 1.2 s and
-`-O regalloc-algorithm=single-pass` 1.35 s at 10,000: the DRC allocation path under the
-backtracking allocator), while the same 20,000 cells split into helper functions of 64 compile
-in 0.2 s. The generator for these modules is
-`.todo/artefacts/953-wasm-compile-quadratic-in-list-length/`.
+drop` compiles in 1.4 / 4.5 / 18.8 s at 5,000 / 10,000 / 20,000, while the same 20,000 cells
+split into helper functions of 64 compile in 0.2 s. It is wasmtime's, with no rontolisp in it:
+N x `struct.new` of an EMPTY struct takes 1.6 / 4.8 / 15.2 s. Those numbers are under the
+DEFAULT collector, which in wasmtime 49 is `copying`. At 10,000, register allocation is 3.8 of
+the 4.4 s. `drc` compiles the same module in 0.15 s, `null` in 0.6 s and single-pass regalloc
+in 0.7 s. Generators: `.todo/artefacts/953-wasm-compile-quadratic-in-list-length/` (list
+shapes) and `.todo/artefacts/955-wasmtime-compile-quadratic-in-allocations-per-function/`
+(the reducer, and an upstream report that is drafted but not filed).
+
+**Long data is NOT split into helper functions (measured 2026-09-24).** Real programs do
+reach thousands of allocations in one function, but those functions never set the compile
+time. Across every GC-wasm leg of `examples/`:
+
+- Most programs stay at or below 317 allocations per function (`llm`).
+- The HTTP Worker family goes higher, because its baked data is one function per datum:
+  5,813 in the ningle Worker's `%asdf-registry%` (1.8 s on one core), 4,692 in its
+  `%class-meta-table`, and 3,493 in tiny-routes (0.67 s).
+- In every one of these modules a different function compiles for as long or longer. Tiny-routes'
+  largest function takes 0.69 s. In ningle, fast-http's `parse-request` takes 46.6 s, which is
+  the landing-pad refresh (`.kb/wasm-landing-pad-refresh.md`, "Cost").
+
+Parallel compilation hides the datum's cost, so the split would save no wall time on any
+measured artifact. It becomes worth building when a datum's function is a module's slowest.
+Past about 10,000 cells that is 5 s. The split then builds such a datum in helper functions,
+one per run, each taking the tail and returning the list; a tree splits per subtree. A helper
+is larger than `WasmInliner.MAX_MOVED_BODY`, so the inliner leaves it out of line.
 
 ## Not covered
 Two DIFFERENT quote sites spelling the same text are not `eq` (CLHS permits but does not

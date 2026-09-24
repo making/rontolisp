@@ -1,24 +1,28 @@
 # 955. wasmtime compile time is quadratic in the GC allocations of one function
 
-Difficulty: Medium
+Difficulty: Low
 
-Found by `.todo/953`, which took the operand-stack depth out of long quoted lists
-(`.kb/quoted-data.md`, "A long list is built in runs"). What is left does not depend on the
-stack: `wasmtime compile` time grows with the square of the `struct.new`s in ONE function.
-Hand-written, wasmtime 49.0.0, N x `ref.i31; ref.null; struct.new; drop`: 1.4 / 4.5 / 18.8 s
-at 5,000 / 10,000 / 20,000. At 10,000, `-C collector=null` takes 1.2 s and
-`-O regalloc-algorithm=single-pass` 1.35 s, so it is the DRC allocation path under the
-backtracking allocator. The same 20,000 cells split into helper functions of 64 compile in
-0.2 s. A quoted list of 50,000 symbols still takes 94 s. Generator and table:
-`.todo/artefacts/953-wasm-compile-quadratic-in-list-length/`.
+Found by `.todo/953`. The measurement on 2026-09-24 changed the plan. The reduction and the
+real-program census are done, and the helper-function split is not built. Only the upstream
+report is left, and it is on hold.
 
-## Plan
+- **Reduced.** One function doing N x `struct.new $s; drop` on an EMPTY struct compiles in
+  1.6 / 4.8 / 15.2 s at 5,000 / 10,000 / 20,000 under wasmtime 49's default `copying`
+  collector. Register allocation is 3.8 of 4.4 s at 10,000.
+- **Real programs reach it, but it does not decide their compile time.** The largest count is
+  5,813, in the hello-ningle Worker's baked `%asdf-registry%` datum, which costs 1.8 s on one
+  core. Every example outside the ningle/tiny-routes/clack Worker family stays at or below
+  317. In each of those Workers another function compiles as long or longer. In ningle it is
+  fast-http's `parse-request`: 46.6 s, the landing-pad refresh, now `.todo/957`. So splitting
+  quoted data into helper functions would save no wall time on any measured artifact. Why it
+  is not built, and when to build it: `.kb/quoted-data.md`.
 
-- Reduce the module to a rontolisp-free wat (the `drop` shape is one) and report it against
-  `bytecodealliance/wasmtime`, as `.todo/731` does for the landing-pad bug.
-- Measure whether real programs reach this: the largest allocation count per function across
-  `examples/` and the Worker family. A large quoted list is the one shape known to.
-- If one does: build a quoted list longer than some bound in helper functions, one per run,
-  each taking the tail and returning the list. The wasm-GC backend has to append functions
-  after the bodies compile, and `WasmInliner` must not inline a helper back into its one
-  caller. Measure the size cost against `size-report` first.
+Numbers, the reducer and the census tools: `.todo/artefacts/955-wasmtime-compile-quadratic-in-allocations-per-function/`.
+
+## Left
+
+- **File the report against `bytecodealliance/wasmtime`.** The draft is `upstream-report.md`
+  in the artefact directory, and `min.py` is the attachment. **On hold:** filing needs the
+  user's explicit word. Record the issue number in `.kb/quoted-data.md` once it exists.
+  Before filing, re-run `minrun.sh` on the wasmtime version pinned at that time. If the
+  quadratic is gone, close this item with the new numbers instead.
