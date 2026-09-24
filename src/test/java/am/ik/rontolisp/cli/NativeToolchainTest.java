@@ -17,7 +17,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 /**
  * The loader of the {@code --native} shim and stub: the refusals, the extraction cache
  * and the native-image registration of its downcalls. The halves that need the built shim
- * run only where {@code rontolisp-native/build.sh} put it on the classpath.
+ * run only where {@code rontolisp-native/build.sh} put it on the classpath, and fail
+ * without it under {@code -Drontolisp.native.required=true}.
  */
 class NativeToolchainTest {
 
@@ -84,6 +85,10 @@ class NativeToolchainTest {
 
 	@Test
 	void theHostShimReportsTheStubsFingerprintAndReportsARefusedModule() {
+		if (Boolean.getBoolean("rontolisp.native.required")) {
+			assertThat(NativeToolchain.availableOnHost()).as("-Drontolisp.native.required=true: the host's pair")
+				.isTrue();
+		}
 		assumeTrue(NativeToolchain.availableOnHost(), "no --native shim for this host on the classpath");
 		NativeToolchain toolchain = NativeToolchain.load();
 		assertThat(NativeExecutable.stubFingerprints(toolchain.stub())).singleElement()

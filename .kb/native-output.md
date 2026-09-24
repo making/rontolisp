@@ -20,7 +20,12 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   `panic = unwind` and `rl_precompile` catches at the boundary: it runs inside a JVM.
   `install_name @rpath/librlprecomp.dylib` / `soname librlprecomp.so` via `precomp/build.rs`.
 - **Stub** `rlrun`: runtime-only wasmtime (`runtime std gc gc-copying`, no Cranelift) +
-  `wasmtime-wasi` `p1`; profile `release-runner` (`panic = abort`). Reads its trailer from
+  `wasmtime-wasi` `p1`; profile `release-runner` (`panic = abort`). On Linux it links glibc
+  STATICALLY (`-C target-feature=+crt-static`, built with an explicit
+  `--target <arch>-unknown-linux-gnu` so the flag stays off build scripts; binary at
+  `target/<triple>/release-runner/rlrun`): an output has no glibc floor and runs on musl
+  hosts too (checked 2026-09-24 in `alpine:3.20`, `centos:7` = glibc 2.17 and `busybox`,
+  where the dynamic stub failed on `GLIBC_2.34` / `libgcc_s.so.1`). Reads its trailer from
   `/proc/self/exe` (Linux) or `current_exe()`, runs `_start` with inherited stdio, argv and
   environment; preopens the current directory as fd 3 (what a relative path resolves against,
   `.kb/read-load-streams.md`) under its ABSOLUTE name (`current_dir()`, `.` when unknown or
@@ -48,9 +53,22 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
 
 - **Resources**: `am/ik/rontolisp/native/<linux|macos>-<x86_64|aarch64>/{librlprecomp.so|.dylib, rlrun}`
   on the classpath. `pom.xml` adds `rontolisp-native/target/resources` as a resource
-  directory, so a jar built after `rontolisp-native/build.sh` carries the host's pair (+4.2 MB
-  compressed on Linux x86_64: 12.3 MB exec jar); without it the build is unchanged and
-  `--native` answers "not available for <os>-<arch>". Shipping every platform: `.todo/945`.
+  directory; without the host's pair there `--native` answers "not available for <os>-<arch>".
+- **Building it from Maven**: the `native-shims` antrun execution (generate-resources) runs
+  `build.sh --maven <rontolisp.native.build> <rontolisp.native.required>`. `build` (default
+  `false`, `true` under `-Pnative`) builds the pair when `cargo` is on `PATH` or in
+  `~/.cargo/bin`, else warns and goes on; `required` (CI) fails unless the host's pair is
+  there afterwards and, on Linux, its stub is static. A static link that fails (no `libc.a`)
+  falls back to a dynamic stub with a warning, except under `required`.
+- **Packaging** (decided 2026-09-24 from the sizes below): each `-Pnative` binary carries its
+  HOST pair only (it is per-platform already); the release exec jar carries all three
+  release platforms (~11.4 MB compressed; 8.1 MB jar -> ~19.5 MB), so `java -jar` compiles
+  `--native` on any of them; the Maven Central jar (the `deploy` job) carries none. CI
+  (`ci.yaml`): each `native-image` leg builds its pair through `-Pnative
+  -Drontolisp.native.required=true`, runs `build.sh --test`, runs `NativeOutputE2eTest` and
+  `NativeToolchainTest` against the binary (`-Drontolisp.binary`; `required` turns their
+  skips into failures) and uploads `native-shims-<platform>`; `release` merges the three
+  into `rontolisp-native/target/resources` and checks the exec jar lists each `rlrun`.
 - **Cache**: `dlopen` needs a file. The shim is extracted to
   `<cache>/native/<sha256 16 hex>/<lib>` via temp file + atomic move; a file of the right
   size there is reused. `<cache>` = `-Drontolisp.native.cache`, else an absolute
@@ -95,8 +113,24 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   thread's fork still holds the write descriptor (until that child's exec). `stub.rs`
   retries the spawn; a Java E2E that writes and runs outputs in parallel needs the same.
 - **CPU features**: the shim targets the HOST CPU; an output may not run on an older one.
+- **musl is slower, not smaller-and-equal**: a musl stub (2.12 MB) ran `gc.lisp` at 14.0-14.3
+  G user cycles against 12.2-12.5 for glibc, dynamic or static (+13-15%, same instruction
+  count, pinned to one core, 2026-09-24, Xeon E5-2697A v4). It is the string functions:
+  `LD_PRELOAD`ing a `rep movs` `memmove` into the glibc stub made it slower still, and a
+  musl stub with mimalloc stayed at 14.0. Static glibc costs size instead (+0.98 MB on
+  x86_64); a musl stub with its own `memmove`/`memcpy`/`memset` could have both, at the
+  price of owning those routines (`.todo/956`).
 
 ## Numbers
+
+Stub and shim per platform (2026-09-24, wasmtime 49.0.0, stripped; `gz` = gzip -6, what a
+jar entry costs): linux-x86_64 shim 10,219,624 B (3.45 MB gz), static stub 2,987,040 B
+(1.24 MB gz; dynamic 2,004,424, musl 2,119,184); linux-aarch64 (cross-built) shim 6,689,392 B
+(2.67 MB gz), static stub 2,436,232 B (1.08 MB gz; musl 1,839,840); macos-aarch64 from the
+spike, shim 5.5 MB, stub 1.7 MB. Static glibc outputs: hello 3,005,768 B, `gc` ~3.2 MB;
+`gc` 12.2-12.3 G cycles (= dynamic), `fib` 0.28-0.31 s, hello 0.01-0.02 s / 19 MB RSS. The
+cross-built aarch64 static stub ran the ci slice under `qemu-aarch64-static` with output
+identical to x86_64's.
 
 2026-09-24, Linux x86_64 (64 cores), rustc 1.98.1, wasmtime 47.0.3:
 

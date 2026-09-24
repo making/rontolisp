@@ -11,15 +11,27 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 
 fn stub() -> PathBuf {
-    let path = std::env::var_os("RLNATIVE_STUB")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/release-runner/rlrun"));
+    let path = std::env::var_os("RLNATIVE_STUB").map(PathBuf::from).unwrap_or_else(|| {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../target")
+            .join(stub_in_target())
+    });
     assert!(
         path.is_file(),
-        "no runner stub at {}: run ./build.sh (or cargo build --profile release-runner -p rlrun) first",
+        "no runner stub at {}: run ./build.sh first",
         path.display()
     );
     path
+}
+
+/// Where build.sh leaves the stub under `target/`: Linux builds it for an explicit
+/// `<arch>-unknown-linux-gnu` target (the static-glibc flag must stay off build scripts).
+fn stub_in_target() -> PathBuf {
+    if cfg!(target_os = "linux") {
+        Path::new(&format!("{}-unknown-linux-gnu", std::env::consts::ARCH)).join("release-runner/rlrun")
+    } else {
+        PathBuf::from("release-runner/rlrun")
+    }
 }
 
 fn fixtures() -> PathBuf {

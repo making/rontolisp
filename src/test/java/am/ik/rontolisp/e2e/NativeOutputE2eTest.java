@@ -10,12 +10,14 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import am.ik.rontolisp.cli.RontoLispCli;
 import am.ik.rontolisp.testsupport.HostWasmtime;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import tools.jackson.databind.JsonNode;
@@ -33,11 +35,22 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * and exit as it exits (.kb/native-output.md).
  *
  * <p>
- * Runs where a usable {@code wasmtime} is on {@code PATH} and this build carries the
- * host's precompile shim and runner stub ({@code rontolisp-native/build.sh}); anywhere
- * else it is skipped.
+ * The compiler is this JVM's {@link RontoLispCli}, or the binary
+ * {@code -Drontolisp.binary=<path>} names (the native-image legs of CI: the binary's own
+ * resources and FFM downcalls are what is under test there). Runs where a usable
+ * {@code wasmtime} is on {@code PATH} and the compiler carries the host's precompile shim
+ * and runner stub ({@code rontolisp-native/build.sh}); elsewhere it is skipped, unless
+ * {@code -Drontolisp.native.required=true} makes a missing pair a failure.
  */
 class NativeOutputE2eTest {
+
+	/** The native binary that compiles, or {@code null} for this JVM. */
+	private static final @Nullable String BINARY = System.getProperty("rontolisp.binary");
+
+	/** A build that must carry the pair fails here instead of skipping. */
+	private static final boolean REQUIRED = Boolean.getBoolean("rontolisp.native.required");
+
+	private static final String NOT_AVAILABLE = "--native is not available for ";
 
 	/** ci-spec cases the slice is made of, in corpus order. */
 	private static final List<String> CASES = List.of("arithmetic", "exact-integers-beyond-the-i64-range",
@@ -145,28 +158,41 @@ class NativeOutputE2eTest {
 	}
 
 	/**
-	 * Compiles with --native, skipping the test where this build has no shim for the
-	 * host.
+	 * Compiles with --native, skipping the test where the compiler has no shim for the
+	 * host (failing it under {@link #REQUIRED}).
 	 */
-	private static void compileNative(Path src, Path output) {
+	private static void compileNative(Path src, Path output) throws Exception {
 		try {
 			compile(src, output, "--native");
 		}
 		catch (UnsupportedOperationException ex) {
 			String message = String.valueOf(ex.getMessage());
-			if (message.startsWith("--native is not available for ")) {
+			if (message.contains(NOT_AVAILABLE) && !REQUIRED) {
 				abort(message);
 			}
 			throw ex;
 		}
 	}
 
-	private static void compile(Path src, Path output, String... flags) {
+	private static void compile(Path src, Path output, String... flags) throws Exception {
 		List<String> args = new ArrayList<>(List.of(src.toString(), "-o", output.toString()));
 		args.addAll(List.of(flags));
-		new RontoLispCli(new ByteArrayInputStream(new byte[0]),
-				new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8))
-			.run(args.toArray(String[]::new));
+		if (BINARY == null) {
+			new RontoLispCli(new ByteArrayInputStream(new byte[0]),
+					new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8))
+				.run(args.toArray(String[]::new));
+			return;
+		}
+		args.addFirst(Path.of(BINARY).toAbsolutePath().toString());
+		Run run = exec(Objects.requireNonNull(src.toAbsolutePath().getParent()), args);
+		if (run.exit() != 0) {
+			// The binary reports the in-process exception on stderr; raise it as one so
+			// both drivers skip (or fail) alike.
+			if (run.stderr().contains(NOT_AVAILABLE)) {
+				throw new UnsupportedOperationException(run.stderr().strip());
+			}
+			throw new IllegalStateException("compile failed (" + run.exit() + "): " + run.stderr());
+		}
 	}
 
 	private static Run exec(Path dir, List<String> command) throws Exception {

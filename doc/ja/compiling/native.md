@@ -28,10 +28,10 @@ rontolisp hello.lisp --native -o hello
 
 ## 動作環境
 
-実行ファイルはコンパイラを動かしているプラットフォーム(Linux または macOS、x86_64 または aarch64)向けに作られ、そのマシンの CPU 機能を必要とする場合があります。ホスト向けのプリコンパイラを含まない rontolisp のビルドは `--native is not available for <os>-<arch>` と答えます。
+実行ファイルはコンパイラを動かしているプラットフォーム(Linux または macOS、x86_64 または aarch64)向けに作られ、そのマシンの CPU 機能を必要とする場合があります。Linux では静的リンクされるので、同じアーキテクチャならC ライブラリを問わずどのディストリビューションでも動きます。リリースのバイナリと実行可能 JAR はプリコンパイラを含みます。ホスト向けのプリコンパイラを含まない rontolisp のビルドは `--native is not available for <os>-<arch>` と答えます(ソースからのビルド: [ビルドとインストール](../getting-started/build.md))。
 
 プリコンパイラは共有ライブラリで、`rontolisp` が一度だけ `$XDG_CACHE_HOME/rontolisp`(なければ `~/.cache/rontolisp`、macOS では `~/Library/Caches/rontolisp`)へ展開します。システムプロパティ `rontolisp.native.cache` で場所を変えられます(`-Drontolisp.native.cache=DIR`)。
 
 ## サイズと速度
 
-実行ファイルはおよそ 2 MB のランナーに `.wasm` の約 11 倍を足した大きさです: `hello` で 2.0 MB、28 KB のモジュールで 2.2 MB。起動は約 10 ms で、同じモジュールを `wasmtime run` で動かすのとほぼ同じ速度で動きます。
+実行ファイルはランナー(Linux x86_64 で 3.0 MB、Linux aarch64 で 2.4 MB、macOS で 1.7 MB)に `.wasm` の約 11 倍を足した大きさです: Linux x86_64 では `hello` で 3.0 MB、28 KB のモジュールで 3.2 MB。起動は約 10 ms で、同じモジュールを `wasmtime run` で動かすのとほぼ同じ速度で動きます。

@@ -24,3 +24,10 @@ features (`threads`, `component-model-async`, `pooling-allocator`, ...) the pinn
   `Config` defaults that differ with the feature set.
 - Anything that changes the engine config changes `rlabi::FINGERPRINT`
   (`.kb/native-output.md`, "Invariant").
+
+## Since then (945, 2026-09-24)
+
+The Linux stub now links glibc statically; on `gc.lisp` it measured the same as the
+dynamic stub (12.2-12.3 G user cycles, pinned to one core). musl was +13-15% from its
+string functions (`.kb/native-output.md`, Traps), so the allocator question above is not
+the musl one: re-measure against the static stub.
