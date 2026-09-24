@@ -34,7 +34,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class LispFloatArrayTest {
 
 	private LispVal eval(String input) {
-		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		return eval(new LispEvaluator(new PrintStream(new ByteArrayOutputStream())), input);
+	}
+
+	private static LispVal eval(LispEvaluator evaluator, String input) {
 		LispVal result = LispNil.INSTANCE;
 		for (LispVal expr : LispReader.readAllFromString(input)) {
 			result = evaluator.eval(expr);
@@ -255,7 +258,10 @@ class LispFloatArrayTest {
 	void everyBf16PatternPrintsAndReadsBackToTheSameBits() {
 		// The printed form must round-trip at THIS width for all 65536 patterns, not
 		// merely look right: a shortest-decimal search that is one digit too short
-		// silently changes a model's weights.
+		// silently changes a model's weights. One evaluator reads all of them back: a
+		// literal is self-evaluating, so no pattern's read can see another's, and a
+		// fresh evaluator per pattern made this test take 79 s.
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
 		StringBuilder mismatches = new StringBuilder();
 		for (int pattern = 0; pattern <= 0xFFFF; pattern++) {
 			double value = BFloat16.value(pattern);
@@ -266,7 +272,7 @@ class LispFloatArrayTest {
 			}
 			LispBFloat16Array one = new LispBFloat16Array(new short[] { (short) pattern }, new int[] { 1 });
 			String text = one.print();
-			LispVal back = eval(text);
+			LispVal back = eval(evaluator, text);
 			assertThat(back).isInstanceOf(LispBFloat16Array.class);
 			short got = ((LispBFloat16Array) back).data()[0];
 			if ((got & 0xFFFF) != pattern) {

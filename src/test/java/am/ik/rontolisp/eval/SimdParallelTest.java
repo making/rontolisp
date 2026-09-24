@@ -2,11 +2,15 @@ package am.ik.rontolisp.eval;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.Concurrently;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -34,10 +38,21 @@ class SimdParallelTest {
 		return result;
 	}
 
-	private void assertMatchesSerial(String input) {
-		String serial = eval(input, false).print();
-		assertThat(serial).as("the program answers something").isNotEmpty();
-		assertThat(eval(input, true).print()).as(input).isEqualTo(serial);
+	private void assertMatchesSerial(String... inputs) {
+		// Every program's two runs at once: each builds its own evaluator, and the
+		// row dispatch takes one call at a time whoever calls it, so what runs beside a
+		// --parallel product is only another program's (interpreted) operand setup.
+		List<Callable<String>> runs = new ArrayList<>();
+		for (String input : inputs) {
+			runs.add(() -> eval(input, false).print());
+			runs.add(() -> eval(input, true).print());
+		}
+		List<String> printed = Concurrently.all(runs);
+		for (int i = 0; i < inputs.length; i++) {
+			String serial = printed.get(2 * i);
+			assertThat(serial).as("the program answers something").isNotEmpty();
+			assertThat(printed.get(2 * i + 1)).as(inputs[i]).isEqualTo(serial);
+		}
 	}
 
 	private static String inexact(int rows, int cols, String option) {
@@ -103,30 +118,34 @@ class SimdParallelTest {
 
 	@Test
 	void theMatrixByVectorProductsAreBitIdenticalToTheSerialKernels() {
+		List<String> programs = new ArrayList<>();
 		for (String option : new String[] { DOUBLE, SINGLE }) {
-			assertMatchesSerial(inexact(600, 300, option) + "(linalg:to-list (vec:matvec *w* *x*))");
-			assertMatchesSerial(inexact(4000, 130, option) + "(linalg:to-list (vec:matvec *w* *x*))");
-			assertMatchesSerial(inexact(600, 300, option) + "(linalg:to-list (linalg:dot *w* *x*))");
-			assertMatchesSerial(inexact(600, 300, option) + """
+			programs.add(inexact(600, 300, option) + "(linalg:to-list (vec:matvec *w* *x*))");
+			programs.add(inexact(4000, 130, option) + "(linalg:to-list (vec:matvec *w* *x*))");
+			programs.add(inexact(600, 300, option) + "(linalg:to-list (linalg:dot *w* *x*))");
+			programs.add(inexact(600, 300, option) + """
 					(defparameter *out* (linalg:zeros '(600)%s))
 					(vec:matvec-into *out* *w* *x*)
 					(linalg:to-list *out*)
 					""".formatted(option));
 		}
+		assertMatchesSerial(programs.toArray(String[]::new));
 	}
 
 	@Test
 	void theMatrixProductsAreBitIdenticalToTheSerialKernels() {
+		List<String> programs = new ArrayList<>();
 		for (String option : new String[] { DOUBLE, SINGLE }) {
-			assertMatchesSerial(inexact(600, 300, option) + """
+			programs.add(inexact(600, 300, option) + """
 					(defparameter *b* (linalg:reshape (linalg:sqrt (linalg:arange 3 %d%s)) '(600 40)))
 					(linalg:to-list (linalg:dot (linalg:transpose *w*) *b*))
 					""".formatted(600 * 40 + 3, option));
-			assertMatchesSerial(inexact(400, 300, option) + """
+			programs.add(inexact(400, 300, option) + """
 					(defparameter *b* (linalg:reshape (linalg:sqrt (linalg:arange 3 %d%s)) '(300 40)))
 					(linalg:to-list (linalg:flatten (linalg:matmul (linalg:reshape *w* '(8 50 300)) *b*)))
 					""".formatted(300 * 40 + 3, option));
 		}
+		assertMatchesSerial(programs.toArray(String[]::new));
 	}
 
 	@Test

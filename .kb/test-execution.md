@@ -5,12 +5,17 @@
 - `src/test/resources/junit-platform.properties` sets `parallel.mode.default` and
   `parallel.mode.classes.default` to `same_thread`. A class opts its OWN methods into
   concurrency only with class-level `@Execution(ExecutionMode.CONCURRENT)`: today
-  `WasmLispCompilerIntegrationTest`, `RoveTestCommandE2eTest`, and every subclass of
-  `AsdfLibraryE2eSupport`. Everything else -- including all of `am.ik.gpu` /
-  `eval.LinalgGpuTest` -- runs one method at a time in one thread. `eval.LinalgGpuTest`
+  `WasmLispCompilerIntegrationTest`, `RoveTestCommandE2eTest`, `eval.LinalgGpuDeclineTest`
+  (its flag-on runs take a lock when a device answered the probe: `DeviceResidency` is not
+  thread-safe), and every subclass of `AsdfLibraryE2eSupport`. Everything else --
+  including all of `am.ik.gpu` / `eval.LinalgGpuTest` -- runs one method at a time in one thread. `eval.LinalgGpuTest`
   costs MINUTES that way on a Mac and carries a `@Timeout` so that a run which is merely
   slow cannot be mistaken for one that stopped (`.kb/gpu.md`, "What `eval/LinalgGpuTest`
   costs").
+- Inside ONE method, independent evaluations (own evaluator, own streams) run at once
+  through `testsupport/Concurrently`, one thread per core at most: `LinalgGpuDeclineTest`,
+  `SimdParallelTest`, `QuantizedMatrixTest`. Measured 2026-09-24 on the 64-core box, alone:
+  281 -> 31 s, 16 -> 4 s, 16 -> 6 s.
 - **Trap: `[rontolisp] JUnit parallelism = N` at the start of a run is NOT evidence of
   parallel test execution.** It is `CoreCountParallelismStrategy` printing the value it
   derived for `junit.jupiter.execution.parallel.config.custom.class`, which governs

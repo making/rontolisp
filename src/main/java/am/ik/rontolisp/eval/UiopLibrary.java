@@ -28,6 +28,7 @@ import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The one home of every {@code uiop} definition: the Lisp-source implementations
@@ -487,8 +488,18 @@ public final class UiopLibrary {
 		}
 	}
 
+	// The interpreter's tables, held once found: tables() is asked on every setf
+	// evaluation (LispEvaluator's uiop place trigger), and the keyed lookup below
+	// allocates a joined key per call. Racing threads store the one TABLES entry.
+	private static volatile @Nullable Tables interpreterTables;
+
 	private static Tables tables() {
-		return tables(Features.INTERPRETER);
+		Tables found = interpreterTables;
+		if (found == null) {
+			found = tables(Features.INTERPRETER);
+			interpreterTables = found;
+		}
+		return found;
 	}
 
 	private static Tables tables(Features features) {

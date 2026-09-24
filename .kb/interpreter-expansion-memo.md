@@ -16,6 +16,11 @@ compile-time-constant flags.**
 - `flet`, `labels` (`preExpandLocalMacros`), `symbol-macrolet` — live user-macro table
 - `read`, `floor`/`ceiling`/`round`/`truncate`, `reduce`, `sort` — partial (nullable) lowerings
 
+What re-expanding `setf` costs, measured 2026-09-24 (JFR, `linalg:arange` over 520000
+elements, i.e. a `(setf (aref out i) x)` loop): **24%** of the samples, 8 points of it
+`UiopLibrary.tables()` joining a cache key per call; with that held once, **14.5%**. A memo
+would need a version bumped by every state read above; not done.
+
 Place-writing macros (`push`, `pop`, `incf`, `decf`, `pushnew`, `remf`, `psetf`, `rotatef`,
 `shiftf`) ARE memoized: they lower to `(setf place ...)` and that arm re-expands.
 
