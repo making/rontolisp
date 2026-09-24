@@ -39,8 +39,7 @@ class HugeMethodTest {
 	private static final Set<String> RUN_ONCE = Set.of("am.ik.rontolisp.PackageRegistry.<clinit>",
 			"am.ik.rontolisp.codegen.jvm.JvmLispCompiler.compile",
 			"am.ik.rontolisp.codegen.wasm.WasmLispCompiler.compile",
-			"am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.build",
-			"am.ik.rontolisp.codegen.wasm.WasmEvalRuntimeBuilder.buildEvalBody");
+			"am.ik.rontolisp.codegen.jvm.JvmArrayRuntimeBuilder.build");
 
 	@Test
 	void everyMethodOutsideTheRunOnceListIsSmallEnoughToCompile() throws IOException, URISyntaxException {
