@@ -43,7 +43,12 @@ off for that module** -- silently, by design; the loss is size, never an answer.
   unassigned reference local reads as null), and dead-code skipping by jumping to the
   frame's `else`/`end` after a terminator. Liveness is part of it: a callee becomes live
   when a live `call` is walked, and the loop repeats until no set grew and nothing new
-  became live.
+  became live. **A body is decoded when it first becomes live** (`Model.materialize`), with its
+  per-body tables: the backends hand the pass their whole runtime, and decoding every body up
+  front was half the pass's time (9% of `WasmLispCompilerIntegrationTest`'s compile CPU, JFR
+  2026-09-24) for bodies no walk reached. A dead body is copied as it is, so the output is
+  unchanged; the one difference is that an undecodable DEAD body no longer throws here (the
+  shake's `scanInstr` still refuses an unknown opcode in any body).
 - **Bottom is dead code, not false.** A test on a value NO source produces marks the rest
   of the block unreachable. Folding it to 0 was the first version's bug: it selected the
   `else` arm of `_rat_add`'s "both exact integers" guard, counted the rational path's

@@ -372,7 +372,10 @@ public final class WasmRefTypeFolder {
 
 		final byte[][] codeEntries;
 
-		final Body[] bodies;
+		// Per defined function, decoded on first use (materialize) together with the
+		// per-body tables below: the analysis only ever reaches the functions it proves
+		// live, and a backend module is mostly runtime the program never calls.
+		final @Nullable Body[] bodies;
 
 		final ValType[] globalTypes;
 
@@ -452,9 +455,6 @@ public final class WasmRefTypeFolder {
 			this.numFuncs = this.funcTypes.length;
 			this.codeEntries = codeEntries.toArray(new byte[0][]);
 			this.bodies = new Body[codeEntries.size()];
-			for (int i = 0; i < this.bodies.length; i++) {
-				this.bodies[i] = WasmCodeModel.decode(this.codeEntries[i], types);
-			}
 
 			// Globals: imported ones first (none may be a reference -- checked by parse),
 			// then the defined ones with their initializers.
@@ -497,34 +497,6 @@ public final class WasmRefTypeFolder {
 			this.assignPositions = new int[this.bodies.length][][];
 			this.impurePrefix = new int[this.bodies.length][];
 			this.targeted = new boolean[this.bodies.length][];
-			for (int d = 0; d < this.bodies.length; d++) {
-				FuncType f = this.funcTypes[this.numImports + d];
-				Body body = this.bodies[d];
-				int n = f.params().size() + body.locals().size();
-				@Nullable BitSet[] sets = new BitSet[n];
-				List<List<Integer>> assigns = new ArrayList<>();
-				for (int l = 0; l < n; l++) {
-					ValType t = l < f.params().size() ? f.params().get(l) : body.locals().get(l - f.params().size());
-					sets[l] = t.isRef() ? new BitSet() : null;
-					assigns.add(new ArrayList<>());
-				}
-				this.localSets[d] = sets;
-				int[] prefix = new int[body.code().size() + 1];
-				for (int i = 0; i < body.code().size(); i++) {
-					Instr in = body.code().get(i);
-					if (in.op == 0x21 || in.op == 0x22) {
-						assigns.get((int) in.a).add(i);
-					}
-					prefix[i + 1] = prefix[i] + (isPure(in) ? 0 : 1);
-				}
-				int[][] positions = new int[n][];
-				for (int l = 0; l < n; l++) {
-					positions[l] = assigns.get(l).stream().mapToInt(Integer::intValue).toArray();
-				}
-				this.assignPositions[d] = positions;
-				this.impurePrefix[d] = prefix;
-				this.targeted[d] = new boolean[body.code().size()];
-			}
 			this.returnSets = new @Nullable BitSet[this.numFuncs][];
 			for (int f = 0; f < this.numFuncs; f++) {
 				this.returnSets[f] = setsFor(this.funcTypes[f].results());
@@ -593,6 +565,49 @@ public final class WasmRefTypeFolder {
 		 * Parses the module, or returns null when it is not closed (a reference type on
 		 * an import or export boundary).
 		 */
+		/**
+		 * Decodes one defined function and builds its per-body tables, once: its local
+		 * sets, where each local is assigned, the impure-instruction prefix sums and the
+		 * branch-target flags. Everything that reads a function's body or tables goes
+		 * through here first.
+		 * @param d the defined-function ordinal
+		 * @return the decoded body
+		 */
+		Body materialize(int d) {
+			@Nullable Body decoded = this.bodies[d];
+			if (decoded != null) {
+				return decoded;
+			}
+			FuncType f = this.funcTypes[this.numImports + d];
+			Body body = WasmCodeModel.decode(this.codeEntries[d], this.types);
+			int n = f.params().size() + body.locals().size();
+			@Nullable BitSet[] sets = new BitSet[n];
+			List<List<Integer>> assigns = new ArrayList<>();
+			for (int l = 0; l < n; l++) {
+				ValType t = l < f.params().size() ? f.params().get(l) : body.locals().get(l - f.params().size());
+				sets[l] = t.isRef() ? new BitSet() : null;
+				assigns.add(new ArrayList<>());
+			}
+			this.localSets[d] = sets;
+			int[] prefix = new int[body.code().size() + 1];
+			for (int i = 0; i < body.code().size(); i++) {
+				Instr in = body.code().get(i);
+				if (in.op == 0x21 || in.op == 0x22) {
+					assigns.get((int) in.a).add(i);
+				}
+				prefix[i + 1] = prefix[i] + (isPure(in) ? 0 : 1);
+			}
+			int[][] positions = new int[n][];
+			for (int l = 0; l < n; l++) {
+				positions[l] = assigns.get(l).stream().mapToInt(Integer::intValue).toArray();
+			}
+			this.assignPositions[d] = positions;
+			this.impurePrefix[d] = prefix;
+			this.targeted[d] = new boolean[body.code().size()];
+			this.bodies[d] = body;
+			return body;
+		}
+
 		static @Nullable Model parse(byte[] module) {
 			List<Section> sections = WasmSections.parseSections(module);
 			for (Section s : sections) {
@@ -944,7 +959,7 @@ public final class WasmRefTypeFolder {
 			this.f = f;
 			if (f >= 0) {
 				this.def = f - m.numImports;
-				Body body = m.bodies[this.def];
+				Body body = m.materialize(this.def);
 				this.code = body.code();
 				this.entry = m.codeEntries[this.def];
 				FuncType ft = m.funcTypes[f];
@@ -1375,6 +1390,7 @@ public final class WasmRefTypeFolder {
 							this.m.live[callee] = true;
 							this.m.changed = true;
 						}
+						this.m.materialize(callee - this.m.numImports);
 						@Nullable BitSet[] paramSets = this.m.localSets[callee - this.m.numImports];
 						for (int k = 0; k < args.size(); k++) {
 							if (args.get(k).ref()) {
@@ -1396,6 +1412,7 @@ public final class WasmRefTypeFolder {
 							this.m.live[callee] = true;
 							this.m.changed = true;
 						}
+						this.m.materialize(callee - this.m.numImports);
 						@Nullable BitSet[] paramSets = this.m.localSets[callee - this.m.numImports];
 						for (int k = 0; k < args.size(); k++) {
 							if (args.get(k).ref()) {
