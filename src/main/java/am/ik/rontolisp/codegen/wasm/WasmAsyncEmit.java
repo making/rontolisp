@@ -112,8 +112,8 @@ final class WasmAsyncEmit {
 			ctx.closureEnvSlot = -1;
 		}
 		Set<String> capturedVars = WasmLandingPad.regionAssignedVars(bodyExprs, new HashSet<>(paramNames));
-		capturedVars
-			.addAll(FreeVarAnalyzer.findCapturedVars(bodyExprs, new HashSet<>(paramNames), proto.functions.keySet()));
+		capturedVars.addAll(FreeVarAnalyzer.findCapturedVars(bodyExprs, new HashSet<>(paramNames),
+				proto.functions.keySet(), ctx.captureMemo));
 		ctx.boxedVars = capturedVars;
 		compileGuardedProgn(bodyExprs, ctx);
 		bodyWriter.write(Instruction.END);
@@ -454,7 +454,8 @@ final class WasmAsyncEmit {
 		}
 		List<LispVal> stmts = new ArrayList<>(run);
 		run.clear();
-		Set<String> boxedVars = FreeVarAnalyzer.findCapturedVars(stmts, new HashSet<>(), ctx.functions.keySet());
+		Set<String> boxedVars = FreeVarAnalyzer.findCapturedVars(stmts, new HashSet<>(), ctx.functions.keySet(),
+				ctx.captureMemo);
 		WasmToplevelEmit.emit(stmts, ctx, boxedVars, true);
 	}
 
@@ -848,6 +849,7 @@ final class WasmAsyncEmit {
 			.symbolPrintTable(proto.symbolPrintTable)
 			.structAccessors(proto.structAccessors)
 			.closRegistry(proto.closRegistry)
+			.captureMemo(proto.captureMemo)
 			.globals(proto.globals)
 			// NOT optional: a chunk built here compiles call sites too, and a name whose
 			// only definition is its global variable must dispatch through it there as

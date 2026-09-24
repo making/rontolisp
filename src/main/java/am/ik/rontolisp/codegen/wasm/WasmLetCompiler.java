@@ -89,7 +89,8 @@ final class WasmLetCompiler {
 				letVarNames.add(((LispSymbol) ((LispCons) binding).toList().get(0)).name());
 			}
 		}
-		Set<String> capturedInLet = FreeVarAnalyzer.findCapturedVars(bodyExprs, letVarNames, ctx.functions.keySet());
+		Set<String> capturedInLet = FreeVarAnalyzer.findCapturedVars(bodyExprs, letVarNames, ctx.functions.keySet(),
+				ctx.captureMemo);
 		// A binding some landing-pad region in the body assigns lives in a cell too, so
 		// the pad's refresh restores the cell and reads the latest value through it
 		// (WasmLandingPad).
