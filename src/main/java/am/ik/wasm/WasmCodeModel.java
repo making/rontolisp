@@ -339,7 +339,9 @@ final class WasmCodeModel {
 				locals.add(t);
 			}
 		}
-		List<Instr> code = new ArrayList<>();
+		// Sized for the common instruction length (an opcode and a one-byte immediate),
+		// so a body rarely regrows its list.
+		List<Instr> code = new ArrayList<>(Math.max(8, (entry.length - p[0]) / 2));
 		while (p[0] < entry.length) {
 			code.add(decodeInstr(entry, p, types));
 		}
@@ -363,29 +365,36 @@ final class WasmCodeModel {
 	}
 
 	private static void matchBlocks(List<Instr> code) {
-		List<Integer> openers = new ArrayList<>();
+		int[] openers = new int[16];
+		int depth = 0;
 		for (int i = 0; i < code.size(); i++) {
 			Instr in = code.get(i);
 			if (in.isOpener()) {
-				openers.add(i);
+				if (depth == openers.length) {
+					openers = java.util.Arrays.copyOf(openers, depth * 2);
+				}
+				openers[depth++] = i;
 			}
 			else if (in.op == 0x05) { // else
-				int opener = openers.get(openers.size() - 1);
+				if (depth == 0) {
+					throw new IndexOutOfBoundsException("WasmCodeModel: else outside a block");
+				}
+				int opener = openers[depth - 1];
 				code.get(opener).elseIndex = i;
 				in.match = opener;
 			}
 			else if (in.op == 0x0B) { // end
-				if (openers.isEmpty()) {
+				if (depth == 0) {
 					in.match = -1; // the function's own end
 				}
 				else {
-					int opener = openers.remove(openers.size() - 1);
+					int opener = openers[--depth];
 					code.get(opener).match = i;
 					in.match = opener;
 				}
 			}
 		}
-		if (!openers.isEmpty()) {
+		if (depth != 0) {
 			throw new IllegalStateException("WasmCodeModel: unterminated block");
 		}
 	}

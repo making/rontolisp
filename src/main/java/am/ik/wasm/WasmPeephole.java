@@ -459,6 +459,17 @@ public final class WasmPeephole {
 	 */
 	private static boolean loopTail(List<Op> out, boolean funcResultsEmpty) {
 		int n = out.size();
+		// The block structure below costs a pass over the body: pay it only when the
+		// shape the rule starts from (`br 0; end; unreachable; end`) occurs at all.
+		boolean candidate = false;
+		for (int i = 2; i + 1 < n && !candidate; i++) {
+			candidate = out.get(i).opcode == Instruction.UNREACHABLE && out.get(i + 1).opcode == Instruction.END
+					&& out.get(i - 1).opcode == Instruction.END && out.get(i - 2).opcode == Instruction.BR
+					&& out.get(i - 2).in.a == 0;
+		}
+		if (!candidate) {
+			return false;
+		}
 		// opener[i] for an `end`/`else`: the index of the block it closes, or -1 for the
 		// function's own `end`; elseOf[opener]: an `if`'s `else`, or -1.
 		int[] opener = new int[n];
