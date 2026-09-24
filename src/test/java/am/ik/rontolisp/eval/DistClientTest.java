@@ -4,10 +4,14 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -384,6 +388,90 @@ class DistClientTest {
 		assertThatThrownBy(() -> client.updateDist(DistClient.ULTRALISP)).isInstanceOf(IOException.class)
 			.hasMessageContaining("ultralisp")
 			.hasMessageContaining("quicklisp");
+	}
+
+	@Test
+	void aFailedExtractionLeavesNoReleaseBehindSoTheNextQuickloadRedownloads(@TempDir Path base) throws IOException {
+		// The archive dies in the middle of its SECOND entry, after the first one has
+		// been extracted. The release directory must not exist afterwards: its presence
+		// is what marks a release installed, so a partial tree left there would be used
+		// by every later quickload -- this process's, and any other process's that looked
+		// while it was still being written.
+		byte[] whole = mylibWithABigSecondEntry();
+		byte[] truncated = Arrays.copyOf(whole, whole.length / 2);
+		DistTestSupport.RecordingDownloader index = mylibDist();
+		Map<String, Integer> tarballHits = new HashMap<>();
+		DistClient client = new DistClient(base, url -> {
+			if (!url.equals(MYLIB_TARBALL_URL)) {
+				return index.get(url);
+			}
+			return tarballHits.merge(url, 1, Integer::sum) == 1 ? truncated : whole;
+		});
+		Path software = base.resolve("quicklisp").resolve("software");
+
+		assertThatThrownBy(() -> client.ensureAvailable("mylib")).isInstanceOf(IOException.class);
+		assertThat(software.resolve("mylib-1.0")).doesNotExist();
+		assertThat(entriesOf(software)).isEmpty();
+
+		client.ensureAvailable("mylib");
+
+		assertThat(tarballHits.get(MYLIB_TARBALL_URL)).isEqualTo(2);
+		assertThat(Files.readString(software.resolve("mylib-1.0").resolve("big.lisp"))).hasSize(BIG_ENTRY_CHARS);
+		assertThat(entriesOf(software)).containsExactly("mylib-1.0");
+	}
+
+	@Test
+	void aReleaseAnotherInstallerFinishedFirstIsUsedAsItIs(@TempDir Path base) throws IOException {
+		// Two processes quickloading one system both miss the cache and both download.
+		// Whichever finishes second must neither write into the first one's tree nor
+		// fail: the winner's release is complete, so it is used.
+		DistTestSupport.RecordingDownloader index = mylibDist();
+		Path software = base.resolve("quicklisp").resolve("software");
+		Path root = software.resolve("mylib-1.0");
+		DistClient client = new DistClient(base, url -> {
+			if (url.equals(MYLIB_TARBALL_URL)) {
+				Files.createDirectories(root);
+				Files.writeString(root.resolve("mylib.asd"), "(defsystem \"mylib\") ; the winner's");
+			}
+			return index.get(url);
+		});
+
+		List<String> asdDirs = client.ensureAvailable("mylib");
+
+		assertThat(asdDirs).containsExactly(root.toAbsolutePath().normalize().toString());
+		assertThat(Files.readString(root.resolve("mylib.asd"))).contains("the winner's");
+		assertThat(root.resolve("mylib.lisp")).doesNotExist();
+		assertThat(entriesOf(software)).containsExactly("mylib-1.0");
+	}
+
+	private static final int BIG_ENTRY_CHARS = 256 * 1024;
+
+	private static DistTestSupport.RecordingDownloader mylibDist() {
+		return DistTestSupport.dist("mylib mylib mylib\n",
+				"mylib " + MYLIB_TARBALL_URL + " 100 md5 sha1 mylib-1.0 mylib.asd\n",
+				Map.of(MYLIB_TARBALL_URL, DistTestSupport.tarGz(Map.of(//
+						"mylib-1.0/mylib.asd", "(defsystem \"mylib\" :components ((:file \"mylib\")))", //
+						"mylib-1.0/mylib.lisp", "(defun mylib-answer () 42)"))));
+	}
+
+	// The .asd first, then an entry large and incompressible enough that half of the
+	// gzip stream ends inside it.
+	private static byte[] mylibWithABigSecondEntry() {
+		Random random = new Random(42);
+		StringBuilder big = new StringBuilder(BIG_ENTRY_CHARS);
+		while (big.length() < BIG_ENTRY_CHARS) {
+			big.append(Character.forDigit(random.nextInt(16), 16));
+		}
+		Map<String, String> files = new LinkedHashMap<>();
+		files.put("mylib-1.0/mylib.asd", "(defsystem \"mylib\" :components ((:file \"big\")))");
+		files.put("mylib-1.0/big.lisp", big.toString());
+		return DistTestSupport.tarGz(files);
+	}
+
+	private static List<String> entriesOf(Path dir) throws IOException {
+		try (Stream<Path> entries = Files.list(dir)) {
+			return entries.map(p -> p.getFileName().toString()).sorted().toList();
+		}
 	}
 
 }

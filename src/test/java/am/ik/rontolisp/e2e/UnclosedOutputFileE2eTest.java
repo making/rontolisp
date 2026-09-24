@@ -17,6 +17,8 @@ import am.ik.rontolisp.testsupport.HostWasmtime;
 import org.junit.jupiter.api.DynamicNode;
 import org.junit.jupiter.api.TestFactory;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.abort;
@@ -27,7 +29,12 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * ends -- normally, through {@code uiop:quit} / Scheme {@code exit}, or on an uncaught
  * condition -- on all four backends, as C stdio and Gauche do. The spec corpora compare
  * standard output only, so each leg runs the program to its end and then reads the file.
+ *
+ * <p>
+ * The legs run CONCURRENTLY: each writes only under its own {@code <case>-<backend>}
+ * directory, and the in-process legs build a fresh {@code RontoLispCli} each.
  */
+@Execution(ExecutionMode.CONCURRENT)
 class UnclosedOutputFileE2eTest {
 
 	@TempDir

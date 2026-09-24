@@ -8,8 +8,11 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -63,6 +66,12 @@ import org.jspecify.annotations.Nullable;
  * limitation does not apply.
  */
 public final class DistClient {
+
+	/**
+	 * The name prefix of a release's private staging directory under {@code software/}.
+	 * The leading dot keeps it apart from every release prefix.
+	 */
+	private static final String STAGING_PREFIX = ".extracting-";
 
 	/** The name of the Quicklisp dist, installed by default. */
 	public static final String QUICKLISP = "quicklisp";
@@ -386,6 +395,14 @@ public final class DistClient {
 	 * {@code <dist home>/software/<prefix>/}, and returns that directory together with
 	 * the {@code .asd} files the index attributes to the release. An already-extracted
 	 * project is reused (no network I/O).
+	 * <p>
+	 * The directory's existence IS the "installed" mark, so it must never be seen
+	 * half-written: the archive is extracted into a private staging directory beside it
+	 * (same parent, so the same file system) and the finished prefix directory is renamed
+	 * into place in one step. A failed extraction leaves nothing behind, and the next
+	 * quickload downloads again. Another process (or client) that installed the same
+	 * release in the meantime wins: its tree is complete by the same argument, so it is
+	 * used and this one's is discarded.
 	 */
 	private Extracted ensureProject(ProjectRef ref) throws IOException {
 		ReleaseEntry release = releases(ref.dist()).get(ref.project());
@@ -400,12 +417,60 @@ public final class DistClient {
 		}
 		byte[] tarGz = this.downloader.get(release.url());
 		Files.createDirectories(software);
-		extractTarGz(tarGz, software);
-		if (!Files.isDirectory(root)) {
-			throw new IOException("ql:quickload: archive for '" + ref.project() + "' did not contain the expected"
-					+ " directory '" + release.prefix() + "'");
+		Path staging = Files.createTempDirectory(software, STAGING_PREFIX);
+		try {
+			extractTarGz(tarGz, staging);
+			Path extracted = staging.resolve(release.prefix());
+			if (!Files.isDirectory(extracted)) {
+				throw new IOException("ql:quickload: archive for '" + ref.project()
+						+ "' did not contain the expected directory '" + release.prefix() + "'");
+			}
+			try {
+				Files.move(extracted, root, StandardCopyOption.ATOMIC_MOVE);
+			}
+			catch (IOException ex) {
+				// rename(2) onto an existing non-empty directory fails; which exception
+				// that surfaces as differs by platform, so the answer is the directory.
+				if (!Files.isDirectory(root)) {
+					throw ex;
+				}
+			}
+		}
+		finally {
+			deleteRecursively(staging);
 		}
 		return new Extracted(root, release.asdFiles());
+	}
+
+	/**
+	 * Deletes {@code dir} and everything under it, if it exists.
+	 */
+	private static void deleteRecursively(Path dir) throws IOException {
+		if (!Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
+			return;
+		}
+		try (Stream<Path> walk = Files.walk(dir)) {
+			for (Path path : walk.sorted(Comparator.reverseOrder()).toList()) {
+				Files.deleteIfExists(path);
+			}
+		}
+	}
+
+	/**
+	 * Writes {@code bytes} to {@code target} through a temporary file in the same
+	 * directory and an atomic rename, so a concurrent reader sees the old file, no file,
+	 * or the whole new one -- never a prefix of it.
+	 */
+	private static void writeAtomically(Path target, byte[] bytes) throws IOException {
+		Path dir = Objects.requireNonNull(target.getParent());
+		Path temp = Files.createTempFile(dir, "." + target.getFileName(), ".tmp");
+		try {
+			Files.write(temp, bytes);
+			Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+		}
+		finally {
+			Files.deleteIfExists(temp);
+		}
 	}
 
 	private Map<String, SystemEntry> systems(Dist dist) throws IOException {
@@ -434,8 +499,12 @@ public final class DistClient {
 			String distinfo = new String(this.downloader.get(dist.distinfoUrl), StandardCharsets.UTF_8);
 			String systemsUrl = distinfoValue(distinfo, "system-index-url");
 			String releasesUrl = distinfoValue(distinfo, "release-index-url");
-			Files.write(systemsFile, this.downloader.get(systemsUrl));
-			Files.write(releasesFile, this.downloader.get(releasesUrl));
+			byte[] systemsBytes = this.downloader.get(systemsUrl);
+			byte[] releasesBytes = this.downloader.get(releasesUrl);
+			// releases.txt first: a systems.txt that exists then implies a complete
+			// releases.txt beside it, from this fetch or a later one.
+			writeAtomically(releasesFile, releasesBytes);
+			writeAtomically(systemsFile, systemsBytes);
 		}
 		dist.systems = parseSystems(Files.readString(systemsFile, StandardCharsets.UTF_8));
 		dist.releases = parseReleases(Files.readString(releasesFile, StandardCharsets.UTF_8));

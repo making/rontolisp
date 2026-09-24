@@ -40,6 +40,18 @@ Format, not vendor: distinfo (`name:`, `system-index-url:`, `release-index-url:`
   read in `createDefault` and passed in as overrides, never inside `homeFor`** — a client
   built with an explicit base (every test) must not pick up the developer's cache.
 
+- **Installs are atomic, because existence IS the "installed" mark** (`ensureProject`
+  reuses any `software/<prefix>/` directory): a tarball extracts into a private
+  `software/.extracting-*` staging dir and the finished prefix dir is RENAMED into place;
+  a failed or crashed extraction leaves no `<prefix>/` (a stale staging dir at worst,
+  ignored), and losing the rename to another installer means using the winner's tree. The
+  indexes are written temp + `ATOMIC_MOVE`, `releases.txt` before `systems.txt`. Before
+  this, a truncated download or a second process quickloading at once (a concurrent
+  `ClPostgresE2eTest` on a cold cache) saw a partial tree and kept it forever.
+  Pinned by `DistClientTest.aFailedExtractionLeavesNoReleaseBehind...` /
+  `aReleaseAnotherInstallerFinishedFirstIsUsedAsItIs`. A partial tree written by an older
+  build is not detected; delete it by hand.
+
 ## Compile path and browser
 - `LoadInliner.distDirective` matches a literal top-level `ql-dist:install-dist` /
   `ql:update-dist`, applies it to `ctx.dists()` WHILE SPLICING (dists must be configured

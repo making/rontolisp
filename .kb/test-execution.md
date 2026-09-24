@@ -4,9 +4,19 @@
 
 - `src/test/resources/junit-platform.properties` sets `parallel.mode.default` and
   `parallel.mode.classes.default` to `same_thread`. A class opts its OWN methods into
-  concurrency only with class-level `@Execution(ExecutionMode.CONCURRENT)`: today
-  `WasmLispCompilerIntegrationTest`, `RoveTestCommandE2eTest`, and every subclass of
-  `AsdfLibraryE2eSupport`. Everything else -- including all of `am.ik.gpu` /
+  concurrency only with class-level `@Execution(ExecutionMode.CONCURRENT)` (`@Inherited`,
+  and it reaches a `@TestFactory`'s dynamic tests too): today
+  `WasmLispCompilerIntegrationTest`, `RoveTestCommandE2eTest`, every subclass of
+  `AsdfLibraryE2eSupport` (Ironclad, Jose, Rove, Sxql, ...), `ClPostgresE2eTest`,
+  `SchemeSpecE2eTest` and `UnclosedOutputFileE2eTest`. The price of admission is that no
+  two legs share a file, a table or a process-global: `SchemeSpecE2eTest` runs a compiled
+  `main` in process, so the factories that swap `System.out`/`System.in` hold
+  `@ResourceLock(Resources.SYSTEM_OUT)`; the `ql:quickload` cache every
+  `ClPostgresE2eTest` leg fills is safe because installs are atomic (`.kb/dists.md`).
+  Measured alone 2026-09-24 (64 cores): `ClPostgresE2eTest` 292 s -> 57 s (cold cache
+  58 s), `SchemeSpecE2eTest` 176 s -> 81 s (its four corpus runs also start at once;
+  the interpreter's is the floor), `UnclosedOutputFileE2eTest` 15 s -> 5 s.
+  Everything else -- including all of `am.ik.gpu` /
   `eval.LinalgGpuTest` -- runs one method at a time in one thread. `eval.LinalgGpuTest`
   costs MINUTES that way on a Mac and carries a `@Timeout` so that a run which is merely
   slow cannot be mistaken for one that stopped (`.kb/gpu.md`, "What `eval/LinalgGpuTest`
