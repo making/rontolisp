@@ -2664,6 +2664,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	@Override
 	public byte[] compile(List<LispVal> program) {
+		try {
+			return compileProgram(program);
+		}
+		finally {
+			// The census is a per-compilation answer; do not keep the program alive.
+			SymbolCensus.LAST.remove();
+		}
+	}
+
+	private byte[] compileProgram(List<LispVal> program) {
 		// The load-context brackets LoadInliner put around each spliced file become
 		// assignments of *load-pathname* / *load-truename* -- when the program reads
 		// either; otherwise they are dropped here and nothing downstream sees them.
@@ -8424,13 +8434,67 @@ public final class WasmLispCompiler implements LispCompiler {
 		return false;
 	}
 
+	// Whether some cons of the program -- any list element, at any depth, quoted data
+	// included -- is the named symbol.
 	private static boolean programUsesSymbol(List<LispVal> program, String name) {
-		for (LispVal expr : program) {
-			if (usesSymbol(expr, name)) {
-				return true;
+		return SymbolCensus.of(program).names().contains(name);
+	}
+
+	/**
+	 * Every name {@link #programUsesSymbol} can find in a program, from one walk: the
+	 * compile asks it some seventy questions, and each used to walk the whole program
+	 * again. Kept for the last program asked about on this thread, and reused only while
+	 * that list still holds the very same forms -- the forms themselves are never mutated
+	 * during a compilation.
+	 *
+	 * @param program the list the census was taken of
+	 * @param forms its elements when the census was taken
+	 * @param names every symbol name some cons of the program has as its car
+	 */
+	private record SymbolCensus(List<LispVal> program, LispVal[] forms, Set<String> names) {
+
+		static final ThreadLocal<@Nullable SymbolCensus> LAST = new ThreadLocal<>();
+
+		static SymbolCensus of(List<LispVal> program) {
+			@Nullable SymbolCensus last = LAST.get();
+			if (last != null && last.describes(program)) {
+				return last;
+			}
+			Set<String> names = new HashSet<>();
+			for (LispVal form : program) {
+				collect(form, names);
+			}
+			SymbolCensus census = new SymbolCensus(program, program.toArray(new LispVal[0]), names);
+			LAST.set(census);
+			return census;
+		}
+
+		private boolean describes(List<LispVal> list) {
+			if (list != this.program || list.size() != this.forms.length) {
+				return false;
+			}
+			for (int i = 0; i < this.forms.length; i++) {
+				if (list.get(i) != this.forms[i]) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+		// Every cons reachable through car and cdr.
+		private static void collect(LispVal val, Set<String> names) {
+			LispVal cur = val;
+			while (cur instanceof LispCons cons) {
+				if (cons.car() instanceof LispSymbol sym) {
+					names.add(sym.name());
+				}
+				else {
+					collect(cons.car(), names);
+				}
+				cur = cons.cdr();
 			}
 		}
-		return false;
+
 	}
 
 	/**
@@ -8775,16 +8839,6 @@ public final class WasmLispCompiler implements LispCompiler {
 			return containsArrayLiteral(cons.car()) || containsArrayLiteral(cons.cdr());
 		}
 		return false;
-	}
-
-	private static boolean usesSymbol(LispVal val, String name) {
-		if (!(val instanceof LispCons cons)) {
-			return false;
-		}
-		if (cons.car() instanceof LispSymbol sym && name.equals(sym.name())) {
-			return true;
-		}
-		return usesSymbol(cons.car(), name) || usesSymbol(cons.cdr(), name);
 	}
 
 	/**
