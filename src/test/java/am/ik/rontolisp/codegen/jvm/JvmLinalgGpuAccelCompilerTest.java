@@ -1,7 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.io.ByteArrayOutputStream;
-import java.io.PrintStream;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -19,9 +18,14 @@ import am.ik.rontolisp.eval.LinalgGpu;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.VecLibrary;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.GpuDeviceLock;
+import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -41,6 +45,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * the emit gate, the class list the blob carries, and the fact that a machine with no
  * device runs the same programs to the same output -- and the half that needs a device.
  */
+@Execution(ExecutionMode.CONCURRENT)
+@ResourceLock(providers = GpuDeviceLock.class)
 class JvmLinalgGpuAccelCompilerTest {
 
 	static boolean aDeviceIsAvailable() {
@@ -163,13 +169,8 @@ class JvmLinalgGpuAccelCompilerTest {
 			Class<?> clazz = loader.loadClass("Test");
 			Method main = clazz.getMethod("main", String[].class);
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(baos));
-			try {
+			try (var _ = ThreadStdio.out(baos)) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
 			}
 			return baos.toString().trim();
 		}
@@ -189,13 +190,8 @@ class JvmLinalgGpuAccelCompilerTest {
 				ClassLoader.getSystemClassLoader())) {
 			Class<?> clazz = loader.loadClass("Test");
 			Method main = clazz.getMethod("main", String[].class);
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(new ByteArrayOutputStream()));
-			try {
+			try (var _ = ThreadStdio.out(new ByteArrayOutputStream())) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
 			}
 			Class<?> gpu = loader.loadClass(JvmGpuRuntimeBuilder.GPU_PREFIX + "Gpu");
 			return (boolean) gpu.getMethod("available").invoke(null);
@@ -215,13 +211,8 @@ class JvmLinalgGpuAccelCompilerTest {
 				ClassLoader.getSystemClassLoader())) {
 			Class<?> clazz = loader.loadClass("Test");
 			Method main = clazz.getMethod("main", String[].class);
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(new ByteArrayOutputStream()));
-			try {
+			try (var _ = ThreadStdio.out(new ByteArrayOutputStream())) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
 			}
 			Class<?> gpu = loader.loadClass(JvmGpuRuntimeBuilder.GPU_PREFIX + "Gpu");
 			Method resident = gpu.getDeclaredMethod("residentBytes");
@@ -1571,13 +1562,8 @@ class JvmLinalgGpuAccelCompilerTest {
 			Class<?> clazz = loader.loadClass("com.example.Test");
 			Method main = clazz.getMethod("main", String[].class);
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(baos));
-			try {
+			try (var _ = ThreadStdio.out(baos)) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
 			}
 			assertThat(baos.toString().trim()).isEqualTo(expected);
 		}

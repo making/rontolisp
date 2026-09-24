@@ -1,7 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.io.ByteArrayOutputStream;
-import java.io.PrintStream;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -14,8 +13,11 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -34,6 +36,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * results, and the declined ones (general arrays, mixed widths, plain numbers, shape
  * errors), which must behave exactly as they do without the flag.
  */
+@Execution(ExecutionMode.CONCURRENT)
 class JvmLinalgSimdAccelCompilerTest {
 
 	@TempDir
@@ -57,13 +60,8 @@ class JvmLinalgSimdAccelCompilerTest {
 			Class<?> clazz = loader.loadClass("Test");
 			Method main = clazz.getMethod("main", String[].class);
 			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			PrintStream oldOut = System.out;
-			System.setOut(new PrintStream(baos));
-			try {
+			try (var _ = ThreadStdio.out(baos)) {
 				main.invoke(null, (Object) new String[0]);
-			}
-			finally {
-				System.setOut(oldOut);
 			}
 			return baos.toString().trim();
 		}

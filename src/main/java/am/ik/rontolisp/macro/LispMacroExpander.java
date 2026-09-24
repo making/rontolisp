@@ -30213,7 +30213,7 @@ public final class LispMacroExpander {
 	 * {@code bfloat16} width was missing here once and rendered as a general
 	 * {@code #(...)} of widened doubles in every program that also called {@code read},
 	 * found only by an {@code -o Prog.class} E2E. The exclusion conjuncts are therefore
-	 * DERIVED from {@code LispFloatArray.WIDTHS}, one per permit's own
+	 * DERIVED from {@code LispFloatArray.widths()}, one per permit's own
 	 * {@code elementType()} answer, never spelled by hand; a permit missing from that
 	 * table fails {@code PackedFloatReachabilityTest}, which reads the same table.
 	 * @return the arm's source text
@@ -30222,7 +30222,7 @@ public final class LispMacroExpander {
 		// Plain concatenation, NOT String.formatted: the generated source is full of
 		// %pos-* names, and every one of them is an invalid format specifier.
 		StringBuilder exclusions = new StringBuilder();
-		for (LispFloatArray proto : LispFloatArray.WIDTHS) {
+		for (LispFloatArray proto : LispFloatArray.widths()) {
 			exclusions.append("\n			      (not (equal (array-element-type %pos-x) '")
 				.append(proto.elementType())
 				.append("))");
@@ -31974,7 +31974,7 @@ public final class LispMacroExpander {
 	private static LispVal upgradedArrayElementType(LispVal spec) {
 		if (spec instanceof LispSymbol sym) {
 			String canonical = canonicalElementTypeName(sym);
-			for (LispFloatArray proto : LispFloatArray.WIDTHS) {
+			for (LispFloatArray proto : LispFloatArray.widths()) {
 				if (proto.elementType().equals(canonical)) {
 					return new LispSymbol(proto.elementType());
 				}

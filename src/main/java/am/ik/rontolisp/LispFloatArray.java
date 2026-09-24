@@ -1,5 +1,7 @@
 package am.ik.rontolisp;
 
+import java.util.List;
+
 /**
  * Umbrella type for a packed float array: a rank-n array of unboxed floats stored as a
  * flat row-major primitive backing plus an {@code int[]} of dimension sizes. Three
@@ -78,14 +80,33 @@ public sealed interface LispFloatArray extends LispVal
 	 * that test red, and a permit present here but unhandled at an allocation site is a
 	 * compile error at every exhaustive {@code switch} over this type that switches on
 	 * what {@link #prototypeFor} answers.
+	 * <p>
+	 * Held by {@link Prototypes}, never by a field of this type: this type declares
+	 * default methods, so it is initialized BEFORE any permit (JLS 12.4.2), and a field
+	 * of it that constructs a permit is a class-initialization cycle that two threads,
+	 * one entering from each end, deadlock on ({@code LispFloatArrayInitTest}).
+	 * @return the prototypes, one per permit
 	 */
-	LispFloatArray[] WIDTHS = { new LispDoubleFloatArray(new double[0], new int[] { 0 }),
-			new LispSingleFloatArray(new float[0], new int[] { 0 }),
-			new LispBFloat16Array(new short[0], new int[] { 0 }) };
+	static List<LispFloatArray> widths() {
+		return Prototypes.WIDTHS;
+	}
+
+	/** The holder {@link #widths()} answers from, initialized on first use. */
+	final class Prototypes {
+
+		private static final List<LispFloatArray> WIDTHS = List.of(
+				new LispDoubleFloatArray(new double[0], new int[] { 0 }),
+				new LispSingleFloatArray(new float[0], new int[] { 0 }),
+				new LispBFloat16Array(new short[0], new int[] { 0 }));
+
+		private Prototypes() {
+		}
+
+	}
 
 	/**
 	 * The packed float width a {@code make-array :element-type} designator names, as the
-	 * zero-length {@link #WIDTHS} prototype of that width, or null when the designator
+	 * zero-length {@link #widths()} prototype of that width, or null when the designator
 	 * names no packed float width. The match is against each permit's own
 	 * {@link #elementType()} answer, never against a private set of string constants, so
 	 * the name {@code make-array} accepts is by construction the name
@@ -112,7 +133,7 @@ public sealed interface LispFloatArray extends LispVal
 			String name = sym.name();
 			int colon = name.lastIndexOf(':');
 			String local = colon >= 0 ? name.substring(colon + 1) : name;
-			for (LispFloatArray proto : WIDTHS) {
+			for (LispFloatArray proto : widths()) {
 				if (proto.elementType().equals(local)) {
 					return proto;
 				}

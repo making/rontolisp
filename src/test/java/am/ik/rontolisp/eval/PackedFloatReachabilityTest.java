@@ -50,7 +50,7 @@ class PackedFloatReachabilityTest {
 
 	/**
 	 * One table row per permit of {@link LispFloatArray}, which is what the door tests
-	 * below iterate over -- NOT {@code LispFloatArray.WIDTHS} itself. The difference is
+	 * below iterate over -- NOT {@code LispFloatArray.widths()} itself. The difference is
 	 * the whole point: a permit with no row must turn EVERY door red, not silently shrink
 	 * the loop each door feeds, or the test reproduces the boxed-array fallback inside
 	 * itself -- the very failure mode it was written to catch.
@@ -59,14 +59,14 @@ class PackedFloatReachabilityTest {
 		List<LispFloatArray> protos = new java.util.ArrayList<>();
 		for (Class<?> permit : LispFloatArray.class.getPermittedSubclasses()) {
 			LispFloatArray row = null;
-			for (LispFloatArray proto : LispFloatArray.WIDTHS) {
+			for (LispFloatArray proto : LispFloatArray.widths()) {
 				if (proto.getClass() == permit) {
 					row = proto;
 				}
 			}
 			// A permit missing from the table fails HERE, and every door test below
 			// with it, before any door can answer for a width it does not know.
-			assertThat(row).as("permit %s has a row in LispFloatArray.WIDTHS", permit.getSimpleName()).isNotNull();
+			assertThat(row).as("permit %s has a row in LispFloatArray.widths()", permit.getSimpleName()).isNotNull();
 			protos.add(row);
 		}
 		return protos;
@@ -90,12 +90,10 @@ class PackedFloatReachabilityTest {
 	@Test
 	void theWidthsTableHoldsExactlyOnePrototypePerPermit() {
 		Set<Class<?>> permits = Set.of(LispFloatArray.class.getPermittedSubclasses());
-		Set<Class<?>> rows = java.util.Arrays.stream(LispFloatArray.WIDTHS)
-			.map(LispFloatArray::getClass)
-			.collect(Collectors.toSet());
+		Set<Class<?>> rows = LispFloatArray.widths().stream().map(LispFloatArray::getClass).collect(Collectors.toSet());
 		assertThat(rows).as("one row per permit of LispFloatArray, no more, no less")
 			.containsExactlyInAnyOrderElementsOf(permits);
-		for (LispFloatArray proto : LispFloatArray.WIDTHS) {
+		for (LispFloatArray proto : LispFloatArray.widths()) {
 			assertThat(proto.totalSize()).as("the %s row is a zero-length prototype", proto.getClass().getSimpleName())
 				.isZero();
 		}
