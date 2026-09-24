@@ -86,12 +86,13 @@ compile error for the client half too.
 - **`TlsLibrary.process` must run BEFORE `SocketsLibrary.process`** in every chain (the trigger is
   TEXTUAL and tls.lisp references `rontolisp:tcp-connect` + `%sock`) and fires the sockets trigger
   itself; a program textually naming the client tls names needs `-S tls=y` even for dead code.
-- `wasmtime serve` does NOT host wasi:tls (measured on 47.0.3): the component compiles but
+- `wasmtime serve` does NOT host wasi:tls (measured on 47.0.3 and 49.0.0, `-S tls=y`): the component compiles but
   instantiation fails with "resource implementation is missing". A served handler needing outbound
   https uses `rontolisp:fetch`.
 - **Trigger**: the draft is experimental/non-semver — on every wasmtime floor bump re-diff
   `eval/tls.wit` against `crates/wasi-tls/src/p3/wit/deps/tls/`, and re-check for
-  verification/client-cert/ALPN knobs or a server interface.
+  verification/client-cert/ALPN knobs or a server interface. Last re-diff: 49.0.0 (2026-09-24), the three
+  `.wit` files are the same blobs as 47.0.3's.
 
 ## The component mechanics (sockets.lisp over wasi:sockets@0.3.0)
 A tcp program is the BASE variant plus one appended user import (`appendUserImports`), like fetch,

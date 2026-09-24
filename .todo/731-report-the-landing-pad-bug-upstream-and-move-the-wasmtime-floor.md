@@ -12,7 +12,8 @@ and a call after it; each `try_call` then passes the local as an exceptional-edg
 evaluated before the call, living in a spill slot no stack map lists, so a copying
 collection during that call hands the landing pad a pre-move reference. Mechanism, the
 30-line rontolisp-free wat reproducer, and the disassembly are `.kb/wasm-landing-pad-refresh.md`.
-Measured unfixed in **47.0.3 through 49.0.0-rc.1** (2026-09-07).
+Measured unfixed in **47.0.3 through 49.0.0** (49.0.0 re-measured 2026-09-24 with the `.kb`
+wat: traps under the copying collector, green under `-C collector=drc`).
 
 ## Do
 
@@ -20,14 +21,11 @@ Measured unfixed in **47.0.3 through 49.0.0-rc.1** (2026-09-07).
    in the `.kb` card; the title is the invariant it breaks -- an exceptional-edge block
    argument is not a stack-mapped value. External submission, so it needs the user's word
    before it is sent. Record the issue number in the `.kb` card when it exists.
-2. **Move the toolchain off 47.0.3.** Installed is 47.0.3 (2026-07-31); latest stable is
-   **48.0.1** (2026-08-24), and 49.0.0-rc.1 is a prerelease. `CLAUDE.md` says "wasmtime 47+",
-   `.github/` pins its own -- both move together or the local box and CI stop agreeing.
-3. **Re-verify the wasm legs on the new binary, not just the suite**: `./mvnw test`, the
-   native `CiSpecE2eTest` (both `--simd` legs), and every `wasm-component-run` entry in
-   `examples/examples.yaml` -- a wasmtime major carries the WASI 0.3 host half, which is
-   exactly where `693` found the component leg diverging from Preview 1.
-4. **Only if the upstream fix has landed by then**, ask whether `WasmLandingPad` can be
+2. ~~Move the toolchain off 47.0.3~~ and ~~re-verify the wasm legs~~: done 2026-09-24 --
+   every pin (CI, the test image, `rontolisp-native`, the local CLI) is on **49.0.0**, with
+   `./mvnw test`, the native `CiSpecE2eTest` (both `--simd` legs) and `ExamplesE2eTest` green
+   on it. The documented FLOOR (`wasmtime 47+` in README/doc) did not move: nothing needs 49.
+3. **Only if the upstream fix has landed by then**, ask whether `WasmLandingPad` can be
    narrowed -- and answer with the pin, not with the version: the ci-spec case
    `landing-pads-read-fresh-references-after-a-collection` and the integration test must
    still pass with the refresh REMOVED before any narrowing is real. Until that day the

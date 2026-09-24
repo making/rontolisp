@@ -3,7 +3,8 @@
 Difficulty: Medium
 
 `.kb/wasm-gc-heap-pregrow.md`, "The size is drawn from a lottery", records a wasmtime
-47.0.3 defect our emitted modules reach: at narrow BANDS of GC-heap size the copying
+defect our emitted modules reach -- measured on 47.0.3, and still there, unchanged, on
+**49.0.0** (2026-09-24): at narrow BANDS of GC-heap size the copying
 collector either injects
 
 ```
@@ -24,11 +25,14 @@ a 60 MB array of its own.
 
 ## What to do
 
-1. Reproduce: compile the `ci-spec` corpus `--simd` with the pre-grow forced to
-   65,259,152 bytes (the value the formula produced on 2026-09-11) and run it under
-   `wasmtime --wasm gc --wasm exceptions=y`. The knobs and the measured bands are in the
-   `.kb` file; a temporary system-property override on
-   `WasmLispCompiler.gcHeapPregrowBytes` is how the sweeps were taken.
+1. Reproduce: `.todo/artefacts/784-wasmtime-semi-space-bug/repro.sh <workdir> <size>`
+   builds `a34942ace~` in a worktree, compiles that commit's `ci-spec` corpus `--simd` (its
+   pre-grow is 65,259,152 as emitted, no override) and runs a copy with the pre-grow
+   patched to `<size>`. 65,259,152 panics (`VMGcKind`) and 65,300,000 traps (semi-space BUG),
+   both at output line 921, on 47.0.3 AND 49.0.0; `-C collector=drc` is green. TODAY's
+   corpus is no reproducer: 306 sizes over 64.0-66.5 MB at 8 KiB steps were all green on
+   47.0.3. (Two of those 306 printed one line short with exit 0 and did not repeat on a
+   re-run; 40 parallel runs shared `--dir /tmp`, so give each sweep job its own.)
 2. Shrink it. `wasm-tools shrink` takes a predicate script -- "exits non-zero with
    `semi-space` in stderr" -- and cuts the module down. Budget: a failing iteration is
    ~1 s, a green one ~30 s on a 9 MB module, so this wants an overnight run and a

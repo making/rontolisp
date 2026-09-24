@@ -48,7 +48,7 @@ jobs:
     - name: Install wasmtime
       uses: bytecodealliance/actions/wasmtime/setup@v1
       with:
-        version: "v47.0.3"
+        version: "v49.0.0"
     - name: Verify wasmtime
       run: |
         wasmtime --version
@@ -236,7 +236,7 @@ jobs:
     - name: Install wasmtime
       uses: bytecodealliance/actions/wasmtime/setup@v1
       with:
-        version: "v47.0.3"
+        version: "v49.0.0"
     # Both caches are RESTORE + SAVE rather than one `actions/cache`, and both saves
     # run on `always()`. actions/cache only writes its cache when the job SUCCEEDS,
     # and this is the one job in the pipeline that is allowed to be red -- a single

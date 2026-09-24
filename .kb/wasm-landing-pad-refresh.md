@@ -22,7 +22,7 @@ one predecessor, no block parameter.
 ## Why: the exceptional edge carries a pre-call value
 
 Cranelift's frontend (`cranelift-frontend` SSA builder + safepoint spiller, wasmtime 47.0.3
-through 49.0.0-rc.1, unfixed upstream as of 2026-09-07) resolves a wasm local read in a
+through 49.0.0, unfixed upstream as of 2026-09-24: the wat below still traps on 49.0.0) resolves a wasm local read in a
 landing pad by looking the variable up through the catch block's predecessors -- one per
 call inside the `try_table` body, since every such call is a `try_call` whose exception
 table names the catch block. When all predecessors agree, the parameter is removed and the
@@ -113,7 +113,7 @@ The snapshot is entry-time, so a variable the body assigns must not be refreshed
 the heap. Alternatives weighed and rejected: a shadow table or per-task array (a second
 root store with write-through and async-interleaving hazards), outlining the body into a
 closure (changes `return-from`/`go`/await semantics), or waiting for upstream
-(wasmtime 49.0.0-rc.1 still traps). `unwind-protect` catches `$lisp-cond` -- plus
+(wasmtime 49.0.0 still traps). `unwind-protect` catches `$lisp-cond` -- plus
 `$block-exit` when the program lowers a cross-lambda exit -- and rethrows the eqref payload
 on its tag, instead of `catch_all_ref`/`throw_ref`: an exnref cannot be stashed in an
 eqref local or cell, and the module throws no other tag.

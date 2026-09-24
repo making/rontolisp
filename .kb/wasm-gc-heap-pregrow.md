@@ -81,6 +81,24 @@ collects it (300k retained conses under a 64 MiB pre-grow never grows the heap, 
 with "trips the semi-space BUG" as the predicate is the tool, at ~30 s per green
 iteration.
 
+**Still there on wasmtime 49.0.0** (2026-09-24). The failing module is reproducible
+without any override: `a34942ace~` (the parent of the quantization commit) compiles its own
+`ci-spec` corpus `--simd` to an 8,986,117-byte module whose pre-grow is 65,259,152; the
+`i32.const` is the only `41 <4-byte sleb> fb 07` in the start function (offset 19,161), so
+other sizes are a 4-byte patch, not a recompile. Run from a directory holding the
+`CorpusFixtures` tree, `--dir . --dir /tmp`:
+
+| pre-grow bytes | 47.0.3 | 49.0.0 |
+| --- | --- | --- |
+| 65,193,616 / 65,228,384 / 65,324,688 | green | green |
+| 65,259,152 | `invalid VMGcKind: 0b0` panic, line 921 | same |
+| 65,300,000 | semi-space BUG trap, line 921 | same (`copying.rs:534`) |
+
+`-C collector=drc` is green at both failing sizes on 49. The two symptoms sit at the
+opposite sizes from the 2026-09-11 table above; both are the same defect. Today's corpus, by
+contrast, has NO band in 64.0-66.5 MB at 8 KiB steps on 47.0.3 (306 sizes, all green), so
+a current module is no reproducer -- use the old commit.
+
 Two things follow for anyone changing the size:
 
 - **The corpus does not need the pre-grow at all.** Full `ci-spec` corpus, `--simd`, on

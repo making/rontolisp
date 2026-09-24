@@ -17,7 +17,7 @@ use std::process::exit;
 use rlabi::payload;
 use wasmtime::{Engine, Linker, Module, Store, Trap};
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
-use wasmtime_wasi::{DirPerms, FilePerms, I32Exit, WasiCtxBuilder};
+use wasmtime_wasi::{FsPerms, I32Exit, WasiCtxBuilder};
 
 /// `128 + SIGABRT`, the status `wasmtime run` exits with after a trap on Unix.
 const TRAP_EXIT: i32 = 134;
@@ -51,9 +51,9 @@ fn run() -> wasmtime::Result<()> {
         .inherit_env()
         .args(&args)
         .allow_blocking_current_thread(true);
-    wasi.preopened_dir(".", &cwd_name(), DirPerms::all(), FilePerms::all())
+    wasi.preopened_dir(".", &cwd_name(), FsPerms::ReadWrite)
         .map_err(|e| e.context("cannot preopen the current directory"))?;
-    wasi.preopened_dir("/", "/", DirPerms::all(), FilePerms::all())
+    wasi.preopened_dir("/", "/", FsPerms::ReadWrite)
         .map_err(|e| e.context("cannot preopen /"))?;
 
     let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);

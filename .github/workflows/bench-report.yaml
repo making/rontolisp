@@ -44,7 +44,7 @@ jobs:
     - name: Install wasmtime
       uses: bytecodealliance/actions/wasmtime/setup@v1
       with:
-        version: "v47.0.3"
+        version: "v49.0.0"
     # The three reference implementations. ECL's compile-file shells out to cc,
     # which the runner image already has.
     # ABCL's launcher runs whatever `java` resolves to -- after the step above

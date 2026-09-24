@@ -28,7 +28,7 @@ The modules and the two drivers are kept in
 ## The numbers (2026-09-17, linux-x86-64)
 
 wasmtime 47.0.3 (`5554cc1a6`, copying collector): the largest `n` that fits a 64 MiB
-reservation, and what it says per object.
+reservation, and what it says per object. 49.0.0 (2026-09-24): every fits/traps pair identical.
 
 | shape | fields | fits | traps | bytes/object |
 | --- | --- | --- | --- | --- |

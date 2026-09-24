@@ -14,7 +14,7 @@ use wasmtime::{Collector, Config};
 #[macro_export]
 macro_rules! wasmtime_version {
     () => {
-        "47.0.3"
+        "49.0.0"
     };
 }
 

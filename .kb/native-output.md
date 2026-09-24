@@ -29,7 +29,7 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   resolves it through `/`. Exit: the
   `proc_exit` code, 0 on return, **134 after a trap** (what `wasmtime run` answers on Unix,
   `Error: <trap>` on stderr), 1 when the module cannot load (no trailer, refused engine).
-- **Fingerprint** `rlnative-abi=1;wasmtime=47.0.3;wasm=gc,function-references,exceptions,tail-call;collector=copying`.
+- **Fingerprint** `rlnative-abi=1;wasmtime=49.0.0;wasm=gc,function-references,exceptions,tail-call;collector=copying`.
   The stub carries `RLNATIVE-FINGERPRINT=<fingerprint>\0` in its read-only data (kept by a
   `black_box` in `main`); the assembler scans the stub for it and compares with
   `rl_version()`. Bump `rlnative-abi` when the trailer or the C ABI changes; edit the
@@ -78,7 +78,9 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
 - **Collector**: copying, never DRC (DRC ran `gc.lisp` 9x slower, 12.1 s vs 1.4 s, arm64
   macOS). Homebrew's C API defaults to DRC with no setter -- hence Rust, not the C API.
 - **wasmtime >= 47**: 45's copying collector fails the 16 MiB heap pregrow
-  (`.kb/wasm-gc-heap-pregrow.md`) on every program. rustc >= 1.96 (47's MSRV).
+  (`.kb/wasm-gc-heap-pregrow.md`) on every program. The pin is 49.0.0 (2026-09-24), rustc >= 1.96
+  (49's MSRV). 48 replaced `wasmtime-wasi`'s `DirPerms`/`FilePerms` pair with one `FsPerms`
+  (read-only or read-write per preopen); the stub asks `ReadWrite` for both.
 - **Engine settings are part of the artifact**: a module precompiled with a different GC
   heap reservation is refused ("heap reservation"); pinned by
   `module_precompiled_under_another_config_is_refused_at_start` in
@@ -108,6 +110,10 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
 | `gc.lisp` | 28,403 B | 0.05 s | 2.2 MB | 3.60 s | 3.54 s |
 | `(print "hello")` | | | | 0.02 s, 20 MB RSS | |
 | whole ci-spec corpus (581 cases) | 7.6 MB | 11.7 s (90.6 s serial) | 84 MB | 17.6 s | 27.6 s |
+
+Re-measured on **49.0.0** (same day, same host, `rlpack` + stub, three runs): shim 10.2 MB,
+stub 2.0 MB; `fib` 0.30-0.31 s (`wasmtime run` 0.27-0.37 s), output 2,042,032 B; `gc`
+3.57-3.59 s (`wasmtime run` 3.29-3.48 s), output 2,236,008 B -- the same picture as 47.0.3.
 
 Through the CLI (2026-09-24, same host, load average ~12, `java -jar` exec jar):
 `--native -o` costs 0.3 s over `-o x.wasm` (2.96 s vs 2.69 s for `gc.lisp`, JVM start
