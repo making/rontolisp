@@ -3,9 +3,9 @@
 //! It finds the precompiled module appended to its own executable (`rlabi::payload`),
 //! loads it into an engine built from `rlabi::config` (runtime only: this binary has no
 //! compiler), and runs `_start` under WASI Preview 1 with the process's stdio, arguments
-//! and environment. The current directory is preopened as `.` (fd 3, what a relative path
-//! resolves against) and the root as `/`, so the program sees the file system a native
-//! program would.
+//! and environment. The current directory is preopened as fd 3 (what a relative path
+//! resolves against) under its absolute name, and the root as `/`, so the program sees the
+//! file system a native program would, `..` above the current directory included.
 //!
 //! Exit status: the program's `proc_exit` code, 0 when `_start` returns, 134 after a trap
 //! (what `wasmtime run` answers on Unix), 1 when the module cannot be loaded.
@@ -51,7 +51,7 @@ fn run() -> wasmtime::Result<()> {
         .inherit_env()
         .args(&args)
         .allow_blocking_current_thread(true);
-    wasi.preopened_dir(".", ".", DirPerms::all(), FilePerms::all())
+    wasi.preopened_dir(".", &cwd_name(), DirPerms::all(), FilePerms::all())
         .map_err(|e| e.context("cannot preopen the current directory"))?;
     wasi.preopened_dir("/", "/", DirPerms::all(), FilePerms::all())
         .map_err(|e| e.context("cannot preopen /"))?;
@@ -63,6 +63,17 @@ fn run() -> wasmtime::Result<()> {
     instance
         .get_typed_func::<(), ()>(&mut store, "_start")?
         .call(&mut store, ())
+}
+
+/// The guest name of the current directory's preopen: its absolute path, which tells the
+/// module where it runs, so a relative path that climbs (`../x`) resolves through the `/`
+/// preopen instead of the sandbox of `.` (`_path_dirfd`, `.kb/read-load-streams.md`).
+/// `"."` when the path is unknown or not UTF-8: relative paths then cannot climb.
+fn cwd_name() -> String {
+    std::env::current_dir()
+        .ok()
+        .and_then(|dir| dir.to_str().map(str::to_owned))
+        .unwrap_or_else(|| ".".to_owned())
 }
 
 /// The module bytes appended to this executable.

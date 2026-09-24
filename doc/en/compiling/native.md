@@ -27,10 +27,8 @@ sees the process environment and standard input. Nothing else is written: the
 
 ## Files
 
-The current directory and `/` are open to the program, so relative and
-absolute paths work as they do in any native program -- with one exception: a
-relative path cannot leave the current directory (`../x` answers the ordinary
-cannot-open error). Build an absolute path instead.
+The current directory and `/` are open to the program, so relative paths
+(`../x` included) and absolute paths work as they do in any native program.
 
 ## Flags
 

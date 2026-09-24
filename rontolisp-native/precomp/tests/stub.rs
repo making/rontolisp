@@ -26,18 +26,21 @@ fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
-/// Writes `stub ++ module ++ trailer` into a fresh directory and runs it there the way
-/// gen-fixtures.sh runs `wasmtime run`.
+/// Writes `stub ++ module ++ trailer` into a fresh directory and runs it the way
+/// gen-fixtures.sh runs `wasmtime run`: from `<dir>/cwd`, beside `<dir>/up.txt`.
 fn run_executable(dir: &Path, module: &[u8]) -> Output {
     let exe = dir.join("prog");
     std::fs::write(&exe, rlabi::payload::assemble(&std::fs::read(stub()).unwrap(), module)).unwrap();
     make_executable(&exe);
+    let cwd = dir.join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::write(dir.join("up.txt"), "up\n").unwrap();
     let mut command = Command::new(&exe);
     command
         .args(["alpha", "beta gamma"])
-        .current_dir(dir)
+        .current_dir(&cwd)
         .env("RLNATIVE_TEST", "hello")
-        .env("RLNATIVE_DIR", dir)
+        .env("RLNATIVE_DIR", &cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -128,6 +131,11 @@ fn gc_pressure_conditions_hash_and_bignum() {
 #[test]
 fn arguments_environment_stdin_files_and_exit_status() {
     check_fixture("host");
+}
+
+#[test]
+fn relative_paths_climb_above_the_current_directory() {
+    check_fixture("updir");
 }
 
 #[test]

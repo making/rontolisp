@@ -302,13 +302,26 @@ Pinned by `LispEvaluatorTest#withOpenFileComputedOptions*`,
 `computed-stream-options-439`.
 
 ## WASM: a path resolves against the PREOPEN TABLE, not fd 3
-`_path_dirfd` (`WasmIoRuntimeBuilder.buildPathDirFdBody`, via `emitDirFdAndPath`) answers the
-descriptor a staged path opens relative to and leaves the bytes it accounts for in `PATH_SKIP_ADDR`
-(248). Every `path_open` goes through it — `_open`, `_probe_file`, `_list_directory`, `_load`.
+`_path_dirfd` (`WasmIoRuntimeBuilder.buildPathDirFdBody`, via `emitDirFdAndPath` /
+`emitResolvedPath`) answers the descriptor a staged path opens relative to and leaves the path that
+descriptor sees in `PATH_PTR_ADDR` (248) / `PATH_LEN_ADDR` (212). Every `path_*` import goes
+through it — `_open`, `_probe_file`, `_list_directory`, `_load`, `_make_directories`,
+`_delete_file`, `_rename_file`.
 
-- Relative -> fd 3, skip 0. No preopen covering an absolute path -> fd 3, skip 0 too, so the failure
-  is the ordinary "cannot open" ERRNO each caller turns into nil — an errno, never a trap
-  (`.kb/wasi-component.md`).
+- Relative -> fd 3, the path unchanged. No preopen covering an absolute path -> fd 3 and the whole
+  path too, so the failure is the ordinary "cannot open" ERRNO each caller turns into nil — an
+  errno, never a trap (`.kb/wasi-component.md`).
+- **A path with a `..` component CLIMBS** and resolves against the SHORTEST covering preopen, not
+  the longest: a preopen is a cap-std sandbox that refuses a `..` leaving it. A RELATIVE climbing
+  path is first joined onto fd 3's name (`<name>/<path>`, in scratch above HEAP_PTR that stays
+  allocated until the caller pops its staging) when that name is ABSOLUTE; a relative name (`--dir
+  .`) keeps the old answer. The `..` itself is resolved physically by the host, not lexically here.
+  This is why the answer is a pointer + length and not a skip: a joined path is not a suffix of
+  the staged one. The `--native` runner stub names fd 3 after `current_dir()`
+  (`.kb/native-output.md`). Pinned by
+  `WasmLispCompilerIntegrationTest#relativePathClimbsAboveANamedCurrentDirectory` + its
+  `component` twin, and `rontolisp-native/precomp/tests/stub.rs`
+  `relative_paths_climb_above_the_current_directory`.
 - Absolute is matched against preopen NAMES via preview1 imports `fd_prestat_get` (its EBADF at the
   first non-preopened fd ENDS the walk) and `fd_prestat_dir_name`. Match is a path-COMPONENT prefix,
   LONGEST wins (`/tmp/x` -> `/tmp`; `/tmpfoo` matches neither); a trailing slash is stripped first; a

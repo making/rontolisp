@@ -13978,6 +13978,102 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(absolutePathExpected(root));
 	}
 
+	/**
+	 * Stages {@code <root>/up.txt} beside the directory {@code <root>/cwd} a program then
+	 * runs in with fd 3 NAMED after that directory's absolute path -- the preopen shape
+	 * the {@code --native} runner stub hands every program (.kb/native-output.md).
+	 * {@code cwd/sub} exists so a {@code ..} that stays inside the directory resolves
+	 * physically.
+	 * @return the absolute path of the staged root
+	 * @throws Exception if the tree cannot be staged
+	 */
+	private static String stageParentDirectoryTree() throws Exception {
+		Path root = Path.of(System.getProperty("java.io.tmpdir"), "rontolisp-wasmtime",
+				"p" + PID + "-up" + Thread.currentThread().threadId());
+		try (Stream<Path> stale = Files.isDirectory(root) ? Files.walk(root) : Stream.<Path>empty()) {
+			for (Path entry : stale.sorted(java.util.Comparator.reverseOrder()).toList()) {
+				Files.deleteIfExists(entry);
+			}
+		}
+		wasmtime.copyFileToContainer(Transferable.of("up\n".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+				root + "/up.txt");
+		wasmtime.copyFileToContainer(Transferable.of("in-cwd\n".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+				root + "/cwd/in-cwd.txt");
+		wasmtime.copyFileToContainer(Transferable.of("keep\n".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+				root + "/cwd/sub/keep");
+		return root.toString();
+	}
+
+	// Every path is BUILT AT RUN TIME (a literal one is bundled at compile time, see
+	// ABSOLUTE_PATH_PROGRAM). The rename's new name merges to "../made/../made/y.txt":
+	// two climbs in one path.
+	private static final String PARENT_DIRECTORY_PROGRAM = """
+			(defvar *root* "%s")
+			(defun up (name) (concatenate 'string ".." "/" name))
+			(print (with-open-file (s (up "up.txt")) (read-line s)))
+			(print (probe-file (up "up.txt")))
+			(print (probe-file (up "absent.txt")))
+			(print (with-open-file (s (concatenate 'string *root* "/cwd/../up.txt")) (read-line s)))
+			(print (with-open-file (s (concatenate 'string "sub/.." "/in-cwd.txt")) (read-line s)))
+			(print (with-open-file (s (concatenate 'string "in" "-cwd.txt")) (read-line s)))
+			(print (ensure-directories-exist (up "made/x.txt")))
+			(with-open-file (out (up "made/x.txt") :direction :output) (write-line "made" out))
+			(print (rename-file (up "made/x.txt") (up "made/y.txt")))
+			(print (with-open-file (s (concatenate 'string *root* "/made/y.txt")) (read-line s)))
+			(print (delete-file (up "made/y.txt")))
+			(print (probe-file (up "made/y.txt")))
+			(print (directory (up "*.txt")))
+			""";
+
+	// What the interpreter prints run from <root>/cwd.
+	private static final String PARENT_DIRECTORY_EXPECTED = """
+			"up"
+			#P"../up.txt"
+			NIL
+			"up"
+			"in-cwd"
+			"in-cwd"
+			"../made/x.txt"
+			#P"../made/../made/y.txt"
+			"made"
+			T
+			NIL
+			(#P"../up.txt")""";
+
+	/**
+	 * Runs a program with fd 3 preopened as {@code cwd} under its own absolute name and
+	 * {@code /} as fd 4, the {@code --native} runner stub's layout.
+	 */
+	private static String compileAndRunInNamedCwd(String lispCode, String cwd, boolean component) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
+		byte[] bytes = WasmLispCompiler.builder().component(component).build().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(bytes), path("named-cwd.wasm"));
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"cd " + cwd + " && wasmtime run -W gc=y -W exceptions=y --dir " + cwd + "::" + cwd + " --dir / "
+						+ path("named-cwd.wasm"));
+		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void relativePathClimbsAboveANamedCurrentDirectory() throws Exception {
+		// The bug this pins: a relative path went to fd 3 whole, and fd 3 is a sandbox
+		// that refuses a ".." escape, so from a subdirectory "../up.txt" could not be
+		// opened although it exists. When fd 3's preopen name is ABSOLUTE the module
+		// knows the current directory and resolves a climbing path through the root-most
+		// preopen instead -- the case of every --native output.
+		String root = stageParentDirectoryTree();
+		assertThat(compileAndRunInNamedCwd(PARENT_DIRECTORY_PROGRAM.formatted(root), root + "/cwd", false))
+			.isEqualTo(PARENT_DIRECTORY_EXPECTED);
+	}
+
+	@Test
+	void componentRelativePathClimbsAboveANamedCurrentDirectory() throws Exception {
+		String root = stageParentDirectoryTree();
+		assertThat(compileAndRunInNamedCwd(PARENT_DIRECTORY_PROGRAM.formatted(root), root + "/cwd", true))
+			.isEqualTo(PARENT_DIRECTORY_EXPECTED);
+	}
+
 	// One program for both WASM modes: the entries are created by the program itself so
 	// the listing is exactly what it wrote, whatever the run directory holds.
 	private static final String DIRECTORY_LISTING_PROGRAM = """

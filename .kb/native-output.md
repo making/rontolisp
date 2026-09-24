@@ -22,8 +22,11 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
 - **Stub** `rlrun`: runtime-only wasmtime (`runtime std gc gc-copying`, no Cranelift) +
   `wasmtime-wasi` `p1`; profile `release-runner` (`panic = abort`). Reads its trailer from
   `/proc/self/exe` (Linux) or `current_exe()`, runs `_start` with inherited stdio, argv and
-  environment; preopens `.` as fd 3 (what a relative path resolves against,
-  `.kb/read-load-streams.md`) and `/` as fd 4 (covers every absolute path). Exit: the
+  environment; preopens the current directory as fd 3 (what a relative path resolves against,
+  `.kb/read-load-streams.md`) under its ABSOLUTE name (`current_dir()`, `.` when unknown or
+  not UTF-8) and `/` as fd 4 (covers every absolute path). The absolute name is what lets
+  `../x` leave the current directory: the module joins a climbing relative path onto it and
+  resolves it through `/`. Exit: the
   `proc_exit` code, 0 on return, **134 after a trap** (what `wasmtime run` answers on Unix,
   `Error: <trap>` on stderr), 1 when the module cannot load (no trailer, refused engine).
 - **Fingerprint** `rlnative-abi=1;wasmtime=47.0.3;wasm=gc,function-references,exceptions,tail-call;collector=copying`.
@@ -79,8 +82,10 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   heap reservation is refused ("heap reservation"); pinned by
   `module_precompiled_under_another_config_is_refused_at_start` in
   `rontolisp-native/precomp/tests/stub.rs`.
-- **Relative paths cannot leave `.`**: the preopen is a cap-std sandbox, so `../x` answers
-  the ordinary open errno (`.todo/948`). An absolute path goes through the `/` preopen.
+- **`..` and the sandbox**: every preopen is a cap-std sandbox that refuses a `..` leaving
+  it, so a relative `../x` needs fd 3's absolute name above; under `wasmtime run --dir .` it
+  still answers the ordinary open errno. `/..` (climbing above the root) is refused, where a
+  native program would stay at `/`.
 - **macOS signature**: the appended payload is outside the linker's ad-hoc signature
   (`codesign -v` fails strict validation; it still runs from a shell) -- `.todo/944`.
 - **ETXTBSY in a multi-threaded test**: exec of a just-written output fails while another
@@ -113,12 +118,13 @@ included); outputs `hello` 2,006,592 B, `fib` 2,025,472 B, `gc` 2,227,640 B; `gc
 takes 0.59 s for hello and 0.72 s for `gc.lisp` (0.80 s on the first call, which extracts
 the shim); it also compiles under `env -i` (cache from `user.home`).
 
-The ci corpus printed byte-identical stdout (4,722 lines) under the stub (`.` + `/`) and
-`wasmtime run --dir . --dir /tmp`. `parallel-compilation` is deterministic: serial and
+The ci corpus printed byte-identical stdout (4,722 lines) under the stub (`.` + `/`, before
+fd 3 carried the absolute name) and `wasmtime run --dir . --dir /tmp`. `parallel-compilation` is deterministic: serial and
 parallel outputs were byte-identical. A precompiled module is ~11x its `.wasm`.
 arm64 macOS spike numbers (2026-09-24): shim 5.5 MB, stub 1.7 MB, `gc.lisp` 1.32 s (=
 `wasmtime run`), hello starts < 10 ms.
 
-Pinned by `rontolisp-native/precomp/tests/stub.rs` (fixtures compiled by rontolisp, stdout
-and exit status equal to `wasmtime run`'s, recorded by `gen-fixtures.sh`) and the
+Pinned by `rontolisp-native/precomp/tests/stub.rs` (fixtures compiled by rontolisp, run from
+`<tmp>/cwd` beside `<tmp>/up.txt`; stdout and exit status equal to `wasmtime run`'s with the
+stub's preopens, recorded by `gen-fixtures.sh`) and the
 `rlabi` / `rlprecomp` unit tests.
