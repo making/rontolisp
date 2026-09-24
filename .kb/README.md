@@ -71,7 +71,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [string-accumulate-cost.md](string-accumulate-cost.md) -- building one string out of N pieces costs the total length, not the sum of the prefixes
 - [hash-tables.md](hash-tables.md) -- per-backend representation, `equalp` key fold, depth cap and work budget
 - [array-literals.md](array-literals.md) -- an array literal is a constructor, not a constant; rank-0 arrays; when `:element-type` specializes
-- [quoted-data.md](quoted-data.md) -- a quoted datum is one shared constant per quote site on all four backends
+- [quoted-data.md](quoted-data.md) -- a quoted datum is one shared constant per quote site on all four backends; a long list is built in runs of 16 on wasm-GC (Cranelift time vs. live values across calls)
 - [adjustable-arrays.md](adjustable-arrays.md) -- fill pointers, `:adjustable`, displaced arrays, `vector-push*`, `adjust-array`
 - [packed-integer-vectors.md](packed-integer-vectors.md) -- `(unsigned-byte 8|16|32)` rank-1 packs, `#N@(...)`, per-backend raw paths
 - [bfloat16.md](bfloat16.md) -- bfloat16 conversion pair, the packed `#bf16` width, and the width's account (why bf16, the name, the prefix, the lattice entry)

@@ -622,9 +622,27 @@ an index. Three things pay for the one decode:
   15,244 -> 10,860, its two-byte `local.*` immediates 3,175 -> 1,807 BEFORE `WasmLocalOrder` sees
   them.
 
-Bodies are re-sunk to a fixpoint (a local whose expression reads a sunk local waits a round), and
-a function's own locals are all it renumbers, so every index-addressed claim the shake reads is
-untouched. **The number this pass is for is raw bytes of the code section, and it DELETES bytes**,
+Bodies are re-sunk to a fixpoint, and a function's own locals are all it renumbers, so every
+index-addressed claim the shake reads is untouched.
+
+**A round is linear in the body, and a chain is one round.** Writes are judged in order, so an
+expression that reads a local this round moves meets that local's verdict first: the moved
+expression NESTS at the read, and the facts the legality argument needs are carried up the
+nesting -- the first position anything it transitively reads is written or clobbered, whether it
+allocates, and its length once nested, held to `MAX_WALK` (32) like the walk back, which bounds
+the operand stack a nesting builds. Only a copy (`tee`) or a dead write reading a moved local
+waits a round. Dominance, the loop-extended range end and the first write per local are
+answered from one per-round `Layout` (innermost region end per position, the enclosing opener
+chain, write positions per local, the next `call`/`global.set`) instead of a scan between each
+write and its read. Before 2026-09-24 a read of a local moved this round always waited, so the
+inliner's cons hand-over chain -- what a backquote template of N elements becomes -- lost one
+link per round: N rounds of a whole-body pass. Measured 2026-09-24, linux-x64, whole
+`-o x.wasm` run of `` (defun g (x) `(,x 0 1 ... )) ``: 4,000 elements 11.7 s -> 2.3 s
+(3,638 rounds -> 2 on the one body, output byte-identical), 8,000 72 s -> 2.5 s, 50,000 did not
+finish in 10 min -> 4.7 s. Over every example and size-report program at both levels the output
+moved by -216 bytes in total (a different but equally long choice of which local keeps a call
+result, in 164 of 366 builds).
+**The number this pass is for is raw bytes of the code section, and it DELETES bytes**,
 so gzip follows -- and falls faster, because a fresh local per temporary is exactly the
 low-repetition byte a compressor cannot fold.
 
@@ -672,7 +690,8 @@ decisions.
 
 Pins: `WasmLocalSinkTest` (the unreachable body left alone, the sink, the gap, the renumbering, the loop-carried input, the
 undominated read, the global across a call, the tee copy, the allocation that is never copied nor
-sunk into a loop, the dead writes, the chained round, the adjacent pair),
+sunk into a loop, the dead writes, the chained round, the adjacent pair, a 2,000-link hand-over
+chain collected in ONE round), `WideListStackTest`'s backquote leg on `.wasm` (50,000 links),
 `WasmTreeShakerCorpusTest` (the whole `ci-spec` corpus at every level validates and round-trips
 with the pass in the pipeline) and `WasmLispCompilerIntegrationTest.mapcanMapconLongInput` /
 `sequenceBoundingKeywords` (a closure's cell mutated across iterations -- the two that caught the

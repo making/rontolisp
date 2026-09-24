@@ -38,6 +38,33 @@ so the compile side meets the interpreter. Same memo, via
 `compileLiteralInstance` (bare). Costs ~+40 bytes on wasm (orphaned null globals;
 `WasmTreeShaker` does not drop globals), zero on the interpreter.
 
+## A long list is built in runs (wasm-GC)
+`WasmQuoteCompiler.compileQuotedCons` pushes every car, the tail, then one `struct.new` per
+cell -- for up to `QUOTED_RUN` (16) cells. A longer list is built from its tail a run at a time,
+the list so far carried through one local, so the operand stack never holds more than a run's
+cars. The cost is what Cranelift does with a deep stack across CALLS: a symbol or string car is
+a call, and every value live across it is spilled and listed in its stack map. Measured
+2026-09-24, linux-x64, wasmtime 49.0.0, `wasmtime compile` of `(defparameter *table* '(s0 s1 ...))`:
+
+| symbols | every car first | runs of 16 |
+| ---: | ---: | ---: |
+| 5,000 | 10.8 s | 1.9 s |
+| 20,000 | 168 s | 16.7 s |
+| 50,000 | -- | 94 s |
+
+A list of NUMBERS (no calls) never cared: every car first compiles as fast as runs. Runs of 64
+cost ~20% more compile time than 16 on hand-written modules; 16 costs 4 bytes per 16 cells,
++0.03% over every example and size-report build (`zlib` +16 B), and a list of 16 or fewer is
+unchanged.
+
+**What is left is not the stack.** Wasmtime's time grows with the square of the GC
+allocations in ONE function, whatever the stack does: N x `ref.i31; ref.null; struct.new;
+drop` compiles in 1.4 / 4.5 / 18.8 s at 5,000 / 10,000 / 20,000 (`-C collector=null` 1.2 s and
+`-O regalloc-algorithm=single-pass` 1.35 s at 10,000: the DRC allocation path under the
+backtracking allocator), while the same 20,000 cells split into helper functions of 64 compile
+in 0.2 s. The generator for these modules is
+`.todo/artefacts/953-wasm-compile-quadratic-in-list-length/`.
+
 ## Not covered
 Two DIFFERENT quote sites spelling the same text are not `eq` (CLHS permits but does not
 require coalescing). `--no-gc` is scalar-only (`.kb/no-gc-scalar-wasm.md`).
@@ -47,3 +74,5 @@ ci-spec `quoted-datum-shared-cross-backend`, `instance-literal-shared-cross-back
 `LispEvaluatorTest.{aQuotedDatum,anInstanceLiteral}IsOneSharedConstantOnEveryBackend`;
 `{aQuotedDatum,aBareInstanceLiteral}IsOneSharedConstantAcrossEvaluations` in
 `JvmLispCompilerTest` and `WasmLispCompilerIntegrationTest` (Preview 1 AND component).
+Runs: `WasmLispCompilerTest.aLongQuotedListKeepsNoMoreThanOneRunOfCellsOnTheOperandStack`,
+`WasmLispCompilerIntegrationTest.aQuotedListLongerThanOneRunIsTheSameListAndStillOneConstant`.

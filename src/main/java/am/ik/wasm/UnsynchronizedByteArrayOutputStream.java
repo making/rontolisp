@@ -49,6 +49,17 @@ public final class UnsynchronizedByteArrayOutputStream extends ByteArrayOutputSt
 		write(b, 0, b.length);
 	}
 
+	/**
+	 * Replaces one byte already written -- a patch in place, where copying the buffer out
+	 * and back would cost the whole of it.
+	 * @param index the position of the byte, below {@link #size()}
+	 * @param b the new value
+	 */
+	public void overwrite(int index, int b) {
+		java.util.Objects.checkIndex(index, this.count);
+		this.buf[index] = (byte) b;
+	}
+
 	private void grow(int minCapacity) {
 		this.buf = Arrays.copyOf(this.buf, Math.max(minCapacity, Math.max(16, this.buf.length * 2)));
 	}

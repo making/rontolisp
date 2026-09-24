@@ -54,9 +54,11 @@ class WideListStackTest {
 				+ "))\n(print (length *table*))\n";
 		String symbols = "(defparameter *table* '(" + repeat(i -> "s" + (i % 1000), " ")
 				+ "))\n(print (length *table*))\n";
-		// The reader's backquote expansion, interpreted: compiled, the template becomes
-		// one
-		// call of ELEMENTS arguments, which a JVM method cannot hold.
+		// The reader's backquote expansion: compiled, the template becomes one call of
+		// ELEMENTS arguments, which a JVM method cannot hold -- and which the wasm
+		// backend's inliner turns into ELEMENTS hand-overs in one body, a chain its
+		// single-use-local sink once collected one link per round
+		// (.kb/optimize-dead-code-elimination.md, "The single-use local").
 		String backquote = "(defun g (x) `(,x " + repeat(i -> Integer.toString(i % 1000), " ")
 				+ "))\n(print (length (g 1)))\n";
 		// --no-gc compiles defuns only: one body of ELEMENTS forms.
@@ -69,6 +71,7 @@ class WideListStackTest {
 			legs.add(Arguments.of("quoted-symbols", target, symbols, ELEMENTS));
 		}
 		legs.add(Arguments.of("backquote", "interpret", backquote, ELEMENTS + 1));
+		legs.add(Arguments.of("backquote", "wasm", backquote, 0));
 		legs.add(Arguments.of("defun-body", "no-gc", body, 0));
 		return legs.stream();
 	}

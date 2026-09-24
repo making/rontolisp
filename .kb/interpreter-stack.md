@@ -172,7 +172,7 @@ compiles on 16 MiB in ~6 s.
 
 `WideListStackTest` runs the whole command line in process on a 1 MiB thread over
 50,000-element lists (a `progn`, quoted numbers, quoted symbols on interpret / `.class` /
-`.wasm` / `--component`; a backquote template interpreted; a 50,000-form defun body on
+`.wasm` / `--component`; a backquote template interpreted and on `.wasm`; a 50,000-form defun body on
 `--no-gc`), the source refusal, the run-time `CircularListException`, and
 `anEmbedderCompilesOnTheCliStackNotItsOwn` (the CLI on 1 MiB must overflow on the nesting the
 embedder then compiles from a 1 MiB caller). `LispTreesTest` pins `rebuildSpine`'s identity
