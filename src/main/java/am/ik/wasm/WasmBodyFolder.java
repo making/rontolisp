@@ -190,7 +190,7 @@ final class WasmBodyFolder {
 	}
 
 	private static byte[] rebuildFunctionSection(int[] defTypeIdx, int[] survivor) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		int count = 0;
 		for (int i = 0; i < defTypeIdx.length; i++) {
 			if (survivor[i] == i) {
@@ -215,7 +215,7 @@ final class WasmBodyFolder {
 			byte[] entry = codeEntries.get(i);
 			kept.add(redirectFuncRefs(entry, WasmSections.scanBody(entry), remap));
 		}
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new UnsynchronizedByteArrayOutputStream();
 		WasmSections.writeU(body, kept.size());
 		for (byte[] entry : kept) {
 			WasmSections.writeU(body, entry.length);
@@ -227,7 +227,7 @@ final class WasmBodyFolder {
 	// Splices only the FUNCTION references; type immediates keep their bytes verbatim
 	// (folding drops no type, so there is nothing to renumber there).
 	private static byte[] redirectFuncRefs(byte[] buf, List<WasmSections.Ref> refs, int[] remap) {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream out = new UnsynchronizedByteArrayOutputStream();
 		int cursor = 0;
 		for (WasmSections.Ref r : refs) {
 			if (r.kind() != WasmSections.RefKind.FUNC) {

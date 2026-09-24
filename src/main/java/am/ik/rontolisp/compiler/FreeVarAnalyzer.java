@@ -12,6 +12,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Static utility for analyzing free variables in Lisp expressions. Shared between JVM and
@@ -119,11 +120,45 @@ public final class FreeVarAnalyzer {
 	 * @return set of variable names that need boxing
 	 */
 	public static Set<String> findCapturedVars(List<LispVal> body, Set<String> localVars, Set<String> knownFunctions) {
+		return findCapturedVars(body, localVars, knownFunctions, new CaptureMemo());
+	}
+
+	/**
+	 * {@link #findCapturedVars(List, Set, Set)}, answering from and recording into
+	 * {@code memo}. A compiler asks once per scope, and the walk an enclosing scope made
+	 * already covered a nested one's body: the let compilers asked at every level of a
+	 * nest, which made the walk quadratic in its depth (8% of a WASM compile's CPU).
+	 * @param body the expressions to scan
+	 * @param localVars the local variable names in the current scope
+	 * @param knownFunctions names of defined functions
+	 * @param memo the answers so far; one per compilation, since it holds forms by
+	 * identity and they must not change under it
+	 * @return set of variable names that need boxing
+	 */
+	public static Set<String> findCapturedVars(List<LispVal> body, Set<String> localVars, Set<String> knownFunctions,
+			CaptureMemo memo) {
 		Set<String> captured = new HashSet<>();
 		for (LispVal expr : body) {
-			collectCapturedVars(expr, localVars, knownFunctions, captured, false);
+			for (String name : reachRoot(expr, false, memo)) {
+				if (localVars.contains(name)) {
+					captured.add(name);
+				}
+			}
 		}
 		return captured;
+	}
+
+	/**
+	 * What {@link #findCapturedVars(List, Set, Set, CaptureMemo)} has walked, per form
+	 * (by identity) and per whether it was reached inside a lambda. Not thread-safe: one
+	 * per compilation.
+	 */
+	public static final class CaptureMemo {
+
+		final java.util.IdentityHashMap<LispCons, List<String>> outside = new java.util.IdentityHashMap<>();
+
+		final java.util.IdentityHashMap<LispCons, List<String>> inside = new java.util.IdentityHashMap<>();
+
 	}
 
 	private static void collectFreeVars(LispVal expr, Set<String> boundVars, Set<String> knownFunctions,
@@ -486,292 +521,325 @@ public final class FreeVarAnalyzer {
 		}
 	}
 
-	private static void collectCapturedVars(LispVal expr, Set<String> localVars, Set<String> knownFunctions,
-			Set<String> captured, boolean insideLambda) {
+	/**
+	 * What the capture walk finds under one form, independent of which locals are being
+	 * asked about: the names a symbol reference or a {@code setq} place spells at a point
+	 * inside a lambda (a nested defun body counts) that no lambda between the form and
+	 * that point binds as a parameter -- with {@code insideLambda}, the form's own top
+	 * level counts as inside one. In order of first occurrence. The captured subset of a
+	 * set of locals is that set's intersection with this, which is what lets
+	 * {@link CaptureMemo} answer a nested scope from the walk an enclosing one made.
+	 */
+	private static List<String> reach(LispVal expr, boolean insideLambda, CaptureMemo memo) {
+		if (expr instanceof LispSymbol sym) {
+			return insideLambda ? List.of(sym.name()) : List.of();
+		}
+		if (!(expr instanceof LispCons cons)) {
+			return List.of();
+		}
 		try {
-			collectCapturedVarsLocated(expr, localVars, knownFunctions, captured, insideLambda);
+			return reachCons(cons, insideLambda, memo);
 		}
 		catch (RuntimeException ex) {
 			// This walk casts binding lists and parameter lists to their expected shapes,
 			// so a malformed form surfaces here as a ClassCastException long before any
 			// backend gets to reject it by name -- worth a position more than most.
-			throw SourceProvenance.noteFailure(expr, ex);
+			throw SourceProvenance.noteFailure(cons, ex);
 		}
 	}
 
-	private static void collectCapturedVarsLocated(LispVal expr, Set<String> localVars, Set<String> knownFunctions,
-			Set<String> captured, boolean insideLambda) {
-		switch (expr) {
-			case LispSymbol sym -> {
-				if (insideLambda && localVars.contains(sym.name())) {
-					captured.add(sym.name());
-				}
-			}
-			case LispCons cons -> {
-				LispVal head = cons.car();
-				if (head instanceof LispSymbol sym) {
-					switch (sym.name()) {
-						case LispNames.QUOTE -> {
-							// skip
-						}
-						case LispNames.LAMBDA -> {
-							// Any reference to localVars inside a lambda body means
-							// capture
-							List<LispVal> parts = cons.toList();
-							Set<String> lambdaParams = extractParamNames(parts.get(1));
-							// Only look for captures of outer localVars, excluding
-							// lambda's own params
-							Set<String> outerVars = new HashSet<>(localVars);
-							outerVars.removeAll(lambdaParams);
-							for (int i = 2; i < parts.size(); i++) {
-								collectCapturedVars(parts.get(i), outerVars, knownFunctions, captured, true);
-							}
-						}
-						case LispNames.LET -> {
-							List<LispVal> parts = cons.toList();
-							LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));
-							if (bindings instanceof LispCons bindingsCons) {
-								for (LispVal binding : bindingsCons.toList()) {
-									LispCons pair = (LispCons) binding;
-									List<LispVal> pairList = pair.toList();
-									collectCapturedVars(pairList.get(1), localVars, knownFunctions, captured,
-											insideLambda);
-								}
-							}
-							for (int i = 2; i < parts.size(); i++) {
-								collectCapturedVars(parts.get(i), localVars, knownFunctions, captured, insideLambda);
-							}
-						}
-						case LispNames.DEFUN -> {
-							// A defun that is NOT at top level is not a definition: both
-							// backends lower it to (setq name (lambda ...)) and call it
-							// through the variable
-							// (LispMacroExpander.expandCallThroughVariable), so it closes
-							// over the enclosing bindings exactly as a lambda does and
-							// they need the same cell. Skipping it left the binding
-							// unboxed and handed every nested definition a private
-							// snapshot copy -- the CL closure-over-let idiom (cl-ppcre's
-							// scanner caches) then answered the INITIAL value for good.
-							// A top-level defun's body never reaches here: it is walked
-							// with its own parameters as the local set, so a name in
-							// this set can only be an enclosing binding.
-							List<LispVal> parts = cons.toList();
-							if (parts.size() >= 3) {
-								Set<String> outerVars = new HashSet<>(localVars);
-								outerVars.removeAll(extractParamNames(parts.get(2)));
-								for (int i = 3; i < parts.size(); i++) {
-									collectCapturedVars(parts.get(i), outerVars, knownFunctions, captured, true);
-								}
-							}
-						}
-						case LispNames.LET_STAR -> collectCapturedVars(LispMacroExpander.expandLetStar(cons), localVars,
-								knownFunctions, captured, insideLambda);
-						// The SUBSTITUTION family, expanded before walking for the same
-						// reason as in collectFreeVars -- and here it is a lost CAPTURE,
-						// not a spurious free variable: a lambda body that spells only
-						// the macro name captures whatever the expansion references
-						// ((symbol-macrolet ((big (* n n))) (lambda () big)) captures n).
-						// Missing it leaves the outer binding unboxed -- or, on wasm, an
-						// unboxed i64 local -- with no cell for the closure to load.
-						case LispNames.SYMBOL_MACROLET ->
-							collectCapturedVars(LispMacroExpander.expandSymbolMacrolet(cons), localVars, knownFunctions,
-									captured, insideLambda);
-						case LispNames.WITH_SLOTS -> collectCapturedVars(LispMacroExpander.expandWithSlots(cons),
-								localVars, knownFunctions, captured, insideLambda);
-						case LispNames.WITH_ACCESSORS ->
-							collectCapturedVars(LispMacroExpander.expandWithAccessors(cons), localVars, knownFunctions,
-									captured, insideLambda);
-						// Expand before walking (same reason as collectFreeVars).
-						case LispNames.COND -> collectCapturedVars(LispMacroExpander.expandCond(cons), localVars,
-								knownFunctions, captured, insideLambda);
-						case LispNames.DOTIMES -> collectCapturedVars(LispMacroExpander.expandDotimes(cons), localVars,
-								knownFunctions, captured, insideLambda);
-						case LispNames.DO_STAR -> collectCapturedVars(LispMacroExpander.expandDoStar(cons), localVars,
-								knownFunctions, captured, insideLambda);
-						case LispNames.DOLIST -> collectCapturedVars(LispMacroExpander.expandDolist(cons), localVars,
-								knownFunctions, captured, insideLambda);
-						case LispNames.DO -> collectCapturedVars(LispMacroExpander.expandDo(cons), localVars,
-								knownFunctions, captured, insideLambda);
-						// do-symbols / do-external-symbols bind their iteration
-						// variable (same reason as in collectFreeVars).
-						case LispNames.DO_SYMBOLS -> collectCapturedVars(LispMacroExpander.expandDoSymbols(cons, false),
-								localVars, knownFunctions, captured, insideLambda);
-						case LispNames.DO_EXTERNAL_SYMBOLS ->
-							collectCapturedVars(LispMacroExpander.expandDoSymbols(cons, true), localVars,
-									knownFunctions, captured, insideLambda);
-						case LispNames.LOOP -> collectCapturedVars(LispMacroExpander.expandLoop(cons), localVars,
-								knownFunctions, captured, insideLambda);
-						// The with-* stream macros bind their stream variable (same
-						// reason
-						// as in collectFreeVars).
-						case LispNames.WITH_OUTPUT_TO_STRING ->
-							collectCapturedVars(LispMacroExpander.expandWithOutputToString(cons), localVars,
-									knownFunctions, captured, insideLambda);
-						case LispNames.WITH_INPUT_FROM_STRING ->
-							collectCapturedVars(LispMacroExpander.expandWithInputFromString(cons), localVars,
-									knownFunctions, captured, insideLambda);
-						case LispNames.WITH_OPEN_FILE -> collectCapturedVars(LispMacroExpander.expandWithOpenFile(cons),
-								localVars, knownFunctions, captured, insideLambda);
-						case LispNames.WITH_OPEN_STREAM ->
-							collectCapturedVars(LispMacroExpander.expandWithOpenStream(cons, true), localVars,
-									knownFunctions, captured, insideLambda);
-						// The lock spec holds a VALUE, not a binding (same reason as in
-						// collectFreeVars).
-						case LispNames.WITH_MUTEX_QUALIFIED, LispNames.WITH_LOCK_HELD_QUALIFIED,
-								LispNames.WITH_RECURSIVE_LOCK_HELD_QUALIFIED ->
-							collectCapturedVars(LispMacroExpander.expandWithMutex(cons), localVars, knownFunctions,
-									captured, insideLambda);
-						// Expand before walking (same reason as collectFreeVars).
-						case LispNames.CHECK_TYPE -> collectCapturedVars(LispMacroExpander.expandCheckType(cons),
-								localVars, knownFunctions, captured, insideLambda);
-						case LispNames.ASSERT -> collectCapturedVars(LispMacroExpander.expandAssert(cons), localVars,
-								knownFunctions, captured, insideLambda);
-						// typecase/case clause HEADS are data: walk the keyform and the
-						// clause bodies only (the collectFreeVars twin).
-						case LispNames.TYPECASE, LispNames.ETYPECASE, LispNames.CTYPECASE, LispNames.CASE,
-								LispNames.ECASE, LispNames.CCASE -> {
-							List<LispVal> parts = cons.toList();
-							if (parts.size() > 1) {
-								collectCapturedVars(parts.get(1), localVars, knownFunctions, captured, insideLambda);
-							}
-							for (int i = 2; i < parts.size(); i++) {
-								if (!(parts.get(i) instanceof LispCons clause)) {
-									continue;
-								}
-								List<LispVal> clauseParts = clause.toList();
-								for (int j = 1; j < clauseParts.size(); j++) {
-									collectCapturedVars(clauseParts.get(j), localVars, knownFunctions, captured,
-											insideLambda);
-								}
-							}
-						}
-						case LispNames.DECLARE, LispNames.DECLAIM, LispNames.PROCLAIM -> {
-							// Parsed no-ops: no variable references.
-						}
-						case LispNames.THE -> collectCapturedVars(LispMacroExpander.expandThe(cons), localVars,
-								knownFunctions, captured, insideLambda);
-						case LispNames.EVAL_WHEN -> collectCapturedVars(LispMacroExpander.expandEvalWhen(cons),
-								localVars, knownFunctions, captured, insideLambda);
-						// Expand before walking (same reason as collectFreeVars).
-						case LispNames.FLET -> collectCapturedVars(LispMacroExpander.expandFlet(cons), localVars,
-								knownFunctions, captured, insideLambda);
-						case LispNames.LABELS -> collectCapturedVars(LispMacroExpander.expandLabels(cons), localVars,
-								knownFunctions, captured, insideLambda);
-						// Expand before walking (same reason as collectFreeVars).
-						case LispNames.MULTIPLE_VALUE_BIND ->
-							collectCapturedVars(LispMacroExpander.expandMultipleValueBind(cons), localVars,
-									knownFunctions, captured, insideLambda);
-						case LispNames.MULTIPLE_VALUE_LIST ->
-							collectCapturedVars(LispMacroExpander.expandMultipleValueList(cons), localVars,
-									knownFunctions, captured, insideLambda);
-						case LispNames.MULTIPLE_VALUE_CALL ->
-							collectCapturedVars(LispMacroExpander.expandMultipleValueCall(cons), localVars,
-									knownFunctions, captured, insideLambda);
-						case LispNames.NTH_VALUE -> collectCapturedVars(LispMacroExpander.expandNthValue(cons),
-								localVars, knownFunctions, captured, insideLambda);
-						// Expand before walking (same reason as collectFreeVars).
-						case LispNames.MULTIPLE_VALUE_SETQ ->
-							collectCapturedVars(LispMacroExpander.expandMultipleValueSetq(cons), localVars,
-									knownFunctions, captured, insideLambda);
-						case LispNames.ROTATEF -> collectCapturedVars(LispMacroExpander.expandRotatef(cons), localVars,
-								knownFunctions, captured, insideLambda);
-						// Expand before walking (same reason as collectFreeVars).
-						case LispNames.DESTRUCTURING_BIND ->
-							collectCapturedVars(LispMacroExpander.expandDestructuringBind(cons), localVars,
-									knownFunctions, captured, insideLambda);
-						// Expand before walking (same reason as collectFreeVars).
-						case LispNames.PPRINT_LOGICAL_BLOCK ->
-							collectCapturedVars(LispMacroExpander.expandPprintLogicalBlock(cons), localVars,
-									knownFunctions, captured, insideLambda);
-						// Expand before walking: the restart expansions introduce lambdas
-						// (restart invokers, handler type tests) whose captures of USER
-						// locals the surface form cannot show.
-						case LispNames.HANDLER_BIND ->
-							collectCapturedVars(LispMacroExpander.expandHandlerBindForAnalysis(cons), localVars,
-									knownFunctions, captured, insideLambda);
-						case LispNames.RESTART_CASE -> collectCapturedVars(LispMacroExpander.expandRestartCase(cons),
-								localVars, knownFunctions, captured, insideLambda);
-						case LispNames.RESTART_BIND -> collectCapturedVars(LispMacroExpander.expandRestartBind(cons),
-								localVars, knownFunctions, captured, insideLambda);
-						case LispNames.WITH_SIMPLE_RESTART ->
-							collectCapturedVars(LispMacroExpander.expandWithSimpleRestart(cons), localVars,
-									knownFunctions, captured, insideLambda);
-						case LispNames.FUNCTION -> {
-							List<LispVal> parts = cons.toList();
-							if (parts.size() == 2 && parts.get(1) instanceof LispCons) {
-								collectCapturedVars(parts.get(1), localVars, knownFunctions, captured, insideLambda);
-							}
-						}
-						case LispNames.SETQ -> {
-							// Every place/value pair, for the reason spelled out in the
-							// free-variable walk above.
-							List<LispVal> parts = cons.toList();
-							for (int i = 1; i + 1 < parts.size(); i += 2) {
-								if (parts.get(i) instanceof LispSymbol place && insideLambda
-										&& localVars.contains(place.name())) {
-									captured.add(place.name());
-								}
-								collectCapturedVars(parts.get(i + 1), localVars, knownFunctions, captured,
-										insideLambda);
-							}
-						}
-						case LispNames.DEFVAR -> {
-							// defvar names a global variable; only the optional init form
-							// can reference captured locals.
-							List<LispVal> parts = cons.toList();
-							if (parts.size() > 2) {
-								collectCapturedVars(parts.get(2), localVars, knownFunctions, captured, insideLambda);
-							}
-						}
-						case LispNames.BLOCK, LispNames.FN_BLOCK_INTERNAL, LispNames.RETURN_FROM -> {
-							// The first argument is a block NAME, not a variable
-							// reference.
-							List<LispVal> parts = cons.toList();
-							for (int i = 2; i < parts.size(); i++) {
-								collectCapturedVars(parts.get(i), localVars, knownFunctions, captured, insideLambda);
-							}
-						}
-						case LispNames.TAGBODY -> {
-							// Body atoms are labels, not variable references.
-							List<LispVal> parts = cons.toList();
-							for (int i = 1; i < parts.size(); i++) {
-								if (parts.get(i) instanceof LispCons) {
-									collectCapturedVars(parts.get(i), localVars, knownFunctions, captured,
-											insideLambda);
-								}
-							}
-						}
-						case LispNames.GO -> {
-							// (go tag): the tag is a label, not a variable reference.
-						}
-						default -> {
-							// A uiop macro with a real expansion binds / rearranges
-							// forms the default walk would misread (same reason, and the
-							// same dispatcher, as in collectFreeVars).
-							LispVal uiopMacro = LispMacroExpander.expandUiopMacro(cons, true);
-							if (uiopMacro != null) {
-								collectCapturedVars(uiopMacro, localVars, knownFunctions, captured, insideLambda);
-								break;
-							}
-							// Lisp-2: the operator symbol is not a variable reference
-							List<LispVal> parts = cons.toList();
-							for (int i = 1; i < parts.size(); i++) {
-								collectCapturedVars(parts.get(i), localVars, knownFunctions, captured, insideLambda);
-							}
-						}
-					}
-				}
-				else {
-					List<LispVal> parts = cons.toList();
-					for (LispVal part : parts) {
-						collectCapturedVars(part, localVars, knownFunctions, captured, insideLambda);
-					}
-				}
-			}
-			default -> {
-				// Literals
+	// reach, through the memo: for a form a compiler will ask about on its own -- one
+	// statement of a let, lambda or defun body, the scopes that ask -- so that the
+	// memo holds the few forms worth keeping rather than every cons the walk passes.
+	private static List<String> reachRoot(LispVal expr, boolean insideLambda, CaptureMemo memo) {
+		if (!(expr instanceof LispCons cons)) {
+			return reach(expr, insideLambda, memo);
+		}
+		java.util.Map<LispCons, List<String>> answers = insideLambda ? memo.inside : memo.outside;
+		List<String> known = answers.get(cons);
+		if (known != null) {
+			return known;
+		}
+		List<String> found = reach(cons, insideLambda, memo);
+		answers.put(cons, found);
+		return found;
+	}
+
+	private static List<String> without(List<String> names, Set<String> removed) {
+		if (names.isEmpty() || removed.isEmpty()) {
+			return names;
+		}
+		List<String> kept = new java.util.ArrayList<>(names.size());
+		for (String name : names) {
+			if (!removed.contains(name)) {
+				kept.add(name);
 			}
 		}
+		return kept;
+	}
+
+	/** An ordered, duplicate-free union of name lists, copying only when two meet. */
+	private static final class Names {
+
+		private List<String> single = List.of();
+
+		private @Nullable LinkedHashSet<String> merged;
+
+		void add(String name) {
+			add(List.of(name));
+		}
+
+		void add(List<String> names) {
+			if (names.isEmpty()) {
+				return;
+			}
+			if (this.merged != null) {
+				this.merged.addAll(names);
+			}
+			else if (this.single.isEmpty()) {
+				this.single = names;
+			}
+			else {
+				this.merged = new LinkedHashSet<>(this.single);
+				this.merged.addAll(names);
+			}
+		}
+
+		List<String> result() {
+			return this.merged != null ? List.copyOf(this.merged) : this.single;
+		}
+
+	}
+
+	private static List<String> reachCons(LispCons cons, boolean insideLambda, CaptureMemo memo) {
+		Names acc = new Names();
+		LispVal head = cons.car();
+		if (head instanceof LispSymbol sym) {
+			switch (sym.name()) {
+				case LispNames.QUOTE -> {
+					// skip
+				}
+				case LispNames.LAMBDA -> {
+					// Any reference to an outer local inside a lambda body means
+					// capture
+					List<LispVal> parts = cons.toList();
+					// Everything the body names is inside a lambda -- except the
+					// lambda's own params, which are not the outer locals.
+					Set<String> lambdaParams = extractParamNames(parts.get(1));
+					Names inner = new Names();
+					for (int i = 2; i < parts.size(); i++) {
+						inner.add(reachRoot(parts.get(i), true, memo));
+					}
+					acc.add(without(inner.result(), lambdaParams));
+				}
+				case LispNames.LET -> {
+					List<LispVal> parts = cons.toList();
+					LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));
+					if (bindings instanceof LispCons bindingsCons) {
+						for (LispVal binding : bindingsCons.toList()) {
+							LispCons pair = (LispCons) binding;
+							List<LispVal> pairList = pair.toList();
+							acc.add(reach(pairList.get(1), insideLambda, memo));
+						}
+					}
+					for (int i = 2; i < parts.size(); i++) {
+						acc.add(reachRoot(parts.get(i), insideLambda, memo));
+					}
+				}
+				case LispNames.DEFUN -> {
+					// A defun that is NOT at top level is not a definition: both
+					// backends lower it to (setq name (lambda ...)) and call it
+					// through the variable
+					// (LispMacroExpander.expandCallThroughVariable), so it closes
+					// over the enclosing bindings exactly as a lambda does and
+					// they need the same cell. Skipping it left the binding
+					// unboxed and handed every nested definition a private
+					// snapshot copy -- the CL closure-over-let idiom (cl-ppcre's
+					// scanner caches) then answered the INITIAL value for good.
+					// A top-level defun's body never reaches here: it is walked
+					// with its own parameters as the local set, so a name in
+					// this set can only be an enclosing binding.
+					List<LispVal> parts = cons.toList();
+					if (parts.size() >= 3) {
+						Set<String> defunParams = extractParamNames(parts.get(2));
+						Names inner = new Names();
+						for (int i = 3; i < parts.size(); i++) {
+							inner.add(reachRoot(parts.get(i), true, memo));
+						}
+						acc.add(without(inner.result(), defunParams));
+					}
+				}
+				case LispNames.LET_STAR -> acc.add(reach(LispMacroExpander.expandLetStar(cons), insideLambda, memo));
+				// The SUBSTITUTION family, expanded before walking for the same
+				// reason as in collectFreeVars -- and here it is a lost CAPTURE,
+				// not a spurious free variable: a lambda body that spells only
+				// the macro name captures whatever the expansion references
+				// ((symbol-macrolet ((big (* n n))) (lambda () big)) captures n).
+				// Missing it leaves the outer binding unboxed -- or, on wasm, an
+				// unboxed i64 local -- with no cell for the closure to load.
+				case LispNames.SYMBOL_MACROLET ->
+					acc.add(reach(LispMacroExpander.expandSymbolMacrolet(cons), insideLambda, memo));
+				case LispNames.WITH_SLOTS ->
+					acc.add(reach(LispMacroExpander.expandWithSlots(cons), insideLambda, memo));
+				case LispNames.WITH_ACCESSORS ->
+					acc.add(reach(LispMacroExpander.expandWithAccessors(cons), insideLambda, memo));
+				// Expand before walking (same reason as collectFreeVars).
+				case LispNames.COND -> acc.add(reach(LispMacroExpander.expandCond(cons), insideLambda, memo));
+				case LispNames.DOTIMES -> acc.add(reach(LispMacroExpander.expandDotimes(cons), insideLambda, memo));
+				case LispNames.DO_STAR -> acc.add(reach(LispMacroExpander.expandDoStar(cons), insideLambda, memo));
+				case LispNames.DOLIST -> acc.add(reach(LispMacroExpander.expandDolist(cons), insideLambda, memo));
+				case LispNames.DO -> acc.add(reach(LispMacroExpander.expandDo(cons), insideLambda, memo));
+				// do-symbols / do-external-symbols bind their iteration
+				// variable (same reason as in collectFreeVars).
+				case LispNames.DO_SYMBOLS ->
+					acc.add(reach(LispMacroExpander.expandDoSymbols(cons, false), insideLambda, memo));
+				case LispNames.DO_EXTERNAL_SYMBOLS ->
+					acc.add(reach(LispMacroExpander.expandDoSymbols(cons, true), insideLambda, memo));
+				case LispNames.LOOP -> acc.add(reach(LispMacroExpander.expandLoop(cons), insideLambda, memo));
+				// The with-* stream macros bind their stream variable (same
+				// reason
+				// as in collectFreeVars).
+				case LispNames.WITH_OUTPUT_TO_STRING ->
+					acc.add(reach(LispMacroExpander.expandWithOutputToString(cons), insideLambda, memo));
+				case LispNames.WITH_INPUT_FROM_STRING ->
+					acc.add(reach(LispMacroExpander.expandWithInputFromString(cons), insideLambda, memo));
+				case LispNames.WITH_OPEN_FILE ->
+					acc.add(reach(LispMacroExpander.expandWithOpenFile(cons), insideLambda, memo));
+				case LispNames.WITH_OPEN_STREAM ->
+					acc.add(reach(LispMacroExpander.expandWithOpenStream(cons, true), insideLambda, memo));
+				// The lock spec holds a VALUE, not a binding (same reason as in
+				// collectFreeVars).
+				case LispNames.WITH_MUTEX_QUALIFIED, LispNames.WITH_LOCK_HELD_QUALIFIED,
+						LispNames.WITH_RECURSIVE_LOCK_HELD_QUALIFIED ->
+					acc.add(reach(LispMacroExpander.expandWithMutex(cons), insideLambda, memo));
+				// Expand before walking (same reason as collectFreeVars).
+				case LispNames.CHECK_TYPE ->
+					acc.add(reach(LispMacroExpander.expandCheckType(cons), insideLambda, memo));
+				case LispNames.ASSERT -> acc.add(reach(LispMacroExpander.expandAssert(cons), insideLambda, memo));
+				// typecase/case clause HEADS are data: walk the keyform and the
+				// clause bodies only (the collectFreeVars twin).
+				case LispNames.TYPECASE, LispNames.ETYPECASE, LispNames.CTYPECASE, LispNames.CASE, LispNames.ECASE,
+						LispNames.CCASE -> {
+					List<LispVal> parts = cons.toList();
+					if (parts.size() > 1) {
+						acc.add(reach(parts.get(1), insideLambda, memo));
+					}
+					for (int i = 2; i < parts.size(); i++) {
+						if (!(parts.get(i) instanceof LispCons clause)) {
+							continue;
+						}
+						List<LispVal> clauseParts = clause.toList();
+						for (int j = 1; j < clauseParts.size(); j++) {
+							acc.add(reach(clauseParts.get(j), insideLambda, memo));
+						}
+					}
+				}
+				case LispNames.DECLARE, LispNames.DECLAIM, LispNames.PROCLAIM -> {
+					// Parsed no-ops: no variable references.
+				}
+				case LispNames.THE -> acc.add(reach(LispMacroExpander.expandThe(cons), insideLambda, memo));
+				case LispNames.EVAL_WHEN -> acc.add(reach(LispMacroExpander.expandEvalWhen(cons), insideLambda, memo));
+				// Expand before walking (same reason as collectFreeVars).
+				case LispNames.FLET -> acc.add(reach(LispMacroExpander.expandFlet(cons), insideLambda, memo));
+				case LispNames.LABELS -> acc.add(reach(LispMacroExpander.expandLabels(cons), insideLambda, memo));
+				// Expand before walking (same reason as collectFreeVars).
+				case LispNames.MULTIPLE_VALUE_BIND ->
+					acc.add(reach(LispMacroExpander.expandMultipleValueBind(cons), insideLambda, memo));
+				case LispNames.MULTIPLE_VALUE_LIST ->
+					acc.add(reach(LispMacroExpander.expandMultipleValueList(cons), insideLambda, memo));
+				case LispNames.MULTIPLE_VALUE_CALL ->
+					acc.add(reach(LispMacroExpander.expandMultipleValueCall(cons), insideLambda, memo));
+				case LispNames.NTH_VALUE -> acc.add(reach(LispMacroExpander.expandNthValue(cons), insideLambda, memo));
+				// Expand before walking (same reason as collectFreeVars).
+				case LispNames.MULTIPLE_VALUE_SETQ ->
+					acc.add(reach(LispMacroExpander.expandMultipleValueSetq(cons), insideLambda, memo));
+				case LispNames.ROTATEF -> acc.add(reach(LispMacroExpander.expandRotatef(cons), insideLambda, memo));
+				// Expand before walking (same reason as collectFreeVars).
+				case LispNames.DESTRUCTURING_BIND ->
+					acc.add(reach(LispMacroExpander.expandDestructuringBind(cons), insideLambda, memo));
+				// Expand before walking (same reason as collectFreeVars).
+				case LispNames.PPRINT_LOGICAL_BLOCK ->
+					acc.add(reach(LispMacroExpander.expandPprintLogicalBlock(cons), insideLambda, memo));
+				// Expand before walking: the restart expansions introduce lambdas
+				// (restart invokers, handler type tests) whose captures of USER
+				// locals the surface form cannot show.
+				case LispNames.HANDLER_BIND ->
+					acc.add(reach(LispMacroExpander.expandHandlerBindForAnalysis(cons), insideLambda, memo));
+				case LispNames.RESTART_CASE ->
+					acc.add(reach(LispMacroExpander.expandRestartCase(cons), insideLambda, memo));
+				case LispNames.RESTART_BIND ->
+					acc.add(reach(LispMacroExpander.expandRestartBind(cons), insideLambda, memo));
+				case LispNames.WITH_SIMPLE_RESTART ->
+					acc.add(reach(LispMacroExpander.expandWithSimpleRestart(cons), insideLambda, memo));
+				case LispNames.FUNCTION -> {
+					List<LispVal> parts = cons.toList();
+					if (parts.size() == 2 && parts.get(1) instanceof LispCons) {
+						acc.add(reach(parts.get(1), insideLambda, memo));
+					}
+				}
+				case LispNames.SETQ -> {
+					// Every place/value pair, for the reason spelled out in the
+					// free-variable walk above.
+					List<LispVal> parts = cons.toList();
+					for (int i = 1; i + 1 < parts.size(); i += 2) {
+						if (parts.get(i) instanceof LispSymbol place && insideLambda) {
+							acc.add(place.name());
+						}
+						acc.add(reach(parts.get(i + 1), insideLambda, memo));
+					}
+				}
+				case LispNames.DEFVAR -> {
+					// defvar names a global variable; only the optional init form
+					// can reference captured locals.
+					List<LispVal> parts = cons.toList();
+					if (parts.size() > 2) {
+						acc.add(reach(parts.get(2), insideLambda, memo));
+					}
+				}
+				case LispNames.BLOCK, LispNames.FN_BLOCK_INTERNAL, LispNames.RETURN_FROM -> {
+					// The first argument is a block NAME, not a variable
+					// reference.
+					List<LispVal> parts = cons.toList();
+					for (int i = 2; i < parts.size(); i++) {
+						acc.add(reach(parts.get(i), insideLambda, memo));
+					}
+				}
+				case LispNames.TAGBODY -> {
+					// Body atoms are labels, not variable references.
+					List<LispVal> parts = cons.toList();
+					for (int i = 1; i < parts.size(); i++) {
+						if (parts.get(i) instanceof LispCons) {
+							acc.add(reach(parts.get(i), insideLambda, memo));
+						}
+					}
+				}
+				case LispNames.GO -> {
+					// (go tag): the tag is a label, not a variable reference.
+				}
+				default -> {
+					// A uiop macro with a real expansion binds / rearranges
+					// forms the default walk would misread (same reason, and the
+					// same dispatcher, as in collectFreeVars).
+					LispVal uiopMacro = LispMacroExpander.expandUiopMacro(cons, true);
+					if (uiopMacro != null) {
+						acc.add(reach(uiopMacro, insideLambda, memo));
+						break;
+					}
+					// Lisp-2: the operator symbol is not a variable reference
+					List<LispVal> parts = cons.toList();
+					for (int i = 1; i < parts.size(); i++) {
+						acc.add(reach(parts.get(i), insideLambda, memo));
+					}
+				}
+			}
+		}
+		else {
+			List<LispVal> parts = cons.toList();
+			for (LispVal part : parts) {
+				acc.add(reach(part, insideLambda, memo));
+			}
+		}
+		return acc.result();
 	}
 
 	/**

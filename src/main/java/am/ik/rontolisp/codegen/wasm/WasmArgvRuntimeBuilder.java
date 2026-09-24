@@ -63,7 +63,7 @@ final class WasmArgvRuntimeBuilder {
 	 * @return the encoded function body
 	 */
 	static byte[] build(int argsSizesGetFunc, int argsGetFunc, int scratchBase, boolean identityHash) {
-		final ByteArrayOutputStream body = new ByteArrayOutputStream();
+		final ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		final WasmWriter w = new WasmWriter(body);
 
 		// 6 i32 locals (0..5) + one (ref null eq) accumulator (6).
@@ -206,7 +206,7 @@ final class WasmArgvRuntimeBuilder {
 	 * @return the encoded stub body
 	 */
 	static byte[] buildStub() {
-		final ByteArrayOutputStream body = new ByteArrayOutputStream();
+		final ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		final WasmWriter w = new WasmWriter(body);
 		w.write(0); // no locals
 		w.write(Instruction.REF_NULL);

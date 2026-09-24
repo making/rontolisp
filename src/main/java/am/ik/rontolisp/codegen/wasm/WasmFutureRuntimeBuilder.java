@@ -279,7 +279,7 @@ final class WasmFutureRuntimeBuilder {
 
 	// _future_new () -> (ref null eq): a fresh pending future.
 	private static byte[] buildNew(int futureType) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // no locals
 		i32(w, 0);
@@ -295,7 +295,7 @@ final class WasmFutureRuntimeBuilder {
 	// _future_settle / _future_reject (future, value-or-payload) -> nil: first settle
 	// wins (idempotent), then wakes the waiters.
 	private static byte[] buildSettleOrReject(int base, int futureType, int state) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // no locals
 		// Already settled: return nil.
@@ -322,7 +322,7 @@ final class WasmFutureRuntimeBuilder {
 
 	// _future_add_waiter (future, resumeClosure) -> nil: FIFO-appends a waiter node.
 	private static byte[] buildAddWaiter(int futureType, boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int NODE = 2, CUR = 3;
 		// locals: 2x (ref null eq)
@@ -373,7 +373,7 @@ final class WasmFutureRuntimeBuilder {
 	// _future_wake (future) -> nil: takes the waiter list (clearing it) and hands it to
 	// _wake_list.
 	private static byte[] buildWake(int base, int futureType) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int LIST = 1;
 		// locals: 1x (ref null eq)
@@ -402,7 +402,7 @@ final class WasmFutureRuntimeBuilder {
 	// ring, and the owner's suspend path drains the list).
 	private static byte[] buildWakeList(int base, int futureType, int frameType, int currentTaskGlobal,
 			WasmFutureRuntimeBuilder.@org.jspecify.annotations.Nullable Cb cb, boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int LIST = 0;
 		final int WASEMPTY = 1, TX = 2, RING = 3;
@@ -560,7 +560,7 @@ final class WasmFutureRuntimeBuilder {
 	// TYPE_P1_FUTURE cannot reach an asyncMode module (its only producer, %async-run, is
 	// the non-asyncMode lowering), so there is no degenerate-future branch.
 	private static byte[] buildPoll(int futureType) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int STATE = 1;
 		// locals: 1x i32
@@ -617,7 +617,7 @@ final class WasmFutureRuntimeBuilder {
 	// so the scheduler can run the close protocol if the completion turns out to be EOF.
 	private static byte[] buildWasiStreamRead(int futureType, int streamType,
 			@org.jspecify.annotations.Nullable Sched sched) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int S = 0, CHUNK = 1, CUR = 2, REST = 3;
 		// locals: 3x (ref null eq)
@@ -698,7 +698,7 @@ final class WasmFutureRuntimeBuilder {
 
 	// _wasi_stream_close (stream) -> nil: run the close protocol once.
 	private static byte[] buildWasiStreamClose(int streamType) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int S = 0;
 		w.write(0); // no locals
@@ -745,7 +745,7 @@ final class WasmFutureRuntimeBuilder {
 	// interface: nothing can produce a host-backed pending future there, so reaching
 	// one is a compiler bug worth trapping on.
 	private static byte[] buildUnreachableStub() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // no locals
 		w.write(Instruction.UNREACHABLE);
@@ -756,7 +756,7 @@ final class WasmFutureRuntimeBuilder {
 	// _subtask_future (token, lift) -> future. token = the async-lowered call's
 	// (packed . retptr) cons; lift = the member's lift wrapper as a function value.
 	private static byte[] buildSubtaskFuture(int futureType, Sched sched, boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int TOKEN = 0, FN = 1, PACKED = 2, SUB = 3, FUT = 4;
 		// locals: 2x i32, 1x (ref null eq)
@@ -842,7 +842,7 @@ final class WasmFutureRuntimeBuilder {
 	// the
 	// reactor transport (a stream response body) and sockets.lisp both spell.
 	private static byte[] buildSyncForce(int base) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // no locals
 		getLocal(w, 0);
@@ -860,7 +860,7 @@ final class WasmFutureRuntimeBuilder {
 	// $lisp-cond. The serve `handle` boundary does NOT use this: it returns the packed
 	// WAIT code to the host instead and the events arrive through _async_cb.
 	private static byte[] buildSchedLoop(int base, int futureType, Sched sched) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int FUT = 0, EVTP = 1, EV = 2;
 		// locals: 2x i32
@@ -915,7 +915,7 @@ final class WasmFutureRuntimeBuilder {
 	// stream's close protocol when the completion is EOF (kind 1). Settling wakes the
 	// entry's waiters -- possibly deferring cross-task ones through their doorbells.
 	private static byte[] buildSchedDispatch(int base, int streamType, Sched sched, boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int EV = 0, WAITABLE = 1, CODE = 2;
 		final int KIND = 3, N = 4;
@@ -1096,7 +1096,7 @@ final class WasmFutureRuntimeBuilder {
 	// (id . (root . (rx . (tx . (set . ready))))), CURRENT = the record, task
 	// waitable-set = 0 (created lazily by this task).
 	private static byte[] buildTaskBegin(int currentTaskGlobal, Cb cb, boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // no locals
 		globalGet(w, cb.taskSeqGlobal());
@@ -1130,7 +1130,7 @@ final class WasmFutureRuntimeBuilder {
 	// create+arm+join the doorbell, register the task and its context slots, then
 	// _task_finish (which drains ready waiters deposited before the doorbell existed).
 	private static byte[] buildTaskSuspend(int base, int currentTaskGlobal, Cb cb, boolean identityHash) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int FUT = 0, RX = 1, TX = 2, R = 3, D = 4, REC = 5, CELL = 6;
 		// locals: 3x i32, 1x i64, 2x (ref null eq)
@@ -1227,7 +1227,7 @@ final class WasmFutureRuntimeBuilder {
 	// _task_finish (ignored) -> code: drain the ready list, then WAIT (root pending) /
 	// EXIT after unlinking the record (root fulfilled) / trap (root rejected).
 	private static byte[] buildTaskFinish(int base, int futureType, int currentTaskGlobal, Cb cb) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int STATE = 1, REC = 2, CELL = 3, PREV = 4, CUR = 5;
 		// locals: 1x i32, 4x (ref null eq)
@@ -1340,7 +1340,7 @@ final class WasmFutureRuntimeBuilder {
 	// condition keeps the trap shape (catch_all -> unreachable), like every other
 	// host-callable entry.
 	private static byte[] buildAsyncCb(int base, int currentTaskGlobal, Cb cb) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int EV = 0, WAITABLE = 1, CODE = 2;
 		final int TID = 3, RX = 4, R = 5;

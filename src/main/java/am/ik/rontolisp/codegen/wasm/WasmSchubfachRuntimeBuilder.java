@@ -686,7 +686,7 @@ final class WasmSchubfachRuntimeBuilder {
 	/** The tiny fluent wasm body assembler used by this builder. */
 	static final class Asm {
 
-		private final ByteArrayOutputStream out = new ByteArrayOutputStream();
+		private final ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 
 		final WasmWriter w = new WasmWriter(this.out);
 

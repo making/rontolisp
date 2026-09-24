@@ -17,7 +17,7 @@ public class CountingDef<T extends CountingDef<?>> {
 	}
 
 	/** The output stream collecting serialized entries. */
-	protected final ByteArrayOutputStream out = new ByteArrayOutputStream();
+	protected final ByteArrayOutputStream out = new UnsynchronizedByteArrayOutputStream();
 
 	/** The number of entries added. */
 	protected int count = 0;
@@ -29,7 +29,7 @@ public class CountingDef<T extends CountingDef<?>> {
 	 */
 	@SuppressWarnings("unchecked")
 	public T add(Consumer<WasmWriter> consumer) {
-		final ByteArrayOutputStream stream = new ByteArrayOutputStream();
+		final ByteArrayOutputStream stream = new UnsynchronizedByteArrayOutputStream();
 		final WasmWriter out = new WasmWriter(stream);
 		this.count++;
 		consumer.accept(out);
@@ -56,7 +56,7 @@ public class CountingDef<T extends CountingDef<?>> {
 	 * @return the serialized bytes
 	 */
 	protected final byte[] toByteArray() {
-		final ByteArrayOutputStream stream = new ByteArrayOutputStream();
+		final ByteArrayOutputStream stream = new UnsynchronizedByteArrayOutputStream();
 		final WasmWriter out = new WasmWriter(stream);
 		// The entry count is a LEB128 integer; a raw byte would be malformed for
 		// sections with 128 or more entries.

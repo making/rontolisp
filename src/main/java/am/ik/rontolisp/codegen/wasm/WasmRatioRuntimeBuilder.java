@@ -28,7 +28,7 @@ final class WasmRatioRuntimeBuilder {
 	// _rat_new(i32 num, i32 den) -> (ref null eq): traps on den == 0, moves the sign to
 	// the numerator, reduces by gcd, demotes a denominator-one result to i31.
 	static byte[] buildRatNewBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// locals: 0=num (param), 1=den (param), 2=a, 3=b, 4=t (all i32)
@@ -130,7 +130,7 @@ final class WasmRatioRuntimeBuilder {
 	}
 
 	private static byte[] buildRatGetBody(int field) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		w.write(0); // no extra locals
@@ -184,7 +184,7 @@ final class WasmRatioRuntimeBuilder {
 	static byte[] buildRatBinaryBody(int i32Opcode, int f64Opcode, boolean i31Head) {
 		int i64Opcode = i32Opcode == Instruction.I32_ADD ? Instruction.I64_ADD
 				: i32Opcode == Instruction.I32_SUB ? Instruction.I64_SUB : Instruction.I64_MUL;
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		w.write(0); // no extra locals
@@ -267,7 +267,7 @@ final class WasmRatioRuntimeBuilder {
 	// falls through to the i32 ratio path, where the components wrap (ratio components
 	// stay i31-range).
 	static byte[] buildRatDivBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// locals: 2=a64, 3=b64 (both i64), 4=r (ref null eq, the tier-aware remainder)
@@ -346,7 +346,7 @@ final class WasmRatioRuntimeBuilder {
 	// dispatch shape of buildRatBinaryBody so a float reaching mod/rem through a
 	// variable is handled.
 	static byte[] buildRatRemBody(boolean mod) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// locals: 2=fa (f64), 3=fb (f64), 4/5/6 = the remainder loop's scratch
@@ -402,7 +402,7 @@ final class WasmRatioRuntimeBuilder {
 	// _rat_cmp((ref null eq) a, (ref null eq) b) -> i32: -1/0/1 by cross-multiplication
 	// in i64 (denominators are positive, so the comparison direction is preserved).
 	static byte[] buildRatCmpBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// locals: 2=left (i64), 3=right (i64)
@@ -479,7 +479,7 @@ final class WasmRatioRuntimeBuilder {
 	// against anything else keeps the old f64 behavior, including its `_type_err_*`
 	// traps for a complex or a non-number.
 	static byte[] buildRatCmpBitsBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// locals: 2=FL, 3=EX (the float and the exact operand, eqref), 4=D (the
@@ -848,7 +848,7 @@ final class WasmRatioRuntimeBuilder {
 	// An exact integer (i31 or TYPE_BIGNUM) is already its own truncation and returns
 	// unchanged (the i32 component path would wrap a bignum).
 	static byte[] buildRatTruncBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		w.write(0); // no extra locals
@@ -870,7 +870,7 @@ final class WasmRatioRuntimeBuilder {
 	// adjusted by one when there is a remainder and the value is negative (floor) or
 	// positive (ceiling). The denominator is always positive.
 	static byte[] buildRatFloorBody(boolean ceiling) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// locals: 1=num, 2=den, 3=q (all i32)
@@ -917,7 +917,7 @@ final class WasmRatioRuntimeBuilder {
 	// _rat_round((ref null eq) x) -> (ref null eq): nearest integer, ties to even
 	// (Common Lisp round semantics).
 	static byte[] buildRatRoundBody() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
 		// locals: 1=num, 2=den, 3=floor, 4=remainder, 5=twice (all i32)

@@ -98,6 +98,19 @@ suite time, sequential -> concurrent (range of four concurrent runs, all green):
 | `JvmBFloat16ArrayTest` | 30 | 24 s | 8 s |
 | `JvmQuantizedMatrixTest` | 10 | 24 s | 14-15 s |
 
+## What `WasmLispCompilerIntegrationTest` spends its CPU on
+
+Its ~3,100 `WasmLispCompiler.compile` calls, not wasmtime: measured 2026-09-24 with a
+per-thread CPU probe around `compile`, 713-728 CPU-s of the class's ~1,650 (user+sys), and a
+JFR profile put ~40% of that in `shakeCore`'s passes over the pre-shake module (which carries
+the whole runtime: ~240 KB for a 3-line program, ~5.6 KB after the shake). After the
+compile-CPU series (dead-body skipping in the sink and the fold, the JIT-sized operator
+dispatch, the worklist fold, the scope memos -- `.kb/wasm-ref-type-fold.md`,
+`.kb/optimize-dead-code-elimination.md`, `.kb/adding-primitives.md`): **427 CPU-s** of
+compile, the class 1,320-1,390 -> ~1,025 CPU-s and 54-61 s -> 40-42 s of its own elapsed
+time on the same machine. **A hot method past 8,000 bytes of bytecode runs interpreted**
+(`HugeMethodTest`); that alone was 12% of a WASM compile.
+
 ## Two builds on one machine: every shared constant collides
 
 Several sessions build this repo at once, one worktree each, and `/tmp` and the port space
@@ -122,6 +135,9 @@ The rules that follow, and which device to reach for:
 
 - **Every staged file goes through the per-thread, per-PID scratch directory**
   (`WasmLispCompilerIntegrationTest#path`). A `/tmp/...` literal in a test is the bug.
+  The per-PID root is `testsupport/ProcessScratch`: deleted at JVM exit, and a killed
+  JVM's leftovers are swept by the next one (before it, 10,150 stale directories, 6.7 GB,
+  filled the development machine's disk on 2026-09-24).
 - **A listening port is the kernel's to choose, not the test's.** `wasmtime serve --addr
   127.0.0.1:0` binds an ephemeral port and prints `Serving HTTP on http://127.0.0.1:PORT/`;
   the script reads the port back out of the log (`#awaitServePort`) and nothing is ever
@@ -132,7 +148,11 @@ The rules that follow, and which device to reach for:
   and the real bind then spans a whole compile, and it is wide enough to lose -- measured
   2026-09-12, three concurrent runs of that serve family lost it **once in 45 cases**.
   Such cases go through `#overAReservedPort`, which re-runs on a fresh port when the
-  output says `Address already in use`.
+  output says `Address already in use`. The script must also WAIT FOR ITS OWN BIND
+  (`#awaitServeBound`, the server's `Serving HTTP on` line) before any readiness curl:
+  wasmtime compiles before it binds, a loaded suite outlasts any fixed sleep, and the
+  port's new owner answers the curl instead (2026-09-24, at 6 forks: a proxy case relayed
+  another server's empty 200 and printed `proxied  200`).
 - A server whose bind failure is not checked turns this into something worse than a red
   test: the losing run connects to the WINNER's server and asserts against it. The TLS
   case did exactly that until its `openssl s_server` log was read back.

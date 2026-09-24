@@ -61,7 +61,7 @@ final class WasmIdentityHashRuntimeBuilder {
 	 * @return the stub body
 	 */
 	static byte[] buildStub() {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // no locals
 		w.write(Instruction.I32_CONST);
@@ -79,7 +79,7 @@ final class WasmIdentityHashRuntimeBuilder {
 	 * @return the function body
 	 */
 	static byte[] build(int seqGlobalIndex, int instanceTypeIndex) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(1); // 1 local group
 		w.write(1); // local 1: i32 h

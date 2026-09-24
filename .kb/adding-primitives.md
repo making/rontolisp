@@ -22,7 +22,12 @@ fail silently at the call site.
    (`WasmEmitHelper.castI31GetS()` to unbox, `ref.i31` to re-box). The same split as
    step 3 applies here: `WasmExprCompiler.compileConsLocated` has its own
    `PackageRegistry.splitQualified`-keyed if-chain for `rontolisp:` members, separate
-   from the `cl:`-symbol switch.
+   from the `cl:`-symbol switch. On both backends that switch is sliced across
+   `compileOperator1..5`: one switch over every operator had grown each `compileConsLocated`
+   to 27-28 KB, past HotSpot's 8,000-byte `HugeMethodLimit`, so it ran interpreted on every
+   cons (12% of a WASM compile's CPU). Add a case to any slice with room; `HugeMethodTest`
+   fails when one crosses the limit, and the answer is another slice, never an allow-list
+   entry.
 5. `BuiltinFunctionWrappers.WRAPPER_DEFS` entry so it works as a first-class value.
 6. A case in `src/test/resources/ci-spec.yaml` if it deserves end-to-end coverage.
 7. Docs: a per-operator page under `reference/{functions,macros,special-forms}/` (H1 = name,

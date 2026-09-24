@@ -77,3 +77,12 @@ reproducible even when the JVM build is not; `CiSpecE2eTest` runs the native bin
 test` compares behavior, not bytes. Check it the way the bugs were found: compile the same program
 N times with `java -jar` and compare bytes, to a FIXED output path (the emitted class name derives
 from the `-o` path).
+
+**Comparing two BUILDS (a refactor that must not change output) has one more variable: the build
+itself.** `am/ik/rontolisp/version.properties` carries the build timestamp and git commit, and a
+program that calls `(rontolisp:version)` -- the `ci-spec` corpus does -- embeds them: two builds of
+the SAME commit emit same-size, different-byte modules. Copy one build's `version.properties` over
+the other's before comparing. Done that way on 2026-09-24 for the WASM compile-CPU series
+(`.kb/wasm-ref-type-fold.md`, `.kb/optimize-dead-code-elimination.md`): the corpus at every level
+and WASI mode, plus the ~3,000 programs `WasmLispCompilerIntegrationTest` compiles, byte-identical
+at every commit.

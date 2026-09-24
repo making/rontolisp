@@ -135,7 +135,7 @@ final class JvmLambdaCompiler {
 		// does not agree with it hands the closure a private snapshot cell instead of
 		// the binding (.kb/core-representation.md).
 		Set<String> capturedParams = FreeVarAnalyzer.findCapturedVars(bodyExprs, new HashSet<>(paramNames),
-				ctx.functions.keySet());
+				ctx.functions.keySet(), ctx.captureMemo);
 		ctx.boxedVars = new HashSet<>(ctx.boxedVars);
 		for (int i = 0; i < required; i++) {
 			String name = paramNames.get(i);

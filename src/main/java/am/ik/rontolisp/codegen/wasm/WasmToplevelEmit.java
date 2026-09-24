@@ -196,7 +196,7 @@ final class WasmToplevelEmit {
 		int funcIndex = start.userFuncBase + start.numDefuns + start.lambdaDecls.size();
 		int lambdaIdx = start.lambdaDecls.size();
 		start.lambdaDecls.add(placeholder(funcId, funcIndex));
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter writer = new WasmWriter(body);
 		WasmLispCompiler.Ctx ctx = WasmAsyncEmit.freshCtx(start, writer, body);
 		// topLevel/usesEval carry over so eval-global mirroring keeps working inside a

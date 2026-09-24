@@ -21,7 +21,7 @@ final class WasmP1FutureRuntimeBuilder {
 	}
 
 	static byte[] buildAwait() {
-		final ByteArrayOutputStream body = new ByteArrayOutputStream();
+		final ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		final WasmWriter w = new WasmWriter(body);
 		final int V = 0;
 		w.write(0); // no locals
