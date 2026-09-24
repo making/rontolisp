@@ -761,7 +761,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// the emitter's own temporaries leave, in front of the shake so the
 			// renumbering LAST sees the frames it has left.
 			module = am.ik.wasm.WasmLocalOrder.reorder(am.ik.wasm.WasmTreeShaker.shake(am.ik.wasm.WasmLocalSink
-				.sink(am.ik.wasm.WasmInliner.inline(am.ik.wasm.WasmPeephole.rewrite(module)))));
+				.sink(am.ik.wasm.WasmInliner.inline(am.ik.wasm.WasmPeephole.rewrite(module)), true)));
 		}
 		if (this.component) {
 			// Post-stage wrap: the core module is byte-identical to the non-component

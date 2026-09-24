@@ -158,6 +158,43 @@ class WasmLocalSinkTest {
 	}
 
 	@Test
+	void onTheWayToTheShakeABodyNoExportReachesIsLeftAsItIs() {
+		// Three copies of one sinkable body: 0 is exported, 1 is what 0 calls, 2 is
+		// called by nothing. Asked for the reachable bodies only, the pass sinks 0 and 1
+		// and leaves 2 byte for byte -- the shake drops it whatever it holds.
+		Consumer<WasmWriter> copyThenAdd = w -> {
+			op(w, Instruction.GET_LOCAL, 0);
+			op(w, Instruction.SET_LOCAL, 1);
+			op(w, Instruction.GET_LOCAL, 1);
+			constant(w, 1);
+			w.write(Instruction.I32_ADD);
+		};
+		byte[] caller = body(1, w -> {
+			copyThenAdd.accept(w);
+			op(w, Instruction.CALL, 1);
+		});
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		new WasmWriter(out).write("\0asm")
+			.writeLittleEndian4(1)
+			.writeTypeSection(TYPES)
+			.writeFunction(functions -> functions.addFunction(1).addFunction(1).addFunction(1))
+			.writeExport(exports -> exports.addExport("run", ExternalKind.FUNCTION, 0))
+			.writeCode(code -> code.addFunction(caller)
+				.addFunction(body(1, copyThenAdd))
+				.addFunction(body(1, copyThenAdd)));
+		byte[] module = out.toByteArray();
+
+		byte[] everything = WasmLocalSink.sink(module);
+		byte[] reachable = WasmLocalSink.sink(module, true);
+		validate(reachable);
+
+		assertThat(code(reachable, 0)).isEqualTo(code(everything, 0))
+			.containsExactly("20:0", "41:1", "6A", "10:1", "0B");
+		assertThat(code(reachable, 1)).isEqualTo(code(everything, 1)).containsExactly("20:0", "41:1", "6A", "0B");
+		assertThat(code(reachable, 2)).isEqualTo(code(module, 2)).contains("21:1");
+	}
+
+	@Test
 	void anExpressionSinksPastTheHandOverOfAnotherValue() {
 		// The inliner's hand-over shape: `a+1` and `a` are pushed, then stored in reverse
 		// (`set 3; set 2`). Both expressions are pure and neither input changes before
