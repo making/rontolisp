@@ -3168,7 +3168,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// scan, so without this clause _apply stayed a nil-answering stub and
 		// (funcall #'mapcar #'list '(1 2) '(3 4)) answered (NIL NIL) here while
 		// the interpreter and the JVM answered ((1 3) (2 4)).
-				|| program.stream().anyMatch(BuiltinFunctionWrappers::referencesApplyingWrapper);
+				|| !java.util.Collections.disjoint(BuiltinFunctionWrappers.functionValueNames(program),
+						BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS);
 		// A funcall/apply through a RUNTIME designator resolves a symbol late through
 		// the name registry (see the _lookup emission gate below).
 		boolean usesRuntimeDesignator = LispMacroExpander.usesRuntimeFunctionDesignator(program);
@@ -3529,12 +3530,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// in the class registry (define-condition is rewritten out of the program) but
 		// are re-injected by the error/signal expansions, so they count as references
 		// too.
+		Set<String> takenAsValues = BuiltinFunctionWrappers.functionValueNames(program);
+		takenAsValues.addAll(BuiltinFunctionWrappers.functionValueNames(closRegistry.conditionReports().values()));
 		for (String op : BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS) {
-			if (program.stream().noneMatch(expr -> BuiltinFunctionWrappers.referencesFunctionValue(expr, op))
-					&& closRegistry.conditionReports()
-						.values()
-						.stream()
-						.noneMatch(report -> BuiltinFunctionWrappers.referencesFunctionValue(report, op))) {
+			if (!takenAsValues.contains(op)) {
 				wrapperExcludes.add(op);
 			}
 		}
@@ -3542,14 +3541,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// compiles to the gated %subtypep-runtime -- inject it only when the program
 		// takes the operator as a first-class value (the JVM complex-wrapper gate
 		// mirrored).
-		if (program.stream()
-			.noneMatch(
-					expr -> BuiltinFunctionWrappers.referencesFunctionValue(expr, LispNames.UPGRADED_COMPLEX_PART_TYPE))
-				&& closRegistry.conditionReports()
-					.values()
-					.stream()
-					.noneMatch(report -> BuiltinFunctionWrappers.referencesFunctionValue(report,
-							LispNames.UPGRADED_COMPLEX_PART_TYPE))) {
+		if (!takenAsValues.contains(LispNames.UPGRADED_COMPLEX_PART_TYPE)) {
 			wrapperExcludes.add(LispNames.UPGRADED_COMPLEX_PART_TYPE);
 		}
 		// The defuns from here down are INJECTED runtime, not the user's program: the
@@ -4997,12 +4989,24 @@ public final class WasmLispCompiler implements LispCompiler {
 		// registry, or named as #'op in the user's program (the apply-direct-call
 		// shape). Every other wrapper is dead code the shaker drops, and its callees
 		// keep their stubs.
+		// The program's #'name references, walked once and only when a wrapper asks.
+		Set<String> programFunctionValues = Set.of();
+		boolean programFunctionValuesScanned = false;
 		for (int i = 0; i < defuns.size(); i++) {
 			String name = defuns.get(i).name;
 			Set<WasmFdlibmRuntimeBuilder.Fn> uses = injectedFdlibmUses.get(name);
-			if (uses != null && !uses.isEmpty()
-					&& (valueFuncIds.contains(i) || dispatchableFuncIds.contains(i) || program.stream()
-						.anyMatch(expr -> BuiltinFunctionWrappers.referencesFunctionValue(expr, name)))) {
+			if (uses == null || uses.isEmpty()) {
+				continue;
+			}
+			if (valueFuncIds.contains(i) || dispatchableFuncIds.contains(i)) {
+				fdlibmUsed.addAll(uses);
+				continue;
+			}
+			if (!programFunctionValuesScanned) {
+				programFunctionValues = BuiltinFunctionWrappers.functionValueNames(program);
+				programFunctionValuesScanned = true;
+			}
+			if (programFunctionValues.contains(name)) {
 				fdlibmUsed.addAll(uses);
 			}
 		}
