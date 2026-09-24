@@ -214,9 +214,9 @@ public final class RontoLispCli {
 			compileToFile(source, baseDir, systemPath, dists, features, outputFile, options.contains("--dynamic"),
 					options.contains("--component"), options.contains("--no-wasi"),
 					OptimizeLevel.parse(options.get("--optimize")), options.contains("--no-gc"),
-					options.contains("--simd"), options.contains("--blas"), options.contains("--gpu"),
-					options.contains("--parallel"), options.contains("--no-prune"), options.contains("--no-main"),
-					options.contains("--emit-wit"), options.contains("--emit-js-glue"),
+					options.contains("--native"), options.contains("--simd"), options.contains("--blas"),
+					options.contains("--gpu"), options.contains("--parallel"), options.contains("--no-prune"),
+					options.contains("--no-main"), options.contains("--emit-wit"), options.contains("--emit-js-glue"),
 					options.contains("--host-random"), options.contains("--host-fetch"),
 					options.contains("--reentrant"),
 					options.contains("--host-boundary") ? HostBoundary.parse(options.get("--host-boundary")) : null,
@@ -236,6 +236,10 @@ public final class RontoLispCli {
 			if (options.contains("--reentrant")) {
 				throw new UnsupportedOperationException(
 						"--reentrant is a WASM module contract (overlapped JSPI calls), so it needs -o <file>.wasm");
+			}
+			if (options.contains("--native")) {
+				throw new UnsupportedOperationException(
+						"--native writes a native executable, so it needs -o <file> (e.g. -o hello)");
 			}
 			if (options.contains("--no-main")) {
 				throw new UnsupportedOperationException("--no-main compiles a JVM library class (no main method), so"
@@ -592,24 +596,35 @@ public final class RontoLispCli {
 
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
 			List<String> declaredFeatures, String outputFile, boolean dynamic, boolean component, boolean noWasi,
-			OptimizeLevel optimize, boolean noGc, boolean simd, boolean blas, boolean gpu, boolean parallel,
-			boolean noPrune, boolean noMain, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch,
-			boolean reentrant, @Nullable HostBoundary hostBoundary, JvmArtifactOptions jvmArtifact,
+			OptimizeLevel optimize, boolean noGc, boolean nativeOutput, boolean simd, boolean blas, boolean gpu,
+			boolean parallel, boolean noPrune, boolean noMain, boolean wit, boolean jsGlue, boolean hostRandom,
+			boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary, JvmArtifactOptions jvmArtifact,
 			@Nullable String entryFile, @Nullable String sourceLanguage, SourceStandards standards) {
 		CompileDiagnostics.recording(() -> {
 			compileRecorded(source, baseDir, systemPath, dists, declaredFeatures, outputFile, dynamic, component,
-					noWasi, optimize, noGc, simd, blas, gpu, parallel, noPrune, noMain, wit, jsGlue, hostRandom,
-					hostFetch, reentrant, hostBoundary, jvmArtifact, entryFile, sourceLanguage, standards);
+					noWasi, optimize, noGc, nativeOutput, simd, blas, gpu, parallel, noPrune, noMain, wit, jsGlue,
+					hostRandom, hostFetch, reentrant, hostBoundary, jvmArtifact, entryFile, sourceLanguage, standards);
 			return null;
 		});
 	}
 
 	private void compileRecorded(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
 			List<String> declaredFeatures, String outputFile, boolean dynamic, boolean component, boolean noWasi,
-			OptimizeLevel optimize, boolean noGc, boolean simd, boolean blas, boolean gpu, boolean parallel,
-			boolean noPrune, boolean noMain, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch,
-			boolean reentrant, @Nullable HostBoundary hostBoundary, JvmArtifactOptions jvmArtifact,
+			OptimizeLevel optimize, boolean noGc, boolean nativeOutput, boolean simd, boolean blas, boolean gpu,
+			boolean parallel, boolean noPrune, boolean noMain, boolean wit, boolean jsGlue, boolean hostRandom,
+			boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary, JvmArtifactOptions jvmArtifact,
 			@Nullable String entryFile, @Nullable String sourceLanguage, SourceStandards standards) {
+		// --native is the wasm-GC backend's WASI Preview 1 command module, precompiled
+		// and appended to a runner stub: every flag that asks for a DIFFERENT module is
+		// refused by name rather than half-honoured, and so is an -o name that says
+		// another output. The shim is loaded before the front end runs, so a host this
+		// build has no shim for fails before any work.
+		if (nativeOutput) {
+			refuseNativeConflicts(outputFile, component, noWasi, noGc, hostRandom, hostFetch, hostBoundary, reentrant,
+					jsGlue);
+			NativeToolchain.load();
+		}
+		boolean wasmOutput = nativeOutput || outputFile.endsWith(".wasm");
 		// --emit-wit describes a component's typed world, so it is meaningless for any
 		// other
 		// output; fail fast instead of silently ignoring the request.
@@ -760,7 +775,7 @@ public final class RontoLispCli {
 			.declaredFeatures(declaredFeatures)
 			.options(CompileFrontend.Options.builder()
 				.baseDir(baseDir)
-				.wasm(outputFile.endsWith(".wasm"))
+				.wasm(wasmOutput)
 				.servlet(outputFile.endsWith(".war"))
 				.dynamic(dynamic)
 				.component(component)
@@ -784,7 +799,7 @@ public final class RontoLispCli {
 		String witText = null;
 		String glueText = null;
 		String glueFile = jsGlue ? outputFile.substring(0, outputFile.length() - ".wasm".length()) + ".js" : null;
-		if (outputFile.endsWith(".wasm")) {
+		if (wasmOutput) {
 			if (noGc) {
 				// --no-gc selects the separate scalar (non-GC) lowering: a plain MVP
 				// module
@@ -915,6 +930,13 @@ public final class RontoLispCli {
 					writePom(outputFile, Objects.requireNonNull(jvmArtifact.coordinates()), simd);
 				}
 			}
+			else if (nativeOutput) {
+				// Only the executable is written: the .wasm and its precompiled form
+				// never leave memory.
+				NativeToolchain toolchain = NativeToolchain.load();
+				NativeExecutable.write(outputPath,
+						NativeExecutable.assemble(toolchain.stub(), toolchain.precompile(bytes)));
+			}
 			else {
 				Files.write(outputPath, bytes);
 				if (!jvmRuntimeClasses.isEmpty()) {
@@ -998,6 +1020,38 @@ public final class RontoLispCli {
 	}
 
 	/**
+	 * The refusals of {@code --native}: what the WASI Preview 1 command module inside a
+	 * native executable cannot be, and an output name that says another backend.
+	 */
+	private static void refuseNativeConflicts(String outputFile, boolean component, boolean noWasi, boolean noGc,
+			boolean hostRandom, boolean hostFetch, @Nullable HostBoundary hostBoundary, boolean reentrant,
+			boolean jsGlue) {
+		for (String extension : List.of(".wasm", ".class", ".jar", ".war")) {
+			if (outputFile.endsWith(extension)) {
+				throw new UnsupportedOperationException(
+						"--native writes a native executable, but -o " + outputFile + " names a " + extension
+								+ " output: drop --native for that, or name the executable (e.g. -o hello)");
+			}
+		}
+		record Flag(boolean given, String name, String why) {
+		}
+		for (Flag flag : List.of(
+				new Flag(component, "--component", "the runner runs a WASI Preview 1 command module, not a component"),
+				new Flag(noWasi, "--no-wasi", "the runner is the WASI host; a reactor has no _start to run"),
+				new Flag(noGc, "--no-gc", "the runner's engine is the wasm-GC one; compile --no-gc to a .wasm"),
+				new Flag(hostRandom, "--host-random", "the runner answers random_get from the OS itself"),
+				new Flag(hostFetch, "--host-fetch", "the runner supplies no env.fetch import"),
+				new Flag(hostBoundary != null, "--host-boundary", "the runner supplies no env.* body imports"),
+				new Flag(reentrant, "--reentrant", "overlapped calls need a JSPI host, and the runner is not one"),
+				new Flag(jsGlue, "--emit-js-glue", "there is no JavaScript host to write glue for"))) {
+			if (flag.given()) {
+				throw new UnsupportedOperationException(
+						"--native cannot be combined with " + flag.name() + ": " + flag.why());
+			}
+		}
+	}
+
+	/**
 	 * A JVM compile: a bare {@code .class}, the {@code .jar} that packages it, or the
 	 * {@code .war} that packages it for a servlet container. All three carry the same
 	 * bytecode (the war additionally compiled in servlet mode), so every flag that
@@ -1047,6 +1101,12 @@ public final class RontoLispCli {
 		this.out.println("                     Jetty, ...): no web.xml, no configuration; the container");
 		this.out.println("                     owns the port, so a written port is ignored");
 		this.out.println("  file -o out.wasm    Compile to WASM");
+		this.out.println("  file --native -o out");
+		this.out.println("                     Compile to ONE self-contained native executable: the");
+		this.out.println("                     WASM output, precompiled by wasmtime and appended to a");
+		this.out.println("                     small runner (no wasmtime needed to run it; ./out ARG...).");
+		this.out.println("                     Host platform only; refuses --component, --no-wasi,");
+		this.out.println("                     --no-gc, --host-*, --reentrant and --emit-js-glue");
 		this.out.println("  file -- ARG...     Interpret the file with ARG... as the PROGRAM's own");
 		this.out.println("                     arguments: everything after -- is (uiop:command-line-");
 		this.out.println("                     arguments), never a rontolisp option. A compiled");

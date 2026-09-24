@@ -15,7 +15,11 @@ glibc-dynamic -- `.kb/native-output.md`).
 - CI: build the Rust module on each release platform (rustc >= 1.96), put the artifacts
   where the jar and each `-Pnative` binary pick them up as resources; the native-image
   legs run the 943 E2E.
-- Packaging: every platform's shims in the jar costs ~7 MB each; decide between an
+- Packaging: 943 wired the HOST pair in: `pom.xml` adds `rontolisp-native/target/resources`
+  as a resource directory (absent = unchanged build), so a jar built after `build.sh`
+  carries it -- Linux x86_64: +4.2 MB compressed (exec jar 12.3 MB), and the `-Pnative`
+  binary 102.5 MB with the 12.0 MB pair inside (2026-09-24). Every platform's shims in the
+  jar costs ~7 MB each; decide between an
   all-platform jar, a separate `-native` artifact, or host-only in each native binary
   (which is per-platform already). Measure the sizes, then choose.
 - Windows is out of scope until the rest ships.

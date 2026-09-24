@@ -35,6 +35,7 @@ wasmtime run hello.wasm
 | コンパクトな型付きコンポーネント | `--no-gc --component` | 数値/文字列[サブセット](../guides/wasm-nogc.md#eligible-subset) | 任意のコンポーネントホスト、**フラグゼロ** | [コンパクトなコンポーネント出力](../guides/wasm-nogc.md#compact-component-output---no-gc---component) |
 
 大まかな指針: **値モデル**はコードの要件で選びます。言語全機能が必要なら GC ヒープ、サブセットに収まる数値/文字列カーネルなら `--no-gc`(どこでも動く移植性と数百バイトのバイナリが得られます)。**パッケージング**はホストで選びます。コンポーネントホストなら `--component`、素のエンジンや JavaScript 埋め込みならコアモジュールです。
+WASI コマンドモジュールを wasmtime 不要の実行ファイル 1 つとして配布するには、[ネイティブ実行ファイルへのコンパイル](native.md)を参照してください。
 
 ## ホスト境界
 

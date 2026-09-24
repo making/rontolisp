@@ -180,6 +180,14 @@ gitBranch=${git.branch}
 								<resource>
 									<directory>${project.build.directory}/generated-resources/version</directory>
 								</resource>
+								<!-- The host's precompile shim and runner stub of the native
+								     executable output (.kb/native-output.md), when
+								     rontolisp-native/build.sh has built them. Absent, the build
+								     is the same and the CLI says the output is not available
+								     for the host. -->
+								<resource>
+									<directory>${project.basedir}/rontolisp-native/target/resources</directory>
+								</resource>
 							</resources>
 						</configuration>
 					</execution>

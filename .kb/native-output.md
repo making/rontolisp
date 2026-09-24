@@ -32,6 +32,39 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   `rl_version()`. Bump `rlnative-abi` when the trailer or the C ABI changes; edit the
   fingerprint together with `rlabi::config`.
 
+## The Java side (`--native -o prog`)
+
+`RontoLispCli.compileRecorded`: `refuseNativeConflicts` first (`--component`, `--no-wasi`,
+`--no-gc`, `--host-random`, `--host-fetch`, `--host-boundary`, `--reentrant`,
+`--emit-js-glue`, and an `-o` ending in `.wasm`/`.class`/`.jar`/`.war`), then
+`NativeToolchain.load()` so a host without a shim fails before the front end runs. The
+module is the ordinary wasm-GC Preview 1 path (`wasmOutput` = `--native` or `.wasm`);
+only the write differs: `NativeExecutable.assemble(stub, precompile(wasm))`, written to a
+temp file beside `-o`, chmod 0755, atomically moved over it (writing in place fails with
+ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches disk.
+
+- **Resources**: `am/ik/rontolisp/native/<linux|macos>-<x86_64|aarch64>/{librlprecomp.so|.dylib, rlrun}`
+  on the classpath. `pom.xml` adds `rontolisp-native/target/resources` as a resource
+  directory, so a jar built after `rontolisp-native/build.sh` carries the host's pair (+4.2 MB
+  compressed on Linux x86_64: 12.3 MB exec jar); without it the build is unchanged and
+  `--native` answers "not available for <os>-<arch>". Shipping every platform: `.todo/945`.
+- **Cache**: `dlopen` needs a file. The shim is extracted to
+  `<cache>/native/<sha256 16 hex>/<lib>` via temp file + atomic move; a file of the right
+  size there is reused. `<cache>` = `-Drontolisp.native.cache`, else an absolute
+  `$XDG_CACHE_HOME/rontolisp`, else `~/Library/Caches/rontolisp` (macOS) /
+  `~/.cache/rontolisp`.
+- **Fingerprint**: `rl_version()` must be AMONG the NUL-terminated strings following
+  `RLNATIVE-FINGERPRINT=` in the stub (`NativeExecutable.stubFingerprints`), else
+  `IllegalStateException` before anything is written.
+- **native-image**: `reachability-metadata.json` registers `rl_precompile` and `rl_free`
+  (the first two downcalls; `rl_version`'s `() -> void*` is Metal's shape), pinned by
+  `NativeToolchainTest`; `resource-config.json` includes `am/ik/rontolisp/native/.*` when
+  `NativeToolchain` is reachable. `-Pweb` never reaches `cli`.
+- **Tests**: `NativeExecutableTest` (layout, marker scan, write), `NativeToolchainTest`,
+  `RontoLispCliTest.nativeRefuses...`, and `NativeOutputE2eTest` (a ci-spec slice + argv,
+  and a trap's exit status, diffed against `wasmtime run --dir . --dir /tmp`), which skips
+  without wasmtime on `PATH` or without the host's resources.
+
 ## Traps
 
 - **Build the two in separate cargo invocations.** Cargo unifies a dependency's features
@@ -69,6 +102,16 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
 | `gc.lisp` | 28,403 B | 0.05 s | 2.2 MB | 3.60 s | 3.54 s |
 | `(print "hello")` | | | | 0.02 s, 20 MB RSS | |
 | whole ci-spec corpus (581 cases) | 7.6 MB | 11.7 s (90.6 s serial) | 84 MB | 17.6 s | 27.6 s |
+
+Through the CLI (2026-09-24, same host, load average ~12, `java -jar` exec jar):
+`--native -o` costs 0.3 s over `-o x.wasm` (2.96 s vs 2.69 s for `gc.lisp`, JVM start
+included); outputs `hello` 2,006,592 B, `fib` 2,025,472 B, `gc` 2,227,640 B; `gc` ran
+3.65-3.72 s against `wasmtime run`'s 3.34-3.39 s (+9%, where the stub-only run above was
++2%), `fib` 0.37 s, hello 0.01 s / 20 MB RSS. The Java-assembled `gc` is byte-identical to
+`rlpack`'s for the same `.wasm`, so any gap is the stub's, not the assembler's.
+`-Pnative` binary (102,500,616 B, carrying the 12.0 MB pair as resources): `--native -o`
+takes 0.59 s for hello and 0.72 s for `gc.lisp` (0.80 s on the first call, which extracts
+the shim); it also compiles under `env -i` (cache from `user.home`).
 
 The ci corpus printed byte-identical stdout (4,722 lines) under the stub (`.` + `/`) and
 `wasmtime run --dir . --dir /tmp`. `parallel-compilation` is deterministic: serial and

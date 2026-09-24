@@ -8,7 +8,12 @@
     "returnType, parameterTypes and options ONLY; a per-entry \"comment\" key is rejected by the",
     "schema, which is why the two groups are described here instead.",
     "",
-    "The --blas CBLAS downcalls (.kb/linalg-blas.md) are the first six: two shapes, each at",
+    "The FIRST TWO are the --native precompile shim's (.kb/native-output.md): rl_precompile",
+    "(void*, jlong, void*, void*) -> jint and rl_free (void*, jlong) -> void; its third,",
+    "rl_version () -> void*, is Metal's MTLCreateSystemDefaultDevice shape and registered below.",
+    "NativeToolchainTest pins them.",
+    "",
+    "The --blas CBLAS downcalls (.kb/linalg-blas.md) are the next six: two shapes, each at",
     "both widths -- gemm (14 parameters) and gemv (12). gemm is registered twice, because a",
     "product above the critical flop ceiling is issued through the plain",
     "(thread-transitioning) handle instead.",
@@ -147,6 +152,14 @@
   ],
   "foreign": {
     "downcalls": [
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jlong", "void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "jlong"]
+      },
       {
         "returnType": "void",
         "parameterTypes": ["jint", "jint", "jint", "jint", "jint", "jint", "jdouble", "void*", "jint", "void*", "jint", "jdouble", "void*", "jint"],

@@ -58,6 +58,8 @@ language means the GC heap; a numeric/string kernel that fits the subset gains
 universal portability and a hundreds-of-bytes binary from `--no-gc` — then pick
 the **packaging** by the host: a component host gets `--component`, a plain
 engine or JavaScript embedder gets a core module.
+To ship the WASI command module as one executable that needs no wasmtime, see
+[Compile to a Native Executable](native.md).
 
 ## Host Boundaries
 

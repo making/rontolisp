@@ -564,6 +564,12 @@
           "typeReachable": "am.ik.rontolisp.eval.UiopLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/uiop-.*\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.cli.NativeToolchain"
+        },
+        "pattern": "am/ik/rontolisp/native/.*"
       }
     ]
   }

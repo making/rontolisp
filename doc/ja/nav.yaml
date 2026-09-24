@@ -21,6 +21,8 @@ sections:
         title: JVMバイトコードへのコンパイル
       - file: compiling/wasm.md
         title: WASMへのコンパイル
+      - file: compiling/native.md
+        title: ネイティブ実行ファイルへのコンパイル
       - file: compiling/dynamic.md
         title: 動的（遅延束縛）
       - file: compiling/self-hosted-repl.md

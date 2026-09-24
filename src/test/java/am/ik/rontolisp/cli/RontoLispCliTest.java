@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -416,6 +417,33 @@ class RontoLispCliTest {
 		assertThatThrownBy(() -> runCli("", program.toString(), "-o", jar.toString(), "--class-name", "9lives"))
 			.isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("not a Java identifier");
+	}
+
+	@Test
+	void nativeRefusesWhatAWasiCommandModuleCannotBeAndAnOutputNamedForAnotherBackend() throws Exception {
+		Path program = this.tempDir.resolve("hello.lisp");
+		Files.writeString(program, "(print 1)\n");
+		String output = this.tempDir.resolve("hello").toString();
+		for (List<String> flags : List.of(List.of("--component"), List.of("--no-wasi"), List.of("--no-gc"),
+				List.of("--host-random"), List.of("--host-fetch"), List.of("--host-boundary=envelope"),
+				List.of("--reentrant"), List.of("--emit-js-glue"))) {
+			List<String> args = new ArrayList<>(List.of(program.toString(), "--native", "-o", output));
+			args.addAll(flags);
+			assertThatThrownBy(() -> runCli("", args.toArray(String[]::new)))
+				.isInstanceOf(UnsupportedOperationException.class)
+				.hasMessageStartingWith("--native cannot be combined with " + flags.getFirst().split("=")[0] + ": ");
+		}
+		for (String extension : List.of(".wasm", ".class", ".jar", ".war")) {
+			assertThatThrownBy(() -> runCli("", program.toString(), "--native", "-o", output + extension))
+				.isInstanceOf(UnsupportedOperationException.class)
+				.hasMessageContaining("names a " + extension + " output");
+		}
+		assertThatThrownBy(() -> runCli("", program.toString(), "--native"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--native writes a native executable, so it needs -o <file>");
+		// Refused before anything is written.
+		assertThat(this.tempDir).isDirectoryNotContaining(
+				path -> path.getFileName().toString().startsWith("hello") && !path.equals(program));
 	}
 
 	@Test

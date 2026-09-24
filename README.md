@@ -74,6 +74,7 @@ rontolisp hello.lisp                     # interpret           -> 3
 rontolisp -e '(print (+ 1 2))'           # interpret this argument (--eval) -> 3
 rontolisp hello.lisp -o Hello.class && java Hello              # JVM -> 3
 rontolisp hello.lisp -o hello.wasm && wasmtime run hello.wasm  # WASM -> 3
+rontolisp hello.lisp --native -o hello && ./hello              # native executable -> 3
 
 rontolisp format hello.lisp               # re-indent (a directory works too)
 rontolisp test tests/main.lisp            # run a rove suite; the exit code is the verdict
