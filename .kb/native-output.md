@@ -25,11 +25,17 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   `install_name @rpath/librlprecomp.dylib` / `soname librlprecomp.so` via `precomp/build.rs`.
 - **Stub** `rlrun`: runtime-only wasmtime (`runtime std gc gc-copying`, no Cranelift) +
   `wasmtime-wasi` `p1`; profile `release-runner` (`panic = abort`). On Linux it links glibc
-  STATICALLY (`-C target-feature=+crt-static`, built with an explicit
-  `--target <arch>-unknown-linux-gnu` so the flag stays off build scripts; binary at
-  `target/<triple>/release-runner/rlrun`): an output has no glibc floor and runs on musl
+  STATICALLY (`-C target-feature=+crt-static -C relocation-model=static`, built with an
+  explicit `--target <arch>-unknown-linux-gnu` so the flags stay off build scripts; binary
+  at `target/<triple>/release-runner/rlrun`): an output has no glibc floor and runs on musl
   hosts too (checked 2026-09-24 in `alpine:3.20`, `centos:7` = glibc 2.17 and `busybox`,
-  where the dynamic stub failed on `GLIBC_2.34` / `libgcc_s.so.1`). Reads its trailer from
+  where the dynamic stub failed on `GLIBC_2.34` / `libgcc_s.so.1`). The relocation model
+  keeps the stub a non-PIE static executable on every architecture: without it the x86_64
+  stub linked as static-pie, which `qemu-x86_64` on an aarch64 host cannot run (QEMU itself
+  dies with an internal SIGSEGV, MAPERR addr=0x20, before the guest starts -- CI runs
+  36018431878 and 36081109453, `cross_target_module_names_the_requested_triple_and_runs_there`
+  for `linux-x86_64`, 2026-09-24/25). The aarch64 stub was already non-PIE static, and runs
+  under `qemu-aarch64` on either host. Reads its trailer from
   `/proc/self/exe` (Linux) or `current_exe()`, runs `_start` with inherited stdio, argv and
   environment; preopens the current directory as fd 3 (what a relative path resolves against,
   `.kb/read-load-streams.md`) under its ABSOLUTE name (`current_dir()`, `.` when unknown or
