@@ -10,8 +10,9 @@ umbrella `.todo/482`, closed 2026-09-08).
 `rontolisp:bfloat16-bits` (real -> 0..65535) / `rontolisp:bits-bfloat16`. There is no bfloat16
 SCALAR, so both cross a `double`. `am.ik.rontolisp.BFloat16` is the single Java authority; both
 compile backends emit the arithmetic INLINE (`JvmBFloat16Compiler`, `WasmBFloat16Compiler`)
-because `BFloat16` does not travel with a compiled program. Sixteen bits fit an i31, so unlike the
-`%ieee754-*` quartet this pair is REAL on all four backends.
+because `BFloat16` does not travel with a compiled program. Sixteen bits fit an i31, so the pair is
+REAL on all four backends (the `%ieee754-*` quartet is too, on wasm-GC since 2026-09-25: see
+`jzon-cl-additions.md`).
 
 ## Three invariants
 - **Widening is exact and total**: all 65536 patterns narrow back unchanged. Tests assert over all

@@ -9014,6 +9014,19 @@ public final class LispNames {
 	 */
 	public static final String IEEE754_SINGLE_BITS = "%IEEE754-SINGLE-BITS";
 
+	/**
+	 * The WASM backend's own half of {@link #IEEE754_DOUBLE_BITS}: the 64 bits as a
+	 * SIGNED integer (an {@code i64} reinterpretation), which the lowering then lifts
+	 * into the unsigned range. Never read from source.
+	 */
+	public static final String IEEE754_DOUBLE_BITS_SIGNED = "%IEEE754-DOUBLE-BITS-SIGNED";
+
+	/**
+	 * The WASM backend's own half of {@link #IEEE754_DOUBLE_FROM_BITS}: the double whose
+	 * bits are a SIGNED 64-bit integer. Never read from source.
+	 */
+	public static final String IEEE754_DOUBLE_FROM_SIGNED_BITS = "%IEEE754-DOUBLE-FROM-SIGNED-BITS";
+
 	/** {@code %ieee754-single-from-bits} -- the float of unsigned 32-bit IEEE bits. */
 	public static final String IEEE754_SINGLE_FROM_BITS = "%IEEE754-SINGLE-FROM-BITS";
 

@@ -216,10 +216,21 @@ impl Api {
         let sel = self.sel(selector)?;
         // SAFETY: a live receiver (the caller holds a reference) or a class.
         let cls = unsafe { (self.object_get_class)(receiver) };
-        let raw = self
-            .raw_encoding(cls, sel)
-            .ok_or_else(|| format!("{} does not respond to {selector}", self.class_name(receiver)))?;
-        let encoding = encoding::parse(&raw)?;
+        // A method's encoding is parsed once per class: a frame loop sends the same few
+        // selectors to the same few classes (only an answer is cached, never "does not
+        // respond", since a class may gain the method later).
+        let cached = ENCODINGS.with(|c| c.borrow().get(&(cls, sel)).cloned());
+        let encoding = match cached {
+            Some(e) => e,
+            None => {
+                let raw = self
+                    .raw_encoding(cls, sel)
+                    .ok_or_else(|| format!("{} does not respond to {selector}", self.class_name(receiver)))?;
+                let e = std::rc::Rc::new(encoding::parse(&raw)?);
+                ENCODINGS.with(|c| c.borrow_mut().insert((cls, sel), e.clone()));
+                e
+            }
+        };
         let declared = encoding.args.len() - 2;
         let variadic = VARIADIC.contains(&selector);
         if if variadic {
@@ -270,7 +281,7 @@ impl Api {
         // SAFETY: the shape is the method's own encoding, laid out by the convention.
         let leaves = unsafe { call.invoke() };
         drop(strings);
-        let ret = encoding.ret;
+        let ret = encoding.ret.clone();
         if let Some(slot) = slots.first() {
             let error = **slot;
             let failed = match (ret.kind, leaves.first()) {
@@ -483,6 +494,8 @@ thread_local! {
     /// The `Caller` of the innermost host call in progress, which a callback re-enters
     /// the module through; null outside one.
     static CALLER: Cell<*mut c_void> = const { Cell::new(std::ptr::null_mut()) };
+    /// Parsed method encodings by (class, selector).
+    static ENCODINGS: RefCell<HashMap<(Id, Id), std::rc::Rc<encoding::Encoding>>> = RefCell::new(HashMap::new());
     /// How many sends / pumps are in progress on this thread (callbacks nest them).
     static DEPTH: Cell<usize> = const { Cell::new(0) };
 }

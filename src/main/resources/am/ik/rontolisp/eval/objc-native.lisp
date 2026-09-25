@@ -161,16 +161,38 @@
     (when (= address 0) (objc::%fail "string"))
     (objc::%own address)))
 
+;; The bytes objc:data sends: what write-sequence writes for a packed buffer --
+;; little-endian, row-major, the elements only (eval/PackedBuffer) -- or a string's
+;; UTF-8.
+(defun objc::%little-endian (array width bits-of)
+  (let* ((n (array-total-size array))
+         (out (make-array (* n width) :element-type '(unsigned-byte 8)))
+         (k 0))
+    (dotimes (i n out)
+      (let ((bits (funcall bits-of (row-major-aref array i))))
+        (dotimes (b width)
+          (setf (aref out k) (ldb (byte 8 (* 8 b)) bits))
+          (setq k (+ k 1)))))))
+
+(defun objc::%packed-bytes (value)
+  (cond ((stringp value) (rontolisp:string-to-octets value))
+        ((typep value '(vector (unsigned-byte 8))) value)
+        ((typep value '(array single-float))
+         (objc::%little-endian value 4 (lambda (x) (%ieee754-single-bits x))))
+        ((typep value '(array double-float))
+         (objc::%little-endian value 8 (lambda (x) (%ieee754-double-bits x))))
+        ((typep value '(vector (unsigned-byte 16)))
+         (objc::%little-endian value 2 (lambda (x) x)))
+        ((typep value '(vector (unsigned-byte 32)))
+         (objc::%little-endian value 4 (lambda (x) x)))
+        (t
+         (error "objc:data expects a packed float array, a packed (unsigned-byte 8|16|32) vector or a string, got ~s"
+                value))))
+
 (defun objc:data (value)
-  (let ((bytes
-         (cond ((stringp value) (rontolisp:string-to-octets value))
-               ((typep value '(vector (unsigned-byte 8))) value)
-               (t
-                (error "objc:data expects a packed float array, a packed (unsigned-byte 8|16|32) vector or a string, got ~s"
-                       value)))))
-    (let ((address (objc::%rl-data bytes)))
-      (when (= address 0) (objc::%fail "data"))
-      (objc::%own address))))
+  (let ((address (objc::%rl-data (objc::%packed-bytes value))))
+    (when (= address 0) (objc::%fail "data"))
+    (objc::%own address)))
 
 (defun objc:bytes (data)
   (unless (objc::%objectp data)

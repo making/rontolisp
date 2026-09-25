@@ -98,6 +98,35 @@ class NativeObjcE2eTest {
 	}
 
 	@Test
+	void aSceneRenderedOffscreenHasTheInterpretersPixels() throws Exception {
+		// scene over metal over objc, with geom and linalg under it: the whole macOS
+		// stack in one frame, read back through objc:bytes (no window).
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		String source = """
+				(defvar *v* (scene:offscreen :width 160 :height 120))
+				(scene:grid *v* :extent nil)
+				(scene:axes *v* nil)
+				(scene:shading *v* :solid)
+				(scene:add *v* (geom:box '(200 200 200) :color (geom:vec3 1.0 0.2 0.2)))
+				(scene:camera *v* :azimuth 0.9 :elevation 0.45 :distance 700.0)
+				(let ((px (scene:snapshot *v*)) (sum 0))
+				  (dotimes (i (length px)) (setq sum (+ sum (* (+ 1 (mod i 7)) (aref px i)))))
+				  (format t "~a ~a~%" (length px) sum))
+				""";
+		String expected;
+		try {
+			expected = interpret(source);
+		}
+		catch (RuntimeException ex) {
+			abort("no Metal device for the interpreter: " + ex.getMessage());
+			return;
+		}
+		Run actual = nativeOutput(source);
+		assertThat(actual.exit()).as("stderr: %s", actual.stderr()).isZero();
+		assertThat(actual.stdout()).startsWith("76800 ").isEqualTo(expected);
+	}
+
+	@Test
 	void anExitInsideACallbackEndsTheProcessWithItsCode() throws Exception {
 		Run run = nativeOutput("""
 				(let* ((cls (objc:define-class "NativeE2eExit" "NSObject"

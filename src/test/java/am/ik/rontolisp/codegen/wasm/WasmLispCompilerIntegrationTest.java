@@ -21547,9 +21547,23 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileAndRunIeee754Bits() throws Exception {
+		// JvmLispCompilerTest's twin, same expectation: a double's bits are UNSIGNED, so
+		// a negative double's are a bignum (the i64 reinterpretation lifted by 2^64), and
+		// the way back lowers that range first.
+		assertThat(compileAndRun("(print (%ieee754-double-bits 1.0)) (print (%ieee754-double-bits -2.5))"
+				+ " (print (%ieee754-double-from-bits 4607182418800017408))"
+				+ " (print (%ieee754-single-bits 1.0)) (print (%ieee754-single-bits -2.5))"
+				+ " (print (%ieee754-single-from-bits 1065353216))"
+				+ " (print (%ieee754-double-from-bits (%ieee754-double-bits -0.5)))"
+				+ " (print (%ieee754-single-from-bits (%ieee754-single-bits -0.5)))"))
+			.isEqualTo("4607182418800017408\n13836183955189006336\n1.0\n1065353216\n3223322624\n1.0\n-0.5\n-0.5");
+	}
+
+	@Test
 	void compileAndRunBfloat16Bits() throws Exception {
-		// The %ieee754-* quartet signals here (no 64-bit unsigned model); sixteen bits
-		// fit an i31, so this pair is real on the WASM backends too.
+		// Sixteen bits fit an i31, so this pair is real on the WASM backends too (the
+		// %ieee754-* quartet is pinned by compileAndRunIeee754Bits).
 		assertThat(compileAndRun("""
 				(print (rontolisp:bfloat16-bits 1.0))
 				(print (rontolisp:bfloat16-bits -2.5))
