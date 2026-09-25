@@ -906,6 +906,13 @@ final class WasmExprCompiler {
 								ctx);
 						return;
 					}
+					if (ctx.functions.containsKey(LispNames.OBJC_SLEEP_INTERNAL)) {
+						// A --native program using objc: runs on thread 0, whose event
+						// loop only turns while the module waits: its sleep is the
+						// host's run loop (objc-native.lisp), never the spin.
+						compileExpr(new LispCons(new LispSymbol(LispNames.OBJC_SLEEP_INTERNAL), cons.cdr()), ctx);
+						return;
+					}
 					compileExpr(LispMacroExpander.expandSleep(cons, true), ctx);
 					return;
 				}

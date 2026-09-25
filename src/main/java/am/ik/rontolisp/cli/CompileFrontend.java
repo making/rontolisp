@@ -27,6 +27,7 @@ import am.ik.rontolisp.eval.LibraryDefunPruner;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.MetalLibrary;
+import am.ik.rontolisp.eval.ObjcNativeLibrary;
 import am.ik.rontolisp.eval.SceneLibrary;
 import am.ik.rontolisp.eval.SchemeLibrary;
 import am.ik.rontolisp.eval.SocketsLibrary;
@@ -196,10 +197,12 @@ final class CompileFrontend {
 	 * @param hostBoundary {@code --host-boundary}
 	 * @param reentrant {@code --reentrant}
 	 * @param noPrune {@code --no-prune}
+	 * @param nativeOutput {@code --native}: the wasm-GC module is the payload of a native
+	 * executable, whose runner answers the {@code rlobjc} imports on macOS
 	 */
 	record Options(@Nullable String baseDir, boolean wasm, boolean servlet, boolean dynamic, boolean component,
 			boolean noWasi, boolean noGc, boolean hostFetch, HostBoundary hostBoundary, boolean reentrant,
-			boolean noPrune) {
+			boolean noPrune, boolean nativeOutput) {
 
 		static Builder builder() {
 			return new Builder();
@@ -228,6 +231,8 @@ final class CompileFrontend {
 			private boolean reentrant;
 
 			private boolean noPrune;
+
+			private boolean nativeOutput;
 
 			private Builder() {
 			}
@@ -293,11 +298,16 @@ final class CompileFrontend {
 				return this;
 			}
 
+			Builder nativeOutput(boolean nativeOutput) {
+				this.nativeOutput = nativeOutput;
+				return this;
+			}
+
 			Options build() {
 				return new Options(this.baseDir, this.wasm, this.servlet, this.dynamic, this.component, this.noWasi,
 						this.noGc, this.hostFetch,
 						this.hostBoundary != null ? this.hostBoundary : HostBoundary.ENVELOPE, this.reentrant,
-						this.noPrune);
+						this.noPrune, this.nativeOutput);
 			}
 
 		}
@@ -469,17 +479,20 @@ final class CompileFrontend {
 		// definitions: HttpLibrary's handler reachability, WitExportInliner's defun
 		// checks and the library pruner all recognize async-defun, never the sugar.
 		loaded = LispMacroExpander.rewriteAsyncSugar(loaded);
-		// objc:, appkit:, metal: and scene: have no WASM lowering and never will (no
-		// foreign function API, no AppKit, no Metal); the JVM backend carries the
-		// binding as an embedded blob (JvmObjcRuntimeBuilder). Refuse the WASM outputs
-		// here, after load inlining, so a (load ...)-ed file is caught too and the error
-		// names the reference rather than an undefined function somewhere inside a
-		// spliced library.
-		String objcReference = wasm ? AppKitLibrary.firstObjcReference(loaded) : null;
+		// objc:, appkit:, metal: and scene: have no lowering for a .wasm and never will
+		// (no WASM runtime offers a foreign function API, AppKit or Metal); the JVM
+		// backend carries the binding as an embedded blob (JvmObjcRuntimeBuilder), and a
+		// --native output's runner answers the rlobjc imports ObjcNativeLibrary splices
+		// below. Refuse every other WASM output here, after load inlining, so a (load
+		// ...)-ed file is caught too and the error names the reference rather than an
+		// undefined function somewhere inside a spliced library.
+		String objcReference = wasm && !(options.nativeOutput() && !noGc && !component && !noWasi)
+				? AppKitLibrary.firstObjcReference(loaded) : null;
 		if (objcReference != null) {
 			throw new IllegalArgumentException("Cannot compile: " + objcReference
 					+ " -- the objc:, appkit:, metal: and scene: packages run on the interpreter (java -jar, or "
-					+ "the rontolisp binary) and in a compiled .class or .jar, not in a .wasm");
+					+ "the rontolisp binary), in a compiled .class or .jar and in a --native executable for macos-aarch64, "
+					+ "not in a .wasm");
 		}
 		// ffi: has no WASM lowering and never will either (no foreign function API in
 		// any WASM runtime); refused the same way, after load inlining, so the error
@@ -641,14 +654,15 @@ final class CompileFrontend {
 		// names a rontolisp::%scheme- helper -- and INSIDE the prelude, which supplies
 		// the
 		// string comparisons the helpers are written over.
+		List<LispVal> macos = AppKitLibrary.process(JsonLibrary.process(LinalgLibrary.process(GeomLibrary
+			.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary
+				.process(SafetensorsLibrary.process(GgufLibrary.process(TokenizersLibrary.process(
+						SchemeLibrary.process(UserMacroExpander.expand(loaded), features, input.standards()))))))))))));
+		// ObjcNativeLibrary right OUTSIDE AppKitLibrary: the objc: verbs of a --native
+		// output, needed by the objc: references the macOS splices above introduce.
 		List<LispVal> program = UnreadCharLibrary
-			.process(WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(
-					UrlLibrary.process(AppKitLibrary.process(JsonLibrary
-						.process(LinalgLibrary.process(GeomLibrary.process(MetalLibrary.process(SceneLibrary
-							.process(TorchLibrary.process(CheckpointLibrary.process(SafetensorsLibrary
-								.process(GgufLibrary.process(TokenizersLibrary.process(SchemeLibrary
-									.process(UserMacroExpander.expand(loaded), features, input.standards()))))))))))))),
-					features)))));
+			.process(WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary
+				.process(UrlLibrary.process(ObjcNativeLibrary.process(macos, options.nativeOutput())), features)))));
 		// uiop:getenv on the --component path is environment.lisp over a wit-imported
 		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /
 		// sockets variants and as an appended user import under serve, whose service

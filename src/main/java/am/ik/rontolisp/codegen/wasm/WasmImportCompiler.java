@@ -70,8 +70,8 @@ final class WasmImportCompiler {
 	 * {@code :string} result's non-validating decoder corrupts arbitrary bytes, so binary
 	 * needs its own designator, not care at the call site.
 	 */
-	private static final List<BoundaryType> KNOWN_PARAM_TYPES = List.of(BoundaryType.S32, BoundaryType.FLOAT,
-			BoundaryType.BOOL, BoundaryType.STRING, BoundaryType.S_EXPR, BoundaryType.BYTES);
+	private static final List<BoundaryType> KNOWN_PARAM_TYPES = List.of(BoundaryType.S32, BoundaryType.S64,
+			BoundaryType.FLOAT, BoundaryType.BOOL, BoundaryType.STRING, BoundaryType.S_EXPR, BoundaryType.BYTES);
 
 	/**
 	 * The boundary types the {@code --no-gc} backend may name -- the same directive, a
@@ -833,6 +833,9 @@ final class WasmImportCompiler {
 	private static void emitUnboxTop(WasmLispCompiler.Ctx ctx, BoundaryType type) {
 		switch (type) {
 			case S32 -> WasmEmitHelper.castI31GetS(ctx);
+			// Any exact integer (an i31 or the boxed i64 lane), exactly; a float
+			// truncates, as the export side's result does.
+			case S64 -> WasmExportCompiler.emitWideIntResult(ctx, true);
 			// Accepts an int, ratio or float Lisp value (numeric contagion like the
 			// arithmetic built-ins).
 			case FLOAT -> WasmEmitHelper.castFloatGetF64(ctx);
@@ -862,6 +865,11 @@ final class WasmImportCompiler {
 			boolean reentrant) {
 		switch (type) {
 			case S32 -> ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			// The whole i64 exactly: an i31 when it fits, else the boxed exact integer.
+			case S64 -> {
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+			}
 			case FLOAT -> {
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);

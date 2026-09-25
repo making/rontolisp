@@ -7368,6 +7368,13 @@ public final class LispNames {
 	 */
 	public static final String OBJC_PKG = "OBJC";
 
+	/**
+	 * {@code objc::%sleep}: the event-loop wait every {@code sleep} of a {@code --native}
+	 * program that carries {@code objc-native.lisp} compiles to (the module runs on
+	 * thread 0, so a spin would freeze its windows).
+	 */
+	public static final String OBJC_SLEEP_INTERNAL = OBJC_PKG + "::%SLEEP";
+
 	/** {@code objc:class} -- a class by name: {@code (objc:class "NSWindow")}. */
 	public static final String OBJC_CLASS = "CLASS";
 

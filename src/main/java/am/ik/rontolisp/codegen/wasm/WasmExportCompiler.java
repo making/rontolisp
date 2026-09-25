@@ -887,7 +887,7 @@ final class WasmExportCompiler {
 	// exact path refuses a negative explicitly (_int_val is called twice on that path --
 	// once for the check, once for the value -- it is pure and cheap); the float path's
 	// i64.trunc_u_f64 already rejects a negative.
-	private static void emitWideIntResult(WasmLispCompiler.Ctx ctx, boolean signed) {
+	static void emitWideIntResult(WasmLispCompiler.Ctx ctx, boolean signed) {
 		int slot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);

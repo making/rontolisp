@@ -13,13 +13,16 @@
 
 use std::process::exit;
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod objc;
+
 use rlabi::payload;
 use wasmtime::{Engine, Linker, Module, Store, Trap};
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
 use wasmtime_wasi::{FsPerms, I32Exit, WasiCtxBuilder};
 
 /// `128 + SIGABRT`, the status `wasmtime run` exits with after a trap on Unix.
-const TRAP_EXIT: i32 = 134;
+pub(crate) const TRAP_EXIT: i32 = 134;
 
 /// The section a macOS output's module is embedded in (`rlprecomp::macho`): reserved here
 /// with an empty header so that the linker lays out its segment, the last before
@@ -66,8 +69,23 @@ fn run() -> wasmtime::Result<()> {
 
     let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
     p1::add_to_linker_sync(&mut linker, |t| t)?;
+    // A program using objc: / appkit: imports the Objective-C host (`objc`), which runs
+    // it on thread 0 -- this thread.
+    let objc = module.imports().any(|i| i.module() == "rlobjc");
+    if objc {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        objc::add_to_linker(&mut linker)?;
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        wasmtime::bail!(
+            "this program uses the Objective-C runtime (objc:, appkit:), which a --native output reaches on macOS on Apple silicon only"
+        );
+    }
     let mut store = Store::new(&engine, wasi.build_p1());
     let instance = linker.instantiate(&mut store, &module)?;
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    if objc {
+        objc::bind(&instance, &mut store)?;
+    }
     instance
         .get_typed_func::<(), ()>(&mut store, "_start")?
         .call(&mut store, ())

@@ -789,6 +789,10 @@ public final class RontoLispCli {
 				.hostBoundary(hostBoundary)
 				.reentrant(reentrant)
 				.noPrune(noPrune)
+				// Only the macOS / Apple-silicon runner answers the rlobjc imports, so
+				// only
+				// that target accepts an objc: program (.kb/objc.md, "--native").
+				.nativeOutput(nativeTarget != null && "macos-aarch64".equals(nativeTarget.platform()))
 				.build())
 			.build());
 		List<LispVal> program = frontend.program();
