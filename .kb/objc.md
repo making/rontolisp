@@ -299,7 +299,8 @@ over `rontolisp:wasm-import`s from module `rlobjc` -- right OUTSIDE `AppKitLibra
   ~19,000 references outstanding, not 300,002 (`NativeObjcE2eTest`). Same rule as the JVM:
   `setReleasedWhenClosed:` NO.
 - **Divergence**: a wrapper is a struct, so `equal` on two wrappers of one object is NIL here and T
-  on the JVM (a record). `appkit.lisp` keys its tables by `objc:address`, which is exact everywhere.
+  on the JVM (a record). `appkit.lisp` keys its tables by `objc:address`, which is exact everywhere
+  (`.todo/959`).
 - `objc:data` lays a packed buffer out in Lisp (`%ieee754-single-bits`, lowered on wasm-GC for
   this) -- a per-frame uniform is 64 bytes; bfloat16 arrays and quantized matrices are refused
   (the JVM serves them). `objc:bytes` copies through a `:bytes` result.
