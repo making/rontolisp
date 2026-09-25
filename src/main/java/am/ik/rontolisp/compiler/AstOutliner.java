@@ -84,13 +84,101 @@ public final class AstOutliner {
 	}
 
 	/**
-	 * The rewritten program and the functions actually changed.
-	 *
-	 * @param program the rewritten top-level forms
-	 * @param outlined the names of the requested functions this pass really did cut -- a
-	 * name absent here cannot be helped by asking again
+	 * The rewritten program, the functions actually changed, and -- for the compile that
+	 * measures the outcome -- what budget, if any, is worth one more compile.
 	 */
-	public record Result(List<LispVal> program, Set<String> outlined) {
+	public static final class Result {
+
+		private final List<LispVal> input;
+
+		private final List<LispVal> program;
+
+		private final Set<String> outlined;
+
+		private Result(List<LispVal> input, List<LispVal> program, Set<String> outlined) {
+			this.input = input;
+			this.program = program;
+			this.outlined = outlined;
+		}
+
+		/**
+		 * {@return the rewritten top-level forms}
+		 */
+		public List<LispVal> program() {
+			return this.program;
+		}
+
+		/**
+		 * {@return the names of the requested functions this pass really did cut} A name
+		 * absent here cannot be helped by asking again.
+		 */
+		public Set<String> outlined() {
+			return this.outlined;
+		}
+
+		/**
+		 * The budget the next compile should cut {@code name} under, or null when no
+		 * budget left to try would change what this compile emitted for it.
+		 *
+		 * <p>
+		 * A compile costs seconds on a large program and learns nothing when the forms it
+		 * compiles are the forms the previous one compiled -- the emitted size is a
+		 * function of the forms. So the next budget is not merely the next target: the
+		 * target keeps tightening (by two thirds, not past the floor) until the cut it
+		 * produces DIFFERS from the one this compile used, which is checked here, on the
+		 * AST, for the price of a walk. A function whose remaining targets all produce
+		 * the same cut -- a flat {@code cond} of clauses each too small to move -- stops
+		 * costing a compile per target; a function no target can cut at all is never
+		 * asked for (mito's JVM compile: five attempts down to two). What ships is
+		 * exactly what the target-by-target sequence shipped, because every attempt it
+		 * skips compiled the same forms.
+		 * @param name a function this compile measured over the limit
+		 * @param measuredBytes the size it came out at
+		 * @param current the budget this compile cut it under, or null when none was
+		 * asked for
+		 * @param firstTargetBytes the target a first cut aims at
+		 * @param floorTargetBytes the target past which no further tightening is tried
+		 * @return the next budget, or null when asking again cannot change the outcome
+		 */
+		public @Nullable Budget nextBudget(String name, int measuredBytes, @Nullable Budget current,
+				int firstTargetBytes, int floorTargetBytes) {
+			if (current == null) {
+				Budget first = new Budget(measuredBytes, firstTargetBytes);
+				return changesCut(name, null, first) ? first : null;
+			}
+			if (!this.outlined.contains(name)) {
+				// Asked for and not cut: no tighter target finds a candidate either.
+				return null;
+			}
+			Budget next = current;
+			while (next.targetBytes() > floorTargetBytes) {
+				next = new Budget(next.measuredBytes(), next.targetBytes() * 2 / 3);
+				if (changesCut(name, current, next)) {
+					return next;
+				}
+			}
+			return null;
+		}
+
+		/**
+		 * {@return whether cutting every top-level defun named {@code name} under
+		 * {@code to} produces other forms than under {@code from}} A null {@code from} is
+		 * the uncut function.
+		 */
+		private boolean changesCut(String name, @Nullable Budget from, Budget to) {
+			for (LispVal form : this.input) {
+				if (!name.equals(defunName(form))) {
+					continue;
+				}
+				LispVal before = from == null ? form : new Cutter(false).cutFunction((LispCons) form, from);
+				LispVal after = new Cutter(false).cutFunction((LispCons) form, to);
+				if (!sameForm(before, after)) {
+					return true;
+				}
+			}
+			return false;
+		}
+
 	}
 
 	/**
@@ -121,9 +209,9 @@ public final class AstOutliner {
 	 */
 	public static Result outline(List<LispVal> program, Map<String, Budget> budgets) {
 		if (budgets.isEmpty()) {
-			return new Result(program, Set.of());
+			return new Result(program, program, Set.of());
 		}
-		Cutter cutter = new Cutter();
+		Cutter cutter = new Cutter(System.getProperty("rontolisp.debug.outline") != null);
 		List<LispVal> out = new ArrayList<>(program.size());
 		Set<String> outlined = new LinkedHashSet<>();
 		for (LispVal form : program) {
@@ -139,7 +227,29 @@ public final class AstOutliner {
 			}
 			out.add(rewritten);
 		}
-		return new Result(out, outlined);
+		return new Result(program, out, outlined);
+	}
+
+	/**
+	 * {@return whether two cuts of one function are the same forms} The uncut parts of
+	 * both are the input's own conses, so identity settles most of the walk; what a cut
+	 * built is fresh on each side and compared by shape, a symbol by its name (the
+	 * {@code __outlined_N} a fresh cutter numbers identically for the same cut).
+	 */
+	private static boolean sameForm(LispVal a, LispVal b) {
+		while (a != b) {
+			if (a instanceof LispCons ca && b instanceof LispCons cb) {
+				if (!sameForm(ca.car(), cb.car())) {
+					return false;
+				}
+				a = ca.cdr();
+				b = cb.cdr();
+			}
+			else {
+				return a instanceof LispSymbol sa && b instanceof LispSymbol sb && sa.name().equals(sb.name());
+			}
+		}
+		return true;
 	}
 
 	/**
@@ -159,6 +269,13 @@ public final class AstOutliner {
 		private final IdentityHashMap<LispVal, Integer> nodeCounts = new IdentityHashMap<>();
 
 		private int counter;
+
+		/** Whether each cut is reported ({@code -Drontolisp.debug.outline}). */
+		private final boolean report;
+
+		private Cutter(boolean report) {
+			this.report = report;
+		}
 
 		/**
 		 * Cuts one {@code (defun name lambda-list body...)} so the body left in place,
@@ -184,7 +301,7 @@ public final class AstOutliner {
 			int nodeBudget = Math.max(MIN_BUDGET_NODES,
 					(int) ((long) nodes * budget.targetBytes() / budget.measuredBytes()));
 			LispVal cut = cut(body, nodeBudget);
-			if (System.getProperty("rontolisp.debug.outline") != null) {
+			if (this.report) {
 				System.err.println("[outline] " + ((LispCons) defun.cdr()).car().print() + " nodes=" + nodes
 						+ " measured=" + budget.measuredBytes() + " target=" + budget.targetBytes() + " nodeBudget="
 						+ nodeBudget + " pieces=" + this.counter);

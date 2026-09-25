@@ -2718,11 +2718,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	 */
 	private static final class FunctionTooLarge extends RuntimeException {
 
-		private final Map<String, Integer> oversized;
+		/** The functions to cut next time, each with the budget to cut it under. */
+		private final Map<String, AstOutliner.Budget> budgets;
 
-		private FunctionTooLarge(Map<String, Integer> oversized) {
+		private FunctionTooLarge(Map<String, AstOutliner.Budget> budgets) {
 			super(null, null, false, false);
-			this.oversized = oversized;
+			this.budgets = budgets;
 		}
 
 	}
@@ -2744,11 +2745,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			catch (FunctionTooLarge signal) {
 				CompileWarnings.discardAttempt();
-				signal.oversized.forEach((name, size) -> {
-					AstOutliner.Budget known = outline.get(name);
-					outline.put(name, known == null ? new AstOutliner.Budget(size, OUTLINE_TARGET_BYTES)
-							: new AstOutliner.Budget(known.measuredBytes(), known.targetBytes() * 2 / 3));
-				});
+				outline.putAll(signal.budgets);
 			}
 			catch (RuntimeException | Error ex) {
 				CompileWarnings.flushAttempt();
@@ -4286,19 +4283,19 @@ public final class WasmLispCompiler implements LispCompiler {
 		// body's bytes per AST node vary by an order of magnitude, because the surface
 		// macros expand during this pass). Only a defun is reported: a lambda's
 		// generated name cannot be pointed back at a form for the next attempt to cut.
-		Map<String, Integer> tooLarge = new LinkedHashMap<>();
+		Map<String, AstOutliner.Budget> tooLarge = new LinkedHashMap<>();
 		for (int i = 0; i < defuns.size(); i++) {
 			byte[] body = userFunctionBodies.get(i);
 			if (body == null || body.length <= FUNCTION_BODY_LIMIT_BYTES) {
 				continue;
 			}
 			String name = defuns.get(i).name;
-			AstOutliner.Budget budget = outlineBudgets.get(name);
-			// Ask again only when there is something new to ask: an untried function,
-			// or one this attempt really did cut and whose target can still shrink.
-			if (budget == null
-					|| (astOutlined.outlined().contains(name) && budget.targetBytes() > OUTLINE_TARGET_FLOOR_BYTES)) {
-				tooLarge.put(name, body.length);
+			// Ask again only when there is something new to ask: a budget whose cut
+			// differs from what this attempt compiled (AstOutliner.Result.nextBudget).
+			AstOutliner.Budget next = astOutlined.nextBudget(name, body.length, outlineBudgets.get(name),
+					OUTLINE_TARGET_BYTES, OUTLINE_TARGET_FLOOR_BYTES);
+			if (next != null) {
+				tooLarge.put(name, next);
 			}
 		}
 		if (!tooLarge.isEmpty()) {

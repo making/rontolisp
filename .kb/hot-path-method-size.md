@@ -61,7 +61,16 @@ chunker can adopt it.
   `JvmLispCompiler.compile` reports an oversized defun through a `MethodTooLarge` signal and
   re-runs with that function's measured bytes-per-node ratio applied to a 6000-byte target; still
   over comes back at two thirds, down to a **2000-byte floor**. Rides the `GateUnderpredicted`
-  retry loop, so a program with no oversized method is byte-identical. **Only a DEFUN is
+  retry loop, so a program with no oversized method is byte-identical.
+- **A retry is asked for only when it compiles different forms** (`AstOutliner.Result.nextBudget`):
+  each attempt is a whole compile -- expansion ~1.5-2.4 s, Pass 1-2 ~3-5 s on mito -- and the
+  emitted size is a function of the forms. So the attempt that measures a function over the
+  limit tries the next targets on the AST and asks for the first whose cut differs from the one
+  it compiled; none, no retry. mito's `MitoE2eTest` probe (2026-09-25): five attempts -> two,
+  `-o Probe.class` 48 s -> 33 s, output byte-identical. Of its 13 oversized defuns 9 cut to
+  nothing at any target (`pieces=0`), and `%condition-report-str` (17.9 KB) cuts to the SAME
+  two pieces at every target -- a flat `cond` whose clauses are each under `MIN_CUT_NODES` -- and
+  stays at 17.2 KB; the old loop spent attempts 3-5 re-learning that. **Only a DEFUN is
   reported** (a lambda's `_lambda_<funcId>` cannot be pointed back at a form), and
   `lack/util:find-package-or-load` answers `pieces=0` -- no branch to cut, stays marginally over.
 - Two pre-existing backend bugs this shape can hit: a captured `let` variable assigned inline in a

@@ -305,11 +305,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	 */
 	private static final class MethodTooLarge extends RuntimeException {
 
-		private final Map<String, Integer> oversized;
+		/** The functions to cut next time, each with the budget to cut it under. */
+		private final Map<String, AstOutliner.Budget> budgets;
 
-		private MethodTooLarge(Map<String, Integer> oversized) {
+		private MethodTooLarge(Map<String, AstOutliner.Budget> budgets) {
 			super(null, null, false, false);
-			this.oversized = oversized;
+			this.budgets = budgets;
 		}
 
 	}
@@ -712,11 +713,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 			catch (MethodTooLarge signal) {
 				CompileWarnings.discardAttempt();
-				signal.oversized.forEach((name, size) -> {
-					AstOutliner.Budget known = outline.get(name);
-					outline.put(name, known == null ? new AstOutliner.Budget(size, OUTLINE_TARGET_BYTES)
-							: new AstOutliner.Budget(known.measuredBytes(), known.targetBytes() * 2 / 3));
-				});
+				if (System.getProperty("rontolisp.debug.outline") != null) {
+					System.err.println("[outline] retry " + signal.budgets);
+				}
+				outline.putAll(signal.budgets);
 			}
 			catch (GateUnderpredicted signal) {
 				CompileWarnings.discardAttempt();
@@ -2566,21 +2566,21 @@ public final class JvmLispCompiler implements LispCompiler {
 		// magnitude, because the surface macros expand during Pass 2). Only a defun is
 		// reported: a lambda's generated name cannot be pointed back at a form for the
 		// next attempt to cut.
-		Map<String, Integer> tooLarge = new LinkedHashMap<>();
+		Map<String, AstOutliner.Budget> tooLarge = new LinkedHashMap<>();
 		for (int i = 0; i < defuns.size(); i++) {
 			int size = funcCtxs.get(i).code.size();
 			if (size <= HUGE_METHOD_LIMIT) {
 				continue;
 			}
 			String name = defuns.get(i).name;
-			AstOutliner.Budget budget = outlineBudgets.get(name);
-			// Ask again only when there is something new to ask: an untried function,
-			// or one this attempt really did cut and whose target can still shrink. A
-			// function the pass cannot cut is left over the limit rather than costing
+			// Ask again only when there is something new to ask: a budget whose cut
+			// differs from what this attempt compiled. A function the pass cannot cut,
+			// or cannot cut any differently, is left over the limit rather than costing
 			// a compile per attempt to learn that again.
-			if (budget == null
-					|| (astOutlined.outlined().contains(name) && budget.targetBytes() > OUTLINE_TARGET_FLOOR_BYTES)) {
-				tooLarge.put(name, size);
+			AstOutliner.Budget next = astOutlined.nextBudget(name, size, outlineBudgets.get(name), OUTLINE_TARGET_BYTES,
+					OUTLINE_TARGET_FLOOR_BYTES);
+			if (next != null) {
+				tooLarge.put(name, next);
 			}
 		}
 		if (!tooLarge.isEmpty()) {
