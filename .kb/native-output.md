@@ -165,7 +165,22 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   `LD_PRELOAD`ing a `rep movs` `memmove` into the glibc stub made it slower still, and a
   musl stub with mimalloc stayed at 14.0. Static glibc costs size instead (+0.98 MB on
   x86_64); a musl stub with its own `memmove`/`memcpy`/`memset` could have both, at the
-  price of owning those routines (`.todo/956`).
+  price of owning those routines (`.todo/956`). These cycle counts predate the
+  codegen-unit fix below (stubs built at one unit).
+- **The stub is not built as one codegen unit.** Under `codegen-units = 1` (what `release`
+  keeps for the shim) LLVM leaves wasmtime's `GcHeap::index::<VMCopyingHeader>` out of line
+  in the copying collector's `forward` (11% of `gc.lisp`'s cycles as its own symbol): 38.0 G
+  user instructions against 33.9 G at 2, 4, 8, 16 or 32 units, the count `wasmtime run`
+  (the 49.0.0 release CLI) retires on the same module (measured 2026-09-25, x86_64; the
+  out-of-line copy is in the aarch64 stub too, by its symbol). It was the whole 7-9% gap to
+  `wasmtime run`, not the feature set, the allocator or the precompiled code: a throwaway
+  runner with wasmtime's default features ran the stub's module at the stub's count, and
+  one with the minimal features at 16 units at the CLI's. `release-runner` sets 4, the
+  smallest stub of those (x86_64 +69 KB / +26 KB gz over one unit, aarch64 +65 KB / +21 KB
+  gz; 16 was +149 KB); pinned by `runner_profile_has_more_than_one_codegen_unit` (`rlabi`).
+  Other programs: `hash` -9.5% instructions, `list` / `sort` -1%, the other bench programs
+  unchanged. The shim stays at one unit: at four, precompiling `llm.lisp` took 2% more
+  instructions.
 
 ## macOS: the module inside the signed image
 
@@ -255,6 +270,13 @@ spike, shim 5.5 MB, stub 1.7 MB. Static glibc outputs: hello 3,005,768 B, `gc` ~
 cross-built aarch64 static stub ran the ci slice under `qemu-aarch64-static` with output
 identical to x86_64's.
 
+2026-09-25, after the Mach-O payload change and at four codegen units (Traps): static stub
+linux-x86_64 2,928,288 B (1.22 MB gz), linux-aarch64 2,501,768 B (1.10 MB gz); outputs hello
+2,947,016 B, `fib` 2,965,896 B, `gc` 3,159,872 B. Pinned to one core, load average < 3, five
+interleaved runs: `gc` 3.25-3.28 s against `wasmtime run` 3.27-3.33 s (one unit:
+3.55-3.57 s), `hash` 0.74-0.76 s against 0.75-0.86 s (one unit: 0.81-0.83 s), `fib`
+0.26 s = `wasmtime run`; hello 0.01 s / 19 MB RSS.
+
 2026-09-24, Linux x86_64 (64 cores), rustc 1.98.1, wasmtime 47.0.3:
 
 | | shim | stub |
@@ -277,7 +299,8 @@ Through the CLI (2026-09-24, same host, load average ~12, `java -jar` exec jar):
 included); outputs `hello` 2,006,592 B, `fib` 2,025,472 B, `gc` 2,227,640 B; `gc` ran
 3.65-3.72 s against `wasmtime run`'s 3.34-3.39 s (+9%, where the stub-only run above was
 +2%), `fib` 0.37 s, hello 0.01 s / 20 MB RSS. The Java-assembled `gc` is byte-identical to
-`rlpack`'s for the same `.wasm`, so any gap is the stub's, not the assembler's.
+`rlpack`'s for the same `.wasm`, so any gap is the stub's, not the assembler's. The gap
+was the stub's single codegen unit (Traps); closed 2026-09-25.
 `-Pnative` binary (102,500,616 B, carrying the 12.0 MB pair as resources): `--native -o`
 takes 0.59 s for hello and 0.72 s for `gc.lisp` (0.80 s on the first call, which extracts
 the shim); it also compiles under `env -i` (cache from `user.home`).

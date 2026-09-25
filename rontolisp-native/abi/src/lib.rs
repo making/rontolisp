@@ -146,6 +146,28 @@ mod tests {
         );
     }
 
+    /// One codegen unit leaves wasmtime's `GcHeap::index` out of line in the copying
+    /// collector: +12% instructions on a GC-heavy program (`.kb/native-output.md`, "Traps").
+    /// `release-runner` inherits `release`'s single unit unless it says otherwise.
+    #[test]
+    fn runner_profile_has_more_than_one_codegen_unit() {
+        let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../Cargo.toml"))
+            .expect("the workspace manifest");
+        let section = manifest
+            .split("\n[")
+            .find(|s| s.starts_with("profile.release-runner]"))
+            .expect("a [profile.release-runner] section");
+        let units = section
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("codegen-units"))
+            .filter_map(|v| v.trim().strip_prefix('=')?.trim().parse::<u32>().ok())
+            .next();
+        assert!(
+            units.is_some_and(|n| n > 1),
+            "[profile.release-runner] must set codegen-units > 1, found {units:?}"
+        );
+    }
+
     #[test]
     fn stub_marker_is_prefix_fingerprint_nul() {
         assert_eq!(STUB_MARKER, format!("{STUB_MARKER_PREFIX}{FINGERPRINT}\0"));

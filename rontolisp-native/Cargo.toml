@@ -26,9 +26,14 @@ codegen-units = 1
 strip = true
 
 # The runner stub has no host to protect; abort keeps it small.
+# Not one codegen unit: under one, LLVM leaves wasmtime's `GcHeap::index` out of line in
+# the copying collector, +12% instructions on a GC-heavy program. Any count from 2 up
+# inlines it; 4 was the smallest stub (.kb/native-output.md, "Traps"). The shim keeps one:
+# four made precompiling 2% more instructions.
 [profile.release-runner]
 inherits = "release"
 panic = "abort"
+codegen-units = 4
 
 # Tests precompile in-process: an unoptimized Cranelift would dominate their run time.
 [profile.dev.package."*"]
