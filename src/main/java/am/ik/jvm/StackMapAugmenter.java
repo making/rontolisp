@@ -445,7 +445,7 @@ public final class StackMapAugmenter {
 			}
 		}
 		if (cp.size() > 0xFFFF) {
-			throw new IllegalStateException("StackMapAugmenter: constant pool overflow: " + cp.size());
+			throw new ConstantPoolOverflowException("StackMapAugmenter: constant pool overflow: " + cp.size());
 		}
 
 		// Reassemble.

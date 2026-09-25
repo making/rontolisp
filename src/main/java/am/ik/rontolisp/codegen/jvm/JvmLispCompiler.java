@@ -56,7 +56,9 @@ import am.ik.jvm.AccessFlag;
 import am.ik.jvm.ByteCodeWriter;
 import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
+import am.ik.jvm.ConstantPoolOverflowException;
 import am.ik.jvm.JvmClassShaker;
+import am.ik.jvm.JvmClassSplitter;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
@@ -175,6 +177,36 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * {@code file-position} and can open a character file stream.
 	 */
 	private boolean needsCharFileRuntime;
+
+	/**
+	 * The {@code $PartN} classes the last {@link #compile} split the program into, keyed
+	 * by their {@code path/Name$PartN.class}; empty for a program whose pool fits one
+	 * class file, which is every program but the largest.
+	 */
+	private Map<String, byte[]> partClassFiles = Map.of();
+
+	/**
+	 * The most constant-pool entries one emitted class may carry before the program is
+	 * split ({@link Builder#classPoolLimit}): the class-format limit, except in a test
+	 * that forces the split onto a small program.
+	 */
+	private final int classPoolLimit;
+
+	/**
+	 * The index the constant pool's first entry takes ({@link Builder#poolIndexOrigin}):
+	 * 1, except in a test that starts it past 65535 to prove no writer cuts an index.
+	 */
+	private final int poolIndexOrigin;
+
+	/**
+	 * The methods something outside the class's own bytecode finds by NAME, which
+	 * therefore stay in the class when it is split: {@code _apply} and {@code _strv},
+	 * which the embedded java:/objc:/ffi: bridges look up with {@code getDeclaredMethod},
+	 * and {@code _gpuMaterialize}/{@code _gpuWritten}, which the travelling float-array
+	 * handle resolves through {@code MethodHandles} ({@code .kb/jvm-export.md}).
+	 */
+	private static final Set<String> REFLECTIVELY_FOUND_METHODS = Set.of("_apply", "_strv", "_gpuMaterialize",
+			"_gpuWritten");
 
 	/** The array runtime helper group ({@link JvmArrayRuntimeBuilder}). */
 	private static final String GROUP_ARRAYS = "arrays";
@@ -323,6 +355,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		this.runtimeFeatures = builder.runtimeFeatures;
 		this.noMain = builder.noMain;
 		this.servletMode = builder.servlet;
+		this.classPoolLimit = builder.classPoolLimit;
+		this.poolIndexOrigin = builder.poolIndexOrigin;
 	}
 
 	/**
@@ -360,6 +394,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		private boolean noMain;
 
 		private boolean servlet;
+
+		private int classPoolLimit = Integer.getInteger("rontolisp.jvm.class-pool-limit", ConstantPool.MAX_INDEX);
+
+		private int poolIndexOrigin = Integer.getInteger("rontolisp.jvm.pool-index-origin", 1);
 
 		private Builder() {
 		}
@@ -538,6 +576,38 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		/**
+		 * Sets the most constant-pool entries one emitted class may carry before the
+		 * program is split into {@code $PartN} classes -- a test instrument: below the
+		 * class-format limit (the default, also read from
+		 * {@code -Drontolisp.jvm.class-pool-limit}) it forces the split onto a program
+		 * small enough to test, and the parts are then filled to this many entries.
+		 * @param classPoolLimit the entry limit per class, at most
+		 * {@link ConstantPool#MAX_INDEX}
+		 * @return this builder
+		 */
+		Builder classPoolLimit(int classPoolLimit) {
+			if (classPoolLimit < 1 || classPoolLimit > ConstantPool.MAX_INDEX) {
+				throw new IllegalArgumentException("a class pool limit is 1.." + ConstantPool.MAX_INDEX);
+			}
+			this.classPoolLimit = classPoolLimit;
+			return this;
+		}
+
+		/**
+		 * Sets the index the constant pool's first entry takes -- a test instrument (also
+		 * read from {@code -Drontolisp.jvm.pool-index-origin}): started past 65535, every
+		 * index is one no class file can carry, so every program takes the split path and
+		 * any writer that cuts an operand to 16 bits fails the compile
+		 * ({@link ConstantPool#unboundedFrom}).
+		 * @param poolIndexOrigin the first entry's index, 1 by default
+		 * @return this builder
+		 */
+		Builder poolIndexOrigin(int poolIndexOrigin) {
+			this.poolIndexOrigin = poolIndexOrigin;
+			return this;
+		}
+
+		/**
 		 * Builds the compiler.
 		 * @return a new JVM compiler
 		 * @throws NullPointerException when no class name was set
@@ -569,10 +639,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsHashTableRuntime
 				&& !this.needsComplexRuntime && !this.needsIoStreamRuntime && !this.needsCharFileRuntime
-				&& !this.needsStringInputRuntime) {
+				&& !this.needsStringInputRuntime && this.partClassFiles.isEmpty()) {
 			return Map.of();
 		}
-		Map<String, byte[]> files = new LinkedHashMap<>();
+		// A program too large for one class brings its $PartN classes: they are written
+		// beside the class exactly where the runtime classes are, in its own package.
+		Map<String, byte[]> files = new LinkedHashMap<>(this.partClassFiles);
 		if (this.needsIoStreamRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES));
 		}
@@ -812,7 +884,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Create the %mv-spill global (a top-level setq) when the program uses a
 		// multiple-value operator: the expansions read/write it across functions.
 		program = LispMacroExpander.injectMvSpillGlobal(program, this.runtimeFeatures);
-		ConstantPool cp = ConstantPool.unbounded();
+		ConstantPool cp = this.poolIndexOrigin == 1 ? ConstantPool.unbounded()
+				: ConstantPool.unboundedFrom(this.poolIndexOrigin);
 		ClassConstant thisClass = cp.addClass(cp.addUtf8(this.className));
 		// The internal-name package prefix of the generated class ("" for the default
 		// package, otherwise e.g. "com/example/"): every embedded acceleration/interop
@@ -4217,7 +4290,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		ClassDefinition classDefinition = definition.build();
-		byte[] classBytes = classDefinition.toBytes();
+		// A pool one class file can carry is written as it always was. One past that is
+		// SPLIT: the methods spread over the class and its $PartN classes, each with a
+		// pool
+		// of its own (JvmClassSplitter, .kb/jvm-method-size-limits.md).
+		byte[] classBytes = cp.size() <= this.classPoolLimit ? classDefinition.toBytes() : null;
 		// Check the runtime-helper gates against what the bodies turned out to reference,
 		// rather than trusting the source scans that predicted them (see compile(List)).
 		// An unresolved own-class call is either a mispredicted gate -- re-run with that
@@ -4227,7 +4304,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// including the injected built-in wrappers: their bodies no longer carry an arm
 		// for a value the absent runtime cannot construct, because each lowering behind
 		// them is gated on Ctx.usesArrays (.kb/adjustable-arrays.md).
-		List<JvmClassShaker.UnresolvedSelfMethod> unresolved = JvmClassShaker.unresolvedSelfMethods(classBytes);
+		List<JvmClassShaker.UnresolvedSelfMethod> unresolved = classBytes != null
+				? JvmClassShaker.unresolvedSelfMethods(classBytes)
+				: JvmClassSplitter.unresolvedSelfMethods(classDefinition);
 		Set<String> underpredicted = new LinkedHashSet<>();
 		List<JvmClassShaker.UnresolvedSelfMethod> unrecoverable = new ArrayList<>();
 		for (JvmClassShaker.UnresolvedSelfMethod missing : unresolved) {
@@ -4249,6 +4328,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 			throw new GateUnderpredicted(underpredicted);
 		}
+		java.util.Set<String> roots = null;
 		if (this.optimize.eliminatesDeadCode()) {
 			// Drop every method unreachable from main (and compact the constant pool).
 			// Dispatch methods contain real invokestatic calls to every registered
@@ -4262,7 +4342,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			// call-graph tree-shaker cannot see, so they are extra roots when
 			// tls-connect's
 			// :insecure trust-all manager is present.
-			java.util.Set<String> roots = new java.util.HashSet<>();
+			roots = new java.util.HashSet<>();
 			if (!this.noMain) {
 				roots.add("main");
 			}
@@ -4301,13 +4381,61 @@ public final class JvmLispCompiler implements LispCompiler {
 			if (usesThreads) {
 				roots.add("call");
 			}
+		}
+		if (classBytes == null) {
+			return this.writeSplit(classDefinition, roots, exportDecls);
+		}
+		this.partClassFiles = Map.of();
+		if (roots != null) {
 			classBytes = JvmClassShaker.shake(classBytes, roots);
 		}
 		// Insert the StackMapTable every class version above 50 requires (and the shaker
 		// could not have preserved), stamping the target version. Must stay after the
 		// shake: the shaker rejects Code sub-attributes and would not rewrite the
 		// constant-pool entries the frames reference.
-		return StackMapAugmenter.augment(classBytes, CLASS_MAJOR_VERSION);
+		try {
+			return StackMapAugmenter.augment(classBytes, CLASS_MAJOR_VERSION);
+		}
+		catch (ConstantPoolOverflowException fullPool) {
+			// The frames' own Class entries were the ones that did not fit: a pool within
+			// a few hundred entries of the limit. The split reserves room for them.
+			return this.writeSplit(classDefinition, roots, exportDecls);
+		}
+	}
+
+	/**
+	 * Writes a class whose constant pool outgrew one class file as the class itself plus
+	 * the {@code $PartN} classes the rest of its methods need, keeping in the class every
+	 * method something finds by NAME: {@code main}, the {@code rontolisp:jvm-export}
+	 * wrappers and the defuns behind them (a Java caller's API), and the helpers an
+	 * embedded bridge or the travelling float-array handle looks up reflectively
+	 * ({@link #REFLECTIVELY_FOUND_METHODS}). {@link JvmClassSplitter} keeps the rest of
+	 * what cannot move by itself. The parts join {@link #runtimeClassFiles()}, the list
+	 * every output shape already writes beside the class.
+	 * @param definition the class as data
+	 * @param roots the tree-shaker roots, or null under {@code --optimize=off}
+	 * @param exportDecls the program's export directives
+	 * @return the class's own bytes
+	 */
+	private byte[] writeSplit(ClassDefinition definition, java.util.@Nullable Set<String> roots,
+			List<JvmExportDirective> exportDecls) {
+		Set<String> pinnedNames = new HashSet<>(REFLECTIVELY_FOUND_METHODS);
+		pinnedNames.add("main");
+		for (JvmExportDirective decl : exportDecls) {
+			pinnedNames.add(decl.methodName());
+			pinnedNames.add(mangleMethodName(decl.name()));
+		}
+		ConstantPool cp = definition.cp();
+		int budget = this.classPoolLimit == ConstantPool.MAX_INDEX
+				? ConstantPool.MAX_INDEX - JvmClassSplitter.RESERVED_ENTRIES : this.classPoolLimit;
+		JvmClassSplitter.Split split = JvmClassSplitter.split(definition, roots,
+				method -> pinnedNames.contains(cp.utf8At(method.name().index())), budget);
+		Map<String, byte[]> parts = new LinkedHashMap<>();
+		for (Map.Entry<String, byte[]> part : split.parts().entrySet()) {
+			parts.put(part.getKey() + ".class", StackMapAugmenter.augment(part.getValue(), CLASS_MAJOR_VERSION));
+		}
+		this.partClassFiles = Map.copyOf(parts);
+		return StackMapAugmenter.augment(split.mainClass(), CLASS_MAJOR_VERSION);
 	}
 
 	/**

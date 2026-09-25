@@ -23,7 +23,7 @@ import org.jspecify.annotations.Nullable;
  * which entry a component names. A pool made by {@link #unbounded()} grows past
  * {@link #MAX_INDEX}: its indexes are then only meaningful to an emitter whose every
  * index sink keeps the full value, and the class it describes has to be split over
- * several class files ({@code JvmClassSplitter}). {@link #toByteArray()} serializes a
+ * several class files ({@link JvmClassSplitter}). {@link #toByteArray()} serializes a
  * pool that fits one class, and only such a pool.
  */
 public final class ConstantPool {
@@ -63,18 +63,43 @@ public final class ConstantPool {
 	}
 
 	private ConstantPool(boolean bounded) {
+		this(bounded, 1);
+	}
+
+	private ConstantPool(boolean bounded, int firstIndex) {
 		this.bounded = bounded;
-		this.slots.add(null);
+		while (this.slots.size() < firstIndex) {
+			this.slots.add(null);
+		}
+		this.size = firstIndex - 1;
 	}
 
 	/**
 	 * Creates a new empty constant pool that may grow past {@link #MAX_INDEX}: one whose
 	 * indexes the caller keeps at full width everywhere it writes them, and whose class
-	 * it hands to {@code JvmClassSplitter} when the pool outgrows one class file.
+	 * it hands to {@link JvmClassSplitter} when the pool outgrows one class file.
 	 * @return a new unbounded pool
 	 */
 	public static ConstantPool unbounded() {
 		return new ConstantPool(false);
+	}
+
+	/**
+	 * Creates an unbounded pool whose first entry takes {@code firstIndex} instead of 1
+	 * -- a test instrument, never an output shape. Started past 65535, every index the
+	 * emitter hands out is one no class file can carry, so a writer anywhere that cuts an
+	 * operand to 16 bits names an entry that does not exist and the split fails loudly,
+	 * instead of calling the wrong method in the one program large enough to reach it.
+	 * {@link #size()} counts the skipped indexes, so such a pool never passes for one
+	 * class's.
+	 * @param firstIndex the index of the first entry added
+	 * @return a new unbounded pool
+	 */
+	public static ConstantPool unboundedFrom(int firstIndex) {
+		if (firstIndex < 1) {
+			throw new IllegalArgumentException("a constant pool starts at index 1 or later: " + firstIndex);
+		}
+		return new ConstantPool(false, firstIndex);
 	}
 
 	/**
@@ -102,7 +127,7 @@ public final class ConstantPool {
 			// every emit site that writes one (`(short) index`), so the FIRST symptom of
 			// an overflowing pool is an instruction whose operand points at an unrelated
 			// entry -- diagnosed downstream as a bogus operand-stack model failure.
-			throw new IllegalStateException("constant pool overflow: this class needs more than " + MAX_INDEX
+			throw new ConstantPoolOverflowException("constant pool overflow: this class needs more than " + MAX_INDEX
 					+ " constant pool entries, the JVM class-format limit; split the program");
 		}
 		Constant constant = new Constant(++this.size, entry.type, entry.bytes());
@@ -269,7 +294,8 @@ public final class ConstantPool {
 	}
 
 	/**
-	 * Return the number of entries in this constant pool.
+	 * Return the number of entries in this constant pool -- the highest index taken,
+	 * which is what a class file's {@code constant_pool_count} has to cover.
 	 * @return the entry count
 	 */
 	public int size() {
@@ -358,7 +384,7 @@ public final class ConstantPool {
 	 */
 	public byte[] toByteArray() {
 		if (this.size > MAX_INDEX) {
-			throw new IllegalStateException("constant pool overflow: " + this.size
+			throw new ConstantPoolOverflowException("constant pool overflow: " + this.size
 					+ " entries exceed the JVM class-format limit of " + MAX_INDEX + "; split the program");
 		}
 		final ByteArrayOutputStream stream = new ByteArrayOutputStream();
