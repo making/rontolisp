@@ -3683,6 +3683,41 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aFlatCondPastTheMethodSizeBudgetSplitsItsClauseList() throws Exception {
+		// The generated %condition-report-str shape: one cond of many clauses, each too
+		// small to be worth a method, so no branch cut helps and the tail-spine splitter
+		// sees one item. The clause list itself is cut: the clauses past a prefix move
+		// into a (t ...) clause whose body is the rest of the cond, as its own method.
+		// The program pins that every clause still answers -- first, middle, last, the
+		// default, and multiple values out of a clause that ends up pieces deep.
+		int clauses = 600;
+		StringBuilder sb = new StringBuilder("(defun classify (x)\n  (cond");
+		for (int k = 0; k < clauses; k++) {
+			sb.append("\n    ((eql x ").append(k).append(") (list ").append(k).append(" (* x 2) \"c").append(k);
+			sb.append("\"))");
+		}
+		sb.append("\n    ((eql x -1) (values 'a 'b))\n    (t 'none)))\n");
+		sb.append("(print (classify 0))\n(print (classify 300))\n(print (classify 599))\n");
+		sb.append("(print (classify 1000))\n(print (multiple-value-list (classify -1)))\n");
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(sb.toString()));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		java.util.Map<String, Integer> sizes = new java.util.LinkedHashMap<>();
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			sizes.put(method.methodName().stringValue(),
+					method.findAttribute(java.lang.classfile.Attributes.code()).orElseThrow().codeLength());
+		}
+		assertThat(sizes.get("CLASSIFY")).as("the clause list was cut").isLessThan(8000);
+		assertThat(sizes.entrySet()
+			.stream()
+			.filter(e -> !e.getKey().equals("main") && !e.getKey().startsWith("_top$") && !e.getKey().equals("<clinit>")
+					&& e.getValue() > 8000)
+			.toList()).as("no piece of it crosses the limit either").isEmpty();
+		assertThat(compileAndRun(forms))
+			.isEqualTo("(0 0 \"c0\")\n(300 600 \"c300\")\n(599 1198 \"c599\")\nNONE\n(A B)");
+	}
+
+	@Test
 	void aFunctionBodyPastTheMethodSizeBudgetSplitsIntoTailContinuations() throws Exception {
 		// A defun body that would compile past HotSpot's 8000-bytecode HugeMethodLimit
 		// is split into _k$N tail continuations (.kb/hot-path-method-size.md). The

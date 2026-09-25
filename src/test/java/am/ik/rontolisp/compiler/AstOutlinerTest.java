@@ -38,37 +38,50 @@ class AstOutlinerTest {
 		return LispReader.readAllFromString("(defun f (x) " + body + ")");
 	}
 
-	/** {@code (cond ((eql x 0) (setq acc 0)) ...)}: clauses each too small to move. */
-	private static String flatCond(int clauses, String... bigArms) {
-		StringBuilder sb = new StringBuilder("(cond");
-		for (String arm : bigArms) {
-			sb.append(" ((eql x ").append(sb.length()).append(") ").append(arm).append(')');
-		}
-		for (int k = 0; k < clauses; k++) {
-			sb.append(" ((eql x ").append(1000 + k).append(") ").append(statement(k)).append(')');
+	/** A call no position of which is cut: its operator is not on the whitelist. */
+	private static String opaqueCall(int arguments) {
+		StringBuilder sb = new StringBuilder("(opaque");
+		for (int k = 0; k < arguments; k++) {
+			sb.append(' ').append(statement(k));
 		}
 		return sb.append(')').toString();
 	}
 
 	@Test
 	void aFunctionNoBudgetCanCutIsNeverAskedFor() {
-		// Every clause is under the smallest piece worth a method, so the first target
-		// cuts nothing -- and the compile that would have learned that is skipped.
-		AstOutliner.Result uncut = AstOutliner.outline(program(flatCond(300)), Map.of());
+		// No position the walker knows to be evaluated, so the first target cuts nothing
+		// -- and the compile that would have learned that is skipped.
+		AstOutliner.Result uncut = AstOutliner.outline(program(opaqueCall(300)), Map.of());
 		assertThat(uncut.nextBudget("F", 20000, null, FIRST_TARGET, FLOOR_TARGET)).isNull();
 	}
 
 	@Test
 	void aTighterTargetThatCutsTheSameFormsIsNotAskedFor() {
-		// Two arms big enough to move and 300 that are not: the first target moves the
-		// two, and every tighter one can move nothing else.
-		List<LispVal> program = program(flatCond(300, group(0), group(100)));
+		// Measured so large that every target's node budget is the pass's minimum: the
+		// first cut moves two of the four groups, and no tighter target can differ.
+		List<LispVal> program = program(
+				"(progn " + group(0) + " " + group(10) + " " + group(20) + " " + group(30) + ")");
 		AstOutliner.Result uncut = AstOutliner.outline(program, Map.of());
-		AstOutliner.Budget first = uncut.nextBudget("F", 20000, null, FIRST_TARGET, FLOOR_TARGET);
-		assertThat(first).isEqualTo(new AstOutliner.Budget(20000, FIRST_TARGET));
+		AstOutliner.Budget first = uncut.nextBudget("F", 100000, null, FIRST_TARGET, FLOOR_TARGET);
+		assertThat(first).isEqualTo(new AstOutliner.Budget(100000, FIRST_TARGET));
 		AstOutliner.Result cut = AstOutliner.outline(program, Map.of("F", first));
 		assertThat(cut.outlined()).containsExactly("F");
-		assertThat(cut.nextBudget("F", 19000, first, FIRST_TARGET, FLOOR_TARGET)).isNull();
+		assertThat(cut.nextBudget("F", 90000, first, FIRST_TARGET, FLOOR_TARGET)).isNull();
+	}
+
+	@Test
+	void aFlatCondIsCutIntoAChainOfClauseRuns() {
+		// Clauses each too small to move: the clause list is cut instead, and every
+		// piece but the last ends in the (t ...) clause that calls the next.
+		StringBuilder cond = new StringBuilder("(cond");
+		for (int k = 0; k < 100; k++) {
+			cond.append(" ((eql x ").append(k).append(") ").append(statement(k)).append(')');
+		}
+		List<LispVal> program = program(cond.append(')').toString());
+		AstOutliner.Result cut = AstOutliner.outline(program, Map.of("F", new AstOutliner.Budget(12000, FIRST_TARGET)));
+		assertThat(cut.outlined()).containsExactly("F");
+		String printed = cut.program().get(0).print();
+		assertThat(printed).contains("(T (LET ((|__outlined_").contains("((EQL X 0)").contains("((EQL X 99)");
 	}
 
 	@Test

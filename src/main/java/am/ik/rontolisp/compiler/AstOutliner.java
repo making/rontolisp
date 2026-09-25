@@ -13,6 +13,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import org.jspecify.annotations.Nullable;
 
@@ -381,7 +382,41 @@ public final class AstOutliner {
 				replacements.put(child, wrap(cut(child.form(), budget)));
 				kept = rest + WRAP_NODES;
 			}
-			return replacements.isEmpty() ? form : rebuild(parts, replacements);
+			LispVal rebuilt = replacements.isEmpty() ? form : rebuild(parts, replacements);
+			if (LispNames.COND.equals(head.name()) && nodes(rebuilt) > budget) {
+				return splitClauses(((LispCons) rebuilt).toList(), budget, rebuilt);
+			}
+			return rebuilt;
+		}
+
+		/**
+		 * {@return a {@code cond} still over {@code budget} once its big forms moved,
+		 * with its clause LIST cut} What is left is clauses each too small to move -- the
+		 * generated {@code %condition-report-str} is hundreds of them -- and no branch
+		 * cut helps. So the clauses past the longest prefix that fits move into a final
+		 * {@code (t ...)} clause whose body is the rest of the {@code cond}, as a piece
+		 * of its own, cut the same way in turn: {@code (cond c1 .. ck ck+1 .. cn)} is
+		 * {@code (cond c1 .. ck (t (cond ck+1 .. cn)))} exactly, the no-match nil
+		 * included. A clause is never split.
+		 */
+		private LispVal splitClauses(List<LispVal> parts, int budget, LispVal form) {
+			// The operator, the list's end, and the (t piece) clause the tail becomes.
+			int used = 2 + 3 + WRAP_NODES;
+			int keep = 1;
+			while (keep < parts.size() && (keep == 1 || used + nodes(parts.get(keep)) <= budget)) {
+				used += nodes(parts.get(keep));
+				keep++;
+			}
+			if (keep >= parts.size() - 1) {
+				// Nothing past the prefix, or a single clause: moving it buys nothing.
+				return form;
+			}
+			List<LispVal> tail = new ArrayList<>();
+			tail.add(parts.get(0));
+			tail.addAll(parts.subList(keep, parts.size()));
+			List<LispVal> out = new ArrayList<>(parts.subList(0, keep));
+			out.add(list(List.of(LispTrue.INSTANCE, wrap(cut(list(tail), budget)))));
+			return list(out);
 		}
 
 		/**

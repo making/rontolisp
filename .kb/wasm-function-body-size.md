@@ -38,7 +38,8 @@ on the smallest CI runner, updating these numbers in the same change.
 body over `FUNCTION_BODY_LIMIT_BYTES` (the 256 KiB bound) is reported, and the compile runs
 again with `AstOutliner` cutting it (`Budget(measured, 48 KiB)`, the target shrinking by 2/3
 down to a 16 KiB floor; a retry is asked for only at a target whose cut differs from the
-compiled one, `AstOutliner.Result.nextBudget`, as on the JVM). Same cut, same position (before `CrossLambdaExitLowering`) as the JVM
+compiled one, `AstOutliner.Result.nextBudget`, as on the JVM). Same cut -- a flat `cond`'s
+clause list included -- and same position (before `CrossLambdaExitLowering`) as the JVM
 (`.kb/hot-path-method-size.md`); warnings buffer per attempt (`CompileWarnings`). The 748 KB
 function becomes pieces under 107 KB (the next body in that program); a 1.2 MB balanced
 decision tree, pieces of ~26 KB. Cost: one extra compile for a program that has such a defun

@@ -68,11 +68,21 @@ chunker can adopt it.
   limit tries the next targets on the AST and asks for the first whose cut differs from the one
   it compiled; none, no retry. mito's `MitoE2eTest` probe (2026-09-25): five attempts -> two,
   `-o Probe.class` 48 s -> 33 s, output byte-identical. Of its 13 oversized defuns 9 cut to
-  nothing at any target (`pieces=0`), and `%condition-report-str` (17.9 KB) cuts to the SAME
-  two pieces at every target -- a flat `cond` whose clauses are each under `MIN_CUT_NODES` -- and
-  stays at 17.2 KB; the old loop spent attempts 3-5 re-learning that. **Only a DEFUN is
+  nothing at any target (`pieces=0`); `%condition-report-str` (17.9 KB) cut to the SAME two
+  pieces at every target and stayed at 17.2 KB, which the old loop spent attempts 3-5
+  re-learning -- until the flat-`cond` cut below. **Only a DEFUN is
   reported** (a lambda's `_lambda_<funcId>` cannot be pointed back at a form), and
   `lack/util:find-package-or-load` answers `pieces=0` -- no branch to cut, stays marginally over.
+- **A flat `cond` has its clause LIST cut** (`Cutter.splitClauses`): once the clauses big enough
+  to move (`MIN_CUT_NODES`) have moved, a `cond` still over budget becomes
+  `(cond c1 .. ck (t <piece: (cond ck+1 .. cn)>))` -- the longest prefix that fits, the rest a
+  piece cut the same way in turn; exact, the no-match nil included, and a clause is never split.
+  The generated dispatches (`%condition-report-str`, `%sbr-*`, `%cds-*`, `%slot-value-runtime`,
+  `%typep-compound-runtime`) are this shape. mito's probe (2026-09-25): `%condition-report-str`
+  17.9 KB -> 6.1 KB, `%sbr-30` 8.7 -> 6.3 KB, `%cds-0` 8.7 -> 5.8 KB; methods over 8000 bytes
+  23 -> 20, still two attempts, 33 s. The example corpus: 20 of 231 programs change their
+  `.class` (the clack/postgres/postmodern stacks, `jose-demo`), none their `.wasm`. Pin
+  `JvmLispCompilerTest#aFlatCondPastTheMethodSizeBudgetSplitsItsClauseList`.
 - Two pre-existing backend bugs this shape can hit: a captured `let` variable assigned inline in a
   sibling arm compiles to a raw store (WRONG ANSWER), and a method past 255 local slots emits a
   truncated index.
