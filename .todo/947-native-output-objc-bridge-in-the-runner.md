@@ -2,7 +2,7 @@
 
 Difficulty: High
 
-Depends on .todo/943 (and 944 for a signed macOS output). Today both WASM backends refuse a
+Depends on .todo/943 (a signed macOS output landed with 944: the module is embedded in the image). Today both WASM backends refuse a
 program that references `objc:` or a library built on it (`AppKitLibrary.firstObjcReference`,
 `CompileFrontend`); `.kb/objc.md` calls that refusal permanent because a wasm runtime offers no
 FFM. A `--native` output is different: its host is the Rust runner stub, which can call the
