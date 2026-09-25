@@ -205,6 +205,9 @@ DELETE FROM article WHERE (id = ?)
 - **インタプリタ** — 上記すべて。
 - **JVM クラス** — `rontolisp blog.lisp -o Blog.class && java Blog`。
   生成されたクラスは自己完結しています。
+  ただし mito を使うプログラムは 1 つのクラスファイルに持てる定数の数を超えるため、
+  `Blog.class` の隣に `Blog$Part1.class` も書き出されます。
+  この 2 つは一緒に置いてください（`-o blog.jar` なら両方が jar に入ります）。
 - **WASM コンポーネント** (`--component`) — 2 つのソケット権限が必要です:
 
   ```bash

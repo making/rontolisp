@@ -202,7 +202,9 @@ backend — the interpreter re-expands macros on every evaluation.
 
 - **Interpreter** — everything above.
 - **JVM class** — `rontolisp blog.lisp -o Blog.class && java Blog`. The
-  compiled class is self-contained.
+  compiled class is self-contained, but a mito program needs more constants than one
+  class file can hold, so `Blog$Part1.class` is written beside `Blog.class`: keep the
+  two together (`-o blog.jar` carries both).
 - **WASM component** (`--component`) — needs both socket permissions:
 
   ```bash

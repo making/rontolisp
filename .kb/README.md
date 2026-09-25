@@ -151,7 +151,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [jvm-complex.md](jvm-complex.md) -- the `RontoComplex` holder, the gated `_c*` group, and the `hasComplexOperand` steering
 - [jvm-typed-loops.md](jvm-typed-loops.md) -- typed numeric loops over packed float arrays
 - [jvm-bignum-literal-pool.md](jvm-bignum-literal-pool.md) -- one `BigInteger` instance per distinct literal in a `_bi$N` pool
-- [jvm-method-size-limits.md](jvm-method-size-limits.md) -- the 64 KB method code limit and the signed-16-bit branch offset
+- [jvm-method-size-limits.md](jvm-method-size-limits.md) -- the 64 KB method code limit, the signed-16-bit branch offset, and the split of a program past one class's 65534-entry constant pool into `$PartN` classes (`JvmClassSplitter`)
 - [jvm-osr-backedges.md](jvm-osr-backedges.md) -- no backward branch may target a bci with a non-empty operand stack
 - [jvm-aot-cache.md](jvm-aot-cache.md) -- the JDK 25 Leyden AOT cache, measured and deliberately not shipped
 - [stackmap-augmenter.md](stackmap-augmenter.md) -- class version 61 via `am.ik.jvm.StackMapAugmenter`

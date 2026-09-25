@@ -41,6 +41,12 @@ class directly: `--class-name` sets it, and it is REQUIRED for a `--no-main`
 library jar, whose class is the artifact's Java API rather than an entry point.
 It works for `.class` output too, where it replaces the name the path would give.
 
+One class file's constant pool holds at most 65534 entries, and a program that splices
+several large libraries can need more (a mito program does). Such a program comes out as
+its class plus `Hello$Part1.class`, `Hello$Part2.class`, ... written beside it in its
+package directory, and a jar carries them too. Run the class as before; the part files
+only have to stay next to it.
+
 A class can also be a **library** Java code calls directly:
 [`rontolisp:jvm-export`](../reference/functions/rontolisp-jvm-export.md)
 declares a typed, Java-callable static method for a `defun`, and `--no-main`

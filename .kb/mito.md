@@ -56,7 +56,9 @@ BYTE-IDENTICAL on all three in-scope backends, plus the Preview 1 compile-error 
 Every exercise sets `mito:*mito-migration-logger-stream*` to nil: `ensure-table-exists` /
 `migrate-table` log each statement to `*standard-output*` with its wall-clock time (twice --
 `with-sql-logging` and `execute-sql` each push a trace hook), which no expected output can
-pin. **The three JVM legs are red since
-2026-08-28**: the program no longer fits one class's constant pool
-(`.kb/jvm-method-size-limits.md`, `.todo/958`); interpreter and component legs are green.
+pin. The program needs more constant-pool entries than one class file indexes, so its JVM
+output is `Probe.class` plus `Probe$Part1.class` (`.kb/jvm-method-size-limits.md`, the
+split); the three JVM legs were red from 2026-08-28 until the split landed (2026-09-25).
+Each JVM leg spends ~250 s compiling, nearly all of it in `expandTopLevelDefinitions`'s
+runtime-subtypep ancestor table, not in codegen.
 Docs: `doc/{en,ja}/guides/mito.md`, the mito row in `guides/asdf-systems.md`.
