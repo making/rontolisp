@@ -1,25 +1,30 @@
-//! `memcpy`, `memmove` and `memset` for the x86_64 Linux stub, which links musl statically.
+//! `memcpy`, `memmove` and (x86_64) `memset` for the Linux stub, which links musl statically.
 //!
 //! musl's own x86_64 routines start every copy with `rep movsq`, whose start-up cost
 //! dominates the small copies the copying collector makes (one per surviving object, most
 //! under 64 bytes): with them the stub ran a GC-heavy program 16-18% slower than against
-//! glibc (`.kb/native-output.md`, Traps, "musl"). These follow glibc's shape instead:
+//! glibc (`.kb/native-output.md`, Traps, "musl"). On aarch64 musl's `memcpy` is fast but
+//! its `memmove` is C that tests for overlap before calling it, instructions on each of the
+//! GC's copies (up to 3% slower than glibc). These follow glibc's shape instead:
 //! up to 128 bytes, every load before any store, of overlapping 1/2/4/8/16-byte pieces
 //! from both ends, so one branchy path serves `memcpy` and `memmove` alike; above, a
 //! 64-byte loop in whichever direction the overlap needs, with the far end loaded before
-//! the loop; from 2 KiB, `rep movsb` / `rep stosb` when copying forwards is safe. SSE2
-//! only: the x86_64 baseline, so the stub runs on every x86_64 CPU.
+//! the loop; on x86_64 from 2 KiB, `rep movsb` / `rep stosb` when copying forwards is
+//! safe. SSE2 / Armv8.0 only: the baseline, so the stub runs on every CPU of its
+//! architecture. aarch64 keeps musl's `memset` (Arm's optimized-routines assembly).
 //!
 //! Defined as `rl_memmove` / `rl_memset`, so that the tests reach them on a glibc host
-//! too; only a musl build also exports them as `memcpy`, `memmove` and `memset`, which
-//! then keeps libc.a's members out of the static link. Module assembly, not Rust: LLVM
-//! may turn a Rust copy loop back into a call to `memcpy`.
+//! too; only a musl build also exports them under the C names, which then keeps libc.a's
+//! members out of the static link. Module assembly, not Rust: LLVM may turn a Rust copy
+//! loop back into a call to `memcpy`.
 
 use std::arch::global_asm;
 
 /// Copies of at least this many bytes use `rep movsb` / `rep stosb` (forwards only).
+#[cfg(target_arch = "x86_64")]
 pub const REP_THRESHOLD: usize = 2048;
 
+#[cfg(target_arch = "x86_64")]
 global_asm!(
     ".text",
     ".p2align 5",
@@ -248,8 +253,134 @@ global_asm!(
     rep = const REP_THRESHOLD,
 );
 
+#[cfg(target_arch = "aarch64")]
+global_asm!(
+    ".text",
+    ".p2align 6",
+    ".globl rl_memmove",
+    ".hidden rl_memmove",
+    ".type rl_memmove,%function",
+    // x0 = dst, x1 = src, x2 = n; returns dst (x0 is never written). x5 / x6 = src / dst end.
+    "rl_memmove:",
+    "    add x5, x1, x2",
+    "    add x6, x0, x2",
+    "    cmp x2, 16",
+    "    b.lo 10f",
+    "    cmp x2, 32",
+    "    b.hi 20f",
+    // 16..=32
+    "    ldr q0, [x1]",
+    "    ldr q1, [x5, -16]",
+    "    str q0, [x0]",
+    "    str q1, [x6, -16]",
+    "    ret",
+    // 0..16
+    "10:",
+    "    cmp x2, 8",
+    "    b.lo 11f",
+    "    ldr x3, [x1]",
+    "    ldr x4, [x5, -8]",
+    "    str x3, [x0]",
+    "    str x4, [x6, -8]",
+    "    ret",
+    "11:",
+    "    cmp x2, 4",
+    "    b.lo 12f",
+    "    ldr w3, [x1]",
+    "    ldr w4, [x5, -4]",
+    "    str w3, [x0]",
+    "    str w4, [x6, -4]",
+    "    ret",
+    "12:",
+    "    cbz x2, 13f",
+    "    ldrb w3, [x1]",
+    "    cmp x2, 2",
+    "    b.lo 14f",
+    "    ldrh w4, [x5, -2]",
+    "    strh w4, [x6, -2]",
+    "14:",
+    "    strb w3, [x0]",
+    "13:",
+    "    ret",
+    // 33..=64
+    "20:",
+    "    cmp x2, 64",
+    "    b.hi 30f",
+    "    ldp q0, q1, [x1]",
+    "    ldp q2, q3, [x5, -32]",
+    "    stp q0, q1, [x0]",
+    "    stp q2, q3, [x6, -32]",
+    "    ret",
+    // 65..=128
+    "30:",
+    "    cmp x2, 128",
+    "    b.hi 40f",
+    "    ldp q0, q1, [x1]",
+    "    ldp q2, q3, [x1, 32]",
+    "    ldp q4, q5, [x5, -64]",
+    "    ldp q6, q7, [x5, -32]",
+    "    stp q0, q1, [x0]",
+    "    stp q2, q3, [x0, 32]",
+    "    stp q4, q5, [x6, -64]",
+    "    stp q6, q7, [x6, -32]",
+    "    ret",
+    // > 128. Backwards when dst lies inside (src, src + n): (dst - src) mod 2^64 < n.
+    "40:",
+    "    sub x3, x0, x1",
+    "    cmp x3, x2",
+    "    b.lo 50f",
+    // Forwards: the last 64 source bytes first (a dst below src may overwrite them), then
+    // 64-byte blocks until the tail's destination, then the tail.
+    "    ldp q4, q5, [x5, -64]",
+    "    ldp q6, q7, [x5, -32]",
+    "    sub x7, x6, 64",
+    "    mov x3, x0",
+    "    mov x4, x1",
+    "41:",
+    "    ldp q0, q1, [x4]",
+    "    ldp q2, q3, [x4, 32]",
+    "    stp q0, q1, [x3]",
+    "    stp q2, q3, [x3, 32]",
+    "    add x4, x4, 64",
+    "    add x3, x3, 64",
+    "    cmp x3, x7",
+    "    b.lo 41b",
+    "    stp q4, q5, [x7]",
+    "    stp q6, q7, [x7, 32]",
+    "    ret",
+    // Backwards: the first 64 source bytes first, then 64-byte blocks from the end down to
+    // the first 64 destination bytes, then the head.
+    "50:",
+    "    ldp q4, q5, [x1]",
+    "    ldp q6, q7, [x1, 32]",
+    "    add x7, x0, 64",
+    "51:",
+    "    ldp q0, q1, [x5, -32]",
+    "    ldp q2, q3, [x5, -64]",
+    "    stp q0, q1, [x6, -32]",
+    "    stp q2, q3, [x6, -64]",
+    "    sub x5, x5, 64",
+    "    sub x6, x6, 64",
+    "    cmp x6, x7",
+    "    b.hi 51b",
+    "    stp q4, q5, [x0]",
+    "    stp q6, q7, [x0, 32]",
+    "    ret",
+    ".size rl_memmove, . - rl_memmove",
+);
+
 // The C names, for the musl link only: a glibc build (the tests) keeps glibc's.
-#[cfg(target_env = "musl")]
+#[cfg(all(target_env = "musl", target_arch = "aarch64"))]
+global_asm!(
+    ".globl memcpy",
+    ".type memcpy,%function",
+    ".set memcpy, rl_memmove",
+    ".globl memmove",
+    ".type memmove,%function",
+    ".set memmove, rl_memmove",
+);
+
+#[cfg(all(target_env = "musl", target_arch = "x86_64"))]
 global_asm!(
     ".globl memcpy",
     ".type memcpy,@function",
@@ -264,10 +395,12 @@ global_asm!(
 
 #[cfg(test)]
 mod tests {
-    use super::REP_THRESHOLD;
+    /// x86_64's `rep` threshold; aarch64 has none, but its lengths are covered alike.
+    const REP_THRESHOLD: usize = 2048;
 
     unsafe extern "C" {
         fn rl_memmove(dst: *mut u8, src: *const u8, n: usize) -> *mut u8;
+        #[cfg(target_arch = "x86_64")]
         fn rl_memset(dst: *mut u8, c: i32, n: usize) -> *mut u8;
     }
 
@@ -329,6 +462,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_arch = "x86_64")]
     #[test]
     fn sets_every_length_and_alignment() {
         for n in lengths() {

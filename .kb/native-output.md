@@ -33,8 +33,8 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   `wasmtime-wasi` `p1`; profile `release-runner` (`panic = abort`). On Linux it links musl
   STATICALLY (target `<arch>-unknown-linux-musl`, which `build.sh` adds through rustup when
   missing, `-C relocation-model=static`; the explicit `--target` keeps the flag off build
-  scripts; binary at `target/<triple>/release-runner/rlrun`), and on x86_64 brings its own
-  `memcpy`/`memmove`/`memset` (`runner/src/memfns.rs`; Traps, "musl"): an output has no
+  scripts; binary at `target/<triple>/release-runner/rlrun`), and brings its own
+  `memcpy`/`memmove` (and on x86_64 `memset`; `runner/src/memfns.rs`; Traps, "musl"): an output has no
   glibc floor (checked 2026-09-24 with static glibc and 2026-09-25 with musl in
   `alpine:3.20`, `centos:7` = glibc 2.17 and `busybox`, where the dynamic stub failed on
   `GLIBC_2.34` / `libgcc_s.so.1`). The module is still precompiled for the `-gnu` triple:
@@ -164,7 +164,7 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
 - **An explicit target turns host detection off.** `Config::target` set (even to the host's
   triple) makes Cranelift start from no ISA flags; unset, it infers the host's. `host` is the
   only CPU level that leaves it unset, so it is refused for another platform.
-- **musl: small, but not with its own x86_64 `memcpy`.** Static glibc cost 0.83 MB
+- **musl: small, but not with its own `memcpy`/`memmove`.** Static glibc cost 0.83 MB
   (x86_64; 0.60 MB aarch64) over musl, and no linker flag wins it back: of the x86_64 stub's
   +700 KB `.text` / +208 KB `.rodata` over the dynamic one, 678 KB / 89 KB are whole `libc.a`
   members glibc's own static startup, stdio, locale, `dlopen` (NSS, gconv) and IFUNC
@@ -182,13 +182,22 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   `libc.a`'s members out of the link. Measured 2026-09-25 against the static-glibc stub, five
   interleaved runs: `gc` 10.96-11.25 G cycles against 11.25-11.38 (-2.5%), 3.16-3.38 s
   against 3.27-3.52 s; `hash` -1.2%; `bignum`, `clos`, `fib`, `list`, `mandelbrot`,
-  `matmul`, `sieve`, `sort`, `string` within 0.5%; hello 0.01 s / 18 MB RSS. aarch64 keeps
-  musl's routines: its `memcpy`/`memset` are Arm's optimized-routines assembly (the lineage
-  of glibc's generic aarch64 ones) and `memmove` hands non-overlapping copies to that
-  `memcpy`. aarch64 speed is NOT measured (`.todo/961`) -- no aarch64 hardware here; only the stub tests
-  under `qemu-aarch64`. The routines' tests (`memfns::tests`, in `build.sh --test`) cover
-  every length to 300 and around the thresholds, every alignment and every overlap
-  distance to 70 either way; a load moved after a store, or a backwards move sent forwards,
+  `matmul`, `sieve`, `sort`, `string` within 0.5%; hello 0.01 s / 18 MB RSS. On aarch64
+  musl's `memcpy`/`memset` are Arm's optimized-routines assembly, but its `memmove` is C
+  that tests for overlap and then calls `memcpy`: `gc.lisp` makes 62 M `memmove` calls,
+  +396 M user instructions (+1.4%) over static glibc's `__memmove_sve`. Measured
+  2026-09-25 on hardware (NVIDIA GB10, Cortex-X925 + Cortex-A725; min user cycles of five
+  interleaved runs pinned to one core, each core type's own PMU): musl `gc` +1.2% on the
+  X925, +3.3% on the A725 (6.20-6.23 G against 6.01-6.02 G), `hash` +1.6% / -0.3%, the
+  rest within 0.5%. So aarch64 defines `memcpy`/`memmove` too (the same shape in
+  `ldp`/`stp` of q registers, no `rep` tier; Armv8.0 only) and keeps musl's `memset`:
+  `gc` 5.77-5.86 G cycles against glibc's 6.01-6.02 (-4.0%) on the A725 and +1.2% on the
+  X925 (4.615-4.641 against 4.560-4.683: musl's cycles at 2.9% fewer instructions), `hash`
+  -2.9% / -0.4%, the other nine within 0.5% except `mandelbrot` +0.9% on the A725 (it calls
+  neither routine: noise). Stub size unchanged (1,971,136 B; static glibc 2,501,768 B,
+  +0.53 MB). The routines' tests (`memfns::tests`, in `build.sh --test`, native on either
+  architecture) cover every length to 300 and around the thresholds, every alignment and
+  every overlap distance to 70 either way; a load moved after a store, or a backwards move sent forwards,
   fails them.
 - **The stub is not built as one codegen unit.** Under `codegen-units = 1` (what `release`
   keeps for the shim) LLVM leaves wasmtime's `GcHeap::index::<VMCopyingHeader>` out of line
