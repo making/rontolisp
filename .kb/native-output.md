@@ -185,7 +185,7 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   `matmul`, `sieve`, `sort`, `string` within 0.5%; hello 0.01 s / 18 MB RSS. aarch64 keeps
   musl's routines: its `memcpy`/`memset` are Arm's optimized-routines assembly (the lineage
   of glibc's generic aarch64 ones) and `memmove` hands non-overlapping copies to that
-  `memcpy`. aarch64 speed is NOT measured -- no aarch64 hardware here; only the stub tests
+  `memcpy`. aarch64 speed is NOT measured (`.todo/961`) -- no aarch64 hardware here; only the stub tests
   under `qemu-aarch64`. The routines' tests (`memfns::tests`, in `build.sh --test`) cover
   every length to 300 and around the thresholds, every alignment and every overlap
   distance to 70 either way; a load moved after a store, or a backwards move sent forwards,
