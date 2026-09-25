@@ -57,7 +57,16 @@ fn run_executable(dir: &Path, module: &[u8]) -> Output {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = spawn_fresh_executable(&mut command);
-    child.stdin.take().unwrap().write_all(b"from stdin\n").unwrap();
+    // The child may already have exited without reading stdin (a refused module
+    // exits 1 at once), closing the pipe before this write: Rust ignores SIGPIPE,
+    // so that lands here as BrokenPipe rather than a signal. Tolerate it -- the
+    // exit-status and stderr assertions below are the real checks, and an
+    // unexpectedly early exit still fails those.
+    match child.stdin.take().unwrap().write_all(b"from stdin\n") {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+        Err(e) => panic!("stdin write: {e}"),
+    }
     child.wait_with_output().unwrap()
 }
 
@@ -229,6 +238,39 @@ fn qemu(arch: &str) -> Option<PathBuf> {
     found
 }
 
+/// Whether `qemu` can actually run an executable of its architecture HERE. qemu-x86_64
+/// 8.2.2 crashes with an internal SIGSEGV on an aarch64 host as soon as the guest opens
+/// /proc/self/maps -- Rust's startup guard setup does (`std/.../stack_overflow.rs`), and
+/// even a C program that only opens it dies the same way -- while qemu-aarch64 on either
+/// host and qemu-x86_64 on an x86_64 host are fine. Probe with the bare stub, which must
+/// exit 1 naming the missing module; anything else (a qemu crash lands here as a signal,
+/// not an exit code) skips the emulated runs for that architecture.
+/// `RLNATIVE_REQUIRE_QEMU` still requires qemu to be INSTALLED -- this only excuses a
+/// qemu that cannot run.
+fn qemu_runs_stub(qemu: &Path, stub: &Path) -> bool {
+    let out = Command::new(qemu)
+        .arg(stub)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
+    match out {
+        Ok(out)
+            if out.status.code() == Some(1) && String::from_utf8_lossy(&out.stderr).contains("no module appended") =>
+        {
+            true
+        }
+        _ => {
+            eprintln!(
+                "{} cannot run {} here: emulated runs for it are skipped",
+                qemu.display(),
+                stub.display()
+            );
+            false
+        }
+    }
+}
+
 /// The oldest CPU qemu emulates that is still a CPU of the platform: SSE2 and nothing
 /// newer (no SSE3) for x86_64, Armv8.0 (no LSE) for aarch64.
 fn oldest_cpu(arch: &str) -> &'static str {
@@ -264,6 +306,9 @@ fn baseline_output_runs_on_the_oldest_cpu_of_its_platform_and_a_host_output_is_r
     let host = rlprecomp::host_platform().unwrap();
     let arch = std::env::consts::ARCH;
     let Some(qemu) = qemu(arch) else { return };
+    if !qemu_runs_stub(&qemu, &stub()) {
+        return;
+    }
     let wasm = std::fs::read(fixtures().join("fib.wasm")).unwrap();
     let expected = std::fs::read_to_string(fixtures().join("fib.out")).unwrap();
 
@@ -355,6 +400,9 @@ fn cross_target_module_names_the_requested_triple_and_runs_there() {
             continue;
         };
         let Some(qemu) = qemu(arch) else { continue };
+        if !qemu_runs_stub(&qemu, &stub) {
+            continue;
+        }
         let out = run_under_qemu(
             &qemu,
             oldest_cpu(arch),

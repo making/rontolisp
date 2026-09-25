@@ -132,11 +132,13 @@ class NativeOutputE2eTest {
 		Files.writeString(src, source);
 		compileNative(src, dir.resolve("baseline"));
 		Run baseline = exec(dir, List.of(qemu.toString(), "-cpu", oldestCpu(arch), "./baseline"));
+		abortedWhenQemuCannotRun(qemu, arch, baseline);
 		assertThat(baseline.exit()).as("stderr: %s", baseline.stderr()).isZero();
 		assertThat(baseline.stdout()).isEqualTo("7\n3\n");
 
 		compileNative(src, dir.resolve("host"), "--native-cpu=host");
 		Run host = exec(dir, List.of(qemu.toString(), "-cpu", oldestCpu(arch), "./host"));
+		abortedWhenQemuCannotRun(qemu, arch, host);
 		assertThat(host.exit()).as("stdout: %s", host.stdout()).isEqualTo(1);
 		assertThat(host.stderr()).contains("is enabled, but not available on the host");
 	}
@@ -167,6 +169,7 @@ class NativeOutputE2eTest {
 		// e_machine of the stub's ELF header: EM_X86_64 or EM_AARCH64.
 		assertThat((exe[18] & 0xff) | (exe[19] & 0xff) << 8).isEqualTo("x86_64".equals(other) ? 62 : 183);
 		Run run = exec(dir, List.of(qemu.toString(), "-cpu", oldestCpu(other), "./prog", "a b"));
+		abortedWhenQemuCannotRun(qemu, other, run);
 		assertThat(run.exit()).as("stderr: %s", run.stderr()).isZero();
 		assertThat(run.stdout()).isEqualTo("(\"a b\")\n7\n");
 	}
@@ -196,6 +199,19 @@ class NativeOutputE2eTest {
 	/** SSE2 and nothing newer; Armv8.0 without LSE. */
 	private static String oldestCpu(String arch) {
 		return "x86_64".equals(arch) ? "Opteron_G1" : "cortex-a53";
+	}
+
+	/**
+	 * A qemu that dies running the guest cannot run any output: qemu-x86_64 8.2.2 crashes
+	 * with an internal SIGSEGV on an aarch64 host as soon as the guest opens
+	 * {@code /proc/self/maps} (.kb/native-output.md). Excuse the emulated run rather than
+	 * failing it; the ELF-shape assertion above already ran.
+	 */
+	private static void abortedWhenQemuCannotRun(Path qemu, String arch, Run run) {
+		if (run.stderr().contains("QEMU internal")) {
+			abort(qemu + " cannot run " + arch + " executables here (" + run.stderr().strip()
+					+ "): emulated run skipped");
+		}
 	}
 
 	private Run wasmtime(String source, String... args) throws Exception {

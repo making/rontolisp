@@ -65,13 +65,15 @@ build_stub() {
       cross=("CARGO_TARGET_${var}_LINKER=$cc" "CC_${triple//-/_}=$cc")
     fi
     # --target keeps the static flag off the build scripts and proc macros.
-    # relocation-model=static keeps the stub a non-PIE static executable on every
-    # architecture: without it the x86_64 stub links as static-pie, which
-    # qemu-x86_64 on an aarch64 host cannot run -- QEMU itself dies with an
-    # internal SIGSEGV (MAPERR addr=0x20) before the guest starts (CI runs
-    # 36018431878, 36081109453: cross_target_module... linux-x86_64). The
-    # aarch64 stub is already non-PIE static under these flags, and runs under
-    # qemu-aarch64 on either host, so this makes both Linux stubs the same shape.
+    # relocation-model=static keeps both Linux stubs the same non-PIE static shape:
+    # without it the x86_64 stub links as static-pie while the aarch64 one is already
+    # non-PIE static. It does NOT make qemu-x86_64 on an aarch64 host work: that
+    # QEMU (8.2.2) dies with an internal SIGSEGV (MAPERR addr=0x20) as soon as the
+    # guest opens /proc/self/maps -- Rust's startup guard setup does, and even a C
+    # program that only opens it dies the same way (CI run 36086331612,
+    # cross_target_module... linux-x86_64, reproduced 2026-09-25). The emulated
+    # runs for an architecture whose qemu cannot run are skipped by a probe in
+    # precomp/tests/stub.rs, not by the link shape.
     if ! env "${cross[@]}" "CARGO_TARGET_${var}_RUSTFLAGS=-C target-feature=+crt-static -C relocation-model=static" \
       cargo build --locked --profile release-runner -p rlrun --target "$triple" >&2; then
       if $static_required; then

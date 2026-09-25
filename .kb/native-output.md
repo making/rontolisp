@@ -30,12 +30,18 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   at `target/<triple>/release-runner/rlrun`): an output has no glibc floor and runs on musl
   hosts too (checked 2026-09-24 in `alpine:3.20`, `centos:7` = glibc 2.17 and `busybox`,
   where the dynamic stub failed on `GLIBC_2.34` / `libgcc_s.so.1`). The relocation model
-  keeps the stub a non-PIE static executable on every architecture: without it the x86_64
-  stub linked as static-pie, which `qemu-x86_64` on an aarch64 host cannot run (QEMU itself
-  dies with an internal SIGSEGV, MAPERR addr=0x20, before the guest starts -- CI runs
-  36018431878 and 36081109453, `cross_target_module_names_the_requested_triple_and_runs_there`
-  for `linux-x86_64`, 2026-09-24/25). The aarch64 stub was already non-PIE static, and runs
-  under `qemu-aarch64` on either host. Reads its trailer from
+  keeps both Linux stubs the same non-PIE static shape: without it the x86_64 stub linked
+  as static-pie while the aarch64 one was already non-PIE static. It does NOT fix
+  `qemu-x86_64` on an aarch64 host (measured 2026-09-25: a non-PIE EXEC stub crashes
+  identically, and so does a C program that only opens `/proc/self/maps`): that QEMU
+  (8.2.2) dies with an internal SIGSEGV, MAPERR addr=0x20, as soon as the guest opens
+  `/proc/self/maps` -- Rust's startup guard setup
+  (`std/.../stack_overflow.rs::install_main_guard_linux`) does on every glibc binary --
+  while `qemu-aarch64` on either host and `qemu-x86_64` on an x86_64 host emulate the
+  same open fine (CI run 36086331612,
+  `cross_target_module_names_the_requested_triple_and_runs_there` for `linux-x86_64`).
+  The emulated runs for an architecture whose qemu cannot run the bare target stub are
+  skipped by a probe in `precomp/tests/stub.rs`, never by the link shape. Reads its trailer from
   `/proc/self/exe` (Linux) or `current_exe()`, runs `_start` with inherited stdio, argv and
   environment; preopens the current directory as fd 3 (what a relative path resolves against,
   `.kb/read-load-streams.md`) under its ABSOLUTE name (`current_dir()`, `.` when unknown or
@@ -182,7 +188,13 @@ Tests: `precomp/tests/stub.rs` runs a baseline output under `qemu-<arch> -cpu` O
 (SSE2, no SSE3) / cortex-a53 (Armv8.0) and checks a `host` one is refused there; checks
 every platform's module is its architecture's ELF whose `.wasmtime.engine` names the
 triple, and runs the other Linux architecture's under qemu when `build.sh --stub` left its
-stub in `target/resources` (or `$RLNATIVE_STUBS`). `NativeOutputE2eTest` does both through
+stub in `target/resources` (or `$RLNATIVE_STUBS`). Each emulated run is guarded by a probe:
+the bare target stub must exit 1 naming the missing module under that qemu here, else the
+runs for that architecture are skipped -- `RLNATIVE_REQUIRE_QEMU` still requires qemu to
+be installed, it only excuses a qemu that cannot run (the 8.2.2 `qemu-x86_64` maps bug
+above skips the cross-x86_64 run on aarch64 hosts; the ELF-shape assertions still run
+everywhere, and every stub is runtime-tested natively on its own arch by the fixture
+tests). `NativeOutputE2eTest` does both through
 the CLI; `NativeToolchainTest` precompiles for every platform through the shim.
 
 ## Numbers
