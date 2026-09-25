@@ -106,11 +106,13 @@ candidate SPECIALS are static -- that asymmetry is the design
 (`LispMacroExpander.expandProgvForCompile`, shared by both compilers; the interpreter keeps
 native `evalProgv`).
 
-- Lowers to a loop over the runtime symbol list dispatching each name through an `equal` chain
-  over the program's special set; a matching arm is `(%progv-dyn-bind NAME value)`
+- Lowers to a loop over the runtime symbol list dispatching each name through an `equal`
+  chain over the program's special set; a matching arm is `(%progv-dyn-bind NAME value)`
   (`Jvm/WasmProgvCompiler`, `WasmDynVars.emitProgvBind` under `--reentrant`). Previous binding
   state flows as a VALUE consed onto a save list -- bind and restore sit in different loop
-  iterations, so a save slot cannot work.
+  iterations, so a save slot cannot work. The chain's DEPTH is the backend's business:
+  the wasm backend compiles else-chains iteratively (below), so hundreds of specials
+  cost no compile stack.
 - `collectDynamicallyBound` returns EVERY special of a progv-using program. The restore loop is
   the cleanup form of an `unwind-protect`, so `progv` FORCES EH MODE on WASM (`usesEhForm`).
 - A name in NO arm is bound in the eval runtime's global env mirror (`_genv`/`GLOBAL_ENV`) via
@@ -123,6 +125,20 @@ native `evalProgv`).
   ...)` see values its decoder `setq`s in the enclosing extent. Programs without progv keep the
   raw emission byte-identically. `#'symbol-value` has a REFERENCE-GATED
   `BuiltinFunctionWrappers` entry.
+- The name dispatch is a chain of one `if` per special, and so is the `progv`
+  bind/unbind lowering above -- a 315-special program nested 315 `if`s. That is fine
+  for the EMISSION (linear, small constants) but the wasm backend used to compile an
+  else-chain with one Java frame per level, so it overflowed a 1 MiB compile stack
+  cold on the ci-spec corpus (2026-09-25, `WasmTreeShakerCorpusTest » StackOverflow`
+  on CI while every local box stayed green -- the same JIT-dependent margin
+  `interpreter-stack.md` records for the interpreter). Else-chains now compile
+  iteratively (`WasmIfCompiler.compile` descends the else spine in a loop and closes
+  the deferred then-arms on the way back out), so depth costs no Java stack: the
+  corpus compiles cold at `-Xss384k` on fresh JVMs, and the emission is byte-identical
+  (the corpus compiles to the same bytes at all three optimize levels as before).
+  Pinned by `WasmLispCompilerTest.aDeepElseChainCompilesOnAMegabyteStack` (a thousand
+  specials through the real dispatch on a 1 MiB thread; fails with `StackOverflow`
+  without the loop).
 - The literal-`boundp` fold refuses progv programs (`CompileTimeBoundp.fold` gate).
 - Deliberate divergences: a non-symbol in the symbols list is not detected, and a closure that
   CAPTURED a special reads its capture even under `symbol-value`.

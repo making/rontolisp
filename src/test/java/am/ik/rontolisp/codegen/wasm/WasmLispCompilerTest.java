@@ -3,6 +3,9 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.Arrays;
 import java.util.List;
 
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.WitExportDirective;
@@ -1652,6 +1655,73 @@ class WasmLispCompilerTest {
 		assertThat(occurrences(module, "MIRRORED-GLOBAL")).isEqualTo(1);
 		assertThat(occurrences(module, "PROBE-LEXICAL")).isZero();
 		assertThat(occurrences(module, "PROBE-COUNTER")).isZero();
+	}
+
+	@Test
+	void aDeepElseChainCompilesOnAMegabyteStack() throws Exception {
+		// A 315-level chain (the progv `symbol-value` dispatch over the ci-spec
+		// special set) overflowed a 1 MiB compile stack cold (2026-09-25): an
+		// else-chain compiles iteratively, so depth costs no Java stack whatever
+		// builds it. Built programmatically: the reader itself recurses per
+		// nesting level, and a deep chain as source would overflow it instead.
+		byte[] module = compileOnOneMebibyte(progvThousandSpecials());
+		assertThat(module.length).isGreaterThan(0);
+	}
+
+	/**
+	 * A thousand specials, a computed `symbol-value` and the `progv` that arms its
+	 * dynamic-first dispatch: shallow source that expands to a thousand-level else-chain
+	 * at codegen time, the ci-spec failure's shape.
+	 */
+	private static List<LispVal> progvThousandSpecials() {
+		List<LispVal> program = new java.util.ArrayList<>();
+		for (int i = 0; i < 1000; i++) {
+			program.add(cons(sym("DEFVAR"),
+					cons(sym("*PS-" + i + "*"), cons(new am.ik.rontolisp.LispInteger(i), LispNil.INSTANCE))));
+		}
+		// (defun probe (s) (symbol-value s))
+		program.add(cons(sym("DEFUN"), cons(sym("PROBE"), cons(cons(sym("S"), LispNil.INSTANCE),
+				cons(cons(sym("SYMBOL-VALUE"), cons(sym("S"), LispNil.INSTANCE)), LispNil.INSTANCE)))));
+		// (progv '(*ps-0*) '(1) (symbol-value '*ps-0*)): arms usesProgv.
+		program.add(cons(sym("PROGV"), cons(quoted(cons(sym("*PS-0*"), LispNil.INSTANCE)), cons(
+				quoted(cons(new am.ik.rontolisp.LispInteger(1), LispNil.INSTANCE)),
+				cons(cons(sym("SYMBOL-VALUE"), cons(quoted(sym("*PS-0*")), LispNil.INSTANCE)), LispNil.INSTANCE)))));
+		return program;
+	}
+
+	private static LispSymbol sym(String name) {
+		return new LispSymbol(name);
+	}
+
+	private static LispCons cons(LispVal car, LispVal cdr) {
+		return new LispCons(car, cdr);
+	}
+
+	private static LispVal quoted(LispVal datum) {
+		return cons(sym("QUOTE"), cons(datum, LispNil.INSTANCE));
+	}
+
+	/** Compiles on a 1 MiB thread: a chain that recursed per level overflows it. */
+	private static byte[] compileOnOneMebibyte(List<LispVal> program) throws Exception {
+		java.util.concurrent.atomic.AtomicReference<byte[]> module = new java.util.concurrent.atomic.AtomicReference<>();
+		java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+		Thread thread = new Thread(null, () -> {
+			try {
+				module.set(WasmLispCompiler.builder().optimize(OptimizeLevel.NONE).build().compile(program));
+			}
+			catch (Throwable throwable) {
+				failure.set(throwable);
+			}
+		}, "deep-else-chain-compile", 1 << 20);
+		thread.start();
+		thread.join();
+		if (failure.get() instanceof Error error) {
+			throw error;
+		}
+		if (failure.get() instanceof Exception exception) {
+			throw exception;
+		}
+		return java.util.Objects.requireNonNull(module.get());
 	}
 
 }

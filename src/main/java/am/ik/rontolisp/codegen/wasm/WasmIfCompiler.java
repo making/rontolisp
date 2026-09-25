@@ -3,7 +3,9 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
@@ -15,6 +17,34 @@ import am.ik.wasm.Type;
 final class WasmIfCompiler {
 
 	private WasmIfCompiler() {
+	}
+
+	/**
+	 * Whether a form continues the else-chain: an `if`-headed proper list, the only shape
+	 * the loop above descends into. Anything else -- a value, a call, an `if`-headed but
+	 * improper tail -- compiles through the ordinary recursive path, exactly as before.
+	 * @param form the candidate else/tail form
+	 * @return whether the loop descends into it
+	 */
+	private static boolean isChainableIf(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.IF.equals(head.name()) && cons.isProperList();
+	}
+
+	/**
+	 * What {@link WasmExprCompiler#compileExpr} consumes on entry -- the tail marker
+	 * (handed on explicitly, so reset here) and the async spine markers -- mirrored for a
+	 * chain level the loop descends into directly instead of through {@code compileExpr}.
+	 * Without this a call nested in a deeper test would compile as a tail call the
+	 * recursion never emitted.
+	 * @param ctx the function context
+	 */
+	private static void consumeExprMarkers(WasmLispCompiler.Ctx ctx) {
+		ctx.tailPosition = false;
+		if (ctx.asyncResume != null) {
+			ctx.asyncSpineCurrent = ctx.asyncSpine;
+			ctx.asyncSpine = false;
+		}
 	}
 
 	/**
@@ -77,49 +107,96 @@ final class WasmIfCompiler {
 	 * are in tail position ({@code Ctx.tailPosition}) -- the test never is.
 	 */
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
-		List<LispVal> parts = cons.toList();
-		if (ctx.asyncResume != null && WasmAwaitAnalysis.countAwaits(cons) > 0) {
-			compileAsync(parts, ctx);
-			return;
-		}
-		LispVal test = parts.get(1);
-		if (test instanceof LispTrue || test instanceof LispNil) {
-			// A constant test selects its arm at compile time: (cond ... (t x)) and the
-			// (and ...) chain end both spell one, and the dead arm would otherwise be
-			// emitted behind a _t_sym call that is tested and never false.
-			LispVal live = test instanceof LispTrue ? parts.get(2) : parts.size() > 3 ? parts.get(3) : null;
-			if (live == null) {
+		// An else-chain (`cond`/`case`/type-dispatch lowering, one `if` per clause)
+		// compiles iteratively: one Java frame per level instead of six, so a chain
+		// hundreds deep no longer overflows the compile stack. A 315-level chain (the
+		// progv `symbol-value` dispatch over the ci-spec special set) overflowed a 1
+		// MiB stack cold (2026-09-25); the loop below holds it on any stack. The
+		// emission is exactly the recursion's -- tests and IF opens stream out in
+		// order, the innermost value lands, then each deferred then-arm closes its
+		// level with ELSE/arm/END -- so the output is byte-identical at every depth.
+		// Only the chain links collapse: a level with awaits still routes through the
+		// state machine, and anything that is not a well-formed `if` tail compiles
+		// through the ordinary recursive path, exactly as before.
+		java.util.ArrayDeque<LispVal> thens = new java.util.ArrayDeque<>();
+		LispVal form = cons;
+		while (true) {
+			if (!(form instanceof LispCons ifCons)) {
+				// A non-`if` tail (a variable, a literal): the innermost value,
+				// exactly as the recursion compiled it.
+				ctx.tailPosition = tail;
+				WasmExprCompiler.compileExpr(form, ctx);
+				break;
+			}
+			List<LispVal> parts = ifCons.toList();
+			if (ctx.asyncResume != null && WasmAwaitAnalysis.countAwaits(ifCons) > 0) {
+				compileAsync(parts, ctx);
+				break;
+			}
+			LispVal test = parts.get(1);
+			if (test instanceof LispTrue || test instanceof LispNil) {
+				// A constant test selects its arm at compile time: (cond ... (t x))
+				// and the (and ...) chain end both spell one, and the dead arm would
+				// otherwise be emitted behind a _t_sym call that is tested and never
+				// false.
+				LispVal live = test instanceof LispTrue ? parts.get(2) : parts.size() > 3 ? parts.get(3) : null;
+				if (live == null) {
+					ctx.writer.write(Instruction.REF_NULL);
+					ctx.writer.writeHeapType(Type.EQ.code());
+					break;
+				}
+				ctx.tailPosition = tail;
+				if (isChainableIf(live)) {
+					// The recursion reached the live arm through `compileExpr`,
+					// which hands the tail marker on explicitly and resets the
+					// context fields: mirror that consume here, then descend.
+					consumeExprMarkers(ctx);
+					form = live;
+					continue;
+				}
+				// Not another `if`: the value, exactly as the recursion compiled
+				// it (`tailPosition` above is what `compileExpr` consumes).
+				WasmExprCompiler.compileExpr(live, ctx);
+				break;
+			}
+			// The test as a raw i32 (a predicate's own ref.test / ref.eq, a
+			// comparison's mask bit, an and/or chain of those; ref.is_null over
+			// anything else), non-0 when it is FALSE: the wasm-if arms stay THEN-on-nil.
+			WasmConditionCompiler.compile(test, ctx, true);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.writeRefType(true, Type.EQ.code());
+			// The branches are compiled inside the if structure; track the depth so
+			// a return nested in a branch computes the correct br depth to its
+			// enclosing %block.
+			ctx.wasmCtrlDepth++;
+			if (parts.size() > 3 && isChainableIf(parts.get(3))) {
+				// Another `if` in else position: defer this level's then-arm and
+				// descend, mirroring `compileExpr`'s consume for the nested level
+				// (below). The nested level's `tail` is this call's, exactly as
+				// the recursion threaded it.
+				consumeExprMarkers(ctx);
+				thens.push(parts.get(2));
+				form = parts.get(3);
+				continue;
+			}
+			thens.push(parts.get(2));
+			if (parts.size() > 3) {
+				ctx.tailPosition = tail;
+				WasmExprCompiler.compileExpr(parts.get(3), ctx);
+			}
+			else {
 				ctx.writer.write(Instruction.REF_NULL);
 				ctx.writer.writeHeapType(Type.EQ.code());
 			}
-			else {
-				ctx.tailPosition = tail;
-				WasmExprCompiler.compileExpr(live, ctx);
-			}
-			return;
+			break;
 		}
-		// The test as a raw i32 (a predicate's own ref.test / ref.eq, a comparison's
-		// mask bit, an and/or chain of those; ref.is_null over anything else), non-0
-		// when it is FALSE: the wasm-if arms stay THEN-on-nil.
-		WasmConditionCompiler.compile(test, ctx, true);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.writeRefType(true, Type.EQ.code());
-		// The branches are compiled inside the if structure; track the depth so a return
-		// nested in a branch computes the correct br depth to its enclosing %block.
-		ctx.wasmCtrlDepth++;
-		if (parts.size() > 3) {
+		while (!thens.isEmpty()) {
+			ctx.writer.write(Instruction.ELSE);
 			ctx.tailPosition = tail;
-			WasmExprCompiler.compileExpr(parts.get(3), ctx);
+			WasmExprCompiler.compileExpr(thens.pop(), ctx);
+			ctx.wasmCtrlDepth--;
+			ctx.writer.write(Instruction.END);
 		}
-		else {
-			ctx.writer.write(Instruction.REF_NULL);
-			ctx.writer.writeHeapType(Type.EQ.code());
-		}
-		ctx.writer.write(Instruction.ELSE);
-		ctx.tailPosition = tail;
-		WasmExprCompiler.compileExpr(parts.get(2), ctx);
-		ctx.wasmCtrlDepth--;
-		ctx.writer.write(Instruction.END);
 	}
 
 	/**
