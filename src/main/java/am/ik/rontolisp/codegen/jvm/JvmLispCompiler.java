@@ -355,7 +355,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		this.runtimeFeatures = builder.runtimeFeatures;
 		this.noMain = builder.noMain;
 		this.servletMode = builder.servlet;
-		this.classPoolLimit = builder.classPoolLimit;
+		// The system property reaches here unchecked: past the format limit it would send
+		// a
+		// pool no class can carry down the single-class path.
+		this.classPoolLimit = Math.clamp(builder.classPoolLimit, 1, ConstantPool.MAX_INDEX);
 		this.poolIndexOrigin = builder.poolIndexOrigin;
 	}
 
