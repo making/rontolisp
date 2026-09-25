@@ -604,6 +604,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @return the index of the first export wrapper type
 	 */
 	private int fixedTypeCount() {
+		return hostRefTypeIndex() + (this.usesHostRefs ? 1 : 0);
+	}
+
+	/**
+	 * The index of the host-reference box, {@code (struct (field externref))}: right
+	 * after the extra callable types, so adding it moves no existing type index. Only
+	 * meaningful when a {@code rontolisp:wasm-import} names {@code :extern}
+	 * ({@link #usesHostRefs}).
+	 */
+	private int hostRefTypeIndex() {
 		return extraCallableTypeBase() + this.extraCallArity;
 	}
 
@@ -699,6 +709,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * about the extra tier.
 	 */
 	private int extraCallArity;
+
+	/**
+	 * Whether a {@code rontolisp:wasm-import} crosses a host reference ({@code :extern}),
+	 * which appends the one-field box type at {@link #hostRefTypeIndex()}. Every other
+	 * module is byte-identical.
+	 */
+	private boolean usesHostRefs;
 
 	/**
 	 * Whether this module carries {@code _arity_chk}, the wrong-argument-count guard a
@@ -3334,7 +3351,15 @@ public final class WasmLispCompiler implements LispCompiler {
 				// backend; on WASM it is a no-op, exactly as wasm-export is on the JVM.
 			}
 			else if (WasmImportCompiler.isImportForm(expr)) {
-				importDecls.add(WasmImportCompiler.parse((LispCons) expr));
+				WasmImportCompiler.Decl decl = WasmImportCompiler.parse((LispCons) expr);
+				if (WasmImportCompiler.usesExtern(decl)) {
+					if (this.component) {
+						throw new UnsupportedOperationException("rontolisp:wasm-import :extern is a core-module"
+								+ " boundary type; a component has no host reference to hand it, in " + expr.print());
+					}
+					this.usesHostRefs = true;
+				}
+				importDecls.add(decl);
 			}
 			else if (WasmComponentImportCompiler.isComponentImportForm(expr)) {
 				componentImports.add(WasmComponentImportCompiler.parse((LispCons) expr));
@@ -4565,6 +4590,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		int parkFreeFuncIndex = parkHelpers ? parkAllocFuncIndex + 1 : -1;
 		int parkStrResultFuncIndex = parkHelpers ? parkAllocFuncIndex + 2 : -1;
 		int parkHelperCount = parkHelpers ? 3 : 0;
+		ctxBuilder.hostRefTypeIndex(this.usesHostRefs ? hostRefTypeIndex() : -1);
 		ctxBuilder.parkAllocFuncIndex(parkAllocFuncIndex)
 			.parkFreeFuncIndex(parkFreeFuncIndex)
 			.parkStrResultFuncIndex(parkStrResultFuncIndex);
@@ -6268,6 +6294,12 @@ public final class WasmLispCompiler implements LispCompiler {
 						w.write(1);
 						w.writeRefType(true, Type.EQ.code());
 					});
+				}
+				// The host-reference box at hostRefTypeIndex(): (struct (field
+				// externref)), what an :extern import result lives in as a Lisp value.
+				if (this.usesHostRefs) {
+					types.addRecGroup(rec -> rec
+						.addSubFinalStruct(fields -> fields.addField(false, w -> w.write(Type.EXTERNREF))));
 				}
 				// Export wrapper signatures (host-callable), appended after the last
 				// fixed type (TYPE_F32ARR, or the --simd block's TYPE_V_SET). One per
@@ -10145,6 +10177,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		/** {@code --reentrant}: the {@code _park_free} function index, or -1. */
 		int parkFreeFuncIndex = -1;
 
+		/** The host-reference box type ({@code :extern}), or -1 when none is used. */
+		int hostRefTypeIndex = -1;
+
 		/** {@code --reentrant}: the {@code _park_str_result} function index, or -1. */
 		int parkStrResultFuncIndex = -1;
 
@@ -10296,6 +10331,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.reentrantTaskGlobalIndex = builder.reentrantTaskGlobalIndex;
 			this.parkAllocFuncIndex = builder.parkAllocFuncIndex;
 			this.parkFreeFuncIndex = builder.parkFreeFuncIndex;
+			this.hostRefTypeIndex = builder.hostRefTypeIndex;
 			this.parkStrResultFuncIndex = builder.parkStrResultFuncIndex;
 			this.callbackExports = builder.callbackExports;
 			this.inlinableDefuns = builder.inlinableDefuns;
@@ -10489,6 +10525,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private int parkAllocFuncIndex = -1;
 
 			private int parkFreeFuncIndex = -1;
+
+			private int hostRefTypeIndex = -1;
 
 			private int parkStrResultFuncIndex = -1;
 
@@ -10946,6 +10984,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder parkFreeFuncIndex(int parkFreeFuncIndex) {
 				this.parkFreeFuncIndex = parkFreeFuncIndex;
+				return this;
+			}
+
+			Builder hostRefTypeIndex(int hostRefTypeIndex) {
+				this.hostRefTypeIndex = hostRefTypeIndex;
 				return this;
 			}
 

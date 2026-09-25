@@ -82,6 +82,22 @@ class NativeObjcE2eTest {
 	}
 
 	@Test
+	void aWrapperThatDiesReleasesTheReferenceItOwned() throws Exception {
+		// Every "self" answer is a wrapper owning one retain. The wrappers die, the
+		// collector drops their externrefs' host data, and the host releases: the count
+		// stays far below the number of wrappers made (it would be 300002 if nothing
+		// were released).
+		Run run = nativeOutput("""
+				(defvar *o* (objc:send (objc:send "NSObject" "alloc") "init"))
+				(dotimes (i 300000) (objc:send *o* "self"))
+				(objc:send *o* "hash")
+				(format t "~a~%" (< (objc:send *o* "retainCount") 150000))
+				""");
+		assertThat(run.exit()).as("stderr: %s", run.stderr()).isZero();
+		assertThat(run.stdout()).isEqualTo("T\n");
+	}
+
+	@Test
 	void anExitInsideACallbackEndsTheProcessWithItsCode() throws Exception {
 		Run run = nativeOutput("""
 				(let* ((cls (objc:define-class "NativeE2eExit" "NSObject"

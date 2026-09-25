@@ -27,12 +27,12 @@ mod encoding;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_void};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use call::{Call, Leaf};
 use encoding::{Kind, Type};
-use wasmtime::{AsContextMut, Caller, Extern, Instance, Linker, Store, TypedFunc};
+use wasmtime::{AsContextMut, Caller, Extern, ExternRef, Instance, Linker, Rooted, Store, TypedFunc};
 use wasmtime_wasi::I32Exit;
 use wasmtime_wasi::p1::WasiP1Ctx;
 
@@ -483,6 +483,8 @@ thread_local! {
     /// The `Caller` of the innermost host call in progress, which a callback re-enters
     /// the module through; null outside one.
     static CALLER: Cell<*mut c_void> = const { Cell::new(std::ptr::null_mut()) };
+    /// How many sends / pumps are in progress on this thread (callbacks nest them).
+    static DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
 fn with<T>(f: impl FnOnce(&mut State) -> T) -> T {
@@ -495,14 +497,56 @@ struct Entered(*mut c_void);
 
 impl Entered {
     fn new(caller: &mut Caller<'_, WasiP1Ctx>) -> Entered {
+        DEPTH.set(DEPTH.get() + 1);
         Entered(CALLER.replace(caller as *mut Caller<'_, WasiP1Ctx> as *mut c_void))
+    }
+
+    /// Whether this is the outermost host call: no Lisp frame below it is in the middle
+    /// of a send, so no address a dead wrapper handed out can still be in flight.
+    fn outermost(&self) -> bool {
+        DEPTH.get() == 1
     }
 }
 
 impl Drop for Entered {
     fn drop(&mut self) {
+        DEPTH.set(DEPTH.get() - 1);
         CALLER.set(self.0);
     }
+}
+
+/// The reference a Lisp wrapper owns, as the host data of the `externref` the wrapper
+/// holds (the `own` import): wasmtime's collector drops it when the wrapper dies -- the
+/// finalizer a wasm-GC module has no other way to get. Dropped INSIDE a collection, so it
+/// only queues the release; [`release_pending`] runs the queue on thread 0 at a point no
+/// Lisp frame is mid-send.
+struct Owned(Id);
+
+impl Drop for Owned {
+    fn drop(&mut self) {
+        if let Ok(mut pending) = PENDING.lock() {
+            pending.push(self.0);
+        }
+    }
+}
+
+static PENDING: Mutex<Vec<Id>> = Mutex::new(Vec::new());
+
+/// Releases the references whose wrappers died. Only ever from the OUTERMOST host call
+/// ([`Entered::outermost`]): the end of a send (whose receiver and arguments may be among
+/// them) or a turn of the event loop. A release inside a callback could free the very
+/// object whose method is running.
+fn release_pending(api: &Api) {
+    let released = match PENDING.lock() {
+        Ok(mut pending) if !pending.is_empty() => std::mem::take(&mut *pending),
+        _ => return,
+    };
+    api.with_pool(|| {
+        for object in released {
+            // SAFETY: one reference a wrapper owned, released once.
+            unsafe { (api.release)(object) };
+        }
+    });
 }
 
 fn memory_bytes(caller: &mut Caller<'_, WasiP1Ctx>, ptr: i32, len: i32) -> wasmtime::Result<Vec<u8>> {
@@ -677,7 +721,7 @@ fn is_application(api: &Api, receiver: Id) -> bool {
 }
 
 /// `sleep` in a program that uses the runtime: thread 0's event loop for that long.
-fn pump(api: &Api, seconds: f64) {
+fn pump(api: &Api, seconds: f64, outermost: bool) {
     let deadline = Instant::now() + Duration::from_secs_f64(seconds.max(0.0));
     let started = with(|s| s.app_started);
     loop {
@@ -686,6 +730,9 @@ fn pump(api: &Api, seconds: f64) {
             break;
         }
         let remaining = (deadline - now).as_secs_f64();
+        if outermost {
+            release_pending(api);
+        }
         api.with_pool(|| {
             if started {
                 let Ok(cls) = api.class("NSApplication") else { return };
@@ -985,8 +1032,21 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
         |mut caller: Caller<'_, WasiP1Ctx>, receiver: i64, p: i32, n: i32| {
             let selector = memory_string(&mut caller, p, n)?;
             let api = runtime()?;
-            let _entered = Entered::new(&mut caller);
-            wasmtime::Result::<i32>::Ok(send(api, receiver as Id, &selector))
+            let entered = Entered::new(&mut caller);
+            let answer = send(api, receiver as Id, &selector);
+            if entered.outermost() {
+                release_pending(api);
+            }
+            wasmtime::Result::<i32>::Ok(answer)
+        },
+    )?;
+    // The owning handle of a +1 reference: the externref a wrapper keeps beside the
+    // address, whose death releases the reference.
+    linker.func_wrap(
+        MODULE,
+        "own",
+        |mut caller: Caller<'_, WasiP1Ctx>, object: i64| -> wasmtime::Result<Option<Rooted<ExternRef>>> {
+            Ok(Some(ExternRef::new(&mut caller, Owned(object as Id))?))
         },
     )?;
     linker.func_wrap(MODULE, "result_int", || with(|s| s.answer.int))?;
@@ -1156,8 +1216,8 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
         "pump",
         |mut caller: Caller<'_, WasiP1Ctx>, seconds: f64| -> wasmtime::Result<()> {
             let api = runtime()?;
-            let _entered = Entered::new(&mut caller);
-            pump(api, seconds);
+            let entered = Entered::new(&mut caller);
+            pump(api, seconds, entered.outermost());
             Ok(())
         },
     )?;

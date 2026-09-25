@@ -168,6 +168,8 @@ final class JvmExportRuntimeBuilder {
 			case BYTES -> "[B";
 			case FLOAT_VECTOR, FLOAT_MATRIX -> HANDLE_DESC;
 			case VOID -> "V";
+			// Unreachable: rontolisp:jvm-export refuses the import-only type.
+			case EXTERN -> throw new IllegalStateException("an import-only boundary type reached a JVM export");
 		};
 	}
 

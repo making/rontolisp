@@ -243,7 +243,7 @@ public record JvmExportDirective(String name, String methodName, List<BoundaryTy
 	private static BoundaryType designator(LispVal value, LispCons form) {
 		if (value instanceof LispSymbol sym && sym.isKeyword()) {
 			BoundaryType type = BoundaryType.forDesignator(sym.name());
-			if (type != null) {
+			if (type != null && type != BoundaryType.EXTERN) {
 				return type;
 			}
 		}

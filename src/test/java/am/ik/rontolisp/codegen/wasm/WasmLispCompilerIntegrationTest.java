@@ -2564,6 +2564,26 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void anS64ImportCrossesTheWholeI64BothWays() throws Exception {
+		// Beyond the i31 house integer in both directions: the argument leaves a boxed
+		// exact integer, the result comes back into one.
+		String host = """
+				(defun host-wide (x) (- (* x 3) 1))
+				(rontolisp:wasm-export 'host-wide :as "wide" :params '(:s64) :returns :s64)
+				""";
+		String main = """
+				(rontolisp:wasm-import 'wide :from "host" :params '(:s64) :returns :s64)
+				(print (wide 5000000000))
+				(print (wide -2))
+				(print (wide 7))
+				""";
+		assertThat(compileAndRunWithPreload(host, main, OptimizeLevel.NONE)).isEqualTo("""
+				14999999999
+				-7
+				20""");
+	}
+
+	@Test
 	void bytesBoundaryCrossesThePreloadBoundaryByLength() throws Exception {
 		// A preloaded wasm host has its own linear memory, so byte CONTENT cannot cross
 		// this pair (that is a JS-host affair -- WasmBytesBoundaryE2eTest round-trips

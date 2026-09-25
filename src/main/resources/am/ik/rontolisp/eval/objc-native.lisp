@@ -11,9 +11,11 @@
 ;; sleep, which the host turns into thread 0's event loop (objc::%sleep, which the
 ;; backend compiles every sleep to in such a program).
 ;;
-;; Ownership: an object a send answers arrives retained (+1), exactly as the JVM
-;; wrapper takes it; nothing here releases it yet (the safe direction), since a wasm-GC
-;; module has no finalizer to release it with.
+;; Ownership: one reference per wrapper, as on the JVM. An object a send answers
+;; arrives retained (+1), and its wrapper keeps, beside the address, the externref
+;; the host's own import hands out for it (an :extern result): when the wrapper dies,
+;; wasmtime's collector drops that reference's host data, which queues the release --
+;; the finalizer a wasm-GC module has no other way to get. A class owns nothing.
 ;;
 ;; Portability constraints honored here (like appkit.lisp): do loops always declare at
 ;; least one variable; parameters are never assigned with setq.
@@ -51,12 +53,17 @@
 (rontolisp:wasm-import 'objc::%rl-data-bytes :from "rlobjc" :as "data_bytes" :params '(:s64)
  :returns :bytes)
 (rontolisp:wasm-import 'objc::%rl-pump :from "rlobjc" :as "pump" :params '(:float))
+(rontolisp:wasm-import 'objc::%rl-own :from "rlobjc" :as "own" :params '(:s64) :returns :extern)
 
-;; An object or a class: its address. A class owns nothing; an object owns one
-;; reference, released never (see the header).
-(defstruct (objc::%object (:constructor objc::%make-object (address))
+;; An object or a class: its address, and for an object the handle whose death
+;; releases the one reference the wrapper owns (see the header). A class owns nothing.
+(defstruct (objc::%object (:constructor objc::%make-object (address handle))
             (:predicate objc::%objectp))
-  address)
+  address
+  handle)
+
+;; A wrapper that takes over a +1 reference.
+(defun objc::%own (address) (objc::%make-object address (objc::%rl-own address)))
 
 (defmethod print-object ((object objc::%object) stream)
   (format stream "#<objc ~a>" (objc::%rl-class-name (objc::%object-address object))))
@@ -74,7 +81,7 @@
     (error "objc:class expects a string, got ~s" name))
   (let ((address (objc::%rl-class name)))
     (when (= address 0) (objc::%fail "class"))
-    (objc::%make-object address)))
+    (objc::%make-object address nil)))
 
 (defun objc:objectp (value) (if (objc::%objectp value) t nil))
 
@@ -123,8 +130,8 @@
 (defun objc::%answer (kind)
   (case kind
     (0 nil)
-    (1 (objc::%make-object (objc::%rl-result-int)))
-    (2 (objc::%make-object (objc::%rl-result-int)))
+    (1 (objc::%own (objc::%rl-result-int)))
+    (2 (objc::%make-object (objc::%rl-result-int) nil))
     (3 (objc::%rl-result-int))
     (4 (objc::%rl-result-string))
     (5 t)
@@ -152,7 +159,7 @@
     (error "objc:string expects a string, got ~s" text))
   (let ((address (objc::%rl-string text)))
     (when (= address 0) (objc::%fail "string"))
-    (objc::%make-object address)))
+    (objc::%own address)))
 
 (defun objc:data (value)
   (let ((bytes
@@ -163,7 +170,7 @@
                        value)))))
     (let ((address (objc::%rl-data bytes)))
       (when (= address 0) (objc::%fail "data"))
-      (objc::%make-object address))))
+      (objc::%own address))))
 
 (defun objc:bytes (data)
   (unless (objc::%objectp data)
@@ -206,7 +213,7 @@
            (objc::%rl-define-class name superclass (objc::%lines protocols "a protocol")
                                    (objc::%lines (reverse selectors) "a selector") first)))
       (when (= address 0) (objc::%fail "define-class"))
-      (objc::%make-object address))))
+      (objc::%make-object address nil))))
 
 ;; A method's answer as the IMP hands it back: an object's address, a boolean as 1/0,
 ;; an integer as itself.
@@ -227,12 +234,12 @@
                ((= argc 1) (list (objc::%wrap first)))
                (t (list (objc::%wrap first) (objc::%wrap second))))))
     (handler-case
-        (objc::%callback-result (apply function (objc::%make-object self) args))
+        (objc::%callback-result (apply function (objc::%own self) args))
       (error (condition)
         (format *error-output* "objc: error in a callback: ~a~%" condition)
         0))))
 
-(defun objc::%wrap (address) (if (= address 0) nil (objc::%make-object address)))
+(defun objc::%wrap (address) (if (= address 0) nil (objc::%own address)))
 
 (rontolisp:wasm-export 'objc::%callback :as "rlobjc_callback" :params '(:s32 :s64 :s64 :s64 :s32)
  :returns :s64)

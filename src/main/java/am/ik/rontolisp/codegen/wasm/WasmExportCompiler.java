@@ -1013,6 +1013,8 @@ final class WasmExportCompiler {
 			case BYTES -> throw new UnsupportedOperationException(
 					"rontolisp:wasm-export :bytes is a core-module (Preview 1 / --no-wasi) boundary type; the"
 							+ " --component path does not lift it yet");
+			// Unreachable: an import-only type, refused by every export parser.
+			case EXTERN -> throw new IllegalStateException("an import-only boundary type reached a component lift");
 			// Unreachable: typeDesignator refuses the JVM-only handle types by name.
 			case FLOAT_VECTOR, FLOAT_MATRIX -> throw new IllegalStateException(
 					"a JVM-only boundary type reached the WASM component lift: " + type.designator());
@@ -1057,6 +1059,7 @@ final class WasmExportCompiler {
 			// Unreachable: componentValType already refused the declaration.
 			case BYTES ->
 				throw new UnsupportedOperationException("rontolisp:wasm-export :bytes has no component-model lift");
+			case EXTERN -> throw new IllegalStateException("an import-only boundary type reached a component lift");
 			// Unreachable: typeDesignator refuses the JVM-only handle types by name.
 			case FLOAT_VECTOR, FLOAT_MATRIX -> throw new IllegalStateException(
 					"a JVM-only boundary type reached the WASM component lift: " + decl.returnType().designator());
@@ -1107,6 +1110,8 @@ final class WasmExportCompiler {
 				types.add(Type.I32);
 			}
 			case VOID -> throw new UnsupportedOperationException("rontolisp:wasm-export :void has no WASM value type");
+			// A host reference: the import's externref, boxed by the wrapper.
+			case EXTERN -> types.add(Type.EXTERNREF);
 		}
 	}
 
@@ -1142,7 +1147,7 @@ final class WasmExportCompiler {
 						+ " is a JVM boundary type (rontolisp:jvm-export); the WASM boundary has no carrier for a"
 						+ " packed float array, in " + form.print());
 			}
-			if (type != null && type != BoundaryType.VOID) {
+			if (type != null && type != BoundaryType.VOID && type != BoundaryType.EXTERN) {
 				return type;
 			}
 		}
