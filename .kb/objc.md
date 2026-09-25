@@ -291,7 +291,7 @@ over `rontolisp:wasm-import`s from module `rlobjc` -- right OUTSIDE `AppKitLibra
   any `Throwable` -- nothing unwinds into the native frame.
 - **Ownership is the JVM's -- one retain per wrapper -- through `:extern`.** A wasm-GC module has no
   finalizer, but wasmtime's copying collector DROPS an `externref`'s host data when the reference
-  dies (`sweep_extern_refs`, read in the 49.0.0 source). Each object wrapper (`objc::%object`, a
+  dies (`sweep_extern_refs`, read in the 49.0.0 source). Each object wrapper (`objc:object`, a
   defstruct: address + handle) holds the externref the `own` import returns, whose host data
   (`Owned`) queues the release on drop. The queue runs only from the OUTERMOST host call -- the end
   of a send, a `pump` turn -- never inside a callback, where it could free the object whose method
@@ -303,12 +303,24 @@ over `rontolisp:wasm-import`s from module `rlobjc` -- right OUTSIDE `AppKitLibra
   (`JvmObjcHandle.equals`): `eq`/`eql`/`equal`/`equalp` and all four hash-table tests compare by
   address. Interning one wrapper per address cannot give this -- the table would keep every
   wrapper, so every reference, alive. The comparison is the backend's: the wasm-GC runtime knows the
-  layout of `objc::%object` (`LispNames.OBJC_OBJECT_STRUCT`, `WasmLispCompiler.addressKeyedLayout`)
+  layout of `objc:object` (`LispNames.OBJC_OBJECT_TYPE`, `WasmLispCompiler.addressKeyedLayout`)
   and compares and hashes its instances by the first (address) slot alone -- an arm in `_eql_tail`,
   a slot count of 1 in `_equal`'s and `_hash`'s instance arms, and `_ihash` placing such an
   instance by `_hash`. The prelude `equalp` tries `eql` before walking two instances' slots. A
   module without the layout is byte-identical. Pinned by the equality block of
   `objc-native-corpus.lisp` (`NativeObjcE2eTest`, against the interpreter).
+- **The type** is `objc:object` on every backend: `type-of` answers `OBJC:OBJECT`, `typep` /
+  `typecase` / a `defmethod` specializer / `class-of` / `find-class` name it, and it is no
+  `structure-object` (nor its `subtypep`). The interpreter's record answers it from
+  `builtinTypeName` (and `ClosRegistry.BUILTIN_CLASS_NAMES`); the JVM handle through an arm of
+  `expandClassDesignator` gated on the objc runtime (`ctx.objcOps`); the `--native` wrapper IS the
+  defstruct `objc:object` (`LispNames.OBJC_OBJECT_TYPE`), which `isStructureObjectLayout` keeps out
+  of `structure-object`. A literal specifier is `(objc:objectp x)` (`makeTypeTest`, matched
+  qualified); a computed one has an arm in the interpreter's inline dispatch and, for a program
+  that spells an `objc:` symbol (`mentionsObjcPackage`), in `%typep-runtime` and the `%find-class`
+  built-in list -- no other program pays. On the JVM, `objc:objectp` without the runtime compiles to
+  `(progn x nil)`. Pinned by the type block of `objc-native-corpus.lisp` (`NativeObjcE2eTest`),
+  `ObjcInteropTest` and `JvmObjcInteropCompilerTest`.
 - `objc:data` lays a packed buffer out in Lisp (`%ieee754-single-bits`, lowered on wasm-GC for
   this) -- a per-frame uniform is 64 bytes; bfloat16 arrays and quantized matrices are refused
   (the JVM serves them). `objc:bytes` copies through a `:bytes` result.

@@ -14,8 +14,10 @@ import java.util.stream.Stream;
 
 import am.ik.objc.ObjcRuntime;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.cli.CompileFrontendAccess;
 import am.ik.rontolisp.eval.AppKitLibrary;
 import am.ik.rontolisp.eval.ObjcInterop;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
@@ -50,11 +52,20 @@ class JvmObjcInteropCompilerTest {
 		return new JvmLispCompiler("Test").compile(program);
 	}
 
+	// Through the compile front end, as the CLI compiles: the prelude defuns (type-of)
+	// are spliced there.
+	private byte[] compileThroughFrontend(String lispCode) {
+		return new JvmLispCompiler("Test").compile(CompileFrontendAccess.corpus(lispCode, Features.JVM, false, false));
+	}
+
 	// Compiles the program, runs its main, and returns the captured stdout. A runtime
 	// exception thrown by the program is unwrapped and rethrown so tests can assert on
 	// the original message.
 	private String compileAndRun(String lispCode) throws Exception {
-		byte[] classBytes = compile(lispCode);
+		return run(compile(lispCode));
+	}
+
+	private String run(byte[] classBytes) throws Exception {
 		Path classFile = this.tempDir.resolve("Test.class");
 		Files.write(classFile, classBytes);
 		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
@@ -131,6 +142,28 @@ class JvmObjcInteropCompilerTest {
 			.startsWith("\"objc:data expects a packed float array");
 		assertThat(compileAndRun("(print (handler-case (objc:bytes 42) (error (e) (princ-to-string e))))"))
 			.startsWith("\"objc:bytes expects an Objective-C object");
+	}
+
+	@Test
+	void aValueThatIsNoWrapperIsNoObjcObject() throws Exception {
+		assertThat(run(
+				compileThroughFrontend("(print (list (typep 42 'objc:object) (typep nil 'objc:object) (type-of 42)))")))
+			.isEqualTo("(NIL NIL INTEGER)");
+	}
+
+	@Test
+	@EnabledOnOs(OS.MAC)
+	void aWrapperIsOfTheNamedTypeObjcObjectAndNoStructure() throws Exception {
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		// The interpreter's expectation, byte for byte (ObjcInteropTest).
+		assertThat(run(compileThroughFrontend("""
+				(print (let ((w (objc:send (objc:send "NSObject" "alloc") "init")))
+				         (list (type-of w) (typep w 'objc:object) (typep w 'structure-object)
+				               (typep (objc:class "NSObject") 'objc:object)
+				               (typecase w (structure-object :struct) (objc:object :objc) (t :other))
+				               (class-name (class-of w)) (eq (class-of w) (find-class 'objc:object))
+				               (typep w (type-of w)))))
+				"""))).isEqualTo("(OBJC:OBJECT T NIL T :OBJC OBJC:OBJECT T T)");
 	}
 
 	@Test

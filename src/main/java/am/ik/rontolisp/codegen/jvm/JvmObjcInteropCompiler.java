@@ -6,6 +6,8 @@ import java.util.Objects;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
@@ -44,6 +46,15 @@ final class JvmObjcInteropCompiler {
 
 	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		Map<String, MethodrefConstant> ops = ctx.objcOps;
+		if (ops == null && LispNames.OBJC_OBJECTP.equals(member) && cons.toList().size() == 2) {
+			// A program that calls no verb holds no Objective-C object: the type test an
+			// objc:object specifier compiles to answers nil without the blob.
+			JvmExprCompiler.compileExpr(
+					new LispCons(new LispSymbol(LispNames.PROGN),
+							new LispCons(cons.toList().get(1), new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))),
+					ctx, className);
+			return;
+		}
 		if (ops == null) {
 			throw new IllegalStateException("objc runtime was not emitted");
 		}

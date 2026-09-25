@@ -64,6 +64,32 @@ class ObjcInteropTest {
 	}
 
 	@Test
+	void aValueThatIsNoWrapperIsNoObjcObject() {
+		assertThat(eval("(list (typep 42 'objc:object) (typep nil 'objc:object) (type-of 42))"))
+			.isEqualTo("(NIL NIL INTEGER)");
+	}
+
+	@Test
+	@EnabledOnOs(OS.MAC)
+	void aWrapperIsOfTheNamedTypeObjcObjectAndNoStructure() {
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		// The type every backend answers (.kb/objc.md): the --native executable's
+		// wrapper is a defstruct, and still reads as this type and no structure-object.
+		assertThat(eval(WRAPPER_TYPE_PROBE)).isEqualTo(WRAPPER_TYPE_ANSWER);
+	}
+
+	static final String WRAPPER_TYPE_PROBE = """
+			(let ((w (objc:send (objc:send "NSObject" "alloc") "init")))
+			  (list (type-of w) (typep w 'objc:object) (typep w 'structure-object)
+			        (typep (objc:class "NSObject") 'objc:object)
+			        (typecase w (structure-object :struct) (objc:object :objc) (t :other))
+			        (class-name (class-of w)) (eq (class-of w) (find-class 'objc:object))
+			        (typep w (type-of w))))
+			""";
+
+	static final String WRAPPER_TYPE_ANSWER = "(OBJC:OBJECT T NIL T :OBJC OBJC:OBJECT T T)";
+
+	@Test
 	@EnabledOnOs(OS.MAC)
 	void aPackedBufferCrossesAsAnNsdataAndComesBackTheSameBytes() {
 		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
