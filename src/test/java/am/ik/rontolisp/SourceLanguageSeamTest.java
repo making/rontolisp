@@ -70,6 +70,7 @@ class SourceLanguageSeamTest {
 
 	private static final Map<String, String> EXEMPT = Map.ofEntries(
 			Map.entry("am.ik.rontolisp.eval.AppKitLibrary", SHIPPED_SOURCE),
+			Map.entry("am.ik.rontolisp.eval.ObjcNativeLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.AsdfRuntimeLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.AsdfSystems", SYSTEM_METADATA),
 			Map.entry("am.ik.rontolisp.eval.CheckpointLibrary", SHIPPED_SOURCE),
