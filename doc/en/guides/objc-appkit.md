@@ -7,11 +7,12 @@ foreign function API (no JNI, no bundled native library, no reflection), and
 label, a button whose action is a Lisp closure, a coloured panel, a click, a
 repeating timer and a menu bar item.
 
-> **macOS only; interpreter and JVM class.** Both packages work under
-> `java -jar rontolisp.jar`, in the `rontolisp` native binary — the binding needs no
-> reflection, which is what `java:` interop lacks there — and in a program compiled
-> to a `.class` or `.jar`, which carries the binding inside it. Neither WASM backend
-> has a foreign function API, so compiling such a program to a `.wasm` is a
+> **macOS only; interpreter, JVM class and native executable.** Both packages work
+> under `java -jar rontolisp.jar`, in the `rontolisp` native binary — the binding needs
+> no reflection, which is what `java:` interop lacks there — in a program compiled
+> to a `.class` or `.jar`, which carries the binding inside it, and in a `--native`
+> executable for Apple silicon, whose runner is the binding. A `.wasm` has no foreign
+> function API, so compiling such a program to one is a
 > `Cannot compile: appkit:window ...` error. On Linux, or on a JVM that denies native
 > access (`--illegal-native-access=deny`), every `objc:` function signals an ordinary
 > `error` whose message starts with the function's name and says why.
@@ -426,11 +427,37 @@ compiles such a program too. A `.wasm` output is refused —
 `Cannot compile: appkit:window ...` — and always will be: there is no foreign function
 API and no AppKit on that side.
 
+## A native executable
+
+`--native` compiles the same program to one executable of about 2.4 MB that needs no
+JVM (Apple silicon; the default target on such a Mac, or
+`--native-target macos-aarch64`):
+
+```console
+$ rontolisp examples/macos/counter.lisp --native -o counter
+$ ./counter
+```
+
+The executable's runner is the binding: it calls the Objective-C runtime itself, so
+every selector the runtime describes can be sent — there is no fixed table of shapes
+as in the `rontolisp` binary — and a send costs a fraction of a microsecond. The
+program runs on the process's first thread, the one AppKit wants, so
+`objc:on-main` is a plain call and there is no hop; while the program waits in
+`sleep` (as `appkit:wait` does) the window handles its events and runs its timers,
+and a button's closure runs inside that wait. A program that reads standard input
+leaves the window unresponsive until the read returns.
+
+Ownership is the same as everywhere else: one reference per Lisp value, released
+once the value is garbage. The one difference: two values wrapping the same object
+are not `equal` here, where the interpreter compares them by address — compare
+`objc:address` values instead, as the `appkit` layer does. A `bfloat16` array or a
+quantized matrix is not accepted by `objc:data` in an executable.
+
 ## Limitations
 
-- macOS only: the interpreter (`java -jar`, or the `rontolisp` binary) and a compiled
-  `.class` / `.jar`. Never a `.wasm`; an `objc:` / `appkit:` reference is a compile
-  error on both WASM backends.
+- macOS only: the interpreter (`java -jar`, or the `rontolisp` binary), a compiled
+  `.class` / `.jar` and a `--native` executable for Apple silicon. Never a `.wasm`; an
+  `objc:` / `appkit:` reference is a compile error on every other WASM output.
 - A process without an application bundle gets no Dock icon or menu bar; there is no
   Cmd-Q, and closing the last window does not quit — the REPL is the process.
 - Callback shapes are the closed set above; a delegate method with a struct or

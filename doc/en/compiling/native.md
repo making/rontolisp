@@ -70,9 +70,17 @@ The precompiler is a shared library that `rontolisp` extracts once to
 `~/Library/Caches/rontolisp` on macOS); the system property
 `rontolisp.native.cache` moves it (`-Drontolisp.native.cache=DIR`).
 
+## macOS GUI Programs
+
+On Apple silicon (`macos-aarch64`) an executable also runs programs that use the
+`objc`, `appkit`, `metal` and `scene` packages: its runner calls the Objective-C
+runtime itself, and the program runs on the process's first thread, where AppKit
+wants it. See [macOS GUI](../guides/objc-appkit.md#a-native-executable). For every
+other target such a program is a compile error naming the reference.
+
 ## Size and Speed
 
-An executable is a runner (3.0 MB on Linux x86_64, 2.4 MB on Linux aarch64,
-1.7 MB on macOS) plus roughly 11 times the `.wasm`: 3.0 MB for `hello` on Linux
-x86_64, 3.2 MB for a 28 KB module. It starts in about 10 ms and runs at
+An executable is a runner (2.1 MB on Linux x86_64, 1.9 MB on Linux aarch64,
+1.7 MB on macOS) plus roughly 11 times the `.wasm`: 2.1 MB for `hello` on Linux
+x86_64, 2.3 MB for a 28 KB module. It starts in about 10 ms and runs at
 about the speed of `wasmtime run` on the same module.

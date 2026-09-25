@@ -149,7 +149,18 @@ public enum BoundaryType {
 	 * Selected when {@code :returns} is omitted, or given as {@code nil}, {@code '()} or
 	 * {@code :void}. A parameter can never have this type.
 	 */
-	VOID(":VOID", null);
+	VOID(":VOID", null),
+
+	/**
+	 * {@code extern}: an opaque host reference ({@code externref}) the module holds but
+	 * never looks into, boxed in a one-field struct so it can live in a Lisp value. The
+	 * host learns when the module lets go of it: wasmtime's collector drops the
+	 * reference's host data when the reference dies, which is the finalizer a wasm-GC
+	 * module otherwise lacks ({@code objc-native.lisp} releases an Objective-C object
+	 * through it, {@code .kb/objc.md}). {@code rontolisp:wasm-import} on a wasm-GC core
+	 * module only; no WIT spelling.
+	 */
+	EXTERN(":EXTERN", null);
 
 	/**
 	 * A closed interval of integers. Used to state a boundary type's range and a
@@ -318,7 +329,7 @@ public enum BoundaryType {
 	 * @return the canonical designators of every non-void member
 	 */
 	public static List<String> valueDesignators() {
-		return designators(type -> type != VOID);
+		return designators(type -> type != VOID && type != EXTERN);
 	}
 
 	/**
@@ -327,7 +338,7 @@ public enum BoundaryType {
 	 * @return the canonical designators of every non-void, non-JVM-only member
 	 */
 	public static List<String> wasmValueDesignators() {
-		return designators(type -> type != VOID && !type.jvmOnly());
+		return designators(type -> type != VOID && type != EXTERN && !type.jvmOnly());
 	}
 
 	private static List<String> designators(java.util.function.Predicate<BoundaryType> accept) {

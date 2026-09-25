@@ -1,8 +1,12 @@
 # Native-executable output: the wasmtime shim and the runner stub
 
-**Invariant**: a native output is `stub ++ module ++ u64-le(module length) ++ "RLNATIVE"`,
-where `module` is the wasm-GC backend's Preview 1 module precompiled by the shim and `stub`
-is the runner. Shim and stub build their engine from ONE function (`rlabi::config`) of ONE
+**Invariant**: a Linux native output is `stub ++ module ++ u64-le(module length) ++ "RLNATIVE"`;
+a macOS one is the stub's Mach-O image with the module INSIDE it (section
+`__RLPAYLOAD,__payload` = `u64-le(length) ++ "RLNATIVE" ++ module`) and re-signed ad hoc
+over the whole file ("macOS: the module inside the signed image"). `module` is the wasm-GC
+backend's Preview 1 module precompiled by the shim, `stub` the runner, and the shim's
+`rlprecomp::assemble` is the ONE implementation of both layouts (Java calls it through
+`rl_assemble`). Shim and stub build their engine from ONE function (`rlabi::config`) of ONE
 exactly pinned wasmtime; a module precompiled under any other engine is refused by wasmtime
 at start-up, so the Java side must compare fingerprints BEFORE writing an output.
 
@@ -17,32 +21,38 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   (`platform`, `cpu`: NUL-terminated, see "CPU baseline and cross-targets"; 0 = module,
   1 = compile error -- an unknown platform or CPU level included --, 2 = caught panic;
   `*out` holds the module or the UTF-8 message either way), `rl_free(out, out_len)`,
-  `rl_version() -> const char*` (static `FINGERPRINT`). Features `cranelift` +
+  `rl_assemble(stub, stub_len, module, module_len, &out, &out_len) -> i32` (same codes and
+  buffer contract: the executable, or the message), `rl_version() -> const char*` (static
+  `FINGERPRINT`). Features `cranelift` +
   `parallel-compilation`, plus Cranelift's `x86` and `arm64` backends through a direct
   `cranelift-codegen` dependency whose features unify into wasmtime's (its version moves
   with the wasmtime pin). The release profile keeps
   `panic = unwind` and `rl_precompile` catches at the boundary: it runs inside a JVM.
   `install_name @rpath/librlprecomp.dylib` / `soname librlprecomp.so` via `precomp/build.rs`.
 - **Stub** `rlrun`: runtime-only wasmtime (`runtime std gc gc-copying`, no Cranelift) +
-  `wasmtime-wasi` `p1`; profile `release-runner` (`panic = abort`). On Linux it links glibc
-  STATICALLY (`-C target-feature=+crt-static -C relocation-model=static`, built with an
-  explicit `--target <arch>-unknown-linux-gnu` so the flags stay off build scripts; binary
-  at `target/<triple>/release-runner/rlrun`): an output has no glibc floor and runs on musl
-  hosts too (checked 2026-09-24 in `alpine:3.20`, `centos:7` = glibc 2.17 and `busybox`,
-  where the dynamic stub failed on `GLIBC_2.34` / `libgcc_s.so.1`). The relocation model
-  keeps both Linux stubs the same non-PIE static shape: without it the x86_64 stub linked
-  as static-pie while the aarch64 one was already non-PIE static. It does NOT fix
+  `wasmtime-wasi` `p1`; profile `release-runner` (`panic = abort`). On Linux it links musl
+  STATICALLY (target `<arch>-unknown-linux-musl`, which `build.sh` adds through rustup when
+  missing, `-C relocation-model=static`; the explicit `--target` keeps the flag off build
+  scripts; binary at `target/<triple>/release-runner/rlrun`), and on x86_64 brings its own
+  `memcpy`/`memmove`/`memset` (`runner/src/memfns.rs`; Traps, "musl"): an output has no
+  glibc floor (checked 2026-09-24 with static glibc and 2026-09-25 with musl in
+  `alpine:3.20`, `centos:7` = glibc 2.17 and `busybox`, where the dynamic stub failed on
+  `GLIBC_2.34` / `libgcc_s.so.1`). The module is still precompiled for the `-gnu` triple:
+  wasmtime compares only architecture and OS. The relocation model keeps both Linux stubs
+  the same non-PIE static shape (the default is static-pie). It does NOT fix
   `qemu-x86_64` on an aarch64 host (measured 2026-09-25: a non-PIE EXEC stub crashes
   identically, and so does a C program that only opens `/proc/self/maps`): that QEMU
   (8.2.2) dies with an internal SIGSEGV, MAPERR addr=0x20, as soon as the guest opens
   `/proc/self/maps` -- Rust's startup guard setup
-  (`std/.../stack_overflow.rs::install_main_guard_linux`) does on every glibc binary --
-  while `qemu-aarch64` on either host and `qemu-x86_64` on an x86_64 host emulate the
-  same open fine (CI run 36086331612,
+  (`std/.../stack_overflow.rs::install_main_guard_linux`) does on every glibc binary, through
+  glibc's `pthread_getattr_np` (musl's does not read the file; whether the musl stub now runs
+  there is unmeasured) -- while `qemu-aarch64` on either host and `qemu-x86_64` on an x86_64
+  host emulate the same open fine (CI run 36086331612,
   `cross_target_module_names_the_requested_triple_and_runs_there` for `linux-x86_64`).
   The emulated runs for an architecture whose qemu cannot run the bare target stub are
   skipped by a probe in `precomp/tests/stub.rs`, never by the link shape. Reads its trailer from
-  `/proc/self/exe` (Linux) or `current_exe()`, runs `_start` with inherited stdio, argv and
+  `/proc/self/exe` (Linux); on macOS takes the module from its own mapped payload section
+  (`getsectiondata`, no read of the file). Runs `_start` with inherited stdio, argv and
   environment; preopens the current directory as fd 3 (what a relative path resolves against,
   `.kb/read-load-streams.md`) under its ABSOLUTE name (`current_dir()`, `.` when unknown or
   not UTF-8) and `/` as fd 4 (covers every absolute path). The absolute name is what lets
@@ -50,11 +60,17 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   resolves it through `/`. Exit: the
   `proc_exit` code, 0 on return, **134 after a trap** (what `wasmtime run` answers on Unix,
   `Error: <trap>` on stderr), 1 when the module cannot load (no trailer, refused engine).
-- **Fingerprint** `rlnative-abi=2;wasmtime=49.0.0;wasm=gc,function-references,exceptions,tail-call;collector=copying`.
+  A module importing from `rlobjc` (an `objc:`/`appkit:`/`metal:`/`scene:` program) also gets the
+  Objective-C host (`runner/src/objc`, macOS aarch64 only -- elsewhere it exits 1 naming the
+  platform) and runs ON thread 0, `sleep` turning the event loop ([objc.md](objc.md), "--native").
+  Not part of the fingerprint: the host is linked per module import, and a module is only ever
+  assembled with the stub of its own build.
+- **Fingerprint** `rlnative-abi=3;wasmtime=49.0.0;wasm=gc,function-references,exceptions,tail-call;collector=copying`.
   The stub carries `RLNATIVE-FINGERPRINT=<fingerprint>\0` in its read-only data (kept by a
   `black_box` in `main`); the assembler scans the stub for it and compares with
   `rl_version()`. Bump `rlnative-abi` when the trailer or the C ABI changes (2: `platform`
-  and `cpu` joined `rl_precompile`, 2026-09-24), together with `NativeToolchain.ABI`, which
+  and `cpu` joined `rl_precompile`, 2026-09-24; 3: `rl_assemble` and the macOS embedded payload,
+  2026-09-25), together with `NativeToolchain.ABI`, which
   refuses a shim of another revision before calling it; edit the
   fingerprint together with `rlabi::config`.
 
@@ -68,7 +84,7 @@ module for the `NativeTarget` (`--native-target`, `--native-cpu`) and the target
 so a host without a shim, an unknown CPU level or a platform without a stub fails before
 the front end runs. The module is the ordinary wasm-GC Preview 1 path (`wasmOutput` =
 `--native` or `.wasm`); only the write differs:
-`NativeExecutable.assemble(stub(platform), precompile(wasm, target))`, written to a
+`NativeToolchain.assemble(stub(platform), precompile(wasm, target))` (`rl_assemble`), written to a
 temp file beside `-o`, chmod 0755, atomically moved over it (writing in place fails with
 ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches disk.
 
@@ -79,15 +95,17 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   `build.sh --maven <rontolisp.native.build> <rontolisp.native.required>`. `build` (default
   `false`, `true` under `-Pnative`) builds the pair when `cargo` is on `PATH` or in
   `~/.cargo/bin`, else warns and goes on; `required` (CI) fails unless the host's pair is
-  there afterwards and, on Linux, its stub is static. A static link that fails (no `libc.a`)
-  falls back to a dynamic stub with a warning, except under `required`. "Static" is read
+  there afterwards and, on Linux, its stub is static. Without the musl target (no rustup)
+  the stub falls back to linking glibc dynamically with a warning, except under `required`.
+  "Static" is read
   from the ELF program headers (no `PT_INTERP`, `build.sh --is-static`), never from `ldd`:
   ldd calls any foreign-architecture file "not a dynamic executable" and, on the aarch64
   runner, reported the static-pie stub as dynamic (CI run 36008491295, 2026-09-24).
   `build-sh-test.sh` (run by `--test`) pins the check on known static/dynamic executables.
 - **Packaging** (decided 2026-09-24 from the sizes below): each `-Pnative` binary carries its
   HOST pair plus the other two release platforms' STUBS (for `--native-target`; +4.1 MB on
-  linux-x86_64, +5.4 MB on macOS, uncompressed as native-image stores resources, against a
+  linux-x86_64, +5.4 MB on macOS with the static-glibc stubs, which the musl ones undercut by
+  0.83 MB (x86_64) and 0.60 MB (aarch64); uncompressed as native-image stores resources, against a
   ~102 MB binary); the release exec jar carries all three pairs (~11.4 MB compressed; 8.1 MB
   jar -> ~19.5 MB), so `java -jar` compiles `--native` on any of them; the Maven Central jar
   (the `deploy` job) carries none. CI (`ci.yaml`): `native-stubs` (not on pull requests)
@@ -107,16 +125,18 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
 - **Fingerprint**: `rl_version()` must be AMONG the NUL-terminated strings following
   `RLNATIVE-FINGERPRINT=` in the stub (`NativeExecutable.stubFingerprints`), else
   `IllegalStateException` before anything is written.
-- **native-image**: `reachability-metadata.json` registers `rl_precompile` and `rl_free`
-  (the first two downcalls; `rl_version`'s `() -> void*` is Metal's shape), pinned by
+- **native-image**: `reachability-metadata.json` registers `rl_precompile`, `rl_free` and
+  `rl_assemble` (the first three downcalls; `rl_version`'s `() -> void*` is Metal's shape), pinned by
   `NativeToolchainTest`; `resource-config.json` includes `am/ik/rontolisp/native/.*` when
   `NativeToolchain` is reachable. `-Pweb` never reaches `cli`.
-- **Tests**: `NativeExecutableTest` (layout, marker scan, write), `NativeToolchainTest`,
+- **Tests**: `NativeExecutableTest` (marker scan, write), `NativeToolchainTest` (incl.
+  `rl_assemble`'s append and refusal),
   `RontoLispCliTest.nativeRefuses...` / `nativeTargetAndCpu...`, and `NativeOutputE2eTest`
   (a ci-spec slice + argv, and a trap's exit status, diffed against
   `wasmtime run --dir . --dir /tmp`; a `../` read from a subdirectory, which wasmtime
   refuses; the baseline and cross-target runs under qemu), which skips without wasmtime or
-  qemu on `PATH` or without the resources it needs.
+  qemu on `PATH` or without the resources it needs; on macOS it also runs
+  `codesign --verify --strict` on an output.
 
 ## Traps
 
@@ -138,21 +158,86 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   it, so a relative `../x` needs fd 3's absolute name above; under `wasmtime run --dir .` it
   still answers the ordinary open errno. `/..` (climbing above the root) is refused, where a
   native program would stay at `/`.
-- **macOS signature**: the appended payload is outside the linker's ad-hoc signature
-  (`codesign -v` fails strict validation; it still runs from a shell) -- `.todo/944`.
 - **ETXTBSY in a multi-threaded test**: exec of a just-written output fails while another
   thread's fork still holds the write descriptor (until that child's exec). `stub.rs`
   retries the spawn; a Java E2E that writes and runs outputs in parallel needs the same.
 - **An explicit target turns host detection off.** `Config::target` set (even to the host's
   triple) makes Cranelift start from no ISA flags; unset, it infers the host's. `host` is the
   only CPU level that leaves it unset, so it is refused for another platform.
-- **musl is slower, not smaller-and-equal**: a musl stub (2.12 MB) ran `gc.lisp` at 14.0-14.3
-  G user cycles against 12.2-12.5 for glibc, dynamic or static (+13-15%, same instruction
-  count, pinned to one core, 2026-09-24, Xeon E5-2697A v4). It is the string functions:
-  `LD_PRELOAD`ing a `rep movs` `memmove` into the glibc stub made it slower still, and a
-  musl stub with mimalloc stayed at 14.0. Static glibc costs size instead (+0.98 MB on
-  x86_64); a musl stub with its own `memmove`/`memcpy`/`memset` could have both, at the
-  price of owning those routines (`.todo/956`).
+- **musl: small, but not with its own x86_64 `memcpy`.** Static glibc cost 0.83 MB
+  (x86_64; 0.60 MB aarch64) over musl, and no linker flag wins it back: of the x86_64 stub's
+  +700 KB `.text` / +208 KB `.rodata` over the dynamic one, 678 KB / 89 KB are whole `libc.a`
+  members glibc's own static startup, stdio, locale, `dlopen` (NSS, gconv) and IFUNC
+  variants pull in (`vfscanf` 37 KB, `gconv_simple` 31 KB, `malloc` 26 KB, `vf[w]printf`
+  38 KB, `dl-*`, `strto*_l`, every `str*`/`mem*` SSE2/AVX2/EVEX variant; `C-ctype` 57 KB
+  of `.rodata`), measured from the link map 2026-09-25. musl's cost was speed: the copying
+  collector copies each surviving object with `copy_within` (`memmove`, most under 64 bytes),
+  and musl's x86_64 `memcpy` starts every copy with `rep movsq` -- 11.7% of `gc.lisp`'s
+  cycles as one symbol, 13.5-14.0 G user cycles against 11.6-11.9 for static glibc in the
+  same interleaved runs (+16-18%, same instruction count; 2026-09-25 at four codegen units, pinned to one core, Xeon
+  E5-2697A v4; at one unit 2026-09-24 it was +13-15%, and mimalloc did not move it). So
+  the x86_64 stub defines `memcpy`/`memmove`/`memset` itself (`runner/src/memfns.rs`, module
+  assembly: every load before any store up to 128 bytes, a 64-byte loop in the safe
+  direction above, `rep movsb`/`stosb` from 2 KiB forwards; SSE2 only), which keeps
+  `libc.a`'s members out of the link. Measured 2026-09-25 against the static-glibc stub, five
+  interleaved runs: `gc` 10.96-11.25 G cycles against 11.25-11.38 (-2.5%), 3.16-3.38 s
+  against 3.27-3.52 s; `hash` -1.2%; `bignum`, `clos`, `fib`, `list`, `mandelbrot`,
+  `matmul`, `sieve`, `sort`, `string` within 0.5%; hello 0.01 s / 18 MB RSS. aarch64 keeps
+  musl's routines: its `memcpy`/`memset` are Arm's optimized-routines assembly (the lineage
+  of glibc's generic aarch64 ones) and `memmove` hands non-overlapping copies to that
+  `memcpy`. aarch64 speed is NOT measured (`.todo/961`) -- no aarch64 hardware here; only the stub tests
+  under `qemu-aarch64`. The routines' tests (`memfns::tests`, in `build.sh --test`) cover
+  every length to 300 and around the thresholds, every alignment and every overlap
+  distance to 70 either way; a load moved after a store, or a backwards move sent forwards,
+  fails them.
+- **The stub is not built as one codegen unit.** Under `codegen-units = 1` (what `release`
+  keeps for the shim) LLVM leaves wasmtime's `GcHeap::index::<VMCopyingHeader>` out of line
+  in the copying collector's `forward` (11% of `gc.lisp`'s cycles as its own symbol): 38.0 G
+  user instructions against 33.9 G at 2, 4, 8, 16 or 32 units, the count `wasmtime run`
+  (the 49.0.0 release CLI) retires on the same module (measured 2026-09-25, x86_64; the
+  out-of-line copy is in the aarch64 stub too, by its symbol). It was the whole 7-9% gap to
+  `wasmtime run`, not the feature set, the allocator or the precompiled code: a throwaway
+  runner with wasmtime's default features ran the stub's module at the stub's count, and
+  one with the minimal features at 16 units at the CLI's. `release-runner` sets 4, the
+  smallest stub of those (x86_64 +69 KB / +26 KB gz over one unit, aarch64 +65 KB / +21 KB
+  gz; 16 was +149 KB); pinned by `runner_profile_has_more_than_one_codegen_unit` (`rlabi`).
+  Other programs: `hash` -9.5% instructions, `list` / `sort` -1%, the other bench programs
+  unchanged. The shim stays at one unit: at four, precompiling `llm.lisp` took 2% more
+  instructions.
+
+## macOS: the module inside the signed image
+
+A payload appended after a Mach-O stub is outside the linker's ad-hoc signature:
+`codesign -v` reported "main executable failed strict validation" (it still ran from a shell,
+2026-09-24, with and without `com.apple.quarantine`). So the module goes INSIDE the image and
+the image is re-signed, in pure Rust (`precomp/src/macho.rs`), with no `codesign` on the
+compiling host -- a Linux host writes `--native-target macos-aarch64` outputs too. Rust, not
+Java: `rlpack` and `stub.rs` need the same assembler, and one implementation serves both.
+
+- **The stub reserves the room**: `runner/src/main.rs` puts a 16-byte `#[used]` static
+  (`rlabi::payload::EMPTY_SECTION`, a header naming an empty module; not all zeros, which
+  the linker may turn into zero-fill) in `__RLPAYLOAD,__payload`; `runner/build.rs` passes
+  `-segprot __RLPAYLOAD r r`. ld (1230.1) lays the segment out LAST before `__LINKEDIT`, one
+  16 KiB page (+16,448 B of stub). No segment is ever added: dyld's binding opcodes and
+  chained fixups name segments by index, and the linker already counted this one.
+- **Embedding** (`macho::embed`): writes `header ++ module` at the section, grows the
+  segment to a 16 KiB multiple, moves `__LINKEDIT` (fileoff and vmaddr) behind it and adds
+  the delta to every file offset that points into it (`LC_SYMTAB`, `LC_DYSYMTAB`,
+  `LC_DYLD_INFO[_ONLY]`, the `linkedit_data_command`s). A load command in neither of its
+  two lists (offset-bearing / offset-free) is REFUSED rather than guessed about, as is a
+  stub whose last two segments are not `__RLPAYLOAD`, `__LINKEDIT`.
+- **Signing**: drops the linker's signature and writes the shape ld writes (read off the
+  stub 2026-09-25): a `SuperBlob` with ONE `CodeDirectory` v0x20400, flags
+  `adhoc | linker-signed`, no special slots, SHA-256 of each 4 KiB page up to the signature
+  (16-aligned, the file's end), `execSeg` = `__TEXT` with `MAIN_BINARY`, identifier kept
+  from the stub's (`rlrun-<hash>`). `stub.rs` checks every page hash on any host holding the
+  macOS stub; on macOS, `codesign --verify --strict` accepts the output and refuses it
+  after one module byte changes. `spctl -a` still rejects it: ad hoc is not notarized, and
+  notarization needs a Developer ID -- out of scope.
+- **Limits**: Mach-O file offsets are 32-bit; an output past 4 GiB is refused.
+- Numbers (2026-09-25, Apple silicon, `rlpack`): `gc` output 1,864,323 B, 1.32-1.33 s (the
+  first run of a fresh file 1.71 s: the kernel validates the signature on first exec),
+  `wasmtime run` 1.37-1.42 s; `fib` 0.10 s / 20 MB RSS.
 
 ## CPU baseline and cross-targets
 
@@ -208,6 +293,18 @@ spike, shim 5.5 MB, stub 1.7 MB. Static glibc outputs: hello 3,005,768 B, `gc` ~
 cross-built aarch64 static stub ran the ci slice under `qemu-aarch64-static` with output
 identical to x86_64's.
 
+2026-09-25, after the Mach-O payload change and at four codegen units (Traps): static stub
+linux-x86_64 2,928,288 B (1.22 MB gz), linux-aarch64 2,501,768 B (1.10 MB gz); outputs hello
+2,947,016 B, `fib` 2,965,896 B, `gc` 3,159,872 B. Pinned to one core, load average < 3, five
+interleaved runs: `gc` 3.25-3.28 s against `wasmtime run` 3.27-3.33 s (one unit:
+3.55-3.57 s), `hash` 0.74-0.76 s against 0.75-0.86 s (one unit: 0.81-0.83 s), `fib`
+0.26 s = `wasmtime run`; hello 0.01 s / 19 MB RSS.
+
+2026-09-25, static musl (Traps, "musl"): stub linux-x86_64 2,094,104 B (0.85 MB gz;
+-834,184 B), linux-aarch64 (cross-built) 1,905,600 B (0.83 MB gz; -596,168 B); outputs hello
+2,112,832 B, `gc` 2,325,688 B. `gc` 3.16-3.38 s against 3.27-3.52 s for the static-glibc
+stub in the same interleaved runs (machine busier than above).
+
 2026-09-24, Linux x86_64 (64 cores), rustc 1.98.1, wasmtime 47.0.3:
 
 | | shim | stub |
@@ -230,7 +327,8 @@ Through the CLI (2026-09-24, same host, load average ~12, `java -jar` exec jar):
 included); outputs `hello` 2,006,592 B, `fib` 2,025,472 B, `gc` 2,227,640 B; `gc` ran
 3.65-3.72 s against `wasmtime run`'s 3.34-3.39 s (+9%, where the stub-only run above was
 +2%), `fib` 0.37 s, hello 0.01 s / 20 MB RSS. The Java-assembled `gc` is byte-identical to
-`rlpack`'s for the same `.wasm`, so any gap is the stub's, not the assembler's.
+`rlpack`'s for the same `.wasm`, so any gap is the stub's, not the assembler's. The gap
+was the stub's single codegen unit (Traps); closed 2026-09-25.
 `-Pnative` binary (102,500,616 B, carrying the 12.0 MB pair as resources): `--native -o`
 takes 0.59 s for hello and 0.72 s for `gc.lisp` (0.80 s on the first call, which extracts
 the shim); it also compiles under `env -i` (cache from `user.home`).

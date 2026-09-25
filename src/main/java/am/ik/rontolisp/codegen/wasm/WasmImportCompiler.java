@@ -70,8 +70,20 @@ final class WasmImportCompiler {
 	 * {@code :string} result's non-validating decoder corrupts arbitrary bytes, so binary
 	 * needs its own designator, not care at the call site.
 	 */
-	private static final List<BoundaryType> KNOWN_PARAM_TYPES = List.of(BoundaryType.S32, BoundaryType.FLOAT,
-			BoundaryType.BOOL, BoundaryType.STRING, BoundaryType.S_EXPR, BoundaryType.BYTES);
+	private static final List<BoundaryType> KNOWN_PARAM_TYPES = List.of(BoundaryType.S32, BoundaryType.S64,
+			BoundaryType.FLOAT, BoundaryType.BOOL, BoundaryType.STRING, BoundaryType.S_EXPR, BoundaryType.BYTES,
+			BoundaryType.EXTERN);
+
+	/**
+	 * Whether a declaration names {@code :extern} anywhere: the module then carries the
+	 * one-field struct a host reference is boxed in ({@code WasmLispCompiler}'s
+	 * {@code hostRefTypeIndex}).
+	 * @param decl the parsed declaration
+	 * @return whether the declaration crosses a host reference
+	 */
+	static boolean usesExtern(Decl decl) {
+		return decl.returnType() == BoundaryType.EXTERN || decl.paramTypes().contains(BoundaryType.EXTERN);
+	}
 
 	/**
 	 * The boundary types the {@code --no-gc} backend may name -- the same directive, a
@@ -833,6 +845,18 @@ final class WasmImportCompiler {
 	private static void emitUnboxTop(WasmLispCompiler.Ctx ctx, BoundaryType type) {
 		switch (type) {
 			case S32 -> WasmEmitHelper.castI31GetS(ctx);
+			// Any exact integer (an i31 or the boxed i64 lane), exactly; a float
+			// truncates, as the export side's result does.
+			case S64 -> WasmExportCompiler.emitWideIntResult(ctx, true);
+			// The boxed host reference back out of its struct (traps on anything else,
+			// nil included: exact-or-trap).
+			case EXTERN -> {
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+				ctx.writer.writeHeapType(ctx.hostRefTypeIndex);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+				ctx.writer.writeUnsignedLeb128(ctx.hostRefTypeIndex);
+				ctx.writer.writeUnsignedLeb128(0);
+			}
 			// Accepts an int, ratio or float Lisp value (numeric contagion like the
 			// arithmetic built-ins).
 			case FLOAT -> WasmEmitHelper.castFloatGetF64(ctx);
@@ -862,6 +886,17 @@ final class WasmImportCompiler {
 			boolean reentrant) {
 		switch (type) {
 			case S32 -> ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			// The whole i64 exactly: an i31 when it fits, else the boxed exact integer.
+			case S64 -> {
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+			}
+			// A host reference, boxed so it can live in a Lisp value: the struct is the
+			// only thing holding it, so the host sees it die with the box.
+			case EXTERN -> {
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeUnsignedLeb128(ctx.hostRefTypeIndex);
+			}
 			case FLOAT -> {
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);

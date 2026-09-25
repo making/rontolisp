@@ -135,6 +135,9 @@ public final class LispPreludeLibrary {
 	private static final Map<String, String> SOURCES = new LinkedHashMap<>();
 
 	static {
+		// Two eql instances are equalp before any slot is walked: on wasm-GC a --native
+		// program's Objective-C wrapper is eql by address while its handle slots differ
+		// (.kb/objc.md, "--native").
 		SOURCES.put(LispNames.EQUALP, """
 				(defun equalp (a b)
 				  (cond ((and (numberp a) (numberp b)) (= a b))
@@ -148,8 +151,9 @@ public final class LispPreludeLibrary {
 				              (equalp %eqp-a %eqp-b))
 				           (unless (equalp (car %eqp-a) (car %eqp-b)) (return nil))))
 				        ((and (%obj-p a) (%obj-p b))
-				         (and (equal (%obj-tag a) (%obj-tag b))
-				              (equalp (%obj-slots a) (%obj-slots b))))
+				         (or (eql a b)
+				             (and (equal (%obj-tag a) (%obj-tag b))
+				                  (equalp (%obj-slots a) (%obj-slots b)))))
 				        ((and (%arrayp a) (%arrayp b))
 				         (and (equal (array-dimensions a) (array-dimensions b))
 				              (do ((%eqp-i 0 (+ %eqp-i 1))

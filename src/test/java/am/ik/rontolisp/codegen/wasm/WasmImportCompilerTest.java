@@ -10,6 +10,7 @@ import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.wasm.Type;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -131,6 +132,27 @@ class WasmImportCompilerTest {
 			.hasMessageContaining(":WIDGET");
 		assertThatThrownBy(() -> parse("(rontolisp:wasm-import 'g :params '(:int) :returns :widget)"))
 			.hasMessageContaining(":WIDGET");
+	}
+
+	@Test
+	void parsesS64AndExternAndKeepsExternAnImportOnlyType() {
+		// :s64 crosses the whole i64 (a 64-bit host address, objc-native.lisp); :extern
+		// is an opaque host reference boxed in a one-field struct, which only an IMPORT
+		// can hand the module.
+		WasmImportCompiler.Decl decl = parse("(rontolisp:wasm-import 'own :params '(:s64) :returns :extern)");
+		assertThat(decl.paramTypes()).containsExactly(BoundaryType.S64);
+		assertThat(decl.returnType()).isEqualTo(BoundaryType.EXTERN);
+		assertThat(WasmImportCompiler.hostParamTypes(decl)).containsExactly(Type.I64);
+		assertThat(WasmImportCompiler.hostResultTypes(decl)).containsExactly(Type.EXTERNREF);
+		assertThat(WasmImportCompiler.usesExtern(decl)).isTrue();
+		assertThat(compile("""
+				(rontolisp:wasm-import 'own :params '(:s64) :returns :extern)
+				(rontolisp:wasm-import 'held :params '(:extern) :returns :s64)
+				(print (held (own 5000000000)))
+				""")).isNotEmpty();
+		assertThatThrownBy(() -> WasmExportCompiler
+			.parse((LispCons) LispReader.readAllFromString("(rontolisp:wasm-export 'f :returns :extern)").getFirst()))
+			.hasMessageContaining(":EXTERN");
 	}
 
 	@Test
@@ -561,8 +583,17 @@ class WasmImportCompilerTest {
 				(rontolisp:wasm-export 'add10 :params '(:long) :returns :long)
 				""");
 		assertThat(new NoGcWasmCompiler().compile(program)).isNotEmpty();
-		assertThatThrownBy(() -> WasmLispCompiler.builder().noWasi(true).build().compile(program))
-			.hasMessageContaining("type designator :LONG is not supported");
+		// The GC backend carries :s64 (:long) too, through its boxed exact integer, but
+		// not the narrow unsigned family the house integer cannot range-check here.
+		assertThat(WasmLispCompiler.builder().noWasi(true).build().compile(program)).isNotEmpty();
+		List<LispVal> unsigned = LispReader.readAllFromString("""
+				(rontolisp:wasm-import 'add :params '(:u32 :u32) :returns :u32)
+				(defun add10 (n) (add n 10))
+				(rontolisp:wasm-export 'add10 :params '(:long) :returns :long)
+				""");
+		assertThat(new NoGcWasmCompiler().compile(unsigned)).isNotEmpty();
+		assertThatThrownBy(() -> WasmLispCompiler.builder().noWasi(true).build().compile(unsigned))
+			.hasMessageContaining("type designator :U32 is not supported");
 	}
 
 	@Test

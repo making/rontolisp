@@ -195,6 +195,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ObjcNativeLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/objc-native\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.GeomLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/geom\\.lisp"

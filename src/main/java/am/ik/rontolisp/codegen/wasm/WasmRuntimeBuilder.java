@@ -139,11 +139,13 @@ final class WasmRuntimeBuilder {
 	 * layout record and every slot is recursively {@code _equal} -- structural, matching
 	 * the interpreter's {@code LispInstance.equals} and the JVM arm, so
 	 * {@code (equal p1 p2)} answers alike on all four backends. Nothing is emitted for it
-	 * when the program cannot build an instance.
+	 * when the program cannot build an instance. An instance of the address-keyed layout
+	 * compares its first slot only (see {@link #buildEqlTailBody}).
 	 * @param instanceTypeIndex the {@code TYPE_INSTANCE} index, or -1
+	 * @param keyedLayout the address-keyed layout record, or -1
 	 * @return the function body
 	 */
-	static byte[] buildEqualBody(int instanceTypeIndex, boolean charvecPossible) {
+	static byte[] buildEqualBody(int instanceTypeIndex, int keyedLayout, boolean charvecPossible) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -202,7 +204,7 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END); // end car-equal if
 		w.write(Instruction.ELSE);
 
-		emitInstanceEqual(w, instanceTypeIndex);
+		emitInstanceEqual(w, instanceTypeIndex, keyedLayout);
 
 		// else (ref.eq already false): eql base case for value types.
 		// both characters -> code points equal
@@ -319,9 +321,20 @@ final class WasmRuntimeBuilder {
 	 * value a loop most often compares. One function rather than the value chain inlined
 	 * at each site; in a module with none of these types the fold leaves it a constant,
 	 * and {@link am.ik.wasm.WasmPeephole} then removes its calls.
+	 *
+	 * <p>
+	 * Two instances of the address-keyed layout ({@code LispNames.OBJC_OBJECT_STRUCT}, a
+	 * {@code --native} program's Objective-C wrapper) are eql when their first slots --
+	 * the object's address -- are: the interpreter's record and the JVM's handle compare
+	 * by address, and a wrapper cannot be interned, since the table would keep every
+	 * wrapper, and so every reference, alive ({@code .kb/objc.md}, "--native").
+	 * @param instanceTypeIndex the {@code TYPE_INSTANCE} index, or -1
+	 * @param keyedLayout the address-keyed layout record, or -1 (nothing is emitted for
+	 * it)
 	 * @return the function body
 	 */
-	static byte[] buildEqlTailBody() {
+	static byte[] buildEqlTailBody(int instanceTypeIndex, int keyedLayout) {
+		boolean keyed = instanceTypeIndex >= 0 && keyedLayout >= 0;
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // 0 extra locals
@@ -399,9 +412,34 @@ final class WasmRuntimeBuilder {
 		w.writeSignedLeb128(0);
 		w.write(Instruction.END);
 		w.write(Instruction.ELSE);
+		if (keyed) {
+			// both address-keyed instances -> their address slots eql
+			refTest(w, 0, instanceTypeIndex);
+			refTest(w, 1, instanceTypeIndex);
+			w.write(Instruction.I32_AND);
+			w.write(Instruction.IF);
+			w.write(Type.I32);
+			emitLayoutIs(w, 0, instanceTypeIndex, keyedLayout);
+			emitLayoutIs(w, 1, instanceTypeIndex, keyedLayout);
+			w.write(Instruction.I32_AND);
+			w.write(Instruction.IF);
+			w.write(Type.I32);
+			firstInstanceSlot(w, 0, instanceTypeIndex);
+			firstInstanceSlot(w, 1, instanceTypeIndex);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQUAL);
+			w.write(Instruction.ELSE);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.END);
+			w.write(Instruction.ELSE);
+		}
 		// anything else (a cons, an instance, a closure, nil) is identity-only
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
+		if (keyed) {
+			w.write(Instruction.END); // end both-instance if
+		}
 		w.write(Instruction.END); // end complex if
 		w.write(Instruction.END); // end ratio if
 		w.write(Instruction.END); // end limb-integer if
@@ -417,7 +455,7 @@ final class WasmRuntimeBuilder {
 	 * type): same layout record and every slot recursively equal. The caller closes the
 	 * {@code if} after the remaining eql arms, so this leaves the ELSE open.
 	 */
-	private static void emitInstanceEqual(WasmWriter w, int instanceTypeIndex) {
+	private static void emitInstanceEqual(WasmWriter w, int instanceTypeIndex, int keyedLayout) {
 		if (instanceTypeIndex < 0) {
 			return;
 		}
@@ -439,8 +477,9 @@ final class WasmRuntimeBuilder {
 		w.writeUnsignedLeb128(2); // i = 0
 		instanceSlots(w, 0, instanceTypeIndex);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		emitKeyedSlotCount(w, 0, instanceTypeIndex, keyedLayout);
 		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(3); // n = slot count
+		w.writeUnsignedLeb128(3); // n = slot count (1 for the address-keyed layout)
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(1);
 		w.write(Instruction.SET_LOCAL);
@@ -480,6 +519,34 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.ELSE);
 	}
 
+	/**
+	 * Replaces the slot count on the stack by {@code 1} when the instance in
+	 * {@code local} carries the address-keyed layout: its identity is its first slot, and
+	 * the rest (the handle that owns the reference) is not part of it. Nothing is emitted
+	 * without such a layout.
+	 */
+	private static void emitKeyedSlotCount(WasmWriter w, int local, int instanceTypeIndex, int keyedLayout) {
+		if (keyedLayout < 0) {
+			return;
+		}
+		// select(count, 1, layout != keyed)
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		emitLayoutIs(w, local, instanceTypeIndex, keyedLayout);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.SELECT);
+	}
+
+	/**
+	 * Pushes whether the instance in {@code local} carries layout record {@code layout}.
+	 */
+	private static void emitLayoutIs(WasmWriter w, int local, int instanceTypeIndex, int layout) {
+		instanceField(w, local, instanceTypeIndex, 0);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(layout);
+		w.write(Instruction.I32_EQ);
+	}
+
 	/** Pushes field {@code field} of the instance in {@code local}. */
 	private static void instanceField(WasmWriter w, int local, int instanceTypeIndex, int field) {
 		getLocal(w, local);
@@ -495,6 +562,15 @@ final class WasmRuntimeBuilder {
 		instanceField(w, local, instanceTypeIndex, 1);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+	}
+
+	/** Pushes the first slot of the instance in {@code local}. */
+	private static void firstInstanceSlot(WasmWriter w, int local, int instanceTypeIndex) {
+		instanceSlots(w, local, instanceTypeIndex);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 	}
 
 	/** Pushes slot {@code local(indexLocal)} of the instance in {@code local}. */
@@ -537,6 +613,8 @@ final class WasmRuntimeBuilder {
 	 * reason two {@code equal} keys still hash equal: same shape, same traversal order,
 	 * same place to run out.
 	 * @param instanceTypeIndex the {@code TYPE_INSTANCE} index, or -1
+	 * @param keyedLayout the address-keyed layout record, whose instances fold their
+	 * first slot only (as {@code _equal} compares them), or -1
 	 * @param depthGlobalIndex the {@code (mut i32)} recursion-depth global, or -1 to emit
 	 * the uncapped body (a program with no hash table never calls {@code _hash}, and
 	 * carries neither the globals nor the guard)
@@ -544,7 +622,7 @@ final class WasmRuntimeBuilder {
 	 * when {@code depthGlobalIndex} is
 	 * @return the function body
 	 */
-	static byte[] buildHashBody(int instanceTypeIndex, int depthGlobalIndex, int gasGlobalIndex,
+	static byte[] buildHashBody(int instanceTypeIndex, int keyedLayout, int depthGlobalIndex, int gasGlobalIndex,
 			boolean charvecPossible, boolean identityHash) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
@@ -776,8 +854,9 @@ final class WasmRuntimeBuilder {
 			w.writeUnsignedLeb128(3); // idx = 0
 			instanceSlots(w, 0, instanceTypeIndex);
 			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+			emitKeyedSlotCount(w, 0, instanceTypeIndex, keyedLayout);
 			w.write(Instruction.SET_LOCAL);
-			w.writeUnsignedLeb128(4); // end = slot count
+			w.writeUnsignedLeb128(4); // end = slot count (1 for the address-keyed layout)
 			w.write(Instruction.BLOCK, 0x40);
 			w.write(Instruction.LOOP, 0x40);
 			getLocal(w, 3);

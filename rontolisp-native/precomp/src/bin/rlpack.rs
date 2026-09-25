@@ -1,6 +1,6 @@
-//! `rlpack [--platform P] [--cpu C] STUB IN.wasm OUT`: precompiles IN.wasm and writes
-//! STUB + module + trailer to OUT (mode 0755) -- what `--native -o OUT` does, without the
-//! JVM. `P` defaults to the host's platform, `C` to `baseline` (`rlprecomp::Cpu`). STUB must
+//! `rlpack [--platform P] [--cpu C] STUB IN.wasm OUT`: precompiles IN.wasm and writes the
+//! executable that runs it under STUB to OUT (mode 0755, `rlprecomp::assemble`) -- what
+//! `--native -o OUT` does, without the JVM. `P` defaults to the host's platform, `C` to `baseline` (`rlprecomp::Cpu`). STUB must
 //! be the runner stub built for `P`. For scripts and tests.
 
 use std::process::exit;
@@ -45,7 +45,7 @@ fn pack(platform: Option<&str>, cpu: &str, stub: &str, wasm: &str, out: &str) ->
         );
     }
     let module = rlprecomp::precompile_for(&std::fs::read(wasm)?, platform, rlprecomp::Cpu::parse(cpu))?;
-    std::fs::write(out, rlabi::payload::assemble(&stub, &module))?;
+    std::fs::write(out, rlprecomp::assemble(&stub, &module).map_err(wasmtime::Error::msg)?)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

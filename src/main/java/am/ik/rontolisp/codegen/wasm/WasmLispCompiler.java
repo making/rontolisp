@@ -604,6 +604,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @return the index of the first export wrapper type
 	 */
 	private int fixedTypeCount() {
+		return hostRefTypeIndex() + (this.usesHostRefs ? 1 : 0);
+	}
+
+	/**
+	 * The index of the host-reference box, {@code (struct (field externref))}: right
+	 * after the extra callable types, so adding it moves no existing type index. Only
+	 * meaningful when a {@code rontolisp:wasm-import} names {@code :extern}
+	 * ({@link #usesHostRefs}).
+	 */
+	private int hostRefTypeIndex() {
 		return extraCallableTypeBase() + this.extraCallArity;
 	}
 
@@ -654,6 +664,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	 */
 	private boolean usesInstances;
 
+	/**
+	 * The baked layout address of {@link LispNames#OBJC_OBJECT_STRUCT}, whose instances
+	 * compare and hash by their first (address) slot alone, or {@code -1} when the
+	 * program carries no such layout -- every other module is byte-identical. Set once
+	 * the layouts are baked, before any runtime body is built.
+	 */
+	private int addressKeyedLayout = -1;
+
 	// Whether a mutable character vector can exist at run time (Ctx.charvecPossible).
 	// A per-compile fact rather than an option, set once the injected runtime defuns
 	// are known, and read both by the expression compiler (through Ctx) and by the
@@ -699,6 +717,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * about the extra tier.
 	 */
 	private int extraCallArity;
+
+	/**
+	 * Whether a {@code rontolisp:wasm-import} crosses a host reference ({@code :extern}),
+	 * which appends the one-field box type at {@link #hostRefTypeIndex()}. Every other
+	 * module is byte-identical.
+	 */
+	private boolean usesHostRefs;
 
 	/**
 	 * Whether this module carries {@code _arity_chk}, the wrong-argument-count guard a
@@ -3334,7 +3359,15 @@ public final class WasmLispCompiler implements LispCompiler {
 				// backend; on WASM it is a no-op, exactly as wasm-export is on the JVM.
 			}
 			else if (WasmImportCompiler.isImportForm(expr)) {
-				importDecls.add(WasmImportCompiler.parse((LispCons) expr));
+				WasmImportCompiler.Decl decl = WasmImportCompiler.parse((LispCons) expr);
+				if (WasmImportCompiler.usesExtern(decl)) {
+					if (this.component) {
+						throw new UnsupportedOperationException("rontolisp:wasm-import :extern is a core-module"
+								+ " boundary type; a component has no host reference to hand it, in " + expr.print());
+					}
+					this.usesHostRefs = true;
+				}
+				importDecls.add(decl);
 			}
 			else if (WasmComponentImportCompiler.isComponentImportForm(expr)) {
 				componentImports.add(WasmComponentImportCompiler.parse((LispCons) expr));
@@ -3917,6 +3950,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// also land before the data segment is snapshotted.)
 		Map<String, Integer> layoutAddresses = this.usesInstances ? WasmInstanceLayouts.emit(closRegistry, stringTable,
 				usedLayoutTags(program, closRegistry, usesEval || restartMode || usesRead)) : Map.of();
+		Integer keyedLayout = layoutAddresses.get(LispLayout.STRUCT_TAG_PREFIX + LispNames.OBJC_OBJECT_STRUCT);
+		this.addressKeyedLayout = keyedLayout != null ? keyedLayout : -1;
 
 		// Assign funcIds and build function info map
 		int[] nextFuncId = { 0 };
@@ -4565,6 +4600,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		int parkFreeFuncIndex = parkHelpers ? parkAllocFuncIndex + 1 : -1;
 		int parkStrResultFuncIndex = parkHelpers ? parkAllocFuncIndex + 2 : -1;
 		int parkHelperCount = parkHelpers ? 3 : 0;
+		ctxBuilder.hostRefTypeIndex(this.usesHostRefs ? hostRefTypeIndex() : -1);
 		ctxBuilder.parkAllocFuncIndex(parkAllocFuncIndex)
 			.parkFreeFuncIndex(parkFreeFuncIndex)
 			.parkStrResultFuncIndex(parkStrResultFuncIndex);
@@ -6269,6 +6305,12 @@ public final class WasmLispCompiler implements LispCompiler {
 						w.writeRefType(true, Type.EQ.code());
 					});
 				}
+				// The host-reference box at hostRefTypeIndex(): (struct (field
+				// externref)), what an :extern import result lives in as a Lisp value.
+				if (this.usesHostRefs) {
+					types.addRecGroup(rec -> rec
+						.addSubFinalStruct(fields -> fields.addField(false, w -> w.write(Type.EXTERNREF))));
+				}
 				// Export wrapper signatures (host-callable), appended after the last
 				// fixed type (TYPE_F32ARR, or the --simd block's TYPE_V_SET). One per
 				// (rontolisp:wasm-export ...) directive.
@@ -7404,7 +7446,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmIoRuntimeBuilder.buildCloseBody(stringTable, ostreamTableGlobalIndex))
 					.addFunction(WasmIoRuntimeBuilder.buildWriteLineBody(stringTable, this.charvecPossible))
 					.addFunction(WasmRuntimeBuilder.buildEqualBody(this.usesInstances ? instanceTypeBase() : -1,
-							this.charvecPossible))
+							this.addressKeyedLayout, this.charvecPossible))
 					.addFunction(WasmGetenvRuntimeBuilder.build(scratchBase));
 				// Dispatch function bodies
 				for (byte[] body : dispatchBodies) {
@@ -7414,7 +7456,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmPlistRuntimeBuilder.buildPlistGet());
 				// Hash-table runtime helper bodies (FUNC_HASH, FUNC_HASH_RESIZE)
 				code.addFunction(WasmRuntimeBuilder.buildHashBody(this.usesInstances ? instanceTypeBase() : -1,
-						hashDepthGlobalIndex, hashGasGlobalIndex, this.charvecPossible, this.usesIdentityHashTables));
+						this.addressKeyedLayout, hashDepthGlobalIndex, hashGasGlobalIndex, this.charvecPossible,
+						this.usesIdentityHashTables));
 				code.addFunction(WasmRuntimeBuilder.buildHashResizeBody(this.usesIdentityHashTables,
 						this.usesInstances ? instanceTypeBase() : -1));
 				// Modulo / remainder runtime helper bodies (FUNC_RAT_REM, FUNC_RAT_MOD)
@@ -7675,10 +7718,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				// objects carry the slot it reads, a constant-0 stub otherwise.
 				code.addFunction(identityHashSeqGlobalIndex >= 0
 						? WasmIdentityHashRuntimeBuilder.build(identityHashSeqGlobalIndex,
-								this.usesInstances ? instanceTypeBase() : -1)
+								this.usesInstances ? instanceTypeBase() : -1, this.addressKeyedLayout)
 						: WasmIdentityHashRuntimeBuilder.buildStub());
 				// the eq/eql tail body (FUNC_EQL_TAIL): shaken when no site compares.
-				code.addFunction(WasmRuntimeBuilder.buildEqlTailBody());
+				code.addFunction(WasmRuntimeBuilder.buildEqlTailBody(this.usesInstances ? instanceTypeBase() : -1,
+						this.addressKeyedLayout));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp
@@ -10145,6 +10189,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		/** {@code --reentrant}: the {@code _park_free} function index, or -1. */
 		int parkFreeFuncIndex = -1;
 
+		/** The host-reference box type ({@code :extern}), or -1 when none is used. */
+		int hostRefTypeIndex = -1;
+
 		/** {@code --reentrant}: the {@code _park_str_result} function index, or -1. */
 		int parkStrResultFuncIndex = -1;
 
@@ -10296,6 +10343,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.reentrantTaskGlobalIndex = builder.reentrantTaskGlobalIndex;
 			this.parkAllocFuncIndex = builder.parkAllocFuncIndex;
 			this.parkFreeFuncIndex = builder.parkFreeFuncIndex;
+			this.hostRefTypeIndex = builder.hostRefTypeIndex;
 			this.parkStrResultFuncIndex = builder.parkStrResultFuncIndex;
 			this.callbackExports = builder.callbackExports;
 			this.inlinableDefuns = builder.inlinableDefuns;
@@ -10489,6 +10537,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private int parkAllocFuncIndex = -1;
 
 			private int parkFreeFuncIndex = -1;
+
+			private int hostRefTypeIndex = -1;
 
 			private int parkStrResultFuncIndex = -1;
 
@@ -10946,6 +10996,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder parkFreeFuncIndex(int parkFreeFuncIndex) {
 				this.parkFreeFuncIndex = parkFreeFuncIndex;
+				return this;
+			}
+
+			Builder hostRefTypeIndex(int hostRefTypeIndex) {
+				this.hostRefTypeIndex = hostRefTypeIndex;
 				return this;
 			}
 

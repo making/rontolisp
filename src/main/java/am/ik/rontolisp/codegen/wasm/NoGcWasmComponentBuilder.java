@@ -634,7 +634,7 @@ final class NoGcWasmComponentBuilder {
 			// --no-gc has no cons/reader/printer runtime (no :s-expr) and no arrays (no
 			// :bytes), so it rejects both long before a component lift is planned
 			// (NoGcWasmCompiler.requireSupported).
-			case S_EXPR, BYTES -> throw new UnsupportedOperationException("rontolisp:wasm-export type "
+			case S_EXPR, BYTES, EXTERN -> throw new UnsupportedOperationException("rontolisp:wasm-export type "
 					+ decl.returnType().designator() + " has no component post-return signature");
 			// Unreachable: typeDesignator refuses the JVM-only handle types by name.
 			case FLOAT_VECTOR, FLOAT_MATRIX -> throw new IllegalStateException(

@@ -23,7 +23,7 @@ macro_rules! wasmtime_version {
 macro_rules! fingerprint {
     () => {
         concat!(
-            "rlnative-abi=2;wasmtime=",
+            "rlnative-abi=3;wasmtime=",
             $crate::wasmtime_version!(),
             ";wasm=gc,function-references,exceptions,tail-call;collector=copying"
         )
@@ -55,15 +55,29 @@ pub fn config() -> Config {
     c
 }
 
-/// The executable layout: `stub ++ module ++ u64-le(module length) ++ PAYLOAD_MAGIC`.
+/// The executable layouts. On Linux: `stub ++ module ++ u64-le(module length) ++ MAGIC`,
+/// the module appended to the ELF stub and found from the file's tail. On macOS the
+/// module lives INSIDE the image, in the section [`SEGMENT`]`,`[`SECTION`] the stub
+/// reserves at link time, as `u64-le(module length) ++ MAGIC ++ module`; the assembler
+/// grows that segment, moves `__LINKEDIT` behind it and re-signs the image ad hoc, so the
+/// code signature covers the module (`rlprecomp::macho`).
 pub mod payload {
-    /// The last eight bytes of every executable.
+    /// Ends every Linux executable; follows the length in the macOS section header.
     pub const MAGIC: &[u8; 8] = b"RLNATIVE";
-    /// Length field + magic.
+    /// Length field + magic: the Linux trailer, the macOS section header.
     pub const TRAILER_LEN: usize = 16;
+    /// The Mach-O segment the macOS stub reserves for the module; the last before
+    /// `__LINKEDIT`.
+    pub const SEGMENT: &str = "__RLPAYLOAD";
+    /// The one section of [`SEGMENT`].
+    pub const SECTION: &str = "__payload";
+    /// What the macOS stub's section holds before a module is embedded: a header naming
+    /// an empty module. Not all zeros, which the linker could turn into zero-fill that
+    /// takes no file space.
+    pub const EMPTY_SECTION: [u8; TRAILER_LEN] = *b"\0\0\0\0\0\0\0\0RLNATIVE";
 
-    /// The executable for `stub` running `module`.
-    pub fn assemble(stub: &[u8], module: &[u8]) -> Vec<u8> {
+    /// The Linux executable for `stub` running `module`.
+    pub fn append(stub: &[u8], module: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(stub.len() + module.len() + TRAILER_LEN);
         out.extend_from_slice(stub);
         out.extend_from_slice(module);
@@ -87,6 +101,33 @@ pub mod payload {
         }
         Ok((room - len, len))
     }
+
+    /// The contents of the macOS payload section: `header ++ module`.
+    pub fn section(module: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(TRAILER_LEN + module.len());
+        out.extend_from_slice(&(module.len() as u64).to_le_bytes());
+        out.extend_from_slice(MAGIC);
+        out.extend_from_slice(module);
+        out
+    }
+
+    /// The module a macOS payload section holds, or why it holds none.
+    pub fn embedded(section: &[u8]) -> Result<&[u8], String> {
+        if section.len() < TRAILER_LEN || &section[8..TRAILER_LEN] != MAGIC {
+            return Err(format!("corrupt {SEGMENT},{SECTION} section (no RLNATIVE header)"));
+        }
+        let len = u64::from_le_bytes(section[..8].try_into().unwrap());
+        let room = (section.len() - TRAILER_LEN) as u64;
+        if len == 0 {
+            return Err("no module embedded in this executable (empty RLNATIVE section)".into());
+        }
+        if len > room {
+            return Err(format!(
+                "corrupt {SEGMENT},{SECTION} section: module length {len} exceeds its {room} bytes"
+            ));
+        }
+        Ok(&section[TRAILER_LEN..TRAILER_LEN + len as usize])
+    }
 }
 
 #[cfg(test)]
@@ -105,6 +146,28 @@ mod tests {
         );
     }
 
+    /// One codegen unit leaves wasmtime's `GcHeap::index` out of line in the copying
+    /// collector: +12% instructions on a GC-heavy program (`.kb/native-output.md`, "Traps").
+    /// `release-runner` inherits `release`'s single unit unless it says otherwise.
+    #[test]
+    fn runner_profile_has_more_than_one_codegen_unit() {
+        let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../Cargo.toml"))
+            .expect("the workspace manifest");
+        let section = manifest
+            .split("\n[")
+            .find(|s| s.starts_with("profile.release-runner]"))
+            .expect("a [profile.release-runner] section");
+        let units = section
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("codegen-units"))
+            .filter_map(|v| v.trim().strip_prefix('=')?.trim().parse::<u32>().ok())
+            .next();
+        assert!(
+            units.is_some_and(|n| n > 1),
+            "[profile.release-runner] must set codegen-units > 1, found {units:?}"
+        );
+    }
+
     #[test]
     fn stub_marker_is_prefix_fingerprint_nul() {
         assert_eq!(STUB_MARKER, format!("{STUB_MARKER_PREFIX}{FINGERPRINT}\0"));
@@ -117,7 +180,7 @@ mod tests {
 
     #[test]
     fn payload_round_trips() {
-        let exe = payload::assemble(b"STUB", b"module");
+        let exe = payload::append(b"STUB", b"module");
         let trailer: [u8; 16] = exe[exe.len() - 16..].try_into().unwrap();
         let (off, len) = payload::locate(&trailer, exe.len() as u64).unwrap();
         assert_eq!(&exe[off as usize..(off + len) as usize], b"module");
@@ -131,5 +194,23 @@ mod tests {
         t[..8].copy_from_slice(&1000u64.to_le_bytes());
         t[8..].copy_from_slice(payload::MAGIC);
         assert!(payload::locate(&t, 100).unwrap_err().contains("corrupt"));
+    }
+
+    #[test]
+    fn section_round_trips_and_the_empty_one_names_no_module() {
+        assert_eq!(payload::embedded(&payload::section(b"module")).unwrap(), b"module");
+        // Room past the module (the segment is page-rounded) is not part of it.
+        let mut padded = payload::section(b"module");
+        padded.extend_from_slice(&[0; 100]);
+        assert_eq!(payload::embedded(&padded).unwrap(), b"module");
+        assert!(
+            payload::embedded(&payload::EMPTY_SECTION)
+                .unwrap_err()
+                .contains("no module")
+        );
+        assert!(payload::embedded(&[0; 16]).unwrap_err().contains("corrupt"));
+        let mut short = payload::section(b"module");
+        short.truncate(20);
+        assert!(payload::embedded(&short).unwrap_err().contains("exceeds"));
     }
 }

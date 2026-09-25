@@ -40,6 +40,10 @@ rontolisp hello.lisp --native --native-target linux-aarch64 -o hello-arm64
 
 プリコンパイラは共有ライブラリで、`rontolisp` が一度だけ `$XDG_CACHE_HOME/rontolisp`(なければ `~/.cache/rontolisp`、macOS では `~/Library/Caches/rontolisp`)へ展開します。システムプロパティ `rontolisp.native.cache` で場所を変えられます(`-Drontolisp.native.cache=DIR`)。
 
+## macOS の GUI プログラム
+
+Apple シリコン (`macos-aarch64`) では、実行ファイルは `objc`、`appkit`、`metal`、`scene` パッケージを使うプログラムも動かせます: ランナー自身が Objective-C ランタイムを呼び、プログラムは AppKit が求めるプロセスの最初のスレッドで動きます。[macOS GUI](../guides/objc-appkit.md#a-native-executable) を参照してください。それ以外のターゲットでは、そうしたプログラムは参照を挙げるコンパイルエラーになります。
+
 ## サイズと速度
 
-実行ファイルはランナー(Linux x86_64 で 3.0 MB、Linux aarch64 で 2.4 MB、macOS で 1.7 MB)に `.wasm` の約 11 倍を足した大きさです: Linux x86_64 では `hello` で 3.0 MB、28 KB のモジュールで 3.2 MB。起動は約 10 ms で、同じモジュールを `wasmtime run` で動かすのとほぼ同じ速度で動きます。
+実行ファイルはランナー(Linux x86_64 で 2.1 MB、Linux aarch64 で 1.9 MB、macOS で 1.7 MB)に `.wasm` の約 11 倍を足した大きさです: Linux x86_64 では `hello` で 2.1 MB、28 KB のモジュールで 2.3 MB。起動は約 10 ms で、同じモジュールを `wasmtime run` で動かすのとほぼ同じ速度で動きます。

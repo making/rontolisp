@@ -19,6 +19,9 @@ wasmtime = { workspace = true, features = ["cranelift", "parallel-compilation"] 
 # Pulley for +2.19 MB). Moves with the wasmtime pin; a mismatch leaves the other
 # architecture out, which `every_platform_precompiles_at_every_cpu` catches.
 cranelift-codegen = { version = "=0.136.0", default-features = false, features = ["x86", "arm64"] }
+# Hashes the pages of a macOS output's ad-hoc code signature (`macho`); already in the
+# tree through wasmtime.
+sha2 = "0.10"
 
 [[bin]]
 name = "rlpack"

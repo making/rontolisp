@@ -7368,6 +7368,23 @@ public final class LispNames {
 	 */
 	public static final String OBJC_PKG = "OBJC";
 
+	/**
+	 * {@code objc::%sleep}: the event-loop wait every {@code sleep} of a {@code --native}
+	 * program that carries {@code objc-native.lisp} compiles to (the module runs on
+	 * thread 0, so a spin would freeze its windows).
+	 */
+	public static final String OBJC_SLEEP_INTERNAL = OBJC_PKG + "::%SLEEP";
+
+	/**
+	 * {@code objc::%object}: the wrapper struct of a {@code --native} program's
+	 * {@code objc-native.lisp} (address + the handle whose death releases the reference).
+	 * The wasm-GC backend compares an instance of it by its ADDRESS slot alone -- in
+	 * {@code eq}/{@code eql}, {@code equal} and every hash -- so two wrappers of one
+	 * object are one value, as the interpreter's record and the JVM's handle are
+	 * ({@code .kb/objc.md}, "--native").
+	 */
+	public static final String OBJC_OBJECT_STRUCT = OBJC_PKG + "::%OBJECT";
+
 	/** {@code objc:class} -- a class by name: {@code (objc:class "NSWindow")}. */
 	public static final String OBJC_CLASS = "CLASS";
 
@@ -9006,6 +9023,19 @@ public final class LispNames {
 	 * 32-bit) of a float rounded to single precision.
 	 */
 	public static final String IEEE754_SINGLE_BITS = "%IEEE754-SINGLE-BITS";
+
+	/**
+	 * The WASM backend's own half of {@link #IEEE754_DOUBLE_BITS}: the 64 bits as a
+	 * SIGNED integer (an {@code i64} reinterpretation), which the lowering then lifts
+	 * into the unsigned range. Never read from source.
+	 */
+	public static final String IEEE754_DOUBLE_BITS_SIGNED = "%IEEE754-DOUBLE-BITS-SIGNED";
+
+	/**
+	 * The WASM backend's own half of {@link #IEEE754_DOUBLE_FROM_BITS}: the double whose
+	 * bits are a SIGNED 64-bit integer. Never read from source.
+	 */
+	public static final String IEEE754_DOUBLE_FROM_SIGNED_BITS = "%IEEE754-DOUBLE-FROM-SIGNED-BITS";
 
 	/** {@code %ieee754-single-from-bits} -- the float of unsigned 32-bit IEEE bits. */
 	public static final String IEEE754_SINGLE_FROM_BITS = "%IEEE754-SINGLE-FROM-BITS";

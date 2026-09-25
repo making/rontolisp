@@ -112,7 +112,28 @@ class NativeOutputE2eTest {
 		}
 		assertThat(Files.isExecutable(out.resolve("hello"))).isTrue();
 		byte[] bytes = Files.readAllBytes(out.resolve("hello"));
-		assertThat(new String(bytes, bytes.length - 8, 8, StandardCharsets.US_ASCII)).isEqualTo("RLNATIVE");
+		if (!System.getProperty("os.name", "").startsWith("Mac")) {
+			assertThat(new String(bytes, bytes.length - 8, 8, StandardCharsets.US_ASCII)).isEqualTo("RLNATIVE");
+		}
+	}
+
+	/**
+	 * On macOS the module is embedded in the image and the image signed ad hoc, so the
+	 * code signature covers the whole output: {@code codesign --verify --strict} accepts
+	 * it (the linker's signature of the stub alone did not), and it runs.
+	 */
+	@Test
+	void aMacOsOutputPassesStrictCodeSignatureValidation() throws Exception {
+		assumeTrue(System.getProperty("os.name", "").startsWith("Mac"), "codesign is macOS's");
+		Path dir = Files.createDirectories(this.tempDir.resolve("signed"));
+		Path src = dir.resolve("hello.lisp");
+		Files.writeString(src, "(print 'hello)\n");
+		compileNative(src, dir.resolve("hello"));
+		Run verify = exec(dir, List.of("codesign", "--verify", "--strict", "--verbose=2", "./hello"));
+		assertThat(verify.exit()).as("codesign: %s", verify.stderr()).isZero();
+		Run run = exec(dir, List.of("./hello"));
+		assertThat(run.exit()).as("stderr: %s", run.stderr()).isZero();
+		assertThat(run.stdout()).isEqualTo("HELLO\n");
 	}
 
 	/**

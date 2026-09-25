@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.wasm;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
@@ -906,6 +907,13 @@ final class WasmExprCompiler {
 								ctx);
 						return;
 					}
+					if (ctx.functions.containsKey(LispNames.OBJC_SLEEP_INTERNAL)) {
+						// A --native program using objc: runs on thread 0, whose event
+						// loop only turns while the module waits: its sleep is the
+						// host's run loop (objc-native.lisp), never the spin.
+						compileExpr(new LispCons(new LispSymbol(LispNames.OBJC_SLEEP_INTERNAL), cons.cdr()), ctx);
+						return;
+					}
 					compileExpr(LispMacroExpander.expandSleep(cons, true), ctx);
 					return;
 				}
@@ -1543,13 +1551,56 @@ final class WasmExprCompiler {
 				.compileExpr(LispMacroExpander.expandSimpleConditionFormatControl(cons, ctx.closRegistry), ctx);
 			case LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS -> WasmExprCompiler
 				.compileExpr(LispMacroExpander.expandSimpleConditionFormatArguments(cons, ctx.closRegistry), ctx);
-			case LispNames.IEEE754_DOUBLE_BITS, LispNames.IEEE754_DOUBLE_FROM_BITS, LispNames.IEEE754_SINGLE_BITS,
-					LispNames.IEEE754_SINGLE_FROM_BITS ->
-				// The IEEE 754 bit primitives need the 64-bit unsigned model the WASM
-				// numeric model lacks: cold-path runtime signal so a library carrying
-				// them (the float-features shim) still compiles.
-				WasmExprCompiler.compileExpr(LispMacroExpander.expandUnsupportedCall(cons,
-						((LispSymbol) cons.car()).name() + " is unsupported on the WASM numeric model"), ctx);
+			// The IEEE 754 bit primitives. A single's bits fit the exact integer as they
+			// are; a double's are an i64 reinterpretation lifted into the UNSIGNED range
+			// the interpreter answers (a negative double's bits are a bignum), and the
+			// way back lowers that range onto the signed i64 first.
+			case LispNames.IEEE754_SINGLE_BITS -> {
+				WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
+				WasmEmitHelper.castFloatGetF64(ctx);
+				ctx.writer.write(Instruction.F32_DEMOTE_F64);
+				ctx.writer.write(Instruction.I32_REINTERPRET_F32);
+				ctx.writer.write(Instruction.I64_EXTEND_U_I32);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+			}
+			case LispNames.IEEE754_SINGLE_FROM_BITS -> {
+				WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
+				WasmExportCompiler.emitWideIntResult(ctx, true);
+				ctx.writer.write(Instruction.I32_WRAP_I64);
+				ctx.writer.write(Instruction.F32_REINTERPRET_I32);
+				ctx.writer.write(Instruction.F64_PROMOTE_F32);
+				WasmEmitHelper.boxF64(ctx);
+			}
+			case LispNames.IEEE754_DOUBLE_BITS_SIGNED -> {
+				WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
+				WasmEmitHelper.castFloatGetF64(ctx);
+				ctx.writer.write(Instruction.I64_REINTERPRET_F64);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+			}
+			case LispNames.IEEE754_DOUBLE_FROM_SIGNED_BITS -> {
+				WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
+				WasmExportCompiler.emitWideIntResult(ctx, true);
+				ctx.writer.write(Instruction.F64_REINTERPRET_I64);
+				WasmEmitHelper.boxF64(ctx);
+			}
+			case LispNames.IEEE754_DOUBLE_BITS -> {
+				LispSymbol bits = new LispSymbol("__ieee754_bits");
+				WasmExprCompiler.compileExpr(ieee754Let(bits,
+						list(new LispSymbol(LispNames.IEEE754_DOUBLE_BITS_SIGNED), cons.toList().get(1)),
+						list(new LispSymbol(LispNames.IF), list(new LispSymbol(LispNames.LT), bits, new LispInteger(0)),
+								list(new LispSymbol(LispNames.ADD), bits, new LispBigInteger(TWO_TO_THE_64)), bits)),
+						ctx);
+			}
+			case LispNames.IEEE754_DOUBLE_FROM_BITS -> {
+				LispSymbol bits = new LispSymbol("__ieee754_bits");
+				LispVal signed = list(new LispSymbol(LispNames.IF),
+						list(new LispSymbol(LispNames.GT), bits, new LispInteger(Long.MAX_VALUE)),
+						list(new LispSymbol(LispNames.SUB), bits, new LispBigInteger(TWO_TO_THE_64)), bits);
+				WasmExprCompiler.compileExpr(ieee754Let(bits, cons.toList().get(1),
+						list(new LispSymbol(LispNames.IEEE754_DOUBLE_FROM_SIGNED_BITS), signed)), ctx);
+			}
 			case LispNames.READ_EVAL, LispNames.READ_EVAL_TEMPLATE ->
 				// Identity: a #. marker split into code position by a backquote
 				// template
@@ -2658,6 +2709,22 @@ final class WasmExprCompiler {
 			return false;
 		}
 		return WasmArrayCompiler.provesArrayValue(rest.car(), ctx);
+	}
+
+	/** 2^64: what lifts a signed 64-bit pattern into the unsigned range and back. */
+	private static final java.math.BigInteger TWO_TO_THE_64 = java.math.BigInteger.ONE.shiftLeft(64);
+
+	private static LispCons list(LispVal... items) {
+		LispVal out = LispNil.INSTANCE;
+		for (int i = items.length - 1; i >= 0; i--) {
+			out = new LispCons(items[i], out);
+		}
+		return (LispCons) out;
+	}
+
+	// (let ((var init)) body)
+	private static LispCons ieee754Let(LispSymbol var, LispVal init, LispVal body) {
+		return list(new LispSymbol(LispNames.LET), list(list(var, init)), body);
 	}
 
 }

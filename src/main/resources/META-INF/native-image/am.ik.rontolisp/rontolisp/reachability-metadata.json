@@ -8,9 +8,10 @@
     "returnType, parameterTypes and options ONLY; a per-entry \"comment\" key is rejected by the",
     "schema, which is why the two groups are described here instead.",
     "",
-    "The FIRST TWO are the --native precompile shim's (.kb/native-output.md): rl_precompile",
-    "(void*, jlong, void*, void*, void*, void*) -> jint and rl_free (void*, jlong) -> void; its third,",
-    "rl_version () -> void*, is Metal's MTLCreateSystemDefaultDevice shape and registered below.",
+    "The FIRST THREE are the --native precompile shim's (.kb/native-output.md): rl_precompile",
+    "(void*, jlong, void*, void*, void*, void*) -> jint, rl_free (void*, jlong) -> void and",
+    "rl_assemble (void*, jlong, void*, jlong, void*, void*) -> jint; its fourth, rl_version",
+    "() -> void*, is Metal's MTLCreateSystemDefaultDevice shape and registered below.",
     "NativeToolchainTest pins them.",
     "",
     "The --blas CBLAS downcalls (.kb/linalg-blas.md) are the next six: two shapes, each at",
@@ -159,6 +160,10 @@
       {
         "returnType": "void",
         "parameterTypes": ["void*", "jlong"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jlong", "void*", "jlong", "void*", "void*"]
       },
       {
         "returnType": "void",

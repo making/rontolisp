@@ -124,6 +124,21 @@ class NativeToolchainTest {
 	}
 
 	@Test
+	void theHostShimAppendsToAnElfStubAndRefusesAMalformedMachO() {
+		hostToolchainOrSkip();
+		NativeToolchain toolchain = NativeToolchain.load();
+		byte[] ascii = "module".getBytes(StandardCharsets.US_ASCII);
+		// rlabi::payload::append: stub, module, u64-le length, magic.
+		assertThat(toolchain.assemble("STUB".getBytes(StandardCharsets.US_ASCII), ascii))
+			.isEqualTo("STUBmodule\6\0\0\0\0\0\0\0RLNATIVE".getBytes(StandardCharsets.US_ASCII));
+		assertThatThrownBy(
+				() -> toolchain.assemble(new byte[] { (byte) 0xcf, (byte) 0xfa, (byte) 0xed, (byte) 0xfe }, ascii))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageStartingWith("--native: cannot assemble the executable: ")
+			.hasMessageContaining("Mach-O");
+	}
+
+	@Test
 	void aPlatformWithoutAStubIsRefusedNamingTheOnesCarried() {
 		String host = hostToolchainOrSkip();
 		assumeFalse("macos-x86_64".equals(host), "the one platform no release carries a stub for");

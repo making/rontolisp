@@ -1,5 +1,5 @@
 //! The shim and the stub together: every fixture `.wasm` (rontolisp output, see
-//! `gen-fixtures.sh`) is precompiled here, appended to the BUILT runner stub, and run; its
+//! `gen-fixtures.sh`) is precompiled here, assembled with the BUILT runner stub, and run; its
 //! stdout and exit status must be what `wasmtime run` gave for the same module.
 //!
 //! The stub is the release binary `build.sh` produces (runtime-only features), not one
@@ -25,10 +25,10 @@ fn stub() -> PathBuf {
 }
 
 /// Where build.sh leaves the stub under `target/`: Linux builds it for an explicit
-/// `<arch>-unknown-linux-gnu` target (the static-glibc flag must stay off build scripts).
+/// `<arch>-unknown-linux-musl` target, linked statically.
 fn stub_in_target() -> PathBuf {
     if cfg!(target_os = "linux") {
-        Path::new(&format!("{}-unknown-linux-gnu", std::env::consts::ARCH)).join("release-runner/rlrun")
+        Path::new(&format!("{}-unknown-linux-musl", std::env::consts::ARCH)).join("release-runner/rlrun")
     } else {
         PathBuf::from("release-runner/rlrun")
     }
@@ -38,11 +38,15 @@ fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
-/// Writes `stub ++ module ++ trailer` into a fresh directory and runs it the way
+/// Writes the executable (`rlprecomp::assemble`) into a fresh directory and runs it the way
 /// gen-fixtures.sh runs `wasmtime run`: from `<dir>/cwd`, beside `<dir>/up.txt`.
 fn run_executable(dir: &Path, module: &[u8]) -> Output {
     let exe = dir.join("prog");
-    std::fs::write(&exe, rlabi::payload::assemble(&std::fs::read(stub()).unwrap(), module)).unwrap();
+    std::fs::write(
+        &exe,
+        rlprecomp::assemble(&std::fs::read(stub()).unwrap(), module).unwrap(),
+    )
+    .unwrap();
     make_executable(&exe);
     let cwd = dir.join("cwd");
     std::fs::create_dir_all(&cwd).unwrap();
@@ -183,10 +187,7 @@ fn stub_carries_the_shim_fingerprint() {
 fn bare_stub_reports_the_missing_module() {
     let out = Command::new(stub()).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("no module appended"),
-        "{out:?}"
-    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no module"), "{out:?}");
 }
 
 #[test]
@@ -255,11 +256,7 @@ fn qemu_runs_stub(qemu: &Path, stub: &Path) -> bool {
         .stderr(Stdio::piped())
         .output();
     match out {
-        Ok(out)
-            if out.status.code() == Some(1) && String::from_utf8_lossy(&out.stderr).contains("no module appended") =>
-        {
-            true
-        }
+        Ok(out) if out.status.code() == Some(1) && String::from_utf8_lossy(&out.stderr).contains("no module") => true,
         _ => {
             eprintln!(
                 "{} cannot run {} here: emulated runs for it are skipped",
@@ -285,7 +282,11 @@ fn oldest_cpu(arch: &str) -> &'static str {
 fn run_under_qemu(qemu: &Path, cpu: &str, stub: &Path, module: &[u8], name: &str) -> Output {
     let dir = TempDir::new(name);
     let exe = dir.0.join("prog");
-    std::fs::write(&exe, rlabi::payload::assemble(&std::fs::read(stub).unwrap(), module)).unwrap();
+    std::fs::write(
+        &exe,
+        rlprecomp::assemble(&std::fs::read(stub).unwrap(), module).unwrap(),
+    )
+    .unwrap();
     make_executable(&exe);
     let mut command = Command::new(qemu);
     command
@@ -419,4 +420,94 @@ fn cross_target_module_names_the_requested_triple_and_runs_there() {
         );
         assert_eq!(out.status.code(), Some(0), "{}; stderr:\n{stderr}", platform.name);
     }
+}
+
+/// Checks a macOS output the way the kernel does, on any host: its `__RLPAYLOAD,__payload`
+/// section holds `module`, and its embedded ad-hoc `CodeDirectory` hashes every 4 KiB page
+/// up to the signature. Returns the file offset of the module.
+fn check_macos_output(exe: &[u8], module: &[u8]) -> usize {
+    let le32 = |at: usize| u32::from_le_bytes(exe[at..at + 4].try_into().unwrap()) as usize;
+    let be32 = |b: &[u8], at: usize| u32::from_be_bytes(b[at..at + 4].try_into().unwrap()) as usize;
+    assert_eq!(le32(0), 0xfeed_facf, "not a Mach-O image");
+    let (mut at, mut sig, mut payload) = (32, None, None);
+    for _ in 0..le32(16) {
+        match le32(at) {
+            0x19 if &exe[at + 8..at + 19] == b"__RLPAYLOAD" => {
+                let sect = at + 72;
+                let size = u64::from_le_bytes(exe[sect + 40..sect + 48].try_into().unwrap()) as usize;
+                payload = Some((le32(sect + 48), size));
+            }
+            0x1d => sig = Some((le32(at + 8), le32(at + 12))),
+            _ => {}
+        }
+        at += le32(at + 4);
+    }
+    let (offset, size) = payload.expect("payload section");
+    let section = &exe[offset..offset + size];
+    assert_eq!(rlabi::payload::embedded(section).unwrap(), module);
+
+    let (sigoff, siglen) = sig.expect("LC_CODE_SIGNATURE");
+    assert_eq!(sigoff + siglen, exe.len(), "the signature ends the file");
+    let blob = &exe[sigoff..sigoff + siglen];
+    assert_eq!(be32(blob, 0), 0xfade_0cc0);
+    let cd = &blob[be32(blob, 16)..];
+    assert_eq!(be32(cd, 0), 0xfade_0c02);
+    assert_eq!(be32(cd, 12), 0x2_0002, "adhoc | linker-signed");
+    let (hash_off, slots, limit) = (be32(cd, 16), be32(cd, 28), be32(cd, 32));
+    assert_eq!(limit, sigoff, "codeLimit");
+    assert_eq!((cd[36], cd[37], cd[39]), (32, 2, 12), "SHA-256 of 4 KiB pages");
+    assert_eq!(slots, sigoff.div_ceil(4096));
+    for (i, page) in exe[..sigoff].chunks(4096).enumerate() {
+        use sha2::Digest;
+        let at = hash_off + 32 * i;
+        assert_eq!(&cd[at..at + 32], sha2::Sha256::digest(page).as_slice(), "page {i}");
+    }
+    offset + rlabi::payload::TRAILER_LEN
+}
+
+/// A macOS output carries its module inside the signed image. Checked structurally on any
+/// host that has the macOS stub (a Linux host compiles `--native-target macos-aarch64`
+/// too); on macOS `codesign --verify --strict` must accept it, and must refuse it once a
+/// byte of the module changes -- the signature covers the module.
+#[test]
+fn macos_output_embeds_the_module_under_a_valid_ad_hoc_signature() {
+    let platform = rlprecomp::platform("macos-aarch64").unwrap();
+    let Some(stub) = stub_for(platform) else {
+        eprintln!("no macos-aarch64 stub: not checked");
+        return;
+    };
+    let wasm = std::fs::read(fixtures().join("fib.wasm")).unwrap();
+    let module = rlprecomp::precompile_for(&wasm, platform, rlprecomp::Cpu::Baseline).unwrap();
+    let exe = rlprecomp::assemble(&std::fs::read(&stub).unwrap(), &module).unwrap();
+    let module_at = check_macos_output(&exe, &module);
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let dir = TempDir::new("signed");
+    let path = dir.0.join("prog");
+    std::fs::write(&path, &exe).unwrap();
+    let codesign = |path: &Path| {
+        Command::new("codesign")
+            .args(["--verify", "--strict", "--verbose=2"])
+            .arg(path)
+            .output()
+            .unwrap()
+    };
+    let out = codesign(&path);
+    assert!(out.status.success(), "{out:?}");
+    let mut tampered = exe.clone();
+    tampered[module_at + module.len() / 2] ^= 1;
+    let bad = dir.0.join("tampered");
+    std::fs::write(&bad, &tampered).unwrap();
+    assert!(!codesign(&bad).status.success(), "a changed module still verifies");
+}
+
+#[test]
+fn a_stub_that_is_no_known_image_is_appended_to() {
+    assert_eq!(
+        rlprecomp::assemble(b"STUB", b"m").unwrap(),
+        rlabi::payload::append(b"STUB", b"m")
+    );
+    let err = rlprecomp::macho::embed(b"\xcf\xfa\xed\xfe", b"m").unwrap_err();
+    assert!(err.contains("Mach-O"), "{err}");
 }

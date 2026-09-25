@@ -1017,6 +1017,7 @@ version = "0.1.0"
 dependencies = [
  "cranelift-codegen",
  "rlabi",
+ "sha2",
  "wasmtime",
 ]
 

@@ -789,6 +789,10 @@ public final class RontoLispCli {
 				.hostBoundary(hostBoundary)
 				.reentrant(reentrant)
 				.noPrune(noPrune)
+				// Only the macOS / Apple-silicon runner answers the rlobjc imports, so
+				// only
+				// that target accepts an objc: program (.kb/objc.md, "--native").
+				.nativeOutput(nativeTarget != null && "macos-aarch64".equals(nativeTarget.platform()))
 				.build())
 			.build());
 		List<LispVal> program = frontend.program();
@@ -938,7 +942,7 @@ public final class RontoLispCli {
 				// Only the executable is written: the .wasm and its precompiled form
 				// never leave memory.
 				NativeToolchain toolchain = NativeToolchain.load();
-				NativeExecutable.write(outputPath, NativeExecutable.assemble(toolchain.stub(nativeTarget.platform()),
+				NativeExecutable.write(outputPath, toolchain.assemble(toolchain.stub(nativeTarget.platform()),
 						toolchain.precompile(bytes, nativeTarget)));
 			}
 			else {

@@ -78,8 +78,10 @@ so `-Pweb` substitutes the one entry class; the JVM backend EMBEDS it the same w
 verifier accepts); the `appkit` widget layer is `appkit.lisp`, the `metal` drawing surface
 `metal.lisp` and the `scene` 3D viewer `scene.lisp`, all shipped like `linalg.lisp` and spliced
 on the compile path by `AppKitLibrary` / `MetalLibrary` / `SceneLibrary`'s `process` (in dependency
-order, `.kb/geom.md`). None of the four compiles to WASM -- `AppKitLibrary.firstObjcReference`
-answers for all of them and `CompileFrontend` refuses by the reference.
+order, `.kb/geom.md`). None of the four compiles to a `.wasm` -- `AppKitLibrary.firstObjcReference`
+answers for all of them and `CompileFrontend` refuses by the reference -- but a `--native` output
+for `macos-aarch64` takes them: `ObjcNativeLibrary` splices the verbs over the `rlobjc` imports the
+runner stub answers, and the module runs on thread 0 (`.kb/objc.md`, "--native").
 
 Package dependency direction (no cycles allowed):
 
