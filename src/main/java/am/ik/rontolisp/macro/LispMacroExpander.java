@@ -18412,13 +18412,26 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandClassOf(LispCons cons, boolean hashTablesExist) {
+		return expandClassOf(cons, hashTablesExist, false);
+	}
+
+	/**
+	 * Like {@link #expandClassOf(LispCons, boolean)}, with the Objective-C designator arm
+	 * of {@link #expandClassDesignator(LispCons, boolean, boolean)}.
+	 * @param cons the class-of expression
+	 * @param hashTablesExist see {@link #expandClassDesignator(LispCons, boolean)}
+	 * @param objcHandlesExist see
+	 * {@link #expandClassDesignator(LispCons, boolean, boolean)}
+	 * @return the expanded expression
+	 */
+	public static LispVal expandClassOf(LispCons cons, boolean hashTablesExist, boolean objcHandlesExist) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
 			throw new IllegalArgumentException(LispNames.CLASS_OF + " expects exactly one argument: " + cons.print());
 		}
 		LispSymbol v = new LispSymbol("__cof" + MV_COUNTER.getAndIncrement() + "_v");
 		LispVal designator = expandClassDesignator((LispCons) fmtCall(LispNames.CLASS_DESIGNATOR_INTERNAL, v),
-				hashTablesExist);
+				hashTablesExist, objcHandlesExist);
 		LispVal rankOne = listToCons(
 				List.of(new LispSymbol(LispNames.EQ), callOf(LispNames.ARRAY_RANK, v), new LispInteger(1)));
 		// A bit vector IS the general boxed array stamped bit: rank-1 bit-stamped
@@ -18464,6 +18477,22 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandClassDesignator(LispCons cons, boolean hashTablesExist) {
+		return expandClassDesignator(cons, hashTablesExist, false);
+	}
+
+	/**
+	 * Like {@link #expandClassDesignator(LispCons, boolean)}, plus an arm answering
+	 * {@code objc:object} for an Objective-C object reference that is no instance -- the
+	 * JVM's handle, which only a program carrying the objc runtime can hold. The
+	 * interpreter answers the same name from its record and a {@code --native} program
+	 * from its wrapper struct's tag, so none of them needs the arm (.kb/objc.md, "The
+	 * type").
+	 * @param cons the %class-designator (or class-of) expression
+	 * @param hashTablesExist whether a hash table can exist in this program
+	 * @param objcHandlesExist whether a non-instance Objective-C reference can exist
+	 * @return the expanded expression
+	 */
+	public static LispVal expandClassDesignator(LispCons cons, boolean hashTablesExist, boolean objcHandlesExist) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
 			throw new IllegalArgumentException(
@@ -18496,6 +18525,10 @@ public final class LispMacroExpander {
 		clauses.add(listToCons(
 				List.of(mvCall(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZED_MATRIX_P), v),
 						unspelledQuoteOf(LispNames.QUANTIZED_MATRIX))));
+		if (objcHandlesExist) {
+			clauses.add(listToCons(
+					List.of(mvCall(OBJC_OBJECTP_QUALIFIED, v), unspelledQuoteOf(LispNames.OBJC_OBJECT_TYPE))));
+		}
 		clauses.add(listToCons(List.of(LispTrue.INSTANCE, unspelledQuoteOf("T"))));
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));
@@ -21737,6 +21770,10 @@ public final class LispMacroExpander {
 				// struct name; the dispatcher tests the struct instance tag.
 				return new ClosRegistry.Specializer(ClosRegistry.SpecializerKind.TYPE, null, specSym.name());
 			}
+			if (LispNames.OBJC_OBJECT_TYPE.equals(specSym.name())) {
+				// Kept qualified: makeTypeTest matches the name whole.
+				return new ClosRegistry.Specializer(ClosRegistry.SpecializerKind.TYPE, null, specSym.name());
+			}
 			if (isSupportedTypeSpecializer(plainName)) {
 				return new ClosRegistry.Specializer(ClosRegistry.SpecializerKind.TYPE, null, plainName);
 			}
@@ -23582,6 +23619,9 @@ public final class LispMacroExpander {
 		// a multiple-value operator can meet.
 		boolean runtimeSubtypepValid = needsRuntimeSubtypepValid(program);
 		boolean runtimeTypep = needsRuntimeTypep(program);
+		// Whether an Objective-C reference can exist: the runtime type dispatch and the
+		// built-in class list then know objc:object, which no other program pays for.
+		boolean objcObjects = mentionsObjcPackage(program);
 		// A make-array whose :element-type is a runtime designator: the arms that
 		// dispatch it compare against the seven built-in spellings, so a deftype alias
 		// held in a VARIABLE needs the shared %make-array-et-alias resolver injected
@@ -23788,7 +23828,7 @@ public final class LispMacroExpander {
 			// the dispatcher slots above were filled by index). Emitted before the
 			// instance/condition re-answers below so the %obj-new inside the
 			// materializer is in their view.
-			out.addAll(findClassRuntimeDefuns(findClassDefun));
+			out.addAll(findClassRuntimeDefuns(findClassDefun, objcObjects));
 			out.addAll(0, classMetaTableForms(closRegistry));
 			if (classDirectSubclasses) {
 				out.addAll(classDirectSubclassesDefuns(closRegistry));
@@ -23915,7 +23955,7 @@ public final class LispMacroExpander {
 			// runs before the defuns below join `out` (their own bodies would otherwise
 			// spell the very names they are gated on).
 			java.util.Map<String, LispVal> aliases = narrowedDeftypeAliases(closRegistry, out);
-			out.add(runtimeTypepDefun(closRegistry, !aliases.isEmpty()));
+			out.add(runtimeTypepDefun(closRegistry, !aliases.isEmpty(), objcObjects));
 			out.add(runtimeTypepCompoundDefun());
 			out.addAll(0, typepTagTableForms(closRegistry));
 			if (!aliases.isEmpty()) {
@@ -31720,6 +31760,12 @@ public final class LispMacroExpander {
 		if (!(typeSpec instanceof LispSymbol sym)) {
 			throw new IllegalArgumentException("Unsupported type specifier: " + typeSpec.print());
 		}
+		if (LispNames.OBJC_OBJECT_TYPE.equals(sym.name())) {
+			// An Objective-C object reference: the interpreter's record, the JVM's
+			// handle and a --native program's wrapper struct alike (.kb/objc.md, "The
+			// type"). Matched QUALIFIED, before the package-stripping switch.
+			return callOf(OBJC_OBJECTP_QUALIFIED, value);
+		}
 		String name = plainTypeName(sym);
 		switch (name) {
 			case "BOOLEAN":
@@ -31893,12 +31939,29 @@ public final class LispMacroExpander {
 	private static LispVal makeAnyStructInstanceTest(LispVal value, ClosRegistry closRegistry) {
 		List<String> tags = new java.util.ArrayList<>();
 		for (LispLayout layout : closRegistry.layouts().values()) {
-			if (layout.kind() == LispLayout.Kind.STRUCT) {
+			if (isStructureObjectLayout(layout)) {
 				tags.add(layout.tag());
 			}
 		}
 		return objIs(value, tags);
 	}
+
+	/**
+	 * Whether a layout's instances are {@code structure-object}s: every defstruct but the
+	 * {@code --native} Objective-C wrapper, which is an {@code objc:object} and nothing
+	 * more, as the interpreter's record and the JVM's handle are (.kb/objc.md, "The
+	 * type").
+	 */
+	private static boolean isStructureObjectLayout(LispLayout layout) {
+		return layout.kind() == LispLayout.Kind.STRUCT && !OBJC_OBJECT_STRUCT_TAG.equals(layout.tag());
+	}
+
+	/** The instance tag of the {@code --native} Objective-C wrapper struct. */
+	private static final String OBJC_OBJECT_STRUCT_TAG = LispLayout.STRUCT_TAG_PREFIX + LispNames.OBJC_OBJECT_TYPE;
+
+	/** {@code objc:objectp}, the predicate of the {@code objc:object} type. */
+	private static final String OBJC_OBJECTP_QUALIFIED = PackageRegistry.qualify(LispNames.OBJC_PKG,
+			LispNames.OBJC_OBJECTP);
 
 	/**
 	 * Builds the test for an instance of ANY registered class (conditions included): the
@@ -38598,6 +38661,9 @@ public final class LispMacroExpander {
 		// tn = T accepts everything -- the name spelling, and the boolean t the built-in
 		// T class carries in its name slot, which is what (find-class 't) normalizes to.
 		clauses.add(listToCons(List.of(universalTypeMatchTest(tn), LispTrue.INSTANCE)));
+		// The interpreter binds objc:objectp on every machine (.kb/objc.md, "The type").
+		clauses.add(listToCons(List.of(nameMatchTest(tn, LispNames.OBJC_OBJECT_TYPE),
+				makeIf(callOf(OBJC_OBJECTP_QUALIFIED, v), LispTrue.INSTANCE, LispNil.INSTANCE))));
 		for (String builtin : RUNTIME_TYPEP_BUILTINS) {
 			LispVal test;
 			try {
@@ -38944,7 +39010,7 @@ public final class LispMacroExpander {
 		String subStructTag = closRegistry.findStructTag(subSym.name());
 		if (subStructTag != null) {
 			if ("STRUCTURE-OBJECT".equals(sup)) {
-				return true;
+				return !OBJC_OBJECT_STRUCT_TAG.equals(subStructTag);
 			}
 			if (closRegistry.findStructTag(superSym.name()) != null) {
 				return closRegistry.descendantStructTags(superSym.name()).contains(subStructTag);
@@ -40240,7 +40306,9 @@ public final class LispMacroExpander {
 		for (LispLayout layout : closRegistry.layouts().values()) {
 			if (layout.kind() == LispLayout.Kind.STRUCT) {
 				String name = layout.printName();
-				allStructTags.add(layout.tag());
+				if (isStructureObjectLayout(layout)) {
+					allStructTags.add(layout.tag());
+				}
 				if (seen.add(name)) {
 					List<String> tags = closRegistry.descendantStructTags(name);
 					java.util.LinkedHashSet<String> names = namesByTags.computeIfAbsent(tags,
@@ -40321,7 +40389,7 @@ public final class LispMacroExpander {
 	 * of registered classes (the inline dispatch overflowed the JVM's 16-bit branch
 	 * offsets at 165 registered classes).
 	 */
-	private static LispVal runtimeTypepDefun(ClosRegistry closRegistry, boolean resolvesAliases) {
+	private static LispVal runtimeTypepDefun(ClosRegistry closRegistry, boolean resolvesAliases, boolean objcObjects) {
 		LispSymbol v = new LispSymbol("%tp_rv");
 		LispSymbol tn = new LispSymbol("%tp_rt");
 		LispSymbol tag = new LispSymbol("%tp_rtag");
@@ -40351,6 +40419,12 @@ public final class LispMacroExpander {
 		// T class carries in its name slot (the metaobject normalization above leaves it
 		// as-is; the quoted-symbol T is what a plain runtime name spelling looks like).
 		clauses.add(listToCons(List.of(universalTypeMatchTest(tn), LispTrue.INSTANCE)));
+		if (objcObjects) {
+			// The interpreter's record and the JVM's handle are no instance; a --native
+			// wrapper is, and answered through the tag table above.
+			clauses.add(listToCons(List.of(nameMatchTest(tn, LispNames.OBJC_OBJECT_TYPE),
+					makeIf(callOf(OBJC_OBJECTP_QUALIFIED, v), LispTrue.INSTANCE, LispNil.INSTANCE))));
+		}
 		for (String builtin : RUNTIME_TYPEP_BUILTINS) {
 			if ("STANDARD-OBJECT".equals(builtin) || "STRUCTURE-OBJECT".equals(builtin)) {
 				// v is not an instance here, so these are constant nil: fall through.
@@ -40553,7 +40627,7 @@ public final class LispMacroExpander {
 	 * lives in the table.
 	 * @param publicFindClass whether to emit the public {@code find-class} defun
 	 */
-	private static List<LispVal> findClassRuntimeDefuns(boolean publicFindClass) {
+	private static List<LispVal> findClassRuntimeDefuns(boolean publicFindClass, boolean objcObjects) {
 		LispSymbol sym = new LispSymbol("%fc_sym");
 		LispSymbol errorp = new LispSymbol("%fc_errorp");
 		LispSymbol env = new LispSymbol("%fc_env");
@@ -40575,7 +40649,9 @@ public final class LispMacroExpander {
 		// the symbol spelling.
 		List<LispVal> builtinSyms = new java.util.ArrayList<>();
 		for (String name : ClosRegistry.BUILTIN_CLASS_NAMES) {
-			builtinSyms.add(new LispSymbol(name));
+			if (objcObjects || !LispNames.OBJC_OBJECT_TYPE.equals(name)) {
+				builtinSyms.add(new LispSymbol(name));
+			}
 		}
 		for (String name : ClosRegistry.FIND_CLASS_ONLY_CLASS_NAMES) {
 			// find-class-resolvable only (standard-object): a slot-less metaobject
@@ -42511,6 +42587,33 @@ public final class LispMacroExpander {
 			collectSymbolNames(form, names);
 		}
 		return names;
+	}
+
+	/**
+	 * Whether any form spells a symbol of the {@code objc} package -- a program that can
+	 * hold an Objective-C reference (on {@code --native}, through the spliced library).
+	 */
+	private static boolean mentionsObjcPackage(List<LispVal> program) {
+		String external = LispNames.OBJC_PKG + ":";
+		for (LispVal form : program) {
+			if (mentionsSymbolPrefix(form, external)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean mentionsSymbolPrefix(LispVal form, String prefix) {
+		if (form instanceof LispSymbol sym) {
+			return sym.name().startsWith(prefix);
+		}
+		for (LispVal cur = form; cur instanceof LispCons cell; cur = cell.cdr()) {
+			if (mentionsSymbolPrefix(cell.car(), prefix)
+					|| (!(cell.cdr() instanceof LispCons) && mentionsSymbolPrefix(cell.cdr(), prefix))) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static void collectSymbolNames(LispVal form, java.util.Set<String> names) {

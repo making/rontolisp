@@ -323,7 +323,7 @@ final class WasmRuntimeBuilder {
 	 * and {@link am.ik.wasm.WasmPeephole} then removes its calls.
 	 *
 	 * <p>
-	 * Two instances of the address-keyed layout ({@code LispNames.OBJC_OBJECT_STRUCT}, a
+	 * Two instances of the address-keyed layout ({@code LispNames.OBJC_OBJECT_TYPE}, a
 	 * {@code --native} program's Objective-C wrapper) are eql when their first slots --
 	 * the object's address -- are: the interpreter's record and the JVM's handle compare
 	 * by address, and a wrapper cannot be interned, since the table would keep every
