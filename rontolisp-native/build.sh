@@ -9,6 +9,7 @@
 #       --native-target output for PLATFORM starts with. The host's platform, or on Linux
 #       the other Linux architecture, cross-built with <arch>-linux-gnu-gcc (Debian/Ubuntu:
 #       gcc-aarch64-linux-gnu / gcc-x86-64-linux-gnu) and the rustup target
+#       <arch>-unknown-linux-musl
 #   ./build.sh --is-static FILE      exit 0 iff FILE is an ELF executable with no interpreter
 #   ./build.sh --maven BUILD REQUIRED
 #       what pom.xml runs in generate-resources, with the values of the properties
@@ -21,10 +22,12 @@
 # dependency's features across the packages of one invocation, so building them together
 # would put the shim's Cranelift into the stub.
 #
-# On Linux the stub links glibc STATICALLY, so an output runs on any distribution (no
-# glibc floor, musl hosts included). Not musl: its string functions made the copying GC
-# ~13% slower (.kb/native-output.md). Where the static link fails (no libc.a) the stub
-# falls back to a dynamic one with a warning, except under REQUIRED.
+# On Linux the stub links musl STATICALLY (the Rust target <arch>-unknown-linux-musl,
+# added through rustup when missing), so an output runs on any distribution: no glibc
+# floor. Not static glibc, which made every output 0.83 MB bigger; on x86_64 the stub
+# brings its own memcpy/memmove/memset, since musl's made the copying GC ~17% slower
+# (.kb/native-output.md, "musl"). Without the target (no rustup) the stub falls back to
+# linking glibc dynamically with a warning, except under REQUIRED.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -52,39 +55,43 @@ build_pair() {
 build_stub() {
   local stub_arch=$1 static_required=$2
   if [[ $os == linux ]]; then
-    local triple=$stub_arch-unknown-linux-gnu
-    local var
-    var=$(tr 'a-z-' 'A-Z_' <<<"$triple")
-    local -a cross=()
+    local cc=cc
     if [[ $stub_arch != "$arch" ]]; then
-      local cc=$stub_arch-linux-gnu-gcc
+      cc=$stub_arch-linux-gnu-gcc
       command -v "$cc" >/dev/null || {
         echo "error: cross-building the $stub_arch stub needs $cc" >&2
         return 1
       }
-      cross=("CARGO_TARGET_${var}_LINKER=$cc" "CC_${triple//-/_}=$cc")
     fi
-    # --target keeps the static flag off the build scripts and proc macros.
-    # relocation-model=static keeps both Linux stubs the same non-PIE static shape:
-    # without it the x86_64 stub links as static-pie while the aarch64 one is already
-    # non-PIE static. It does NOT make qemu-x86_64 on an aarch64 host work: that
-    # QEMU (8.2.2) dies with an internal SIGSEGV (MAPERR addr=0x20) as soon as the
-    # guest opens /proc/self/maps -- Rust's startup guard setup does, and even a C
-    # program that only opens it dies the same way (CI run 36086331612,
-    # cross_target_module... linux-x86_64, reproduced 2026-09-25). The emulated
-    # runs for an architecture whose qemu cannot run are skipped by a probe in
-    # precomp/tests/stub.rs, not by the link shape.
-    if ! env "${cross[@]}" "CARGO_TARGET_${var}_RUSTFLAGS=-C target-feature=+crt-static -C relocation-model=static" \
+    # --target keeps the flags off the build scripts and proc macros. The C compiler and
+    # linker are named because cc-rs would look for <arch>-linux-musl-gcc, which the
+    # static link does not need: the Rust target brings musl's CRT objects and libc.a.
+    # relocation-model=static keeps both Linux stubs the same non-PIE static shape
+    # (musl's default is static-pie). It does NOT make qemu-x86_64 on an aarch64 host
+    # run a glibc binary: that QEMU (8.2.2) dies with an internal SIGSEGV (MAPERR
+    # addr=0x20) as soon as the guest opens /proc/self/maps -- Rust's startup guard
+    # setup does under glibc, and even a C program that only opens it dies the same way
+    # (CI run 36086331612, cross_target_module... linux-x86_64, reproduced 2026-09-25).
+    # The emulated runs for an architecture whose qemu cannot run are skipped by a probe
+    # in precomp/tests/stub.rs, not by the link shape.
+    local triple=$stub_arch-unknown-linux-musl
+    local var
+    var=$(tr 'a-z-' 'A-Z_' <<<"$triple")
+    if ! have_target "$triple" || ! env "CARGO_TARGET_${var}_LINKER=$cc" "CC_${triple//-/_}=$cc" \
+      "CARGO_TARGET_${var}_RUSTFLAGS=-C relocation-model=static" \
       cargo build --locked --profile release-runner -p rlrun --target "$triple" >&2; then
       if $static_required; then
-        echo "error: the runner stub did not link statically; install glibc's static" \
-          "libraries (libc6-dev on Debian/Ubuntu, glibc-static on Fedora/RHEL)" >&2
+        echo "error: the runner stub did not link statically against musl; install the" \
+          "Rust target: rustup target add $triple" >&2
         return 1
       fi
-      echo "WARNING: the runner stub did not link statically (no libc.a? install libc6-dev" \
-        "or glibc-static); linking glibc dynamically, so --native outputs need this" \
-        "host's glibc or newer" >&2
-      env "${cross[@]}" cargo build --locked --profile release-runner -p rlrun --target "$triple" >&2 || return
+      echo "WARNING: the runner stub did not link statically against musl (rustup target" \
+        "add $triple); linking glibc dynamically, so --native outputs need this host's" \
+        "glibc or newer" >&2
+      triple=$stub_arch-unknown-linux-gnu
+      var=$(tr 'a-z-' 'A-Z_' <<<"$triple")
+      env "CARGO_TARGET_${var}_LINKER=$cc" "CC_${triple//-/_}=$cc" \
+        cargo build --locked --profile release-runner -p rlrun --target "$triple" >&2 || return
     fi
     echo "target/$triple/release-runner/rlrun"
   else
@@ -112,6 +119,17 @@ statically_linked() {
   local headers
   headers=$(readelf -lW "$1") || return
   ! grep -q 'INTERP' <<<"$headers"
+}
+
+# Whether the standard library of Rust target $1 is installed; adds it through rustup
+# when it is not and rustup is there.
+have_target() {
+  local libdir
+  libdir=$(rustc --print target-libdir --target "$1") || return
+  compgen -G "$libdir/libstd-*.rlib" >/dev/null && return
+  command -v rustup >/dev/null || return
+  echo "rontolisp-native: adding the Rust target $1 (the runner stub links musl statically)" >&2
+  rustup target add "$1" >&2
 }
 
 find_cargo() {

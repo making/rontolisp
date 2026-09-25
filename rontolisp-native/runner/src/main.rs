@@ -13,6 +13,8 @@
 
 use std::process::exit;
 
+#[cfg(all(target_arch = "x86_64", target_os = "linux", any(target_env = "musl", test)))]
+mod memfns;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod objc;
 

@@ -25,10 +25,10 @@ fn stub() -> PathBuf {
 }
 
 /// Where build.sh leaves the stub under `target/`: Linux builds it for an explicit
-/// `<arch>-unknown-linux-gnu` target (the static-glibc flag must stay off build scripts).
+/// `<arch>-unknown-linux-musl` target, linked statically.
 fn stub_in_target() -> PathBuf {
     if cfg!(target_os = "linux") {
-        Path::new(&format!("{}-unknown-linux-gnu", std::env::consts::ARCH)).join("release-runner/rlrun")
+        Path::new(&format!("{}-unknown-linux-musl", std::env::consts::ARCH)).join("release-runner/rlrun")
     } else {
         PathBuf::from("release-runner/rlrun")
     }

@@ -30,21 +30,24 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   `panic = unwind` and `rl_precompile` catches at the boundary: it runs inside a JVM.
   `install_name @rpath/librlprecomp.dylib` / `soname librlprecomp.so` via `precomp/build.rs`.
 - **Stub** `rlrun`: runtime-only wasmtime (`runtime std gc gc-copying`, no Cranelift) +
-  `wasmtime-wasi` `p1`; profile `release-runner` (`panic = abort`). On Linux it links glibc
-  STATICALLY (`-C target-feature=+crt-static -C relocation-model=static`, built with an
-  explicit `--target <arch>-unknown-linux-gnu` so the flags stay off build scripts; binary
-  at `target/<triple>/release-runner/rlrun`): an output has no glibc floor and runs on musl
-  hosts too (checked 2026-09-24 in `alpine:3.20`, `centos:7` = glibc 2.17 and `busybox`,
-  where the dynamic stub failed on `GLIBC_2.34` / `libgcc_s.so.1`). The relocation model
-  keeps both Linux stubs the same non-PIE static shape: without it the x86_64 stub linked
-  as static-pie while the aarch64 one was already non-PIE static. It does NOT fix
+  `wasmtime-wasi` `p1`; profile `release-runner` (`panic = abort`). On Linux it links musl
+  STATICALLY (target `<arch>-unknown-linux-musl`, which `build.sh` adds through rustup when
+  missing, `-C relocation-model=static`; the explicit `--target` keeps the flag off build
+  scripts; binary at `target/<triple>/release-runner/rlrun`), and on x86_64 brings its own
+  `memcpy`/`memmove`/`memset` (`runner/src/memfns.rs`; Traps, "musl"): an output has no
+  glibc floor (checked 2026-09-24 with static glibc and 2026-09-25 with musl in
+  `alpine:3.20`, `centos:7` = glibc 2.17 and `busybox`, where the dynamic stub failed on
+  `GLIBC_2.34` / `libgcc_s.so.1`). The module is still precompiled for the `-gnu` triple:
+  wasmtime compares only architecture and OS. The relocation model keeps both Linux stubs
+  the same non-PIE static shape (the default is static-pie). It does NOT fix
   `qemu-x86_64` on an aarch64 host (measured 2026-09-25: a non-PIE EXEC stub crashes
   identically, and so does a C program that only opens `/proc/self/maps`): that QEMU
   (8.2.2) dies with an internal SIGSEGV, MAPERR addr=0x20, as soon as the guest opens
   `/proc/self/maps` -- Rust's startup guard setup
-  (`std/.../stack_overflow.rs::install_main_guard_linux`) does on every glibc binary --
-  while `qemu-aarch64` on either host and `qemu-x86_64` on an x86_64 host emulate the
-  same open fine (CI run 36086331612,
+  (`std/.../stack_overflow.rs::install_main_guard_linux`) does on every glibc binary, through
+  glibc's `pthread_getattr_np` (musl's does not read the file; whether the musl stub now runs
+  there is unmeasured) -- while `qemu-aarch64` on either host and `qemu-x86_64` on an x86_64
+  host emulate the same open fine (CI run 36086331612,
   `cross_target_module_names_the_requested_triple_and_runs_there` for `linux-x86_64`).
   The emulated runs for an architecture whose qemu cannot run the bare target stub are
   skipped by a probe in `precomp/tests/stub.rs`, never by the link shape. Reads its trailer from
@@ -92,15 +95,17 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   `build.sh --maven <rontolisp.native.build> <rontolisp.native.required>`. `build` (default
   `false`, `true` under `-Pnative`) builds the pair when `cargo` is on `PATH` or in
   `~/.cargo/bin`, else warns and goes on; `required` (CI) fails unless the host's pair is
-  there afterwards and, on Linux, its stub is static. A static link that fails (no `libc.a`)
-  falls back to a dynamic stub with a warning, except under `required`. "Static" is read
+  there afterwards and, on Linux, its stub is static. Without the musl target (no rustup)
+  the stub falls back to linking glibc dynamically with a warning, except under `required`.
+  "Static" is read
   from the ELF program headers (no `PT_INTERP`, `build.sh --is-static`), never from `ldd`:
   ldd calls any foreign-architecture file "not a dynamic executable" and, on the aarch64
   runner, reported the static-pie stub as dynamic (CI run 36008491295, 2026-09-24).
   `build-sh-test.sh` (run by `--test`) pins the check on known static/dynamic executables.
 - **Packaging** (decided 2026-09-24 from the sizes below): each `-Pnative` binary carries its
   HOST pair plus the other two release platforms' STUBS (for `--native-target`; +4.1 MB on
-  linux-x86_64, +5.4 MB on macOS, uncompressed as native-image stores resources, against a
+  linux-x86_64, +5.4 MB on macOS with the static-glibc stubs, which the musl ones undercut by
+  0.83 MB (x86_64) and 0.60 MB (aarch64); uncompressed as native-image stores resources, against a
   ~102 MB binary); the release exec jar carries all three pairs (~11.4 MB compressed; 8.1 MB
   jar -> ~19.5 MB), so `java -jar` compiles `--native` on any of them; the Maven Central jar
   (the `deploy` job) carries none. CI (`ci.yaml`): `native-stubs` (not on pull requests)
@@ -159,14 +164,32 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
 - **An explicit target turns host detection off.** `Config::target` set (even to the host's
   triple) makes Cranelift start from no ISA flags; unset, it infers the host's. `host` is the
   only CPU level that leaves it unset, so it is refused for another platform.
-- **musl is slower, not smaller-and-equal**: a musl stub (2.12 MB) ran `gc.lisp` at 14.0-14.3
-  G user cycles against 12.2-12.5 for glibc, dynamic or static (+13-15%, same instruction
-  count, pinned to one core, 2026-09-24, Xeon E5-2697A v4). It is the string functions:
-  `LD_PRELOAD`ing a `rep movs` `memmove` into the glibc stub made it slower still, and a
-  musl stub with mimalloc stayed at 14.0. Static glibc costs size instead (+0.98 MB on
-  x86_64); a musl stub with its own `memmove`/`memcpy`/`memset` could have both, at the
-  price of owning those routines (`.todo/956`). These cycle counts predate the
-  codegen-unit fix below (stubs built at one unit).
+- **musl: small, but not with its own x86_64 `memcpy`.** Static glibc cost 0.83 MB
+  (x86_64; 0.60 MB aarch64) over musl, and no linker flag wins it back: of the x86_64 stub's
+  +700 KB `.text` / +208 KB `.rodata` over the dynamic one, 678 KB / 89 KB are whole `libc.a`
+  members glibc's own static startup, stdio, locale, `dlopen` (NSS, gconv) and IFUNC
+  variants pull in (`vfscanf` 37 KB, `gconv_simple` 31 KB, `malloc` 26 KB, `vf[w]printf`
+  38 KB, `dl-*`, `strto*_l`, every `str*`/`mem*` SSE2/AVX2/EVEX variant; `C-ctype` 57 KB
+  of `.rodata`), measured from the link map 2026-09-25. musl's cost was speed: the copying
+  collector copies each surviving object with `copy_within` (`memmove`, most under 64 bytes),
+  and musl's x86_64 `memcpy` starts every copy with `rep movsq` -- 11.7% of `gc.lisp`'s
+  cycles as one symbol, 13.5-14.0 G user cycles against 11.6-11.9 for static glibc in the
+  same interleaved runs (+16-18%, same instruction count; 2026-09-25 at four codegen units, pinned to one core, Xeon
+  E5-2697A v4; at one unit 2026-09-24 it was +13-15%, and mimalloc did not move it). So
+  the x86_64 stub defines `memcpy`/`memmove`/`memset` itself (`runner/src/memfns.rs`, module
+  assembly: every load before any store up to 128 bytes, a 64-byte loop in the safe
+  direction above, `rep movsb`/`stosb` from 2 KiB forwards; SSE2 only), which keeps
+  `libc.a`'s members out of the link. Measured 2026-09-25 against the static-glibc stub, five
+  interleaved runs: `gc` 10.96-11.25 G cycles against 11.25-11.38 (-2.5%), 3.16-3.38 s
+  against 3.27-3.52 s; `hash` -1.2%; `bignum`, `clos`, `fib`, `list`, `mandelbrot`,
+  `matmul`, `sieve`, `sort`, `string` within 0.5%; hello 0.01 s / 18 MB RSS. aarch64 keeps
+  musl's routines: its `memcpy`/`memset` are Arm's optimized-routines assembly (the lineage
+  of glibc's generic aarch64 ones) and `memmove` hands non-overlapping copies to that
+  `memcpy`. aarch64 speed is NOT measured -- no aarch64 hardware here; only the stub tests
+  under `qemu-aarch64`. The routines' tests (`memfns::tests`, in `build.sh --test`) cover
+  every length to 300 and around the thresholds, every alignment and every overlap
+  distance to 70 either way; a load moved after a store, or a backwards move sent forwards,
+  fails them.
 - **The stub is not built as one codegen unit.** Under `codegen-units = 1` (what `release`
   keeps for the shim) LLVM leaves wasmtime's `GcHeap::index::<VMCopyingHeader>` out of line
   in the copying collector's `forward` (11% of `gc.lisp`'s cycles as its own symbol): 38.0 G
@@ -276,6 +299,11 @@ linux-x86_64 2,928,288 B (1.22 MB gz), linux-aarch64 2,501,768 B (1.10 MB gz); o
 interleaved runs: `gc` 3.25-3.28 s against `wasmtime run` 3.27-3.33 s (one unit:
 3.55-3.57 s), `hash` 0.74-0.76 s against 0.75-0.86 s (one unit: 0.81-0.83 s), `fib`
 0.26 s = `wasmtime run`; hello 0.01 s / 19 MB RSS.
+
+2026-09-25, static musl (Traps, "musl"): stub linux-x86_64 2,094,104 B (0.85 MB gz;
+-834,184 B), linux-aarch64 (cross-built) 1,905,600 B (0.83 MB gz; -596,168 B); outputs hello
+2,112,832 B, `gc` 2,325,688 B. `gc` 3.16-3.38 s against 3.27-3.52 s for the static-glibc
+stub in the same interleaved runs (machine busier than above).
 
 2026-09-24, Linux x86_64 (64 cores), rustc 1.98.1, wasmtime 47.0.3:
 

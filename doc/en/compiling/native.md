@@ -80,7 +80,7 @@ other target such a program is a compile error naming the reference.
 
 ## Size and Speed
 
-An executable is a runner (2.9 MB on Linux x86_64, 2.5 MB on Linux aarch64,
-1.7 MB on macOS) plus roughly 11 times the `.wasm`: 2.9 MB for `hello` on Linux
-x86_64, 3.2 MB for a 28 KB module. It starts in about 10 ms and runs at
+An executable is a runner (2.1 MB on Linux x86_64, 1.9 MB on Linux aarch64,
+1.7 MB on macOS) plus roughly 11 times the `.wasm`: 2.1 MB for `hello` on Linux
+x86_64, 2.3 MB for a 28 KB module. It starts in about 10 ms and runs at
 about the speed of `wasmtime run` on the same module.

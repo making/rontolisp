@@ -85,8 +85,8 @@ GraalVM を使ってネイティブ実行ファイルを自分でビルドしま
 **要件:**
 - GraalVM 25 以降（`native-image` ツールを含む）
 - [`--native`](../compiling/native.md) には Rust 1.96 以降(`PATH` 上か `~/.cargo/bin` の
-  `cargo`)と、Linux では glibc の静的ライブラリ(Debian/Ubuntu は `libc6-dev`、
-  Fedora/RHEL は `glibc-static`)。ビルドがプリコンパイラをバイナリに組み込みます。
+  `cargo`)と、Linux では Rust のターゲット `<arch>-unknown-linux-musl`(なければビルドが
+  `rustup` で追加します)。ビルドがプリコンパイラをバイナリに組み込みます。
   `cargo` がなければ警告が出て、バイナリは `--native is not available` と答えます。
   上の JAR のビルドでは `-Drontolisp.native.build=true` で同じことをします。
 
