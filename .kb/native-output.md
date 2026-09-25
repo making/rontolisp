@@ -1,8 +1,12 @@
 # Native-executable output: the wasmtime shim and the runner stub
 
-**Invariant**: a native output is `stub ++ module ++ u64-le(module length) ++ "RLNATIVE"`,
-where `module` is the wasm-GC backend's Preview 1 module precompiled by the shim and `stub`
-is the runner. Shim and stub build their engine from ONE function (`rlabi::config`) of ONE
+**Invariant**: a Linux native output is `stub ++ module ++ u64-le(module length) ++ "RLNATIVE"`;
+a macOS one is the stub's Mach-O image with the module INSIDE it (section
+`__RLPAYLOAD,__payload` = `u64-le(length) ++ "RLNATIVE" ++ module`) and re-signed ad hoc
+over the whole file ("macOS: the module inside the signed image"). `module` is the wasm-GC
+backend's Preview 1 module precompiled by the shim, `stub` the runner, and the shim's
+`rlprecomp::assemble` is the ONE implementation of both layouts (Java calls it through
+`rl_assemble`). Shim and stub build their engine from ONE function (`rlabi::config`) of ONE
 exactly pinned wasmtime; a module precompiled under any other engine is refused by wasmtime
 at start-up, so the Java side must compare fingerprints BEFORE writing an output.
 
@@ -17,7 +21,9 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   (`platform`, `cpu`: NUL-terminated, see "CPU baseline and cross-targets"; 0 = module,
   1 = compile error -- an unknown platform or CPU level included --, 2 = caught panic;
   `*out` holds the module or the UTF-8 message either way), `rl_free(out, out_len)`,
-  `rl_version() -> const char*` (static `FINGERPRINT`). Features `cranelift` +
+  `rl_assemble(stub, stub_len, module, module_len, &out, &out_len) -> i32` (same codes and
+  buffer contract: the executable, or the message), `rl_version() -> const char*` (static
+  `FINGERPRINT`). Features `cranelift` +
   `parallel-compilation`, plus Cranelift's `x86` and `arm64` backends through a direct
   `cranelift-codegen` dependency whose features unify into wasmtime's (its version moves
   with the wasmtime pin). The release profile keeps
@@ -42,7 +48,8 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   `cross_target_module_names_the_requested_triple_and_runs_there` for `linux-x86_64`).
   The emulated runs for an architecture whose qemu cannot run the bare target stub are
   skipped by a probe in `precomp/tests/stub.rs`, never by the link shape. Reads its trailer from
-  `/proc/self/exe` (Linux) or `current_exe()`, runs `_start` with inherited stdio, argv and
+  `/proc/self/exe` (Linux); on macOS takes the module from its own mapped payload section
+  (`getsectiondata`, no read of the file). Runs `_start` with inherited stdio, argv and
   environment; preopens the current directory as fd 3 (what a relative path resolves against,
   `.kb/read-load-streams.md`) under its ABSOLUTE name (`current_dir()`, `.` when unknown or
   not UTF-8) and `/` as fd 4 (covers every absolute path). The absolute name is what lets
@@ -50,11 +57,12 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   resolves it through `/`. Exit: the
   `proc_exit` code, 0 on return, **134 after a trap** (what `wasmtime run` answers on Unix,
   `Error: <trap>` on stderr), 1 when the module cannot load (no trailer, refused engine).
-- **Fingerprint** `rlnative-abi=2;wasmtime=49.0.0;wasm=gc,function-references,exceptions,tail-call;collector=copying`.
+- **Fingerprint** `rlnative-abi=3;wasmtime=49.0.0;wasm=gc,function-references,exceptions,tail-call;collector=copying`.
   The stub carries `RLNATIVE-FINGERPRINT=<fingerprint>\0` in its read-only data (kept by a
   `black_box` in `main`); the assembler scans the stub for it and compares with
   `rl_version()`. Bump `rlnative-abi` when the trailer or the C ABI changes (2: `platform`
-  and `cpu` joined `rl_precompile`, 2026-09-24), together with `NativeToolchain.ABI`, which
+  and `cpu` joined `rl_precompile`, 2026-09-24; 3: `rl_assemble` and the macOS embedded payload,
+  2026-09-25), together with `NativeToolchain.ABI`, which
   refuses a shim of another revision before calling it; edit the
   fingerprint together with `rlabi::config`.
 
@@ -68,7 +76,7 @@ module for the `NativeTarget` (`--native-target`, `--native-cpu`) and the target
 so a host without a shim, an unknown CPU level or a platform without a stub fails before
 the front end runs. The module is the ordinary wasm-GC Preview 1 path (`wasmOutput` =
 `--native` or `.wasm`); only the write differs:
-`NativeExecutable.assemble(stub(platform), precompile(wasm, target))`, written to a
+`NativeToolchain.assemble(stub(platform), precompile(wasm, target))` (`rl_assemble`), written to a
 temp file beside `-o`, chmod 0755, atomically moved over it (writing in place fails with
 ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches disk.
 
@@ -107,16 +115,18 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
 - **Fingerprint**: `rl_version()` must be AMONG the NUL-terminated strings following
   `RLNATIVE-FINGERPRINT=` in the stub (`NativeExecutable.stubFingerprints`), else
   `IllegalStateException` before anything is written.
-- **native-image**: `reachability-metadata.json` registers `rl_precompile` and `rl_free`
-  (the first two downcalls; `rl_version`'s `() -> void*` is Metal's shape), pinned by
+- **native-image**: `reachability-metadata.json` registers `rl_precompile`, `rl_free` and
+  `rl_assemble` (the first three downcalls; `rl_version`'s `() -> void*` is Metal's shape), pinned by
   `NativeToolchainTest`; `resource-config.json` includes `am/ik/rontolisp/native/.*` when
   `NativeToolchain` is reachable. `-Pweb` never reaches `cli`.
-- **Tests**: `NativeExecutableTest` (layout, marker scan, write), `NativeToolchainTest`,
+- **Tests**: `NativeExecutableTest` (marker scan, write), `NativeToolchainTest` (incl.
+  `rl_assemble`'s append and refusal),
   `RontoLispCliTest.nativeRefuses...` / `nativeTargetAndCpu...`, and `NativeOutputE2eTest`
   (a ci-spec slice + argv, and a trap's exit status, diffed against
   `wasmtime run --dir . --dir /tmp`; a `../` read from a subdirectory, which wasmtime
   refuses; the baseline and cross-target runs under qemu), which skips without wasmtime or
-  qemu on `PATH` or without the resources it needs.
+  qemu on `PATH` or without the resources it needs; on macOS it also runs
+  `codesign --verify --strict` on an output.
 
 ## Traps
 
@@ -138,8 +148,6 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   it, so a relative `../x` needs fd 3's absolute name above; under `wasmtime run --dir .` it
   still answers the ordinary open errno. `/..` (climbing above the root) is refused, where a
   native program would stay at `/`.
-- **macOS signature**: the appended payload is outside the linker's ad-hoc signature
-  (`codesign -v` fails strict validation; it still runs from a shell) -- `.todo/944`.
 - **ETXTBSY in a multi-threaded test**: exec of a just-written output fails while another
   thread's fork still holds the write descriptor (until that child's exec). `stub.rs`
   retries the spawn; a Java E2E that writes and runs outputs in parallel needs the same.
@@ -153,6 +161,40 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   musl stub with mimalloc stayed at 14.0. Static glibc costs size instead (+0.98 MB on
   x86_64); a musl stub with its own `memmove`/`memcpy`/`memset` could have both, at the
   price of owning those routines (`.todo/956`).
+
+## macOS: the module inside the signed image
+
+A payload appended after a Mach-O stub is outside the linker's ad-hoc signature:
+`codesign -v` reported "main executable failed strict validation" (it still ran from a shell,
+2026-09-24, with and without `com.apple.quarantine`). So the module goes INSIDE the image and
+the image is re-signed, in pure Rust (`precomp/src/macho.rs`), with no `codesign` on the
+compiling host -- a Linux host writes `--native-target macos-aarch64` outputs too. Rust, not
+Java: `rlpack` and `stub.rs` need the same assembler, and one implementation serves both.
+
+- **The stub reserves the room**: `runner/src/main.rs` puts a 16-byte `#[used]` static
+  (`rlabi::payload::EMPTY_SECTION`, a header naming an empty module; not all zeros, which
+  the linker may turn into zero-fill) in `__RLPAYLOAD,__payload`; `runner/build.rs` passes
+  `-segprot __RLPAYLOAD r r`. ld (1230.1) lays the segment out LAST before `__LINKEDIT`, one
+  16 KiB page (+16,448 B of stub). No segment is ever added: dyld's binding opcodes and
+  chained fixups name segments by index, and the linker already counted this one.
+- **Embedding** (`macho::embed`): writes `header ++ module` at the section, grows the
+  segment to a 16 KiB multiple, moves `__LINKEDIT` (fileoff and vmaddr) behind it and adds
+  the delta to every file offset that points into it (`LC_SYMTAB`, `LC_DYSYMTAB`,
+  `LC_DYLD_INFO[_ONLY]`, the `linkedit_data_command`s). A load command in neither of its
+  two lists (offset-bearing / offset-free) is REFUSED rather than guessed about, as is a
+  stub whose last two segments are not `__RLPAYLOAD`, `__LINKEDIT`.
+- **Signing**: drops the linker's signature and writes the shape ld writes (read off the
+  stub 2026-09-25): a `SuperBlob` with ONE `CodeDirectory` v0x20400, flags
+  `adhoc | linker-signed`, no special slots, SHA-256 of each 4 KiB page up to the signature
+  (16-aligned, the file's end), `execSeg` = `__TEXT` with `MAIN_BINARY`, identifier kept
+  from the stub's (`rlrun-<hash>`). `stub.rs` checks every page hash on any host holding the
+  macOS stub; on macOS, `codesign --verify --strict` accepts the output and refuses it
+  after one module byte changes. `spctl -a` still rejects it: ad hoc is not notarized, and
+  notarization needs a Developer ID -- out of scope.
+- **Limits**: Mach-O file offsets are 32-bit; an output past 4 GiB is refused.
+- Numbers (2026-09-25, Apple silicon, `rlpack`): `gc` output 1,864,323 B, 1.32-1.33 s (the
+  first run of a fresh file 1.71 s: the kernel validates the signature on first exec),
+  `wasmtime run` 1.37-1.42 s; `fib` 0.10 s / 20 MB RSS.
 
 ## CPU baseline and cross-targets
 

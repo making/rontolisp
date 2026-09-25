@@ -938,7 +938,7 @@ public final class RontoLispCli {
 				// Only the executable is written: the .wasm and its precompiled form
 				// never leave memory.
 				NativeToolchain toolchain = NativeToolchain.load();
-				NativeExecutable.write(outputPath, NativeExecutable.assemble(toolchain.stub(nativeTarget.platform()),
+				NativeExecutable.write(outputPath, toolchain.assemble(toolchain.stub(nativeTarget.platform()),
 						toolchain.precompile(bytes, nativeTarget)));
 			}
 			else {

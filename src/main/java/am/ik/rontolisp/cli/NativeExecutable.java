@@ -2,8 +2,6 @@ package am.ik.rontolisp.cli;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -19,18 +17,13 @@ import java.util.Set;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The layout of a {@code --native} output and the one step that writes it: the runner
- * stub, the precompiled module, the module's length as a little-endian {@code u64} and
- * the magic {@code RLNATIVE} -- what {@code rlabi::payload} in {@code rontolisp-native/}
- * defines and the stub reads back from its own executable (.kb/native-output.md).
+ * What the Java side knows of a {@code --native} output: the fingerprint a runner stub
+ * carries and the one step that writes an output. The layout itself -- the module
+ * appended to a Linux stub, embedded in a macOS one and signed -- is the shim's
+ * ({@code rl_assemble}, {@link NativeToolchain#assemble}), the one implementation the
+ * runner's reader is tested against (.kb/native-output.md).
  */
 final class NativeExecutable {
-
-	/** The last eight bytes of every output. */
-	static final byte[] MAGIC = "RLNATIVE".getBytes(StandardCharsets.US_ASCII);
-
-	/** Length field plus magic. */
-	static final int TRAILER_LEN = 16;
 
 	/**
 	 * What a runner stub carries in its read-only data in front of its engine
@@ -42,22 +35,6 @@ final class NativeExecutable {
 	private static final int MAX_FINGERPRINT = 1024;
 
 	private NativeExecutable() {
-	}
-
-	/**
-	 * The executable that runs {@code module} under {@code stub}.
-	 * @param stub the runner stub's bytes
-	 * @param module the module the shim precompiled
-	 * @return {@code stub ++ module ++ u64-le(module.length) ++ "RLNATIVE"}
-	 */
-	static byte[] assemble(byte[] stub, byte[] module) {
-		return ByteBuffer.allocate(Math.addExact(Math.addExact(stub.length, module.length), TRAILER_LEN))
-			.order(ByteOrder.LITTLE_ENDIAN)
-			.put(stub)
-			.put(module)
-			.putLong(module.length)
-			.put(MAGIC)
-			.array();
 	}
 
 	/**
@@ -98,7 +75,7 @@ final class NativeExecutable {
 	 * fail with ETXTBSY while the previous build of the same output is still running, and
 	 * a crash midway would leave a truncated program where a working one was.
 	 * @param output the path {@code -o} named
-	 * @param executable the bytes {@link #assemble} produced
+	 * @param executable the bytes {@link NativeToolchain#assemble} produced
 	 */
 	static void write(Path output, byte[] executable) {
 		Path absolute = output.toAbsolutePath();

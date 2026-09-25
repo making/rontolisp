@@ -58,6 +58,14 @@ final class NativeToolchain {
 	static final FunctionDescriptor PRECOMPILE = FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
 			ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS);
 
+	/**
+	 * {@code int32_t rl_assemble(const uint8_t *stub, size_t stub_len, const uint8_t
+	 * *module, size_t module_len, uint8_t **out, size_t *out_len)}.
+	 */
+	static final FunctionDescriptor ASSEMBLE = FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+			ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS,
+			ValueLayout.ADDRESS);
+
 	/** {@code void rl_free(uint8_t*, size_t)}. */
 	static final FunctionDescriptor FREE = FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.JAVA_LONG);
 
@@ -65,10 +73,10 @@ final class NativeToolchain {
 	static final FunctionDescriptor VERSION = FunctionDescriptor.of(ValueLayout.ADDRESS);
 
 	/** Every shape this class asks the linker for, for the native-image metadata test. */
-	static final List<FunctionDescriptor> DOWNCALLS = List.of(PRECOMPILE, FREE, VERSION);
+	static final List<FunctionDescriptor> DOWNCALLS = List.of(PRECOMPILE, ASSEMBLE, FREE, VERSION);
 
 	/** The C ABI revision this class calls, the first field of the shim's fingerprint. */
-	static final String ABI = "rlnative-abi=2";
+	static final String ABI = "rlnative-abi=3";
 
 	/** {@code (module)}: what {@link #check} precompiles to try a target. */
 	private static final byte[] EMPTY_MODULE = { 0, 'a', 's', 'm', 1, 0, 0, 0 };
@@ -83,11 +91,14 @@ final class NativeToolchain {
 
 	private final MethodHandle precompile;
 
+	private final MethodHandle assemble;
+
 	private final MethodHandle free;
 
-	private NativeToolchain(String fingerprint, MethodHandle precompile, MethodHandle free) {
+	private NativeToolchain(String fingerprint, MethodHandle precompile, MethodHandle assemble, MethodHandle free) {
 		this.fingerprint = fingerprint;
 		this.precompile = precompile;
+		this.assemble = assemble;
 		this.free = free;
 	}
 
@@ -189,7 +200,39 @@ final class NativeToolchain {
 	}
 
 	/**
-	 * What {@code rl_precompile} answered: 0 and the module, or an error and its message.
+	 * The executable that runs {@code module} under {@code stub}: on macOS the module
+	 * embedded in the image and the image signed ad hoc, elsewhere the module appended
+	 * ({@code rlprecomp::assemble}, .kb/native-output.md).
+	 * @param stub the target platform's runner stub, {@link #stub}
+	 * @param module what {@link #precompile} answered for that platform
+	 * @return the output's bytes
+	 * @throws IllegalStateException when the shim cannot lay the module into the stub
+	 */
+	byte[] assemble(byte[] stub, byte[] module) {
+		try (Arena arena = Arena.ofConfined()) {
+			MemorySegment stubIn = arena.allocateFrom(ValueLayout.JAVA_BYTE, stub);
+			MemorySegment moduleIn = arena.allocateFrom(ValueLayout.JAVA_BYTE, module);
+			MemorySegment outPointer = arena.allocate(ValueLayout.ADDRESS);
+			MemorySegment outLength = arena.allocate(ValueLayout.JAVA_LONG);
+			int rc = (int) this.assemble.invokeExact(stubIn, (long) stub.length, moduleIn, (long) module.length,
+					outPointer, outLength);
+			Precompiled result = take(rc, outPointer, outLength);
+			if (result.rc() != 0) {
+				throw new IllegalStateException("--native: cannot assemble the executable: " + result.text());
+			}
+			return result.bytes();
+		}
+		catch (RuntimeException | Error ex) {
+			throw ex;
+		}
+		catch (Throwable ex) {
+			throw new IllegalStateException("--native: the assemble call failed", ex);
+		}
+	}
+
+	/**
+	 * What {@code rl_precompile} or {@code rl_assemble} answered: 0 and the bytes, or an
+	 * error and its message.
 	 */
 	private record Precompiled(int rc, byte[] bytes) {
 
@@ -207,20 +250,25 @@ final class NativeToolchain {
 			MemorySegment outPointer = arena.allocate(ValueLayout.ADDRESS);
 			MemorySegment outLength = arena.allocate(ValueLayout.JAVA_LONG);
 			int rc = (int) this.precompile.invokeExact(in, (long) wasm.length, platform, cpu, outPointer, outLength);
-			long length = outLength.get(ValueLayout.JAVA_LONG, 0);
-			MemorySegment result = outPointer.get(ValueLayout.ADDRESS, 0).reinterpret(length);
-			try {
-				return new Precompiled(rc, result.toArray(ValueLayout.JAVA_BYTE));
-			}
-			finally {
-				this.free.invokeExact(result, length);
-			}
+			return take(rc, outPointer, outLength);
 		}
 		catch (RuntimeException | Error ex) {
 			throw ex;
 		}
 		catch (Throwable ex) {
 			throw new IllegalStateException("--native: the precompile call failed", ex);
+		}
+	}
+
+	/** Copies the shim's answer out of its buffer and releases the buffer. */
+	private Precompiled take(int rc, MemorySegment outPointer, MemorySegment outLength) throws Throwable {
+		long length = outLength.get(ValueLayout.JAVA_LONG, 0);
+		MemorySegment result = outPointer.get(ValueLayout.ADDRESS, 0).reinterpret(length);
+		try {
+			return new Precompiled(rc, result.toArray(ValueLayout.JAVA_BYTE));
+		}
+		finally {
+			this.free.invokeExact(result, length);
 		}
 	}
 
@@ -246,6 +294,7 @@ final class NativeToolchain {
 		Linker linker = Linker.nativeLinker();
 		SymbolLookup lookup = SymbolLookup.libraryLookup(library, Arena.global());
 		MethodHandle precompile = linker.downcallHandle(find(lookup, "rl_precompile"), PRECOMPILE);
+		MethodHandle assemble = linker.downcallHandle(find(lookup, "rl_assemble"), ASSEMBLE);
 		MethodHandle free = linker.downcallHandle(find(lookup, "rl_free"), FREE);
 		MethodHandle version = linker.downcallHandle(find(lookup, "rl_version"), VERSION);
 		String fingerprint;
@@ -265,7 +314,7 @@ final class NativeToolchain {
 			throw new IllegalStateException("--native: the precompile shim for " + platform + " speaks " + fingerprint
 					+ ", this rontolisp " + ABI + "; rebuild it with rontolisp-native/build.sh");
 		}
-		NativeToolchain toolchain = new NativeToolchain(fingerprint, precompile, free);
+		NativeToolchain toolchain = new NativeToolchain(fingerprint, precompile, assemble, free);
 		toolchain.stub(platform);
 		return toolchain;
 	}

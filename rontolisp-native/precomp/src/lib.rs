@@ -4,6 +4,8 @@
 //! ```c
 //! int32_t     rl_precompile(const uint8_t *wasm, size_t len, const char *platform, const char *cpu,
 //!                           uint8_t **out, size_t *out_len);
+//! int32_t     rl_assemble(const uint8_t *stub, size_t stub_len, const uint8_t *module,
+//!                         size_t module_len, uint8_t **out, size_t *out_len);
 //! void        rl_free(uint8_t *p, size_t len);
 //! const char *rl_version(void);   /* static, NUL-terminated; never freed */
 //! ```
@@ -11,8 +13,9 @@
 //! `platform` is the platform the output runs on (`linux-x86_64`, `macos-aarch64`, ...;
 //! [`PLATFORMS`]), `cpu` the CPU features its code may use ([`Cpu`]); both are
 //! NUL-terminated. `rl_precompile` returns 0 with the module in `*out`, or non-zero with a
-//! UTF-8 error message there; either buffer is released with `rl_free(*out, *out_len)`. A
-//! panic is caught at the boundary (this library lives inside a JVM) and reported as an
+//! UTF-8 error message there; `rl_assemble` likewise with the executable that runs `module`
+//! under `stub` ([`assemble`]). Either buffer is released with `rl_free(*out, *out_len)`.
+//! A panic is caught at the boundary (this library lives inside a JVM) and reported as an
 //! error.
 
 use std::ffi::{CStr, c_char};
@@ -20,6 +23,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::slice;
 
 use wasmtime::Config;
+
+pub mod macho;
 
 /// A platform an output can run on: the name the Java side gives its resource directory,
 /// the triple Cranelift compiles for, and what [`Cpu::Baseline`] assumes of its CPU.
@@ -177,6 +182,17 @@ pub fn precompile(wasm: &[u8]) -> wasmtime::Result<Vec<u8>> {
     precompile_for(wasm, host, Cpu::Baseline)
 }
 
+/// The executable that runs `module` (precompiled for the stub's platform) under the
+/// runner `stub`: on macOS the module embedded in the image and the image re-signed
+/// ([`macho::embed`]), elsewhere the module appended ([`rlabi::payload::append`]).
+pub fn assemble(stub: &[u8], module: &[u8]) -> Result<Vec<u8>, String> {
+    if macho::is_macho(stub) {
+        macho::embed(stub, module)
+    } else {
+        Ok(rlabi::payload::append(stub, module))
+    }
+}
+
 const OK: i32 = 0;
 const COMPILE_ERROR: i32 = 1;
 const PANIC: i32 = 2;
@@ -193,6 +209,43 @@ fn precompile_c(wasm: &[u8], platform: &CStr, cpu: &CStr) -> wasmtime::Result<Ve
     precompile_for(wasm, self::platform(platform)?, Cpu::parse(cpu))
 }
 
+/// `len` bytes at `p`; a null or dangling `p` is fine when `len` is 0.
+unsafe fn bytes<'a>(p: *const u8, len: usize) -> &'a [u8] {
+    if len == 0 {
+        &[][..]
+    } else {
+        unsafe { slice::from_raw_parts(p, len) }
+    }
+}
+
+/// Runs `f` behind the C boundary: its result or error message, or the panic it raised,
+/// into `*out`; the status code as the result.
+unsafe fn answer(
+    what: &str,
+    out: *mut *mut u8,
+    out_len: *mut usize,
+    f: impl FnOnce() -> Result<Vec<u8>, String>,
+) -> i32 {
+    let (code, bytes) = match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(Ok(bytes)) => (OK, bytes),
+        Ok(Err(e)) => (COMPILE_ERROR, e.into_bytes()),
+        Err(panic) => {
+            let msg = panic
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".to_string());
+            (PANIC, format!("{what}: {msg}").into_bytes())
+        }
+    };
+    let boxed = bytes.into_boxed_slice();
+    unsafe {
+        *out_len = boxed.len();
+        *out = Box::into_raw(boxed).cast::<u8>();
+    }
+    code
+}
+
 /// # Safety
 /// `wasm` must point to `len` readable bytes; `platform` and `cpu` must be NUL-terminated
 /// strings; `out` and `out_len` must be writable.
@@ -205,38 +258,39 @@ pub unsafe extern "C" fn rl_precompile(
     out: *mut *mut u8,
     out_len: *mut usize,
 ) -> i32 {
-    let input = if len == 0 {
-        &[][..]
-    } else {
-        unsafe { slice::from_raw_parts(wasm, len) }
-    };
+    let input = unsafe { bytes(wasm, len) };
     let platform = unsafe { CStr::from_ptr(platform) };
     let cpu = unsafe { CStr::from_ptr(cpu) };
-    let (code, bytes) = match catch_unwind(AssertUnwindSafe(|| precompile_c(input, platform, cpu))) {
-        Ok(Ok(module)) => (OK, module),
-        Ok(Err(e)) => (COMPILE_ERROR, format!("{e:?}").into_bytes()),
-        Err(panic) => {
-            let msg = panic
-                .downcast_ref::<&str>()
-                .map(|s| s.to_string())
-                .or_else(|| panic.downcast_ref::<String>().cloned())
-                .unwrap_or_else(|| "unknown panic".to_string());
-            (
-                PANIC,
-                format!("wasmtime panicked while precompiling: {msg}").into_bytes(),
-            )
-        }
-    };
-    let boxed = bytes.into_boxed_slice();
     unsafe {
-        *out_len = boxed.len();
-        *out = Box::into_raw(boxed).cast::<u8>();
+        answer("wasmtime panicked while precompiling", out, out_len, || {
+            precompile_c(input, platform, cpu).map_err(|e| format!("{e:?}"))
+        })
     }
-    code
 }
 
 /// # Safety
-/// `p` / `len` must be a pair `rl_precompile` returned, released once.
+/// `stub` and `module` must point to `stub_len` and `module_len` readable bytes; `out`
+/// and `out_len` must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rl_assemble(
+    stub: *const u8,
+    stub_len: usize,
+    module: *const u8,
+    module_len: usize,
+    out: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    let stub = unsafe { bytes(stub, stub_len) };
+    let module = unsafe { bytes(module, module_len) };
+    unsafe {
+        answer("panicked while assembling the executable", out, out_len, || {
+            assemble(stub, module)
+        })
+    }
+}
+
+/// # Safety
+/// `p` / `len` must be a pair `rl_precompile` or `rl_assemble` returned, released once.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rl_free(p: *mut u8, len: usize) {
     if !p.is_null() {
@@ -360,5 +414,30 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn assemble_c(stub: &[u8], module: &[u8]) -> (i32, Vec<u8>) {
+        let (mut out, mut out_len) = (std::ptr::null_mut(), 0usize);
+        let code = unsafe {
+            rl_assemble(
+                stub.as_ptr(),
+                stub.len(),
+                module.as_ptr(),
+                module.len(),
+                &mut out,
+                &mut out_len,
+            )
+        };
+        let bytes = unsafe { slice::from_raw_parts(out, out_len) }.to_vec();
+        unsafe { rl_free(out, out_len) };
+        (code, bytes)
+    }
+
+    #[test]
+    fn rl_assemble_answers_the_executable_or_why_not() {
+        assert_eq!(assemble_c(b"STUB", b"m"), (OK, rlabi::payload::append(b"STUB", b"m")));
+        let (code, msg) = assemble_c(b"\xcf\xfa\xed\xfe", b"m");
+        assert_eq!(code, COMPILE_ERROR);
+        assert!(String::from_utf8(msg).unwrap().contains("Mach-O"));
     }
 }

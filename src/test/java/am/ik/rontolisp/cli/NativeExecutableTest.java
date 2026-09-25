@@ -1,7 +1,6 @@
 package am.ik.rontolisp.cli;
 
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -14,36 +13,14 @@ import org.junit.jupiter.api.io.TempDir;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The {@code --native} output layout, byte for byte what {@code rlabi::payload} in
- * {@code rontolisp-native/abi} writes and the runner stub reads back.
+ * The Java half of a {@code --native} output: the stub's fingerprint marker, the host
+ * platform's name and the write. The layout is the shim's, tested in
+ * {@code rontolisp-native/} and through {@code NativeToolchainTest}.
  */
 class NativeExecutableTest {
 
 	@TempDir
 	Path tempDir;
-
-	@Test
-	void anOutputIsStubModuleLittleEndianLengthAndMagic() {
-		byte[] exe = NativeExecutable.assemble(ascii("STUB"), ascii("module"));
-		// The same bytes rlabi's payload_round_trips test pins on the Rust side.
-		assertThat(exe)
-			.containsExactly(concat(ascii("STUBmodule"), new byte[] { 6, 0, 0, 0, 0, 0, 0, 0 }, ascii("RLNATIVE")));
-		assertThat(exe).hasSize(4 + 6 + NativeExecutable.TRAILER_LEN);
-	}
-
-	@Test
-	void theLengthFieldLocatesTheModuleFromTheEnd() {
-		byte[] module = new byte[70_000];
-		Arrays.fill(module, (byte) 7);
-		byte[] exe = NativeExecutable.assemble(new byte[123], module);
-		ByteBuffer trailer = ByteBuffer.wrap(exe, exe.length - NativeExecutable.TRAILER_LEN, 8)
-			.order(ByteOrder.LITTLE_ENDIAN);
-		long length = trailer.getLong();
-		assertThat(length).isEqualTo(module.length);
-		int start = (int) (exe.length - NativeExecutable.TRAILER_LEN - length);
-		assertThat(start).isEqualTo(123);
-		assertThat(Arrays.copyOfRange(exe, start, start + module.length)).isEqualTo(module);
-	}
 
 	@Test
 	void theStubFingerprintIsReadUpToItsNul() {
