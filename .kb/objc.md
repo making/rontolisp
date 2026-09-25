@@ -248,8 +248,9 @@ defines its own copy into its own loader, which is why the test names a run-time
 alone) accepts the four packages: `ObjcNativeLibrary` splices `objc-native.lisp` -- the nine verbs
 over `rontolisp:wasm-import`s from module `rlobjc` -- right OUTSIDE `AppKitLibrary`, and the runner
 (`rontolisp-native/runner/src/objc`) answers them over libobjc/AppKit, dlopened on the first
-`rlobjc` call (an output that makes none starts as before). Stub +116 KB (1.62 -> 1.73 MB).
-`counter.lisp` is a 2.36 MB executable.
+`rlobjc` call (an output that makes none starts as before). Stub +116 KB (1,616,656 ->
+1,732,800 B at one codegen unit; 1,799,168 B at the four the stub builds with since
+2026-09-25). `counter.lisp` is a 2.36 MB executable.
 
 - **THE decision: the module runs ON thread 0.** A wasmtime `Store` is not `Sync`, and a callback
   arriving on thread 0 while the module ran elsewhere could not enter it: that thread's stack holds
