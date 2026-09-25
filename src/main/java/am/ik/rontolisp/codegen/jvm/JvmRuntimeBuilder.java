@@ -3224,10 +3224,20 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.ARETURN);
 	}
 
+	/**
+	 * Appends a two-byte operand. The high part is kept whole rather than cut to a byte:
+	 * the class file only ever receives its low eight bits (so an operand that fits is
+	 * written exactly as before), while a constant-pool index past 65535 -- which an
+	 * unbounded pool hands out once a program outgrows one class file -- survives in the
+	 * code list until {@link am.ik.jvm.JvmClassSplitter} re-points it into the pool of
+	 * the class the method lands in. Every emitter's u2 goes through here or through
+	 * {@code Ctx.emitU2}, which keeps the same rule.
+	 * @param code the method body, one element per byte
+	 * @param value the operand
+	 */
 	static void emitU2(List<Integer> code, int value) {
-		byte[] bytes = ByteBuffer.allocate(2).putShort((short) value).array();
-		code.add((int) bytes[0]);
-		code.add((int) bytes[1]);
+		code.add(value >> 8);
+		code.add(value & 0xFF);
 	}
 
 	// Emits one packed-array print branch: "if (val instanceof <arrayClass>) return

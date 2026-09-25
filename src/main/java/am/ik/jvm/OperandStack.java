@@ -102,6 +102,14 @@ public final class OperandStack {
 
 	private final int[] operands = new int[4];
 
+	/**
+	 * The operand values exactly as fed, before the cut to a byte: the high part of a
+	 * constant-pool index past 65535 arrives whole from an emitter whose pool outgrew one
+	 * class file ({@link ConstantPool#unbounded()}), and only the uncut value names the
+	 * entry. The byte view above stays what the class file will carry.
+	 */
+	private final int[] rawOperands = new int[4];
+
 	private int operandCount = 0;
 
 	private int operandsExpected = 0;
@@ -130,6 +138,7 @@ public final class OperandStack {
 		if (this.operandsExpected > 0) {
 			if (this.operandCount < this.operands.length) {
 				this.operands[this.operandCount] = value;
+				this.rawOperands[this.operandCount] = b;
 			}
 			this.operandCount++;
 			if (--this.operandsExpected == 0) {
@@ -444,9 +453,9 @@ public final class OperandStack {
 			// corrupt (a u2 that was truncated, a wrong constant handed to the emitter),
 			// and reading a field descriptor as an argument list would report the damage
 			// as an operand-stack underflow instead.
-			throw new IllegalStateException("operand-stack model: the invoke at " + this.opcodePc
-					+ " references the constant-pool entry " + ((this.operands[0] << 8) | this.operands[1])
-					+ ", whose descriptor " + descriptor + " is not a method descriptor");
+			throw new IllegalStateException(
+					"operand-stack model: the invoke at " + this.opcodePc + " references the constant-pool entry "
+							+ this.poolIndex() + ", whose descriptor " + descriptor + " is not a method descriptor");
 		}
 		for (int i = 0; i < argumentCount(descriptor); i++) {
 			this.pop();
@@ -460,10 +469,19 @@ public final class OperandStack {
 	}
 
 	/**
+	 * {@return the constant-pool index a two-byte operand names} The high part is read
+	 * uncut, so an index past 65535 -- which the class file itself can never carry, and
+	 * only an unbounded pool hands out -- still names its own entry here.
+	 */
+	private int poolIndex() {
+		return (this.rawOperands[0] << 8) | this.operands[1];
+	}
+
+	/**
 	 * {@return the descriptor of the constant-pool entry this instruction references}
 	 */
 	private String descriptor() {
-		int index = (this.operands[0] << 8) | this.operands[1];
+		int index = this.poolIndex();
 		String descriptor = this.cp.descriptorOf(index);
 		if (descriptor == null) {
 			throw new IllegalStateException("operand-stack model: no descriptor for the constant-pool entry " + index
@@ -473,7 +491,7 @@ public final class OperandStack {
 	}
 
 	private Slot constantSlot() {
-		int index = this.opcode == Opcode.LDC ? this.operands[0] : (this.operands[0] << 8) | this.operands[1];
+		int index = this.opcode == Opcode.LDC ? this.rawOperands[0] : this.poolIndex();
 		String descriptor = this.cp.descriptorOf(index);
 		if (descriptor == null) {
 			throw new IllegalStateException("operand-stack model: no descriptor for the constant loaded at "

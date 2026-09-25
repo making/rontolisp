@@ -1,7 +1,5 @@
 package am.ik.rontolisp.codegen.jvm;
 
-import java.io.ByteArrayOutputStream;
-import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -56,6 +54,7 @@ import am.ik.rontolisp.compiler.WasmImportDirective;
 
 import am.ik.jvm.AccessFlag;
 import am.ik.jvm.ByteCodeWriter;
+import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.JvmClassShaker;
 import am.ik.jvm.ConstantPool.ClassConstant;
@@ -813,7 +812,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Create the %mv-spill global (a top-level setq) when the program uses a
 		// multiple-value operator: the expansions read/write it across functions.
 		program = LispMacroExpander.injectMvSpillGlobal(program, this.runtimeFeatures);
-		ConstantPool cp = new ConstantPool();
+		ConstantPool cp = ConstantPool.unbounded();
 		ClassConstant thisClass = cp.addClass(cp.addUtf8(this.className));
 		// The internal-name package prefix of the generated class ("" for the default
 		// package, otherwise e.g. "com/example/"): every embedded acceleration/interop
@@ -3435,1305 +3434,790 @@ public final class JvmLispCompiler implements LispCompiler {
 			fusedHelperMethods.add(JvmIntFusionCompiler.buildFxAsh(cp));
 		}
 
-		ByteArrayOutputStream classOut = new ByteArrayOutputStream();
-		new ByteCodeWriter(classOut) //
-			.write(0xCA, 0xFE, 0xBA, 0xBE) //
-			.writeVersion(0, 50) //
-			.writeConstantPool(cp) //
-			.writeClass(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER, thisClass, objectClass) //
-			.writeInterfaces(i -> {
-				if (x509TrustManagerClass != null) {
-					i.add(w -> w.writeU2(x509TrustManagerClass.index()));
-				}
-				if (httpHandlerRuntime != null) {
-					i.add(w -> w.writeU2(httpHandlerRuntime.handlerInterface().index()));
-				}
-				if (runnableClass != null) {
-					i.add(w -> w.writeU2(runnableClass.index()));
-				}
-				if (callableClass != null) {
-					i.add(w -> w.writeU2(callableClass.index()));
-				}
-			})
-			.writeFields(f -> {
-				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-					.writeU2(stdinReaderFieldName)
-					.writeU2(stdinReaderFieldDesc)
-					.writeU2(0));
-				if (usesComplex) {
-					// The holder-presence probe (.todo/757): whether the travelling
-					// RontoComplex class resolved, set once in <clinit> below.
-					// Final (a JIT constant after class init), and attribute-free
-					// like every other field -- JvmClassShaker rejects field
-					// attributes. The <clinit> store keeps the field alive for the
-					// shaker exactly when the class needs it.
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_FINAL)
-						.writeU2(java.util.Objects.requireNonNull(hasComplexName))
-						.writeU2(java.util.Objects.requireNonNull(hasComplexDesc))
-						.writeU2(0));
-				}
-				if (secureRandomRuntime != null) {
-					f.add(w -> w.writeU2(JvmSecureRandomRuntimeBuilder.fieldAccessFlags())
-						.writeU2(secureRandomRuntime.fieldName())
-						.writeU2(secureRandomRuntime.fieldDesc())
-						.writeU2(0));
-				}
-				if (argvRuntime != null) {
-					f.add(w -> w.writeU2(JvmArgvRuntimeBuilder.fieldAccessFlags())
-						.writeU2(argvRuntime.fieldName())
-						.writeU2(argvRuntime.fieldDesc())
-						.writeU2(0));
-				}
-				// VOLATILE: the synchronized _addStream writes the table back on every
-				// call, and that store is what publishes a new entry to the reader
-				// threads (one virtual thread per served request).
-				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE)
-					.writeU2(streamsFieldName)
-					.writeU2(streamsFieldDesc)
-					.writeU2(0));
-				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-					.writeU2(streamCountFieldName)
-					.writeU2(streamCountFieldDesc)
-					.writeU2(0));
-				if (streamPathsFieldName != null) {
-					// VOLATILE for the same reason _streams is: _setStreamPath is
-					// synchronized and its write-back publishes the table.
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE)
-						.writeU2(streamPathsFieldName)
-						.writeU2(java.util.Objects.requireNonNull(streamPathsFieldDesc))
-						.writeU2(0));
-				}
-				if (streamPositionsFieldName != null) {
-					// VOLATILE for the same reason _streams is: _storeStreamPosition is
-					// synchronized and its write-back publishes the table.
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE)
-						.writeU2(streamPositionsFieldName)
-						.writeU2(java.util.Objects.requireNonNull(streamPositionsFieldDesc))
-						.writeU2(0));
-				}
-				// The renderers' cycle guard: the current rendering path (lazily
-				// allocated) and its depth, shared by the two escape modes of the
-				// instance, cons and array renderers. Unconditional -- the cons
-				// renderer is in every class. Not volatile: the guard's emitted reads
-				// are bounds-checked so a rendering race between request threads can at
-				// worst misplace a "#" marker; the interpreter twin is a ThreadLocal
-				// (RenderCycleGuard).
-				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-					.writeU2(renderPathFieldName)
-					.writeU2(renderPathFieldDesc)
-					.writeU2(0));
-				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-					.writeU2(renderDepthFieldName)
-					.writeU2(renderDepthFieldDesc)
-					.writeU2(0));
-				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-					.writeU2(colFieldName)
-					.writeU2(colFieldDesc)
-					.writeU2(0));
-				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-					.writeU2(gensymCtrFieldName)
-					.writeU2(gensymCtrFieldDesc)
-					.writeU2(0));
-				// The two strings last PROVEN to hold no surrogate pair, so a character
-				// index into one is 1 + i. Deliberately NOT volatile: a String is
-				// immutable and a reference field is written atomically, so a racing
-				// reader sees an older string (a re-probe) but never a torn pair.
-				for (Utf8Constant siName : stringIndexFieldNames) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(siName)
-						.writeU2(stringIndexFieldDesc)
-						.writeU2(0));
-				}
-				// The two breakpoint tables, for the strings that DO hold a surrogate
-				// pair. VOLATILE, unlike the pair above: each slot is an Object[]{string,
-				// table} whose table was FILLED before the slot was stored, and a plain
-				// store publishes neither the second element nor the table's contents --
-				// a racing reader could match the string and then read an unwritten
-				// offset, answering a position inside the framing quote. The release
-				// fence is the publication (.kb/string-index-cost.md).
-				for (Utf8Constant siName : stringIndexWideFieldNames) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE)
-						.writeU2(siName)
-						.writeU2(stringIndexWideFieldDesc)
-						.writeU2(0));
-				}
-				if (httpHandlerRuntime != null) {
-					// VOLATILE: the handler slot is written once by the thread that runs
-					// the top level and read by every request thread afterwards. On the
-					// socket transports the server thread is started AFTER the write, so
-					// Thread.start() published it; a SERVLET war has no such edge -- the
-					// container's request threads exist already, and a clack:clackup left
-					// at :use-thread t writes the slot from a thread of its own -- so the
-					// field carries the publication itself. One volatile read per request
-					// is not measurable against an HTTP round trip.
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE)
-						.writeU2(httpHandlerRuntime.handlerFieldName())
-						.writeU2(httpHandlerRuntime.handlerFieldDesc())
-						.writeU2(0));
-				}
-				if (sizedMain != null) {
-					// The launcher instance's two fields: main's arguments in, the
-					// body's throwable out (published by Thread.join).
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE)
-						.writeU2(sizedMain.argsName())
-						.writeU2(sizedMain.argsDesc())
-						.writeU2(0));
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE)
-						.writeU2(sizedMain.thrownName())
-						.writeU2(sizedMain.thrownDesc())
-						.writeU2(0));
-				}
-				if (asyncRuntimeBodies != null) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(java.util.Objects.requireNonNull(handoffFieldName))
-						.writeU2(java.util.Objects.requireNonNull(handoffFieldDesc))
-						.writeU2(0));
-					for (Utf8Constant instField : List.of(java.util.Objects.requireNonNull(asyncFnFieldName),
-							java.util.Objects.requireNonNull(asyncFutureFieldName),
-							java.util.Objects.requireNonNull(asyncLatchFieldName))) {
-						f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE)
-							.writeU2(Objects.requireNonNull(instField))
-							.writeU2(Objects.requireNonNull(asyncInstanceFieldDesc))
-							.writeU2(0));
-					}
-				}
-				if (threadRuntimeBodies != null) {
-					for (Utf8Constant instField : List.of(java.util.Objects.requireNonNull(threadFnFieldName),
-							java.util.Objects.requireNonNull(threadBindingsFieldName))) {
-						f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE)
-							.writeU2(Objects.requireNonNull(instField))
-							.writeU2(Objects.requireNonNull(threadInstanceFieldDesc))
-							.writeU2(0));
-					}
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(java.util.Objects.requireNonNull(curThreadTlFieldName))
-						.writeU2(java.util.Objects.requireNonNull(curThreadTlFieldDesc))
-						.writeU2(0));
-				}
-				// One static Object field per top-level global variable (default null =
-				// nil); written by setq/defvar, read by getstatic from any method body.
-				for (Utf8Constant gfName : globalFieldNameUtfs) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(gfName)
-						.writeU2(globalFieldDescUtf)
-						.writeU2(0));
-				}
-				// The raw long half and the int flag of an unboxed global's triple; the
-				// _g$ field above is its boxed shadow. Both default to 0, so the flag
-				// starts clear and the shadow's null (nil) is authoritative -- exactly
-				// the state a plain global starts in.
-				for (Utf8Constant rgName : rawGlobalLongFieldNameUtfs) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(rgName)
-						.writeU2(Objects.requireNonNull(rawGlobalLongDescUtf))
-						.writeU2(0));
-				}
-				for (Utf8Constant rkName : rawGlobalFlagFieldNameUtfs) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(rkName)
-						.writeU2(Objects.requireNonNull(rawGlobalFlagDescUtf))
-						.writeU2(0));
-				}
-				if (dynVarRuntime != null) {
-					// One static ThreadLocal per dynamically-bound special: the thread's
-					// innermost dynamic binding as a one-element Object[] cell (see
-					// JvmDynVarRuntimeBuilder); created in <clinit>.
-					for (Utf8Constant dfName : dynVarRuntime.fieldNameUtfs()) {
-						f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-							.writeU2(dfName)
-							.writeU2(dynVarRuntime.fieldDescUtf())
-							.writeU2(0));
-					}
-				}
-				if (javaRuntime != null) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(javaRuntime.initedFieldName())
-						.writeU2(javaRuntime.initedFieldDesc())
-						.writeU2(0));
-				}
-				if (objcRuntime != null) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(objcRuntime.initedFieldName())
-						.writeU2(objcRuntime.initedFieldDesc())
-						.writeU2(0));
-				}
-				if (ffiRuntime != null) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(ffiRuntime.initedFieldName())
-						.writeU2(ffiRuntime.initedFieldDesc())
-						.writeU2(0));
-				}
-				if (simdRuntime != null) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(simdRuntime.initedFieldName())
-						.writeU2(simdRuntime.initedFieldDesc())
-						.writeU2(0));
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(simdRuntime.availableFieldName())
-						.writeU2(simdRuntime.availableFieldDesc())
-						.writeU2(0));
-				}
-				if (blasRuntime != null) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(blasRuntime.initedFieldName())
-						.writeU2(blasRuntime.initedFieldDesc())
-						.writeU2(0));
-				}
-				if (gpuRuntime != null) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(gpuRuntime.initedFieldName())
-						.writeU2(gpuRuntime.initedFieldDesc())
-						.writeU2(0));
-				}
-				if (geomRuntime != null) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(geomRuntime.initedFieldName())
-						.writeU2(geomRuntime.initedFieldDesc())
-						.writeU2(0));
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(geomRuntime.availableFieldName())
-						.writeU2(geomRuntime.availableFieldDesc())
-						.writeU2(0));
-				}
-				if (usesEval) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(genvName)
-						.writeU2(genvDesc)
-						.writeU2(0));
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(fenvName)
-						.writeU2(genvDesc)
-						.writeU2(0));
-				}
-				if (usesRead) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(readSrcName)
-						.writeU2(readSrcDesc)
-						.writeU2(0));
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(readPosName)
-						.writeU2(readPosDesc)
-						.writeU2(0));
-				}
-				if (!structTableClinitFinal.isEmpty()) {
-					// The runtime struct-layout directory for #S(...) read at run time.
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(rdStructsName)
-						.writeU2(rdStructsDesc)
-						.writeU2(0));
-				}
-				if (mainCtx.conditionChannel.used) {
-					// The per-thread condition carrier from a %error-cond throw site to a
-					// handler-case catch handler; initialized in <clinit>.
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(java.util.Objects.requireNonNull(mainCtx.conditionChannel.fieldName))
-						.writeU2(java.util.Objects.requireNonNull(mainCtx.conditionChannel.fieldDesc))
-						.writeU2(0));
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(java.util.Objects.requireNonNull(mainCtx.conditionChannel.depthFieldName))
-						.writeU2(java.util.Objects.requireNonNull(mainCtx.conditionChannel.fieldDesc))
-						.writeU2(0));
-				}
-				if (mainCtx.conditionChannel.nleUsed) {
-					// The per-thread non-local-exit carrier from a %nlx-throw site to the
-					// matching %nlx-catch (a {throwable, id, value} Object[]);
-					// initialized
-					// in <clinit>.
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(java.util.Objects.requireNonNull(mainCtx.conditionChannel.nleFieldName))
-						.writeU2(java.util.Objects.requireNonNull(mainCtx.conditionChannel.fieldDesc))
-						.writeU2(0));
-				}
-				// One private static String[] per instance layout the program references:
-				// {tag, printName, "S"|"C", slot0, ...}. Initialized in <clinit>; the
-				// array in slot 0 of an instance is also its type discriminator. The
-				// attribute count MUST stay 0 -- JvmClassShaker rejects field attributes.
-				for (LayoutPool.LayoutField lf : mainCtx.layoutPool.fields()) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(lf.name())
-						.writeU2(java.util.Objects.requireNonNull(mainCtx.layoutPool.fieldDesc))
-						.writeU2(0));
-				}
-				// One private static BigInteger per DISTINCT bignum literal, built once
-				// in <clinit> so a use site is a GETSTATIC. The attribute count MUST stay
-				// 0 -- JvmClassShaker rejects field attributes -- which is also why the
-				// field is not marked ACC_FINAL-with-ConstantValue: a BigInteger has no
-				// constant-pool form.
-				for (BigIntPool.BigIntField bf : mainCtx.bigIntPool.fields()) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
-						.writeU2(bf.name())
-						.writeU2(java.util.Objects.requireNonNull(mainCtx.bigIntPool.fieldDesc))
-						.writeU2(0));
-				}
-				// One private static VOLATILE Object per quoted aggregate datum, built
-				// lazily by its quote site so every evaluation answers the same object
-				// (.kb/quoted-data.md) -- volatile so a racing first build publishes a
-				// fully-constructed datum. Lazy on purpose: JvmClassShaker drops the
-				// field with the method holding its site, which a <clinit> initializer
-				// would pin alive. The attribute count MUST stay 0 -- JvmClassShaker
-				// rejects field attributes.
-				for (QuotePool.QuoteField qf : mainCtx.quotePool.fields()) {
-					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE)
-						.writeU2(qf.name())
-						.writeU2(java.util.Objects.requireNonNull(mainCtx.quotePool.fieldDesc))
-						.writeU2(0));
-				}
-			})
-			.writeMethods(methods -> {
-				if (sizedMain != null) {
-					// The launcher is main; the program body keeps its code under
-					// _main$body, reached from the worker through run().
-					for (JvmSizedMainBuilder.Method sm : java.util.Arrays.asList(sizedMain.main(), sizedMain.run(),
-							sizedMainInstanceRun)) {
-						if (sm == null) {
-							continue;
-						}
-						int access = sm == sizedMain.main() ? AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC
-								: sm == sizedMain.run() ? AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC
-										: AccessFlag.ACC_PUBLIC;
-						methods.add(access, sm.name(), sm.desc(),
-								method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-									attr.writeU2(sm.maxStack())
-										.writeU2(sm.maxLocals())
-										.writeCode((Object[]) sm.code().toArray(new Integer[0]));
-									List<ByteCodeWriter.ExceptionTableEntry> entries = new ArrayList<>();
-									for (int[] e : sm.exceptionTable()) {
-										entries.add(new ByteCodeWriter.ExceptionTableEntry(e[0], e[1], e[2], e[3]));
-									}
-									attr.writeExceptionTable(entries);
-									attr.writeU2(0);
-								})));
-					}
-				}
-				if (!this.noMain) {
-					methods.add(
-							sizedMain != null ? AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC
-									: AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC,
-							sizedMain != null ? sizedMain.bodyName() : mainUtf8, mainDesc,
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(mainCtx.maxStack())
-									.writeU2(mainCtx.maxLocals)
-									.writeCode((Object[]) mainCtx.code.toArray(new Integer[0]))
-									.writeExceptionTable(mainCtx.exceptionTable)
-									.writeU2(0);
-							})));
-				}
-				if (topRunnerCtxFinal != null) {
-					// _top$run: the top-level body <clinit> runs (see mainCtx above).
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
-							java.util.Objects.requireNonNull(topRunnerName), topChunkDesc,
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(topRunnerCtxFinal.maxStack())
-									.writeU2(topRunnerCtxFinal.maxLocals)
-									.writeCode((Object[]) topRunnerCtxFinal.code.toArray(new Integer[0]))
-									.writeExceptionTable(topRunnerCtxFinal.exceptionTable)
-									.writeU2(0);
-							})));
-				}
-				for (JvmExportRuntimeBuilder.BuiltMethod em : exportMethods) {
-					methods.add(
-							(em.isPublic() ? AccessFlag.ACC_PUBLIC : AccessFlag.ACC_PRIVATE) | AccessFlag.ACC_STATIC,
-							em.name(), em.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(em.maxStack())
-									.writeU2(em.maxLocals())
-									.writeCode((Object[]) em.code().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				// The top-level body, split into one or more void chunk methods main()
-				// calls.
-				for (int i = 0; i < topChunks.size(); i++) {
-					final Ctx chunk = topChunks.get(i);
-					methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, topChunkNames.get(i), topChunkDesc,
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(chunk.maxStack())
-									.writeU2(chunk.maxLocals)
-									.writeCode((Object[]) chunk.code.toArray(new Integer[0]))
-									.writeExceptionTable(chunk.exceptionTable)
-									.writeU2(0);
-							})));
-				}
-				for (int i = 0; i < defuns.size(); i++) {
-					FunctionInfo fi = java.util.Objects.requireNonNull(functions.get(defuns.get(i).name));
-					final Ctx funcCtx = funcCtxs.get(i);
-					methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, fi.nameUtf8, fi.descUtf8,
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(funcCtx.maxStack())
-									.writeU2(funcCtx.maxLocals)
-									.writeCode((Object[]) funcCtx.code.toArray(new Integer[0]))
-									.writeExceptionTable(funcCtx.exceptionTable)
-									.writeU2(0);
-							})));
-				}
-				for (int i = 0; i < lambdaCtxs.size(); i++) {
-					FunctionInfo fi = lambdaFuncInfos.get(i);
-					final Ctx lambdaCtx = lambdaCtxs.get(i);
-					methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, fi.nameUtf8, fi.descUtf8,
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(lambdaCtx.maxStack())
-									.writeU2(lambdaCtx.maxLocals)
-									.writeCode((Object[]) lambdaCtx.code.toArray(new Integer[0]))
-									.writeExceptionTable(lambdaCtx.exceptionTable)
-									.writeU2(0);
-							})));
-				}
-				for (DispatchMethod dm : dispatchMethods) {
-					methods.add(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, dm.nameUtf8, dm.descUtf8,
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(64)
-									.writeU2(dm.maxLocals)
-									.writeCode((Object[]) dm.code.toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || !mainCtx.layoutPool.isEmpty()
-						|| !mainCtx.bigIntPool.isEmpty() || !structTableClinitFinal.isEmpty() || dynVarRuntime != null
-						|| initsClinit) {
-					// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
-					// on a thread with no pending condition returns null). The async
-					// runtime's _handoffTl (the eager-start handoff) joins the same
-					// initializer when present, as does _nleTl (the cross-lambda exit
-					// carrier) -- appended last so a condition-only program is unchanged.
-					// The instance-layout constants join the SAME method (a class may
-					// have
-					// only one <clinit>), appended after the ThreadLocals for the same
-					// reason.
-					ConditionChannel channel = mainCtx.conditionChannel;
-					List<FieldrefConstant> tlFields = new java.util.ArrayList<>();
-					if (channel.used) {
-						tlFields.add(java.util.Objects.requireNonNull(channel.condTlField));
-						tlFields.add(java.util.Objects.requireNonNull(channel.depthTlField));
-						if (handoffFieldRef != null) {
-							tlFields.add(handoffFieldRef);
-						}
-					}
-					if (channel.nleUsed) {
-						tlFields.add(java.util.Objects.requireNonNull(channel.nleTlField));
-					}
-					if (curThreadTlFieldRef != null) {
-						// The _thread_current handle cache joins the same initializer.
-						tlFields.add(curThreadTlFieldRef);
-					}
-					List<Integer> clinitCode = new java.util.ArrayList<>();
-					// The holder-presence probe's single initialization (.todo/757):
-					// _hasComplex is true when the travelling RontoComplex class
-					// loads, false when a lone class runs without it beside it (then
-					// every holder test takes its holder-less shape, which is exact
-					// because no holder can exist). First, so the top level a
-					// <clinit> may run already sees the settled value. Peaks at one
-					// stack slot, under every declared clinit maximum.
-					final List<ByteCodeWriter.ExceptionTableEntry> clinitProbeTable;
-					if (usesComplex) {
-						List<Integer> probe = new java.util.ArrayList<>();
-						int tryStart = probe.size();
-						probe.add(Opcode.LDC_W);
-						JvmRuntimeBuilder.emitU2(probe, java.util.Objects.requireNonNull(hasComplexTarget).index());
-						probe.add(Opcode.INVOKESTATIC);
-						JvmRuntimeBuilder.emitU2(probe, java.util.Objects.requireNonNull(hasComplexProbe).index());
-						probe.add(Opcode.POP);
-						probe.add(Opcode.ICONST_1);
-						probe.add(Opcode.PUTSTATIC);
-						JvmRuntimeBuilder.emitU2(probe, java.util.Objects.requireNonNull(hasComplexField).index());
-						int toDone = probe.size();
-						probe.add(Opcode.GOTO);
-						JvmRuntimeBuilder.emitU2(probe, 0);
-						int handler = probe.size();
-						// The caught exception is on the stack on handler entry.
-						probe.add(Opcode.POP);
-						probe.add(Opcode.ICONST_0);
-						probe.add(Opcode.PUTSTATIC);
-						JvmRuntimeBuilder.emitU2(probe, java.util.Objects.requireNonNull(hasComplexField).index());
-						int done = probe.size();
-						JvmRuntimeBuilder.patchBranch(probe, toDone, done);
-						clinitCode.addAll(probe);
-						clinitProbeTable = List.of(new ByteCodeWriter.ExceptionTableEntry(tryStart, toDone, handler,
-								java.util.Objects.requireNonNull(hasComplexAbsent).index()));
-					}
-					else {
-						clinitProbeTable = List.of();
-					}
-					for (FieldrefConstant tlField : tlFields) {
-						clinitCode.add(Opcode.NEW);
-						JvmRuntimeBuilder.emitU2(clinitCode,
-								java.util.Objects.requireNonNull(channel.threadLocalClass).index());
-						clinitCode.add(Opcode.DUP);
-						clinitCode.add(Opcode.INVOKESPECIAL);
-						JvmRuntimeBuilder.emitU2(clinitCode, java.util.Objects.requireNonNull(channel.tlCtor).index());
-						clinitCode.add(Opcode.PUTSTATIC);
-						JvmRuntimeBuilder.emitU2(clinitCode, tlField.index());
-					}
-					if (dynVarRuntime != null) {
-						// The dynamic-binding ThreadLocals (one per bound special) join
-						// the
-						// same initializer -- never lazily: a racy first binding from two
-						// request threads would mint two ThreadLocals and lose one
-						// binding.
-						clinitCode.addAll(dynVarRuntime.clinitCode());
-					}
-					if (streamsFieldRef != null) {
-						// _streams = new Object[16]; _streamCount = 3 -- the reserved
-						// standard-stream handles as empty table slots (see above).
-						clinitCode.add(Opcode.BIPUSH);
-						clinitCode.add(16);
-						clinitCode.add(Opcode.ANEWARRAY);
-						JvmRuntimeBuilder.emitU2(clinitCode, objectClass.index());
-						clinitCode.add(Opcode.PUTSTATIC);
-						JvmRuntimeBuilder.emitU2(clinitCode, streamsFieldRef.index());
-						clinitCode.add(Opcode.ICONST_3);
-						clinitCode.add(Opcode.PUTSTATIC);
-						JvmRuntimeBuilder.emitU2(clinitCode,
-								java.util.Objects.requireNonNull(streamCountFieldRef).index());
-					}
-					// The bignum literals go in before the layouts: they are plain
-					// values with no dependency of their own, and every later fragment
-					// (and the top-level runner, invoked last) may read them.
-					clinitCode.addAll(bigIntClinitCode);
-					clinitCode.addAll(layoutClinitCode);
-					// The standard stream variables' defaults, one table
-					// (StreamDesignators) feeding BOTH homes: the per-name global field
-					// a direct read uses, and the eval runtime's _genv mirror that
-					// symbol-value / boundp / eval probe.
-					for (Map.Entry<String, LispVal> streamVar : StreamDesignators.standardStreamDefaults().entrySet()) {
-						FieldrefConstant globalField = streamGlobalSeeds.get(streamVar.getKey());
-						if (globalField != null) {
-							emitStreamDefault(clinitCode, streamVar.getValue(), standardOutputTStr, longValueOf,
-									objectClass, streamLayoutField, streamKindStandardStr);
-							clinitCode.add(Opcode.PUTSTATIC);
-							JvmRuntimeBuilder.emitU2(clinitCode, globalField.index());
-						}
-						ConstantPool.StringConstant seedName = streamGenvSeeds.get(streamVar.getKey());
-						if (seedName != null) {
-							// _genv = {{name, default}, _genv} -- the binding shape
-							// _store prepends, so a later top-level assignment MUTATES
-							// this cell rather than shadowing it.
-							clinitCode.add(Opcode.ICONST_2);
-							clinitCode.add(Opcode.ANEWARRAY);
-							JvmRuntimeBuilder.emitU2(clinitCode, objectClass.index());
-							clinitCode.add(Opcode.DUP);
-							clinitCode.add(Opcode.ICONST_0);
-							clinitCode.add(Opcode.ICONST_2);
-							clinitCode.add(Opcode.ANEWARRAY);
-							JvmRuntimeBuilder.emitU2(clinitCode, objectClass.index());
-							clinitCode.add(Opcode.DUP);
-							clinitCode.add(Opcode.ICONST_0);
-							clinitCode.add(Opcode.LDC_W);
-							JvmRuntimeBuilder.emitU2(clinitCode, seedName.index());
-							clinitCode.add(Opcode.AASTORE);
-							clinitCode.add(Opcode.DUP);
-							clinitCode.add(Opcode.ICONST_1);
-							emitStreamDefault(clinitCode, streamVar.getValue(), standardOutputTStr, longValueOf,
-									objectClass, streamLayoutField, streamKindStandardStr);
-							clinitCode.add(Opcode.AASTORE);
-							clinitCode.add(Opcode.AASTORE);
-							clinitCode.add(Opcode.DUP);
-							clinitCode.add(Opcode.ICONST_1);
-							clinitCode.add(Opcode.GETSTATIC);
-							JvmRuntimeBuilder.emitU2(clinitCode, genvField.index());
-							clinitCode.add(Opcode.AASTORE);
-							clinitCode.add(Opcode.PUTSTATIC);
-							JvmRuntimeBuilder.emitU2(clinitCode, genvField.index());
-						}
-					}
-					clinitCode.addAll(structTableClinitFinal);
-					if (topRunnerRef != null) {
-						// Run the top level last, after every piece of runtime infra
-						// above is seeded — this is the export-carrying class's
-						// "top level at instantiation" (see mainCtx above).
-						clinitCode.add(Opcode.INVOKESTATIC);
-						JvmRuntimeBuilder.emitU2(clinitCode, topRunnerRef.index());
-					}
-					clinitCode.add(Opcode.RETURN);
-					// max_stack: the ThreadLocal group peaks at 2 (NEW; DUP), the layout
-					// group at 4 (array; DUP; index; LDC), the reader's struct directory
-					// at 10 (outer array, entry, initTexts nested builds each keep a DUP
-					// and an index live), a _genv seed at 8 (outer array plus index under
-					// the inner array build, whose boxed handle is briefly a long).
-					// StackMapAugmenter copies the declared maximum verbatim, so an
-					// under-declaration is a VerifyError at class load, not a compile
-					// error.
-					// A stream-VALUE seed adds its own Object[3] build (array, dup,
-					// index, then a briefly-two-slot long) on top of whichever nest it
-					// sits in, hence the +6 -- an over-declared maximum is free, an
-					// under-declared one is a VerifyError at class load.
-					// A bignum initializer peaks at 3 (the uninitialized BigInteger, its
-					// dup, the decimal string).
-					final int clinitMaxStack = Math.max(
-							Math.max(streamGenvSeeds.isEmpty() ? 0 : 8, mainCtx.bigIntPool.isEmpty() ? 0 : 3),
-							!structTableClinitFinal.isEmpty() ? 10 : (mainCtx.layoutPool.isEmpty() ? 2 : 4))
-							+ (streamLayoutField != null ? 6 : 0);
-					// A layout-only program never runs ensureThreadLocalInfra, so the
-					// channel's <clinit> name constants are null there; a
-					// bound-special-only
-					// program has neither, so the dyn-var runtime carries its own.
-					Utf8Constant clinitNameUtf = channel.clinitName != null ? channel.clinitName
-							: mainCtx.layoutPool.clinitName != null ? mainCtx.layoutPool.clinitName
-									: dynVarRuntime != null ? dynVarRuntime.clinitName()
-											: standardOutputClinitName != null ? standardOutputClinitName
-													: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitName);
-					Utf8Constant clinitDescUtf = channel.clinitDesc != null ? channel.clinitDesc
-							: mainCtx.layoutPool.clinitDesc != null ? mainCtx.layoutPool.clinitDesc
-									: dynVarRuntime != null ? dynVarRuntime.clinitDesc()
-											: standardOutputClinitDesc != null ? standardOutputClinitDesc
-													: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitDesc);
-					methods.add(AccessFlag.ACC_STATIC, clinitNameUtf, clinitDescUtf,
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(clinitMaxStack)
-									.writeU2(0)
-									.writeCode((Object[]) clinitCode.toArray(new Integer[0]))
-									.writeExceptionTable(clinitProbeTable)
-									.writeU2(0);
-							})));
-				}
-				if (dynVarRuntime != null) {
-					// _dget/_dbind/_dset: the shared thread-scoped dynamic-binding
-					// helpers.
-					for (JvmDynVarRuntimeBuilder.HelperMethod hm : dynVarRuntime.methods()) {
-						methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, hm.nameUtf8(), hm.descUtf8(),
-								method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-									attr.writeU2(hm.maxStack())
-										.writeU2(hm.maxLocals())
-										.writeCode((Object[]) hm.code().toArray(new Integer[0]))
-										.writeU2(0)
-										.writeU2(0);
-								})));
-					}
-				}
-				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, strEscName, strEscDescUtf,
-						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-							attr.writeU2(6)
-								.writeU2(2)
-								.writeCode((Object[]) strEscCode.toArray(new Integer[0]))
-								.writeU2(0)
-								.writeU2(0);
-						})));
-				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, symEscName, strEscDescUtf,
-						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-							attr.writeU2(4)
-								.writeU2(7)
-								.writeCode((Object[]) symEscCode.toArray(new Integer[0]))
-								.writeU2(0)
-								.writeU2(0);
-						})));
-				if (!funNameCode.isEmpty()) {
-					// _funName: the funcId -> name table behind #<function NAME>. Emitted
-					// only when the gate found a nameable function value (see above).
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, Objects.requireNonNull(funNameName),
-							Objects.requireNonNull(funNameDescUtf),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(2)
-									.writeU2(1)
-									.writeCode((Object[]) funNameCode.toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToStringName, lispToStringDescUtf,
-						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-							attr.writeU2(3)
-								.writeU2(3)
-								.writeCode((Object[]) ltsCode.toArray(new Integer[0]))
-								.writeU2(0)
-								.writeU2(0);
-						})));
-				if (usesInstances) {
-					// _instToString / _instToDisplayString: one body builder, two element
-					// formatters, so the readable and display renderings cannot drift.
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
-							Objects.requireNonNull(instToStringName), consToStringDescUtf,
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(5)
-									.writeU2(5)
-									.writeCode((Object[]) instCode.toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
-							Objects.requireNonNull(instToDisplayStringName), consToStringDescUtf,
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(5)
-									.writeU2(5)
-									.writeCode((Object[]) instDisplayCode.toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToStringName, consToStringDescUtf,
-						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-							attr.writeU2(4)
-								.writeU2(10)
-								.writeCode((Object[]) ctsCode.toArray(new Integer[0]))
-								.writeU2(0)
-								.writeU2(0);
-						})));
-				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, appendName, appendDescUtf,
-						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-							attr.writeU2(5)
-								.writeU2(6)
-								.writeCode((Object[]) appendCode.toArray(new Integer[0]))
-								.writeU2(0)
-								.writeU2(0);
-						})));
-				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, readLineHelperName, readLineHelperDesc,
-						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-							attr.writeU2(5)
-								.writeU2(1)
-								.writeCode((Object[]) readLineCode.toArray(new Integer[0]))
-								.writeU2(0)
-								.writeU2(0);
-						})));
-				for (JvmIoRuntimeBuilder.IoMethod im : ioMethods) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | im.extraFlags(), im.name(), im.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(im.maxStack())
-									.writeU2(im.maxLocals())
-									.writeCode((Object[]) im.code().toArray(new Integer[0]))
-									.writeExceptionTable(im.exceptionTable())
-									.writeU2(0);
-							})));
-				}
-				// The five lazy _*Init methods below define an embedded class (or bind a
-				// native library) behind a plain int guard, and a served program runs
-				// one virtual thread per request -- two first calls arriving together
-				// both passed the guard and the second defineClass died with a
-				// LinkageError (found by WarE2eTest's concurrent burst; the exact bug
-				// family .kb/concurrent-served-requests.md records for the
-				// interpreter's lazy loads, whose rule is: take the lock, check the
-				// flag, set it, evaluate). ACC_SYNCHRONIZED is that rule in bytecode;
-				// steady state pays one uncontended class monitor per call, which every
-				// one of these paths (reflection, FFM, a kernel) dwarfs.
-				if (javaRuntime != null) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-							javaRuntime.initName(), javaRuntime.initDesc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(javaRuntime.maxStack())
-									.writeU2(javaRuntime.maxLocals())
-									.writeCode((Object[]) javaRuntime.initCode().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				if (objcRuntime != null) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-							objcRuntime.initName(), objcRuntime.initDesc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(objcRuntime.maxStack())
-									.writeU2(objcRuntime.maxLocals())
-									.writeCode((Object[]) objcRuntime.initCode().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				if (ffiRuntime != null) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-							ffiRuntime.initName(), ffiRuntime.initDesc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(ffiRuntime.maxStack())
-									.writeU2(ffiRuntime.maxLocals())
-									.writeCode((Object[]) ffiRuntime.initCode().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				if (simdRuntime != null) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-							simdRuntime.initName(), simdRuntime.initDesc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(simdRuntime.maxStack())
-									.writeU2(simdRuntime.maxLocals())
-									.writeCode((Object[]) simdRuntime.initCode().toArray(new Integer[0]))
-									.writeExceptionTable(simdRuntime.initExceptionTable())
-									.writeU2(0);
-							})));
-					// _simdReady(): returns whether the bridge define succeeded --
-					// _simdInit must have run first, same as every ops.get(member)
-					// call site. False on a runtime without jdk.incubator.vector, so
-					// the accelerated call sites (JvmSimdCompiler, the --simd rung of
-					// JvmLinalgKernelCompiler's chain) can decline to the scalar defun
-					// instead of resolving a method reference into a bridge class that
-					// was never defined.
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, simdRuntime.readyName(),
-							simdRuntime.readyDesc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(1)
-									.writeU2(0)
-									.writeCode((Object[]) simdRuntime.readyCode().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				if (blasRuntime != null) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-							blasRuntime.initName(), blasRuntime.initDesc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(blasRuntime.maxStack())
-									.writeU2(blasRuntime.maxLocals())
-									.writeCode((Object[]) blasRuntime.initCode().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				if (gpuRuntime != null) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-							gpuRuntime.initName(), gpuRuntime.initDesc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(gpuRuntime.maxStack())
-									.writeU2(gpuRuntime.maxLocals())
-									.writeCode((Object[]) gpuRuntime.initCode().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-					// The residency invalidation guard, called from every in-place write
-					// to a packed float array, answering the array to write into
-					// (JvmGpuRuntimeBuilder.WRITTEN_METHOD).
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.writtenName(),
-							gpuRuntime.writtenDesc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(1)
-									.writeU2(1)
-									.writeCode((Object[]) gpuRuntime.writtenCode().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-					// Its read-side twin, called before every host read of one and
-					// answering the array to read
-					// (JvmGpuRuntimeBuilder.MATERIALIZE_METHOD).
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.materializeName(),
-							gpuRuntime.materializeDesc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(1)
-									.writeU2(1)
-									.writeCode((Object[]) gpuRuntime.materializeCode().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-					// And the one a call site runs over a host rung's answer, per
-					// argument it handed over (JvmGpuRuntimeBuilder.UNSWAP_METHOD).
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.unswapName(),
-							gpuRuntime.unswapDesc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(3)
-									.writeU2(3)
-									.writeCode((Object[]) gpuRuntime.unswapCode().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				if (geomRuntime != null) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-							geomRuntime.initName(), geomRuntime.initDesc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(geomRuntime.maxStack())
-									.writeU2(geomRuntime.maxLocals())
-									.writeCode((Object[]) geomRuntime.initCode().toArray(new Integer[0]))
-									.writeExceptionTable(geomRuntime.initExceptionTable())
-									.writeU2(0);
-							})));
-					// _geomReady(): whether the bridge define succeeded. False on a JRE
-					// older than the template's class version, so every accelerated call
-					// site declines to the spliced geom.lisp defun instead of resolving a
-					// method reference into a class that was never defined.
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, geomRuntime.readyName(),
-							geomRuntime.readyDesc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(1)
-									.writeU2(0)
-									.writeCode((Object[]) geomRuntime.readyCode().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				if (fetchRuntimeBodies != null) {
-					JvmFetchRuntimeBuilder.FetchMethod fm = fetchRuntimeBodies.fetch();
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, fm.name(), fm.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(fm.maxStack())
-									.writeU2(fm.maxLocals())
-									.writeCode((Object[]) fm.code().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				if (asyncRuntimeBodies != null) {
-					for (JvmAsyncRuntimeBuilder.AsyncMethod am : asyncRuntimeBodies.staticMethods()) {
-						methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, am.name(), am.desc(),
-								method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-									attr.writeU2(am.maxStack())
-										.writeU2(am.maxLocals())
-										.writeCode((Object[]) am.code().toArray(new Integer[0]));
-									writeAsyncExceptionTable(attr, am);
-									attr.writeU2(0);
-								})));
-					}
-					JvmAsyncRuntimeBuilder.AsyncMethod runBody = asyncRuntimeBodies.runMethod();
-					methods.add(AccessFlag.ACC_PUBLIC, runBody.name(), runBody.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(runBody.maxStack())
-									.writeU2(runBody.maxLocals())
-									.writeCode((Object[]) runBody.code().toArray(new Integer[0]));
-								writeAsyncExceptionTable(attr, runBody);
-								attr.writeU2(0);
-							})));
-				}
-				if (octetsStrictRuntime != null) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, octetsStrictRuntime.name(),
-							octetsStrictRuntime.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(octetsStrictRuntime.maxStack())
-									.writeU2(octetsStrictRuntime.maxLocals())
-									.writeCode((Object[]) octetsStrictRuntime.code().toArray(new Integer[0]));
-								writeAsyncExceptionTable(attr, octetsStrictRuntime);
-								attr.writeU2(0);
-							})));
-				}
-				if (secureRandomRuntime != null) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, secureRandomRuntime.name(),
-							secureRandomRuntime.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(secureRandomRuntime.maxStack())
-									.writeU2(secureRandomRuntime.maxLocals())
-									.writeCode((Object[]) secureRandomRuntime.code().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				if (argvRuntime != null) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, argvRuntime.name(), argvRuntime.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(argvRuntime.maxStack())
-									.writeU2(argvRuntime.maxLocals())
-									.writeCode((Object[]) argvRuntime.code().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				for (JvmMutexRuntimeBuilder.MutexMethod mm : mutexMethods) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mm.name(), mm.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(mm.maxStack())
-									.writeU2(mm.maxLocals())
-									.writeCode((Object[]) mm.code().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				if (threadRuntimeBodies != null) {
-					for (JvmThreadRuntimeBuilder.ThreadMethod tm : threadRuntimeBodies.staticMethods()) {
-						methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, tm.name(), tm.desc(),
-								method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-									attr.writeU2(tm.maxStack())
-										.writeU2(tm.maxLocals())
-										.writeCode((Object[]) tm.code().toArray(new Integer[0]));
-									writeThreadExceptionTable(attr, tm);
-									attr.writeU2(0);
-								})));
-					}
-					JvmThreadRuntimeBuilder.ThreadMethod callBody = threadRuntimeBodies.callMethod();
-					methods.add(AccessFlag.ACC_PUBLIC, callBody.name(), callBody.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(callBody.maxStack())
-									.writeU2(callBody.maxLocals())
-									.writeCode((Object[]) callBody.code().toArray(new Integer[0]));
-								writeThreadExceptionTable(attr, callBody);
-								attr.writeU2(0);
-							})));
-				}
-				if (socketRuntime != null) {
-					for (JvmSocketRuntimeBuilder.SocketMethod sm : socketRuntime.methods()) {
-						methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, sm.name(), sm.desc(),
-								method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-									attr.writeU2(sm.maxStack())
-										.writeU2(sm.maxLocals())
-										.writeCode((Object[]) sm.code().toArray(new Integer[0]))
-										.writeU2(0)
-										.writeU2(0);
-								})));
-					}
-				}
-				if (ctorName != null) {
-					// No-arg constructor: super(). _tlsConnect does `new Prog()` for the
-					// :insecure trust-all manager; the http-handler directive does the
-					// same for the RontoHttpServer.Handler instance.
-					// The sized-stack launcher does it for its Runnable.
-					Utf8Constant initName = ctorName;
-					Utf8Constant initDesc = java.util.Objects.requireNonNull(ctorDesc);
-					int objectInitIdx = java.util.Objects.requireNonNull(ctorObjectInitRef).index();
-					List<Integer> instanceInitCode = new java.util.ArrayList<>(
-							List.of(Opcode.ALOAD_0, Opcode.INVOKESPECIAL));
-					JvmRuntimeBuilder.emitU2(instanceInitCode, objectInitIdx);
-					instanceInitCode.add(Opcode.RETURN);
-					methods.add(AccessFlag.ACC_PUBLIC, initName, initDesc,
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
-									attr -> attr.writeU2(1)
-										.writeU2(1)
-										.writeCode((Object[]) instanceInitCode.toArray(new Integer[0]))
-										.writeU2(0)
-										.writeU2(0))));
-				}
-				if (usesTlsConnect) {
-					Utf8Constant clientName = java.util.Objects.requireNonNull(checkClientName);
-					Utf8Constant serverName = java.util.Objects.requireNonNull(checkServerName);
-					Utf8Constant trustedDesc = java.util.Objects.requireNonNull(checkTrustedDesc);
-					Utf8Constant issuersName = java.util.Objects.requireNonNull(acceptedIssuersName);
-					Utf8Constant issuersDesc = java.util.Objects.requireNonNull(acceptedIssuersDesc);
-					int x509CertIdx = java.util.Objects.requireNonNull(x509CertificateClass).index();
-					// X509TrustManager: trust-all client/server checks (empty bodies) and
-					// an empty accepted-issuers array.
-					methods.add(AccessFlag.ACC_PUBLIC, clientName, trustedDesc, method -> method
-						.writeAttributes(attrs -> attrs.add(codeUtf8,
-								attr -> attr.writeU2(0).writeU2(3).writeCode(Opcode.RETURN).writeU2(0).writeU2(0))));
-					methods.add(AccessFlag.ACC_PUBLIC, serverName, trustedDesc, method -> method
-						.writeAttributes(attrs -> attrs.add(codeUtf8,
-								attr -> attr.writeU2(0).writeU2(3).writeCode(Opcode.RETURN).writeU2(0).writeU2(0))));
-					List<Integer> acceptedIssuersCode = new java.util.ArrayList<>(
-							List.of(Opcode.ICONST_0, Opcode.ANEWARRAY));
-					JvmRuntimeBuilder.emitU2(acceptedIssuersCode, x509CertIdx);
-					acceptedIssuersCode.add(Opcode.ARETURN);
-					methods.add(AccessFlag.ACC_PUBLIC, issuersName, issuersDesc,
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
-									attr -> attr.writeU2(1)
-										.writeU2(1)
-										.writeCode((Object[]) acceptedIssuersCode.toArray(new Integer[0]))
-										.writeU2(0)
-										.writeU2(0))));
-				}
-				if (httpHandlerRuntime != null) {
-					// handle(Request): the RontoHttpServer.Handler implementation
-					// adapting each incoming request to the compiled Lisp handler.
-					JvmHttpHandlerRuntimeBuilder.HandleMethod hm = httpHandlerRuntime.handle();
-					methods.add(AccessFlag.ACC_PUBLIC, hm.name(), hm.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(hm.maxStack())
-									.writeU2(hm.maxLocals())
-									.writeCode((Object[]) hm.code().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				{
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lengthMethodBody.name(),
-							lengthMethodBody.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(lengthMethodBody.maxStack())
-									.writeU2(lengthMethodBody.maxLocals())
-									.writeCode((Object[]) lengthMethodBody.code().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				{
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nthcdrMethodBody.name(),
-							nthcdrMethodBody.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(nthcdrMethodBody.maxStack())
-									.writeU2(nthcdrMethodBody.maxLocals())
-									.writeCode((Object[]) nthcdrMethodBody.code().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				{
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, aritySurplusMethodBody.name(),
-							aritySurplusMethodBody.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(aritySurplusMethodBody.maxStack())
-									.writeU2(aritySurplusMethodBody.maxLocals())
-									.writeCode((Object[]) aritySurplusMethodBody.code().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				{
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, arityMissingMethodBody.name(),
-							arityMissingMethodBody.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(arityMissingMethodBody.maxStack())
-									.writeU2(arityMissingMethodBody.maxLocals())
-									.writeCode((Object[]) arityMissingMethodBody.code().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				for (JvmStringIndexRuntimeBuilder.StringIndexMethod sm : stringIndexMethods) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, sm.name(), sm.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(sm.maxStack())
-									.writeU2(sm.maxLocals())
-									.writeCode((Object[]) sm.code().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				for (JvmReadRuntimeBuilder.ReadMethod rm : readMethodsFinal) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rm.name(), rm.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(rm.maxStack())
-									.writeU2(rm.maxLocals())
-									.writeCode((Object[]) rm.code().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				for (JvmHashRuntimeBuilder.HashMethod hm : hashMethods) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, hm.name(), hm.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(hm.maxStack())
-									.writeU2(hm.maxLocals())
-									.writeCode((Object[]) hm.code().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				for (JvmArrayRuntimeBuilder.ArrayMethod am : arrayMethods) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, am.name(), am.desc(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(am.maxStack())
-									.writeU2(am.maxLocals())
-									.writeCode((Object[]) am.code().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				for (JvmNumericRuntimeBuilder.NumericMethod nm : numericRuntime.methods()) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(nm.maxStack())
-									.writeU2(nm.maxLocals())
-									.writeCode((Object[]) nm.code().toArray(new Integer[0]))
-									.writeU2(nm.exceptionTable().size());
-								for (int[] entry : nm.exceptionTable()) {
-									attr.writeU2(entry[0]).writeU2(entry[1]).writeU2(entry[2]).writeU2(entry[3]);
-								}
-								attr.writeU2(0);
-							})));
-				}
-				// The gated complex helpers, present only when the program may
-				// create a complex -- a complex-free program keeps its bytes.
-				if (complexRuntime != null) {
-					for (JvmComplexRuntimeBuilder.ComplexMethod cm : complexRuntime.methods()) {
-						methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, cm.nameUtf8(), cm.descUtf8(),
-								method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-									attr.writeU2(cm.maxStack())
-										.writeU2(cm.maxLocals())
-										.writeCode((Object[]) cm.code().toArray(new Integer[0]))
-										.writeU2(0)
-										.writeU2(0);
-								})));
-					}
-				}
-				// The outlined fused-site methods (.kb/jvm-int-fusion.md) and their
-				// two shared helpers, present only when Pass 2 registered a site / a
-				// raw local -- a program without one is byte-identical to before.
-				for (int i = 0; i < fusedCtxs.size(); i++) {
-					JvmIntFusionCompiler.Pending pendingFused = fusedState.pending.get(i);
-					final Ctx fusedCtx = fusedCtxs.get(i);
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, pendingFused.nameUtf8(),
-							pendingFused.descUtf8(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(fusedCtx.maxStack())
-									.writeU2(fusedCtx.maxLocals)
-									.writeCode((Object[]) fusedCtx.code.toArray(new Integer[0]))
-									.writeExceptionTable(fusedCtx.exceptionTable)
-									.writeU2(0);
-							})));
-				}
-				// The outlined tail continuations of a body that would have compiled
-				// past HotSpot's HugeMethodLimit (JvmBodyOutliner); empty for every
-				// program whose bodies stay under the budget.
-				for (JvmBodyOutliner.OutlinedBody outlined : mainCtx.outlinedBodies) {
-					final Ctx outlinedCtx = outlined.ctx();
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, outlined.nameUtf8(),
-							outlined.descUtf8(), method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(outlinedCtx.maxStack())
-									.writeU2(outlinedCtx.maxLocals)
-									.writeCode((Object[]) outlinedCtx.code.toArray(new Integer[0]))
-									.writeExceptionTable(outlinedCtx.exceptionTable)
-									.writeU2(0);
-							})));
-				}
-				for (JvmNumericRuntimeBuilder.NumericMethod nm : fusedHelperMethods) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8(),
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-								attr.writeU2(nm.maxStack())
-									.writeU2(nm.maxLocals())
-									.writeCode((Object[]) nm.code().toArray(new Integer[0]))
-									.writeU2(0)
-									.writeU2(0);
-							})));
-				}
-				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToDisplayStringName,
-						lispToStringDescUtf, method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-							attr.writeU2(4)
-								.writeU2(3)
-								.writeCode((Object[]) ltdsCode.toArray(new Integer[0]))
-								.writeU2(0)
-								.writeU2(0);
-						})));
-				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToDisplayStringName,
-						consToStringDescUtf, method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-							attr.writeU2(4)
-								.writeU2(10)
-								.writeCode((Object[]) ctdsCode.toArray(new Integer[0]))
-								.writeU2(0)
-								.writeU2(0);
-						})));
-				methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, charPrin1Name, charPrin1Desc,
-						method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
-							attr.writeU2(3)
-								.writeU2(1)
-								.writeCode((Object[]) charPrin1Code.toArray(new Integer[0]))
-								.writeU2(0)
-								.writeU2(0);
-						})));
-				for (int g = 0; g < lookupBodies.size(); g++) {
-					final List<Integer> segBody = lookupBodies.get(g);
-					Utf8Constant segName = g == 0 ? lookupName : lookupSegmentNames.get(g - 1);
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, segName, lookupDesc,
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
-									attr -> attr.writeU2(8)
-										.writeU2(2)
-										.writeCode((Object[]) segBody.toArray(new Integer[0]))
-										.writeU2(0)
-										.writeU2(0))));
-				}
-				if (usesApplyRuntime) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, applyName, evalDesc,
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
-									attr -> attr.writeU2(32)
-										.writeU2(20)
-										.writeCode((Object[]) applyBody.toArray(new Integer[0]))
-										.writeU2(0)
-										.writeU2(0))));
-				}
-				if (usesEval) {
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, envLookupName, envLookupDesc,
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
-									attr -> attr.writeU2(8)
-										.writeU2(5)
-										.writeCode((Object[]) envLookupBody.toArray(new Integer[0]))
-										.writeU2(0)
-										.writeU2(0))));
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, evalName, evalDesc,
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
-									attr -> attr.writeU2(32)
-										.writeU2(22)
-										.writeCode((Object[]) evalBody.toArray(new Integer[0]))
-										.writeU2(0)
-										.writeU2(0))));
-					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, storeName, storeDesc,
-							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8,
-									attr -> attr.writeU2(32)
-										.writeU2(14)
-										.writeCode((Object[]) storeBody.toArray(new Integer[0]))
-										.writeU2(0)
-										.writeU2(0))));
-				}
-			}) //
-			.writeAttributes(a -> {
-			});
-		byte[] classBytes = classOut.toByteArray();
+		// The class as data first: a program whose pool fits one class file is written
+		// from it as it always was; one whose pool outgrew it is split from it
+		// (.kb/jvm-method-size-limits.md).
+		ClassDefinition.Builder definition = ClassDefinition.builder(cp, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER,
+				thisClass, objectClass, codeUtf8);
+		if (x509TrustManagerClass != null) {
+			definition.addInterface(x509TrustManagerClass);
+		}
+		if (httpHandlerRuntime != null) {
+			definition.addInterface(httpHandlerRuntime.handlerInterface());
+		}
+		if (runnableClass != null) {
+			definition.addInterface(runnableClass);
+		}
+		if (callableClass != null) {
+			definition.addInterface(callableClass);
+		}
+
+		definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, stdinReaderFieldName, stdinReaderFieldDesc);
+		if (usesComplex) {
+			// The holder-presence probe (.todo/757): whether the travelling
+			// RontoComplex class resolved, set once in <clinit> below.
+			// Final (a JIT constant after class init), and attribute-free
+			// like every other field -- JvmClassShaker rejects field
+			// attributes. The <clinit> store keeps the field alive for the
+			// shaker exactly when the class needs it.
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_FINAL,
+					java.util.Objects.requireNonNull(hasComplexName), java.util.Objects.requireNonNull(hasComplexDesc));
+		}
+		if (secureRandomRuntime != null) {
+			definition.addField(JvmSecureRandomRuntimeBuilder.fieldAccessFlags(), secureRandomRuntime.fieldName(),
+					secureRandomRuntime.fieldDesc());
+		}
+		if (argvRuntime != null) {
+			definition.addField(JvmArgvRuntimeBuilder.fieldAccessFlags(), argvRuntime.fieldName(),
+					argvRuntime.fieldDesc());
+		}
+		// VOLATILE: the synchronized _addStream writes the table back on every
+		// call, and that store is what publishes a new entry to the reader
+		// threads (one virtual thread per served request).
+		definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE, streamsFieldName,
+				streamsFieldDesc);
+		definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, streamCountFieldName, streamCountFieldDesc);
+		if (streamPathsFieldName != null) {
+			// VOLATILE for the same reason _streams is: _setStreamPath is
+			// synchronized and its write-back publishes the table.
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE,
+					streamPathsFieldName, java.util.Objects.requireNonNull(streamPathsFieldDesc));
+		}
+		if (streamPositionsFieldName != null) {
+			// VOLATILE for the same reason _streams is: _storeStreamPosition is
+			// synchronized and its write-back publishes the table.
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE,
+					streamPositionsFieldName, java.util.Objects.requireNonNull(streamPositionsFieldDesc));
+		}
+		// The renderers' cycle guard: the current rendering path (lazily
+		// allocated) and its depth, shared by the two escape modes of the
+		// instance, cons and array renderers. Unconditional -- the cons
+		// renderer is in every class. Not volatile: the guard's emitted reads
+		// are bounds-checked so a rendering race between request threads can at
+		// worst misplace a "#" marker; the interpreter twin is a ThreadLocal
+		// (RenderCycleGuard).
+		definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, renderPathFieldName, renderPathFieldDesc);
+		definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, renderDepthFieldName, renderDepthFieldDesc);
+		definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, colFieldName, colFieldDesc);
+		definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gensymCtrFieldName, gensymCtrFieldDesc);
+		// The two strings last PROVEN to hold no surrogate pair, so a character
+		// index into one is 1 + i. Deliberately NOT volatile: a String is
+		// immutable and a reference field is written atomically, so a racing
+		// reader sees an older string (a re-probe) but never a torn pair.
+		for (Utf8Constant siName : stringIndexFieldNames) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, siName, stringIndexFieldDesc);
+		}
+		// The two breakpoint tables, for the strings that DO hold a surrogate
+		// pair. VOLATILE, unlike the pair above: each slot is an Object[]{string,
+		// table} whose table was FILLED before the slot was stored, and a plain
+		// store publishes neither the second element nor the table's contents --
+		// a racing reader could match the string and then read an unwritten
+		// offset, answering a position inside the framing quote. The release
+		// fence is the publication (.kb/string-index-cost.md).
+		for (Utf8Constant siName : stringIndexWideFieldNames) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE, siName,
+					stringIndexWideFieldDesc);
+		}
+		if (httpHandlerRuntime != null) {
+			// VOLATILE: the handler slot is written once by the thread that runs
+			// the top level and read by every request thread afterwards. On the
+			// socket transports the server thread is started AFTER the write, so
+			// Thread.start() published it; a SERVLET war has no such edge -- the
+			// container's request threads exist already, and a clack:clackup left
+			// at :use-thread t writes the slot from a thread of its own -- so the
+			// field carries the publication itself. One volatile read per request
+			// is not measurable against an HTTP round trip.
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE,
+					httpHandlerRuntime.handlerFieldName(), httpHandlerRuntime.handlerFieldDesc());
+		}
+		if (sizedMain != null) {
+			// The launcher instance's two fields: main's arguments in, the
+			// body's throwable out (published by Thread.join).
+			definition.addField(AccessFlag.ACC_PRIVATE, sizedMain.argsName(), sizedMain.argsDesc());
+			definition.addField(AccessFlag.ACC_PRIVATE, sizedMain.thrownName(), sizedMain.thrownDesc());
+		}
+		if (asyncRuntimeBodies != null) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+					java.util.Objects.requireNonNull(handoffFieldName),
+					java.util.Objects.requireNonNull(handoffFieldDesc));
+			for (Utf8Constant instField : List.of(java.util.Objects.requireNonNull(asyncFnFieldName),
+					java.util.Objects.requireNonNull(asyncFutureFieldName),
+					java.util.Objects.requireNonNull(asyncLatchFieldName))) {
+				definition.addField(AccessFlag.ACC_PRIVATE, Objects.requireNonNull(instField),
+						Objects.requireNonNull(asyncInstanceFieldDesc));
+			}
+		}
+		if (threadRuntimeBodies != null) {
+			for (Utf8Constant instField : List.of(java.util.Objects.requireNonNull(threadFnFieldName),
+					java.util.Objects.requireNonNull(threadBindingsFieldName))) {
+				definition.addField(AccessFlag.ACC_PRIVATE, Objects.requireNonNull(instField),
+						Objects.requireNonNull(threadInstanceFieldDesc));
+			}
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+					java.util.Objects.requireNonNull(curThreadTlFieldName),
+					java.util.Objects.requireNonNull(curThreadTlFieldDesc));
+		}
+		// One static Object field per top-level global variable (default null =
+		// nil); written by setq/defvar, read by getstatic from any method body.
+		for (Utf8Constant gfName : globalFieldNameUtfs) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gfName, globalFieldDescUtf);
+		}
+		// The raw long half and the int flag of an unboxed global's triple; the
+		// _g$ field above is its boxed shadow. Both default to 0, so the flag
+		// starts clear and the shadow's null (nil) is authoritative -- exactly
+		// the state a plain global starts in.
+		for (Utf8Constant rgName : rawGlobalLongFieldNameUtfs) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rgName,
+					Objects.requireNonNull(rawGlobalLongDescUtf));
+		}
+		for (Utf8Constant rkName : rawGlobalFlagFieldNameUtfs) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rkName,
+					Objects.requireNonNull(rawGlobalFlagDescUtf));
+		}
+		if (dynVarRuntime != null) {
+			// One static ThreadLocal per dynamically-bound special: the thread's
+			// innermost dynamic binding as a one-element Object[] cell (see
+			// JvmDynVarRuntimeBuilder); created in <clinit>.
+			for (Utf8Constant dfName : dynVarRuntime.fieldNameUtfs()) {
+				definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, dfName,
+						dynVarRuntime.fieldDescUtf());
+			}
+		}
+		if (javaRuntime != null) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, javaRuntime.initedFieldName(),
+					javaRuntime.initedFieldDesc());
+		}
+		if (objcRuntime != null) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, objcRuntime.initedFieldName(),
+					objcRuntime.initedFieldDesc());
+		}
+		if (ffiRuntime != null) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, ffiRuntime.initedFieldName(),
+					ffiRuntime.initedFieldDesc());
+		}
+		if (simdRuntime != null) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, simdRuntime.initedFieldName(),
+					simdRuntime.initedFieldDesc());
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, simdRuntime.availableFieldName(),
+					simdRuntime.availableFieldDesc());
+		}
+		if (blasRuntime != null) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, blasRuntime.initedFieldName(),
+					blasRuntime.initedFieldDesc());
+		}
+		if (gpuRuntime != null) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.initedFieldName(),
+					gpuRuntime.initedFieldDesc());
+		}
+		if (geomRuntime != null) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, geomRuntime.initedFieldName(),
+					geomRuntime.initedFieldDesc());
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, geomRuntime.availableFieldName(),
+					geomRuntime.availableFieldDesc());
+		}
+		if (usesEval) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, genvName, genvDesc);
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, fenvName, genvDesc);
+		}
+		if (usesRead) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, readSrcName, readSrcDesc);
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, readPosName, readPosDesc);
+		}
+		if (!structTableClinitFinal.isEmpty()) {
+			// The runtime struct-layout directory for #S(...) read at run time.
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rdStructsName, rdStructsDesc);
+		}
+		if (mainCtx.conditionChannel.used) {
+			// The per-thread condition carrier from a %error-cond throw site to a
+			// handler-case catch handler; initialized in <clinit>.
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+					java.util.Objects.requireNonNull(mainCtx.conditionChannel.fieldName),
+					java.util.Objects.requireNonNull(mainCtx.conditionChannel.fieldDesc));
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+					java.util.Objects.requireNonNull(mainCtx.conditionChannel.depthFieldName),
+					java.util.Objects.requireNonNull(mainCtx.conditionChannel.fieldDesc));
+		}
+		if (mainCtx.conditionChannel.nleUsed) {
+			// The per-thread non-local-exit carrier from a %nlx-throw site to the
+			// matching %nlx-catch (a {throwable, id, value} Object[]);
+			// initialized
+			// in <clinit>.
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+					java.util.Objects.requireNonNull(mainCtx.conditionChannel.nleFieldName),
+					java.util.Objects.requireNonNull(mainCtx.conditionChannel.fieldDesc));
+		}
+		// One private static String[] per instance layout the program references:
+		// {tag, printName, "S"|"C", slot0, ...}. Initialized in <clinit>; the
+		// array in slot 0 of an instance is also its type discriminator. The
+		// attribute count MUST stay 0 -- JvmClassShaker rejects field attributes.
+		for (LayoutPool.LayoutField lf : mainCtx.layoutPool.fields()) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lf.name(),
+					java.util.Objects.requireNonNull(mainCtx.layoutPool.fieldDesc));
+		}
+		// One private static BigInteger per DISTINCT bignum literal, built once
+		// in <clinit> so a use site is a GETSTATIC. The attribute count MUST stay
+		// 0 -- JvmClassShaker rejects field attributes -- which is also why the
+		// field is not marked ACC_FINAL-with-ConstantValue: a BigInteger has no
+		// constant-pool form.
+		for (BigIntPool.BigIntField bf : mainCtx.bigIntPool.fields()) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, bf.name(),
+					java.util.Objects.requireNonNull(mainCtx.bigIntPool.fieldDesc));
+		}
+		// One private static VOLATILE Object per quoted aggregate datum, built
+		// lazily by its quote site so every evaluation answers the same object
+		// (.kb/quoted-data.md) -- volatile so a racing first build publishes a
+		// fully-constructed datum. Lazy on purpose: JvmClassShaker drops the
+		// field with the method holding its site, which a <clinit> initializer
+		// would pin alive. The attribute count MUST stay 0 -- JvmClassShaker
+		// rejects field attributes.
+		for (QuotePool.QuoteField qf : mainCtx.quotePool.fields()) {
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE, qf.name(),
+					java.util.Objects.requireNonNull(mainCtx.quotePool.fieldDesc));
+		}
+
+		if (sizedMain != null) {
+			// The launcher is main; the program body keeps its code under
+			// _main$body, reached from the worker through run().
+			for (JvmSizedMainBuilder.Method sm : java.util.Arrays.asList(sizedMain.main(), sizedMain.run(),
+					sizedMainInstanceRun)) {
+				if (sm == null) {
+					continue;
+				}
+				int access = sm == sizedMain.main() ? AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC
+						: sm == sizedMain.run() ? AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC
+								: AccessFlag.ACC_PUBLIC;
+				definition.addMethod(access, sm.name(), sm.desc(), sm.maxStack(), sm.maxLocals(), sm.code(),
+						exceptionTable(sm.exceptionTable()));
+			}
+		}
+		if (!this.noMain) {
+			definition.addMethod(
+					sizedMain != null ? AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC
+							: AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC,
+					sizedMain != null ? sizedMain.bodyName() : mainUtf8, mainDesc, mainCtx.maxStack(),
+					mainCtx.maxLocals, mainCtx.code, mainCtx.exceptionTable);
+		}
+		if (topRunnerCtxFinal != null) {
+			// _top$run: the top-level body <clinit> runs (see mainCtx above).
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+					java.util.Objects.requireNonNull(topRunnerName), topChunkDesc, topRunnerCtxFinal.maxStack(),
+					topRunnerCtxFinal.maxLocals, topRunnerCtxFinal.code, topRunnerCtxFinal.exceptionTable);
+		}
+		for (JvmExportRuntimeBuilder.BuiltMethod em : exportMethods) {
+			definition.addMethod(
+					(em.isPublic() ? AccessFlag.ACC_PUBLIC : AccessFlag.ACC_PRIVATE) | AccessFlag.ACC_STATIC, em.name(),
+					em.desc(), em.maxStack(), em.maxLocals(), em.code(), List.of());
+		}
+		// The top-level body, split into one or more void chunk methods main()
+		// calls.
+		for (int i = 0; i < topChunks.size(); i++) {
+			final Ctx chunk = topChunks.get(i);
+			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, topChunkNames.get(i), topChunkDesc,
+					chunk.maxStack(), chunk.maxLocals, chunk.code, chunk.exceptionTable);
+		}
+		for (int i = 0; i < defuns.size(); i++) {
+			FunctionInfo fi = java.util.Objects.requireNonNull(functions.get(defuns.get(i).name));
+			final Ctx funcCtx = funcCtxs.get(i);
+			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, fi.nameUtf8, fi.descUtf8,
+					funcCtx.maxStack(), funcCtx.maxLocals, funcCtx.code, funcCtx.exceptionTable);
+		}
+		for (int i = 0; i < lambdaCtxs.size(); i++) {
+			FunctionInfo fi = lambdaFuncInfos.get(i);
+			final Ctx lambdaCtx = lambdaCtxs.get(i);
+			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, fi.nameUtf8, fi.descUtf8,
+					lambdaCtx.maxStack(), lambdaCtx.maxLocals, lambdaCtx.code, lambdaCtx.exceptionTable);
+		}
+		for (DispatchMethod dm : dispatchMethods) {
+			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, dm.nameUtf8, dm.descUtf8, 64,
+					dm.maxLocals, dm.code, List.of());
+		}
+		if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || !mainCtx.layoutPool.isEmpty()
+				|| !mainCtx.bigIntPool.isEmpty() || !structTableClinitFinal.isEmpty() || dynVarRuntime != null
+				|| initsClinit) {
+			// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
+			// on a thread with no pending condition returns null). The async
+			// runtime's _handoffTl (the eager-start handoff) joins the same
+			// initializer when present, as does _nleTl (the cross-lambda exit
+			// carrier) -- appended last so a condition-only program is unchanged.
+			// The instance-layout constants join the SAME method (a class may
+			// have
+			// only one <clinit>), appended after the ThreadLocals for the same
+			// reason.
+			ConditionChannel channel = mainCtx.conditionChannel;
+			List<FieldrefConstant> tlFields = new java.util.ArrayList<>();
+			if (channel.used) {
+				tlFields.add(java.util.Objects.requireNonNull(channel.condTlField));
+				tlFields.add(java.util.Objects.requireNonNull(channel.depthTlField));
+				if (handoffFieldRef != null) {
+					tlFields.add(handoffFieldRef);
+				}
+			}
+			if (channel.nleUsed) {
+				tlFields.add(java.util.Objects.requireNonNull(channel.nleTlField));
+			}
+			if (curThreadTlFieldRef != null) {
+				// The _thread_current handle cache joins the same initializer.
+				tlFields.add(curThreadTlFieldRef);
+			}
+			List<Integer> clinitCode = new java.util.ArrayList<>();
+			// The holder-presence probe's single initialization (.todo/757):
+			// _hasComplex is true when the travelling RontoComplex class
+			// loads, false when a lone class runs without it beside it (then
+			// every holder test takes its holder-less shape, which is exact
+			// because no holder can exist). First, so the top level a
+			// <clinit> may run already sees the settled value. Peaks at one
+			// stack slot, under every declared clinit maximum.
+			final List<ByteCodeWriter.ExceptionTableEntry> clinitProbeTable;
+			if (usesComplex) {
+				List<Integer> probe = new java.util.ArrayList<>();
+				int tryStart = probe.size();
+				probe.add(Opcode.LDC_W);
+				JvmRuntimeBuilder.emitU2(probe, java.util.Objects.requireNonNull(hasComplexTarget).index());
+				probe.add(Opcode.INVOKESTATIC);
+				JvmRuntimeBuilder.emitU2(probe, java.util.Objects.requireNonNull(hasComplexProbe).index());
+				probe.add(Opcode.POP);
+				probe.add(Opcode.ICONST_1);
+				probe.add(Opcode.PUTSTATIC);
+				JvmRuntimeBuilder.emitU2(probe, java.util.Objects.requireNonNull(hasComplexField).index());
+				int toDone = probe.size();
+				probe.add(Opcode.GOTO);
+				JvmRuntimeBuilder.emitU2(probe, 0);
+				int handler = probe.size();
+				// The caught exception is on the stack on handler entry.
+				probe.add(Opcode.POP);
+				probe.add(Opcode.ICONST_0);
+				probe.add(Opcode.PUTSTATIC);
+				JvmRuntimeBuilder.emitU2(probe, java.util.Objects.requireNonNull(hasComplexField).index());
+				int done = probe.size();
+				JvmRuntimeBuilder.patchBranch(probe, toDone, done);
+				clinitCode.addAll(probe);
+				clinitProbeTable = List.of(new ByteCodeWriter.ExceptionTableEntry(tryStart, toDone, handler,
+						java.util.Objects.requireNonNull(hasComplexAbsent).index()));
+			}
+			else {
+				clinitProbeTable = List.of();
+			}
+			for (FieldrefConstant tlField : tlFields) {
+				clinitCode.add(Opcode.NEW);
+				JvmRuntimeBuilder.emitU2(clinitCode,
+						java.util.Objects.requireNonNull(channel.threadLocalClass).index());
+				clinitCode.add(Opcode.DUP);
+				clinitCode.add(Opcode.INVOKESPECIAL);
+				JvmRuntimeBuilder.emitU2(clinitCode, java.util.Objects.requireNonNull(channel.tlCtor).index());
+				clinitCode.add(Opcode.PUTSTATIC);
+				JvmRuntimeBuilder.emitU2(clinitCode, tlField.index());
+			}
+			if (dynVarRuntime != null) {
+				// The dynamic-binding ThreadLocals (one per bound special) join
+				// the
+				// same initializer -- never lazily: a racy first binding from two
+				// request threads would mint two ThreadLocals and lose one
+				// binding.
+				clinitCode.addAll(dynVarRuntime.clinitCode());
+			}
+			if (streamsFieldRef != null) {
+				// _streams = new Object[16]; _streamCount = 3 -- the reserved
+				// standard-stream handles as empty table slots (see above).
+				clinitCode.add(Opcode.BIPUSH);
+				clinitCode.add(16);
+				clinitCode.add(Opcode.ANEWARRAY);
+				JvmRuntimeBuilder.emitU2(clinitCode, objectClass.index());
+				clinitCode.add(Opcode.PUTSTATIC);
+				JvmRuntimeBuilder.emitU2(clinitCode, streamsFieldRef.index());
+				clinitCode.add(Opcode.ICONST_3);
+				clinitCode.add(Opcode.PUTSTATIC);
+				JvmRuntimeBuilder.emitU2(clinitCode, java.util.Objects.requireNonNull(streamCountFieldRef).index());
+			}
+			// The bignum literals go in before the layouts: they are plain
+			// values with no dependency of their own, and every later fragment
+			// (and the top-level runner, invoked last) may read them.
+			clinitCode.addAll(bigIntClinitCode);
+			clinitCode.addAll(layoutClinitCode);
+			// The standard stream variables' defaults, one table
+			// (StreamDesignators) feeding BOTH homes: the per-name global field
+			// a direct read uses, and the eval runtime's _genv mirror that
+			// symbol-value / boundp / eval probe.
+			for (Map.Entry<String, LispVal> streamVar : StreamDesignators.standardStreamDefaults().entrySet()) {
+				FieldrefConstant globalField = streamGlobalSeeds.get(streamVar.getKey());
+				if (globalField != null) {
+					emitStreamDefault(clinitCode, streamVar.getValue(), standardOutputTStr, longValueOf, objectClass,
+							streamLayoutField, streamKindStandardStr);
+					clinitCode.add(Opcode.PUTSTATIC);
+					JvmRuntimeBuilder.emitU2(clinitCode, globalField.index());
+				}
+				ConstantPool.StringConstant seedName = streamGenvSeeds.get(streamVar.getKey());
+				if (seedName != null) {
+					// _genv = {{name, default}, _genv} -- the binding shape
+					// _store prepends, so a later top-level assignment MUTATES
+					// this cell rather than shadowing it.
+					clinitCode.add(Opcode.ICONST_2);
+					clinitCode.add(Opcode.ANEWARRAY);
+					JvmRuntimeBuilder.emitU2(clinitCode, objectClass.index());
+					clinitCode.add(Opcode.DUP);
+					clinitCode.add(Opcode.ICONST_0);
+					clinitCode.add(Opcode.ICONST_2);
+					clinitCode.add(Opcode.ANEWARRAY);
+					JvmRuntimeBuilder.emitU2(clinitCode, objectClass.index());
+					clinitCode.add(Opcode.DUP);
+					clinitCode.add(Opcode.ICONST_0);
+					clinitCode.add(Opcode.LDC_W);
+					JvmRuntimeBuilder.emitU2(clinitCode, seedName.index());
+					clinitCode.add(Opcode.AASTORE);
+					clinitCode.add(Opcode.DUP);
+					clinitCode.add(Opcode.ICONST_1);
+					emitStreamDefault(clinitCode, streamVar.getValue(), standardOutputTStr, longValueOf, objectClass,
+							streamLayoutField, streamKindStandardStr);
+					clinitCode.add(Opcode.AASTORE);
+					clinitCode.add(Opcode.AASTORE);
+					clinitCode.add(Opcode.DUP);
+					clinitCode.add(Opcode.ICONST_1);
+					clinitCode.add(Opcode.GETSTATIC);
+					JvmRuntimeBuilder.emitU2(clinitCode, genvField.index());
+					clinitCode.add(Opcode.AASTORE);
+					clinitCode.add(Opcode.PUTSTATIC);
+					JvmRuntimeBuilder.emitU2(clinitCode, genvField.index());
+				}
+			}
+			clinitCode.addAll(structTableClinitFinal);
+			if (topRunnerRef != null) {
+				// Run the top level last, after every piece of runtime infra
+				// above is seeded — this is the export-carrying class's
+				// "top level at instantiation" (see mainCtx above).
+				clinitCode.add(Opcode.INVOKESTATIC);
+				JvmRuntimeBuilder.emitU2(clinitCode, topRunnerRef.index());
+			}
+			clinitCode.add(Opcode.RETURN);
+			// max_stack: the ThreadLocal group peaks at 2 (NEW; DUP), the layout
+			// group at 4 (array; DUP; index; LDC), the reader's struct directory
+			// at 10 (outer array, entry, initTexts nested builds each keep a DUP
+			// and an index live), a _genv seed at 8 (outer array plus index under
+			// the inner array build, whose boxed handle is briefly a long).
+			// StackMapAugmenter copies the declared maximum verbatim, so an
+			// under-declaration is a VerifyError at class load, not a compile
+			// error.
+			// A stream-VALUE seed adds its own Object[3] build (array, dup,
+			// index, then a briefly-two-slot long) on top of whichever nest it
+			// sits in, hence the +6 -- an over-declared maximum is free, an
+			// under-declared one is a VerifyError at class load.
+			// A bignum initializer peaks at 3 (the uninitialized BigInteger, its
+			// dup, the decimal string).
+			final int clinitMaxStack = Math.max(
+					Math.max(streamGenvSeeds.isEmpty() ? 0 : 8, mainCtx.bigIntPool.isEmpty() ? 0 : 3),
+					!structTableClinitFinal.isEmpty() ? 10 : (mainCtx.layoutPool.isEmpty() ? 2 : 4))
+					+ (streamLayoutField != null ? 6 : 0);
+			// A layout-only program never runs ensureThreadLocalInfra, so the
+			// channel's <clinit> name constants are null there; a
+			// bound-special-only
+			// program has neither, so the dyn-var runtime carries its own.
+			Utf8Constant clinitNameUtf = channel.clinitName != null ? channel.clinitName
+					: mainCtx.layoutPool.clinitName != null ? mainCtx.layoutPool.clinitName
+							: dynVarRuntime != null ? dynVarRuntime.clinitName()
+									: standardOutputClinitName != null ? standardOutputClinitName
+											: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitName);
+			Utf8Constant clinitDescUtf = channel.clinitDesc != null ? channel.clinitDesc
+					: mainCtx.layoutPool.clinitDesc != null ? mainCtx.layoutPool.clinitDesc
+							: dynVarRuntime != null ? dynVarRuntime.clinitDesc()
+									: standardOutputClinitDesc != null ? standardOutputClinitDesc
+											: java.util.Objects.requireNonNull(mainCtx.bigIntPool.clinitDesc);
+			definition.addMethod(AccessFlag.ACC_STATIC, clinitNameUtf, clinitDescUtf, clinitMaxStack, 0, clinitCode,
+					clinitProbeTable);
+		}
+		if (dynVarRuntime != null) {
+			// _dget/_dbind/_dset: the shared thread-scoped dynamic-binding
+			// helpers.
+			for (JvmDynVarRuntimeBuilder.HelperMethod hm : dynVarRuntime.methods()) {
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, hm.nameUtf8(), hm.descUtf8(),
+						hm.maxStack(), hm.maxLocals(), hm.code(), List.of());
+			}
+		}
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, strEscName, strEscDescUtf, 6, 2,
+				strEscCode, List.of());
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, symEscName, strEscDescUtf, 4, 7,
+				symEscCode, List.of());
+		if (!funNameCode.isEmpty()) {
+			// _funName: the funcId -> name table behind #<function NAME>. Emitted
+			// only when the gate found a nameable function value (see above).
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, Objects.requireNonNull(funNameName),
+					Objects.requireNonNull(funNameDescUtf), 2, 1, funNameCode, List.of());
+		}
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToStringName, lispToStringDescUtf, 3,
+				3, ltsCode, List.of());
+		if (usesInstances) {
+			// _instToString / _instToDisplayString: one body builder, two element
+			// formatters, so the readable and display renderings cannot drift.
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+					Objects.requireNonNull(instToStringName), consToStringDescUtf, 5, 5, instCode, List.of());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+					Objects.requireNonNull(instToDisplayStringName), consToStringDescUtf, 5, 5, instDisplayCode,
+					List.of());
+		}
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToStringName, consToStringDescUtf, 4,
+				10, ctsCode, List.of());
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, appendName, appendDescUtf, 5, 6,
+				appendCode, List.of());
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, readLineHelperName, readLineHelperDesc, 5,
+				1, readLineCode, List.of());
+		for (JvmIoRuntimeBuilder.IoMethod im : ioMethods) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | im.extraFlags(), im.name(), im.desc(),
+					im.maxStack(), im.maxLocals(), im.code(), im.exceptionTable());
+		}
+		// The five lazy _*Init methods below define an embedded class (or bind a
+		// native library) behind a plain int guard, and a served program runs
+		// one virtual thread per request -- two first calls arriving together
+		// both passed the guard and the second defineClass died with a
+		// LinkageError (found by WarE2eTest's concurrent burst; the exact bug
+		// family .kb/concurrent-served-requests.md records for the
+		// interpreter's lazy loads, whose rule is: take the lock, check the
+		// flag, set it, evaluate). ACC_SYNCHRONIZED is that rule in bytecode;
+		// steady state pays one uncontended class monitor per call, which every
+		// one of these paths (reflection, FFM, a kernel) dwarfs.
+		if (javaRuntime != null) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					javaRuntime.initName(), javaRuntime.initDesc(), javaRuntime.maxStack(), javaRuntime.maxLocals(),
+					javaRuntime.initCode(), List.of());
+		}
+		if (objcRuntime != null) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					objcRuntime.initName(), objcRuntime.initDesc(), objcRuntime.maxStack(), objcRuntime.maxLocals(),
+					objcRuntime.initCode(), List.of());
+		}
+		if (ffiRuntime != null) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					ffiRuntime.initName(), ffiRuntime.initDesc(), ffiRuntime.maxStack(), ffiRuntime.maxLocals(),
+					ffiRuntime.initCode(), List.of());
+		}
+		if (simdRuntime != null) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					simdRuntime.initName(), simdRuntime.initDesc(), simdRuntime.maxStack(), simdRuntime.maxLocals(),
+					simdRuntime.initCode(), simdRuntime.initExceptionTable());
+			// _simdReady(): returns whether the bridge define succeeded --
+			// _simdInit must have run first, same as every ops.get(member)
+			// call site. False on a runtime without jdk.incubator.vector, so
+			// the accelerated call sites (JvmSimdCompiler, the --simd rung of
+			// JvmLinalgKernelCompiler's chain) can decline to the scalar defun
+			// instead of resolving a method reference into a bridge class that
+			// was never defined.
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, simdRuntime.readyName(),
+					simdRuntime.readyDesc(), 1, 0, simdRuntime.readyCode(), List.of());
+		}
+		if (blasRuntime != null) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					blasRuntime.initName(), blasRuntime.initDesc(), blasRuntime.maxStack(), blasRuntime.maxLocals(),
+					blasRuntime.initCode(), List.of());
+		}
+		if (gpuRuntime != null) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					gpuRuntime.initName(), gpuRuntime.initDesc(), gpuRuntime.maxStack(), gpuRuntime.maxLocals(),
+					gpuRuntime.initCode(), List.of());
+			// The residency invalidation guard, called from every in-place write
+			// to a packed float array, answering the array to write into
+			// (JvmGpuRuntimeBuilder.WRITTEN_METHOD).
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.writtenName(),
+					gpuRuntime.writtenDesc(), 1, 1, gpuRuntime.writtenCode(), List.of());
+			// Its read-side twin, called before every host read of one and
+			// answering the array to read
+			// (JvmGpuRuntimeBuilder.MATERIALIZE_METHOD).
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.materializeName(),
+					gpuRuntime.materializeDesc(), 1, 1, gpuRuntime.materializeCode(), List.of());
+			// And the one a call site runs over a host rung's answer, per
+			// argument it handed over (JvmGpuRuntimeBuilder.UNSWAP_METHOD).
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.unswapName(),
+					gpuRuntime.unswapDesc(), 3, 3, gpuRuntime.unswapCode(), List.of());
+		}
+		if (geomRuntime != null) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
+					geomRuntime.initName(), geomRuntime.initDesc(), geomRuntime.maxStack(), geomRuntime.maxLocals(),
+					geomRuntime.initCode(), geomRuntime.initExceptionTable());
+			// _geomReady(): whether the bridge define succeeded. False on a JRE
+			// older than the template's class version, so every accelerated call
+			// site declines to the spliced geom.lisp defun instead of resolving a
+			// method reference into a class that was never defined.
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, geomRuntime.readyName(),
+					geomRuntime.readyDesc(), 1, 0, geomRuntime.readyCode(), List.of());
+		}
+		if (fetchRuntimeBodies != null) {
+			JvmFetchRuntimeBuilder.FetchMethod fm = fetchRuntimeBodies.fetch();
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, fm.name(), fm.desc(), fm.maxStack(),
+					fm.maxLocals(), fm.code(), List.of());
+		}
+		if (asyncRuntimeBodies != null) {
+			for (JvmAsyncRuntimeBuilder.AsyncMethod am : asyncRuntimeBodies.staticMethods()) {
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, am.name(), am.desc(),
+						am.maxStack(), am.maxLocals(), am.code(), exceptionTable(am.exceptionTable()));
+			}
+			JvmAsyncRuntimeBuilder.AsyncMethod runBody = asyncRuntimeBodies.runMethod();
+			definition.addMethod(AccessFlag.ACC_PUBLIC, runBody.name(), runBody.desc(), runBody.maxStack(),
+					runBody.maxLocals(), runBody.code(), exceptionTable(runBody.exceptionTable()));
+		}
+		if (octetsStrictRuntime != null) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, octetsStrictRuntime.name(),
+					octetsStrictRuntime.desc(), octetsStrictRuntime.maxStack(), octetsStrictRuntime.maxLocals(),
+					octetsStrictRuntime.code(), exceptionTable(octetsStrictRuntime.exceptionTable()));
+		}
+		if (secureRandomRuntime != null) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, secureRandomRuntime.name(),
+					secureRandomRuntime.desc(), secureRandomRuntime.maxStack(), secureRandomRuntime.maxLocals(),
+					secureRandomRuntime.code(), List.of());
+		}
+		if (argvRuntime != null) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, argvRuntime.name(), argvRuntime.desc(),
+					argvRuntime.maxStack(), argvRuntime.maxLocals(), argvRuntime.code(), List.of());
+		}
+		for (JvmMutexRuntimeBuilder.MutexMethod mm : mutexMethods) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mm.name(), mm.desc(), mm.maxStack(),
+					mm.maxLocals(), mm.code(), List.of());
+		}
+		if (threadRuntimeBodies != null) {
+			for (JvmThreadRuntimeBuilder.ThreadMethod tm : threadRuntimeBodies.staticMethods()) {
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, tm.name(), tm.desc(),
+						tm.maxStack(), tm.maxLocals(), tm.code(), exceptionTable(tm.exceptionTable()));
+			}
+			JvmThreadRuntimeBuilder.ThreadMethod callBody = threadRuntimeBodies.callMethod();
+			definition.addMethod(AccessFlag.ACC_PUBLIC, callBody.name(), callBody.desc(), callBody.maxStack(),
+					callBody.maxLocals(), callBody.code(), exceptionTable(callBody.exceptionTable()));
+		}
+		if (socketRuntime != null) {
+			for (JvmSocketRuntimeBuilder.SocketMethod sm : socketRuntime.methods()) {
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, sm.name(), sm.desc(),
+						sm.maxStack(), sm.maxLocals(), sm.code(), List.of());
+			}
+		}
+		if (ctorName != null) {
+			// No-arg constructor: super(). _tlsConnect does `new Prog()` for the
+			// :insecure trust-all manager; the http-handler directive does the
+			// same for the RontoHttpServer.Handler instance.
+			// The sized-stack launcher does it for its Runnable.
+			Utf8Constant initName = ctorName;
+			Utf8Constant initDesc = java.util.Objects.requireNonNull(ctorDesc);
+			int objectInitIdx = java.util.Objects.requireNonNull(ctorObjectInitRef).index();
+			List<Integer> instanceInitCode = new java.util.ArrayList<>(List.of(Opcode.ALOAD_0, Opcode.INVOKESPECIAL));
+			JvmRuntimeBuilder.emitU2(instanceInitCode, objectInitIdx);
+			instanceInitCode.add(Opcode.RETURN);
+			definition.addMethod(AccessFlag.ACC_PUBLIC, initName, initDesc, 1, 1, instanceInitCode, List.of());
+		}
+		if (usesTlsConnect) {
+			Utf8Constant clientName = java.util.Objects.requireNonNull(checkClientName);
+			Utf8Constant serverName = java.util.Objects.requireNonNull(checkServerName);
+			Utf8Constant trustedDesc = java.util.Objects.requireNonNull(checkTrustedDesc);
+			Utf8Constant issuersName = java.util.Objects.requireNonNull(acceptedIssuersName);
+			Utf8Constant issuersDesc = java.util.Objects.requireNonNull(acceptedIssuersDesc);
+			int x509CertIdx = java.util.Objects.requireNonNull(x509CertificateClass).index();
+			// X509TrustManager: trust-all client/server checks (empty bodies) and
+			// an empty accepted-issuers array.
+			definition.addMethod(AccessFlag.ACC_PUBLIC, clientName, trustedDesc, 0, 3, List.of(Opcode.RETURN),
+					List.of());
+			definition.addMethod(AccessFlag.ACC_PUBLIC, serverName, trustedDesc, 0, 3, List.of(Opcode.RETURN),
+					List.of());
+			List<Integer> acceptedIssuersCode = new java.util.ArrayList<>(List.of(Opcode.ICONST_0, Opcode.ANEWARRAY));
+			JvmRuntimeBuilder.emitU2(acceptedIssuersCode, x509CertIdx);
+			acceptedIssuersCode.add(Opcode.ARETURN);
+			definition.addMethod(AccessFlag.ACC_PUBLIC, issuersName, issuersDesc, 1, 1, acceptedIssuersCode, List.of());
+		}
+		if (httpHandlerRuntime != null) {
+			// handle(Request): the RontoHttpServer.Handler implementation
+			// adapting each incoming request to the compiled Lisp handler.
+			JvmHttpHandlerRuntimeBuilder.HandleMethod hm = httpHandlerRuntime.handle();
+			definition.addMethod(AccessFlag.ACC_PUBLIC, hm.name(), hm.desc(), hm.maxStack(), hm.maxLocals(), hm.code(),
+					List.of());
+		}
+		{
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lengthMethodBody.name(),
+					lengthMethodBody.desc(), lengthMethodBody.maxStack(), lengthMethodBody.maxLocals(),
+					lengthMethodBody.code(), List.of());
+		}
+		{
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nthcdrMethodBody.name(),
+					nthcdrMethodBody.desc(), nthcdrMethodBody.maxStack(), nthcdrMethodBody.maxLocals(),
+					nthcdrMethodBody.code(), List.of());
+		}
+		{
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, aritySurplusMethodBody.name(),
+					aritySurplusMethodBody.desc(), aritySurplusMethodBody.maxStack(),
+					aritySurplusMethodBody.maxLocals(), aritySurplusMethodBody.code(), List.of());
+		}
+		{
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, arityMissingMethodBody.name(),
+					arityMissingMethodBody.desc(), arityMissingMethodBody.maxStack(),
+					arityMissingMethodBody.maxLocals(), arityMissingMethodBody.code(), List.of());
+		}
+		for (JvmStringIndexRuntimeBuilder.StringIndexMethod sm : stringIndexMethods) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, sm.name(), sm.desc(), sm.maxStack(),
+					sm.maxLocals(), sm.code(), List.of());
+		}
+		for (JvmReadRuntimeBuilder.ReadMethod rm : readMethodsFinal) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rm.name(), rm.desc(), rm.maxStack(),
+					rm.maxLocals(), rm.code(), List.of());
+		}
+		for (JvmHashRuntimeBuilder.HashMethod hm : hashMethods) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, hm.name(), hm.desc(), hm.maxStack(),
+					hm.maxLocals(), hm.code(), List.of());
+		}
+		for (JvmArrayRuntimeBuilder.ArrayMethod am : arrayMethods) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, am.name(), am.desc(), am.maxStack(),
+					am.maxLocals(), am.code(), List.of());
+		}
+		for (JvmNumericRuntimeBuilder.NumericMethod nm : numericRuntime.methods()) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8(),
+					nm.maxStack(), nm.maxLocals(), nm.code(), exceptionTable(nm.exceptionTable()));
+		}
+		// The gated complex helpers, present only when the program may
+		// create a complex -- a complex-free program keeps its bytes.
+		if (complexRuntime != null) {
+			for (JvmComplexRuntimeBuilder.ComplexMethod cm : complexRuntime.methods()) {
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, cm.nameUtf8(), cm.descUtf8(),
+						cm.maxStack(), cm.maxLocals(), cm.code(), List.of());
+			}
+		}
+		// The outlined fused-site methods (.kb/jvm-int-fusion.md) and their
+		// two shared helpers, present only when Pass 2 registered a site / a
+		// raw local -- a program without one is byte-identical to before.
+		for (int i = 0; i < fusedCtxs.size(); i++) {
+			JvmIntFusionCompiler.Pending pendingFused = fusedState.pending.get(i);
+			final Ctx fusedCtx = fusedCtxs.get(i);
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, pendingFused.nameUtf8(),
+					pendingFused.descUtf8(), fusedCtx.maxStack(), fusedCtx.maxLocals, fusedCtx.code,
+					fusedCtx.exceptionTable);
+		}
+		// The outlined tail continuations of a body that would have compiled
+		// past HotSpot's HugeMethodLimit (JvmBodyOutliner); empty for every
+		// program whose bodies stay under the budget.
+		for (JvmBodyOutliner.OutlinedBody outlined : mainCtx.outlinedBodies) {
+			final Ctx outlinedCtx = outlined.ctx();
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, outlined.nameUtf8(),
+					outlined.descUtf8(), outlinedCtx.maxStack(), outlinedCtx.maxLocals, outlinedCtx.code,
+					outlinedCtx.exceptionTable);
+		}
+		for (JvmNumericRuntimeBuilder.NumericMethod nm : fusedHelperMethods) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8(),
+					nm.maxStack(), nm.maxLocals(), nm.code(), List.of());
+		}
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, lispToDisplayStringName,
+				lispToStringDescUtf, 4, 3, ltdsCode, List.of());
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, consToDisplayStringName,
+				consToStringDescUtf, 4, 10, ctdsCode, List.of());
+		definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, charPrin1Name, charPrin1Desc, 3, 1,
+				charPrin1Code, List.of());
+		for (int g = 0; g < lookupBodies.size(); g++) {
+			final List<Integer> segBody = lookupBodies.get(g);
+			Utf8Constant segName = g == 0 ? lookupName : lookupSegmentNames.get(g - 1);
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, segName, lookupDesc, 8, 2, segBody,
+					List.of());
+		}
+		if (usesApplyRuntime) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, applyName, evalDesc, 32, 20, applyBody,
+					List.of());
+		}
+		if (usesEval) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, envLookupName, envLookupDesc, 8, 5,
+					envLookupBody, List.of());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, evalName, evalDesc, 32, 22, evalBody,
+					List.of());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, storeName, storeDesc, 32, 14,
+					storeBody, List.of());
+		}
+
+		ClassDefinition classDefinition = definition.build();
+		byte[] classBytes = classDefinition.toBytes();
 		// Check the runtime-helper gates against what the bodies turned out to reference,
 		// rather than trusting the source scans that predicted them (see compile(List)).
 		// An unresolved own-class call is either a mispredicted gate -- re-run with that
@@ -4942,23 +4426,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		return false;
 	}
 
-	// Writes an async runtime method's exception table (or the empty-table u2 when the
-	// method has none) into its Code attribute.
-	private static void writeAsyncExceptionTable(ByteCodeWriter attr, JvmAsyncRuntimeBuilder.AsyncMethod am) {
-		List<ByteCodeWriter.ExceptionTableEntry> entries = new java.util.ArrayList<>();
-		for (int[] e : am.exceptionTable()) {
+	// A runtime builder's exception table ({startPc, endPc, handlerPc, catchType} rows)
+	// in
+	// the form a class definition carries.
+	private static List<ByteCodeWriter.ExceptionTableEntry> exceptionTable(List<int[]> rows) {
+		List<ByteCodeWriter.ExceptionTableEntry> entries = new ArrayList<>(rows.size());
+		for (int[] e : rows) {
 			entries.add(new ByteCodeWriter.ExceptionTableEntry(e[0], e[1], e[2], e[3]));
 		}
-		attr.writeExceptionTable(entries);
-	}
-
-	// The thread runtime twin of writeAsyncExceptionTable.
-	private static void writeThreadExceptionTable(ByteCodeWriter attr, JvmThreadRuntimeBuilder.ThreadMethod tm) {
-		List<ByteCodeWriter.ExceptionTableEntry> entries = new java.util.ArrayList<>();
-		for (int[] e : tm.exceptionTable()) {
-			entries.add(new ByteCodeWriter.ExceptionTableEntry(e[0], e[1], e[2], e[3]));
-		}
-		attr.writeExceptionTable(entries);
+		return entries;
 	}
 
 	/**
@@ -8027,12 +7503,18 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.stack.feed(opcode);
 		}
 
+		/**
+		 * Appends a two-byte operand, the high part kept whole for the reason
+		 * {@link JvmRuntimeBuilder#emitU2} gives: a pool index past 65535 must reach the
+		 * splitter, and the operand-stack model, uncut.
+		 */
 		void emitU2(int value) {
-			byte[] bytes = ByteBuffer.allocate(2).putShort((short) value).array();
-			this.code.add((int) bytes[0]);
-			this.stack.feed(bytes[0]);
-			this.code.add((int) bytes[1]);
-			this.stack.feed(bytes[1]);
+			int high = value >> 8;
+			int low = value & 0xFF;
+			this.code.add(high);
+			this.stack.feed(high);
+			this.code.add(low);
+			this.stack.feed(low);
 		}
 
 		/**

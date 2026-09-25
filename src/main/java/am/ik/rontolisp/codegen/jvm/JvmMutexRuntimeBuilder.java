@@ -86,8 +86,9 @@ final class JvmMutexRuntimeBuilder {
 	}
 
 	private static void emitU2(List<Integer> code, int value) {
-		code.add((value >> 8) & 0xFF);
-		code.add(value & 0xFF);
+		// The shared writer keeps a pool index past 65535 whole
+		// (JvmRuntimeBuilder.emitU2).
+		JvmRuntimeBuilder.emitU2(code, value);
 	}
 
 }
