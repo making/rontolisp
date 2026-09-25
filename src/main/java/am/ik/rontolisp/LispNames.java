@@ -7376,14 +7376,23 @@ public final class LispNames {
 	public static final String OBJC_SLEEP_INTERNAL = OBJC_PKG + "::%SLEEP";
 
 	/**
-	 * {@code objc::%object}: the wrapper struct of a {@code --native} program's
-	 * {@code objc-native.lisp} (address + the handle whose death releases the reference).
+	 * {@code objc:object} -- the type of an Objective-C object reference, on every
+	 * backend: what {@code type-of} answers for one, what {@code typep} and
+	 * {@code typecase} test and what {@code class-of} names ({@code .kb/objc.md}, "The
+	 * type").
+	 */
+	public static final String OBJC_OBJECT = "OBJECT";
+
+	/**
+	 * {@code objc:object}, qualified: the type name, and the name of the wrapper struct
+	 * of a {@code --native} program's {@code objc-native.lisp} (address + the handle
+	 * whose death releases the reference). That struct is no {@code structure-object}.
 	 * The wasm-GC backend compares an instance of it by its ADDRESS slot alone -- in
 	 * {@code eq}/{@code eql}, {@code equal} and every hash -- so two wrappers of one
 	 * object are one value, as the interpreter's record and the JVM's handle are
 	 * ({@code .kb/objc.md}, "--native").
 	 */
-	public static final String OBJC_OBJECT_STRUCT = OBJC_PKG + "::%OBJECT";
+	public static final String OBJC_OBJECT_TYPE = OBJC_PKG + ":" + OBJC_OBJECT;
 
 	/** {@code objc:class} -- a class by name: {@code (objc:class "NSWindow")}. */
 	public static final String OBJC_CLASS = "CLASS";

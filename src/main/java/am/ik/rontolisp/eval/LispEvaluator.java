@@ -3805,6 +3805,8 @@ public final class LispEvaluator {
 			case LispCons ignored -> "cons";
 			case LispHashTable ignored -> "hash-table";
 			case am.ik.rontolisp.LispQuantizedMatrix ignored -> "quantized-matrix";
+			// Its own named type on every backend (.kb/objc.md, "The type").
+			case LispObjcObject ignored -> LispNames.OBJC_OBJECT_TYPE;
 			case LispFunction ignored -> "function";
 			default -> "t";
 		};

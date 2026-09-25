@@ -29,6 +29,7 @@ import java.util.zip.ZipInputStream;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.HostGlueEmitter;
 import am.ik.rontolisp.testsupport.CliStack;
+import am.ik.rontolisp.testsupport.SplitPrograms;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.Execution;
@@ -230,6 +231,25 @@ class RontoLispCliTest {
 		runCli("", program.toString(), "-o", jar.toString(), "--class-name", "com.example.Prog");
 		assertThat(new String(entries(jar).get("META-INF/MANIFEST.MF"), StandardCharsets.UTF_8))
 			.contains("Main-Class: com.example.Prog");
+	}
+
+	// A program too large for one class file is its class plus $PartN classes, and both
+	// output shapes carry them: beside a .class (in its package directory), inside a jar
+	// that `java -jar` still runs (.kb/jvm-method-size-limits.md).
+	@Test
+	void aProgramPastOneClassesPoolTravelsWithItsPartsInEveryOutputShape() throws Exception {
+		Path program = this.tempDir.resolve("big.lisp");
+		Files.writeString(program, SplitPrograms.pastOneClass());
+		Path classes = this.tempDir.resolve("classes");
+		runCli("", program.toString(), "-o", classes.resolve("com/acme/Big.class").toString(), "--class-name",
+				"com.acme.Big");
+		assertThat(classes.resolve("com/acme/Big$Part1.class")).exists();
+		assertThat(loadClassName(classes, "com.acme.Big$Part1")).isEqualTo("com.acme.Big$Part1");
+
+		Path jar = this.tempDir.resolve("big.jar");
+		runCli("", program.toString(), "-o", jar.toString());
+		assertThat(entries(jar)).containsKeys("Big.class", "Big$Part1.class");
+		assertThat(runJar(jar).strip()).isEqualTo(SplitPrograms.pastOneClassOutput());
 	}
 
 	@Test

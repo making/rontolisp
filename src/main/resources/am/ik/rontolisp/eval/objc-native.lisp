@@ -130,11 +130,13 @@
 
 ;; An object or a class: its address, and for an object the handle whose death
 ;; releases the one reference the wrapper owns (see the header). A class owns nothing.
-;; The backend compares and hashes it by ADDRESS alone (LispNames.OBJC_OBJECT_STRUCT
+;; The backend compares and hashes it by ADDRESS alone (LispNames.OBJC_OBJECT_TYPE
 ;; names it), so two wrappers of one object are eq, as on the interpreter and the JVM:
-;; the address stays the first slot.
-(defstruct (objc::%object (:constructor objc::%make-object (address handle))
-                          (:predicate objc::%objectp))
+;; the address stays the first slot. Its name is the type every backend answers for an
+;; Objective-C object, and the backend keeps it out of structure-object.
+(defstruct (objc:object (:constructor objc::%make-object (address handle))
+                        (:predicate objc::%objectp) (:conc-name objc::%object-)
+                        (:copier nil))
   address
   handle)
 
@@ -142,7 +144,7 @@
 (defun objc::%own (address)
   (objc::%make-object address (objc::%rl-own address)))
 
-(defmethod print-object ((object objc::%object) stream)
+(defmethod print-object ((object objc:object) stream)
   (format stream "#<objc ~a>"
           (objc::%rl-class-name (objc::%object-address object))))
 

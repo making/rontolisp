@@ -55,4 +55,53 @@ class ConstantPoolTest {
 		assertThat(cp.addInteger(-1).index()).isEqualTo(ConstantPool.MAX_INDEX);
 	}
 
+	// An unbounded pool describes a program too large for one class: it keeps growing,
+	// and an entry whose components sit past 65535 still names them -- a u2-encoded body
+	// would have wrapped them onto unrelated entries, and then deduplicated two different
+	// references into one.
+	@Test
+	void anUnboundedPoolKeepsFullWidthComponentIndexesPastTheFormatLimit() {
+		ConstantPool cp = ConstantPool.unbounded();
+		while (cp.size() < 70_000) {
+			cp.addInteger(cp.size());
+		}
+		ConstantPool.Utf8Constant owner = cp.addUtf8("Owner");
+		ConstantPool.ClassConstant ownerClass = cp.addClass(owner);
+		ConstantPool.NameAndTypeConstant first = cp.addNameAndType(cp.addUtf8("a"), cp.addUtf8("()V"));
+		ConstantPool.NameAndTypeConstant second = cp.addNameAndType(cp.addUtf8("b"), cp.addUtf8("()V"));
+		ConstantPool.MethodrefConstant firstRef = cp.addMethodref(ownerClass, first);
+		ConstantPool.MethodrefConstant secondRef = cp.addMethodref(ownerClass, second);
+		assertThat(firstRef.index()).isNotEqualTo(secondRef.index()).isGreaterThan(0xFFFF);
+		assertThat(cp.typeAt(firstRef.index())).isEqualTo(ConstantType.METHODREF);
+		assertThat(cp.firstComponentAt(firstRef.index())).isEqualTo(ownerClass.index());
+		assertThat(cp.secondComponentAt(secondRef.index())).isEqualTo(second.index());
+		assertThat(cp.utf8At(cp.firstComponentAt(ownerClass.index()))).isEqualTo("Owner");
+		assertThat(cp.descriptorOf(secondRef.index())).isEqualTo("()V");
+		// The same reference added again is still the same entry.
+		assertThat(cp.addMethodref(ownerClass, first).index()).isEqualTo(firstRef.index());
+		// Such a pool is not one class file's pool.
+		assertThatIllegalStateException().isThrownBy(cp::toByteArray).withMessageContaining("constant pool overflow");
+	}
+
+	// Entries are held as data now, so their serialization is pinned against the class
+	// format directly: tag, then the u2 components or the payload, in insertion order.
+	@Test
+	void serializesEveryEntryKindInInsertionOrder() {
+		ConstantPool cp = new ConstantPool();
+		ConstantPool.Utf8Constant name = cp.addUtf8("A");
+		ConstantPool.ClassConstant clazz = cp.addClass(name);
+		cp.addString(name);
+		cp.addInteger(0x01020304);
+		cp.addLong(0x0102030405060708L);
+		cp.addMethodref(clazz, cp.addNameAndType(name, name));
+		assertThat(cp.toByteArray()).containsExactly(0x00, 0x09, // count = 8 entries + 1
+				1, 0x00, 0x01, 'A', // #1 Utf8 "A"
+				7, 0x00, 0x01, // #2 Class #1
+				8, 0x00, 0x01, // #3 String #1
+				3, 0x01, 0x02, 0x03, 0x04, // #4 Integer
+				5, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, // #5-6 Long
+				12, 0x00, 0x01, 0x00, 0x01, // #7 NameAndType #1:#1
+				10, 0x00, 0x02, 0x00, 0x07); // #8 Methodref #2.#7
+	}
+
 }

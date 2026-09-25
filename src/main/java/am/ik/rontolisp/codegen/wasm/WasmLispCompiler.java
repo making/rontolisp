@@ -665,7 +665,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	private boolean usesInstances;
 
 	/**
-	 * The baked layout address of {@link LispNames#OBJC_OBJECT_STRUCT}, whose instances
+	 * The baked layout address of {@link LispNames#OBJC_OBJECT_TYPE}, whose instances
 	 * compare and hash by their first (address) slot alone, or {@code -1} when the
 	 * program carries no such layout -- every other module is byte-identical. Set once
 	 * the layouts are baked, before any runtime body is built.
@@ -3950,7 +3950,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// also land before the data segment is snapshotted.)
 		Map<String, Integer> layoutAddresses = this.usesInstances ? WasmInstanceLayouts.emit(closRegistry, stringTable,
 				usedLayoutTags(program, closRegistry, usesEval || restartMode || usesRead)) : Map.of();
-		Integer keyedLayout = layoutAddresses.get(LispLayout.STRUCT_TAG_PREFIX + LispNames.OBJC_OBJECT_STRUCT);
+		Integer keyedLayout = layoutAddresses.get(LispLayout.STRUCT_TAG_PREFIX + LispNames.OBJC_OBJECT_TYPE);
 		this.addressKeyedLayout = keyedLayout != null ? keyedLayout : -1;
 
 		// Assign funcIds and build function info map

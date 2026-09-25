@@ -15,6 +15,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
@@ -180,6 +182,13 @@ class JvmLispCompilerTest {
 		byte[] classBytes = compiler.compile(program);
 		Path classFile = tempDir.resolve("Test.class");
 		Files.write(classFile, classBytes);
+		// Whatever travels beside the class -- a split program's Test$PartN classes
+		// included -- goes where the loader below looks.
+		for (Map.Entry<String, byte[]> travelling : compiler.runtimeClassFiles().entrySet()) {
+			Path target = tempDir.resolve(travelling.getKey());
+			Files.createDirectories(Objects.requireNonNull(target.getParent()));
+			Files.write(target, travelling.getValue());
+		}
 
 		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
 				ClassLoader.getSystemClassLoader())) {

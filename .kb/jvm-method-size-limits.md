@@ -1,4 +1,4 @@
-# JVM backend: no emitted method may outgrow the 64 KB code limit (branches past the 16-bit offset relax to goto_w), and no class its 65534-entry constant pool
+# JVM backend: no emitted method may outgrow the 64 KB code limit (branches past the 16-bit offset relax to goto_w), and a program past one class's 65534-entry constant pool is split into `$PartN` classes
 
 Scope: JVM backend (`codegen.jvm`), HARD format limits. WASM sibling:
 [wasm-function-body-size.md](wasm-function-body-size.md). Run
@@ -10,26 +10,67 @@ expansion) first when a large program trips the guard.
   inverted short branch over one; fixpoint sizing, remapped exception table), fed by
   `JvmEmitHelper.patchBranch` -> `Ctx.deferredBranches`. No deferred branch => byte-identical
   output. The raw-list `JvmRuntimeBuilder.patchBranch` still throws.
-- **Code array <= 65535 bytes** (JVMS 4.7.3). HARD; `am.ik.jvm.ByteCodeWriter.writeCode`
-  rejects loudly. A single enormous USER defun cannot be outlined.
+- **Code array <= 65535 bytes** (JVMS 4.7.3). HARD; `am.ik.jvm.ClassDefinition` (and
+  `JvmClassSplitter`) reject loudly, naming the method. A single enormous USER defun cannot be
+  outlined.
 - **`sipush` operand is signed 16 bits.** `JvmEmitHelper.emitIntConst` used to truncate
   silently into a class that VERIFIES and computes the wrong number — reachable via a character
   above the BMP (`.kb/characters-code-points.md`). Now `ldc`/`ldc_w`; the pool-free
   `JvmRuntimeBuilder.emitIntConstStatic` cannot mint a constant and throws.
 - **65534 constant-pool entries per CLASS** (`ConstantPool.MAX_INDEX`). Every distinct integer
   literal costs TWO entries (boxed `long` = `CONSTANT_Long`); ~25,000 distinct numbers suffice.
-  Emit sites write `(short) index`, so crossing used to alias an unrelated entry and surface far
-  away (`operand-stack model: underflow`). `ConstantPool.add` now refuses the crossing entry
-  (counting both slots of a long/double first); `OperandStack.invoke` is the backstop.
-  **A real program is over it** (measured 2026-09-24, the refusal lifted to count): mito's
-  `MitoE2eTest` probe (mito-core + migration + dbd-postgres, no `--optimize`) needs **83,456**
-  entries -- Utf8 33,089, String 18,775, NameAndType 14,322, Methodref 9,217, Fieldref 5,129,
-  Long 1,283. Of the Fieldrefs, 3,747 are `QuotePool` fields (`.kb/quoted-data.md`, one
-  field = Utf8 + NameAndType + Fieldref per datum) and 47 `BigIntPool` ones. It first crossed
-  the limit at `af1c467fe` (2026-08-28, the bignum pool's 141 entries tipped it, bisected) and
-  grew ~18k past it since, the quote pool (2026-08-30) the largest single share. Holding the
-  quote and bignum values in one array field each would save ~11.4k and still leave it ~6.5k
-  over, so the program's JVM legs stay red until one class stops having to hold it all.
+  Not a program limit any more: past it the program is SPLIT (next section). A bounded
+  `ConstantPool` still refuses the crossing entry (both slots of a long/double counted), and
+  every pool refuses to serialize past it (`ConstantPoolOverflowException`).
+
+## A program past one class's pool is split
+**Invariant: a program whose pool fits one class file is written byte for byte as before; one
+that does not is its class plus `Name$Part1`, `Name$Part2`, ..., each with a pool of its own.**
+Measured by mito's `MitoE2eTest` probe (mito-core + migration + dbd-postgres): **83,456**
+entries unshaken (2026-09-24: Utf8 33,089, String 18,775, NameAndType 14,322, Methodref 9,217,
+Fieldref 5,129 -- 3,747 of them `QuotePool` fields -- Long 1,283). It crossed at `af1c467fe`
+(2026-08-28, the bignum pool tipped it); one array field per pool would have saved ~11.4k and
+still been ~6.5k over, and the program keeps growing -- hence a split, not a diet.
+
+- **Lossless until written.** `ConstantPool` holds entries as data (tag, component indexes,
+  payload), dedup'd on that; `ConstantPool.unbounded()` (the backend's) grows past the limit.
+  Every u2 code writer keeps the high part whole (`JvmRuntimeBuilder.emitU2`, `Ctx.emitU2`,
+  the private copies delegate) and `OperandStack` reads a pool operand uncut, so an index past
+  65535 still names its entry. The class is assembled as a `ClassDefinition` (pool, header,
+  fields, methods with their code lists); `toBytes()` is the unchanged single-class form.
+- **The decision** (`JvmLispCompiler`, end of `compile`): `cp.size() <= classPoolLimit` (the
+  format limit) takes the old path -- `toBytes`, `JvmClassShaker`, `StackMapAugmenter`. Past it,
+  or when the augmenter's own frame-type entries overflow (`ConstantPoolOverflowException`),
+  `writeSplit` hands the definition to `am.ik.jvm.JvmClassSplitter`.
+- **The split**: `unresolvedSelfMethods` and the shake are `JvmClassShaker`'s rules on the
+  definition (a definition that then fits one class comes out byte-identical to the shaker's
+  output -- pinned). The class keeps every field and each method found by name or by class
+  identity: `main`, jvm-export wrappers and their defuns, `REFLECTIVELY_FOUND_METHODS`
+  (`_apply`/`_strv` for the bridges' `getDeclaredMethod`, `_gpuMaterialize`/`_gpuWritten` for
+  `RontoFloatArray`'s MethodHandles), plus by the splitter's own rule every instance method and
+  initializer, `synchronized` method (monitor = class) and `MethodHandles` caller (lookup =
+  class). The rest goes in DECLARATION order into the class while it has room, then into
+  parts; budget `MAX_INDEX - RESERVED_ENTRIES` (4096: the augmenter's Class entries, the
+  parts' own). A `Methodref` to a moved method is re-pointed to its part at write time; members
+  lose `ACC_PRIVATE` (one package). Each class keeps the definition's entry order and appends
+  its new Class entries last, so an `ldc`'s one-byte operand stays in range.
+- **Where they go**: parts join `runtimeClassFiles()` (`path/Name$PartN.class`), which every
+  output shape already writes beside the class (`.kb/jvm-export.md`, "What travels").
+- **Measured 2026-09-25** (mito probe, default `--optimize`): `Probe.class` 9.08 MB, 57,820
+  entries, 12,640 methods; `Probe$Part1.class` 3.16 MB, 35,760 entries, 1,393 methods (mostly
+  runtime helpers -- they come last in declaration order). The two pools repeat ~10k entries.
+  The split costs no measurable compile time; the probe's ~250 s compile is
+  `expandTopLevelDefinitions`'s runtime-subtypep ancestor table (a linear `findClass` per
+  lattice pair), not codegen. All three JVM legs green again.
+- **Still bounded**: all fields stay in the class, so fields plus the kept methods must fit one
+  pool (`the class's fixed part ... needs N`); one method's own references must fit one pool
+  (`_funName`'s name table is the first to grow with the program: 2 entries per nameable
+  function).
+- **Test instruments** (system properties, also `Builder` methods):
+  `-Drontolisp.jvm.class-pool-limit=N` forces the split onto small programs;
+  `-Drontolisp.jvm.pool-index-origin=70000` starts every index past 65535, so a writer that cuts
+  one names a missing entry and the compile fails -- every corpus program compiles under it
+  (2026-09-25), and `JvmLispCompilerTest`'s programs behave the same in classes of 1,200.
 
 ## Bodies bounded by construction
 - Registry-proportional expansions (computed `typep` 37 KB/site, runtime `subtypep` 59 KB,
@@ -77,5 +118,11 @@ only grows. Past 255 a load/store takes the `wide` prefix
   `#aCapturedLetVariableAssignedInlineInASiblingBranchPastTheSlotCeiling`,
   `.compileCharBeyondBmpCodePoint`
 - `am.ik.jvm.ConstantPoolTest#refusesTheEntryThatWouldCrossTheFormatLimit`,
-  `#refusesATwoSlotEntryThatWouldStraddleTheFormatLimit`
+  `#refusesATwoSlotEntryThatWouldStraddleTheFormatLimit`,
+  `#anUnboundedPoolKeepsFullWidthComponentIndexesPastTheFormatLimit`
+- The split: `am.ik.jvm.JvmClassSplitterTest` (parts run, what cannot move stays, indexes past
+  65535, byte-identity with the shaker), `JvmLispCompilerSplitTest` (`SplitPrograms` past one
+  class for real, forced splits at both optimize levels, an export library),
+  `RontoLispCliTest#aProgramPastOneClassesPoolTravelsWithItsPartsInEveryOutputShape`, and the
+  three JVM legs of `MitoE2eTest`
 - `Uax15E2eTest`, `ClUnicodeTablesTest`; ci-spec `runtime-type-dispatch-and-symbol-designators`

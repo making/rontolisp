@@ -955,7 +955,12 @@ public final class RontoLispCli {
 					String root = JvmArtifactOptions.classRoot(outputFile, Objects.requireNonNull(jvmClassName));
 					for (Map.Entry<String, byte[]> runtimeClass : jvmRuntimeClasses.entrySet()) {
 						Path runtimePath = Path.of(root + runtimeClass.getKey());
-						Files.createDirectories(Objects.requireNonNull(runtimePath.getParent()));
+						// A default-package program's $PartN class sits in the root
+						// itself, so it has no directory of its own to create.
+						Path runtimeDir = runtimePath.getParent();
+						if (runtimeDir != null) {
+							Files.createDirectories(runtimeDir);
+						}
 						Files.write(runtimePath, runtimeClass.getValue());
 					}
 				}
