@@ -10,9 +10,15 @@
 //!
 //! Exit status: the program's `proc_exit` code, 0 when `_start` returns, 134 after a trap
 //! (what `wasmtime run` answers on Unix), 1 when the module cannot be loaded.
+//!
+//! Built twice: `rlrun`, and with the `net` feature `rlrun-net`, which also answers a
+//! fetch's `rlhttp` imports (`http`). The side that assembles an output picks the one the
+//! module's imports need.
 
 use std::process::exit;
 
+#[cfg(feature = "net")]
+mod http;
 #[cfg(all(
     any(target_arch = "x86_64", target_arch = "aarch64"),
     target_os = "linux",
@@ -84,6 +90,16 @@ fn run() -> wasmtime::Result<()> {
         #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
         wasmtime::bail!(
             "this program uses the Objective-C runtime (objc:, appkit:), which a --native output reaches on macOS on Apple silicon only"
+        );
+    }
+    // A program using rontolisp:fetch imports the network host (`http`, rlrun-net only);
+    // nothing of it runs before the first request.
+    if module.imports().any(|i| i.module() == "rlhttp") {
+        #[cfg(feature = "net")]
+        http::add_to_linker(&mut linker)?;
+        #[cfg(not(feature = "net"))]
+        wasmtime::bail!(
+            "this program uses rontolisp:fetch, whose host is the network runner (rlrun-net), not this one"
         );
     }
     let mut store = Store::new(&engine, wasi.build_p1());

@@ -17532,6 +17532,31 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aDeferredFutureSettlesAtEachAwaitAndSignalsThere() throws Exception {
+		// rontolisp::%future-deferred is the one Preview 1 future that is not settled
+		// when
+		// it is made -- a --native fetch's, whose reply is still on its way when fetch
+		// returns (HostFetchLibrary's runner shape). Its thunk runs at every AWAIT, not
+		// at the call, so what the thunk signals is the await's (where every backend
+		// reports a fetch's transport failure), the thunk keeps its own answer between
+		// awaits, and what it answers is awaited in turn, so nested futures flatten.
+		assertThat(compileAndRunEh("""
+				(defvar *runs* 0)
+				(let ((f (rontolisp::%future-deferred (lambda () (setq *runs* (+ *runs* 1)) (* 6 7)))))
+				  (print (list :made *runs* (rontolisp:futurep f)))
+				  (print f)
+				  (print (rontolisp:await f))
+				  (print (rontolisp:await f))
+				  (print *runs*))
+				(let ((g (rontolisp::%future-deferred (lambda () (error "refused")))))
+				  (print :made)
+				  (print (handler-case (rontolisp:await g) (error (e) (list :at-await (princ-to-string e))))))
+				(print (rontolisp:await
+				        (rontolisp::%future-deferred (lambda () (rontolisp::%future-deferred (lambda () :nested))))))
+				""")).isEqualTo("(:MADE 0 T)\n#<FUTURE>\n42\n42\n2\n:MADE\n(:AT-AWAIT \"refused\")\n:NESTED");
+	}
+
+	@Test
 	void preview1ExportResolvesTheFutureItsTargetAnswers() throws Exception {
 		// A wasm-export whose target answers a future -- the settled one a degenerate
 		// async body produces here -- used to unbox it as the declared scalar and trap

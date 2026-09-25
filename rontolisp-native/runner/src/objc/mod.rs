@@ -36,7 +36,6 @@ use wasmtime::{AsContextMut, Caller, Extern, ExternRef, Instance, Linker, Rooted
 use wasmtime_wasi::I32Exit;
 use wasmtime_wasi::p1::WasiP1Ctx;
 
-
 /// The import module the library's `rontolisp:wasm-import`s name.
 pub const MODULE: &str = "rlobjc";
 
@@ -793,6 +792,25 @@ fn pump(api: &Api, seconds: f64, outermost: bool) {
             }
         });
     }
+}
+
+/// For a host call that waits on another thread (a fetch's head or body): runs thread 0's
+/// event loop in short turns until `done` answers true, so the windows of a program whose
+/// application started stay live while it waits, and a callback arriving meanwhile
+/// re-enters the module through this call's `Caller`, as during `sleep`. Answers false at
+/// once, without waiting, when the application has not started: nothing is on screen,
+/// and the caller blocks as any program would.
+#[cfg(feature = "net")]
+pub fn pump_until(caller: &mut Caller<'_, WasiP1Ctx>, done: &mut dyn FnMut() -> bool) -> bool {
+    if !with(|s| s.app_started) {
+        return false;
+    }
+    let Ok(api) = api() else { return false };
+    let entered = Entered::new(caller);
+    while !done() {
+        pump(api, 0.02, entered.outermost());
+    }
+    true
 }
 
 /// The encoding a defined method gets: the superclass's, an adopted protocol's, else the

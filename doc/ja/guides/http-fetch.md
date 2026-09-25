@@ -25,9 +25,12 @@
 > のどちらかです。後者は同じソースを `env.fetch` (とレスポンスボディ用の
 > `env.readResponseBody`) というimport経由でホスト自身のHTTPクライアントへ
 > 落とします — Cloudflare Workerやnode埋め込みがfetchする仕組みがこれです
-> ([後述の節](#fetching-from-a-reactor---no-wasi---host-fetch))。どちらでも
-> ない場合、`fetch` はPreview 1 (コアモジュール) モードではコンパイルエラーに
-> なります。**ブラウザプレイグラウンド** では本物のブラウザの
+> ([後述の節](#fetching-from-a-reactor---no-wasi---host-fetch))。
+> [ネイティブ実行ファイル](../compiling/native.md#http) (`--native`) は
+> クライアントを自分で持ちます: ランナーがリクエストを送り、JVM と同じく
+> `fetch` が返った瞬間からリクエストは走ります。いずれでもない場合、`fetch`
+> はPreview 1 (コアモジュール) の `.wasm` ではコンパイルエラーになります。
+> **ブラウザプレイグラウンド** では本物のブラウザの
 > `fetch()` が実行され (CORSの制約を受けます)、その間プログラムは続行
 > します。JSON関数は **すべての** バックエンド・すべてのWASMモードで動作
 > します。制限があるのは `fetch` 自体だけです。`await`、`futurep`、future
@@ -219,6 +222,14 @@ WASM componentにコンパイルして (wasmtime 46+。外向きHTTPを許可す
 ```bash
 rontolisp fetch-post.lisp -o fetch-post.wasm --component
 wasmtime run -S http=y fetch-post.wasm
+```
+
+ネイティブ実行ファイルにコンパイルして (HTTPS は実行ファイルに組み込まれた
+ルート証明書を信頼します。[HTTP](../compiling/native.md#http) を参照):
+
+```bash
+rontolisp fetch-post.lisp --native -o fetch-post
+./fetch-post
 ```
 
 ## リアクタからのfetch (`--no-wasi --host-fetch`)

@@ -22,6 +22,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.Version;
 import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
+import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.HostBoundary;
 import am.ik.rontolisp.compiler.HostGlueEmitter;
 import am.ik.rontolisp.compiler.OptimizeLevel;
@@ -789,10 +790,10 @@ public final class RontoLispCli {
 				.hostBoundary(hostBoundary)
 				.reentrant(reentrant)
 				.noPrune(noPrune)
-				// Only the macOS / Apple-silicon runner answers the rlobjc imports, so
-				// only
-				// that target accepts an objc: program (.kb/objc.md, "--native").
-				.nativeOutput(nativeTarget != null && "macos-aarch64".equals(nativeTarget.platform()))
+				// Every runner answers the rlhttp imports of a fetch; only the macOS /
+				// Apple-silicon one the rlobjc imports, so only that target accepts an
+				// objc: program (.kb/objc.md, "--native").
+				.nativePlatform(nativeTarget != null ? nativeTarget.platform() : null)
 				.build())
 			.build());
 		List<LispVal> program = frontend.program();
@@ -874,6 +875,8 @@ public final class RontoLispCli {
 					.simd(simd)
 					.hostRandom(hostRandom)
 					.hostFetch(hostFetch)
+					// --native: fetch is the runner's (HostFetchLibrary's runner shape).
+					.runnerFetch(nativeTarget != null)
 					.reentrant(reentrant)
 					.runtimeFeatures(features.names())
 					.build();
@@ -940,9 +943,12 @@ public final class RontoLispCli {
 			}
 			else if (nativeTarget != null) {
 				// Only the executable is written: the .wasm and its precompiled form
-				// never leave memory.
+				// never leave memory. The runner is the one the module's imports need:
+				// a fetch's rlhttp only the network runner answers.
 				NativeToolchain toolchain = NativeToolchain.load();
-				NativeExecutable.write(outputPath, toolchain.assemble(toolchain.stub(nativeTarget.platform()),
+				boolean network = WasmLispCompiler.importModules(bytes)
+					.contains(FetchResponseShape.RUNNER_IMPORT_MODULE);
+				NativeExecutable.write(outputPath, toolchain.assemble(toolchain.stub(nativeTarget.platform(), network),
 						toolchain.precompile(bytes, nativeTarget)));
 			}
 			else {
@@ -1071,7 +1077,8 @@ public final class RontoLispCli {
 				new Flag(noWasi, "--no-wasi", "the runner is the WASI host; a reactor has no _start to run"),
 				new Flag(noGc, "--no-gc", "the runner's engine is the wasm-GC one; compile --no-gc to a .wasm"),
 				new Flag(hostRandom, "--host-random", "the runner answers random_get from the OS itself"),
-				new Flag(hostFetch, "--host-fetch", "the runner supplies no env.fetch import"),
+				new Flag(hostFetch, "--host-fetch",
+						"the runner answers rontolisp:fetch itself (no env.fetch import); drop the flag"),
 				new Flag(hostBoundary != null, "--host-boundary", "the runner supplies no env.* body imports"),
 				new Flag(reentrant, "--reentrant", "overlapped calls need a JSPI host, and the runner is not one"),
 				new Flag(jsGlue, "--emit-js-glue", "there is no JavaScript host to write glue for"))) {

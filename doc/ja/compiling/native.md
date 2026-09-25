@@ -22,9 +22,21 @@ rontolisp hello.lisp --native -o hello
 
 カレントディレクトリと `/` がプログラムに開かれているので、相対パス(`../x` を含む)も絶対パスも通常のネイティブプログラムと同じように使えます。
 
+## HTTP
+
+実行ファイルでも [`rontolisp:fetch`](../guides/http-fetch.md) はインタプリタや JVM と同じように動きます: `fetch` が返った時点でリクエストは送信中で、複数のリクエストは並行して進み、`await` は `(:status :headers :body)` を返します(`:body` は応答のオクテットのストリームです)。失敗したリクエスト(接続の拒否や、信頼するルート証明書のどれも保証しない証明書)は `await` でエラーをシグナルします。リクエストはランナー自身が HTTP/1.1 で、1 リクエストにつき 1 接続を使って送ります。JDK のクライアントと同じく、リダイレクトはたどらず、圧縮された応答も展開しません。
+
+HTTPS は実行ファイルに組み込まれた Mozilla のルート証明書を信頼するので、マシン上の証明書バンドルは要りません。社内の認証局や TLS を検査するプロキシの認証局を信頼させたいときは、`SSL_CERT_FILE` に PEM ファイルを指定すると、組み込みのルート証明書の代わりにそのファイルの証明書を信頼します:
+
+```bash
+SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt ./fetcher
+```
+
+fetch するプログラムは、HTTP と TLS を含む大きいランナーから始まります。それ以外のプログラムは小さいランナーのままです([サイズと速度](#size-and-speed))。
+
 ## フラグ
 
-デフォルトの WASM 出力のフラグはすべて使えます(`--simd`、`--optimize`、`--dynamic` など)。別の種類のモジュールを求めるフラグは名前を挙げて拒否されます: `--component`、`--no-wasi`、`--no-gc`、`--host-random`、`--host-fetch`、`--host-boundary`、`--reentrant`、`--emit-js-glue`。`.wasm`、`.class`、`.jar`、`.war` で終わる `-o` の名前も同様です。
+デフォルトの WASM 出力のフラグはすべて使えます(`--simd`、`--optimize`、`--dynamic` など)。別の種類のモジュールを求めるフラグは名前を挙げて拒否されます: `--component`、`--no-wasi`、`--no-gc`、`--host-random`、`--host-fetch`、`--host-boundary`、`--reentrant`、`--emit-js-glue`。`.wasm`、`.class`、`.jar`、`.war` で終わる `-o` の名前も同様です。fetch するプログラムにフラグは要りません。リクエストはランナー自身が送ります([HTTP](#http))。
 
 ## 動作環境
 
@@ -46,4 +58,4 @@ Apple シリコン (`macos-aarch64`) では、実行ファイルは `objc`、`ap
 
 ## サイズと速度
 
-実行ファイルはランナー(Linux x86_64 で 2.1 MB、Linux aarch64 で 1.9 MB、macOS で 1.7 MB)に `.wasm` の約 11 倍を足した大きさです: Linux x86_64 では `hello` で 2.1 MB、28 KB のモジュールで 2.3 MB。起動は約 10 ms で、同じモジュールを `wasmtime run` で動かすのとほぼ同じ速度で動きます。
+実行ファイルはランナー(Linux x86_64 で 2.1 MB、Linux aarch64 で 1.9 MB、macOS で 1.7 MB)に `.wasm` の約 11 倍を足した大きさです: Linux x86_64 では `hello` で 2.1 MB、28 KB のモジュールで 2.3 MB。fetch するプログラムのランナーは Linux x86_64 で 3.3 MB、Linux aarch64 で 2.9 MB です。起動は約 10 ms で、同じモジュールを `wasmtime run` で動かすのとほぼ同じ速度で動きます。

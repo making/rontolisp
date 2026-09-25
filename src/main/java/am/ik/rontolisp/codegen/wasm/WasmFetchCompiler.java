@@ -45,7 +45,8 @@ final class WasmFetchCompiler {
 	}
 
 	/**
-	 * Raises the compile error for a build with no fetch transport: Preview 1, or a
+	 * Raises the compile error for a build with no fetch transport: a Preview 1
+	 * {@code .wasm} (a {@code --native} output's runner is its transport), or a
 	 * {@code --no-wasi} build without {@code --host-fetch} (fetch is the component's
 	 * wasi:http import surface, which that flag excludes -- and the way out on a reactor
 	 * is the {@code env.fetch} host import the {@code --host-fetch} opt-in injects).
@@ -58,8 +59,8 @@ final class WasmFetchCompiler {
 					+ "which --no-wasi excludes (a --no-wasi build imports nothing by default); add --host-fetch "
 					+ "to route fetch at a host import (env.fetch), or drop --no-wasi");
 		}
-		throw new UnsupportedOperationException(
-				"rontolisp:fetch is only available in WASM component mode (--component), not Preview 1 WASM");
+		throw new UnsupportedOperationException("rontolisp:fetch is only available in WASM component mode"
+				+ " (--component) or a --native executable, not in a Preview 1 .wasm (no host of one answers HTTP)");
 	}
 
 	// Rejects a statically-known unsupported literal method; null (unknown/runtime)

@@ -25,8 +25,11 @@ assumes; here we cover only what is particular to making requests.
 > source onto the host's own HTTP client through an `env.fetch` import (plus
 > `env.readResponseBody` for the reply body) — that
 > is how a Cloudflare Worker or a node embedding fetches
-> ([the section below](#fetching-from-a-reactor---no-wasi---host-fetch)). With
-> neither, `fetch` is a compile error in Preview 1 (core-module) mode. In the
+> ([the section below](#fetching-from-a-reactor---no-wasi---host-fetch)). A
+> [native executable](../compiling/native.md#http) (`--native`) carries its
+> own client: its runner makes the requests, which are running from the moment
+> `fetch` returns, as on the JVM. With none of these, `fetch` is a compile
+> error in a Preview 1 (core-module) `.wasm`. In the
 > **browser playground** `fetch`
 > runs the real browser `fetch()` (subject to CORS) while the program
 > continues. The JSON functions work on **every** backend and in every WASM
@@ -213,6 +216,14 @@ imports are unavailable):
 ```bash
 rontolisp fetch-post.lisp -o fetch-post.wasm --component
 wasmtime run -S http=y fetch-post.wasm
+```
+
+Compiled to a native executable (HTTPS trusts the root certificates built into
+it; see [HTTP](../compiling/native.md#http)):
+
+```bash
+rontolisp fetch-post.lisp --native -o fetch-post
+./fetch-post
 ```
 
 ## Fetching from a reactor (`--no-wasi --host-fetch`)

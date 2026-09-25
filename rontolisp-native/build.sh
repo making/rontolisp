@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Builds the precompile shim and the runner stub for the host and lays them out as
-#   <out>/am/ik/rontolisp/native/<os>-<arch>/{librlprecomp.so|librlprecomp.dylib, rlrun}
-# (<out> defaults to target/resources), the classpath layout the Java side loads.
+# Builds the precompile shim and the runner stubs for the host and lays them out as
+#   <out>/am/ik/rontolisp/native/<os>-<arch>/{librlprecomp.so|librlprecomp.dylib, rlrun, rlrun-net}
+# (<out> defaults to target/resources), the classpath layout the Java side loads. The
+# stubs are one runner built twice: rlrun-net adds the network host a program that
+# fetches imports (the `net` feature: rustls, +1.14 MB), which no other output carries.
 #
-#   ./build.sh [--test] [out-dir]    --test: then run the workspace tests against the stub
+#   ./build.sh [--test] [out-dir]    --test: then run the workspace tests against the stubs
 #   ./build.sh --stub PLATFORM [out-dir]
-#       only the runner stub of PLATFORM (<os>-<arch>), laid out the same way: what a
+#       only the runner stubs of PLATFORM (<os>-<arch>), laid out the same way: what a
 #       --native-target output for PLATFORM starts with. The host's platform, or on Linux
 #       the other Linux architecture, cross-built with <arch>-linux-gnu-gcc (Debian/Ubuntu:
 #       gcc-aarch64-linux-gnu / gcc-x86-64-linux-gnu) and the rustup target
@@ -15,8 +17,9 @@
 #       what pom.xml runs in generate-resources, with the values of the properties
 #       rontolisp.native.build and rontolisp.native.required (true|false):
 #       BUILD     build the pair when cargo is found; without cargo, warn and go on
-#       REQUIRED  fail unless target/resources holds the host's pair afterwards (built
-#                 here or put there by CI), and on Linux unless its stub is static
+#       REQUIRED  fail unless target/resources holds the host's shim and both stubs
+#                 afterwards (built here or put there by CI), and on Linux unless the
+#                 stubs are static
 #
 # The two are built by SEPARATE cargo invocations on purpose: cargo unifies a
 # dependency's features across the packages of one invocation, so building them together
@@ -42,18 +45,36 @@ case "$(uname -m)" in
   *) echo "unsupported host architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-# Prints the stub's path once it is built. Every step ends in `|| return`: callers run it
-# in a command substitution under `if`, where `set -e` does not apply.
+# Prints the directory holding the stubs once they are built. Every step ends in
+# `|| return`: callers run it in a command substitution under `if`, where `set -e` does
+# not apply.
 build_pair() {
   local static_required=$1
   cargo build --locked --release -p rlprecomp >&2 || return
-  build_stub "$arch" "$static_required"
+  build_stubs "$arch" "$static_required"
 }
 
-# Builds the stub for <os>-$1 (on Linux, $1 may be the other architecture) and prints its
-# path.
+# Builds both runners of <os>-$1 -- rlrun, and rlrun-net, which adds the network host a
+# fetching program imports (the `net` feature) -- and prints the directory holding them.
+# Two cargo invocations write one binary path, so the network runner is copied out
+# before the plain one is built over it.
+build_stubs() {
+  local stub_arch=$1 static_required=$2 net plain
+  net=$(build_stub "$stub_arch" "$static_required" --features net) || return
+  cp "$net" "$(dirname "$net")/rlrun-net" || return
+  plain=$(build_stub "$stub_arch" "$static_required") || return
+  if [[ $(dirname "$plain") != "$(dirname "$net")" ]]; then
+    echo "error: the two runners linked differently ($plain, $net)" >&2
+    return 1
+  fi
+  dirname "$plain"
+}
+
+# Builds the stub for <os>-$1 (on Linux, $1 may be the other architecture), with the
+# cargo arguments after $2, and prints its path.
 build_stub() {
   local stub_arch=$1 static_required=$2
+  local -a extra=("${@:3}")
   if [[ $os == linux ]]; then
     local cc=cc
     if [[ $stub_arch != "$arch" ]]; then
@@ -79,7 +100,7 @@ build_stub() {
     var=$(tr 'a-z-' 'A-Z_' <<<"$triple")
     if ! have_target "$triple" || ! env "CARGO_TARGET_${var}_LINKER=$cc" "CC_${triple//-/_}=$cc" \
       "CARGO_TARGET_${var}_RUSTFLAGS=-C relocation-model=static" \
-      cargo build --locked --profile release-runner -p rlrun --target "$triple" >&2; then
+      cargo build --locked --profile release-runner -p rlrun --target "$triple" ${extra[@]+"${extra[@]}"} >&2; then
       if $static_required; then
         echo "error: the runner stub did not link statically against musl; install the" \
           "Rust target: rustup target add $triple" >&2
@@ -91,7 +112,7 @@ build_stub() {
       triple=$stub_arch-unknown-linux-gnu
       var=$(tr 'a-z-' 'A-Z_' <<<"$triple")
       env "CARGO_TARGET_${var}_LINKER=$cc" "CC_${triple//-/_}=$cc" \
-        cargo build --locked --profile release-runner -p rlrun --target "$triple" >&2 || return
+        cargo build --locked --profile release-runner -p rlrun --target "$triple" ${extra[@]+"${extra[@]}"} >&2 || return
     fi
     echo "target/$triple/release-runner/rlrun"
   else
@@ -99,15 +120,18 @@ build_stub() {
       echo "error: on macOS the stub is built for the host's architecture only" >&2
       return 1
     }
-    cargo build --locked --profile release-runner -p rlrun >&2 || return
+    cargo build --locked --profile release-runner -p rlrun ${extra[@]+"${extra[@]}"} >&2 || return
     echo "target/release-runner/rlrun"
   fi
 }
 
+# The two runners every platform ships: the plain one, and the one with the network host.
+RUNNERS=(rlrun rlrun-net)
+
 install_pair() {
-  local stub=$1 dest=$2
+  local stubs=$1 dest=$2
   mkdir -p "$dest"
-  cp "target/release/$lib" "$stub" "$dest/"
+  cp "target/release/$lib" "$stubs/rlrun" "$stubs/rlrun-net" "$dest/"
   ls -l "$dest"
 }
 
@@ -151,14 +175,16 @@ if [[ ${1:-} == --stub ]]; then
   out=${3:-target/resources}
   [[ $platform == "$os"-* ]] || { echo "error: a $os host cannot build the $platform stub" >&2; exit 1; }
   find_cargo || { echo "error: cargo (Rust >= 1.96) not found" >&2; exit 1; }
-  stub=$(build_stub "${platform#*-}" true)
-  if [[ $os == linux ]] && ! statically_linked "$stub"; then
-    echo "error: $stub links glibc dynamically" >&2
-    exit 1
-  fi
+  stubs=$(build_stubs "${platform#*-}" true)
   dest=$out/am/ik/rontolisp/native/$platform
   mkdir -p "$dest"
-  cp "$stub" "$dest/"
+  for runner in "${RUNNERS[@]}"; do
+    if [[ $os == linux ]] && ! statically_linked "$stubs/$runner"; then
+      echo "error: $stubs/$runner links glibc dynamically" >&2
+      exit 1
+    fi
+    cp "$stubs/$runner" "$dest/"
+  done
   ls -l "$dest"
   exit 0
 fi
@@ -169,28 +195,30 @@ if [[ ${1:-} == --maven ]]; then
   dest=target/resources/am/ik/rontolisp/native/$os-$arch
   if [[ $build == true ]]; then
     if find_cargo; then
-      if ! stub=$(build_pair "$required"); then
+      if ! stubs=$(build_pair "$required"); then
         echo "error: rontolisp-native/build.sh failed; pass -Drontolisp.native.build=false" \
           "to build without --native for $os-$arch" >&2
         exit 1
       fi
-      install_pair "$stub" "$dest"
+      install_pair "$stubs" "$dest"
     elif [[ ! -f $dest/$lib ]]; then
       echo "WARNING: cargo (Rust >= 1.96) not found: this build carries no --native" \
         "precompiler for $os-$arch, and --native will say it is not available" >&2
     fi
   fi
   if [[ $required == true ]]; then
-    if [[ ! -f $dest/$lib || ! -f $dest/rlrun ]]; then
+    if [[ ! -f $dest/$lib || ! -f $dest/rlrun || ! -f $dest/rlrun-net ]]; then
       echo "error: -Drontolisp.native.required=true but rontolisp-native/$dest has no" \
-        "shim and stub (install Rust >= 1.96 or put CI's artifact there)" >&2
+        "shim and stubs (install Rust >= 1.96 or put CI's artifact there)" >&2
       exit 1
     fi
-    if [[ $os == linux ]] && ! statically_linked "$dest/rlrun"; then
-      echo "error: -Drontolisp.native.required=true but rontolisp-native/$dest/rlrun" \
-        "links glibc dynamically" >&2
-      exit 1
-    fi
+    for runner in "${RUNNERS[@]}"; do
+      if [[ $os == linux ]] && ! statically_linked "$dest/$runner"; then
+        echo "error: -Drontolisp.native.required=true but rontolisp-native/$dest/$runner" \
+          "links glibc dynamically" >&2
+        exit 1
+      fi
+    done
     echo "rontolisp-native: $os-$arch pair present in $dest"
   fi
   exit 0
@@ -200,10 +228,11 @@ run_tests=false
 if [[ ${1:-} == --test ]]; then run_tests=true; shift; fi
 out=${1:-target/resources}
 
-stub=$(build_pair false)
-install_pair "$stub" "$out/am/ik/rontolisp/native/$os-$arch"
+stubs=$(build_pair false)
+install_pair "$stubs" "$out/am/ik/rontolisp/native/$os-$arch"
 
 if $run_tests; then
   ./build-sh-test.sh
-  RLNATIVE_STUB=$PWD/$stub cargo test --locked --workspace
+  RLNATIVE_STUB=$PWD/$stubs/rlrun RLNATIVE_NET_STUB=$PWD/$stubs/rlrun-net \
+    cargo test --locked --workspace --features rlrun/net
 fi

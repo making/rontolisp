@@ -37,7 +37,10 @@
   awaiting thread before rethrowing -- that is what makes handler-case dispatch across the await.
 - **Preview-1 wasm-GC**: degenerate synchronous. `WasmAsyncRunCompiler` wraps the value in a settled
   kind-2 `TYPE_P1_FUTURE {mut i32 kind, mut value}` (the kind field exists so the shape does not
-  canonicalize into `TYPE_CELL`); `_p1_future_await` (`FUNC_P1_FUTURE_AWAIT`) resolves. CAVEAT: an
+  canonicalize into `TYPE_CELL`); `_p1_future_await` (`FUNC_P1_FUTURE_AWAIT`) resolves. The one
+  UNSETTLED kind is 3, `rontolisp::%future-deferred`'s: its value is a thunk every await runs (a
+  `--native` fetch's, `.kb/fetch-http.md`), and the await runtime carries that arm only in a module
+  that names the primitive. CAVEAT: an
   async body's ERROR signals at the CALL, not at await. **`--no-gc`** rejects the whole async surface
   by name, `%stream-new` included.
 

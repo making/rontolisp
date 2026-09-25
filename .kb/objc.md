@@ -244,8 +244,8 @@ defines its own copy into its own loader, which is why the test names a run-time
 (`objc_allocateClassPair` cannot be undone).
 
 ## `--native`: the runner is the Objective-C host
-`--native -o prog` (`macos-aarch64` only; `RontoLispCli` passes `nativeOutput` for that platform
-alone) accepts the four packages: `ObjcNativeLibrary` splices `objc-native.lisp` -- the nine verbs
+`--native -o prog` (`macos-aarch64` only: `CompileFrontend` accepts them when the native target is
+`NativeTarget.OBJC_PLATFORM`) accepts the four packages: `ObjcNativeLibrary` splices `objc-native.lisp` -- the nine verbs
 over `rontolisp:wasm-import`s from module `rlobjc` -- right OUTSIDE `AppKitLibrary`, and the runner
 (`rontolisp-native/runner/src/objc`) answers them over libobjc/AppKit, dlopened on the first
 `rlobjc` call (an output that makes none starts as before). Stub +116 KB (1,616,656 ->
@@ -264,6 +264,15 @@ over `rontolisp:wasm-import`s from module `rlobjc` -- right OUTSIDE `AppKitLibra
   application started, else `CFRunLoopRunInMode`. `appkit:wait`'s 50 ms poll therefore keeps the
   window live at ~0% CPU (the Preview 1 spin would freeze it). A blocking stdin read still freezes
   it.
+- **A fetch's wait turns the event loop too.** A program that also fetches (the network runner,
+  `.kb/fetch-http.md`, "--native") waits in the runner for a reply's head or next body chunk; once
+  the application started, that wait runs `pump` in 20 ms turns until the answer is in
+  (`objc::pump_until`, called from `http::wait`), so the windows stay live and a callback arriving
+  meanwhile re-enters through the call's `Caller`, as during `sleep`. Before the application starts
+  nothing is on screen and the wait blocks on its condition variable. Decided 2026-09-25 over
+  blocking like a stdin read: a window frozen for a request's round trip is what the `sleep` pump
+  exists to prevent. Type-checked for `aarch64-apple-darwin` only -- no test opens a window, and the
+  macOS CI leg runs the fetch corpus without one -- so it is unverified by hand.
 - **`-[NSApplication run]` is never started**: it never returns, and the thread is the module's.
   `appkit::%app`'s `performSelectorOnMainThread:withObject:waitUntilDone:` of `run` to an
   `NSApplication` is answered by marking the application started (and

@@ -144,6 +144,29 @@ public final class FetchResponseShape {
 	 */
 	public static final String HOST_BODY_ID_KEY = "body-id";
 
+	/**
+	 * The import module a {@code --native} output's runner answers fetch through
+	 * ({@code rontolisp-native/runner/src/http}): the runner's own, the way
+	 * {@code rlobjc} is its Objective-C host's. Its three fields carry the same two
+	 * records as the reactor's {@code env} pair -- the request JSON in, the reply head
+	 * JSON (or the {@link #HOST_ENVELOPE_ERROR_KEY} arm) out, the body through
+	 * {@link #HOST_BODY_IMPORT_FIELD} -- but split at a different place: the request is
+	 * STARTED by {@link #RUNNER_START_FIELD}, which answers a handle at once (an
+	 * {@code externref}, so the reply is released when the module lets go of it), and the
+	 * head is waited for by {@link #RUNNER_HEAD_FIELD} at the first await.
+	 */
+	public static final String RUNNER_IMPORT_MODULE = "rlhttp";
+
+	/**
+	 * {@code start(request-json) -> reply handle}: the request is in flight on return.
+	 */
+	public static final String RUNNER_START_FIELD = "start";
+
+	/**
+	 * {@code head(reply) -> head-json}: blocks until the reply head (or its error) is in.
+	 */
+	public static final String RUNNER_HEAD_FIELD = "head";
+
 	/** The response {@code status} used when the plist has none. */
 	public static final int RESPONSE_STATUS_DEFAULT = 200;
 

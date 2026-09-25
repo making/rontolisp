@@ -155,4 +155,60 @@ class HostFetchLibraryTest {
 		assertThat(HostFetchLibrary.forms(boundary)).isSameAs(HostFetchLibrary.forms(boundary));
 	}
 
+	@Test
+	void theRunnerLoweringIsSplicedExactlyWhenTheProgramFetches() {
+		List<LispVal> fetches = LispReader.readAllFromString("(defun f () (rontolisp:fetch \"https://x\"))",
+				Features.WASM);
+		List<LispVal> spliced = HostFetchLibrary.processForRunner(fetches);
+		// Appended after the program, so its own forms (and import ordinals) come first.
+		assertThat(spliced).hasSizeGreaterThan(fetches.size()).startsWith(fetches.toArray(LispVal[]::new));
+		// A --native program that never fetches imports nothing new: its module is the
+		// one it was before the transport existed.
+		List<LispVal> plain = LispReader.readAllFromString("(defun f () 1)", Features.WASM);
+		assertThat(HostFetchLibrary.processForRunner(plain)).isSameAs(plain);
+	}
+
+	@Test
+	void theRunnerLoweringCarriesTheDerivedEnvelopeOverTheRunnersImports() {
+		String source = HostFetchLibrary.runnerSource();
+		// The runner's own import module, answered by rlrun-net -- no env import a host
+		// would have to supply.
+		String module = ":from \"" + FetchResponseShape.RUNNER_IMPORT_MODULE + "\"";
+		assertThat(source).contains(module + " :as \"" + FetchResponseShape.RUNNER_START_FIELD + "\"")
+			.contains(module + " :as \"" + FetchResponseShape.RUNNER_HEAD_FIELD + "\"")
+			.contains(module + " :as \"" + HostFetchLibrary.BODY_IMPORT_FIELD + "\"")
+			.doesNotContain(":from \"" + HostFetchLibrary.IMPORT_MODULE + "\"");
+		// The same envelope as the host's: every request field crosses, every response
+		// field is read back by its key, and the error arm signals.
+		for (FetchResponseShape.Field field : FetchResponseShape.requestFields()) {
+			assertThat(source).as("request field '%s' is carried", field.name()).contains(field.keyword());
+		}
+		for (FetchResponseShape.Field field : FetchResponseShape.responseFields()) {
+			assertThat(source).as("response field '%s' is read", field.name())
+				.contains("(gethash \"" + field.name() + "\" envelope)");
+		}
+		assertThat(source).contains("(gethash \"" + FetchResponseShape.HOST_ENVELOPE_ERROR_KEY + "\" envelope)");
+		// The reply is a HANDLE the runner answers at once (an externref the collector
+		// releases), every body pull names it, and there is no one-cursor counter.
+		assertThat(source).contains(":params '(:string) :returns :extern)")
+			.contains(":params '(:extern) :returns :bytes)")
+			.contains("(rontolisp::%host-fetch-read-body reply buf)")
+			.doesNotContain("%host-fetch-open")
+			.doesNotContain("superseded by a later fetch");
+		// The request is in flight when fetch returns; the head is waited for at the
+		// FIRST AWAIT of a deferred future, which is where a transport failure signals,
+		// as on the interpreter and the JVM.
+		assertThat(source).contains("(rontolisp::%future-deferred").contains("(rontolisp::%host-fetch-head reply)");
+		// The transport is the runner's, not a host's: fetch sends the default agent
+		// itself unless the caller's headers name the field.
+		assertThat(source).contains("(string-equal (car pair) \"" + FetchResponseShape.USER_AGENT_HEADER + "\")")
+			.contains("\"" + FetchResponseShape.defaultUserAgent() + "\"");
+	}
+
+	@Test
+	void theRunnerLoweringParsesInCanonicalShape() {
+		assertThat(HostFetchLibrary.runnerForms()).isNotEmpty();
+		assertThat(HostFetchLibrary.runnerForms()).isSameAs(HostFetchLibrary.runnerForms());
+	}
+
 }

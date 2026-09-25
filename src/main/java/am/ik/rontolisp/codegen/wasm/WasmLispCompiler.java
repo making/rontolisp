@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -64,6 +65,7 @@ import am.ik.wasm.ExternalKind;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Section;
 import am.ik.wasm.Type;
+import am.ik.wasm.WasmImports;
 import am.ik.wasm.WasmWriter;
 import org.jspecify.annotations.Nullable;
 
@@ -91,6 +93,8 @@ public final class WasmLispCompiler implements LispCompiler {
 	private final boolean hostRandom;
 
 	private final boolean hostFetch;
+
+	private final boolean runnerFetch;
 
 	private final boolean reentrant;
 
@@ -140,6 +144,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		this.simd = builder.simd;
 		this.hostRandom = builder.hostRandom;
 		this.hostFetch = builder.hostFetch;
+		this.runnerFetch = builder.runnerFetch;
 		this.reentrant = builder.reentrant;
 		this.runtimeFeatures = builder.runtimeFeatures;
 		// A component's calls are driven by the component-model scheduler, not by JSPI,
@@ -197,6 +202,12 @@ public final class WasmLispCompiler implements LispCompiler {
 							+ "at all, and a plain --component build already fetches over wasi:http; "
 							+ "drop --component (core module) or drop --no-wasi (component)");
 		}
+		// The runner transport is the WASI command module's: a native executable's
+		// runner answers its rlhttp imports, and it runs nothing else.
+		if (this.runnerFetch && (this.noWasi || this.component || this.hostFetch)) {
+			throw new IllegalStateException("the --native fetch transport is the Preview 1 command module's: it"
+					+ " cannot be combined with --no-wasi, --component or --host-fetch");
+		}
 	}
 
 	/**
@@ -228,6 +239,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		private boolean hostRandom;
 
 		private boolean hostFetch;
+
+		private boolean runnerFetch;
 
 		private boolean reentrant;
 
@@ -385,6 +398,22 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 
 		/**
+		 * Selects the {@code --native} fetch transport, which is the Preview 1 command
+		 * module's (it rejects {@link #noWasi}, {@link #component} and
+		 * {@link #hostFetch}). When {@code true}, {@code rontolisp:fetch} compiles: the
+		 * call falls through to the {@code HostFetchLibrary} runner splice, over the
+		 * {@code rlhttp} imports a native executable's runner answers. A program that
+		 * never fetches gets no splice and no import.
+		 * @param runnerFetch whether {@code rontolisp:fetch} lowers to the runner's
+		 * imports
+		 * @return this builder
+		 */
+		public Builder runnerFetch(boolean runnerFetch) {
+			this.runnerFetch = runnerFetch;
+			return this;
+		}
+
+		/**
 		 * Selects {@code --reentrant}, which rejects {@link #component} and
 		 * {@link #dynamic}. When {@code true}, the module OWNS its per-call state and a
 		 * JSPI host may OVERLAP calls into one instance instead of serialising them: the
@@ -442,6 +471,22 @@ public final class WasmLispCompiler implements LispCompiler {
 	 */
 	public @Nullable String componentWit() {
 		return this.componentWit;
+	}
+
+	/**
+	 * The import modules a finished core module names, each once, in declaration order --
+	 * after the tree shaker, so an import nothing reaches is not among them. What a
+	 * {@code --native} output's runner must answer follows from it: a module naming
+	 * {@code rlhttp} needs the network runner.
+	 * @param module a core module {@link #compile} produced
+	 * @return the import module names
+	 */
+	public static Set<String> importModules(byte[] module) {
+		Set<String> names = new LinkedHashSet<>();
+		for (WasmImports.Entry entry : WasmImports.of(module)) {
+			names.add(entry.module());
+		}
+		return names;
 	}
 
 	private @Nullable String componentWit;
@@ -704,6 +749,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * byte-identical to a build that never knew about them.
 	 */
 	private boolean usesP1Streams;
+
+	/**
+	 * Whether a DEFERRED degenerate future can exist in this module: the program names
+	 * {@code rontolisp::%future-deferred}, its one producer (a {@code --native} fetch).
+	 * Adds the arm of {@code _p1_future_await} that runs the future's thunk; any other
+	 * module's await runtime is byte-identical.
+	 */
+	private boolean usesDeferredFutures;
 
 	/**
 	 * How many per-arity dispatchers past {@link #MAX_CALLABLE_ARITY} this program asks
@@ -3012,6 +3065,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// names %stream-new, its one producer. Outside asyncMode only -- a --component
 		// async program builds TYPE_WASI_STREAMs from the same primitive instead.
 		this.usesP1Streams = !this.asyncMode && programUsesSymbol(program, LispNames.STREAM_NEW_INTERNAL_QUALIFIED);
+		// Whether a DEFERRED degenerate future can exist: the program names
+		// %future-deferred, its one producer (a --native fetch). Only then does the
+		// await runtime carry the arm that runs its thunk.
+		this.usesDeferredFutures = !this.asyncMode && programUsesSymbol(program, LispNames.FUTURE_DEFERRED_QUALIFIED);
 		// Whether a degenerate TYPE_P1_FUTURE can exist in this module at all. It has
 		// exactly three producers outside asyncMode: the %async-run the lowering above
 		// leaves behind (WasmAsyncRunCompiler), a `wasm-import ... :async t` wrapper
@@ -3020,7 +3077,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// future must be resolved at the boundary; a module with no producer cannot
 		// meet one and gains no instruction.
 		boolean p1Futures = !this.asyncMode && (programUsesSymbol(program, LispNames.ASYNC_RUN_QUALIFIED)
-				|| !suspendingImports.isEmpty() || this.usesP1Streams);
+				|| !suspendingImports.isEmpty() || this.usesP1Streams || this.usesDeferredFutures);
 		// Splice top-level defstructs/defclasses/defgenerics/defmethods into their
 		// generated defuns before lambda-list desugaring (the generated constructors
 		// use &key) so Pass 1 collects them as ordinary functions; the registries make
@@ -4041,6 +4098,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (this.usesP1Streams) {
 			indirectCallArities.add(0);
 		}
+		// So does the await runtime's deferred arm, whose thunk it runs.
+		if (this.usesDeferredFutures) {
+			indirectCallArities.add(0);
+		}
 
 		// When eval is used, _eval applies any registered function via the dispatch
 		// functions, so ensure a real dispatch body exists for every registered arity.
@@ -4114,7 +4175,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			.noWasi(this.noWasi)
 			.reactorComponent(this.component && this.noWasi)
 			.hostRandom(this.hostRandom)
-			.hostFetch(this.hostFetch)
+			// Both transports make fetch a spliced defun the call site falls through to.
+			.hostFetch(this.hostFetch || this.runnerFetch)
 			.serve(this.serve)
 			.simd(this.simd)
 			.userFuncBase(userFuncBase())
@@ -7463,7 +7525,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// gensym runtime helper body (FUNC_GENSYM)
 				code.addFunction(WasmGensymRuntimeBuilder.build());
 				// p1-future-await runtime helper body (FUNC_P1_FUTURE_AWAIT)
-				code.addFunction(WasmP1FutureRuntimeBuilder.buildAwait());
+				code.addFunction(WasmP1FutureRuntimeBuilder.buildAwait(this.usesDeferredFutures));
 				// binary stream runtime helper bodies (FUNC_READ_BYTE, FUNC_WRITE_BYTE)
 				code.addFunction(WasmIoRuntimeBuilder.buildReadByteBody());
 				code.addFunction(WasmIoRuntimeBuilder.buildWriteByteBody());
@@ -9606,10 +9668,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean hostRandom = false;
 
 		/**
-		 * True under {@code --no-wasi --host-fetch}: {@code rontolisp:fetch} is the
-		 * {@code HostFetchLibrary} splice over the injected {@code env.fetch} host
-		 * import, so the fetch call site falls through to the ordinary defun path instead
-		 * of the no-wasi rejection.
+		 * True under {@code --no-wasi --host-fetch} and for a {@code --native} output:
+		 * {@code rontolisp:fetch} is a {@code HostFetchLibrary} splice (over the injected
+		 * {@code env.fetch} host import, or over the runner's {@code rlhttp} imports), so
+		 * the fetch call site falls through to the ordinary defun path instead of the
+		 * Preview 1 / no-wasi rejection.
 		 */
 		boolean hostFetch = false;
 

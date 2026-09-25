@@ -95,7 +95,7 @@ request `:body` from an s-expression.
   `--component` and run with
   `wasmtime run -S http=y`
   (wasmtime 46+; `-S http=y` makes the host provide `wasi:http`). fetch remains
-  a compile error in Preview 1 (core-module) mode, which has no host
+  a compile error in a Preview 1 (core-module) `.wasm`, which has no host
   `wasi:http`; the generic future operations (`await`, `then`, `futurep`)
   compile in every mode. fetch also works inside a
   [`rontolisp:http-handler`](rontolisp-http-handler.md) serve component (a
@@ -114,6 +114,12 @@ request `:body` from an s-expression.
   before the head signals at the `fetch` call rather than at `await` — one
   during the body signals at the drain, as on every other backend. Without the
   flag, `--no-wasi` keeps the compile error.
+- **Native executable** (`--native`): the executable's runner makes the
+  request on a thread of its own from the moment `fetch` returns, over HTTP/1.1
+  (HTTPS trusting Mozilla's root certificates, which the executable carries, or
+  the PEM bundle `SSL_CERT_FILE` names), so requests overlap and a transport
+  failure signals at `await`, as on the JVM. See
+  [HTTP](../../compiling/native.md#http).
 - **Browser playground**: truly asynchronous. The interpreter runs in a Web
   Worker; `fetch` hands the request to the page's main thread, which runs the
   real browser `fetch()` (subject to CORS) while the program continues, so

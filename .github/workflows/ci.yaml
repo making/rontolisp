@@ -96,9 +96,10 @@ jobs:
     - name: Report the wasmtime cache size
       if: always()
       run: du -sh ~/.cache/wasmtime || true
-  # Each platform's runner stub, for every native binary to carry beside its own pair:
-  # a --native-target output starts with the TARGET's stub, and only a runner of that
-  # platform can build it (.kb/native-output.md, "Packaging").
+  # Each platform's runner stubs (rlrun, and rlrun-net for a program that fetches), for
+  # every native binary to carry beside its own pair: a --native-target output starts
+  # with the TARGET's stub, and only a runner of that platform can build it
+  # (.kb/native-output.md, "Packaging").
   native-stubs:
     needs: test
     if: github.event_name != 'pull_request'
@@ -118,9 +119,9 @@ jobs:
       with:
         workspaces: rontolisp-native
         key: stub
-    - name: Build the runner stub
+    - name: Build the runner stubs
       run: rontolisp-native/build.sh --stub ${{ matrix.platform }}
-    - name: Upload the runner stub
+    - name: Upload the runner stubs
       uses: actions/upload-artifact@v7
       with:
         name: native-stub-${{ matrix.platform }}
@@ -184,8 +185,10 @@ jobs:
         ./target/rontolisp -v
         if [[ ${{ github.event_name }} != pull_request ]]; then
           for platform in linux-x86_64 linux-aarch64 macos-aarch64; do
-            [[ -f rontolisp-native/target/resources/am/ik/rontolisp/native/$platform/rlrun ]] \
-              || { echo "the native binary carries no $platform stub" >&2; exit 1; }
+            for stub in rlrun rlrun-net; do
+              [[ -f rontolisp-native/target/resources/am/ik/rontolisp/native/$platform/$stub ]] \
+                || { echo "the native binary carries no $platform $stub" >&2; exit 1; }
+            done
           done
         fi
         # Run the ci-spec.yaml cases through the native binary in all four
@@ -195,9 +198,11 @@ jobs:
         # same one (.kb/vec.md). The driver reports the exact failing case by
         # name and leg, so there is no positional expected file to keep in sync.
         # NativeOutputE2eTest compiles through the binary's --native (its resources
-        # and FFM downcalls) and diffs the output against wasmtime run.
+        # and FFM downcalls) and diffs the output against wasmtime run; FetchSpecE2eTest
+        # runs the fetch corpus on every transport, the native leg through the binary's
+        # network runner.
         ./mvnw -V --no-transfer-progress \
-          -Dtest='CiSpecE2eTest,NativeOutputE2eTest,NativeToolchainTest' -DfailIfNoTests=false \
+          -Dtest='CiSpecE2eTest,NativeOutputE2eTest,NativeToolchainTest,FetchSpecE2eTest' -DfailIfNoTests=false \
           -Drontolisp.binary="$PWD/target/rontolisp" \
           -Drontolisp.native.required=true \
           test
@@ -261,8 +266,10 @@ jobs:
         set -e
         ./mvnw -V --no-transfer-progress -Drontolisp.native.required=true -DskipTests clean package
         for platform in linux-x86_64 linux-aarch64 macos-aarch64; do
-          unzip -l target/rontolisp-*-exec.jar | grep -q "am/ik/rontolisp/native/$platform/rlrun" \
-            || { echo "the executable jar has no --native pair for $platform" >&2; exit 1; }
+          for stub in rlrun rlrun-net; do
+            unzip -l target/rontolisp-*-exec.jar | grep -q "am/ik/rontolisp/native/$platform/$stub\$" \
+              || { echo "the executable jar has no --native $stub for $platform" >&2; exit 1; }
+          done
         done
     # Move the snapshot tag onto this commit and leave the release itself alone, so
     # the action below UPDATES it in place (it overwrites the assets) instead of the

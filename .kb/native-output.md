@@ -63,6 +63,8 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   A module importing from `rlobjc` (an `objc:`/`appkit:`/`metal:`/`scene:` program) also gets the
   Objective-C host (`runner/src/objc`, macOS aarch64 only -- elsewhere it exits 1 naming the
   platform) and runs ON thread 0, `sleep` turning the event loop ([objc.md](objc.md), "--native").
+  A module importing from `rlhttp` (a program that fetches) needs the NETWORK runner, `rlrun-net`
+  ("The network runner" below); the plain stub exits 1 naming it.
   Not part of the fingerprint: the host is linked per module import, and a module is only ever
   assembled with the stub of its own build.
 - **Fingerprint** `rlnative-abi=3;wasmtime=49.0.0;wasm=gc,function-references,exceptions,tail-call;collector=copying`.
@@ -83,12 +85,13 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
 module for the `NativeTarget` (`--native-target`, `--native-cpu`) and the target's stub --
 so a host without a shim, an unknown CPU level or a platform without a stub fails before
 the front end runs. The module is the ordinary wasm-GC Preview 1 path (`wasmOutput` =
-`--native` or `.wasm`); only the write differs:
-`NativeToolchain.assemble(stub(platform), precompile(wasm, target))` (`rl_assemble`), written to a
+`--native` or `.wasm`), plus the runner's fetch lowering when the program fetches; only the write
+differs: `NativeToolchain.assemble(stub(platform, network), precompile(wasm, target))`
+(`rl_assemble`; `network` = the finished module imports `rlhttp`), written to a
 temp file beside `-o`, chmod 0755, atomically moved over it (writing in place fails with
 ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches disk.
 
-- **Resources**: `am/ik/rontolisp/native/<linux|macos>-<x86_64|aarch64>/{librlprecomp.so|.dylib, rlrun}`
+- **Resources**: `am/ik/rontolisp/native/<linux|macos>-<x86_64|aarch64>/{librlprecomp.so|.dylib, rlrun, rlrun-net}`
   on the classpath. `pom.xml` adds `rontolisp-native/target/resources` as a resource
   directory; without the host's pair there `--native` answers "not available for <os>-<arch>".
 - **Building it from Maven**: the `native-shims` antrun execution (generate-resources) runs
@@ -112,10 +115,11 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   builds each platform's stub (`build.sh --stub <platform>`); each `native-image` leg
   downloads them into `rontolisp-native/target/resources`, builds its pair through
   `-Pnative -Drontolisp.native.required=true`, runs `build.sh --test` (with qemu user mode
-  on Linux, `RLNATIVE_REQUIRE_QEMU=1`), runs `NativeOutputE2eTest` and `NativeToolchainTest`
-  against the binary (`-Drontolisp.binary`; `required` turns their skips into failures)
-  and uploads `native-shims-<platform>`; `release` merges them into
-  `rontolisp-native/target/resources` and checks the exec jar lists each `rlrun`. A pull
+  on Linux, `RLNATIVE_REQUIRE_QEMU=1`), runs `NativeOutputE2eTest`, `NativeToolchainTest` and
+  `FetchSpecE2eTest` against the binary (`-Drontolisp.binary`; `required` turns their skips
+  into failures) and uploads `native-shims-<platform>`; `release` merges them into
+  `rontolisp-native/target/resources` and checks the exec jar lists each `rlrun` and
+  `rlrun-net`. Every platform ships both stubs since 2026-09-25 ("The network runner"). A pull
   request's binary carries its own pair only; its cross-target tests skip.
 - **Cache**: `dlopen` needs a file. The shim is extracted to
   `<cache>/native/<sha256 16 hex>/<lib>` via temp file + atomic move; a file of the right
@@ -213,6 +217,55 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   Other programs: `hash` -9.5% instructions, `list` / `sort` -1%, the other bench programs
   unchanged. The shim stays at one unit: at four, precompiling `llm.lisp` took 2% more
   instructions.
+
+## The network runner
+
+A program that fetches (`.kb/fetch-http.md`, "--native") imports `rlhttp`, which the runner answers
+with an HTTP/1.1 client over rustls + ring (`runner/src/http`, the cargo feature `net`). That client
+costs more than the rest of the stub's growth combined, so it is a SECOND stub, `rlrun-net`, built
+from the same crate with `--features net`, and only a module that imports `rlhttp` starts with it:
+`RontoLispCli` asks `WasmLispCompiler.importModules` of the FINISHED module (after the tree shaker,
+so a fetch nothing reaches picks the plain stub) and `NativeToolchain.stub(platform, network)`
+loads `rlrun` or `rlrun-net`. Every other output starts with `rlrun`, whose one new start-up step is
+the scan of the module's imports for `rlhttp`.
+
+Measured 2026-09-25 (stripped static musl, four codegen units, gz = gzip -6):
+
+| | `rlrun` | `rlrun-net` |
+|---|---|---|
+| linux-x86_64 | 2,094,104 B (0.85 MB gz) | 3,261,528 B (1.48 MB gz) |
+| linux-aarch64 (cross-built) | 1,971,136 B (0.83 MB gz) | 2,888,712 B (1.44 MB gz) |
+
+`rlrun` measured the same size as before the feature existed. `profile.release-runner.package.<crate>` builds
+rustls, ring, rustls-webpki, untrusted and rustls-pki-types at `opt-level = "z"`: without it
+`rlrun-net` is 3,519,576 B (1.59 MB gz) on x86_64, so it saves 258,048 B, and a 256 MiB HTTPS
+download through an output took 10.3-11.4 s user with it and 11.2-11.4 s without (the module's own
+work dominates, `.kb/fetch-http.md`, "Throughput"). macOS stubs were not built here: the macOS CI
+leg builds and tests them.
+
+- **Why one TLS stack everywhere, and why rustls.** A static musl stub cannot `dlopen` the system's
+  TLS library, so Linux needs its own; macOS could use its system stack (Security.framework /
+  CFNetwork, through the `rlobjc` machinery) at no size cost, but that is a second transport with
+  its own trust store, errors and HTTP semantics, saving ~1 MB on fetching programs only. ring,
+  not aws-lc-rs (no cmake, the smaller of the two); TLS 1.2 kept; roots from `webpki-roots`
+  (Mozilla's, the set wasmtime's `wasi:http` trusts), replaced by `SSL_CERT_FILE`'s bundle when set.
+- **Why a second stub rather than a bigger one.** Every output would otherwise grow by 1.17 MB
+  (x86_64) for a feature most programs never use; the tool pays instead, once: each platform ships
+  two stubs (a `-Pnative` binary carries the other platforms' `rlrun-net` too, +3.3 MB and +2.9 MB
+  uncompressed for the two Linux ones; the exec jar +1.48 and +1.44 MB gz).
+- **Building both**: `build.sh` builds the stub twice (two cargo invocations write one binary path,
+  so `rlrun-net` is copied out before `rlrun` is built over it); `--maven ... true` requires both,
+  static; `--test` runs the workspace tests `--features rlrun/net`, TLS included
+  (`http::wire::tests` against a local rustls origin with the test root in
+  `runner/src/http/testdata`).
+- **The start-up path of a fetching output** adds nothing until its first `start`: the TLS
+  configuration (and the roots) is built on the first HTTPS request.
+- Tests: `NativeFetchTest` (a program that never fetches carries the same module for every
+  platform as for a `.wasm`; a fetching one imports exactly `rlhttp.start/head/readResponseBody`;
+  on Linux the output starts with the stub its imports need), `NativeToolchainTest` (the network
+  runner pairs with the same shim), the Rust `http::*` tests and the native leg of
+  `FetchSpecE2eTest`. A fetching `linux-aarch64` output ran the fetch program and HTTPS to
+  `example.com` under `qemu-aarch64-static -cpu cortex-a53` (by hand, 2026-09-25).
 
 ## macOS: the module inside the signed image
 

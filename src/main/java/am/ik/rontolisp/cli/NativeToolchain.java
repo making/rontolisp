@@ -28,8 +28,9 @@ import org.jspecify.annotations.Nullable;
  * The two native halves of {@code --native}: the host's precompile shim
  * ({@code librlprecomp}, wasmtime + Cranelift behind a C ABI, called here through FFM),
  * which precompiles for any {@link NativeTarget}, and the runner stub every output starts
- * with -- the target platform's, which need not be the host's. Both are classpath
- * resources under {@code am/ik/rontolisp/native/<os>-<arch>/}, laid out by
+ * with -- the target platform's, which need not be the host's, and its network runner
+ * when the module fetches. All are classpath resources under
+ * {@code am/ik/rontolisp/native/<os>-<arch>/}, laid out by
  * {@code rontolisp-native/build.sh} (.kb/native-output.md).
  *
  * <p>
@@ -47,6 +48,15 @@ final class NativeToolchain {
 
 	/** Where build.sh puts each platform's pair on the classpath. */
 	static final String RESOURCE_ROOT = "am/ik/rontolisp/native/";
+
+	/** The plain runner stub's resource name. */
+	static final String PLAIN_STUB = "rlrun";
+
+	/**
+	 * The network runner's resource name: the same runner built with the {@code net}
+	 * feature, which answers a fetch's {@code rlhttp} imports.
+	 */
+	static final String NETWORK_STUB = "rlrun-net";
 
 	/** The system property that overrides the extraction cache. */
 	static final String CACHE_PROPERTY = "rontolisp.native.cache";
@@ -86,7 +96,10 @@ final class NativeToolchain {
 	/** The shim's engine fingerprint, which every stub it is paired with must carry. */
 	private final String fingerprint;
 
-	/** Runner stubs by platform, each checked against {@link #fingerprint}. */
+	/**
+	 * Runner stubs by {@code <platform>/<name>} ({@link #PLAIN_STUB} or
+	 * {@link #NETWORK_STUB}), each checked against {@link #fingerprint}.
+	 */
 	private final Map<String, byte[]> stubs = new ConcurrentHashMap<>();
 
 	private final MethodHandle precompile;
@@ -128,11 +141,12 @@ final class NativeToolchain {
 		String platform = hostPlatform();
 		ClassLoader loader = NativeToolchain.class.getClassLoader();
 		return platform != null && loader.getResource(RESOURCE_ROOT + platform + "/" + shimName(platform)) != null
-				&& loader.getResource(RESOURCE_ROOT + platform + "/rlrun") != null;
+				&& loader.getResource(RESOURCE_ROOT + platform + "/" + PLAIN_STUB) != null;
 	}
 
 	/**
-	 * The runner stub of {@code platform}; an output for it starts with these bytes.
+	 * The plain runner stub of {@code platform}; an output for it starts with these
+	 * bytes.
 	 * @param platform one of {@link NativeTarget#PLATFORMS}
 	 * @return the stub's bytes
 	 * @throws UnsupportedOperationException when this build carries no stub for it
@@ -140,14 +154,37 @@ final class NativeToolchain {
 	 * shim precompiles for
 	 */
 	byte[] stub(String platform) {
-		return this.stubs.computeIfAbsent(platform, this::loadStub);
+		return stub(platform, false);
 	}
 
-	private byte[] loadStub(String platform) {
-		byte[] stub = resource(platform + "/rlrun");
+	/**
+	 * The runner stub of {@code platform} an output starts with: the plain one, or the
+	 * NETWORK runner ({@value #NETWORK_STUB}), the same runner built with the host a
+	 * program that fetches imports ({@code rlhttp}) -- TLS included, which is why no
+	 * other output carries it (.kb/native-output.md, "The network runner").
+	 * @param platform one of {@link NativeTarget#PLATFORMS}
+	 * @param network whether the module imports what only the network runner answers
+	 * @return the stub's bytes
+	 * @throws UnsupportedOperationException when this build carries no such stub for it
+	 * @throws IllegalStateException when the stub was built for another engine than the
+	 * shim precompiles for
+	 */
+	byte[] stub(String platform, boolean network) {
+		return this.stubs.computeIfAbsent(platform + "/" + (network ? NETWORK_STUB : PLAIN_STUB), this::loadStub);
+	}
+
+	private byte[] loadStub(String key) {
+		String platform = key.substring(0, key.indexOf('/'));
+		byte[] stub = resource(key);
+		if (stub == null && key.endsWith("/" + NETWORK_STUB)) {
+			throw new UnsupportedOperationException("--native: this program fetches (rontolisp:fetch), whose host is"
+					+ " the network runner, and this build of rontolisp carries no " + NETWORK_STUB + " for " + platform
+					+ "; `rontolisp-native/build.sh` builds it beside " + PLAIN_STUB);
+		}
 		if (stub == null) {
 			List<String> carried = NativeTarget.PLATFORMS.stream()
-				.filter(p -> NativeToolchain.class.getClassLoader().getResource(RESOURCE_ROOT + p + "/rlrun") != null)
+				.filter(p -> NativeToolchain.class.getClassLoader()
+					.getResource(RESOURCE_ROOT + p + "/" + PLAIN_STUB) != null)
 				.toList();
 			throw new UnsupportedOperationException("--native-target " + platform
 					+ ": this build of rontolisp carries no runner stub for it (it carries "
@@ -284,8 +321,8 @@ final class NativeToolchain {
 		}
 		String shimName = shimName(platform);
 		byte[] shim = resource(platform + "/" + shimName);
-		if (shim == null
-				|| NativeToolchain.class.getClassLoader().getResource(RESOURCE_ROOT + platform + "/rlrun") == null) {
+		if (shim == null || NativeToolchain.class.getClassLoader()
+			.getResource(RESOURCE_ROOT + platform + "/" + PLAIN_STUB) == null) {
 			throw new UnsupportedOperationException("--native is not available for " + platform
 					+ ": this build of rontolisp carries no precompile shim and runner stub for it"
 					+ " (rontolisp-native/build.sh builds them)");

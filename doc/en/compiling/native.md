@@ -30,13 +30,37 @@ sees the process environment and standard input. Nothing else is written: the
 The current directory and `/` are open to the program, so relative paths
 (`../x` included) and absolute paths work as they do in any native program.
 
+## HTTP
+
+[`rontolisp:fetch`](../guides/http-fetch.md) works in an executable as it does
+on the interpreter and the JVM: the request is running when `fetch` returns,
+several requests overlap, `await` answers `(:status :headers :body)` with
+`:body` a stream of the reply's octets, and a request that fails (a refused
+connection, a certificate no trusted root vouches for) signals at the `await`.
+The runner makes the requests itself, over HTTP/1.1 and one connection each,
+and like the JDK's client it neither follows redirects nor decompresses.
+
+HTTPS trusts Mozilla's root certificates, which are built into the executable,
+so it needs no certificate bundle on the machine. `SSL_CERT_FILE` names a PEM
+file of certificates to trust instead, for a private or TLS-inspecting
+certificate authority:
+
+```bash
+SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt ./fetcher
+```
+
+A program that fetches starts with a larger runner, the one that carries HTTP
+and TLS; every other program keeps the small one
+([Size and Speed](#size-and-speed)).
+
 ## Flags
 
 Every flag of the default WASM output applies (`--simd`, `--optimize`,
 `--dynamic`, ...). The flags that ask for a different kind of module are
 refused by name: `--component`, `--no-wasi`, `--no-gc`, `--host-random`,
 `--host-fetch`, `--host-boundary`, `--reentrant` and `--emit-js-glue`. So is an
-`-o` name ending in `.wasm`, `.class`, `.jar` or `.war`.
+`-o` name ending in `.wasm`, `.class`, `.jar` or `.war`. A program that fetches
+needs no flag: the runner answers `fetch` itself ([HTTP](#http)).
 
 ## Where It Runs
 
@@ -82,5 +106,6 @@ other target such a program is a compile error naming the reference.
 
 An executable is a runner (2.1 MB on Linux x86_64, 1.9 MB on Linux aarch64,
 1.7 MB on macOS) plus roughly 11 times the `.wasm`: 2.1 MB for `hello` on Linux
-x86_64, 2.3 MB for a 28 KB module. It starts in about 10 ms and runs at
+x86_64, 2.3 MB for a 28 KB module. The runner of a program that fetches is
+3.3 MB on Linux x86_64 and 2.9 MB on Linux aarch64. It starts in about 10 ms and runs at
 about the speed of `wasmtime run` on the same module.

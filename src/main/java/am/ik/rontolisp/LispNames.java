@@ -5713,6 +5713,20 @@ public final class LispNames {
 	public static final String FUTURE_FORCE_INTERNAL = "%FUTURE-FORCE";
 
 	/**
+	 * The internal {@code rontolisp::%future-deferred} primitive of the degenerate
+	 * (Preview 1) tier: {@code (%future-deferred thunk)} is a future that settles on its
+	 * first await, to what {@code thunk} answers there -- every await calls it, so the
+	 * thunk keeps its own answer, and one that signals makes that await signal. It exists
+	 * for a transport whose work is already running elsewhere when the future is made: a
+	 * {@code --native} output's fetch, whose request is in flight on a runner thread when
+	 * {@code fetch} returns, waits for the reply head at the first await -- which is
+	 * where a transport failure has to signal ({@code eval/HostFetchLibrary}). WASM
+	 * outside asyncMode only, like the async-runtime bindings beside it; nothing else
+	 * produces or needs one.
+	 */
+	public static final String FUTURE_DEFERRED_INTERNAL = "%FUTURE-DEFERRED";
+
+	/**
 	 * The internal {@code rontolisp::%read-line-raw}/{@code %read-char-raw}/
 	 * {@code %read-byte-raw}/{@code %write-line-raw}/{@code %write-byte-raw}/
 	 * {@code %close-raw} aliases of the NATIVE stream built-ins on the
@@ -7197,6 +7211,13 @@ public final class LispNames {
 	 * answer on every backend.
 	 */
 	public static final String FUTURE_FORCE_QUALIFIED = RONTOLISP_PKG + "::" + FUTURE_FORCE_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%future-deferred}
+	 * ({@link #FUTURE_DEFERRED_INTERNAL}), which the WASM compiler gates the deferred arm
+	 * of the Preview 1 await on.
+	 */
+	public static final String FUTURE_DEFERRED_QUALIFIED = RONTOLISP_PKG + "::" + FUTURE_DEFERRED_INTERNAL;
 
 	/**
 	 * The canonical package-qualified spelling of {@code rontolisp:then}.

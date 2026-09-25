@@ -11,7 +11,8 @@ asyncMode = the first-class `TYPE_FUTURE` struct; Preview 1 = the degenerate `TY
 (settled at creation, `FUNC_P1_FUTURE_AWAIT` resolves it).
 
 `await`/`futurep` work on every backend and WASM mode. **fetch needs a transport**:
-`WasmFetchCompiler` is a compile error on plain Preview 1 (no host wasi:http) and on `--no-wasi`
+`WasmFetchCompiler` is a compile error on a plain Preview 1 `.wasm` (no host wasi:http; the Preview 1
+module inside a `--native` output fetches through its runner, "--native" below) and on `--no-wasi`
 WITHOUT `--host-fetch` (the message names the flag). Interpreter (`eval/HttpSupport.requestAsync` --
 request-building failures fail the future; the per-request client is deliberately never closed) and
 JVM (`JvmFetchRuntimeBuilder`) use the JDK `java.net.http.HttpClient`.
@@ -83,6 +84,86 @@ Pinned by `HostFetchLibraryTest`, `FetchResponseShapeTest`, `WasmImportCompilerT
 `WasmHostFetchBodyE2eTest` (node, a JS host sharing the module's memory: the portable drain, `ff fe
 41` crossing exactly, the in-band fallback, a 256 KiB reply never drained leaving
 `memory.buffer.byteLength` where it was, the mid-body failure, the superseded-body guard).
+
+## `--native` (the runner transport)
+
+A native executable's module is the Preview 1 command module, and its runner is the host
+(`.kb/native-output.md`, "The network runner"). `HostFetchLibrary.processForRunner` (spliced by
+`CompileFrontend` in the `--host-fetch` position when `Options.runnerHosted()`, i.e. a `--native`
+output) appends the same request builder, method validation, header conversions, response parser
+and `%http-reactor-body-stream` as the reactor's, over three imports of the runner's own module
+`rlhttp` (`FetchResponseShape.RUNNER_*`):
+
+```
+rlhttp.start(request-json) -> externref      ; the request is in flight on return
+rlhttp.head(reply) -> head-json               ; blocks until the head (or its "error" arm)
+rlhttp.readResponseBody(reply, ptr, cap) -> i32  ; 0 = end, -1 = failed mid-body
+```
+
+- **The request is in flight when `fetch` returns, and the future settles at its first await** --
+  the interpreter's and the JVM's timing, not the reactor's started == settled. The future is a
+  DEFERRED `TYPE_P1_FUTURE` (`rontolisp::%future-deferred`, kind 3, `LispNames.FUTURE_DEFERRED_*`):
+  its value field is a thunk `_p1_future_await` calls through the arity-0 dispatch on EVERY await
+  and then awaits what it answers. The thunk waits for the head, parses it and keeps the plist, so
+  a second await answers the same (`eq`) plist; a head carrying the error arm signals at each
+  await. Options (the method) are validated at the call. `WasmP1FutureRuntimeBuilder` emits the
+  deferred arm only when the program names `%future-deferred` (`usesDeferredFutures`), so every
+  other module's await runtime is byte-identical (`NativeFetchTest`).
+- **The reply is an `externref` handle**, not the reactor's one cursor: several replies drain
+  independently, and nothing is superseded. Its host data owns the reply; when the collector finds
+  the handle dead (the future and the body stream gone) the runner shuts the socket down under the
+  serving thread and frees the buffered octets. The runner starts a collection itself once 256
+  replies are alive or 64 MiB is buffered (host memory does not make the module collect).
+- **The runner's client is modelled on the JDK's `HttpClient`** (`runner/src/http/wire.rs`): the
+  fields it reserves (`connection`, `content-length`, `expect`, `host`, `upgrade`) fail the
+  request, reply field names come back lowercased and sorted (the JDK's `TreeMap` order, which the
+  interpreter shows) with values decoded as ISO-8859-1, redirects are not followed, nothing is
+  decompressed, and an empty `POST`/`PUT`/`PATCH` states `Content-Length: 0`. It speaks HTTP/1.1
+  only, one connection per request (`Connection: close`), ALPN `http/1.1`; a thread per request
+  reads the whole body into memory as it arrives (the JDK backends buffer it too), and a pull
+  blocks only while nothing has arrived. The default User-Agent is added module-side
+  (`%host-fetch-agent`): the transport is ours, not a host's.
+- **TLS**: rustls over ring. Roots: Mozilla's (`webpki-roots`, what wasmtime's `wasi:http`
+  trusts), compiled in, or -- REPLACING them -- every certificate of the PEM bundle
+  `SSL_CERT_FILE` names (the OpenSSL / curl / Go convention; an unreadable or certificate-less
+  bundle fails each HTTPS request naming the variable rather than falling back). The handshake
+  completes inside `start`'s thread, so an untrusted certificate is the head's error: it signals
+  at the await. Built on the first HTTPS request only.
+- **macOS**: a wait for the head or a body chunk turns the event loop once the application
+  started (`.kb/objc.md`, "--native").
+- **Throughput** (2026-09-25, x86_64, loopback): a 256 MiB body drained through
+  `rontolisp:stream-read` took 10.3-11.4 s user (~25 MB/s; `perf`: nearly every sample in the
+  module's JIT-compiled code, none worth naming in the runner) against
+  4.8 s wall on the interpreter and 2.9 s on the JVM; RSS 0.3 GB against 1.6 / 2.7 GB. `curl`
+  fetched the same HTTPS body in 0.5 s.
+
+## The cross-backend corpus and its known divergences
+
+`src/test/resources/fetch-spec.yaml` (`FetchSpecE2eTest`) runs one fetch corpus against one local
+origin on every transport a program fetches through -- the interpreter, the JVM, a `--native`
+output and a `--component` under `wasmtime run -S http=y` -- concatenated into one program per leg
+and sliced back per case, like `ci-spec.yaml`. It is in `./mvnw test` (the native leg skips
+without the host's pair, the component leg without wasmtime) and in CI's native-image job, where
+the native leg compiles through the binary on each release platform. The `--host-fetch` reactor
+has no leg (its transport is the JavaScript host, `WasmHostFetchBodyE2eTest`).
+
+A case a leg skips names the divergence; each is a real difference, measured 2026-09-25:
+
+- **JVM**: every await converts the settled `HttpResponse` into a NEW plist, with a new body stream
+  over the whole body (the others answer the same plist); a repeated field's values are joined
+  into one (`"a=1, b=2"`) where the others keep one pair per value; a URL `java.net.URI` refuses
+  signals at the `fetch` call, uncaught by a handler around the await (the interpreter fails the
+  future). Its `:headers` also come in REVERSE name order (the corpus looks fields up by name).
+- **Component**: the body stream ends at the first read that finds nothing there yet, so a reply
+  that pauses mid-body arrives cut short and a large one reads as empty (the opt-in
+  `componentPendingBodyReadOverlapsTimer` fails the same way); a rejected future awaited a second
+  time answers NIL; a fetch that cannot start (a runtime-built unsupported method, a URL the
+  request cannot carry) answers NIL instead of signalling at the call or failing the future. Its
+  `:headers` come in wire order, without `transfer-encoding`.
+- **The JDK backends over HTTPS** negotiate HTTP/2 where the origin offers it, and their `:headers`
+  then carry HTTP/2's `:status` pseudo-field and no hop-by-hop fields; the runner speaks HTTP/1.1
+  and reports `connection` / `transfer-encoding` as sent (seen on the interpreter against
+  `https://example.com`; the JVM uses the same client).
 
 ## The response plist
 
@@ -195,8 +276,8 @@ threads (verified against GraalVM 25), so blocking-in-JS is the only way to awai
 `web/coi-serviceworker.min.js` (MIT, vendored). Without isolation -- or on the main thread -- `start`
 returns `"sync"` and the substitution falls back to the synchronous XHR (settled future, no overlap).
 
-Fetch tests: interpreter/JVM use a local `HttpServer` (awaited-twice, two-in-flight out-of-order
-cases); Preview-1 await passthrough in `WasmLispCompilerIntegrationTest.promiseOpsWorkInPreview1Mode`;
+Fetch tests: the cross-backend corpus above; interpreter/JVM use a local `HttpServer` (awaited-twice,
+two-in-flight out-of-order cases); Preview-1 await passthrough in `WasmLispCompilerIntegrationTest.promiseOpsWorkInPreview1Mode`;
 deterministic component error-path + `-S http` gate tests plus an opt-in (`RONTOLISP_HTTP_E2E=1`)
 success test; ci-spec `async-defun-await-futurep` / `await-passes-non-futures-through`.
 

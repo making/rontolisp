@@ -1,0 +1,237 @@
+# The cross-backend corpus of rontolisp:fetch (FetchSpecE2eTest): every transport a
+# program can fetch through, against ONE local origin -- the test's HttpServer, whose
+# http://127.0.0.1:<port> replaces @ORIGIN@ -- and the same expected text on each: the
+# interpreter and the JVM (the JDK's HttpClient), a --native output (the runner's rlhttp
+# host) and a --component under `wasmtime run -S http=y` (wasi:http). Cases run IN ORDER,
+# concatenated into one program per leg, and the output is sliced back per case.
+#
+# The origin's endpoints (FetchSpecE2eTest.origin): /hello (200, "hello-from-fetch",
+# X-Test: ok; "got-header" when the request carries X-Custom: abc), /echo ("<METHOD>:
+# <request body>"), /agent (the User-Agent values, joined by "|"), /status/404 (404,
+# "missing"), /status/204, /redirect (302 to /hello), /chunked ("first-", then after a
+# pause "second", chunked), /octets (ff fe 41 00 80 7f), /utf8 (UTF-8 text), /big
+# (300000 octets, i mod 251) and /cookies (two Set-Cookie fields).
+#
+# A case a leg must not run says why under skip:, by leg (interpreter, jvm, native,
+# component). Every skip is a divergence .kb/fetch-http.md lists ("Known divergences"),
+# never a flake.
+cases:
+  - name: the-origin-and-the-drains
+    source: |
+      (defvar *origin* "@ORIGIN@")
+      (defun url (path) (concatenate 'string *origin* path))
+      (rontolisp:async-defun body-text (r)
+        (rontolisp:await (rontolisp:read-all (getf r :body))))
+      (rontolisp:async-defun body-octets (r)
+        (let ((s (getf r :body)) (out nil))
+          (loop
+            (let ((chunk (rontolisp:await (rontolisp:stream-read s))))
+              (if chunk
+                  (dotimes (i (length chunk)) (push (aref chunk i) out))
+                  (return (nreverse out)))))))
+      (defun field (r name)
+        (cdr (assoc name (getf r :headers) :test #'string-equal)))
+      (print (mismatch "http://127.0.0.1:" (url "/hello")))
+    expected: |
+      17
+  - name: a-get-answers-status-headers-and-a-body-stream
+    source: |
+      (let ((r (rontolisp:await (rontolisp:fetch (url "/hello")))))
+        (print (getf r :status))
+        (print (field r "x-test"))
+        (print (rontolisp:streamp (getf r :body)))
+        (print (rontolisp:await (body-text r))))
+    expected: |
+      200
+      "ok"
+      T
+      "hello-from-fetch"
+  - name: field-names-arrive-lowercased
+    source: |
+      (let ((r (rontolisp:await (rontolisp:fetch (url "/hello")))))
+        (print (assoc "x-test" (getf r :headers) :test #'string=))
+        (print (assoc "content-length" (getf r :headers) :test #'string=)))
+    expected: |
+      ("x-test" . "ok")
+      ("content-length" . "16")
+  - name: fetch-answers-a-future-the-request-already-in-flight
+    source: |
+      (let ((f (rontolisp:fetch (url "/hello"))))
+        (print (rontolisp:futurep f))
+        (print f)
+        (print (getf (rontolisp:await f) :status)))
+    expected: |
+      T
+      #<FUTURE>
+      200
+  - name: request-headers-are-sent
+    source: |
+      (print (rontolisp:await
+              (body-text
+               (rontolisp:await
+                (rontolisp:fetch (url "/hello")
+                                 (list :headers (list (cons "X-Custom" "abc"))))))))
+    expected: |
+      "got-header"
+  - name: method-and-body-are-sent
+    source: |
+      (dolist (m (list "POST" "put" "PATCH"))
+        (print (rontolisp:await
+                (body-text
+                 (rontolisp:await
+                  (rontolisp:fetch (url "/echo") (list :method m :body "héllo")))))))
+      (print (rontolisp:await
+              (body-text (rontolisp:await (rontolisp:fetch (url "/echo") (list :method "DELETE"))))))
+    expected: |
+      "POST:héllo"
+      "PUT:héllo"
+      "PATCH:héllo"
+      "DELETE:"
+  - name: two-requests-in-flight-settle-independently
+    source: |
+      (let ((p1 (rontolisp:fetch (url "/echo") (list :method "POST" :body "one")))
+            (p2 (rontolisp:fetch (url "/echo") (list :method "POST" :body "two"))))
+        (print (rontolisp:await (body-text (rontolisp:await p2))))
+        (print (rontolisp:await (body-text (rontolisp:await p1))))
+        (print (getf (rontolisp:await p1) :status)))
+    expected: |
+      "POST:two"
+      "POST:one"
+      200
+  - name: awaiting-a-reply-twice-answers-the-same-plist
+    source: |
+      (let ((f (rontolisp:fetch (url "/hello"))))
+        (print (eq (rontolisp:await f) (rontolisp:await f))))
+    expected: |
+      T
+    skip:
+      jvm: >-
+        every await converts the settled HttpResponse into a NEW plist, with a new
+        body stream over the whole body
+  - name: the-default-user-agent-and-the-callers-own
+    source: |
+      (let ((agent (rontolisp:await (body-text (rontolisp:await (rontolisp:fetch (url "/agent")))))))
+        (print (search "rontolisp/" agent))
+        (print (search "|" agent)))
+      (print (rontolisp:await
+              (body-text
+               (rontolisp:await
+                (rontolisp:fetch (url "/agent")
+                                 (list :headers (list (cons "user-agent" "custom/1"))))))))
+    expected: |
+      0
+      NIL
+      "custom/1"
+  - name: an-error-status-is-an-answer-not-a-failure
+    source: |
+      (let ((r (rontolisp:await (rontolisp:fetch (url "/status/404")))))
+        (print (list (getf r :status) (rontolisp:await (body-text r)))))
+      (let ((r (rontolisp:await (rontolisp:fetch (url "/status/204")))))
+        (print (list (getf r :status) (rontolisp:await (body-text r)))))
+    expected: |
+      (404 "missing")
+      (204 "")
+  - name: a-redirect-is-not-followed
+    source: |
+      (let ((r (rontolisp:await (rontolisp:fetch (url "/redirect")))))
+        (print (getf r :status))
+        (print (field r "location")))
+    expected: |
+      302
+      "/hello"
+  - name: a-head-reply-has-an-empty-body
+    source: |
+      (let ((r (rontolisp:await (rontolisp:fetch (url "/hello") (list :method "HEAD")))))
+        (print (list (getf r :status) (field r "x-test") (rontolisp:await (body-text r)))))
+    expected: |
+      (200 "ok" "")
+  - name: a-chunked-reply-streams-whole
+    source: |
+      (print (rontolisp:await (body-text (rontolisp:await (rontolisp:fetch (url "/chunked"))))))
+    expected: |
+      "first-second"
+    skip:
+      component: >-
+        the component's body stream ends at the first read that finds nothing
+        there yet, so a reply that pauses mid-body arrives cut short ("first-")
+  - name: the-body-is-the-wires-octets
+    source: |
+      (print (rontolisp:await (body-octets (rontolisp:await (rontolisp:fetch (url "/octets"))))))
+    expected: |
+      (255 254 65 0 128 127)
+  - name: read-all-decodes-utf-8
+    source: |
+      (let ((text (rontolisp:await (body-text (rontolisp:await (rontolisp:fetch (url "/utf8")))))))
+        (print text)
+        (print (length text)))
+    expected: |
+      "héllo, 世界"
+      9
+  - name: a-large-body-arrives-whole-across-chunks
+    source: |
+      (let ((octets (rontolisp:await (body-octets (rontolisp:await (rontolisp:fetch (url "/big")))))))
+        (print (length octets))
+        (let ((i 0) (bad nil))
+          (dolist (o octets)
+            (unless (= o (mod i 251)) (setq bad (or bad i)))
+            (setq i (+ i 1)))
+          (print bad)))
+    expected: |
+      300000
+      NIL
+    skip:
+      component: >-
+        the component's body stream ends at the first read that finds nothing
+        there yet, so a body larger than what has arrived reads as empty
+  - name: a-repeated-field-keeps-every-value
+    source: |
+      (let ((r (rontolisp:await (rontolisp:fetch (url "/cookies")))))
+        (print (sort (mapcar #'cdr
+                             (remove-if-not (lambda (h) (string-equal (car h) "set-cookie"))
+                                            (getf r :headers)))
+                     #'string<)))
+    expected: |
+      ("a=1" "b=2")
+    skip:
+      jvm: >-
+        the JVM joins a repeated field's values into one, "a=1, b=2"
+  - name: an-unsupported-method-signals-at-the-call
+    source: |
+      (print (handler-case (progn (rontolisp:fetch (url "/hello") (list :method (string-upcase "bogus")))
+                                  :no-signal)
+               (error () :signalled-at-fetch)))
+    expected: |
+      :SIGNALLED-AT-FETCH
+    skip:
+      component: >-
+        a fetch the component cannot start answers NIL instead of signalling
+  - name: a-transport-failure-signals-at-the-await
+    source: |
+      (defvar *refused* (rontolisp:fetch "http://127.0.0.1:1/refused"))
+      (print (rontolisp:futurep *refused*))
+      (print (handler-case (rontolisp:await *refused*) (error () :signalled-at-await)))
+    expected: |
+      T
+      :SIGNALLED-AT-AWAIT
+  - name: a-failed-reply-signals-again-at-the-next-await
+    source: |
+      (print (handler-case (rontolisp:await *refused*) (error () :signalled-at-await)))
+    expected: |
+      :SIGNALLED-AT-AWAIT
+    skip:
+      component: >-
+        awaiting a rejected future a second time answers NIL on the component
+  - name: a-url-that-cannot-be-requested-signals-at-the-await
+    source: |
+      (let ((f (rontolisp:fetch (url "/a b"))))
+        (print (rontolisp:futurep f))
+        (print (handler-case (rontolisp:await f) (error () :signalled-at-await))))
+    expected: |
+      T
+      :SIGNALLED-AT-AWAIT
+    skip:
+      jvm: >-
+        the JVM builds the request at the call, so a URL java.net.URI refuses
+        signals there, uncaught by the handler around the await
+      component: >-
+        a fetch the component cannot start answers NIL instead of a future

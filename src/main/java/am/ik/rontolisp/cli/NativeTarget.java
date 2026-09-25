@@ -21,6 +21,14 @@ record NativeTarget(String platform, String cpu) {
 	/** Every platform a runner stub can be built for, as its resource directory. */
 	static final List<String> PLATFORMS = List.of("linux-x86_64", "linux-aarch64", "macos-aarch64", "macos-x86_64");
 
+	/**
+	 * The one platform whose runner is an Objective-C host ({@code rlobjc}; its calls are
+	 * Apple's AArch64 convention), so the one where a {@code --native} output accepts the
+	 * {@code objc:}, {@code appkit:}, {@code metal:} and {@code scene:} packages
+	 * (.kb/objc.md, "--native").
+	 */
+	static final String OBJC_PLATFORM = "macos-aarch64";
+
 	/** The default CPU level: what every CPU of the platform has. */
 	static final String BASELINE = "baseline";
 

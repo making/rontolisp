@@ -73,8 +73,10 @@ wasmtime run --dir . fileio.wasm
   true asynchrony: `fetch` sends the request and returns a future (wrapping
   the in-flight `wasi:http` response handle) immediately, so several
   requests can overlap before `await` suspends on each. The future
-  operations themselves compile in every mode; only `fetch` is
-  component-only. fetch imports the async `wasi:http@0.3.0`
+  operations themselves compile in every mode; only `fetch` needs an HTTP
+  transport, which a component, a `--host-fetch` reactor and a
+  [native executable](../compiling/native.md#http) have and a Preview 1
+  `.wasm` does not. fetch imports the async `wasi:http@0.3.0`
   (`wasi:http/types` + `wasi:http/client`) — uniformly WASI 0.3, like the
   rest of the component. Run a fetch component with `-S http=y` (which makes
   the host provide `wasi:http`). Non-fetch

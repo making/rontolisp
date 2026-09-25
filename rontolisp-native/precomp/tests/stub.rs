@@ -4,17 +4,27 @@
 //!
 //! The stub is the release binary `build.sh` produces (runtime-only features), not one
 //! built for this test: a test build would unify the compiler into it. Override its path
-//! with `RLNATIVE_STUB`.
+//! with `RLNATIVE_STUB`, and the network runner's (`rlrun-net`) with `RLNATIVE_NET_STUB`.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 
 fn stub() -> PathBuf {
-    let path = std::env::var_os("RLNATIVE_STUB").map(PathBuf::from).unwrap_or_else(|| {
+    built_stub("RLNATIVE_STUB", "rlrun")
+}
+
+/// The network runner, which `build.sh` leaves beside the plain one.
+fn net_stub() -> PathBuf {
+    built_stub("RLNATIVE_NET_STUB", "rlrun-net")
+}
+
+fn built_stub(var: &str, name: &str) -> PathBuf {
+    let path = std::env::var_os(var).map(PathBuf::from).unwrap_or_else(|| {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../target")
             .join(stub_in_target())
+            .with_file_name(name)
     });
     assert!(
         path.is_file(),
@@ -41,10 +51,15 @@ fn fixtures() -> PathBuf {
 /// Writes the executable (`rlprecomp::assemble`) into a fresh directory and runs it the way
 /// gen-fixtures.sh runs `wasmtime run`: from `<dir>/cwd`, beside `<dir>/up.txt`.
 fn run_executable(dir: &Path, module: &[u8]) -> Output {
+    run_executable_on(&stub(), dir, module)
+}
+
+/// [`run_executable`] under the runner `stub`.
+fn run_executable_on(stub: &Path, dir: &Path, module: &[u8]) -> Output {
     let exe = dir.join("prog");
     std::fs::write(
         &exe,
-        rlprecomp::assemble(&std::fs::read(stub()).unwrap(), module).unwrap(),
+        rlprecomp::assemble(&std::fs::read(stub).unwrap(), module).unwrap(),
     )
     .unwrap();
     make_executable(&exe);
@@ -188,6 +203,35 @@ fn bare_stub_reports_the_missing_module() {
     let out = Command::new(stub()).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("no module"), "{out:?}");
+}
+
+/// `(module (import "rlhttp" "start" (func (param i32 i32) (result externref)))
+/// (func (export "_start")))`: a module importing what a fetch imports
+/// (`eval/HostFetchLibrary`'s runner shape), with the signature `http::add_to_linker` binds.
+const FETCHING_MODULE: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // magic, version
+    0x01, 0x0a, 0x02, 0x60, 0x02, 0x7f, 0x7f, 0x01, 0x6f, 0x60, 0x00, 0x00, // types
+    0x02, 0x10, 0x01, 0x06, b'r', b'l', b'h', b't', b't', b'p', 0x05, b's', b't', b'a', b'r', b't', 0x00,
+    0x00, // import rlhttp.start
+    0x03, 0x02, 0x01, 0x01, // one function of type 1
+    0x07, 0x0a, 0x01, 0x06, b'_', b's', b't', b'a', b'r', b't', 0x00, 0x01, // export _start
+    0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b, // its empty body
+];
+
+/// A module that fetches starts with the network runner, which links its `rlhttp`
+/// imports; the plain runner refuses it naming the one that would run it.
+#[test]
+fn a_fetching_module_runs_on_the_network_runner_and_the_plain_one_names_it() {
+    let module = rlprecomp::precompile(FETCHING_MODULE).unwrap();
+    let dir = TempDir::new("fetching");
+    let net = run_executable_on(&net_stub(), &dir.0, &module);
+    assert_eq!(net.status.code(), Some(0), "{net:?}");
+    let plain = run_executable_on(&stub(), &dir.0, &module);
+    assert_eq!(plain.status.code(), Some(1), "{plain:?}");
+    assert!(
+        String::from_utf8_lossy(&plain.stderr).contains("whose host is the network runner (rlrun-net)"),
+        "{plain:?}"
+    );
 }
 
 #[test]

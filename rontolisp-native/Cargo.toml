@@ -35,6 +35,17 @@ inherits = "release"
 panic = "abort"
 codegen-units = 4
 
+[profile.release-runner.package.rustls]
+opt-level = "z"
+[profile.release-runner.package.ring]
+opt-level = "z"
+[profile.release-runner.package.rustls-webpki]
+opt-level = "z"
+[profile.release-runner.package.untrusted]
+opt-level = "z"
+[profile.release-runner.package.rustls-pki-types]
+opt-level = "z"
+
 # Tests precompile in-process: an unoptimized Cranelift would dominate their run time.
 [profile.dev.package."*"]
 opt-level = 3

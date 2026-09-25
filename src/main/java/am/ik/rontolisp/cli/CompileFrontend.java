@@ -197,12 +197,24 @@ final class CompileFrontend {
 	 * @param hostBoundary {@code --host-boundary}
 	 * @param reentrant {@code --reentrant}
 	 * @param noPrune {@code --no-prune}
-	 * @param nativeOutput {@code --native}: the wasm-GC module is the payload of a native
-	 * executable, whose runner answers the {@code rlobjc} imports on macOS
+	 * @param nativePlatform {@code --native}'s target platform ({@link NativeTarget}), or
+	 * {@code null} for every other output: the wasm-GC module is the payload of a native
+	 * executable, whose runner answers the {@code rlhttp} imports of a fetch on every
+	 * platform and the {@code rlobjc} imports on {@link NativeTarget#OBJC_PLATFORM}
 	 */
 	record Options(@Nullable String baseDir, boolean wasm, boolean servlet, boolean dynamic, boolean component,
 			boolean noWasi, boolean noGc, boolean hostFetch, HostBoundary hostBoundary, boolean reentrant,
-			boolean noPrune, boolean nativeOutput) {
+			boolean noPrune, @Nullable String nativePlatform) {
+
+		/**
+		 * Whether the module is a native executable's -- the WASI command module a runner
+		 * hosts, which is what its imports need (no reactor, no component, no scalar
+		 * backend: the CLI refuses those beside {@code --native}).
+		 * @return whether the runner's imports are answered
+		 */
+		boolean runnerHosted() {
+			return this.nativePlatform != null && this.wasm && !this.noGc && !this.component && !this.noWasi;
+		}
 
 		static Builder builder() {
 			return new Builder();
@@ -232,7 +244,7 @@ final class CompileFrontend {
 
 			private boolean noPrune;
 
-			private boolean nativeOutput;
+			private @Nullable String nativePlatform;
 
 			private Builder() {
 			}
@@ -298,8 +310,13 @@ final class CompileFrontend {
 				return this;
 			}
 
-			Builder nativeOutput(boolean nativeOutput) {
-				this.nativeOutput = nativeOutput;
+			/**
+			 * Sets the {@code --native} target platform.
+			 * @param nativePlatform the platform, or {@code null} for a non-native output
+			 * @return this builder
+			 */
+			Builder nativePlatform(@Nullable String nativePlatform) {
+				this.nativePlatform = nativePlatform;
 				return this;
 			}
 
@@ -307,7 +324,7 @@ final class CompileFrontend {
 				return new Options(this.baseDir, this.wasm, this.servlet, this.dynamic, this.component, this.noWasi,
 						this.noGc, this.hostFetch,
 						this.hostBoundary != null ? this.hostBoundary : HostBoundary.ENVELOPE, this.reentrant,
-						this.noPrune, this.nativeOutput);
+						this.noPrune, this.nativePlatform);
 			}
 
 		}
@@ -486,8 +503,8 @@ final class CompileFrontend {
 		// below. Refuse every other WASM output here, after load inlining, so a (load
 		// ...)-ed file is caught too and the error names the reference rather than an
 		// undefined function somewhere inside a spliced library.
-		String objcReference = wasm && !(options.nativeOutput() && !noGc && !component && !noWasi)
-				? AppKitLibrary.firstObjcReference(loaded) : null;
+		boolean objcHost = options.runnerHosted() && NativeTarget.OBJC_PLATFORM.equals(options.nativePlatform());
+		String objcReference = wasm && !objcHost ? AppKitLibrary.firstObjcReference(loaded) : null;
 		if (objcReference != null) {
 			throw new IllegalArgumentException("Cannot compile: " + objcReference
 					+ " -- the objc:, appkit:, metal: and scene: packages run on the interpreter (java -jar, or "
@@ -521,6 +538,12 @@ final class CompileFrontend {
 			if (hostFetch) {
 				loaded = HostFetchLibrary.process(loaded, boundary, reentrant);
 			}
+		}
+		// The third fetch transport, in the same position for the same reason: a
+		// --native output keeps WASI Preview 1, and its runner -- not a host, not
+		// wasi:http -- answers fetch's rlhttp imports (HostFetchLibrary's runner shape).
+		if (options.runnerHosted()) {
+			loaded = HostFetchLibrary.processForRunner(loaded);
 		}
 		// Both rontolisp:fetch AND rontolisp:http-handler on the --component path are ONE
 		// Lisp-source library (http.lisp) over a wit-imported wasi:http@0.3.0 surface,
@@ -662,7 +685,7 @@ final class CompileFrontend {
 		// output, needed by the objc: references the macOS splices above introduce.
 		List<LispVal> program = UnreadCharLibrary
 			.process(WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary
-				.process(UrlLibrary.process(ObjcNativeLibrary.process(macos, options.nativeOutput())), features)))));
+				.process(UrlLibrary.process(ObjcNativeLibrary.process(macos, objcHost)), features)))));
 		// uiop:getenv on the --component path is environment.lisp over a wit-imported
 		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /
 		// sockets variants and as an appended user import under serve, whose service

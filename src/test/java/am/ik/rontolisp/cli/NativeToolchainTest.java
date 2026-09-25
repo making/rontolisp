@@ -148,6 +148,36 @@ class NativeToolchainTest {
 			.hasMessageContaining(host);
 	}
 
+	/**
+	 * The network runner is the same runner built with the host a fetching program
+	 * imports: it pairs with the one shim (its fingerprint is the plain stub's), and it
+	 * is the bigger of the two, which is why no other output starts with it.
+	 */
+	@Test
+	void theNetworkRunnerPairsWithTheSameShimAsThePlainOne() {
+		String host = hostToolchainOrSkip();
+		NativeToolchain toolchain = NativeToolchain.load();
+		byte[] plain = toolchain.stub(host);
+		byte[] network = toolchain.stub(host, true);
+		assertThat(NativeExecutable.stubFingerprints(network)).isEqualTo(NativeExecutable.stubFingerprints(plain))
+			.singleElement()
+			.asString()
+			.startsWith(NativeToolchain.ABI + ";");
+		assertThat(network.length).isGreaterThan(plain.length);
+		assertThat(toolchain.stub(host, false)).isSameAs(plain);
+		assertThat(toolchain.stub(host, true)).isSameAs(network);
+	}
+
+	@Test
+	void aMissingNetworkRunnerIsRefusedNamingIt() {
+		String host = hostToolchainOrSkip();
+		assumeFalse("macos-x86_64".equals(host), "the one platform no release carries a stub for");
+		assertThatThrownBy(() -> NativeToolchain.load().stub("macos-x86_64", true))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageStartingWith("--native: this program fetches (rontolisp:fetch)")
+			.hasMessageContaining("carries no " + NativeToolchain.NETWORK_STUB + " for macos-x86_64");
+	}
+
 	private static final byte[] EMPTY_MODULE = { 0, 'a', 's', 'm', 1, 0, 0, 0 };
 
 	private static NativeTarget target(String platform) {

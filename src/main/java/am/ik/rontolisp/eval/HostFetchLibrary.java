@@ -67,6 +67,15 @@ import am.ik.rontolisp.reader.LispReader;
  * call's.
  *
  * <p>
+ * <p>
+ * The same request builder, method validation, header conversions, response parser and
+ * body stream serve a second transport: a {@code --native} output's, where the runner
+ * stub is the host and answers {@code rlhttp} imports instead of {@code env} ones
+ * ({@link #processForRunner(List)}, {@link #runnerSource()}). There the request is IN
+ * FLIGHT when {@code fetch} returns and the future settles at its first await, as on the
+ * interpreter and the JVM -- so a transport failure signals at the await, not the call.
+ *
+ * <p>
  * Consumers: {@code RontoLispCli} calls {@link #process(List, HostBoundary)} under
  * {@code --no-wasi --host-fetch} (before {@code UserMacroExpander}, so
  * {@code JsonLibrary} and the prelude pick up the splice's {@code json-parse} /
@@ -230,34 +239,9 @@ public final class HostFetchLibrary {
 			.append(IMPORT_FIELD)
 			.append("\"\n                       :params '(:string) :returns :string)\n");
 		appendBody(src, boundary, withId);
-		src.append("""
-				(defun rontolisp::%host-fetch-pairs (alist)
-				  ;; header alist -> a JSON array of [name, value] (a VECTOR: an empty
-				  ;; LIST would stringify as false, and a name may repeat, so no object).
-				  (let ((out nil))
-				    (dolist (pair alist) (setq out (cons (list (car pair) (cdr pair)) out)))
-				    (coerce (nreverse out) 'vector)))
-				(defun rontolisp::%host-fetch-alist (pairs)
-				  ;; the JSON array of [name, value] -> the response header alist.
-				  (let ((out nil)
-				        (n (if pairs (length pairs) 0))
-				        (i 0))
-				    (while (< i n)
-				      (let ((pair (elt pairs i)))
-				        (setq out (cons (cons (elt pair 0) (elt pair 1)) out)))
-				      (setq i (+ i 1)))
-				    (nreverse out)))
-				(defun rontolisp::%host-fetch-method (options)
-				  (let ((method (string-upcase (or (getf options :method) "GET"))))
-				""");
-		src.append("    (unless (or");
-		for (String method : SUPPORTED_METHODS) {
-			src.append(" (string= method \"").append(method).append("\")");
-		}
-		src.append(")\n");
-		src.append("      (error \"fetch: unsupported method: ~a\" method))\n    method))\n");
-		appendRequestBuilder(src);
-		appendResponseParser(src, withId);
+		appendEnvelopeHelpers(src);
+		appendRequestBuilder(src, false);
+		appendResponseParser(src, withId, false);
 		src.append("""
 				(rontolisp:async-defun rontolisp::%host-fetch-run (request-json)
 				  ;; The async frame is what makes fetch answer a future; the host call
@@ -291,6 +275,144 @@ public final class HostFetchLibrary {
 				  ;; The options are validated here, at fetch time, like every backend.
 				  (rontolisp::%host-fetch-run
 				   (rontolisp::%host-fetch-request url (if options (car options) nil))))
+				""");
+		return src.toString();
+	}
+
+	/**
+	 * The {@code --native} compile-path pre-pass: when the program references
+	 * {@code rontolisp:fetch}, append the RUNNER lowering -- the same request builder,
+	 * method validation, header conversions, response parser and body stream as the
+	 * reactor's, over the {@code rlhttp} imports the runner stub answers instead of a
+	 * host's {@code env} pair ({@link #runnerSource()}). Unchanged otherwise: a program
+	 * that never fetches imports nothing new and its module is byte-identical.
+	 * @param program the top-level forms
+	 * @return the program, with the lowering appended when it fetches
+	 */
+	public static List<LispVal> processForRunner(List<LispVal> program) {
+		if (!referencesFetch(program)) {
+			return program;
+		}
+		List<LispVal> out = new java.util.ArrayList<>(program);
+		out.addAll(runnerForms());
+		return out;
+	}
+
+	/**
+	 * The parsed runner lowering, parsed once and cached.
+	 * @return the lowering forms
+	 */
+	public static List<LispVal> runnerForms() {
+		synchronized (FORMS) {
+			return FORMS.computeIfAbsent("RUNNER",
+					shape -> List.copyOf(LispReader.readAllFromString(runnerSource(), Features.WASM)));
+		}
+	}
+
+	/**
+	 * The generated runner lowering: {@code rontolisp:fetch} over the runner's
+	 * {@code rlhttp} imports ({@link FetchResponseShape#RUNNER_IMPORT_MODULE}).
+	 *
+	 * <p>
+	 * Where the reactor's transport blocks the stack at the CALL until the head, the
+	 * runner's answers a handle at once and serves the request on a thread of its own, so
+	 * {@code fetch} returns with the request in flight -- as on the interpreter and the
+	 * JVM: several requests overlap, and one whose future is never awaited is still sent.
+	 * The future is a DEFERRED one ({@code rontolisp::%future-deferred}): Preview 1 has
+	 * no scheduler to settle it, so it settles on its first {@code await}, which waits
+	 * for the head there -- and that is where a transport failure (the head's error arm)
+	 * signals, again as everywhere else. The closure keeps the head and the plist, so a
+	 * second await answers the same plist, or signals the same failure.
+	 *
+	 * <p>
+	 * The handle is an {@code :extern}: the runner releases the reply (its thread, its
+	 * buffered octets) when the collector finds the handle dead, which happens once
+	 * neither the future nor the body stream is reachable. The request carries the
+	 * default User-Agent, since the transport is ours rather than a host's.
+	 * @return the Lisp source of the lowering
+	 */
+	public static String runnerSource() {
+		String module = FetchResponseShape.RUNNER_IMPORT_MODULE;
+		StringBuilder src = new StringBuilder();
+		src.append(";; Generated by HostFetchLibrary from FetchResponseShape -- the --native\n");
+		src.append(";; lowering of rontolisp:fetch over the runner's rlhttp imports.\n");
+		src.append("(rontolisp:wasm-import 'rontolisp::%host-fetch-start :from \"")
+			.append(module)
+			.append("\" :as \"")
+			.append(FetchResponseShape.RUNNER_START_FIELD)
+			.append("\"\n                       :params '(:string) :returns :extern)\n");
+		src.append("(rontolisp:wasm-import 'rontolisp::%host-fetch-head :from \"")
+			.append(module)
+			.append("\" :as \"")
+			.append(FetchResponseShape.RUNNER_HEAD_FIELD)
+			.append("\"\n                       :params '(:extern) :returns :string)\n");
+		src.append("(rontolisp:wasm-import 'rontolisp::%host-fetch-read-body :from \"")
+			.append(module)
+			.append("\" :as \"")
+			.append(BODY_IMPORT_FIELD)
+			.append("\"\n                       :params '(:extern) :returns :bytes)\n");
+		src.append("""
+				(defun rontolisp::%host-fetch-pull (reply)
+				  ;; One chunk of REPLY's body, through the caller-passes-the-buffer
+				  ;; import: the module owns the buffer and the runner writes into it,
+				  ;; blocking only while nothing has arrived. A NEGATIVE count is a
+				  ;; transfer that failed after the head -- signalled at the drain, as on
+				  ;; every backend; 0 is end of stream.
+				  (let* ((buf (rontolisp::%http-reactor-buffer\s""").append(HttpReactorInliner.CHUNK_BYTES).append("""
+				))
+				         (n (rontolisp::%host-fetch-read-body reply buf)))
+				    (when (and n (< n 0))
+				      (error "fetch: the response body failed mid-transfer"))
+				    (rontolisp::%http-reactor-chunk buf n)))
+				(defun rontolisp::%host-fetch-body (in-band reply)
+				  ;; The :body of the result plist: the reactor's stream, pulled from the
+				  ;; runner by REPLY. The closure holds the handle, so the reply lives as
+				  ;; long as the stream does.
+				  (rontolisp::%http-reactor-body-stream
+				   (or (rontolisp::%http-reactor-source in-band)
+				       (lambda () (rontolisp::%host-fetch-pull reply)))))
+				(defun rontolisp::%host-fetch-agent-set-p (headers)
+				  ;; Whether the caller's alist already names the user-agent field (field
+				  ;; names are case-insensitive): only the ABSENT case takes the default.
+				  (when headers
+				    (let ((pair (car headers)))
+				      (if (and (consp pair) (stringp (car pair))
+				""");
+		src.append("               (string-equal (car pair) \"")
+			.append(FetchResponseShape.USER_AGENT_HEADER)
+			.append("\"))\n");
+		src.append("""
+				          t
+				          (rontolisp::%host-fetch-agent-set-p (cdr headers))))))
+				(defun rontolisp::%host-fetch-agent (headers)
+				  ;; The one field fetch sets on the caller's behalf -- the transport is
+				  ;; the runner's, so nothing else would (FetchResponseShape).
+				  (if (rontolisp::%host-fetch-agent-set-p headers)
+				      headers
+				""");
+		src.append("      (append headers (list (cons \"")
+			.append(FetchResponseShape.USER_AGENT_HEADER)
+			.append("\" \"")
+			.append(FetchResponseShape.defaultUserAgent())
+			.append("\")))))\n");
+		appendEnvelopeHelpers(src);
+		appendRequestBuilder(src, true);
+		appendResponseParser(src, false, true);
+		src.append("""
+				(defun rontolisp:fetch (url &rest options)
+				  ;; The options are validated here, at fetch time, like every backend;
+				  ;; the request is in flight when the call returns. The head is waited
+				  ;; for at the first await, where a transport failure signals.
+				  (let ((reply (rontolisp::%host-fetch-start
+				                (rontolisp::%host-fetch-request url (if options (car options) nil))))
+				        (head nil)
+				        (settled nil))
+				    (rontolisp::%future-deferred
+				     (lambda ()
+				       (unless settled
+				         (unless head (setq head (rontolisp::%host-fetch-head reply)))
+				         (setq settled (rontolisp::%host-fetch-parse head reply)))
+				       settled))))
 				""");
 		return src.toString();
 	}
@@ -422,11 +544,45 @@ public final class HostFetchLibrary {
 				""");
 	}
 
+	// The helpers both transports share: the header alist <-> JSON pairs conversions and
+	// the method validation, which is what makes an unsupported :method signal at the
+	// fetch call on every transport.
+	private static void appendEnvelopeHelpers(StringBuilder src) {
+		src.append("""
+				(defun rontolisp::%host-fetch-pairs (alist)
+				  ;; header alist -> a JSON array of [name, value] (a VECTOR: an empty
+				  ;; LIST would stringify as false, and a name may repeat, so no object).
+				  (let ((out nil))
+				    (dolist (pair alist) (setq out (cons (list (car pair) (cdr pair)) out)))
+				    (coerce (nreverse out) 'vector)))
+				(defun rontolisp::%host-fetch-alist (pairs)
+				  ;; the JSON array of [name, value] -> the response header alist.
+				  (let ((out nil)
+				        (n (if pairs (length pairs) 0))
+				        (i 0))
+				    (while (< i n)
+				      (let ((pair (elt pairs i)))
+				        (setq out (cons (cons (elt pair 0) (elt pair 1)) out)))
+				      (setq i (+ i 1)))
+				    (nreverse out)))
+				(defun rontolisp::%host-fetch-method (options)
+				  (let ((method (string-upcase (or (getf options :method) "GET"))))
+				""");
+		src.append("    (unless (or");
+		for (String method : SUPPORTED_METHODS) {
+			src.append(" (string= method \"").append(method).append("\")");
+		}
+		src.append(")\n");
+		src.append("      (error \"fetch: unsupported method: ~a\" method))\n    method))\n");
+	}
+
 	// (defun rontolisp::%host-fetch-request (url options) ...) -> the request JSON, its
 	// keys the request record's fields in record order. Each field's value expression is
 	// supplied here (the one part a record cannot derive); an unknown field fails the
 	// build loudly, so growing the record forces this switch to say what crosses.
-	private static void appendRequestBuilder(StringBuilder src) {
+	// agent: the transport is ours, not a host's, so the request carries the default
+	// User-Agent unless the caller's :headers name the field (%host-fetch-agent).
+	private static void appendRequestBuilder(StringBuilder src, boolean agent) {
 		src.append("(defun rontolisp::%host-fetch-request (url options)\n");
 		src.append("  (let ((method (rontolisp::%host-fetch-method options)))\n");
 		src.append("    (rontolisp:json-stringify\n     (rontolisp:plist-hash-table\n      (append (list");
@@ -437,7 +593,9 @@ public final class HostFetchLibrary {
 				case "method" -> src.append(' ').append(field.keyword()).append(" method");
 				case "headers" -> src.append(' ')
 					.append(field.keyword())
-					.append(" (rontolisp::%host-fetch-pairs (getf options :headers))");
+					.append(agent
+							? " (rontolisp::%host-fetch-pairs (rontolisp::%host-fetch-agent (getf options :headers)))"
+							: " (rontolisp::%host-fetch-pairs (getf options :headers))");
 				// option<string>: an absent :body crosses as an ABSENT key -- a GET
 				// with any body key (even "") is a TypeError in the host's fetch.
 				case "body" -> optional.append("\n              (let ((body (getf options :body)))\n")
@@ -454,9 +612,11 @@ public final class HostFetchLibrary {
 	// (defun rontolisp::%host-fetch-parse (response-json) ...) -> the result plist, its
 	// keys the response record's fields in record order; the reserved error key signals.
 	// withId: the reply head's reserved "body-id" key reaches the body builder too, so
-	// the stream it answers names its reply on every pull.
-	private static void appendResponseParser(StringBuilder src, boolean withId) {
-		src.append("(defun rontolisp::%host-fetch-parse (response-json)\n");
+	// the stream it answers names its reply on every pull. runner: the reply is the
+	// handle the runner's start answered, a second parameter the body builder receives.
+	private static void appendResponseParser(StringBuilder src, boolean withId, boolean runner) {
+		src.append(runner ? "(defun rontolisp::%host-fetch-parse (response-json reply)\n"
+				: "(defun rontolisp::%host-fetch-parse (response-json)\n");
 		src.append("  (let ((envelope (rontolisp:json-parse response-json)))\n");
 		src.append("    (let ((err (gethash \"")
 			.append(FetchResponseShape.HOST_ENVELOPE_ERROR_KEY)
@@ -475,9 +635,10 @@ public final class HostFetchLibrary {
 				// Either way an absent-body reply (a HEAD, a 204) is that stream finding
 				// end of stream at its first read, which read-all drains to the declared
 				// default, the empty string.
-				case "body" -> withId ? "(rontolisp::%host-fetch-body " + read + " (gethash \""
-						+ FetchResponseShape.HOST_BODY_ID_KEY + "\" envelope))"
-						: "(rontolisp::%host-fetch-body " + read + ")";
+				case "body" -> runner ? "(rontolisp::%host-fetch-body " + read + " reply)"
+						: withId ? "(rontolisp::%host-fetch-body " + read + " (gethash \""
+								+ FetchResponseShape.HOST_BODY_ID_KEY + "\" envelope))"
+								: "(rontolisp::%host-fetch-body " + read + ")";
 				default -> throw new IllegalStateException(
 						"The http-plist response record grew a field this lowering does not carry: " + field.name());
 			};

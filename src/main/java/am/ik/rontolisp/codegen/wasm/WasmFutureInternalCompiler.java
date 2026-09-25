@@ -61,6 +61,20 @@ final class WasmFutureInternalCompiler {
 				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_P1_FUTURE_AWAIT);
 				return;
 			}
+			// %future-deferred: a TYPE_P1_FUTURE of kind 3 whose value field is the
+			// thunk the await calls (WasmP1FutureRuntimeBuilder, through the arity-0
+			// dispatch; the gate that builds that arm reads the same occurrence).
+			if (LispNames.FUTURE_DEFERRED_INTERNAL.equals(member)) {
+				List<LispVal> deferredArgs = cons.toList();
+				expectArgs(member, deferredArgs, 1);
+				ctx.indirectCallArities.add(0);
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(WasmP1FutureRuntimeBuilder.KIND_DEFERRED);
+				WasmExprCompiler.compileExpr(deferredArgs.get(1), ctx);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_P1_FUTURE);
+				return;
+			}
 			throw new UnsupportedOperationException("rontolisp::" + member
 					+ " requires --component and an async program (it is an internal async-runtime binding)");
 		}
@@ -107,6 +121,9 @@ final class WasmFutureInternalCompiler {
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SCHED_LOOP);
 			}
+			case LispNames.FUTURE_DEFERRED_INTERNAL -> throw new UnsupportedOperationException("rontolisp::" + member
+					+ " belongs to the degenerate (non-async) tier: an asyncMode program's futures settle through its"
+					+ " scheduler");
 			default -> throw new IllegalArgumentException("unknown future internal: " + member);
 		}
 	}

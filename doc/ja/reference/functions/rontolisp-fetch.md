@@ -95,8 +95,8 @@ JSON のレスポンスボディは
   `--component` でコンパイルし、
   `wasmtime run -S http=y`
   で実行してください (wasmtime 46+。`-S http=y` はホストに `wasi:http` を提供させる
-  フラグです)。ホストの `wasi:http` を持たない Preview 1 (コアモジュール) モードでは
-  fetch はコンパイルエラーのままです。汎用の future 操作 (`await`、`then`、
+  フラグです)。ホストの `wasi:http` を持たない Preview 1 (コアモジュール) の
+  `.wasm` では fetch はコンパイルエラーのままです。汎用の future 操作 (`await`、`then`、
   `futurep`) はどのモードでもコンパイルできます。fetch は
   [`rontolisp:http-handler`](rontolisp-http-handler.md) の serve コンポーネント内
   (プロキシ型のハンドラ) でも動作します。`wasmtime serve` で
@@ -115,6 +115,12 @@ JSON のレスポンスボディは
   トランスポート失敗は `await` ではなく `fetch` 呼び出しでシグナルされます —
   ボディ途中の失敗は他のバックエンドと同様、読み切りでシグナルされます。
   フラグなしの `--no-wasi` はこれまで通りコンパイルエラーです。
+- **ネイティブ実行ファイル** (`--native`): 実行ファイルのランナーが、`fetch` が
+  返った瞬間から専用のスレッドでリクエストを HTTP/1.1 で送ります (HTTPS は
+  実行ファイルに組み込まれた Mozilla のルート証明書か、`SSL_CERT_FILE` が指す
+  PEM バンドルを信頼します)。JVM と同じくリクエストは並行し、トランスポートの
+  失敗は `await` でシグナルされます。[HTTP](../../compiling/native.md#http) を
+  参照してください。
 - **ブラウザ プレイグラウンド**: 真に非同期です。インタプリタは Web Worker 内で
   実行され、`fetch` はリクエストをページのメインスレッドに引き渡します。メイン
   スレッドがブラウザの本物の `fetch()` を (CORS の制約の下で) 実行している間も
