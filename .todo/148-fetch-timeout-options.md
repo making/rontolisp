@@ -43,7 +43,13 @@ component side would get it for free from the host.
   `HttpLibrary`'s reachable-member set — no new `.wit` file, no core Java on
   this path. The host enforces the deadline; the error arrives as the
   existing `error-code` variant and is already signaled as a condition.
-- **WASM P1 / `--no-gc`**: fetch is unsupported there today; unchanged.
+- **`--native`** (added 2026-09-25): the runner's own client (`rontolisp-native/runner/src/http`)
+  has no deadline either. The request record crosses as JSON (`FetchResponseShape`'s `request`),
+  so the two keys become two more fields there; `wire::connect` takes `TcpStream::connect_timeout`
+  and a read timeout on the socket until the head (`set_read_timeout`), reported as the head's
+  error arm, which signals at the await like any transport failure. Pin it in the fetch corpus
+  (`fetch-spec.yaml`), whose origin can sleep.
+- **WASM P1 `.wasm` / `--no-gc`**: fetch is unsupported there today; unchanged.
 
 ## Verification
 
