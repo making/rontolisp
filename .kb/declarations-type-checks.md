@@ -270,6 +270,21 @@ table is GENERATED from it. **Change them together.**
   answered nil on the compile paths and `T` on the interpreter. `subtypepUniverse` now adds every
   `RUNTIME_TYPEP_BUILTINS` name except `T` (not a symbol at run time; the generated `(eq b t)` edge
   answers it). No COMPUTED `subtypep` -> byte-identical.
+- **The ancestor table resolves each name ONCE** (2026-09-25). `subtypepAncestorTableForms` asks
+  about every PAIR of the universe (U^2), and each pair used to re-resolve both names: a miss of
+  `ClosRegistry.findClass` (most universe spellings) scanned every class with a `splitQualified`
+  each. mito's probe: U = 1,218 (649 class spellings, 245 struct, 111 deftype, 293 classes), ~40 s
+  per table, built once per `JvmLispCompiler` retry attempt (5 there) -- 90% of a 253 s compile.
+  Now the name arm of `subtypep` is `namedSubtypep` over two `SubtypepName`s (per-name lookups,
+  kept on first use); the table makes one per universe name, `subtypep` two per call, so both
+  answer through the one body. `ClosRegistry` indexes the member-name fallbacks
+  (`classesByMember` / `aliasesByMember`, dropped by each registration) and keeps
+  `descendantStructTags` answers (cleared by each `registerStruct`; the generic-dispatch builders
+  had made it 15% of the remaining compile). Table 40 s -> 0.3-0.45 s; probe JVM compile 253 s ->
+  51 s, component (`--component --optimize`) 77 s -> 32 s; outputs byte-identical there and on
+  all 231 `examples/` programs (`.class` and `.wasm`). What is left of the 51 s is the five
+  attempts themselves. Pins `LispMacroExpanderTest#theRuntimeSubtypepTableAnswersEveryPairAsSubtypepDoes`
+  (every pair against `subtypep`) and `ClosRegistryTest` (the kept lookups follow registration).
 
 ## `subtypep` answers CL's VALID-P as its second value
 **Invariant: a nil primary claims a DECISION only between two plain type NAMES. Every compound rule

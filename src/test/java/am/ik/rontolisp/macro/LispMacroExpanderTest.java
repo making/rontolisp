@@ -210,6 +210,77 @@ class LispMacroExpanderTest {
 		assertThat(ancestorTableNames(source)).isEqualTo(ancestorTableNames(source));
 	}
 
+	@Test
+	void theRuntimeSubtypepTableAnswersEveryPairAsSubtypepDoes() {
+		// The table resolves each name of its universe once and asks the name arm about
+		// every pair; subtypep resolves both names per call. Every kind of name the
+		// universe holds is here: a class reached only by an AMBIGUOUS member (two
+		// packages), a unique member, an alias, an :include chain, deftypes (one
+		// circular) and the built-in lattice.
+		String source = """
+				(defclass pa::widget () ())
+				(defclass pb::widget () ())
+				(defclass pa::gadget (pa::widget) ())
+				(defclass pa::solo () ())
+				(setf (find-class 'pa::solo-alias) (find-class 'pa::solo))
+				(defstruct pa::base a)
+				(defstruct (pa::derived (:include pa::base)) b)
+				(deftype pa::either () '(or pa::base pa::gadget))
+				(deftype pa::small () '(integer 0 9))
+				(deftype pa::circle () 'pa::circle)
+				(defun st (a b) (subtypep a b))
+				(print (st 'pa::gadget 'pa::widget))
+				""";
+		ClosRegistry registry = new ClosRegistry();
+		List<LispVal> expanded = LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source),
+				new HashMap<>(), registry);
+		java.util.Map<String, List<String>> rows = new java.util.LinkedHashMap<>();
+		for (LispVal entry : ancestorTableEntries(expanded)) {
+			List<LispVal> parts = ((LispCons) entry).toList();
+			List<String> ancestors = parts.subList(1, parts.size()).stream().map(v -> ((LispSymbol) v).name()).toList();
+			for (LispVal sub : ((LispCons) parts.get(0)).toList()) {
+				rows.put(((LispSymbol) sub).name(), ancestors);
+			}
+		}
+		assertThat(rows.keySet()).contains("PA::WIDGET", "PB::WIDGET", "WIDGET", "GADGET", "PA::SOLO-ALIAS",
+				"SOLO-ALIAS", "PA::DERIVED", "BASE", "PA::EITHER", "PA::CIRCLE", "FIXNUM");
+		List<String> universe = List.copyOf(rows.keySet());
+		for (String name : universe) {
+			List<String> expected = universe.stream()
+				.filter(candidate -> LispMacroExpander.subtypep(new LispSymbol(name), new LispSymbol(candidate),
+						registry))
+				.toList();
+			assertThat(rows.get(name)).as(name).containsExactlyInAnyOrderElementsOf(expected);
+		}
+		assertThat(rows.get("GADGET")).contains("PA::WIDGET").doesNotContain("WIDGET", "PB::WIDGET");
+		assertThat(rows.get("PA::DERIVED")).contains("PA::BASE", "PA::EITHER", "STRUCTURE-OBJECT");
+		assertThat(rows.get("PA::CIRCLE")).containsExactly("PA::CIRCLE");
+	}
+
+	/**
+	 * The entries of the emitted {@code %subtypep-ancestor-table%}, across its chunks.
+	 */
+	private static List<LispVal> ancestorTableEntries(List<LispVal> expanded) {
+		List<LispVal> entries = new ArrayList<>();
+		for (LispVal form : expanded) {
+			if (!(form instanceof LispCons cons) || !(cons.cdr() instanceof LispCons rest)
+					|| !(rest.car() instanceof LispSymbol var) || !LispNames.SUBTYPEP_ANCESTOR_TABLE.equals(var.name())
+					|| !(rest.cdr() instanceof LispCons valueCell)) {
+				continue;
+			}
+			LispVal value = valueCell.car();
+			if (cons.car() instanceof LispSymbol op && LispNames.SETQ.equals(op.name())) {
+				// (setq table (append 'chunk table))
+				value = ((LispCons) ((LispCons) value).cdr()).car();
+			}
+			if (cons.car() instanceof LispSymbol op
+					&& (LispNames.DEFVAR.equals(op.name()) || LispNames.SETQ.equals(op.name()))) {
+				entries.addAll(((LispCons) ((LispCons) ((LispCons) value).cdr()).car()).toList());
+			}
+		}
+		return entries;
+	}
+
 	private static String expandOne(String source) {
 		LispCons form = (LispCons) LispReader.readAllFromString(source).get(0);
 		return LispMacroExpander.expandFormat(form).print();

@@ -1164,6 +1164,14 @@ public final class ClosRegistry {
 	private final Map<String, Set<String>> structAncestors = new LinkedHashMap<>();
 
 	/**
+	 * {@link #descendantStructTags}'s answers by the name as spelled, cleared by every
+	 * {@link #registerStruct}. Each answer is a scan of every struct, and the generic
+	 * dispatch builders ask it once per (method specializer, dispatch branch) pair -- 15%
+	 * of mito's JVM compile before it was kept.
+	 */
+	private final Map<String, List<String>> descendantStructTagsMemo = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
 	 * Struct type name (normalized) to its DIRECT {@code :include} parent (normalized as
 	 * given) -- what {@link #classMetaobject} builds the direct-superclass list of a
 	 * struct metaobject from ({@link #structAncestors} flattens the chain into a set and
@@ -1278,6 +1286,20 @@ public final class ClosRegistry {
 	private final Map<String, String> classAliases = new LinkedHashMap<>();
 
 	/**
+	 * {@link #uniqueByMember}'s answers, keyed by member name: the one package-qualified
+	 * class of that member, or an empty optional when two packages define it. Built on
+	 * first use and dropped by every {@link #registerClass}; without it each miss of
+	 * {@link #findClass} scanned every class, which the runtime-subtypep table (a lookup
+	 * per pair of its universe) turned into minutes on a program the size of mito. An
+	 * index is never mutated once published, so interpreter threads that only LOOK UP
+	 * classes stay as safe as they were over the plain maps.
+	 */
+	private volatile @Nullable Map<String, java.util.Optional<ClassInfo>> classesByMember;
+
+	/** {@link #classesByMember}'s twin over the alias table, dropped by every alias. */
+	private volatile @Nullable Map<String, java.util.Optional<String>> aliasesByMember;
+
+	/**
 	 * Whether the compile paths have already emitted the class metaobject table from this
 	 * registry (see {@code LispMacroExpander.classMetaTableForms}). A registration after
 	 * that point can no longer reach the emitted program, so {@link #registerClassAlias}
@@ -1306,7 +1328,7 @@ public final class ClosRegistry {
 	 * @return the class registry
 	 */
 	public Map<String, ClassInfo> classes() {
-		return this.classes;
+		return java.util.Collections.unmodifiableMap(this.classes);
 	}
 
 	/**
@@ -1317,7 +1339,7 @@ public final class ClosRegistry {
 	 * @return the alias table, possibly empty
 	 */
 	public Map<String, String> classAliases() {
-		return this.classAliases;
+		return java.util.Collections.unmodifiableMap(this.classAliases);
 	}
 
 	/**
@@ -1354,6 +1376,7 @@ public final class ClosRegistry {
 					+ "compile time, so an alias registered from inside a function body would not exist at run time");
 		}
 		this.classAliases.put(key, canonical);
+		this.aliasesByMember = null;
 	}
 
 	/**
@@ -1522,6 +1545,7 @@ public final class ClosRegistry {
 		}
 		ancestors.add(key);
 		this.structAncestors.put(key, Set.copyOf(ancestors));
+		this.descendantStructTagsMemo.clear();
 		LispLayout layout = LispLayout.ofStruct(structName, slotBaseNames, initforms);
 		this.layoutsByTag.put(layout.tag(), layout);
 	}
@@ -1571,6 +1595,15 @@ public final class ClosRegistry {
 	 * @return the descendant tags
 	 */
 	public List<String> descendantStructTags(String structName) {
+		List<String> memo = this.descendantStructTagsMemo.get(structName);
+		if (memo == null) {
+			memo = java.util.Collections.unmodifiableList(computeDescendantStructTags(structName));
+			this.descendantStructTagsMemo.putIfAbsent(structName, memo);
+		}
+		return memo;
+	}
+
+	private List<String> computeDescendantStructTags(String structName) {
 		String key = normalize(structName);
 		if (!this.structAncestors.containsKey(key)
 				&& PackageRegistry.splitQualified(structName) instanceof PackageRegistry.QualifiedName qn
@@ -1808,33 +1841,39 @@ public final class ClosRegistry {
 	// The one alias whose member name matches, or null when none does (or when the match
 	// is ambiguous) -- uniqueByMember's twin over the alias table.
 	@Nullable private String uniqueAliasByMember(String member) {
-		String found = null;
-		for (Map.Entry<String, String> entry : this.classAliases.entrySet()) {
-			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(entry.getKey());
-			if (qn != null && qn.member().equals(member)) {
-				if (found != null) {
-					return null;
+		Map<String, java.util.Optional<String>> index = this.aliasesByMember;
+		if (index == null) {
+			index = new java.util.HashMap<>();
+			for (Map.Entry<String, String> entry : this.classAliases.entrySet()) {
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(entry.getKey());
+				if (qn != null) {
+					index.merge(qn.member(), java.util.Optional.of(entry.getValue()),
+							(first, second) -> java.util.Optional.empty());
 				}
-				found = entry.getValue();
 			}
+			this.aliasesByMember = index;
 		}
-		return found;
+		java.util.Optional<String> found = index.get(member);
+		return found == null ? null : found.orElse(null);
 	}
 
 	// The one registered class whose member name matches, or null when none does (or
 	// when two packages define the name -- an ambiguous match must stay unresolved).
 	@Nullable private ClassInfo uniqueByMember(String member) {
-		ClassInfo found = null;
-		for (ClassInfo candidate : this.classes.values()) {
-			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(candidate.name());
-			if (qn != null && qn.member().equals(member)) {
-				if (found != null) {
-					return null;
+		Map<String, java.util.Optional<ClassInfo>> index = this.classesByMember;
+		if (index == null) {
+			index = new java.util.HashMap<>();
+			for (ClassInfo candidate : this.classes.values()) {
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(candidate.name());
+				if (qn != null) {
+					index.merge(qn.member(), java.util.Optional.of(candidate),
+							(first, second) -> java.util.Optional.empty());
 				}
-				found = candidate;
 			}
+			this.classesByMember = index;
 		}
-		return found;
+		java.util.Optional<ClassInfo> found = index.get(member);
+		return found == null ? null : found.orElse(null);
 	}
 
 	/**
@@ -2115,6 +2154,7 @@ public final class ClosRegistry {
 					Set.copyOf(merged));
 		}
 		this.classes.put(key, info);
+		this.classesByMember = null;
 		// A redefinition invalidates the memoized metaobject; descendants keep theirs
 		// (their slot lists are unchanged -- redefinition does not propagate in the
 		// static subset).

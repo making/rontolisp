@@ -59,9 +59,10 @@ still been ~6.5k over, and the program keeps growing -- hence a split, not a die
 - **Measured 2026-09-25** (mito probe, default `--optimize`): `Probe.class` 9.08 MB, 57,820
   entries, 12,640 methods; `Probe$Part1.class` 3.16 MB, 35,760 entries, 1,393 methods (mostly
   runtime helpers -- they come last in declaration order). The two pools repeat ~10k entries.
-  The split costs no measurable compile time; the probe's ~250 s compile is
+  The split costs no measurable compile time; the probe's ~250 s compile was
   `expandTopLevelDefinitions`'s runtime-subtypep ancestor table (a linear `findClass` per
-  lattice pair), not codegen. All three JVM legs green again.
+  lattice pair), not codegen -- 51 s since that was fixed (`.kb/declarations-type-checks.md`).
+  All three JVM legs green again.
 - **Still bounded**: all fields stay in the class, so fields plus the kept methods must fit one
   pool (`the class's fixed part ... needs N`); one method's own references must fit one pool
   (`_funName`'s name table is the first to grow with the program: 2 entries per nameable

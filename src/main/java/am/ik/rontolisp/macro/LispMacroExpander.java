@@ -38990,38 +38990,48 @@ public final class LispMacroExpander {
 		if (!(subV instanceof LispSymbol subSym) || !(superV instanceof LispSymbol superSym)) {
 			return false;
 		}
-		String sub = canonicalSubtypeName(plainTypeName(subSym));
-		String sup = canonicalSubtypeName(plainTypeName(superSym));
-		if ("T".equals(sup) || sub.equals(sup)) {
+		return namedSubtypep(new SubtypepName(subSym, closRegistry), new SubtypepName(superSym, closRegistry),
+				closRegistry, expanding);
+	}
+
+	/**
+	 * The NAME arm of {@link #subtypep}: both designators are type-name symbols. It reads
+	 * the registry only through the two {@link SubtypepName}s, so the runtime ancestor
+	 * table ({@link #subtypepAncestorTableForms}), which asks this about every PAIR of
+	 * its universe, resolves each name once instead of once per pair -- and still answers
+	 * through this one body, so the table cannot drift from the fold.
+	 */
+	private static boolean namedSubtypep(SubtypepName sub, SubtypepName sup, ClosRegistry closRegistry,
+			java.util.Set<String> expanding) {
+		if ("T".equals(sup.canonical) || sub.canonical.equals(sup.canonical)) {
 			return true;
 		}
-		ClosRegistry.ClassInfo subClass = closRegistry.findClass(subSym.name());
+		ClosRegistry.ClassInfo subClass = sub.classInfo();
 		if (subClass != null) {
-			ClosRegistry.ClassInfo superClass = closRegistry.findClass(superSym.name());
-			if (superClass != null) {
-				return subClass.ancestors().contains(ClosRegistry.normalize(superClass.name()));
+			if (sup.classInfo() != null) {
+				return subClass.ancestors().contains(sup.classKey());
 			}
-			return "STANDARD-OBJECT".equals(sup);
+			return "STANDARD-OBJECT".equals(sup.canonical);
 		}
 		// A defstruct type: :include ancestry via the spelling-tolerant tag APIs;
 		// structure-object is every struct's supertype. A struct sub whose super is
 		// neither falls through to the deftype resolution below (sxql's
 		// multiple-allowed-clause names structs through a deftype'd or).
-		String subStructTag = closRegistry.findStructTag(subSym.name());
+		String subStructTag = sub.structTag();
 		if (subStructTag != null) {
-			if ("STRUCTURE-OBJECT".equals(sup)) {
+			if ("STRUCTURE-OBJECT".equals(sup.canonical)) {
 				return !OBJC_OBJECT_STRUCT_TAG.equals(subStructTag);
 			}
-			if (closRegistry.findStructTag(superSym.name()) != null) {
-				return closRegistry.descendantStructTags(superSym.name()).contains(subStructTag);
+			if (sup.structTag() != null) {
+				return sup.descendantStructTags().contains(subStructTag);
 			}
 		}
 		// A user deftype on either side resolves to its expansion and re-tests.
 		// A name already being expanded on this path is circular and stays unexpanded.
-		String subKey = ClosRegistry.normalize(subSym.name());
-		String supKey = ClosRegistry.normalize(superSym.name());
-		LispVal subExpansion = expanding.contains(subKey) ? null : closRegistry.findDeftype(subSym.name());
-		LispVal supExpansion = expanding.contains(supKey) ? null : closRegistry.findDeftype(superSym.name());
+		String subKey = sub.key();
+		String supKey = sup.key();
+		LispVal subExpansion = expanding.contains(subKey) ? null : sub.deftype();
+		LispVal supExpansion = expanding.contains(supKey) ? null : sup.deftype();
 		if (subExpansion != null || supExpansion != null) {
 			java.util.Set<String> deeper = new java.util.HashSet<>(expanding);
 			if (subExpansion != null) {
@@ -39030,26 +39040,127 @@ public final class LispMacroExpander {
 			if (supExpansion != null) {
 				deeper.add(supKey);
 			}
-			return subtypep(subExpansion != null ? subExpansion : subV, supExpansion != null ? supExpansion : superV,
-					closRegistry, deeper);
+			return subtypep(subExpansion != null ? subExpansion : sub.symbol,
+					supExpansion != null ? supExpansion : sup.symbol, closRegistry, deeper);
 		}
 		if (subStructTag != null) {
 			return false;
 		}
-		// Walk the built-in lattice upward from sub.
-		java.util.ArrayDeque<String> queue = new java.util.ArrayDeque<>();
-		queue.add(sub);
-		java.util.Set<String> seen = new java.util.HashSet<>();
-		while (!queue.isEmpty()) {
-			String current = queue.poll();
-			if (current.equals(sup)) {
-				return true;
-			}
-			if (seen.add(current)) {
-				queue.addAll(SUBTYPEP_PARENTS.getOrDefault(current, List.of()));
-			}
+		return sub.latticeAncestors().contains(sup.canonical);
+	}
+
+	/**
+	 * One type-name symbol as {@link #namedSubtypep} reads it: its canonical lattice
+	 * spelling, and the registry facts about it -- class, struct tag, struct descendants,
+	 * deftype expansion, built-in lattice ancestors -- each looked up on first use and
+	 * then kept. The lookups are pure over a registry that does not change while one
+	 * {@link #subtypep} call (or one ancestor table) is being answered, so keeping them
+	 * changes no answer.
+	 */
+	private static final class SubtypepName {
+
+		private final LispSymbol symbol;
+
+		private final String canonical;
+
+		private final ClosRegistry registry;
+
+		private boolean classResolved;
+
+		private ClosRegistry.@Nullable ClassInfo classInfo;
+
+		private @Nullable String classKey;
+
+		private boolean structTagResolved;
+
+		private @Nullable String structTag;
+
+		private java.util.@Nullable Set<String> descendantStructTags;
+
+		private @Nullable String key;
+
+		private boolean deftypeResolved;
+
+		private @Nullable LispVal deftype;
+
+		private java.util.@Nullable Set<String> latticeAncestors;
+
+		SubtypepName(LispSymbol symbol, ClosRegistry registry) {
+			this.symbol = symbol;
+			this.canonical = canonicalSubtypeName(plainTypeName(symbol));
+			this.registry = registry;
 		}
-		return false;
+
+		ClosRegistry.@Nullable ClassInfo classInfo() {
+			if (!this.classResolved) {
+				this.classInfo = this.registry.findClass(this.symbol.name());
+				this.classResolved = true;
+			}
+			return this.classInfo;
+		}
+
+		/** The registry key of {@link #classInfo}, which must be non-null. */
+		String classKey() {
+			String k = this.classKey;
+			if (k == null) {
+				k = ClosRegistry.normalize(java.util.Objects.requireNonNull(classInfo()).name());
+				this.classKey = k;
+			}
+			return k;
+		}
+
+		@Nullable String structTag() {
+			if (!this.structTagResolved) {
+				this.structTag = this.registry.findStructTag(this.symbol.name());
+				this.structTagResolved = true;
+			}
+			return this.structTag;
+		}
+
+		java.util.Set<String> descendantStructTags() {
+			java.util.Set<String> tags = this.descendantStructTags;
+			if (tags == null) {
+				tags = new java.util.HashSet<>(this.registry.descendantStructTags(this.symbol.name()));
+				this.descendantStructTags = tags;
+			}
+			return tags;
+		}
+
+		String key() {
+			String k = this.key;
+			if (k == null) {
+				k = ClosRegistry.normalize(this.symbol.name());
+				this.key = k;
+			}
+			return k;
+		}
+
+		@Nullable LispVal deftype() {
+			if (!this.deftypeResolved) {
+				this.deftype = this.registry.findDeftype(this.symbol.name());
+				this.deftypeResolved = true;
+			}
+			return this.deftype;
+		}
+
+		/** The canonical name and every built-in lattice name above it. */
+		java.util.Set<String> latticeAncestors() {
+			java.util.Set<String> seen = this.latticeAncestors;
+			if (seen == null) {
+				seen = new java.util.HashSet<>();
+				java.util.ArrayDeque<String> queue = new java.util.ArrayDeque<>();
+				queue.add(this.canonical);
+				while (!queue.isEmpty()) {
+					String current = queue.poll();
+					if (seen.add(current)) {
+						queue.addAll(SUBTYPEP_PARENTS.getOrDefault(current, List.of()));
+					}
+				}
+				this.latticeAncestors = seen;
+			}
+			return seen;
+		}
+
 	}
 
 	/**
@@ -41645,15 +41756,22 @@ public final class LispMacroExpander {
 	 */
 	private static List<LispVal> subtypepAncestorTableForms(ClosRegistry closRegistry) {
 		List<String> universe = subtypepUniverse(closRegistry);
-		java.util.Map<List<String>, List<String>> subsByAncestors = new java.util.LinkedHashMap<>();
+		List<SubtypepName> names = new java.util.ArrayList<>(universe.size());
 		for (String name : universe) {
+			names.add(new SubtypepName(new LispSymbol(name), closRegistry));
+		}
+		java.util.Map<List<String>, List<String>> subsByAncestors = new java.util.LinkedHashMap<>();
+		for (SubtypepName name : names) {
 			List<String> ancestors = new java.util.ArrayList<>();
-			for (String candidate : universe) {
-				if (subtypep(new LispSymbol(name), new LispSymbol(candidate), closRegistry)) {
-					ancestors.add(candidate);
+			for (SubtypepName candidate : names) {
+				// subtypep's own arms before the name arm decide nothing for two symbols
+				// (a symbol is neither a metaobject, nor t/nil, nor a cons), so this is
+				// exactly subtypep(name, candidate) -- over names resolved once.
+				if (namedSubtypep(name, candidate, closRegistry, java.util.Set.of())) {
+					ancestors.add(candidate.symbol.name());
 				}
 			}
-			subsByAncestors.computeIfAbsent(ancestors, k -> new java.util.ArrayList<>()).add(name);
+			subsByAncestors.computeIfAbsent(ancestors, k -> new java.util.ArrayList<>()).add(name.symbol.name());
 		}
 		List<LispVal> entries = new java.util.ArrayList<>();
 		for (java.util.Map.Entry<List<String>, List<String>> entry : subsByAncestors.entrySet()) {
