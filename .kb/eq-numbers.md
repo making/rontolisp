@@ -32,7 +32,8 @@ alone, and it is what the backends already did for bignums and characters.
   `catch` tags, `remf`, the hash bucket scan): `ref.eq` inline, then inline the symbol/string
   offset compare and the i31 miss (an i31 is eql only to itself), then one call to `_eql_tail`
   (`FUNC_EQL_TAIL`, `WasmRuntimeBuilder.buildEqlTailBody`: float, char, bignum, bigint, ratio,
-  complex). In a module with none of those boxes the fold makes the tail `i32.const 0` and
+  complex; and, in a `--native` `objc:` program only, two Objective-C wrappers by address --
+  [objc.md](objc.md), "--native"). In a module with none of those boxes the fold makes the tail `i32.const 0` and
   `WasmPeephole` removes every call of it (`.kb/optimize-dead-code-elimination.md`).
 
 ## Cost (measured 2026-09-19)

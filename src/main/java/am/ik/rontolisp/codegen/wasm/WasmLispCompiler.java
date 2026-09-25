@@ -664,6 +664,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	 */
 	private boolean usesInstances;
 
+	/**
+	 * The baked layout address of {@link LispNames#OBJC_OBJECT_STRUCT}, whose instances
+	 * compare and hash by their first (address) slot alone, or {@code -1} when the
+	 * program carries no such layout -- every other module is byte-identical. Set once
+	 * the layouts are baked, before any runtime body is built.
+	 */
+	private int addressKeyedLayout = -1;
+
 	// Whether a mutable character vector can exist at run time (Ctx.charvecPossible).
 	// A per-compile fact rather than an option, set once the injected runtime defuns
 	// are known, and read both by the expression compiler (through Ctx) and by the
@@ -3942,6 +3950,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// also land before the data segment is snapshotted.)
 		Map<String, Integer> layoutAddresses = this.usesInstances ? WasmInstanceLayouts.emit(closRegistry, stringTable,
 				usedLayoutTags(program, closRegistry, usesEval || restartMode || usesRead)) : Map.of();
+		Integer keyedLayout = layoutAddresses.get(LispLayout.STRUCT_TAG_PREFIX + LispNames.OBJC_OBJECT_STRUCT);
+		this.addressKeyedLayout = keyedLayout != null ? keyedLayout : -1;
 
 		// Assign funcIds and build function info map
 		int[] nextFuncId = { 0 };
@@ -7436,7 +7446,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmIoRuntimeBuilder.buildCloseBody(stringTable, ostreamTableGlobalIndex))
 					.addFunction(WasmIoRuntimeBuilder.buildWriteLineBody(stringTable, this.charvecPossible))
 					.addFunction(WasmRuntimeBuilder.buildEqualBody(this.usesInstances ? instanceTypeBase() : -1,
-							this.charvecPossible))
+							this.addressKeyedLayout, this.charvecPossible))
 					.addFunction(WasmGetenvRuntimeBuilder.build(scratchBase));
 				// Dispatch function bodies
 				for (byte[] body : dispatchBodies) {
@@ -7446,7 +7456,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmPlistRuntimeBuilder.buildPlistGet());
 				// Hash-table runtime helper bodies (FUNC_HASH, FUNC_HASH_RESIZE)
 				code.addFunction(WasmRuntimeBuilder.buildHashBody(this.usesInstances ? instanceTypeBase() : -1,
-						hashDepthGlobalIndex, hashGasGlobalIndex, this.charvecPossible, this.usesIdentityHashTables));
+						this.addressKeyedLayout, hashDepthGlobalIndex, hashGasGlobalIndex, this.charvecPossible,
+						this.usesIdentityHashTables));
 				code.addFunction(WasmRuntimeBuilder.buildHashResizeBody(this.usesIdentityHashTables,
 						this.usesInstances ? instanceTypeBase() : -1));
 				// Modulo / remainder runtime helper bodies (FUNC_RAT_REM, FUNC_RAT_MOD)
@@ -7707,10 +7718,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				// objects carry the slot it reads, a constant-0 stub otherwise.
 				code.addFunction(identityHashSeqGlobalIndex >= 0
 						? WasmIdentityHashRuntimeBuilder.build(identityHashSeqGlobalIndex,
-								this.usesInstances ? instanceTypeBase() : -1)
+								this.usesInstances ? instanceTypeBase() : -1, this.addressKeyedLayout)
 						: WasmIdentityHashRuntimeBuilder.buildStub());
 				// the eq/eql tail body (FUNC_EQL_TAIL): shaken when no site compares.
-				code.addFunction(WasmRuntimeBuilder.buildEqlTailBody());
+				code.addFunction(WasmRuntimeBuilder.buildEqlTailBody(this.usesInstances ? instanceTypeBase() : -1,
+						this.addressKeyedLayout));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp

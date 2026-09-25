@@ -299,9 +299,16 @@ over `rontolisp:wasm-import`s from module `rlobjc` -- right OUTSIDE `AppKitLibra
   dead is released after the send that uses its address). Measured: 300,000 `self` sends leave
   ~19,000 references outstanding, not 300,002 (`NativeObjcE2eTest`). Same rule as the JVM:
   `setReleasedWhenClosed:` NO.
-- **Divergence**: a wrapper is a struct, so `equal` on two wrappers of one object is NIL here and T
-  on the JVM (a record). `appkit.lisp` keys its tables by `objc:address`, which is exact everywhere
-  (`.todo/959`).
+- **Two wrappers of one object are one value**, as on the interpreter (a record) and the JVM
+  (`JvmObjcHandle.equals`): `eq`/`eql`/`equal`/`equalp` and all four hash-table tests compare by
+  address. Interning one wrapper per address cannot give this -- the table would keep every
+  wrapper, so every reference, alive. The comparison is the backend's: the wasm-GC runtime knows the
+  layout of `objc::%object` (`LispNames.OBJC_OBJECT_STRUCT`, `WasmLispCompiler.addressKeyedLayout`)
+  and compares and hashes its instances by the first (address) slot alone -- an arm in `_eql_tail`,
+  a slot count of 1 in `_equal`'s and `_hash`'s instance arms, and `_ihash` placing such an
+  instance by `_hash`. The prelude `equalp` tries `eql` before walking two instances' slots. A
+  module without the layout is byte-identical. Pinned by the equality block of
+  `objc-native-corpus.lisp` (`NativeObjcE2eTest`, against the interpreter).
 - `objc:data` lays a packed buffer out in Lisp (`%ieee754-single-bits`, lowered on wasm-GC for
   this) -- a per-frame uniform is 64 bytes; bfloat16 arrays and quantized matrices are refused
   (the JVM serves them). `objc:bytes` copies through a `:bytes` result.
@@ -344,5 +351,4 @@ via `eval/ObjcInterop`'s five entry points (the `LinalgGpu`/`LinalgGpuKernels` s
 - A variadic selector a PROGRAM declares: served only for the names in `VariadicSelectors`, and
   the runtime offers no way to recognise another.
 - x86_64: `objc_msgSend_stret` (struct returns wider than 16 bytes) has not been exercised.
-- `--native`: `equal` on two wrappers of one object (above); a macos-x86_64 runner has no
-  Objective-C host (`call.rs` is Apple's AArch64 convention, and there is no release stub).
+- `--native`: a macos-x86_64 runner has no Objective-C host (`call.rs` is Apple's AArch64 convention, and there is no release stub).

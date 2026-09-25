@@ -130,6 +130,9 @@
 
 ;; An object or a class: its address, and for an object the handle whose death
 ;; releases the one reference the wrapper owns (see the header). A class owns nothing.
+;; The backend compares and hashes it by ADDRESS alone (LispNames.OBJC_OBJECT_STRUCT
+;; names it), so two wrappers of one object are eq, as on the interpreter and the JVM:
+;; the address stays the first slot.
 (defstruct (objc::%object (:constructor objc::%make-object (address handle))
                           (:predicate objc::%objectp))
   address
