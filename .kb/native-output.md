@@ -57,6 +57,11 @@ dependency-free). `abi/` (`rlabi`: config, `FINGERPRINT`, `STUB_MARKER`, `payloa
   resolves it through `/`. Exit: the
   `proc_exit` code, 0 on return, **134 after a trap** (what `wasmtime run` answers on Unix,
   `Error: <trap>` on stderr), 1 when the module cannot load (no trailer, refused engine).
+  A module importing from `rlobjc` (an `objc:`/`appkit:`/`metal:`/`scene:` program) also gets the
+  Objective-C host (`runner/src/objc`, macOS aarch64 only -- elsewhere it exits 1 naming the
+  platform) and runs ON thread 0, `sleep` turning the event loop ([objc.md](objc.md), "--native").
+  Not part of the fingerprint: the host is linked per module import, and a module is only ever
+  assembled with the stub of its own build.
 - **Fingerprint** `rlnative-abi=3;wasmtime=49.0.0;wasm=gc,function-references,exceptions,tail-call;collector=copying`.
   The stub carries `RLNATIVE-FINGERPRINT=<fingerprint>\0` in its read-only data (kept by a
   `black_box` in `main`); the assembler scans the stub for it and compares with

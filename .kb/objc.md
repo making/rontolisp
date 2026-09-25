@@ -9,9 +9,10 @@
 - Docs: `doc/{en,ja}/guides/objc-appkit.md`. Examples: `examples/macos/*.lisp`, not in
   `examples.yaml` (whose `os: [mac]` field gates only RUN legs).
 
-**Scope**: macOS only, on the interpreter and on JVM class output. Both WASM backends REFUSE a
-program referencing either package (`CompileFrontend`, after load inlining, naming the reference)
--- permanently: no FFM, no AppKit. A machine without the runtime SIGNALS at the call. Why it
+**Scope**: macOS only, on the interpreter, on JVM class output and in a `--native` executable for
+`macos-aarch64` (below). Every other WASM output REFUSES a program referencing any of the four
+packages (`CompileFrontend`, after load inlining, naming the reference) -- permanently: no WASM
+runtime offers FFM or AppKit; only the runner stub of a native executable answers the imports. A machine without the runtime SIGNALS at the call. Why it
 exists: the native binary is the REPL people run, and `java:` cannot be INTERPRETED there (no
 reflection metadata); FFM needs none.
 
@@ -242,6 +243,74 @@ carries `Enable-Native-Access: ALL-UNNAMED` in its manifest (`JvmJarWriter`). Ea
 defines its own copy into its own loader, which is why the test names a run-time class per program
 (`objc_allocateClassPair` cannot be undone).
 
+## `--native`: the runner is the Objective-C host
+`--native -o prog` (`macos-aarch64` only; `RontoLispCli` passes `nativeOutput` for that platform
+alone) accepts the four packages: `ObjcNativeLibrary` splices `objc-native.lisp` -- the nine verbs
+over `rontolisp:wasm-import`s from module `rlobjc` -- right OUTSIDE `AppKitLibrary`, and the runner
+(`rontolisp-native/runner/src/objc`) answers them over libobjc/AppKit, dlopened on the first
+`rlobjc` call (an output that makes none starts as before). Stub +116 KB (1.62 -> 1.73 MB).
+`counter.lisp` is a 2.36 MB executable.
+
+- **THE decision: the module runs ON thread 0.** A wasmtime `Store` is not `Sync`, and a callback
+  arriving on thread 0 while the module ran elsewhere could not enter it: that thread's stack holds
+  the store, and a nested call from another thread would leave its wasm frames' GC roots unwalked
+  (wasmtime walks the CURRENT thread's activations). So there is no hop: `objc:on-main` is a plain
+  call, and a callback arrives INSIDE a host call -- a send that made AppKit call out, or `pump` --
+  and re-enters through that call's `Caller`, published in the `CALLER` thread-local (`Entered`).
+- **`sleep` is the event loop.** Nothing drains thread 0 while the module computes, so every
+  `sleep` of such a program compiles to `objc::%sleep` (`WasmExprCompiler`, keyed on the spliced
+  defun `LispNames.OBJC_SLEEP_INTERNAL`) -> `pump`: `nextEventMatchingMask:` + `sendEvent:` once the
+  application started, else `CFRunLoopRunInMode`. `appkit:wait`'s 50 ms poll therefore keeps the
+  window live at ~0% CPU (the Preview 1 spin would freeze it). A blocking stdin read still freezes
+  it.
+- **`-[NSApplication run]` is never started**: it never returns, and the thread is the module's.
+  `appkit::%app`'s `performSelectorOnMainThread:withObject:waitUntilDone:` of `run` to an
+  `NSApplication` is answered by marking the application started (and
+  `activateIgnoringOtherApps:`), after which `pump` dispatches. The one place the runner reads a
+  selector's meaning; `appkit.lisp` is unchanged.
+- **Sends: one generic import, no shape table.** The library pushes each argument (`arg_*`, typed
+  imports; `:s64` for an address), then `send(receiver, selector)` answers a result KIND fetched
+  with `result_*`. The host marshals by the method's own encoding (`encoding.rs`, the twin of
+  `TypeEncoding`, same refusals and messages) and calls `objc_msgSend` through `rl_objc_call`
+  (`call.rs`): an assembly frame that loads x0-x7, d0-d7, x8 and a stack area, with Apple's AArch64
+  classification (HFA -> SIMD registers, struct > 16 B by reference, struct result through x8,
+  stack arguments at natural alignment, variadic ones in 8-byte slots) -- so EVERY parseable
+  selector is callable, where the native binary serves a closed table. Encodings are cached per
+  (class, selector). Measured 2026-09-25 (M4 Max): 0.20 us an integer answer, 0.24 an object
+  answer (wrapper + handle), 0.27 one argument, 0.66 a struct argument; `java -jar` 7.4-8.1 us
+  (its main-thread hop). `metal-cube` over 6 s: 0.51 s CPU against 4.18 s under `java -jar`,
+  `metal-robot-arm` 2.13 s against 8.65 s.
+- **Upcalls: one IMP for the closed shape set** (`v@:` ... `q@:@`, the JVM's set, same refusal
+  text): on AArch64 `(self, _cmd, a, b) -> x0` serves them all. It looks up (class, SEL) up the
+  superclass chain, retains `self` and the object arguments (the wrappers own them), and calls the
+  export `rlobjc_callback(id, self, a, b, argc)`, which applies the closure `define-class`
+  registered under `id`. A Lisp error is printed in the library (`objc: error in a callback: ...`)
+  and answered as zero; a `proc_exit` inside exits with its code; a `throw` to a tag outside the
+  callback (a trap here) is printed the same way and contained, as `ObjcClasses.dispatch` contains
+  any `Throwable` -- nothing unwinds into the native frame.
+- **Ownership is the JVM's -- one retain per wrapper -- through `:extern`.** A wasm-GC module has no
+  finalizer, but wasmtime's copying collector DROPS an `externref`'s host data when the reference
+  dies (`sweep_extern_refs`, read in the 49.0.0 source). Each object wrapper (`objc::%object`, a
+  defstruct: address + handle) holds the externref the `own` import returns, whose host data
+  (`Owned`) queues the release on drop. The queue runs only from the OUTERMOST host call -- the end
+  of a send, a `pump` turn -- never inside a callback, where it could free the object whose method
+  is running, nor between a send's argument pushes (a receiver wrapper Cranelift already considers
+  dead is released after the send that uses its address). Measured: 300,000 `self` sends leave
+  ~19,000 references outstanding, not 300,002 (`NativeObjcE2eTest`). Same rule as the JVM:
+  `setReleasedWhenClosed:` NO.
+- **Divergence**: a wrapper is a struct, so `equal` on two wrappers of one object is NIL here and T
+  on the JVM (a record). `appkit.lisp` keys its tables by `objc:address`, which is exact everywhere.
+- `objc:data` lays a packed buffer out in Lisp (`%ieee754-single-bits`, lowered on wasm-GC for
+  this) -- a per-frame uniform is 64 bytes; bfloat16 arrays and quantized matrices are refused
+  (the JVM serves them). `objc:bytes` copies through a `:bytes` result.
+- Verified 2026-09-25: the corpus and `scene:` offscreen pixels equal the interpreter's
+  (`NativeObjcE2eTest`); `objc-runtime.lisp` and `system-frameworks.lisp` print byte for byte what
+  `java -jar` prints; every `examples/macos` program starts and draws. Clicks were checked without
+  a hand by posting `NSEvent mouseEventWithType:...` mouse-down/up pairs through `postEvent:atStart:`
+  (the path a trackpad takes: `pump` -> `sendEvent:` -> the button's tracking loop -> the action
+  IMP): 2 of 2 on `--native` and on `java -jar`. A human click on `counter.lisp` is still the
+  GUI rule's check.
+
 ## Package rules and the web build
 `am.ik.objc -> (nothing)`; `eval -> am.ik.objc` through ONE class, `eval/ObjcBridge`, reached only
 via `eval/ObjcInterop`'s five entry points (the `LinalgGpu`/`LinalgGpuKernels` shape), so
@@ -256,7 +325,11 @@ via `eval/ObjcInterop`'s five entry points (the `LinalgGpu`/`LinalgGpuKernels` s
   `eval/ObjcInteropTest` (the verbs headless, the `data`/`bytes` round trip and the `:error` slot,
   the signal off-Mac); `codegen/jvm/JvmObjcInteropCompilerTest` (the same expectations byte for byte
   compiled, the embedded class list, one file per template); `eval/AppKitLibraryTest` /
-  `eval/MetalLibraryTest`; `SceneOffscreenRenderTest`; `PackageCycleTest`.
+  `eval/MetalLibraryTest`; `SceneOffscreenRenderTest`; `PackageCycleTest`; `--native`:
+  `eval/ObjcNativeLibraryTest` (the verbs defined, the splice), `e2e/NativeObjcE2eTest` (macOS
+  aarch64: the corpus `objc-native-corpus.lisp` against the interpreter, a timer during `sleep`, an
+  exit inside a callback, release on wrapper death, `scene:` pixels), the runner's own
+  `call.rs` / `encoding.rs` unit tests (`build.sh --test`).
 - No test opens a window (CI has no display; the guide uses `console` fences so `DocExamplesTest`
   cannot hang). **Verified by hand: `counter.lisp` on `java -jar` AND the native binary;
   `minesweeper-macos.lisp` and `life-macos.lisp` on all three targets (`java -jar`, native binary,
@@ -269,3 +342,5 @@ via `eval/ObjcInterop`'s five entry points (the `LinalgGpu`/`LinalgGpuKernels` s
 - A variadic selector a PROGRAM declares: served only for the names in `VariadicSelectors`, and
   the runtime offers no way to recognise another.
 - x86_64: `objc_msgSend_stret` (struct returns wider than 16 bytes) has not been exercised.
+- `--native`: `equal` on two wrappers of one object (above); a macos-x86_64 runner has no
+  Objective-C host (`call.rs` is Apple's AArch64 convention, and there is no release stub).

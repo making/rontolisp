@@ -127,6 +127,23 @@ class NativeObjcE2eTest {
 	}
 
 	@Test
+	void aThrowOutOfACallbackIsContainedAsOnTheInterpreter() throws Exception {
+		// The catch is outside the native frame the callback runs under: the interpreter
+		// prints the escaping throw and answers nil, and so does the executable.
+		String source = """
+				(let* ((cls (objc:define-class "NativeE2eNlx" "NSObject"
+				              (list (list "jump:" (lambda (self x) (throw 'out 42))))))
+				       (obj (objc:send (objc:send cls "alloc") "init")))
+				  (print (catch 'out (objc:send obj "performSelector:withObject:" "jump:" nil) :fell-through))
+				  (print :after))
+				""";
+		Run run = nativeOutput(source);
+		assertThat(run.exit()).as("stderr: %s", run.stderr()).isZero();
+		assertThat(run.stdout()).isEqualTo(interpret(source));
+		assertThat(run.stderr()).startsWith("objc: error in a callback: ");
+	}
+
+	@Test
 	void anExitInsideACallbackEndsTheProcessWithItsCode() throws Exception {
 		Run run = nativeOutput("""
 				(let* ((cls (objc:define-class "NativeE2eExit" "NSObject"

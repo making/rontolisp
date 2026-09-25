@@ -164,7 +164,8 @@ runtime-built string, the flat-memory loop).
   `hostResultTypes` settle the host signature, and `am.ik.wasm.WasmImportInjector` resolves the
   same `PLACEHOLDER_FUNC_BASE` encoding. **The accepted TYPE SET is per-backend and follows the
   house integer**, which is why `parse` takes it as an argument: `KNOWN_PARAM_TYPES` here
-  (`:s32`, `:float`, `:bool`, `:string`, `:s-expr`, `:bytes` -- the house integer is `i31ref`),
+  (`:s32`, `:s64`, `:float`, `:bool`, `:string`, `:s-expr`, `:bytes`, `:extern` -- the house
+  integer is `i31ref`; `:s64` crosses through the boxed exact integer, `_int_val` / `_int_new`),
   `SCALAR_PARAM_TYPES` there (every type with a WIT spelling, i.e. the whole fixed-width integer
   family plus `:float`/`:bool`/`:string` -- the house integer is `i64`, and `:s-expr`/`:bytes`
   are heap objects that model has no runtime for). `SCALAR_PARAM_TYPES` is DERIVED from
@@ -175,6 +176,16 @@ runtime-built string, the flat-memory loop).
   `WasmImportCompilerTest.sexprResultExportsTheAllocatorToo`.
 - **Export aliases**: `wasm-export` takes `:as "alias"`; `Decl.exportName()` defaults to the Lisp
   name. Used by the GC backend export section and `NoGcWasmCompiler`.
+
+## `:extern` -- a host reference the module holds (2026-09-25)
+An import-only boundary type (`BoundaryType.EXTERN`; every export parser refuses it, a
+`--component` build too): the host's `externref`, boxed by the wrapper in a one-field
+`(struct (field externref))` appended at `WasmLispCompiler.hostRefTypeIndex()` -- right after the
+extra callable types, so `fixedTypeCount()` grows by one only in a module that names it and every
+other module is byte-identical. A parameter unboxes with `ref.cast` + `struct.get` (nil traps). What
+it is FOR: wasmtime drops an `externref`'s host data when the collector finds it dead, the only
+finalizer a wasm-GC module can have -- `objc-native.lisp` releases an Objective-C object through it
+([objc.md](objc.md), "--native").
 
 ## Directives inside a user `defpackage`
 Unlike ordinary quoted data, the quoted NAME argument of both directives IS package-resolved

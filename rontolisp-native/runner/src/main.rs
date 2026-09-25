@@ -22,7 +22,7 @@ use wasmtime_wasi::p1::{self, WasiP1Ctx};
 use wasmtime_wasi::{FsPerms, I32Exit, WasiCtxBuilder};
 
 /// `128 + SIGABRT`, the status `wasmtime run` exits with after a trap on Unix.
-pub(crate) const TRAP_EXIT: i32 = 134;
+const TRAP_EXIT: i32 = 134;
 
 /// The section a macOS output's module is embedded in (`rlprecomp::macho`): reserved here
 /// with an empty header so that the linker lays out its segment, the last before
@@ -53,7 +53,7 @@ fn run() -> wasmtime::Result<()> {
         let image = read_payload()?;
         // SAFETY: the bytes are what rl_precompile produced for this config; wasmtime checks
         // the header, version and engine settings before using them.
-        unsafe { Module::deserialize(&engine, &*image)? }
+        unsafe { Module::deserialize(&engine, image)? }
     };
 
     let args: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
@@ -62,7 +62,7 @@ fn run() -> wasmtime::Result<()> {
         .inherit_env()
         .args(&args)
         .allow_blocking_current_thread(true);
-    wasi.preopened_dir(".", &cwd_name(), FsPerms::ReadWrite)
+    wasi.preopened_dir(".", cwd_name(), FsPerms::ReadWrite)
         .map_err(|e| e.context("cannot preopen the current directory"))?;
     wasi.preopened_dir("/", "/", FsPerms::ReadWrite)
         .map_err(|e| e.context("cannot preopen /"))?;

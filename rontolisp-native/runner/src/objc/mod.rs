@@ -36,7 +36,6 @@ use wasmtime::{AsContextMut, Caller, Extern, ExternRef, Instance, Linker, Rooted
 use wasmtime_wasi::I32Exit;
 use wasmtime_wasi::p1::WasiP1Ctx;
 
-use crate::TRAP_EXIT;
 
 /// The import module the library's `rontolisp:wasm-import`s name.
 pub const MODULE: &str = "rlobjc";
@@ -93,6 +92,8 @@ fn api() -> Result<&'static Api, String> {
     API.get_or_init(open).as_ref().map_err(Clone::clone)
 }
 
+// Each symbol becomes the function type its header declares, named by the field.
+#[allow(clippy::missing_transmute_annotations)]
 fn open() -> Result<Api, String> {
     // SAFETY: plain C calls; every symbol is checked before it is transmuted to the type
     // its header declares.
@@ -202,12 +203,11 @@ impl Api {
                 Leaf::Float(_) => Arg::Leaf(*l),
             })
             .collect();
-        match self.send(receiver, selector, args)? {
-            (_, leaves) => Ok(match leaves.first() {
-                Some(Leaf::Int(i)) => *i as Id,
-                _ => 0,
-            }),
-        }
+        let (_, leaves) = self.send(receiver, selector, args)?;
+        Ok(match leaves.first() {
+            Some(Leaf::Int(i)) => *i as Id,
+            _ => 0,
+        })
     }
 
     /// The generic send: marshals each argument by the selector's declared type and
@@ -284,11 +284,8 @@ impl Api {
         let ret = encoding.ret.clone();
         if let Some(slot) = slots.first() {
             let error = **slot;
-            let failed = match (ret.kind, leaves.first()) {
-                (_, None) => true,
-                (_, Some(Leaf::Int(0))) => true,
-                _ => false,
-            };
+            // Cocoa's rule: the RESULT says the call failed -- nil, NO, zero or void.
+            let failed = matches!(leaves.first(), None | Some(Leaf::Int(0)));
             if error != 0 && failed {
                 return Err(self.error_text(error, selector));
             }
@@ -328,6 +325,8 @@ impl Api {
         format!("{selector}: {reason}{where}")
     }
 
+    // Each out slot is boxed: its address is handed to the callee while the vector grows.
+    #[allow(clippy::vec_box)]
     fn marshal(
         &self,
         ty: &Type,
@@ -475,6 +474,9 @@ struct Bound {
     ret: Kind,
 }
 
+/// The module's `rlobjc_callback(closure-id, self, arg1, arg2, argc) -> i64`.
+type Callback = TypedFunc<(i32, i64, i64, i64, i32), i64>;
+
 #[derive(Default)]
 struct State {
     args: Vec<Arg>,
@@ -486,7 +488,7 @@ struct State {
     defined: HashMap<String, Id>,
     /// `appkit::%app` asked for `-[NSApplication run]`: `pump` dispatches events.
     app_started: bool,
-    callback: Option<TypedFunc<(i32, i64, i64, i64, i32), i64>>,
+    callback: Option<Callback>,
 }
 
 thread_local! {
@@ -956,13 +958,16 @@ extern "C" fn imp(this: Id, cmd: Id, a: Id, b: Id) -> u64 {
             _ => v as u64,
         },
         Err(e) => {
-            // Never unwind into the native frame above: the module has already printed a
-            // Lisp error it did not handle, so this is an exit or a trap.
+            // Never unwind into the native frame above. A Lisp error was already
+            // handled in the library; what arrives here is an exit, or a non-local exit
+            // to a tag outside the callback (a trap on this backend), which is printed
+            // and contained as ObjcClasses contains any Throwable: the method answers 0.
             if let Some(code) = e.downcast_ref::<I32Exit>() {
                 std::process::exit(code.0);
             }
-            eprintln!("Error: {e:?}");
-            std::process::exit(TRAP_EXIT);
+            let why = e.root_cause().to_string();
+            eprintln!("objc: error in a callback: {}", why.lines().next().unwrap_or(""));
+            0
         }
     }
 }
@@ -985,7 +990,6 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
     fn runtime() -> wasmtime::Result<&'static Api> {
         api().map_err(|e| wasmtime::Error::msg(format!("objc: {e}")))
     }
-    linker.func_wrap(MODULE, "available", || -> i32 { api().is_ok() as i32 })?;
     linker.func_wrap(MODULE, "error", |mut caller: Caller<'_, WasiP1Ctx>| {
         let e = with(|s| std::mem::take(&mut s.error));
         return_string(&mut caller, &e)
