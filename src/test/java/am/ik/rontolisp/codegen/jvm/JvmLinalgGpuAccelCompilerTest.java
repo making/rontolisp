@@ -1,6 +1,7 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -1257,12 +1258,18 @@ class JvmLinalgGpuAccelCompilerTest {
 		assertThat(cpuErr).contains("OutOfMemoryError");
 	}
 
-	/** Runs a compiled class in a child JVM with a 256 MB heap. */
+	/**
+	 * Runs a compiled class in a child JVM with a 256 MB heap. The class path carries the
+	 * compile's travelling class files ({@link TravellingClassFiles}, under
+	 * {@link #tempDir}) behind the class's own directory: a {@code --gpu} class without
+	 * its {@code $GpuBridge} beside it dies in {@code _gpuInit}.
+	 */
 	private Process runInASmallJvm(byte[] classBytes) throws Exception {
 		Path dir = Files.createDirectories(this.tempDir.resolve("small-" + System.nanoTime()));
 		Files.write(dir.resolve("Test.class"), classBytes);
 		String java = ProcessHandle.current().info().command().orElse("java");
-		return new ProcessBuilder(java, "-Xmx256m", "--enable-native-access=ALL-UNNAMED", "-cp", dir.toString(), "Test")
+		String classPath = dir + File.pathSeparator + this.tempDir;
+		return new ProcessBuilder(java, "-Xmx256m", "--enable-native-access=ALL-UNNAMED", "-cp", classPath, "Test")
 			.start();
 	}
 
@@ -1565,7 +1572,10 @@ class JvmLinalgGpuAccelCompilerTest {
 		assertThat(new String(classBytes, StandardCharsets.ISO_8859_1)).contains(bridgeName);
 		assertThat(compiler.runtimeClassFiles()).containsKey(bridgeName + ".class")
 			.containsKey(gpuPrefix + "Gpu.class")
-			.containsKey(gpuPrefix + "Gpu$Probe.class");
+			.containsKey(gpuPrefix + "Gpu$Probe.class")
+			// The downcall registration native-image reads from the output
+			// (ShippedBridgeNativeImageE2eTest runs an image of it on the device).
+			.containsKey("META-INF/native-image/rontolisp-gpu/com.example.Test/reachability-metadata.json");
 
 		Path packageDir = this.tempDir.resolve("com").resolve("example");
 		Files.createDirectories(packageDir);

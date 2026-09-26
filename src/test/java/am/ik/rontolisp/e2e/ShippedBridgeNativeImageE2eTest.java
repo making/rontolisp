@@ -12,9 +12,11 @@ import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import am.ik.gpu.GpuThresholds;
 import am.ik.rontolisp.cli.RontoLispCli;
 import am.ik.rontolisp.eval.FfiInterop;
 import am.ik.rontolisp.eval.LinalgBlas;
+import am.ik.rontolisp.eval.LinalgGpu;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -29,10 +31,11 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * an {@code UnsupportedFeatureError}). The {@code java:} program's reflective calls and
  * the {@code --blas} / {@code ffi:} programs' downcalls are covered by the configuration
  * the tracing agent records from one {@code java -jar} run; the {@code geom:},
- * {@code --simd} and {@code --gpu} programs need no configuration at all, and neither
- * does a {@code java:} program compiled with {@code --java-static}, whose calls are all
- * direct (.kb/java-interop.md, "Direct calls"). {@code objc:} needs macOS and is not
- * covered here.
+ * {@code --simd} and {@code --gpu} programs need no configuration at all ({@code --gpu}
+ * ships its downcall registration inside the jar), and neither does a {@code java:}
+ * program compiled with {@code --java-static}, whose calls are all direct
+ * (.kb/java-interop.md, "Direct calls"). {@code objc:} needs macOS and is not covered
+ * here.
  * <p>
  * Opt-in ({@code -Drontolisp.native-image.e2e=true}), because it runs
  * {@code native-image} (about 20 s a program) from the running JDK, which must be a
@@ -166,9 +169,9 @@ class ShippedBridgeNativeImageE2eTest {
 
 	@Test
 	void aGpuJarRunsAsANativeImageWithNoConfiguration() throws Exception {
-		// The whole renamed am.ik.gpu travels in the jar. A machine without a device
-		// declines every product, so this pins that the image loads the library and
-		// runs; the device path itself is .kb/gpu.md's.
+		// The whole renamed am.ik.gpu travels in the jar, with its downcall registration.
+		// An 8x8 product is below every device threshold, so this pins that the image
+		// loads the library and runs on any machine; the device path is the next test's.
 		Path jar = compileJar("""
 				(defparameter *a* (linalg:reshape (linalg:arange 1 65) '(8 8)))
 				(print (linalg:sum (linalg:matmul *a* *a*)))
@@ -177,6 +180,37 @@ class ShippedBridgeNativeImageE2eTest {
 		List<String> onTheJvm = lines(run(java, "-jar", jar.toString()));
 		assertThat(onTheJvm).hasSize(1);
 		assertThat(lines(run(buildImage(jar)))).isEqualTo(onTheJvm);
+	}
+
+	@Test
+	void aGpuJarTakesTheDevicePathUnderJavaJarAndAsANativeImage() throws Exception {
+		assumeTrue(LinalgGpu.available(), LinalgGpu::description);
+		assumeTrue(GpuThresholds.lazyResultsPay(), "lazy results pay on this device");
+		// The device path, observed from outside the process: every accepted member lands
+		// on the defun's bits, so no printed value tells the device from the fallback.
+		// Memory does. 48 kept 2048x2048 f32 results are 768 MB of host arrays, which a
+		// 256 MB heap cannot hold, while a lazy device result has no host array at all
+		// (.kb/gpu.md, "Lazy results"). The shipped $Gpu* classes must therefore reach
+		// the device in the jar and in the image built from it, and the same program
+		// without --gpu must not fit.
+		int side = 2048;
+		String program = """
+				(defparameter *a* (linalg:reshape (linalg:arange 1 %d :element-type 'single-float) '(%d %d)))
+				(defparameter *row* (linalg:reshape (linalg:arange 1 %d :element-type 'single-float) '(1 %d)))
+				(defparameter *keep* nil)
+				(dotimes (i 48) (setq *keep* (cons (linalg:add *a* *row*) *keep*)))
+				(format t "kept ~a~%%" (length *keep*))
+				(format t "cell ~a ~a~%%" (aref (car *keep*) 7 9) (aref (car (last *keep*)) %d %d))
+				""".formatted(side * side + 1, side, side, side + 1, side, side - 1, side - 1);
+		// a[7][9] = 7*2048+10, row[9] = 10; a[2047][2047] = 2048*2048, row[2047] = 2048.
+		List<String> expected = List.of("kept 48", "cell 14356.0 4196352.0");
+		Path java = Path.of(System.getProperty("java.home"), "bin", "java");
+		Path jar = compileJar(program, "--gpu");
+		assertThat(lines(run(java, "-Xmx256m", "--enable-native-access=ALL-UNNAMED", "-jar", jar.toString())))
+			.isEqualTo(expected);
+		assertThat(lines(run(buildImage(jar), "-Xmx256m"))).isEqualTo(expected);
+		Path cpuJar = compileJar(program);
+		assertThat(runFailing(java, "-Xmx256m", "-jar", cpuJar.toString())).contains("OutOfMemoryError");
 	}
 
 	@Test
@@ -230,6 +264,19 @@ class ShippedBridgeNativeImageE2eTest {
 
 	private String run(Path executable, String... arguments) throws Exception {
 		return run(Map.of(), executable, arguments);
+	}
+
+	/** Runs a command that must exit non-zero and answers its output. */
+	private String runFailing(Path executable, String... arguments) throws Exception {
+		List<String> command = new ArrayList<>();
+		command.add(executable.toString());
+		command.addAll(List.of(arguments));
+		Process process = new ProcessBuilder(command).directory(this.tempDir.toFile())
+			.redirectErrorStream(true)
+			.start();
+		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(process.waitFor()).describedAs("%s should fail:%n%s", command, output).isNotZero();
+		return output;
 	}
 
 	private String run(Map<String, String> environment, Path executable, String... arguments) throws Exception {

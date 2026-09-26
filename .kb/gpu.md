@@ -1403,6 +1403,16 @@ Two build inputs, both in `src/main/resources/META-INF/native-image/am.ik.rontol
   `NativeImageForeignConfigTest` binds both drivers against a lookup that finds everything (no device
   needed) and asserts every shape they ask the linker for has an entry.
 
+**A compiled `--gpu` output carries the same registration.** Its image is built from the user's jar,
+not from rontolisp's, so rontolisp's `META-INF` is not there: `am/ik/gpu/reachability-metadata.json`
+(the CUDA and Metal shapes only, 39 entries) ships as
+`META-INF/native-image/rontolisp-gpu/<program>/reachability-metadata.json` beside the `$Gpu*` classes
+(`JvmGpuRuntimeBuilder.nativeImageMetadataPath`), and `NativeImageForeignConfigTest` pins it EQUAL to
+both drivers' bound shapes. Verified 2026-09-27 on the GB10 under nsys: `-o X.class`, `java -jar` and
+the native image of that jar each launch the same kernels (`gemm_batched_f32_t4`, `map_f32`,
+`copy_f32`) for one 512-square product and a `tanh`. The opt-in `ShippedBridgeNativeImageE2eTest`
+pins the jar and the image by memory, not by a profiler.
+
 Generate them with the tracing agent over a program that opens the binding and runs a member; merely
 constructing a driver registers every shape. **The type names must be the agent's own** (`jlong`,
 `jint`, `jboolean`): the un-prefixed aliases parse, but `boolean` does NOT. **A per-entry `"comment"`

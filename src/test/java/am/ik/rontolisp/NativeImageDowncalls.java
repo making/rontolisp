@@ -164,8 +164,22 @@ public final class NativeImageDowncalls {
 	}
 
 	private static Set<String> registered(String section) {
-		JsonNode downcalls = JsonMapper.builder().build().readTree(read(METADATA)).path("foreign").path(section);
-		assertThat(downcalls.size()).as("foreign.%s entries in %s", section, METADATA).isPositive();
+		return registered(METADATA, section);
+	}
+
+	/**
+	 * Every {@code foreign.downcalls} entry of another metadata file, in this class's own
+	 * spelling -- for a file that must hold exactly a binding's shapes.
+	 * @param metadata the {@code reachability-metadata.json} to read
+	 * @return the entries, spelled as {@link #signature} spells them
+	 */
+	public static Set<String> registeredDowncalls(Path metadata) {
+		return registered(metadata, "downcalls");
+	}
+
+	private static Set<String> registered(Path metadata, String section) {
+		JsonNode downcalls = JsonMapper.builder().build().readTree(read(metadata)).path("foreign").path(section);
+		assertThat(downcalls.size()).as("foreign.%s entries in %s", section, metadata).isPositive();
 		Set<String> registered = new LinkedHashSet<>();
 		for (JsonNode entry : downcalls) {
 			List<String> parameters = new ArrayList<>();
