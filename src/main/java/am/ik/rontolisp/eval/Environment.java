@@ -7251,7 +7251,9 @@ public final class Environment implements Scope {
 
 	// Shared parse-integer logic: trims whitespace, accepts an optional sign, and
 	// accumulates digits in the given radix. With junkAllowed, stops at the first
-	// non-digit and returns nil when no digits were seen; otherwise signals on junk.
+	// non-digit and returns nil when no digits were seen; otherwise signals on junk --
+	// the text a call's expansion signals (LispMacroExpander.expandParseInteger: ~s of
+	// the string), which every compiled backend prints for #'parse-integer too.
 	private static LispVal[] parseInteger(String s, int start, int end, int radix, boolean junkAllowed) {
 		int i = start;
 		while (i < end && Character.isWhitespace(s.charAt(i))) {
@@ -7279,14 +7281,14 @@ public final class Environment implements Scope {
 				i++;
 			}
 			if (i != end) {
-				throw new LispEvalException(LispNames.PARSE_INTEGER + ": junk in string \"" + s + "\"");
+				throw new LispEvalException("parse-integer: junk in string " + new LispString(s).print());
 			}
 		}
 		if (!sawDigit) {
 			if (junkAllowed) {
 				return new LispVal[] { LispNil.INSTANCE, new LispInteger(i) };
 			}
-			throw new LispEvalException(LispNames.PARSE_INTEGER + ": no integer in string \"" + s + "\"");
+			throw new LispEvalException("parse-integer: no integer in string " + new LispString(s).print());
 		}
 		return new LispVal[] { normalizeBig(acc.multiply(java.math.BigInteger.valueOf(sign))), new LispInteger(i) };
 	}
