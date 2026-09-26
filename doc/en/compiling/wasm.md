@@ -331,9 +331,10 @@ byte-for-byte what `--optimize=default` produces.
 
 ### Uncaught Condition Locations (`--report-locations`)
 
-When nothing catches a condition, the interpreter prints where it happened under
-the `Unhandled condition:` line ([`error`](../reference/macros/error.md)). A
-wasm-GC module prints the same lines when compiled with `--report-locations`:
+When nothing catches a condition, the interpreter and a compiled JVM program print
+where it happened under the `Unhandled condition:` line
+([`error`](../reference/macros/error.md)). A wasm-GC module prints the same lines
+when compiled with `--report-locations`:
 
 ```console
 $ rontolisp app.lisp -o app.wasm --report-locations=line

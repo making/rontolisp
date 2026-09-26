@@ -26,6 +26,7 @@ import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.MutableStringProducers;
 import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.rontolisp.compiler.StreamDesignators;
+import am.ik.rontolisp.compiler.UncaughtReport;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
@@ -119,7 +120,14 @@ final class JvmExprCompiler {
 		// (.kb/jvm-double-arithmetic.md). The recursion covers let* (nested lets).
 		if (expr instanceof LispCons cons && cons.isProperList() && cons.car() instanceof LispSymbol head
 				&& LispNames.LET.equals(head.name()) && cons.toList().size() > 2) {
-			JvmLetCompiler.compileForEffect(cons, ctx, className);
+			// Past compileCons, so the form's site is entered here.
+			int site = ctx.enterSite(cons);
+			try {
+				JvmLetCompiler.compileForEffect(cons, ctx, className);
+			}
+			finally {
+				ctx.leaveSite(site);
+			}
 			return;
 		}
 		compileExpr(expr, ctx, className);
@@ -132,8 +140,37 @@ final class JvmExprCompiler {
 	 * ({@link JvmBodyOutliner}) can take it before falling back to "value, then pop".
 	 */
 	static boolean compileStatementSetq(LispVal expr, JvmLispCompiler.Ctx ctx, String className) {
-		return expr instanceof LispCons cons && cons.car() instanceof LispSymbol head
-				&& LispNames.SETQ.equals(head.name()) && JvmSetqCompiler.compileForEffect(cons, ctx, className);
+		if (!(expr instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.SETQ.equals(head.name()))) {
+			return false;
+		}
+		// Past compileCons, so the form's site is entered here.
+		int site = ctx.enterSite(cons);
+		try {
+			return JvmSetqCompiler.compileForEffect(cons, ctx, className);
+		}
+		finally {
+			ctx.leaveSite(site);
+		}
+	}
+
+	/**
+	 * Compiles an {@code if}/{@code while} test through the fused-comparison path
+	 * ({@link JvmIntFusionCompiler#tryCompileCondition}), which emits the test form
+	 * without passing through {@link #compileCons}: the form's site is entered here.
+	 * @param test the test form
+	 * @param ctx the compilation context
+	 * @param className the class being generated
+	 * @return whether the test compiled as a raw truth value
+	 */
+	static boolean tryCompileFusedCondition(LispVal test, JvmLispCompiler.Ctx ctx, String className) {
+		int site = test instanceof LispCons cons ? ctx.enterSite(cons) : -1;
+		try {
+			return JvmIntFusionCompiler.tryCompileCondition(test, ctx, className);
+		}
+		finally {
+			ctx.leaveSite(site);
+		}
 	}
 
 	static void compileExpr(LispVal expr, JvmLispCompiler.Ctx ctx, String className) {
@@ -320,6 +357,9 @@ final class JvmExprCompiler {
 		// form through that form's.
 		@Nullable String outerOperator = ctx.operator;
 		ctx.operator = cons.car() instanceof LispSymbol head ? head.name() : null;
+		// The code this form compiles to reports the form's site when it fails
+		// (JvmSourceSites): the innermost located form wins, as in the interpreter.
+		int site = ctx.enterSite(cons);
 		try {
 			compileConsLocated(cons, ctx, className);
 		}
@@ -330,7 +370,23 @@ final class JvmExprCompiler {
 		}
 		finally {
 			ctx.operator = outerOperator;
+			ctx.leaveSite(site);
 		}
+	}
+
+	/**
+	 * A non-top-level {@code defun}: the {@code (setq name (lambda ...))} it lowers to,
+	 * with the lambda keeping the name for the uncaught report -- the interpreter
+	 * installs a nested defun as a named function, and an anonymous lambda would hand its
+	 * failures to whatever function called it.
+	 */
+	private static void compileNestedDefun(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		LispVal lowered = LispMacroExpander.expandDefun(cons);
+		UncaughtReport.NestedDefun nested = UncaughtReport.nestedDefun(lowered);
+		if (nested != null) {
+			ctx.lambdaReportNames.put(nested.lambda(), nested.name());
+		}
+		compileExpr(lowered, ctx, className);
 	}
 
 	private static void compileConsLocated(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
@@ -1375,7 +1431,7 @@ final class JvmExprCompiler {
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, true), ctx, className);
 			case LispNames.SETQ -> JvmSetqCompiler.compile(cons, ctx, className);
 			case LispNames.LAMBDA -> JvmLambdaCompiler.compileValue(cons, ctx, className);
-			case LispNames.DEFUN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDefun(cons), ctx, className);
+			case LispNames.DEFUN -> compileNestedDefun(cons, ctx, className);
 			case LispNames.DEFSTRUCT ->
 				// Top-level defstructs are spliced into defuns before Pass 1; one
 				// reaching this compiler is nested inside another form.

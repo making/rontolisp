@@ -130,6 +130,70 @@ class WasmReportLocationsTest {
 
 	@Test
 	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aMethodAndALocalFunctionInItReportAsTheInterpreterDoes() throws Exception {
+		// The method body is a function the lowering names %AREA--m0, reported as its
+		// generic; the labels function inside it reports its own line, not the labels
+		// form's, on both.
+		Path program = write("shapes.lisp", """
+				(defgeneric area (s))
+				(defmethod area ((s list))
+				  (labels ((walk (xs acc)
+				             (if (null xs)
+				                 (error "no area for ~a" acc)
+				                 (walk (cdr xs) (+ acc (car xs))))))
+				    (walk s 0)))
+
+				(print (ignore-errors (area '(1))))
+				(area '(1 2))
+				""");
+		List<String> expected = List.of("Unhandled condition: no area for 3", "  at " + program + ":5 in AREA");
+		assertThat(interpreterReport(program)).isEqualTo(expected);
+		assertThat(wasmReport(program, "--report-locations=line")).isEqualTo(expected);
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aLambdaNamesTheFunctionItIsWrittenInThoughATailCallLeftItsCaller() throws Exception {
+		// RUN-CALLBACK's tail call through a function value is a return_call, so its
+		// frame is gone when the lambda signals: the lambda's own frame names MAIN, where
+		// it is written -- the interpreter's answer, which no caller decides.
+		Path program = write("callback.lisp", """
+				(defun run-callback (cb)
+				  (funcall cb))
+
+				(defun main ()
+				  (run-callback (lambda ()
+				                  (error "callback failed")))
+				  :done)
+
+				(print (ignore-errors (error "caught")))
+				(main)
+				""");
+		List<String> expected = List.of("Unhandled condition: callback failed", "  at " + program + ":6 in MAIN");
+		assertThat(interpreterReport(program)).isEqualTo(expected);
+		assertThat(wasmReport(program, "--report-locations=line")).isEqualTo(expected);
+		assertThat(wasmReport(program, "--report-locations=line", "--component")).isEqualTo(expected);
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aNestedDefunIsANamedFunction() throws Exception {
+		Path program = write("nested.lisp", """
+				(defun make-it ()
+				  (defun made (x)
+				    (error "made ~a" x)))
+
+				(print (ignore-errors (error "caught")))
+				(make-it)
+				(made 3)
+				""");
+		List<String> expected = List.of("Unhandled condition: made 3", "  at " + program + ":3 in MADE");
+		assertThat(interpreterReport(program)).isEqualTo(expected);
+		assertThat(wasmReport(program, "--report-locations=line")).isEqualTo(expected);
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
 	void aConditionAHandlerCaughtLeavesNothingALaterOneCouldMisreport() throws Exception {
 		// The frames note the first condition on its way to the handler-case; the second
 		// escapes from the top level, in no function, and must say only that.

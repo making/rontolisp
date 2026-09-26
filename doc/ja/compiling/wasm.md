@@ -149,7 +149,7 @@ wasm-GC のコード生成には、速度と引き換えにバイト数を費や
 
 ### 捕捉されなかったコンディションの発生場所(`--report-locations`)
 
-コンディションを誰も捕捉しなかったとき、インタプリタは `Unhandled condition:` の行の下に発生場所を出力します([`error`](../reference/macros/error.md))。wasm-GC モジュールは `--report-locations` を付けてコンパイルすると同じ行を出力します:
+コンディションを誰も捕捉しなかったとき、インタプリタとコンパイル済みの JVM プログラムは `Unhandled condition:` の行の下に発生場所を出力します([`error`](../reference/macros/error.md))。wasm-GC モジュールは `--report-locations` を付けてコンパイルすると同じ行を出力します:
 
 ```console
 $ rontolisp app.lisp -o app.wasm --report-locations=line

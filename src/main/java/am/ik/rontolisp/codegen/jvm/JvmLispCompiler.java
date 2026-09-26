@@ -35,6 +35,7 @@ import am.ik.rontolisp.macro.SignalMessages;
 import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
+import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
 import am.ik.rontolisp.compiler.ConcatenateForms;
@@ -2301,6 +2302,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		for (DefunDecl defun : defuns) {
 			Ctx funcCtx = ctxBuilder.build();
 			funcCtx.evalStoreRef = evalStoreRef;
+			funcCtx.openFunction(JvmSourceSites.reportedName(defun.name), null, defun.bodyExprs);
 			funcCtx.nextLocal = defun.paramNames.size();
 			funcCtx.maxLocals = defun.paramNames.size();
 			for (int i = 0; i < defun.paramNames.size(); i++) {
@@ -2512,8 +2514,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// every handler main already carries dispatches first. In _top$run the same
 		// report-and-rethrow surfaces to a Java caller as ExceptionInInitializerError
 		// (which also poisons the class permanently) — the reactor's failure shape,
-		// stated in the docs rather than designed around.
-		JvmUncaughtHandler.append(entryCtx);
+		// stated in the docs rather than designed around. Appended once the lambdas are
+		// compiled too: only then is it known whether anything was located to report.
+		JvmUncaughtHandler.Prepared uncaughtHandler = JvmUncaughtHandler.prepare(entryCtx);
 		if (topLevelInClinit) {
 			// main (when kept) has nothing left to do: invoking it already triggered
 			// <clinit>, which ran the top level.
@@ -2539,6 +2542,9 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Ctx lambdaCtx = ctxBuilder.build();
 			lambdaCtx.evalStoreRef = evalStoreRef;
+			lambdaCtx.openFunction(
+					lambda.reportName() == null ? null : JvmSourceSites.reportedName(lambda.reportName()),
+					lambda.writtenIn(), lambda.bodyExprs());
 			lambdaCtx.closureEnvSlot = 0; // slot 0 = env Object[]
 			// Lambda params start at slot 1
 			for (int i = 0; i < lambda.paramNames.size(); i++) {
@@ -2591,6 +2597,29 @@ public final class JvmLispCompiler implements LispCompiler {
 			lambdaCtxs.add(lambdaCtx);
 			lambdaIdx++;
 		}
+
+		// The uncaught report's location lines (JvmUncaughtHandler): every body that can
+		// hold a located form has been compiled, so the site table is complete. A class
+		// with nothing located gets neither the lines nor the async-boundary records.
+		final JvmSourceSites sourceSites = mainCtx.sites != null && !mainCtx.sites.isEmpty() ? mainCtx.sites : null;
+		final @Nullable MethodrefConstant whereRef = sourceSites == null ? null : cp.addMethodref(thisClass, cp
+			.addNameAndType(cp.addUtf8(JvmUncaughtHandler.WHERE_METHOD), cp.addUtf8(JvmUncaughtHandler.WHERE_DESC)));
+		@Nullable MethodrefConstant asyncCrossRef = null;
+		if (sourceSites != null) {
+			for (int i = 0; i < lambdaDecls.size(); i++) {
+				String head = lambdaDecls.get(i).asyncHead();
+				if (head != null) {
+					if (asyncCrossRef == null) {
+						asyncCrossRef = cp.addMethodref(thisClass,
+								cp.addNameAndType(cp.addUtf8(JvmUncaughtHandler.ASYNC_CROSS_METHOD),
+										cp.addUtf8(JvmUncaughtHandler.ASYNC_CROSS_DESC)));
+					}
+					JvmUncaughtHandler.appendAsyncCrossing(lambdaCtxs.get(i), head, asyncCrossRef);
+				}
+			}
+		}
+		final boolean recordsAsyncBoundaries = asyncCrossRef != null;
+		uncaughtHandler.append(whereRef);
 
 		// Pass 2d: emit the outlined fused-site method bodies (JvmIntFusionCompiler).
 		// After every program body, because Pass 2 is what registers the sites; before
@@ -3320,7 +3349,11 @@ public final class JvmLispCompiler implements LispCompiler {
 					cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
 			asyncRuntimeBodies = JvmAsyncRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, stringClass,
 					mainCtx.conditionChannel, progInitForAsync, longValueOf, stringLength, stringSubstring,
-					stringConcat, sizedMain != null ? sizedMain.runRef() : null, mainCtx.mvChannel);
+					stringConcat, sizedMain != null ? sizedMain.runRef() : null, mainCtx.mvChannel,
+					recordsAsyncBoundaries ? cp.addMethodref(thisClass,
+							cp.addNameAndType(cp.addUtf8(JvmUncaughtHandler.ASYNC_AWAITED_METHOD),
+									cp.addUtf8(JvmUncaughtHandler.ASYNC_AWAITED_DESC)))
+							: null);
 			runnableClass = cp.addClass(cp.addUtf8("java/lang/Runnable"));
 		}
 		else {
@@ -3523,27 +3556,26 @@ public final class JvmLispCompiler implements LispCompiler {
 		// (fast-http's generated parse-header-field-and-value state machine is the
 		// real-world trigger). A method with no deferred branch is untouched, byte for
 		// byte. The runtime-builder methods never defer: their raw-list patchBranch
-		// still throws, and they stay under budget by construction.
-		am.ik.jvm.BranchRelaxer.relax(mainCtx.code, mainCtx.deferredBranches, mainCtx.exceptionTable);
+		// still throws, and they stay under budget by construction. A body's line
+		// numbers move with its instructions.
+		mainCtx.relax();
 		if (topRunnerCtx != null) {
-			am.ik.jvm.BranchRelaxer.relax(topRunnerCtx.code, topRunnerCtx.deferredBranches,
-					topRunnerCtx.exceptionTable);
+			topRunnerCtx.relax();
 		}
 		for (Ctx chunk : topChunks) {
-			am.ik.jvm.BranchRelaxer.relax(chunk.code, chunk.deferredBranches, chunk.exceptionTable);
+			chunk.relax();
 		}
 		for (Ctx funcCtx : funcCtxs) {
-			am.ik.jvm.BranchRelaxer.relax(funcCtx.code, funcCtx.deferredBranches, funcCtx.exceptionTable);
+			funcCtx.relax();
 		}
 		for (Ctx lambdaCtx : lambdaCtxs) {
-			am.ik.jvm.BranchRelaxer.relax(lambdaCtx.code, lambdaCtx.deferredBranches, lambdaCtx.exceptionTable);
+			lambdaCtx.relax();
 		}
 		for (Ctx fusedCtx : fusedCtxs) {
-			am.ik.jvm.BranchRelaxer.relax(fusedCtx.code, fusedCtx.deferredBranches, fusedCtx.exceptionTable);
+			fusedCtx.relax();
 		}
 		for (JvmBodyOutliner.OutlinedBody outlined : mainCtx.outlinedBodies) {
-			am.ik.jvm.BranchRelaxer.relax(outlined.ctx().code, outlined.ctx().deferredBranches,
-					outlined.ctx().exceptionTable);
+			outlined.ctx().relax();
 		}
 		// The fusion helpers, built HERE (before assembly) because their bodies mint
 		// constant-pool entries: _ubRead whenever a raw local exists, _fxAsh whenever a
@@ -3829,13 +3861,14 @@ public final class JvmLispCompiler implements LispCompiler {
 					sizedMain != null ? AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC
 							: AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC,
 					sizedMain != null ? sizedMain.bodyName() : mainUtf8, mainDesc, mainCtx.maxStack(),
-					mainCtx.maxLocals, mainCtx.code, mainCtx.exceptionTable);
+					mainCtx.maxLocals, mainCtx.code, mainCtx.exceptionTable, mainCtx.lines());
 		}
 		if (topRunnerCtxFinal != null) {
 			// _top$run: the top-level body <clinit> runs (see mainCtx above).
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
 					java.util.Objects.requireNonNull(topRunnerName), topChunkDesc, topRunnerCtxFinal.maxStack(),
-					topRunnerCtxFinal.maxLocals, topRunnerCtxFinal.code, topRunnerCtxFinal.exceptionTable);
+					topRunnerCtxFinal.maxLocals, topRunnerCtxFinal.code, topRunnerCtxFinal.exceptionTable,
+					topRunnerCtxFinal.lines());
 		}
 		for (JvmExportRuntimeBuilder.BuiltMethod em : exportMethods) {
 			definition.addMethod(
@@ -3847,19 +3880,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		for (int i = 0; i < topChunks.size(); i++) {
 			final Ctx chunk = topChunks.get(i);
 			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, topChunkNames.get(i), topChunkDesc,
-					chunk.maxStack(), chunk.maxLocals, chunk.code, chunk.exceptionTable);
+					chunk.maxStack(), chunk.maxLocals, chunk.code, chunk.exceptionTable, chunk.lines());
 		}
 		for (int i = 0; i < defuns.size(); i++) {
 			FunctionInfo fi = java.util.Objects.requireNonNull(functions.get(defuns.get(i).name));
 			final Ctx funcCtx = funcCtxs.get(i);
 			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, fi.nameUtf8, fi.descUtf8,
-					funcCtx.maxStack(), funcCtx.maxLocals, funcCtx.code, funcCtx.exceptionTable);
+					funcCtx.maxStack(), funcCtx.maxLocals, funcCtx.code, funcCtx.exceptionTable, funcCtx.lines());
 		}
 		for (int i = 0; i < lambdaCtxs.size(); i++) {
 			FunctionInfo fi = lambdaFuncInfos.get(i);
 			final Ctx lambdaCtx = lambdaCtxs.get(i);
 			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, fi.nameUtf8, fi.descUtf8,
-					lambdaCtx.maxStack(), lambdaCtx.maxLocals, lambdaCtx.code, lambdaCtx.exceptionTable);
+					lambdaCtx.maxStack(), lambdaCtx.maxLocals, lambdaCtx.code, lambdaCtx.exceptionTable,
+					lambdaCtx.lines());
 		}
 		for (DispatchMethod dm : dispatchMethods) {
 			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, dm.nameUtf8, dm.descUtf8, 64,
@@ -4326,7 +4360,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			final Ctx fusedCtx = fusedCtxs.get(i);
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, pendingFused.nameUtf8(),
 					pendingFused.descUtf8(), fusedCtx.maxStack(), fusedCtx.maxLocals, fusedCtx.code,
-					fusedCtx.exceptionTable);
+					fusedCtx.exceptionTable, fusedCtx.lines());
 		}
 		// The outlined tail continuations of a body that would have compiled
 		// past HotSpot's HugeMethodLimit (JvmBodyOutliner); empty for every
@@ -4335,7 +4369,23 @@ public final class JvmLispCompiler implements LispCompiler {
 			final Ctx outlinedCtx = outlined.ctx();
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, outlined.nameUtf8(),
 					outlined.descUtf8(), outlinedCtx.maxStack(), outlinedCtx.maxLocals, outlinedCtx.code,
-					outlinedCtx.exceptionTable);
+					outlinedCtx.exceptionTable, outlinedCtx.lines());
+		}
+		// The uncaught report's location lines and the async-boundary records their
+		// hops are read from (JvmUncaughtHandler): only in a class something was
+		// located in.
+		if (sourceSites != null) {
+			definition.lineNumberTableName(cp.addUtf8("LineNumberTable"));
+			List<JvmUncaughtHandler.Built> reportMethods = new ArrayList<>();
+			reportMethods.add(JvmUncaughtHandler.buildWhere(cp, this.className, sourceSites, mainCtx.printlnStr));
+			if (recordsAsyncBoundaries) {
+				reportMethods.add(JvmUncaughtHandler.buildAsyncCross(cp));
+				reportMethods.add(JvmUncaughtHandler.buildAsyncAwaited(cp));
+			}
+			for (JvmUncaughtHandler.Built built : reportMethods) {
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, built.name(), built.desc(),
+						built.maxStack(), built.maxLocals(), built.code(), built.exceptionTable());
+			}
 		}
 		for (JvmNumericRuntimeBuilder.NumericMethod nm : fusedHelperMethods) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, nm.nameUtf8(), nm.descUtf8(),
@@ -5280,8 +5330,32 @@ public final class JvmLispCompiler implements LispCompiler {
 			Utf8Constant nameUtf8, Utf8Constant descUtf8) {
 	}
 
+	/**
+	 * A lambda awaiting Pass 2c.
+	 * @param funcId its function id
+	 * @param methodName its method's name
+	 * @param paramNames its parameters
+	 * @param variadic whether the last parameter takes the rest
+	 * @param bodyExprs its body forms
+	 * @param freeVarNames the variables it captures, in environment order
+	 * @param reportName the name the uncaught report calls it by -- a non-top-level
+	 * defun's, which the interpreter installs as a named function -- or {@code null} for
+	 * an anonymous one
+	 * @param asyncHead the report head of the async body this lambda is the
+	 * {@code %async-run} thunk of ({@link JvmUncaughtHandler#appendAsyncCrossing}), or
+	 * {@code null}
+	 */
+	/**
+	 * A lambda Pass 2c compiles into a method of its own.
+	 *
+	 * @param reportName the name a non-top-level defun installs it under, or {@code null}
+	 * @param asyncHead the report head of an {@code %async-run} thunk, or {@code null}
+	 * @param writtenIn the name the report calls the program function its code is written
+	 * in, or {@code null} for none (the top level, an async body)
+	 */
 	record LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs,
-			List<String> freeVarNames) {
+			List<String> freeVarNames, @Nullable String reportName, @Nullable String asyncHead,
+			@Nullable String writtenIn) {
 	}
 
 	record DispatchMethod(Utf8Constant nameUtf8, Utf8Constant descUtf8, List<Integer> code, int maxLocals) {
@@ -6646,6 +6720,59 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<int[]> deferredBranches = new ArrayList<>();
 
 		/**
+		 * The compilation's source-site table, shared by every context like
+		 * {@link #lambdaDecls}; {@code null} when the compile records no source positions
+		 * (an embedder calling {@link JvmLispCompiler#compile} on forms it built), which
+		 * leaves every method without line numbers.
+		 */
+		final @Nullable JvmSourceSites sites;
+
+		/**
+		 * The name of the function this method compiles, or {@code null} for the top
+		 * level and an anonymous function: what an async body's report head names
+		 * ({@link JvmUncaughtHandler#appendAsyncCrossing}).
+		 */
+		@Nullable String functionName;
+
+		/**
+		 * The name the report calls the program function this method's code is written in
+		 * -- its own for a function, the one around it for a lambda -- or {@code null}
+		 * for none (the top level, an async body): the owner of its sites, and what a
+		 * lambda it builds is written in ({@link LambdaInfo#writtenIn}).
+		 */
+		@Nullable String writtenIn;
+
+		/**
+		 * The report names of lambda forms a non-top-level defun lowered to, by identity;
+		 * shared per compilation ({@link LambdaInfo#reportName}).
+		 */
+		final Map<LispCons, String> lambdaReportNames;
+
+		/**
+		 * The report heads of {@code %async-run} thunk forms, by identity; shared per
+		 * compilation ({@link LambdaInfo#asyncHead}).
+		 */
+		final Map<LispCons, String> asyncBodyHeads;
+
+		/** The owner code ({@link JvmSourceSites#owner}) of {@link #writtenIn}. */
+		int siteOwner;
+
+		/**
+		 * The site of the innermost located form being emitted, else 0.
+		 */
+		int siteCurrent;
+
+		/**
+		 * The {@code {pc, site}} marks emission left, in pc order: where the innermost
+		 * located form changes. {@link #lineNumbers} turns them into the method's
+		 * {@code LineNumberTable}.
+		 */
+		private final List<int[]> siteMarks = new ArrayList<>();
+
+		/** The line numbers {@link #relax} moved along with the code, once it has run. */
+		private @Nullable List<ByteCodeWriter.LineNumberEntry> relaxedLines;
+
+		/**
 		 * The compilation-wide condition-channel state (the {@code _condTl} ThreadLocal
 		 * field constants); one instance shared across every context of a compilation
 		 * through the single builder, like {@link #nextFuncId}.
@@ -6808,6 +6935,140 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.mathOps = builder.mathOps;
 			this.systemOps = builder.systemOps;
 			this.operandTypeWrappers = builder.operandTypeWrappers;
+			this.sites = builder.sites;
+			this.lambdaReportNames = builder.lambdaReportNames;
+			this.asyncBodyHeads = builder.asyncBodyHeads;
+		}
+
+		/**
+		 * Opens the method of a function or a lambda: its name for an async body's report
+		 * head, and the program function its code is written in, which owns its sites.
+		 * @param name the name the report calls the function by, or {@code null} for an
+		 * anonymous function
+		 * @param around for an anonymous function, the name of the function it is written
+		 * in ({@link #writtenIn}), else ignored
+		 * @param body its body forms
+		 */
+		void openFunction(@Nullable String name, @Nullable String around, List<LispVal> body) {
+			this.functionName = name;
+			this.writtenIn = name != null ? name : around;
+			JvmSourceSites table = this.sites;
+			String owner = this.writtenIn;
+			// Only a body that holds a located form has a site to own.
+			if (table != null && owner != null && JvmSourceSites.sourced(body)) {
+				this.siteOwner = table.owner(owner);
+			}
+		}
+
+		/**
+		 * Opens a continuation's sites ({@link JvmBodyOutliner}): the method it was split
+		 * from continues here, so the function and the innermost located form open at the
+		 * split carry over.
+		 * @param from the method the continuation was split from
+		 */
+		void continueFunction(Ctx from) {
+			this.functionName = from.functionName;
+			this.writtenIn = from.writtenIn;
+			this.siteOwner = from.siteOwner;
+			this.siteCurrent = from.siteCurrent;
+			if (this.siteCurrent != 0) {
+				this.siteMarks.add(new int[] { this.code.size(), this.siteCurrent });
+			}
+		}
+
+		/**
+		 * Enters a form: from here until the matching {@link #leaveSite}, emitted code
+		 * belongs to the form when it has a position in a named file.
+		 * @param form the form about to be compiled
+		 * @return what {@link #leaveSite} restores, or -1 when the form has no site (the
+		 * enclosing one keeps the code)
+		 */
+		int enterSite(LispCons form) {
+			JvmSourceSites table = this.sites;
+			if (table == null) {
+				return -1;
+			}
+			int site = table.site(form, this.siteOwner);
+			if (site == 0) {
+				return -1;
+			}
+			int saved = this.siteCurrent;
+			this.siteCurrent = site;
+			this.siteMarks.add(new int[] { this.code.size(), site });
+			return saved;
+		}
+
+		/**
+		 * Leaves a form entered by {@link #enterSite}: the code emitted next belongs to
+		 * the site that was current before it.
+		 * @param saved what {@link #enterSite} answered
+		 */
+		void leaveSite(int saved) {
+			if (saved < 0) {
+				return;
+			}
+			this.siteCurrent = saved;
+			this.siteMarks.add(new int[] { this.code.size(), saved });
+		}
+
+		/**
+		 * Makes the code emitted next belong to {@code site}: a tail-spine item's
+		 * ({@link JvmBodyOutliner}), queued by a construct whose own compilation -- and
+		 * whose {@link #leaveSite} -- is over by the time the item is emitted.
+		 * @param site the site current where the item was queued
+		 */
+		void restoreSite(int site) {
+			if (site != this.siteCurrent) {
+				this.siteCurrent = site;
+				this.siteMarks.add(new int[] { this.code.size(), site });
+			}
+		}
+
+		/**
+		 * Relaxes this method's out-of-range branches ({@link am.ik.jvm.BranchRelaxer})
+		 * with its line numbers moving along, which {@link #lines} then answers. Call
+		 * once, when the body is complete.
+		 */
+		void relax() {
+			List<ByteCodeWriter.LineNumberEntry> lines = this.lineNumbers();
+			am.ik.jvm.BranchRelaxer.relax(this.code, this.deferredBranches, this.exceptionTable, lines);
+			this.relaxedLines = lines;
+		}
+
+		/**
+		 * This method's finished {@code LineNumberTable}: the one {@link #relax} moved
+		 * along with the code, else the marks as they stand.
+		 * @return the entries, in pc order; empty when the method has no site
+		 */
+		List<ByteCodeWriter.LineNumberEntry> lines() {
+			List<ByteCodeWriter.LineNumberEntry> relaxed = this.relaxedLines;
+			return relaxed != null ? relaxed : this.lineNumbers();
+		}
+
+		/**
+		 * This method's {@code LineNumberTable}: one entry wherever the site changes, the
+		 * last mark winning where several fall on one instruction, nothing before the
+		 * first site (an instruction before every entry reports no line at all). The
+		 * number is a site id ({@link JvmSourceSites}); 0 marks code outside any site.
+		 * @return the entries, in pc order; empty when the method has no site
+		 */
+		private List<ByteCodeWriter.LineNumberEntry> lineNumbers() {
+			List<ByteCodeWriter.LineNumberEntry> entries = new ArrayList<>();
+			int end = this.code.size();
+			for (int[] mark : this.siteMarks) {
+				int pc = mark[0];
+				if (pc >= end) {
+					break;
+				}
+				if (!entries.isEmpty() && entries.getLast().startPc() == pc) {
+					entries.removeLast();
+				}
+				int previous = entries.isEmpty() ? 0 : entries.getLast().lineNumber();
+				if (mark[1] != previous) {
+					entries.add(new ByteCodeWriter.LineNumberEntry(pc, mark[1]));
+				}
+			}
+			return entries;
 		}
 
 		static Builder builder() {
@@ -6839,6 +7100,26 @@ public final class JvmLispCompiler implements LispCompiler {
 			 * from the same builder shares it.
 			 */
 			private final QuotePool quotePool = new QuotePool();
+
+			/**
+			 * One source-site table per builder (= per compilation), or none when the
+			 * compile records no source positions: every context built from the same
+			 * builder shares it.
+			 */
+			private final @Nullable JvmSourceSites sites = SourceProvenance.isRecording() ? new JvmSourceSites() : null;
+
+			/**
+			 * The report names of the lambda FORMS a non-top-level defun lowered to, by
+			 * identity, shared per compilation: set where the defun is compiled, read by
+			 * {@link JvmLambdaCompiler} when it registers the lambda.
+			 */
+			private final Map<LispCons, String> lambdaReportNames = new java.util.IdentityHashMap<>();
+
+			/**
+			 * The report heads of the {@code %async-run} thunk FORMS, by identity, shared
+			 * per compilation like {@link #lambdaReportNames}.
+			 */
+			private final Map<LispCons, String> asyncBodyHeads = new java.util.IdentityHashMap<>();
 
 			private @Nullable ConstantPool cp;
 

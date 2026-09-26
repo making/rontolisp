@@ -47,9 +47,11 @@ import org.jspecify.annotations.Nullable;
  * describes): a condition a {@code handler-case} caught leaves nothing a later one could
  * misreport, and a rethrow -- an unmatched clause, an {@code await} re-signalling a
  * rejected future -- keeps what the frames below it noted. The rules are the
- * interpreter's: the innermost frame with a known line gives the location, the innermost
- * NAMED frame at or outside it the function; an async body the condition escapes closes
- * that and opens a hop, whose await site is the next frame with a known line.
+ * interpreter's: the innermost frame with a known line gives the location, and its name
+ * the function that code is written in (a lambda's frame is named after the function
+ * around it, so no tail call can take the answer away); an async body the condition
+ * escapes closes that and opens a hop, whose await site is the next frame with a known
+ * line.
  *
  * <p>
  * <b>Texts ride with their frame.</b> A frame's name (and an async body's hop text) is a
@@ -131,8 +133,9 @@ final class WasmUncaughtLocations {
 
 	/**
 	 * What a frame notes: its file id (0: the file rides in a local, a top level), the
-	 * line its definition starts on, its name ({@code null}: anonymous), and -- for an
-	 * async body -- the hop line's text ({@code null}: not an async body).
+	 * line its definition starts on, the function its code is written in ({@code null}:
+	 * none), and -- for an async body -- the hop line's text ({@code null}: not an async
+	 * body).
 	 */
 	record Spec(int fileId, int baseLine, @Nullable String name, @Nullable String hop) {
 
@@ -194,6 +197,18 @@ final class WasmUncaughtLocations {
 
 		/** Each registered lambda's spec, by funcId, for Pass 2c. */
 		final Map<Integer, Spec> lambdaSpecs = new HashMap<>();
+
+		/**
+		 * The function each registered lambda's code is written in, by funcId, for Pass
+		 * 2c's {@code Ctx.ucWrittenIn}: what the lambdas IT builds are written in.
+		 */
+		final Map<Integer, String> lambdaWrittenIn = new HashMap<>();
+
+		/**
+		 * The lambdas nested {@code defun}s install, with their names
+		 * ({@link #nestedDefun}).
+		 */
+		final Map<LispVal, String> nestedDefunNames = new IdentityHashMap<>();
 
 		/** The defuns that are frames ({@link #tailCallOp}). */
 		final Set<String> framedFunctions = new HashSet<>();
@@ -390,8 +405,8 @@ final class WasmUncaughtLocations {
 				w.write(Instruction.REF_IS_NULL);
 				w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 			}
-			// Segment 0: the first frame with a line is the location, the first named
-			// frame from there on the function.
+			// Segment 0: the first frame with a line is the location, and its name the
+			// function the code is written in.
 			getGlobal(w, this.fileGlobal);
 			w.write(Instruction.REF_IS_NULL);
 			w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
@@ -400,13 +415,6 @@ final class WasmUncaughtLocations {
 			setGlobal(w, this.fileGlobal);
 			get(w, NOTE_LINE);
 			setGlobal(w, this.lineGlobal);
-			get(w, NOTE_NAME);
-			setGlobal(w, this.nameGlobal);
-			w.write(Instruction.END);
-			w.write(Instruction.ELSE);
-			getGlobal(w, this.nameGlobal);
-			w.write(Instruction.REF_IS_NULL);
-			w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 			get(w, NOTE_NAME);
 			setGlobal(w, this.nameGlobal);
 			w.write(Instruction.END);
@@ -521,9 +529,11 @@ final class WasmUncaughtLocations {
 	 * frame: a condition passing through it is noted by the frames around it, as the
 	 * interpreter's frames without a located form note nothing. The file is that of the
 	 * body's located code; the definition line the defining form's when it was read from
-	 * the same file, else the body's first located line.
+	 * the same file, else the body's first located line. The name is the one the program
+	 * spelled ({@link UncaughtReport#functionName}: a method body reports its generic).
 	 * @param module the module state, or {@code null} when the option is off
-	 * @param name the function's name, or {@code null} for an anonymous one
+	 * @param name the name the function its code is written in was defined under -- its
+	 * own, or for a lambda the one around it -- or {@code null} for none
 	 * @param form the defining form, or {@code null}
 	 * @param body the body forms
 	 * @return the spec, or {@code null}
@@ -547,7 +557,7 @@ final class WasmUncaughtLocations {
 		}
 		SourceLocation defined = fileLocation(form);
 		int baseLine = defined != null && file.equals(defined.file()) ? defined.line() : own.line();
-		return new Spec(fileId, baseLine, name, null);
+		return new Spec(fileId, baseLine, name == null ? null : UncaughtReport.functionName(name), null);
 	}
 
 	/**
@@ -584,15 +594,17 @@ final class WasmUncaughtLocations {
 	 * @return the text
 	 */
 	static String hopText(@Nullable String asyncFunction) {
-		String line = UncaughtReport.asyncLine(asyncFunction, null, 0);
+		String line = UncaughtReport
+			.asyncLine(asyncFunction == null ? null : UncaughtReport.functionName(asyncFunction), null, 0);
 		return line.substring(line.indexOf("in ") + "in ".length());
 	}
 
 	/**
-	 * Records the spec of a lambda Pass 2c will compile ({@link #functionSpec}). A lambda
-	 * is anonymous, so the function a condition in it reports is the named frame around
-	 * it at run time -- the interpreter's rule. An async body ({@code %async-run}'s
-	 * thunk) is marked by {@code Ctx.ucPendingHop}, consumed here.
+	 * Records the spec of a lambda Pass 2c will compile ({@link #functionSpec}), named
+	 * after the function its code is written in: the one around it -- the interpreter's
+	 * rule, which names where a form is WRITTEN, whatever frames called it -- a nested
+	 * {@code defun}'s own name, or none in an async body ({@code %async-run}'s thunk,
+	 * marked by {@code Ctx.ucPendingHop} and consumed here).
 	 * @param funcId the lambda's funcId
 	 * @param form the lambda form
 	 * @param body its body forms
@@ -605,9 +617,29 @@ final class WasmUncaughtLocations {
 		if (module == null || ctx.injectedRuntimeBody) {
 			return;
 		}
-		Spec spec = functionSpec(module, null, form, body);
+		String nested = module.nestedDefunNames.remove(form);
+		String writtenIn = hop != null ? null : nested != null ? nested : ctx.ucWrittenIn;
+		if (writtenIn != null) {
+			module.lambdaWrittenIn.put(funcId, writtenIn);
+		}
+		Spec spec = functionSpec(module, writtenIn, form, body);
 		if (spec != null) {
 			module.lambdaSpecs.put(funcId, hop != null ? spec.asAsyncBody(hop) : spec);
+		}
+	}
+
+	/**
+	 * Names the lambda a nested {@code defun}'s lowering installs, as the interpreter's
+	 * nested defun is a named function ({@link UncaughtReport#nestedDefun}); a no-op
+	 * without the option.
+	 * @param lowered the {@code (setq name (lambda ...))} the defun lowered to
+	 * @param ctx the context compiling it
+	 */
+	static void nestedDefun(LispVal lowered, WasmLispCompiler.Ctx ctx) {
+		Module module = ctx.uncaughtLocations;
+		UncaughtReport.NestedDefun nested = module == null ? null : UncaughtReport.nestedDefun(lowered);
+		if (module != null && nested != null) {
+			module.nestedDefunNames.put(nested.lambda(), nested.name());
 		}
 	}
 

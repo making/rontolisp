@@ -30,10 +30,12 @@ unconditional transfer.
   ([jvm-osr-backedges.md](jvm-osr-backedges.md)). It ACCEPTS an already-augmented class; `augment`
   REJECTS one, since it must not see a stale table.
 
-**Pipeline order is fixed**: optional `JvmClassShaker.shake` FIRST, then augment. The shaker rejects
-`Code` sub-attributes (it DROPS a `StackMapTable`, so shake stays callable on augmented bytes), and
-the frames reference constant-pool entries the augmenter appends, which the shaker's compaction could
-not rewrite. Cost of frames: default output ~+80%, `--optimize` +28%.
+**Pipeline order is fixed**: optional `JvmClassShaker.shake` FIRST, then augment. The shaker DROPS a
+`StackMapTable` (so shake stays callable on augmented bytes), and the frames reference constant-pool
+entries the augmenter appends, which the shaker's compaction could not rewrite. A `LineNumberTable`
+(the uncaught report's site ids, [error-handling.md](error-handling.md)) is the one other `Code`
+sub-attribute either accepts: both carry it verbatim, since neither moves an instruction. Cost of
+frames: default output ~+80%, `--optimize` +28%.
 
 Version 61 unlocks not yet used: `invokedynamic` (v51+) for the `_invoke_N` linear if-else id
 dispatch (nothing models `tableswitch` either); interface-static `invokestatic` (v52+), for which the

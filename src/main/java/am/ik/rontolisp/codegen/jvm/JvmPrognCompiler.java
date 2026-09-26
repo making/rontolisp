@@ -39,7 +39,7 @@ final class JvmPrognCompiler {
 				items.add(new JvmBodyOutliner.EffectForm(parts.get(i)));
 			}
 			items.add(new JvmBodyOutliner.ValueForm(parts.get(parts.size() - 1)));
-			tail.pushFront(items);
+			tail.pushFront(items, ctx);
 			return;
 		}
 		for (int i = 1; i < parts.size() - 1; i++) {

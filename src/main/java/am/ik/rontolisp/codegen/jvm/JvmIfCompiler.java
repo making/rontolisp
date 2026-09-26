@@ -20,7 +20,7 @@ final class JvmIfCompiler {
 		// value and branches on it directly, skipping the boxed t/nil round trip
 		// (.kb/jvm-int-fusion.md); any other test compiles boxed as before.
 		int falseBranchOpcode;
-		if (JvmIntFusionCompiler.tryCompileCondition(parts.get(1), ctx, className)) {
+		if (JvmExprCompiler.tryCompileFusedCondition(parts.get(1), ctx, className)) {
 			falseBranchOpcode = Opcode.IFEQ;
 		}
 		else {

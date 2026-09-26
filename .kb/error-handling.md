@@ -329,34 +329,92 @@ second payload reader, so both gates go broad; outside EH mode nothing is observ
 **Invariant: a signaled condition escaping the top level writes `Unhandled condition: <report>` to
 standard error -- the same line on all four backends -- then the process exits the way it always
 did.** Built from `compiler/UncaughtReport.PREFIX` at all three emission sites; the report text is
-the one `princ` writes, and nothing below changes it.
+the one `princ` writes, and nothing below changes it. Two reports still differ on the JVM
+(`.todo/993`: a struct accessor on a non-instance, a typed loop's out-of-range `aref`), and one on
+wasm-GC (the report-less class, "Known gap" below).
 
 **Under it, location lines** (`UncaughtReport.atLine` / `asyncLine`, two-space indented):
 `  at FILE:LINE in FUNCTION` -- the innermost form read from a named file that the condition passed
-through and the innermost NAMED function (or macro expander) holding it -- then one
+through and the PROGRAM'S named function that form is written in -- then one
 `  in NAME (async), awaited at FILE:LINE` per async boundary crossed. Nothing known (a `-e`
-program, only macro-built forms) prints none. **The interpreter prints them, for Scheme source
-too; wasm-GC prints them only under `--report-locations`** (below, "Location lines on wasm-GC");
-the JVM backend does not yet.
-- **Recorded on the throw path only** (`eval/ConditionTrace`, on `LispEvalException.trace()`):
-  `evalCons` keeps the innermost `LocatedCons` it stepped onto and the lambda it was in then (a
-  type test and two stores per loop step; [source-positions.md](source-positions.md) Phase 4) and
-  hands them over from the catch clauses it already had. The function is decided by the first
-  frame that sees the location known and is in a named body: a tail call into a library function
-  with no positions reports the CALL SITE and the caller; a location found only in a caller is
-  never attributed to the callee; an anonymous lambda defers to the named function around it.
-- **Async**: `evalCons` runs `%async-run` itself (`runAsync`), naming the async function from its
-  own frame -- the body's virtual thread never sees the defun. A condition escaping the thunk
-  closes segment 0 (`crossedAsync`), so the awaiter's frames are not attributed to it; the first
-  located form after that is the `await`.
+program, only macro-built forms) prints none. **The interpreter and the JVM backend print the same
+lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints them only under
+`--report-locations` (below, "Location lines on wasm-GC").
+- **Which function: LEXICAL** (every backend) -- the named function whose text holds the form. A
+  form in an anonymous lambda (a callback, an `flet`/`labels` helper, a `handler-bind` handler, a
+  sort predicate) belongs to the function the lambda is written in, whoever calls it; one at the
+  top level, or in an async body (its hop line names the async function), to none. Only a
+  function whose body was read from a named file is named (`LispLambda.sourced`,
+  `JvmSourceSites.sourced`), so a library function a callback runs under never is. The answer is
+  a property of the FORM, so no backend's tail calls, inlining or threads can change it -- the
+  reason it is lexical. Until 2026-09-26 it was the named function DYNAMICALLY around the form,
+  which each backend approximated from the frames it still had: the interpreter lost the caller
+  on a tail call (then kept it, `frameFunction`), the JVM never lost it, and a wasm-GC
+  `return_call` left it -- one program named three different functions, and a callback written
+  in MAIN but run by RUN-CALLBACK printed `at <a line of MAIN> in RUN-CALLBACK`. A lowering's
+  internal name is reported as the program spelled it (`UncaughtReport.functionName`): a method
+  body is its generic (`%AREA--m0` -> `AREA`), a `%top-defun$` rename its original, a nested
+  `defun` its own name (`UncaughtReport.nestedDefun`).
+- **Interpreter -- recorded on the throw path only** (`eval/ConditionTrace`, on
+  `LispEvalException.trace()`): `evalCons` keeps the innermost `LocatedCons` it stepped onto and
+  the lexical function of the scope it stepped onto it in (a type test and two stores per loop
+  step; [source-positions.md](source-positions.md) Phase 4) and hands them over from the catch
+  clauses it already had; the first frame with a located form decides both. The function is a
+  field of the scope (`Environment.lexicalFunction`): a program function's call scope and a macro
+  expander's set it, every other scope -- a closure's included -- inherits it from its parent. A
+  form `eval` runs is in the null lexical environment, so it names none.
+- **Interpreter async**: `evalCons` runs `%async-run` itself (`runAsync`), naming the async
+  function from its own frame -- the body's virtual thread never sees the defun -- and runs the
+  thunk under a scope of no function (`asyncBody`). A condition escaping the thunk closes segment
+  0 (`crossedAsync`), so the awaiter's frames are not attributed to it; the first located form
+  after that is the `await`.
+- **JVM -- read off the stack trace** (`codegen/jvm/JvmSourceSites`, `JvmUncaughtHandler`): every
+  method the program's own source compiled into carries a `LineNumberTable` whose numbers are SITE
+  ids -- (file, line, function) in a table the class carries as string constants -- not lines: a
+  method holds several files' forms (a top-level chunk, a macro handing back a form of its own
+  file) and a class names one `SourceFile`. `Ctx.enterSite`/`leaveSite` around every form
+  (`JvmExprCompiler.compileCons`, the statement `setq`/`let`, the fused `if`/`while` test) mark
+  where the innermost located form changes; a site's function is its method's `writtenIn` -- a
+  lambda's method takes that of the method that built it (`LambdaInfo.writtenIn`), an async thunk
+  none; a tail-spine item carries the site current where it was queued (`JvmBodyOutliner.Entry`
+  -- the construct that queued it has returned by then), and a `_k$N` continuation inherits its
+  method's. `_where` walks the exception's trace: the innermost frame of this class (or a
+  `$PartN`) at a site gives the location and, from the same site, the function. The positions are
+  `SourceProvenance`'s, the same forms the interpreter's reader locates. (A function's methods
+  used to open on a BASE site naming it, for the dynamic rule's outward search; the lexical one
+  needs none, 4 bytes a method.)
+- **JVM async**: the `%async-run` thunk's last exception entry appends a made-up frame
+  `rontolisp/async.crossed(HEAD)` to the escaping exception's trace (`_asyncCross`; `/` is in no
+  binary name), and the first `_await` that rethrows it appends its OWN frames after it
+  (`_asyncAwaited`) -- once per crossing, the interpreter's first-await rule. `_where` reads each
+  such frame as a hop. An exception keeps its identity (`handler-case` classifies by class), and
+  the report empties the trace, so none of it shows unless `RONTOLISP_DEBUG` asks for the trace --
+  which then IS the async chain.
+- **JVM optimizations keep the granularity**: a fused integer tree (`_fx$N`,
+  [jvm-int-fusion.md](jvm-int-fusion.md)) whose operations all report the call's own site stays
+  shared and line-free; one that spans lines, or holds an inlined defun's body, gets a method of
+  its own whose fallback marks each operation (so `(sq a)` inlined into F still says `in SQ`, even
+  when F itself was inlined into the top level). A typed loop marks its array accesses.
+- **Nothing located, nothing emitted**: a class compiled with no position in a named file (`-e`,
+  a direct `JvmLispCompiler.compile` with no recording scope) has no line numbers, no site table,
+  no `_where` and its pool in the old order -- the bytes it always had
+  (`UncaughtReportParityTest#aProgramWithNothingLocatedCompilesAsItAlwaysDid`). The line numbers
+  survive every pass after emission: `BranchRelaxer` remaps them, `JvmClassShaker`,
+  `JvmClassSplitter` and `StackMapAugmenter` carry the attribute (no instruction moves there).
+- **Cost, measured 2026-09-26**: +1.5-2 KB per class (`_where` and its constants; ~1 KB gzip)
+  plus ~7 bytes per located line (examples/console +1.46-1.79 KB; `llm.lisp` 1.04 MB +12.6 KB,
+  1.2%); a fused tree that needs its own method ~200 B. Zero at run time until a condition
+  escapes.
 - **Harness decisions, per suite**: `ci-spec.yaml`'s `standalone:` compares expected stderr lines
   as CONTAINED, in order (wasmtime prints around ours), so the location lines need no change there
-  and are pinned instead by `RontoLispCliStreamsTest`'s `anUncaught*` cases, where the file path is
-  the test's own. `scheme-spec.yaml` compares the interpreter's MESSAGE (contained), so it needs no
-  change; the Scheme cases in `RontoLispCliStreamsTest` pin the location lines where the case is
-  about the report and the report line alone where it is about the message. The JVM/wasm assertions (`JvmLispCompilerTest`, `JvmSizedMainTest`,
-  `WasmLispCompilerIntegrationTest`) pin the report line and stay exact: their programs are read
-  from no file, so a wasm module has nothing to locate even under the option.
+  and are pinned instead by `RontoLispCliStreamsTest`'s `anUncaught*` cases (the interpreter, then
+  `java -cp` and `java -jar` of the compiled program) and `UncaughtReportParityTest`, where the file
+  path is the test's own. `scheme-spec.yaml` compares the interpreter's MESSAGE and the compiled
+  legs' stderr as CONTAINED, so it needs no change; the Scheme cases in `RontoLispCliStreamsTest` pin
+  the location lines where the case is about the report and the report line alone where it is about
+  the message. The JVM/wasm assertions that compile directly (`JvmLispCompilerTest`,
+  `JvmSizedMainTest`, `WasmLispCompilerIntegrationTest`) record no positions -- their programs are
+  read from no file -- so they pin the report line alone, a wasm module's even under the option.
 
 - **Interpreter / compile failures** (`RontoLispCli.runReporting`): only `main` catches -- `run`
   still throws, so an embedded caller keeps the exception with its type and cause. A rontolisp
@@ -365,7 +423,8 @@ the JVM backend does not yet.
   position on any backend**: the location goes under the report, never into the text a program
   can read. `RONTOLISP_DEBUG` additionally prints the JVM trace.
 - **JVM** (`JvmUncaughtHandler`): a last exception-table entry over the whole of `main` catching
-  `RuntimeException`; prints the line, EMPTIES the stack trace and RETHROWS. **Not
+  `RuntimeException`; prints the line (and `_where` the location lines), EMPTIES the stack trace
+  and RETHROWS. **Not
   `System.exit(1)`**: a compiled class's `main` is invoked in-process by ~110 assertions here and by
   any embedder; the launcher supplies exit 1.
 - **wasm-GC, EH MODE ONLY** (`WasmUncaughtReportCompiler`): the entry function wraps its body in
@@ -450,12 +509,15 @@ by `cli/WasmReportLocationsTest` (each case against the interpreter's own output
 - **The note is keyed by payload IDENTITY** (a global holding the payload it describes): a
   condition a `handler-case` caught cannot leak into a later report, and a rethrow (unmatched
   clause, `await` re-signalling a rejected future -- both rethrow the same payload) keeps the
-  inner frames' note. Rules = `ConditionTrace`'s: first frame with a line gives the location; the
-  first NAMED frame from there the function; an async body (a hop text in the frame) freezes the
-  function and appends a hop whose await site is the next frame with a line.
+  inner frames' note. Rules = `ConditionTrace`'s: the first frame with a line gives the location
+  and, by its own name, the function (a lambda's frame is named after the function it is written
+  in, `Ctx.ucWrittenIn`; a nested `defun`'s after itself); an async body (a hop text in the
+  frame) appends a hop whose await site is the next frame with a line.
 - **Texts ride with their frame**: the name and hop text are unspelled string literals built in the
   frame's own landing (`compileUnspelledLiteral`: a spelled one would arm the dispatch gate), so
-  the shaker drops them with the frame. A first version kept a quoted name TABLE: every defun's
+  the shaker drops them with the frame. The name is the program's spelling
+  (`UncaughtReport.functionName`, the mapping every backend uses: a method body names its generic).
+  A first version kept a quoted name TABLE: every defun's
   name stayed after its function was shaken -- zlib +4,489 B instead of +3,856. Files are the one
   table (quoted list, sealed when the entry's render compiles; the prescan of the program is what
   makes it complete, since every Pass 2 rewrite inherits an existing cons's position).
@@ -471,11 +533,22 @@ by `cli/WasmReportLocationsTest` (each case against the interpreter's own output
   macro-written one, a signal helper) it is a plain `call`, or the call site and its function were
   lost. Disabling tail calls in frames outright was the first version and broke the
   `.kb/wasm-tail-calls.md` invariant a Scheme loop depends on (named `let` overflowed).
-- **Known divergence**: an error inside a `labels`/`flet` local function reports the form's own
-  line on wasm (the expansion records positions through `SourceProvenance.inheritWhenCompiling`)
-  and the `labels` form's line on the interpreter, whose expansion drops them. The interpreter's
-  cells were deliberately left alone: a located copy there moves what its trampolined frames
-  attribute (`lab.lisp:3 in OUTER` became `lab.lisp:5` with no function).
+- **Known divergences** (`.todo/991`; the second `await`, `.todo/992`), from 82 programs of the
+  JVM parity corpus with a catching form appended (2026-09-26, Linux, wasmtime 49); the others'
+  location lines matched the interpreter's byte for byte:
+  - A tail call through a function value stays a `return_call`, so a callee that is no frame (a
+    built-in: `(funcall f x)` into `parse-integer`) leaves the location to the frames further out
+    -- the line that called the caller, not its `funcall`. A lambda callee is a frame and names
+    the function it is written in, so only this location moves.
+  - A `handler-bind` handler's condition is located at the `handler-bind` form, not the
+    handler's own form; a fused or inlined arithmetic tree reports its caller's or its first line
+    (`(sq a)` inlined into F says `in F`).
+  - Preview 1 runs an async body at its call: the hop's await site is the CALL's line when the
+    `await` is on another one, and a body whose tail call enters another frame leaves before its
+    hop is noted, so the hop line is missing. `--component` matches the interpreter in both.
+  - A future's condition re-signalled by a second `await` after a handler caught the first:
+    `--component` names the second await, the interpreter and the JVM the first (their hop is
+    recorded once per crossing).
 
 Cost in EH mode, measured 2026-09-26 (wasmtime 49.0.0, node 24, macOS arm64):
 
@@ -1284,6 +1357,11 @@ all, so **`restart-case` alone unblocks nothing real**.
   `compileRuntimeErrorDispatchScalesPastTheBranchLimit`, `anUncaughtCondition*`, `ehUncaught*`, and
   the `compileAndRunHandlerCaseIn*` block -- which must COMPILE, LOAD and RUN the class, since the
   broken class was written without complaint and only failed at link time.
+- Location lines: `RontoLispCliStreamsTest`'s `anUncaught*`/`anAsyncBodys*` (interpreter, `java -cp`,
+  `java -jar`), `cli/UncaughtReportParityTest` (both backends, every shape above: tail calls,
+  `labels`, macros, a loaded file, library callbacks, methods, nested defuns, async chains,
+  fused trees, typed loops, continuations, nothing located), `am.ik.jvm.LineNumberTableTest` (the
+  attribute through the relaxer, shaker, splitter and augmenter).
 - Gates in `LispMacroExpanderTest`: `conditionNarrowing*`,
   `anExplicitFormatControlInitargForcesTheRenderer`, `aComputedDatumMakesTheConditionSetUnknowable`,
   `aDirectiveFreeLiteralFormatControlStillDeclinesTheRenderer`,

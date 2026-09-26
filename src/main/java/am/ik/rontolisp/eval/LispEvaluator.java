@@ -54,6 +54,7 @@ import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
+import am.ik.rontolisp.compiler.UncaughtReport;
 import am.ik.rontolisp.compiler.ClackEnv;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.WitExportDirective;
@@ -6096,11 +6097,11 @@ public final class LispEvaluator {
 		boolean inBody = false;
 		boolean funcallSeam = false;
 		// Where a condition leaving this frame was (ConditionTrace): the innermost form
-		// read from a named file the loop has stepped onto and the lambda whose body it
-		// was in then, and the lambda whose body the loop is in now. A type test and two
-		// stores per step; read only when a condition escapes.
+		// read from a named file the loop has stepped onto and the program function its
+		// code is written in (the scope's Environment.lexicalFunction). A type test and
+		// two stores per step; read only when a condition escapes.
 		LocatedCons located = null;
-		LispLambda locatedIn = null;
+		String locatedIn = null;
 		LispLambda frameLambda = null;
 		LispVal result;
 		try {
@@ -6108,7 +6109,7 @@ public final class LispEvaluator {
 				LispVal next;
 				if (cons instanceof LocatedCons here) {
 					located = here;
-					locatedIn = frameLambda;
+					locatedIn = env.lexicalFunction();
 				}
 				dispatch: {
 					LispVal head = cons.car();
@@ -6742,7 +6743,9 @@ public final class LispEvaluator {
 						// The async function whose body this thunk is, named from THIS
 						// frame: the body's own thread will never see the defun.
 						try {
-							result = singleValue(runAsync(args, frameLambda == null ? null : frameLambda.name()));
+							String asyncName = frameLambda == null ? null : frameLambda.name();
+							result = singleValue(
+									runAsync(args, asyncName == null ? null : UncaughtReport.functionName(asyncName)));
 						}
 						catch (LispEvalException e) {
 							throw withHandlerBindHandlersRun(e);
@@ -6821,17 +6824,17 @@ public final class LispEvaluator {
 			result = signal.value();
 		}
 		catch (LispEvalException e) {
-			e.trace().passing(located, locatedIn, frameLambda);
+			e.trace().passing(located, locatedIn);
 			throw funcallSeam ? withHandlerBindHandlersRun(e) : e;
 		}
 		catch (IllegalArgumentException | IndexOutOfBoundsException raw) {
 			LispEvalException failure = rawEvaluationFailure(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, raw);
-			failure.trace().passing(located, locatedIn, frameLambda);
+			failure.trace().passing(located, locatedIn);
 			throw funcallSeam ? withHandlerBindHandlersRun(failure) : failure;
 		}
 		catch (ClassCastException | ArithmeticException | NegativeArraySizeException raw) {
 			LispEvalException failure = rawEvaluationFailure(rawFailureConditionClass(raw), raw);
-			failure.trace().passing(located, locatedIn, frameLambda);
+			failure.trace().passing(located, locatedIn);
 			throw funcallSeam ? withHandlerBindHandlersRun(failure) : failure;
 		}
 		finally {
@@ -6885,7 +6888,7 @@ public final class LispEvaluator {
 				return null;
 			}
 		}
-		Environment lambdaEnv = new Environment((Environment) lambda.closure());
+		Environment lambdaEnv = callScope(lambda);
 		for (int i = 0; i < required; i++) {
 			lambdaEnv.define(lambda.params().get(i).name(), args.get(i));
 		}
@@ -6897,6 +6900,20 @@ public final class LispEvaluator {
 			lambdaEnv.define(lambda.rest().name(), restList);
 		}
 		return lambdaEnv;
+	}
+
+	/**
+	 * A fresh scope for one call of {@code lambda}, under the scope it closed over. A
+	 * program function's own ({@link LispLambda#sourced}) starts its code
+	 * ({@link Environment#lexicalFunction}); any other lambda's code is the code of the
+	 * function it was written in, which its closure already says.
+	 */
+	private static Environment callScope(LispLambda lambda) {
+		Environment scope = new Environment((Environment) lambda.closure());
+		if (lambda.sourced() && lambda.name() != null) {
+			scope.lexicalFunction(lambda.name());
+		}
+		return scope;
 	}
 
 	/**
@@ -7610,8 +7627,11 @@ public final class LispEvaluator {
 		// The funcName rides on the value so it prints #<function NAME>, the text both
 		// compiled backends answer from their function-name table (a defun's value is a
 		// lambda here, a funcId there -- the name is the one identity either keeps).
+		// Whether its body was read from a named file decides whether the uncaught
+		// report may name it (ConditionTrace): a library's function never does.
+		boolean sourced = LispTrees.anyCons(blockForm, form -> form instanceof LocatedCons);
 		this.globalEnv.defineFunction(funcName,
-				new LispLambda(expanded.required(), expanded.rest(), List.of(blockForm), env, funcName));
+				new LispLambda(expanded.required(), expanded.rest(), List.of(blockForm), env, funcName, sourced));
 		return singleValue(nameForm);
 	}
 
@@ -8832,6 +8852,7 @@ public final class LispEvaluator {
 							: "at least " + macro.required().size()) + " arguments, got " + args.size());
 		}
 		Environment macroEnv = new Environment(macro.env());
+		macroEnv.lexicalFunction(name);
 		// A macro parameter named like a proclaimed special must also bind DYNAMICALLY:
 		// symbol reads consult the dynamic store first, so a lexical binding would be
 		// shadowed by an active dynamic binding of the same name and the macro body
@@ -8885,10 +8906,6 @@ public final class LispEvaluator {
 			}
 			markExpansionConstants(expansion, new java.util.IdentityHashMap<>());
 			return expansion;
-		}
-		catch (LispEvalException e) {
-			e.trace().passingNamed(name);
-			throw e;
 		}
 		finally {
 			if (swapPackage) {
@@ -11978,7 +11995,9 @@ public final class LispEvaluator {
 			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 					LispNames.ASYNC_RUN + " expects 1 argument, got " + args.size());
 		}
-		LispVal thunk = args.get(0);
+		// The body is code of no function: a condition in its own forms names none, the
+		// hop line names the async function (.kb/error-handling.md, "Which function").
+		LispVal thunk = args.get(0) instanceof LispLambda lambda ? asyncBody(lambda) : args.get(0);
 		// The body's values are captured where it completes: the channel holds its
 		// extra values the moment the thunk returns, on the thread that ran it, and
 		// they travel in the future -- the awaiter publishes them from there, never
@@ -11995,6 +12014,17 @@ public final class LispEvaluator {
 			future.settleExtras(this.globalEnv.spill());
 			return primary;
 		});
+	}
+
+	/**
+	 * An async lowering's thunk, run under a scope that starts code of no function
+	 * ({@link Environment#lexicalFunction}), so neither its forms nor the lambdas they
+	 * build name the function the async form was written in.
+	 */
+	private static LispLambda asyncBody(LispLambda thunk) {
+		Environment scope = new Environment((Environment) thunk.closure());
+		scope.lexicalFunction(null);
+		return new LispLambda(thunk.params(), thunk.rest(), thunk.body(), scope, thunk.name(), thunk.sourced());
 	}
 
 	// The rontolisp:await special form: evaluates its one operand and resolves it.
@@ -12513,7 +12543,7 @@ public final class LispEvaluator {
 			// INSIDE the body are proper; only this activation keeps a Java frame.
 			checkArity(lambda, args);
 			int required = lambda.params().size();
-			Environment lambdaEnv = new Environment((Environment) lambda.closure());
+			Environment lambdaEnv = callScope(lambda);
 			// A parameter whose name is proclaimed special binds DYNAMICALLY, as in CL:
 			// symbol reads consult the dynamic store before the lexical chain, so a
 			// lexical binding of a special name would be shadowed by any active outer
@@ -12567,10 +12597,6 @@ public final class LispEvaluator {
 					result = eval(bodyExpr, lambdaEnv);
 				}
 				return result;
-			}
-			catch (LispEvalException e) {
-				e.trace().passing(null, null, lambda);
-				throw e;
 			}
 			finally {
 				this.functionBodyDepth--;

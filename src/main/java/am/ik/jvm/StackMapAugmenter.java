@@ -48,9 +48,10 @@ import org.jspecify.annotations.Nullable;
  * types need no modelling at all: the verifier treats them as {@code Object} and defers
  * the real check to {@code invokeinterface}.
  * <p>
- * The pass must run after {@link JvmClassShaker} when both apply: the shaker rejects
- * {@code Code} sub-attributes, and the frames reference constant-pool entries this pass
- * appends, which the shaker's compaction would not know how to rewrite.
+ * The pass must run after {@link JvmClassShaker} when both apply: the shaker drops a
+ * {@code StackMapTable}, whose frames reference constant-pool entries this pass appends
+ * and the shaker's compaction would not know how to rewrite. A {@code LineNumberTable}
+ * passes through both untouched.
  * <p>
  * The same dataflow answers a second, read-only question through
  * {@link #osrHostileBackedges}: which backward branches target a position whose operand
@@ -184,8 +185,14 @@ public final class StackMapAugmenter {
 	private record ExcEntry(int startPc, int endPc, int handlerPc, int catchType) {
 	}
 
+	/**
+	 * A parsed method. {@code lineNumberTable} is the body of its {@code LineNumberTable}
+	 * sub-attribute, written back verbatim beside the frames (the frames never move an
+	 * instruction), and {@code lineNumberAttrNameIdx} its name; 0 and {@code null} when
+	 * the method has none.
+	 */
 	private record MethodInfo(int access, int nameIdx, int descIdx, int codeAttrNameIdx, int maxStack, int maxLocals,
-			byte[] code, List<ExcEntry> exceptionTable) {
+			byte[] code, List<ExcEntry> exceptionTable, int lineNumberAttrNameIdx, byte @Nullable [] lineNumberTable) {
 	}
 
 	/** One StackMapTable entry: the frame asserted at a code offset. */
@@ -231,7 +238,7 @@ public final class StackMapAugmenter {
 	 * @param skipCodeSubAttributes whether to skip (rather than reject) a {@code Code}
 	 * sub-attribute -- true for the read-only analysis, which accepts an
 	 * already-augmented class, false for {@link #augment}, which re-derives the frames
-	 * and must not be handed a stale table
+	 * and must not be handed a stale table. A {@code LineNumberTable} is kept either way.
 	 */
 	private static Parsed parse(byte[] classFile, boolean skipCodeSubAttributes) {
 		int[] p = { 0 };
@@ -314,21 +321,28 @@ public final class StackMapAugmenter {
 						readU2(classFile, p)));
 			}
 			int codeAttrCount = readU2(classFile, p);
-			if (codeAttrCount != 0) {
-				if (!skipCodeSubAttributes) {
-					throw new IllegalStateException("StackMapAugmenter: unsupported Code sub-attribute");
+			int lineNumberAttrNameIdx = 0;
+			byte @Nullable [] lineNumberTable = null;
+			for (int j = 0; j < codeAttrCount; j++) {
+				int subAttrNameIdx = readU2(classFile, p);
+				int subAttrLen = readU4(classFile, p);
+				if ("LineNumberTable".equals(utf8(cp, subAttrNameIdx)) && lineNumberTable == null) {
+					// Line numbers name no pool entry but their attribute's, and the
+					// frames never move an instruction: carried through as they are.
+					lineNumberAttrNameIdx = subAttrNameIdx;
+					lineNumberTable = Arrays.copyOfRange(classFile, p[0], p[0] + subAttrLen);
+				}
+				else if (!skipCodeSubAttributes) {
+					throw new IllegalStateException(
+							"StackMapAugmenter: unsupported Code sub-attribute " + utf8(cp, subAttrNameIdx));
 				}
 				// The read-only analysis accepts an already-augmented class: it derives
 				// everything from the code itself, so a StackMapTable left by a previous
 				// run is redundant and simply skipped.
-				for (int j = 0; j < codeAttrCount; j++) {
-					readU2(classFile, p); // attribute_name_index
-					int subAttrLen = readU4(classFile, p);
-					p[0] += subAttrLen;
-				}
+				p[0] += subAttrLen;
 			}
-			methods
-				.add(new MethodInfo(access, nameIdx, descIdx, attrNameIdx, maxStack, maxLocals, code, exceptionTable));
+			methods.add(new MethodInfo(access, nameIdx, descIdx, attrNameIdx, maxStack, maxLocals, code, exceptionTable,
+					lineNumberAttrNameIdx, lineNumberTable));
 		}
 
 		int classAttrCount = readU2(classFile, p);
@@ -371,7 +385,8 @@ public final class StackMapAugmenter {
 	 * Computes and inserts a {@code StackMapTable} into every method and stamps the given
 	 * class-file major version.
 	 * @param classFile a class file as produced by {@link ByteCodeWriter} (single
-	 * {@code Code} attribute per method, no other attributes anywhere)
+	 * {@code Code} attribute per method, carrying at most a {@code LineNumberTable}; no
+	 * other attributes anywhere)
 	 * @param majorVersion the class-file major version to stamp (e.g. 61 for Java 17)
 	 * @return the augmented class file
 	 */
@@ -481,13 +496,14 @@ public final class StackMapAugmenter {
 			MethodInfo m = methods.get(i);
 			MethodFrames mf = analyzed.get(i);
 			byte[] stackMap = mf.frames.isEmpty() ? new byte[0] : encodeStackMapTable(mf.frames, classIdxByName);
+			byte @Nullable [] lines = m.lineNumberTable;
 			writeU2(out, m.access);
 			writeU2(out, m.nameIdx);
 			writeU2(out, m.descIdx);
 			writeU2(out, 1); // the single Code attribute
 			writeU2(out, m.codeAttrNameIdx);
 			int codeAttrLen = 2 + 2 + 4 + mf.code.length + 2 + 8 * mf.exceptionTable.size() + 2
-					+ (stackMap.length == 0 ? 0 : 2 + 4 + stackMap.length);
+					+ (stackMap.length == 0 ? 0 : 2 + 4 + stackMap.length) + (lines == null ? 0 : 2 + 4 + lines.length);
 			writeU4(out, codeAttrLen);
 			writeU2(out, m.maxStack);
 			writeU2(out, m.maxLocals);
@@ -500,14 +516,16 @@ public final class StackMapAugmenter {
 				writeU2(out, e.handlerPc);
 				writeU2(out, e.catchType);
 			}
-			if (stackMap.length == 0) {
-				writeU2(out, 0);
-			}
-			else {
-				writeU2(out, 1);
+			writeU2(out, (stackMap.length == 0 ? 0 : 1) + (lines == null ? 0 : 1));
+			if (stackMap.length != 0) {
 				writeU2(out, stackMapNameIdx);
 				writeU4(out, stackMap.length);
 				out.write(stackMap, 0, stackMap.length);
+			}
+			if (lines != null) {
+				writeU2(out, m.lineNumberAttrNameIdx);
+				writeU4(out, lines.length);
+				out.write(lines, 0, lines.length);
 			}
 		}
 		writeU2(out, 0); // class attributes

@@ -166,6 +166,33 @@ public class ByteCodeWriter {
 	}
 
 	/**
+	 * Write the body of a {@code LineNumberTable} attribute (JVMS 4.7.12): the u2 entry
+	 * count followed by one {@code start_pc}/{@code line_number} u2 pair per entry.
+	 * @param entries the entries, in ascending {@code startPc} order
+	 * @return this instance for chaining
+	 */
+	public ByteCodeWriter writeLineNumberTable(List<LineNumberEntry> entries) {
+		this.writeU2(entries.size());
+		for (LineNumberEntry entry : entries) {
+			this.writeU2(entry.startPc()).writeU2(entry.lineNumber());
+		}
+		return this;
+	}
+
+	/**
+	 * A {@code LineNumberTable} entry: the instructions from {@code startPc} up to the
+	 * next entry's belong to {@code lineNumber}. What the number MEANS is the producer's
+	 * business -- the JVM only hands it back through
+	 * {@link StackTraceElement#getLineNumber()}.
+	 *
+	 * @param startPc the offset of the first instruction the entry covers; an instruction
+	 * boundary
+	 * @param lineNumber the u2 number those instructions report
+	 */
+	public record LineNumberEntry(int startPc, int lineNumber) {
+	}
+
+	/**
 	 * Write raw bytes to the output.
 	 * @param bytes the bytes to write
 	 * @return this instance for chaining

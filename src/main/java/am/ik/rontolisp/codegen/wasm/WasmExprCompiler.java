@@ -1833,7 +1833,11 @@ final class WasmExprCompiler {
 			case LispNames.PROG_STAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandProg(cons, true), ctx);
 			case LispNames.SETQ -> WasmSetqCompiler.compile(cons, ctx);
 			case LispNames.LAMBDA -> WasmLambdaCompiler.compileValue(cons, ctx);
-			case LispNames.DEFUN -> WasmExprCompiler.compileExpr(LispMacroExpander.expandDefun(cons), ctx);
+			case LispNames.DEFUN -> {
+				LispVal lowered = LispMacroExpander.expandDefun(cons);
+				WasmUncaughtLocations.nestedDefun(lowered, ctx);
+				WasmExprCompiler.compileExpr(lowered, ctx);
+			}
 			case LispNames.DEFSTRUCT ->
 				// Top-level defstructs are spliced into defuns before Pass 1; one
 				// reaching this compiler is nested inside another form.

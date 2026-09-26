@@ -94,20 +94,30 @@ final class JvmBodyOutliner {
 
 	}
 
+	/**
+	 * A queued item and the source site ({@link JvmSourceSites}) current where it was
+	 * queued: the construct that queued it has returned by the time the item is emitted,
+	 * so the item carries the site its code belongs to.
+	 */
+	private record Entry(Item item, int site) {
+
+	}
+
 	/** The queue of items still to emit for one method. */
 	static final class Tail {
 
-		private final Deque<Item> queue = new ArrayDeque<>();
+		private final Deque<Entry> queue = new ArrayDeque<>();
 
 		/**
 		 * Puts a construct's body items at the FRONT, before whatever the enclosing
 		 * constructs still owe -- the queue is the spine read outside-in, so the
 		 * innermost work is always next.
 		 * @param items the items, in emission order
+		 * @param ctx the method, whose current source site the items' code belongs to
 		 */
-		void pushFront(List<Item> items) {
+		void pushFront(List<Item> items, JvmLispCompiler.Ctx ctx) {
 			for (int i = items.size() - 1; i >= 0; i--) {
-				this.queue.addFirst(items.get(i));
+				this.queue.addFirst(new Entry(items.get(i), ctx.siteCurrent));
 			}
 		}
 
@@ -130,7 +140,7 @@ final class JvmBodyOutliner {
 			}
 			seed.add(new ValueForm(bodyExprs.get(i)));
 		}
-		tail.pushFront(seed);
+		tail.pushFront(seed, ctx);
 		run(tail, ctx, className);
 	}
 
@@ -140,8 +150,9 @@ final class JvmBodyOutliner {
 				split(tail, ctx, className);
 				continue;
 			}
-			Item item = tail.queue.removeFirst();
-			switch (item) {
+			Entry entry = tail.queue.removeFirst();
+			ctx.restoreSite(entry.site());
+			switch (entry.item()) {
 				case PopValue ignored -> ctx.emit(Opcode.POP);
 				case Cleanup cleanup -> cleanup.action().run();
 				case EffectForm effect -> {
@@ -149,7 +160,7 @@ final class JvmBodyOutliner {
 					// but a statement assignment -- said as two items so a nested body
 					// still joins the spine and the pop lands after it.
 					if (!JvmExprCompiler.compileStatementSetq(effect.form(), ctx, className)) {
-						tail.pushFront(List.of(new ValueForm(effect.form()), new PopValue()));
+						tail.pushFront(List.of(new ValueForm(effect.form()), new PopValue()), ctx);
 					}
 				}
 				case ValueForm value -> {
@@ -170,8 +181,8 @@ final class JvmBodyOutliner {
 		// scope live at the split -- could not compile it in the right environment.
 		int work = 0;
 		boolean cleanupSeen = false;
-		for (Item item : tail.queue) {
-			if (item instanceof Cleanup) {
+		for (Entry entry : tail.queue) {
+			if (entry.item() instanceof Cleanup) {
 				cleanupSeen = true;
 			}
 			else if (cleanupSeen) {
@@ -212,8 +223,8 @@ final class JvmBodyOutliner {
 	}
 
 	private static void split(Tail tail, JvmLispCompiler.Ctx ctx, String className) {
-		List<Item> moved = new ArrayList<>();
-		while (!tail.queue.isEmpty() && !(tail.queue.peekFirst() instanceof Cleanup)) {
+		List<Entry> moved = new ArrayList<>();
+		while (!tail.queue.isEmpty() && !(tail.queue.peekFirst().item() instanceof Cleanup)) {
 			moved.add(tail.queue.removeFirst());
 		}
 		List<String> names = liveNames(ctx);
@@ -256,6 +267,9 @@ final class JvmBodyOutliner {
 		ctx.emitU2(ref.index());
 		JvmLispCompiler.Ctx cont = ctx.ctxBuilder.build();
 		cont.evalStoreRef = ctx.evalStoreRef;
+		// The continuation is the same function, part way through: the uncaught report
+		// names it and locates its code as it would the method it was split from.
+		cont.continueFunction(ctx);
 		int slot = 0;
 		if (hasEnv) {
 			cont.closureEnvSlot = 0;
@@ -277,7 +291,7 @@ final class JvmBodyOutliner {
 		}
 		cont.boxedVars = boxed;
 		Tail contTail = new Tail();
-		contTail.pushFront(moved);
+		contTail.queue.addAll(moved);
 		run(contTail, cont, className);
 		cont.emit(Opcode.ARETURN);
 		ctx.outlinedBodies.add(new OutlinedBody(methodName, nameUtf8, descUtf8, cont));

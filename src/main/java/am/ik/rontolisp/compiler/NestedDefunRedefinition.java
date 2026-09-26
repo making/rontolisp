@@ -60,6 +60,17 @@ public final class NestedDefunRedefinition {
 	}
 
 	/**
+	 * The name a program gave a function this pass renamed, or the name itself: what a
+	 * report about the function calls it by, since the program never spelled the internal
+	 * one.
+	 * @param name a defun's name after this pass
+	 * @return the name the program wrote
+	 */
+	public static String originalName(String name) {
+		return name.startsWith(INTERNAL_PREFIX) ? name.substring(INTERNAL_PREFIX.length()) : name;
+	}
+
+	/**
 	 * Rewrites the program so a top-level {@code defun} whose name is redefined by a
 	 * non-top-level {@code defun} resolves through its global variable.
 	 * @param program the whole program, after every pass that can introduce a top-level

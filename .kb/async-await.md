@@ -34,7 +34,9 @@
   `stream-read` returns an `{RMARKER, queue, state}` token taken at `_await`. The class
   `implements Runnable`; `_async_run` spawns
   `Thread.ofVirtual()`. **An error cannot ride the `_condTl` ThreadLocal across threads**: `run()`
-  completes NORMALLY with `{EMARKER, throwable, condition}` and `_await` re-sets `_condTl` on the
+  completes NORMALLY with `{EMARKER, throwable, condition}` (the thunk having appended a
+  `rontolisp/async.crossed` frame to its trace when the class carries location lines,
+  [error-handling.md](error-handling.md)) and `_await` re-sets `_condTl` on the
   awaiting thread before rethrowing -- that is what makes handler-case dispatch across the await.
 - **Preview-1 wasm-GC**: degenerate synchronous. `WasmAsyncRunCompiler` wraps the value in a settled
   kind-2 (kind 4 for several values, "Multiple values") `TYPE_P1_FUTURE {mut i32 kind, mut value}` (the kind field exists so the shape does not

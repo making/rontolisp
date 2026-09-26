@@ -52,8 +52,12 @@ final class JvmLambdaCompiler {
 		// lambda is only ever reached through a dispatcher, so its case must stay.
 		ctx.valueFuncIds.add(funcId);
 		String methodName = "_lambda_" + funcId;
+		// The lambda's code is written in this method's function -- unless it is an async
+		// body, whose report line names no function (its hop line names the async one).
+		String asyncHead = ctx.asyncBodyHeads.get(cons);
 		ctx.lambdaDecls.add(new JvmLispCompiler.LambdaInfo(funcId, methodName, paramNames, nf.variadic(), bodyExprs,
-				new ArrayList<>(freeVars)));
+				new ArrayList<>(freeVars), ctx.lambdaReportNames.get(cons), asyncHead,
+				asyncHead == null ? ctx.writtenIn : null));
 		int totalSize = 1 + freeVars.size();
 		JvmEmitHelper.emitIntConst(ctx, totalSize);
 		ctx.emit(Opcode.ANEWARRAY);

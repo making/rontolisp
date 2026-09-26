@@ -19,6 +19,7 @@ import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import org.jspecify.annotations.Nullable;
 
@@ -97,7 +98,14 @@ final class JvmIntFusionCompiler {
 
 	}
 
-	private record OpNode(String op, List<Node> args) implements Node {
+	/**
+	 * An operation over its argument nodes. {@code site} is the source site
+	 * ({@link JvmSourceSites}) of the form the operation came from -- 0 without one --
+	 * which the fallback marks before the operation's helper call, so a wrong-type
+	 * operand reports the operation's own line and function even inside a fused tree or
+	 * an inlined defun's body, as the interpreter does.
+	 */
+	private record OpNode(String op, List<Node> args, int site) implements Node {
 	}
 
 	private record ConstLeaf(long value) implements Node {
@@ -141,14 +149,21 @@ final class JvmIntFusionCompiler {
 
 		final LispVal arrayExpr;
 
+		/**
+		 * The source site of the {@code aref} form, 0 without one ({@link OpNode});
+		 * cleared when the whole tree reports its caller's site ({@link #methodFor}).
+		 */
+		int site;
+
 		@Nullable Node indexNode;
 
 		int arrParam = -1;
 
 		int longSlot = -1;
 
-		ArefLeaf(LispVal arrayExpr) {
+		ArefLeaf(LispVal arrayExpr, int site) {
 			this.arrayExpr = arrayExpr;
+			this.site = site;
 		}
 
 	}
@@ -194,9 +209,17 @@ final class JvmIntFusionCompiler {
 		/** Only for a non-literal limit: {@code _random}'s boxed draw. */
 		int boxSlot = -1;
 
-		RandomLeaf(@Nullable LispVal limitExpr, long limitConst) {
+		/**
+		 * The source site of the {@code random} form, which a rejected limit's throw
+		 * reports ({@link #emitRandomDraw}); 0 without one, and cleared like
+		 * {@link ArefLeaf#site}.
+		 */
+		int site;
+
+		RandomLeaf(@Nullable LispVal limitExpr, long limitConst, int site) {
 			this.limitExpr = limitExpr;
 			this.limitConst = limitConst;
+			this.site = site;
 		}
 
 	}
@@ -380,8 +403,16 @@ final class JvmIntFusionCompiler {
 
 		final Set<String> assignedNames = new HashSet<>();
 
-		Site(LispVal expr) {
+		/**
+		 * The owner code ({@link JvmSourceSites#owner}) the forms being classified belong
+		 * to: the compiling method's function, and an inlined defun's own while its body
+		 * is classified.
+		 */
+		int owner;
+
+		Site(LispVal expr, JvmLispCompiler.Ctx ctx) {
 			collectAssignedNames(expr, this.assignedNames);
+			this.owner = ctx.siteOwner;
 		}
 
 		private static void collectAssignedNames(LispVal form, Set<String> out) {
@@ -424,7 +455,7 @@ final class JvmIntFusionCompiler {
 			// (`.kb/jvm-complex.md`).
 			return false;
 		}
-		Site site = new Site(cons);
+		Site site = new Site(cons, ctx);
 		Node root = classify(cons, ctx, Map.of(), site, 0);
 		if (!(root instanceof OpNode)) {
 			return false;
@@ -499,7 +530,7 @@ final class JvmIntFusionCompiler {
 			// doubles); fusing it would change nothing for the better.
 			return false;
 		}
-		Site site = new Site(cons);
+		Site site = new Site(cons, ctx);
 		Node left = classify(parts.get(1), ctx, Map.of(), site, 0);
 		if (left == null) {
 			return false;
@@ -514,7 +545,7 @@ final class JvmIntFusionCompiler {
 		if (left instanceof ExprLeaf && right instanceof ExprLeaf) {
 			return false;
 		}
-		Node root = new OpNode(CMP_ROOT, List.of(left, right));
+		Node root = new OpNode(CMP_ROOT, List.of(left, right), sourceSite(cons, ctx, site));
 		MethodrefConstant ref = methodFor(root, site.leaves, maskFor(branchOpcode), ctx);
 		pushLeaves(site.leaves, ctx, className);
 		ctx.emit(Opcode.INVOKESTATIC);
@@ -728,7 +759,7 @@ final class JvmIntFusionCompiler {
 			// for a holder instead of answering complex -- `.kb/jvm-complex.md`).
 			// The boxed value lands in the shadow instead, which is then
 			// authoritative.
-			Site site = new Site(expr);
+			Site site = new Site(expr, ctx);
 			Node root = classify(expr, ctx, Map.of(), site, 0);
 			if (root instanceof ConstLeaf c) {
 				// A tree folded to a literal: the raw value directly.
@@ -1108,10 +1139,10 @@ final class JvmIntFusionCompiler {
 			// operands may be parameter references, which the argument-position
 			// ArefLeaf cannot express; substituteCall handles the parameter-shaped
 			// accessor case.
-			return arefLeaf(parts.get(1), parts.get(2), ctx, site, depth);
+			return arefLeaf(parts.get(1), parts.get(2), sourceSite(cons, ctx, site), ctx, site, depth);
 		}
 		if (LispNames.RANDOM.equals(op) && arity == 1 && env.isEmpty()) {
-			RandomLeaf leaf = randomLeaf(parts, ctx);
+			RandomLeaf leaf = randomLeaf(parts, ctx, sourceSite(cons, ctx, site));
 			if (leaf != null) {
 				return registerLeaf(leaf, leaves);
 			}
@@ -1123,7 +1154,8 @@ final class JvmIntFusionCompiler {
 					&& LispNames.BYTE.equals(specHead.name()) && spec.cdr() instanceof LispCons sCell
 					&& sCell.car() instanceof LispInteger && sCell.cdr() instanceof LispCons pCell
 					&& pCell.car() instanceof LispInteger && pCell.cdr() instanceof am.ik.rontolisp.LispNil) {
-				return classify(LispMacroExpander.expandLdb(cons), ctx, env, site, depth);
+				return classify(SourceProvenance.inherit(cons, LispMacroExpander.expandLdb(cons)), ctx, env, site,
+						depth);
 			}
 			return env.isEmpty() ? registerLeaf(new ExprLeaf(expr), leaves) : null;
 		}
@@ -1136,7 +1168,7 @@ final class JvmIntFusionCompiler {
 			LocalIntLambda lambda = ctx.localIntLambdas.get(fvar.name());
 			if (lambda != null && arity - 1 == lambda.params().size()) {
 				Node substituted = substituteCall(lambda.params(), lambda.body(), parts.subList(2, parts.size()), ctx,
-						env, site, depth);
+						env, site, depth, site.owner);
 				if (substituted != null) {
 					return substituted;
 				}
@@ -1146,7 +1178,7 @@ final class JvmIntFusionCompiler {
 		if (inlinable != null && arity == inlinable.paramNames().size() && depth < MAX_INLINE_DEPTH) {
 			LispVal body = java.util.Objects.requireNonNull(singleBodyExpr(inlinable.bodyExprs()));
 			Node substituted = substituteCall(inlinable.paramNames(), body, parts.subList(1, parts.size()), ctx, env,
-					site, depth);
+					site, depth, inlinedOwner(inlinable, ctx));
 			if (substituted != null) {
 				return substituted;
 			}
@@ -1186,11 +1218,33 @@ final class JvmIntFusionCompiler {
 			}
 			args.add(arg);
 		}
+		int sourceSite = sourceSite(cons, ctx, site);
 		return switch (op) {
-			case LispNames.ONE_PLUS -> makeOp(LispNames.ADD, List.of(args.get(0), new ConstLeaf(1)));
-			case LispNames.ONE_MINUS -> makeOp(LispNames.SUB, List.of(args.get(0), new ConstLeaf(1)));
-			default -> makeOp(op, args);
+			case LispNames.ONE_PLUS -> makeOp(LispNames.ADD, List.of(args.get(0), new ConstLeaf(1)), sourceSite);
+			case LispNames.ONE_MINUS -> makeOp(LispNames.SUB, List.of(args.get(0), new ConstLeaf(1)), sourceSite);
+			default -> makeOp(op, args, sourceSite);
 		};
+	}
+
+	/**
+	 * The source site of a form classified into the tree, owned by the function the form
+	 * belongs to ({@link Site#owner}); 0 when the compile records no positions or the
+	 * form has none.
+	 */
+	private static int sourceSite(LispCons form, JvmLispCompiler.Ctx ctx, Site site) {
+		JvmSourceSites table = ctx.sites;
+		return table == null ? 0 : table.site(form, site.owner);
+	}
+
+	/**
+	 * The owner an inlined defun's body is classified under: the defun itself when it is
+	 * the program's own code -- the interpreter runs its body as its own function -- and
+	 * 0 for a library defun, which a report never names.
+	 */
+	private static int inlinedOwner(JvmLispCompiler.DefunDecl inlinable, JvmLispCompiler.Ctx ctx) {
+		JvmSourceSites table = ctx.sites;
+		return table == null || !JvmSourceSites.sourced(inlinable.bodyExprs()) ? 0
+				: table.owner(JvmSourceSites.reportedName(inlinable.name()));
 	}
 
 	/**
@@ -1199,10 +1253,10 @@ final class JvmIntFusionCompiler {
 	 * computes exactly what the fast path would (and bails to the ordinary node on
 	 * overflow or a zero divisor, so promotion/error behavior is preserved).
 	 */
-	private static Node makeOp(String op, List<Node> args) {
+	private static Node makeOp(String op, List<Node> args, int sourceSite) {
 		for (Node arg : args) {
 			if (!(arg instanceof ConstLeaf)) {
-				return new OpNode(op, args);
+				return new OpNode(op, args, sourceSite);
 			}
 		}
 		try {
@@ -1228,7 +1282,7 @@ final class JvmIntFusionCompiler {
 			return new ConstLeaf(acc);
 		}
 		catch (ArithmeticException overflowOrZeroDivide) {
-			return new OpNode(op, args);
+			return new OpNode(op, args, sourceSite);
 		}
 	}
 
@@ -1263,7 +1317,7 @@ final class JvmIntFusionCompiler {
 	 * fall-through leaf treatment does not ALSO evaluate them.
 	 */
 	@Nullable private static Node substituteCall(List<String> params, LispVal body, List<LispVal> args, JvmLispCompiler.Ctx ctx,
-			Map<String, Node> env, Site site, int depth) {
+			Map<String, Node> env, Site site, int depth, int bodyOwner) {
 		List<Node> leaves = site.leaves;
 		// An accessor-shaped body -- exactly (aref P I) over parameters/literals -- maps
 		// straight onto an ArefLeaf over the CALLER's operand expressions, provided each
@@ -1277,7 +1331,11 @@ final class JvmIntFusionCompiler {
 				LispVal arr = inlineArefOperand(bodyParts.get(1), params, args);
 				LispVal idx = inlineArefOperand(bodyParts.get(2), params, args);
 				if (arr != null && idx != null) {
-					return arefLeaf(arr, idx, ctx, site, depth);
+					int callerOwner = site.owner;
+					site.owner = bodyOwner;
+					int arefSite = sourceSite(bodyCons, ctx, site);
+					site.owner = callerOwner;
+					return arefLeaf(arr, idx, arefSite, ctx, site, depth);
 				}
 			}
 		}
@@ -1292,7 +1350,15 @@ final class JvmIntFusionCompiler {
 			callEnv.put(params.get(i), argNode);
 		}
 		if (callEnv.size() == params.size()) {
-			substituted = classify(body, ctx, callEnv, site, depth + 1);
+			// The arguments were the caller's forms; the body is the callee's.
+			int callerOwner = site.owner;
+			site.owner = bodyOwner;
+			try {
+				substituted = classify(body, ctx, callEnv, site, depth + 1);
+			}
+			finally {
+				site.owner = callerOwner;
+			}
 		}
 		if (substituted == null) {
 			leaves.subList(mark, leaves.size()).clear();
@@ -1305,8 +1371,9 @@ final class JvmIntFusionCompiler {
 	 * the call site pushes the array first and the index's own leaves after it -- the
 	 * generic {@code (aref a i)} argument order.
 	 */
-	private static Node arefLeaf(LispVal arrayExpr, LispVal indexExpr, JvmLispCompiler.Ctx ctx, Site site, int depth) {
-		ArefLeaf leaf = new ArefLeaf(arrayExpr);
+	private static Node arefLeaf(LispVal arrayExpr, LispVal indexExpr, int sourceSite, JvmLispCompiler.Ctx ctx,
+			Site site, int depth) {
+		ArefLeaf leaf = new ArefLeaf(arrayExpr, sourceSite);
 		registerLeaf(leaf, site.leaves);
 		leaf.indexNode = arefIndexNode(indexExpr, ctx, site, depth);
 		return leaf;
@@ -1339,7 +1406,7 @@ final class JvmIntFusionCompiler {
 	 * keeps the form: a float limit (whose result is a Double), and a big-integer or
 	 * ratio literal, which the fast path's {@code Long} formula cannot answer.
 	 */
-	@Nullable private static RandomLeaf randomLeaf(List<LispVal> parts, JvmLispCompiler.Ctx ctx) {
+	@Nullable private static RandomLeaf randomLeaf(List<LispVal> parts, JvmLispCompiler.Ctx ctx, int sourceSite) {
 		if (!enabled(ctx) || JvmLispCompiler.hasDoubleLiteral(parts, ctx)) {
 			return null;
 		}
@@ -1351,12 +1418,12 @@ final class JvmIntFusionCompiler {
 				// baking a bad constant into the draw.
 				return null;
 			}
-			return new RandomLeaf(null, lit.value());
+			return new RandomLeaf(null, lit.value(), sourceSite);
 		}
 		if (limit instanceof am.ik.rontolisp.LispBigInteger || limit instanceof am.ik.rontolisp.LispRatio) {
 			return null;
 		}
-		return new RandomLeaf(limit, 0);
+		return new RandomLeaf(limit, 0, sourceSite);
 	}
 
 	private static Node registerLeaf(Node leaf, List<Node> leaves) {
@@ -1416,6 +1483,14 @@ final class JvmIntFusionCompiler {
 	 * a new {@code _fx$N} only when no structurally identical site exists yet.
 	 */
 	private static MethodrefConstant methodFor(Node root, List<Node> leaves, int cmpMask, JvmLispCompiler.Ctx ctx) {
+		if (reportsOnlyCallerSite(root, ctx.siteCurrent)) {
+			// Every form in the tree reports the site the call itself is at -- the
+			// common one-line tree -- so the method needs no line numbers of its own: it
+			// stays transparent to the uncaught report and shared by every structurally
+			// identical site, as it was before sites existed. Only a tree that spans
+			// lines, or an inlined defun's body, pays for a method of its own.
+			root = withoutSites(root);
+		}
 		State state = java.util.Objects.requireNonNull(ctx.fusedState);
 		StringBuilder desc = new StringBuilder("(");
 		for (Node leaf : leaves) {
@@ -1443,6 +1518,42 @@ final class JvmIntFusionCompiler {
 		return ref;
 	}
 
+	/**
+	 * Whether every operation of the tree reports {@code callerSite} (or no site at all):
+	 * then a failure inside the fused method is reported exactly by the call it is made
+	 * from.
+	 */
+	private static boolean reportsOnlyCallerSite(Node node, int callerSite) {
+		return switch (node) {
+			case OpNode op -> (op.site() == 0 || op.site() == callerSite)
+					&& op.args().stream().allMatch(arg -> reportsOnlyCallerSite(arg, callerSite));
+			case ArefLeaf leaf -> (leaf.site == 0 || leaf.site == callerSite)
+					&& reportsOnlyCallerSite(java.util.Objects.requireNonNull(leaf.indexNode), callerSite);
+			case RandomLeaf leaf -> leaf.site == 0 || leaf.site == callerSite;
+			default -> true;
+		};
+	}
+
+	/**
+	 * The tree with its sites cleared: an ordinary, shareable, line-free fused method.
+	 */
+	private static Node withoutSites(Node node) {
+		return switch (node) {
+			case OpNode op -> op.site() == 0 && op.args().stream().allMatch(arg -> withoutSites(arg) == arg) ? op
+					: new OpNode(op.op(), op.args().stream().map(JvmIntFusionCompiler::withoutSites).toList(), 0);
+			case ArefLeaf leaf -> {
+				leaf.site = 0;
+				leaf.indexNode = withoutSites(java.util.Objects.requireNonNull(leaf.indexNode));
+				yield leaf;
+			}
+			case RandomLeaf leaf -> {
+				leaf.site = 0;
+				yield leaf;
+			}
+			default -> node;
+		};
+	}
+
 	/** A deterministic structural serialization: leaves by ordinal, ops by name. */
 	private static String structureKey(Node root, List<Node> leaves) {
 		StringBuilder sb = new StringBuilder();
@@ -1455,6 +1566,11 @@ final class JvmIntFusionCompiler {
 			case ConstLeaf c -> sb.append('#').append(c.value());
 			case OpNode op -> {
 				sb.append('(').append(op.op());
+				if (op.site() != 0) {
+					// Sites differ, methods differ: a fused method's line numbers are its
+					// forms' (JvmSourceSites), so it is shared only by sites of one form.
+					sb.append('@').append(op.site());
+				}
 				for (Node arg : op.args()) {
 					sb.append(' ');
 					appendKey(arg, leaves, sb);
@@ -1463,13 +1579,18 @@ final class JvmIntFusionCompiler {
 			}
 			case ExprLeaf leaf -> sb.append('e').append(leafIndex(leaf, leaves));
 			case ArefLeaf leaf -> {
-				sb.append('a').append(leafIndex(leaf, leaves)).append('[');
+				sb.append('a').append(leafIndex(leaf, leaves));
+				if (leaf.site != 0) {
+					sb.append('@').append(leaf.site);
+				}
+				sb.append('[');
 				appendKey(java.util.Objects.requireNonNull(leaf.indexNode), leaves, sb);
 				sb.append(']');
 			}
 			case RandomLeaf leaf -> sb.append('n')
 				.append(leafIndex(leaf, leaves))
-				.append(leaf.limitExpr == null ? "#" + leaf.limitConst : "");
+				.append(leaf.limitExpr == null ? "#" + leaf.limitConst : "")
+				.append(leaf.site == 0 ? "" : "@" + leaf.site);
 			case RawLeaf leaf -> sb.append('r').append(leafIndex(leaf, leaves));
 		}
 	}
@@ -1748,10 +1869,15 @@ final class JvmIntFusionCompiler {
 		int drawn = branch(ctx, Opcode.GOTO);
 		JvmEmitHelper.patchBranch(ctx, notLong, ctx.code.size());
 		JvmEmitHelper.patchBranch(ctx, notPositive, ctx.code.size());
+		// _random may reject the limit: its throw reports the random form, whatever line
+		// the tree around it started on.
+		int outerSite = ctx.siteCurrent;
+		ctx.restoreSite(leaf.site);
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(leaf.limitParam);
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(randomHelper.index());
+		ctx.restoreSite(outerSite);
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(leaf.boxSlot);
 		JvmEmitHelper.emitRawLong(0, ctx);
@@ -2113,6 +2239,7 @@ final class JvmIntFusionCompiler {
 			OpNode root = (OpNode) pending.root();
 			emitFallback(root.args().get(0), ctx, className);
 			emitFallback(root.args().get(1), ctx, className);
+			ctx.restoreSite(root.site());
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(numOpFor(compareOperator(pending.cmpMask()), JvmNumericRuntimeBuilder.CMPB, ctx).index());
 			JvmEmitHelper.emitIntConst(ctx, pending.cmpMask());
@@ -2307,6 +2434,7 @@ final class JvmIntFusionCompiler {
 				ctx.emit(Opcode.ALOAD);
 				ctx.emit(leaf.arrParam);
 				emitFallback(java.util.Objects.requireNonNull(leaf.indexNode), ctx, className);
+				ctx.restoreSite(leaf.site);
 				ctx.emit(Opcode.INVOKESTATIC);
 				ctx.emitU2(aref1Helper(ctx, className).index());
 			}
@@ -2352,10 +2480,14 @@ final class JvmIntFusionCompiler {
 				emitFallback(op.args().get(0), ctx, className);
 				for (int i = 1; i < op.args().size(); i++) {
 					emitFallback(op.args().get(i), ctx, className);
+					// A wrong-type operand fails in this call: it reports this node's
+					// form.
+					ctx.restoreSite(op.site());
 					ctx.emit(Opcode.INVOKESTATIC);
 					ctx.emitU2(numOpFor(op.op(), fallbackKey(op.op()), ctx).index());
 				}
 				if (LispNames.LOGNOT.equals(op.op())) {
+					ctx.restoreSite(op.site());
 					ctx.emit(Opcode.INVOKESTATIC);
 					ctx.emitU2(numOpFor(op.op(), JvmNumericRuntimeBuilder.LOGNOT, ctx).index());
 				}

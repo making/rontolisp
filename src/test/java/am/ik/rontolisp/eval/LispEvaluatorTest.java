@@ -14351,6 +14351,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void parseIntegerThroughAFunctionValueReportsWhatACallReports() {
+		// A call expands to (error "parse-integer: junk in string ~s" s); #'parse-integer
+		// is the built-in, whose report is what every compiled backend prints for both.
+		for (String input : List.of("\"12abc\"", "\"\"", "\"a\\\"b\"")) {
+			String viaCall = eval("(handler-case (parse-integer " + input + ") (error (e) (princ-to-string e)))")
+				.display();
+			String viaValue = eval(
+					"(handler-case (funcall #'parse-integer " + input + ") (error (e) (princ-to-string e)))")
+				.display();
+			assertThat(viaValue).as(input).startsWith("parse-integer: ").isEqualTo(viaCall);
+		}
+	}
+
+	@Test
 	void evalReadFromString() {
 		assertThat(eval("(read-from-string \"(+ 1 2)\")")).isEqualTo(new LispCons(new LispSymbol("+"),
 				new LispCons(new LispInteger(1), new LispCons(new LispInteger(2), LispNil.INSTANCE))));

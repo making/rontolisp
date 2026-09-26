@@ -458,12 +458,39 @@ public final class Environment implements Scope {
 	@Nullable private Environment blockOwner;
 
 	/**
+	 * The name the program function this scope's code is WRITTEN in was defined under, or
+	 * {@code null} outside every one (the top level, an async body): what the uncaught
+	 * report's location line names ({@code ConditionTrace}). Lexical, so it follows the
+	 * scope chain a closure keeps: a child scope inherits it, a program function's call
+	 * scope and a macro expander's scope set their own.
+	 */
+	@Nullable private String lexicalFunction;
+
+	/**
 	 * Create a new environment with the given parent scope.
 	 * @param parent the parent environment, or {@code null} for a top-level scope
 	 */
 	public Environment(@Nullable Environment parent) {
 		this.parent = parent;
 		this.mvSpill = parent == null ? new ValueCountRegister() : parent.mvSpill;
+		this.lexicalFunction = parent == null ? null : parent.lexicalFunction;
+	}
+
+	/**
+	 * The program function this scope's code is written in; see {@link #lexicalFunction}.
+	 * @return the name it was defined under, or {@code null}
+	 */
+	@Nullable String lexicalFunction() {
+		return this.lexicalFunction;
+	}
+
+	/**
+	 * Makes this freshly created scope the start of a program function's code (a call
+	 * scope, a macro expander's), or of code in none (an async body).
+	 * @param name the name the function was defined under, or {@code null}
+	 */
+	void lexicalFunction(@Nullable String name) {
+		this.lexicalFunction = name;
 	}
 
 	/**
@@ -7297,7 +7324,9 @@ public final class Environment implements Scope {
 
 	// Shared parse-integer logic: trims whitespace, accepts an optional sign, and
 	// accumulates digits in the given radix. With junkAllowed, stops at the first
-	// non-digit and returns nil when no digits were seen; otherwise signals on junk.
+	// non-digit and returns nil when no digits were seen; otherwise signals on junk --
+	// the text a call's expansion signals (LispMacroExpander.expandParseInteger: ~s of
+	// the string), which every compiled backend prints for #'parse-integer too.
 	private static LispVal[] parseInteger(String s, int start, int end, int radix, boolean junkAllowed) {
 		int i = start;
 		while (i < end && Character.isWhitespace(s.charAt(i))) {
@@ -7325,14 +7354,14 @@ public final class Environment implements Scope {
 				i++;
 			}
 			if (i != end) {
-				throw new LispEvalException(LispNames.PARSE_INTEGER + ": junk in string \"" + s + "\"");
+				throw new LispEvalException("parse-integer: junk in string " + new LispString(s).print());
 			}
 		}
 		if (!sawDigit) {
 			if (junkAllowed) {
 				return new LispVal[] { LispNil.INSTANCE, new LispInteger(i) };
 			}
-			throw new LispEvalException(LispNames.PARSE_INTEGER + ": no integer in string \"" + s + "\"");
+			throw new LispEvalException("parse-integer: no integer in string " + new LispString(s).print());
 		}
 		return new LispVal[] { normalizeBig(acc.multiply(java.math.BigInteger.valueOf(sign))), new LispInteger(i) };
 	}
