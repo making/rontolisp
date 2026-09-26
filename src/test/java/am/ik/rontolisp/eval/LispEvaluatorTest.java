@@ -3158,9 +3158,11 @@ class LispEvaluatorTest {
 			double d = ((LispDouble) floatResult).value();
 			assertThat(d).isGreaterThanOrEqualTo(0.0).isLessThan(2.0);
 		}
-		// A non-positive limit is an error.
-		assertThatThrownBy(() -> eval("(random 0)")).hasMessageContaining("positive");
-		assertThatThrownBy(() -> eval("(random -3)")).hasMessageContaining("positive");
+		// A non-positive limit is a catchable type-error
+		// (randomLimitDomainViolationsSignalATypeError
+		// covers the full domain, including a ratio limit).
+		assertThatThrownBy(() -> eval("(random 0)")).hasMessage("RANDOM: The value 0 is not of type REAL");
+		assertThatThrownBy(() -> eval("(random -3)")).hasMessage("RANDOM: The value -3 is not of type REAL");
 	}
 
 	@Test
