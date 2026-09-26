@@ -19943,17 +19943,25 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The routing answer {@code expandTopLevelDefinitions} records: the broad "can one be
-	 * built" gate on the message-rendering backends (and always under restart mode or
-	 * {@code --dynamic}), the "can program code hold one" gate where signal messages are
-	 * never rendered (see the {@code lazyConditionMessages} overload's javadoc).
+	 * Records the routing answer {@code expandTopLevelDefinitions} needs: the broad "can
+	 * one be built" gate on the message-rendering backends (and always under restart mode
+	 * or {@code --dynamic}), the "can program code hold one" gate where signal messages
+	 * are never rendered, and under {@link SignalMessages#ENTRY_REPORT} the broad gate
+	 * for the renderer and the narrow one for the printing operators (see
+	 * {@link SignalMessages}).
 	 */
-	private static boolean conditionRoutingGate(List<LispVal> program, ClosRegistry closRegistry,
-			boolean lazyConditionMessages, boolean dynamic, boolean restartMode) {
-		if (!lazyConditionMessages || dynamic || restartMode) {
-			return mayCreateConditions(program, closRegistry);
+	private static void recordConditionRouting(List<LispVal> program, ClosRegistry closRegistry,
+			SignalMessages signalMessages, boolean dynamic, boolean restartMode) {
+		if (signalMessages == SignalMessages.RENDERED || dynamic || restartMode) {
+			closRegistry.setRoutesConditionReports(mayCreateConditions(program, closRegistry));
 		}
-		return mayHoldConditions(program, closRegistry);
+		else if (signalMessages == SignalMessages.LAZY) {
+			closRegistry.setRoutesConditionReports(mayHoldConditions(program, closRegistry));
+		}
+		else {
+			closRegistry.setRoutesConditionReports(mayCreateConditions(program, closRegistry),
+					mayHoldConditions(program, closRegistry));
+		}
 	}
 
 	private static boolean conditionValueGate(List<LispVal> program, ClosRegistry closRegistry, boolean holdOnly) {
@@ -23614,7 +23622,7 @@ public final class LispMacroExpander {
 			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported, boolean dynamic,
 			boolean lazyConditionMessages) {
 		return expandTopLevelDefinitions(program, structAccessors, closRegistry, exported, dynamic,
-				lazyConditionMessages, null);
+				lazyConditionMessages ? SignalMessages.LAZY : SignalMessages.RENDERED, null);
 	}
 
 	/**
@@ -23633,14 +23641,14 @@ public final class LispMacroExpander {
 	 * @param closRegistry mutated: classes, generics, and methods
 	 * @param exported {@code (package, member) -> is it external}, or {@code null}
 	 * @param dynamic whether the backend compiles in late-binding mode
-	 * @param lazyConditionMessages whether the backend never renders signal messages
+	 * @param signalMessages who reads a signal's message ({@link SignalMessages})
 	 * @param narrower the dispatch narrower, or {@code null} to keep every branch
 	 * @return the program with each definition replaced by its generated defuns
 	 */
 	public static List<LispVal> expandTopLevelDefinitions(List<LispVal> program,
 			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry,
 			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported, boolean dynamic,
-			boolean lazyConditionMessages, @org.jspecify.annotations.Nullable DispatchNarrower narrower) {
+			SignalMessages signalMessages, @org.jspecify.annotations.Nullable DispatchNarrower narrower) {
 		// The one whole-program pass both compilers already run, so the pure-builtin fold
 		// and the load-time-value hoist ride along instead of needing their own
 		// registration in every pipeline. The fold goes FIRST: a folded
@@ -23746,8 +23754,7 @@ public final class LispMacroExpander {
 		// has no definition to splice and would take the fast path below), and again on
 		// the expanded program, where a define-condition has become a %obj-new
 		// constructor.
-		closRegistry.setRoutesConditionReports(
-				conditionRoutingGate(program, closRegistry, lazyConditionMessages, dynamic, restartMode));
+		recordConditionRouting(program, closRegistry, signalMessages, dynamic, restartMode);
 		boolean symbolFunctionWrite = usesSymbolFunctionWrite(program);
 		// print-object NAMED but not specialized: CL supplies a system method for every
 		// object, so a program that only CALLS it (or takes #'print-object) still needs
@@ -24034,8 +24041,7 @@ public final class LispMacroExpander {
 		// The registry is complete and every class constructor is spliced, so this is the
 		// final answer: everything injected below (the runtime-error helpers, the print
 		// renderer) reads it, and so does every signal site compiled in Pass 2.
-		closRegistry.setRoutesConditionReports(
-				conditionRoutingGate(out, closRegistry, lazyConditionMessages, dynamic, restartMode));
+		recordConditionRouting(out, closRegistry, signalMessages, dynamic, restartMode);
 		if (runtimeSubtypep) {
 			// Injected once the registry is complete; defuns are collected in a
 			// position-independent pass, so appending is safe. The data table is a
@@ -24127,13 +24133,19 @@ public final class LispMacroExpander {
 		// the tags the program can actually construct, with the runtime format
 		// renderer declined when no site can hand it an unrendered control.
 		if (closRegistry.routesConditionReports()) {
-			out.addAll(
-					conditionReportDefuns(closRegistry, conditionNarrowing(out, closRegistry, dynamic, restartMode)));
+			ConditionNarrowing narrowing = conditionNarrowing(out, closRegistry, dynamic, restartMode);
+			// A declined renderer means no site can hand the report a control that is not
+			// a literal string, so a FUNCTION control cannot reach it either -- and its
+			// arm is a funcall of a runtime value, which in a program that can make a
+			// symbol at run time (read) keeps every built-in dispatchable. Dropped only
+			// under ENTRY_REPORT: every other mode's artifact keeps its bytes.
+			boolean functionControls = signalMessages != SignalMessages.ENTRY_REPORT || !narrowing.declineRenderer();
+			out.addAll(conditionReportDefuns(closRegistry, narrowing, functionControls));
 		}
 		// The print-object renderer, once per program that defines a print-object method
 		// or routes condition reports. Emitted here so the tag list is the COMPLETE
 		// method set, whatever order the defmethods came in.
-		if (!printObjectTags(closRegistry).isEmpty() || closRegistry.routesConditionReports()) {
+		if (!printObjectTags(closRegistry).isEmpty() || closRegistry.printsConditionReports()) {
 			out.addAll(printObjectStrDefuns(closRegistry, usesPrintControls(program), programUsesGeneralArrayOp(out)));
 		}
 		// The runtime format renderer, once per program that can reach it. Emitted here
@@ -30487,7 +30499,7 @@ public final class LispMacroExpander {
 		LispSymbol value = new LispSymbol("__pox");
 		LispSymbol escape = new LispSymbol("__poe");
 		LispVal fallback = makeIf(escape, rawRendering(value, true, printControls),
-				princRendering(value, closRegistry.routesConditionReports(), printControls));
+				princRendering(value, closRegistry.printsConditionReports(), printControls));
 		LispVal body = printObjectRouting(value, fallback, closRegistry, escape);
 		LispVal leaf = listToCons(List.of(new LispSymbol(LispNames.DEFUN),
 				new LispSymbol(LispNames.PRINT_OBJECT_LEAF_INTERNAL), listToCons(List.of(value, escape)), body));
@@ -31134,6 +31146,19 @@ public final class LispMacroExpander {
 	 * @return the {@code %format-condition} and {@code %condition-report-str} defuns
 	 */
 	public static List<LispVal> conditionReportDefuns(ClosRegistry closRegistry, ConditionNarrowing narrowing) {
+		return conditionReportDefuns(closRegistry, narrowing, true);
+	}
+
+	/**
+	 * As the overload above, choosing whether {@code %format-condition} keeps its arm for
+	 * a {@code format-control} that is a function.
+	 * @param closRegistry the completed registry
+	 * @param narrowing what the program can construct
+	 * @param functionControls whether a function control can reach the report
+	 * @return the {@code %format-condition} and {@code %condition-report-str} defuns
+	 */
+	public static List<LispVal> conditionReportDefuns(ClosRegistry closRegistry, ConditionNarrowing narrowing,
+			boolean functionControls) {
 		LispSymbol value = new LispSymbol("__crv");
 		List<LispVal> clauses = new java.util.ArrayList<>();
 		clauses.add(new LispSymbol(LispNames.COND));
@@ -31156,7 +31181,7 @@ public final class LispMacroExpander {
 		LispVal reportDefun = listToCons(
 				List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.CONDITION_REPORT_STR_INTERNAL),
 						listToCons(List.<LispVal>of(value)), listToCons(clauses)));
-		return List.of(formatConditionDefun(narrowing.declineRenderer()), reportDefun);
+		return List.of(formatConditionDefun(narrowing.declineRenderer(), functionControls), reportDefun);
 	}
 
 	/**
@@ -31173,7 +31198,7 @@ public final class LispMacroExpander {
 	 * prints a condition. A nil control is no report at all, and answers nil so the
 	 * caller falls back.
 	 */
-	private static LispVal formatConditionDefun(boolean declineRenderer) {
+	private static LispVal formatConditionDefun(boolean declineRenderer, boolean functionControls) {
 		LispSymbol control = new LispSymbol("__fcc");
 		LispSymbol args = new LispSymbol("__fca");
 		LispSymbol stream = new LispSymbol("__fcs");
@@ -31198,8 +31223,8 @@ public final class LispMacroExpander {
 		// arguments -- the synthesized-simple-error common case -- the string arm
 		// answers the control itself and the renderer is never spliced.
 		LispVal stringArm = declineRenderer ? control : FormatRenderer.call(control, args);
-		LispVal body = makeIf(callOf(LispNames.STRINGP, control), stringArm,
-				makeIf(callOf(LispNames.NULL, control), LispNil.INSTANCE, functionControl));
+		LispVal body = makeIf(callOf(LispNames.STRINGP, control), stringArm, functionControls
+				? makeIf(callOf(LispNames.NULL, control), LispNil.INSTANCE, functionControl) : LispNil.INSTANCE);
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.FORMAT_CONDITION_INTERNAL),
 				listToCons(List.of(control, args)), body));
 	}
@@ -31268,7 +31293,7 @@ public final class LispMacroExpander {
 	 * method nor can build a condition nor mentions a printer-control variable
 	 */
 	@Nullable public static LispVal expandPrintObjectHook(LispCons cons, ClosRegistry closRegistry, boolean printControls) {
-		if ((printObjectTags(closRegistry).isEmpty() && !closRegistry.routesConditionReports() && !printControls)
+		if ((printObjectTags(closRegistry).isEmpty() && !closRegistry.printsConditionReports() && !printControls)
 				|| !cons.isProperList()) {
 			return null;
 		}
@@ -31317,7 +31342,7 @@ public final class LispMacroExpander {
 		// Nothing to route: the operator is here for the printer-control variables
 		// alone, so the %print-cased renderer IS the rewrite (and the %print-object-str
 		// defun this would otherwise call is not generated for such a program).
-		if (printObjectTags(closRegistry).isEmpty() && !closRegistry.routesConditionReports()) {
+		if (printObjectTags(closRegistry).isEmpty() && !closRegistry.printsConditionReports()) {
 			return rawRendering(value, escape, printControls);
 		}
 		return listToCons(List.of(new LispSymbol(LispNames.PRINT_OBJECT_STR_INTERNAL), value,

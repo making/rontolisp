@@ -88,6 +88,18 @@ class NativeOutputE2eTest {
 	}
 
 	@Test
+	void reportLocationsReportsAnUncaughtConditionOfAProgramWithNoCatchingForm() throws Exception {
+		// Outside exception-handling mode the option turns the report on, so the runner
+		// prints it and its location line before exiting as the trap it still is.
+		String source = "(defun parse (s)\n  (parse-integer s))\n(print (parse \"x\"))\n";
+		Run run = nativeOutput(source, List.of("--report-locations=line"));
+		Path src = this.tempDir.resolve("native").resolve("prog.lisp");
+		assertThat(run.exit()).as("stderr: %s", run.stderr()).isNotZero();
+		assertThat(run.stderr().lines().filter(line -> !line.startsWith("Error: ")).limit(2))
+			.containsExactly("Unhandled condition: parse-integer: junk in string \"x\"", "  at " + src + ":2 in PARSE");
+	}
+
+	@Test
 	void aRelativePathClimbsAboveTheDirectoryItRunsIn() throws Exception {
 		// Where `wasmtime run --dir .` refuses `../x`, the runner answers as a native
 		// program does; there is no wasmtime run to diff against here. The program runs
@@ -251,11 +263,15 @@ class NativeOutputE2eTest {
 	}
 
 	private Run nativeOutput(String source, String... args) throws Exception {
+		return nativeOutput(source, List.of(), args);
+	}
+
+	private Run nativeOutput(String source, List<String> flags, String... args) throws Exception {
 		Path dir = Files.createDirectories(this.tempDir.resolve("native"));
 		Path src = dir.resolve("prog.lisp");
 		Files.writeString(src, source);
 		Path exe = dir.resolve("prog");
-		compileNative(src, exe);
+		compileNative(src, exe, flags.toArray(String[]::new));
 		List<String> command = new ArrayList<>(List.of(exe.toString()));
 		command.addAll(List.of(args));
 		return exec(Files.createDirectories(dir.resolve("run")), command);
