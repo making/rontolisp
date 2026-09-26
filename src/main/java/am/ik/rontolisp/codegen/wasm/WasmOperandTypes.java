@@ -68,7 +68,9 @@ final class WasmOperandTypes {
 	 * a {@code coerce} to {@code real} signals through {@code float}, a {@code setf} of
 	 * an {@code aref} or {@code svref} place through {@code %aset}, {@code nth} and
 	 * {@code second}..{@code tenth} through {@code (car (nthcdr ...))}, {@code dolist}
-	 * through {@code endp}.
+	 * and {@code loop}'s {@code for-in} through {@code endp}, a {@code car}/{@code cdr}
+	 * place's store ({@code setf} and the modify macros) through {@code rplaca} /
+	 * {@code rplacd}.
 	 */
 	private static final java.util.Map<String, java.util.List<String>> LOWERED_TO = loweredTo();
 
@@ -78,6 +80,10 @@ final class WasmOperandTypes {
 		map.put("AREF", java.util.List.of(OperandTypes.SETF_AREF));
 		map.put("SVREF", java.util.List.of(OperandTypes.SETF_AREF));
 		map.put("DOLIST", java.util.List.of("ENDP"));
+		map.put("LOOP", java.util.List.of("ENDP"));
+		for (String modify : java.util.List.of("SETF", "INCF", "DECF", "PUSH", "POP", "PUSHNEW")) {
+			map.put(modify, java.util.List.of("RPLACA", "RPLACD"));
+		}
 		for (String nth : java.util.List.of("NTH", "SECOND", "THIRD", "FOURTH", "FIFTH", "SIXTH", "SEVENTH", "EIGHTH",
 				"NINTH", "TENTH")) {
 			map.put(nth, java.util.List.of("NTHCDR", "CAR"));

@@ -19,8 +19,10 @@ final class JvmRplacaCompiler {
 		List<LispVal> args = cons.toList();
 		// Compile the cons cell
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
+		// A cons, cast; anything else (nil included) is RPLACA's CONS type-error
+		// (JvmOperandTypeRuntime).
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CK_CONS).index());
 		// DUP the array ref (to leave it on stack after AASTORE)
 		ctx.emit(Opcode.DUP);
 		// Index 0 = car

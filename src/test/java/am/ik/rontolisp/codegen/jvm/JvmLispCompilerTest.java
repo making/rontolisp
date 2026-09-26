@@ -1284,34 +1284,32 @@ class JvmLispCompilerTest {
 		// literal or through a variable -- and used to skip this check entirely: a
 		// non-positive limit silently produced a wrong value instead of signaling
 		// (.todo/981).
-		assertThat(compileAndRun(
-				"""
-						(defun te (thunk)
-						  (handler-case (funcall thunk)
-						    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
-						    (error (e) (list :not-a-type-error (princ-to-string e)))))
-						(print (te (lambda () (random 1/2))))
-						(print (te (lambda () (random -1))))
-						(print (te (lambda () (random 0))))
-						(print (te (lambda () (random -1.5))))
-						(print (te (lambda () (random 0.0))))
-						(let ((x -1.0)) (print (te (lambda () (random x)))))
-						(print (te (lambda () (+ 100 (random -1)))))
-						(print (te (lambda () (+ 100 (random 0)))))
-						(let ((x -1)) (print (te (lambda () (+ 100 (random x))))))
-						(let ((r (+ 100 (random 3)))) (print (and (integerp r) (>= r 100) (< r 103))))
-						"""))
-			.isEqualTo("""
-					("RANDOM: The value 1/2 is not of type REAL" 1/2 REAL)
-					("RANDOM: The value -1 is not of type REAL" -1 REAL)
-					("RANDOM: The value 0 is not of type REAL" 0 REAL)
-					("RANDOM: The value -1.5 is not of type REAL" -1.5 REAL)
-					("RANDOM: The value 0.0 is not of type REAL" 0.0 REAL)
-					("RANDOM: The value -1.0 is not of type REAL" -1.0 REAL)
-					("RANDOM: The value -1 is not of type REAL" -1 REAL)
-					("RANDOM: The value 0 is not of type REAL" 0 REAL)
-					("RANDOM: The value -1 is not of type REAL" -1 REAL)
-					T""");
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(print (te (lambda () (random 1/2))))
+				(print (te (lambda () (random -1))))
+				(print (te (lambda () (random 0))))
+				(print (te (lambda () (random -1.5))))
+				(print (te (lambda () (random 0.0))))
+				(let ((x -1.0)) (print (te (lambda () (random x)))))
+				(print (te (lambda () (+ 100 (random -1)))))
+				(print (te (lambda () (+ 100 (random 0)))))
+				(let ((x -1)) (print (te (lambda () (+ 100 (random x))))))
+				(let ((r (+ 100 (random 3)))) (print (and (integerp r) (>= r 100) (< r 103))))
+				""")).isEqualTo("""
+				("RANDOM: The value 1/2 is not of type REAL" 1/2 REAL)
+				("RANDOM: The value -1 is not of type REAL" -1 REAL)
+				("RANDOM: The value 0 is not of type REAL" 0 REAL)
+				("RANDOM: The value -1.5 is not of type REAL" -1.5 REAL)
+				("RANDOM: The value 0.0 is not of type REAL" 0.0 REAL)
+				("RANDOM: The value -1.0 is not of type REAL" -1.0 REAL)
+				("RANDOM: The value -1 is not of type REAL" -1 REAL)
+				("RANDOM: The value 0 is not of type REAL" 0 REAL)
+				("RANDOM: The value -1 is not of type REAL" -1 REAL)
+				T""");
 	}
 
 	@Test
@@ -1373,6 +1371,75 @@ class JvmLispCompilerTest {
 				("SCHAR: The value NIL is not of type INTEGER" NIL INTEGER)
 				("CHAR: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
 				("CHAR: The value NIL is not of type INTEGER" NIL INTEGER)""");
+	}
+
+	@Test
+	void listConsumersNameTheOperator() throws Exception {
+		// A list consumer over a non-list names its operator as the list walks do
+		// (compiler/OperandTypes): length of a non-sequence (SEQUENCE), last and the map*
+		// family of a non-list (LIST), rplaca/rplacd of a non-cons (CONS), and loop's
+		// for-in, which checks its list's end as endp does.
+		// length and last answered wrong values here (0, and the argument itself), rplaca
+		// the landing pad's generic text.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *te-five* 5)
+				(defvar *te-sym* 'foo)
+				(defvar *te-nil* nil)
+				(print (te (lambda () (length *te-five*))))
+				(print (te (lambda () (length *te-sym*))))
+				(print (te (lambda () (length (make-hash-table)))))
+				(print (te (lambda () (funcall #'length *te-five*))))
+				(print (list (length nil) (length '(1 2)) (length "ab") (length (vector 1 2 3))))
+				(print (te (lambda () (last *te-five*))))
+				(print (te (lambda () (last *te-five* 1))))
+				(print (te (lambda () (funcall #'last *te-five*))))
+				(print (list (last nil) (last '(1 2 . 3)) (last '(1 2 3) 2)))
+				(print (te (lambda () (rplaca *te-five* 0))))
+				(print (te (lambda () (rplacd *te-nil* 0))))
+				(print (te (lambda () (funcall #'rplaca *te-five* 0))))
+				(print (te (lambda () (setf (car *te-five*) 0))))
+				(print (te (lambda () (mapcar #'1+ *te-five*))))
+				(print (te (lambda () (mapcar #'+ '(1 2) *te-five*))))
+				(print (te (lambda () (mapc #'1+ *te-five*))))
+				(print (te (lambda () (mapcan #'list *te-five*))))
+				(print (te (lambda () (maplist #'car *te-five*))))
+				(print (te (lambda () (mapl #'car *te-five*))))
+				(print (te (lambda () (mapcon #'list *te-five*))))
+				(print (te (lambda () (funcall #'mapcar #'1+ *te-five*))))
+				(print (te (lambda () (loop for x in *te-five* collect x))))
+				(let ((seen nil))
+				  (print (list (te (lambda () (loop for x in '(1 2 . 3) do (push x seen)))) seen)))
+				(print (list (loop for x in '(1 2) collect x) (loop for x in nil collect x) (mapcar #'1+ nil)))
+				""")).isEqualTo(
+				"""
+						("LENGTH: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+						("LENGTH: The value FOO is not of type SEQUENCE" FOO SEQUENCE)
+						("LENGTH: The value #<HASH-TABLE :TEST EQUAL :COUNT 0> is not of type SEQUENCE" #<HASH-TABLE :TEST EQUAL :COUNT 0> SEQUENCE)
+						("LENGTH: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+						(0 2 2 3)
+						("LAST: The value 5 is not of type LIST" 5 LIST)
+						("LAST: The value 5 is not of type LIST" 5 LIST)
+						("LAST: The value 5 is not of type LIST" 5 LIST)
+						(NIL (2 . 3) (2 3))
+						("RPLACA: The value 5 is not of type CONS" 5 CONS)
+						("RPLACD: The value NIL is not of type CONS" NIL CONS)
+						("RPLACA: The value 5 is not of type CONS" 5 CONS)
+						("RPLACA: The value 5 is not of type CONS" 5 CONS)
+						("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+						("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+						("MAPC: The value 5 is not of type LIST" 5 LIST)
+						("MAPCAN: The value 5 is not of type LIST" 5 LIST)
+						("MAPLIST: The value 5 is not of type LIST" 5 LIST)
+						("MAPL: The value 5 is not of type LIST" 5 LIST)
+						("MAPCON: The value 5 is not of type LIST" 5 LIST)
+						("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+						("ENDP: The value 5 is not of type LIST" 5 LIST)
+						(("ENDP: The value 3 is not of type LIST" 3 LIST) (2 1))
+						((1 2) NIL NIL)""");
 	}
 
 	@Test
@@ -1691,9 +1758,10 @@ class JvmLispCompilerTest {
 		// A cast failure's host text names Java classes and an out-of-range index's
 		// counts the layout cell; both are replaced at the pad. (car 1) names itself now
 		// (argumentTypeErrorsNameTheOperatorBeyondArithmetic), as does nthcdr's walk
-		// (listWalksAndStringIndicesNameTheOperator); rplaca of a non-cons is still a
-		// bare cast.
-		assertThat(compileAndRun("(print (handler-case (rplaca 5 0) (type-error (e) (princ-to-string e))))"))
+		// (listWalksAndStringIndicesNameTheOperator) and rplaca's
+		// (listConsumersNameTheOperator); an access's array argument is still a bare
+		// cast.
+		assertThat(compileAndRun("(print (handler-case (aref 5 0) (type-error (e) (princ-to-string e))))"))
 			.isEqualTo("\"the value is not of the expected type\"");
 		assertThat(compileAndRun("(print (handler-case (aref (vector 1 2) 5) (type-error (e) (princ-to-string e))))"))
 			.isEqualTo("\"index out of bounds\"");
@@ -7903,9 +7971,9 @@ class JvmLispCompilerTest {
 		// i x) the renderer always made.
 		assertThat(compileAndRun("""
 				(let ((c "~{~a~}[~a]"))
-				  (princ (format nil c 5 'tail))
+				  (princ (handler-case (format nil c 5 'tail) (type-error (e) (type-error-expected-type e))))
 				  (princ (format nil c nil 'tail)))
-				""")).isEqualTo("[TAIL][TAIL]");
+				""")).isEqualTo("SEQUENCE[TAIL]");
 		// Long enough that the head-walk showed: 0.56 ms a call at n = 2000 before.
 		assertThat(compileAndRun("""
 				(let* ((c "~{~a~}")
@@ -12515,18 +12583,18 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunMapFamilyErrorsOnNonList() throws Exception {
-		// The map* family operates on lists; a non-list (e.g. a string) signals an error
-		// rather than silently returning nil, matching the interpreter.
+		// The map* family operates on lists; a non-list (e.g. a string) is the operator's
+		// LIST type-error rather than a silent nil, matching the interpreter.
 		assertThatThrownBy(() -> compileAndRun("(mapcar #'identity \"abc\")"))
-			.hasRootCauseMessage("MAPCAR: argument is not a list (use map for strings/vectors)");
+			.hasRootCauseMessage("MAPCAR: The value \"abc\" is not of type LIST");
 		assertThatThrownBy(() -> compileAndRun("(mapc #'identity \"abc\")"))
-			.hasRootCauseMessage("MAPC: argument is not a list (use map for strings/vectors)");
+			.hasRootCauseMessage("MAPC: The value \"abc\" is not of type LIST");
 		assertThatThrownBy(() -> compileAndRun("(mapcan #'list \"abc\")"))
-			.hasRootCauseMessage("MAPCAN: argument is not a list (use map for strings/vectors)");
+			.hasRootCauseMessage("MAPCAN: The value \"abc\" is not of type LIST");
 		assertThatThrownBy(() -> compileAndRun("(maplist #'identity \"abc\")"))
-			.hasRootCauseMessage("MAPLIST: argument is not a list: \"abc\" (use map for strings/vectors)");
+			.hasRootCauseMessage("MAPLIST: The value \"abc\" is not of type LIST");
 		assertThatThrownBy(() -> compileAndRun("(mapcon #'list \"abc\")"))
-			.hasRootCauseMessage("MAPCON: argument is not a list: \"abc\" (use map for strings/vectors)");
+			.hasRootCauseMessage("MAPCON: The value \"abc\" is not of type LIST");
 		// nil (the empty list) and proper lists stay accepted.
 		assertThat(compileAndRun("(print (mapcar #'1+ '(1 2 3))) (print (mapcar #'1+ nil))")).isEqualTo("(2 3 4)\nNIL");
 		assertThat(compileAndRun("(print (maplist #'identity nil))")).isEqualTo("NIL");
@@ -15950,7 +16018,9 @@ class JvmLispCompilerTest {
 		// (JvmOperandTypeRuntime): _teRaw, _opTypeErr and the (* x x) wrapper, +565 B.
 		// 10,129 since car/cdr name themselves (_car/_cdr, and _opTypeErr's
 		// funnel-typed arm): +143 B.
-		assertThat(classBytes.length).isLessThan(10_200);
+		// 10,238 since mapcar's list argument is checked (_ckList and MAPCAR's wrapper,
+		// replacing the inline guard's message): +109 B.
+		assertThat(classBytes.length).isLessThan(10_300);
 		assertThat(runClass(classBytes)).isEqualTo("(1 4 9)");
 	}
 
@@ -16556,13 +16626,13 @@ class JvmLispCompilerTest {
 				(print (coerce nil 'vector))
 				(print (handler-case (coerce '(1 2) 'string) (error () :not-a-character)))
 				(print (coerce 5 'vector))
-				(print (coerce 5 'list))
+				(print (handler-case (coerce 5 'list) (type-error (e) (type-error-expected-type e))))
 				(print (position #\\Space "a b c"))
 				(print (position #\\Space "a b c" :from-end t))
 				(print (count #\\a "banana"))
 				(print (remove #\\a "banana"))
 				""")).isEqualTo(
-				"1\n(#\\z #\\z)\n(7 7)\n(1 2 3)\n(1.0 2.0)\n\"pq\"\n\"\"\n#()\n:NOT-A-CHARACTER\n5\nNIL\n1\n3\n3\n\"bnn\"");
+				"1\n(#\\z #\\z)\n(7 7)\n(1 2 3)\n(1.0 2.0)\n\"pq\"\n\"\"\n#()\n:NOT-A-CHARACTER\n5\nSEQUENCE\n1\n3\n3\n\"bnn\"");
 	}
 
 	@Test

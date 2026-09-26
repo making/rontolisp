@@ -4,6 +4,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
 
 /**
@@ -28,6 +29,21 @@ final class WasmNullPredCompiler {
 	 * else is {@code ENDP}'s type-error in EH mode and a trap outside it
 	 * ({@link WasmEmitHelper#emitListCheck}).
 	 */
+	/**
+	 * Compiles {@code (%check-list x 'op)}: {@code x}, checked to be a list under
+	 * {@code op} ({@link WasmEmitHelper#emitListCheck}).
+	 */
+	static void compileCheckList(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
+		int slot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		WasmOperandTypes.withOperator(ctx, LispMacroExpander.checkListOperator(cons),
+				() -> WasmEmitHelper.emitListCheck(ctx, slot, true));
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+	}
+
 	static void compileEndp(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
 		int slot = ctx.allocTemp();

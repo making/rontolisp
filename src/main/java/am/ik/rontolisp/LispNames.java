@@ -1595,6 +1595,14 @@ public final class LispNames {
 	public static final String ASET = "%ASET";
 
 	/**
+	 * The {@code %check-list} internal: {@code (%check-list x 'op)} answers {@code x}
+	 * when it is a list and otherwise signals {@code op}'s {@code LIST} type-error -- the
+	 * check a lowering makes on behalf of the operator it expands ({@code last},
+	 * {@code maplist}, {@code loop}'s {@code for-in} under {@code endp}).
+	 */
+	public static final String CHECK_LIST_INTERNAL = "%CHECK-LIST";
+
+	/**
 	 * The {@code row-major-aref} built-in function (flat row-major element access,
 	 * independent of rank); also a {@code setf} place.
 	 */

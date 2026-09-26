@@ -11278,15 +11278,12 @@ public final class LispEvaluator {
 		return settled;
 	}
 
-	// The map* family (mapcar/mapc/mapcan/maplist/mapcon) operates on lists; passing a
-	// non-list (e.g. a string) signals an error rather than silently behaving like the
-	// empty list, which would hide a caller's mistake. nil is a valid empty list. For
-	// mapping over a string or vector, use the generic map.
+	// The map* family (mapcar/mapc/mapcan/maplist/mapl/mapcon) operates on lists; a
+	// non-list (e.g. a string) is the operator's LIST type-error rather than the empty
+	// list, which would hide a caller's mistake. nil is a valid empty list. For mapping
+	// over a string or vector, use the generic map.
 	private void requireList(String name, LispVal value) {
-		if (!(value instanceof LispNil) && !(value instanceof LispCons)) {
-			throw new LispEvalException(
-					name + ": argument is not a list: " + value.print() + " (use map for strings/vectors)");
-		}
+		Environment.requireListArgument(name, value);
 	}
 
 	// Validates a map* family call's arguments -- a function designator plus at least one

@@ -8139,9 +8139,9 @@ class WasmLispCompilerIntegrationTest {
 				+ "\"|1-2-3-4-5-6-7-8-9\")");
 		assertThat(compileAndRun("""
 				(let ((c "~{~a~}[~a]"))
-				  (princ (format nil c 5 'tail))
+				  (princ (handler-case (format nil c 5 'tail) (type-error () :type-error)))
 				  (princ (format nil c nil 'tail)))
-				""")).isEqualTo("[TAIL][TAIL]");
+				""")).isEqualTo("TYPE-ERROR[TAIL]");
 		assertThat(compileAndRun("""
 				(let* ((c "~{~a~}")
 				       (long (let ((out nil))
@@ -21365,13 +21365,13 @@ class WasmLispCompilerIntegrationTest {
 				(print (coerce nil 'vector))
 				(print (handler-case (coerce '(1 2) 'string) (error () :not-a-character)))
 				(print (coerce 5 'vector))
-				(print (coerce 5 'list))
+				(print (handler-case (coerce 5 'list) (type-error () :type-error)))
 				(print (position #\\Space "a b c"))
 				(print (position #\\Space "a b c" :from-end t))
 				(print (count #\\a "banana"))
 				(print (remove #\\a "banana"))
 				""")).isEqualTo(
-				"1\n(#\\z #\\z)\n(7 7)\n(1 2 3)\n(1.0 2.0)\n\"pq\"\n\"\"\n#()\n:NOT-A-CHARACTER\n5\nNIL\n1\n3\n3\n\"bnn\"");
+				"1\n(#\\z #\\z)\n(7 7)\n(1 2 3)\n(1.0 2.0)\n\"pq\"\n\"\"\n#()\n:NOT-A-CHARACTER\n5\n:TYPE-ERROR\n1\n3\n3\n\"bnn\"");
 	}
 
 	@Test
@@ -24650,6 +24650,77 @@ class WasmLispCompilerIntegrationTest {
 				("SCHAR: The value NIL is not of type INTEGER" NIL INTEGER)
 				("CHAR: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
 				("CHAR: The value NIL is not of type INTEGER" NIL INTEGER)""";
+		assertThat(compileAndRunPrelude(source)).isEqualTo(expected);
+		assertThat(compileComponentAndRunPrelude(source)).isEqualTo(expected);
+	}
+
+	@Test
+	void listConsumersNameTheOperator() throws Exception {
+		// A list consumer over a non-list names its operator as the list walks do
+		// (compiler/OperandTypes): length of a non-sequence (SEQUENCE), last and the map*
+		// family of a non-list (LIST), rplaca/rplacd of a non-cons (CONS), and loop's
+		// for-in, which checks its list's end as endp does.
+		// They used to be uncatchable traps here, and length and last answered wrong
+		// values.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *te-five* 5)
+				(defvar *te-sym* 'foo)
+				(defvar *te-nil* nil)
+				(print (te (lambda () (length *te-five*))))
+				(print (te (lambda () (length *te-sym*))))
+				(print (te (lambda () (length (make-hash-table)))))
+				(print (te (lambda () (funcall #'length *te-five*))))
+				(print (list (length nil) (length '(1 2)) (length "ab") (length (vector 1 2 3))))
+				(print (te (lambda () (last *te-five*))))
+				(print (te (lambda () (last *te-five* 1))))
+				(print (te (lambda () (funcall #'last *te-five*))))
+				(print (list (last nil) (last '(1 2 . 3)) (last '(1 2 3) 2)))
+				(print (te (lambda () (rplaca *te-five* 0))))
+				(print (te (lambda () (rplacd *te-nil* 0))))
+				(print (te (lambda () (funcall #'rplaca *te-five* 0))))
+				(print (te (lambda () (setf (car *te-five*) 0))))
+				(print (te (lambda () (mapcar #'1+ *te-five*))))
+				(print (te (lambda () (mapcar #'+ '(1 2) *te-five*))))
+				(print (te (lambda () (mapc #'1+ *te-five*))))
+				(print (te (lambda () (mapcan #'list *te-five*))))
+				(print (te (lambda () (maplist #'car *te-five*))))
+				(print (te (lambda () (mapl #'car *te-five*))))
+				(print (te (lambda () (mapcon #'list *te-five*))))
+				(print (te (lambda () (funcall #'mapcar #'1+ *te-five*))))
+				(print (te (lambda () (loop for x in *te-five* collect x))))
+				(let ((seen nil))
+				  (print (list (te (lambda () (loop for x in '(1 2 . 3) do (push x seen)))) seen)))
+				(print (list (loop for x in '(1 2) collect x) (loop for x in nil collect x) (mapcar #'1+ nil)))
+				""";
+		String expected = """
+				("LENGTH: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+				("LENGTH: The value FOO is not of type SEQUENCE" FOO SEQUENCE)
+				("LENGTH: The value #<HASH-TABLE :TEST EQUAL :COUNT 0> is not of type SEQUENCE" #<HASH-TABLE :TEST EQUAL :COUNT 0> SEQUENCE)
+				("LENGTH: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+				(0 2 2 3)
+				("LAST: The value 5 is not of type LIST" 5 LIST)
+				("LAST: The value 5 is not of type LIST" 5 LIST)
+				("LAST: The value 5 is not of type LIST" 5 LIST)
+				(NIL (2 . 3) (2 3))
+				("RPLACA: The value 5 is not of type CONS" 5 CONS)
+				("RPLACD: The value NIL is not of type CONS" NIL CONS)
+				("RPLACA: The value 5 is not of type CONS" 5 CONS)
+				("RPLACA: The value 5 is not of type CONS" 5 CONS)
+				("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+				("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+				("MAPC: The value 5 is not of type LIST" 5 LIST)
+				("MAPCAN: The value 5 is not of type LIST" 5 LIST)
+				("MAPLIST: The value 5 is not of type LIST" 5 LIST)
+				("MAPL: The value 5 is not of type LIST" 5 LIST)
+				("MAPCON: The value 5 is not of type LIST" 5 LIST)
+				("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				(("ENDP: The value 3 is not of type LIST" 3 LIST) (2 1))
+				((1 2) NIL NIL)""";
 		assertThat(compileAndRunPrelude(source)).isEqualTo(expected);
 		assertThat(compileComponentAndRunPrelude(source)).isEqualTo(expected);
 	}

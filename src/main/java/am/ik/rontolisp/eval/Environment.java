@@ -4029,6 +4029,9 @@ public final class Environment implements Scope {
 				}
 				return new LispInteger(qm.totalSize());
 			}
+			if (!(args.get(0) instanceof LispCons) && !(args.get(0) instanceof LispNil)) {
+				throw OperandTypeException.of(args.get(0), OperandTypes.Kind.SEQUENCE, LispNames.LENGTH);
+			}
 			long count = 0;
 			LispVal cur = args.get(0);
 			while (cur instanceof LispCons cell) {
@@ -4101,7 +4104,7 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.LAST, new LispFunction(LispNames.LAST, args -> {
 			requireArgCountBetween(LispNames.LAST, args, 1, 2);
-			LispVal cur = args.get(0);
+			LispVal cur = requireListArgument(LispNames.LAST, args.get(0));
 			if (args.size() == 1) {
 				while (cur instanceof LispCons cell && cell.cdr() instanceof LispCons) {
 					cur = cell.cdr();
@@ -4799,6 +4802,20 @@ public final class Environment implements Scope {
 			return requireIndex(operator, val);
 		}
 		throw OperandTypeException.of(val, OperandTypes.Kind.INTEGER, operator);
+	}
+
+	/**
+	 * A list argument: nil or a cons answers itself, anything else is the operator's
+	 * {@code LIST} type-error.
+	 * @param operator the operator's symbol name
+	 * @param val the argument
+	 * @return the argument
+	 */
+	static LispVal requireListArgument(String operator, LispVal val) {
+		if (val instanceof LispCons || val instanceof LispNil) {
+			return val;
+		}
+		throw OperandTypeException.of(val, OperandTypes.Kind.LIST, operator);
 	}
 
 	static int requireIndex(String name, LispVal val) {
@@ -8151,14 +8168,20 @@ public final class Environment implements Scope {
 				default -> throw OperandTypeException.of(args.get(0), OperandTypes.Kind.LIST, LispNames.ENDP);
 			};
 		}));
+		// (%check-list x 'op): x when it is a list, else OP's LIST type-error -- the
+		// check an expansion makes on its operator's behalf (last, maplist, loop's
+		// for-in under endp).
+		env.defineFunction(LispNames.CHECK_LIST_INTERNAL, new LispFunction(LispNames.CHECK_LIST_INTERNAL, args -> {
+			requireArgCount(LispNames.CHECK_LIST_INTERNAL, args, 2);
+			return requireListArgument(((LispSymbol) args.get(1)).name(), args.get(0));
+		}));
 		env.defineFunction(LispNames.RPLACA, new LispFunction(LispNames.RPLACA, args -> {
 			requireArgCount(LispNames.RPLACA, args, 2);
 			if (args.get(0) instanceof LispCons cons) {
 				cons.setCar(args.get(1));
 				return cons;
 			}
-			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-					"rplaca expects a cons cell, got: " + args.get(0).print());
+			throw OperandTypeException.of(args.get(0), OperandTypes.Kind.CONS, LispNames.RPLACA);
 		}));
 		env.defineFunction(LispNames.RPLACD, new LispFunction(LispNames.RPLACD, args -> {
 			requireArgCount(LispNames.RPLACD, args, 2);
@@ -8166,8 +8189,7 @@ public final class Environment implements Scope {
 				cons.setCdr(args.get(1));
 				return cons;
 			}
-			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-					"rplacd expects a cons cell, got: " + args.get(0).print());
+			throw OperandTypeException.of(args.get(0), OperandTypes.Kind.CONS, LispNames.RPLACD);
 		}));
 		env.defineFunction(LispNames.REMF_TAIL, new LispFunction(LispNames.REMF_TAIL, args -> {
 			requireArgCount(LispNames.REMF_TAIL, args, 2);

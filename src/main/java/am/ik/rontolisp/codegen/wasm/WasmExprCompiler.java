@@ -2439,6 +2439,7 @@ final class WasmExprCompiler {
 			case LispNames.LIST_STAR -> WasmExprCompiler.compileExpr(LispMacroExpander.expandListStar(cons), ctx);
 			case LispNames.ACONS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandAcons(cons), ctx);
 			case LispNames.ENDP -> WasmNullPredCompiler.compileEndp(cons, ctx);
+			case LispNames.CHECK_LIST_INTERNAL -> WasmNullPredCompiler.compileCheckList(cons, ctx);
 			case LispNames.ELT -> WasmExprCompiler.compileExpr(LispMacroExpander.expandElt(cons), ctx);
 			case LispNames.RASSOC -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRassoc(cons), ctx);
 			case LispNames.PAIRLIS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPairlis(cons), ctx);

@@ -16,7 +16,7 @@ ANSI `loop` マクロの限定的なサブセットです。既存の反復コ�
 それ以外の場合は、節 (clause) から構成される **拡張ループ** です。サポートする節は次のとおりです。
 
 - 数値ステップ: `for VAR from LO [to|upto|below|downto|above HI] [by STEP]` (`upfrom`/`downfrom` も可。`from` のない上限キーワードは 0 から開始)。
-- リストステップ: `for VAR in LIST [by FN]` と `for VAR on LIST [by FN]` (`VAR` には分配束縛パターンも指定可能)。
+- リストステップ: `for VAR in LIST [by FN]` と `for VAR on LIST [by FN]` (`VAR` には分配束縛パターンも指定可能)。`in` はリストの終端を `endp` で判定するため、nil で終わらないリストは `type-error` を通知します。
 - シーケンスステップ: `for VAR across SEQ` は `VAR` を文字列の各文字、またはベクタの各要素に順に束縛します。
 - 汎用ステップ: `for VAR = INIT [then STEP]` (`VAR` には分配束縛パターンも指定可能)。
 - ローカル変数: `with VAR [= INIT]` (`VAR` には分配束縛パターンも指定可能。`and` で連結した `with` の束縛は並行に行われます)。

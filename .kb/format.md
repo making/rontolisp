@@ -115,7 +115,8 @@ cursor cannot serve it -- `~*`, `~:*`, `~n@*` and `~?`/`~{` recursion make the a
   string, a vector and a short list get `(list x nil)`.
 - `%fmt-arg` consults the vector only for an index INSIDE it (negative or past the end falls
   through to `(nth i list)`, reproducing NIL past the end); `%fmt-count` falls back to
-  `(length x)`, so `(format nil "~{~a~}" 5)` still renders nothing.
+  `(length x)`, so `(format nil "~{~a~}" 5)` is `LENGTH`'s `SEQUENCE` type-error (it rendered
+  nothing until 2026-09-26).
 - The pair is rebuilt per NESTED level: `~{`'s list argument, `~:{`/`~:@{`'s per-pass sublist, a
   logical block's list argument, `~?`'s list through `%fmt-render`.
 - The iteration directives collect their pieces and join once: `%fmt-join` halves the piece list
