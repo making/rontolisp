@@ -26,7 +26,7 @@ final class WasmConsRuntimeBuilder {
 	 * field, nil itself, and anything else stores {@code car}'s / {@code cdr}'s operator
 	 * id in the register and lands in {@code _type_err_list}, which never returns -- the
 	 * slow path every checked inline site leaves for
-	 * ({@code WasmEmitHelper.emitInlineConsField}), so the id is the function's own.
+	 * ({@code WasmEmitHelper.emitCheckedConsField}), so the id is the function's own.
 	 * @param field the cons field the function reads
 	 * @param operatorGlobal the operator register, or -1 outside EH mode
 	 * @param operatorId the operator table's row for {@code CAR}/{@code CDR}, 0 when the
@@ -42,9 +42,9 @@ final class WasmConsRuntimeBuilder {
 			w.write(Instruction.END);
 			return body.toByteArray();
 		}
-		WasmEmitHelper.emitCheckedConsField(w, 0, field, () -> {
-			w.write(Instruction.GET_LOCAL);
-			w.writeUnsignedLeb128(0);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		WasmEmitHelper.emitCheckedConsField(w, field, () -> {
 			w.write(Instruction.REF_IS_NULL);
 			w.write(Instruction.IF);
 			w.writeRefType(true, Type.EQ.code());

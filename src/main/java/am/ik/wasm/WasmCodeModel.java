@@ -219,6 +219,14 @@ final class WasmCodeModel {
 	}
 
 	/**
+	 * The immediates of a {@code br_on_cast}/{@code br_on_cast_fail} besides its label
+	 * (which is {@link Instr#a}, as for every branch): the operand's heap type
+	 * {@code from} and the cast's {@code to}, each nullable per its flag bit.
+	 */
+	record CastBranch(boolean fromNullable, int from, boolean toNullable, int to) {
+	}
+
+	/**
 	 * A block type: the parameters it takes off the stack and the results it leaves, plus
 	 * the byte span of its encoding within the instruction (copied when an {@code if}
 	 * becomes a {@code block}).
@@ -255,6 +263,9 @@ final class WasmCodeModel {
 
 		@Nullable List<Catch> catches;
 
+		/** A {@code br_on_cast}/{@code br_on_cast_fail}'s cast; null otherwise. */
+		@Nullable CastBranch cast;
+
 		/**
 		 * A block opener's matching {@code end}; an {@code else}/{@code end}'s opener.
 		 */
@@ -271,6 +282,15 @@ final class WasmCodeModel {
 
 		boolean isOpener() {
 			return this.op == 0x02 || this.op == 0x03 || this.op == 0x04 || this.op == 0x1F;
+		}
+
+		/**
+		 * Whether this is a {@code br_on_cast} or {@code br_on_cast_fail}: a conditional
+		 * branch to label {@link #a} decided by its reference operand, which a pass that
+		 * follows branches treats as it treats a {@code br_if}.
+		 */
+		boolean isCastBranch() {
+			return this.cast != null;
 		}
 
 	}
@@ -540,6 +560,16 @@ final class WasmCodeModel {
 				in.b = WasmSections.readU(buf, p);
 			}
 			case 0x0F, 0x1C, 0x1D, 0x1E -> {
+			}
+			case 0x18, 0x19 -> { // br_on_cast / br_on_cast_fail: flags, label, ht1, ht2
+				int flags = buf[p[0]++] & 0xff;
+				if ((flags & ~0x03) != 0) {
+					throw new IllegalStateException(String.format("WasmCodeModel: br_on_cast flags 0x%02X", flags));
+				}
+				in.a = WasmSections.readU(buf, p);
+				int from = WasmSections.readS(buf, p);
+				int to = WasmSections.readS(buf, p);
+				in.cast = new CastBranch((flags & 0x01) != 0, from, (flags & 0x02) != 0, to);
 			}
 			// any.convert_extern / extern.convert_any (0x1A/0x1B) would let a host value
 			// enter the eq hierarchy; the data-segment array constructors carry a

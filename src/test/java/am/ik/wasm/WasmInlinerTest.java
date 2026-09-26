@@ -264,6 +264,46 @@ class WasmInlinerTest {
 	}
 
 	@Test
+	void aCastBranchToTheCalleesOwnLabelLeavesAWrappingBlock() {
+		// `local.get 0; ref.i31; br_on_cast_fail 0 eqref (ref i31); drop; ref.null eq`:
+		// the branch names the callee's function body -- moved, it names the block that
+		// wraps the body, not the caller's.
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		new WasmWriter(out).write("\0asm")
+			.writeLittleEndian4(1)
+			.writeTypeSection(types -> types.addFunc(new Type[] { Type.I32 }, new Type[] { Type.EQ })
+				.addFunc(new Type[] {}, new Type[] { Type.I32 }))
+			.writeFunction(functions -> functions.addFunction(0).addFunction(1))
+			.writeExport(ex -> ex.addExport("g", ExternalKind.FUNCTION, 1))
+			.writeCode(code -> code.addFunction(body(0, w -> {
+				op(w, Instruction.GET_LOCAL, 0);
+				w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+				w.write(Instruction.GC_PREFIX, Instruction.BR_ON_CAST_FAIL);
+				w.write(0x01);
+				w.writeUnsignedLeb128(0);
+				w.writeHeapType(Type.EQ.code());
+				w.writeHeapType(Type.I31.code());
+				w.write(Instruction.DROP);
+				w.write(Instruction.REF_NULL);
+				w.writeHeapType(Type.EQ.code());
+			})).addFunction(body(0, w -> {
+				constant(w, 7);
+				op(w, Instruction.CALL, 0);
+				w.write(Instruction.REF_IS_NULL);
+			})));
+		byte[] module = out.toByteArray();
+
+		byte[] inlined = inlineAndValidate(module);
+
+		List<Instr> code = decode(inlined, 1).code();
+		assertThat(code.stream().map(in -> in.op)).doesNotContain(Instruction.CALL);
+		assertThat(code.get(1).op).isEqualTo(Instruction.BLOCK);
+		Instr branch = code.stream().filter(Instr::isCastBranch).findFirst().orElseThrow();
+		assertThat(branch.a).isZero();
+		assertThat(code.indexOf(branch)).isGreaterThan(1);
+	}
+
+	@Test
 	void aCalleeWithTwoCallSitesAnExportOrARecursiveBodyIsLeftAlone() {
 		byte[] twice = body(0, w -> {
 			constant(w, 1);

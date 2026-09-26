@@ -104,6 +104,8 @@ public final class WasmInliner {
 
 	private static final int OP_TRY_TABLE = 0x1F;
 
+	private static final int OP_GC = 0xFB;
+
 	/**
 	 * The largest code entry this pass will relocate, in bytes. What a move RECLAIMS is
 	 * the per-function overhead -- a code-entry size prefix, the locals-vector byte, the
@@ -510,6 +512,8 @@ public final class WasmInliner {
 					needsBlock |= !isTrailing(code, k, depth);
 				}
 				case OP_BR, OP_BR_IF -> needsBlock |= in.a >= depth;
+				// br_on_cast / br_on_cast_fail: a conditional branch like br_if.
+				case OP_GC -> needsBlock |= in.isCastBranch() && in.a >= depth;
 				case OP_BR_TABLE -> {
 					for (int label : java.util.Objects.requireNonNull(in.labels)) {
 						needsBlock |= label >= depth;

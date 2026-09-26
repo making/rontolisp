@@ -71,8 +71,9 @@ off for that module** -- silently, by design; the loss is size, never an answer.
   `emitIsExactInt`'s `x is i31 | x is bignum | x is bigint` decides as ONE question. Every
   other i32 is opaque.
 - **Refinement**: an `if` on a `Bool` narrows the local inside the arm it selects (and
-  after an arm that never falls through; after a not-taken `br_if`), only across a range
-  the local is never assigned in -- so `_int_val`'s innermost `else` sees `x ∈ {bigint}`,
+  after an arm that never falls through; after a not-taken `br_if`; after a
+  `br_on_cast`/`br_on_cast_fail` over a `local.get`, which leaves the local outside / inside the
+  cast's type), only across a range the local is never assigned in -- so `_int_val`'s innermost `else` sees `x ∈ {bigint}`,
   its `ref.test bigint` folds to 1 and the `_type_err_int` landing goes.
 
 ## The rewrite
@@ -84,7 +85,13 @@ a call, a trapping division), else kept and `drop`ped; a constant-conditioned `i
 live arm -- spliced in BARE when no branch targets the `if` (`Model.targeted`, recorded by
 the previous walk), with every `br`/`br_if`/`br_table`/catch label crossing it counted one
 fewer, or wrapped in a `block` of the same block type when one does; `br_if` on a constant
-as `br` or nothing; an impossible `ref.cast` as `unreachable`. **A block whose end is
+as `br` or nothing; an impossible `ref.cast` as `unreachable`. A `br_on_cast`/`br_on_cast_fail`
+splits its operand's set: the part that passes the cast and the part that fails it go one to
+the label, one to the fall-through (`Walk.stepCastBranch`). A `br_on_cast_fail` no value
+fails is the `ref.cast` its fall-through is, one every value fails a `br` when the cast is
+non-null (a nullable cast types the label's value non-null, which a `br` does not say, so it
+stays and an `unreachable` follows); a `br_on_cast` that never branches goes when its cast is
+non-null. **A block whose end is
 unreachable gets an explicit `unreachable` after it**: a block's END is not
 stack-polymorphic for the validator (`expected i64 but nothing on stack` was the symptom).
 It is written unconditionally, because at that point the pass cannot see whether what
@@ -165,7 +172,8 @@ representation questions, never range ones.
 `WasmRefTypeFolderTest` (hand-assembled modules read back instruction by instruction, run
 under wasmtime: the one-question merge, the undecidable half kept, the arm refinement, the
 bare splice with reindexed branches, the targeted arm keeping its block, the always-failing
-cast, the declined boundary, the reactor's float tests gone and the fold's idempotence),
+cast, the cast branch never taken / always taken / undecided with its refinement / reindexed
+across a spliced arm, the declined boundary, the reactor's float tests gone and the fold's idempotence),
 `WasmCallForwardingTest`, `WasmLispCompilerIntegrationTest.theNarrowIntegerBoundaryCrossesEveryTierExactlyAtEveryLevel`
 and the mixed-tier programs in `.optimizedModulesPrintExactlyWhatTheUnoptimizedOnesDo`
 (now at DEFAULT and SIZE), `WasmImportCompilerTest.twoMemoryTypedParamsStageOnDistinctRegions`

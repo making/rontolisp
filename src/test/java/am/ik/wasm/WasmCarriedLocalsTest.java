@@ -360,6 +360,32 @@ class WasmCarriedLocalsTest {
 	}
 
 	@Test
+	void aCastBranchOutOfThePadIsAPathToWhatItsLabelsContinuationReads() throws Exception {
+		// Local 1 is read after a block in the pad whose fall-through writes it first:
+		// only the br_on_cast_fail leaving that block skips the write, so it is the one
+		// path from the pad to the read -- and the edge that keeps 1 carried.
+		Asm a = new Asm(3);
+		a.region(new int[] { 1 }, 2, Asm::call, pad -> {
+			pad.raw(Instruction.BLOCK, Type.EQ.code());
+			pad.raw(Instruction.REF_NULL, Type.EQ.code());
+			pad.raw(Instruction.GC_PREFIX, Instruction.BR_ON_CAST_FAIL, 0x01, 0, Type.EQ.code(), Type.I31.code());
+			pad.raw(Instruction.DROP);
+			pad.constant(9).set(1);
+			pad.raw(Instruction.REF_NULL, Type.EQ.code());
+			pad.raw(Instruction.END);
+			pad.raw(Instruction.DROP);
+			pad.use(1);
+		});
+		byte[] entry = a.entry();
+
+		byte[] narrowed = WasmCarriedLocals.narrow(entry, a.carries);
+
+		assertThat(pushes(narrowed)).containsExactly(List.of(1L));
+		assertThat(refreshes(narrowed)).containsExactly(List.of(1L));
+		validate(narrowed);
+	}
+
+	@Test
 	void aCompiledPadAfterManyDeadLetScopesRefreshesOnlyWhatItReads() {
 		// The compilers' own pads, end to end: at emission a pad pushes every local
 		// declared so far -- here the closure slot, x, the fused let's m and 24 dead let

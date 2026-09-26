@@ -814,9 +814,13 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   built-in function; `#'nth`/`#'second` name the failing step explicitly
   (`OperandTypeException.of(datum, kind, operator)`). JVM: `_nthcdr` throws `NTHCDR`'s report, and
   `endp` is `_endp` (nil or a cons answers itself, else `ENDP`'s report) plus the null test. wasm:
-  `WasmEmitHelper.emitListCheck` -- `ref.test $cons [or ref.is_null]`, else `_type_err_list` under
-  the operator's id in EH mode and a trap outside it (`endp` traps outside EH mode rather than
-  answering nil; the `nthcdr` walk keeps its trapping cast there). The operator table adds `ENDP`
+  `endp` is `WasmEmitHelper.emitListCheck` -- `ref.test $cons or ref.is_null`, else
+  `_type_err_list` under the operator's id in EH mode (`emitListTypeError`) and a trap outside it
+  (it traps there rather than answering nil); the `nthcdr` walk's step is the checked cons read
+  itself, `br_on_cast_fail` with `emitListTypeError` as its miss, one type test per step
+  ([cons-access-runtime.md](cons-access-runtime.md); 1M steps x100, wasmtime 49: 141 ms with a
+  `ref.test` in front of the cast, 129 now, 131 unchecked), and keeps its trapping cast outside EH
+  mode. The operator table adds `ENDP`
   for a program that spells `dolist`, `NTHCDR` and `CAR` for one that spells `nth`/`second`..
   (`WasmOperandTypes.LOWERED_TO`), and is placed in key order (it iterated `Map.of`s, whose
   order varies between JVMs). `char`/`schar` check the subscript as `aref` does (`_ckIdx`,
@@ -833,9 +837,9 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   `complex` constructor are invoked under the wrapper too. `_opTypeErr`'s funnel-typed arm reads the
   kind back off the raw report.
 - **wasm-GC, EH mode only** (`WasmEmitHelper.checksConsFields`; outside it every cast still traps and
-  a non-EH module is byte-identical): an inline `car`/`cdr` site is `local.get x; ref.test $cons; if
-  (result eqref) local.get x; ref.cast $cons; struct.get else local.get x; call _car end` (+4 B), and
-  `_car`/`_cdr` are CHECKED there -- nil answers nil, a non-list sets the register to `CAR`'s/`CDR`'s
+  a non-EH module is byte-identical): an inline `car`/`cdr` site is ONE type test over the operand
+  on the stack, `block block br_on_cast_fail 0 eqref (ref $cons); struct.get; br 1 end; call _car
+  end` ([cons-access-runtime.md](cons-access-runtime.md)), and `_car`/`_cdr` are CHECKED there -- nil answers nil, a non-list sets the register to `CAR`'s/`CDR`'s
   row and lands in `_type_err_list`; a `--optimize=size` site was already that call and pays nothing.
   The body names itself whichever form reached it (an unnamed report when the program spells neither
   name). A subscript goes through `i32.const id; ref.i31; call _idx_chk` (+6 B): a fixnum answers
@@ -845,8 +849,10 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   `denominator` checks a non-ratio through `_int_val`, since `_rat_den` answers 1 for anything.
 - **Cost, measured 2026-09-26** (wasmtime 47): P1 `zlib` 114,383 -> 115,984 (+1.4%), size level
   87,936 -> 88,735 (+0.9%); a tight 1M-element `car`/`cdr` loop in an EH module 129 -> 166 ms
-  (+28%): the cons path tests the type twice (`ref.test`, `ref.cast`) -- `.todo/979` makes it one
-  `br_on_cast_fail`. The `aref` loop and the JVM are unchanged.
+  (+28%), while the site tested the type twice (`ref.test`, `ref.cast`). With the one
+  `br_on_cast_fail` (same day, wasmtime 49) that loop is 113 -> 92 ms against 84 unchecked, and
+  most list walks are at or under the unchecked time (the table:
+  [cons-access-runtime.md](cons-access-runtime.md)). The `aref` loop and the JVM are unchanged.
 - **Cost of the list walks, measured 2026-09-26**: `zlib` P1 115,984 -> 116,300 (+0.27%), size level
   88,735 -> 89,051, JVM classes 163,399 -> 163,693; `hello_world`, `pi_approx`, `dom_reactor`
   unchanged. No loop gains a test.
