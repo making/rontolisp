@@ -118,6 +118,56 @@ public final class JavaInteropPrograms {
 			  (row (lambda () (size s))))
 			""";
 
+	/**
+	 * A host {@code ArrayList} (holding a value, and empty) and a host
+	 * {@code LinkedHashMap} beside a Lisp vector and hash table, through every type
+	 * predicate, {@code typecase}, a method dispatch, {@code type-of} and every printer
+	 * entry: a host collection is no Lisp array or table and prints {@code #<java C>}.
+	 * Prints {@link #HOST_COLLECTION_OUTPUT}.
+	 */
+	public static final String HOST_COLLECTION_PROGRAM = """
+			(defgeneric kind (x))
+			(defmethod kind ((x hash-table)) 'table)
+			(defmethod kind ((x vector)) 'vector)
+			(defmethod kind (x) 'other)
+			(let ((l (java:new "java.util.ArrayList"))
+			      (e (java:new "java.util.ArrayList"))
+			      (m (java:new "java.util.LinkedHashMap"))
+			      (v (vector 1 2))
+			      (h (make-hash-table)))
+			  (java:call l "add" 1)
+			  (java:call m "put" "k" 1)
+			  (setf (gethash 'k h) m)
+			  (dolist (x (list l e m v h))
+			    (print (list (hash-table-p x) (vectorp x) (arrayp x) (stringp x) (typep x 'simple-vector)
+			                 (typep x 'sequence) (typep x 'hash-table) (typep x '(vector t))
+			                 (typecase x (hash-table 'table) (vector 'vector) (t 'other))
+			                 (kind x) (type-of x))))
+			  (print l) (print e) (print m)
+			  (terpri) (prin1 l) (prin1 m) (princ l) (princ m)
+			  (print (format nil "~a ~s ~a ~s" l l m m))
+			  (print (list (prin1-to-string l) (princ-to-string m) (write-to-string e)))
+			  (print (list l m v h (gethash 'k h)))
+			  (print (vector l m v h)))
+			""";
+
+	/** What {@link #HOST_COLLECTION_PROGRAM} prints. */
+	public static final String HOST_COLLECTION_OUTPUT = """
+			(NIL NIL NIL NIL NIL NIL NIL NIL OTHER OTHER T)
+			(NIL NIL NIL NIL NIL NIL NIL NIL OTHER OTHER T)
+			(NIL NIL NIL NIL NIL NIL NIL NIL OTHER OTHER T)
+			(NIL T T NIL T T NIL T VECTOR VECTOR (SIMPLE-VECTOR 2))
+			(T NIL NIL NIL NIL NIL T NIL TABLE TABLE HASH-TABLE)
+			#<java java.util.ArrayList>
+			#<java java.util.ArrayList>
+			#<java java.util.LinkedHashMap>
+
+			#<java java.util.ArrayList>#<java java.util.LinkedHashMap>#<java java.util.ArrayList>#<java java.util.LinkedHashMap>\
+			"#<java java.util.ArrayList> #<java java.util.ArrayList> #<java java.util.LinkedHashMap> #<java java.util.LinkedHashMap>"
+			("#<java java.util.ArrayList>" "#<java java.util.LinkedHashMap>" "#<java java.util.ArrayList>")
+			(#<java java.util.ArrayList> #<java java.util.LinkedHashMap> #(1 2) #<HASH-TABLE :TEST EQUAL :COUNT 1> #<java java.util.LinkedHashMap>)
+			#(#<java java.util.ArrayList> #<java java.util.LinkedHashMap> #(1 2) #<HASH-TABLE :TEST EQUAL :COUNT 1>)""";
+
 	/** What {@link #HOST_OBJECT_PROGRAM} prints. */
 	public static final String HOST_OBJECT_OUTPUT = """
 			java:call expects a java object as the first argument, got (1 2)

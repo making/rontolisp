@@ -11,6 +11,8 @@ import java.nio.file.Path;
 import java.util.List;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.cli.CompileFrontendAccess;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.JavaImplementationPrograms;
 import am.ik.rontolisp.testsupport.JavaInteropPrograms;
@@ -36,7 +38,16 @@ class JvmJavaInteropCompilerTest {
 	// exception thrown by the program (e.g. a bridge validation error) is unwrapped and
 	// rethrown so tests can assert on the original message.
 	private String compileAndRun(String lispCode) throws Exception {
-		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		return compileAndRun(LispReader.readAllFromString(lispCode));
+	}
+
+	// Through the CLI's front end, which splices the library functions (type-of, the
+	// class dispatch) a program's own forms reach.
+	private String compileAndRunThroughFrontEnd(String lispCode) throws Exception {
+		return compileAndRun(CompileFrontendAccess.corpus(lispCode, Features.JVM, false, false));
+	}
+
+	private String compileAndRun(List<LispVal> program) throws Exception {
 		JvmLispCompiler compiler = new JvmLispCompiler("Test");
 		byte[] classBytes = compiler.compile(program);
 		Files.write(this.tempDir.resolve("Test.class"), classBytes);
@@ -961,6 +972,18 @@ class JvmJavaInteropCompilerTest {
 	void aLispValueIsNeverAHostObject() throws Exception {
 		assertThat(compileAndRun(JavaInteropPrograms.HOST_OBJECT_PROGRAM))
 			.isEqualTo(JavaInteropPrograms.HOST_OBJECT_OUTPUT);
+	}
+
+	// A host ArrayList / LinkedHashMap is told from a Lisp array / hash table by the
+	// program's shared header / order-key test, not by its class: every type predicate,
+	// type-of, a method dispatch and every printer entry answer as interpreted. Before,
+	// hash-table-p answered T for a host map and printing one threw a
+	// NullPointerException; vectorp / typep / type-of on a host list threw
+	// IndexOutOfBoundsException, arrayp answered T.
+	@Test
+	void aHostCollectionIsNoLispArrayOrTable() throws Exception {
+		assertThat(compileAndRunThroughFrontEnd(JavaInteropPrograms.HOST_COLLECTION_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.HOST_COLLECTION_OUTPUT);
 	}
 
 	// java: interop composes with hash tables: the HashMap-based Lisp hash table keeps

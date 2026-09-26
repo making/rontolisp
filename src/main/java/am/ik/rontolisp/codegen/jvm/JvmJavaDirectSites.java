@@ -66,6 +66,19 @@ final class JvmJavaDirectSites {
 	/** {@code _jhost(Object)Z}: whether a value is a wrapped host object. */
 	static final String HOST = "_jhost";
 
+	/**
+	 * {@code _jlarr(Object)Z}: whether a value is a Lisp array -- an {@code ArrayList}
+	 * whose slot 0 is its {@code Object[]} header, not a host list a call answered.
+	 */
+	static final String LISP_ARRAY = "_jlarr";
+
+	/**
+	 * {@code _jltab(Object)Z}: whether a value is a Lisp hash table -- a
+	 * {@code LinkedHashMap} holding its insertion-order {@code ArrayList} under
+	 * {@link RontoHashTable#ORDER_KEY}, not a host map a call answered.
+	 */
+	static final String LISP_TABLE = "_jltab";
+
 	/** {@code _junm(Object)Object}: a Java value as the Lisp value it stands for. */
 	static final String UNMARSHAL = "_junm";
 
@@ -158,6 +171,10 @@ final class JvmJavaDirectSites {
 	private final List<Method> methods = new ArrayList<>();
 
 	private @Nullable MethodrefConstant host;
+
+	private @Nullable MethodrefConstant lispArray;
+
+	private @Nullable MethodrefConstant lispTable;
 
 	private @Nullable MethodrefConstant unmarshal;
 
@@ -375,6 +392,41 @@ final class JvmJavaDirectSites {
 			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
 			this.host = ref;
 			this.methods.add(buildHost(name, desc));
+		}
+		return ref;
+	}
+
+	/**
+	 * The one test a {@code java:} program tells a Lisp array from a host
+	 * {@code ArrayList} by: {@code _jhost}, the printer and the array predicates all call
+	 * it, so they cannot disagree about a value. Built on first use.
+	 * @return {@code _jlarr(Object)Z}
+	 */
+	MethodrefConstant lispArray() {
+		MethodrefConstant ref = this.lispArray;
+		if (ref == null) {
+			Utf8Constant name = this.cp.addUtf8(LISP_ARRAY);
+			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)Z");
+			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			this.lispArray = ref;
+			this.methods.add(buildLispArray(name, desc));
+		}
+		return ref;
+	}
+
+	/**
+	 * The one test a {@code java:} program tells a Lisp hash table from a host
+	 * {@code LinkedHashMap} by, shared as {@link #lispArray()} is. Built on first use.
+	 * @return {@code _jltab(Object)Z}
+	 */
+	MethodrefConstant lispTable() {
+		MethodrefConstant ref = this.lispTable;
+		if (ref == null) {
+			Utf8Constant name = this.cp.addUtf8(LISP_TABLE);
+			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)Z");
+			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			this.lispTable = ref;
+			this.methods.add(buildLispTable(name, desc));
 		}
 		return ref;
 	}
@@ -2136,13 +2188,10 @@ final class JvmJavaDirectSites {
 	// _jhost(Object)Z: the bridge's isJavaObject, test for test -- anything outside the
 	// compiled Lisp representation: not a Long/Double/BigInteger/String, not a Java array
 	// (characters, ratios, conses, function values, specialized vectors), not a Lisp
-	// array (an ArrayList whose slot 0 is an Object[] header), not a Lisp hash table (a
-	// LinkedHashMap holding an ArrayList under the order key), not a travelling runtime
-	// class's value (a complex number).
+	// array (_jlarr), not a Lisp hash table (_jltab), not a travelling runtime class's
+	// value (a complex number).
 	private Method buildHost(Utf8Constant name, Utf8Constant desc) {
 		JvmAsm a = new JvmAsm();
-		ClassConstant arrayList = cls("java/util/ArrayList");
-		ClassConstant linkedHashMap = cls(RontoHashTable.MAP_CLASS);
 		MethodrefConstant getClass = method("java/lang/Object", "getClass", "()Ljava/lang/Class;");
 		int no = a.label();
 		a.aload(0);
@@ -2157,34 +2206,13 @@ final class JvmJavaDirectSites {
 		a.invokevirtual(getClass);
 		a.invokevirtual(method("java/lang/Class", "isArray", "()Z"));
 		a.branch(Opcode.IFNE, no);
-		// A Lisp array: a non-empty ArrayList whose first element is an Object[].
-		int notArray = a.label();
+		// A Lisp array or a Lisp hash table: the shared tests.
 		a.aload(0);
-		a.instanceOf(arrayList);
-		a.branch(Opcode.IFEQ, notArray);
-		a.aload(0);
-		a.checkcast(arrayList);
-		a.invokevirtual(method("java/util/ArrayList", "isEmpty", "()Z"));
-		a.branch(Opcode.IFNE, notArray);
-		a.aload(0);
-		a.checkcast(arrayList);
-		a.iconst(0);
-		a.invokevirtual(method("java/util/ArrayList", "get", "(I)Ljava/lang/Object;"));
-		a.instanceOf(cls("[Ljava/lang/Object;"));
+		a.invokestatic(lispArray());
 		a.branch(Opcode.IFNE, no);
-		a.bind(notArray);
-		// A Lisp hash table: a LinkedHashMap holding its insertion-order list.
-		int notTable = a.label();
 		a.aload(0);
-		a.instanceOf(linkedHashMap);
-		a.branch(Opcode.IFEQ, notTable);
-		a.aload(0);
-		a.checkcast(linkedHashMap);
-		a.ldcString(str(RontoHashTable.ORDER_KEY));
-		a.invokevirtual(method(RontoHashTable.MAP_CLASS, "get", "(Ljava/lang/Object;)Ljava/lang/Object;"));
-		a.instanceOf(cls(RontoHashTable.LIST_CLASS));
+		a.invokestatic(lispTable());
 		a.branch(Opcode.IFNE, no);
-		a.bind(notTable);
 		// A value of a class that travels with the program (a complex number).
 		a.aload(0);
 		a.invokevirtual(getClass);
@@ -2198,6 +2226,50 @@ final class JvmJavaDirectSites {
 		a.iconst(0);
 		a.ireturn();
 		return new Method(name, desc, 3, 1, a.finish(), List.of());
+	}
+
+	// _jlarr(Object)Z: a non-empty ArrayList whose first element is an Object[] header.
+	private Method buildLispArray(Utf8Constant name, Utf8Constant desc) {
+		JvmAsm a = new JvmAsm();
+		ClassConstant arrayList = cls("java/util/ArrayList");
+		int no = a.label();
+		a.aload(0);
+		a.instanceOf(arrayList);
+		a.branch(Opcode.IFEQ, no);
+		a.aload(0);
+		a.checkcast(arrayList);
+		a.invokevirtual(method("java/util/ArrayList", "isEmpty", "()Z"));
+		a.branch(Opcode.IFNE, no);
+		a.aload(0);
+		a.checkcast(arrayList);
+		a.iconst(0);
+		a.invokevirtual(method("java/util/ArrayList", "get", "(I)Ljava/lang/Object;"));
+		a.instanceOf(cls("[Ljava/lang/Object;"));
+		a.ireturn();
+		a.bind(no);
+		a.iconst(0);
+		a.ireturn();
+		return new Method(name, desc, 2, 1, a.finish(), List.of());
+	}
+
+	// _jltab(Object)Z: a LinkedHashMap holding an ArrayList under the order key.
+	private Method buildLispTable(Utf8Constant name, Utf8Constant desc) {
+		JvmAsm a = new JvmAsm();
+		ClassConstant linkedHashMap = cls(RontoHashTable.MAP_CLASS);
+		int no = a.label();
+		a.aload(0);
+		a.instanceOf(linkedHashMap);
+		a.branch(Opcode.IFEQ, no);
+		a.aload(0);
+		a.checkcast(linkedHashMap);
+		a.ldcString(str(RontoHashTable.ORDER_KEY));
+		a.invokevirtual(method(RontoHashTable.MAP_CLASS, "get", "(Ljava/lang/Object;)Ljava/lang/Object;"));
+		a.instanceOf(cls(RontoHashTable.LIST_CLASS));
+		a.ireturn();
+		a.bind(no);
+		a.iconst(0);
+		a.ireturn();
+		return new Method(name, desc, 2, 1, a.finish(), List.of());
 	}
 
 	// _junm(Object)Object: the bridge's unmarshal.

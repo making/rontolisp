@@ -24,10 +24,8 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   (user doc: `guides/java-interop.md`, "Native image").
 - WASM: rejected; no `BuiltinFunctionWrappers` entry, so `#'java:call` is a compile error while
   the interpreter allows it.
-- A host `ArrayList` a Java call answers is not a Lisp array: in a java: program the compiled
-  printer's array arm checks the array header first (`JavaPrint.arrayListIsEmpty/arrayListGet`,
-  the bridge's `kindOf` test), so it prints `#<java java.util.ArrayList>` as interpreted -- it threw
-  `IndexOutOfBoundsException` before (`JvmJavaInteropCompilerTest#aHostArrayListPrintsOpaquely`).
+- A host `ArrayList` / `LinkedHashMap` a Java call answers is not a Lisp array / hash table
+  ("What a host object is" below): the compiled printer and predicates ask the shared tests.
 - Trap: the template must have NO nested classes/records and NO rontolisp imports. The bridge
   forces `usesEval`, a generated interface class only the apply tier (`JvmJavaSites.needsApply`);
   `usesJava` threads `JvmRuntimeBuilder.JavaPrint` into the print builders.
@@ -51,6 +49,18 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   `RontoHashTable.ORDER_KEY` (a hash table), NOT a class in `am.ik.rontolisp.runtime`
   (`RontoComplex`). The bridge spells the key and the package itself (no rontolisp imports);
   `theBridgeSpellsTheRepresentationAsTheRuntimeDoes` pins both.
+- The array and table arms are ONE test each in a compiled program: `_jlarr` (non-empty
+  `ArrayList`, slot 0 an `Object[]`) and `_jltab` (`LinkedHashMap`, an `ArrayList` under the
+  order key), `JvmJavaDirectSites.lispArray()` / `lispTable()`, built on first use. `_jhost`
+  calls them, and so -- in a `java:` program only (`Ctx.javaSites`, `JavaPrint`), a program
+  without `java:` keeps its `instanceof` bytecode -- do the printer's array and hash-table
+  arms (`JavaPrint.lispArray/lispTable`), `_hashP` (`hash-table-p`, the class dispatch, typep
+  `hash-table`) and `%arrayp` (`arrayp`, `vectorp`, typep `vector`/`array`/`sequence`,
+  `type-of`). `stringp` / `%simple-array-p` read the header themselves. Before, measured
+  2026-09-26: `hash-table-p` of a host map `T`, printing it (in a program with hash tables)
+  `NullPointerException`; `arrayp` of a host list `T`, `vectorp` / typep / `type-of`
+  `IndexOutOfBoundsException` or `ClassCastException`
+  (`JavaInteropPrograms.HOST_COLLECTION_PROGRAM`, both backends).
 - The bridge's `kindOf` ends with it (a host's kind = its exact class, anything else none);
   `_jkind` answers HOST / NONE through `_jhost`; a direct site's exact-class kind test of
   `ArrayList` / `LinkedHashMap` / a runtime class also calls `_jhost` (`mayHoldALispValue`).
@@ -72,9 +82,9 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   method RontoComplex.size` / `[D.size`; `(java:new "java.math.BigInteger" "5")` printed `5`
   compiled and `#<java java.math.BigInteger>` interpreted. All agree now
   (`testsupport/JavaInteropPrograms.HOST_OBJECT_PROGRAM`).
-- Still divergent: the compiled PRINTER and type predicates on a host `ArrayList` /
-  `LinkedHashMap` (`.todo/a31`); specialized vectors and bignums are marshalled on neither
-  backend (`.todo/a32`).
+- Still divergent: the compiled ACCESSORS on a host `ArrayList` / `LinkedHashMap` (`gethash`
+  answers `NIL`, `length` / `aref` / `hash-table-count` throw a Java exception; `.todo/a38`);
+  specialized vectors and bignums are marshalled on neither backend (`.todo/a32`).
 
 ## Resolution: kinds, pure select, caches (both bridges, identical)
 Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns - 1.4 us),

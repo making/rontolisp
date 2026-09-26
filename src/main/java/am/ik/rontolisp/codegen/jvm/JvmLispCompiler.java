@@ -3126,7 +3126,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				? JvmHashRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, longValueOf,
 						Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQUAL)),
 						Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQV)), strvMethod,
-						instanceLayoutClass, usesEqualpHashTables, usesIdentityHashTables)
+						instanceLayoutClass, usesEqualpHashTables, usesIdentityHashTables,
+						javaSites != null ? javaSites.direct().lispTable() : null)
 				: List.of();
 
 		// Build the array runtime helpers, only when the program uses arrays. Includes
@@ -3245,13 +3246,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			ClassConstant classClass = cp.addClass(cp.addUtf8("java/lang/Class"));
 			MethodrefConstant classGetName = cp.addMethodref(classClass,
 					cp.addNameAndType(cp.addUtf8("getName"), cp.addUtf8("()Ljava/lang/String;")));
-			ClassConstant arrayListForPrint = cp.addClass(cp.addUtf8("java/util/ArrayList"));
+			JvmJavaDirectSites direct = Objects.requireNonNull(javaSites).direct();
 			javaPrint = new JvmRuntimeBuilder.JavaPrint(bigIntegerClassForPrint, objectGetClass, classGetName,
-					stringConcat, cp.addString("#<java "), cp.addString(">"),
-					cp.addMethodref(arrayListForPrint, cp.addNameAndType(cp.addUtf8("isEmpty"), cp.addUtf8("()Z"))),
-					cp.addMethodref(arrayListForPrint,
-							cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;"))),
-					cp.addClass(cp.addUtf8("[Ljava/lang/Object;")));
+					stringConcat, cp.addString("#<java "), cp.addString(">"), usesArrays ? direct.lispArray() : null,
+					usesHashTables ? direct.lispTable() : null);
 		}
 		else {
 			javaPrint = null;
