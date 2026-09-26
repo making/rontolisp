@@ -98,14 +98,14 @@ unchanged as `private static _main$body(String[])`; the class itself is the `Run
   launcher instance, told apart by its null `_asyncLatch` (`JvmAsyncRuntimeBuilder.build`'s
   `launcherRun`). `run` is a tree-shaker root whenever the launcher exists.
 - **NOT emitted** -- and the output is byte-identical to before -- when there is no `main`
-  (`--no-main`, `-o app.war`), when the top level runs in `<clinit>` (any
+  (`--no-main`, `-o app.war`) and when the top level runs in `<clinit>` (any
   `rontolisp:jvm-export`, a war: the JVM initializes the class on the caller's thread before
-  `main` could move anything), and when the program reaches `objc:` (raw or through the spliced
-  `appkit`/`metal`/`scene` layers): AppKit belongs to thread 0 ([objc.md](objc.md)). Checked
-  2026-09-19 by compiling `examples/macos/counter.lisp` (`-o Counter.class`, `-o counter.jar`),
-  a jvm-export class and a `--no-main` class with the jars before and after: all identical.
-  **The macOS manual GUI check (CLAUDE.md, "After Task Completion") was NOT run -- the change
-  was made on linux-x64; it is still outstanding.**
+  `main` could move anything). Checked 2026-09-19 by compiling a jvm-export class and a
+  `--no-main` class with the jars before and after: identical.
+- **A program that reaches `objc:`** (raw or through the spliced `appkit`/`metal`/`scene` layers)
+  gets the launcher too, headed by the thread-0 hand-over a native image needs
+  ([objc.md](objc.md), "AppKit belongs to thread 0"). Until 2026-09-27 it got none and kept the
+  program on the calling thread; the macOS GUI check of the change is recorded there.
 
 ### The numbers (2026-09-19, linux-x64, Oracle GraalVM 25, before -> after)
 
@@ -193,8 +193,8 @@ languages.
 
 `JvmSizedMainTest` pins the compiled launcher: depth under `-Xint` in a child JVM at the
 default and at `-Drontolisp.stack=1`/`=0`, the one-line report and exit 1 from thread 0, the
-thread's name, and the ABSENCE of the launcher from an `objc:`/`appkit:` class and a
-jvm-export class.
+thread's name, the ABSENCE of the launcher from a jvm-export class, and an `objc:`/`appkit:`
+class's hand-over (macOS: simulated on the JVM under `-XstartOnFirstThread`).
 
 The in-process test legs mirror the constant rather than the mechanism:
 `testsupport/CliStack.BYTES` must track `WORKER_STACK_BYTES` (`RontoLispCliTest` pins it), or

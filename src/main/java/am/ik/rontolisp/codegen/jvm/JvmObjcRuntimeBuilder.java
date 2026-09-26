@@ -140,6 +140,17 @@ final class JvmObjcRuntimeBuilder {
 	}
 
 	/**
+	 * The internal name of a program's copy of {@code am.ik.objc.MainThread}, whose
+	 * {@code handOverRequired()} the sized-stack launcher asks
+	 * ({@code JvmSizedMainBuilder}).
+	 * @param programInternalName the generated class's internal (slash-separated) name
+	 * @return e.g. {@code com/example/Prog$ObjcMainThread}
+	 */
+	static String mainThreadName(String programInternalName) {
+		return objcPrefix(programInternalName) + "MainThread";
+	}
+
+	/**
 	 * Builds the {@code _objcInit} method body, registers the bridge references and
 	 * renames the class files that travel beside the program.
 	 * @param cp the constant pool
