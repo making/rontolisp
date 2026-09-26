@@ -1410,7 +1410,9 @@ report's two top rows: 370 + 299 lost forms) and to fail the COMPILE on the comp
   check the lambda-list desugaring emits on every backend ([lambda-lists.md](lambda-lists.md)).
   The interpreter's `Function expects N argument(s), got M` (lambda application), `Macro X
   expects ...`, `Environment.requireArgCount*` and every inline `X expects N arguments, got M` built-in
-  check are `program-error`s (the ANSI suite's next six rows). The compiled backends signal the same
+  check are `program-error`s (the ANSI suite's next six rows). `requireArgCount` /
+  `requireMinArgCount` spell theirs through `ClosRegistry.arityMessage(name, ...)` -- so `1
+  argument`, not the `1 arguments` they wrote until 2026-09-26. The compiled backends signal the same
   through a function VALUE ("A wrong argument COUNT" below), `apply` included since 2026-09-12.
   `-`/`/` (no identity, unlike `+`/`*`: `compiler/ArithmeticIdentities`) inline-check their own empty
   argument list in `Environment.registerArithmetic` rather than fall through to the generic
@@ -1432,24 +1434,30 @@ report's two top rows: 370 + 299 lost forms) and to fail the COMPILE on the comp
 ## A wrong argument COUNT through a function value
 **Invariant: calling a function VALUE with a count its lambda list cannot take signals a catchable
 `program-error` on every backend, spelled by the ONE `ClosRegistry.arityMessage`** -- `Function
-expects [at least ]N argument(s), got M`. Only a DIRECT call is checked at compile time; everything
-else (`funcall`, `mapcar`, `sort`, a bare `(f x)` whose head is an expression) arrives at an
-`_invoke_N` dispatcher, whose no-match arm used to answer nil on the JVM and `unreachable` on
-wasm-GC. A silent nil is the worst of the three: an ANSI `signals-error ... program-error` row
-passed interpreted and returned a WRONG VALUE compiled. Pinned by ci-spec
-`wrong-arity-funcall-signals-program-error` and `JvmLispCompilerTest`
-`compileAndRunWrongArityThroughAFunctionValueSignalsProgramError`.
+expects [at least ]N argument(s), got M`, with the OPERATOR in place of `Function` when the callee
+is a built-in's (`CONS expects 2 arguments, got 1`; "Naming the operator" below). Only a DIRECT
+call is checked at compile time; everything else (`funcall`, `mapcar`, `sort`, a bare `(f x)` whose
+head is an expression) arrives at an `_invoke_N` dispatcher, whose no-match arm used to answer nil
+on the JVM and `unreachable` on wasm-GC. A silent nil is the worst of the three: an ANSI
+`signals-error ... program-error` row passed interpreted and returned a WRONG VALUE compiled.
+Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompilerTest`
+`compileAndRunWrongArityThroughAFunctionValueSignalsProgramError` /
+`...ThroughABuiltinDesignatorNamesTheOperator` (and its wasm and interpreter twins).
 
 - **JVM** (`JvmRuntimeBuilder.ArityReporting`): the arm calls `_arityErr(funcId, got)`, which reads
   the callee's SHAPE (required count doubled, plus one for a `&rest` tail) out of a STRING indexed
-  by funcId and throws `new RuntimeException(_arityMsg(shape, got))`. A search tree over the
+  by funcId and throws `new WrongMethodTypeException(_arityMsg(shape, got))`. A search tree over the
   dispatchable ids -- the shape the dispatchers themselves use -- is the wrong structure here: ~15
   bytes per callable in ONE method, and the cl-postgres corpus overflowed the signed 16-bit branch
   offset on it. The table is one byte per funcId and three instructions, whatever the program's
-  size. `JvmHandlerCaseCompiler.emitRawFailureTest` recovers `program-error` from the
-  `Function expects ` prefix (the unbound-variable precedent -- a bytecode-emitted throw
-  site has no channel for a class), which is the sixth entry in
-  `LispMacroExpander.rawFailureConditionClasses()`.
+  size. `JvmHandlerCaseCompiler.emitRawFailureTest` recovers `program-error` from the exception's
+  CLASS (`JvmRuntimeBuilder.ARITY_EXCEPTION_CLASS`, the sixth entry in
+  `LispMacroExpander.rawFailureConditionClasses()`). It used to recover it from the `Function
+  expects ` prefix of the TEXT (the unbound-variable precedent), which a named report does not
+  start with -- and which a user's `(error "Function expects ...")`, a plain `RuntimeException`,
+  matched too: that user error was a `program-error` on the JVM alone until 2026-09-26. The one
+  visible cost: an UNCAUGHT report's JVM stderr line names `java.lang.invoke.WrongMethodTypeException`
+  where it said `java.lang.RuntimeException` (the `Unhandled condition:` line is unchanged).
 - **wasm-GC** (`WasmRuntimeBuilder.ArityReport`): the `br_table` already has a label per funcId, so
   the ids this arity cannot serve point at one ARM PER SHAPE instead of at the default; the arm puts
   the shape in the (now dead) funcId local and branches to one assembly block per dispatcher, which
@@ -1485,10 +1493,44 @@ passed interpreted and returned a WRONG VALUE compiled. Pinned by ci-spec
     too, so dropping it leaves a top-level literal `apply` unguarded while the same form inside a
     defun reports -- the same trap `callArityCeiling` and `extraDispatchFuncBase` are listed there
     for.
-- **A BUILT-IN designator diverges in TEXT, not in class**: `(funcall #'car)` is a `program-error`
-  everywhere, but the interpreter names the operator (`CAR expects 1 arguments, got 0`) while the
-  compiled backends go through the `BuiltinFunctionWrappers` lambda and say `Function expects 1
-  argument, got 0`. The wrapper has no name to report at the dispatcher.
+- **Naming the operator** (2026-09-26). The interpreter's Java built-ins always named themselves
+  (`requireArgCount(name, ...)`); a function value that is a `BuiltinFunctionWrappers` lambda said
+  `Function` -- on the compiled backends for every built-in, in the interpreter for the ones it
+  resolves through `lambdaFor`. ONE rule now decides on all four:
+  `BuiltinFunctionWrappers.arityOperator(name)` -- the callee's name when it is a catalog name, else
+  `Function`. By NAME, because the interpreter's catalog lambda and the compilers' injected wrapper
+  defun are the same function under it (a user `defun` of a catalog name is named too, on every
+  backend alike). A program's own functions keep `Function`: naming them would also have to name
+  the `&optional` surplus and destructuring checks the lambda-list desugaring emits without a name
+  ([lambda-lists.md](lambda-lists.md)), or one function would report under two names.
+  - **Interpreter**: `resolveFunction` gives the catalog lambda its name (so `#'elt` prints
+    `#<function ELT>`, as it always did compiled), and `checkArity` asks `arityOperator` of it.
+  - **JVM** (`JvmArityOperators`): the shape carries the operator's 1-based index from bit 16 up.
+    Every site that bakes a shape registers through it -- a literal `apply`'s guard, a spread case,
+    the `_arityErr` table (whose cell keeps `shape + 1` in the low seven bits and the index in the
+    nine above, so an unnamed cell stays one byte) -- and `_arityMsg` reads the name back out of one
+    newline-joined string constant (`split` on a one-char non-regex pattern). `buildArityMethods`
+    registers every dispatchable callee before freezing the registry for `_arityMsg`, which covers
+    the spread cases built after it; a late registration throws. A named spread case's shape is past
+    `sipush` range and is `ldc`'d. `_arityMsg` and `_arityChk` mask the operator bits off before
+    reading the required count -- `_arityChk` without the mask rejected every RIGHT-count `apply` of
+    a built-in (`(apply #'cons '(1 2))`), which the wrong-count tests alone could not see.
+  - **wasm-GC**: the shape carries `funcId + 1` from bit 16 up (`WasmRuntimeBuilder.arityShape`),
+    and one shared function, `_arity_opening(shape, _) -> string` (TYPE_RAT_NEW, a conditional
+    index right after `_arity_chk`, reserved once the defuns are final:
+    `WasmLispCompiler.emitsArityOpening`), selects the operator by funcId with the dispatchers' own
+    `emitCaseSelector` and concatenates one shared `" expects "`. A dispatcher whose misses include
+    a named callee writes `(funcId + 1) << 16 | shape` from its arm (the page bias folded into the
+    constant); `_arity_chk` and the spread cases read it off the shape they are handed. The named
+    set is the catalog defuns that are DISPATCHABLE or the callee of a guarded literal `apply`
+    (`Ctx.arityNamedCallees`, forwarded by `WasmAsyncEmit.freshCtx` with `namesArityOperators`):
+    wasm injects every wrapper and shakes most, so naming them all kept every operator's piece in
+    every module. The first cut inlined the selection into each dispatcher and cost the eval
+    module below +36 KB -- one copy per dispatcher arity.
+  - Still divergent, in the EXPECTATION half only: a built-in the interpreter implements in Java
+    with an optional tail spells its own range (`GETHASH expects 2 or 3 arguments, got 0`), while
+    the compiled wrapper's lambda list says `at least 2`; and a wrapper's `&optional` surplus check
+    says `Function expects at most N`.
 - **Sizes** (2026-09-12, minimal programs, JVM `.class` / wasm Preview 1 bytes):
 
   | program | JVM before | after | wasm before | after |
@@ -1519,6 +1561,26 @@ passed interpreted and returned a WRONG VALUE compiled. Pinned by ci-spec
   one. The plan this landed from feared +28 KB on wasm from 14 B in every spread case pushing a 2,000-callable
   program past `DISPATCH_PAGE_BUDGET_BYTES` ([wasm-function-body-size.md](wasm-function-body-size.md));
   the shared function made it 7 B and the measurement is an order of magnitude under that.
+
+  Naming the operator on top of that (2026-09-26, same method, programs compiled with
+  `--class-name P`; the programs catch with `(program-error (c) (princ-to-string c))`):
+
+  | program | JVM before | after | wasm before | after |
+  |---|---|---|---|---|
+  | `(print (+ 1 2))` | 6,024 | 6,024 | 348 | 348 |
+  | `(print (handler-case (car 1) (error (c) :e)))` | 14,502 | 14,513 | 5,203 | 5,203 |
+  | `(print (mapcar (lambda (x) (* x x)) '(1 2 3)))` | 11,623 | 11,775 | 6,175 | 6,175 |
+  | a `defun` + a wrong-arity `funcall` of it under `handler-case` | 38,875 | 39,014 | 22,623 | 22,823 |
+  | a wrong-arity `funcall` of `#'cons` under `handler-case` | 32,813 | 32,958 | 21,310 | 21,510 |
+  | the same as a LITERAL `(apply #'cons '(1))` | 31,983 | 32,125 | 19,404 | 19,552 |
+  | the same through a VALUE (`(let ((h #'cons)) (apply h '(1 2 3)))`) | 43,768 | 43,938 | 29,758 | 29,975 |
+  | `(eval '(funcall ...))` of it -- eval makes EVERY wrapper dispatchable | 443,796 | 448,858 | 366,576 | 375,084 |
+
+  Even a program that names no built-in itself has some dispatchable (the runtime's own
+  `#'identity` / `#'eql` defaults), so a module with a report pays ~150 B on the JVM (the exception
+  class constant, the names and the decode) and ~200 B on wasm (`_arity_opening` plus a handful of
+  names). The eval row is the price of naming ~250 operators: their names (JVM one joined string,
+  wasm one piece each) and one selector case apiece, +1.1% / +2.3%.
 
 ## Applying a value that names no function
 **Invariant: applying a non-designator (`(funcall 3 1)`, a Scheme `(h 1)` over a number) signals a

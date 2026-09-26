@@ -1882,6 +1882,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The shapes a literal (apply #'f ... list) guarded at its call site; non-empty
 		// is what makes _arityChk reachable (see Ctx.arityGuardShapes).
 		Set<Integer> arityGuardShapes = new HashSet<>();
+		// The built-in operators the wrong-count reports name (see Ctx.arityOperators).
+		JvmArityOperators arityOperators = new JvmArityOperators();
 
 		if (usesEval) {
 			for (int arity = 0; arity <= JvmEvalRuntimeBuilder.MAX_CALLABLE_ARITY; arity++) {
@@ -2227,6 +2229,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.indirectCallArities(indirectCallArities)
 			.valueFuncIds(valueFuncIds)
 			.arityGuardShapes(arityGuardShapes)
+			.arityOperators(arityOperators)
 			.spelledLiterals(spelledLiterals)
 			.nextFuncId(nextFuncId)
 			.appendMethod(appendMethod)
@@ -2864,12 +2867,13 @@ public final class JvmLispCompiler implements LispCompiler {
 							cp.addNameAndType(cp.addUtf8(JvmRuntimeBuilder.ARITY_ERR_NAME),
 									cp.addUtf8(JvmRuntimeBuilder.ARITY_ERR_DESC)))
 							: null,
-					reportsCount
-							? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmRuntimeBuilder.ARITY_CHK_NAME),
+					reportsCount ? cp.addMethodref(thisClass,
+							cp.addNameAndType(cp.addUtf8(JvmRuntimeBuilder.ARITY_CHK_NAME),
 									cp.addUtf8(JvmRuntimeBuilder.ARITY_CHK_DESC)))
-							: null);
+							: null,
+					reportsCount ? arityOperators : null);
 			dispatchMethods.addAll(JvmRuntimeBuilder.buildArityMethods(functions, lambdaDecls, cp, thisClass,
-					objectArrayClass, stringClass, dispatchableFuncIds, reportsMiss, reportsCount));
+					objectArrayClass, stringClass, dispatchableFuncIds, reportsMiss, reportsCount, arityOperators));
 		}
 		// What applying a non-function raises, shared by every dispatcher and by _apply
 		// (the eval runtime, which the spread dispatcher comes with).
@@ -6169,6 +6173,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		Set<Integer> arityGuardShapes;
 
+		/**
+		 * The built-in operators the program's wrong-count reports name, whose indices a
+		 * guarded call site bakes into its callee shape. One registry shared by every
+		 * {@code Ctx}, like {@link #arityGuardShapes}, and read by the emitter to build
+		 * {@code _arityMsg}.
+		 */
+		JvmArityOperators arityOperators;
+
 		int[] nextFuncId;
 
 		/**
@@ -6957,6 +6969,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.indirectCallArities = builder.indirectCallArities;
 			this.valueFuncIds = builder.valueFuncIds;
 			this.arityGuardShapes = builder.arityGuardShapes;
+			this.arityOperators = builder.arityOperators;
 			this.spelledLiterals = builder.spelledLiterals;
 			this.nextFuncId = builder.nextFuncId;
 			this.ctxBuilder = builder;
@@ -7286,6 +7299,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private Set<Integer> valueFuncIds = new HashSet<>();
 
 			private Set<Integer> arityGuardShapes = new HashSet<>();
+
+			private JvmArityOperators arityOperators = new JvmArityOperators();
 
 			private Set<String> spelledLiterals = new HashSet<>();
 
@@ -7745,6 +7760,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder arityGuardShapes(Set<Integer> arityGuardShapes) {
 				this.arityGuardShapes = arityGuardShapes;
+				return this;
+			}
+
+			Builder arityOperators(JvmArityOperators arityOperators) {
+				this.arityOperators = arityOperators;
 				return this;
 			}
 

@@ -59,6 +59,13 @@ Only a call that names the function directly can be checked at compile time. A c
 ; => "Function expects 2 arguments, got 1"
 ```
 
+A built-in operator's function value names the operator in place of `Function`.
+
+```lisp
+(handler-case (funcall #'cons 1) (program-error (c) (princ-to-string c)))
+; => "CONS expects 2 arguments, got 1"
+```
+
 A function whose lambda list ends in `&optional` parameters (no `&rest` or `&key`) takes
 at most its required plus optional count: a surplus argument signals the same catchable
 `program-error` at run time, on every backend, before any default form is evaluated.

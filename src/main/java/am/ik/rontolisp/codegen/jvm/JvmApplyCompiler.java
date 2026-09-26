@@ -63,7 +63,7 @@ final class JvmApplyCompiler {
 				// long one would drop its tail. _arityChk measures the list against the
 				// shape baked here and throws ClosRegistry.arityMessage's text, the same
 				// helper a SPREAD dispatcher case carries.
-				emitArityGuard(ctx, className, argsSlot, required, fi.variadic());
+				emitArityGuard(ctx, className, argsSlot, required, fi.variadic(), target);
 				for (int i = 0; i < required; i++) {
 					ctx.emit(Opcode.ALOAD);
 					ctx.emit(argsSlot);
@@ -141,11 +141,12 @@ final class JvmApplyCompiler {
 	/**
 	 * Emits {@code _arityChk(args, shape)} in front of the physical direct call, and
 	 * records the shape so the emitter knows the helper is reachable
-	 * ({@code JvmLispCompiler.Ctx.arityGuardShapes}).
+	 * ({@code JvmLispCompiler.Ctx.arityGuardShapes}). The shape carries the callee's
+	 * operator when it is a built-in ({@code JvmArityOperators}).
 	 */
 	private static void emitArityGuard(JvmLispCompiler.Ctx ctx, String className, int argsSlot, int required,
-			boolean variadic) {
-		int shape = JvmRuntimeBuilder.arityShape(required, variadic);
+			boolean variadic, String target) {
+		int shape = ctx.arityOperators.shape(required, variadic, target);
 		ctx.arityGuardShapes.add(shape);
 		MethodrefConstant chkRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 				ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmRuntimeBuilder.ARITY_CHK_NAME),

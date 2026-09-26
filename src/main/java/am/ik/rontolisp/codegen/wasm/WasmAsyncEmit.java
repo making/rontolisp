@@ -888,6 +888,9 @@ final class WasmAsyncEmit {
 			// same form inside a defun reports a wrong argument count
 			// (Ctx.arityChkFuncIndex).
 			.arityChkFuncIndex(proto.arityChkFuncIndex)
+			// With it, whether that guard bakes a built-in callee's funcId in.
+			.namesArityOperators(proto.namesArityOperators)
+			.arityNamedCallees(proto.arityNamedCallees)
 			// NOT optional for the same reason: a chunk built here compiles call sites
 			// too, and a literal :string host-import site must lower the same way at the
 			// top level as it does inside a defun.

@@ -9894,14 +9894,14 @@ public final class Environment implements Scope {
 	private static void requireArgCount(String name, List<LispVal> args, int expected) {
 		if (args.size() != expected) {
 			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
-					name + " expects " + expected + " arguments, got " + args.size());
+					ClosRegistry.arityMessage(name, expected, false, args.size()));
 		}
 	}
 
 	private static void requireMinArgCount(String name, List<LispVal> args, int min) {
 		if (args.size() < min) {
 			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
-					name + " expects at least " + min + " arguments, got " + args.size());
+					ClosRegistry.arityMessage(name, min, true, args.size()));
 		}
 	}
 

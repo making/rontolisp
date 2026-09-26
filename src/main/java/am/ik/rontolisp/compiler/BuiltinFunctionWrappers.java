@@ -451,6 +451,20 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	/**
+	 * The operator a wrong-argument-count report names for a function of this name: the
+	 * name itself when it is a wrapped built-in, {@code null} (reported as
+	 * {@code ClosRegistry.ARITY_ANONYMOUS_OPERATOR}) for anything else. One rule for all
+	 * four backends -- the interpreter asks it of a lambda's name, the compiled backends
+	 * of a callable's -- decided by the NAME, because the interpreter's catalog lambda
+	 * and the compilers' injected wrapper defun are the same function under it.
+	 * @param functionName the callee's name, or {@code null} for an anonymous one
+	 * @return the operator to report, or {@code null}
+	 */
+	public static @Nullable String arityOperator(@Nullable String functionName) {
+		return functionName != null && WRAPPER_NAMES.contains(functionName) ? functionName : null;
+	}
+
+	/**
 	 * Generates wrapper defuns for built-in operators that are not already defined by the
 	 * user.
 	 * @param userDefinedNames names already defined by user defuns

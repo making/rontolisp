@@ -2259,6 +2259,34 @@ final class WasmRuntimeBuilder {
 	}
 
 	/**
+	 * Where a callee shape carries the funcId a report names the operator of:
+	 * {@code funcId + 1} from this bit up, 0 for a callee reported as {@code Function}.
+	 * The required count doubled, plus one for a {@code &rest} tail, stays below it.
+	 */
+	static final int ARITY_FUNC_ID_SHIFT = 16;
+
+	/**
+	 * The funcIds a shape can carry: {@code funcId + 1} has to fit the sixteen bits above
+	 * {@link #ARITY_FUNC_ID_SHIFT}, or it would wrap onto a smaller id.
+	 */
+	static final int ARITY_MAX_NAMED_FUNC_ID = (1 << (Integer.SIZE - ARITY_FUNC_ID_SHIFT)) - 1;
+
+	/**
+	 * The callee shape a wrong-count report is spelled from: the required count doubled,
+	 * plus one for a {@code &rest} tail, and -- for a callee whose report names its
+	 * operator -- {@code funcId + 1} above {@link #ARITY_FUNC_ID_SHIFT}.
+	 * @param required the callee's required parameter count
+	 * @param variadic whether it takes a {@code &rest} tail
+	 * @param namedFuncId the callee's funcId when its report names an operator, else -1
+	 * @return the shape
+	 */
+	static int arityShape(int required, boolean variadic, int namedFuncId) {
+		int shape = required * 2 + (variadic ? 1 : 0);
+		return namedFuncId >= 0 && namedFuncId < ARITY_MAX_NAMED_FUNC_ID && shape < 1 << (ARITY_FUNC_ID_SHIFT - 1)
+				? shape | (namedFuncId + 1) << ARITY_FUNC_ID_SHIFT : shape;
+	}
+
+	/**
 	 * What a per-arity dispatcher needs to report a wrong argument COUNT: the message
 	 * pieces it assembles at run time and the {@code program-error} instance it hands the
 	 * throw.
@@ -2280,6 +2308,18 @@ final class WasmRuntimeBuilder {
 	 * leaving a HOLE that splits the data segment in two and costs the module a segment
 	 * header it did not need (6 B, measured on
 	 * {@code (print (handler-case (car 1) (error (c) :e)))}).
+	 *
+	 * <p>
+	 * A built-in operator's function value names the operator in place of
+	 * {@code Function} ({@code CONS expects 2 arguments, got 1}), as the interpreter's
+	 * does. Where the module has a defun under such a name, the report opens its message
+	 * through one shared function, {@code _arity_opening}
+	 * ({@link #buildArityOpeningBody}), which reads the callee's funcId out of the shape
+	 * ({@link #arityShape}) and answers {@code "NAME expects "} from the operator's
+	 * interned name -- or {@code "Function expects "} for any other callee. Shared rather
+	 * than inlined: a selection over every named operator in each dispatcher cost an
+	 * eval-carrying module, which makes every wrapper dispatchable, one copy per
+	 * dispatcher arity (+36 KB on a 367 KB module, measured 2026-09-26).
 	 *
 	 * <p>
 	 * Built only in EH mode behind a handler landing pad -- outside that nothing could
@@ -2315,14 +2355,33 @@ final class WasmRuntimeBuilder {
 
 		private WasmLispCompiler.StringTable.@Nullable StringEntry infix;
 
+		/** The funcIds whose report names an operator, and the operator each names. */
+		private final SortedMap<Integer, String> namedFuncIds;
+
+		/** {@code _arity_opening}'s module index, or -1 when the module has none. */
+		private final int openingIndex;
+
 		ArityReport(WasmLispCompiler.StringTable stringTable, int layoutAddress, int instanceTypeIndex,
-				int slotCapacity, int formatControlSlot, boolean identityHash) {
+				int slotCapacity, int formatControlSlot, boolean identityHash, SortedMap<Integer, String> namedFuncIds,
+				int openingIndex) {
 			this.stringTable = stringTable;
 			this.layoutAddress = layoutAddress;
 			this.instanceTypeIndex = instanceTypeIndex;
 			this.slotCapacity = slotCapacity;
 			this.formatControlSlot = formatControlSlot;
 			this.identityHash = identityHash;
+			this.namedFuncIds = openingIndex >= 0 ? namedFuncIds : new TreeMap<>();
+			this.openingIndex = openingIndex;
+		}
+
+		/** Whether a shape may carry a funcId the report names an operator for. */
+		boolean namesOperators() {
+			return !this.namedFuncIds.isEmpty();
+		}
+
+		/** Whether the report names the operator of this callee. */
+		boolean names(int funcId) {
+			return this.namedFuncIds.containsKey(funcId);
 		}
 
 		private void intern() {
@@ -2338,6 +2397,11 @@ final class WasmRuntimeBuilder {
 
 		private WasmLispCompiler.StringTable.StringEntry quoted(String text) {
 			return this.stringTable.addBodyString("\"" + text + "\"");
+		}
+
+		/** An operator's name as a string piece, interned on first use. */
+		private WasmLispCompiler.StringTable.StringEntry operatorPiece(String operator) {
+			return quoted(operator);
 		}
 
 	}
@@ -2608,13 +2672,13 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.END); // $counted
 		// The count fits when it is the required one, or larger with a &rest tail to
 		// take the surplus.
-		emitArityFits(w, got);
+		emitArityFits(w, got, report.namesOperators());
 		w.write(Instruction.IF, 0x40);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		emitArityThrow(w, report, 1, slots, msg, () -> {
+		emitArityThrow(w, report, 1, report.namesOperators(), slots, msg, () -> {
 			w.write(Instruction.GET_LOCAL);
 			w.writeUnsignedLeb128(got);
 		});
@@ -2644,15 +2708,16 @@ final class WasmRuntimeBuilder {
 	/**
 	 * Pushes 1 when {@code gotLocal} is a count the shape in local 1 can take:
 	 * {@code got == required}, or {@code got > required} with a {@code &rest} tail.
+	 * {@code named}: the shape may carry a funcId ({@link #arityShape}).
 	 */
-	private static void emitArityFits(WasmWriter w, int gotLocal) {
+	private static void emitArityFits(WasmWriter w, int gotLocal, boolean named) {
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(gotLocal);
-		emitShapeRequired(w, 1);
+		emitShapeRequired(w, 1, named);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(gotLocal);
-		emitShapeRequired(w, 1);
+		emitShapeRequired(w, 1, named);
 		w.write(Instruction.I32_GT_U);
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(1);
@@ -2671,11 +2736,24 @@ final class WasmRuntimeBuilder {
 	 * the way {@code %obj-new} does, and throw the {@code (instance . message)} payload
 	 * on {@code $lisp-cond} -- the channel {@code %error-cond} uses, so a
 	 * {@code program-error} clause matches and the entry landing pad reports it.
+	 * {@code named}: the shape may carry a funcId, and the message opens through
+	 * {@code _arity_opening}; otherwise the assembly is the one a module that named
+	 * nothing emitted, byte for byte.
 	 */
-	private static void emitArityThrow(WasmWriter w, ArityReport report, int shapeLocal, int slotsLocal, int msgLocal,
-			Runnable pushGot) {
+	private static void emitArityThrow(WasmWriter w, ArityReport report, int shapeLocal, boolean named, int slotsLocal,
+			int msgLocal, Runnable pushGot) {
 		report.intern();
-		emitStrConst(w, Objects.requireNonNull(report.prefix));
+		if (named) {
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(shapeLocal);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(report.openingIndex);
+		}
+		else {
+			emitStrConst(w, Objects.requireNonNull(report.prefix));
+		}
 		// a &rest tail makes the count a lower bound
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(shapeLocal);
@@ -2689,12 +2767,12 @@ final class WasmRuntimeBuilder {
 		emitStrConst(w, Objects.requireNonNull(report.atLeast));
 		emitConcat(w);
 		w.write(Instruction.END);
-		emitShapeRequired(w, shapeLocal);
+		emitShapeRequired(w, shapeLocal, named);
 		emitDecimal(w);
 		emitConcat(w);
 		emitStrConst(w, Objects.requireNonNull(report.argument));
 		emitConcat(w);
-		emitShapeRequired(w, shapeLocal);
+		emitShapeRequired(w, shapeLocal, named);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(1);
 		w.write(Instruction.I32_NE);
@@ -2798,13 +2876,114 @@ final class WasmRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_TILDE);
 	}
 
-	/** Pushes the required count out of a callee shape. */
-	private static void emitShapeRequired(WasmWriter w, int shapeLocal) {
+	/**
+	 * Pushes the required count out of a callee shape; {@code named}: the shape may carry
+	 * a funcId above {@link #ARITY_FUNC_ID_SHIFT}, masked off.
+	 */
+	private static void emitShapeRequired(WasmWriter w, int shapeLocal, boolean named) {
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(shapeLocal);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(1);
 		w.write(Instruction.I32_SHR_U);
+		if (named) {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128((1 << (ARITY_FUNC_ID_SHIFT - 1)) - 1);
+			w.write(Instruction.I32_AND);
+		}
+	}
+
+	/**
+	 * {@code _arity_opening(shape, _) -> string}: the opening of a wrong-count message
+	 * for the callee shape -- {@code "NAME expects "} when the shape carries the funcId
+	 * of a callee the report names ({@link #arityShape}), {@code "Function expects "} for
+	 * any other. The funcId is selected over exactly as a dispatcher selects its cases
+	 * ({@link #emitCaseSelector}: a plain or biased {@code br_table}, or a comparison
+	 * chain when the named ids are sparse), one case per named operator:
+	 *
+	 * <pre>
+	 * block (result eqref) $done
+	 *   block $function
+	 *     block $op_0 ... block $op_{n-1}
+	 *       (shape >>> 16) - 1  select
+	 *     end $op_{n-1}: "NAME" br $done
+	 *     ...
+	 *   end $function: "Function"
+	 * end
+	 * " expects " concat
+	 * </pre>
+	 *
+	 * A shape carrying no funcId selects {@code -1}, which no case claims. The second
+	 * parameter is the selector's scratch local: the function reuses
+	 * {@code TYPE_RAT_NEW}'s {@code (i32, i32) -> (ref null eq)} signature, so no module
+	 * gains a type entry, and its callers pass 0.
+	 * @param report the report whose named funcIds and pieces the body reads
+	 * @return the function body
+	 */
+	static byte[] buildArityOpeningBody(ArityReport report) {
+		report.intern();
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // 0 locals
+		List<Map.Entry<Integer, String>> ops = new ArrayList<>(report.namedFuncIds.entrySet());
+		int n = ops.size();
+		int funcIdLocal = 1;
+		w.write(Instruction.BLOCK);
+		w.writeRefType(true, Type.EQ.code());
+		w.write(Instruction.BLOCK, 0x40); // $function
+		for (int j = 0; j < n; j++) {
+			w.write(Instruction.BLOCK, 0x40);
+		}
+		if (n > 0) {
+			Map<Integer, Integer> funcIdToCase = new HashMap<>();
+			for (int j = 0; j < n; j++) {
+				funcIdToCase.put(ops.get(j).getKey(), j);
+			}
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(ARITY_FUNC_ID_SHIFT);
+			w.write(Instruction.I32_SHR_U);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(1);
+			w.write(Instruction.I32_SUB);
+			w.write(Instruction.TEE_LOCAL);
+			w.writeUnsignedLeb128(funcIdLocal);
+			emitCaseSelector(w, funcIdToCase, ops.get(n - 1).getKey(), n, funcIdLocal);
+		}
+		else {
+			w.write(Instruction.BR);
+			w.writeUnsignedLeb128(0); // $function
+		}
+		for (int k = 0; k < n; k++) {
+			w.write(Instruction.END); // $op_{n-1-k}
+			emitStrConst(w, report.operatorPiece(ops.get(n - 1 - k).getValue()));
+			w.write(Instruction.BR);
+			w.writeUnsignedLeb128(n - k); // $done
+		}
+		w.write(Instruction.END); // $function
+		emitStrConst(w, report.quoted(ClosRegistry.ARITY_ANONYMOUS_OPERATOR));
+		w.write(Instruction.END); // $done
+		// one " expects " for every case, rather than a copy inside each operator's piece
+		emitStrConst(w, report.quoted(ClosRegistry.ARITY_VERB));
+		emitConcat(w);
+		w.write(Instruction.END); // end function
+		return body.toByteArray();
+	}
+
+	/**
+	 * The body a module that reserved {@code _arity_opening}'s slot emits when it builds
+	 * no report after all: nothing calls it, and a null keeps the index space honest.
+	 * @return the function body
+	 */
+	static byte[] buildArityOpeningStubBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // 0 locals
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.END);
+		return body.toByteArray();
 	}
 
 	/** Renders the i32 on the stack as its decimal string, through the shared printer. */
@@ -3155,6 +3334,16 @@ final class WasmRuntimeBuilder {
 			funcIdToCase.put(miss.getKey() - funcIdBias, targets.size() + armShapes.indexOf(miss.getValue()));
 		}
 		emitCaseSelector(w, funcIdToCase, maxFuncId, numCases, funcIdLocal);
+		// Whether a report arm hands the assembly the funcId too, for a report that may
+		// name a built-in's operator (ArityReport): only where one of this dispatcher's
+		// misses is such a callee, so every other dispatcher is byte-identical.
+		boolean namedArms = false;
+		if (report != null && report.namesOperators() && !missShapes.isEmpty()
+				&& missShapes.lastKey() < ARITY_MAX_NAMED_FUNC_ID) {
+			for (Integer missId : missShapes.keySet()) {
+				namedArms |= report.names(missId);
+			}
+		}
 
 		// Case bodies: close blocks from innermost to outermost
 		for (int k = 0; k < numCases; k++) {
@@ -3163,9 +3352,25 @@ final class WasmRuntimeBuilder {
 			if (targetIdx >= targets.size()) {
 				// A report arm: hand the shape to the assembly below and branch out. The
 				// funcId local is dead from here (the br_table has already read it), so
-				// it carries the shape rather than costing a local of its own.
-				w.write(Instruction.I32_CONST);
-				w.writeSignedLeb128(armShapes.get(targetIdx - targets.size()));
+				// it carries the shape rather than costing a local of its own -- with the
+				// funcId folded in above it when the report may name an operator:
+				// (funcId + 1) << 16 | shape, the funcId being this page's bias plus the
+				// digit the local holds.
+				if (namedArms) {
+					w.write(Instruction.GET_LOCAL);
+					w.writeUnsignedLeb128(funcIdLocal);
+					w.write(Instruction.I32_CONST);
+					w.writeSignedLeb128(ARITY_FUNC_ID_SHIFT);
+					w.write(Instruction.I32_SHL);
+					w.write(Instruction.I32_CONST);
+					w.writeSignedLeb128(
+							((funcIdBias + 1) << ARITY_FUNC_ID_SHIFT) + armShapes.get(targetIdx - targets.size()));
+					w.write(Instruction.I32_ADD);
+				}
+				else {
+					w.write(Instruction.I32_CONST);
+					w.writeSignedLeb128(armShapes.get(targetIdx - targets.size()));
+				}
 				w.write(Instruction.SET_LOCAL);
 				w.writeUnsignedLeb128(funcIdLocal);
 				w.write(Instruction.BR);
@@ -3183,7 +3388,8 @@ final class WasmRuntimeBuilder {
 					w.write(Instruction.GET_LOCAL);
 					w.writeUnsignedLeb128(1);
 					w.write(Instruction.I32_CONST);
-					w.writeSignedLeb128(target.required() * 2 + (target.variadic() ? 1 : 0));
+					w.writeSignedLeb128(arityShape(target.required(), target.variadic(),
+							Objects.requireNonNull(report).names(target.funcId()) ? target.funcId() : -1));
 					w.write(Instruction.CALL);
 					w.writeUnsignedLeb128(arityChkIndex);
 					w.write(Instruction.DROP);
@@ -3264,10 +3470,11 @@ final class WasmRuntimeBuilder {
 
 		if (!armShapes.isEmpty()) {
 			w.write(Instruction.END); // $arityerr
-			emitArityThrow(w, Objects.requireNonNull(report), funcIdLocal, argListLocal, dispatchArgs + 3, () -> {
-				w.write(Instruction.I32_CONST);
-				w.writeSignedLeb128(arity);
-			});
+			emitArityThrow(w, Objects.requireNonNull(report), funcIdLocal, namedArms, argListLocal, dispatchArgs + 3,
+					() -> {
+						w.write(Instruction.I32_CONST);
+						w.writeSignedLeb128(arity);
+					});
 		}
 
 		// End result block

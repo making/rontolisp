@@ -793,11 +793,11 @@ final class JvmHandlerCaseCompiler {
 			case 4 ->
 				List.of(emitMessageTest(rawSlot, "startsWith", ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX, ctx),
 						emitMessageTest(rawSlot, "endsWith", ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX, ctx));
-			// A dispatcher's wrong-argument-count throw
-			// (JvmRuntimeBuilder.ArityReporting):
-			// the same no-channel-for-a-class situation as the two above, and the text
-			// is ClosRegistry.arityMessage's, which no other throw site writes.
-			default -> List.of(emitMessageTest(rawSlot, "startsWith", ClosRegistry.ARITY_MESSAGE_PREFIX, ctx));
+			// A dispatcher's or a count guard's wrong-argument-count throw
+			// (JvmRuntimeBuilder.ARITY_EXCEPTION_CLASS): recognized by its class, which
+			// no other throw site raises -- its text may name any operator, and a user
+			// error's may begin like it.
+			default -> List.of(emitInstanceOfJump(excSlot, JvmRuntimeBuilder.ARITY_EXCEPTION_CLASS, ctx, false));
 		};
 	}
 

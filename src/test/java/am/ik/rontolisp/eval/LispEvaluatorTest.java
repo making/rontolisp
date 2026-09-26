@@ -8875,6 +8875,29 @@ class LispEvaluatorTest {
 			.isEqualTo("(1 2 3)");
 	}
 
+	// A built-in operator's function value names the operator in its wrong-count
+	// program-error -- a Java built-in and a catalog wrapper lambda alike, the latter
+	// printing under its name as the compiled backends print it -- with the count
+	// spelled by ClosRegistry.arityExpectation; a user's own function keeps "Function".
+	@Test
+	void evalWrongArityThroughABuiltinDesignatorNamesTheOperator() {
+		String caught = "(handler-case %s (program-error (c) (princ-to-string c)))";
+		assertThat(eval(caught.formatted("(funcall #'cons 1)")).print())
+			.isEqualTo("\"CONS expects 2 arguments, got 1\"");
+		assertThat(eval(caught.formatted("(funcall #'car)")).print()).isEqualTo("\"CAR expects 1 argument, got 0\"");
+		assertThat(eval(caught.formatted("(funcall #'mapcar #'car)")).print())
+			.isEqualTo("\"MAPCAR expects at least 2 arguments, got 1\"");
+		assertThat(eval(caught.formatted("(funcall #'elt '(1))")).print())
+			.isEqualTo("\"ELT expects 2 arguments, got 1\"");
+		assertThat(eval(caught.formatted("(apply #'cons '(1))")).print())
+			.isEqualTo("\"CONS expects 2 arguments, got 1\"");
+		assertThat(eval(caught.formatted("(funcall (lambda (x) x))")).print())
+			.isEqualTo("\"Function expects 1 argument, got 0\"");
+		assertThat(evalMulti("(defun ar-f (x) x) " + caught.formatted("(funcall #'ar-f)")).print())
+			.isEqualTo("\"Function expects 1 argument, got 0\"");
+		assertThat(eval("#'elt").print()).isEqualTo("#<function ELT>");
+	}
+
 	@Test
 	void evalDestructuringBindMissingElementsSignalProgramError() {
 		// A required element the list runs out before is a program-error, not a nil
