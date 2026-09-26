@@ -257,6 +257,20 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void anUncaughtReportlessInstanceNamesItsClass() throws Exception {
+		// (error c) over an instance whose class reports nothing: the same line the
+		// interpreter and the wasm-GC landing pad write.
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		try (var _ = ThreadStdio.err(err)) {
+			catchThrowable(() -> compileAndRun("""
+					(define-condition uc-plain (error) ())
+					(error (identity (make-condition 'uc-plain)))
+					"""));
+		}
+		assertThat(err.toString().trim()).isEqualTo("Unhandled condition: Condition of type UC-PLAIN was signalled.");
+	}
+
+	@Test
 	void compileFindClassReturnsAnEqStableClassMetaobject() throws Exception {
 		// The generated metaobject runtime memoizes per canonical name, so the answer is
 		// eq across calls; slot 0 = name, slot 1 = direct-superclass metaobjects, slot 4

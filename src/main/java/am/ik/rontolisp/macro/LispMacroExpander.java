@@ -27309,9 +27309,13 @@ public final class LispMacroExpander {
 			// The fallback is the same text this site signalled before there was a
 			// renderer, so a class the renderer does not cover (no report anywhere, no
 			// format-control) is unchanged, and so is a covered one whose format-control
-			// is nil at runtime.
-			LispVal rendered = conditionReportOr(condVar, suppliedFormatControl(cls, items) instanceof LispVal supplied
-					? supplied : legacySignalMessage(typeSym, items, bindings, false));
+			// is nil at runtime. A class that INHERITS a report always renders one (a
+			// string, or a stream's contents), so its fallback is dead and not built: the
+			// wasm-GC signal compiles the fallback into every site's payload.
+			LispVal fallback = cls != null && inheritsConditionReport(cls, closRegistry) ? LispNil.INSTANCE
+					: suppliedFormatControl(cls, items) instanceof LispVal supplied ? supplied
+							: legacySignalMessage(typeSym, items, bindings, false);
+			LispVal rendered = conditionReportOr(condVar, fallback);
 			message = warn
 					? listToCons(
 							List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), rendered))
@@ -27349,6 +27353,15 @@ public final class LispMacroExpander {
 		letParts.add(listToCons(bindings));
 		letParts.add(signalCall);
 		return listToCons(letParts);
+	}
+
+	/**
+	 * Whether a {@code :report} is found along the class precedence list -- the walk the
+	 * generated renderer makes ({@link #conditionReportGroups}), so such a class's
+	 * {@code %condition-report-str} never answers nil.
+	 */
+	private static boolean inheritsConditionReport(ClosRegistry.ClassInfo cls, ClosRegistry closRegistry) {
+		return cls.cpl().stream().anyMatch(walk -> closRegistry.findConditionReport(walk) != null);
 	}
 
 	/**
@@ -27482,10 +27495,10 @@ public final class LispMacroExpander {
 		LispVal slotMsg = objRef(condVar, 0);
 		LispVal isSimpleWithMessage = listToCons(List.of(new LispSymbol(LispNames.AND),
 				objIs(condVar, SIMPLE_CONDITION_TAGS), callOf(LispNames.STRINGP, slotMsg)));
-		LispVal typeMessage = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT),
-				listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("Condition of type "),
-						listToCons(List.of(new LispSymbol(LispNames.SUBSEQ),
-								callOf(LispNames.PRIN1_PIECE_INTERNAL, tag), new LispInteger(7))))),
+		LispVal typeMessage = listToCons(List.of(
+				new LispSymbol(LispNames.STRING_CONCAT), listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT),
+						new LispString("Condition of type "), listToCons(List.of(new LispSymbol(LispNames.SUBSEQ),
+								callOf(LispNames.SYMBOL_NAME, tag), new LispInteger(7))))),
 				new LispString(" was signalled.")));
 		// A value that is not an instance at all has no tag to name, so it signals as its
 		// own printed representation rather than off the end of a nil tag.
@@ -31285,9 +31298,42 @@ public final class LispMacroExpander {
 	 * @return the message form
 	 */
 	private static LispVal conditionReportOr(LispVal value, LispVal fallback) {
-		LispSymbol reportVar = new LispSymbol("__crm" + MV_COUNTER.getAndIncrement());
+		LispSymbol reportVar = new LispSymbol(CONDITION_REPORT_VAR_PREFIX + MV_COUNTER.getAndIncrement());
 		return makeLet(reportVar.name(), callOf(LispNames.CONDITION_REPORT_STR_INTERNAL, value),
 				makeIf(reportVar, reportVar, fallback));
+	}
+
+	private static final String CONDITION_REPORT_VAR_PREFIX = "__crm";
+
+	/**
+	 * The {@code fallback} of a message {@link #conditionReportOr} built, or null when
+	 * the form is not one: the half of a signal's text that only the signal SITE can make
+	 * (a report-less class's {@code Condition (TYPE :INITARG v) was signalled.}), while
+	 * the report half is the instance's, re-rendered wherever the instance is. The
+	 * wasm-GC signal compiles only this half into its payload, since its entry landing
+	 * pad renders the instance itself ({@code .kb/error-handling.md}).
+	 * @param message a signal's message operand
+	 * @return the fallback form, or null
+	 */
+	public static @Nullable LispVal conditionReportFallback(LispVal message) {
+		// (let ((__crmN (%condition-report-str v))) (if __crmN __crmN fallback))
+		if (!(message instanceof LispCons let && let.car() instanceof LispSymbol letOp
+				&& LispNames.LET.equals(letOp.name()) && let.cdr() instanceof LispCons letRest
+				&& letRest.car() instanceof LispCons bindings && bindings.cdr() instanceof LispNil
+				&& bindings.car() instanceof LispCons binding && binding.car() instanceof LispSymbol var
+				&& var.name().startsWith(CONDITION_REPORT_VAR_PREFIX) && binding.cdr() instanceof LispCons valueCell
+				&& valueCell.car() instanceof LispCons value && value.car() instanceof LispSymbol valueOp
+				&& LispNames.CONDITION_REPORT_STR_INTERNAL.equals(valueOp.name())
+				&& letRest.cdr() instanceof LispCons bodyCell && bodyCell.cdr() instanceof LispNil
+				&& bodyCell.car() instanceof LispCons body)) {
+			return null;
+		}
+		List<LispVal> ifParts = body.toList();
+		if (ifParts.size() == 4 && ifParts.get(0) instanceof LispSymbol ifOp && LispNames.IF.equals(ifOp.name())
+				&& var.equals(ifParts.get(1)) && var.equals(ifParts.get(2))) {
+			return ifParts.get(3);
+		}
+		return null;
 	}
 
 	/**

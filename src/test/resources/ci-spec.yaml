@@ -19057,6 +19057,18 @@ standalone:
     stderr: |
       Unhandled condition: database error: password authentication failed
     fails: true
+  - name: uncaught-reportless-condition-report
+    source: |
+      ;; A class with no report anywhere: the text is built at the signal site from
+      ;; the initargs as written, which the wasm-GC payload carries to the entry pad.
+      (define-condition plain-err (error) ((code :initarg :code)))
+      (print (handler-case (error "caught") (error (e) :ok)))
+      (error 'plain-err :code 42)
+    stdout: |
+      :OK
+    stderr: |
+      Unhandled condition: Condition (PLAIN-ERR :CODE 42) was signalled.
+    fails: true
   - name: uncaught-non-function-report
     source: |
       ;; The handler-case puts the wasm module in EH mode, where the dispatcher's
