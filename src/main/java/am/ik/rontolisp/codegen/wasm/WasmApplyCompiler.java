@@ -83,7 +83,17 @@ final class WasmApplyCompiler {
 					ctx.writer.write(Instruction.GET_LOCAL);
 					ctx.writer.writeUnsignedLeb128(argsSlot);
 					ctx.writer.write(Instruction.I32_CONST);
-					ctx.writer.writeSignedLeb128(required * 2 + (fi.variadic() ? 1 : 0));
+					// A built-in callee's shape carries its funcId, so the report names
+					// the
+					// operator (WasmRuntimeBuilder.ArityReport).
+					boolean named = ctx.namesArityOperators
+							&& am.ik.rontolisp.compiler.BuiltinFunctionWrappers.arityOperator(target) != null
+							&& fi.funcId() < WasmRuntimeBuilder.ARITY_MAX_NAMED_FUNC_ID;
+					if (named) {
+						ctx.arityNamedCallees.add(fi.funcId());
+					}
+					ctx.writer.writeSignedLeb128(
+							WasmRuntimeBuilder.arityShape(required, fi.variadic(), named ? fi.funcId() : -1));
 					ctx.writer.write(Instruction.CALL);
 					ctx.writer.writeUnsignedLeb128(ctx.arityChkFuncIndex);
 					ctx.writer.write(Instruction.DROP);

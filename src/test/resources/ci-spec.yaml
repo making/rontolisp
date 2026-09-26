@@ -18427,9 +18427,10 @@ cases:
   # is here too, through both of its shapes: a LITERAL #'f target is a physical direct
   # call that reaches no dispatcher, a computed one goes to the spread dispatcher, which
   # carries a case for every callable -- so neither is a dispatch miss and both carry a
-  # count guard against the argument LIST instead. One deliberate divergence is pinned:
-  # a BUILT-IN designator's wrapper reports the generic "Function expects ..." where the
-  # interpreter names the operator -- so only the CLASS is compared for that one.
+  # count guard against the argument LIST instead. A BUILT-IN operator's function value
+  # names the operator in place of "Function", through every one of those routes; the
+  # JVM recognizes the class by the exception's class, not the text, so a user error
+  # that merely begins like an arity report stays a plain error.
   - name: wrong-arity-funcall-signals-program-error
     source: |
       (defun ci-ar-one (x) x)
@@ -18439,7 +18440,7 @@ cases:
       (print (handler-case (funcall #'ci-ar-one) (program-error (c) (princ-to-string c)) (error (c) :plain)))
       (print (handler-case (funcall #'ci-ar-rest) (program-error (c) (princ-to-string c)) (error (c) :plain)))
       (print (handler-case (mapcar #'ci-ar-one '(1 2) '(3 4)) (program-error (c) (princ-to-string c)) (error (c) :plain)))
-      (print (handler-case (funcall #'identity 1 2) (program-error (c) :pe) (error (c) :plain)))
+      (print (handler-case (funcall #'identity 1 2) (program-error (c) (princ-to-string c)) (error (c) :plain)))
       (print (handler-case (apply #'ci-ar-one '(1 2)) (program-error (c) (princ-to-string c)) (error (c) :plain)))
       (print (handler-case (apply #'ci-ar-one '()) (program-error (c) (princ-to-string c)) (error (c) :plain)))
       (print (handler-case (apply #'ci-ar-rest '()) (program-error (c) (princ-to-string c)) (error (c) :plain)))
@@ -18447,19 +18448,37 @@ cases:
       (print (handler-case (let ((h #'ci-ar-rest)) (apply h '())) (program-error (c) (princ-to-string c)) (error (c) :plain)))
       (print (list (funcall #'ci-ar-one 5) (funcall #'ci-ar-rest 6 7)
                    (apply #'ci-ar-one '(8)) (apply #'ci-ar-rest 9 '(10))))
+      (print (handler-case (funcall #'cons 1) (program-error (c) (princ-to-string c)) (error (c) :plain)))
+      (print (handler-case (funcall #'car) (program-error (c) (princ-to-string c)) (error (c) :plain)))
+      (print (handler-case (mapcar #'cons '(1 2)) (program-error (c) (princ-to-string c)) (error (c) :plain)))
+      (print (handler-case (funcall #'mapcar #'car) (program-error (c) (princ-to-string c)) (error (c) :plain)))
+      (print (handler-case (funcall #'elt '(1)) (program-error (c) (princ-to-string c)) (error (c) :plain)))
+      (print (handler-case (apply #'cons '(1)) (program-error (c) (princ-to-string c)) (error (c) :plain)))
+      (print (handler-case (let ((h #'cons)) (apply h '(1 2 3))) (program-error (c) (princ-to-string c)) (error (c) :plain)))
+      (print (handler-case (error "Function expects nothing") (program-error (c) :pe) (error (c) :plain)))
+      (print (list (apply #'cons '(1 2)) (let ((h #'cons)) (apply h '(3 4))) (funcall #'car '(5)) (mapcar #'cons '(1) '(2))))
     expected: |
       "Function expects 1 argument, got 2"
       "Function expects 1 argument, got 2"
       "Function expects 1 argument, got 0"
       "Function expects at least 1 argument, got 0"
       "Function expects 1 argument, got 2"
-      :PE
+      "IDENTITY expects 1 argument, got 2"
       "Function expects 1 argument, got 2"
       "Function expects 1 argument, got 0"
       "Function expects at least 1 argument, got 0"
       "Function expects 1 argument, got 2"
       "Function expects at least 1 argument, got 0"
       (5 (6 (7)) 8 (9 (10)))
+      "CONS expects 2 arguments, got 1"
+      "CAR expects 1 argument, got 0"
+      "CONS expects 2 arguments, got 1"
+      "MAPCAR expects at least 2 arguments, got 1"
+      "ELT expects 2 arguments, got 1"
+      "CONS expects 2 arguments, got 1"
+      "CONS expects 2 arguments, got 3"
+      :PLAIN
+      ((1 . 2) (3 . 4) 5 ((1 . 2)))
 
   # Applying a value that names no function is the interpreter's condition on every
   # backend (.kb/error-handling.md): a type-error "Not a function: <prin1>" for a

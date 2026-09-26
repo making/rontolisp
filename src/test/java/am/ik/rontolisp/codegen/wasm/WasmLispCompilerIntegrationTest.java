@@ -12824,6 +12824,35 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo(":PE\n:PE\n:PE\n:PE\n\"Function expects at most 2 arguments, got 4\"\n(1 (2 3))\n(1 7)");
 	}
 
+	// A built-in operator's function value names the operator in its wrong-count
+	// program-error on every backend, through a dispatch miss, a literal apply's direct
+	// call and the spread dispatcher alike.
+	@Test
+	void wrongArityThroughABuiltinDesignatorNamesTheOperator() throws Exception {
+		assertThat(compileAndRun(
+				"""
+						(print (handler-case (funcall #'cons 1) (program-error (c) (princ-to-string c))))
+						(print (handler-case (funcall #'car) (program-error (c) (princ-to-string c))))
+						(print (handler-case (mapcar #'cons '(1 2)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (funcall #'mapcar #'car) (program-error (c) (princ-to-string c))))
+						(print (handler-case (funcall #'elt '(1)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (apply #'cons '(1)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (let ((h #'cons)) (apply h '(1 2 3))) (program-error (c) (princ-to-string c))))
+						(print (handler-case (funcall (lambda (x) x)) (program-error (c) (princ-to-string c))))
+						(print (list (apply #'cons '(1 2)) (let ((h #'cons)) (apply h '(3 4))) (funcall #'car '(5)) (mapcar #'cons '(1) '(2))))
+						"""))
+			.isEqualTo("""
+					"CONS expects 2 arguments, got 1"
+					"CAR expects 1 argument, got 0"
+					"CONS expects 2 arguments, got 1"
+					"MAPCAR expects at least 2 arguments, got 1"
+					"ELT expects 2 arguments, got 1"
+					"CONS expects 2 arguments, got 1"
+					"CONS expects 2 arguments, got 3"
+					"Function expects 1 argument, got 0"
+					((1 . 2) (3 . 4) 5 ((1 . 2)))""");
+	}
+
 	@Test
 	void destructuringBindMissingElementsSignalProgramError() throws Exception {
 		assertThat(compileAndRun("""

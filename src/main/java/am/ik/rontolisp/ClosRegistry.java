@@ -216,25 +216,48 @@ public final class ClosRegistry {
 	public static final String NOT_A_FUNCTION_MESSAGE_PREFIX = "Not a function: ";
 
 	/**
-	 * The prefix of the message a call with the wrong number of arguments reports. The
-	 * whole message is {@link #arityMessage}, spelled identically by the interpreter's
-	 * {@code apply} and by both compiled backends' indirect-call dispatchers, so the JVM
-	 * landing pad -- which only sees the TEXT of a failure its bytecode threw -- can
-	 * recover {@code program-error} from it (the unbound-variable precedent).
+	 * What an arity message calls a callee that is not a built-in operator: a program's
+	 * own function, an anonymous lambda, a destructured list.
 	 */
-	public static final String ARITY_MESSAGE_PREFIX = "Function expects ";
+	public static final String ARITY_ANONYMOUS_OPERATOR = "Function";
+
+	/** What an arity message puts between the operator and the expectation. */
+	public static final String ARITY_VERB = " expects ";
+
+	/**
+	 * The prefix of the message a call with the wrong number of arguments reports when
+	 * the callee is not a built-in operator ({@link #arityMessage}).
+	 */
+	public static final String ARITY_MESSAGE_PREFIX = ARITY_ANONYMOUS_OPERATOR + ARITY_VERB;
 
 	/**
 	 * The message a call with the wrong number of arguments reports, the one spelling
-	 * every backend uses. A variadic callee can only be called with too FEW arguments, so
-	 * its count is reported as a lower bound.
+	 * every backend uses, for a callee that is not a built-in operator.
+	 * @param required the callee's required parameter count
+	 * @param variadic whether the callee takes a {@code &rest} tail
+	 * @param got the number of arguments the call passed
+	 * @return the message
+	 * @see #arityMessage(String, int, boolean, int)
+	 */
+	public static String arityMessage(int required, boolean variadic, int got) {
+		return arityMessage(null, required, variadic, got);
+	}
+
+	/**
+	 * The message a call with the wrong number of arguments reports, the one spelling
+	 * every backend uses: {@code CONS expects 2 arguments, got 1}. A built-in operator
+	 * names itself; any other callee is {@link #ARITY_ANONYMOUS_OPERATOR}. A variadic
+	 * callee can only be called with too FEW arguments, so its count is reported as a
+	 * lower bound.
+	 * @param operator the built-in operator's name, or {@code null} for any other callee
 	 * @param required the callee's required parameter count
 	 * @param variadic whether the callee takes a {@code &rest} tail
 	 * @param got the number of arguments the call passed
 	 * @return the message
 	 */
-	public static String arityMessage(int required, boolean variadic, int got) {
-		return ARITY_MESSAGE_PREFIX + arityExpectation(required, variadic) + ARITY_MESSAGE_INFIX + got;
+	public static String arityMessage(@Nullable String operator, int required, boolean variadic, int got) {
+		return (operator == null ? ARITY_ANONYMOUS_OPERATOR : operator) + ARITY_VERB
+				+ arityExpectation(required, variadic) + ARITY_MESSAGE_INFIX + got;
 	}
 
 	/**

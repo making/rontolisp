@@ -16,6 +16,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.SequencedSet;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.Set;
 
 import am.ik.rontolisp.ClosRegistry;
@@ -572,7 +574,27 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * dynamically. Only meaningful when {@link #emitsLitStage} is set.
 	 */
 	private int litStageFuncBase() {
+		return arityOpeningFuncBase() + (this.emitsArityOpening ? 1 : 0);
+	}
+
+	/**
+	 * The index of {@code _arity_opening}, right after {@code _arity_chk}, so adding it
+	 * moves no fixed index -- only {@link #userFuncBase()}. Only meaningful when
+	 * {@link #emitsArityOpening} is set.
+	 */
+	private int arityOpeningFuncBase() {
 		return arityChkFuncBase() + (this.emitsArityChk ? 1 : 0);
+	}
+
+	/**
+	 * The module index of {@code _arity_opening}, the shared function a wrong-count
+	 * report opens its message through when the callee may be a built-in operator
+	 * ({@code WasmRuntimeBuilder.buildArityOpeningBody}), or {@code -1} when this module
+	 * carries none.
+	 * @return the function index, or -1
+	 */
+	int arityOpeningFuncIndex() {
+		return this.emitsArityOpening ? arityOpeningFuncBase() : -1;
 	}
 
 	/**
@@ -813,6 +835,17 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * in the pre-pass, because {@link #userFuncBase()} shifts by it.
 	 */
 	private boolean emitsArityChk;
+
+	/**
+	 * Whether this module carries {@code _arity_opening}, the shared function a
+	 * wrong-count report reads a built-in operator's name through: gated like the report
+	 * itself (EH mode behind a handler landing pad, with instances) and on the program
+	 * having a defun under a built-in operator's name at all -- an injected wrapper, in
+	 * practice. Decided once the defuns are final and before any index is handed out,
+	 * because it shifts {@link #userFuncBase()}; a module whose report turns out not to
+	 * be built gets a stub.
+	 */
+	private boolean emitsArityOpening;
 
 	/**
 	 * Whether this module carries {@code _lit_stage}, the linear-to-linear staging helper
@@ -4138,6 +4171,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			}
 		}
+		this.emitsArityOpening = ehMode && hasLandingPad && this.usesInstances
+				&& !arityOperatorFuncIds(defuns, null, Set.of()).isEmpty();
 		for (int i = 0; i < defuns.size(); i++) {
 			DefunDecl defun = defuns.get(i);
 			int funcId = nextFuncId[0]++;
@@ -4162,6 +4197,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Ctx.valueFuncIds). Filled while the bodies are emitted, read below to size the
 		// dispatch ladders.
 		Set<Integer> valueFuncIds = new HashSet<>();
+		// The built-in callees a guarded literal apply baked its funcId in for (see
+		// Ctx.arityNamedCallees), read below by the report.
+		Set<Integer> arityNamedCallees = new HashSet<>();
 		// Every literal spelling Pass 2 emits as a runtime value (see
 		// Ctx.spelledLiterals). Filled while the bodies are emitted, read below by the
 		// dispatch gate's name probes.
@@ -4273,6 +4311,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.runtimeDesignatorDispatch(runtimeDesignatorDispatch)
 			.injectedRuntimeLambdas(injectedRuntimeLambdas)
 			.valueFuncIds(valueFuncIds)
+			.arityNamedCallees(arityNamedCallees)
 			.spelledLiterals(spelledLiterals)
 			.userSpelledLiterals(userSpelledLiterals)
 			.nextFuncId(nextFuncId)
@@ -4298,6 +4337,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.callArityCeiling(callArityCeiling())
 			.extraDispatchFuncBase(extraDispatchFuncBase())
 			.arityChkFuncIndex(arityChkFuncIndex())
+			.namesArityOperators(this.emitsArityOpening)
 			.litStageFuncIndex(litStageFuncIndex())
 			.litStageBytes(litStageBytes)
 			.importDecls(importWrappers)
@@ -5383,7 +5423,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		WasmRuntimeBuilder.ArityReport arityReport = arityReport(
 				ehMode && hasLandingPad && this.usesInstances
 						&& (!indirectCallArities.isEmpty() || usesApplyRuntime || this.emitsArityChk),
-				closRegistry, stringTable, layoutAddresses);
+				closRegistry, stringTable, layoutAddresses, this.emitsArityOpening
+						? arityOperatorFuncIds(defuns, dispatchableFuncIds, arityNamedCallees) : new TreeMap<>());
 		// The guard the SPREAD cases and the literal apply call sites share. Its slot was
 		// reserved in the pre-pass (userFuncBase() shifts by it), so a module that
 		// reserved one and turns out to have no program-error representation to throw
@@ -5391,6 +5432,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// where its index is.
 		byte[] arityChkBody = this.emitsArityChk ? (arityReport != null
 				? WasmRuntimeBuilder.buildArityChkBody(arityReport) : WasmRuntimeBuilder.buildArityChkStubBody())
+				: new byte[0];
+		// The shared opening a report reads a built-in operator's name through; a stub
+		// where no report is built, since then nothing calls it.
+		byte[] arityOpeningBody = this.emitsArityOpening
+				? (arityReport != null ? WasmRuntimeBuilder.buildArityOpeningBody(arityReport)
+						: WasmRuntimeBuilder.buildArityOpeningStubBody())
 				: new byte[0];
 		int arityChkIndex = arityReport != null ? arityChkFuncIndex() : -1;
 		// The type-error a wrong-type operand's landing throws (WasmOperandTypes): only
@@ -7074,6 +7121,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (this.emitsArityChk) {
 					fnDef.addFunction(TYPE_STR_TO_MEM);
 				}
+				// The shared report opening, right after it: reuses TYPE_RAT_NEW's
+				// (i32, i32) -> (ref null eq) signature.
+				if (this.emitsArityOpening) {
+					fnDef.addFunction(TYPE_RAT_NEW);
+				}
 				// The literal :string staging helper, right after it: reuses
 				// TYPE_RD_MEMEQ's (i32, i32, i32) -> i32 signature, so no module gains a
 				// type entry for it either.
@@ -8043,6 +8095,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (this.emitsArityChk) {
 					code.addFunction(arityChkBody);
 				}
+				// The shared report opening body, in arityOpeningFuncBase() order.
+				if (this.emitsArityOpening) {
+					code.addFunction(arityOpeningBody);
+				}
 				// The literal :string staging helper, in litStageFuncBase() order.
 				if (this.emitsLitStage) {
 					code.addFunction(WasmStringRuntimeBuilder.buildLitStageBody(litStageBase));
@@ -8658,6 +8714,32 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	/**
+	 * The defuns a wrong-count report names the operator of, as {@code funcId -> name}:
+	 * every defun under a built-in operator's name
+	 * ({@link BuiltinFunctionWrappers#arityOperator}) whose funcId a callee shape can
+	 * carry ({@code WasmRuntimeBuilder.arityShape}) and a report can reach -- a
+	 * dispatchable one, or the callee of a guarded literal {@code apply}. Every wrapper
+	 * is injected and most are shaken, so naming them all would keep every operator's
+	 * piece alive in every module. A defun's funcId is its index.
+	 * @param defuns the module's defuns
+	 * @param dispatchable the dispatchable funcIds, or null for the pre-pass question
+	 * "could any defun be named"
+	 * @param guardedCallees the literal-apply callees whose shape carries their funcId
+	 * @return the named funcIds
+	 */
+	static SortedMap<Integer, String> arityOperatorFuncIds(List<DefunDecl> defuns, @Nullable Set<Integer> dispatchable,
+			Set<Integer> guardedCallees) {
+		SortedMap<Integer, String> named = new TreeMap<>();
+		for (int i = 0; i < defuns.size() && i < WasmRuntimeBuilder.ARITY_MAX_NAMED_FUNC_ID; i++) {
+			String operator = BuiltinFunctionWrappers.arityOperator(defuns.get(i).name());
+			if (operator != null && (dispatchable == null || dispatchable.contains(i) || guardedCallees.contains(i))) {
+				named.put(i, operator);
+			}
+		}
+		return named;
+	}
+
+	/**
 	 * The wrong-argument-count report a dispatcher's no-match arm throws, or {@code null}
 	 * when this module reports none. The message pieces are interned by the report on
 	 * first use rather than here: a module can have dispatchers and still report nothing,
@@ -8670,14 +8752,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @return the report, or null
 	 */
 	private WasmRuntimeBuilder.@Nullable ArityReport arityReport(boolean on, ClosRegistry closRegistry,
-			StringTable stringTable, Map<String, Integer> layoutAddresses) {
+			StringTable stringTable, Map<String, Integer> layoutAddresses,
+			SortedMap<Integer, String> arityOperatorFuncIds) {
 		WasmRuntimeBuilder.ConditionInstance instance = on
 				? conditionInstance(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, closRegistry, layoutAddresses) : null;
 		if (instance == null) {
 			return null;
 		}
 		return new WasmRuntimeBuilder.ArityReport(stringTable, instance.layoutAddress(), instance.instanceTypeIndex(),
-				instance.slotCapacity(), instance.formatControlSlot(), this.usesIdentityHashTables);
+				instance.slotCapacity(), instance.formatControlSlot(), this.usesIdentityHashTables,
+				arityOperatorFuncIds, arityOpeningFuncIndex());
 	}
 
 	/**
@@ -10242,6 +10326,21 @@ public final class WasmLispCompiler implements LispCompiler {
 		int arityChkFuncIndex = -1;
 
 		/**
+		 * Whether a guarded call site bakes a built-in callee's funcId into the shape it
+		 * hands {@code _arity_chk}, so the report names the operator
+		 * ({@code WasmLispCompiler.emitsArityOpening}).
+		 */
+		boolean namesArityOperators;
+
+		/**
+		 * The built-in callees a guarded literal {@code (apply #'f ... list)} baked its
+		 * funcId into the shape for: the report names their operator even when nothing
+		 * makes them dispatchable. One mutable set shared by every {@code Ctx}, like
+		 * {@link #valueFuncIds}.
+		 */
+		Set<Integer> arityNamedCallees = new HashSet<>();
+
+		/**
 		 * The number of emitted defun bodies -- the defuns LIST size, one module function
 		 * per definition. NOT {@link #functions}{@code .size()}: that map holds one entry
 		 * per NAME, so a redefined defun (fast-http redefines 11 struct readers) makes it
@@ -10689,6 +10788,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.callArityCeiling = builder.callArityCeiling;
 			this.extraDispatchFuncBase = builder.extraDispatchFuncBase;
 			this.arityChkFuncIndex = builder.arityChkFuncIndex;
+			this.namesArityOperators = builder.namesArityOperators;
+			this.arityNamedCallees = builder.arityNamedCallees;
 			this.litStageFuncIndex = builder.litStageFuncIndex;
 			this.litStageBytes = builder.litStageBytes;
 			this.importDecls = builder.importDecls;
@@ -10850,6 +10951,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			private int extraDispatchFuncBase = FUNC_USER_BASE;
 
 			private int arityChkFuncIndex = -1;
+
+			private boolean namesArityOperators;
+
+			private Set<Integer> arityNamedCallees = new HashSet<>();
 
 			private int litStageFuncIndex = -1;
 
@@ -11217,6 +11322,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder importDecls(Map<String, WasmImportCompiler.Decl> importDecls) {
 				this.importDecls = importDecls;
+				return this;
+			}
+
+			Builder namesArityOperators(boolean namesArityOperators) {
+				this.namesArityOperators = namesArityOperators;
+				return this;
+			}
+
+			Builder arityNamedCallees(Set<Integer> arityNamedCallees) {
+				this.arityNamedCallees = arityNamedCallees;
 				return this;
 			}
 
