@@ -33,7 +33,8 @@ because it ships its own downcall registration: `am/ik/gpu/reachability-metadata
 it from the jar or class directory. Without it (until 2026-09-27) the image built and printed the
 right answers while refusing the CUDA binding, so every member ran on the CPU -- visible only on a
 machine with a device (found on the GB10). `aGpuJarTakesTheDevicePathUnderJavaJarAndAsANativeImage`
-pins it by memory (48 lazy 16 MB results under `-Xmx256m`, which the CPU path cannot hold).
+pins it by memory (48 lazy 16 MB results under `-Xmx256m`, which the CPU path cannot hold). On macOS
+it builds an `objc:` jar too (agent config), whose `main` hands thread 0 to the run loop ([[objc]]).
 
 What the emitted `_*Init` does now: `_javaInit`/`_objcInit`/`_ffiInit` only `bind`; `_gpuInit` hands
 the kernel texts over; `_geomInit` `ldc`s its bridge inside a `LinkageError` catch; `_simdInit` forces

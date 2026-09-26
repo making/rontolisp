@@ -3532,13 +3532,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		// thread of its own, sized by -Drontolisp.stack, and the old main body becomes
 		// _main$body. Not where there is no main, not where the top level runs in
 		// <clinit> (a jvm-export library, a war: the JVM initializes the class on the
-		// caller's thread before main could move anything), and NOT for a program that
-		// reaches objc: -- AppKit belongs to thread 0 (.kb/objc.md), and those outputs
-		// stay byte-identical because a GUI change is verified only by hand on macOS.
-		final JvmSizedMainBuilder.@Nullable SizedMain sizedMain = !this.noMain && !topLevelInClinit && !usesObjc
+		// caller's thread before main could move anything). A program that reaches objc:
+		// also hands thread 0 to the run loop when it is a native image's main
+		// (.kb/objc.md, "AppKit belongs to thread 0").
+		final JvmSizedMainBuilder.@Nullable SizedMain sizedMain = !this.noMain && !topLevelInClinit
 				? JvmSizedMainBuilder.build(cp, thisClass, this.className,
 						cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V"))),
-						cp.addUtf8("([Ljava/lang/String;)V"))
+						cp.addUtf8("([Ljava/lang/String;)V"),
+						usesObjc ? JvmObjcRuntimeBuilder.mainThreadName(this.className) : null)
 				: null;
 		final MethodrefConstant ctorObjectInitRef = objectInitRef != null ? objectInitRef : sizedMain != null
 				? cp.addMethodref(objectClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V"))) : null;
@@ -3900,6 +3901,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			// body's throwable out (published by Thread.join).
 			definition.addField(AccessFlag.ACC_PRIVATE, sizedMain.argsName(), sizedMain.argsDesc());
 			definition.addField(AccessFlag.ACC_PRIVATE, sizedMain.thrownName(), sizedMain.thrownDesc());
+			if (sizedMain.exitName() != null) {
+				definition.addField(AccessFlag.ACC_PRIVATE, sizedMain.exitName(),
+						java.util.Objects.requireNonNull(sizedMain.exitDesc()));
+			}
 		}
 		if (asyncRuntimeBodies != null) {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
