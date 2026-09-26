@@ -478,16 +478,16 @@ final class WasmEvalRuntimeBuilder {
 	 * {@code let}, {@code lambda}, {@code defun}, {@code function} ({@code #'}),
 	 * {@code symbol-function}, {@code cond}, {@code and}, {@code or}, {@code when},
 	 * {@code unless}, {@code while}, {@code dotimes}, {@code setq}, {@code eval}
-	 * (nested), {@code funcall}, {@code map}, {@code reduce} and {@code list}; variadic
+	 * (nested), {@code funcall} and {@code list}; variadic
 	 * {@code + - * /}; chained {@code = < > <= >= /=}; {@code car}/{@code cdr}
 	 * compositions such as {@code cadr}; and application of any registered function
 	 * (built-in wrappers and user defuns) as well as interpreted closures produced by
 	 * {@code lambda}.
 	 * @param off the string-table offsets of the special-form symbols
-	 * @param comparisons what the comparison chain reports an empty call through
+	 * @param counts what the arms that check their own argument count report through
 	 * @return the encoded function body
 	 */
-	static byte[] buildEvalBody(SpecialFormOffsets off, Comparisons comparisons, boolean identityHash) {
+	static byte[] buildEvalBody(SpecialFormOffsets off, CountChecks counts, boolean identityHash) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -1070,7 +1070,13 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.END);
 
 		// ---- eval (nested): evaluate the argument, then evaluate its result ----
+		// No wrapper backs eval, so the arm reports a wrong count itself.
 		openSpecial(w, OFF, off.of(LispNames.EVAL));
+		emitArgCountIs(w, REST, TMP, 1);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitCountReport(w, counts, LispNames.EVAL, REST);
+		w.write(Instruction.END);
 		emitEvalCar(w, REST, ENV);
 		emitNull(w);
 		w.write(Instruction.CALL);
@@ -1079,7 +1085,15 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.END);
 
 		// ---- funcall: (funcall fn arg...) ----
-		openSpecial(w, OFF, off.of(LispNames.FUNCALL));
+		// (funcall) goes on to the generic application, whose wrapper reports the count.
+		getLocal(w, OFF);
+		i32(w, off.of(LispNames.FUNCALL));
+		w.write(Instruction.I32_EQ);
+		getLocal(w, REST);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
 		emitEvalCar(w, REST, ENV);
 		setLocal(w, FN);
 		emitCdrOf(w, REST);
@@ -1092,220 +1106,12 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
-		// ---- mapcar: (mapcar fn list) ----
-		openSpecial(w, OFF, off.of(LispNames.MAPCAR));
-		emitEvalCar(w, REST, ENV);
-		setLocal(w, FN);
-		emitCdrOf(w, REST);
-		setLocal(w, REST);
-		emitEvalCar(w, REST, ENV);
-		setLocal(w, ELEM); // input list cursor
-		emitNull(w);
-		setLocal(w, ARGHEAD);
-		emitNull(w);
-		setLocal(w, ARGTAIL);
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		getLocal(w, ELEM);
-		refTest(w, WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.BR_IF, 1);
-		// mapped = apply(FN, list(car(ELEM)))
-		emitCarOf(w, ELEM);
-		emitNull(w);
-		WasmEmitHelper.emitNewCons(w, identityHash);
-		setLocal(w, NEWCELL);
-		getLocal(w, FN);
-		getLocal(w, NEWCELL);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
-		setLocal(w, TMP);
-		// append cons(mapped, null)
-		getLocal(w, TMP);
-		emitNull(w);
-		WasmEmitHelper.emitNewCons(w, identityHash);
-		setLocal(w, NEWCELL);
-		emitAppendCell(w, NEWCELL, ARGHEAD, ARGTAIL);
-		emitCdrOf(w, ELEM);
-		setLocal(w, ELEM);
-		w.write(Instruction.BR, 0);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-		getLocal(w, ARGHEAD);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
-
-		// ---- mapc: (mapc fn list) — apply for effect, return the list ----
-		openSpecial(w, OFF, off.of(LispNames.MAPC));
-		emitEvalCar(w, REST, ENV);
-		setLocal(w, FN);
-		emitCdrOf(w, REST);
-		setLocal(w, REST);
-		emitEvalCar(w, REST, ENV);
-		setLocal(w, ARGHEAD); // original list, returned at the end
-		getLocal(w, ARGHEAD);
-		setLocal(w, ELEM); // input list cursor
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		getLocal(w, ELEM);
-		refTest(w, WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.BR_IF, 1);
-		// apply(FN, list(car(ELEM)))
-		emitCarOf(w, ELEM);
-		emitNull(w);
-		WasmEmitHelper.emitNewCons(w, identityHash);
-		setLocal(w, NEWCELL);
-		getLocal(w, FN);
-		getLocal(w, NEWCELL);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
-		w.write(Instruction.DROP); // discard the result
-		emitCdrOf(w, ELEM);
-		setLocal(w, ELEM);
-		w.write(Instruction.BR, 0);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-		getLocal(w, ARGHEAD);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
-
-		// ---- reduce: (reduce fn list) or (reduce fn list :initial-value init) ----
-		openSpecial(w, OFF, off.of(LispNames.REDUCE));
-		emitEvalCar(w, REST, ENV);
-		setLocal(w, FN);
-		emitCdrOf(w, REST);
-		setLocal(w, REST);
-		emitCdrOf(w, REST);
-		setLocal(w, TMP); // cdr(rest): null for 2-arg, (:initial-value init) for keyword
-							// form
-		getLocal(w, TMP);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.IF, 0x40);
-		// 2-arg: list = eval(car rest); acc = car(list); list = cdr(list)
-		emitEvalCar(w, REST, ENV);
-		setLocal(w, ELEM);
-		emitCarOf(w, ELEM);
-		setLocal(w, ACC);
-		emitCdrOf(w, ELEM);
-		setLocal(w, ELEM);
-		w.write(Instruction.ELSE);
-		// keyword form: list = eval(car rest); acc = eval(car (cdr (cdr rest)))
-		emitEvalCar(w, REST, ENV);
-		setLocal(w, ELEM);
-		emitCdrOf(w, TMP); // TMP = (init)
-		setLocal(w, TMP);
-		emitEvalCar(w, TMP, ENV);
-		setLocal(w, ACC);
-		w.write(Instruction.END);
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		getLocal(w, ELEM);
-		refTest(w, WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.BR_IF, 1);
-		// acc = apply(FN, list(acc, car(ELEM)))
-		emitCarOf(w, ELEM);
-		emitNull(w);
-		WasmEmitHelper.emitNewCons(w, identityHash);
-		setLocal(w, NEWCELL);
-		getLocal(w, ACC);
-		getLocal(w, NEWCELL);
-		WasmEmitHelper.emitNewCons(w, identityHash);
-		setLocal(w, NEWCELL);
-		getLocal(w, FN);
-		getLocal(w, NEWCELL);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
-		setLocal(w, ACC);
-		emitCdrOf(w, ELEM);
-		setLocal(w, ELEM);
-		w.write(Instruction.BR, 0);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-		getLocal(w, ACC);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
-
-		// ---- first/second/third/fourth/fifth/sixth/seventh/eighth/ninth/tenth: nth-car
-		// accessors ----
-		openSpecial(w, OFF, off.of(LispNames.FIRST));
-		emitFixedAccessor(w, REST, ENV, ACC, 0);
-		w.write(Instruction.END);
-		openSpecial(w, OFF, off.of(LispNames.SECOND));
-		emitFixedAccessor(w, REST, ENV, ACC, 1);
-		w.write(Instruction.END);
-		openSpecial(w, OFF, off.of(LispNames.THIRD));
-		emitFixedAccessor(w, REST, ENV, ACC, 2);
-		w.write(Instruction.END);
-		openSpecial(w, OFF, off.of(LispNames.FOURTH));
-		emitFixedAccessor(w, REST, ENV, ACC, 3);
-		w.write(Instruction.END);
-		openSpecial(w, OFF, off.of(LispNames.FIFTH));
-		emitFixedAccessor(w, REST, ENV, ACC, 4);
-		w.write(Instruction.END);
-		openSpecial(w, OFF, off.of(LispNames.SIXTH));
-		emitFixedAccessor(w, REST, ENV, ACC, 5);
-		w.write(Instruction.END);
-		openSpecial(w, OFF, off.of(LispNames.SEVENTH));
-		emitFixedAccessor(w, REST, ENV, ACC, 6);
-		w.write(Instruction.END);
-		openSpecial(w, OFF, off.of(LispNames.EIGHTH));
-		emitFixedAccessor(w, REST, ENV, ACC, 7);
-		w.write(Instruction.END);
-		openSpecial(w, OFF, off.of(LispNames.NINTH));
-		emitFixedAccessor(w, REST, ENV, ACC, 8);
-		w.write(Instruction.END);
-		openSpecial(w, OFF, off.of(LispNames.TENTH));
-		emitFixedAccessor(w, REST, ENV, ACC, 9);
-		w.write(Instruction.END);
-
-		// ---- rest: (rest lst) -> (cdr lst) ----
-		openSpecial(w, OFF, off.of(LispNames.REST));
-		emitEvalCar(w, REST, ENV);
-		setLocal(w, ACC);
-		emitCdrOf(w, ACC);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
-
-		// ---- nth: (nth n list) -> (car (nthcdr n list)) ----
-		openSpecial(w, OFF, off.of(LispNames.NTH));
-		emitEvalCar(w, REST, ENV);
-		refCast(w, Type.I31.code());
-		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
-		setLocal(w, IDX);
-		emitCdrOf(w, REST);
-		setLocal(w, REST);
-		emitEvalCar(w, REST, ENV);
-		setLocal(w, ACC);
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		getLocal(w, IDX);
-		i32(w, 0);
-		w.write(Instruction.I32_LE_S);
-		w.write(Instruction.BR_IF, 1);
-		getLocal(w, ACC);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.BR_IF, 1);
-		emitCdrOf(w, ACC);
-		setLocal(w, ACC);
-		getLocal(w, IDX);
-		i32(w, 1);
-		w.write(Instruction.I32_SUB);
-		setLocal(w, IDX);
-		w.write(Instruction.BR, 0);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-		// (car list) if a cons remains, else nil
-		getLocal(w, ACC);
-		refTest(w, WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.IF, 0x40);
-		emitCarOf(w, ACC);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
-		emitNull(w);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
+		// mapcar, mapc, reduce, first ... tenth, rest and nth have no arm: their
+		// registered wrappers take every shape (mapcar over several lists, reduce with
+		// :from-end), report a wrong count naming the operator and signal the
+		// interpreter's type-error on a non-list, where the arms this replaced answered
+		// one list only, took a :from-end for the initial value, dropped a surplus
+		// argument and trapped on (first nil).
 
 		// ---- list (variadic) ----
 		openSpecial(w, OFF, off.of(LispNames.LIST));
@@ -1330,6 +1136,12 @@ final class WasmEvalRuntimeBuilder {
 		i32(w, off.of(LispNames.DIV));
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.I32_OR);
+		// no argument: the wrapper answers the identity ((+) is 0) or reports the count
+		// ((-) expects at least 1 argument)
+		getLocal(w, REST);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.I32_AND);
 		w.write(Instruction.IF, 0x40);
 		getLocal(w, OFF);
 		w.write(Instruction.CALL);
@@ -1399,8 +1211,8 @@ final class WasmEvalRuntimeBuilder {
 		// chain goes pairwise through them here: adjacent pairs for the ordering
 		// operators, every pair for /=. The registry path below would evaluate every
 		// argument too and then report the binary wrapper's count.
-		emitComparisonChain(w, off, comparisons, REST, ENV, FN, ACC, ELEM, ARGHEAD, ARGTAIL, NEWCELL, TMP, OFF, ADDR,
-				ARITY, IDX, CH, identityHash);
+		emitComparisonChain(w, off, counts, REST, ENV, FN, ACC, ELEM, ARGHEAD, ARGTAIL, NEWCELL, TMP, OFF, ADDR, ARITY,
+				IDX, CH, identityHash);
 
 		// ---- generic named application ----
 		// Lisp-2: the operator resolves in the function namespace only. Variable
@@ -1480,20 +1292,71 @@ final class WasmEvalRuntimeBuilder {
 			LispNames.GE, LispNames.NE);
 
 	/**
-	 * What the comparison chain reports a call with no argument through: the
+	 * The operators whose {@code _eval} arm checks its own argument count: the comparison
+	 * chain's empty call, and {@code eval}, which no wrapper backs.
+	 */
+	static final List<String> SELF_COUNTED_OPERATORS = java.util.stream.Stream
+		.concat(COMPARISON_OPERATORS.stream(), java.util.stream.Stream.of(LispNames.EVAL))
+		.toList();
+
+	/**
+	 * What the arms that check their own argument count report a wrong one through: the
 	 * {@code _arity_chk} index ({@code -1} where the module reports no wrong count, and
-	 * the call traps instead) and each operator's callee shape
-	 * ({@code WasmRuntimeBuilder.arityShape(1, true, funcId)}, so the report names it).
+	 * the call traps instead) and each operator's shape
+	 * ({@code WasmRuntimeBuilder.arityShape}, carrying the id its report is named by).
 	 *
 	 * @param arityChkIndex the {@code _arity_chk} function index, or -1
-	 * @param shapes the shape per {@link #COMPARISON_OPERATORS} name
+	 * @param shapes the shape per {@link #SELF_COUNTED_OPERATORS} name
 	 */
-	record Comparisons(int arityChkIndex, Map<String, Integer> shapes) {
+	record CountChecks(int arityChkIndex, Map<String, Integer> shapes) {
 
-		Comparisons {
+		CountChecks {
 			shapes = Map.copyOf(shapes);
 		}
 
+		int shape(String operator) {
+			return java.util.Objects.requireNonNull(this.shapes.get(operator), operator);
+		}
+
+	}
+
+	/**
+	 * Emits the wrong-count report of {@code operator} over the argument-form list in
+	 * {@code restSlot}: {@code _arity_chk} throws the interpreter's program-error, and
+	 * the {@code unreachable} after it is what a module that reports no count gets.
+	 */
+	private static void emitCountReport(WasmWriter w, CountChecks counts, String operator, int restSlot) {
+		if (counts.arityChkIndex() >= 0) {
+			getLocal(w, restSlot);
+			i32(w, counts.shape(operator));
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(counts.arityChkIndex());
+			w.write(Instruction.DROP);
+		}
+		w.write(Instruction.UNREACHABLE);
+	}
+
+	/**
+	 * Pushes 1 when the argument-form list in {@code restSlot} holds exactly
+	 * {@code count} forms, else 0. Clobbers {@code cursorSlot}.
+	 */
+	private static void emitArgCountIs(WasmWriter w, int restSlot, int cursorSlot, int count) {
+		w.write(Instruction.BLOCK, Type.I32);
+		getLocal(w, restSlot);
+		setLocal(w, cursorSlot);
+		for (int i = 0; i < count; i++) {
+			getLocal(w, cursorSlot);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.IF, 0x40);
+			i32(w, 0);
+			w.write(Instruction.BR, 1);
+			w.write(Instruction.END);
+			emitCdrOf(w, cursorSlot);
+			setLocal(w, cursorSlot);
+		}
+		getLocal(w, cursorSlot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.END);
 	}
 
 	/**
@@ -1504,7 +1367,7 @@ final class WasmEvalRuntimeBuilder {
 	 * {@code _arity_chk}; one argument answers {@code T}. Falls through for any other
 	 * operator.
 	 */
-	private static void emitComparisonChain(WasmWriter w, SpecialFormOffsets off, Comparisons comparisons, int restSlot,
+	private static void emitComparisonChain(WasmWriter w, SpecialFormOffsets off, CountChecks counts, int restSlot,
 			int envSlot, int fnSlot, int leftSlot, int rightSlot, int headSlot, int tailSlot, int cellSlot, int tmpSlot,
 			int offSlot, int addrSlot, int shapeSlot, int allPairsSlot, int matchedSlot, boolean identityHash) {
 		i32(w, 0);
@@ -1514,7 +1377,7 @@ final class WasmEvalRuntimeBuilder {
 			i32(w, off.of(operator));
 			w.write(Instruction.I32_EQ);
 			w.write(Instruction.IF, 0x40);
-			i32(w, java.util.Objects.requireNonNull(comparisons.shapes().get(operator), operator));
+			i32(w, counts.shape(operator));
 			setLocal(w, shapeSlot);
 			i32(w, LispNames.NE.equals(operator) ? 1 : 0);
 			setLocal(w, allPairsSlot);
@@ -1528,11 +1391,11 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, restSlot);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF, 0x40);
-		if (comparisons.arityChkIndex() >= 0) {
+		if (counts.arityChkIndex() >= 0) {
 			getLocal(w, restSlot);
 			getLocal(w, shapeSlot);
 			w.write(Instruction.CALL);
-			w.writeUnsignedLeb128(comparisons.arityChkIndex());
+			w.writeUnsignedLeb128(counts.arityChkIndex());
 			w.write(Instruction.DROP);
 		}
 		w.write(Instruction.UNREACHABLE);
@@ -1600,23 +1463,6 @@ final class WasmEvalRuntimeBuilder {
 		i32(w, target);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, 0x40);
-	}
-
-	/**
-	 * Emits a fixed car/cdr accessor (e.g. {@code second} = one {@code cdr} then
-	 * {@code car}): evaluates the single argument from {@code restSlot}, applies
-	 * {@code cdrCount} {@code cdr} operations, then a final {@code car}, and returns the
-	 * result. Uses {@code accSlot} as scratch.
-	 */
-	private static void emitFixedAccessor(WasmWriter w, int restSlot, int envSlot, int accSlot, int cdrCount) {
-		emitEvalCar(w, restSlot, envSlot);
-		setLocal(w, accSlot);
-		for (int i = 0; i < cdrCount; i++) {
-			emitCdrOf(w, accSlot);
-			setLocal(w, accSlot);
-		}
-		emitCarOf(w, accSlot);
-		w.write(Instruction.RETURN);
 	}
 
 	/**
