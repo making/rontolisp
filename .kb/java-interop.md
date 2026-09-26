@@ -251,6 +251,12 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   three: resolver, interpreter, bridge -- its memo key is prefixed so a call's and a static's
   choices of one name never mix). An instance method under `java:static` only ever failed (an NPE
   out of `Method.invoke`); now it is no candidate: `No matching method C.m with N argument(s)`.
+- An INTERFACE receiver's `java:call` candidates add `Object`'s public instance methods it does
+  not redeclare (`JavaSiteResolver.callableMethods`; JLS 9.2 members, final ones included --
+  javac emits `invokeinterface List.getClass`, which links by JVMS 5.4.3.4). The lookups keep
+  `getMethods()` semantics (none of them listed; `JvmClassFileLookupTest#anInterfaceReceiver...`
+  pins both), so `publicMethods()` / reify slots are unaffected. Before 2026-09-26 such a site
+  (a declared `List`, a `java:reify` object) was left to run time and `--java-static` refused it.
 - `(java:field "C" "f")` reads a static field: an instance field so named is `java:field: field
   C.f is not static` on all three (was an NPE), and the resolver leaves it unresolved with that
   reason. `(java:field obj "CONSTANT")` of a static field still reads it.

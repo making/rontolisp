@@ -400,9 +400,53 @@ public final class JavaSiteResolver {
 			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, unlinkable);
 		}
 		JavaOverloads.Member member = JavaOverloads.parseMember(methodName.value());
-		List<? extends JavaExecutable> candidates = JavaOverloads.filterByTag(type.methods(member.name()),
+		List<? extends JavaExecutable> candidates = JavaOverloads.filterByTag(callableMethods(type, member.name()),
 				member.tag());
 		return select(op, type, member, methodName.value(), candidates, parts.subList(3, parts.size()), null);
+	}
+
+	/**
+	 * The methods of this name a {@code java:call} on a receiver of this static class may
+	 * call: {@link JavaType#methods}, and of an interface also {@code Object}'s public
+	 * instance methods it does not redeclare. {@link Class#getMethods()} of an interface
+	 * lists none of those, yet they are its members (JLS 9.2) and an
+	 * {@code invokeinterface} of one links (JVMS 5.4.3.4) -- what javac emits for
+	 * {@code list.toString()}.
+	 */
+	private List<? extends JavaExecutable> callableMethods(JavaType type, String name) {
+		List<? extends JavaExecutable> declared = type.methods(name);
+		if (!type.isInterface()) {
+			return declared;
+		}
+		JavaType object = this.lookup.find("java.lang.Object");
+		if (object == null) {
+			return declared;
+		}
+		List<JavaExecutable> callable = new ArrayList<>(declared);
+		for (JavaExecutable inherited : object.methods(name)) {
+			if (!inherited.isStatic() && !redeclared(declared, inherited)) {
+				callable.add(inherited);
+			}
+		}
+		return callable;
+	}
+
+	private static boolean redeclared(List<? extends JavaExecutable> declared, JavaExecutable inherited) {
+		for (JavaExecutable method : declared) {
+			List<? extends JavaType> params = method.parameterTypes();
+			List<? extends JavaType> inheritedParams = inherited.parameterTypes();
+			if (params.size() != inheritedParams.size()) {
+				continue;
+			}
+			boolean same = true;
+			for (int i = 0; i < params.size() && same; i++) {
+				same = params.get(i).name().equals(inheritedParams.get(i).name());
+			}
+			if (same) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private JavaSite resolveField(List<LispVal> parts) {

@@ -267,6 +267,29 @@ public final class JavaInteropPrograms {
 			"[1267650600228229401496703205376, 1]"
 			("[1, 1267650600228229401496703205376]" "[1267650600228229401496703205376]")""";
 
+	/**
+	 * {@code Object}'s methods called on a receiver whose static class is an interface --
+	 * one declared a {@code List}, which redeclares only {@code equals} and
+	 * {@code hashCode}, and a {@code java:reify} of {@code Runnable}, which redeclares
+	 * none: each site resolves before it runs (JLS 9.2). Prints
+	 * {@link #OBJECT_METHODS_ON_AN_INTERFACE_OUTPUT}.
+	 */
+	public static final String OBJECT_METHODS_ON_AN_INTERFACE = """
+			(defun shown (l)
+			  (declare (type (java:object "java.util.List") l))
+			  (list (java:call l "toString") (java:call l "hashCode") (java:call l "equals" l)
+			        (java:call (java:call l "getClass") "getName")))
+			(print (shown (java:static "java.util.List" "of" 1 2)))
+			(let ((r (java:reify "java.lang.Runnable" "run" (lambda () nil))))
+			  (print (list (java:call r "toString") (java:call r "equals" r)
+			               (eql (java:call r "hashCode") (java:call r "hashCode")))))
+			""";
+
+	/** What {@link #OBJECT_METHODS_ON_AN_INTERFACE} prints. */
+	public static final String OBJECT_METHODS_ON_AN_INTERFACE_OUTPUT = """
+			("[1, 2]" 994 T "java.util.ImmutableCollections$List12")
+			("#<java-reify java.lang.Runnable>" T T)""";
+
 	private JavaInteropPrograms() {
 	}
 

@@ -522,6 +522,20 @@ class JavaInteropTest {
 				""")).isEqualTo("#\\b\nT\n#\\a\nT\n1.5\n7\n(\"a\" \"b\")\nT");
 	}
 
+	// An interface has Object's public methods as members, which Class.getMethods() of
+	// it does not list: a call of one resolves before it runs, so nothing is reported.
+	// Mirrors JvmJavaInteropCompilerTest#objectsMethodsOnAnInterfaceAreDirectCalls.
+	@Test
+	void objectsMethodsOnAnInterfaceResolveBeforeTheyRun() {
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		try (var ignored = ThreadStdio.err(err)) {
+			assertThat(
+					output("(setq java:*warn-on-reflection* t)\n" + JavaInteropPrograms.OBJECT_METHODS_ON_AN_INTERFACE))
+				.isEqualTo(JavaInteropPrograms.OBJECT_METHODS_ON_AN_INTERFACE_OUTPUT);
+		}
+		assertThat(err.toString()).isEmpty();
+	}
+
 	// Evaluates the forms and answers what they printed.
 	private String output(String input) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();

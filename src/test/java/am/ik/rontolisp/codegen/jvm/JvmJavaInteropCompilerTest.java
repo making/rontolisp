@@ -498,6 +498,29 @@ class JvmJavaInteropCompilerTest {
 			.doesNotContain("_eval");
 	}
 
+	// Object's methods on a receiver whose static class is an interface are its members
+	// (JLS 9.2) and link through it (JVMS 5.4.3.4): each is an invokeinterface, as javac
+	// emits it, and --java-static refuses none. Mirrors
+	// JavaInteropTest#objectsMethodsOnAnInterfaceResolveBeforeTheyRun.
+	@Test
+	void objectsMethodsOnAnInterfaceAreDirectCalls() throws Exception {
+		String program = JavaInteropPrograms.OBJECT_METHODS_ON_AN_INTERFACE;
+		assertThat(compileAndRun(program)).isEqualTo(JavaInteropPrograms.OBJECT_METHODS_ON_AN_INTERFACE_OUTPUT);
+		byte[] classBytes = JvmLispCompiler.builder()
+			.className("Test")
+			.javaStatic(true)
+			.build()
+			.compile(LispReader.readAllFromString(program));
+		assertThat(javap(classBytes)).contains("InterfaceMethod java/util/List.toString:()Ljava/lang/String;")
+			.contains("InterfaceMethod java/util/List.hashCode:()I")
+			.contains("InterfaceMethod java/util/List.equals:(Ljava/lang/Object;)Z")
+			.contains("InterfaceMethod java/util/List.getClass:()Ljava/lang/Class;")
+			.contains("InterfaceMethod java/lang/Runnable.toString:()Ljava/lang/String;")
+			.contains("InterfaceMethod java/lang/Runnable.equals:(Ljava/lang/Object;)Z")
+			.contains("InterfaceMethod java/lang/Runnable.hashCode:()I")
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX);
+	}
+
 	// A site left to run time keeps the bridge, and only then is it embedded.
 	@Test
 	void aSiteLeftToRunTimeKeepsTheBridge() throws Exception {
