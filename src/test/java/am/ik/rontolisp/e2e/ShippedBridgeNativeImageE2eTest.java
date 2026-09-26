@@ -29,10 +29,10 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * an {@code UnsupportedFeatureError}). The {@code java:} program's reflective calls and
  * the {@code --blas} / {@code ffi:} programs' downcalls are covered by the configuration
  * the tracing agent records from one {@code java -jar} run; the {@code geom:},
- * {@code --simd} and {@code --gpu} programs need no configuration at all, and neither does
- * a {@code java:} program compiled with {@code --java-static}, whose calls are all direct
- * (.kb/java-interop.md, "Direct calls"). {@code objc:} needs macOS and is not covered
- * here.
+ * {@code --simd} and {@code --gpu} programs need no configuration at all, and neither
+ * does a {@code java:} program compiled with {@code --java-static}, whose calls are all
+ * direct (.kb/java-interop.md, "Direct calls"). {@code objc:} needs macOS and is not
+ * covered here.
  * <p>
  * Opt-in ({@code -Drontolisp.native-image.e2e=true}), because it runs
  * {@code native-image} (about 20 s a program) from the running JDK, which must be a

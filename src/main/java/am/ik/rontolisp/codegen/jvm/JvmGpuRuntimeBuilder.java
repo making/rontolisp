@@ -97,7 +97,7 @@ final class JvmGpuRuntimeBuilder {
 	/**
 	 * The emitted guard every in-place write to a packed float array calls under
 	 * {@code --gpu}:
-	 * {@code _gpuInited != 0 ? RontoLispGpuBridge.gpuWritten(array) : array} -- and
+	 * {@code _gpuInited != 0 ? <Program>$GpuBridge.gpuWritten(array) : array} -- and
 	 * writes into what it ANSWERS, which is the array itself or, for a result stub, the
 	 * backing the library holds its elements in ({@code .kb/gpu.md}, "A lazy result
 	 * allocates no host array"). Before the first device member nothing can be resident,
@@ -113,7 +113,7 @@ final class JvmGpuRuntimeBuilder {
 	/**
 	 * The emitted guard every HOST READ of a packed float array's storage calls under
 	 * {@code --gpu}:
-	 * {@code _gpuInited != 0 ? RontoLispGpuBridge.gpuMaterialize(array) : array} -- the
+	 * {@code _gpuInited != 0 ? <Program>$GpuBridge.gpuMaterialize(array) : array} -- the
 	 * other half of {@link #WRITTEN_METHOD}, for lazy results: a result the device still
 	 * holds the only copy of comes home before the read, and the reader reads what the
 	 * guard ANSWERS (the array, or a stub's backing). Same guard, same reason.
@@ -126,7 +126,7 @@ final class JvmGpuRuntimeBuilder {
 	/**
 	 * The emitted guard a call site runs over a HOST RUNG's answer, once per argument it
 	 * handed over through {@link #MATERIALIZE_METHOD} or {@link #WRITTEN_METHOD}:
-	 * {@code _gpuInited != 0 ? RontoLispGpuBridge.gpuUnswap(result, original, handed) : result}
+	 * {@code _gpuInited != 0 ? <Program>$GpuBridge.gpuUnswap(result, original, handed) : result}
 	 * -- a rung that answered the argument it was handed (the in-place kernels, an
 	 * {@code -into} form, a defun that answers its operand) answers the caller's own
 	 * object instead of the backing, so the program never holds a backing beside its

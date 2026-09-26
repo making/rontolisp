@@ -27,8 +27,10 @@ class ShippedBridgeClassFilesTest {
 	}
 
 	private static final List<Bridge> BRIDGES = List.of(
-			new Bridge("java:", "(print (java:static \"java.lang.Math\" \"max\" 3 7))", false, false, false,
-					List.of("$JavaBridge")),
+			// A class named at run time: a site resolved at compile time is a direct call
+			// and needs no bridge.
+			new Bridge("java:", "(let ((math \"java.lang.Math\")) (print (java:static math \"max\" 3 7)))", false,
+					false, false, List.of("$JavaBridge")),
 			new Bridge("geom:", "(print (geom:volume (geom:box 10)))", false, false, false, List.of("$GeomBridge")),
 			new Bridge("--simd", "(print (vec:sum #d(1.0 2.0)))", true, false, false, List.of("$SimdBridge")),
 			new Bridge("--blas", "(print (linalg:dot #d(1.0 2.0) #d(3.0 4.0)))", false, true, false,
