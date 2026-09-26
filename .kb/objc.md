@@ -271,8 +271,12 @@ over `rontolisp:wasm-import`s from module `rlobjc` -- right OUTSIDE `AppKitLibra
   meanwhile re-enters through the call's `Caller`, as during `sleep`. Before the application starts
   nothing is on screen and the wait blocks on its condition variable. Decided 2026-09-25 over
   blocking like a stdin read: a window frozen for a request's round trip is what the `sleep` pump
-  exists to prevent. Type-checked for `aarch64-apple-darwin` only -- no test opens a window, and the
-  macOS CI leg runs the fetch corpus without one -- so it is unverified by hand.
+  exists to prevent. Verified 2026-09-26 (M4 Max): a window whose 50 ms timer relabels it and posts a
+  mouse down/up pair on its button to the application's queue, awaiting a reply held 2 s by the
+  origin, got 40 relabels and 4 clicks during the wait at 0.16 s CPU -- the same for a head that
+  arrives at once and a body held 2 s mid-transfer. Pinned without a window by `NativeObjcE2eTest`
+  (a timer counts turns during the await; an event posted before it is dequeued by the end); with
+  the application not started both come back false.
 - **`-[NSApplication run]` is never started**: it never returns, and the thread is the module's.
   `appkit::%app`'s `performSelectorOnMainThread:withObject:waitUntilDone:` of `run` to an
   `NSApplication` is answered by marking the application started (and
@@ -357,8 +361,8 @@ via `eval/ObjcInterop`'s five entry points (the `LinalgGpu`/`LinalgGpuKernels` s
   compiled, the embedded class list, one file per template); `eval/AppKitLibraryTest` /
   `eval/MetalLibraryTest`; `SceneOffscreenRenderTest`; `PackageCycleTest`; `--native`:
   `eval/ObjcNativeLibraryTest` (the verbs defined, the splice), `e2e/NativeObjcE2eTest` (macOS
-  aarch64: the corpus `objc-native-corpus.lisp` against the interpreter, a timer during `sleep`, an
-  exit inside a callback, release on wrapper death, `scene:` pixels), the runner's own
+  aarch64: the corpus `objc-native-corpus.lisp` against the interpreter, a timer during `sleep`, the
+  event loop during a fetch's wait, an exit inside a callback, release on wrapper death, `scene:` pixels), the runner's own
   `call.rs` / `encoding.rs` unit tests (`build.sh --test`).
 - No test opens a window (CI has no display; the guide uses `console` fences so `DocExamplesTest`
   cannot hang). **Verified by hand: `counter.lisp` on `java -jar` AND the native binary;

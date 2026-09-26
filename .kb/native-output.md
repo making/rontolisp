@@ -235,13 +235,15 @@ Measured 2026-09-25 (stripped static musl, four codegen units, gz = gzip -6):
 |---|---|---|
 | linux-x86_64 | 2,094,104 B (0.85 MB gz) | 3,261,528 B (1.48 MB gz) |
 | linux-aarch64 (cross-built) | 1,971,136 B (0.83 MB gz) | 2,888,712 B (1.44 MB gz) |
+| macos-aarch64 (2026-09-26, M4 Max, rustc 1.96.0) | 1,799,168 B (0.77 MB gz) | 2,646,736 B (1.32 MB gz) |
 
 `rlrun` measured the same size as before the feature existed. `profile.release-runner.package.<crate>` builds
 rustls, ring, rustls-webpki, untrusted and rustls-pki-types at `opt-level = "z"`: without it
 `rlrun-net` is 3,519,576 B (1.59 MB gz) on x86_64, so it saves 258,048 B, and a 256 MiB HTTPS
 download through an output took 10.3-11.4 s user with it and 11.2-11.4 s without (the module's own
-work dominates, `.kb/fetch-http.md`, "Throughput"). macOS stubs were not built here: the macOS CI
-leg builds and tests them.
+work dominates, `.kb/fetch-http.md`, "Throughput"). On macos-aarch64 the network host costs
+847,568 B (+0.55 MB gz), less than on Linux; there `FetchSpecE2eTest` (native leg under
+`-Drontolisp.native.required=true`) and `NativeOutputE2eTest` pass on the JVM compiler (2026-09-26).
 
 - **Why one TLS stack everywhere, and why rustls.** A static musl stub cannot `dlopen` the system's
   TLS library, so Linux needs its own; macOS could use its system stack (Security.framework /

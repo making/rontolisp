@@ -3,13 +3,16 @@ package am.ik.rontolisp.e2e;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.PrintStream;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import am.ik.rontolisp.LispVal;
@@ -17,6 +20,7 @@ import am.ik.rontolisp.cli.RontoLispCli;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.ObjcInterop;
 import am.ik.rontolisp.reader.LispReader;
+import com.sun.net.httpserver.HttpServer;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
@@ -32,8 +36,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * the headless corpus prints byte for byte what the interpreter prints -- sends of every
  * result kind, a class whose methods are Lisp closures, a callback that signals, the
  * {@code :error} slot, the argument refusals -- and {@code sleep} turns thread 0's event
- * loop, so a timer's closure runs while the program waits. No window is opened (CI has no
- * display); a window is verified by hand with {@code examples/macos/counter.lisp}.
+ * loop, so a timer's closure runs while the program waits, as does a fetch's wait once
+ * the application started. No window is opened (CI has no display); a window is verified
+ * by hand with {@code examples/macos/counter.lisp}.
  *
  * <p>
  * macOS on Apple silicon only, where the runner answers the {@code rlobjc} imports; the
@@ -79,6 +84,64 @@ class NativeObjcE2eTest {
 				""");
 		assertThat(run.exit()).as("stderr: %s", run.stderr()).isZero();
 		assertThat(run.stdout()).isEqualTo("before 0\nafter 3\n");
+	}
+
+	@Test
+	void aFetchsWaitTurnsTheEventLoopOnceTheApplicationStarted() throws Exception {
+		// A window stays live while the program awaits a fetch (.kb/objc.md, "--native"):
+		// the runner's wait pumps thread 0. A timer counts the turns, and an event posted
+		// before the fetch is gone from the queue after it -- only a pump that dequeues
+		// and
+		// dispatches takes it. The application is started the way appkit::%app starts it
+		// (a performSelectorOnMainThread: of run is what the runner keys on), with the
+		// prohibited activation policy so that no Dock icon appears; no window is opened.
+		HttpServer origin = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		origin.createContext("/slow", exchange -> {
+			try {
+				Thread.sleep(500);
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+			byte[] body = "slow".getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			try (OutputStream out = exchange.getResponseBody()) {
+				out.write(body);
+			}
+		});
+		origin.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+		origin.start();
+		try {
+			Run run = nativeOutput(
+					"""
+							(defvar *app* (objc:send "NSApplication" "sharedApplication"))
+							(objc:send *app* "setActivationPolicy:" 2)
+							(objc:send *app* "finishLaunching")
+							(objc:send *app* "performSelectorOnMainThread:withObject:waitUntilDone:" "run" nil nil)
+							(defvar *ticks* 0)
+							(defvar *fetching* nil)
+							(appkit:timer 0.02 (lambda () (when *fetching* (setq *ticks* (+ *ticks* 1))) t))
+							(sleep 0.1)
+							(setq *fetching* t)
+							(objc:send *app* "postEvent:atStart:"
+							           (objc:send "NSEvent"
+							                      "otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:"
+							                      15 (list 0.0d0 0.0d0) 0 0.0d0 0 nil 0 0 0)
+							           nil)
+							(let ((reply (rontolisp:await (rontolisp:fetch "http://127.0.0.1:%d/slow"))))
+							  (setq *fetching* nil)
+							  (format t "~a~%%" (getf reply :status)))
+							(format t "~a~%%" (> *ticks* 5))
+							(format t "~a~%%" (null (objc:send *app* "nextEventMatchingMask:untilDate:inMode:dequeue:"
+							                                   (ash 1 15) nil "kCFRunLoopDefaultMode" nil)))
+							"""
+						.formatted(origin.getAddress().getPort()));
+			assertThat(run.exit()).as("stderr: %s", run.stderr()).isZero();
+			assertThat(run.stdout()).isEqualTo("200\nT\nT\n");
+		}
+		finally {
+			origin.stop(0);
+		}
 	}
 
 	@Test
