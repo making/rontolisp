@@ -457,9 +457,9 @@ final class JavaBridgeTemplate {
 		return new Object[] { name, types.toArray(new String[0]) };
 	}
 
-	// A tag type in Class.getName() spelling: int, java.lang.String, [I,
-	// [Ljava.lang.String;
-	// -- "String" means java.lang.String, "T[]" and "T..." an array.
+	// A tag type in Class.getName() spelling (int, java.lang.String, [I): "String"
+	// means java.lang.String, "T[]" and "T..." an array. Mirrors
+	// compiler/JavaOverloads.tagTypeName.
 	private static String tagTypeName(String type) {
 		if ("_".equals(type) || type.startsWith("[")) {
 			return type;
