@@ -8,7 +8,7 @@ unboxed `f64` out of a Lisp value emits `call FUNC_AS_F64` and nothing else.**
 - Ladder order: **`TYPE_FLOAT` FIRST**, then i31 fixnum, `TYPE_BIGNUM`, `TYPE_BIGINT`
   via `_big_to_f64`, `TYPE_RATIO`. Tiers: `.kb/wasm-bignum.md`.
 - The final arm is CHECKED (test-then-cast), never a bare `ref.cast`: a NON-number lands
-  in `_type_err_num` — catchable `Expected number, got: <prin1>` in EH mode, an
+  in `_type_err_num` — catchable `OP: The value <prin1> is not of type T` in EH mode, an
   `unreachable` trap outside it (`.kb/error-handling.md`).
 - The ladder is ~80 bytes per OPERAND, not per operation; sharing also stops
   `castFloatGetF64` calling `ctx.allocTemp()` per site (compile-path temps are never

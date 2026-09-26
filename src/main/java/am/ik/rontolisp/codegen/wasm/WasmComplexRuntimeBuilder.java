@@ -29,7 +29,8 @@ final class WasmComplexRuntimeBuilder {
 
 	// _ccomplex((ref null eq) re, (ref null eq) im) -> (ref null eq): the canonical
 	// value for two real parts, like LispComplex.valueOf. A nested complex part (or
-	// any other non-real) lands in _type_err_num ("Expected number, got: <prin1>",
+	// any other non-real) lands in _type_err_num ("The value <prin1> is not of type
+	// NUMBER",
 	// catchable in EH mode); a float anywhere coerces both parts through _as_f64 and
 	// always builds (a float zero never demotes); otherwise a rational-zero
 	// imaginary part demotes to the real itself.

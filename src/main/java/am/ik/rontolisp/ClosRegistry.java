@@ -206,33 +206,6 @@ public final class ClosRegistry {
 	public static final String NON_FINITE_ROUNDING_MESSAGE = "rounding a non-finite float to an integer is undefined";
 
 	/**
-	 * The prefix of the message a non-integer reaching an exact-arithmetic coercion
-	 * reports (the interpreter's {@code asLong}/{@code asBigInteger}, the JVM runtime's
-	 * {@code _big} widening, the wasm runtime's {@code _int_val}); the printed operand
-	 * follows. All three signal it where the failure is DETECTED, and the JVM landing pad
-	 * additionally classifies the prefix as a {@code type-error} because its throw site
-	 * is a plain {@code RuntimeException} with no channel to carry a class (the
-	 * unbound-variable precedent).
-	 */
-	public static final String EXPECTED_INTEGER_MESSAGE_PREFIX = "Expected integer, got: ";
-
-	/**
-	 * The float-context twin of {@link #EXPECTED_INTEGER_MESSAGE_PREFIX}: a non-number
-	 * reaching a to-double coercion (the interpreter's {@code asDouble}, the JVM
-	 * runtime's {@code _dbl}, the wasm runtime's {@code _as_f64}).
-	 */
-	public static final String EXPECTED_NUMBER_MESSAGE_PREFIX = "Expected number, got: ";
-
-	/**
-	 * The prefix of the message a complex number reaching an ordering or real-only
-	 * comparison reports (the interpreter's {@code compareNumeric}, and later the
-	 * compiled backends' own comparisons): a complex IS a number, so neither the integer
-	 * nor the number prefix fits, and SBCL's own complaint names the {@code REAL} type.
-	 * The printed operand follows.
-	 */
-	public static final String EXPECTED_REAL_MESSAGE_PREFIX = "Expected real number, got: ";
-
-	/**
 	 * The prefix of the message applying a value that is not a function designator
 	 * reports -- {@code (funcall 3 1)}, a Scheme {@code (h 1)} over a non-procedure --
 	 * signaled as a {@code type-error}; the printed value follows. A SYMBOL designator
@@ -625,6 +598,20 @@ public final class ClosRegistry {
 	 * @return the condition instance, or null when the class is not registered here
 	 */
 	public @Nullable LispVal newReportingCondition(String className, @Nullable LispVal message) {
+		return newReportingCondition(className, message, java.util.Map.of());
+	}
+
+	/**
+	 * {@link #newReportingCondition(String, LispVal)} with named slots filled as well --
+	 * a {@code type-error}'s {@code DATUM} and {@code EXPECTED-TYPE}. A name the layout
+	 * does not carry is ignored.
+	 * @param className the seeded condition class name
+	 * @param message the reported message, or null for no report
+	 * @param slotValues slot name to value
+	 * @return the condition instance, or null when the class is not registered here
+	 */
+	public @Nullable LispVal newReportingCondition(String className, @Nullable LispVal message,
+			java.util.Map<String, LispVal> slotValues) {
 		LispLayout layout = findLayoutByTag(LispLayout.CLASS_TAG_PREFIX + normalize(className));
 		if (layout == null) {
 			return null;
@@ -635,6 +622,12 @@ public final class ClosRegistry {
 		if (control >= 0 && message != null) {
 			slots[control] = message;
 		}
+		slotValues.forEach((name, value) -> {
+			int index = layout.slotNames().indexOf(name);
+			if (index >= 0) {
+				slots[index] = value;
+			}
+		});
 		return new LispInstance(layout, slots);
 	}
 

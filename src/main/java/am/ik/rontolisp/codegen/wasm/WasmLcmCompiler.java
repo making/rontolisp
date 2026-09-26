@@ -46,24 +46,20 @@ final class WasmLcmCompiler {
 		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_GCD);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_BIG_GCD);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(0);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_DIVREM);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_BIG_DIVREM);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(bSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_MUL);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_BIG_MUL);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(prodSlot);
 		// abs
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(prodSlot);
 		emitI31Zero(ctx);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_CMP);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_BIG_CMP);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(0);
 		ctx.writer.write(Instruction.I32_LT_S);
@@ -71,8 +67,7 @@ final class WasmLcmCompiler {
 		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(prodSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_NEG);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_BIG_NEG);
 		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(prodSlot);

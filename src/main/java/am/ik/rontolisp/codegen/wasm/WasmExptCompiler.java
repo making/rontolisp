@@ -115,8 +115,7 @@ final class WasmExptCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(baseSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_DIV);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_DIV);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(baseSlot);
 		WasmMathHelper.constI32(ctx, 0);
@@ -143,8 +142,7 @@ final class WasmExptCompiler {
 		ctx.writer.writeUnsignedLeb128(rSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(baseSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_MUL);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_MUL);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(rSlot);
 		// power = power - 1

@@ -7385,11 +7385,18 @@ public final class LispEvaluator {
 	private LispVal evalFloorFamilyDivision(String name, LispVal dividendForm, LispVal divisorForm, Environment env) {
 		LispVal dividend = eval(dividendForm, env);
 		LispVal divisor = eval(divisorForm, env);
-		LispVal exact = ExactRounding.quotient(dividend, divisor, ExactRounding.mode(name));
-		if (exact != null) {
-			return exact;
+		try {
+			LispVal exact = ExactRounding.quotient(dividend, divisor, ExactRounding.mode(name));
+			if (exact != null) {
+				return exact;
+			}
+			return Environment.roundToInteger(name, applyGlobalFunction(LispNames.DIV, dividend, divisor));
 		}
-		return Environment.roundToInteger(name, applyGlobalFunction(LispNames.DIV, dividend, divisor));
+		catch (OperandTypeException e) {
+			// The division is the rounding operator's own step (the compiled backends
+			// emit it as one helper call under that operator).
+			throw e.named(name);
+		}
 	}
 
 	/** Calls a global built-in on already-evaluated arguments. */
@@ -10862,6 +10869,11 @@ public final class LispEvaluator {
 		String message = e.getMessage();
 		LispVal messageVal = message == null ? LispNil.INSTANCE : new LispString(message);
 		String className = e.conditionClassName();
+		if (e instanceof OperandTypeException operand && this.closRegistry
+			.newReportingCondition(ClosRegistry.TYPE_ERROR_CLASS_NAME, messageVal, java.util.Map.of("DATUM",
+					operand.datum(), "EXPECTED-TYPE", new LispSymbol(operand.expectedType()))) instanceof LispVal c) {
+			return c;
+		}
 		if (className != null && this.closRegistry.newReportingCondition(className, messageVal) instanceof LispVal c) {
 			return c;
 		}
@@ -12390,6 +12402,11 @@ public final class LispEvaluator {
 					this.globalEnv.clearSpill();
 				}
 				return result;
+			}
+			catch (OperandTypeException e) {
+				// A coercion funnel cannot know which operator it serves; the built-in
+				// whose body raised the error does (OperandTypes).
+				throw withHandlerBindHandlersRun(e.named(builtIn.name()));
 			}
 			catch (LispEvalException e) {
 				throw withHandlerBindHandlersRun(e);

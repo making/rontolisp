@@ -47,8 +47,7 @@ final class WasmSignumCompiler {
 
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_C_SIGNUM);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_C_SIGNUM);
 
 		ctx.writer.write(Instruction.ELSE);
 
@@ -95,8 +94,7 @@ final class WasmSignumCompiler {
 		ctx.writer.writeUnsignedLeb128(slot);
 		WasmMathHelper.constI32(ctx, 0);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_CMP);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_CMP);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 
 		ctx.writer.write(Instruction.END);

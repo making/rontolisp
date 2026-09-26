@@ -310,6 +310,12 @@ final class JvmExprCompiler {
 	}
 
 	private static void compileCons(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// The innermost form's operator names a wrong-type operand's report
+		// (JvmOperandTypeRuntime): a numeric helper called while compiling THIS form
+		// goes through its operator's wrapper, one called while compiling an argument
+		// form through that form's.
+		@Nullable String outerOperator = ctx.operator;
+		ctx.operator = cons.car() instanceof LispSymbol head ? head.name() : null;
 		try {
 			compileConsLocated(cons, ctx, className);
 		}
@@ -317,6 +323,9 @@ final class JvmExprCompiler {
 			// The innermost cons that came from source names the position; the exception
 			// itself is rethrown untouched, since passes above catch it by type.
 			throw SourceProvenance.noteFailure(cons, ex);
+		}
+		finally {
+			ctx.operator = outerOperator;
 		}
 	}
 

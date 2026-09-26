@@ -70,7 +70,7 @@ final class WasmMinMaxCompiler {
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(bSlot);
 
-		// A complex in either operand signals "Expected real number" (catchable in
+		// A complex in either operand signals REAL operand-type report (catchable in
 		// EH mode), like the interpreter -- the n-ary expansion reduces to this
 		// binary shape, so one guard covers every arity.
 		if (WasmComplexCompiler.hasComplex(cons)) {
@@ -93,8 +93,7 @@ final class WasmMinMaxCompiler {
 			// General path: integers, ratios and bignums as well as floats.
 			getLocal(ctx, aSlot);
 			getLocal(ctx, bSlot);
-			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_CMP_BITS);
+			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_CMP_BITS);
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(CMP_EQ | (min ? CMP_LT : CMP_GT));
 			ctx.writer.write(Instruction.I32_AND);

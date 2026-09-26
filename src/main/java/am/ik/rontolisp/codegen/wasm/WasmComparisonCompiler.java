@@ -38,8 +38,7 @@ final class WasmComparisonCompiler {
 			// signum _rat_cmp against zero answered "equal" for NaN.
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
 			WasmExprCompiler.compileExpr(args.get(2), ctx);
-			ctx.writer.write(am.ik.wasm.Instruction.CALL);
-			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_CMP_BITS);
+			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_CMP_BITS);
 			ctx.writer.write(am.ik.wasm.Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(maskFor(i32Opcode));
 			ctx.writer.write(am.ik.wasm.Instruction.I32_AND);
@@ -90,6 +89,17 @@ final class WasmComparisonCompiler {
 		if (i32Opcode < 0 || WasmLispCompiler.hasDoubleLiteral(args)) {
 			return false;
 		}
+		// The consumer handed the test over without compiling it as a form, so the
+		// test's operator is set here (WasmOperandTypes).
+		WasmOperandTypes.withOperator(ctx, head.name(), () -> compileConditionI32(cons, args, ctx, i32Opcode));
+		if (negated) {
+			ctx.writer.write(am.ik.wasm.Instruction.I32_EQZ);
+		}
+		return true;
+	}
+
+	private static void compileConditionI32(LispCons cons, List<LispVal> args, WasmLispCompiler.Ctx ctx,
+			int i32Opcode) {
 		if (!WasmIntFusionCompiler.tryCompileCompare(cons, ctx, i64OpcodeFor(i32Opcode), maskFor(i32Opcode), false)) {
 			// The generic comparison, still RAW: the mask test's i32 is the truth value,
 			// and boxing it into t/nil only for the consumer to test the box again would
@@ -98,16 +108,11 @@ final class WasmComparisonCompiler {
 			// Not a speed-for-size trade, so it holds at every optimize level.
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
 			WasmExprCompiler.compileExpr(args.get(2), ctx);
-			ctx.writer.write(am.ik.wasm.Instruction.CALL);
-			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_CMP_BITS);
+			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_CMP_BITS);
 			ctx.writer.write(am.ik.wasm.Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(maskFor(i32Opcode));
 			ctx.writer.write(am.ik.wasm.Instruction.I32_AND);
 		}
-		if (negated) {
-			ctx.writer.write(am.ik.wasm.Instruction.I32_EQZ);
-		}
-		return true;
 	}
 
 	private static int i64OpcodeFor(int i32Opcode) {

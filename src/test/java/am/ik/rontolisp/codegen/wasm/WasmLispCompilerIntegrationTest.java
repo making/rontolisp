@@ -15700,8 +15700,8 @@ class WasmLispCompilerIntegrationTest {
 	// over complex, phase) reuse the backend's software cores, so like every WASM
 	// transcendental they are close but not bit-exact (the expSoftwareApproximation
 	// precedent); those assert closeness, everything else print equality. Ordering
-	// over a complex is catchable with the interpreter's "Expected real number"
-	// text, but as a simple-error -- the documented instance-less-throw divergence
+	// over a complex is catchable with the interpreter's text, but as a simple-error --
+	// the documented instance-less-throw divergence
 	// (ehANonNumberArithmeticOperandIsCaughtAsASimpleErrorHere) -- so the ordering
 	// test catches (error ...) and compares the message.
 	@Test
@@ -15719,7 +15719,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void compileAndRunComplexConstructorRejectsNonRealParts() throws Exception {
 		assertThat(compileAndRunEh("(print (handler-case (complex #c(1 2) 3) (error (e) (princ-to-string e))))"))
-			.isEqualTo("\"Expected number, got: #C(1 2)\"");
+			.isEqualTo("\"The value #C(1 2) is not of type NUMBER\"");
 		assertThat(compileAndRunEhExpectTrap("(print (complex #c(1 2) 3))")).contains("unreachable");
 		assertThat(compileAndRunEhExpectTrap("(print (complex 1 \"a\"))")).contains("unreachable");
 		// Caught as a plain error (not type-error): the documented
@@ -15862,9 +15862,10 @@ class WasmLispCompilerIntegrationTest {
 				             (te-print (lambda () (> #c(1 2) 1)))
 				             (te-print (lambda () (min #c(1 2) 3)))
 				             (te-print (lambda () (max 3 #c(1 2))))))
-				""")).isEqualTo("(\"Expected real number, got: #C(1 2)\"" + " \"Expected real number, got: #C(1 2)\""
-				+ " \"Expected real number, got: #C(1 2)\"" + " \"Expected real number, got: #C(1 2)\""
-				+ " \"Expected real number, got: #C(1 2)\"" + " \"Expected real number, got: #C(1 2)\")");
+				""")).isEqualTo("(\"<: The value #C(1 2) is not of type REAL\""
+				+ " \">: The value #C(1 2) is not of type REAL\"" + " \"<: The value #C(1 2) is not of type REAL\""
+				+ " \">: The value #C(1 2) is not of type REAL\"" + " \"MIN: The value #C(1 2) is not of type REAL\""
+				+ " \"MAX: The value #C(1 2) is not of type REAL\")");
 	}
 
 	@Test
@@ -16292,10 +16293,12 @@ class WasmLispCompilerIntegrationTest {
 				             (te-print (lambda () (float #c(1 2))))
 				             (te-print (lambda () (numerator #c(1 2))))
 				             (te-print (lambda () (denominator #c(1 2))))))
-				""")).isEqualTo("(\"Expected real number, got: #C(1 2)\"" + " \"Expected real number, got: #C(1 2)\""
-				+ " \"Expected real number, got: #C(1 2)\"" + " \"Expected real number, got: #C(1 2)\""
-				+ " \"Expected real number, got: #C(1 2)\"" + " \"Expected real number, got: #C(1 2)\""
-				+ " \"Expected real number, got: #C(1 2)\")");
+				""")).isEqualTo("(\"FLOOR: The value #C(1 2) is not of type REAL\""
+				+ " \"TRUNCATE: The value #C(1 2) is not of type REAL\""
+				+ " \"CEILING: The value #C(1 2) is not of type REAL\""
+				+ " \"ROUND: The value #C(1 2) is not of type REAL\""
+				+ " \"FLOAT: The value #C(1 2) is not of type REAL\"" + " \"The value #C(1 2) is not of type REAL\""
+				+ " \"The value #C(1 2) is not of type REAL\")");
 		assertThat(compileAndRunEh("""
 				(defun te-print (thunk)
 				  (handler-case (funcall thunk) (error (e) (princ-to-string e))))
@@ -16306,10 +16309,12 @@ class WasmLispCompilerIntegrationTest {
 				             (te-print (lambda () (lcm 4 #c(1 2))))
 				             (te-print (lambda () (logand #c(1 2) 3)))
 				             (te-print (lambda () (ash #c(1 2) 1)))))
-				""")).isEqualTo("(\"Expected integer, got: #C(1 2)\"" + " \"Expected integer, got: #C(1 2)\""
-				+ " \"Expected integer, got: #C(1 2)\"" + " \"Expected integer, got: #C(1 2)\""
-				+ " \"Expected integer, got: #C(1 2)\"" + " \"Expected integer, got: #C(1 2)\""
-				+ " \"Expected integer, got: #C(1 2)\")");
+				""")).isEqualTo("(\"ISQRT: The value #C(1 2) is not of type INTEGER\""
+				+ " \"MOD: The value #C(1 2) is not of type REAL\"" + " \"REM: The value #C(1 2) is not of type REAL\""
+				+ " \"GCD: The value #C(1 2) is not of type INTEGER\""
+				+ " \"LCM: The value #C(1 2) is not of type INTEGER\""
+				+ " \"LOGAND: The value #C(1 2) is not of type INTEGER\""
+				+ " \"ASH: The value #C(1 2) is not of type INTEGER\")");
 	}
 
 	@Test
@@ -24276,8 +24281,9 @@ class WasmLispCompilerIntegrationTest {
 		// `wasm trap: cast failure` straight past handler-case. The arithmetic
 		// runtime's non-number arms (_int_val, _as_f64) now land in
 		// _type_err_int/_type_err_num, which throw a $lisp-cond whose message is the
-		// interpreter's exact text (.kb/error-handling.md, "A non-number reaching
-		// arithmetic"). The evaluator/JVM twins assert the same strings.
+		// interpreter's exact text, named after the operator the call site stored in the
+		// operator register (WasmOperandTypes). The evaluator/JVM twins assert the same
+		// strings.
 		assertThat(compileAndRunEh("""
 				(defun te-print (thunk)
 				  (handler-case (funcall thunk) (error (e) (princ-to-string e))))
@@ -24286,9 +24292,9 @@ class WasmLispCompilerIntegrationTest {
 				(print (te-print (lambda () (* 2 "x"))))
 				(print (te-print (lambda () (max 1 'sym))))
 				(print (te-print (lambda () (+ 1.5 nil))))
-				""")).isEqualTo("\"Expected integer, got: NIL\"\n\"Expected integer, got: NIL\"\n"
-				+ "\"Expected integer, got: \\\"x\\\"\"\n\"Expected integer, got: SYM\"\n"
-				+ "\"Expected number, got: NIL\"");
+				""")).isEqualTo("\"+: The value NIL is not of type NUMBER\"\n\"<: The value NIL is not of type REAL\"\n"
+				+ "\"*: The value \\\"x\\\" is not of type NUMBER\"\n\"MAX: The value SYM is not of type REAL\"\n"
+				+ "\"+: The value NIL is not of type NUMBER\"");
 	}
 
 	@Test
@@ -24296,7 +24302,8 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileComponentAndRun("""
 				(print (handler-case (+ 1 nil) (error (e) (princ-to-string e))))
 				(print (handler-case (* 2 "x") (error (e) (princ-to-string e))))
-				""")).isEqualTo("\"Expected integer, got: NIL\"\n\"Expected integer, got: \\\"x\\\"\"");
+				"""))
+			.isEqualTo("\"+: The value NIL is not of type NUMBER\"\n\"*: The value \\\"x\\\" is not of type NUMBER\"");
 	}
 
 	@Test
@@ -24386,7 +24393,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunEhExpectTrap("""
 				(print (handler-case (error "warm") (error (e) :ok)))
 				(print (+ 1 nil))
-				""")).contains("Unhandled condition: Expected integer, got: NIL");
+				""")).contains("Unhandled condition: +: The value NIL is not of type NUMBER");
 	}
 
 	@Test

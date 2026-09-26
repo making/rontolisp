@@ -83,8 +83,8 @@ final class JvmRuntimeBuilder {
 	 * {@code signals-error} test passed interpreted and returned a WRONG VALUE compiled.
 	 * The arm now throws instead, spelled by {@link ClosRegistry#arityMessage} exactly as
 	 * the interpreter spells it, and {@code JvmHandlerCaseCompiler} recovers the class
-	 * from that text (the {@code Expected integer, got: } precedent -- a bytecode-emitted
-	 * throw site has no channel for a condition).
+	 * from that text (the unbound-variable precedent -- a bytecode-emitted throw site has
+	 * no channel for a condition).
 	 *
 	 * <p>
 	 * The SPREAD dispatcher has no such arm: it carries a case for every callable and

@@ -68,7 +68,8 @@ final class WasmBignumRuntimeBuilder {
 	// limb-sized `random` limit, a declared s64/u64 export), and a catchable "Expected
 	// integer" for a value that IS an integer would be a lie. Any OTHER value -- callers
 	// guarantee an exact integer, so reaching it is a type slip -- lands in
-	// _type_err_int: a catchable "Expected integer, got: <prin1>" $lisp-cond throw in EH
+	// _type_err_int: a catchable "The value <prin1> is not of type INTEGER" $lisp-cond
+	// throw in EH
 	// mode, a bare `unreachable` trap outside it. The tests in front of the TYPE_BIGNUM
 	// cast replaced the uncatchable cast-failure trap; they cost one ref.test on the
 	// boxed (out-of-i31) arm only -- the i31 fast arm is byte-identical.

@@ -32,8 +32,7 @@ final class WasmArithCompiler {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(ratioFunc);
+		WasmOperandTypes.emitCall(ctx, ratioFunc);
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, int f64Opcode, int ratioFunc) {
@@ -92,15 +91,13 @@ final class WasmArithCompiler {
 			ctx.writer.writeSignedLeb128(1);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
-			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeUnsignedLeb128(ratioFunc);
+			WasmOperandTypes.emitCall(ctx, ratioFunc);
 			return;
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		for (int i = 2; i < args.size(); i++) {
 			WasmExprCompiler.compileExpr(args.get(i), ctx);
-			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeUnsignedLeb128(ratioFunc);
+			WasmOperandTypes.emitCall(ctx, ratioFunc);
 		}
 	}
 
@@ -141,8 +138,7 @@ final class WasmArithCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(tmpSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_SUB);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_SUB);
 		ctx.writer.write(Instruction.END);
 	}
 

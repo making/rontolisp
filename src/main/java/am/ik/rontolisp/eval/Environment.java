@@ -82,6 +82,7 @@ import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.FixedDecimal;
 import am.ik.rontolisp.compiler.OpenModes;
+import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.macro.StreamElementType;
@@ -8250,7 +8251,7 @@ public final class Environment implements Scope {
 				default -> r.truncate();
 			});
 		}
-		throw new LispEvalException(op.toLowerCase(Locale.ROOT) + " expects a number, got: " + arg.print());
+		throw OperandTypeException.of(arg, OperandTypes.Kind.REAL).named(op);
 	}
 
 	/**
@@ -8258,11 +8259,17 @@ public final class Environment implements Scope {
 	 * magnitude, a float operand included ({@link ExactRounding#quotient}).
 	 */
 	private static LispVal floorFamilyQuotient(Environment env, String op, LispVal dividend, LispVal divisor) {
-		LispVal exact = ExactRounding.quotient(dividend, divisor, ExactRounding.mode(op));
-		if (exact != null) {
-			return exact;
+		try {
+			LispVal exact = ExactRounding.quotient(dividend, divisor, ExactRounding.mode(op));
+			if (exact != null) {
+				return exact;
+			}
+			return roundToInteger(op, callGlobal(env, LispNames.DIV, dividend, divisor));
 		}
-		return roundToInteger(op, callGlobal(env, LispNames.DIV, dividend, divisor));
+		catch (OperandTypeException e) {
+			// The division is this operator's own step, not a call the program made.
+			throw e.named(op);
+		}
 	}
 
 	/**
@@ -8350,7 +8357,7 @@ public final class Environment implements Scope {
 			if (arg instanceof LispRatio r) {
 				return new LispDouble(r.doubleValue());
 			}
-			throw new LispEvalException("float expects a number, got: " + arg.print());
+			throw OperandTypeException.of(arg, OperandTypes.Kind.REAL).named(LispNames.FLOAT);
 		}));
 		// floor/ceiling/round/truncate and their float-quotient twins as FUNCTION objects
 		// ((funcall #'floor 7 2), (mapcar #'truncate xs ys)): an optional divisor, and
@@ -8409,8 +8416,7 @@ public final class Environment implements Scope {
 			if (arg instanceof LispDouble d) {
 				return rationalOfDouble(d.value());
 			}
-			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-					ClosRegistry.EXPECTED_REAL_MESSAGE_PREFIX + arg.print());
+			throw OperandTypeException.of(arg, OperandTypes.Kind.REAL);
 		}));
 	}
 
@@ -8446,8 +8452,7 @@ public final class Environment implements Scope {
 		if (val instanceof LispInteger i) {
 			return i.value();
 		}
-		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-				ClosRegistry.EXPECTED_INTEGER_MESSAGE_PREFIX + val.print());
+		throw OperandTypeException.of(val, OperandTypes.Kind.INTEGER);
 	}
 
 	private static double asDouble(LispVal val) {
@@ -8463,8 +8468,7 @@ public final class Environment implements Scope {
 		if (val instanceof LispRatio r) {
 			return r.doubleValue();
 		}
-		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-				ClosRegistry.EXPECTED_NUMBER_MESSAGE_PREFIX + val.print());
+		throw OperandTypeException.of(val, OperandTypes.Kind.NUMBER);
 	}
 
 	/** Whether every argument is a {@code long}-range integer (the bitwise fast path). */
@@ -8484,8 +8488,7 @@ public final class Environment implements Scope {
 		if (val instanceof LispBigInteger b) {
 			return b.value();
 		}
-		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-				ClosRegistry.EXPECTED_INTEGER_MESSAGE_PREFIX + val.print());
+		throw OperandTypeException.of(val, OperandTypes.Kind.INTEGER);
 	}
 
 	/**
@@ -8584,7 +8587,7 @@ public final class Environment implements Scope {
 		if (val instanceof LispInteger || val instanceof LispBigInteger) {
 			return BigInteger.ONE;
 		}
-		throw new LispEvalException("Expected rational, got: " + val.print());
+		throw OperandTypeException.of(val, OperandTypes.Kind.NUMBER);
 	}
 
 	/**
@@ -8733,11 +8736,10 @@ public final class Environment implements Scope {
 		boolean aIsFloat = a instanceof LispDouble;
 		LispVal other = aIsFloat ? b : a;
 		if (!(other instanceof LispInteger) && !(other instanceof LispBigInteger) && !(other instanceof LispRatio)) {
-			// The float arm's funnel: a non-number beside a float is "Expected
-			// number", exactly what asDouble threw here before (.kb/error-handling.md,
-			// "A non-number reaching arithmetic signals a catchable type-error").
-			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-					ClosRegistry.EXPECTED_NUMBER_MESSAGE_PREFIX + other.print());
+			// The float arm's funnel: a non-number beside a float is what asDouble
+			// throws (.kb/error-handling.md, "A non-number reaching arithmetic signals a
+			// catchable type-error").
+			throw OperandTypeException.of(other, OperandTypes.Kind.NUMBER);
 		}
 		double v = ((LispDouble) (aIsFloat ? a : b)).value();
 		if (Double.isNaN(v)) {
@@ -8822,15 +8824,14 @@ public final class Environment implements Scope {
 	}
 
 	private static LispEvalException realOperandError(LispVal complex) {
-		return LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-				ClosRegistry.EXPECTED_REAL_MESSAGE_PREFIX + complex.print());
+		return OperandTypeException.of(complex, OperandTypes.Kind.REAL);
 	}
 
 	// Signals for a complex operand only; any other value falls through to the
 	// caller's own funnel, so a non-number keeps its existing message.
 	private static void requireRealOperand(String name, LispVal val) {
 		if (val instanceof LispComplex) {
-			throw realOperandError(val);
+			throw OperandTypeException.of(val, OperandTypes.Kind.REAL).named(name);
 		}
 	}
 
@@ -8839,8 +8840,7 @@ public final class Environment implements Scope {
 				|| val instanceof LispDouble) {
 			return val;
 		}
-		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-				ClosRegistry.EXPECTED_NUMBER_MESSAGE_PREFIX + val.print());
+		throw OperandTypeException.of(val, OperandTypes.Kind.NUMBER).named(name);
 	}
 
 	private static boolean isZeroReal(LispVal val) {
@@ -8857,8 +8857,7 @@ public final class Environment implements Scope {
 		if (val instanceof LispInteger i) {
 			return i.value() == 0;
 		}
-		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-				ClosRegistry.EXPECTED_NUMBER_MESSAGE_PREFIX + val.print());
+		throw OperandTypeException.of(val, OperandTypes.Kind.NUMBER);
 	}
 
 	// A real value as a double; a non-number signals through the float funnel.
@@ -8875,8 +8874,7 @@ public final class Environment implements Scope {
 		if (val instanceof LispRatio r) {
 			return r.doubleValue();
 		}
-		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-				ClosRegistry.EXPECTED_NUMBER_MESSAGE_PREFIX + val.print());
+		throw OperandTypeException.of(val, OperandTypes.Kind.NUMBER);
 	}
 
 	// The real part of a real-or-complex operand (a real answers itself; anything

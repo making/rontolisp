@@ -52,7 +52,7 @@ public class LispEvalException extends RuntimeException {
 		this(message, condition, null);
 	}
 
-	private LispEvalException(String message, @Nullable LispVal condition, @Nullable String conditionClassName) {
+	LispEvalException(String message, @Nullable LispVal condition, @Nullable String conditionClassName) {
 		super(message);
 		this.condition = condition;
 		this.conditionClassName = conditionClassName;

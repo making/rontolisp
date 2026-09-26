@@ -63,7 +63,10 @@ final class JvmComplexCompiler {
 	 * its references at the call site.
 	 */
 	static MethodrefConstant complexOp(JvmLispCompiler.Ctx ctx, String className, String op) {
-		return JvmEmitHelper.selfMethod(ctx, className, op, JvmComplexRuntimeBuilder.descFor(op));
+		String desc = JvmComplexRuntimeBuilder.descFor(op);
+		MethodrefConstant ref = JvmEmitHelper.selfMethod(ctx, className, op, desc);
+		// Every complex helper but the constructor can meet a wrong-type operand.
+		return JvmComplexRuntimeBuilder.COMPLEX.equals(op) ? ref : ctx.wrapForOperator(op, desc, ref);
 	}
 
 	/**
@@ -220,11 +223,11 @@ final class JvmComplexCompiler {
 
 	/**
 	 * Validates the real in {@code temp} through the {@code _dbl} funnel (signalling
-	 * "Expected number" for a non-real, like the interpreter's requireReal) and leaves
-	 * the value itself on the stack.
+	 * NUMBER operand-type report for a non-real, like the interpreter's requireReal) and
+	 * leaves the value itself on the stack.
 	 */
 	private static void emitRealCheck(JvmLispCompiler.Ctx ctx, int temp) {
-		// Not a holder: the _dbl funnel validates (signalling "Expected number"
+		// Not a holder: the _dbl funnel validates (signalling NUMBER operand-type report
 		// for a non-real, like the interpreter's requireReal) and the value
 		// itself is the answer.
 		ctx.emit(Opcode.ALOAD);

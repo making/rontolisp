@@ -2787,10 +2787,10 @@ class LispEvaluatorTest {
 				      (te-print (lambda () (> #c(1 2) 1)))
 				      (te-print (lambda () (min #c(1 2) 3)))
 				      (te-print (lambda () (max 3 #c(1 2)))))
-				""").print())
-			.isEqualTo("(\"Expected real number, got: #C(1 2)\"" + " \"Expected real number, got: #C(1 2)\""
-					+ " \"Expected real number, got: #C(1 2)\"" + " \"Expected real number, got: #C(1 2)\""
-					+ " \"Expected real number, got: #C(1 2)\"" + " \"Expected real number, got: #C(1 2)\")");
+				""").print()).isEqualTo("(\"<: The value #C(1 2) is not of type REAL\""
+				+ " \">: The value #C(1 2) is not of type REAL\"" + " \"<: The value #C(1 2) is not of type REAL\""
+				+ " \">: The value #C(1 2) is not of type REAL\"" + " \"MIN: The value #C(1 2) is not of type REAL\""
+				+ " \"MAX: The value #C(1 2) is not of type REAL\")");
 	}
 
 	@Test
@@ -3081,10 +3081,12 @@ class LispEvaluatorTest {
 				      (te-print (lambda () (float #c(1 2))))
 				      (te-print (lambda () (numerator #c(1 2))))
 				      (te-print (lambda () (denominator #c(1 2)))))
-				""").print()).isEqualTo("(\"Expected real number, got: #C(1 2)\""
-				+ " \"Expected real number, got: #C(1 2)\"" + " \"Expected real number, got: #C(1 2)\""
-				+ " \"Expected real number, got: #C(1 2)\"" + " \"Expected real number, got: #C(1 2)\""
-				+ " \"Expected real number, got: #C(1 2)\"" + " \"Expected real number, got: #C(1 2)\")");
+				""").print()).isEqualTo("(\"FLOOR: The value #C(1 2) is not of type REAL\""
+				+ " \"TRUNCATE: The value #C(1 2) is not of type REAL\""
+				+ " \"CEILING: The value #C(1 2) is not of type REAL\""
+				+ " \"ROUND: The value #C(1 2) is not of type REAL\""
+				+ " \"FLOAT: The value #C(1 2) is not of type REAL\"" + " \"The value #C(1 2) is not of type REAL\""
+				+ " \"The value #C(1 2) is not of type REAL\")");
 		assertThat(evalMulti("""
 				(defun te-print (thunk)
 				  (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
@@ -3095,10 +3097,12 @@ class LispEvaluatorTest {
 				      (te-print (lambda () (lcm 4 #c(1 2))))
 				      (te-print (lambda () (logand #c(1 2) 3)))
 				      (te-print (lambda () (ash #c(1 2) 1))))
-				""").print()).isEqualTo("(\"Expected integer, got: #C(1 2)\"" + " \"Expected integer, got: #C(1 2)\""
-				+ " \"Expected integer, got: #C(1 2)\"" + " \"Expected integer, got: #C(1 2)\""
-				+ " \"Expected integer, got: #C(1 2)\"" + " \"Expected integer, got: #C(1 2)\""
-				+ " \"Expected integer, got: #C(1 2)\")");
+				""").print()).isEqualTo("(\"ISQRT: The value #C(1 2) is not of type INTEGER\""
+				+ " \"MOD: The value #C(1 2) is not of type REAL\"" + " \"REM: The value #C(1 2) is not of type REAL\""
+				+ " \"GCD: The value #C(1 2) is not of type INTEGER\""
+				+ " \"LCM: The value #C(1 2) is not of type INTEGER\""
+				+ " \"LOGAND: The value #C(1 2) is not of type INTEGER\""
+				+ " \"ASH: The value #C(1 2) is not of type INTEGER\")");
 	}
 
 	@Test
@@ -3579,8 +3583,10 @@ class LispEvaluatorTest {
 		}
 		// One argument is unchanged, and both arguments must be REAL (CLHS).
 		assertThat(eval("(atan 1d0)")).isEqualTo(new LispDouble(StrictMath.atan(1.0)));
-		assertThatThrownBy(() -> eval("(atan #c(1d0 1d0) 1d0)")).hasMessageContaining("Expected real number");
-		assertThatThrownBy(() -> eval("(atan 1d0 #c(1d0 1d0))")).hasMessageContaining("Expected real number");
+		assertThatThrownBy(() -> eval("(atan #c(1d0 1d0) 1d0)"))
+			.hasMessage("ATAN: The value #C(1.0 1.0) is not of type REAL");
+		assertThatThrownBy(() -> eval("(atan 1d0 #c(1d0 1d0))"))
+			.hasMessage("ATAN: The value #C(1.0 1.0) is not of type REAL");
 		assertThatThrownBy(() -> eval("(atan 1d0 1d0 1d0)")).hasMessageContaining("ATAN expects 1 to 2 arguments");
 	}
 
@@ -5761,7 +5767,7 @@ class LispEvaluatorTest {
 			.hasMessageContaining("expects 1 argument");
 		assertThatThrownBy(() -> eval("(rational \"s\")")).isInstanceOf(LispEvalException.class);
 		assertThatThrownBy(() -> eval("(rational #c(1 2))")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("Expected real number");
+			.hasMessage("RATIONAL: The value #C(1 2) is not of type REAL");
 		// Neither infinity nor NaN is a rational: Math.scalb overflows to one.
 		assertThatThrownBy(() -> eval("(rational (scale-float 1.0 2097))")).isInstanceOf(LispEvalException.class);
 	}
@@ -18587,9 +18593,25 @@ class LispEvaluatorTest {
 				      (te-print (lambda () (* 2 "x")))
 				      (te-print (lambda () (max 1 'sym)))
 				      (te-print (lambda () (+ 1.5 nil))))
-				""").print()).isEqualTo("(\"Expected integer, got: NIL\" \"Expected integer, got: NIL\""
-				+ " \"Expected integer, got: \\\"x\\\"\" \"Expected integer, got: SYM\""
-				+ " \"Expected number, got: NIL\")");
+				""").print())
+			.isEqualTo("(\"+: The value NIL is not of type NUMBER\" \"<: The value NIL is not of type REAL\""
+					+ " \"*: The value \\\"x\\\" is not of type NUMBER\" \"MAX: The value SYM is not of type REAL\""
+					+ " \"+: The value NIL is not of type NUMBER\")");
+	}
+
+	@Test
+	void operandTypeErrorAnswersItsDatumAndExpectedType() {
+		// The condition a wrong-type operand signals is a type-error whose readers answer
+		// the operand and the type the OPERATOR accepts -- not the coercion helper's.
+		assertThat(evalMulti("""
+				(defun te-slots (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (type-error-datum e) (type-error-expected-type e)))))
+				(list (te-slots (lambda () (> nil 0)))
+				      (te-slots (lambda () (logand 1 "x")))
+				      (te-slots (lambda () (sqrt 'q))))
+				""").print()).isEqualTo("((NIL REAL) (\"x\" INTEGER) (Q NUMBER))");
+		assertThatThrownBy(() -> eval("(> nil 0)")).hasMessage(">: The value NIL is not of type REAL");
 	}
 
 	@Test

@@ -821,6 +821,8 @@ final class WasmAsyncEmit {
 			// 1,961-byte group in a module that can never make a character vector.
 			.charvecPossible(proto.charvecPossible)
 			.ehDepthGlobalIndex(proto.ehDepthGlobalIndex)
+			.operandOpGlobalIndex(proto.operandOpGlobalIndex)
+			.operandOperators(proto.operandOperators)
 			// NOT optional: freshCtx builds the synchronous top level's CHUNKS, where an
 			// unboxed local's shadow is marked authoritative by reading this module
 			// global. Without it the chunk emits `global.get -1` and the module does not

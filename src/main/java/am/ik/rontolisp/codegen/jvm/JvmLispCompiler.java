@@ -2023,6 +2023,20 @@ public final class JvmLispCompiler implements LispCompiler {
 				: null;
 		JvmNumericRuntimeBuilder.NumericRuntime numericRuntime = JvmNumericRuntimeBuilder.build(cp, thisClass,
 				strvMethod, instanceLayoutClass, usesComplex);
+		// A wrong-type operand's report names the operator (JvmOperandTypeRuntime); the
+		// thread-local record a pad reads the datum from exists only when a pad does.
+		final Utf8Constant teTlName = hasLandingPad ? cp.addUtf8(JvmOperandTypeRuntime.TL_FIELD) : null;
+		final Utf8Constant teTlDesc = hasLandingPad ? cp.addUtf8(JvmOperandTypeRuntime.TL_DESC) : null;
+		final FieldrefConstant teTlField = teTlName != null && teTlDesc != null
+				? cp.addFieldref(thisClass, cp.addNameAndType(teTlName, teTlDesc)) : null;
+		numericRuntime.methods().addAll(JvmOperandTypeRuntime.build(cp, thisClass, teTlField));
+		if (teTlField != null) {
+			numericRuntime.ops()
+				.put(JvmOperandTypeRuntime.TE_SLOT, JvmOperandTypeRuntime.self(cp, thisClass,
+						JvmOperandTypeRuntime.TE_SLOT, JvmOperandTypeRuntime.TE_SLOT_DESC));
+		}
+		final JvmOperandTypeRuntime.Wrappers operandTypeWrappers = new JvmOperandTypeRuntime.Wrappers(cp, thisClass,
+				numericRuntime.methods());
 		final JvmComplexRuntimeBuilder.@Nullable ComplexRuntime complexRuntime = usesComplex
 				? JvmComplexRuntimeBuilder.build(cp, thisClass) : null;
 
@@ -2138,6 +2152,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.fusedState(fusedState)
 			.cp(cp)
 			.numOps(numericRuntime.ops())
+			.operandTypeWrappers(operandTypeWrappers)
 			.mathOps(mathOps)
 			.systemOps(systemOps)
 			.systemOut(systemOut)
@@ -3724,6 +3739,11 @@ public final class JvmLispCompiler implements LispCompiler {
 					java.util.Objects.requireNonNull(mainCtx.conditionChannel.depthFieldName),
 					java.util.Objects.requireNonNull(mainCtx.conditionChannel.fieldDesc));
 		}
+		if (teTlName != null && teTlDesc != null) {
+			// The per-thread record of the last wrong-type operand's exception, datum
+			// and type (JvmOperandTypeRuntime); initialized in <clinit>.
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, teTlName, teTlDesc);
+		}
 		if (mainCtx.conditionChannel.nleUsed) {
 			// The per-thread non-local-exit carrier from a %nlx-throw site to the
 			// matching %nlx-catch (a {throwable, id, value} Object[]);
@@ -3818,9 +3838,9 @@ public final class JvmLispCompiler implements LispCompiler {
 			definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, dm.nameUtf8, dm.descUtf8, 64,
 					dm.maxLocals, dm.code, List.of());
 		}
-		if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || !mainCtx.layoutPool.isEmpty()
-				|| !mainCtx.bigIntPool.isEmpty() || !structTableClinitFinal.isEmpty() || dynVarRuntime != null
-				|| initsClinit) {
+		if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || teTlField != null
+				|| !mainCtx.layoutPool.isEmpty() || !mainCtx.bigIntPool.isEmpty() || !structTableClinitFinal.isEmpty()
+				|| dynVarRuntime != null || initsClinit) {
 			// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
 			// on a thread with no pending condition returns null). The async
 			// runtime's _handoffTl (the eager-start handoff) joins the same
@@ -3841,6 +3861,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 			if (channel.nleUsed) {
 				tlFields.add(java.util.Objects.requireNonNull(channel.nleTlField));
+			}
+			if (teTlField != null) {
+				tlFields.add(teTlField);
+				channel.ensureThreadLocalInfra(cp);
 			}
 			if (curThreadTlFieldRef != null) {
 				// The _thread_current handle cache joins the same initializer.
@@ -5360,7 +5384,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			ensureThreadLocalInfra(cp);
 		}
 
-		private void ensureThreadLocalInfra(ConstantPool cp) {
+		void ensureThreadLocalInfra(ConstantPool cp) {
 			if (this.threadLocalClass != null) {
 				return;
 			}
@@ -5928,6 +5952,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		Map<String, MethodrefConstant> mathOps = Map.of();
 
 		Map<String, MethodrefConstant> systemOps = Map.of();
+
+		/**
+		 * The operator of the innermost form being compiled (set by
+		 * {@code JvmExprCompiler.compileCons}); a numeric helper called under a named one
+		 * goes through that operator's wrapper ({@link JvmOperandTypeRuntime}).
+		 */
+		@Nullable String operator;
+
+		/** The compilation's operator wrappers, or null outside a full compilation. */
+		JvmOperandTypeRuntime.@Nullable Wrappers operandTypeWrappers;
 
 		final List<Integer> code = new ArrayList<>();
 
@@ -6726,6 +6760,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.numOps = builder.numOps;
 			this.mathOps = builder.mathOps;
 			this.systemOps = builder.systemOps;
+			this.operandTypeWrappers = builder.operandTypeWrappers;
 		}
 
 		static Builder builder() {
@@ -6999,6 +7034,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVars;
 
 			private Map<String, MethodrefConstant> numOps = Map.of();
+
+			private JvmOperandTypeRuntime.@Nullable Wrappers operandTypeWrappers;
 
 			private Map<String, MethodrefConstant> mathOps = Map.of();
 
@@ -7594,6 +7631,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				return this;
 			}
 
+			Builder operandTypeWrappers(JvmOperandTypeRuntime.Wrappers operandTypeWrappers) {
+				this.operandTypeWrappers = operandTypeWrappers;
+				return this;
+			}
+
 			Builder systemOps(Map<String, MethodrefConstant> systemOps) {
 				this.systemOps = systemOps;
 				return this;
@@ -7606,7 +7648,23 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		MethodrefConstant numOp(String key) {
-			return Objects.requireNonNull(this.numOps.get(key), () -> "Unknown numeric helper: " + key);
+			MethodrefConstant ref = Objects.requireNonNull(this.numOps.get(key),
+					() -> "Unknown numeric helper: " + key);
+			String desc = JvmNumericRuntimeBuilder.wrappedDesc(key);
+			return desc == null ? ref : wrapForOperator(key, desc, ref);
+		}
+
+		/**
+		 * The reference a call to a numeric helper compiled at this point invokes: the
+		 * innermost named operator's wrapper, or the helper itself.
+		 * @param helper the helper's method name
+		 * @param desc its descriptor
+		 * @param ref its reference
+		 * @return the reference to invoke
+		 */
+		MethodrefConstant wrapForOperator(String helper, String desc, MethodrefConstant ref) {
+			JvmOperandTypeRuntime.Wrappers wrappers = this.operandTypeWrappers;
+			return wrappers == null ? ref : wrappers.wrap(this.operator, helper, desc, ref);
 		}
 
 		MethodrefConstant mathOp(String key) {

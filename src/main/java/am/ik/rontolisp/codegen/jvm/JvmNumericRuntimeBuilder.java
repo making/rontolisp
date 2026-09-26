@@ -201,6 +201,33 @@ final class JvmNumericRuntimeBuilder {
 
 	private static final String BINARY_DESC = "(" + OBJ + OBJ + ")" + OBJ;
 
+	/**
+	 * The helpers a wrong-type operand can escape from, with their descriptors: a call to
+	 * one compiled inside a named operator's form goes through that operator's wrapper
+	 * ({@link JvmOperandTypeRuntime.Wrappers}). The rest -- {@code _eqv}, {@code _norm},
+	 * the raw-double {@code _fmod} family -- cannot see a non-number.
+	 */
+	private static final Map<String, String> WRAPPED_DESCS = Map.ofEntries(Map.entry(ADD, BINARY_DESC),
+			Map.entry(SUB, BINARY_DESC), Map.entry(MUL, BINARY_DESC), Map.entry(DIV, BINARY_DESC),
+			Map.entry(MOD, BINARY_DESC), Map.entry(REM, BINARY_DESC), Map.entry(MIN, BINARY_DESC),
+			Map.entry(MAX, BINARY_DESC), Map.entry(POW, BINARY_DESC), Map.entry(LOGAND, BINARY_DESC),
+			Map.entry(LOGIOR, BINARY_DESC), Map.entry(LOGXOR, BINARY_DESC), Map.entry(ASH, BINARY_DESC),
+			Map.entry(NEG, UNARY_DESC), Map.entry(ABS, UNARY_DESC), Map.entry(SIGNUM, UNARY_DESC),
+			Map.entry(DBL, UNARY_DESC), Map.entry(RATIONAL, UNARY_DESC), Map.entry(LOGNOT, UNARY_DESC),
+			Map.entry(INTEGER_LENGTH, UNARY_DESC), Map.entry(CMP, "(" + OBJ + OBJ + ")I"),
+			Map.entry(CMPB, "(" + OBJ + OBJ + ")I"), Map.entry(LOGBITP, "(" + OBJ + OBJ + ")I"),
+			Map.entry(BIG_OP, "(" + OBJ + ")" + BIG), Map.entry(RAT_NUM, "(" + OBJ + ")" + BIG),
+			Map.entry(RAT_DEN, "(" + OBJ + ")" + BIG), Map.entry(FDIV, "(" + OBJ + OBJ + "I)" + OBJ));
+
+	/**
+	 * The descriptor of a helper a wrong-type operand can escape from, or null.
+	 * @param key the helper's key
+	 * @return its descriptor, or null when it needs no operator wrapper
+	 */
+	static @Nullable String wrappedDesc(String key) {
+		return WRAPPED_DESCS.get(key);
+	}
+
 	private JvmNumericRuntimeBuilder() {
 	}
 
@@ -231,62 +258,31 @@ final class JvmNumericRuntimeBuilder {
 
 	/**
 	 * The constant-pool references the non-number landing needs: the exception class and
-	 * constructor, {@code String.concat}, the generated {@code _lispToString} (the prin1
-	 * renderer, emitted unconditionally), and the two message-prefix constants.
+	 * constructor (the non-finite texts build their own), and the funnels' shared thrower
+	 * ({@link JvmOperandTypeRuntime}).
 	 *
 	 * @param rte {@code java/lang/RuntimeException}
 	 * @param rteInit its {@code (String)} constructor
-	 * @param strConcat {@code String.concat(String)}
-	 * @param lispToString the generated class's {@code _lispToString(Object)}
-	 * @param intPrefix
-	 * {@link am.ik.rontolisp.ClosRegistry#EXPECTED_INTEGER_MESSAGE_PREFIX}
-	 * @param numPrefix
-	 * {@link am.ik.rontolisp.ClosRegistry#EXPECTED_NUMBER_MESSAGE_PREFIX}
+	 * @param throwRefs {@code _teRaw} and the kind names
 	 */
-	record TypeErrRefs(ClassConstant rte, MethodrefConstant rteInit, MethodrefConstant strConcat,
-			MethodrefConstant lispToString, ConstantPool.StringConstant intPrefix,
-			ConstantPool.StringConstant numPrefix, ConstantPool.StringConstant realPrefix) {
+	record TypeErrRefs(ClassConstant rte, MethodrefConstant rteInit, JvmOperandTypeRuntime.ThrowRefs throwRefs) {
 	}
 
 	/**
-	 * Emits {@code throw new RuntimeException(prefix + _lispToString(local0))}. Peak
-	 * operand stack: 4.
+	 * Emits {@code throw _teRaw(local0, kind)}. Peak operand stack: 2.
 	 * @param c the bytecode sink
 	 * @param refs the shared references
-	 * @param numberContext whether to use the "Expected number" prefix (the "Expected
-	 * integer" one otherwise)
+	 * @param numberContext whether the funnel wanted a number (an integer otherwise)
 	 */
 	private static void emitTypeErrThrow(List<Integer> c, TypeErrRefs refs, boolean numberContext) {
-		c.add(Opcode.NEW);
-		JvmRuntimeBuilder.emitU2(c, refs.rte().index());
-		c.add(Opcode.DUP);
-		JvmRuntimeBuilder.emitLdc(c, (numberContext ? refs.numPrefix() : refs.intPrefix()).index());
-		c.add(Opcode.ALOAD_0);
-		c.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(c, refs.lispToString().index());
-		c.add(Opcode.INVOKEVIRTUAL);
-		JvmRuntimeBuilder.emitU2(c, refs.strConcat().index());
-		c.add(Opcode.INVOKESPECIAL);
-		JvmRuntimeBuilder.emitU2(c, refs.rteInit().index());
-		c.add(Opcode.ATHROW);
+		JvmOperandTypeRuntime.ThrowRefs t = refs.throwRefs();
+		t.emitThrow(c, 0, numberContext ? t.numberKind() : t.integerKind());
 	}
 
 	// The real-context twin of emitTypeErrThrow: a complex reaching a real-only
-	// funnel throws the interpreter's "Expected real number" text (catchable as a
-	// type-error by the handler-case prefix classification, like _ccmpb's).
+	// funnel (catchable as a type-error, like _ccmpb's).
 	private static void emitRealErrThrow(List<Integer> c, TypeErrRefs refs) {
-		c.add(Opcode.NEW);
-		JvmRuntimeBuilder.emitU2(c, refs.rte().index());
-		c.add(Opcode.DUP);
-		JvmRuntimeBuilder.emitLdc(c, refs.realPrefix().index());
-		c.add(Opcode.ALOAD_0);
-		c.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(c, refs.lispToString().index());
-		c.add(Opcode.INVOKEVIRTUAL);
-		JvmRuntimeBuilder.emitU2(c, refs.strConcat().index());
-		c.add(Opcode.INVOKESPECIAL);
-		JvmRuntimeBuilder.emitU2(c, refs.rteInit().index());
-		c.add(Opcode.ATHROW);
+		refs.throwRefs().emitThrow(c, 0, refs.throwRefs().realKind());
 	}
 
 	/**
@@ -431,7 +427,8 @@ final class JvmNumericRuntimeBuilder {
 			.addString(am.ik.rontolisp.ClosRegistry.NON_FINITE_ROUNDING_MESSAGE);
 
 		// The non-number landing (_big / _dbl / _abs's BigInteger arm): a plain
-		// RuntimeException carrying "Expected integer|number, got: <prin1>" -- the
+		// RuntimeException carrying "The value <prin1> is not of type INTEGER|NUMBER" --
+		// the
 		// interpreter's exact text, rendered through the unconditional _lispToString.
 		// A checkcast cannot be the check here: null PASSES a checkcast and the failure
 		// then surfaces later as a Java NPE naming BigInteger internals. The landing-pad
@@ -440,14 +437,7 @@ final class JvmNumericRuntimeBuilder {
 		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
 		TypeErrRefs typeErrRefs = new TypeErrRefs(rteClass,
 				cp.addMethodref(rteClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V"))),
-				cp.addMethodref(stringClass,
-						cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;"))),
-				cp.addMethodref(thisClass,
-						cp.addNameAndType(cp.addUtf8("_lispToString"),
-								cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;"))),
-				cp.addString(am.ik.rontolisp.ClosRegistry.EXPECTED_INTEGER_MESSAGE_PREFIX),
-				cp.addString(am.ik.rontolisp.ClosRegistry.EXPECTED_NUMBER_MESSAGE_PREFIX),
-				cp.addString(am.ik.rontolisp.ClosRegistry.EXPECTED_REAL_MESSAGE_PREFIX));
+				JvmOperandTypeRuntime.ThrowRefs.of(cp, thisClass));
 
 		MethodrefConstant bdInitDouble = cp.addMethodref(bigDecClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(D)V")));
@@ -723,7 +713,8 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.emitU2(c, biValueOf.index());
 		c.add(Opcode.ARETURN);
 		JvmRuntimeBuilder.patchBranch(c, ifNotLong, c.size());
-		// Anything but a BigInteger throws the interpreter's "Expected integer" text: a
+		// Anything but a BigInteger throws the interpreter's INTEGER operand-type report
+		// text: a
 		// bare checkcast is not a check here (null passes it and fails later as a Java
 		// NPE naming BigInteger internals, and a cast failure's own text names Java
 		// classes). One instanceof on the widening (out-of-long) arm only.
@@ -1241,7 +1232,8 @@ final class JvmNumericRuntimeBuilder {
 
 	// The exact comparison of a (Double, exact) pair, shared by _cmp and _cmpb: the
 	// operand loaded by dblLoad is a Double, the one loaded by othLoad is exact
-	// (Long/BigInteger/ratio) or the float funnel's "Expected number" throw. A finite
+	// (Long/BigInteger/ratio) or the float funnel's NUMBER operand-type report throw. A
+	// finite
 	// double compares its _frat decomposition against the exact operand's (_ratNum,
 	// _ratDen) by cross-multiplication (every denominator is positive, so the
 	// direction is preserved); an infinity outweighs every exact number on its side.
@@ -1324,18 +1316,8 @@ final class JvmNumericRuntimeBuilder {
 		int ifOthBig = c.size();
 		c.add(Opcode.IFNE);
 		JvmRuntimeBuilder.emitU2(c, 0);
-		c.add(Opcode.NEW);
-		JvmRuntimeBuilder.emitU2(c, typeErrRefs.rte().index());
-		c.add(Opcode.DUP);
-		JvmRuntimeBuilder.emitLdc(c, typeErrRefs.numPrefix().index());
 		c.add(othLoad);
-		c.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(c, typeErrRefs.lispToString().index());
-		c.add(Opcode.INVOKEVIRTUAL);
-		JvmRuntimeBuilder.emitU2(c, typeErrRefs.strConcat().index());
-		c.add(Opcode.INVOKESPECIAL);
-		JvmRuntimeBuilder.emitU2(c, typeErrRefs.rteInit().index());
-		c.add(Opcode.ATHROW);
+		typeErrRefs.throwRefs().emitThrowLoaded(c, typeErrRefs.throwRefs().numberKind());
 		JvmRuntimeBuilder.patchBranch(c, ifOthRat, c.size());
 		JvmRuntimeBuilder.patchBranch(c, ifOthLong, c.size());
 		JvmRuntimeBuilder.patchBranch(c, ifOthBig, c.size());
@@ -1661,26 +1643,16 @@ final class JvmNumericRuntimeBuilder {
 	}
 
 	// _ccmpb(Object a, Object b): like _cmpb, but a complex operand signals the
-	// interpreter's "Expected real number" text instead of comparing -- the
+	// interpreter's REAL operand-type report text instead of comparing -- the
 	// ordering operators' comparison once a complex literal steered them off
 	// the double path (`.kb/jvm-complex.md`).
 	/**
-	 * Emits {@code throw new RuntimeException("Expected real number, got: " +
-	 * _lispToString(value))} for the value loaded by {@code loadOpcode}.
+	 * Emits {@code throw _teRaw(value, "REAL")} for the value loaded by
+	 * {@code loadOpcode}.
 	 */
 	private static void emitRealErrThrow(List<Integer> c, TypeErrRefs refs, int loadOpcode) {
-		c.add(Opcode.NEW);
-		JvmRuntimeBuilder.emitU2(c, refs.rte().index());
-		c.add(Opcode.DUP);
-		JvmRuntimeBuilder.emitLdc(c, refs.realPrefix().index());
 		c.add(loadOpcode);
-		c.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(c, refs.lispToString().index());
-		c.add(Opcode.INVOKEVIRTUAL);
-		JvmRuntimeBuilder.emitU2(c, refs.strConcat().index());
-		c.add(Opcode.INVOKESPECIAL);
-		JvmRuntimeBuilder.emitU2(c, refs.rteInit().index());
-		c.add(Opcode.ATHROW);
+		refs.throwRefs().emitThrowLoaded(c, refs.throwRefs().realKind());
 	}
 
 	/**
@@ -1869,7 +1841,8 @@ final class JvmNumericRuntimeBuilder {
 		int big = c.size();
 		JvmRuntimeBuilder.patchBranch(c, ifBig, big);
 		// Through _big rather than a bare checkcast, so a non-number (which null-passes
-		// a checkcast and NPEs inside BigInteger.abs) throws the "Expected integer"
+		// a checkcast and NPEs inside BigInteger.abs) throws the INTEGER operand-type
+		// report
 		// text at the coercion like every other operator.
 		c.add(Opcode.ALOAD_0);
 		c.add(Opcode.INVOKESTATIC);
@@ -2007,8 +1980,8 @@ final class JvmNumericRuntimeBuilder {
 			@Nullable FieldrefConstant hasComplex) {
 		List<Integer> c = new ArrayList<>();
 		if (rcClass != null) {
-			// Ordering over a complex signals the interpreter's "Expected real
-			// number" text, like the interpreter (min and max select over an
+			// Ordering over a complex signals a REAL operand-type report, like the
+			// interpreter (min and max select over an
 			// ordering, so both throw here). Emitted only for a
 			// complex-capable program, like the _abs arm. The presence probe
 			// first, so a lone class without the file never resolves it
@@ -2096,7 +2069,7 @@ final class JvmNumericRuntimeBuilder {
 		List<Integer> c = new ArrayList<>();
 		if (rcClass != null) {
 			// A complex reaching the f64 coercion is not silently reduced to its
-			// real part: it throws the interpreter's "Expected real number" text.
+			// real part: it throws the interpreter's REAL operand-type report text.
 			// Emitted only for a complex-capable program, so the holder class stays
 			// out of every other constant pool (the _abs arm pattern). The presence
 			// probe first, so a lone class without the file never resolves it
@@ -2140,7 +2113,8 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.ARETURN);
 		JvmRuntimeBuilder.patchBranch(c, ifNotRat, c.size());
 		// A Long or BigInteger widens through Number.doubleValue(); anything else throws
-		// the interpreter's "Expected number" text (the checkcast alone let null through
+		// the interpreter's NUMBER operand-type report text (the checkcast alone let null
+		// through
 		// to an NPE naming Number internals). One instanceof on the non-double slow arm
 		// only -- the Double fast arm above is byte-identical.
 		c.add(Opcode.ALOAD_0);
@@ -3395,9 +3369,9 @@ final class JvmNumericRuntimeBuilder {
 	// _rational(Object x): integers and ratios answer themselves; a finite Double
 	// normalizes through _frat + _rat (the pair is NOT normalized, so it cannot be
 	// answered directly -- _frat is the decomposition, _rat the normalization). A
-	// complex or any other non-real takes the real funnel (the interpreter's
-	// "Expected real number" text, prefix-classified as a type-error like the
-	// interpreter's throw); a NaN or an infinity throws the interpreter's
+	// complex or any other non-real takes the real funnel (a REAL operand-type
+	// report, a type-error like the interpreter's throw); a NaN or an infinity throws the
+	// interpreter's
 	// non-finite text instead.
 	private static NumericMethod buildRational(Utf8Constant name, Utf8Constant desc, ClassConstant longClass,
 			ClassConstant bigClass, ClassConstant doubleClass, ClassConstant ratArrClass, MethodrefConstant rFrat,

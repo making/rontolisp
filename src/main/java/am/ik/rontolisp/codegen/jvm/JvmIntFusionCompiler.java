@@ -522,6 +522,17 @@ final class JvmIntFusionCompiler {
 		return true;
 	}
 
+	/** The operator a compare method's mask came from (maskFor's inverse). */
+	private static String compareOperator(int cmpMask) {
+		return switch (cmpMask) {
+			case JvmNumericRuntimeBuilder.CMPB_LT -> LispNames.LT;
+			case JvmNumericRuntimeBuilder.CMPB_LT | JvmNumericRuntimeBuilder.CMPB_EQ -> LispNames.LE;
+			case JvmNumericRuntimeBuilder.CMPB_GT -> LispNames.GT;
+			case JvmNumericRuntimeBuilder.CMPB_GT | JvmNumericRuntimeBuilder.CMPB_EQ -> LispNames.GE;
+			default -> LispNames.EQ;
+		};
+	}
+
 	/** The synthetic root op a compare method's two operand trees hang under. */
 	private static final String CMP_ROOT = "%cmp";
 
@@ -2075,7 +2086,7 @@ final class JvmIntFusionCompiler {
 			emitFallback(root.args().get(0), ctx, className);
 			emitFallback(root.args().get(1), ctx, className);
 			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.CMPB).index());
+			ctx.emitU2(numOpFor(compareOperator(pending.cmpMask()), JvmNumericRuntimeBuilder.CMPB, ctx).index());
 			JvmEmitHelper.emitIntConst(ctx, pending.cmpMask());
 			ctx.emit(Opcode.IAND);
 			ctx.emit(Opcode.IRETURN);
@@ -2314,11 +2325,11 @@ final class JvmIntFusionCompiler {
 				for (int i = 1; i < op.args().size(); i++) {
 					emitFallback(op.args().get(i), ctx, className);
 					ctx.emit(Opcode.INVOKESTATIC);
-					ctx.emitU2(ctx.numOp(fallbackKey(op.op())).index());
+					ctx.emitU2(numOpFor(op.op(), fallbackKey(op.op()), ctx).index());
 				}
 				if (LispNames.LOGNOT.equals(op.op())) {
 					ctx.emit(Opcode.INVOKESTATIC);
-					ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.LOGNOT).index());
+					ctx.emitU2(numOpFor(op.op(), JvmNumericRuntimeBuilder.LOGNOT, ctx).index());
 				}
 			}
 		}
@@ -2329,6 +2340,22 @@ final class JvmIntFusionCompiler {
 		String name = ctx.usesIntArray ? JvmIntArrayRuntimeBuilder.AREF1
 				: ctx.usesFloatArray ? JvmFloatArrayRuntimeBuilder.AREF1 : JvmArrayRuntimeBuilder.AREF1;
 		return JvmEmitHelper.selfMethod(ctx, className, name, JvmArrayRuntimeBuilder.AREF1_DESC);
+	}
+
+	/**
+	 * A fallback helper under the tree node's own operator: the outlined method is
+	 * compiled away from the form, so the node names a wrong-type operand's report
+	 * ({@link JvmOperandTypeRuntime}).
+	 */
+	private static MethodrefConstant numOpFor(String operator, String key, JvmLispCompiler.Ctx ctx) {
+		@Nullable String outer = ctx.operator;
+		ctx.operator = operator;
+		try {
+			return ctx.numOp(key);
+		}
+		finally {
+			ctx.operator = outer;
+		}
 	}
 
 	private static String fallbackKey(String op) {
