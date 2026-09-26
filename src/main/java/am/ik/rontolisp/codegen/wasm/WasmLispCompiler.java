@@ -4103,7 +4103,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// addresses must exist before any body is compiled. (Like them, the append must
 		// also land before the data segment is snapshotted.)
 		Map<String, Integer> layoutAddresses = this.usesInstances ? WasmInstanceLayouts.emit(closRegistry, stringTable,
-				usedLayoutTags(program, closRegistry, usesEval || restartMode || usesRead)) : Map.of();
+				usedLayoutTags(program, closRegistry, usesEval || usesRead)) : Map.of();
 		Integer keyedLayout = layoutAddresses.get(LispLayout.STRUCT_TAG_PREFIX + LispNames.OBJC_OBJECT_TYPE);
 		this.addressKeyedLayout = keyedLayout != null ? keyedLayout : -1;
 
@@ -11501,10 +11501,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * spellings are symbols in the post-definitions program, so keeping every layout
 	 * whose tag or bare name occurs as ANY symbol (plus the simple-* tags the
 	 * handler-case/signal lowering synthesizes AFTER this scan, inside Pass 2) is a sound
-	 * over-approximation. Unknowable when the program embeds the eval runtime or restart
-	 * mode (evaluated/signal-hook code can reach any registered class), under
-	 * {@code --dynamic}, or when it enumerates subclasses / resolves classes by computed
-	 * name -- the same openings the pruner's class gates bail on.
+	 * over-approximation. Restart mode adds nothing outside it: the signal hook builds
+	 * only the simple-* three. Unknowable when the program embeds the eval runtime
+	 * (evaluated code can reach any registered class), under {@code --dynamic}, or when
+	 * it enumerates subclasses / resolves classes by computed name -- the same openings
+	 * the pruner's class gates bail on.
 	 */
 	private java.util.@Nullable Set<String> usedLayoutTags(List<LispVal> program, ClosRegistry closRegistry,
 			boolean open) {
@@ -11559,7 +11560,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					break;
 				}
 			}
-			// The same for an intern's package-error (lowerPackageError).
+			// The same for an intern's / find-symbol's package-error (lowerPackageError).
 			for (String site : LispMacroExpander.PACKAGE_ERROR_SITES) {
 				if (symbols.contains(site)) {
 					used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.PACKAGE_ERROR_CLASS_NAME);

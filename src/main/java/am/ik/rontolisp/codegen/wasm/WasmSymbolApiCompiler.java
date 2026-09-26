@@ -116,8 +116,8 @@ final class WasmSymbolApiCompiler {
 			// (intern name pkg): the canonical-spelling lowering shared with the 2-arg
 			// find-symbol (an unknown package is a call-time signal, or -- when the
 			// program can create packages -- a runtime-table lookup first).
-			WasmExprCompiler.compileExpr(
-					LispMacroExpander.expandInternInPackage(cons, ctx.packageTable, ctx.usesRuntimePackages), ctx);
+			WasmExprCompiler.compileExpr(LispMacroExpander.expandInternInPackage(cons, ctx.packageTable,
+					ctx.usesRuntimePackages, ctx.functions::containsKey), ctx);
 			return;
 		}
 		compileUnaryCall(cons, LispNames.INTERN, WasmLispCompiler.FUNC_INTERN_SYM, ctx, true);
@@ -165,7 +165,7 @@ final class WasmSymbolApiCompiler {
 	static void compileFindSymbol(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		if (cons.toList().size() == 3) {
 			LispVal inPackage = LispMacroExpander.expandFindSymbolInPackage(cons, ctx.packageTable,
-					ctx.usesRuntimePackages);
+					ctx.usesRuntimePackages, ctx.functions::containsKey);
 			if (inPackage == null) {
 				throw new UnsupportedOperationException(LispNames.FIND_SYMBOL
 						+ " needs a literal package designator in compiled mode: " + cons.print());

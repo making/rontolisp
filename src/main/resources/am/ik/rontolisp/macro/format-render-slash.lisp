@@ -43,7 +43,9 @@
                          (char= (char name (+ k 1)) #\:))
                     (subseq name (+ k 2))
                     (subseq name (+ k 1))))
-               (found (find-symbol member pkg))
+               ;; find-symbol signals for a package that does not exist;
+               ;; the built spellings below still answer then.
+               (found (and (find-package pkg) (find-symbol member pkg)))
                (internal (intern (concatenate 'string pkg "::" member)))
                (external (intern (concatenate 'string pkg ":" member))))
           ;; find-symbol answers the canonical spelling wherever a live symbol

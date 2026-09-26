@@ -690,7 +690,7 @@ class LispMacroExpanderTest {
 		ClosRegistry registry = new ClosRegistry();
 		List<LispVal> expanded = LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source),
 				new HashMap<>(), registry);
-		return LispMacroExpander.conditionNarrowing(expanded, registry, false, false);
+		return LispMacroExpander.conditionNarrowing(expanded, registry, false);
 	}
 
 	@Test
@@ -742,6 +742,36 @@ class LispMacroExpanderTest {
 				(defun boom () (error 'simple-error :format-control "x"))
 				(boom)
 				""").constructibleTags()).isNotNull().doesNotContain("%class-PROGRAM-ERROR");
+	}
+
+	@Test
+	void restartModeNarrowsTheConditionReportRuntime() {
+		// A handler-bind puts the program into restart mode. Every construction restart
+		// mode adds is visible to the scan or always in the set: the signal hook's
+		// instances are the synthesized simple-* three, restart-mode cerror keeps its
+		// error datum, and the restart runtime's defuns are injected before the scan.
+		// So the report partition keeps only what the program can construct, and the
+		// runtime format renderer stays out.
+		List<LispVal> expanded = LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString("""
+				(defun main ()
+				  (handler-bind ((error (lambda (c) (format t "saw ~a~%" c))))
+				    (car 5)))
+				(print (ignore-errors (main)))
+				"""), new HashMap<>(), new ClosRegistry());
+		String report = expanded.stream()
+			.filter(form -> isDefunNamed(form, LispNames.CONDITION_REPORT_STR_INTERNAL))
+			.map(LispVal::print)
+			.findFirst()
+			.orElseThrow();
+		assertThat(report).contains("%class-TYPE-ERROR", "%class-SIMPLE-ERROR")
+			.doesNotContain("%class-END-OF-FILE", "%class-UNBOUND-SLOT", "%class-FILE-ERROR");
+		assertThat(expanded.stream().map(LispVal::print)).noneMatch(printed -> printed.contains(FormatRenderer.RENDER));
+	}
+
+	private static boolean isDefunNamed(LispVal form, String name) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.DEFUN.equals(op.name())
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol defined
+				&& name.equals(defined.name());
 	}
 
 	@Test

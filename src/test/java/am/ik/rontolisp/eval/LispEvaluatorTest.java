@@ -17109,13 +17109,27 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void findSymbolAnswersNilForAPackageThatDoesNotExist() {
-		// CL signals a package-error; the compile paths cannot (no registry at run
-		// time), and probing an OPTIONAL system this way is what libraries do
-		// (postmodern's json-encoder), so all four backends answer nil.
-		assertThat(evalMulti("(find-symbol \"TIMESTAMP\" :simple-date)")).isEqualTo(LispNil.INSTANCE);
-		assertThat(evalMulti("(find-symbol \"TIMESTAMP\" \"SIMPLE-DATE\")")).isEqualTo(LispNil.INSTANCE);
-		assertThat(evalMulti("(find-symbol \"CAR\" nil)")).isEqualTo(LispNil.INSTANCE);
+	void findSymbolInAMissingPackageSignalsACatchablePackageError() {
+		// CLHS: a package designator must name a package. A literal and a computed
+		// designator alike (nil included) signal a package-error a handler catches,
+		// carrying the designator, for either value arity, and create nothing.
+		assertThat(evalMulti("""
+				(defun fse-in (p) (find-symbol "X" p))
+				(list (handler-case (find-symbol "X" "FSE-NOPKG") (error () :caught))
+				      (handler-case (fse-in "FSE-NOPKG")
+				        (package-error (e) (list (package-error-package e) (princ-to-string e))))
+				      (handler-case (fse-in nil) (package-error () :caught))
+				      (handler-case (find-symbol "X" nil) (package-error () :caught))
+				      (handler-case (multiple-value-list (find-symbol "X" :fse-nopkg))
+				        (package-error () :caught))
+				      (handler-case (multiple-value-list (fse-in "FSE-NOPKG")) (package-error () :caught))
+				      (find-package "FSE-NOPKG"))
+				""").print())
+			.isEqualTo("(:CAUGHT (:FSE-NOPKG \"No such package: FSE-NOPKG\") :CAUGHT :CAUGHT :CAUGHT :CAUGHT NIL)");
+		// The optional-system probe libraries write guards on find-package first
+		// (postmodern's json-encoder), and that answers nil.
+		assertThat(evalMulti("(and (find-package :simple-date) (find-symbol \"TIMESTAMP\" :simple-date))"))
+			.isEqualTo(LispNil.INSTANCE);
 		assertThat(evalMulti("(find-package :simple-date)")).isEqualTo(LispNil.INSTANCE);
 		assertThat(evalMulti("(find-package nil)")).isEqualTo(LispNil.INSTANCE);
 	}
@@ -17145,9 +17159,6 @@ class LispEvaluatorTest {
 			.isEqualTo("(:FOO :EXTERNAL)");
 		assertThat(evalMulti("(multiple-value-list (intern \"CAR\" 'common-lisp))").print())
 			.isEqualTo("(CAR :EXTERNAL)");
-		// A package that does not exist provides neither.
-		assertThat(evalMulti("(multiple-value-list (find-symbol \"CAR\" :simple-date))").print())
-			.isEqualTo("(NIL NIL)");
 	}
 
 	@Test

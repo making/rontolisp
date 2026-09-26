@@ -12177,8 +12177,8 @@ cases:
       (defun rps-fs (n p) (find-symbol n p))
       (print (rps-fs "FOO" :keyword))
       (print (rps-fs "CAR" :cl))
-      (print (rps-fs "BAR" nil))
-      (print (find-symbol "TIMESTAMP" :simple-date))
+      (print (handler-case (rps-fs "BAR" nil) (package-error () :caught)))
+      (print (handler-case (find-symbol "TIMESTAMP" :simple-date) (package-error () :caught)))
       (setq rps-name "CAR")
       (print (find-symbol rps-name))
       (defun rps-prepared () 42)
@@ -12201,8 +12201,8 @@ cases:
       NIL
       :FOO
       CAR
-      NIL
-      NIL
+      :CAUGHT
+      :CAUGHT
       CAR
       T
       RPS-PREPARED
@@ -19168,6 +19168,21 @@ cases:
       (2 1)
       (10 1)
 
+  - name: empty-body-let-returns-nil
+    source: |
+      ;; CLHS: a let/let* with no body forms returns nil. Both compilers rejected this
+      ;; with an operand-stack underflow (the body lowering pushed no value).
+      (print (let ((eblrn-p 1))))
+      (print (let* ((eblrn-p 1))))
+      (print (let ()))
+      (defun eblrn-f () (let ((eblrn-p 1))))
+      (print (eblrn-f))
+    expected: |
+      NIL
+      NIL
+      NIL
+      NIL
+
   # eq on NUMBERS is eql on every backend (.kb/eq-numbers.md): a float, ratio or
   # complex compares by type and value, never by box identity, so no optimizer that
   # unboxes or re-boxes can change the answer. -0.0 and 0.0 stay distinct, as for eql.
@@ -20147,6 +20162,26 @@ standalone:
       :CAUGHT
       (:CI-IPE-NOPKG "No such package: CI-IPE-NOPKG")
       :CAUGHT
+      NIL
+  # find-symbol into a package that does not exist signals a catchable
+  # package-error too, for either value arity, and creates nothing.
+  - name: find-symbol-in-a-missing-package
+    source: |
+      (defun ci-fse-in (p) (find-symbol "X" p))
+      (print (handler-case (find-symbol "X" "CI-FSE-NOPKG") (error () :caught)))
+      (print (handler-case (ci-fse-in "CI-FSE-NOPKG")
+               (package-error (e) (list (package-error-package e) (princ-to-string e)))))
+      (print (handler-case (ci-fse-in nil) (package-error () :caught)))
+      (print (handler-case (multiple-value-list (find-symbol "X" :ci-fse-nopkg))
+               (package-error () :caught)))
+      (print (and (find-package :ci-fse-nopkg) (find-symbol "X" :ci-fse-nopkg)))
+      (print (find-package "CI-FSE-NOPKG"))
+    stdout: |
+      :CAUGHT
+      (:CI-FSE-NOPKG "No such package: CI-FSE-NOPKG")
+      :CAUGHT
+      :CAUGHT
+      NIL
       NIL
   - name: uncaught-simple-error-report
     source: |
