@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Tests for the {@code java:} interop functions compiled to a JVM {@code .class} (the
- * embedded {@link JavaBridgeTemplate} bridge). Mirrors the interpreter's
+ * {@link JavaBridgeTemplate} bridge that travels beside it). Mirrors the interpreter's
  * {@code JavaInteropTest} cases so the two backends stay behaviorally identical; every
  * case uses headless, deterministic JDK classes.
  */
@@ -36,8 +36,8 @@ class JvmJavaInteropCompilerTest {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		JvmLispCompiler compiler = new JvmLispCompiler("Test");
 		byte[] classBytes = compiler.compile(program);
-		Path classFile = this.tempDir.resolve("Test.class");
-		Files.write(classFile, classBytes);
+		Files.write(this.tempDir.resolve("Test.class"), classBytes);
+		writeBeside(compiler);
 
 		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
 				ClassLoader.getSystemClassLoader())) {
@@ -60,6 +60,16 @@ class JvmJavaInteropCompilerTest {
 				System.setOut(oldOut);
 			}
 			return baos.toString().trim();
+		}
+	}
+
+	// Writes the class files that travel beside the program (the java: bridge among
+	// them) into the class path root, as the CLI does for -o X.class.
+	private void writeBeside(JvmLispCompiler compiler) throws Exception {
+		for (var file : compiler.runtimeClassFiles().entrySet()) {
+			Path target = this.tempDir.resolve(file.getKey());
+			Files.createDirectories(target.getParent());
+			Files.write(target, file.getValue());
 		}
 	}
 
@@ -355,6 +365,23 @@ class JvmJavaInteropCompilerTest {
 			.hasMessageContaining("java:field expects");
 	}
 
+	// The bridge travels as an ordinary class file beside the program, never as bytes the
+	// program defines at run time: a GraalVM native image cannot define a class at run
+	// time, so a Lookup.defineClass in _javaInit made every java: program fail under
+	// native-image. Named after the program, because it holds that program's _apply.
+	@Test
+	void theBridgeTravelsAsAClassFileBesideTheProgram() throws Exception {
+		JvmLispCompiler compiler = new JvmLispCompiler("com/example/Test");
+		byte[] classBytes = compiler
+			.compile(LispReader.readAllFromString("(print (java:static \"java.lang.Math\" \"max\" 3 7))"));
+		assertThat(compiler.runtimeClassFiles()).containsKey("com/example/Test$JavaBridge.class");
+		String classText = new String(classBytes, java.nio.charset.StandardCharsets.ISO_8859_1);
+		assertThat(classText).doesNotContain("defineClass").doesNotContain("java/util/Base64");
+		byte[] bridge = compiler.runtimeClassFiles().get("com/example/Test$JavaBridge.class");
+		assertThat(new String(bridge, java.nio.charset.StandardCharsets.ISO_8859_1))
+			.doesNotContain("am/ik/rontolisp/codegen/jvm/JavaBridgeTemplate");
+	}
+
 	// The renamed bridge class stays structurally valid: this is implicitly covered by
 	// every test above, but the rename itself must also leave non-matching classes
 	// untouched.
@@ -375,10 +402,9 @@ class JvmJavaInteropCompilerTest {
 		assertThat(roundTripped).isEqualTo(original);
 	}
 
-	// MethodHandles.Lookup.defineClass(byte[]) requires the defined class to share the
-	// lookup class's package, so a generated class that HAS a package must rename the
-	// embedded bridge into that package too -- not into the default package, which is
-	// what every other test above compiles into.
+	// The bridge's entry points are package-private, so a generated class that HAS a
+	// package must rename the bridge into that package too -- not into the default
+	// package, which is what every other test above compiles into.
 	@Test
 	void theBridgeIsRenamedIntoTheGeneratedClassOwnPackage() throws Exception {
 		List<LispVal> program = LispReader.readAllFromString("(print (java:static \"java.lang.Math\" \"max\" 3 7))");
@@ -387,8 +413,10 @@ class JvmJavaInteropCompilerTest {
 		Path packageDir = this.tempDir.resolve("com").resolve("example");
 		Files.createDirectories(packageDir);
 		Files.write(packageDir.resolve("Test.class"), classBytes);
+		writeBeside(compiler);
 
-		String bridgeName = "com/example/" + JvmJavaRuntimeBuilder.BRIDGE_NAME;
+		String bridgeName = JvmJavaRuntimeBuilder.bridgeName("com/example/Test");
+		assertThat(bridgeName).isEqualTo("com/example/Test$JavaBridge");
 		assertThat(new String(classBytes, java.nio.charset.StandardCharsets.ISO_8859_1)).contains(bridgeName);
 
 		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },

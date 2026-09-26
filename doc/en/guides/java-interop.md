@@ -10,10 +10,10 @@ the screen without any bespoke Java glue.
 > host-object references resolved by reflection, so the feature needs a real
 > JVM: it works under the **JVM-hosted interpreter** (`java -jar rontolisp.jar
 > program.lisp`) and in a **JVM-compiled program** (`-o Prog.class`, run with
-> `java Prog`) — the compiler embeds a small reflection bridge into the
-> generated class, so the output stays a single self-contained `.class` file
-> (running one that uses `java:` requires a JRE at least as new as the one
-> rontolisp was built with). The WASM backend cannot lower host references, so
+> `java Prog`) — the compiler writes a small reflection bridge beside the
+> generated class (`Prog$JavaBridge.class`, or an entry inside `-o prog.jar`),
+> and the program needs it on its class path (running one that uses `java:`
+> requires a JRE at least as new as the one rontolisp was built with). The WASM backend cannot lower host references, so
 > compiling `java:` to `.wasm` remains a `Cannot compile: java:...` error. The
 > GraalVM native binary (`rontolisp program.lisp`) can **compile** a `java:`
 > program to a `.class`, but cannot **interpret** one: a native image only
@@ -178,6 +178,23 @@ automatically, which is what lets a Swing `ActionListener` be a plain lambda:
 functions -- wrapped in a `swing` [package](../reference/packages.md) of its own,
 spliced in with `(require :swing "swing.lisp")` -- and `examples/jvm/life-gui.lisp`
 animates Conway's Game of Life with it (`swing:grid-window`, `swing:paint`, ...).
+
+## Native image
+
+A compiled `java:` program builds into a GraalVM native image. The reflective
+calls need reachability metadata, which the tracing agent records from a run:
+
+```bash
+rontolisp prog.lisp -o prog.jar
+java -agentlib:native-image-agent=config-output-dir=config -jar prog.jar
+native-image -jar prog.jar -H:ConfigurationFileDirectories=config
+```
+
+The metadata covers only the calls the traced run made. A call that selects an
+overload the run never selected fails in the image with
+`MissingReflectionRegistrationError` -- for example `(java:static
+"java.lang.Math" "max" 1.5 2.5)` after a run that only passed integers. Trace
+runs that exercise every call shape the program uses.
 
 ## Limitations
 

@@ -7,9 +7,14 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   prints `#<java <class>>`.
 - JVM: `codegen.jvm.JavaBridgeTemplate` re-implements it against the compiled representation
   (raw ref; `"t"` = true; header-slot ArrayList = vector) — **KEEP THE TWO IN SYNC**.
-  `JvmJavaRuntimeBuilder` renames to `RontoLispJavaBridge`, base64-embeds, `Lookup.defineClass`
-  from `_javaInit`; call sites `JvmJavaInteropCompiler`. Needs JRE >= build JRE.
+  `JvmJavaRuntimeBuilder` renames it to `<Program>$JavaBridge` and SHIPS it beside the class
+  (`runtimeClassFiles()`); `_javaInit` only calls `bind(Class)`. Per-program name: `bind` stores
+  that program's `_apply` statically. Call sites `JvmJavaInteropCompiler`. Needs JRE >= build JRE.
 - Native image: template `.class` in `resource-config.json` — COMPILE works, INTERPRET does not.
+- A compiled `-o prog.jar` native-images with agent config (`ShippedBridgeNativeImageE2eTest`,
+  opt-in `-Drontolisp.native-image.e2e=true`). Measured 2026-09-26, GraalVM 25.0.4: the config
+  covers only traced overloads -- an untraced `Math.max(double,double)` answers
+  `MissingReflectionRegistrationError` (user doc: `guides/java-interop.md`, "Native image").
 - WASM: rejected; no `BuiltinFunctionWrappers` entry, so `#'java:call` is a compile error while
   the interpreter allows it.
 - Trap: the template must have NO nested classes/records and NO rontolisp imports.

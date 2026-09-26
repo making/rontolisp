@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -18,13 +17,14 @@ import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 
 /**
- * Builds the {@code geom} kernel bridge for the generated standalone {@code .class}, the
- * shape of {@link JvmBlasRuntimeBuilder} with {@link JvmSimdRuntimeBuilder}'s
- * availability guard: the logic lives in {@link JvmGeomTemplate} (plain Java, compiled by
- * the project build), whose bytecode is read from the classpath at compile time, renamed
- * into the generated program's own package as {@value #BRIDGE_NAME}, base64-encoded and
- * embedded as string constants, and the emitted {@code private static void _geomInit()}
- * decodes and defines it on first use.
+ * Builds the {@code geom} kernel bridge for the generated {@code .class}: the logic lives
+ * in {@link JvmGeomTemplate} (plain Java, compiled by the project build), whose bytecode
+ * is read from the classpath at compile time, renamed after the generated program
+ * ({@code <Program>$GeomBridge}, in its package) and shipped BESIDE it as an ordinary
+ * class file ({@link GeomRuntime#classFiles()}, joined into
+ * {@link JvmLispCompiler#runtimeClassFiles()}) -- never defined at run time, which a
+ * GraalVM native image refuses ({@code .kb/template-class-embedding.md}). The emitted
+ * {@code private static void _geomInit()} only loads it.
  *
  * <p>
  * <b>It is emitted only for a program that CALLS one of the four accelerated members</b>
@@ -35,20 +35,15 @@ import am.ik.jvm.Opcode;
  * <p>
  * Unlike {@code --blas} there is no flag in front of this, so the bridge must never be
  * able to BREAK a program that used to run. {@code _geomInit} therefore catches the
- * {@link LinkageError} a {@code Lookup.defineClass} can raise -- the template carries the
- * project's class version, so a JRE older than the toolchain answers
- * {@code UnsupportedClassVersionError} here -- leaves {@value #AVAILABLE_FIELD} false and
- * says nothing, and {@code _geomReady()} lets every call site skip the attempt and run
- * the spliced {@code geom.lisp} defun instead. That is {@code --simd}'s degrade with the
+ * {@link LinkageError} loading the bridge can raise -- the template carries the project's
+ * class version, so a JRE older than the toolchain answers
+ * {@code UnsupportedClassVersionError}, and a class copied without the file beside it
+ * answers {@code NoClassDefFoundError} -- leaves {@value #AVAILABLE_FIELD} false and says
+ * nothing, and {@code _geomReady()} lets every call site skip the attempt and run the
+ * spliced {@code geom.lisp} defun instead. That is {@code --simd}'s degrade with the
  * warning removed: a flagless acceleration has nothing to tell the user about.
  */
 final class JvmGeomRuntimeBuilder {
-
-	/**
-	 * The name the embedded bridge class is defined under at runtime, relative to the
-	 * generated program's own package (see {@link #build}).
-	 */
-	static final String BRIDGE_NAME = "RontoLispGeomBridge";
 
 	/** The template's internal (constant-pool) class name before renaming. */
 	private static final String TEMPLATE_INTERNAL_NAME = "am/ik/rontolisp/codegen/jvm/JvmGeomTemplate";
@@ -65,10 +60,17 @@ final class JvmGeomRuntimeBuilder {
 	/** The {@code ops} key of the availability accessor ({@link #READY_METHOD}). */
 	static final String AVAILABLE = "available";
 
-	/** Keeps each base64 string constant well under the 65535-byte Utf8 limit. */
-	private static final int CHUNK_SIZE = 40000;
-
 	private JvmGeomRuntimeBuilder() {
+	}
+
+	/**
+	 * The internal name of a program's bridge class: named after the program, in its
+	 * package, so programs built by different rontolisp versions never share one file.
+	 * @param programInternalName the generated class's internal (slash-separated) name
+	 * @return the bridge's internal name
+	 */
+	static String bridgeName(String programInternalName) {
+		return programInternalName + "$GeomBridge";
 	}
 
 	/**
@@ -80,31 +82,22 @@ final class JvmGeomRuntimeBuilder {
 	record GeomRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack,
 			int maxLocals, List<ByteCodeWriter.ExceptionTableEntry> initExceptionTable, Utf8Constant initedFieldName,
 			Utf8Constant initedFieldDesc, Utf8Constant availableFieldName, Utf8Constant availableFieldDesc,
-			Utf8Constant readyName, Utf8Constant readyDesc, List<Integer> readyCode,
-			Map<String, MethodrefConstant> ops) {
+			Utf8Constant readyName, Utf8Constant readyDesc, List<Integer> readyCode, Map<String, MethodrefConstant> ops,
+			Map<String, byte[]> classFiles) {
 	}
 
 	/**
-	 * Builds the {@code _geomInit} / {@code _geomReady} method bodies and registers the
-	 * bridge references.
+	 * Builds the {@code _geomInit} / {@code _geomReady} method bodies, registers the
+	 * bridge references and renames the bridge class file.
 	 * @param cp the constant pool
 	 * @param thisClass the generated class
-	 * @param stringConcat {@code String.concat(String)}
-	 * @param packagePrefix the generated class's package as an internal-name prefix
-	 * ({@code ""} for the default package, otherwise e.g. {@code "com/example/"}) --
-	 * {@code Lookup.defineClass(byte[])} requires the defined class to share the lookup
-	 * class's package, so the bridge is renamed into this one too
+	 * @param programInternalName the generated class's internal name -- the bridge is
+	 * named after it and lives in its package (the bridge methods are package-private)
 	 * @return the runtime pieces
 	 */
-	static GeomRuntime build(ConstantPool cp, ClassConstant thisClass, MethodrefConstant stringConcat,
-			String packagePrefix) {
-		String bridgeName = packagePrefix + BRIDGE_NAME;
+	static GeomRuntime build(ConstantPool cp, ClassConstant thisClass, String programInternalName) {
+		String bridgeName = bridgeName(programInternalName);
 		byte[] bridgeBytes = JvmJavaRuntimeBuilder.renameClass(loadTemplateBytes(), TEMPLATE_INTERNAL_NAME, bridgeName);
-		String base64 = Base64.getEncoder().encodeToString(bridgeBytes);
-		List<ConstantPool.StringConstant> chunks = new ArrayList<>();
-		for (int i = 0; i < base64.length(); i += CHUNK_SIZE) {
-			chunks.add(cp.addString(base64.substring(i, Math.min(base64.length(), i + CHUNK_SIZE))));
-		}
 
 		Utf8Constant initedFieldName = cp.addUtf8("_geomInited");
 		Utf8Constant initedFieldDesc = cp.addUtf8("I");
@@ -114,18 +107,6 @@ final class JvmGeomRuntimeBuilder {
 		FieldrefConstant availableField = cp.addFieldref(thisClass,
 				cp.addNameAndType(availableFieldName, availableFieldDesc));
 
-		ClassConstant base64Class = cp.addClass(cp.addUtf8("java/util/Base64"));
-		MethodrefConstant getDecoder = cp.addMethodref(base64Class,
-				cp.addNameAndType(cp.addUtf8("getDecoder"), cp.addUtf8("()Ljava/util/Base64$Decoder;")));
-		ClassConstant decoderClass = cp.addClass(cp.addUtf8("java/util/Base64$Decoder"));
-		MethodrefConstant decode = cp.addMethodref(decoderClass,
-				cp.addNameAndType(cp.addUtf8("decode"), cp.addUtf8("(Ljava/lang/String;)[B")));
-		ClassConstant methodHandlesClass = cp.addClass(cp.addUtf8("java/lang/invoke/MethodHandles"));
-		MethodrefConstant lookup = cp.addMethodref(methodHandlesClass,
-				cp.addNameAndType(cp.addUtf8("lookup"), cp.addUtf8("()Ljava/lang/invoke/MethodHandles$Lookup;")));
-		ClassConstant lookupClass = cp.addClass(cp.addUtf8("java/lang/invoke/MethodHandles$Lookup"));
-		MethodrefConstant defineClass = cp.addMethodref(lookupClass,
-				cp.addNameAndType(cp.addUtf8("defineClass"), cp.addUtf8("([B)Ljava/lang/Class;")));
 		ClassConstant linkageErrorClass = cp.addClass(cp.addUtf8("java/lang/LinkageError"));
 
 		ClassConstant bridgeClass = cp.addClass(cp.addUtf8(bridgeName));
@@ -146,10 +127,11 @@ final class JvmGeomRuntimeBuilder {
 		// --- _geomInit body (self-contained: no bind callback) ---
 		// if (_geomInited != 0) return;
 		// try {
-		// MethodHandles.lookup().defineClass(Base64.getDecoder().decode(chunks...));
+		// <Program>$GeomBridge.class; -- loads the class file beside the program
 		// _geomAvailable = 1;
 		// } catch (LinkageError e) {
-		// // an older JRE than the template's class version: stay on the defuns.
+		// // missing, or an older JRE than the template's class version: stay on the
+		// defuns.
 		// }
 		// _geomInited = 1;
 		List<Integer> code = new ArrayList<>();
@@ -159,21 +141,7 @@ final class JvmGeomRuntimeBuilder {
 		code.add(Opcode.IFNE);
 		JvmRuntimeBuilder.emitU2(code, 0);
 		int tryStart = code.size();
-		code.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(code, getDecoder.index()); // [decoder]
-		JvmRuntimeBuilder.emitLdc(code, chunks.get(0).index()); // [decoder, str]
-		for (int i = 1; i < chunks.size(); i++) {
-			JvmRuntimeBuilder.emitLdc(code, chunks.get(i).index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			JvmRuntimeBuilder.emitU2(code, stringConcat.index());
-		}
-		code.add(Opcode.INVOKEVIRTUAL);
-		JvmRuntimeBuilder.emitU2(code, decode.index()); // [bytes]
-		code.add(Opcode.INVOKESTATIC);
-		JvmRuntimeBuilder.emitU2(code, lookup.index()); // [bytes, lookup]
-		code.add(Opcode.SWAP); // [lookup, bytes]
-		code.add(Opcode.INVOKEVIRTUAL);
-		JvmRuntimeBuilder.emitU2(code, defineClass.index()); // [class]
+		JvmRuntimeBuilder.emitLdc(code, bridgeClass.index()); // [class]
 		code.add(Opcode.POP);
 		code.add(Opcode.ICONST_1);
 		code.add(Opcode.PUTSTATIC);
@@ -203,8 +171,9 @@ final class JvmGeomRuntimeBuilder {
 		JvmRuntimeBuilder.emitU2(readyCode, availableField.index());
 		readyCode.add(Opcode.IRETURN);
 
-		return new GeomRuntime(initName, initDesc, code, 3, 1, initExceptionTable, initedFieldName, initedFieldDesc,
-				availableFieldName, availableFieldDesc, readyName, readyDesc, readyCode, ops);
+		return new GeomRuntime(initName, initDesc, code, 1, 0, initExceptionTable, initedFieldName, initedFieldDesc,
+				availableFieldName, availableFieldDesc, readyName, readyDesc, readyCode, ops,
+				Map.of(bridgeName + ".class", bridgeBytes));
 	}
 
 	/** Reads the compiled {@link JvmGeomTemplate} bytecode from the classpath. */

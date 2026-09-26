@@ -2,7 +2,7 @@
 
 `java` パッケージは、リフレクションを使って rontolisp から任意の Java API を操作できるようにします。オブジェクトの生成、インスタンスメソッドや静的メソッドの呼び出し、フィールドの読み取り、そして rontolisp のラムダを Java のインターフェース実装へ変換することができます。`examples/` の Swing デモ (`java-interop.lisp`、`swing.lisp`、`life-gui.lisp`) は、専用の Java グルーコードを一切書かずにこのパッケージだけでウィンドウを画面に表示しています。
 
-> **JVM 専用 (インタプリタとコンパイル済み `.class`)。** 連携で得られる値はホストオブジェクトへの不透明な参照であり、呼び出しはリフレクションで解決されるため、本物の JVM が必要です。動作するのは **JVM 上のインタプリタ** (`java -jar rontolisp.jar program.lisp`) と **JVM コンパイル済みプログラム** (`-o Prog.class` でコンパイルし `java Prog` で実行) です — コンパイラは小さなリフレクションブリッジを生成クラスに埋め込むため、出力は従来どおり単一の自己完結した `.class` ファイルのままです (`java:` を使うプログラムの実行には、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です)。WASM バックエンドはホスト参照を表現できないため、`java:` を `.wasm` にコンパイルすると従来どおり `Cannot compile: java:...` エラーになります。GraalVM ネイティブバイナリ (`rontolisp program.lisp`) は `java:` プログラムを `.class` に**コンパイルする**ことはできますが、**インタプリタ実行**はできません。ネイティブイメージにはビルド時にリフレクション登録されたクラス・メンバーしか含まれず、rontolisp のビルドは連携用に何も登録していないため、`(java:static "java.lang.Math" "max" 3 7)` ですら `No such class` で失敗します。
+> **JVM 専用 (インタプリタとコンパイル済み `.class`)。** 連携で得られる値はホストオブジェクトへの不透明な参照であり、呼び出しはリフレクションで解決されるため、本物の JVM が必要です。動作するのは **JVM 上のインタプリタ** (`java -jar rontolisp.jar program.lisp`) と **JVM コンパイル済みプログラム** (`-o Prog.class` でコンパイルし `java Prog` で実行) です — コンパイラは小さなリフレクションブリッジを生成クラスの隣 (`Prog$JavaBridge.class`、`-o prog.jar` ではその中のエントリー) に書き出し、プログラムの実行にはそれがクラスパス上に必要です (`java:` を使うプログラムの実行には、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です)。WASM バックエンドはホスト参照を表現できないため、`java:` を `.wasm` にコンパイルすると従来どおり `Cannot compile: java:...` エラーになります。GraalVM ネイティブバイナリ (`rontolisp program.lisp`) は `java:` プログラムを `.class` に**コンパイルする**ことはできますが、**インタプリタ実行**はできません。ネイティブイメージにはビルド時にリフレクション登録されたクラス・メンバーしか含まれず、rontolisp のビルドは連携用に何も登録していないため、`(java:static "java.lang.Math" "max" 3 7)` ですら `No such class` で失敗します。
 
 ## 関数
 
@@ -135,6 +135,18 @@ Java の `null` (および `void` メソッド) は `nil` として返ります�
 ```
 
 `examples/jvm/swing.lisp` はこの 5 つの関数の上に再利用可能なグリッドウィンドウのヘルパーを構築しています。ヘルパーは独自の `swing` [パッケージ](../reference/packages.md)にまとめられており、`(require :swing "swing.lisp")` で取り込みます。`examples/jvm/life-gui.lisp` はこれを使って (`swing:grid-window`、`swing:paint`、...) ライフゲームをアニメーション表示します。
+
+## ネイティブイメージ
+
+コンパイル済みの `java:` プログラムは GraalVM ネイティブイメージにビルドできます。リフレクション呼び出しには到達可能性メタデータが必要で、トレーシングエージェントが実行から記録します。
+
+```bash
+rontolisp prog.lisp -o prog.jar
+java -agentlib:native-image-agent=config-output-dir=config -jar prog.jar
+native-image -jar prog.jar -H:ConfigurationFileDirectories=config
+```
+
+メタデータがカバーするのはトレースした実行が行った呼び出しだけです。その実行が選ばなかったオーバーロードを選ぶ呼び出しは、イメージ内で `MissingReflectionRegistrationError` になります。たとえば整数だけを渡した実行の後の `(java:static "java.lang.Math" "max" 1.5 2.5)` です。プログラムが使うすべての呼び出しの形を通る実行でトレースしてください。
 
 ## 制限
 

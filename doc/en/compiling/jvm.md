@@ -187,8 +187,8 @@ for the overflow-promoting integer and exact ratio arithmetic) and `java.util`
 `rontolisp:await` / `rontolisp:futurep` represent futures as
 `java.util.concurrent` futures -- all of which are part of Java 17, so none of
 these raise the requirement. The one exception is a program that uses the
-[`java:` interop package](../guides/java-interop.md): the compiler embeds a
-reflection bridge (compiled with the project's own Java release) into the
+[`java:` interop package](../guides/java-interop.md): the compiler writes a
+reflection bridge (compiled with the project's own Java release) beside the
 class, so it needs a JRE at least as new as the one rontolisp was built with.
 
 ## Skip the JIT Warm-Up with an AOT Cache

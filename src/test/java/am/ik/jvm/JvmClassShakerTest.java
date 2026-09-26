@@ -298,7 +298,13 @@ class JvmClassShakerTest {
 				(setq s (java:proxy "java.util.function.Supplier" (lambda (method) 42)))
 				(print (java:call s "get"))
 				""";
-		assertThat(run(compile(source, OptimizeLevel.DEFAULT))).isEqualTo("42");
+		JvmLispCompiler compiler = JvmLispCompiler.builder().className("Test").optimize(OptimizeLevel.DEFAULT).build();
+		byte[] classBytes = compiler.compile(LispReader.readAllFromString(source));
+		// The bridge travels beside the class as its own file.
+		for (var file : compiler.runtimeClassFiles().entrySet()) {
+			Files.write(this.tempDir.resolve(file.getKey()), file.getValue());
+		}
+		assertThat(run(classBytes)).isEqualTo("42");
 	}
 
 	@Test
