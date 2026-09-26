@@ -57,6 +57,21 @@ class JvmSourceCompilerTest {
 	}
 
 	@Test
+	void warningsAsErrorsFailsAnEmbeddedCompileThatWarns() {
+		String source = """
+				(defun add (a b) (+ a b))
+				(defun warned (x) (add x))
+				(rontolisp:jvm-export 'warned :params '(:float) :returns :float)
+				""";
+		assertThatThrownBy(() -> new JvmSourceCompiler("Warned").noMain(true)
+			.warningsAsErrors(true)
+			.compile(source, "warned.lisp")).isInstanceOf(WarningsAsErrorsException.class)
+			.hasMessageContaining("1 warning about the program's source");
+		assertThat(new JvmSourceCompiler("Warned").noMain(true).compile(source, "warned.lisp").classBytes())
+			.isNotEmpty();
+	}
+
+	@Test
 	void aFailureCarriesTheFrontendsPositionPrefix() {
 		assertThatThrownBy(() -> new JvmSourceCompiler("com.example.Broken").compile("""
 				(defmacro m () (error "cannot expand"))

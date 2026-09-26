@@ -280,15 +280,14 @@ final class JvmJavaSites {
 			for (LispCons site : JavaSiteResolver.sitesIn(form)) {
 				JavaSite resolution = resolve(site);
 				if (!resolution.resolved()) {
-					CompileWarnings.warn(SourceProvenance.prefix(site) + "warning: "
-							+ JavaSiteResolver.reflectionWarning(site, resolution));
+					CompileWarnings.warn(site, JavaSiteResolver.reflectionWarning(site, resolution));
 				}
 			}
 			for (LispCons implementationForm : JavaImplementations.formsIn(form)) {
 				JavaImplementation implementation = implementation(implementationForm);
 				if (!implementation.resolved()) {
-					CompileWarnings.warn(SourceProvenance.prefix(implementationForm) + "warning: "
-							+ JavaImplementations.reflectionWarning(implementationForm, implementation));
+					CompileWarnings.warn(implementationForm,
+							JavaImplementations.reflectionWarning(implementationForm, implementation));
 				}
 			}
 		}

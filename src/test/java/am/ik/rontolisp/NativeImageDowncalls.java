@@ -49,11 +49,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * The registration is more than one file under rontolisp's
  * {@code META-INF/native-image/am.ik.rontolisp/}, and rontolisp's own binary reads every
- * one of them; the plain methods ask about that union. The {@code objc:} package's is a
- * file of its own ({@link #OBJC}), which the JVM backend copies into a compiled program
- * so an image built from the user's jar -- which reads only that jar's {@code META-INF}
- * -- needs no configuration. That file must stand ALONE, so its tests ask about it by
- * path.
+ * one of them; the plain methods ask about that union. The {@code objc:} package's and
+ * the {@code --blas} bridge's are files of their own ({@link #OBJC}, {@link #BLAS}),
+ * which the JVM backend copies into a compiled program so an image built from the user's
+ * jar -- which reads only that jar's {@code META-INF} -- needs no configuration. Such a
+ * file must stand ALONE, so its tests ask about it by path.
  *
  * @see am.ik.gpu.NativeImageForeignConfigTest
  * @see am.ik.rontolisp.eval.LinalgBlasDeclineTest
@@ -66,6 +66,9 @@ public final class NativeImageDowncalls {
 
 	/** The {@code objc:} registration a compiled program carries. */
 	public static final Path OBJC = NATIVE_IMAGE.resolve("rontolisp-objc").resolve("reachability-metadata.json");
+
+	/** The {@code --blas} registration a compiled program carries. */
+	public static final Path BLAS = NATIVE_IMAGE.resolve("rontolisp-blas").resolve("reachability-metadata.json");
 
 	/**
 	 * A lookup that finds every name. The address is arbitrary and non-NULL: a handle is

@@ -243,12 +243,17 @@ final class JvmHashRuntimeBuilder {
 	 * @param identityTables whether the program writes {@code :test 'eq} or
 	 * {@code :test 'eql} somewhere, in which case the identity makers and the test reader
 	 * are emitted and the get/put/remove trio compares and hashes by the table's own test
+	 * @param lispTable in a {@code java:} program, the shared test
+	 * ({@code JvmJavaDirectSites#lispTable}) that tells a table from a host
+	 * {@code LinkedHashMap} for {@code hash-table-p}; null elsewhere, where the class
+	 * alone decides
 	 * @return the helper methods
 	 */
 	static List<HashMethod> build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
 			ClassConstant objectArrayClass, MethodrefConstant longValueOf, MethodrefConstant equalMethod,
 			MethodrefConstant eqvMethod, @Nullable MethodrefConstant strvMethod,
-			@Nullable ClassConstant stringArrayClass, boolean equalpFold, boolean identityTables) {
+			@Nullable ClassConstant stringArrayClass, boolean equalpFold, boolean identityTables,
+			@Nullable MethodrefConstant lispTable) {
 		ClassConstant mapClass = cp.addClass(cp.addUtf8(MAP_CLASS));
 		ClassConstant listClass = cp.addClass(cp.addUtf8(LIST_CLASS));
 		ClassConstant integerClass = cp.addClass(cp.addUtf8("java/lang/Integer"));
@@ -488,10 +493,17 @@ final class JvmHashRuntimeBuilder {
 		size.ireturn();
 		methods.add(new HashMethod(cp.addUtf8(SIZE), cp.addUtf8(SIZE_DESC), 1, 1, size.code));
 
-		// _hashP(x): return (x instanceof LinkedHashMap) ? "T" : null
+		// _hashP(x): return (x instanceof LinkedHashMap) ? "T" : null -- in a java:
+		// program
+		// _jltab(x), since a host map is a LinkedHashMap too.
 		JvmAsm hp = new JvmAsm();
 		hp.aload(0);
-		hp.instanceOf(mapClass);
+		if (lispTable != null) {
+			hp.invokestatic(lispTable);
+		}
+		else {
+			hp.instanceOf(mapClass);
+		}
 		int hpFalse = hp.label();
 		hp.branch(Opcode.IFEQ, hpFalse);
 		hp.ldcString(trueStr);

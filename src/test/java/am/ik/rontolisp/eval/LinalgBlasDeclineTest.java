@@ -66,8 +66,11 @@ class LinalgBlasDeclineTest {
 	void everyDowncallShapeIsRegisteredForTheNativeImage() {
 		// Binds the six handles against a lookup that finds everything -- they are made,
 		// never called -- so the shapes are recorded on a machine with no CBLAS too.
+		// They live in a file of their own, which a compiled --blas program carries too
+		// (JvmBlasTemplateNativeImageTest), so this binding must need nothing else.
 		LinalgBlasKernels.bind(NativeImageDowncalls.EVERYTHING);
-		assertThat(NativeImageDowncalls.missing(LinalgBlasKernels.signatures(), LinalgBlasKernels.criticalSignatures()))
+		assertThat(NativeImageDowncalls.missing(NativeImageDowncalls.BLAS, LinalgBlasKernels.signatures(),
+				LinalgBlasKernels.criticalSignatures()))
 			.as("CBLAS downcall shapes with no entry in the native-image metadata -- the binary refuses to bind "
 					+ "them, so --blas declines on a machine whose tuned library is right there")
 			.isEmpty();

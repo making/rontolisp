@@ -765,9 +765,11 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * program's own package instead: a split program's {@code $PartN} classes and the
 	 * template bridges ({@code $JavaBridge}, {@code $GeomBridge}, {@code $SimdBridge},
 	 * {@code $BlasBridge}, and the {@code $Gpu*}, {@code $Objc*} and {@code $Ffi*}
-	 * library copies). Some entries are not classes: the {@code $Gpu*} and {@code $Objc*}
-	 * copies bring their native-image registration under {@code META-INF/native-image/}
-	 * ({@link JvmGpuRuntimeBuilder#nativeImageMetadataPath},
+	 * library copies). Some entries are not classes: {@code $BlasBridge} and the
+	 * {@code $Gpu*} and {@code $Objc*} copies bring their native-image registration under
+	 * {@code META-INF/native-image/}
+	 * ({@link JvmBlasRuntimeBuilder#nativeImageMetadataPath},
+	 * {@link JvmGpuRuntimeBuilder#nativeImageMetadataPath},
 	 * {@link JvmObjcRuntimeBuilder#nativeImageMetadataPath}).
 	 *
 	 * <p>
@@ -1461,7 +1463,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				: CLASS_MAJOR_VERSION;
 		if (javaSites != null) {
 			if (!javaClasses().hasPlatform()) {
-				CompileWarnings.warn("warning: no JDK found (java.home, JAVA_HOME or java on PATH holds no lib/ct.sym):"
+				CompileWarnings.note("warning: no JDK found (java.home, JAVA_HOME or java on PATH holds no lib/ct.sym):"
 						+ " java: sites that name JDK classes are resolved at run time");
 			}
 			javaSites.report(program, this.warnJavaReflection);
@@ -3125,7 +3127,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				? JvmHashRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, longValueOf,
 						Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQUAL)),
 						Objects.requireNonNull(numericRuntime.ops().get(JvmNumericRuntimeBuilder.EQV)), strvMethod,
-						instanceLayoutClass, usesEqualpHashTables, usesIdentityHashTables)
+						instanceLayoutClass, usesEqualpHashTables, usesIdentityHashTables,
+						javaSites != null ? javaSites.direct().lispTable() : null)
 				: List.of();
 
 		// Build the array runtime helpers, only when the program uses arrays. Includes
@@ -3244,13 +3247,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			ClassConstant classClass = cp.addClass(cp.addUtf8("java/lang/Class"));
 			MethodrefConstant classGetName = cp.addMethodref(classClass,
 					cp.addNameAndType(cp.addUtf8("getName"), cp.addUtf8("()Ljava/lang/String;")));
-			ClassConstant arrayListForPrint = cp.addClass(cp.addUtf8("java/util/ArrayList"));
+			JvmJavaDirectSites direct = Objects.requireNonNull(javaSites).direct();
 			javaPrint = new JvmRuntimeBuilder.JavaPrint(bigIntegerClassForPrint, objectGetClass, classGetName,
-					stringConcat, cp.addString("#<java "), cp.addString(">"),
-					cp.addMethodref(arrayListForPrint, cp.addNameAndType(cp.addUtf8("isEmpty"), cp.addUtf8("()Z"))),
-					cp.addMethodref(arrayListForPrint,
-							cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;"))),
-					cp.addClass(cp.addUtf8("[Ljava/lang/Object;")));
+					stringConcat, cp.addString("#<java "), cp.addString(">"), usesArrays ? direct.lispArray() : null,
+					usesHashTables ? direct.lispTable() : null);
 		}
 		else {
 			javaPrint = null;

@@ -156,7 +156,9 @@ parameter per JVM-reaching CLI flag under the same name.
   state is a STATUS FILE (`target/rontolisp/compile-status.txt`), not the output directory.
 - It compiles IN PROCESS: `cli/CompileFrontend` (the shared, order-critical front end) +
   `cli/JvmSourceCompiler`, whose `compileProgram` also serves `-o out.class`/`-o out.jar`;
-  `cli/CompileDiagnostics` reaches Maven as a `MojoFailureException`.
+  `cli/CompileDiagnostics` reaches Maven as a `MojoFailureException` -- so does
+  `warningsAsErrors`' `WarningsAsErrorsException`, at the first file that warns, the files
+  compiled before it already written (the same as a compile error) ([compile-warnings.md](compile-warnings.md)).
 
 ## Tests
 

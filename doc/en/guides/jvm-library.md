@@ -221,7 +221,7 @@ The `testCompile` goal is its twin: `src/test/lisp` into `target/test-classes`, 
 `process-test-sources`.
 
 Every flag that reaches the JVM backend is a parameter under the same name — `simd`,
-`blas`, `gpu`, `parallel`, `optimize`, `dynamic`, `noPrune`, `systemPath`, `dists` — and
+`blas`, `gpu`, `parallel`, `optimize`, `dynamic`, `noPrune`, `warningsAsErrors`, `systemPath`, `dists` — and
 `skip` (`-Drontolisp.skip=true`) turns the goal off. One default differs from the command
 line: `noMain` is **on**, because a source set is a library, and that is also what makes
 an unexported file ordinary Lisp rather than a class. Set `<noMain>false</noMain>` and

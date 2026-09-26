@@ -8,22 +8,17 @@
     "returnType, parameterTypes and options ONLY; a per-entry \"comment\" key is rejected by the",
     "schema, which is why the two groups are described here instead.",
     "",
-    "The objc: package's registration is NOT here: it is its own file,",
-    "META-INF/native-image/am.ik.rontolisp/rontolisp-objc/reachability-metadata.json, which this",
-    "binary reads as well and the JVM backend copies verbatim into a compiled objc: program",
-    "(.kb/objc.md). An image built from the user's jar reads only that jar's META-INF, so the file",
-    "stands alone and repeats the shapes it shares with the ones below.",
+    "The objc: package's registration and the --blas CBLAS one are NOT here: each is its own",
+    "file, META-INF/native-image/am.ik.rontolisp/rontolisp-objc/ and rontolisp-blas/, which this",
+    "binary reads as well and the JVM backend copies verbatim into a compiled objc: or --blas",
+    "program (.kb/objc.md, .kb/linalg-blas.md). An image built from the user's jar reads only that",
+    "jar's META-INF, so each file stands alone and repeats the shapes it shares with the ones below.",
     "",
     "The FIRST THREE are the --native precompile shim's (.kb/native-output.md): rl_precompile",
     "(void*, jlong, void*, void*, void*, void*) -> jint, rl_free (void*, jlong) -> void and",
     "rl_assemble (void*, jlong, void*, jlong, void*, void*) -> jint; its fourth, rl_version",
     "() -> void*, is Metal's MTLCreateSystemDefaultDevice shape and registered below.",
     "NativeToolchainTest pins them.",
-    "",
-    "The --blas CBLAS downcalls (.kb/linalg-blas.md) are the next six: two shapes, each at",
-    "both widths -- gemm (14 parameters) and gemv (12). gemm is registered twice, because a",
-    "product above the critical flop ceiling is issued through the plain",
-    "(thread-transitioning) handle instead.",
     "",
     "The rest are the CUDA driver API downcalls behind am.ik.gpu (.kb/gpu.md), one entry per",
     "distinct SHAPE rather than per entry point -- 29 handles collapse to 18 signatures, in",
@@ -69,7 +64,7 @@
     "declared type, and an ADDRESS is that same jlong -- a pointer and a 64-bit integer are one",
     "parameter on both ABIs the linker serves, so :pointer and :string get no void* of their own.",
     "THREE carriers per parameter. Nothing in the ffi half of either section says void*; the",
-    "void* entries above it are the Metal, CUDA and CBLAS bindings (and objc:'s, in its own file), which build their own",
+    "void* entries above it are the Metal and CUDA bindings (and objc:'s and CBLAS's, in their own files), which build their own",
     "descriptors and are not canonicalised. The grid covers, at every return carrier (void,",
     "jlong, jdouble, jfloat): jlong arguments at arity 0-10, all jlong/jdouble combinations at",
     "arity 1-4, and all three carriers at arity 1-2 -- 172 entries, every one with",
@@ -119,34 +114,6 @@
       {
         "returnType": "jint",
         "parameterTypes": ["void*", "jlong", "void*", "jlong", "void*", "void*"]
-      },
-      {
-        "returnType": "void",
-        "parameterTypes": ["jint", "jint", "jint", "jint", "jint", "jint", "jdouble", "void*", "jint", "void*", "jint", "jdouble", "void*", "jint"],
-        "options": { "critical": { "allowHeapAccess": true } }
-      },
-      {
-        "returnType": "void",
-        "parameterTypes": ["jint", "jint", "jint", "jint", "jint", "jint", "jdouble", "void*", "jint", "void*", "jint", "jdouble", "void*", "jint"]
-      },
-      {
-        "returnType": "void",
-        "parameterTypes": ["jint", "jint", "jint", "jint", "jint", "jint", "jfloat", "void*", "jint", "void*", "jint", "jfloat", "void*", "jint"],
-        "options": { "critical": { "allowHeapAccess": true } }
-      },
-      {
-        "returnType": "void",
-        "parameterTypes": ["jint", "jint", "jint", "jint", "jint", "jint", "jfloat", "void*", "jint", "void*", "jint", "jfloat", "void*", "jint"]
-      },
-      {
-        "returnType": "void",
-        "parameterTypes": ["jint", "jint", "jint", "jint", "jdouble", "void*", "jint", "void*", "jint", "jdouble", "void*", "jint"],
-        "options": { "critical": { "allowHeapAccess": true } }
-      },
-      {
-        "returnType": "void",
-        "parameterTypes": ["jint", "jint", "jint", "jint", "jfloat", "void*", "jint", "void*", "jint", "jfloat", "void*", "jint"],
-        "options": { "critical": { "allowHeapAccess": true } }
       },
       {
         "returnType": "jint",

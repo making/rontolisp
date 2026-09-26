@@ -13,6 +13,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.macro.LispMacroExpander;
 
 /**
@@ -372,7 +373,10 @@ public final class ShadowedBuiltins {
 			}
 			String dispatch = shadowed.get(opName);
 			if (dispatch != null) {
-				return new LispCons(new LispSymbol(dispatch), rewriteTail(cons.cdr(), shadowed, closeShadowed));
+				// Positioned at the call, so a report the backend makes of it (a wrong
+				// argument count) points at the source.
+				return SourceProvenance.inherit(cons,
+						new LispCons(new LispSymbol(dispatch), rewriteTail(cons.cdr(), shadowed, closeShadowed)));
 			}
 		}
 		// Generic: rewrite the operator/elements individually. The tail is walked

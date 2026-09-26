@@ -11,13 +11,15 @@ import am.ik.jvm.Opcode;
  * Compiles the internal {@code %arrayp} predicate used by the {@code vector}/
  * {@code array}/{@code sequence} type specifiers. A general array is a
  * {@code java.util.ArrayList} at runtime (see {@link JvmArrayRuntimeBuilder}), and no
- * other value uses that class, so a plain {@code instanceof} suffices. When the program
- * uses a packed representation, the packed shapes are arrays too: a {@code byte[]} /
- * {@code long[]} (packed integer vector, {@link JvmIntArrayRuntimeBuilder}) and a
- * {@code double[]}/{@code float[]} (packed float array,
- * {@link JvmFloatArrayRuntimeBuilder}) each get a preceding {@code instanceof} branch;
- * without the gates the default build is byte-identical. A quantized matrix, the other
- * {@code byte[]}, is no array: the octet test reads the tag where one can exist.
+ * other Lisp value uses that class, so a plain {@code instanceof} suffices -- except in a
+ * {@code java:} program, where a call can answer a host {@code ArrayList} and the
+ * program's shared {@code _jlarr} test ({@link JvmJavaDirectSites#lispArray()}) decides.
+ * When the program uses a packed representation, the packed shapes are arrays too: a
+ * {@code byte[]} / {@code long[]} (packed integer vector,
+ * {@link JvmIntArrayRuntimeBuilder}) and a {@code double[]}/{@code float[]} (packed float
+ * array, {@link JvmFloatArrayRuntimeBuilder}) each get a preceding {@code instanceof}
+ * branch; without the gates the default build is byte-identical. A quantized matrix, the
+ * other {@code byte[]}, is no array: the octet test reads the tag where one can exist.
  */
 final class JvmArraypCompiler {
 
@@ -64,9 +66,17 @@ final class JvmArraypCompiler {
 			ctx.emitU2(0);
 			JvmEmitHelper.patchBranch(ctx, ifNotPackedPos, ctx.code.size());
 		}
-		// fall through with the value still on the stack for the ArrayList check
-		ctx.emit(Opcode.INSTANCEOF);
-		ctx.emitU2(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")).index());
+		// fall through with the value still on the stack for the ArrayList check -- in a
+		// java: program the shared _jlarr, since a call can answer a host ArrayList
+		JvmJavaSites javaSites = ctx.javaSites;
+		if (javaSites != null) {
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(javaSites.direct().lispArray().index());
+		}
+		else {
+			ctx.emit(Opcode.INSTANCEOF);
+			ctx.emitU2(ctx.cp.addClass(ctx.cp.addUtf8("java/util/ArrayList")).index());
+		}
 		int ifNotListPos = ctx.code.size();
 		ctx.emit(Opcode.IFEQ);
 		ctx.emitU2(0);

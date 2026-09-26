@@ -1,7 +1,10 @@
 package am.ik.rontolisp;
 
+import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Supplier;
 
 import org.jspecify.annotations.Nullable;
 
@@ -92,6 +95,22 @@ public final class SourceProvenance {
 		@Nullable LispVal topLevelForm;
 
 		/**
+		 * The units the source-language seam read: the program's own source, as opposed
+		 * to the library source a splice reads straight through the reader. By identity,
+		 * like {@link #lineStarts}.
+		 */
+		final Set<Unit> programUnits = Collections.newSetFromMap(new IdentityHashMap<>());
+
+		/** How many {@link #readingProgramSource} calls are open on this thread. */
+		int programReads;
+
+		/**
+		 * The innermost located form a backend is compiling ({@link #enterForm}), the
+		 * position a warning about a macro-built form falls back to.
+		 */
+		@Nullable LispCons enclosing;
+
+		/**
 		 * The location of a recorded position: what {@link SourceLocation#at} computes by
 		 * scanning the text from its start, answered through the line index.
 		 */
@@ -155,6 +174,122 @@ public final class SourceProvenance {
 	 */
 	public static boolean isRecording() {
 		return STATE.get() != null;
+	}
+
+	/**
+	 * The unit a reader records its conses against, or {@code null} when this thread is
+	 * not recording. A unit made inside {@link #readingProgramSource} is the program's
+	 * own source.
+	 * @param file the origin file, or {@code null} when unknown
+	 * @param text the full source text of the unit
+	 * @return the unit, or {@code null}
+	 */
+	public static @Nullable Unit unit(@Nullable String file, String text) {
+		State state = STATE.get();
+		if (state == null) {
+			return null;
+		}
+		Unit unit = new Unit(file, text);
+		if (state.programReads > 0) {
+			state.programUnits.add(unit);
+		}
+		return unit;
+	}
+
+	/**
+	 * Runs a read of the PROGRAM's source -- the entry source, a file it loads, a system
+	 * it builds -- so that every unit read inside it is marked as the program's own
+	 * ({@link #programSourceLocation}). Only the source-language seam calls this: the
+	 * library source a splice reads goes straight to the reader and stays unmarked. A
+	 * plain call when this thread is not recording.
+	 * @param <T> what the read produces
+	 * @param read the read
+	 * @return what it produced
+	 */
+	public static <T> T readingProgramSource(Supplier<T> read) {
+		State state = STATE.get();
+		if (state == null) {
+			return read.get();
+		}
+		state.programReads++;
+		try {
+			return read.get();
+		}
+		finally {
+			state.programReads--;
+		}
+	}
+
+	/**
+	 * Where a warning about {@code form} is placed: its own recorded position, or else
+	 * the innermost located form the backend is compiling around it ({@link #enterForm})
+	 * -- a form a macro built has no position of its own, and the call it came from is
+	 * the nearest place that does. {@code null} when neither is known.
+	 * @param form the form the warning is about, or {@code null} for none
+	 * @return the location, or {@code null}
+	 */
+	public static @Nullable SourceLocation warningLocation(@Nullable LispVal form) {
+		State state = STATE.get();
+		if (state == null) {
+			return null;
+		}
+		Position position = position(state, form);
+		return position == null ? null : state.location(position);
+	}
+
+	/**
+	 * {@link #warningLocation}, but only when that position is in the PROGRAM's own
+	 * source ({@link #readingProgramSource}); {@code null} for a form of a spliced
+	 * library, and for one nothing places.
+	 * @param form the form a warning is about, or {@code null} for none
+	 * @return the location in the program's source, or {@code null}
+	 */
+	public static @Nullable SourceLocation programSourceLocation(@Nullable LispVal form) {
+		State state = STATE.get();
+		if (state == null) {
+			return null;
+		}
+		Position position = position(state, form);
+		return position == null || !state.programUnits.contains(position.unit()) ? null : state.location(position);
+	}
+
+	private static @Nullable Position position(State state, @Nullable LispVal form) {
+		Position position = form instanceof LispCons cons ? state.positions.get(cons) : null;
+		if (position == null && state.enclosing != null) {
+			position = state.positions.get(state.enclosing);
+		}
+		return position;
+	}
+
+	/**
+	 * Enters a form a backend compiles: until the matching {@link #leaveForm}, a warning
+	 * about an unplaced form is placed at the innermost located form entered
+	 * ({@link #warningLocation}). A form with no position leaves the enclosing one in
+	 * place.
+	 * @param form the form about to be compiled
+	 * @return what {@link #leaveForm} restores
+	 */
+	public static @Nullable LispCons enterForm(LispCons form) {
+		State state = STATE.get();
+		if (state == null) {
+			return null;
+		}
+		LispCons previous = state.enclosing;
+		if (state.positions.containsKey(form)) {
+			state.enclosing = form;
+		}
+		return previous;
+	}
+
+	/**
+	 * Leaves a form entered by {@link #enterForm}, in a {@code finally}.
+	 * @param previous what {@link #enterForm} answered
+	 */
+	public static void leaveForm(@Nullable LispCons previous) {
+		State state = STATE.get();
+		if (state != null) {
+			state.enclosing = previous;
+		}
 	}
 
 	/**

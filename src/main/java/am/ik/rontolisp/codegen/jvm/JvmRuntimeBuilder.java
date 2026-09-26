@@ -1360,7 +1360,7 @@ final class JvmRuntimeBuilder {
 		// "#<HASH-TABLE>" for a hash table, "#<java class>" for a wrapped host object
 		// (java: interop), then val.toString()
 		patchBranch(code, ifNotArrayPos, code.size());
-		emitHashTableBranch(code, hashPrint);
+		emitHashTableBranch(code, hashPrint, javaPrint);
 		emitDefaultTail(code, objectToString, javaPrint, objcPrint, ffiPrint);
 
 		return code;
@@ -2235,7 +2235,7 @@ final class JvmRuntimeBuilder {
 		// "#<HASH-TABLE>" for a hash table, "#<java class>" for a wrapped host object
 		// (java: interop), then val.toString()
 		patchBranch(code, ifNotArrayPos, code.size());
-		emitHashTableBranch(code, hashPrint);
+		emitHashTableBranch(code, hashPrint, javaPrint);
 		emitDefaultTail(code, objectToString, javaPrint, objcPrint, ffiPrint);
 
 		return code;
@@ -2450,12 +2450,15 @@ final class JvmRuntimeBuilder {
 	 * Constant-pool references for printing a wrapped {@code java:} host object as
 	 * {@code #<java class.Name>} (interpreter parity), threaded into the two
 	 * lisp-to-string builders only when the program uses {@code java:} interop -- which
-	 * is also when an {@code ArrayList} may be a host object rather than a Lisp array, so
-	 * the array branch checks for the array's header first.
+	 * is also when an {@code ArrayList} / {@code LinkedHashMap} may be a host object
+	 * rather than a Lisp array / hash table, so those branches ask the program's shared
+	 * tests ({@code lispArray} = {@code _jlarr}, {@code lispTable} = {@code _jltab})
+	 * first.
 	 */
 	record JavaPrint(ClassConstant bigIntegerClass, MethodrefConstant objectGetClass, MethodrefConstant classGetName,
 			MethodrefConstant stringConcat, ConstantPool.StringConstant prefix, ConstantPool.StringConstant suffix,
-			MethodrefConstant arrayListIsEmpty, MethodrefConstant arrayListGet, ClassConstant objectArrayClass) {
+			@org.jspecify.annotations.Nullable MethodrefConstant lispArray,
+			@org.jspecify.annotations.Nullable MethodrefConstant lispTable) {
 	}
 
 	/**
@@ -2477,10 +2480,11 @@ final class JvmRuntimeBuilder {
 	 *
 	 * <p>
 	 * {@code mapClass} is {@link JvmHashRuntimeBuilder#MAP_CLASS}, the runtime class a
-	 * COMPILED table has and a host {@code java:} map does not: without a branch of its
-	 * own a table used to fall through to {@code toString()} and print Java's own map
-	 * syntax -- container braces, the raw {@code Object[]} entry pair, and an IDENTITY
-	 * HASH, which made the same program print different text on two runs
+	 * COMPILED table has -- and a host {@code java:} map too, so a {@code java:} program
+	 * tests {@link JavaPrint#lispTable} instead: without a branch of its own a table used
+	 * to fall through to {@code toString()} and print Java's own map syntax -- container
+	 * braces, the raw {@code Object[]} entry pair, and an IDENTITY HASH, which made the
+	 * same program print different text on two runs
 	 * ({@code .kb/emitted-output-determinism.md}). The count comes from {@code mapSize},
 	 * the {@code _hashSize} helper {@code _hashCount} reads too, so the printed number
 	 * and {@code hash-table-count} cannot disagree.
@@ -3264,14 +3268,22 @@ final class JvmRuntimeBuilder {
 	// :COUNT ".concat(Integer.toString(map.size())).concat(">")" -- the interpreter's
 	// LispHashTable.print() answer, so all four backends print one table identically. A
 	// no-op in a program that never makes a table.
-	private static void emitHashTableBranch(List<Integer> code,
-			@org.jspecify.annotations.Nullable HashPrint hashPrint) {
+	private static void emitHashTableBranch(List<Integer> code, @org.jspecify.annotations.Nullable HashPrint hashPrint,
+			@org.jspecify.annotations.Nullable JavaPrint javaPrint) {
 		if (hashPrint == null) {
 			return;
 		}
 		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.INSTANCEOF);
-		emitU2(code, hashPrint.mapClass().index());
+		if (javaPrint != null && javaPrint.lispTable() != null) {
+			// A java: call can answer a LinkedHashMap of its own: a host object, printed
+			// by the #<java ...> tail.
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, java.util.Objects.requireNonNull(javaPrint.lispTable()).index());
+		}
+		else {
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, hashPrint.mapClass().index());
+		}
 		int skip = code.size();
 		code.add(Opcode.IFEQ);
 		emitU2(code, 0);
@@ -3580,25 +3592,11 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.IFEQ);
 		emitU2(code, 0);
 		if (javaPrint != null) {
-			// A java: call can answer an ArrayList of its own, which is a host object: a
-			// Lisp array's slot 0 is its Object[] header (the bridge's kindOf test), and
-			// anything else falls through to the #<java ...> tail.
+			// A java: call can answer an ArrayList of its own, which is a host object and
+			// falls through to the #<java ...> tail.
 			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, arrayListClass.index());
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, javaPrint.arrayListIsEmpty().index());
-			notArray.add(code.size());
-			code.add(Opcode.IFNE);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.CHECKCAST);
-			emitU2(code, arrayListClass.index());
-			code.add(Opcode.ICONST_0);
-			code.add(Opcode.INVOKEVIRTUAL);
-			emitU2(code, javaPrint.arrayListGet().index());
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, javaPrint.objectArrayClass().index());
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, java.util.Objects.requireNonNull(javaPrint.lispArray()).index());
 			notArray.add(code.size());
 			code.add(Opcode.IFEQ);
 			emitU2(code, 0);

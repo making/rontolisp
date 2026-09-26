@@ -2979,7 +2979,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean anySuspendingImportEscapes = (!suspendingImports.isEmpty() || this.hostFetch)
 				&& SuspendingImports.anyTakenAsValue(program, suspendingImports.keySet(), this.hostFetch);
 		if (!suspendingImports.isEmpty()) {
-			CompileWarnings.warn(":async t: this module imports " + String.join(", ", suspendingImports.values())
+			CompileWarnings.note(":async t: this module imports " + String.join(", ", suspendingImports.values())
 					+ ", declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the"
 					+ " exports that can reach one through WebAssembly.promising, and "
 					+ (this.reentrant ? "may OVERLAP calls (--reentrant: the module owns its per-call state; a"
@@ -2993,7 +2993,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			if (anySuspendingImportEscapes) {
 				// Whoever received it can call it, so the per-export answer below would
 				// under-report -- widen it to every export instead.
-				CompileWarnings.warn(":async t: a function that can reach a suspending import is taken as a value"
+				CompileWarnings.note(":async t: a function that can reach a suspending import is taken as a value"
 						+ " (#'name), so ANY export may reach one -- enter every export through"
 						+ " WebAssembly.promising");
 			}
@@ -3009,7 +3009,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					}
 				}
 				if (!exportsReaching.isEmpty()) {
-					CompileWarnings.warn(":async t: the exports that can reach a suspending import -- enter each"
+					CompileWarnings.note(":async t: the exports that can reach a suspending import -- enter each"
 							+ " through WebAssembly.promising: " + String.join(", ", exportsReaching));
 				}
 			}
@@ -3077,8 +3077,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			// so (the clock's line is a HOST OBLIGATION rather than a refusal: it names
 			// __ronto_set_time). Before the rewrite below, which is what takes the
 			// file-opening forms out of the program.
-			NoWasiLoadPathRefusals.report(program, this.hostRandom, this.hostFetch, this.component)
-				.forEach(CompileWarnings::warn);
+			NoWasiLoadPathRefusals.warn(program, this.hostRandom, this.hostFetch, this.component);
 			// --host-fetch states its host obligation once, whatever position fetch
 			// sits in: the compiler emits nothing for the suspension, so the BUILD is
 			// the only place that can say what the host now owes (the clock-hook
@@ -3091,7 +3090,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// one shape: with the reply body in band there is no second import, no
 				// pull and no mid-body failure to warn about.
 				boolean split = declaresImport(program, FetchResponseShape.HOST_BODY_IMPORT_FIELD);
-				CompileWarnings.warn("--host-fetch: this module imports env.fetch(request-json) -> " + (split
+				CompileWarnings.note("--host-fetch: this module imports env.fetch(request-json) -> " + (split
 						? "response-head-json and env.readResponseBody(" + (this.reentrant ? "reply-id, " : "")
 								+ "ptr, cap) -> i32, and every rontolisp:fetch crosses both"
 								+ " -- the head with the call, the reply BODY pulled out of band afterwards (0 = end"

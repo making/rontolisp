@@ -361,6 +361,9 @@ final class JvmExprCompiler {
 		// The code this form compiles to reports the form's site when it fails
 		// (JvmSourceSites): the innermost located form wins, as in the interpreter.
 		int site = ctx.enterSite(cons);
+		// A warning about a form a macro built is placed at this one when it is the
+		// innermost located form around it (CompileWarnings).
+		LispCons enclosing = SourceProvenance.enterForm(cons);
 		try {
 			compileConsLocated(cons, ctx, className);
 		}
@@ -372,6 +375,7 @@ final class JvmExprCompiler {
 		finally {
 			ctx.operator = outerOperator;
 			ctx.leaveSite(site);
+			SourceProvenance.leaveForm(enclosing);
 		}
 	}
 
@@ -2243,7 +2247,7 @@ final class JvmExprCompiler {
 	 */
 	private static void warnClRedefinition(String name, LispCons cons, JvmLispCompiler.Ctx ctx) {
 		if (ctx.warnedClRedefinitions.add(name)) {
-			CompileWarnings.warn(SourceProvenance.prefix(cons) + ClRedefinitionWarnings.message(name));
+			CompileWarnings.warn(cons, ClRedefinitionWarnings.message(name));
 		}
 	}
 

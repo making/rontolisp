@@ -343,6 +343,9 @@ final class WasmExprCompiler {
 		// --report-locations: the frame's line local holds this form's line while it runs
 		// (WasmUncaughtLocations; a no-op outside a frame).
 		long located = WasmUncaughtLocations.enterForm(cons, ctx);
+		// A warning about a form a macro built is placed at this one when it is the
+		// innermost located form around it (CompileWarnings).
+		LispCons enclosing = SourceProvenance.enterForm(cons);
 		try {
 			compileConsLocated(cons, ctx, tail);
 		}
@@ -353,6 +356,7 @@ final class WasmExprCompiler {
 		}
 		finally {
 			ctx.operator = outerOperator;
+			SourceProvenance.leaveForm(enclosing);
 		}
 		WasmUncaughtLocations.leaveForm(located, cons, ctx);
 	}
@@ -2626,7 +2630,7 @@ final class WasmExprCompiler {
 	 */
 	private static void warnClRedefinition(String name, LispCons cons, WasmLispCompiler.Ctx ctx) {
 		if (ctx.warnedClRedefinitions.add(name)) {
-			CompileWarnings.warn(SourceProvenance.prefix(cons) + ClRedefinitionWarnings.message(name));
+			CompileWarnings.warn(cons, ClRedefinitionWarnings.message(name));
 		}
 	}
 

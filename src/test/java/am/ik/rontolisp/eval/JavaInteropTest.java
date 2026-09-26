@@ -438,6 +438,13 @@ class JavaInteropTest {
 		assertThat(output(JavaInteropPrograms.HOST_OBJECT_PROGRAM)).isEqualTo(JavaInteropPrograms.HOST_OBJECT_OUTPUT);
 	}
 
+	// Mirrors JvmJavaInteropCompilerTest#aHostCollectionIsNoLispArrayOrTable.
+	@Test
+	void aHostCollectionIsNoLispArrayOrTable() {
+		assertThat(output(JavaInteropPrograms.HOST_COLLECTION_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.HOST_COLLECTION_OUTPUT);
+	}
+
 	// What a dispatched site counted on is checked before it chooses: a declared argument
 	// that is not an instance of its class is an error, and arguments no overload takes
 	// are reported as the run-time resolution reports them.

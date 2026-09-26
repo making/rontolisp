@@ -9,6 +9,7 @@ import org.jspecify.annotations.Nullable;
 
 import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
@@ -111,6 +112,14 @@ public enum SourceLanguage {
 	 */
 	public List<LispVal> read(String source, Features features, @Nullable String file, SourceStandards standards,
 			@Nullable SourceLoader loader) {
+		// What the seam reads is the PROGRAM's source; a library a splice reads goes to
+		// the reader directly. The compile path tells the two apart by this mark
+		// (CompileWarnings counts only the program's warnings).
+		return SourceProvenance.readingProgramSource(() -> readProgram(source, features, file, standards, loader));
+	}
+
+	private List<LispVal> readProgram(String source, Features features, @Nullable String file,
+			SourceStandards standards, @Nullable SourceLoader loader) {
 		if (this == SCHEME) {
 			return refuseCircularLists(Scheme.read(source, file, standards.scheme(), schemeFiles(loader)), source,
 					file);

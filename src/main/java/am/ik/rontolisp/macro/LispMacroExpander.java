@@ -43801,7 +43801,7 @@ public final class LispMacroExpander {
 			if (LispNames.PROGN.equals(sym.name()) || LispNames.LOCALLY.equals(sym.name())) {
 				List<LispVal> parts = cons.toList();
 				for (int i = 1; i < parts.size(); i++) {
-					flattenTopLevelInto(parts.get(i), out);
+					flattenTopLevelInto(splicedPart(cons, parts.get(i)), out);
 				}
 				return;
 			}
@@ -43814,7 +43814,7 @@ public final class LispMacroExpander {
 				List<LispVal> parts = cons.toList();
 				if (parts.size() >= 2) {
 					for (int i = 2; i < parts.size(); i++) {
-						flattenTopLevelInto(parts.get(i), out);
+						flattenTopLevelInto(splicedPart(cons, parts.get(i)), out);
 					}
 					return;
 				}
@@ -43826,12 +43826,24 @@ public final class LispMacroExpander {
 			// pairs; flattening that keeps each a top-level definition.
 			if (isUiopWithDeprecationWrapper(sym.name())) {
 				if (cons.toList().size() >= 2) {
-					flattenTopLevelInto(expandUiopWithDeprecation(cons), out);
+					flattenTopLevelInto(splicedPart(cons, expandUiopWithDeprecation(cons)), out);
 					return;
 				}
 			}
 		}
 		out.add(form);
+	}
+
+	/**
+	 * A form spliced out of a top-level wrapper keeps the wrapper's position when it has
+	 * none of its own (compile path only): a user macro that expands to a {@code progn}
+	 * of definitions built them, and the macro CALL -- whose position the {@code progn}
+	 * inherited -- is where a warning about one of them belongs. A form read from source
+	 * keeps its own.
+	 */
+	private static LispVal splicedPart(LispCons wrapper, LispVal part) {
+		SourceProvenance.inheritWhenCompiling(wrapper, part);
+		return part;
 	}
 
 	private static LispCons listToCons(List<LispVal> elements) {

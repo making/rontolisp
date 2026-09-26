@@ -64,11 +64,11 @@ public final class ClRedefinitionWarnings {
 	 * accident described above, so a message claiming "the interpreter honours it" would
 	 * be wrong for {@code first} while being right for {@code car}.
 	 * @param name the {@code cl} function name the program redefined
-	 * @return the complete warning line minus the position prefix, which the caller
-	 * prepends (the shape {@code CompileWarnings} callers already use)
+	 * @return the warning's text, without the {@code warning: } label and the position
+	 * that {@code CompileWarnings.warn} puts in front of it
 	 */
 	public static String message(String name) {
-		return "warning: (defun " + name + " ...) redefines the COMMON-LISP function " + name + ", but a (" + name
+		return "(defun " + name + " ...) redefines the COMMON-LISP function " + name + ", but a (" + name
 				+ " ...) call site here compiles to the standard operator, so the definition is not what runs"
 				+ " (a #'" + name + " function value still names it). Defining a function on a COMMON-LISP symbol"
 				+ " has undefined consequences (CLHS 11.1.2.1.2): rename it, or shadow the symbol in a package"
