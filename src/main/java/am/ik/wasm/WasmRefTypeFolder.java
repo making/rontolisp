@@ -2146,6 +2146,9 @@ public final class WasmRefTypeFolder {
 					}
 					push(new Val(true, narrowed, null, v.local(), v.getPos(), v.spanStart()));
 				}
+				case 0x18, 0x19 -> {
+					return stepCastBranch(i, in);
+				}
 				case 0x1C -> { // ref.i31
 					Val a = pop();
 					push(Val.ref(this.m.i31Set, a.spanStart()));
@@ -2159,6 +2162,105 @@ public final class WasmRefTypeFolder {
 			}
 			emit(in);
 			return i + 1;
+		}
+
+		// br_on_cast (0x18) / br_on_cast_fail (0x19): the operand's set splits into the
+		// part that passes the cast and the part that fails it; one goes to the label,
+		// the other falls through. A side no value takes is a branch never taken (a
+		// br_on_cast_fail then becomes the cast its fall-through is) or never skipped (a
+		// br_on_cast_fail on a non-null cast then becomes the br it always is -- with a
+		// nullable cast the label wants the operand non-null, which a br does not say).
+		// Falling through is a guard on the operand's local, as a br_if's is.
+		private int stepCastBranch(int i, Instr in) {
+			WasmCodeModel.CastBranch cast = java.util.Objects.requireNonNull(in.cast);
+			boolean onFail = in.sub == 0x19;
+			int depth = (int) in.a;
+			Frame fr = top();
+			Val v = pop();
+			BitSet set = v.refSet();
+			if (set.isEmpty()) {
+				// Nothing reaches the branch: the code from here on is dead.
+				if (this.out != null) {
+					this.out.write(0x00);
+				}
+				return unreachable(fr);
+			}
+			@Nullable BitSet target = this.m.heapTypeSet(cast.to());
+			BitSet pass;
+			BitSet fail;
+			if (target == null) {
+				pass = set;
+				fail = set;
+			}
+			else {
+				if (cast.toNullable()) {
+					target = (BitSet) target.clone();
+					target.or(this.m.nullSet);
+				}
+				pass = (BitSet) set.clone();
+				pass.and(target);
+				fail = (BitSet) set.clone();
+				fail.andNot(target);
+			}
+			BitSet taken = onFail ? fail : pass;
+			BitSet falls = onFail ? pass : fail;
+			if (taken.isEmpty()) {
+				if (onFail) {
+					if (this.out != null) {
+						this.out.write(0xFB);
+						this.out.writeU(cast.toNullable() ? 0x17 : 0x16);
+						this.out.writeS(cast.to());
+					}
+				}
+				else if (cast.toNullable()) {
+					// The fall-through is typed non-null: keep the instruction that says
+					// so.
+					emitCastBranch(in, depth);
+				}
+				push(new Val(true, falls, null, v.local(), v.getPos(), v.spanStart()));
+				return i + 1;
+			}
+			push(Val.ref(taken, v.spanStart()));
+			if (falls.isEmpty()) {
+				branchTo(depth, true);
+				if (onFail && !cast.toNullable()) {
+					emitBranch(null, 0x0C, depth);
+				}
+				else {
+					emitCastBranch(in, depth);
+					if (this.out != null) {
+						this.out.write(0x00);
+					}
+				}
+				return unreachable(fr);
+			}
+			branchTo(depth, false);
+			pop();
+			emitCastBranch(in, depth);
+			push(new Val(true, falls, null, v.local(), v.getPos(), v.spanStart()));
+			if (v.local() >= 0 && target != null) {
+				addRefinement(new Bool(v.local(), target, false, v.getPos()), onFail, i, regionEnd(fr, i));
+			}
+			return i + 1;
+		}
+
+		// Emits a br_on_cast(_fail) with its label depth adjusted for spliced-in arms.
+		private void emitCastBranch(Instr in, int depth) {
+			if (this.out == null) {
+				return;
+			}
+			int adjusted = adjustedDepth(depth, this.frames.size());
+			if (adjusted == depth) {
+				emit(in);
+				return;
+			}
+			WasmCodeModel.CastBranch cast = java.util.Objects.requireNonNull(in.cast);
+			this.out.write(0xFB);
+			this.out.writeU(in.sub);
+			this.out.write((cast.fromNullable() ? 0x01 : 0) | (cast.toNullable() ? 0x02 : 0));
+			this.out.writeU(adjusted);
+			this.out.writeS(cast.from());
+			this.out.writeS(cast.to());
 		}
 
 		private int stepNumeric(int i, Instr in) {

@@ -1817,6 +1817,57 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void checkedConsAccessAnswersTheSameAtEveryLevel() throws Exception {
+		// The same shapes in EH mode, where a site is CHECKED
+		// (.kb/cons-access-runtime.md):
+		// one br_on_cast_fail over the operand on the stack, the checked _car/_cdr body
+		// on the miss -- inline at the default levels, the body alone at the size level.
+		// Nil and a cons answer as before at every level, whatever the operand (a
+		// parameter, a special, a nested read, a do-stepped local, apply's walk), and a
+		// non-list is CAR's / CDR's catchable type-error, wherever a site took it: an
+		// inline site, a nested one, a walk that ran off a dotted tail.
+		String program = """
+				(defvar *l* (list 1 (list 2 3) nil))
+				(defun second-of (x) (car (cdr x)))
+				(defun walk (l) (let ((n 0)) (do ((c l (cdr c))) ((null c) n) (when (car c) (setq n (+ n 1))))))
+				(defun three (a b c) (list a b c))
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e)))))
+				(print (car nil))
+				(print (cdr nil))
+				(print (car *l*))
+				(print (second-of *l*))
+				(print (car (car (cdr *l*))))
+				(print (walk *l*))
+				(print (apply (car (list #'three)) 1 '(2 3)))
+				(print (te (lambda () (car 5))))
+				(print (te (lambda () (second-of (cons 1 "s")))))
+				(print (te (lambda () (walk (cons 1 2)))))
+				(print (te (lambda () (car (car *l*)))))
+				""";
+		String expected = """
+				NIL
+				NIL
+				1
+				(2 3)
+				2
+				2
+				(1 2 3)
+				("CAR: The value 5 is not of type LIST" 5)
+				("CAR: The value \\"s\\" is not of type LIST" "s")
+				("CAR: The value 2 is not of type LIST" 2)
+				("CAR: The value 1 is not of type LIST" 1)""";
+		// type-error-datum is prelude Lisp.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(program));
+		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			byte[] module = WasmLispCompiler.builder().optimize(level).build().compile(forms);
+			assertThat(runModule(module, "checked-cons-" + level.name().toLowerCase() + ".wasm")).as(level.name())
+				.isEqualTo(expected);
+		}
+	}
+
+	@Test
 	void theSizeLevelDeclinesTheSpeedTradesWithoutChangingAnyResult() throws Exception {
 		// --optimize=size declines the two wasm-GC emissions that spend bytes on speed:
 		// integer expression-tree fusion (every fused site emits its tree TWICE, raw

@@ -15,10 +15,50 @@ level alone, never by the program:
 
 - **EH mode checks** ([error-handling.md](error-handling.md), "A wrong-type argument names its
   operator"): there the bodies are CHECKED (nil answers nil, a non-list is `CAR`'s/`CDR`'s
-  type-error through `_type_err_list`) and an inline site is `local.get x; ref.test $cons; if
-  (result eqref) local.get x; ref.cast $cons; struct.get else local.get x; call _car end` -- the
-  checked body is its slow path, so the two still answer alike. A size-level site is unchanged.
-  The double type test costs a tight traversal +28% (`.todo/979`).
+  type-error through `_type_err_list`), and an inline site tests the type ONCE, over the operand
+  on the stack (`WasmEmitHelper.emitCheckedConsField`): `<operand> block (eqref -> eqref) block
+  (eqref -> eqref) br_on_cast_fail 0 eqref (ref $cons); struct.get $cons k; br 1 end; call _car
+  end` (20-21 B + the operand). The blocks take the operand as their parameter, so no operand is
+  ever spilled or read twice -- `plainLocalSlot` plays no part here -- and the miss (nil or a
+  non-list) is the checked body with the operand still on the stack, so the two answer alike. The
+  body itself is `local.get 0` and the same shape, its miss arm the nil test and the landing;
+  `nthcdr`'s walk steps with it too (nil has left the loop by then, so its miss is `NTHCDR`'s
+  landing, `WasmEmitHelper.emitListTypeError`). A size-level site is unchanged.
+- **Why `br_on_cast_fail`.** The first checked site (`local.get x; ref.test $cons; if (result
+  eqref) local.get x; ref.cast $cons; struct.get else local.get x; call _car end`) tested the type
+  twice on the cons path. Measured 2026-09-26, wasmtime 49, median of 9, an EH module, each loop
+  over a 1M-element list (ms; "unchecked" = the non-EH inline shape forced into the same module):
+
+  | loop | two tests | unchecked | `br_on_cast_fail` |
+  | --- | --- | --- | --- |
+  | `(+ s (car l))`, `(setq l (cdr l))` x40 | 113 | 84 | 92 |
+  | the same, `-C inlining=y` | 91 | 71 | 64 |
+  | `(setq n (+ n 1))`, `cdr` x40 | 59 | 55 | 52 |
+  | `dolist` sum x40 | 113 | 92 | 95 |
+  | `(car (cdr l))`, `cddr` x40 | 92 | 75 | 61 |
+  | `last`-style `(null (cdr l))` walk x100 | 160 | 143 | 110 |
+  | `(null (cdr (cdr l)))` walk x100 | 234 | 184 | 164 |
+
+  The check's machine code is no longer than the unchecked null test plus cast; what is left
+  of the first row is Cranelift's register allocation around the generic `+`, whose i64
+  overflow helper is a real call on the hot path -- inlined (`-C inlining=y`), the checked
+  loop is the fastest of the three. **A miss arm that never returns buys nothing measurable**:
+  `br_on_null` to an inline nil and `call _car; unreachable` for the rest keeps the call's
+  live values out of stack slots in a call-free loop (the micro-benchmark's machine code equals
+  the unchecked one), but a Lisp loop has calls anyway -- 87-92 ms on the first row, `dolist`
+  worse -- for 8 bytes a site and one more opcode for every pass to model; not taken.
+  `br_on_cast` (branch on success) measured the same (92 ms) and needs an `eqref -> (ref $cons)`
+  block type the module does not declare.
+  `zlib` P1: `--optimize` 116,527 -> 116,652 (gzip 38,923 -> 38,350), `off` 462,468 -> 458,614
+  (no temps), `size` unchanged at 89,272.
+- **What the passes must model.** `am.ik.wasm` decodes `br_on_cast`/`br_on_cast_fail`
+  (`WasmCodeModel.CastBranch`, `Instr.isCastBranch`, label in `Instr.a`) and treats it as a
+  `br_if` wherever branches are followed: `WasmSections.scanGc` records its two heap types (the
+  shaker renumbers the target), `WasmInliner.shapeOf` wraps a moved body whose cast branch
+  leaves it, `WasmCarriedLocals` gives it both CFG edges, and `WasmRefTypeFolder` splits the
+  operand's set between the label and the fall-through ([wasm-ref-type-fold.md](wasm-ref-type-fold.md)).
+  `WasmLocalSink` and `WasmPeephole` see an opaque instruction (an unknown stack effect ends an
+  expression walk), which is all they need.
 - `FUNC_CAR`/`FUNC_CDR` (`TYPE_CALLABLE_BASE + 0`, `WasmLispCompiler`) are appended after the
   last fixed helper, so no fixed index moves; unreferenced at every level but `size`, and
   the shaker drops them there (`WasmLispCompilerTest.aConsAccessSiteIsOneCallAtTheSizeLevelAndReadsAPlainLocalInPlaceOtherwise`
@@ -61,5 +101,9 @@ before and after, i.e. the 101 KB is outside its reach (it does not outline).
 `WasmLispCompilerIntegrationTest.consAccessAnswersTheSameAtEveryLevel` (nil, a cons's
 field, a special, a parameter and a `do`-stepped local as operands, `apply`'s walk exact
 and with a rest tail, `funcall` of a computed designator, and `(car 5)` trapping through
-the shared reader outside EH mode), `WasmTreeShakerCorpusTest` (now compiles the corpus at `size` too:
-validate + shortest-encoding round trip), the byte-budget pin above.
+the shared reader outside EH mode) and its EH twin `checkedConsAccessAnswersTheSameAtEveryLevel`
+(the same answers, and a non-list as `CAR`'s type-error from an inline, a nested and a walked
+site at every level), `WasmTreeShakerCorpusTest` (now compiles the corpus at `size` too:
+validate + shortest-encoding round trip), the byte-budget pin above and
+`WasmLispCompilerTest.aCheckedConsAccessSiteTestsItsOperandOnceAndNeedsNoLocal` (one
+`br_on_cast_fail` per checked site, no `ref.test`/`ref.cast` of `$cons`, no local).

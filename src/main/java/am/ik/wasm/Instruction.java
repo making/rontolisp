@@ -658,6 +658,19 @@ public interface Instruction {
 	/** {@code REF_CAST} (0x16). */
 	int REF_CAST = 0x16;
 
+	/**
+	 * {@code BR_ON_CAST} (0x18 flags label ht1 ht2): branch to the label with the operand
+	 * when it passes the cast to {@code ht2}, else fall through with it.
+	 */
+	int BR_ON_CAST = 0x18;
+
+	/**
+	 * {@code BR_ON_CAST_FAIL} (0x19 flags label ht1 ht2): branch to the label with the
+	 * operand when it FAILS the cast to {@code ht2}, else fall through with it cast. Bit
+	 * 0 of the flags makes {@code ht1} nullable, bit 1 {@code ht2}.
+	 */
+	int BR_ON_CAST_FAIL = 0x19;
+
 	/** {@code I31_REF_NEW} (0x1C). */
 	int I31_REF_NEW = 0x1C;
 
