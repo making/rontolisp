@@ -837,6 +837,10 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
 | `(nthcdr 1 5)`, `(nth 1 5)`, `(second 5)`, `(nthcdr 2 '(1 . 2))` | `NTHCDR: ... LIST` |
 | `(endp 5)`, `(dolist (x 5))`, `(dolist (x '(1 2 . 3)))` | `ENDP: ... LIST` |
 | `(char "ab" nil)`, `(schar "ab" 1.5)` | `CHAR:` / `SCHAR: ... INTEGER` |
+| `(length 5)`, `(length 'foo)`, `(length (make-hash-table))` | `LENGTH: ... SEQUENCE` |
+| `(last 5)`, `(mapcar #'1+ 5)` and `mapc`/`mapcan`/`maplist`/`mapl`/`mapcon` | `LAST:` / `MAPCAR: ... LIST` |
+| `(rplaca 5 0)`, `(rplacd nil 0)`, `(setf (car 5) 0)` | `RPLACA:` / `RPLACD: ... CONS` |
+| `(loop for x in 5 ...)`, `(loop for x in '(1 2 . 3) ...)` | `ENDP: ... LIST` |
 
 - **FUNNEL-TYPED operators** (`OperandTypes.FUNNEL_TYPE`: `CAR`, `CDR`, `NTHCDR`, `ENDP`, `AREF`,
   `(SETF AREF)`, `CHAR`, `SCHAR`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
@@ -866,6 +870,21 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   (`WasmOperandTypes.LOWERED_TO`), and is placed in key order (it iterated `Map.of`s, whose
   order varies between JVMs). `char`/`schar` check the subscript as `aref` does (`_ckIdx`,
   `_idx_chk`).
+- **List consumers** (2026-09-26; `length` answered 0, `last` NIL or its argument): `LENGTH`,
+  `RPLACA`, `RPLACD` are FIXED-typed (`SEQUENCE`, `CONS`, two kinds no funnel produces -- the row
+  names the type, so wasm reuses `_type_err_list`); `LAST` and the six `map*` are funnel-typed.
+  A lowering checks through `(%check-list x 'op)` (`LispMacroExpander.checkListOf`): `last`'s
+  binding, the `maplist`/`mapl`/`mapcon` guard, and `loop`'s `for-in` cursor under `ENDP` -- whose
+  end test is `(if (consp c) nil (endp c))`, so `endp` runs only on the way out, as `dolist`'s
+  does. Interpreter: `Environment.requireListArgument`. JVM: `_ckList` (nil or a cons) and
+  `_ckCons` (returns the `Object[]`, replacing the site's `checkcast`) through the operator's
+  wrapper; `%check-list` of `ENDP` calls `_endp`; `_length` throws `LENGTH`'s report for a symbol
+  (a String without the quote) and any non-list. wasm: `emitListCheck` for the `map*` guards and
+  `%check-list` (both modes; a trap outside EH), for `rplaca`/`rplacd` in EH mode only (outside
+  it the cast still traps); `_seq_len` lands under `LENGTH`'s row, baked in like `_car`'s. The
+  table gains `ENDP` for `LOOP`, `RPLACA`/`RPLACD` for `SETF INCF DECF PUSH POP PUSHNEW` (a
+  `car` place's store). `#'rplaca`/`#'rplacd` became first-class on the compiled backends.
+  Still open: a dotted list's `length` and the other consumers (`.todo/985`).
 - **Interpreter**: the built-ins throw `OperandTypeException` with the kind (`car`/`cdr`/`first`/
   `rest` and `nthValue` `LIST`, `numerator`/`denominator` `RATIONAL`, `random` `NUMBER`/`REAL`), the
   seam names them. `#'first`/`#'rest` of nil and `#'second` past the end answer nil now, as the
@@ -897,12 +916,17 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
 - **Cost of the list walks, measured 2026-09-26**: `zlib` P1 115,984 -> 116,300 (+0.27%), size level
   88,735 -> 89,051, JVM classes 163,399 -> 163,693; `hello_world`, `pi_approx`, `dom_reactor`
   unchanged. No loop gains a test.
-- **Open**: a string access's non-string and `(setf char)` index (`.todo/983`), list consumers
-  over a non-list (`.todo/984`).
+- **Cost of the list consumers, measured 2026-09-26**: `zlib` P1 116,527 -> 116,892 (+0.31%), size
+  level 89,272 -> 89,623, JVM class 164,202 -> 164,583; `hello_world`, `pi_approx`, `dom_reactor`
+  unchanged. A 1M-element `loop`/`dolist`+`rplacd`/`length` mix in an EH module 0.34 -> 0.36 s
+  (the `rplacd` site's `ref.test` in front of its cast: not the one-test `br_on_cast_fail` of a
+  `car`/`cdr` read, whose block would need a cast-typed signature); the JVM unchanged.
+- **Open**: a string access's non-string and `(setf char)` index (`.todo/983`), the list consumers
+  beyond these (`.todo/985`).
 - Pinned by `ci-spec.yaml`'s `argument-type-errors-name-the-operator-beyond-arithmetic` and
-  `list-walks-and-string-indices-name-the-operator`, and the
-  `argumentTypeErrorsNameTheOperatorBeyondArithmetic` / `listWalksAndStringIndicesNameTheOperator`
-  triples (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
+  `list-walks-and-string-indices-name-the-operator` and `list-consumers-name-the-operator`, and the
+  `argumentTypeErrorsNameTheOperatorBeyondArithmetic` / `listWalksAndStringIndicesNameTheOperator` /
+  `listConsumersNameTheOperator` triples (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
 
 ### `random`'s domain (closed 2026-09-26, `.todo/981`)
 CLHS's domain is a COMPOUND type, `(OR (INTEGER 1) (FLOAT (0.0)))`: a ratio limit is real but

@@ -1744,9 +1744,14 @@ public final class LispMacroExpander {
 				// later sequential clause's init can reference it, as in CL) and is
 				// re-synced from the cursor in the iteration head, once the cursor has
 				// stepped AND the end test has passed.
+				// The list's end is CL's endp: a list that is no list, or ends in no nil,
+				// is ENDP's type-error. The cursor is checked once as it is bound (the
+				// variable reads its car before the first end test), and the end test
+				// calls endp only once the cursor is no cons -- on the way out.
 				LispSymbol cursor = gensym("LIST");
-				piece.binds.add(new ForBinding(cursor, listForm, false));
-				piece.endTests.add(makeNot(call(LispNames.CONSP, cursor)));
+				piece.binds.add(new ForBinding(cursor, checkListOf(listForm, LispNames.ENDP), false));
+				piece.endTests
+					.add(makeIf(call(LispNames.CONSP, cursor), LispNil.INSTANCE, call(LispNames.ENDP, cursor)));
 				destructureInto(piece, pattern, call(LispNames.CAR, cursor));
 				piece.steps.add(new LispVal[] { cursor, stepCdr(cursor, byFn) });
 			}
@@ -8261,7 +8266,8 @@ public final class LispMacroExpander {
 	 * Expands (last lst [n]) into a let/while walk returning the last cons cell -- or,
 	 * with the optional count, the last {@code n} conses (CL's {@code last list
 	 * &amp;optional n}). Without the count this is the one-cell walk; with it, the
-	 * two-cursor walk of {@link #expandLastN}.
+	 * two-cursor walk of {@link #expandLastN}. A {@code lst} that is no list is
+	 * {@code LAST}'s type-error ({@link #checkListOf}).
 	 * @param cons the last expression
 	 * @return the expanded expression
 	 */
@@ -8279,7 +8285,8 @@ public final class LispMacroExpander {
 				listToCons(List.of(new LispSymbol(LispNames.CONSP), callOf(LispNames.CDR, cur)))));
 		LispVal step = listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)));
 		LispVal whileExpr = listToCons(List.of(new LispSymbol(LispNames.WHILE), test, step));
-		LispVal bindings = new LispCons(listToCons(List.of(cur, parts.get(1))), LispNil.INSTANCE);
+		LispVal bindings = new LispCons(listToCons(List.of(cur, checkListOf(parts.get(1), LispNames.LAST))),
+				LispNil.INSTANCE);
 		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, whileExpr, cur));
 	}
 
@@ -8289,7 +8296,7 @@ public final class LispMacroExpander {
 	 * falls off the end, leaving the trailing cursor on the answer.
 	 *
 	 * <pre>
-	 * (let* ((__last_cur lst) (__last_lead __last_cur) (__last_n n))
+	 * (let* ((__last_cur (%check-list lst 'last)) (__last_lead __last_cur) (__last_n n))
 	 *   (while (and (&gt; __last_n 0) (consp __last_lead))
 	 *     (setq __last_lead (cdr __last_lead)) (setq __last_n (- __last_n 1)))
 	 *   (while (consp __last_lead)
@@ -8319,8 +8326,8 @@ public final class LispMacroExpander {
 				listToCons(List.of(new LispSymbol(LispNames.SETQ), cur, callOf(LispNames.CDR, cur)))));
 		// let* so the list is evaluated before the count (left-to-right argument order)
 		// and the lead cursor starts from the already-evaluated list.
-		LispVal bindings = listToCons(List.of(listToCons(List.of(cur, listForm)), listToCons(List.of(lead, cur)),
-				listToCons(List.of(n, countForm))));
+		LispVal bindings = listToCons(List.of(listToCons(List.of(cur, checkListOf(listForm, LispNames.LAST))),
+				listToCons(List.of(lead, cur)), listToCons(List.of(n, countForm))));
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, skip, stepBoth, cur));
 	}
 
@@ -15420,6 +15427,34 @@ public final class LispMacroExpander {
 
 	private static LispVal callOf(String op, LispVal arg) {
 		return listToCons(List.of(new LispSymbol(op), arg));
+	}
+
+	/**
+	 * {@code (%check-list form 'operator)}: the form's value when it is a list, else the
+	 * operator's {@code LIST} type-error -- the check a lowering makes on behalf of the
+	 * operator it expands.
+	 * @param form the list form
+	 * @param operator the operator the report names
+	 * @return the checked form
+	 */
+	static LispVal checkListOf(LispVal form, String operator) {
+		return listToCons(List.of(new LispSymbol(LispNames.CHECK_LIST_INTERNAL), form,
+				callOf(LispNames.QUOTE, new LispSymbol(operator))));
+	}
+
+	/**
+	 * The operator a {@code (%check-list x 'op)} form names ({@link #checkListOf}).
+	 * @param cons the form
+	 * @return the operator's symbol name
+	 */
+	public static String checkListOperator(LispCons cons) {
+		if (cons.cdr() instanceof LispCons args && args.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispCons quote && quote.cdr() instanceof LispCons body
+				&& body.car() instanceof LispSymbol op) {
+			return op.name();
+		}
+		throw new IllegalArgumentException(
+				LispNames.CHECK_LIST_INTERNAL + " expects a quoted operator: " + cons.print());
 	}
 
 	/**
@@ -29542,9 +29577,9 @@ public final class LispMacroExpander {
 	/**
 	 * Wraps a {@code maplist}/{@code mapcon}/{@code mapl} loop in a guard that binds the
 	 * function and every list argument once (preserving left-to-right evaluation:
-	 * function first, then the lists in order) and signals an error for a list argument
-	 * that is not a list. Each list value is bound to the matching symbol, which the loop
-	 * walks. nil is a valid empty list.
+	 * function first, then the lists in order) and signals the operator's type-error for
+	 * a list argument that is not a list ({@link #checkListOf}). Each list value is bound
+	 * to the matching symbol, which the loop walks. nil is a valid empty list.
 	 * @param name the operator name (for the error message)
 	 * @param fnSym the symbol the function argument is bound to
 	 * @param fnArg the (unevaluated) function argument form
@@ -29564,8 +29599,7 @@ public final class LispMacroExpander {
 		letForm.add(new LispSymbol(LispNames.LET));
 		letForm.add(listToCons(letBindings));
 		for (LispSymbol lstSym : lstSyms) {
-			letForm.add(makeIf(listToCons(List.of(new LispSymbol(LispNames.LISTP), lstSym)), LispNil.INSTANCE,
-					mapNotAListError(name, lstSym)));
+			letForm.add(checkListOf(lstSym, name));
 		}
 		letForm.add(loop);
 		return listToCons(letForm);

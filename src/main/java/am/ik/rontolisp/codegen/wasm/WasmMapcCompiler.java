@@ -39,7 +39,8 @@ final class WasmMapcCompiler {
 			int listSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(listSlot);
-			WasmEmitHelper.emitRequireListGuard(ctx, listSlot);
+			// A non-list is MAPC's type-error (EH mode; a trap outside it).
+			WasmEmitHelper.emitListCheck(ctx, listSlot, true);
 			listSlots.add(listSlot);
 		}
 

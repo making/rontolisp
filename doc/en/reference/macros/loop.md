@@ -16,7 +16,7 @@ If every top-level subform is a compound form, `loop` is a **simple loop**: it r
 Otherwise it is an **extended loop** built from clauses. The supported clauses are:
 
 - Numeric stepping: `for VAR from LO [to|upto|below|downto|above HI] [by STEP]` (also `upfrom`/`downfrom`; a limit keyword with no `from` starts at 0).
-- List stepping: `for VAR in LIST [by FN]` and `for VAR on LIST [by FN]` (`VAR` may be a destructuring pattern).
+- List stepping: `for VAR in LIST [by FN]` and `for VAR on LIST [by FN]` (`VAR` may be a destructuring pattern). `in` tests the list's end with `endp`, so a list that does not end in nil signals a `type-error`.
 - Sequence stepping: `for VAR across SEQ` binds `VAR` to each character of a string or each element of a vector in turn.
 - General stepping: `for VAR = INIT [then STEP]` (`VAR` may be a destructuring pattern).
 - Local variables: `with VAR [= INIT]` (`VAR` may be a destructuring pattern; `and`-joined `with` bindings are parallel).

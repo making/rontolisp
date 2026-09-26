@@ -89,6 +89,22 @@ final class JvmOperandTypeRuntime {
 
 	static final String CK_RAT_DESC = CK_IDX_DESC;
 
+	/**
+	 * A list argument's check ({@code last}, the {@code map*} family,
+	 * {@code %check-list}): nil or a cons answers itself, anything else throws the
+	 * unnamed {@code LIST} report for a wrapper to name. Descriptor {@link #FIELD_DESC}.
+	 */
+	static final String CK_LIST = "_ckList";
+
+	/**
+	 * A cons argument's check ({@code rplaca}, {@code rplacd}): a cons answers itself as
+	 * an {@code Object[]} -- the cast the site used to make -- and anything else, nil
+	 * included, throws the unnamed {@code CONS} report for a wrapper to name.
+	 */
+	static final String CK_CONS = "_ckCons";
+
+	static final String CK_CONS_DESC = "(Ljava/lang/Object;)[Ljava/lang/Object;";
+
 	/** The thread-local record's field. */
 	static final String TL_FIELD = "_teTl";
 
@@ -194,6 +210,9 @@ final class JvmOperandTypeRuntime {
 				cp.addString(OperandTypes.Kind.INTEGER.name())));
 		methods.add(check(cp, CK_RAT, CK_RAT_DESC, List.of(longClass, bigClass, ratioClass), null, teRaw,
 				cp.addString(OperandTypes.Kind.RATIONAL.name())));
+		methods.add(check(cp, CK_LIST, FIELD_DESC, true, List.of(objArr), null, teRaw, listKind));
+		methods.add(check(cp, CK_CONS, CK_CONS_DESC, List.of(objArr), objArr, teRaw,
+				cp.addString(OperandTypes.Kind.CONS.name())));
 
 		// _teRaw(Object x, String kind): new RuntimeException("The value " + prin1(x) +
 		// " is not of type " + kind), recorded under a pad.
@@ -465,8 +484,21 @@ final class JvmOperandTypeRuntime {
 	private static JvmNumericRuntimeBuilder.NumericMethod check(ConstantPool cp, String name, String desc,
 			List<ClassConstant> accepted, @Nullable ClassConstant result, MethodrefConstant teRaw,
 			StringConstant kind) {
+		return check(cp, name, desc, false, accepted, result, teRaw, kind);
+	}
+
+	/**
+	 * Builds an argument check, accepting nil too when {@code nilOk}.
+	 */
+	private static JvmNumericRuntimeBuilder.NumericMethod check(ConstantPool cp, String name, String desc,
+			boolean nilOk, List<ClassConstant> accepted, @Nullable ClassConstant result, MethodrefConstant teRaw,
+			StringConstant kind) {
 		List<Integer> c = new ArrayList<>();
 		List<Integer> hits = new ArrayList<>();
+		if (nilOk) {
+			c.add(Opcode.ALOAD_0);
+			hits.add(branch(c, Opcode.IFNULL));
+		}
 		for (ClassConstant type : accepted) {
 			c.add(Opcode.ALOAD_0);
 			c.add(Opcode.INSTANCEOF);

@@ -15,12 +15,12 @@ import am.ik.wasm.WasmWriter;
  * quotes, counting one per lead byte); a vector (rank-1 array) returns its element count;
  * any other argument is treated as a list and its cons cells are counted (Common Lisp
  * sequences). A symbol (which shares the string struct representation but lacks the
- * leading quote) is not a sequence and yields zero, matching the interpreter; a hash
- * table likewise yields zero. A rank-2 array is not a sequence and traps. An array and a
- * hash table are both {@code TYPE_CELL} boxes; the header's car distinguishes them (a
- * bucket array for an array, an i31 count for a hash table). A packed float vector
- * ({@code TYPE_FARRAY}) is handled first: a rank-1 one yields its {@code dims[0]}, a
- * higher-rank one traps like a general rank-n array.
+ * leading quote), a hash table and any other non-list are no sequence: {@code LENGTH}'s
+ * type-error in EH mode, a trap outside it. A rank-2 array is not a sequence and traps.
+ * An array and a hash table are both {@code TYPE_CELL} boxes; the header's car
+ * distinguishes them (a bucket array for an array, an i31 count for a hash table). A
+ * packed float vector ({@code TYPE_FARRAY}) is handled first: a rank-1 one yields its
+ * {@code dims[0]}, a higher-rank one traps like a general rank-n array.
  *
  * <p>
  * The dispatch is ONE shared function, {@code _seq_len}
@@ -61,7 +61,7 @@ final class WasmLengthCompiler {
 	 * @return the function body (signature {@code ((ref null eq)) -> (ref null eq)},
 	 * {@code TYPE_CALLABLE_BASE + 0})
 	 */
-	static byte[] buildSeqLenBody() {
+	static byte[] buildSeqLenBody(int operatorGlobal, int operatorId) {
 		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
 		// Two scratch (ref null eq) locals: slot 1 holds the dims array of whichever
@@ -146,10 +146,8 @@ final class WasmLengthCompiler {
 		WasmEmitHelper.emitStrCharCountCall(w);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		w.write(Instruction.ELSE);
-		// Symbol: not a sequence -> 0.
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0);
-		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		// Symbol: not a sequence.
+		emitNotSequence(w, valSlot, operatorGlobal, operatorId);
 		w.write(Instruction.END);
 
 		w.write(Instruction.ELSE);
@@ -237,15 +235,23 @@ final class WasmLengthCompiler {
 		w.write(Instruction.UNREACHABLE);
 		w.write(Instruction.END);
 		w.write(Instruction.ELSE);
-		// hash table: not a sequence -> 0 (matching the interpreter/JVM list
-		// fallthrough).
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0);
-		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		// hash table: not a sequence.
+		emitNotSequence(w, valSlot, operatorGlobal, operatorId);
 		w.write(Instruction.END);
 		w.write(Instruction.ELSE);
-		// List case: count cons cells until the value is no longer a cons. The counter
-		// reuses fpSlot; the cursor is the parameter itself.
+		// List case: anything but nil or a cons is no sequence; count cons cells until
+		// the value is no longer a cons. The counter reuses fpSlot; the cursor is the
+		// parameter itself.
+		get(w, valSlot);
+		w.write(Instruction.REF_IS_NULL);
+		get(w, valSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		emitNotSequence(w, valSlot, operatorGlobal, operatorId);
+		w.write(Instruction.END);
 		int countSlot = fpSlot;
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
@@ -288,6 +294,24 @@ final class WasmLengthCompiler {
 		w.write(Instruction.END); // outermost if (packed farray)
 		w.write(Instruction.END); // function body
 		return out.toByteArray();
+	}
+
+	/**
+	 * Emits the no-sequence exit: in EH mode {@code LENGTH}'s type-error
+	 * ({@code _type_err_list} under its row, whose type is {@code SEQUENCE}), then
+	 * {@code unreachable} -- the only exit outside EH mode.
+	 */
+	private static void emitNotSequence(WasmWriter w, int valSlot, int operatorGlobal, int operatorId) {
+		if (operatorGlobal >= 0) {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(operatorId);
+			w.write(Instruction.SET_GLOBAL);
+			w.writeUnsignedLeb128(operatorGlobal);
+			get(w, valSlot);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_TYPE_ERR_LIST);
+		}
+		w.write(Instruction.UNREACHABLE);
 	}
 
 	private static void get(WasmWriter w, int slot) {

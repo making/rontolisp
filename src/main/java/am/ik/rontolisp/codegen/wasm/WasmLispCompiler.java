@@ -7828,7 +7828,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrGetBody(this.simd));
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrSetBody(this.simd, this.usesIdentityHashTables));
 				// shared generic sequence-length dispatch body (FUNC_SEQ_LEN)
-				code.addFunction(WasmLengthCompiler.buildSeqLenBody());
+				// (a non-sequence lands in _type_err_list under LENGTH in EH mode)
+				code.addFunction(WasmLengthCompiler.buildSeqLenBody(operandOpGlobalIndex,
+						operandOperators.ids().getOrDefault(LispNames.LENGTH, 0)));
 				// string output-stream buffer helper body (FUNC_OSTREAM_ROOM)
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildOstreamRoomBody(ostreamTableGlobalIndex));
 				// strict UTF-8 octet-vector decode body (FUNC_IV_UTF8_STR)
