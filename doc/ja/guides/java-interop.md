@@ -2,7 +2,7 @@
 
 `java` パッケージは、リフレクションを使って rontolisp から任意の Java API を操作できるようにします。オブジェクトの生成、インスタンスメソッドや静的メソッドの呼び出し、フィールドの読み取り、そして rontolisp のラムダを Java のインターフェース実装へ変換することができます。`examples/` の Swing デモ (`java-interop.lisp`、`swing.lisp`、`life-gui.lisp`) は、専用の Java グルーコードを一切書かずにこのパッケージだけでウィンドウを画面に表示しています。
 
-> **JVM 専用 (インタプリタとコンパイル済み `.class`)。** 連携で得られる値はホストオブジェクトへの不透明な参照であるため、本物の JVM が必要です。動作するのは **JVM 上のインタプリタ** (`java -jar rontolisp.jar program.lisp`) と **JVM コンパイル済みプログラム** (`-o Prog.class` でコンパイルし `java Prog` で実行) です — コンパイラが解決した呼び出しは生成クラスの中の直接呼び出しになり、実行時解決に回る呼び出しのためにだけ小さなリフレクションブリッジを埋め込むので、出力は従来どおり単一の自己完結した `.class` ファイルのままです (必要な JRE は [Java リリースやクラスパスを指定したコンパイル](#compiling-against-a-java-release-or-a-class-path) を参照)。WASM バックエンドはホスト参照を表現できないため、`java:` を `.wasm` にコンパイルすると従来どおり `Cannot compile: java:...` エラーになります。GraalVM ネイティブバイナリ (`rontolisp program.lisp`) は `java:` プログラムを `.class` に**コンパイルする**ことはできますが、**インタプリタ実行**はできません。ネイティブイメージにはビルド時にリフレクション登録されたクラス・メンバーしか含まれず、rontolisp のビルドは連携用に何も登録していないため、`(java:static "java.lang.Math" "max" 3 7)` ですら `No such class` で失敗します。
+> **JVM 専用 (インタプリタとコンパイル済み `.class`)。** 連携で得られる値はホストオブジェクトへの不透明な参照であるため、本物の JVM が必要です。動作するのは **JVM 上のインタプリタ** (`java -jar rontolisp.jar program.lisp`) と **JVM コンパイル済みプログラム** (`-o Prog.class` でコンパイルし `java Prog` で実行) です — コンパイラが解決した呼び出しは生成クラスの中の直接呼び出しになり、実行時解決に回る呼び出しのためにだけ、コンパイラは小さなリフレクションブリッジを生成クラスの隣 (`Prog$JavaBridge.class`、`-o prog.jar` ではその中のエントリー) に書き出します。そのときプログラムの実行にはそれがクラスパス上に必要です (必要な JRE は [Java リリースやクラスパスを指定したコンパイル](#compiling-against-a-java-release-or-a-class-path) を参照)。WASM バックエンドはホスト参照を表現できないため、`java:` を `.wasm` にコンパイルすると従来どおり `Cannot compile: java:...` エラーになります。GraalVM ネイティブバイナリ (`rontolisp program.lisp`) は `java:` プログラムを `.class` に**コンパイルする**ことはできますが、**インタプリタ実行**はできません。ネイティブイメージにはビルド時にリフレクション登録されたクラス・メンバーしか含まれず、rontolisp のビルドは連携用に何も登録していないため、`(java:static "java.lang.Math" "max" 3 7)` ですら `No such class` で失敗します。
 
 ## 関数
 
@@ -84,7 +84,9 @@ Java の `null` (および `void` メソッド) は `nil` として返ります�
 - リテラルの種別: `3`、`2.5`、`"x"`、`#\a`、`t`、`nil`、`lambda`
 - `(java:new "C" ...)` はちょうど `C` である
 - 解決済みの呼び出しの値は、そのメソッドが宣言する型を持つ。`StringBuilder` の `append` は `StringBuilder` を返すので、呼び出しの連鎖は 1 段ずつ解決される。`Object` を返すと宣言されたメソッドは何も示さない
-- `(the (java:object "C") x)` と `(declare (type (java:object "C") v))` は、その値が `C` (または `nil`) であることを示す。`C` は `java:new` と同じくバイナリクラス名 (`java.util.Map$Entry`) で書く
+- `(the (java:object "C") x)` と `(declare (type (java:object "C") v))` は、その値が `C` (または `nil`) であることを示す。`C` は `java:new` と同じくバイナリクラス名 (`java.util.Map$Entry`) で書く。`(java:object "C" :exact)` は、`java:new` の戻り値と同じく、値がちょうど `C` であり `nil` ではないことを示す
+- `let` / `let*` の変数は初期化式の型を持つ。ただし special 変数である場合と、スコープ内のどこか (クロージャ内を含む) で `setq`、`setf`、`incf` などにより代入される場合を除く
+- `(declaim (type (java:object "C") v))` は、それ以降のフォームで大域変数 `v` の型を示す。`defvar` の初期値は型を示さない。どのフォームもその変数に代入しうるため
 
 宣言された型は信頼されます。`C` でない値は、レシーバでも引数でも、呼び出しに渡った時点でエラーになります。選ばれていないメソッドに合わせて変換されることはありません。
 
@@ -102,13 +104,21 @@ Java の `null` (および `void` メソッド) は `nil` として返ります�
 (parse 42)   ; error: java:static: argument 1 is not a java.lang.String, got 42
 ```
 
-コンパイル済みクラスは、解決済みの呼び出しをそれぞれメソッドの直接呼び出しにし (リフレクションなし)、実行時解決に回る呼び出しのためにだけリフレクションブリッジを埋め込みます。インタプリタも解決済みの呼び出しを同じく実行します。選ばれたメソッドを呼び、引数を検査して変換します。
+次の 2 つの呼び出しはどちらも実行前に解決されます。`sb` はちょうど `StringBuilder` です。
+
+```lisp
+(let ((sb (java:new "java.lang.StringBuilder" "ab")))
+  (java:call sb "reverse")
+  (java:call sb "toString"))   ; => "ba"
+```
+
+コンパイル済みクラスは、解決済みの呼び出しをそれぞれメソッドの直接呼び出しにし (リフレクションなし)、実行時解決に回る呼び出しのためにだけリフレクションブリッジを書き出します。インタプリタも解決済みの呼び出しを同じく実行します。選ばれたメソッドを呼び、引数を検査して変換します。
 
 引数が呼び出しを解決するのは、その引数が取りうるすべての種別が同じメソッドを選ぶときだけです。`String` の戻り値は `nil` でありえて、`nil` は `append(boolean)` を選ぶため、`(java:call sb "append" (java:call x "toString"))` は実行時に解決されます。
 
 ### 宣言されたレシーバのクラスが候補を決める
 
-宣言クラス `C` のレシーバに対する呼び出しは、Java と同じく `C` のメソッドの中から解決されます。実行時クラスだけが追加する同名の public オーバーロードは候補になりません。実行前の解決と実行時の解決で選択が異なるのはこの場合だけです。
+宣言クラス `C` のレシーバに対する呼び出しは、Java と同じく `C` のメソッドの中から解決されます。初期化式の型が `C` である `let` 変数に対する呼び出しも同じです。実行時クラスだけが追加する同名の public オーバーロードは候補になりません。実行前の解決と実行時の解決で選択が異なるのはこの場合だけです。
 
 ```lisp
 (defun remove-one (c)
@@ -233,6 +243,18 @@ error: --java-static: 1 java: call cannot be compiled without reflection:
 ```
 
 `examples/jvm/swing.lisp` はこの 5 つの関数の上に再利用可能なグリッドウィンドウのヘルパーを構築しています。ヘルパーは独自の `swing` [パッケージ](../reference/packages.md)にまとめられており、`(require :swing "swing.lisp")` で取り込みます。`examples/jvm/life-gui.lisp` はこれを使って (`swing:grid-window`、`swing:paint`、...) ライフゲームをアニメーション表示します。
+
+## ネイティブイメージ
+
+コンパイル済みの `java:` プログラムは GraalVM ネイティブイメージにビルドできます。すべての呼び出しが実行前に解決されるプログラムには何も要りません。`--java-static` でコンパイルし ([リフレクションなしのコンパイル](#compiling-without-reflection))、その jar をそのままビルドしてください。実行時解決に回る呼び出しはリフレクションを使うので到達可能性メタデータが必要で、トレーシングエージェントが実行から記録します。
+
+```bash
+rontolisp prog.lisp -o prog.jar
+java -agentlib:native-image-agent=config-output-dir=config -jar prog.jar
+native-image -jar prog.jar -H:ConfigurationFileDirectories=config
+```
+
+メタデータがカバーするのはトレースした実行が行った呼び出しだけです。その実行が選ばなかったオーバーロードを選ぶ呼び出しは、イメージ内で `MissingReflectionRegistrationError` になります。たとえば種別の分からない `a` と `b` による `(java:static "java.lang.Math" "max" a b)` に、整数だけを渡した実行の後で浮動小数点数を渡した場合です。プログラムが使うすべての呼び出しの形を通る実行でトレースするか、型を宣言して呼び出しを解決させてください。
 
 ## 制限
 

@@ -3374,10 +3374,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Create the %mv-spill global (a top-level setq) when the program uses a
 		// multiple-value operator: the expansions read/write it across functions.
 		program = LispMacroExpander.injectMvSpillGlobal(program, this.runtimeFeatures);
-		// Bundle the surplus parameters of too-wide fixed-arity defuns into a list
-		// (and rewrite their direct call sites) so real-library signatures compile
-		// despite the MAX_CALLABLE_ARITY type limit.
-		program = WasmArityBundler.bundle(program);
+		// Take the arguments of too-wide fixed-arity defuns as one rest list so
+		// real-library signatures compile despite the MAX_CALLABLE_ARITY type limit;
+		// such a defun checks its count itself, through _arity_chk where one is built.
+		List<LispVal> bundled = WasmArityBundler.bundle(program);
+		boolean bundlesWideDefuns = bundled != program;
+		program = bundled;
 		// A CALL SITE wider than the fixed block is a different question from a too-wide
 		// DEFUN: the arguments of a keyword lambda list go through verbatim for the
 		// callee's own dispatcher to parse, so a seven-parameter function is funcalled
@@ -3516,7 +3518,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// (WasmRuntimeBuilder.ArityReport): EH mode behind a handler landing pad, which
 		// is where a thrown program-error has both a representation and a catcher.
 		this.emitsArityChk = ehMode && hasLandingPad && this.usesInstances
-				&& (usesApplyRuntime || programUsesSymbol(program, LispNames.APPLY));
+				&& (usesApplyRuntime || programUsesSymbol(program, LispNames.APPLY) || bundlesWideDefuns);
 		// The rontolisp:tcp-* built-ins are component-only the same way: they are the
 		// spliced sockets.lisp defuns over a wit-imported wasi:sockets@0.3.0 (an
 		// ordinary user import -- the base variant; the dedicated sockets blob variant
@@ -5450,10 +5452,19 @@ public final class WasmLispCompiler implements LispCompiler {
 		// down to the five interned message pieces this does not add.
 		SortedMap<Integer, String> arityNamedFuncIds = this.emitsArityOpening
 				? arityOperatorFuncIds(defuns, dispatchableFuncIds, arityNamedCallees) : new TreeMap<>();
+		// The operator the eval runtime counts itself with no callee behind it (eval)
+		// gets an id past every named one, which only the report's opening reads -- no
+		// dispatcher arm or spread case names a callee by it, so it cannot collide with a
+		// function whose funcId it happens to equal.
+		SortedMap<Integer, String> unbackedArityOperators = new TreeMap<>();
+		if (usesEval && !arityNamedFuncIds.isEmpty()
+				&& arityNamedFuncIds.lastKey() + 1 < WasmRuntimeBuilder.ARITY_MAX_NAMED_FUNC_ID) {
+			unbackedArityOperators.put(arityNamedFuncIds.lastKey() + 1, LispNames.EVAL);
+		}
 		WasmRuntimeBuilder.ArityReport arityReport = arityReport(
 				ehMode && hasLandingPad && this.usesInstances
 						&& (!indirectCallArities.isEmpty() || usesApplyRuntime || this.emitsArityChk),
-				closRegistry, stringTable, layoutAddresses, arityNamedFuncIds);
+				closRegistry, stringTable, layoutAddresses, arityNamedFuncIds, unbackedArityOperators);
 		// The guard the SPREAD cases and the literal apply call sites share. Its slot was
 		// reserved in the pre-pass (userFuncBase() shifts by it), so a module that
 		// reserved one and turns out to have no program-error representation to throw
@@ -5735,9 +5746,6 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(stringTable, LispNames.SETQ)
 				.add(stringTable, LispNames.EVAL)
 				.add(stringTable, LispNames.FUNCALL)
-				.add(stringTable, LispNames.MAPCAR)
-				.add(stringTable, LispNames.MAPC)
-				.add(stringTable, LispNames.REDUCE)
 				.add(stringTable, LispNames.LIST)
 				.add(stringTable, LispNames.ADD)
 				.add(stringTable, LispNames.SUB)
@@ -5765,22 +5773,28 @@ public final class WasmLispCompiler implements LispCompiler {
 				offsetsBuilder.add(stringTable, operator);
 			}
 			WasmEvalRuntimeBuilder.SpecialFormOffsets offsets = offsetsBuilder.build();
-			// The shape an operator-less comparison reports through names the operator
-			// when the report can (its wrapper's funcId is in the named set).
-			Map<String, Integer> comparisonShapes = new HashMap<>();
-			for (String operator : WasmEvalRuntimeBuilder.COMPARISON_OPERATORS) {
+			// The shape an arm that checks its own count reports through names the
+			// operator when the report can: a comparison by its wrapper's funcId in the
+			// named set, eval -- which no wrapper backs -- by the id the report reserved.
+			Map<String, Integer> countShapes = new HashMap<>();
+			for (String operator : WasmEvalRuntimeBuilder.SELF_COUNTED_OPERATORS) {
 				int funcId = -1;
 				for (Map.Entry<Integer, String> named : arityNamedFuncIds.entrySet()) {
 					if (named.getValue().equals(operator)) {
 						funcId = named.getKey();
 					}
 				}
-				comparisonShapes.put(operator, WasmRuntimeBuilder.arityShape(1, true, funcId));
+				for (Map.Entry<Integer, String> named : unbackedArityOperators.entrySet()) {
+					if (named.getValue().equals(operator)) {
+						funcId = named.getKey();
+					}
+				}
+				countShapes.put(operator, WasmRuntimeBuilder.arityShape(1, !LispNames.EVAL.equals(operator), funcId));
 			}
-			WasmEvalRuntimeBuilder.Comparisons comparisons = new WasmEvalRuntimeBuilder.Comparisons(arityChkIndex,
-					comparisonShapes);
+			WasmEvalRuntimeBuilder.CountChecks counts = new WasmEvalRuntimeBuilder.CountChecks(arityChkIndex,
+					countShapes);
 			envLookupBody = WasmEvalRuntimeBuilder.buildEnvLookupBody();
-			evalBody = WasmEvalRuntimeBuilder.buildEvalBody(offsets, comparisons, this.usesIdentityHashTables);
+			evalBody = WasmEvalRuntimeBuilder.buildEvalBody(offsets, counts, this.usesIdentityHashTables);
 			storeBody = WasmEvalRuntimeBuilder.buildStoreBody(offsets, this.usesIdentityHashTables);
 		}
 		else {
@@ -8815,11 +8829,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @param closRegistry the class registry, for the program-error slot layout
 	 * @param stringTable the module's string table
 	 * @param layoutAddresses the baked instance layout records
+	 * @param arityOperatorFuncIds the callees whose report names their operator
+	 * @param unbackedOperators the operators named by an id no callee has
 	 * @return the report, or null
 	 */
 	private WasmRuntimeBuilder.@Nullable ArityReport arityReport(boolean on, ClosRegistry closRegistry,
 			StringTable stringTable, Map<String, Integer> layoutAddresses,
-			SortedMap<Integer, String> arityOperatorFuncIds) {
+			SortedMap<Integer, String> arityOperatorFuncIds, SortedMap<Integer, String> unbackedOperators) {
 		WasmRuntimeBuilder.ConditionInstance instance = on
 				? conditionInstance(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, closRegistry, layoutAddresses) : null;
 		if (instance == null) {
@@ -8827,7 +8843,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		return new WasmRuntimeBuilder.ArityReport(stringTable, instance.layoutAddress(), instance.instanceTypeIndex(),
 				instance.slotCapacity(), instance.formatControlSlot(), this.usesIdentityHashTables,
-				arityOperatorFuncIds, arityOpeningFuncIndex());
+				arityOperatorFuncIds, unbackedOperators, arityOpeningFuncIndex());
 	}
 
 	/**

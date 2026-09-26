@@ -21,7 +21,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Tests for the {@code java:} interop functions compiled to a JVM {@code .class} (the
- * embedded {@link JavaBridgeTemplate} bridge). Mirrors the interpreter's
+ * {@link JavaBridgeTemplate} bridge that travels beside it). Mirrors the interpreter's
  * {@code JavaInteropTest} cases so the two backends stay behaviorally identical; every
  * case uses headless, deterministic JDK classes.
  */
@@ -37,8 +37,8 @@ class JvmJavaInteropCompilerTest {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		JvmLispCompiler compiler = new JvmLispCompiler("Test");
 		byte[] classBytes = compiler.compile(program);
-		Path classFile = this.tempDir.resolve("Test.class");
-		Files.write(classFile, classBytes);
+		Files.write(this.tempDir.resolve("Test.class"), classBytes);
+		writeBeside(compiler);
 
 		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
 				ClassLoader.getSystemClassLoader())) {
@@ -61,6 +61,16 @@ class JvmJavaInteropCompilerTest {
 				System.setOut(oldOut);
 			}
 			return baos.toString().trim();
+		}
+	}
+
+	// Writes the class files that travel beside the program (the java: bridge among
+	// them) into the class path root, as the CLI does for -o X.class.
+	private void writeBeside(JvmLispCompiler compiler) throws Exception {
+		for (var file : compiler.runtimeClassFiles().entrySet()) {
+			Path target = this.tempDir.resolve(file.getKey());
+			Files.createDirectories(target.getParent());
+			Files.write(target, file.getValue());
 		}
 	}
 
@@ -393,6 +403,41 @@ class JvmJavaInteropCompilerTest {
 	}
 
 	@Test
+	void aLetBoundReceiverTakesItsInitializersType() throws Exception {
+		assertThat(compileAndRun("""
+				(defun fill-list ()
+				  (let ((lst (java:new "java.util.ArrayList")))
+				    (java:call lst "add" 10)
+				    (java:call lst "add" 20)
+				    (java:call lst "add" 1)
+				    lst))
+				(let ((c (the (java:object "java.util.Collection") (fill-list)))
+				      (d (the (java:object "java.util.Collection") (fill-list))))
+				  (setq d (fill-list))
+				  (print (list (java:call c "remove" 1) (java:call c "toString")
+				               (java:call d "remove" 1) (java:call d "toString"))))
+				""")).isEqualTo("(T \"[10, 20]\" 20 \"[10, 1]\")");
+	}
+
+	@Test
+	void aProclaimedGlobalTypesTheFormsAfterIt() throws Exception {
+		assertThat(compileAndRun("""
+				(defun fill-list ()
+				  (let ((lst (java:new "java.util.ArrayList")))
+				    (java:call lst "add" 10)
+				    (java:call lst "add" 20)
+				    (java:call lst "add" 1)
+				    lst))
+				(defvar *before* (fill-list))
+				(defun drop-before () (java:call *before* "remove" 1))
+				(declaim (type (java:object "java.util.Collection") *c* *before*))
+				(defvar *c* (fill-list))
+				(print (list (java:call *c* "remove" 1) (java:call *c* "toString")
+				             (drop-before) (java:call *before* "toString")))
+				""")).isEqualTo("(T \"[10, 20]\" 20 \"[10, 1]\")");
+	}
+
+	@Test
 	void aFalseDeclarationSignals() {
 		assertThatThrownBy(() -> compileAndRun("""
 				(defun size-of (c)
@@ -425,13 +470,16 @@ class JvmJavaInteropCompilerTest {
 				(print (java:call (java:static "java.util.List" "of" 1 2) "size"))
 				""";
 		assertThat(compileAndRun(program)).isEqualTo("7\n2\n2147483647\n2");
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		compiler.compile(LispReader.readAllFromString(program));
+		assertThat(compiler.runtimeClassFiles()).isEmpty();
 		assertThat(javap(program)).contains("Method java/lang/Math.max:(II)I")
 			.contains("Method java/lang/StringBuilder.\"<init>\":(Ljava/lang/String;)V")
 			.contains("Method java/lang/StringBuilder.length:()I")
 			.contains("Field java/lang/Integer.MAX_VALUE:I")
 			.contains("InterfaceMethod java/util/List.of:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;")
 			.contains("InterfaceMethod java/util/List.size:()I")
-			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_NAME)
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX)
 			.doesNotContain(JvmJavaRuntimeBuilder.INIT_METHOD)
 			.doesNotContain("java/lang/reflect")
 			.doesNotContain("_eval");
@@ -445,7 +493,7 @@ class JvmJavaInteropCompilerTest {
 				(print (len (java:new "java.lang.StringBuilder" "abc")))
 				""";
 		assertThat(compileAndRun(program)).isEqualTo("3");
-		assertThat(javap(program)).contains(JvmJavaRuntimeBuilder.BRIDGE_NAME)
+		assertThat(javap(program)).contains(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX)
 			.contains("Method java/lang/StringBuilder.\"<init>\":(Ljava/lang/String;)V");
 	}
 
@@ -577,7 +625,7 @@ class JvmJavaInteropCompilerTest {
 			.build()
 			.compile(LispReader.readAllFromString("(print (java:static \"java.lang.Math\" \"max\" 3 7))"));
 		assertThat(new String(direct, java.nio.charset.StandardCharsets.ISO_8859_1))
-			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_NAME);
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX);
 		assertThatThrownBy(() -> JvmLispCompiler.builder()
 			.className("Test")
 			.javaStatic(true)
@@ -632,18 +680,42 @@ class JvmJavaInteropCompilerTest {
 				(defun before (x) (java:call x "size"))
 				(defun len (x) (java:call x "length"))
 				(print (java:static "java.lang.Math" "max" 1 2))
+				(let ((sb (java:new "java.lang.StringBuilder"))) (java:call sb "capacity"))
 				""";
 		assertThat(compileWarnings(program, true))
 			.contains("warning: java:call \"size\" is resolved by reflection at run time")
 			.contains("warning: java:call \"length\" is resolved by reflection at run time:"
 					+ " the receiver's class is not known")
-			.doesNotContain("\"max\"");
+			.doesNotContain("\"max\"")
+			.doesNotContain("\"capacity\"");
 		assertThat(compileWarnings("""
 				(defun before (x) (java:call x "size"))
 				(setq java:*warn-on-reflection* t)
 				(defun len (x) (java:call x "length"))
 				""", false)).contains("\"length\"").doesNotContain("\"size\"");
 		assertThat(compileWarnings(program, false)).isEmpty();
+	}
+
+	// A site rewritten for a typed argument, around another rewritten site, keeps its
+	// source position in the report.
+	@Test
+	void aRewrittenSiteKeepsItsPosition() {
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		am.ik.rontolisp.SourceProvenance.startRecording();
+		try (var ignored = ThreadStdio.err(err)) {
+			JvmLispCompiler.builder()
+				.className("Test")
+				.warnJavaReflection(true)
+				.build()
+				.compile(LispReader.readAllFromString("""
+						(let ((sb (java:new "java.lang.StringBuilder")))
+						  (java:call (other) "accept" sb (lambda () (java:call sb "length"))))
+						""", am.ik.rontolisp.reader.Features.JVM, "t.lisp"));
+		}
+		finally {
+			am.ik.rontolisp.SourceProvenance.stopRecording();
+		}
+		assertThat(err.toString()).contains("t.lisp:2:3: warning: java:call \"accept\"");
 	}
 
 	private static String compileWarnings(String program, boolean warn) {
@@ -739,6 +811,25 @@ class JvmJavaInteropCompilerTest {
 			.hasMessageContaining("java:field expects");
 	}
 
+	// The bridge travels as an ordinary class file beside the program, never as bytes the
+	// program defines at run time: a GraalVM native image cannot define a class at run
+	// time, so a Lookup.defineClass in _javaInit made every java: program fail under
+	// native-image. Named after the program, because it holds that program's _apply.
+	@Test
+	void theBridgeTravelsAsAClassFileBesideTheProgram() throws Exception {
+		JvmLispCompiler compiler = new JvmLispCompiler("com/example/Test");
+		byte[] classBytes = compiler.compile(LispReader.readAllFromString("""
+				(defun biggest (cls) (java:static cls "max" 3 7))
+				(print (biggest "java.lang.Math"))
+				"""));
+		assertThat(compiler.runtimeClassFiles()).containsKey("com/example/Test$JavaBridge.class");
+		String classText = new String(classBytes, java.nio.charset.StandardCharsets.ISO_8859_1);
+		assertThat(classText).doesNotContain("defineClass").doesNotContain("java/util/Base64");
+		byte[] bridge = compiler.runtimeClassFiles().get("com/example/Test$JavaBridge.class");
+		assertThat(new String(bridge, java.nio.charset.StandardCharsets.ISO_8859_1))
+			.doesNotContain("am/ik/rontolisp/codegen/jvm/JavaBridgeTemplate");
+	}
+
 	// The renamed bridge class stays structurally valid: this is implicitly covered by
 	// every test above, but the rename itself must also leave non-matching classes
 	// untouched.
@@ -759,10 +850,9 @@ class JvmJavaInteropCompilerTest {
 		assertThat(roundTripped).isEqualTo(original);
 	}
 
-	// MethodHandles.Lookup.defineClass(byte[]) requires the defined class to share the
-	// lookup class's package, so a generated class that HAS a package must rename the
-	// embedded bridge into that package too -- not into the default package, which is
-	// what every other test above compiles into.
+	// The bridge's entry points are package-private, so a generated class that HAS a
+	// package must rename the bridge into that package too -- not into the default
+	// package, which is what every other test above compiles into.
 	@Test
 	void theBridgeIsRenamedIntoTheGeneratedClassOwnPackage() throws Exception {
 		// A site left to run time: the bridge travels.
@@ -775,8 +865,10 @@ class JvmJavaInteropCompilerTest {
 		Path packageDir = this.tempDir.resolve("com").resolve("example");
 		Files.createDirectories(packageDir);
 		Files.write(packageDir.resolve("Test.class"), classBytes);
+		writeBeside(compiler);
 
-		String bridgeName = "com/example/" + JvmJavaRuntimeBuilder.BRIDGE_NAME;
+		String bridgeName = JvmJavaRuntimeBuilder.bridgeName("com/example/Test");
+		assertThat(bridgeName).isEqualTo("com/example/Test$JavaBridge");
 		assertThat(new String(classBytes, java.nio.charset.StandardCharsets.ISO_8859_1)).contains(bridgeName);
 
 		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },

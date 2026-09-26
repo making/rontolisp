@@ -2707,7 +2707,7 @@ public final class Environment implements Scope {
 			// instead of leaking the IndexOutOfBoundsException of indexing an empty list.
 			if (args.isEmpty()) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
-						LispNames.SUB + " requires at least one argument");
+						ClosRegistry.arityMessage(LispNames.SUB, 1, true, 0));
 			}
 			if (hasComplex(args)) {
 				return subComplex(args);
@@ -2777,7 +2777,7 @@ public final class Environment implements Scope {
 			// instead of leaking the IndexOutOfBoundsException of indexing an empty list.
 			if (args.isEmpty()) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
-						LispNames.DIV + " requires at least one argument");
+						ClosRegistry.arityMessage(LispNames.DIV, 1, true, 0));
 			}
 			if (hasComplex(args)) {
 				return divComplex(args);

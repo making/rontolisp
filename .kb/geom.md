@@ -197,7 +197,8 @@ equivalent (no `float[]` to pack into; Preview 1 reads through its own stream la
   replaceable): `geom::%solid-of-vertices`, `geom::%vertex-extremes` and `geom::%model-extent` -- the
   last the ONE `geom::` internal `scene.lisp` reaches for, the public bounds API being world-space only.
 - **The gate is the CALL SITE, not the splice**: `JvmLispCompiler` scans the ALREADY-PRUNED program
-  for `JvmGeomKernelCompiler.members()` (+16.8 KB where it arms). **`--dynamic` is excluded
+  for `JvmGeomKernelCompiler.members()` (where it arms: a 12 KB `$GeomBridge.class` beside the
+  class, 2026-09-26). **`--dynamic` is excluded
   outright** -- it skips the pruner, and its point is that a call site honours a run-time redefinition.
 - **All four members arm the bridge.** `geom::%vertex-extremes` used to be accelerated without arming
   anything, because `LibraryDefunPruner` counted a `defclass` header's own name as a function
@@ -206,9 +207,12 @@ equivalent (no `float[]` to pack into; Preview 1 reads through its own stream la
   bridge hands its packed array and index loops to the LISP `geom::%solid-of-vertices`. Its
   `:color`/`:label` tail is built into a rest list ONCE; a tail that is not those literal keywords
   declines at COMPILE time so the defun's own lambda list still signals about it.
-- **The bridge can decline to exist**: `_geomInit` catches `LinkageError` (an older JRE answers
-  `UnsupportedClassVersionError`), leaves `_geomAvailable` false silently, every call site tests
-  `_geomReady()` first.
+- **The bridge can decline to exist**: it ships beside the class as `<Program>$GeomBridge.class`;
+  `_geomInit` `ldc`s it inside a `LinkageError` catch (an older JRE answers
+  `UnsupportedClassVersionError`, a class copied without it `NoClassDefFoundError`), leaves
+  `_geomAvailable` false silently, every call site tests `_geomReady()` first. It used to be
+  `defineClass`d, which a native image refuses with an `Error` the catch missed: every geom jar
+  crashed there (`ShippedBridgeNativeImageE2eTest`).
 
 ### PLY, glTF, and what real files taught
 

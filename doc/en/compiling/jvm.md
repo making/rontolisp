@@ -192,8 +192,8 @@ resolved at compile time wherever the program text allows, against a JDK's
 class files, and become direct calls; the class is then stamped for that Java
 release (the compiling JDK's own by default), so it needs a JRE of that
 release. A call left to run time goes through a reflection bridge (compiled
-with the project's own Java release) the compiler embeds, which needs a JRE at
-least as new as the one rontolisp was built with.
+with the project's own Java release) the compiler writes beside the class,
+which needs a JRE at least as new as the one rontolisp was built with.
 
 `--java-release N` and `--java-classpath` choose which class files, `--warn-java-reflection`
 reports the calls left to run time, and `--java-static` makes each of them a compile error,

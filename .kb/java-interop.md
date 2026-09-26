@@ -9,10 +9,17 @@ variable `java:*warn-on-reflection*` (static resolution, below).
 - JVM: a RESOLVED site is a direct call (`JvmJavaDirectSites`, "Direct calls" below); every
   other site goes through `codegen.jvm.JavaBridgeTemplate`, which re-implements the run-time half
   against the compiled representation (raw ref; `"t"` = true; header-slot ArrayList = vector) —
-  **KEEP THE TWO IN SYNC**. `JvmJavaRuntimeBuilder` renames to `RontoLispJavaBridge`,
-  base64-embeds, `Lookup.defineClass` from `_javaInit`; call sites `JvmJavaInteropCompiler`. The
+  **KEEP THE TWO IN SYNC**. `JvmJavaRuntimeBuilder` renames it to `<Program>$JavaBridge` and SHIPS
+  it beside the class (`runtimeClassFiles()`); `_javaInit` only calls `bind(Class)`. Per-program
+  name: `bind` stores that program's `_apply` statically. Call sites `JvmJavaInteropCompiler`. The
   bridge is emitted only when a site needs it; it needs JRE >= build JRE.
 - Native image: template `.class` in `resource-config.json` — COMPILE works, INTERPRET does not.
+- A compiled `-o prog.jar` whose sites all resolve native-images with NO config (`--java-static`,
+  "Direct calls" below); one that still needs the bridge native-images with agent config
+  (`ShippedBridgeNativeImageE2eTest`, opt-in `-Drontolisp.native-image.e2e=true`). Measured
+  2026-09-26, GraalVM 25.0.4: the config covers only traced overloads -- an untraced
+  `Math.max(double,double)` at a site left to run time answers `MissingReflectionRegistrationError`
+  (user doc: `guides/java-interop.md`, "Native image").
 - WASM: rejected; no `BuiltinFunctionWrappers` entry, so `#'java:call` is a compile error while
   the interpreter allows it.
 - A host `ArrayList` a Java call answers is not a Lisp array: in a java: program the compiled
@@ -96,19 +103,47 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   both gone). X is `print` / the program's `_lispToString`, so the texts agree for every value.
   Then the member is called with the packing the resolution chose; what it throws is `error
   calling C.m: <throwable>` / `error constructing C: ...` / `error reading field f: ...`.
-- `(declare (type (java:object "C") v))`: `compiler/JavaDeclarations.lower` rewrites references
-  to v in java: receiver/argument positions into `(the (java:object "C") v)` -- the ONE scope walk
-  (special forms structurally; built-in and user macros expanded only to learn what they bind;
-  never replaces a macro form: sites found in expansions are rebuilt in the original tree by
-  identity; `macrolet`/unknown built-ins drop the scope). Interpreter: `LispEvaluator.
-  prepareJavaSites` on each top-level form that mentions `java:object`; JVM: right after
-  `PackageResolver` in `JvmLispCompiler.compile`. Known gap: a user macro whose EXPANSION alone
-  holds the java:object declaration is lowered on the compile path (user macros pre-expanded) but
-  not by the interpreter (the unexpanded form does not mention it) -- visible only in the
-  upper-bound receiver case. let-initializer inference: not done (a later step, .todo/a20).
-- Measured 2026-09-26 (`--warn-java-reflection`): examples/jvm/java-interop.lisp resolves 8 of
-  17 sites before they run, swing.lisp 13 of 53; what stays at run time is almost entirely a
-  receiver held in a `let` local or a `defvar` global.
+- Variable types: `compiler/JavaDeclarations` rewrites references to a typed variable in java:
+  receiver/argument positions into `(the <spec> v)` -- the ONE scope walk (special forms
+  structurally; built-in and user macros expanded, once per walk and cached, only to learn what
+  they bind; never replaces a macro form: sites found in expansions are rebuilt in the original
+  tree by identity, with `SourceProvenance.inherit` on every rebuilt cell; `macrolet`/unknown
+  built-ins drop the scope). Three sources:
+  - `(declare (type (java:object "C") v))`, body-head, bound or free; wins over inference.
+  - let-initializer inference (Clojure's locals): a `let`/`let*` variable takes `typeOf` of its
+    initializer (after user-macro expansion, the expansion walked first so its sites are lowered;
+    a typed variable's spec for a bare symbol) unless it is special or ASSIGNED in its scope.
+    The assignment scan (`assignedIn`) is conservative: `setq`/`psetq`/`multiple-value-setq`
+    targets after full macro expansion, rebindings ignored, a `defvar` of the name counts, and a
+    form it cannot see into (a special operator with no expansion here: `psetf`, `shiftf`, ...;
+    an expansion that throws) assigns every candidate it mentions.
+  - `(declaim (type (java:object "C") v))` / `(proclaim '(type ...))` (quoted literal only): for
+    every later site in PROGRAM ORDER where v is not rebound; a later type proclamation of v with
+    any other type ends it (a top-level one is read even when it mentions no java:). A defvar's
+    init types nothing (any form may setq it).
+  - Spelling (`JavaSiteResolver.specOf` / `typeOfSpec`): Bounded(C) = `(java:object "C")`; {C}
+    exact = `(java:object "C" :exact)` (= `ofConstructed`, never nil; users may write it); a Lisp
+    kind set = the smallest declared type covering it ("int" {integer}, "java.lang.Long"
+    {integer,nil}, "boolean" {t,nil}, "java.lang.String" {string,string-1,nil}, a final class
+    {C,nil}, "void" {nil}); FUNCTION/supplementary char: no spelling, not inferred. Wider = fewer
+    sites resolve, never a different member.
+  - One `JavaDeclarations` per program, fed EVERY top-level form in order (`lower`), a top-level
+    `progn`/`eval-when` element by element (as the compile path's flattened program): it keeps the
+    proclaimed types and its own special set (`SpecialVarCollector.collectDeclared`: defvar family,
+    declaim/proclaim special, local `(declare (special ...))`). Interpreter: `LispEvaluator.
+    javaDeclarations()` from `prepareJavaSites` on each top-level form; JVM: right after
+    `PackageResolver` in `JvmLispCompiler.compile` (skipped, lookup unopened, when no form mentions
+    java:). Both see the same proclamations at every site by construction.
+  - Known gaps (both paths agree unless noted): a site that a user macro's expansion BUILDS is
+    lowered on the compile path (user macros pre-expanded) but not by the interpreter (the
+    evaluator re-expands; the rewrite has nowhere to live) -- visible only for an upper-bound
+    receiver; a name made special by a form AFTER the binding (rontolisp's pessimistic
+    program-wide special reading) is still inferred on both.
+- Measured 2026-09-26 (`--warn-java-reflection`, compile path), before -> after let inference +
+  declaim: swing.lisp 13 -> 32 of 53 sites resolved (the 21 left: defun parameters, user-function
+  results, gethash values, a `let` assigned by `setq`); java-interop.lisp 8 of 17 unchanged (its
+  receivers are defvar globals), 12 of 17 with a declaim per global (the 5 left: a global as an
+  ARGUMENT is only an upper bound, and a `java:proxy` argument).
 - Lookups: interpreter = `ReflectiveJavaClasses` (Class.forName without init; canonical Type per
   Class via ClassValue). JVM compile = `codegen.jvm.JvmClassFileLookup` over `am.ik.jvm.JvmClassPath`
   (`ClassFileInfo` reader): a JDK's `lib/ct.sym` for one release (java.home, else JAVA_HOME, else
@@ -189,8 +224,10 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   metadata: measured 2026-09-26 (GraalVM 25.0.4), a 17-site program (constructor, instance,
   interface, static, varargs, field, chain, declared receiver, regex split, `LocalDate`, a caught
   exception) -> 17,792-byte jar, `native-image --no-fallback -jar` in 30 s, 14.7 MB executable,
-  output identical to `java -jar` (`JavaStaticNativeImageE2eTest`, opt-in
-  `-Drontolisp.java.native=true`).
+  output identical to `java -jar`
+  (`ShippedBridgeNativeImageE2eTest#aJavaStaticJarRunsAsANativeImageWithNoConfiguration`, opt-in
+  `-Drontolisp.native-image.e2e=true`; the same class keeps the agent-config route for a program
+  that still needs the bridge).
 - Measured 2026-09-26 (JDK 25, default output): `(print (java:static "java.lang.Math" "max" 3 7))`
   101,803 -> 6,839 bytes (the bridge blob no longer travels); a 13-site all-resolved program
   103,527 -> 14,411; a program that still leaves sites to run time GROWS (127,454 -> 141,811: the
@@ -204,7 +241,7 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
 `JavaSiteResolverTest`, `JavaDeclarationsTest` (compiler), `JvmClassFileLookupTest`,
 `JavaBridgeTemplateParityTest`, `am.ik.jvm.JvmClassPathTest`; direct calls:
 `JvmJavaInteropCompilerTest` (javap shape, class version, `--java-static`, conversions, texts),
-`JvmLispCompilerSplitTest#aForcedSplitKeepsJavaCallsWorking`, `JavaStaticNativeImageE2eTest`.
+`JvmLispCompilerSplitTest#aForcedSplitKeepsJavaCallsWorking`, `ShippedBridgeNativeImageE2eTest`.
 `JavaInteropTest` + `JvmJavaInteropCompilerTest` mirror the same cases — keep in step, headless
 only. `examples/jvm/{java-interop,swing,life-gui}.lisp`; `doc/{en,ja}/guides/java-interop.md` +
 five `reference/functions/java-*.md` (a GUI form hangs `DocExamplesTest`).

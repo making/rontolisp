@@ -130,11 +130,16 @@ class JvmSizedMainTest {
 	@Test
 	void theProgramThreadIsNamedMainAndIsNotTheCaller() throws Exception {
 		String className = "SizedThread";
-		Files.write(this.tempDir.resolve(className + ".class"), compile("""
+		JvmLispCompiler compiler = new JvmLispCompiler(className);
+		Files.write(this.tempDir.resolve(className + ".class"), compiler.compile(LispReader.readAllFromString("""
 				(let ((th (java:static "java.lang.Thread" "currentThread")))
 				  (print (java:call th "getName"))
 				  (print (java:call th "threadId")))
-				""", className));
+				""")));
+		// The java: bridge travels beside the class as its own file.
+		for (var file : compiler.runtimeClassFiles().entrySet()) {
+			Files.write(this.tempDir.resolve(file.getKey()), file.getValue());
+		}
 		String out;
 		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
 				ClassLoader.getSystemClassLoader())) {

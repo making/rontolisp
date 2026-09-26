@@ -225,4 +225,43 @@ class JavaSiteResolverTest {
 			.containsExactly("(JAVA:CALL (JAVA:NEW \"C\") \"m\")", "(JAVA:NEW \"C\")");
 	}
 
+	// What JavaDeclarations writes for a variable's inferred type reads back as that
+	// type, or as the narrowest declared type covering it -- never a narrower one.
+	@Test
+	void aStaticTypeIsSpelledAsASpecifierThatReadsItBack() {
+		for (String form : List.of("3", "2.5", "\"abc\"", "\"a\"", "#\\a", "nil", "t",
+				"(java:new \"java.lang.StringBuilder\")", "(java:new \"java.util.ArrayList\")",
+				"(java:call (java:new \"java.lang.StringBuilder\") \"reverse\")",
+				"(java:call (java:new \"java.lang.StringBuilder\") \"length\")",
+				"(java:call (java:new \"java.lang.StringBuilder\") \"toString\")",
+				"(java:static \"java.lang.Integer\" \"valueOf\" 3)",
+				"(the (java:object \"java.util.Collection\") x)")) {
+			JavaStaticType type = this.resolver.typeOf(LispReader.readAllFromString(form).get(0));
+			am.ik.rontolisp.LispVal spec = this.resolver.specOf(type);
+			assertThat(spec).as(form).isNotNull();
+			JavaStaticType read = this.resolver.typeOfSpec(spec);
+			if (type instanceof JavaStaticType.Kinds kinds) {
+				assertThat(read).as(form)
+					.isInstanceOfSatisfying(JavaStaticType.Kinds.class,
+							r -> assertThat(r.kinds()).containsAll(kinds.kinds()));
+			}
+			else {
+				assertThat(read).as(form).isEqualTo(type);
+			}
+		}
+		assertThat(spelled("(java:new \"java.lang.StringBuilder\")"))
+			.isEqualTo("(JAVA:OBJECT \"java.lang.StringBuilder\" :EXACT)");
+		assertThat(spelled("3")).isEqualTo("(JAVA:OBJECT \"int\")");
+		assertThat(spelled("(java:static \"java.lang.Integer\" \"valueOf\" 3)"))
+			.isEqualTo("(JAVA:OBJECT \"java.lang.Long\")");
+		// A function value has no java:object spelling: the variable stays untyped.
+		assertThat(spelled("(lambda () 1)")).isNull();
+	}
+
+	private @org.jspecify.annotations.Nullable String spelled(String form) {
+		am.ik.rontolisp.LispVal spec = this.resolver
+			.specOf(this.resolver.typeOf(LispReader.readAllFromString(form).get(0)));
+		return spec == null ? null : spec.print();
+	}
+
 }

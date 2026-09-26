@@ -194,6 +194,14 @@ public final class JvmLispCompiler implements LispCompiler {
 	private Map<String, byte[]> partClassFiles = Map.of();
 
 	/**
+	 * The bridge classes a feature ships beside the program rather than defining at run
+	 * time (the {@code java:} bridge, {@link JvmJavaRuntimeBuilder}, and the
+	 * {@code geom:} kernels, {@link JvmGeomRuntimeBuilder}), keyed like
+	 * {@link #partClassFiles}. Reset by every compile attempt.
+	 */
+	private Map<String, byte[]> bridgeClassFiles = new LinkedHashMap<>();
+
+	/**
 	 * The most constant-pool entries one emitted class may carry before the program is
 	 * split ({@link Builder#classPoolLimit}): the class-format limit, except in a test
 	 * that forces the split onto a small program.
@@ -743,24 +751,29 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * serves through, the {@code equalp} key fold a program that writes
 	 * {@code :test 'equalp} places its keys by, and the complex holder a program that can
 	 * observe a complex value builds. Empty unless the program does one of those, so an
-	 * ordinary compilation still produces exactly one file.
+	 * ordinary compilation still produces exactly one file. Two kinds live in the
+	 * program's own package instead: a split program's {@code $PartN} classes and the
+	 * template bridges ({@code $JavaBridge}, {@code $GeomBridge}).
 	 *
 	 * <p>
-	 * They are written at their canonical names rather than renamed into the program's
-	 * package ({@link JvmRuntimeClassFiles}), and the {@code runtime} package they come
-	 * from imports nothing, which is what makes the output run with no rontolisp jar on
-	 * the classpath ({@code .kb/jvm-export.md}). Valid after {@link #compile}.
+	 * The runtime classes are written at their canonical names rather than renamed into
+	 * the program's package ({@link JvmRuntimeClassFiles}), and the {@code runtime}
+	 * package they come from imports nothing, which is what makes the output run with no
+	 * rontolisp jar on the classpath ({@code .kb/jvm-export.md}). Valid after
+	 * {@link #compile}.
 	 * @return each class file's path within an output tree (or jar), mapped to its bytes
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsHashTableRuntime
 				&& !this.needsComplexRuntime && !this.needsIoStreamRuntime && !this.needsCharFileRuntime
-				&& !this.needsStringInputRuntime && this.partClassFiles.isEmpty()) {
+				&& !this.needsStringInputRuntime && this.partClassFiles.isEmpty() && this.bridgeClassFiles.isEmpty()) {
 			return Map.of();
 		}
-		// A program too large for one class brings its $PartN classes: they are written
-		// beside the class exactly where the runtime classes are, in its own package.
+		// A program too large for one class brings its $PartN classes, and a java:
+		// program its bridge: they are written beside the class exactly where the runtime
+		// classes are, in its own package.
 		Map<String, byte[]> files = new LinkedHashMap<>(this.partClassFiles);
+		files.putAll(this.bridgeClassFiles);
 		if (this.needsIoStreamRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(JvmIoRuntimeBuilder.RUNTIME_CLASS_FILES));
 		}
@@ -875,9 +888,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// the rest of compilation sees canonical names.
 		PackageResolver packageResolver = new PackageResolver();
 		program = packageResolver.resolveProgram(program);
-		// (declare (type (java:object "C") v)) onto the java: sites it types, as the
-		// interpreter lowers each top-level form before running it
-		// (compiler/JavaDeclarations): the site resolver then reads the site alone.
+		// The host types of variables -- declared, inferred from a let initializer,
+		// proclaimed -- onto the java: sites they type, as the interpreter lowers each
+		// top-level form before running it (compiler/JavaDeclarations): the site
+		// resolver then reads the site alone.
 		program = lowerJavaDeclarations(program);
 		// A quoted designator of a wrapped built-in becomes #'name before any wrapper
 		// gate scans the program for that spelling (compiler/FunctionDesignators).
@@ -1414,16 +1428,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		// site compiles to a direct call (JvmJavaDirectSites). The bridge runtime is
 		// emitted only when a site needs it -- a site left to run time, a java:proxy, a
 		// function value passed where an interface is expected -- and never under
-		// --java-static, which refuses such a site. It embeds the (renamed)
-		// JavaBridgeTemplate bytecode and forces the eval runtime (the bridge applies
-		// Lisp callables through _apply).
+		// --java-static, which refuses such a site. The (renamed) JavaBridgeTemplate
+		// travels beside the class as its own class file, and the eval runtime is forced
+		// (the bridge applies Lisp callables through _apply).
 		boolean usesJava = programUsesAnyJavaOp(program);
 		final JvmJavaSites javaSites = usesJava
 				? new JvmJavaSites(javaClasses(), cp, thisClass, lispToStringMethod, this.javaStatic) : null;
 		boolean usesJavaBridge = javaSites != null && !this.javaStatic
 				&& (forcedGroups.contains(GROUP_JAVA_BRIDGE) || javaSites.needsBridge(program));
 		final JvmJavaRuntimeBuilder.@Nullable JavaRuntime javaRuntime = usesJavaBridge
-				? JvmJavaRuntimeBuilder.build(cp, thisClass, stringConcat, bridgePackagePrefix) : null;
+				? JvmJavaRuntimeBuilder.build(cp, thisClass, this.className) : null;
+		this.bridgeClassFiles = new LinkedHashMap<>();
+		if (javaRuntime != null) {
+			this.bridgeClassFiles.putAll(javaRuntime.classFiles());
+		}
 		// A class calling members chosen against release N's API is stamped for release
 		// N, so an older JRE refuses it at load rather than failing at the first call of
 		// a member it lacks; a program without java: keeps the version-61 baseline.
@@ -1701,7 +1719,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.LOAD))) {
 			wrapperExcludes.add(LispNames.READ_FROM_STRING);
 		}
-		if (!usesFuncallValue) {
+		// With the eval runtime on, a runtime funcall designator -- (eval '(funcall)), a
+		// read or interned FUNCALL -- resolves through _lookup like any wrapper name, and
+		// the _apply its body calls is there.
+		if (!usesFuncallValue && !usesEval) {
 			wrapperExcludes.add(LispNames.FUNCALL);
 		}
 		// The map*/every/some family, gated as a whole rather than on each name: with
@@ -2271,7 +2292,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		final JvmGeomRuntimeBuilder.@Nullable GeomRuntime geomRuntime = usesGeom
-				? JvmGeomRuntimeBuilder.build(cp, thisClass, stringConcat, bridgePackagePrefix) : null;
+				? JvmGeomRuntimeBuilder.build(cp, thisClass, this.className) : null;
+		if (geomRuntime != null) {
+			this.bridgeClassFiles.putAll(geomRuntime.classFiles());
+		}
 
 		// Integer expression-tree fusion (.kb/jvm-int-fusion.md): the shared registry
 		// of outlined fused-site methods, plus the fusion-inlinable defuns -- uniquely
@@ -4950,13 +4974,19 @@ public final class JvmLispCompiler implements LispCompiler {
 		return false;
 	}
 
-	// The java: declarations of every top-level form lowered onto their sites
-	// (compiler/JavaDeclarations); a form without java:object comes back unchanged.
-	private static List<LispVal> lowerJavaDeclarations(List<LispVal> program) {
+	// The host types the program text gives its variables lowered onto the java: sites
+	// they type, every top-level form in order (compiler/JavaDeclarations); a program
+	// that mentions no java: symbol comes back unchanged without opening the classes.
+	private List<LispVal> lowerJavaDeclarations(List<LispVal> program) {
+		if (program.stream().noneMatch(am.ik.rontolisp.compiler.JavaDeclarations::mentionsJava)) {
+			return program;
+		}
+		am.ik.rontolisp.compiler.JavaDeclarations declarations = new am.ik.rontolisp.compiler.JavaDeclarations(
+				javaClasses());
 		List<LispVal> lowered = null;
 		for (int i = 0; i < program.size(); i++) {
 			LispVal form = program.get(i);
-			LispVal result = am.ik.rontolisp.compiler.JavaDeclarations.lower(form, null);
+			LispVal result = declarations.lower(form, null);
 			if (result != form) {
 				if (lowered == null) {
 					lowered = new ArrayList<>(program);

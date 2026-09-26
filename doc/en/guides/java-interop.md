@@ -11,9 +11,10 @@ the screen without any bespoke Java glue.
 > JVM: it works under the **JVM-hosted interpreter** (`java -jar rontolisp.jar
 > program.lisp`) and in a **JVM-compiled program** (`-o Prog.class`, run with
 > `java Prog`) — a call the compiler resolves becomes a direct call in the
-> generated class, and for the calls left to run time it embeds a small
-> reflection bridge, so the output stays a single self-contained `.class` file
-> (see [Compiling against a Java release or a class
+> generated class, and for the calls left to run time the compiler writes a
+> small reflection bridge beside it (`Prog$JavaBridge.class`, or an entry
+> inside `-o prog.jar`), which the program then needs on its class path (see
+> [Compiling against a Java release or a class
 > path](#compiling-against-a-java-release-or-a-class-path) for the JRE it needs).
 > The WASM backend cannot lower host references, so
 > compiling `java:` to `.wasm` remains a `Cannot compile: java:...` error. The
@@ -126,6 +127,11 @@ What the program text says about a value:
   `Object` says nothing;
 - `(the (java:object "C") x)` and `(declare (type (java:object "C") v))` say that the value
   is a `C` (or `nil`). `C` is a binary class name, as for `java:new` (`java.util.Map$Entry`).
+  `(java:object "C" :exact)` says it is exactly a `C`, never `nil`, as `java:new` answers;
+- a `let` or `let*` variable has its initializer's type, unless it is special or something
+  in its scope assigns it (`setq`, `setf`, `incf`, ..., in a closure too);
+- `(declaim (type (java:object "C") v))` types the global `v` in the forms after it. A
+  `defvar`'s initial value does not: any form may assign the variable.
 
 A declared type is trusted: a value that is not a `C` is an error where it meets the call,
 whether it is the receiver or an argument -- never converted for a method it was not chosen
@@ -145,9 +151,17 @@ for.
 (parse 42)   ; error: java:static: argument 1 is not a java.lang.String, got 42
 ```
 
+Both calls below are resolved before they run: `sb` is exactly a `StringBuilder`.
+
+```lisp
+(let ((sb (java:new "java.lang.StringBuilder" "ab")))
+  (java:call sb "reverse")
+  (java:call sb "toString"))   ; => "ba"
+```
+
 A compiled class makes each resolved call a direct call of its method -- no reflection --
-and embeds the reflection bridge only for the calls left to run time. The interpreter runs
-a resolved call the same way: the method chosen, the arguments checked and converted.
+and writes the reflection bridge only for the calls left to run time. The interpreter runs a
+resolved call the same way: the method chosen, the arguments checked and converted.
 
 An argument resolves a call only when every kind it can have selects the same method. A
 `String` answer may be `nil`, which selects `append(boolean)`, so
@@ -155,9 +169,10 @@ An argument resolves a call only when every kind it can have selects the same me
 
 ### The declared receiver class decides the candidates
 
-A call on a receiver of declared class `C` resolves among `C`'s methods, as in Java. A
-public overload of the same name that only the run-time class adds is not a candidate --
-the one place where resolving early chooses differently from resolving at run time:
+A call on a receiver of declared class `C` resolves among `C`'s methods, as in Java -- so
+does one on a `let` variable whose initializer is typed `C`. A public overload of the same
+name that only the run-time class adds is not a candidate -- the one place where resolving
+early chooses differently from resolving at run time:
 
 ```lisp
 (defun remove-one (c)
@@ -312,6 +327,27 @@ automatically, which is what lets a Swing `ActionListener` be a plain lambda:
 functions -- wrapped in a `swing` [package](../reference/packages.md) of its own,
 spliced in with `(require :swing "swing.lisp")` -- and `examples/jvm/life-gui.lisp`
 animates Conway's Game of Life with it (`swing:grid-window`, `swing:paint`, ...).
+
+## Native image
+
+A compiled `java:` program builds into a GraalVM native image. One whose calls
+all resolve before they run needs nothing more: compile it with `--java-static`
+([Compiling without reflection](#compiling-without-reflection)) and build the
+jar as it is. The calls left to run time are reflective and need reachability
+metadata, which the tracing agent records from a run:
+
+```bash
+rontolisp prog.lisp -o prog.jar
+java -agentlib:native-image-agent=config-output-dir=config -jar prog.jar
+native-image -jar prog.jar -H:ConfigurationFileDirectories=config
+```
+
+The metadata covers only the calls the traced run made. A call that selects an
+overload the run never selected fails in the image with
+`MissingReflectionRegistrationError` -- for example `(java:static
+"java.lang.Math" "max" a b)` with `a` and `b` of unknown kinds, passed floats
+after a run that only passed integers. Trace runs that exercise every call
+shape the program uses, or declare the types so the calls resolve.
 
 ## Limitations
 

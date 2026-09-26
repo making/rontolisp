@@ -99,6 +99,17 @@ context-sensitive rule (`(string-downcase "ΑΣ")` is `"ασ"`). Interpreter and
   lexer on EVERY backend, and none of the JDK's table travels into a compiled program. The long
   spelling is deliberately NOT in the two runtime readers -- a run-time
   `(read-from-string "#\\IDEOGRAPHIC_SPACE")` would need the name table inside the artifact.
+- **The first character after `#\` is read as a CODE POINT, not a UTF-16 `char`**
+  (`LispLexer.readChar`; `FormatReader.readCharLiteral` for the formatter's CST front end
+  mirrors it). A supplementary-plane literal (`#\😀`, U+1F600) is a surrogate PAIR in the
+  UTF-16 source; scanning one unit at a time used to read only the high surrogate and leave
+  the low surrogate to be lexed as its own, unrelated token (an unbound-variable error at
+  eval time, or a truncated/corrupted literal out of the formatter). `SchemeReader.readCharacter`
+  already scanned by code point and was never affected. Fixed 2026-09-26 (`.todo/a21`); pinned by
+  `LispReaderTest#readsASupplementaryPlaneCharacterLiteralAsOneCharacter`,
+  `LispEvaluatorTest#evalSupplementaryPlaneCharacterLiteralReadsAsOneCharacter`,
+  `LispFormatterTest#keepsASupplementaryPlaneCharacterLiteralWhole` and the `#\` literal lines
+  added to ci-spec `code-point-characters-beyond-ascii` (all four backends, including native).
 
 ## Print / read
 - `princ` prints the glyph (`Character.toString(int)`, or the UTF-8 sequence on WASM via

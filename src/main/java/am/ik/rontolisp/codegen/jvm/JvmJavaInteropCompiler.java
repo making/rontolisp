@@ -21,10 +21,10 @@ import am.ik.jvm.Opcode;
  * site evaluates its receiver and arguments and calls its own method
  * ({@link JvmJavaDirectSites}), which checks them, converts them and invokes the member
  * with plain bytecode, exactly as the interpreter runs the same site. Any other site --
- * left to run time, or a {@code java:proxy} -- calls the embedded
- * {@link JavaBridgeTemplate bridge}: it first invokes the emitted {@code _javaInit}
- * helper (which lazily defines the bridge, see {@link JvmJavaRuntimeBuilder}), then
- * evaluates the arguments -- the leading fixed arguments as-is and the variadic tail
+ * left to run time, or a {@code java:proxy} -- calls the {@link JavaBridgeTemplate bridge
+ * class} shipped beside the program: it first invokes the emitted {@code _javaInit}
+ * helper (which binds the program into the bridge, see {@link JvmJavaRuntimeBuilder}),
+ * then evaluates the arguments -- the leading fixed arguments as-is and the variadic tail
  * packed into an {@code Object[]} -- and calls the matching bridge entry point, which
  * resolves by reflection from the receiver's run-time class and the argument kinds. Under
  * {@code --java-static} such a site is a compile error instead.
