@@ -11,7 +11,7 @@ import am.ik.jvm.Opcode;
  * ({@code BigInteger[]}) the requested component is returned (normalized back to a
  * {@code Long} when it fits); an integer is its own numerator and has denominator one. A
  * syntactic complex takes the signalling exit first: the comparison throws the
- * interpreter's "Expected real number" text for a complex operand (like the ordering
+ * interpreter's REAL operand-type report text for a complex operand (like the ordering
  * operators), and its result is discarded for a real one -- so a complex can never fall
  * through to the identity tail the way it did before (`.kb/jvm-complex.md`).
  */

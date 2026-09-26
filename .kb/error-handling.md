@@ -559,10 +559,9 @@ message at the catching end** -- except for the failures the backends report as 
   `ArithmeticException` -> `division-by-zero` when its message contains
   `ClosRegistry.DIVISION_BY_ZERO_MESSAGE_TOKEN` else `arithmetic-error`; and -- the message
   exceptions -- text starting `The variable `/`The function ` and ending ` is unbound`/` is
-  undefined` -> its cell-error class, and text starting
-  `ClosRegistry.EXPECTED_INTEGER|NUMBER_MESSAGE_PREFIX` (thrown by `_big`/`_dbl`) -> `type-error`,
-  because those sites are plain `RuntimeException`s emitted in bytecode with no channel to carry a
-  class. The arms are compiled Lisp forms built by `LispMacroExpander.reportingConditionForm`, so no
+  undefined` -> its cell-error class, because those sites are plain `RuntimeException`s emitted in
+  bytecode with no channel to carry a class; a wrong-type operand's exception is recognized by
+  identity instead (`_teSlot`, see "A non-number reaching arithmetic"). The arms are compiled Lisp forms built by `LispMacroExpander.reportingConditionForm`, so no
   slot index is baked here.
 - **WASM**: the pad is unchanged, and correctly so -- only `$lisp-cond` throws land in it. **Two
   families diverge by CLASS rather than catchability**: an undefined-function call and a non-number
@@ -579,8 +578,8 @@ message at the catching end** -- except for the failures the backends report as 
   `ClosRegistry.TYPE_ERROR_MESSAGE` replaces a `ClassCastException`'s Java class names and
   `INDEX_OUT_OF_BOUNDS_MESSAGE` the JVM's `Index 10 out of bounds for length 3` (whose length counts
   the layout cell in slot 0). Per-site texts a built-in writes itself are kept and are NOT identical
-  across backends. **Trigger: if a program needs the operator name in a compiled type error, fix it
-  by per-operator emission at the check, not more message parsing at the pad.** The substitution does
+  across backends. The numeric operators name themselves by per-operator emission at the call
+  ("A non-number reaching arithmetic"), never by message parsing at the pad. The substitution does
   NOT reach the UNCAUGHT top-level line on the JVM -- deliberate.
 - **Restart mode moves the undefined-function text out of the pad's reach**: the string-datum `error`
   arm builds its `simple-error` at the SIGNAL point and hands it over on the condition channel, so
@@ -594,40 +593,75 @@ message at the catching end** -- except for the failures the backends report as 
   `ConditionTagScan.hasLandingPad`); marking them unconditionally cost zlib 680 B.
 
 ## A non-number reaching arithmetic signals a catchable type-error
-**Invariant: a non-number operand reaching an arithmetic or comparison operator
-(`+ - * / mod rem = < > <= >= min max abs gcd`, the bitwise family, `1+`/`1-`, and every float
-coercion behind `sqrt`/`exp`/...) signals a CATCHABLE error carrying the interpreter's exact text --
-`Expected integer, got: <prin1>` on the exact path, `Expected number, got: <prin1>` on the float path
--- byte-identical on all four backends.** Prefixes in
-`ClosRegistry.EXPECTED_INTEGER|NUMBER_MESSAGE_PREFIX`; detected at each backend's coercion FUNNEL,
-never by wrapping operator sites. Which prefix a case sees depends on which dispatch arm the OTHER
-operands select -- `(+ 1 nil)` exact, `(+ 1.5 nil)` float.
+**Invariant: a wrong-type operand reaching a numeric operator signals a CATCHABLE error whose text
+is `OP: The value <prin1> is not of type T` -- the operator and the type IT accepts, CL's
+`type-error` shape -- byte-identical on all four backends; on the interpreter and the JVM the
+condition is a `type-error` whose `type-error-datum`/`type-error-expected-type` answer the operand
+and `T`.** One table, `compiler/OperandTypes`: the named operators and their types (`NUMBER` for
+`+ - * / = abs sqrt exp expt ...`, `REAL` for the orderings, `min`/`max`, the rounding family,
+`mod`/`rem`, `float`; `INTEGER` for the bitwise family, `gcd`/`lcm`/`isqrt`), narrowed to `REAL`
+where a `NUMBER` operator met a complex that must be real (two-argument `atan`). A failure outside a
+named operator reports unnamed (`The value "x" is not of type NUMBER` for a packed-array store) with
+the funnel's own kind. Pinned by `ci-spec.yaml`'s `non-number-arithmetic-operands-are-catchable` and
+`operand-type-errors-name-the-operator-wherever-it-compiles`.
 
-- Funnels: `Environment.asLong`/`asDouble`/`asBigInteger`; JVM `_big` and `_dbl`
-  (`JvmNumericRuntimeBuilder`), which test-and-throw `prefix + _lispToString(x)` where a bare
-  `checkcast` used to let null through to a later NPE (`_abs`'s BigInteger arm routes through `_big`
-  for the same reason) -- one `instanceof` on each SLOW arm only, fast arms byte-identical, class
-  +1.4 KB; wasm `_int_val` -> `_type_err_int` and `_as_f64` -> `_type_err_num`
-  (`FUNC_TYPE_ERR_INT`/`FUNC_TYPE_ERR_NUM`, bodies `WasmEmitHelper.buildTypeErrBody`, signature
-  `TYPE_PRINT_VAL` so no new type entry).
-- **Outside EH mode both wasm bodies are a bare `unreachable`** -- the failure stays a messageless
-  trap. **The message prefixes are interned EARLY (`WasmLispCompiler`, beside `tSymEntry`): a string
-  added during code emission lands after the data segment content is fixed and reads back as
-  blanks.** `_int_val`'s limb-tier arm still TRAPS explicitly ([wasm-bignum.md](wasm-bignum.md)'s
-  exact-or-trap boundary is about values that ARE integers). The `_as_f64` ladder was reordered
-  float-first in the same change, turning the check's +9.8% float cost into a -21% win
-  ([wasm-shared-coercion.md](wasm-shared-coercion.md)). Size: +33-37 B per non-EH module, +283 B per
-  EH module. `--no-gc` unaffected, still traps.
+**Detection stays at each backend's coercion FUNNEL; the operator is attached ONE LEVEL UP**, because
+a funnel (and every shared helper above it -- `_cmpb` serves `< > <= >= = min max`) cannot know which
+operator it serves:
+- **Interpreter**: `Environment.asLong`/`asDouble`/`asBigInteger` and the real checks throw an UNNAMED
+  `eval/OperandTypeException`; the built-in seam in `LispEvaluator.apply` names it after the built-in
+  whose body raised it (`named`, no-op when already named or not a named operator), and
+  `synthesizeCondition` fills `DATUM`/`EXPECTED-TYPE`. Built-ins that reach a funnel through
+  `callGlobal`/`applyGlobalFunction` (bypassing the seam) name it themselves: the floor family's
+  division (`floorFamilyQuotient`, `evalFloorFamilyDivision`), `requireRealOperand`,
+  `roundToInteger`, `float`.
+- **JVM** (`JvmOperandTypeRuntime`): every funnel throw is `_teRaw(x, kind)`. `JvmExprCompiler.compileCons`
+  sets `Ctx.operator` to the form's head for the form's own emission; `Ctx.numOp` and
+  `JvmComplexCompiler.complexOp` hand a wrappable helper (`JvmNumericRuntimeBuilder.wrappedDesc`)
+  back as a per-(helper, operator) WRAPPER, built on first use: the same invocation under a catch-any
+  entry whose handler throws `_opTypeErr(e, "OP", "TYPE")`, which renames an unnamed report and
+  passes anything else through. Zero cost on the normal path (measured: no difference on a boxed
+  generic-arithmetic loop). Under a landing pad the thread-local `_teTl` holds
+  `{exception, datum, type}`, identity-checked by `_teSlot`, which is how the pad's `type-error` arm
+  fills the slots -- a `RuntimeException` has nowhere to carry an object and a compiled program ships
+  no exception class. Size: +0.8 KB on a four-defun class, +2.8 KB on a 116 KB one.
+- **wasm-GC, EH mode** (`WasmOperandTypes`): a call to a helper that can reject an operand, compiled
+  inside a named form (`WasmOperandTypes.emitCall`, converted at every call site of the arithmetic
+  compilers and `castFloatGetF64`), stores the operator's id in the operator register (a
+  `(mut i32)` global after the render guards) for the call's duration and clears it after; the
+  `_type_err_*` landings read and clear it and look the id up in the operator table, a blob placed
+  before any body compiles (**a string interned during emission lands after the data segment is
+  fixed and reads back as blanks**), so it holds only the operators the program spells, their
+  call-position rewrites, the `+ - * / = < > <= >=` family and the operators a lowering introduces
+  (`WasmOperandTypes.LOWERED_TO`); an operator missing there reports unnamed. Boxing, the fused raw
+  i64 helpers and fdlibm take no register (`mayReject`). Size: +2.3% on a 109 KB EH module; a non-EH
+  module is byte-identical. Outside EH mode the landings stay a bare `unreachable`.
+- **The operator is the innermost FORM being compiled**, so a lowering that re-emits an operator's
+  calls away from its form sets it back: the fusion fallbacks per tree node
+  (`JvmIntFusionCompiler.numOpFor`, the compare method's mask -> `compareOperator`,
+  `WasmOperandTypes.withOperator`), and wasm's condition-position compare
+  (`WasmComparisonCompiler.tryCompileConditionI32`, handed the test without `compileCons`).
+- **A call-position rewrite reports under the operator it becomes** (`OperandTypes.REWRITTEN`: `1+`/`1-`
+  -> `+`/`-`, `zerop`/`plusp`/`minusp`/`/=` -> `= > < =`, `evenp`/`oddp` -> `mod`, `logtest`/`logeqv`
+  -> `logand`/`logxor`), because the compiled backends' function values (`#'1+`) ARE the rewrite
+  (`BuiltinFunctionWrappers`), so the interpreter's built-in reports what a call does.
+- **Class divergence, deliberate**: the wasm pair signal a `simple-error` carrying the same text --
+  the landing is a fixed helper built after the instance gates (`mayCreateInstances`,
+  `usedLayoutTags`) decided. `(handler-case ... (type-error ...))` therefore does not match there.
+- **Outside the named operators the old divergences remain**: a one-argument `lcm`/`gcd` compiles to
+  `abs` (and accepts a float), `numerator`/`random`/`nth`/`aref` over a non-number keep their own
+  per-backend texts.
+- `_int_val`'s limb-tier arm still TRAPS explicitly ([wasm-bignum.md](wasm-bignum.md)'s exact-or-trap
+  boundary is about values that ARE integers). The `_as_f64` ladder is float-first
+  ([wasm-shared-coercion.md](wasm-shared-coercion.md)). `--no-gc` unaffected, still traps.
 - **What still traps on wasm-GC**: anything not funneled through `_int_val`/`_as_f64` -- `(car 5)`,
   division by zero, kinded/generic aref casts, the limb-tier boundaries.
 - **The funnels' reach is wider than arithmetic**: a STORE into a packed float array goes through the
-  same `_dbl`/`_as_f64`, so `(setf (aref #d(1.0 2.0 3.0) 0) "x")` moved with them (the JVM used to
-  leak a raw `ClassCastException`). Pinned by `JvmFloatArrayTest`'s
-  `nonRealStoreIsATypeError`/`singleNonRealStoreIsATypeError` -- the only two tests in the repo that
-  noticed, and the reason to run the WHOLE suite after changing a shared runtime helper.
-- **Class divergence, deliberate**: interpreter and JVM signal `type-error`, the wasm pair
-  `simple-error`. Pre-existing edge unchanged: a condition thrown from INSIDE a wasm to-string
-  capture leaves the capture flag set.
+  same `_dbl`/`_as_f64`. Pinned by `JvmFloatArrayTest`'s
+  `nonRealStoreIsATypeError`/`singleNonRealStoreIsATypeError` -- the reason to run the WHOLE suite
+  after changing a shared runtime helper.
+- Pre-existing edge unchanged: a condition thrown from INSIDE a wasm to-string capture leaves the
+  capture flag set.
 
 ## Argument-shape errors signal a catchable program-error
 **Invariant: a keyword the operator does not accept, an odd keyword tail and a non-keyword in
@@ -721,7 +755,7 @@ passed interpreted and returned a WRONG VALUE compiled. Pinned by ci-spec
   bytes per callable in ONE method, and the cl-postgres corpus overflowed the signed 16-bit branch
   offset on it. The table is one byte per funcId and three instructions, whatever the program's
   size. `JvmHandlerCaseCompiler.emitRawFailureTest` recovers `program-error` from the
-  `Function expects ` prefix (the `Expected integer, got: ` precedent -- a bytecode-emitted throw
+  `Function expects ` prefix (the unbound-variable precedent -- a bytecode-emitted throw
   site has no channel for a class), which is the sixth entry in
   `LispMacroExpander.rawFailureConditionClasses()`.
 - **wasm-GC** (`WasmRuntimeBuilder.ArityReport`): the `br_table` already has a label per funcId, so
@@ -816,7 +850,7 @@ standalone `uncaught-non-function-report`, `LispEvaluatorTest`
   string-designator lookup miss and `_apply`'s three silent arms to one helper,
   `_notFn(Object) -> RuntimeException` (`JvmRuntimeBuilder.buildNotFnBody`: null -> NIL, an unframed
   `String` -> symbol, else `_lispToString`). The pad recovers `type-error` from the prefix (the
-  `Expected integer` precedent). wasm-GC: `emitDispatchPrologue` in EH mode tests the CLOSURE first
+  unbound-variable precedent). wasm-GC: `emitDispatchPrologue` in EH mode tests the CLOSURE first
   and `br_if`s straight to the cast, so a function value pays the same two type checks and one
   branch the symbol-first order did; the failure arms sit AFTER the dispatch (`emitDispatchEpilogue`),
   not between prologue and `br_table`. `_apply` hands every value it cannot call to the spread

@@ -29,8 +29,7 @@ final class WasmTranscendentalCompiler {
 	 * @param fn the function
 	 */
 	static void call(WasmLispCompiler.Ctx ctx, Fn fn) {
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(ctx.fdlibm(fn));
+		WasmOperandTypes.emitCall(ctx, ctx.fdlibm(fn));
 	}
 
 	/**

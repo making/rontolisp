@@ -1208,12 +1208,11 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunNonNumberArithmeticOperandsSignalCatchableTypeErrors() throws Exception {
-		// The numeric runtime's _big/_dbl throw the interpreter's "Expected
-		// integer|number, got: <prin1>" text where a bare checkcast used to let null
-		// through to an NPE naming BigInteger internals, and the landing pad classifies
-		// the prefix as a type-error (its throw sites are plain RuntimeExceptions with
-		// no channel for a class -- the unbound-variable precedent). The evaluator twin
-		// is nonNumberArithmeticOperandsSignalCatchableTypeErrors.
+		// The numeric runtime's _big/_dbl throw where a bare checkcast used to let null
+		// through to an NPE naming BigInteger internals, and the operator's wrapper
+		// names the report after the operator and the type IT accepts
+		// (JvmOperandTypeRuntime). The evaluator twin is
+		// nonNumberArithmeticOperandsSignalCatchableTypeErrors.
 		assertThat(compileAndRun("""
 				(defun te-print (thunk)
 				  (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
@@ -1222,9 +1221,24 @@ class JvmLispCompilerTest {
 				             (te-print (lambda () (* 2 "x")))
 				             (te-print (lambda () (max 1 'sym)))
 				             (te-print (lambda () (+ 1.5 nil)))))
-				""")).isEqualTo("(\"Expected integer, got: NIL\" \"Expected integer, got: NIL\""
-				+ " \"Expected integer, got: \\\"x\\\"\" \"Expected integer, got: SYM\""
-				+ " \"Expected number, got: NIL\")");
+				""")).isEqualTo("(\"+: The value NIL is not of type NUMBER\" \"<: The value NIL is not of type REAL\""
+				+ " \"*: The value \\\"x\\\" is not of type NUMBER\" \"MAX: The value SYM is not of type REAL\""
+				+ " \"+: The value NIL is not of type NUMBER\")");
+	}
+
+	@Test
+	void compileAndRunOperandTypeErrorAnswersItsDatumAndExpectedType() throws Exception {
+		// The pad fills the type-error's datum and expected-type from the record the
+		// wrapper left (JvmOperandTypeRuntime); the evaluator twin is
+		// operandTypeErrorAnswersItsDatumAndExpectedType.
+		assertThat(compileAndRun("""
+				(defun te-slots (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (type-error-datum e) (type-error-expected-type e)))))
+				(print (list (te-slots (lambda () (> nil 0)))
+				             (te-slots (lambda () (logand 1 "x")))
+				             (te-slots (lambda () (sqrt 'q)))))
+				""")).isEqualTo("((NIL REAL) (\"x\" INTEGER) (Q NUMBER))");
 	}
 
 	@Test
@@ -8223,11 +8237,11 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (= (/ 1.0 0.0) (ash 1 10000)))")).isEqualTo("NIL");
 		assertThat(compileAndRun("(print (= (/ 0.0 0.0) (/ 0.0 0.0)))")).isEqualTo("NIL");
 		assertThat(compileAndRun("(print (> (max 1.0 (+ 1 (/ 1 (ash 1 60)))) 1.0))")).isEqualTo("T");
-		// The float arm's funnel: a non-number beside a float stays "Expected
-		// number", like the interpreter.
+		// The float arm's funnel: a non-number beside a float is named after the
+		// operator, like the interpreter.
 		assertThat(compileAndRun("""
 				(print (handler-case (< 1.0 nil) (type-error (e) (princ-to-string e))))
-				""")).isEqualTo("\"Expected number, got: NIL\"");
+				""")).isEqualTo("\"<: The value NIL is not of type REAL\"");
 	}
 
 	@Test
@@ -8553,9 +8567,10 @@ class JvmLispCompilerTest {
 				             (te-print (lambda () (> #c(1 2) 1)))
 				             (te-print (lambda () (min #c(1 2) 3)))
 				             (te-print (lambda () (max 3 #c(1 2))))))
-				""")).isEqualTo("(\"Expected real number, got: #C(1 2)\"" + " \"Expected real number, got: #C(1 2)\""
-				+ " \"Expected real number, got: #C(1 2)\"" + " \"Expected real number, got: #C(1 2)\""
-				+ " \"Expected real number, got: #C(1 2)\"" + " \"Expected real number, got: #C(1 2)\")");
+				""")).isEqualTo("(\"<: The value #C(1 2) is not of type REAL\""
+				+ " \">: The value #C(1 2) is not of type REAL\"" + " \"<: The value #C(1 2) is not of type REAL\""
+				+ " \">: The value #C(1 2) is not of type REAL\"" + " \"MIN: The value #C(1 2) is not of type REAL\""
+				+ " \"MAX: The value #C(1 2) is not of type REAL\")");
 	}
 
 	@Test
@@ -8813,7 +8828,7 @@ class JvmLispCompilerTest {
 		String source = """
 				(print (handler-case (atan #c(1d0 1d0) 1d0) (error (e) (princ-to-string e))))
 				""";
-		assertThat(compileAndRun(source)).contains("Expected real number");
+		assertThat(compileAndRun(source)).contains("ATAN: The value #C(1.0 1.0) is not of type REAL");
 		assertThat(compileAndRun(source)).isEqualTo(interpret(source));
 	}
 
@@ -8969,10 +8984,12 @@ class JvmLispCompilerTest {
 				             (te-print (lambda () (float #c(1 2))))
 				             (te-print (lambda () (numerator #c(1 2))))
 				             (te-print (lambda () (denominator #c(1 2))))))
-				""")).isEqualTo("(\"Expected real number, got: #C(1 2)\"" + " \"Expected real number, got: #C(1 2)\""
-				+ " \"Expected real number, got: #C(1 2)\"" + " \"Expected real number, got: #C(1 2)\""
-				+ " \"Expected real number, got: #C(1 2)\"" + " \"Expected real number, got: #C(1 2)\""
-				+ " \"Expected real number, got: #C(1 2)\")");
+				""")).isEqualTo("(\"FLOOR: The value #C(1 2) is not of type REAL\""
+				+ " \"TRUNCATE: The value #C(1 2) is not of type REAL\""
+				+ " \"CEILING: The value #C(1 2) is not of type REAL\""
+				+ " \"ROUND: The value #C(1 2) is not of type REAL\""
+				+ " \"FLOAT: The value #C(1 2) is not of type REAL\"" + " \"The value #C(1 2) is not of type REAL\""
+				+ " \"The value #C(1 2) is not of type REAL\")");
 		assertThat(compileAndRun("""
 				(defun te-print (thunk)
 				  (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
@@ -8983,10 +9000,12 @@ class JvmLispCompilerTest {
 				             (te-print (lambda () (lcm 4 #c(1 2))))
 				             (te-print (lambda () (logand #c(1 2) 3)))
 				             (te-print (lambda () (ash #c(1 2) 1)))))
-				""")).isEqualTo("(\"Expected integer, got: #C(1 2)\"" + " \"Expected integer, got: #C(1 2)\""
-				+ " \"Expected integer, got: #C(1 2)\"" + " \"Expected integer, got: #C(1 2)\""
-				+ " \"Expected integer, got: #C(1 2)\"" + " \"Expected integer, got: #C(1 2)\""
-				+ " \"Expected integer, got: #C(1 2)\")");
+				""")).isEqualTo("(\"ISQRT: The value #C(1 2) is not of type INTEGER\""
+				+ " \"MOD: The value #C(1 2) is not of type REAL\"" + " \"REM: The value #C(1 2) is not of type REAL\""
+				+ " \"GCD: The value #C(1 2) is not of type INTEGER\""
+				+ " \"LCM: The value #C(1 2) is not of type INTEGER\""
+				+ " \"LOGAND: The value #C(1 2) is not of type INTEGER\""
+				+ " \"ASH: The value #C(1 2) is not of type INTEGER\")");
 	}
 
 	@Test
@@ -15749,7 +15768,9 @@ class JvmLispCompilerTest {
 		// test in front of the id read, .kb/error-handling.md): +309 B.
 		// 9,421 since main runs the program on a sized worker thread
 		// (.kb/interpreter-stack.md): +817 B, in every class with a main.
-		assertThat(classBytes.length).isLessThan(9_500);
+		// 9,986 since a wrong-type operand's report names the operator
+		// (JvmOperandTypeRuntime): _teRaw, _opTypeErr and the (* x x) wrapper, +565 B.
+		assertThat(classBytes.length).isLessThan(10_100);
 		assertThat(runClass(classBytes)).isEqualTo("(1 4 9)");
 	}
 
@@ -17068,11 +17089,13 @@ class JvmLispCompilerTest {
 		// runtime helper; spelled as prin1-to-string over (+ req (length rest)) it pulled
 		// the mutable-string wrap, the generic length and the code-point helpers into
 		// a program that uses none of them: 7,708 -> 12,394 B for this program (CLI
-		// -o). The helper costs 8,112 there, 8,102 here.
+		// -o). The helper costs 8,112 there, 8,102 here; 8,713 since a wrong-type
+		// operand's report names the operator (JvmOperandTypeRuntime: _teRaw, _opTypeErr
+		// and the (+ a b) wrapper).
 		byte[] classBytes = new JvmLispCompiler("Test")
 			.compile(LispReader.readAllFromString("(defun f (a &optional (b 2)) (+ a b)) (print (f 1))"));
 		assertThat(declaredMethodNames(classBytes)).doesNotContain("_toMutStr", "_strToCharVec", "_length", "_scount");
-		assertThat(classBytes.length).isLessThan(8_200);
+		assertThat(classBytes.length).isLessThan(8_800);
 		assertThat(runClass(classBytes)).isEqualTo("3");
 	}
 

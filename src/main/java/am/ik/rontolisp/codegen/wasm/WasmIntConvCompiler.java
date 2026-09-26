@@ -74,8 +74,7 @@ final class WasmIntConvCompiler {
 			ctx.writer.writeUnsignedLeb128(bSlot);
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(fdivMode);
-			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_FDIV);
+			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_BIG_FDIV);
 			ctx.writer.write(Instruction.ELSE);
 			// A FLOAT operand divides exactly too: _f64_fdiv reads both operands as the
 			// exact rationals they are, so the quotient is the mathematical integer at
@@ -91,8 +90,7 @@ final class WasmIntConvCompiler {
 			ctx.writer.writeUnsignedLeb128(bSlot);
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(fdivMode);
-			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_F64_FDIV);
+			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_F64_FDIV);
 			ctx.writer.write(Instruction.TEE_LOCAL);
 			ctx.writer.writeUnsignedLeb128(exactSlot);
 			ctx.writer.write(Instruction.REF_IS_NULL);
@@ -102,8 +100,7 @@ final class WasmIntConvCompiler {
 			ctx.writer.writeUnsignedLeb128(aSlot);
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(bSlot);
-			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_DIV);
+			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_DIV);
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(tmpSlot);
 			emitGenericFromSlot(ctx, tmpSlot, f64RoundingOp, ratioFunc, fdivMode);
@@ -132,8 +129,7 @@ final class WasmIntConvCompiler {
 		ctx.writer.writeRefType(true, am.ik.wasm.Type.EQ.code());
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(tmpSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(ratioFunc);
+		WasmOperandTypes.emitCall(ctx, ratioFunc);
 		ctx.writer.write(Instruction.ELSE);
 		// Exact-integer path: an i31, boxed or limb integer is already its own
 		// conversion (the f64 route below would trap on a value past the i64 range).
@@ -171,8 +167,7 @@ final class WasmIntConvCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(fdivMode);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_F64_FDIV);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_F64_FDIV);
 		ctx.writer.write(Instruction.TEE_LOCAL);
 		ctx.writer.writeUnsignedLeb128(wideSlot);
 		ctx.writer.write(Instruction.REF_IS_NULL);
@@ -199,8 +194,7 @@ final class WasmIntConvCompiler {
 		}
 		ctx.writer.write(Instruction.MISC_PREFIX);
 		ctx.writer.writeUnsignedLeb128(Instruction.I64_TRUNC_SAT_F64_S);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_INT_NEW);
 	}
 
 	// Pushes `local[slot] is (i31 | TYPE_BIGNUM | TYPE_BIGINT)` as an i32.

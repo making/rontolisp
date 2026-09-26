@@ -21,7 +21,7 @@ in generated helpers so nothing duplicates `_rat`/`_norm`/`_dbl`.
 - Unconditional numeric helpers gain holder arms that are emitted only for a
   complex-capable program: `_abs` (float modulus), `_cmpb` (part-wise numeric:
   `=` and `zerop` over holders compare, ordering never reaches it),
-  `_min`/`_max` (throw `Expected real number`). `eql`/`equal`/`eq` need
+  `_min`/`_max` (throw a REAL operand-type report). `eql`/`equal`/`eq` need
   nothing (they fall through to the holder's `equals`).
 - Gated `GROUP_COMPLEX` (`JvmComplexRuntimeBuilder`, only when
   `mayCreateComplex`: a `#C` literal, a `complex`/`conjugate` call, a `sqrt`
@@ -230,7 +230,7 @@ The answer's type is now a run-time property, and the syntactic steering around 
 unchanged, so two shapes keep the pre-existing corner rather than gaining an arm:
 
 - `(+ 1.0 (log x))` takes the unboxed double path and lands in `_dbl`'s
-  `Expected number` (catchable, correctly rendered) when `x` is negative -- the same
+  NUMBER operand-type report (catchable, correctly rendered) when `x` is negative -- the same
   corner a complex arriving through a variable has always had. Widening
   `containsComplex` to cover the escapes would fix it and would also push every
   `(* alpha (log p))` in a numeric loop off the f64 path, which is the wrong trade.
@@ -249,7 +249,7 @@ which is byte-for-byte what it was.
   `(atan (imagpart z) (realpart z))` IS `(phase z)` and no second quadrant assembly
   exists to drift. Both arguments must be REAL (CLHS): they go through
   `compileUnboxedOperand`, whose `_dbl` funnel already throws the interpreter's
-  "Expected real number" for a holder. `atan` NEVER opens the complex gate -- it is not
+  a REAL operand-type report for a holder. `atan` NEVER opens the complex gate -- it is not
   a real-domain escape, and the two-argument form cannot answer a complex.
 - **`log/2` is TWO logarithms and one division.** `escapesToComplex` therefore reads
   BOTH literals: `(log 8 2)` keeps the gate shut and compiles to two `StrictMath.log` calls
@@ -332,7 +332,7 @@ carries the four shapes.
 ## Known corners (documented, not fixed here)
 
 A complex arriving only through a variable beside a double literal takes the
-unboxed path into `_dbl`'s `Expected number` landing (catchable, correctly
+unboxed path into `_dbl`'s NUMBER operand-type landing (catchable, correctly
 rendered) instead of the complex answer; ordering there answers `nil` instead
 of signalling. The embedded runtime reader has no `#C` arm yet. `signum` of a
 complex is 754's audit.

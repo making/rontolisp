@@ -87,7 +87,8 @@ final class WasmComplexCompiler {
 	}
 
 	// (realpart x): field 0 for a complex, the value itself for a real, _type_err_num
-	// ("Expected number, got: <prin1>") otherwise -- the interpreter's requireReal.
+	// ("The value <prin1> is not of type NUMBER") otherwise -- the interpreter's
+	// requireReal.
 	static void compileRealpart(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
@@ -334,7 +335,7 @@ final class WasmComplexCompiler {
 
 	// An ordering form (< > <= >=) carrying a syntactic complex, any arity: every
 	// adjacent pair must satisfy the relation; a complex in any pair lands in
-	// _type_err_real ("Expected real number, got: <prin1>"). A single argument is
+	// _type_err_real ("The value <prin1> is not of type REAL"). A single argument is
 	// true.
 	static void compileOrdering(LispCons cons, WasmLispCompiler.Ctx ctx, int mask) {
 		List<LispVal> args = cons.toList();
@@ -362,7 +363,7 @@ final class WasmComplexCompiler {
 
 	// The two-real-operands guard, over the two operand slots the caller already
 	// filled: a complex in either lands in _type_err_real (the interpreter's
-	// "Expected real number, got: <prin1>", caught as a simple-error on this
+	// "The value <prin1> is not of type REAL", caught as a simple-error on this
 	// backend, like every instance-less throw). min/max and the two-argument atan
 	// share it.
 	static void emitRealOperandGuard(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot) {
@@ -1832,8 +1833,7 @@ final class WasmComplexCompiler {
 	}
 
 	private static void call(WasmLispCompiler.Ctx ctx, int func) {
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(func);
+		WasmOperandTypes.emitCall(ctx, func);
 	}
 
 	private static void constI32(WasmLispCompiler.Ctx ctx, int value) {

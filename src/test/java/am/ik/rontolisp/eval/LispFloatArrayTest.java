@@ -341,8 +341,10 @@ class LispFloatArrayTest {
 
 	@Test
 	void storingANonRealIsATypeError() {
-		assertThatThrownBy(() -> eval("(let ((v #f(1.0))) (setf (aref v 0) \"x\"))")).hasMessageContaining("number");
-		assertThatThrownBy(() -> eval("(let ((v #d(1.0))) (setf (aref v 0) \"x\"))")).hasMessageContaining("number");
+		assertThatThrownBy(() -> eval("(let ((v #f(1.0))) (setf (aref v 0) \"x\"))"))
+			.hasMessage("The value \"x\" is not of type NUMBER");
+		assertThatThrownBy(() -> eval("(let ((v #d(1.0))) (setf (aref v 0) \"x\"))"))
+			.hasMessage("The value \"x\" is not of type NUMBER");
 	}
 
 	@Test

@@ -19,7 +19,7 @@ import am.ik.wasm.Type;
  * through the existing {@code _rat_div} -- so the answer is exactly what
  * {@code (/ num den)} of the same integers would be, including the backend's
  * ratio-component range. A complex or any other non-real takes the {@code _type_err_real}
- * landing (the interpreter's "Expected real number" text); a NaN or an infinity has no
+ * landing (the interpreter's REAL operand-type report text); a NaN or an infinity has no
  * exact rational and signals the interpreter's non-finite error instead.
  */
 final class WasmRationalCompiler {
@@ -68,8 +68,7 @@ final class WasmRationalCompiler {
 		// Anything else -- a complex, a non-number -- has no exact rational.
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(tmpSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_TYPE_ERR_REAL);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_TYPE_ERR_REAL);
 		ctx.writer.write(Instruction.UNREACHABLE);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
@@ -195,39 +194,33 @@ final class WasmRationalCompiler {
 		ctx.writer.write(Instruction.I64_GE_S);
 		ctx.writer.write(Instruction.IF, 0x40);
 		getI64(ctx, mantSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_INT_NEW);
 		getI64(ctx, expSlot);
 		ctx.writer.write(Instruction.I32_WRAP_I64);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_ASH);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_BIG_ASH);
 		setLocal(ctx, numSlot);
 		constI32(ctx, 1);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		setLocal(ctx, denSlot);
 		ctx.writer.write(Instruction.ELSE);
 		getI64(ctx, mantSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_INT_NEW);
 		setLocal(ctx, numSlot);
 		constI64(ctx, 1);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_INT_NEW);
 		constI64(ctx, 0);
 		getI64(ctx, expSlot);
 		ctx.writer.write(Instruction.I64_SUB);
 		ctx.writer.write(Instruction.I32_WRAP_I64);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_ASH);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_BIG_ASH);
 		setLocal(ctx, denSlot);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 		getLocal(ctx, numSlot);
 		getLocal(ctx, denSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_DIV);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_DIV);
 		ctx.nextI64Local = savedI64Locals;
 	}
 

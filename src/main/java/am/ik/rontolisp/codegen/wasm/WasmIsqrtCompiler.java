@@ -132,8 +132,7 @@ final class WasmIsqrtCompiler {
 	}
 
 	private static void call(WasmLispCompiler.Ctx ctx, int function) {
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(function);
+		WasmOperandTypes.emitCall(ctx, function);
 	}
 
 }

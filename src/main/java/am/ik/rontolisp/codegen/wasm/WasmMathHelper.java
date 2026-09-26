@@ -43,8 +43,7 @@ final class WasmMathHelper {
 	static void getI64(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_INT_VAL);
 	}
 
 	/**
@@ -52,8 +51,7 @@ final class WasmMathHelper {
 	 * {@code _int_new} (an i31 when it fits, a {@code TYPE_BIGNUM} box otherwise).
 	 */
 	static void setI64(WasmLispCompiler.Ctx ctx, int slot) {
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_INT_NEW);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
 	}

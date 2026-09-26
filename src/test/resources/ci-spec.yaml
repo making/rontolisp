@@ -17832,10 +17832,10 @@ cases:
   - name: non-number-arithmetic-operands-are-catchable
     source: |
       ;; A non-number reaching an arithmetic operator signals a CATCHABLE error
-      ;; carrying the interpreter's exact "Expected integer|number, got: <prin1>"
-      ;; text on every backend -- on the wasm pair it used to be an uncatchable
-      ;; `wasm trap: cast failure` straight past handler-case. The clause is
-      ;; `error` because the CLASS diverges deliberately: interpreter/JVM signal a
+      ;; carrying one text on every backend, "OP: The value X is not of type T" --
+      ;; the operator and the type IT accepts, not the coercion helper's (on the
+      ;; wasm pair it used to be an uncatchable `wasm trap: cast failure`). The
+      ;; clause is `error` because the CLASS diverges: interpreter/JVM signal a
       ;; type-error, the wasm runtime's instance-less payload synthesizes a
       ;; simple-error (.kb/error-handling.md, "A non-number reaching arithmetic").
       (defun ci-te-print (thunk)
@@ -17847,12 +17847,60 @@ cases:
       (print (ci-te-print (lambda () (+ 1.5 nil))))
       (print (ci-te-print (lambda () (logand 1 nil))))
     expected: |
-      "Expected integer, got: NIL"
-      "Expected integer, got: NIL"
-      "Expected integer, got: \"x\""
-      "Expected integer, got: CI-TE-SYM"
-      "Expected number, got: NIL"
-      "Expected integer, got: NIL"
+      "+: The value NIL is not of type NUMBER"
+      "<: The value NIL is not of type REAL"
+      "*: The value \"x\" is not of type NUMBER"
+      "MAX: The value CI-TE-SYM is not of type REAL"
+      "+: The value NIL is not of type NUMBER"
+      "LOGAND: The value NIL is not of type INTEGER"
+  - name: operand-type-errors-name-the-operator-wherever-it-compiles
+    source: |
+      ;; A wrong-type operand's report names the same operator on every backend
+      ;; wherever the backend compiled it: a condition-position compare, a fused
+      ;; integer tree, a counted loop, a function value, a two-argument rounding,
+      ;; and the shared rewrites under the operator they become (zerop -> =,
+      ;; evenp -> mod, logtest -> logand, incf and #'1+ -> +). A store into a
+      ;; packed array is no named operator and reports unnamed.
+      (defun ci-ot-print (thunk)
+        (handler-case (funcall thunk) (error (e) (princ-to-string e))))
+      (defvar *ci-ot-n* nil)
+      (print (ci-ot-print (lambda () (if (< *ci-ot-n* 1) :a :b))))
+      (print (ci-ot-print (lambda () (when (>= *ci-ot-n* 2) :a))))
+      (print (ci-ot-print (lambda () (if (zerop *ci-ot-n*) :a :b))))
+      (print (ci-ot-print (lambda () (if (evenp *ci-ot-n*) :a :b))))
+      (print (ci-ot-print (lambda () (dotimes (i *ci-ot-n*) i))))
+      (print (ci-ot-print (lambda () (let ((x 1)) (incf x *ci-ot-n*)))))
+      (print (ci-ot-print (lambda () (+ (* 2 *ci-ot-n*) 3))))
+      (print (ci-ot-print (lambda () (logand (ash 1 3) *ci-ot-n*))))
+      (print (ci-ot-print (lambda () (floor 7 *ci-ot-n*))))
+      (print (ci-ot-print (lambda () (truncate 1.5 *ci-ot-n*))))
+      (print (ci-ot-print (lambda () (* 1.5 *ci-ot-n*))))
+      (print (ci-ot-print (lambda () (sqrt "s"))))
+      (print (ci-ot-print (lambda () (expt 2.0 *ci-ot-n*))))
+      (print (ci-ot-print (lambda () (reduce #'max (list 3 *ci-ot-n* 1)))))
+      (print (ci-ot-print (lambda () (mapcar #'1+ (list *ci-ot-n*)))))
+      (print (ci-ot-print (lambda () (atan #c(1 2) 1))))
+      (print (ci-ot-print (lambda () (logtest 1 *ci-ot-n*))))
+      (print (ci-ot-print (lambda () (setf (aref #d(1.0 2.0) 0) "x"))))
+    expected: |
+      "<: The value NIL is not of type REAL"
+      ">=: The value NIL is not of type REAL"
+      "=: The value NIL is not of type NUMBER"
+      "MOD: The value NIL is not of type REAL"
+      "<: The value NIL is not of type REAL"
+      "+: The value NIL is not of type NUMBER"
+      "*: The value NIL is not of type NUMBER"
+      "LOGAND: The value NIL is not of type INTEGER"
+      "FLOOR: The value NIL is not of type REAL"
+      "TRUNCATE: The value NIL is not of type REAL"
+      "*: The value NIL is not of type NUMBER"
+      "SQRT: The value \"s\" is not of type NUMBER"
+      "EXPT: The value NIL is not of type NUMBER"
+      "MAX: The value NIL is not of type REAL"
+      "+: The value NIL is not of type NUMBER"
+      "ATAN: The value #C(1 2) is not of type REAL"
+      "LOGAND: The value NIL is not of type INTEGER"
+      "The value \"x\" is not of type NUMBER"
   # CLHS 3.5.1.4-6 / .kb/error-handling.md, "Argument-shape errors signal a
   # catchable program-error": a keyword the operator does not accept, an odd
   # keyword tail and a non-keyword in keyword position signal a CATCHABLE
@@ -18600,11 +18648,11 @@ cases:
       #C(5.0 0.0)
       5
       :COMPLEX
-      "Expected real number, got: #C(1 2)"
-      "Expected real number, got: #C(1 2)"
-      "Expected real number, got: #C(1 2)"
-      "Expected integer, got: #C(1 2)"
-      "Expected real number, got: #C(1 2)"
+      "<: The value #C(1 2) is not of type REAL"
+      "<: The value #C(1 2) is not of type REAL"
+      "FLOOR: The value #C(1 2) is not of type REAL"
+      "ISQRT: The value #C(1 2) is not of type INTEGER"
+      "FLOAT: The value #C(1 2) is not of type REAL"
       #C(5.0 0.0)
   - name: arithmetic-identities-with-no-arguments
     source: |

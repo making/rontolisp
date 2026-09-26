@@ -77,9 +77,9 @@ final class JvmComplexRuntimeBuilder {
 	static final String CONJUGATE = "_cconjugate";
 
 	/**
-	 * Like {@code _cmpb} but a complex operand signals the interpreter's "Expected real
-	 * number" text: the ordering operators' comparison once a complex literal steered
-	 * them off the double path.
+	 * Like {@code _cmpb} but a complex operand signals a REAL operand-type report: the
+	 * ordering operators' comparison once a complex literal steered them off the double
+	 * path.
 	 */
 	static final String CCPMB = "_ccmpb";
 
@@ -227,8 +227,7 @@ final class JvmComplexRuntimeBuilder {
 			ClassConstant bigClass, ClassConstant ratArrClass, ClassConstant numberClass, ClassConstant mathClass,
 			ClassConstant rteClass, MethodrefConstant longValueOf, MethodrefConstant longValue,
 			MethodrefConstant doubleValueOf, MethodrefConstant numDoubleValue, MethodrefConstant rteInit,
-			MethodrefConstant strConcat, MethodrefConstant lispToString, ConstantPool.StringConstant numPrefix,
-			ConstantPool.StringConstant realPrefix, MethodrefConstant rAdd, MethodrefConstant rSub,
+			JvmOperandTypeRuntime.ThrowRefs throwRefs, MethodrefConstant rAdd, MethodrefConstant rSub,
 			MethodrefConstant rMul, MethodrefConstant rDiv, MethodrefConstant rNeg, MethodrefConstant rDbl,
 			MethodrefConstant rCmp, MethodrefConstant rCComplex, MethodrefConstant rCMul, MethodrefConstant rCDiv,
 			MethodrefConstant rPow) {
@@ -261,13 +260,7 @@ final class JvmComplexRuntimeBuilder {
 						cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(D)Ljava/lang/Double;"))),
 				cp.addMethodref(numberClass, cp.addNameAndType(cp.addUtf8("doubleValue"), cp.addUtf8("()D"))),
 				cp.addMethodref(rteClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V"))),
-				cp.addMethodref(stringClass,
-						cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;"))),
-				cp.addMethodref(thisClass,
-						cp.addNameAndType(cp.addUtf8("_lispToString"),
-								cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/String;"))),
-				cp.addString(am.ik.rontolisp.ClosRegistry.EXPECTED_NUMBER_MESSAGE_PREFIX),
-				cp.addString(am.ik.rontolisp.ClosRegistry.EXPECTED_REAL_MESSAGE_PREFIX),
+				JvmOperandTypeRuntime.ThrowRefs.of(cp, thisClass),
 				self(cp, thisClass, JvmNumericRuntimeBuilder.ADD, BINARY_DESC),
 				self(cp, thisClass, JvmNumericRuntimeBuilder.SUB, BINARY_DESC),
 				self(cp, thisClass, JvmNumericRuntimeBuilder.MUL, BINARY_DESC),
@@ -551,8 +544,8 @@ final class JvmComplexRuntimeBuilder {
 
 	/**
 	 * Unboxes the real value in {@code slot} to a raw double ({@code _dbl} plus
-	 * {@code Number.doubleValue}, throwing the interpreter's "Expected number" text for a
-	 * non-number).
+	 * {@code Number.doubleValue}, throwing the interpreter's NUMBER operand-type report
+	 * text for a non-number).
 	 */
 	private static void emitToDouble(List<Integer> c, Refs refs, int slot) {
 		aload(c, slot);
@@ -570,22 +563,11 @@ final class JvmComplexRuntimeBuilder {
 	}
 
 	/**
-	 * Emits {@code throw new RuntimeException("Expected number, got: " +
-	 * _lispToString(value))} for the value in {@code slot}.
+	 * Emits {@code throw _teRaw(value, "NUMBER")} for the value in {@code slot}.
 	 */
 	private static void emitNumberErrThrow(List<Integer> c, Refs refs, int slot) {
-		c.add(Opcode.NEW);
-		emitU2(c, refs.rteClass().index());
-		c.add(Opcode.DUP);
-		emitLdc(c, refs.numPrefix().index());
 		aload(c, slot);
-		c.add(Opcode.INVOKESTATIC);
-		emitU2(c, refs.lispToString().index());
-		c.add(Opcode.INVOKEVIRTUAL);
-		emitU2(c, refs.strConcat().index());
-		c.add(Opcode.INVOKESPECIAL);
-		emitU2(c, refs.rteInit().index());
-		c.add(Opcode.ATHROW);
+		refs.throwRefs().emitThrowLoaded(c, refs.throwRefs().numberKind());
 	}
 
 	/**
@@ -698,7 +680,8 @@ final class JvmComplexRuntimeBuilder {
 	}
 
 	// _ccomplex(Object real, Object imag): the canonical value. A non-real part
-	// signals "Expected number"; a float anywhere coerces both parts to floats (a
+	// signals NUMBER operand-type report; a float anywhere coerces both parts to floats
+	// (a
 	// float zero never demotes); a rational zero imaginary part demotes to the
 	// real itself; otherwise a fresh holder.
 	private static ComplexMethod buildComplex(Refs refs, Utf8Constant name, Utf8Constant desc) {
@@ -2164,7 +2147,7 @@ final class JvmComplexRuntimeBuilder {
 	}
 
 	// _ccmpb(Object a, Object b): like _cmpb, but a complex operand signals the
-	// interpreter's "Expected real number" text instead of comparing.
+	// interpreter's REAL operand-type report text instead of comparing.
 	private static ComplexMethod buildCCmpBits(Refs refs, ConstantPool cp, Utf8Constant name, Utf8Constant desc) {
 		MethodrefConstant rCmpb = self(cp, refs.thisClass(), JvmNumericRuntimeBuilder.CMPB, CMP_DESC);
 		List<Integer> c = new ArrayList<>();
@@ -2188,22 +2171,11 @@ final class JvmComplexRuntimeBuilder {
 	}
 
 	/**
-	 * Emits {@code throw new RuntimeException("Expected real number, got: " +
-	 * _lispToString(value))} for the value in {@code slot}.
+	 * Emits {@code throw _teRaw(value, "REAL")} for the value in {@code slot}.
 	 */
 	private static void emitRealErrThrow(List<Integer> c, Refs refs, int slot) {
-		c.add(Opcode.NEW);
-		emitU2(c, refs.rteClass().index());
-		c.add(Opcode.DUP);
-		emitLdc(c, refs.realPrefix().index());
 		aload(c, slot);
-		c.add(Opcode.INVOKESTATIC);
-		emitU2(c, refs.lispToString().index());
-		c.add(Opcode.INVOKEVIRTUAL);
-		emitU2(c, refs.strConcat().index());
-		c.add(Opcode.INVOKESPECIAL);
-		emitU2(c, refs.rteInit().index());
-		c.add(Opcode.ATHROW);
+		refs.throwRefs().emitThrowLoaded(c, refs.throwRefs().realKind());
 	}
 
 	// _cphase(Object x): the angle of a complex value, 0.0 for a non-negative
@@ -2322,7 +2294,7 @@ final class JvmComplexRuntimeBuilder {
 	}
 
 	// _cconjugate(Object x): (re, -im) for a holder, the value itself for a
-	// real (signalling "Expected number" otherwise).
+	// real (signalling NUMBER operand-type report otherwise).
 	private static ComplexMethod buildConjugate(Refs refs, Utf8Constant name, Utf8Constant desc) {
 		List<Integer> c = new ArrayList<>();
 		aload(c, 0);

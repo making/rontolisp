@@ -28464,7 +28464,7 @@ public final class LispMacroExpander {
 	 * conversion over the value. An instance-free signal is required here -- an
 	 * {@code (error 'type-error ...)} designator builds a condition instance and cannot
 	 * compile into an instance-free program -- and every backend's {@code float} funnel
-	 * throws the interpreter's "Expected real number" text for a complex (and an error
+	 * throws the interpreter's REAL operand-type report text for a complex (and an error
 	 * for any other non-real), catchable as a type-error where the backend types its
 	 * throws. Only reached for a non-real value (a real answers itself upstream).
 	 * @param value the offending value form
@@ -33567,13 +33567,28 @@ public final class LispMacroExpander {
 	 * @return the construction form
 	 */
 	public static LispVal reportingConditionForm(ClosRegistry closRegistry, String className, LispVal message) {
+		return reportingConditionForm(closRegistry, className, message, java.util.Map.of());
+	}
+
+	/**
+	 * {@link #reportingConditionForm(ClosRegistry, String, LispVal)} with more slots
+	 * filled -- a {@code type-error}'s {@code DATUM} and {@code EXPECTED-TYPE}.
+	 * @param closRegistry the registry holding the class's slot order
+	 * @param className the seeded condition class
+	 * @param message the form evaluating to the message
+	 * @param slotForms slot base name to the form evaluating to its value
+	 * @return the construction form
+	 */
+	public static LispVal reportingConditionForm(ClosRegistry closRegistry, String className, LispVal message,
+			java.util.Map<String, LispVal> slotForms) {
 		ClosRegistry.ClassInfo info = closRegistry.findClass(className);
 		List<LispVal> parts = new java.util.ArrayList<>();
 		parts.add(new LispSymbol(LispNames.OBJ_NEW));
 		parts.add(quoteOf(LispLayout.CLASS_TAG_PREFIX + className));
 		if (info != null) {
 			for (ClosRegistry.SlotSpec slot : info.slots()) {
-				parts.add("FORMAT-CONTROL".equals(slot.baseName()) ? message : LispNil.INSTANCE);
+				parts.add("FORMAT-CONTROL".equals(slot.baseName()) ? message
+						: slotForms.getOrDefault(slot.baseName(), LispNil.INSTANCE));
 			}
 		}
 		return listToCons(parts);

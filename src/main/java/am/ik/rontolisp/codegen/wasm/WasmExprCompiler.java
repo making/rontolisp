@@ -322,6 +322,12 @@ final class WasmExprCompiler {
 	 * (not through {@code compileExpr}) can never see a stale marker.
 	 */
 	private static void compileCons(LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
+		// The innermost form's operator names a wrong-type operand's report
+		// (WasmOperandTypes): a numeric helper called while compiling THIS form is
+		// called under its operator, one called while compiling an argument form under
+		// that form's.
+		String outerOperator = ctx.operator;
+		ctx.operator = cons.car() instanceof LispSymbol head ? head.name() : null;
 		try {
 			compileConsLocated(cons, ctx, tail);
 		}
@@ -329,6 +335,9 @@ final class WasmExprCompiler {
 			// The innermost cons that came from source names the position; the exception
 			// itself is rethrown untouched, since passes above catch it by type.
 			throw SourceProvenance.noteFailure(cons, ex);
+		}
+		finally {
+			ctx.operator = outerOperator;
 		}
 	}
 

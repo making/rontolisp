@@ -57,8 +57,7 @@ final class WasmAbsCompiler {
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(0);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_CMP);
+			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_CMP);
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(0);
 			ctx.writer.write(Instruction.I32_LT_S);
@@ -70,8 +69,7 @@ final class WasmAbsCompiler {
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(tmpSlot);
-			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_SUB);
+			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_SUB);
 			// else: return x as-is
 			ctx.writer.write(Instruction.ELSE);
 			ctx.writer.write(Instruction.GET_LOCAL);

@@ -144,7 +144,7 @@ final class JvmMathFnCompiler {
 		if (LispNames.ATAN.equals(name)) {
 			// Both arguments must be REAL (CLHS). A complex reaching the f64
 			// coercion is not silently reduced to its real part: _dbl throws the
-			// interpreter's "Expected real number" there.
+			// interpreter's REAL operand-type report there.
 			JvmArithCompiler.compileUnboxedOperand(args.get(1), ctx, className);
 			JvmArithCompiler.compileUnboxedOperand(args.get(2), ctx, className);
 			ctx.emit(Opcode.INVOKESTATIC);

@@ -46,7 +46,7 @@ path allocated and immediately unwrapped, never a different computation. Sibling
   whose mixed arm decomposes the double through `_frat` and cross-multiplies against the
   exact operand's (`_ratNum`, `_ratDen`) — the interpreter's `compareFloat` in bytecode
   (NaN unordered, infinities beyond every exact number on their side, the non-number
-  funnel staying "Expected number"). `_cmp`'s prologue mirrors it for the complex parts
+  funnel staying a NUMBER operand-type report). `_cmp`'s prologue mirrors it for the complex parts
   (a NaN jumps back to the old DCMPL, which collapses it to -1 as before). The ANSI
   `*.17`/`*.18` + `BIGNUM.FLOAT.COMPARE.1A-4B` pin the interpreter; `JvmLispCompilerTest`
   pins the JVM call-site gate (a double LITERAL beside a computed ratio) and the funnel.

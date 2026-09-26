@@ -1686,11 +1686,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	static final int FUNC_FILE_POSITION_SET = FUNC_FILE_POSITION + 1;
 
 	// _type_err_int / _type_err_num ((ref null eq) culprit) -> (): the arithmetic
-	// runtime's non-number landing (WasmEmitHelper.buildTypeErrBody). _int_val's
+	// runtime's non-number landing (WasmOperandTypes.buildLandingBody). _int_val's
 	// non-integer arm calls the first, _as_f64's non-number arm the second; both arms
 	// used to be a bare ref.cast whose failure was an UNCATCHABLE host trap
 	// (.kb/error-handling.md, "A non-number reaching arithmetic"). In EH mode the body
-	// renders "Expected integer|number, got: <prin1>" and throws it on $lisp-cond, so
+	// renders "OP: The value <prin1> is not of type T" (the operator from the operator
+	// register) and throws it on $lisp-cond, so
 	// handler-case catches it and the entry landing pad reports it; outside EH mode the
 	// body is a bare `unreachable` -- no tag exists and nothing could catch it -- which
 	// keeps the printer family unreachable there. Both reuse the ((ref null eq)) -> ()
@@ -1822,8 +1823,8 @@ public final class WasmLispCompiler implements LispCompiler {
 	static final int FUNC_C_NEG = FUNC_C_DIV + 1;
 
 	// _type_err_real ((ref null eq)) -> (): the landing for a complex reaching an
-	// ordering operator (or min/max) -- the interpreter's "Expected real number,
-	// got: <prin1>" text, a catchable $lisp-cond throw in EH mode (caught as a
+	// ordering operator (or min/max) -- a REAL operand-type report, a catchable
+	// $lisp-cond throw in EH mode (caught as a
 	// simple-error, the documented instance-less-throw divergence) and a bare
 	// `unreachable` outside it. Reuses TYPE_PRINT_VAL; appended after the last
 	// fixed helper so no index above shifts.
@@ -3937,24 +3938,28 @@ public final class WasmLispCompiler implements LispCompiler {
 						: hashGasGlobalIndex >= 0 ? hashGasGlobalIndex : ostreamTableGlobalIndex;
 		int renderPathGlobalIndex = lastCounterGlobalIndex + 1;
 		int renderDepthGlobalIndex = lastCounterGlobalIndex + 2;
+		// The operator register (WasmOperandTypes), EH mode only: outside it a
+		// wrong-type operand traps with no message to name an operator in.
+		int operandOpGlobalIndex = ehMode ? renderDepthGlobalIndex + 1 : -1;
 		// The ended-stream latch of a module that binds a component stream.read: a cons
 		// list of the i31 readable-end handles whose read completed DROPPED. That status
 		// can come WITH the last items (Dropped(n), n > 0), and the host traps the next
 		// stream.read of the handle, so the read wrappers answer a latched handle nil
-		// without touching it; its drop-readable unlinks it. After the render pair, so
-		// every module without a stream read keeps the globals it had.
+		// without touching it; its drop-readable unlinks it. After the operator register,
+		// so every module without a stream read keeps the globals it had.
 		boolean readsComponentStream = componentAsyncWrappers.values()
 			.stream()
 			.anyMatch(async -> async.stream() && async.op() == WasmComponentImportCompiler.AsyncOp.READ);
-		int streamEndedGlobalIndex = readsComponentStream ? renderDepthGlobalIndex + 1 : -1;
+		int streamEndedGlobalIndex = readsComponentStream
+				? (operandOpGlobalIndex >= 0 ? operandOpGlobalIndex : renderDepthGlobalIndex) + 1 : -1;
 		// The quoted-datum constants (.kb/quoted-data.md): one (mut (ref null eq)) =
 		// null per quoted aggregate the bodies compile, discovered DURING body
 		// compilation, so they are appended after every fixed-index global above --
 		// the render-guard pair included -- and nothing renumbers. A program with no
 		// quoted aggregate allocates none and is byte-identical to a build that never
 		// knew about them.
-		QuoteGlobals quoteGlobals = new QuoteGlobals(
-				(streamEndedGlobalIndex >= 0 ? streamEndedGlobalIndex : renderDepthGlobalIndex) + 1);
+		QuoteGlobals quoteGlobals = new QuoteGlobals((streamEndedGlobalIndex >= 0 ? streamEndedGlobalIndex
+				: operandOpGlobalIndex >= 0 ? operandOpGlobalIndex : renderDepthGlobalIndex) + 1);
 
 		// Create string table. The page-6 component base exists to keep the static data
 		// clear of the OTHER writers of the shared memory (the adapter's page-5 scratch,
@@ -3964,19 +3969,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		int dataBase = this.component && !this.noWasi ? COMPONENT_DATA_BASE_OFFSET : DATA_BASE_OFFSET;
 		StringTable stringTable = new StringTable(dataBase, this.usesEqualpHashTables, this.usesIdentityHashTables);
 		StringTable.StringEntry tSymEntry = stringTable.addBodyString("T");
-		// The _type_err_int/_type_err_num/_type_err_real message prefixes, interned
-		// HERE -- before any body compiles -- because a string added during code
-		// emission would land after the data segment's content is fixed. EH mode only:
-		// outside it all three bodies are a bare `unreachable` that cites no bytes.
-		StringTable.StringEntry expIntEntry = ehMode
-				? stringTable.addBodyString("\"" + am.ik.rontolisp.ClosRegistry.EXPECTED_INTEGER_MESSAGE_PREFIX + "\"")
-				: null;
-		StringTable.StringEntry expNumEntry = ehMode
-				? stringTable.addBodyString("\"" + am.ik.rontolisp.ClosRegistry.EXPECTED_NUMBER_MESSAGE_PREFIX + "\"")
-				: null;
-		StringTable.StringEntry expRealEntry = ehMode
-				? stringTable.addBodyString("\"" + am.ik.rontolisp.ClosRegistry.EXPECTED_REAL_MESSAGE_PREFIX + "\"")
-				: null;
+		// The _type_err_int/_type_err_num/_type_err_real texts, interned HERE -- before
+		// any body compiles -- because the landing bodies are built after the data
+		// segment's content is fixed. EH mode only: outside it all three bodies are a
+		// bare `unreachable` that cites no bytes.
+		WasmOperandTypes.Texts operandTexts = ehMode ? WasmOperandTypes.Texts.intern(stringTable) : null;
+		final List<LispVal> spelledProgram = program;
+		WasmOperandTypes.Operators operandOperators = ehMode
+				? WasmOperandTypes.Operators.place(stringTable, name -> programUsesSymbol(spelledProgram, name))
+				: WasmOperandTypes.Operators.NONE;
 		// The Schubfach float-printer tables (todo-431): ONE shakeable blob whose only
 		// readers are the _schub_* helper bodies built later, so a program that never
 		// prints a float carries no table bytes. Appended here, BEFORE any user body
@@ -4159,6 +4160,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			.mutableStringProducers(mutableStringProducers)
 			.charvecPossible(this.charvecPossible)
 			.ehDepthGlobalIndex(ehDepthGlobalIndex)
+			.operandOpGlobalIndex(operandOpGlobalIndex)
+			.operandOperators(operandOperators)
 			.rawSentinelGlobalIndex(rawSentinelGlobalIndex)
 			.functions(functions)
 			.inlinableDefuns(inlinableDefuns)
@@ -7256,6 +7259,16 @@ public final class WasmLispCompiler implements LispCompiler {
 					g.writeSignedLeb128(0);
 					g.write(Instruction.END);
 				});
+				// The operator register at operandOpGlobalIndex, a (mut i32) = 0.
+				if (operandOpGlobalIndex >= 0) {
+					gs.add(g -> {
+						g.write(Type.I32);
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.I32_CONST);
+						g.writeSignedLeb128(0);
+						g.write(Instruction.END);
+					});
+				}
 				// The ended-stream latch at streamEndedGlobalIndex, a (mut (ref null eq))
 				// = null (the empty list), present only when a stream.read is bound.
 				if (streamEndedGlobalIndex >= 0) {
@@ -7739,8 +7752,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				// FUNC_TYPE_ERR_NUM): a catchable $lisp-cond throw in EH mode, a bare
 				// `unreachable` outside it (no tag section exists there, and referencing
 				// the prin1 renderer would pin the printer family into every module).
-				code.addFunction(WasmEmitHelper.buildTypeErrBody(ehMode, expIntEntry, this.usesIdentityHashTables));
-				code.addFunction(WasmEmitHelper.buildTypeErrBody(ehMode, expNumEntry, this.usesIdentityHashTables));
+				code.addFunction(WasmOperandTypes.buildLandingBody(am.ik.rontolisp.compiler.OperandTypes.Kind.INTEGER,
+						operandTexts, operandOperators.base(), operandOpGlobalIndex, this.usesIdentityHashTables));
+				code.addFunction(WasmOperandTypes.buildLandingBody(am.ik.rontolisp.compiler.OperandTypes.Kind.NUMBER,
+						operandTexts, operandOperators.base(), operandOpGlobalIndex, this.usesIdentityHashTables));
 				// either-representation character index body (FUNC_STR_CHAR_REF)
 				code.addFunction(WasmStringRuntimeBuilder.buildStrCharRefBody());
 				// string -> mutable character vector body (FUNC_STR_TO_CV)
@@ -7771,7 +7786,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmComplexRuntimeBuilder.buildDivBody());
 				code.addFunction(WasmComplexRuntimeBuilder.buildNegBody());
 				// ordering-over-complex landing body (FUNC_TYPE_ERR_REAL)
-				code.addFunction(WasmEmitHelper.buildTypeErrBody(ehMode, expRealEntry, this.usesIdentityHashTables));
+				code.addFunction(WasmOperandTypes.buildLandingBody(am.ik.rontolisp.compiler.OperandTypes.Kind.REAL,
+						operandTexts, operandOperators.base(), operandOpGlobalIndex, this.usesIdentityHashTables));
 				// complex signum body (FUNC_C_SIGNUM)
 				code.addFunction(WasmComplexRuntimeBuilder.buildCsignumBody());
 				// directory-creation body (FUNC_MAKE_DIRECTORIES)
@@ -9907,6 +9923,24 @@ public final class WasmLispCompiler implements LispCompiler {
 		int ehDepthGlobalIndex = -1;
 
 		/**
+		 * The operator register, a {@code (mut i32)}: a call to the numeric runtime
+		 * compiled inside a named operator's form stores the operator's packed report
+		 * prefix here for the call's duration, and the {@code _type_err_*} landings read
+		 * (and clear) it ({@link WasmOperandTypes}). -1 outside EH mode, where the
+		 * landings trap without a message.
+		 */
+		int operandOpGlobalIndex = -1;
+
+		/** The module's operator table ({@link WasmOperandTypes.Operators}). */
+		WasmOperandTypes.Operators operandOperators = WasmOperandTypes.Operators.NONE;
+
+		/**
+		 * The operator of the innermost form being compiled (set by
+		 * {@code WasmExprCompiler.compileCons}).
+		 */
+		@Nullable String operator;
+
+		/**
 		 * True under {@code --simd}: the vectorizable {@code vec:} kernels are routed to
 		 * the {@link WasmVecSimdRuntimeBuilder} v128 helpers at their call sites, and a
 		 * packed float array's {@code TYPE_FARRAY} data field holds a {@code TYPE_VBLOCK}
@@ -10382,6 +10416,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.charvecPossible = builder.charvecPossible;
 			this.injectedRuntimeDefunNames = builder.injectedRuntimeDefunNames;
 			this.ehDepthGlobalIndex = builder.ehDepthGlobalIndex;
+			this.operandOpGlobalIndex = builder.operandOpGlobalIndex;
+			this.operandOperators = builder.operandOperators;
 			this.rawSentinelGlobalIndex = builder.rawSentinelGlobalIndex;
 			this.simd = builder.simd;
 			this.userFuncBase = builder.userFuncBase;
@@ -10531,6 +10567,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			private Set<String> injectedRuntimeDefunNames = Set.of();
 
 			private int ehDepthGlobalIndex = -1;
+
+			private int operandOpGlobalIndex = -1;
+
+			private WasmOperandTypes.Operators operandOperators = WasmOperandTypes.Operators.NONE;
 
 			private int rawSentinelGlobalIndex = -1;
 
@@ -10860,6 +10900,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder ehDepthGlobalIndex(int ehDepthGlobalIndex) {
 				this.ehDepthGlobalIndex = ehDepthGlobalIndex;
+				return this;
+			}
+
+			Builder operandOpGlobalIndex(int operandOpGlobalIndex) {
+				this.operandOpGlobalIndex = operandOpGlobalIndex;
+				return this;
+			}
+
+			Builder operandOperators(WasmOperandTypes.Operators operandOperators) {
+				this.operandOperators = operandOperators;
 				return this;
 			}
 

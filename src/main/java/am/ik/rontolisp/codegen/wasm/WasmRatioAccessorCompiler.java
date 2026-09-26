@@ -33,8 +33,7 @@ final class WasmRatioAccessorCompiler {
 		ctx.writer.write(Instruction.IF, 0x40);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_TYPE_ERR_REAL);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_TYPE_ERR_REAL);
 		ctx.writer.write(Instruction.UNREACHABLE);
 		ctx.writer.write(Instruction.END);
 		// if (x is a wide integer) { x, or 1 } else { the i31 helper answer }
@@ -51,8 +50,7 @@ final class WasmRatioAccessorCompiler {
 		ctx.writer.write(Instruction.IF, 0x40);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(ratioFunc);
+		WasmOperandTypes.emitCall(ctx, ratioFunc);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);

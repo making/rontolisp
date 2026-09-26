@@ -8,6 +8,7 @@ import am.ik.jvm.ByteCodeWriter;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispInteger;
@@ -670,10 +671,18 @@ final class JvmHandlerCaseCompiler {
 		List<Integer> joins = new ArrayList<>();
 		for (int i = 0; i < classes.size(); i++) {
 			List<Integer> skips = emitRawFailureTest(i, excSlot, rawSlot, ctx);
-			JvmExprCompiler.compileExpr(
-					LispMacroExpander.reportingConditionForm(ctx.closRegistry, classes.get(i), msgVar), ctx, className);
-			ctx.emit(Opcode.ASTORE);
-			ctx.emit(condSlot);
+			if (i == 0 && ctx.numOps.containsKey(JvmOperandTypeRuntime.TE_SLOT)) {
+				// The type-error arm: a wrong-type operand's datum and expected type come
+				// from its record, nil for any other type failure.
+				emitTypeErrorConstruction(excSlot, condSlot, classes.get(i), msgVar, ctx, className);
+			}
+			else {
+				JvmExprCompiler.compileExpr(
+						LispMacroExpander.reportingConditionForm(ctx.closRegistry, classes.get(i), msgVar), ctx,
+						className);
+				ctx.emit(Opcode.ASTORE);
+				ctx.emit(condSlot);
+			}
 			joins.add(ctx.code.size());
 			ctx.emit(Opcode.GOTO);
 			ctx.emitU2(0);
@@ -694,6 +703,42 @@ final class JvmHandlerCaseCompiler {
 	}
 
 	/**
+	 * Emits the {@code type-error} arm's construction with {@code datum} and
+	 * {@code expected-type} read through {@code _teSlot}, bound as pseudo-locals so the
+	 * construction stays an ordinary compiled Lisp form.
+	 */
+	private static void emitTypeErrorConstruction(int excSlot, int condSlot, String conditionClass, LispSymbol msgVar,
+			JvmLispCompiler.Ctx ctx, String className) {
+		int datumSlot = ctx.allocTemp();
+		int typeSlot = ctx.allocTemp();
+		for (int[] slot : new int[][] { { 1, datumSlot }, { 2, typeSlot } }) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(excSlot);
+			JvmEmitHelper.emitIntConst(ctx, slot[0]);
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.TE_SLOT).index());
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(slot[1]);
+		}
+		String datumVar = "__hc_datum$" + datumSlot;
+		String typeVar = "__hc_etype$" + typeSlot;
+		ctx.locals.put(datumVar, datumSlot);
+		ctx.locals.put(typeVar, typeSlot);
+		try {
+			JvmExprCompiler.compileExpr(
+					LispMacroExpander.reportingConditionForm(ctx.closRegistry, conditionClass, msgVar, java.util.Map
+						.of("DATUM", new LispSymbol(datumVar), "EXPECTED-TYPE", new LispSymbol(typeVar))),
+					ctx, className);
+		}
+		finally {
+			ctx.locals.remove(datumVar);
+			ctx.locals.remove(typeVar);
+		}
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(condSlot);
+	}
+
+	/**
 	 * Emits the test guarding raw-failure arm {@code index}, and answers the branch
 	 * positions to patch to the arm's END (i.e. the "does not apply" exits). The order
 	 * mirrors {@link LispMacroExpander#rawFailureConditionClasses()}: type-error,
@@ -703,21 +748,31 @@ final class JvmHandlerCaseCompiler {
 	private static List<Integer> emitRawFailureTest(int index, int excSlot, int rawSlot, JvmLispCompiler.Ctx ctx) {
 		return switch (index) {
 			case 0 -> {
-				// A cast failure, an out-of-range index, the numeric runtime's
-				// "Expected integer|number|real number, got:" message, or a dispatcher's
-				// "Not a function: " (JvmRuntimeBuilder.buildNotFnBody): type-error.
-				// Neither is an
-				// ArithmeticException, so testing this arm first costs the arithmetic
-				// arms nothing. The message tests exist because those throw sites are
-				// plain RuntimeExceptions with no channel to carry a class (the
-				// unbound-variable precedent); the interpreter types the same texts at
-				// its own throw sites (Environment.asLong/asDouble/asBigInteger).
+				// A cast failure, an out-of-range index, a wrong-type operand (its
+				// exception recorded by identity, JvmOperandTypeRuntime), or a
+				// dispatcher's "Not a function: " (JvmRuntimeBuilder.buildNotFnBody):
+				// type-error. None is an ArithmeticException, so testing this arm first
+				// costs the arithmetic arms nothing. The message test exists because that
+				// throw site is a plain RuntimeException with no channel to carry a class
+				// (the unbound-variable precedent).
 				List<Integer> skips = new ArrayList<>();
 				List<Integer> hits = new ArrayList<>();
 				hits.add(emitInstanceOfJump(excSlot, "java/lang/ClassCastException", ctx, true));
-				hits.add(emitMessagePrefixHit(rawSlot, ClosRegistry.EXPECTED_INTEGER_MESSAGE_PREFIX, ctx));
-				hits.add(emitMessagePrefixHit(rawSlot, ClosRegistry.EXPECTED_NUMBER_MESSAGE_PREFIX, ctx));
-				hits.add(emitMessagePrefixHit(rawSlot, ClosRegistry.EXPECTED_REAL_MESSAGE_PREFIX, ctx));
+				if (ctx.numOps.containsKey(JvmOperandTypeRuntime.TE_SLOT)) {
+					// A wrong-type operand's exception is recorded under its identity
+					// (JvmOperandTypeRuntime), so no message is parsed here.
+					ctx.emit(Opcode.ALOAD);
+					ctx.emit(excSlot);
+					ctx.emit(Opcode.ICONST_0);
+					ctx.emit(Opcode.INVOKESTATIC);
+					ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.TE_SLOT).index());
+					hits.add(ctx.code.size());
+					ctx.emit(Opcode.IFNONNULL);
+					ctx.emitU2(0);
+				}
+				else {
+					hits.add(emitMessagePrefixHit(rawSlot, OperandTypes.VALUE_PREFIX, ctx));
+				}
 				hits.add(emitMessagePrefixHit(rawSlot, ClosRegistry.NOT_A_FUNCTION_MESSAGE_PREFIX, ctx));
 				skips.add(emitInstanceOfJump(excSlot, "java/lang/IndexOutOfBoundsException", ctx, false));
 				for (int hit : hits) {

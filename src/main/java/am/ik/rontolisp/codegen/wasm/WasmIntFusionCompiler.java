@@ -688,8 +688,7 @@ final class WasmIntFusionCompiler {
 		ctx.writer.writeUnsignedLeb128(raw.shadowSlot());
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writeI64LocalIndex(raw.i64Slot());
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_UB_READ);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_UB_READ);
 	}
 
 	/**
@@ -732,8 +731,7 @@ final class WasmIntFusionCompiler {
 		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writeI64LocalIndex(i64Slot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_INT_NEW);
 		ctx.writer.write(Instruction.END);
 	}
 
@@ -1476,8 +1474,7 @@ final class WasmIntFusionCompiler {
 	}
 
 	private static void emitCall(int func, WasmLispCompiler.Ctx ctx) {
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(func);
+		WasmOperandTypes.emitCall(ctx, func);
 	}
 
 	/**
@@ -1511,8 +1508,7 @@ final class WasmIntFusionCompiler {
 					ctx.writer.writeRefType(true, Type.EQ.code());
 					ctx.writer.write(Instruction.GET_LOCAL);
 					ctx.writeI64LocalIndex(leaf.snapI64);
-					ctx.writer.write(Instruction.CALL);
-					ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+					WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_INT_NEW);
 					ctx.writer.write(Instruction.ELSE);
 					ctx.writer.write(Instruction.GET_LOCAL);
 					ctx.writer.writeUnsignedLeb128(leaf.snapShadow);
@@ -1521,12 +1517,14 @@ final class WasmIntFusionCompiler {
 			}
 			case OpNode op -> {
 				emitFallback(op.args().get(0), ctx);
+				// A node's generic call reports under the NODE's operator: the tree is
+				// compiled under its root's form ((evenp x) is one (= (mod x 2) 0) tree).
 				for (int i = 1; i < op.args().size(); i++) {
 					emitFallback(op.args().get(i), ctx);
-					emitCall(fallbackFunc(op.op()), ctx);
+					WasmOperandTypes.withOperator(ctx, op.op(), () -> emitCall(fallbackFunc(op.op()), ctx));
 				}
 				if (LispNames.LOGNOT.equals(op.op())) {
-					emitCall(WasmLispCompiler.FUNC_BIG_NOT, ctx);
+					WasmOperandTypes.withOperator(ctx, op.op(), () -> emitCall(WasmLispCompiler.FUNC_BIG_NOT, ctx));
 				}
 			}
 		}
