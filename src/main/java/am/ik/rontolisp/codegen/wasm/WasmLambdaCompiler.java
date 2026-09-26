@@ -12,6 +12,7 @@ import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.DefinedCallArity;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
@@ -133,9 +134,12 @@ final class WasmLambdaCompiler {
 		List<LispVal> callArgs = call.toList();
 		int required = paramNames.size() - (nf.variadic() ? 1 : 0);
 		int supplied = callArgs.size() - 1;
-		if (supplied < required || (!nf.variadic() && supplied > required)) {
-			throw new UnsupportedOperationException("lambda expects " + (nf.variadic() ? "at least " : "") + required
-					+ " argument" + (required == 1 ? "" : "s") + ", got " + supplied);
+		// A count the lambda list rules out signals when the call runs, as a named
+		// function's direct call does (compiler/DefinedCallArity).
+		LispVal wrongCount = DefinedCallArity.wrongCountSignal(call, null, required, nf.variadic());
+		if (wrongCount != null) {
+			WasmExprCompiler.compileExpr(wrongCount, ctx);
+			return;
 		}
 
 		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);

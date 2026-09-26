@@ -150,10 +150,23 @@ public final class BuiltinCallArity {
 		if (shape.accepts(args.size())) {
 			return null;
 		}
+		return signalAfterArguments(call, args, shape.message(head.name(), args.size()));
+	}
+
+	/**
+	 * {@code (progn args... (%program-error "message"))}, positioned at the call: the
+	 * arguments evaluated left to right, as the interpreter evaluates them before a
+	 * callee rejects the count, then the signal.
+	 * @param call the rejected call
+	 * @param args its argument forms
+	 * @param message the report
+	 * @return the replacement form
+	 */
+	static LispVal signalAfterArguments(LispCons call, List<LispVal> args, String message) {
 		List<LispVal> body = new ArrayList<>();
 		body.add(new LispSymbol(LispNames.PROGN));
 		body.addAll(args);
-		body.add(LispMacroExpander.programErrorForm(call, shape.message(head.name(), args.size())));
+		body.add(LispMacroExpander.programErrorForm(call, message));
 		LispVal form = LispNil.INSTANCE;
 		for (int i = body.size() - 1; i >= 0; i--) {
 			form = new LispCons(body.get(i), form);

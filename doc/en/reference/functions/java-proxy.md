@@ -7,8 +7,9 @@ Every interface method is dispatched to the callable as `(callable "method-name"
 arg...)` — so the callable's **first argument is the name of the invoked method**
 (a string) and the remaining arguments are the method's arguments. The callable's
 return value is marshalled back to the method's return type (a `void` method
-ignores it). This is how a rontolisp lambda becomes a Java listener or
-comparator. For a single-method (SAM) interface the method name is always the
+ignores it; a function returned is not made a proxy -- return a `java:proxy` or
+[`java:reify`](java-reify.md) object where an interface is expected). This is how
+a rontolisp lambda becomes a Java listener or comparator. For a single-method (SAM) interface the method name is always the
 same, so it is conventionally ignored (the `method` parameter in the examples
 below). Part of the JVM-only `java` interop
 package — available on the interpreter and in JVM-compiled classes, not on the
@@ -77,3 +78,16 @@ to the lambda as `(callable "andThen" ...)` rather than running the interface's
 built-in default implementation, so combinators like `(f.andThen g)` are not
 available — call the single abstract method (`apply`/`test`/`accept`/`get`/
 `compare`) instead.
+
+To implement each method with a function of its own -- a default method then keeping
+its body -- use [`java:reify`](java-reify.md).
+
+## In a compiled program
+
+A `java:proxy` whose interface is a literal string the compile can see is a class
+generated at compile time (`Prog$Proxy0.class` beside the program), as is a function
+passed where an interface is expected: no `java.lang.reflect.Proxy`, so the program
+compiles under `--java-static` and builds into a GraalVM native image with no
+configuration. It prints as `#<java Prog$Proxy0>`, where the interpreter prints the
+name of a `java.lang.reflect.Proxy` class. A `java:proxy` of an interface named at run
+time goes through the reflection bridge.

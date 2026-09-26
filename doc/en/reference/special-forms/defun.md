@@ -43,7 +43,7 @@ An unknown keyword argument signals an error unless the lambda list declares `&a
 (area 3) ; => 9
 ```
 
-Calling a function with too few required arguments (or too many, for a fixed-arity function) signals an error in the interpreter and is a compile error on the JVM/WASM backends.
+Calling a function with too few required arguments (or too many, for a fixed-arity function) evaluates the arguments and then signals a catchable `program-error` when the call runs, on every backend. It is not a compile error: the JVM/WASM compilers print a warning for a direct call whose count is wrong.
 
 ```console
 CL-USER> (defun f (a b) (+ a b))
@@ -51,7 +51,7 @@ CL-USER> (f 1)
 Function expects 2 arguments, got 1
 ```
 
-Only a call that names the function directly can be checked at compile time. A call through a function *value* -- `funcall`, `apply`, `mapcar`, a variable holding `#'f` -- is checked at run time and signals a catchable `program-error` with the same text, on every backend.
+A call through a function *value* -- `funcall`, `apply`, `mapcar`, a variable holding `#'f` -- signals the same `program-error` with the same text.
 
 ```lisp
 (defun f (a b) (+ a b))
@@ -66,7 +66,7 @@ A built-in operator's function value names the operator in place of `Function`.
 ; => "CONS expects 2 arguments, got 1"
 ```
 
-A direct call of a built-in operator with an argument count its lambda list rules out is not a compile error: it evaluates its arguments and then signals the same `program-error` when it runs, on every backend. The JVM/WASM compilers print a warning for it.
+A direct call of a built-in operator with an argument count its lambda list rules out behaves the same way, and names the operator too.
 
 ```lisp
 (handler-case (car '(1 2) 2) (program-error (c) (princ-to-string c)))

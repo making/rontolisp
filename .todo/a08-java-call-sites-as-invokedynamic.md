@@ -11,8 +11,10 @@ harness floor (~15-20 ns) on 2026-09-26.
 Scope note (2026-09-26): sites a13/a14 resolve statically become direct
 bytecode (landed in a14: codegen/jvm/JvmJavaDirectSites), which beats indy and
 suits native-image (MutableCallSite does not).
-Narrow this item to UNRESOLVED sites only, or cancel it once a15 lands. The
-am.ik.jvm indy infrastructure is shared with a16.
+Narrow this item to UNRESOLVED sites only, or cancel it once a15 lands. a16
+needed no invokedynamic after all (its interface implementations are classes
+generated at compile time, `.kb/java-interop.md`, "Implementing interfaces"), so
+the am.ik.jvm indy infrastructure is this item's alone.
 
 Plan:
 - am.ik.jvm: add CONSTANT_MethodHandle / CONSTANT_InvokeDynamic entries and the

@@ -12898,6 +12898,36 @@ class WasmLispCompilerIntegrationTest {
 				(T 3 1 T (1 2))""");
 	}
 
+	// The JVM twin: JvmLispCompilerTest
+	// .compileAndRunADirectCallOfAProgramFunctionWithAWrongCountSignalsAtCallTime.
+	@Test
+	void aDirectCallOfAProgramFunctionWithAWrongCountSignalsAtCallTime() throws Exception {
+		assertThat(compileAndRun("""
+				(defun ud (a b) (list a b))
+				(defun ur (a &rest r) (list a r))
+				(defun uo (a &optional b) (list a b))
+				(defclass wc-box () ())
+				(defmethod length ((b wc-box)) 42)
+				(defun wc-rep (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
+				(print (wc-rep (lambda () (ud 1))))
+				(print (let ((n 0)) (list (wc-rep (lambda () (ud (incf n) (incf n) (incf n)))) n)))
+				(print (wc-rep (lambda () (ur))))
+				(print (wc-rep (lambda () (uo 1 2 3))))
+				(print (wc-rep (lambda () ((lambda (a) a) 1 2))))
+				(print (wc-rep (lambda () (length '(1) 2))))
+				(print (wc-rep (lambda () (funcall #'length '(1) 2))))
+				(print (list (ud 1 2) (ur 1 2 3) (length (make-instance 'wc-box)) (length '(1 2))))
+				""")).isEqualTo("""
+				"Function expects 2 arguments, got 1"
+				("Function expects 2 arguments, got 3" 3)
+				"Function expects at least 1 argument, got 0"
+				"Function expects at most 2 arguments, got 3"
+				"Function expects 1 argument, got 2"
+				"LENGTH expects 1 argument, got 2"
+				"LENGTH expects 1 argument, got 2"
+				((1 2) (1 (2 3)) 42 2)""");
+	}
+
 	// Inside a compiled eval a wrong count is the interpreter's program-error too: a
 	// registered function gets EVERY argument form evaluated and the spread dispatcher
 	// judges the count (evaluating exactly the registered arity answered (car 1 2) with

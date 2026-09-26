@@ -16,6 +16,7 @@ import am.ik.jvm.Opcode;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.compiler.JavaExecutable;
 import am.ik.rontolisp.compiler.JavaField;
+import am.ik.rontolisp.compiler.JavaImplementationType;
 import am.ik.rontolisp.compiler.JavaKind;
 import am.ik.rontolisp.compiler.JavaOverloads;
 import am.ik.rontolisp.compiler.JavaSite;
@@ -41,9 +42,9 @@ import org.jspecify.annotations.Nullable;
  * A value is checked by its KIND ({@link JavaKind}), computed from the compiled
  * representation as the bridge's {@code kindOf} computes it; the conversions are the
  * bridge's {@code convert} and {@code convertLong}, one arm per (kind, parameter type)
- * the resolution counted on. The one arm that needs the bridge is a function value where
- * an interface is expected: it becomes the bridge's proxy, so such a site calls
- * {@code _javaInit} and {@code javaProxy} (and {@code --java-static} refuses it).
+ * the resolution counted on. A function value where an interface is expected becomes the
+ * interface's generated proxy class ({@link JvmJavaImplementations}), as the bridge makes
+ * it a {@code java.lang.reflect.Proxy}: nothing here reflects.
  * <p>
  * A DISPATCHED site -- its class known, its argument kinds only when it runs -- chooses
  * among its overloads as the interpreter does ({@code JavaOverloads.selectRanked}): each
@@ -170,6 +171,8 @@ final class JvmJavaDirectSites {
 
 	private final Map<String, MethodrefConstant> costs = new LinkedHashMap<>();
 
+	private @Nullable JvmJavaImplementations implementations;
+
 	private final Map<String, MethodrefConstant> converts = new LinkedHashMap<>();
 
 	/**
@@ -205,45 +208,42 @@ final class JvmJavaDirectSites {
 	}
 
 	/**
-	 * Why a resolved site's method calls the bridge's proxy, or {@code null} when it does
-	 * not: an argument that may be a function value where an interface -- or, at a
-	 * dispatched site, an array of one a sequence becomes -- is expected, which the
-	 * function becomes a {@code java.lang.reflect.Proxy} of. What the site's method and
-	 * the conversion helpers it calls are made of follows the same rule, so a site this
-	 * answers {@code null} for never names the bridge.
-	 * @param site a resolved site
-	 * @return the reason, or {@code null}
+	 * Sets the generated classes a function value where an interface is expected becomes.
+	 * @param implementations the attempt's implementations
 	 */
-	static @Nullable String proxyReason(JavaSite site) {
-		List<JavaSite.Argument> arguments = site.arguments();
-		if (arguments.isEmpty()) {
-			return null;
-		}
-		List<JavaOverloads.Overload> overloads = site.dispatched() ? site.overloads()
-				: List.of(new JavaOverloads.Overload(Objects.requireNonNull(site.executable()), site.packed()));
-		for (int i = 0; i < arguments.size(); i++) {
-			if (!arguments.get(i).mayBeFunction()) {
-				continue;
-			}
-			for (JavaOverloads.Overload overload : overloads) {
-				JavaType proxied = proxied(JavaOverloads.parameterAt(overload, i));
-				if (proxied != null) {
-					return "argument " + (i + 1) + " may be a function, which becomes a java.lang.reflect.Proxy of "
-							+ proxied.name();
-				}
-			}
-		}
-		return null;
+	void implementations(JvmJavaImplementations implementations) {
+		this.implementations = implementations;
 	}
 
-	// The interface a function value converted to this type becomes a proxy of --
-	// directly, or as an element of a sequence converted to an array -- or null.
-	private static @Nullable JavaType proxied(JavaType type) {
-		if (type.isInterface()) {
-			return type;
-		}
-		JavaType component = type.componentType();
-		return component != null ? proxied(component) : null;
+	/**
+	 * {@code _junm}: the bridge's {@code unmarshal}, made when first asked for.
+	 * @return the helper
+	 */
+	MethodrefConstant unmarshalHelper() {
+		return unmarshal();
+	}
+
+	/**
+	 * The cost of a value a {@code java:reify} / {@code java:proxy} function answers for
+	 * the method's return type: {@code _jcost$N} without the function arm -- a function
+	 * is never made a proxy on the way back -- {@code NO_MATCH} (negative) when it does
+	 * not convert.
+	 * @param target the return type
+	 * @return {@code _jcost$N(Object)I}
+	 */
+	MethodrefConstant returnedCost(JavaType target) {
+		return cost(target, false);
+	}
+
+	/**
+	 * The conversion of such a value to the return type: {@code _jconv$N} with sequences
+	 * made arrays or lists and no function arm, for a value {@link #returnedCost}
+	 * accepts.
+	 * @param target the return type
+	 * @return {@code _jconv$N(Object)T}
+	 */
+	MethodrefConstant returnedConvert(JavaType target) {
+		return convert(target, false, true);
 	}
 
 	/**
@@ -253,15 +253,10 @@ final class JvmJavaDirectSites {
 	 * class-name literal (a static read, no object passed)
 	 * @param valueCount how many values the call passes: the receiver or object, then the
 	 * arguments
-	 * @param bridge the bridge's references ({@code init}, {@code proxy}), or
-	 * {@code null} when the attempt carries no bridge -- a proxy argument then calls the
-	 * absent {@code _javaInit}, which the helper-gate check turns into a retry with the
-	 * bridge
 	 * @return the method, in the {@code (Object...)Object} shape or, past
 	 * {@link #MAX_SPREAD} values, {@code (Object[])Object}
 	 */
-	MethodrefConstant site(JavaSite site, boolean staticField, int valueCount,
-			@Nullable Map<String, MethodrefConstant> bridge) {
+	MethodrefConstant site(JavaSite site, boolean staticField, int valueCount) {
 		boolean packedValues = valueCount > MAX_SPREAD;
 		String key = shapeKey(site, staticField, packedValues);
 		MethodrefConstant cached = this.sites.get(key);
@@ -282,7 +277,7 @@ final class JvmJavaDirectSites {
 		MethodrefConstant ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(nameUtf, descUtf));
 		// Registered before it is built, which may add the shared helpers first.
 		this.sites.put(key, ref);
-		this.methods.add(new SiteBuilder(site, staticField, valueCount, packedValues, bridge).build(nameUtf, descUtf));
+		this.methods.add(new SiteBuilder(site, staticField, valueCount, packedValues).build(nameUtf, descUtf));
 		return ref;
 	}
 
@@ -461,9 +456,8 @@ final class JvmJavaDirectSites {
 		// The handler of each bound class an argument check names: "No such class".
 		private final Map<String, Integer> boundMissing = new LinkedHashMap<>();
 
-		SiteBuilder(JavaSite site, boolean staticField, int valueCount, boolean packedValues,
-				@Nullable Map<String, MethodrefConstant> bridge) {
-			super(packedValues ? 1 + valueCount : valueCount, bridge);
+		SiteBuilder(JavaSite site, boolean staticField, int valueCount, boolean packedValues) {
+			super(packedValues ? 1 + valueCount : valueCount);
 			this.site = site;
 			this.staticField = staticField;
 			this.valueCount = valueCount;
@@ -896,7 +890,8 @@ final class JvmJavaDirectSites {
 			for (int j = 0; j < fixed; j++) {
 				JavaType param = params.get(j);
 				a.aload(this.valueSlots[firstValue + j]);
-				a.invokestatic(convert(param, arguments.get(j).mayBeFunction(), this.bridge));
+				boolean open = arguments.get(j).mayBeFunction();
+				a.invokestatic(convert(param, open, open));
 				converted[j] = this.nextSlot;
 				this.nextSlot += width(param);
 				store(param, converted[j]);
@@ -911,7 +906,8 @@ final class JvmJavaDirectSites {
 					a.aload(array);
 					a.iconst(j - fixed);
 					a.aload(this.valueSlots[firstValue + j]);
-					a.invokestatic(convert(component, arguments.get(j).mayBeFunction(), this.bridge));
+					boolean open = arguments.get(j).mayBeFunction();
+					a.invokestatic(convert(component, open, open));
 					a.op(arrayStore(component));
 				}
 				converted[fixed] = array;
@@ -940,15 +936,10 @@ final class JvmJavaDirectSites {
 
 		final int longTemp;
 
-		final @Nullable Map<String, MethodrefConstant> bridge;
-
 		/**
 		 * @param firstFree the first local the parameters leave free
-		 * @param bridge the bridge's references, or {@code null} when the attempt carries
-		 * none
 		 */
-		Body(int firstFree, @Nullable Map<String, MethodrefConstant> bridge) {
-			this.bridge = bridge;
+		Body(int firstFree) {
 			this.objectTemp = firstFree;
 			this.longTemp = firstFree + 1;
 			this.nextSlot = firstFree + 3;
@@ -973,6 +964,17 @@ final class JvmJavaDirectSites {
 		 */
 		void emitKindTest(int slot, JavaKind kind, boolean bothStrings, int fail) {
 			JvmAsm a = this.a;
+			if (kind instanceof JavaImplementationType implementation) {
+				// An object a java:reify / java:proxy of the interface made: of a class
+				// generated for one (JvmJavaImplementations), implementing it.
+				a.aload(slot);
+				a.instanceOf(cls(implementations().baseClass()));
+				a.branch(Opcode.IFEQ, fail);
+				a.aload(slot);
+				a.instanceOf(cls(implementation.iface()));
+				a.branch(Opcode.IFEQ, fail);
+				return;
+			}
 			if (kind instanceof JavaType host) {
 				a.aload(slot);
 				a.branch(Opcode.IFNULL, fail);
@@ -1161,25 +1163,15 @@ final class JvmJavaDirectSites {
 					}
 				}
 				case FUNCTION -> {
-					// The bridge's proxy of the interface parameter: the one arm that
-					// reflects.
-					Map<String, MethodrefConstant> ops = this.bridge;
-					if (ops == null) {
-						// No bridge in this attempt: calling the absent _javaInit makes
-						// the
-						// helper-gate check retry with it.
-						a.invokestatic(JvmJavaDirectSites.this.cp.addMethodref(JvmJavaDirectSites.this.thisClass,
-								JvmJavaDirectSites.this.cp.addNameAndType(
-										JvmJavaDirectSites.this.cp.addUtf8(JvmJavaRuntimeBuilder.INIT_METHOD),
-										JvmJavaDirectSites.this.cp.addUtf8("()V"))));
-						a.aconstNull();
-					}
-					else {
-						a.invokestatic(Objects.requireNonNull(ops.get("init")));
-						a.ldcString(str("\"" + name + "\""));
-						a.aload(slot);
-						a.invokestatic(Objects.requireNonNull(ops.get("proxy")));
-					}
+					// The interface's generated proxy class over the function, as the
+					// bridge makes it a Proxy: of(new Object[] { function }).
+					a.iconst(1);
+					a.anewarray(cls("java/lang/Object"));
+					a.dup();
+					a.iconst(0);
+					a.aload(slot);
+					a.aastore();
+					a.invokestatic(implementations().proxyFactory(target));
 				}
 			}
 		}
@@ -1470,39 +1462,54 @@ final class JvmJavaDirectSites {
 	}
 
 	/**
-	 * {@code _jcost$N}: what the bridge's {@code marshal} costs a value for this type.
+	 * {@code _jcost$N}: what the bridge's {@code marshal} costs a value for this type --
+	 * an argument's, a function costing its proxy.
 	 */
 	private MethodrefConstant cost(JavaType target) {
-		MethodrefConstant ref = this.costs.get(target.name());
+		return cost(target, true);
+	}
+
+	/**
+	 * {@code _jcost$N} for this type, with or without the function arm: a value a
+	 * {@code java:reify} / {@code java:proxy} function answers never makes a proxy.
+	 */
+	private MethodrefConstant cost(JavaType target, boolean functions) {
+		String key = target.name() + (functions ? "" : " returned");
+		MethodrefConstant ref = this.costs.get(key);
 		if (ref == null) {
 			Utf8Constant name = this.cp.addUtf8(COST_PREFIX + this.costs.size());
 			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)I");
 			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
 			// Registered before it is built: a list of lists costs itself.
-			this.costs.put(target.name(), ref);
-			this.methods.add(buildCost(name, desc, target));
+			this.costs.put(key, ref);
+			this.methods.add(buildCost(name, desc, target, functions));
 		}
 		return ref;
 	}
 
 	/**
 	 * {@code _jconv$N}: a value converted to this type as the bridge's {@code marshal}
-	 * converts it. An argument that may be a function takes the {@code open} variant,
-	 * which also makes a function a proxy of an interface and a sequence an array or a
-	 * list; the closed one, for a value of known kinds or an object, never names the
-	 * bridge.
+	 * converts it. An argument that may be a function takes the open variant (both
+	 * flags), which also makes a function the interface's generated proxy and a sequence
+	 * an array or a list; the closed one (neither) serves a value of known kinds or an
+	 * object; a value a {@code java:reify} / {@code java:proxy} function answers takes
+	 * sequences without functions.
 	 */
-	private MethodrefConstant convert(JavaType target, boolean open, @Nullable Map<String, MethodrefConstant> bridge) {
-		String key = target.name() + (open ? " open" : "");
+	private MethodrefConstant convert(JavaType target, boolean functions, boolean sequences) {
+		String key = target.name() + (functions ? " functions" : "") + (sequences ? " sequences" : "");
 		MethodrefConstant ref = this.converts.get(key);
 		if (ref == null) {
 			Utf8Constant name = this.cp.addUtf8(CONVERT_PREFIX + this.converts.size());
 			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)" + descriptor(target));
 			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
 			this.converts.put(key, ref);
-			this.methods.add(buildConvert(name, desc, target, open, bridge));
+			this.methods.add(buildConvert(name, desc, target, functions, sequences));
 		}
 		return ref;
+	}
+
+	private JvmJavaImplementations implementations() {
+		return Objects.requireNonNull(this.implementations, "the attempt's implementations");
 	}
 
 	// The type a sequence's elements convert to for this parameter: an array's
@@ -1891,7 +1898,7 @@ final class JvmJavaDirectSites {
 	// _jcost$N(Object)I for one type: the bridge's marshal cost -- kindCost of a value's
 	// kind, a host object's class against the type, a sequence its base plus its
 	// elements' costs -- or NO_MATCH.
-	private Method buildCost(Utf8Constant name, Utf8Constant desc, JavaType target) {
+	private Method buildCost(Utf8Constant name, Utf8Constant desc, JavaType target, boolean functions) {
 		JvmAsm a = new JvmAsm();
 		render(a, 0);
 		int code = 1;
@@ -1900,7 +1907,7 @@ final class JvmJavaDirectSites {
 		a.istore(code);
 		for (int c = 0; c < LISP_KINDS.length; c++) {
 			int cost = JavaOverloads.kindCost(LISP_KINDS[c], target, this.lookup);
-			if (cost == JavaOverloads.NO_MATCH) {
+			if (cost == JavaOverloads.NO_MATCH || (!functions && LISP_KINDS[c] == JavaKind.Lisp.FUNCTION)) {
 				continue;
 			}
 			int next = a.label();
@@ -1950,7 +1957,7 @@ final class JvmJavaDirectSites {
 			a.aload(elements);
 			a.iload(index);
 			a.aaload();
-			a.invokestatic(cost(element));
+			a.invokestatic(cost(element, functions));
 			a.istore(each);
 			a.iload(each);
 			a.branch(Opcode.IFGE, add);
@@ -1999,9 +2006,9 @@ final class JvmJavaDirectSites {
 	// host object itself, and in the open variant a function's proxy and a sequence's
 	// array or list. A value no arm takes was costed NO_MATCH, so the site never passes
 	// one.
-	private Method buildConvert(Utf8Constant name, Utf8Constant desc, JavaType target, boolean open,
-			@Nullable Map<String, MethodrefConstant> bridge) {
-		Body body = new Body(2, bridge);
+	private Method buildConvert(Utf8Constant name, Utf8Constant desc, JavaType target, boolean functions,
+			boolean sequences) {
+		Body body = new Body(2);
 		JvmAsm a = body.a;
 		int code = 1;
 		int reject = a.label();
@@ -2014,7 +2021,7 @@ final class JvmJavaDirectSites {
 		boolean needsCast = reference && !"java.lang.Object".equals(target.name());
 		for (int c = 0; c < LISP_KINDS.length; c++) {
 			JavaKind.Lisp kind = LISP_KINDS[c];
-			if ((kind == JavaKind.Lisp.FUNCTION && !open)
+			if ((kind == JavaKind.Lisp.FUNCTION && !functions)
 					|| JavaOverloads.kindCost(kind, target, this.lookup) == JavaOverloads.NO_MATCH) {
 				continue;
 			}
@@ -2029,7 +2036,7 @@ final class JvmJavaDirectSites {
 			a.op(returnOpcode(target));
 			a.bind(next);
 		}
-		JavaType element = open ? sequenceElement(target) : null;
+		JavaType element = sequences ? sequenceElement(target) : null;
 		if (element != null) {
 			int sequenceValue = a.label();
 			int notSequence = a.label();
@@ -2050,7 +2057,7 @@ final class JvmJavaDirectSites {
 			a.astore(elements);
 			a.aload(elements);
 			a.branch(Opcode.IFNULL, reject);
-			MethodrefConstant each = convert(element, true, bridge);
+			MethodrefConstant each = convert(element, functions, sequences);
 			if (target.isArray()) {
 				a.aload(elements);
 				a.arraylength();

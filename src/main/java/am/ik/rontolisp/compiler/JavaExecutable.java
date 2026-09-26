@@ -43,4 +43,11 @@ public interface JavaExecutable {
 	 */
 	boolean isConstructor();
 
+	/**
+	 * @return whether it has no body: an interface method that is neither default nor
+	 * static, or an abstract class's abstract method -- what a class implementing the
+	 * interface must supply ({@link JavaImplementations})
+	 */
+	boolean isAbstract();
+
 }

@@ -18256,14 +18256,54 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("(1 2 3)\n(1 (2 3))\n(1 (2 3))\n(101 102 103)\n(1 (2 3))");
 	}
 
+	// A direct call of the program's own function with a count its lambda list rules
+	// out is the interpreter's program-error when it RUNS, its arguments evaluated first
+	// (compiler/DefinedCallArity): it failed the compile, so a program whose wrong call
+	// sat in a branch never taken or under a program-error handler did not compile. The
+	// dispatcher a defmethod on a built-in is renamed to reports as the built-in, on the
+	// direct and the function-value path alike, as the interpreter's does.
 	@Test
-	void compileDefunArityMismatchFails() {
-		assertThatThrownBy(() -> compileAndRun("(defun f (a b) (+ a b)) (print (f 1))"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("expects 2 arguments, got 1");
-		assertThatThrownBy(() -> compileAndRun("(defun f (a &rest r) r) (print (f))"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("expects at least 1 argument, got 0");
+	void compileAndRunADirectCallOfAProgramFunctionWithAWrongCountSignalsAtCallTime() throws Exception {
+		assertThat(compileAndRun("""
+				(defun ud (a b) (list a b))
+				(defun ur (a &rest r) (list a r))
+				(defun uo (a &optional b) (list a b))
+				(defclass wc-box () ())
+				(defmethod length ((b wc-box)) 42)
+				(defun wc-rep (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
+				(print (wc-rep (lambda () (ud 1))))
+				(print (let ((n 0)) (list (wc-rep (lambda () (ud (incf n) (incf n) (incf n)))) n)))
+				(print (wc-rep (lambda () (ur))))
+				(print (wc-rep (lambda () (uo 1 2 3))))
+				(print (wc-rep (lambda () ((lambda (a) a) 1 2))))
+				(print (wc-rep (lambda () (length '(1) 2))))
+				(print (wc-rep (lambda () (funcall #'length '(1) 2))))
+				(print (list (ud 1 2) (ur 1 2 3) (length (make-instance 'wc-box)) (length '(1 2))))
+				""")).isEqualTo("""
+				"Function expects 2 arguments, got 1"
+				("Function expects 2 arguments, got 3" 3)
+				"Function expects at least 1 argument, got 0"
+				"Function expects at most 2 arguments, got 3"
+				"Function expects 1 argument, got 2"
+				"LENGTH expects 1 argument, got 2"
+				"LENGTH expects 1 argument, got 2"
+				((1 2) (1 (2 3)) 42 2)""");
+	}
+
+	@Test
+	void compileAndRunAnUncaughtWrongDefunCountWarnsAndReportsTheSameLine() throws Exception {
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		Throwable cause;
+		try (var _ = ThreadStdio.err(err)) {
+			cause = catchThrowable(() -> compileAndRun("""
+					(defun ud (a b) (+ a b))
+					(print (ud 1))
+					"""));
+		}
+		assertThat(err.toString().trim()).isEqualTo("""
+				warning: Function expects 2 arguments, got 1; compiled as a call-time program-error
+				Unhandled condition: Function expects 2 arguments, got 1""");
+		assertThat(cause).isInstanceOf(InvocationTargetException.class);
 	}
 
 	// The instance tag is written with |...| because the reader upcases every ordinary

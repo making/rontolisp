@@ -1,13 +1,15 @@
-# `java:` interop (interpreter, JVM direct calls, the reflection bridge)
+# `java:` interop (interpreter, JVM direct calls, generated interface classes, the reflection bridge)
 
 Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `java:new`,
-`java:call`, `java:static`, `java:field`, `java:proxy`; the type specifier `java:object` and the
-variable `java:*warn-on-reflection*` (static resolution, below).
+`java:call`, `java:static`, `java:field`, `java:proxy`, `java:reify`; the type specifier
+`java:object` and the variable `java:*warn-on-reflection*` (static resolution, below).
 
 - Interpreter: `eval/JavaInterop`, `LispEvaluator.registerJava()`; value = `LispJavaObject`,
   prints `#<java <class>>`.
-- JVM: a RESOLVED site is a direct call (`JvmJavaDirectSites`, "Direct calls" below); every
-  other site goes through `codegen.jvm.JavaBridgeTemplate`, which re-implements the run-time half
+- JVM: a RESOLVED site is a direct call (`JvmJavaDirectSites`, "Direct calls" below); a resolved
+  `java:reify` / `java:proxy` and a function passed where an interface is expected an object of a
+  generated class ("Implementing interfaces" below); every other site goes through
+  `codegen.jvm.JavaBridgeTemplate`, which re-implements the run-time half
   against the compiled representation (raw ref; `"t"` = true; header-slot ArrayList = vector) —
   **KEEP THE TWO IN SYNC**. `JvmJavaRuntimeBuilder` renames it to `<Program>$JavaBridge` and SHIPS
   it beside the class (`runtimeClassFiles()`); `_javaInit` only calls `bind(Class)`. Per-program
@@ -26,8 +28,9 @@ variable `java:*warn-on-reflection*` (static resolution, below).
   printer's array arm checks the array header first (`JavaPrint.arrayListIsEmpty/arrayListGet`,
   the bridge's `kindOf` test), so it prints `#<java java.util.ArrayList>` as interpreted -- it threw
   `IndexOutOfBoundsException` before (`JvmJavaInteropCompilerTest#aHostArrayListPrintsOpaquely`).
-- Trap: the template must have NO nested classes/records and NO rontolisp imports.
-  `usesJava` forces `usesEval` and threads `JvmRuntimeBuilder.JavaPrint` into the print builders.
+- Trap: the template must have NO nested classes/records and NO rontolisp imports. The bridge
+  forces `usesEval`, a generated interface class only the apply tier (`JvmJavaSites.needsApply`);
+  `usesJava` threads `JvmRuntimeBuilder.JavaPrint` into the print builders.
 - `select()` = lowest total cost `COST_EXACT` < `COST_WIDEN` < `COST_CONVERT` < `COST_NARROW` <
   `COST_BOXED` < `COST_PROXY` (`COST_VARARGS` via `varargsCost`), ties by stable signature string,
   then (one parameter list, covariant variants) the most specific return type -- never the
@@ -258,22 +261,26 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
     10 Lisp array, 11 host (`_jhost`), 12 none (symbol, bignum, ratio, hash table, ...).
   - `_jseq(Object)Object[]`: a cons's cars (null if dotted / function-terminated), a rank-1 Lisp
     array's elements (fill pointer; the PACKED long[] shape with MIN_VALUE -> nil), else null.
-  - `_jcost$N` per parameter type: `_strv` first (a built string; elements too), then the
-    compile-time `kindCost` constant per code, a sequence `COST_CONVERT`/`COST_BOXED` + its
-    elements' `_jcost` (array component / Object for an `ArrayList`-assignable type), a host
-    object `instanceof` + `getClass() ==`.
-  - `_jconv$N` per (parameter type, open): the existing `emitConvert` arm per code, the host
-    object `checkcast`; the OPEN variant (an argument that `mayBeFunction`: unknown, or FUNCTION
-    in its kinds) adds the FUNCTION arm (the bridge's proxy) and the sequence arm (array via
-    `newarray` + element `_jconv`, or an `ArrayList` of element `_jconv(Object)`). A closed
-    argument's helper never names the bridge.
+  - `_jcost$N` per (parameter type, function arm or not): `_strv` first (a built string;
+    elements too), then the compile-time `kindCost` constant per code, a sequence
+    `COST_CONVERT`/`COST_BOXED` + its elements' `_jcost` (array component / Object for an
+    `ArrayList`-assignable type), a host object `instanceof` + `getClass() ==`. Without the
+    function arm it is the RETURNED variant a16's callbacks test a value with
+    (`returnedCost`: a function is never made a proxy on the way back).
+  - `_jconv$N` per (parameter type, functions, sequences): the existing `emitConvert` arm per
+    code, the host object `checkcast`; the OPEN variant (both; an argument that `mayBeFunction`:
+    unknown, or FUNCTION in its kinds) adds the FUNCTION arm (the interface's generated proxy
+    class) and the sequence arm (array via `newarray` + element `_jconv`, or an `ArrayList` of
+    element `_jconv(Object)`); the closed one neither; the RETURNED one (`returnedConvert`)
+    sequences without functions.
   - The method builders share a `Body` (assembler, locals, handlers, kind tests, conversions,
     unmarshal) that `SiteBuilder` extends.
-- Bridge need: `JvmJavaDirectSites.proxyReason` -- an argument that may be a function where
-  an overload's parameter is an interface or an array (of arrays) of one (`proxied`); the same
-  rule picks the open helper, so a dispatched site it answers null for never names `_javaInit`.
-  `String.join("-", xs)` with unknown `xs` needs the bridge (`CharSequence[]`, `Iterable`);
-  `Math.max(x, y)`, `String.valueOf(x)`, `Arrays.toString(x)` do not.
+- No dispatched site needs the bridge (since a16): an argument that may be a function where an
+  overload's parameter is an interface, or an array (of arrays) of one, becomes the interface's
+  generated proxy class. So `String.join("-", xs)` with unknown `xs` compiles under
+  `--java-static`, generating the `CharSequence` and `Iterable` proxy classes a function would
+  need (`JvmJavaSites.passesAFunction` predicts `_apply` from the same rule); a15 measured it
+  needing the bridge.
 - Measured 2026-09-26 (JDK 25, default output, `--warn-java-reflection` counts): sites left to
   run time swing.lisp 21 -> 8, life-gui.lisp 21 -> 8, java-interop.lisp 9 -> 9 (every one left
   has an unknown receiver). `(defun mx (x y) (java:static "java.lang.Math" "max" x y))` +
@@ -313,9 +320,12 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   converted back specialized to the declared type (`_junm` = the bridge's `unmarshal` for a type a
   box/String/array may hide behind, `_jarr` its `arrayToList` over every array type without
   `java.lang.reflect.Array`).
-- The ONE arm that reflects: a FUNCTION kind for an interface parameter calls `_javaInit` + the
-  bridge's `javaProxy` (at a dispatched site: in an open `_jconv$N`). The bridge is emitted when `JvmJavaSites.needsBridge` (a pre-scan: an
-  unresolved site, a `java:proxy`, a FUNCTION argument) or when forced: a site a pass rebuilt after
+- Nothing in a direct call reflects: a FUNCTION kind for an interface parameter -- at a
+  dispatched site in an open `_jconv$N` too -- is the interface's generated proxy class
+  (`JvmJavaImplementations.proxyFactory`, "Implementing interfaces" below); until a16 it called
+  `_javaInit` + the bridge's `javaProxy`, the one reflective arm, and `--java-static` refused
+  such a site. The bridge is emitted when `JvmJavaSites.needsBridge` (a pre-scan: an unresolved
+  site, an unresolved `java:reify` / `java:proxy`) or when forced: a site a pass rebuilt after
   the scan and that needs it calls the absent `_javaInit`, `gateGroupFor` maps it to
   `GROUP_JAVA_BRIDGE`, and the attempt retries with the bridge. `usesEval` / the `_apply` root follow
   the bridge, not `usesJava`; `JavaPrint` (`#<java C>`) follows `usesJava`.
@@ -340,13 +350,97 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   them (`(code-char 128512)` -> a literal), so such a site resolves compiled and not interpreted;
   the member is the same either way.
 
+## Implementing interfaces (java:reify, java:proxy, a function where an interface is expected)
+- ONE rule, `compiler/JavaImplementations` -> `JavaImplementation` (its `Slot`s: name, parameters,
+  return type, the function index or `NONE`): the methods an implementing class DECLARES. The
+  interface's non-static `JavaType.publicMethods()` (`Class.getMethods()` as declared, never
+  re-resolved; `JavaExecutable.isAbstract()`) grouped by `name(params)` in key order, variants by
+  return type -- so the result is lookup-order free and a compiled class deterministic.
+  `java:reify`: a designator (name + optional `java:call` tag) must leave exactly one group of the
+  interface or of Object's `equals`/`hashCode`/`toString`; else the error is the form's run-time
+  error ("has no method", "names more than one method of", "is implemented twice", malformed tag).
+  Every variant of a named group calls its function; an unnamed variant one declaration leaves
+  abstract, or two interfaces default, throws `UnsupportedOperationException("java:reify: no
+  implementation of I.m(p)")`; a default keeps its body; Object's three are identity /
+  `#<java-reify I>` unless named. `java:proxy`: every group but Object's three (default methods
+  too -- java:proxy's meaning, unchanged) calls the callable with the name first; `toString` is
+  `#<java-proxy I>`.
+- Dispatch key is `name(params)return` (`Slot.dispatchKey`): a covariant default variant is never
+  shadowed by an abstract sibling.
+- A value a function RETURNS is marshalled to the method's return type as an argument is, EXCEPT
+  a function is never made a proxy (interpreter `marshal(..., proxies=false)`, the bridge's twin,
+  the direct sites' returned `_jcost$N` / `_jconv$N`). Decided 2026-09-26 on a measurement: with
+  the function arm, a return conversion to an interface needs that interface's proxy class, whose
+  methods' interface returns need theirs -- one `java:reify` of `CharSequence` pulled in 19 proxy
+  classes (the IntStream/Stream/Spliterator family, ~60 KB) and a 169 KB program class. Clojure's
+  reify/proxy do not coerce return values either; an interface return is a
+  `java:reify`/`java:proxy` object.
+  Function -> interface stays for ARGUMENTS (Clojure 1.12's direction).
+- The object's KIND is `compiler/JavaImplementationType` (canonical per interface in each lookup,
+  `JavaClassLookup.implementationOf`): assignable to Object, `java.io.Serializable`, the interface
+  and its superinterfaces -- a `java.lang.reflect.Proxy` class's supertypes less `Proxy` -- so its
+  cost depends on the interface alone and a call passing a literal `java:reify`/`java:proxy`
+  RESOLVES (`JavaSiteResolver.typeOf`); `receiverClass()` is the interface. Spelled
+  `(java:object "I" :exact)` (no object's class is exactly an interface, so `:exact` of one means
+  this), so a `let`-bound listener keeps it: `(let ((l (java:reify ...))) (java:call b "add..." l)
+  (java:call b "remove..." l))` resolves both. The interpreter maps its OWN Proxy objects to the
+  kind (`JavaInterop.hostKind`, the handler's `Dispatch.kind`); `Argument.expected()` reads "an
+  implementation of I".
+- Interpreter: `JavaInterop.reify`/`proxy` -> a `Proxy` whose `ImplementationHandler` dispatches on
+  the slots (memo per `Method`), `InvocationHandler.invokeDefault` for an unnamed default. The
+  resolution is cached per (interface, designators). `java:reify` is a plain function there
+  (computed names work; errors after the arguments are evaluated, as a call).
+- JVM (`JvmJavaImplementations`, owned by `JvmJavaSites`): a form `JavaImplementations.resolve`
+  resolves (literal names, interface found and linkable, every slot return type linkable) is
+  `invokestatic <Program>$Reify<N>.of(Object[] functions)` / `$Proxy<N>` -- one class per
+  (interface, slots) shape, the functions evaluated left to right. The classes extend ONE
+  per-program `abstract <Program>$Implementation implements Serializable` (the `fns` field and
+  constructor), which is what a direct call tests an argument counted as the kind against
+  (`instanceof $Implementation && instanceof I`, as strict as the interpreter's kind check). A slot
+  boxes its arguments as a Proxy does and calls a PACKAGE-PRIVATE program method
+  `_jimpl$K(Object fn, Object[] args)R` (one per (proxy?, interface, dispatch key)): `_junm` each
+  argument into a list (a proxy's with the name first), `_apply`, then the direct sites' RETURNED
+  `_jcost$N` / `_jconv$N` for R (`returnedCost` / `returnedConvert`: the per-type helpers of
+  dispatched sites, without the function arm) or the interpreter's "cannot return" text. The
+  `_jimpl$` names are shaker roots and pinned to the main class on a split
+  (`JvmLispCompiler.implementationCallbacks`); `bridgeClassFiles` carries the classes, stamped with
+  the program's class version. Anything else (computed names, an interface not found, an
+  unlinkable one) is the bridge's `javaReify` / `javaProxy` -- a `Proxy` over `reifySlots` /
+  `proxySlots`, a hand copy pinned by `JavaBridgeTemplateParityTest`; `--java-static` refuses it
+  ("it implements its interface with java.lang.reflect.Proxy: <reason>"), and
+  `--warn-java-reflection` / `java:*warn-on-reflection*` report it on both paths.
+- NOT LambdaMetafactory (the a16 plan): an `invokedynamic` implements only a functional interface's
+  one abstract method, and routes no default method -- java:proxy's meaning and an auto-proxied
+  argument route every method to the callable, and a non-SAM interface (`MouseListener`) must
+  work; one generator serves reify, proxy and arguments; plain classes need nothing from
+  native-image nor `am.ik.jvm` indy support (BootstrapMethods, the shaker, the splitter).
+- Known differences: the object prints as its class (`#<java Prog$Reify0>` compiled, a
+  `jdk.proxyN.$ProxyM` interpreted -- as java:proxy objects always did); a parameter typed
+  `java.lang.reflect.Proxy` accepts the interpreter's object only; a bridge-made object (a form
+  left to run time) fails a direct call's `$Implementation` test, which only a false `(java:object
+  "I" :exact)` can bring about.
+- Measured 2026-09-26 (JDK 25, `-o P.jar`): `(java:call (java:proxy "java.util.function.Supplier"
+  f) "get")` 12,916-byte jar (29,411-byte class + 238 + 596 generated) vs the bridge path it took
+  before (the same with the interface name in a variable) 40,070 (51,335 + 45,528: the bridge
+  forces the eval runtime). A `Supplier.get` through a typed receiver, 1M calls: generated class
+  9-55 ns/call, bridge Proxy 146-315 ns/call; interpreter ~1.2-2 us either way (its loop floor).
+  Native image with no configuration: a 9-form `--java-static` program (a `PropertyChangeListener`
+  the JDK calls back, a comparator `Collections.sort` calls and its default `reversed()`, a
+  `Runnable` on a thread, a `forEach` lambda, a literal proxy, `IntBinaryOperator`) built in 26 s,
+  output identical to `java -jar`
+  (`ShippedBridgeNativeImageE2eTest#anInterfaceImplementingJavaStaticJarRunsAsANativeImageWithNoConfiguration`).
+
 ## Tests / docs
-`JavaSiteResolverTest`, `JavaDeclarationsTest` (compiler), `JvmClassFileLookupTest`,
+`JavaSiteResolverTest`, `JavaDeclarationsTest`, `JavaImplementationsTest` (compiler),
+`JvmClassFileLookupTest` (incl. `everyInterfaceIsImplementedTheSame`),
 `JavaBridgeTemplateParityTest`, `am.ik.jvm.JvmClassPathTest`; direct calls:
 `JvmJavaInteropCompilerTest` (javap shape, class version, `--java-static`, conversions, texts,
 dispatch: `aDispatchedSite*`, programs shared with `JavaInteropTest` through
-`testsupport/JavaInteropPrograms`),
-`JvmLispCompilerSplitTest#aForcedSplitKeepsJavaCallsWorking`, `ShippedBridgeNativeImageE2eTest`.
-`JavaInteropTest` + `JvmJavaInteropCompilerTest` mirror the same cases — keep in step, headless
-only. `examples/jvm/{java-interop,swing,life-gui}.lisp`; `doc/{en,ja}/guides/java-interop.md` +
-five `reference/functions/java-*.md` (a GUI form hangs `DocExamplesTest`).
+`testsupport/JavaInteropPrograms`; the reify/proxy programs through
+`testsupport/JavaImplementationPrograms`),
+`JvmLispCompilerSplitTest#aForcedSplitKeepsJavaCallsWorking`,
+`JvmClassShakerTest#keepsTheCallbacksOfAGeneratedInterfaceImplementation`,
+`ShippedBridgeNativeImageE2eTest`. `JavaInteropTest` + `JvmJavaInteropCompilerTest` mirror the
+same cases — keep in step, headless only. `examples/jvm/{java-interop,swing,life-gui}.lisp`;
+`doc/{en,ja}/guides/java-interop.md` + six `reference/functions/java-*.md` (a GUI form hangs
+`DocExamplesTest`).

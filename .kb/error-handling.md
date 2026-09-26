@@ -1439,8 +1439,8 @@ report's two top rows: 370 + 299 lost forms) and to fail the COMPILE on the comp
 `program-error` on every backend, spelled by the ONE `ClosRegistry.arityMessage`** -- `Function
 expects [at least ]N argument(s), got M`, with the OPERATOR in place of `Function` when the callee
 is a built-in's (`CONS expects 2 arguments, got 1`; "Naming the operator" below). A DIRECT call
-of a program's own function is checked at compile time, a direct call of a built-in at the call
-("A DIRECT call of a built-in" below); everything else (`funcall`, `mapcar`, `sort`, a bare `(f x)` whose
+is judged where the backend compiles it ("A DIRECT call of a built-in" and "A DIRECT call of a
+program's own function" below); everything else (`funcall`, `mapcar`, `sort`, a bare `(f x)` whose
 head is an expression) arrives at an `_invoke_N` dispatcher, whose no-match arm used to answer nil
 on the JVM and `unreachable` on wasm-GC. A silent nil is the worst of the three: an ANSI
 `signals-error ... program-error` row passed interpreted and returned a WRONG VALUE compiled.
@@ -1586,10 +1586,30 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   - A name the program defines itself (a `defun` of a cl name, a spliced library defun such as
     wait.lisp's `sleep`) keeps its own call path: `ctx.userDefunNames` on the compiled backends, a
     `LispLambda` global binding in the interpreter.
-  - A direct call of a program's own function with a wrong count is still a COMPILE error on
-    both compiled backends (`UD expects 2 arguments, got 1`), as is a wrong-count call of a
-    built-in the program shadowed with `defmethod` (`%LENGTH--dispatch expects 1 argument`); the
-    interpreter signals at run time.
+- **A DIRECT call of a program's own function** (2026-09-26). **Invariant: `(f args...)` with `f`
+  a compiled defun, or `((lambda ...) args...)`, with a count the lambda list rules out evaluates
+  its arguments and then signals the interpreter's `program-error` at run time on all four
+  backends** (`Function expects 2 arguments, got 1`), each compiled backend warning at compile
+  time. Pinned by ci-spec `direct-defun-call-wrong-count-signals-program-error`,
+  `DefinedCallArityTest` and `JvmLispCompilerTest`
+  `compileAndRunADirectCallOfAProgramFunctionWithAWrongCountSignalsAtCallTime` with its wasm twin.
+  - Before: both compiled backends failed the COMPILE (`UD expects 2 arguments, got 1`, `lambda
+    expects 1 argument, got 2`), so a wrong call in a branch never taken, or under a
+    `program-error` handler (the ANSI suite's `signals-error` rows), kept the program from
+    compiling at all.
+  - `compiler/DefinedCallArity.wrongCountSignal` builds the same `(progn args... (%program-error
+    "msg"))` as the built-in case, from the compiled function's shape (required count, rest or
+    not -- an `&optional`/`&key` tail is a rest list by then and judges its own surplus inside the
+    callee). Called from `Jvm/WasmFunctionCallCompiler.compileDirectCall` and
+    `Jvm/WasmLambdaCompiler.compileCall`.
+  - The operator the report names is `BuiltinFunctionWrappers.arityOperator`'s, the rule the
+    function-value path already used: `Function` for a program name, the built-in's name for a
+    defun of a catalog name. It also maps the compile-path dispatcher `ShadowedBuiltins` renames
+    a `defmethod`-shadowed built-in to (`%LENGTH--dispatch`) back to the built-in, because the
+    interpreter's dispatcher keeps the name: `(length x 2)` and `(funcall #'length x 2)` both say
+    `LENGTH expects 1 argument, got 2` everywhere (the function-value path said `Function` on
+    both compiled backends, the direct call failed the compile). `ShadowedBuiltins` now keeps the
+    rewritten call's source position, so the warning has one.
 - **Inside a compiled `eval`** (2026-09-26) the same reports hold: the runtime evaluates every
   argument form of a registered function and the spread case judges the count, `apply` is a
   catalog wrapper, an eval-built closure without a `&` marker is checked, and the operators
