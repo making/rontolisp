@@ -2205,6 +2205,11 @@ public final class LispEvaluator {
 					throw new LispEvalException(LispNames.INTERN + " expects a string, got " + args.get(0).print());
 				}
 				String designator = packageDesignator(LispNames.INTERN, args.get(1));
+				if (this.packageResolver.findPackageName(designator) == null) {
+					// CLHS: a designator naming no package is an error a handler
+					// catches -- not the resolver's read-time failure.
+					return signalPackageError("No such package: " + designator, designator);
+				}
 				return symbolOfSpelling(this.packageResolver.internSpellingIn(designator, str.value(), true));
 			}
 			requireSingleArg(LispNames.INTERN, args);

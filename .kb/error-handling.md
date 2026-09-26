@@ -103,7 +103,7 @@ A condition is a CLOS-subset instance ([instance-syntax.md](instance-syntax.md))
   (`newReportingCondition`, the reader-/file-error factories, `synthesizeCondition`); the wasm-GC
   fixed runtime's `emitConditionThrow` (dispatcher and operand landings) through `_tilde`
   (`FUNC_TILDE`, one body for `%text-control` and `%control-text`, shaken when unused). An
-  `(error <literal>)` the expander builds from a name the program chose (`No such package: X`, an
+  `(error <literal>)` the expander builds from a name the program chose (an
   undefined function stub) goes through `textDatum` for the same reason: a string datum IS a control.
   Consequences, pinned by ci-spec `condition-report-prints-rendered-text-once` and the three
   `aConditionCarryingRenderedTextReportsItOnce` tests: `(simple-condition-format-control e)` of
