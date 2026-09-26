@@ -2,7 +2,7 @@
 
 `java` パッケージは、リフレクションを使って rontolisp から任意の Java API を操作できるようにします。オブジェクトの生成、インスタンスメソッドや静的メソッドの呼び出し、フィールドの読み取り、そして rontolisp のラムダを Java のインターフェース実装へ変換することができます。`examples/` の Swing デモ (`java-interop.lisp`、`swing.lisp`、`life-gui.lisp`) は、専用の Java グルーコードを一切書かずにこのパッケージだけでウィンドウを画面に表示しています。
 
-> **JVM 専用 (インタプリタとコンパイル済み `.class`)。** 連携で得られる値はホストオブジェクトへの不透明な参照であり、呼び出しはリフレクションで解決されるため、本物の JVM が必要です。動作するのは **JVM 上のインタプリタ** (`java -jar rontolisp.jar program.lisp`) と **JVM コンパイル済みプログラム** (`-o Prog.class` でコンパイルし `java Prog` で実行) です — コンパイラは小さなリフレクションブリッジを生成クラスに埋め込むため、出力は従来どおり単一の自己完結した `.class` ファイルのままです (`java:` を使うプログラムの実行には、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です)。WASM バックエンドはホスト参照を表現できないため、`java:` を `.wasm` にコンパイルすると従来どおり `Cannot compile: java:...` エラーになります。GraalVM ネイティブバイナリ (`rontolisp program.lisp`) は `java:` プログラムを `.class` に**コンパイルする**ことはできますが、**インタプリタ実行**はできません。ネイティブイメージにはビルド時にリフレクション登録されたクラス・メンバーしか含まれず、rontolisp のビルドは連携用に何も登録していないため、`(java:static "java.lang.Math" "max" 3 7)` ですら `No such class` で失敗します。
+> **JVM 専用 (インタプリタとコンパイル済み `.class`)。** 連携で得られる値はホストオブジェクトへの不透明な参照であるため、本物の JVM が必要です。動作するのは **JVM 上のインタプリタ** (`java -jar rontolisp.jar program.lisp`) と **JVM コンパイル済みプログラム** (`-o Prog.class` でコンパイルし `java Prog` で実行) です — コンパイラが解決した呼び出しは生成クラスの中の直接呼び出しになり、実行時解決に回る呼び出しのためにだけ小さなリフレクションブリッジを埋め込むので、出力は従来どおり単一の自己完結した `.class` ファイルのままです (必要な JRE は [Java リリースやクラスパスを指定したコンパイル](#compiling-against-a-java-release-or-a-class-path) を参照)。WASM バックエンドはホスト参照を表現できないため、`java:` を `.wasm` にコンパイルすると従来どおり `Cannot compile: java:...` エラーになります。GraalVM ネイティブバイナリ (`rontolisp program.lisp`) は `java:` プログラムを `.class` に**コンパイルする**ことはできますが、**インタプリタ実行**はできません。ネイティブイメージにはビルド時にリフレクション登録されたクラス・メンバーしか含まれず、rontolisp のビルドは連携用に何も登録していないため、`(java:static "java.lang.Math" "max" 3 7)` ですら `No such class` で失敗します。
 
 ## 関数
 
@@ -86,7 +86,7 @@ Java の `null` (および `void` メソッド) は `nil` として返ります�
 - 解決済みの呼び出しの値は、そのメソッドが宣言する型を持つ。`StringBuilder` の `append` は `StringBuilder` を返すので、呼び出しの連鎖は 1 段ずつ解決される。`Object` を返すと宣言されたメソッドは何も示さない
 - `(the (java:object "C") x)` と `(declare (type (java:object "C") v))` は、その値が `C` (または `nil`) であることを示す。`C` は `java:new` と同じくバイナリクラス名 (`java.util.Map$Entry`) で書く
 
-宣言された型は信頼されます。`C` でない値は、呼び出しに渡った時点でエラーになります。
+宣言された型は信頼されます。`C` でない値は、レシーバでも引数でも、呼び出しに渡った時点でエラーになります。選ばれていないメソッドに合わせて変換されることはありません。
 
 ```lisp
 (defun total-length (sb)
@@ -94,6 +94,15 @@ Java の `null` (および `void` メソッド) は `nil` として返ります�
   (java:call sb "length"))
 (total-length (java:new "java.lang.StringBuilder" "abc"))   ; => 3
 ```
+
+```console
+(defun parse (s)
+  (declare (type (java:object "java.lang.String") s))
+  (java:static "java.lang.Integer" "parseInt" s))
+(parse 42)   ; error: java:static: argument 1 is not a java.lang.String, got 42
+```
+
+コンパイル済みクラスは、解決済みの呼び出しをそれぞれメソッドの直接呼び出しにし (リフレクションなし)、実行時解決に回る呼び出しのためにだけリフレクションブリッジを埋め込みます。インタプリタも解決済みの呼び出しを同じく実行します。選ばれたメソッドを呼び、引数を検査して変換します。
 
 引数が呼び出しを解決するのは、その引数が取りうるすべての種別が同じメソッドを選ぶときだけです。`String` の戻り値は `nil` でありえて、`nil` は `append(boolean)` を選ぶため、`(java:call sb "append" (java:call x "toString"))` は実行時に解決されます。
 
@@ -140,11 +149,29 @@ len.lisp:1:16: warning: java:call "length" is resolved by reflection at run time
 
 ### Java リリースやクラスパスを指定したコンパイル
 
-インタプリタは実行中のクラスに対して解決します。JVM コンパイラは代わりにクラスファイルを読みます。JDK の `lib/ct.sym` (実行中の JDK のもの、なければ `JAVA_HOME` のもの、なければ `PATH` 上の `java` のもの) から、その JDK が持つ最新のリリース、または `--java-release N` のリリースを読み、続いて `--java-classpath` のディレクトリと jar を探します。コンパイル済みクラスはコンパイル時に選ばれたメソッドを呼ぶので、そのリリース以降の JRE で実行してください。コンパイル時に見えないクラスを名指す呼び出しは実行時に解決されます。
+インタプリタは実行中のクラスに対して解決します。JVM コンパイラは代わりにクラスファイルを読みます。JDK の `lib/ct.sym` (実行中の JDK のもの、なければ `JAVA_HOME` のもの、なければ `PATH` 上の `java` のもの) から、その JDK が持つ最新のリリース、または `--java-release N` のリリースを読み、続いて `--java-classpath` のディレクトリと jar を探します。コンパイル済みクラスはコンパイル時に選ばれたメソッドを呼ぶので、そのリリース向けに刻印されます (クラスバージョン 44 + N、最低でも Java 17 の 61)。そのリリースより古い JRE はクラスの読み込みを拒否します。コンパイル時に見えないクラスを名指す呼び出しは実行時に解決され、その呼び出しが使うリフレクションブリッジには、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です。
 
 ```console
 $ rontolisp app.lisp -o app.jar --java-release 21 --java-classpath lib/guava.jar
 ```
+
+### リフレクションなしのコンパイル
+
+`--java-static` は、リフレクションを必要とする呼び出しをすべてコンパイルエラーにします。実行時解決に回る呼び出し、`java:proxy`、そしてインターフェースが期待される箇所に渡した関数 (`java.lang.reflect.Proxy` になる) が該当し、コンパイルはそれらを一度にすべて列挙します。コンパイルが通ったものはリフレクションを含まないので、GraalVM の `native-image` はその jar をリーチャビリティメタデータなし (`reflect-config.json` もエージェント実行も不要) で実行ファイルにビルドできます。
+
+```console
+$ rontolisp app.lisp --java-static -o app.jar
+$ native-image --no-fallback -jar app.jar -o app
+$ ./app
+```
+
+```console
+$ rontolisp len.lisp --java-static -o len.jar
+error: --java-static: 1 java: call cannot be compiled without reflection:
+  len.lisp:1:16: java:call "length": it is resolved by reflection at run time: the receiver's class is not known
+```
+
+こうした呼び出しを解決させるのは `(declare (type (java:object "C") v))` や `(the (java:object "C") x)` です。
 
 ## 可変長引数 (varargs)
 
@@ -210,7 +237,7 @@ $ rontolisp app.lisp -o app.jar --java-release 21 --java-classpath lib/guava.jar
 ## 制限
 
 - **JVM 専用**。インタプリタ (`java -jar rontolisp.jar`) と JVM コンパイル済みクラス (`java Prog`) で動作します。WASM バックエンドでは動作せず、連携クラスのリフレクションメタデータを持たない GraalVM ネイティブバイナリでのインタプリタ実行もできません (ネイティブバイナリで `java:` プログラムを `.class` に*コンパイルする*ことは可能です)。
-- コンパイル済みクラスでは 5 つの関数は呼び出し位置でのみ使えます。第一級の関数値を持たないため、`#'java:call` や `(funcall 'java:new ...)` はコンパイルエラーになります (代わりに自前の `defun` でラップしてください)。埋め込み `eval` ランタイムもこれらを認識しません。また `java:` を使うコンパイル済みプログラムの実行には、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です。
+- コンパイル済みクラスでは 5 つの関数は呼び出し位置でのみ使えます。第一級の関数値を持たないため、`#'java:call` や `(funcall 'java:new ...)` はコンパイルエラーになります (代わりに自前の `defun` でラップしてください)。埋め込み `eval` ランタイムもこれらを認識しません。また `java:` を使うコンパイル済みプログラムの実行には、呼び出しを解決したリリースの JRE が必要で、実行時解決に回る呼び出しを含むものには、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です。
 - シンボル、ハッシュテーブル、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリングされません。代わりに `java:new`/`java:call` で構築した Java コレクションとして渡してください。
 - 返された `java.util.List` は (Java 配列と異なり) 不透明な `java` オブジェクトのままです。同一性と可変性が保たれるため、リスト関数ではなく `java:call` (`"get"`、`"size"` など) で読み取ってください。
 - オーバーロード解決は引数コストによるもので、Java の完全な型推論規則ではありません。曖昧な呼び出しは曖昧性エラーを出さず、最小コスト (次に最小シグネチャ) の候補に解決されます。パラメータタグでオーバーロードを明示できます。

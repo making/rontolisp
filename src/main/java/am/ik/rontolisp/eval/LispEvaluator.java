@@ -4946,11 +4946,11 @@ public final class LispEvaluator {
 	/**
 	 * Evaluates a {@code java:new} / {@code java:call} / {@code java:static} /
 	 * {@code java:field} call site. The site is resolved once ({@link #javaSite}); a
-	 * resolved one runs as the explicit request the compiled program's bridge receives
-	 * for it -- its static class and fully tagged member -- and an unresolved one as the
-	 * ordinary call of the built-in, which resolves at run time. Answers
-	 * {@link #UNHANDLED} (before evaluating anything) when the operator is no longer the
-	 * built-in, so a redefinition is called like any function.
+	 * resolved one runs its resolved member ({@link JavaInterop#invokeResolved}), as a
+	 * compiled program's direct call does, and an unresolved one as the ordinary call of
+	 * the built-in, which resolves at run time. Answers {@link #UNHANDLED} (before
+	 * evaluating anything) when the operator is no longer the built-in, so a redefinition
+	 * is called like any function.
 	 */
 	private LispVal evalJavaSite(LispCons cons, Environment env, String name) {
 		LispFunction builtin = this.javaBuiltins.get(name);
@@ -4960,19 +4960,18 @@ public final class LispEvaluator {
 		}
 		am.ik.rontolisp.compiler.JavaSite site = javaSite(cons);
 		List<LispVal> args = evalArgs(cons, env, length - 1);
-		String staticClass = site.staticClass();
-		String designator = site.designator();
-		if (staticClass == null || designator == null) {
+		if (!site.resolved()) {
 			return apply(builtin, args, env);
 		}
 		JavaInterop.Caller caller = this.javaCaller;
 		LispVal result = switch (site.operator()) {
-			case NEW -> JavaInterop.newInstance(designator, args.subList(1, args.size()), caller);
-			case STATIC -> JavaInterop.callStatic(staticClass, designator, args.subList(2, args.size()), caller);
-			case CALL ->
-				JavaInterop.callInstanceAs(staticClass, args.get(0), designator, args.subList(2, args.size()), caller);
-			case FIELD -> args.get(0) instanceof LispString ? JavaInterop.field(args.get(0), designator)
-					: JavaInterop.fieldAs(staticClass, args.get(0), designator);
+			case NEW -> JavaInterop.invokeResolved(site, null, args.subList(1, args.size()), caller);
+			case STATIC -> JavaInterop.invokeResolved(site, null, args.subList(2, args.size()), caller);
+			case CALL -> JavaInterop.invokeResolved(site, args.get(0), args.subList(2, args.size()), caller);
+			// The FORM says static or instance: a class-name literal reads a static
+			// field, any other first argument is the object -- whatever it evaluates to.
+			case FIELD -> JavaInterop.invokeResolved(site,
+					((LispCons) cons.cdr()).car() instanceof LispString ? null : args.get(0), List.of(), caller);
 		};
 		return singleValue(result);
 	}

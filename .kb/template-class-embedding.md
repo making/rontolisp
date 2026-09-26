@@ -5,7 +5,8 @@ primitives; (2) a hand-assembled `Jvm/Wasm<Name>RuntimeBuilder`, the standard ev
 ([[stackmap-augmenter]]); (3) embedding a project-compiled Java class, renamed into the generated
 program's package by constant-pool rewrite (`JvmJavaRuntimeBuilder.renameClass`), base64-embedded and
 `Lookup.defineClass`d at first use. Use (3) only for a helper needing JDK facilities impractical in
-raw bytecode: [[java-interop]] and the `--simd`/`--blas`/`--gpu` bridges. Before adding one, check
+raw bytecode: [[java-interop]] (only for the sites left to run time: a resolved site is a
+hand-assembled direct call, `JvmJavaDirectSites`) and the `--simd`/`--blas`/`--gpu` bridges. Before adding one, check
 whether the complex part can run at COMPILE time; pin the rename with
 `JvmJavaInteropCompilerTest#renameClassLeavesOtherUtf8EntriesIntact`.
 

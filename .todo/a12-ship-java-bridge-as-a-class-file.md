@@ -11,6 +11,12 @@ an agent-generated config builds a working 15.5MB binary. Caveat measured: the
 config covers only paths the agent run took; a double argument not seen during
 tracing fails with MissingReflectionRegistrationError for Math.max(double,double).
 
+a14 note: the bridge is now emitted only when a site needs it (JvmJavaSites.needsBridge:
+a site left to run time, a java:proxy, a function argument; a mispredicted one retries
+through the _javaInit gate); resolved sites are direct calls and --java-static output
+carries no bridge at all (native-image with no metadata, JavaStaticNativeImageE2eTest).
+This item is about the programs that still need it.
+
 Plan:
 - Jar/war output: write the renamed bridge as a regular entry; _javaInit only
   binds. .class output: write it beside the class (precedent: runtime classes).

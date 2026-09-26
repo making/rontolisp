@@ -219,6 +219,19 @@ public final class JvmLispCompiler implements LispCompiler {
 	private final boolean warnJavaReflection;
 
 	/**
+	 * Whether a {@code java:} site that needs the reflective bridge is a compile error
+	 * ({@code --java-static}).
+	 */
+	private final boolean javaStatic;
+
+	/**
+	 * The class-file major version this attempt stamps: {@link #CLASS_MAJOR_VERSION}, or
+	 * the version of the Java release a {@code java:} program's sites resolved against
+	 * when that is newer.
+	 */
+	private int classMajorVersion = CLASS_MAJOR_VERSION;
+
+	/**
 	 * The class files {@code java:} sites resolve against, opened by the first attempt
 	 * that compiles one and closed when {@link #compile(List)} returns.
 	 */
@@ -273,6 +286,13 @@ public final class JvmLispCompiler implements LispCompiler {
 	private static final String GROUP_APPLY = "apply";
 
 	/**
+	 * The {@code java:} bridge's gate: embedded only when a site needs it
+	 * ({@link JvmJavaSites#needsBridge}); a site that turns out to after all calls the
+	 * absent {@code _javaInit}.
+	 */
+	private static final String GROUP_JAVA_BRIDGE = "java-bridge";
+
+	/**
 	 * Which gate emits a given runtime helper, i.e. which gate to force on when the
 	 * finished class turns out to call that helper without it having been emitted. A
 	 * helper absent from this table is not recoverable and makes the compile fail loudly
@@ -296,6 +316,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if ("_apply".equals(helperName)) {
 			return GROUP_APPLY;
+		}
+		if (JvmJavaRuntimeBuilder.INIT_METHOD.equals(helperName)) {
+			return GROUP_JAVA_BRIDGE;
 		}
 		if (JvmComplexRuntimeBuilder.METHOD_NAMES.contains(helperName)) {
 			return GROUP_COMPLEX;
@@ -390,6 +413,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		this.javaRelease = builder.javaRelease;
 		this.javaClasspath = builder.javaClasspath;
 		this.warnJavaReflection = builder.warnJavaReflection;
+		this.javaStatic = builder.javaStatic;
 	}
 
 	/**
@@ -437,6 +461,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		private List<java.nio.file.Path> javaClasspath = List.of();
 
 		private boolean warnJavaReflection;
+
+		private boolean javaStatic;
 
 		private Builder() {
 		}
@@ -680,6 +706,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		public Builder warnJavaReflection(boolean warnJavaReflection) {
 			this.warnJavaReflection = warnJavaReflection;
+			return this;
+		}
+
+		/**
+		 * Makes a {@code java:} call site that cannot be compiled to a direct call -- one
+		 * left to run-time reflection, a {@code java:proxy}, a function value passed
+		 * where an interface is expected -- a compile error ({@code --java-static}), so
+		 * the class carries no reflective bridge at all: what GraalVM native-image
+		 * compiles without reachability metadata.
+		 * @param javaStatic whether to refuse such sites
+		 * @return this builder
+		 */
+		public Builder javaStatic(boolean javaStatic) {
+			this.javaStatic = javaStatic;
 			return this;
 		}
 
@@ -1369,15 +1409,26 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Constant acceptedIssuersDesc = usesTlsConnect ? cp.addUtf8("()[Ljava/security/cert/X509Certificate;")
 				: null;
 
-		// java: interop runtime: emitted only when the program uses one of the five
-		// java: functions. It embeds the (renamed) JavaBridgeTemplate bytecode and
-		// forces the eval runtime (the bridge applies Lisp callables through _apply).
+		// java: interop. The sites resolve against class files, never the classes this
+		// compiler runs on (compiler/JavaSiteResolver, .kb/java-interop.md); a resolved
+		// site compiles to a direct call (JvmJavaDirectSites). The bridge runtime is
+		// emitted only when a site needs it -- a site left to run time, a java:proxy, a
+		// function value passed where an interface is expected -- and never under
+		// --java-static, which refuses such a site. It embeds the (renamed)
+		// JavaBridgeTemplate bytecode and forces the eval runtime (the bridge applies
+		// Lisp callables through _apply).
 		boolean usesJava = programUsesAnyJavaOp(program);
-		final JvmJavaRuntimeBuilder.@Nullable JavaRuntime javaRuntime = usesJava
+		final JvmJavaSites javaSites = usesJava
+				? new JvmJavaSites(javaClasses(), cp, thisClass, lispToStringMethod, this.javaStatic) : null;
+		boolean usesJavaBridge = javaSites != null && !this.javaStatic
+				&& (forcedGroups.contains(GROUP_JAVA_BRIDGE) || javaSites.needsBridge(program));
+		final JvmJavaRuntimeBuilder.@Nullable JavaRuntime javaRuntime = usesJavaBridge
 				? JvmJavaRuntimeBuilder.build(cp, thisClass, stringConcat, bridgePackagePrefix) : null;
-		// The sites resolve against class files, never the classes this compiler runs
-		// on (compiler/JavaSiteResolver, .kb/java-interop.md).
-		final JvmJavaSites javaSites = usesJava ? new JvmJavaSites(javaClasses()) : null;
+		// A class calling members chosen against release N's API is stamped for release
+		// N, so an older JRE refuses it at load rather than failing at the first call of
+		// a member it lacks; a program without java: keeps the version-61 baseline.
+		this.classMajorVersion = usesJava ? Math.max(CLASS_MAJOR_VERSION, 44 + javaClasses().release())
+				: CLASS_MAJOR_VERSION;
 		if (javaSites != null) {
 			if (!javaClasses().hasPlatform()) {
 				CompileWarnings.warn("warning: no JDK found (java.home, JAVA_HOME or java on PATH holds no lib/ct.sym):"
@@ -1606,7 +1657,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// runtime's global env mirror (_genv) and function registry (_lookup/_fenv), so
 		// they force the eval runtime. fmakunbound writes the tombstone into that same
 		// _fenv.
-		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic || usesJava || usesObjc || usesFfi
+		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic || usesJavaBridge || usesObjc || usesFfi
 				|| programUsesSymbol(program, LispNames.BOUNDP) || programUsesSymbol(program, LispNames.SYMBOL_VALUE)
 				|| programUsesSymbol(program, LispNames.SET) || programUsesSymbol(program, LispNames.FBOUNDP)
 				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
@@ -3134,8 +3185,13 @@ public final class JvmLispCompiler implements LispCompiler {
 			ClassConstant classClass = cp.addClass(cp.addUtf8("java/lang/Class"));
 			MethodrefConstant classGetName = cp.addMethodref(classClass,
 					cp.addNameAndType(cp.addUtf8("getName"), cp.addUtf8("()Ljava/lang/String;")));
+			ClassConstant arrayListForPrint = cp.addClass(cp.addUtf8("java/util/ArrayList"));
 			javaPrint = new JvmRuntimeBuilder.JavaPrint(bigIntegerClassForPrint, objectGetClass, classGetName,
-					stringConcat, cp.addString("#<java "), cp.addString(">"));
+					stringConcat, cp.addString("#<java "), cp.addString(">"),
+					cp.addMethodref(arrayListForPrint, cp.addNameAndType(cp.addUtf8("isEmpty"), cp.addUtf8("()Z"))),
+					cp.addMethodref(arrayListForPrint,
+							cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;"))),
+					cp.addClass(cp.addUtf8("[Ljava/lang/Object;")));
 		}
 		else {
 			javaPrint = null;
@@ -4270,6 +4326,14 @@ public final class JvmLispCompiler implements LispCompiler {
 					javaRuntime.initName(), javaRuntime.initDesc(), javaRuntime.maxStack(), javaRuntime.maxLocals(),
 					javaRuntime.initCode(), List.of());
 		}
+		// The direct java: calls (JvmJavaDirectSites), each site shape's method and the
+		// helpers they share, made while the bodies above were compiled.
+		if (javaSites != null) {
+			for (JvmJavaDirectSites.Method site : javaSites.direct().methods()) {
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, site.name(), site.desc(),
+						site.maxStack(), site.maxLocals(), site.code(), site.exceptionTable());
+			}
+		}
 		if (objcRuntime != null) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
 					objcRuntime.initName(), objcRuntime.initDesc(), objcRuntime.maxStack(), objcRuntime.maxLocals(),
@@ -4533,6 +4597,14 @@ public final class JvmLispCompiler implements LispCompiler {
 					storeBody, List.of());
 		}
 
+		// --java-static: every site that would have needed the bridge, at once, before
+		// anything is written.
+		if (javaSites != null && !javaSites.refusals().isEmpty()) {
+			List<String> refusals = javaSites.refusals();
+			throw new UnsupportedOperationException(
+					"--java-static: " + refusals.size() + " java: call" + (refusals.size() == 1 ? "" : "s")
+							+ " cannot be compiled without reflection:\n  " + String.join("\n  ", refusals));
+		}
 		ClassDefinition classDefinition = definition.build();
 		// A pool one class file can carry is written as it always was. One past that is
 		// SPLIT: the methods spread over the class and its $PartN classes, each with a
@@ -4601,7 +4673,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			// ... and an objc: callback (a run-time class's method, objc:on-main's
 			// body) or an ffi:callback's Lisp function reaches it from an upcall, the
 			// same invisible edge.
-			if (usesJava || usesObjc || usesFfi) {
+			if (usesJavaBridge || usesObjc || usesFfi) {
 				roots.add("_apply");
 			}
 			if (usesTlsConnect) {
@@ -4638,7 +4710,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// shake: the shaker rejects Code sub-attributes and would not rewrite the
 		// constant-pool entries the frames reference.
 		try {
-			return StackMapAugmenter.augment(classBytes, CLASS_MAJOR_VERSION);
+			return StackMapAugmenter.augment(classBytes, this.classMajorVersion);
 		}
 		catch (ConstantPoolOverflowException fullPool) {
 			// The frames' own Class entries were the ones that did not fit: a pool within
@@ -4676,10 +4748,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				method -> pinnedNames.contains(cp.utf8At(method.name().index())), budget);
 		Map<String, byte[]> parts = new LinkedHashMap<>();
 		for (Map.Entry<String, byte[]> part : split.parts().entrySet()) {
-			parts.put(part.getKey() + ".class", StackMapAugmenter.augment(part.getValue(), CLASS_MAJOR_VERSION));
+			parts.put(part.getKey() + ".class", StackMapAugmenter.augment(part.getValue(), this.classMajorVersion));
 		}
 		this.partClassFiles = Map.copyOf(parts);
-		return StackMapAugmenter.augment(split.mainClass(), CLASS_MAJOR_VERSION);
+		return StackMapAugmenter.augment(split.mainClass(), this.classMajorVersion);
 	}
 
 	/**

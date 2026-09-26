@@ -348,6 +348,83 @@ class JavaInteropTest {
 					"java:call: the receiver is not a java.util.Collection, got #<java java.lang.StringBuilder>");
 	}
 
+	// An argument a declaration lied about is an error where it meets the member, never
+	// converted for a member it was not chosen for -- the text a compiled direct call
+	// raises (JvmJavaInteropCompilerTest#aFalseArgumentDeclarationSignals).
+	@Test
+	void aFalseArgumentDeclarationSignals() {
+		String parse = """
+				(defun parse (s)
+				  (declare (type (java:object "java.lang.String") s))
+				  (java:static "java.lang.Integer" "parseInt" s))
+				""";
+		assertThat(eval(parse + "(parse \"42\")")).isEqualTo(new LispInteger(42));
+		assertThatThrownBy(() -> eval(parse + "(parse 42)")).isInstanceOf(LispEvalException.class)
+			.hasMessage("java:static: argument 1 is not a java.lang.String, got 42");
+	}
+
+	// java:static calls a static method: an instance method of the name, which could only
+	// fail without a receiver, is never chosen.
+	@Test
+	void aStaticCallNeverChoosesAnInstanceMethod() {
+		assertThatThrownBy(() -> eval("(java:static \"java.lang.String\" \"length\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("No matching method java.lang.String.length with 0 argument(s)");
+	}
+
+	@Test
+	void aClassNameReadsOnlyAStaticField() {
+		assertThatThrownBy(() -> eval("(java:field \"java.awt.Point\" \"x\")")).isInstanceOf(LispEvalException.class)
+			.hasMessage("java:field: field java.awt.Point.x is not static");
+	}
+
+	// What the member throws is wrapped, with the compiled program's text.
+	@Test
+	void anExceptionFromTheMemberIsWrapped() {
+		assertThatThrownBy(() -> eval("(java:static \"java.lang.Integer\" \"parseInt\" \"x\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("error calling java.lang.Integer.parseInt: java.lang.NumberFormatException:"
+					+ " For input string: \"x\"");
+		assertThatThrownBy(() -> eval("(java:new \"java.lang.StringBuilder\" -1)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("error constructing java.lang.StringBuilder: java.lang.NegativeArraySizeException: -1");
+	}
+
+	// A function value passed to a resolved site where an interface is expected becomes a
+	// proxy, as on a compiled direct call.
+	@Test
+	void aFunctionArgumentOfAResolvedSiteBecomesAProxy() {
+		assertThat(output("""
+				(java:call (java:static "java.util.List" "of" 1 2 3) "forEach" (lambda (m x) (print x)))
+				""")).isEqualTo("1\n2\n3");
+	}
+
+	// The values a resolved site answers, as a compiled direct call answers them
+	// (JvmJavaInteropCompilerTest#aDirectCallConvertsTheValueBackAsTheBridgeDoes).
+	@Test
+	void aResolvedSiteConvertsTheValueBack() {
+		assertThat(output("""
+				(print (java:call (java:new "java.lang.StringBuilder" "ab") "charAt" 1))
+				(print (java:call (java:new "java.util.ArrayList") "isEmpty"))
+				(print (java:static "java.lang.Character" "valueOf" #\\a))
+				(print (java:static "java.lang.Boolean" "valueOf" t))
+				(print (java:static "java.lang.Float" "valueOf" 1.5))
+				(print (java:static "java.lang.Long" "valueOf" 7))
+				(print (java:call (java:static "java.util.regex.Pattern" "compile" ",") "split" "a,b"))
+				(print (java:call (java:new "java.util.ArrayList") "add" nil))
+				""")).isEqualTo("#\\b\nT\n#\\a\nT\n1.5\n7\n(\"a\" \"b\")\nT");
+	}
+
+	// Evaluates the forms and answers what they printed.
+	private String output(String input) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out));
+		for (LispVal expr : LispReader.readAllFromString(input)) {
+			evaluator.eval(expr);
+		}
+		return out.toString().trim();
+	}
+
 	// A chain resolves link by link: each declared return type types the next receiver.
 	@Test
 	void aChainResolvesThroughDeclaredReturnTypes() {
@@ -374,6 +451,27 @@ class JavaInteropTest {
 				"warning: java:call \"length\" is resolved by reflection at run time: the receiver's class is not known")
 			.doesNotContain("\"size\"")
 			.doesNotContain("\"max\"");
+	}
+
+	// Mirrors JvmJavaInteropCompilerTest#aHostArrayListPrintsOpaquely.
+	@Test
+	void aHostArrayListPrintsOpaquely() {
+		assertThat(output("""
+				(print (java:new "java.util.ArrayList"))
+				(let ((l (java:new "java.util.ArrayList")))
+				  (java:call l "add" 1)
+				  (print l)
+				  (princ l))
+				(print (make-array 2 :initial-element 7))
+				"""))
+			.isEqualTo("#<java java.util.ArrayList>\n#<java java.util.ArrayList>\n#<java java.util.ArrayList>#(7 7)");
+		assertThatThrownBy(() -> eval("""
+				(defun size-of (sb)
+				  (declare (type (java:object "java.lang.StringBuilder") sb))
+				  (java:call sb "length"))
+				(size-of (java:new "java.util.ArrayList"))
+				""")).isInstanceOf(LispEvalException.class)
+			.hasMessage("java:call: the receiver is not a java.lang.StringBuilder, got #<java java.util.ArrayList>");
 	}
 
 	@Test

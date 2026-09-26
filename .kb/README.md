@@ -156,7 +156,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [jvm-aot-cache.md](jvm-aot-cache.md) -- the JDK 25 Leyden AOT cache, measured and deliberately not shipped
 - [stackmap-augmenter.md](stackmap-augmenter.md) -- class version 61 via `am.ik.jvm.StackMapAugmenter`
 - [template-class-embedding.md](template-class-embedding.md) -- when to embed a Java template class, and when to embed a closure of them
-- [java-interop.md](java-interop.md) -- the `java:` reflection interop bridge
+- [java-interop.md](java-interop.md) -- `java:` interop: one resolution model, resolved sites as direct calls (`--java-static`, native-image without metadata), the reflection bridge for the rest
 
 ## WASM backends
 

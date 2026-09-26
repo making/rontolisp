@@ -6,6 +6,7 @@ import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.Proxy;
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -78,6 +79,10 @@ final class JavaBridgeTemplate {
 
 	private static final String CONSTRUCTOR = "<init>";
 
+	// A static call's member-key prefix: it chooses among static methods only, so its
+	// choices are remembered apart from an instance call's (mirrors eval/JavaInterop).
+	private static final String STATIC_PREFIX = "static ";
+
 	private static final ConcurrentHashMap<String, Class<?>> CLASSES = new ConcurrentHashMap<>();
 
 	private static final ConcurrentHashMap<Class<?>, List<Constructor<?>>> CONSTRUCTORS = new ConcurrentHashMap<>();
@@ -88,9 +93,6 @@ final class JavaBridgeTemplate {
 
 	// Parsed member designators: {String name, String[] tag or null}.
 	private static final ConcurrentHashMap<String, Object[]> MEMBERS = new ConcurrentHashMap<>();
-
-	// The classes resolved sites name, by their quote-framed class-name literal.
-	private static final ConcurrentHashMap<String, Class<?>> LITERAL_CLASSES = new ConcurrentHashMap<>();
 
 	// class -> member -> memos, each {Object[] kinds, Object[] overload}; an overload is
 	// {Executable, Class<?>[] parameter types, Boolean packed-varargs} (plain arrays: a
@@ -204,49 +206,6 @@ final class JavaBridgeTemplate {
 		return invoke(target.getClass(), target, method, args);
 	}
 
-	/**
-	 * Implements a {@code java:call} site resolved at compile time: the method is chosen
-	 * among the members of the receiver's static class -- the one the site's fully tagged
-	 * designator names -- and the receiver must be an instance of that class, exactly as
-	 * the interpreter runs the same site ({@code eval/JavaInterop.callInstanceAs}).
-	 */
-	static @Nullable Object javaCallAs(@Nullable Object className, @Nullable Object target, @Nullable Object methodName,
-			@Nullable Object[] args) {
-		String method = lispString(methodName);
-		if (method == null) {
-			throw new RuntimeException("java:call expects (java:call object \"method\" args...)");
-		}
-		if (target == null || !isJavaObject(target)) {
-			throw new RuntimeException(
-					"java:call expects a java object as the first argument, got " + describe(target));
-		}
-		Class<?> type = literalClass(className);
-		if (!type.isInstance(target)) {
-			throw new RuntimeException(
-					"java:call: the receiver is not a " + type.getName() + ", got " + describe(target));
-		}
-		return invoke(type, target, method, args);
-	}
-
-	// The class a resolved site names, by the identity of the constant the compiled site
-	// passes: the quote-framed literal is one object per site, so neither the unquoting
-	// substring nor a fresh hash is paid per call.
-	private static Class<?> literalClass(@Nullable Object className) {
-		Class<?> cached = className instanceof String raw ? LITERAL_CLASSES.get(raw) : null;
-		if (cached != null) {
-			return cached;
-		}
-		String name = lispString(className);
-		if (name == null) {
-			throw new RuntimeException("java:call expects a class-name string, got " + describe(className));
-		}
-		Class<?> type = loadClass(name);
-		if (className instanceof String raw) {
-			remember(LITERAL_CLASSES, raw, type);
-		}
-		return type;
-	}
-
 	/** Implements {@code (java:static "class" "method" args...)}. */
 	static @Nullable Object javaStatic(@Nullable Object className, @Nullable Object methodName,
 			@Nullable Object[] args) {
@@ -270,7 +229,12 @@ final class JavaBridgeTemplate {
 		try {
 			String staticClass = lispString(classOrObject);
 			if (staticClass != null) {
-				Field field = publicField(loadClass(staticClass), name);
+				Class<?> cls = loadClass(staticClass);
+				Field field = publicField(cls, name);
+				if (!Modifier.isStatic(field.getModifiers())) {
+					// Mirrors compiler/JavaSiteResolver.notStatic.
+					throw new RuntimeException("java:field: field " + cls.getName() + "." + name + " is not static");
+				}
 				return unmarshal(field.get(null));
 			}
 			if (classOrObject != null && isJavaObject(classOrObject)) {
@@ -279,34 +243,6 @@ final class JavaBridgeTemplate {
 			}
 			throw new RuntimeException(
 					"java:field expects a class-name string or a java object, got " + describe(classOrObject));
-		}
-		catch (ReflectiveOperationException ex) {
-			throw fail("reading field " + name, ex);
-		}
-	}
-
-	/**
-	 * Implements a {@code java:field} site on an object whose class is known at compile
-	 * time: the field is looked up on that class, and the object must be an instance of
-	 * it ({@code eval/JavaInterop.fieldAs}).
-	 */
-	static @Nullable Object javaFieldAs(@Nullable Object className, @Nullable Object object,
-			@Nullable Object fieldName) {
-		String name = lispString(fieldName);
-		if (name == null) {
-			throw new RuntimeException("java:field expects (java:field class-or-object \"field\")");
-		}
-		if (object == null || !isJavaObject(object)) {
-			throw new RuntimeException(
-					"java:field expects a class-name string or a java object, got " + describe(object));
-		}
-		Class<?> type = literalClass(className);
-		if (!type.isInstance(object)) {
-			throw new RuntimeException(
-					"java:field: the object is not a " + type.getName() + ", got " + describe(object));
-		}
-		try {
-			return unmarshal(publicField(type, name).get(object));
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("reading field " + name, ex);
@@ -389,14 +325,17 @@ final class JavaBridgeTemplate {
 	private static @Nullable Object invoke(Class<?> cls, @Nullable Object receiver, String methodName,
 			@Nullable Object[] args) {
 		@Nullable Object[] values = renderedAll(args);
-		// The designator is parsed only when the candidates are needed: a remembered
-		// choice is found by the designator as written.
-		Object[] overload = resolve(cls, methodName, () -> {
+		// A static call (no receiver) chooses among the static methods only. The
+		// designator is parsed only when the candidates are needed: a remembered choice
+		// is found by the designator as written.
+		boolean statics = receiver == null;
+		Object[] overload = resolve(cls, statics ? STATIC_PREFIX + methodName : methodName, () -> {
 			if (!isTagged(methodName)) {
-				return methods(cls, methodName);
+				return statics ? staticMethods(methods(cls, methodName)) : methods(cls, methodName);
 			}
 			Object[] member = member(methodName);
-			return filterByTag(methods(cls, (String) member[0]), (String[]) member[1]);
+			List<Method> candidates = methods(cls, (String) member[0]);
+			return filterByTag(statics ? staticMethods(candidates) : candidates, (String[]) member[1]);
 		}, values);
 		if (overload == null) {
 			throw new RuntimeException(
@@ -497,6 +436,18 @@ final class JavaBridgeTemplate {
 			return base;
 		}
 		return "[".repeat(dimensions) + (descriptor != null ? descriptor : "L" + base + ";");
+	}
+
+	// The static methods among the candidates, what java:static chooses from (mirrors
+	// compiler/JavaOverloads.staticMethods).
+	private static List<Method> staticMethods(List<Method> candidates) {
+		List<Method> statics = new ArrayList<>();
+		for (Method candidate : candidates) {
+			if (Modifier.isStatic(candidate.getModifiers())) {
+				statics.add(candidate);
+			}
+		}
+		return statics;
 	}
 
 	// The candidates a parameter tag leaves: one parameter per tag type, each the type

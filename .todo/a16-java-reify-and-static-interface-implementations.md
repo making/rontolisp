@@ -25,7 +25,10 @@ Plan:
   under native-image); the interpreter implements it with Proxy but dispatches to
   the same resolved methods, so selection and marshalling match.
 - A callable passed where a SAM interface is expected: invokedynamic
-  LambdaMetafactory to a synthetic method calling _apply.
+  LambdaMetafactory to a synthetic method calling _apply. a14 note: today that
+  argument is the FUNCTION arm of a direct site (JvmJavaDirectSites.emitConvert),
+  which calls the bridge's javaProxy -- the one reflective arm left, and why
+  --java-static refuses such a site (JvmJavaSites.bridgeReason).
 - java:proxy keeps its meaning (one handler for all methods: logging, mocks).
   On the JVM backend it becomes a generated class routing every method to the
   callable; decide whether --java-static accepts it.

@@ -59,7 +59,7 @@ class JavaSiteResolverTest {
 		assertThat(member("(java:static \"java.lang.String\" \"valueOf(Object)\" 5)"))
 			.isEqualTo("java.lang.String valueOf(java.lang.Object)");
 		assertThat(resolve("(java:static \"java.lang.Math\" \"max(String,_)\" 3 7)").reason())
-			.contains("no public method max matching max(java.lang.String,_)");
+			.contains("no public static method max matching max(java.lang.String,_)");
 		assertThat(resolve("(java:static \"java.lang.Math\" \"max(long\" 3 7)").reason())
 			.contains("malformed parameter tag");
 	}
@@ -116,7 +116,7 @@ class JavaSiteResolverTest {
 		assertThat(resolve("(java:static \"no.such.Class\" \"m\")").reason())
 			.isEqualTo("class no.such.Class is not found");
 		assertThat(resolve("(java:static \"java.lang.Math\" \"noSuchMethod\" 1)").reason())
-			.isEqualTo("class java.lang.Math has no public method noSuchMethod");
+			.isEqualTo("class java.lang.Math has no public static method noSuchMethod");
 		// A method whose declared type is Object answers any value: nothing is known.
 		assertThat(resolve("(java:call (the (java:object \"java.util.List\") x) \"get\" 0)").result())
 			.isEqualTo(JavaStaticType.UNKNOWN);
@@ -138,6 +138,72 @@ class JavaSiteResolverTest {
 			.isEqualTo(new JavaStaticType.Kinds(java.util.Set.of(JavaKind.Lisp.T, JavaKind.Lisp.NIL)));
 		assertThat(resolve("(java:new \"java.lang.String\" \"x\")").result())
 			.isEqualTo(new JavaStaticType.Kinds(java.util.Set.of(JavaKind.Lisp.STRING, JavaKind.Lisp.STRING_1)));
+	}
+
+	// java:static calls a static method: an instance method of the name, which could
+	// only fail without a receiver, is no candidate.
+	@Test
+	void aStaticCallChoosesAmongTheStaticMethods() {
+		assertThat(resolve("(java:static \"java.lang.String\" \"length\")").reason())
+			.isEqualTo("class java.lang.String has no public static method length");
+		assertThat(member("(java:static \"java.lang.Integer\" \"toString\" 5)"))
+			.isEqualTo("java.lang.Integer toString(int)");
+		// java:call keeps both: a static method is called through an instance as Java
+		// allows.
+		assertThat(member("(java:call (java:new \"java.lang.StringBuilder\") \"length\")"))
+			.isEqualTo("java.lang.StringBuilder length()");
+	}
+
+	// A site resolves only when a compiled program could call it directly: nothing is
+	// constructed from an abstract class or an interface, a class name reads a static
+	// field, and every class the call names must be public.
+	@Test
+	void aSiteResolvesOnlyWhenItCanBeCalledDirectly() {
+		assertThat(resolve("(java:new \"java.io.InputStream\")").reason())
+			.isEqualTo("class java.io.InputStream is abstract");
+		assertThat(resolve("(java:new \"java.lang.Runnable\")").reason())
+			.isEqualTo("class java.lang.Runnable is an interface");
+		assertThat(resolve("(java:field \"java.awt.Point\" \"x\")").reason())
+			.isEqualTo("field java.awt.Point.x is not static");
+		assertThat(resolve("(java:new \"" + Hidden.class.getName() + "\")").reason())
+			.isEqualTo("class " + Hidden.class.getName() + " is not public");
+		assertThat(resolve("(java:static \"java.lang.AbstractStringBuilder\" \"m\")").reason())
+			.isEqualTo("class java.lang.AbstractStringBuilder is not accessible");
+		// A value of a class no compiled program can name has no kind to check.
+		assertThat(this.resolver
+			.typeOf(LispReader.readAllFromString("(the (java:object \"" + Hidden.class.getName() + "\") x)").get(0)))
+			.isEqualTo(JavaStaticType.UNKNOWN);
+	}
+
+	// What a resolved site counted on for each argument: the kinds, in a fixed order,
+	// and the class a declaration named -- what a value of another kind is reported
+	// against.
+	@Test
+	void aResolvedSiteRecordsWhatItCountedOnForEachArgument() {
+		JavaSite site = resolve(
+				"(java:static \"java.lang.Integer\" \"parseInt\"" + " (the (java:object \"java.lang.String\") s) 16)");
+		assertThat(site.designator()).isEqualTo("parseInt(java.lang.String,int)");
+		assertThat(site.arguments()).containsExactly(
+				new JavaSite.Argument(List.of(JavaKind.Lisp.NIL, JavaKind.Lisp.STRING, JavaKind.Lisp.STRING_1),
+						"java.lang.String"),
+				new JavaSite.Argument(List.of(JavaKind.Lisp.INTEGER), null));
+		assertThat(site.arguments().get(0).expected()).isEqualTo("a java.lang.String");
+		assertThat(site.arguments().get(1).expected()).isEqualTo("an integer");
+		assertThat(new JavaSite.Argument(List.of(JavaKind.Lisp.NIL, JavaKind.Lisp.STRING, JavaKind.Lisp.STRING_1), null)
+			.expected()).isEqualTo("nil or a string");
+		// A primitive declaration reads as its kinds.
+		assertThat(new JavaSite.Argument(List.of(JavaKind.Lisp.INTEGER), "int").expected()).isEqualTo("an integer");
+		assertThat(JavaSiteResolver.declaredClass(LispReader
+			.readAllFromString("(the fixnum (the (java:object \"java.lang.Integer\") (the (java:object \"C\") x)))")
+			.get(0))).isEqualTo("java.lang.Integer");
+	}
+
+	/** A class-path class that is not public: reflection can call it, bytecode cannot. */
+	static final class Hidden {
+
+		public Hidden() {
+		}
+
 	}
 
 	@Test

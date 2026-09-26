@@ -73,6 +73,8 @@ public final class JvmSourceCompiler {
 
 	private boolean warnJavaReflection;
 
+	private boolean javaStatic;
+
 	/**
 	 * @param className the class to emit, in either the {@code com.acme.Kernels} or the
 	 * {@code com/acme/Kernels} spelling
@@ -241,6 +243,15 @@ public final class JvmSourceCompiler {
 	}
 
 	/**
+	 * @param javaStatic {@code --java-static}: a {@code java:} site that needs the
+	 * reflective bridge is a compile error, so the class carries no reflection
+	 */
+	public JvmSourceCompiler javaStatic(boolean javaStatic) {
+		this.javaStatic = javaStatic;
+		return this;
+	}
+
+	/**
 	 * Compiles a source text.
 	 * <p>
 	 * A failure carries the frontend's {@code file:line:column:} prefix, exactly as the
@@ -331,6 +342,7 @@ public final class JvmSourceCompiler {
 			.javaRelease(this.javaRelease)
 			.javaClasspath(this.javaClasspath)
 			.warnJavaReflection(this.warnJavaReflection)
+			.javaStatic(this.javaStatic)
 			.build();
 		byte[] bytes = compiler.compile(TlsPemInliner.inline(program, this.baseDir));
 		// A :float-vector / :float-matrix export hands out a handle class; it travels

@@ -2,28 +2,32 @@ package am.ik.rontolisp.codegen.jvm;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.JavaKind;
 import am.ik.rontolisp.compiler.JavaSite;
-import org.jspecify.annotations.Nullable;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
 
 /**
  * Compiles the five {@code java:} interop functions ({@code java:new}, {@code java:call},
- * {@code java:static}, {@code java:field}, {@code java:proxy}). Each call site first
- * invokes the emitted {@code _javaInit} helper (which lazily defines the embedded
- * {@link JavaBridgeTemplate bridge class}, see {@link JvmJavaRuntimeBuilder}), then
+ * {@code java:static}, {@code java:field}, {@code java:proxy}). A site the shared
+ * resolver resolves at compile time ({@link JvmJavaSites}) becomes a DIRECT call: the
+ * site evaluates its receiver and arguments and calls its own method
+ * ({@link JvmJavaDirectSites}), which checks them, converts them and invokes the member
+ * with plain bytecode, exactly as the interpreter runs the same site. Any other site --
+ * left to run time, or a {@code java:proxy} -- calls the embedded
+ * {@link JavaBridgeTemplate bridge}: it first invokes the emitted {@code _javaInit}
+ * helper (which lazily defines the bridge, see {@link JvmJavaRuntimeBuilder}), then
  * evaluates the arguments -- the leading fixed arguments as-is and the variadic tail
- * packed into an {@code Object[]} -- and calls the matching bridge entry point. A site
- * the shared resolver resolves at compile time ({@link JvmJavaSites}) passes the member
- * it chose -- its static class and fully tagged designator -- instead of the names
- * written; marshalling and run-time validation live in the bridge, so compiled behavior
- * matches the interpreter.
+ * packed into an {@code Object[]} -- and calls the matching bridge entry point, which
+ * resolves by reflection from the receiver's run-time class and the argument kinds. Under
+ * {@code --java-static} such a site is a compile error instead.
  */
 final class JvmJavaInteropCompiler {
 
@@ -41,96 +45,148 @@ final class JvmJavaInteropCompiler {
 	}
 
 	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		switch (member) {
+			case LispNames.JAVA_NEW -> requireArity(args.size() >= 2, "java:new expects (java:new \"class\" args...)");
+			case LispNames.JAVA_CALL ->
+				requireArity(args.size() >= 3, "java:call expects (java:call object \"method\" args...)");
+			case LispNames.JAVA_STATIC ->
+				requireArity(args.size() >= 3, "java:static expects (java:static \"class\" \"method\" args...)");
+			case LispNames.JAVA_FIELD ->
+				requireArity(args.size() == 3, "java:field expects (java:field class-or-object \"field\")");
+			case LispNames.JAVA_PROXY ->
+				requireArity(args.size() == 3, "java:proxy expects (java:proxy \"interface\" callable)");
+			default -> throw new UnsupportedOperationException("Cannot compile: java:" + member);
+		}
+		JvmJavaSites sites = Objects.requireNonNull(ctx.javaSites, "the java: sites were not prepared");
+		// How the site resolves (compiler/JavaSiteResolver, the interpreter's resolver):
+		// a
+		// resolved site is compiled as the direct call of the member chosen, which the
+		// interpreter runs it as too (eval/JavaInterop.invokeResolved).
+		JavaSite site = LispNames.JAVA_PROXY.equals(member) ? null : sites.resolve(cons);
+		String bridgeReason = sites.bridgeReason(cons);
+		if (bridgeReason != null && sites.javaStatic()) {
+			// Refused: the attempt fails once every site has been seen; the value only
+			// keeps the method being compiled well-formed until then.
+			sites.refuse(cons, bridgeReason);
+			ctx.emit(Opcode.ACONST_NULL);
+			return;
+		}
+		if (site != null && site.resolved()) {
+			compileDirect(site, args, ctx, className);
+			return;
+		}
 		Map<String, MethodrefConstant> ops = ctx.javaOps;
 		if (ops == null) {
-			throw new IllegalStateException("java interop runtime was not emitted");
+			// This attempt carries no bridge (every site it predicted was direct): a call
+			// to
+			// the absent _javaInit makes the helper-gate check retry with the bridge.
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(ctx.cp
+				.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
+						ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmJavaRuntimeBuilder.INIT_METHOD), ctx.cp.addUtf8("()V")))
+				.index());
+			ctx.emit(Opcode.ACONST_NULL);
+			return;
 		}
-		List<LispVal> args = cons.toList();
-		// How the site resolves (compiler/JavaSiteResolver, the interpreter's resolver):
-		// a resolved site is compiled as the explicit request the interpreter runs it as
-		// -- its static class and fully tagged member -- so the bridge invokes exactly
-		// the member chosen here; any other site keeps the run-time resolution.
-		JvmJavaSites sites = ctx.javaSites;
-		JavaSite site = sites != null && !LispNames.JAVA_PROXY.equals(member) ? sites.resolve(cons) : null;
-		String staticClass = site == null ? null : site.staticClass();
-		String designator = site == null ? null : site.designator();
-		boolean resolved = staticClass != null && designator != null;
 		// Make sure the bridge class is defined before its method reference resolves.
 		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(java.util.Objects.requireNonNull(ops.get("init")).index());
+		ctx.emitU2(Objects.requireNonNull(ops.get("init")).index());
 		switch (member) {
 			case LispNames.JAVA_NEW -> {
-				requireArity(args.size() >= 2, "java:new expects (java:new \"class\" args...)");
-				if (resolved) {
-					compileString(designator, ctx, className);
-				}
-				else {
-					JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-				}
+				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 				compileRestArray(args, 2, ctx, className);
 				emitBridgeCall(ctx, ops, "new");
 			}
 			case LispNames.JAVA_CALL -> {
-				requireArity(args.size() >= 3, "java:call expects (java:call object \"method\" args...)");
-				if (resolved) {
-					compileString(staticClass, ctx, className);
-				}
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 				// The receiver may itself be a packed array ((java:call arr "clone")),
-				// and
-				// Java reads it raw: materialize it like every other argument.
+				// and Java reads it raw: materialize it like every other argument.
 				emitMaterialize(ctx);
-				if (resolved) {
-					compileString(designator, ctx, className);
-				}
-				else {
-					JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-				}
+				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 				compileRestArray(args, 3, ctx, className);
-				emitBridgeCall(ctx, ops, resolved ? "callAs" : "call");
+				emitBridgeCall(ctx, ops, "call");
 			}
 			case LispNames.JAVA_STATIC -> {
-				requireArity(args.size() >= 3, "java:static expects (java:static \"class\" \"method\" args...)");
-				if (resolved) {
-					compileString(staticClass, ctx, className);
-					compileString(designator, ctx, className);
-				}
-				else {
-					JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-					JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-				}
+				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 				compileRestArray(args, 3, ctx, className);
 				emitBridgeCall(ctx, ops, "static");
 			}
 			case LispNames.JAVA_FIELD -> {
-				requireArity(args.size() == 3, "java:field expects (java:field class-or-object \"field\")");
-				if (resolved && !(args.get(1) instanceof LispString)) {
-					// An object whose class is known: the field of that class.
-					compileString(staticClass, ctx, className);
-					JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-					compileString(designator, ctx, className);
-					emitBridgeCall(ctx, ops, "fieldAs");
-				}
-				else {
-					JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-					JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-					emitBridgeCall(ctx, ops, "field");
-				}
+				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+				emitBridgeCall(ctx, ops, "field");
 			}
-			case LispNames.JAVA_PROXY -> {
-				requireArity(args.size() == 3, "java:proxy expects (java:proxy \"interface\" callable)");
+			default -> {
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 				emitBridgeCall(ctx, ops, "proxy");
 			}
-			default -> throw new UnsupportedOperationException("Cannot compile: java:" + member);
 		}
 	}
 
-	// A string constant the bridge reads as a Lisp string: the class or member a resolved
-	// site names.
-	private static void compileString(@Nullable String value, JvmLispCompiler.Ctx ctx, String className) {
-		JvmExprCompiler.compileExpr(new LispString(java.util.Objects.requireNonNull(value)), ctx, className);
+	/**
+	 * A resolved site: the receiver (a {@code java:call}'s, a {@code java:field}'s
+	 * object) and the arguments are evaluated left to right -- the names written at the
+	 * site are literals and evaluate to nothing -- and handed to the site's method.
+	 */
+	private static void compileDirect(JavaSite site, List<LispVal> args, JvmLispCompiler.Ctx ctx, String className) {
+		JvmJavaSites sites = Objects.requireNonNull(ctx.javaSites);
+		boolean staticField = site.operator() == JavaSite.Operator.FIELD && args.get(1) instanceof LispString;
+		// The values the method takes, and which of them is an argument the resolution
+		// counted string kinds for (a mutable character vector is rendered to the
+		// string it spells before the method sees it, as the bridge renders every
+		// argument).
+		List<LispVal> values;
+		int firstArgument;
+		switch (site.operator()) {
+			case CALL -> {
+				values = new java.util.ArrayList<>();
+				values.add(args.get(1));
+				values.addAll(args.subList(3, args.size()));
+				firstArgument = 1;
+			}
+			case STATIC -> {
+				values = args.subList(3, args.size());
+				firstArgument = 0;
+			}
+			case NEW -> {
+				values = args.subList(2, args.size());
+				firstArgument = 0;
+			}
+			default -> {
+				values = staticField ? List.of() : List.of(args.get(1));
+				firstArgument = 1;
+			}
+		}
+		MethodrefConstant method = sites.direct().site(site, staticField, values.size(), ctx.javaOps);
+		boolean packed = values.size() > JvmJavaDirectSites.MAX_SPREAD;
+		if (packed) {
+			JvmEmitHelper.emitIntConst(ctx, values.size());
+			ctx.emit(Opcode.ANEWARRAY);
+			ctx.emitU2(ctx.objectClass.index());
+		}
+		for (int i = 0; i < values.size(); i++) {
+			if (packed) {
+				ctx.emit(Opcode.DUP);
+				JvmEmitHelper.emitIntConst(ctx, i);
+			}
+			JvmExprCompiler.compileExpr(values.get(i), ctx, className);
+			emitMaterialize(ctx);
+			if (i >= firstArgument && countsOnAString(site.arguments().get(i - firstArgument))) {
+				JvmArrayCompiler.emitStrvNormalize(ctx, className);
+			}
+			if (packed) {
+				ctx.emit(Opcode.AASTORE);
+			}
+		}
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(method.index());
+	}
+
+	private static boolean countsOnAString(JavaSite.Argument argument) {
+		return argument.kinds().contains(JavaKind.Lisp.STRING) || argument.kinds().contains(JavaKind.Lisp.STRING_1);
 	}
 
 	private static void requireArity(boolean ok, String message) {
@@ -154,7 +210,7 @@ final class JvmJavaInteropCompiler {
 		Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
 		if (gpuOps != null) {
 			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(java.util.Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE)).index());
+			ctx.emitU2(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE)).index());
 		}
 	}
 
@@ -174,7 +230,7 @@ final class JvmJavaInteropCompiler {
 
 	private static void emitBridgeCall(JvmLispCompiler.Ctx ctx, Map<String, MethodrefConstant> ops, String key) {
 		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(java.util.Objects.requireNonNull(ops.get(key)).index());
+		ctx.emitU2(Objects.requireNonNull(ops.get(key)).index());
 	}
 
 }

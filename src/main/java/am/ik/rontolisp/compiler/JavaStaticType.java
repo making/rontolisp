@@ -81,7 +81,8 @@ public sealed interface JavaStaticType {
 	 * {@code String} or of an array ({@code Object}, {@code Number},
 	 * {@code CharSequence}, ...) -- whose value may have become any of those -- nothing;
 	 * a final class exactly that class or {@code nil}; any other class a {@link Bounded
-	 * bound}.
+	 * bound}. A class a compiled program cannot name ({@link JavaType#isLinkable()}) is
+	 * nothing: a site resolves only through classes it can be compiled against.
 	 * @param type the declared type
 	 * @param lookup where the boxes and {@code String} are found
 	 * @return the static type of the unmarshalled value
@@ -119,7 +120,7 @@ public sealed interface JavaStaticType {
 			default -> {
 			}
 		}
-		if (type.isArray() || type.isPrimitive() || becomesLisp(type, lookup)) {
+		if (type.isArray() || type.isPrimitive() || !type.isLinkable() || becomesLisp(type, lookup)) {
 			return UNKNOWN;
 		}
 		return type.isFinal() ? new Kinds(Set.of(type, nil)) : new Bounded(type);
@@ -127,7 +128,8 @@ public sealed interface JavaStaticType {
 
 	/**
 	 * The type of the object {@code (java:new "C" ...)} answers: exactly {@code C}, or
-	 * the Lisp value an instance of a box or {@code String} unmarshals to.
+	 * the Lisp value an instance of a box or {@code String} unmarshals to (nothing for a
+	 * class a compiled program cannot name).
 	 * @param type the constructed class
 	 * @param lookup where the boxes and {@code String} are found
 	 * @return the static type of the unmarshalled instance
@@ -140,7 +142,7 @@ public sealed interface JavaStaticType {
 			case "java.lang.Float", "java.lang.Double" -> new Kinds(Set.of(JavaKind.Lisp.FLOAT));
 			case "java.lang.Character" -> new Kinds(Set.of(JavaKind.Lisp.CHAR));
 			case "java.lang.String" -> new Kinds(Set.of(JavaKind.Lisp.STRING, JavaKind.Lisp.STRING_1));
-			default -> becomesLisp(type, lookup) ? UNKNOWN : new Kinds(Set.of(type));
+			default -> !type.isLinkable() || becomesLisp(type, lookup) ? UNKNOWN : new Kinds(Set.of(type));
 		};
 	}
 

@@ -2,8 +2,10 @@
 
 `(java:static "fully.qualified.ClassName" "methodName" args...)`
 
-Invokes a static method by reflection, choosing the overload whose parameters
-best match the arguments, and returns the marshalled result. Part of the
+Invokes a static method, choosing the overload whose parameters best match the
+arguments, and returns the marshalled result. Only the class's static methods
+are candidates: `(java:static "java.lang.String" "length")` finds no method.
+Part of the
 JVM-only `java` interop
 package — available on the interpreter and in JVM-compiled classes, not on the
 WASM backend.

@@ -413,15 +413,214 @@ class JvmJavaInteropCompilerTest {
 				""")).isEqualTo("\"cba\"");
 	}
 
-	// A resolved site is compiled as the explicit request the interpreter runs it as:
-	// the static class and the fully tagged member are what the class carries, and the
-	// names as written are not.
+	// A resolved site is a direct call of the member it resolved to -- invokestatic,
+	// new + invokespecial, invokevirtual, getstatic, invokeinterface -- and a class whose
+	// sites all resolved carries no bridge, no reflection and no eval runtime.
 	@Test
-	void aResolvedSiteCarriesItsMember() {
-		byte[] classBytes = new JvmLispCompiler("Test")
+	void aResolvedSiteIsADirectCall() throws Exception {
+		String program = """
+				(print (java:static "java.lang.Math" "max" 3 7))
+				(print (java:call (java:new "java.lang.StringBuilder" "ab") "length"))
+				(print (java:field "java.lang.Integer" "MAX_VALUE"))
+				(print (java:call (java:static "java.util.List" "of" 1 2) "size"))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("7\n2\n2147483647\n2");
+		assertThat(javap(program)).contains("Method java/lang/Math.max:(II)I")
+			.contains("Method java/lang/StringBuilder.\"<init>\":(Ljava/lang/String;)V")
+			.contains("Method java/lang/StringBuilder.length:()I")
+			.contains("Field java/lang/Integer.MAX_VALUE:I")
+			.contains("InterfaceMethod java/util/List.of:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;")
+			.contains("InterfaceMethod java/util/List.size:()I")
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_NAME)
+			.doesNotContain(JvmJavaRuntimeBuilder.INIT_METHOD)
+			.doesNotContain("java/lang/reflect")
+			.doesNotContain("_eval");
+	}
+
+	// A site left to run time keeps the bridge, and only then is it embedded.
+	@Test
+	void aSiteLeftToRunTimeKeepsTheBridge() throws Exception {
+		String program = """
+				(defun len (x) (java:call x "length"))
+				(print (len (java:new "java.lang.StringBuilder" "abc")))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("3");
+		assertThat(javap(program)).contains(JvmJavaRuntimeBuilder.BRIDGE_NAME)
+			.contains("Method java/lang/StringBuilder.\"<init>\":(Ljava/lang/String;)V");
+	}
+
+	// The class is stamped for the Java release its sites resolved against, so an older
+	// JRE refuses it at load instead of failing at the first call of a newer member; a
+	// program without java: keeps the Java 17 baseline.
+	@Test
+	void theClassIsStampedForTheReleaseItsSitesResolvedAgainst() {
+		List<LispVal> program = LispReader.readAllFromString("(print (java:static \"java.lang.Math\" \"max\" 3 7))");
+		int newest;
+		try (JvmClassFileLookup lookup = JvmClassFileLookup.forJdk(null, List.of())) {
+			newest = lookup.release();
+		}
+		assertThat(majorVersion(JvmLispCompiler.builder().className("Test").build().compile(program)))
+			.isEqualTo(Math.max(61, 44 + newest));
+		assertThat(majorVersion(JvmLispCompiler.builder().className("Test").javaRelease(17).build().compile(program)))
+			.isEqualTo(61);
+		assertThat(majorVersion(JvmLispCompiler.builder()
+			.className("Test")
+			.build()
+			.compile(LispReader.readAllFromString("(print (+ 1 2))")))).isEqualTo(61);
+	}
+
+	private static int majorVersion(byte[] classFile) {
+		return ((classFile[6] & 0xFF) << 8) | (classFile[7] & 0xFF);
+	}
+
+	// A declared type is trusted: an argument a declaration lied about is an error where
+	// it meets the member, with the interpreter's text, never converted for a member it
+	// was not chosen for.
+	@Test
+	void aFalseArgumentDeclarationSignals() throws Exception {
+		String parse = """
+				(defun parse (s)
+				  (declare (type (java:object "java.lang.String") s))
+				  (java:static "java.lang.Integer" "parseInt" s))
+				""";
+		assertThat(compileAndRun(parse + "(print (parse \"42\"))")).isEqualTo("42");
+		assertThatThrownBy(() -> compileAndRun(parse + "(parse 42)")).isInstanceOf(RuntimeException.class)
+			.hasMessage("java:static: argument 1 is not a java.lang.String, got 42");
+	}
+
+	// java:static calls a static method: an instance method of the name, which could only
+	// fail without a receiver, is never chosen.
+	@Test
+	void aStaticCallNeverChoosesAnInstanceMethod() {
+		assertThatThrownBy(() -> compileAndRun("(java:static \"java.lang.String\" \"length\")"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("No matching method java.lang.String.length with 0 argument(s)");
+	}
+
+	@Test
+	void aClassNameReadsOnlyAStaticField() {
+		assertThatThrownBy(() -> compileAndRun("(java:field \"java.awt.Point\" \"x\")"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("java:field: field java.awt.Point.x is not static");
+	}
+
+	// What the member throws is wrapped as the bridge and the interpreter wrap it.
+	@Test
+	void anExceptionFromTheMemberIsWrapped() {
+		assertThatThrownBy(() -> compileAndRun("(java:static \"java.lang.Integer\" \"parseInt\" \"x\")"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("error calling java.lang.Integer.parseInt: java.lang.NumberFormatException:"
+					+ " For input string: \"x\"");
+		assertThatThrownBy(() -> compileAndRun("(java:new \"java.lang.StringBuilder\" -1)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("error constructing java.lang.StringBuilder: java.lang.NegativeArraySizeException: -1");
+	}
+
+	// A function value passed where an interface is expected becomes the bridge's proxy
+	// even on a direct call: the one conversion that reflects.
+	@Test
+	void aFunctionArgumentOfADirectCallBecomesAProxy() throws Exception {
+		String program = """
+				(java:call (java:static "java.util.List" "of" 1 2 3) "forEach" (lambda (m x) (print x)))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("1\n2\n3");
+		assertThat(javap(program)).contains("InterfaceMethod java/util/List.forEach:(Ljava/util/function/Consumer;)V")
+			.contains("javaProxy");
+	}
+
+	// The value comes back as the bridge's unmarshal makes it, specialized to the
+	// declared
+	// type: a char, a boolean, the boxes, an array.
+	@Test
+	void aDirectCallConvertsTheValueBackAsTheBridgeDoes() throws Exception {
+		assertThat(compileAndRun("""
+				(print (java:call (java:new "java.lang.StringBuilder" "ab") "charAt" 1))
+				(print (java:call (java:new "java.util.ArrayList") "isEmpty"))
+				(print (java:static "java.lang.Character" "valueOf" #\\a))
+				(print (java:static "java.lang.Boolean" "valueOf" t))
+				(print (java:static "java.lang.Float" "valueOf" 1.5))
+				(print (java:static "java.lang.Long" "valueOf" 7))
+				(print (java:call (java:static "java.util.regex.Pattern" "compile" ",") "split" "a,b"))
+				(print (java:call (java:new "java.util.ArrayList") "add" nil))
+				""")).isEqualTo("#\\b\nT\n#\\a\nT\n1.5\n7\n(\"a\" \"b\")\nT");
+	}
+
+	// A string a program builds is a mutable character vector: it is rendered to the
+	// string it spells before a direct call reads it, as the bridge renders it.
+	@Test
+	void aBuiltStringReachesADirectCallAsTheStringItSpells() throws Exception {
+		assertThat(compileAndRun("""
+				(print (java:static "java.lang.Integer" "parseInt"
+				                    (the (java:object "java.lang.String") (concatenate 'string "4" "2"))))
+				""")).isEqualTo("42");
+	}
+
+	// Past the JVM's parameter-count comfort a site's method takes its values in one
+	// array.
+	@Test
+	void aSiteWithManyArgumentsPassesThemInOneArray() throws Exception {
+		StringBuilder args = new StringBuilder();
+		for (int i = 1; i <= 250; i++) {
+			args.append(' ').append(i);
+		}
+		assertThat(compileAndRun("(print (java:call (java:static \"java.util.List\" \"of\"" + args + ") \"size\"))"))
+			.isEqualTo("250");
+	}
+
+	// --java-static: a program whose sites are all direct compiles to a class with no
+	// reflection; any site that would need the bridge is a compile error naming it.
+	@Test
+	void javaStaticRefusesEverySiteThatNeedsReflection() throws Exception {
+		byte[] direct = JvmLispCompiler.builder()
+			.className("Test")
+			.javaStatic(true)
+			.build()
 			.compile(LispReader.readAllFromString("(print (java:static \"java.lang.Math\" \"max\" 3 7))"));
-		String text = new String(classBytes, java.nio.charset.StandardCharsets.ISO_8859_1);
-		assertThat(text).contains("max(int,int)").contains("javaStatic");
+		assertThat(new String(direct, java.nio.charset.StandardCharsets.ISO_8859_1))
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_NAME);
+		assertThatThrownBy(() -> JvmLispCompiler.builder()
+			.className("Test")
+			.javaStatic(true)
+			.build()
+			.compile(LispReader.readAllFromString("""
+					(defun len (x) (java:call x "length"))
+					(java:proxy "java.lang.Runnable" (lambda (m) nil))
+					(java:call (java:static "java.util.List" "of" 1) "forEach" (lambda (m x) x))
+					"""))).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--java-static: 3 java: calls cannot be compiled without reflection:")
+			.hasMessageContaining("java:call \"length\": it is resolved by reflection at run time:"
+					+ " the receiver's class is not known")
+			.hasMessageContaining("java:proxy \"java.lang.Runnable\": java:proxy implements its interface with"
+					+ " java.lang.reflect.Proxy")
+			.hasMessageContaining("java:call \"forEach\": argument 1 may be a function, which becomes a"
+					+ " java.lang.reflect.Proxy of java.util.function.Consumer");
+	}
+
+	// The class's disassembly, as javap prints it.
+	private static String javap(String program) throws Exception {
+		return javap(new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program)));
+	}
+
+	private static String javap(byte[] classBytes) throws Exception {
+		Path dir = Files.createTempDirectory("javap");
+		try {
+			Path classFile = dir.resolve("Test.class");
+			Files.write(classFile, classBytes);
+			java.util.spi.ToolProvider javap = java.util.spi.ToolProvider.findFirst("javap").orElseThrow();
+			java.io.StringWriter out = new java.io.StringWriter();
+			int code = javap.run(new java.io.PrintWriter(out), new java.io.PrintWriter(out), "-c", "-p", "-v",
+					classFile.toString());
+			assertThat(code).as(out.toString()).isZero();
+			return out.toString();
+		}
+		finally {
+			try (var files = Files.list(dir)) {
+				for (Path file : files.toList()) {
+					Files.delete(file);
+				}
+			}
+			Files.delete(dir);
+		}
 	}
 
 	// --warn-java-reflection reports at compile time, with the site's position, each
@@ -464,6 +663,29 @@ class JvmJavaInteropCompilerTest {
 	void printsOpaquely() throws Exception {
 		assertThat(compileAndRun("(print (java:new \"java.lang.StringBuilder\"))"))
 			.isEqualTo("#<java java.lang.StringBuilder>");
+	}
+
+	// An ArrayList a Java call answers is a host object, not a Lisp array (whose slot 0
+	// is its Object[] header): it prints as the interpreter prints it, and a message that
+	// shows it (a false declaration's) does too.
+	@Test
+	void aHostArrayListPrintsOpaquely() throws Exception {
+		assertThat(compileAndRun("""
+				(print (java:new "java.util.ArrayList"))
+				(let ((l (java:new "java.util.ArrayList")))
+				  (java:call l "add" 1)
+				  (print l)
+				  (princ l))
+				(print (make-array 2 :initial-element 7))
+				"""))
+			.isEqualTo("#<java java.util.ArrayList>\n#<java java.util.ArrayList>\n#<java java.util.ArrayList>#(7 7)");
+		assertThatThrownBy(() -> compileAndRun("""
+				(defun size-of (sb)
+				  (declare (type (java:object "java.lang.StringBuilder") sb))
+				  (java:call sb "length"))
+				(size-of (java:new "java.util.ArrayList"))
+				""")).isInstanceOf(RuntimeException.class)
+			.hasMessage("java:call: the receiver is not a java.lang.StringBuilder, got #<java java.util.ArrayList>");
 	}
 
 	// java: interop composes with hash tables: the HashMap-based Lisp hash table keeps
@@ -543,7 +765,11 @@ class JvmJavaInteropCompilerTest {
 	// what every other test above compiles into.
 	@Test
 	void theBridgeIsRenamedIntoTheGeneratedClassOwnPackage() throws Exception {
-		List<LispVal> program = LispReader.readAllFromString("(print (java:static \"java.lang.Math\" \"max\" 3 7))");
+		// A site left to run time: the bridge travels.
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defun biggest (cls) (java:static cls "max" 3 7))
+				(print (biggest "java.lang.Math"))
+				""");
 		JvmLispCompiler compiler = new JvmLispCompiler("com/example/Test");
 		byte[] classBytes = compiler.compile(program);
 		Path packageDir = this.tempDir.resolve("com").resolve("example");

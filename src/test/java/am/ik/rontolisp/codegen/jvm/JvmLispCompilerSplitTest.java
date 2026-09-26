@@ -117,6 +117,31 @@ class JvmLispCompilerSplitTest {
 		}
 	}
 
+	// Direct java: calls are private methods of the class, the helpers they share too,
+	// and the bridge finds _apply by name: a forced split must leave every one reachable.
+	@Test
+	void aForcedSplitKeepsJavaCallsWorking() throws Exception {
+		String source = FEATURES + """
+				(defun describe-point (p)
+				  (declare (type (java:object "java.awt.Point") p))
+				  (list (java:field p "x") (java:call p "getY")))
+				(print (describe-point (java:new "java.awt.Point" 3 4)))
+				(print (java:static "java.lang.Math" "max" 3 7))
+				(print (java:call (java:call (java:new "java.lang.StringBuilder" "ab") "reverse") "toString"))
+				(print (java:call (java:call (java:new "java.lang.StringBuilder" "ab") "chars") "toArray"))
+				(java:call (java:static "java.util.List" "of" 1 2) "forEach" (lambda (m x) (print x)))
+				(defun len (x) (java:call x "length"))
+				(print (len (java:new "java.lang.StringBuilder" "abc")))
+				""";
+		JvmLispCompiler whole = JvmLispCompiler.builder().className("Features").build();
+		String expected = run("Features", whole.compile(program(source)), whole.runtimeClassFiles());
+		assertThat(expected).endsWith("(3 4.0)\n7\n\"ba\"\n(97 98)\n1\n2\n3");
+		JvmLispCompiler split = JvmLispCompiler.builder().className("Features").classPoolLimit(3000).build();
+		byte[] splitMain = split.compile(program(source));
+		assertThat(split.runtimeClassFiles()).containsKey("Features$Part1.class");
+		assertThat(run("Features", splitMain, split.runtimeClassFiles())).isEqualTo(expected);
+	}
+
 	// A library's Java API is its class: the typed wrappers and the defuns behind them
 	// stay where a Java caller looks them up, however the rest is spread.
 	@Test

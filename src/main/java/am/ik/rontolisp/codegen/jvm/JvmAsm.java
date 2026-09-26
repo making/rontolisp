@@ -234,6 +234,55 @@ final class JvmAsm {
 		JvmRuntimeBuilder.emitU2(this.code, m.index());
 	}
 
+	/**
+	 * {@code invokeinterface} of an {@code InterfaceMethodref}.
+	 * @param m the method
+	 * @param argumentSlots the operand slots the call pops, the receiver included
+	 */
+	void invokeinterface(MethodrefConstant m, int argumentSlots) {
+		this.code.add(Opcode.INVOKEINTERFACE);
+		JvmRuntimeBuilder.emitU2(this.code, m.index());
+		this.code.add(argumentSlots);
+		this.code.add(0);
+	}
+
+	void getfield(FieldrefConstant f) {
+		this.code.add(Opcode.GETFIELD);
+		JvmRuntimeBuilder.emitU2(this.code, f.index());
+	}
+
+	/** Pushes a {@code Class} constant via {@code ldc} / {@code ldc_w}. */
+	void ldcClass(ClassConstant c) {
+		JvmRuntimeBuilder.emitLdc(this.code, c.index());
+	}
+
+	/** The {@code newarray} instruction for a primitive element type code (JVMS 6.5). */
+	void newarray(int atype) {
+		this.code.add(Opcode.NEWARRAY);
+		this.code.add(atype);
+	}
+
+	/**
+	 * @return the position the next instruction is emitted at: an exception-table bound
+	 */
+	int pos() {
+		return this.code.size();
+	}
+
+	/**
+	 * The position a bound label stands at: an exception handler's entry.
+	 * @param label a label
+	 * @return its position
+	 * @throws IllegalStateException when the label is not bound yet
+	 */
+	int position(int label) {
+		Integer at = this.labelPos.get(label);
+		if (at == null) {
+			throw new IllegalStateException("label " + label + " is not bound");
+		}
+		return at;
+	}
+
 	void invokevirtual(MethodrefConstant m) {
 		this.code.add(Opcode.INVOKEVIRTUAL);
 		JvmRuntimeBuilder.emitU2(this.code, m.index());

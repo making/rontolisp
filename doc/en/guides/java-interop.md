@@ -7,13 +7,15 @@ rontolisp lambda into a Java interface instance. It is how the Swing demos in
 the screen without any bespoke Java glue.
 
 > **JVM only (interpreter and compiled `.class`).** Interop values are opaque
-> host-object references resolved by reflection, so the feature needs a real
+> host-object references, so the feature needs a real
 > JVM: it works under the **JVM-hosted interpreter** (`java -jar rontolisp.jar
 > program.lisp`) and in a **JVM-compiled program** (`-o Prog.class`, run with
-> `java Prog`) — the compiler embeds a small reflection bridge into the
-> generated class, so the output stays a single self-contained `.class` file
-> (running one that uses `java:` requires a JRE at least as new as the one
-> rontolisp was built with). The WASM backend cannot lower host references, so
+> `java Prog`) — a call the compiler resolves becomes a direct call in the
+> generated class, and for the calls left to run time it embeds a small
+> reflection bridge, so the output stays a single self-contained `.class` file
+> (see [Compiling against a Java release or a class
+> path](#compiling-against-a-java-release-or-a-class-path) for the JRE it needs).
+> The WASM backend cannot lower host references, so
 > compiling `java:` to `.wasm` remains a `Cannot compile: java:...` error. The
 > GraalVM native binary (`rontolisp program.lisp`) can **compile** a `java:`
 > program to a `.class`, but cannot **interpret** one: a native image only
@@ -125,7 +127,9 @@ What the program text says about a value:
 - `(the (java:object "C") x)` and `(declare (type (java:object "C") v))` say that the value
   is a `C` (or `nil`). `C` is a binary class name, as for `java:new` (`java.util.Map$Entry`).
 
-A declared type is trusted: a value that is not a `C` is an error where it meets the call.
+A declared type is trusted: a value that is not a `C` is an error where it meets the call,
+whether it is the receiver or an argument -- never converted for a method it was not chosen
+for.
 
 ```lisp
 (defun total-length (sb)
@@ -133,6 +137,17 @@ A declared type is trusted: a value that is not a `C` is an error where it meets
   (java:call sb "length"))
 (total-length (java:new "java.lang.StringBuilder" "abc"))   ; => 3
 ```
+
+```console
+(defun parse (s)
+  (declare (type (java:object "java.lang.String") s))
+  (java:static "java.lang.Integer" "parseInt" s))
+(parse 42)   ; error: java:static: argument 1 is not a java.lang.String, got 42
+```
+
+A compiled class makes each resolved call a direct call of its method -- no reflection --
+and embeds the reflection bridge only for the calls left to run time. The interpreter runs
+a resolved call the same way: the method chosen, the arguments checked and converted.
 
 An argument resolves a call only when every kind it can have selects the same method. A
 `String` answer may be `nil`, which selects `append(boolean)`, so
@@ -193,12 +208,37 @@ The interpreter resolves against the classes it runs with. The JVM compiler read
 files instead: the JDK's `lib/ct.sym` -- the running JDK's, else `JAVA_HOME`'s, else that
 of the `java` on `PATH` -- for the newest release it holds or for `--java-release N`,
 followed by the directories and jars of `--java-classpath`. A compiled class calls the
-methods chosen at compile time, so run it on a JRE of that release or later; a call that
-names a class the compile cannot see is resolved when it runs.
+methods chosen at compile time, so it is stamped for that release (class version 44 + N, at
+least Java 17's 61): a JRE older than the release refuses to load it. A call that names a
+class the compile cannot see is resolved when it runs, and the reflection bridge such a call
+uses needs a JRE at least as new as the one rontolisp was built with.
 
 ```console
 $ rontolisp app.lisp -o app.jar --java-release 21 --java-classpath lib/guava.jar
 ```
+
+### Compiling without reflection
+
+`--java-static` makes every call that needs reflection a compile error: one left to run
+time, a `java:proxy`, and a function passed where an interface is expected (it becomes a
+`java.lang.reflect.Proxy`). The compile lists them all at once. What compiles has no
+reflection in it, so GraalVM `native-image` builds the jar into an executable with no
+reachability metadata -- no `reflect-config.json`, no agent run:
+
+```console
+$ rontolisp app.lisp --java-static -o app.jar
+$ native-image --no-fallback -jar app.jar -o app
+$ ./app
+```
+
+```console
+$ rontolisp len.lisp --java-static -o len.jar
+error: --java-static: 1 java: call cannot be compiled without reflection:
+  len.lisp:1:16: java:call "length": it is resolved by reflection at run time: the receiver's class is not known
+```
+
+A `(declare (type (java:object "C") v))` or a `(the (java:object "C") x)` is what makes such a
+call resolve.
 
 ## Varargs
 
@@ -284,7 +324,9 @@ animates Conway's Game of Life with it (`swing:grid-window`, `swing:paint`, ...)
   no first-class value, so `#'java:call` or `(funcall 'java:new ...)` is a
   compile error (wrap them in your own `defun` instead), and the embedded
   `eval` runtime does not know them either. A compiled program that uses
-  `java:` needs a JRE at least as new as the one rontolisp was built with.
+  `java:` needs a JRE of the release its calls were resolved against, and one
+  that leaves a call to run time a JRE at least as new as the one rontolisp was
+  built with.
 - Symbols, hash tables, dotted (improper) lists and multidimensional (rank-2+)
   arrays are not marshalled — pass them as Java collections you build with
   `java:new`/`java:call` instead.

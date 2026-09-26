@@ -6,7 +6,9 @@ Expands the CLAUDE.md "JVM Class Version 61 (Java 17)" invariant. The JVM emitte
 `StackMapAugmenter.augment(classBytes, CLASS_MAJOR_VERSION /* 61 */)`, an offline,
 language-independent post-pass in `am.ik.jvm` that makes the bytes acceptable to the type-checking
 verifier mandatory from version 51+ and stamps the version. Compiled classes need a Java 17+ JRE
-(`doc/{en,ja}/compiling/jvm.md`).
+(`doc/{en,ja}/compiling/jvm.md`) -- except a `java:` program, stamped `max(61, 44 + R)` for the
+release R its sites resolved against (`JvmLispCompiler.classMajorVersion`,
+[java-interop.md](java-interop.md)).
 
 ## `augment`
 

@@ -9,7 +9,8 @@ Method.invoke boxing) matters. A constant-MethodHandle call measured at the
 harness floor (~15-20 ns) on 2026-09-26.
 
 Scope note (2026-09-26): sites a13/a14 resolve statically become direct
-bytecode, which beats indy and suits native-image (MutableCallSite does not).
+bytecode (landed in a14: codegen/jvm/JvmJavaDirectSites), which beats indy and
+suits native-image (MutableCallSite does not).
 Narrow this item to UNRESOLVED sites only, or cancel it once a15 lands. The
 am.ik.jvm indy infrastructure is shared with a16.
 
