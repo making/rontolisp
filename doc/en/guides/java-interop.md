@@ -378,6 +378,42 @@ automatically, which is what lets a Swing `ActionListener` be a plain lambda:
   (lambda (method event) (handle-click)))
 ```
 
+## Errors and non-local exits
+
+An exception a Java member throws is signalled as a Lisp error that names the member and
+the exception:
+
+```lisp
+(handler-case (java:static "java.lang.Integer" "parseInt" "x")
+  (error (e) (format nil "~a" e)))
+; => "error calling java.lang.Integer.parseInt: java.lang.NumberFormatException: For input string: \"x\""
+```
+
+A condition a rontolisp function signals while Java calls it back, and a `return-from`,
+`throw` or `go` out of that function, propagates through the Java frames in between as it
+does through Lisp frames, to the code that made the Java call:
+
+```lisp
+(block found
+  (java:call (java:static "java.util.List" "of" 1 2 3) "forEach"
+             (lambda (method x) (when (= x 2) (return-from found x))))
+  nil)
+; => 2
+```
+
+```lisp
+(handler-case
+    (java:call (java:static "java.util.List" "of" 1) "forEach"
+               (lambda (method x) (error "bad element ~a" x)))
+  (error (e) (format nil "~a" e)))
+; => "bad element 1"
+```
+
+To the Java code in between it is an ordinary exception, and only what that code lets
+propagate arrives: one it catches and ignores never does, and one it wraps, or rethrows on
+another thread, arrives as the failure of the Java call (`FutureTask.get` wraps it in an
+`ExecutionException`).
+
 ## A Swing example
 
 `examples/jvm/java-interop.lisp` builds a small window directly through the package

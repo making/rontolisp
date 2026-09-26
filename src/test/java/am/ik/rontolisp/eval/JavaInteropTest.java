@@ -662,6 +662,17 @@ class JavaInteropTest {
 				""")).isEqualTo(new LispInteger(7));
 	}
 
+	// What a function called back from Java raises passes through the Java frames to
+	// the Lisp code that made the call -- before, the java: site wrapped it as "error
+	// calling C.m: ...", so an exit never arrived and a handler on the condition's type
+	// never matched. Mirrors
+	// JvmJavaInteropCompilerTest#whatACallbackRaisesPassesThroughTheJavaCall.
+	@Test
+	void whatACallbackRaisesPassesThroughTheJavaCall() {
+		assertThat(output(JavaImplementationPrograms.CALLBACK_SIGNALS))
+			.isEqualTo(JavaImplementationPrograms.CALLBACK_SIGNALS_OUTPUT);
+	}
+
 	// java:proxy routes every method -- a default one too -- to its callable, with the
 	// method's name first; Object's three keep their identity behavior. Mirrors
 	// JvmJavaInteropCompilerTest#aProxyRoutesEveryMethodToItsCallable.

@@ -704,6 +704,14 @@ class JvmJavaInteropCompilerTest {
 				""")).isEqualTo("7");
 	}
 
+	// Mirrors JavaInteropTest#whatACallbackRaisesPassesThroughTheJavaCall: through a
+	// generated class and the bridge's Proxy, at a direct site and one left to run time.
+	@Test
+	void whatACallbackRaisesPassesThroughTheJavaCall() throws Exception {
+		assertThat(compileAndRunThroughFrontEnd(JavaImplementationPrograms.CALLBACK_SIGNALS))
+			.isEqualTo(JavaImplementationPrograms.CALLBACK_SIGNALS_OUTPUT);
+	}
+
 	// Mirrors JavaInteropTest#aProxyRoutesEveryMethodToItsCallable.
 	@Test
 	void aProxyRoutesEveryMethodToItsCallable() throws Exception {

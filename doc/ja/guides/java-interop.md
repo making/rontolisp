@@ -262,6 +262,36 @@ error: --java-static: 1 java: call cannot be compiled without reflection:
   (lambda (method event) (handle-click)))
 ```
 
+## エラーと非局所脱出
+
+Java のメンバが投げた例外は、メンバと例外を示す Lisp のエラーとして通知されます。
+
+```lisp
+(handler-case (java:static "java.lang.Integer" "parseInt" "x")
+  (error (e) (format nil "~a" e)))
+; => "error calling java.lang.Integer.parseInt: java.lang.NumberFormatException: For input string: \"x\""
+```
+
+Java からコールバックとして呼ばれた rontolisp の関数が通知したコンディションや、その関数から抜ける `return-from`・`throw`・`go` は、Lisp のフレームを抜けるときと同じく途中の Java のフレームをそのまま伝播し、Java を呼び出したコードに到達します。
+
+```lisp
+(block found
+  (java:call (java:static "java.util.List" "of" 1 2 3) "forEach"
+             (lambda (method x) (when (= x 2) (return-from found x))))
+  nil)
+; => 2
+```
+
+```lisp
+(handler-case
+    (java:call (java:static "java.util.List" "of" 1) "forEach"
+               (lambda (method x) (error "bad element ~a" x)))
+  (error (e) (format nil "~a" e)))
+; => "bad element 1"
+```
+
+途中の Java のコードにとってこれは通常の例外であり、到達するのはそのコードが伝播させたものだけです。捕捉して握りつぶされたものは到達せず、ラップされたものや別スレッドで投げ直されたものは、その Java 呼び出し自体の失敗として到達します (`FutureTask.get` は `ExecutionException` でラップします)。
+
 ## Swing の例
 
 `examples/jvm/java-interop.lisp` はこのパッケージだけで小さなウィンドウを構築します (ディスプレイのあるマシンで、インタプリタ実行するか `.class` にコンパイルして実行してください)。

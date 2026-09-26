@@ -118,9 +118,9 @@ class JvmLispCompilerSplitTest {
 	}
 
 	// Direct java: calls are private methods of the class, the helpers they share too,
-	// the bridge finds _apply by name, and a generated interface implementation calls
-	// its program-side callback from its own class: a forced split must leave every one
-	// reachable.
+	// the bridge finds _apply, _jsig and _jfail by name, and a generated interface
+	// implementation calls its program-side callback from its own class: a forced split
+	// must leave every one reachable -- what a callback raises too.
 	@Test
 	void aForcedSplitKeepsJavaCallsWorking() throws Exception {
 		String source = FEATURES + """
@@ -140,10 +140,16 @@ class JvmLispCompilerSplitTest {
 				(java:call (java:static "java.util.List" "of" 1 2) "forEach" (lambda (m x) (print x)))
 				(defun len (x) (java:call x "length"))
 				(print (len (java:new "java.lang.StringBuilder" "abc")))
+				(print (block b
+				         (java:call (java:static "java.util.List" "of" 1 2) "forEach"
+				                    (lambda (m x) (return-from b (* x 10))))))
+				(defun each (c f) (java:call c "forEach" f))
+				(print (handler-case (each (java:static "java.util.List" "of" 1) (lambda (m x) (error "boom ~a" x)))
+				         (error (e) (format nil "~a" e))))
 				""";
 		JvmLispCompiler whole = JvmLispCompiler.builder().className("Features").build();
 		String expected = run("Features", whole.compile(program(source)), whole.runtimeClassFiles());
-		assertThat(expected).contains("\"[1, 2]\"").endsWith("(3 4.0)\n7\n\"ba\"\n(97 98)\n1\n2\n3");
+		assertThat(expected).contains("\"[1, 2]\"").endsWith("(3 4.0)\n7\n\"ba\"\n(97 98)\n1\n2\n3\n10\n\"boom 1\"");
 		JvmLispCompiler split = JvmLispCompiler.builder().className("Features").classPoolLimit(3000).build();
 		byte[] splitMain = split.compile(program(source));
 		assertThat(split.runtimeClassFiles()).containsKey("Features$Part1.class");
