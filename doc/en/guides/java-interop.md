@@ -106,6 +106,100 @@ When no integer overload exists the integer is converted to the available type:
 (java:static "java.lang.Math" "sqrt" 16)   ; => 4.0
 ```
 
+## Resolving calls before they run
+
+The interpreter and a compiled class resolve every call by that one rule. A call whose
+receiver class and argument kinds are known from the program text is resolved once, before
+it first runs, to exactly one method -- the model is Clojure's type-hinted interop, applied
+by the interpreter too. Any other call is resolved when it runs, from the receiver's class
+and the arguments' kinds. The method chosen is the same either way, with the one exception
+below.
+
+What the program text says about a value:
+
+- a literal's kind: `3`, `2.5`, `"x"`, `#\a`, `t`, `nil`, a `lambda`;
+- `(java:new "C" ...)` is exactly a `C`;
+- a resolved call's value has the type its method declares: `append` on a `StringBuilder`
+  answers a `StringBuilder`, so a chain resolves link by link; a method declared to return
+  `Object` says nothing;
+- `(the (java:object "C") x)` and `(declare (type (java:object "C") v))` say that the value
+  is a `C` (or `nil`). `C` is a binary class name, as for `java:new` (`java.util.Map$Entry`).
+
+A declared type is trusted: a value that is not a `C` is an error where it meets the call.
+
+```lisp
+(defun total-length (sb)
+  (declare (type (java:object "java.lang.StringBuilder") sb))
+  (java:call sb "length"))
+(total-length (java:new "java.lang.StringBuilder" "abc"))   ; => 3
+```
+
+An argument resolves a call only when every kind it can have selects the same method. A
+`String` answer may be `nil`, which selects `append(boolean)`, so
+`(java:call sb "append" (java:call x "toString"))` is resolved when it runs.
+
+### The declared receiver class decides the candidates
+
+A call on a receiver of declared class `C` resolves among `C`'s methods, as in Java. A
+public overload of the same name that only the run-time class adds is not a candidate --
+the one place where resolving early chooses differently from resolving at run time:
+
+```lisp
+(defun remove-one (c)
+  (declare (type (java:object "java.util.Collection") c))
+  (java:call c "remove" 1))
+(let ((a (java:new "java.util.ArrayList")) (b (java:new "java.util.ArrayList")))
+  (dolist (x (list 10 20 1)) (java:call a "add" x) (java:call b "add" x))
+  (remove-one a)             ; Collection.remove(Object): removes the element 1
+  (java:call b "remove" 1)   ; ArrayList.remove(int): removes the element at index 1
+  (list (java:call a "toString") (java:call b "toString")))
+; => ("[10, 20]" "[10, 1]")
+```
+
+### Parameter tags
+
+A method name, or the class name of `java:new`, may carry the parameter types, which names
+the overload directly: `"max(long,long)"`, `"java.lang.StringBuilder(int)"`. `_` matches any
+type and leaves that parameter to the cost rule; a type without a package means `java.lang`;
+`T[]` or `T...` is an array.
+
+```lisp
+(java:static "java.lang.String" "valueOf(int)" #\a)   ; => "97"
+```
+
+```lisp
+(java:static "java.lang.Math" "max(long,_)" 3 7)   ; => 7
+```
+
+```lisp
+(java:call (java:new "java.lang.StringBuilder(int)" 64) "capacity")   ; => 64
+```
+
+### Reflection warnings
+
+`(setq java:*warn-on-reflection* t)` reports each call in the forms that follow which is
+left to run-time resolution, with the reason: the interpreter when it loads a form (with
+the form's line), the compiler at compile time (with the call's position).
+`--warn-java-reflection` turns it on from the start:
+
+```console
+$ rontolisp --warn-java-reflection len.lisp -o Len.class
+len.lisp:1:16: warning: java:call "length" is resolved by reflection at run time: the receiver's class is not known
+```
+
+### Compiling against a Java release or a class path
+
+The interpreter resolves against the classes it runs with. The JVM compiler reads class
+files instead: the JDK's `lib/ct.sym` -- the running JDK's, else `JAVA_HOME`'s, else that
+of the `java` on `PATH` -- for the newest release it holds or for `--java-release N`,
+followed by the directories and jars of `--java-classpath`. A compiled class calls the
+methods chosen at compile time, so run it on a JRE of that release or later; a call that
+names a class the compile cannot see is resolved when it runs.
+
+```console
+$ rontolisp app.lisp -o app.jar --java-release 21 --java-classpath lib/guava.jar
+```
+
 ## Varargs
 
 A varargs method (e.g. `String.format(String, Object...)`) accepts any number
@@ -199,6 +293,7 @@ animates Conway's Game of Life with it (`swing:grid-window`, `swing:paint`, ...)
   `java:call` (`"get"`, `"size"`, ...) rather than list functions.
 - Overload resolution is by argument cost, not the full Java type-inference
   rules; an ambiguous call resolves to the lowest-cost (then
-  lowest-signature) candidate rather than signalling an ambiguity error.
+  lowest-signature) candidate rather than signalling an ambiguity error. A
+  parameter tag names an overload explicitly.
 - It is a full host-reflection bridge, so it can run arbitrary Java code: treat a
   program that uses `java:` with the same trust as any other JVM program.

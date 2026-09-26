@@ -43301,6 +43301,11 @@ public final class LispMacroExpander {
 		// interpreter answers, and a setq works on both.
 		boolean usesGensymCounter = mentioned.contains(LispNames.GENSYM_COUNTER_VAR);
 		boolean usesRandomState = mentioned.contains(LispNames.RANDOM_STATE_VAR);
+		// java:*warn-on-reflection*: a global the interpreter binds to nil
+		// (LispEvaluator.registerJava) and consults while it resolves java: sites; a
+		// compiled program only holds it (the compile path's switch is
+		// --warn-java-reflection), seeded the same way so a read or a let of it works.
+		boolean usesJavaWarnVar = mentioned.contains(LispNames.JAVA_WARN_ON_REFLECTION_QUALIFIED);
 
 		// The standard constant variables (pi, the float-range names, the fixnum and
 		// array limits, char-code-limit, internal-time-units-per-second,
@@ -43356,7 +43361,8 @@ public final class LispMacroExpander {
 			program = kept;
 		}
 		if (!usesMv && !usesFloatFormat && printerVars.isEmpty() && loadContextVars.isEmpty() && !readsPackage
-				&& !usesFeatures && constantNames.isEmpty() && !usesGensymCounter && !usesRandomState) {
+				&& !usesFeatures && constantNames.isEmpty() && !usesGensymCounter && !usesRandomState
+				&& !usesJavaWarnVar) {
 			return program;
 		}
 		List<LispVal> out = new java.util.ArrayList<>(
@@ -43381,6 +43387,10 @@ public final class LispMacroExpander {
 		if (usesRandomState) {
 			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.RANDOM_STATE_VAR),
 					LispNil.INSTANCE)));
+		}
+		if (usesJavaWarnVar) {
+			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR),
+					new LispSymbol(LispNames.JAVA_WARN_ON_REFLECTION_QUALIFIED), LispNil.INSTANCE)));
 		}
 		for (String name : loadContextVars) {
 			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(name), LispNil.INSTANCE)));

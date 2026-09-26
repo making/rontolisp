@@ -587,6 +587,9 @@ public final class LispEvaluator {
 		this.specialVars.add(LispNames.LOAD_PRINT_VAR);
 		this.specialVars.add(LispNames.COMPILE_VERBOSE_VAR);
 		this.specialVars.add(LispNames.COMPILE_PRINT_VAR);
+		// java:*warn-on-reflection*: a program binds it around the code it wants reports
+		// for, as in Clojure.
+		this.specialVars.add(LispNames.JAVA_WARN_ON_REFLECTION_QUALIFIED);
 	}
 
 	/**
@@ -597,6 +600,25 @@ public final class LispEvaluator {
 
 	/** The {@code funcall} built-in, which {@code evalCons} recognizes by identity. */
 	private @Nullable LispFunction funcallBuiltin;
+
+	/**
+	 * The {@code java:new} / {@code java:call} / {@code java:static} / {@code java:field}
+	 * built-ins by qualified name: {@link #evalJavaSite} takes a call site over only
+	 * while its operator is still the built-in.
+	 */
+	private final java.util.Map<String, LispFunction> javaBuiltins = new java.util.HashMap<>();
+
+	/**
+	 * How each {@code java:} call site resolves ({@code compiler.JavaSiteResolver}),
+	 * keyed by the site's cons identity: resolved on the first evaluation (or when a
+	 * top-level form is loaded under {@code java:*warn-on-reflection*}) and remembered,
+	 * like the expansion memos -- the resolution is a pure function of the site form and
+	 * the classes. Bounded by {@link #EXPANSION_MEMO_LIMIT}; the same monitor discipline.
+	 */
+	private final java.util.IdentityHashMap<LispCons, am.ik.rontolisp.compiler.JavaSite> javaSites = new java.util.IdentityHashMap<>();
+
+	/** Applies a Lisp callable for the java: bridge (proxies, auto-proxied arguments). */
+	private final JavaInterop.Caller javaCaller = this::applyGlobally;
 
 	/**
 	 * The {@code apply} built-in, kept so {@link #evalCons} can recognize an
@@ -4860,9 +4882,10 @@ public final class LispEvaluator {
 	// `java -jar rontolisp.jar`; the JVM compiler supports the same functions via its
 	// embedded bridge (codegen.jvm.JavaBridgeTemplate), the WASM backend rejects them.
 	private void registerJava() {
-		JavaInterop.Caller caller = (function, callArgs) -> apply(function, callArgs, this.globalEnv);
+		JavaInterop.Caller caller = this.javaCaller;
+		this.globalEnv.define(LispNames.JAVA_WARN_ON_REFLECTION_QUALIFIED, LispNil.INSTANCE);
 		String jnew = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_NEW);
-		this.globalEnv.defineFunction(jnew, new LispFunction(jnew, args -> {
+		this.globalEnv.defineFunction(jnew, javaBuiltin(jnew, args -> {
 			if (args.isEmpty() || !(args.get(0) instanceof LispString cls)) {
 				throw new LispEvalException(jnew + " expects a class-name string, got "
 						+ (args.isEmpty() ? "no arguments" : args.get(0).print()));
@@ -4870,14 +4893,14 @@ public final class LispEvaluator {
 			return JavaInterop.newInstance(cls.value(), args.subList(1, args.size()), caller);
 		}));
 		String jcall = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_CALL);
-		this.globalEnv.defineFunction(jcall, new LispFunction(jcall, args -> {
+		this.globalEnv.defineFunction(jcall, javaBuiltin(jcall, args -> {
 			if (args.size() < 2 || !(args.get(1) instanceof LispString method)) {
 				throw new LispEvalException(jcall + " expects (java:call object \"method\" args...)");
 			}
 			return JavaInterop.callInstance(args.get(0), method.value(), args.subList(2, args.size()), caller);
 		}));
 		String jstatic = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_STATIC);
-		this.globalEnv.defineFunction(jstatic, new LispFunction(jstatic, args -> {
+		this.globalEnv.defineFunction(jstatic, javaBuiltin(jstatic, args -> {
 			if (args.size() < 2 || !(args.get(0) instanceof LispString cls)
 					|| !(args.get(1) instanceof LispString method)) {
 				throw new LispEvalException(jstatic + " expects (java:static \"class\" \"method\" args...)");
@@ -4885,7 +4908,7 @@ public final class LispEvaluator {
 			return JavaInterop.callStatic(cls.value(), method.value(), args.subList(2, args.size()), caller);
 		}));
 		String jfield = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_FIELD);
-		this.globalEnv.defineFunction(jfield, new LispFunction(jfield, args -> {
+		this.globalEnv.defineFunction(jfield, javaBuiltin(jfield, args -> {
 			if (args.size() != 2 || !(args.get(1) instanceof LispString field)) {
 				throw new LispEvalException(jfield + " expects (java:field class-or-object \"field\")");
 			}
@@ -4901,6 +4924,126 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Sets {@code java:*warn-on-reflection*} (the CLI's {@code --warn-java-reflection}):
+	 * while it is true, each {@code java:} call site that cannot be resolved before it
+	 * runs is reported on standard error when its top-level form is loaded.
+	 * @param warn whether to report
+	 */
+	public void setWarnOnJavaReflection(boolean warn) {
+		this.globalEnv.define(LispNames.JAVA_WARN_ON_REFLECTION_QUALIFIED, warn ? LispTrue.INSTANCE : LispNil.INSTANCE);
+	}
+
+	private LispVal applyGlobally(LispVal function, List<LispVal> args) {
+		return apply(function, args, this.globalEnv);
+	}
+
+	private LispFunction javaBuiltin(String name, java.util.function.Function<List<LispVal>, LispVal> body) {
+		LispFunction function = new LispFunction(name, body);
+		this.javaBuiltins.put(name, function);
+		return function;
+	}
+
+	/**
+	 * Evaluates a {@code java:new} / {@code java:call} / {@code java:static} /
+	 * {@code java:field} call site. The site is resolved once ({@link #javaSite}); a
+	 * resolved one runs as the explicit request the compiled program's bridge receives
+	 * for it -- its static class and fully tagged member -- and an unresolved one as the
+	 * ordinary call of the built-in, which resolves at run time. Answers
+	 * {@link #UNHANDLED} (before evaluating anything) when the operator is no longer the
+	 * built-in, so a redefinition is called like any function.
+	 */
+	private LispVal evalJavaSite(LispCons cons, Environment env, String name) {
+		LispFunction builtin = this.javaBuiltins.get(name);
+		int length = cons.properLength();
+		if (builtin == null || length < 0 || this.globalEnv.lookupFunctionOrNull(name) != builtin) {
+			return UNHANDLED;
+		}
+		am.ik.rontolisp.compiler.JavaSite site = javaSite(cons);
+		List<LispVal> args = evalArgs(cons, env, length - 1);
+		String staticClass = site.staticClass();
+		String designator = site.designator();
+		if (staticClass == null || designator == null) {
+			return apply(builtin, args, env);
+		}
+		JavaInterop.Caller caller = this.javaCaller;
+		LispVal result = switch (site.operator()) {
+			case NEW -> JavaInterop.newInstance(designator, args.subList(1, args.size()), caller);
+			case STATIC -> JavaInterop.callStatic(staticClass, designator, args.subList(2, args.size()), caller);
+			case CALL ->
+				JavaInterop.callInstanceAs(staticClass, args.get(0), designator, args.subList(2, args.size()), caller);
+			case FIELD -> args.get(0) instanceof LispString ? JavaInterop.field(args.get(0), designator)
+					: JavaInterop.fieldAs(staticClass, args.get(0), designator);
+		};
+		return singleValue(result);
+	}
+
+	/**
+	 * How a {@code java:} site resolves, from the memo or resolved now -- and, while
+	 * {@code java:*warn-on-reflection*} is true, reported when it is left to run time.
+	 */
+	private am.ik.rontolisp.compiler.JavaSite javaSite(LispCons cons) {
+		return javaSite(cons, "");
+	}
+
+	private am.ik.rontolisp.compiler.JavaSite javaSite(LispCons cons, String location) {
+		synchronized (this.javaSites) {
+			am.ik.rontolisp.compiler.JavaSite cached = this.javaSites.get(cons);
+			if (cached != null) {
+				return cached;
+			}
+		}
+		// Outside the monitor: resolving loads classes.
+		am.ik.rontolisp.compiler.JavaSite site = new am.ik.rontolisp.compiler.JavaSiteResolver(
+				am.ik.rontolisp.compiler.ReflectiveJavaClasses.instance())
+			.resolve(cons);
+		if (!site.resolved()
+				&& !(currentSpecialValue(LispNames.JAVA_WARN_ON_REFLECTION_QUALIFIED) instanceof LispNil)) {
+			System.err.println(
+					location + "warning: " + am.ik.rontolisp.compiler.JavaSiteResolver.reflectionWarning(cons, site));
+		}
+		synchronized (this.javaSites) {
+			if (this.javaSites.size() < EXPANSION_MEMO_LIMIT) {
+				this.javaSites.put(cons, site);
+			}
+		}
+		return site;
+	}
+
+	/**
+	 * Prepares a top-level form's {@code java:} sites before it runs: the
+	 * {@code (declare (type (java:object "C") v))} of the form are lowered onto the sites
+	 * they type ({@code compiler.JavaDeclarations}, the same pass the JVM compiler runs),
+	 * and under {@code java:*warn-on-reflection*} every site the form shows is resolved
+	 * now, so what cannot be resolved is reported when the code is loaded, not when it
+	 * first runs.
+	 */
+	private LispVal prepareJavaSites(LispVal form) {
+		if (this.javaBuiltins.isEmpty() || !(form instanceof LispCons)) {
+			return form;
+		}
+		// User macros are expanded only to learn what they bind, and not into the
+		// expansion memo: the form has not run yet, so state an earlier part of it sets
+		// is not there, and the evaluator must expand at its own time.
+		LispVal lowered = am.ik.rontolisp.compiler.JavaDeclarations.lower(form, call -> {
+			if (!(call.car() instanceof LispSymbol op)) {
+				return null;
+			}
+			UserMacro macro = this.userMacros.get(op.name());
+			return macro == null ? null : expandMacroCall(op.name(), macro, call);
+		});
+		if (!(currentSpecialValue(LispNames.JAVA_WARN_ON_REFLECTION_QUALIFIED) instanceof LispNil)) {
+			// A form read from a file carries its first line: the report names the
+			// top-level form a site is in.
+			String location = form instanceof am.ik.rontolisp.LocatedCons located
+					? located.file() + ":" + located.line() + ": " : "";
+			for (LispCons site : am.ik.rontolisp.compiler.JavaSiteResolver.sitesIn(lowered)) {
+				javaSite(site, location);
+			}
+		}
+		return lowered;
+	}
+
+	/**
 	 * Evaluate an expression in the global environment.
 	 * @param expr the expression to evaluate
 	 * @return the result
@@ -4908,7 +5051,7 @@ public final class LispEvaluator {
 	public LispVal eval(LispVal expr) {
 		// Resolve packages at the top-level entry only; nested evaluation and macro
 		// expansion operate on the already-resolved canonical form.
-		LispVal resolved = resolveStructLiterals(this.packageResolver.resolve(expr));
+		LispVal resolved = prepareJavaSites(resolveStructLiterals(this.packageResolver.resolve(expr)));
 		// Register special declarations BEFORE evaluating, so a defun body's local
 		// (declare (special x)) makes later let bindings of x dynamic (the same
 		// pessimistic program-wide reading the compilers get from SpecialVarCollector).
@@ -5141,7 +5284,7 @@ public final class LispEvaluator {
 	 * @return the result
 	 */
 	public LispVal evalResolved(LispVal expr) {
-		expr = resolveStructLiterals(expr);
+		expr = prepareJavaSites(resolveStructLiterals(expr));
 		SpecialVarCollector.collectForm(expr, this.specialVars);
 		try {
 			return eval(expr, this.globalEnv);
@@ -7338,6 +7481,11 @@ public final class LispEvaluator {
 	 */
 	private LispVal evalConsRareOperator(LispCons cons, Environment env, String name) {
 		switch (name) {
+			case LispNames.JAVA_NEW_QUALIFIED:
+			case LispNames.JAVA_CALL_QUALIFIED:
+			case LispNames.JAVA_STATIC_QUALIFIED:
+			case LispNames.JAVA_FIELD_QUALIFIED:
+				return evalJavaSite(cons, env, name);
 			case LispNames.HB_GUARD_INTERNAL:
 				return evalHbGuard(cons, env);
 			case LispNames.PROGRAM_ERROR_INTERNAL: {

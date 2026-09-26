@@ -191,6 +191,11 @@ these raise the requirement. The one exception is a program that uses the
 reflection bridge (compiled with the project's own Java release) into the
 class, so it needs a JRE at least as new as the one rontolisp was built with.
 
+Such a program's `java:` calls are resolved at compile time wherever the program text
+allows, against a JDK's class files: `--java-release N` and `--java-classpath` choose which,
+and `--warn-java-reflection` reports the calls left to run time (the guide's [Resolving
+calls before they run](../guides/java-interop.md#resolving-calls-before-they-run)).
+
 ## Skip the JIT Warm-Up with an AOT Cache
 
 A compiled program starts as bytecode, so its first few dozen milliseconds run in

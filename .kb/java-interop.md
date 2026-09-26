@@ -1,7 +1,8 @@
 # `java:` interop (interpreter + JVM-compiler Java reflection bridge)
 
 Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `java:new`,
-`java:call`, `java:static`, `java:field`, `java:proxy`.
+`java:call`, `java:static`, `java:field`, `java:proxy`; the type specifier `java:object` and the
+variable `java:*warn-on-reflection*` (static resolution, below).
 
 - Interpreter: `eval/JavaInterop`, `LispEvaluator.registerJava()`; value = `LispJavaObject`,
   prints `#<java <class>>`.
@@ -15,9 +16,14 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
 - Trap: the template must have NO nested classes/records and NO rontolisp imports.
   `usesJava` forces `usesEval` and threads `JvmRuntimeBuilder.JavaPrint` into the print builders.
 - `select()` = lowest total cost `COST_EXACT` < `COST_WIDEN` < `COST_CONVERT` < `COST_NARROW` <
-  `COST_BOXED` < `COST_PROXY` (`COST_VARARGS` via `varargsCost`), ties by stable signature string.
-  `marshal`/`marshalSequence`/`accessibleMethod`. Symbols, hash tables, dotted lists and rank-2+
-  arrays are NOT marshalled.
+  `COST_BOXED` < `COST_PROXY` (`COST_VARARGS` via `varargsCost`), ties by stable signature string,
+  then (one parameter list, covariant variants) the most specific return type -- never the
+  bridge that erases it. `marshal`/`marshalSequence`/`accessibleMethod`. Symbols, hash tables,
+  dotted lists and rank-2+ arrays are NOT marshalled.
+- THE rule lives ONCE for the interpreter and the compiler: `compiler/JavaOverloads` (`select`,
+  `kindCost`, the tags). The interpreter (`eval/JavaInterop`) selects through it at run time over
+  `compiler/ReflectiveJavaClasses`; `JavaBridgeTemplate` keeps a hand copy (it must stand alone),
+  pinned by `JavaBridgeTemplateParityTest` -- change the two together.
 
 ## Resolution: kinds, pure select, caches (both bridges, identical)
 Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns - 1.4 us),
@@ -36,7 +42,8 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   `marshalArguments` then converts the values for the chosen overload only. The tie-break
   signature is built only on a cost tie.
 - Caches: class by name, constructors of a class, accessible methods of (class, name), field
-  of (class, name), overload per (class, member, kinds). `ConcurrentHashMap` only (the
+  of (class, name), parsed member designators, overload per (class, member designator -- a
+  tagged one is its own key --, kinds). `ConcurrentHashMap` only (the
   template cannot subclass `ClassValue`); a map is cleared at 4096 entries, a member keeps at
   most 16 memos (copy-on-write; a lost race only re-resolves). The template renders mutable
   character vectors once per call (`renderedAll`) before classifying.
@@ -54,7 +61,68 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
 - No `bench-report/` program: that suite compares portable ANSI CL across SBCL/ECL/ABCL and
   the wasm backend, none of which has `java:`.
 
+## One resolution model: sites resolved before they run (Clojure's, interpreter included)
+- `compiler/JavaSiteResolver.resolve(site)` = a PURE function of the site form + a lookup:
+  RESOLVED (static class + fully tagged designator, e.g. `java.lang.Math` `max(int,int)`) or
+  unresolved with a reason. Static types (`typeOf`, `JavaStaticType`): literal kinds; `java:new
+  "C"` = exactly C (boxes/String = their Lisp kinds); a resolved member's declared type
+  (`ofDeclared`: primitives/boxes/String -> kinds incl. nil for references, a final class ->
+  {C, nil}, Object/Number/CharSequence/arrays... -> UNKNOWN, else `Bounded(C)`); `(the
+  (java:object "C") x)`. An argument resolves the site only when EVERY kind it can have selects
+  the same (executable, packed) (`COMBINATION_LIMIT` 256) -- so a resolved argument never changes
+  the member (a String answer may be nil -> `append(boolean)` -> unresolved).
+- THE semantic difference (documented in the guide): a receiver typed by an upper bound resolves
+  among the bound's methods; an overload only the run-time class adds is not a candidate
+  (`Collection.remove(Object)` vs `ArrayList.remove(int)`). Unresolved sites keep the run-time
+  class + run-time kinds (Clojure's reflective fallback; no "static class, dynamic kinds" middle
+  state -- a15's decision tree would introduce one).
+- A resolved site runs as the explicit request on BOTH backends: interpreter
+  `JavaInterop.callInstanceAs`/`fieldAs`/`newInstance`/`callStatic` with (static class,
+  designator); JVM `JvmJavaInteropCompiler` emits `javaCallAs`/`javaFieldAs`/`javaNew`/`javaStatic`
+  with the same strings. The receiver must be an instance of the static class (a declared type is
+  trusted; a false one = the same deterministic error text on both). The tag makes the member
+  exact; packing is re-derived from the run-time kinds, which a true declaration keeps inside the
+  static set.
+- `(declare (type (java:object "C") v))`: `compiler/JavaDeclarations.lower` rewrites references
+  to v in java: receiver/argument positions into `(the (java:object "C") v)` -- the ONE scope walk
+  (special forms structurally; built-in and user macros expanded only to learn what they bind;
+  never replaces a macro form: sites found in expansions are rebuilt in the original tree by
+  identity; `macrolet`/unknown built-ins drop the scope). Interpreter: `LispEvaluator.
+  prepareJavaSites` on each top-level form that mentions `java:object`; JVM: right after
+  `PackageResolver` in `JvmLispCompiler.compile`. Known gap: a user macro whose EXPANSION alone
+  holds the java:object declaration is lowered on the compile path (user macros pre-expanded) but
+  not by the interpreter (the unexpanded form does not mention it) -- visible only in the
+  upper-bound receiver case. let-initializer inference: not done (a later step).
+- Lookups: interpreter = `ReflectiveJavaClasses` (Class.forName without init; canonical Type per
+  Class via ClassValue). JVM compile = `codegen.jvm.JvmClassFileLookup` over `am.ik.jvm.JvmClassPath`
+  (`ClassFileInfo` reader): a JDK's `lib/ct.sym` for one release (java.home, else JAVA_HOME, else
+  `java` on PATH; works in the native CLI, no reflection) + `--java-classpath` dirs/jars. It
+  re-implements `Class.getMethods()` (the `PublicMethods` merge; interface statics not inherited;
+  an interface has no superclass), `getMethod` (most specific return), `getField` (declared,
+  interfaces, superclass) and the interpreter's `accessibleMethod`. Accessible = class-path class
+  (unnamed module: `trySetAccessible` is true there) or public + package exported to all (the
+  release's `module-info` Module attribute). `JvmClassFileLookupTest` pins identical candidates,
+  fields, subtyping and site resolutions over a JDK corpus and a class-path root.
+- ct.sym measured 2026-09-26 (GraalVM 25.0.4): 11.4 MB, 21707 entries, releases 8..25 (`P`) --
+  the JDK's OWN release is in it, so one provider covers the default. Package-private supertypes of
+  API classes are present (`AbstractStringBuilder`); impl classes are not (`ImmutableCollections$ListN`).
+- Defaults: `--java-release` = the newest release in ct.sym (= the JDK's own = what the interpreter
+  on it resolves against). No JDK found: class path only + one compile warning; JDK classes then
+  resolve at run time. Output of a java: program depends on the release read (an input, like the
+  class path); a program without java: is byte-identical. a14 must reconcile its class-61 default
+  with this metadata default (a member chosen against 25 may not exist on 17).
+- Candidate sets are `getMethods()` by name, static AND instance for both `java:call` and
+  `java:static` (today's behavior kept; a14 must treat an instance member chosen for java:static).
+- Warnings: `java:*warn-on-reflection*` (special, nil; `--warn-java-reflection` sets it) --
+  interpreter: at top-level load for the sites the form shows (`sitesIn`), prefixed with the
+  top-level form's `file:line`, and at the first resolution of a site not shown there; compile
+  path: `JvmJavaSites.report` in source order, on from the flag or after a top-level `(setq
+  java:*warn-on-reflection* t)`, with `SourceProvenance.prefix`. The interpreter memo is
+  `LispEvaluator.javaSites` (identity, `EXPANSION_MEMO_LIMIT`).
+
 ## Tests / docs
+`JavaSiteResolverTest`, `JavaDeclarationsTest` (compiler), `JvmClassFileLookupTest`,
+`JavaBridgeTemplateParityTest`, `am.ik.jvm.JvmClassPathTest`.
 `JavaInteropTest` + `JvmJavaInteropCompilerTest` mirror the same cases — keep in step, headless
 only. `examples/jvm/{java-interop,swing,life-gui}.lisp`; `doc/{en,ja}/guides/java-interop.md` +
 five `reference/functions/java-*.md` (a GUI form hangs `DocExamplesTest`).

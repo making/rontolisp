@@ -86,6 +86,12 @@ final class JavaBridgeTemplate {
 
 	private static final ConcurrentHashMap<List<Object>, Field> FIELDS = new ConcurrentHashMap<>();
 
+	// Parsed member designators: {String name, String[] tag or null}.
+	private static final ConcurrentHashMap<String, Object[]> MEMBERS = new ConcurrentHashMap<>();
+
+	// The classes resolved sites name, by their quote-framed class-name literal.
+	private static final ConcurrentHashMap<String, Class<?>> LITERAL_CLASSES = new ConcurrentHashMap<>();
+
 	// class -> member -> memos, each {Object[] kinds, Object[] overload}; an overload is
 	// {Executable, Class<?>[] parameter types, Boolean packed-varargs} (plain arrays: a
 	// nested record would become a second class file).
@@ -156,17 +162,26 @@ final class JavaBridgeTemplate {
 		}
 	}
 
-	/** Implements {@code (java:new "class" args...)}. */
+	/**
+	 * Implements {@code (java:new "class" args...)}; the class may carry a parameter tag
+	 * ({@code "java.lang.StringBuilder(int)"}).
+	 */
 	static @Nullable Object javaNew(@Nullable Object className, @Nullable Object[] args) {
-		String name = lispString(className);
-		if (name == null) {
+		String designator = lispString(className);
+		if (designator == null) {
 			throw new RuntimeException("java:new expects a class-name string, got " + describe(className));
 		}
+		boolean tagged = isTagged(designator);
+		String name = tagged ? (String) member(designator)[0] : designator;
 		Class<?> cls = loadClass(name);
 		@Nullable Object[] values = renderedAll(args);
-		Object[] overload = resolve(cls, CONSTRUCTOR, () -> constructors(cls), values);
+		// A tagged java:new is remembered under its designator, which no method name can
+		// spell, so it never answers an untagged one's choice.
+		Object[] overload = resolve(cls, tagged ? designator : CONSTRUCTOR,
+				() -> filterByTag(constructors(cls), tagged ? (String[]) member(designator)[1] : null), values);
 		if (overload == null) {
-			throw new RuntimeException("No matching constructor for " + name + " with " + args.length + " argument(s)");
+			throw new RuntimeException(
+					"No matching constructor for " + designator + " with " + args.length + " argument(s)");
 		}
 		try {
 			return unmarshal(((Constructor<?>) overload[0]).newInstance(marshalArguments(overload, values)));
@@ -187,6 +202,49 @@ final class JavaBridgeTemplate {
 					"java:call expects a java object as the first argument, got " + describe(target));
 		}
 		return invoke(target.getClass(), target, method, args);
+	}
+
+	/**
+	 * Implements a {@code java:call} site resolved at compile time: the method is chosen
+	 * among the members of the receiver's static class -- the one the site's fully tagged
+	 * designator names -- and the receiver must be an instance of that class, exactly as
+	 * the interpreter runs the same site ({@code eval/JavaInterop.callInstanceAs}).
+	 */
+	static @Nullable Object javaCallAs(@Nullable Object className, @Nullable Object target, @Nullable Object methodName,
+			@Nullable Object[] args) {
+		String method = lispString(methodName);
+		if (method == null) {
+			throw new RuntimeException("java:call expects (java:call object \"method\" args...)");
+		}
+		if (target == null || !isJavaObject(target)) {
+			throw new RuntimeException(
+					"java:call expects a java object as the first argument, got " + describe(target));
+		}
+		Class<?> type = literalClass(className);
+		if (!type.isInstance(target)) {
+			throw new RuntimeException(
+					"java:call: the receiver is not a " + type.getName() + ", got " + describe(target));
+		}
+		return invoke(type, target, method, args);
+	}
+
+	// The class a resolved site names, by the identity of the constant the compiled site
+	// passes: the quote-framed literal is one object per site, so neither the unquoting
+	// substring nor a fresh hash is paid per call.
+	private static Class<?> literalClass(@Nullable Object className) {
+		Class<?> cached = className instanceof String raw ? LITERAL_CLASSES.get(raw) : null;
+		if (cached != null) {
+			return cached;
+		}
+		String name = lispString(className);
+		if (name == null) {
+			throw new RuntimeException("java:call expects a class-name string, got " + describe(className));
+		}
+		Class<?> type = loadClass(name);
+		if (className instanceof String raw) {
+			remember(LITERAL_CLASSES, raw, type);
+		}
+		return type;
 	}
 
 	/** Implements {@code (java:static "class" "method" args...)}. */
@@ -221,6 +279,34 @@ final class JavaBridgeTemplate {
 			}
 			throw new RuntimeException(
 					"java:field expects a class-name string or a java object, got " + describe(classOrObject));
+		}
+		catch (ReflectiveOperationException ex) {
+			throw fail("reading field " + name, ex);
+		}
+	}
+
+	/**
+	 * Implements a {@code java:field} site on an object whose class is known at compile
+	 * time: the field is looked up on that class, and the object must be an instance of
+	 * it ({@code eval/JavaInterop.fieldAs}).
+	 */
+	static @Nullable Object javaFieldAs(@Nullable Object className, @Nullable Object object,
+			@Nullable Object fieldName) {
+		String name = lispString(fieldName);
+		if (name == null) {
+			throw new RuntimeException("java:field expects (java:field class-or-object \"field\")");
+		}
+		if (object == null || !isJavaObject(object)) {
+			throw new RuntimeException(
+					"java:field expects a class-name string or a java object, got " + describe(object));
+		}
+		Class<?> type = literalClass(className);
+		if (!type.isInstance(object)) {
+			throw new RuntimeException(
+					"java:field: the object is not a " + type.getName() + ", got " + describe(object));
+		}
+		try {
+			return unmarshal(publicField(type, name).get(object));
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("reading field " + name, ex);
@@ -303,7 +389,15 @@ final class JavaBridgeTemplate {
 	private static @Nullable Object invoke(Class<?> cls, @Nullable Object receiver, String methodName,
 			@Nullable Object[] args) {
 		@Nullable Object[] values = renderedAll(args);
-		Object[] overload = resolve(cls, methodName, () -> methods(cls, methodName), values);
+		// The designator is parsed only when the candidates are needed: a remembered
+		// choice is found by the designator as written.
+		Object[] overload = resolve(cls, methodName, () -> {
+			if (!isTagged(methodName)) {
+				return methods(cls, methodName);
+			}
+			Object[] member = member(methodName);
+			return filterByTag(methods(cls, (String) member[0]), (String[]) member[1]);
+		}, values);
 		if (overload == null) {
 			throw new RuntimeException(
 					"No matching method " + cls.getName() + "." + methodName + " with " + args.length + " argument(s)");
@@ -312,8 +406,123 @@ final class JavaBridgeTemplate {
 			return unmarshal(((Method) overload[0]).invoke(receiver, marshalArguments(overload, values)));
 		}
 		catch (ReflectiveOperationException ex) {
-			throw fail("calling " + cls.getName() + "." + methodName, ex);
+			throw fail("calling " + cls.getName() + "." + ((Method) overload[0]).getName(), ex);
 		}
+	}
+
+	// Whether a designator carries a parameter tag (or a stray parenthesis parseMember
+	// reports): the untagged common case is never looked up in MEMBERS.
+	private static boolean isTagged(String designator) {
+		return designator.indexOf('(') >= 0 || designator.indexOf(')') >= 0;
+	}
+
+	// Parsed member designators {String name, String[] tag or null}, mirroring
+	// compiler/JavaOverloads.parseMember: a tag is parsed once, not per call.
+	private static Object[] member(String designator) {
+		Object[] cached = MEMBERS.get(designator);
+		if (cached == null) {
+			cached = parseMember(designator);
+			remember(MEMBERS, designator, cached);
+		}
+		return cached;
+	}
+
+	// "max", "max(long,long)", "max(long,_)", "java.lang.StringBuilder(int)": the name
+	// and the tag's types in Class.getName() spelling ("_" matches any type). Mirrors
+	// compiler/JavaOverloads.parseMember.
+	private static Object[] parseMember(String designator) {
+		int open = designator.indexOf('(');
+		if (open < 0) {
+			if (designator.indexOf(')') >= 0) {
+				throw new RuntimeException("malformed parameter tag in \"" + designator + "\"");
+			}
+			return new Object[] { designator, null };
+		}
+		if (!designator.endsWith(")") || open == 0 || designator.indexOf('(', open + 1) >= 0
+				|| designator.indexOf(')') != designator.length() - 1) {
+			throw new RuntimeException("malformed parameter tag in \"" + designator + "\"");
+		}
+		String name = designator.substring(0, open).strip();
+		String inside = designator.substring(open + 1, designator.length() - 1).strip();
+		List<String> types = new ArrayList<>();
+		if (!inside.isEmpty()) {
+			for (String part : inside.split(",", -1)) {
+				String type = part.strip();
+				if (type.isEmpty()) {
+					throw new RuntimeException("malformed parameter tag in \"" + designator + "\"");
+				}
+				types.add(tagTypeName(type));
+			}
+		}
+		return new Object[] { name, types.toArray(new String[0]) };
+	}
+
+	// A tag type in Class.getName() spelling: int, java.lang.String, [I,
+	// [Ljava.lang.String;
+	// -- "String" means java.lang.String, "T[]" and "T..." an array.
+	private static String tagTypeName(String type) {
+		if ("_".equals(type) || type.startsWith("[")) {
+			return type;
+		}
+		int dimensions = 0;
+		String base = type;
+		while (true) {
+			if (base.endsWith("[]")) {
+				base = base.substring(0, base.length() - 2).strip();
+				dimensions++;
+			}
+			else if (base.endsWith("...")) {
+				base = base.substring(0, base.length() - 3).strip();
+				dimensions++;
+			}
+			else {
+				break;
+			}
+		}
+		String descriptor = switch (base) {
+			case "boolean" -> "Z";
+			case "byte" -> "B";
+			case "char" -> "C";
+			case "short" -> "S";
+			case "int" -> "I";
+			case "long" -> "J";
+			case "float" -> "F";
+			case "double" -> "D";
+			default -> null;
+		};
+		if (descriptor == null && base.indexOf('.') < 0) {
+			base = "java.lang." + base;
+		}
+		if (dimensions == 0) {
+			return base;
+		}
+		return "[".repeat(dimensions) + (descriptor != null ? descriptor : "L" + base + ";");
+	}
+
+	// The candidates a parameter tag leaves: one parameter per tag type, each the type
+	// the tag names ("_": any).
+	private static <E extends Executable> List<E> filterByTag(List<E> candidates, String @Nullable [] tag) {
+		if (tag == null) {
+			return candidates;
+		}
+		List<E> matching = new ArrayList<>();
+		for (E candidate : candidates) {
+			Class<?>[] params = candidate.getParameterTypes();
+			if (params.length != tag.length) {
+				continue;
+			}
+			boolean all = true;
+			for (int i = 0; i < params.length; i++) {
+				if (!"_".equals(tag[i]) && !tag[i].equals(params[i].getName())) {
+					all = false;
+					break;
+				}
+			}
+			if (all) {
+				matching.add(candidate);
+			}
+		}
+		return matching;
 	}
 
 	// The overload of `member` on `cls` for these (rendered) arguments: the one
@@ -573,7 +782,35 @@ final class JavaBridgeTemplate {
 	}
 
 	private static boolean beats(Object[] a, int costA, Object[] b, int costB) {
-		return costA < costB || (costA == costB && signatureOf(a).compareTo(signatureOf(b)) < 0);
+		if (costA != costB) {
+			return costA < costB;
+		}
+		int bySignature = signatureOf(a).compareTo(signatureOf(b));
+		if (bySignature != 0) {
+			return bySignature < 0;
+		}
+		// One parameter list, several return types: the covariant override over the
+		// bridge that erases it (mirrors compiler/JavaOverloads.beats).
+		Class<?> ra = returnType(a);
+		Class<?> rb = returnType(b);
+		if (ra != rb) {
+			if (rb.isAssignableFrom(ra)) {
+				return true;
+			}
+			if (ra.isAssignableFrom(rb)) {
+				return false;
+			}
+		}
+		return tieKey(a).compareTo(tieKey(b)) < 0;
+	}
+
+	private static Class<?> returnType(Object[] overload) {
+		return overload[0] instanceof Method method ? method.getReturnType()
+				: ((Executable) overload[0]).getDeclaringClass();
+	}
+
+	private static String tieKey(Object[] overload) {
+		return ((Executable) overload[0]).getDeclaringClass().getName() + ':' + returnType(overload).getName();
 	}
 
 	private static int fixedArityCost(Class<?>[] params, int argc, ToIntBiFunction<Integer, Class<?>> cost) {

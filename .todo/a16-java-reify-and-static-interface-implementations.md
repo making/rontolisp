@@ -4,6 +4,10 @@ Difficulty: High
 
 Depends on a14; shares invokedynamic support in am.ik.jvm with a08.
 
+a13 provides the param-tag syntax and parser (compiler/JavaOverloads.parseMember,
+mirrored in JavaBridgeTemplate) and the SAM/member lookup over class files
+(JvmClassFileLookup: getMethods semantics, ct.sym per release).
+
 Today the only way to implement a host interface is (java:proxy "Iface" callable):
 java.lang.reflect.Proxy with one callable receiving (method-name-string args...) for
 every method (eval/JavaInterop.proxy; the JVM bridge mirrors it). That shape keeps

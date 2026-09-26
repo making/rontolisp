@@ -75,6 +75,77 @@ Java の `null` (および `void` メソッド) は `nil` として返ります�
 (java:static "java.lang.Math" "sqrt" 16)   ; => 4.0
 ```
 
+## 実行前の呼び出し解決
+
+インタプリタもコンパイル済みクラスも、すべての呼び出しを上の同じ規則で解決します。レシーバのクラスと引数の種別がプログラムのテキストから分かる呼び出しは、最初に実行される前に一度だけ、ただ 1 つのメソッドへ解決されます。手本は Clojure の型ヒント付き連携で、それをインタプリタにも適用しています。それ以外の呼び出しは、実行時にレシーバのクラスと引数の種別から解決されます。選ばれるメソッドはどちらでも同じです。例外は後述の 1 つだけです。
+
+プログラムのテキストが値について示すもの:
+
+- リテラルの種別: `3`、`2.5`、`"x"`、`#\a`、`t`、`nil`、`lambda`
+- `(java:new "C" ...)` はちょうど `C` である
+- 解決済みの呼び出しの値は、そのメソッドが宣言する型を持つ。`StringBuilder` の `append` は `StringBuilder` を返すので、呼び出しの連鎖は 1 段ずつ解決される。`Object` を返すと宣言されたメソッドは何も示さない
+- `(the (java:object "C") x)` と `(declare (type (java:object "C") v))` は、その値が `C` (または `nil`) であることを示す。`C` は `java:new` と同じくバイナリクラス名 (`java.util.Map$Entry`) で書く
+
+宣言された型は信頼されます。`C` でない値は、呼び出しに渡った時点でエラーになります。
+
+```lisp
+(defun total-length (sb)
+  (declare (type (java:object "java.lang.StringBuilder") sb))
+  (java:call sb "length"))
+(total-length (java:new "java.lang.StringBuilder" "abc"))   ; => 3
+```
+
+引数が呼び出しを解決するのは、その引数が取りうるすべての種別が同じメソッドを選ぶときだけです。`String` の戻り値は `nil` でありえて、`nil` は `append(boolean)` を選ぶため、`(java:call sb "append" (java:call x "toString"))` は実行時に解決されます。
+
+### 宣言されたレシーバのクラスが候補を決める
+
+宣言クラス `C` のレシーバに対する呼び出しは、Java と同じく `C` のメソッドの中から解決されます。実行時クラスだけが追加する同名の public オーバーロードは候補になりません。実行前の解決と実行時の解決で選択が異なるのはこの場合だけです。
+
+```lisp
+(defun remove-one (c)
+  (declare (type (java:object "java.util.Collection") c))
+  (java:call c "remove" 1))
+(let ((a (java:new "java.util.ArrayList")) (b (java:new "java.util.ArrayList")))
+  (dolist (x (list 10 20 1)) (java:call a "add" x) (java:call b "add" x))
+  (remove-one a)             ; Collection.remove(Object): removes the element 1
+  (java:call b "remove" 1)   ; ArrayList.remove(int): removes the element at index 1
+  (list (java:call a "toString") (java:call b "toString")))
+; => ("[10, 20]" "[10, 1]")
+```
+
+### パラメータタグ
+
+メソッド名、および `java:new` のクラス名にはパラメータ型を付けられます。これはオーバーロードを直接指定します: `"max(long,long)"`、`"java.lang.StringBuilder(int)"`。`_` は任意の型に一致し、そのパラメータはコスト規則に任せます。パッケージのない型名は `java.lang` の型です。`T[]` または `T...` は配列です。
+
+```lisp
+(java:static "java.lang.String" "valueOf(int)" #\a)   ; => "97"
+```
+
+```lisp
+(java:static "java.lang.Math" "max(long,_)" 3 7)   ; => 7
+```
+
+```lisp
+(java:call (java:new "java.lang.StringBuilder(int)" 64) "capacity")   ; => 64
+```
+
+### リフレクション警告
+
+`(setq java:*warn-on-reflection* t)` は、それ以降のフォームで実行時解決に回る呼び出しを理由とともに報告します。インタプリタはフォームを読み込むときに (フォームの行番号付きで)、コンパイラはコンパイル時に (呼び出しの位置付きで) 報告します。`--warn-java-reflection` は最初から有効にします。
+
+```console
+$ rontolisp --warn-java-reflection len.lisp -o Len.class
+len.lisp:1:16: warning: java:call "length" is resolved by reflection at run time: the receiver's class is not known
+```
+
+### Java リリースやクラスパスを指定したコンパイル
+
+インタプリタは実行中のクラスに対して解決します。JVM コンパイラは代わりにクラスファイルを読みます。JDK の `lib/ct.sym` (実行中の JDK のもの、なければ `JAVA_HOME` のもの、なければ `PATH` 上の `java` のもの) から、その JDK が持つ最新のリリース、または `--java-release N` のリリースを読み、続いて `--java-classpath` のディレクトリと jar を探します。コンパイル済みクラスはコンパイル時に選ばれたメソッドを呼ぶので、そのリリース以降の JRE で実行してください。コンパイル時に見えないクラスを名指す呼び出しは実行時に解決されます。
+
+```console
+$ rontolisp app.lisp -o app.jar --java-release 21 --java-classpath lib/guava.jar
+```
+
 ## 可変長引数 (varargs)
 
 可変長引数メソッド (例: `String.format(String, Object...)`) には任意個の末尾引数を渡せます。末尾引数は自動的に varargs 配列へパックされます。固定アリティのオーバーロードが両方に一致する場合はそちらが優先され、varargs 位置に渡したリスト/ベクタは配列そのものとしても扱えます。
@@ -142,5 +213,5 @@ Java の `null` (および `void` メソッド) は `nil` として返ります�
 - コンパイル済みクラスでは 5 つの関数は呼び出し位置でのみ使えます。第一級の関数値を持たないため、`#'java:call` や `(funcall 'java:new ...)` はコンパイルエラーになります (代わりに自前の `defun` でラップしてください)。埋め込み `eval` ランタイムもこれらを認識しません。また `java:` を使うコンパイル済みプログラムの実行には、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です。
 - シンボル、ハッシュテーブル、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリングされません。代わりに `java:new`/`java:call` で構築した Java コレクションとして渡してください。
 - 返された `java.util.List` は (Java 配列と異なり) 不透明な `java` オブジェクトのままです。同一性と可変性が保たれるため、リスト関数ではなく `java:call` (`"get"`、`"size"` など) で読み取ってください。
-- オーバーロード解決は引数コストによるもので、Java の完全な型推論規則ではありません。曖昧な呼び出しは曖昧性エラーを出さず、最小コスト (次に最小シグネチャ) の候補に解決されます。
+- オーバーロード解決は引数コストによるもので、Java の完全な型推論規則ではありません。曖昧な呼び出しは曖昧性エラーを出さず、最小コスト (次に最小シグネチャ) の候補に解決されます。パラメータタグでオーバーロードを明示できます。
 - これは完全なホストリフレクションブリッジであり任意の Java コードを実行できます。`java:` を使うプログラムは他の JVM プログラムと同じ信頼度で扱ってください。

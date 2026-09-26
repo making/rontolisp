@@ -931,8 +931,10 @@ public final class PackageRegistry {
 		define(new LispPackage(LispNames.USOCKET_PKG, List.of(), new HashSet<>(USOCKET_EXTERNALS)));
 		// Interpreter-only Java interop. Does not use cl; its values (LispJavaObject)
 		// run on the JVM interpreter only -- the compilers cannot lower them.
-		define(new LispPackage(LispNames.JAVA_PKG, List.of(), new HashSet<>(Set.of(LispNames.JAVA_NEW,
-				LispNames.JAVA_CALL, LispNames.JAVA_STATIC, LispNames.JAVA_FIELD, LispNames.JAVA_PROXY))));
+		define(new LispPackage(LispNames.JAVA_PKG, List.of(),
+				new HashSet<>(
+						Set.of(LispNames.JAVA_NEW, LispNames.JAVA_CALL, LispNames.JAVA_STATIC, LispNames.JAVA_FIELD,
+								LispNames.JAVA_PROXY, LispNames.JAVA_OBJECT, LispNames.JAVA_WARN_ON_REFLECTION))));
 		// Interpreter-only Objective-C interop through the foreign function API (no
 		// reflection, so it runs in the native binary too). Does not use cl; its values
 		// (LispObjcObject) cannot be lowered by any compiler.
