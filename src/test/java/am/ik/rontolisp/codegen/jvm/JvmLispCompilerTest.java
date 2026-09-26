@@ -1278,6 +1278,67 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void listWalksAndStringIndicesNameTheOperator() throws Exception {
+		// A list walk over a non-list and a string index that is no integer name their
+		// operator as the other wrong-type arguments do (compiler/OperandTypes): nthcdr's
+		// walk (and so nth and second..tenth), endp and so dolist -- which checks its
+		// list's end once after the loop, CL's endp -- and char/schar.
+		// The walks used to report the landing pad's generic text or answer NIL, an index
+		// nil a NullPointerException.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *te-n* nil)
+				(defvar *te-five* 5)
+				(print (te (lambda () (nthcdr 1 *te-five*))))
+				(print (te (lambda () (nthcdr 1 5))))
+				(print (te (lambda () (nthcdr 2 '(1 . 2)))))
+				(print (te (lambda () (nth 1 *te-five*))))
+				(print (te (lambda () (second *te-five*))))
+				(print (te (lambda () (third '(1 . 2)))))
+				(print (te (lambda () (funcall #'nthcdr 1 *te-five*))))
+				(print (te (lambda () (funcall #'nth 1 *te-five*))))
+				(print (te (lambda () (funcall #'second *te-five*))))
+				(print (te (lambda () (funcall #'second '(1 . 5)))))
+				(print (te (lambda () (dolist (x *te-five*) x))))
+				(print (te (lambda () (dolist (x 5) x))))
+				(print (te (lambda () (dolist (x *te-five*)))))
+				(let ((seen nil))
+				  (print (list (te (lambda () (dolist (x '(1 2 . 3)) (push x seen)))) seen)))
+				(print (te (lambda () (endp *te-five*))))
+				(print (te (lambda () (funcall #'endp *te-five*))))
+				(print (list (endp nil) (endp '(1)) (dolist (x '(1 2) :done) x)))
+				(print (te (lambda () (char "ab" *te-n*))))
+				(print (te (lambda () (schar "ab" *te-n*))))
+				(print (te (lambda () (char "ab" 1.5))))
+				(print (te (lambda () (funcall #'char "ab" *te-n*))))
+				""")).isEqualTo("""
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 2 is not of type LIST" 2 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 2 is not of type LIST" 2 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("CAR: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				(("ENDP: The value 3 is not of type LIST" 3 LIST) (2 1))
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				(T NIL :DONE)
+				("CHAR: The value NIL is not of type INTEGER" NIL INTEGER)
+				("SCHAR: The value NIL is not of type INTEGER" NIL INTEGER)
+				("CHAR: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+				("CHAR: The value NIL is not of type INTEGER" NIL INTEGER)""");
+	}
+
+	@Test
 	void compileAndRunOperandTypeErrorAnswersItsDatumAndExpectedType() throws Exception {
 		// The pad fills the type-error's datum and expected-type from the record the
 		// wrapper left (JvmOperandTypeRuntime); the evaluator twin is
@@ -1592,9 +1653,10 @@ class JvmLispCompilerTest {
 	void compileAndRunASynthesizedBuiltInConditionReportsARontolispMessage() throws Exception {
 		// A cast failure's host text names Java classes and an out-of-range index's
 		// counts the layout cell; both are replaced at the pad. (car 1) names itself now
-		// (argumentTypeErrorsNameTheOperatorBeyondArithmetic); nthcdr's walk over a
-		// non-list is still a bare cast.
-		assertThat(compileAndRun("(print (handler-case (nthcdr 1 5) (type-error (e) (princ-to-string e))))"))
+		// (argumentTypeErrorsNameTheOperatorBeyondArithmetic), as does nthcdr's walk
+		// (listWalksAndStringIndicesNameTheOperator); rplaca of a non-cons is still a
+		// bare cast.
+		assertThat(compileAndRun("(print (handler-case (rplaca 5 0) (type-error (e) (princ-to-string e))))"))
 			.isEqualTo("\"the value is not of the expected type\"");
 		assertThat(compileAndRun("(print (handler-case (aref (vector 1 2) 5) (type-error (e) (princ-to-string e))))"))
 			.isEqualTo("\"index out of bounds\"");

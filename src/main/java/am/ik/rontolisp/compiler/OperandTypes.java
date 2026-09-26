@@ -90,9 +90,11 @@ public final class OperandTypes {
 	/**
 	 * The funnel-typed operators ({@link #expectedType}): {@code (setf aref)} is the
 	 * reported name of {@code %aset}, the operator a {@code setf} of an {@code aref} or
-	 * {@code svref} place lowers to.
+	 * {@code svref} place lowers to. {@code endp} is also {@code dolist}'s: the expansion
+	 * checks the list's end once, after the loop.
 	 */
-	private static final List<String> FUNNEL_TYPED = List.of("CAR", "CDR", "NTHCDR", "AREF", SETF_AREF);
+	private static final List<String> FUNNEL_TYPED = List.of("CAR", "CDR", "NTHCDR", "ENDP", "AREF", SETF_AREF, "CHAR",
+			"SCHAR");
 
 	static {
 		String[] numberOps = { "+", "-", "*", "/", "=", "ABS", "SIGNUM", "SQRT", "EXP", "LOG", "EXPT", "SIN", "COS",

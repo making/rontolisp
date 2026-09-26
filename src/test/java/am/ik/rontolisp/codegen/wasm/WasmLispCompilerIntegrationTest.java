@@ -24537,6 +24537,69 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void listWalksAndStringIndicesNameTheOperator() throws Exception {
+		// A list walk over a non-list and a string index that is no integer name their
+		// operator as the other wrong-type arguments do (compiler/OperandTypes): nthcdr's
+		// walk (and so nth and second..tenth), endp and so dolist -- which checks its
+		// list's end once after the loop, CL's endp -- and char/schar.
+		// They used to be uncatchable traps here, and endp answered NIL.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *te-n* nil)
+				(defvar *te-five* 5)
+				(print (te (lambda () (nthcdr 1 *te-five*))))
+				(print (te (lambda () (nthcdr 1 5))))
+				(print (te (lambda () (nthcdr 2 '(1 . 2)))))
+				(print (te (lambda () (nth 1 *te-five*))))
+				(print (te (lambda () (second *te-five*))))
+				(print (te (lambda () (third '(1 . 2)))))
+				(print (te (lambda () (funcall #'nthcdr 1 *te-five*))))
+				(print (te (lambda () (funcall #'nth 1 *te-five*))))
+				(print (te (lambda () (funcall #'second *te-five*))))
+				(print (te (lambda () (funcall #'second '(1 . 5)))))
+				(print (te (lambda () (dolist (x *te-five*) x))))
+				(print (te (lambda () (dolist (x 5) x))))
+				(print (te (lambda () (dolist (x *te-five*)))))
+				(let ((seen nil))
+				  (print (list (te (lambda () (dolist (x '(1 2 . 3)) (push x seen)))) seen)))
+				(print (te (lambda () (endp *te-five*))))
+				(print (te (lambda () (funcall #'endp *te-five*))))
+				(print (list (endp nil) (endp '(1)) (dolist (x '(1 2) :done) x)))
+				(print (te (lambda () (char "ab" *te-n*))))
+				(print (te (lambda () (schar "ab" *te-n*))))
+				(print (te (lambda () (char "ab" 1.5))))
+				(print (te (lambda () (funcall #'char "ab" *te-n*))))
+				""";
+		String expected = """
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 2 is not of type LIST" 2 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 2 is not of type LIST" 2 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("CAR: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				(("ENDP: The value 3 is not of type LIST" 3 LIST) (2 1))
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				(T NIL :DONE)
+				("CHAR: The value NIL is not of type INTEGER" NIL INTEGER)
+				("SCHAR: The value NIL is not of type INTEGER" NIL INTEGER)
+				("CHAR: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+				("CHAR: The value NIL is not of type INTEGER" NIL INTEGER)""";
+		assertThat(compileAndRunPrelude(source)).isEqualTo(expected);
+		assertThat(compileComponentAndRunPrelude(source)).isEqualTo(expected);
+	}
+
+	@Test
 	void ehArgumentShapeErrorsSignalACatchableProgramError() throws Exception {
 		// A malformed keyword tail compiles to a call-time program-error carrying the
 		// interpreter's text, and :allow-other-keys t suppresses the check

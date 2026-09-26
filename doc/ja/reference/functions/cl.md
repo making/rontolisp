@@ -266,7 +266,7 @@
 | `nunion` / `nintersection` / `nset-difference` / `nset-exclusive-or` | `(nunion (list 1 2) (list 2 3))` | `(3 1 2)`(4つの集合演算の破壊的な綴り。CLHSは非破壊的な結果を返すことを認めており、これらはそうします。引数は変更されません) |
 | `list*` | `(list* 1 2 '(3 4))`, `(list* 1 2 3)` | `(1 2 3 4)`, `(1 2 . 3)`(先頭の引数を最後の引数の末尾にconsします) |
 | `acons` | `(acons 'a 1 nil)` | `((a . 1))`(`(key . value)` ペアを連想リストの先頭に追加します) |
-| `endp` | `(endp nil)`, `(endp '(1))` | `t`, `nil`(リスト終端テスト。`null` の同義語で、不正リストのエラーは緩和されています) |
+| `endp` | `(endp nil)`, `(endp '(1))` | `t`, `nil`(リスト終端テスト。それ以外の値は `type-error` を通知します) |
 | `elt` | `(elt '(a b c) 1)` | `b`(0始まりの要素アクセス。リストのみで文字列インデックスはありません) |
 | `rassoc` | `(rassoc 2 '((a . 1) (b . 2)))` | `(b . 2)`(cdrが値に一致する最初のペア、またはnil。既定では `eql` で比較し、省略可能な `:test`/`:key` キーワードを取ります) |
 | `rassoc-if` | `(rassoc-if #'oddp '((a . 2) (b . 3)))` | `(b . 3)`(cdrが述語を満たす最初のペア、またはnil。省略可能な `:key`) |
