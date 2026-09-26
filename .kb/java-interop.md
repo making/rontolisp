@@ -369,11 +369,12 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   shadowed by an abstract sibling.
 - A value a function RETURNS is marshalled to the method's return type as an argument is, EXCEPT
   a function is never made a proxy (interpreter `marshal(..., proxies=false)`, the bridge's twin,
-  the direct sites' returned `_jcost$N` / `_jconv$N`). Decided 2026-09-26 on a measurement: with the function arm, a return
-  conversion to an interface needs that interface's proxy class, whose methods' interface returns
-  need theirs -- one `java:reify` of `CharSequence` pulled in 19 proxy classes (the
-  IntStream/Stream/Spliterator family, ~60 KB) and a 169 KB program class. Clojure's reify/proxy do
-  not coerce return values either; an interface return is a `java:reify`/`java:proxy` object.
+  the direct sites' returned `_jcost$N` / `_jconv$N`). Decided 2026-09-26 on a measurement: with
+  the function arm, a return conversion to an interface needs that interface's proxy class, whose
+  methods' interface returns need theirs -- one `java:reify` of `CharSequence` pulled in 19 proxy
+  classes (the IntStream/Stream/Spliterator family, ~60 KB) and a 169 KB program class. Clojure's
+  reify/proxy do not coerce return values either; an interface return is a
+  `java:reify`/`java:proxy` object.
   Function -> interface stays for ARGUMENTS (Clojure 1.12's direction).
 - The object's KIND is `compiler/JavaImplementationType` (canonical per interface in each lookup,
   `JavaClassLookup.implementationOf`): assignable to Object, `java.io.Serializable`, the interface
@@ -399,9 +400,9 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   boxes its arguments as a Proxy does and calls a PACKAGE-PRIVATE program method
   `_jimpl$K(Object fn, Object[] args)R` (one per (proxy?, interface, dispatch key)): `_junm` each
   argument into a list (a proxy's with the name first), `_apply`, then the direct sites' RETURNED
-  `_jcost$N` / `_jconv$N` for R (`returnedCost` / `returnedConvert`: a15's per-type helpers
-  without the function arm) or the interpreter's "cannot return" text.
-  The `_jimpl$` names are shaker roots and pinned to the main class on a split
+  `_jcost$N` / `_jconv$N` for R (`returnedCost` / `returnedConvert`: the per-type helpers of
+  dispatched sites, without the function arm) or the interpreter's "cannot return" text. The
+  `_jimpl$` names are shaker roots and pinned to the main class on a split
   (`JvmLispCompiler.implementationCallbacks`); `bridgeClassFiles` carries the classes, stamped with
   the program's class version. Anything else (computed names, an interface not found, an
   unlinkable one) is the bridge's `javaReify` / `javaProxy` -- a `Proxy` over `reifySlots` /

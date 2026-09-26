@@ -761,7 +761,7 @@ final class JavaInterop {
 	// java:reify / java:proxy function answers to Java, which -- as in Clojure -- never
 	// coerces a function (return a java:reify or java:proxy object instead). A compiled
 	// program's generated class converts its functions' values the same way
-	// (codegen.jvm.JvmJavaMarshal).
+	// (codegen.jvm.JvmJavaDirectSites#returnedConvert).
 	private static int marshal(LispVal value, JavaType target, Caller caller, @Nullable Object[] out, int index,
 			boolean proxies) {
 		JavaKind kind = kindOf(value);
