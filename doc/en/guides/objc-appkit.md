@@ -428,9 +428,10 @@ compiles such a program too. A `.wasm` output is refused —
 `Cannot compile: appkit:window ...` — and always will be: there is no foreign function
 API and no AppKit on that side.
 
-The jar also builds into a GraalVM native image (`native-image -jar counter.jar`), given
-the foreign-call metadata the tracing agent records from one `java -jar` run
-([Java interop](java-interop.md#native-image)). In the image the program's `main` starts
+The jar also builds into a GraalVM native image with no configuration
+(`native-image -jar counter.jar`): it carries the native-image metadata the binding needs,
+the same table of message shapes the `rontolisp` binary serves (see
+[the native binary](#the-native-binary) above). In the image the program's `main` starts
 on the process's first thread, so it hands that thread to the event loop itself and runs
 the program on a second one, as the `rontolisp` binary does.
 

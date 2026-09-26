@@ -14,3 +14,8 @@ config. The shapes are closed (gemm/gemv at both widths, gemm critical and plain
 them the same way and make a `--blas` jar build with no configuration. Pin the shipped file
 EQUAL to `JvmBlasTemplate`'s bound shapes, as `NativeImageForeignConfigTest` does for the
 GPU drivers. Verifiable on Linux x86_64.
+
+Findings from the macOS side (2026-09-27): `JvmBlasTemplate` also makes a seventh downcall,
+`jint()` (the OpenBLAS/MKL thread-count query), which the shipped registration must include.
+On macOS, Accelerate binds and a no-config `--blas` image fails with
+`MissingForeignRegistrationError`, so either OS reproduces the failure.

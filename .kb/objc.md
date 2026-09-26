@@ -99,7 +99,9 @@ pointers are refused by name.
 
 - A native image builds a downcall stub only for a shape registered at build time
   (`MissingForeignRegistrationError` at `Linker.downcallHandle`), so the served set is a CLOSED
-  TABLE in `reachability-metadata.json`: the runtime's own C functions, every shape `appkit.lisp`/
+  TABLE in a file of its own, `META-INF/native-image/am.ik.rontolisp/rontolisp-objc/
+  reachability-metadata.json` (rontolisp's binary reads it beside the main file; a compiled
+  program carries a copy, "The JVM backend" below): the runtime's own C functions, every shape `appkit.lisp`/
   `metal.lisp` and the documented examples send, the 60 most common shapes of a census over 29 core
   AppKit/Foundation classes (13,065 methods, 90.6% reached), plus `NSTimer`'s
   `scheduledTimerWithTimeInterval:...`. A selector outside the table signals with the exact entry
@@ -260,6 +262,27 @@ CLI and `java -jar` compile byte-identical class files. Rechecked with the hand-
 (2026-09-27, same machine, same method): the same five routes, byte-identical class files again, and
 **a `native-image` of `counter.jar`** (agent config from one `java -jar` run) counts 3 clicks and exits
 0.
+
+**An image of a compiled `objc:` program needs no configuration** (since 2026-09-27). The image is
+built from the user's jar or class directory, which holds none of rontolisp's `META-INF`, so
+`JvmObjcRuntimeBuilder` ships two registrations beside the `$Objc*` classes, each in a directory
+named after the program: `META-INF/native-image/rontolisp-objc/<program>/` is a verbatim copy of the
+`rontolisp-objc` file above, and `rontolisp-objc-bridge/<program>/` registers the two program methods
+`JvmObjcTemplate.bind` finds by name, `_apply(Object,Object)` and `_strv(Object)`. Without the first
+every send refuses its stub; without `_apply` the program stops at `objc: no _apply method`; without
+`_strv` the first string the program BUILT (`format nil`, `concatenate`) dies in
+`MissingReflectionRegistrationError` -- `counter.lisp`'s label on the first click. `_strv` exists
+only with the array runtime, and native-image skips a registered method the class lacks. That file
+stands ALONE, so it repeats the shapes it shares with the main file (the Metal driver's
+`objc_msgSend` shapes, the CUDA ones that coincide, and `jint()`, `void*()`, `void*(void*)`,
+`void(void*)` the runtime binds); `ObjcNativeImageForeignConfigTest` checks every layer against it
+alone (`NativeImageDowncalls.OBJC`), and `ShippedBridgeClassFilesTest` pins the shipped bytes and the
+reflection entry. Verified 2026-09-27 (macOS 26.3 aarch64, Oracle GraalVM 25.0.3, screen locked,
+timer clicks): `counter.lisp` counts 3 clicks, relabels and exits 0 under `java -jar`, the native
+binary (which now reads the split file), `java Counter`, `java -jar counter.jar`, `--native`, and a
+`native-image` with NO configuration of both `counter.jar` and the `-o Counter.class` directory; the
+native CLI and `java -jar` still write byte-identical outputs. Pinned by
+`ShippedBridgeNativeImageE2eTest#anObjcJarRunsAsANativeImageThatHandsThreadZeroToAppKit`.
 
 ## `--native`: the runner is the Objective-C host
 `--native -o prog` (`macos-aarch64` only: `CompileFrontend` accepts them when the native target is
