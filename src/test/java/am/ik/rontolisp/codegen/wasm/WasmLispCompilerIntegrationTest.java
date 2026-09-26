@@ -16683,6 +16683,31 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void gcdLcmNumeratorDenominatorAsFirstClass() throws Exception {
+		// #'gcd / #'lcm are variadic like the call: (gcd) is 0, (lcm) is 1, a single
+		// argument is its absolute value.
+		assertThat(compileAndRun("(print (funcall #'gcd))")).isEqualTo("0");
+		assertThat(compileAndRun("(print (funcall #'gcd -6))")).isEqualTo("6");
+		assertThat(compileAndRun("(print (apply #'gcd (list 24 36 48)))")).isEqualTo("12");
+		assertThat(compileAndRun("(print (funcall #'lcm))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (funcall #'lcm -6))")).isEqualTo("6");
+		assertThat(compileAndRun("(print (apply #'lcm (list 4 6 10)))")).isEqualTo("60");
+		// #'numerator / #'denominator must compile as function values too.
+		assertThat(compileAndRun("(print (funcall #'numerator 1/2))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (funcall #'denominator 1/2))")).isEqualTo("2");
+		assertThat(compileAndRun("(print (mapcar #'numerator (list 1/2 2/3)))")).isEqualTo("(1 2)");
+		// The wrong-type report through the first-class value still names the operator
+		// (.todo/972's naming applies whether the call is direct or through funcall).
+		assertThat(compileAndRun("""
+				(defun te-print (thunk)
+				  (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
+				(print (list (te-print (lambda () (funcall #'gcd #c(1 2) 3)))
+				             (te-print (lambda () (funcall #'numerator #c(1 2))))))
+				""")).isEqualTo("(\"GCD: The value #C(1 2) is not of type INTEGER\""
+				+ " \"NUMERATOR: The value #C(1 2) is not of type RATIONAL\")");
+	}
+
+	@Test
 	void arcAndHyperbolicSoftwareApproximation() throws Exception {
 		// asin/acos/atan/sinh/cosh were the LAST members of
 		// BuiltinFunctionWrappers.WASM_UNSUPPORTED -- every transcendental built-in
