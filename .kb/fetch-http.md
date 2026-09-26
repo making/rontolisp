@@ -29,7 +29,10 @@ against `FetchResponseShape.responseFields()` at compile time (a mismatch fails 
 **Error timing** is JS-like: options validated at `fetch` time; request/transport failures surface at
 `await` on EVERY backend (on WASM the send result's error arm becomes a `rontolisp:wit-error`
 condition, catchable with `handler-case`; interpreter/JVM signal a plain error -- a known type
-divergence). A fetch that cannot even start (malformed URL) returns `nil` instead of a future on WASM.
+divergence), and again at every later await of the same future. A request that cannot be built (a
+URL with a space in its path) is such a failure: `fetch` answers a future, whose await signals. A
+transfer that fails mid-body signals at the DRAIN, never reading as a shorter body. The component
+answered `nil` for a fetch it could not start until 2026-09-26.
 
 ## `--host-fetch` (the `--no-wasi` reactor transport)
 
@@ -156,20 +159,48 @@ without the host's pair, the component leg without wasmtime) and in CI's native-
 the native leg compiles through the binary on each release platform. The `--host-fetch` reactor
 has no leg (its transport is the JavaScript host, `WasmHostFetchBodyE2eTest`).
 
-A case a leg skips names the divergence; each is a real difference, measured 2026-09-25:
+A case a leg skips names the divergence; no case skips a leg since 2026-09-26. What the corpus
+does not pin (it looks fields up by name), measured 2026-09-25:
 
-- **Component**: the body stream ends at the first read that finds nothing there yet, so a reply
-  that pauses mid-body arrives cut short and a large one reads as empty (the opt-in
-  `componentPendingBodyReadOverlapsTimer` fails the same way); a rejected future awaited a second
-  time answers NIL; a fetch that cannot start (a runtime-built unsupported method, a URL the
-  request cannot carry) answers NIL instead of signalling at the call or failing the future. Its
-  `:headers` lack `transfer-encoding` (the host strips it).
+- **Component**: its `:headers` lack `transfer-encoding` (the host strips it).
 - **The JDK backends over HTTPS** negotiate HTTP/2 where the origin offers it, and their `:headers`
   then carry no hop-by-hop fields; the runner speaks HTTP/1.1 and reports `connection` /
   `transfer-encoding` as sent (seen on the interpreter against `https://example.com`).
 
 The JVM ran three cases skipped until 2026-09-26 (a NEW plist per await, a repeated field joined
 into one `"a=1, b=2"` pair, a bad URL signalling at the call); `RontoFetch` removed all three.
+
+The component ran five skipped until the same day, and the causes were not where they were filed:
+
+- **A reply body that pauses (`/chunked`) or outruns the head (`/big`) ended early** -- "first-",
+  8076 of 300000 octets. Not the stream read: a read the host reports BLOCKED already parked on
+  the scheduler (`EVENT_STREAM_READ`), and its completion came back `Dropped(0)` because the
+  CONNECTION was gone (seen with
+  `WASMTIME_LOG=wasmtime::runtime::component::concurrent::futures_and_streams=trace`). http.lisp
+  dropped the readable end of the future `request.new` answers for the request's transmission
+  right after `send`; wasmtime 49's wasi-http `send` (`p3/host/handler.rs`) hands the
+  connection's I/O task, as an abort-on-drop handle, to that future's producer, so the drop
+  aborted the connection as soon as the head was in (`want: signal: Closed` in a full trace), and
+  the body kept only what had arrived with the head. **The reader now stays open until the reply
+  body is released** (`%fetch-body-finish`). The two Lisp-driven wasi:http tests,
+  `WasmLispCompilerIntegrationTest.componentImportLetsLispDriveWasiHttpAcrossSeparatelyImportedInterfaces`
+  and `componentImportDropsResourcesSoALispRequestCanCarryABody`, drop it after the body for the
+  same reason.
+- **A rejected future awaited again answered NIL** -- or rather, the program stopped: a region
+  (`handler-case`, `catch`) that caught a signal on a RESUMED frame restored the resume-target
+  local `$rt` to the state the resume had routed through, and everything after the region was
+  skipped as "a later segment" (the top level exited 0). Not fetch-specific:
+  `.kb/wasm-landing-pad-refresh.md`, "`$rt`".
+- **A fetch that could not start answered NIL**: `rontolisp:fetch` wrapped the whole start in a
+  `handler-case` returning nil. Now the method is validated at the call (outside any handler),
+  and `%fetch-run` builds and sends INSIDE its async body, so a request the host refuses to build
+  or a transport failure rejects the future.
+
+One more divergence surfaced with the first: a transfer that fails mid-body (`/cut-short`,
+`Content-Length: 1000` and ten octets) read as a short body on the component alone. wasi:http ends
+such a body exactly like a whole one and puts the `error-code` in the TRAILERS future, which the
+close protocol dropped unread; the fetched reply's release now reads it at the end and signals
+(corpus case `a-body-cut-short-signals-rather-than-reading-short`).
 
 ## The response plist
 
@@ -256,8 +287,13 @@ compile-time arity / literal-`:method` check and control reaches the http.lisp d
   async-lowers (`canon lower ... async`): the start wrapper returns a `(packed . retptr)` token,
   which `rontolisp::%subtask-future` turns into a first-class PENDING `TYPE_FUTURE`. The public
   `send` binding is an async-defun that awaits and unwraps the `result<response, error-code>`
-  envelope, so awaiting SIGNALS the error arm (`rontolisp:wit-error`); `rontolisp:fetch` composes it
-  through the async-defun `%fetch-run` and keeps the nil-on-start-failure contract. Run:
+  envelope, so awaiting SIGNALS the error arm (`rontolisp:wit-error`). `rontolisp:fetch` validates
+  the method (`%fetch-method-variant`, signalling at the call) and hands everything else to the
+  async-defun `%fetch-run`, which builds, sends and awaits the head INSIDE its body: a refused
+  field or URL (a setter's error arm; the request and its ends are released first) and a
+  transport failure reject the future. `%fetch-send` answers `(send-future . transmission)`: the
+  readable end of the request's transmission future stays open until the reply body's release,
+  because wasmtime aborts the connection when it drops ("The cross-backend corpus" above). Run:
   `wasmtime run -S http=y`. Non-fetch components do not import `wasi:http`.
 - **serve (incoming)**: the handler implements
   `handler.handle: async func(request) -> result<response, error-code>` as a CALLBACK async lift
@@ -272,10 +308,22 @@ compile-time arity / literal-`:method` check and control reaches the http.lisp d
 - **Bodies (shared, symmetric)**: request and response are the same 0.3 shape
   (`contents: option<stream<u8>>` + a trailers future), so `%http-body-value` serves both directions:
   it runs `consume-body` (which MOVES its resource) eagerly and wraps the (stream, trailers,
-  transmit-res) protocol into a first-class stream via `rontolisp::%stream-new` -- the read thunk
-  issues one built-in read per call, and the close thunk (run ONCE, at EOF or an early stream-close)
-  drops the readable end + unread trailers and resolves the transmit future ok (an unfinished body
-  traps). `%serve-handle` stream-closes the request body after dispatch; a STREAM response body
+  transmit-res) protocol into a first-class stream via `rontolisp::%stream-new`. The read thunk
+  issues one built-in read per call and answers a chunk that is there as it is; a read that finds
+  the end or is in flight (a PENDING future) goes through the async-defun `%http-body-next`, so the
+  END is found in Lisp, not by the stream runtime (whose attach-and-close-at-EOF machinery http.lisp
+  no longer reaches). The RELEASE runs ONCE, at the end or at an early stream-close: it drops the
+  readable end and the trailers and resolves the transmit future ok (an unfinished body traps), plus
+  the body owner's FINISH -- nil for a served request body; for a fetched reply `%fetch-body-finish`,
+  which at the END reads the trailers future (its error arm is the transfer's failure, signalled at
+  the read that found the end) and then drops the request's transmission future. An early close does
+  not read the trailers: the caller gave the rest up, and a host may well fail it for that.
+  **Trap**: `%http-body-next`'s first parameter is `pending`, not `read` -- the library splices
+  find their triggers by the symbols a program spells, a variable included, and `read` spliced the
+  prelude reader into every fetch component (caught by
+  `RontoLispCliTest.aMalformedFormKeepsItsLineWhenTheProgramAlsoTriggersALibrarySplice`, whose
+  position the unread-char rewrite that came with it lost).
+  `%serve-handle` stream-closes the request body after dispatch; a STREAM response body
   drains inside `%http-serve-request` via `rontolisp::%http-drain`, which lives in http-server.lisp
   (both libraries stay prelude-free). http.lisp accepts the per-call bump-heap growth of an async
   start (the start wrapper must not pop its staging -- args + retptr outlive the call until the lift).

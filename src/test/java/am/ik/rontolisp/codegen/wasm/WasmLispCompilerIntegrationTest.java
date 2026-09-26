@@ -18986,9 +18986,9 @@ class WasmLispCompilerIntegrationTest {
 			String out = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
 			p.waitFor();
 			assertThat(out.trim()).isEqualTo("""
-					timer-fired
-					(drained "first-second")
-					end""");
+					TIMER-FIRED
+					(DRAINED "first-second")
+					END""");
 		}
 		finally {
 			server.stop(0);
@@ -25303,9 +25303,8 @@ class WasmLispCompilerIntegrationTest {
 							    ;; returns an ordinary promise whose await drives the waitable-set.
 							    (let ((promise (client:send req)))
 							      ;; resolve the request-side trailers (ok none) so the host can finish
-							      ;; sending, and drop the transmission-result future unread.
+							      ;; sending.
 							      (http:trailers-future-write (cdr trailers) (cons :ok nil))
-							      (http:transmit-future-drop-readable (car (cdr reqpair)))
 							      (let* ((response (rontolisp:await promise))
 							             (status (http:response-get-status-code response))
 							             (res (http:transmit-future-new))
@@ -25317,6 +25316,9 @@ class WasmLispCompilerIntegrationTest {
 							        (http:body-stream-drop-readable stream)
 							        (http:trailers-future-drop-readable (car (cdr pair)))
 							        (http:transmit-future-write (cdr res) :ok)
+							        ;; the transmission-result future goes unread, but only once the
+							        ;; body is in: wasmtime aborts the connection when its reader drops.
+							        (http:transmit-future-drop-readable (car (cdr reqpair)))
 							        (list :status status :body text)))))
 
 							(let ((r (rontolisp:await (get-url "127.0.0.1:%d" "/hello"))))
@@ -25401,7 +25403,6 @@ class WasmLispCompilerIntegrationTest {
 							        ;; resolve the trailers future, or the body never completes.
 							        (http:body-stream-drop-writable (cdr contents))
 							        (http:trailers-future-write (cdr trailers) (cons :ok nil))
-							        (http:transmit-future-drop-readable (car (cdr reqpair)))
 							        (let* ((response (rontolisp:await promise))
 							               (status (http:response-get-status-code response))
 							               (res (http:transmit-future-new))
@@ -25411,6 +25412,8 @@ class WasmLispCompilerIntegrationTest {
 							          (http:body-stream-drop-readable stream)
 							          (http:trailers-future-drop-readable (car (cdr pair)))
 							          (http:transmit-future-write (cdr res) :ok)
+							          ;; dropped once the reply is in: its reader keeps the connection.
+							          (http:transmit-future-drop-readable (car (cdr reqpair)))
 							          (list :status status :body text))))))
 
 							(let ((r (rontolisp:await (post-url "127.0.0.1:%d" "/echo" "hello from a lisp POST"))))

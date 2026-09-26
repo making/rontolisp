@@ -799,7 +799,7 @@ class WasmLispCompilerTest {
 	@Test
 	void fetchWithLiteralUnsupportedMethodIsCompileError() {
 		// A method outside the supported set is rejected at compile time (only literal
-		// methods are checked; a runtime-computed one is treated as GET).
+		// methods are checked; a runtime-computed one signals at the fetch call).
 		assertThatThrownBy(() -> compileComponent("(rontolisp:fetch \"http://x/\" (list :method \"CONNECT\"))"))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("unsupported method");

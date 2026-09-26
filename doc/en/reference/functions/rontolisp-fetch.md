@@ -134,15 +134,16 @@ request `:body` from an s-expression.
 ## Limitations
 
 - The method must be one of `GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `OPTIONS`,
-  `PATCH`. An unsupported `:method` is an error: the interpreter and JVM reject
-  it at `fetch` time; the WASM backend resolves the method statically and
-  rejects a statically-known unsupported `:method` at compile time (a method
-  computed at runtime cannot be checked there and is treated as GET, while a
-  runtime-computed `:body` is sent normally).
+  `PATCH`. An unsupported `:method` is an error when `fetch` is called, on
+  every backend; on WASM a literal one is already a compile error.
 - A failed request (for example a refused connection) surfaces when the future
   is awaited — the same timing as a JavaScript `await` rejection: every backend
   signals an error there (on WASM it is a `rontolisp:wit-error` condition,
-  catchable with `handler-case`). A request that cannot even be *started* (for
-  example a malformed URL, or an unsupported runtime-computed method on the
-  interpreter/JVM) makes `fetch` itself error or, on WASM, return `nil` instead
-  of a future — and awaiting `nil` yields `nil`.
+  catchable with `handler-case`), and again at every later await of the same
+  future. A URL no request can be built for (for example one with a space in
+  its path) fails the same way: `fetch` returns a future, and awaiting it
+  signals.
+- A reply whose transfer fails part-way (the connection closes before the
+  body it announced has arrived) signals an error instead of reading as a
+  shorter body: when its `:body` is drained, or, on the JVM, whose client takes
+  the whole reply before answering, when the future is awaited.

@@ -48,15 +48,15 @@ the server closes:
 - **Interpreter** and **JVM**: use the JDK `java.net.Socket`; `host` may be a
   hostname or an IP literal. A failed connection (for example a refused port)
   signals an error.
-- **WASM**: component-only, over `wasi:sockets@0.3.0` (natively WASI 0.3 —
-  unlike `rontolisp:fetch`, no 0.2 hybrid is needed). `host` must be an
+- **WASM**: component-only, over `wasi:sockets@0.3.0` (natively WASI 0.3, no
+  0.2 hybrid). `host` must be an
   **IPv4 literal** such as `"127.0.0.1"` (hostname resolution via
   `wasi:sockets/ip-name-lookup` is not wired yet). Compile with `--component`
   and run with `wasmtime run -S tcp=y
   -S inherit-network=y` (wasmtime 46+). A
-  failed connection returns `nil` instead of a handle (the same nil-on-failure
-  convention as `rontolisp:fetch`); without the `-S` flags the component still
-  starts, but every socket operation fails and yields `nil`. The tcp built-ins
+  failed connection returns `nil` instead of a handle; without the `-S` flags
+  the component still starts, but every socket operation fails and yields
+  `nil`. The tcp built-ins
   compile in Preview 1 (core-module) mode but every call raises a call-time
   error naming the backends that work.
 - **Browser playground**: not supported — the browser sandbox provides no raw
