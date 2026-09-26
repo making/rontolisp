@@ -317,7 +317,8 @@ unguarded shipped caller, `format-render-slash.lisp`'s `~/pkg:fn/` resolver, now
   non-runtime site, 156 B per runtime site. The first site of a small program pays the
   helper's `string-upcase` (the package-error's keyword) and `intern`: `(find-symbol "CAR"
   *p*)` alone is 36.8 KB of class (13.4 KB when it answered nil unguarded), the same as a
-  computed `intern` already cost after `.todo/996`.
+  computed `intern` already cost after `.todo/996`. The guard's `find-package` is itself one
+  call to `%find-package` now (`.kb/packages.md`, after "Divergence").
 
 Tests: the *Fmakunbound* / *FindPackage* / *FindSymbol* groups in the three backend tests
 (`findSymbolInAMissingPackage*` for the signal), the `runtime-package-symbol-ops` and

@@ -894,7 +894,7 @@ final class JvmExprCompiler {
 			// table plus the runtime table).
 			case LispNames.FIND_PACKAGE ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeFindPackage(cons.toList().get(1),
-						ctx.packageTable, ctx.usesRuntimePackages), ctx, className);
+						ctx.packageTable, ctx.usesRuntimePackages, ctx.functions::containsKey), ctx, className);
 			case LispNames.CONCATENATE -> {
 				JvmExprCompiler.compileExpr(ConcatenateForms.expand(cons, ctx.usesSeqString, ctx.closRegistry), ctx,
 						className);

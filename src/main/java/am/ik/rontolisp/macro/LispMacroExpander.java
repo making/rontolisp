@@ -13961,6 +13961,69 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandRuntimeFindPackage(LispVal designatorForm, java.util.Map<String, String> table,
 			boolean runtimeMutation) {
+		return inlineRuntimeFindPackage(designatorForm, table, runtimeMutation);
+	}
+
+	/**
+	 * As {@link #expandRuntimeFindPackage(LispVal, java.util.Map, boolean)}, but one call
+	 * to the {@code %find-package} helper when the program carries it
+	 * ({@link #injectFindPackageHelper}): the helper's body is the inline lookup, so the
+	 * baked table is built once per program rather than at every site (~2.5 KB of JVM
+	 * code and ~1.6 KB of WASM per site, measured 2026-09-26). A program without the
+	 * helper keeps the inline form.
+	 * @param designatorForm the (unevaluated) package designator expression
+	 * @param table the designator-to-package-name table
+	 * @param runtimeMutation whether the program can create packages at run time
+	 * @param definedFunction whether the program defines the named function
+	 * @return the equivalent lookup expression
+	 */
+	public static LispVal expandRuntimeFindPackage(LispVal designatorForm, java.util.Map<String, String> table,
+			boolean runtimeMutation, java.util.function.Predicate<String> definedFunction) {
+		if (definedFunction.test(LispNames.FIND_PACKAGE_INTERNAL)) {
+			return listToCons(List.of(new LispSymbol(LispNames.FIND_PACKAGE_INTERNAL), designatorForm));
+		}
+		return inlineRuntimeFindPackage(designatorForm, table, runtimeMutation);
+	}
+
+	/**
+	 * Prepends {@code (defun %find-package (d) <inline lookup over d>)} when the program
+	 * may lower a computed {@code find-package}: a {@code find-package} call survived
+	 * package resolution (a literal one is folded unless the program can create packages;
+	 * the {@code %symbol-in-package} guard is one), or a {@code package-use-list} /
+	 * {@code package-used-by-list} whose computed lowering calls it. Runs after package
+	 * resolution, from the resolver's final table, like {@link #injectBakedPackageTable}.
+	 * A site synthesized by a lowering the scan cannot see still compiles -- inline --
+	 * because the call sites consult the function table, not this scan.
+	 * @param program the resolved top-level forms
+	 * @param table the designator-to-package-name table
+	 * @param runtimeMutation whether the program can create packages at run time
+	 * @return the program with the helper prepended, or unchanged
+	 */
+	public static List<LispVal> injectFindPackageHelper(List<LispVal> program, java.util.Map<String, String> table,
+			boolean runtimeMutation) {
+		boolean needed = false;
+		for (LispVal form : program) {
+			if (usesSymbol(form, LispNames.FIND_PACKAGE) || usesSymbol(form, LispNames.PACKAGE_USE_LIST)
+					|| usesSymbol(form, LispNames.PACKAGE_USED_BY_LIST)) {
+				needed = true;
+				break;
+			}
+		}
+		if (!needed) {
+			return program;
+		}
+		LispSymbol designatorVar = new LispSymbol("%FP-D");
+		LispVal defun = listToCons(List.of(new LispSymbol(LispNames.DEFUN),
+				new LispSymbol(LispNames.FIND_PACKAGE_INTERNAL), listToCons(List.of(designatorVar)),
+				inlineRuntimeFindPackage(designatorVar, table, runtimeMutation)));
+		List<LispVal> out = new java.util.ArrayList<>(program.size() + 1);
+		out.add(defun);
+		out.addAll(program);
+		return out;
+	}
+
+	private static LispVal inlineRuntimeFindPackage(LispVal designatorForm, java.util.Map<String, String> table,
+			boolean runtimeMutation) {
 		List<LispVal> entries = new java.util.ArrayList<>(table.size());
 		table.forEach((designator, canonical) -> entries
 			.add(new LispCons(new LispString(designator), new LispSymbol(":" + canonical))));
@@ -14570,15 +14633,15 @@ public final class LispMacroExpander {
 	 * ({@code memberHelper}: find or intern).
 	 * <p>
 	 * The guarded build is the same for both operators and costs a computed
-	 * {@code find-package} (the baked table, a quoted constant built at each site) plus
-	 * the package-error construction -- ~3 KB of JVM code per site, measured 2026-09-26.
-	 * So where the program carries the {@code %symbol-in-package} prelude defun
-	 * ({@link #callsWithComputedPackageDesignator} selects it) a site is one call to it;
-	 * a site the selection could not see (a lowering that synthesizes one) keeps the
-	 * inline form. The inline form's two binding names are fixed rather than generated:
-	 * {@code let} evaluates its inits in the enclosing scope, so a nested expansion in an
-	 * argument position cannot capture them, and fixed names keep the emitted output
-	 * deterministic.
+	 * {@code find-package} plus the package-error construction -- ~3 KB of JVM code per
+	 * site inline, measured 2026-09-26 while the find-package still built its table at
+	 * each site. So where the program carries the {@code %symbol-in-package} prelude
+	 * defun ({@link #callsWithComputedPackageDesignator} selects it) a site is one call
+	 * to it; a site the selection could not see (a lowering that synthesizes one) keeps
+	 * the inline form. The inline form's two binding names are fixed rather than
+	 * generated: {@code let} evaluates its inits in the enclosing scope, so a nested
+	 * expansion in an argument position cannot capture them, and fixed names keep the
+	 * emitted output deterministic.
 	 */
 	private static LispVal computedPackageLookup(LispVal name, LispVal packageForm, boolean runtimeMutation,
 			String memberHelper, java.util.function.Predicate<String> definedFunction) {
