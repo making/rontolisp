@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispVal;
@@ -40,6 +41,17 @@ final class JvmGensymCompiler {
 		MethodrefConstant intToString = ctx.cp.addMethodref(ctx.integerClass,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("toString"), ctx.cp.addUtf8("(I)Ljava/lang/String;")));
 		MethodrefConstant concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		if (args.size() == 2 && args.get(1) instanceof LispInteger n) {
+			// CL's other gensym shape: a non-negative integer IS the suffix (under the
+			// default "G" prefix), and it never touches the counter -- a compile-time
+			// constant, like the literal-string branch below (todo a42).
+			if (n.value() < 0) {
+				throw new UnsupportedOperationException(
+						LispNames.GENSYM + " suffix must be a non-negative integer: " + cons.print());
+			}
+			JvmEmitHelper.compileStringLiteral("#:G" + n.value(), ctx);
+			return;
+		}
 		if (args.size() == 2 && !(args.get(1) instanceof LispString)) {
 			// A computed prefix: the shared string-construction lowering (the interned
 			// prefix text below is a compile-time constant, so it has no place here).

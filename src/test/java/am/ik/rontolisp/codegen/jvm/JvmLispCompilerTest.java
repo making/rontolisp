@@ -4,6 +4,7 @@ import am.ik.rontolisp.CharacterFilePositionFixture;
 import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
+import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.runtime.RontoHttpServer;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -3302,6 +3303,16 @@ class JvmLispCompilerTest {
 		// (alexandria's format-symbol passes one).
 		assertThat(compileAndRun("(setq p \"tmp\") (print (gensym p)) (print (gensym p))"))
 			.isEqualTo("#:|tmp1|\n#:|tmp2|");
+	}
+
+	@Test
+	void compileGensymAcceptsANonNegativeIntegerSuffix() throws Exception {
+		// The JVM twin of LispEvaluatorTest#gensymAcceptsANonNegativeIntegerSuffix: a
+		// literal integer argument used to lower through the computed-prefix path
+		// unchecked, e.g. (gensym 5) printed "#:51" (todo a42).
+		assertThat(
+				compileAndRun("(print (list (symbol-name (gensym)) (symbol-name (gensym 42)) (symbol-name (gensym))))"))
+			.isEqualTo("(\"G1\" \"G42\" \"G2\")");
 	}
 
 	@Test
@@ -8455,6 +8466,13 @@ class JvmLispCompilerTest {
 	void compileAndRunSubseq() throws Exception {
 		assertThat(compileAndRun("(princ (subseq \"hello world\" 6))")).isEqualTo("world");
 		assertThat(compileAndRun("(princ (subseq \"hello world\" 0 5))")).isEqualTo("hello");
+	}
+
+	@Test
+	void compileAndRunSubseqSignalsInvalidBounds() throws Exception {
+		// The JVM twin of LispEvaluatorTest#subseqSignalsInvalidBoundsOnEveryBackend: a
+		// raw StringIndexOutOfBoundsException used to escape instead (todo a42).
+		assertThat(compileAndRun(SubseqBoundsFixture.PROGRAM)).isEqualTo(SubseqBoundsFixture.EXPECTED);
 	}
 
 	@Test

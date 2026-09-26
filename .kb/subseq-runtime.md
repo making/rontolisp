@@ -71,6 +71,52 @@ through to a general vector on the two compilers until 2026-09-06 (`.todo/719`),
   Appended, so existing `FUNC_*`/`TYPE_*` values are unchanged.
 - If these become hot, add a fast path at the SITE, not a return to inlining the walk.
 
+## Bounds check -- the STRING lane only (todo a42)
+**Invariant: `0 <= start <= end <= (length seq)` for the string lane, checked before any
+byte/element copy, on every backend, with the SAME text.** Before a42 only the
+interpreter (`Environment`'s `SUBSEQ` arm) checked this and raised
+`"SUBSEQ: invalid bounds S, E for string of length N"`; the JVM's `_subseqCv` (the
+`scStr`/immutable-string arm `JvmArrayRuntimeBuilder` builds) let a bad range fall
+straight into `String#substring`, surfacing a raw `StringIndexOutOfBoundsException`
+instead, and wasm's `_subseq` (`WasmStringRuntimeBuilder.buildSubseqBody`'s STRING branch)
+had no check at all -- an unsigned loop bound (`I32_GE_U`) meant `start > end` silently
+answered `""` and an over-large `end` walked past the content into whatever bytes
+followed.
+- JVM: `_subseqCv`'s `scStr` arm calls `_scount(s)` (`JvmStringIndexRuntimeBuilder`, always
+  emitted) for the character length, resolves the omitted-`end` sentinel, and on a
+  violation builds `new RuntimeException(...)` from chained `String.valueOf(int)` +
+  `concat` (the `_oob`/`emitRankCheckAndReturn` idiom, `.kb/error-handling.md`) --
+  a plain, condition-less `RuntimeException` is exactly what the interpreter's
+  condition-less `LispEvalException` synthesizes too: both land as `simple-error` under
+  `handler-case`.
+- wasm: `_subseq`'s STRING branch calls `FUNC_SEQ_LEN` (the shared `length` dispatch,
+  `.kb/length-runtime.md`) for the character length, before translating the character
+  indices to byte offsets. In EH mode a violation boxes each of `start`/`end`/`len` as an
+  i31 and renders it through `FUNC_PRIN1_TO_STR` (the `WasmOperandTypes.pushBound` trick,
+  no itoa duplicated), concatenates around three literal pieces interned as
+  `WasmLispCompiler.StringTable.StringEntry`s, and throws `(nil . message)` on
+  `$lisp-cond` like `WasmErrorCompiler.emitThrowPayload`. Outside EH mode: a bare
+  `unreachable`, like every other unchecked failure that backend takes when no tag exists
+  to throw on.
+- **The three literal pieces MUST be interned before `WasmLispCompiler.compile` calls
+  `stringTable.toByteArray()`** (same requirement as `WasmOperandTypes.Texts`, both
+  interned right next to each other) -- interning them lazily inside
+  `buildSubseqBody` (called later, in the `.addFunction(...)` chain that assembles the
+  fixed runtime bodies) records the right offset/length bookkeeping but the bytes
+  never make it into the data segment: the printed message comes back with the right
+  SHAPE (numbers in the right positions) and blank ASCII spaces where the literal text
+  should be -- the heap starts right where those bytes should have lived and overwrites
+  them. Caught by actually running the compiled test, not by reading the bytecode.
+- The list lane is UNCHECKED on both compilers still -- an over-large `end` silently
+  truncates, matching pre-a42 behavior; not part of this fix (the interpreter's own list
+  arm is unaffected, since it was already correct). The `--no-gc` scalar wasm backend
+  (`NoGcWasmCompiler`, a fourth variant outside `CiSpecE2eTest`'s four) is untouched too --
+  `.kb/no-gc-scalar-wasm.md` already names its `subseq` as unchecked, and that measurement
+  stands.
+- Pins: `SubseqBoundsFixture` (`LispEvaluatorTest#subseqSignalsInvalidBoundsOnEveryBackend`,
+  `JvmLispCompilerTest#compileAndRunSubseqSignalsInvalidBounds`,
+  `WasmLispCompilerIntegrationTest#subseqSignalsInvalidBounds`).
+
 ## Tests
 - `LispMacroExpanderTest.aSubseqSiteIsOneCallWhenTheProgramCarriesTheSharedDispatch`,
   `.theSharedSubseqDispatchAnswersTheSameThingAsTheInlinedOne` (the helper must not call `subseq`
