@@ -35,7 +35,8 @@
   `implements Runnable`; `_async_run` spawns
   `Thread.ofVirtual()`. **An error cannot ride the `_condTl` ThreadLocal across threads**: `run()`
   completes NORMALLY with `{EMARKER, throwable, condition}` (the thunk having appended a
-  `rontolisp/async.crossed` frame to its trace when the class carries location lines,
+  `rontolisp/async.crossed` frame to its trace when the class carries location lines, and the
+  payload then carrying that trace as a fourth element for each await to put back,
   [error-handling.md](error-handling.md)) and `_await` re-sets `_condTl` on the
   awaiting thread before rethrowing -- that is what makes handler-case dispatch across the await.
 - **Preview-1 wasm-GC**: degenerate synchronous. `WasmAsyncRunCompiler` wraps the value in a settled

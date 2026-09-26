@@ -39,10 +39,23 @@ import org.jspecify.annotations.Nullable;
  * by {@code await} on another, so the frames after the boundary are the AWAITER's and
  * must not be attributed to the async function. The first located form after it is the
  * {@code await} site.
+ *
+ * <p>
+ * <b>The await that re-signalled it.</b> A failed future holds ONE condition, which every
+ * {@code await} of it rethrows. An await therefore rewinds the trace to what its future
+ * stored ({@link #reawaited}) before its own frames note anything: an earlier await's
+ * site, and every hop recorded past it, belongs to a signal a handler already caught.
  */
 final class ConditionTrace {
 
-	private record Hop(@Nullable String function, @Nullable LocatedCons awaitedAt) {
+	/**
+	 * One async boundary.
+	 *
+	 * @param function the async function's name, or {@code null}
+	 * @param awaitedAt the await site, or {@code null} until an await's frame notes one
+	 * @param stored what the boundary's future settles through, compared by identity
+	 */
+	private record Hop(@Nullable String function, @Nullable LocatedCons awaitedAt, Object stored) {
 	}
 
 	private @Nullable LocatedCons location;
@@ -67,7 +80,7 @@ final class ConditionTrace {
 			int last = crossed.size() - 1;
 			Hop hop = crossed.get(last);
 			if (hop.awaitedAt() == null) {
-				crossed.set(last, new Hop(hop.function(), located));
+				crossed.set(last, new Hop(hop.function(), located, hop.stored()));
 			}
 			return;
 		}
@@ -81,14 +94,38 @@ final class ConditionTrace {
 	 * Notes that the condition escaped an async body and is about to be stored for an
 	 * {@code await} on another thread.
 	 * @param asyncFunction the async function's name, or {@code null} for an async lambda
+	 * @param stored what the future that stores the condition settles through, which
+	 * {@link #reawaited} is handed back
 	 */
-	synchronized void crossedAsync(@Nullable String asyncFunction) {
+	synchronized void crossedAsync(@Nullable String asyncFunction, Object stored) {
 		List<Hop> crossed = this.hops;
 		if (crossed == null) {
 			crossed = new ArrayList<>(1);
 			this.hops = crossed;
 		}
-		crossed.add(new Hop(asyncFunction, null));
+		crossed.add(new Hop(asyncFunction, null, stored));
+	}
+
+	/**
+	 * Notes that an {@code await} is re-signalling the condition a future stored: the
+	 * trace goes back to where that future's boundary left it, so the hop's await site is
+	 * this await's, not that of an earlier one whose signal was handled.
+	 * @param stored what the future settles through, as {@link #crossedAsync} was handed
+	 * it; a future whose boundary this trace never crossed changes nothing
+	 */
+	synchronized void reawaited(Object stored) {
+		List<Hop> crossed = this.hops;
+		if (crossed == null) {
+			return;
+		}
+		for (int i = crossed.size() - 1; i >= 0; i--) {
+			Hop hop = crossed.get(i);
+			if (hop.stored() == stored) {
+				crossed.subList(i + 1, crossed.size()).clear();
+				crossed.set(i, new Hop(hop.function(), null, stored));
+				return;
+			}
+		}
 	}
 
 	/**
