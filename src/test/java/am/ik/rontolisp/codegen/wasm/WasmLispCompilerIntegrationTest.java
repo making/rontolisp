@@ -17743,6 +17743,56 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void componentBodyGoesOnPastARegionThatCaughtAfterASuspension() throws Exception {
+		// A region (handler-case, catch) whose protected await SUSPENDED lands on the
+		// RESUMED frame -- and the body must go on past it. The landing pad used to
+		// restore the resume-target local ($rt) to the state the resume had routed
+		// through, so every statement after the region read as "a later segment" and
+		// was skipped: the rest of an async body, and at the top level the rest of the
+		// program, silently never ran (the process exited 0 after the first catch).
+		assertThat(compileAndRunComponent("""
+				(defvar *f* (rontolisp::%future-new))
+				(rontolisp:async-defun task ()
+				  (let ((first (handler-case (rontolisp:await *f*) (error (e) :caught))))
+				    (print first)
+				    (print :after-the-handler)
+				    (print (handler-case (rontolisp:await *f*) (error (e) :caught-again)))
+				    :done))
+				(defvar *tf* (task))
+				(print 20)
+				(rontolisp::%future-reject *f* "boom")
+				(print (rontolisp:await *tf*))
+				(defvar *h* (rontolisp::%future-new))
+				(rontolisp:async-defun task2 ()
+				  (print (catch 'out (rontolisp:await *h*) (throw 'out :thrown)))
+				  (print :after-the-catch)
+				  :done2)
+				(defvar *tf2* (task2))
+				(rontolisp::%future-settle *h* 1)
+				(print (rontolisp:await *tf2*))
+				(defvar *g* (rontolisp::%future-new))
+				(rontolisp:async-defun reject-later ()
+				  (rontolisp:await (rontolisp:wait-for 1))
+				  (rontolisp::%future-reject *g* "late"))
+				(reject-later)
+				(print (handler-case (rontolisp:await *g*) (error (e) :top-level-caught)))
+				(print :the-top-level-goes-on)
+				(print (handler-case (rontolisp:await *g*) (error (e) :caught-again-at-top-level)))
+				""")).isEqualTo("""
+				20
+				:CAUGHT
+				:AFTER-THE-HANDLER
+				:CAUGHT-AGAIN
+				:DONE
+				:THROWN
+				:AFTER-THE-CATCH
+				:DONE2
+				:TOP-LEVEL-CAUGHT
+				:THE-TOP-LEVEL-GOES-ON
+				:CAUGHT-AGAIN-AT-TOP-LEVEL""");
+	}
+
+	@Test
 	void componentUnwindProtectSkipsAndReArmsCleanupAcrossSuspension() throws Exception {
 		// A suspension is a plain return out of the protected region -- the cleanup
 		// does NOT run at the suspend (the task is not exiting) and re-arms on
