@@ -6311,31 +6311,50 @@ public final class LispMacroExpander {
 	 * @return the lowered form
 	 */
 	public static LispVal lowerFileError(LispCons cons, ClosRegistry closRegistry, boolean typed) {
+		return lowerDesignatorError(cons, closRegistry, typed, ClosRegistry.FILE_ERROR_CLASS_NAME, "PATHNAME");
+	}
+
+	/**
+	 * Lowers {@code (%package-error package message)} for a compiled backend: the
+	 * {@link #lowerFileError} split, with the designator in the {@code package} slot.
+	 * @param cons the {@code %package-error} form
+	 * @param closRegistry the class registry (for the seeded slot layout)
+	 * @param typed whether the signal may carry an instance
+	 * @return the lowered form
+	 */
+	public static LispVal lowerPackageError(LispCons cons, ClosRegistry closRegistry, boolean typed) {
+		return lowerDesignatorError(cons, closRegistry, typed, ClosRegistry.PACKAGE_ERROR_CLASS_NAME, "PACKAGE");
+	}
+
+	/**
+	 * The shared {@code (%<class> designator message)} lowering of
+	 * {@link #lowerFileError} / {@link #lowerPackageError}: {@code designatorSlot} holds
+	 * the designator, {@code format-control} the message's text control.
+	 */
+	private static LispVal lowerDesignatorError(LispCons cons, ClosRegistry closRegistry, boolean typed,
+			String className, String designatorSlot) {
 		List<LispVal> parts = cons.toList();
-		LispVal pathname = parts.size() > 1 ? parts.get(1) : LispNil.INSTANCE;
+		LispVal designator = parts.size() > 1 ? parts.get(1) : LispNil.INSTANCE;
 		LispVal message = parts.size() > 2 ? parts.get(2) : LispNil.INSTANCE;
-		LispSymbol pathVar = new LispSymbol("__fe_path");
+		LispSymbol designatorVar = new LispSymbol("__fe_path");
 		LispSymbol messageVar = new LispSymbol("__fe_msg");
 		LispVal signal;
 		if (!typed) {
 			signal = callOf(LispNames.ERROR_INTERNAL, messageVar);
 		}
 		else {
-			ClosRegistry.ClassInfo info = java.util.Objects
-				.requireNonNull(closRegistry.findClass(ClosRegistry.FILE_ERROR_CLASS_NAME));
+			ClosRegistry.ClassInfo info = java.util.Objects.requireNonNull(closRegistry.findClass(className));
 			List<LispVal> slots = new ArrayList<>();
 			for (ClosRegistry.SlotSpec slot : info.slots()) {
-				slots.add(switch (slot.baseName()) {
-					case "PATHNAME" -> pathVar;
-					case "FORMAT-CONTROL" -> textControlForm(messageVar);
-					default -> LispNil.INSTANCE;
-				});
+				String base = slot.baseName();
+				slots.add(designatorSlot.equals(base) ? designatorVar
+						: "FORMAT-CONTROL".equals(base) ? textControlForm(messageVar) : LispNil.INSTANCE);
 			}
 			signal = listToCons(List.of(new LispSymbol(LispNames.ERROR_COND_INTERNAL),
 					objNew(LispLayout.CLASS_TAG_PREFIX + info.name(), slots), messageVar));
 		}
-		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
-				listToCons(List.of(listToCons(List.of(pathVar, pathname)), listToCons(List.of(messageVar, message)))),
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(
+				List.of(listToCons(List.of(designatorVar, designator)), listToCons(List.of(messageVar, message)))),
 				signal));
 	}
 
@@ -14557,19 +14576,38 @@ public final class LispMacroExpander {
 	 * The runtime form of {@code (intern NAME PKG)} for a COMPUTED package designator
 	 * (clack's handler protocol passes the {@code find-handler} package value through
 	 * {@code (apply (intern (string '#:run) handler-package) ...)}): the same
-	 * qualified-spelling build as {@link #computedPackageFindSymbol}, except that a nil
-	 * designator SIGNALS -- intern's contract has no "package does not exist -> nil"
-	 * escape ({@code PackageResolver.internSpellingIn} throws on the interpreter).
+	 * qualified-spelling build as {@link #computedPackageFindSymbol}, guarded on the
+	 * package existing -- intern's contract has no "package does not exist -> nil"
+	 * escape, and building the spelling unguarded would CREATE the package.
 	 */
 	private static LispVal computedPackageIntern(LispVal name, LispVal packageForm) {
 		LispSymbol pkgVar = new LispSymbol(FIND_SYMBOL_PKG_VAR);
 		LispVal interned = listToCons(List.of(new LispSymbol(LispNames.INTERN),
 				computedQualifiedSpelling(pkgVar, new LispSymbol(FIND_SYMBOL_NAME_VAR))));
-		LispVal guarded = listToCons(
-				List.of(new LispSymbol(LispNames.IF), listToCons(List.of(new LispSymbol(LispNames.NULL), pkgVar)),
-						listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString("No such package: NIL"))),
-						interned));
-		return bindFindSymbolTemps(name, packageForm, guarded);
+		return bindFindSymbolTemps(name, packageForm,
+				makeIf(listToCons(List.of(new LispSymbol(LispNames.FIND_PACKAGE), pkgVar)), interned,
+						computedNoSuchPackage(pkgVar)));
+	}
+
+	/**
+	 * The {@code package-error} a literal designator naming no package signals: the
+	 * interpreter's {@code signalPackageError} (the upcased keyword in the
+	 * {@code package} slot, the text as the report).
+	 */
+	private static LispVal literalNoSuchPackage(String pkg) {
+		return listToCons(List.of(new LispSymbol(LispNames.PACKAGE_ERROR_INTERNAL),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE),
+						new LispSymbol(":" + pkg.toUpperCase(java.util.Locale.ROOT)))),
+				new LispString("No such package: " + pkg)));
+	}
+
+	/** {@link #literalNoSuchPackage} for the designator held by {@code pkgVar}. */
+	private static LispVal computedNoSuchPackage(LispSymbol pkgVar) {
+		LispVal pkgString = listToCons(List.of(new LispSymbol(LispNames.STRING), pkgVar));
+		return listToCons(List.of(new LispSymbol(LispNames.PACKAGE_ERROR_INTERNAL),
+				internKeywordForm(listToCons(List.of(new LispSymbol(LispNames.STRING_UPCASE), pkgString))),
+				listToCons(List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"),
+						new LispString("No such package: "), pkgString))));
 	}
 
 	/**
@@ -14653,17 +14691,16 @@ public final class LispMacroExpander {
 			}
 			// Both arguments bound once; a runtime package interns into its member
 			// table, a read/compile-time one builds the spelling, a designator naming
-			// nothing signals.
+			// nothing (nil included: no package is named NIL unless the program made
+			// one) signals.
 			LispSymbol pkgVar = new LispSymbol(FIND_SYMBOL_PKG_VAR);
 			LispSymbol nameVar = new LispSymbol(FIND_SYMBOL_NAME_VAR);
 			LispVal built = makeIf(listToCons(List.of(new LispSymbol(LispNames.FIND_PACKAGE), pkgVar)),
 					listToCons(List.of(new LispSymbol(LispNames.INTERN), computedQualifiedSpelling(pkgVar, nameVar))),
-					listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString("No such package: computed"))));
-			LispVal guarded = makeIf(listToCons(List.of(new LispSymbol(LispNames.NULL), pkgVar)),
-					listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString("No such package: NIL"))),
+					computedNoSuchPackage(pkgVar));
+			return bindFindSymbolTemps(name, parts.get(2),
 					runtimeMemberLookup(listToCons(List.of(new LispSymbol(LispNames.STRING), pkgVar)),
 							LispNames.RUNTIME_MEMBER_INTERN_INTERNAL, nameVar, built));
-			return bindFindSymbolTemps(name, parts.get(2), guarded);
 		}
 		if (!packageTable.isEmpty() && !packageTable.containsKey(pkg)
 				&& !packageTable.containsKey(pkg.toUpperCase(java.util.Locale.ROOT))) {
@@ -14671,7 +14708,7 @@ public final class LispMacroExpander {
 			// table means the caller has none -- treat the package as known.) When the
 			// program can create packages, a runtime package of that name interns
 			// into its member table instead.
-			LispVal signal = listToCons(List.of(new LispSymbol(LispNames.ERROR), textDatum("No such package: " + pkg)));
+			LispVal signal = literalNoSuchPackage(pkg);
 			if (!runtimeMutation) {
 				return signal;
 			}
@@ -30754,6 +30791,11 @@ public final class LispMacroExpander {
 			if (scan.fileErrorSite) {
 				scan.tags.add(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.FILE_ERROR_CLASS_NAME);
 			}
+			// And the package-error of an intern into a missing package
+			// (expandInternInPackage, lowered with the call).
+			if (scan.packageErrorSite) {
+				scan.tags.add(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.PACKAGE_ERROR_CLASS_NAME);
+			}
 		}
 		// A signalling read builds its end-of-file during the expression expansion
 		// (expandReadEofSignal), pad or no pad; without the tag a caught one printed as
@@ -30773,6 +30815,14 @@ public final class LispMacroExpander {
 	 */
 	public static final java.util.Set<String> FILE_ERROR_SITES = java.util.Set.of(LispNames.OPEN,
 			LispNames.WITH_OPEN_FILE, LispNames.FILE_ERROR_INTERNAL);
+
+	/**
+	 * The operators whose compiled form can construct a {@code package-error} instance in
+	 * a lowering that runs after the whole-program scans ({@link #lowerPackageError},
+	 * behind a handler landing pad): the {@link #FILE_ERROR_SITES} situation.
+	 */
+	public static final java.util.Set<String> PACKAGE_ERROR_SITES = java.util.Set.of(LispNames.INTERN,
+			LispNames.PACKAGE_ERROR_INTERNAL);
 
 	/**
 	 * The read operators whose compiled form can construct an {@code end-of-file}
@@ -30850,7 +30900,17 @@ public final class LispMacroExpander {
 		 */
 		boolean endOfFileSite;
 
+		/**
+		 * Whether an {@code intern} occurs, whose package-designator form is lowered with
+		 * the call -- after this scan -- to a {@code package-error} construction when the
+		 * package does not exist ({@link #PACKAGE_ERROR_SITES}).
+		 */
+		boolean packageErrorSite;
+
 		private void noteSite(String member) {
+			if (PACKAGE_ERROR_SITES.contains(member)) {
+				this.packageErrorSite = true;
+			}
 			if (FILE_ERROR_SITES.contains(member)) {
 				this.fileErrorSite = true;
 			}

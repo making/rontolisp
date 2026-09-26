@@ -16370,6 +16370,21 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void internIntoAMissingPackageSignalsACatchablePackageError() {
+		// CLHS: a package designator must name a package. A literal and a computed
+		// designator alike signal a package-error a handler catches, carrying the
+		// designator, and create nothing.
+		assertThat(evalMulti("""
+				(defun ipe-in (p) (intern "X" p))
+				(list (handler-case (intern "X" "IPE-NOPKG") (error () :caught))
+				      (handler-case (ipe-in "IPE-NOPKG")
+				        (package-error (e) (list (package-error-package e) (princ-to-string e))))
+				      (handler-case (ipe-in nil) (package-error () :caught))
+				      (find-package "IPE-NOPKG"))
+				""").print()).isEqualTo("(:CAUGHT (:IPE-NOPKG \"No such package: IPE-NOPKG\") :CAUGHT NIL)");
+	}
+
+	@Test
 	void internHomesTheNameInTheDesignatedPackage() {
 		// A package designator interns into THAT package (alexandria's ensure-symbol):
 		// a cl-user name stays bare, a keyword designator builds a keyword, and an

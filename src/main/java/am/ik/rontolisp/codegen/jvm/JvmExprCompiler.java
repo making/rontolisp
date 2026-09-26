@@ -989,6 +989,8 @@ final class JvmExprCompiler {
 			case LispNames.FILE_ERROR_INTERNAL -> JvmExprCompiler.compileExpr(
 					LispMacroExpander.lowerFileError(cons, ctx.closRegistry, ctx.hasLandingPad && ctx.mayUseInstances),
 					ctx, className);
+			case LispNames.PACKAGE_ERROR_INTERNAL -> JvmExprCompiler.compileExpr(LispMacroExpander
+				.lowerPackageError(cons, ctx.closRegistry, ctx.hasLandingPad && ctx.mayUseInstances), ctx, className);
 			case LispNames.CLOSE -> {
 				// Closing a SYNONYM stream closes the synonym, not what it forwards
 				// to -- which is nothing to do; an OPEN stream resolves to its

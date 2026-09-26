@@ -103,7 +103,9 @@ since `.todo/917` a package keeps a MEMBER table of what `intern` / `export` / `
   `Environment` converter and the compiled backends' 1-arg intern stay package-blind) and
   RECORDS a fresh name in the package's member table (`recordInterned`). `(intern name
   :keyword)` builds a keyword; any other package argument goes through
-  `PackageResolver.internSpellingIn`, which throws `No such package: X` on every backend.
+  `PackageResolver.internSpellingIn`. A designator naming no package is a catchable
+  `package-error` on every backend (the interpreter's `intern` checks before the resolver,
+  whose `LispPackageException` no handler sees).
 - `t` and `nil` are singletons, not `LispSymbol`s: everything that answers a symbol by NAME
   (`find-symbol`, `intern`, the enumerations) maps the spellings `"T"`/`"NIL"` back to them,
   on EVERY backend. Interpreter: `LispEvaluator.symbolOfSpelling`, plus
@@ -330,11 +332,16 @@ symbol-to-function route (the interpreter resolves designators against the live 
   `keyword` keeps the byte-identical keyword lowering; a literal `cl`/`cl-user` drops the
   qualifier; any other literal known package builds `(intern (concatenate "PKG:" name))`; a
   computed designator runs the same three-way `cond` as `computedPackageFindSymbol` (shared
-  `computedQualifiedSpelling`). **Intern's two contract differences from find-symbol**: an
-  unknown LITERAL package is a call-time `(error "No such package: X")` stub, not a nil fold,
-  and a nil COMPUTED designator signals the same way. That interpreter error
-  (`LispPackageException`) is NOT handler-case-catchable on any backend, so it is pinned
-  per-backend, not in ci-spec.
+  `computedQualifiedSpelling`). **Intern's contract difference from find-symbol**: a
+  designator naming no package SIGNALS instead of folding to nil -- a LITERAL one as a
+  call-time `(%package-error ':X "No such package: X")` stub, a COMPUTED one (nil included)
+  behind a `(find-package p)` guard, since building the spelling unguarded CREATES the
+  package (`.todo/996`: `(f "NOPKG")` answered `NOPKG:X`). `%package-error` lowers like
+  `%file-error` (`lowerPackageError`): a typed `package-error` behind a landing pad, the plain
+  `%error` channel otherwise. It is built during body compilation, after the condition
+  scans, so `PACKAGE_ERROR_SITES` (`intern`) stands in for the tag in `conditionNarrowing`
+  and wasm's `usedLayoutTags`. Pinned in ci-spec (`intern-into-a-missing-package`) and
+  `{LispEvaluatorTest,JvmLispCompilerTest,WasmLispCompilerIntegrationTest}#internIntoAMissingPackage*`.
 - **Alias rows for internal names in the `_lookup` registries**
   (`JvmEvalRuntimeBuilder.lookupSegments`, the registry-blob loop in `WasmLispCompiler`): the
   runtime-built spelling is always the single-colon EXTERNAL one, so every registered

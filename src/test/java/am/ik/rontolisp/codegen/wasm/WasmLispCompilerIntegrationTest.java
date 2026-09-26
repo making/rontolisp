@@ -5997,6 +5997,35 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void internIntoAMissingPackageSignalsACatchablePackageError() throws Exception {
+		// A literal and a computed designator naming no package signal a catchable
+		// package-error and create nothing.
+		assertThat(compileAndRunPrelude("""
+				(defun ipe-in (p) (intern "X" p))
+				(print (handler-case (intern "X" "IPE-NOPKG") (error () :caught)))
+				(print (handler-case (ipe-in "IPE-NOPKG")
+				         (package-error (e) (list (package-error-package e) (princ-to-string e)))))
+				(print (handler-case (ipe-in nil) (package-error () :caught)))
+				(print (find-package "IPE-NOPKG"))
+				""")).isEqualTo(":CAUGHT\n(:IPE-NOPKG \"No such package: IPE-NOPKG\")\n:CAUGHT\nNIL");
+	}
+
+	@Test
+	void internIntoAMissingPackageSignalsWithRuntimePackages() throws Exception {
+		// A literal and a computed designator naming no package signal a catchable
+		// package-error and create nothing (with runtime packages in the program).
+		assertThat(compileAndRunPrelude("""
+				(defun ipe-in (p) (intern "X" p))
+				(print (handler-case (intern "X" "IPE-NOPKG") (error () :caught)))
+				(print (handler-case (ipe-in "IPE-NOPKG")
+				         (package-error (e) (list (package-error-package e) (princ-to-string e)))))
+				(print (handler-case (ipe-in nil) (package-error () :caught)))
+				(print (find-package "IPE-NOPKG"))
+				(print (ipe-in (make-package "IPE-RT" :use nil)))
+				""")).isEqualTo(":CAUGHT\n(:IPE-NOPKG \"No such package: IPE-NOPKG\")\n:CAUGHT\nNIL\nIPE-RT::X");
+	}
+
+	@Test
 	void keywordInternStaysInternedInAGateShakenModule() throws Exception {
 		// (intern NAME :keyword) does not turn the funcall-dispatch gate off
 		// (RuntimeNameProducers exemption 2), so this module shakes hard -- and the
