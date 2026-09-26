@@ -293,6 +293,27 @@ class UncaughtReportParityTest {
 	}
 
 	@Test
+	void schemeSourceIsLocatedTheSameWay() throws Exception {
+		// The Scheme reader locates its lists on both paths, and its procedures lower to
+		// the same named functions -- a named let's loop and an internal define report
+		// the procedure around them.
+		Path program = write("scheme.scm", """
+				(define (count-down n)
+				  (define (check k)
+				    (if (> k 5)
+				        (error "too big" k)
+				        k))
+				  (let loop ((k (check n)))
+				    (if (= k 0)
+				        (error "bottom")
+				        (loop (- k 1)))))
+
+				(count-down 3)
+				""");
+		assertSameReport(program, "Unhandled condition: bottom", "  at " + program + ":8 in count-down");
+	}
+
+	@Test
 	void aTypedLoopsOutOfRangeIndexReportsTheArefNotTheLoop() throws Exception {
 		// A dotimes over a packed double array compiles to raw primitive code
 		// (.kb/jvm-typed-loops.md): its array access still reports the aref's line.
@@ -403,7 +424,8 @@ class UncaughtReportParityTest {
 	}
 
 	private Path compiledClassFile(Path program) {
-		String stem = program.getFileName().toString().replace(".lisp", "").replace('-', '_');
+		String file = program.getFileName().toString();
+		String stem = file.substring(0, file.lastIndexOf('.')).replace('-', '_');
 		return this.tempDir.resolve("out-" + stem).resolve("P" + stem + ".class");
 	}
 
