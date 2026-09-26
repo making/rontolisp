@@ -935,7 +935,7 @@ final class WasmArrayCompiler {
 			// initializer this compile itself chose a representation for) pins down
 			// emits that ONE representation's read with a trapping ref.cast instead of
 			// the full dispatch chain (.kb/declarations-type-checks.md).
-			WasmExprCompiler.compileExpr(subscriptCount == 1 ? args.get(2) : new LispInteger(0), ctx);
+			compileSubscript(subscriptCount == 1 ? args.get(2) : new LispInteger(0), ctx);
 			int idxSlot = setTemp(ctx);
 			DeclaredArrayTypes.Kind kind = arrayKindOfExpr(args.get(1), ctx);
 			if (kind != null) {
@@ -1518,6 +1518,13 @@ final class WasmArrayCompiler {
 	 * read-back {@code _int_new} box entirely -- the hot-loop store allocates nothing.
 	 */
 	static void compileAset(LispCons cons, WasmLispCompiler.Ctx ctx, boolean resultNeeded) {
+		// A statement-position store and a setf of a pinned-kind place arrive here
+		// without compileCons, so the store names itself: a subscript or a packed value
+		// of the wrong type reports under (setf aref) (OperandTypes).
+		WasmOperandTypes.withOperator(ctx, LispNames.ASET, () -> compileAsetForm(cons, ctx, resultNeeded));
+	}
+
+	private static void compileAsetForm(LispCons cons, WasmLispCompiler.Ctx ctx, boolean resultNeeded) {
 		// (%aset array subscript... value)
 		List<LispVal> args = cons.toList();
 		// subscriptCount is the ORIGINAL number of subscripts at this call site (0 for a
@@ -1617,7 +1624,7 @@ final class WasmArrayCompiler {
 		switch (kind) {
 			case U8, U16, U32 -> {
 				int type = intArrType(kind.packedIntWidth());
-				WasmExprCompiler.compileExpr(idxExpr, ctx);
+				compileSubscript(idxExpr, ctx);
 				int idxSlot = setTemp(ctx);
 				getLocal(ctx, arrSlot);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
@@ -1637,7 +1644,7 @@ final class WasmArrayCompiler {
 				}
 			}
 			case FLOAT -> {
-				WasmExprCompiler.compileExpr(idxExpr, ctx);
+				compileSubscript(idxExpr, ctx);
 				int idxSlot = setTemp(ctx);
 				WasmExprCompiler.compileExpr(valueExpr, ctx);
 				WasmEmitHelper.castFloatGetF64(ctx);
@@ -1651,7 +1658,7 @@ final class WasmArrayCompiler {
 			case GENERAL -> {
 				getLocal(ctx, arrSlot);
 				castCellGet0(ctx);
-				WasmExprCompiler.compileExpr(idxExpr, ctx);
+				compileSubscript(idxExpr, ctx);
 				WasmEmitHelper.castI31GetS(ctx);
 				WasmExprCompiler.compileExpr(valueExpr, ctx);
 				callArrSet(ctx);
@@ -1673,7 +1680,7 @@ final class WasmArrayCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
 		emitArefCheckRank(ctx, arrSlot, given);
-		WasmExprCompiler.compileExpr(idxExpr, ctx);
+		compileSubscript(idxExpr, ctx);
 		int idxSlot = setTemp(ctx);
 		WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
 		int valSlot = setTemp(ctx);
@@ -1728,7 +1735,7 @@ final class WasmArrayCompiler {
 	// when the caller consumes it; a statement-position store allocates nothing.
 	private static void emitPackedIntStore(WasmLispCompiler.Ctx ctx, int arrSlot, LispVal idxExpr, LispVal valueExpr,
 			boolean resultNeeded) {
-		WasmExprCompiler.compileExpr(idxExpr, ctx);
+		compileSubscript(idxExpr, ctx);
 		int idxSlot = setTemp(ctx);
 		getLocal(ctx, arrSlot);
 		getLocal(ctx, idxSlot);
@@ -1747,6 +1754,18 @@ final class WasmArrayCompiler {
 		}
 		else {
 			refNull(ctx);
+		}
+	}
+
+	/**
+	 * Compiles a subscript, leaving it boxed. In EH mode one that is no integer is a
+	 * catchable type-error naming the access ({@link WasmEmitHelper#emitIndexCheck}),
+	 * where the {@code ref.cast i31} every arm unboxes it with would trap.
+	 */
+	private static void compileSubscript(LispVal subscript, WasmLispCompiler.Ctx ctx) {
+		WasmExprCompiler.compileExpr(subscript, ctx);
+		if (!(subscript instanceof LispInteger)) {
+			WasmEmitHelper.emitIndexCheck(ctx);
 		}
 	}
 
@@ -1780,7 +1799,7 @@ final class WasmArrayCompiler {
 			i32Const(ctx, 0);
 			return;
 		}
-		WasmExprCompiler.compileExpr(args.get(firstSub), ctx);
+		compileSubscript(args.get(firstSub), ctx);
 		WasmEmitHelper.castI31GetS(ctx);
 		for (int k = 1; k < rank; k++) {
 			// flat = flat * dims[k] + subscript_k
@@ -1791,7 +1810,7 @@ final class WasmArrayCompiler {
 			arrayGet(ctx);
 			WasmEmitHelper.castI31GetS(ctx);
 			ctx.writer.write(Instruction.I32_MUL);
-			WasmExprCompiler.compileExpr(args.get(firstSub + k), ctx);
+			compileSubscript(args.get(firstSub + k), ctx);
 			WasmEmitHelper.castI31GetS(ctx);
 			ctx.writer.write(Instruction.I32_ADD);
 		}
@@ -1806,7 +1825,7 @@ final class WasmArrayCompiler {
 			i32Const(ctx, 0);
 			return;
 		}
-		WasmExprCompiler.compileExpr(args.get(firstSub), ctx);
+		compileSubscript(args.get(firstSub), ctx);
 		WasmEmitHelper.castI31GetS(ctx);
 		for (int k = 1; k < rank; k++) {
 			// flat = flat * dims[k] + subscript_k
@@ -1815,7 +1834,7 @@ final class WasmArrayCompiler {
 			arrayGet(ctx);
 			WasmEmitHelper.castI31GetS(ctx);
 			ctx.writer.write(Instruction.I32_MUL);
-			WasmExprCompiler.compileExpr(args.get(firstSub + k), ctx);
+			compileSubscript(args.get(firstSub + k), ctx);
 			WasmEmitHelper.castI31GetS(ctx);
 			ctx.writer.write(Instruction.I32_ADD);
 		}

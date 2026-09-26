@@ -19,8 +19,9 @@ final class WasmNthcdrCompiler {
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
-		// Evaluate n
+		// Evaluate n (checked: in EH mode a non-integer is NTHCDR's type-error)
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		WasmEmitHelper.emitIndexCheck(ctx);
 		int nSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(nSlot);

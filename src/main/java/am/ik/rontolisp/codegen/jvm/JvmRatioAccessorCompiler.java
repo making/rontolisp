@@ -9,11 +9,10 @@ import am.ik.jvm.Opcode;
 /**
  * Compiles the {@code numerator} and {@code denominator} accessors. For a ratio
  * ({@code BigInteger[]}) the requested component is returned (normalized back to a
- * {@code Long} when it fits); an integer is its own numerator and has denominator one. A
- * syntactic complex takes the signalling exit first: the comparison throws the
- * interpreter's REAL operand-type report text for a complex operand (like the ordering
- * operators), and its result is discarded for a real one -- so a complex can never fall
- * through to the identity tail the way it did before (`.kb/jvm-complex.md`).
+ * {@code Long} when it fits); an integer is its own numerator and has denominator one.
+ * Anything else -- a float, a complex, a non-number -- is rejected first by
+ * {@code _ckRat}, a {@code RATIONAL} type-error named after the operator
+ * ({@code JvmOperandTypeRuntime}), so it can never fall through to the identity tail.
  */
 final class JvmRatioAccessorCompiler {
 
@@ -31,21 +30,13 @@ final class JvmRatioAccessorCompiler {
 	private static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className, int index) {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		// _ckRat answers a rational and throws the operator's type-error for anything
+		// else -- a float, a complex, a non-number.
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CK_RAT).index());
 		int temp = ctx.allocTemp();
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(temp);
-		if (JvmLispCompiler.hasComplexOperand(args)) {
-			// _ccmpb throws for a complex operand and answers an int otherwise;
-			// either way the value in temp is re-read below, so the check costs a
-			// real operand one discarded comparison and nothing else.
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(temp);
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(temp);
-			ctx.emit(Opcode.INVOKESTATIC);
-			ctx.emitU2(JvmComplexCompiler.complexOp(ctx, className, JvmComplexRuntimeBuilder.CCPMB).index());
-			ctx.emit(Opcode.POP);
-		}
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(temp);
 		ctx.emit(Opcode.INSTANCEOF);

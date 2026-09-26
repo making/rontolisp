@@ -1,6 +1,7 @@
 # `car`/`cdr` as a shared callee at the size level (`WasmConsRuntimeBuilder`)
 
-**Invariant: a `car`/`cdr` site and the shared `_car`/`_cdr` body spell ONE shape**
+**Invariant: a `car`/`cdr` site and the shared `_car`/`_cdr` body answer alike -- outside EH mode
+they spell ONE shape**
 (`WasmEmitHelper.emitInlineConsField`: `local.get x; ref.is_null; if (result eqref)
 ref.null eq else local.get x; ref.cast $cons; struct.get $cons k end` -- nil answers nil, a
 cons its field, anything else traps on the cast), so a site that calls the body answers
@@ -12,6 +13,12 @@ level alone, never by the program:
 | `off`, `default` | inline, read in place (17 B) | spilled into a fresh temp, inline (21 B + a local) | inline, per parameter |
 | `size` | operand + `call _car` (3-4 B) | same | `local.get; call` per parameter |
 
+- **EH mode checks** ([error-handling.md](error-handling.md), "A wrong-type argument names its
+  operator"): there the bodies are CHECKED (nil answers nil, a non-list is `CAR`'s/`CDR`'s
+  type-error through `_type_err_list`) and an inline site is `local.get x; ref.test $cons; if
+  (result eqref) local.get x; ref.cast $cons; struct.get else local.get x; call _car end` -- the
+  checked body is its slow path, so the two still answer alike. A size-level site is unchanged.
+  The double type test costs a tight traversal +28% (`.todo/979`).
 - `FUNC_CAR`/`FUNC_CDR` (`TYPE_CALLABLE_BASE + 0`, `WasmLispCompiler`) are appended after the
   last fixed helper, so no fixed index moves; unreferenced at every level but `size`, and
   the shaker drops them there (`WasmLispCompilerTest.aConsAccessSiteIsOneCallAtTheSizeLevelAndReadsAPlainLocalInPlaceOtherwise`
@@ -54,5 +61,5 @@ before and after, i.e. the 101 KB is outside its reach (it does not outline).
 `WasmLispCompilerIntegrationTest.consAccessAnswersTheSameAtEveryLevel` (nil, a cons's
 field, a special, a parameter and a `do`-stepped local as operands, `apply`'s walk exact
 and with a rest tail, `funcall` of a computed designator, and `(car 5)` trapping through
-the shared reader), `WasmTreeShakerCorpusTest` (now compiles the corpus at `size` too:
+the shared reader outside EH mode), `WasmTreeShakerCorpusTest` (now compiles the corpus at `size` too:
 validate + shortest-encoding round trip), the byte-budget pin above.

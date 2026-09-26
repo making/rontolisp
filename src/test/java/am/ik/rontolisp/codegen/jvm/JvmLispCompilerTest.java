@@ -1227,6 +1227,57 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void argumentTypeErrorsNameTheOperatorBeyondArithmetic() throws Exception {
+		// The evaluator twin is argumentTypeErrorsNameTheOperatorBeyondArithmetic:
+		// car/cdr
+		// used to report the landing pad's generic text, an index nil an NPE, numerator
+		// of nil answered nil and a one-argument lcm/gcd reported ABS.
+		assertThat(compileAndRun(
+				"""
+						(defun te (thunk)
+						  (handler-case (funcall thunk)
+						    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+						    (error (e) (list :not-a-type-error (princ-to-string e)))))
+						(defvar *te-n* nil)
+						(print (te (lambda () (car 5))))
+						(print (te (lambda () (cdr "s"))))
+						(print (te (lambda () (first 5))))
+						(print (te (lambda () (rest 5))))
+						(print (te (lambda () (nth *te-n* '(1 2)))))
+						(print (te (lambda () (nthcdr 1.5 '(1 2)))))
+						(print (te (lambda () (aref #(1 2) *te-n*))))
+						(print (te (lambda () (svref #(1 2) *te-n*))))
+						(print (te (lambda () (let ((v (vector 1 2))) (setf (aref v *te-n*) 3)))))
+						(print (te (lambda () (setf (aref #d(1.0) 0) "x"))))
+						(print (te (lambda () (let ((v (make-array 2 :element-type 'double-float))) (setf (aref v 0) "y") :unreached))))
+						(print (te (lambda () (random *te-n*))))
+						(print (te (lambda () (numerator *te-n*))))
+						(print (te (lambda () (denominator 1.5))))
+						(print (te (lambda () (lcm *te-n*))))
+						(print (te (lambda () (gcd 1.5))))
+						(print (te (lambda () (complex #c(1 2) 3))))
+						"""))
+			.isEqualTo("""
+					("CAR: The value 5 is not of type LIST" 5 LIST)
+					("CDR: The value \\"s\\" is not of type LIST" "s" LIST)
+					("CAR: The value 5 is not of type LIST" 5 LIST)
+					("CDR: The value 5 is not of type LIST" 5 LIST)
+					("NTHCDR: The value NIL is not of type INTEGER" NIL INTEGER)
+					("NTHCDR: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+					("AREF: The value NIL is not of type INTEGER" NIL INTEGER)
+					("AREF: The value NIL is not of type INTEGER" NIL INTEGER)
+					("(SETF AREF): The value NIL is not of type INTEGER" NIL INTEGER)
+					("(SETF AREF): The value \\"x\\" is not of type REAL" "x" REAL)
+					("(SETF AREF): The value \\"y\\" is not of type REAL" "y" REAL)
+					("RANDOM: The value NIL is not of type REAL" NIL REAL)
+					("NUMERATOR: The value NIL is not of type RATIONAL" NIL RATIONAL)
+					("DENOMINATOR: The value 1.5 is not of type RATIONAL" 1.5 RATIONAL)
+					("LCM: The value NIL is not of type INTEGER" NIL INTEGER)
+					("GCD: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+					("COMPLEX: The value #C(1 2) is not of type REAL" #C(1 2) REAL)""");
+	}
+
+	@Test
 	void compileAndRunOperandTypeErrorAnswersItsDatumAndExpectedType() throws Exception {
 		// The pad fills the type-error's datum and expected-type from the record the
 		// wrapper left (JvmOperandTypeRuntime); the evaluator twin is
@@ -1540,8 +1591,10 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunASynthesizedBuiltInConditionReportsARontolispMessage() throws Exception {
 		// A cast failure's host text names Java classes and an out-of-range index's
-		// counts the layout cell; both are replaced at the pad.
-		assertThat(compileAndRun("(print (handler-case (car 1) (type-error (e) (princ-to-string e))))"))
+		// counts the layout cell; both are replaced at the pad. (car 1) names itself now
+		// (argumentTypeErrorsNameTheOperatorBeyondArithmetic); nthcdr's walk over a
+		// non-list is still a bare cast.
+		assertThat(compileAndRun("(print (handler-case (nthcdr 1 5) (type-error (e) (princ-to-string e))))"))
 			.isEqualTo("\"the value is not of the expected type\"");
 		assertThat(compileAndRun("(print (handler-case (aref (vector 1 2) 5) (type-error (e) (princ-to-string e))))"))
 			.isEqualTo("\"index out of bounds\"");
@@ -8988,8 +9041,9 @@ class JvmLispCompilerTest {
 				+ " \"TRUNCATE: The value #C(1 2) is not of type REAL\""
 				+ " \"CEILING: The value #C(1 2) is not of type REAL\""
 				+ " \"ROUND: The value #C(1 2) is not of type REAL\""
-				+ " \"FLOAT: The value #C(1 2) is not of type REAL\"" + " \"The value #C(1 2) is not of type REAL\""
-				+ " \"The value #C(1 2) is not of type REAL\")");
+				+ " \"FLOAT: The value #C(1 2) is not of type REAL\""
+				+ " \"NUMERATOR: The value #C(1 2) is not of type RATIONAL\""
+				+ " \"DENOMINATOR: The value #C(1 2) is not of type RATIONAL\")");
 		assertThat(compileAndRun("""
 				(defun te-print (thunk)
 				  (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
@@ -15770,7 +15824,9 @@ class JvmLispCompilerTest {
 		// (.kb/interpreter-stack.md): +817 B, in every class with a main.
 		// 9,986 since a wrong-type operand's report names the operator
 		// (JvmOperandTypeRuntime): _teRaw, _opTypeErr and the (* x x) wrapper, +565 B.
-		assertThat(classBytes.length).isLessThan(10_100);
+		// 10,129 since car/cdr name themselves (_car/_cdr, and _opTypeErr's
+		// funnel-typed arm): +143 B.
+		assertThat(classBytes.length).isLessThan(10_200);
 		assertThat(runClass(classBytes)).isEqualTo("(1 4 9)");
 	}
 
@@ -17091,11 +17147,12 @@ class JvmLispCompilerTest {
 		// a program that uses none of them: 7,708 -> 12,394 B for this program (CLI
 		// -o). The helper costs 8,112 there, 8,102 here; 8,713 since a wrong-type
 		// operand's report names the operator (JvmOperandTypeRuntime: _teRaw, _opTypeErr
-		// and the (+ a b) wrapper).
+		// and the (+ a b) wrapper); 8,940 since car/cdr name themselves (the &optional
+		// walk's _car/_cdr, and _opTypeErr's funnel-typed arm).
 		byte[] classBytes = new JvmLispCompiler("Test")
 			.compile(LispReader.readAllFromString("(defun f (a &optional (b 2)) (+ a b)) (print (f 1))"));
 		assertThat(declaredMethodNames(classBytes)).doesNotContain("_toMutStr", "_strToCharVec", "_length", "_scount");
-		assertThat(classBytes.length).isLessThan(8_800);
+		assertThat(classBytes.length).isLessThan(9_000);
 		assertThat(runClass(classBytes)).isEqualTo("3");
 	}
 

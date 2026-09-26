@@ -2035,6 +2035,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		final FieldrefConstant teTlField = teTlName != null && teTlDesc != null
 				? cp.addFieldref(thisClass, cp.addNameAndType(teTlName, teTlDesc)) : null;
 		numericRuntime.methods().addAll(JvmOperandTypeRuntime.build(cp, thisClass, teTlField));
+		for (String[] check : new String[][] { { JvmOperandTypeRuntime.CAR, JvmOperandTypeRuntime.FIELD_DESC },
+				{ JvmOperandTypeRuntime.CDR, JvmOperandTypeRuntime.FIELD_DESC },
+				{ JvmOperandTypeRuntime.CK_IDX, JvmOperandTypeRuntime.CK_IDX_DESC },
+				{ JvmOperandTypeRuntime.CK_RAT, JvmOperandTypeRuntime.CK_RAT_DESC } }) {
+			numericRuntime.ops().put(check[0], JvmOperandTypeRuntime.self(cp, thisClass, check[0], check[1]));
+		}
 		if (teTlField != null) {
 			numericRuntime.ops()
 				.put(JvmOperandTypeRuntime.TE_SLOT, JvmOperandTypeRuntime.self(cp, thisClass,

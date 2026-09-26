@@ -48,6 +48,22 @@ final class WasmRatioAccessorCompiler {
 		ctx.writer.write(Instruction.I32_OR);
 		ctx.writer.write(Instruction.I32_EQZ);
 		ctx.writer.write(Instruction.IF, 0x40);
+		if (ratioFunc == WasmLispCompiler.FUNC_RAT_DEN) {
+			// _rat_den answers 1 for anything but a ratio (the arithmetic runtime's
+			// contract), so a non-integer is rejected here, through _int_val under the
+			// operator's register -- _rat_num's own fall-through does the same.
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(slot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_RATIO);
+			ctx.writer.write(Instruction.I32_EQZ);
+			ctx.writer.write(Instruction.IF, 0x40);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(slot);
+			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_INT_VAL);
+			ctx.writer.write(Instruction.DROP);
+			ctx.writer.write(Instruction.END);
+		}
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
 		WasmOperandTypes.emitCall(ctx, ratioFunc);
