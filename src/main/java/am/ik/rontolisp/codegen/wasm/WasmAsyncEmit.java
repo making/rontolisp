@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
@@ -117,6 +118,22 @@ final class WasmAsyncEmit {
 				proto.functions.keySet(), ctx.captureMemo));
 		ctx.boxedVars = capturedVars;
 		compileGuardedProgn(bodyExprs, ctx);
+		Integer spillGlobal = ctx.globalIndices.get(LispNames.MV_SPILL);
+		if (spillGlobal != null && !topLevel) {
+			// The body completed (a suspension leaves through its await's own return):
+			// the channel holds the body's extra values -- its tail settled them -- and
+			// they go into the frame's future, which the entry or the waking scheduler
+			// settles with the primary left on the stack; _future_poll publishes them at
+			// the await.
+			frameField(bodyWriter, ctx, 2);
+			bodyWriter.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			bodyWriter.writeHeapType(ctx.futureTypeIndex);
+			bodyWriter.write(Instruction.GET_GLOBAL);
+			bodyWriter.writeUnsignedLeb128(spillGlobal);
+			bodyWriter.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+			bodyWriter.writeUnsignedLeb128(ctx.futureTypeIndex);
+			bodyWriter.writeUnsignedLeb128(3);
+		}
 		bodyWriter.write(Instruction.END);
 
 		// Prologue, built now that the local count is final: $rt = frame.state, restore
@@ -208,6 +225,7 @@ final class WasmAsyncEmit {
 		int fut = paramCount + 2;
 		int frame = paramCount + 3;
 		int r = paramCount + 4;
+		Integer spillGlobal = proto.globalIndices.get(LispNames.MV_SPILL);
 		// locals: 4x (ref null eq)
 		w.write(1);
 		w.writeUnsignedLeb128(4);
@@ -284,6 +302,7 @@ final class WasmAsyncEmit {
 		w.writeUnsignedLeb128(frame);
 		w.write(Instruction.REF_EQ);
 		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		clearSpill(w, spillGlobal);
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(fut);
 		w.write(Instruction.RETURN);
@@ -296,6 +315,7 @@ final class WasmAsyncEmit {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(proto.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SETTLE);
 		w.write(Instruction.DROP);
+		clearSpill(w, spillGlobal);
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(fut);
 		w.write(Instruction.RETURN);
@@ -309,10 +329,23 @@ final class WasmAsyncEmit {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(proto.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_REJECT);
 		w.write(Instruction.DROP);
+		clearSpill(w, spillGlobal);
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(fut);
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	// The entry answers ONE value, its future, whatever the body left in the channel
+	// (its values travel in the future) -- in a program whose spill global exists.
+	private static void clearSpill(WasmWriter w, @org.jspecify.annotations.Nullable Integer spillGlobal) {
+		if (spillGlobal == null) {
+			return;
+		}
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(spillGlobal);
 	}
 
 	/**
@@ -691,7 +724,12 @@ final class WasmAsyncEmit {
 		List<LispVal> parts = cons.toList();
 		LambdaLists.NativeForm nf = LambdaLists.toNative(parts.get(1), parts.subList(2, parts.size()));
 		List<String> paramNames = nf.paramNames();
-		List<LispVal> bodyExprs = nf.body();
+		// The body's tail settles the channel as a lambda's does
+		// (WasmLambdaCompiler): its values are what the resume captures into the
+		// future at completion. A top-level async-defun's body was settled with the
+		// defuns (settleDefunTails).
+		List<LispVal> bodyExprs = ctx.globalIndices.containsKey(LispNames.MV_SPILL)
+				? LispMacroExpander.settleFunctionBody(nf.body()) : nf.body();
 		Set<String> enclosingLexicals = new HashSet<>(ctx.locals.keySet());
 		enclosingLexicals.addAll(ctx.captures.keySet());
 		List<String> freeVars = new ArrayList<>(FreeVarAnalyzer.findFreeVars(bodyExprs, new HashSet<>(paramNames),

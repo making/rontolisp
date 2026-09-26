@@ -484,15 +484,12 @@ final class JvmHandlerCaseCompiler {
 		// unconditionally so the (nth N spill) form below has a real local to read;
 		// when the program has no spill global we seed it with nil directly.
 		int spillSlot = ctx.allocTemp();
-		am.ik.jvm.ConstantPool.FieldrefConstant spillField = ctx.globalFields.get(LispNames.MV_SPILL);
-		if (spillField != null) {
-			ctx.emit(Opcode.GETSTATIC);
-			ctx.emitU2(spillField.index());
+		JvmMvChannel spill = ctx.mvChannel;
+		if (spill != null) {
+			spill.emitLoad(ctx);
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(spillSlot);
-			ctx.emit(Opcode.ACONST_NULL);
-			ctx.emit(Opcode.PUTSTATIC);
-			ctx.emitU2(spillField.index());
+			spill.emitClear(ctx);
 		}
 		else {
 			ctx.emit(Opcode.ACONST_NULL);

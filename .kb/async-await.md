@@ -15,6 +15,7 @@
 - **Eager start**: the body runs immediately until its first await of an UNSETTLED future, so output
   before the first suspension is identically ordered everywhere. Await of a settled future or a
   non-future never suspends; nested futures flatten; an errored future re-signals AT AWAIT.
+- **Values**: `await` answers every value the body answered ("Multiple values", below).
 - **await placement is lexical**: legal in async bodies and at top level, illegal in any plain
   defun/lambda even nested inside an async body (the JavaScript rule).
   `am.ik.rontolisp.LispAsync.checkTopLevel` (compilers) / memoized `checkAwaitPlacement`
@@ -36,7 +37,7 @@
   completes NORMALLY with `{EMARKER, throwable, condition}` and `_await` re-sets `_condTl` on the
   awaiting thread before rethrowing -- that is what makes handler-case dispatch across the await.
 - **Preview-1 wasm-GC**: degenerate synchronous. `WasmAsyncRunCompiler` wraps the value in a settled
-  kind-2 `TYPE_P1_FUTURE {mut i32 kind, mut value}` (the kind field exists so the shape does not
+  kind-2 (kind 4 for several values, "Multiple values") `TYPE_P1_FUTURE {mut i32 kind, mut value}` (the kind field exists so the shape does not
   canonicalize into `TYPE_CELL`); `_p1_future_await` (`FUNC_P1_FUTURE_AWAIT`) resolves. The one
   UNSETTLED kind is 3, `rontolisp::%future-deferred`'s: its value is a thunk every await runs (a
   `--native` fetch's, `.kb/fetch-http.md`), and the await runtime carries that arm only in a module
@@ -44,11 +45,53 @@
   async body's ERROR signals at the CALL, not at await. **`--no-gc`** rejects the whole async surface
   by name, `%stream-new` included.
 
+## Multiple values
+**Invariant (2026-09-26): an async body's values reach its awaiter the way a function call's
+do.** The future settles with the body's full value list, captured where the body completes, on
+the thread (or in the resume) that ran it; `await` answers the primary and publishes the extras
+to the `%mv-spill` channel (`.kb/multiple-values.md`). The last future of a flattened chain
+decides; a non-future operand, and every future no async body made (fetch, wait-for, a stream
+read, a subtask), is one value. Pinned by `AwaitValuesMatrix` (literal, zero, syntactic-producer,
+called, nested, tail-awaited and stale-publish bodies; a consumer inside a body; an async-lambda;
+a second await of one future; an unrelated publish between call and await) on all four backends
+-- `AsyncEvalTest`/`JvmAsyncCompilerTest`/`WasmLispCompilerIntegrationTest` `*AwaitAnswersEvery*`
+and the `await-answers-every-value-of-the-async-body` ci-spec case -- plus its suspending half
+(not on Preview 1) and `CONCURRENT_PROGRAM`, sixty bodies consuming values in parallel.
+- Before, `await` answered one value (`singleValue`, acf4b247a) and a program written for the
+  pre-acf4b247a behaviour -- which read the body's publish back out of the process-wide channel,
+  by accident -- got a silent NIL far from the cause.
+- The capture reads the channel right after the body's tail, which the tail settle made exact
+  (`settleLambdaTails` + the backends' lambda CLEAR for the `%async-run` thunk,
+  `settleDefunTails` for a component's rewritten async-defun, `settleFunctionBody` for its
+  async-lambda). It is race-free only because the channel is one per thread
+  (`.kb/multiple-values.md`, "One register per thread").
+- Interpreter: `%async-run`'s body calls `LispFuture.settleExtras(spill)` before answering the
+  primary; `awaitValues` publishes the extras of the last future it joined.
+- JVM: `run()` completes with `{VMARKER, primary, extras}` when the channel is non-nil;
+  `_await` clears the channel, publishes a VMARKER payload's extras and flattens its primary.
+- Preview 1: `%async-run` settles a `KIND_VALUES` (4) `TYPE_P1_FUTURE` over `(primary . extras)`
+  when the channel is non-nil; `_p1_future_await` clears the channel and publishes them.
+- `--component`: `TYPE_FUTURE`'s fourth field (unused before) holds the extras: the resume
+  writes it into its frame's future as it completes (not the top-level resume), the ENTRY clears
+  the channel on all three exits (it answers one value, the future), and `_future_poll` clears
+  the channel and publishes each fulfilled hop's extras.
+- All of it is gated on the spill global: a program with no multiple-value consumer is
+  byte-identical on the three compile targets (fib, fib + a consumer, an async program with no
+  consumer). With one (2026-09-26): the combinator ci-spec case + one consumer, class 15,578 ->
+  16,014 B, wasm 13,849 -> 14,015 B, component 21,679 -> 21,806 B. An `await` inside a consumer
+  now takes the channel round trip instead of the one-temporary path, which on `--component` is
+  dearer at TOP LEVEL, where every mirrored local is spilled at every suspend site (the matrix
+  program, fourteen such consumers: 31,056 -> 37,965 B). 300,000 async calls + awaits: Preview 1
+  17-21 -> 17-22 ms, component 40-66 -> 42-56 ms, JVM 3,229-4,412 -> 3,203-3,763 ms -- noise.
+
 ## `--component` (asyncMode)
 - Async bodies compile as ENTRY+RESUME state machines over first-class `TYPE_FUTURE`s
   (`WasmAsyncEmit`); asyncMode FORCES EH mode.
 - **Trap**: an async-defun's rewritten plain defun is EXCLUDED from the fusion-inlinable set even
   when a one-form body qualifies textually (`.kb/wasm-int-fusion.md`).
+- **Trap**: a region's landing pad must not restore the resume target `$rt`; one that did skipped
+  everything after a `handler-case` that caught on a RESUMED frame (`.kb/wasm-landing-pad-refresh.md`,
+  "`$rt`").
 - An `async func` wit-import member returns a pending `TYPE_FUTURE` via
   `rontolisp::%subtask-future`; events dispatch through the shared core `_sched_dispatch`
   (`WasmFutureRuntimeBuilder`) under TWO drivers.

@@ -54,8 +54,8 @@
 (rontolisp:futurep (add-later 1 2))   ; => T
 ```
 
-future は本体の最後のフォームの値で確定するか、本体がシグナルしたエラーで
-確定します (future を await したときに再シグナルされます —
+future は本体の最後のフォームの値 (すべての値。`await` はそれを多値として返します)
+で確定するか、本体がシグナルしたエラーで確定します (future を await したときに再シグナルされます —
 [エラー](#errors-across-the-await-barrier)を参照)。無名版は
 [`rontolisp:async-lambda`](../reference/special-forms/rontolisp-async-lambda.md)
 で、`(rontolisp:async (defun ...))` / `(rontolisp:async (lambda ...))` はその2つの
@@ -70,6 +70,14 @@ future は本体の最後のフォームの値で確定するか、本体がシ�
 
 ```lisp
 (rontolisp:await 42)   ; => 42
+```
+
+future は関数呼び出しと同じく本体が返したすべての値を返すので、多値の消費者は
+`await` 越しにそのまま受け取れます:
+
+```lisp
+(rontolisp:async-defun div-mod (a b) (floor a b))
+(multiple-value-list (rontolisp:await (div-mod 17 5)))   ; => (3 2)
 ```
 
 `await` の配置は **字句的** です: `async-defun`/`async-lambda` の本体の中、

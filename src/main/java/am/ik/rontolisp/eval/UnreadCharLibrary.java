@@ -16,6 +16,7 @@ import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -203,7 +204,10 @@ public final class UnreadCharLibrary {
 			}
 			LispVal call = rewriteCall(cons, opName);
 			if (call != null) {
-				return call;
+				// A genuine rewrite (a different call replaces this one): the
+				// replacement stands for the same source text, so it inherits the
+				// position (.kb/source-positions.md, Half 2).
+				return SourceProvenance.inherit(cons, call);
 			}
 			LispVal structural = rewriteStructuralForm(cons, opName);
 			if (structural != null) {
@@ -294,10 +298,10 @@ public final class UnreadCharLibrary {
 		List<LispVal> parts = cons.toList();
 		switch (opName) {
 			case LispNames.LAMBDA, LispNames.DESTRUCTURING_BIND -> {
-				return keepThenRewrite(parts, 2);
+				return keepThenRewrite(cons, 2);
 			}
 			case LispNames.DEFUN, LispNames.DEFMACRO -> {
-				return keepThenRewrite(parts, 3);
+				return keepThenRewrite(cons, 3);
 			}
 			case LispNames.DEFMETHOD -> {
 				// (defmethod name [qualifier] lambda-list body...): the lambda list is
@@ -307,7 +311,7 @@ public final class UnreadCharLibrary {
 						&& !(parts.get(body) instanceof LispNil)) {
 					body++;
 				}
-				return keepThenRewrite(parts, Math.min(body + 1, parts.size()));
+				return keepThenRewrite(cons, Math.min(body + 1, parts.size()));
 			}
 			case LispNames.LET, LispNames.LET_STAR -> {
 				List<LispVal> out = new ArrayList<>();
@@ -316,7 +320,7 @@ public final class UnreadCharLibrary {
 				for (int i = 2; i < parts.size(); i++) {
 					out.add(rewrite(parts.get(i)));
 				}
-				return listOf(out.toArray(new LispVal[0]));
+				return rebuilt(cons, out);
 			}
 			case LispNames.FLET, LispNames.LABELS, LispNames.MACROLET -> {
 				List<LispVal> out = new ArrayList<>();
@@ -325,15 +329,15 @@ public final class UnreadCharLibrary {
 				for (int i = 2; i < parts.size(); i++) {
 					out.add(rewrite(parts.get(i)));
 				}
-				return listOf(out.toArray(new LispVal[0]));
+				return rebuilt(cons, out);
 			}
 			case LispNames.DEFCLASS, LispNames.DEFINE_CONDITION -> {
 				// name, superclasses and the slot list stay verbatim; the class options
 				// after them are ordinary code (a :report lambda reads and prints).
-				return keepThenRewrite(parts, 4);
+				return keepThenRewrite(cons, 4);
 			}
 			case LispNames.DEFSTRUCT -> {
-				return listOf(parts.toArray(new LispVal[0]));
+				return rebuilt(cons, parts);
 			}
 			default -> {
 				return null;
@@ -341,47 +345,56 @@ public final class UnreadCharLibrary {
 		}
 	}
 
-	private static LispVal keepThenRewrite(List<LispVal> parts, int firstRewritten) {
-		List<LispVal> out = new ArrayList<>();
+	private static LispVal keepThenRewrite(LispCons cons, int firstRewritten) {
+		List<LispVal> parts = cons.toList();
+		List<LispVal> out = new ArrayList<>(parts.size());
 		for (int i = 0; i < parts.size(); i++) {
 			out.add(i < firstRewritten ? parts.get(i) : rewrite(parts.get(i)));
 		}
-		return listOf(out.toArray(new LispVal[0]));
+		return rebuilt(cons, out);
 	}
 
 	// ((var init) ...): the variable half is a name, the init half is code.
 	private static LispVal rewriteBindings(LispVal bindings) {
-		if (!(bindings instanceof LispCons)) {
+		if (!(bindings instanceof LispCons bindingsCons)) {
 			return bindings;
 		}
 		List<LispVal> out = new ArrayList<>();
-		for (LispVal binding : ((LispCons) bindings).toList()) {
-			if (binding instanceof LispCons pair) {
-				out.add(keepThenRewrite(pair.toList(), 1));
-			}
-			else {
-				out.add(binding);
-			}
+		for (LispVal binding : bindingsCons.toList()) {
+			out.add(binding instanceof LispCons pair ? keepThenRewrite(pair, 1) : binding);
 		}
-		return listOf(out.toArray(new LispVal[0]));
+		return rebuilt(bindingsCons, out);
 	}
 
 	// ((name lambda-list body...) ...): only the body is code.
 	private static LispVal rewriteLocalFunctions(LispVal functions) {
-		if (!(functions instanceof LispCons)) {
+		if (!(functions instanceof LispCons functionsCons)) {
 			return functions;
 		}
 		List<LispVal> out = new ArrayList<>();
-		for (LispVal fn : ((LispCons) functions).toList()) {
-			out.add(fn instanceof LispCons local ? keepThenRewrite(local.toList(), 2) : fn);
+		for (LispVal fn : functionsCons.toList()) {
+			out.add(fn instanceof LispCons local ? keepThenRewrite(local, 2) : fn);
 		}
-		return listOf(out.toArray(new LispVal[0]));
+		return rebuilt(functionsCons, out);
 	}
 
 	// The generic recursion rewrites list ELEMENTS; a dotted tail is data, never a call.
+	// Identity-preserving via the default rebuild (LispCons::rebuilt): an element that
+	// rewrite() hands back unchanged keeps its cell, so a form with nothing below it to
+	// rewrite is returned exactly as it came in.
 	private static LispVal rewriteElements(LispCons cons) {
-		return LispTrees.rebuildSpine(cons, node -> node instanceof LispCons ? null : node, UnreadCharLibrary::rewrite,
-				(cell, car, cdr) -> new LispCons(car, cdr));
+		return LispTrees.rebuildSpine(cons, node -> node instanceof LispCons ? null : node, UnreadCharLibrary::rewrite);
+	}
+
+	/**
+	 * The proper list an element-wise rewrite should return: {@code original} itself when
+	 * {@code elements} is exactly what it already held ({@link LispCons#rebuiltList}), a
+	 * fresh list carrying {@code original}'s source position otherwise
+	 * ({@link SourceProvenance#inherit}) -- the cons-identity rule every AST pass owes
+	 * (.kb/source-positions.md, Half 1 and Half 2).
+	 */
+	private static LispVal rebuilt(LispCons original, List<LispVal> elements) {
+		return SourceProvenance.inherit(original, LispCons.rebuiltList(original, elements));
 	}
 
 	private static LispSymbol defunSymbol(String name) {

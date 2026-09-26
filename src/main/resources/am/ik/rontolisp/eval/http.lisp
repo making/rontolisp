@@ -71,28 +71,68 @@
 
 ;;; --- body reading (shared): consume-body -> a first-class stream value ---
 
-(defun %http-body-value (consume thing)
+(defun %http-body-value (consume thing finish)
   ;; consume-body(this, res) MOVES `thing` and returns tuple<stream<u8>,
   ;; future<result<option<trailers>, error-code>>>. The pair is wrapped into a
-  ;; first-class rontolisp stream (TYPE_WASI_STREAM): each rontolisp:stream-read
-  ;; future settles to the next chunk (nil = EOF), and the close protocol -- run
-  ;; ONCE, at EOF or an early rontolisp:stream-close -- drops the readable end and
-  ;; the (unread) trailers and resolves `res` ok, reporting our side's outcome to
-  ;; the host (dropping `res` instead would signal an error). rontolisp's
-  ;; request/response plists carry no trailers.
+  ;; first-class rontolisp stream: each rontolisp:stream-read future settles to the
+  ;; next chunk, nil at the end.
+  ;;
+  ;; The release -- run ONCE, at the end or at an early rontolisp:stream-close --
+  ;; drops the readable end and the trailers and resolves `res` ok, reporting our
+  ;; side's outcome to the host (dropping `res` instead would signal an error);
+  ;; rontolisp's plists carry no trailers. FINISH is the body owner's part of it:
+  ;; nil for a served request's body, and for a fetched reply's the closure
+  ;; %fetch-read-response makes, called with the trailers future and whether the
+  ;; body reached its END (nil for an early close), which answers the transfer's
+  ;; failure -- signalled here, so at the await of the read that found the end --
+  ;; or nil.
+  ;;
+  ;; The end is found HERE, not by the stream runtime: a read that answers nil at
+  ;; once, or that the host reports in flight (a PENDING future the scheduler
+  ;; settles, so the task keeps running meanwhile), goes through %http-body-next,
+  ;; which awaits it and releases at the end -- the same release, and the same
+  ;; failure, whichever way the end arrives. A chunk that is there at once is
+  ;; answered as it is.
   (let* ((res (%http:transmit-future-new))
          (pair (funcall consume thing (car res)))
          (stream (car pair))
-         (trailers (car (cdr pair))))
-    (rontolisp::%stream-new
-                            ;; One built-in read per call: the next chunk, nil = EOF, or -- when the host
-                            ;; reports the read in flight -- a PENDING future the scheduler settles (the
-                            ;; stream runtime passes it through, so the task keeps running meanwhile).
-                            (lambda () (%http:body-stream-read stream))
-                            (lambda ()
-                              (%http:body-stream-drop-readable stream)
-                              (%http:trailers-future-drop-readable trailers)
-                              (%http:transmit-future-write (cdr res) :ok)))))
+         (trailers (car (cdr pair)))
+         (live t)
+         (release
+          (lambda (whole)
+            (when live
+              (setq live nil)
+              (%http:body-stream-drop-readable stream)
+              (let ((failure (if finish (funcall finish trailers whole) nil)))
+                (%http:trailers-future-drop-readable trailers)
+                (%http:transmit-future-write (cdr res) :ok)
+                (when failure
+                  (error 'rontolisp:wit-error
+                         :payload failure
+                         :message (concatenate 'string
+                                               "the body's transfer failed: "
+                                               (%prin1-piece failure))))))))
+         (next
+          (lambda ()
+            (if live
+                (let ((chunk (%http:body-stream-read stream)))
+                  (if (and chunk (not (rontolisp:futurep chunk)))
+                      chunk
+                      (%http-body-next chunk release)))
+                nil))))
+    (rontolisp::%stream-new next (lambda () (funcall release nil)))))
+
+(rontolisp:async-defun %http-body-next (pending release)
+  ;; A read that found the end (nil) or is in flight (a pending future): the chunk it
+  ;; settles to, or -- at the end -- nil once the body is released. (Not a parameter
+  ;; named `read`: the library splices find their triggers by the symbols a program
+  ;; spells, and that one pulls in the prelude's reader.)
+  (let ((chunk (rontolisp:await pending)))
+    (if chunk
+        chunk
+        (progn
+          (funcall release t)
+          nil))))
 
 ;;; --- body writing (shared): stream the bytes, close, resolve the trailers ---
 
@@ -113,8 +153,12 @@
 (defun %fetch-method-variant (method)
   ;; The options plist carries the method as a string ("GET", "post"); wasi:http wants
   ;; the `method` variant. Case-insensitive, defaulting to GET, matching the
-  ;; interpreter/JVM.
-  (let ((m (if (stringp method) (string-upcase method) "GET")))
+  ;; interpreter/JVM -- and like theirs, any other method (or a :method that is not a
+  ;; string) signals at the fetch CALL, which validates its options before anything
+  ;; starts.
+  (unless (or (null method) (stringp method))
+    (error "fetch: :method must be a string, got ~s" method))
+  (let ((m (if method (string-upcase method) "GET")))
     (cond ((string= m "GET") :get)
           ((string= m "HEAD") :head)
           ((string= m "POST") :post)
@@ -122,10 +166,7 @@
           ((string= m "DELETE") :delete)
           ((string= m "OPTIONS") :options)
           ((string= m "PATCH") :patch)
-          (t
-           (error 'rontolisp:wit-error
-            :payload :other
-            :message (concatenate 'string "fetch: unsupported method: " m))))))
+          (t (error "fetch: unsupported method: ~a" m)))))
 
 (defun %fetch-user-agent-set-p (headers)
   ;; Whether the caller's alist already names the user-agent field. HTTP field names
@@ -140,11 +181,37 @@
           t
           (%fetch-user-agent-set-p (cdr headers))))))
 
-(defun %fetch-send (url options)
-  ;; scheme://authority/path -- the scheme's colon is the first colon. Returns the
-  ;; send future with the request already fully in flight: the async-lowered send
-  ;; starts the subtask immediately, and the body / trailers writes below rendezvous
-  ;; with the host's eager reads before this function returns.
+(defun %fetch-fields (headers)
+  ;; The request's header fields: the caller's alist, and the one header we add on the
+  ;; caller's behalf. Without it a caller-silent request goes out with NO user-agent at
+  ;; all -- the java.net.http backends write their own, so the same program sent a
+  ;; different request here, and an origin that rejects agent-less traffic answered it
+  ;; with a 4xx. A field the host refuses (fields.append's error arm) releases the
+  ;; fields before the failure goes on.
+  (let ((fields (%http:fields-new)))
+    (handler-case (progn
+                    (%http-add-headers fields headers)
+                    (unless (%fetch-user-agent-set-p headers)
+                      (%http:fields-append fields (%http-user-agent-header)
+                                           (%http-default-user-agent))))
+      (error (c)
+        (%http:fields-drop fields)
+        (error c)))
+    fields))
+
+(defun %fetch-send (url options method)
+  ;; scheme://authority/path -- the scheme's colon is the first colon. Answers
+  ;; (send-future . transmission): the request in flight -- the async-lowered send
+  ;; starts the subtask at once, and the body / trailers writes below rendezvous with
+  ;; the host's eager reads before this returns -- and the readable end of the future
+  ;; request.new answered for the request's transmission.
+  ;;
+  ;; That readable end stays OPEN until the reply body is released
+  ;; (%fetch-body-finish): wasmtime (49) keeps the connection's I/O task alive only
+  ;; while the future it resolves has a reader. Dropped here, as it used to be, the
+  ;; connection was aborted as soon as the response head was in, and the reply body
+  ;; ended with whatever had arrived with the head -- "first-" of a reply that
+  ;; pauses, the first 8 KiB of a large one -- reading as whole.
   (let ((colon (position #\: url)))
     (when (null colon)
       (error 'rontolisp:wit-error
@@ -155,34 +222,60 @@
            (authority (if slash (subseq rest 0 slash) rest))
            (path (if slash (subseq rest slash) "/"))
            (body (getf options :BODY))
-           (headers (getf options :HEADERS))
-           (fields (%http:fields-new)))
-      (%http-add-headers fields headers)
-      ;; The one header we add on the caller's behalf. Without it a caller-silent
-      ;; request goes out with NO user-agent at all -- the java.net.http backends write
-      ;; their own, so the same program sent a different request here, and an origin
-      ;; that rejects agent-less traffic answered it with a 4xx.
-      (unless (%fetch-user-agent-set-p headers)
-        (%http:fields-append fields (%http-user-agent-header)
-                             (%http-default-user-agent)))
-      (let* ((bodypair (if body (%http:body-stream-new) nil))
-             (trailers (%http:trailers-future-new))
-             (reqpair
-              (%http:request-new fields (if bodypair (car bodypair) nil)
-                                 (car trailers) nil))
-             (req (car reqpair)))
-        (%http:request-set-method req
-         (%fetch-method-variant (getf options :METHOD)))
-        (%http:request-set-scheme req (%fetch-scheme-keyword url colon))
-        (%http:request-set-authority req authority)
-        (%http:request-set-path-with-query req path)
-        (let ((future (%http-client:send req)))
-          (when bodypair (%http-write-body (cdr bodypair) body))
-          (%http:trailers-future-write (cdr trailers) (cons :ok nil))
-          (%http:transmit-future-drop-readable (car (cdr reqpair)))
-          future)))))
+           (fields (%fetch-fields (getf options :HEADERS)))
+           (bodypair (if body (%http:body-stream-new) nil))
+           (trailers (%http:trailers-future-new))
+           (reqpair
+            (%http:request-new fields (if bodypair (car bodypair) nil)
+                               (car trailers) nil))
+           (req (car reqpair))
+           (transmission (car (cdr reqpair))))
+      (handler-case (progn
+                      (%http:request-set-method req method)
+                      (%http:request-set-scheme req
+                       (%fetch-scheme-keyword url colon))
+                      (%http:request-set-authority req authority)
+                      (%http:request-set-path-with-query req path))
+        (error ()
+          ;; A URL the host refuses to request (a space in its path): release what
+          ;; was made -- the request takes the body's and the trailers' readable ends
+          ;; with it -- then fail, naming the URL, since the setters' error arms carry
+          ;; nothing.
+          (%http:request-drop req)
+          (when bodypair (%http:body-stream-drop-writable (cdr bodypair)))
+          (%http:transmit-future-drop-readable transmission)
+          (error 'rontolisp:wit-error
+                 :payload :other
+                 :message (concatenate 'string
+                                       "fetch: not a URL the host can request: "
+                                       url))))
+      (let ((future (%http-client:send req)))
+        (when bodypair (%http-write-body (cdr bodypair) body))
+        (%http:trailers-future-write (cdr trailers) (cons :ok nil))
+        (cons future transmission)))))
 
-(defun %fetch-read-response (response)
+(defun %fetch-body-finish (trailers whole transmission)
+  ;; A fetched reply body's part of the release. At the END it reads the trailers
+  ;; future, which is where wasi:http reports a transfer that failed mid-body -- the
+  ;; stream itself just ends, exactly like a body that arrived whole -- and answers
+  ;; its error-code, the failure the release signals; without the look a reply cut
+  ;; short by the network read as a short body, on this backend alone. An early close
+  ;; does not look: the caller gave the rest up. The request's transmission future
+  ;; closes last, whichever way.
+  (let ((failure
+         (if whole
+             (let ((result (%http:trailers-future-read trailers)))
+               (if (and (consp result) (eq (car result) :error))
+                   (cdr result)
+                   (progn
+                     (when (and (consp result) (cdr result))
+                       (%http:fields-drop (cdr result)))
+                     nil)))
+             nil)))
+    (%http:transmit-future-drop-readable transmission)
+    failure))
+
+(defun %fetch-read-response (response transmission)
   ;; The send future settled to the response resource; build the response plist
   ;; through %http-response-plist (generated from the http-plist WIT record, so the
   ;; shape matches the interpreter/JVM by construction) -- :body is a first-class
@@ -193,26 +286,36 @@
          (rheaders (%http:response-get-headers response))
          (headers (%http-sorted-fields (%http-header-alist rheaders)))
          (body
-          (%http-body-value (function %http:response-consume-body) response)))
+          (%http-body-value (function %http:response-consume-body) response
+                            (lambda (trailers whole)
+                              (%fetch-body-finish trailers whole
+                                                  transmission)))))
     (%http:fields-drop rheaders)
     (%http-response-plist status headers body)))
 
-(rontolisp:async-defun %fetch-run (send-future)
-  ;; Awaits the in-flight send -- a REAL suspension when the response has not
-  ;; arrived (the scheduler resumes this frame on the subtask's completion) -- and
-  ;; reads the response. A transport failure re-signals rontolisp:wit-error at the
-  ;; await, rejecting the fetch future, so it surfaces at the CALLER's await.
-  (let ((response (rontolisp:await send-future)))
-    (%fetch-read-response response)))
+(rontolisp:async-defun %fetch-run (url options method)
+  ;; Builds and sends the request, awaits its head -- a REAL suspension while the
+  ;; response has not arrived (the scheduler resumes this frame on the subtask's
+  ;; completion) -- and reads the response. Whatever fails in here rejects the future
+  ;; rontolisp:fetch answered, so it signals at the CALLER's await: a request the host
+  ;; refuses to build as much as a transport failure (rontolisp:wit-error), the
+  ;; interpreter's timing.
+  (let* ((sent (%fetch-send url options method))
+         (response
+          (handler-case (rontolisp:await (car sent))
+            (error (c)
+              (%http:transmit-future-drop-readable (cdr sent))
+              (error c)))))
+    (%fetch-read-response response (cdr sent))))
 
 (defun rontolisp:fetch (url &rest options)
-  ;; Returns a future immediately (the request is already in flight); await it for the
-  ;; (:status :body :headers) plist. A request that cannot even be started -- a
-  ;; malformed URL, an unsupported method -- returns nil rather than a future; a
-  ;; transport failure signals rontolisp:wit-error at await time, matching the
-  ;; interpreter/JVM.
-  (handler-case (%fetch-run (%fetch-send url (if options (car options) nil)))
-    (rontolisp:wit-error () nil)))
+  ;; Returns a future at once, the request already in flight; await it for the
+  ;; (:status :headers :body) plist. The options are validated HERE, so an
+  ;; unsupported method signals at the call (a literal one is a compile error);
+  ;; everything after that fails the future and signals at the await, as on every
+  ;; other backend.
+  (let ((opts (if options (car options) nil)))
+    (%fetch-run url opts (%fetch-method-variant (getf opts :METHOD)))))
 
 ;;; --- serve (incoming): read the request, dispatch, deliver, stream the body ---
 
@@ -250,7 +353,7 @@
          (rheaders (%http:request-get-headers request))
          (headers (%http-header-alist rheaders))
          (stream
-          (%http-body-value (function %http:request-consume-body) request)))
+          (%http-body-value (function %http:request-consume-body) request nil)))
     (%http:fields-drop rheaders)
     (let* ((body (rontolisp:await (%serve-request-body stream)))
            ;; The raw tuple %http-make-env consumes. wasi:http@0.3.0 exposes no peer

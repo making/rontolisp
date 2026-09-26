@@ -206,6 +206,11 @@ final class JvmSetqCompiler {
 	 * {@code putstatic}.
 	 */
 	private static void emitGlobalStore(String name, JvmLispCompiler.Ctx ctx) {
+		if (ctx.mvChannel != null && am.ik.rontolisp.LispNames.MV_SPILL.equals(name)) {
+			ctx.emit(Opcode.DUP);
+			ctx.mvChannel.emitStore(ctx);
+			return;
+		}
 		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
 		am.ik.jvm.ConstantPool.FieldrefConstant tlField = dyn == null ? null : dyn.fields().get(name);
 		int globalFieldIndex = java.util.Objects.requireNonNull(ctx.globalFields.get(name)).index();

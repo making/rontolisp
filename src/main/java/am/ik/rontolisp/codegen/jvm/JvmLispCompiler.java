@@ -1770,6 +1770,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			globalFieldNameUtfs.add(fieldNameUtf);
 			globalFields.put(g, cp.addFieldref(thisClass, cp.addNameAndType(fieldNameUtf, globalFieldDescUtf)));
 		}
+		// The %mv-spill channel: its _g$ field, or -- in a program that runs Lisp code on
+		// more than one thread -- one register per thread (JvmMvChannel).
+		FieldrefConstant mvSpillField = globalFields.get(LispNames.MV_SPILL);
+		final @Nullable JvmMvChannel mvChannel = mvSpillField == null ? null : usesAsyncSpawn || usesThreads
+				? JvmMvChannel.perThread(cp, thisClass, mvSpillField) : new JvmMvChannel(mvSpillField, null);
 		// A special that is DYNAMICALLY BOUND somewhere additionally gets a per-thread
 		// store (a _d$ ThreadLocal next to its _g$ global default), so concurrent
 		// http-handler requests binding the same special do not clobber each other --
@@ -2264,6 +2269,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.nestedDefunNames(nestedDefunNames)
 			.specialVars(specialVars)
 			.globalFields(globalFields)
+			.mvChannel(mvChannel)
 			.dynVars(dynVarRuntime)
 			.structAccessors(structAccessors)
 			.closRegistry(closRegistry);
@@ -2440,6 +2446,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean topLevelInClinit = !exportDecls.isEmpty() || this.servletMode;
 		Ctx mainCtx = ctxBuilder.build();
 		mainCtx.evalStoreRef = evalStoreRef;
+		if (mvChannel != null) {
+			// The thread running main keeps the channel's static field (JvmMvChannel).
+			mvChannel.emitClaimOwner(mainCtx);
+		}
 		// The command line's static home, built HERE rather than beside the other
 		// runtime helpers because main's own prologue is what fills it: a defun that
 		// reads the arguments is an ordinary static method and cannot see main's locals.
@@ -3300,7 +3310,7 @@ public final class JvmLispCompiler implements LispCompiler {
 					cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
 			asyncRuntimeBodies = JvmAsyncRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, stringClass,
 					mainCtx.conditionChannel, progInitForAsync, longValueOf, stringLength, stringSubstring,
-					stringConcat, sizedMain != null ? sizedMain.runRef() : null);
+					stringConcat, sizedMain != null ? sizedMain.runRef() : null, mainCtx.mvChannel);
 			runnableClass = cp.addClass(cp.addUtf8("java/lang/Runnable"));
 		}
 		else {
@@ -3649,6 +3659,13 @@ public final class JvmLispCompiler implements LispCompiler {
 						Objects.requireNonNull(asyncInstanceFieldDesc));
 			}
 		}
+		if (mvChannel != null && mvChannel.perThread() != null) {
+			JvmMvChannel.PerThread mvPerThread = mvChannel.perThread();
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mvPerThread.threadLocalName(),
+					mvPerThread.threadLocalDesc());
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mvPerThread.ownerName(),
+					mvPerThread.ownerDesc());
+		}
 		if (threadRuntimeBodies != null) {
 			for (Utf8Constant instField : List.of(java.util.Objects.requireNonNull(threadFnFieldName),
 					java.util.Objects.requireNonNull(threadBindingsFieldName))) {
@@ -3840,7 +3857,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || teTlField != null
 				|| !mainCtx.layoutPool.isEmpty() || !mainCtx.bigIntPool.isEmpty() || !structTableClinitFinal.isEmpty()
-				|| dynVarRuntime != null || initsClinit) {
+				|| dynVarRuntime != null || initsClinit || (mvChannel != null && mvChannel.perThread() != null)) {
 			// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
 			// on a thread with no pending condition returns null). The async
 			// runtime's _handoffTl (the eager-start handoff) joins the same
@@ -3869,6 +3886,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			if (curThreadTlFieldRef != null) {
 				// The _thread_current handle cache joins the same initializer.
 				tlFields.add(curThreadTlFieldRef);
+			}
+			if (mvChannel != null && mvChannel.perThread() != null) {
+				// The per-thread %mv-spill store joins the same initializer: every
+				// thread's register starts null, nil.
+				tlFields.add(java.util.Objects.requireNonNull(mvChannel.perThread()).threadLocal());
 			}
 			List<Integer> clinitCode = new java.util.ArrayList<>();
 			// The holder-presence probe's single initialization (.todo/757):
@@ -4159,6 +4181,13 @@ public final class JvmLispCompiler implements LispCompiler {
 			JvmAsyncRuntimeBuilder.AsyncMethod runBody = asyncRuntimeBodies.runMethod();
 			definition.addMethod(AccessFlag.ACC_PUBLIC, runBody.name(), runBody.desc(), runBody.maxStack(),
 					runBody.maxLocals(), runBody.code(), exceptionTable(runBody.exceptionTable()));
+		}
+		if (mvChannel != null && mvChannel.perThread() != null) {
+			JvmMvChannel.PerThread mvPerThread = mvChannel.perThread();
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mvPerThread.getName(),
+					mvPerThread.getDesc(), 2, 0, mvPerThread.getCode(mvChannel.field()), List.of());
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mvPerThread.setName(),
+					mvPerThread.setDesc(), 2, 1, mvPerThread.setCode(mvChannel.field()), List.of());
 		}
 		if (octetsStrictRuntime != null) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, octetsStrictRuntime.name(),
@@ -6529,6 +6558,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		Map<String, FieldrefConstant> globalFields = Map.of();
 
 		/**
+		 * The {@code %mv-spill} channel's store ({@link JvmMvChannel}), or null when the
+		 * program declares no spill global. Every read and write of the channel goes
+		 * through it, never through {@link #globalFields} directly.
+		 */
+		@Nullable JvmMvChannel mvChannel;
+
+		/**
 		 * The promoted top-level globals that carry the unboxed dual representation
 		 * ({@code .kb/jvm-int-fusion.md}): a raw {@code long} field and an {@code int}
 		 * flag beside the ordinary {@code _g$} field, which stays the boxed shadow. A
@@ -6681,6 +6717,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.nestedDefunNames = builder.nestedDefunNames;
 			this.specialVars = builder.specialVars;
 			this.globalFields = builder.globalFields;
+			this.mvChannel = builder.mvChannel;
 			this.rawGlobals = builder.rawGlobals;
 			this.dynVars = builder.dynVars;
 			this.cp = Objects.requireNonNull(builder.cp);
@@ -7028,6 +7065,13 @@ public final class JvmLispCompiler implements LispCompiler {
 			private Set<String> specialVars = Set.of();
 
 			private Map<String, FieldrefConstant> globalFields = Map.of();
+
+			private @Nullable JvmMvChannel mvChannel;
+
+			Builder mvChannel(@Nullable JvmMvChannel mvChannel) {
+				this.mvChannel = mvChannel;
+				return this;
+			}
 
 			private Map<String, JvmIntFusionCompiler.RawLocal> rawGlobals = Map.of();
 

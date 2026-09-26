@@ -29,7 +29,7 @@ and a runnable example you can evaluate in your browser.
 | `rontolisp:async` | `(rontolisp:async (defun ...))` or `(rontolisp:async (lambda ...))` | Turn the wrapped `defun`/`lambda` into its asynchronous counterpart (`async-defun`/`async-lambda`) — the JavaScript-style spelling |
 | `rontolisp:async-defun` | `(rontolisp:async-defun name (params...) body...)` | Define an asynchronous function: calling it starts the body eagerly and returns a future that settles with the body's value (or error) |
 | `rontolisp:async-lambda` | `(rontolisp:async-lambda (params...) body...)` | Anonymous asynchronous function; each invocation returns a future |
-| `rontolisp:await` | `(rontolisp:await value)` | Suspend the current asynchronous function until a future settles and return its value; a non-future passes through unchanged. Legal only in `async-defun`/`async-lambda` bodies and at top level |
+| `rontolisp:await` | `(rontolisp:await value)` | Suspend the current asynchronous function until a future settles and return its values; a non-future passes through unchanged. Legal only in `async-defun`/`async-lambda` bodies and at top level |
 | `tagbody` | `(tagbody tag-or-form...)` | Body forms with go tags: `go` jumps to a tag (forward or backward), falling off the end returns nil |
 | `go` | `(go tag)` | Transfer control to a tag of the enclosing `tagbody` (compiled `go` is lexical, but one crossing a `lambda` re-enters the `tagbody` as a non-local exit) |
 | `catch` | `(catch tag body...)` | Establish a dynamic exit point named by `tag` (an `eq`-compared runtime value): the form's value is the body's, or the value of a matching `throw` fired in its dynamic extent (compile error under `--no-gc`) |

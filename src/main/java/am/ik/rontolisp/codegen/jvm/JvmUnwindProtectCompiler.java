@@ -200,25 +200,22 @@ final class JvmUnwindProtectCompiler {
 		if (cleanups.isEmpty()) {
 			return;
 		}
-		am.ik.jvm.ConstantPool.FieldrefConstant spillField = internalOnly(cleanups) ? null
-				: ctx.globalFields.get(LispNames.MV_SPILL);
+		JvmMvChannel spill = internalOnly(cleanups) ? null : ctx.mvChannel;
 		int savedNextLocal = ctx.nextLocal;
 		int spillSlot = -1;
-		if (spillField != null) {
+		if (spill != null) {
 			spillSlot = ctx.allocTemp();
-			ctx.emit(Opcode.GETSTATIC);
-			ctx.emitU2(spillField.index());
+			spill.emitLoad(ctx);
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(spillSlot);
 		}
 		for (LispVal form : cleanups) {
 			JvmExprCompiler.compileForEffect(form, ctx, className);
 		}
-		if (spillField != null) {
+		if (spill != null) {
 			ctx.emit(Opcode.ALOAD);
 			ctx.emit(spillSlot);
-			ctx.emit(Opcode.PUTSTATIC);
-			ctx.emitU2(spillField.index());
+			spill.emitStore(ctx);
 			ctx.nextLocal = savedNextLocal;
 		}
 	}

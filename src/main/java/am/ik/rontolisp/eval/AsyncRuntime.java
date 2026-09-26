@@ -2,6 +2,7 @@ package am.ik.rontolisp.eval;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import am.ik.rontolisp.LispFuture;
@@ -16,7 +17,7 @@ import am.ik.rontolisp.LispVal;
  * completion instead).
  *
  * <p>
- * {@link #run(Supplier)} implements the cross-backend <em>eager-start</em> contract of
+ * {@link #run(Function)} implements the cross-backend <em>eager-start</em> contract of
  * {@code rontolisp:async-defun}: the body starts on a virtual thread, but the caller does
  * not resume until the body reaches its first real suspension point (an await of an
  * unsettled future -- which calls {@link #releaseHandoffIfPending()} before blocking) or
@@ -35,18 +36,20 @@ final class AsyncRuntime {
 	/**
 	 * Runs an asynchronous body: eagerly to its first suspension on the calling thread's
 	 * clock, then concurrently on its virtual thread.
-	 * @param body the zero-argument body (the {@code %async-run} thunk applied by the
-	 * evaluator)
+	 * @param body the body (the {@code %async-run} thunk applied by the evaluator),
+	 * handed the future it settles so it can record its extra values there
+	 * ({@link LispFuture#settleExtras}) before answering its primary value
 	 * @return a future settling with the body's value, or exceptionally with what it
 	 * threw
 	 */
-	static LispFuture run(Supplier<LispVal> body) {
+	static LispFuture run(Function<LispFuture, LispVal> body) {
 		CompletableFuture<LispVal> result = new CompletableFuture<>();
+		LispFuture future = LispFuture.of(result);
 		CountDownLatch handoff = new CountDownLatch(1);
 		Thread.ofVirtual().start(() -> {
 			HANDOFF.set(handoff);
 			try {
-				result.complete(body.get());
+				result.complete(body.apply(future));
 			}
 			catch (Throwable ex) {
 				result.completeExceptionally(ex);
@@ -63,12 +66,12 @@ final class AsyncRuntime {
 			Thread.currentThread().interrupt();
 			throw new LispEvalException("async body interrupted before its first suspension");
 		}
-		return LispFuture.of(result);
+		return future;
 	}
 
 	/**
 	 * Spawns a plain (non-async) virtual thread running the given body:
-	 * {@code rontolisp:make-thread}. Unlike {@link #run(Supplier)} there is no
+	 * {@code rontolisp:make-thread}. Unlike {@link #run(Function)} there is no
 	 * eager-start handoff -- the caller resumes immediately, because a spawned body (a
 	 * server accept loop, say) may neither await nor complete. Kept HERE so the browser
 	 * playground's wholesale substitution of this class covers thread creation too (Web

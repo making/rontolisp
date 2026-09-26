@@ -87,11 +87,27 @@ final class WasmLandingPad {
 		return keepSlotsAlive(ctx, allSlots(ctx));
 	}
 
-	/** Every local declared so far -- what {@link #keepLocalsAlive} pushes. */
+	/**
+	 * Every local declared so far -- what {@link #keepLocalsAlive} pushes -- except an
+	 * async resume's resume-target local ({@link WasmAsyncEmit#RT_SLOT}). The push is a
+	 * snapshot taken at region ENTRY, and {@code $rt} is the one local that changes
+	 * inside a region without a box: a resume routes through the region's head with
+	 * {@code $rt} still naming the target state, and the await landing inside clears it.
+	 * Refreshed, a catch on the resumed frame put the target state back, and every
+	 * statement after the region read as "a later segment" and was skipped. It is an i32
+	 * the collector never moves, so the value the catch edge carries is the one the
+	 * throwing call saw: exactly the value the pad must read.
+	 * @param ctx the compilation context
+	 * @return the slots to keep, in push order
+	 */
 	static int[] allSlots(WasmLispCompiler.Ctx ctx) {
-		int[] slots = new int[ctx.nextLocal];
-		for (int slot = 0; slot < slots.length; slot++) {
-			slots[slot] = slot;
+		boolean resume = ctx.asyncResume != null;
+		int[] slots = new int[resume ? ctx.nextLocal - 1 : ctx.nextLocal];
+		int next = 0;
+		for (int slot = 0; slot < ctx.nextLocal; slot++) {
+			if (!resume || slot != WasmAsyncEmit.RT_SLOT) {
+				slots[next++] = slot;
+			}
 		}
 		return slots;
 	}

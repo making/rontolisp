@@ -2,7 +2,7 @@
 
 `(rontolisp:await value)`
 
-future を与えると、future が確定するまで現在の非同期関数をサスペンドし、確定値を返します。確定済みの future はサスペンドせず、ネストした future はフラット化され、future でない値はそのまま通過します — JavaScript でプロミス以外を `await` した場合と同じで、「future かもしれない値」に一律に `await` を適用できます。
+future を与えると、future が確定するまで現在の非同期関数をサスペンドし、確定した値を返します。確定済みの future はサスペンドせず、ネストした future はフラット化され、future でない値はそのまま通過します — JavaScript でプロミス以外を `await` した場合と同じで、「future かもしれない値」に一律に `await` を適用できます。
 
 ```lisp
 (rontolisp:await 42)   ; => 42
@@ -12,6 +12,15 @@ future を与えると、future が確定するまで現在の非同期関数を
 (rontolisp:async-defun inner () 10)
 (rontolisp:async-defun outer () (+ (rontolisp:await (inner)) 1))
 (rontolisp:await (outer))   ; => 11
+```
+
+## 多値
+
+future は本体の最後のフォームのすべての値で確定し、`await` は関数呼び出しと同じくそれを多値として返します。フラット化された連鎖では最後の future の値が返り、future でない値は1つの値です。
+
+```lisp
+(rontolisp:async-defun div-mod (a b) (floor a b))
+(multiple-value-list (rontolisp:await (div-mod 17 5)))   ; => (3 2)
 ```
 
 `await` は特殊形式で、[`rontolisp:async-defun`](rontolisp-async-defun.md) / [`rontolisp:async-lambda`](rontolisp-async-lambda.md) の本体内とトップレベル (トップレベルは暗黙に非同期です) でのみ使えます。それ以外の場所 — 普通の `defun` や `lambda` の本体、たとえ非同期本体の内側にネストしていても — ではコンパイル/定義時のエラーになります:

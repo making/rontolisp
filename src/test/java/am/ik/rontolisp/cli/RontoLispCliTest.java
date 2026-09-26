@@ -1533,7 +1533,10 @@ class RontoLispCliTest {
 		// pass that used to rebuild unconditionally: the JSON call-site rewrite, the Gray
 		// binding-form walk, the component sockets/async rewrite (which also runs
 		// ShadowedBuiltins with a non-empty alias map, the arity bundler and the
-		// cross-lambda lowering over the spliced library).
+		// cross-lambda lowering over the spliced library), and the unread-char pushback
+		// rewrite -- both naming unread-char directly and through read, the prelude Lisp
+		// spliced over it (LispPreludeLibrary), so the whole program (this malformed form
+		// included) goes through UnreadCharLibrary's rewrite.
 		record Case(String trigger, String output, String[] flags) {
 		}
 		Case[] cases = { new Case("(print (rontolisp:json-parse \"{}\"))", "Json.class", new String[0]),
@@ -1542,7 +1545,9 @@ class RontoLispCliTest {
 				new Case("(print (rontolisp:tcp-connect \"localhost\" 80))", "tcp.wasm",
 						new String[] { "--component" }),
 				new Case("(print (rontolisp:fetch \"http://example.com/\"))", "fetch.wasm",
-						new String[] { "--component" }) };
+						new String[] { "--component" }),
+				new Case("(print (unread-char #\\a))", "UnreadChar.class", new String[0]),
+				new Case("(print (read))", "read.wasm", new String[0]) };
 		for (Case testCase : cases) {
 			Path file = this.tempDir.resolve("bad.lisp");
 			Files.writeString(file, """

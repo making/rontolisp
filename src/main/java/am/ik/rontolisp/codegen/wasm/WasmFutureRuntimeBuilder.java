@@ -11,10 +11,13 @@ import am.ik.wasm.WasmWriter;
  * (emitted only when the program uses {@code rontolisp:async-defun}/{@code async-lambda}/
  * {@code await}; every other module is byte-identical to a build that never knew about
  * it). A future is a {@code TYPE_FUTURE} struct {@code {mut i32 state, mut value, mut
- * waiters, mut source}} with state 0 = pending, 1 = fulfilled (value = the result), 2 =
+ * waiters, mut extras}} with state 0 = pending, 1 = fulfilled (value = the result), 2 =
  * rejected (value = the {@code $lisp-cond} payload cons). {@code waiters} is a cons list
  * of resume closures ({@code TYPE_CLOSURE} over a suspended function's
- * {@code TYPE_ASYNC_FRAME}); {@code source} is reserved for the host-waitable registry.
+ * {@code TYPE_ASYNC_FRAME}); {@code extras} is the fulfilled value's extra values in the
+ * {@code %mv-spill} channel's shape -- nil for one value, which every future but an async
+ * body's is -- written by the body's resume as it completes, published by
+ * {@code _future_poll}.
  *
  * <p>
  * Waiter wake-up is a direct call in this tier (no microtask queue): settling a future
@@ -246,18 +249,21 @@ final class WasmFutureRuntimeBuilder {
 	 * async-calling interface
 	 * @param cb the callback-task wiring, or {@code null} when the module has no
 	 * callback-lifted export
+	 * @param identityHash whether the module's conses carry the identity-hash slot
+	 * @param spillGlobal the {@code %mv-spill} channel's global index, or -1 when the
+	 * program has no multiple-value consumer (the poll then publishes nothing)
 	 * @return the function body bytes (locals declaration included)
 	 */
 	static byte[] build(int off, int base, int futureType, int frameType, int streamType, int currentTaskGlobal,
 			@org.jspecify.annotations.Nullable Sched sched, @org.jspecify.annotations.Nullable Cb cb,
-			boolean identityHash) {
+			boolean identityHash, int spillGlobal) {
 		return switch (off) {
 			case OFF_NEW -> buildNew(futureType);
 			case OFF_SETTLE -> buildSettleOrReject(base, futureType, 1);
 			case OFF_REJECT -> buildSettleOrReject(base, futureType, 2);
 			case OFF_ADD_WAITER -> buildAddWaiter(futureType, identityHash);
 			case OFF_WAKE -> buildWake(base, futureType);
-			case OFF_POLL -> buildPoll(futureType);
+			case OFF_POLL -> buildPoll(futureType, spillGlobal);
 			case OFF_SUBTASK_FUTURE ->
 				sched == null ? buildUnreachableStub() : buildSubtaskFuture(futureType, sched, identityHash);
 			case OFF_SCHED_LOOP -> sched == null ? buildSyncForce(base) : buildSchedLoop(base, futureType, sched);
@@ -558,8 +564,10 @@ final class WasmFutureRuntimeBuilder {
 	// returns a PENDING future unchanged (the await site suspends on it); throws the
 	// payload of a rejected future on $lisp-cond (the memoized re-signal at await). A
 	// TYPE_P1_FUTURE cannot reach an asyncMode module (its only producer, %async-run, is
-	// the non-asyncMode lowering), so there is no degenerate-future branch.
-	private static byte[] buildPoll(int futureType) {
+	// the non-asyncMode lowering), so there is no degenerate-future branch. With a spill
+	// global the poll is await's multiple-value producer: it answers one value unless
+	// the last fulfilled future of the chain carries extras, which it publishes.
+	private static byte[] buildPoll(int futureType, int spillGlobal) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int STATE = 1;
@@ -567,6 +575,10 @@ final class WasmFutureRuntimeBuilder {
 		w.write(1);
 		w.writeUnsignedLeb128(1);
 		w.write(Type.I32);
+		if (spillGlobal >= 0) {
+			refNullEq(w);
+			globalSet(w, spillGlobal);
+		}
 		w.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		w.write(Instruction.LOOP, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		// TYPE_FUTURE: dispatch on state.
@@ -584,11 +596,16 @@ final class WasmFutureRuntimeBuilder {
 		getLocal(w, 0);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		// fulfilled -> flatten
+		// fulfilled -> flatten (publishing its extras: the innermost hop decides)
 		getLocal(w, STATE);
 		i32(w, 1);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		if (spillGlobal >= 0) {
+			castFuture(w, 0, futureType);
+			structGet(w, futureType, 3);
+			globalSet(w, spillGlobal);
+		}
 		castFuture(w, 0, futureType);
 		structGet(w, futureType, 1);
 		setLocal(w, 0);

@@ -81,9 +81,10 @@ wasmtime run --dir . fileio.wasm
   rest of the component. Run a fetch component with `-S http=y` (which makes
   the host provide `wasi:http`). Non-fetch
   components do not import `wasi:http`, so they do not need `-S http`. A
-  transport failure (refused connection, unresolvable host) signals
-  `rontolisp:wit-error` at `await` time on every backend; `nil` comes back
-  only for a request that cannot be started. See the
+  transport failure (refused connection, unresolvable host) or a URL no
+  request can be built for signals `rontolisp:wit-error` when the future is
+  awaited, and an unsupported `:method` signals at the `fetch` call, both as
+  on every other backend. See the
   [HTTP fetch guide](http-fetch.md) for the request/response shape.
 - TCP sockets (`rontolisp:tcp-connect` / `tcp-listen` / `tcp-accept` /
   `tcp-local-port`) work in component mode over `wasi:sockets@0.3.0`

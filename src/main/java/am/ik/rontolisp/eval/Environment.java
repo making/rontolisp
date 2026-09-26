@@ -208,16 +208,17 @@ public final class Environment implements Scope {
 
 	/**
 	 * The {@code %mv-spill} channel ({@link LispNames#MV_SPILL}) of the GLOBAL
-	 * environment -- the interpreter's value-count register: nil while the last value
-	 * produced was one value, the extra values after it as a fresh list, or
-	 * {@code LispMacroExpander.MV_ZERO_VALUES} for no value at all. A field rather than a
-	 * binding because the evaluator writes it on every primitive step (an atom, a
-	 * built-in's return, an argument list), which a map put could not afford; the Lisp
-	 * variable {@code %mv-spill} the expansions read and assign resolves to it through
+	 * environment -- the interpreter's value-count register, one per thread: nil while
+	 * the last value produced was one value, the extra values after it as a fresh list,
+	 * or {@code LispMacroExpander.MV_ZERO_VALUES} for no value at all. Not a binding
+	 * because the evaluator writes it on every primitive step (an atom, a built-in's
+	 * return, an argument list), which a map put could not afford; the Lisp variable
+	 * {@code %mv-spill} the expansions read and assign resolves to it through
 	 * {@link #lookup}/{@link #set}. Every Java publisher goes through
-	 * {@link #publishSpill}, every clear through {@link #clearSpill}.
+	 * {@link #publishSpill}, every clear through {@link #clearSpill}. A child scope
+	 * shares its top-level scope's register.
 	 */
-	private LispVal mvSpill = LispNil.INSTANCE;
+	private final ValueCountRegister mvSpill;
 
 	/**
 	 * Resolves the print family's default destination at call time. Set by the evaluator
@@ -462,6 +463,7 @@ public final class Environment implements Scope {
 	 */
 	public Environment(@Nullable Environment parent) {
 		this.parent = parent;
+		this.mvSpill = parent == null ? new ValueCountRegister() : parent.mvSpill;
 	}
 
 	/**
@@ -519,7 +521,7 @@ public final class Environment implements Scope {
 			return this.parent.lookup(name);
 		}
 		if (LispNames.MV_SPILL.equals(name)) {
-			return this.mvSpill;
+			return this.mvSpill.get();
 		}
 		throw LispEvalException.ofClass(ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME,
 				ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX + name + ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX);
@@ -544,7 +546,7 @@ public final class Environment implements Scope {
 		if (this.parent != null) {
 			return this.parent.lookupOrNull(name);
 		}
-		return LispNames.MV_SPILL.equals(name) ? this.mvSpill : null;
+		return LispNames.MV_SPILL.equals(name) ? this.mvSpill.get() : null;
 	}
 
 	/**
@@ -708,7 +710,7 @@ public final class Environment implements Scope {
 		if (LispNames.MV_SPILL.equals(name)) {
 			// The expansions' (setq %mv-spill ...): a publish or a clear of the
 			// channel, never a binding.
-			this.mvSpill = value;
+			this.mvSpill.set(value);
 			return;
 		}
 		// If not found anywhere, define in current scope
@@ -722,7 +724,7 @@ public final class Environment implements Scope {
 	 * @param extras the channel value
 	 */
 	void publishSpill(LispVal extras) {
-		this.mvSpill = extras;
+		this.mvSpill.set(extras);
 	}
 
 	/**
@@ -733,7 +735,7 @@ public final class Environment implements Scope {
 	 * the value-count register of a native implementation, kept as a field.
 	 */
 	void clearSpill() {
-		this.mvSpill = LispNil.INSTANCE;
+		this.mvSpill.set(LispNil.INSTANCE);
 	}
 
 	/**
@@ -741,7 +743,7 @@ public final class Environment implements Scope {
 	 * @return nil, the extra values, or the zero-values marker
 	 */
 	LispVal spill() {
-		return this.mvSpill;
+		return this.mvSpill.get();
 	}
 
 	/**
