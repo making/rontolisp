@@ -462,7 +462,9 @@ never knew about it.** `codegen/wasm/WasmUncaughtLocations`; pinned by
   function and appends a hop whose await site is the next frame with a line.
 - **Texts ride with their frame**: the name and hop text are unspelled string literals built in the
   frame's own landing (`compileUnspelledLiteral`: a spelled one would arm the dispatch gate), so
-  the shaker drops them with the frame. A first version kept a quoted name TABLE: every defun's
+  the shaker drops them with the frame. The name is the program's spelling
+  (`UncaughtReport.functionName`, the mapping every backend uses: a method body names its generic).
+  A first version kept a quoted name TABLE: every defun's
   name stayed after its function was shaken -- zlib +4,489 B instead of +3,856. Files are the one
   table (quoted list, sealed when the entry's render compiles; the prescan of the program is what
   makes it complete, since every Pass 2 rewrite inherits an existing cons's position).

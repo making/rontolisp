@@ -497,7 +497,8 @@ final class WasmUncaughtLocations {
 	 * frame: a condition passing through it is noted by the frames around it, as the
 	 * interpreter's frames without a located form note nothing. The file is that of the
 	 * body's located code; the definition line the defining form's when it was read from
-	 * the same file, else the body's first located line.
+	 * the same file, else the body's first located line. The name is the one the program
+	 * spelled ({@link UncaughtReport#functionName}: a method body reports its generic).
 	 * @param module the module state, or {@code null} when the option is off
 	 * @param name the function's name, or {@code null} for an anonymous one
 	 * @param form the defining form, or {@code null}
@@ -523,7 +524,7 @@ final class WasmUncaughtLocations {
 		}
 		SourceLocation defined = fileLocation(form);
 		int baseLine = defined != null && file.equals(defined.file()) ? defined.line() : own.line();
-		return new Spec(fileId, baseLine, name, null);
+		return new Spec(fileId, baseLine, name == null ? null : UncaughtReport.functionName(name), null);
 	}
 
 	/**
@@ -560,7 +561,8 @@ final class WasmUncaughtLocations {
 	 * @return the text
 	 */
 	static String hopText(@Nullable String asyncFunction) {
-		String line = UncaughtReport.asyncLine(asyncFunction, null, 0);
+		String line = UncaughtReport
+			.asyncLine(asyncFunction == null ? null : UncaughtReport.functionName(asyncFunction), null, 0);
 		return line.substring(line.indexOf("in ") + "in ".length());
 	}
 
