@@ -520,6 +520,15 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalSupplementaryPlaneCharacterLiteralReadsAsOneCharacter() {
+		// #\<emoji> is one code point above U+FFFF -- a UTF-16 surrogate PAIR in the
+		// source. char-code must answer the code point, and (string ...) of it must be
+		// a one-character (one code point) string, on every backend.
+		assertThat(eval("(char-code #\\😀)").print()).isEqualTo("128512");
+		assertThat(eval("(length (string #\\😀))").print()).isEqualTo("1");
+	}
+
+	@Test
 	void evalMapNilCallsForEffect() {
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));

@@ -14003,6 +14003,12 @@ cases:
       ;; Supplementary code point (astral): U+1F600 grinning face.
       (print (char-code (code-char 128512)))
       (print (string (code-char 128512)))
+      ;; The SAME code point read directly through the #\ reader syntax (not
+      ;; built via code-char): a supplementary character literal is a UTF-16
+      ;; surrogate PAIR in the source, and scanning it one unit at a time reads
+      ;; only the high surrogate, stranding the low surrogate as its own token.
+      (print (char-code #\😀))
+      (print (string #\😀))
       ;; String indexing / length are CHARACTER-based (code points), not code
       ;; units, so a supplementary code point counts as one indexed step.
       (print (length "😀"))
@@ -14046,6 +14052,8 @@ cases:
       233
       913
       1072
+      128512
+      "😀"
       128512
       "😀"
       1

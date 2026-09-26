@@ -843,8 +843,12 @@ public final class LispLexer {
 			throw eofAt(literalStart, "Unexpected end of input after #\\");
 		}
 		int start = this.pos;
-		char first = this.input.charAt(this.pos);
-		this.pos++;
+		// A code point, not a char: a supplementary-plane literal (#\\U+1F600) is one
+		// surrogate PAIR in the UTF-16 input, and scanning it as a single char would
+		// read only the high surrogate, leaving the low surrogate to be lexed as the
+		// next, unrelated token.
+		int first = this.input.codePointAt(this.pos);
+		this.pos += Character.charCount(first);
 		// A multi-character name only follows an alphabetic first character.
 		if (Character.isLetter(first)) {
 			while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
@@ -852,7 +856,7 @@ public final class LispLexer {
 			}
 		}
 		String token = this.input.substring(start, this.pos);
-		if (token.length() == 1) {
+		if (token.codePointCount(0, token.length()) == 1) {
 			return new Token.CharToken(first);
 		}
 		return new Token.CharToken(charByName(token, literalStart));
