@@ -329,29 +329,75 @@ the one `princ` writes, and nothing below changes it.
 
 **Under it, location lines** (`UncaughtReport.atLine` / `asyncLine`, two-space indented):
 `  at FILE:LINE in FUNCTION` -- the innermost form read from a named file that the condition passed
-through and the innermost NAMED function (or macro expander) holding it -- then one
+through and the innermost of the PROGRAM'S named functions holding it -- then one
 `  in NAME (async), awaited at FILE:LINE` per async boundary crossed. Nothing known (a `-e`
-program, only macro-built forms) prints none. **The interpreter prints them; the compiled backends
-do not yet** (open items for the JVM backend, wasm-GC and interpreted Scheme source).
-- **Recorded on the throw path only** (`eval/ConditionTrace`, on `LispEvalException.trace()`):
-  `evalCons` keeps the innermost `LocatedCons` it stepped onto and the lambda it was in then (a
-  type test and two stores per loop step; [source-positions.md](source-positions.md) Phase 4) and
-  hands them over from the catch clauses it already had. The function is decided by the first
-  frame that sees the location known and is in a named body: a tail call into a library function
-  with no positions reports the CALL SITE and the caller; a location found only in a caller is
-  never attributed to the callee; an anonymous lambda defers to the named function around it.
-- **Async**: `evalCons` runs `%async-run` itself (`runAsync`), naming the async function from its
-  own frame -- the body's virtual thread never sees the defun. A condition escaping the thunk
-  closes segment 0 (`crossedAsync`), so the awaiter's frames are not attributed to it; the first
-  located form after that is the `await`.
+program, only macro-built forms) prints none. **The interpreter and the JVM backend print the same
+lines** (`cli/UncaughtReportParityTest`); wasm-GC and interpreted Scheme source do not yet (open
+items). The JVM backend locates Scheme source too (`SchemeReader` records positions on the compile
+path), so a compiled `.scm` prints lines its interpreted run does not until the Scheme item lands.
+- **Which function** (both backends): only a named function whose body was read from a named file
+  (`LispLambda.sourced`; `JvmSourceSites.sourced`) -- a library function a user callback runs
+  under is never named (`%run-handlers` around a `handler-bind` handler, `%sort-runtime` around a
+  sort predicate). A location found only in a caller is never attributed to the callee, and an
+  anonymous lambda defers to the named function around it -- DYNAMICALLY: a frame keeps the
+  program function it entered across a tail call into an anonymous lambda or a library function
+  (`frameFunction` in `evalCons`), since that code still runs for it and the JVM still has its
+  frame. Before 2026-09-26 an `flet` helper or a callback called in tail position lost its
+  caller, and `handler-bind` handlers reported `%RUN-HANDLERS`. A lowering's internal name is
+  reported as the program spelled it (`UncaughtReport.functionName`): a method body is its
+  generic (`%AREA--m0` -> `AREA`), a `%top-defun$` rename its original.
+- **Interpreter -- recorded on the throw path only** (`eval/ConditionTrace`, on
+  `LispEvalException.trace()`): `evalCons` keeps the innermost `LocatedCons` it stepped onto and
+  the function it was in then (a type test and two stores per loop step;
+  [source-positions.md](source-positions.md) Phase 4) and hands them over from the catch clauses
+  it already had.
+- **Interpreter async**: `evalCons` runs `%async-run` itself (`runAsync`), naming the async
+  function from its own frame -- the body's virtual thread never sees the defun. A condition
+  escaping the thunk closes segment 0 (`crossedAsync`), so the awaiter's frames are not attributed
+  to it; the first located form after that is the `await`.
+- **JVM -- read off the stack trace** (`codegen/jvm/JvmSourceSites`, `JvmUncaughtHandler`): every
+  method the program's own source compiled into carries a `LineNumberTable` whose numbers are SITE
+  ids -- (file, line, function) in a table the class carries as string constants -- not lines: a
+  method holds several files' forms (a top-level chunk, a macro handing back a form of its own
+  file) and a class names one `SourceFile`. `Ctx.enterSite`/`leaveSite` around every form
+  (`JvmExprCompiler.compileCons`, the statement `setq`/`let`, the fused `if`/`while` test) mark
+  where the innermost located form changes; a named function's methods open on its BASE site, so
+  a frame stopped anywhere in them names it; a tail-spine item carries the site current where it
+  was queued (`JvmBodyOutliner.Entry` -- the construct that queued it has returned by then), and a
+  `_k$N` continuation inherits its method's. `_where` walks the exception's trace: the innermost
+  frame of this class (or a `$PartN`) at a located site, then the first named site from there
+  out. The positions are `SourceProvenance`'s, the same forms the interpreter's reader locates.
+- **JVM async**: the `%async-run` thunk's last exception entry appends a made-up frame
+  `rontolisp/async.crossed(HEAD)` to the escaping exception's trace (`_asyncCross`; `/` is in no
+  binary name), and the first `_await` that rethrows it appends its OWN frames after it
+  (`_asyncAwaited`) -- once per crossing, the interpreter's first-await rule. `_where` reads each
+  such frame as a hop. An exception keeps its identity (`handler-case` classifies by class), and
+  the report empties the trace, so none of it shows unless `RONTOLISP_DEBUG` asks for the trace --
+  which then IS the async chain.
+- **JVM optimizations keep the granularity**: a fused integer tree (`_fx$N`,
+  [jvm-int-fusion.md](jvm-int-fusion.md)) whose operations all report the call's own site stays
+  shared and line-free; one that spans lines, or holds an inlined defun's body, gets a method of
+  its own whose fallback marks each operation (so `(sq a)` inlined into F still says `in SQ`, even
+  when F itself was inlined into the top level). A typed loop marks its array accesses.
+- **Nothing located, nothing emitted**: a class compiled with no position in a named file (`-e`,
+  a direct `JvmLispCompiler.compile` with no recording scope) has no line numbers, no site table,
+  no `_where` and its pool in the old order -- the bytes it always had
+  (`UncaughtReportParityTest#aProgramWithNothingLocatedCompilesAsItAlwaysDid`). The line numbers
+  survive every pass after emission: `BranchRelaxer` remaps them, `JvmClassShaker`,
+  `JvmClassSplitter` and `StackMapAugmenter` carry the attribute (no instruction moves there).
+- **Cost, measured 2026-09-26**: +1.5-2 KB per class (`_where` and its constants; ~1 KB gzip)
+  plus ~7 bytes per located line (examples/console +1.5-1.9 KB; `llm.lisp` 1.10 MB +12.6 KB,
+  1.1%); a fused tree that needs its own method ~200 B. Zero at run time until a condition
+  escapes.
 - **Harness decisions, per suite**: `ci-spec.yaml`'s `standalone:` compares expected stderr lines
   as CONTAINED, in order (wasmtime prints around ours), so the location lines need no change there
-  and are pinned instead by `RontoLispCliStreamsTest`'s `anUncaught*` cases, where the file path is
-  the test's own. `scheme-spec.yaml` and the Scheme cases in `RontoLispCliStreamsTest` compare the
-  whole of stderr and stay valid because Scheme source is not located yet -- when it is, they
-  compare the report line. The JVM/wasm assertions (`JvmLispCompilerTest`, `JvmSizedMainTest`,
-  `WasmLispCompilerIntegrationTest`) pin the report line and stay exact until those backends print
-  locations.
+  and are pinned instead by `RontoLispCliStreamsTest`'s `anUncaught*` cases (the interpreter, then
+  `java -cp` and `java -jar` of the compiled program) and `UncaughtReportParityTest`, where the file
+  path is the test's own. `scheme-spec.yaml`'s interpreter leg and the Scheme cases in
+  `RontoLispCliStreamsTest` compare the whole of stderr and stay valid because interpreted Scheme
+  is not located yet -- when it is, they compare the report line; the JVM leg compares CONTAINED.
+  The JVM/wasm assertions that compile directly (`JvmLispCompilerTest`, `JvmSizedMainTest`,
+  `WasmLispCompilerIntegrationTest`) record no positions, so they pin the report line alone.
 
 - **Interpreter / compile failures** (`RontoLispCli.runReporting`): only `main` catches -- `run`
   still throws, so an embedded caller keeps the exception with its type and cause. A rontolisp
@@ -360,7 +406,8 @@ do not yet** (open items for the JVM backend, wasm-GC and interpreted Scheme sou
   position on any backend**: the location goes under the report, never into the text a program
   can read. `RONTOLISP_DEBUG` additionally prints the JVM trace.
 - **JVM** (`JvmUncaughtHandler`): a last exception-table entry over the whole of `main` catching
-  `RuntimeException`; prints the line, EMPTIES the stack trace and RETHROWS. **Not
+  `RuntimeException`; prints the line (and `_where` the location lines), EMPTIES the stack trace
+  and RETHROWS. **Not
   `System.exit(1)`**: a compiled class's `main` is invoked in-process by ~110 assertions here and by
   any embedder; the launcher supplies exit 1.
 - **wasm-GC, EH MODE ONLY** (`WasmUncaughtReportCompiler`): the entry function wraps its body in
@@ -943,6 +990,11 @@ all, so **`restart-case` alone unblocks nothing real**.
   `compileRuntimeErrorDispatchScalesPastTheBranchLimit`, `anUncaughtCondition*`, `ehUncaught*`, and
   the `compileAndRunHandlerCaseIn*` block -- which must COMPILE, LOAD and RUN the class, since the
   broken class was written without complaint and only failed at link time.
+- Location lines: `RontoLispCliStreamsTest`'s `anUncaught*`/`anAsyncBodys*` (interpreter, `java -cp`,
+  `java -jar`), `cli/UncaughtReportParityTest` (both backends, every shape above: tail calls,
+  `labels`, macros, a loaded file, library callbacks, methods, nested defuns, async chains,
+  fused trees, typed loops, continuations, nothing located), `am.ik.jvm.LineNumberTableTest` (the
+  attribute through the relaxer, shaker, splitter and augmenter).
 - Gates in `LispMacroExpanderTest`: `conditionNarrowing*`,
   `anExplicitFormatControlInitargForcesTheRenderer`, `aComputedDatumMakesTheConditionSetUnknowable`,
   `aDirectiveFreeLiteralFormatControlStillDeclinesTheRenderer`,

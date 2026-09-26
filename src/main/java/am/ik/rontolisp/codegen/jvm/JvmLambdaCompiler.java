@@ -53,7 +53,7 @@ final class JvmLambdaCompiler {
 		ctx.valueFuncIds.add(funcId);
 		String methodName = "_lambda_" + funcId;
 		ctx.lambdaDecls.add(new JvmLispCompiler.LambdaInfo(funcId, methodName, paramNames, nf.variadic(), bodyExprs,
-				new ArrayList<>(freeVars)));
+				new ArrayList<>(freeVars), ctx.lambdaReportNames.get(cons), ctx.asyncBodyHeads.get(cons)));
 		int totalSize = 1 + freeVars.size();
 		JvmEmitHelper.emitIntConst(ctx, totalSize);
 		ctx.emit(Opcode.ANEWARRAY);

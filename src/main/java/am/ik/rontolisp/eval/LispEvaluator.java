@@ -54,6 +54,7 @@ import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
+import am.ik.rontolisp.compiler.UncaughtReport;
 import am.ik.rontolisp.compiler.ClackEnv;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.WitExportDirective;
@@ -6096,19 +6097,24 @@ public final class LispEvaluator {
 		boolean inBody = false;
 		boolean funcallSeam = false;
 		// Where a condition leaving this frame was (ConditionTrace): the innermost form
-		// read from a named file the loop has stepped onto and the lambda whose body it
-		// was in then, and the lambda whose body the loop is in now. A type test and two
-		// stores per step; read only when a condition escapes.
+		// read from a named file the loop has stepped onto and the function it was in
+		// then, and the function the loop is in now. A type test and two stores per step;
+		// read only when a condition escapes. The function is the innermost of the
+		// program's own named functions this frame has entered (LispLambda.sourced): a
+		// tail call into an anonymous lambda or a library function REPLACES the frame's
+		// lambda but not the function the code is still running for -- the frame a
+		// compiled backend would still have on its stack.
 		LocatedCons located = null;
 		LispLambda locatedIn = null;
 		LispLambda frameLambda = null;
+		LispLambda frameFunction = null;
 		LispVal result;
 		try {
 			frame: while (true) {
 				LispVal next;
 				if (cons instanceof LocatedCons here) {
 					located = here;
-					locatedIn = frameLambda;
+					locatedIn = frameFunction;
 				}
 				dispatch: {
 					LispVal head = cons.car();
@@ -6742,7 +6748,9 @@ public final class LispEvaluator {
 						// The async function whose body this thunk is, named from THIS
 						// frame: the body's own thread will never see the defun.
 						try {
-							result = singleValue(runAsync(args, frameLambda == null ? null : frameLambda.name()));
+							String asyncName = frameLambda == null ? null : frameLambda.name();
+							result = singleValue(
+									runAsync(args, asyncName == null ? null : UncaughtReport.functionName(asyncName)));
 						}
 						catch (LispEvalException e) {
 							throw withHandlerBindHandlersRun(e);
@@ -6753,6 +6761,9 @@ public final class LispEvaluator {
 						Environment lambdaEnv = lexicalLambdaScope(lambda, args);
 						if (lambdaEnv != null) {
 							frameLambda = lambda;
+							if (lambda.sourced()) {
+								frameFunction = lambda;
+							}
 							// The body runs in this frame. See expandMacroCall: the depth
 							// tells a macro expansion
 							// whether its call site is a TOP-LEVEL form (whose file's
@@ -6821,17 +6832,17 @@ public final class LispEvaluator {
 			result = signal.value();
 		}
 		catch (LispEvalException e) {
-			e.trace().passing(located, locatedIn, frameLambda);
+			e.trace().passing(located, locatedIn, frameFunction);
 			throw funcallSeam ? withHandlerBindHandlersRun(e) : e;
 		}
 		catch (IllegalArgumentException | IndexOutOfBoundsException raw) {
 			LispEvalException failure = rawEvaluationFailure(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, raw);
-			failure.trace().passing(located, locatedIn, frameLambda);
+			failure.trace().passing(located, locatedIn, frameFunction);
 			throw funcallSeam ? withHandlerBindHandlersRun(failure) : failure;
 		}
 		catch (ClassCastException | ArithmeticException | NegativeArraySizeException raw) {
 			LispEvalException failure = rawEvaluationFailure(rawFailureConditionClass(raw), raw);
-			failure.trace().passing(located, locatedIn, frameLambda);
+			failure.trace().passing(located, locatedIn, frameFunction);
 			throw funcallSeam ? withHandlerBindHandlersRun(failure) : failure;
 		}
 		finally {
@@ -7612,8 +7623,11 @@ public final class LispEvaluator {
 		// The funcName rides on the value so it prints #<function NAME>, the text both
 		// compiled backends answer from their function-name table (a defun's value is a
 		// lambda here, a funcId there -- the name is the one identity either keeps).
+		// Whether its body was read from a named file decides whether the uncaught
+		// report may name it (ConditionTrace): a library's function never does.
+		boolean sourced = LispTrees.anyCons(blockForm, form -> form instanceof LocatedCons);
 		this.globalEnv.defineFunction(funcName,
-				new LispLambda(expanded.required(), expanded.rest(), List.of(blockForm), env, funcName));
+				new LispLambda(expanded.required(), expanded.rest(), List.of(blockForm), env, funcName, sourced));
 		return singleValue(nameForm);
 	}
 

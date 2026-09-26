@@ -1,5 +1,7 @@
 package am.ik.rontolisp.compiler;
 
+import am.ik.rontolisp.macro.LispMacroExpander;
+
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -22,8 +24,11 @@ import org.jspecify.annotations.Nullable;
  * indented lines ({@link #atLine}, {@link #asyncLine}): the innermost form read from a
  * named file that the condition passed through and the named function enclosing it, then
  * one line per asynchronous boundary it crossed. A condition with nothing known (a
- * {@code -e} program, a form a macro built) prints no location line. The interpreter
- * prints them; the compiled backends print the report line alone.
+ * {@code -e} program, a form a macro built) prints no location line. The interpreter and
+ * the JVM backend print the same ones -- the JVM backend reads them off the stack trace
+ * ({@code codegen.jvm.JvmUncaughtHandler}), which is why the function named is the
+ * program's own ({@link #functionName}) and a frame keeps the function it entered across
+ * a tail call; the wasm-GC backends print the report line alone.
  *
  * <p>
  * <b>Why not the JVM stack trace.</b> The trace names the interpreter's own frames, not
@@ -48,6 +53,24 @@ public final class UncaughtReport {
 	/** What every location line under the report starts with. */
 	private static final String LOCATION_INDENT = "  ";
 
+	/**
+	 * What the line naming where the condition was signaled starts with; the file, a
+	 * colon and the line follow ({@link #atLine}).
+	 */
+	public static final String AT_PREFIX = LOCATION_INDENT + "at ";
+
+	/** What joins the function holding the form to {@link #AT_PREFIX}'s position. */
+	public static final String IN_FUNCTION = " in ";
+
+	/**
+	 * What an async boundary's line starts with; {@link #asyncHead} and, when known,
+	 * {@link #AWAITED_AT} and the await's position follow ({@link #asyncLine}).
+	 */
+	public static final String ASYNC_PREFIX = LOCATION_INDENT + "in ";
+
+	/** What joins an async boundary's head to the position of the await that rethrew. */
+	public static final String AWAITED_AT = ", awaited at ";
+
 	private UncaughtReport() {
 	}
 
@@ -71,7 +94,7 @@ public final class UncaughtReport {
 	 * @return the line, without its newline
 	 */
 	public static String atLine(String file, int line, @Nullable String function) {
-		return LOCATION_INDENT + "at " + file + ":" + line + (function == null ? "" : " in " + function);
+		return AT_PREFIX + file + ":" + line + (function == null ? "" : IN_FUNCTION + function);
 	}
 
 	/**
@@ -83,8 +106,32 @@ public final class UncaughtReport {
 	 * @return the line, without its newline
 	 */
 	public static String asyncLine(@Nullable String function, @Nullable String file, int line) {
-		return LOCATION_INDENT + "in " + (function == null ? "an async lambda" : function + " (async)")
-				+ (file == null ? "" : ", awaited at " + file + ":" + line);
+		return ASYNC_PREFIX + asyncHead(function) + (file == null ? "" : AWAITED_AT + file + ":" + line);
+	}
+
+	/**
+	 * The name a location line calls a function by, given the name it was defined under:
+	 * the program's own spelling where a lowering renamed it -- a method body is its
+	 * generic function ({@code %AREA--m0} is {@code AREA}), a top-level defun a nested
+	 * one redefines keeps its name ({@link NestedDefunRedefinition}). One mapping for
+	 * every backend, so their lines stay identical.
+	 * @param defined the name the function was defined under
+	 * @return the name to report
+	 */
+	public static String functionName(String defined) {
+		String generic = LispMacroExpander.genericOfMethodFunction(defined);
+		return generic != null ? generic : NestedDefunRedefinition.originalName(defined);
+	}
+
+	/**
+	 * What an async boundary's line names the body it escaped by -- the part a compiled
+	 * program knows before it runs, since the async function is fixed where
+	 * {@code %async-run} is called.
+	 * @param function the async function's name, or {@code null} for an async lambda
+	 * @return the head, without {@link #ASYNC_PREFIX}
+	 */
+	public static String asyncHead(@Nullable String function) {
+		return function == null ? "an async lambda" : function + " (async)";
 	}
 
 	/**
@@ -94,7 +141,7 @@ public final class UncaughtReport {
 	 * @return true for a location line
 	 */
 	public static boolean isLocationLine(String line) {
-		return line.startsWith(LOCATION_INDENT + "at ") || line.startsWith(LOCATION_INDENT + "in ");
+		return line.startsWith(AT_PREFIX) || line.startsWith(ASYNC_PREFIX);
 	}
 
 	/**

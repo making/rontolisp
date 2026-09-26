@@ -337,7 +337,7 @@ final class JvmLetCompiler {
 				}
 			}
 			items.add(new JvmBodyOutliner.Cleanup(afterBody));
-			tail.pushFront(items);
+			tail.pushFront(items, ctx);
 			return;
 		}
 		for (int i = 2; i < parts.size(); i++) {

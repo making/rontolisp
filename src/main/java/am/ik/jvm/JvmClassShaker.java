@@ -43,16 +43,17 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * Correctness rests on properties of the rontolisp output that this class verifies by
  * construction: methods carry exactly one {@code Code} attribute whose only permitted
- * sub-attribute is a {@code StackMapTable} (dropped, not preserved -- its frames index
- * the pool being compacted; run {@link StackMapAugmenter} after shaking to restore it),
- * fields and the class itself carry no attributes (no {@code invokedynamic}), and every
- * constant-pool tag and instruction is in the finite set enumerated here. Anything
- * unrecognized makes the pass throw rather than silently emit a corrupt class.
- * Dynamically-reached methods stay alive the same way they do on WASM: first-class calls
- * go through dispatch methods whose bodies contain real {@code invokestatic}s to every
- * registered function. The one edge invisible to bytecode is a reflective call by name;
- * the caller lists such methods as extra roots (rontolisp: {@code _apply}, looked up
- * reflectively by the embedded {@code java:} bridge).
+ * sub-attributes are a {@code StackMapTable} (dropped, not preserved -- its frames index
+ * the pool being compacted; run {@link StackMapAugmenter} after shaking to restore it)
+ * and a {@code LineNumberTable} (kept: it names no pool entry but its own attribute name,
+ * and no instruction moves), fields and the class itself carry no attributes (no
+ * {@code invokedynamic}), and every constant-pool tag and instruction is in the finite
+ * set enumerated here. Anything unrecognized makes the pass throw rather than silently
+ * emit a corrupt class. Dynamically-reached methods stay alive the same way they do on
+ * WASM: first-class calls go through dispatch methods whose bodies contain real
+ * {@code invokestatic}s to every registered function. The one edge invisible to bytecode
+ * is a reflective call by name; the caller lists such methods as extra roots (rontolisp:
+ * {@code _apply}, looked up reflectively by the embedded {@code java:} bridge).
  * <p>
  * The same class-file walk answers the opposite question, and
  * {@link #unresolvedSelfMethods(byte[])} exposes it: which own-class methods does the
@@ -100,10 +101,14 @@ public final class JvmClassShaker {
 	/**
 	 * A parsed method: its header indices and single {@code Code} attribute, plus the
 	 * derived facts the shaker needs (every constant-pool index site in the bytecode, and
-	 * the this-class method/field keys it references).
+	 * the this-class method/field keys it references). {@code lineNumberTable} is the
+	 * body of the method's {@code LineNumberTable} sub-attribute, carried through
+	 * verbatim, and {@code lineNumberAttrNameIdx} its name; 0 and {@code null} when the
+	 * method has none.
 	 */
 	private record MethodInfo(int access, int nameIdx, int descIdx, int codeAttrNameIdx, int maxStack, int maxLocals,
-			byte[] code, List<ExcEntry> exceptionTable, List<CpSite> cpSites) {
+			byte[] code, List<ExcEntry> exceptionTable, List<CpSite> cpSites, int lineNumberAttrNameIdx,
+			byte @Nullable [] lineNumberTable) {
 	}
 
 	/** A constant-pool index immediate within a method body: offset and byte width. */
@@ -214,6 +219,9 @@ public final class JvmClassShaker {
 			markCp(cp, marked, m.nameIdx);
 			markCp(cp, marked, m.descIdx);
 			markCp(cp, marked, m.codeAttrNameIdx);
+			if (m.lineNumberTable != null) {
+				markCp(cp, marked, m.lineNumberAttrNameIdx);
+			}
 			for (CpSite site : m.cpSites) {
 				markCp(cp, marked, readIndex(m.code, site));
 			}
@@ -301,9 +309,12 @@ public final class JvmClassShaker {
 			writeU2(out, 1); // the single Code attribute
 			writeU2(out, remap[m.codeAttrNameIdx]);
 			// max_stack + max_locals + code_length + code + exception_table_length +
-			// entries + attributes_count; the byte size never changes, so exception-table
-			// pc offsets and switch padding stay valid.
-			writeU4(out, 2 + 2 + 4 + m.code.length + 2 + 8 * m.exceptionTable.size() + 2);
+			// entries + attributes_count (+ the line numbers); the byte size never
+			// changes, so exception-table and line-number pc offsets and switch padding
+			// stay valid.
+			byte @Nullable [] lines = m.lineNumberTable;
+			writeU4(out, 2 + 2 + 4 + m.code.length + 2 + 8 * m.exceptionTable.size() + 2
+					+ (lines == null ? 0 : 2 + 4 + lines.length));
 			writeU2(out, m.maxStack);
 			writeU2(out, m.maxLocals);
 			writeU4(out, m.code.length);
@@ -315,7 +326,15 @@ public final class JvmClassShaker {
 				writeU2(out, e.handlerPc);
 				writeU2(out, e.catchType == 0 ? 0 : remap[e.catchType]);
 			}
-			writeU2(out, 0);
+			if (lines == null) {
+				writeU2(out, 0);
+			}
+			else {
+				writeU2(out, 1);
+				writeU2(out, remap[m.lineNumberAttrNameIdx]);
+				writeU4(out, lines.length);
+				writeRaw(out, lines);
+			}
 		}
 		writeU2(out, 0); // class attributes
 
@@ -494,20 +513,27 @@ public final class JvmClassShaker {
 					readU2(classFile, p)));
 		}
 		int codeAttrCount = readU2(classFile, p);
+		int lineNumberAttrNameIdx = 0;
+		byte @Nullable [] lineNumberTable = null;
 		for (int i = 0; i < codeAttrCount; i++) {
 			// A StackMapTable (from a prior StackMapAugmenter run) is dropped: its frames
 			// reference constant-pool entries the compaction would invalidate, and the
-			// caller re-augments after shaking anyway. Anything else is unsupported.
+			// caller re-augments after shaking anyway. A LineNumberTable is kept as it
+			// is -- pcs and line numbers only. Anything else is unsupported.
 			int subAttrNameIdx = readU2(classFile, p);
-			if (!"StackMapTable".equals(utf8(cp, subAttrNameIdx))) {
-				throw new IllegalStateException(
-						"JvmClassShaker: unsupported Code sub-attribute " + utf8(cp, subAttrNameIdx));
-			}
+			String subAttrName = utf8(cp, subAttrNameIdx);
 			int subAttrLen = readU4(classFile, p);
+			if ("LineNumberTable".equals(subAttrName) && lineNumberTable == null) {
+				lineNumberAttrNameIdx = subAttrNameIdx;
+				lineNumberTable = slice(classFile, p[0], p[0] + subAttrLen);
+			}
+			else if (!"StackMapTable".equals(subAttrName)) {
+				throw new IllegalStateException("JvmClassShaker: unsupported Code sub-attribute " + subAttrName);
+			}
 			p[0] += subAttrLen;
 		}
 		return new MethodInfo(access, nameIdx, descIdx, attrNameIdx, maxStack, maxLocals, code, exceptionTable,
-				scanCpSites(code));
+				scanCpSites(code), lineNumberAttrNameIdx, lineNumberTable);
 	}
 
 	// --- Instruction scanning ---

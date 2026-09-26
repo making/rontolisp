@@ -191,7 +191,11 @@ final class JvmTypedLoopCompiler {
 		}
 	}
 
-	record Aref(Var arr, List<Node> idx) implements Node {
+	/**
+	 * An element read. {@code site} is the {@code aref} form's source site
+	 * ({@link JvmSourceSites}), which an out-of-range index is reported at.
+	 */
+	record Aref(Var arr, List<Node> idx, int site) implements Node {
 		@Override
 		public T type() {
 			return T.DOUBLE;
@@ -233,7 +237,11 @@ final class JvmTypedLoopCompiler {
 		}
 	}
 
-	record Aset(Var arr, List<Node> idx, Node value) implements Node {
+	/**
+	 * An element store. {@code site} is the store form's source site, which an
+	 * out-of-range index is reported at.
+	 */
+	record Aset(Var arr, List<Node> idx, Node value, int site) implements Node {
 		@Override
 		public T type() {
 			return T.DOUBLE;
@@ -842,10 +850,10 @@ final class JvmTypedLoopCompiler {
 					return new ArrLen(arrayVar(parts.get(1), sc, 1));
 				}
 				case LispNames.AREF -> {
-					return aref(parts, sc);
+					return aref(parts, sc, siteOf(cons));
 				}
 				case LispNames.ASET -> {
-					return aset(parts, sc);
+					return aset(parts, sc, siteOf(cons));
 				}
 				case LispNames.SETF, LispNames.SETQ -> {
 					if (parts.size() < 3 || parts.size() % 2 == 0) {
@@ -862,7 +870,9 @@ final class JvmTypedLoopCompiler {
 								&& pc.car() instanceof LispSymbol ph && LispNames.AREF.equals(ph.name())) {
 							List<LispVal> ap = new ArrayList<>(pc.toList());
 							ap.add(value);
-							stores.add(aset(ap, sc));
+							// The store is the setf's: the place itself is never
+							// evaluated.
+							stores.add(aset(ap, sc, siteOf(cons)));
 						}
 						else {
 							throw Ineligible.raise();
@@ -1016,16 +1026,25 @@ final class JvmTypedLoopCompiler {
 			return idx;
 		}
 
-		private Node aref(List<LispVal> parts, Scope sc) {
+		/**
+		 * The source site of a form the loop body holds, under the compiling method's
+		 * function; 0 when the compile records no positions or the form has none.
+		 */
+		private int siteOf(LispCons form) {
+			JvmSourceSites table = this.ctx.sites;
+			return table == null ? 0 : table.site(form, this.ctx.siteOwner);
+		}
+
+		private Node aref(List<LispVal> parts, Scope sc, int site) {
 			int rank = parts.size() - 2;
 			if (rank < 1 || rank > 2) {
 				throw Ineligible.raise();
 			}
 			Var arr = arrayVar(parts.get(1), sc, rank);
-			return new Aref(arr, subscripts(parts, 2, rank, sc));
+			return new Aref(arr, subscripts(parts, 2, rank, sc), site);
 		}
 
-		private Node aset(List<LispVal> parts, Scope sc) {
+		private Node aset(List<LispVal> parts, Scope sc, int site) {
 			// (%aset a i... value)
 			int rank = parts.size() - 3;
 			if (rank < 1 || rank > 2) {
@@ -1035,7 +1054,7 @@ final class JvmTypedLoopCompiler {
 			arr.stored = true;
 			List<Node> idx = subscripts(parts, 2, rank, sc);
 			Node value = expr(parts.get(2 + rank), sc);
-			return new Aset(arr, idx, value);
+			return new Aset(arr, idx, value, site);
 		}
 
 		private Node setq(LispSymbol place, LispVal valueForm, Scope sc) {
@@ -1129,11 +1148,18 @@ final class JvmTypedLoopCompiler {
 
 		private final @Nullable MethodrefConstant materialize;
 
+		/**
+		 * The source site current where the loop is compiled -- the {@code dotimes}
+		 * form's -- which every instruction but an array access reports.
+		 */
+		private final int loopSite;
+
 		Emitter(Analysis an, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 			this.an = an;
 			this.cons = cons;
 			this.ctx = ctx;
 			this.className = className;
+			this.loopSite = ctx.siteCurrent;
 			this.floatArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[F"));
 			this.doubleArrayClass = ctx.cp.addClass(ctx.cp.addUtf8("[D"));
 			Map<String, MethodrefConstant> gpuOps = ctx.gpuOps;
@@ -1558,6 +1584,8 @@ final class JvmTypedLoopCompiler {
 				}
 				case Aref a -> {
 					arrayIndex(a.arr(), a.idx());
+					// An index out of range fails in this load: it reports the aref.
+					atSite(a.site());
 					if (this.single) {
 						this.ctx.emit(Opcode.FALOAD);
 						this.ctx.emit(Opcode.F2D);
@@ -1565,6 +1593,7 @@ final class JvmTypedLoopCompiler {
 					else {
 						this.ctx.emit(Opcode.DALOAD);
 					}
+					this.ctx.restoreSite(this.loopSite);
 				}
 				case Arith a -> {
 					if (a.type() == T.LONG) {
@@ -1665,6 +1694,11 @@ final class JvmTypedLoopCompiler {
 			this.ctx.emit(Opcode.IADD);
 		}
 
+		/** Makes the next instruction report {@code site}, the loop's own without one. */
+		private void atSite(int site) {
+			this.ctx.restoreSite(site == 0 ? this.loopSite : site);
+		}
+
 		private void aset(Aset a, boolean valueNeeded) {
 			// No --gpu guard here: hoistArrays already reported the array written, once
 			// for the whole loop.
@@ -1677,6 +1711,8 @@ final class JvmTypedLoopCompiler {
 				this.ctx.emit(Opcode.DSTORE);
 				this.ctx.emit(tmp);
 			}
+			// An index out of range fails in this store: it reports the store's form.
+			atSite(a.site());
 			if (this.single) {
 				this.ctx.emit(Opcode.D2F);
 				this.ctx.emit(Opcode.FASTORE);
@@ -1684,6 +1720,7 @@ final class JvmTypedLoopCompiler {
 			else {
 				this.ctx.emit(Opcode.DASTORE);
 			}
+			this.ctx.restoreSite(this.loopSite);
 			if (valueNeeded) {
 				// the value of a store is the value AS STORED (narrowed for single)
 				this.ctx.emit(Opcode.DLOAD);

@@ -7,7 +7,7 @@ expansion) first when a large program trips the guard.
 
 ## The four format limits
 - **Branch offset, signed 16 bits** — RELAXED by `am.ik.jvm.BranchRelaxer` (`goto_w`, or an
-  inverted short branch over one; fixpoint sizing, remapped exception table), fed by
+  inverted short branch over one; fixpoint sizing, remapped exception table and line numbers), fed by
   `JvmEmitHelper.patchBranch` -> `Ctx.deferredBranches`. No deferred branch => byte-identical
   output. The raw-list `JvmRuntimeBuilder.patchBranch` still throws.
 - **Code array <= 65535 bytes** (JVMS 4.7.3). HARD; `am.ik.jvm.ClassDefinition` (and

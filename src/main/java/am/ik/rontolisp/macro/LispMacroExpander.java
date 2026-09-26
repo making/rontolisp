@@ -21369,6 +21369,45 @@ public final class LispMacroExpander {
 	 * @return the generated method-body defun, or a progn of a synthesized default plus
 	 * the method-body defun
 	 */
+	/** What a method-body defun's name carries between its generic's name and index. */
+	private static final String METHOD_FUNCTION_INFIX = "--m";
+
+	/**
+	 * Mints the name of the next method-body defun of a generic: {@code %NAME--mN}, the
+	 * {@code %} after the package qualifier when there is one.
+	 * {@link #genericOfMethodFunction} reads it back.
+	 */
+	private static String methodFunctionName(ClosRegistry.GenericInfo generic) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(generic.name());
+		return (qn == null ? "%" + generic.name() : qn.pkg() + "::%" + qn.member()) + METHOD_FUNCTION_INFIX
+				+ generic.nextMethodIndex();
+	}
+
+	/**
+	 * The generic function a method-body defun implements, read back from the name
+	 * {@link #expandDefmethod} gave it -- what an uncaught condition's report calls the
+	 * function, since the program never spelled the internal name.
+	 * @param functionName a defun's name
+	 * @return the generic's name, or {@code null} when the name is not a method body's
+	 */
+	public static @Nullable String genericOfMethodFunction(String functionName) {
+		int infix = functionName.lastIndexOf(METHOD_FUNCTION_INFIX);
+		if (infix < 0 || infix + METHOD_FUNCTION_INFIX.length() == functionName.length()) {
+			return null;
+		}
+		for (int i = infix + METHOD_FUNCTION_INFIX.length(); i < functionName.length(); i++) {
+			if (!Character.isDigit(functionName.charAt(i))) {
+				return null;
+			}
+		}
+		String head = functionName.substring(0, infix);
+		int qualified = head.indexOf("::%");
+		if (qualified > 0) {
+			return head.substring(0, qualified + 2) + head.substring(qualified + 3);
+		}
+		return head.length() > 1 && head.charAt(0) == '%' ? head.substring(1) : null;
+	}
+
 	public static LispVal expandDefmethod(LispCons cons, ClosRegistry closRegistry, boolean nested) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3 || !(parts.get(1) instanceof LispSymbol nameSym)) {
@@ -21496,9 +21535,7 @@ public final class LispMacroExpander {
 				insertRestVariable(tail, methodRestVar);
 			}
 		}
-		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(generic.name());
-		String functionName = (qn == null ? "%" + generic.name() : qn.pkg() + "::%" + qn.member()) + "--m"
-				+ generic.nextMethodIndex();
+		String functionName = methodFunctionName(generic);
 		String specKey = specKeyText(specializers);
 		// Qualifier + specializers form the registry key, so a :before dog method and a
 		// primary dog method coexist while redefining the same qualifier+specializers
@@ -21659,9 +21696,7 @@ public final class LispMacroExpander {
 		for (int i = 0; i < generic.paramNames().size(); i++) {
 			defaults.add(ClosRegistry.Specializer.DEFAULT);
 		}
-		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(generic.name());
-		String defaultName = (qn == null ? "%" + generic.name() : qn.pkg() + "::%" + qn.member()) + "--m"
-				+ generic.nextMethodIndex();
+		String defaultName = methodFunctionName(generic);
 		generic.methods().put(specKeyText(defaults), new ClosRegistry.MethodInfo(defaults, defaultName, "", false));
 		List<LispVal> params = new java.util.ArrayList<>();
 		params.add(new LispSymbol(NEXT_METHOD_VAR));
@@ -21693,8 +21728,7 @@ public final class LispMacroExpander {
 		for (int i = 0; i < generic.paramNames().size(); i++) {
 			defaults.add(ClosRegistry.Specializer.DEFAULT);
 		}
-		String defaultName = (qn == null ? "%" + generic.name() : qn.pkg() + "::%" + qn.member()) + "--m"
-				+ generic.nextMethodIndex();
+		String defaultName = methodFunctionName(generic);
 		generic.methods().put(specKeyText(defaults), new ClosRegistry.MethodInfo(defaults, defaultName, "", false));
 		generic.markVariadic();
 		List<LispVal> defaultParams = new java.util.ArrayList<>();
@@ -21872,8 +21906,8 @@ public final class LispMacroExpander {
 				for (int i = 2; i < parts.size(); i++) {
 					call.add(rewriteNextMethod(parts.get(i), paramNames, restVar, optionals));
 				}
-				return makeIf(new LispSymbol(NEXT_METHOD_VAR), listToCons(call), listToCons(
-						List.of(new LispSymbol(LispNames.ERROR), new LispString("call-next-method: no next method"))));
+				return inheriting(cons, makeIf(new LispSymbol(NEXT_METHOD_VAR), listToCons(call), listToCons(
+						List.of(new LispSymbol(LispNames.ERROR), new LispString("call-next-method: no next method")))));
 			}
 			if (LispNames.CALL_NEXT_METHOD.equals(plain)) {
 				List<LispVal> rawArgs = cons.toList().subList(1, cons.toList().size());
@@ -21895,18 +21929,20 @@ public final class LispMacroExpander {
 					call.add(rawArgs.isEmpty() && !optionals.isEmpty() ? forwardedTail(optionals, forwardedRest)
 							: new LispSymbol(forwardedRest));
 				}
-				return makeIf(new LispSymbol(NEXT_METHOD_VAR), listToCons(call), listToCons(
-						List.of(new LispSymbol(LispNames.ERROR), new LispString("call-next-method: no next method"))));
+				return inheriting(cons, makeIf(new LispSymbol(NEXT_METHOD_VAR), listToCons(call), listToCons(
+						List.of(new LispSymbol(LispNames.ERROR), new LispString("call-next-method: no next method")))));
 			}
 			if (LispNames.NEXT_METHOD_P.equals(plain) && cons.toList().size() == 1) {
-				return callOf(LispNames.NOT, callOf(LispNames.NULL, new LispSymbol(NEXT_METHOD_VAR)));
+				return inheriting(cons, callOf(LispNames.NOT, callOf(LispNames.NULL, new LispSymbol(NEXT_METHOD_VAR))));
 			}
 		}
 		List<LispVal> out = new java.util.ArrayList<>();
 		for (LispVal element : cons.toList()) {
 			out.add(rewriteNextMethod(element, paramNames, restVar, optionals));
 		}
-		return listToCons(out);
+		// Identity-preserving (.kb/source-positions.md): a method body with no
+		// call-next-method in a form keeps that form -- and its source position.
+		return rebuilt(cons, out);
 	}
 
 	/**
@@ -35792,7 +35828,9 @@ public final class LispMacroExpander {
 			letParts.add(LispNil.INSTANCE);
 		}
 		letParts.addAll(rewrittenBody);
-		return listToCons(letParts);
+		// The expansion stands where the flet/labels form stood (.kb/source-positions.md,
+		// "Half 2").
+		return inheriting(cons, listToCons(letParts));
 	}
 
 	/** Records which of the given names occur as a symbol anywhere in the tree. */
@@ -35832,7 +35870,7 @@ public final class LispMacroExpander {
 		if (!(cons.car() instanceof LispSymbol sym)) {
 			// Non-symbol head, e.g. ((lambda (x) ...) arg...): every element is an
 			// expression (also reached for cond-style clauses via the generic walk).
-			return rewriteTail(cons.toList(), 0, fns);
+			return rewriteTail(cons, cons.toList(), 0, fns);
 		}
 		String name = sym.name();
 		if (LispNames.QUOTE.equals(name) || LispNames.DEFMACRO.equals(name) || LispNames.DEFPACKAGE.equals(name)) {
@@ -35842,14 +35880,15 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> parts = cons.toList();
 		if (fns.containsKey(name)) {
-			// Call position: (f args...) -> (funcall var args...)
+			// Call position: (f args...) -> (funcall var args...), standing where the
+			// call stood.
 			List<LispVal> out = new java.util.ArrayList<>();
 			out.add(new LispSymbol(LispNames.FUNCALL));
 			out.add(fns.get(name));
 			for (int i = 1; i < parts.size(); i++) {
 				out.add(rewriteLocalCalls(parts.get(i), fns));
 			}
-			return listToCons(out);
+			return inheriting(cons, listToCons(out));
 		}
 		switch (name) {
 			case LispNames.FUNCTION: {
@@ -35858,20 +35897,20 @@ public final class LispMacroExpander {
 				}
 				if (parts.size() == 2 && parts.get(1) instanceof LispCons) {
 					// (function (lambda ...)): walk the lambda expression.
-					return rewriteTail(parts, 1, fns);
+					return rewriteTail(cons, parts, 1, fns);
 				}
 				return form;
 			}
 			case LispNames.LAMBDA:
-				return rewriteKeeping(parts, 2, fns, rewriteLambdaList(parts.get(1), fns));
+				return rewriteKeeping(cons, parts, 2, fns, rewriteLambdaList(parts.get(1), fns));
 			case LispNames.DEFUN:
-				return rewriteKeeping(parts, 3, fns, parts.get(1), rewriteLambdaList(parts.get(2), fns));
+				return rewriteKeeping(cons, parts, 3, fns, parts.get(1), rewriteLambdaList(parts.get(2), fns));
 			case LispNames.LET, LispNames.LET_STAR, LispNames.DO, LispNames.DO_STAR, LispNames.SYMBOL_MACROLET:
 				// (let ((name init)...) body...) / (do ((var init step)...) (end
 				// result...) body...) / (symbol-macrolet ((name expansion)...) body...):
 				// binding names stay (they are variables, not functions), init/step/
 				// end/result/expansion and the body are expressions.
-				return rewriteKeeping(parts, 2, fns, rewriteBindings(parts.get(1), fns));
+				return rewriteKeeping(cons, parts, 2, fns, rewriteBindings(parts.get(1), fns));
 			case LispNames.DOLIST, LispNames.DOTIMES, LispNames.WITH_OPEN_FILE: {
 				// (dolist (var listform result) body...): var stays.
 				LispVal spec = parts.get(1);
@@ -35882,9 +35921,9 @@ public final class LispMacroExpander {
 					for (int i = 1; i < specParts.size(); i++) {
 						newSpec.add(rewriteLocalCalls(specParts.get(i), fns));
 					}
-					spec = listToCons(newSpec);
+					spec = rebuilt(specCons, newSpec);
 				}
-				return rewriteKeeping(parts, 2, fns, spec);
+				return rewriteKeeping(cons, parts, 2, fns, spec);
 			}
 			case LispNames.MULTIPLE_VALUE_BIND: {
 				// (multiple-value-bind (vars...) values-form body...): the variable
@@ -35892,7 +35931,7 @@ public final class LispMacroExpander {
 				if (parts.size() < 2) {
 					return form; // malformed; the expansion reports it
 				}
-				return rewriteKeeping(parts, 2, fns, parts.get(1));
+				return rewriteKeeping(cons, parts, 2, fns, parts.get(1));
 			}
 			case LispNames.DESTRUCTURING_BIND: {
 				// (destructuring-bind pattern form body...): the pattern's variables
@@ -35901,7 +35940,7 @@ public final class LispMacroExpander {
 				if (parts.size() < 2) {
 					return form; // malformed; the expansion reports it
 				}
-				return rewriteKeeping(parts, 2, fns, rewriteDestructuringPattern(parts.get(1), fns));
+				return rewriteKeeping(cons, parts, 2, fns, rewriteDestructuringPattern(parts.get(1), fns));
 			}
 			case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE,
 					LispNames.CTYPECASE: {
@@ -35917,13 +35956,13 @@ public final class LispMacroExpander {
 						for (int j = 1; j < clauseParts.size(); j++) {
 							newClause.add(rewriteLocalCalls(clauseParts.get(j), fns));
 						}
-						newParts.add(listToCons(newClause));
+						newParts.add(rebuilt(clause, newClause));
 					}
 					else {
 						newParts.add(parts.get(i));
 					}
 				}
-				return listToCons(newParts);
+				return rebuilt(cons, newParts);
 			}
 			case LispNames.DEFSTRUCT: {
 				// (defstruct name (slot default)...): only slot defaults are expressions.
@@ -35938,13 +35977,13 @@ public final class LispMacroExpander {
 						for (int j = 1; j < slotParts.size(); j++) {
 							newSlot.add(rewriteLocalCalls(slotParts.get(j), fns));
 						}
-						newParts.add(listToCons(newSlot));
+						newParts.add(rebuilt(slotCons, newSlot));
 					}
 					else {
 						newParts.add(parts.get(i));
 					}
 				}
-				return listToCons(newParts);
+				return rebuilt(cons, newParts);
 			}
 			case LispNames.FLET, LispNames.LABELS: {
 				// A nested flet/labels shadows this level's bindings of the same names
@@ -35976,7 +36015,7 @@ public final class LispMacroExpander {
 						for (int i = 2; i < dp.size(); i++) {
 							newDef.add(rewriteLocalCalls(dp.get(i), defScope));
 						}
-						newDefs.add(listToCons(newDef));
+						newDefs.add(rebuilt(defCons, newDef));
 					}
 					else {
 						newDefs.add(def);
@@ -35985,40 +36024,44 @@ public final class LispMacroExpander {
 				List<LispVal> newParts = new java.util.ArrayList<>();
 				newParts.add(parts.get(0));
 				newParts.add(nestedDefs.isEmpty() && !(parts.size() > 1 && parts.get(1) instanceof LispCons)
-						? parts.get(1) : listToCons(newDefs));
+						? parts.get(1)
+						: parts.get(1) instanceof LispCons defsList ? rebuilt(defsList, newDefs) : listToCons(newDefs));
 				for (int i = 2; i < parts.size(); i++) {
 					newParts.add(rewriteLocalCalls(parts.get(i), shadowed));
 				}
-				return listToCons(newParts);
+				return rebuilt(cons, newParts);
 			}
 			default:
 				// Every other operator (function call, macro call, special form): the
 				// head resolves in the function namespace and stays, all arguments are
 				// expressions.
-				return rewriteTail(parts, 1, fns);
+				return rewriteTail(cons, parts, 1, fns);
 		}
 	}
 
 	// Rewrites parts[from..] as expressions, keeping parts[0] and the given fixed
-	// subforms verbatim.
-	private static LispVal rewriteKeeping(List<LispVal> parts, int from, java.util.Map<String, LispSymbol> fns,
-			LispVal... fixed) {
+	// subforms verbatim. The original comes back when nothing changed, and a rebuilt
+	// form keeps its position (.kb/source-positions.md).
+	private static LispVal rewriteKeeping(LispCons original, List<LispVal> parts, int from,
+			java.util.Map<String, LispSymbol> fns, LispVal... fixed) {
 		List<LispVal> newParts = new java.util.ArrayList<>();
 		newParts.add(parts.get(0));
 		newParts.addAll(List.of(fixed));
 		for (int i = from; i < parts.size(); i++) {
 			newParts.add(rewriteLocalCalls(parts.get(i), fns));
 		}
-		return listToCons(newParts);
+		return rebuilt(original, newParts);
 	}
 
-	// Rewrites parts[from..] as expressions, keeping parts[0..from-1] verbatim.
-	private static LispVal rewriteTail(List<LispVal> parts, int from, java.util.Map<String, LispSymbol> fns) {
+	// Rewrites parts[from..] as expressions, keeping parts[0..from-1] verbatim. The
+	// original comes back when nothing changed, and a rebuilt form keeps its position.
+	private static LispVal rewriteTail(LispCons original, List<LispVal> parts, int from,
+			java.util.Map<String, LispSymbol> fns) {
 		List<LispVal> newParts = new java.util.ArrayList<>();
 		for (int i = 0; i < parts.size(); i++) {
 			newParts.add(i < from ? parts.get(i) : rewriteLocalCalls(parts.get(i), fns));
 		}
-		return listToCons(newParts);
+		return rebuilt(original, newParts);
 	}
 
 	// Rewrites the init/step forms of a let/do binding list, keeping the bound names.
@@ -36035,13 +36078,13 @@ public final class LispMacroExpander {
 				for (int i = 1; i < pair.size(); i++) {
 					newPair.add(rewriteLocalCalls(pair.get(i), fns));
 				}
-				newBindings.add(listToCons(newPair));
+				newBindings.add(rebuilt(bindingCons, newPair));
 			}
 			else {
 				newBindings.add(binding);
 			}
 		}
-		return listToCons(newBindings);
+		return rebuilt(bindingsCons, newBindings);
 	}
 
 	// Rewrites the default-value forms inside a destructuring pattern (specs after
@@ -36069,13 +36112,13 @@ public final class LispMacroExpander {
 				for (int i = 1; i < sp.size(); i++) {
 					newSpec.set(i, rewriteLocalCalls(sp.get(i), fns));
 				}
-				newElements.add(listToCons(newSpec));
+				newElements.add(rebuilt(specCons, newSpec));
 			}
 			else {
 				newElements.add(e);
 			}
 		}
-		return listToCons(newElements);
+		return rebuilt(patternCons, newElements);
 	}
 
 	// Rewrites the default-value forms of a lambda list ((var default supplied-p) in
@@ -36092,13 +36135,13 @@ public final class LispMacroExpander {
 				if (pp.size() > 1) {
 					newParam.set(1, rewriteLocalCalls(pp.get(1), fns));
 				}
-				newParams.add(listToCons(newParam));
+				newParams.add(rebuilt(paramCons, newParam));
 			}
 			else {
 				newParams.add(param);
 			}
 		}
-		return listToCons(newParams);
+		return rebuilt(listCons, newParams);
 	}
 
 	/**

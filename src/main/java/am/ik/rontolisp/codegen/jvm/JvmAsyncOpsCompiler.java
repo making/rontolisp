@@ -57,6 +57,13 @@ final class JvmAsyncOpsCompiler {
 		if (helper == null) {
 			throw new IllegalStateException(member + " helper method was not emitted");
 		}
+		if (LispNames.ASYNC_RUN.equals(member) && ctx.sites != null && args.get(1) instanceof LispCons thunk
+				&& thunk.car() instanceof am.ik.rontolisp.LispSymbol head && LispNames.LAMBDA.equals(head.name())) {
+			// The thunk the async-defun/async-lambda lowering built: its failures cross
+			// an async boundary, named after the function this call is compiled in --
+			// what the interpreter names it by, the lambda whose body runs %async-run.
+			ctx.asyncBodyHeads.put(thunk, am.ik.rontolisp.compiler.UncaughtReport.asyncHead(ctx.functionName));
+		}
 		for (int i = 1; i < args.size(); i++) {
 			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
 		}

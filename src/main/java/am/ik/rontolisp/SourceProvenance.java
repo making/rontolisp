@@ -39,8 +39,14 @@ import org.jspecify.annotations.Nullable;
  * location wins, and a frame whose cons is macro-generated (not in the table) simply
  * leaves the slot for an enclosing one to fill -- that is the "nearest enclosing located
  * cons" rule. The compile boundary then reads {@link #failureLocation(RuntimeException)}
- * and prefixes the message it reports. Compiled output is untouched: nothing here reaches
- * an emitter.
+ * and prefixes the message it reports.
+ *
+ * <p>
+ * <b>One emitter reads it: the JVM backend's line numbers.</b> A compiled class maps its
+ * instructions to the forms they came from ({@code codegen.jvm.JvmSourceSites}), so an
+ * uncaught condition reports where it happened as the interpreter does. A form with no
+ * FILE (a {@code -e} program, a library spliced from the jar) counts as unlocated there,
+ * and a class in which nothing was located is emitted exactly as without this table.
  */
 public final class SourceProvenance {
 
@@ -57,16 +63,19 @@ public final class SourceProvenance {
 
 	/** A cons's recorded origin: the unit it was read from and its offset in it. */
 	private record Position(Unit unit, int offset) {
-
-		SourceLocation location() {
-			return SourceLocation.at(this.unit.file(), this.offset, this.unit.text());
-		}
 	}
 
 	/** The per-thread recording; {@code null} when this thread is not recording. */
 	private static final class State {
 
 		final Map<LispCons, Position> positions = new IdentityHashMap<>();
+
+		/**
+		 * Each unit's line-start offsets, built on the first lookup into it. By identity:
+		 * {@link Unit} is a record, and comparing two whole source texts per lookup is
+		 * what this index exists to avoid.
+		 */
+		final Map<Unit, int[]> lineStarts = new IdentityHashMap<>();
 
 		/** The exception {@link #failureLocation} currently describes, by identity. */
 		@Nullable RuntimeException failing;
@@ -76,6 +85,39 @@ public final class SourceProvenance {
 
 		/** The top-level form the pipeline is on, used when no frame noted a location. */
 		@Nullable LispVal topLevelForm;
+
+		/**
+		 * The location of a recorded position: what {@link SourceLocation#at} computes by
+		 * scanning the text from its start, answered through a line index built once per
+		 * unit -- a backend that asks for every form it emits would otherwise make its
+		 * compile quadratic in the program's size.
+		 */
+		SourceLocation location(Position position) {
+			Unit unit = position.unit();
+			String text = unit.text();
+			int[] starts = this.lineStarts.computeIfAbsent(unit, u -> lineStartsOf(u.text()));
+			int limit = Math.max(0, Math.min(position.offset(), text.length()));
+			int index = java.util.Arrays.binarySearch(starts, limit);
+			int line = index >= 0 ? index : -index - 2;
+			return new SourceLocation(unit.file(), line + 1, limit - starts[line] + 1);
+		}
+
+		private static int[] lineStartsOf(String text) {
+			int count = 1;
+			for (int i = 0; i < text.length(); i++) {
+				if (text.charAt(i) == '\n') {
+					count++;
+				}
+			}
+			int[] starts = new int[count];
+			int line = 1;
+			for (int i = 0; i < text.length(); i++) {
+				if (text.charAt(i) == '\n') {
+					starts[line++] = i + 1;
+				}
+			}
+			return starts;
+		}
 
 	}
 
@@ -176,7 +218,22 @@ public final class SourceProvenance {
 			return null;
 		}
 		Position position = state.positions.get(cons);
-		return position == null ? null : position.location();
+		return position == null ? null : state.location(position);
+	}
+
+	/**
+	 * Whether a form has a recorded position in a NAMED file: {@link #locate} answering a
+	 * location with a file, without resolving the line.
+	 * @param form the form to ask about
+	 * @return true when it was read from a named file on this recording thread
+	 */
+	public static boolean locatedInFile(@Nullable LispVal form) {
+		State state = STATE.get();
+		if (state == null || !(form instanceof LispCons cons)) {
+			return false;
+		}
+		Position position = state.positions.get(cons);
+		return position != null && position.unit().file() != null;
 	}
 
 	/**

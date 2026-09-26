@@ -16,7 +16,7 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * <b>Recorded on the throw path only.</b> Each evaluation frame keeps, in two locals, the
- * innermost {@link LocatedCons} its loop has stepped onto and the lambda whose body it
+ * innermost {@link LocatedCons} its loop has stepped onto and the function whose body it
  * was in then -- a type test and two stores per step -- and hands them to
  * {@link #passing} from a {@code catch} it already had. A program that never signals
  * builds nothing; nothing here reaches the condition's message, so {@code handler-case},
@@ -24,12 +24,17 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * <b>Segment 0</b> is where the condition was signaled: the innermost located form and
- * the innermost NAMED function whose body holds it. A frame's located form was visited in
- * the lambda it reports with it; when that is none (the frame had not entered a lambda)
- * or an anonymous one, the answer is the lambda the ENCLOSING frame is in, which that
- * frame supplies as its current lambda. So a tail call into a library function whose own
- * forms carry no position still reports the call site and the caller, and a location
- * found only in a caller is never attributed to the callee.
+ * the innermost of the PROGRAM'S named functions holding it ({@link LispLambda#sourced}:
+ * a named function whose body was read from a named file -- a library's never is). A
+ * frame's located form was visited in the function it reports with it; when that is none
+ * (the frame had not entered one), the answer is the function the ENCLOSING frame is in,
+ * which that frame supplies as its current function. A frame keeps the program function
+ * it entered across a tail call into an anonymous lambda or a library function, since
+ * that is the code the frame still runs for. So a tail call into a library function whose
+ * own forms carry no position still reports the call site and the caller, a location
+ * found only in a caller is never attributed to the callee, and an {@code flet} helper
+ * reports the function that called it -- what the JVM backend's stack says
+ * ({@code codegen.jvm.JvmUncaughtHandler}), which has no tail calls to lose a caller to.
  *
  * <p>
  * <b>An async boundary</b> ({@link #crossedAsync}) closes segment 0 and opens a hop: an
@@ -55,9 +60,10 @@ final class ConditionTrace {
 	/**
 	 * Notes one evaluation frame the condition is leaving.
 	 * @param located the innermost located form the frame visited, or {@code null}
-	 * @param locatedIn the lambda whose body the frame was in when it visited
+	 * @param locatedIn the function whose body the frame was in when it visited
 	 * {@code located}, or {@code null} for the frame's starting context
-	 * @param current the lambda whose body the frame is in now, or {@code null}
+	 * @param current the function whose body the frame is in now, or {@code null}; only a
+	 * {@link LispLambda#sourced} one names the report
 	 */
 	synchronized void passing(@Nullable LocatedCons located, @Nullable LispLambda locatedIn,
 			@Nullable LispLambda current) {
@@ -96,8 +102,8 @@ final class ConditionTrace {
 	}
 
 	private void decide(@Nullable LispLambda lambda) {
-		if (!this.functionDecided && lambda != null && lambda.name() != null) {
-			this.function = lambda.name();
+		if (!this.functionDecided && lambda != null && lambda.sourced() && lambda.name() != null) {
+			this.function = UncaughtReport.functionName(lambda.name());
 			this.functionDecided = true;
 		}
 	}

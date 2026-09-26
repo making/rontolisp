@@ -186,13 +186,16 @@ final class JvmAsyncRuntimeBuilder {
 	 * @param mvChannel the {@code %mv-spill} channel, or null when the program has no
 	 * multiple-value consumer: a body's extra values then need not travel, and the bodies
 	 * are what they were before they could
+	 * @param asyncAwaited {@code _asyncAwaited}, which {@code _await} hands a body's
+	 * exception to before rethrowing it -- the uncaught report's record of the await
+	 * ({@link JvmUncaughtHandler}) -- or null when no async body records its boundary
 	 * @return the runtime bodies
 	 */
 	static AsyncRuntime build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
 			ClassConstant objectArrayClass, ClassConstant stringClass, JvmLispCompiler.ConditionChannel channel,
 			MethodrefConstant instanceInitRef, MethodrefConstant longValueOf, MethodrefConstant stringLength,
 			MethodrefConstant stringSubstring, MethodrefConstant stringConcat, @Nullable MethodrefConstant launcherRun,
-			@Nullable JvmMvChannel mvChannel) {
+			@Nullable JvmMvChannel mvChannel, @Nullable MethodrefConstant asyncAwaited) {
 		// --- shared class/method references ---
 		ClassConstant futureClass = cp.addClass(cp.addUtf8("java/util/concurrent/CompletableFuture"));
 		MethodrefConstant futureCtor = cp.addMethodref(futureClass,
@@ -587,6 +590,13 @@ final class JvmAsyncRuntimeBuilder {
 			a.iconst(1);
 			a.aaload();
 			a.checkcast(throwableClass);
+			if (asyncAwaited != null) {
+				// The uncaught report's hop: this await completes the boundary the body's
+				// thunk recorded in the trace (JvmUncaughtHandler).
+				a.op(Opcode.DUP);
+				a.op(Opcode.INVOKESTATIC);
+				a.u2(asyncAwaited.index());
+			}
 			a.op(Opcode.ATHROW);
 			a.bind(plain);
 			if (mvChannel != null && vMarker != null) {
