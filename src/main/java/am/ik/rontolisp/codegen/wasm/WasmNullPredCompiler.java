@@ -25,11 +25,6 @@ final class WasmNullPredCompiler {
 	}
 
 	/**
-	 * Compiles {@code endp}: {@code null} of a value checked to be a list -- anything
-	 * else is {@code ENDP}'s type-error in EH mode and a trap outside it
-	 * ({@link WasmEmitHelper#emitListCheck}).
-	 */
-	/**
 	 * Compiles {@code (%check-list x 'op)}: {@code x}, checked to be a list under
 	 * {@code op} ({@link WasmEmitHelper#emitListCheck}).
 	 */
@@ -44,6 +39,11 @@ final class WasmNullPredCompiler {
 		ctx.writer.writeUnsignedLeb128(slot);
 	}
 
+	/**
+	 * Compiles {@code endp}: {@code null} of a value checked to be a list -- anything
+	 * else is {@code ENDP}'s type-error in EH mode and a trap outside it
+	 * ({@link WasmEmitHelper#emitListCheck}).
+	 */
 	static void compileEndp(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
 		int slot = ctx.allocTemp();

@@ -4,6 +4,8 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OperandTypes;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -27,11 +29,47 @@ final class WasmCharCompiler {
 		// string) and decodes an immutable string's UTF-8 through _str_char_at.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
-		// In EH mode an index that is no integer is CHAR's / SCHAR's type-error.
+		// In EH mode an index that is no integer is CHAR's / SCHAR's type-error, and so
+		// is a string that is no string: _str_char_ref lands under the register's
+		// operator.
 		WasmEmitHelper.emitIndexCheck(ctx);
 		WasmEmitHelper.castI31GetS(ctx);
-		WasmEmitHelper.emitStrCharRefCall(ctx);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_STR_CHAR_REF);
 		makeChar(ctx);
+	}
+
+	/**
+	 * Compiles {@code (%check-string x 'op)}: {@code x}, which in EH mode lands as
+	 * {@code op}'s {@code STRING} type-error when it is no string; outside EH mode no
+	 * check is made (the store fails as it always did).
+	 */
+	static void compileCheckString(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
+		if (!WasmEmitHelper.checksConsFields(ctx)) {
+			return;
+		}
+		int slot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		WasmStringpCompiler.emitStringpI32(ctx, slot);
+		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		WasmOperandTypes.withOperator(ctx, LispMacroExpander.checkOperator(cons),
+				() -> WasmOperandTypes.emitTypeError(ctx, slot, OperandTypes.Kind.STRING));
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+	}
+
+	/**
+	 * Compiles {@code (%check-index x 'op)}: {@code x}, checked in EH mode to be an
+	 * integer under {@code op} ({@link WasmEmitHelper#emitIndexCheck}) -- unnamed when
+	 * {@code op} is nil.
+	 */
+	static void compileCheckIndex(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
+		WasmOperandTypes.withOperator(ctx, LispMacroExpander.checkOperator(cons),
+				() -> WasmEmitHelper.emitIndexCheck(ctx));
 	}
 
 	/** {@code (char-code ch)}. */
