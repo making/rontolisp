@@ -262,6 +262,56 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo("0");
 	}
 
+	// The overload chosen for a call is remembered per argument kind. A float first
+	// selects max(double,double); the integers after it must still select max(int,int)
+	// (a shared choice would print 3.0), and the floats after those the double one.
+	@Test
+	void rememberedOverloadFollowsTheArgumentKind() throws Exception {
+		assertThat(compileAndRun("""
+				(print (mapcar (lambda (x) (java:static "java.lang.Math" "max" x 0)) (list 2.5 3 4.5 5)))
+				""")).isEqualTo("(2.5 3 4.5 5)");
+	}
+
+	// The same method name on alternating receiver classes resolves on each class.
+	@Test
+	void rememberedOverloadFollowsTheReceiverClass() throws Exception {
+		assertThat(compileAndRun("""
+				(print (mapcar (lambda (c) (java:call c "add" "x") (java:call c "size"))
+				               (list (java:new "java.util.ArrayList") (java:new "java.util.LinkedList")
+				                     (java:new "java.util.ArrayList"))))
+				""")).isEqualTo("(1 1 1)");
+	}
+
+	// A one-character string may narrow to char (Writer.append(char)); a longer one
+	// cannot and takes append(CharSequence). Alternating the two at one site.
+	@Test
+	void rememberedOverloadSeparatesOneCharacterStrings() throws Exception {
+		assertThat(compileAndRun("""
+				(setq w (java:new "java.io.StringWriter"))
+				(dolist (s (list "a" "bc" "d" "ef")) (java:call w "append" s))
+				(print (java:call w "toString"))
+				""")).isEqualTo("\"abcdef\"");
+	}
+
+	// A list has no remembered kind: after a scalar, String.valueOf still takes the
+	// char[] overload for a list of characters, and the scalar the int one again.
+	@Test
+	void listArgumentAfterAScalarIsResolvedAgain() throws Exception {
+		assertThat(compileAndRun("""
+				(print (mapcar (lambda (x) (java:static "java.lang.String" "valueOf" x)) (list 5 (list #\\a #\\b) 7)))
+				""")).isEqualTo("(\"5\" \"ab\" \"7\")");
+	}
+
+	// A remembered varargs choice packs a tail of its own length on every call.
+	@Test
+	void rememberedVarargsChoicePacksEachTail() throws Exception {
+		assertThat(compileAndRun("""
+				(print (list (java:static "java.lang.String" "format" "%s" 1)
+				             (java:static "java.lang.String" "format" "%s/%s" 1 2)
+				             (java:static "java.lang.String" "format" "%s" 3)))
+				""")).isEqualTo("(\"1\" \"1/2\" \"3\")");
+	}
+
 	// A returned Java array surfaces as a Lisp list, and a list marshals back into an
 	// array parameter -- Arrays.copyOf(int[], int) round-trips both directions.
 	@Test

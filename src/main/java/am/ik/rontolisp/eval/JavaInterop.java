@@ -8,7 +8,10 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 import org.jspecify.annotations.Nullable;
 
@@ -80,16 +83,79 @@ final class JavaInterop {
 
 	private static final int NO_MATCH = -1; // this argument cannot become this type
 
+	// Resolution caches. Reflection lookups (Class.forName, getMethods, getField) and the
+	// cost-based overload selection dominate a java: call, so each is remembered. The
+	// chosen overload is keyed by (class, member, argument kinds): a kind is the smallest
+	// token of which every marshal() cost is a pure function, so the memoized choice is
+	// the one select() would make again. Lists and vectors are element-dependent and
+	// have no kind; a call passing one is resolved every time. Kinds are canonical (a
+	// KIND_ constant or a Class), so a member's remembered choices are scanned by
+	// identity. Mirrored in codegen.jvm.JavaBridgeTemplate.
+	private static final int CACHE_LIMIT = 4096; // a full cache is cleared, never grown
+
+	private static final int CHOICES_PER_MEMBER = 16; // a full member starts over
+
+	private static final String CONSTRUCTOR = "<init>"; // member key of a constructor
+
+	private static final ConcurrentHashMap<String, Class<?>> CLASSES = new ConcurrentHashMap<>();
+
+	private static final ConcurrentHashMap<Class<?>, List<Constructor<?>>> CONSTRUCTORS = new ConcurrentHashMap<>();
+
+	private static final ConcurrentHashMap<List<Object>, List<Method>> METHODS = new ConcurrentHashMap<>();
+
+	private static final ConcurrentHashMap<List<Object>, Field> FIELDS = new ConcurrentHashMap<>();
+
+	private static final ConcurrentHashMap<Class<?>, ConcurrentHashMap<String, Choice[]>> CHOICES = new ConcurrentHashMap<>();
+
+	// Argument kinds that are not a host object's class (a host object's kind is its
+	// exact class, which isInstance/== costs depend on).
+	private static final String KIND_NIL = "nil";
+
+	private static final String KIND_T = "t";
+
+	private static final String KIND_INTEGER = "integer";
+
+	private static final String KIND_FLOAT = "float";
+
+	private static final String KIND_STRING_1 = "string/1"; // may narrow to char
+
+	private static final String KIND_STRING = "string";
+
+	private static final String KIND_CHAR = "char"; // BMP: fits a Java char
+
+	private static final String KIND_SUPPLEMENTARY_CHAR = "char/supplementary";
+
+	private static final String KIND_FUNCTION = "function";
+
 	private JavaInterop() {
 	}
 
-	// The chosen overload together with its already-marshalled arguments.
-	private record Selected<E extends Executable>(E executable, @Nullable Object[] args, int cost, String signature) {
+	// The chosen overload together with its already-marshalled arguments; `packed` when
+	// the trailing arguments were packed into the varargs array.
+	private record Selected<E extends Executable>(E executable, @Nullable Object[] args, int cost, boolean packed) {
+	}
+
+	// A memoized overload choice for the argument kinds: the executable, its parameter
+	// types, and whether it packs a varargs tail.
+	private record Choice(Object[] kinds, Executable executable, Class<?>[] params, boolean packed) {
+
+		boolean matches(Object[] argumentKinds) {
+			if (this.kinds.length != argumentKinds.length) {
+				return false;
+			}
+			for (int i = 0; i < argumentKinds.length; i++) {
+				if (this.kinds[i] != argumentKinds[i]) {
+					return false;
+				}
+			}
+			return true;
+		}
+
 	}
 
 	static LispVal newInstance(String className, List<LispVal> args, Caller caller) {
 		Class<?> cls = loadClass(className);
-		Selected<Constructor<?>> sel = select(List.of(cls.getConstructors()), args, caller);
+		Selected<Constructor<?>> sel = resolve(cls, CONSTRUCTOR, () -> constructors(cls), args, caller);
 		if (sel == null) {
 			throw new LispEvalException(
 					"No matching constructor for " + className + " with " + args.size() + " argument(s)");
@@ -115,16 +181,7 @@ final class JavaInterop {
 
 	private static LispVal invoke(Class<?> cls, @Nullable Object receiver, String methodName, List<LispVal> args,
 			Caller caller) {
-		List<Method> candidates = new ArrayList<>();
-		for (Method method : cls.getMethods()) {
-			if (method.getName().equals(methodName)) {
-				Method accessible = accessibleMethod(method);
-				if (accessible != null) {
-					candidates.add(accessible);
-				}
-			}
-		}
-		Selected<Method> sel = select(candidates, args, caller);
+		Selected<Method> sel = resolve(cls, methodName, () -> methods(cls, methodName), args, caller);
 		if (sel == null) {
 			throw new LispEvalException(
 					"No matching method " + cls.getName() + "." + methodName + " with " + args.size() + " argument(s)");
@@ -135,6 +192,140 @@ final class JavaInterop {
 		catch (ReflectiveOperationException ex) {
 			throw fail("calling " + cls.getName() + "." + methodName, ex);
 		}
+	}
+
+	// The overload of `member` on `cls` for these arguments: the memoized choice when the
+	// argument kinds were seen before (marshalled afresh against its parameter types),
+	// otherwise select() over the candidates, remembered when every argument has a kind.
+	private static <E extends Executable> @Nullable Selected<E> resolve(Class<?> cls, String member,
+			Supplier<List<E>> candidates, List<LispVal> args, Caller caller) {
+		Object[] kinds = kindsOf(args);
+		if (kinds != null) {
+			Choice choice = remembered(cls, member, kinds);
+			if (choice != null) {
+				@SuppressWarnings("unchecked")
+				E e = (E) choice.executable();
+				Selected<E> sel = choice.packed() ? tryVarargs(e, choice.params(), args, caller)
+						: tryFixedArity(e, choice.params(), args, caller);
+				if (sel != null) {
+					return sel;
+				}
+			}
+		}
+		Selected<E> sel = select(candidates.get(), args, caller);
+		if (sel != null && kinds != null) {
+			Executable e = sel.executable();
+			rememberChoice(cls, member, new Choice(kinds, e, e.getParameterTypes(), sel.packed()));
+		}
+		return sel;
+	}
+
+	private static @Nullable Choice remembered(Class<?> cls, String member, Object[] kinds) {
+		ConcurrentHashMap<String, Choice[]> members = CHOICES.get(cls);
+		Choice[] choices = members == null ? null : members.get(member);
+		if (choices != null) {
+			for (Choice choice : choices) {
+				if (choice.matches(kinds)) {
+					return choice;
+				}
+			}
+		}
+		return null;
+	}
+
+	// Copy-on-write: a racing update may drop a choice, which is only resolved again.
+	private static void rememberChoice(Class<?> cls, String member, Choice choice) {
+		ConcurrentHashMap<String, Choice[]> members = CHOICES.get(cls);
+		if (members == null) {
+			members = new ConcurrentHashMap<>();
+			remember(CHOICES, cls, members);
+		}
+		Choice[] old = members.get(member);
+		Choice[] choices;
+		if (old == null || old.length >= CHOICES_PER_MEMBER) {
+			choices = new Choice[] { choice };
+		}
+		else {
+			choices = Arrays.copyOf(old, old.length + 1);
+			choices[old.length] = choice;
+		}
+		members.put(member, choices);
+	}
+
+	// The kind of every argument, or null when one has none.
+	private static Object @Nullable [] kindsOf(List<LispVal> args) {
+		Object[] kinds = new Object[args.size()];
+		for (int i = 0; i < kinds.length; i++) {
+			Object kind = kindOf(args.get(i));
+			if (kind == null) {
+				return null;
+			}
+			kinds[i] = kind;
+		}
+		return kinds;
+	}
+
+	// The token of which marshal(value, target) is a pure function for every target, or
+	// null when there is none: a list or vector (the cost sums its elements), and the
+	// values marshal() never bridges (they never match, so nothing is remembered).
+	private static @Nullable Object kindOf(LispVal value) {
+		return switch (value) {
+			case LispNil ignored -> KIND_NIL;
+			case LispTrue ignored -> KIND_T;
+			case LispInteger ignored -> KIND_INTEGER;
+			case LispDouble ignored -> KIND_FLOAT;
+			case LispString s -> s.value().length() == 1 ? KIND_STRING_1 : KIND_STRING;
+			case LispChar c -> Character.isBmpCodePoint(c.codePoint()) ? KIND_CHAR : KIND_SUPPLEMENTARY_CHAR;
+			case LispJavaObject obj -> obj.ref().getClass();
+			case LispLambda ignored -> KIND_FUNCTION;
+			case LispFunction ignored -> KIND_FUNCTION;
+			default -> null;
+		};
+	}
+
+	private static List<Constructor<?>> constructors(Class<?> cls) {
+		List<Constructor<?>> cached = CONSTRUCTORS.get(cls);
+		if (cached == null) {
+			cached = List.of(cls.getConstructors());
+			remember(CONSTRUCTORS, cls, cached);
+		}
+		return cached;
+	}
+
+	private static List<Method> methods(Class<?> cls, String methodName) {
+		List<Object> key = List.of(cls, methodName);
+		List<Method> cached = METHODS.get(key);
+		if (cached == null) {
+			List<Method> candidates = new ArrayList<>();
+			for (Method method : cls.getMethods()) {
+				if (method.getName().equals(methodName)) {
+					Method accessible = accessibleMethod(method);
+					if (accessible != null) {
+						candidates.add(accessible);
+					}
+				}
+			}
+			cached = List.copyOf(candidates);
+			remember(METHODS, key, cached);
+		}
+		return cached;
+	}
+
+	private static Field publicField(Class<?> cls, String fieldName) throws NoSuchFieldException {
+		List<Object> key = List.of(cls, fieldName);
+		Field cached = FIELDS.get(key);
+		if (cached == null) {
+			cached = cls.getField(fieldName);
+			remember(FIELDS, key, cached);
+		}
+		return cached;
+	}
+
+	private static <K, V> void remember(ConcurrentHashMap<K, V> cache, K key, V value) {
+		if (cache.size() >= CACHE_LIMIT) {
+			cache.clear();
+		}
+		cache.put(key, value);
 	}
 
 	// A public method declared in a non-exported/non-public class (e.g. the List.of
@@ -194,9 +385,10 @@ final class JavaInterop {
 			Caller caller) {
 		Selected<E> best = null;
 		for (E e : candidates) {
-			best = better(best, tryFixedArity(e, args, caller));
+			Class<?>[] params = e.getParameterTypes();
+			best = better(best, tryFixedArity(e, params, args, caller));
 			if (e.isVarArgs()) {
-				best = better(best, tryVarargs(e, args, caller));
+				best = better(best, tryVarargs(e, params, args, caller));
 			}
 		}
 		return best;
@@ -210,14 +402,14 @@ final class JavaInterop {
 		if (b == null) {
 			return a;
 		}
-		return b.cost() < a.cost() || (b.cost() == a.cost() && b.signature().compareTo(a.signature()) < 0) ? b : a;
+		return b.cost() < a.cost() || (b.cost() == a.cost() && signatureOf(b).compareTo(signatureOf(a)) < 0) ? b : a;
 	}
 
-	private static <E extends Executable> @Nullable Selected<E> tryFixedArity(E e, List<LispVal> args, Caller caller) {
-		if (e.getParameterCount() != args.size()) {
+	private static <E extends Executable> @Nullable Selected<E> tryFixedArity(E e, Class<?>[] params,
+			List<LispVal> args, Caller caller) {
+		if (params.length != args.size()) {
 			return null;
 		}
-		Class<?>[] params = e.getParameterTypes();
 		@Nullable Object[] out = new @Nullable Object[params.length];
 		int total = 0;
 		for (int i = 0; i < params.length; i++) {
@@ -227,11 +419,11 @@ final class JavaInterop {
 			}
 			total += cost;
 		}
-		return new Selected<>(e, out, total, signatureOf(params));
+		return new Selected<>(e, out, total, false);
 	}
 
-	private static <E extends Executable> @Nullable Selected<E> tryVarargs(E e, List<LispVal> args, Caller caller) {
-		Class<?>[] params = e.getParameterTypes();
+	private static <E extends Executable> @Nullable Selected<E> tryVarargs(E e, Class<?>[] params, List<LispVal> args,
+			Caller caller) {
 		int fixed = params.length - 1;
 		if (args.size() < fixed) {
 			return null;
@@ -257,17 +449,18 @@ final class JavaInterop {
 			Array.set(packed, i - fixed, slot[0]);
 		}
 		out[fixed] = packed;
-		// The "*" keeps the packed signature distinct from the same method's fixed-arity
-		// interpretation, so the tie-break stays a total order.
-		return new Selected<>(e, out, total, signatureOf(params) + "*");
+		return new Selected<>(e, out, total, true);
 	}
 
-	private static String signatureOf(Class<?>[] params) {
+	// The tie-break key: the parameter-type names, with a "*" that keeps a packed varargs
+	// interpretation distinct from the same method's fixed-arity one, so the tie-break
+	// stays a total order. Built only on a cost tie.
+	private static String signatureOf(Selected<?> sel) {
 		StringBuilder sb = new StringBuilder();
-		for (Class<?> p : params) {
+		for (Class<?> p : sel.executable().getParameterTypes()) {
 			sb.append(p.getName()).append(',');
 		}
-		return sb.toString();
+		return sel.packed() ? sb.append('*').toString() : sb.toString();
 	}
 
 	// (java:field "class.Name" "CONSTANT") -> static field; (java:field obj "name") ->
@@ -275,11 +468,11 @@ final class JavaInterop {
 	static LispVal field(LispVal classOrObject, String fieldName) {
 		try {
 			if (classOrObject instanceof LispString s) {
-				Field field = loadClass(s.value()).getField(fieldName);
+				Field field = publicField(loadClass(s.value()), fieldName);
 				return unmarshal(field.get(null));
 			}
 			if (classOrObject instanceof LispJavaObject obj) {
-				Field field = obj.ref().getClass().getField(fieldName);
+				Field field = publicField(obj.ref().getClass(), fieldName);
 				return unmarshal(field.get(obj.ref()));
 			}
 			throw new LispEvalException(
@@ -565,8 +758,14 @@ final class JavaInterop {
 	}
 
 	private static Class<?> loadClass(String name) {
+		Class<?> cached = CLASSES.get(name);
+		if (cached != null) {
+			return cached;
+		}
 		try {
-			return Class.forName(name);
+			Class<?> cls = Class.forName(name);
+			remember(CLASSES, name, cls);
+			return cls;
 		}
 		catch (ClassNotFoundException ex) {
 			throw new LispEvalException("No such class: " + name);

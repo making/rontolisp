@@ -9,7 +9,10 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 import org.jspecify.annotations.Nullable;
 
@@ -60,6 +63,49 @@ final class JavaBridgeTemplate {
 	private static final int COST_VARARGS = 10;
 
 	private static final int NO_MATCH = -1;
+
+	// Resolution caches, mirroring eval/JavaInterop: the class by name, the candidate
+	// constructors / methods / field of a class, and the overload chosen for (class,
+	// member, argument kinds). A kind is the smallest token of which every marshal()
+	// cost is a pure function; lists and vectors have none and are resolved every call.
+	// Kinds are canonical (a KIND_ constant or a Class), so a member's remembered choices
+	// are scanned by identity. ConcurrentHashMap only -- a ClassValue would need a nested
+	// subclass.
+	private static final int CACHE_LIMIT = 4096; // a full cache is cleared, never grown
+
+	private static final int CHOICES_PER_MEMBER = 16; // a full member starts over
+
+	private static final String CONSTRUCTOR = "<init>";
+
+	private static final ConcurrentHashMap<String, Class<?>> CLASSES = new ConcurrentHashMap<>();
+
+	private static final ConcurrentHashMap<Class<?>, List<Constructor<?>>> CONSTRUCTORS = new ConcurrentHashMap<>();
+
+	private static final ConcurrentHashMap<List<Object>, List<Method>> METHODS = new ConcurrentHashMap<>();
+
+	private static final ConcurrentHashMap<List<Object>, Field> FIELDS = new ConcurrentHashMap<>();
+
+	// class -> member -> choices, each {Object[] kinds, Executable, Class<?>[] parameter
+	// types, Boolean packed-varargs}.
+	private static final ConcurrentHashMap<Class<?>, ConcurrentHashMap<String, Object[][]>> CHOICES = new ConcurrentHashMap<>();
+
+	private static final String KIND_NIL = "nil";
+
+	private static final String KIND_T = "t";
+
+	private static final String KIND_INTEGER = "integer";
+
+	private static final String KIND_FLOAT = "float";
+
+	private static final String KIND_STRING_1 = "string/1";
+
+	private static final String KIND_STRING = "string";
+
+	private static final String KIND_CHAR = "char";
+
+	private static final String KIND_SUPPLEMENTARY_CHAR = "char/supplementary";
+
+	private static final String KIND_FUNCTION = "function";
 
 	/**
 	 * The generated program's {@code _apply(Object fn, Object argList)} eval-runtime
@@ -115,7 +161,7 @@ final class JavaBridgeTemplate {
 			throw new RuntimeException("java:new expects a class-name string, got " + describe(className));
 		}
 		Class<?> cls = loadClass(name);
-		Object[] sel = select(List.of(cls.getConstructors()), args);
+		Object[] sel = resolve(cls, CONSTRUCTOR, () -> constructors(cls), args);
 		if (sel == null) {
 			throw new RuntimeException("No matching constructor for " + name + " with " + args.length + " argument(s)");
 		}
@@ -163,11 +209,11 @@ final class JavaBridgeTemplate {
 		try {
 			String staticClass = lispString(classOrObject);
 			if (staticClass != null) {
-				Field field = loadClass(staticClass).getField(name);
+				Field field = publicField(loadClass(staticClass), name);
 				return unmarshal(field.get(null));
 			}
 			if (classOrObject != null && isJavaObject(classOrObject)) {
-				Field field = classOrObject.getClass().getField(name);
+				Field field = publicField(classOrObject.getClass(), name);
 				return unmarshal(field.get(classOrObject));
 			}
 			throw new RuntimeException(
@@ -253,16 +299,7 @@ final class JavaBridgeTemplate {
 
 	private static @Nullable Object invoke(Class<?> cls, @Nullable Object receiver, String methodName,
 			@Nullable Object[] args) {
-		List<Method> candidates = new ArrayList<>();
-		for (Method method : cls.getMethods()) {
-			if (method.getName().equals(methodName)) {
-				Method accessible = accessibleMethod(method);
-				if (accessible != null) {
-					candidates.add(accessible);
-				}
-			}
-		}
-		Object[] sel = select(candidates, args);
+		Object[] sel = resolve(cls, methodName, () -> methods(cls, methodName), args);
 		if (sel == null) {
 			throw new RuntimeException(
 					"No matching method " + cls.getName() + "." + methodName + " with " + args.length + " argument(s)");
@@ -273,6 +310,185 @@ final class JavaBridgeTemplate {
 		catch (ReflectiveOperationException ex) {
 			throw fail("calling " + cls.getName() + "." + methodName, ex);
 		}
+	}
+
+	// The overload of `member` on `cls` for these arguments: the memoized choice when the
+	// argument kinds were seen before (marshalled afresh against its parameter types),
+	// otherwise select() over the candidates, remembered when every argument has a kind.
+	private static Object @Nullable [] resolve(Class<?> cls, String member,
+			Supplier<? extends List<? extends Executable>> candidates, @Nullable Object[] args) {
+		// Render mutable character vectors once, before both the kinds and marshal() see
+		// them (marshal() renders again, a no-op on a rendered string).
+		@Nullable Object[] values = renderedAll(args);
+		Object[] kinds = kindsOf(values);
+		if (kinds != null) {
+			Object[] choice = remembered(cls, member, kinds);
+			if (choice != null) {
+				Executable e = (Executable) choice[1];
+				Class<?>[] params = (Class<?>[]) choice[2];
+				Object[] sel = (Boolean) choice[3] ? tryVarargs(e, params, values) : tryFixedArity(e, params, values);
+				if (sel != null) {
+					return sel;
+				}
+			}
+		}
+		Object[] sel = select(candidates.get(), values);
+		if (sel != null && kinds != null) {
+			Executable e = (Executable) sel[0];
+			rememberChoice(cls, member, new Object[] { kinds, e, e.getParameterTypes(), sel[3] });
+		}
+		return sel;
+	}
+
+	private static Object @Nullable [] remembered(Class<?> cls, String member, Object[] kinds) {
+		ConcurrentHashMap<String, Object[][]> members = CHOICES.get(cls);
+		Object[][] choices = members == null ? null : members.get(member);
+		if (choices != null) {
+			for (Object[] choice : choices) {
+				if (sameKinds((Object[]) choice[0], kinds)) {
+					return choice;
+				}
+			}
+		}
+		return null;
+	}
+
+	private static boolean sameKinds(Object[] a, Object[] b) {
+		if (a.length != b.length) {
+			return false;
+		}
+		for (int i = 0; i < a.length; i++) {
+			if (a[i] != b[i]) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// Copy-on-write: a racing update may drop a choice, which is only resolved again.
+	private static void rememberChoice(Class<?> cls, String member, Object[] choice) {
+		ConcurrentHashMap<String, Object[][]> members = CHOICES.get(cls);
+		if (members == null) {
+			members = new ConcurrentHashMap<>();
+			remember(CHOICES, cls, members);
+		}
+		Object[][] old = members.get(member);
+		Object[][] choices;
+		if (old == null || old.length >= CHOICES_PER_MEMBER) {
+			choices = new Object[][] { choice };
+		}
+		else {
+			choices = Arrays.copyOf(old, old.length + 1);
+			choices[old.length] = choice;
+		}
+		members.put(member, choices);
+	}
+
+	private static @Nullable Object[] renderedAll(@Nullable Object[] args) {
+		@Nullable Object[] values = args;
+		for (int i = 0; i < args.length; i++) {
+			Object v = rendered(args[i]);
+			if (v != args[i]) {
+				if (values == args) {
+					values = args.clone();
+				}
+				values[i] = v;
+			}
+		}
+		return values;
+	}
+
+	// The kind of every argument, or null when one has none.
+	private static Object @Nullable [] kindsOf(@Nullable Object[] values) {
+		Object[] kinds = new Object[values.length];
+		for (int i = 0; i < values.length; i++) {
+			Object kind = kindOf(values[i]);
+			if (kind == null) {
+				return null;
+			}
+			kinds[i] = kind;
+		}
+		return kinds;
+	}
+
+	// The token of which marshal(value, target) is a pure function for every target, or
+	// null when there is none: a cons or a Lisp array (the cost sums its elements), and
+	// the values marshal() never bridges. The tests mirror marshal()'s, in its order.
+	private static @Nullable Object kindOf(@Nullable Object value) {
+		if (value == null) {
+			return KIND_NIL;
+		}
+		if (value instanceof Long) {
+			return KIND_INTEGER;
+		}
+		if (value instanceof Double) {
+			return KIND_FLOAT;
+		}
+		if (value instanceof int[] chBox && chBox.length == 1) {
+			return Character.isBmpCodePoint(chBox[0]) ? KIND_CHAR : KIND_SUPPLEMENTARY_CHAR;
+		}
+		if (value instanceof String s) {
+			if (isLispString(s)) {
+				return stringValue(s).length() == 1 ? KIND_STRING_1 : KIND_STRING;
+			}
+			return "T".equals(s) ? KIND_T : null;
+		}
+		if (value.getClass() == Object[].class) {
+			Object[] arr = (Object[]) value;
+			return arr.length > 0 && arr[0] instanceof Integer ? KIND_FUNCTION : null;
+		}
+		if (value instanceof BigInteger || value instanceof BigInteger[]) {
+			return null;
+		}
+		if (value instanceof ArrayList<?> list && !list.isEmpty() && list.get(0) instanceof Object[]) {
+			return null;
+		}
+		return value.getClass();
+	}
+
+	private static List<Constructor<?>> constructors(Class<?> cls) {
+		List<Constructor<?>> cached = CONSTRUCTORS.get(cls);
+		if (cached == null) {
+			cached = List.of(cls.getConstructors());
+			remember(CONSTRUCTORS, cls, cached);
+		}
+		return cached;
+	}
+
+	private static List<Method> methods(Class<?> cls, String methodName) {
+		List<Object> key = List.of(cls, methodName);
+		List<Method> cached = METHODS.get(key);
+		if (cached == null) {
+			List<Method> candidates = new ArrayList<>();
+			for (Method method : cls.getMethods()) {
+				if (method.getName().equals(methodName)) {
+					Method accessible = accessibleMethod(method);
+					if (accessible != null) {
+						candidates.add(accessible);
+					}
+				}
+			}
+			cached = List.copyOf(candidates);
+			remember(METHODS, key, cached);
+		}
+		return cached;
+	}
+
+	private static Field publicField(Class<?> cls, String fieldName) throws NoSuchFieldException {
+		List<Object> key = List.of(cls, fieldName);
+		Field cached = FIELDS.get(key);
+		if (cached == null) {
+			cached = cls.getField(fieldName);
+			remember(FIELDS, key, cached);
+		}
+		return cached;
+	}
+
+	private static <K, V> void remember(ConcurrentHashMap<K, V> cache, K key, V value) {
+		if (cache.size() >= CACHE_LIMIT) {
+			cache.clear();
+		}
+		cache.put(key, value);
 	}
 
 	// A public method declared in a non-exported/non-public class (e.g. the List.of
@@ -324,14 +540,16 @@ final class JavaBridgeTemplate {
 	// Picks the overload whose arguments marshal at the lowest total cost; ties broken
 	// by the parameter-type signature (never by getMethods() order). A varargs
 	// executable is tried both as-is and with the trailing arguments packed (at a flat
-	// extra cost). Returns {executable, marshalled args, Integer cost, signature} (a
-	// plain Object[] because a nested record would become a second class file).
+	// extra cost). Returns {executable, marshalled args, Integer cost, Boolean
+	// packed-varargs} (a plain Object[] because a nested record would become a second
+	// class file).
 	private static Object @Nullable [] select(List<? extends Executable> candidates, @Nullable Object[] args) {
 		Object[] best = null;
 		for (Executable e : candidates) {
-			best = better(best, tryFixedArity(e, args));
+			Class<?>[] params = e.getParameterTypes();
+			best = better(best, tryFixedArity(e, params, args));
 			if (e.isVarArgs()) {
-				best = better(best, tryVarargs(e, args));
+				best = better(best, tryVarargs(e, params, args));
 			}
 		}
 		return best;
@@ -346,14 +564,13 @@ final class JavaBridgeTemplate {
 		}
 		int costA = (Integer) a[2];
 		int costB = (Integer) b[2];
-		return costB < costA || (costB == costA && ((String) b[3]).compareTo((String) a[3]) < 0) ? b : a;
+		return costB < costA || (costB == costA && signatureOf(b).compareTo(signatureOf(a)) < 0) ? b : a;
 	}
 
-	private static Object @Nullable [] tryFixedArity(Executable e, @Nullable Object[] args) {
-		if (e.getParameterCount() != args.length) {
+	private static Object @Nullable [] tryFixedArity(Executable e, Class<?>[] params, @Nullable Object[] args) {
+		if (params.length != args.length) {
 			return null;
 		}
-		Class<?>[] params = e.getParameterTypes();
 		@Nullable Object[] out = new @Nullable Object[params.length];
 		int total = 0;
 		for (int i = 0; i < params.length; i++) {
@@ -363,11 +580,10 @@ final class JavaBridgeTemplate {
 			}
 			total += cost;
 		}
-		return new Object[] { e, out, total, signatureOf(params) };
+		return new Object[] { e, out, total, Boolean.FALSE };
 	}
 
-	private static Object @Nullable [] tryVarargs(Executable e, @Nullable Object[] args) {
-		Class<?>[] params = e.getParameterTypes();
+	private static Object @Nullable [] tryVarargs(Executable e, Class<?>[] params, @Nullable Object[] args) {
 		int fixed = params.length - 1;
 		if (args.length < fixed) {
 			return null;
@@ -393,17 +609,18 @@ final class JavaBridgeTemplate {
 			Array.set(packed, i - fixed, slot[0]);
 		}
 		out[fixed] = packed;
-		// The "*" keeps the packed signature distinct from the fixed-arity
-		// interpretation, so the tie-break stays a total order.
-		return new Object[] { e, out, total, signatureOf(params) + "*" };
+		return new Object[] { e, out, total, Boolean.TRUE };
 	}
 
-	private static String signatureOf(Class<?>[] params) {
+	// The tie-break key: the parameter-type names, with a "*" that keeps a packed varargs
+	// interpretation distinct from the fixed-arity one, so the tie-break stays a total
+	// order. Built only on a cost tie.
+	private static String signatureOf(Object[] sel) {
 		StringBuilder sb = new StringBuilder();
-		for (Class<?> p : params) {
+		for (Class<?> p : ((Executable) sel[0]).getParameterTypes()) {
 			sb.append(p.getName()).append(',');
 		}
-		return sb.toString();
+		return (Boolean) sel[3] ? sb.append('*').toString() : sb.toString();
 	}
 
 	// Writes the Java value for `value` into out[index] and returns its conversion
@@ -741,8 +958,14 @@ final class JavaBridgeTemplate {
 	}
 
 	private static Class<?> loadClass(String name) {
+		Class<?> cached = CLASSES.get(name);
+		if (cached != null) {
+			return cached;
+		}
 		try {
-			return Class.forName(name);
+			Class<?> cls = Class.forName(name);
+			remember(CLASSES, name, cls);
+			return cls;
 		}
 		catch (ClassNotFoundException ex) {
 			throw new RuntimeException("No such class: " + name);
