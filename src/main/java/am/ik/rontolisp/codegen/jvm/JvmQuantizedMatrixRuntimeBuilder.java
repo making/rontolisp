@@ -135,7 +135,7 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 			ClassConstant sbClass, MethodrefConstant sbInit, MethodrefConstant sbAppendStr,
 			MethodrefConstant sbAppendInt, MethodrefConstant sbToString, MethodrefConstant stringLastIndexOf,
 			MethodrefConstant stringSubstring, MethodrefConstant stringEquals, MethodrefConstant bf16Value,
-			MethodrefConstant bf16Bits, MethodrefConstant systemArraycopy) {
+			MethodrefConstant bf16Bits, MethodrefConstant systemArraycopy, MethodrefConstant ckBound) {
 
 	}
 
@@ -185,8 +185,10 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 				self(cp, selfClass, JvmFloatArrayRuntimeBuilder.BF16_VALUE,
 						JvmFloatArrayRuntimeBuilder.BF16_VALUE_DESC),
 				self(cp, selfClass, JvmFloatArrayRuntimeBuilder.BF16_BITS, JvmFloatArrayRuntimeBuilder.BF16_BITS_DESC),
-				cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/System")), cp.addNameAndType(cp.addUtf8("arraycopy"),
-						cp.addUtf8("(Ljava/lang/Object;ILjava/lang/Object;II)V"))));
+				cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/System")),
+						cp.addNameAndType(cp.addUtf8("arraycopy"),
+								cp.addUtf8("(Ljava/lang/Object;ILjava/lang/Object;II)V"))),
+				self(cp, selfClass, JvmOperandTypeRuntime.CK_BOUND, JvmOperandTypeRuntime.CK_BOUND_DESC));
 		List<ArrayMethod> methods = new ArrayList<>();
 		methods.add(buildInt(r));
 		methods.add(buildPutInt(r));
@@ -381,37 +383,27 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		a.invokestatic(r.float16ToFloat());
 	}
 
-	// _qmAref1(arr, i): the element at flat index i (rank-1 aref and row-major-aref).
-	// Locals: 0=arr, 1=i, 2=a, 3=flat.
+	// _qmAref1(arr, i): the element at flat index i (rank-1 aref and row-major-aref), i
+	// checked against the total size (_ckBound, JvmOperandTypeRuntime). Locals: 0=arr,
+	// 1=i, 2=a.
 	private static ArrayMethod buildAref1(Refs r) {
 		JvmAsm a = new JvmAsm();
 		a.aload(0);
 		a.checkcast(r.byteArrayClass());
 		a.astore(2);
+		a.aload(2);
 		a.aload(1);
-		a.checkcast(r.longClass());
-		a.invokevirtual(r.longIntValue());
-		a.istore(3);
-		int bad = a.label();
-		int ok = a.label();
-		a.iload(3);
-		a.branch(Opcode.IFLT, bad);
-		a.iload(3);
 		a.aload(2);
 		a.invokestatic(r.qmTotal());
-		a.branch(Opcode.IF_ICMPLT, ok);
-		a.bind(bad);
-		throwMessage(a, r, "aref: index out of bounds");
-		a.bind(ok);
-		a.aload(2);
-		a.iload(3);
+		a.invokestatic(r.ckBound());
 		a.invokestatic(r.qmValue());
 		a.invokestatic(r.doubleValueOf());
 		a.areturn();
-		return method(r, AREF1, BINARY_DESC, 6, 4, a);
+		return method(r, AREF1, BINARY_DESC, 6, 3, a);
 	}
 
-	// _qmAref2(arr, i, j). Locals: 0=arr, 1=i, 2=j, 3=a, 4=row, 5=col, 6=cols, 7=msg.
+	// _qmAref2(arr, i, j), each subscript checked against its own dimension. Locals:
+	// 0=arr, 1=i, 2=j, 3=a, 4=row, 5=col, 6=cols.
 	private static ArrayMethod buildAref2(Refs r) {
 		JvmAsm a = new JvmAsm();
 		a.aload(0);
@@ -423,31 +415,16 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		a.branch(Opcode.IF_ICMPEQ, rank2);
 		throwMessage(a, r, "aref: expected 1 subscripts, got 2");
 		a.bind(rank2);
-		a.aload(1);
-		a.checkcast(r.longClass());
-		a.invokevirtual(r.longIntValue());
-		a.istore(4);
-		a.aload(2);
-		a.checkcast(r.longClass());
-		a.invokevirtual(r.longIntValue());
-		a.istore(5);
 		headerInt(a, r, 3, 12);
 		a.istore(6);
-		int bad = a.label();
-		int ok = a.label();
-		a.iload(4);
-		a.branch(Opcode.IFLT, bad);
-		a.iload(5);
-		a.branch(Opcode.IFLT, bad);
-		a.iload(4);
+		a.aload(1);
 		headerInt(a, r, 3, 8);
-		a.branch(Opcode.IF_ICMPGE, bad);
-		a.iload(5);
+		a.invokestatic(r.ckBound());
+		a.istore(4);
+		a.aload(2);
 		a.iload(6);
-		a.branch(Opcode.IF_ICMPLT, ok);
-		a.bind(bad);
-		throwMessage(a, r, "aref: index out of bounds");
-		a.bind(ok);
+		a.invokestatic(r.ckBound());
+		a.istore(5);
 		a.aload(3);
 		a.iload(4);
 		a.iload(6);
@@ -460,8 +437,9 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		return method(r, AREF2, TERNARY_DESC, 6, 8, a);
 	}
 
-	// _qmArefN(arr, subs): the Horner fold over the header dims. Locals: 0=arr, 1=subs,
-	// 2=a, 3=subsArr, 4=rank, 5=flat, 6=k, 7=d, 8=s, 9=msg.
+	// _qmArefN(arr, subs): the Horner fold over the header dims, each subscript checked
+	// against its own dimension. Locals: 0=arr, 1=subs, 2=a, 3=subsArr, 4=rank, 5=flat,
+	// 6=k, 7=d, 8=s, 9=msg.
 	private static ArrayMethod buildArefN(Refs r) {
 		JvmAsm a = new JvmAsm();
 		a.aload(0);
@@ -493,12 +471,11 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		a.istore(6);
 		int loop = a.label();
 		int done = a.label();
-		int bad = a.label();
 		a.bind(loop);
 		a.iload(6);
 		a.iload(4);
 		a.branch(Opcode.IF_ICMPGE, done);
-		// d = dim k; s = subs[k]
+		// d = dim k; s = subs[k], checked against d
 		a.aload(2);
 		a.iload(6);
 		a.iconst(4);
@@ -510,14 +487,9 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		a.aload(3);
 		a.iload(6);
 		a.aaload();
-		a.checkcast(r.longClass());
-		a.invokevirtual(r.longIntValue());
-		a.istore(8);
-		a.iload(8);
-		a.branch(Opcode.IFLT, bad);
-		a.iload(8);
 		a.iload(7);
-		a.branch(Opcode.IF_ICMPGE, bad);
+		a.invokestatic(r.ckBound());
+		a.istore(8);
 		a.iload(5);
 		a.iload(7);
 		a.op(Opcode.IMUL);
@@ -526,8 +498,6 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		a.istore(5);
 		a.iinc(6, 1);
 		a.branch(Opcode.GOTO, loop);
-		a.bind(bad);
-		throwMessage(a, r, "aref: index out of bounds");
 		a.bind(done);
 		a.aload(2);
 		a.iload(5);

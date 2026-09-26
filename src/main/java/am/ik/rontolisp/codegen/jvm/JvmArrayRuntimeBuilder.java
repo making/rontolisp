@@ -354,6 +354,11 @@ final class JvmArrayRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8(RM_SET), cp.addUtf8(RM_SET_DESC)));
 		MethodrefConstant undisplace = cp.addMethodref(selfClass,
 				cp.addNameAndType(cp.addUtf8(UNDISPLACE), cp.addUtf8(UNDISPLACE_DESC)));
+		// Every subscript an accessor below indexes with is checked against the
+		// dimension it indexes (JvmOperandTypeRuntime): an out-of-range one is the
+		// access's type-error, named by its operator's wrapper.
+		MethodrefConstant ckBound = cp.addMethodref(selfClass, cp.addNameAndType(
+				cp.addUtf8(JvmOperandTypeRuntime.CK_BOUND), cp.addUtf8(JvmOperandTypeRuntime.CK_BOUND_DESC)));
 		MethodrefConstant makeDisplaced = cp.addMethodref(selfClass,
 				cp.addNameAndType(cp.addUtf8(MAKE_DISPLACED), cp.addUtf8(MAKE_DISPLACED_DESC)));
 		MethodrefConstant widen = cp.addMethodref(selfClass,
@@ -552,11 +557,15 @@ final class JvmArrayRuntimeBuilder {
 		a1.iastore();
 		a1.areturn();
 		a1.bind(a1NotString);
+		// A flat access (rank 1, or row-major-aref at any rank): the bound is the total
+		// size.
+		emitFlatBound(a1, arrayListClass, objectArrayClass, longArrayClass, alGet, alSize, longClass, longIntValue, 3,
+				4, 5);
 		a1.aload(0);
 		a1.iconst(1);
 		a1.aload(1);
-		a1.checkcast(longClass);
-		a1.invokevirtual(longIntValue);
+		a1.iload(5);
+		a1.invokestatic(ckBound);
 		a1.op(Opcode.IADD);
 		a1.invokestatic(rmGet);
 		a1.areturn();
@@ -564,26 +573,28 @@ final class JvmArrayRuntimeBuilder {
 
 		// _aref2(arr, i, j): cols = dims[1]; return _rmGet(arr, 1 + i * cols + j)
 		JvmAsm a2 = new JvmAsm();
-		emitFlat2(a2, arrayListClass, longClass, objectArrayClass, alGet, longIntValue);
+		emitFlat2(a2, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, ckBound, 4);
 		a2.istore(3);
 		a2.aload(0);
 		a2.iload(3);
 		a2.invokestatic(rmGet);
 		a2.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(AREF2), cp.addUtf8(AREF2_DESC), 4, 4, a2.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(AREF2), cp.addUtf8(AREF2_DESC), 5, 5, a2.finish()));
 
 		// _aset1(arr, i, val): _rmSet(arr, 1 + i, val) -- returns val
 		JvmAsm s1 = new JvmAsm();
+		emitFlatBound(s1, arrayListClass, objectArrayClass, longArrayClass, alGet, alSize, longClass, longIntValue, 3,
+				4, 5);
 		s1.aload(0);
 		s1.iconst(1);
 		s1.aload(1);
-		s1.checkcast(longClass);
-		s1.invokevirtual(longIntValue);
+		s1.iload(5);
+		s1.invokestatic(ckBound);
 		s1.op(Opcode.IADD);
 		s1.aload(2);
 		s1.invokestatic(rmSet);
 		s1.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ASET1), cp.addUtf8(ASET1_DESC), 4, 3, s1.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(ASET1), cp.addUtf8(ASET1_DESC), 4, 6, s1.finish()));
 
 		// _arrayDims(arr): the dimension sizes as a fresh cons list, built backwards
 		// over the dims Object[] in the slot-0 header (the sizes are already boxed
@@ -697,18 +708,18 @@ final class JvmArrayRuntimeBuilder {
 
 		// _aset2(arr, i, j, val): _rmSet(arr, 1 + i * cols + j, val) -- returns val
 		JvmAsm s2 = new JvmAsm();
-		emitFlat2(s2, arrayListClass, longClass, objectArrayClass, alGet, longIntValue);
+		emitFlat2(s2, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, ckBound, 5);
 		s2.istore(4);
 		s2.aload(0);
 		s2.iload(4);
 		s2.aload(3);
 		s2.invokestatic(rmSet);
 		s2.areturn();
-		methods.add(new ArrayMethod(cp.addUtf8(ASET2), cp.addUtf8(ASET2_DESC), 4, 5, s2.finish()));
+		methods.add(new ArrayMethod(cp.addUtf8(ASET2), cp.addUtf8(ASET2_DESC), 5, 6, s2.finish()));
 
 		// _arefN(arr, subs): return _rmGet(arr, 1 + flatIndex(arr, subs))
 		JvmAsm an = new JvmAsm();
-		emitFlatN(an, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, 1, 2, 3, 4, 5);
+		emitFlatN(an, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, ckBound, 1, 2, 3, 4, 5);
 		an.aload(0);
 		an.iconst(1);
 		an.iload(2);
@@ -719,7 +730,7 @@ final class JvmArrayRuntimeBuilder {
 
 		// _asetN(arr, subs, val): _rmSet(arr, 1 + flatIndex(arr, subs), val)
 		JvmAsm sn = new JvmAsm();
-		emitFlatN(sn, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, 1, 3, 4, 5, 6);
+		emitFlatN(sn, arrayListClass, longClass, objectArrayClass, alGet, longIntValue, ckBound, 1, 3, 4, 5, 6);
 		sn.aload(0);
 		sn.iconst(1);
 		sn.iload(3);
@@ -3838,15 +3849,88 @@ final class JvmArrayRuntimeBuilder {
 	}
 
 	// Pushes the rank-2 flat index 1 + i*cols + j, where arr is in slot 0, i in slot 1,
-	// j in slot 2, and cols is the second element of the Object[] dimension header.
+	// j in slot 2, and the dims are the Object[] dimension header, loaded into dimsSlot:
+	// each subscript is checked against ITS OWN dimension first (_ckBound), so a column
+	// past its dimension is out of range rather than folding into the next row.
 	private static void emitFlat2(JvmAsm a, ClassConstant arrayListClass, ClassConstant longClass,
-			ClassConstant objectArrayClass, MethodrefConstant get, MethodrefConstant intValue) {
+			ClassConstant objectArrayClass, MethodrefConstant get, MethodrefConstant intValue,
+			MethodrefConstant ckBound, int dimsSlot) {
+		emitLoadDims(a, arrayListClass, objectArrayClass, get, 0);
+		a.astore(dimsSlot);
 		a.iconst(1);
 		a.aload(1);
-		a.checkcast(longClass);
-		a.invokevirtual(intValue);
-		// cols = ((Long) ((Object[]) ((Object[]) list.get(0))[0])[1]).intValue()
+		emitDim(a, longClass, intValue, dimsSlot, 0);
+		a.invokestatic(ckBound);
+		emitDim(a, longClass, intValue, dimsSlot, 1);
+		a.op(Opcode.IMUL);
+		a.op(Opcode.IADD);
+		a.aload(2);
+		emitDim(a, longClass, intValue, dimsSlot, 1);
+		a.invokestatic(ckBound);
+		a.op(Opcode.IADD);
+	}
+
+	// Stores into totalSlot the total size of the general array in slot 0 -- the bound
+	// of a flat access -- read from what already holds it: a packed array's long[]
+	// length, a boxed one's element count (its ArrayList's size past the header), and
+	// only for a displaced view, whose storage is its target's, the product of its own
+	// dims. Every load but the view's is one the element access makes anyway, so the JIT
+	// shares them. headerSlot and kSlot are scratch.
+	private static void emitFlatBound(JvmAsm a, ClassConstant arrayListClass, ClassConstant objectArrayClass,
+			ClassConstant longArrayClass, MethodrefConstant get, MethodrefConstant size, ClassConstant longClass,
+			MethodrefConstant intValue, int headerSlot, int kSlot, int totalSlot) {
+		int notPacked = a.label();
+		int boxed = a.label();
+		int done = a.label();
 		a.aload(0);
+		a.checkcast(arrayListClass);
+		a.iconst(0);
+		a.invokevirtual(get);
+		a.checkcast(objectArrayClass);
+		a.astore(headerSlot);
+		a.aload(headerSlot);
+		a.arraylength();
+		a.iconst(6);
+		a.branch(Opcode.IF_ICMPNE, notPacked);
+		a.aload(headerSlot);
+		a.iconst(5);
+		a.aaload();
+		a.checkcast(longArrayClass);
+		a.arraylength();
+		a.istore(totalSlot);
+		a.branch(Opcode.GOTO, done);
+		a.bind(notPacked);
+		// a displaced view: header length > 4 with a target in slot 3
+		a.aload(headerSlot);
+		a.arraylength();
+		a.iconst(4);
+		a.branch(Opcode.IF_ICMPLE, boxed);
+		a.aload(headerSlot);
+		a.iconst(3);
+		a.aaload();
+		a.branch(Opcode.IFNULL, boxed);
+		a.aload(headerSlot);
+		a.iconst(0);
+		a.aaload();
+		a.checkcast(objectArrayClass);
+		a.astore(headerSlot);
+		emitTotalSize(a, longClass, intValue, headerSlot, kSlot, totalSlot);
+		a.branch(Opcode.GOTO, done);
+		a.bind(boxed);
+		a.aload(0);
+		a.checkcast(arrayListClass);
+		a.invokevirtual(size);
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.istore(totalSlot);
+		a.bind(done);
+	}
+
+	// Pushes the Object[] dimension header of the general array in arrSlot:
+	// (Object[]) ((Object[]) ((ArrayList) arr).get(0))[0].
+	private static void emitLoadDims(JvmAsm a, ClassConstant arrayListClass, ClassConstant objectArrayClass,
+			MethodrefConstant get, int arrSlot) {
+		a.aload(arrSlot);
 		a.checkcast(arrayListClass);
 		a.iconst(0);
 		a.invokevirtual(get);
@@ -3854,34 +3938,65 @@ final class JvmArrayRuntimeBuilder {
 		a.iconst(0);
 		a.aaload();
 		a.checkcast(objectArrayClass);
+	}
+
+	// Pushes dimension k of the dims Object[] in dimsSlot as an int.
+	private static void emitDim(JvmAsm a, ClassConstant longClass, MethodrefConstant intValue, int dimsSlot, int k) {
+		a.aload(dimsSlot);
+		a.iconst(k);
+		a.aaload();
+		a.checkcast(longClass);
+		a.invokevirtual(intValue);
+	}
+
+	// Stores into totalSlot the total size of the dims Object[] in dimsSlot -- the
+	// product of its dimensions, 1 for rank 0 -- the bound of a flat access.
+	private static void emitTotalSize(JvmAsm a, ClassConstant longClass, MethodrefConstant intValue, int dimsSlot,
+			int kSlot, int totalSlot) {
+		// rank 1, the common case: the one dimension, no loop
+		int general = a.label();
+		int done = a.label();
+		a.aload(dimsSlot);
+		a.arraylength();
 		a.iconst(1);
+		a.branch(Opcode.IF_ICMPNE, general);
+		emitDim(a, longClass, intValue, dimsSlot, 0);
+		a.istore(totalSlot);
+		a.branch(Opcode.GOTO, done);
+		a.bind(general);
+		a.iconst(1);
+		a.istore(totalSlot);
+		a.iconst(0);
+		a.istore(kSlot);
+		int loop = a.label();
+		a.bind(loop);
+		a.iload(kSlot);
+		a.aload(dimsSlot);
+		a.arraylength();
+		a.branch(Opcode.IF_ICMPGE, done);
+		a.iload(totalSlot);
+		a.aload(dimsSlot);
+		a.iload(kSlot);
 		a.aaload();
 		a.checkcast(longClass);
 		a.invokevirtual(intValue);
 		a.op(Opcode.IMUL);
-		a.op(Opcode.IADD);
-		a.aload(2);
-		a.checkcast(longClass);
-		a.invokevirtual(intValue);
-		a.op(Opcode.IADD);
+		a.istore(totalSlot);
+		a.iinc(kSlot, 1);
+		a.branch(Opcode.GOTO, loop);
+		a.bind(done);
 	}
 
 	// Computes the Horner flat index over an Object[] of Long subscripts (in the slot
 	// subs) against the array in slot 0, leaving it in the int slot flat:
-	// flat = 0; for k in 0..: flat = flat * dims[k] + subs[k]. The fold starts at 0 (not
-	// at subs[0]) so an EMPTY subscript array -- a rank-0 array -- answers 0.
+	// flat = 0; for k in 0..: flat = flat * dims[k] + subs[k], each subscript checked
+	// against its own dimension (_ckBound). The fold starts at 0 (not at subs[0]) so an
+	// EMPTY subscript array -- a rank-0 array -- answers 0.
 	private static void emitFlatN(JvmAsm a, ClassConstant arrayListClass, ClassConstant longClass,
-			ClassConstant objectArrayClass, MethodrefConstant get, MethodrefConstant intValue, int subs, int flat,
-			int kSlot, int nSlot, int dimsSlot) {
+			ClassConstant objectArrayClass, MethodrefConstant get, MethodrefConstant intValue,
+			MethodrefConstant ckBound, int subs, int flat, int kSlot, int nSlot, int dimsSlot) {
 		// dims = (Object[]) ((Object[]) ((ArrayList) arr).get(0))[0]
-		a.aload(0);
-		a.checkcast(arrayListClass);
-		a.iconst(0);
-		a.invokevirtual(get);
-		a.checkcast(objectArrayClass);
-		a.iconst(0);
-		a.aaload();
-		a.checkcast(objectArrayClass);
+		emitLoadDims(a, arrayListClass, objectArrayClass, get, 0);
 		a.astore(dimsSlot);
 		// subs = (Object[]) subs (re-store the checked cast); n = subs.length
 		a.aload(subs);
@@ -3913,8 +4028,12 @@ final class JvmArrayRuntimeBuilder {
 		a.aload(subs);
 		a.iload(kSlot);
 		a.aaload();
+		a.aload(dimsSlot);
+		a.iload(kSlot);
+		a.aaload();
 		a.checkcast(longClass);
 		a.invokevirtual(intValue);
+		a.invokestatic(ckBound);
 		a.op(Opcode.IADD);
 		a.istore(flat);
 		a.iinc(kSlot, 1);

@@ -10966,9 +10966,9 @@ public final class LispEvaluator {
 		String message = e.getMessage();
 		LispVal messageVal = message == null ? LispNil.INSTANCE : new LispString(message);
 		String className = e.conditionClassName();
-		if (e instanceof OperandTypeException operand && this.closRegistry
-			.newReportingCondition(ClosRegistry.TYPE_ERROR_CLASS_NAME, messageVal, java.util.Map.of("DATUM",
-					operand.datum(), "EXPECTED-TYPE", new LispSymbol(operand.expectedType()))) instanceof LispVal c) {
+		if (e instanceof OperandTypeException operand
+				&& this.closRegistry.newReportingCondition(ClosRegistry.TYPE_ERROR_CLASS_NAME, messageVal, java.util.Map
+					.of("DATUM", operand.datum(), "EXPECTED-TYPE", operand.expectedType())) instanceof LispVal c) {
 			return c;
 		}
 		if (className != null && this.closRegistry.newReportingCondition(className, messageVal) instanceof LispVal c) {

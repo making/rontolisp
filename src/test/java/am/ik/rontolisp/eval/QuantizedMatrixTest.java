@@ -105,7 +105,8 @@ class QuantizedMatrixTest {
 		assertThatThrownBy(() -> eval(program + "(setf (row-major-aref *m* 0) 1.0)"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("a quantized matrix is immutable");
-		assertThatThrownBy(() -> eval(program + "(aref *m* 2 0)")).hasMessageContaining("out of bounds");
+		assertThatThrownBy(() -> eval(program + "(aref *m* 2 0)"))
+			.hasMessageContaining("AREF: The value 2 is not of type (INTEGER 0 (2))");
 		assertThatThrownBy(() -> eval(program + "(aref *m* 0)")).hasMessageContaining("expected 2 subscripts");
 	}
 

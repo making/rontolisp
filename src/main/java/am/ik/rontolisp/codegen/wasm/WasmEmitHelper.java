@@ -420,10 +420,17 @@ final class WasmEmitHelper {
 			w.write(Instruction.END);
 			return body.toByteArray();
 		}
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(Type.I31.code());
+		// a fixnum, an i64 box or a limb integer passes: the access bounds a wide one
+		// (_int_val's limb-tier arm would trap on it)
+		for (int type : new int[] { Type.I31.code(), WasmLispCompiler.TYPE_BIGNUM, WasmLispCompiler.TYPE_BIGINT }) {
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			w.writeHeapType(type);
+			if (type != Type.I31.code()) {
+				w.write(Instruction.I32_OR);
+			}
+		}
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		w.write(Instruction.GET_LOCAL);
@@ -443,6 +450,71 @@ final class WasmEmitHelper {
 		w.write(Instruction.END);
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds {@code _idx_in(subscript, bound) -> i32} ({@code FUNC_IDX_IN}): an i31
+	 * subscript in {@code [0, bound)} answers itself unboxed; any other -- negative, at
+	 * or past the bound, a wide integer no bound reaches -- is out of range. In EH mode
+	 * that is the operator's {@code type-error} whose datum is the subscript and whose
+	 * expected type is {@code (INTEGER 0 (bound))}, thrown by {@code _type_err}'s index
+	 * arm ({@code WasmOperandTypes}) as kind {@code -1 - bound} under the register the
+	 * caller set; outside it -- or in a module whose landing has no index arm -- a trap,
+	 * as every failed check is there. On success it clears the operator register the
+	 * caller set, so a site needs no clear of its own after the call.
+	 * @param operatorGlobal the operator register when the module reports an out-of-range
+	 * subscript (EH mode, and the landing's index arm present:
+	 * {@code WasmOperandTypes.Operators.indexed}), else -1
+	 * @return the function body
+	 */
+	static byte[] buildIndexBoundBody(int operatorGlobal) {
+		boolean landing = operatorGlobal >= 0;
+		java.io.ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: the subscript, the bound; one i32 local, the unboxed subscript
+		w.writeUnsignedLeb128(1);
+		w.writeUnsignedLeb128(1);
+		w.write(Type.I32);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		castI31GetS(w);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		if (landing) {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+			w.write(Instruction.SET_GLOBAL);
+			w.writeUnsignedLeb128(operatorGlobal);
+		}
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		if (landing) {
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(-1);
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(1);
+			w.write(Instruction.I32_SUB);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_TYPE_ERR);
+			w.write(Instruction.DROP);
+		}
+		w.write(Instruction.UNREACHABLE);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}

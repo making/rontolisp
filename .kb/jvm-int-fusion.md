@@ -51,7 +51,8 @@ enclosing expression's pending operands.
   `Ctx.usesIntArray`) or the general array's length-6 header over a flat `long[]` (elements from
   slot 0, `.kb/adjustable-arrays.md`). Discriminator: `instanceof ArrayList`, `size() != 0`,
   `get(0) instanceof Object[]`, `length == 6` -- **4 is a character vector, 5 a displacement, 3 the
-  boxed general array**. The nil sentinel (`Long.MIN_VALUE`), an out-of-range index and every
+  boxed general array**. The nil sentinel (`Long.MIN_VALUE`), an out-of-range index (a long one past the int range
+  too, which no truncation may turn into a read) and every
   non-packed shape bail into the same `_ivAref1`/`_fvAref1`/`_arrayAref1` the ordinary emission
   would use. The INDEX is itself a fusion node.
 - **Random leaves**: `(random <integer>)` draws with the same formula `_random` uses for a `Long`

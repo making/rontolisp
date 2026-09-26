@@ -1924,19 +1924,30 @@ final class JvmIntFusionCompiler {
 	 */
 	private static void emitArefRead(ArefLeaf leaf, JvmLispCompiler.Ctx ctx, List<Integer> bails,
 			ClassConstant longArrayClass, ArefScratch scratch) {
-		// idx = (int) <index> -- the same truncation _aref1's ((Long) i).intValue()
-		// applies.
+		// idx = (int) <index>, an index past the int range bailing: _aref1 checks the
+		// whole value against the bound, so no truncation may read an element.
 		int idxSlot = scratch.idxSlot();
 		Node index = java.util.Objects.requireNonNull(leaf.indexNode);
 		if (index instanceof ConstLeaf c) {
+			if (c.value() != (int) c.value()) {
+				bails.add(branch(ctx, Opcode.GOTO));
+			}
 			JvmEmitHelper.emitIntConst(ctx, (int) c.value());
+			ctx.emit(Opcode.ISTORE);
+			ctx.emit(idxSlot);
 		}
 		else {
 			emitLongLoad(rawSlotOf(index), ctx);
 			ctx.emit(Opcode.L2I);
+			ctx.emit(Opcode.ISTORE);
+			ctx.emit(idxSlot);
+			emitLongLoad(rawSlotOf(index), ctx);
+			ctx.emit(Opcode.ILOAD);
+			ctx.emit(idxSlot);
+			ctx.emit(Opcode.I2L);
+			ctx.emit(Opcode.LCMP);
+			bails.add(branch(ctx, Opcode.IFNE));
 		}
-		ctx.emit(Opcode.ISTORE);
-		ctx.emit(idxSlot);
 		leaf.longSlot = ctx.allocTemp();
 		ctx.allocTemp();
 		List<Integer> done = new ArrayList<>();
@@ -2436,7 +2447,7 @@ final class JvmIntFusionCompiler {
 				emitFallback(java.util.Objects.requireNonNull(leaf.indexNode), ctx, className);
 				ctx.restoreSite(leaf.site);
 				ctx.emit(Opcode.INVOKESTATIC);
-				ctx.emitU2(aref1Helper(ctx, className).index());
+				ctx.emitU2(namedAref1Helper(ctx, className).index());
 			}
 			// The ONE draw the prologue took, re-boxed: raw from the slot, or the
 			// boxed value _random answered for a limit the raw path could not take.
@@ -2495,11 +2506,31 @@ final class JvmIntFusionCompiler {
 		}
 	}
 
+	/**
+	 * {@link #aref1Helper} under {@code AREF}'s wrapper, as the ordinary emission calls
+	 * it: the fallback is compiled away from the form, so an out-of-range subscript names
+	 * the access whatever operator the tree node is ({@link JvmOperandTypeRuntime}).
+	 */
+	private static MethodrefConstant namedAref1Helper(JvmLispCompiler.Ctx ctx, String className) {
+		MethodrefConstant ref = aref1Helper(ctx, className);
+		@Nullable String outer = ctx.operator;
+		ctx.operator = LispNames.AREF;
+		try {
+			return ctx.wrapForOperator(aref1HelperName(ctx), JvmArrayRuntimeBuilder.AREF1_DESC, ref);
+		}
+		finally {
+			ctx.operator = outer;
+		}
+	}
+
 	/** The same helper the ordinary rank-1 aref emission calls for this program. */
 	private static MethodrefConstant aref1Helper(JvmLispCompiler.Ctx ctx, String className) {
-		String name = ctx.usesIntArray ? JvmIntArrayRuntimeBuilder.AREF1
+		return JvmEmitHelper.selfMethod(ctx, className, aref1HelperName(ctx), JvmArrayRuntimeBuilder.AREF1_DESC);
+	}
+
+	private static String aref1HelperName(JvmLispCompiler.Ctx ctx) {
+		return ctx.usesIntArray ? JvmIntArrayRuntimeBuilder.AREF1
 				: ctx.usesFloatArray ? JvmFloatArrayRuntimeBuilder.AREF1 : JvmArrayRuntimeBuilder.AREF1;
-		return JvmEmitHelper.selfMethod(ctx, className, name, JvmArrayRuntimeBuilder.AREF1_DESC);
 	}
 
 	/**
