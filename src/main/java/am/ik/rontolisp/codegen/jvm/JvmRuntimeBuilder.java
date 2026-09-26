@@ -101,13 +101,29 @@ final class JvmRuntimeBuilder {
 	 * arm: it maps the funcId back to the callee's shape and throws
 	 * @param chkRef {@code _arityChk(argList, shape)}, the spread cases' and the literal
 	 * {@code apply} call sites' count guard
+	 * @param operators the program's arity-operator registry, which a spread case bakes
+	 * its callee's shape through; null exactly when {@code chkRef} is
 	 */
 	record ArityReporting(@org.jspecify.annotations.Nullable MethodrefConstant errRef,
-			@org.jspecify.annotations.Nullable MethodrefConstant chkRef) {
+			@org.jspecify.annotations.Nullable MethodrefConstant chkRef,
+			@org.jspecify.annotations.Nullable JvmArityOperators operators) {
 
-		static final ArityReporting NONE = new ArityReporting(null, null);
+		static final ArityReporting NONE = new ArityReporting(null, null, null);
 
 	}
+
+	/**
+	 * The class every arity reporter throws: {@code _arityErr} and {@code _arityChk}. A
+	 * bytecode-emitted throw site has no channel for a condition, so the landing pad
+	 * recovers {@code program-error} from the exception's CLASS
+	 * ({@code JvmHandlerCaseCompiler}). It used to recover it from the
+	 * {@code Function expects } prefix of the text, which a named report does not start
+	 * with and which a user's {@code (error "Function expects ...")} -- a plain
+	 * {@code RuntimeException} -- matched too. The JDK class is the one whose meaning is
+	 * a call made with the wrong signature, and nothing else a compiled program runs
+	 * raises it.
+	 */
+	static final String ARITY_EXCEPTION_CLASS = "java/lang/invoke/WrongMethodTypeException";
 
 	/**
 	 * {@code _notFn(Object value)}: the exception applying a value that names no function
@@ -201,7 +217,7 @@ final class JvmRuntimeBuilder {
 			// The spread dispatcher takes EVERY callable: its case reads the parameters
 			// out of the list, so no arity has to match and no ceiling applies.
 			if (spread) {
-				cases.add(renderSpreadCase(fi, -1, objectArrayClass, arityReporting));
+				cases.add(renderSpreadCase(fi, entry.getKey(), -1, cp, objectArrayClass, arityReporting));
 			}
 			else if (dispatchMatches(fi.paramCount(), fi.variadic(), arity)) {
 				cases.add(renderCase(fi, arity, restSlot, -1, objectClass));
@@ -213,7 +229,7 @@ final class JvmRuntimeBuilder {
 				continue;
 			}
 			if (spread) {
-				cases.add(renderSpreadCase(lambdaFuncInfos.get(i), fvSlot, objectArrayClass, arityReporting));
+				cases.add(renderSpreadCase(lambdaFuncInfos.get(i), null, fvSlot, cp, objectArrayClass, arityReporting));
 			}
 			else if (dispatchMatches(lambda.paramNames().size(), lambda.variadic(), arity)) {
 				cases.add(renderCase(lambdaFuncInfos.get(i), arity, restSlot, fvSlot, objectClass));
@@ -546,8 +562,23 @@ final class JvmRuntimeBuilder {
 	 * cell and an {@code _arityChk} argument alike.
 	 */
 	static int arityShape(int required, boolean variadic) {
-		return required * 2 + (variadic ? 1 : 0);
+		return JvmArityOperators.plainShape(required, variadic);
 	}
+
+	/**
+	 * Where a callee shape carries the operator a report names
+	 * ({@link JvmArityOperators#OPERATOR_SHIFT}).
+	 */
+	static final int ARITY_OPERATOR_SHIFT = JvmArityOperators.OPERATOR_SHIFT;
+
+	/**
+	 * Where an {@code _arityErr} table cell carries the operator index: above the seven
+	 * bits of {@code shape + 1}, so a cell that names nothing keeps its one-byte
+	 * encoding. Nine bits are left in a {@code char}.
+	 */
+	private static final int ARITY_TABLE_OPERATOR_SHIFT = 7;
+
+	private static final int ARITY_TABLE_MAX_OPERATOR = (1 << (Character.SIZE - ARITY_TABLE_OPERATOR_SHIFT)) - 1;
 
 	/**
 	 * The {@code _arityErr} table cell for a funcId no dispatchable callable claims --
@@ -592,18 +623,24 @@ final class JvmRuntimeBuilder {
 	 * {@code _arityErr} serves
 	 * @param withChk whether the program has a spread case or a literal {@code apply}
 	 * call site, which {@code _arityChk} serves
+	 * @param operators the program's arity-operator registry: every dispatchable callee
+	 * registers here -- which covers every spread case, built after this -- and
+	 * {@code _arityMsg} is built from it, frozen
 	 * @return the helper methods
 	 */
 	static List<JvmLispCompiler.DispatchMethod> buildArityMethods(Map<String, JvmLispCompiler.FunctionInfo> functions,
 			List<JvmLispCompiler.LambdaInfo> lambdaDecls, ConstantPool cp, ClassConstant thisClass,
 			ClassConstant objectArrayClass, ClassConstant stringClass,
-			@org.jspecify.annotations.Nullable Set<Integer> dispatchable, boolean withErr, boolean withChk) {
+			@org.jspecify.annotations.Nullable Set<Integer> dispatchable, boolean withErr, boolean withChk,
+			JvmArityOperators operators) {
 		SortedMap<Integer, Integer> shapes = new java.util.TreeMap<>();
-		for (JvmLispCompiler.FunctionInfo fi : functions.values()) {
+		for (Map.Entry<String, JvmLispCompiler.FunctionInfo> entry : functions.entrySet()) {
+			JvmLispCompiler.FunctionInfo fi = entry.getValue();
 			if (fi.isClosure() || (dispatchable != null && !dispatchable.contains(fi.funcId()))) {
 				continue;
 			}
-			shapes.put(fi.funcId(), arityShape(fi.variadic() ? fi.paramCount() - 1 : fi.paramCount(), fi.variadic()));
+			shapes.put(fi.funcId(), operators.shape(fi.variadic() ? fi.paramCount() - 1 : fi.paramCount(),
+					fi.variadic(), entry.getKey()));
 		}
 		for (JvmLispCompiler.LambdaInfo lambda : lambdaDecls) {
 			if (dispatchable != null && !dispatchable.contains(lambda.funcId())) {
@@ -612,21 +649,22 @@ final class JvmRuntimeBuilder {
 			int params = lambda.paramNames().size();
 			shapes.put(lambda.funcId(), arityShape(lambda.variadic() ? params - 1 : params, lambda.variadic()));
 		}
-		ClassConstant runtimeEx = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
+		ClassConstant runtimeEx = cp.addClass(cp.addUtf8(ARITY_EXCEPTION_CLASS));
 		MethodrefConstant exCtor = cp.addMethodref(runtimeEx,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
 		MethodrefConstant msgRef = cp.addMethodref(thisClass,
 				cp.addNameAndType(cp.addUtf8(ARITY_MSG_NAME), cp.addUtf8(ARITY_MSG_DESC)));
+		List<String> operatorNames = operators.freeze();
 		List<JvmLispCompiler.DispatchMethod> methods = new ArrayList<>();
 		methods.add(new JvmLispCompiler.DispatchMethod(cp.addUtf8(ARITY_MSG_NAME), cp.addUtf8(ARITY_MSG_DESC),
-				buildArityMsgBody(cp), 4));
+				buildArityMsgBody(cp, stringClass, operatorNames), operatorNames.isEmpty() ? 4 : 5));
 		if (withErr) {
 			methods.add(new JvmLispCompiler.DispatchMethod(cp.addUtf8(ARITY_ERR_NAME), cp.addUtf8(ARITY_ERR_DESC),
 					buildArityErrBody(shapes, cp, stringClass, runtimeEx, exCtor, msgRef), 3));
 		}
 		if (withChk) {
 			methods.add(new JvmLispCompiler.DispatchMethod(cp.addUtf8(ARITY_CHK_NAME), cp.addUtf8(ARITY_CHK_DESC),
-					buildArityChkBody(objectArrayClass, runtimeEx, exCtor, msgRef), 5));
+					buildArityChkBody(objectArrayClass, runtimeEx, exCtor, msgRef, !operatorNames.isEmpty()), 5));
 		}
 		return methods;
 	}
@@ -649,7 +687,7 @@ final class JvmRuntimeBuilder {
 	 * on it.
 	 */
 	private static List<Integer> buildArityChkBody(ClassConstant objectArrayClass, ClassConstant runtimeEx,
-			MethodrefConstant exCtor, MethodrefConstant msgRef) {
+			MethodrefConstant exCtor, MethodrefConstant msgRef, boolean named) {
 		// Params: 0 = argList, 1 = shape. Locals: 2 = got, 3 = cursor, 4 = required.
 		int argList = 0, shape = 1, got = 2, cursor = 3, required = 4;
 		JvmAsm a = new JvmAsm();
@@ -675,7 +713,15 @@ final class JvmRuntimeBuilder {
 		a.branch(Opcode.GOTO, loop);
 		a.bind(counted);
 		a.iload(shape);
-		a.iconst(1);
+		if (named) {
+			// the operator bits above ARITY_OPERATOR_SHIFT shifted out first
+			a.iconst(Integer.SIZE - ARITY_OPERATOR_SHIFT);
+			a.op(Opcode.ISHL);
+			a.iconst(Integer.SIZE - ARITY_OPERATOR_SHIFT + 1);
+		}
+		else {
+			a.iconst(1);
+		}
 		a.op(Opcode.IUSHR);
 		a.istore(required);
 		// a &rest tail makes the required count a lower bound
@@ -707,9 +753,13 @@ final class JvmRuntimeBuilder {
 	/**
 	 * {@code _arityMsg(shape, got)}: the text, assembled out of the very constants
 	 * {@link ClosRegistry#arityMessage} composes, so the compiled wording cannot drift
-	 * from the interpreter's.
+	 * from the interpreter's. With {@code operatorNames} the shape may carry an operator
+	 * ({@link JvmArityOperators}), whose name is read out of the newline-joined names and
+	 * stands where {@code Function} would; without, the body is the one a build that
+	 * named nothing emitted, byte for byte.
 	 */
-	private static List<Integer> buildArityMsgBody(ConstantPool cp) {
+	private static List<Integer> buildArityMsgBody(ConstantPool cp, ClassConstant stringClass,
+			List<String> operatorNames) {
 		ClassConstant sb = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
 		MethodrefConstant sbInit = cp.addMethodref(sb, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
 		MethodrefConstant appendStr = cp.addMethodref(sb,
@@ -719,9 +769,17 @@ final class JvmRuntimeBuilder {
 		MethodrefConstant toString = cp.addMethodref(sb,
 				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
 		List<Integer> code = new ArrayList<>();
-		// required = shape >>> 1
+		boolean named = !operatorNames.isEmpty();
+		// required = shape >>> 1, the operator bits shifted out first when there are any
 		code.add(Opcode.ILOAD_0);
-		code.add(Opcode.ICONST_1);
+		if (named) {
+			emitIntConstStatic(code, Integer.SIZE - ARITY_OPERATOR_SHIFT);
+			code.add(Opcode.ISHL);
+			emitIntConstStatic(code, Integer.SIZE - ARITY_OPERATOR_SHIFT + 1);
+		}
+		else {
+			code.add(Opcode.ICONST_1);
+		}
 		code.add(Opcode.IUSHR);
 		code.add(Opcode.ISTORE_3);
 		code.add(Opcode.NEW);
@@ -730,7 +788,46 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.INVOKESPECIAL);
 		emitU2(code, sbInit.index());
 		code.add(Opcode.ASTORE_2);
-		emitArityAppend(code, cp, appendStr, ClosRegistry.ARITY_MESSAGE_PREFIX);
+		if (named) {
+			// operator = shape >>> ARITY_OPERATOR_SHIFT; 0 reports as "Function"
+			int operator = 4;
+			code.add(Opcode.ILOAD_0);
+			emitIntConstStatic(code, ARITY_OPERATOR_SHIFT);
+			code.add(Opcode.IUSHR);
+			code.add(Opcode.DUP);
+			code.add(Opcode.ISTORE);
+			code.add(operator);
+			int ifNamed = code.size();
+			code.add(Opcode.IFNE);
+			emitU2(code, 0);
+			emitArityAppend(code, cp, appendStr, ClosRegistry.ARITY_MESSAGE_PREFIX);
+			int toJoin = code.size();
+			code.add(Opcode.GOTO);
+			emitU2(code, 0);
+			patchBranch(code, ifNamed, code.size());
+			// sb.append(NAMES.split("\n")[operator - 1]).append(" expects ")
+			code.add(Opcode.ALOAD_2);
+			emitLdc(code, cp.addString(String.join(ARITY_OPERATOR_SEPARATOR, operatorNames)).index());
+			emitLdc(code, cp.addString(ARITY_OPERATOR_SEPARATOR).index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, cp
+				.addMethodref(stringClass,
+						cp.addNameAndType(cp.addUtf8("split"), cp.addUtf8("(Ljava/lang/String;)[Ljava/lang/String;")))
+				.index());
+			code.add(Opcode.ILOAD);
+			code.add(operator);
+			code.add(Opcode.ICONST_1);
+			code.add(Opcode.ISUB);
+			code.add(Opcode.AALOAD);
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, appendStr.index());
+			code.add(Opcode.POP);
+			emitArityAppend(code, cp, appendStr, ClosRegistry.ARITY_VERB);
+			patchBranch(code, toJoin, code.size());
+		}
+		else {
+			emitArityAppend(code, cp, appendStr, ClosRegistry.ARITY_MESSAGE_PREFIX);
+		}
 		// a &rest tail makes the count a lower bound
 		code.add(Opcode.ILOAD_0);
 		code.add(Opcode.ICONST_1);
@@ -766,6 +863,13 @@ final class JvmRuntimeBuilder {
 		return code;
 	}
 
+	/**
+	 * What joins the operator names {@code _arityMsg} splits: no operator name contains a
+	 * newline, and a one-character non-metacharacter pattern is {@code String.split}'s
+	 * regex-free path.
+	 */
+	private static final String ARITY_OPERATOR_SEPARATOR = "\n";
+
 	/** {@code sb.append(<literal>)} inside {@code _arityMsg}, discarding the builder. */
 	private static void emitArityAppend(List<Integer> code, ConstantPool cp, MethodrefConstant appendStr, String text) {
 		code.add(Opcode.ALOAD_2);
@@ -789,9 +893,12 @@ final class JvmRuntimeBuilder {
 		int span = shapes.isEmpty() ? 0 : shapes.lastKey() - base + 1;
 		if (span > 0 && span <= ARITY_TABLE_MAX_SPAN) {
 			StringBuilder table = new StringBuilder(span);
+			boolean named = false;
 			for (int i = 0; i < span; i++) {
 				Integer shape = shapes.get(base + i);
-				table.append((char) (shape == null || shape + 1 >= ARITY_TABLE_NONE ? ARITY_TABLE_NONE : shape + 1));
+				int cell = shape == null ? ARITY_TABLE_NONE : arityTableCell(shape);
+				named |= cell > ARITY_TABLE_NONE;
+				table.append((char) cell);
 			}
 			code.add(Opcode.ILOAD_0);
 			if (base != 0) {
@@ -822,9 +929,25 @@ final class JvmRuntimeBuilder {
 			code.add(Opcode.NEW);
 			emitU2(code, runtimeEx.index());
 			code.add(Opcode.DUP);
-			code.add(Opcode.ILOAD_2);
-			code.add(Opcode.ICONST_1);
-			code.add(Opcode.ISUB);
+			if (named) {
+				// shape = (cell >>> 7) << 16 | ((cell & 0x7F) - 1)
+				code.add(Opcode.ILOAD_2);
+				emitIntConstStatic(code, ARITY_TABLE_OPERATOR_SHIFT);
+				code.add(Opcode.IUSHR);
+				emitIntConstStatic(code, ARITY_OPERATOR_SHIFT);
+				code.add(Opcode.ISHL);
+				code.add(Opcode.ILOAD_2);
+				emitIntConstStatic(code, (1 << ARITY_TABLE_OPERATOR_SHIFT) - 1);
+				code.add(Opcode.IAND);
+				code.add(Opcode.ICONST_1);
+				code.add(Opcode.ISUB);
+				code.add(Opcode.IOR);
+			}
+			else {
+				code.add(Opcode.ILOAD_2);
+				code.add(Opcode.ICONST_1);
+				code.add(Opcode.ISUB);
+			}
 			code.add(Opcode.ILOAD_1);
 			code.add(Opcode.INVOKESTATIC);
 			emitU2(code, msgRef.index());
@@ -838,6 +961,22 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.ACONST_NULL);
 		code.add(Opcode.ARETURN);
 		return code;
+	}
+
+	/**
+	 * The {@code _arityErr} table cell of a callee shape
+	 * ({@link JvmArityOperators#shape}): {@code shape + 1} in the low seven bits and the
+	 * operator index above them, or {@link #ARITY_TABLE_NONE} for a shape too wide to fit
+	 * -- such a callee answers nil rather than a report. An operator index past the nine
+	 * bits left drops the name, not the report.
+	 */
+	private static int arityTableCell(int shape) {
+		int plain = (shape & ((1 << ARITY_OPERATOR_SHIFT) - 1)) + 1;
+		if (plain >= ARITY_TABLE_NONE) {
+			return ARITY_TABLE_NONE;
+		}
+		int operator = shape >>> ARITY_OPERATOR_SHIFT;
+		return operator <= ARITY_TABLE_MAX_OPERATOR ? operator << ARITY_TABLE_OPERATOR_SHIFT | plain : plain;
 	}
 
 	/**
@@ -902,17 +1041,27 @@ final class JvmRuntimeBuilder {
 	 * instructions per parameter and keeps the case body self-contained so it can be
 	 * spliced into any segment.
 	 */
-	private static Case renderSpreadCase(JvmLispCompiler.FunctionInfo fi, int fvSlot, ClassConstant objectArrayClass,
+	private static Case renderSpreadCase(JvmLispCompiler.FunctionInfo fi,
+			@org.jspecify.annotations.Nullable String name, int fvSlot, ConstantPool cp, ClassConstant objectArrayClass,
 			ArityReporting arityReporting) {
 		List<Integer> code = new ArrayList<>();
 		int required = fi.variadic() ? fi.paramCount() - 1 : fi.paramCount();
 		// The count guard. A short list would otherwise BIND nil for the parameters it
 		// does not reach and a long one would drop its tail, because the walk below is
 		// car/cdr and both answer nil past the end -- neither of which is a dispatch
-		// miss, so the shared no-match arm never sees it (ArityReporting).
+		// miss, so the shared no-match arm never sees it (ArityReporting). A built-in's
+		// shape carries its operator index, past sipush range: that one constant is
+		// pooled.
 		if (arityReporting.chkRef() != null) {
 			code.add(Opcode.ALOAD_1);
-			emitIntConstStatic(code, arityShape(required, fi.variadic()));
+			int shape = java.util.Objects.requireNonNull(arityReporting.operators())
+				.shape(required, fi.variadic(), name);
+			if (shape > Short.MAX_VALUE) {
+				emitLdc(code, cp.addInteger(shape).index());
+			}
+			else {
+				emitIntConstStatic(code, shape);
+			}
 			code.add(Opcode.INVOKESTATIC);
 			emitU2(code, arityReporting.chkRef().index());
 		}

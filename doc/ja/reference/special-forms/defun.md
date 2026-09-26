@@ -59,6 +59,13 @@ Function expects 2 arguments, got 1
 ; => "Function expects 2 arguments, got 1"
 ```
 
+組み込みオペレータの関数値では、`Function` の代わりにオペレータ名が入ります。
+
+```lisp
+(handler-case (funcall #'cons 1) (program-error (c) (princ-to-string c)))
+; => "CONS expects 2 arguments, got 1"
+```
+
 ラムダリストが `&optional` パラメータで終わる関数(`&rest` も `&key` もない)が受け取れるのは、
 必須と省略可能の個数の合計までです。余分な引数は、どのバックエンドでも、デフォルト式を
 評価する前に実行時の捕捉可能な `program-error` を通知します。

@@ -227,8 +227,8 @@ public final class BuiltinFunctionWrappers {
 
 	/**
 	 * The wrappers whose BODY calls {@code apply}: the {@code map*} family, {@code every}
-	 * / {@code some} and {@code funcall} itself. All of them forward a runtime number of
-	 * arguments, which is what {@code apply} is for.
+	 * / {@code some}, {@code funcall} and {@code apply} themselves. All of them forward a
+	 * runtime number of arguments, which is what {@code apply} is for.
 	 *
 	 * <p>
 	 * They are injected ungated, but a backend that GATES its {@code apply} runtime on
@@ -241,7 +241,7 @@ public final class BuiltinFunctionWrappers {
 	 */
 	public static final Set<String> APPLY_USING_FUNCTIONS = Set.of(LispNames.MAPCAR, LispNames.MAPC, LispNames.MAPCAN,
 			LispNames.MAPLIST, LispNames.MAPCON, LispNames.MAPL, LispNames.EVERY, LispNames.SOME, LispNames.NOTANY,
-			LispNames.NOTEVERY, LispNames.MAP, LispNames.MAP_INTO, LispNames.FUNCALL);
+			LispNames.NOTEVERY, LispNames.MAP, LispNames.MAP_INTO, LispNames.FUNCALL, LispNames.APPLY);
 
 	/**
 	 * Whether the expression takes any {@link #APPLY_USING_FUNCTIONS} member as a
@@ -451,6 +451,20 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	/**
+	 * The operator a wrong-argument-count report names for a function of this name: the
+	 * name itself when it is a wrapped built-in, {@code null} (reported as
+	 * {@code ClosRegistry.ARITY_ANONYMOUS_OPERATOR}) for anything else. One rule for all
+	 * four backends -- the interpreter asks it of a lambda's name, the compiled backends
+	 * of a callable's -- decided by the NAME, because the interpreter's catalog lambda
+	 * and the compilers' injected wrapper defun are the same function under it.
+	 * @param functionName the callee's name, or {@code null} for an anonymous one
+	 * @return the operator to report, or {@code null}
+	 */
+	public static @Nullable String arityOperator(@Nullable String functionName) {
+		return functionName != null && WRAPPER_NAMES.contains(functionName) ? functionName : null;
+	}
+
+	/**
 	 * Generates wrapper defuns for built-in operators that are not already defined by the
 	 * user.
 	 * @param userDefinedNames names already defined by user defuns
@@ -590,6 +604,42 @@ public final class BuiltinFunctionWrappers {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * {@code #'apply}: {@code (lambda (f a &rest r) ...)} spreads its LAST argument -- a
+	 * when r is empty, else the last of r -- behind the arguments in front of it, and
+	 * refuses a last argument that is no proper list with the interpreter's text (a
+	 * dotted one would otherwise reach the dispatcher's list walk). Its lambda list is
+	 * what a wrong count is reported from ({@code APPLY expects at least 2 arguments}),
+	 * which is also how the compiled {@code eval} reaches it: through the registry, like
+	 * any other catalog name.
+	 *
+	 * <pre>
+	 * (let ((l (if r (car (last r)) a)))
+	 *   (if (do ((c l (cdr c))) ((atom c) (null c)))
+	 *       (apply f (if r (cons a (append (butlast r) l)) l))
+	 *       (error "APPLY: last argument must be a list")))
+	 * </pre>
+	 */
+	private static WrapperDef applyWrapper() {
+		LispSymbol f = new LispSymbol("f");
+		LispSymbol a = new LispSymbol("a");
+		LispSymbol r = new LispSymbol("r");
+		LispSymbol l = new LispSymbol("l");
+		LispSymbol c = new LispSymbol("c");
+		LispVal last = listToCons(
+				List.of(new LispSymbol(LispNames.IF), r, callV(LispNames.CAR, callV(LispNames.LAST, r)), a));
+		LispVal proper = listToCons(List.of(new LispSymbol(LispNames.DO),
+				listToCons(List.of((LispVal) listToCons(List.of(c, l, callV(LispNames.CDR, c))))),
+				listToCons(List.of(callV(LispNames.ATOM, c), callV(LispNames.NULL, c)))));
+		LispVal spread = listToCons(List.of(new LispSymbol(LispNames.IF), r,
+				callV(LispNames.CONS, a, callV(LispNames.APPEND, callV(LispNames.BUTLAST, r), l)), l));
+		LispVal checked = listToCons(List.of(new LispSymbol(LispNames.IF), proper, callV(LispNames.APPLY, f, spread),
+				callV(LispNames.ERROR, new LispString("APPLY: last argument must be a list"))));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of((LispVal) listToCons(List.of(l, last)))), checked));
+		return new WrapperDef(LispNames.APPLY, List.of("f", "a", LispNames.LAMBDA_REST, "r"), List.of(body));
 	}
 
 	// Helper to build a call expression: (op args...)
@@ -1785,6 +1835,7 @@ public final class BuiltinFunctionWrappers {
 			// cl-utilities' compose folds with (reduce #'funcall fns ...).
 			new WrapperDef(LispNames.FUNCALL, List.of("f", LispNames.LAMBDA_REST, "r"),
 					List.of(callV(LispNames.APPLY, new LispSymbol("f"), new LispSymbol("r")))),
+			applyWrapper(),
 			// #'make-instance (gated by REFERENCE_GATED_FUNCTIONS): forwards to the
 			// generated %mop-make-instance runtime-class construction defun.
 			new WrapperDef(LispNames.MAKE_INSTANCE, List.of("class", LispNames.LAMBDA_REST, "r"),

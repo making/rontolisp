@@ -6952,17 +6952,16 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Signals the program-error of a call whose argument count the lambda list refuses.
+	 * Signals the program-error of a call whose argument count the lambda list refuses,
+	 * naming the operator when the lambda is a built-in's
+	 * ({@link BuiltinFunctionWrappers#arityOperator}).
 	 */
 	private static void checkArity(LispLambda lambda, List<LispVal> args) {
 		int required = lambda.params().size();
-		if (args.size() < required) {
+		if (args.size() < required || (lambda.rest() == null && args.size() > required)) {
 			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
-					ClosRegistry.arityMessage(required, lambda.rest() != null, args.size()));
-		}
-		if (lambda.rest() == null && args.size() > required) {
-			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
-					ClosRegistry.arityMessage(required, false, args.size()));
+					ClosRegistry.arityMessage(BuiltinFunctionWrappers.arityOperator(lambda.name()), required,
+							lambda.rest() != null, args.size()));
 		}
 	}
 
@@ -9486,9 +9485,15 @@ public final class LispEvaluator {
 		// table calls it (typep is the CL function rontolisp implements as a special
 		// form). The synthesized lambda cannot recurse: every wrapped operator has a
 		// real lowering, so its body never resolves back to this branch.
+		// The lambda carries the operator's name, as the compiled backends' injected
+		// wrapper defun does: it prints as #<function NAME> and its wrong-count
+		// program-error names the operator (checkArity).
 		LispVal wrapper = BuiltinFunctionWrappers.lambdaFor(name);
 		if (wrapper != null) {
-			return eval(wrapper, this.globalEnv);
+			LispVal value = eval(wrapper, this.globalEnv);
+			return value instanceof LispLambda lambda
+					? new LispLambda(lambda.params(), lambda.rest(), lambda.body(), lambda.closure(), name, false)
+					: value;
 		}
 		if (SPECIAL_OPERATORS.contains(name)) {
 			throw new LispEvalException(name + " is a macro or special operator, not a function");

@@ -117,6 +117,24 @@ class JvmJavaInteropCompilerTest {
 		assertThat(compileAndRun("(print (java:static \"java.lang.Math\" \"sqrt\" 16))")).isEqualTo("4.0");
 	}
 
+	// A character argument marshals to an int parameter (the code point) when there is
+	// no char/Character overload -- mirrors
+	// JavaInteropTest#characterMarshalsToIntParameter
+	// to pin the interpreter and the compiled bridge to the same rule.
+	@Test
+	void characterMarshalsToIntParameter() throws Exception {
+		assertThat(compileAndRun("(print (java:static \"java.lang.Character\" \"charCount\" #\\a))")).isEqualTo("1");
+	}
+
+	// A supplementary code point cannot fit a single Java char, so it falls back to the
+	// int overload (Character.toString(int)) rather than the char one -- mirrors
+	// JavaInteropTest#supplementaryCodePointDoesNotNarrowToChar.
+	@Test
+	void supplementaryCodePointDoesNotNarrowToChar() throws Exception {
+		assertThat(compileAndRun("(print (java:static \"java.lang.Character\" \"toString\" (code-char 128512)))"))
+			.isEqualTo("\"" + new String(Character.toChars(128512)) + "\"");
+	}
+
 	// The symbol t marshals to a boolean parameter (the compiled true is the bare
 	// symbol "T", which is also what a boolean answer comes back as).
 	@Test
@@ -260,6 +278,56 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo("11");
 		assertThat(compileAndRun("(print (java:call (java:static \"java.util.List\" \"of\") \"size\"))"))
 			.isEqualTo("0");
+	}
+
+	// The overload chosen for a call is remembered per argument kind. A float first
+	// selects max(double,double); the integers after it must still select max(int,int)
+	// (a shared choice would print 3.0), and the floats after those the double one.
+	@Test
+	void rememberedOverloadFollowsTheArgumentKind() throws Exception {
+		assertThat(compileAndRun("""
+				(print (mapcar (lambda (x) (java:static "java.lang.Math" "max" x 0)) (list 2.5 3 4.5 5)))
+				""")).isEqualTo("(2.5 3 4.5 5)");
+	}
+
+	// The same method name on alternating receiver classes resolves on each class.
+	@Test
+	void rememberedOverloadFollowsTheReceiverClass() throws Exception {
+		assertThat(compileAndRun("""
+				(print (mapcar (lambda (c) (java:call c "add" "x") (java:call c "size"))
+				               (list (java:new "java.util.ArrayList") (java:new "java.util.LinkedList")
+				                     (java:new "java.util.ArrayList"))))
+				""")).isEqualTo("(1 1 1)");
+	}
+
+	// A one-character string may narrow to char (Writer.append(char)); a longer one
+	// cannot and takes append(CharSequence). Alternating the two at one site.
+	@Test
+	void rememberedOverloadSeparatesOneCharacterStrings() throws Exception {
+		assertThat(compileAndRun("""
+				(setq w (java:new "java.io.StringWriter"))
+				(dolist (s (list "a" "bc" "d" "ef")) (java:call w "append" s))
+				(print (java:call w "toString"))
+				""")).isEqualTo("\"abcdef\"");
+	}
+
+	// A list has no remembered kind: after a scalar, String.valueOf still takes the
+	// char[] overload for a list of characters, and the scalar the int one again.
+	@Test
+	void listArgumentAfterAScalarIsResolvedAgain() throws Exception {
+		assertThat(compileAndRun("""
+				(print (mapcar (lambda (x) (java:static "java.lang.String" "valueOf" x)) (list 5 (list #\\a #\\b) 7)))
+				""")).isEqualTo("(\"5\" \"ab\" \"7\")");
+	}
+
+	// A remembered varargs choice packs a tail of its own length on every call.
+	@Test
+	void rememberedVarargsChoicePacksEachTail() throws Exception {
+		assertThat(compileAndRun("""
+				(print (list (java:static "java.lang.String" "format" "%s" 1)
+				             (java:static "java.lang.String" "format" "%s/%s" 1 2)
+				             (java:static "java.lang.String" "format" "%s" 3)))
+				""")).isEqualTo("(\"1\" \"1/2\" \"3\")");
 	}
 
 	// A returned Java array surfaces as a Lisp list, and a list marshals back into an

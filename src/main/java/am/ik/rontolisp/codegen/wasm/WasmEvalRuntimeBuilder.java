@@ -2,6 +2,7 @@ package am.ik.rontolisp.codegen.wasm;
 
 import java.io.ByteArrayOutputStream;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import am.ik.rontolisp.LispNames;
@@ -478,13 +479,15 @@ final class WasmEvalRuntimeBuilder {
 	 * {@code symbol-function}, {@code cond}, {@code and}, {@code or}, {@code when},
 	 * {@code unless}, {@code while}, {@code dotimes}, {@code setq}, {@code eval}
 	 * (nested), {@code funcall}, {@code map}, {@code reduce} and {@code list}; variadic
-	 * {@code + - * /}; {@code car}/{@code cdr} compositions such as {@code cadr}; and
-	 * application of any registered function (built-in wrappers and user defuns) as well
-	 * as interpreted closures produced by {@code lambda}.
+	 * {@code + - * /}; chained {@code = < > <= >= /=}; {@code car}/{@code cdr}
+	 * compositions such as {@code cadr}; and application of any registered function
+	 * (built-in wrappers and user defuns) as well as interpreted closures produced by
+	 * {@code lambda}.
 	 * @param off the string-table offsets of the special-form symbols
+	 * @param comparisons what the comparison chain reports an empty call through
 	 * @return the encoded function body
 	 */
-	static byte[] buildEvalBody(SpecialFormOffsets off, boolean identityHash) {
+	static byte[] buildEvalBody(SpecialFormOffsets off, Comparisons comparisons, boolean identityHash) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -1391,6 +1394,14 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
+		// ---- = < > <= >= /= : every argument evaluated, then each pair tested ----
+		// The wrappers are binary (a sort predicate stays a two-argument call), so a
+		// chain goes pairwise through them here: adjacent pairs for the ordering
+		// operators, every pair for /=. The registry path below would evaluate every
+		// argument too and then report the binary wrapper's count.
+		emitComparisonChain(w, off, comparisons, REST, ENV, FN, ACC, ELEM, ARGHEAD, ARGTAIL, NEWCELL, TMP, OFF, ADDR,
+				ARITY, IDX, CH, identityHash);
+
 		// ---- generic named application ----
 		// Lisp-2: the operator resolves in the function namespace only. Variable
 		// bindings (lexical or global) never shadow a function.
@@ -1413,7 +1424,11 @@ final class WasmEvalRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		// (b) registered function -> evaluate exactly its arity, then apply
+		// (b) registered function -> evaluate every argument form, then apply. The count
+		// is the spread dispatcher's to judge -- its case measures the list against the
+		// callee's lambda list and reports a wrong count naming the operator -- so no
+		// argument is dropped or padded here (evaluating exactly the registered arity
+		// answered (car 1 2) with a type-error on 1 and (cons 1) with (1)).
 		getLocal(w, OFF);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
@@ -1427,20 +1442,7 @@ final class WasmEvalRuntimeBuilder {
 		emitNull(w);
 		WasmEmitHelper.emitNewClosure(w, identityHash);
 		setLocal(w, FN);
-		getLocal(w, ADDR);
-		w.write(Instruction.I32_LOAD, 0x02, 0x08);
-		setLocal(w, ARITY);
-		// A negative arity marks a variadic function: evaluate every argument form
-		// (the _apply dispatch links the surplus into the rest list); a non-negative
-		// arity evaluates exactly that many, padding missing arguments with nil.
-		getLocal(w, ARITY);
-		i32(w, 0);
-		w.write(Instruction.I32_LT_S);
-		w.write(Instruction.IF, 0x40);
 		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP, identityHash);
-		w.write(Instruction.ELSE);
-		emitBuildNArgs(w, REST, ENV, ARITY, ARGHEAD, ARGTAIL, NEWCELL, TMP, identityHash);
-		w.write(Instruction.END);
 		getLocal(w, FN);
 		getLocal(w, ARGHEAD);
 		w.write(Instruction.CALL);
@@ -1471,6 +1473,122 @@ final class WasmEvalRuntimeBuilder {
 		emitNull(w); // unreachable, satisfies result type
 		w.write(Instruction.END); // function
 		return body.toByteArray();
+	}
+
+	/** The comparison operators {@code _eval} chains pairwise over binary wrappers. */
+	static final List<String> COMPARISON_OPERATORS = List.of(LispNames.EQ, LispNames.LT, LispNames.GT, LispNames.LE,
+			LispNames.GE, LispNames.NE);
+
+	/**
+	 * What the comparison chain reports a call with no argument through: the
+	 * {@code _arity_chk} index ({@code -1} where the module reports no wrong count, and
+	 * the call traps instead) and each operator's callee shape
+	 * ({@code WasmRuntimeBuilder.arityShape(1, true, funcId)}, so the report names it).
+	 *
+	 * @param arityChkIndex the {@code _arity_chk} function index, or -1
+	 * @param shapes the shape per {@link #COMPARISON_OPERATORS} name
+	 */
+	record Comparisons(int arityChkIndex, Map<String, Integer> shapes) {
+
+		Comparisons {
+			shapes = Map.copyOf(shapes);
+		}
+
+	}
+
+	/**
+	 * Emits the {@code _eval} arm for the comparison operators: {@code (< a b c)} is
+	 * {@code (and (< a b) (< b c))} over arguments all evaluated first, as the
+	 * interpreter does, and {@code (/= a b c)} tests every pair. With no argument it
+	 * reports the interpreter's {@code < expects at least 1 argument, got 0} through
+	 * {@code _arity_chk}; one argument answers {@code T}. Falls through for any other
+	 * operator.
+	 */
+	private static void emitComparisonChain(WasmWriter w, SpecialFormOffsets off, Comparisons comparisons, int restSlot,
+			int envSlot, int fnSlot, int leftSlot, int rightSlot, int headSlot, int tailSlot, int cellSlot, int tmpSlot,
+			int offSlot, int addrSlot, int shapeSlot, int allPairsSlot, int matchedSlot, boolean identityHash) {
+		i32(w, 0);
+		setLocal(w, matchedSlot);
+		for (String operator : COMPARISON_OPERATORS) {
+			getLocal(w, offSlot);
+			i32(w, off.of(operator));
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF, 0x40);
+			i32(w, java.util.Objects.requireNonNull(comparisons.shapes().get(operator), operator));
+			setLocal(w, shapeSlot);
+			i32(w, LispNames.NE.equals(operator) ? 1 : 0);
+			setLocal(w, allPairsSlot);
+			i32(w, 1);
+			setLocal(w, matchedSlot);
+			w.write(Instruction.END);
+		}
+		getLocal(w, matchedSlot);
+		w.write(Instruction.IF, 0x40);
+		// no argument at all: _arity_chk measures the empty list and throws
+		getLocal(w, restSlot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		if (comparisons.arityChkIndex() >= 0) {
+			getLocal(w, restSlot);
+			getLocal(w, shapeSlot);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(comparisons.arityChkIndex());
+			w.write(Instruction.DROP);
+		}
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+		// fn = the binary wrapper, as a function value
+		getLocal(w, offSlot);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
+		setLocal(w, addrSlot);
+		getLocal(w, addrSlot);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		emitNull(w);
+		WasmEmitHelper.emitNewClosure(w, identityHash);
+		setLocal(w, fnSlot);
+		emitBuildArgList(w, restSlot, envSlot, headSlot, tailSlot, cellSlot, tmpSlot, identityHash);
+		getLocal(w, headSlot);
+		setLocal(w, leftSlot);
+		w.write(Instruction.LOOP, 0x40); // outer: one left operand per round
+		emitCdrOf(w, leftSlot);
+		setLocal(w, rightSlot);
+		getLocal(w, rightSlot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		i32(w, off.of("T"));
+		i32(w, 1);
+		WasmEmitHelper.emitStrBuildCall(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		w.write(Instruction.BLOCK, 0x40); // next left
+		w.write(Instruction.LOOP, 0x40); // inner: the right operands this left meets
+		getLocal(w, rightSlot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.BR_IF, 1);
+		getLocal(w, fnSlot);
+		emitCarOf(w, leftSlot);
+		emitCarOf(w, rightSlot);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 2);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		emitNull(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		getLocal(w, allPairsSlot);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1);
+		emitCdrOf(w, rightSlot);
+		setLocal(w, rightSlot);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // inner loop
+		w.write(Instruction.END); // next left
+		emitCdrOf(w, leftSlot);
+		setLocal(w, leftSlot);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // outer loop
+		w.write(Instruction.END); // matched
 	}
 
 	/**
@@ -1520,57 +1638,6 @@ final class WasmEvalRuntimeBuilder {
 		structSet(w, WasmLispCompiler.TYPE_CONS, 1);
 		getLocal(w, cellSlot);
 		setLocal(w, tailSlot);
-		w.write(Instruction.END);
-	}
-
-	/**
-	 * Emits a loop that evaluates exactly {@code arity} arguments from the list at
-	 * {@code restSlot} (missing arguments default to nil) and links them into a fresh
-	 * list left in {@code headSlot}. Consumes {@code restSlot} and {@code aritySlot}.
-	 */
-	private static void emitBuildNArgs(WasmWriter w, int restSlot, int envSlot, int aritySlot, int headSlot,
-			int tailSlot, int cellSlot, int tmpSlot, boolean identityHash) {
-		emitNull(w);
-		setLocal(w, headSlot);
-		emitNull(w);
-		setLocal(w, tailSlot);
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		getLocal(w, aritySlot);
-		i32(w, 0);
-		w.write(Instruction.I32_LE_S);
-		w.write(Instruction.BR_IF, 1);
-		// val = (rest null ? nil : eval(car rest))
-		getLocal(w, restSlot);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.IF);
-		w.writeRefType(true, Type.EQ.code());
-		emitNull(w);
-		w.write(Instruction.ELSE);
-		emitEvalCar(w, restSlot, envSlot);
-		w.write(Instruction.END);
-		setLocal(w, tmpSlot);
-		// advance rest if not null
-		getLocal(w, restSlot);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		emitCdrOf(w, restSlot);
-		setLocal(w, restSlot);
-		w.write(Instruction.END);
-		// cell = cons(val, null); append
-		getLocal(w, tmpSlot);
-		emitNull(w);
-		WasmEmitHelper.emitNewCons(w, identityHash);
-		setLocal(w, cellSlot);
-		emitAppendCell(w, cellSlot, headSlot, tailSlot);
-		// arity--
-		getLocal(w, aritySlot);
-		i32(w, 1);
-		w.write(Instruction.I32_SUB);
-		setLocal(w, aritySlot);
-		w.write(Instruction.BR, 0);
-		w.write(Instruction.END);
 		w.write(Instruction.END);
 	}
 
@@ -1764,9 +1831,14 @@ final class WasmEvalRuntimeBuilder {
 	 * arguments over their captured environment and evaluate their body; compiled
 	 * closures are dispatched through the arity dispatch function matching the argument
 	 * count.
+	 * @param usesEval whether the {@code _eval} interpreter exists (and with it the
+	 * {@code $fenv} and interpreted-closure arms)
+	 * @param arityChkIndex the {@code _arity_chk} function index an interpreted closure's
+	 * wrong count is reported through, or -1 where the module reports none
+	 * @param identityHash whether conses and closures carry an identity hash
 	 * @return the encoded function body
 	 */
-	static byte[] buildApplyBody(boolean usesEval, boolean identityHash) {
+	static byte[] buildApplyBody(boolean usesEval, int arityChkIndex, boolean identityHash) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -1872,6 +1944,9 @@ final class WasmEvalRuntimeBuilder {
 			setLocal(w, PARAMS); // (params)
 			emitCdrOf(w, PAIR);
 			setLocal(w, BODY); // (body...)
+			if (arityChkIndex >= 0) {
+				emitClosureArityCheck(w, PARAMS, ARGLIST, ARGCUR, ARG0, LEN, arityChkIndex);
+			}
 			// bind params to args
 			getLocal(w, ARGLIST);
 			setLocal(w, ARGCUR);
@@ -1942,6 +2017,60 @@ final class WasmEvalRuntimeBuilder {
 		emitSpreadDispatch(w, FN, ARGLIST);
 		w.write(Instruction.END); // function
 		return body.toByteArray();
+	}
+
+	/**
+	 * Emits the wrong-count check of an interpreted closure: {@code _arity_chk(argList,
+	 * 2 * params)}, reported as {@code Function expects N argument(s), got M} like any
+	 * anonymous callee. A lambda list with a {@code &}-marker is left unchecked: the
+	 * runtime {@code lambda} binds such a list positionally (a documented limitation), so
+	 * its parameter count is no count the call has to match. Clobbers the cursor, element
+	 * and count locals.
+	 */
+	private static void emitClosureArityCheck(WasmWriter w, int paramsSlot, int argListSlot, int cursorSlot,
+			int elemSlot, int countSlot, int arityChkIndex) {
+		i32(w, 0);
+		setLocal(w, countSlot);
+		getLocal(w, paramsSlot);
+		setLocal(w, cursorSlot);
+		w.write(Instruction.BLOCK, 0x40); // unchecked
+		w.write(Instruction.BLOCK, 0x40); // counted
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, cursorSlot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.BR_IF, 1);
+		emitCarOf(w, cursorSlot);
+		setLocal(w, elemSlot);
+		getLocal(w, elemSlot);
+		refTest(w, WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, elemSlot);
+		refCast(w, WasmLispCompiler.TYPE_STRING);
+		structGet(w, WasmLispCompiler.TYPE_STRING, 1);
+		w.write(Instruction.IF, 0x40);
+		strByteAt(w, elemSlot, () -> i32(w, 0));
+		i32(w, '&');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.BR_IF, 4); // if, if, loop, counted -> unchecked
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		getLocal(w, countSlot);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, countSlot);
+		emitCdrOf(w, cursorSlot);
+		setLocal(w, cursorSlot);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // counted
+		getLocal(w, argListSlot);
+		getLocal(w, countSlot);
+		i32(w, 1);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(arityChkIndex);
+		w.write(Instruction.DROP);
+		w.write(Instruction.END); // unchecked
 	}
 
 	/**

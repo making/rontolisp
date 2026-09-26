@@ -4946,7 +4946,7 @@ class JvmLispCompilerTest {
 			.isEqualTo("\"Function expects 1 argument, got 2\"")
 			.isEqualTo(compileAndRun(defs + caught.formatted("(let ((f #'dbl)) (funcall f 1 2))")));
 		assertThat(compileAndRun(caught.formatted("(mapcar #'cons '(1 2))")))
-			.isEqualTo("\"Function expects 2 arguments, got 1\"")
+			.isEqualTo("\"CONS expects 2 arguments, got 1\"")
 			.isEqualTo(compileAndRun(caught.formatted("(let ((f #'cons)) (mapcar f '(1 2)))")));
 	}
 
@@ -5001,6 +5001,78 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(defs + "(print (list (funcall #'f 1) (apply #'f '(2)) (funcall #'g 3 4)"
 				+ " (apply #'g 5 '(6)) (let ((h #'f)) (apply h '(7)))))"))
 			.isEqualTo("(1 2 (3 (4)) (5 (6)) 7)");
+	}
+
+	// A built-in operator's function value names the operator in its wrong-count
+	// program-error, as the interpreter does, through every route that checks the
+	// count: a dispatch miss, a literal apply's direct call and the spread dispatcher.
+	// A user's own function keeps "Function"; the class is no longer recovered from
+	// the text, so a user error that merely STARTS like one stays an error.
+	@Test
+	void compileAndRunWrongArityThroughABuiltinDesignatorNamesTheOperator() throws Exception {
+		assertThat(compileAndRun(
+				"""
+						(print (handler-case (funcall #'cons 1) (program-error (c) (princ-to-string c))))
+						(print (handler-case (funcall #'car) (program-error (c) (princ-to-string c))))
+						(print (handler-case (mapcar #'cons '(1 2)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (funcall #'mapcar #'car) (program-error (c) (princ-to-string c))))
+						(print (handler-case (funcall #'elt '(1)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (apply #'cons '(1)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (let ((h #'cons)) (apply h '(1 2 3))) (program-error (c) (princ-to-string c))))
+						(print (handler-case (funcall (lambda (x) x)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (error "Function expects nothing") (program-error () :pe) (error () :e)))
+						(print (list (apply #'cons '(1 2)) (let ((h #'cons)) (apply h '(3 4))) (funcall #'car '(5)) (mapcar #'cons '(1) '(2))))
+						"""))
+			.isEqualTo("""
+					"CONS expects 2 arguments, got 1"
+					"CAR expects 1 argument, got 0"
+					"CONS expects 2 arguments, got 1"
+					"MAPCAR expects at least 2 arguments, got 1"
+					"ELT expects 2 arguments, got 1"
+					"CONS expects 2 arguments, got 1"
+					"CONS expects 2 arguments, got 3"
+					"Function expects 1 argument, got 0"
+					:E
+					((1 . 2) (3 . 4) 5 ((1 . 2)))""");
+	}
+
+	// Inside a compiled eval a wrong count is the interpreter's program-error too: a
+	// registered function gets EVERY argument form evaluated and the spread dispatcher
+	// judges the count (evaluating exactly the registered arity answered (car 1 2) with
+	// a type-error and (cons 1) with (1)); apply is the catalog's wrapper, so eval
+	// reaches it and the report names it; an eval-built closure without a lambda-list
+	// keyword is checked; and the comparisons chain over every argument.
+	@Test
+	void compileAndRunEvalReportsAWrongArgumentCountAsTheInterpreterDoes() throws Exception {
+		assertThat(compileAndRun(
+				"""
+						(defun ev-one (x) x)
+						(print (handler-case (eval '(apply #'car '(1 2))) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(car 1 2)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(cons 1)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(ev-one 1 2)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(apply #'+)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(<)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '((lambda (x) x) 1 2)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(progn (defun ev-two (a b) (list a b)) (ev-two 1))) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(apply #'list 1 2)) (program-error () :pe) (error (c) (princ-to-string c))))
+						(print (list (eval '(apply #'cons '(1 2))) (eval '(apply #'+ 1 2 '(3 4))) (eval '(< 1 3 2))
+						             (eval '(<= 1 2 2 3)) (eval '(/= 1 2 1)) (eval '(/= 1 2 3)) (eval '(= 4))
+						             (eval '(funcall (lambda (a &optional b) (list a b)) 1))))
+						(print (list (funcall #'apply #'+ 1 2 '(3 4)) (mapcar #'apply (list #'+ #'*) '((1 2) (3 4)))))
+						"""))
+			.isEqualTo("""
+					"CAR expects 1 argument, got 2"
+					"CAR expects 1 argument, got 2"
+					"CONS expects 2 arguments, got 1"
+					"Function expects 1 argument, got 2"
+					"APPLY expects at least 2 arguments, got 1"
+					"< expects at least 1 argument, got 0"
+					"Function expects 1 argument, got 2"
+					"Function expects 2 arguments, got 1"
+					"APPLY: last argument must be a list"
+					((1 . 2) 10 NIL T NIL T T (1 NIL))
+					(10 (3 12))""");
 	}
 
 	@Test
@@ -16585,7 +16657,10 @@ class JvmLispCompilerTest {
 		// (_isCons, and the same test in _ckList): +165 B.
 		// 10,474 since an out-of-range subscript's compound type (INTEGER 0 (d)) rides
 		// _opTypeErr verbatim: +71 B.
-		assertThat(classBytes.length).isLessThan(10_550);
+		// 10,686 since a built-in's wrong-count report names the operator: the thrown
+		// class the landing pad recognizes, the names of the runtime's own dispatchable
+		// defaults (#'identity, #'eql) and their decode in _arityMsg/_arityErr: +152 B.
+		assertThat(classBytes.length).isLessThan(10_760);
 		assertThat(runClass(classBytes)).isEqualTo("(1 4 9)");
 	}
 
