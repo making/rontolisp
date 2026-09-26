@@ -3829,11 +3829,12 @@ public final class LispMacroExpander {
 					// string arm aref/svref have above -- %row-major-aset for an array,
 					// the schar-set rebuild for a string. Only a variable place can take
 					// the string branch (see expandScharSetFunctional's lite semantics).
+					// Both arms report as (SETF ROW-MAJOR-AREF).
 					LispVal rowMajorAset = listToCons(List.of(new LispSymbol(LispNames.ROW_MAJOR_ASET),
 							placeParts.get(1), placeParts.get(2), value));
 					if (stringsExist && placeParts.get(1) instanceof LispSymbol arrayVar) {
 						yield makeIf(callOf(LispNames.STRINGP, arrayVar),
-								scharSetOf(arrayVar, placeParts.get(2), value, null), rowMajorAset);
+								scharSetOf(arrayVar, placeParts.get(2), value, LispNames.ROW_MAJOR_AREF), rowMajorAset);
 					}
 					yield rowMajorAset;
 				}
@@ -35655,21 +35656,23 @@ public final class LispMacroExpander {
 		LispSymbol chVar = new LispSymbol("__schar_c");
 		// The checks the runtime defun cannot make under the store's name: the string of
 		// a char/schar place (an aref/elt place's string arm runs under stringp), and the
-		// subscript of every place.
+		// subscript and the value of every place -- in that order, as the interpreter's
+		// %schar-set checks them.
 		String head = scharSetPlace(cons);
 		String operator = scharSetOperator(cons);
 		LispVal string = LispNames.CHAR.equals(head) || LispNames.SCHAR.equals(head)
 				? checkOf(LispNames.CHECK_STRING_INTERNAL, var, operator) : var;
-		LispVal assign = listToCons(List.of(new LispSymbol(LispNames.SETQ), var, fmtCall(LispNames.SCHAR_SET_RUNTIME,
-				string, checkOf(LispNames.CHECK_INDEX_INTERNAL, idxVar, operator), chVar)));
+		LispVal assign = listToCons(List.of(new LispSymbol(LispNames.SETQ), var,
+				fmtCall(LispNames.SCHAR_SET_RUNTIME, string, checkOf(LispNames.CHECK_INDEX_INTERNAL, idxVar, operator),
+						checkOf(LispNames.CHECK_CHARACTER_INTERNAL, chVar, operator))));
 		return makeLet(idxVar.name(), parts.get(2),
 				makeLet(chVar.name(), parts.get(3), makeProgn(List.of(assign, chVar))));
 	}
 
 	/**
 	 * {@code (%schar-set s i c 'head)}, or without the head when it is null: the string
-	 * store a {@code setf} of a {@code head} place reaches, reporting a wrong-type string
-	 * or subscript under {@code (SETF HEAD)} ({@link LispNames#SCHAR_SET}).
+	 * store a {@code setf} of a {@code head} place reaches, reporting a wrong-type
+	 * string, subscript or value under {@code (SETF HEAD)} ({@link LispNames#SCHAR_SET}).
 	 * @param string the string place
 	 * @param index the subscript form
 	 * @param value the value form
@@ -35712,7 +35715,8 @@ public final class LispMacroExpander {
 
 	/**
 	 * {@code (check form 'operator)}, or {@code (check form nil)} for an unnamed report:
-	 * a {@code %check-string} / {@code %check-index} of {@code %schar-set}'s expansion.
+	 * a {@code %check-string} / {@code %check-index} / {@code %check-character} of
+	 * {@code %schar-set}'s expansion.
 	 */
 	private static LispVal checkOf(String check, LispVal form, @Nullable String operator) {
 		return listToCons(List.of(new LispSymbol(check), form,
@@ -35720,8 +35724,9 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The operator a {@code %check-string} / {@code %check-index} form names
-	 * ({@link #expandScharSetFunctional}), or null for an unnamed report.
+	 * The operator a {@code %check-string} / {@code %check-index} /
+	 * {@code %check-character} form names ({@link #expandScharSetFunctional}), or null
+	 * for an unnamed report.
 	 * @param cons the form
 	 * @return the operator's symbol name, or null
 	 */

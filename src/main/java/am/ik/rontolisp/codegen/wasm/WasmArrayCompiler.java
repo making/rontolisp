@@ -1377,7 +1377,8 @@ final class WasmArrayCompiler {
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
-		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		// A subscript that is no integer is ROW-MAJOR-AREF's type-error.
+		compileSubscript(args.get(2), ctx);
 		int idxSlot = setTemp(ctx);
 		emitAref1FromSlots(ctx, arrSlot, idxSlot);
 	}
@@ -1397,8 +1398,9 @@ final class WasmArrayCompiler {
 		// packed: coerce value -> f64 (narrowing to f32 for a single-float array), store
 		// at data[index], and return the value AS STORED (read back widened), matching
 		// the
-		// interpreter/JVM across widths.
-		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		// interpreter/JVM across widths. Each arm checks its subscript
+		// (compileSubscript), a wrong-type one reported as (SETF ROW-MAJOR-AREF)'s.
+		compileSubscript(args.get(2), ctx);
 		WasmEmitHelper.castI31GetS(ctx);
 		boxI31(ctx);
 		int pIdxSlot = setTemp(ctx);
@@ -1416,7 +1418,7 @@ final class WasmArrayCompiler {
 		// general: resolve the displacement chain, store, and leave the value.
 		getLocal(ctx, arrSlot);
 		castCellGet0(ctx);
-		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		compileSubscript(args.get(2), ctx);
 		WasmEmitHelper.castI31GetS(ctx);
 		WasmExprCompiler.compileExpr(args.get(3), ctx);
 		callArrSet(ctx);

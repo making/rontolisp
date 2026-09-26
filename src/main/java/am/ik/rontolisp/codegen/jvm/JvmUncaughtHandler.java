@@ -62,12 +62,13 @@ import org.jspecify.annotations.Nullable;
  * frames the exception never saw. So the body's thunk catches what escapes it and appends
  * a frame of the made-up class {@link #ASYNC_FRAME_CLASS} ({@code /} is in no binary
  * name, so no real frame can be mistaken for it) naming the async function
- * ({@link #appendAsyncCrossing}, {@code _asyncCross}); the first {@code _await} that
- * rethrows it then appends the awaiting thread's own frames ({@code _asyncAwaited}), once
- * per crossing, as the interpreter's trace records the first await after each boundary.
- * {@code _where} reads each such frame as a hop line. A trace the report empties never
- * shows any of it; under {@code RONTOLISP_DEBUG} the printed trace is the async chain end
- * to end.
+ * ({@link #appendAsyncCrossing}, {@code _asyncCross}); an {@code _await} that rethrows it
+ * then puts back the trace the future stored and appends the awaiting thread's own frames
+ * ({@code _asyncAwaited}), so the hop names the await the condition escaped from -- a
+ * second await of a failed future after a handler caught the first, as the interpreter's
+ * trace rewinds to the boundary at each await. {@code _where} reads each such frame as a
+ * hop line. A trace the report empties never shows any of it; under
+ * {@code RONTOLISP_DEBUG} the printed trace is the async chain end to end.
  *
  * <p>
  * {@code RuntimeException} is the whole catch, matching what {@code handler-case} takes
@@ -110,10 +111,13 @@ final class JvmUncaughtHandler {
 
 	static final String ASYNC_CROSS_DESC = "(Ljava/lang/Throwable;Ljava/lang/String;)V";
 
-	/** {@code _asyncAwaited(Throwable)}: completes the last boundary with the awaiter. */
+	/**
+	 * {@code _asyncAwaited(Throwable, StackTraceElement[])}: puts back the trace a future
+	 * stored and completes its boundary with the awaiter.
+	 */
 	static final String ASYNC_AWAITED_METHOD = "_asyncAwaited";
 
-	static final String ASYNC_AWAITED_DESC = "(Ljava/lang/Throwable;)V";
+	static final String ASYNC_AWAITED_DESC = "(Ljava/lang/Throwable;[Ljava/lang/StackTraceElement;)V";
 
 	// _where's locals.
 	private static final int EX = 0;
@@ -546,11 +550,11 @@ final class JvmUncaughtHandler {
 	}
 
 	/**
-	 * Builds {@code _asyncAwaited(Throwable)V}: when the exception's trace ends in a
-	 * boundary no await has completed yet, marks it awaited and appends the current
-	 * thread's frames -- the await's -- after it. A second await of the same failed
-	 * future finds the boundary completed and changes nothing, as the interpreter keeps
-	 * the first await after a crossing.
+	 * Builds {@code _asyncAwaited(Throwable, StackTraceElement[])V}: sets the exception's
+	 * trace back to the one its future stored -- ending in the boundary its body crossed,
+	 * whatever an earlier await of the same future appended since -- and, when it ends in
+	 * a boundary, marks it awaited and appends the current thread's frames, the await's,
+	 * after it.
 	 * @param cp the class's pool
 	 * @return the method
 	 */
@@ -564,6 +568,10 @@ final class JvmUncaughtHandler {
 				"(Ljava/lang/Object;)Z");
 		JvmAsm a = new JvmAsm();
 		int skip = a.label();
+		// t.setStackTrace(stored): an earlier await's frames are a caught signal's
+		a.aload(0);
+		a.aload(1);
+		a.invokevirtual(f.setStackTrace);
 		// trace = t.getStackTrace(); n = trace.length; if (n == 0) return
 		a.aload(0);
 		a.invokevirtual(f.getStackTrace);

@@ -4220,7 +4220,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// for a program with a file to locate into).
 		WasmUncaughtLocations.Module uncaughtLocations = this.reportLocations != null && uncaughtReportPad
 				? new WasmUncaughtLocations.Module(this.reportLocations, program,
-						this.asyncMode || programUsesSymbol(program, LispNames.ASYNC_RUN_QUALIFIED))
+						this.asyncMode || programUsesSymbol(program, LispNames.ASYNC_RUN_QUALIFIED), this.asyncMode)
 				: null;
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.stringTable(stringTable)
@@ -7991,7 +7991,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					for (int i = 0; i < WasmFutureRuntimeBuilder.FUNC_COUNT; i++) {
 						code.addFunction(WasmFutureRuntimeBuilder.build(i, asyncFuncBase(), asyncTypeBase(),
 								asyncTypeBase() + 1, asyncTypeBase() + 2, currentTaskGlobalIndex, sched, cb,
-								this.usesIdentityHashTables, globalIndices.getOrDefault(LispNames.MV_SPILL, -1)));
+								this.usesIdentityHashTables, globalIndices.getOrDefault(LispNames.MV_SPILL, -1),
+								uncaughtLocations != null ? uncaughtLocations.reawaitFuncIndex() : -1));
 					}
 				}
 				// The degenerate tier's stream runtime bodies, in p1StreamFuncBase()

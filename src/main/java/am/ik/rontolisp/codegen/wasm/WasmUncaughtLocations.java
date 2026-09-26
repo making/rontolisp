@@ -216,6 +216,14 @@ final class WasmUncaughtLocations {
 		/** Whether an async body can exist, so the note and the render carry hops. */
 		final boolean hopsPossible;
 
+		/**
+		 * Whether an {@code await} can re-signal a future's stored condition
+		 * ({@code --component}'s {@code _future_poll}), so the note rewinds at each one
+		 * ({@link #reawaitBody}). Preview 1 signals an async body's condition at its
+		 * call.
+		 */
+		private final boolean reawaits;
+
 		/** Set once the render has read the file table: nothing can join it after. */
 		private boolean sealed;
 
@@ -231,13 +239,18 @@ final class WasmUncaughtLocations {
 
 		private int lastHopGlobal = -1;
 
+		private int reawaitedGlobal = -1;
+
 		private int noteFuncIndex = -1;
+
+		private int reawaitFuncIndex = -1;
 
 		private int digitsFuncIndex = -1;
 
-		Module(WasmReportLocations granularity, List<LispVal> program, boolean hopsPossible) {
+		Module(WasmReportLocations granularity, List<LispVal> program, boolean hopsPossible, boolean reawaits) {
 			this.granularity = granularity;
 			this.hopsPossible = hopsPossible;
+			this.reawaits = hopsPossible && reawaits;
 			// Every file a located cons of the program came from: a rewrite during
 			// Pass 2 inherits the position of a cons already here, so no later frame
 			// can name a file this missed.
@@ -282,6 +295,9 @@ final class WasmUncaughtLocations {
 				this.hopsGlobal = ctx.quoteGlobals.indexFor(new LispString("uncaught-hops"));
 				this.lastHopGlobal = ctx.quoteGlobals.indexFor(new LispString("uncaught-last-hop"));
 			}
+			if (this.reawaits) {
+				this.reawaitedGlobal = ctx.quoteGlobals.indexFor(new LispString("uncaught-reawaited"));
+			}
 			// Raw helpers in the lambda table, reached only by direct calls: the line
 			// (resp. the payload) rides in the env slot.
 			this.digitsFuncIndex = ctx.userFuncBase + ctx.numDefuns + ctx.lambdaDecls.size();
@@ -291,6 +307,153 @@ final class WasmUncaughtLocations {
 			ctx.lambdaDecls.add(new WasmLispCompiler.LambdaInfo(ctx.nextFuncId[0]++, "_uncaught_note",
 					List.of("%file", "%line", "%name", "%hop"), false, List.of(), List.of(), this.noteFuncIndex,
 					noteBody(ctx.usesIdentityHashTables)));
+			if (this.reawaits) {
+				this.reawaitFuncIndex = ctx.userFuncBase + ctx.numDefuns + ctx.lambdaDecls.size();
+				ctx.lambdaDecls.add(new WasmLispCompiler.LambdaInfo(ctx.nextFuncId[0]++, "_uncaught_reawait",
+						List.of("%payload"), false, List.of(), List.of(), this.reawaitFuncIndex,
+						reawaitBody(ctx.usesIdentityHashTables)));
+			}
+		}
+
+		/**
+		 * {@code _future_poll}'s helper, or -1 when no frame noted anything or no await
+		 * can re-signal a stored condition.
+		 * @return the function index
+		 */
+		int reawaitFuncIndex() {
+			return this.reawaitFuncIndex;
+		}
+
+		/**
+		 * {@code _uncaught_reawait}, {@code (future payload) -> nil}: an {@code await} is
+		 * re-signalling the condition a rejected future stored, so the note goes back to
+		 * what it held when that future's boundary was crossed -- an earlier await's
+		 * site, and every hop past it, belongs to a signal a handler caught. The first
+		 * await of the future is where that state is known (nothing but an await of it
+		 * can have noted its payload since), so it records a snapshot,
+		 * {@code (last-hop site file
+		 * line . name)}, in an association list keyed by the future; each later await
+		 * restores it. A payload the note is not about changes nothing.
+		 */
+		private byte[] reawaitBody(boolean identityHash) {
+			final int future = 0;
+			final int payload = 1;
+			final int cursor = 2;
+			final int snap = 3;
+			ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+			WasmWriter w = new WasmWriter(out);
+			w.write(1);
+			w.writeUnsignedLeb128(2);
+			w.writeRefType(true, Type.EQ.code());
+			get(w, payload);
+			getGlobal(w, this.payloadGlobal);
+			w.write(Instruction.REF_EQ);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			nil(w);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+			getGlobal(w, this.reawaitedGlobal);
+			set(w, cursor);
+			w.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			w.write(Instruction.LOOP, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			// Not seen: the first await of this future records the snapshot.
+			get(w, cursor);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			get(w, future);
+			getGlobal(w, this.lastHopGlobal);
+			getGlobal(w, this.lastHopGlobal);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.IF);
+			w.writeRefType(true, Type.EQ.code());
+			nil(w);
+			w.write(Instruction.ELSE);
+			getGlobal(w, this.lastHopGlobal);
+			consField(w, 0);
+			consField(w, 1);
+			w.write(Instruction.END);
+			getGlobal(w, this.fileGlobal);
+			getGlobal(w, this.lineGlobal);
+			getGlobal(w, this.nameGlobal);
+			for (int i = 0; i < 5; i++) {
+				WasmEmitHelper.emitNewCons(w, identityHash);
+			}
+			getGlobal(w, this.reawaitedGlobal);
+			WasmEmitHelper.emitNewCons(w, identityHash);
+			setGlobal(w, this.reawaitedGlobal);
+			nil(w);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+			get(w, cursor);
+			consField(w, 0);
+			consField(w, 0);
+			get(w, future);
+			w.write(Instruction.REF_EQ);
+			w.write(Instruction.BR_IF, 1);
+			get(w, cursor);
+			consField(w, 1);
+			set(w, cursor);
+			w.write(Instruction.BR, 0);
+			w.write(Instruction.END); // loop
+			w.write(Instruction.END); // block
+			// Seen: restore. The last hop loses what was appended after it and its site.
+			get(w, cursor);
+			consField(w, 0);
+			consField(w, 1);
+			set(w, snap);
+			get(w, snap);
+			consField(w, 0);
+			setGlobal(w, this.lastHopGlobal);
+			getGlobal(w, this.lastHopGlobal);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			clearGlobal(w, this.hopsGlobal);
+			w.write(Instruction.ELSE);
+			getGlobal(w, this.lastHopGlobal);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			nil(w);
+			setConsField(w, 1);
+			getGlobal(w, this.lastHopGlobal);
+			consField(w, 0);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			get(w, snap);
+			consField(w, 1);
+			consField(w, 0);
+			setConsField(w, 1);
+			w.write(Instruction.END);
+			// Segment 0, which frames fill only while no hop is open.
+			get(w, snap);
+			consField(w, 1);
+			consField(w, 1);
+			set(w, snap);
+			get(w, snap);
+			consField(w, 0);
+			setGlobal(w, this.fileGlobal);
+			get(w, snap);
+			consField(w, 1);
+			consField(w, 0);
+			setGlobal(w, this.lineGlobal);
+			get(w, snap);
+			consField(w, 1);
+			consField(w, 1);
+			setGlobal(w, this.nameGlobal);
+			nil(w);
+			w.write(Instruction.END);
+			return out.toByteArray();
+		}
+
+		private static void nil(WasmWriter w) {
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+		}
+
+		private static void setConsField(WasmWriter w, int field) {
+			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			w.writeUnsignedLeb128(field);
 		}
 
 		/**
@@ -398,6 +561,9 @@ final class WasmUncaughtLocations {
 			if (this.hopsPossible) {
 				clearGlobal(w, this.hopsGlobal);
 				clearGlobal(w, this.lastHopGlobal);
+			}
+			if (this.reawaits) {
+				clearGlobal(w, this.reawaitedGlobal);
 			}
 			w.write(Instruction.END);
 			if (this.hopsPossible) {

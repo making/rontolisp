@@ -44,6 +44,29 @@ final class WasmCharCompiler {
 	 * check is made (the store fails as it always did).
 	 */
 	static void compileCheckString(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compileCheck(cons, ctx, OperandTypes.Kind.STRING, slot -> WasmStringpCompiler.emitStringpI32(ctx, slot));
+	}
+
+	/**
+	 * Compiles {@code (%check-character x 'op)}: {@code x}, which in EH mode lands as
+	 * {@code op}'s {@code CHARACTER} type-error when it is no character; outside EH mode
+	 * no check is made (the store's cast traps).
+	 */
+	static void compileCheckCharacter(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compileCheck(cons, ctx, OperandTypes.Kind.CHARACTER, slot -> {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(slot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
+		});
+	}
+
+	/**
+	 * Compiles a check form's operand and, in EH mode, lands it as the form's operator's
+	 * {@code kind} type-error when {@code test} (an i32 over the operand's local) fails.
+	 */
+	private static void compileCheck(LispCons cons, WasmLispCompiler.Ctx ctx, OperandTypes.Kind kind,
+			java.util.function.IntConsumer test) {
 		WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
 		if (!WasmEmitHelper.checksConsFields(ctx)) {
 			return;
@@ -51,11 +74,11 @@ final class WasmCharCompiler {
 		int slot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
-		WasmStringpCompiler.emitStringpI32(ctx, slot);
+		test.accept(slot);
 		ctx.writer.write(Instruction.I32_EQZ);
 		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		WasmOperandTypes.withOperator(ctx, LispMacroExpander.checkOperator(cons),
-				() -> WasmOperandTypes.emitTypeError(ctx, slot, OperandTypes.Kind.STRING));
+				() -> WasmOperandTypes.emitTypeError(ctx, slot, kind));
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);

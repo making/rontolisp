@@ -368,6 +368,15 @@ lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints 
   thunk under a scope of no function (`asyncBody`). A condition escaping the thunk closes segment
   0 (`crossedAsync`), so the awaiter's frames are not attributed to it; the first located form
   after that is the `await`.
+- **The await that re-signalled it** (every backend, since 2026-09-26): a failed future holds ONE
+  condition object, which every `await` of it rethrows, so each await first rewinds the trace to
+  what that future stored -- the hop's site back to none, and every hop an earlier await's path
+  appended dropped. A second await after a handler caught the first names ITSELF, and one of JOB's
+  future after RELAY's (which re-signalled JOB's condition) was caught prints no RELAY hop. The
+  interpreter keys the hop by the future's `CompletableFuture` (`ConditionTrace.reawaited`, from
+  `joinFuture`). Until then the interpreter and the JVM recorded the site once per crossing and
+  named the FIRST await, while `--component` named the right one only when no hop had been added
+  since.
 - **JVM -- read off the stack trace** (`codegen/jvm/JvmSourceSites`, `JvmUncaughtHandler`): every
   method the program's own source compiled into carries a `LineNumberTable` whose numbers are SITE
   ids -- (file, line, function) in a table the class carries as string constants -- not lines: a
@@ -385,9 +394,10 @@ lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints 
   needs none, 4 bytes a method.)
 - **JVM async**: the `%async-run` thunk's last exception entry appends a made-up frame
   `rontolisp/async.crossed(HEAD)` to the escaping exception's trace (`_asyncCross`; `/` is in no
-  binary name), and the first `_await` that rethrows it appends its OWN frames after it
-  (`_asyncAwaited`) -- once per crossing, the interpreter's first-await rule. `_where` reads each
-  such frame as a hop. An exception keeps its identity (`handler-case` classifies by class), and
+  binary name); `run()` keeps the trace as it then is in the error payload, a fourth element
+  (`{EMARKER, t, cond, trace}`, only in a class that records boundaries), and each `_await` that
+  rethrows it puts that trace back and appends its OWN frames after the boundary
+  (`_asyncAwaited`). `_where` reads each such frame as a hop. An exception keeps its identity (`handler-case` classifies by class), and
   the report empties the trace, so none of it shows unless `RONTOLISP_DEBUG` asks for the trace --
   which then IS the async chain.
 - **JVM optimizations keep the granularity**: a fused integer tree (`_fx$N`,
@@ -526,6 +536,11 @@ by `cli/WasmReportLocationsTest` (each case against the interpreter's own output
   and, by its own name, the function (a lambda's frame is named after the function it is written
   in, `Ctx.ucWrittenIn`; a nested `defun`'s after itself); an async body (a hop text in the
   frame) appends a hop whose await site is the next frame with a line.
+- **An await rewinds the note** (`--component` only; Preview 1 signals at the call): the poll of a
+  rejected future calls `_uncaught_reawait(future, payload)` before re-signalling. The FIRST await
+  of a future records a snapshot -- `(last-hop site file line . name)` -- in an association list
+  keyed by the future (nothing but an await of it can have noted its payload since the rejection);
+  each later one restores it. A fresh note clears the list.
 - **Texts ride with their frame**: the name and hop text are unspelled string literals built in the
   frame's own landing (`compileUnspelledLiteral`: a spelled one would arm the dispatch gate), so
   the shaker drops them with the frame. The name is the program's spelling
@@ -546,7 +561,7 @@ by `cli/WasmReportLocationsTest` (each case against the interpreter's own output
   macro-written one, a signal helper) it is a plain `call`, or the call site and its function were
   lost. Disabling tail calls in frames outright was the first version and broke the
   `.kb/wasm-tail-calls.md` invariant a Scheme loop depends on (named `let` overflowed).
-- **Known divergences** (`.todo/991`; the second `await`, `.todo/992`), from 82 programs of the
+- **Known divergences** (`.todo/991`), from 82 programs of the
   JVM parity corpus with a catching form appended (2026-09-26, Linux, wasmtime 49); the others'
   location lines matched the interpreter's byte for byte:
   - A tail call through a function value stays a `return_call`, so a callee that is no frame (a
@@ -559,9 +574,6 @@ by `cli/WasmReportLocationsTest` (each case against the interpreter's own output
   - Preview 1 runs an async body at its call: the hop's await site is the CALL's line when the
     `await` is on another one, and a body whose tail call enters another frame leaves before its
     hop is noted, so the hop line is missing. `--component` matches the interpreter in both.
-  - A future's condition re-signalled by a second `await` after a handler caught the first:
-    `--component` names the second await, the interpreter and the JVM the first (their hop is
-    recorded once per crossing).
 
 Cost in EH mode, measured 2026-09-26 (wasmtime 49.0.0, node 24, macOS arm64):
 
@@ -951,12 +963,15 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
 | `(mapcar #'1+ '(1 . 2))` and the other five, `(mapcan (lambda (x) 5) '(1))` | `MAPCAR:` / `MAPCAN: ... LIST` |
 | `(char 5 0)`, `(schar 'foo 0)`, `(char (vector #\a) 0)` | `CHAR:` / `SCHAR: ... STRING` |
 | `(setf (char s nil) c)`, `(setf (schar 5 0) c)` | `(SETF CHAR): ... INTEGER` / `(SETF SCHAR): ... STRING` |
+| `(setf (char s 0) 5)`, `(setf (aref s 0) 5)` (`s` a string) | `(SETF CHAR):` / `(SETF AREF): ... CHARACTER` |
+| `(row-major-aref v nil)`, `(setf (row-major-aref v nil) 0)` | `ROW-MAJOR-AREF:` / `(SETF ROW-MAJOR-AREF): ... INTEGER` |
 
 - **FUNNEL-TYPED operators** (`OperandTypes.FUNNEL_TYPE`: `CAR`, `CDR`, `NTHCDR`, `ENDP`, `AREF`,
-  `(SETF AREF)`, `CHAR`, `SCHAR`, `(SETF CHAR)`, `(SETF SCHAR)`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
-  (new kinds `LIST`, `RATIONAL`, `STRING`) -- except that a to-double funnel (`NUMBER`) there is a packed float
+  `(SETF AREF)`, `CHAR`, `SCHAR`, `(SETF CHAR)`, `(SETF SCHAR)`, `ROW-MAJOR-AREF`,
+  `(SETF ROW-MAJOR-AREF)`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
+  (new kinds `LIST`, `RATIONAL`, `STRING`, `CHARACTER`) -- except that a to-double funnel (`NUMBER`) there is a packed float
   store, which takes any real: `REAL`. A numeric operator keeps its one fixed type. `%aset` reports
-  as `(SETF AREF)`, `nth` as `NTHCDR`, `svref` as `AREF`, `first`/`rest` as `CAR`/`CDR`
+  as `(SETF AREF)`, `%row-major-aset` as `(SETF ROW-MAJOR-AREF)`, `nth` as `NTHCDR`, `svref` as `AREF`, `first`/`rest` as `CAR`/`CDR`
   (`OperandTypes.REWRITTEN`, the call-position-rewrite rule above). A one-argument `gcd`/`lcm`
   lowers to `(gcd x 0)`/`(lcm x 1)` (`LispMacroExpander.expandReduction`) -- it was `abs`, which
   accepted a float and named itself.
@@ -1024,9 +1039,9 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   then the string -- that order on every backend, because the compiled sites check the
   subscript ahead of the read. A `setf` place names its STORE: `%schar-set`'s optional fourth
   operand is the quoted place head (`LispMacroExpander.scharSetOf`), reported as
-  `(SETF CHAR)`/`(SETF SCHAR)`, and as `(SETF AREF)` for an `aref`/`svref`/`elt` place's
-  string arm (the array arm's name); `row-major-aref`'s string arm stays unnamed, as its array
-  arm is. Interpreter: `charRef`, `scharSet(args, rebind, operator)`. Compiled:
+  `(SETF CHAR)`/`(SETF SCHAR)`, as `(SETF AREF)` for an `aref`/`svref`/`elt` place's
+  string arm (the array arm's name) and as `(SETF ROW-MAJOR-AREF)` for a `row-major-aref`
+  place's. Interpreter: `charRef`, `scharSet(args, rebind, operator)`. Compiled:
   `expandScharSetFunctional` wraps the runtime defun's arguments in `(%check-string var 'op)`
   (a `char`/`schar` place only; the others run under `stringp`) and `(%check-index i 'op)`
   (`op` nil = unnamed) -- compile-path-only forms, since `%schar-set-runtime` cannot know the
@@ -1040,8 +1055,23 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   `emitStringpI32` plus `emitTypeError`, `%check-index` is `emitIndexCheck`. The landing
   selects `STRING` only when the table has a string-checking row (`STRING_CHECKED` adds its
   code to `rowCodes`); `LOWERED_TO` adds `(SETF CHAR)`/`(SETF SCHAR)` for `CHAR`/`SCHAR` and
-  `(SETF AREF)` for `ELT`. Still open: a `setf` value that is no character, and
-  `row-major-aref`'s array-arm subscript (`.todo/989`).
+  `(SETF AREF)` for `ELT`.
+- **String stores and `row-major-aref`** (2026-09-26; a non-character store was
+  `%SCHAR-SET`'s message-only error, a silent JVM store that later escaped as a
+  `ClassCastException`, a wasm cast trap; a `row-major-aref` subscript unnamed, a
+  `NullPointerException` or a trap): a `%schar-set` checks string, subscript, VALUE, then
+  bounds -- the value is `CHARACTER`, a new kind. Compiled: the runtime defun's third
+  argument is `(%check-character c 'op)`, every place (`op` nil = unnamed). JVM:
+  `instanceof int[]` plus the site throw `%check-string` uses (`emitSiteTypeError`). wasm, EH
+  mode only: `ref.test $char` plus `emitTypeError`; the landing selects `CHARACTER` only when
+  the module carries `%schar-set-runtime` (`WasmOperandTypes.CHARACTER_CHECKED`, the one
+  function every string store calls). The interpreter's `%aset`/`%row-major-aset` string arm
+  (`storeStringChar`) throws the unnamed `CHARACTER` report the seam names. `row-major-aref`
+  and `%row-major-aset` check their subscript as `aref`/`%aset` do (`compileSubscript`: JVM
+  `_ckIdx`, wasm `_idx_chk` on every arm), and the JVM store goes through the wrapper, so a
+  packed float store's non-real reports `(SETF ROW-MAJOR-AREF): ... REAL` as the
+  interpreter's seam now names it. `LOWERED_TO` adds `(SETF ROW-MAJOR-AREF)` for
+  `ROW-MAJOR-AREF`.
 - **Interpreter**: the built-ins throw `OperandTypeException` with the kind (`car`/`cdr`/`first`/
   `rest` and `nthValue` `LIST`, `numerator`/`denominator` `RATIONAL`, `random` `NUMBER`/`REAL`), the
   seam names them. `#'first`/`#'rest` of nil and `#'second` past the end answer nil now, as the
@@ -1091,13 +1121,23 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   checked site is a `length` or an `append` (`(handler-case (length *x*) ...)`, 1,573 -> 6,127 B)
   now keeps the landing and its tables, because the dotted-tail test at the walk's end is one the
   whole-module type facts cannot prove away; `examples/console/error-handling.lisp` 35,901 -> 35,641.
-- **Open**: the string-store leftovers (`.todo/989`).
+- **Cost of the string stores and `row-major-aref`, measured 2026-09-26** (wasmtime 49, on the
+  tree after `.todo/985` and `990`): `zlib` P1 116,920 -> 117,028 (code +67 B, the landing's
+  `CHARACTER` arm +16; data +41 B, the `CHARACTER` suffix and the new row); size level 89,499 ->
+  89,051 (code -488 B: `WasmRefTypeFolder` proves `%schar-set-runtime`'s value a character, so its
+  packed-integer arm folds to a trap and one body folds away); JVM class 172,368 -> 173,351
+  (+983 B: the `_ckIdx`/store wrappers and chipz's `row-major-aref`/`fill`/`replace` sites).
+  `hello_world`, `pi_approx`, `dom_reactor` byte-identical; a non-EH module too. A 20M-iteration
+  `row-major-aref` read+store loop: EH wasm 0.91 -> 1.08 s, what the same `aref` loop already
+  paid (0.99 s); JVM unchanged (1.67 -> 1.65 s at 300M).
 - Pinned by `ci-spec.yaml`'s `argument-type-errors-name-the-operator-beyond-arithmetic` and
   `list-walks-and-string-indices-name-the-operator`, `list-consumers-name-the-operator`,
-  `list-consumers-beyond-the-first-set-name-the-operator` and `string-accesses-name-the-operator`,
-  and the `argumentTypeErrorsNameTheOperatorBeyondArithmetic` /
+  `list-consumers-beyond-the-first-set-name-the-operator`, `string-accesses-name-the-operator` and
+  `string-stores-and-row-major-subscripts-name-the-operator`, and the
+  `argumentTypeErrorsNameTheOperatorBeyondArithmetic` /
   `listWalksAndStringIndicesNameTheOperator` / `listConsumersNameTheOperator` /
-  `listConsumersBeyondTheFirstSetNameTheOperator` / `stringAccessesNameTheOperator` triples
+  `listConsumersBeyondTheFirstSetNameTheOperator` / `stringAccessesNameTheOperator` /
+  `stringStoresAndRowMajorSubscriptsNameTheOperator` triples
   (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
 
 ### `random`'s domain (closed 2026-09-26, `.todo/981`)

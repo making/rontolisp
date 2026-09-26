@@ -102,6 +102,48 @@ class WasmReportLocationsTest {
 
 	@Test
 	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aConditionReSignalledByASecondAwaitNamesThatAwait() throws Exception {
+		// --component only: Preview 1 signals an async body's condition at its call.
+		Path direct = write("relay-then-direct.lisp", """
+				(rontolisp:async-defun job ()
+				  (error "job failed"))
+
+				(rontolisp:async-defun relay (f)
+				  (rontolisp:await f))
+
+				(let ((f (job)))
+				  (handler-case (rontolisp:await (relay f))
+				    (error () (print :caught)))
+				  (rontolisp:await f))
+				""");
+		assertThat(wasmReport(direct, "--report-locations=line", "--component"))
+			.isEqualTo(List.of("Unhandled condition: job failed", "  at " + direct + ":2",
+					"  in JOB (async), awaited at " + direct + ":10"))
+			.isEqualTo(interpreterReport(direct));
+		Path relayed = write("direct-then-relay.lisp", """
+				(rontolisp:async-defun job ()
+				  (rontolisp:await (rontolisp:wait-for 1))
+				  (error "job failed"))
+
+				(rontolisp:async-defun relay (f)
+				  (rontolisp:await f))
+
+				(let ((f (job)))
+				  (handler-case (rontolisp:await f)
+				    (error () (print :caught)))
+				  (handler-case (rontolisp:await (relay f))
+				    (error () (print :caught-again)))
+				  (rontolisp:await (relay f)))
+				""");
+		assertThat(wasmReport(relayed, "--report-locations=line", "--component"))
+			.isEqualTo(List.of("Unhandled condition: job failed", "  at " + relayed + ":3",
+					"  in JOB (async), awaited at " + relayed + ":6",
+					"  in RELAY (async), awaited at " + relayed + ":13"))
+			.isEqualTo(interpreterReport(relayed));
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
 	void aSchemeProgramNamesTheProcedureHoldingTheForm() throws Exception {
 		Path program = write("app.scm", """
 				(import (scheme base) (scheme write))

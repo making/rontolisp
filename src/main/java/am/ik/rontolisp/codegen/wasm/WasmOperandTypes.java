@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.wasm;
 
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
@@ -70,8 +71,9 @@ final class WasmOperandTypes {
 	 * {@code second}..{@code tenth} through {@code (car (nthcdr ...))}, {@code dolist}
 	 * and {@code loop}'s {@code for-in} through {@code endp}, a {@code car}/{@code cdr}
 	 * place's store ({@code setf} and the modify macros) through {@code rplaca} /
-	 * {@code rplacd}, a {@code setf} of a {@code char}/{@code schar} place through its
-	 * own store name and of an {@code elt} place through {@code %aset}'s.
+	 * {@code rplacd}, a {@code setf} of a {@code char}/{@code schar}/
+	 * {@code row-major-aref} place through its own store name and of an {@code elt} place
+	 * through {@code %aset}'s.
 	 */
 	private static final java.util.Map<String, java.util.List<String>> LOWERED_TO = loweredTo();
 
@@ -84,6 +86,14 @@ final class WasmOperandTypes {
 	private static final java.util.List<String> STRING_CHECKED = java.util.List.of("CHAR", "SCHAR",
 			OperandTypes.SETF_CHAR, OperandTypes.SETF_SCHAR);
 
+	/**
+	 * The function whose presence says a module has string stores, whose
+	 * {@code %check-character} lands {@code CHARACTER} directly ({@link #emitLanding}):
+	 * every such store calls it ({@code .kb/string-write-runtime.md}), and a module
+	 * without it selects no {@code CHARACTER} text.
+	 */
+	private static final String CHARACTER_CHECKED = LispNames.SCHAR_SET_RUNTIME;
+
 	private static java.util.Map<String, java.util.List<String>> loweredTo() {
 		java.util.Map<String, java.util.List<String>> map = new java.util.HashMap<>();
 		map.put("COERCE", java.util.List.of("FLOAT"));
@@ -92,6 +102,7 @@ final class WasmOperandTypes {
 		map.put("ELT", java.util.List.of(OperandTypes.SETF_AREF));
 		map.put("CHAR", java.util.List.of(OperandTypes.SETF_CHAR));
 		map.put("SCHAR", java.util.List.of(OperandTypes.SETF_SCHAR));
+		map.put("ROW-MAJOR-AREF", java.util.List.of(OperandTypes.SETF_ROW_MAJOR_AREF));
 		map.put("DOLIST", java.util.List.of("ENDP"));
 		map.put("LOOP", java.util.List.of("ENDP"));
 		for (String modify : java.util.List.of("SETF", "INCF", "DECF", "PUSH", "POP", "PUSHNEW")) {
@@ -113,9 +124,10 @@ final class WasmOperandTypes {
 	 * @param ids operator to its row (1-based)
 	 * @param base the blob's absolute address
 	 * @param rowCodes the type codes the rows hold ({@link #FUNNEL_CODE} included), plus
-	 * {@code STRING}'s when a row's sites land with it directly
-	 * ({@link #STRING_CHECKED}): a landing selects among only the types they can name, so
-	 * a suffix no row can reach is never cited and drops with the string blob's dead
+	 * {@code STRING}'s when a row's sites land with it directly ({@link #STRING_CHECKED})
+	 * and {@code CHARACTER}'s when the module stores into strings
+	 * ({@link #CHARACTER_CHECKED}): a landing selects among only the types they can name,
+	 * so a suffix no row can reach is never cited and drops with the string blob's dead
 	 * ranges
 	 */
 	record Operators(java.util.Map<String, Integer> ids, int base, java.util.Set<Integer> rowCodes) {
@@ -175,6 +187,9 @@ final class WasmOperandTypes {
 					rowCodes.add(code(OperandTypes.Kind.STRING));
 				}
 			}
+			if (spelled.test(CHARACTER_CHECKED)) {
+				rowCodes.add(code(OperandTypes.Kind.CHARACTER));
+			}
 			return new Operators(java.util.Map.copyOf(ids), table.appendReaderOwnedBlob(blob.toByteArray()),
 					java.util.Set.copyOf(rowCodes));
 		}
@@ -216,8 +231,9 @@ final class WasmOperandTypes {
 
 	/**
 	 * Emits the shared landing over the culprit on the stack with a kind no stub has
-	 * ({@code STRING}): {@code i32.const kind; call _type_err; unreachable}. It reads the
-	 * operator from the register the caller set. EH mode only.
+	 * ({@code STRING}, {@code CHARACTER}):
+	 * {@code i32.const kind; call _type_err; unreachable}. It reads the operator from the
+	 * register the caller set. EH mode only.
 	 * @param w the writer
 	 * @param kind what the check was for
 	 */
