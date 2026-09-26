@@ -61,15 +61,15 @@ class ShippedBridgeNativeImageE2eTest {
 	@Test
 	void aJavaInteropJarRunsAsANativeImageWithAgentConfiguration() throws Exception {
 		// The bridge's entry points a program still needs -- a class named at run time,
-		// an argument of no known kind, a proxy -- and both reflective back-calls bind()
+		// a receiver of no known class, a proxy -- and both reflective back-calls bind()
 		// makes: _apply (the proxy's lambda) and _strv (a string built by concatenate).
 		// The calls that resolve are direct and need no configuration.
 		Path jar = compileJar("""
+				(defvar *sb* (java:new "java.lang.StringBuilder" "hi"))
 				(let ((math "java.lang.Math") (int "java.lang.Integer"))
 				  (print (java:static math "max" 3 7))
-				  (let ((sb (java:new "java.lang.StringBuilder" "hi")))
-				    (java:call sb "append" (concatenate 'string "!" "?"))
-				    (print (java:call sb "toString")))
+				  (java:call *sb* "append" (concatenate 'string "!" "?"))
+				  (print (java:call *sb* "toString"))
 				  (print (java:field int "MAX_VALUE")))
 				(print (java:call (java:proxy "java.util.function.Supplier" (lambda (method) 42)) "get"))
 				""");
