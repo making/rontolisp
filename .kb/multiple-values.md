@@ -9,6 +9,9 @@ values after the primary, `t` (`LispMacroExpander.MV_ZERO_VALUES`) no value at a
 interpreter keeps it as a value-count register (every primitive step clears), the compile paths
 by settling every function tail ("A tail settles the channel", below); the four backends agree
 line for line with SBCL on the `multiple-values-single-value-contexts` ci-spec case.
+**Since 2026-09-26 the channel is one per THREAD** on the interpreter and the JVM ("One register
+per thread", below): exactness is a per-thread property, and a shared register broke it the
+moment two threads ran Lisp code.
 
 ## What ships
 - `values` is a CL **function** (`CL_FUNCTIONS`, `Environment`, a variadic `&rest`
@@ -216,12 +219,14 @@ publish in a non-tail position -- an argument, a `let` initform, a form before t
   several values here -- `values-list`, `parse-integer`, `macroexpand(-1)` and the prelude's
   multiple-value defuns (`passesMultipleValues`, pinned against the prelude source by
   `LispPreludeLibraryTest`). `(funcall #'name ...)`/`(apply 'name ...)` over a LITERAL designator
-  is classified by `name` -- the compile paths call the built-in inline there.
+  is classified by `name` -- the compile paths call the built-in inline there. `rontolisp:await`
+  too (`.kb/async-await.md`, "Multiple values").
 - **One value, cleared**: an atom, `quote`, `function`, a `lambda` expression,
   `load-time-value` get `(progn (setq %mv-spill nil) form)` (`clearBefore`: nothing in them can
   publish); a call of any other `cl` function, the assignment macros (`setq`/`setf`/`incf`/
   `push`/..., except a `(setf (values ...) ...)` place), `multiple-value-list`, `nth-value`, the
-  definers, `format`/`error`/`warn`/`check-type`/... get `(let ((__mvN_v form)) (setq %mv-spill
+  definers, `format`/`error`/`warn`/`check-type`/..., `rontolisp::%async-run` (the future; its
+  thunk ran -- eagerly, or to completion on Preview 1 -- and left the body's values) get `(let ((__mvN_v form)) (setq %mv-spill
   nil) __mvN_v)` (`clearAfter`: an argument or a callback -- `sort`'s predicate, a `print-object`
   method -- may have published), or `clearBefore` when the operator is one of the pure
   primitives in `QUIET_OPERATORS` and every argument is quiet; `while`, `tagbody` and a
@@ -289,8 +294,11 @@ primitive step that is not a publish and not a call of user code clears it
   values die at its own return.
 - a constructing special form: `quote`, `function`, `lambda`, `setq` (an assignment answers ONE
   value however many the value form produced), the definers, `while`, `tagbody`, `slot-value`,
-  `await`, a value-less `return`/`return-from`/`throw`, an empty `progn`/block/`catch`/clause
+  a value-less `return`/`return-from`/`throw`, an empty `progn`/block/`catch`/clause
   body, an `if` without an else branch taking it, a result-less `do-symbols`.
+- NOT `await` (since 2026-09-26): it publishes the extra values its future settled with
+  (`awaitValues`; `.kb/async-await.md`, "Multiple values"), and so does `%future-force`, a
+  `passesValues` function. `%async-run` answers one value, its future (the built-in clears).
 A form that merely passes a sub-form's value on (`if`, `let`, `progn`, a block, `catch`,
 `handler-case` without `:no-error`, a user function's body, the last form of an `or` --
 its `t` clause since 2026-09-19, `LispMacroExpander.expandOr`, on all four backends: `(or
@@ -304,6 +312,34 @@ sub-form: a `(values ...)` tail reaches the consumer behind any number of return
   2,254-2,344 ms, medians 2,317 -> 2,297, no measurable change. The old argument-boundary
   flag (`beginArguments`/`endArguments`) is gone: it only cleared arguments, and left a
   `let` initform, a `progn` body form and a callback's publish to leak.
+
+## One register per thread
+**Invariant (2026-09-26): each thread that runs Lisp code has its own channel** on the two
+multi-threaded backends; the WASM tiers are single-threaded (the component's tasks are
+cooperative and a suspension happens only at an `await`, which publishes afresh).
+- Why: an async body's virtual thread, a `make-thread` thread and a served request run in
+  parallel with `main`, and every primitive step (interpreter) or function tail (JVM) writes the
+  channel. Through ONE register a sibling's step cleared the values between a callee's publish
+  and its consumer's read: 8 `make-thread`s each running `(multiple-value-bind (a b c) (f n) ...)`
+  20,000 times, and 60 async bodies doing it 200 times, signalled `Expected integer, got: NIL`
+  on every run on both backends (a b c came back nil), and an async body's own values were lost
+  between its tail and the capture into its future (`(1)` for `(1 2)` with two bodies
+  completing together).
+- Interpreter: `ValueCountRegister`, shared by every scope of one global `Environment` (the
+  `mvSpill` field). The thread that created the global environment keeps a plain field behind
+  one `Thread.currentThread()` compare; every other thread a `ThreadLocal`.
+- JVM: `JvmMvChannel`. A program that can run Lisp on another thread (`%async-run`, an
+  http handler, a thread primitive: `usesAsyncSpawn || usesThreads`) reads and writes the
+  channel through `_mvGet`/`_mvSet`: the OWNER -- the thread whose `main` prologue claimed
+  `_mvOwner` -- keeps the `_g$` static field, every other thread the `_mvTl` ThreadLocal. A class
+  whose `main` never runs (a jvm-export library, a war) has no owner and every thread takes the
+  ThreadLocal. Every emission site goes through `ctx.mvChannel`, never `globalFields` directly.
+  Any other program keeps the plain `getstatic`/`putstatic`, byte-identical.
+- Cost (2026-09-26, x86-64 Linux, Java 25, 5 alternating process pairs). Interpreter, fib 27 +
+  a 2M-call loop: 2,203-2,454 -> 2,256-2,487 ms, medians 2,352 -> 2,367, noise. JVM, fib 34
+  (18M calls, each tail clears the channel) in a program with an async-defun and a consumer:
+  74-101 -> 83-103 ms, class 17,055 -> 17,471 B. A `ThreadLocal.set` on EVERY write (no owner
+  fast path) was 151-177 ms, twice the time -- which is why the owner keeps the field.
 
 ## The REPL echo is a consumer
 `LispEvaluator.evalValues(form) -> List<LispVal>` is the ONLY multiple-value entry point outside
@@ -331,7 +367,8 @@ the macro expander.
 
 ## Wiring points
 `LispNames`; `PackageRegistry`; `LispEvaluator.evalCons`/`eval`/`evalArgs`/`apply`
-(`singleValue`); `Environment` (`mvSpill`, `publishSpill`, `clearSpill`, `spill`);
+(`singleValue`); `Environment` (`mvSpill`, `publishSpill`, `clearSpill`, `spill`),
+`ValueCountRegister`; `JvmMvChannel` (every JVM read and write of the channel);
 `LispFunction.passesValues`; `Jvm`/`WasmExprCompiler` (+ the floor-family branch around the
 IntConv compilers, the fused-local-call clear in the FUNCALL arm); `Jvm`/`WasmLambdaCompiler`
 (the lambda hooks); `Jvm`/`WasmLispCompiler` (the wrapper settle); `NoGcWasmCompiler.expandMacro`;
@@ -342,6 +379,8 @@ holds the entry's values as a list across the exit catch) and `SchemeValueCount`
 leaf that may answer other than one value leaves through a `return-from`).
 
 ## Tests
+`ThreadTest`/`JvmThreadTest.eachThreadHasItsOwnMultipleValueChannel` and the
+`AwaitValuesMatrix.CONCURRENT_PROGRAM` tests (one register per thread);
 `LispEvaluatorTest` (`evalValues*`, `evalMultipleValue*`, `evalNthValue`,
 `evalUnwindProtectCleanupKeepsTheProtectedFormsValues`,
 `evalSyntacticMvProducerTailPublishesThroughAFunctionReturn`,

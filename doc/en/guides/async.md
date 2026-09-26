@@ -14,7 +14,7 @@ resolves it, and a handful of combinators build on top.
 | [`rontolisp:async-defun`](../reference/special-forms/rontolisp-async-defun.md) | Define an asynchronous function (returns a future) |
 | [`rontolisp:async-lambda`](../reference/special-forms/rontolisp-async-lambda.md) | The anonymous counterpart |
 | [`rontolisp:async`](../reference/special-forms/rontolisp-async.md) | `(async (defun ...))` / `(async (lambda ...))` — a JavaScript-style spelling of the two above |
-| [`rontolisp:await`](../reference/special-forms/rontolisp-await.md) | Suspend until a future settles and return its value |
+| [`rontolisp:await`](../reference/special-forms/rontolisp-await.md) | Suspend until a future settles and return its values |
 | [`rontolisp:futurep`](../reference/functions/rontolisp-futurep.md) | `t` if a value is a future |
 | [`rontolisp:wait-for`](../reference/functions/rontolisp-wait-for.md) | A future that settles to `nil` after N milliseconds (the async counterpart of `cl:sleep`) |
 | [`rontolisp:then`](../reference/functions/rontolisp-then.md) / [`then*`](../reference/functions/rontolisp-then-star.md) | Attach a transform to a future *as a value* |
@@ -55,8 +55,8 @@ it prints as `#<FUTURE>`:
 (rontolisp:futurep (add-later 1 2))   ; => T
 ```
 
-The future settles with the value of the last body form, or with the error the
-body signaled (re-signaled when the future is awaited — see
+The future settles with the values of the last body form — all of them, which
+`await` returns as multiple values — or with the error the body signaled (re-signaled when the future is awaited — see
 [Errors](#errors-across-the-await-barrier)). The anonymous counterpart is
 [`rontolisp:async-lambda`](../reference/special-forms/rontolisp-async-lambda.md),
 and `(rontolisp:async (defun ...))` / `(rontolisp:async (lambda ...))` is an
@@ -72,6 +72,14 @@ may not be a future.
 
 ```lisp
 (rontolisp:await 42)   ; => 42
+```
+
+A future answers every value its body answered, the way a function call does,
+so a multiple-value consumer reads them straight through the `await`:
+
+```lisp
+(rontolisp:async-defun div-mod (a b) (floor a b))
+(multiple-value-list (rontolisp:await (div-mod 17 5)))   ; => (3 2)
 ```
 
 `await` placement is **lexical**: it is legal only inside an

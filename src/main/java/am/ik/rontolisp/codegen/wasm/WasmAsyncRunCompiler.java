@@ -3,8 +3,11 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
+import am.ik.wasm.Type;
+import am.ik.wasm.WasmWriter;
 
 /**
  * Compiles the internal {@code rontolisp::%async-run} primitive (the lowered
@@ -27,13 +30,54 @@ final class WasmAsyncRunCompiler {
 			throw new UnsupportedOperationException("%async-run expects 1 argument, got " + (args.size() - 1));
 		}
 		ctx.indirectCallArities.add(0);
+		Integer spillGlobal = ctx.globalIndices.get(LispNames.MV_SPILL);
+		if (spillGlobal != null) {
+			compileCapturingValues(args.get(1), spillGlobal, ctx);
+			return;
+		}
 		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(2); // kind 2: settled
+		ctx.writer.writeSignedLeb128(WasmP1FutureRuntimeBuilder.KIND_SETTLED);
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_P1_FUTURE);
+	}
+
+	// In a program with a multiple-value consumer: the channel holds the body's extra
+	// values the moment the thunk returns (its tail settled them), so a body that
+	// answered other than one value settles a KIND_VALUES future over
+	// (primary . extras) -- what the await publishes -- and any other a KIND_SETTLED one.
+	private static void compileCapturingValues(LispVal thunk, int spillGlobal, WasmLispCompiler.Ctx ctx) {
+		WasmWriter w = ctx.writer;
+		WasmExprCompiler.compileExpr(thunk, ctx);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE);
+		int primary = ctx.allocTemp();
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(primary);
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(spillGlobal);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmP1FutureRuntimeBuilder.KIND_SETTLED);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(primary);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_P1_FUTURE);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmP1FutureRuntimeBuilder.KIND_VALUES);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(primary);
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(spillGlobal);
+		WasmEmitHelper.emitNewCons(ctx);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_P1_FUTURE);
+		w.write(Instruction.END);
 	}
 
 }

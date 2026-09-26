@@ -22,6 +22,15 @@ public final class LispFuture implements LispVal {
 
 	private final CompletableFuture<LispVal> future;
 
+	/**
+	 * The settled value's EXTRA values, in the {@code %mv-spill} channel's shape: nil for
+	 * exactly one value, a list of the values after the primary, or the zero-values
+	 * marker. Written once, by the thread that ran an asynchronous body, before it
+	 * completes {@link #future} -- so an awaiter that joined the completion reads it (the
+	 * completion is the happens-before edge).
+	 */
+	private volatile LispVal extras = LispNil.INSTANCE;
+
 	private LispFuture(CompletableFuture<LispVal> future) {
 		this.future = future;
 	}
@@ -60,6 +69,26 @@ public final class LispFuture implements LispVal {
 	 */
 	public CompletableFuture<LispVal> future() {
 		return this.future;
+	}
+
+	/**
+	 * Records the settled value's extra values -- what the body answered after its
+	 * primary value -- before the computation completes.
+	 * @param extras nil, the list of the values after the primary, or the zero-values
+	 * marker
+	 */
+	public void settleExtras(LispVal extras) {
+		this.extras = extras;
+	}
+
+	/**
+	 * Returns the settled value's extra values ({@link #settleExtras}); nil for a future
+	 * that settles with one value, which every future not made by an asynchronous body
+	 * does.
+	 * @return nil, the list of the values after the primary, or the zero-values marker
+	 */
+	public LispVal extras() {
+		return this.extras;
 	}
 
 	@Override

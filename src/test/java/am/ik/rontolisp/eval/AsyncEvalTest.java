@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.AwaitValuesMatrix;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -459,6 +460,26 @@ class AsyncEvalTest {
 			.hasMessageContaining("WAIT-FOR expects a non-negative integer of milliseconds");
 		assertThatThrownBy(() -> eval("(rontolisp:wait-for \"x\")"))
 			.hasMessageContaining("WAIT-FOR expects a non-negative integer of milliseconds");
+	}
+
+	// ---------- The values of an async body reach the awaiter ----------
+
+	@Test
+	void awaitAnswersEveryValueOfTheAsyncBody() {
+		Run run = evalMulti(AwaitValuesMatrix.PROGRAM);
+		assertThat(run.output().trim()).isEqualTo(AwaitValuesMatrix.EXPECTED);
+	}
+
+	@Test
+	void awaitAnswersEveryValueOfAnAsyncBodyThatSuspended() {
+		Run run = evalMulti(AwaitValuesMatrix.SUSPENDING_PROGRAM);
+		assertThat(run.output().trim()).isEqualTo(AwaitValuesMatrix.SUSPENDING_EXPECTED);
+	}
+
+	@Test
+	void concurrentAsyncBodiesKeepTheirOwnValues() {
+		Run run = evalMulti(AwaitValuesMatrix.CONCURRENT_PROGRAM);
+		assertThat(run.output().trim()).isEqualTo(AwaitValuesMatrix.CONCURRENT_EXPECTED);
 	}
 
 	// ---------- Future-as-value combinators: then / then* / catch / finally ----------

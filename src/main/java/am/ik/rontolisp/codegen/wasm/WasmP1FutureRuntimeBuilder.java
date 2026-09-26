@@ -22,6 +22,13 @@ import am.ik.wasm.WasmWriter;
  * first awaited -- and a thunk that signals makes the await signal, which is how a
  * {@code --native} fetch reports a transport failure at the await rather than at the
  * call. Any other module's body is byte-identical to what it was before the kind existed.
+ *
+ * <p>
+ * A module with a {@code %mv-spill} global also meets a VALUES future
+ * ({@link #KIND_VALUES}): {@code %async-run}'s, when the body answered other than exactly
+ * one value, whose value field is {@code (primary . extras)} -- the channel as the body
+ * left it. The await is then a multiple-value producer: it publishes one value, or the
+ * extras of the last future of the chain.
  */
 final class WasmP1FutureRuntimeBuilder {
 
@@ -31,14 +38,41 @@ final class WasmP1FutureRuntimeBuilder {
 	/** The {@code kind} of a future settled by its thunk at each await. */
 	static final int KIND_DEFERRED = 3;
 
+	/**
+	 * The {@code kind} of a future settled at creation with several (or zero) values: the
+	 * value field is {@code (primary . extras)}.
+	 */
+	static final int KIND_VALUES = 4;
+
 	private WasmP1FutureRuntimeBuilder() {
 	}
 
-	static byte[] buildAwait(boolean deferred) {
+	/**
+	 * Builds the resolver's body.
+	 * @param deferred whether the module can hold a {@link #KIND_DEFERRED} future
+	 * @param spillGlobal the {@code %mv-spill} channel's global index, or -1 when the
+	 * program has no multiple-value consumer (no {@link #KIND_VALUES} future can exist)
+	 * @return the function body bytes (locals declaration included)
+	 */
+	static byte[] buildAwait(boolean deferred, int spillGlobal) {
 		final ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		final WasmWriter w = new WasmWriter(body);
 		final int V = 0;
-		w.write(0); // no locals
+		final int PRIMARY = 1;
+		if (spillGlobal >= 0) {
+			// locals: 1x (ref null eq)
+			w.write(1);
+			w.writeUnsignedLeb128(1);
+			w.writeRefType(true, am.ik.wasm.Type.EQ.code());
+			// One value unless the last future of the chain says otherwise.
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(am.ik.wasm.Type.EQ.code());
+			w.write(Instruction.SET_GLOBAL);
+			w.writeUnsignedLeb128(spillGlobal);
+		}
+		else {
+			w.write(0); // no locals
+		}
 
 		// A non-future value passes through unchanged.
 		getLocal(w, V);
@@ -64,6 +98,35 @@ final class WasmP1FutureRuntimeBuilder {
 			w.write(Instruction.END);
 		}
 
+		if (spillGlobal >= 0) {
+			// Values: (primary . extras). A primary that is itself a future is awaited
+			// in turn (its own values decide); any other publishes the extras.
+			futureField(w, V, 0);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(KIND_VALUES);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF, 0x40);
+			futureField(w, V, 1);
+			consField(w, 0);
+			w.write(Instruction.SET_LOCAL);
+			w.writeUnsignedLeb128(PRIMARY);
+			getLocal(w, PRIMARY);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			w.writeHeapType(WasmLispCompiler.TYPE_P1_FUTURE);
+			w.write(Instruction.IF, 0x40);
+			getLocal(w, PRIMARY);
+			call(w, WasmLispCompiler.FUNC_P1_FUTURE_AWAIT);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+			futureField(w, V, 1);
+			consField(w, 1);
+			w.write(Instruction.SET_GLOBAL);
+			w.writeUnsignedLeb128(spillGlobal);
+			getLocal(w, PRIMARY);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+		}
+
 		// Settled: the memoized value, recursively awaited so a nested settled future
 		// (an async body returning another async call's future) flattens like
 		// JavaScript await; a non-future value returns immediately.
@@ -80,6 +143,15 @@ final class WasmP1FutureRuntimeBuilder {
 		w.writeHeapType(WasmLispCompiler.TYPE_P1_FUTURE);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_P1_FUTURE);
+		w.writeUnsignedLeb128(fieldIdx);
+	}
+
+	// Replaces the cons on the stack with its car (0) or cdr (1).
+	private static void consField(WasmWriter w, int fieldIdx) {
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		w.writeUnsignedLeb128(fieldIdx);
 	}
 

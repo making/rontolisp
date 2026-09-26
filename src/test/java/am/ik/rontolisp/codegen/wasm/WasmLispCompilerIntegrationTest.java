@@ -22,6 +22,7 @@ import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.AwaitValuesMatrix;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
 import am.ik.rontolisp.testsupport.StringStreamPrograms;
@@ -17962,6 +17963,28 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
+	}
+
+	@Test
+	void p1AwaitAnswersEveryValueOfTheAsyncBody() throws Exception {
+		assertThat(compileAndRunCombinatorsP1(AwaitValuesMatrix.PROGRAM)).isEqualTo(AwaitValuesMatrix.EXPECTED);
+	}
+
+	@Test
+	void componentAwaitAnswersEveryValueOfTheAsyncBody() throws Exception {
+		assertThat(compileAndRunComponent(AwaitValuesMatrix.PROGRAM)).isEqualTo(AwaitValuesMatrix.EXPECTED);
+	}
+
+	@Test
+	void componentAwaitAnswersEveryValueOfAnAsyncBodyThatSuspended() throws Exception {
+		assertThat(compileAndRunComponent(AwaitValuesMatrix.SUSPENDING_PROGRAM))
+			.isEqualTo(AwaitValuesMatrix.SUSPENDING_EXPECTED);
+	}
+
+	@Test
+	void componentInterleavedAsyncBodiesKeepTheirOwnValues() throws Exception {
+		assertThat(compileAndRunComponent(AwaitValuesMatrix.CONCURRENT_PROGRAM))
+			.isEqualTo(AwaitValuesMatrix.CONCURRENT_EXPECTED);
 	}
 
 	@Test

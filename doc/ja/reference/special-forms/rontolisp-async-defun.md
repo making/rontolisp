@@ -2,7 +2,7 @@
 
 `(rontolisp:async-defun name (params...) body...)`
 
-非同期関数を定義します。表面上は [`defun`](defun.md) と同じで、ラムダリストキーワード (`&optional`、`&rest`、`&key` など) をフルにサポートしますが、呼び出すと本体が直ちに開始され、値の代わりに *future* を返します: 本体は未確定の future への最初の [`rontolisp:await`](rontolisp-await.md) (または完了) まで実行され、そこで呼び出し側が再開します (「eager start」)。future は最後の本体フォームの値で確定するか、本体がシグナルしたエラーで確定します (await 時に再シグナルされます)。
+非同期関数を定義します。表面上は [`defun`](defun.md) と同じで、ラムダリストキーワード (`&optional`、`&rest`、`&key` など) をフルにサポートしますが、呼び出すと本体が直ちに開始され、値の代わりに *future* を返します: 本体は未確定の future への最初の [`rontolisp:await`](rontolisp-await.md) (または完了) まで実行され、そこで呼び出し側が再開します (「eager start」)。future は最後の本体フォームの値 (すべての値。`await` はそれを多値として返します) で確定するか、本体がシグナルしたエラーで確定します (await 時に再シグナルされます)。
 
 ```lisp
 (rontolisp:async-defun add-later (a b)
