@@ -1073,7 +1073,7 @@ public final class PureBuiltinFolder {
 			}
 			data[i] = n.longValue();
 		}
-		return new LispIntVector(width, data);
+		return LispIntVector.of(width, data);
 	}
 
 	/**

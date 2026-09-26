@@ -2571,7 +2571,9 @@ public final class LispPreludeLibrary {
 		// body size); OCTET chunks -- what every HTTP body stream answers, so a relayed
 		// body crosses byte-exact -- are joined once and UTF-8 decoded, which is what
 		// keeps a document-shaped consumer reading text off a byte stream. A stream
-		// mixing the two kinds is an error rather than a guess.
+		// mixing the two kinds is an error rather than a guess. The chunk list is dropped
+		// once joined, so a body's octets are held once, not twice, while the decode
+		// builds the string (.kb/fetch-http.md, "Throughput").
 		SOURCES.put(LispNames.READ_ALL, """
 				(rontolisp:async-defun rontolisp:read-all (s)
 				  (if (stringp s)
@@ -2587,8 +2589,9 @@ public final class LispPreludeLibrary {
 				        (cond ((and octets text)
 				               (error "read-all: the stream mixes string and octet chunks"))
 				              (octets
-				               (rontolisp::%octets-to-string
-				                (rontolisp::%octets-join chunks total)))
+				               (let ((joined (rontolisp::%octets-join chunks total)))
+				                 (setq chunks nil)
+				                 (rontolisp::%octets-to-string joined)))
 				              (t
 				               (with-output-to-string (out)
 				                 (dolist (c chunks) (write-string c out))))))))

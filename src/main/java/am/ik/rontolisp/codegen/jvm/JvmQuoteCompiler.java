@@ -118,7 +118,7 @@ final class JvmQuoteCompiler {
 	 * @param className the enclosing class name
 	 */
 	static void compileLiteralIntVector(am.ik.rontolisp.LispIntVector iv, JvmLispCompiler.Ctx ctx, String className) {
-		long[] data = iv.data();
+		long[] data = iv.toLongArray();
 		JvmEmitHelper.emitIntConst(ctx, 1 + data.length);
 		ctx.emit(Opcode.NEWARRAY);
 		ctx.emit(11); // T_LONG

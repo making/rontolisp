@@ -18,7 +18,6 @@ import java.math.BigInteger;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.ByteBuffer;
-import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -1245,21 +1244,21 @@ public final class Environment implements Scope {
 				// reads widen unsigned. A non-integer element is a type error. Rank-n /
 				// fill-pointer / adjustable / displaced combinations keep the general
 				// boxed representation, like the packed float fallback.
-				long[] idata = new long[total];
+				LispIntVector packed = LispIntVector.zeros(packedIntWidth, total);
 				if (initialContents != null) {
 					LispVal[] tmp = new LispVal[total];
 					fillInitialContents(initialContents, dims, 0, tmp, 0);
 					for (int i = 0; i < total; i++) {
-						idata[i] = exactIntElement(LispNames.MAKE_ARRAY, tmp[i]);
+						packed.setElement(i, exactIntElement(LispNames.MAKE_ARRAY, tmp[i]));
 					}
 				}
 				else if (initGiven) {
 					long fill = exactIntElement(LispNames.MAKE_ARRAY, init) & LispIntVector.mask(packedIntWidth);
 					if (fill != 0) {
-						java.util.Arrays.fill(idata, fill);
+						packed.fill(0, total, fill);
 					}
 				}
-				return new LispIntVector(packedIntWidth, idata);
+				return packed;
 			}
 			// A rank-1 :element-type 'character array is a string in CL, so build a
 			// mutable LispString (the make-string result shape; space-filled unless
@@ -1690,7 +1689,7 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.ARRAY_ALIKE, args, 2);
 			int n = (int) asLong(args.get(1));
 			if (args.get(0) instanceof LispIntVector iv) {
-				return new LispIntVector(iv.width(), new long[n]);
+				return LispIntVector.zeros(iv.width(), n);
 			}
 			if (args.get(0) instanceof LispFloatArray fa) {
 				return zeroPackedFloatLike(fa, n);
@@ -1703,7 +1702,7 @@ public final class Environment implements Scope {
 				// (.todo/698).
 				int width = packedIntWidthForElementTypeCode(arr.elementTypeCode());
 				if (width > 0) {
-					return new LispIntVector(width, new long[n]);
+					return LispIntVector.zeros(width, n);
 				}
 				LispFloatArray proto = floatPrototypeForElementTypeCode(arr.elementTypeCode());
 				if (proto != null) {
@@ -2116,11 +2115,11 @@ public final class Environment implements Scope {
 	 * :initial-contents} signals) and is masked to the width by {@link LispIntVector}.
 	 */
 	private static LispVal packedIntVector(String fn, int width, List<LispVal> elements) {
-		long[] data = new long[elements.size()];
-		for (int i = 0; i < data.length; i++) {
-			data[i] = exactIntElement(fn, elements.get(i));
+		LispIntVector packed = LispIntVector.zeros(width, elements.size());
+		for (int i = 0; i < elements.size(); i++) {
+			packed.setElement(i, exactIntElement(fn, elements.get(i)));
 		}
-		return new LispIntVector(width, data);
+		return packed;
 	}
 
 	/**
@@ -2214,7 +2213,7 @@ public final class Environment implements Scope {
 	}
 
 	// A fresh zero-filled rank-1 packed float array of length n, at proto's width -- the
-	// float twin of `new LispIntVector(width, new long[n])`, shared by %array-alike's
+	// float twin of `LispIntVector.zeros(width, n)`, shared by %array-alike's
 	// LispFloatArray and packed-general-LispArray arms.
 	private static LispFloatArray zeroPackedFloatLike(LispFloatArray proto, int n) {
 		int[] dims = { n };
@@ -4610,9 +4609,7 @@ public final class Environment implements Scope {
 					throw new LispEvalException(LispNames.SUBSEQ + ": invalid bounds " + start + ", " + end
 							+ " for vector of length " + len);
 				}
-				long[] copy = new long[end - start];
-				System.arraycopy(iv.data(), start, copy, 0, copy.length);
-				return new LispIntVector(iv.width(), copy);
+				return iv.copyOfRange(start, end);
 			}
 			if (args.get(0) instanceof LispFloatArray fa && fa.rank() == 1) {
 				// Type-preserving, the packed-float twin of the LispIntVector arm above:
@@ -4644,7 +4641,7 @@ public final class Environment implements Scope {
 				return new LispString(str.value());
 			}
 			if (args.get(0) instanceof LispIntVector iv) {
-				return new LispIntVector(iv.width(), iv.data().clone());
+				return iv.copy();
 			}
 			if (args.get(0) instanceof LispCons || args.get(0) instanceof LispNil) {
 				List<LispVal> elements = new ArrayList<>();
@@ -7766,8 +7763,7 @@ public final class Environment implements Scope {
 		env.defineFunction(octetsToString, new LispFunction(octetsToString, args -> {
 			requireArgCount(LispNames.OCTETS_TO_STRING_INTERNAL, args, 1);
 			LispIntVector v = asOctetVector(LispNames.OCTETS_TO_STRING_INTERNAL, args.get(0));
-			String strict = decodeUtf8Strict(v);
-			return new LispString(strict != null ? strict : decodeUtf8Leniently(v));
+			return LispString.wrapCodePoints(decodeUtf8CodePoints(v));
 		}));
 		// %octets-to-string-packed: the NATIVE half, on every backend, so the prelude's
 		// lenient definition hands a packed octet vector -- every HTTP body -- to native
@@ -7783,8 +7779,7 @@ public final class Environment implements Scope {
 			if (!(args.get(0) instanceof LispIntVector v) || v.width() != 8) {
 				return LispNil.INSTANCE;
 			}
-			String strict = decodeUtf8Strict(v);
-			return new LispString(strict != null ? strict : decodeUtf8Leniently(v));
+			return LispString.wrapCodePoints(decodeUtf8CodePoints(v));
 		}));
 		env.defineFunction(LispNames.CONSTANTP, new LispFunction(LispNames.CONSTANTP, args -> {
 			requireMinArgCount(LispNames.CONSTANTP, args, 1);
@@ -7854,6 +7849,16 @@ public final class Environment implements Scope {
 				LispString into = targetStr.sourceLiteral() ? targetStr.copyForBulkWrite() : targetStr;
 				into.replaceInPlace(start1, s2, start2, copied);
 				return into;
+			}
+			if (target instanceof LispIntVector targetIv && source instanceof LispIntVector sourceIv && copied > 0
+					&& start1 >= 0 && start2 >= 0 && start1 + copied <= targetIv.length()
+					&& start2 + copied <= sourceIv.length()) {
+				// Packed into packed: one block copy, masked to the target's width, and
+				// overlap-safe exactly as CLHS reads a shared region (as if copied
+				// first) -- not a boxed integer per element, which is what
+				// %octets-join's blit of a whole HTTP body used to cost.
+				LispIntVector.copy(sourceIv, start2, targetIv, start1, copied);
+				return targetIv;
 			}
 			// All three destructive arms below read the source the same way, so one
 			// cursor serves them all: a list source is walked once rather than indexed
@@ -7933,6 +7938,10 @@ public final class Environment implements Scope {
 			}
 			if (target instanceof LispIntVector targetIv) {
 				long masked = exactIntElement(LispNames.FILL, item);
+				if (0 <= start && start <= end && end <= targetIv.length()) {
+					targetIv.fill(start, end, masked);
+					return targetIv;
+				}
 				for (int k = start; k < end; k++) {
 					targetIv.setElement(k, masked);
 				}
@@ -9928,89 +9937,122 @@ public final class Environment implements Scope {
 		}
 		if (seq instanceof LispArray arr && arr.dimensions().length == 1) {
 			int len = arr.effectiveLength();
-			long[] data = new long[len];
+			LispIntVector octets = LispIntVector.zeros(8, len);
 			for (int i = 0; i < len; i++) {
-				data[i] = exactIntElement(fn, arr.readFlat(i));
+				octets.setElement(i, exactIntElement(fn, arr.readFlat(i)));
 			}
-			return new LispIntVector(8, data);
+			return octets;
 		}
 		throw new LispEvalException(fn + " expects an (unsigned-byte 8) vector, got: " + seq.print());
 	}
 
 	/**
-	 * The lenient UTF-8 decode of an {@code (unsigned-byte 8)} vector, arm for arm the
-	 * prelude's {@code rontolisp::%octets-to-string}: a byte that leads no valid
-	 * sequence, a sequence the vector truncates, and one that assembles a code point
-	 * outside the Unicode range answer their own characters, so malformed input never
-	 * signals. The malformed half -- {@link #decodeUtf8Strict} takes every well-formed
-	 * input before this runs.
+	 * The lenient UTF-8 decode of an {@code (unsigned-byte 8)} vector as the CODE POINTS
+	 * of the string it spells, arm for arm the prelude's
+	 * {@code rontolisp::%octets-to-string}: a byte that leads no valid sequence, a
+	 * sequence the vector truncates, and one that assembles a code point outside the
+	 * Unicode range answer their own characters, so malformed input never signals. On
+	 * valid UTF-8 every arm answers what a strict decoder answers, so there is no second,
+	 * strict pass.
+	 *
+	 * <p>
+	 * The octets are counted first and decoded into a buffer of exactly that many code
+	 * points, which the caller wraps as the string's own buffer: the decode of an
+	 * {@code n}-octet body allocates the {@code 4 * chars} bytes of the result and
+	 * nothing else. It used to copy the octets into a {@code byte[]}, run the platform
+	 * decoder into a {@code CharBuffer} (and, for malformed input, a
+	 * {@code StringBuilder}), then re-scan the {@code String} into code points -- five
+	 * body-sized intermediates, half of a 256 MiB {@code read-all}'s peak
+	 * ({@code .kb/fetch-http.md}, "Throughput").
 	 * @param v the octets
-	 * @return the decoded string
+	 * @return the decoded code points
 	 */
-	static String decodeUtf8Leniently(LispIntVector v) {
+	static int[] decodeUtf8CodePoints(LispIntVector v) {
 		int n = v.length();
-		StringBuilder out = new StringBuilder(n);
+		if (v.width() != 8) {
+			// Out of contract (the decoder takes octets), kept to the element-wise rule
+			// the Lisp loop spells: each element is what its arm reads it as.
+			return decodeWideElements(v);
+		}
+		byte[] octets = v.octets();
+		int count = 0;
+		for (int i = 0; i < n; count++) {
+			i += utf8Unit(octets, i, n) >>> UNIT_LENGTH_SHIFT;
+		}
+		int[] codePoints = new int[count];
+		for (int i = 0, k = 0; i < n; k++) {
+			int unit = utf8Unit(octets, i, n);
+			codePoints[k] = unit & UNIT_CODE_POINT_MASK;
+			i += unit >>> UNIT_LENGTH_SHIFT;
+		}
+		return codePoints;
+	}
+
+	private static final int UNIT_LENGTH_SHIFT = 21;
+
+	private static final int UNIT_CODE_POINT_MASK = (1 << UNIT_LENGTH_SHIFT) - 1;
+
+	// The lenient unit that starts at octets[i]: its code point in the low 21 bits, its
+	// length in octets (1-4) above them.
+	private static int utf8Unit(byte[] octets, int i, int n) {
+		int b = octets[i] & 0xFF;
+		if (b >= 0xC0) {
+			if (b < 0xE0) {
+				if (i + 1 < n) {
+					return (2 << UNIT_LENGTH_SHIFT) | ((b & 0x1F) << 6) | (octets[i + 1] & 0x3F);
+				}
+			}
+			else if (b < 0xF0) {
+				if (i + 2 < n) {
+					return (3 << UNIT_LENGTH_SHIFT) | ((b & 0x0F) << 12) | ((octets[i + 1] & 0x3F) << 6)
+							| (octets[i + 2] & 0x3F);
+				}
+			}
+			else if (b < 0xF8 && i + 3 < n) {
+				int cp = ((b & 0x07) << 18) | ((octets[i + 1] & 0x3F) << 12) | ((octets[i + 2] & 0x3F) << 6)
+						| (octets[i + 3] & 0x3F);
+				if (cp <= Character.MAX_CODE_POINT) {
+					return (4 << UNIT_LENGTH_SHIFT) | cp;
+				}
+			}
+		}
+		// ASCII, a byte that leads nothing, or a lead its sequence does not follow: the
+		// byte is its own character.
+		return (1 << UNIT_LENGTH_SHIFT) | b;
+	}
+
+	// The same arms over a 16- or 32-bit vector's elements, which an octet decoder was
+	// never meant to see: an element read as a byte past its own range keeps the
+	// UTF-16 unit its low bits spell, as the decoder always answered it.
+	private static int[] decodeWideElements(LispIntVector v) {
+		int n = v.length();
+		int[] out = new int[n];
+		int k = 0;
 		int i = 0;
 		while (i < n) {
 			int b = (int) v.elementAt(i);
 			int b1 = i + 1 < n ? (int) v.elementAt(i + 1) : -1;
 			int b2 = i + 2 < n ? (int) v.elementAt(i + 2) : -1;
 			int b3 = i + 3 < n ? (int) v.elementAt(i + 3) : -1;
-			if (b < 0x80) {
-				out.append((char) b);
-				i += 1;
-			}
-			else if (b >= 0xC0 && b < 0xE0 && b1 >= 0) {
-				out.appendCodePoint(((b & 0x1F) << 6) | (b1 & 0x3F));
+			int cp4 = ((b & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F);
+			if (b >= 0xC0 && b < 0xE0 && b1 >= 0) {
+				out[k++] = ((b & 0x1F) << 6) | (b1 & 0x3F);
 				i += 2;
 			}
 			else if (b >= 0xE0 && b < 0xF0 && b1 >= 0 && b2 >= 0) {
-				out.appendCodePoint(((b & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F));
+				out[k++] = ((b & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F);
 				i += 3;
 			}
-			else if (b >= 0xF0 && b < 0xF8 && b1 >= 0 && b2 >= 0 && b3 >= 0 && Character
-				.isValidCodePoint(((b & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F))) {
-				out.appendCodePoint(((b & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F));
+			else if (b >= 0xF0 && b < 0xF8 && b1 >= 0 && b2 >= 0 && b3 >= 0 && cp4 <= Character.MAX_CODE_POINT) {
+				out[k++] = cp4;
 				i += 4;
 			}
 			else {
-				out.append((char) b);
+				out[k++] = (char) b;
 				i += 1;
 			}
 		}
-		return out.toString();
-	}
-
-	/**
-	 * The STRICT UTF-8 decode of an {@code (unsigned-byte 8)} vector: the string its
-	 * bytes spell when they are valid UTF-8, {@code null} when they are not. The fast
-	 * half of {@code rontolisp::%octets-to-string} -- the platform decoder answers a
-	 * well-formed body without the per-byte walk, and only bytes it refuses reach
-	 * {@link #decodeUtf8Leniently}. A vector of any other element width answers
-	 * {@code null} too: the fast path is a fast path, and the general loop stays the one
-	 * that has to handle everything.
-	 * @param v the octets
-	 * @return the decoded string, or {@code null} when the bytes are not valid UTF-8
-	 */
-	@Nullable static String decodeUtf8Strict(LispIntVector v) {
-		if (v.width() != 8) {
-			return null;
-		}
-		long[] data = v.data();
-		byte[] bytes = new byte[data.length];
-		for (int i = 0; i < data.length; i++) {
-			bytes[i] = (byte) data[i];
-		}
-		try {
-			// REPORT is CharsetDecoder's default for both malformed input and
-			// unmappable characters, so a byte sequence UTF-8 does not spell raises
-			// rather than turning into U+FFFD -- which is the whole question being
-			// asked here.
-			return StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString();
-		}
-		catch (CharacterCodingException ex) {
-			return null;
-		}
+		return java.util.Arrays.copyOf(out, k);
 	}
 
 }
