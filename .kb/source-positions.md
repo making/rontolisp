@@ -114,9 +114,10 @@ lines of [error-handling.md](error-handling.md)); no message ever gets a prefix,
   rewrites reach `SourceProvenance.inherit`, so they stay located; `SchemeLowering.positioned`
   records its ANSWER (the located copy) in the reader's own offset map too, which syntax
   errors are positioned from. A `syntax-rules` expansion is positioned at its USE.
-- The `evalCons` locals carry the FUNCTION the frame runs for (`frameFunction`, set only by a
-  `LispLambda.sourced` lambda), not the lambda it is in: a tail call into an anonymous lambda
-  keeps the caller ([error-handling.md](error-handling.md), "Which function").
+- The function a located form reports is the one it is WRITTEN in, read off the scope it is
+  evaluated in (`Environment.lexicalFunction`: set by a `LispLambda.sourced` function's call scope
+  and a macro expander's, inherited by every other scope, a closure's included), never off the
+  frames around it ([error-handling.md](error-handling.md), "Which function").
 
 ## Phase 5 — the JVM backend's location lines
 The compile path's table reaches the JVM emitter: `codegen/jvm/JvmSourceSites` numbers each

@@ -329,43 +329,54 @@ the one `princ` writes, and nothing below changes it.
 
 **Under it, location lines** (`UncaughtReport.atLine` / `asyncLine`, two-space indented):
 `  at FILE:LINE in FUNCTION` -- the innermost form read from a named file that the condition passed
-through and the innermost of the PROGRAM'S named functions holding it -- then one
+through and the PROGRAM'S named function that form is written in -- then one
 `  in NAME (async), awaited at FILE:LINE` per async boundary crossed. Nothing known (a `-e`
 program, only macro-built forms) prints none. **The interpreter and the JVM backend print the same
 lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints them only under
 `--report-locations` (below, "Location lines on wasm-GC").
-- **Which function** (both backends): only a named function whose body was read from a named file
-  (`LispLambda.sourced`; `JvmSourceSites.sourced`) -- a library function a user callback runs
-  under is never named (`%run-handlers` around a `handler-bind` handler, `%sort-runtime` around a
-  sort predicate). A location found only in a caller is never attributed to the callee, and an
-  anonymous lambda defers to the named function around it -- DYNAMICALLY: a frame keeps the
-  program function it entered across a tail call into an anonymous lambda or a library function
-  (`frameFunction` in `evalCons`), since that code still runs for it and the JVM still has its
-  frame. Before 2026-09-26 an `flet` helper or a callback called in tail position lost its
-  caller, and `handler-bind` handlers reported `%RUN-HANDLERS`. A lowering's internal name is
-  reported as the program spelled it (`UncaughtReport.functionName`): a method body is its
-  generic (`%AREA--m0` -> `AREA`), a `%top-defun$` rename its original.
+- **Which function: LEXICAL** (every backend) -- the named function whose text holds the form. A
+  form in an anonymous lambda (a callback, an `flet`/`labels` helper, a `handler-bind` handler, a
+  sort predicate) belongs to the function the lambda is written in, whoever calls it; one at the
+  top level, or in an async body (its hop line names the async function), to none. Only a
+  function whose body was read from a named file is named (`LispLambda.sourced`,
+  `JvmSourceSites.sourced`), so a library function a callback runs under never is. The answer is
+  a property of the FORM, so no backend's tail calls, inlining or threads can change it -- the
+  reason it is lexical. Until 2026-09-26 it was the named function DYNAMICALLY around the form,
+  which each backend approximated from the frames it still had: the interpreter lost the caller
+  on a tail call (then kept it, `frameFunction`), the JVM never lost it, and a wasm-GC
+  `return_call` left it -- one program named three different functions, and a callback written
+  in MAIN but run by RUN-CALLBACK printed `at <a line of MAIN> in RUN-CALLBACK`. A lowering's
+  internal name is reported as the program spelled it (`UncaughtReport.functionName`): a method
+  body is its generic (`%AREA--m0` -> `AREA`), a `%top-defun$` rename its original, a nested
+  `defun` its own name (`UncaughtReport.nestedDefun`).
 - **Interpreter -- recorded on the throw path only** (`eval/ConditionTrace`, on
   `LispEvalException.trace()`): `evalCons` keeps the innermost `LocatedCons` it stepped onto and
-  the function it was in then (a type test and two stores per loop step;
-  [source-positions.md](source-positions.md) Phase 4) and hands them over from the catch clauses
-  it already had.
+  the lexical function of the scope it stepped onto it in (a type test and two stores per loop
+  step; [source-positions.md](source-positions.md) Phase 4) and hands them over from the catch
+  clauses it already had; the first frame with a located form decides both. The function is a
+  field of the scope (`Environment.lexicalFunction`): a program function's call scope and a macro
+  expander's set it, every other scope -- a closure's included -- inherits it from its parent. A
+  form `eval` runs is in the null lexical environment, so it names none.
 - **Interpreter async**: `evalCons` runs `%async-run` itself (`runAsync`), naming the async
-  function from its own frame -- the body's virtual thread never sees the defun. A condition
-  escaping the thunk closes segment 0 (`crossedAsync`), so the awaiter's frames are not attributed
-  to it; the first located form after that is the `await`.
+  function from its own frame -- the body's virtual thread never sees the defun -- and runs the
+  thunk under a scope of no function (`asyncBody`). A condition escaping the thunk closes segment
+  0 (`crossedAsync`), so the awaiter's frames are not attributed to it; the first located form
+  after that is the `await`.
 - **JVM -- read off the stack trace** (`codegen/jvm/JvmSourceSites`, `JvmUncaughtHandler`): every
   method the program's own source compiled into carries a `LineNumberTable` whose numbers are SITE
   ids -- (file, line, function) in a table the class carries as string constants -- not lines: a
   method holds several files' forms (a top-level chunk, a macro handing back a form of its own
   file) and a class names one `SourceFile`. `Ctx.enterSite`/`leaveSite` around every form
   (`JvmExprCompiler.compileCons`, the statement `setq`/`let`, the fused `if`/`while` test) mark
-  where the innermost located form changes; a named function's methods open on its BASE site, so
-  a frame stopped anywhere in them names it; a tail-spine item carries the site current where it
-  was queued (`JvmBodyOutliner.Entry` -- the construct that queued it has returned by then), and a
-  `_k$N` continuation inherits its method's. `_where` walks the exception's trace: the innermost
-  frame of this class (or a `$PartN`) at a located site, then the first named site from there
-  out. The positions are `SourceProvenance`'s, the same forms the interpreter's reader locates.
+  where the innermost located form changes; a site's function is its method's `writtenIn` -- a
+  lambda's method takes that of the method that built it (`LambdaInfo.writtenIn`), an async thunk
+  none; a tail-spine item carries the site current where it was queued (`JvmBodyOutliner.Entry`
+  -- the construct that queued it has returned by then), and a `_k$N` continuation inherits its
+  method's. `_where` walks the exception's trace: the innermost frame of this class (or a
+  `$PartN`) at a site gives the location and, from the same site, the function. The positions are
+  `SourceProvenance`'s, the same forms the interpreter's reader locates. (A function's methods
+  used to open on a BASE site naming it, for the dynamic rule's outward search; the lexical one
+  needs none, 4 bytes a method.)
 - **JVM async**: the `%async-run` thunk's last exception entry appends a made-up frame
   `rontolisp/async.crossed(HEAD)` to the escaping exception's trace (`_asyncCross`; `/` is in no
   binary name), and the first `_await` that rethrows it appends its OWN frames after it
@@ -385,8 +396,8 @@ lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints 
   survive every pass after emission: `BranchRelaxer` remaps them, `JvmClassShaker`,
   `JvmClassSplitter` and `StackMapAugmenter` carry the attribute (no instruction moves there).
 - **Cost, measured 2026-09-26**: +1.5-2 KB per class (`_where` and its constants; ~1 KB gzip)
-  plus ~7 bytes per located line (examples/console +1.5-1.9 KB; `llm.lisp` 1.10 MB +12.6 KB,
-  1.1%); a fused tree that needs its own method ~200 B. Zero at run time until a condition
+  plus ~7 bytes per located line (examples/console +1.46-1.79 KB; `llm.lisp` 1.04 MB +12.6 KB,
+  1.2%); a fused tree that needs its own method ~200 B. Zero at run time until a condition
   escapes.
 - **Harness decisions, per suite**: `ci-spec.yaml`'s `standalone:` compares expected stderr lines
   as CONTAINED, in order (wasmtime prints around ours), so the location lines need no change there
@@ -457,9 +468,10 @@ never knew about it.** `codegen/wasm/WasmUncaughtLocations`; pinned by
 - **The note is keyed by payload IDENTITY** (a global holding the payload it describes): a
   condition a `handler-case` caught cannot leak into a later report, and a rethrow (unmatched
   clause, `await` re-signalling a rejected future -- both rethrow the same payload) keeps the
-  inner frames' note. Rules = `ConditionTrace`'s: first frame with a line gives the location; the
-  first NAMED frame from there the function; an async body (a hop text in the frame) freezes the
-  function and appends a hop whose await site is the next frame with a line.
+  inner frames' note. Rules = `ConditionTrace`'s: the first frame with a line gives the location
+  and, by its own name, the function (a lambda's frame is named after the function it is written
+  in, `Ctx.ucWrittenIn`; a nested `defun`'s after itself); an async body (a hop text in the
+  frame) appends a hop whose await site is the next frame with a line.
 - **Texts ride with their frame**: the name and hop text are unspelled string literals built in the
   frame's own landing (`compileUnspelledLiteral`: a spelled one would arm the dispatch gate), so
   the shaker drops them with the frame. The name is the program's spelling
@@ -480,11 +492,22 @@ never knew about it.** `codegen/wasm/WasmUncaughtLocations`; pinned by
   macro-written one, a signal helper) it is a plain `call`, or the call site and its function were
   lost. Disabling tail calls in frames outright was the first version and broke the
   `.kb/wasm-tail-calls.md` invariant a Scheme loop depends on (named `let` overflowed).
-- **Known divergence** (open item): an error inside a `labels`/`flet` local function reports its
-  own form's line on both, since the interpreter's expansion now keeps those positions too
-  ([source-positions.md](source-positions.md), Half 2). A tail call through a function value stays
-  a `return_call`, so the caller's frame is gone when the callee signals, where the interpreter and
-  the JVM keep the caller (`frameFunction`).
+- **Known divergences** (open item), from 82 programs of the JVM parity corpus with a catching
+  form appended (2026-09-26, Linux, wasmtime 49); the others' location lines matched the
+  interpreter's byte for byte:
+  - A tail call through a function value stays a `return_call`, so a callee that is no frame (a
+    built-in: `(funcall f x)` into `parse-integer`) leaves the location to the frames further out
+    -- the line that called the caller, not its `funcall`. A lambda callee is a frame and names
+    the function it is written in, so only this location moves.
+  - A `handler-bind` handler's condition is located at the `handler-bind` form, not the
+    handler's own form; a fused or inlined arithmetic tree reports its caller's or its first line
+    (`(sq a)` inlined into F says `in F`).
+  - Preview 1 runs an async body at its call: the hop's await site is the CALL's line when the
+    `await` is on another one, and a body whose tail call enters another frame leaves before its
+    hop is noted, so the hop line is missing. `--component` matches the interpreter in both.
+  - A future's condition re-signalled by a second `await` after a handler caught the first:
+    `--component` names the second await, the interpreter and the JVM the first (their hop is
+    recorded once per crossing).
 
 Cost, measured 2026-09-26 (wasmtime 49.0.0, node 24, macOS arm64):
 

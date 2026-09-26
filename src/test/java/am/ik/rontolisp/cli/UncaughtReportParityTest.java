@@ -34,10 +34,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code java -jar} are {@link RontoLispCliStreamsTest}'s {@code anUncaught*} cases.
  *
  * <p>
- * The programs are the shapes where the two used to part: a tail call replacing the
- * interpreter's frame (an {@code flet} helper, an inline lambda, a callback), a lowering
- * that rebuilt forms and dropped their positions ({@code labels}, a user macro, a method
- * body), a library function a user callback runs under, and the async boundaries.
+ * The programs are the shapes where the two used to part: a lambda run by a tail call or
+ * by another function (an {@code flet} helper, an inline lambda, a callback -- each
+ * reports the function it is WRITTEN in), a lowering that rebuilt forms and dropped their
+ * positions ({@code labels}, a user macro, a method body), a library function a user
+ * callback runs under, and the async boundaries.
  */
 @Execution(ExecutionMode.CONCURRENT)
 class UncaughtReportParityTest {
@@ -49,7 +50,7 @@ class UncaughtReportParityTest {
 	}
 
 	@Test
-	void anFletHelperCalledInTailPositionReportsTheFunctionThatCalledIt() throws Exception {
+	void anFletHelperCalledInTailPositionReportsTheFunctionItIsWrittenIn() throws Exception {
 		Path program = write("flet.lisp", """
 				(defun f (x)
 				  (flet ((helper (y)
@@ -77,7 +78,7 @@ class UncaughtReportParityTest {
 	}
 
 	@Test
-	void anInlineLambdaAndACallbackInTailPositionReportTheFunctionAroundThem() throws Exception {
+	void aLambdaReportsTheFunctionItIsWrittenInWhateverCallsIt() throws Exception {
 		Path inline = write("inline.lisp", """
 				(defun f ()
 				  ((lambda (x)
@@ -87,7 +88,23 @@ class UncaughtReportParityTest {
 				(f)
 				""");
 		assertSameReport(inline, "Unhandled condition: inline 7", "  at " + inline + ":3 in F");
+		// RUN-CALLBACK calls it, in tail position -- a frame a wasm-GC tail call leaves
+		// --
+		// but it is written in MAIN.
 		Path callback = write("callback.lisp", """
+				(defun run-callback (cb)
+				  (funcall cb))
+
+				(defun main ()
+				  (run-callback (lambda ()
+				                  (error "callback failed")))
+				  :done)
+
+				(main)
+				""");
+		assertSameReport(callback, "Unhandled condition: callback failed", "  at " + callback + ":6 in MAIN");
+		// Written at the top level, it is no function's code, whoever called it.
+		Path topLevel = write("top-level-callback.lisp", """
 				(defvar *cb* (lambda ()
 				               (error "callback failed")))
 
@@ -96,7 +113,7 @@ class UncaughtReportParityTest {
 
 				(run-callback *cb*)
 				""");
-		assertSameReport(callback, "Unhandled condition: callback failed", "  at " + callback + ":2 in RUN-CALLBACK");
+		assertSameReport(topLevel, "Unhandled condition: callback failed", "  at " + topLevel + ":2");
 	}
 
 	@Test

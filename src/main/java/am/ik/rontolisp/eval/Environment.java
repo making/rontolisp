@@ -458,12 +458,39 @@ public final class Environment implements Scope {
 	@Nullable private Environment blockOwner;
 
 	/**
+	 * The name the program function this scope's code is WRITTEN in was defined under, or
+	 * {@code null} outside every one (the top level, an async body): what the uncaught
+	 * report's location line names ({@code ConditionTrace}). Lexical, so it follows the
+	 * scope chain a closure keeps: a child scope inherits it, a program function's call
+	 * scope and a macro expander's scope set their own.
+	 */
+	@Nullable private String lexicalFunction;
+
+	/**
 	 * Create a new environment with the given parent scope.
 	 * @param parent the parent environment, or {@code null} for a top-level scope
 	 */
 	public Environment(@Nullable Environment parent) {
 		this.parent = parent;
 		this.mvSpill = parent == null ? new ValueCountRegister() : parent.mvSpill;
+		this.lexicalFunction = parent == null ? null : parent.lexicalFunction;
+	}
+
+	/**
+	 * The program function this scope's code is written in; see {@link #lexicalFunction}.
+	 * @return the name it was defined under, or {@code null}
+	 */
+	@Nullable String lexicalFunction() {
+		return this.lexicalFunction;
+	}
+
+	/**
+	 * Makes this freshly created scope the start of a program function's code (a call
+	 * scope, a macro expander's), or of code in none (an async body).
+	 * @param name the name the function was defined under, or {@code null}
+	 */
+	void lexicalFunction(@Nullable String name) {
+		this.lexicalFunction = name;
 	}
 
 	/**

@@ -41,10 +41,11 @@ import org.jspecify.annotations.Nullable;
  * line numbers, no table and no report code: the bytes it always had.
  *
  * <p>
- * <b>A function is named only when its body was read from a named file</b>
- * ({@link #sourced}) -- the same rule the interpreter's report applies, so a library
- * function a user callback runs under ({@code %sort-runtime} here, a Java built-in there)
- * never takes the attribution from the user function around it.
+ * <b>A site's function is the one its form is WRITTEN in</b> -- a lambda's forms belong
+ * to the function around the lambda, whatever calls it -- and only a function whose body
+ * was read from a named file ({@link #sourced}) owns sites: the rule the interpreter's
+ * report applies, so the answer is the same on both however a tail call or an inlining
+ * moved the frames.
  */
 final class JvmSourceSites {
 
@@ -70,10 +71,10 @@ final class JvmSourceSites {
 	/**
 	 * One site: indexes into {@link #names} (0: none) and a line.
 	 *
-	 * @param file the form's file, or 0 for a function's base site
-	 * @param line the form's 1-based line, or 0 for a base site
-	 * @param owner the function whose body holds the form, or 0 for the top level and an
-	 * anonymous function
+	 * @param file the form's file
+	 * @param line the form's 1-based line
+	 * @param owner the program function the form is written in -- a lambda's forms are
+	 * the function's around it -- or 0 for none (the top level, an async body)
 	 */
 	private record Site(int file, int line, int owner) {
 	}
@@ -113,9 +114,9 @@ final class JvmSourceSites {
 	}
 
 	/**
-	 * The owner code of a function, for {@link #site} and {@link #base}.
-	 * @param function the name the report calls it by, or {@code null} for the top level
-	 * and an anonymous function
+	 * The owner code of a function, for {@link #site}.
+	 * @param function the name the report calls it by, or {@code null} for code written
+	 * in none
 	 * @return the code; 0 for {@code null}
 	 */
 	int owner(@Nullable String function) {
@@ -142,17 +143,6 @@ final class JvmSourceSites {
 	}
 
 	/**
-	 * The site every instruction of a named function's methods reports outside its
-	 * located forms: no file or line, only the function -- so a frame stopped in a
-	 * prologue, or in code a macro built, still says which function it is.
-	 * @param owner the function's owner code
-	 * @return its id, or 0 for owner 0 (and when the table is full)
-	 */
-	int base(int owner) {
-		return owner == 0 ? 0 : this.id(new Site(0, 0, owner));
-	}
-
-	/**
 	 * @return whether no site was numbered -- the compile located nothing, and the class
 	 * must come out as it would have without this table
 	 */
@@ -162,8 +152,8 @@ final class JvmSourceSites {
 
 	/**
 	 * The site table as the report reads it: three chars per site, in id order -- the
-	 * file's name index (0 for a base site), the line, and the function's name index (0
-	 * for none) -- cut into pieces that each fit one constant.
+	 * file's name index, the line, and the function's name index (0 for none) -- cut into
+	 * pieces that each fit one constant.
 	 * @return the pieces, to be concatenated in order
 	 */
 	List<String> tableChunks() {

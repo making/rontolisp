@@ -1,5 +1,9 @@
 package am.ik.rontolisp.compiler;
 
+import am.ik.rontolisp.LambdaLists;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.LispMacroExpander;
 
 import org.jspecify.annotations.Nullable;
@@ -22,13 +26,15 @@ import org.jspecify.annotations.Nullable;
  * changes -- it is the condition's {@code princ} text, which {@code handler-case},
  * {@code format nil "~a"} and every pinned output read -- and the location follows it as
  * indented lines ({@link #atLine}, {@link #asyncLine}): the innermost form read from a
- * named file that the condition passed through and the named function enclosing it, then
- * one line per asynchronous boundary it crossed. A condition with nothing known (a
- * {@code -e} program, a form a macro built) prints no location line. The interpreter and
- * the JVM backend print the same ones -- the JVM backend reads them off the stack trace
- * ({@code codegen.jvm.JvmUncaughtHandler}), which is why the function named is the
- * program's own ({@link #functionName}) and a frame keeps the function it entered across
- * a tail call; the wasm-GC backends print the report line alone.
+ * named file that the condition passed through and the program function that form is
+ * WRITTEN in (a lambda's forms are the function's around it), then one line per
+ * asynchronous boundary it crossed. A condition with nothing known (a {@code -e} program,
+ * a form a macro built) prints no location line. The interpreter and the JVM backend
+ * print the same ones -- the JVM backend reads them off the stack trace
+ * ({@code codegen.jvm.JvmUncaughtHandler}) -- and so does a wasm-GC module compiled with
+ * {@code --report-locations}. The function is a property of the form, never of the frames
+ * around it, so no backend's tail calls or inlining can change it; each names it as the
+ * program spelled it ({@link #functionName}).
  *
  * <p>
  * <b>Why not the JVM stack trace.</b> The trace names the interpreter's own frames, not
@@ -121,6 +127,34 @@ public final class UncaughtReport {
 	public static String functionName(String defined) {
 		String generic = LispMacroExpander.genericOfMethodFunction(defined);
 		return generic != null ? generic : NestedDefunRedefinition.originalName(defined);
+	}
+
+	/**
+	 * A non-top-level {@code defun}'s lowering, {@code (setq name (lambda ...))}: the
+	 * lambda it installs and the name it installs it under -- a function the report
+	 * names, as the interpreter installs a nested defun as a named function.
+	 *
+	 * @param lambda the lambda form
+	 * @param name the name it is defined under (a {@code setf} function's included)
+	 */
+	public record NestedDefun(LispCons lambda, String name) {
+	}
+
+	/**
+	 * The lambda and name of a nested {@code defun}'s lowering; see {@link NestedDefun}.
+	 * @param lowered what {@code LispMacroExpander.expandDefun} answered for it
+	 * @return the pair, or {@code null} for any other shape
+	 */
+	public static @Nullable NestedDefun nestedDefun(LispVal lowered) {
+		if (!(lowered instanceof LispCons setq && setq.cdr() instanceof LispCons nameCell
+				&& nameCell.cdr() instanceof LispCons lambdaCell && lambdaCell.car() instanceof LispCons lambda)) {
+			return null;
+		}
+		LispSymbol setfPlace = LambdaLists.setfFunctionPlaceName(nameCell.car());
+		if (setfPlace != null) {
+			return new NestedDefun(lambda, LispMacroExpander.setfFunctionName(setfPlace.name()));
+		}
+		return nameCell.car() instanceof LispSymbol symbol ? new NestedDefun(lambda, symbol.name()) : null;
 	}
 
 	/**

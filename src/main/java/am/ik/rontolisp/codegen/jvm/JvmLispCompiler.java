@@ -2298,7 +2298,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		for (DefunDecl defun : defuns) {
 			Ctx funcCtx = ctxBuilder.build();
 			funcCtx.evalStoreRef = evalStoreRef;
-			funcCtx.openFunction(JvmSourceSites.reportedName(defun.name), defun.bodyExprs);
+			funcCtx.openFunction(JvmSourceSites.reportedName(defun.name), null, defun.bodyExprs);
 			funcCtx.nextLocal = defun.paramNames.size();
 			funcCtx.maxLocals = defun.paramNames.size();
 			for (int i = 0; i < defun.paramNames.size(); i++) {
@@ -2540,7 +2540,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			lambdaCtx.evalStoreRef = evalStoreRef;
 			lambdaCtx.openFunction(
 					lambda.reportName() == null ? null : JvmSourceSites.reportedName(lambda.reportName()),
-					lambda.bodyExprs());
+					lambda.writtenIn(), lambda.bodyExprs());
 			lambdaCtx.closureEnvSlot = 0; // slot 0 = env Object[]
 			// Lambda params start at slot 1
 			for (int i = 0; i < lambda.paramNames.size(); i++) {
@@ -5328,7 +5328,6 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	/**
 	 * A lambda awaiting Pass 2c.
-	 *
 	 * @param funcId its function id
 	 * @param methodName its method's name
 	 * @param paramNames its parameters
@@ -5342,8 +5341,17 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * {@code %async-run} thunk of ({@link JvmUncaughtHandler#appendAsyncCrossing}), or
 	 * {@code null}
 	 */
+	/**
+	 * A lambda Pass 2c compiles into a method of its own.
+	 *
+	 * @param reportName the name a non-top-level defun installs it under, or {@code null}
+	 * @param asyncHead the report head of an {@code %async-run} thunk, or {@code null}
+	 * @param writtenIn the name the report calls the program function its code is written
+	 * in, or {@code null} for none (the top level, an async body)
+	 */
 	record LambdaInfo(int funcId, String methodName, List<String> paramNames, boolean variadic, List<LispVal> bodyExprs,
-			List<String> freeVarNames, @Nullable String reportName, @Nullable String asyncHead) {
+			List<String> freeVarNames, @Nullable String reportName, @Nullable String asyncHead,
+			@Nullable String writtenIn) {
 	}
 
 	record DispatchMethod(Utf8Constant nameUtf8, Utf8Constant descUtf8, List<Integer> code, int maxLocals) {
@@ -6723,6 +6731,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		@Nullable String functionName;
 
 		/**
+		 * The name the report calls the program function this method's code is written in
+		 * -- its own for a function, the one around it for a lambda -- or {@code null}
+		 * for none (the top level, an async body): the owner of its sites, and what a
+		 * lambda it builds is written in ({@link LambdaInfo#writtenIn}).
+		 */
+		@Nullable String writtenIn;
+
+		/**
 		 * The report names of lambda forms a non-top-level defun lowered to, by identity;
 		 * shared per compilation ({@link LambdaInfo#reportName}).
 		 */
@@ -6734,18 +6750,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		final Map<LispCons, String> asyncBodyHeads;
 
-		/** The owner code ({@link JvmSourceSites#owner}) of this method's function. */
+		/** The owner code ({@link JvmSourceSites#owner}) of {@link #writtenIn}. */
 		int siteOwner;
 
 		/**
-		 * The site this method reports outside every located form: its function's base
-		 * site ({@link JvmSourceSites#base}), or 0 for the top level and an anonymous
-		 * function.
-		 */
-		int siteBase;
-
-		/**
-		 * The site of the innermost located form being emitted, else {@link #siteBase}.
+		 * The site of the innermost located form being emitted, else 0.
 		 */
 		int siteCurrent;
 
@@ -6928,47 +6937,35 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		/**
-		 * Opens this method's sites: what it emits from here on belongs to the function
-		 * {@code owner} names and reports {@code base} outside its located forms.
-		 * @param owner the function's owner code
-		 * @param base its base site, or 0
-		 */
-		void openSites(int owner, int base) {
-			this.siteOwner = owner;
-			this.siteBase = base;
-			this.siteCurrent = base;
-			if (base != 0) {
-				this.siteMarks.add(new int[] { this.code.size(), base });
-			}
-		}
-
-		/**
-		 * Opens the method of a function: its name for an async body's report head, and
-		 * -- when the function is the program's own code ({@link JvmSourceSites#sourced})
-		 * -- the sites that name it in the uncaught report.
+		 * Opens the method of a function or a lambda: its name for an async body's report
+		 * head, and the program function its code is written in, which owns its sites.
 		 * @param name the name the report calls the function by, or {@code null} for an
 		 * anonymous function
+		 * @param around for an anonymous function, the name of the function it is written
+		 * in ({@link #writtenIn}), else ignored
 		 * @param body its body forms
 		 */
-		void openFunction(@Nullable String name, List<LispVal> body) {
+		void openFunction(@Nullable String name, @Nullable String around, List<LispVal> body) {
 			this.functionName = name;
+			this.writtenIn = name != null ? name : around;
 			JvmSourceSites table = this.sites;
-			if (table != null && name != null && JvmSourceSites.sourced(body)) {
-				int owner = table.owner(name);
-				this.openSites(owner, table.base(owner));
+			String owner = this.writtenIn;
+			// Only a body that holds a located form has a site to own.
+			if (table != null && owner != null && JvmSourceSites.sourced(body)) {
+				this.siteOwner = table.owner(owner);
 			}
 		}
 
 		/**
 		 * Opens a continuation's sites ({@link JvmBodyOutliner}): the method it was split
-		 * from continues here, so the function, its base site and the innermost located
-		 * form open at the split carry over.
+		 * from continues here, so the function and the innermost located form open at the
+		 * split carry over.
 		 * @param from the method the continuation was split from
 		 */
 		void continueFunction(Ctx from) {
 			this.functionName = from.functionName;
+			this.writtenIn = from.writtenIn;
 			this.siteOwner = from.siteOwner;
-			this.siteBase = from.siteBase;
 			this.siteCurrent = from.siteCurrent;
 			if (this.siteCurrent != 0) {
 				this.siteMarks.add(new int[] { this.code.size(), this.siteCurrent });

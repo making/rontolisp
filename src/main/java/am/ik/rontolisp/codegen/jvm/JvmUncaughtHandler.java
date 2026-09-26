@@ -132,19 +132,17 @@ final class JvmUncaughtHandler {
 
 	private static final int FUNCTION = 7;
 
-	private static final int DECIDED = 8;
+	private static final int FRAME = 8;
 
-	private static final int FRAME = 9;
+	private static final int FRAME_CLASS = 9;
 
-	private static final int FRAME_CLASS = 10;
+	private static final int SITE = 10;
 
-	private static final int SITE = 11;
+	private static final int SITE_BASE = 11;
 
-	private static final int SITE_BASE = 12;
+	private static final int HEAD = 12;
 
-	private static final int HEAD = 13;
-
-	private static final int AWAITED = 14;
+	private static final int AWAITED = 13;
 
 	private JvmUncaughtHandler() {
 	}
@@ -351,11 +349,11 @@ final class JvmUncaughtHandler {
 	/**
 	 * Builds {@code _where(Throwable)V}: the location lines under the report, printed to
 	 * standard error. Segment 0 is the trace up to the first async boundary: its
-	 * innermost frame at a located site gives {@code at FILE:LINE}, and the first frame
-	 * from there out whose site names a function gives {@code in FUNCTION}. Each boundary
-	 * then gives one {@code in NAME (async)} line, with {@code awaited at} the first
-	 * located site among the frames the await appended. The whole body sits in a
-	 * catch-all: the lines are a courtesy, and nothing in them may mask the condition.
+	 * innermost frame at a site gives {@code at FILE:LINE} and, from the same site, the
+	 * function the form is written in, {@code in FUNCTION}. Each boundary then gives one
+	 * {@code in NAME (async)} line, with {@code awaited at} the first site among the
+	 * frames the await appended. The whole body sits in a catch-all: the lines are a
+	 * courtesy, and nothing in them may mask the condition.
 	 * @param cp the class's pool
 	 * @param className the class's internal name
 	 * @param sites the compilation's site table, not empty
@@ -407,30 +405,20 @@ final class JvmUncaughtHandler {
 		a.istore(LOCATION);
 		a.aconstNull();
 		a.astore(FUNCTION);
-		a.iconst(0);
-		a.istore(DECIDED);
 
-		// Segment 0: the frames up to the first async boundary.
+		// Segment 0: the frames up to the first async boundary. The innermost frame at a
+		// site is the location, and the site's own function the one it is written in;
+		// the frames past it only lead to the boundary.
 		int segmentLoop = a.label();
 		int segmentEnd = a.label();
 		int segmentNext = a.label();
 		a.bind(segmentLoop);
 		emitNextFrame(a, s, r, segmentEnd);
-		emitSiteOf(a, s, r, segmentNext);
-		// the location: the innermost located site
-		int located = a.label();
 		a.iload(LOCATION);
-		a.branch(Opcode.IFNE, located);
-		a.aload(TABLE);
-		a.iload(SITE_BASE);
-		a.invokevirtual(charAt);
-		a.branch(Opcode.IFEQ, segmentNext);
+		a.branch(Opcode.IFNE, segmentNext);
+		emitSiteOf(a, s, r, segmentNext);
 		a.iload(SITE);
 		a.istore(LOCATION);
-		a.bind(located);
-		// the function: the first named site from the location out
-		a.iload(DECIDED);
-		a.branch(Opcode.IFNE, segmentNext);
 		a.aload(TABLE);
 		a.iload(SITE_BASE);
 		a.iconst(2);
@@ -443,8 +431,6 @@ final class JvmUncaughtHandler {
 		a.iload(SITE);
 		a.aaload();
 		a.astore(FUNCTION);
-		a.iconst(1);
-		a.istore(DECIDED);
 		a.bind(segmentNext);
 		a.iinc(INDEX, 1);
 		a.branch(Opcode.GOTO, segmentLoop);
@@ -492,10 +478,6 @@ final class JvmUncaughtHandler {
 		a.iload(AWAITED);
 		a.branch(Opcode.IFNE, hopNext);
 		emitSiteOf(a, s, r, hopNext);
-		a.aload(TABLE);
-		a.iload(SITE_BASE);
-		a.invokevirtual(charAt);
-		a.branch(Opcode.IFEQ, hopNext);
 		a.iload(SITE);
 		a.istore(AWAITED);
 		a.bind(hopNext);

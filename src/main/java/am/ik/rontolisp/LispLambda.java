@@ -20,9 +20,9 @@ import org.jspecify.annotations.Nullable;
  * built-in and both compiled backends emit from their function-name table -- while an
  * anonymous one keeps {@code #<lambda>}
  * @param sourced whether this is a named function whose body holds a form read from a
- * named file -- the program's own code, which the uncaught-condition report may name as
- * the function a condition happened in. A function a library defines is not: a report
- * names the program's function that called it, the way every compiled backend's does
+ * named file -- the program's own code, which the uncaught-condition report names for the
+ * forms written in it, its lambdas' included. A function a library defines is not, so it
+ * is never the one named, as on every compiled backend
  */
 public record LispLambda(List<LispSymbol> params, @Nullable LispSymbol rest, List<LispVal> body, Scope closure,
 		@Nullable String name, boolean sourced) implements LispVal {

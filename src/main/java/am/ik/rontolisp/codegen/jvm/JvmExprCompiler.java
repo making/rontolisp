@@ -26,6 +26,7 @@ import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.MutableStringProducers;
 import am.ik.rontolisp.compiler.OpenModes;
 import am.ik.rontolisp.compiler.StreamDesignators;
+import am.ik.rontolisp.compiler.UncaughtReport;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
@@ -381,16 +382,9 @@ final class JvmExprCompiler {
 	 */
 	private static void compileNestedDefun(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		LispVal lowered = LispMacroExpander.expandDefun(cons);
-		if (lowered instanceof LispCons setq && setq.cdr() instanceof LispCons nameCell
-				&& nameCell.cdr() instanceof LispCons lambdaCell && lambdaCell.car() instanceof LispCons lambda) {
-			String name = nameCell.car() instanceof LispSymbol symbol ? symbol.name() : null;
-			am.ik.rontolisp.LispSymbol setfPlace = am.ik.rontolisp.LambdaLists.setfFunctionPlaceName(nameCell.car());
-			if (setfPlace != null) {
-				name = LispMacroExpander.setfFunctionName(setfPlace.name());
-			}
-			if (name != null) {
-				ctx.lambdaReportNames.put(lambda, name);
-			}
+		UncaughtReport.NestedDefun nested = UncaughtReport.nestedDefun(lowered);
+		if (nested != null) {
+			ctx.lambdaReportNames.put(nested.lambda(), nested.name());
 		}
 		compileExpr(lowered, ctx, className);
 	}
