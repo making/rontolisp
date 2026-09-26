@@ -177,7 +177,7 @@ public record JavaSite(Operator operator, @Nullable String staticClass, @Nullabl
 			return switch ((JavaKind.Lisp) kind) {
 				case NIL -> "nil";
 				case T -> "t";
-				case INTEGER -> "an integer";
+				case INTEGER, BIGNUM -> "an integer";
 				case FLOAT -> "a float";
 				case STRING, STRING_1 -> "a string";
 				case CHAR, SUPPLEMENTARY_CHAR -> "a character";

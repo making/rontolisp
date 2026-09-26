@@ -438,6 +438,13 @@ class JavaInteropTest {
 		assertThat(output(JavaInteropPrograms.HOST_OBJECT_PROGRAM)).isEqualTo(JavaInteropPrograms.HOST_OBJECT_OUTPUT);
 	}
 
+	// Mirrors JvmJavaInteropCompilerTest#specializedVectorsAndBignumsAreMarshalled.
+	@Test
+	void specializedVectorsAndBignumsAreMarshalled() {
+		assertThat(output(JavaInteropPrograms.SPECIALIZED_AND_BIGNUM_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.SPECIALIZED_AND_BIGNUM_OUTPUT);
+	}
+
 	// Mirrors JvmJavaInteropCompilerTest#aHostCollectionIsNoLispArrayOrTable.
 	@Test
 	void aHostCollectionIsNoLispArrayOrTable() {

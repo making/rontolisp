@@ -175,7 +175,7 @@ public final class JavaInteropPrograms {
 			java:call expects a java object as the first argument, got 1.0e10
 			"1.0E10"
 			java:call expects a java object as the first argument, got 1267650600228229401496703205376
-			No matching method java.util.Objects.toString with 1 argument(s)
+			"1267650600228229401496703205376"
 			java:call expects a java object as the first argument, got 1/3
 			No matching method java.util.Objects.toString with 1 argument(s)
 			java:call expects a java object as the first argument, got #C(1 2)
@@ -185,7 +185,7 @@ public final class JavaInteropPrograms {
 			java:call expects a java object as the first argument, got #()
 			"[]"
 			java:call expects a java object as the first argument, got #d(1.0 1.0)
-			No matching method java.util.Objects.toString with 1 argument(s)
+			"[1.0, 1.0]"
 			java:call expects a java object as the first argument, got #<HASH-TABLE :TEST EQUAL :COUNT 0>
 			No matching method java.util.Objects.toString with 1 argument(s)
 			java:call expects a java object as the first argument, got #(1 2)
@@ -194,6 +194,78 @@ public final class JavaInteropPrograms {
 			java:static: argument 1 is not a java.util.LinkedHashMap, got #<HASH-TABLE :TEST EQUAL :COUNT 0>
 			(123456789012345678901234567890 123456789012345678901234567891 5 T T 1 2)
 			java:call expects a java object as the first argument, got 5""";
+
+	/**
+	 * Specialized vectors and bignums as arguments, at a dispatched site ({@code ts},
+	 * {@code val}), at a site left to run time (the class name in a variable: the
+	 * compiled program's bridge) and at resolved ones: every rank-1 packed float and
+	 * integer vector converts element-wise like a general vector, a rank-2 one does not;
+	 * a bignum is a {@code BigInteger} (or a supertype of one), a fixnum reaches a
+	 * {@code BigInteger} parameter, a ratio and a bignum where a {@code double} is
+	 * expected match nothing. Prints {@link #SPECIALIZED_AND_BIGNUM_OUTPUT}.
+	 */
+	public static final String SPECIALIZED_AND_BIGNUM_PROGRAM = """
+			(defvar *arrays* "java.util.Arrays")
+			(defvar *string* "java.lang.String")
+			(defun ts (x) (java:static "java.util.Arrays" "toString" x))
+			(defun ts* (x) (java:static *arrays* "toString" x))
+			(defun val (x) (java:static "java.lang.String" "valueOf" x))
+			(defun val* (x) (java:static *string* "valueOf" x))
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(dolist (x (list (make-array 3 :element-type 'double-float :initial-contents '(1d0 2d0 3.5d0))
+			                 (make-array 2 :element-type 'single-float :initial-contents '(1.5 -2.0))
+			                 #f(6.0)
+			                 (make-array 2 :element-type 'bfloat16 :initial-contents '(1.5 -2.0))
+			                 (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 200 255))
+			                 (make-array 2 :element-type '(unsigned-byte 16) :initial-contents '(7 65535))
+			                 (make-array 2 :element-type '(unsigned-byte 32) :initial-contents '(9 65536))))
+			  (row (lambda () (list (ts x) (ts* x) (val x) (val* x)))))
+			(dolist (x (list (make-array '(2 2) :element-type 'double-float :initial-element 0d0)
+			                 (expt 2 100) (- (expt 2 64)) 1/3))
+			  (row (lambda () (ts x)))
+			  (row (lambda () (ts* x)))
+			  (row (lambda () (list (val x) (val* x)))))
+			(row (lambda () (java:call (java:new "java.math.BigDecimal" 5 2) "toString")))
+			(row (lambda () (java:call (java:new "java.math.BigDecimal" (expt 10 20) 3) "toString")))
+			(row (lambda () (java:static "java.lang.String" "valueOf" 1267650600228229401496703205376)))
+			(row (lambda () (java:static "java.util.Objects" "equals" (expt 2 100) (expt 2 100))))
+			(row (lambda () (+ 1 (java:call (java:new "java.math.BigDecimal" (expt 2 100) 0) "toBigInteger"))))
+			(row (lambda () (java:static "java.lang.Math" "sqrt" (expt 2 100))))
+			(row (lambda () (java:call (java:static "java.util.List" "of" (expt 2 100) 1) "toString")))
+			(row (lambda () (list (ts (list 1 (expt 2 100))) (ts* (vector (expt 2 100))))))
+			""";
+
+	/** What {@link #SPECIALIZED_AND_BIGNUM_PROGRAM} prints. */
+	public static final String SPECIALIZED_AND_BIGNUM_OUTPUT = """
+			("[1.0, 2.0, 3.5]" "[1.0, 2.0, 3.5]" "[1.0, 2.0, 3.5]" "[1.0, 2.0, 3.5]")
+			("[1.5, -2.0]" "[1.5, -2.0]" "[1.5, -2.0]" "[1.5, -2.0]")
+			("[6.0]" "[6.0]" "[6.0]" "[6.0]")
+			("[1.5, -2.0]" "[1.5, -2.0]" "[1.5, -2.0]" "[1.5, -2.0]")
+			("[1, 200, 255]" "[1, 200, 255]" "[1, 200, 255]" "[1, 200, 255]")
+			("[7, 65535]" "[7, 65535]" "[7, 65535]" "[7, 65535]")
+			("[9, 65536]" "[9, 65536]" "[9, 65536]" "[9, 65536]")
+			No matching method java.util.Arrays.toString with 1 argument(s)
+			No matching method java.util.Arrays.toString with 1 argument(s)
+			No matching method java.lang.String.valueOf with 1 argument(s)
+			No matching method java.util.Arrays.toString with 1 argument(s)
+			No matching method java.util.Arrays.toString with 1 argument(s)
+			("1267650600228229401496703205376" "1267650600228229401496703205376")
+			No matching method java.util.Arrays.toString with 1 argument(s)
+			No matching method java.util.Arrays.toString with 1 argument(s)
+			("-18446744073709551616" "-18446744073709551616")
+			No matching method java.util.Arrays.toString with 1 argument(s)
+			No matching method java.util.Arrays.toString with 1 argument(s)
+			No matching method java.lang.String.valueOf with 1 argument(s)
+			"0.05"
+			"100000000000000000.000"
+			"1267650600228229401496703205376"
+			T
+			1267650600228229401496703205377
+			No matching method java.lang.Math.sqrt with 1 argument(s)
+			"[1267650600228229401496703205376, 1]"
+			("[1, 1267650600228229401496703205376]" "[1267650600228229401496703205376]")""";
 
 	private JavaInteropPrograms() {
 	}

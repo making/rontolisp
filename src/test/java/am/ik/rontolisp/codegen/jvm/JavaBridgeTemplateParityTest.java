@@ -54,6 +54,10 @@ class JavaBridgeTemplateParityTest {
 		return new Arg(JavaKind.Lisp.INTEGER, v);
 	}
 
+	private static Arg bignum(BigInteger v) {
+		return new Arg(JavaKind.Lisp.BIGNUM, v);
+	}
+
 	private static Arg real(double v) {
 		return new Arg(JavaKind.Lisp.FLOAT, v);
 	}
@@ -118,7 +122,17 @@ class JavaBridgeTemplateParityTest {
 				new Object[] { StringBuilder.class, "insert", List.of(integer(0), string("x")) },
 				new Object[] { java.util.ArrayList.class, "remove", List.of(integer(1)) },
 				new Object[] { java.util.Collection.class, "remove", List.of(integer(1)) },
-				new Object[] { java.util.ArrayList.class, "add", List.of(integer(0), integer(42)) });
+				new Object[] { java.util.ArrayList.class, "add", List.of(integer(0), integer(42)) },
+				new Object[] { String.class, "valueOf", List.of(bignum(BigInteger.TWO.pow(100))) },
+				new Object[] { java.util.Objects.class, "equals",
+						List.of(bignum(BigInteger.TWO.pow(100)), integer(1)) },
+				new Object[] { java.util.List.class, "of", List.of(bignum(BigInteger.TWO.pow(64)), integer(1)) },
+				new Object[] { BigInteger.class, "add", List.of(integer(5)) },
+				new Object[] { BigInteger.class, "add", List.of(bignum(BigInteger.TWO.pow(64))) },
+				new Object[] { BigInteger.class, "pow", List.of(integer(5)) },
+				new Object[] { BigDecimal.class, "valueOf", List.of(integer(5)) },
+				new Object[] { Math.class, "sqrt", List.of(bignum(BigInteger.TWO.pow(64))) },
+				new Object[] { Math.class, "max", List.of(bignum(BigInteger.TWO.pow(64)), integer(1)) });
 		int checked = 0;
 		for (Object[] row : corpus) {
 			Class<?> type = (Class<?>) row[0];
@@ -137,7 +151,7 @@ class JavaBridgeTemplateParityTest {
 			assertThat(template[2]).as("%s packs the same way", what).isEqualTo(shared.packed());
 			checked++;
 		}
-		assertThat(checked).isGreaterThan(35);
+		assertThat(checked).isGreaterThan(42);
 	}
 
 	// A covariant variant is never chosen over the method it overrides: both copies pick
@@ -255,6 +269,63 @@ class JavaBridgeTemplateParityTest {
 				assertThat(jhost.invoke(null, value)).as("_jhost %s", value).isEqualTo(true);
 				assertThat(invoke("isJavaObject", new Class<?>[] { Object.class }, value)).as("bridge %s", value)
 					.isEqualTo(true);
+			}
+		}
+	}
+
+	// A specialized vector reaches a site as the same elements whichever copy reads it:
+	// the bridge's packedElements and the _jseq a dispatched site calls, over every
+	// packed shape -- the rank-1 ones as aref reads them, a rank-2 array and a quantized
+	// matrix (a byte[] whose slot 0 is its format code) as no sequence.
+	@Test
+	void theBridgeAndADirectSiteReadASpecializedVectorAlike(@TempDir Path dir) throws Exception {
+		JvmLispCompiler compiler = new JvmLispCompiler("PackedTest");
+		byte[] bytes = compiler.compile(LispReader.readAllFromString("""
+				(defvar *c* "java.util.Arrays")
+				(defun ts (x) (java:static "java.util.Arrays" "toString" x))
+				(defun ts* (x) (java:static *c* "toString" x))
+				(print (ts (make-array 1 :element-type 'bfloat16)))
+				(print (ts* (make-array 1 :element-type '(unsigned-byte 8))))
+				"""));
+		Files.write(dir.resolve("PackedTest.class"), bytes);
+		for (Map.Entry<String, byte[]> file : compiler.runtimeClassFiles().entrySet()) {
+			Path target = dir.resolve(file.getKey());
+			Files.createDirectories(target.getParent());
+			Files.write(target, file.getValue());
+		}
+		short oneAndAHalf = (short) (Float.floatToRawIntBits(1.5f) >>> 16);
+		short nan = (short) 0x7f81;
+		List<Object> values = List.of(new double[] { 1, 2, 1.5, -2 }, new float[] { 1, 1, 6 },
+				new short[] { 1, 0, 2, oneAndAHalf, nan }, new long[] { 16, 7, 65535 },
+				new byte[] { 8, 1, (byte) 200, (byte) 255 }, new double[] { 2, 1, 1, 0 }, new byte[] { 1, 0, 0 });
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> program = loader.loadClass("PackedTest");
+			Method jseq = program.getDeclaredMethod(JvmJavaDirectSites.SEQUENCE, Object.class);
+			jseq.setAccessible(true);
+			invoke("bind", new Class<?>[] { Class.class }, program);
+			try {
+				List<@Nullable List<?>> direct = new ArrayList<>();
+				List<@Nullable Object> bridge = new ArrayList<>();
+				for (Object value : values) {
+					Object[] elements = (Object[]) jseq.invoke(null, value);
+					direct.add(elements == null ? null : Arrays.asList(elements));
+					bridge.add(invoke("packedElements", new Class<?>[] { Object.class }, value));
+				}
+				assertThat(bridge).isEqualTo(direct);
+				assertThat(direct).containsExactly(List.of(1.5, -2.0), List.of(6.0),
+						List.of(1.5, am.ik.rontolisp.BFloat16.value(nan)), List.of(7L, 65535L), List.of(1L, 200L, 255L),
+						null, null);
+				assertThat(Double.doubleToRawLongBits((Double) Objects.requireNonNull(direct.get(2)).get(1)))
+					.isEqualTo(Double.doubleToRawLongBits(am.ik.rontolisp.BFloat16.value(nan)));
+			}
+			finally {
+				// The template class is this JVM's: leave it unbound for the other tests.
+				for (String field : List.of("applyMethod", "strvMethod", "lispToStringMethod", "bf16ValueMethod")) {
+					Field f = JavaBridgeTemplate.class.getDeclaredField(field);
+					f.setAccessible(true);
+					f.set(null, null);
+				}
 			}
 		}
 	}

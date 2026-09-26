@@ -41,6 +41,9 @@ public final class JavaOverloads {
 	/** This argument cannot become this type. */
 	public static final int NO_MATCH = -1;
 
+	/** The class a bignum is, and a fixnum may become. */
+	private static final String BIG_INTEGER = "java.math.BigInteger";
+
 	/** A tag type that matches any parameter type. */
 	public static final String WILDCARD = "_";
 
@@ -366,6 +369,14 @@ public final class JavaOverloads {
 				yield assignableFrom(target, "java.lang.Boolean", lookup) ? COST_BOXED : NO_MATCH;
 			}
 			case INTEGER -> integerCost(target, name, lookup);
+			// A bignum is a BigInteger: that class, or a supertype of it. It converts to
+			// no primitive or box -- none holds it -- and never silently to a double.
+			case BIGNUM -> {
+				if (BIG_INTEGER.equals(name)) {
+					yield COST_EXACT;
+				}
+				yield assignableFrom(target, BIG_INTEGER, lookup) ? COST_BOXED : NO_MATCH;
+			}
 			case FLOAT -> floatCost(target, name, lookup);
 			case STRING, STRING_1 -> {
 				if (assignableFrom(target, "java.lang.String", lookup)) {
@@ -401,6 +412,9 @@ public final class JavaOverloads {
 			case "java.lang.Integer", "long", "java.lang.Long" -> COST_WIDEN;
 			case "double", "java.lang.Double", "float", "java.lang.Float" -> COST_CONVERT;
 			case "short", "java.lang.Short", "byte", "java.lang.Byte" -> COST_NARROW;
+			// Lossless, but no primitive: ties with double, which the signature order
+			// prefers.
+			case BIG_INTEGER -> COST_CONVERT;
 			default ->
 				assignableFrom(target, "java.lang.Long", lookup) || assignableFrom(target, "java.lang.Integer", lookup)
 						? COST_BOXED : NO_MATCH;

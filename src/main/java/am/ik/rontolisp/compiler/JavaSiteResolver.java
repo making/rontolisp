@@ -5,6 +5,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
@@ -111,7 +112,7 @@ public final class JavaSiteResolver {
 	 * member declared with that type answers ({@link JavaStaticType#ofDeclared}).
 	 */
 	private static final List<String> KIND_SPELLINGS = List.of("void", "int", "double", "char", "java.lang.Long",
-			"java.lang.Double", "java.lang.Character", "boolean", "java.lang.String");
+			"java.lang.Double", "java.lang.Character", "boolean", "java.lang.String", "java.math.BigInteger");
 
 	/**
 	 * What a {@code java:object} type specifier says about a value.
@@ -713,6 +714,9 @@ public final class JavaSiteResolver {
 			case LispInteger ignored -> {
 				return kinds(JavaKind.Lisp.INTEGER);
 			}
+			case LispBigInteger ignored -> {
+				return kinds(JavaKind.Lisp.BIGNUM);
+			}
 			case LispDouble ignored -> {
 				return kinds(JavaKind.Lisp.FLOAT);
 			}
@@ -757,7 +761,8 @@ public final class JavaSiteResolver {
 			case LispNames.QUOTE -> {
 				if (parts.size() == 2) {
 					LispVal quoted = parts.get(1);
-					if (quoted instanceof LispInteger || quoted instanceof LispDouble || quoted instanceof LispString
+					if (quoted instanceof LispInteger || quoted instanceof LispBigInteger
+							|| quoted instanceof LispDouble || quoted instanceof LispString
 							|| quoted instanceof LispChar || quoted instanceof LispNil || quoted instanceof LispTrue) {
 						return typeOf(quoted);
 					}

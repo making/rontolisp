@@ -974,6 +974,17 @@ class JvmJavaInteropCompilerTest {
 			.isEqualTo(JavaInteropPrograms.HOST_OBJECT_OUTPUT);
 	}
 
+	// A packed float / integer vector -- a bare double[] / float[] / short[] / long[] /
+	// byte[] with its header in the compiled program -- converts element-wise like a
+	// general vector at a dispatched site and at the bridge, and a bignum is a
+	// BigInteger argument, as interpreted (JavaInteropTest has the twin). Before, both
+	// matched no parameter on either backend.
+	@Test
+	void specializedVectorsAndBignumsAreMarshalled() throws Exception {
+		assertThat(compileAndRunThroughFrontEnd(JavaInteropPrograms.SPECIALIZED_AND_BIGNUM_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.SPECIALIZED_AND_BIGNUM_OUTPUT);
+	}
+
 	// A host ArrayList / LinkedHashMap is told from a Lisp array / hash table by the
 	// program's shared header / order-key test, not by its class: every type predicate,
 	// type-of, a method dispatch and every printer entry answer as interpreted. Before,
