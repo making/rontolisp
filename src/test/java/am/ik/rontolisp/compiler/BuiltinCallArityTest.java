@@ -36,8 +36,11 @@ class BuiltinCallArityTest {
 
 	@Test
 	void theStandardLambdaListWidensAWrapperThatIsNarrowerThanItsOperator() {
-		// #'< is binary (a sort predicate is a two-argument call); (< a b c) is legal.
-		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.LT, 3)).isNull();
+		// #'< takes (a b &rest r), so a sort predicate's call conses nothing; (< a) is
+		// legal in call position.
+		assertThat(wrapperShape(lambdaList(LispNames.LT)))
+			.isEqualTo(new BuiltinCallArity.Shape(2, BuiltinCallArity.UNBOUNDED));
+		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.LT, 1)).isNull();
 		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.LT, 0))
 			.isEqualTo("< expects at least 1 argument, got 0");
 		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.GETHASH, 3)).isNull();
@@ -45,6 +48,22 @@ class BuiltinCallArityTest {
 			.isEqualTo("GETHASH expects at most 3 arguments, got 4");
 		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.LOGAND, 0)).isNull();
 		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.GENSYM, 1)).isNull();
+	}
+
+	@Test
+	void theFunctionValueTakesTheOperatorsOptionalAndKeywordArguments() {
+		assertThat(wrapperShape(lambdaList(LispNames.GETHASH))).isEqualTo(new BuiltinCallArity.Shape(2, 3));
+		assertThat(wrapperShape(lambdaList(LispNames.GENSYM))).isEqualTo(new BuiltinCallArity.Shape(0, 1));
+		assertThat(wrapperShape(lambdaList(LispNames.TYPEP))).isEqualTo(new BuiltinCallArity.Shape(2, 3));
+		assertThat(wrapperShape(lambdaList(LispNames.STRING_UPCASE)))
+			.isEqualTo(new BuiltinCallArity.Shape(1, BuiltinCallArity.UNBOUNDED));
+		assertThat(wrapperShape(lambdaList(LispNames.ADJUST_ARRAY)))
+			.isEqualTo(new BuiltinCallArity.Shape(2, BuiltinCallArity.UNBOUNDED));
+		assertThat(wrapperShape(lambdaList(LispNames.READ_CHAR_NO_HANG))).isEqualTo(new BuiltinCallArity.Shape(0, 4));
+	}
+
+	private static LispVal lambdaList(String name) {
+		return ((LispCons) ((LispCons) Objects.requireNonNull(BuiltinFunctionWrappers.lambdaFor(name))).cdr()).car();
 	}
 
 	@Test

@@ -1307,19 +1307,37 @@ final class JvmExprCompiler {
 				// arrives here with its (already evaluated) argument.
 				JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
 			case LispNames.STRING_UPCASE -> {
-				JvmStringUpcaseCompiler.compileUpcase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx,
-						className);
-				JvmArrayCompiler.emitToMutStr(ctx, className);
+				LispVal bounded = LispMacroExpander.expandBoundedCaseConversion(cons);
+				if (bounded != null) {
+					JvmExprCompiler.compileExpr(bounded, ctx, className);
+				}
+				else {
+					JvmStringUpcaseCompiler.compileUpcase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx,
+							className);
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
 			}
 			case LispNames.STRING_DOWNCASE -> {
-				JvmStringUpcaseCompiler.compileDowncase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx,
-						className);
-				JvmArrayCompiler.emitToMutStr(ctx, className);
+				LispVal bounded = LispMacroExpander.expandBoundedCaseConversion(cons);
+				if (bounded != null) {
+					JvmExprCompiler.compileExpr(bounded, ctx, className);
+				}
+				else {
+					JvmStringUpcaseCompiler.compileDowncase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1),
+							ctx, className);
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
 			}
 			case LispNames.STRING_CAPITALIZE -> {
-				JvmStringCapitalizeCompiler.compile(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx,
-						className);
-				JvmArrayCompiler.emitToMutStr(ctx, className);
+				LispVal bounded = LispMacroExpander.expandBoundedCaseConversion(cons);
+				if (bounded != null) {
+					JvmExprCompiler.compileExpr(bounded, ctx, className);
+				}
+				else {
+					JvmStringCapitalizeCompiler.compile(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx,
+							className);
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
 			}
 			case LispNames.SUBSEQ, LispNames.SUBSEQ_CORE -> JvmSubseqCompiler.compile(cons, ctx, className);
 			case LispNames.CHAR, LispNames.SCHAR -> JvmCharCompiler.compileChar(cons, ctx, className);

@@ -82,9 +82,11 @@ twins, `LispEvaluatorTest.theListAccessorsFuncallAndReduceReportAWrongArgumentCo
   arity used to be the number of forms `_eval` evaluated, padding with nil and dropping the
   surplus: `(car 1 2)` raised a type-error on `1`, `(cons 1)` answered `(1)`.
 - **`= < > <= >= /=` chain in `_eval`** (`comparisonChain` / `emitComparisonChain`): their wrappers
-  stay binary, since a sort predicate is a two-argument call and a variadic wrapper would cons a
-  rest list per comparison, so the arm evaluates every argument and tests adjacent pairs (every
-  pair for `/=`) through the binary wrapper. Without it the first bullet would have turned the old
+  take `(a b &rest r)`, not `(a &rest r)`, since a sort predicate is a two-argument call and a
+  one-required wrapper would cons a rest list per comparison ([error-handling.md](error-handling.md),
+  "A built-in's function VALUE"), so the arm evaluates every argument and tests adjacent pairs
+  (every pair for `/=`) through the wrapper's two-argument call -- which is also what serves
+  `(eval '(< 1))`. Without it the first bullet would have turned the old
   "extra arguments ignored" (`(< 1 3 2)` => T) into a count error. `(<)` reports `< expects at
   least 1 argument` through `_arityChk` with the operator's shape; on wasm the shape carries the
   `<` wrapper's funcId when it is in the named set, and the call traps where the module reports

@@ -1582,11 +1582,10 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     (2026-09-26) found ~240 such "wrong-count" conses; the ones inspected were binding lists,
     lambda lists and clauses, and the test suite's compiles warned on none of them.
   - The SHAPE is the catalog wrapper's lambda list widened by `BuiltinCallArity.STANDARD_WIDER`
-    to the operator's standard lambda list wherever the wrapper is narrower: `#'<` is binary (a
-    sort predicate), `(< 1 2 3)` is legal; likewise `gethash` 2..3, `logand` 0.., `char=` 1..,
-    `string-upcase` 1.. (keywords count as unbounded; the keyword-tail check stays the
-    operator's), `rontolisp:widen-float-bits` 3... A row that is not wider than its wrapper fails
-    the class initialization, so widening a wrapper retires its row.
+    to the operator's standard lambda list wherever the wrapper is still narrower (keywords count
+    as unbounded; the keyword-tail check stays the operator's). A row that is not wider than its
+    wrapper fails the class initialization, so widening a wrapper retires its row. What is left
+    is the next bullet's.
   - A name the program defines itself (a `defun` of a cl name, a spliced library defun such as
     wait.lisp's `sleep`) keeps its own call path: `ctx.userDefunNames` on the compiled backends, a
     `LispLambda` global binding in the interpreter.
@@ -1615,6 +1614,53 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     `LENGTH expects 1 argument, got 2` everywhere (the function-value path said `Function` on
     both compiled backends, the direct call failed the compile). `ShadowedBuiltins` now keeps the
     rewritten call's source position, so the warning has one.
+- **A built-in's function VALUE takes the operator's standard lambda list** (2026-09-26).
+  `(funcall #'string-upcase s :start 1)`, `(apply #'gethash k h '(d))`, `(funcall #'typep x 'y
+  env)` answer what the call position answers, on all four backends: the wrapper forwards its
+  optional and keyword arguments to the call-position lowering. Pinned by ci-spec
+  `builtin-function-values-take-the-standard-lambda-list`, `BuiltinCallArityTest`,
+  `LispEvaluatorTest` / `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest`
+  `...BuiltinFunctionValuesTakeTheStandardLambdaList`. `STANDARD_WIDER` had 43 rows; 24 are
+  gone, and the 16 comparison and bitwise wrappers widened as far as the next bullets allow.
+  What it took:
+  - An absent keyword gets the value the lowering would have used (`make-string`'s space,
+    `adjust-array`'s old fill pointer and `%array-default-element`); where presence itself picks
+    the expansion, the wrapper decides at run time. `adjust-array` picks displaced vs not at run
+    time, and contents vs element INSIDE one expansion through the internal keyword
+    `LispMacroExpander.ADJUST_CONTENTS_P_KEYWORD`, so the element-copy loop is not carried twice.
+  - Two DIRECT calls were wrong too, and are fixed with them: `(string-upcase s :start a :end b)`
+    dropped the keywords unevaluated on JVM/wasm (answered `"ABC"` for `"abc" :start 1`) and was
+    a count error in the interpreter -- now `LispMacroExpander.expandBoundedCaseConversion` (the
+    bounded substring converted, the rest kept) and `Environment.boundedCaseConversion`; and
+    `typep` / `upgraded-complex-part-type` with an environment failed the JVM/wasm COMPILE --
+    now `withEnvironmentEvaluated` evaluates it and drops it.
+  - `#'file-position` with a computed position reaches `_fileLength` (`:end`), so
+    `filePositionMayNeedLength` counts a `(function file-position)`; without it the JVM
+    self-call check refused the class.
+  - `gethash` / `intern` had a second, full-width `VALUE_SHAPES` wrapper for a program that names
+    them as designators; the catalog wrapper is that shape now and the map is gone (the
+    second-value publishing stays designator-gated).
+  - **What stays narrower**, as rows: the comparisons (`= < > <= >= /=`, the seven `char`
+    ones) and `logand` / `logior` / `logxor` take `(a b &rest r)`, not `(a &rest r)` / `(&rest
+    r)`, so `(funcall #'< 1)` and `(funcall #'logand)` report a wrong count on the compiled
+    backends while the interpreter's Java built-ins answer `T` / `-1`. Measured: a rest list is
+    consed on EVERY call of a variadic callee, and on wasmtime (49.0) that is expensive once the
+    heap is large -- sorting 200,000 fixnums ten times through a variable predicate took 21.7 s
+    with `(a &rest r)` against 2.4 s with `(a b)` and 1.5 s with `(a b &rest r)`; `(reduce #'+
+    data)` over a million fixnums (the `(&rest r)` wrapper) ran 5.5 s against 1.5 s for the
+    binary `#'logior`. The JVM showed no difference. The one-argument call is the price of the
+    two-argument call's speed until a call can pass an optional argument without consing.
+  - Also still rows: `make-broadcast-stream` with components (the wrapper is the sink, and the
+    Gray class it would need is gated on the program's own spelling), `read-from-string`'s
+    optional and keyword arguments (unsupported in call position too; `.todo/214`) and
+    `write-to-string`'s keywords (they bind printer variables whose runtime is gated on a scan
+    that cannot see a wrapper).
+  - Size (JVM `.class` / wasm Preview 1 bytes): `(print (eval '(+ 1 2)))` 329,075 -> 355,089 /
+    255,334 -> 262,266, under `handler-case` 462,614 -> 493,358 / 387,082 -> 410,908 -- the eval
+    registry carries every wrapper; of it `adjust-array` ~10 KB (its `:initial-contents` fill,
+    a runtime element type, is ~8 KB), the case conversions ~3.5 KB, the fourteen comparisons
+    ~5 KB. `(print (sort (list 3 1 2) #'<))` 33,039 -> 33,256 / 23,156 -> 23,158. A program that
+    takes none of them as a value is unchanged (`(print (+ 1 2))` 6,024 / 348).
 - **Inside a compiled `eval`** (2026-09-26) the same reports hold: the runtime evaluates every
   argument form of a registered function and the spread case judges the count, `apply` is a
   catalog wrapper, an eval-built closure without a `&` marker is checked, and the operators

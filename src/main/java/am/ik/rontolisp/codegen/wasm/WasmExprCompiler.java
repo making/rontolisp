@@ -1659,8 +1659,15 @@ final class WasmExprCompiler {
 				// arrives here with its (already evaluated) argument.
 				WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
 			case LispNames.STRING_UPCASE -> {
-				WasmStringUpcaseCompiler.compileUpcase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx);
-				WasmEmitHelper.emitToMutStrCall(ctx);
+				LispVal bounded = LispMacroExpander.expandBoundedCaseConversion(cons);
+				if (bounded != null) {
+					WasmExprCompiler.compileExpr(bounded, ctx);
+				}
+				else {
+					WasmStringUpcaseCompiler.compileUpcase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1),
+							ctx);
+					WasmEmitHelper.emitToMutStrCall(ctx);
+				}
 			}
 			default -> {
 				return false;
@@ -1681,12 +1688,25 @@ final class WasmExprCompiler {
 	private static boolean compileOperator3(LispSymbol sym, LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		switch (sym.name()) {
 			case LispNames.STRING_DOWNCASE -> {
-				WasmStringUpcaseCompiler.compileDowncase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx);
-				WasmEmitHelper.emitToMutStrCall(ctx);
+				LispVal bounded = LispMacroExpander.expandBoundedCaseConversion(cons);
+				if (bounded != null) {
+					WasmExprCompiler.compileExpr(bounded, ctx);
+				}
+				else {
+					WasmStringUpcaseCompiler.compileDowncase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1),
+							ctx);
+					WasmEmitHelper.emitToMutStrCall(ctx);
+				}
 			}
 			case LispNames.STRING_CAPITALIZE -> {
-				WasmStringCapitalizeCompiler.compile(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx);
-				WasmEmitHelper.emitToMutStrCall(ctx);
+				LispVal bounded = LispMacroExpander.expandBoundedCaseConversion(cons);
+				if (bounded != null) {
+					WasmExprCompiler.compileExpr(bounded, ctx);
+				}
+				else {
+					WasmStringCapitalizeCompiler.compile(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx);
+					WasmEmitHelper.emitToMutStrCall(ctx);
+				}
 			}
 			case LispNames.SUBSEQ, LispNames.SUBSEQ_CORE -> WasmSubseqCompiler.compile(cons, ctx);
 			case LispNames.CHAR, LispNames.SCHAR -> WasmCharCompiler.compileChar(cons, ctx);
