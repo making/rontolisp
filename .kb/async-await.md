@@ -89,6 +89,9 @@ and the `await-answers-every-value-of-the-async-body` ci-spec case -- plus its s
   (`WasmAsyncEmit`); asyncMode FORCES EH mode.
 - **Trap**: an async-defun's rewritten plain defun is EXCLUDED from the fusion-inlinable set even
   when a one-form body qualifies textually (`.kb/wasm-int-fusion.md`).
+- **Trap**: a region's landing pad must not restore the resume target `$rt`; one that did skipped
+  everything after a `handler-case` that caught on a RESUMED frame (`.kb/wasm-landing-pad-refresh.md`,
+  "`$rt`").
 - An `async func` wit-import member returns a pending `TYPE_FUTURE` via
   `rontolisp::%subtask-future`; events dispatch through the shared core `_sched_dispatch`
   (`WasmFutureRuntimeBuilder`) under TWO drivers.

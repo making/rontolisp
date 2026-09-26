@@ -84,6 +84,9 @@ class FetchSpecE2eTest {
 	/** How long {@code /big} is: several reads on every transport. */
 	private static final int BIG = 300_000;
 
+	/** The length {@code /cut-short} announces and never sends. */
+	private static final int CUT_SHORT = 1000;
+
 	enum Leg {
 
 		INTERPRETER, JVM, NATIVE, COMPONENT;
@@ -175,6 +178,15 @@ class FetchSpecE2eTest {
 				body[i] = (byte) (i % 251);
 			}
 			answer(exchange, 200, body);
+		});
+		// A transfer that fails mid-body: the head promises more than ever comes, and
+		// closing the exchange short of its Content-Length closes the connection.
+		server.createContext("/cut-short", exchange -> {
+			exchange.sendResponseHeaders(200, CUT_SHORT);
+			OutputStream body = exchange.getResponseBody();
+			body.write(new byte[10]);
+			body.flush();
+			exchange.close();
 		});
 		server.createContext("/cookies", exchange -> {
 			exchange.getResponseHeaders().add("Set-Cookie", "a=1");

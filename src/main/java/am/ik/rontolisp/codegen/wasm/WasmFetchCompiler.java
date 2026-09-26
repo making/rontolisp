@@ -18,11 +18,10 @@ import org.jspecify.annotations.Nullable;
  * component-only compile error.
  *
  * <p>
- * The supported methods are GET, HEAD, POST, PUT, DELETE, OPTIONS and PATCH; the method
- * is resolved <strong>statically</strong> from a literal {@code :method} (a
- * statically-unknown method, e.g. one computed at runtime, is treated as GET, and a
- * statically-known unsupported method is rejected at compile time) -- parity with the
- * interpreter/JVM, which validate at runtime.
+ * The supported methods are GET, HEAD, POST, PUT, DELETE, OPTIONS and PATCH. A literal
+ * unsupported {@code :method} is rejected here, at compile time; one computed at run time
+ * is validated by {@code http.lisp}'s {@code rontolisp:fetch} at the call, which signals
+ * for an unsupported method exactly where the interpreter/JVM do.
  */
 final class WasmFetchCompiler {
 

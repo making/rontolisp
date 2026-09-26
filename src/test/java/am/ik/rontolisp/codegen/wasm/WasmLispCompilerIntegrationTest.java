@@ -17744,6 +17744,56 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void componentBodyGoesOnPastARegionThatCaughtAfterASuspension() throws Exception {
+		// A region (handler-case, catch) whose protected await SUSPENDED lands on the
+		// RESUMED frame -- and the body must go on past it. The landing pad used to
+		// restore the resume-target local ($rt) to the state the resume had routed
+		// through, so every statement after the region read as "a later segment" and
+		// was skipped: the rest of an async body, and at the top level the rest of the
+		// program, silently never ran (the process exited 0 after the first catch).
+		assertThat(compileAndRunComponent("""
+				(defvar *f* (rontolisp::%future-new))
+				(rontolisp:async-defun task ()
+				  (let ((first (handler-case (rontolisp:await *f*) (error (e) :caught))))
+				    (print first)
+				    (print :after-the-handler)
+				    (print (handler-case (rontolisp:await *f*) (error (e) :caught-again)))
+				    :done))
+				(defvar *tf* (task))
+				(print 20)
+				(rontolisp::%future-reject *f* "boom")
+				(print (rontolisp:await *tf*))
+				(defvar *h* (rontolisp::%future-new))
+				(rontolisp:async-defun task2 ()
+				  (print (catch 'out (rontolisp:await *h*) (throw 'out :thrown)))
+				  (print :after-the-catch)
+				  :done2)
+				(defvar *tf2* (task2))
+				(rontolisp::%future-settle *h* 1)
+				(print (rontolisp:await *tf2*))
+				(defvar *g* (rontolisp::%future-new))
+				(rontolisp:async-defun reject-later ()
+				  (rontolisp:await (rontolisp:wait-for 1))
+				  (rontolisp::%future-reject *g* "late"))
+				(reject-later)
+				(print (handler-case (rontolisp:await *g*) (error (e) :top-level-caught)))
+				(print :the-top-level-goes-on)
+				(print (handler-case (rontolisp:await *g*) (error (e) :caught-again-at-top-level)))
+				""")).isEqualTo("""
+				20
+				:CAUGHT
+				:AFTER-THE-HANDLER
+				:CAUGHT-AGAIN
+				:DONE
+				:THROWN
+				:AFTER-THE-CATCH
+				:DONE2
+				:TOP-LEVEL-CAUGHT
+				:THE-TOP-LEVEL-GOES-ON
+				:CAUGHT-AGAIN-AT-TOP-LEVEL""");
+	}
+
+	@Test
 	void componentUnwindProtectSkipsAndReArmsCleanupAcrossSuspension() throws Exception {
 		// A suspension is a plain return out of the protected region -- the cleanup
 		// does NOT run at the suspend (the task is not exiting) and re-arms on
@@ -18959,9 +19009,9 @@ class WasmLispCompilerIntegrationTest {
 			String out = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
 			p.waitFor();
 			assertThat(out.trim()).isEqualTo("""
-					timer-fired
-					(drained "first-second")
-					end""");
+					TIMER-FIRED
+					(DRAINED "first-second")
+					END""");
 		}
 		finally {
 			server.stop(0);
@@ -25276,9 +25326,8 @@ class WasmLispCompilerIntegrationTest {
 							    ;; returns an ordinary promise whose await drives the waitable-set.
 							    (let ((promise (client:send req)))
 							      ;; resolve the request-side trailers (ok none) so the host can finish
-							      ;; sending, and drop the transmission-result future unread.
+							      ;; sending.
 							      (http:trailers-future-write (cdr trailers) (cons :ok nil))
-							      (http:transmit-future-drop-readable (car (cdr reqpair)))
 							      (let* ((response (rontolisp:await promise))
 							             (status (http:response-get-status-code response))
 							             (res (http:transmit-future-new))
@@ -25290,6 +25339,9 @@ class WasmLispCompilerIntegrationTest {
 							        (http:body-stream-drop-readable stream)
 							        (http:trailers-future-drop-readable (car (cdr pair)))
 							        (http:transmit-future-write (cdr res) :ok)
+							        ;; the transmission-result future goes unread, but only once the
+							        ;; body is in: wasmtime aborts the connection when its reader drops.
+							        (http:transmit-future-drop-readable (car (cdr reqpair)))
 							        (list :status status :body text)))))
 
 							(let ((r (rontolisp:await (get-url "127.0.0.1:%d" "/hello"))))
@@ -25374,7 +25426,6 @@ class WasmLispCompilerIntegrationTest {
 							        ;; resolve the trailers future, or the body never completes.
 							        (http:body-stream-drop-writable (cdr contents))
 							        (http:trailers-future-write (cdr trailers) (cons :ok nil))
-							        (http:transmit-future-drop-readable (car (cdr reqpair)))
 							        (let* ((response (rontolisp:await promise))
 							               (status (http:response-get-status-code response))
 							               (res (http:transmit-future-new))
@@ -25384,6 +25435,8 @@ class WasmLispCompilerIntegrationTest {
 							          (http:body-stream-drop-readable stream)
 							          (http:trailers-future-drop-readable (car (cdr pair)))
 							          (http:transmit-future-write (cdr res) :ok)
+							          ;; dropped once the reply is in: its reader keeps the connection.
+							          (http:transmit-future-drop-readable (car (cdr reqpair)))
 							          (list :status status :body text))))))
 
 							(let ((r (rontolisp:await (post-url "127.0.0.1:%d" "/echo" "hello from a lisp POST"))))

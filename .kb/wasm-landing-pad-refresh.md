@@ -3,7 +3,8 @@
 **Invariant**: on the wasm-GC backend, no wasm local's value may reach a `try_table`
 landing pad through the catch block. Every region whose landing runs user code -- or
 continues into it -- pushes locals onto the operand stack immediately before its landing
-block (`WasmLandingPad.keepLocalsAlive`: every local declared so far) and pops them back
+block (`WasmLandingPad.keepLocalsAlive`: every local declared so far, save an async resume's
+`$rt` -- "`$rt`" below) and pops them back
 into the locals as the pad's first act (`WasmLandingPad.refresh`). Once the body is a
 complete code entry, both runs are narrowed to the locals LIVE after the pad
 (`WasmLandingPad.narrowCarries` -> `am.ik.wasm.WasmCarriedLocals`, from `buildLocalsAndPatch`
@@ -139,6 +140,23 @@ closure (changes `return-from`/`go`/await semantics), or waiting for upstream
 `$block-exit` when the program lowers a cross-lambda exit -- and rethrows the eqref payload
 on its tag, instead of `catch_all_ref`/`throw_ref`: an exnref cannot be stashed in an
 eqref local or cell, and the module throws no other tag.
+
+## `$rt`: the one local the refresh skips
+
+An async resume function (`WasmAsyncEmit.compileResume`) keeps its resume target in the i32
+`$rt` (`WasmAsyncEmit.RT_SLOT`), and `$rt` changes INSIDE a region without a box: a resume
+routes through the region's head with `$rt` still naming the target state, and the await
+landing inside clears it to 0. Refreshed from the entry snapshot, a catch on a resumed frame
+put the target state back, every later statement's guard read "a later segment", and the rest
+of the body was skipped -- at the top level the program simply exited 0 after the first
+`handler-case` that caught a rejection delivered through the scheduler (found 2026-09-26 as the
+fetch corpus's "a rejected future awaited again answers NIL", `.kb/fetch-http.md`). So
+`WasmLandingPad.allSlots` leaves `$rt` out in a resume context. Nothing is lost: the refresh
+exists for GC references a copying collection moves, and an i32 on the catch edge is exactly
+the value the throwing call saw. Pinned by
+`WasmLispCompilerIntegrationTest.componentBodyGoesOnPastARegionThatCaughtAfterASuspension`
+(`handler-case` in an async body and at the top level, `catch`) and the fetch corpus case
+`a-failed-reply-signals-again-at-the-next-await`.
 
 ## Cost
 
