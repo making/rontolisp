@@ -39,8 +39,9 @@ import am.ik.wasm.Type;
  * section at all, so there is no payload to read and no landing to read it in. Reporting
  * there would mean turning EH mode on for every program (122 KB -> 176 KB on a two-line
  * toy) to buy an error path most programs never take -- and would give up the
- * byte-identity guarantee a program without a catching form has today. See
- * {@code .kb/error-handling.md}.
+ * byte-identity guarantee a program without a catching form has today. Only
+ * {@code --report-locations} asks for it there, and gets EH mode with it
+ * ({@code SignalMessages.ENTRY_REPORT}). See {@code .kb/error-handling.md}.
  */
 final class WasmUncaughtReportCompiler {
 

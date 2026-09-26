@@ -1095,6 +1095,12 @@ public final class ClosRegistry {
 	 */
 	private boolean routesConditionReports;
 
+	/**
+	 * Whether the printing operators route a condition through the renderer (see
+	 * {@link #printsConditionReports()}).
+	 */
+	private boolean printsConditionReports;
+
 	/** Whether {@link #ensureMopClassesSeeded()} has run. */
 	private boolean mopClassesSeeded;
 
@@ -1710,12 +1716,37 @@ public final class ClosRegistry {
 	}
 
 	/**
-	 * Records that the generated {@code %condition-report-str} renderer is available; see
+	 * Whether the printing operators ({@code princ}, {@code format ~A}, ...) render a
+	 * condition VALUE through the {@code %condition-report-str} renderer. The same answer
+	 * as {@link #routesConditionReports()} except on a wasm-GC module whose renderer
+	 * exists only for the entry function's uncaught report ({@code --report-locations}
+	 * outside exception-handling mode): no program code can hold a condition there, so no
+	 * printing operator can be handed one.
+	 * @return whether printing a condition goes through its report
+	 */
+	public boolean printsConditionReports() {
+		return this.printsConditionReports;
+	}
+
+	/**
+	 * Records that the generated {@code %condition-report-str} renderer is available, and
+	 * that the printing operators route through it; see
 	 * {@link #routesConditionReports()}.
 	 * @param routes whether the renderer is in the artifact
 	 */
 	public void setRoutesConditionReports(boolean routes) {
+		setRoutesConditionReports(routes, routes);
+	}
+
+	/**
+	 * Records the two halves of {@link #setRoutesConditionReports(boolean)} apart.
+	 * @param routes whether the renderer is in the artifact
+	 * @param prints whether the printing operators route through it (implies
+	 * {@code routes})
+	 */
+	public void setRoutesConditionReports(boolean routes, boolean prints) {
 		this.routesConditionReports = routes;
+		this.printsConditionReports = routes && prints;
 	}
 
 	/**

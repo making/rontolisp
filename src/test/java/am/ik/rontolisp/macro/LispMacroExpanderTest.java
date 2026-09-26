@@ -987,6 +987,47 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
+	void anEntryReportRendersEveryBuildableConditionButRoutesNoPrinterUnlessOneIsHeld() {
+		// The entry report reads every condition that escapes, so the renderer is in as
+		// soon as one can be built; a printing operator can only be handed one program
+		// code holds.
+		ClosRegistry thrown = entryReportRegistry("(define-condition zc (error) ()) (defun f () (error 'zc)) (f)");
+		assertThat(thrown.routesConditionReports()).isTrue();
+		assertThat(thrown.printsConditionReports()).isFalse();
+		ClosRegistry held = entryReportRegistry("(define-condition zc (error) ()) (print (make-condition 'zc))");
+		assertThat(held.routesConditionReports()).isTrue();
+		assertThat(held.printsConditionReports()).isTrue();
+	}
+
+	@Test
+	void anEntryReportWithADeclinedRendererKeepsNoFunctionControlArm() {
+		// Every control is a directive-free literal, so none is a function: the arm that
+		// funcalls one -- a runtime designator -- is gone, and only under ENTRY_REPORT.
+		String source = "(define-condition zc (error) ()) (defun f () (error 'zc)) (f)";
+		assertThat(formatConditionDefun(source, SignalMessages.ENTRY_REPORT)).doesNotContain("FUNCALL");
+		assertThat(formatConditionDefun(source, SignalMessages.RENDERED)).contains("FUNCALL");
+	}
+
+	private static ClosRegistry entryReportRegistry(String source) {
+		ClosRegistry registry = new ClosRegistry();
+		LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source), new HashMap<>(), registry,
+				null, false, SignalMessages.ENTRY_REPORT, null);
+		return registry;
+	}
+
+	private static String formatConditionDefun(String source, SignalMessages signalMessages) {
+		return LispMacroExpander
+			.expandTopLevelDefinitions(LispReader.readAllFromString(source), new HashMap<>(), new ClosRegistry(), null,
+					false, signalMessages, null)
+			.stream()
+			.filter(form -> form instanceof LispCons cons && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol name && LispNames.FORMAT_CONDITION_INTERNAL.equals(name.name()))
+			.findFirst()
+			.map(LispVal::toString)
+			.orElseThrow();
+	}
+
+	@Test
 	void aHeldConditionStillRoutesReportsWhereMessagesAreLazy() {
 		// A handler-case clause that names its condition hands it to program code.
 		assertThat(routesReportsLazy("""
