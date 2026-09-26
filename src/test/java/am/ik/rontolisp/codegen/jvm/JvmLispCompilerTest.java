@@ -11690,6 +11690,22 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aConditionWhoseMessageIsNoStringIsStillSignalled() throws Exception {
+		// The message of a typed signal is its uncaught report text, and a nil
+		// :format-control makes it nil: the throw site cast it and failed with a
+		// NullPointerException, which the unkeyed channel passed off as the condition
+		// recorded before the message ran. Keyed, the failure was nobody's -- the handler
+		// saw a simple-error made of the NullPointerException's text.
+		assertThat(compileAndRun("""
+				(defun nm-signal (type) (error type :format-control nil))
+				(print (handler-case (error 'simple-error :format-control nil)
+				         (simple-error (c) (list :literal (simple-condition-format-control c)))))
+				(print (handler-case (nm-signal 'simple-error)
+				         (simple-error (c) (list :computed (simple-condition-format-control c)))))
+				""")).isEqualTo("(:LITERAL NIL)\n(:COMPUTED NIL)");
+	}
+
+	@Test
 	void aConditionOnItsWayOutKeepsItsRecordInRestartMode() throws Exception {
 		// A handler-bind anywhere puts the program in restart mode, where a string
 		// designator's error carries a simple-error instance of its own and every

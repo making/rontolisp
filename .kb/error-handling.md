@@ -191,6 +191,13 @@ the throwable (`JvmThrowableRecords`; `_tlMap` makes a thread's map on its first
   then `throw _condPut(new RuntimeException(message), condition)`: nothing is recorded before the
   exception exists. `_await` / `_thread_join` record the payload's condition on the awaiting thread
   (a plain failure's: none). `_teRaw` / `_oob` / `_opTypeErr` record `{datum, type}`.
+- **A condition's message is rendered, not cast** (`JvmErrorCompiler`): the two terminals pass it
+  through `_lispToDisplayString`, so a nil `:format-control` reports `NIL`, the interpreter's text.
+  The cast failed the throw with a `NullPointerException`, which the one slot passed off as the
+  condition it held from before the message ran -- `(handler-case (error ty :code 42) (type-error
+  ...))` with a computed `type-error` worked by that accident alone
+  (`JvmLispCompilerTest#compileAndRunErrorWithComputedConditionType` caught it once the slot was
+  keyed). What that computed case reports uncaught still differs per backend (`.todo/a50`).
 - **Readers TAKE** (`_condTake`, the entry removed): a `handler-case` landing, the `_hbGuard` pad,
   an async body's `run()`, a thread's `call()`, `_jsig`. What passes the throwable on records the
   instance again (`_condPut`): a landing no clause matched and the pad -- a synthesized instance
@@ -207,16 +214,19 @@ the throwable (`JvmThrowableRecords`; `_tlMap` makes a thread's map on its first
   program) goes with its throwable. No record holds its throwable -- a value reaching its weak key
   never dies -- so the te record lost its `exception` slot (`_teSlot(e, 0)` answers the record).
 - Byte-identical without the channel (`ConditionChannel.used`) and, for `_teTl`, without a landing
-  pad. A landing is 8 bytes shorter, a no-match rethrow 3, a throw site 1 longer; the fixed part is
-  `_tlMap` / `_condTake` / `_condPut` and ~23 pool entries. Class bytes before -> after
-  (2026-09-26): the ci-spec pin's first case as a program of its own 36,138 -> 36,720; `(ignore-errors (f 1))`
-  11,139 -> 11,794; an async body's typed error 51,424 -> 52,053;
-  `examples/console/error-handling.lisp` 64,343 -> 64,965; `examples/net/httpbin.lisp` 185,469 ->
-  185,966; `examples/net/hello-clack.lisp` 950,310 -> 951,256.
+  pad (`examples/jvm/java-interop.lisp`, `examples/jvm/life-gui.lisp`,
+  `examples/console/calc.lisp`: every output file). A landing is 8 bytes shorter, a no-match rethrow 3, a throw site 10 (13 where it
+  normalized a character vector); the fixed part is `_tlMap` / `_condTake` / `_condPut` and ~23
+  pool entries. Class bytes before -> after (2026-09-26, against develop at `797c28fec`): the
+  ci-spec pin's first case as a program of its own 36,138 -> 36,706; `(ignore-errors (f 1))`
+  11,139 -> 11,794; an async body's typed error 51,424 -> 52,011; a restart-mode program 45,991 ->
+  46,415; `examples/console/error-handling.lisp` 64,343 -> 64,881; `examples/net/httpbin.lisp`
+  185,469 -> 185,966; `examples/net/hello-clack.lisp` (205 throw sites) 950,310 -> 948,474.
 - Not keyed yet: `%handlers-ran%` itself, on every backend -- a condition handled in a cleanup
   replaces the mark and the outer condition's handlers run twice (`.todo/a49`).
 - Pins: ci-spec `condition-on-its-way-out-keeps-its-record`,
   `JvmLispCompilerTest#aConditionOnItsWayOutKeepsItsRecord*`,
+  `#aConditionWhoseMessageIsNoStringIsStillSignalled`,
   `JvmAsyncCompilerTest#anAwaitHandledInACleanupLeavesTheConditionOnItsWayOut`,
   `JvmThreadTest#aJoinHandledInACleanupLeavesTheConditionOnItsWayOut`, the swallowed-plain-failure
   row of `testsupport/JavaImplementationPrograms.CALLBACK_SIGNALS`, `JvmThrowableRecordsTest`.
