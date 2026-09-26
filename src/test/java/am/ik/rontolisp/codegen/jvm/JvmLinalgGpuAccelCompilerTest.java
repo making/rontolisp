@@ -142,26 +142,32 @@ class JvmLinalgGpuAccelCompilerTest {
 
 	private byte[] compile(String lispCode, boolean gpu, boolean blas, boolean simd) {
 		List<LispVal> program = LinalgLibrary.process(LispReader.readAllFromString(lispCode));
-		return JvmLispCompiler.builder()
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
 			.className("Test")
 			.optimize(OptimizeLevel.NONE)
 			.simd(simd)
 			.blas(blas)
 			.gpu(gpu)
-			.build()
-			.compile(program);
+			.build();
+		byte[] classBytes = compiler.compile(program);
+		// The bridges travel beside the class as their own files, where run() loads.
+		TravellingClassFiles.write(compiler, this.tempDir);
+		return classBytes;
 	}
 
 	/** {@link #compile} with the {@code vec:} library spliced in as well. */
 	private byte[] compileWithVec(String lispCode, boolean gpu, boolean simd) {
 		List<LispVal> program = VecLibrary.process(LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
-		return JvmLispCompiler.builder()
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
 			.className("Test")
 			.optimize(OptimizeLevel.NONE)
 			.simd(simd)
 			.gpu(gpu)
-			.build()
-			.compile(program);
+			.build();
+		byte[] classBytes = compiler.compile(program);
+		// The bridges travel beside the class as their own files, where run() loads.
+		TravellingClassFiles.write(compiler, this.tempDir);
+		return classBytes;
 	}
 
 	private String run(byte[] classBytes) throws Exception {
@@ -181,7 +187,7 @@ class JvmLinalgGpuAccelCompilerTest {
 
 	/**
 	 * Runs a {@code --gpu} class in a loader of its own and answers whether the library
-	 * EMBEDDED in it -- defined into that loader by {@code _gpuInit} under its renamed
+	 * SHIPPED with it -- loaded into that loader from beside the class under its renamed
 	 * name -- found a device. The one observable that says the compiled program really
 	 * accelerates, which no printed value can: every member is written to land on the
 	 * oracle's bits, so a class whose embedded probe failed prints the same thing.
@@ -196,16 +202,16 @@ class JvmLinalgGpuAccelCompilerTest {
 			try (var _ = ThreadStdio.out(new ByteArrayOutputStream())) {
 				main.invoke(null, (Object) new String[0]);
 			}
-			Class<?> gpu = loader.loadClass(JvmGpuRuntimeBuilder.GPU_PREFIX + "Gpu");
+			Class<?> gpu = loader.loadClass(JvmGpuRuntimeBuilder.gpuPrefix("Test") + "Gpu");
 			return (boolean) gpu.getMethod("available").invoke(null);
 		}
 	}
 
 	/**
-	 * Runs a {@code --gpu} class in a loader of its own and answers the bytes its
-	 * EMBEDDED library holds resident when it ends -- the one observable that says a
-	 * matrix reached the device through the compiled bridge when the accepted answer is,
-	 * by contract, the defun's own bits ({@code .todo/728}).
+	 * Runs a {@code --gpu} class in a loader of its own and answers the bytes its SHIPPED
+	 * library holds resident when it ends -- the one observable that says a matrix
+	 * reached the device through the compiled bridge when the accepted answer is, by
+	 * contract, the defun's own bits ({@code .todo/728}).
 	 */
 	private long embeddedResidentBytes(byte[] classBytes) throws Exception {
 		Path classFile = this.tempDir.resolve("Test.class");
@@ -217,7 +223,7 @@ class JvmLinalgGpuAccelCompilerTest {
 			try (var _ = ThreadStdio.out(new ByteArrayOutputStream())) {
 				main.invoke(null, (Object) new String[0]);
 			}
-			Class<?> gpu = loader.loadClass(JvmGpuRuntimeBuilder.GPU_PREFIX + "Gpu");
+			Class<?> gpu = loader.loadClass(JvmGpuRuntimeBuilder.gpuPrefix("Test") + "Gpu");
 			Method resident = gpu.getDeclaredMethod("residentBytes");
 			resident.setAccessible(true);
 			return (long) resident.invoke(null);
@@ -269,15 +275,15 @@ class JvmLinalgGpuAccelCompilerTest {
 	}
 
 	private static boolean embedsGpuBridge(byte[] classBytes) {
-		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmGpuRuntimeBuilder.BRIDGE_NAME);
+		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmGpuRuntimeBuilder.bridgeName("Test"));
 	}
 
 	private static boolean embedsSimdBridge(byte[] classBytes) {
-		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmSimdRuntimeBuilder.BRIDGE_NAME);
+		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmSimdRuntimeBuilder.bridgeName("Test"));
 	}
 
 	private static boolean embedsBlasBridge(byte[] classBytes) {
-		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmBlasRuntimeBuilder.BRIDGE_NAME);
+		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmBlasRuntimeBuilder.bridgeName("Test"));
 	}
 
 	// --- the emit gate and the blob (run on every machine) ----------------------------
@@ -406,9 +412,9 @@ class JvmLinalgGpuAccelCompilerTest {
 				.toList();
 		}
 		assertThat(JvmGpuRuntimeBuilder.embeddedGpuClasses()).containsExactlyInAnyOrderElementsOf(onDisk);
-		// And the kernels: a resource cannot follow the classes into the emitted
-		// program's package, so the PTX text rides in the same blob -- verbatim, not
-		// base64'd like the class files -- and is handed to Gpu.useKernels by _gpuInit.
+		// And the kernels: a resource cannot follow the classes renamed after the
+		// emitted program, so the PTX text rides verbatim in the program's own constant
+		// pool and is handed to Gpu.useKernels by _gpuInit.
 		String bytes = new String(compile("(print (linalg:matmul #d((1.0)) #d((2.0))))", true),
 				StandardCharsets.ISO_8859_1);
 		assertThat(bytes).contains(".visible .entry gemm_f64")
@@ -1532,10 +1538,11 @@ class JvmLinalgGpuAccelCompilerTest {
 			.isEqualTo(run(compile(program, false, false, true)));
 	}
 
-	// MethodHandles.Lookup.defineClass(byte[]) requires the defined class to share the
-	// lookup class's package; every test above compiles into the default package, so this
-	// one alone proves the whole embedded library -- the bridge glue AND every renamed
-	// am.ik.gpu class file -- is renamed into a NON-default package too. Runs on any
+	// The library's members are package-private; every test above compiles into the
+	// default package, so this one alone proves the whole shipped library -- the bridge
+	// glue AND every renamed am.ik.gpu class file -- is renamed into a NON-default
+	// package
+	// too. Runs on any
 	// machine: a below-threshold product declines regardless of whether a device exists.
 	@Test
 	void theLibraryIsRenamedIntoTheGeneratedClassOwnPackageAndRunsThere() throws Exception {
@@ -1545,17 +1552,20 @@ class JvmLinalgGpuAccelCompilerTest {
 				""";
 		String expected = scalar(lispCode);
 		List<LispVal> program = LinalgLibrary.process(LispReader.readAllFromString(lispCode));
-		byte[] classBytes = JvmLispCompiler.builder()
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
 			.className("com/example/Test")
 			.optimize(OptimizeLevel.NONE)
 			.gpu(true)
-			.build()
-			.compile(program);
+			.build();
+		byte[] classBytes = compiler.compile(program);
+		TravellingClassFiles.write(compiler, this.tempDir);
 
-		String bridgeName = "com/example/" + JvmGpuRuntimeBuilder.BRIDGE_NAME;
-		String gpuPrefix = "com/example/" + JvmGpuRuntimeBuilder.GPU_PREFIX;
-		String bytesAsText = new String(classBytes, StandardCharsets.ISO_8859_1);
-		assertThat(bytesAsText).contains(bridgeName).contains(gpuPrefix);
+		String bridgeName = JvmGpuRuntimeBuilder.bridgeName("com/example/Test");
+		String gpuPrefix = JvmGpuRuntimeBuilder.gpuPrefix("com/example/Test");
+		assertThat(new String(classBytes, StandardCharsets.ISO_8859_1)).contains(bridgeName);
+		assertThat(compiler.runtimeClassFiles()).containsKey(bridgeName + ".class")
+			.containsKey(gpuPrefix + "Gpu.class")
+			.containsKey(gpuPrefix + "Gpu$Probe.class");
 
 		Path packageDir = this.tempDir.resolve("com").resolve("example");
 		Files.createDirectories(packageDir);

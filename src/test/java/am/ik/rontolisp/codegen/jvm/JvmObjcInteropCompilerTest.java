@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
 import am.ik.objc.ObjcRuntime;
@@ -28,34 +29,42 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * The {@code objc:} verbs compiled to a JVM {@code .class} (the embedded
- * {@code am.ik.objc} blob plus the {@link JvmObjcTemplate} bridge). Mirrors the
- * interpreter's {@code ObjcInteropTest} case for case so the two stay behaviorally
- * identical: everything here is headless -- Foundation objects and a class defined at run
- * time, never a window -- so the Mac half runs under a plain {@code ./mvnw test} on a
- * Mac, and the platform-independent half pins what a machine without the runtime must do:
- * compile every verb and SIGNAL at the call.
+ * The {@code objc:} verbs compiled to a JVM {@code .class} (the {@code am.ik.objc} copy
+ * plus the {@link JvmObjcTemplate} bridge shipped beside it). Mirrors the interpreter's
+ * {@code ObjcInteropTest} case for case so the two stay behaviorally identical:
+ * everything here is headless -- Foundation objects and a class defined at run time,
+ * never a window -- so the Mac half runs under a plain {@code ./mvnw test} on a Mac, and
+ * the platform-independent half pins what a machine without the runtime must do: compile
+ * every verb and SIGNAL at the call.
  *
  * <p>
- * Every compiled program carries its OWN copy of the binding (renamed into its own
- * package, defined into its own class loader), so a class a program defines at run time
- * must have a name no other program in this JVM -- the interpreter's tests included --
- * has defined: the Objective-C runtime cannot unregister one.
+ * Every compiled program carries its OWN copy of the binding (renamed after it, loaded
+ * into its own class loader), so a class a program defines at run time must have a name
+ * no other program in this JVM -- the interpreter's tests included -- has defined: the
+ * Objective-C runtime cannot unregister one.
  */
 class JvmObjcInteropCompilerTest {
 
 	@TempDir
 	Path tempDir;
 
+	// Compiles into the class path root run() loads from: the bridge and the library
+	// travel beside the class as their own files.
 	private byte[] compile(String lispCode) {
 		List<LispVal> program = AppKitLibrary.process(LispReader.readAllFromString(lispCode));
-		return new JvmLispCompiler("Test").compile(program);
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		TravellingClassFiles.write(compiler, this.tempDir);
+		return classBytes;
 	}
 
 	// Through the compile front end, as the CLI compiles: the prelude defuns (type-of)
 	// are spliced there.
 	private byte[] compileThroughFrontend(String lispCode) {
-		return new JvmLispCompiler("Test").compile(CompileFrontendAccess.corpus(lispCode, Features.JVM, false, false));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(CompileFrontendAccess.corpus(lispCode, Features.JVM, false, false));
+		TravellingClassFiles.write(compiler, this.tempDir);
+		return classBytes;
 	}
 
 	// Compiles the program, runs its main, and returns the captured stdout. A runtime
@@ -92,7 +101,7 @@ class JvmObjcInteropCompilerTest {
 	}
 
 	private static boolean embedsObjcBridge(byte[] classBytes) {
-		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmObjcRuntimeBuilder.BRIDGE_NAME);
+		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmObjcRuntimeBuilder.bridgeName("Test"));
 	}
 
 	@Test
@@ -229,7 +238,7 @@ class JvmObjcInteropCompilerTest {
 	}
 
 	@Test
-	void theBlobCarriesTheWholeLibrary() throws Exception {
+	void theProgramShipsTheWholeLibrary() throws Exception {
 		// The compiled backend runs am.ik.objc's own bytes rather than a hand-kept copy
 		// of them, so a class file added to the library must be added to the list that
 		// travels -- there is no way to enumerate a package from a classpath, let alone
@@ -247,16 +256,29 @@ class JvmObjcInteropCompilerTest {
 		}
 		assertThat(JvmObjcRuntimeBuilder.embeddedObjcClasses()).containsExactlyInAnyOrderElementsOf(onDisk);
 		// The bridge and the handle are ONE class file each: a nested class, or the
-		// synthetic $1 an enum switch lowers to, would be a file the blob does not carry
-		// (found the hard way: NoClassDefFoundError RontoLispObjcBridge$1).
+		// synthetic $1 an enum switch lowers to, would be a file the builder does not
+		// ship (found the hard way: NoClassDefFoundError RontoLispObjcBridge$1).
 		try (Stream<Path> files = Files.list(classes.resolve("am/ik/rontolisp/codegen/jvm"))) {
 			assertThat(files.map(p -> p.getFileName().toString())
 				.filter(name -> name.startsWith("JvmObjcTemplate$") || name.startsWith("JvmObjcHandle$"))).isEmpty();
 		}
 		// And nothing of the library's own package name survives the rename: the
-		// emitted class resolves the blob under its own package or not at all.
-		String bytes = new String(compile("(print (objc:objectp 1))"), StandardCharsets.ISO_8859_1);
+		// emitted class resolves the shipped files under its own names or not at all.
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		String bytes = new String(compiler.compile(LispReader.readAllFromString("(print (objc:objectp 1))")),
+				StandardCharsets.ISO_8859_1);
 		assertThat(bytes).doesNotContain("am/ik/objc/").doesNotContain("am/ik/rontolisp/codegen/jvm/JvmObjc");
+		List<Map.Entry<String, byte[]>> shipped = compiler.runtimeClassFiles()
+			.entrySet()
+			.stream()
+			.filter(file -> file.getKey().startsWith("Test$Objc"))
+			.toList();
+		assertThat(shipped).hasSize(onDisk.size() + 2);
+		for (Map.Entry<String, byte[]> file : shipped) {
+			assertThat(new String(file.getValue(), StandardCharsets.ISO_8859_1)).as(file.getKey())
+				.doesNotContain("am/ik/objc/")
+				.doesNotContain("am/ik/rontolisp/codegen/jvm/JvmObjc");
+		}
 	}
 
 	@Test

@@ -31,7 +31,7 @@ import com.example.GpuKernels;
  *
  * <p>
  * The residency counters are read reflectively out of the library the compiled class
- * carries ({@code am.ik.gpu}, renamed into the class's own package): a compiled class has
+ * carries ({@code am.ik.gpu}, renamed after the class): a compiled class has
  * no test seam, and the counters are the only observable that says a result really stayed
  * -- the printed numbers cannot, since the device member is written to land on the host's
  * own bits.
@@ -218,9 +218,9 @@ public class GpuResidencyBench {
 
 	/**
 	 * The compiled class's own copy of the residency cache, reached by reflection. The
-	 * {@code --gpu} bridge travels as {@code am.ik.gpu}'s class files renamed into the
-	 * generated class's package ({@code .kb/gpu.md}), so the cache is
-	 * {@code <package>.RontoLispGpuDeviceResidency} and the counters are the library's own
+	 * {@code --gpu} bridge travels as {@code am.ik.gpu}'s class files renamed after the
+	 * generated class ({@code .kb/gpu.md}), so the cache is
+	 * {@code <Class>$GpuDeviceResidency} and the counters are the library's own
 	 * package-private ones. A consumer never does this; a measurement has to.
 	 */
 	private static final class Residency {
@@ -244,8 +244,7 @@ public class GpuResidencyBench {
 		}
 
 		static Residency of(Class<?> library) throws Exception {
-			String pkg = library.getPackageName().isEmpty() ? "" : library.getPackageName() + ".";
-			Method entry = Class.forName(pkg + "RontoLispGpuGpu").getDeclaredMethod("residency");
+			Method entry = Class.forName(library.getName() + "$GpuGpu").getDeclaredMethod("residency");
 			entry.setAccessible(true);
 			Object cache = entry.invoke(null);
 			if (cache == null) {

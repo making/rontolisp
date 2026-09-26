@@ -22,7 +22,7 @@ import am.ik.objc.TypeEncoding;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The {@code objc:} bridge injected into a compiled {@code .class} program: the nine
+ * The {@code objc:} bridge shipped beside a compiled {@code .class} program: the nine
  * verbs' bodies against the compiled value representation ({@code null} = nil, the symbol
  * {@code "T"} = true, a {@code String} with surrounding quotes = string, {@code Long} /
  * {@code Double} numbers, an exact {@code Object[]} pair = cons cell, a
@@ -33,11 +33,11 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * Unlike the marshalling, the binding is NOT copied: {@code am.ik.objc} itself travels in
- * the same blob as this class ({@link JvmObjcRuntimeBuilder}), renamed into the emitted
- * program's own package, so the compiled program runs the very bytes the interpreter runs
- * -- one type-encoding parser, one hop to thread 0, one closed set of callback shapes.
- * What this class holds is only what a call site adds: the value representation and the
- * callback into the program.
+ * beside the program with this class ({@link JvmObjcRuntimeBuilder}), renamed after it,
+ * so the compiled program runs the very bytes the interpreter runs -- one type-encoding
+ * parser, one hop to thread 0, one closed set of callback shapes. What this class holds
+ * is only what a call site adds: the value representation and the callback into the
+ * program.
  *
  * <h2>Callbacks apply a compiled function</h2>
  *
@@ -59,8 +59,8 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * Design constraints (as for {@link JavaBridgeTemplate}): no nested classes or records
- * (lambdas are fine), and no reference to any class that is not either the JDK's or in
- * the blob.
+ * (lambdas are fine), and no reference to any class that is not either the JDK's or
+ * shipped with it.
  */
 final class JvmObjcTemplate {
 
@@ -80,7 +80,7 @@ final class JvmObjcTemplate {
 	 * vector on this backend ({@code .kb/string-write-runtime.md}), and every string this
 	 * bridge accepts funnels through {@link #lispString(Object)}, which renders it once
 	 * here -- the same one-chokepoint rule the IO/socket/fetch runtimes follow, without
-	 * adding a class to the travelling blob or duplicating the representation walk
+	 * adding a class to the shipped closure or duplicating the representation walk
 	 * {@code _strv} owns.
 	 */
 	private static @Nullable Method strvMethod;
@@ -502,9 +502,8 @@ final class JvmObjcTemplate {
 			return null;
 		}
 		// An if-chain rather than a switch over the enum: javac lowers that switch
-		// through
-		// a synthetic JvmObjcTemplate$1 holding the ordinal map -- a second class file
-		// the single-blob template cannot carry.
+		// through a synthetic JvmObjcTemplate$1 holding the ordinal map -- a second
+		// class file the builder does not ship.
 		TypeEncoding.Kind kind = type.kind();
 		if (kind == TypeEncoding.Kind.OBJECT) {
 			return wrapObject(runtime, (MemorySegment) value, !handsOwnership(selector));

@@ -281,10 +281,9 @@ public final class RontoLispCli {
 	// reflection: a class-file option would be silently ignored, so it is refused.
 	private static void refuseJavaClassFiles(JavaResolutionOptions javaResolution) {
 		if (javaResolution.namesClassFiles()) {
-			throw new UnsupportedOperationException("--java-release and --java-classpath choose the classes a"
-					+ " compiled JVM program resolves its java: calls against, so they need -o <file>.class or"
-					+ " -o <file>.jar; the interpreter resolves against the classes it runs with"
-					+ " (java -cp ... to add some)");
+			throw new UnsupportedOperationException("--java-release, --java-classpath and --java-static decide how a"
+					+ " compiled JVM program calls Java, so they need -o <file>.class or -o <file>.jar; the"
+					+ " interpreter resolves against the classes it runs with (java -cp ... to add some)");
 		}
 	}
 
@@ -699,11 +698,11 @@ public final class RontoLispCli {
 					+ " Only a program jar derives its class name from the -o file name");
 		}
 		// --java-release / --java-classpath name the class files a JVM compile resolves
-		// java: sites against; java: has no WASM lowering at all.
+		// java: sites against, --java-static refuses the sites that need reflection;
+		// java: has no WASM lowering at all.
 		if (javaResolution.namesClassFiles() && !jvmOutput(outputFile)) {
-			throw new UnsupportedOperationException("--java-release and --java-classpath choose the classes a"
-					+ " compiled JVM program resolves its java: calls against, so they need a .class, .jar or .war"
-					+ " output");
+			throw new UnsupportedOperationException("--java-release, --java-classpath and --java-static decide how a"
+					+ " compiled JVM program calls Java, so they need a .class, .jar or .war output");
 		}
 		if (jvmArtifact.className() != null && !jvmOutput(outputFile)) {
 			throw new UnsupportedOperationException("--class-name names the class a JVM compile emits, so it needs a"
@@ -958,6 +957,7 @@ public final class RontoLispCli {
 				.javaRelease(javaResolution.release())
 				.javaClasspath(javaResolution.classpath())
 				.warnJavaReflection(javaResolution.warnReflection())
+				.javaStatic(javaResolution.javaStatic())
 				.compileProgram(program, features);
 			jvmClassName = compiled.internalClassName();
 			bytes = compiled.classBytes();
@@ -1292,6 +1292,9 @@ public final class RontoLispCli {
 		this.out.println("  --warn-java-reflection");
 		this.out.println("                     Report every java: call that cannot be resolved before it runs");
 		this.out.println("                     (a compile warning; the interpreter sets java:*warn-on-reflection*)");
+		this.out.println("  --java-static      With a .class, .jar or .war output: make every java: call that");
+		this.out.println("                     needs reflection a compile error, so the output has none and");
+		this.out.println("                     GraalVM native-image builds it with no reachability metadata");
 		this.out.println("  --no-wasi          Emit WASM with no WASI imports (reactor mode)");
 		this.out.println("                     Instantiates without an import object (beyond any");
 		this.out.println("                     rontolisp:wasm-import host functions); pure-compute");

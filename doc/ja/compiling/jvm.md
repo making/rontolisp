@@ -21,6 +21,8 @@ jar のパスはどのクラスも名指ししないので、中のクラスは�
 
 1 つのクラスファイルが定数プールに持てる項目は最大 65534 個で、大きなライブラリをいくつも取り込むプログラムはこれを超えることがあります（mito を使うプログラムがその例です）。そのようなプログラムは、クラス本体に加えて `Hello$Part1.class`、`Hello$Part2.class`、... に分かれて出力されます。パートのファイルはクラスと同じパッケージのディレクトリに書き出され、jar にも収められます。実行方法はこれまでと同じで、パートのファイルをクラスの隣に置いておくだけです。
 
+[`java:`](../guides/java-interop.md)、`geom:` のカーネル、`--simd`、`--blas`、`--gpu`、`objc:`、`ffi:` を使うプログラムも、それぞれが必要とするブリッジを同じ方法で受け取ります。`Hello$JavaBridge.class`、`Hello$SimdBridge.class`、... がクラスの隣に書き出され (`--gpu`、`objc:`、`ffi:` ではリネームしたバインディングライブラリの複製 `Hello$Gpu*.class` なども加わります)、jar にも収められます。実行時にクラスを定義しないので、そうした jar は `native-image -jar` で GraalVM ネイティブイメージにもビルドできます。`java:` のリフレクション呼び出しと `--blas` / `ffi:` の foreign 呼び出しには、`java -jar` で一度実行してトレーシングエージェントが記録するメタデータが必要です ([Java 連携](../guides/java-interop.md#native-image))。
+
 クラスは Java コードが直接呼び出す**ライブラリ**にもなれます:
 [`rontolisp:jvm-export`](../reference/functions/rontolisp-jvm-export.md) は `defun` に対して型付きで Java から呼び出し可能な static メソッドを宣言し、`--no-main` は `main` エントリポイントを完全に取り除きます。[JVM ライブラリのエクスポート](../guides/jvm-library.md) を参照してください。
 
@@ -72,9 +74,9 @@ java Fact
 
 その帰結として、実行時に計算した文字列から名前を組み立てて `eval`/`apply` 経由で呼び出すライブラリ関数は、通常の「undefined function」エラーを通知します。その場合は `--no-prune`（または `--dynamic`）を付けてコンパイルすると、すべてのライブラリ定義が保持されます。
 
-生成される `.class` ファイルは Java 17（クラスバージョン 61）をターゲットとするため、実行には Java 17 以降の JRE が必要です。`java.lang` と `java.io` のほか、出力されるランタイムヘルパーは `java.math`（オーバーフロー時に昇格する整数演算と厳密な有理数演算のための `BigInteger`/`BigDecimal`/`MathContext`）と `java.util`（`ArrayList`/`Arrays`、およびハッシュテーブル用の `HashMap`）を参照します。`rontolisp:fetch` を呼び出すプログラムは追加で `java.net`/`java.net.http` を参照し、`rontolisp:await` / `rontolisp:futurep` は future を `java.util.concurrent` のフューチャーとして表現しますが、これらはいずれも Java 17 に含まれるため、要件が上がることはありません。唯一の例外は [`java:` 連携パッケージ](../guides/java-interop.md)を使うプログラムで、コンパイラが (プロジェクト自身の Java リリースでコンパイルされた) リフレクションブリッジをクラスの隣に書き出すため、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です。
+生成される `.class` ファイルは Java 17（クラスバージョン 61）をターゲットとするため、実行には Java 17 以降の JRE が必要です。`java.lang` と `java.io` のほか、出力されるランタイムヘルパーは `java.math`（オーバーフロー時に昇格する整数演算と厳密な有理数演算のための `BigInteger`/`BigDecimal`/`MathContext`）と `java.util`（`ArrayList`/`Arrays`、およびハッシュテーブル用の `HashMap`）を参照します。`rontolisp:fetch` を呼び出すプログラムは追加で `java.net`/`java.net.http` を参照し、`rontolisp:await` / `rontolisp:futurep` は future を `java.util.concurrent` のフューチャーとして表現しますが、これらはいずれも Java 17 に含まれるため、要件が上がることはありません。唯一の例外は [`java:` 連携パッケージ](../guides/java-interop.md)を使うプログラムです。その `java:` 呼び出しは、プログラムのテキストが許す限りコンパイル時に JDK のクラスファイルに対して解決されて直接呼び出しになり、クラスはそのリリース (既定ではコンパイルした JDK 自身のもの) 向けに刻印されるため、そのリリースの JRE が必要です。実行時解決に回る呼び出しは、コンパイラがクラスの隣に書き出す (プロジェクト自身の Java リリースでコンパイルされた) リフレクションブリッジを通るため、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です。
 
-そうしたプログラムの `java:` 呼び出しは、プログラムのテキストが許す限りコンパイル時に JDK のクラスファイルに対して解決されます。`--java-release N` と `--java-classpath` がどのクラスファイルかを選び、`--warn-java-reflection` は実行時解決に回る呼び出しを報告します (ガイドの[実行前の呼び出し解決](../guides/java-interop.md#resolving-calls-before-they-run))。
+`--java-release N` と `--java-classpath` がどのクラスファイルかを選び、`--warn-java-reflection` は実行時解決に回る呼び出しを報告し、`--java-static` はそれらをすべてコンパイルエラーにします。これでクラスはリフレクションを含まなくなり、GraalVM の `native-image` がリーチャビリティメタデータなしでビルドできます (ガイドの[実行前の呼び出し解決](../guides/java-interop.md#resolving-calls-before-they-run))。
 
 ## AOT キャッシュで JIT のウォームアップを飛ばす
 

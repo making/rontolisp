@@ -52,6 +52,22 @@ public interface JavaType extends JavaKind {
 	boolean isFinal();
 
 	/**
+	 * Whether the class file says {@code ACC_PUBLIC}: what bytecode in another package
+	 * may name the class by. A member class declared {@code public} or {@code protected}
+	 * is public in its class file (the language-level access lives in the
+	 * {@code InnerClasses} attribute, which linking does not read); a primitive is
+	 * public, an array as public as its element type.
+	 * @return whether the class is public to the linker
+	 */
+	boolean isPublic();
+
+	/**
+	 * @return whether it is an interface or an {@code abstract} class: no constructor of
+	 * it makes an instance
+	 */
+	boolean isAbstract();
+
+	/**
 	 * Whether a value of {@code other} can be assigned to this type without conversion,
 	 * as {@link Class#isAssignableFrom(Class)} answers.
 	 * @param other the source type
@@ -89,5 +105,17 @@ public interface JavaType extends JavaKind {
 	 * @return whether the members are accessible
 	 */
 	boolean isAccessible();
+
+	/**
+	 * Whether a compiled program can name this type in its own bytecode -- a class
+	 * constant, a {@code checkcast}, a method's owner: a primitive, or a type that is
+	 * {@link #isPublic() public} and {@link #isAccessible() accessible}. A site resolves
+	 * only through linkable types, so every resolved site can be compiled to a direct
+	 * call ({@code JavaSiteResolver}).
+	 * @return whether bytecode in another package and module links against it
+	 */
+	default boolean isLinkable() {
+		return isPrimitive() || (isPublic() && isAccessible());
+	}
 
 }

@@ -2,7 +2,7 @@
 
 2 つの組み込みパッケージで、何もインストールせずに rontolisp の REPL から本物の Cocoa ウィンドウを開けます。`objc` は JVM の Foreign Function API を通じて Objective-C ランタイムと AppKit をバインドし (JNI なし、同梱ネイティブライブラリなし、リフレクションなし)、`appkit` はその上に rontolisp で書かれた小さなウィジェット層です — ウィンドウ、ラベル、Lisp クロージャをアクションに持つボタン、色付きパネル、クリック、繰り返しタイマー、メニューバー項目。
 
-> **macOS 専用。インタプリタ、JVM クラス、ネイティブ実行ファイルで動作。** 両パッケージは `java -jar rontolisp.jar`、`rontolisp` ネイティブバイナリ (バインディングはリフレクションを必要としないためで、これが `java:` 連携にはできないことです)、バインディングを内部に抱えた `.class` / `.jar` にコンパイルしたプログラム、そしてランナー自身がバインディングである Apple シリコン向けの `--native` 実行ファイルで動作します。`.wasm` には foreign function API がないので、そうしたプログラムを `.wasm` にコンパイルすると `Cannot compile: appkit:window ...` エラーになります。Linux 上、またはネイティブアクセスを拒否する JVM (`--illegal-native-access=deny`) では、すべての `objc:` 関数が関数名で始まり理由を述べるメッセージの通常の `error` をシグナルします。
+> **macOS 専用。インタプリタ、JVM クラス、ネイティブ実行ファイルで動作。** 両パッケージは `java -jar rontolisp.jar`、`rontolisp` ネイティブバイナリ (バインディングはリフレクションを必要としないためで、これが `java:` 連携にはできないことです)、バインディングを持ち運ぶ `.class` / `.jar` にコンパイルしたプログラム、そしてランナー自身がバインディングである Apple シリコン向けの `--native` 実行ファイルで動作します。`.wasm` には foreign function API がないので、そうしたプログラムを `.wasm` にコンパイルすると `Cannot compile: appkit:window ...` エラーになります。Linux 上、またはネイティブアクセスを拒否する JVM (`--illegal-native-access=deny`) では、すべての `objc:` 関数が関数名で始まり理由を述べるメッセージの通常の `error` をシグナルします。
 
 ## REPL からウィンドウを
 
@@ -321,7 +321,7 @@ $ rontolisp examples/macos/counter.lisp -o counter.jar
 $ java -jar counter.jar
 ```
 
-クラスはバインディング全体 (`am.ik.objc`、自身のパッケージにリネーム済み) と使用する `appkit` ウィジェットを抱えているので、`java.lang.foreign` を持つ JVM (コンパイラが動いたものか、それより新しいもの) 以外には何も必要ありません。素の `.class` を `--enable-native-access=ALL-UNNAMED` なしで実行すると JDK の restricted-method 警告が一度出ますが動作します。`.jar` はマニフェストでネイティブアクセスを有効にします。`rontolisp` バイナリもそうしたプログラムをコンパイルできます。`.wasm` 出力は拒否され (`Cannot compile: appkit:window ...`)、今後もそうです: そちら側には foreign function API も AppKit もありません。
+クラスは使用する `appkit` ウィジェットを抱え、バインディング全体 (`am.ik.objc`、クラス名に合わせてリネーム済み) は `Counter$Objc*.class` ファイルとしてクラスの隣 (または jar の中) に書き出されます。それらのファイルがあれば、`java.lang.foreign` を持つ JVM (コンパイラが動いたものか、それより新しいもの) 以外には何も必要ありません。素の `.class` を `--enable-native-access=ALL-UNNAMED` なしで実行すると JDK の restricted-method 警告が一度出ますが動作します。`.jar` はマニフェストでネイティブアクセスを有効にします。`rontolisp` バイナリもそうしたプログラムをコンパイルできます。`.wasm` 出力は拒否され (`Cannot compile: appkit:window ...`)、今後もそうです: そちら側には foreign function API も AppKit もありません。
 
 ## ネイティブ実行ファイル
 

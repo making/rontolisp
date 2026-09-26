@@ -47,14 +47,17 @@ class JvmSimdParallelCompilerTest {
 
 	private byte[] compile(String lispCode, boolean parallel, boolean gpu) {
 		List<LispVal> program = VecLibrary.process(LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
-		return JvmLispCompiler.builder()
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
 			.className("Test")
 			.optimize(OptimizeLevel.NONE)
 			.simd(true)
 			.gpu(gpu)
 			.parallel(parallel)
-			.build()
-			.compile(program);
+			.build();
+		byte[] classBytes = compiler.compile(program);
+		// The bridges travel beside the class as their own files, where run() loads.
+		TravellingClassFiles.write(compiler, this.tempDir);
+		return classBytes;
 	}
 
 	private String run(byte[] classBytes) throws Exception {
@@ -207,7 +210,7 @@ class JvmSimdParallelCompilerTest {
 
 	@Test
 	void theEmittedPoolDefaultsToHalfTheBoxToo() throws Exception {
-		// The pool a compiled program carries is this template's bytecode, embedded
+		// The pool a compiled program carries is this template's bytecode, shipped
 		// verbatim, and it sizes itself the way the interpreter's twin does
 		// (SimdParallelTest#theDefaultThreadCountIsHalfTheBoxAndNeverFillsIt): half the
 		// processors, never below two, never the whole box.
@@ -240,7 +243,7 @@ class JvmSimdParallelCompilerTest {
 		String program = inexact(600, 300, DOUBLE) + "(print (linalg:to-list (vec:matvec *w* *x*)))";
 		byte[] chained = compile(program, true, true);
 		assertThat(new String(chained, StandardCharsets.ISO_8859_1)).contains("simdMatvecParallel")
-			.contains("RontoLispGpuBridge");
+			.contains(JvmGpuRuntimeBuilder.bridgeName("Test"));
 		assertThat(run(chained)).isEqualTo(run(compile(program, false, false)));
 	}
 

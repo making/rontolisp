@@ -4,7 +4,7 @@ import am.ik.gpu.Gpu;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The GPU bridge injected into a compiled {@code .class} when the {@code --gpu} flag is
+ * The GPU bridge shipped beside a compiled {@code .class} when the {@code --gpu} flag is
  * passed: {@code linalg:dot} over two packed rank-2 operands -- and through it
  * {@code linalg:matmul} at rank 2 and {@code linalg:solve} -- is lowered to a call on
  * {@link #gpuDot}, and {@code linalg::%la-matmul-nd}, the STACKED product behind
@@ -16,8 +16,8 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * The compiled sibling of {@code eval/LinalgGpuKernels}, and unlike
  * {@link JvmBlasTemplate} NOT a copy of it: the binding itself is {@code am.ik.gpu},
- * whose class files travel in the same blob as this one ({@link JvmGpuRuntimeBuilder}),
- * renamed into the emitted program's own package. So the compiled backend runs the very
+ * whose class files travel beside the program with this one
+ * ({@link JvmGpuRuntimeBuilder}), renamed after it. So the compiled backend runs the very
  * bytes the interpreter runs -- one probe, one allocator discipline, one status table,
  * one precision contract -- and there is nothing here to keep in sync. What this class
  * holds is only the two things a call site adds: the compiled packed-array
@@ -40,7 +40,7 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * Design constraints (as for {@link JavaBridgeTemplate}): no nested classes or records,
- * and no reference to any class that is not either the JDK's or in the blob.
+ * and no reference to any class that is not either the JDK's or shipped with it.
  */
 final class JvmGpuTemplate {
 
@@ -48,8 +48,8 @@ final class JvmGpuTemplate {
 	}
 
 	/**
-	 * Hands the embedded PTX text to the library, which has no classpath resource of its
-	 * own once its classes are renamed into this program's package. Emitted by
+	 * Hands the PTX text the program carries to the library, which has no classpath
+	 * resource of its own once its classes are renamed after the program. Emitted by
 	 * {@link JvmGpuRuntimeBuilder} into {@code _gpuInit}, before anything can probe.
 	 * @param ptx the kernel text
 	 */
@@ -90,11 +90,11 @@ final class JvmGpuTemplate {
 	 * holding of it is stale. The compiled half of the residency invalidation: the
 	 * emitted {@code _gpuWritten} guard calls this from {@code _fvAset1/2/N}, from the
 	 * in-place {@code --simd} kernels' call sites and from every {@code vec:}
-	 * {@code -into} call site, but only once the bridge is defined -- before that nothing
-	 * can be resident ({@code .kb/gpu.md}). Answers the array the write must land in: the
-	 * array itself, or -- when it is a result STUB, the header alone, whose elements the
-	 * library holds ({@code Gpu.materialize}) -- its backing; the caller writes into what
-	 * is answered and keeps holding what it passed.
+	 * {@code -into} call site, but only once {@code _gpuInit} has run -- before that
+	 * nothing can be resident ({@code .kb/gpu.md}). Answers the array the write must land
+	 * in: the array itself, or -- when it is a result STUB, the header alone, whose
+	 * elements the library holds ({@code Gpu.materialize}) -- its backing; the caller
+	 * writes into what is answered and keeps holding what it passed.
 	 * @param array the {@code double[]} or {@code float[]} that was written; anything
 	 * else is answered back untouched
 	 * @return the array to write into
@@ -110,7 +110,7 @@ final class JvmGpuTemplate {
 	 * A packed float array is about to be READ on the host: if the device holds its only
 	 * bytes (a result left there lazily), they come home first. The compiled half of the
 	 * reader enumeration: the emitted {@code _gpuMaterialize} guard calls this from every
-	 * host read of packed-array storage, once the bridge is defined -- before that
+	 * host read of packed-array storage, once {@code _gpuInit} has run -- before that
 	 * nothing can be resident. Answers the array to READ: the array itself, or the
 	 * backing of a result stub (see {@link #gpuWritten}); every reader reads what is
 	 * answered, and the value the program holds stays the one it passed. Anything that is

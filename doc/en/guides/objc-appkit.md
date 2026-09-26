@@ -10,7 +10,7 @@ repeating timer and a menu bar item.
 > **macOS only; interpreter, JVM class and native executable.** Both packages work
 > under `java -jar rontolisp.jar`, in the `rontolisp` native binary — the binding needs
 > no reflection, which is what `java:` interop lacks there — in a program compiled
-> to a `.class` or `.jar`, which carries the binding inside it, and in a `--native`
+> to a `.class` or `.jar`, which carries the binding with it, and in a `--native`
 > executable for Apple silicon, whose runner is the binding. A `.wasm` has no foreign
 > function API, so compiling such a program to one is a
 > `Cannot compile: appkit:window ...` error. On Linux, or on a JVM that denies native
@@ -418,9 +418,10 @@ $ rontolisp examples/macos/counter.lisp -o counter.jar
 $ java -jar counter.jar
 ```
 
-The class carries the whole binding (`am.ik.objc`, renamed into its own package) and
-the `appkit` widgets it uses, so it needs nothing beside a JVM with `java.lang.foreign`
-— the one the compiler ran on, or newer. A bare `.class` run without
+The class carries the `appkit` widgets it uses, and the whole binding (`am.ik.objc`,
+renamed after the class) is written beside it as `Counter$Objc*.class` files, or into
+the jar; with those files it needs nothing else but a JVM with `java.lang.foreign` —
+the one the compiler ran on, or newer. A bare `.class` run without
 `--enable-native-access=ALL-UNNAMED` prints the JDK's restricted-method warning once
 and works; a `.jar` enables native access in its manifest. The `rontolisp` binary
 compiles such a program too. A `.wasm` output is refused —

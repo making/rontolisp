@@ -143,6 +143,25 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 			return this.type.isPrimitive() || this.type.isArray() || Modifier.isFinal(this.type.getModifiers());
 		}
 
+		// The class file's ACC_PUBLIC, which getModifiers() does not answer for a member
+		// class: javac writes a protected one as public there.
+		@Override
+		public boolean isPublic() {
+			if (this.type.isPrimitive()) {
+				return true;
+			}
+			if (this.type.isArray()) {
+				return of(this.type.componentType()).isPublic();
+			}
+			int modifiers = this.type.getModifiers();
+			return Modifier.isPublic(modifiers) || (this.type.isMemberClass() && Modifier.isProtected(modifiers));
+		}
+
+		@Override
+		public boolean isAbstract() {
+			return !this.type.isPrimitive() && !this.type.isArray() && Modifier.isAbstract(this.type.getModifiers());
+		}
+
 		@Override
 		public boolean isAssignableFrom(JavaType other) {
 			return other instanceof Type t && this.type.isAssignableFrom(t.type);
@@ -200,9 +219,10 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 
 		@Override
 		public boolean isAccessible() {
+			// Public as the class file says it (what reflective access checks too), so a
+			// protected member class of an exported package is accessible.
 			Module module = this.type.getModule();
-			return !module.isNamed()
-					|| (Modifier.isPublic(this.type.getModifiers()) && module.isExported(this.type.getPackageName()));
+			return !module.isNamed() || (isPublic() && module.isExported(this.type.getPackageName()));
 		}
 
 		@Override

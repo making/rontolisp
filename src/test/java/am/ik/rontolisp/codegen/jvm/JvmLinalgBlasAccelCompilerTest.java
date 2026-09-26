@@ -50,13 +50,16 @@ class JvmLinalgBlasAccelCompilerTest {
 
 	private byte[] compile(String lispCode, boolean blas, boolean simd) {
 		List<LispVal> program = VecLibrary.process(LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
-		return JvmLispCompiler.builder()
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
 			.className("Test")
 			.optimize(OptimizeLevel.NONE)
 			.simd(simd)
 			.blas(blas)
-			.build()
-			.compile(program);
+			.build();
+		byte[] classBytes = compiler.compile(program);
+		// The bridges travel beside the class as their own files, where run() loads.
+		TravellingClassFiles.write(compiler, this.tempDir);
+		return classBytes;
 	}
 
 	private String run(byte[] classBytes) throws Exception {
@@ -92,17 +95,17 @@ class JvmLinalgBlasAccelCompilerTest {
 	}
 
 	private static boolean embedsBlasBridge(byte[] classBytes) {
-		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmBlasRuntimeBuilder.BRIDGE_NAME);
+		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmBlasRuntimeBuilder.bridgeName("Test"));
 	}
 
 	private static boolean embedsSimdBridge(byte[] classBytes) {
-		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmSimdRuntimeBuilder.BRIDGE_NAME);
+		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmSimdRuntimeBuilder.bridgeName("Test"));
 	}
 
 	/**
 	 * Whether a CALL SITE for the named bridge entry point was emitted. The bridge's own
-	 * bytes are base64 string constants, so its method names are invisible there; a
-	 * Methodref in the generated class's constant pool is the interception itself.
+	 * bytes travel in a file of their own, so a Methodref in the generated class's
+	 * constant pool is the interception itself.
 	 */
 	private static boolean callsBridgeMethod(byte[] classBytes, String bridgeMethod) {
 		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(bridgeMethod);
@@ -323,23 +326,25 @@ class JvmLinalgBlasAccelCompilerTest {
 		assertThat(run(compile(program, true, true))).isEqualTo(scalar(program));
 	}
 
-	// MethodHandles.Lookup.defineClass(byte[]) requires the defined class to share the
-	// lookup class's package; every test above compiles into the default package, so this
-	// one alone proves the embedded bridge is renamed into a NON-default package too --
-	// runs on any machine, since a below-threshold product declines regardless.
+	// The bridge's entry points are package-private; every test above compiles into the
+	// default package, so this one alone proves the bridge is renamed into a NON-default
+	// package too -- runs on any machine, since a below-threshold product declines
+	// regardless.
 	@Test
 	void theBridgeIsRenamedIntoTheGeneratedClassOwnPackageAndRunsThere() throws Exception {
 		String lispCode = "(print (linalg:dot #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))";
 		String expected = scalar(lispCode);
 		List<LispVal> program = LinalgLibrary.process(LispReader.readAllFromString(lispCode));
-		byte[] classBytes = JvmLispCompiler.builder()
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
 			.className("com/example/Test")
 			.optimize(OptimizeLevel.NONE)
 			.blas(true)
-			.build()
-			.compile(program);
+			.build();
+		byte[] classBytes = compiler.compile(program);
+		TravellingClassFiles.write(compiler, this.tempDir);
 
-		String bridgeName = "com/example/" + JvmBlasRuntimeBuilder.BRIDGE_NAME;
+		String bridgeName = JvmBlasRuntimeBuilder.bridgeName("com/example/Test");
+		assertThat(bridgeName).isEqualTo("com/example/Test$BlasBridge");
 		assertThat(new String(classBytes, StandardCharsets.ISO_8859_1)).contains(bridgeName);
 
 		Path packageDir = this.tempDir.resolve("com").resolve("example");

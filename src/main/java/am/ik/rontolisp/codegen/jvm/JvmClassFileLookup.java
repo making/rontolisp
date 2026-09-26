@@ -313,6 +313,16 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 		}
 
 		@Override
+		public boolean isPublic() {
+			return true;
+		}
+
+		@Override
+		public boolean isAbstract() {
+			return false;
+		}
+
+		@Override
 		public boolean isAssignableFrom(JavaType other) {
 			return other == this;
 		}
@@ -379,6 +389,16 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 
 		@Override
 		public boolean isFinal() {
+			return false;
+		}
+
+		@Override
+		public boolean isPublic() {
+			return false;
+		}
+
+		@Override
+		public boolean isAbstract() {
 			return false;
 		}
 
@@ -453,6 +473,16 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 		@Override
 		public boolean isFinal() {
 			return true;
+		}
+
+		@Override
+		public boolean isPublic() {
+			return this.component.isPublic();
+		}
+
+		@Override
+		public boolean isAbstract() {
+			return false;
 		}
 
 		@Override
@@ -551,6 +581,16 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 		@Override
 		public boolean isFinal() {
 			return this.info.isFinal();
+		}
+
+		@Override
+		public boolean isPublic() {
+			return this.info.isPublic();
+		}
+
+		@Override
+		public boolean isAbstract() {
+			return (this.info.access() & (am.ik.jvm.AccessFlag.ACC_ABSTRACT | am.ik.jvm.AccessFlag.ACC_INTERFACE)) != 0;
 		}
 
 		@Override

@@ -14,7 +14,7 @@ bitfield layers, the translate/expand protocol — is upstream's code.
 
 > **Where it runs.** `cffi` works under `java -jar rontolisp.jar`, in the REPL, in
 > the `rontolisp` native binary, and in a compiled `-o Prog.class` / `-o app.jar`,
-> which carry the binding inside the emitted class. Neither WASM backend has a
+> which carry the binding beside the emitted class. Neither WASM backend has a
 > foreign function API, so compiling such a program to a `.wasm` is a
 > `Cannot compile: FFI:...` error, permanently.
 

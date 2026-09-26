@@ -195,9 +195,10 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	/**
 	 * The bridge classes a feature ships beside the program rather than defining at run
-	 * time (the {@code java:} bridge, {@link JvmJavaRuntimeBuilder}, and the
-	 * {@code geom:} kernels, {@link JvmGeomRuntimeBuilder}), keyed like
-	 * {@link #partClassFiles}. Reset by every compile attempt.
+	 * time -- the {@code java:}, {@code geom:}, {@code --simd}, {@code --blas} and
+	 * {@code --gpu} bridges and the {@code objc:} / {@code ffi:} libraries
+	 * ({@code .kb/template-class-embedding.md}) -- keyed like {@link #partClassFiles}.
+	 * Reset by every compile attempt.
 	 */
 	private Map<String, byte[]> bridgeClassFiles = new LinkedHashMap<>();
 
@@ -227,6 +228,19 @@ public final class JvmLispCompiler implements LispCompiler {
 	private final boolean warnJavaReflection;
 
 	/**
+	 * Whether a {@code java:} site that needs the reflective bridge is a compile error
+	 * ({@code --java-static}).
+	 */
+	private final boolean javaStatic;
+
+	/**
+	 * The class-file major version this attempt stamps: {@link #CLASS_MAJOR_VERSION}, or
+	 * the version of the Java release a {@code java:} program's sites resolved against
+	 * when that is newer.
+	 */
+	private int classMajorVersion = CLASS_MAJOR_VERSION;
+
+	/**
 	 * The class files {@code java:} sites resolve against, opened by the first attempt
 	 * that compiles one and closed when {@link #compile(List)} returns.
 	 */
@@ -235,7 +249,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	/**
 	 * The methods something outside the class's own bytecode finds by NAME, which
 	 * therefore stay in the class when it is split: {@code _apply} and {@code _strv},
-	 * which the embedded java:/objc:/ffi: bridges look up with {@code getDeclaredMethod},
+	 * which the shipped java:/objc:/ffi: bridges look up with {@code getDeclaredMethod},
 	 * and {@code _gpuMaterialize}/{@code _gpuWritten}, which the travelling float-array
 	 * handle resolves through {@code MethodHandles} ({@code .kb/jvm-export.md}).
 	 */
@@ -281,6 +295,13 @@ public final class JvmLispCompiler implements LispCompiler {
 	private static final String GROUP_APPLY = "apply";
 
 	/**
+	 * The {@code java:} bridge's gate: embedded only when a site needs it
+	 * ({@link JvmJavaSites#needsBridge}); a site that turns out to after all calls the
+	 * absent {@code _javaInit}.
+	 */
+	private static final String GROUP_JAVA_BRIDGE = "java-bridge";
+
+	/**
 	 * Which gate emits a given runtime helper, i.e. which gate to force on when the
 	 * finished class turns out to call that helper without it having been emitted. A
 	 * helper absent from this table is not recoverable and makes the compile fail loudly
@@ -304,6 +325,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if ("_apply".equals(helperName)) {
 			return GROUP_APPLY;
+		}
+		if (JvmJavaRuntimeBuilder.INIT_METHOD.equals(helperName)) {
+			return GROUP_JAVA_BRIDGE;
 		}
 		if (JvmComplexRuntimeBuilder.METHOD_NAMES.contains(helperName)) {
 			return GROUP_COMPLEX;
@@ -398,6 +422,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		this.javaRelease = builder.javaRelease;
 		this.javaClasspath = builder.javaClasspath;
 		this.warnJavaReflection = builder.warnJavaReflection;
+		this.javaStatic = builder.javaStatic;
 	}
 
 	/**
@@ -445,6 +470,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		private List<java.nio.file.Path> javaClasspath = List.of();
 
 		private boolean warnJavaReflection;
+
+		private boolean javaStatic;
 
 		private Builder() {
 		}
@@ -499,7 +526,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * Selects the {@code --simd} lowering. When {@code true}, the six vectorizable
 		 * {@code vec:} kernels
 		 * ({@code add}/{@code sub}/{@code mul}/{@code scale}/{@code dot}/{@code sum}) are
-		 * lowered at their call sites to an embedded {@code jdk.incubator.vector} bridge
+		 * lowered at their call sites to a shipped {@code jdk.incubator.vector} bridge
 		 * ({@link JvmSimdVectorTemplate}) instead of the scalar {@code vec.lisp}
 		 * reference. Running such a class requires
 		 * {@code java --add-modules jdk.incubator.vector}.
@@ -513,7 +540,7 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		/**
 		 * Selects the {@code --blas} lowering. When {@code true}, the {@code linalg:}
-		 * matrix product is lowered at its call sites to an embedded CBLAS bridge
+		 * matrix product is lowered at its call sites to a shipped CBLAS bridge
 		 * ({@link JvmBlasTemplate}), which binds a tuned library out of the OS at run
 		 * time and declines to whatever is below it -- the {@code --simd} kernel or the
 		 * scalar defun -- when there is none. Orthogonal to {@link #simd}: either, both
@@ -528,12 +555,12 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		/**
 		 * Selects the {@code --gpu} lowering. When {@code true}, the matrix-by-matrix
-		 * case of the {@code linalg:} product is lowered at its call sites to an embedded
-		 * device bridge ({@link JvmGpuTemplate} over the injected {@code am.ik.gpu}),
-		 * which offers the product to an NVIDIA GPU and declines to whatever is below it
-		 * -- the CBLAS bridge, the {@code --simd} kernel or the scalar defun -- when
-		 * there is no device or the product is one it does not take. Orthogonal to
-		 * {@link #simd} and {@link #blas}: any combination.
+		 * case of the {@code linalg:} product is lowered at its call sites to a shipped
+		 * device bridge ({@link JvmGpuTemplate} over a renamed copy of
+		 * {@code am.ik.gpu}), which offers the product to an NVIDIA GPU and declines to
+		 * whatever is below it -- the CBLAS bridge, the {@code --simd} kernel or the
+		 * scalar defun -- when there is no device or the product is one it does not take.
+		 * Orthogonal to {@link #simd} and {@link #blas}: any combination.
 		 * @param gpu whether to lower the matrix product to the device bridge
 		 * @return this builder
 		 */
@@ -692,6 +719,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		/**
+		 * Makes a {@code java:} call site that cannot be compiled to a direct call -- one
+		 * left to run-time reflection, a {@code java:proxy}, a function value passed
+		 * where an interface is expected -- a compile error ({@code --java-static}), so
+		 * the class carries no reflective bridge at all: what GraalVM native-image
+		 * compiles without reachability metadata.
+		 * @param javaStatic whether to refuse such sites
+		 * @return this builder
+		 */
+		public Builder javaStatic(boolean javaStatic) {
+			this.javaStatic = javaStatic;
+			return this;
+		}
+
+		/**
 		 * Builds the compiler.
 		 * @return a new JVM compiler
 		 * @throws NullPointerException when no class name was set
@@ -713,7 +754,9 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * observe a complex value builds. Empty unless the program does one of those, so an
 	 * ordinary compilation still produces exactly one file. Two kinds live in the
 	 * program's own package instead: a split program's {@code $PartN} classes and the
-	 * template bridges ({@code $JavaBridge}, {@code $GeomBridge}).
+	 * template bridges ({@code $JavaBridge}, {@code $GeomBridge}, {@code $SimdBridge},
+	 * {@code $BlasBridge}, and the {@code $Gpu*}, {@code $Objc*} and {@code $Ffi*}
+	 * library copies).
 	 *
 	 * <p>
 	 * The runtime classes are written at their canonical names rather than renamed into
@@ -729,7 +772,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				&& !this.needsStringInputRuntime && this.partClassFiles.isEmpty() && this.bridgeClassFiles.isEmpty()) {
 			return Map.of();
 		}
-		// A program too large for one class brings its $PartN classes, and a java:
+		// A program too large for one class brings its $PartN classes, and a bridged
 		// program its bridge: they are written beside the class exactly where the runtime
 		// classes are, in its own package.
 		Map<String, byte[]> files = new LinkedHashMap<>(this.partClassFiles);
@@ -1000,12 +1043,6 @@ public final class JvmLispCompiler implements LispCompiler {
 		ConstantPool cp = this.poolIndexOrigin == 1 ? ConstantPool.unbounded()
 				: ConstantPool.unboundedFrom(this.poolIndexOrigin);
 		ClassConstant thisClass = cp.addClass(cp.addUtf8(this.className));
-		// The internal-name package prefix of the generated class ("" for the default
-		// package, otherwise e.g. "com/example/"): every embedded acceleration/interop
-		// bridge is renamed into it, because Lookup.defineClass(byte[]) requires the
-		// defined class to share the lookup class's package.
-		int classNameSlash = this.className.lastIndexOf('/');
-		String bridgePackagePrefix = classNameSlash < 0 ? "" : this.className.substring(0, classNameSlash + 1);
 		ClassConstant objectClass = cp.addClass(cp.addUtf8("java/lang/Object"));
 
 		ClassConstant systemClass = cp.addClass(cp.addUtf8("java/lang/System"));
@@ -1383,20 +1420,30 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Constant acceptedIssuersDesc = usesTlsConnect ? cp.addUtf8("()[Ljava/security/cert/X509Certificate;")
 				: null;
 
-		// java: interop runtime: emitted only when the program uses one of the five
-		// java: functions. The (renamed) JavaBridgeTemplate travels beside the class as
-		// its own class file, and the eval runtime is forced (the bridge applies Lisp
-		// callables through _apply).
+		// java: interop. The sites resolve against class files, never the classes this
+		// compiler runs on (compiler/JavaSiteResolver, .kb/java-interop.md); a resolved
+		// site compiles to a direct call (JvmJavaDirectSites). The bridge runtime is
+		// emitted only when a site needs it -- a site left to run time, a java:proxy, a
+		// function value passed where an interface is expected -- and never under
+		// --java-static, which refuses such a site. The (renamed) JavaBridgeTemplate
+		// travels beside the class as its own class file, and the eval runtime is forced
+		// (the bridge applies Lisp callables through _apply).
 		boolean usesJava = programUsesAnyJavaOp(program);
-		final JvmJavaRuntimeBuilder.@Nullable JavaRuntime javaRuntime = usesJava
+		final JvmJavaSites javaSites = usesJava
+				? new JvmJavaSites(javaClasses(), cp, thisClass, lispToStringMethod, this.javaStatic) : null;
+		boolean usesJavaBridge = javaSites != null && !this.javaStatic
+				&& (forcedGroups.contains(GROUP_JAVA_BRIDGE) || javaSites.needsBridge(program));
+		final JvmJavaRuntimeBuilder.@Nullable JavaRuntime javaRuntime = usesJavaBridge
 				? JvmJavaRuntimeBuilder.build(cp, thisClass, this.className) : null;
 		this.bridgeClassFiles = new LinkedHashMap<>();
 		if (javaRuntime != null) {
 			this.bridgeClassFiles.putAll(javaRuntime.classFiles());
 		}
-		// The sites resolve against class files, never the classes this compiler runs
-		// on (compiler/JavaSiteResolver, .kb/java-interop.md).
-		final JvmJavaSites javaSites = usesJava ? new JvmJavaSites(javaClasses()) : null;
+		// A class calling members chosen against release N's API is stamped for release
+		// N, so an older JRE refuses it at load rather than failing at the first call of
+		// a member it lacks; a program without java: keeps the version-61 baseline.
+		this.classMajorVersion = usesJava ? Math.max(CLASS_MAJOR_VERSION, 44 + javaClasses().release())
+				: CLASS_MAJOR_VERSION;
 		if (javaSites != null) {
 			if (!javaClasses().hasPlatform()) {
 				CompileWarnings.warn("warning: no JDK found (java.home, JAVA_HOME or java on PATH holds no lib/ct.sym):"
@@ -1406,23 +1453,29 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		// objc: runtime: emitted only when the program uses one of the seven objc: verbs
-		// (an appkit: program does, through the spliced appkit.lisp). It embeds the whole
-		// am.ik.objc library plus the bridge and the handle, renamed into this class's
-		// package (JvmObjcRuntimeBuilder), and forces the eval runtime: a method of
+		// (an appkit: program does, through the spliced appkit.lisp). It ships the whole
+		// am.ik.objc library plus the bridge and the handle beside the class, renamed
+		// after it (JvmObjcRuntimeBuilder), and forces the eval runtime: a method of
 		// objc:define-class and the body of objc:on-main are applied through _apply from
 		// an upcall on thread 0.
 		boolean usesObjc = programUsesAnyObjcOp(program);
 		final JvmObjcRuntimeBuilder.@Nullable ObjcRuntime objcRuntime = usesObjc
-				? JvmObjcRuntimeBuilder.build(cp, thisClass, stringConcat, bridgePackagePrefix) : null;
+				? JvmObjcRuntimeBuilder.build(cp, thisClass, this.className) : null;
+		if (objcRuntime != null) {
+			this.bridgeClassFiles.putAll(objcRuntime.classFiles());
+		}
 
 		// ffi: runtime: emitted only when the program uses one of the ffi: verbs (a
-		// cffi: program does, through the spliced cffi-sys backend). It embeds the whole
-		// am.ik.ffi library plus the bridge and the pointer class, renamed into this
-		// class's package (JvmFfiRuntimeBuilder), and forces the eval runtime: an
+		// cffi: program does, through the spliced cffi-sys backend). It ships the whole
+		// am.ik.ffi library plus the bridge and the pointer class beside the class,
+		// renamed after it (JvmFfiRuntimeBuilder), and forces the eval runtime: an
 		// ffi:callback's Lisp function is applied through _apply from an upcall.
 		boolean usesFfi = programUsesAnyFfiOp(program);
 		final JvmFfiRuntimeBuilder.@Nullable FfiRuntime ffiRuntime = usesFfi
-				? JvmFfiRuntimeBuilder.build(cp, thisClass, stringConcat, bridgePackagePrefix) : null;
+				? JvmFfiRuntimeBuilder.build(cp, thisClass, this.className) : null;
+		if (ffiRuntime != null) {
+			this.bridgeClassFiles.putAll(ffiRuntime.classFiles());
+		}
 
 		ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
 		final JvmHttpHandlerRuntimeBuilder.@Nullable HttpHandlerRuntime httpHandlerRuntime = usesHttpHandler
@@ -1625,7 +1678,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// runtime's global env mirror (_genv) and function registry (_lookup/_fenv), so
 		// they force the eval runtime. fmakunbound writes the tombstone into that same
 		// _fenv.
-		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic || usesJava || usesObjc || usesFfi
+		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic || usesJavaBridge || usesObjc || usesFfi
 				|| programUsesSymbol(program, LispNames.BOUNDP) || programUsesSymbol(program, LispNames.SYMBOL_VALUE)
 				|| programUsesSymbol(program, LispNames.SET) || programUsesSymbol(program, LispNames.FBOUNDP)
 				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
@@ -2184,12 +2237,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		// --vec: emit the Vector API acceleration bridge only when the program actually
 		// references one of the six accelerated vec: kernels (directly or via a spliced
 		// mean/norm body). Off by default, so the ordinary scalar vec.lisp is used. The
-		// bridge is a self-contained embedded class (like the java: interop bridge); the
+		// bridge is a self-contained class shipped beside the program (like the java:
+		// interop bridge); the
 		// packed float-array _fv* helpers still render/index its double[] results.
 		boolean usesSimd = this.simdAccel && programUsesAnyAcceleratedSimdOp(program);
 		final JvmSimdRuntimeBuilder.@Nullable SimdRuntime simdRuntime = usesSimd
-				? JvmSimdRuntimeBuilder.build(cp, thisClass, stringConcat, this.parallelAccel, bridgePackagePrefix)
-				: null;
+				? JvmSimdRuntimeBuilder.build(cp, thisClass, this.parallelAccel, this.className) : null;
+		if (simdRuntime != null) {
+			this.bridgeClassFiles.putAll(simdRuntime.classFiles());
+		}
 
 		// --blas: emit the CBLAS bridge only when the program actually reaches a matrix
 		// product the library takes -- linalg:dot (directly, or through the spliced
@@ -2206,13 +2262,16 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		final JvmBlasRuntimeBuilder.@Nullable BlasRuntime blasRuntime = usesBlas
-				? JvmBlasRuntimeBuilder.build(cp, thisClass, stringConcat, bridgePackagePrefix) : null;
+				? JvmBlasRuntimeBuilder.build(cp, this.className) : null;
+		if (blasRuntime != null) {
+			this.bridgeClassFiles.putAll(blasRuntime.classFiles());
+		}
 
 		// --gpu: the same gate over its own members -- the matrix by matrix case of
 		// linalg:dot, the STACKED rank->=3 product behind linalg:matmul, and the twelve
 		// element-wise ufuncs whose scalar cost is a libm call -- and the same
-		// orthogonality. What it embeds is not one template but am.ik.gpu itself, renamed
-		// into this class's package (JvmGpuRuntimeBuilder). The gate has to name every
+		// orthogonality. What it ships is not one template but am.ik.gpu itself, renamed
+		// after this class (JvmGpuRuntimeBuilder). The gate has to name every
 		// member: a transformer reaches only the stacked product and the ufuncs, so a
 		// gate on dot alone would embed no bridge for exactly the program the flag is
 		// for.
@@ -2223,7 +2282,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		final JvmGpuRuntimeBuilder.@Nullable GpuRuntime gpuRuntime = usesGpu
-				? JvmGpuRuntimeBuilder.build(cp, thisClass, stringConcat, bridgePackagePrefix) : null;
+				? JvmGpuRuntimeBuilder.build(cp, thisClass, stringConcat, this.className) : null;
+		if (gpuRuntime != null) {
+			this.bridgeClassFiles.putAll(gpuRuntime.classFiles());
+		}
 
 		// The geom: kernels: no flag in front of them (the interpreter's natives have
 		// none either -- nothing here reassociates, .kb/geom.md), so the gate is the
@@ -3159,8 +3221,13 @@ public final class JvmLispCompiler implements LispCompiler {
 			ClassConstant classClass = cp.addClass(cp.addUtf8("java/lang/Class"));
 			MethodrefConstant classGetName = cp.addMethodref(classClass,
 					cp.addNameAndType(cp.addUtf8("getName"), cp.addUtf8("()Ljava/lang/String;")));
+			ClassConstant arrayListForPrint = cp.addClass(cp.addUtf8("java/util/ArrayList"));
 			javaPrint = new JvmRuntimeBuilder.JavaPrint(bigIntegerClassForPrint, objectGetClass, classGetName,
-					stringConcat, cp.addString("#<java "), cp.addString(">"));
+					stringConcat, cp.addString("#<java "), cp.addString(">"),
+					cp.addMethodref(arrayListForPrint, cp.addNameAndType(cp.addUtf8("isEmpty"), cp.addUtf8("()Z"))),
+					cp.addMethodref(arrayListForPrint,
+							cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;"))),
+					cp.addClass(cp.addUtf8("[Ljava/lang/Object;")));
 		}
 		else {
 			javaPrint = null;
@@ -3904,10 +3971,6 @@ public final class JvmLispCompiler implements LispCompiler {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, simdRuntime.availableFieldName(),
 					simdRuntime.availableFieldDesc());
 		}
-		if (blasRuntime != null) {
-			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, blasRuntime.initedFieldName(),
-					blasRuntime.initedFieldDesc());
-		}
 		if (gpuRuntime != null) {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, gpuRuntime.initedFieldName(),
 					gpuRuntime.initedFieldDesc());
@@ -4280,11 +4343,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | im.extraFlags(), im.name(), im.desc(),
 					im.maxStack(), im.maxLocals(), im.code(), im.exceptionTable());
 		}
-		// The five lazy _*Init methods below define an embedded class (or bind a
-		// native library) behind a plain int guard, and a served program runs
+		// The lazy _*Init methods below bind a callback, hand over kernel text or
+		// initialize a bridge behind a plain int guard, and a served program runs
 		// one virtual thread per request -- two first calls arriving together
-		// both passed the guard and the second defineClass died with a
-		// LinkageError (found by WarE2eTest's concurrent burst; the exact bug
+		// both passed the guard (when these still defined classes, the second
+		// defineClass died with a LinkageError; found by WarE2eTest's concurrent
+		// burst; the exact bug
 		// family .kb/concurrent-served-requests.md records for the
 		// interpreter's lazy loads, whose rule is: take the lock, check the
 		// flag, set it, evaluate). ACC_SYNCHRONIZED is that rule in bytecode;
@@ -4294,6 +4358,14 @@ public final class JvmLispCompiler implements LispCompiler {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
 					javaRuntime.initName(), javaRuntime.initDesc(), javaRuntime.maxStack(), javaRuntime.maxLocals(),
 					javaRuntime.initCode(), List.of());
+		}
+		// The direct java: calls (JvmJavaDirectSites), each site shape's method and the
+		// helpers they share, made while the bodies above were compiled.
+		if (javaSites != null) {
+			for (JvmJavaDirectSites.Method site : javaSites.direct().methods()) {
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, site.name(), site.desc(),
+						site.maxStack(), site.maxLocals(), site.code(), site.exceptionTable());
+			}
 		}
 		if (objcRuntime != null) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
@@ -4309,20 +4381,15 @@ public final class JvmLispCompiler implements LispCompiler {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
 					simdRuntime.initName(), simdRuntime.initDesc(), simdRuntime.maxStack(), simdRuntime.maxLocals(),
 					simdRuntime.initCode(), simdRuntime.initExceptionTable());
-			// _simdReady(): returns whether the bridge define succeeded --
+			// _simdReady(): returns whether the bridge linked --
 			// _simdInit must have run first, same as every ops.get(member)
 			// call site. False on a runtime without jdk.incubator.vector, so
 			// the accelerated call sites (JvmSimdCompiler, the --simd rung of
 			// JvmLinalgKernelCompiler's chain) can decline to the scalar defun
 			// instead of resolving a method reference into a bridge class that
-			// was never defined.
+			// cannot link.
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, simdRuntime.readyName(),
 					simdRuntime.readyDesc(), 1, 0, simdRuntime.readyCode(), List.of());
-		}
-		if (blasRuntime != null) {
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
-					blasRuntime.initName(), blasRuntime.initDesc(), blasRuntime.maxStack(), blasRuntime.maxLocals(),
-					blasRuntime.initCode(), List.of());
 		}
 		if (gpuRuntime != null) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_SYNCHRONIZED,
@@ -4558,6 +4625,14 @@ public final class JvmLispCompiler implements LispCompiler {
 					storeBody, List.of());
 		}
 
+		// --java-static: every site that would have needed the bridge, at once, before
+		// anything is written.
+		if (javaSites != null && !javaSites.refusals().isEmpty()) {
+			List<String> refusals = javaSites.refusals();
+			throw new UnsupportedOperationException(
+					"--java-static: " + refusals.size() + " java: call" + (refusals.size() == 1 ? "" : "s")
+							+ " cannot be compiled without reflection:\n  " + String.join("\n  ", refusals));
+		}
 		ClassDefinition classDefinition = definition.build();
 		// A pool one class file can carry is written as it always was. One past that is
 		// SPLIT: the methods spread over the class and its $PartN classes, each with a
@@ -4626,7 +4701,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			// ... and an objc: callback (a run-time class's method, objc:on-main's
 			// body) or an ffi:callback's Lisp function reaches it from an upcall, the
 			// same invisible edge.
-			if (usesJava || usesObjc || usesFfi) {
+			if (usesJavaBridge || usesObjc || usesFfi) {
 				roots.add("_apply");
 			}
 			if (usesTlsConnect) {
@@ -4663,7 +4738,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// shake: the shaker rejects Code sub-attributes and would not rewrite the
 		// constant-pool entries the frames reference.
 		try {
-			return StackMapAugmenter.augment(classBytes, CLASS_MAJOR_VERSION);
+			return StackMapAugmenter.augment(classBytes, this.classMajorVersion);
 		}
 		catch (ConstantPoolOverflowException fullPool) {
 			// The frames' own Class entries were the ones that did not fit: a pool within
@@ -4677,7 +4752,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * the {@code $PartN} classes the rest of its methods need, keeping in the class every
 	 * method something finds by NAME: {@code main}, the {@code rontolisp:jvm-export}
 	 * wrappers and the defuns behind them (a Java caller's API), and the helpers an
-	 * embedded bridge or the travelling float-array handle looks up reflectively
+	 * shipped bridge or the travelling float-array handle looks up reflectively
 	 * ({@link #REFLECTIVELY_FOUND_METHODS}). {@link JvmClassSplitter} keeps the rest of
 	 * what cannot move by itself. The parts join {@link #runtimeClassFiles()}, the list
 	 * every output shape already writes beside the class.
@@ -4701,10 +4776,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				method -> pinnedNames.contains(cp.utf8At(method.name().index())), budget);
 		Map<String, byte[]> parts = new LinkedHashMap<>();
 		for (Map.Entry<String, byte[]> part : split.parts().entrySet()) {
-			parts.put(part.getKey() + ".class", StackMapAugmenter.augment(part.getValue(), CLASS_MAJOR_VERSION));
+			parts.put(part.getKey() + ".class", StackMapAugmenter.augment(part.getValue(), this.classMajorVersion));
 		}
 		this.partClassFiles = Map.copyOf(parts);
-		return StackMapAugmenter.augment(split.mainClass(), CLASS_MAJOR_VERSION);
+		return StackMapAugmenter.augment(split.mainClass(), this.classMajorVersion);
 	}
 
 	/**
@@ -4948,8 +5023,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		return false;
 	}
 
-	// True when the program references any of the seven objc: verbs, so the embedded
-	// am.ik.objc blob (and the eval runtime its callbacks need) is emitted. A program
+	// True when the program references any of the seven objc: verbs, so the shipped
+	// am.ik.objc copy (and the eval runtime its callbacks need) is emitted. A program
 	// that uses appkit: qualifies through the spliced appkit.lisp, whose widgets are
 	// objc:send.
 	private static boolean programUsesAnyObjcOp(List<LispVal> program) {
@@ -4961,8 +5036,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		return false;
 	}
 
-	// True when the program references any of the ffi: verbs, so the embedded
-	// am.ik.ffi blob (and the eval runtime an ffi:callback needs) is emitted. A
+	// True when the program references any of the ffi: verbs, so the shipped
+	// am.ik.ffi copy (and the eval runtime an ffi:callback needs) is emitted. A
 	// program that uses cffi: qualifies through the spliced cffi-sys backend, whose
 	// primitives are ffi: calls.
 	private static boolean programUsesAnyFfiOp(List<LispVal> program) {

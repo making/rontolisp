@@ -427,7 +427,8 @@ worth sent up again, which a run whose working set fits never reaches -- and a b
 the first pre-flight derives one) never reports.
 
 Verified 2026-09-06 on the GB10 with `stories15M` (60 MB of f32 weights) and
-`ResidencyCliff.java`, which drives BOTH halves (it looks for `RontoLispGpuGpu` and for
+`ResidencyCliff.java`, which drives BOTH halves (it looked for `RontoLispGpuGpu` -- `<Program>$GpuGpu`
+since the library ships beside the class -- and for
 `am.ik.gpu.Gpu`, so the interpreter runs out of the exec jar) and announces the budget in force:
 
 | leg | derived budget (~93 GB) | forced to 48 MB |
@@ -1196,7 +1197,7 @@ member lands on the best CPU path the invocation asked for**, never back on the 
 ### The call site
 
 `JvmLinalgKernelCompiler.compile` emits up to THREE attempts in the interpreter's install order:
-`_gpuInit(); _blasInit(); _simdInit();` then each argument form evaluated ONCE into a temp, then
+`_gpuInit(); _simdInit();` (the CBLAS bridge needs no init: it binds its library itself) then each argument form evaluated ONCE into a temp, then
 `gpuDot` / `blasDot` / `laDot` each falling through on `null` to the scalar defun. The temps are what
 make a chain of any length safe: every decline branch RE-READS them
 (`anArgumentFormIsEvaluatedExactlyOnceEvenWhenTheKernelDeclines`, in all three suites).
@@ -1216,27 +1217,24 @@ make a chain of any length safe: every decline branch RE-READS them
   new public method on `LinalgGpu` that touches the kernels would break it, and only the Pages
   workflow's Web Image build would notice**; `./mvnw -Pweb compile` is the local check.
 
-## The JVM backend: the whole library travels in the class
+## The JVM backend: the whole library travels beside the class
 
 A GPU binding is ~1700 lines across several classes plus two kernel texts, and the parts a copy would
 fork are exactly the parts that were expensive to get right. So `JvmGpuRuntimeBuilder` generalizes the
-`--blas` template mechanism from one class to a CLOSURE of them plus data resources:
+`--blas` template mechanism from one class to a CLOSURE of them plus data resources
+([template-class-embedding.md](template-class-embedding.md)):
 
-- every class file of `am.ik.gpu` is renamed by ONE prefix rule, `am/ik/gpu/` -> the generated
-  program's own package plus `RontoLispGpu` (`Gpu` becomes `RontoLispGpuGpu`), because
-  `Lookup.defineClass(byte[])` requires the defined class to share the lookup class's package.
-- `JvmGpuTemplate` is renamed to `RontoLispGpuBridge` by the same pass, which lets it be WRITTEN
-  against `am.ik.gpu` and type-checked by javac while resolving to the embedded copies at run time.
-- each is base64'd into its own chunked string constant and `_gpuInit` runs one `defineClass` per
-  blob. Definition order is free.
+- every class file of `am.ik.gpu` is renamed by ONE prefix rule, `am/ik/gpu/` -> `<Program>$Gpu`
+  (`Gpu` becomes `<Program>$GpuGpu`), in the program's package (the members are package-private),
+  and ships beside it through `runtimeClassFiles()`.
+- `JvmGpuTemplate` is renamed to `<Program>$GpuBridge` by the same pass, which lets it be WRITTEN
+  against `am.ik.gpu` and type-checked by javac while resolving to the shipped copies at run time.
+- Named after the program because the library's statics (the probed device, the residency cache) are
+  per program: two `--gpu` programs in one `target/classes` keep two copies.
 
-**BOTH kernel texts travel in every `--gpu` class whichever machine emitted it**; they cannot be
-resources on the other side, so `_gpuInit` hands each to `Gpu.useKernels` / `useMetalKernels` before
-anything can probe.
-
-**What it is NOT.** The renamed classes are defined into the emitted class's own loader, so two `--gpu`
-classes loaded by ONE classloader would collide on `defineClass` -- the reason the compiled-backend
-tests give each program a fresh `URLClassLoader`.
+**BOTH kernel texts travel in every `--gpu` class whichever machine emitted it**, as string constants
+in the program's own pool; they cannot be resources on the other side, so `_gpuInit` hands each to
+`Gpu.useKernels` / `useMetalKernels` before anything can probe.
 
 ### The offer is decided twice, and what pins the two
 

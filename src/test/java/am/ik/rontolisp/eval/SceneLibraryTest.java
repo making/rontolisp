@@ -96,7 +96,7 @@ class SceneLibraryTest {
 			.contains("METAL$colonATTACH")
 			.contains("GEOM$colonBOX")
 			.contains("APPKIT$colonWINDOW")
-			.contains("RontoLispObjcBridge");
+			.contains("Prog$ObjcBridge");
 	}
 
 	@Test

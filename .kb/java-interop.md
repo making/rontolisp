@@ -1,4 +1,4 @@
-# `java:` interop (interpreter + JVM-compiler Java reflection bridge)
+# `java:` interop (interpreter, JVM direct calls, the reflection bridge)
 
 Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `java:new`,
 `java:call`, `java:static`, `java:field`, `java:proxy`; the type specifier `java:object` and the
@@ -6,18 +6,26 @@ variable `java:*warn-on-reflection*` (static resolution, below).
 
 - Interpreter: `eval/JavaInterop`, `LispEvaluator.registerJava()`; value = `LispJavaObject`,
   prints `#<java <class>>`.
-- JVM: `codegen.jvm.JavaBridgeTemplate` re-implements it against the compiled representation
-  (raw ref; `"t"` = true; header-slot ArrayList = vector) — **KEEP THE TWO IN SYNC**.
-  `JvmJavaRuntimeBuilder` renames it to `<Program>$JavaBridge` and SHIPS it beside the class
-  (`runtimeClassFiles()`); `_javaInit` only calls `bind(Class)`. Per-program name: `bind` stores
-  that program's `_apply` statically. Call sites `JvmJavaInteropCompiler`. Needs JRE >= build JRE.
+- JVM: a RESOLVED site is a direct call (`JvmJavaDirectSites`, "Direct calls" below); every
+  other site goes through `codegen.jvm.JavaBridgeTemplate`, which re-implements the run-time half
+  against the compiled representation (raw ref; `"t"` = true; header-slot ArrayList = vector) —
+  **KEEP THE TWO IN SYNC**. `JvmJavaRuntimeBuilder` renames it to `<Program>$JavaBridge` and SHIPS
+  it beside the class (`runtimeClassFiles()`); `_javaInit` only calls `bind(Class)`. Per-program
+  name: `bind` stores that program's `_apply` statically. Call sites `JvmJavaInteropCompiler`. The
+  bridge is emitted only when a site needs it; it needs JRE >= build JRE.
 - Native image: template `.class` in `resource-config.json` — COMPILE works, INTERPRET does not.
-- A compiled `-o prog.jar` native-images with agent config (`ShippedBridgeNativeImageE2eTest`,
-  opt-in `-Drontolisp.native-image.e2e=true`). Measured 2026-09-26, GraalVM 25.0.4: the config
-  covers only traced overloads -- an untraced `Math.max(double,double)` answers
-  `MissingReflectionRegistrationError` (user doc: `guides/java-interop.md`, "Native image").
+- A compiled `-o prog.jar` whose sites all resolve native-images with NO config (`--java-static`,
+  "Direct calls" below); one that still needs the bridge native-images with agent config
+  (`ShippedBridgeNativeImageE2eTest`, opt-in `-Drontolisp.native-image.e2e=true`). Measured
+  2026-09-26, GraalVM 25.0.4: the config covers only traced overloads -- an untraced
+  `Math.max(double,double)` at a site left to run time answers `MissingReflectionRegistrationError`
+  (user doc: `guides/java-interop.md`, "Native image").
 - WASM: rejected; no `BuiltinFunctionWrappers` entry, so `#'java:call` is a compile error while
   the interpreter allows it.
+- A host `ArrayList` a Java call answers is not a Lisp array: in a java: program the compiled
+  printer's array arm checks the array header first (`JavaPrint.arrayListIsEmpty/arrayListGet`,
+  the bridge's `kindOf` test), so it prints `#<java java.util.ArrayList>` as interpreted -- it threw
+  `IndexOutOfBoundsException` before (`JvmJavaInteropCompilerTest#aHostArrayListPrintsOpaquely`).
 - Trap: the template must have NO nested classes/records and NO rontolisp imports.
   `usesJava` forces `usesEval` and threads `JvmRuntimeBuilder.JavaPrint` into the print builders.
 - `select()` = lowest total cost `COST_EXACT` < `COST_WIDEN` < `COST_CONVERT` < `COST_NARROW` <
@@ -81,13 +89,20 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   (`Collection.remove(Object)` vs `ArrayList.remove(int)`). Unresolved sites keep the run-time
   class + run-time kinds (Clojure's reflective fallback; no "static class, dynamic kinds" middle
   state -- a15's decision tree would introduce one).
-- A resolved site runs as the explicit request on BOTH backends: interpreter
-  `JavaInterop.callInstanceAs`/`fieldAs`/`newInstance`/`callStatic` with (static class,
-  designator); JVM `JvmJavaInteropCompiler` emits `javaCallAs`/`javaFieldAs`/`javaNew`/`javaStatic`
-  with the same strings. The receiver must be an instance of the static class (a declared type is
-  trusted; a false one = the same deterministic error text on both). The tag makes the member
-  exact; packing is re-derived from the run-time kinds, which a true declaration keeps inside the
-  static set.
+- A resolved site runs its RESOLVED MEMBER on both backends -- interpreter
+  `JavaInterop.invokeResolved` over the site's reflective executable, JVM a direct call -- with the
+  same checks in the same order and the same texts: receiver not a java object (`java:call expects
+  a java object as the first argument, got X` / `java:field expects a class-name string or a java
+  object, got X`), not an instance of the static class (`java:call: the receiver is not a C, got X`
+  / `java:field: the object is not a C, got X`), then each argument whose run-time kind is not one
+  the resolution counted on (`JavaSite.Argument`): `java:<op>: argument N is not <expected>, got
+  X`, expected = the declared class (`JavaSiteResolver.declaredClass`, the outermost `(the
+  (java:object "C") ...)`) or the kinds spelled out (`an integer or nil`; a primitive declaration
+  too). Only a false `the`/declaration can deliver such a value; it is never converted for a member
+  it was not chosen for (a13 converted it when convertible and re-derived the varargs packing --
+  both gone). X is `print` / the program's `_lispToString`, so the texts agree for every value.
+  Then the member is called with the packing the resolution chose; what it throws is `error
+  calling C.m: <throwable>` / `error constructing C: ...` / `error reading field f: ...`.
 - Variable types: `compiler/JavaDeclarations` rewrites references to a typed variable in java:
   receiver/argument positions into `(the <spec> v)` -- the ONE scope walk (special forms
   structurally; built-in and user macros expanded, once per walk and cached, only to learn what
@@ -145,10 +160,22 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
 - Defaults: `--java-release` = the newest release in ct.sym (= the JDK's own = what the interpreter
   on it resolves against). No JDK found: class path only + one compile warning; JDK classes then
   resolve at run time. Output of a java: program depends on the release read (an input, like the
-  class path); a program without java: is byte-identical. a14 must reconcile its class-61 default
-  with this metadata default (a member chosen against 25 may not exist on 17).
-- Candidate sets are `getMethods()` by name, static AND instance for both `java:call` and
-  `java:static` (today's behavior kept; a14 must treat an instance member chosen for java:static).
+  class path); a program without java: is byte-identical.
+- Class version (decided with the default, 2026-09-26): a program with java: sites is stamped
+  `max(61, 44 + R)`, R = the release its sites resolved against (`JvmLispCompiler.classMajorVersion`,
+  every `$PartN` too) -- javac's `--release` model: a member chosen against 25 may not exist on
+  17, and a JRE older than R refuses the class at load instead of throwing `NoSuchMethodError` at
+  the first call. Default release 17 was rejected: it would resolve against a different API than
+  the interpreter on the compiling JDK. The bridge's own floor (the build release) is separate and
+  unchanged. A program without java: stays 61.
+- Candidate sets are `getMethods()` by name: static AND instance for `java:call` (Java calls a
+  static through an instance), STATIC ONLY for `java:static` (`JavaOverloads.staticMethods`, on all
+  three: resolver, interpreter, bridge -- its memo key is prefixed so a call's and a static's
+  choices of one name never mix). An instance method under `java:static` only ever failed (an NPE
+  out of `Method.invoke`); now it is no candidate: `No matching method C.m with N argument(s)`.
+- `(java:field "C" "f")` reads a static field: an instance field so named is `java:field: field
+  C.f is not static` on all three (was an NPE), and the resolver leaves it unresolved with that
+  reason. `(java:field obj "CONSTANT")` of a static field still reads it.
 - Warnings: `java:*warn-on-reflection*` (special, nil; `--warn-java-reflection` sets it) --
   interpreter: at top-level load for the sites the form shows (`sitesIn`), prefixed with the
   top-level form's `file:line`, and at the first resolution of a site not shown there; compile
@@ -156,9 +183,67 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   java:*warn-on-reflection* t)`, with `SourceProvenance.prefix`. The interpreter memo is
   `LispEvaluator.javaSites` (identity, `EXPANSION_MEMO_LIMIT`).
 
+## Direct calls: resolved sites without reflection (JVM)
+- A site resolves only through what bytecode can name (`JavaType.isLinkable` = primitive, or
+  class-file `ACC_PUBLIC` (`isPublic`: a `protected` member class counts, as javac writes it) and
+  accessible): the static class of every operator, each chosen parameter type (a varargs array's
+  element type), and a host kind (`ofDeclared` / `ofConstructed` give UNKNOWN for anything else).
+  `java:new` of an abstract class or interface is left to run time ("class C is abstract"). The
+  rule is in the shared resolver, so the interpreter leaves the same sites to run time -- and
+  every resolved site CAN be a direct call; there is no "resolved but bridged" state. Both lookups'
+  `isPublic` / `isAbstract` / `isLinkable` are pinned by `JvmClassFileLookupTest#theTypesAgree`;
+  `ReflectiveJavaClasses.isAccessible` reads the class-file flag too (it disagreed for a
+  protected member class before).
+- `JvmJavaDirectSites`: one `private static Object _jsite$N(Object...)` per site SHAPE (operator,
+  class, designator, packing, argument kinds + declared names; past 200 values one `Object[]`).
+  The site evaluates receiver and arguments left to right (`--gpu` materializes each; an argument
+  counted as a string is `_strv`-rendered at the site) and calls it. Body: `_jhost` (the bridge's
+  `isJavaObject`) + `instanceof C` for a receiver -- class resolution under a handler catching
+  `NoClassDefFoundError` -> `No such class: C`, an `ldc C` for a class-named site; per argument a
+  kind dispatch (the bridge's `kindOf` tests: `"T".equals`, `instanceof Long`, `int[]` of length 1
+  and `isBmpCodePoint`, quote-framed `String` (length 3 = STRING_1), exact `getClass()` for a host
+  kind -- an `ArrayList` with an `Object[]` first element is a Lisp array, a `BigInteger` never a
+  host kind) into the bridge's `convert`/`convertLong` arm for (kind, parameter), a `checkcast` to
+  a class parameter after the join (the augmenter merges arms to `Number`/`Object`); then
+  `invokevirtual`/`invokeinterface` (InterfaceMethodref on an interface owner)/`invokestatic`/`new`
+  + `invokespecial`/`getfield`/`getstatic` with the static class as OWNER (javac's qualifying type:
+  a method of a package-private superclass links through it) and the chosen descriptor (the most
+  specific covariant return), under a handler catching Throwable -> the `error ...` text; the value
+  converted back specialized to the declared type (`_junm` = the bridge's `unmarshal` for a type a
+  box/String/array may hide behind, `_jarr` its `arrayToList` over every array type without
+  `java.lang.reflect.Array`).
+- The ONE arm that reflects: a FUNCTION kind for an interface parameter calls `_javaInit` + the
+  bridge's `javaProxy`. The bridge is emitted when `JvmJavaSites.needsBridge` (a pre-scan: an
+  unresolved site, a `java:proxy`, a FUNCTION argument) or when forced: a site a pass rebuilt after
+  the scan and that needs it calls the absent `_javaInit`, `gateGroupFor` maps it to
+  `GROUP_JAVA_BRIDGE`, and the attempt retries with the bridge. `usesEval` / the `_apply` root follow
+  the bridge, not `usesJava`; `JavaPrint` (`#<java C>`) follows `usesJava`.
+- `--java-static` (`JvmLispCompiler.Builder.javaStatic`, `JvmSourceCompiler`, CLI; JVM outputs
+  only): no bridge ever; each site `JvmJavaSites.bridgeReason` names is refused at codegen and the
+  attempt fails listing all of them with positions. Native-image of the resulting jar needs no
+  metadata: measured 2026-09-26 (GraalVM 25.0.4), a 17-site program (constructor, instance,
+  interface, static, varargs, field, chain, declared receiver, regex split, `LocalDate`, a caught
+  exception) -> 17,792-byte jar, `native-image --no-fallback -jar` in 30 s, 14.7 MB executable,
+  output identical to `java -jar`
+  (`ShippedBridgeNativeImageE2eTest#aJavaStaticJarRunsAsANativeImageWithNoConfiguration`, opt-in
+  `-Drontolisp.native-image.e2e=true`; the same class keeps the agent-config route for a program
+  that still needs the bridge).
+- Measured 2026-09-26 (JDK 25, default output, against the pre-a12 compiler that embedded the
+  bridge as base64): `(print (java:static "java.lang.Math" "max" 3 7))` 101,803 -> 6,839 bytes; a
+  13-site all-resolved program 103,527 -> 14,411; a program that still leaves sites to run time
+  GROWS (127,454 -> 141,811: the bridge plus the site methods). Since a12 the bridge is a
+  37,099-byte `$JavaBridge.class` beside the program instead -- written only when a site needs it.
+  `Math.max` on a declared-int loop variable, 1M calls after warm-up: bridge ~95-220 ns/call,
+  direct 1-2 ns/call (the loop floor: the JIT inlines it).
+- Known resolution-status difference: the compile path folds some forms before the resolver sees
+  them (`(code-char 128512)` -> a literal), so such a site resolves compiled and not interpreted;
+  the member is the same either way.
+
 ## Tests / docs
 `JavaSiteResolverTest`, `JavaDeclarationsTest` (compiler), `JvmClassFileLookupTest`,
-`JavaBridgeTemplateParityTest`, `am.ik.jvm.JvmClassPathTest`.
+`JavaBridgeTemplateParityTest`, `am.ik.jvm.JvmClassPathTest`; direct calls:
+`JvmJavaInteropCompilerTest` (javap shape, class version, `--java-static`, conversions, texts),
+`JvmLispCompilerSplitTest#aForcedSplitKeepsJavaCallsWorking`, `ShippedBridgeNativeImageE2eTest`.
 `JavaInteropTest` + `JvmJavaInteropCompilerTest` mirror the same cases — keep in step, headless
 only. `examples/jvm/{java-interop,swing,life-gui}.lisp`; `doc/{en,ja}/guides/java-interop.md` +
 five `reference/functions/java-*.md` (a GUI form hangs `DocExamplesTest`).

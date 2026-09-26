@@ -47,12 +47,15 @@ class JvmLinalgSimdAccelCompilerTest {
 
 	private byte[] compile(String lispCode, boolean accel) {
 		List<LispVal> program = LinalgLibrary.process(LispReader.readAllFromString(lispCode));
-		return JvmLispCompiler.builder()
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
 			.className("Test")
 			.optimize(OptimizeLevel.NONE)
 			.simd(accel)
-			.build()
-			.compile(program);
+			.build();
+		byte[] classBytes = compiler.compile(program);
+		// The bridges travel beside the class as their own files, where run() loads.
+		TravellingClassFiles.write(compiler, this.tempDir);
+		return classBytes;
 	}
 
 	private String run(byte[] classBytes) throws Exception {
@@ -84,7 +87,7 @@ class JvmLinalgSimdAccelCompilerTest {
 	}
 
 	private static boolean embedsBridge(byte[] classBytes) {
-		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmSimdRuntimeBuilder.BRIDGE_NAME);
+		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmSimdRuntimeBuilder.bridgeName("Test"));
 	}
 
 	// --- the dead-flag guard -------------------------------------------------------

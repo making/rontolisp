@@ -15,7 +15,7 @@ enum と bitfield の層、translate/expand プロトコル——はアップス
 
 > **動く場所。** `cffi` は `java -jar rontolisp.jar` と REPL、`rontolisp`
 > ネイティブバイナリ、そしてコンパイルした `-o Prog.class` / `-o app.jar`
-> （バインディングを出力クラスの中に持ち運びます）で動きます。どちらの WASM
+> （バインディングを出力クラスの隣に持ち運びます）で動きます。どちらの WASM
 > バックエンドにも foreign function API はないので、そうしたプログラムを `.wasm` に
 > コンパイルすると `Cannot compile: FFI:...` エラーになります（恒久的な仕様です）。
 

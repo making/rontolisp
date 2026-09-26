@@ -17,13 +17,13 @@ import am.ik.jvm.Opcode;
  * Compiles the nine {@code objc:} verbs ({@code objc:class}, {@code objc:send},
  * {@code objc:define-class}, {@code objc:on-main}, {@code objc:string},
  * {@code objc:data}, {@code objc:bytes}, {@code objc:address}, {@code objc:objectp}).
- * Each call site first invokes the emitted {@code _objcInit} helper (which lazily defines
- * the embedded {@code am.ik.objc} blob and the {@link JvmObjcTemplate bridge}, see
- * {@link JvmObjcRuntimeBuilder}), then evaluates the arguments -- the leading fixed
- * arguments as-is, {@code objc:send}'s variadic tail packed into an {@code Object[]} --
- * and calls the matching bridge entry point. Marshalling, ownership and every run-time
- * validation live in the bridge, so compiled behavior matches the interpreter's
- * {@code eval/ObjcBridge}.
+ * Each call site first invokes the emitted {@code _objcInit} helper (which binds the
+ * program into the {@link JvmObjcTemplate bridge} shipped beside it with its copy of
+ * {@code am.ik.objc}, see {@link JvmObjcRuntimeBuilder}), then evaluates the arguments --
+ * the leading fixed arguments as-is, {@code objc:send}'s variadic tail packed into an
+ * {@code Object[]} -- and calls the matching bridge entry point. Marshalling, ownership
+ * and every run-time validation live in the bridge, so compiled behavior matches the
+ * interpreter's {@code eval/ObjcBridge}.
  */
 final class JvmObjcInteropCompiler {
 
@@ -48,7 +48,7 @@ final class JvmObjcInteropCompiler {
 		Map<String, MethodrefConstant> ops = ctx.objcOps;
 		if (ops == null && LispNames.OBJC_OBJECTP.equals(member) && cons.toList().size() == 2) {
 			// A program that calls no verb holds no Objective-C object: the type test an
-			// objc:object specifier compiles to answers nil without the blob.
+			// objc:object specifier compiles to answers nil without the bridge.
 			JvmExprCompiler.compileExpr(
 					new LispCons(new LispSymbol(LispNames.PROGN),
 							new LispCons(cons.toList().get(1), new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))),
@@ -59,7 +59,7 @@ final class JvmObjcInteropCompiler {
 			throw new IllegalStateException("objc runtime was not emitted");
 		}
 		List<LispVal> args = cons.toList();
-		// Make sure the blob is defined before a bridge method reference resolves.
+		// Make sure the bridge holds the program's _apply before any verb runs.
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(Objects.requireNonNull(ops.get("init")).index());
 		switch (member) {

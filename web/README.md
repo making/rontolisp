@@ -119,7 +119,10 @@ source root. The `web` Maven profile adds `src/web/java` to the build (via
 `rontoPutFile`) on the JavaScript global scope using
 the `@JS` annotation (`@JS.Export` is not implemented in Web Image yet, so the
 bootstrap-helper pattern is used). Compiled bytes cross the JS boundary as
-Base64 strings; the front-end decodes them into a `Blob` for download.
+Base64 strings; the front-end decodes them into a `Blob` for download. A JVM
+class that needs files beside it (a runtime class, a shipped bridge) comes back
+as `FILES:` plus one path / Base64 line pair per file, and the page packs them
+into a `.jar` with a `Main-Class` manifest.
 Compilation errors are returned as strings prefixed with `ERROR:`.
 
 ## Prerequisites

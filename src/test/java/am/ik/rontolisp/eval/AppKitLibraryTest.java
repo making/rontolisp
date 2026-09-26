@@ -98,20 +98,21 @@ class AppKitLibraryTest {
 		Files.writeString(source, "(objc:send \"NSString\" \"stringWithUTF8String:\" \"x\")\n");
 		assertThatThrownBy(() -> compile(source, "-o", dir.resolve("prog.wasm").toString()))
 			.hasMessageContaining("Cannot compile: OBJC:SEND");
-		// The JVM backend carries the binding as an embedded blob: both programs compile,
+		// The JVM backend ships the binding beside the class: both programs compile,
 		// the appkit one with the widget layer spliced in, to a class and to a jar whose
 		// manifest enables native access for a plain java -jar.
 		Files.writeString(source, "(print (appkit:window \"hi\"))\n");
 		Path prog = dir.resolve("Prog.class");
 		compile(loader, "-o", prog.toString());
 		String bytes = Files.readString(prog, StandardCharsets.ISO_8859_1);
-		assertThat(bytes).contains("RontoLispObjcBridge").contains("APPKIT$colonWINDOW");
+		assertThat(bytes).contains("Prog$ObjcBridge").contains("APPKIT$colonWINDOW");
+		assertThat(dir.resolve("Prog$ObjcBridge.class")).exists();
 		Path jar = dir.resolve("prog.jar");
 		compile(source, "-o", jar.toString(), "--class-name", "Prog");
 		assertThat(Files.size(jar)).isGreaterThan(0);
 		Files.writeString(source, "(objc:send \"NSString\" \"stringWithUTF8String:\" \"x\")\n");
 		compile(source, "-o", prog.toString());
-		assertThat(Files.readString(prog, StandardCharsets.ISO_8859_1)).contains("RontoLispObjcBridge")
+		assertThat(Files.readString(prog, StandardCharsets.ISO_8859_1)).contains("Prog$ObjcBridge")
 			.doesNotContain("APPKIT$colon");
 	}
 

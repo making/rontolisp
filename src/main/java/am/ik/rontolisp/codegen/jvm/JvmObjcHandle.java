@@ -11,9 +11,9 @@ package am.ik.rontolisp.codegen.jvm;
  * a value outside the Lisp representation.
  *
  * <p>
- * Travels in the {@code objc:} blob beside {@link JvmObjcTemplate}, renamed into the
- * emitted program's own package by {@link JvmObjcRuntimeBuilder}; hence the same
- * constraints -- no nested classes, no rontolisp import.
+ * Ships beside the program with {@link JvmObjcTemplate}, renamed after it by
+ * {@link JvmObjcRuntimeBuilder}; hence the same constraints -- no nested classes, no
+ * rontolisp import.
  */
 final class JvmObjcHandle {
 

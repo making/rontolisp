@@ -27,8 +27,10 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.JavaExecutable;
+import am.ik.rontolisp.compiler.JavaField;
 import am.ik.rontolisp.compiler.JavaKind;
 import am.ik.rontolisp.compiler.JavaOverloads;
+import am.ik.rontolisp.compiler.JavaSite;
 import am.ik.rontolisp.compiler.JavaType;
 import am.ik.rontolisp.compiler.ReflectiveJavaClasses;
 
@@ -43,10 +45,10 @@ import am.ik.rontolisp.compiler.ReflectiveJavaClasses;
  * <p>
  * A member designator may carry a parameter tag ({@code "max(long,long)"},
  * {@code "java.lang.StringBuilder(int)"}) that narrows the candidates. A site the
- * interpreter resolved before running it ({@code compiler.JavaSiteResolver}) arrives here
- * as its static class and its fully tagged designator ({@link #callInstanceAs}); the
- * member it names is the one chosen, and the compiled program's bridge receives the very
- * same request.
+ * interpreter resolved before running it ({@code compiler.JavaSiteResolver}) runs through
+ * {@link #invokeResolved}: the member the resolution chose, called with the arguments
+ * converted for exactly the kinds it counted on -- what a compiled program's direct call
+ * does ({@code codegen.jvm.JvmJavaDirectSites}), check for check and message for message.
  * <p>
  * This is the interpreter side of the bridge: the wrapped objects are
  * {@link LispJavaObject}s, and the reflection relies on classes (and their members) being
@@ -85,6 +87,9 @@ final class JavaInterop {
 	private static final int CHOICES_PER_MEMBER = 16; // a full member starts over
 
 	private static final String CONSTRUCTOR = "<init>"; // member key of a constructor
+
+	private static final String STATIC_PREFIX = "static "; // member key prefix of a
+															// static call
 
 	private static final ConcurrentHashMap<Class<?>, ConcurrentHashMap<String, Memo[]>> CHOICES = new ConcurrentHashMap<>();
 
@@ -140,37 +145,29 @@ final class JavaInterop {
 		return invoke(ReflectiveJavaClasses.of(obj.ref().getClass()), obj.ref(), methodName, args, caller);
 	}
 
-	/**
-	 * A {@code java:call} whose receiver is statically typed: the method is resolved
-	 * among the members of {@code className} -- for a resolved site, the one its fully
-	 * tagged designator names -- and the receiver must be an instance of it.
-	 */
-	static LispVal callInstanceAs(String className, LispVal target, String methodName, List<LispVal> args,
-			Caller caller) {
-		if (!(target instanceof LispJavaObject obj)) {
-			throw new LispEvalException("java:call expects a java object as the first argument, got " + target.print());
-		}
-		ReflectiveJavaClasses.Type type = loadClass(className);
-		if (!type.type().isInstance(obj.ref())) {
-			throw new LispEvalException("java:call: the receiver is not a " + className + ", got " + target.print());
-		}
-		return invoke(type, obj.ref(), methodName, args, caller);
-	}
-
 	static LispVal callStatic(String className, String methodName, List<LispVal> args, Caller caller) {
 		return invoke(loadClass(className), null, methodName, args, caller);
 	}
 
+	// A static call chooses among the static methods only (JavaOverloads.staticMethods),
+	// so its choices are remembered apart from an instance call's of the same name.
 	private static LispVal invoke(ReflectiveJavaClasses.Type type, @Nullable Object receiver, String methodName,
 			List<LispVal> args, Caller caller) {
+		boolean statics = receiver == null;
 		// The designator is parsed only when the candidates are needed: a remembered
 		// choice is found by the designator as written.
-		JavaOverloads.Overload overload = resolve(type, methodName, () -> {
+		JavaOverloads.Overload overload = resolve(type, statics ? STATIC_PREFIX + methodName : methodName, () -> {
+			List<ReflectiveJavaClasses.Member> candidates;
+			List<String> tag = null;
 			if (!isTagged(methodName)) {
-				return type.methods(methodName);
+				candidates = type.methods(methodName);
 			}
-			JavaOverloads.Member member = member(methodName);
-			return JavaOverloads.filterByTag(type.methods(member.name()), member.tag());
+			else {
+				JavaOverloads.Member member = member(methodName);
+				candidates = type.methods(member.name());
+				tag = member.tag();
+			}
+			return JavaOverloads.filterByTag(statics ? JavaOverloads.staticMethods(candidates) : candidates, tag);
 		}, args, caller);
 		if (overload == null) {
 			throw new LispEvalException(
@@ -344,7 +341,13 @@ final class JavaInterop {
 	static LispVal field(LispVal classOrObject, String fieldName) {
 		try {
 			if (classOrObject instanceof LispString s) {
-				Field field = publicField(loadClass(s.value()), fieldName);
+				ReflectiveJavaClasses.Type type = loadClass(s.value());
+				ReflectiveJavaClasses.FieldMember member = type.field(fieldName);
+				if (member != null && !member.isStatic()) {
+					throw new LispEvalException("java:field: "
+							+ am.ik.rontolisp.compiler.JavaSiteResolver.notStatic(type.name(), fieldName));
+				}
+				Field field = publicField(type, fieldName);
 				return unmarshal(field.get(null));
 			}
 			if (classOrObject instanceof LispJavaObject obj) {
@@ -360,23 +363,68 @@ final class JavaInterop {
 	}
 
 	/**
-	 * A {@code java:field} whose object is statically typed: the field is looked up on
-	 * {@code className}, and the object must be an instance of it.
+	 * Runs a site resolved before it ran ({@code compiler.JavaSiteResolver}), exactly as
+	 * a compiled program's direct call does ({@code codegen.jvm.JvmJavaDirectSites}): a
+	 * {@code java:call} / {@code java:field} receiver must be a java object and an
+	 * instance of the site's static class; each argument must have one of the kinds the
+	 * resolution counted on and is converted to its parameter type (a varargs tail packed
+	 * as the resolution packed it); then the resolved member itself is called. A value a
+	 * declaration lied about is an error here, never converted for a member it was not
+	 * chosen for.
+	 * @param site the resolved site
+	 * @param receiver the {@code java:call} / {@code java:field} receiver, or
+	 * {@code null}
+	 * @param args the argument values, the names written at the site left out
+	 * @param caller applies a Lisp callable a proxy argument calls back
+	 * @return the member's value
 	 */
-	static LispVal fieldAs(String className, LispVal object, String fieldName) {
-		if (!(object instanceof LispJavaObject obj)) {
-			throw new LispEvalException(
-					"java:field expects a class-name string or a java object, got " + object.print());
+	static LispVal invokeResolved(JavaSite site, @Nullable LispVal receiver, List<LispVal> args, Caller caller) {
+		String className = java.util.Objects.requireNonNull(site.staticClass());
+		String operator = "java:" + site.operator().name().toLowerCase(java.util.Locale.ROOT);
+		Object target = null;
+		if (receiver != null) {
+			boolean call = site.operator() == JavaSite.Operator.CALL;
+			if (!(receiver instanceof LispJavaObject obj)) {
+				throw new LispEvalException(
+						call ? "java:call expects a java object as the first argument, got " + receiver.print()
+								: "java:field expects a class-name string or a java object, got " + receiver.print());
+			}
+			if (!loadClass(className).type().isInstance(obj.ref())) {
+				throw new LispEvalException(operator + ": the " + (call ? "receiver" : "object") + " is not a "
+						+ className + ", got " + receiver.print());
+			}
+			target = obj.ref();
 		}
-		ReflectiveJavaClasses.Type type = loadClass(className);
-		if (!type.type().isInstance(obj.ref())) {
-			throw new LispEvalException("java:field: the object is not a " + className + ", got " + object.print());
+		JavaField resolvedField = site.field();
+		if (resolvedField != null) {
+			try {
+				return unmarshal(((ReflectiveJavaClasses.FieldMember) resolvedField).field().get(target));
+			}
+			catch (ReflectiveOperationException ex) {
+				throw fail("reading field " + resolvedField.name(), ex);
+			}
 		}
+		JavaExecutable executable = java.util.Objects.requireNonNull(site.executable());
+		List<JavaSite.Argument> promised = site.arguments();
+		for (int i = 0; i < args.size(); i++) {
+			JavaKind kind = kindOf(args.get(i));
+			JavaSite.Argument argument = promised.get(i);
+			if (kind == null || !argument.kinds().contains(kind)) {
+				throw new LispEvalException(operator + ": argument " + (i + 1) + " is not " + argument.expected()
+						+ ", got " + args.get(i).print());
+			}
+		}
+		@Nullable Object[] javaArgs = marshalArguments(new JavaOverloads.Overload(executable, site.packed()), args, caller);
 		try {
-			return unmarshal(publicField(type, fieldName).get(obj.ref()));
+			java.lang.reflect.Executable reflected = ((ReflectiveJavaClasses.Member) executable).executable();
+			if (reflected instanceof Constructor<?> constructor) {
+				return unmarshal(constructor.newInstance(javaArgs));
+			}
+			return unmarshal(((Method) reflected).invoke(target, javaArgs));
 		}
 		catch (ReflectiveOperationException ex) {
-			throw fail("reading field " + fieldName, ex);
+			throw fail(executable.isConstructor() ? "constructing " + className
+					: "calling " + className + "." + executable.name(), ex);
 		}
 	}
 

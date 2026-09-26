@@ -47,6 +47,15 @@ its class plus `Hello$Part1.class`, `Hello$Part2.class`, ... written beside it i
 package directory, and a jar carries them too. Run the class as before; the part files
 only have to stay next to it.
 
+A program that uses [`java:`](../guides/java-interop.md), the `geom:` kernels,
+`--simd`, `--blas`, `--gpu`, `objc:` or `ffi:` gets the bridge each one needs the same
+way: `Hello$JavaBridge.class`, `Hello$SimdBridge.class`, ... beside the class (for
+`--gpu`, `objc:` and `ffi:` with a renamed copy of the binding library,
+`Hello$Gpu*.class` and so on), and inside a jar. Nothing is defined at run time, so
+such a jar also builds into a GraalVM native image with `native-image -jar`; reflective
+`java:` calls and the `--blas` / `ffi:` foreign calls need the metadata the tracing agent
+records from one `java -jar` run ([Java interop](../guides/java-interop.md#native-image)).
+
 A class can also be a **library** Java code calls directly:
 [`rontolisp:jvm-export`](../reference/functions/rontolisp-jvm-export.md)
 declares a typed, Java-callable static method for a `defun`, and `--no-main`
@@ -187,14 +196,19 @@ for the overflow-promoting integer and exact ratio arithmetic) and `java.util`
 `rontolisp:await` / `rontolisp:futurep` represent futures as
 `java.util.concurrent` futures -- all of which are part of Java 17, so none of
 these raise the requirement. The one exception is a program that uses the
-[`java:` interop package](../guides/java-interop.md): the compiler writes a
-reflection bridge (compiled with the project's own Java release) beside the
-class, so it needs a JRE at least as new as the one rontolisp was built with.
+[`java:` interop package](../guides/java-interop.md). Its `java:` calls are
+resolved at compile time wherever the program text allows, against a JDK's
+class files, and become direct calls; the class is then stamped for that Java
+release (the compiling JDK's own by default), so it needs a JRE of that
+release. A call left to run time goes through a reflection bridge (compiled
+with the project's own Java release) the compiler writes beside the class,
+which needs a JRE at least as new as the one rontolisp was built with.
 
-Such a program's `java:` calls are resolved at compile time wherever the program text
-allows, against a JDK's class files: `--java-release N` and `--java-classpath` choose which,
-and `--warn-java-reflection` reports the calls left to run time (the guide's [Resolving
-calls before they run](../guides/java-interop.md#resolving-calls-before-they-run)).
+`--java-release N` and `--java-classpath` choose which class files, `--warn-java-reflection`
+reports the calls left to run time, and `--java-static` makes each of them a compile error,
+so the class carries no reflection and GraalVM `native-image` builds it with no
+reachability metadata (the guide's [Resolving calls before they
+run](../guides/java-interop.md#resolving-calls-before-they-run)).
 
 ## Skip the JIT Warm-Up with an AOT Cache
 

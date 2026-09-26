@@ -111,6 +111,6 @@ browser build substitutes `FfiInterop`'s three bridge-touching methods.
   callback as a plain address + escaped-error-answers-zero, varargs (`snprintf`), errno from a failed
   `open`, signal texts, the WASM refusal.
 - `codegen/jvm/JvmFfiInteropCompilerTest` -- verbs compiled to a `.class` case for case with the
-  interpreter; blob gated on the reference; class list pinned; `ffi:%apply-call`.
+  interpreter; the shipped library gated on the reference; class list pinned; `ffi:%apply-call`.
 - `am.ik.ffi.FfiNativeImageForeignConfigTest` -- the grid; `PackageCycleTest` -- `eval -> am.ik.ffi`
   and the library importing nothing.

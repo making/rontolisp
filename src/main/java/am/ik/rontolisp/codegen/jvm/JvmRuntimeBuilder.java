@@ -1207,7 +1207,7 @@ final class JvmRuntimeBuilder {
 		// used; a mutable character vector instead renders via _strv, quote-framed like
 		// the String branch)
 		emitArrayBranch(code, arrayListClass, arrayToStringMethod, packedPrint, packedIntPrint, strvMethod, stringClass,
-				null, null, strEscMethod);
+				null, null, strEscMethod, javaPrint);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, longClass.index());
@@ -2053,7 +2053,7 @@ final class JvmRuntimeBuilder {
 		// a mutable character vector instead renders via _strv with the surrounding
 		// quotes stripped, like the String branch)
 		emitArrayBranch(code, arrayListClass, arrayToDisplayStringMethod, packedPrint, packedIntPrint, strvMethod,
-				stringClass, stringLength, stringSubstring, null);
+				stringClass, stringLength, stringSubstring, null, javaPrint);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, longClass.index());
@@ -2449,10 +2449,13 @@ final class JvmRuntimeBuilder {
 	/**
 	 * Constant-pool references for printing a wrapped {@code java:} host object as
 	 * {@code #<java class.Name>} (interpreter parity), threaded into the two
-	 * lisp-to-string builders only when the program uses {@code java:} interop.
+	 * lisp-to-string builders only when the program uses {@code java:} interop -- which
+	 * is also when an {@code ArrayList} may be a host object rather than a Lisp array, so
+	 * the array branch checks for the array's header first.
 	 */
 	record JavaPrint(ClassConstant bigIntegerClass, MethodrefConstant objectGetClass, MethodrefConstant classGetName,
-			MethodrefConstant stringConcat, ConstantPool.StringConstant prefix, ConstantPool.StringConstant suffix) {
+			MethodrefConstant stringConcat, ConstantPool.StringConstant prefix, ConstantPool.StringConstant suffix,
+			MethodrefConstant arrayListIsEmpty, MethodrefConstant arrayListGet, ClassConstant objectArrayClass) {
 	}
 
 	/**
@@ -3492,7 +3495,8 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod, ClassConstant stringClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant stringLength,
 			@org.jspecify.annotations.Nullable MethodrefConstant stringSubstring,
-			@org.jspecify.annotations.Nullable MethodrefConstant strEscMethod) {
+			@org.jspecify.annotations.Nullable MethodrefConstant strEscMethod,
+			@org.jspecify.annotations.Nullable JavaPrint javaPrint) {
 		if (arrayListClass == null || arrayToStringMethod == null) {
 			return;
 		}
@@ -3571,9 +3575,34 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, arrayListClass.index());
-		int ifNotArrayPos = code.size();
+		List<Integer> notArray = new ArrayList<>();
+		notArray.add(code.size());
 		code.add(Opcode.IFEQ);
 		emitU2(code, 0);
+		if (javaPrint != null) {
+			// A java: call can answer an ArrayList of its own, which is a host object: a
+			// Lisp array's slot 0 is its Object[] header (the bridge's kindOf test), and
+			// anything else falls through to the #<java ...> tail.
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, arrayListClass.index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, javaPrint.arrayListIsEmpty().index());
+			notArray.add(code.size());
+			code.add(Opcode.IFNE);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, arrayListClass.index());
+			code.add(Opcode.ICONST_0);
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, javaPrint.arrayListGet().index());
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, javaPrint.objectArrayClass().index());
+			notArray.add(code.size());
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+		}
 		if (strvMethod != null) {
 			// Object s = _strv(val); if (s instanceof String) -> character vector
 			code.add(Opcode.ALOAD_0);
@@ -3615,7 +3644,9 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, arrayToStringMethod.index());
 		code.add(Opcode.ARETURN);
-		patchBranch(code, ifNotArrayPos, code.size());
+		for (int pos : notArray) {
+			patchBranch(code, pos, code.size());
+		}
 	}
 
 	static void emitLdc(List<Integer> code, int cpIndex) {

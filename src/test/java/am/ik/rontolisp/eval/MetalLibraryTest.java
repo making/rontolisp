@@ -108,12 +108,12 @@ class MetalLibraryTest {
 			.isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("Cannot compile: METAL:ATTACH")
 			.hasMessageContaining("not in a .wasm");
-		// The JVM backend carries the binding as an embedded blob, and the splice chain
+		// The JVM backend ships the binding beside the class, and the splice chain
 		// pulls appkit in behind metal: metal:run's clock is appkit:timer.
 		Path prog = dir.resolve("Prog.class");
 		compile(source, "-o", prog.toString());
 		String bytes = Files.readString(prog, StandardCharsets.ISO_8859_1);
-		assertThat(bytes).contains("RontoLispObjcBridge").contains("METAL$colonATTACH");
+		assertThat(bytes).contains("Prog$ObjcBridge").contains("METAL$colonATTACH");
 	}
 
 	private static List<String> definitionNames(List<LispVal> forms) {
