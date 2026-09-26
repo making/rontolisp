@@ -452,6 +452,13 @@ class JavaInteropTest {
 			.isEqualTo(JavaInteropPrograms.HOST_COLLECTION_OUTPUT);
 	}
 
+	// Mirrors JvmJavaInteropCompilerTest#anAccessorRefusesAHostCollection.
+	@Test
+	void anAccessorRefusesAHostCollection() {
+		assertThat(output(JavaInteropPrograms.HOST_ACCESSOR_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.HOST_ACCESSOR_OUTPUT);
+	}
+
 	// What a dispatched site counted on is checked before it chooses: a declared argument
 	// that is not an instance of its class is an error, and arguments no overload takes
 	// are reported as the run-time resolution reports them.

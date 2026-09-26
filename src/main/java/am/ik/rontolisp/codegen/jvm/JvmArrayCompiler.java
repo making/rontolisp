@@ -70,6 +70,25 @@ final class JvmArrayCompiler {
 		}
 	}
 
+	/**
+	 * Runs the array operand on the stack through the program's {@code _jckarr} in a
+	 * {@code java:} program: a host {@code ArrayList} a call answered is no Lisp array,
+	 * and every accessor below reads its operand by the class alone, so it is refused
+	 * here with the interpreter's {@code OP expects an array, got X}. A program without
+	 * {@code java:} holds no host list and emits nothing.
+	 * @param ctx the compilation context, the operand on top of its stack
+	 * @param lispName the operator the refusal names
+	 */
+	static void emitHostArrayGuard(JvmLispCompiler.Ctx ctx, String lispName) {
+		JvmJavaSites javaSites = ctx.javaSites;
+		if (javaSites == null) {
+			return;
+		}
+		JvmEmitHelper.compileUnspelledLiteral(lispName, ctx);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(javaSites.direct().arrayGuard().index());
+	}
+
 	static void compileMake(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
 		if (args.size() < 2) {
@@ -292,6 +311,7 @@ final class JvmArrayCompiler {
 					"%set-fill-pointer expects an array and a value, got " + (args.size() - 1) + " argument(s)");
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.SET_FILL_POINTER);
 		emitRequireGeneralIfPacked(ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.SET_FILL_POINTER,
@@ -322,6 +342,7 @@ final class JvmArrayCompiler {
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.VECTOR_PUSH);
 		emitRequireGeneralIfPacked(ctx, className);
 		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.VECTOR_PUSH, JvmArrayRuntimeBuilder.VECTOR_PUSH_DESC);
 	}
@@ -340,6 +361,7 @@ final class JvmArrayCompiler {
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.VECTOR_PUSH_EXTEND);
 		emitRequireGeneralIfPacked(ctx, className);
 		if (args.size() == 4) {
 			JvmExprCompiler.compileExpr(args.get(3), ctx, className);
@@ -362,6 +384,7 @@ final class JvmArrayCompiler {
 			throw new UnsupportedOperationException(lispName + " expects 1 argument, got " + (args.size() - 1));
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, lispName);
 		invokeHelper(ctx, className, helper, desc);
 	}
 
@@ -372,6 +395,7 @@ final class JvmArrayCompiler {
 			throw new UnsupportedOperationException(lispName + " expects 1 argument, got " + (args.size() - 1));
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, lispName);
 		// Every unary caller is part of the fill-pointer / adjustability / displacement
 		// surface, none of which applies to a packed integer vector.
 		emitRequireGeneralIfPacked(ctx, className);
@@ -400,6 +424,7 @@ final class JvmArrayCompiler {
 		// before any arity-specific rewriting below.
 		int subscriptCount = args.size() - 2;
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.AREF);
 		JvmExprCompiler.compileExpr(new LispInteger(subscriptCount), ctx, className);
 		invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.CHECK_RANK,
 				JvmFloatArrayRuntimeBuilder.CHECK_RANK, JvmArrayRuntimeBuilder.CHECK_RANK),
@@ -443,6 +468,7 @@ final class JvmArrayCompiler {
 					"row-major-aref expects an array and an index, got " + (args.size() - 1) + " argument(s)");
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.ROW_MAJOR_AREF);
 		compileSubscript(args.get(2), ctx, className);
 		invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.AREF1, JvmFloatArrayRuntimeBuilder.AREF1,
 				JvmArrayRuntimeBuilder.AREF1), JvmArrayRuntimeBuilder.AREF1_DESC);
@@ -458,6 +484,7 @@ final class JvmArrayCompiler {
 					+ (args.size() - 1) + " argument(s)");
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.ROW_MAJOR_ASET);
 		compileSubscript(args.get(2), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(3), ctx, className);
 		invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1, JvmFloatArrayRuntimeBuilder.ASET1,
@@ -483,6 +510,7 @@ final class JvmArrayCompiler {
 			throw new UnsupportedOperationException("array-element-type expects 1 argument, got " + (args.size() - 1));
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.ARRAY_ELEMENT_TYPE);
 		int tempSlot = ctx.allocTemp();
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(tempSlot);
@@ -559,6 +587,7 @@ final class JvmArrayCompiler {
 			throw new UnsupportedOperationException("array-dimensions expects 1 argument, got " + (args.size() - 1));
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.ARRAY_DIMENSIONS);
 		invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.DIMS, JvmFloatArrayRuntimeBuilder.DIMS,
 				JvmArrayRuntimeBuilder.DIMS), JvmArrayRuntimeBuilder.DIMS_DESC);
 	}
@@ -571,6 +600,7 @@ final class JvmArrayCompiler {
 		int subscriptCount = args.size() - 3;
 		LispVal value = args.get(args.size() - 1);
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.ASET);
 		JvmExprCompiler.compileExpr(new LispInteger(subscriptCount), ctx, className);
 		invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.CHECK_RANK,
 				JvmFloatArrayRuntimeBuilder.CHECK_RANK, JvmArrayRuntimeBuilder.CHECK_RANK),

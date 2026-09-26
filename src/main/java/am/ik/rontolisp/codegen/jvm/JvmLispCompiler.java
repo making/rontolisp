@@ -3671,7 +3671,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// computation lives in one method so each call site is a single invokestatic,
 		// keeping main within the JVM's 64 KB per-method limit.
 		final JvmLengthRuntimeBuilder.LengthMethod lengthMethodBody = JvmLengthRuntimeBuilder.build(cp,
-				objectArrayClass, stringClass, longValueOf, thisClass);
+				objectArrayClass, stringClass, longValueOf, thisClass,
+				javaSites != null ? javaSites.direct().lispArray() : null);
 
 		// nthcdr runtime helper. Emitted unconditionally for the same reason _length is:
 		// nthcdr is generated internally by a long tail of expanders (nth, elt, loop's

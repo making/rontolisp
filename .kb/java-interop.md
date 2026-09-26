@@ -25,7 +25,8 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
 - WASM: rejected; no `BuiltinFunctionWrappers` entry, so `#'java:call` is a compile error while
   the interpreter allows it.
 - A host `ArrayList` / `LinkedHashMap` a Java call answers is not a Lisp array / hash table
-  ("What a host object is" below): the compiled printer and predicates ask the shared tests.
+  ("What a host object is" below): the compiled printer and predicates ask the shared tests,
+  the accessors refuse it through guards built on them.
 - Trap: the template must have NO nested classes/records and NO rontolisp imports. The bridge
   forces `usesEval`, a generated interface class only the apply tier (`JvmJavaSites.needsApply`);
   `usesJava` threads `JvmRuntimeBuilder.JavaPrint` into the print builders.
@@ -84,8 +85,24 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   method RontoComplex.size` / `[D.size`; `(java:new "java.math.BigInteger" "5")` printed `5`
   compiled and `#<java java.math.BigInteger>` interpreted. All agree now
   (`testsupport/JavaInteropPrograms.HOST_OBJECT_PROGRAM`).
-- Still divergent: the compiled ACCESSORS on a host `ArrayList` / `LinkedHashMap` (`gethash`
-  answers `NIL`, `length` / `aref` / `hash-table-count` throw a Java exception; `.todo/a38`).
+- The ACCESSORS refuse a host collection as the interpreter does, in a `java:` program only
+  (a program without `java:` emits nothing new): every hash-table accessor's call site runs
+  the table through `_jcktab(v, "OP")` (`JvmHashTableCompiler.emitHostTableGuard`; after
+  gethash's default / `%puthash`'s value, which the interpreter evaluates first) and every
+  array accessor's through `_jckarr` (`JvmArrayCompiler.emitHostArrayGuard`: `aref`, `%aset`,
+  `row-major-aref`, `array-dimensions`, `array-element-type`, the fill-pointer surface) --
+  `JvmJavaDirectSites.tableGuard()` / `arrayGuard()`: an instance of the shared class the
+  shared test rejects throws `OP expects a hash table / an array, got X` (a simple-error).
+  Only a host collection of the accessor's OWN class is refused; any other wrong type fails
+  as in a program without `java:` (`.todo/a48`). `_length`'s array arm asks `_jlarr`, so a
+  host list is `LENGTH`'s `SEQUENCE` type-error, and so is every sequence function that
+  measures first (`coerce`, `position`, `fill`, ...). `hash-table-test` and the rehash
+  accessors, constants elsewhere, evaluate and guard the table first. Before, measured
+  2026-09-26: `gethash` of a key the host map lacks answered `NIL`, `(setf gethash)` wrote a
+  bucket INTO the host map and then threw a `NullPointerException`, `hash-table-test` answered
+  `EQUAL`, `length` / `aref` / `hash-table-count` threw Java exceptions
+  (`JavaInteropPrograms.HOST_ACCESSOR_PROGRAM`, both backends). `(apply #'aref l ...)` still
+  names `ARRAY-DIMENSIONS`, the wrapper's first reader (`.todo/a48`).
 
 ## Bignums and specialized vectors
 - BIGNUM is a kind (`JavaKind.Lisp`, after INTEGER): `kindCost` = `BigInteger` EXACT, a supertype

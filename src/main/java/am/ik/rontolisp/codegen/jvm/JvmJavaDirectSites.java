@@ -84,6 +84,20 @@ final class JvmJavaDirectSites {
 	 */
 	static final String LISP_TABLE = "_jltab";
 
+	/**
+	 * {@code _jckarr(Object, String)Object}: an array accessor's operand, answered
+	 * unchanged unless it is a host {@code ArrayList}, which is refused with the
+	 * interpreter's {@code OP expects an array, got X}.
+	 */
+	static final String ARRAY_GUARD = "_jckarr";
+
+	/**
+	 * {@code _jcktab(Object, String)Object}: a hash-table accessor's operand, answered
+	 * unchanged unless it is a host {@code LinkedHashMap}, which is refused with the
+	 * interpreter's {@code OP expects a hash table, got X}.
+	 */
+	static final String TABLE_GUARD = "_jcktab";
+
 	/** {@code _junm(Object)Object}: a Java value as the Lisp value it stands for. */
 	static final String UNMARSHAL = "_junm";
 
@@ -141,6 +155,8 @@ final class JvmJavaDirectSites {
 	private static final int KIND_NONE = KIND_CONS + 3;
 
 	private static final String OBJECT_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	private static final String GUARD_DESC = "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;";
 
 	/**
 	 * The package of the classes that travel with a compiled program; a value of one
@@ -201,6 +217,10 @@ final class JvmJavaDirectSites {
 	private @Nullable MethodrefConstant lispArray;
 
 	private @Nullable MethodrefConstant lispTable;
+
+	private @Nullable MethodrefConstant arrayGuard;
+
+	private @Nullable MethodrefConstant tableGuard;
 
 	private @Nullable MethodrefConstant unmarshal;
 
@@ -753,6 +773,42 @@ final class JvmJavaDirectSites {
 			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
 			this.lispTable = ref;
 			this.methods.add(buildLispTable(name, desc));
+		}
+		return ref;
+	}
+
+	/**
+	 * The guard an array accessor runs its array operand through in a {@code java:}
+	 * program: a host {@code ArrayList} is no Lisp array, and the accessors read the
+	 * class alone. Built on first use.
+	 * @return {@code _jckarr(Object, String)Object}, the operator name second
+	 */
+	MethodrefConstant arrayGuard() {
+		MethodrefConstant ref = this.arrayGuard;
+		if (ref == null) {
+			Utf8Constant name = this.cp.addUtf8(ARRAY_GUARD);
+			Utf8Constant desc = this.cp.addUtf8(GUARD_DESC);
+			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			this.arrayGuard = ref;
+			this.methods.add(buildGuard(name, desc, "java/util/ArrayList", lispArray(), " expects an array, got "));
+		}
+		return ref;
+	}
+
+	/**
+	 * The guard a hash-table accessor runs its table operand through in a {@code java:}
+	 * program, as {@link #arrayGuard()} is for arrays. Built on first use.
+	 * @return {@code _jcktab(Object, String)Object}, the operator name second
+	 */
+	MethodrefConstant tableGuard() {
+		MethodrefConstant ref = this.tableGuard;
+		if (ref == null) {
+			Utf8Constant name = this.cp.addUtf8(TABLE_GUARD);
+			Utf8Constant desc = this.cp.addUtf8(GUARD_DESC);
+			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
+			this.tableGuard = ref;
+			this.methods
+				.add(buildGuard(name, desc, RontoHashTable.MAP_CLASS, lispTable(), " expects a hash table, got "));
 		}
 		return ref;
 	}
@@ -2742,6 +2798,36 @@ final class JvmJavaDirectSites {
 		a.iconst(0);
 		a.ireturn();
 		return new Method(name, desc, 2, 1, a.finish(), List.of());
+	}
+
+	// _jckarr / _jcktab(Object v, String op)Object: v unless it is an instance of the
+	// class a Lisp array / table shares with a host collection and the shared test says
+	// it is no Lisp one -- then the interpreter's refusal, a simple-error: throw new
+	// RuntimeException(op + " expects ..., got " + _lispToString(v)).
+	private Method buildGuard(Utf8Constant name, Utf8Constant desc, String sharedClass, MethodrefConstant lispTest,
+			String refusal) {
+		JvmAsm a = new JvmAsm();
+		int pass = a.label();
+		a.aload(0);
+		a.instanceOf(cls(sharedClass));
+		a.branch(Opcode.IFEQ, pass);
+		a.aload(0);
+		a.invokestatic(lispTest);
+		a.branch(Opcode.IFNE, pass);
+		a.anew(cls("java/lang/RuntimeException"));
+		a.dup();
+		a.aload(1);
+		a.ldcString(str(refusal));
+		a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
+		a.aload(0);
+		a.invokestatic(this.lispToString);
+		a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
+		a.invokespecial(method("java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V"));
+		a.athrow();
+		a.bind(pass);
+		a.aload(0);
+		a.areturn();
+		return new Method(name, desc, 4, 2, a.finish(), List.of());
 	}
 
 	// _jltab(Object)Z: a LinkedHashMap holding an ArrayList under the order key.
