@@ -43,10 +43,11 @@ public final class BuiltinCallArity {
 	 * own). A row that is not wider than its wrapper fails the class's initialization, so
 	 * widening a wrapper retires its row here. What is left:
 	 * <ul>
-	 * <li>the comparisons and {@code logand}/{@code logior}/{@code logxor}, whose wrappers
-	 * keep TWO required parameters so the two-argument call -- a sort predicate's, a
-	 * fold's -- conses no rest list ({@code BuiltinFunctionWrappers.comparison} has the
-	 * measurement); their one- and zero-argument call positions are legal;</li>
+	 * <li>the comparisons and {@code logand}/{@code logior}/{@code logxor}, whose
+	 * wrappers keep TWO required parameters so the two-argument call -- a sort
+	 * predicate's, a fold's -- conses no rest list
+	 * ({@code BuiltinFunctionWrappers.comparison} has the measurement); their one- and
+	 * zero-argument call positions are legal;</li>
 	 * <li>{@code make-broadcast-stream} with components, {@code read-from-string}'s
 	 * optional and keyword arguments and {@code write-to-string}'s keywords, which their
 	 * function values do not forward yet.</li>
