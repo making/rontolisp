@@ -1800,7 +1800,7 @@ final class JvmExprCompiler {
 				// string sequence sorts as a list of its characters and is coerced
 				// back
 				// to a string; null when the call is already the inner sort.
-				LispVal keyedSort = LispMacroExpander.expandSortWithKey(cons);
+				LispVal keyedSort = LispMacroExpander.expandSortWithKey(cons, ctx.usesArrays);
 				if (keyedSort != null) {
 					JvmExprCompiler.compileExpr(keyedSort, ctx, className);
 				}

@@ -1828,29 +1828,12 @@ final class WasmEvalRuntimeBuilder {
 			w.write(Instruction.END); // if interpreted
 		}
 
-		// compiled closure: dispatch by argument count
-		i32(w, 0);
-		setLocal(w, LEN);
-		getLocal(w, ARGLIST);
-		setLocal(w, ARGCUR);
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		getLocal(w, ARGCUR);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.BR_IF, 1);
-		getLocal(w, LEN);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		setLocal(w, LEN);
-		emitCdrOf(w, ARGCUR);
-		setLocal(w, ARGCUR);
-		w.write(Instruction.BR, 0);
-		w.write(Instruction.END); // loop
-		w.write(Instruction.END); // block
-
-		// One call, any argument count: the SPREAD dispatcher takes the list whole and
-		// each case reads its target's required parameters out of it, handing a variadic
-		// target the remaining tail. The per-arity dispatchers cannot serve apply -- they
+		// compiled closure. One call, any argument count: the SPREAD dispatcher takes the
+		// list whole and each case reads its target's required parameters out of it,
+		// handing a variadic target the remaining tail; its _arity_chk judges the count
+		// and the list's properness. (A length walk here, left over from the per-arity
+		// ladder, cast every cell and trapped on an improper list before the dispatcher
+		// could report it.) The per-arity dispatchers cannot serve apply -- they
 		// take one WASM parameter per Lisp argument, so they stop at MAX_CALLABLE_ARITY,
 		// and an apply past it used to fall off the ladder and trap. A tail call, like
 		// every dispatch: an (apply f ...) in tail position whose target applies again
@@ -1867,10 +1850,11 @@ final class WasmEvalRuntimeBuilder {
 	/**
 	 * Emits the wrong-count check of an interpreted closure: {@code _arity_chk(argList,
 	 * 2 * params)}, reported as {@code Function expects N argument(s), got M} like any
-	 * anonymous callee. A lambda list with a {@code &}-marker is left unchecked: the
+	 * anonymous callee. A lambda list with a {@code &}-marker has no count checked: the
 	 * runtime {@code lambda} binds such a list positionally (a documented limitation), so
-	 * its parameter count is no count the call has to match. Clobbers the cursor, element
-	 * and count locals.
+	 * its parameter count is no count the call has to match. Its list is still walked
+	 * with the shape {@code (0, variadic)}, which only an {@code apply}'s improper last
+	 * argument can fail. Clobbers the cursor, element and count locals.
 	 */
 	private static void emitClosureArityCheck(WasmWriter w, int paramsSlot, int argListSlot, int cursorSlot,
 			int elemSlot, int countSlot, int arityChkIndex) {
@@ -1878,6 +1862,7 @@ final class WasmEvalRuntimeBuilder {
 		setLocal(w, countSlot);
 		getLocal(w, paramsSlot);
 		setLocal(w, cursorSlot);
+		w.write(Instruction.BLOCK, 0x40); // check
 		w.write(Instruction.BLOCK, 0x40); // unchecked
 		w.write(Instruction.BLOCK, 0x40); // counted
 		w.write(Instruction.LOOP, 0x40);
@@ -1908,14 +1893,20 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // counted
-		getLocal(w, argListSlot);
 		getLocal(w, countSlot);
 		i32(w, 1);
 		w.write(Instruction.I32_SHL);
+		setLocal(w, countSlot);
+		w.write(Instruction.BR, 1); // check
+		w.write(Instruction.END); // unchecked
+		i32(w, 1);
+		setLocal(w, countSlot);
+		w.write(Instruction.END); // check
+		getLocal(w, argListSlot);
+		getLocal(w, countSlot);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(arityChkIndex);
 		w.write(Instruction.DROP);
-		w.write(Instruction.END); // unchecked
 	}
 
 	/**

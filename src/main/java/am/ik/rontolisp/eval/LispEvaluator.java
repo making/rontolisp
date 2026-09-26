@@ -3182,9 +3182,15 @@ public final class LispEvaluator {
 		this.globalEnv.defineFunction(LispNames.MAPCAN, new LispFunction(LispNames.MAPCAN,
 				args -> mapcanValues(LispNames.MAPCAN, args.get(0), requireMapLists(LispNames.MAPCAN, args), false)));
 		this.globalEnv.defineFunction(LispNames.SORT, new LispFunction(LispNames.SORT, args -> {
-			if (args.size() != 2) {
+			if (args.size() < 2) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
-						LispNames.SORT + " expects 2 arguments, got " + args.size());
+						LispNames.SORT + " expects at least 2 arguments, got " + args.size());
+			}
+			if (args.size() > 2) {
+				// A :key routes through stable-sort, as the call position does
+				// (LispMacroExpander.expandSortWithKey).
+				requireKeyKeyword(LispNames.SORT, args, 2);
+				return stableSortValues(args);
 			}
 			// A string/vector argument sorts as a list of its elements and is written
 			// back into its own storage (Common Lisp sequences; .todo/623 keeps a
@@ -3203,29 +3209,7 @@ public final class LispEvaluator {
 						LispNames.STABLE_SORT + " expects at least 2 arguments, got " + args.size());
 			}
 			requireKeyKeyword(LispNames.STABLE_SORT, args, 2);
-			LispVal keyArg = optionalKeywordArg(args, 2, LispNames.KEY_KEYWORD);
-			LispVal keyFn = keyArg instanceof LispNil ? null : keyArg;
-			LispVal pred = args.get(1);
-			List<LispVal[]> decorated = new java.util.ArrayList<>();
-			LispVal cur = Environment.seqAsList(args.get(0));
-			while (cur instanceof LispCons cell) {
-				LispVal keyVal = (keyFn == null) ? cell.car() : apply(keyFn, List.of(cell.car()), this.globalEnv);
-				decorated.add(new LispVal[] { keyVal, cell.car() });
-				cur = cell.cdr();
-			}
-			decorated.sort((x, y) -> {
-				if (isTruthy(apply(pred, List.of(x[0], y[0]), this.globalEnv))) {
-					return -1;
-				}
-				return isTruthy(apply(pred, List.of(y[0], x[0]), this.globalEnv)) ? 1 : 0;
-			});
-			LispVal result = LispNil.INSTANCE;
-			for (int i = decorated.size() - 1; i >= 0; i--) {
-				result = new LispCons(decorated.get(i)[1], result);
-			}
-			// A string/vector argument sorts as a list of its elements and is written
-			// back into its own storage, matching the SORT builtin above (.todo/623).
-			return Environment.seqResultDestructive(args.get(0), result);
+			return stableSortValues(args);
 		}));
 		this.applyBuiltin = new LispFunction(LispNames.APPLY, args -> {
 			if (args.size() < 2) {
@@ -12212,6 +12196,35 @@ public final class LispEvaluator {
 		System.arraycopy(buffer, 0, values, from, length);
 	}
 
+	// stable-sort's decorate-sort-undecorate over (seq pred [:key fn]), the keyword tail
+	// already validated. A Java list sort is stable; a string/vector argument is written
+	// back into its own storage.
+	private LispVal stableSortValues(List<LispVal> args) {
+		LispVal keyArg = optionalKeywordArg(args, 2, LispNames.KEY_KEYWORD);
+		LispVal keyFn = keyArg instanceof LispNil ? null : keyArg;
+		LispVal pred = args.get(1);
+		List<LispVal[]> decorated = new java.util.ArrayList<>();
+		LispVal cur = Environment.seqAsList(args.get(0));
+		while (cur instanceof LispCons cell) {
+			LispVal keyVal = (keyFn == null) ? cell.car() : apply(keyFn, List.of(cell.car()), this.globalEnv);
+			decorated.add(new LispVal[] { keyVal, cell.car() });
+			cur = cell.cdr();
+		}
+		decorated.sort((x, y) -> {
+			if (isTruthy(apply(pred, List.of(x[0], y[0]), this.globalEnv))) {
+				return -1;
+			}
+			return isTruthy(apply(pred, List.of(y[0], x[0]), this.globalEnv)) ? 1 : 0;
+		});
+		LispVal result = LispNil.INSTANCE;
+		for (int i = decorated.size() - 1; i >= 0; i--) {
+			result = new LispCons(decorated.get(i)[1], result);
+		}
+		// A string/vector argument sorts as a list of its elements and is written
+		// back into its own storage, matching the SORT builtin above (.todo/623).
+		return Environment.seqResultDestructive(args.get(0), result);
+	}
+
 	// Apply a function to a spread argument list (Common Lisp apply semantics): the
 	// leading
 	// arguments are taken literally and the final argument must be a list whose elements
@@ -12239,7 +12252,7 @@ public final class LispEvaluator {
 			tail = cell.cdr();
 		}
 		if (!(tail instanceof LispNil)) {
-			throw new LispEvalException(LispNames.APPLY + ": last argument must be a list");
+			throw new LispEvalException(ClosRegistry.APPLY_IMPROPER_LIST_MESSAGE);
 		}
 		return callArgs;
 	}

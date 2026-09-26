@@ -2355,6 +2355,8 @@ final class WasmRuntimeBuilder {
 
 		private WasmLispCompiler.StringTable.@Nullable StringEntry infix;
 
+		private WasmLispCompiler.StringTable.@Nullable StringEntry applyImproperList;
+
 		/** The funcIds whose report names an operator, and the operator each names. */
 		private final SortedMap<Integer, String> namedFuncIds;
 
@@ -2406,6 +2408,14 @@ final class WasmRuntimeBuilder {
 
 		private WasmLispCompiler.StringTable.StringEntry quoted(String text) {
 			return this.stringTable.addBodyString("\"" + text + "\"");
+		}
+
+		/** {@link ClosRegistry#APPLY_IMPROPER_LIST_MESSAGE}, interned on first use. */
+		private WasmLispCompiler.StringTable.StringEntry applyImproperList() {
+			if (this.applyImproperList == null) {
+				this.applyImproperList = quoted(ClosRegistry.APPLY_IMPROPER_LIST_MESSAGE);
+			}
+			return this.applyImproperList;
 		}
 
 		/** An operator's name as a string piece, interned on first use. */
@@ -2624,12 +2634,16 @@ final class WasmRuntimeBuilder {
 	 * one case per callable in the program.
 	 *
 	 * <p>
-	 * The walk stops at the first non-cons, so an IMPROPER tail ends the count instead of
-	 * trapping on the {@code ref.cast}: {@code (apply #'f '(1 . 2))} is undefined in CL
-	 * and answered {@code (f 1)} before this guard existed, and a guard is no place to
-	 * start trapping on it. It reuses the {@code ((ref null eq), i32) -> i32} signature
-	 * ({@code TYPE_STR_TO_MEM}), so no module gains a type entry; the result is always 0
-	 * and every call site drops it.
+	 * The walk stops at the first non-cons. A list that ends in anything but nil came
+	 * from an {@code apply} whose last argument is no proper list -- every other list
+	 * reaching a spread case is built by the compiler -- so it throws the interpreter's
+	 * {@code simple-error} ({@link ClosRegistry#APPLY_IMPROPER_LIST_MESSAGE}, the
+	 * {@code (nil . message)} payload a plain {@code %error} throws) before the count is
+	 * judged, as the interpreter's spread does; the car/cdr walk behind the guard would
+	 * trap on the {@code ref.cast} instead. The aligned literal {@code apply} passes its
+	 * rest tail here with the shape {@code (0, variadic)} for that check alone. It reuses
+	 * the {@code ((ref null eq), i32) -> i32} signature ({@code TYPE_STR_TO_MEM}), so no
+	 * module gains a type entry; the result is always 0 and every call site drops it.
 	 * @param report the message pieces and the {@code program-error} layout
 	 * @return the function body
 	 */
@@ -2679,6 +2693,19 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.BR, 0); // $walk
 		w.write(Instruction.END); // $walk
 		w.write(Instruction.END); // $counted
+		// An improper tail: (apply f 1 2), (apply f '(1 . 2)).
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(cursor);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		emitStrConst(w, report.applyImproperList());
+		WasmEmitHelper.emitNewCons(w, report.identityHash);
+		w.write(Instruction.THROW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+		w.write(Instruction.END);
 		// The count fits when it is the required one, or larger with a &rest tail to
 		// take the surplus.
 		emitArityFits(w, got, report.namesOperators());
