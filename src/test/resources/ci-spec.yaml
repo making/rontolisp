@@ -18693,6 +18693,37 @@ cases:
       (:SIMPLE "APPLY: last argument must be a list")
       ((1 2 3) 10 NIL)
 
+  # A DIRECT call of a wrapped built-in with a count its call shape rules out is the
+  # interpreter's program-error at run time, its arguments evaluated first, with a
+  # compile-time warning (compiler/BuiltinCallArity): the compiled lowerings dropped a
+  # surplus ((car x 2) answered the car) or failed the compile ((nth x)), and the
+  # interpreter itself answered (minusp 1 2) and said "Index 1 out of bounds" for (1+).
+  # The shape is the operator's standard lambda list, so (< 1 2 3) stays legal.
+  - name: direct-builtin-call-wrong-count-signals-program-error
+    source: |
+      (defun ci-wc-car (x) (car x 2))
+      (defun ci-wc-nth (x) (nth x))
+      (defun ci-wc-report (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
+      (print (ci-wc-report (lambda () (ci-wc-car '(1 2)))))
+      (print (ci-wc-report (lambda () (ci-wc-nth 1))))
+      (print (let ((n 0)) (list (ci-wc-report (lambda () (cons (incf n)))) n)))
+      (print (ci-wc-report (lambda () (zerop 0 1))))
+      (print (ci-wc-report (lambda () (minusp 1 2))))
+      (print (ci-wc-report (lambda () (1+))))
+      (print (ci-wc-report (lambda () (floor 1 2 3))))
+      (print (ci-wc-report (lambda () (gethash 1))))
+      (print (list (< 1 2 3) (gethash 1 (make-hash-table) 3) (logand 1 3 7) (char= #\a #\a #\a)))
+    expected: |
+      "CAR expects 1 argument, got 2"
+      "NTH expects 2 arguments, got 1"
+      ("CONS expects 2 arguments, got 1" 1)
+      "ZEROP expects 1 argument, got 2"
+      "MINUSP expects 1 argument, got 2"
+      "1+ expects 1 argument, got 0"
+      "FLOOR expects at most 2 arguments, got 3"
+      "GETHASH expects at least 2 arguments, got 1"
+      (T 3 1 T)
+
   # Applying a value that names no function is the interpreter's condition on every
   # backend (.kb/error-handling.md): a type-error "Not a function: <prin1>" for a
   # non-designator, an undefined-function for a symbol -- NIL included -- no function

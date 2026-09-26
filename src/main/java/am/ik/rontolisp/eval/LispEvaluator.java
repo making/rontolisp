@@ -53,6 +53,7 @@ import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.SpecialVarCollector;
+import am.ik.rontolisp.compiler.BuiltinCallArity;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.UncaughtReport;
 import am.ik.rontolisp.compiler.ClackEnv;
@@ -6358,6 +6359,9 @@ public final class LispEvaluator {
 								result = singleValue(evalDefmethod(cons, env));
 								break frame;
 							case LispNames.MAKE_INSTANCE:
+								if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
+									break dispatch;
+								}
 								ensureAsdfClassesFor(cons);
 								ensureGeomClassesFor(cons);
 								next = LispMacroExpander.expandMakeInstance(cons, this.closRegistry);
@@ -6434,6 +6438,9 @@ public final class LispEvaluator {
 								next = builtinMacroExpansion(cons, LispMacroExpander::expandCcase);
 								break dispatch;
 							case LispNames.ERROR:
+								if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
+									break dispatch;
+								}
 								ensureWitLoadedForConditionClass(cons);
 								ensureConditionReportRuntimeLoaded();
 								// The signal hook (handler-bind handlers at the signal
@@ -6448,16 +6455,25 @@ public final class LispEvaluator {
 										this.restartRuntimeLoaded);
 								break dispatch;
 							case LispNames.CERROR:
+								if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
+									break dispatch;
+								}
 								ensureConditionReportRuntimeLoaded();
 								next = LispMacroExpander.expandCerror(cons, this.closRegistry,
 										this.restartRuntimeLoaded);
 								break dispatch;
 							case LispNames.WARN:
+								if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
+									break dispatch;
+								}
 								ensureWitLoadedForConditionClass(cons);
 								ensureConditionReportRuntimeLoaded();
 								next = LispMacroExpander.expandWarn(cons, this.closRegistry, this.restartRuntimeLoaded);
 								break dispatch;
 							case LispNames.SIGNAL:
+								if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
+									break dispatch;
+								}
 								ensureWitLoadedForConditionClass(cons);
 								ensureConditionReportRuntimeLoaded();
 								next = LispMacroExpander.expandSignalMacro(cons, this.closRegistry,
@@ -6879,6 +6895,13 @@ public final class LispEvaluator {
 						// Neither the tail-transparent expansions nor the value forms of
 						// the second half claimed the
 						// operator, then the ordinary call.
+						// A wrapped built-in called with a count its shape rules out
+						// signals before any lowering can drop the surplus or index past
+						// the form (compiler/BuiltinCallArity), as on the compiled
+						// backends.
+						if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
+							break dispatch;
+						}
 						LispVal expansion = rareOperatorExpansion(cons, sym.name());
 						if (expansion != null) {
 							next = expansion;
@@ -7711,6 +7734,25 @@ public final class LispEvaluator {
 	 * @param expander the pure syntactic expansion of one built-in macro
 	 * @return the (memoized) expansion
 	 */
+	/**
+	 * The form a DIRECT call of a wrapped built-in evaluates in place of the call when
+	 * its argument count is one the operator's shape rules out: the arguments, then the
+	 * {@code program-error} every backend reports ({@link BuiltinCallArity}). A name the
+	 * program defines itself keeps its own call path, as on the compiled backends.
+	 * @param cons the call
+	 * @param name the operator's name
+	 * @param properLength the call form's length, operator included
+	 * @return the signalling form, or {@code null} when the count fits
+	 */
+	private @Nullable LispVal wrongCountCall(LispCons cons, String name, int properLength) {
+		BuiltinCallArity.Shape shape = BuiltinCallArity.of(name);
+		if (shape == null || properLength < 1 || shape.accepts(properLength - 1)
+				|| this.globalEnv.lookupFunctionOrNull(name) instanceof LispLambda) {
+			return null;
+		}
+		return BuiltinCallArity.wrongCountSignal(cons);
+	}
+
 	private LispVal builtinMacroExpansion(LispCons cons, java.util.function.Function<LispCons, LispVal> expander) {
 		LispVal cached;
 		synchronized (this.builtinMacroExpansions) {
@@ -7719,7 +7761,9 @@ public final class LispEvaluator {
 		if (cached != null) {
 			return cached;
 		}
-		LispVal expansion = expander.apply(cons);
+		LispVal wrongCount = cons.car() instanceof LispSymbol head
+				? wrongCountCall(cons, head.name(), cons.properLength()) : null;
+		LispVal expansion = wrongCount != null ? wrongCount : expander.apply(cons);
 		synchronized (this.builtinMacroExpansions) {
 			if (this.builtinMacroExpansions.size() < EXPANSION_MEMO_LIMIT) {
 				this.builtinMacroExpansions.put(cons, expansion);

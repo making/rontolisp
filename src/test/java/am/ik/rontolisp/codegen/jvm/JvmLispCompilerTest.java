@@ -2194,6 +2194,21 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAnUncaughtWrongBuiltinCountWarnsAndReportsTheSameLine() throws Exception {
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		Throwable cause;
+		try (var _ = ThreadStdio.err(err)) {
+			cause = catchThrowable(() -> compileAndRun("""
+					(print (car '(1 2) 2))
+					"""));
+		}
+		assertThat(err.toString().trim()).isEqualTo("""
+				warning: CAR expects 1 argument, got 2; compiled as a call-time program-error
+				Unhandled condition: CAR expects 1 argument, got 2""");
+		assertThat(cause).isInstanceOf(InvocationTargetException.class);
+	}
+
+	@Test
 	void compileAndRunASynthesizedBuiltInConditionReportsARontolispMessage() throws Exception {
 		// A cast failure's host text names Java classes and is replaced at the pad; an
 		// out-of-range index reports its bound itself now
@@ -5034,6 +5049,39 @@ class JvmLispCompilerTest {
 					"Function expects 1 argument, got 0"
 					:E
 					((1 . 2) (3 . 4) 5 ((1 . 2)))""");
+	}
+
+	// A DIRECT call of a wrapped built-in with a count its call shape rules out is the
+	// interpreter's program-error at run time, after its arguments are evaluated: the
+	// call-position lowerings dropped a surplus ((car x 2) answered the car) and indexed
+	// past a short form ((nth x) failed the compile). The shape is the operator's
+	// standard lambda list, so (< 1 2 3) and (gethash k h default) stay legal
+	// (compiler/BuiltinCallArity).
+	@Test
+	void compileAndRunADirectBuiltinCallWithAWrongCountSignalsAtCallTime() throws Exception {
+		assertThat(compileAndRun("""
+				(defun wc-car (x) (car x 2))
+				(defun wc-nth (x) (nth x))
+				(print (handler-case (wc-car '(1 2)) (program-error (c) (princ-to-string c))))
+				(print (handler-case (wc-nth 1) (program-error (c) (princ-to-string c))))
+				(print (let ((n 0)) (handler-case (cons (incf n)) (program-error (c) (list n (princ-to-string c))))))
+				(print (handler-case (minusp 1 2) (program-error (c) (princ-to-string c))))
+				(print (handler-case (1+) (program-error (c) (princ-to-string c))))
+				(print (handler-case (floor 1 2 3) (program-error (c) (princ-to-string c))))
+				(print (handler-case (gethash 1) (program-error (c) (princ-to-string c))))
+				(print (handler-case (error) (program-error (c) (princ-to-string c))))
+				(print (list (< 1 2 3) (gethash 1 (make-hash-table) 3) (logand 1 3 7) (char= #\\a #\\a #\\a)
+				             (flet ((car (a b) (list a b))) (car 1 2))))
+				""")).isEqualTo("""
+				"CAR expects 1 argument, got 2"
+				"NTH expects 2 arguments, got 1"
+				(1 "CONS expects 2 arguments, got 1")
+				"MINUSP expects 1 argument, got 2"
+				"1+ expects 1 argument, got 0"
+				"FLOOR expects at most 2 arguments, got 3"
+				"GETHASH expects at least 2 arguments, got 1"
+				"ERROR expects at least 1 argument, got 0"
+				(T 3 1 T (1 2))""");
 	}
 
 	// Inside a compiled eval a wrong count is the interpreter's program-error too: a

@@ -1438,8 +1438,9 @@ report's two top rows: 370 + 299 lost forms) and to fail the COMPILE on the comp
 **Invariant: calling a function VALUE with a count its lambda list cannot take signals a catchable
 `program-error` on every backend, spelled by the ONE `ClosRegistry.arityMessage`** -- `Function
 expects [at least ]N argument(s), got M`, with the OPERATOR in place of `Function` when the callee
-is a built-in's (`CONS expects 2 arguments, got 1`; "Naming the operator" below). Only a DIRECT
-call is checked at compile time; everything else (`funcall`, `mapcar`, `sort`, a bare `(f x)` whose
+is a built-in's (`CONS expects 2 arguments, got 1`; "Naming the operator" below). A DIRECT call
+of a program's own function is checked at compile time, a direct call of a built-in at the call
+("A DIRECT call of a built-in" below); everything else (`funcall`, `mapcar`, `sort`, a bare `(f x)` whose
 head is an expression) arrives at an `_invoke_N` dispatcher, whose no-match arm used to answer nil
 on the JVM and `unreachable` on wasm-GC. A silent nil is the worst of the three: an ANSI
 `signals-error ... program-error` row passed interpreted and returned a WRONG VALUE compiled.
@@ -1541,9 +1542,54 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     every module. The first cut inlined the selection into each dispatcher and cost the eval
     module below +36 KB -- one copy per dispatcher arity.
   - Still divergent, in the EXPECTATION half only: a built-in the interpreter implements in Java
-    with an optional tail spells its own range (`GETHASH expects 2 or 3 arguments, got 0`), while
-    the compiled wrapper's lambda list says `at least 2`; and a wrapper's `&optional` surplus check
-    says `Function expects at most N`.
+    with an optional tail spells its own range through a function value (`(funcall 'gethash)` says
+    `GETHASH expects 2 or 3 arguments, got 0`), while the compiled wrapper's lambda list says `at
+    least 2`; and a wrapper's `&optional` surplus check says `Function expects at most N`. A DIRECT
+    call says `at least` / `at most` on all four (below).
+- **A DIRECT call of a built-in** (2026-09-26). **Invariant: `(op args...)` in call position,
+  `op` a `BuiltinFunctionWrappers` name, with a count the operator's call shape rules out,
+  evaluates its arguments and then signals `program-error` with ONE text on all four backends**
+  (`CAR expects 1 argument, got 2`, `FLOOR expects at most 2 arguments, got 3`, `GETHASH expects
+  at least 2 arguments, got 1`), and each compiled backend warns at compile time
+  (`warning: ...; compiled as a call-time program-error`). Pinned by ci-spec
+  `direct-builtin-call-wrong-count-signals-program-error`, `BuiltinCallArityTest`,
+  `LispEvaluatorTest.everyWrappedBuiltinReportsAWrongDirectCountWithItsCallShape` (every catalog
+  name, counts 0..4) and `JvmLispCompilerTest.compileAndRunADirectBuiltinCallWithAWrongCountSignalsAtCallTime`
+  with its wasm twin.
+  - Before: every call-position lowering indexed the argument list by the count it expected, so
+    compiled `(car x 2)` answered the car and `(nth x)` failed the COMPILE with `Index 2 out of
+    bounds`; the interpreter answered `(minusp 1 2)` => NIL and `(array-rank v 2)` => 1, and said
+    `Index 1 out of bounds for length 1` for `(1+)`. Measured over all 329 catalog names x counts
+    0..6 on the interpreter: most reported, many said the raw index text, some answered.
+  - The count is judged ONCE, where each backend decides a form is a built-in call, never per
+    lowering: `compiler/BuiltinCallArity.wrongCountSignal` lowers the call to `(progn args...
+    (%program-error "msg"))` -- the existing static-rejection signal, which is what gives the
+    warning. JVM / wasm: first thing in `Jvm/WasmExprCompiler.compileConsLocated` for a symbol
+    head, before the `rontolisp:` chain and the operator slices. Interpreter: `LispEvaluator.
+    wrongCountCall`, in `builtinMacroExpansion` (memoized per site), the `error` / `cerror` /
+    `warn` / `signal` / `make-instance` arms, and once in front of the rare-operator tables on the
+    fall-through path. A HashMap probe per fall-through call; A/B over a call-heavy interpreted
+    benchmark (fib 27 + a list walk, 8 interleaved runs each on a loaded host) put the medians
+    within noise of each other (3,208 / 3,095 / 3,080 ms: before / with / without the
+    fall-through probe).
+  - NOT the front end (`CompileFrontend.expand`): built-in macros are still unexpanded there, so
+    a walker would have to know that `(let ((nth 5)) ...)`'s binding or a `case` key list is no
+    call. The backends' own dispatch already knows. A syntactic scan of the repo's Lisp sources
+    (2026-09-26) found ~240 such "wrong-count" conses; the ones inspected were binding lists,
+    lambda lists and clauses, and the test suite's compiles warned on none of them.
+  - The SHAPE is the catalog wrapper's lambda list widened by `BuiltinCallArity.STANDARD_WIDER`
+    to the operator's standard lambda list wherever the wrapper is narrower: `#'<` is binary (a
+    sort predicate), `(< 1 2 3)` is legal; likewise `gethash` 2..3, `logand` 0.., `char=` 1..,
+    `string-upcase` 1.. (keywords count as unbounded; the keyword-tail check stays the
+    operator's), `rontolisp:widen-float-bits` 3... A row that is not wider than its wrapper fails
+    the class initialization, so widening a wrapper retires its row.
+  - A name the program defines itself (a `defun` of a cl name, a spliced library defun such as
+    wait.lisp's `sleep`) keeps its own call path: `ctx.userDefunNames` on the compiled backends, a
+    `LispLambda` global binding in the interpreter.
+  - A direct call of a program's own function with a wrong count is still a COMPILE error on
+    both compiled backends (`UD expects 2 arguments, got 1`), as is a wrong-count call of a
+    built-in the program shadowed with `defmethod` (`%LENGTH--dispatch expects 1 argument`); the
+    interpreter signals at run time.
 - **Inside a compiled `eval`** (2026-09-26) the same reports hold: the runtime evaluates every
   argument form of a registered function and the spread case judges the count, `apply` is a
   catalog wrapper, an eval-built closure without a `&` marker is checked, and the operators

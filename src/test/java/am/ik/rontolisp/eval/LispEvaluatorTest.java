@@ -3621,7 +3621,7 @@ class LispEvaluatorTest {
 			.hasMessage("ATAN: The value #C(1.0 1.0) is not of type REAL");
 		assertThatThrownBy(() -> eval("(atan 1d0 #c(1d0 1d0))"))
 			.hasMessage("ATAN: The value #C(1.0 1.0) is not of type REAL");
-		assertThatThrownBy(() -> eval("(atan 1d0 1d0 1d0)")).hasMessageContaining("ATAN expects 1 to 2 arguments");
+		assertThatThrownBy(() -> eval("(atan 1d0 1d0 1d0)")).hasMessage("ATAN expects at most 2 arguments, got 3");
 	}
 
 	@Test
@@ -3654,7 +3654,7 @@ class LispEvaluatorTest {
 		// One argument is unchanged.
 		assertThat(eval("(log 1d0)")).isEqualTo(new LispDouble(0.0));
 		assertThat(eval("(log 8d0)")).isEqualTo(new LispDouble(StrictMath.log(8.0)));
-		assertThatThrownBy(() -> eval("(log 8 2 1)")).hasMessageContaining("LOG expects 1 to 2 arguments");
+		assertThatThrownBy(() -> eval("(log 8 2 1)")).hasMessage("LOG expects at most 2 arguments, got 3");
 		// The first-class reference carries the optional argument too.
 		assertThat(eval("(funcall #'log 8 2)")).isEqualTo(new LispDouble(3.0));
 		assertThat(eval("(funcall #'atan 1d0 -1d0)")).isEqualTo(new LispDouble(StrictMath.atan2(1.0, -1.0)));
@@ -19322,6 +19322,48 @@ class LispEvaluatorTest {
 		assertThat(eval("(list (funcall #'reduce #'list '(1 2 3) :from-end t)"
 				+ " (funcall #'reduce #'+ '(1 2 3 4) :start 1 :end 3 :initial-value 10))")
 			.print()).isEqualTo("((1 (2 3)) 15)");
+	}
+
+	@Test
+	void aDirectBuiltinCallWithAWrongCountEvaluatesItsArgumentsAndReportsTheCount() {
+		// Judged once, before any lowering: (minusp 1 2) answered NIL, (array-rank v 2)
+		// dropped its surplus, (1+) and (acons 1 2) reported "Index 1 out of bounds",
+		// and a range said "1 to 2" where the compiled backends say "at most 2".
+		assertThat(eval("""
+				(let ((n 0))
+				  (list (handler-case (cons (incf n)) (program-error (c) (list n (princ-to-string c))))
+				        (handler-case (minusp 1 2) (program-error (c) (princ-to-string c)))
+				        (handler-case (array-rank #(1) 2) (program-error (c) (princ-to-string c)))
+				        (handler-case (1+) (program-error (c) (princ-to-string c)))
+				        (handler-case (acons 1 2) (program-error (c) (princ-to-string c)))
+				        (handler-case (floor 1 2 3) (program-error (c) (princ-to-string c)))
+				        (handler-case (gethash 1) (program-error (c) (princ-to-string c)))
+				        (handler-case (error) (program-error (c) (princ-to-string c)))))
+				""").print()).isEqualTo("((1 \"CONS expects 2 arguments, got 1\") \"MINUSP expects 1 argument, got 2\""
+				+ " \"ARRAY-RANK expects 1 argument, got 2\" \"1+ expects 1 argument, got 0\""
+				+ " \"ACONS expects 3 arguments, got 2\" \"FLOOR expects at most 2 arguments, got 3\""
+				+ " \"GETHASH expects at least 2 arguments, got 1\" \"ERROR expects at least 1 argument, got 0\")");
+		// The operator's standard lambda list, not its binary function value, decides.
+		assertThat(eval("(list (< 1 2 3) (gethash 1 (make-hash-table) 3) (logand 1 3 7) (char= #\\a #\\a #\\a)"
+				+ " (flet ((car (a b) (list a b))) (car 1 2)))")
+			.print()).isEqualTo("(T 3 1 T (1 2))");
+	}
+
+	@Test
+	void everyWrappedBuiltinReportsAWrongDirectCountWithItsCallShape() {
+		for (String name : new java.util.TreeSet<>(am.ik.rontolisp.compiler.BuiltinFunctionWrappers.wrapperNames())) {
+			am.ik.rontolisp.compiler.BuiltinCallArity.Shape shape = java.util.Objects
+				.requireNonNull(am.ik.rontolisp.compiler.BuiltinCallArity.of(name));
+			String spelled = name.indexOf(':') > 0 ? name : "|" + name + "|";
+			for (int count = 0; count <= 4; count++) {
+				if (shape.accepts(count)) {
+					continue;
+				}
+				String call = "(" + spelled + " nil".repeat(count) + ")";
+				assertThat(eval("(handler-case " + call + " (program-error (c) (princ-to-string c)))").print()).as(call)
+					.isEqualTo("\"" + shape.message(name, count) + "\"");
+			}
+		}
 	}
 
 	@Test
