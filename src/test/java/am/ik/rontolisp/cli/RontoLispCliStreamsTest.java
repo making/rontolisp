@@ -135,6 +135,33 @@ class RontoLispCliStreamsTest {
 		assertThat(output).doesNotExist();
 	}
 
+	@Test
+	void warningsAsErrorsCountsAWarningAMacroSignalsWhileItExpands() throws Exception {
+		Path file = this.tempDir.resolve("mw.lisp");
+		Files.writeString(file, """
+				(defmacro m (x) (warn "m got ~a" x) x)
+				(print (m 1))
+				""");
+		Path output = this.tempDir.resolve("Mw.class");
+		String[] failed = runReporting(file.toString(), "-o", output.toString(), "--warnings-as-errors");
+		assertThat(failed[0]).isEqualTo("1");
+		assertThat(failed[2].lines().toList()).containsExactly(file + ":2:8: warning: m got 1",
+				"error: 1 warning about the program's source, treated as errors (--warnings-as-errors)");
+		assertThat(output).doesNotExist();
+
+		// A style-warning and a muffled warning leave the compile alone.
+		Files.writeString(file, """
+				(defmacro s (x) (warn 'style-warning) x)
+				(defmacro q (x) (handler-bind ((warning #'muffle-warning)) (warn "q")) x)
+				(print (list (s 1) (q 2)))
+				""");
+		String[] compiled = runReporting(file.toString(), "-o", output.toString(), "--warnings-as-errors");
+		assertThat(compiled[0]).isEqualTo("0");
+		assertThat(compiled[2].lines().toList()).singleElement()
+			.satisfies(line -> assertThat(line).startsWith(file + ":3:14: style-warning: "));
+		assertThat(output).exists();
+	}
+
 	// A program deeper than the 1 MiB linux-x64 gives a process's first thread, and well
 	// inside the stack the CLI hands the interpreter. cl-mustache's spec suite is the
 	// real-world specimen (~800 KiB down); this is the same shape in two lines.

@@ -5867,12 +5867,14 @@ public final class Environment implements Scope {
 			String message = (args.get(1) instanceof LispString s) ? s.value() : args.get(1).display();
 			throw new LispEvalException(message, args.get(0));
 		}));
-		// %warn: internal single-argument primitive that writes a pre-built
-		// "WARNING: ..." message to the current *error-output* -- the seeded handle 2
-		// (the process standard error) unless the program rebound it -- and returns nil.
-		// Produced by the warn macro expansion.
+		// %warn: internal primitive that writes a pre-built "WARNING: ..." message to the
+		// current *error-output* -- the seeded handle 2 (the process standard error)
+		// unless the program rebound it -- and returns nil. Produced by the warn macro
+		// expansion; the interpreter's expansion adds a second argument naming what was
+		// signalled (LispMacroExpander.expandWarnWithDesignator), which only
+		// LispEvaluator's macro-time report reads.
 		env.defineFunction(LispNames.WARN_INTERNAL, new LispFunction(LispNames.WARN_INTERNAL, args -> {
-			requireArgCount(LispNames.WARN_INTERNAL, args, 1);
+			requireArgCountBetween(LispNames.WARN_INTERNAL, args, 1, 2);
 			String message = (args.get(0) instanceof LispString s) ? s.value() : args.get(0).display();
 			emitTo.accept(message + "\n", resolveErrorDest.get());
 			return LispNil.INSTANCE;

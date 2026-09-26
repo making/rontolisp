@@ -19,11 +19,13 @@ import org.jspecify.annotations.Nullable;
  * {@code --warnings-as-errors} fails the compile on.
  *
  * <p>
- * <b>Two kinds of line.</b> A {@link #warn warning} is about a form of the program: it is
+ * <b>Three kinds of line.</b> A {@link #warn warning} is about a form of the program: it is
  * placed at that form ({@code file:line:column: warning: ...}) and it may be counted. A
- * {@link #note} states what the build did or what the host now owes (the {@code :async t}
- * and {@code --host-fetch} obligations, a missing JDK): it is printed verbatim and never
- * counted, because there is nothing in the source to change.
+ * {@link #styleWarning style warning} (a {@code style-warning} a macro signalled while it
+ * expanded) is placed the same way and never counted. A {@link #note} states what the
+ * build did or what the host now owes (the {@code :async t} and {@code --host-fetch}
+ * obligations, a missing JDK): it is printed verbatim and never counted, because there is
+ * nothing in the source to change.
  *
  * <p>
  * <b>Which warnings count</b> ({@link #startCounting}): those placed in the program's own
@@ -93,6 +95,20 @@ public final class CompileWarnings {
 		SourceLocation location = SourceProvenance.warningLocation(subject);
 		String line = (location == null ? "" : location.prefix()) + "warning: " + text;
 		emit(line, counts(subject));
+	}
+
+	/**
+	 * Emits a style warning about a form of the program -- a {@code style-warning} Lisp
+	 * code signalled while a macro expanded -- placed like {@link #warn} and labelled
+	 * {@code style-warning: }; never counted, as SBCL's {@code compile-file} leaves
+	 * {@code failure-p} alone for one.
+	 * @param subject the form the warning is about, or {@code null} when it is about no
+	 * one form
+	 * @param text the warning, without a label or a position
+	 */
+	public static void styleWarning(@Nullable LispVal subject, String text) {
+		SourceLocation location = SourceProvenance.warningLocation(subject);
+		emit((location == null ? "" : location.prefix()) + "style-warning: " + text, false);
 	}
 
 	/**

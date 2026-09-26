@@ -13,6 +13,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import am.ik.rontolisp.ClosRegistry;
@@ -173,6 +174,14 @@ public final class LispEvaluator {
 	// their historical expansions until then (the interpreter re-expands per
 	// evaluation, so later signals pick the hook up).
 	private boolean restartRuntimeLoaded = false;
+
+	// The label every warn expansion puts in front of its report.
+	private static final String WARNING_LABEL = "WARNING: ";
+
+	// Where a warning that reaches its report goes instead of *error-output* while a
+	// macro expands on the compile path (reportingWarningsTo): the report's text and
+	// whether it is a style-warning. Null everywhere else.
+	private @Nullable BiConsumer<String, Boolean> macroTimeWarnings;
 
 	// Whether the runtime format renderer (FormatRenderer.defuns(), the same forms the
 	// compile path injects) has been evaluated into the global environment. The
@@ -1833,7 +1842,18 @@ public final class LispEvaluator {
 		// any other write to the stream; the handle-based %warn signalled "not an output
 		// stream" there.
 		LispVal baseWarn = this.globalEnv.lookupFunction(LispNames.WARN_INTERNAL);
-		this.globalEnv.defineFunction(LispNames.WARN_INTERNAL, new LispFunction(LispNames.WARN_INTERNAL, args -> {
+		this.globalEnv.defineFunction(LispNames.WARN_INTERNAL, new LispFunction(LispNames.WARN_INTERNAL, rawArgs -> {
+			// The designator the interpreter's expansion adds names what was signalled
+			// (LispMacroExpander.expandWarnWithDesignator); only the macro-time report
+			// reads it, so the write below sees the message alone.
+			List<LispVal> args = rawArgs.size() == 2 ? rawArgs.subList(0, 1) : rawArgs;
+			BiConsumer<String, Boolean> macroTimeSink = this.macroTimeWarnings;
+			if (macroTimeSink != null && args.size() == 1) {
+				String message = args.get(0) instanceof LispString s ? s.value() : args.get(0).display();
+				String text = message.startsWith(WARNING_LABEL) ? message.substring(WARNING_LABEL.length()) : message;
+				macroTimeSink.accept(text, rawArgs.size() == 2 && designatesStyleWarning(rawArgs.get(1)));
+				return LispNil.INSTANCE;
+			}
 			LispVal destination = currentErrorOutput();
 			if (args.size() == 1 && destination != null) {
 				destination = resolveStreamArg(List.of(args.get(0), destination), 1).get(1);
@@ -6520,7 +6540,8 @@ public final class LispEvaluator {
 								}
 								ensureWitLoadedForConditionClass(cons);
 								ensureConditionReportRuntimeLoaded();
-								next = LispMacroExpander.expandWarn(cons, this.closRegistry, this.restartRuntimeLoaded);
+								next = LispMacroExpander.expandWarnWithDesignator(cons, this.closRegistry,
+										this.restartRuntimeLoaded);
 								break dispatch;
 							case LispNames.SIGNAL:
 								if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
@@ -8672,6 +8693,48 @@ public final class LispEvaluator {
 				this.userMacroExpansions.clear();
 			}
 		}
+	}
+
+	/**
+	 * Runs {@code body} with every warning that reaches its report -- no handler muffled
+	 * it -- handed to {@code sink} instead of written to {@code *error-output*}: the
+	 * report's text (without the {@code WARNING: } label) and whether the condition is a
+	 * {@code style-warning}. The compile path's macro-time evaluator reports a warning a
+	 * macro signals while it expands this way, as a compile-time warning
+	 * ({@code UserMacroExpander}); the enclosing sink is restored afterwards.
+	 * @param <T> what the body produces
+	 * @param sink where the reports go
+	 * @param body the evaluation to run
+	 * @return what the body produced
+	 */
+	<T> T reportingWarningsTo(BiConsumer<String, Boolean> sink, java.util.function.Supplier<T> body) {
+		BiConsumer<String, Boolean> previous = this.macroTimeWarnings;
+		this.macroTimeWarnings = sink;
+		try {
+			return body.get();
+		}
+		finally {
+			this.macroTimeWarnings = previous;
+		}
+	}
+
+	/**
+	 * Whether a {@code %warn} designator
+	 * ({@link LispMacroExpander#expandWarnWithDesignator}) names a {@code style-warning}:
+	 * a class-name symbol by {@code subtypep}, a condition instance by {@code typep}; nil
+	 * or a string is a {@code simple-warning}.
+	 */
+	private boolean designatesStyleWarning(LispVal designator) {
+		LispSymbol styleWarning = new LispSymbol(ClosRegistry.STYLE_WARNING_CLASS_NAME);
+		if (designator instanceof LispNil || designator instanceof LispString) {
+			return false;
+		}
+		if (designator instanceof LispSymbol) {
+			return subtypep(designator, styleWarning);
+		}
+		LispVal test = new LispCons(new LispSymbol(LispNames.TYPEP),
+				new LispCons(quotedValue(designator), new LispCons(quotedValue(styleWarning), LispNil.INSTANCE)));
+		return !(eval(test, this.globalEnv) instanceof LispNil);
 	}
 
 	/**

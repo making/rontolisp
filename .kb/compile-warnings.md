@@ -54,6 +54,27 @@ none). User doc: `doc/*/compiling/warnings.md`. Pinned by `CompileWarningsTest`,
 - **Only compiled code warns**: a system's `defun` the tree-shaker drops is never compiled, so
   a wrong call inside it says nothing (`.kb/library-defun-pruning.md`).
 - **Not counted**: the macro-time evaluator's own `warning: skipping macro-time evaluation` line
-  (a `defvar` init form that failed at compile time -- no program defect), and, for now, a
-  `(warn ...)` Lisp code signals while a macro expands (printed `WARNING:` by the macro-time
-  evaluator, never reaching `CompileWarnings`; SBCL's `failure-p` would count it).
+  (a `defvar` init form that failed at compile time -- no program defect).
+
+## A `(warn ...)` while a macro expands (2026-09-26)
+- **SBCL's rule**: a WARNING signalled during `compile-file`, macroexpansion included, sets
+  `failure-p`; a STYLE-WARNING does not. Here: an unmuffled macro-time warning is
+  `CompileWarnings.warn(null, text)` -- placed and judged at the innermost located form, so it
+  counts exactly when the macro CALL is in the program's source (a library macro called inside
+  library code prints, uncounted). A `style-warning` is `CompileWarnings.styleWarning`
+  (`file:l:c: style-warning: text`, never counted). A handler that muffles it runs before the
+  report, so nothing is printed or counted.
+- **Mechanics**: `UserMacroExpander.expandCompiling` (the two top-level `expandAll` calls of
+  `expand`, i.e. compile path only) runs the walk under `LispEvaluator.reportingWarningsTo(sink)`;
+  the evaluator's `%warn` hands the report (minus `WARNING: `) to the sink instead of
+  `*error-output*`. `expandAll` brackets every cons with `SourceProvenance.enterForm`, which is
+  where "innermost located form" comes from. The interpreter's own `expandAll` uses (macrolet
+  pre-expansion) install no sink, so a run prints `WARNING:` as before.
+- **Style-warning test**: the interpreter expands `warn` through
+  `LispMacroExpander.expandWarnWithDesignator`, whose `%warn` terminals carry a second argument
+  naming what was signalled (quoted class, the runtime datum `__signal_cond`, or nil for a
+  literal control); `designatesStyleWarning` answers by `subtypep`/`typep`. The compiled
+  backends expand `warn` themselves and never see the two-argument shape.
+- **Scope**: macro expansion only. `eval-when (:compile-toplevel)`, `#.` and library replay
+  still print `WARNING:` uncounted (SBCL would count a compile-toplevel one).
+- Pinned by `MacroTimeWarningsTest` and `RontoLispCliStreamsTest.warningsAsErrorsCountsAWarningAMacroSignalsWhileItExpands`.
