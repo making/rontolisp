@@ -573,13 +573,24 @@ final class JavaInterop {
 				return NO_MATCH;
 			}
 			case LispChar c -> {
-				if (target == char.class) {
-					out[index] = (char) c.codePoint();
-					return COST_EXACT;
+				int cp = c.codePoint();
+				// A supplementary code point cannot fit a single Java char, so the
+				// char/Character overload is refused for it (matching
+				// JavaBridgeTemplate.marshal) rather than silently truncated.
+				if ((target == char.class || target == Character.class || target.isAssignableFrom(Character.class))
+						&& Character.isBmpCodePoint(cp)) {
+					out[index] = (char) cp;
+					return target == char.class ? COST_EXACT : (target == Character.class ? COST_WIDEN : COST_BOXED);
 				}
-				if (target == Character.class || target.isAssignableFrom(Character.class)) {
-					out[index] = (char) c.codePoint();
-					return target == Character.class ? COST_WIDEN : COST_BOXED;
+				// int / Integer accept the raw code point (including supplementary
+				// values).
+				if (target == int.class) {
+					out[index] = cp;
+					return COST_WIDEN;
+				}
+				if (target == Integer.class || target.isAssignableFrom(Integer.class)) {
+					out[index] = cp;
+					return target == Integer.class ? COST_WIDEN : COST_BOXED;
 				}
 				return NO_MATCH;
 			}

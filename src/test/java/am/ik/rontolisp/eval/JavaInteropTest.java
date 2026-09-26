@@ -80,6 +80,24 @@ class JavaInteropTest {
 		assertThat(eval("(java:static \"java.lang.Math\" \"sqrt\" 16)")).isEqualTo(new LispDouble(4.0));
 	}
 
+	// A character argument marshals to an int parameter (the code point) when there is
+	// no char/Character overload -- matching the JVM-compiled bridge's rule
+	// (JavaBridgeTemplate.marshal).
+	@Test
+	void characterMarshalsToIntParameter() {
+		assertThat(eval("(java:static \"java.lang.Character\" \"charCount\" #\\a)")).isEqualTo(new LispInteger(1));
+	}
+
+	// A supplementary code point cannot fit a single Java char, so it must be refused
+	// the char/Character overload (which would otherwise silently truncate it) and fall
+	// back to the int overload instead: Character.toString(int) over
+	// Character.toString(char).
+	@Test
+	void supplementaryCodePointDoesNotNarrowToChar() {
+		assertThat(eval("(java:static \"java.lang.Character\" \"toString\" (code-char 128512))"))
+			.isEqualTo(new LispString(new String(Character.toChars(128512))));
+	}
+
 	// A boolean Java return (ArrayList.add) surfaces as t.
 	@Test
 	void booleanReturnSurfacesAsTrue() {

@@ -113,25 +113,37 @@ class JvmAsyncCompilerTest {
 	}
 
 	@Test
-	void octetsDecodeThroughTheStrictFastPathAndFallBackOnMalformedBytes() throws Exception {
-		// The JVM arm of the gate (the compiled twin of AsyncEvalTest's): the
-		// emitted _utf8Strict answers a well-formed body from the JDK decoder, and the
-		// compiled per-byte loop takes only what it refuses -- the same answers the loop
-		// alone gave, including the four-byte form past U+10FFFF, which used to reach
-		// code-char and throw on this backend alone.
+	void octetsDecodeNativelyWhetherOrNotTheBytesAreUtf8() throws Exception {
+		// The JVM arm of the gate (the compiled twin of AsyncEvalTest's): the emitted
+		// _octetsToString answers a well-formed body from the JDK decoder and a malformed
+		// one by its bytecode transcode, and the compiled per-byte loop is left only a
+		// GENERAL array, which the primitive declines. *cases* pins the transcode against
+		// that loop case for case (an empty remove-if list), including the four-byte form
+		// past U+10FFFF, which used to reach code-char and throw on this backend alone.
 		assertThat(compileAndRun("""
 				(defun octs (bs)
 				  (let ((a (make-array (length bs) :element-type '(unsigned-byte 8))) (i 0))
 				    (dolist (b bs) (setf (aref a i) b) (setq i (+ i 1)))
 				    a))
+				(defun gen (bs) (make-array (length bs) :initial-contents bs))
+				(defvar *cases*
+				  '((65 66) (#xE3 #x81 #x93) (#xF0 #x9F #x98 #x80 #x41) (#xFF #xFE #x41) (#x80 #xBF)
+				    (#xE3 #x81) (#xC3) (#xC3 #x41) (#xF8 #x41) (#x41 #xE3 #x81 #x82 #xFF #x42 #xC3 #xBF) ()
+				    (#xC0 #x80) (#xC1 #xBF) (#xE0 #x80 #x80) (#xED #xA0 #x80) (#xE3 #x81 #xC0)
+				    (#xF0 #x80 #x80 #x80) (#xF4 #x8F #xBF #xBF) (#xF4 #x90 #x80 #x80) (#xF5 #x80 #x80 #x80)))
 				(print (list (rontolisp::%octets-to-string (octs '(72 105)))
 				             (map 'list #'char-code
 				                  (rontolisp::%octets-to-string (octs '(#xE3 #x81 #x82 #xF0 #x9F #x98 #x80))))
 				             (map 'list #'char-code (rontolisp::%octets-to-string (octs '(#xFF #x41))))
 				             (map 'list #'char-code (rontolisp::%octets-to-string (octs '(#xF4 #x90 #x80 #x80))))
-				             (rontolisp::%octets-to-string-strict (octs '(72 105)))
-				             (rontolisp::%octets-to-string-strict (octs '(#xFF)))))
-				""")).isEqualTo("(\"Hi\" (12354 128512) (255 65) (244 144 128 128) \"Hi\" NIL)");
+				             (rontolisp::%octets-to-string-packed (octs '(72 105)))
+				             (map 'list #'char-code (rontolisp::%octets-to-string-packed (octs '(#xFF))))
+				             (rontolisp::%octets-to-string-packed (gen '(72 105)))
+				             (remove-if (lambda (c)
+				                          (equal (map 'list #'char-code (rontolisp::%octets-to-string-packed (octs c)))
+				                                 (map 'list #'char-code (rontolisp::%octets-to-string (gen c)))))
+				                        *cases*)))
+				""")).isEqualTo("(\"Hi\" (12354 128512) (255 65) (244 144 128 128) \"Hi\" (255) NIL NIL)");
 	}
 
 	@Test

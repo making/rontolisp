@@ -7754,7 +7754,7 @@ public final class Environment implements Scope {
 		//
 		// The Lisp source reads its argument through plain length/aref, so it accepts ANY
 		// rank-1 array of small integers, not only a packed byte vector; the compile
-		// paths inherit that for free (their %octets-to-string-strict fast path declines
+		// paths inherit that for free (their %octets-to-string-packed native declines
 		// a general array and the same generic loop runs). This native mirror used to
 		// require a LispIntVector outright, so a general array -- exactly what a general
 		// array's subseq answered before .todo/698 fixed it -- signaled here while the
@@ -7769,19 +7769,22 @@ public final class Environment implements Scope {
 			String strict = decodeUtf8Strict(v);
 			return new LispString(strict != null ? strict : decodeUtf8Leniently(v));
 		}));
-		// %octets-to-string-strict: the STRICT half, native on every backend so the
-		// prelude's lenient definition can offer the vector to a platform decoder before
-		// it walks a byte at a time. Present here as its own binding (rather than only
-		// folded into the mirror above) because the compile paths call it BY NAME from
-		// the spliced defun, and LispPreludeLibraryTest evaluates that defun to pin the
-		// two renderings against each other. Anything it cannot fast-path -- malformed
-		// bytes, a value that is not a packed octet vector -- answers nil, and the
-		// caller's loop decides; it never signals.
-		String octetsToStringStrict = LispNames.OCTETS_TO_STRING_STRICT_INTERNAL_QUALIFIED;
-		env.defineFunction(octetsToStringStrict, new LispFunction(octetsToStringStrict, args -> {
-			requireArgCount(LispNames.OCTETS_TO_STRING_STRICT_INTERNAL, args, 1);
-			String decoded = args.get(0) instanceof LispIntVector v ? decodeUtf8Strict(v) : null;
-			return decoded == null ? LispNil.INSTANCE : new LispString(decoded);
+		// %octets-to-string-packed: the NATIVE half, on every backend, so the prelude's
+		// lenient definition hands a packed octet vector -- every HTTP body -- to native
+		// code, malformed bytes included, and walks a byte at a time only through a
+		// general array. Present here as its own binding (rather than only folded into
+		// the mirror above) because the compile paths call it BY NAME from the spliced
+		// defun, and LispPreludeLibraryTest evaluates that defun to pin the two
+		// renderings against each other. A value that is not a packed octet vector
+		// answers nil, and the caller's loop decides; it never signals.
+		String octetsToStringPacked = LispNames.OCTETS_TO_STRING_PACKED_INTERNAL_QUALIFIED;
+		env.defineFunction(octetsToStringPacked, new LispFunction(octetsToStringPacked, args -> {
+			requireArgCount(LispNames.OCTETS_TO_STRING_PACKED_INTERNAL, args, 1);
+			if (!(args.get(0) instanceof LispIntVector v) || v.width() != 8) {
+				return LispNil.INSTANCE;
+			}
+			String strict = decodeUtf8Strict(v);
+			return new LispString(strict != null ? strict : decodeUtf8Leniently(v));
 		}));
 		env.defineFunction(LispNames.CONSTANTP, new LispFunction(LispNames.CONSTANTP, args -> {
 			requireMinArgCount(LispNames.CONSTANTP, args, 1);
@@ -9939,7 +9942,7 @@ public final class Environment implements Scope {
 	 * prelude's {@code rontolisp::%octets-to-string}: a byte that leads no valid
 	 * sequence, a sequence the vector truncates, and one that assembles a code point
 	 * outside the Unicode range answer their own characters, so malformed input never
-	 * signals. The FALLBACK half -- {@link #decodeUtf8Strict} takes every well-formed
+	 * signals. The malformed half -- {@link #decodeUtf8Strict} takes every well-formed
 	 * input before this runs.
 	 * @param v the octets
 	 * @return the decoded string

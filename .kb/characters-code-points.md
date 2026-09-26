@@ -139,11 +139,11 @@ fire before the prelude ever loads the real definition, and the wrapper's own bo
 unresolved name again -- infinite recursion on the first `#'octets-to-string` or bare call.
 
 **Decode is total and lenient, arm for arm the pre-existing internal decoder**
-(`rontolisp::%octets-to-string` / `%octets-to-string-strict`, `.kb/fetch-http.md`,
+(`rontolisp::%octets-to-string` / `%octets-to-string-packed`, `.kb/fetch-http.md`,
 `.kb/http-server.md`): a byte that leads no valid sequence, and a sequence the vector's end cuts
 short, both decode to their OWN byte value as a one-character result, never a signal. An overlong
-encoding and a UTF-8-encoded surrogate are NOT rejected by the lenient fallback (only the strict
-platform decoder refuses them, and refusing falls through to lenient) -- each decodes to the code
+encoding and a UTF-8-encoded surrogate are NOT rejected by the lenient rule (only the strict
+validator refuses them, and refusing falls through to the lenient arms) -- each decodes to the code
 point its bits assemble, since a CHARACTER admits any code point 0..`#x10FFFF` including surrogates
 (above). Consequence: `octets-to-string` then `string-to-octets` round-trips only for a WELL-FORMED,
 non-overlong, non-truncated input -- a malformed byte's lenient answer does not generally re-encode
@@ -157,9 +157,9 @@ exactly what a general array's `subseq` answered before the packed-width fix
 surfaced: the same program crashed on the interpreter and quietly decoded on the JVM and
 WASM. `Environment.asOctetVector` closed it by widening the native mirror to accept any
 rank-1 array of integers, matching the Lisp source's own acceptance -- only a genuinely
-non-array argument still signals. `%octets-to-string-strict` is unaffected: answering
+non-array argument still signals. `%octets-to-string-packed` is unaffected: answering
 `nil` for anything that is not a packed byte vector (rather than a general array too) is
-its designed fast-path-declines contract, not the asymmetry.
+its designed declines-to-the-loop contract, not the asymmetry.
 
 **Framing is not decoding, and the round-trip pair cannot replace a length classifier.**
 `encode(decode(x)) = x` looks like a byte-count-free way to ask "how many of these bytes are safe to
