@@ -84,7 +84,9 @@ Java の `null` (および `void` メソッド) は `nil` として返ります�
 - リテラルの種別: `3`、`2.5`、`"x"`、`#\a`、`t`、`nil`、`lambda`
 - `(java:new "C" ...)` はちょうど `C` である
 - 解決済みの呼び出しの値は、そのメソッドが宣言する型を持つ。`StringBuilder` の `append` は `StringBuilder` を返すので、呼び出しの連鎖は 1 段ずつ解決される。`Object` を返すと宣言されたメソッドは何も示さない
-- `(the (java:object "C") x)` と `(declare (type (java:object "C") v))` は、その値が `C` (または `nil`) であることを示す。`C` は `java:new` と同じくバイナリクラス名 (`java.util.Map$Entry`) で書く
+- `(the (java:object "C") x)` と `(declare (type (java:object "C") v))` は、その値が `C` (または `nil`) であることを示す。`C` は `java:new` と同じくバイナリクラス名 (`java.util.Map$Entry`) で書く。`(java:object "C" :exact)` は、`java:new` の戻り値と同じく、値がちょうど `C` であり `nil` ではないことを示す
+- `let` / `let*` の変数は初期化式の型を持つ。ただし special 変数である場合と、スコープ内のどこか (クロージャ内を含む) で `setq`、`setf`、`incf` などにより代入される場合を除く
+- `(declaim (type (java:object "C") v))` は、それ以降のフォームで大域変数 `v` の型を示す。`defvar` の初期値は型を示さない。どのフォームもその変数に代入しうるため
 
 宣言された型は信頼されます。`C` でない値は、呼び出しに渡った時点でエラーになります。
 
@@ -95,11 +97,19 @@ Java の `null` (および `void` メソッド) は `nil` として返ります�
 (total-length (java:new "java.lang.StringBuilder" "abc"))   ; => 3
 ```
 
+次の 2 つの呼び出しはどちらも実行前に解決されます。`sb` はちょうど `StringBuilder` です。
+
+```lisp
+(let ((sb (java:new "java.lang.StringBuilder" "ab")))
+  (java:call sb "reverse")
+  (java:call sb "toString"))   ; => "ba"
+```
+
 引数が呼び出しを解決するのは、その引数が取りうるすべての種別が同じメソッドを選ぶときだけです。`String` の戻り値は `nil` でありえて、`nil` は `append(boolean)` を選ぶため、`(java:call sb "append" (java:call x "toString"))` は実行時に解決されます。
 
 ### 宣言されたレシーバのクラスが候補を決める
 
-宣言クラス `C` のレシーバに対する呼び出しは、Java と同じく `C` のメソッドの中から解決されます。実行時クラスだけが追加する同名の public オーバーロードは候補になりません。実行前の解決と実行時の解決で選択が異なるのはこの場合だけです。
+宣言クラス `C` のレシーバに対する呼び出しは、Java と同じく `C` のメソッドの中から解決されます。初期化式の型が `C` である `let` 変数に対する呼び出しも同じです。実行時クラスだけが追加する同名の public オーバーロードは候補になりません。実行前の解決と実行時の解決で選択が異なるのはこの場合だけです。
 
 ```lisp
 (defun remove-one (c)
