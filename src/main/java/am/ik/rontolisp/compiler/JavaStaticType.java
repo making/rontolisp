@@ -78,8 +78,9 @@ public sealed interface JavaStaticType {
 	 * The type of a value a member declared as returning {@code type} answers, once the
 	 * bridge unmarshalled it: {@code void} is {@code nil}, {@code boolean} is {@code t}
 	 * or {@code nil}, a primitive number or character its kind, a box or {@code String}
-	 * the same or {@code nil}; an array (a list) and a supertype of a box, of
-	 * {@code String} or of an array ({@code Object}, {@code Number},
+	 * the same or {@code nil}; an array (a list), a {@code BigInteger} (a Lisp integer,
+	 * fixnum or bignum) and a supertype of a box, of {@code String}, of
+	 * {@code BigInteger} or of an array ({@code Object}, {@code Number},
 	 * {@code CharSequence}, ...) -- whose value may have become any of those -- nothing;
 	 * a final class exactly that class or {@code nil}; any other class a {@link Bounded
 	 * bound}. A class a compiled program cannot name ({@link JavaType#isLinkable()}) is
@@ -149,18 +150,23 @@ public sealed interface JavaStaticType {
 
 	/**
 	 * Whether a value of this type may be unmarshalled into something other than a host
-	 * object: it is a supertype of a box, of {@code String} or of an array.
+	 * object: it is a supertype of a box, of {@code String}, of {@code BigInteger} (a
+	 * Lisp integer) or of an array, or a subclass of {@code BigInteger}.
+	 * @param type the declared or constructed type
+	 * @param lookup where the boxes and {@code String} are found
+	 * @return whether the unmarshalled value may be a Lisp value
 	 */
-	private static boolean becomesLisp(JavaType type, JavaClassLookup lookup) {
+	static boolean becomesLisp(JavaType type, JavaClassLookup lookup) {
 		for (String name : new String[] { "java.lang.Boolean", "java.lang.Byte", "java.lang.Short", "java.lang.Integer",
 				"java.lang.Long", "java.lang.Float", "java.lang.Double", "java.lang.Character", "java.lang.String",
-				"[I" }) {
+				"java.math.BigInteger", "[I" }) {
 			JavaType unmarshalled = lookup.find(name);
 			if (unmarshalled != null && type.isAssignableFrom(unmarshalled)) {
 				return true;
 			}
 		}
-		return false;
+		JavaType bignum = lookup.find("java.math.BigInteger");
+		return bignum != null && bignum.isAssignableFrom(type);
 	}
 
 }

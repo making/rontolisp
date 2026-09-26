@@ -250,11 +250,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * The methods something outside the class's own bytecode finds by NAME, which
 	 * therefore stay in the class when it is split: {@code _apply} and {@code _strv},
 	 * which the shipped java:/objc:/ffi: bridges look up with {@code getDeclaredMethod},
-	 * and {@code _gpuMaterialize}/{@code _gpuWritten}, which the travelling float-array
+	 * {@code _lispToString}, which the java: bridge shows a value in a message with, and
+	 * {@code _gpuMaterialize}/{@code _gpuWritten}, which the travelling float-array
 	 * handle resolves through {@code MethodHandles} ({@code .kb/jvm-export.md}).
 	 */
-	private static final Set<String> REFLECTIVELY_FOUND_METHODS = Set.of("_apply", "_strv", "_gpuMaterialize",
-			"_gpuWritten");
+	private static final Set<String> REFLECTIVELY_FOUND_METHODS = Set.of("_apply", "_strv", "_lispToString",
+			"_gpuMaterialize", "_gpuWritten");
 
 	/** The array runtime helper group ({@link JvmArrayRuntimeBuilder}). */
 	private static final String GROUP_ARRAYS = "arrays";
@@ -4715,6 +4716,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			// same invisible edge.
 			if (usesJavaBridge || usesObjc || usesFfi) {
 				roots.add("_apply");
+			}
+			// The java: bridge shows a value in a message through the program's printer,
+			// found by name like _apply.
+			if (usesJavaBridge) {
+				roots.add("_lispToString");
 			}
 			if (usesTlsConnect) {
 				roots.add("checkClientTrusted");

@@ -19,7 +19,10 @@ import am.ik.rontolisp.compiler.JavaField;
 import am.ik.rontolisp.compiler.JavaKind;
 import am.ik.rontolisp.compiler.JavaOverloads;
 import am.ik.rontolisp.compiler.JavaSite;
+import am.ik.rontolisp.compiler.JavaStaticType;
 import am.ik.rontolisp.compiler.JavaType;
+import am.ik.rontolisp.runtime.RontoComplex;
+import am.ik.rontolisp.runtime.RontoHashTable;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -98,6 +101,12 @@ final class JvmJavaDirectSites {
 			JavaKind.Lisp.SUPPLEMENTARY_CHAR, JavaKind.Lisp.FUNCTION };
 
 	private static final String OBJECT_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/**
+	 * The package of the classes that travel with a compiled program; a value of one
+	 * ({@code RontoComplex}) is a Lisp value, never a host object.
+	 */
+	static final String RUNTIME_PACKAGE_PREFIX = RontoComplex.class.getPackageName() + ".";
 
 	/**
 	 * Past this many values a site's method takes them in one {@code Object[]}: a method
@@ -352,6 +361,15 @@ final class JvmJavaDirectSites {
 	/** The operand slots a value of this type takes: 2 for long and double. */
 	private static int width(JavaType type) {
 		return "long".equals(type.name()) || "double".equals(type.name()) ? 2 : 1;
+	}
+
+	// A class whose exact instances the compiled representation also uses for Lisp values
+	// (a Lisp array is an ArrayList, a hash table a LinkedHashMap, a complex number a
+	// travelling runtime class): a host kind of it is told apart by _jhost.
+	private static boolean mayHoldALispValue(JavaType host) {
+		String name = host.name();
+		return "java.util.ArrayList".equals(name) || "java.util.LinkedHashMap".equals(name)
+				|| name.startsWith(RUNTIME_PACKAGE_PREFIX);
 	}
 
 	private MethodrefConstant host() {
@@ -962,21 +980,12 @@ final class JvmJavaDirectSites {
 				a.invokevirtual(method("java/lang/Object", "getClass", "()Ljava/lang/Class;"));
 				a.ldcClass(cls(host));
 				a.branch(Opcode.IF_ACMPNE, fail);
-				if ("java.util.ArrayList".equals(host.name())) {
-					// A non-empty ArrayList whose first element is an Object[] is a Lisp
-					// array in the compiled representation, not a host object.
-					int hostObject = a.label();
+				if (mayHoldALispValue(host)) {
+					// A class the compiled representation also uses (a Lisp array is an
+					// ArrayList, a hash table a LinkedHashMap): _jhost tells them apart.
 					a.aload(slot);
-					a.checkcast(cls("java/util/ArrayList"));
-					a.invokevirtual(method("java/util/ArrayList", "isEmpty", "()Z"));
-					a.branch(Opcode.IFNE, hostObject);
-					a.aload(slot);
-					a.checkcast(cls("java/util/ArrayList"));
-					a.iconst(0);
-					a.invokevirtual(method("java/util/ArrayList", "get", "(I)Ljava/lang/Object;"));
-					a.instanceOf(cls("[Ljava/lang/Object;"));
-					a.branch(Opcode.IFNE, fail);
-					a.bind(hostObject);
+					a.invokestatic(host());
+					a.branch(Opcode.IFEQ, fail);
 				}
 				return;
 			}
@@ -1425,19 +1434,11 @@ final class JvmJavaDirectSites {
 			this.a.bind(end);
 		}
 
-		// A supertype of a box, of String or of an array: a value declared so may be one
-		// of those at run time, which unmarshal turns into a Lisp value
-		// (compiler/JavaStaticType.ofDeclared's rule).
+		// A supertype of a box, of String, of BigInteger or of an array, or BigInteger's
+		// subclass: a value declared so may be one of those at run time, which unmarshal
+		// turns into a Lisp value (compiler/JavaStaticType.ofDeclared's rule).
 		boolean mayHideALispValue(JavaType declared) {
-			for (String name : new String[] { "java.lang.Boolean", "java.lang.Byte", "java.lang.Short",
-					"java.lang.Integer", "java.lang.Long", "java.lang.Float", "java.lang.Double", "java.lang.Character",
-					"java.lang.String", "[I" }) {
-				JavaType unmarshalled = JvmJavaDirectSites.this.lookup.find(name);
-				if (unmarshalled != null && declared.isAssignableFrom(unmarshalled)) {
-					return true;
-				}
-			}
-			return false;
+			return JavaStaticType.becomesLisp(declared, JvmJavaDirectSites.this.lookup);
 		}
 
 	}
@@ -1451,7 +1452,7 @@ final class JvmJavaDirectSites {
 			Utf8Constant desc = this.cp.addUtf8("(Ljava/lang/Object;)I");
 			ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(name, desc));
 			this.kind = ref;
-			this.methods.add(buildKind(name, desc));
+			this.methods.add(buildKind(name, desc, host()));
 		}
 		return ref;
 	}
@@ -1541,7 +1542,7 @@ final class JvmJavaDirectSites {
 	// _jkind(Object)I: the bridge's kindOf as a code -- the Lisp kinds (LISP_KINDS'
 	// index), a cons, a Lisp array, a host object, or none (a symbol, a bignum, a ratio)
 	// -- tested in its order.
-	private Method buildKind(Utf8Constant name, Utf8Constant desc) {
+	private Method buildKind(Utf8Constant name, Utf8Constant desc, MethodrefConstant hostTest) {
 		JvmAsm a = new JvmAsm();
 		ClassConstant string = cls("java/lang/String");
 		ClassConstant objects = cls("[Ljava/lang/Object;");
@@ -1642,30 +1643,29 @@ final class JvmJavaDirectSites {
 		a.bind(cons);
 		returnCode(a, KIND_CONS);
 		a.bind(notObjects);
-		int none = a.label();
-		a.aload(0);
-		a.instanceOf(cls("java/math/BigInteger"));
-		a.branch(Opcode.IFNE, none);
-		a.aload(0);
-		a.instanceOf(cls("[Ljava/math/BigInteger;"));
-		a.branch(Opcode.IFNE, none);
 		// An ArrayList whose first element is an Object[] header is a Lisp array.
-		int host = a.label();
+		int notArray = a.label();
 		a.aload(0);
 		a.instanceOf(arrayList);
-		a.branch(Opcode.IFEQ, host);
+		a.branch(Opcode.IFEQ, notArray);
 		a.aload(0);
 		a.checkcast(arrayList);
 		a.invokevirtual(method("java/util/ArrayList", "isEmpty", "()Z"));
-		a.branch(Opcode.IFNE, host);
+		a.branch(Opcode.IFNE, notArray);
 		a.aload(0);
 		a.checkcast(arrayList);
 		a.iconst(0);
 		a.invokevirtual(method("java/util/ArrayList", "get", "(I)Ljava/lang/Object;"));
 		a.instanceOf(objects);
-		a.branch(Opcode.IFEQ, host);
+		a.branch(Opcode.IFEQ, notArray);
 		returnCode(a, KIND_ARRAY);
-		a.bind(host);
+		a.bind(notArray);
+		// A host object (_jhost), or a value of no kind (a bignum, a ratio, a hash
+		// table).
+		int none = a.label();
+		a.aload(0);
+		a.invokestatic(hostTest);
+		a.branch(Opcode.IFEQ, none);
 		returnCode(a, KIND_HOST);
 		a.bind(none);
 		returnCode(a, KIND_NONE);
@@ -2126,30 +2126,71 @@ final class JvmJavaDirectSites {
 
 	// --- the shared helpers ---
 
-	// _jhost(Object)Z: the bridge's isJavaObject -- anything outside the compiled Lisp
-	// representation (Long/Double/BigInteger integers, BigInteger[] ratios, String
-	// symbols and strings, int[] characters, exact Object[] conses and function values).
+	// _jhost(Object)Z: the bridge's isJavaObject, test for test -- anything outside the
+	// compiled Lisp representation: not a Long/Double/BigInteger/String, not a Java array
+	// (characters, ratios, conses, function values, specialized vectors), not a Lisp
+	// array (an ArrayList whose slot 0 is an Object[] header), not a Lisp hash table (a
+	// LinkedHashMap holding an ArrayList under the order key), not a travelling runtime
+	// class's value (a complex number).
 	private Method buildHost(Utf8Constant name, Utf8Constant desc) {
 		JvmAsm a = new JvmAsm();
+		ClassConstant arrayList = cls("java/util/ArrayList");
+		ClassConstant linkedHashMap = cls(RontoHashTable.MAP_CLASS);
+		MethodrefConstant getClass = method("java/lang/Object", "getClass", "()Ljava/lang/Class;");
 		int no = a.label();
 		a.aload(0);
 		a.branch(Opcode.IFNULL, no);
 		for (String excluded : new String[] { "java/lang/Long", "java/lang/Double", "java/math/BigInteger",
-				"[Ljava/math/BigInteger;", "java/lang/String", "[I" }) {
+				"java/lang/String" }) {
 			a.aload(0);
 			a.instanceOf(cls(excluded));
 			a.branch(Opcode.IFNE, no);
 		}
 		a.aload(0);
-		a.invokevirtual(method("java/lang/Object", "getClass", "()Ljava/lang/Class;"));
-		a.ldcClass(cls("[Ljava/lang/Object;"));
-		a.branch(Opcode.IF_ACMPEQ, no);
+		a.invokevirtual(getClass);
+		a.invokevirtual(method("java/lang/Class", "isArray", "()Z"));
+		a.branch(Opcode.IFNE, no);
+		// A Lisp array: a non-empty ArrayList whose first element is an Object[].
+		int notArray = a.label();
+		a.aload(0);
+		a.instanceOf(arrayList);
+		a.branch(Opcode.IFEQ, notArray);
+		a.aload(0);
+		a.checkcast(arrayList);
+		a.invokevirtual(method("java/util/ArrayList", "isEmpty", "()Z"));
+		a.branch(Opcode.IFNE, notArray);
+		a.aload(0);
+		a.checkcast(arrayList);
+		a.iconst(0);
+		a.invokevirtual(method("java/util/ArrayList", "get", "(I)Ljava/lang/Object;"));
+		a.instanceOf(cls("[Ljava/lang/Object;"));
+		a.branch(Opcode.IFNE, no);
+		a.bind(notArray);
+		// A Lisp hash table: a LinkedHashMap holding its insertion-order list.
+		int notTable = a.label();
+		a.aload(0);
+		a.instanceOf(linkedHashMap);
+		a.branch(Opcode.IFEQ, notTable);
+		a.aload(0);
+		a.checkcast(linkedHashMap);
+		a.ldcString(str(RontoHashTable.ORDER_KEY));
+		a.invokevirtual(method(RontoHashTable.MAP_CLASS, "get", "(Ljava/lang/Object;)Ljava/lang/Object;"));
+		a.instanceOf(cls(RontoHashTable.LIST_CLASS));
+		a.branch(Opcode.IFNE, no);
+		a.bind(notTable);
+		// A value of a class that travels with the program (a complex number).
+		a.aload(0);
+		a.invokevirtual(getClass);
+		a.invokevirtual(method("java/lang/Class", "getName", "()Ljava/lang/String;"));
+		a.ldcString(str(RUNTIME_PACKAGE_PREFIX));
+		a.invokevirtual(method("java/lang/String", "startsWith", "(Ljava/lang/String;)Z"));
+		a.branch(Opcode.IFNE, no);
 		a.iconst(1);
 		a.ireturn();
 		a.bind(no);
 		a.iconst(0);
 		a.ireturn();
-		return new Method(name, desc, 2, 1, a.finish(), List.of());
+		return new Method(name, desc, 3, 1, a.finish(), List.of());
 	}
 
 	// _junm(Object)Object: the bridge's unmarshal.
@@ -2209,6 +2250,27 @@ final class JvmJavaDirectSites {
 		a.invokestatic(doubleValueOf);
 		a.areturn();
 		a.bind(notFloat);
+		// BigInteger -> a Lisp integer: the long when it fits, else the bignum itself
+		int notBignum = a.label();
+		int bignum = a.label();
+		ClassConstant bigInteger = cls("java/math/BigInteger");
+		a.aload(0);
+		a.instanceOf(bigInteger);
+		a.branch(Opcode.IFEQ, notBignum);
+		a.aload(0);
+		a.checkcast(bigInteger);
+		a.invokevirtual(method("java/math/BigInteger", "bitLength", "()I"));
+		a.iconst(64);
+		a.branch(Opcode.IF_ICMPGE, bignum);
+		a.aload(0);
+		a.checkcast(bigInteger);
+		a.invokevirtual(method("java/math/BigInteger", "longValue", "()J"));
+		a.invokestatic(longValueOf);
+		a.areturn();
+		a.bind(bignum);
+		a.aload(0);
+		a.areturn();
+		a.bind(notBignum);
 		// Character -> int[]{code unit}
 		int notCharacter = a.label();
 		a.aload(0);

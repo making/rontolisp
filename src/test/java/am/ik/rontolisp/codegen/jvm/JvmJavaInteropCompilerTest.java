@@ -836,6 +836,16 @@ class JvmJavaInteropCompilerTest {
 			.hasMessage("java:call: the receiver is not a java.lang.StringBuilder, got #<java java.util.ArrayList>");
 	}
 
+	// A compiled program counts as a host object exactly what the interpreter does --
+	// a Lisp list, float, bignum, ratio, complex, vector or hash table is refused at a
+	// site left to run time, a dispatched site and a declared receiver alike -- shows it
+	// in the message through its own printer, and answers a BigInteger as an integer.
+	@Test
+	void aLispValueIsNeverAHostObject() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.HOST_OBJECT_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.HOST_OBJECT_OUTPUT);
+	}
+
 	// java: interop composes with hash tables: the HashMap-based Lisp hash table keeps
 	// working (and hash-table-p stays t) while host objects print opaquely.
 	@Test

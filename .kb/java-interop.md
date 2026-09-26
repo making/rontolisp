@@ -38,6 +38,41 @@ variable `java:*warn-on-reflection*` (static resolution, below).
   `compiler/ReflectiveJavaClasses`; `JavaBridgeTemplate` keeps a hand copy (it must stand alone),
   pinned by `JavaBridgeTemplateParityTest` -- change the two together.
 
+## What a host object is (one rule; interpreter = `LispJavaObject`)
+- Compiled: `JavaBridgeTemplate.isJavaObject` = `JvmJavaDirectSites._jhost`, test for test
+  (`JavaBridgeTemplateParityTest#theBridgeAndADirectSiteCountTheSameHostObjects`): NOT a
+  `Long`/`Double`/`BigInteger`/`String`, NOT any Java array (characters, ratios, conses,
+  function values, instances, streams, `#d`/`#f`/octet vectors -- a Java array a call answers
+  is unmarshalled into a list, so none is ever a host), NOT an `ArrayList` whose slot 0 is an
+  `Object[]` (a Lisp array), NOT a `LinkedHashMap` holding an `ArrayList` under
+  `RontoHashTable.ORDER_KEY` (a hash table), NOT a class in `am.ik.rontolisp.runtime`
+  (`RontoComplex`). The bridge spells the key and the package itself (no rontolisp imports);
+  `theBridgeSpellsTheRepresentationAsTheRuntimeDoes` pins both.
+- The bridge's `kindOf` ends with it (a host's kind = its exact class, anything else none);
+  `_jkind` answers HOST / NONE through `_jhost`; a direct site's exact-class kind test of
+  `ArrayList` / `LinkedHashMap` / a runtime class also calls `_jhost` (`mayHoldALispValue`).
+- Messages: the bridge's `describe` is the program's `_lispToString`, bound in `bind` beside
+  `_apply` (a shaker root while the bridge travels; `REFLECTIVELY_FOUND_METHODS` keeps it in
+  the class on a split), the old minimal text only when absent -- so a site left to run time
+  shows `(1 2)`, `1.0e10`, `#(0 0)` as the interpreter and a direct site do.
+- A Java `BigInteger` result is a Lisp integer on all three paths (a fixnum when
+  `bitLength() < 64`: interpreter `unmarshal`, bridge `unmarshal`, `_junm`); `JavaStaticType.
+  becomesLisp` counts BigInteger, its supertypes and its subclasses, so such a declared or
+  constructed type is UNKNOWN. Decided 2026-09-26: the compiled representation cannot hold a
+  host `BigInteger` apart from a bignum, so the interpreter gave up calling its methods
+  (`(java:call (java:new "java.math.BigInteger" "5") "add" ...)` now refuses `5` on both).
+- Measured 2026-09-26 before the rule, `(defun f (x) (java:call x "size"))` compiled: a list /
+  struct / function / stream / condition was described `#<java [Ljava.lang.Object;>`, a ratio
+  `#<java [Ljava.math.BigInteger;>`, a bignum `#<java java.math.BigInteger>`, `1.0e10` as
+  `1.0E10`; a vector / string / bit vector / fill-pointer vector answered `size()` (the
+  `ArrayList` with its header), a hash table answered 2, a complex / `#d` vector `No matching
+  method RontoComplex.size` / `[D.size`; `(java:new "java.math.BigInteger" "5")` printed `5`
+  compiled and `#<java java.math.BigInteger>` interpreted. All agree now
+  (`testsupport/JavaInteropPrograms.HOST_OBJECT_PROGRAM`).
+- Still divergent: the compiled PRINTER and type predicates on a host `ArrayList` /
+  `LinkedHashMap` (`.todo/a31`); specialized vectors and bignums are marshalled on neither
+  backend (`.todo/a32`).
+
 ## Resolution: kinds, pure select, caches (both bridges, identical)
 Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns - 1.4 us),
 `Class.forName` (~500 ns); a resolved `Method.invoke` is ~46 ns.
@@ -220,7 +255,7 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   if_icmpne`, the last untested): `_jconv$N(Object)T` per argument (packed tail: `newarray` +
   store), `emitInvoke`, `emitUnmarshal`, `areturn`. Shared helpers, made once per attempt:
   - `_jkind(Object)I`: the bridge's `kindOf` order as codes 0-8 (`LISP_KINDS`), 9 cons,
-    10 Lisp array, 11 host, 12 none (symbol, bignum, ratio).
+    10 Lisp array, 11 host (`_jhost`), 12 none (symbol, bignum, ratio, hash table, ...).
   - `_jseq(Object)Object[]`: a cons's cars (null if dotted / function-terminated), a rank-1 Lisp
     array's elements (fill pointer; the PACKED long[] shape with MIN_VALUE -> nil), else null.
   - `_jcost$N` per parameter type: `_strv` first (a built string; elements too), then the
@@ -268,7 +303,7 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   `NoClassDefFoundError` -> `No such class: C`, an `ldc C` for a class-named site; per argument a
   kind dispatch (the bridge's `kindOf` tests: `"T".equals`, `instanceof Long`, `int[]` of length 1
   and `isBmpCodePoint`, quote-framed `String` (length 3 = STRING_1), exact `getClass()` for a host
-  kind -- an `ArrayList` with an `Object[]` first element is a Lisp array, a `BigInteger` never a
+  kind -- `_jhost` for an `ArrayList`/`LinkedHashMap`/runtime class, a `BigInteger` never a
   host kind) into the bridge's `convert`/`convertLong` arm for (kind, parameter), a `checkcast` to
   a class parameter after the join (the augmenter merges arms to `Number`/`Object`); then
   `invokevirtual`/`invokeinterface` (InterfaceMethodref on an interface owner)/`invokestatic`/`new`

@@ -11,6 +11,7 @@ import java.lang.reflect.Proxy;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
@@ -136,6 +137,27 @@ final class JavaBridgeTemplate {
 	 */
 	private static @Nullable Method strvMethod;
 
+	/**
+	 * The generated program's {@code _lispToString(Object)} printer, or null when the
+	 * program has none (then {@link #describe(Object)} falls back to its own minimal
+	 * text). Bound beside {@code _apply}, so a message shows a value as the interpreter's
+	 * does -- {@code (1 2)}, {@code 1.0e10}, {@code #(0 0)} -- and not as its Java class.
+	 */
+	private static @Nullable Method lispToStringMethod;
+
+	/**
+	 * The key a compiled hash table's insertion-order list hangs off; mirrors
+	 * {@code runtime/RontoHashTable.ORDER_KEY} (this class may import nothing of
+	 * rontolisp's).
+	 */
+	private static final String HASH_TABLE_ORDER_KEY = "#order";
+
+	/**
+	 * The package of the classes that travel with a compiled program and hold Lisp values
+	 * ({@code RontoComplex}, ...): none of them is a host object.
+	 */
+	private static final String RUNTIME_PACKAGE_PREFIX = "am.ik.rontolisp.runtime.";
+
 	private JavaBridgeTemplate() {
 	}
 
@@ -161,6 +183,14 @@ final class JavaBridgeTemplate {
 		catch (NoSuchMethodException ex) {
 			// No array runtime in this program: no character vector can exist.
 			strvMethod = null;
+		}
+		try {
+			Method print = mainClass.getDeclaredMethod("_lispToString", Object.class);
+			print.setAccessible(true);
+			lispToStringMethod = print;
+		}
+		catch (NoSuchMethodException ex) {
+			lispToStringMethod = null;
 		}
 	}
 
@@ -598,13 +628,9 @@ final class JavaBridgeTemplate {
 			Object[] arr = (Object[]) value;
 			return arr.length > 0 && arr[0] instanceof Integer ? KIND_FUNCTION : null;
 		}
-		if (value instanceof BigInteger || value instanceof BigInteger[]) {
-			return null;
-		}
-		if (value instanceof ArrayList<?> list && !list.isEmpty() && list.get(0) instanceof Object[]) {
-			return null;
-		}
-		return value.getClass();
+		// A host object's kind is its exact class; any other value (a bignum, a ratio, a
+		// Lisp array or hash table, ...) has none.
+		return isJavaObject(value) ? value.getClass() : null;
 	}
 
 	private static List<Constructor<?>> constructors(Class<?> cls) {
@@ -1113,6 +1139,11 @@ final class JavaBridgeTemplate {
 		if (o instanceof Float f) {
 			return (double) f;
 		}
+		if (o instanceof BigInteger b) {
+			// A Java BigInteger is a Lisp integer, a fixnum when it fits (as
+			// interpreted).
+			return b.bitLength() < 64 ? (Object) b.longValue() : b;
+		}
 		if (o instanceof Character c) {
 			// A Java char is a UTF-16 code unit; the Lisp CHARACTER is a length-1
 			// int[]{codePoint}. Wrap directly (BMP code units are also code points).
@@ -1174,19 +1205,41 @@ final class JavaBridgeTemplate {
 		return "\"" + s + "\"";
 	}
 
-	// A wrapped host object is any value outside the compiled Lisp representation
-	// (Long/Double/BigInteger integers, BigInteger[] ratios, String symbols/strings,
-	// int[]{codePoint} CHARACTERs, Object[] conses/function values). ArrayList/HashMap
-	// receivers are accepted: a wrapped List/Map is indistinguishable from a Lisp
-	// array/hash-table here, and calling methods on either is harmless.
+	// A wrapped host object is any value outside the compiled Lisp representation:
+	// not a Long/Double/BigInteger integer or float, not a String symbol or string, not
+	// a Java array (an int[]{codePoint} CHARACTER, a BigInteger[] ratio, an Object[]
+	// cons / function value / instance, a double[]/float[]/byte[] specialized vector --
+	// a Java array a call answers is unmarshalled into a list, so none is ever a host
+	// object), not a Lisp array (an ArrayList whose slot 0 is its Object[] header), not a
+	// Lisp hash table (a LinkedHashMap holding its insertion-order ArrayList under
+	// "#order") and not a travelling runtime class's value (a complex number). Mirrored
+	// by JvmJavaDirectSites' _jhost: a resolved site and the bridge classify alike.
 	private static boolean isJavaObject(@Nullable Object v) {
-		return v != null && !(v instanceof Long) && !(v instanceof Double) && !(v instanceof BigInteger)
-				&& !(v instanceof BigInteger[]) && !(v instanceof String) && !(v instanceof int[])
-				&& v.getClass() != Object[].class;
+		if (v == null || v instanceof Long || v instanceof Double || v instanceof BigInteger || v instanceof String
+				|| v.getClass().isArray()) {
+			return false;
+		}
+		if (v instanceof ArrayList<?> list && !list.isEmpty() && list.get(0) instanceof Object[]) {
+			return false;
+		}
+		if (v instanceof LinkedHashMap<?, ?> map && map.get(HASH_TABLE_ORDER_KEY) instanceof ArrayList) {
+			return false;
+		}
+		return !v.getClass().getName().startsWith(RUNTIME_PACKAGE_PREFIX);
 	}
 
-	// A minimal prin1-ish description for error messages.
+	// How a message shows a value: the program's printer (prin1), as the interpreter
+	// shows it; a minimal prin1-ish text when the program has none.
 	private static String describe(@Nullable Object v) {
+		Method print = lispToStringMethod;
+		if (print != null) {
+			try {
+				return (String) print.invoke(null, v);
+			}
+			catch (ReflectiveOperationException ex) {
+				// Fall through to the minimal text.
+			}
+		}
 		if (v == null) {
 			return "NIL";
 		}
