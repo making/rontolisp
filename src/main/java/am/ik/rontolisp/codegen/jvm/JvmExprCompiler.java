@@ -835,6 +835,8 @@ final class JvmExprCompiler {
 				JvmArrayCompiler.emitToMutStr(ctx, className);
 			}
 			case LispNames.FIXED_DECIMAL -> JvmFixedDecimalCompiler.compile(cons, ctx, className);
+			case LispNames.TEXT_CONTROL_INTERNAL -> JvmTextControlCompiler.compile(cons, ctx, className, false);
+			case LispNames.CONTROL_TEXT_INTERNAL -> JvmTextControlCompiler.compile(cons, ctx, className, true);
 			case LispNames.GENSYM -> JvmGensymCompiler.compile(cons, ctx, className);
 			case LispNames.STRING -> JvmSymbolApiCompiler.compileString(cons, ctx, className);
 			// The transport boundary's explicit render: normalize a mutable

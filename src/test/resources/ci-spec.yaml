@@ -3908,6 +3908,30 @@ cases:
       "PostgreSQL warning: relation notes already exists, skipping"
       "computed 00042 [A,B]"
       "sig 3/4"
+  # A condition built for already-rendered TEXT -- a signal's message, a built-in
+  # failure's -- stores it as the control that renders it verbatim (every ~ doubled),
+  # so its report prints the text once: a ~ in it is never a directive, and the
+  # format-control of (error "a~~b") is the control the program wrote.
+  - name: condition-report-prints-rendered-text-once
+    source: |
+      (defun ci-rto-te (thunk) (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
+      (print (handler-case (error "a~~b") (error (e) (princ-to-string e))))
+      (print (handler-case (car "~a") (error (e) (princ-to-string e))))
+      (print (ci-rto-te (lambda () (+ 1 "~a"))))
+      (print (handler-case (error "a~~b") (error (e) (simple-condition-format-control e))))
+      (print (handler-case (error "~a" "~/x/ 100~%") (error (e) (princ-to-string e))))
+      (print (handler-case (signal "s~~t") (condition (e) (princ-to-string e))))
+      (print (handler-case (error "p~a" "~")
+               (error (e) (apply #'format nil (simple-condition-format-control e)
+                                 (simple-condition-format-arguments e)))))
+    expected: |
+      "a~b"
+      "CAR: The value \"~a\" is not of type LIST"
+      "+: The value \"~a\" is not of type NUMBER"
+      "a~~b"
+      "~/x/ 100~%"
+      "s~t"
+      "p~"
   - name: format-directives-radix-character-case
     source: |
       (format t "~x ~o ~b ~8r ~x [~8,'0x]~%" 255 256 10 4096 -255 255)

@@ -1868,6 +1868,38 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aConditionCarryingRenderedTextReportsItOnce() throws Exception {
+		// The evaluator twin is
+		// LispEvaluatorTest#aConditionCarryingRenderedTextReportsItOnce.
+		// The probes alone decline the format renderer (the report undoubles through
+		// _ctl_text); the explicit :format-control appended forces it back. The
+		// type-errors are the operand landing's and the dispatcher-free cons check's,
+		// built in the fixed runtime (_text_ctl), the others by the handler pad.
+		String probes = """
+				(defun te (thunk) (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
+				(print (handler-case (error "a~~b") (error (e) (princ-to-string e))))
+				(print (handler-case (car "~a") (error (e) (princ-to-string e))))
+				(print (te (lambda () (+ 1 "~a"))))
+				(print (handler-case (error "a~~b") (error (e) (simple-condition-format-control e))))
+				(print (handler-case (error "~a" "~/x/ 100~%") (error (e) (princ-to-string e))))
+				(print (handler-case (signal "s~~t") (condition (e) (princ-to-string e))))
+				""";
+		String expected = """
+				"a~b"
+				"CAR: The value \\"~a\\" is not of type LIST"
+				"+: The value \\"~a\\" is not of type NUMBER"
+				"a~~b"
+				"~/x/ 100~%"
+				"s~t\"""";
+		assertThat(compileAndRunEh(probes)).isEqualTo(expected);
+		assertThat(compileAndRunEh(
+				probes + """
+						(print (princ-to-string (make-condition 'simple-error :format-control "~a!" :format-arguments (list 1))))
+						"""))
+			.isEqualTo(expected + "\n\"1!\"");
+	}
+
+	@Test
 	void theSizeLevelDeclinesTheSpeedTradesWithoutChangingAnyResult() throws Exception {
 		// --optimize=size declines the two wasm-GC emissions that spend bytes on speed:
 		// integer expression-tree fusion (every fused site emits its tree TWICE, raw

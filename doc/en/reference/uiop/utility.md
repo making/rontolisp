@@ -178,8 +178,9 @@ read and evaluated as a function name.
 
 The one deviation worth knowing: a STRING pattern for `match-condition-p` is
 compared against `simple-condition-format-control`, which in rontolisp holds the
-already-formatted message. A pattern with format directives in it therefore
-cannot match; a pattern without them still does.
+already-formatted message (as the control that prints it: every `~` doubled). A
+pattern with format directives in it therefore cannot match; a pattern without
+them still does.
 
 ## Macros
 

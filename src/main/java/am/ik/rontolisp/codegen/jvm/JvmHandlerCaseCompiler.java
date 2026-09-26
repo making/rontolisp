@@ -693,7 +693,8 @@ final class JvmHandlerCaseCompiler {
 		LispVal quotedTag = new LispCons(new LispSymbol(LispNames.QUOTE),
 				new LispCons(new LispSymbol(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-ERROR"), LispNil.INSTANCE));
 		LispVal instance = new LispCons(new LispSymbol(LispNames.OBJ_NEW),
-				new LispCons(quotedTag, new LispCons(msgVar, new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))));
+				new LispCons(quotedTag, new LispCons(LispMacroExpander.textControlForm(msgVar),
+						new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))));
 		JvmExprCompiler.compileExpr(instance, ctx, className);
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(condSlot);

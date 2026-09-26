@@ -1952,6 +1952,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	// shifts, and shaken with the last stub.
 	static final int FUNC_TYPE_ERR = FUNC_IDX_CHK + 1;
 
+	// _tilde ((ref null eq) string, (ref null eq) mode as an i31) -> (ref null eq):
+	// mode 0 doubles every ~ -- the format-control a condition stores rendered text as
+	// (%text-control, and every condition a dispatcher or operand landing throws) --
+	// and mode 1 undoubles every ~~, the inverse (%control-text), what
+	// %format-condition's renderer-free arm renders a control with
+	// (WasmStringRuntimeBuilder.buildTildeBody). Reuses the binary callable signature
+	// (TYPE_CALLABLE_BASE + 1); appended after the last fixed helper so no index above
+	// shifts, and shaken when nothing calls it.
+	static final int FUNC_TILDE = FUNC_TYPE_ERR + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -1982,7 +1992,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_TYPE_ERR + 1;
+	static final int FUNC_VEC_BASE = FUNC_TILDE + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -1997,9 +2007,9 @@ public final class WasmLispCompiler implements LispCompiler {
 	// unboxed-fixnum fusion helpers (_fx_*, WasmFxRuntimeBuilder), the fdlibm
 	// runtime, the identity-hash helper (_ihash), the eq/eql tail (_eql_tail) and the
 	// non-list landing (_type_err_list), the subscript check (_idx_chk) and the shared
-	// landing body (_type_err) -- plus, under --simd, the vec: SIMD block. Use
-	// userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FUNC_TYPE_ERR + 1;
+	// landing body (_type_err) and the text-control helper (_tilde) -- plus, under
+	// --simd, the vec: SIMD block. Use userFuncBase(), which adds that offset.
+	static final int FUNC_USER_BASE = FUNC_TILDE + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -7011,6 +7021,8 @@ public final class WasmLispCompiler implements LispCompiler {
 															// index (FUNC_IDX_CHK)
 				fnDef.addFunction(TYPE_STR_TO_MEM); // _type_err (culprit, kind) -> i32
 													// (FUNC_TYPE_ERR)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _tilde (string, mode) ->
+															// string (FUNC_TILDE)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -7972,6 +7984,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				code.addFunction(WasmOperandTypes.buildSharedLandingBody(operandTexts, operandOperators,
 						operandOpGlobalIndex, operandTypeError, this.usesIdentityHashTables));
+				// the text-control body (FUNC_TILDE): shaken when no condition stores or
+				// renders text.
+				code.addFunction(WasmStringRuntimeBuilder.buildTildeBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp

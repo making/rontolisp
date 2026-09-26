@@ -566,7 +566,56 @@ public final class ClosRegistry {
 		return new LispInstance(
 				LispLayout.ofClass(READER_ERROR_CLASS_NAME, List.of("STREAM", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
 						List.of(LispNil.INSTANCE, LispNil.INSTANCE, LispNil.INSTANCE)),
-				new LispVal[] { stream, message, LispNil.INSTANCE });
+				new LispVal[] { stream, textControl(message), LispNil.INSTANCE });
+	}
+
+	/**
+	 * The {@code format-control} whose rendering is {@code text} verbatim: every
+	 * {@code ~} doubled. A condition carrying already-rendered text stores it this way,
+	 * because its report renders the slot as a control ({@code %text-control}).
+	 * @param text the rendered text
+	 * @return the control
+	 */
+	public static String textControl(String text) {
+		return text.replace("~", "~~");
+	}
+
+	/**
+	 * {@link #textControl(String)} over a value: a string becomes its control (the same
+	 * object when it holds no {@code ~}), anything else passes through.
+	 * @param value the rendered text, or any other value
+	 * @return the control, or the value
+	 */
+	public static LispVal textControl(LispVal value) {
+		if (value instanceof LispString text) {
+			String s = text.value();
+			return s.indexOf('~') < 0 ? value : new LispString(textControl(s));
+		}
+		return value;
+	}
+
+	/**
+	 * The inverse of {@link #textControl(String)}: the rendering of a control whose only
+	 * directive is {@code ~~} ({@code %control-text}).
+	 * @param control the control
+	 * @return the text it renders
+	 */
+	public static String controlText(String control) {
+		return control.replace("~~", "~");
+	}
+
+	/**
+	 * {@link #controlText(String)} over a value: a string becomes its text (the same
+	 * object when it holds no {@code ~}), anything else passes through.
+	 * @param value the control, or any other value
+	 * @return the text, or the value
+	 */
+	public static LispVal controlText(LispVal value) {
+		if (value instanceof LispString control) {
+			String s = control.value();
+			return s.indexOf('~') < 0 ? value : new LispString(controlText(s));
+		}
+		return value;
 	}
 
 	/**
@@ -584,7 +633,7 @@ public final class ClosRegistry {
 		return new LispInstance(
 				LispLayout.ofClass(FILE_ERROR_CLASS_NAME, List.of("PATHNAME", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
 						List.of(LispNil.INSTANCE, LispNil.INSTANCE, LispNil.INSTANCE)),
-				new LispVal[] { pathname, message, LispNil.INSTANCE });
+				new LispVal[] { pathname, textControl(message), LispNil.INSTANCE });
 	}
 
 	/**
@@ -620,7 +669,7 @@ public final class ClosRegistry {
 		java.util.Arrays.fill(slots, LispNil.INSTANCE);
 		int control = layout.slotNames().indexOf("FORMAT-CONTROL");
 		if (control >= 0 && message != null) {
-			slots[control] = message;
+			slots[control] = textControl(message);
 		}
 		slotValues.forEach((name, value) -> {
 			int index = layout.slotNames().indexOf(name);

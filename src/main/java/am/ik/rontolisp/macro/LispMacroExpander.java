@@ -6326,7 +6326,7 @@ public final class LispMacroExpander {
 			for (ClosRegistry.SlotSpec slot : info.slots()) {
 				slots.add(switch (slot.baseName()) {
 					case "PATHNAME" -> pathVar;
-					case "FORMAT-CONTROL" -> messageVar;
+					case "FORMAT-CONTROL" -> textControlForm(messageVar);
 					default -> LispNil.INSTANCE;
 				});
 			}
@@ -14670,8 +14670,7 @@ public final class LispMacroExpander {
 			// table means the caller has none -- treat the package as known.) When the
 			// program can create packages, a runtime package of that name interns
 			// into its member table instead.
-			LispVal signal = listToCons(
-					List.of(new LispSymbol(LispNames.ERROR), new LispString("No such package: " + pkg)));
+			LispVal signal = listToCons(List.of(new LispSymbol(LispNames.ERROR), textDatum("No such package: " + pkg)));
 			if (!runtimeMutation) {
 				return signal;
 			}
@@ -15282,7 +15281,7 @@ public final class LispMacroExpander {
 		List<LispVal> progn = new java.util.ArrayList<>();
 		progn.add(new LispSymbol(LispNames.PROGN));
 		progn.addAll(parts.subList(1, parts.size()));
-		progn.add(listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString(message))));
+		progn.add(listToCons(List.of(new LispSymbol(LispNames.ERROR), textDatum(message))));
 		return listToCons(progn);
 	}
 
@@ -17817,7 +17816,7 @@ public final class LispMacroExpander {
 		if (info == null) {
 			if (coldBranchOk) {
 				return listToCons(List.of(new LispSymbol(LispNames.ERROR),
-						new LispString(LispNames.MAKE_INSTANCE + ": unknown class " + classSym.name())));
+						textDatum(LispNames.MAKE_INSTANCE + ": unknown class " + classSym.name())));
 			}
 			throw new IllegalArgumentException(LispNames.MAKE_INSTANCE + ": unknown class " + classSym.name());
 		}
@@ -19376,7 +19375,7 @@ public final class LispMacroExpander {
 		if (target == null) {
 			if (coldBranchOk) {
 				return listToCons(List.of(new LispSymbol(LispNames.ERROR),
-						new LispString(LispNames.CHANGE_CLASS + ": unknown class " + classSym.name())));
+						textDatum(LispNames.CHANGE_CLASS + ": unknown class " + classSym.name())));
 			}
 			throw new IllegalArgumentException(LispNames.CHANGE_CLASS + ": unknown class " + classSym.name());
 		}
@@ -22918,7 +22917,7 @@ public final class LispMacroExpander {
 		LispVal core;
 		if (primaries.isEmpty()) {
 			core = listToCons(List.of(new LispSymbol(LispNames.ERROR),
-					new LispString("No applicable primary method: " + generic.name())));
+					textDatum("No applicable primary method: " + generic.name())));
 		}
 		else {
 			List<ClosRegistry.MethodInfo> ordered = generic.mostSpecificLast() ? primaries.reversed() : primaries;
@@ -23092,7 +23091,7 @@ public final class LispMacroExpander {
 		if (primaries.isEmpty()) {
 			primaryInvocation = builtinFallback != null ? fallbackCall(builtinFallback, params, variadic)
 					: listToCons(List.of(new LispSymbol(LispNames.ERROR),
-							new LispString("No applicable primary method: " + genericName)));
+							textDatum("No applicable primary method: " + genericName)));
 		}
 		else {
 			// The stashed built-in closes the primary chain: a bare (call-next-method)
@@ -23209,7 +23208,7 @@ public final class LispMacroExpander {
 	private static LispVal noApplicableMethod(String genericName, List<LispVal> params) {
 		if (params.isEmpty()) {
 			return listToCons(
-					List.of(new LispSymbol(LispNames.ERROR), new LispString("No applicable method: " + genericName)));
+					List.of(new LispSymbol(LispNames.ERROR), textDatum("No applicable method: " + genericName)));
 		}
 		// One call of the shared signal helper (see noApplicableMethodDefun); the literal
 		// carries the message's per-generic TAIL only, so its 22-byte head is one string
@@ -27224,7 +27223,7 @@ public final class LispMacroExpander {
 				default -> listToCons(List.of(new LispSymbol(LispNames.ERROR_COND_INTERNAL), condVar, msgVar));
 			};
 			signalCall = makeLet(SIG_MSG_VAR, message,
-					makeLet(SIGNAL_COND_VAR, objNew(tag, List.of(msgVar, LispNil.INSTANCE)),
+					makeLet(SIGNAL_COND_VAR, objNew(tag, List.of(textControlForm(msgVar), LispNil.INSTANCE)),
 							listToCons(List.of(new LispSymbol(LispNames.PROGN),
 									callOf(LispNames.RUN_HANDLERS_INTERNAL, condVar), terminal))));
 		}
@@ -27234,7 +27233,7 @@ public final class LispMacroExpander {
 			// __signal_cond nil) __signal_cond))
 			LispVal message = formatMessagePieces(control.value(), argSyms);
 			LispSymbol msgVar = new LispSymbol(SIGNAL_COND_VAR);
-			LispVal instance = objNew(SIMPLE_CONDITION_TAG, List.of(msgVar, LispNil.INSTANCE));
+			LispVal instance = objNew(SIMPLE_CONDITION_TAG, List.of(textControlForm(msgVar), LispNil.INSTANCE));
 			signalCall = makeLet(SIGNAL_COND_VAR, message,
 					listToCons(List.of(new LispSymbol(internalName), instance, msgVar)));
 		}
@@ -27504,7 +27503,7 @@ public final class LispMacroExpander {
 		// own printed representation rather than off the end of a nil tag.
 		LispVal fallback = makeIf(listToCons(List.of(new LispSymbol(LispNames.OBJ_P), condVar)), typeMessage,
 				callOf(LispNames.PRINC_PIECE_INTERNAL, condVar));
-		LispVal message = makeIf(isSimpleWithMessage, slotMsg, fallback);
+		LispVal message = makeIf(isSimpleWithMessage, callOf(LispNames.CONTROL_TEXT_INTERNAL, slotMsg), fallback);
 		if (closRegistry.routesConditionReports()) {
 			message = conditionReportOr(condVar, message);
 		}
@@ -27518,7 +27517,7 @@ public final class LispMacroExpander {
 					List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), message))));
 		}
 		else if (LispNames.SIGNAL_COND_INTERNAL.equals(internalName)) {
-			LispVal instance = objNew(SIMPLE_CONDITION_TAG, List.of(stringMessage, LispNil.INSTANCE));
+			LispVal instance = objNew(SIMPLE_CONDITION_TAG, List.of(textControlForm(stringMessage), LispNil.INSTANCE));
 			stringCase = listToCons(List.of(new LispSymbol(internalName), instance, stringMessage));
 			conditionCase = listToCons(List.of(new LispSymbol(internalName), condVar, message));
 		}
@@ -27536,7 +27535,7 @@ public final class LispMacroExpander {
 					List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), symbolMessage))));
 		}
 		else if (LispNames.SIGNAL_COND_INTERNAL.equals(internalName)) {
-			LispVal instance = objNew(SIMPLE_CONDITION_TAG, List.of(symbolMessage, LispNil.INSTANCE));
+			LispVal instance = objNew(SIMPLE_CONDITION_TAG, List.of(textControlForm(symbolMessage), LispNil.INSTANCE));
 			symbolCase = listToCons(List.of(new LispSymbol(internalName), instance, symbolMessage));
 		}
 		else {
@@ -27554,25 +27553,28 @@ public final class LispMacroExpander {
 			String simpleTag = warn ? "%class-SIMPLE-WARNING" : LispNames.SIGNAL_COND_INTERNAL.equals(internalName)
 					? SIMPLE_CONDITION_TAG : "%class-SIMPLE-ERROR";
 			if (warn) {
-				stringCase = listToCons(List.of(new LispSymbol(LispNames.PROGN), callOf(LispNames.RUN_HANDLERS_INTERNAL,
-						objNew(simpleTag, List.of(stringMessage, LispNil.INSTANCE))), stringCase));
-				symbolCase = listToCons(List.of(new LispSymbol(LispNames.PROGN),
+				stringCase = listToCons(List.of(new LispSymbol(LispNames.PROGN),
 						callOf(LispNames.RUN_HANDLERS_INTERNAL,
-								objNew(simpleTag,
-										List.of(callOf(LispNames.PRINC_PIECE_INTERNAL, condVar), LispNil.INSTANCE))),
+								objNew(simpleTag, List.of(textControlForm(stringMessage), LispNil.INSTANCE))),
+						stringCase));
+				symbolCase = listToCons(List.of(new LispSymbol(LispNames.PROGN),
+						callOf(LispNames.RUN_HANDLERS_INTERNAL, objNew(simpleTag, List
+							.of(textControlForm(callOf(LispNames.PRINC_PIECE_INTERNAL, condVar)), LispNil.INSTANCE))),
 						symbolCase));
 			}
 			else {
 				boolean signal = LispNames.SIGNAL_COND_INTERNAL.equals(internalName);
 				String throwInternal = signal ? LispNames.SIGNAL_COND_INTERNAL : LispNames.ERROR_COND_INTERNAL;
 				LispSymbol instVar = new LispSymbol(SIGNAL_INST_VAR);
-				stringCase = makeLet(SIGNAL_INST_VAR, objNew(simpleTag, List.of(stringMessage, LispNil.INSTANCE)),
+				stringCase = makeLet(SIGNAL_INST_VAR,
+						objNew(simpleTag, List.of(textControlForm(stringMessage), LispNil.INSTANCE)),
 						listToCons(List.of(new LispSymbol(LispNames.PROGN),
 								callOf(LispNames.RUN_HANDLERS_INTERNAL, instVar),
 								listToCons(List.of(new LispSymbol(throwInternal), instVar, stringMessage)))));
 				LispSymbol symMsgVar = new LispSymbol(SIGNAL_SYMBOL_MSG_VAR);
 				symbolCase = makeLet(SIGNAL_SYMBOL_MSG_VAR, callOf(LispNames.PRINC_PIECE_INTERNAL, condVar),
-						makeLet(SIGNAL_INST_VAR, objNew(simpleTag, List.of(symMsgVar, LispNil.INSTANCE)),
+						makeLet(SIGNAL_INST_VAR,
+								objNew(simpleTag, List.of(textControlForm(symMsgVar), LispNil.INSTANCE)),
 								listToCons(List.of(new LispSymbol(LispNames.PROGN),
 										callOf(LispNames.RUN_HANDLERS_INTERNAL, instVar),
 										listToCons(List.of(new LispSymbol(throwInternal), instVar, symMsgVar))))));
@@ -27641,7 +27643,8 @@ public final class LispMacroExpander {
 			// their side effects still happen exactly once. A COMPILE error here would
 			// make one cold, never-taken branch unbuildable.
 			return objNew(SIMPLE_CONDITION_TAG,
-					List.of(new LispString("Condition " + typeSym.name() + " was signalled."), LispNil.INSTANCE));
+					List.of(textControlForm(new LispString("Condition " + typeSym.name() + " was signalled.")),
+							LispNil.INSTANCE));
 		}
 		// Arguments that are not initarg pairs: the values fill the layout positionally
 		// (surplus ones are evaluated and dropped by %obj-new). The tag comes from the
@@ -31053,11 +31056,24 @@ public final class LispMacroExpander {
 		}
 
 		/**
-		 * A control the identity fast path renders correctly: nil, or a tilde-free
-		 * literal.
+		 * A control the renderer-free fast path ({@code %control-text}) renders
+		 * correctly: nil, a literal whose only directive is {@code ~~}, or the text
+		 * control of a rendered message ({@link #textControlForm}).
 		 */
 		private static boolean isRenderedControl(LispVal control) {
-			return isLiteralNil(control) || control instanceof LispString text && text.value().indexOf('~') < 0;
+			return isLiteralNil(control) || control instanceof LispString text && isTextControl(text.value())
+					|| control instanceof LispCons call && call.car() instanceof LispSymbol op
+							&& LispNames.TEXT_CONTROL_INTERNAL.equals(op.name());
+		}
+
+		/** Whether every {@code ~} of the control is half of a {@code ~~}. */
+		private static boolean isTextControl(String control) {
+			for (int i = control.indexOf('~'); i >= 0; i = control.indexOf('~', i + 2)) {
+				if (i + 1 >= control.length() || control.charAt(i + 1) != '~') {
+					return false;
+				}
+			}
+			return true;
 		}
 
 		private static boolean isLiteralNil(LispVal value) {
@@ -31264,10 +31280,12 @@ public final class LispMacroExpander {
 		LispVal functionControl = renderedToString(stream, listToCons(arity));
 		// The renderer arm is what pulls format-render.lisp (~33 KB of source) into
 		// every artifact that can build a condition. When conditionNarrowing PROVED
-		// every reachable control is a directive-free literal (or nil) with nil
-		// arguments -- the synthesized-simple-error common case -- the string arm
-		// answers the control itself and the renderer is never spliced.
-		LispVal stringArm = declineRenderer ? control : FormatRenderer.call(control, args);
+		// every reachable control has no directive but ~~ (a rendered message's text
+		// control, a directive-free literal, or nil) with nil arguments -- the
+		// synthesized-simple-error common case -- the string arm only undoubles the ~~
+		// and the renderer is never spliced.
+		LispVal stringArm = declineRenderer ? callOf(LispNames.CONTROL_TEXT_INTERNAL, control)
+				: FormatRenderer.call(control, args);
 		LispVal body = makeIf(callOf(LispNames.STRINGP, control), stringArm, functionControls
 				? makeIf(callOf(LispNames.NULL, control), LispNil.INSTANCE, functionControl) : LispNil.INSTANCE);
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.FORMAT_CONDITION_INTERNAL),
@@ -32682,7 +32700,9 @@ public final class LispMacroExpander {
 				: "of type " + typeSpec.print();
 		LispSymbol var = new LispSymbol(CHECK_TYPE_VAR);
 		LispVal errorCall = listToCons(List.of(new LispSymbol(LispNames.ERROR),
-				new LispString("The value of " + place.print() + " is ~s, which is not " + expected + "."), var));
+				new LispString("The value of " + ClosRegistry.textControl(place.print()) + " is ~s, which is not "
+						+ ClosRegistry.textControl(expected) + "."),
+				var));
 		LispVal test;
 		try {
 			test = makeTypeTest(var, typeSpec);
@@ -33251,8 +33271,8 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal undefinedFunctionCallStub(String name) {
 		return listToCons(
-				List.of(new LispSymbol(LispNames.ERROR), new LispString(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX
-						+ name + ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX)));
+				List.of(new LispSymbol(LispNames.ERROR), textDatum(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + name
+						+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX)));
 	}
 
 	/**
@@ -33263,7 +33283,7 @@ public final class LispMacroExpander {
 	 * @return the signaling expression
 	 */
 	public static LispVal callTimeUnsupportedStub(String message) {
-		return listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString(message)));
+		return listToCons(List.of(new LispSymbol(LispNames.ERROR), textDatum(message)));
 	}
 
 	/**
@@ -33742,10 +33762,38 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The literal datum of an {@code (error datum)} that signals {@code text} verbatim. A
+	 * string datum IS a format control, so a message spliced together from a name the
+	 * program chose must reach it with every {@code ~} doubled.
+	 * @param text the message
+	 * @return the control literal
+	 */
+	private static LispString textDatum(String text) {
+		return new LispString(ClosRegistry.textControl(text));
+	}
+
+	/**
+	 * The {@code format-control} form of already-rendered TEXT: {@code (%text-control
+	 * text)}, the control whose rendering is the text verbatim, computed here when the
+	 * text is a literal (and nil left nil). Every site that stores a message in a
+	 * condition's {@code format-control} goes through this, because the report renders
+	 * that slot as a control -- a {@code ~} the text carries must reach it doubled.
+	 * @param text the form evaluating to the rendered text
+	 * @return the form evaluating to its control
+	 */
+	public static LispVal textControlForm(LispVal text) {
+		if (text instanceof LispString || text instanceof LispNil) {
+			return ClosRegistry.textControl(text);
+		}
+		return callOf(LispNames.TEXT_CONTROL_INTERNAL, text);
+	}
+
+	/**
 	 * The {@code (%obj-new '%class-NAME slot...)} form that builds a seeded condition
 	 * instance reporting the given message: every slot nil but {@code format-control},
-	 * which holds the message. The slot count and the control's position come from the
-	 * REGISTRY, so a landing pad never bakes an index that the seeded layout could move.
+	 * which holds the message as its text control ({@link #textControlForm}). The slot
+	 * count and the control's position come from the REGISTRY, so a landing pad never
+	 * bakes an index that the seeded layout could move.
 	 * @param closRegistry the class registry
 	 * @param className the seeded condition class name
 	 * @param message the expression holding the message (a pseudo-local or a literal)
@@ -33772,7 +33820,7 @@ public final class LispMacroExpander {
 		parts.add(quoteOf(LispLayout.CLASS_TAG_PREFIX + className));
 		if (info != null) {
 			for (ClosRegistry.SlotSpec slot : info.slots()) {
-				parts.add("FORMAT-CONTROL".equals(slot.baseName()) ? message
+				parts.add("FORMAT-CONTROL".equals(slot.baseName()) ? textControlForm(message)
 						: slotForms.getOrDefault(slot.baseName(), LispNil.INSTANCE));
 			}
 		}

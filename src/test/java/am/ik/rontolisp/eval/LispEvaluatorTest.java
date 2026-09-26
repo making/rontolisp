@@ -2775,6 +2775,28 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aConditionCarryingRenderedTextReportsItOnce() {
+		// A signal's message and a built-in failure's text are already rendered; the
+		// condition stores each as the control that renders it verbatim, so a ~ in the
+		// text is never a directive of the report. The compile-path twins are
+		// JvmLispCompilerTest / WasmLispCompilerIntegrationTest
+		// #aConditionCarryingRenderedTextReportsItOnce, the four-backend pin ci-spec's
+		// condition-report-prints-rendered-text-once.
+		assertThat(evalMulti("""
+				(defun te (thunk) (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
+				(list (handler-case (error "a~~b") (error (e) (princ-to-string e)))
+				      (handler-case (car "~a") (error (e) (princ-to-string e)))
+				      (te (lambda () (+ 1 "~a")))
+				      (handler-case (error "a~~b") (error (e) (simple-condition-format-control e)))
+				      (handler-case (error "~a" "~/x/ 100~%") (error (e) (princ-to-string e)))
+				      (handler-case (signal "s~~t") (condition (e) (princ-to-string e)))
+				      (handler-case (error (make-condition 'simple-error :format-control "u~~v"))
+				        (error (e) (princ-to-string e))))
+				""").print()).isEqualTo("(\"a~b\" \"CAR: The value \\\"~a\\\" is not of type LIST\""
+				+ " \"+: The value \\\"~a\\\" is not of type NUMBER\" \"a~~b\" \"~/x/ 100~%\" \"s~t\" \"u~v\")");
+	}
+
+	@Test
 	void evalComplexOrderingSignalsCatchableTypeErrors() {
 		// Ordering (and min/max, plusp/minusp) over a complex signals a catchable
 		// type-error (SBCL parity).

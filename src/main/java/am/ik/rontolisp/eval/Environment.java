@@ -5697,6 +5697,16 @@ public final class Environment implements Scope {
 			}
 			return new LispString(a.value() + b.value());
 		}));
+		// %text-control / %control-text: rendered text as the format-control that
+		// renders it verbatim, and back (ClosRegistry.textControl).
+		env.defineFunction(LispNames.TEXT_CONTROL_INTERNAL, new LispFunction(LispNames.TEXT_CONTROL_INTERNAL, args -> {
+			requireArgCount(LispNames.TEXT_CONTROL_INTERNAL, args, 1);
+			return ClosRegistry.textControl(args.get(0));
+		}));
+		env.defineFunction(LispNames.CONTROL_TEXT_INTERNAL, new LispFunction(LispNames.CONTROL_TEXT_INTERNAL, args -> {
+			requireArgCount(LispNames.CONTROL_TEXT_INTERNAL, args, 1);
+			return ClosRegistry.controlText(args.get(0));
+		}));
 		// %str-fresh: "this value, as a FRESH mutable string". The compile backends
 		// emit their mutable-result wrap for it (a non-string passes through), which is
 		// how the pure-builtin fold keeps a literal-argument producer's value constant

@@ -7,6 +7,7 @@ import java.util.List;
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 
 import am.ik.rontolisp.LispVal;
@@ -707,6 +708,25 @@ class LispMacroExpanderTest {
 			.contains("%class-MY-ERROR", "%class-SIMPLE-ERROR", "%class-TYPE-ERROR", "%class-DIVISION-BY-ZERO")
 			.doesNotContain("%class-END-OF-FILE", "%class-UNBOUND-SLOT");
 		assertThat(narrowing.declineRenderer()).isTrue();
+	}
+
+	@Test
+	void theRendererFreeReportServesAControlWhoseOnlyDirectiveIsADoubledTilde() {
+		// A rendered message reaches format-control as its text control (every ~
+		// doubled), and %control-text -- the renderer-free arm -- undoubles it; so a
+		// literal control whose only directive is ~~ is served without the renderer,
+		// while any other directive still forces it.
+		assertThat(narrowingOf("""
+				(handler-case (error 'simple-error :format-control "a~~b") (error (e) (princ e)))
+				""").declineRenderer()).isTrue();
+		assertThat(narrowingOf("""
+				(handler-case (error 'simple-error :format-control "a~%b") (error (e) (princ e)))
+				""").declineRenderer()).isFalse();
+		assertThat(narrowingOf("""
+				(handler-case (error 'simple-error :format-control "a~") (error (e) (princ e)))
+				""").declineRenderer()).isFalse();
+		assertThat(LispMacroExpander.textControlForm(new LispString("a~b")).print()).isEqualTo("\"a~~b\"");
+		assertThat(LispMacroExpander.textControlForm(new LispSymbol("M")).print()).isEqualTo("(%TEXT-CONTROL M)");
 	}
 
 	@Test

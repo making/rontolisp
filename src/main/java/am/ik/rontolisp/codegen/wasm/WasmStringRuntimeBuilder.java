@@ -2513,6 +2513,183 @@ final class WasmStringRuntimeBuilder {
 	}
 
 	/**
+	 * Builds {@code _tilde} (FUNC_TILDE): {@code (_tilde v mode)} answers a runtime
+	 * string with every {@code ~} doubled when {@code mode} is 0 -- the
+	 * {@code format-control} that renders the string verbatim ({@code %text-control}) --
+	 * and with every {@code ~~} undoubled when it is 1, the inverse
+	 * ({@code %control-text}). Anything that is not a quote-framed string (nil, a symbol
+	 * sharing the struct) and a string with nothing to change answer themselves; a
+	 * changed one is a fresh string. The caller normalizes a mutable character vector
+	 * first. {@code ~} is ASCII, so the walk is over bytes: no UTF-8 continuation byte
+	 * can equal it. One body for both directions, since a module that renders a
+	 * condition's control carries both.
+	 * @return the function body (signature {@code ((ref null eq), (ref null eq)) ->
+	 * (ref null eq)}, TYPE_CALLABLE_BASE + 1; the mode an i31)
+	 */
+	static byte[] buildTildeBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: v = 0, mode = 1 (i31). locals: n = 2, i = 3, j = 4, count = 5, b = 6,
+		// id = 7, undo = 8 (i32); src = 9, out = 10 ($str_bytes).
+		declareI32AndStrArrayLocals(w, 7, 2);
+		int v = 0, n = 2, i = 3, j = 4, count = 5, b = 6, id = 7, undo = 8, src = 9, out = 10;
+		int tilde = '~';
+		// Not a string struct, too short to be framed, or a symbol (no opening quote)
+		// -> itself.
+		get(w, v);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, v);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		setStrArray(w, v, src);
+		emitStrLen(w, v);
+		set(w, n);
+		get(w, n);
+		i32(w, 2);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		get(w, v);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		arrGetLocal(w, src, i);
+		i32(w, QUOTE);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.IF, 0x40);
+		get(w, v);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		emitI31GetS(w, 1);
+		set(w, undo);
+		// count = the tildes (doubling) or the ~~ pairs (undoubling). The closing quote
+		// is never a tilde, so src[i + 1] after a tilde is always in range.
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, i);
+		get(w, n);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		arrGetLocal(w, src, i);
+		i32(w, tilde);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		get(w, undo);
+		w.write(Instruction.IF, 0x40);
+		// a pair counts once and is stepped over whole
+		get(w, src);
+		get(w, i);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		i32(w, tilde);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		increment(w, count);
+		increment(w, i);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		increment(w, count);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		increment(w, i);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		get(w, count);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, v);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// n = the new length (one byte more per tilde, one less per pair); out = a
+		// fresh array of it
+		get(w, n);
+		get(w, count);
+		w.write(Instruction.I32_ADD);
+		get(w, count);
+		get(w, undo);
+		w.write(Instruction.I32_MUL);
+		i32(w, 1);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_SUB);
+		set(w, n);
+		get(w, n);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		set(w, out);
+		// copy: out[j++] = b = src[i++]; after a tilde, a second one (doubling) or the
+		// next one skipped (undoubling)
+		i32(w, 0);
+		set(w, i);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, j);
+		get(w, n);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		arrGetLocal(w, src, i);
+		set(w, b);
+		get(w, out);
+		get(w, j);
+		get(w, b);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		increment(w, i);
+		increment(w, j);
+		get(w, b);
+		i32(w, tilde);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		get(w, undo);
+		w.write(Instruction.IF, 0x40);
+		arrGetLocal(w, src, i);
+		i32(w, tilde);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		increment(w, i);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		get(w, out);
+		get(w, j);
+		i32(w, tilde);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		increment(w, j);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// id = STRING_ID_CTR++ -- a fresh runtime string, as _iv_utf8_str stamps one.
+		i32(w, WasmLispCompiler.STRING_ID_CTR_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		set(w, id);
+		i32(w, WasmLispCompiler.STRING_ID_CTR_ADDR);
+		get(w, id);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		get(w, id);
+		get(w, n);
+		get(w, out);
+		emitSeedCursor(w);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.END); // function
+		return body.toByteArray();
+	}
+
+	private static void increment(WasmWriter w, int local) {
+		get(w, local);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, local);
+	}
+
+	/**
 	 * Builds {@code _iv_utf8_str} (FUNC_IV_UTF8_STR): a packed {@code (unsigned-byte 8)}
 	 * vector (a bare {@code TYPE_I8ARR}) validated as STRICT UTF-8 and, when it is,
 	 * turned into the {@code TYPE_STRING} its bytes spell by ONE {@code array.copy}

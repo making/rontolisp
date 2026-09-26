@@ -2718,8 +2718,9 @@ final class WasmRuntimeBuilder {
 
 	/**
 	 * Builds the condition instance the way {@code %obj-new} does -- every slot nil but
-	 * {@code format-control}, which holds the message in {@code msgLocal} -- and throws
-	 * the {@code (instance . message)} payload on {@code $lisp-cond}, the channel
+	 * {@code format-control}, which holds the message in {@code msgLocal} as its text
+	 * control ({@link #emitTildeCall}, what {@code %text-control} compiles to) -- and
+	 * throws the {@code (instance . message)} payload on {@code $lisp-cond}, the channel
 	 * {@code %error-cond} uses, so a clause naming the class matches and the entry
 	 * landing pad reports it. {@code slotsLocal} is a spare {@code (ref null eq)}.
 	 */
@@ -2752,8 +2753,10 @@ final class WasmRuntimeBuilder {
 		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(instance.formatControlSlot());
+		// the message as its text control: the report renders the slot as a control
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(msgLocal);
+		emitTildeCall(w, false);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		for (Map.Entry<Integer, Runnable> slot : new TreeMap<>(slots).entrySet()) {
@@ -2778,6 +2781,21 @@ final class WasmRuntimeBuilder {
 		WasmEmitHelper.emitNewCons(w, instance.identityHash());
 		w.write(Instruction.THROW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+	}
+
+	/**
+	 * Calls {@code _tilde} ({@code FUNC_TILDE}) on the string on the stack: its text
+	 * control ({@code %text-control}), or with {@code undo} the text of a control whose
+	 * only directive is {@code ~~} ({@code %control-text}).
+	 * @param w the writer
+	 * @param undo whether to undouble rather than double
+	 */
+	static void emitTildeCall(WasmWriter w, boolean undo) {
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(undo ? 1 : 0);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_TILDE);
 	}
 
 	/** Pushes the required count out of a callee shape. */

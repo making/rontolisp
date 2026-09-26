@@ -92,7 +92,27 @@ A condition is a CLOS-subset instance ([instance-syntax.md](instance-syntax.md))
   format arguments**: `expandObjectSignal`'s string arm renders `(%fmt-render datum (list ...))`,
   fed by three callers. Argument forms are evaluated only on that arm, so every datum-only call keeps
   its previous expansion byte for byte. **The rendering is EAGER**: the instance carries rendered
-  text in `format-control` and nil `format-arguments`. **Re-evaluate if** the renderer becomes free.
+  text in `format-control` -- as its TEXT CONTROL, below -- and nil `format-arguments`.
+  **Re-evaluate if** the renderer becomes free.
+- **Invariant: rendered TEXT enters a `format-control` slot only as its text control** -- every `~`
+  doubled, the control whose rendering is the text verbatim -- so the report, which renders the slot
+  as a control, prints it exactly once. Producers: `LispMacroExpander.textControlForm` (a literal
+  escaped at expansion, anything else `(%text-control x)`) at every expansion that builds a simple-*
+  instance, `reportingConditionForm` (the JVM pads, `%program-error`), `lowerFileError` and the
+  JVM/wasm pads' `simple-error` synthesis; `ClosRegistry.textControl` on the interpreter's Java side
+  (`newReportingCondition`, the reader-/file-error factories, `synthesizeCondition`); the wasm-GC
+  fixed runtime's `emitConditionThrow` (dispatcher and operand landings) through `_tilde`
+  (`FUNC_TILDE`, one body for `%text-control` and `%control-text`, shaken when unused). An
+  `(error <literal>)` the expander builds from a name the program chose (`No such package: X`, an
+  undefined function stub) goes through `textDatum` for the same reason: a string datum IS a control.
+  Consequences, pinned by ci-spec `condition-report-prints-rendered-text-once` and the three
+  `aConditionCarryingRenderedTextReportsItOnce` tests: `(simple-condition-format-control e)` of
+  `(error "a~~b")` is `"a~~b"`, the control the program wrote, and `(apply #'format nil control args)`
+  reproduces the report for every condition. Before (2026-09-26): the report re-rendered the text,
+  so `(error "a~~b")` printed `aNIL` on the interpreter and a caught `(error (format nil "~a" "~/x/"))`
+  ran the `~/` directive and escaped the handler as `The function X is undefined` on all four
+  backends. Cost: +417 B on a wasm-GC `handler-case` program (`_tilde` is 324 B), +229 B on its JVM
+  class.
 - The lite `#'error`/`#'warn`/`#'signal`/`#'cerror` WRAPPERS forward the datum only
   (`BuiltinFunctionWrappers.SIGNAL_FUNCTIONS`), so `(apply #'error c '(1 2))` drops the arguments on
   the compiled backends -- documented lite semantics, as for initargs.
@@ -228,9 +248,9 @@ split, matching SBCL.
 - The interpreter loads the same generated AST (`ensureConditionReportRuntimeLoaded`) and RE-loads
   whenever the registry it partitions changed (a stamp over class and report counts).
 - **Lite**: the rewrite is per CALL FORM, so a condition reached through a FUNCTION VALUE gets the
-  raw conversion, exactly as a `print-object` method does. **Known deviation**: the
-  string-designator path renders EAGERLY, so printing renders the message a SECOND time -- visible
-  only when it still contains a live directive (`(error "~a" "~a")` prints `NIL`).
+  raw conversion, exactly as a `print-object` method does. The string-designator path renders
+  EAGERLY, and its text reaches the instance as its text control (Phase 2), so printing renders it
+  once: `(error "~a" "~a")` prints `~a`.
 
 ## The condition floor is narrowed to what the program can construct
 The compile path shrinks the condition runtime along three axes; the interpreter never narrows, and
@@ -242,13 +262,14 @@ every narrowing is IMPOSSIBILITY-based.
   `none()` on a computed datum, `eval`/`symbol-function`/`fdefinition`, an escaping `#'error`-family
   value or quoted designator in data, `--dynamic`, restart mode. Name forgery from computed strings
   can reach a pruned arm -- the failure is the caller's fallback report text, never a lost signal.
-- **`%format-condition` declines the renderer** when every possible control is a directive-free
-  literal (or nil) with nil arguments -- the common case, since every string-datum signal site
-  pre-renders (`formatMessagePieces`). Only an explicit `:format-control` initarg (surface keyword
-  check plus the baked `:initform`/`:default-initargs` cons check inside generated constructors'
-  `%obj-new`) forces it back. On zlib that is **-61 KB**. **Trigger: the double-render deviation
-  requires the renderer, so a declined artifact prints a rendered-once message; if that bites,
-  render once EVERYWHERE, not by un-declining.**
+- **`%format-condition` declines the renderer** when every possible control has no directive but
+  `~~` -- a literal whose every `~` is half of a `~~`, nil, or a `(%text-control x)` -- with nil
+  arguments: the common case, since every string-datum signal site pre-renders
+  (`formatMessagePieces`) and stores the text control. The declined arm is `(%control-text control)`,
+  which undoubles the `~~`: the one directive such a control can hold, so declined and rendered
+  artifacts print the same text. Only an explicit `:format-control` initarg with another directive
+  (surface keyword check plus the baked `:initform`/`:default-initargs` cons check inside generated
+  constructors' `%obj-new`) forces the renderer back. On zlib that is **-61 KB**.
 - **A tag built by a LATER lowering is taken from its site's presence.** The read family's
   `end-of-file` (`expandReadEofSignal`, expression expansion) and a failed open's /
   `%file-error`'s `file-error` (`lowerFileError`, body compilation, behind a pad only) are

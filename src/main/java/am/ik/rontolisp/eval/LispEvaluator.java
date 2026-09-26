@@ -9236,7 +9236,7 @@ public final class LispEvaluator {
 		parts.add(designator.isEmpty() ? LispNil.INSTANCE
 				: quoteValue(packageKeyword(designator.toUpperCase(java.util.Locale.ROOT))));
 		parts.add(new LispSymbol(":FORMAT-CONTROL"));
-		parts.add(quoteValue(new LispString(message)));
+		parts.add(quoteValue(new LispString(ClosRegistry.textControl(message))));
 		if (continuable) {
 			LispVal form = LispNil.INSTANCE;
 			for (int i = parts.size() - 1; i >= 0; i--) {
@@ -10931,7 +10931,7 @@ public final class LispEvaluator {
 		}
 		LispLayout layout = java.util.Objects
 			.requireNonNull(this.closRegistry.findLayoutByTag(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-ERROR"));
-		return new LispInstance(layout, new LispVal[] { messageVal, LispNil.INSTANCE });
+		return new LispInstance(layout, new LispVal[] { ClosRegistry.textControl(messageVal), LispNil.INSTANCE });
 	}
 
 	/**

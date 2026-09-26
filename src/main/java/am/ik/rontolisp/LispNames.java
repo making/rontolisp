@@ -8652,6 +8652,25 @@ public final class LispNames {
 	public static final String FORMAT_CONDITION_INTERNAL = "%FORMAT-CONDITION";
 
 	/**
+	 * The internal {@code (%text-control text)}: the {@code format-control} whose
+	 * rendering is {@code text} verbatim -- the text with every {@code ~} doubled -- or
+	 * the value itself when it is not a string. Every site that stores already-rendered
+	 * TEXT (a signal's message, a built-in failure's) in a condition's
+	 * {@code format-control} stores it through this, so the report, which renders the
+	 * slot as a control, prints the text once.
+	 */
+	public static final String TEXT_CONTROL_INTERNAL = "%TEXT-CONTROL";
+
+	/**
+	 * The internal {@code (%control-text control)}: the rendering of a control whose only
+	 * directive is {@code ~~} -- every {@code ~~} undoubled -- or the value itself when
+	 * it is not a string. The inverse of {@link #TEXT_CONTROL_INTERNAL}, and all the
+	 * rendering {@link #FORMAT_CONDITION_INTERNAL} needs where the condition narrowing
+	 * proved no other directive can reach it.
+	 */
+	public static final String CONTROL_TEXT_INTERNAL = "%CONTROL-TEXT";
+
+	/**
 	 * The internal alias of {@code princ-to-string} that does NOT consult
 	 * {@code print-object}. It is what {@link #PRINT_OBJECT_STR_INTERNAL}'s fallback
 	 * calls; without it the fallback would re-enter the very rewrite that produced it.

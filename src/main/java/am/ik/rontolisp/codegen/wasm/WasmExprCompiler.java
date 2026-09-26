@@ -1082,6 +1082,13 @@ final class WasmExprCompiler {
 			case LispNames.PRIN1_TO_STRING_RAW -> WasmPrin1ToStringCompiler.compile(cons, ctx);
 			case LispNames.STRING_CONCAT -> WasmStringConcatCompiler.compile(cons, ctx);
 			case LispNames.FIXED_DECIMAL -> WasmFixedDecimalCompiler.compile(cons, ctx);
+			// A rendered text as its format-control, and back
+			// (WasmStringRuntimeBuilder.buildTildeBody).
+			case LispNames.TEXT_CONTROL_INTERNAL, LispNames.CONTROL_TEXT_INTERNAL -> {
+				WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
+				WasmEmitHelper.emitCharvecToStrCall(ctx);
+				WasmRuntimeBuilder.emitTildeCall(ctx.writer, LispNames.CONTROL_TEXT_INTERNAL.equals(sym.name()));
+			}
 			case LispNames.GENSYM -> WasmGensymCompiler.compile(cons, ctx);
 			case LispNames.STRING -> WasmSymbolApiCompiler.compileString(cons, ctx);
 			// The transport boundary's explicit render: normalize a mutable

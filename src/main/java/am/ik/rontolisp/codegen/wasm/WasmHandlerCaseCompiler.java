@@ -523,11 +523,12 @@ final class WasmHandlerCaseCompiler {
 		String msgVarName = "__hc_msg$" + msgSlot;
 		ctx.locals.put(msgVarName, msgSlot);
 		try {
-			// (%obj-new '%class-SIMPLE-ERROR __hc_msg nil)
+			// (%obj-new '%class-SIMPLE-ERROR (%text-control __hc_msg) nil)
 			LispVal quotedTag = new LispCons(new LispSymbol(LispNames.QUOTE),
 					new LispCons(new LispSymbol(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-ERROR"), LispNil.INSTANCE));
-			LispVal instance = new LispCons(new LispSymbol(LispNames.OBJ_NEW), new LispCons(quotedTag,
-					new LispCons(new LispSymbol(msgVarName), new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))));
+			LispVal instance = new LispCons(new LispSymbol(LispNames.OBJ_NEW),
+					new LispCons(quotedTag, new LispCons(LispMacroExpander.textControlForm(new LispSymbol(msgVarName)),
+							new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))));
 			WasmExprCompiler.compileExpr(instance, ctx);
 		}
 		finally {

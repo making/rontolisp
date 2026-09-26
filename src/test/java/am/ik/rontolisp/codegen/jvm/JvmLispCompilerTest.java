@@ -6002,6 +6002,36 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aConditionCarryingRenderedTextReportsItOnce() throws Exception {
+		// The evaluator twin is aConditionCarryingRenderedTextReportsItOnce. The probes
+		// alone leave the condition narrowing free to decline the format renderer, so
+		// the report's control goes through %control-text; the explicit :format-control
+		// appended forces the renderer back, and the text must read the same.
+		String probes = """
+				(defun te (thunk) (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
+				(print (handler-case (error "a~~b") (error (e) (princ-to-string e))))
+				(print (handler-case (car "~a") (error (e) (princ-to-string e))))
+				(print (te (lambda () (+ 1 "~a"))))
+				(print (handler-case (error "a~~b") (error (e) (simple-condition-format-control e))))
+				(print (handler-case (error "~a" "~/x/ 100~%") (error (e) (princ-to-string e))))
+				(print (handler-case (signal "s~~t") (condition (e) (princ-to-string e))))
+				""";
+		String expected = """
+				"a~b"
+				"CAR: The value \\"~a\\" is not of type LIST"
+				"+: The value \\"~a\\" is not of type NUMBER"
+				"a~~b"
+				"~/x/ 100~%"
+				"s~t\"""";
+		assertThat(compileAndRun(probes)).isEqualTo(expected);
+		assertThat(compileAndRun(
+				probes + """
+						(print (princ-to-string (make-condition 'simple-error :format-control "~a!" :format-arguments (list 1))))
+						"""))
+			.isEqualTo(expected + "\n\"1!\"");
+	}
+
+	@Test
 	void readCharEndOfFileIsCatchableAsEndOfFile() throws Exception {
 		assertThat(compileAndRun("""
 				(with-input-from-string (s "")
