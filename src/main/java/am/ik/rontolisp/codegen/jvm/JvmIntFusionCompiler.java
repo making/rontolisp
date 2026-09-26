@@ -209,9 +209,17 @@ final class JvmIntFusionCompiler {
 		/** Only for a non-literal limit: {@code _random}'s boxed draw. */
 		int boxSlot = -1;
 
-		RandomLeaf(@Nullable LispVal limitExpr, long limitConst) {
+		/**
+		 * The source site of the {@code random} form, which a rejected limit's throw
+		 * reports ({@link #emitRandomDraw}); 0 without one, and cleared like
+		 * {@link ArefLeaf#site}.
+		 */
+		int site;
+
+		RandomLeaf(@Nullable LispVal limitExpr, long limitConst, int site) {
 			this.limitExpr = limitExpr;
 			this.limitConst = limitConst;
+			this.site = site;
 		}
 
 	}
@@ -1134,7 +1142,7 @@ final class JvmIntFusionCompiler {
 			return arefLeaf(parts.get(1), parts.get(2), sourceSite(cons, ctx, site), ctx, site, depth);
 		}
 		if (LispNames.RANDOM.equals(op) && arity == 1 && env.isEmpty()) {
-			RandomLeaf leaf = randomLeaf(parts, ctx);
+			RandomLeaf leaf = randomLeaf(parts, ctx, sourceSite(cons, ctx, site));
 			if (leaf != null) {
 				return registerLeaf(leaf, leaves);
 			}
@@ -1398,7 +1406,7 @@ final class JvmIntFusionCompiler {
 	 * keeps the form: a float limit (whose result is a Double), and a big-integer or
 	 * ratio literal, which the fast path's {@code Long} formula cannot answer.
 	 */
-	@Nullable private static RandomLeaf randomLeaf(List<LispVal> parts, JvmLispCompiler.Ctx ctx) {
+	@Nullable private static RandomLeaf randomLeaf(List<LispVal> parts, JvmLispCompiler.Ctx ctx, int sourceSite) {
 		if (!enabled(ctx) || JvmLispCompiler.hasDoubleLiteral(parts, ctx)) {
 			return null;
 		}
@@ -1410,12 +1418,12 @@ final class JvmIntFusionCompiler {
 				// baking a bad constant into the draw.
 				return null;
 			}
-			return new RandomLeaf(null, lit.value());
+			return new RandomLeaf(null, lit.value(), sourceSite);
 		}
 		if (limit instanceof am.ik.rontolisp.LispBigInteger || limit instanceof am.ik.rontolisp.LispRatio) {
 			return null;
 		}
-		return new RandomLeaf(limit, 0);
+		return new RandomLeaf(limit, 0, sourceSite);
 	}
 
 	private static Node registerLeaf(Node leaf, List<Node> leaves) {
@@ -1521,6 +1529,7 @@ final class JvmIntFusionCompiler {
 					&& op.args().stream().allMatch(arg -> reportsOnlyCallerSite(arg, callerSite));
 			case ArefLeaf leaf -> (leaf.site == 0 || leaf.site == callerSite)
 					&& reportsOnlyCallerSite(java.util.Objects.requireNonNull(leaf.indexNode), callerSite);
+			case RandomLeaf leaf -> leaf.site == 0 || leaf.site == callerSite;
 			default -> true;
 		};
 	}
@@ -1535,6 +1544,10 @@ final class JvmIntFusionCompiler {
 			case ArefLeaf leaf -> {
 				leaf.site = 0;
 				leaf.indexNode = withoutSites(java.util.Objects.requireNonNull(leaf.indexNode));
+				yield leaf;
+			}
+			case RandomLeaf leaf -> {
+				leaf.site = 0;
 				yield leaf;
 			}
 			default -> node;
@@ -1576,7 +1589,8 @@ final class JvmIntFusionCompiler {
 			}
 			case RandomLeaf leaf -> sb.append('n')
 				.append(leafIndex(leaf, leaves))
-				.append(leaf.limitExpr == null ? "#" + leaf.limitConst : "");
+				.append(leaf.limitExpr == null ? "#" + leaf.limitConst : "")
+				.append(leaf.site == 0 ? "" : "@" + leaf.site);
 			case RawLeaf leaf -> sb.append('r').append(leafIndex(leaf, leaves));
 		}
 	}
@@ -1855,10 +1869,15 @@ final class JvmIntFusionCompiler {
 		int drawn = branch(ctx, Opcode.GOTO);
 		JvmEmitHelper.patchBranch(ctx, notLong, ctx.code.size());
 		JvmEmitHelper.patchBranch(ctx, notPositive, ctx.code.size());
+		// _random may reject the limit: its throw reports the random form, whatever line
+		// the tree around it started on.
+		int outerSite = ctx.siteCurrent;
+		ctx.restoreSite(leaf.site);
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(leaf.limitParam);
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(randomHelper.index());
+		ctx.restoreSite(outerSite);
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(leaf.boxSlot);
 		JvmEmitHelper.emitRawLong(0, ctx);

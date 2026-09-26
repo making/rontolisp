@@ -14,8 +14,10 @@ once-evaluated leaves. A fused site emits its tree TWICE (fast + fallback), so i
 the 8000-byte `HugeMethodLimit` (`.kb/hot-path-method-size.md`). Structurally identical sites share
 one method (`State.byKey`) -- unless an operation reports a source site other than the call's (a
 tree spanning lines, an inlined defun's body): then the key carries the sites and the fallback marks
-each operation's, so the uncaught report names the operation's line and function
-([error-handling.md](error-handling.md)); a one-line tree stays shared and line-free. Inside the method the operand stack is the tree's own, so an overflow
+each operation's -- and the prologue a `random` draw's, around the `_random` call that may reject
+its limit -- so the uncaught report names the operation's line and function
+([error-handling.md](error-handling.md)); a one-line tree stays shared and line-free. Inside the
+method the operand stack is the tree's own, so an overflow
 bail through the `ArithmeticException` handler (which discards the stack) cannot disturb an
 enclosing expression's pending operands.
 

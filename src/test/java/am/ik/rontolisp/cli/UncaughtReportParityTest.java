@@ -307,6 +307,18 @@ class UncaughtReportParityTest {
 				""");
 		assertSameReport(multiline, "Unhandled condition: *: The value \"x\" is not of type NUMBER",
 				"  at " + multiline + ":3 in F");
+		// A random draw is the prologue's, not an operation's: a limit _random rejects
+		// still reports the random form.
+		Path random = write("fused-random.lisp", """
+				(defun draw (n a b)
+				  (+ (* a b)
+				     (random n)))
+
+				(print (< (draw 10 2 3) 16))
+				(draw 0 2 3)
+				""");
+		assertSameReport(random, "Unhandled condition: RANDOM: The value 0 is not of type REAL",
+				"  at " + random + ":3 in DRAW");
 	}
 
 	@Test
