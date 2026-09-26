@@ -195,7 +195,7 @@ final class WasmDesignatorCall {
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(restSlot);
 		}
-		ctx.writer.write(callOp);
+		ctx.writer.write(WasmUncaughtLocations.tailCallOp(ctx, tail, this.target.name()));
 		ctx.writer.writeUnsignedLeb128(this.target.funcIndex());
 	}
 

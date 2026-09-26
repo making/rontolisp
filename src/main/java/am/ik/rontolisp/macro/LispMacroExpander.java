@@ -35731,7 +35731,10 @@ public final class LispMacroExpander {
 			blockParts.add(new LispSymbol(entry.getKey()));
 			blockParts.addAll(e.body());
 			lambdaParts.add(listToCons(blockParts));
+			// The local function stands for its definition, so a compiled program's
+			// report places it there (.kb/source-positions.md, Half 2).
 			LispVal lambda = listToCons(lambdaParts);
+			SourceProvenance.inheritWhenCompiling((LispCons) defs.get(i - 1), lambda);
 			if (recursive) {
 				// labels: the lambdas see every sibling; bind nil first, setq after.
 				LispVal rewritten = rewriteLocalCalls(lambda, fnVars);
@@ -35795,7 +35798,9 @@ public final class LispMacroExpander {
 			letParts.add(LispNil.INSTANCE);
 		}
 		letParts.addAll(rewrittenBody);
-		return listToCons(letParts);
+		LispVal expansion = listToCons(letParts);
+		SourceProvenance.inheritWhenCompiling(cons, expansion);
+		return expansion;
 	}
 
 	/** Records which of the given names occur as a symbol anywhere in the tree. */
@@ -35819,6 +35824,19 @@ public final class LispMacroExpander {
 	 * name shadows the outer one for its scope).
 	 */
 	private static LispVal rewriteLocalCalls(LispVal form, java.util.Map<String, LispSymbol> fns) {
+		// A rewritten form stands for the one it replaces: on the compile path it keeps
+		// that position (.kb/source-positions.md, Half 2), or every form around a local
+		// call would lose the line a compiled program's report gives for a condition
+		// inside it. The interpreter's forms are left as they were: its report walks
+		// its own frames, which a located copy here would re-attribute.
+		LispVal rewritten = rewriteLocalCallsHere(form, fns);
+		if (form instanceof LispCons cons) {
+			SourceProvenance.inheritWhenCompiling(cons, rewritten);
+		}
+		return rewritten;
+	}
+
+	private static LispVal rewriteLocalCallsHere(LispVal form, java.util.Map<String, LispSymbol> fns) {
 		if (fns.isEmpty() || !(form instanceof LispCons cons)) {
 			return form;
 		}

@@ -22,6 +22,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.Version;
 import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
+import am.ik.rontolisp.codegen.wasm.WasmReportLocations;
 import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.HostBoundary;
 import am.ik.rontolisp.compiler.HostGlueEmitter;
@@ -221,6 +222,8 @@ public final class RontoLispCli {
 					options.contains("--host-random"), options.contains("--host-fetch"),
 					options.contains("--reentrant"),
 					options.contains("--host-boundary") ? HostBoundary.parse(options.get("--host-boundary")) : null,
+					options.contains("--report-locations")
+							? WasmReportLocations.parse(options.get("--report-locations")) : null,
 					JvmArtifactOptions.from(options), inputFile, sourceLanguage, standards);
 		}
 		else {
@@ -237,6 +240,11 @@ public final class RontoLispCli {
 			if (options.contains("--reentrant")) {
 				throw new UnsupportedOperationException(
 						"--reentrant is a WASM module contract (overlapped JSPI calls), so it needs -o <file>.wasm");
+			}
+			if (options.contains("--report-locations")) {
+				throw new UnsupportedOperationException("--report-locations chooses what a compiled wasm-GC module"
+						+ " spends on its uncaught report, so it needs -o <file>.wasm (the interpreter always"
+						+ " prints the location lines)");
 			}
 			if (options.contains("--native")) {
 				throw new UnsupportedOperationException(
@@ -601,12 +609,13 @@ public final class RontoLispCli {
 			OptimizeLevel optimize, boolean noGc, @Nullable NativeTarget nativeTarget, boolean simd, boolean blas,
 			boolean gpu, boolean parallel, boolean noPrune, boolean noMain, boolean wit, boolean jsGlue,
 			boolean hostRandom, boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary,
-			JvmArtifactOptions jvmArtifact, @Nullable String entryFile, @Nullable String sourceLanguage,
-			SourceStandards standards) {
+			@Nullable WasmReportLocations reportLocations, JvmArtifactOptions jvmArtifact, @Nullable String entryFile,
+			@Nullable String sourceLanguage, SourceStandards standards) {
 		CompileDiagnostics.recording(() -> {
 			compileRecorded(source, baseDir, systemPath, dists, declaredFeatures, outputFile, dynamic, component,
 					noWasi, optimize, noGc, nativeTarget, simd, blas, gpu, parallel, noPrune, noMain, wit, jsGlue,
-					hostRandom, hostFetch, reentrant, hostBoundary, jvmArtifact, entryFile, sourceLanguage, standards);
+					hostRandom, hostFetch, reentrant, hostBoundary, reportLocations, jvmArtifact, entryFile,
+					sourceLanguage, standards);
 			return null;
 		});
 	}
@@ -616,8 +625,8 @@ public final class RontoLispCli {
 			OptimizeLevel optimize, boolean noGc, @Nullable NativeTarget nativeTarget, boolean simd, boolean blas,
 			boolean gpu, boolean parallel, boolean noPrune, boolean noMain, boolean wit, boolean jsGlue,
 			boolean hostRandom, boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary,
-			JvmArtifactOptions jvmArtifact, @Nullable String entryFile, @Nullable String sourceLanguage,
-			SourceStandards standards) {
+			@Nullable WasmReportLocations reportLocations, JvmArtifactOptions jvmArtifact, @Nullable String entryFile,
+			@Nullable String sourceLanguage, SourceStandards standards) {
 		// --native is the wasm-GC backend's WASI Preview 1 command module, precompiled
 		// and appended to a runner stub: every flag that asks for a DIFFERENT module is
 		// refused by name rather than half-honoured, and so is an -o name that says
@@ -757,6 +766,14 @@ public final class RontoLispCli {
 					+ " already) or --no-gc (which has no packed array to carry a body in)"
 					+ " -- e.g. -o out.wasm --no-wasi --host-boundary=" + HostBoundary.ENVELOPE.spelling());
 		}
+		// --report-locations buys the wasm-GC entry's uncaught report its location lines;
+		// the interpreter always prints them and --no-gc has no report to put them under.
+		// Refused rather than ignored, like the flags above.
+		if (reportLocations != null && (!wasmOutput || noGc)) {
+			throw new UnsupportedOperationException("--report-locations reaches a wasm-GC output only (-o out.wasm,"
+					+ " --component or --native, without --no-gc): it chooses what the module spends on the location"
+					+ " lines under its uncaught report. The interpreter always prints them");
+		}
 		// --reentrant relaxes the wasm-GC reactor's one-call-at-a-time contract, so it
 		// means nothing anywhere else; the finer guards (needs a suspending import,
 		// no streaming boundary, no --dynamic) live in the compiler, next to the
@@ -878,6 +895,7 @@ public final class RontoLispCli {
 					// --native: fetch is the runner's (HostFetchLibrary's runner shape).
 					.runnerFetch(nativeTarget != null)
 					.reentrant(reentrant)
+					.reportLocations(reportLocations)
 					.runtimeFeatures(features.names())
 					.build();
 				bytes = compiler.compile(program);
@@ -1317,6 +1335,14 @@ public final class RontoLispCli {
 		this.out.println("                     Packed vec: arrays are bump-allocated and never freed; reclaim");
 		this.out.println("                     with rontolisp:with-arena or use the -into kernels in hot loops.");
 		this.out.println("                     Add --component for a compact typed component-model wrap.");
+		this.out.println("  --report-locations=G");
+		this.out.println("                     With a wasm-GC output (.wasm, --component, --native): print where");
+		this.out.println("                     an uncaught condition happened under its report, as the");
+		this.out.println("                     interpreter does. Off by default; costs bytes in every function");
+		this.out.println("                     read from a file, and only a module in exception-handling mode");
+		this.out.println("                     (handler-case & co.) has a report to put the lines under");
+		this.out.println("                       function  the function and the line its definition starts on");
+		this.out.println("                       line      the innermost form, like the interpreter");
 		this.out.println("  --simd             Accelerate the vec: and linalg: kernels with hardware SIMD");
 		this.out.println("                     JVM (.class): route to the jdk.incubator.vector bridge (run with");
 		this.out.println("                     java --add-modules jdk.incubator.vector). A runtime without the");

@@ -64,7 +64,7 @@ final class WasmApplyCompiler {
 				}
 				WasmExprCompiler
 					.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.applyAlignedRestExpr(cons, required), ctx);
-				ctx.writer.write(callOp);
+				ctx.writer.write(WasmUncaughtLocations.tailCallOp(ctx, tail, target));
 				ctx.writer.writeUnsignedLeb128(fi.funcIndex());
 				return;
 			}
@@ -108,7 +108,7 @@ final class WasmApplyCompiler {
 						emitNullSafeCell(ctx, 1);
 					}
 				}
-				ctx.writer.write(callOp);
+				ctx.writer.write(WasmUncaughtLocations.tailCallOp(ctx, tail, target));
 				ctx.writer.writeUnsignedLeb128(fi.funcIndex());
 				return;
 			}
