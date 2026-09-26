@@ -67,6 +67,44 @@ stubs to hold fixed function indices, JVM needs none.
   on both compile paths and in the CLI/playground before the tree-shaker; only `(boundp (intern ...))`
   opens it (`.kb/compile-time-boundp.md`).
 
+## Argument counts
+
+**Invariant: a wrong argument count inside a compiled `eval` is the interpreter's `program-error`,
+with its text, on both backends** (2026-09-26). Pinned by ci-spec
+`eval-wrong-arity-signals-program-error`, `JvmLispCompilerTest.
+compileAndRunEvalReportsAWrongArgumentCountAsTheInterpreterDoes`, `WasmLispCompilerIntegrationTest.
+evalReportsAWrongArgumentCountAsTheInterpreterDoes`.
+
+- **A registered function gets EVERY argument form evaluated** and `_apply` hands the list to the
+  spread dispatcher, whose case guard (`_arityChk` / `_arity_chk`) judges the count and names the
+  operator ([error-handling.md](error-handling.md), "A wrong argument COUNT"). The registry's
+  arity used to be the number of forms `_eval` evaluated, padding with nil and dropping the
+  surplus: `(car 1 2)` raised a type-error on `1`, `(cons 1)` answered `(1)`.
+- **`= < > <= >= /=` chain in `_eval`** (`comparisonChain` / `emitComparisonChain`): their wrappers
+  stay binary, since a sort predicate is a two-argument call and a variadic wrapper would cons a
+  rest list per comparison, so the arm evaluates every argument and tests adjacent pairs (every
+  pair for `/=`) through the binary wrapper. Without it the first bullet would have turned the old
+  "extra arguments ignored" (`(< 1 3 2)` => T) into a count error. `(<)` reports `< expects at
+  least 1 argument` through `_arityChk` with the operator's shape; on wasm the shape carries the
+  `<` wrapper's funcId when it is in the named set, and the call traps where the module reports
+  no count (no EH landing pad).
+- **`apply` is a catalog wrapper** (`BuiltinFunctionWrappers.applyWrapper`, `(f a &rest r)`), so
+  `eval` reaches it through the registry like any name and the report says `APPLY expects at least
+  2 arguments`; it also made `#'apply` compile. It refuses a last argument that is no proper list
+  with the interpreter's `APPLY: last argument must be a list`. `apply` was unknown inside `eval`
+  before, which is why `(eval '(apply #'car '(1 2)))` answered nil.
+- **An interpreted closure checks its count only without a `&` marker** in its lambda list: the
+  runtime `lambda` binds such a list positionally (documented), so its parameter count is no
+  count a call must match. The check is `_arityChk(argList, 2 * params)` in `_apply`'s closure
+  arm; on wasm it exists only where `_arity_chk` does.
+- **What a fixed-arity wrapper now reports** instead of silently dropping: `find` / `find-if` with
+  `:test`/`:key`, `sort` with `:key`, `make-list` with `:initial-element` (`FIND expects 2
+  arguments, got 4`), the same answer `(funcall #'find ...)` gives compiled. Most sequence
+  wrappers already take their keywords.
+- **Size** (2026-09-26, `--class-name P` / wasm Preview 1 bytes): `(print (eval '(+ 1 2)))`
+  317,887 -> 319,303 JVM, 247,064 -> 247,775 wasm; the same under `handler-case` 449,779 ->
+  451,309 / 375,740 -> 376,831. A program without `eval` is unchanged.
+
 ## Top-level global mirroring
 
 When `usesEval`, a top-level `setq`/`defvar`/`defparameter`/`defconstant` (`Ctx.topLevel`) also calls

@@ -18565,6 +18565,43 @@ cases:
       :PLAIN
       ((1 . 2) (3 . 4) 5 ((1 . 2)))
 
+  # The same count inside a compiled eval (.kb/eval-runtime.md): a registered
+  # function gets every argument form evaluated and the dispatcher judges the count
+  # (the runtime used to evaluate exactly the registered arity, so (car 1 2) raised a
+  # type-error on 1 and (cons 1) answered (1)); apply is the catalog's wrapper, so it
+  # is reachable and named; an eval-built closure without a lambda-list keyword is
+  # checked; comparisons chain over every argument instead of ignoring the surplus.
+  - name: eval-wrong-arity-signals-program-error
+    source: |
+      (defun ci-ev-one (x) x)
+      (print (handler-case (eval '(apply #'car '(1 2))) (program-error (c) (princ-to-string c)) (error (c) :plain)))
+      (print (handler-case (eval '(car 1 2)) (program-error (c) (princ-to-string c)) (error (c) :plain)))
+      (print (handler-case (eval '(cons 1)) (program-error (c) (princ-to-string c)) (error (c) :plain)))
+      (print (handler-case (eval '(ci-ev-one 1 2)) (program-error (c) (princ-to-string c)) (error (c) :plain)))
+      (print (handler-case (eval '(apply #'+)) (program-error (c) (princ-to-string c)) (error (c) :plain)))
+      (print (handler-case (eval '(<)) (program-error (c) (princ-to-string c)) (error (c) :plain)))
+      (print (handler-case (eval '((lambda (x) x) 1 2)) (program-error (c) (princ-to-string c)) (error (c) :plain)))
+      (print (handler-case (eval '(progn (defun ci-ev-two (a b) (list a b)) (ci-ev-two 1))) (program-error (c) (princ-to-string c)) (error (c) :plain)))
+      (print (handler-case (eval '(apply #'list 1 2)) (program-error (c) :pe) (error (c) (princ-to-string c))))
+      (print (list (eval '(apply #'cons '(1 2))) (eval '(apply #'+ 1 2 '(3 4))) (eval '(apply 'list '()))
+                   (eval '(< 1 3 2)) (eval '(<= 1 2 2 3)) (eval '(/= 1 2 1)) (eval '(/= 1 2 3)) (eval '(= 4))
+                   (eval '(funcall (lambda (a &optional b) (list a b)) 1))))
+      (print (list (funcall #'apply #'+ 1 2 '(3 4)) (mapcar #'apply (list #'+ #'*) '((1 2) (3 4)))))
+      (print (handler-case (funcall #'apply #'+) (program-error (c) (princ-to-string c)) (error (c) :plain)))
+    expected: |
+      "CAR expects 1 argument, got 2"
+      "CAR expects 1 argument, got 2"
+      "CONS expects 2 arguments, got 1"
+      "Function expects 1 argument, got 2"
+      "APPLY expects at least 2 arguments, got 1"
+      "< expects at least 1 argument, got 0"
+      "Function expects 1 argument, got 2"
+      "Function expects 2 arguments, got 1"
+      "APPLY: last argument must be a list"
+      ((1 . 2) 10 NIL NIL T NIL T T (1 NIL))
+      (10 (3 12))
+      "APPLY expects at least 2 arguments, got 1"
+
   # Applying a value that names no function is the interpreter's condition on every
   # backend (.kb/error-handling.md): a type-error "Not a function: <prin1>" for a
   # non-designator, an undefined-function for a symbol -- NIL included -- no function

@@ -5448,11 +5448,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		// program-error instance may have no representation, and the arm stays the
 		// `unreachable` it was -- so a module that reports nothing is byte-identical,
 		// down to the five interned message pieces this does not add.
+		SortedMap<Integer, String> arityNamedFuncIds = this.emitsArityOpening
+				? arityOperatorFuncIds(defuns, dispatchableFuncIds, arityNamedCallees) : new TreeMap<>();
 		WasmRuntimeBuilder.ArityReport arityReport = arityReport(
 				ehMode && hasLandingPad && this.usesInstances
 						&& (!indirectCallArities.isEmpty() || usesApplyRuntime || this.emitsArityChk),
-				closRegistry, stringTable, layoutAddresses, this.emitsArityOpening
-						? arityOperatorFuncIds(defuns, dispatchableFuncIds, arityNamedCallees) : new TreeMap<>());
+				closRegistry, stringTable, layoutAddresses, arityNamedFuncIds);
 		// The guard the SPREAD cases and the literal apply call sites share. Its slot was
 		// reserved in the pre-pass (userFuncBase() shifts by it), so a module that
 		// reserved one and turns out to have no program-error representation to throw
@@ -5716,7 +5717,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		final int funNameBase = funNameCount == 0 ? -1
 				: stringTable.appendReaderOwnedBlobUnaligned(funNameRows.toByteArray());
 		if (usesEval) {
-			WasmEvalRuntimeBuilder.SpecialFormOffsets offsets = WasmEvalRuntimeBuilder.SpecialFormOffsets.builder()
+			WasmEvalRuntimeBuilder.SpecialFormOffsets.Builder offsetsBuilder = WasmEvalRuntimeBuilder.SpecialFormOffsets
+				.builder()
 				.add(stringTable, LispNames.QUOTE)
 				.add(stringTable, LispNames.IF)
 				.add(stringTable, LispNames.PROGN)
@@ -5758,10 +5760,27 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(stringTable, LispNames.PUSH)
 				.add(stringTable, LispNames.POP)
 				.add(stringTable, LispNames.FUNCTION)
-				.add(stringTable, LispNames.SYMBOL_FUNCTION)
-				.build();
+				.add(stringTable, LispNames.SYMBOL_FUNCTION);
+			for (String operator : WasmEvalRuntimeBuilder.COMPARISON_OPERATORS) {
+				offsetsBuilder.add(stringTable, operator);
+			}
+			WasmEvalRuntimeBuilder.SpecialFormOffsets offsets = offsetsBuilder.build();
+			// The shape an operator-less comparison reports through names the operator
+			// when the report can (its wrapper's funcId is in the named set).
+			Map<String, Integer> comparisonShapes = new HashMap<>();
+			for (String operator : WasmEvalRuntimeBuilder.COMPARISON_OPERATORS) {
+				int funcId = -1;
+				for (Map.Entry<Integer, String> named : arityNamedFuncIds.entrySet()) {
+					if (named.getValue().equals(operator)) {
+						funcId = named.getKey();
+					}
+				}
+				comparisonShapes.put(operator, WasmRuntimeBuilder.arityShape(1, true, funcId));
+			}
+			WasmEvalRuntimeBuilder.Comparisons comparisons = new WasmEvalRuntimeBuilder.Comparisons(arityChkIndex,
+					comparisonShapes);
 			envLookupBody = WasmEvalRuntimeBuilder.buildEnvLookupBody();
-			evalBody = WasmEvalRuntimeBuilder.buildEvalBody(offsets, this.usesIdentityHashTables);
+			evalBody = WasmEvalRuntimeBuilder.buildEvalBody(offsets, comparisons, this.usesIdentityHashTables);
 			storeBody = WasmEvalRuntimeBuilder.buildStoreBody(offsets, this.usesIdentityHashTables);
 		}
 		else {
@@ -5772,7 +5791,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// _apply exists whenever the apply runtime does; without the _eval interpreter
 		// its body skips the $fenv and interpreted-closure arms (nothing can create
 		// either without _eval/_store).
-		applyBody = usesApplyRuntime ? WasmEvalRuntimeBuilder.buildApplyBody(usesEval, this.usesIdentityHashTables)
+		applyBody = usesApplyRuntime
+				? WasmEvalRuntimeBuilder.buildApplyBody(usesEval, arityChkIndex, this.usesIdentityHashTables)
 				: WasmEvalRuntimeBuilder.buildApplyStub();
 
 		// The symbol-API helper bodies (always emitted) embed the offset of the symbol

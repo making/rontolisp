@@ -2805,6 +2805,14 @@ public final class JvmLispCompiler implements LispCompiler {
 				.functions(functions)
 				.complexValues(usesComplex)
 				.hasComplexField(hasComplexField)
+				// _arityChk comes with _apply (reportsCount below), and only then does
+				// the
+				// runtime reference it
+				.arityChkRef(usesApplyRuntime ? cp.addMethodref(thisClass,
+						cp.addNameAndType(cp.addUtf8(JvmRuntimeBuilder.ARITY_CHK_NAME),
+								cp.addUtf8(JvmRuntimeBuilder.ARITY_CHK_DESC)))
+						: null)
+				.arityOperators(arityOperators)
 				.build();
 			if (usesEval) {
 				evalCode = JvmEvalRuntimeBuilder.buildEval(ec);
