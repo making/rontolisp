@@ -142,13 +142,15 @@ class RontoLispCliStreamsTest {
 		// The interpreter's half of the cross-backend contract: the condition's report,
 		// once, on standard error -- not the 16 (212 for a cl-postgres connect) frames
 		// of LispEvaluator the default handler used to print -- and under it where it
-		// happened. The program's own output still comes out.
+		// happened. The program's own output still comes out. A compiled class and jar
+		// print the same lines.
 		Path program = this.tempDir.resolve("boom.lisp");
 		Files.writeString(program, "(print \"before\")\n(error \"boom: ~a\" 42)\n");
 		String[] result = runReporting(program.toString());
 		assertThat(result[0]).isEqualTo("1");
 		assertThat(result[1]).isEqualTo("\"before\"\n");
 		assertThat(result[2].lines()).containsExactly("Unhandled condition: boom: 42", "  at " + program + ":2");
+		assertCompiledRunsReport(program, result[2]);
 	}
 
 	@Test
@@ -177,6 +179,7 @@ class RontoLispCliStreamsTest {
 		assertThat(result[0]).isEqualTo("1");
 		assertThat(result[2].lines()).containsExactly("Unhandled condition: parse-integer: junk in string \"x\"",
 				"  at " + program + ":5 in APP::PARSE");
+		assertCompiledRunsReport(program, result[2]);
 	}
 
 	@Test
@@ -254,12 +257,41 @@ class RontoLispCliStreamsTest {
 		assertThat(result[2].lines()).containsExactly("Unhandled condition: no price for ABC", "  at " + program + ":3",
 				"  in CURRENT-PRICE (async), awaited at " + program + ":7",
 				"  in PORTFOLIO (async), awaited at " + program + ":9");
+		assertCompiledRunsReport(program, result[2]);
+	}
+
+	/**
+	 * The JVM backend's half of the location lines: the program compiled to a
+	 * {@code .class} and to a program {@code .jar}, each run the way its user runs it --
+	 * {@code java -cp dir Prog}, {@code java -jar prog.jar} -- reports on standard error
+	 * exactly what the interpreter did, and exits 1. The launcher's own
+	 * {@code Exception in thread "main"} echo is the host's line, not the report's, and
+	 * is left out of the comparison.
+	 */
+	private void assertCompiledRunsReport(Path program, String interpreted) throws Exception {
+		Path classDir = Files.createDirectories(this.tempDir.resolve("class-out"));
+		runCli("", program.toString(), "-o", classDir.resolve("Prog.class").toString());
+		Path jar = this.tempDir.resolve("prog.jar");
+		runCli("", program.toString(), "-o", jar.toString());
+		for (List<String> command : List.of(List.of("-cp", classDir.toString(), "Prog"),
+				List.of("-jar", jar.toString()))) {
+			List<String> java = new java.util.ArrayList<>();
+			java.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
+			java.addAll(command);
+			Process process = new ProcessBuilder(java).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+			String err = new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
+			assertThat(process.waitFor()).as(String.join(" ", command)).isEqualTo(1);
+			assertThat(err.lines().filter(line -> !line.startsWith("Exception in thread ")))
+				.as(String.join(" ", command))
+				.containsExactlyElementsOf(interpreted.lines().toList());
+		}
 	}
 
 	@Test
 	void aProgramWithNoFileReportsTheLineAlone() {
 		// -e names no file, so there is nothing to locate against: the report is the one
-		// line it always was.
+		// line it always was -- on the compiled backends too
+		// (UncaughtReportParityTest#aProgramWithNothingLocatedCompilesAsItAlwaysDid).
 		String[] result = runReporting("-e", "(defun f (x) (car x)) (f 1)");
 		assertThat(result[0]).isEqualTo("1");
 		assertThat(result[2].lines()).containsExactly("Unhandled condition: CAR: The value 1 is not of type LIST");

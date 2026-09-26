@@ -42,6 +42,22 @@ public final class BranchRelaxer {
 	 */
 	public static void relax(List<Integer> code, List<int[]> deferredBranches,
 			List<ByteCodeWriter.ExceptionTableEntry> exceptionTable) {
+		relax(code, deferredBranches, exceptionTable, new ArrayList<>());
+	}
+
+	/**
+	 * Relaxes {@code code} in place, moving the method's line numbers with its
+	 * instructions. No-op when {@code deferredBranches} is empty.
+	 * @param code the method body bytes, one int per byte
+	 * @param deferredBranches the branches whose patch overflowed the short encoding:
+	 * {@code {branchPos, targetPos}} pairs recorded instead of being written
+	 * @param exceptionTable the method's exception table entries; start/end/handler
+	 * positions are remapped in place
+	 * @param lineNumbers the method's {@code LineNumberTable} entries; each start
+	 * position is remapped in place (it must be an instruction boundary)
+	 */
+	public static void relax(List<Integer> code, List<int[]> deferredBranches,
+			List<ByteCodeWriter.ExceptionTableEntry> exceptionTable, List<ByteCodeWriter.LineNumberEntry> lineNumbers) {
 		if (deferredBranches.isEmpty()) {
 			return;
 		}
@@ -135,6 +151,10 @@ public final class BranchRelaxer {
 			ByteCodeWriter.ExceptionTableEntry e = exceptionTable.get(i);
 			exceptionTable.set(i, new ByteCodeWriter.ExceptionTableEntry(remap(newPos, e.startPc()),
 					remap(newPos, e.endPc()), remap(newPos, e.handlerPc()), e.catchType()));
+		}
+		for (int i = 0; i < lineNumbers.size(); i++) {
+			ByteCodeWriter.LineNumberEntry e = lineNumbers.get(i);
+			lineNumbers.set(i, new ByteCodeWriter.LineNumberEntry(remap(newPos, e.startPc()), e.lineNumber()));
 		}
 	}
 

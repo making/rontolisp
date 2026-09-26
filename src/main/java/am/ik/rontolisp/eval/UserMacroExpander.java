@@ -492,7 +492,13 @@ public final class UserMacroExpander {
 			case LispCons cons when cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name()) -> cons;
 			case LispCons cons -> null;
 			default -> node;
-		}, car -> requalifyShadowedClNames(car, macroEval), (cell, car, cdr) -> new LispCons(car, cdr));
+		}, car -> requalifyShadowedClNames(car, macroEval),
+				// Identity-preserving (.kb/source-positions.md): nearly every cell comes
+				// back unchanged, and copying them all dropped the source position of
+				// every
+				// form a macro call sat in -- the whole defun around it.
+				(cell, car, cdr) -> car == cell.car() && cdr == cell.cdr() ? cell
+						: SourceProvenance.inherit(cell, new LispCons(car, cdr)));
 	}
 
 	/**
@@ -1331,7 +1337,10 @@ public final class UserMacroExpander {
 		// macro call (or an atom, which needs no further walking).
 		while (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 				&& macroEval.isUserMacro(sym.name())) {
-			form = macroEval.expandUserMacro(cons);
+			// The expansion stands where the call stood: it keeps the call's position
+			// (.kb/source-positions.md, "Half 2"), so code a macro built still reports
+			// the line of the call that built it.
+			form = SourceProvenance.inherit(cons, macroEval.expandUserMacro(cons));
 		}
 		// Then the operator's compiler macro, at most ONCE: the standard shape rewrites a
 		// call into a call of the SAME function with a better argument (cl-ppcre's
@@ -1343,10 +1352,10 @@ public final class UserMacroExpander {
 				&& macroEval.hasCompilerMacro(op.name())) {
 			LispVal expansion = macroEval.expandCompilerMacro(call);
 			if (expansion != form) {
-				form = expansion;
+				form = SourceProvenance.inherit(call, expansion);
 				while (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 						&& macroEval.isUserMacro(sym.name())) {
-					form = macroEval.expandUserMacro(cons);
+					form = SourceProvenance.inherit(cons, macroEval.expandUserMacro(cons));
 				}
 			}
 		}

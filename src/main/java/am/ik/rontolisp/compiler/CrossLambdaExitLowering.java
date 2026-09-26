@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.SourceProvenance;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -367,8 +368,8 @@ public final class CrossLambdaExitLowering {
 			blockParts.add(parts.get(0)); // block
 			blockParts.add(parts.get(1)); // name
 			blockParts.addAll(body);
-			LispVal blockForm = list(blockParts);
-			return scope.used ? wrapWithCatch(idVar, List.of(blockForm)) : blockForm;
+			LispVal blockForm = LispCons.rebuiltList(cons, blockParts);
+			return scope.used ? SourceProvenance.inherit(cons, wrapWithCatch(idVar, List.of(blockForm))) : blockForm;
 		}
 
 		private LispVal transformReturnFrom(LispCons cons, int lambdaDepth) {
@@ -385,7 +386,8 @@ public final class CrossLambdaExitLowering {
 			if (target != null && target.lambdaDepth < lambdaDepth) {
 				target.used = true;
 				this.used = true;
-				return list(List.of(new LispSymbol(LispNames.NLX_THROW_INTERNAL), target.idVar, value));
+				return SourceProvenance.inherit(cons,
+						list(List.of(new LispSymbol(LispNames.NLX_THROW_INTERNAL), target.idVar, value)));
 			}
 			// Same-function (or unmatched) return-from: keep it lexical.
 			List<LispVal> out = new ArrayList<>();
@@ -394,7 +396,7 @@ public final class CrossLambdaExitLowering {
 			if (parts.size() == 3) {
 				out.add(value);
 			}
-			return list(out);
+			return LispCons.rebuiltList(cons, out);
 		}
 
 		// A bare (return [value]) -- (return-from nil ...): targets the nearest
@@ -412,14 +414,15 @@ public final class CrossLambdaExitLowering {
 			if (target != null && target.lambdaDepth < lambdaDepth) {
 				target.used = true;
 				this.used = true;
-				return list(List.of(new LispSymbol(LispNames.NLX_THROW_INTERNAL), target.idVar, value));
+				return SourceProvenance.inherit(cons,
+						list(List.of(new LispSymbol(LispNames.NLX_THROW_INTERNAL), target.idVar, value)));
 			}
 			List<LispVal> out = new ArrayList<>();
 			out.add(parts.get(0));
 			if (parts.size() == 2) {
 				out.add(value);
 			}
-			return list(out);
+			return LispCons.rebuiltList(cons, out);
 		}
 
 		// A loop macro (loop/do/do*/dotimes/dolist/prog/prog*) or the internal %block:
@@ -439,8 +442,8 @@ public final class CrossLambdaExitLowering {
 				out.add(transform(parts.get(i), lambdaDepth));
 			}
 			scopes.pop();
-			LispVal form = list(out);
-			return scope.used ? wrapWithCatch(idVar, List.of(form)) : form;
+			LispVal form = LispCons.rebuiltList(cons, out);
+			return scope.used ? SourceProvenance.inherit(cons, wrapWithCatch(idVar, List.of(form))) : form;
 		}
 
 		// (tagbody item...) -- the tags a crossing `go` can target. Body atoms (symbols
@@ -461,9 +464,9 @@ public final class CrossLambdaExitLowering {
 				List<LispVal> out = new ArrayList<>(parts.size());
 				out.add(parts.get(0));
 				out.addAll(body);
-				return list(out);
+				return LispCons.rebuiltList(cons, out);
 			}
-			return reentryLoop(scope, body);
+			return SourceProvenance.inherit(cons, reentryLoop(scope, body));
 		}
 
 		// (prog bindings item...) = %block + let + tagbody(item...), so it establishes
@@ -493,8 +496,8 @@ public final class CrossLambdaExitLowering {
 			else {
 				out.add(reentryLoop(tagScope, body));
 			}
-			LispVal form = list(out);
-			return nilScope.used ? wrapWithCatch(idVar, List.of(form)) : form;
+			LispVal form = LispCons.rebuiltList(cons, out);
+			return nilScope.used ? SourceProvenance.inherit(cons, wrapWithCatch(idVar, List.of(form))) : form;
 		}
 
 		// (go tag): a tag established outside the lambda this go sits in cannot be
@@ -513,8 +516,8 @@ public final class CrossLambdaExitLowering {
 			TagScope target = nearestTagScope(tag);
 			if (target != null && target.lambdaDepth < lambdaDepth) {
 				this.used = true;
-				return list(List.of(new LispSymbol(LispNames.NLX_THROW_INTERNAL), target.idVar,
-						new LispInteger(target.reentryIndex(tag))));
+				return SourceProvenance.inherit(cons, list(List.of(new LispSymbol(LispNames.NLX_THROW_INTERNAL),
+						target.idVar, new LispInteger(target.reentryIndex(tag)))));
 			}
 			// Same-function (or unmatched) go: keep it lexical.
 			return cons;
@@ -623,15 +626,18 @@ public final class CrossLambdaExitLowering {
 				for (int i = 2; i < dp.size(); i++) {
 					outDef.add(transform(dp.get(i), lambdaDepth + 1));
 				}
-				outDefs.add(list(outDef));
+				outDefs.add(LispCons.rebuiltList(defCons, outDef));
 			}
 			List<LispVal> out = new ArrayList<>(parts.size());
 			out.add(parts.get(0));
-			out.add(defs.isEmpty() ? parts.get(1) : list(outDefs));
+			out.add(defs.isEmpty() ? parts.get(1) : LispCons.rebuiltList((LispCons) parts.get(1), outDefs));
 			for (int i = 2; i < parts.size(); i++) {
 				out.add(transform(parts.get(i), lambdaDepth));
 			}
-			return list(out);
+			// Identity-preserving, like structural(): local functions with no
+			// cross-lambda exit in them keep the conses SourceProvenance keyed their
+			// positions on.
+			return LispCons.rebuiltList(cons, out);
 		}
 
 		private @Nullable Scope nearestNilScope() {

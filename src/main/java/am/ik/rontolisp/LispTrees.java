@@ -133,6 +133,31 @@ public final class LispTrees {
 	}
 
 	/**
+	 * Whether any cons of a tree -- through cars and cdrs alike, quoted data included --
+	 * satisfies {@code test}. The walk keeps its own stack and visits each cell once, so
+	 * neither a long list, a deep nesting nor a {@code #n=} cycle can stop it.
+	 * @param tree the tree to search
+	 * @param test the property one cell is asked for
+	 * @return true at the first cell that has it
+	 */
+	public static boolean anyCons(LispVal tree, java.util.function.Predicate<LispCons> test) {
+		Set<LispCons> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+		Deque<LispVal> pending = new ArrayDeque<>();
+		pending.push(tree);
+		while (!pending.isEmpty()) {
+			LispVal node = pending.pop();
+			while (node instanceof LispCons cell && seen.add(cell)) {
+				if (test.test(cell)) {
+					return true;
+				}
+				pending.push(cell.car());
+				node = cell.cdr();
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * The first cell whose cdr chain leads back into itself, or {@code null} when every
 	 * list in the tree ends. A {@code #n=} reader label can close such a list
 	 * ({@code #1=(a b . #1#)}), and a walk that loops down the spine would never finish

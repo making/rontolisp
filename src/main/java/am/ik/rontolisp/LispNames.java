@@ -1603,6 +1603,22 @@ public final class LispNames {
 	public static final String CHECK_LIST_INTERNAL = "%CHECK-LIST";
 
 	/**
+	 * The {@code %check-string} internal: {@code (%check-string x 'op)} answers {@code x}
+	 * when it is a string and otherwise signals {@code op}'s {@code STRING} type-error.
+	 * Compile path only: {@code %schar-set}'s functional expansion checks a
+	 * {@code (setf char)} / {@code (setf schar)} place's string with it.
+	 */
+	public static final String CHECK_STRING_INTERNAL = "%CHECK-STRING";
+
+	/**
+	 * The {@code %check-index} internal: {@code (%check-index x 'op)} answers {@code x}
+	 * when it is an integer and otherwise signals {@code op}'s {@code INTEGER} type-error
+	 * -- unnamed when {@code op} is nil. Compile path only, like
+	 * {@link #CHECK_STRING_INTERNAL}: the subscript of a string store.
+	 */
+	public static final String CHECK_INDEX_INTERNAL = "%CHECK-INDEX";
+
+	/**
 	 * The {@code row-major-aref} built-in function (flat row-major element access,
 	 * independent of rank); also a {@code setf} place.
 	 */
@@ -3794,7 +3810,9 @@ public final class LispNames {
 	/**
 	 * The {@code %schar-set} internal helper: the {@code (setf (schar s i) c)} /
 	 * {@code (setf (char s i) c)} lowering, mutating the string in place and returning
-	 * the stored character.
+	 * the stored character. An optional fourth operand, the quoted place head
+	 * ({@code 'char}, {@code 'schar}, {@code 'aref}), names the store a wrong-type string
+	 * or subscript reports under: {@code (SETF CHAR)}; without it the report is unnamed.
 	 */
 	public static final String SCHAR_SET = "%SCHAR-SET";
 

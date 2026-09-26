@@ -4430,6 +4430,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			// --report-locations: a function read from a file notes where a condition
 			// leaving it happened (an injected runtime body is library code, never).
 			funcCtx.ucFunctionName = injectedBody ? null : defun.name;
+			funcCtx.ucWrittenIn = funcCtx.ucFunctionName;
 			WasmUncaughtLocations.open(funcCtx, defunFrames.get(defun));
 			if (defun.bodyExprs.isEmpty()) {
 				// (defun f ()) -- an empty body answers nil, per CL (dissect's no-op
@@ -4670,6 +4671,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			}
 
+			if (uncaughtLocations != null) {
+				lambdaCtx.ucWrittenIn = uncaughtLocations.lambdaWrittenIn.get(lambda.funcId());
+			}
 			WasmUncaughtLocations.open(lambdaCtx,
 					uncaughtLocations == null ? null : uncaughtLocations.lambdaSpecs.get(lambda.funcId()));
 			for (int i = 0; i < lambda.bodyExprs.size(); i++) {
@@ -7879,7 +7883,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(
 						WasmOperandTypes.buildLandingBody(am.ik.rontolisp.compiler.OperandTypes.Kind.NUMBER, ehMode));
 				// either-representation character index body (FUNC_STR_CHAR_REF)
-				code.addFunction(WasmStringRuntimeBuilder.buildStrCharRefBody());
+				code.addFunction(WasmStringRuntimeBuilder.buildStrCharRefBody(ehMode));
 				// string -> mutable character vector body (FUNC_STR_TO_CV)
 				code.addFunction(WasmStringRuntimeBuilder.buildStrToCvBody(this.usesIdentityHashTables));
 				// mutable-result string/list subseq lane body (FUNC_SUBSEQ_STR)
@@ -10124,6 +10128,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * ({@link WasmUncaughtLocations#hopText}).
 		 */
 		@Nullable String ucFunctionName;
+
+		/**
+		 * Under {@code --report-locations}, the name the program function this context's
+		 * code is WRITTEN in was defined under -- a defun's own, the one around a lambda
+		 * -- or {@code null} for none (the top level, an async body): what a lambda frame
+		 * built here is named ({@link WasmUncaughtLocations#registerLambda}).
+		 */
+		@Nullable String ucWrittenIn;
 
 		/**
 		 * The operator of the innermost form being compiled (set by

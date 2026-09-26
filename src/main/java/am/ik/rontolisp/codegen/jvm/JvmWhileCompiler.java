@@ -33,7 +33,7 @@ final class JvmWhileCompiler {
 		// comparison leaves a RAW int truth value (no boxed t/nil per iteration,
 		// .kb/jvm-int-fusion.md); any other test compiles boxed as before.
 		int exitBranchOpcode;
-		if (JvmIntFusionCompiler.tryCompileCondition(parts.get(1), ctx, className)) {
+		if (JvmExprCompiler.tryCompileFusedCondition(parts.get(1), ctx, className)) {
 			exitBranchOpcode = Opcode.IFEQ;
 		}
 		else {

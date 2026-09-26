@@ -377,6 +377,10 @@ public final class JvmClassSplitter {
 						this.close(entry.catchType(), closure);
 					}
 				}
+				if (!method.lineNumbers().isEmpty()) {
+					this.close(java.util.Objects.requireNonNull(this.definition.lineNumberTableName()).index(),
+							closure);
+				}
 				this.closures[m] = closure;
 			}
 			return closure;
@@ -558,12 +562,14 @@ public final class JvmClassSplitter {
 			for (int m : this.methods) {
 				ClassDefinition.Method method = this.scan.methods.get(m);
 				byte[] code = this.scan.sites.get(m).rewrite(method, remap);
+				List<ByteCodeWriter.LineNumberEntry> lines = method.lineNumbers();
 				writeU2(out, split ? method.access() & ~AccessFlag.ACC_PRIVATE : method.access());
 				writeU2(out, remap.get(method.name().index()));
 				writeU2(out, remap.get(method.descriptor().index()));
 				writeU2(out, 1);
 				writeU2(out, codeName);
-				writeU4(out, 2 + 2 + 4 + code.length + 2 + 8 * method.exceptionTable().size() + 2);
+				writeU4(out, 2 + 2 + 4 + code.length + 2 + 8 * method.exceptionTable().size() + 2
+						+ ClassDefinition.lineNumberTableSize(lines));
 				writeU2(out, method.maxStack());
 				writeU2(out, method.maxLocals());
 				writeU4(out, code.length);
@@ -575,7 +581,19 @@ public final class JvmClassSplitter {
 					writeU2(out, entry.handlerPc());
 					writeU2(out, entry.catchType() == 0 ? 0 : remap.get(entry.catchType()));
 				}
-				writeU2(out, 0);
+				if (lines.isEmpty()) {
+					writeU2(out, 0);
+				}
+				else {
+					writeU2(out, 1);
+					writeU2(out, remap.get(java.util.Objects.requireNonNull(definition.lineNumberTableName()).index()));
+					writeU4(out, 2 + 4 * lines.size());
+					writeU2(out, lines.size());
+					for (ByteCodeWriter.LineNumberEntry line : lines) {
+						writeU2(out, line.startPc());
+						writeU2(out, line.lineNumber());
+					}
+				}
 			}
 			writeU2(out, 0);
 			return out.toByteArray();

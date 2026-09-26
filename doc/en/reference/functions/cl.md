@@ -92,7 +92,7 @@ page.
 | `copy-readtable` | `(copy-readtable nil)` | Lite stub: always `nil` -- the reader is not readtable-driven, so there is no readtable object (`*readtable*` exists but is seeded to `nil`) |
 | `set-dispatch-macro-character` | `(set-dispatch-macro-character #\# #\7 fn)` | Lite stub: accepted and ignored, returns `t` (user dispatch macros cannot extend the reader) |
 | `readtable-case` | `(readtable-case *readtable*)` | Lite stub: always `:upcase` -- the reader always upcases unescaped symbol names, the standard readtable's mode |
-| `char` `schar` | `(char "hello" 1)` | `#\e` -- the character at a 0-based string index |
+| `char` `schar` | `(char "hello" 1)` | `#\e` -- the character at a 0-based string index (a non-string or a non-integer index signals a `type-error`) |
 | `char-code` | `(char-code #\A)` | `65` -- the code point of a character |
 | `code-char` | `(code-char 66)` | `#\B` -- the character with a given code point |
 | `char=` `char<` `char<=` `char>` `char>=` `char/=` `char-equal` | `(char< #\a #\b #\c)` | `t` (variadic comparison by code point; `char/=` = pairwise distinct, `char-equal` = case-insensitive `char=`) |

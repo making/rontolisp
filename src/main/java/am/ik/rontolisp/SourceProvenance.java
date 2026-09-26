@@ -39,8 +39,16 @@ import org.jspecify.annotations.Nullable;
  * location wins, and a frame whose cons is macro-generated (not in the table) simply
  * leaves the slot for an enclosing one to fill -- that is the "nearest enclosing located
  * cons" rule. The compile boundary then reads {@link #failureLocation(RuntimeException)}
- * and prefixes the message it reports. Compiled output is untouched: nothing here reaches
- * an emitter.
+ * and prefixes the message it reports.
+ *
+ * <p>
+ * <b>Two emitters read it, both for the uncaught report's location lines.</b> A compiled
+ * JVM class maps its instructions to the forms they came from
+ * ({@code codegen.jvm.JvmSourceSites}), and a wasm-GC module compiled with
+ * {@code --report-locations} wraps each located function in a frame that notes its line
+ * ({@code codegen.wasm.WasmUncaughtLocations}). A form with no FILE (a {@code -e}
+ * program, a library spliced from the jar) counts as unlocated for both, and an output in
+ * which nothing was located is emitted exactly as without this table.
  */
 public final class SourceProvenance {
 
@@ -64,6 +72,16 @@ public final class SourceProvenance {
 
 		final Map<LispCons, Position> positions = new IdentityHashMap<>();
 
+		/**
+		 * Each unit's line-start offsets, built on the first {@link #locate} into it. A
+		 * backend that asks for the line of every form it compiles (the JVM line numbers,
+		 * the wasm-GC {@code --report-locations}) would otherwise rescan the unit's text
+		 * from the start once per form -- quadratic in the size of the file. By identity:
+		 * {@link Unit} is a record, and comparing two whole source texts per lookup is
+		 * what this index exists to avoid.
+		 */
+		final Map<Unit, int[]> lineStarts = new IdentityHashMap<>();
+
 		/** The exception {@link #failureLocation} currently describes, by identity. */
 		@Nullable RuntimeException failing;
 
@@ -74,13 +92,9 @@ public final class SourceProvenance {
 		@Nullable LispVal topLevelForm;
 
 		/**
-		 * Each unit's line-start offsets, built on the first {@link #locate} into it. A
-		 * backend that asks for the line of every form it compiles (the wasm-GC
-		 * {@code --report-locations}) would otherwise rescan the unit's text from the
-		 * start once per form -- quadratic in the size of the file.
+		 * The location of a recorded position: what {@link SourceLocation#at} computes by
+		 * scanning the text from its start, answered through the line index.
 		 */
-		final Map<Unit, int[]> lineStarts = new IdentityHashMap<>();
-
 		SourceLocation location(Position position) {
 			Unit unit = position.unit();
 			String text = unit.text();
@@ -202,9 +216,12 @@ public final class SourceProvenance {
 	 * {@link #inherit} for the compile path only: records {@code rewritten} at the
 	 * position of {@code original} when a recording scope is open, and does nothing
 	 * otherwise -- the interpreter's forms keep exactly the {@link LocatedCons} cells
-	 * they had. For a rewrite shared with the interpreter whose positions only a compiled
-	 * program's report reads (the wasm-GC {@code --report-locations} frames), where a
-	 * located copy would move what the interpreter's own report attributes.
+	 * they had. For a cell whose position only a compiled output reads: the lambda a
+	 * local function or an async body is built as, which the wasm-GC
+	 * {@code --report-locations} frames name by its line. The interpreter never
+	 * attributes a condition to such a form (evaluating it only makes a closure), so a
+	 * located copy there would buy nothing and would have to replace the cell inside its
+	 * already-built parent.
 	 * @param original the cons the rewrite stands for
 	 * @param rewritten what replaced it
 	 */
@@ -227,6 +244,21 @@ public final class SourceProvenance {
 		}
 		Position position = state.positions.get(cons);
 		return position == null ? null : state.location(position);
+	}
+
+	/**
+	 * Whether a form has a recorded position in a NAMED file: {@link #locate} answering a
+	 * location with a file, without resolving the line.
+	 * @param form the form to ask about
+	 * @return true when it was read from a named file on this recording thread
+	 */
+	public static boolean locatedInFile(@Nullable LispVal form) {
+		State state = STATE.get();
+		if (state == null || !(form instanceof LispCons cons)) {
+			return false;
+		}
+		Position position = state.positions.get(cons);
+		return position != null && position.unit().file() != null;
 	}
 
 	/**

@@ -19,9 +19,13 @@ import org.jspecify.annotations.Nullable;
  * {@code #<function NAME>} -- the text {@code LispFunction.print()} answers for a
  * built-in and both compiled backends emit from their function-name table -- while an
  * anonymous one keeps {@code #<lambda>}
+ * @param sourced whether this is a named function whose body holds a form read from a
+ * named file -- the program's own code, which the uncaught-condition report names for the
+ * forms written in it, its lambdas' included. A function a library defines is not, so it
+ * is never the one named, as on every compiled backend
  */
 public record LispLambda(List<LispSymbol> params, @Nullable LispSymbol rest, List<LispVal> body, Scope closure,
-		@Nullable String name) implements LispVal {
+		@Nullable String name, boolean sourced) implements LispVal {
 
 	/**
 	 * Creates an anonymous fixed-arity lambda (no {@code &rest} parameter, no name).
@@ -30,7 +34,7 @@ public record LispLambda(List<LispSymbol> params, @Nullable LispSymbol rest, Lis
 	 * @param closure the captured lexical scope
 	 */
 	public LispLambda(List<LispSymbol> params, List<LispVal> body, Scope closure) {
-		this(params, null, body, closure, null);
+		this(params, null, body, closure, null, false);
 	}
 
 	/**
@@ -41,7 +45,7 @@ public record LispLambda(List<LispSymbol> params, @Nullable LispSymbol rest, Lis
 	 * @param closure the captured lexical scope
 	 */
 	public LispLambda(List<LispSymbol> params, @Nullable LispSymbol rest, List<LispVal> body, Scope closure) {
-		this(params, rest, body, closure, null);
+		this(params, rest, body, closure, null, false);
 	}
 
 	@Override
