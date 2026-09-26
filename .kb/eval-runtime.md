@@ -98,10 +98,26 @@ twins, `LispEvaluatorTest.theListAccessorsFuncallAndReduceReportAWrongArgumentCo
   runtime `lambda` binds such a list positionally (documented), so its parameter count is no
   count a call must match. The check is `_arityChk(argList, 2 * params)` in `_apply`'s closure
   arm; on wasm it exists only where `_arity_chk` does.
-- **What a fixed-arity wrapper now reports** instead of silently dropping: `find` / `find-if` with
-  `:test`/`:key`, `sort` with `:key`, `make-list` with `:initial-element` (`FIND expects 2
-  arguments, got 4`), the same answer `(funcall #'find ...)` gives compiled. Most sequence
-  wrappers already take their keywords.
+- **Every catalog wrapper takes its call position's keywords** (2026-09-26). `find` / `find-if` /
+  `find-if-not`, `sort` and `make-list` were fixed-arity (`FIND expects 2 arguments, got 4` through
+  `funcall` and inside `eval`); pinned by ci-spec `builtin-function-values-take-their-keywords`.
+  - `find` family: a keyword-less call is the plain scan; a keyword call hands the keywords to the
+    `position` wrapper of its kind and answers `(elt seq i)` -- one copy of the general keyword
+    scan instead of three (inlined, each cost a JVM program naming `#'find` 12 KB).
+  - `sort`: `(sort seq (if kw (lambda (x y) (funcall pred (funcall k x) (funcall k y))) pred))` --
+    one sort site, and the shared merge sort is stable ([sort.md](sort.md)), so it answers the
+    permutation of the call position's `stable-sort` decoration without inlining that expansion
+    (+19 KB). The interpreter's `#'sort` routes a keyword call to its `stable-sort`.
+  - `make-list`: `(make-list n :initial-element (getf kw :initial-element))`.
+  - A trap found on the way: `expandSortWithKey` expanded `stable-sort` with arrays assumed, so the
+    wrapper's keyword arm opened the JVM array runtime in EVERY program (`(print (+ 1 2))` 6,024 ->
+    9,736 bytes); it takes the backend's array gate now.
+  - Size (same method as below): `(print (eval '(+ 1 2)))` 323,818 -> 329,076 JVM, 250,901 ->
+    255,334 wasm; `(print (funcall #'sort (list 3 1 2) #'<))` 32,718 -> 34,220 / 23,148 -> 23,433;
+    `(print (funcall #'find 2 '(1 2 3)))` 14,567 -> 27,680 / 3,267 -> 3,271 (the `position`
+    wrapper now travels with it); the `apply` properness check ([error-handling.md](error-handling.md))
+    adds 565 / 454 to a `&rest`-forwarding `(apply #'list x r)` under `handler-case`.
+    `(print (+ 1 2))` unchanged (6,024 / 348).
 - **Size** (2026-09-26, `--class-name P` / wasm Preview 1 bytes): `(print (eval '(+ 1 2)))`
   317,887 -> 319,303 JVM, 247,064 -> 247,775 wasm; the same under `handler-case` 449,779 ->
   451,309 / 375,740 -> 376,831. A program without `eval` is unchanged.

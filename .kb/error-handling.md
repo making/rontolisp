@@ -1483,9 +1483,19 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   dispatchers) decided in the pre-pass, because it shifts `userFuncBase()`; a module without it is
   byte-identical. Inlining the throw instead would have cost ~100 B at every one of those sites,
   over a spread dispatcher that is one case per callable.
-  - The walk **stops at the first non-cons**, so an improper tail ends the count rather than
-    trapping on the `ref.cast` / `checkcast`: `(apply #'f '(1 . 2))` is undefined in CL and
-    answered `(f 1)` before the guard existed.
+  - The walk **stops at the first non-cons**, and a list that ends in anything but nil signals the
+    interpreter's `simple-error` `APPLY: last argument must be a list`
+    (`ClosRegistry.APPLY_IMPROPER_LIST_MESSAGE`) BEFORE the count is judged (2026-09-26): only an
+    `apply` whose last argument is no proper list builds one. JVM: a plain `RuntimeException`, as a
+    compiled `(error "...")` is; wasm: the `(nil . message)` payload of a plain `%error`. Before, a
+    computed designator was a `type-error` on the JVM and a cast-failure trap on wasm -- a dead
+    length walk in `_apply`, left over from the per-arity ladder, cast every cell ahead of the
+    dispatcher and is gone -- and a literal target answered `(f 1)`.
+  - The ALIGNED literal `apply` (a variadic target whose required parameters the leading arguments
+    cover) reaches no count check; it passes its rest tail through the same helper with the shape
+    `(0, variadic)`, for the properness alone, unless the last argument is proper by its shape
+    (`LispMacroExpander.applyListProvablyProper`: `nil`, a quoted proper list, `(list ...)`). So
+    does an eval-built closure whose lambda list has a `&` marker (no count to check).
   - The guard is why this half waited: what it found FIRST was not a user bug but a compile-path
     leak, a failing cl-ppcre scan leaving `*reg-starts*` bound past the special `let` that shadowed
     it, the phantom register arriving as a second argument to a one-parameter `:simple-calls`

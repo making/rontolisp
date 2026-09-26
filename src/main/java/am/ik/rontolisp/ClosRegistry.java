@@ -216,6 +216,14 @@ public final class ClosRegistry {
 	public static final String NOT_A_FUNCTION_MESSAGE_PREFIX = "Not a function: ";
 
 	/**
+	 * The {@code simple-error} an {@code apply} whose last argument is no proper list
+	 * signals -- {@code (apply f 1 2)}, {@code (apply f '(1 . 2))} -- before the callee
+	 * is called. The interpreter's spread, the {@code #'apply} wrapper and the compiled
+	 * backends' argument-list walk all say it.
+	 */
+	public static final String APPLY_IMPROPER_LIST_MESSAGE = "APPLY: last argument must be a list";
+
+	/**
 	 * What an arity message calls a callee that is not a built-in operator: a program's
 	 * own function, an anonymous lambda, a destructured list.
 	 */

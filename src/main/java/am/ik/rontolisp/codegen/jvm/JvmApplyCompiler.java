@@ -8,6 +8,7 @@ import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.Opcode;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles the {@code apply} built-in function. The leading arguments are taken literally
@@ -46,6 +47,17 @@ final class JvmApplyCompiler {
 				}
 				JvmExprCompiler.compileExpr(
 						am.ik.rontolisp.macro.LispMacroExpander.applyAlignedRestExpr(cons, required), ctx, className);
+				if (!am.ik.rontolisp.macro.LispMacroExpander.applyListProvablyProper(cons)) {
+					// No count can be wrong here, but the tail still has to be a proper
+					// list: _arityChk with the shape (0, variadic) walks it for that
+					// alone.
+					int tailSlot = ctx.allocTemp();
+					ctx.emit(Opcode.ASTORE);
+					ctx.emit(tailSlot);
+					emitArityGuard(ctx, className, tailSlot, 0, true, null);
+					ctx.emit(Opcode.ALOAD);
+					ctx.emit(tailSlot);
+				}
 				ctx.emit(Opcode.INVOKESTATIC);
 				ctx.emitU2(fi.methodref().index());
 				return;
@@ -145,7 +157,7 @@ final class JvmApplyCompiler {
 	 * operator when it is a built-in ({@code JvmArityOperators}).
 	 */
 	private static void emitArityGuard(JvmLispCompiler.Ctx ctx, String className, int argsSlot, int required,
-			boolean variadic, String target) {
+			boolean variadic, @Nullable String target) {
 		int shape = ctx.arityOperators.shape(required, variadic, target);
 		ctx.arityGuardShapes.add(shape);
 		MethodrefConstant chkRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),

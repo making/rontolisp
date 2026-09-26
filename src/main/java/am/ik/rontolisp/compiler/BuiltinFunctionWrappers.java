@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.Set;
 
 import am.ik.rontolisp.ArrayElementTypes;
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
@@ -679,7 +680,7 @@ public final class BuiltinFunctionWrappers {
 		LispVal spread = listToCons(List.of(new LispSymbol(LispNames.IF), r,
 				callV(LispNames.CONS, a, callV(LispNames.APPEND, callV(LispNames.BUTLAST, r), l)), l));
 		LispVal checked = listToCons(List.of(new LispSymbol(LispNames.IF), proper, callV(LispNames.APPLY, f, spread),
-				callV(LispNames.ERROR, new LispString("APPLY: last argument must be a list"))));
+				callV(LispNames.ERROR, new LispString(ClosRegistry.APPLY_IMPROPER_LIST_MESSAGE))));
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET),
 				listToCons(List.of((LispVal) listToCons(List.of(l, last)))), checked));
 		return new WrapperDef(LispNames.APPLY, List.of("f", "a", LispNames.LAMBDA_REST, "r"), List.of(body));
@@ -1355,6 +1356,96 @@ public final class BuiltinFunctionWrappers {
 		return new WrapperDef(name, List.of("a", "seq", LispNames.LAMBDA_REST, "kw"), List.of(listToCons(callParts)));
 	}
 
+	/**
+	 * Variadic wrapper for {@code find} / {@code find-if} / {@code find-if-not}. A call
+	 * with no keyword is the plain two-argument scan; a keyword call hands the keywords
+	 * to the {@code position} wrapper of the same kind and answers the element at the
+	 * index it finds. {@code find} is {@code position} answering the element
+	 * ({@code expandFind} and {@code expandPosition} are one scan), and delegating keeps
+	 * ONE copy of the general keyword scan -- inlined into each of the three it cost a
+	 * JVM program naming {@code #'find} 12 KB, and every compiled {@code eval} all three.
+	 *
+	 * <pre>
+	 * (if kw
+	 *     (let ((i (funcall #'position a seq :test ... :key ... :start ... :end ... :from-end ...)))
+	 *       (if i (elt seq i) nil))
+	 *     (find a seq))
+	 * </pre>
+	 * @param name the operator
+	 * @param item whether the operator compares an ITEM (so takes :test / :test-not)
+	 */
+	private static WrapperDef findFamily(String name, boolean item) {
+		String position = switch (name) {
+			case LispNames.FIND -> LispNames.POSITION;
+			case LispNames.FIND_IF -> LispNames.POSITION_IF;
+			case LispNames.FIND_IF_NOT -> LispNames.POSITION_IF_NOT;
+			default -> throw new IllegalArgumentException(name);
+		};
+		List<LispVal> callParts = new ArrayList<>(List.of(new LispSymbol(LispNames.FUNCALL), sharpQuote(position),
+				new LispSymbol("a"), new LispSymbol("seq")));
+		List<String> keywords = new ArrayList<>();
+		if (item) {
+			keywords.add(LispNames.TEST_KEYWORD);
+			keywords.add(LispNames.TEST_NOT_KEYWORD);
+		}
+		keywords.addAll(List.of(LispNames.KEY_KEYWORD, LispNames.START_KEYWORD, LispNames.END_KEYWORD,
+				LispNames.FROM_END_KEYWORD));
+		for (String keyword : keywords) {
+			callParts.add(new LispSymbol(keyword));
+			callParts.add(getfKw(keyword));
+		}
+		LispSymbol i = new LispSymbol("i");
+		LispVal element = listToCons(List.of(new LispSymbol(LispNames.IF), i,
+				callV(LispNames.ELT, new LispSymbol("seq"), i), LispNil.INSTANCE));
+		LispVal keyed = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of((LispVal) listToCons(List.of(i, listToCons(callParts))))), element));
+		LispVal body = listToCons(
+				List.of(new LispSymbol(LispNames.IF), new LispSymbol("kw"), keyed, call(name, "a", "seq")));
+		return new WrapperDef(name, List.of("a", "seq", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
+	/**
+	 * {@code #'sort}: {@code (lambda (seq pred &rest kw) ...)}. A {@code :key} sorts with
+	 * the predicate composed over it; the shared merge sort is stable
+	 * ({@code .kb/sort.md}), so this is the permutation the call position's
+	 * {@code stable-sort} decoration answers, without inlining that expansion into every
+	 * program naming {@code #'sort} (+19 KB on the JVM). One {@code sort} site serves
+	 * both shapes -- a second would repeat its string/vector dispatch -- and the
+	 * two-argument call, every sort's hot path, pays one test of {@code kw}.
+	 *
+	 * <pre>
+	 * (sort seq (if kw
+	 *               (let ((k (getf kw :key ... #'identity)))
+	 *                 (lambda (x y) (funcall pred (funcall k x) (funcall k y))))
+	 *               pred))
+	 * </pre>
+	 */
+	private static WrapperDef sortWrapper() {
+		LispSymbol k = new LispSymbol("k");
+		LispSymbol pred = new LispSymbol("pred");
+		LispSymbol x = new LispSymbol("x");
+		LispSymbol y = new LispSymbol("y");
+		LispVal composed = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(x, y)),
+				callV(LispNames.FUNCALL, pred, callV(LispNames.FUNCALL, k, x), callV(LispNames.FUNCALL, k, y))));
+		LispVal keyed = listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(List
+			.of((LispVal) listToCons(List.of(k, getfKwOr(LispNames.KEY_KEYWORD, sharpQuote(LispNames.IDENTITY)))))),
+				composed));
+		LispVal predicate = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("kw"), keyed, pred));
+		return new WrapperDef(LispNames.SORT, List.of("seq", "pred", LispNames.LAMBDA_REST, "kw"),
+				List.of(callV(LispNames.SORT, new LispSymbol("seq"), predicate)));
+	}
+
+	/**
+	 * {@code #'make-list}: {@code (lambda (n &rest kw) (make-list n :initial-element
+	 * (getf kw :initial-element)))} -- an absent {@code :initial-element} is nil, which
+	 * is also the default.
+	 */
+	private static WrapperDef makeListWrapper() {
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.MAKE_LIST), new LispSymbol("n"),
+				new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD), getfKw(LispNames.INITIAL_ELEMENT_KEYWORD)));
+		return new WrapperDef(LispNames.MAKE_LIST, List.of("n", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
 	// Variadic wrapper for make-array (gated with the fill-pointer array group):
 	// runtime keywords are re-extracted with getf. A :displaced-to argument selects
 	// the bare-view shape (a displaced array cannot combine with the other options),
@@ -1837,20 +1928,20 @@ public final class BuiltinFunctionWrappers {
 			// Sequence operations (compiled via macro expansion in call position)
 			unary(LispNames.LENGTH), unary(LispNames.REVERSE), unaryOptionalSecond(LispNames.LAST),
 			unaryOptionalSecond(LispNames.BUTLAST), designatorFamily(LispNames.MEMBER, true),
-			designatorFamily(LispNames.MEMBER_IF, false), binary(LispNames.FIND), binary(LispNames.FIND_IF),
-			binary(LispNames.FIND_IF_NOT), positionFamily(LispNames.POSITION, true),
-			positionFamily(LispNames.POSITION_IF, false), positionFamily(LispNames.POSITION_IF_NOT, false),
-			sequenceScanFamily(LispNames.COUNT, true, false, 1),
+			designatorFamily(LispNames.MEMBER_IF, false), findFamily(LispNames.FIND, true),
+			findFamily(LispNames.FIND_IF, false), findFamily(LispNames.FIND_IF_NOT, false),
+			positionFamily(LispNames.POSITION, true), positionFamily(LispNames.POSITION_IF, false),
+			positionFamily(LispNames.POSITION_IF_NOT, false), sequenceScanFamily(LispNames.COUNT, true, false, 1),
 			sequenceScanFamily(LispNames.COUNT_IF, false, false, 1), designatorFamily(LispNames.ASSOC, true),
 			designatorFamily(LispNames.ASSOC_IF, false), designatorFamily(LispNames.RASSOC, true),
 			designatorFamily(LispNames.RASSOC_IF, false), ternary(LispNames.ACONS), binary(LispNames.PAIRLIS),
 			unary(LispNames.COPY_ALIST), binaryOptionalThird(LispNames.GETF),
 			sequenceScanFamily(LispNames.REMOVE_DUPLICATES, true, false, 0),
 			sequenceScanFamily(LispNames.DELETE_DUPLICATES, true, false, 0), variadicNconc(), unary(LispNames.IDENTITY),
-			unary(LispNames.COPY_LIST), unary(LispNames.COPY_STRUCTURE), unary(LispNames.NREVERSE),
-			unary(LispNames.MAKE_LIST), designatorFamily(LispNames.UNION, true),
-			designatorFamily(LispNames.INTERSECTION, true), designatorFamily(LispNames.SET_DIFFERENCE, true),
-			designatorFamily(LispNames.ADJOIN, true), designatorFamily(LispNames.SUBSETP, true),
+			unary(LispNames.COPY_LIST), unary(LispNames.COPY_STRUCTURE), unary(LispNames.NREVERSE), makeListWrapper(),
+			designatorFamily(LispNames.UNION, true), designatorFamily(LispNames.INTERSECTION, true),
+			designatorFamily(LispNames.SET_DIFFERENCE, true), designatorFamily(LispNames.ADJOIN, true),
+			designatorFamily(LispNames.SUBSETP, true),
 			// every/some carry ANY number of sequences, the same as in call position,
 			// and notany/notevery are their complements over the same walk.
 			everySomeWrapper(LispNames.EVERY, true), everySomeWrapper(LispNames.SOME, false),
@@ -1866,7 +1957,7 @@ public final class BuiltinFunctionWrappers {
 			sequenceScanFamily(LispNames.SUBSTITUTE_IF, false, true, 2),
 			sequenceScanFamily(LispNames.SUBSTITUTE_IF_NOT, false, true, 2),
 			sequenceScanFamily(LispNames.NSUBSTITUTE_IF, false, true, 2),
-			sequenceScanFamily(LispNames.NSUBSTITUTE_IF_NOT, false, true, 2), reduceWrapper(), binary(LispNames.SORT),
+			sequenceScanFamily(LispNames.NSUBSTITUTE_IF_NOT, false, true, 2), reduceWrapper(), sortWrapper(),
 			variadicStableSort(), unary(LispNames.COPY_SEQ),
 			// The mapping family as first-class values (alexandria hands #'mapcar to
 			// its own combinators). Every member carries ANY number of lists, the same

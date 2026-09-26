@@ -63,6 +63,22 @@ final class WasmApplyCompiler {
 				}
 				WasmExprCompiler
 					.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.applyAlignedRestExpr(cons, required), ctx);
+				if (ctx.arityChkFuncIndex >= 0
+						&& !am.ik.rontolisp.macro.LispMacroExpander.applyListProvablyProper(cons)) {
+					// No count can be wrong here, but the tail still has to be a proper
+					// list: _arity_chk with the shape (0, variadic) walks it for that
+					// alone.
+					int tailSlot = ctx.allocTemp();
+					ctx.writer.write(Instruction.TEE_LOCAL);
+					ctx.writer.writeUnsignedLeb128(tailSlot);
+					ctx.writer.write(Instruction.I32_CONST);
+					ctx.writer.writeSignedLeb128(WasmRuntimeBuilder.arityShape(0, true, -1));
+					ctx.writer.write(Instruction.CALL);
+					ctx.writer.writeUnsignedLeb128(ctx.arityChkFuncIndex);
+					ctx.writer.write(Instruction.DROP);
+					ctx.writer.write(Instruction.GET_LOCAL);
+					ctx.writer.writeUnsignedLeb128(tailSlot);
+				}
 				ctx.writer.write(WasmUncaughtLocations.tailCallOp(ctx, tail, target));
 				ctx.writer.writeUnsignedLeb128(fi.funcIndex());
 				return;
