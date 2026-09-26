@@ -478,11 +478,10 @@ final class WasmEvalRuntimeBuilder {
 	 * {@code let}, {@code lambda}, {@code defun}, {@code function} ({@code #'}),
 	 * {@code symbol-function}, {@code cond}, {@code and}, {@code or}, {@code when},
 	 * {@code unless}, {@code while}, {@code dotimes}, {@code setq}, {@code eval}
-	 * (nested), {@code funcall} and {@code list}; variadic
-	 * {@code + - * /}; chained {@code = < > <= >= /=}; {@code car}/{@code cdr}
-	 * compositions such as {@code cadr}; and application of any registered function
-	 * (built-in wrappers and user defuns) as well as interpreted closures produced by
-	 * {@code lambda}.
+	 * (nested), {@code funcall} and {@code list}; variadic {@code + - * /}; chained
+	 * {@code = < > <= >= /=}; {@code car}/{@code cdr} compositions such as {@code cadr};
+	 * and application of any registered function (built-in wrappers and user defuns) as
+	 * well as interpreted closures produced by {@code lambda}.
 	 * @param off the string-table offsets of the special-form symbols
 	 * @param counts what the arms that check their own argument count report through
 	 * @return the encoded function body
