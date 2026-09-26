@@ -238,8 +238,15 @@ Differences from the `--gpu` library:
 Under the `java` launcher thread 0 is already parked, so no hand-over arises. A bare `.class`
 without `--enable-native-access=ALL-UNNAMED` gets the JDK's one-time warning and works; a `.jar`
 carries `Enable-Native-Access: ALL-UNNAMED` in its manifest (`JvmJarWriter`). Each compiled program
-defines its own copy into its own loader, which is why the test names a run-time class per program
-(`objc_allocateClassPair` cannot be undone).
+ships its own copy as class files named after it (`<Program>$Objc*`,
+[template-class-embedding.md](template-class-embedding.md)), which is why the test names a run-time
+class per program (`objc_allocateClassPair` cannot be undone). Verified on macOS 26.3 aarch64
+(Oracle GraalVM 25.0.3, 2026-09-27, screen locked, so clicks were `performClick:` from an
+`appkit:timer` and the close `performClose:`): `counter.lisp` counts 3 clicks and exits 0 under
+`java -jar`, the native binary, `java Counter`, `java -jar counter.jar` and `--native`; the native
+CLI and `java -jar` compile byte-identical class files. **A `native-image` of the `.jar` does NOT
+work**: `main` is thread 0 there and nothing hands it over, so the window opens and nothing is ever
+dispatched (open item).
 
 ## `--native`: the runner is the Objective-C host
 `--native -o prog` (`macos-aarch64` only: `CompileFrontend` accepts them when the native target is
@@ -369,6 +376,8 @@ via `eval/ObjcInterop`'s five entry points (the `LinalgGpu`/`LinalgGpuKernels` s
   it travels into every compiled `appkit:` program.
 
 ## Open items
+- A compiled `objc:` jar built into a native image hangs: its `main` runs the program on thread 0
+  and never parks it in the run loop (`RontoLispCli.main`'s hand-over has no compiled twin).
 - No MAIN menu (a process with no bundle sets none), so no Cmd-Q on a windowed program.
 - Callback shapes with struct or integer arguments, and block-taking selectors.
 - A variadic selector a PROGRAM declares: served only for the names in `VariadicSelectors`, and
