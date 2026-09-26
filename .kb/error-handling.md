@@ -295,6 +295,15 @@ fails. What decides the gate is whether program code can ever HOLD that instance
 - **`handler-case` counts only when some clause binds a variable its own body mentions**
   (`handlerCaseBindsCondition`); otherwise the instance never leaves the landing pad. The occurrence
   test is deliberately blunt.
+- **`handler-bind` counts unless every handler is a literal `lambda` whose body never mentions its
+  first required parameter** (`handlerBindExposesCondition`): a handler is CALLED with the instance,
+  so a `#'name`, a computed handler or a lambda list opening with `&rest`/`&optional` counts. Before
+  2026-09-26 it did not count at all, and on the compiled backends `(format t "~a" c)` in a handler
+  printed `#<TYPE-ERROR :DATUM 5 ...>` while the interpreter printed the report. Restart mode never
+  narrows the condition runtime (`conditionNarrowing`), so turning the gate on costs a handler-bind
+  program far more than a handler-case one: the `(car 5)` probe is 17,961 B on wasm-GC with a
+  handler that ignores its condition, 114,044 B with one that prints it (the handler-case twin:
+  7,357 B).
 - **`ignore-errors` counts only where a SECOND value can be read** (`receivesMultipleValues`, a
   whole-program answer): any occurrence of
   `multiple-value-bind`/`-list`/`-call`/`-setq`/`-prog1`/`nth-value`/`%mv-spill` turns it back on.

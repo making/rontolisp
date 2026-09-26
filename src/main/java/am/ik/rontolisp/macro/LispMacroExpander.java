@@ -20276,6 +20276,10 @@ public final class LispMacroExpander {
 		if (LispNames.HANDLER_CASE.equals(member)) {
 			return handlerCaseBindsCondition(form);
 		}
+		if (LispNames.HANDLER_BIND.equals(member) && handlerBindExposesCondition(form)) {
+			// A false answer falls through to the evaluated handler and body forms.
+			return true;
+		}
 		if (LispNames.IGNORE_ERRORS.equals(member)) {
 			// (ignore-errors f) -> (handler-case f (error (c) (values nil c))): the
 			// condition leaves ONLY as the secondary value, which nothing but a
@@ -20372,6 +20376,51 @@ public final class LispMacroExpander {
 				continue;
 			}
 			for (LispVal bodyForm : clauseParts.subList(2, clauseParts.size())) {
+				if (usesSymbol(bodyForm, var.name())) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a {@code handler-bind} can hand a condition VALUE to program code. Unlike a
+	 * {@code handler-case} clause, a handler is a FUNCTION the signal calls with the
+	 * instance, so it holds the condition unless it is a literal lambda whose body never
+	 * mentions its first required parameter. A named or computed handler, or a lambda
+	 * list that opens with a lambda-list keyword, counts (the safe direction); the
+	 * occurrence test is as blunt as {@link #handlerCaseBindsCondition}'s.
+	 * @param form the handler-bind form
+	 * @return whether some handler exposes the condition
+	 */
+	private static boolean handlerBindExposesCondition(LispCons form) {
+		if (!(form.cdr() instanceof LispCons rest) || !(rest.car() instanceof LispCons bindings)) {
+			// No bindings (or a malformed form, the backends' error to raise).
+			return false;
+		}
+		if (!bindings.isProperList()) {
+			return true;
+		}
+		for (LispVal binding : bindings.toList()) {
+			if (!(binding instanceof LispCons pair) || !(pair.cdr() instanceof LispCons handlerCell)) {
+				continue;
+			}
+			LispVal handler = handlerCell.car();
+			if (handler instanceof LispCons fn && fn.car() instanceof LispSymbol fnHead
+					&& LispNames.FUNCTION.equals(fnHead.name()) && fn.cdr() instanceof LispCons fnRest) {
+				handler = fnRest.car();
+			}
+			if (!(handler instanceof LispCons lambda) || !(lambda.car() instanceof LispSymbol lambdaHead)
+					|| !LispNames.LAMBDA.equals(lambdaHead.name()) || !lambda.isProperList()) {
+				return true;
+			}
+			List<LispVal> lambdaParts = lambda.toList();
+			if (lambdaParts.size() < 2 || !(lambdaParts.get(1) instanceof LispCons params)
+					|| !(params.car() instanceof LispSymbol var) || var.name().startsWith("&")) {
+				return true;
+			}
+			for (LispVal bodyForm : lambdaParts.subList(2, lambdaParts.size())) {
 				if (usesSymbol(bodyForm, var.name())) {
 					return true;
 				}
