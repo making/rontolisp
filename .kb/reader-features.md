@@ -32,6 +32,17 @@ a separate ordinary special seeded from it.
 - `Features.JVM_SERVLET` -> `rontolisp-servlet` when `-o` ends in `.war`: a servlet container owns
   the port ([[http-server]]). A feature and not an internal flag because
   `clack-handler-rontolisp` branches on features and nothing else ([[clack]]).
+- `Features.NATIVE` -> `rontolisp-native`, added in `CompileFrontend.run` when
+  `options.runnerHosted()`. The module inside a `--native` output is the ordinary Preview 1
+  build (`Features.WASM` as is -- the CLI refuses
+  `--component`/`--no-wasi`/`--no-gc` beside `--native`), so nothing in the module says
+  "native"; the RUNNER around it answers imports P1 alone lacks (`rontolisp:fetch` through
+  `rlrun-net`, `objc:`/`appkit:`/`metal:`/`scene:` through `rlobjc` on `macos-aarch64`), and no
+  existing feature could tell the two apart. Additive, like every other target-describing
+  feature. Deliberately carries no OS/architecture name -- those would have to come from
+  `--native-target`, never the compile host's `os.name` (a cross build would lie), and they flip
+  `#+unix`/`#+darwin` branches in shipped libraries ([[uiop]]). Pinned by
+  `NativeFeatureTest` (native / Preview 1 / `--component` with a native platform named anyway).
 - Pinned by `RontoLispCliTest.aComponentBuildReadsTheSourceWithTheComponentFeature`,
   `.theStreamingBoundaryReadsTheSourceWithTheBodyImportsFeature` (ONE source with a `#+`
   declaration and a `#-` fallback, compiled three ways), and

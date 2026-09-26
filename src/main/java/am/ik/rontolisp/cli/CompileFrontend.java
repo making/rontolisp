@@ -415,6 +415,17 @@ final class CompileFrontend {
 		if (wasm && noWasi && !component && !noGc && boundary.bodiesOutOfBand()) {
 			features = features.with(List.of(Features.BODY_IMPORTS));
 		}
+		// And #+rontolisp-native selects code for the RUNNER a --native executable's
+		// wasm-GC module runs inside: the module is the same Preview 1 build as ever
+		// (WASM as is), but the runner around it answers imports Preview 1 lacks --
+		// rontolisp:fetch through rlrun-net, and objc:/appkit:/metal:/scene: through
+		// rlobjc on macos-aarch64 -- so a source that wants "fetch on native, fall back
+		// on Preview 1" needs a way to tell the two apart. Additive, like every other
+		// target-describing feature; OS/architecture stay off *features* on purpose
+		// (.kb/reader-features.md).
+		if (options.runnerHosted()) {
+			features = features.with(List.of(Features.NATIVE));
+		}
 		// And LAST, whatever the user declared with --feature: names a portable library's
 		// #+ chain expects from the HOST implementation and no rontolisp target could
 		// answer for (RontoLispCli.declaredFeatures). It goes on top of the target set
