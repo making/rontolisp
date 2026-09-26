@@ -325,7 +325,9 @@ second payload reader, so both gates go broad; outside EH mode nothing is observ
 **Invariant: a signaled condition escaping the top level writes `Unhandled condition: <report>` to
 standard error -- the same line on all four backends -- then the process exits the way it always
 did.** Built from `compiler/UncaughtReport.PREFIX` at all three emission sites; the report text is
-the one `princ` writes, and nothing below changes it.
+the one `princ` writes, and nothing below changes it. Three reports still differ (`.todo/993`: a
+struct accessor on a non-instance and a typed loop's out-of-range `aref` on the JVM, a report-less
+`type-error` instance on wasm-GC).
 
 **Under it, location lines** (`UncaughtReport.atLine` / `asyncLine`, two-space indented):
 `  at FILE:LINE in FUNCTION` -- the innermost form read from a named file that the condition passed
@@ -492,9 +494,9 @@ never knew about it.** `codegen/wasm/WasmUncaughtLocations`; pinned by
   macro-written one, a signal helper) it is a plain `call`, or the call site and its function were
   lost. Disabling tail calls in frames outright was the first version and broke the
   `.kb/wasm-tail-calls.md` invariant a Scheme loop depends on (named `let` overflowed).
-- **Known divergences** (open item), from 82 programs of the JVM parity corpus with a catching
-  form appended (2026-09-26, Linux, wasmtime 49); the others' location lines matched the
-  interpreter's byte for byte:
+- **Known divergences** (`.todo/991`; the second `await`, `.todo/992`), from 82 programs of the
+  JVM parity corpus with a catching form appended (2026-09-26, Linux, wasmtime 49); the others'
+  location lines matched the interpreter's byte for byte:
   - A tail call through a function value stays a `return_call`, so a callee that is no frame (a
     built-in: `(funcall f x)` into `parse-integer`) leaves the location to the frames further out
     -- the line that called the caller, not its `funcall`. A lambda callee is a frame and names
