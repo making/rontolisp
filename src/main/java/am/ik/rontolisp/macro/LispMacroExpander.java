@@ -7221,9 +7221,10 @@ public final class LispMacroExpander {
 	// The shared copy-list: a fresh spine whose last cdr is the argument's final atom, so
 	// a dotted list copies dotted (CLHS copy-list) -- (append x nil), the lowering this
 	// replaced, walks its argument to nil and failed on the atom. A non-list signals
-	// instead of answering: the string datum keeps the helper instance-free (an
-	// (error 'type-error ...) would pull the condition-instance runtime into every
-	// program that copies a list, ~45 KB on the JVM).
+	// COPY-LIST's own type-error through the shared, instance-free %check-list funnel --
+	// the same mechanism last/reverse/append and the rest of the list consumers use --
+	// rather than a message-only (error ...) whose condition class and expected-type
+	// answered nothing.
 	private static final String COPY_LIST_RUNTIME_SOURCE = """
 			(setq %copy-list-runtime
 			  (lambda (%cpl-x)
@@ -7236,9 +7237,7 @@ public final class LispMacroExpander {
 			            (setq %cpl-cur (cdr %cpl-cur)))
 			          (rplacd %cpl-tail %cpl-cur)
 			          %cpl-head)
-			        (if (null %cpl-x)
-			            nil
-			            (error "The value ~s is not of type LIST" %cpl-x)))))
+			        (%check-list %cpl-x 'copy-list))))
 			""";
 
 	/**
