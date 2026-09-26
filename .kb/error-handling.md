@@ -859,10 +859,12 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
 | `(last 5)`, `(mapcar #'1+ 5)` and `mapc`/`mapcan`/`maplist`/`mapl`/`mapcon` | `LAST:` / `MAPCAR: ... LIST` |
 | `(rplaca 5 0)`, `(rplacd nil 0)`, `(setf (car 5) 0)` | `RPLACA:` / `RPLACD: ... CONS` |
 | `(loop for x in 5 ...)`, `(loop for x in '(1 2 . 3) ...)` | `ENDP: ... LIST` |
+| `(char 5 0)`, `(schar 'foo 0)`, `(char (vector #\a) 0)` | `CHAR:` / `SCHAR: ... STRING` |
+| `(setf (char s nil) c)`, `(setf (schar 5 0) c)` | `(SETF CHAR): ... INTEGER` / `(SETF SCHAR): ... STRING` |
 
 - **FUNNEL-TYPED operators** (`OperandTypes.FUNNEL_TYPE`: `CAR`, `CDR`, `NTHCDR`, `ENDP`, `AREF`,
-  `(SETF AREF)`, `CHAR`, `SCHAR`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
-  (new kinds `LIST`, `RATIONAL`) -- except that a to-double funnel (`NUMBER`) there is a packed float
+  `(SETF AREF)`, `CHAR`, `SCHAR`, `(SETF CHAR)`, `(SETF SCHAR)`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
+  (new kinds `LIST`, `RATIONAL`, `STRING`) -- except that a to-double funnel (`NUMBER`) there is a packed float
   store, which takes any real: `REAL`. A numeric operator keeps its one fixed type. `%aset` reports
   as `(SETF AREF)`, `nth` as `NTHCDR`, `svref` as `AREF`, `first`/`rest` as `CAR`/`CDR`
   (`OperandTypes.REWRITTEN`, the call-position-rewrite rule above). A one-argument `gcd`/`lcm`
@@ -903,6 +905,29 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   table gains `ENDP` for `LOOP`, `RPLACA`/`RPLACD` for `SETF INCF DECF PUSH POP PUSHNEW` (a
   `car` place's store). `#'rplaca`/`#'rplacd` became first-class on the compiled backends.
   Still open: a dotted list's `length` and the other consumers (`.todo/985`).
+- **String accesses** (2026-09-26; a non-string was a message-only error, the pad's generic
+  text or a trap, a symbol read as its NAME on the JVM): `char`/`schar` check the subscript,
+  then the string -- that order on every backend, because the compiled sites check the
+  subscript ahead of the read. A `setf` place names its STORE: `%schar-set`'s optional fourth
+  operand is the quoted place head (`LispMacroExpander.scharSetOf`), reported as
+  `(SETF CHAR)`/`(SETF SCHAR)`, and as `(SETF AREF)` for an `aref`/`svref`/`elt` place's
+  string arm (the array arm's name); `row-major-aref`'s string arm stays unnamed, as its array
+  arm is. Interpreter: `charRef`, `scharSet(args, rebind, operator)`. Compiled:
+  `expandScharSetFunctional` wraps the runtime defun's arguments in `(%check-string var 'op)`
+  (a `char`/`schar` place only; the others run under `stringp`) and `(%check-index i 'op)`
+  (`op` nil = unnamed) -- compile-path-only forms, since `%schar-set-runtime` cannot know the
+  store's name. JVM: `_charRef` throws the unnamed `STRING` report for anything but a
+  quote-framed String or a character vector, named by the operator's wrapper
+  (`wrapForOperator`); `%check-string` is `_pStringp` plus a site throw
+  (`_opTypeErr(_teRaw(x, "STRING"), op, FUNNEL_TYPE)`), `%check-index` is `_ckIdx` under `op`.
+  wasm, EH mode only (a non-EH module is byte-identical): `_str_char_ref` lands a non-string
+  through `_type_err(x, STRING)` directly (`WasmOperandTypes.emitLanding`; `STRING` has no
+  `_type_err_*` stub) under the register its site sets (`emitCall`), `%check-string` is
+  `emitStringpI32` plus `emitTypeError`, `%check-index` is `emitIndexCheck`. The landing
+  selects `STRING` only when the table has a string-checking row (`STRING_CHECKED` adds its
+  code to `rowCodes`); `LOWERED_TO` adds `(SETF CHAR)`/`(SETF SCHAR)` for `CHAR`/`SCHAR` and
+  `(SETF AREF)` for `ELT`. Still open: a `setf` value that is no character, and
+  `row-major-aref`'s array-arm subscript (`.todo/989`).
 - **Interpreter**: the built-ins throw `OperandTypeException` with the kind (`car`/`cdr`/`first`/
   `rest` and `nthValue` `LIST`, `numerator`/`denominator` `RATIONAL`, `random` `NUMBER`/`REAL`), the
   seam names them. `#'first`/`#'rest` of nil and `#'second` past the end answer nil now, as the
@@ -939,12 +964,19 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   unchanged. A 1M-element `loop`/`dolist`+`rplacd`/`length` mix in an EH module 0.34 -> 0.36 s
   (the `rplacd` site's `ref.test` in front of its cast: not the one-test `br_on_cast_fail` of a
   `car`/`cdr` read, whose block would need a cast-typed signature); the JVM unchanged.
-- **Open**: a string access's non-string and `(setf char)` index (`.todo/983`), the list consumers
-  beyond these (`.todo/985`).
+- **Cost of the string accesses, measured 2026-09-26** (wasmtime 49): `zlib` code +201 B and
+  strings +52 B; `hello_world`, `pi_approx`, `dom_reactor` unchanged, a non-EH module
+  byte-identical, JVM class 164,583 -> 164,736. Its P1 total reads 117,008 -> 118,253 only because
+  the 52-byte shift put the fdlibm table's probed base word on chipz's literal `2048`, which pins
+  ~990 dead bytes (`.todo/990`). A 21M-read `char` loop: JVM unchanged (noise), EH wasm 560 ->
+  580 ms (the register write around `_str_char_ref` and its quote-frame test).
+- **Open**: the list consumers beyond these (`.todo/985`), the string-store leftovers
+  (`.todo/989`).
 - Pinned by `ci-spec.yaml`'s `argument-type-errors-name-the-operator-beyond-arithmetic` and
-  `list-walks-and-string-indices-name-the-operator` and `list-consumers-name-the-operator`, and the
+  `list-walks-and-string-indices-name-the-operator`, `list-consumers-name-the-operator` and
+  `string-accesses-name-the-operator`, and the
   `argumentTypeErrorsNameTheOperatorBeyondArithmetic` / `listWalksAndStringIndicesNameTheOperator` /
-  `listConsumersNameTheOperator` triples (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
+  `listConsumersNameTheOperator` / `stringAccessesNameTheOperator` triples (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
 
 ### `random`'s domain (closed 2026-09-26, `.todo/981`)
 CLHS's domain is a COMPOUND type, `(OR (INTEGER 1) (FLOAT (0.0)))`: a ratio limit is real but

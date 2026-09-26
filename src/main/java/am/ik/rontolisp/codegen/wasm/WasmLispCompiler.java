@@ -7877,7 +7877,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(
 						WasmOperandTypes.buildLandingBody(am.ik.rontolisp.compiler.OperandTypes.Kind.NUMBER, ehMode));
 				// either-representation character index body (FUNC_STR_CHAR_REF)
-				code.addFunction(WasmStringRuntimeBuilder.buildStrCharRefBody());
+				code.addFunction(WasmStringRuntimeBuilder.buildStrCharRefBody(ehMode));
 				// string -> mutable character vector body (FUNC_STR_TO_CV)
 				code.addFunction(WasmStringRuntimeBuilder.buildStrToCvBody(this.usesIdentityHashTables));
 				// mutable-result string/list subseq lane body (FUNC_SUBSEQ_STR)

@@ -4795,13 +4795,22 @@ public final class Environment implements Scope {
 	 * {@code INTEGER} type-error. A bignum is an integer, out of any string's bounds.
 	 */
 	private static int requireStringIndex(String operator, LispVal val) {
+		return requireStringIndex(operator, operator, val);
+	}
+
+	/**
+	 * A string subscript under {@code operator}, unnamed when it is null; a bignum's
+	 * out-of-range report names {@code fallback}.
+	 */
+	private static int requireStringIndex(@Nullable String operator, String fallback, LispVal val) {
 		if (val instanceof LispInteger i) {
 			return (int) i.value();
 		}
 		if (val instanceof LispBigInteger) {
-			return requireIndex(operator, val);
+			return requireIndex(operator == null ? fallback : operator, val);
 		}
-		throw OperandTypeException.of(val, OperandTypes.Kind.INTEGER, operator);
+		throw operator == null ? OperandTypeException.of(val, OperandTypes.Kind.INTEGER)
+				: OperandTypeException.of(val, OperandTypes.Kind.INTEGER, operator);
 	}
 
 	/**
@@ -7449,17 +7458,23 @@ public final class Environment implements Scope {
 	 * whenever the place is a variable; when it is not there is nowhere to put the
 	 * result, and the compiled backends refuse such a place outright, so this refuses it
 	 * too ({@code .kb/string-write-runtime.md}).
+	 * <p>
+	 * A string that is no string and a subscript that is no integer are the
+	 * {@code operator}'s type-errors -- {@code (SETF CHAR)} for a {@code char} place --
+	 * or unnamed ones without it.
 	 * @param args the string, the index and the character
 	 * @param rebindPlace how to store a rebuilt string back into the place the string
 	 * came from, or {@code null} when the place cannot take one
+	 * @param operator the store's reported name, or null
 	 * @return the character written
 	 */
-	static LispVal scharSet(List<LispVal> args, @Nullable Consumer<LispString> rebindPlace) {
+	static LispVal scharSet(List<LispVal> args, @Nullable Consumer<LispString> rebindPlace, @Nullable String operator) {
 		requireArgCount(LispNames.SCHAR_SET, args, 3);
 		if (!(args.get(0) instanceof LispString str)) {
-			throw new LispEvalException(LispNames.SCHAR_SET + " expects a string, got " + args.get(0).print());
+			throw operator == null ? OperandTypeException.of(args.get(0), OperandTypes.Kind.STRING)
+					: OperandTypeException.of(args.get(0), OperandTypes.Kind.STRING, operator);
 		}
-		int index = requireIndex(LispNames.SCHAR_SET, args.get(1));
+		int index = requireStringIndex(operator, LispNames.SCHAR_SET, args.get(1));
 		// Capacity, not the fill pointer: a (setf (char s i) c) past the fill pointer
 		// writes an inactive slot in CL and on all three compile backends, and the
 		// fill pointer bounds the sequence view only (.kb/adjustable-arrays.md).
@@ -7486,7 +7501,8 @@ public final class Environment implements Scope {
 		// %schar-set: the (setf (schar s i) c) lowering -- mutate in place, return c.
 		// One indexed slot holds one full code point (including supplementary code
 		// points), matching the JVM and WASM char-vec representations.
-		env.defineFunction(LispNames.SCHAR_SET, new LispFunction(LispNames.SCHAR_SET, args -> scharSet(args, null)));
+		env.defineFunction(LispNames.SCHAR_SET,
+				new LispFunction(LispNames.SCHAR_SET, args -> scharSet(args, null, null)));
 		env.defineFunction(LispNames.CHAR_CODE, new LispFunction(LispNames.CHAR_CODE, args -> {
 			requireArgCount(LispNames.CHAR_CODE, args, 1);
 			return new LispInteger(requireChar(LispNames.CHAR_CODE, args.get(0)).codePoint());
@@ -7841,10 +7857,11 @@ public final class Environment implements Scope {
 
 	private static LispVal charRef(String name, java.util.List<LispVal> args) {
 		requireArgCount(name, args, 2);
-		if (!(args.get(0) instanceof LispString s)) {
-			throw new LispEvalException(name + " expects a string, got: " + args.get(0).print());
-		}
+		// The subscript first, as the compiled backends check it ahead of the read.
 		int index = requireStringIndex(name, args.get(1));
+		if (!(args.get(0) instanceof LispString s)) {
+			throw OperandTypeException.of(args.get(0), OperandTypes.Kind.STRING, name);
+		}
 		// Indexing is by CHARACTER (Unicode code point), not by UTF-16 code unit -- a
 		// supplementary code point is one indexed character, not two, matching every
 		// other backend and Common Lisp's contract. The backing store is already one code

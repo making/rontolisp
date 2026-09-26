@@ -70,15 +70,28 @@ final class WasmOperandTypes {
 	 * {@code second}..{@code tenth} through {@code (car (nthcdr ...))}, {@code dolist}
 	 * and {@code loop}'s {@code for-in} through {@code endp}, a {@code car}/{@code cdr}
 	 * place's store ({@code setf} and the modify macros) through {@code rplaca} /
-	 * {@code rplacd}.
+	 * {@code rplacd}, a {@code setf} of a {@code char}/{@code schar} place through its
+	 * own store name and of an {@code elt} place through {@code %aset}'s.
 	 */
 	private static final java.util.Map<String, java.util.List<String>> LOWERED_TO = loweredTo();
+
+	/**
+	 * The operators whose sites hand a landing a kind no {@code _type_err_*} stub has --
+	 * {@code STRING}, which {@code _str_char_ref} and {@code %check-string} land with
+	 * directly ({@link #emitLanding}) -- so the shared body selects its type only in a
+	 * module that can reach one.
+	 */
+	private static final java.util.List<String> STRING_CHECKED = java.util.List.of("CHAR", "SCHAR",
+			OperandTypes.SETF_CHAR, OperandTypes.SETF_SCHAR);
 
 	private static java.util.Map<String, java.util.List<String>> loweredTo() {
 		java.util.Map<String, java.util.List<String>> map = new java.util.HashMap<>();
 		map.put("COERCE", java.util.List.of("FLOAT"));
 		map.put("AREF", java.util.List.of(OperandTypes.SETF_AREF));
 		map.put("SVREF", java.util.List.of(OperandTypes.SETF_AREF));
+		map.put("ELT", java.util.List.of(OperandTypes.SETF_AREF));
+		map.put("CHAR", java.util.List.of(OperandTypes.SETF_CHAR));
+		map.put("SCHAR", java.util.List.of(OperandTypes.SETF_SCHAR));
 		map.put("DOLIST", java.util.List.of("ENDP"));
 		map.put("LOOP", java.util.List.of("ENDP"));
 		for (String modify : java.util.List.of("SETF", "INCF", "DECF", "PUSH", "POP", "PUSHNEW")) {
@@ -99,9 +112,11 @@ final class WasmOperandTypes {
 	 *
 	 * @param ids operator to its row (1-based)
 	 * @param base the blob's absolute address
-	 * @param rowCodes the type codes the rows hold ({@link #FUNNEL_CODE} included): a
-	 * landing selects among only the types they can name, so a suffix no row can reach is
-	 * never cited and drops with the string blob's dead ranges
+	 * @param rowCodes the type codes the rows hold ({@link #FUNNEL_CODE} included), plus
+	 * {@code STRING}'s when a row's sites land with it directly
+	 * ({@link #STRING_CHECKED}): a landing selects among only the types they can name, so
+	 * a suffix no row can reach is never cited and drops with the string blob's dead
+	 * ranges
 	 */
 	record Operators(java.util.Map<String, Integer> ids, int base, java.util.Set<Integer> rowCodes) {
 
@@ -156,6 +171,9 @@ final class WasmOperandTypes {
 			java.util.Set<Integer> rowCodes = new java.util.TreeSet<>();
 			for (String op : wanted) {
 				rowCodes.add(typeCode(java.util.Objects.requireNonNull(OperandTypes.operatorType(op))));
+				if (STRING_CHECKED.contains(op)) {
+					rowCodes.add(code(OperandTypes.Kind.STRING));
+				}
 			}
 			return new Operators(java.util.Map.copyOf(ids), table.appendShakeableBlobProbedOnBase(blob.toByteArray()),
 					java.util.Set.copyOf(rowCodes));
@@ -197,6 +215,33 @@ final class WasmOperandTypes {
 	}
 
 	/**
+	 * Emits the shared landing over the culprit on the stack with a kind no stub has
+	 * ({@code STRING}): {@code i32.const kind; call _type_err; unreachable}. It reads the
+	 * operator from the register the caller set. EH mode only.
+	 * @param w the writer
+	 * @param kind what the check was for
+	 */
+	static void emitLanding(WasmWriter w, OperandTypes.Kind kind) {
+		i32Const(w, code(kind));
+		call(w, WasmLispCompiler.FUNC_TYPE_ERR);
+		w.write(Instruction.UNREACHABLE);
+	}
+
+	/**
+	 * Emits the innermost named operator's type-error over the value in {@code slot}: the
+	 * operator's id into the register, then {@link #emitLanding}. EH mode only.
+	 * @param ctx the emission context
+	 * @param slot the local holding the culprit
+	 * @param kind what the check was for
+	 */
+	static void emitTypeError(WasmLispCompiler.Ctx ctx, int slot, OperandTypes.Kind kind) {
+		setRegister(ctx.writer, ctx.operandOpGlobalIndex, operatorId(ctx));
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		emitLanding(ctx.writer, kind);
+	}
+
+	/**
 	 * Whether a helper is one of the landings, which never return (and clear the register
 	 * themselves), so nothing after the call needs to.
 	 */
@@ -224,7 +269,7 @@ final class WasmOperandTypes {
 	 * @param operator the operator
 	 * @param emission the emission
 	 */
-	static void withOperator(WasmLispCompiler.Ctx ctx, String operator, Runnable emission) {
+	static void withOperator(WasmLispCompiler.Ctx ctx, @Nullable String operator, Runnable emission) {
 		@Nullable String outer = ctx.operator;
 		ctx.operator = operator;
 		try {

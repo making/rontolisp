@@ -8,6 +8,7 @@ import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
+import am.ik.rontolisp.compiler.OperandTypes;
 
 /**
  * Builds the three helpers every CHARACTER index into a string reads through:
@@ -165,8 +166,8 @@ final class JvmStringIndexRuntimeBuilder {
 	// _charRef(o, i): the element read for a mutable character vector (only when the
 	// array runtime exists -- a character vector can only come from make-array, which
 	// raises the same gate), else _cpoff + codePointAt on the immutable string. A
-	// non-string, non-character-vector argument fails the String cast exactly as the
-	// old _strv + CHECKCAST site did.
+	// non-string, non-character-vector argument throws the unnamed STRING report, which
+	// the site's operator wrapper names (JvmCharCompiler).
 	private static StringIndexMethod buildCharRef(ConstantPool cp, ClassConstant selfClass, ClassConstant stringClass,
 			boolean usesArrays) {
 		// Slots: 0 = o, 1 = i, 2 = header scratch, 3 = s.
@@ -226,15 +227,32 @@ final class JvmStringIndexRuntimeBuilder {
 			a.ireturn();
 			a.bind(str);
 		}
+		// Anything but a quote-framed String (a symbol is a bare one) is no string: the
+		// unnamed STRING report, named CHAR's / SCHAR's by the call site's wrapper.
+		int notString = a.label();
+		a.aload(0);
+		a.instanceOf(stringClass);
+		a.branch(Opcode.IFEQ, notString);
 		a.aload(0);
 		a.checkcast(stringClass);
 		a.astore(3);
+		a.aload(3);
+		a.ldcString(cp.addString("\""));
+		a.invokevirtual(cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("startsWith"), cp.addUtf8("(Ljava/lang/String;)Z"))));
+		a.branch(Opcode.IFEQ, notString);
 		a.aload(3);
 		a.aload(3);
 		a.iload(1);
 		a.invokestatic(strCpOffset);
 		a.invokevirtual(strCodePointAt);
 		a.ireturn();
+		a.bind(notString);
+		a.aload(0);
+		a.ldcString(cp.addString(OperandTypes.Kind.STRING.name()));
+		a.invokestatic(JvmOperandTypeRuntime.self(cp, selfClass, JvmOperandTypeRuntime.TE_RAW,
+				JvmOperandTypeRuntime.TE_RAW_DESC));
+		a.athrow();
 		return new StringIndexMethod(cp.addUtf8(CHARREF_METHOD), cp.addUtf8(CHARREF_DESC), 4, 4, a.finish());
 	}
 
