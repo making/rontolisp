@@ -12,6 +12,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.JavaInteropPrograms;
 import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -536,6 +537,66 @@ class JvmJavaInteropCompilerTest {
 			.hasMessage("java:static: argument 1 is not a java.lang.String, got 42");
 	}
 
+	// A site whose class is known but whose argument kinds are not is a dispatch among
+	// the
+	// class's overloads compiled without reflection: the costs of the value each argument
+	// has, the cheapest overload, a direct call of it. It chooses what the interpreter
+	// chooses (JavaInteropTest#aDispatchedSiteChoosesByTheKindsItMeets).
+	@Test
+	void aDispatchedSiteChoosesByTheKindsItMeets() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.DISPATCH_PROGRAM)).isEqualTo(JavaInteropPrograms.DISPATCH_OUTPUT);
+		String program = """
+				(defun mx (x y) (java:static "java.lang.Math" "max" x y))
+				(defun val (x) (java:static "java.lang.String" "valueOf" x))
+				(print (list (mx 1 2) (val (list #\\a #\\b))))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("(2 \"ab\")");
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		compiler.compile(LispReader.readAllFromString(program));
+		assertThat(compiler.runtimeClassFiles()).isEmpty();
+		assertThat(javap(program)).contains("Method java/lang/Math.max:(II)I")
+			.contains("Method java/lang/Math.max:(DD)D")
+			.contains("Method java/lang/String.valueOf:([C)Ljava/lang/String;")
+			.contains(JvmJavaDirectSites.COST_PREFIX)
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX)
+			.doesNotContain(JvmJavaRuntimeBuilder.INIT_METHOD)
+			.doesNotContain("java/lang/reflect");
+	}
+
+	// Sequences and functions reach a dispatched site as the run-time resolution passes
+	// them: a list or vector becomes an array or a list of the parameter's type, a
+	// function a proxy of an interface -- the one arm that needs the bridge.
+	@Test
+	void aDispatchedSiteConvertsSequencesAndFunctions() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.SEQUENCE_DISPATCH_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.SEQUENCE_DISPATCH_OUTPUT);
+	}
+
+	// A dispatched call on a receiver of declared class C chooses among C's overloads
+	// (JavaInteropTest#aDispatchedSiteChoosesAmongTheDeclaredClasssOverloads).
+	@Test
+	void aDispatchedSiteChoosesAmongTheDeclaredClasssOverloads() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.UPPER_BOUND_DISPATCH)).isEqualTo("(T \"[10, 20]\")");
+	}
+
+	// JavaInteropTest#aDispatchedSiteChecksWhatItCountedOn, with the same texts.
+	@Test
+	void aDispatchedSiteChecksWhatItCountedOn() throws Exception {
+		String addAll = """
+				(defun add-all (c)
+				  (declare (type (java:object "java.util.Collection") c))
+				  (java:call (java:new "java.util.ArrayList") "addAll" c))
+				""";
+		assertThat(compileAndRun(addAll + "(print (add-all (java:static \"java.util.List\" \"of\" 1)))"))
+			.isEqualTo("T");
+		assertThatThrownBy(() -> compileAndRun(addAll + "(add-all 5)")).isInstanceOf(RuntimeException.class)
+			.hasMessage("java:call: argument 1 is not a java.util.Collection, got 5");
+		assertThatThrownBy(
+				() -> compileAndRun("(defun mx (x y) (java:static \"java.lang.Math\" \"max\" x y)) (mx \"a\" 1)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("No matching method java.lang.Math.max with 2 argument(s)");
+	}
+
 	// java:static calls a static method: an instance method of the name, which could only
 	// fail without a receiver, is never chosen.
 	@Test
@@ -626,6 +687,18 @@ class JvmJavaInteropCompilerTest {
 			.compile(LispReader.readAllFromString("(print (java:static \"java.lang.Math\" \"max\" 3 7))"));
 		assertThat(new String(direct, java.nio.charset.StandardCharsets.ISO_8859_1))
 			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX);
+		// A dispatch among overloads that take no interface needs no reflection either.
+		byte[] dispatched = JvmLispCompiler.builder()
+			.className("Test")
+			.javaStatic(true)
+			.build()
+			.compile(LispReader.readAllFromString("""
+					(defun mx (x y) (java:static "java.lang.Math" "max" x y))
+					(defun val (x) (java:static "java.lang.String" "valueOf" x))
+					(print (list (mx 1 2.5) (val (list #\\a))))
+					"""));
+		assertThat(new String(dispatched, java.nio.charset.StandardCharsets.ISO_8859_1))
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX);
 		assertThatThrownBy(() -> JvmLispCompiler.builder()
 			.className("Test")
 			.javaStatic(true)
@@ -634,14 +707,17 @@ class JvmJavaInteropCompilerTest {
 					(defun len (x) (java:call x "length"))
 					(java:proxy "java.lang.Runnable" (lambda (m) nil))
 					(java:call (java:static "java.util.List" "of" 1) "forEach" (lambda (m x) x))
+					(defun join (xs) (java:static "java.lang.String" "join" "-" xs))
 					"""))).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("--java-static: 3 java: calls cannot be compiled without reflection:")
+			.hasMessageContaining("--java-static: 4 java: calls cannot be compiled without reflection:")
 			.hasMessageContaining("java:call \"length\": it is resolved by reflection at run time:"
 					+ " the receiver's class is not known")
 			.hasMessageContaining("java:proxy \"java.lang.Runnable\": java:proxy implements its interface with"
 					+ " java.lang.reflect.Proxy")
 			.hasMessageContaining("java:call \"forEach\": argument 1 may be a function, which becomes a"
-					+ " java.lang.reflect.Proxy of java.util.function.Consumer");
+					+ " java.lang.reflect.Proxy of java.util.function.Consumer")
+			.hasMessageContaining("java:static \"java.lang.String\" \"join\": argument 2 may be a function, which"
+					+ " becomes a java.lang.reflect.Proxy of java.lang.CharSequence");
 	}
 
 	// The class's disassembly, as javap prints it.

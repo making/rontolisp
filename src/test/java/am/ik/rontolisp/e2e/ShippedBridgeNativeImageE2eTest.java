@@ -82,7 +82,9 @@ class ShippedBridgeNativeImageE2eTest {
 	// no agent run -- into an executable that prints what java -jar prints. Every shape a
 	// direct call has: a constructor, instance and interface calls, a static call and a
 	// varargs one, fields, a chain typed by declared return types, a let-typed receiver,
-	// a returned array, a primitive char, and an exception the member throws.
+	// a returned array, a primitive char, and an exception the member throws -- and the
+	// dispatch of a site whose argument kinds are known only when it runs, over numbers,
+	// t, a list to a char[], a vector to an int[] and a list to an Object[].
 	@Test
 	void aJavaStaticJarRunsAsANativeImageWithNoConfiguration() throws Exception {
 		Path jar = compileJar("""
@@ -106,11 +108,16 @@ class ShippedBridgeNativeImageE2eTest {
 				                  "toString"))
 				(print (handler-case (java:static "java.lang.Integer" "parseInt" "zz")
 				         (error (e) (format nil "caught: ~a" e))))
+				(defun mx (x y) (java:static "java.lang.Math" "max" x y))
+				(defun val (x) (java:static "java.lang.String" "valueOf" x))
+				(defun ts (x) (java:static "java.util.Arrays" "toString" x))
+				(print (list (mx 1 2) (mx 1 2.5) (val t) (val (list #\\a #\\b)) (ts (vector 1 2)) (ts (list "a" nil))))
 				""", "--java-static");
 		List<String> expected = List.of("\"items: 1 2 3\"", "7", "2.5", "\"cba\"", "#\\b", "2147483647", "4", "\"1-x\"",
 				"(\"a\" \"b\" \"c\")", "3", "\"SATURDAY\"",
 				"\"caught: error calling java.lang.Integer.parseInt: java.lang.NumberFormatException:"
-						+ " For input string: \\\"zz\\\"\"");
+						+ " For input string: \\\"zz\\\"\"",
+				"(2 2.5 \"true\" \"ab\" \"[1, 2]\" \"[a, null]\")");
 		Path java = Path.of(System.getProperty("java.home"), "bin", "java");
 		assertThat(lines(run(java, "-jar", jar.toString()))).isEqualTo(expected);
 		try (ZipFile entries = new ZipFile(jar.toFile())) {

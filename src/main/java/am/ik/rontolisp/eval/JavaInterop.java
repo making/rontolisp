@@ -93,10 +93,29 @@ final class JavaInterop {
 
 	private static final ConcurrentHashMap<Class<?>, ConcurrentHashMap<String, Memo[]>> CHOICES = new ConcurrentHashMap<>();
 
+	// The overload a dispatched site chose for its argument kinds, remembered per site
+	// (by identity): over kinds the choice is a pure function of the site's overloads.
+	private static final ConcurrentHashMap<SiteKey, Memo[]> DISPATCHES = new ConcurrentHashMap<>();
+
 	// Parsed member designators: a tag is parsed once, not per call.
 	private static final ConcurrentHashMap<String, JavaOverloads.Member> MEMBERS = new ConcurrentHashMap<>();
 
 	private JavaInterop() {
+	}
+
+	// A site compared by identity: two sites that resolved alike are still two sites.
+	private record SiteKey(JavaSite site) {
+
+		@Override
+		public boolean equals(@Nullable Object other) {
+			return other instanceof SiteKey key && key.site == this.site;
+		}
+
+		@Override
+		public int hashCode() {
+			return System.identityHashCode(this.site);
+		}
+
 	}
 
 	// The overload select() chose for these argument kinds.
@@ -366,9 +385,12 @@ final class JavaInterop {
 	 * Runs a site resolved before it ran ({@code compiler.JavaSiteResolver}), exactly as
 	 * a compiled program's direct call does ({@code codegen.jvm.JvmJavaDirectSites}): a
 	 * {@code java:call} / {@code java:field} receiver must be a java object and an
-	 * instance of the site's static class; each argument must have one of the kinds the
-	 * resolution counted on and is converted to its parameter type (a varargs tail packed
-	 * as the resolution packed it); then the resolved member itself is called. A value a
+	 * instance of the site's static class; each argument must be what the resolution
+	 * counted on -- one of its kinds, or {@code nil} or an instance of its bound; then
+	 * the member is called -- the resolved one, or at a dispatched site the cheapest of
+	 * the site's overloads for the arguments' kinds, the first on a tie
+	 * ({@link JavaOverloads#selectRanked}) -- with each argument converted to its
+	 * parameter type (a varargs tail packed as the overload packs it). A value a
 	 * declaration lied about is an error here, never converted for a member it was not
 	 * chosen for.
 	 * @param site the resolved site
@@ -404,17 +426,29 @@ final class JavaInterop {
 				throw fail("reading field " + resolvedField.name(), ex);
 			}
 		}
-		JavaExecutable executable = java.util.Objects.requireNonNull(site.executable());
 		List<JavaSite.Argument> promised = site.arguments();
 		for (int i = 0; i < args.size(); i++) {
-			JavaKind kind = kindOf(args.get(i));
-			JavaSite.Argument argument = promised.get(i);
-			if (kind == null || !argument.kinds().contains(kind)) {
-				throw new LispEvalException(operator + ": argument " + (i + 1) + " is not " + argument.expected()
+			if (!keepsPromise(args.get(i), promised.get(i))) {
+				throw new LispEvalException(operator + ": argument " + (i + 1) + " is not " + promised.get(i).expected()
 						+ ", got " + args.get(i).print());
 			}
 		}
-		@Nullable Object[] javaArgs = marshalArguments(new JavaOverloads.Overload(executable, site.packed()), args, caller);
+		JavaOverloads.Overload overload;
+		if (site.dispatched()) {
+			overload = dispatch(site, args, caller);
+			if (overload == null) {
+				String designator = java.util.Objects.requireNonNull(site.designator());
+				throw new LispEvalException(site.operator() == JavaSite.Operator.NEW
+						? "No matching constructor for " + designator + " with " + args.size() + " argument(s)"
+						: "No matching method " + className + "." + designator + " with " + args.size()
+								+ " argument(s)");
+			}
+		}
+		else {
+			overload = new JavaOverloads.Overload(java.util.Objects.requireNonNull(site.executable()), site.packed());
+		}
+		JavaExecutable executable = overload.executable();
+		@Nullable Object[] javaArgs = marshalArguments(overload, args, caller);
 		try {
 			java.lang.reflect.Executable reflected = ((ReflectiveJavaClasses.Member) executable).executable();
 			if (reflected instanceof Constructor<?> constructor) {
@@ -426,6 +460,58 @@ final class JavaInterop {
 			throw fail(executable.isConstructor() ? "constructing " + className
 					: "calling " + className + "." + executable.name(), ex);
 		}
+	}
+
+	// The overload of a dispatched site for these arguments: the first cheapest of its
+	// ranked overloads, remembered per site for the argument kinds. A list or vector has
+	// no kind: such a call is costed by marshalling its arguments and never remembered.
+	private static JavaOverloads.@Nullable Overload dispatch(JavaSite site, List<LispVal> args, Caller caller) {
+		JavaKind[] kinds = kindsOf(args);
+		if (kinds == null) {
+			@Nullable Object[] slot = new @Nullable Object[1];
+			return JavaOverloads.selectRanked(site.overloads(), args.size(), (i, type) -> {
+				JavaKind kind = kindOf(args.get(i));
+				return kind != null ? JavaOverloads.kindCost(kind, type, CLASSES)
+						: marshal(args.get(i), type, caller, slot, 0);
+			});
+		}
+		SiteKey key = new SiteKey(site);
+		Memo[] memos = DISPATCHES.get(key);
+		if (memos != null) {
+			for (Memo memo : memos) {
+				if (memo.matches(kinds)) {
+					return memo.overload();
+				}
+			}
+		}
+		JavaOverloads.Overload chosen = JavaOverloads.selectRanked(site.overloads(), kinds.length,
+				(i, type) -> JavaOverloads.kindCost(kinds[i], type, CLASSES));
+		if (chosen != null) {
+			Memo[] grown;
+			if (memos == null || memos.length >= CHOICES_PER_MEMBER) {
+				grown = new Memo[] { new Memo(kinds, chosen) };
+			}
+			else {
+				grown = Arrays.copyOf(memos, memos.length + 1);
+				grown[memos.length] = new Memo(kinds, chosen);
+			}
+			remember(DISPATCHES, key, grown);
+		}
+		return chosen;
+	}
+
+	// Whether a value is what a resolved site counted on for its argument: one of the
+	// kinds, nil or an instance of the bound, or -- known only when it runs -- anything.
+	private static boolean keepsPromise(LispVal value, JavaSite.Argument argument) {
+		if (argument.known()) {
+			JavaKind kind = kindOf(value);
+			return kind != null && argument.kinds().contains(kind);
+		}
+		String bound = argument.bound();
+		if (bound == null || value instanceof LispNil) {
+			return true;
+		}
+		return value instanceof LispJavaObject obj && loadClass(bound).type().isInstance(obj.ref());
 	}
 
 	private static Field publicField(ReflectiveJavaClasses.Type type, String fieldName) throws NoSuchFieldException {

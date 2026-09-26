@@ -16,11 +16,8 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.JavaClassLookup;
-import am.ik.rontolisp.compiler.JavaExecutable;
-import am.ik.rontolisp.compiler.JavaKind;
 import am.ik.rontolisp.compiler.JavaSite;
 import am.ik.rontolisp.compiler.JavaSiteResolver;
-import am.ik.rontolisp.compiler.JavaType;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -92,8 +89,9 @@ final class JvmJavaSites {
 	/**
 	 * Why a site needs the reflective bridge, or {@code null} when it compiles to a
 	 * direct call that needs nothing else: a {@code java:proxy}; a site left to run time;
-	 * a resolved site with an argument that may be a function value, which becomes a
-	 * {@code java.lang.reflect.Proxy} of its interface parameter.
+	 * a resolved site with an argument that may be a function value where an interface is
+	 * expected, which becomes a {@code java.lang.reflect.Proxy} of it
+	 * ({@link JvmJavaDirectSites#proxyReason}).
 	 * @param site a {@code java:} form
 	 * @return the reason, or {@code null}
 	 */
@@ -105,25 +103,7 @@ final class JvmJavaSites {
 		if (!resolution.resolved()) {
 			return "it is resolved by reflection at run time: " + resolution.reason();
 		}
-		List<JavaSite.Argument> arguments = resolution.arguments();
-		for (int i = 0; i < arguments.size(); i++) {
-			if (arguments.get(i).kinds().contains(JavaKind.Lisp.FUNCTION)) {
-				return "argument " + (i + 1) + " may be a function, which becomes a java.lang.reflect.Proxy of "
-						+ parameterType(resolution, i).name();
-			}
-		}
-		return null;
-	}
-
-	// The parameter an argument is converted to: a packed varargs tail's component.
-	private static JavaType parameterType(JavaSite site, int argument) {
-		JavaExecutable executable = java.util.Objects.requireNonNull(site.executable());
-		List<? extends JavaType> params = executable.parameterTypes();
-		int last = params.size() - 1;
-		if (site.packed() && argument >= last) {
-			return java.util.Objects.requireNonNull(params.get(last).componentType());
-		}
-		return params.get(argument);
+		return JvmJavaDirectSites.proxyReason(resolution);
 	}
 
 	/**

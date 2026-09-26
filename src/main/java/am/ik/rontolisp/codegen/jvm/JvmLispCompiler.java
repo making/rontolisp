@@ -2146,6 +2146,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodrefConstant strvMethod = usesArrays ? cp.addMethodref(thisClass, cp
 			.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.STRV), cp.addUtf8(JvmArrayRuntimeBuilder.STRV_DESC)))
 				: null;
+		if (javaSites != null) {
+			// A dispatched java: site renders a mutable character vector, a sequence's
+			// elements too, before it costs and converts it.
+			javaSites.direct().strv(strvMethod);
+		}
 		// Numeric runtime helpers (long arithmetic with automatic BigInteger promotion)
 		// The interned layout array of an instance -- the discriminator the structural
 		// _equal and _hash arms share, minted once so both see the same constant.

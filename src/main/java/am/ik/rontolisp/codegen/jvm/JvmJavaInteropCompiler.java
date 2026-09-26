@@ -8,7 +8,6 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.compiler.JavaKind;
 import am.ik.rontolisp.compiler.JavaSite;
 
 import am.ik.jvm.ConstantPool.MethodrefConstant;
@@ -134,10 +133,9 @@ final class JvmJavaInteropCompiler {
 	private static void compileDirect(JavaSite site, List<LispVal> args, JvmLispCompiler.Ctx ctx, String className) {
 		JvmJavaSites sites = Objects.requireNonNull(ctx.javaSites);
 		boolean staticField = site.operator() == JavaSite.Operator.FIELD && args.get(1) instanceof LispString;
-		// The values the method takes, and which of them is an argument the resolution
-		// counted string kinds for (a mutable character vector is rendered to the
-		// string it spells before the method sees it, as the bridge renders every
-		// argument).
+		// The values the method takes, and which of them is an argument that may be a
+		// string (a mutable character vector is rendered to the string it spells before
+		// the method sees it, as the bridge renders every argument).
 		List<LispVal> values;
 		int firstArgument;
 		switch (site.operator()) {
@@ -174,7 +172,7 @@ final class JvmJavaInteropCompiler {
 			}
 			JvmExprCompiler.compileExpr(values.get(i), ctx, className);
 			emitMaterialize(ctx);
-			if (i >= firstArgument && countsOnAString(site.arguments().get(i - firstArgument))) {
+			if (i >= firstArgument && site.arguments().get(i - firstArgument).mayBeString()) {
 				JvmArrayCompiler.emitStrvNormalize(ctx, className);
 			}
 			if (packed) {
@@ -183,10 +181,6 @@ final class JvmJavaInteropCompiler {
 		}
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(method.index());
-	}
-
-	private static boolean countsOnAString(JavaSite.Argument argument) {
-		return argument.kinds().contains(JavaKind.Lisp.STRING) || argument.kinds().contains(JavaKind.Lisp.STRING_1);
 	}
 
 	private static void requireArity(boolean ok, String message) {

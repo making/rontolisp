@@ -36,7 +36,8 @@ public sealed interface JavaStaticType {
 	 * of it -- the declared type of a resolved member, or a
 	 * {@code (the (java:object "C") x)} / {@code (declare (type (java:object "C") x))}.
 	 * The class is known only up to a subclass, so the value's kind is not: it types a
-	 * receiver (the members a call resolves against), never an argument.
+	 * receiver (the members a call resolves against), and an argument only of a
+	 * dispatched site, where the kind is read when the call runs.
 	 *
 	 * @param type the upper bound
 	 */
