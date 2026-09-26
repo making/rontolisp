@@ -17870,6 +17870,31 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void defstructAccessorsSignalATypeErrorOnANonInstance() {
+		// CL's type-error naming the accessor (or its setf place, or the copier) and
+		// the struct type, as every wrong-type argument reports; the store's check
+		// follows its value, so an incf reports the read. It was "%OBJ-REF expects an
+		// instance, got 42", a simple-error.
+		assertThat(evalMulti("""
+				(defstruct point x y)
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (type-error-datum e) (eq (type-error-expected-type e) 'point)
+				                          (princ-to-string e)))))
+				(list (te (lambda () (point-x 42)))
+				      (te (lambda () (setf (point-y (cons 1 2)) (progn (setq *v* :v) 0))))
+				      *v*
+				      (te (lambda () (incf (point-x "s"))))
+				      (te (lambda () (copy-point nil)))
+				      (let ((p (make-point :x 1))) (setf (point-y p) 2) (incf (point-x p)) (list p (copy-point p))))
+				""").print()).isEqualTo("((42 T \"POINT-X: The value 42 is not of type POINT\") "
+				+ "((1 . 2) T \"(SETF POINT-Y): The value (1 . 2) is not of type POINT\") :V "
+				+ "(\"s\" T \"POINT-X: The value \\\"s\\\" is not of type POINT\") "
+				+ "(NIL T \"COPY-POINT: The value NIL is not of type POINT\") "
+				+ "(#S(POINT :X 2 :Y 2) #S(POINT :X 2 :Y 2)))");
+	}
+
+	@Test
 	void defstructDefinesEveryDeclaredConstructor() {
 		// CL allows more than one (:constructor ...) option and defines them ALL; only
 		// the last one used to survive. esrap's failed-parse declares a full BOA plus a

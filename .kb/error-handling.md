@@ -295,6 +295,15 @@ fails. What decides the gate is whether program code can ever HOLD that instance
 - **`handler-case` counts only when some clause binds a variable its own body mentions**
   (`handlerCaseBindsCondition`); otherwise the instance never leaves the landing pad. The occurrence
   test is deliberately blunt.
+- **`handler-bind` counts unless every handler is a literal `lambda` whose body never mentions its
+  first required parameter** (`handlerBindExposesCondition`): a handler is CALLED with the instance,
+  so a `#'name`, a computed handler or a lambda list opening with `&rest`/`&optional` counts. Before
+  2026-09-26 it did not count at all, and on the compiled backends `(format t "~a" c)` in a handler
+  printed `#<TYPE-ERROR :DATUM 5 ...>` while the interpreter printed the report. Restart mode never
+  narrows the condition runtime (`conditionNarrowing`), so turning the gate on costs a handler-bind
+  program far more than a handler-case one: the `(car 5)` probe is 17,961 B on wasm-GC with a
+  handler that ignores its condition, 114,044 B with one that prints it (the handler-case twin:
+  7,357 B).
 - **`ignore-errors` counts only where a SECOND value can be read** (`receivesMultipleValues`, a
   whole-program answer): any occurrence of
   `multiple-value-bind`/`-list`/`-call`/`-setq`/`-prog1`/`nth-value`/`%mv-spill` turns it back on.
@@ -350,9 +359,11 @@ second payload reader, so both gates go broad; outside EH mode nothing is observ
 **Invariant: a signaled condition escaping the top level writes `Unhandled condition: <report>` to
 standard error -- the same line on all four backends -- then the process exits the way it always
 did.** Built from `compiler/UncaughtReport.PREFIX` at all three emission sites; the report text is
-the one `princ` writes, and nothing below changes it. Two reports still differ on the JVM
-(`.todo/993`: a struct accessor on a non-instance, a typed loop's out-of-range `aref`), and one on
-wasm-GC (the report-less class, "Known gap" below).
+the one `princ` writes, and nothing below changes it. An out-of-range `aref` still differs -- the
+JVM prints the raw `ArrayIndexOutOfBoundsException` text and wasm-GC traps even in EH mode
+(`.todo/a00`) -- and so does one report on wasm-GC (the report-less class, "Known gap" below). A
+struct accessor on a non-instance agrees since 2026-09-26 ([defstruct.md](defstruct.md),
+"Accessors check their object").
 
 **Under it, location lines** (`UncaughtReport.atLine` / `asyncLine`, two-space indented):
 `  at FILE:LINE in FUNCTION` -- the innermost form read from a named file that the condition passed
@@ -1020,6 +1031,7 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
 | `(setf (char s nil) c)`, `(setf (schar 5 0) c)` | `(SETF CHAR): ... INTEGER` / `(SETF SCHAR): ... STRING` |
 | `(setf (char s 0) 5)`, `(setf (aref s 0) 5)` (`s` a string) | `(SETF CHAR):` / `(SETF AREF): ... CHARACTER` |
 | `(row-major-aref v nil)`, `(setf (row-major-aref v nil) 0)` | `ROW-MAJOR-AREF:` / `(SETF ROW-MAJOR-AREF): ... INTEGER` |
+| `(point-x 42)`, `(setf (point-x 42) 0)`, `(copy-point 42)` (a `defstruct`'s) | `POINT-X:` / `(SETF POINT-X):` / `COPY-POINT: ... POINT` -- generated code, not this table: [defstruct.md](defstruct.md) |
 
 - **FUNNEL-TYPED operators** (`OperandTypes.FUNNEL_TYPE`: `CAR`, `CDR`, `NTHCDR`, `ENDP`, `AREF`,
   `(SETF AREF)`, `CHAR`, `SCHAR`, `(SETF CHAR)`, `(SETF SCHAR)`, `ROW-MAJOR-AREF`,

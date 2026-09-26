@@ -6643,6 +6643,36 @@ public final class LispEvaluator {
 							case LispNames.READTABLE_CASE:
 								next = builtinMacroExpansion(cons, LispMacroExpander::expandReadtableCase);
 								break dispatch;
+							case LispNames.OBJ_REF:
+							case LispNames.OBJ_SET: {
+								// A defstruct accessor's checked read / store carries a
+								// trailing FAILURE form, evaluated -- after the object
+								// and
+								// the value -- only when the object is no instance.
+								// Without
+								// it these are the plain functions below.
+								boolean read = LispNames.OBJ_REF.equals(sym.name());
+								if (properLength != (read ? 4 : 5)) {
+									break;
+								}
+								List<LispVal> parts = cons.toList();
+								List<LispVal> primitiveArgs = new ArrayList<>(3);
+								primitiveArgs.add(eval(parts.get(1), env));
+								primitiveArgs.add(parts.get(2));
+								if (!read) {
+									primitiveArgs.add(eval(parts.get(3), env));
+								}
+								if (!(primitiveArgs.get(0) instanceof LispInstance inst)) {
+									next = parts.getLast();
+									break dispatch;
+								}
+								int slot = requireSlotIndex(sym.name(), inst, primitiveArgs);
+								if (!read) {
+									inst.setSlot(slot, primitiveArgs.get(2));
+								}
+								result = singleValue(read ? inst.slot(slot) : primitiveArgs.get(2));
+								break frame;
+							}
 						}
 						// Neither the tail-transparent expansions nor the value forms of
 						// the second half claimed the
@@ -9753,6 +9783,16 @@ public final class LispEvaluator {
 				for (LispVal form : LispMacroExpander.slotUnboundDefuns()) {
 					eval(form, this.globalEnv);
 				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// %struct-type-error, every defstruct accessor's failure arm, is generated
+			// the
+			// same way.
+			if (LispNames.STRUCT_TYPE_ERROR_INTERNAL.equals(name) && this.loadedPreludeNames.add(name)) {
+				eval(LispMacroExpander.structTypeErrorDefun(true), this.globalEnv);
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 				if (loaded != null) {
 					return loaded;

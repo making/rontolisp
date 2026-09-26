@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles the instance primitives -- {@code %obj-new}, {@code %obj-ref},
@@ -122,17 +123,71 @@ final class WasmInstanceCompiler {
 	/** {@code (%obj-ref obj <k>)}. */
 	static void compileRef(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
+		LispVal failure = checkedFailure(args, 3, ctx);
 		if (gateOff(ctx)) {
-			// No instance can exist in this module, so this read is unreachable; the
-			// object is still evaluated for effect and the result is nil.
+			// No instance can exist in this module: the object is still evaluated for
+			// effect, and the read answers nil -- or fails, when it checks.
 			evaluateForEffectThenNil(args.get(1), ctx);
+			if (failure != null) {
+				ctx.writer.write(Instruction.DROP);
+				WasmExprCompiler.compileExpr(failure, ctx);
+			}
 			return;
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
-		pushSlots(ctx);
-		i32Const(ctx, literalIndex(args.get(2), LispNames.OBJ_REF));
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		int index = literalIndex(args.get(2), LispNames.OBJ_REF);
+		if (failure == null) {
+			pushSlots(ctx);
+			i32Const(ctx, index);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+			return;
+		}
+		emitChecked(ctx, failure, () -> {
+			i32Const(ctx, index);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		});
+	}
+
+	/**
+	 * The failure form of a {@code defstruct} accessor's checked {@code %obj-ref} /
+	 * {@code %obj-set} (the operand at {@code position}), or null when the site does not
+	 * check or nothing could read what it signals: outside exception-handling mode the
+	 * non-instance traps either way, so the site keeps the plain trapping cast.
+	 */
+	private static @Nullable LispVal checkedFailure(List<LispVal> args, int position, WasmLispCompiler.Ctx ctx) {
+		return args.size() > position && ctx.ehMode ? args.get(position) : null;
+	}
+
+	/**
+	 * Over the object on the stack: its slots array, then {@code access} (which leaves
+	 * one value), when it is an instance -- in the ONE type test the plain site's cast
+	 * makes -- else the {@code failure} form's value:
+	 * {@code block (eqref -> eqref) block (eqref -> eqref) br_on_cast_fail 0 eqref
+	 * (ref $instance); struct.get $instance 1; <access>; br 1 end drop <failure> end}.
+	 */
+	private static void emitChecked(WasmLispCompiler.Ctx ctx, LispVal failure, Runnable access) {
+		ctx.writer.write(Instruction.BLOCK);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CALLABLE_BASE);
+		ctx.writer.write(Instruction.BLOCK);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CALLABLE_BASE);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.BR_ON_CAST_FAIL);
+		ctx.writer.write(0x01); // the operand nullable, the cast not
+		ctx.writer.writeUnsignedLeb128(0);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
+		ctx.writer.writeUnsignedLeb128(1);
+		castBuckets(ctx);
+		access.run();
+		ctx.writer.write(Instruction.BR);
+		ctx.writer.writeUnsignedLeb128(1);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.DROP);
+		WasmExprCompiler.compileExpr(failure, ctx);
+		ctx.writer.write(Instruction.END);
 	}
 
 	/**
@@ -216,10 +271,15 @@ final class WasmInstanceCompiler {
 		getLocal(ctx, objSlot);
 	}
 
-	/** {@code (%obj-set obj <k> v)}, returning the value written. */
+	/**
+	 * {@code (%obj-set obj <k> v)}, returning the value written; with a fifth operand, a
+	 * {@code defstruct} accessor place's checked store ({@link #compileRef}), whose check
+	 * follows the object AND the value.
+	 */
 	static void compileSet(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		requireGate(ctx, LispNames.OBJ_SET);
 		List<LispVal> args = cons.toList();
+		LispVal failure = checkedFailure(args, 4, ctx);
 		// The object is evaluated before the value, as in the interpreter.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int objSlot = ctx.allocTemp();
@@ -228,12 +288,21 @@ final class WasmInstanceCompiler {
 		int valSlot = ctx.allocTemp();
 		setLocal(ctx, valSlot);
 		getLocal(ctx, objSlot);
-		pushSlots(ctx);
-		i32Const(ctx, literalIndex(args.get(2), LispNames.OBJ_SET));
-		getLocal(ctx, valSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		getLocal(ctx, valSlot);
+		int index = literalIndex(args.get(2), LispNames.OBJ_SET);
+		Runnable store = () -> {
+			i32Const(ctx, index);
+			getLocal(ctx, valSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+			getLocal(ctx, valSlot);
+		};
+		if (failure == null) {
+			pushSlots(ctx);
+			store.run();
+		}
+		else {
+			emitChecked(ctx, failure, store);
+		}
 	}
 
 	/** {@code (%obj-is obj '<tag1> '<tag2> ...)}. */

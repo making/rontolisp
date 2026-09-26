@@ -10538,6 +10538,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aHandlerBindHandlerPrintsTheReportOfItsCondition() throws Exception {
+		// The JVM twin is
+		// JvmLispCompilerTest#compileAndRunAHandlerBindHandlerPrintsTheReportOfItsCondition.
+		assertThat(compileAndRun("""
+				(defun hb-main ()
+				  (handler-bind ((error (lambda (c) (format t "saw ~a~%" c))))
+				    (car 5)))
+				(print (handler-case (hb-main) (error () :caught)))
+				""")).isEqualTo("saw CAR: The value 5 is not of type LIST\n:CAUGHT");
+	}
+
+	@Test
 	void returnInAHandlerBindHandlerExitsTheLexicalNilBlock() throws Exception {
 		// rove's SIGNALS shape: the handler's plain (return c) names the (block nil ...)
 		// that LEXICALLY encloses it, whatever iteration form -- each of which
@@ -24603,6 +24615,53 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileComponentAndRun("""
 				(print (handler-case (funcall (car (list 3)) 1) (error (e) (princ-to-string e))))
 				""")).isEqualTo("\"Not a function: 3\"");
+	}
+
+	@Test
+	void ehAStructAccessorOnANonInstanceSignalsATypeError() throws Exception {
+		// The checked %obj-ref / %obj-set cast is a br_on_cast_fail whose miss runs the
+		// accessor's %struct-type-error (.kb/defstruct.md, "Accessors check their
+		// object"): catchable, with the interpreter's and the JVM's report, datum and
+		// expected-type, where the plain ref.cast trapped.
+		String source = """
+				(defstruct point x y)
+				(defvar *v* nil)
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (type-error-datum e) (eq (type-error-expected-type e) 'point)
+				                          (princ-to-string e)))))
+				(print (te (lambda () (point-x 42))))
+				(print (te (lambda () (point-y (cons 1 2)))))
+				(print (te (lambda () (setf (point-y (cons 1 2)) (progn (setq *v* :v) 0)))))
+				(print *v*)
+				(print (te (lambda () (incf (point-x "s")))))
+				(print (te (lambda () (copy-point nil))))
+				(let ((p (make-point :x 1))) (setf (point-y p) 2) (incf (point-x p)) (print (list p (copy-point p))))
+				""";
+		String expected = """
+				(42 T "POINT-X: The value 42 is not of type POINT")
+				((1 . 2) T "POINT-Y: The value (1 . 2) is not of type POINT")
+				((1 . 2) T "(SETF POINT-Y): The value (1 . 2) is not of type POINT")
+				:V
+				("s" T "POINT-X: The value \\"s\\" is not of type POINT")
+				(NIL T "COPY-POINT: The value NIL is not of type POINT")
+				(#S(POINT :X 2 :Y 2) #S(POINT :X 2 :Y 2))""";
+		assertThat(compileAndRunPrelude(source)).isEqualTo(expected);
+	}
+
+	@Test
+	void outsideEhModeAStructAccessorKeepsItsTrappingCast() {
+		// Nothing reads the report outside exception-handling mode -- the non-instance
+		// traps either way -- so the accessors stay the bare %obj-ref / %obj-set and the
+		// module is what it was before accessors checked: no %struct-type-error, no
+		// operator text.
+		String source = """
+				(defstruct point x y)
+				(let ((p (make-point :x 1 :y 2))) (setf (point-y p) 5) (print (+ (point-x p) (point-y p))))
+				""";
+		byte[] wasm = new WasmLispCompiler().compile(LispReader.readAllFromString(source));
+		String text = new String(wasm, java.nio.charset.StandardCharsets.ISO_8859_1);
+		assertThat(text).doesNotContain("POINT-X").doesNotContain("is not of type");
 	}
 
 	@Test

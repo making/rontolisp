@@ -1318,6 +1318,8 @@ public final class ClosRegistry {
 	 */
 	private final Map<String, LispVal> structAccessorTypes = new LinkedHashMap<>();
 
+	private final Map<String, String> structAccessorOwners = new LinkedHashMap<>();
+
 	private final Map<String, Map<String, LispVal>> structSlotTypes = new LinkedHashMap<>();
 
 	/**
@@ -1529,6 +1531,34 @@ public final class ClosRegistry {
 			exact = this.structSlotTypes.get(qn.member());
 		}
 		return exact == null ? Map.of() : exact;
+	}
+
+	/**
+	 * Registers the struct a {@code defstruct} slot accessor belongs to -- the type its
+	 * {@code setf} expansion names when the object is not an instance.
+	 * @param accessorName the generated accessor's name, as the expansion spells it
+	 * @param structName the struct name as spelled in the defstruct
+	 */
+	public void registerStructAccessor(String accessorName, String structName) {
+		this.structAccessorOwners.put(normalize(accessorName), structName);
+	}
+
+	/**
+	 * The struct a {@code defstruct} slot accessor belongs to, as spelled in its
+	 * defstruct, or null. Single- and double-colon spellings match, like
+	 * {@link #structAccessorType}.
+	 * @param accessorName the accessor name as spelled at the call site
+	 * @return the struct name, or null
+	 */
+	@Nullable public String structOfAccessor(String accessorName) {
+		String exact = this.structAccessorOwners.get(normalize(accessorName));
+		if (exact != null) {
+			return exact;
+		}
+		if (PackageRegistry.splitQualified(accessorName) instanceof PackageRegistry.QualifiedName qn) {
+			return this.structAccessorOwners.get(qn.member());
+		}
+		return null;
 	}
 
 	/**

@@ -1098,6 +1098,24 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
+	void aHandlerBindHandlerThatCanSeeItsConditionRoutesReports() {
+		// Every handler-bind handler is CALLED with the instance, so a lambda whose body
+		// mentions its parameter holds it -- on the message-rendering backends and where
+		// messages are lazy alike.
+		String named = "(print (handler-bind ((error (lambda (c) (format t \"~a\" c)))) (car 5)))";
+		assertThat(routesReports(named)).isTrue();
+		assertThat(routesReportsLazy(named)).isTrue();
+		assertThat(routesReports("(print (handler-bind ((error #'(lambda (c) (princ c)))) (car 5)))")).isTrue();
+		// A named function (or any computed handler) can do anything with it.
+		assertThat(routesReports("(defun h (c) (princ c)) (print (handler-bind ((error #'h)) (car 5)))")).isTrue();
+		assertThat(routesReports("(print (handler-bind ((error 'h)) (car 5)))")).isTrue();
+		assertThat(routesReports("(print (handler-bind ((error (lambda (&rest r) (princ r)))) (car 5)))")).isTrue();
+		// A handler that never mentions its parameter cannot hand it to a printer.
+		assertThat(routesReports("(print (handler-bind ((error (lambda (c) (print 1)))) (car 5)))")).isFalse();
+		assertThat(routesReportsLazy("(print (handler-bind ((error (lambda (c) (print 1)))) (car 5)))")).isFalse();
+	}
+
+	@Test
 	void ignoreErrorsRoutesReportsOnlyWhereASecondValueCanBeRead() {
 		// (ignore-errors f) hands the condition back as its SECONDARY value, which
 		// travels through the %mv-spill global that only a consumer ever reads.

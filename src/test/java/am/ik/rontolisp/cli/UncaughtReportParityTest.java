@@ -117,6 +117,31 @@ class UncaughtReportParityTest {
 	}
 
 	@Test
+	void aStructAccessorOnANonInstanceReportsTheAccessorAndItsType() throws Exception {
+		// The report line itself, not only the location lines: it was the interpreter's
+		// primitive ("%OBJ-REF expects an instance, got 42") against the JVM's
+		// ClassCastException text. The accessor is generated code, so the location is
+		// the call's line and names the function the call is written in.
+		Path program = write("struct.lisp", """
+				(defstruct point x y)
+
+				(defun norm (p)
+				  (+ (point-x p) (point-y p)))
+
+				(norm 42)
+				""");
+		assertSameReport(program, "Unhandled condition: POINT-X: The value 42 is not of type POINT",
+				"  at " + program + ":4 in NORM");
+		Path store = write("struct-store.lisp", """
+				(defstruct point x y)
+
+				(setf (point-y (list 1 2)) 0)
+				""");
+		assertSameReport(store, "Unhandled condition: (SETF POINT-Y): The value (1 2) is not of type POINT",
+				"  at " + store + ":3");
+	}
+
+	@Test
 	void aMacroCallReportsItsOwnLineWhereverTheMacroWasDefined() throws Exception {
 		Path local = write("macro.lisp", """
 				(defmacro must (x)

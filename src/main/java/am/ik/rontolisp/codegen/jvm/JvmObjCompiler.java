@@ -164,20 +164,67 @@ final class JvmObjCompiler {
 		ctx.emit(Opcode.AASTORE);
 	}
 
-	/** {@code (%obj-ref obj <k>)}. */
+	/**
+	 * {@code (%obj-ref obj <k>)}, and a {@code defstruct} accessor's checked
+	 * {@code (%obj-ref obj <k> failure)}: {@code failure} is compiled on the arm the
+	 * instance guard rejects, so a non-instance signals the accessor's type-error rather
+	 * than a {@code ClassCastException} -- or, being a cons, reading a slot.
+	 */
 	static void compileRef(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
+		LispVal failure = args.size() > 3 ? args.get(3) : null;
 		if (gateOff(ctx)) {
-			// No instance can exist here, so this read is unreachable; the object is
-			// still evaluated for effect and the result is nil.
-			evaluateForEffectThenNil(args.get(1), ctx, className);
+			// No instance can exist here: the object is still evaluated for effect, and
+			// the read answers nil -- or fails, when it checks.
+			if (failure == null) {
+				evaluateForEffectThenNil(args.get(1), ctx, className);
+			}
+			else {
+				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+				ctx.emit(Opcode.POP);
+				JvmExprCompiler.compileExpr(failure, ctx, className);
+			}
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		JvmEmitHelper.emitIntConst(ctx, 1 + literalIndex(args.get(2)));
-		ctx.emit(Opcode.AALOAD);
+		if (failure == null) {
+			ctx.emit(Opcode.CHECKCAST);
+			ctx.emitU2(ctx.objectArrayClass.index());
+			JvmEmitHelper.emitIntConst(ctx, 1 + literalIndex(args.get(2)));
+			ctx.emit(Opcode.AALOAD);
+			return;
+		}
+		int objSlot = ctx.allocTemp();
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(objSlot);
+		emitChecked(ctx, className, objSlot, failure, () -> {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(objSlot);
+			ctx.emit(Opcode.CHECKCAST);
+			ctx.emitU2(ctx.objectArrayClass.index());
+			JvmEmitHelper.emitIntConst(ctx, 1 + literalIndex(args.get(2)));
+			ctx.emit(Opcode.AALOAD);
+		});
+	}
+
+	/**
+	 * Emits {@code access} when the value in {@code objSlot} passes the instance guard,
+	 * else {@code failure}; either arm leaves one value.
+	 */
+	private static void emitChecked(JvmLispCompiler.Ctx ctx, String className, int objSlot, LispVal failure,
+			Runnable access) {
+		int hdrSlot = ctx.allocTemp();
+		List<Integer> toFailure = new ArrayList<>();
+		emitInstanceGuard(ctx, objSlot, hdrSlot, toFailure);
+		access.run();
+		int gotoEndPos = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
+		ctx.emitU2(0);
+		for (int p : toFailure) {
+			JvmEmitHelper.patchBranch(ctx, p, ctx.code.size());
+		}
+		JvmExprCompiler.compileExpr(failure, ctx, className);
+		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());
 	}
 
 	private static MethodrefConstant arraysCopyOfMethod(JvmLispCompiler.Ctx ctx) {
@@ -230,10 +277,37 @@ final class JvmObjCompiler {
 		ctx.emit(Opcode.AASTORE);
 	}
 
-	/** {@code (%obj-set obj <k> v)}, returning the value written. */
+	/**
+	 * {@code (%obj-set obj <k> v)}, returning the value written; with a fifth operand, a
+	 * {@code defstruct} accessor place's checked store ({@link #compileRef}), whose check
+	 * follows the object AND the value.
+	 */
 	static void compileSet(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		requireGate(ctx, LispNames.OBJ_SET);
 		List<LispVal> args = cons.toList();
+		if (args.size() > 4) {
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			int objSlot = ctx.allocTemp();
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(objSlot);
+			JvmExprCompiler.compileExpr(args.get(3), ctx, className);
+			int valSlot = ctx.allocTemp();
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(valSlot);
+			emitChecked(ctx, className, objSlot, args.get(4), () -> {
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(objSlot);
+				ctx.emit(Opcode.CHECKCAST);
+				ctx.emitU2(ctx.objectArrayClass.index());
+				JvmEmitHelper.emitIntConst(ctx, 1 + literalIndex(args.get(2)));
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(valSlot);
+				ctx.emit(Opcode.AASTORE);
+				ctx.emit(Opcode.ALOAD);
+				ctx.emit(valSlot);
+			});
+			return;
+		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.objectArrayClass.index());

@@ -1763,6 +1763,19 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAHandlerBindHandlerPrintsTheReportOfItsCondition() throws Exception {
+		// The handler is called with the instance, so the printers route it through its
+		// report (~a / princ) -- the interpreter's answer, not the #<TYPE-ERROR ...>
+		// slot syntax.
+		assertThat(compileAndRun("""
+				(defun hb-main ()
+				  (handler-bind ((error (lambda (c) (format t "saw ~a~%" c))))
+				    (car 5)))
+				(print (handler-case (hb-main) (error () :caught)))
+				""")).isEqualTo("saw CAR: The value 5 is not of type LIST\n:CAUGHT");
+	}
+
+	@Test
 	void compileAndRunAnInnerHandlerCaseShadowsAnEnclosingHandlerBind() throws Exception {
 		// CLHS 9.1.4.1: handlers run MOST RECENT FIRST and handler-case transfers
 		// control, so the nearer handler-case handles the condition and the enclosing
@@ -17959,6 +17972,35 @@ class JvmLispCompilerTest {
 				(print (point-x p))
 				(print (point-x q))
 				""")).isEqualTo("1\n10\nT\nNIL\n1\n100");
+	}
+
+	@Test
+	void compileAndRunDefstructAccessorsSignalATypeErrorOnANonInstance() throws Exception {
+		// A non-instance fails the instance guard -- a cons is an Object[] too, and
+		// the accessor read (and the setf wrote) one of its fields -- and signals the
+		// accessor's type-error, not a ClassCastException.
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(defvar *v* nil)
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (type-error-datum e) (eq (type-error-expected-type e) 'point)
+				                          (princ-to-string e)))))
+				(print (te (lambda () (point-x 42))))
+				(print (te (lambda () (point-y (cons 1 2)))))
+				(print (te (lambda () (setf (point-y (cons 1 2)) (progn (setq *v* :v) 0)))))
+				(print *v*)
+				(print (te (lambda () (incf (point-x "s")))))
+				(print (te (lambda () (copy-point nil))))
+				(let ((p (make-point :x 1))) (setf (point-y p) 2) (incf (point-x p)) (print (list p (copy-point p))))
+				""")).isEqualTo("""
+				(42 T "POINT-X: The value 42 is not of type POINT")
+				((1 . 2) T "POINT-Y: The value (1 . 2) is not of type POINT")
+				((1 . 2) T "(SETF POINT-Y): The value (1 . 2) is not of type POINT")
+				:V
+				("s" T "POINT-X: The value \\"s\\" is not of type POINT")
+				(NIL T "COPY-POINT: The value NIL is not of type POINT")
+				(#S(POINT :X 2 :Y 2) #S(POINT :X 2 :Y 2))""");
 	}
 
 	@Test

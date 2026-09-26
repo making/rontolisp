@@ -9383,6 +9383,36 @@ cases:
       (10 20)
       25
       (T NIL)
+  - name: defstruct-accessors-signal-a-type-error-on-a-non-instance
+    source: |
+      ;; CL's type-error naming the accessor, its setf place or the copier, and
+      ;; the struct type -- where the interpreter reported its own primitive, the
+      ;; JVM read (and wrote) a field of a cons and wasm-GC trapped. The store's
+      ;; check follows its value, so an incf reports the read.
+      (defstruct cs-te-pt x y)
+      (defvar *cs-te-v* nil)
+      (defun cs-te (thunk)
+        (handler-case (funcall thunk)
+          (type-error (e) (list (type-error-datum e) (eq (type-error-expected-type e) 'cs-te-pt)
+                                (princ-to-string e)))))
+      (print (cs-te (lambda () (cs-te-pt-x 42))))
+      (print (cs-te (lambda () (cs-te-pt-y (cons 1 2)))))
+      (print (cs-te (lambda () (setf (cs-te-pt-y (cons 1 2)) (progn (setq *cs-te-v* :v) 0)))))
+      (print *cs-te-v*)
+      (print (cs-te (lambda () (incf (cs-te-pt-x "s")))))
+      (print (cs-te (lambda () (copy-cs-te-pt nil))))
+      (let ((p (make-cs-te-pt :x 1)))
+        (setf (cs-te-pt-y p) 2)
+        (incf (cs-te-pt-x p))
+        (print (list p (copy-cs-te-pt p))))
+    expected: |
+      (42 T "CS-TE-PT-X: The value 42 is not of type CS-TE-PT")
+      ((1 . 2) T "CS-TE-PT-Y: The value (1 . 2) is not of type CS-TE-PT")
+      ((1 . 2) T "(SETF CS-TE-PT-Y): The value (1 . 2) is not of type CS-TE-PT")
+      :V
+      ("s" T "CS-TE-PT-X: The value \"s\" is not of type CS-TE-PT")
+      (NIL T "COPY-CS-TE-PT: The value NIL is not of type CS-TE-PT")
+      (#S(CS-TE-PT :X 2 :Y 2) #S(CS-TE-PT :X 2 :Y 2))
   - name: instance-print-syntax-and-identity
     source: |
       (defstruct ips-pt x y)
@@ -12887,6 +12917,19 @@ cases:
       :OUTER-RAN
       :OUTER-RAN
       (TYPE-ERROR (TYPE-ERROR :INNER))
+  # A handler-bind handler is called with the condition, so ~a prints its report,
+  # not the #<TYPE-ERROR ...> slot syntax.
+  - name: handler-bind-handler-prints-report
+    source: |
+      (defvar *ci-hbr-seen* nil)
+      (defun ci-hbr-main ()
+        (handler-bind ((error (lambda (c) (setq *ci-hbr-seen* (format nil "saw ~a" c)))))
+          (car 5)))
+      (print (handler-case (ci-hbr-main) (error () :caught)))
+      (print *ci-hbr-seen*)
+    expected: |
+      :CAUGHT
+      "saw CAR: The value 5 is not of type LIST"
   # A catching form in an ARGUMENT position: the enclosing call has operands live
   # when the protected region begins, and entering a handler discards them (on the
   # JVM the compiler spills them around the region). The float case keeps a raw
@@ -19166,6 +19209,18 @@ standalone:
       SIMPLE-ERROR
     stderr: |
       Unhandled condition: CAR: The value SIMPLE-ERROR is not of type LIST
+    fails: true
+  - name: uncaught-struct-accessor-report
+    source: |
+      ;; The handler-case puts the wasm module in EH mode, where the accessor's
+      ;; checked cast signals instead of trapping (.kb/defstruct.md).
+      (defstruct pt x y)
+      (print (handler-case (pt-x 41) (error (e) (princ-to-string e))))
+      (pt-x 42)
+    stdout: |
+      "PT-X: The value 41 is not of type PT"
+    stderr: |
+      Unhandled condition: PT-X: The value 42 is not of type PT
     fails: true
   - name: uncaught-non-function-report
     source: |
