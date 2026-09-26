@@ -21,7 +21,9 @@ import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispFunction;
+import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispJavaObject;
 import am.ik.rontolisp.LispLambda;
@@ -308,6 +310,7 @@ final class JavaInterop {
 			case LispNil ignored -> JavaKind.Lisp.NIL;
 			case LispTrue ignored -> JavaKind.Lisp.T;
 			case LispInteger ignored -> JavaKind.Lisp.INTEGER;
+			case LispBigInteger ignored -> JavaKind.Lisp.BIGNUM;
 			case LispDouble ignored -> JavaKind.Lisp.FLOAT;
 			case LispString s -> s.value().length() == 1 ? JavaKind.Lisp.STRING_1 : JavaKind.Lisp.STRING;
 			case LispChar c ->
@@ -796,8 +799,29 @@ final class JavaInterop {
 				}
 				return marshalSequence(elements, target, caller, out, index, proxies);
 			}
+			case LispFloatArray array -> {
+				if (array.dims().length != 1) {
+					return NO_MATCH;
+				}
+				// A packed float vector's elements are the floats aref reads (every width
+				// widened to a double), as a compiled program's _jseq reads them.
+				int count = array.dims()[0];
+				List<LispVal> elements = new ArrayList<>(count);
+				for (int i = 0; i < count; i++) {
+					elements.add(new LispDouble(array.elementAt(i)));
+				}
+				return marshalSequence(elements, target, caller, out, index, proxies);
+			}
+			case LispIntVector vector -> {
+				// A packed (unsigned-byte 8|16|32) vector's elements, widened unsigned.
+				List<LispVal> elements = new ArrayList<>(vector.length());
+				for (int i = 0; i < vector.length(); i++) {
+					elements.add(new LispInteger(vector.elementAt(i)));
+				}
+				return marshalSequence(elements, target, caller, out, index, proxies);
+			}
 			default -> {
-				return NO_MATCH; // symbol, hash-table, ... are not bridged
+				return NO_MATCH; // symbol, ratio, hash-table, ... are not bridged
 			}
 		}
 	}
@@ -808,6 +832,7 @@ final class JavaInterop {
 			case LispNil ignored -> target == boolean.class || target == Boolean.class ? Boolean.FALSE : null;
 			case LispTrue ignored -> Boolean.TRUE;
 			case LispInteger i -> convertLong(i.value(), target);
+			case LispBigInteger b -> b.value(); // a BigInteger or a supertype of it
 			case LispDouble d -> convertDouble(d.value(), target);
 			case LispString s -> target.isAssignableFrom(String.class) ? s.value() : (Object) s.value().charAt(0);
 			case LispChar c -> {
@@ -840,6 +865,9 @@ final class JavaInterop {
 		}
 		if (target == byte.class || target == Byte.class) {
 			return (byte) v;
+		}
+		if (target == BigInteger.class) {
+			return BigInteger.valueOf(v);
 		}
 		// Box to the narrowest type that holds the value, like Common Lisp fixnums.
 		return v >= Integer.MIN_VALUE && v <= Integer.MAX_VALUE ? (Object) (int) v : (Object) v;

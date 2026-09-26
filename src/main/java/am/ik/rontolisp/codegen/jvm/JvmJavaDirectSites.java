@@ -101,18 +101,17 @@ final class JvmJavaDirectSites {
 	 */
 	static final String CONVERT_PREFIX = "_jconv$";
 
-	// _jkind's codes, in the bridge's kindOf order; 0-8 index LISP_KINDS.
-	private static final int KIND_CONS = 9;
+	// _jkind's codes: a Lisp kind's is its index in LISP_KINDS (its ordinal), then the
+	// four below.
+	private static final JavaKind.Lisp[] LISP_KINDS = JavaKind.Lisp.values();
 
-	private static final int KIND_ARRAY = 10;
+	private static final int KIND_CONS = LISP_KINDS.length;
 
-	private static final int KIND_HOST = 11;
+	private static final int KIND_ARRAY = KIND_CONS + 1;
 
-	private static final int KIND_NONE = 12;
+	private static final int KIND_HOST = KIND_CONS + 2;
 
-	private static final JavaKind.Lisp[] LISP_KINDS = { JavaKind.Lisp.NIL, JavaKind.Lisp.T, JavaKind.Lisp.INTEGER,
-			JavaKind.Lisp.FLOAT, JavaKind.Lisp.STRING_1, JavaKind.Lisp.STRING, JavaKind.Lisp.CHAR,
-			JavaKind.Lisp.SUPPLEMENTARY_CHAR, JavaKind.Lisp.FUNCTION };
+	private static final int KIND_NONE = KIND_CONS + 3;
 
 	private static final String OBJECT_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
@@ -186,6 +185,14 @@ final class JvmJavaDirectSites {
 
 	private @Nullable MethodrefConstant strv;
 
+	// The specialized vector shapes the program can hold (its gates), and the program's
+	// _bf16Value when a bfloat16 vector can be one of them.
+	private boolean floatVectors;
+
+	private boolean intVectors;
+
+	private @Nullable MethodrefConstant bf16Value;
+
 	private final Map<String, MethodrefConstant> costs = new LinkedHashMap<>();
 
 	private @Nullable JvmJavaImplementations implementations;
@@ -215,6 +222,26 @@ final class JvmJavaDirectSites {
 	 */
 	void strv(@Nullable MethodrefConstant strv) {
 		this.strv = strv;
+	}
+
+	/**
+	 * Names the specialized vector shapes the program can hold, which a sequence
+	 * argument's elements are read from as the bridge's {@code marshal} reads them: a
+	 * packed float vector ({@code double[]} / {@code float[]} / bfloat16 {@code short[]},
+	 * read through the program's {@code _bf16Value}) and a packed integer vector
+	 * ({@code long[]} / octet {@code byte[]}). A shape the program cannot make is never
+	 * tested for.
+	 * @param floats whether the program carries the packed float runtime
+	 * @param ints whether it carries the packed integer runtime
+	 * @param bf16Value the program's {@code _bf16Value(I)D}, present when {@code floats}
+	 */
+	void packedVectors(boolean floats, boolean ints, @Nullable MethodrefConstant bf16Value) {
+		if (floats && bf16Value == null) {
+			throw new IllegalArgumentException("the packed float runtime without _bf16Value");
+		}
+		this.floatVectors = floats;
+		this.intVectors = ints;
+		this.bf16Value = bf16Value;
 	}
 
 	/**
@@ -1059,6 +1086,11 @@ final class JvmJavaDirectSites {
 					a.instanceOf(cls("java/lang/Long"));
 					a.branch(Opcode.IFEQ, fail);
 				}
+				case BIGNUM -> {
+					a.aload(slot);
+					a.instanceOf(cls("java/math/BigInteger"));
+					a.branch(Opcode.IFEQ, fail);
+				}
 				case FLOAT -> {
 					a.aload(slot);
 					a.instanceOf(cls("java/lang/Double"));
@@ -1156,6 +1188,8 @@ final class JvmJavaDirectSites {
 					}
 				}
 				case INTEGER -> convertInteger(slot, name);
+				// The BigInteger itself, for that class or a supertype.
+				case BIGNUM -> a.aload(slot);
 				case FLOAT -> {
 					switch (name) {
 						case "double" -> doubleValue(slot);
@@ -1269,6 +1303,8 @@ final class JvmJavaDirectSites {
 					a.op(Opcode.I2B);
 					a.invokestatic(method("java/lang/Byte", "valueOf", "(B)Ljava/lang/Byte;"));
 				}
+				case "java.math.BigInteger" ->
+					a.invokestatic(method("java/math/BigInteger", "valueOf", "(J)Ljava/math/BigInteger;"));
 				default -> {
 					// Boxed to the narrowest type that holds it, like a fixnum.
 					int wide = a.label();
@@ -1599,8 +1635,8 @@ final class JvmJavaDirectSites {
 	}
 
 	// _jkind(Object)I: the bridge's kindOf as a code -- the Lisp kinds (LISP_KINDS'
-	// index), a cons, a Lisp array, a host object, or none (a symbol, a bignum, a ratio)
-	// -- tested in its order.
+	// index), a cons, a Lisp array (a specialized one too), a host object, or none (a
+	// symbol, a ratio, a hash table) -- tested in its order.
 	private Method buildKind(Utf8Constant name, Utf8Constant desc, MethodrefConstant hostTest) {
 		JvmAsm a = new JvmAsm();
 		ClassConstant string = cls("java/lang/String");
@@ -1610,19 +1646,25 @@ final class JvmJavaDirectSites {
 		int notNil = a.label();
 		a.aload(0);
 		a.branch(Opcode.IFNONNULL, notNil);
-		returnCode(a, 0);
+		returnCode(a, code(JavaKind.Lisp.NIL));
 		a.bind(notNil);
 		int notInteger = a.label();
 		a.aload(0);
 		a.instanceOf(cls("java/lang/Long"));
 		a.branch(Opcode.IFEQ, notInteger);
-		returnCode(a, 2);
+		returnCode(a, code(JavaKind.Lisp.INTEGER));
 		a.bind(notInteger);
+		int notBignum = a.label();
+		a.aload(0);
+		a.instanceOf(cls("java/math/BigInteger"));
+		a.branch(Opcode.IFEQ, notBignum);
+		returnCode(a, code(JavaKind.Lisp.BIGNUM));
+		a.bind(notBignum);
 		int notFloat = a.label();
 		a.aload(0);
 		a.instanceOf(cls("java/lang/Double"));
 		a.branch(Opcode.IFEQ, notFloat);
-		returnCode(a, 3);
+		returnCode(a, code(JavaKind.Lisp.FLOAT));
 		a.bind(notFloat);
 		// A character is an int[] of length 1; any other int[] is a host object.
 		int notChar = a.label();
@@ -1641,9 +1683,9 @@ final class JvmJavaDirectSites {
 		a.iaload();
 		a.invokestatic(method("java/lang/Character", "isBmpCodePoint", "(I)Z"));
 		a.branch(Opcode.IFEQ, supplementary);
-		returnCode(a, 6);
+		returnCode(a, code(JavaKind.Lisp.CHAR));
 		a.bind(supplementary);
-		returnCode(a, 7);
+		returnCode(a, code(JavaKind.Lisp.SUPPLEMENTARY_CHAR));
 		a.bind(notChar);
 		// A quote-framed string is a Lisp string (length 3: one character), "T" the
 		// symbol t, any other string another symbol.
@@ -1668,16 +1710,16 @@ final class JvmJavaDirectSites {
 		a.invokevirtual(length);
 		a.iconst(3);
 		a.branch(Opcode.IF_ICMPNE, longer);
-		returnCode(a, 4);
+		returnCode(a, code(JavaKind.Lisp.STRING_1));
 		a.bind(longer);
-		returnCode(a, 5);
+		returnCode(a, code(JavaKind.Lisp.STRING));
 		a.bind(symbol);
 		int other = a.label();
 		a.ldcString(str("T"));
 		a.aload(0);
 		a.invokevirtual(method("java/lang/String", "equals", "(Ljava/lang/Object;)Z"));
 		a.branch(Opcode.IFEQ, other);
-		returnCode(a, 1);
+		returnCode(a, code(JavaKind.Lisp.T));
 		a.bind(other);
 		returnCode(a, KIND_NONE);
 		a.bind(notString);
@@ -1698,7 +1740,7 @@ final class JvmJavaDirectSites {
 		a.aaload();
 		a.instanceOf(cls("java/lang/Integer"));
 		a.branch(Opcode.IFEQ, cons);
-		returnCode(a, 8);
+		returnCode(a, code(JavaKind.Lisp.FUNCTION));
 		a.bind(cons);
 		returnCode(a, KIND_CONS);
 		a.bind(notObjects);
@@ -1719,8 +1761,16 @@ final class JvmJavaDirectSites {
 		a.branch(Opcode.IFEQ, notArray);
 		returnCode(a, KIND_ARRAY);
 		a.bind(notArray);
-		// A host object (_jhost), or a value of no kind (a bignum, a ratio, a hash
-		// table).
+		// A specialized array the program can hold: _jseq reads a rank-1 one.
+		for (String shape : packedShapes()) {
+			int next = a.label();
+			a.aload(0);
+			a.instanceOf(cls(shape));
+			a.branch(Opcode.IFEQ, next);
+			returnCode(a, KIND_ARRAY);
+			a.bind(next);
+		}
+		// A host object (_jhost), or a value of no kind (a ratio, a hash table).
 		int none = a.label();
 		a.aload(0);
 		a.invokestatic(hostTest);
@@ -1731,6 +1781,25 @@ final class JvmJavaDirectSites {
 		return new Method(name, desc, 3, 1, a.finish(), List.of());
 	}
 
+	private static int code(JavaKind.Lisp kind) {
+		return kind.ordinal();
+	}
+
+	// The array classes of the specialized arrays the program can hold.
+	private List<String> packedShapes() {
+		List<String> shapes = new ArrayList<>();
+		if (this.floatVectors) {
+			shapes.add("[D");
+			shapes.add("[F");
+			shapes.add("[S");
+		}
+		if (this.intVectors) {
+			shapes.add("[J");
+			shapes.add("[B");
+		}
+		return shapes;
+	}
+
 	private static void returnCode(JvmAsm a, int code) {
 		a.iconst(code);
 		a.ireturn();
@@ -1738,8 +1807,9 @@ final class JvmJavaDirectSites {
 
 	// _jseq(Object)Object[]: the bridge's element list of a cons or a Lisp array (the
 	// value is one: _jkind said so), or null when it is not a sequence -- a dotted list,
-	// a list ending in a function value, an array of rank other than 1. A packed vector's
-	// Long.MIN_VALUE is nil; a fill pointer bounds the elements.
+	// a list ending in a function value, an array of rank other than 1, a quantized
+	// matrix. A packed fixnum vector's Long.MIN_VALUE is nil; a fill pointer bounds the
+	// elements; a specialized vector's are the values aref reads (emitPackedElements).
 	private Method buildSequence(Utf8Constant name, Utf8Constant desc) {
 		JvmAsm a = new JvmAsm();
 		ClassConstant objects = cls("[Ljava/lang/Object;");
@@ -1819,6 +1889,9 @@ final class JvmJavaDirectSites {
 		a.aload(3);
 		a.areturn();
 		a.bind(notCons);
+		for (String shape : packedShapes()) {
+			emitPackedElements(a, shape);
+		}
 		// A Lisp array: slot 0 the {dims, fillPointer, ...} header (1 = header).
 		int rankOne = a.label();
 		a.aload(0);
@@ -1944,7 +2017,130 @@ final class JvmJavaDirectSites {
 		a.bind(done);
 		a.aload(3);
 		a.areturn();
-		return new Method(name, desc, 6, 7, a.finish(), List.of());
+		return new Method(name, desc, 6, 11, a.finish(), List.of());
+	}
+
+	// One specialized shape's arm of _jseq: when the value is of the array class, its
+	// elements after the header -- each a Double read as aref reads it, or a Long -- or
+	// null when it is no rank-1 vector. The shapes and their headers: a packed float
+	// array double[] / float[] {rank, dim..., e...} and bfloat16 short[] {rank, hi, lo,
+	// ..., e...} (JvmPackedFloatWidth, its element through _bf16Value), a packed integer
+	// vector long[] {width, e...} and an octet vector byte[] {8, e...} (read unsigned;
+	// any other byte[] is a quantized matrix). Locals 7 = the array, 8 = the count, 9 =
+	// the elements, 10 = the index.
+	private void emitPackedElements(JvmAsm a, String shape) {
+		int array = 7;
+		int count = 8;
+		int out = 9;
+		int index = 10;
+		int next = a.label();
+		int notVector = a.label();
+		a.aload(0);
+		a.instanceOf(cls(shape));
+		a.branch(Opcode.IFEQ, next);
+		a.aload(0);
+		a.checkcast(cls(shape));
+		a.astore(array);
+		int offset;
+		switch (shape) {
+			case "[D", "[F", "[S" -> {
+				JvmPackedFloatWidth width = switch (shape) {
+					case "[D" -> JvmPackedFloatWidth.DOUBLE;
+					case "[F" -> JvmPackedFloatWidth.SINGLE;
+					default -> JvmPackedFloatWidth.BFLOAT16;
+				};
+				// Rank 1: slot 0 is 1.
+				a.aload(array);
+				a.iconst(0);
+				switch (shape) {
+					case "[D" -> {
+						a.daload();
+						a.d2i();
+					}
+					case "[F" -> {
+						a.faload();
+						a.f2i();
+					}
+					default -> a.saload();
+				}
+				a.iconst(1);
+				a.branch(Opcode.IF_ICMPNE, notVector);
+				offset = width.dataOffset(1);
+			}
+			case "[B" -> {
+				a.aload(array);
+				a.arraylength();
+				a.branch(Opcode.IFEQ, notVector);
+				a.aload(array);
+				a.iconst(0);
+				a.baload();
+				a.iconst(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+				a.branch(Opcode.IF_ICMPNE, notVector);
+				offset = 1;
+			}
+			default -> offset = 1; // [J: the width, then the elements
+		}
+		int loop = a.label();
+		int done = a.label();
+		a.aload(array);
+		a.arraylength();
+		a.iconst(offset);
+		a.op(Opcode.ISUB);
+		a.istore(count);
+		a.iload(count);
+		a.anewarray(cls("java/lang/Object"));
+		a.astore(out);
+		a.iconst(0);
+		a.istore(index);
+		a.bind(loop);
+		a.iload(index);
+		a.iload(count);
+		a.branch(Opcode.IF_ICMPGE, done);
+		a.aload(out);
+		a.iload(index);
+		a.aload(array);
+		a.iload(index);
+		a.iconst(offset);
+		a.iadd();
+		MethodrefConstant doubleValueOf = method("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");
+		MethodrefConstant longValueOf = method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
+		switch (shape) {
+			case "[D" -> {
+				a.daload();
+				a.invokestatic(doubleValueOf);
+			}
+			case "[F" -> {
+				a.faload();
+				a.f2d();
+				a.invokestatic(doubleValueOf);
+			}
+			case "[S" -> {
+				a.saload();
+				a.invokestatic(Objects.requireNonNull(this.bf16Value, "_bf16Value"));
+				a.invokestatic(doubleValueOf);
+			}
+			case "[J" -> {
+				a.laload();
+				a.invokestatic(longValueOf);
+			}
+			default -> {
+				a.baload();
+				a.iconst(0xFF);
+				a.op(Opcode.IAND);
+				a.i2l();
+				a.invokestatic(longValueOf);
+			}
+		}
+		a.aastore();
+		a.iinc(index, 1);
+		a.branch(Opcode.GOTO, loop);
+		a.bind(done);
+		a.aload(out);
+		a.areturn();
+		a.bind(notVector);
+		a.aconstNull();
+		a.areturn();
+		a.bind(next);
 	}
 
 	// _jcost$N(Object)I for one type: the bridge's marshal cost -- kindCost of a value's

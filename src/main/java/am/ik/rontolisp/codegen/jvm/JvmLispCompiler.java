@@ -258,12 +258,13 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * The methods something outside the class's own bytecode finds by NAME, which
 	 * therefore stay in the class when it is split: {@code _apply} and {@code _strv},
 	 * which the shipped java:/objc:/ffi: bridges look up with {@code getDeclaredMethod},
-	 * {@code _lispToString}, which the java: bridge shows a value in a message with, and
+	 * {@code _lispToString}, which the java: bridge shows a value in a message with,
+	 * {@code _bf16Value}, which it reads a bfloat16 vector's elements through, and
 	 * {@code _gpuMaterialize}/{@code _gpuWritten}, which the travelling float-array
 	 * handle resolves through {@code MethodHandles} ({@code .kb/jvm-export.md}).
 	 */
 	private static final Set<String> REFLECTIVELY_FOUND_METHODS = Set.of("_apply", "_strv", "_lispToString",
-			"_gpuMaterialize", "_gpuWritten");
+			JvmFloatArrayRuntimeBuilder.BF16_VALUE, "_gpuMaterialize", "_gpuWritten");
 
 	/** The array runtime helper group ({@link JvmArrayRuntimeBuilder}). */
 	private static final String GROUP_ARRAYS = "arrays";
@@ -2174,6 +2175,14 @@ public final class JvmLispCompiler implements LispCompiler {
 			// elements too, before it costs and converts it -- as does the conversion
 			// of a value a java: interface implementation's function answers.
 			javaSites.direct().strv(strvMethod);
+			// ... and reads a specialized vector's elements from the shapes the program
+			// can hold, a bfloat16 one's through the program's own widening.
+			javaSites.direct()
+				.packedVectors(usesFloatArray, usesIntArray,
+						usesFloatArray ? cp.addMethodref(thisClass,
+								cp.addNameAndType(cp.addUtf8(JvmFloatArrayRuntimeBuilder.BF16_VALUE),
+										cp.addUtf8(JvmFloatArrayRuntimeBuilder.BF16_VALUE_DESC)))
+								: null);
 		}
 		// Numeric runtime helpers (long arithmetic with automatic BigInteger promotion)
 		// The interned layout array of an instance -- the discriminator the structural
@@ -4753,6 +4762,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			// found by name like _apply.
 			if (usesJavaBridge) {
 				roots.add("_lispToString");
+				// ... and reads a bfloat16 vector's elements through the program's own
+				// widening, found by name too.
+				if (usesFloatArray) {
+					roots.add(JvmFloatArrayRuntimeBuilder.BF16_VALUE);
+				}
 			}
 			// A generated java: interface implementation calls its program-side
 			// callbacks from its own class: an edge this class's bytecode cannot show.

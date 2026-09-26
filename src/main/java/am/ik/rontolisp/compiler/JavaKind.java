@@ -10,7 +10,7 @@ package am.ik.rontolisp.compiler;
  * kinds its arguments are statically known to have ({@link JavaSiteResolver}).
  * <p>
  * A cons or a Lisp array has no kind (its cost sums its elements), and neither has a
- * value the bridge never marshals (a symbol, a bignum, a hash table).
+ * value the bridge never marshals (a symbol, a ratio, a hash table).
  */
 public interface JavaKind {
 
@@ -25,6 +25,12 @@ public interface JavaKind {
 
 		/** An integer that fits a {@code long}. */
 		INTEGER,
+
+		/**
+		 * An integer that does not fit a {@code long}: it is a {@code BigInteger}, and
+		 * converts to nothing narrower.
+		 */
+		BIGNUM,
 
 		/** A float. */
 		FLOAT,

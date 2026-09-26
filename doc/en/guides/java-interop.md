@@ -60,17 +60,19 @@ Arguments and results are converted between rontolisp and Java automatically:
 
 | rontolisp | Java (in) | Java (out) |
 |-----------|-----------|------------|
-| integer | `int`/`long`/`short`/`byte`/`float`/`double` (and their boxes) | `int`/`long`/.../`BigInteger` → integer |
+| integer | `int`/`long`/`short`/`byte`/`float`/`double` (and their boxes), `BigInteger` | `int`/`long`/.../`BigInteger` → integer |
+| bignum | `BigInteger` (or a supertype: `Number`, `Object`, ...) | `BigInteger` → integer |
 | float | `double`/`float` (and boxes) | `double`/`float` → float |
 | string | `String`, or `char` if length 1 | `String` → string |
 | character | `char`/`Character` | `Character` → character |
 | `t` / `nil` | `boolean` (`nil` also → any `null` reference) | `boolean` → `t`/`nil` |
 | a `java` object | the wrapped host object | any other object → a `java` object |
 | a function/lambda | a `java:proxy` over the matching interface (an argument only) | — |
-| a proper list / a vector | `T[]` (element-wise, incl. primitives), or `List`/`Collection`/`Iterable` | any Java array → a list |
+| a proper list / a vector (specialized too) | `T[]` (element-wise, incl. primitives), or `List`/`Collection`/`Iterable` | any Java array → a list |
 
 A Java `null` (and a `void` method) comes back as `nil`. A proper list — or a
-rank-1 array made with `make-array` — passed where a Java array is expected is
+rank-1 array made with `make-array`, a specialized one included (`double-float`,
+`single-float`, `bfloat16`, `(unsigned-byte 8|16|32)`) — passed where a Java array is expected is
 converted element-wise to the component type (including primitive arrays like
 `int[]`), and where a `List`/`Collection`/`Iterable` is expected it becomes a
 `java.util.List`; nested lists convert recursively. In the other direction a
@@ -87,9 +89,26 @@ stays an opaque `java` object whose methods you call:
 (java:static "java.util.Arrays" "copyOf" (list 1 2 3) 2)   ; => (1 2)
 ```
 
-Symbols, hash tables, dotted (improper) lists and multidimensional (rank-2+)
-arrays are **not** bridged. A `java.math.BigInteger` result is a Lisp integer,
-not a `java` object: compute with it in Lisp rather than through `java:call`.
+A bignum is passed as a `java.math.BigInteger` where one (or a supertype such as
+`Number` or `Object`) is expected, and nowhere narrower: not as a `long`, and not
+as a `double` -- convert it with `float` first. A fixnum reaches a `BigInteger`
+parameter too, when no primitive overload takes it. In the other direction a
+`java.math.BigInteger` result is a Lisp integer, not a `java` object: compute with
+it in Lisp rather than through `java:call`.
+
+```lisp
+;; in: a bignum -> BigInteger; a fixnum -> BigInteger where no primitive fits
+(java:call (java:new "java.math.BigDecimal" (expt 10 20) 3) "toString")   ; => "100000000000000000.000"
+```
+
+```lisp
+;; in: a specialized vector converts element-wise like any vector
+(java:static "java.util.Arrays" "toString"
+             (make-array 2 :element-type 'double-float :initial-element 0.5d0))   ; => "[0.5, 0.5]"
+```
+
+Symbols, ratios, hash tables, dotted (improper) lists and multidimensional
+(rank-2+) arrays are **not** bridged.
 
 ## Overload resolution
 

@@ -37,16 +37,17 @@
 
 | rontolisp | Java (入力) | Java (出力) |
 |-----------|-----------|------------|
-| integer | `int`/`long`/`short`/`byte`/`float`/`double` (およびそのボックス型) | `int`/`long`/.../`BigInteger` → integer |
+| integer | `int`/`long`/`short`/`byte`/`float`/`double` (およびそのボックス型)、`BigInteger` | `int`/`long`/.../`BigInteger` → integer |
+| bignum | `BigInteger` (またはその上位型: `Number`、`Object` など) | `BigInteger` → integer |
 | float | `double`/`float` (およびボックス型) | `double`/`float` → float |
 | string | `String`、長さ 1 なら `char` | `String` → string |
 | character | `char`/`Character` | `Character` → character |
 | `t` / `nil` | `boolean` (`nil` は任意の `null` 参照にもなる) | `boolean` → `t`/`nil` |
 | `java` オブジェクト | ラップされたホストオブジェクト | その他のオブジェクト → `java` オブジェクト |
 | 関数/ラムダ | 一致するインターフェースに対する `java:proxy` (引数に限る) | — |
-| 真リスト / ベクタ | `T[]` (要素ごとに変換、プリミティブ配列も可)、または `List`/`Collection`/`Iterable` | 任意の Java 配列 → リスト |
+| 真リスト / ベクタ (特殊化されたものも含む) | `T[]` (要素ごとに変換、プリミティブ配列も可)、または `List`/`Collection`/`Iterable` | 任意の Java 配列 → リスト |
 
-Java の `null` (および `void` メソッド) は `nil` として返ります。Java の配列が期待される箇所に真リスト (または `make-array` で作ったランク 1 の配列) を渡すと、要素ごとに要素型へ変換されます (`int[]` などのプリミティブ配列も含む)。`List`/`Collection`/`Iterable` が期待される箇所では `java.util.List` になり、ネストしたリストは再帰的に変換されます。逆方向では、Java の **配列** の結果は Lisp のリストになりますが、返された `java.util.List` は不透明な `java` オブジェクトのままで、そのメソッドを呼び出して操作します。
+Java の `null` (および `void` メソッド) は `nil` として返ります。Java の配列が期待される箇所に真リスト (または `make-array` で作ったランク 1 の配列。`double-float`、`single-float`、`bfloat16`、`(unsigned-byte 8|16|32)` に特殊化された配列も含む) を渡すと、要素ごとに要素型へ変換されます (`int[]` などのプリミティブ配列も含む)。`List`/`Collection`/`Iterable` が期待される箇所では `java.util.List` になり、ネストしたリストは再帰的に変換されます。逆方向では、Java の **配列** の結果は Lisp のリストになりますが、返された `java.util.List` は不透明な `java` オブジェクトのままで、そのメソッドを呼び出して操作します。
 
 ```lisp
 ;; in: the list becomes a Collection
@@ -58,7 +59,20 @@ Java の `null` (および `void` メソッド) は `nil` として返ります�
 (java:static "java.util.Arrays" "copyOf" (list 1 2 3) 2)   ; => (1 2)
 ```
 
-シンボル、ハッシュテーブル、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリング **されません**。`java.math.BigInteger` の結果は `java` オブジェクトではなく Lisp の整数になるため、`java:call` ではなく Lisp の演算で扱ってください。
+bignum は、`java.math.BigInteger` (または `Number`、`Object` などその上位型) が期待される箇所に `BigInteger` として渡り、それより狭い型には渡りません。`long` にも `double` にもならないので、`double` が必要なら先に `float` で変換してください。fixnum も、それを受け取るプリミティブのオーバーロードがなければ `BigInteger` パラメータに渡ります。逆方向では、`java.math.BigInteger` の結果は `java` オブジェクトではなく Lisp の整数になるため、`java:call` ではなく Lisp の演算で扱ってください。
+
+```lisp
+;; in: a bignum -> BigInteger; a fixnum -> BigInteger where no primitive fits
+(java:call (java:new "java.math.BigDecimal" (expt 10 20) 3) "toString")   ; => "100000000000000000.000"
+```
+
+```lisp
+;; in: a specialized vector converts element-wise like any vector
+(java:static "java.util.Arrays" "toString"
+             (make-array 2 :element-type 'double-float :initial-element 0.5d0))   ; => "[0.5, 0.5]"
+```
+
+シンボル、分数、ハッシュテーブル、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリング **されません**。
 
 ## オーバーロード解決
 

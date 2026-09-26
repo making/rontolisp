@@ -28,7 +28,8 @@ Scheme's bytevectors are the 8-bit pack ([scheme-frontend.md](scheme-frontend.md
   `usesIntArray`) every door taking either reads slot 0: the octet side through
   `JvmIntArrayRuntimeBuilder.Octets` / `emitOctetTestOnStack`, the matrix side in
   `JvmFloatArrayRuntimeBuilder.emitQuantizedArm`, `JvmQuantizedMatrixRuntimeBuilder.emitMatrixTest`,
-  `JvmSimdCompiler`'s lane guard and `JvmGpuTemplate.gpuMatvec`; the packed-int print branch runs
+  `JvmSimdCompiler`'s lane guard, `JvmGpuTemplate.gpuMatvec` and the `java:` sequence readers
+  (`JvmJavaDirectSites._jseq`, the bridge's `packedElements`); the packed-int print branch runs
   ahead of the matrix's. No format code may be 8. A door that forgets reads a header as data
   without a word -- pinned by `JvmQuantizedMatrixTest.anOctetVectorAndAQuantizedMatrixAreToldApartWhereBothCanExist`.
   The travelling Java (`RontoFetch`, `RontoHttpClack`, `JvmObjcTemplate`, `JvmGpuTemplate`)
