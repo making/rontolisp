@@ -179,9 +179,9 @@ public final class BuiltinCallArity {
 	 * of one is judged by {@link #wrongCountSignal} rather than by the defun's own count
 	 * check, so it reports as the built-in on every backend -- the defun's check says
 	 * {@code Function expects at most 3 arguments} from inside the callee for the surplus
-	 * past an {@code &optional} tail. A paired shape is taken by the range its lambda list
-	 * spells ({@code (host port &optional opt value)}). A catalog name is not listed: a
-	 * defun of one keeps its own call path, as before.
+	 * past an {@code &optional} tail. A paired shape is taken by the range its lambda
+	 * list spells ({@code (host port &optional opt value)}). A catalog name is not
+	 * listed: a defun of one keeps its own call path, as before.
 	 * @param program the top-level forms, before their lambda lists are desugared
 	 * @return the names
 	 */
