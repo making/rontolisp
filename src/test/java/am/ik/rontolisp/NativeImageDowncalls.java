@@ -43,16 +43,29 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * So each binding records the shapes it asks the linker for and its test compares that
  * record -- what is actually asked for, not a list someone remembered to update -- with
- * this file. Every one of them binds against {@link #EVERYTHING}, so none of the tests
+ * the files. Every one of them binds against {@link #EVERYTHING}, so none of the tests
  * needs the library it is about.
+ *
+ * <p>
+ * The registration is more than one file under rontolisp's
+ * {@code META-INF/native-image/am.ik.rontolisp/}, and rontolisp's own binary reads every
+ * one of them; the plain methods ask about that union. The {@code objc:} package's is a
+ * file of its own ({@link #OBJC}), which the JVM backend copies into a compiled program
+ * so an image built from the user's jar -- which reads only that jar's {@code META-INF}
+ * -- needs no configuration. That file must stand ALONE, so its tests ask about it by
+ * path.
  *
  * @see am.ik.gpu.NativeImageForeignConfigTest
  * @see am.ik.rontolisp.eval.LinalgBlasDeclineTest
  */
 public final class NativeImageDowncalls {
 
-	private static final Path METADATA = Path.of("src", "main", "resources", "META-INF", "native-image",
-			"am.ik.rontolisp", "rontolisp", "reachability-metadata.json");
+	/** Where rontolisp's own image reads its registration from: every file below. */
+	private static final Path NATIVE_IMAGE = Path.of("src", "main", "resources", "META-INF", "native-image",
+			"am.ik.rontolisp");
+
+	/** The {@code objc:} registration a compiled program carries. */
+	public static final Path OBJC = NATIVE_IMAGE.resolve("rontolisp-objc").resolve("reachability-metadata.json");
 
 	/**
 	 * A lookup that finds every name. The address is arbitrary and non-NULL: a handle is
@@ -75,7 +88,23 @@ public final class NativeImageDowncalls {
 	 * @return the unregistered ones, spelled as the file spells them
 	 */
 	public static List<String> missing(Set<FunctionDescriptor> plain, Set<FunctionDescriptor> critical) {
-		Set<String> registered = registered();
+		return missing(registered(), plain, critical);
+	}
+
+	/**
+	 * The shapes with no entry in ONE file: what an image built from a compiled program
+	 * that carries only that file would refuse to bind.
+	 * @param metadata the {@code reachability-metadata.json} that must stand alone
+	 * @param plain the shapes bound without {@code critical}
+	 * @param critical the shapes bound with {@code critical(true)}
+	 * @return the unregistered ones, spelled as the file spells them
+	 */
+	public static List<String> missing(Path metadata, Set<FunctionDescriptor> plain, Set<FunctionDescriptor> critical) {
+		return missing(registered(metadata, "downcalls"), plain, critical);
+	}
+
+	private static List<String> missing(Set<String> registered, Set<FunctionDescriptor> plain,
+			Set<FunctionDescriptor> critical) {
 		List<String> missing = new ArrayList<>();
 		for (FunctionDescriptor descriptor : plain) {
 			if (!registered.contains(signature(descriptor, false))) {
@@ -120,7 +149,22 @@ public final class NativeImageDowncalls {
 	 * @return the unregistered ones, spelled as the file spells them
 	 */
 	public static List<String> missingVariadic(Set<FunctionDescriptor> shapes, int firstVariadicArg) {
-		Set<String> registered = registered();
+		return missingVariadic(registered(), shapes, firstVariadicArg);
+	}
+
+	/**
+	 * The VARIADIC downcall shapes with no entry in ONE file.
+	 * @param metadata the {@code reachability-metadata.json} that must stand alone
+	 * @param shapes the shapes bound with {@code Linker.Option.firstVariadicArg}
+	 * @param firstVariadicArg the index every one of them was bound at
+	 * @return the unregistered ones, spelled as the file spells them
+	 */
+	public static List<String> missingVariadic(Path metadata, Set<FunctionDescriptor> shapes, int firstVariadicArg) {
+		return missingVariadic(registered(metadata, "downcalls"), shapes, firstVariadicArg);
+	}
+
+	private static List<String> missingVariadic(Set<String> registered, Set<FunctionDescriptor> shapes,
+			int firstVariadicArg) {
 		List<String> missing = new ArrayList<>();
 		for (FunctionDescriptor descriptor : shapes) {
 			String signature = signature(descriptor, false) + " variadic@" + firstVariadicArg;
@@ -139,7 +183,20 @@ public final class NativeImageDowncalls {
 	 * @return the unregistered ones, spelled as the file spells them
 	 */
 	public static List<String> missingUpcalls(Set<FunctionDescriptor> shapes) {
-		Set<String> registered = registered("upcalls");
+		return missingUpcalls(registered("upcalls"), shapes);
+	}
+
+	/**
+	 * The upcall shapes with no entry in ONE file.
+	 * @param metadata the {@code reachability-metadata.json} that must stand alone
+	 * @param shapes the shapes bound with {@code Linker.upcallStub}
+	 * @return the unregistered ones, spelled as the file spells them
+	 */
+	public static List<String> missingUpcalls(Path metadata, Set<FunctionDescriptor> shapes) {
+		return missingUpcalls(registered(metadata, "upcalls"), shapes);
+	}
+
+	private static List<String> missingUpcalls(Set<String> registered, Set<FunctionDescriptor> shapes) {
 		List<String> missing = new ArrayList<>();
 		for (FunctionDescriptor descriptor : shapes) {
 			if (!registered.contains(signature(descriptor, false))) {
@@ -149,22 +206,46 @@ public final class NativeImageDowncalls {
 		return missing;
 	}
 
-	/** Every {@code foreign.downcalls} entry, in this class's own spelling. */
+	/**
+	 * Every {@code foreign.downcalls} entry of every file, in this class's own spelling.
+	 */
 	private static Set<String> registered() {
 		return registered("downcalls");
 	}
 
 	/**
-	 * Every VARIADIC {@code foreign.downcalls} entry, so a test can pin the file and the
-	 * rule that generated it against each other in both directions.
+	 * Every VARIADIC {@code foreign.downcalls} entry of one file, so a test can pin the
+	 * file and the rule that generated it against each other in both directions.
+	 * @param metadata the {@code reachability-metadata.json} to read
 	 * @return the entries, spelled as {@link #missingVariadic} spells them
 	 */
-	public static List<String> registeredVariadic() {
-		return registered().stream().filter(entry -> entry.contains(" variadic@")).toList();
+	public static List<String> registeredVariadic(Path metadata) {
+		return registered(metadata, "downcalls").stream().filter(entry -> entry.contains(" variadic@")).toList();
 	}
 
+	/** One section of every file rontolisp's own image reads, as one set. */
 	private static Set<String> registered(String section) {
-		return registered(METADATA, section);
+		Set<String> registered = new LinkedHashSet<>();
+		for (Path metadata : files()) {
+			JsonNode entries = JsonMapper.builder().build().readTree(read(metadata)).path("foreign").path(section);
+			if (!entries.isMissingNode()) {
+				registered.addAll(registered(metadata, section));
+			}
+		}
+		assertThat(registered).as("foreign.%s entries under %s", section, NATIVE_IMAGE).isNotEmpty();
+		return registered;
+	}
+
+	/** Every {@code reachability-metadata.json} rontolisp's own image reads. */
+	private static List<Path> files() {
+		try (var walk = Files.walk(NATIVE_IMAGE)) {
+			return walk.filter(path -> path.getFileName().toString().equals("reachability-metadata.json"))
+				.sorted()
+				.toList();
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
 	}
 
 	/**

@@ -52,9 +52,10 @@ A program that uses [`java:`](../guides/java-interop.md), the `geom:` kernels,
 way: `Hello$JavaBridge.class`, `Hello$SimdBridge.class`, ... beside the class (for
 `--gpu`, `objc:` and `ffi:` with a renamed copy of the binding library,
 `Hello$Gpu*.class` and so on), and inside a jar. Nothing is defined at run time, so
-such a jar also builds into a GraalVM native image with `native-image -jar`; reflective
-`java:` calls and the `--blas` / `objc:` / `ffi:` foreign calls need the metadata the tracing agent
-records from one `java -jar` run ([Java interop](../guides/java-interop.md#native-image)).
+such a jar also builds into a GraalVM native image with `native-image -jar`. A `--gpu` or
+`objc:` jar carries the native-image metadata its foreign calls need and builds as it is;
+reflective `java:` calls and the `--blas` / `ffi:` foreign calls need the metadata the tracing
+agent records from one `java -jar` run ([Java interop](../guides/java-interop.md#native-image)).
 
 A class can also be a **library** Java code calls directly:
 [`rontolisp:jvm-export`](../reference/functions/rontolisp-jvm-export.md)
