@@ -1457,6 +1457,82 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void consAccessorsRejectEveryObjectArrayThatIsNoCons() throws Exception {
+		// An instance, a ratio and a function reference are Object[]s like a cons cell;
+		// car/cdr/endp/rplaca/rplacd/nthcdr and the inline map walks read them as one:
+		// the instance's layout for its car, its first slot overwritten by rplacd.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defun id (x) x)
+				(defstruct pt x y)
+				(defvar *pt* (make-pt :x 1 :y 2))
+				(print (te (lambda () (car (id *pt*)))))
+				(print (te (lambda () (cdr (id *pt*)))))
+				(print (te (lambda () (endp (id *pt*)))))
+				(print (te (lambda () (dolist (x (id *pt*) :walked) x))))
+				(print (te (lambda () (rplaca (id *pt*) 9))))
+				(print (te (lambda () (rplacd (id *pt*) 9))))
+				(print (te (lambda () (nthcdr 1 (id *pt*)))))
+				(print (te (lambda () (mapcar #'id (id *pt*)))))
+				(print (te (lambda () (car (id 1/2)))))
+				(print (te (lambda () (cdr (id #'id)))))
+				(print *pt*)
+				(print (te (lambda () (handler-bind ((error (lambda (c) (car c)))) (error "first")))))
+				(print (list (car (id '(1 . 2))) (cdr (id '(1 . 2))) (endp (id '(1))) (nthcdr 1 (id '(1 2)))))
+				""")).isEqualTo(
+				"""
+						("CAR: The value #S(PT :X 1 :Y 2) is not of type LIST" LIST)
+						("CDR: The value #S(PT :X 1 :Y 2) is not of type LIST" LIST)
+						("ENDP: The value #S(PT :X 1 :Y 2) is not of type LIST" LIST)
+						("ENDP: The value #S(PT :X 1 :Y 2) is not of type LIST" LIST)
+						("RPLACA: The value #S(PT :X 1 :Y 2) is not of type CONS" CONS)
+						("RPLACD: The value #S(PT :X 1 :Y 2) is not of type CONS" CONS)
+						("NTHCDR: The value #S(PT :X 1 :Y 2) is not of type LIST" LIST)
+						("MAPCAR: The value #S(PT :X 1 :Y 2) is not of type LIST" LIST)
+						("CAR: The value 1/2 is not of type LIST" LIST)
+						("CDR: The value #<function ID> is not of type LIST" LIST)
+						#S(PT :X 1 :Y 2)
+						("CAR: The value #<SIMPLE-ERROR :FORMAT-CONTROL \\"first\\" :FORMAT-ARGUMENTS NIL> is not of type LIST" LIST)
+						(1 2 NIL (2))""");
+		// Without an instance the program tests for none, and still excludes a ratio
+		// and a function reference.
+		assertThat(compileAndRun("""
+				(defun id (x) x)
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-expected-type e)))))
+				(print (te (lambda () (car (id #'id)))))
+				(print (te (lambda () (endp (id 1/2)))))
+				(print (te (lambda () (mapc #'print (id #'id)))))
+				(print (te (lambda () (mapcan #'list (id 1/2)))))
+				(print (te (lambda () (mapcar #'+ '(1 2) (id #'id)))))
+				(print (list (mapcar #'1+ (id '(1 2))) (mapcan #'list (id '(1 2))) (mapc #'id (id '(1)))))
+				""")).isEqualTo("""
+				("CAR: The value #<function ID> is not of type LIST" LIST)
+				("ENDP: The value 1/2 is not of type LIST" LIST)
+				("MAPC: The value #<function ID> is not of type LIST" LIST)
+				("MAPCAN: The value 1/2 is not of type LIST" LIST)
+				("MAPCAR: The value #<function ID> is not of type LIST" LIST)
+				((2 3) (1 2) (1))""");
+		// A stream is an Object[3] headed by its marker.
+		assertThat(compileAndRun("""
+				(defun id (x) x)
+				(defvar *s* (rontolisp::%stream-new (lambda () nil) (lambda () nil)))
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (type-error-expected-type e))))
+				(print (list (te (lambda () (car (id *s*)))) (te (lambda () (rplaca (id *s*) 1)))
+				             (te (lambda () (nthcdr 1 (id *s*)))) (te (lambda () (mapcar #'id (id *s*))))))
+				(print (car (id (list (id *s*) 2))))
+				""")).isEqualTo("""
+				(LIST CONS LIST LIST)
+				#<STREAM>""");
+	}
+
+	@Test
 	void stringAccessesNameTheOperator() throws Exception {
 		// A string access names its operator (compiler/OperandTypes): char/schar of a
 		// non-string (STRING), and a (setf char|schar) place's string and subscript --
@@ -1716,6 +1792,8 @@ class JvmLispCompilerTest {
 				(print (te (lambda () (append *te-five* nil))))
 				(print (te (lambda () (append *te-dotted* '(4)))))
 				(print (te (lambda () (funcall #'append *te-five* nil))))
+				(print (te (lambda () (copy-list *te-five*))))
+				(print (te (lambda () (funcall #'copy-list *te-five*))))
 				(print (te (lambda () (member 1 *te-five*))))
 				(print (te (lambda () (member 9 *te-dotted*))))
 				(print (te (lambda () (funcall #'member 1 *te-five*))))
@@ -1746,6 +1824,8 @@ class JvmLispCompilerTest {
 				("APPEND: The value 5 is not of type LIST" 5 LIST)
 				("APPEND: The value 3 is not of type LIST" 3 LIST)
 				("APPEND: The value 5 is not of type LIST" 5 LIST)
+				("COPY-LIST: The value 5 is not of type LIST" 5 LIST)
+				("COPY-LIST: The value 5 is not of type LIST" 5 LIST)
 				("MEMBER: The value 5 is not of type LIST" 5 LIST)
 				("MEMBER: The value 3 is not of type LIST" 3 LIST)
 				("MEMBER: The value 5 is not of type LIST" 5 LIST)
@@ -1972,6 +2052,27 @@ class JvmLispCompilerTest {
 				                 (car 1)))
 				           (error (e) (cons :caught log)))))
 				""")).isEqualTo("(:CAUGHT :OUTER :INNER)");
+	}
+
+	@Test
+	void compileAndRunAHandlerFailingInABuiltInDoesNotRunItself() throws Exception {
+		// CLHS 9.1.4.1: a handler runs with its own cluster disabled, so a built-in
+		// failing inside it reaches only the enclosing handlers -- never the failing
+		// handler again, which the handler-bind's own landing pad used to rerun.
+		assertThat(compileAndRun("""
+				(defun hb-id (x) x)
+				(print (let ((n 0))
+				         (handler-case
+				             (handler-bind ((error (lambda (c) (setq n (+ n 1)) (car (hb-id 5)))))
+				               (error "first"))
+				           (error (e) (list (type-of e) n)))))
+				(print (let ((log nil))
+				         (handler-case
+				             (handler-bind ((error (lambda (c) (setq log (cons (type-of c) log)))))
+				               (handler-bind ((error (lambda (c) (setq log (cons :inner log)) (car (hb-id 5)))))
+				                 (error "first")))
+				           (error (e) (list (type-of e) log)))))
+				""")).isEqualTo("(TYPE-ERROR 1)\n(TYPE-ERROR (TYPE-ERROR :INNER))");
 	}
 
 	@Test
@@ -3254,6 +3355,45 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void findSymbolInAMissingPackageSignalsACatchablePackageError() throws Exception {
+		// A literal and a computed designator naming no package (nil included) signal a
+		// catchable package-error for either value arity and create nothing.
+		assertThat(compileAndRun("""
+				(defun fse-in (p) (find-symbol "X" p))
+				(print (handler-case (find-symbol "X" "FSE-NOPKG") (error () :caught)))
+				(print (handler-case (fse-in "FSE-NOPKG")
+				         (package-error (e) (list (package-error-package e) (princ-to-string e)))))
+				(print (handler-case (fse-in nil) (package-error () :caught)))
+				(print (handler-case (find-symbol "X" nil) (package-error () :caught)))
+				(print (handler-case (multiple-value-list (find-symbol "X" :fse-nopkg))
+				         (package-error () :caught)))
+				(print (handler-case (multiple-value-list (fse-in "FSE-NOPKG")) (package-error () :caught)))
+				(print (find-package "FSE-NOPKG"))
+				"""))
+			.isEqualTo(":CAUGHT\n(:FSE-NOPKG \"No such package: FSE-NOPKG\")\n:CAUGHT\n:CAUGHT\n:CAUGHT\n:CAUGHT\nNIL");
+	}
+
+	@Test
+	void findSymbolInAMissingPackageSignalsWithRuntimePackages() throws Exception {
+		// The same with runtime packages in the program; a runtime package answers
+		// from its member table.
+		assertThat(compileAndRun("""
+				(defun fse-in (p) (find-symbol "X" p))
+				(print (handler-case (find-symbol "X" "FSE-NOPKG") (error () :caught)))
+				(print (handler-case (fse-in "FSE-NOPKG")
+				         (package-error (e) (list (package-error-package e) (princ-to-string e)))))
+				(print (handler-case (fse-in nil) (package-error () :caught)))
+				(print (handler-case (find-symbol "X" nil) (package-error () :caught)))
+				(print (handler-case (multiple-value-list (find-symbol "X" :fse-nopkg))
+				         (package-error () :caught)))
+				(print (handler-case (multiple-value-list (fse-in "FSE-NOPKG")) (package-error () :caught)))
+				(print (find-package "FSE-NOPKG"))
+				(print (fse-in (make-package "FSE-RT" :use nil)))
+				""")).isEqualTo(
+				":CAUGHT\n(:FSE-NOPKG \"No such package: FSE-NOPKG\")\n:CAUGHT\n:CAUGHT\n:CAUGHT\n:CAUGHT\nNIL\nNIL");
+	}
+
+	@Test
 	void internIntoAMissingPackageSignalsACatchablePackageError() throws Exception {
 		// A literal and a computed designator naming no package signal a catchable
 		// package-error and create nothing.
@@ -4129,10 +4269,32 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunFindSymbolWithAComputedPackageDesignator() throws Exception {
 		// (find-symbol name pkg) with pkg in a variable: keyword/cl/cl-user need no
-		// qualifier, anything else gets the external "PKG:" spelling.
-		assertThat(compileAndRun("(defun fs (n p) (find-symbol n p))"
-				+ "(print (fs \"FOO\" :keyword)) (print (fs \"CAR\" :cl)) (print (fs \"BAR\" nil))"))
-			.isEqualTo(":FOO\nCAR\nNIL");
+		// qualifier, anything else gets the external "PKG:" spelling; nil names no
+		// package, so it signals.
+		assertThat(compileAndRun(
+				"(defun fs (n p) (find-symbol n p))" + "(print (fs \"FOO\" :keyword)) (print (fs \"CAR\" :cl))"
+						+ "(print (handler-case (fs \"BAR\" nil) (package-error () :caught)))"))
+			.isEqualTo(":FOO\nCAR\n:CAUGHT");
+	}
+
+	@Test
+	void aComputedFindPackageSiteDoesNotCarryItsOwnCopyOfThePackageTable() {
+		// A computed find-package is one call to the %find-package helper the backend
+		// injects with the baked package table, not the table built at every site
+		// (~2.5 KB of class per site, ~3 KB with runtime packages, measured 2026-09-26).
+		assertThat(findPackageBytes(3, false) - findPackageBytes(2, false)).isLessThan(100);
+		assertThat(findPackageBytes(3, true) - findPackageBytes(2, true)).isLessThan(100);
+	}
+
+	private int findPackageBytes(int sites, boolean runtimePackages) {
+		StringBuilder source = new StringBuilder("(defvar *p* :cl)\n");
+		if (runtimePackages) {
+			source.append("(defvar *q* (make-package \"FPB-RT\"))\n");
+		}
+		for (int k = 0; k < sites; k++) {
+			source.append("(print (find-package *p*))\n");
+		}
+		return compileToBytes(source.toString()).length;
 	}
 
 	// macroexpand/macroexpand-1 with a literal quoted argument are folded to the
@@ -16419,9 +16581,11 @@ class JvmLispCompilerTest {
 		// funnel-typed arm): +143 B.
 		// 10,238 since mapcar's list argument is checked (_ckList and MAPCAR's wrapper,
 		// replacing the inline guard's message): +109 B.
-		// 10,301 since an out-of-range subscript's compound type (INTEGER 0 (d)) rides
+		// 10,403 since mapcar's walk tells a cons from a ratio or a function reference
+		// (_isCons, and the same test in _ckList): +165 B.
+		// 10,474 since an out-of-range subscript's compound type (INTEGER 0 (d)) rides
 		// _opTypeErr verbatim: +71 B.
-		assertThat(classBytes.length).isLessThan(10_400);
+		assertThat(classBytes.length).isLessThan(10_550);
 		assertThat(runClass(classBytes)).isEqualTo("(1 4 9)");
 	}
 
@@ -21683,6 +21847,20 @@ class JvmLispCompilerTest {
 				(defun typed (n) (let ((n (+ n 1)) (m (* n 2))) (+ n m)))
 				(print (typed 5))
 				""")).isEqualTo("(2 1)\n(2 1)\n(2 1)\n(10 1)\n16");
+	}
+
+	@Test
+	void compileAndRunEmptyBodyLetReturnsNil() throws Exception {
+		// CLHS: a let/let* with no body forms returns nil. Was an operand-stack
+		// underflow at compile time (the body lowering pushed no value for an empty
+		// body): (let ((p 1))) and (let ()) both failed to compile.
+		assertThat(compileAndRun("""
+				(print (let ((p 1))))
+				(print (let* ((p 1))))
+				(print (let ()))
+				(defun f () (let ((p 1))))
+				(print (f))
+				""")).isEqualTo("NIL\nNIL\nNIL\nNIL");
 	}
 
 }

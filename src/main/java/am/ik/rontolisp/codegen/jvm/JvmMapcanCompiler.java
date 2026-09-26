@@ -78,8 +78,8 @@ final class JvmMapcanCompiler {
 		for (int listSlot : listSlots) {
 			ctx.emit(Opcode.ALOAD);
 			ctx.emit(listSlot);
-			ctx.emit(Opcode.INSTANCEOF);
-			ctx.emitU2(ctx.objectArrayClass.index());
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.IS_CONS).index());
 			exitBranches.add(ctx.code.size());
 			ctx.emit(Opcode.IFEQ);
 			ctx.emitU2(0);

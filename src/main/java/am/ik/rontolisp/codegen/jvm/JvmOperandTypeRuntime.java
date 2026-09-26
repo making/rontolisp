@@ -134,6 +134,15 @@ final class JvmOperandTypeRuntime {
 
 	static final String CK_BOUND_J_DESC = "(JI)I";
 
+	/**
+	 * The cons test of an inline list walk ({@code mapcar}, {@code mapc},
+	 * {@code mapcan}): true for a cons, false for anything else -- nil, an atom, and the
+	 * {@code Object[]}-shaped values that are no cons ({@link ConsShape}).
+	 */
+	static final String IS_CONS = "_isCons";
+
+	static final String IS_CONS_DESC = "(Ljava/lang/Object;)Z";
+
 	/** The thread-local record's field. */
 	static final String TL_FIELD = "_teTl";
 
@@ -199,7 +208,7 @@ final class JvmOperandTypeRuntime {
 	 * @return the methods
 	 */
 	static List<JvmNumericRuntimeBuilder.NumericMethod> build(ConstantPool cp, ClassConstant thisClass,
-			@Nullable FieldrefConstant teTl) {
+			@Nullable FieldrefConstant teTl, ConsShape shape) {
 		ClassConstant rte = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
 		ClassConstant string = cp.addClass(cp.addUtf8("java/lang/String"));
 		ClassConstant objArr = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
@@ -232,16 +241,17 @@ final class JvmOperandTypeRuntime {
 		MethodrefConstant opTypeErr = self(cp, thisClass, OP_TYPE_ERR, OP_TYPE_ERR_DESC);
 		StringConstant listKind = cp.addString(OperandTypes.Kind.LIST.name());
 		StringConstant funnelType = cp.addString(OperandTypes.FUNNEL_TYPE);
-		methods.add(field(cp, CAR, 0, objArr, teRaw, opTypeErr, listKind, funnelType));
-		methods.add(field(cp, CDR, 1, objArr, teRaw, opTypeErr, listKind, funnelType));
-		methods.add(listCheck(cp, objArr, teRaw, opTypeErr, listKind, funnelType));
-		methods.add(check(cp, CK_IDX, CK_IDX_DESC, List.of(longClass, bigClass), null, teRaw,
+		methods.add(field(cp, CAR, 0, shape, teRaw, opTypeErr, listKind, funnelType));
+		methods.add(field(cp, CDR, 1, shape, teRaw, opTypeErr, listKind, funnelType));
+		methods.add(listCheck(cp, shape, teRaw, opTypeErr, listKind, funnelType));
+		methods.add(consTest(cp, shape));
+		methods.add(check(cp, CK_IDX, CK_IDX_DESC, List.of(longClass, bigClass), teRaw,
 				cp.addString(OperandTypes.Kind.INTEGER.name())));
-		methods.add(check(cp, CK_RAT, CK_RAT_DESC, List.of(longClass, bigClass, ratioClass), null, teRaw,
+		methods.add(check(cp, CK_RAT, CK_RAT_DESC, List.of(longClass, bigClass, ratioClass), teRaw,
 				cp.addString(OperandTypes.Kind.RATIONAL.name())));
-		methods.add(check(cp, CK_LIST, FIELD_DESC, true, List.of(objArr), null, teRaw, listKind));
-		methods.add(check(cp, CK_CONS, CK_CONS_DESC, List.of(objArr), objArr, teRaw,
-				cp.addString(OperandTypes.Kind.CONS.name())));
+		methods.add(consCheck(cp, CK_LIST, FIELD_DESC, true, shape, teRaw, listKind));
+		methods.add(
+				consCheck(cp, CK_CONS, CK_CONS_DESC, false, shape, teRaw, cp.addString(OperandTypes.Kind.CONS.name())));
 
 		// _teRaw(Object x, String kind): new RuntimeException("The value " + prin1(x) +
 		// " is not of type " + kind), recorded under a pad.
@@ -586,54 +596,191 @@ final class JvmOperandTypeRuntime {
 	}
 
 	/**
-	 * Builds {@code _car}/{@code _cdr}: nil answers nil, a cons ({@code Object[]}) its
-	 * field, anything else
-	 * {@code throw _opTypeErr(_teRaw(x, "LIST"), "CAR", FUNNEL_TYPE)}.
+	 * What tells a cons from the other {@code Object[]}-shaped values of one program: a
+	 * ratio ({@code BigInteger[]}), a function reference ({@code Integer} in slot 0), an
+	 * instance (its {@code String[]} layout in slot 0) and an async value (an
+	 * {@code Object[3]} headed by a marker string). The same exclusions
+	 * {@code consp}/{@code listp}/{@code atom} make ({@link JvmConspCompiler}), and gated
+	 * the same way: a program that cannot build an instance or an async value tests
+	 * neither.
+	 *
+	 * @param objArr the {@code Object[]} class
+	 * @param ratio the {@code BigInteger[]} class
+	 * @param funcRefHead the {@code Integer} class
+	 * @param instanceLayout the {@code String[]} class, or null when the program builds
+	 * no instance
+	 * @param asyncMarkers the async values' marker strings, empty when the program builds
+	 * none
 	 */
-	private static JvmNumericRuntimeBuilder.NumericMethod field(ConstantPool cp, String name, int index,
-			ClassConstant objArr, MethodrefConstant teRaw, MethodrefConstant opTypeErr, StringConstant listKind,
-			StringConstant funnelType) {
-		List<Integer> c = new ArrayList<>();
-		c.add(Opcode.ALOAD_0);
-		int ifNotNull = branch(c, Opcode.IFNONNULL);
-		c.add(Opcode.ACONST_NULL);
-		c.add(Opcode.ARETURN);
-		JvmRuntimeBuilder.patchBranch(c, ifNotNull, c.size());
-		c.add(Opcode.ALOAD_0);
-		c.add(Opcode.INSTANCEOF);
-		JvmRuntimeBuilder.emitU2(c, objArr.index());
-		int ifNotCons = branch(c, Opcode.IFEQ);
-		c.add(Opcode.ALOAD_0);
-		c.add(Opcode.CHECKCAST);
-		JvmRuntimeBuilder.emitU2(c, objArr.index());
-		c.add(index == 0 ? Opcode.ICONST_0 : Opcode.ICONST_1);
-		c.add(Opcode.AALOAD);
-		c.add(Opcode.ARETURN);
-		JvmRuntimeBuilder.patchBranch(c, ifNotCons, c.size());
-		emitNamedListThrow(c, cp, teRaw, opTypeErr, listKind, funnelType,
-				index == 0 ? am.ik.rontolisp.LispNames.CAR : am.ik.rontolisp.LispNames.CDR);
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(FIELD_DESC), c, 3, 1, List.of());
+	record ConsShape(ClassConstant objArr, ClassConstant ratio, ClassConstant funcRefHead,
+			@Nullable ClassConstant instanceLayout, List<StringConstant> asyncMarkers) {
+
+		/**
+		 * The shape of one program's conses.
+		 * @param cp the constant pool
+		 * @param instanceLayout the {@code String[]} class, or null when the program
+		 * builds no instance
+		 * @param asyncValues whether the program carries the async runtime
+		 * @return the shape
+		 */
+		static ConsShape of(ConstantPool cp, @Nullable ClassConstant instanceLayout, boolean asyncValues) {
+			return new ConsShape(cp.addClass(cp.addUtf8("[Ljava/lang/Object;")),
+					cp.addClass(cp.addUtf8("[Ljava/math/BigInteger;")), cp.addClass(cp.addUtf8("java/lang/Integer")),
+					instanceLayout, asyncValues ? List.of(cp.addString(JvmAsyncRuntimeBuilder.SMARKER),
+							cp.addString(JvmAsyncRuntimeBuilder.RMARKER)) : List.of());
+		}
+
+		/**
+		 * Emits the test of the non-null value in local {@code value}: falls through with
+		 * the value as an {@code Object[]} in local {@code arr} and its slot 0 in local
+		 * {@code head} when it is a cons, and branches to {@code miss} for every way it
+		 * is not. Peak operand stack: 2.
+		 * @param a the assembler
+		 * @param value the local holding the value
+		 * @param arr the local to receive it as an {@code Object[]}
+		 * @param head the local to receive its slot 0
+		 * @param miss the not-a-cons label
+		 */
+		void emitTest(JvmAsm a, int value, int arr, int head, int miss) {
+			a.aload(value);
+			a.instanceOf(this.objArr);
+			a.branch(Opcode.IFEQ, miss);
+			a.aload(value);
+			a.instanceOf(this.ratio);
+			a.branch(Opcode.IFNE, miss);
+			a.aload(value);
+			a.checkcast(this.objArr);
+			a.astore(arr);
+			a.aload(arr);
+			a.iconst(0);
+			a.aaload();
+			a.astore(head);
+			a.aload(head);
+			a.instanceOf(this.funcRefHead);
+			a.branch(Opcode.IFNE, miss);
+			if (this.instanceLayout != null) {
+				a.aload(head);
+				a.instanceOf(this.instanceLayout);
+				a.branch(Opcode.IFNE, miss);
+			}
+			if (!this.asyncMarkers.isEmpty()) {
+				// Length first, like the runtime's own marker test: a cons is an
+				// Object[2], so no marker comparison is reached on the cons path.
+				int notTriple = a.label();
+				a.aload(arr);
+				a.arraylength();
+				a.iconst(3);
+				a.branch(Opcode.IF_ICMPNE, notTriple);
+				for (StringConstant marker : this.asyncMarkers) {
+					a.aload(head);
+					a.ldcString(marker);
+					a.branch(Opcode.IF_ACMPEQ, miss);
+				}
+				a.bind(notTriple);
+			}
+		}
+
 	}
 
 	/**
-	 * Builds {@code _endp}: nil or a cons ({@code Object[]}) answers itself, anything
-	 * else {@code throw _opTypeErr(_teRaw(x, "LIST"), "ENDP", FUNNEL_TYPE)}.
+	 * Builds {@code _car}/{@code _cdr}: nil answers nil, a cons its field, anything else
+	 * {@code throw _opTypeErr(_teRaw(x, "LIST"), "CAR", FUNNEL_TYPE)}.
 	 */
-	private static JvmNumericRuntimeBuilder.NumericMethod listCheck(ConstantPool cp, ClassConstant objArr,
+	private static JvmNumericRuntimeBuilder.NumericMethod field(ConstantPool cp, String name, int index,
+			ConsShape shape, MethodrefConstant teRaw, MethodrefConstant opTypeErr, StringConstant listKind,
+			StringConstant funnelType) {
+		JvmAsm a = new JvmAsm();
+		int notNull = a.label();
+		int miss = a.label();
+		a.aload(0);
+		a.branch(Opcode.IFNONNULL, notNull);
+		a.aconstNull();
+		a.areturn();
+		a.bind(notNull);
+		shape.emitTest(a, 0, 1, 2, miss);
+		if (index == 0) {
+			a.aload(2);
+		}
+		else {
+			a.aload(1);
+			a.iconst(1);
+			a.aaload();
+		}
+		a.areturn();
+		a.bind(miss);
+		emitNamedListThrow(a.code, cp, teRaw, opTypeErr, listKind, funnelType,
+				index == 0 ? am.ik.rontolisp.LispNames.CAR : am.ik.rontolisp.LispNames.CDR);
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(FIELD_DESC), a.finish(), 3, 3,
+				List.of());
+	}
+
+	/**
+	 * Builds {@code _endp}: nil or a cons answers itself, anything else
+	 * {@code throw _opTypeErr(_teRaw(x, "LIST"), "ENDP", FUNNEL_TYPE)}.
+	 */
+	private static JvmNumericRuntimeBuilder.NumericMethod listCheck(ConstantPool cp, ConsShape shape,
 			MethodrefConstant teRaw, MethodrefConstant opTypeErr, StringConstant listKind, StringConstant funnelType) {
-		List<Integer> c = new ArrayList<>();
-		c.add(Opcode.ALOAD_0);
-		int ifNull = branch(c, Opcode.IFNULL);
-		c.add(Opcode.ALOAD_0);
-		c.add(Opcode.INSTANCEOF);
-		JvmRuntimeBuilder.emitU2(c, objArr.index());
-		int ifCons = branch(c, Opcode.IFNE);
-		emitNamedListThrow(c, cp, teRaw, opTypeErr, listKind, funnelType, am.ik.rontolisp.LispNames.ENDP);
-		JvmRuntimeBuilder.patchBranch(c, ifNull, c.size());
-		JvmRuntimeBuilder.patchBranch(c, ifCons, c.size());
-		c.add(Opcode.ALOAD_0);
-		c.add(Opcode.ARETURN);
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(ENDP), cp.addUtf8(FIELD_DESC), c, 3, 1, List.of());
+		JvmAsm a = new JvmAsm();
+		int answer = a.label();
+		int miss = a.label();
+		a.aload(0);
+		a.branch(Opcode.IFNULL, answer);
+		shape.emitTest(a, 0, 1, 2, miss);
+		a.bind(answer);
+		a.aload(0);
+		a.areturn();
+		a.bind(miss);
+		emitNamedListThrow(a.code, cp, teRaw, opTypeErr, listKind, funnelType, am.ik.rontolisp.LispNames.ENDP);
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(ENDP), cp.addUtf8(FIELD_DESC), a.finish(), 3, 3,
+				List.of());
+	}
+
+	/**
+	 * Builds {@code _isCons}: true for a cons, false for anything else.
+	 */
+	private static JvmNumericRuntimeBuilder.NumericMethod consTest(ConstantPool cp, ConsShape shape) {
+		JvmAsm a = new JvmAsm();
+		int miss = a.label();
+		a.aload(0);
+		a.branch(Opcode.IFNULL, miss);
+		shape.emitTest(a, 0, 1, 2, miss);
+		a.iconst(1);
+		a.ireturn();
+		a.bind(miss);
+		a.iconst(0);
+		a.ireturn();
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(IS_CONS), cp.addUtf8(IS_CONS_DESC), a.finish(), 2,
+				3, List.of());
+	}
+
+	/**
+	 * Builds {@code _ckList} ({@code nilOk}: nil or a cons answers itself) or
+	 * {@code _ckCons} (a cons answers itself as an {@code Object[]}); anything else is
+	 * {@code throw _teRaw(x, kind)}, for a wrapper to name.
+	 */
+	private static JvmNumericRuntimeBuilder.NumericMethod consCheck(ConstantPool cp, String name, String desc,
+			boolean nilOk, ConsShape shape, MethodrefConstant teRaw, StringConstant kind) {
+		JvmAsm a = new JvmAsm();
+		int ifNull = a.label();
+		int miss = a.label();
+		a.aload(0);
+		a.branch(Opcode.IFNULL, nilOk ? ifNull : miss);
+		shape.emitTest(a, 0, 1, 2, miss);
+		if (nilOk) {
+			a.bind(ifNull);
+			a.aload(0);
+		}
+		else {
+			a.aload(1);
+		}
+		a.areturn();
+		a.bind(miss);
+		a.aload(0);
+		a.ldcString(kind);
+		a.invokestatic(teRaw);
+		a.athrow();
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(desc), a.finish(), 2, 3,
+				List.of());
 	}
 
 	/**
@@ -659,27 +806,13 @@ final class JvmOperandTypeRuntime {
 	}
 
 	/**
-	 * Builds an argument check: {@code x} (cast to {@code result} when given) when it is
-	 * an instance of one of {@code accepted}, else {@code throw _teRaw(x, kind)}.
+	 * Builds an argument check: {@code x} when it is an instance of one of
+	 * {@code accepted}, else {@code throw _teRaw(x, kind)}.
 	 */
 	private static JvmNumericRuntimeBuilder.NumericMethod check(ConstantPool cp, String name, String desc,
-			List<ClassConstant> accepted, @Nullable ClassConstant result, MethodrefConstant teRaw,
-			StringConstant kind) {
-		return check(cp, name, desc, false, accepted, result, teRaw, kind);
-	}
-
-	/**
-	 * Builds an argument check, accepting nil too when {@code nilOk}.
-	 */
-	private static JvmNumericRuntimeBuilder.NumericMethod check(ConstantPool cp, String name, String desc,
-			boolean nilOk, List<ClassConstant> accepted, @Nullable ClassConstant result, MethodrefConstant teRaw,
-			StringConstant kind) {
+			List<ClassConstant> accepted, MethodrefConstant teRaw, StringConstant kind) {
 		List<Integer> c = new ArrayList<>();
 		List<Integer> hits = new ArrayList<>();
-		if (nilOk) {
-			c.add(Opcode.ALOAD_0);
-			hits.add(branch(c, Opcode.IFNULL));
-		}
 		for (ClassConstant type : accepted) {
 			c.add(Opcode.ALOAD_0);
 			c.add(Opcode.INSTANCEOF);
@@ -695,10 +828,6 @@ final class JvmOperandTypeRuntime {
 			JvmRuntimeBuilder.patchBranch(c, hit, ok);
 		}
 		c.add(Opcode.ALOAD_0);
-		if (result != null) {
-			c.add(Opcode.CHECKCAST);
-			JvmRuntimeBuilder.emitU2(c, result.index());
-		}
 		c.add(Opcode.ARETURN);
 		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(desc), c, 2, 1, List.of());
 	}

@@ -1346,6 +1346,30 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void aComputedFindPackageSiteDoesNotCarryItsOwnCopyOfThePackageTable() {
+		// A computed find-package is one call to the %find-package helper the backend
+		// injects with the baked package table, not the table built at every site
+		// (~1.6 KB per site, ~2.3 KB with runtime packages, measured 2026-09-26).
+		assertThat(findPackageBytes(3, false) - findPackageBytes(2, false)).isLessThan(100);
+		assertThat(findPackageBytes(3, true) - findPackageBytes(2, true)).isLessThan(100);
+	}
+
+	private static int findPackageBytes(int sites, boolean runtimePackages) {
+		StringBuilder source = new StringBuilder("(defvar *p* :cl)\n");
+		if (runtimePackages) {
+			source.append("(defvar *q* (make-package \"FPB-RT\"))\n");
+		}
+		for (int k = 0; k < sites; k++) {
+			source.append("(print (find-package *p*))\n");
+		}
+		return WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary
+				.process(LispReader.readAllFromString(source.toString()))).length;
+	}
+
+	@Test
 	void anElementAccessSiteDoesNotCarryItsOwnCopyOfTheSharedRuntime() {
 		// A byte budget, because nothing else notices: every arrangement of this code
 		// compiles and runs correctly, and the only difference is how many times the
@@ -1439,6 +1463,25 @@ class WasmLispCompilerTest {
 		// ANSWER the same thing is pinned by
 		// WasmLispCompilerIntegrationTest.sequenceOpRuntimeArmRouting and the
 		// sequence-op-runtime-arm-routing ci-spec case (all four backends).
+	}
+
+	@Test
+	void aHandlerBindHandlerThatPrintsItsConditionCarriesOnlyTheReportsItCanReach() {
+		// handler-bind puts the program into restart mode, and restart mode used to skip
+		// the condition narrowing entirely: printing the condition brought in every
+		// registered class's report arm and the runtime format renderer. Measured on
+		// wasm-GC, default optimize: 113,391 bytes against 18,094 for the same handler
+		// ignoring its condition; narrowed, 26,365 against 16,614.
+		String printing = """
+				(defun main ()
+				  (handler-bind ((error (lambda (c) (format t "saw ~a~%" c))))
+				    (car 5)))
+				(print (ignore-errors (main)))
+				""";
+		String ignoring = printing.replace("(format t \"saw ~a~%\" c)", "(print :saw)");
+		int printingSize = WasmLispCompiler.builder().build().compile(LispReader.readAllFromString(printing)).length;
+		int ignoringSize = WasmLispCompiler.builder().build().compile(LispReader.readAllFromString(ignoring)).length;
+		assertThat(printingSize - ignoringSize).isLessThan(20_000);
 	}
 
 	private static byte[] compileForSize(String source) {

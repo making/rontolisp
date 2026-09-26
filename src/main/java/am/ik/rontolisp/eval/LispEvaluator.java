@@ -11117,12 +11117,11 @@ public final class LispEvaluator {
 	/**
 	 * The one lookup behind {@code find-symbol} and its status value: the accessible
 	 * symbol of the (verbatim) name in the designated package -- the current one for the
-	 * one-argument form -- or null. A package that does not exist provides no symbol:
-	 * nil, not an error. CL signals a package-error here, but the compile paths cannot
-	 * (they have no registry at run time), and probing an OPTIONAL system with
-	 * {@code (find-symbol "TIMESTAMP" :simple-date)} is exactly what libraries do
-	 * (postmodern's json-encoder) -- so all four backends answer nil. The image probe
-	 * makes a defun (or a defstruct-GENERATED defun/defvar) under {@code (in-package
+	 * one-argument form -- or null. A designator naming no package signals a
+	 * {@code package-error}, as {@code intern}'s does (libraries probing an OPTIONAL
+	 * system guard on {@code find-package} first, as postmodern's json-encoder does). The
+	 * image probe makes a defun (or a defstruct-GENERATED defun/defvar) under
+	 * {@code (in-package
 	 * pkg)} count as a member, so {@code (find-symbol "POINT-P" pkg)} finds a defstruct
 	 * predicate (trivia level2's predicatep).
 	 */
@@ -11131,11 +11130,11 @@ public final class LispEvaluator {
 			if (!(args.get(0) instanceof LispString str)) {
 				throw new LispEvalException(LispNames.FIND_SYMBOL + " expects a string, got " + args.get(0).print());
 			}
-			if (args.get(1) instanceof LispNil) {
-				return null;
-			}
 			String designator = packageDesignator(LispNames.FIND_SYMBOL, args.get(1));
 			if (this.packageResolver.findPackageName(designator) == null) {
+				// CLHS: a designator naming no package (nil included) is an error a
+				// handler catches. signalPackageError does not return normally.
+				signalPackageError("No such package: " + designator, designator);
 				return null;
 			}
 			return this.packageResolver.accessible(designator, str.value(), this::definedInImage);

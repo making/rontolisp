@@ -1257,6 +1257,12 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.MAKE_ARRAY_ET_FP_INTERNAL,
 				makeArrayElementTypeDispatch(LispNames.MAKE_ARRAY_ET_FP_INTERNAL, "%maef", " %maef-fp %maef-adj",
 						"\n                     :fill-pointer %maef-fp :adjustable %maef-adj"));
+		// %symbol-in-package: a compiled find-symbol / intern with a computed package
+		// designator calls it (LispMacroExpander.computedPackageLookup) -- the
+		// find-package guard and the package-error once, not at every site. The body IS
+		// the inline lowering, printed, so the two cannot drift.
+		SOURCES.put(LispNames.SYMBOL_IN_PACKAGE_INTERNAL,
+				am.ik.rontolisp.macro.LispMacroExpander.symbolInPackageDefinition());
 		SOURCES.put(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, """
 				(defclass %broadcast-stream (rontolisp:fundamental-character-output-stream)
 				  ((components :initarg :components :reader %broadcast-stream-components)))
@@ -4389,6 +4395,12 @@ public final class LispPreludeLibrary {
 		}
 		if (LispNames.MAKE_ARRAY_ET_FP_INTERNAL.equals(entry)) {
 			return am.ik.rontolisp.macro.LispMacroExpander.callsMakeArrayWithRuntimeElementType(program, true);
+		}
+		// %symbol-in-package: the find-symbol / intern lowerings call it from inside the
+		// expression compilers, after this pass; the surface fact is a call spelling a
+		// computed package designator. A site synthesized later keeps the inline form.
+		if (LispNames.SYMBOL_IN_PACKAGE_INTERNAL.equals(entry)) {
+			return am.ik.rontolisp.macro.LispMacroExpander.callsWithComputedPackageDesignator(program);
 		}
 		// The entry uiop:with-temporary-file's EXPANSION calls. Same timing problem as
 		// %make-broadcast-stream: the expansion runs inside the expression compilers,

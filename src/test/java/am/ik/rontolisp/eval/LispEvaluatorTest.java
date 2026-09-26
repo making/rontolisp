@@ -6678,7 +6678,15 @@ class LispEvaluatorTest {
 		assertThat(eval("(copy-list '(1 2 . 3))").print()).isEqualTo("(1 2 . 3)");
 		assertThat(eval("(let* ((a (list 1 2)) (b (copy-list a))) (list b (eq a b) (eq (cdr a) (cdr b))))").print())
 			.isEqualTo("((1 2) NIL NIL)");
-		assertThat(eval("(handler-case (copy-list 5) (type-error () :type-error))").print()).isEqualTo(":TYPE-ERROR");
+		// A non-list names COPY-LIST as the other list operators name themselves
+		// (compiler/OperandTypes): a catchable type-error whose datum and expected-type
+		// answer the operand and LIST, not a bare type-error whose slots answer nothing.
+		assertThat(evalMulti("""
+				(defun ci-cpl-id (x) x)
+				(handler-case (copy-list (ci-cpl-id 5))
+				  (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				  (error (e) (list :not-a-type-error (princ-to-string e))))
+				""").print()).isEqualTo("(\"COPY-LIST: The value 5 is not of type LIST\" 5 LIST)");
 	}
 
 	@Test
@@ -13333,6 +13341,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aHandlerFailingInABuiltInDoesNotRunItself() {
+		// CLHS 9.1.4.1: a handler runs with its own cluster disabled, so a built-in
+		// failing inside it reaches only the enclosing handlers, each once.
+		assertThat(eval("""
+				(let ((log nil))
+				  (handler-case
+				      (handler-bind ((error (lambda (c) (setq log (cons (type-of c) log)))))
+				        (handler-bind ((error (lambda (c) (setq log (cons :inner log)) (car 5))))
+				          (error "first")))
+				    (error (e) (list (type-of e) log))))
+				""").print()).isEqualTo("(TYPE-ERROR (TYPE-ERROR :INNER))");
+	}
+
+	@Test
 	void handlerBindHandlerAndHandlerCaseSeeTheSameInstance() {
 		// The signal path attaches the instance %run-handlers saw to the throw, so
 		// the handler-case clause dispatches on the IDENTICAL condition -- and the
@@ -17095,13 +17117,27 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void findSymbolAnswersNilForAPackageThatDoesNotExist() {
-		// CL signals a package-error; the compile paths cannot (no registry at run
-		// time), and probing an OPTIONAL system this way is what libraries do
-		// (postmodern's json-encoder), so all four backends answer nil.
-		assertThat(evalMulti("(find-symbol \"TIMESTAMP\" :simple-date)")).isEqualTo(LispNil.INSTANCE);
-		assertThat(evalMulti("(find-symbol \"TIMESTAMP\" \"SIMPLE-DATE\")")).isEqualTo(LispNil.INSTANCE);
-		assertThat(evalMulti("(find-symbol \"CAR\" nil)")).isEqualTo(LispNil.INSTANCE);
+	void findSymbolInAMissingPackageSignalsACatchablePackageError() {
+		// CLHS: a package designator must name a package. A literal and a computed
+		// designator alike (nil included) signal a package-error a handler catches,
+		// carrying the designator, for either value arity, and create nothing.
+		assertThat(evalMulti("""
+				(defun fse-in (p) (find-symbol "X" p))
+				(list (handler-case (find-symbol "X" "FSE-NOPKG") (error () :caught))
+				      (handler-case (fse-in "FSE-NOPKG")
+				        (package-error (e) (list (package-error-package e) (princ-to-string e))))
+				      (handler-case (fse-in nil) (package-error () :caught))
+				      (handler-case (find-symbol "X" nil) (package-error () :caught))
+				      (handler-case (multiple-value-list (find-symbol "X" :fse-nopkg))
+				        (package-error () :caught))
+				      (handler-case (multiple-value-list (fse-in "FSE-NOPKG")) (package-error () :caught))
+				      (find-package "FSE-NOPKG"))
+				""").print())
+			.isEqualTo("(:CAUGHT (:FSE-NOPKG \"No such package: FSE-NOPKG\") :CAUGHT :CAUGHT :CAUGHT :CAUGHT NIL)");
+		// The optional-system probe libraries write guards on find-package first
+		// (postmodern's json-encoder), and that answers nil.
+		assertThat(evalMulti("(and (find-package :simple-date) (find-symbol \"TIMESTAMP\" :simple-date))"))
+			.isEqualTo(LispNil.INSTANCE);
 		assertThat(evalMulti("(find-package :simple-date)")).isEqualTo(LispNil.INSTANCE);
 		assertThat(evalMulti("(find-package nil)")).isEqualTo(LispNil.INSTANCE);
 	}
@@ -17131,9 +17167,6 @@ class LispEvaluatorTest {
 			.isEqualTo("(:FOO :EXTERNAL)");
 		assertThat(evalMulti("(multiple-value-list (intern \"CAR\" 'common-lisp))").print())
 			.isEqualTo("(CAR :EXTERNAL)");
-		// A package that does not exist provides neither.
-		assertThat(evalMulti("(multiple-value-list (find-symbol \"CAR\" :simple-date))").print())
-			.isEqualTo("(NIL NIL)");
 	}
 
 	@Test
@@ -19172,6 +19205,8 @@ class LispEvaluatorTest {
 				(print (te (lambda () (append *te-five* nil))))
 				(print (te (lambda () (append *te-dotted* '(4)))))
 				(print (te (lambda () (funcall #'append *te-five* nil))))
+				(print (te (lambda () (copy-list *te-five*))))
+				(print (te (lambda () (funcall #'copy-list *te-five*))))
 				(print (te (lambda () (member 1 *te-five*))))
 				(print (te (lambda () (member 9 *te-dotted*))))
 				(print (te (lambda () (funcall #'member 1 *te-five*))))
@@ -19208,6 +19243,8 @@ class LispEvaluatorTest {
 				("APPEND: The value 5 is not of type LIST" 5 LIST)
 				("APPEND: The value 3 is not of type LIST" 3 LIST)
 				("APPEND: The value 5 is not of type LIST" 5 LIST)
+				("COPY-LIST: The value 5 is not of type LIST" 5 LIST)
+				("COPY-LIST: The value 5 is not of type LIST" 5 LIST)
 				("MEMBER: The value 5 is not of type LIST" 5 LIST)
 				("MEMBER: The value 3 is not of type LIST" 3 LIST)
 				("MEMBER: The value 5 is not of type LIST" 5 LIST)

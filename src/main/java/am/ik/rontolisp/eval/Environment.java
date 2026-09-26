@@ -4420,11 +4420,7 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.COPY_LIST, new LispFunction(LispNames.COPY_LIST, args -> {
 			requireArgCount(LispNames.COPY_LIST, args, 1);
-			LispVal list = args.get(0);
-			if (!(list instanceof LispCons) && !(list instanceof LispNil)) {
-				throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-						"The value " + list.print() + " is not of type LIST");
-			}
+			LispVal list = requireListArgument(LispNames.COPY_LIST, args.get(0));
 			// A fresh spine whose last cdr is the argument's final atom: a dotted list
 			// copies dotted (CLHS copy-list), as the compile paths' %copy-list-runtime.
 			List<LispVal> elements = new java.util.ArrayList<>();

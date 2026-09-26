@@ -260,8 +260,17 @@ every narrowing is IMPOSSIBILITY-based.
   whether any site can hand `%format-condition` an UNRENDERED control. Tag sources: literal datums of
   the signal family, literal-tag `%obj-new`, plus always the synthesized simple-* three. BAILS to
   `none()` on a computed datum, `eval`/`symbol-function`/`fdefinition`, an escaping `#'error`-family
-  value or quoted designator in data, `--dynamic`, restart mode. Name forgery from computed strings
+  value or quoted designator in data, `--dynamic`. Name forgery from computed strings
   can reach a pruned arm -- the failure is the caller's fallback report text, never a lost signal.
+- **Restart mode narrows like any other program** (since 2026-09-26; the bail it replaced had no
+  stated reason). What it adds is seen by the scan or always in the set: the signal hook builds the
+  simple-* three over a text control, restart-mode `cerror` keeps its datum inside a `restart-case`,
+  and the restart runtime defuns are injected before the scan. `usedLayoutTags` dropped its
+  restart-mode bail on the same grounds. A handler-bind whose handler prints its condition,
+  `(car 5)` probe, wasm-GC default optimize: **113,391 -> 26,365 B** (component 117,075 -> 27,911; JVM
+  output 106,911 -> 38,728 B); the same handler ignoring its condition 18,094 -> 16,614 B (the
+  layout half). Output unchanged on all four backends over 43 probes covering every late-lowering
+  site and raw failure under a bare handler-bind.
 - **`%format-condition` declines the renderer** when every possible control has no directive but
   `~~` -- a literal whose every `~` is half of a `~~`, nil, or a `(%text-control x)` -- with nil
   arguments: the common case, since every string-datum signal site pre-renders
@@ -280,7 +289,7 @@ every narrowing is IMPOSSIBILITY-based.
 - **`WasmInstanceLayouts.emit` takes a used-tag set** (`usedLayoutTags`): a `%class-`/`%struct-`
   layout ships only when its tag or bare name occurs as a symbol in the final program (plus the
   simple-* three the handler lowering synthesizes during Pass 2), with null (= bake all) under
-  `--dynamic`, an embedded eval runtime, restart mode, subclass enumeration,
+  `--dynamic`, an embedded eval runtime, subclass enumeration,
   `find-class`/`change-class`/`allocate-instance`/`symbol-function`/`fdefinition`. The JVM already
   interned per referenced tag (`LayoutPool`).
 - **`needsRuntimeErrorDispatch` no longer misreads handler clauses**: `(handler-case b (error (e)
@@ -299,11 +308,9 @@ fails. What decides the gate is whether program code can ever HOLD that instance
   first required parameter** (`handlerBindExposesCondition`): a handler is CALLED with the instance,
   so a `#'name`, a computed handler or a lambda list opening with `&rest`/`&optional` counts. Before
   2026-09-26 it did not count at all, and on the compiled backends `(format t "~a" c)` in a handler
-  printed `#<TYPE-ERROR :DATUM 5 ...>` while the interpreter printed the report. Restart mode never
-  narrows the condition runtime (`conditionNarrowing`), so turning the gate on costs a handler-bind
-  program far more than a handler-case one: the `(car 5)` probe is 17,961 B on wasm-GC with a
-  handler that ignores its condition, 114,044 B with one that prints it (the handler-case twin:
-  7,357 B).
+  printed `#<TYPE-ERROR :DATUM 5 ...>` while the interpreter printed the report. The `(car 5)`
+  probe on wasm-GC: 16,614 B with a handler that ignores its condition, 26,365 B with one that
+  prints it (113,391 B until restart mode was narrowed, above).
 - **`ignore-errors` counts only where a SECOND value can be read** (`receivesMultipleValues`, a
   whole-program answer): any occurrence of
   `multiple-value-bind`/`-list`/`-call`/`-setq`/`-prog1`/`nth-value`/`%mv-spill` turns it back on.
@@ -757,6 +764,13 @@ Rove's failure-recording model is `handler-bind` around USER code, so `(car 1)`,
   innermost, CLHS rebinding included, so ONE pad run covers every enclosing cluster and outer pads
   skip by the mark -- and rethrows CARRYING the instance. The pad never touches the hc-depth channel,
   has no cleanup (no `UnwindScope`, no trampoline), and does not catch the block-exit tag.
+- **A handler's own call runs in a pad too** (`runHandlersDefun`: `(%hb-guard (funcall handler
+  c))`), while `%handler-clusters%` holds the REMAINING clusters. CLHS 9.1.4.1 runs a handler with
+  its cluster disabled, so a built-in failing inside it is walked there, against the enclosing
+  clusters only, and marked; the handler-bind's own pad then rethrows it untouched. Without it the
+  failure escaped the walk's cleanup with the full stack restored and the handler-bind's pad RAN
+  THE FAILING HANDLER AGAIN on the `type-error` (JVM and both wasm-GC, until 2026-09-26). Pinned by
+  ci-spec `restart-system` (the output) and `failing-handler-bind-handler-report` (the report).
 - **Identity contract**: `%run-handlers` sets `%handlers-ran%` to its argument AT THE END of a
   completed walk, so a pad recognizes an already-walked condition by `eq` and handlers run ONCE.
   End-of-walk (not entry) marking keeps a nested signal inside a handler from clearing the outer
@@ -1026,10 +1040,20 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
 | `(setf (char s 0) 5)`, `(setf (aref s 0) 5)` (`s` a string) | `(SETF CHAR):` / `(SETF AREF): ... CHARACTER` |
 | `(row-major-aref v nil)`, `(setf (row-major-aref v nil) 0)` | `ROW-MAJOR-AREF:` / `(SETF ROW-MAJOR-AREF): ... INTEGER` |
 | `(point-x 42)`, `(setf (point-x 42) 0)`, `(copy-point 42)` (a `defstruct`'s) | `POINT-X:` / `(SETF POINT-X):` / `COPY-POINT: ... POINT` -- generated code, not this table: [defstruct.md](defstruct.md) |
+| `(copy-list 5)` | `COPY-LIST: ... LIST` |
 
+- **`copy-list` of a non-list** (2026-09-26): used to signal a bare `type-error` whose
+  `datum`/`expected-type` answered nothing on the interpreter (a raw
+  `LispEvalException.ofClass`) and a `simple-error` on the compiled backends (a
+  message-only `(error "The value ~s is not of type LIST" x)` inside
+  `%copy-list-runtime`, kept instance-free by never naming a condition class). Now
+  `COPY-LIST` is FUNNEL-TYPED like `last`/`append`/the rest of the list consumers: the
+  interpreter's built-in goes through `Environment.requireListArgument`, and
+  `%copy-list-runtime`'s non-list branch is `(%check-list x 'copy-list)` -- the same
+  shared, instance-free funnel, so the fix costs nothing beyond one more table row.
 - **FUNNEL-TYPED operators** (`OperandTypes.FUNNEL_TYPE`: `CAR`, `CDR`, `NTHCDR`, `ENDP`, `AREF`,
   `(SETF AREF)`, `CHAR`, `SCHAR`, `(SETF CHAR)`, `(SETF SCHAR)`, `ROW-MAJOR-AREF`,
-  `(SETF ROW-MAJOR-AREF)`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
+  `(SETF ROW-MAJOR-AREF)`, `COPY-LIST`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
   (new kinds `LIST`, `RATIONAL`, `STRING`, `CHARACTER`) -- except that a to-double funnel (`NUMBER`) there is a packed float
   store, which takes any real: `REAL`. A numeric operator keeps its one fixed type. `%aset` reports
   as `(SETF AREF)`, `%row-major-aset` as `(SETF ROW-MAJOR-AREF)`, `nth` as `NTHCDR`, `svref` as `AREF`, `first`/`rest` as `CAR`/`CDR`
@@ -1144,6 +1168,18 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   `denominator` through `_ckRat`, both via the operator's wrapper; `%aset`'s store helpers and the
   `complex` constructor are invoked under the wrapper too. `_opTypeErr`'s funnel-typed arm reads the
   kind back off the raw report.
+- **What is a cons on the JVM** (`JvmOperandTypeRuntime.ConsShape`): `_car`/`_cdr`/`_endp`/
+  `_ckList`/`_ckCons`, `_nthcdr`'s walk and the inline `mapcar`/`mapc`/`mapcan` walks (`_isCons`)
+  exclude the other `Object[]`s exactly as `consp` does: a ratio, a function reference (`Integer`
+  head), an instance (`String[]` head; tested only when `mayUseInstances`) and an async value
+  (`Object[3]` + marker; only with the async runtime). Until 2026-09-26 they tested `instanceof
+  Object[]` alone: `(car an-instance)` answered its layout, `rplacd` overwrote its first slot, and
+  `(car c)` in a `handler-bind` handler returned. Cost, measured 2026-09-26 (JDK 25, 10 interleaved
+  runs pinned to 4 cores on a loaded host, best/median ms): 1M-element `car`+`cdr` walk x40
+  156/189 -> 161/190; `endp`+`cdr` walk 182/242 -> 150/187; `dolist` 159/191 -> 161/188; `mapcar`
+  over 10k x2000 131/150 -> 132/150; bench-report `list` 463/513 -> 463/484. A `mapcar` class
+  +165 B. Pins: `JvmLispCompilerTest.consAccessorsRejectEveryObjectArrayThatIsNoCons`, ci-spec
+  `cons-accessors-reject-object-arrays-that-are-no-cons` and `failing-handler-bind-handler-report`.
 - **wasm-GC, EH mode only** (`WasmEmitHelper.checksConsFields`; outside it every cast still traps and
   a non-EH module is byte-identical): an inline `car`/`cdr` site is ONE type test over the operand
   on the stack, `block block br_on_cast_fail 0 eqref (ref $cons); struct.get; br 1 end; call _car

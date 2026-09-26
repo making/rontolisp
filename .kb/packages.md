@@ -289,6 +289,18 @@ becomes an `assoc` over `runtimePackageTable()` / `PackageRegistry.designatorTab
 names plus every nickname, each also uppercase), read AFTER `resolveProgram`
 (`.kb/symbol-runtime-api.md`). ci-spec `package-registry-queries`.
 
+**That lookup is one `%find-package` defun per program**, prepended by the backends after
+`injectBakedPackageTable` (`LispMacroExpander.injectFindPackageHelper`) when a `find-package`,
+`package-use-list` or `package-used-by-list` survives resolution; every site -- the
+`%symbol-in-package` guard and the package-query lowerings included -- calls it
+(`expandRuntimeFindPackage` with `ctx.functions::containsKey`; a site without the helper stays
+inline). Inline, the quoted table was built at EACH site: a quote datum is memoized per identity,
+and every site made a new one. Measured 2026-09-26 (CLI, per additional site): JVM 2,494 -> 42 B,
+WASM ~1,600 -> 15 B; with runtime packages JVM 2,954 -> 55 B, WASM ~2,300 -> 16 B. The mito probe
+(`ql:quickload "mito"` + `table-definition`): JVM 9,670,156 -> 9,600,823 B, component
+7,227,396 -> 7,174,018 B. Pinned by `aComputedFindPackageSiteDoesNotCarryItsOwnCopyOfThePackageTable`
+in `JvmLispCompilerTest` and `WasmLispCompilerTest`.
+
 **There is no package introspection, deliberately.** `rontolisp:list-functions`/`list-macros`/
 `list-special-forms`, `PackageIntrospection`, `Jvm`/`WasmIntrospectionCompiler`,
 `clMacroNames`/`clSpecialFormNames`, `Environment.globalFunctionNames` are GONE: the listings were
@@ -467,7 +479,7 @@ made table-aware. The model:
   `intern` over a computed designator naming a READ/COMPILE-TIME package build the
   permissive `PKG:NAME` spelling on the compiled backends (the unknown-name
   deviation's sibling; a runtime package answers from its member table instead); a
-  computed package designator naming nothing answers nil / signals only when gated;
+  computed package designator naming nothing signals a `package-error`;
   `symbol-package` on the compiled backends reads the qualifier off the spelling, so
   an uninterned symbol keeps its old home there; `unintern`'s name-conflict check
   runs on the interpreter only; `--no-gc` refuses the whole tier (no conses).

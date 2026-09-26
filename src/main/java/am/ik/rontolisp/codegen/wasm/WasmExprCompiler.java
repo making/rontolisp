@@ -1138,8 +1138,9 @@ final class WasmExprCompiler {
 			// literal
 			// one to the quoted package keyword before the compiler ever sees it
 			// (unless the program can create packages at run time).
-			case LispNames.FIND_PACKAGE -> WasmExprCompiler.compileExpr(LispMacroExpander
-				.expandRuntimeFindPackage(cons.toList().get(1), ctx.packageTable, ctx.usesRuntimePackages), ctx);
+			case LispNames.FIND_PACKAGE ->
+				WasmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeFindPackage(cons.toList().get(1),
+						ctx.packageTable, ctx.usesRuntimePackages, ctx.functions::containsKey), ctx);
 			case LispNames.CONCATENATE -> {
 				WasmExprCompiler.compileExpr(ConcatenateForms.expand(cons, ctx.usesSeqString, ctx.closRegistry), ctx);
 				// The string family's fresh result carries a writable identity

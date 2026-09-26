@@ -492,6 +492,11 @@ final class WasmLetCompiler {
 					WasmExprCompiler.compileExpr(parts.get(i), ctx);
 				}
 			}
+			if (parts.size() == 2 && !forEffect) {
+				// CLHS: a body-less let/let* returns nil (the loop above pushed nothing).
+				ctx.writer.write(Instruction.REF_NULL);
+				ctx.writer.writeHeapType(am.ik.wasm.Type.EQ.code());
+			}
 			// A body-less let has no region (nothing can exit it abnormally): its
 			// restores run straight after the bindings, innermost first.
 			if (dynamicRestores != null) {

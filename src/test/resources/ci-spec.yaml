@@ -12177,8 +12177,8 @@ cases:
       (defun rps-fs (n p) (find-symbol n p))
       (print (rps-fs "FOO" :keyword))
       (print (rps-fs "CAR" :cl))
-      (print (rps-fs "BAR" nil))
-      (print (find-symbol "TIMESTAMP" :simple-date))
+      (print (handler-case (rps-fs "BAR" nil) (package-error () :caught)))
+      (print (handler-case (find-symbol "TIMESTAMP" :simple-date) (package-error () :caught)))
       (setq rps-name "CAR")
       (print (find-symbol rps-name))
       (defun rps-prepared () 42)
@@ -12201,8 +12201,8 @@ cases:
       NIL
       :FOO
       CAR
-      NIL
-      NIL
+      :CAUGHT
+      :CAUGHT
       CAR
       T
       RPS-PREPARED
@@ -12889,6 +12889,16 @@ cases:
       (print (block ci-hb-b
                (handler-bind ((error (lambda (e) (return-from ci-hb-b :outer-ran))))
                  (handler-case (error "boom") (error () (error "again"))))))
+      ;; A handler runs with its own cluster disabled: a built-in failing inside
+      ;; it reaches the enclosing handlers once each and never the failing one.
+      (print (let ((ci-hb-log nil))
+               (handler-case
+                   (handler-bind ((error (lambda (c) (setq ci-hb-log (cons (type-of c) ci-hb-log)))))
+                     (handler-bind ((error (lambda (c)
+                                             (setq ci-hb-log (cons :inner ci-hb-log))
+                                             (car (type-of c)))))
+                       (error "first")))
+                 (error (e) (list (type-of e) ci-hb-log)))))
     expected: |
       (:RECONNECTED 42)
       3
@@ -12906,6 +12916,7 @@ cases:
       NIL
       :OUTER-RAN
       :OUTER-RAN
+      (TYPE-ERROR (TYPE-ERROR :INNER))
   # A handler-bind handler is called with the condition, so ~a prints its report,
   # not the #<TYPE-ERROR ...> slot syntax.
   - name: handler-bind-handler-prints-report
@@ -18054,6 +18065,44 @@ cases:
       ("RANDOM: The value -1.5 is not of type REAL" -1.5 REAL)
       ("RANDOM: The value 0.0 is not of type REAL" 0.0 REAL)
       ("RANDOM: The value -1.0 is not of type REAL" -1.0 REAL)
+  - name: cons-accessors-reject-object-arrays-that-are-no-cons
+    # An instance, a ratio and a function reference are Object[]s on the JVM, like a
+    # cons cell; the list accessors and walks must reject them as consp does.
+    source: |
+      (defun ci-nocons-id (x) x)
+      (defstruct ci-nocons-pt x y)
+      (defvar *ci-nocons-pt* (make-ci-nocons-pt :x 1 :y 2))
+      (defun ci-nocons-te (thunk)
+        (handler-case (funcall thunk)
+          (type-error (e) (list (princ-to-string e) (type-error-expected-type e)))
+          (error (e) (list :not-a-type-error (princ-to-string e)))))
+      (print (ci-nocons-te (lambda () (car (ci-nocons-id *ci-nocons-pt*)))))
+      (print (ci-nocons-te (lambda () (cdr (ci-nocons-id *ci-nocons-pt*)))))
+      (print (ci-nocons-te (lambda () (endp (ci-nocons-id *ci-nocons-pt*)))))
+      (print (ci-nocons-te (lambda () (dolist (x (ci-nocons-id *ci-nocons-pt*) :walked) x))))
+      (print (ci-nocons-te (lambda () (rplaca (ci-nocons-id *ci-nocons-pt*) 9))))
+      (print (ci-nocons-te (lambda () (rplacd (ci-nocons-id *ci-nocons-pt*) 9))))
+      (print (ci-nocons-te (lambda () (nthcdr 1 (ci-nocons-id *ci-nocons-pt*)))))
+      (print (ci-nocons-te (lambda () (mapcar #'ci-nocons-id (ci-nocons-id *ci-nocons-pt*)))))
+      (print (ci-nocons-te (lambda () (car (ci-nocons-id 1/2)))))
+      (print (ci-nocons-te (lambda () (mapc #'print (ci-nocons-id 1/2)))))
+      (print (ci-nocons-te (lambda () (cdr (ci-nocons-id #'ci-nocons-id)))))
+      (print (ci-nocons-te (lambda () (mapcan #'list (ci-nocons-id #'ci-nocons-id)))))
+      (print *ci-nocons-pt*)
+    expected: |
+      ("CAR: The value #S(CI-NOCONS-PT :X 1 :Y 2) is not of type LIST" LIST)
+      ("CDR: The value #S(CI-NOCONS-PT :X 1 :Y 2) is not of type LIST" LIST)
+      ("ENDP: The value #S(CI-NOCONS-PT :X 1 :Y 2) is not of type LIST" LIST)
+      ("ENDP: The value #S(CI-NOCONS-PT :X 1 :Y 2) is not of type LIST" LIST)
+      ("RPLACA: The value #S(CI-NOCONS-PT :X 1 :Y 2) is not of type CONS" CONS)
+      ("RPLACD: The value #S(CI-NOCONS-PT :X 1 :Y 2) is not of type CONS" CONS)
+      ("NTHCDR: The value #S(CI-NOCONS-PT :X 1 :Y 2) is not of type LIST" LIST)
+      ("MAPCAR: The value #S(CI-NOCONS-PT :X 1 :Y 2) is not of type LIST" LIST)
+      ("CAR: The value 1/2 is not of type LIST" LIST)
+      ("MAPC: The value 1/2 is not of type LIST" LIST)
+      ("CDR: The value #<function CI-NOCONS-ID> is not of type LIST" LIST)
+      ("MAPCAN: The value #<function CI-NOCONS-ID> is not of type LIST" LIST)
+      #S(CI-NOCONS-PT :X 1 :Y 2)
   # .kb/error-handling.md, "A wrong-type argument names its operator": a list walk
   # over a non-list (nthcdr, and so nth and second..tenth; endp, and so dolist,
   # which checks its list's end after the loop) and a string index that is no
@@ -19199,6 +19248,21 @@ cases:
       (2 1)
       (10 1)
 
+  - name: empty-body-let-returns-nil
+    source: |
+      ;; CLHS: a let/let* with no body forms returns nil. Both compilers rejected this
+      ;; with an operand-stack underflow (the body lowering pushed no value).
+      (print (let ((eblrn-p 1))))
+      (print (let* ((eblrn-p 1))))
+      (print (let ()))
+      (defun eblrn-f () (let ((eblrn-p 1))))
+      (print (eblrn-f))
+    expected: |
+      NIL
+      NIL
+      NIL
+      NIL
+
   # eq on NUMBERS is eql on every backend (.kb/eq-numbers.md): a float, ratio or
   # complex compares by type and value, never by box identity, so no optimizer that
   # unboxes or re-boxes can change the answer. -0.0 and 0.0 stay distinct, as for eql.
@@ -19263,6 +19327,21 @@ standalone:
       :OK
     stderr: |
       Unhandled condition: Condition (PLAIN-ERR :CODE 42) was signalled.
+    fails: true
+  - name: failing-handler-bind-handler-report
+    source: |
+      ;; The handler's own failure escapes: it runs with its cluster disabled, so
+      ;; the handler-bind does not run it a second time on the type-error.
+      (defun k ()
+        (handler-bind ((error (lambda (c)
+                                (print (type-of c))
+                                (car c))))
+          (error "first")))
+      (k)
+    stdout: |
+      SIMPLE-ERROR
+    stderr: |
+      Unhandled condition: CAR: The value #<SIMPLE-ERROR :FORMAT-CONTROL "first" :FORMAT-ARGUMENTS NIL> is not of type LIST
     fails: true
   - name: uncaught-struct-accessor-report
     source: |
@@ -20144,7 +20223,13 @@ standalone:
         (setf (car dup) 9)
         (print (list src dup (eq src dup))))
       (print (mapcar #'copy-list '((a . b) (c d))))
-      (print (handler-case (copy-list 5) (error () :not-a-list)))
+      ;; A non-list names COPY-LIST as the other list operators name themselves
+      ;; (.kb/error-handling.md, "A wrong-type argument names its operator"): a
+      ;; catchable type-error whose datum and expected-type answer the operand and LIST.
+      (defun ci-cpl-id (x) x)
+      (print (handler-case (copy-list (ci-cpl-id 5))
+               (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+               (error (e) (list :not-a-type-error (princ-to-string e)))))
       ;; A string's elements are characters: a non-character element is an error,
       ;; from coerce and from map 'string alike, never its printed text.
       (print (coerce (list #\a #\b) 'string))
@@ -20159,7 +20244,7 @@ standalone:
       NIL
       ((1 2 3) (9 2 3) NIL)
       ((A . B) (C D))
-      :NOT-A-LIST
+      ("COPY-LIST: The value 5 is not of type LIST" 5 LIST)
       "ab"
       "cd"
       :NOT-A-CHARACTER
@@ -20180,6 +20265,26 @@ standalone:
       :CAUGHT
       (:CI-IPE-NOPKG "No such package: CI-IPE-NOPKG")
       :CAUGHT
+      NIL
+  # find-symbol into a package that does not exist signals a catchable
+  # package-error too, for either value arity, and creates nothing.
+  - name: find-symbol-in-a-missing-package
+    source: |
+      (defun ci-fse-in (p) (find-symbol "X" p))
+      (print (handler-case (find-symbol "X" "CI-FSE-NOPKG") (error () :caught)))
+      (print (handler-case (ci-fse-in "CI-FSE-NOPKG")
+               (package-error (e) (list (package-error-package e) (princ-to-string e)))))
+      (print (handler-case (ci-fse-in nil) (package-error () :caught)))
+      (print (handler-case (multiple-value-list (find-symbol "X" :ci-fse-nopkg))
+               (package-error () :caught)))
+      (print (and (find-package :ci-fse-nopkg) (find-symbol "X" :ci-fse-nopkg)))
+      (print (find-package "CI-FSE-NOPKG"))
+    stdout: |
+      :CAUGHT
+      (:CI-FSE-NOPKG "No such package: CI-FSE-NOPKG")
+      :CAUGHT
+      :CAUGHT
+      NIL
       NIL
   - name: uncaught-simple-error-report
     source: |

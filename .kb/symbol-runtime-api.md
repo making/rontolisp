@@ -284,17 +284,45 @@ creates later is invisible. The three registry QUERIES (`list-all-packages` /
 A computed NAME lowers to `(intern name)` (`LispMacroExpander.computedFindSymbol`) — interning
 IS the lookup — carrying the unknown-name-yields-a-symbol deviation. A computed PACKAGE
 designator builds the spelling through a runtime test of the three packages whose members carry
-no qualifier (`computedPackageFindSymbol`: `keyword` -> `:NAME`, `cl`/`cl-user` -> bare,
+no qualifier (`computedQualifiedSpelling`: `keyword` -> `:NAME`, `cl`/`cl-user` -> bare,
 anything else -> `PKG:NAME`); unconditionally prefixing `(string PKG)` built `KEYWORD:X` instead
 of the keyword `:X`.
 
-**A package that does not exist provides no symbol: `find-symbol` answers nil, not an error.** A
-LITERAL designator naming no package folds to nil on the compile paths (same baked table). CL
-signals a `package-error` and the interpreter used to. `nil` is accepted as the designator
-naming the package `"NIL"` (`packageDesignator`).
+**A designator naming no package signals a `package-error`, as `intern`'s does** (`.todo/997`;
+nil until then). `nil` designates the package `"NIL"`, which no image has, so it signals too.
+Interpreter: `findSymbolAccessible`, shared by `find-symbol` and `%find-symbol-status`, so the
+multiple-value lowering signals once. Compile paths: a LITERAL designator the baked table lacks
+lowers to the `%package-error` stub (behind the runtime table when `usesRuntimePackages`); a
+COMPUTED one is guarded by `(find-package p)` (`computedGuardedSpelling`, shared with
+`intern`) -- before that the computed path built `NOPKG:X` for any non-nil designator, a
+cross-backend divergence the interpreter's nil hid.
+Survey before the change (2026-09-26):
+every shipped-library and corpus probe of an optional package already guards on
+`find-package` (postmodern's json-encoder, alexandria's `sequence-emptyp`,
+trivial-with-current-source-form, esrap, dissect, local-time), sits behind a reader
+conditional for another implementation (jzon `#+ecl`, ironclad/trivial-garbage `#+sbcl`,
+swank), or errors on nil anyway (lack's `locate-symbol`, flexi-streams' version check); the one
+unguarded shipped caller, `format-render-slash.lisp`'s `~/pkg:fn/` resolver, now guards. ANSI
+`packages` + `symbols` chapters unchanged. The optional-system probe is
+`(and (find-package p) (find-symbol n p))`.
+- **A computed-designator site is one call to the `%symbol-in-package` prelude defun**
+  (`computedPackageLookup`; its body IS `computedGuardedSpelling`, printed by
+  `symbolInPackageDefinition`, so the two cannot drift). Selected by the surface fact
+  `callsWithComputedPackageDesignator`; a site the selection cannot see keeps the inline form
+  (`ctx.functions::containsKey`, the `%make-array-et` pattern). Why: the guard inline is a
+  computed `find-package` -- the baked table is a quoted constant BUILT AT EACH SITE, ~2.5 KB
+  of JVM code -- plus the package-error, ~3 KB per site in all; the runtime-package path
+  (`usesRuntimePackages`) was ~4 KB per site, and `JvmLispCompilerTest#compileAndRunRuntimePackageMemberTable`'s
+  top method (13 sites) crossed 64 KB (67,446 B). With the helper (2026-09-26): 28 B per
+  non-runtime site, 156 B per runtime site. The first site of a small program pays the
+  helper's `string-upcase` (the package-error's keyword) and `intern`: `(find-symbol "CAR"
+  *p*)` alone is 36.8 KB of class (13.4 KB when it answered nil unguarded), the same as a
+  computed `intern` already cost after `.todo/996`. The guard's `find-package` is itself one
+  call to `%find-package` now (`.kb/packages.md`, after "Divergence").
 
-Tests: the *Fmakunbound* / *FindPackage* / *FindSymbol* groups in the three backend tests, the
-`runtime-package-symbol-ops` ci-spec case.
+Tests: the *Fmakunbound* / *FindPackage* / *FindSymbol* groups in the three backend tests
+(`findSymbolInAMissingPackage*` for the signal), the `runtime-package-symbol-ops` and
+`find-symbol-in-a-missing-package` ci-spec cases.
 
 ## The standard stream variables are bound in the MIRROR too
 A compiled program keeps a special in **two homes that did not know about each other** — the
@@ -332,14 +360,14 @@ symbol-to-function route (the interpreter resolves designators against the live 
   `keyword` keeps the byte-identical keyword lowering; a literal `cl`/`cl-user` drops the
   qualifier; any other literal known package builds `(intern (concatenate "PKG:" name))`; a
   computed designator runs the same three-way `cond` as `computedPackageFindSymbol` (shared
-  `computedQualifiedSpelling`). **Intern's contract difference from find-symbol**: a
-  designator naming no package SIGNALS instead of folding to nil -- a LITERAL one as a
+  `computedQualifiedSpelling`). A designator naming no package
+  SIGNALS (find-symbol's contract too since `.todo/997`) -- a LITERAL one as a
   call-time `(%package-error ':X "No such package: X")` stub, a COMPUTED one (nil included)
   behind a `(find-package p)` guard, since building the spelling unguarded CREATES the
   package (`.todo/996`: `(f "NOPKG")` answered `NOPKG:X`). `%package-error` lowers like
   `%file-error` (`lowerPackageError`): a typed `package-error` behind a landing pad, the plain
   `%error` channel otherwise. It is built during body compilation, after the condition
-  scans, so `PACKAGE_ERROR_SITES` (`intern`) stands in for the tag in `conditionNarrowing`
+  scans, so `PACKAGE_ERROR_SITES` (`intern`, `find-symbol`) stands in for the tag in `conditionNarrowing`
   and wasm's `usedLayoutTags`. Pinned in ci-spec (`intern-into-a-missing-package`) and
   `{LispEvaluatorTest,JvmLispCompilerTest,WasmLispCompilerIntegrationTest}#internIntoAMissingPackage*`.
 - **Alias rows for internal names in the `_lookup` registries**

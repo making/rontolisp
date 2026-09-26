@@ -5997,6 +5997,45 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void findSymbolInAMissingPackageSignalsACatchablePackageError() throws Exception {
+		// A literal and a computed designator naming no package (nil included) signal a
+		// catchable package-error for either value arity and create nothing.
+		assertThat(compileAndRunPrelude("""
+				(defun fse-in (p) (find-symbol "X" p))
+				(print (handler-case (find-symbol "X" "FSE-NOPKG") (error () :caught)))
+				(print (handler-case (fse-in "FSE-NOPKG")
+				         (package-error (e) (list (package-error-package e) (princ-to-string e)))))
+				(print (handler-case (fse-in nil) (package-error () :caught)))
+				(print (handler-case (find-symbol "X" nil) (package-error () :caught)))
+				(print (handler-case (multiple-value-list (find-symbol "X" :fse-nopkg))
+				         (package-error () :caught)))
+				(print (handler-case (multiple-value-list (fse-in "FSE-NOPKG")) (package-error () :caught)))
+				(print (find-package "FSE-NOPKG"))
+				"""))
+			.isEqualTo(":CAUGHT\n(:FSE-NOPKG \"No such package: FSE-NOPKG\")\n:CAUGHT\n:CAUGHT\n:CAUGHT\n:CAUGHT\nNIL");
+	}
+
+	@Test
+	void findSymbolInAMissingPackageSignalsWithRuntimePackages() throws Exception {
+		// The same with runtime packages in the program; a runtime package answers
+		// from its member table.
+		assertThat(compileAndRunPrelude("""
+				(defun fse-in (p) (find-symbol "X" p))
+				(print (handler-case (find-symbol "X" "FSE-NOPKG") (error () :caught)))
+				(print (handler-case (fse-in "FSE-NOPKG")
+				         (package-error (e) (list (package-error-package e) (princ-to-string e)))))
+				(print (handler-case (fse-in nil) (package-error () :caught)))
+				(print (handler-case (find-symbol "X" nil) (package-error () :caught)))
+				(print (handler-case (multiple-value-list (find-symbol "X" :fse-nopkg))
+				         (package-error () :caught)))
+				(print (handler-case (multiple-value-list (fse-in "FSE-NOPKG")) (package-error () :caught)))
+				(print (find-package "FSE-NOPKG"))
+				(print (fse-in (make-package "FSE-RT" :use nil)))
+				""")).isEqualTo(
+				":CAUGHT\n(:FSE-NOPKG \"No such package: FSE-NOPKG\")\n:CAUGHT\n:CAUGHT\n:CAUGHT\n:CAUGHT\nNIL\nNIL");
+	}
+
+	@Test
 	void internIntoAMissingPackageSignalsACatchablePackageError() throws Exception {
 		// A literal and a computed designator naming no package signal a catchable
 		// package-error and create nothing.
@@ -17679,10 +17718,12 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void findSymbolWithAComputedPackageDesignator() throws Exception {
 		// (find-symbol name pkg) with pkg in a variable: keyword/cl/cl-user need no
-		// qualifier, anything else gets the external "PKG:" spelling.
-		assertThat(compileAndRun("(defun fs (n p) (find-symbol n p))"
-				+ "(print (fs \"FOO\" :keyword)) (print (fs \"CAR\" :cl)) (print (fs \"BAR\" nil))"))
-			.isEqualTo(":FOO\nCAR\nNIL");
+		// qualifier, anything else gets the external "PKG:" spelling; nil names no
+		// package, so it signals.
+		assertThat(compileAndRun(
+				"(defun fs (n p) (find-symbol n p))" + "(print (fs \"FOO\" :keyword)) (print (fs \"CAR\" :cl))"
+						+ "(print (handler-case (fs \"BAR\" nil) (package-error () :caught)))"))
+			.isEqualTo(":FOO\nCAR\n:CAUGHT");
 	}
 
 	@Test
@@ -25141,6 +25182,8 @@ class WasmLispCompilerIntegrationTest {
 				(print (te (lambda () (append *te-five* nil))))
 				(print (te (lambda () (append *te-dotted* '(4)))))
 				(print (te (lambda () (funcall #'append *te-five* nil))))
+				(print (te (lambda () (copy-list *te-five*))))
+				(print (te (lambda () (funcall #'copy-list *te-five*))))
 				(print (te (lambda () (member 1 *te-five*))))
 				(print (te (lambda () (member 9 *te-dotted*))))
 				(print (te (lambda () (funcall #'member 1 *te-five*))))
@@ -25172,6 +25215,8 @@ class WasmLispCompilerIntegrationTest {
 				("APPEND: The value 5 is not of type LIST" 5 LIST)
 				("APPEND: The value 3 is not of type LIST" 3 LIST)
 				("APPEND: The value 5 is not of type LIST" 5 LIST)
+				("COPY-LIST: The value 5 is not of type LIST" 5 LIST)
+				("COPY-LIST: The value 5 is not of type LIST" 5 LIST)
 				("MEMBER: The value 5 is not of type LIST" 5 LIST)
 				("MEMBER: The value 3 is not of type LIST" 3 LIST)
 				("MEMBER: The value 5 is not of type LIST" 5 LIST)
@@ -25532,6 +25577,27 @@ class WasmLispCompilerIntegrationTest {
 				                 (no-such-function-xyz 1)))
 				           (error (e) (cons :caught log)))))
 				""")).isEqualTo("(:CAUGHT :OUTER :INNER)");
+	}
+
+	@Test
+	void ehAHandlerFailingInABuiltInDoesNotRunItself() throws Exception {
+		// CLHS 9.1.4.1: a handler runs with its own cluster disabled, so a built-in
+		// failing inside it reaches only the enclosing handlers -- never the failing
+		// handler again, which the handler-bind's own landing pad used to rerun.
+		assertThat(compileAndRunEh("""
+				(defun hb-id (x) x)
+				(print (let ((n 0))
+				         (handler-case
+				             (handler-bind ((error (lambda (c) (setq n (+ n 1)) (car (hb-id 5)))))
+				               (error "first"))
+				           (error (e) (list (typep e 'type-error) n)))))
+				(print (let ((log nil))
+				         (handler-case
+				             (handler-bind ((error (lambda (c) (setq log (cons (typep c 'type-error) log)))))
+				               (handler-bind ((error (lambda (c) (setq log (cons :inner log)) (car (hb-id 5)))))
+				                 (error "first")))
+				           (error (e) (list (typep e 'type-error) log)))))
+				""")).isEqualTo("(T 1)\n(T (T :INNER))");
 	}
 
 	@Test
@@ -27436,6 +27502,20 @@ class WasmLispCompilerIntegrationTest {
 				(defun typed (n) (let ((n (+ n 1)) (m (* n 2))) (+ n m)))
 				(print (typed 5))
 				""")).isEqualTo("(2 1)\n(2 1)\n(2 1)\n(10 1)\n16");
+	}
+
+	@Test
+	void emptyBodyLetReturnsNil() throws Exception {
+		// CLHS: a let/let* with no body forms returns nil. Was an operand-stack
+		// underflow at compile time (the body lowering pushed no value for an empty
+		// body): (let ((p 1))) and (let ()) both failed to compile.
+		assertThat(compileAndRun("""
+				(print (let ((p 1))))
+				(print (let* ((p 1))))
+				(print (let ()))
+				(defun f () (let ((p 1))))
+				(print (f))
+				""")).isEqualTo("NIL\nNIL\nNIL\nNIL");
 	}
 
 	@Test

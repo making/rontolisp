@@ -7221,9 +7221,10 @@ public final class LispMacroExpander {
 	// The shared copy-list: a fresh spine whose last cdr is the argument's final atom, so
 	// a dotted list copies dotted (CLHS copy-list) -- (append x nil), the lowering this
 	// replaced, walks its argument to nil and failed on the atom. A non-list signals
-	// instead of answering: the string datum keeps the helper instance-free (an
-	// (error 'type-error ...) would pull the condition-instance runtime into every
-	// program that copies a list, ~45 KB on the JVM).
+	// COPY-LIST's own type-error through the shared, instance-free %check-list funnel --
+	// the same mechanism last/reverse/append and the rest of the list consumers use --
+	// rather than a message-only (error ...) whose condition class and expected-type
+	// answered nothing.
 	private static final String COPY_LIST_RUNTIME_SOURCE = """
 			(setq %copy-list-runtime
 			  (lambda (%cpl-x)
@@ -7236,9 +7237,7 @@ public final class LispMacroExpander {
 			            (setq %cpl-cur (cdr %cpl-cur)))
 			          (rplacd %cpl-tail %cpl-cur)
 			          %cpl-head)
-			        (if (null %cpl-x)
-			            nil
-			            (error "The value ~s is not of type LIST" %cpl-x)))))
+			        (%check-list %cpl-x 'copy-list))))
 			""";
 
 	/**
@@ -13618,11 +13617,10 @@ public final class LispMacroExpander {
 	 * symbol instead of nil (harmless where find-symbol feeds a plist/dispatch lookup
 	 * that then answers nil anyway), and the qualifier is the single-colon EXTERNAL
 	 * spelling, which is what a library's exported API uses. The {@code keyword},
-	 * {@code cl} and {@code cl-user} packages need no qualifier work, and a literal
-	 * designator naming NO package folds straight to nil -- the backend's baked package
-	 * table knows which those are, so the compile paths agree with the interpreter on
-	 * postmodern's {@code (find-symbol "TIMESTAMP" :simple-date)} probe. Returns
-	 * {@code null} when the package argument is not a literal designator.
+	 * {@code cl} and {@code cl-user} packages need no qualifier work, and a designator
+	 * naming NO package signals a call-time {@code package-error} (the interpreter's
+	 * answer): a literal one is decided against the backend's baked package table, a
+	 * computed one behind a {@code find-package} guard.
 	 * @param cons the find-symbol call
 	 * @param packageTable the backend's baked package table
 	 * ({@code PackageResolver.runtimePackageTable()})
@@ -13635,9 +13633,8 @@ public final class LispMacroExpander {
 	/**
 	 * As {@link #expandFindSymbolInPackage(LispCons, java.util.Map)}, keeping a literal
 	 * designator that names no read/compile-time package dynamic when the program can
-	 * create packages at run time: the runtime table decides between the permissive
-	 * spelling build and nil. A computed designator additionally answers nil (rather than
-	 * building a spelling) when it names no package at all.
+	 * create packages at run time: the runtime table decides between the member-table
+	 * answer and the package-error.
 	 * @param cons the find-symbol call
 	 * @param packageTable the backend's baked package table
 	 * @param runtimeMutation whether the program can create packages at run time
@@ -13645,6 +13642,21 @@ public final class LispMacroExpander {
 	 */
 	@Nullable public static LispVal expandFindSymbolInPackage(LispCons cons, java.util.Map<String, String> packageTable,
 			boolean runtimeMutation) {
+		return expandFindSymbolInPackage(cons, packageTable, runtimeMutation, name -> false);
+	}
+
+	/**
+	 * As {@link #expandFindSymbolInPackage(LispCons, java.util.Map, boolean)}, routing a
+	 * computed designator through the {@code %symbol-in-package} prelude helper when the
+	 * program carries it ({@link #computedPackageLookup}).
+	 * @param cons the find-symbol call
+	 * @param packageTable the backend's baked package table
+	 * @param runtimeMutation whether the program can create packages at run time
+	 * @param definedFunction whether a function of that name is defined in the program
+	 * @return the lowered expression, or {@code null}
+	 */
+	@Nullable public static LispVal expandFindSymbolInPackage(LispCons cons, java.util.Map<String, String> packageTable,
+			boolean runtimeMutation, java.util.function.Predicate<String> definedFunction) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 3) {
 			return null;
@@ -13653,15 +13665,16 @@ public final class LispMacroExpander {
 		String pkg = literalPackageDesignator(parts.get(2));
 		if (pkg != null && !packageTable.isEmpty() && !packageTable.containsKey(pkg)
 				&& !packageTable.containsKey(pkg.toUpperCase(java.util.Locale.ROOT))) {
-			// No such package: it provides no symbol. (An empty table means the caller
-			// has none -- keep the pre-table behavior rather than folding everything
-			// away.) When the program can create packages, the runtime table decides:
-			// a runtime package answers from its MEMBER table, nothing else answers nil.
+			// No such package: a call-time package-error, as intern's. (An empty table
+			// means the caller has none -- keep the pre-table behavior rather than
+			// folding everything away.) When the program can create packages, the
+			// runtime table decides: a runtime package answers from its MEMBER table,
+			// nothing else signals.
+			LispVal signal = literalNoSuchPackage(pkg);
 			if (!runtimeMutation) {
-				return LispNil.INSTANCE;
+				return signal;
 			}
-			return runtimeMemberLookup(new LispString(pkg), LispNames.RUNTIME_MEMBER_FIND_INTERNAL, name,
-					LispNil.INSTANCE);
+			return runtimeMemberLookup(new LispString(pkg), LispNames.RUNTIME_MEMBER_FIND_INTERNAL, name, signal);
 		}
 		if (pkg == null) {
 			// A computed package value (ironclad's massage-symbol holds one in a local,
@@ -13672,21 +13685,10 @@ public final class LispMacroExpander {
 			// members are spelled WITHOUT a qualifier, which the literal path folds away
 			// and this one must test for at run time, or a computed :keyword designator
 			// would build KEYWORD:X instead of the keyword :X.
-			if (!runtimeMutation) {
-				return computedPackageFindSymbol(name, parts.get(2));
-			}
-			// Both arguments bound once; a runtime package answers from its member
-			// table, a read/compile-time one builds the spelling as above, and a
-			// designator naming nothing answers nil.
-			LispSymbol pkgVar = new LispSymbol(FIND_SYMBOL_PKG_VAR);
-			LispSymbol nameVar = new LispSymbol(FIND_SYMBOL_NAME_VAR);
-			LispVal built = makeIf(listToCons(List.of(new LispSymbol(LispNames.FIND_PACKAGE), pkgVar)),
-					listToCons(List.of(new LispSymbol(LispNames.INTERN), computedQualifiedSpelling(pkgVar, nameVar))),
-					LispNil.INSTANCE);
-			LispVal guarded = makeIf(listToCons(List.of(new LispSymbol(LispNames.NULL), pkgVar)), LispNil.INSTANCE,
-					runtimeMemberLookup(listToCons(List.of(new LispSymbol(LispNames.STRING), pkgVar)),
-							LispNames.RUNTIME_MEMBER_FIND_INTERNAL, nameVar, built));
-			return bindFindSymbolTemps(name, parts.get(2), guarded);
+			// Building the spelling is guarded on the package existing: a designator
+			// naming nothing (nil included) signals, as intern's does.
+			return computedPackageLookup(name, parts.get(2), runtimeMutation, LispNames.RUNTIME_MEMBER_FIND_INTERNAL,
+					definedFunction);
 		}
 		if ("KEYWORD".equalsIgnoreCase(pkg)) {
 			return listToCons(List.of(new LispSymbol(LispNames.INTERN), name, new LispSymbol(":KEYWORD")));
@@ -13957,6 +13959,69 @@ public final class LispMacroExpander {
 	 * @return the equivalent lookup expression
 	 */
 	public static LispVal expandRuntimeFindPackage(LispVal designatorForm, java.util.Map<String, String> table,
+			boolean runtimeMutation) {
+		return inlineRuntimeFindPackage(designatorForm, table, runtimeMutation);
+	}
+
+	/**
+	 * As {@link #expandRuntimeFindPackage(LispVal, java.util.Map, boolean)}, but one call
+	 * to the {@code %find-package} helper when the program carries it
+	 * ({@link #injectFindPackageHelper}): the helper's body is the inline lookup, so the
+	 * baked table is built once per program rather than at every site (~2.5 KB of JVM
+	 * code and ~1.6 KB of WASM per site, measured 2026-09-26). A program without the
+	 * helper keeps the inline form.
+	 * @param designatorForm the (unevaluated) package designator expression
+	 * @param table the designator-to-package-name table
+	 * @param runtimeMutation whether the program can create packages at run time
+	 * @param definedFunction whether the program defines the named function
+	 * @return the equivalent lookup expression
+	 */
+	public static LispVal expandRuntimeFindPackage(LispVal designatorForm, java.util.Map<String, String> table,
+			boolean runtimeMutation, java.util.function.Predicate<String> definedFunction) {
+		if (definedFunction.test(LispNames.FIND_PACKAGE_INTERNAL)) {
+			return listToCons(List.of(new LispSymbol(LispNames.FIND_PACKAGE_INTERNAL), designatorForm));
+		}
+		return inlineRuntimeFindPackage(designatorForm, table, runtimeMutation);
+	}
+
+	/**
+	 * Prepends {@code (defun %find-package (d) <inline lookup over d>)} when the program
+	 * may lower a computed {@code find-package}: a {@code find-package} call survived
+	 * package resolution (a literal one is folded unless the program can create packages;
+	 * the {@code %symbol-in-package} guard is one), or a {@code package-use-list} /
+	 * {@code package-used-by-list} whose computed lowering calls it. Runs after package
+	 * resolution, from the resolver's final table, like {@link #injectBakedPackageTable}.
+	 * A site synthesized by a lowering the scan cannot see still compiles -- inline --
+	 * because the call sites consult the function table, not this scan.
+	 * @param program the resolved top-level forms
+	 * @param table the designator-to-package-name table
+	 * @param runtimeMutation whether the program can create packages at run time
+	 * @return the program with the helper prepended, or unchanged
+	 */
+	public static List<LispVal> injectFindPackageHelper(List<LispVal> program, java.util.Map<String, String> table,
+			boolean runtimeMutation) {
+		boolean needed = false;
+		for (LispVal form : program) {
+			if (usesSymbol(form, LispNames.FIND_PACKAGE) || usesSymbol(form, LispNames.PACKAGE_USE_LIST)
+					|| usesSymbol(form, LispNames.PACKAGE_USED_BY_LIST)) {
+				needed = true;
+				break;
+			}
+		}
+		if (!needed) {
+			return program;
+		}
+		LispSymbol designatorVar = new LispSymbol("%FP-D");
+		LispVal defun = listToCons(List.of(new LispSymbol(LispNames.DEFUN),
+				new LispSymbol(LispNames.FIND_PACKAGE_INTERNAL), listToCons(List.of(designatorVar)),
+				inlineRuntimeFindPackage(designatorVar, table, runtimeMutation)));
+		List<LispVal> out = new java.util.ArrayList<>(program.size() + 1);
+		out.add(defun);
+		out.addAll(program);
+		return out;
+	}
+
+	private static LispVal inlineRuntimeFindPackage(LispVal designatorForm, java.util.Map<String, String> table,
 			boolean runtimeMutation) {
 		List<LispVal> entries = new java.util.ArrayList<>(table.size());
 		table.forEach((designator, canonical) -> entries
@@ -14544,7 +14609,7 @@ public final class LispMacroExpander {
 				parts.size() == 3 ? parts.get(2) : LispNil.INSTANCE));
 	}
 
-	/** The temporaries {@link #computedPackageFindSymbol} binds its two arguments to. */
+	/** The temporaries {@link #computedPackageLookup} binds its two arguments to. */
 	private static final String FIND_SYMBOL_PKG_VAR = "%FIND-SYMBOL-PKG";
 
 	private static final String FIND_SYMBOL_NAME_VAR = "%FIND-SYMBOL-NAME";
@@ -14555,39 +14620,107 @@ public final class LispMacroExpander {
 	private static final String UIOP_SYMBOL_CALL_NAME_VAR = "%UIOP-SC-NAME";
 
 	/**
-	 * The runtime form of {@code (find-symbol NAME PKG)} for a COMPUTED package
-	 * designator: bind both arguments (each evaluated once), answer nil for a nil
-	 * designator (the interpreter's answer for a package that does not exist -- see
-	 * {@code .kb/symbol-runtime-api.md}), and otherwise intern the qualified spelling,
-	 * treating {@code keyword} / {@code cl} / {@code cl-user} exactly as the literal path
-	 * does. The two binding names are fixed rather than generated: {@code let} evaluates
-	 * its inits in the enclosing scope, so a nested expansion in an argument position
-	 * cannot capture them, and fixed names keep the emitted output deterministic.
+	 * The runtime form of {@code (find-symbol NAME PKG)} / {@code (intern NAME PKG)} for
+	 * a COMPUTED package designator (ironclad's massage-symbol holds one in a local;
+	 * clack's handler protocol passes the {@code find-handler} package value through
+	 * {@code (apply (intern (string '#:run) handler-package) ...)}). Building the
+	 * qualified spelling IS the lookup and the intern under the name-based symbol model,
+	 * guarded on the package existing: a designator naming no package (nil included: no
+	 * package is named NIL unless the program made one) signals a {@code package-error},
+	 * and building the spelling unguarded would CREATE the package. When the program can
+	 * create packages, a runtime package answers from its member table first
+	 * ({@code memberHelper}: find or intern).
+	 * <p>
+	 * The guarded build is the same for both operators and costs a computed
+	 * {@code find-package} plus the package-error construction -- ~3 KB of JVM code per
+	 * site inline, measured 2026-09-26 while the find-package still built its table at
+	 * each site. So where the program carries the {@code %symbol-in-package} prelude
+	 * defun ({@link #callsWithComputedPackageDesignator} selects it) a site is one call
+	 * to it; a site the selection could not see (a lowering that synthesizes one) keeps
+	 * the inline form. The inline form's two binding names are fixed rather than
+	 * generated: {@code let} evaluates its inits in the enclosing scope, so a nested
+	 * expansion in an argument position cannot capture them, and fixed names keep the
+	 * emitted output deterministic.
 	 */
-	private static LispVal computedPackageFindSymbol(LispVal name, LispVal packageForm) {
+	private static LispVal computedPackageLookup(LispVal name, LispVal packageForm, boolean runtimeMutation,
+			String memberHelper, java.util.function.Predicate<String> definedFunction) {
+		boolean helper = definedFunction.test(LispNames.SYMBOL_IN_PACKAGE_INTERNAL);
+		if (!runtimeMutation && helper) {
+			return listToCons(List.of(new LispSymbol(LispNames.SYMBOL_IN_PACKAGE_INTERNAL), name, packageForm));
+		}
 		LispSymbol pkgVar = new LispSymbol(FIND_SYMBOL_PKG_VAR);
-		LispVal interned = listToCons(List.of(new LispSymbol(LispNames.INTERN),
-				computedQualifiedSpelling(pkgVar, new LispSymbol(FIND_SYMBOL_NAME_VAR))));
-		LispVal guarded = listToCons(List.of(new LispSymbol(LispNames.IF),
-				listToCons(List.of(new LispSymbol(LispNames.NULL), pkgVar)), LispNil.INSTANCE, interned));
-		return bindFindSymbolTemps(name, packageForm, guarded);
+		LispSymbol nameVar = new LispSymbol(FIND_SYMBOL_NAME_VAR);
+		LispVal built = helper
+				? listToCons(List.of(new LispSymbol(LispNames.SYMBOL_IN_PACKAGE_INTERNAL), nameVar, pkgVar))
+				: computedGuardedSpelling(pkgVar, nameVar);
+		if (!runtimeMutation) {
+			return bindFindSymbolTemps(name, packageForm, built);
+		}
+		return bindFindSymbolTemps(name, packageForm, runtimeMemberLookup(
+				listToCons(List.of(new LispSymbol(LispNames.STRING), pkgVar)), memberHelper, nameVar, built));
 	}
 
 	/**
-	 * The runtime form of {@code (intern NAME PKG)} for a COMPUTED package designator
-	 * (clack's handler protocol passes the {@code find-handler} package value through
-	 * {@code (apply (intern (string '#:run) handler-package) ...)}): the same
-	 * qualified-spelling build as {@link #computedPackageFindSymbol}, guarded on the
-	 * package existing -- intern's contract has no "package does not exist -> nil"
-	 * escape, and building the spelling unguarded would CREATE the package.
+	 * {@code (if (find-package PKG) (intern SPELLING) PACKAGE-ERROR)}: the
+	 * read/compile-time half of every computed-designator lookup, inline at a site or as
+	 * the body of the {@code %symbol-in-package} prelude defun
+	 * ({@link #symbolInPackageDefinition}).
 	 */
-	private static LispVal computedPackageIntern(LispVal name, LispVal packageForm) {
-		LispSymbol pkgVar = new LispSymbol(FIND_SYMBOL_PKG_VAR);
-		LispVal interned = listToCons(List.of(new LispSymbol(LispNames.INTERN),
-				computedQualifiedSpelling(pkgVar, new LispSymbol(FIND_SYMBOL_NAME_VAR))));
-		return bindFindSymbolTemps(name, packageForm,
-				makeIf(listToCons(List.of(new LispSymbol(LispNames.FIND_PACKAGE), pkgVar)), interned,
-						computedNoSuchPackage(pkgVar)));
+	private static LispVal computedGuardedSpelling(LispSymbol pkgVar, LispSymbol nameVar) {
+		return makeIf(listToCons(List.of(new LispSymbol(LispNames.FIND_PACKAGE), pkgVar)),
+				listToCons(List.of(new LispSymbol(LispNames.INTERN), computedQualifiedSpelling(pkgVar, nameVar))),
+				computedNoSuchPackage(pkgVar));
+	}
+
+	/**
+	 * The source of the {@code %symbol-in-package} prelude defun: the inline
+	 * {@link #computedGuardedSpelling} over its two parameters, so the helper and an
+	 * inline site cannot drift apart.
+	 * @return the {@code defun} source text
+	 */
+	public static String symbolInPackageDefinition() {
+		LispSymbol nameVar = new LispSymbol("%SIP-NAME");
+		LispSymbol pkgVar = new LispSymbol("%SIP-PKG");
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.SYMBOL_IN_PACKAGE_INTERNAL),
+				listToCons(List.of(nameVar, pkgVar)), computedGuardedSpelling(pkgVar, nameVar)))
+			.print();
+	}
+
+	/**
+	 * Whether the program has a two-argument {@code find-symbol} / {@code intern} call
+	 * whose package designator is computed -- the sites {@link #computedPackageLookup}
+	 * routes through {@code %symbol-in-package}. The prelude's selection runs long before
+	 * the lowering does, so this SURFACE fact decides whether the defun is spliced.
+	 * @param program the top-level forms
+	 * @return whether any call site needs the helper
+	 */
+	public static boolean callsWithComputedPackageDesignator(List<LispVal> program) {
+		for (LispVal expr : program) {
+			if (callsWithComputedPackageDesignator(expr)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean callsWithComputedPackageDesignator(LispVal val) {
+		while (val instanceof LispCons cons) {
+			// The prelude resolves the program before asking, so the operator can arrive
+			// package-QUALIFIED here (cl:intern).
+			if (cons.car() instanceof LispSymbol head
+					&& (LispNames.FIND_SYMBOL.equals(memberName(head.name()))
+							|| LispNames.INTERN.equals(memberName(head.name())))
+					&& cons.cdr() instanceof LispCons args && args.cdr() instanceof LispCons pkgCell
+					&& pkgCell.cdr() instanceof LispNil && !isKeywordPackageDesignator(pkgCell.car())
+					&& literalPackageDesignator(pkgCell.car()) == null) {
+				return true;
+			}
+			if (callsWithComputedPackageDesignator(cons.car())) {
+				return true;
+			}
+			val = cons.cdr();
+		}
+		return false;
 	}
 
 	/**
@@ -14677,6 +14810,21 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandInternInPackage(LispCons cons, java.util.Map<String, String> packageTable,
 			boolean runtimeMutation) {
+		return expandInternInPackage(cons, packageTable, runtimeMutation, name -> false);
+	}
+
+	/**
+	 * As {@link #expandInternInPackage(LispCons, java.util.Map, boolean)}, routing a
+	 * computed designator through the {@code %symbol-in-package} prelude helper when the
+	 * program carries it ({@link #computedPackageLookup}).
+	 * @param cons the intern call (must be the three-part shape)
+	 * @param packageTable the backend's baked package table
+	 * @param runtimeMutation whether the program can create packages at run time
+	 * @param definedFunction whether a function of that name is defined in the program
+	 * @return the lowered expression
+	 */
+	public static LispVal expandInternInPackage(LispCons cons, java.util.Map<String, String> packageTable,
+			boolean runtimeMutation, java.util.function.Predicate<String> definedFunction) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 3) {
 			throw new IllegalArgumentException("intern with a package expects (intern name package): " + cons.print());
@@ -14687,25 +14835,12 @@ public final class LispMacroExpander {
 		}
 		String pkg = literalPackageDesignator(parts.get(2));
 		if (pkg == null) {
-			if (!runtimeMutation) {
-				return computedPackageIntern(name, parts.get(2));
-			}
-			// Both arguments bound once; a runtime package interns into its member
-			// table, a read/compile-time one builds the spelling, a designator naming
-			// nothing (nil included: no package is named NIL unless the program made
-			// one) signals.
-			LispSymbol pkgVar = new LispSymbol(FIND_SYMBOL_PKG_VAR);
-			LispSymbol nameVar = new LispSymbol(FIND_SYMBOL_NAME_VAR);
-			LispVal built = makeIf(listToCons(List.of(new LispSymbol(LispNames.FIND_PACKAGE), pkgVar)),
-					listToCons(List.of(new LispSymbol(LispNames.INTERN), computedQualifiedSpelling(pkgVar, nameVar))),
-					computedNoSuchPackage(pkgVar));
-			return bindFindSymbolTemps(name, parts.get(2),
-					runtimeMemberLookup(listToCons(List.of(new LispSymbol(LispNames.STRING), pkgVar)),
-							LispNames.RUNTIME_MEMBER_INTERN_INTERNAL, nameVar, built));
+			return computedPackageLookup(name, parts.get(2), runtimeMutation, LispNames.RUNTIME_MEMBER_INTERN_INTERNAL,
+					definedFunction);
 		}
 		if (!packageTable.isEmpty() && !packageTable.containsKey(pkg)
 				&& !packageTable.containsKey(pkg.toUpperCase(java.util.Locale.ROOT))) {
-			// No such package: intern SIGNALS where find-symbol answers nil. (An empty
+			// No such package: a call-time package-error, as find-symbol's. (An empty
 			// table means the caller has none -- treat the package as known.) When the
 			// program can create packages, a runtime package of that name interns
 			// into its member table instead.
@@ -20099,8 +20234,7 @@ public final class LispMacroExpander {
 	 * constructor (reachable from {@code make-instance}), the {@code #'}-value escapes,
 	 * {@code load} (runs code this scan never saw), and {@code warn} with a non-string
 	 * datum (its printed message renders through the report machinery). Restart mode and
-	 * {@code --dynamic} keep the broad answer -- the caller gates them, mirroring
-	 * {@code conditionNarrowing}'s bails.
+	 * {@code --dynamic} keep the broad answer -- the caller gates them.
 	 * @param program the top-level forms, AFTER the library splices
 	 * @param closRegistry the class registry
 	 * @return whether program code can hold a condition instance
@@ -24390,7 +24524,7 @@ public final class LispMacroExpander {
 		// the tags the program can actually construct, with the runtime format
 		// renderer declined when no site can hand it an unrendered control.
 		if (closRegistry.routesConditionReports()) {
-			ConditionNarrowing narrowing = conditionNarrowing(out, closRegistry, dynamic, restartMode);
+			ConditionNarrowing narrowing = conditionNarrowing(out, closRegistry, dynamic);
 			// A declined renderer means no site can hand the report a control that is not
 			// a literal string, so a FUNCTION control cannot reach it either -- and its
 			// arm is a funcall of a runtime value, which in a program that can make a
@@ -30847,7 +30981,7 @@ public final class LispMacroExpander {
 	/**
 	 * What the condition-report runtime may be narrowed to, computed by
 	 * {@link #conditionNarrowing} on the compile path and answered as {@link #none()}
-	 * everywhere the world stays open (the interpreter, {@code --dynamic}, restart mode).
+	 * everywhere the world stays open (the interpreter, {@code --dynamic}).
 	 *
 	 * @param constructibleTags the {@code %class-} tags any reachable site can construct,
 	 * or null when unknowable (no narrowing)
@@ -30891,15 +31025,21 @@ public final class LispMacroExpander {
 	 * literal string (or nil) and literal nil -- which the pre-rendering expansions
 	 * guarantee for every string-datum site, so only an explicit {@code :format-control}
 	 * initarg can force the renderer.
+	 *
+	 * <p>
+	 * Restart mode narrows too: every construction it adds is either seen here or always
+	 * in the set. The signal hook's instances are the synthesized simple-* three over a
+	 * text control, restart-mode {@code cerror} wraps the same datum in a
+	 * {@code restart-case}, and the restart runtime's defuns are injected before this
+	 * scan runs.
 	 * @param program the expanded program (post definition walk, pre report splice)
 	 * @param closRegistry the completed registry
 	 * @param dynamic whether the compile is {@code --dynamic} (never narrows)
-	 * @param restartMode whether the restart runtime is on (never narrows)
 	 * @return the narrowing, or {@link ConditionNarrowing#none()} when unknowable
 	 */
 	public static ConditionNarrowing conditionNarrowing(List<LispVal> program, ClosRegistry closRegistry,
-			boolean dynamic, boolean restartMode) {
-		if (dynamic || restartMode) {
+			boolean dynamic) {
+		if (dynamic) {
 			return ConditionNarrowing.none();
 		}
 		ConditionTagScan scan = new ConditionTagScan(closRegistry);
@@ -30930,7 +31070,7 @@ public final class LispMacroExpander {
 			if (scan.fileErrorSite) {
 				scan.tags.add(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.FILE_ERROR_CLASS_NAME);
 			}
-			// And the package-error of an intern into a missing package
+			// And the package-error of an intern / find-symbol into a missing package
 			// (expandInternInPackage, lowered with the call).
 			if (scan.packageErrorSite) {
 				scan.tags.add(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.PACKAGE_ERROR_CLASS_NAME);
@@ -30961,7 +31101,7 @@ public final class LispMacroExpander {
 	 * behind a handler landing pad): the {@link #FILE_ERROR_SITES} situation.
 	 */
 	public static final java.util.Set<String> PACKAGE_ERROR_SITES = java.util.Set.of(LispNames.INTERN,
-			LispNames.PACKAGE_ERROR_INTERNAL);
+			LispNames.FIND_SYMBOL, LispNames.PACKAGE_ERROR_INTERNAL);
 
 	/**
 	 * The read operators whose compiled form can construct an {@code end-of-file}
@@ -31040,9 +31180,10 @@ public final class LispMacroExpander {
 		boolean endOfFileSite;
 
 		/**
-		 * Whether an {@code intern} occurs, whose package-designator form is lowered with
-		 * the call -- after this scan -- to a {@code package-error} construction when the
-		 * package does not exist ({@link #PACKAGE_ERROR_SITES}).
+		 * Whether an {@code intern} or {@code find-symbol} occurs, whose
+		 * package-designator form is lowered with the call -- after this scan -- to a
+		 * {@code package-error} construction when the package does not exist
+		 * ({@link #PACKAGE_ERROR_SITES}).
 		 */
 		boolean packageErrorSite;
 
@@ -34709,7 +34850,7 @@ public final class LispMacroExpander {
 	// (while (and (null __rh_stop) (consp __rh_entries))
 	// (when (funcall (car (car __rh_entries)) __rh_c)
 	// (if (cdr (car __rh_entries)) ; nil cdr = a handler-case
-	// (funcall (cdr (car __rh_entries)) __rh_c) ; clause: it TRANSFERS
+	// (%hb-guard (funcall (cdr (car __rh_entries)) __rh_c)) ; clause: it TRANSFERS
 	// (setq __rh_stop t))) ; control, so stop here
 	// (setq __rh_entries (cdr __rh_entries)))))
 	// (setq %handler-clusters% __rh_saved)))))))
@@ -34727,10 +34868,19 @@ public final class LispMacroExpander {
 		// nearest matching one HANDLES the condition (it transfers control when the
 		// ordinary throw resumes), so the walk stops instead of running any enclosing
 		// handler-bind handler -- CLHS 9.1.4.1, most recent first.
+		//
+		// The handler call runs inside its own %hb-guard landing pad: CLHS 9.1.4.1 runs
+		// a handler with its cluster (and every more recent one) disabled, so a
+		// BUILT-IN failing inside it -- which signals through no hook on the compiled
+		// backends -- must be walked HERE, against the remaining clusters the global
+		// holds now. Without it the failure escapes this walk's cleanup with the full
+		// stack restored and the handler-bind's own pad reruns the failing handler.
+		// The pad marks the walk, so every pad further out rethrows untouched.
+		LispVal callHandler = listToCons(List.of(new LispSymbol(LispNames.HB_GUARD_INTERNAL),
+				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), callOf(LispNames.CDR, entry), c))));
 		LispVal callEntry = makeIf(
 				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), callOf(LispNames.CAR, entry), c)),
-				makeIf(callOf(LispNames.CDR, entry),
-						listToCons(List.of(new LispSymbol(LispNames.FUNCALL), callOf(LispNames.CDR, entry), c)),
+				makeIf(callOf(LispNames.CDR, entry), callHandler,
 						listToCons(List.of(new LispSymbol(LispNames.SETQ), stop, LispTrue.INSTANCE))),
 				LispNil.INSTANCE);
 		LispVal entriesLoop = makeLet(entries.name(), cluster,
