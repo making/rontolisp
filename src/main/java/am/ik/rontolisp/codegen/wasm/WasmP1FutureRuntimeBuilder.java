@@ -24,6 +24,11 @@ import am.ik.wasm.WasmWriter;
  * call. Any other module's body is byte-identical to what it was before the kind existed.
  *
  * <p>
+ * An exception-handling module also meets a FAILED one ({@link #KIND_FAILED}): the body
+ * signalled, and each await signals its condition again -- the interpreter's errored
+ * future, which re-signals at the await rather than at the call.
+ *
+ * <p>
  * A module with a {@code %mv-spill} global also meets a VALUES future
  * ({@link #KIND_VALUES}): {@code %async-run}'s, when the body answered other than exactly
  * one value, whose value field is {@code (primary . extras)} -- the channel as the body
@@ -44,17 +49,27 @@ final class WasmP1FutureRuntimeBuilder {
 	 */
 	static final int KIND_VALUES = 4;
 
+	/**
+	 * The {@code kind} of a future whose body signalled: the value field is the
+	 * {@code $lisp-cond} payload, which every await throws again.
+	 */
+	static final int KIND_FAILED = 5;
+
 	private WasmP1FutureRuntimeBuilder() {
 	}
 
 	/**
 	 * Builds the resolver's body.
 	 * @param deferred whether the module can hold a {@link #KIND_DEFERRED} future
+	 * @param failed whether the module can hold a {@link #KIND_FAILED} future
+	 * @param reawaitFunc {@code --report-locations}' {@code _uncaught_reawait}, which a
+	 * failed future's await hands the future and its payload before re-signalling it
+	 * ({@link WasmUncaughtLocations}), or -1 when the module notes no hops
 	 * @param spillGlobal the {@code %mv-spill} channel's global index, or -1 when the
 	 * program has no multiple-value consumer (no {@link #KIND_VALUES} future can exist)
 	 * @return the function body bytes (locals declaration included)
 	 */
-	static byte[] buildAwait(boolean deferred, int spillGlobal) {
+	static byte[] buildAwait(boolean deferred, boolean failed, int reawaitFunc, int spillGlobal) {
 		final ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		final WasmWriter w = new WasmWriter(body);
 		final int V = 0;
@@ -83,6 +98,27 @@ final class WasmP1FutureRuntimeBuilder {
 		getLocal(w, V);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
+
+		if (failed) {
+			// Failed: the body's condition signals again -- the SAME payload, so what the
+			// body's frames noted about it for --report-locations stays, rewound to where
+			// the boundary left it.
+			futureField(w, V, 0);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(KIND_FAILED);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF, 0x40);
+			if (reawaitFunc >= 0) {
+				getLocal(w, V);
+				futureField(w, V, 1);
+				call(w, reawaitFunc);
+				w.write(Instruction.DROP);
+			}
+			futureField(w, V, 1);
+			w.write(Instruction.THROW);
+			w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+			w.write(Instruction.END);
+		}
 
 		if (deferred) {
 			// Deferred: run the thunk (it keeps its own answer) and await that.

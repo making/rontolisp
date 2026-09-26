@@ -96,20 +96,22 @@ final class WasmLandingPad {
 	 * Refreshed, a catch on the resumed frame put the target state back, and every
 	 * statement after the region read as "a later segment" and was skipped. It is an i32
 	 * the collector never moves, so the value the catch edge carries is the one the
-	 * throwing call saw: exactly the value the pad must read.
+	 * throwing call saw: exactly the value the pad must read. The same holds for a
+	 * {@code --report-locations} frame's position locals (i31s), which the pad notes as
+	 * the throw left them ({@link WasmUncaughtLocations#positionSlot}).
 	 * @param ctx the compilation context
 	 * @return the slots to keep, in push order
 	 */
 	static int[] allSlots(WasmLispCompiler.Ctx ctx) {
 		boolean resume = ctx.asyncResume != null;
-		int[] slots = new int[resume ? ctx.nextLocal - 1 : ctx.nextLocal];
+		int[] slots = new int[ctx.nextLocal];
 		int next = 0;
 		for (int slot = 0; slot < ctx.nextLocal; slot++) {
-			if (!resume || slot != WasmAsyncEmit.RT_SLOT) {
+			if ((!resume || slot != WasmAsyncEmit.RT_SLOT) && !WasmUncaughtLocations.positionSlot(ctx, slot)) {
 				slots[next++] = slot;
 			}
 		}
-		return slots;
+		return java.util.Arrays.copyOf(slots, next);
 	}
 
 	/**

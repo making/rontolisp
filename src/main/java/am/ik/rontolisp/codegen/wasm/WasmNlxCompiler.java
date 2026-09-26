@@ -207,6 +207,7 @@ final class WasmNlxCompiler {
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		WasmLandingPad.refresh(ctx, kept);
+		WasmUncaughtLocations.resyncPad(ctx);
 		// car(payload) is the block-instance id (an i31) for %nlx-catch and the (tag)
 		// wrapper cons for catch; either way, when it is ours deliver cdr(payload).
 		if (eqTags) {

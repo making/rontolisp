@@ -111,7 +111,10 @@ paid `_rat_add -> _big_add -> _int_val x2 -> _int_new`.
 ## Mechanics
 
 `WasmIntFusionCompiler` (classify -> collect leaves -> emit fast + fallback), hooked into
-`WasmExprCompiler`'s per-op cases ahead of the per-op compilers. `WasmFxRuntimeBuilder` builds the
+`WasmExprCompiler`'s per-op cases ahead of the per-op compilers. Each `OpNode`/`ArefLeaf` keeps
+the innermost located form it evaluates under and the inlined defun holding it (`Site.source`,
+`bodyOwner`), which the fallback hands `--report-locations` per operation
+([error-handling.md](error-handling.md)); without the option nothing is emitted for them. `WasmFxRuntimeBuilder` builds the
 `_fx_*` helpers (`FUNC_FX_VAL .. FUNC_FX_REM`, appended after the limb block;
 `FUNC_VEC_BASE`/`FUNC_USER_BASE` rebase on `FX_FUNC_LAST`). Three signature types
 `TYPE_FX_VAL`/`TYPE_FX_BIN`/`TYPE_FX_DIV` (54-56; the first multi-result function types in the

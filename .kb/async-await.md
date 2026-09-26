@@ -44,9 +44,20 @@
   canonicalize into `TYPE_CELL`); `_p1_future_await` (`FUNC_P1_FUTURE_AWAIT`) resolves. The one
   UNSETTLED kind is 3, `rontolisp::%future-deferred`'s: its value is a thunk every await runs (a
   `--native` fetch's, `.kb/fetch-http.md`), and the await runtime carries that arm only in a module
-  that names the primitive. CAVEAT: an
-  async body's ERROR signals at the CALL, not at await. **`--no-gc`** rejects the whole async surface
-  by name, `%stream-new` included.
+  that names the primitive. **An async body's ERROR signals at the await, as everywhere else, in an
+  EH-mode module**: `%async-run` catches `$lisp-cond` around the thunk and settles a FAILED future,
+  kind 5, over the payload, which every await throws again (the same payload, so what
+  `--report-locations`' frames noted about it survives, rewound per await,
+  [error-handling.md](error-handling.md)). Until 2026-09-26 it signalled at the CALL: output
+  between the call and the await never printed, and a `handler-case` around the await -- or
+  `rontolisp:catch` -- never saw it. Outside EH mode nothing can catch a condition, so the body
+  still traps at the call (the one observable difference left: output between call and await).
+  Measured 2026-09-26 on 2f611be61 (EH mode, bytes): the clack/ningle/tiny-routes examples and
+  their Cloudflare workers +74 each, `postgres-web` +122; a toy `(print (ignore-errors (await (job
+  21))))` 5,571 -> 6,749 -- the payload joins the future's value field, so the type-test fold keeps
+  the printer's cons arm (`--component`'s rejected future has the same shape). Every other example,
+  size-report and bench program is byte-identical at default, `--component` and `--optimize=size`.
+  **`--no-gc`** rejects the whole async surface by name, `%stream-new` included.
 
 ## Multiple values
 **Invariant (2026-09-26): an async body's values reach its awaiter the way a function call's

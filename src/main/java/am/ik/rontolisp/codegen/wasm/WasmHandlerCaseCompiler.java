@@ -184,6 +184,7 @@ final class WasmHandlerCaseCompiler {
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		WasmLandingPad.refresh(ctx, kept);
+		WasmUncaughtLocations.notePad(ctx, payloadSlot);
 		emitDepthAdjust(ctx, false);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
@@ -317,6 +318,7 @@ final class WasmHandlerCaseCompiler {
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		WasmLandingPad.refresh(ctx, kept);
+		WasmUncaughtLocations.notePad(ctx, payloadSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
@@ -347,16 +349,36 @@ final class WasmHandlerCaseCompiler {
 		ctx.writer.write(Instruction.DROP);
 		// Rethrow (instance . message): the instance slot is filled (a synthesized one
 		// included) so an outer catcher sees the instance the handlers saw.
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(condSlot);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(payloadSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeUnsignedLeb128(1);
-		WasmErrorCompiler.emitThrowPayload(ctx);
+		if (ctx.uncaughtLocations != null) {
+			// --report-locations keys what the frames noted by the payload's identity
+			// (WasmUncaughtLocations), so the payload itself carries the instance on:
+			// a fresh one would drop the lines of every frame the condition left.
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(payloadSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(condSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.writeUnsignedLeb128(0);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(payloadSlot);
+			ctx.writer.write(Instruction.THROW);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+		}
+		else {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(condSlot);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(payloadSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.writeUnsignedLeb128(1);
+			WasmErrorCompiler.emitThrowPayload(ctx);
+		}
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END); // block $done
 	}

@@ -12,7 +12,8 @@ and from `WasmAsyncEmit.compileResume`'s assembly). A variable the protected bod
 assigns is boxed (`WasmLandingPad.regionAssignedVars`, folded into every binder's boxed
 set beside the closure-capture answer). Regions: `WasmUnwindProtectCompiler`,
 `WasmHandlerCaseCompiler.compile` and `compileGuard` (`%hb-guard`),
-`WasmNlxCompiler.emitCatch` (`catch`, `%nlx-catch`), and a special `let`'s binding-restore region
+`WasmNlxCompiler.emitCatch` (`catch`, `%nlx-catch`), `WasmAsyncRunCompiler` (Preview 1's
+failed-future capture, [async-await.md](async-await.md)), and a special `let`'s binding-restore region
 (`WasmLetCompiler` through `WasmUnwindProtectCompiler.compileRegion`), whose pad pushes ONLY its
 save slots (`WasmLandingPad.keepSlotsAlive`): it reads nothing else, rethrows, and
 no user code runs in or after it, so the invariant is kept at a fraction of the push
@@ -25,7 +26,11 @@ pad refreshes only its own. Pinned by
 `aCompiledPadAfterManyDeadLetScopesRefreshesOnlyWhatItReads` end to end), the inliner rule by
 `WasmInlinerTest.aBodyHoldingATryTableStaysOutOfLine`. Compiler-internal pads whose body is a
 single call (the async entry wrapper, the future runtime's resume, the export prologues) are
-exempt by construction: one predecessor, no block parameter.
+exempt by construction: one predecessor, no block parameter. A `--report-locations` frame's
+position locals (line, file, inlined-function owner) are left out of every push
+(`WasmUncaughtLocations.positionSlot`): they hold i31s or null, which no collection moves, and the
+pad READS their value at the throw -- it notes it, then resets them to the compile-time track
+([error-handling.md](error-handling.md), "Location lines on wasm-GC").
 
 ## Why: the exceptional edge carries a pre-call value
 
