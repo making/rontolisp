@@ -7,8 +7,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -31,8 +34,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * the tracing agent records from one {@code java -jar} run; the {@code geom:},
  * {@code --simd} and {@code --gpu} programs need no configuration at all, and neither
  * does a {@code java:} program compiled with {@code --java-static}, whose calls are all
- * direct (.kb/java-interop.md, "Direct calls"). {@code objc:} needs macOS and is not
- * covered here.
+ * direct (.kb/java-interop.md, "Direct calls"). The {@code objc:} program runs on macOS
+ * only, where the image's {@code main} is thread 0 and has to hand it to AppKit
+ * (.kb/objc.md).
  * <p>
  * Opt-in ({@code -Drontolisp.native-image.e2e=true}), because it runs
  * {@code native-image} (about 20 s a program) from the running JDK, which must be a
@@ -208,6 +212,37 @@ class ShippedBridgeNativeImageE2eTest {
 		assertThat(lines(run(buildImage(jar, "-H:ConfigurationFileDirectories=" + config)))).isEqualTo(expected);
 	}
 
+	// A native image's main IS thread 0, the thread AppKit needs draining: the image
+	// has to park it in the run loop and run the program on a worker, as java -jar's
+	// launcher does. A timer on thread 0 clicks the button three times and closes the
+	// window, so no hand is needed -- and nothing fires at all when thread 0 is never
+	// handed over, which is the hang the deadline turns into a failure.
+	@Test
+	void anObjcJarRunsAsANativeImageThatHandsThreadZeroToAppKit() throws Exception {
+		assumeTrue(System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac"), "objc: needs macOS");
+		Path jar = compileJar("""
+				(defvar *window* (appkit:window "native image hand-over" :width 240 :height 120))
+				(defvar *clicks* 0)
+				(defvar *button*
+				  (appkit:button *window* "b" :on-click (lambda () (setq *clicks* (+ *clicks* 1)))))
+				(defvar *ticks* 0)
+				(appkit:timer 0.1 (lambda ()
+				                    (setq *ticks* (+ *ticks* 1))
+				                    (cond ((<= *ticks* 3) (objc:send *button* "performClick:" nil) t)
+				                          (t (objc:send *window* "performClose:" nil) nil))))
+				(appkit:wait *window*)
+				(format t "clicks ~a~%" *clicks*)
+				""");
+		List<String> expected = List.of("clicks 3");
+		Path config = this.tempDir.resolve("config");
+		Path java = Path.of(System.getProperty("java.home"), "bin", "java");
+		assertThat(lines(run(java, "-agentlib:native-image-agent=config-output-dir=" + config, "-jar", jar.toString())))
+			.isEqualTo(expected);
+		assertThat(lines(
+				run(Map.of(), Duration.ofSeconds(60), buildImage(jar, "-H:ConfigurationFileDirectories=" + config))))
+			.isEqualTo(expected);
+	}
+
 	private Path compileJar(String program, String... options) throws Exception {
 		Path source = this.tempDir.resolve("prog.lisp");
 		Files.writeString(source, program);
@@ -240,14 +275,28 @@ class ShippedBridgeNativeImageE2eTest {
 	}
 
 	private String run(Map<String, String> environment, Path executable, String... arguments) throws Exception {
+		return run(environment, Duration.ofMinutes(10), executable, arguments);
+	}
+
+	private String run(Map<String, String> environment, Duration deadline, Path executable, String... arguments)
+			throws Exception {
 		List<String> command = new ArrayList<>();
 		command.add(executable.toString());
 		command.addAll(List.of(arguments));
-		ProcessBuilder builder = new ProcessBuilder(command).directory(this.tempDir.toFile()).redirectErrorStream(true);
+		// Into a file, not a pipe: a process that hangs must not hang the read.
+		Path log = Files.createTempFile(this.tempDir, "run", ".log");
+		ProcessBuilder builder = new ProcessBuilder(command).directory(this.tempDir.toFile())
+			.redirectErrorStream(true)
+			.redirectOutput(log.toFile());
 		builder.environment().putAll(environment);
 		Process process = builder.start();
-		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		int status = process.waitFor();
+		boolean exited = process.waitFor(deadline.toMillis(), TimeUnit.MILLISECONDS);
+		if (!exited) {
+			process.destroyForcibly().waitFor();
+		}
+		String output = Files.readString(log, StandardCharsets.UTF_8);
+		assertThat(exited).describedAs("%s still running after %s:%n%s", command, deadline, output).isTrue();
+		int status = process.exitValue();
 		assertThat(status).describedAs("%s exited %d:%n%s", command, status, output).isZero();
 		return output;
 	}
