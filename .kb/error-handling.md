@@ -14,6 +14,9 @@ a build that never knew about EH -- unless `--report-locations` asks for the unc
   running every `unwind-protect` cleanup -- cross-lambda `return-from`/`go` and `catch`/`throw`
   share one exit channel ([do-return-block.md](do-return-block.md), which owns the
   `ctx.blockExitTag`/`blockExitChannel` gate).
+- **Java frames are transparent to both**: an exit or condition a `java:` callback raises
+  passes through the Java call that ran it, the compiled `_condTl` / `_nleTl` state with it
+  ([java-interop.md](java-interop.md), "What a callback raises").
 - **The three-point catchability spectrum**: interpreter catches `LispEvalException` only -- with
   the evaluation seam classifying an escaping `IllegalArgumentException` /
   `IndexOutOfBoundsException` (`program-error`) and cast / arithmetic / negative-size failure (the

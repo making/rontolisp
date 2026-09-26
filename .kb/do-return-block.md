@@ -63,7 +63,10 @@ is a **dynamic block-instance id** captured by `FreeVarAnalyzer`, minted fresh p
   cl-ppcre scale, shape-dependently and engine-divergently. JVM object identity is sound.
 - **The JVM channel is a STACK, not a slot**: a cleanup completing an exit OF ITS OWN used to
   clear it, so the outer exit found nothing at its landing pad and the first enclosing
-  `handler-case`/`%hb-guard` turned it into a message-less `simple-error`.
+  `handler-case`/`%hb-guard` turned it into a message-less `simple-error`. An exit leaving a
+  `java:` callback leaves its entry with it (`_jsig`) until the `java:` site passes it on
+  (`_jfail`): a landing reads only the top entry, which an exit Java swallowed meanwhile would
+  otherwise hold ([java-interop.md](java-interop.md), "What a callback raises").
 - **`handler-case` does NOT intercept it**: the JVM handler rethrows a pending `_nleTl` first;
   wasm uses a distinct tag with a block-exit passthrough restoring the handler depth.
 - EH-mode trigger: a cross-lambda exit compiles in EH mode like `handler-case`; a program

@@ -9,6 +9,7 @@ import java.util.Objects;
 import java.util.Set;
 
 import am.ik.jvm.AccessFlag;
+import am.ik.jvm.ByteCodeWriter;
 import am.ik.jvm.ClassDefinition;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
@@ -61,7 +62,9 @@ import org.jspecify.annotations.Nullable;
  * the bridge's {@code marshal}, a function never made a proxy on the way back) or refused
  * with the interpreter's message. The generated classes call only those, so the program
  * keeps them in its own class when it is split and roots them for the tree-shaker
- * ({@link #callbackNames()}).
+ * ({@link #callbackNames()}). What leaves a callback thrown is recorded on its way out to
+ * the Java caller by the program's {@code _jsig}, so the site whose Java call it reaches
+ * throws it on unchanged ({@link JvmJavaDirectSites#finishHelpers}).
  */
 final class JvmJavaImplementations {
 
@@ -255,12 +258,15 @@ final class JvmJavaImplementations {
 	}
 
 	// static R _jimpl$K(Object fn, Object[] args): (fn [name] (_junm args[0]) ...), then
-	// the value converted to R -- or the interpreter's error for one that does not.
+	// the value converted to R -- or the interpreter's error for one that does not. What
+	// leaves it thrown -- the function's exit or condition, that error -- is recorded on
+	// its way out to the Java caller (_jsig), for the site whose Java call it reaches.
 	private JvmJavaDirectSites.Method buildCallback(boolean proxy, JavaType iface, JavaImplementation.Slot slot,
 			Utf8Constant name, Utf8Constant desc) {
 		JvmAsm a = new JvmAsm();
 		ClassConstant objectClass = cls("java/lang/Object");
 		MethodrefConstant unmarshal = this.direct.unmarshalHelper();
+		MethodrefConstant signal = this.direct.signalHelper();
 		// 2 = the argument list, 3 = i, 4 = the value
 		int loop = a.label();
 		int done = a.label();
@@ -311,30 +317,35 @@ final class JvmJavaImplementations {
 		if ("void".equals(returnType.name())) {
 			a.pop();
 			a.op(Opcode.RETURN);
-			return new JvmJavaDirectSites.Method(name, desc, 6, 5, a.finish(), List.of());
 		}
-		a.astore(4);
-		int fits = a.label();
-		a.aload(4);
-		a.invokestatic(this.direct.returnedCost(returnType));
-		a.branch(Opcode.IFGE, fits);
-		MethodrefConstant concat = method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;");
-		a.anew(cls("java/lang/RuntimeException"));
-		a.dup();
-		a.ldcString(this.cp.addString(JavaImplementation.returnMismatchPrefix(proxy)));
-		a.aload(4);
-		a.invokestatic(this.lispToString);
-		a.invokevirtual(concat);
-		a.ldcString(this.cp
-			.addString(JavaImplementation.returnMismatchSuffix(proxy, iface.name(), slot.name(), returnType)));
-		a.invokevirtual(concat);
-		a.invokespecial(method("java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V"));
+		else {
+			a.astore(4);
+			int fits = a.label();
+			a.aload(4);
+			a.invokestatic(this.direct.returnedCost(returnType));
+			a.branch(Opcode.IFGE, fits);
+			MethodrefConstant concat = method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+			a.anew(cls("java/lang/RuntimeException"));
+			a.dup();
+			a.ldcString(this.cp.addString(JavaImplementation.returnMismatchPrefix(proxy)));
+			a.aload(4);
+			a.invokestatic(this.lispToString);
+			a.invokevirtual(concat);
+			a.ldcString(this.cp
+				.addString(JavaImplementation.returnMismatchSuffix(proxy, iface.name(), slot.name(), returnType)));
+			a.invokevirtual(concat);
+			a.invokespecial(method("java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V"));
+			a.athrow();
+			a.bind(fits);
+			a.aload(4);
+			a.invokestatic(this.direct.returnedConvert(returnType));
+			a.op(returnOpcode(returnType));
+		}
+		int end = a.pos();
+		a.invokestatic(signal);
 		a.athrow();
-		a.bind(fits);
-		a.aload(4);
-		a.invokestatic(this.direct.returnedConvert(returnType));
-		a.op(returnOpcode(returnType));
-		return new JvmJavaDirectSites.Method(name, desc, 6, 5, a.finish(), List.of());
+		return new JvmJavaDirectSites.Method(name, desc, 6, 5, a.finish(),
+				List.of(new ByteCodeWriter.ExceptionTableEntry(0, end, end, cls("java/lang/Throwable").index())));
 	}
 
 	private static int returnOpcode(JavaType type) {

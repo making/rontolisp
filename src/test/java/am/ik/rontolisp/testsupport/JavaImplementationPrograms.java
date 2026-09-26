@@ -118,4 +118,116 @@ public final class JavaImplementationPrograms {
 	public static final String FALSE_IMPLEMENTATION_ERROR = "java:new: argument 1 is not an implementation of"
 			+ " java.lang.Runnable, got #<java java.lang.Thread>";
 
+	/**
+	 * What a function called back from Java raises -- a {@code return-from}, a
+	 * {@code throw}, a {@code go}, a condition of any type, a restart's transfer, a raw
+	 * failure -- reaches the Lisp code that made the Java call as itself, through
+	 * generated and reflective implementations, direct and run-time sites, nested calls
+	 * and Java code that relays the first of two failures ({@code Stream.close}); what
+	 * Java makes of it instead ({@code FutureTask.get}) is the Java call's failure, and a
+	 * condition Java swallowed ({@code FutureTask.run}) is no later failure's.
+	 */
+	public static final String CALLBACK_SIGNALS = """
+			(define-condition callback-failed (error) ((item :initarg :item :reader callback-failed-item)))
+			(defun each (coll f) (java:call coll "forEach" f))
+			(defvar *consumer* "java.util.function.Consumer")
+			(print (block b
+			         (java:call (java:static "java.util.List" "of" 1 2 3) "forEach"
+			                    (lambda (m x) (when (= x 2) (return-from b x))))
+			         :none))
+			(print (catch 'done
+			         (java:call (java:static "java.util.List" "of" 1 2 3) "forEach"
+			                    (lambda (m x) (when (= x 3) (throw 'done (* x 10)))))
+			         :none))
+			(print (let ((seen nil))
+			         (tagbody
+			            (java:call (java:static "java.util.List" "of" 1 2 3) "forEach"
+			                       (lambda (m x) (push x seen) (when (= x 2) (go out))))
+			          out)
+			         seen))
+			(print (handler-case (java:call (java:static "java.util.List" "of" 1) "forEach"
+			                                (lambda (m x) (error "boom ~a" x)))
+			         (error (e) (format nil "~a" e))))
+			(print (handler-case (java:call (java:static "java.util.List" "of" 7) "forEach"
+			                                (lambda (m x) (error 'callback-failed :item x)))
+			         (callback-failed (c) (list :failed (callback-failed-item c)))))
+			(print (restart-case
+			           (handler-bind ((callback-failed (lambda (c) (invoke-restart 'skip (callback-failed-item c)))))
+			             (java:call (java:static "java.util.List" "of" 1 "two" 3) "forEach"
+			                        (lambda (m x) (unless (numberp x) (error 'callback-failed :item x)))))
+			         (skip (item) (list :skipped item))))
+			(print (handler-case (java:call (java:static "java.util.List" "of" 1) "forEach" (lambda (m x) (car x)))
+			         (type-error () :type-error)))
+			(print (handler-case (java:call (java:static "java.util.List" "of" "x") "forEach"
+			                                (lambda (m s) (java:static "java.lang.Integer" "parseInt" s)))
+			         (error (e) (format nil "~a" e))))
+			(print (block b
+			         (java:call (java:static "java.util.List" "of" 1) "forEach"
+			                    (lambda (m x) (unwind-protect (return-from b :left) (print :cleanup))))))
+			(print (block outer
+			         (java:call (java:static "java.util.List" "of" 1) "forEach"
+			                    (lambda (m x)
+			                      (java:call (java:static "java.util.List" "of" 2) "forEach"
+			                                 (lambda (m y) (return-from outer (list x y))))))
+			         :none))
+			(print (block b
+			         (each (java:static "java.util.List" "of" 1 2 3) (lambda (m x) (when (= x 2) (return-from b x))))
+			         :none))
+			(print (catch 'tag
+			         (each (java:static "java.util.List" "of" 4)
+			               (java:reify "java.util.function.Consumer" "accept" (lambda (x) (throw 'tag x))))))
+			(print (handler-case (java:call (java:static "java.util.List" "of" 5) "forEach"
+			                                (java:reify *consumer* "accept" (lambda (x) (error 'callback-failed :item x))))
+			         (callback-failed (c) (callback-failed-item c))))
+			(print (block b
+			         (java:call (java:call (java:call (java:static "java.util.stream.Stream" "of" 1)
+			                                          "onClose" (lambda (m) (return-from b :first)))
+			                               "onClose" (lambda (m) (return-from b :second)))
+			                    "close")
+			         :none))
+			(print (handler-case
+			           (java:call (java:call (java:call (java:static "java.util.stream.Stream" "of" 1)
+			                                            "onClose" (lambda (m) (error 'callback-failed :item :first)))
+			                                 "onClose" (lambda (m) (error 'callback-failed :item :second)))
+			                      "close")
+			         (callback-failed (c) (callback-failed-item c))))
+			(defun failed-task (item)
+			  (let ((task (java:new "java.util.concurrent.FutureTask"
+			                        (java:reify "java.util.concurrent.Callable" "call"
+			                                    (lambda () (error 'callback-failed :item item))))))
+			    (java:call task "run")
+			    task))
+			(let ((task (failed-task 1)))
+			  (print (handler-case (java:call task "get")
+			           (callback-failed () :swallowed-condition)
+			           (error (e)
+			             (search "error calling java.util.concurrent.FutureTask.get: java.util.concurrent.ExecutionException: "
+			                     (format nil "~a" e))))))
+			(let ((task (failed-task 2)))
+			  (print (handler-case (car (java:call task "isDone"))
+			           (callback-failed () :swallowed-condition)
+			           (type-error () :type-error))))
+			""";
+
+	/** What {@link #CALLBACK_SIGNALS} prints. */
+	public static final String CALLBACK_SIGNALS_OUTPUT = """
+			2
+			30
+			(2 1)
+			"boom 1"
+			(:FAILED 7)
+			(:SKIPPED "two")
+			:TYPE-ERROR
+			"error calling java.lang.Integer.parseInt: java.lang.NumberFormatException: For input string: \\"x\\""
+			:CLEANUP
+			:LEFT
+			(1 2)
+			2
+			4
+			5
+			:FIRST
+			:FIRST
+			0
+			:TYPE-ERROR""";
+
 }

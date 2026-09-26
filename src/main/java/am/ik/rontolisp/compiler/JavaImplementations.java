@@ -38,6 +38,14 @@ public final class JavaImplementations {
 	/** The error a malformed {@code java:reify} call raises when it runs. */
 	public static final String REIFY_USAGE = "java:reify expects (java:reify \"interface\" \"method\" function ...)";
 
+	/**
+	 * How many throwables a thread holds between the function called back from Java that
+	 * raised each one and the {@code java:} site whose Java call passes it on (the
+	 * interpreter's {@code JavaInterop}, a compiled program's {@code _jsig}): the newest
+	 * are kept, so one that Java swallowed is dropped in time.
+	 */
+	public static final int PENDING_SIGNALS = 16;
+
 	private static final List<String> OBJECT_METHODS = List.of("equals(java.lang.Object)", "hashCode()", "toString()");
 
 	private JavaImplementations() {
