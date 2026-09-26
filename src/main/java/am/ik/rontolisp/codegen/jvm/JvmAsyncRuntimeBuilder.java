@@ -44,7 +44,12 @@ import org.jspecify.annotations.Nullable;
  * across threads (it is a ThreadLocal), so {@code run()} completes the future NORMALLY
  * with {@code {EMARKER, throwable, condition}} and {@code _await} re-sets the condition
  * on the awaiting thread before rethrowing -- {@code handler-case} around the await then
- * dispatches by type exactly like a same-thread signal.</li>
+ * dispatches by type exactly like a same-thread signal;</li>
+ * <li>a body that answers other than exactly one value completes the future with
+ * {@code {VMARKER, primary, extras}}, the channel read on the body's own thread the
+ * moment it returns; {@code _await} answers the primary and publishes the extras on the
+ * awaiting thread, the last future of a flattened chain deciding (a non-future, or a
+ * one-value hop, publishes one value).</li>
  * </ul>
  * A fetch's future settles to its response plist inside the transport
  * ({@code runtime/RontoFetch}, which builds the body as a stream of this shape), so
@@ -66,6 +71,15 @@ final class JvmAsyncRuntimeBuilder {
 	 * Marker heading an async body's error payload {@code {EMARKER, throwable, cond}}.
 	 */
 	static final String EMARKER = "%async-error\n";
+
+	/**
+	 * Marker heading an async body's multiple-value payload {@code {VMARKER, primary,
+	 * extras}}: the body answered other than exactly one value, {@code extras} being the
+	 * {@code %mv-spill} channel as the body left it (the list of the values after the
+	 * primary, or the zero-values marker). Built only in a program whose spill field
+	 * exists -- no other program has a consumer to hand extras to.
+	 */
+	static final String VMARKER = "%async-values\n";
 
 	static final String ASYNC_RUN_METHOD = "_async_run";
 
@@ -169,13 +183,16 @@ final class JvmAsyncRuntimeBuilder {
 	 * main runs on the caller's thread ({@code JvmSizedMainBuilder}): the class has ONE
 	 * {@code run()}, so the launcher instance -- the one whose latch is null -- is
 	 * dispatched from its head
+	 * @param mvChannel the {@code %mv-spill} channel, or null when the program has no
+	 * multiple-value consumer: a body's extra values then need not travel, and the bodies
+	 * are what they were before they could
 	 * @return the runtime bodies
 	 */
 	static AsyncRuntime build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
 			ClassConstant objectArrayClass, ClassConstant stringClass, JvmLispCompiler.ConditionChannel channel,
 			MethodrefConstant instanceInitRef, MethodrefConstant longValueOf, MethodrefConstant stringLength,
-			MethodrefConstant stringSubstring, MethodrefConstant stringConcat,
-			@Nullable MethodrefConstant launcherRun) {
+			MethodrefConstant stringSubstring, MethodrefConstant stringConcat, @Nullable MethodrefConstant launcherRun,
+			@Nullable JvmMvChannel mvChannel) {
 		// --- shared class/method references ---
 		ClassConstant futureClass = cp.addClass(cp.addUtf8("java/util/concurrent/CompletableFuture"));
 		MethodrefConstant futureCtor = cp.addMethodref(futureClass,
@@ -262,6 +279,7 @@ final class JvmAsyncRuntimeBuilder {
 		ConstantPool.StringConstant sMarker = cp.addString(SMARKER);
 		ConstantPool.StringConstant rMarker = cp.addString(RMARKER);
 		ConstantPool.StringConstant eMarker = cp.addString(EMARKER);
+		ConstantPool.@Nullable StringConstant vMarker = mvChannel != null ? cp.addString(VMARKER) : null;
 		ConstantPool.StringConstant tStr = cp.addString("T");
 		ConstantPool.StringConstant quote = cp.addString("\"");
 
@@ -382,6 +400,32 @@ final class JvmAsyncRuntimeBuilder {
 			a.u2(fnField.index());
 			a.op(Opcode.INVOKESTATIC);
 			a.u2(invoke0.index()); // [future, v]
+			if (mvChannel != null && vMarker != null) {
+				// The channel holds the body's extra values the moment its thunk
+				// returns (its tail settled them), on THIS thread: a body that answered
+				// other than one value completes with {VMARKER, v, extras}.
+				int single = a.label();
+				a.astore(1);
+				mvChannel.emitLoad(a::op, a::u2);
+				a.branch(Opcode.IFNULL, single);
+				a.iconst(3);
+				a.anewarray(objectClass);
+				a.op(Opcode.DUP);
+				a.iconst(0);
+				a.ldc(vMarker.index());
+				a.aastore();
+				a.op(Opcode.DUP);
+				a.iconst(1);
+				a.aload(1);
+				a.aastore();
+				a.op(Opcode.DUP);
+				a.iconst(2);
+				mvChannel.emitLoad(a::op, a::u2);
+				a.aastore();
+				a.astore(1);
+				a.bind(single);
+				a.aload(1); // [future, v-or-payload]
+			}
 			a.op(Opcode.INVOKEVIRTUAL);
 			a.u2(futureComplete.index());
 			a.op(Opcode.POP);
@@ -434,6 +478,12 @@ final class JvmAsyncRuntimeBuilder {
 			int loop = a.label();
 			int notToken = a.label();
 			int notFuture = a.label();
+			if (mvChannel != null) {
+				// await is a multiple-value producer: one value unless the last
+				// future of the chain settled with a {VMARKER, ...} payload.
+				a.aconstNull();
+				mvChannel.emitStore(a::op, a::u2);
+			}
 			a.bind(loop);
 			// stream-read token {RMARKER, queue, state}?
 			a.aload(0);
@@ -477,6 +527,10 @@ final class JvmAsyncRuntimeBuilder {
 			a.aconstNull();
 			a.areturn();
 			a.bind(notPill);
+			if (mvChannel != null) {
+				a.aconstNull();
+				mvChannel.emitStore(a::op, a::u2);
+			}
 			a.aload(2);
 			a.astore(0);
 			a.branch(Opcode.GOTO, loop); // flatten the chunk
@@ -535,6 +589,25 @@ final class JvmAsyncRuntimeBuilder {
 			a.checkcast(throwableClass);
 			a.op(Opcode.ATHROW);
 			a.bind(plain);
+			if (mvChannel != null && vMarker != null) {
+				// {VMARKER, primary, extras}: publish the extras, flatten the primary
+				int oneValue = a.label();
+				emitMarkerTest(a, objectArrayClass, vMarker, 4, oneValue);
+				a.aload(4);
+				a.checkcast(objectArrayClass);
+				a.iconst(2);
+				a.aaload();
+				mvChannel.emitStore(a::op, a::u2);
+				a.aload(4);
+				a.checkcast(objectArrayClass);
+				a.iconst(1);
+				a.aaload();
+				a.astore(0);
+				a.branch(Opcode.GOTO, loop);
+				a.bind(oneValue);
+				a.aconstNull();
+				mvChannel.emitStore(a::op, a::u2);
+			}
 			// flatten: v = r; loop (a plain value exits at the type checks above)
 			a.aload(4);
 			a.astore(0);

@@ -3603,6 +3603,55 @@ cases:
       99
       5
       (:CI-CLEANUP)
+  - name: await-answers-every-value-of-the-async-body
+    # An async body's values reach its awaiter the way a function call's do
+    # (.kb/async-await.md, "Multiple values"); AwaitValuesMatrix.PROGRAM, the
+    # program the four backend unit tests share.
+    source: |
+      (defun ci-awv-plain () (values 4 5 6))
+      (rontolisp:async-defun ci-awv-three () (values 1 2 3))
+      (rontolisp:async-defun ci-awv-zero () (values))
+      (rontolisp:async-defun ci-awv-floor (n) (floor n 2))
+      (rontolisp:async-defun ci-awv-call () (ci-awv-plain))
+      (rontolisp:async-defun ci-awv-nested () (ci-awv-three))
+      (rontolisp:async-defun ci-awv-tail-await () (rontolisp:await (ci-awv-three)))
+      (rontolisp:async-defun ci-awv-single () (ci-awv-plain) 9)
+      (rontolisp:async-defun ci-awv-inner ()
+        (multiple-value-bind (a b c) (rontolisp:await (ci-awv-call)) (list c b a)))
+      (print (multiple-value-list (rontolisp:await (ci-awv-three))))
+      (print (multiple-value-list (rontolisp:await (ci-awv-zero))))
+      (print (multiple-value-list (rontolisp:await (ci-awv-floor 7))))
+      (print (multiple-value-list (rontolisp:await (ci-awv-call))))
+      (print (multiple-value-list (rontolisp:await (ci-awv-nested))))
+      (print (multiple-value-list (rontolisp:await (ci-awv-tail-await))))
+      (print (multiple-value-list (rontolisp:await (ci-awv-single))))
+      (print (rontolisp:await (ci-awv-inner)))
+      (print (multiple-value-list
+              (rontolisp:await (funcall (rontolisp:async-lambda (x) (values x (* x x))) 5))))
+      (print (multiple-value-list (rontolisp:await 5)))
+      (print (length (multiple-value-list (ci-awv-three))))
+      (let ((f (ci-awv-three)))
+        (ci-awv-plain)
+        (print (multiple-value-list (rontolisp:await f)))
+        (print (multiple-value-list (rontolisp:await f))))
+      (multiple-value-bind (q r) (rontolisp:await (ci-awv-floor 9)) (print (list q r)))
+      (print (nth-value 2 (rontolisp:await (ci-awv-three))))
+    expected: |
+      (1 2 3)
+      NIL
+      (3 1)
+      (4 5 6)
+      (1 2 3)
+      (1 2 3)
+      (9)
+      (6 5 4)
+      (5 25)
+      (5)
+      1
+      (1 2 3)
+      (1 2 3)
+      (4 1)
+      3
   - name: first-rest-nth-as-first-class-function
     source: |
       (print (funcall #'first '(1 2 3)))

@@ -28,7 +28,7 @@
 | `rontolisp:async` | `(rontolisp:async (defun ...))` or `(rontolisp:async (lambda ...))` | ラップした `defun`/`lambda` を非同期版 (`async-defun`/`async-lambda`) に変えます — JavaScript 風の記法です |
 | `rontolisp:async-defun` | `(rontolisp:async-defun name (params...) body...)` | 非同期関数を定義します: 呼び出すと本体が eager に開始され、本体の値 (またはエラー) で確定する future を返します |
 | `rontolisp:async-lambda` | `(rontolisp:async-lambda (params...) body...)` | 無名の非同期関数。呼び出しごとに future を返します |
-| `rontolisp:await` | `(rontolisp:await value)` | future が確定するまで現在の非同期関数をサスペンドし、確定値を返します。future 以外はそのまま通過します。`async-defun`/`async-lambda` の本体内とトップレベルでのみ使えます |
+| `rontolisp:await` | `(rontolisp:await value)` | future が確定するまで現在の非同期関数をサスペンドし、確定した値 (多値) を返します。future 以外はそのまま通過します。`async-defun`/`async-lambda` の本体内とトップレベルでのみ使えます |
 | `tagbody` | `(tagbody tag-or-form...)` | go タグ付きの本体フォーム: `go` がタグへ(前方・後方を問わず)ジャンプし、末尾到達で nil を返します |
 | `go` | `(go tag)` | 囲んでいる `tagbody` のタグへ制御を移します(コンパイルされた `go` は字句的ですが、`lambda` を跨ぐものは非局所脱出として `tagbody` に再入します) |
 | `catch` | `(catch tag body...)` | `tag`(`eq` で比較されるランタイム値)で名前を付けた動的な脱出点を確立します。フォームの値は本体の値、またはその動的エクステント内で発生した一致する `throw` の値です(`--no-gc` ではコンパイルエラー) |

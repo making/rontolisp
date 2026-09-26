@@ -1,5 +1,6 @@
 package am.ik.rontolisp.eval;
 
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import am.ik.rontolisp.LispFuture;
@@ -21,13 +22,16 @@ import com.oracle.svm.core.annotate.TargetClass;
 final class Target_AsyncRuntime {
 
 	@Substitute
-	static LispFuture run(Supplier<LispVal> body) {
+	static LispFuture run(Function<LispFuture, LispVal> body) {
+		java.util.concurrent.CompletableFuture<LispVal> result = new java.util.concurrent.CompletableFuture<>();
+		LispFuture future = LispFuture.of(result);
 		try {
-			return LispFuture.settled(body.get());
+			result.complete(body.apply(future));
 		}
 		catch (RuntimeException ex) {
-			return LispFuture.failed(ex);
+			result.completeExceptionally(ex);
 		}
+		return future;
 	}
 
 	@Substitute

@@ -36955,7 +36955,7 @@ public final class LispMacroExpander {
 					LispNames.DECLAIM, LispNames.DECLARE, LispNames.DEFPACKAGE, LispNames.IN_PACKAGE,
 					LispNames.CHECK_TYPE, LispNames.ASSERT, LispNames.PPRINT_LOGICAL_BLOCK,
 					LispNames.PRINT_UNREADABLE_OBJECT, LispNames.DO_SYMBOLS, LispNames.DO_EXTERNAL_SYMBOLS,
-					LispNames.DO_ALL_SYMBOLS, LispNames.AWAIT_QUALIFIED ->
+					LispNames.DO_ALL_SYMBOLS, LispNames.ASYNC_RUN_QUALIFIED ->
 				true;
 			// The fresh-string form answers its string; one that names a string to append
 			// to answers the body's values.
@@ -37236,14 +37236,16 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Rewrites the tail of every {@code lambda} body and every {@code flet}/
-	 * {@code labels} function body in {@code form}, at any depth, so that a syntactic
-	 * producer there publishes its secondary value ({@link #spillEscapingMvProducers}) as
-	 * it does in a {@code defun}'s tail. Publish only: the backends' lambda compilers
-	 * clear a single-valued tail afterwards ({@link #settleFunctionBody}). A
-	 * {@code quote} is data and a {@code defmacro}/{@code macrolet}/
-	 * {@code define-compiler-macro} definition is compile-time code, so neither is
-	 * entered. Unchanged subtrees keep their cons identity (.kb/source-positions.md).
+	 * Rewrites the tail of every {@code lambda} body (a {@code --component} program's raw
+	 * {@code rontolisp:async-lambda} included: its body's values settle its future) and
+	 * every {@code flet}/{@code labels} function body in {@code form}, at any depth, so
+	 * that a syntactic producer there publishes its secondary value
+	 * ({@link #spillEscapingMvProducers}) as it does in a {@code defun}'s tail. Publish
+	 * only: the backends' lambda compilers clear a single-valued tail afterwards
+	 * ({@link #settleFunctionBody}). A {@code quote} is data and a
+	 * {@code defmacro}/{@code macrolet}/ {@code define-compiler-macro} definition is
+	 * compile-time code, so neither is entered. Unchanged subtrees keep their cons
+	 * identity (.kb/source-positions.md).
 	 * @param form any form
 	 * @return the rewritten form, or {@code form} itself when nothing changed
 	 */
@@ -37277,7 +37279,7 @@ public final class LispMacroExpander {
 			changed = changed || rewritten != part;
 			out.add(rewritten);
 		}
-		if (LispNames.LAMBDA.equals(head) && out.size() >= 3) {
+		if ((LispNames.LAMBDA.equals(head) || LispNames.ASYNC_LAMBDA_QUALIFIED.equals(head)) && out.size() >= 3) {
 			LispVal last = out.get(out.size() - 1);
 			LispVal settled = spillEscapingMvProducers(last);
 			changed = changed || settled != last;

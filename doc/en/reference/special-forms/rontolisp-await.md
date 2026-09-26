@@ -2,7 +2,7 @@
 
 `(rontolisp:await value)`
 
-Given a future, suspends the current asynchronous function until the future settles and returns its settled value. Settled futures never suspend, nested futures flatten, and a value that is not a future passes through unchanged — like a JavaScript `await` on a non-promise — so `await` can be applied uniformly to a value that may or may not be a future.
+Given a future, suspends the current asynchronous function until the future settles and returns its settled values. Settled futures never suspend, nested futures flatten, and a value that is not a future passes through unchanged — like a JavaScript `await` on a non-promise — so `await` can be applied uniformly to a value that may or may not be a future.
 
 ```lisp
 (rontolisp:await 42)   ; => 42
@@ -12,6 +12,15 @@ Given a future, suspends the current asynchronous function until the future sett
 (rontolisp:async-defun inner () 10)
 (rontolisp:async-defun outer () (+ (rontolisp:await (inner)) 1))
 (rontolisp:await (outer))   ; => 11
+```
+
+## Multiple values
+
+A future settles with *all* the values of its body's last form, and `await` returns them as multiple values, the way a function call returns its values. The last future of a flattened chain decides; a value that is not a future is one value.
+
+```lisp
+(rontolisp:async-defun div-mod (a b) (floor a b))
+(multiple-value-list (rontolisp:await (div-mod 17 5)))   ; => (3 2)
 ```
 
 `await` is a special form, legal only inside [`rontolisp:async-defun`](rontolisp-async-defun.md) / [`rontolisp:async-lambda`](rontolisp-async-lambda.md) bodies and at top level (the top level is implicitly asynchronous). Anywhere else — a plain `defun` or `lambda` body, even one nested inside an asynchronous body — it is an error at compile/definition time:

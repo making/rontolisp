@@ -43,6 +43,27 @@ class ThreadTest {
 	}
 
 	@Test
+	void eachThreadHasItsOwnMultipleValueChannel() {
+		// The value-count register is per thread (ValueCountRegister): through the one
+		// shared field a sibling's step cleared the values between th-helper's publish
+		// and the consumer's read ("Expected integer, got: NIL" on every run).
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		evalAll(new LispEvaluator(new PrintStream(out, true, java.nio.charset.StandardCharsets.UTF_8)), """
+				(defun th-helper (n) (values n (* n n) (- n)))
+				(defun th-work (n)
+				  (let ((acc 0))
+				    (dotimes (i 20000)
+				      (multiple-value-bind (a b c) (th-helper (+ n i))
+				        (setq acc (+ acc (- (+ a b c) (* (+ n i) (+ n i)))))))
+				    acc))
+				(let ((threads nil))
+				  (dotimes (n 8) (let ((k n)) (push (rontolisp:make-thread (lambda () (th-work k))) threads)))
+				  (print (mapcar (lambda (th) (rontolisp:join-thread th)) threads)))
+				""");
+		assertThat(out.toString(java.nio.charset.StandardCharsets.UTF_8).trim()).isEqualTo("(0 0 0 0 0 0 0 0)");
+	}
+
+	@Test
 	void threadpIsNilOnANonThread() {
 		assertThat(evalAll(evaluator(), "(rontolisp:threadp 42)")).isEqualTo(LispNil.INSTANCE);
 	}
