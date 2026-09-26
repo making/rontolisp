@@ -45,7 +45,8 @@ Builders in `LispMacroExpander`, each the body its `expand*` used to inline:
 
 ## The bulk-copy arm
 `%replace-runtime-array`'s element loop is fronted by `(%replace-bulk dst src s1 s2 n)`
-(`LispNames.REPLACE_BULK`, emitted ONLY in the narrow helper's body by `replaceDispatch`): true =
+(`LispNames.REPLACE_BULK`, emitted ONLY in the narrow helper's body by `replaceDispatch` and in
+`subseq`'s general-array arm, `.kb/subseq-runtime.md`): true =
 the n elements moved in one engine-level copy, nil = nothing happened and the loop runs.
 `WasmArrayCompiler.compileReplaceBulk` fires only for DISTINCT packed integer vectors of the SAME
 width with in-bounds non-negative i31 bounds, then one `array.copy`; it declines everything else so

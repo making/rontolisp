@@ -9,7 +9,12 @@ The STRING lane answers a MUTABLE CHARACTER VECTOR (`_subseqCv` JVM, `_subseq_st
 ## `%subseq-runtime` -- a spliced defun, both compile paths
 - `LispMacroExpander.expandSubseqCompat` dispatches on runtime type: string or cons ->
   `%subseq-core` (what the per-backend `subseq` compilers emit); a general array is copied
-  element-wise into a fresh `%array-alike`. `subseqRuntimeWrapper()` is the callee; `end` is a
+  into a fresh `%array-alike` -- by `(%replace-bulk out seq 0 start n)` first (wasm: one
+  `array.copy` when both are packed integer vectors of one width, `.kb/sequence-op-runtimes.md`),
+  element-wise when that declines. Without the bulk arm a 64 KiB octet `subseq` cost ~11 M fuel
+  (~1.4 ms native), and it is what every fetched body chunk goes through (`.kb/fetch-http.md`,
+  "Throughput"); pin: `WasmLispCompilerIntegrationTest.subseqOfAPackedIntegerVectorIsOneBulkCopy`
+  (a wasmtime fuel budget). `subseqRuntimeWrapper()` is the callee; `end` is a
   PARAMETER, nil when omitted, so one call shape serves 2- and 3-arg calls.
 - **Injection is the BACKEND's**, in the same loop that adds the `BuiltinFunctionWrappers`
   (`JvmLispCompiler` / `WasmLispCompiler`), not `expandTopLevelDefinitions`: most `subseq` sites

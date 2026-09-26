@@ -143,11 +143,17 @@ rlhttp.readResponseBody(reply, ptr, cap) -> i32  ; 0 = end, -1 = failed mid-body
   at the await. Built on the first HTTPS request only.
 - **macOS**: a wait for the head or a body chunk turns the event loop once the application
   started (`.kb/objc.md`, "--native").
-- **Throughput** (2026-09-25, x86_64, loopback): a 256 MiB body drained through
-  `rontolisp:stream-read` took 10.3-11.4 s user (~25 MB/s; `perf`: nearly every sample in the
-  module's JIT-compiled code, none worth naming in the runner) against
-  4.8 s wall on the interpreter and 2.9 s on the JVM; RSS 0.3 GB against 1.6 / 2.7 GB. `curl`
-  fetched the same HTTPS body in 0.5 s.
+- **Throughput** (2026-09-26, x86_64, plain-HTTP loopback origin, 256 MiB body drained through
+  `rontolisp:stream-read` in 64 KiB chunks): 0.78 s wall / 0.6 s user (~340 MB/s) against 5.2 s on
+  the interpreter and 3.2 s on the JVM; `curl` 0.18 s. Until 2026-09-26 it was 8.4 s (10.3-11.4 s
+  user over HTTPS on 2026-09-25, ~25 MB/s): 5.8 s of it was `%http-reactor-chunk`'s `subseq`,
+  whose general-array arm copied an aref and a `%aset` dispatch per octet (~170 fuel each); that
+  arm is now fronted by `%replace-bulk`, one `array.copy` (`.kb/subseq-runtime.md`). Of the rest,
+  the import wrapper's `_bytes_fill` (linear memory -> the receive vector, one `array.set` per
+  octet: wasm-GC has no memory -> array bulk instruction) is ~0.3 s user; an 8-octets-per-`i64.load`
+  unrolled fill measured the same within noise (the per-element `array.set` bounds check is the
+  cost, not the load), so the byte loop stays. The `--host-fetch` reactor's body takes the same
+  `%http-reactor-chunk` path.
 
 ## The cross-backend corpus and its known divergences
 
