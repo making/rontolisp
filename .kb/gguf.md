@@ -46,9 +46,10 @@ everything else is refused BY NAME, pointing at the publisher's BF16/F16 file.
   DECLARED offset, so an unknown block shape still skips correctly.
 - Staging is the `checkpoint` package's (`.kb/checkpoint-readers.md`): `checkpoint:make-tensor`,
   `stage-float32`, `stage-float-bits`, `skip-bytes`. `gguf.lisp` keeps only the FORMAT.
-- **Trap: a packed `(unsigned-byte 16)` staging vector is a `LispIntVector` over `long[]` -- four
-  times the tensor's on-disk size.** Stage in chunks through one reused buffer
-  (`widen-float-bits`' `:start`); it is the difference between loading a 1.1B model and not.
+- **Trap: a packed `(unsigned-byte 16)` staging vector is a `long[]` on the JVM -- four times the
+  tensor's on-disk size** (the interpreter's is a `short[]` since 2026-09-26). Stage in chunks
+  through one reused buffer (`widen-float-bits`' `:start`); it is the difference between loading
+  a 1.1B model and not.
 
 ## Tests and fixtures
 

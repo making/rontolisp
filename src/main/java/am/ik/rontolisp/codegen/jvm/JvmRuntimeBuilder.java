@@ -2404,15 +2404,22 @@ final class JvmRuntimeBuilder {
 	}
 
 	/**
-	 * Constant-pool references for printing a packed integer vector (a {@code long[]}
-	 * with a width header at runtime) as a plain {@code #(...)} vector -- CL prints
-	 * specialized vectors this way, so unlike the {@code #d}/{@code #f} float syntax
-	 * there is no prefix rewrite: the value is boxed to a general array
-	 * ({@code ivToGeneralMethod}) and rendered by the ordinary array renderer. Threaded
-	 * into the two lisp-to-string builders only when the program uses packed integer
-	 * vectors.
+	 * Constant-pool references for printing a packed integer vector (a {@code byte[]} at
+	 * width 8, a {@code long[]} at 16/32, each with a width header at runtime) as a plain
+	 * {@code #(...)} vector -- CL prints specialized vectors this way, so unlike the
+	 * {@code #d}/{@code #f} float syntax there is no prefix rewrite: the value is boxed
+	 * to a general array ({@code ivToGeneralMethod}) and rendered by the ordinary array
+	 * renderer. Threaded into the two lisp-to-string builders only when the program uses
+	 * packed integer vectors.
+	 *
+	 * @param longArrayClass the {@code [J} class constant
+	 * @param byteArrayClass the {@code [B} class constant
+	 * @param quantized whether a quantized matrix -- another {@code byte[]} -- can exist,
+	 * so the octet test reads the tag ({@code JvmIntArrayRuntimeBuilder.OCTET_TAG})
+	 * @param ivToGeneralMethod {@code _ivToGeneral}
 	 */
-	record PackedIntPrint(ClassConstant longArrayClass, MethodrefConstant ivToGeneralMethod) {
+	record PackedIntPrint(ClassConstant longArrayClass, ClassConstant byteArrayClass, boolean quantized,
+			MethodrefConstant ivToGeneralMethod) {
 	}
 
 	/**
@@ -3324,6 +3331,51 @@ final class JvmRuntimeBuilder {
 		if (arrayListClass == null || arrayToStringMethod == null) {
 			return;
 		}
+		if (packedIntPrint != null) {
+			// if (val is a packed integer vector) return
+			// arrayToString(_ivToGeneral(val));
+			// -- a plain #(...) vector, no prefix rewrite. Ahead of the quantized
+			// matrix's byte[] test, which it tells an octet vector from by the tag.
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, packedIntPrint.byteArrayClass().index());
+			List<Integer> notOctets = new ArrayList<>();
+			notOctets.add(code.size());
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			if (packedIntPrint.quantized()) {
+				code.add(Opcode.ALOAD_0);
+				code.add(Opcode.CHECKCAST);
+				emitU2(code, packedIntPrint.byteArrayClass().index());
+				code.add(Opcode.ICONST_0);
+				code.add(Opcode.BALOAD);
+				code.add(Opcode.BIPUSH);
+				code.add(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+				notOctets.add(code.size());
+				code.add(Opcode.IF_ICMPNE);
+				emitU2(code, 0);
+			}
+			int isPackedIntPos = code.size();
+			code.add(Opcode.GOTO);
+			emitU2(code, 0);
+			for (int pos : notOctets) {
+				patchBranch(code, pos, code.size());
+			}
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, packedIntPrint.longArrayClass().index());
+			int ifNotPackedIntPos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			patchBranch(code, isPackedIntPos, code.size());
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, packedIntPrint.ivToGeneralMethod().index());
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, arrayToStringMethod.index());
+			code.add(Opcode.ARETURN);
+			patchBranch(code, ifNotPackedIntPos, code.size());
+		}
 		if (packedPrint != null) {
 			// if (val instanceof double[]) -> #d(...); if (val instanceof float[]) ->
 			// #f(...)
@@ -3350,23 +3402,6 @@ final class JvmRuntimeBuilder {
 				code.add(Opcode.ARETURN);
 				patchBranch(code, ifNotQuantized, code.size());
 			}
-		}
-		if (packedIntPrint != null) {
-			// if (val instanceof long[]) return arrayToString(_ivToGeneral(val)); -- a
-			// plain #(...) vector, no prefix rewrite.
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INSTANCEOF);
-			emitU2(code, packedIntPrint.longArrayClass().index());
-			int ifNotPackedIntPos = code.size();
-			code.add(Opcode.IFEQ);
-			emitU2(code, 0);
-			code.add(Opcode.ALOAD_0);
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, packedIntPrint.ivToGeneralMethod().index());
-			code.add(Opcode.INVOKESTATIC);
-			emitU2(code, arrayToStringMethod.index());
-			code.add(Opcode.ARETURN);
-			patchBranch(code, ifNotPackedIntPos, code.size());
 		}
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);

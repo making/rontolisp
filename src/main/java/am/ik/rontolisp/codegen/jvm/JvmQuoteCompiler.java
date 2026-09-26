@@ -108,11 +108,12 @@ final class JvmQuoteCompiler {
 
 	/**
 	 * Emits a packed integer-vector literal (ironclad's {@code #N@(...)}, or a macro-time
-	 * {@code LispIntVector} value) as a bare {@code long[]} with a width header:
-	 * {@code [width, e_0, ..., e_{n-1}]} -- the native packed representation
-	 * ({@link JvmIntArrayRuntimeBuilder}). The elements arrive pre-masked from the
-	 * reader. The array reference is kept on the stack and {@code DUP}ed for each store,
-	 * so the operand stack stays shallow regardless of the element count.
+	 * {@code LispIntVector} value) as a bare array with a width header: {@code [width,
+	 * e_0, ..., e_{n-1}]} -- a {@code byte[]} at width 8, a {@code long[]} otherwise, the
+	 * native packed representation ({@link JvmIntArrayRuntimeBuilder}). The elements
+	 * arrive pre-masked from the reader; a zero octet needs no store. The array reference
+	 * is kept on the stack and {@code DUP}ed for each store, so the operand stack stays
+	 * shallow regardless of the element count.
 	 * @param iv the packed integer-vector literal
 	 * @param ctx the compilation context
 	 * @param className the enclosing class name
@@ -121,11 +122,30 @@ final class JvmQuoteCompiler {
 		long[] data = iv.toLongArray();
 		JvmEmitHelper.emitIntConst(ctx, 1 + data.length);
 		ctx.emit(Opcode.NEWARRAY);
+		if (iv.width() == JvmIntArrayRuntimeBuilder.OCTET_TAG) {
+			ctx.emit(8); // T_BYTE
+			emitRawByteStore(ctx, 0, JvmIntArrayRuntimeBuilder.OCTET_TAG);
+			for (int i = 0; i < data.length; i++) {
+				if (data[i] != 0) {
+					emitRawByteStore(ctx, 1 + i, (int) data[i]);
+				}
+			}
+			return;
+		}
 		ctx.emit(11); // T_LONG
 		emitRawLongStore(ctx, 0, iv.width());
 		for (int i = 0; i < data.length; i++) {
 			emitRawLongStore(ctx, 1 + i, data[i]);
 		}
+	}
+
+	// Assumes the byte[] is on top of the stack; stores the octet at index (DUP; index;
+	// the octet as a signed byte; BASTORE), leaving the array on the stack.
+	private static void emitRawByteStore(JvmLispCompiler.Ctx ctx, int index, int octet) {
+		ctx.emit(Opcode.DUP);
+		JvmEmitHelper.emitIntConst(ctx, index);
+		JvmEmitHelper.emitIntConst(ctx, (byte) octet);
+		ctx.emit(Opcode.BASTORE);
 	}
 
 	// Assumes the long[] is on top of the stack; stores value at index (DUP; index;

@@ -24,10 +24,13 @@ along: `.kb/character-sequence-io.md`.
   `WRITE_SEQUENCE_PACKED`, in `PackageRegistry.CL_INTERNALS`.
 - **Interpreter** (`Environment`, beside `read-byte`): the `PackedBuffer` record views the value
   as (width, size); an `InputStream`/`OutputStream` table entry or a standard-stream designator is
-  handled. `readNBytes` + `ByteBuffer.order(LITTLE_ENDIAN)`; a stdout write updates `atLineStart`.
+  handled. `readNBytes` + `ByteBuffer.order(LITTLE_ENDIAN)`, one bulk `get`/`put` into the
+  width's own array at every width (a `LispIntVector` is a `byte[]`/`short[]`/`int[]` since
+  2026-09-26, no element loop); a stdout write updates `atLineStart`.
 - **JVM** `JvmIoRuntimeBuilder.buildSeqPacked` -> `_readSeqPacked` / `_writeSeqPacked`, called by
   `JvmSequencePackedCompiler`. Buffer is a `float[]`/`double[]` with the `[rank, dims..., data...]`
-  header (data offset `1 + rank`) or a `long[]` with its width header (offset 1). Helpers are
+  header (data offset `1 + rank`), a `byte[]{8, ...}` octet vector (one bulk transfer, offset 1),
+  or a `long[]` with its width header (offset 1, an element loop). Helpers are
   minted only when the program has both a packed buffer and a `read-sequence`/`write-sequence`
   (`usesPackedSequenceIo` in `JvmLispCompiler`, threaded into `Ctx`); otherwise the primitives
   compile to `aconst_null`.
@@ -50,13 +53,16 @@ along: `.kb/character-sequence-io.md`.
 - `rontolisp:widen-float-bits` / `narrow-float-bits` (`eval/FloatBitsWidening`): an f16/bf16
   checkpoint is read as `(unsigned-byte 16)` bits through the bulk path above, then widened into
   an existing `#f`/`#d` array chunk by chunk, not held as its own array type.
-- **Chunk size 1 Mi elements (2^20) -- a memory requirement, not style.** `LispIntVector` backs
-  with `long[]` regardless of declared width (`.kb/packed-integer-vectors.md`), so a whole
-  1.1B-element checkpoint's bits cost 8.8 GB of staging + 4.4 GB destination. `dst`/`:start` exist
-  so a caller writes successive offsets of one destination. GGUF/safetensors readers MUST chunk.
-- **Deliberately a plain scalar loop, not `jdk.incubator.vector`**: `long[]` backing has no
-  `ShortVector.fromArray`/`convertShape(S2I)` path. Measured 1.6-2.6 Gelem/s; re-open only if a
-  caller measures itself bandwidth-bound here. Correctness pinned against
+- **Chunk size 1 Mi elements (2^20) -- a memory requirement, not style.** The JVM backs an
+  `(unsigned-byte 16)` vector with `long[]` (`.kb/packed-integer-vectors.md`), so a whole
+  1.1B-element checkpoint's bits cost 8.8 GB of staging + 4.4 GB destination there (2.2 GB of
+  staging on the interpreter, whose `LispIntVector` is a `short[]` at that width since
+  2026-09-26). `dst`/`:start` exist so a caller writes successive offsets of one destination.
+  GGUF/safetensors readers MUST chunk.
+- **Deliberately a plain scalar loop, not `jdk.incubator.vector`**: the JVM's `long[]` backing
+  has no `ShortVector.fromArray`/`convertShape(S2I)` path. Measured 1.6-2.6 Gelem/s (before the
+  interpreter's backing became a `short[]`); re-open only if a caller measures itself
+  bandwidth-bound here. Correctness pinned against
   `Float.floatToFloat16`/`float16ToFloat` over all 65536 f16 bit patterns.
 
 ## Tests

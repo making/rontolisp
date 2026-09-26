@@ -336,7 +336,10 @@ final class JvmGpuTemplate {
 		if (w instanceof short[] bw) {
 			return gpuMatvecBf16(bw, x);
 		}
-		if (w instanceof byte[] qw) {
+		// A quantized matrix, not the other byte[] -- an (unsigned-byte 8) vector, whose
+		// slot 0 is its tag, 8 (JvmIntArrayRuntimeBuilder.OCTET_TAG; this class travels
+		// alone, so the number is spelled here).
+		if (w instanceof byte[] qw && qw[0] != 8) {
 			return gpuMatvecQ8(qw, x);
 		}
 		if (!(w instanceof double[]) && !(w instanceof float[])) {

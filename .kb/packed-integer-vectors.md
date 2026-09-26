@@ -11,22 +11,39 @@ Rank-n falls back for every specialized type except packed floats; CHARACTER deg
 Scheme's bytevectors are the 8-bit pack ([scheme-frontend.md](scheme-frontend.md), "Bytevectors").
 
 ## Representation
-- Interpreter `LispIntVector`: `int width` (8/16/32) + pre-masked `long[]`.
-- JVM: bare `long[]{width, e0, ...}`, `instanceof long[]` the free discriminator;
-  `JvmIntArrayRuntimeBuilder` `_ivAref1`/`_ivAset1`/`_ivDims`/`_ivLength`/`_ivToGeneral`/
-  `_ivElementType`/`_ivMake`/`_ivRequireGeneral`, gated on `Ctx.usesIntArray`
-  (gate off = byte-identical build); dispatch chains iv -> fv -> general. The
-  `%array-alike` allocator is NOT in this tier: it is the general group's `_arrayAlike`
+- Interpreter `LispIntVector`: `int width` + the storage AT the width -- `byte[]` (8),
+  `short[]` (16), `int[]` (32), read back widened unsigned; `octets()`/`shorts()`/`ints()` are
+  the LIVE arrays, `wrapOctets(byte[])` takes one over uncopied (an HTTP body, a request
+  body, a digest), `LispIntVector.copy` is one `System.arraycopy` between equal widths
+  (`replace`/`fill` between packed vectors, `PackedBuffer`'s `read-sequence`/`write-sequence`).
+- JVM: a bare array with the width in slot 0 and the elements from slot 1 --
+  `byte[]{8, e0, ...}` at width 8 (`JvmIntArrayRuntimeBuilder.OCTET_TAG`), `long[]{16|32, ...}`
+  otherwise; `JvmIntArrayRuntimeBuilder` `_ivAref1`/`_ivAset1`/`_ivDims`/`_ivLength`/
+  `_ivToGeneral`/`_ivElementType`/`_ivMake`/`_ivRequireGeneral` carry both arms, gated on
+  `Ctx.usesIntArray` (gate off = byte-identical build); dispatch chains iv -> fv -> general.
+  The `%array-alike` allocator is NOT in this tier: it is the general group's `_arrayAlike`
   ([subseq-runtime.md](subseq-runtime.md)).
+- **Trap: `byte[]` is ALSO the quantized matrix** ([quantized-matrix.md](quantized-matrix.md)),
+  whose slot 0 is its format code (1 = Q8_0). Where both can exist (`usesQuantized` and
+  `usesIntArray`) every door taking either reads slot 0: the octet side through
+  `JvmIntArrayRuntimeBuilder.Octets` / `emitOctetTestOnStack`, the matrix side in
+  `JvmFloatArrayRuntimeBuilder.emitQuantizedArm`, `JvmQuantizedMatrixRuntimeBuilder.emitMatrixTest`,
+  `JvmSimdCompiler`'s lane guard and `JvmGpuTemplate.gpuMatvec`; the packed-int print branch runs
+  ahead of the matrix's. No format code may be 8. A door that forgets reads a header as data
+  without a word -- pinned by `JvmQuantizedMatrixTest.anOctetVectorAndAQuantizedMatrixAreToldApartWhereBothCanExist`.
+  The travelling Java (`RontoFetch`, `RontoHttpClack`, `JvmObjcTemplate`, `JvmGpuTemplate`)
+  spells the 8 itself.
 - wasm-GC: the BARE `TYPE_I8ARR`/`TYPE_I16ARR`/`TYPE_I32ARR`, `(array (mut i8|i16|i32))`,
   types 57-59 in ONE rec group (keeping i32 structurally distinct from `TYPE_LIMBS` under GC
   canonicalization); no wrapper, no dims, `ref.test` discriminates width. `TYPE_IV_SET` (60)
   is `_iv_set`'s signature; `IARR_TYPE_LAST` shifts the `--simd`/async/instance blocks past
   all four, `FUNC_IV_SET` follows `FUNC_FX_REM` inside `FX_FUNC_LAST`. `--no-gc`: no arrays.
-- **Small-buffer-oriented**: interpreter/JVM spend 8 bytes an element whatever the width (the
-  width is a DISCRIMINATOR, not a packing scheme); only wasm-GC packs at width. 1.6-4.3
-  Gelem/s on a 1 Mi-element chunk, 1.3-1.7x slower than a real `short[]`
-  ([binary-sequence-io.md](binary-sequence-io.md)); stage huge buffers in chunks.
+- **An octet is one byte on every backend** since 2026-09-26; the JVM still spends 8 bytes an
+  element at widths 16/32 (the `int[]` a `(unsigned-byte 32)` pack would take is the character
+  box). Until then interpreter and JVM spent 8 bytes an element at every width (the width was a
+  discriminator, not a packing scheme), and a 256 MiB body read with `read-all` peaked at
+  6.2 GB of live heap on the interpreter and 3.4 GB on the JVM, the octets in `long[]`s two
+  thirds of each ([fetch-http.md](fetch-http.md), "Throughput").
 
 ## Two hand-written width lists (audited 2026-09-05, `.todo/683`)
 The float umbrella's exhaustive-switch net has no analogue here: `LispIntVector` is NOT
@@ -36,11 +53,11 @@ reflective reachability test to enumerate (contrast [vec.md](vec.md), "Asking a 
 its width"). The widths therefore live in exactly two lists, and their failure modes differ:
 - `LispNames.unsignedByteWidth` PARSES 8/16/32 and answers 0 for anything else -- an unlisted
   width silently degrades to the general boxed array (the `.todo/683` shape).
-- the `LispIntVector` constructor ACCEPTS 8/16/32 and throws otherwise -- an unsupported
-  width at the allocation is loud at least.
+- `LispIntVector.zeros`/`of` ACCEPT 8/16/32 and throw otherwise -- an unsupported width at the
+  allocation is loud at least (a new width also needs its storage arm in every switch there).
 Adding an integer width means editing BOTH; `PackedFloatReachabilityTest`'s last two tests
 pin both directions as they stand (every listed width builds and answers its specifier;
-`(unsigned-byte 64)` degrades silently while the constructor refuses it).
+`(unsigned-byte 64)` degrades silently while the allocation refuses it).
 
 ## "Literal" includes a `deftype` alias of one
 `LispMacroExpander.resolveElementTypeAlias(spec, closRegistry)` is the one resolver: strips
@@ -63,8 +80,8 @@ registry, the `concatenateBuiltin` arrangement); `JvmArrayCompiler.compileMake` 
   `(equal (array-element-type x) '(unsigned-byte N))`, dimensions unchecked -- so a general
   `#(...)` is never a `(vector (unsigned-byte 8))` (s-sql's `sql-escape` dispatches on it).
 - `subseq`/`copy-seq` are TYPE-PRESERVING via `%array-alike` (`LispNames.ARRAY_ALIKE`, in
-  `CL_INTERNALS`); `replace` mask-stores element-wise (forward, even over overlapping regions
-  of one vector -- a bug on every backend and sequence type, `.todo/872`); `coerce`/`concatenate` pack when the
+  `CL_INTERNALS`); `replace` mask-stores element-wise, a self-overlapping region read out first
+  (fixed on every backend 2026-09-19, `.todo/872`); `coerce`/`concatenate` pack when the
   RESULT TYPE asks ([concatenate-result-families.md](concatenate-result-families.md));
   `reverse`, `remove`, `map 'vector` and printing return GENERAL everywhere, the interpreter's
   `seqResult` deliberately rebuilding general to match the compilers.

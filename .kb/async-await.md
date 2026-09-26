@@ -185,17 +185,27 @@ arrangement); `LispPreludeLibraryTest` pins the two arm for arm.
 
 **The lenient loop is the FALLBACK, for a general array only: `%octets-to-string-packed` runs
 first**, NATIVE on every backend, and answers every packed `(unsigned-byte 8)` vector itself
-(`nil` for any other value): STRICT UTF-8 first (a platform decode; one `array.copy` on wasm), the
-lenient arms as a native transcode for the rest. `Environment.decodeUtf8Strict` /
-`decodeUtf8Leniently`; JVM `_octetsToString` (`JvmAsyncRuntimeBuilder.buildOctetsToString`, the
-transcode in the `CharacterCodingException` handler); both WASM GC tiers `_iv_utf8_str`
-(`WasmStringRuntimeBuilder.buildIvUtf8StrBody`, `FUNC_IV_UTF8_STR`, a two-pass transcode behind the
-validator). Until 2026-09-26 the primitive was `%octets-to-string-strict` (`nil` on malformed
-bytes) and a binary body walked the compiled loop: ~350-700 ns a byte, and on a `--native` output a
-256 MiB body exhausted the GC heap (`.kb/fetch-http.md`, "Throughput"). The native transcodes are
-pinned against the loop case for case by the three `octetsDecodeNativelyWhetherOrNotTheBytesAreUtf8` tests (the loop fed a
-GENERAL array, which the primitive declines) and `LispPreludeLibraryTest`.
-**The validator is deliberately NOT `_str_char_at`'s walk**, whose ranges accept overlong forms, surrogates, code
+(`nil` for any other value). Interpreter and JVM run ONE lenient transcode, counted first so the
+result is built once at its size -- on valid UTF-8 every lenient arm answers what a strict decoder
+answers, so no strict pass stands in front: `Environment.decodeUtf8CodePoints` straight into the
+code points a `LispString` keeps (`LispString.wrapCodePoints`), pinned against the platform's
+strict decode by `LispPreludeLibraryTest.theDecodeOfValidUtf8IsThePlatformsStrictDecode`; JVM
+`_octetsToString` (`JvmAsyncRuntimeBuilder.buildOctetsToString`) into a framed Latin-1 `byte[]`
+(the octets themselves when every unit is one octet) or a `char[]`. Both WASM GC tiers validate
+STRICTLY first and `array.copy`, transcoding only the rest: `_iv_utf8_str`
+(`WasmStringRuntimeBuilder.buildIvUtf8StrBody`, `FUNC_IV_UTF8_STR`). Until 2026-09-26 the
+interpreter and JVM tried a platform decode first and transcoded in its refusal, through five
+body-sized intermediates (`.kb/fetch-http.md`, "Throughput"); before that the primitive was
+`%octets-to-string-strict` (`nil` on malformed bytes) and a binary body walked the compiled loop:
+~350-700 ns a byte, and on a `--native` output a 256 MiB body exhausted the GC heap. The native
+transcodes are pinned against the loop case for case by the three
+`octetsDecodeNativelyWhetherOrNotTheBytesAreUtf8` tests (the loop fed a GENERAL array, which the
+primitive declines) and `LispPreludeLibraryTest`.
+**Two encoded surrogates side by side** (`ED A0 BD ED B8 80`) decode to two characters on the
+interpreter and both wasm tiers, and to ONE on the JVM, whose string is UTF-16 and reads the pair
+as U+1F600 (the interpreter did the same until 2026-09-26, through a `java.lang.String`). A
+divergence in the string representation, not the decoder; unpinned in ci-spec.
+**The wasm validator is deliberately NOT `_str_char_at`'s walk**, whose ranges accept overlong forms, surrogates, code
 points past U+10FFFF and bare continuation bytes. Strict ranges: `C2..DF` one continuation; `E0..EF`
 two (`E0` needs `A0..BF` first, `ED` needs `80..9F`); `F0..F4` three (`F0` needs `90..BF`, `F4` needs
 `80..8F`); every continuation `10xxxxxx`; a truncated tail refused. The lenient 4-byte arm re-tests

@@ -12,11 +12,12 @@ import am.ik.jvm.Opcode;
  * {@code array}/{@code sequence} type specifiers. A general array is a
  * {@code java.util.ArrayList} at runtime (see {@link JvmArrayRuntimeBuilder}), and no
  * other value uses that class, so a plain {@code instanceof} suffices. When the program
- * uses a packed representation, the packed shapes are arrays too: a {@code long[]}
- * (packed integer vector, {@link JvmIntArrayRuntimeBuilder}) and a
+ * uses a packed representation, the packed shapes are arrays too: a {@code byte[]} /
+ * {@code long[]} (packed integer vector, {@link JvmIntArrayRuntimeBuilder}) and a
  * {@code double[]}/{@code float[]} (packed float array,
  * {@link JvmFloatArrayRuntimeBuilder}) each get a preceding {@code instanceof} branch;
- * without the gates the default build is byte-identical.
+ * without the gates the default build is byte-identical. A quantized matrix, the other
+ * {@code byte[]}, is no array: the octet test reads the tag where one can exist.
  */
 final class JvmArraypCompiler {
 
@@ -38,6 +39,17 @@ final class JvmArraypCompiler {
 			packedClasses.add("[S");
 		}
 		List<Integer> gotoEnds = new ArrayList<>();
+		if (ctx.usesIntArray) {
+			List<Integer> notOctets = JvmIntArrayRuntimeBuilder.emitOctetTestOnStack(ctx);
+			ctx.emit(Opcode.POP);
+			JvmEmitHelper.compileTrue(ctx);
+			gotoEnds.add(ctx.code.size());
+			ctx.emit(Opcode.GOTO);
+			ctx.emitU2(0);
+			for (int pos : notOctets) {
+				JvmEmitHelper.patchBranch(ctx, pos, ctx.code.size());
+			}
+		}
 		for (String cls : packedClasses) {
 			ctx.emit(Opcode.DUP);
 			ctx.emit(Opcode.INSTANCEOF);

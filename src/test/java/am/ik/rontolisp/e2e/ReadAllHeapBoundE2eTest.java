@@ -21,16 +21,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * {@code read-all} of a large fetched body fits in a heap a small multiple of the body on
- * the interpreter. The body is binary -- not UTF-8 -- so the decode takes the lenient
+ * both JDK backends. The body is binary -- not UTF-8 -- so the decode takes the lenient
  * arms, and the program runs in a child JVM whose heap is capped at ten times the body,
  * with the serial collector so the cap is the live set's and not a concurrent collector's
  * headroom.
  *
  * <p>
  * What the cap has to hold is the body once (an octet a byte) and the string it decodes
- * to (a code point four bytes). Until 2026-09-26 the interpreter held every octet in a
- * {@code long}, twice (the chunks and their join), plus five body-sized decode
- * intermediates: a 256 MiB body peaked at 6.2 GB of live heap, twenty-four times its size
+ * to, plus one transcode buffer on the JVM. Until 2026-09-26 an octet was a {@code long}
+ * on both: a 256 MiB body peaked at 6.2 GB of live heap on the interpreter (the chunks
+ * and their join, plus five body-sized decode intermediates) and 3.4 GB on the JVM
  * ({@code .kb/fetch-http.md}, "Throughput").
  */
 class ReadAllHeapBoundE2eTest {
@@ -40,6 +40,8 @@ class ReadAllHeapBoundE2eTest {
 	private static final String HEAP = "-Xmx" + (10 * (BODY_BYTES >> 20)) + "m";
 
 	private static final byte[] BODY = new byte[BODY_BYTES];
+
+	private static final String JAVA = ProcessHandle.current().info().command().orElse("java");
 
 	private static HttpServer origin;
 
@@ -66,6 +68,26 @@ class ReadAllHeapBoundE2eTest {
 
 	@Test
 	void theInterpreterReadsABinaryBodyInTenTimesItsSize() throws Exception {
+		String output = run(List.of(JAVA, HEAP, "-XX:+UseSerialGC", "-cp", System.getProperty("java.class.path"),
+				"am.ik.rontolisp.cli.RontoLispCli", program().toString()));
+		int[] decoded = decodeLeniently(BODY);
+		assertThat(output.trim()).isEqualTo(decoded.length + " " + decoded[decoded.length - 1]);
+	}
+
+	@Test
+	void theJvmBackendReadsABinaryBodyInTenTimesItsSize() throws Exception {
+		Path classes = Files.createDirectories(this.dir.resolve("classes"));
+		run(List.of(JAVA, "-cp", System.getProperty("java.class.path"), "am.ik.rontolisp.cli.RontoLispCli",
+				program().toString(), "-o", classes.resolve("ReadAll.class").toString()));
+		String output = run(List.of(JAVA, HEAP, "-XX:+UseSerialGC", "-cp", classes.toString(), "ReadAll"));
+		// A JVM string is UTF-16, so two decoded surrogates side by side read back as the
+		// one character they pair into.
+		int[] codePoints = decodeLeniently(BODY);
+		int[] decoded = new String(codePoints, 0, codePoints.length).codePoints().toArray();
+		assertThat(output.trim()).isEqualTo(decoded.length + " " + decoded[decoded.length - 1]);
+	}
+
+	private Path program() throws IOException {
 		Path program = this.dir.resolve("read-all.lisp");
 		Files.writeString(program, """
 				(let* ((res (rontolisp:await (rontolisp:fetch "http://127.0.0.1:%d/body")))
@@ -74,15 +96,15 @@ class ReadAllHeapBoundE2eTest {
 				  (princ " ")
 				  (princ (char-code (char s (1- (length s))))))
 				""".formatted(origin.getAddress().getPort()));
-		List<String> command = new ArrayList<>(
-				List.of(ProcessHandle.current().info().command().orElse("java"), HEAP, "-XX:+UseSerialGC", "-cp",
-						System.getProperty("java.class.path"), "am.ik.rontolisp.cli.RontoLispCli", program.toString()));
-		Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+		return program;
+	}
+
+	private static String run(List<String> command) throws Exception {
+		Process process = new ProcessBuilder(new ArrayList<>(command)).redirectErrorStream(true).start();
 		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 		assertThat(process.waitFor(5, TimeUnit.MINUTES)).as(output).isTrue();
 		assertThat(process.exitValue()).as(output).isZero();
-		int[] decoded = decodeLeniently(BODY);
-		assertThat(output.trim()).isEqualTo(decoded.length + " " + decoded[decoded.length - 1]);
+		return output;
 	}
 
 	/**

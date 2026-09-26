@@ -145,7 +145,10 @@ short, both decode to their OWN byte value as a one-character result, never a si
 encoding and a UTF-8-encoded surrogate are NOT rejected by the lenient rule (only the strict
 validator refuses them, and refusing falls through to the lenient arms) -- each decodes to the code
 point its bits assemble, since a CHARACTER admits any code point 0..`#x10FFFF` including surrogates
-(above). Consequence: `octets-to-string` then `string-to-octets` round-trips only for a WELL-FORMED,
+(above). Two of them side by side stay two characters on the interpreter and wasm, and read back as
+the one supplementary character they pair into on the JVM, whose strings are UTF-16
+(`.kb/async-await.md`, "`read-all` is prelude Lisp"). Consequence: `octets-to-string` then
+`string-to-octets` round-trips only for a WELL-FORMED,
 non-overlong, non-truncated input -- a malformed byte's lenient answer does not generally re-encode
 to the same bytes. **Encode is total** over every code point with no malformed case at all.
 

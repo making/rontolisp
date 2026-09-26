@@ -152,6 +152,29 @@ class JvmQuantizedMatrixTest {
 	}
 
 	@Test
+	void anOctetVectorAndAQuantizedMatrixAreToldApartWhereBothCanExist() throws Exception {
+		// Both are a byte[] on the JVM: the octet vector byte[]{8, e0, ...}, the matrix
+		// its
+		// format code first. Every door that takes either must read the tag -- a missed
+		// one reads an octet vector as a matrix header (or the reverse) without a word.
+		String program = """
+				(defparameter *m* (rontolisp:make-quantized-matrix 'q8-0 32))
+				(defparameter *o* (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 200 8)))
+				(defparameter *l* #8@(8 0 0 0))
+				""";
+		assertAgreedText(program + "(print (list (rontolisp:quantized-matrix-p *o*) (rontolisp:quantized-matrix-p *l*)"
+				+ " (rontolisp:quantized-matrix-p *m*) (arrayp *o*) (arrayp *m*) (typep *o* '(simple-array * (*)))"
+				+ " (array-element-type *o*) (length *o*) (aref *o* 1) (length *m*)))",
+				"(NIL NIL T T NIL T (UNSIGNED-BYTE 8) 3 200 32)");
+		assertAgreedText(program + "(print (list *o* *l* *m*))",
+				"(#(1 200 8) #(8 0 0 0) #<quantized-matrix q8-0 (32)>)");
+		assertAgreedText(
+				program + "(print (handler-case (rontolisp:dequantize *o* 'single-float)" + " (error (e) :refused)))",
+				":REFUSED");
+		assertAgreedText(program + "(setf (aref *o* 2) 300) (print (list (aref *o* 2) (reduce #'+ *l*)))", "(44 8)");
+	}
+
+	@Test
 	void arefDequantizesOnBothBackendsAndStoresAreRefused() throws Exception {
 		String program = fixture(3, 64, "single-float");
 		assertAgreedText(

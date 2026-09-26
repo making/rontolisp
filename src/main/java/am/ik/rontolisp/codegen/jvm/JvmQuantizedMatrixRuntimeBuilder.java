@@ -143,9 +143,12 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 	 * Builds the helpers.
 	 * @param cp the constant pool
 	 * @param selfClass the generated program class
+	 * @param octets whether an {@code (unsigned-byte 8)} vector -- the other
+	 * {@code byte[]}, whose slot 0 is {@link JvmIntArrayRuntimeBuilder#OCTET_TAG} -- can
+	 * exist, so the tests that take any value tell the two apart
 	 * @return the helper methods
 	 */
-	static List<ArrayMethod> build(ConstantPool cp, ClassConstant selfClass) {
+	static List<ArrayMethod> build(ConstantPool cp, ClassConstant selfClass, boolean octets) {
 		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
 		ClassConstant doubleClass = cp.addClass(cp.addUtf8("java/lang/Double"));
 		ClassConstant floatClass = cp.addClass(cp.addUtf8("java/lang/Float"));
@@ -200,7 +203,7 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		methods.add(buildDims(r));
 		methods.add(buildLength(r));
 		methods.add(buildToString(r));
-		methods.add(buildPredicate(r));
+		methods.add(buildPredicate(r, octets));
 		methods.add(buildQuant(r));
 		methods.add(buildScale(r));
 		methods.add(buildAlloc(r));
@@ -209,8 +212,8 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		methods.add(buildQuantizeBlocks(r));
 		methods.add(buildMake(r));
 		methods.add(buildQuantize(r));
-		methods.add(buildDequantize(r));
-		methods.add(buildRows(r));
+		methods.add(buildDequantize(r, octets));
+		methods.add(buildRows(r, octets));
 		return methods;
 	}
 
@@ -604,13 +607,27 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 		return method(r, TO_STRING, TO_STRING_DESC, 5, 3, a);
 	}
 
-	// _qmP(o): T for a byte[], nil otherwise.
-	private static ArrayMethod buildPredicate(Refs r) {
+	// Branches to notMatrix unless local slot holds a quantized matrix: a byte[] -- whose
+	// slot 0 is not the octet vector's tag, where one of those can exist.
+	private static void emitMatrixTest(JvmAsm a, Refs r, int slot, int notMatrix, boolean octets) {
+		a.aload(slot);
+		a.instanceOf(r.byteArrayClass());
+		a.branch(Opcode.IFEQ, notMatrix);
+		if (octets) {
+			a.aload(slot);
+			a.checkcast(r.byteArrayClass());
+			a.iconst(0);
+			a.baload();
+			a.iconst(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+			a.branch(Opcode.IF_ICMPEQ, notMatrix);
+		}
+	}
+
+	// _qmP(o): T for a quantized matrix, nil otherwise.
+	private static ArrayMethod buildPredicate(Refs r, boolean octets) {
 		JvmAsm a = new JvmAsm();
 		int no = a.label();
-		a.aload(0);
-		a.instanceOf(r.byteArrayClass());
-		a.branch(Opcode.IFEQ, no);
+		emitMatrixTest(a, r, 0, no, octets);
 		a.ldcString(r.cp().addString("T"));
 		a.areturn();
 		a.bind(no);
@@ -1249,13 +1266,14 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 	// _qmDequantize(m, element-type): a fresh packed array of the width named, every
 	// element q * scale. Locals: 0=m, 1=etype, 2=a, 3=rank, 4=total, 5=arr, 6=off, 7=i,
 	// 8=k, 9=dim, 10=name.
-	private static ArrayMethod buildDequantize(Refs r) {
+	private static ArrayMethod buildDequantize(Refs r, boolean octets) {
 		String op = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.DEQUANTIZE);
 		JvmAsm a = new JvmAsm();
 		int isMatrix = a.label();
-		a.aload(0);
-		a.instanceOf(r.byteArrayClass());
-		a.branch(Opcode.IFNE, isMatrix);
+		int notMatrix = a.label();
+		emitMatrixTest(a, r, 0, notMatrix, octets);
+		a.branch(Opcode.GOTO, isMatrix);
+		a.bind(notMatrix);
 		throwMessage(a, r, op + ": expects a quantized matrix");
 		a.bind(isMatrix);
 		a.aload(0);
@@ -1342,13 +1360,14 @@ final class JvmQuantizedMatrixRuntimeBuilder {
 	// _qmRows(m, rows): a fresh rank-2 matrix gathering the rows named by the cons list
 	// of Longs, one array copy a row -- the source's own blocks. Locals: 0=m, 1=rows,
 	// 2=a, 3=srcRows, 4=cols, 5=rowBytes, 6=srcOff, 7=count, 8=cur, 9=out, 10=i, 11=idx.
-	private static ArrayMethod buildRows(Refs r) {
+	private static ArrayMethod buildRows(Refs r, boolean octets) {
 		String op = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZED_ROWS);
 		JvmAsm a = new JvmAsm();
 		int isMatrix = a.label();
-		a.aload(0);
-		a.instanceOf(r.byteArrayClass());
-		a.branch(Opcode.IFNE, isMatrix);
+		int notMatrix = a.label();
+		emitMatrixTest(a, r, 0, notMatrix, octets);
+		a.branch(Opcode.GOTO, isMatrix);
+		a.bind(notMatrix);
 		throwMessage(a, r, op + ": expects a quantized matrix");
 		a.bind(isMatrix);
 		a.aload(0);

@@ -138,7 +138,8 @@ final class JvmFloatArrayRuntimeBuilder {
 	 * which exists exactly when this record is non-null.
 	 */
 	private record Quantized(ClassConstant byteArrayClass, MethodrefConstant aref1, MethodrefConstant aref2,
-			MethodrefConstant arefN, MethodrefConstant dims, MethodrefConstant length, MethodrefConstant qmInt) {
+			MethodrefConstant arefN, MethodrefConstant dims, MethodrefConstant length, MethodrefConstant qmInt,
+			boolean octets) {
 
 	}
 
@@ -163,11 +164,15 @@ final class JvmFloatArrayRuntimeBuilder {
 	 * @param objectClass the {@code java/lang/Object} class constant
 	 * @param objectArrayClass the {@code [Ljava/lang/Object;} class constant
 	 * @param selfClass the generated program class (for self-referencing invokestatic)
+	 * @param quantized whether a quantized matrix can exist, so these helpers carry its
+	 * {@code byte[]} arms
+	 * @param octets whether an {@code (unsigned-byte 8)} vector -- also a {@code byte[]}
+	 * -- can exist, so those arms test the tag that tells the two apart
 	 * @return the helper methods
 	 */
 	static List<ArrayMethod> build(ConstantPool cp, ClassConstant objectClass, ClassConstant objectArrayClass,
 			ClassConstant selfClass, @Nullable MethodrefConstant written, @Nullable MethodrefConstant materialize,
-			boolean quantized) {
+			boolean quantized, boolean octets) {
 		ClassConstant doubleArrayClass = cp.addClass(cp.addUtf8("[D"));
 		ClassConstant floatArrayClass = cp.addClass(cp.addUtf8("[F"));
 		ClassConstant shortArrayClass = cp.addClass(cp.addUtf8("[S"));
@@ -223,8 +228,8 @@ final class JvmFloatArrayRuntimeBuilder {
 				self(cp, selfClass, JvmQuantizedMatrixRuntimeBuilder.DIMS, JvmQuantizedMatrixRuntimeBuilder.UNARY_DESC),
 				self(cp, selfClass, JvmQuantizedMatrixRuntimeBuilder.LENGTH,
 						JvmQuantizedMatrixRuntimeBuilder.UNARY_DESC),
-				self(cp, selfClass, JvmQuantizedMatrixRuntimeBuilder.INT, JvmQuantizedMatrixRuntimeBuilder.INT_DESC))
-				: null;
+				self(cp, selfClass, JvmQuantizedMatrixRuntimeBuilder.INT, JvmQuantizedMatrixRuntimeBuilder.INT_DESC),
+				octets) : null;
 		Refs refs = new Refs(doubleArrayClass, floatArrayClass, shortArrayClass, bf16Value, bf16Bits, ckBound, qm);
 
 		List<ArrayMethod> methods = new ArrayList<>();
@@ -425,8 +430,10 @@ final class JvmFloatArrayRuntimeBuilder {
 
 	/**
 	 * The quantized matrix's arm, ahead of the width dispatch: {@code if (arr instanceof
-	 * byte[]) body}, where the body leaves the method. Nothing when no quantized matrix
-	 * can exist in the program, so such a program's helpers keep their bytes.
+	 * byte[]) body}, where the body leaves the method -- and, where an
+	 * {@code (unsigned-byte 8)} vector (the other {@code byte[]}) can exist, only when
+	 * slot 0 is not that vector's tag. Nothing when no quantized matrix can exist in the
+	 * program, so such a program's helpers keep their bytes.
 	 */
 	private static void emitQuantizedArm(JvmAsm a, Refs refs, int arr, java.util.function.Consumer<Quantized> body) {
 		Quantized qm = refs.quantized();
@@ -437,6 +444,14 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(arr);
 		a.instanceOf(qm.byteArrayClass());
 		a.branch(Opcode.IFEQ, next);
+		if (qm.octets()) {
+			a.aload(arr);
+			a.checkcast(qm.byteArrayClass());
+			a.iconst(0);
+			a.baload();
+			a.iconst(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+			a.branch(Opcode.IF_ICMPEQ, next);
+		}
 		body.accept(qm);
 		a.bind(next);
 	}
@@ -1170,7 +1185,9 @@ final class JvmFloatArrayRuntimeBuilder {
 		});
 		a.ldcString(cp.addString("T"));
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC), 1, 1, a.finish());
+		// 2: the quantized arm's tag test (a byte[] slot and the tag) where an octet
+		// vector can exist.
+		return new ArrayMethod(cp.addUtf8(ELEMENT_TYPE), cp.addUtf8(ELEMENT_TYPE_DESC), 2, 1, a.finish());
 	}
 
 	// _fvRequireGeneral(o): the fill-pointer-surface guard for a packed float array -- a
