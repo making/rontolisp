@@ -28430,9 +28430,11 @@ public final class LispMacroExpander {
 		LispVal fpExpr = null;
 		LispVal displacedToExpr = null;
 		LispVal displacedOffsetExpr = null;
+		LispVal contentsChoice = null;
 		for (int i = 3; i + 1 < parts.size(); i += 2) {
 			if (parts.get(i) instanceof LispSymbol kw) {
 				switch (kw.name()) {
+					case ADJUST_CONTENTS_P_KEYWORD -> contentsChoice = parts.get(i + 1);
 					case LispNames.INITIAL_ELEMENT_KEYWORD -> {
 						initExpr = parts.get(i + 1);
 						initGiven = true;
@@ -28500,27 +28502,16 @@ public final class LispMacroExpander {
 		// adjustment answers has to remember what the original did, which is what the
 		// %array-adopt-element-type stamp carries over. (An :adjustable array keeps its
 		// own identity through %array-become and never reads the copy's stamp.)
-		List<LispVal> makeParts = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.MAKE_ARRAY), ndl));
-		if (icExpr != null) {
-			// :initial-contents fills the WHOLE result (like make-array), so no :initial-
-			// element and no overlap copy. The RESULT's element type is the adjusted
-			// array's, passed as a RUNTIME :element-type so make-array builds the right
-			// representation (a character vector for a char source) rather than
-			// defaulting
-			// to a boxed `t` array -- otherwise the copy would stop answering stringp.
-			makeParts.add(new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD));
-			makeParts.add(callOf(LispNames.ARRAY_ELEMENT_TYPE, a));
-			makeParts.add(new LispSymbol(LispNames.INITIAL_CONTENTS_KEYWORD));
-			makeParts.add(icExpr);
+		LispVal fresh;
+		if (contentsChoice != null) {
+			// The function value's one expansion (BuiltinFunctionWrappers): which of the
+			// two fills applies is known only at run time.
+			fresh = makeIf(contentsChoice, adjustedArrayMake(a, ndl, fp, icExpr, null),
+					adjustedArrayMake(a, ndl, fp, null, initExpr));
 		}
 		else {
-			makeParts.add(new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD));
-			makeParts.add(initExpr != null ? initExpr : callOf(LispNames.ARRAY_DEFAULT_ELEMENT, a));
+			fresh = adjustedArrayMake(a, ndl, fp, icExpr, initExpr);
 		}
-		makeParts.add(new LispSymbol(LispNames.FILL_POINTER_KEYWORD));
-		makeParts.add(fp);
-		makeParts.add(new LispSymbol(LispNames.ADJUSTABLE_KEYWORD));
-		makeParts.add(callOf(LispNames.ADJUSTABLE_ARRAY_P, a));
 		// `a` un-displaces (SBCL 2.2.9) as PART of its own binding, before any later
 		// binding reads it: its current view contents become its own storage and the
 		// displacement drops, in place. Later than this the ordering would matter --
@@ -28536,19 +28527,56 @@ public final class LispMacroExpander {
 						listToCons(List.of(ndl,
 								makeIf(callOf(LispNames.LISTP, nd), nd, mvCall(LispNames.CONS, nd, LispNil.INSTANCE)))),
 						listToCons(List.of(od, callOf(LispNames.ARRAY_DIMENSIONS, a))), listToCons(List.of(fp, fpInit)),
-						listToCons(
-								List.of(newArr, mvCall(LispNames.ARRAY_ADOPT_ELEMENT_TYPE, listToCons(makeParts), a))),
+						listToCons(List.of(newArr, mvCall(LispNames.ARRAY_ADOPT_ELEMENT_TYPE, fresh, a))),
 						listToCons(List.of(total, callOf(LispNames.ARRAY_TOTAL_SIZE, newArr)))));
 		LispVal rankCheck = makeIf(mvCall(LispNames.EQ, callOf(LispNames.LENGTH, ndl), callOf(LispNames.LENGTH, od)),
 				LispNil.INSTANCE, mvCall(LispNames.ERROR, new LispString("adjust-array: rank mismatch")));
 		// The overlap copy is skipped for :initial-contents, which fills the result
 		// wholesale; both backends need a no-op there, and the form below only drives the
 		// (unused when absent) copy.
-		LispVal copyLoop = icExpr != null ? LispNil.INSTANCE : adjustArrayCopyLoop(a, ndl, od, newArr, total);
+		LispVal copyLoop = contentsChoice != null
+				? makeIf(contentsChoice, LispNil.INSTANCE, adjustArrayCopyLoop(a, ndl, od, newArr, total))
+				: icExpr != null ? LispNil.INSTANCE : adjustArrayCopyLoop(a, ndl, od, newArr, total);
 		LispVal result = makeIf(callOf(LispNames.ADJUSTABLE_ARRAY_P, a), mvCall(LispNames.ARRAY_BECOME, a, newArr),
 				newArr);
 		return listToCons(
 				List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), rankCheck, copyLoop, result));
+	}
+
+	/**
+	 * The internal keyword whose value picks, at run time, between an adjustment's
+	 * {@code :initial-contents} and its {@code :initial-element} -- both of which the
+	 * call then carries -- in ONE expansion. The {@code #'adjust-array} function value
+	 * writes it (its keywords are a run-time plist), where two expansions would double
+	 * the element-copy loop the wrapper carries.
+	 */
+	public static final String ADJUST_CONTENTS_P_KEYWORD = ":%CONTENTS-P";
+
+	// The fresh array of an adjustment: (make-array ndl <fill> :fill-pointer fp
+	// :adjustable (adjustable-array-p a)). :initial-contents fills the WHOLE result (like
+	// make-array), so it takes no :initial-element and the caller skips the overlap
+	// copy; the RESULT's element type is then the adjusted array's, passed as a RUNTIME
+	// :element-type so make-array builds the right representation (a character vector
+	// for a char source) rather than defaulting to a boxed `t` array -- otherwise the
+	// copy would stop answering stringp.
+	private static LispVal adjustedArrayMake(LispSymbol a, LispSymbol ndl, LispSymbol fp, @Nullable LispVal icExpr,
+			@Nullable LispVal initExpr) {
+		List<LispVal> makeParts = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.MAKE_ARRAY), ndl));
+		if (icExpr != null) {
+			makeParts.add(new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD));
+			makeParts.add(callOf(LispNames.ARRAY_ELEMENT_TYPE, a));
+			makeParts.add(new LispSymbol(LispNames.INITIAL_CONTENTS_KEYWORD));
+			makeParts.add(icExpr);
+		}
+		else {
+			makeParts.add(new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD));
+			makeParts.add(initExpr != null ? initExpr : callOf(LispNames.ARRAY_DEFAULT_ELEMENT, a));
+		}
+		makeParts.add(new LispSymbol(LispNames.FILL_POINTER_KEYWORD));
+		makeParts.add(fp);
+		makeParts.add(new LispSymbol(LispNames.ADJUSTABLE_KEYWORD));
+		makeParts.add(callOf(LispNames.ADJUSTABLE_ARRAY_P, a));
+		return listToCons(makeParts);
 	}
 
 	// The element-copy loop of expandAdjustArray: for every row-major index of the new
@@ -29189,6 +29217,9 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandUpgradedComplexPartType(LispCons cons) {
 		List<LispVal> parts = cons.toList();
+		if (parts.size() == 3) {
+			return withEnvironmentEvaluated(parts, "__ucpt_a");
+		}
 		if (parts.size() != 2) {
 			throw new UnsupportedOperationException("upgraded-complex-part-type expects a type specifier");
 		}
@@ -29923,6 +29954,70 @@ public final class LispMacroExpander {
 	private static boolean isStringDesignatorCoercion(LispVal form) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
 				&& LispNames.STRING.equals(op.name()) && cons.isProperList() && cons.toList().size() == 2;
+	}
+
+	/**
+	 * Lowers a {@code string-upcase} / {@code string-downcase} /
+	 * {@code string-capitalize} call that carries {@code :start} / {@code :end} onto the
+	 * one-argument conversion every backend compiles: only the bounded substring is
+	 * converted, and the text around it is kept, as CL specifies.
+	 * {@code string-capitalize} starts a word at {@code start} whatever precedes it,
+	 * which is what converting the substring alone gives (SBCL answers the same).
+	 *
+	 * <pre>
+	 * (string-upcase x :start a :end b) ->
+	 * (let* ((__bcc_s (string x)) (__bcc_k0 a) (__bcc_k1 b)
+	 *        (__bcc_st __bcc_k0) (__bcc_en (or __bcc_k1 (length __bcc_s))))
+	 *   (%string-concat (%string-concat (subseq __bcc_s 0 __bcc_st)
+	 *                                   (string-upcase (subseq __bcc_s __bcc_st __bcc_en)))
+	 *                   (subseq __bcc_s __bcc_en)))
+	 * </pre>
+	 *
+	 * The keyword values are evaluated in the order written, after the string, and the
+	 * first occurrence of a keyword counts; a malformed tail is the {@code program-error}
+	 * every keyword operator reports. {@code %string-concat} rather than
+	 * {@code concatenate}: this runs inside the expression compilers, after the scans
+	 * that gate {@code concatenate}'s helpers.
+	 * @param cons the conversion call
+	 * @return the lowered form, or {@code null} for a call without keywords
+	 */
+	public static @Nullable LispVal expandBoundedCaseConversion(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() <= 2 || !(parts.get(0) instanceof LispSymbol op)) {
+			return null;
+		}
+		LispVal keywordError = keywordTailError(cons, op.name(), parts, 2, LispNames.START_KEYWORD,
+				LispNames.END_KEYWORD);
+		if (keywordError != null) {
+			return keywordError;
+		}
+		LispSymbol s = new LispSymbol("__bcc_s");
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(listToCons(List.of(s, callOf(LispNames.STRING, parts.get(1)))));
+		LispVal start = new LispInteger(0);
+		LispVal end = null;
+		for (int i = 2; i + 1 < parts.size(); i += 2) {
+			LispSymbol value = new LispSymbol("__bcc_k" + (i / 2 - 1));
+			bindings.add(listToCons(List.of(value, parts.get(i + 1))));
+			String key = ((LispSymbol) parts.get(i)).name();
+			if (LispNames.START_KEYWORD.equals(key) && start instanceof LispInteger) {
+				start = value;
+			}
+			else if (LispNames.END_KEYWORD.equals(key) && end == null) {
+				end = value;
+			}
+		}
+		LispSymbol st = new LispSymbol("__bcc_st");
+		LispSymbol en = new LispSymbol("__bcc_en");
+		LispVal length = callOf(LispNames.LENGTH, s);
+		bindings.add(listToCons(List.of(st, start)));
+		bindings.add(listToCons(
+				List.of(en, end == null ? length : listToCons(List.of(new LispSymbol(LispNames.OR), end, length)))));
+		LispVal converted = callOf(op.name(), mvCall(LispNames.SUBSEQ, s, st, en));
+		LispVal body = mvCall(LispNames.STRING_CONCAT,
+				mvCall(LispNames.STRING_CONCAT, mvCall(LispNames.SUBSEQ, s, new LispInteger(0), st), converted),
+				mvCall(LispNames.SUBSEQ, s, en));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), body));
 	}
 
 	/**
@@ -36060,7 +36155,9 @@ public final class LispMacroExpander {
 	 * Whether any {@code file-position} call in the program reaches for the stream's
 	 * {@code file-length} through {@link #rewriteFilePositionArg} (a {@code :end}, or a
 	 * computed position that may be one) -- the JVM backend's {@code _fileLength} gate
-	 * must then be on although the source never names {@code file-length}.
+	 * must then be on although the source never names {@code file-length}. A
+	 * {@code #'file-position} counts too: the function value forwards a computed
+	 * position.
 	 * @param program the forms the backend compiles
 	 * @return whether the rewrite can introduce a {@code file-length} call
 	 */
@@ -36078,6 +36175,11 @@ public final class LispMacroExpander {
 			return false;
 		}
 		List<LispVal> parts = cons.toList();
+		if (parts.size() == 2 && parts.get(0) instanceof LispSymbol fn && LispNames.FUNCTION.equals(fn.name())
+				&& parts.get(1) instanceof LispSymbol named
+				&& LispNames.FILE_POSITION.equals(unqualifiedClMember(named.name()))) {
+			return true;
+		}
 		if (parts.size() == 3 && parts.get(0) instanceof LispSymbol op
 				&& LispNames.FILE_POSITION.equals(unqualifiedClMember(op.name()))
 				&& filePositionArgNeedsResolving(parts.get(2))
@@ -39119,6 +39221,40 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * A call {@code (op a1 ... an env)} without its trailing ENVIRONMENT argument, which
+	 * nothing here consults (there is one global environment, as the interpreter's
+	 * {@code &environment} parameter is nil): {@code (op a1 ... an)} for a literal nil,
+	 * else {@code (let ((t1 a1) ...) env (op t1 ...))}, so {@code env} is still evaluated
+	 * after the arguments before it. A quoted or self-evaluating argument stays in place,
+	 * which keeps a literal type specifier literal for the static type test.
+	 * @param parts the call's operator and arguments, the environment last
+	 * @param prefix the temporaries' name prefix
+	 * @return the call without the environment
+	 */
+	private static LispVal withEnvironmentEvaluated(List<LispVal> parts, String prefix) {
+		List<LispVal> call = new ArrayList<>(parts.subList(0, parts.size() - 1));
+		LispVal environment = parts.getLast();
+		if (environment instanceof LispNil) {
+			return listToCons(call);
+		}
+		List<LispVal> bindings = new ArrayList<>();
+		for (int i = 1; i < call.size(); i++) {
+			LispVal arg = call.get(i);
+			boolean constant = arg instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+					&& LispNames.QUOTE.equals(q.name())
+					|| !(arg instanceof LispCons) && !(arg instanceof LispSymbol sym && !sym.name().startsWith(":"));
+			if (!constant) {
+				LispSymbol temp = new LispSymbol(prefix + i);
+				bindings.add(listToCons(List.of(temp, arg)));
+				call.set(i, temp);
+			}
+		}
+		LispVal body = makeProgn(List.of(environment, listToCons(call)));
+		return bindings.isEmpty() ? body
+				: listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(bindings), body));
+	}
+
+	/**
 	 * Expands {@code (typep value 'type)} through the shared static type-test builder.
 	 * Lite: the type specifier must be a literal (quoted) type -- the same set
 	 * {@code typecase} supports plus the registered classes; a non-literal specifier is
@@ -39147,6 +39283,9 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandTypep(LispCons cons, ClosRegistry closRegistry, boolean inlineRuntimeDispatch) {
 		List<LispVal> parts = cons.toList();
+		if (parts.size() == 4) {
+			return withEnvironmentEvaluated(parts, "__typep_a");
+		}
 		if (parts.size() != 3) {
 			throw new IllegalArgumentException(LispNames.TYPEP + " expects a value and a quoted type specifier");
 		}

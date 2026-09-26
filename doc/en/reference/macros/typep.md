@@ -1,8 +1,8 @@
 # typep
 
-`(typep object 'type-specifier)`
+`(typep object 'type-specifier &optional environment)`
 
-Tests whether `object` is of the given type. Lite: the type specifier is normally a literal (quoted) type — the same set [`typecase`](typecase.md) supports (atomic names, registered classes, zero-parameter user [`deftype`](deftype.md) names, and the compound specifiers `(or ...)`/`(and ...)`/`(not ...)`/`(member ...)`/`(eql ...)`/`(satisfies ...)`/ranged numerics/`(unsigned-byte n)`/`(signed-byte n)`/the array family); an unknown specifier matches nothing.
+Tests whether `object` is of the given type. Lite: the type specifier is normally a literal (quoted) type — the same set [`typecase`](typecase.md) supports (atomic names, registered classes, zero-parameter user [`deftype`](deftype.md) names, and the compound specifiers `(or ...)`/`(and ...)`/`(not ...)`/`(member ...)`/`(eql ...)`/`(satisfies ...)`/ranged numerics/`(unsigned-byte n)`/`(signed-byte n)`/the array family); an unknown specifier matches nothing. The optional `environment` is evaluated and ignored: there is one global environment.
 
 The array family is `(array ELEMENT-TYPE DIMENSIONS)`, `(simple-array ELEMENT-TYPE DIMENSIONS)`, `(vector ELEMENT-TYPE SIZE)` and `(simple-vector SIZE)` — the specifiers [`type-of`](../functions/type-of.md) builds. Both halves are checked: the element type against the array's upgraded [`array-element-type`](../functions/array-element-type.md), the dimensions against its own. `DIMENSIONS` may be a list (`*` in any position means "any size"), a bare rank, `nil` for a rank-0 array, or `*`; both `vector` spellings pin the rank to 1.
 

@@ -5084,6 +5084,49 @@ class JvmLispCompilerTest {
 				(T 3 1 T (1 2))""");
 	}
 
+	// A built-in's function VALUE takes the operator's standard lambda list: the
+	// optional and keyword arguments a direct call takes reach the call-position
+	// lowering through the wrapper (compiler/BuiltinFunctionWrappers), and a direct
+	// string-upcase :start / :end and typep's environment are lowered rather than
+	// dropped or refused. The comparisons and the logand trio keep two required
+	// parameters, so the two-argument call conses no rest list: one or zero arguments
+	// through the value stay a wrong count here, where the interpreter answers.
+	@Test
+	void compileAndRunBuiltinFunctionValuesTakeTheStandardLambdaList() throws Exception {
+		assertThat(compileAndRun(
+				"""
+						(defun wv-call (f &rest a) (apply f a))
+						(print (list (wv-call #'< 1 2 3) (wv-call #'< 1 3 2) (wv-call #'/= 1 2 1) (wv-call #'char< #\\a #\\b #\\c)
+						             (wv-call #'char-equal #\\a #\\A #\\a) (wv-call #'logand 1 3 7) (wv-call #'logxor 1 2 4 8)))
+						(print (list (wv-call #'digit-char-p #\\f 16) (wv-call #'float 1 1.0d0) (wv-call #'gethash 1 (make-hash-table) 'none)
+						             (wv-call #'pairlis '(a) '(1) '((b . 2))) (wv-call #'typep 1 'integer nil)
+						             (wv-call #'constantp 1 nil) (wv-call #'upgraded-complex-part-type 'double-float nil)))
+						(print (list (wv-call #'parse-integer "ff" :radix 16) (wv-call #'parse-integer "a12b" :start 1 :end 3)
+						             (wv-call #'make-string 2 :initial-element #\\z) (wv-call #'string-upcase "abcd" :start 1 :end 3)
+						             (wv-call #'string-capitalize "one two" :start 4) (string-downcase "ABCD" :end 2) (typep 1 'integer nil)))
+						(print (list (let ((v (make-array 0 :fill-pointer 0 :adjustable t)))
+						               (wv-call #'vector-push-extend 1 v 8)
+						               (array-total-size v))
+						             (wv-call #'adjust-array (vector 1 2) 3 :initial-element 0)
+						             (wv-call #'adjust-array (vector 1 2) 3 :initial-contents '(a b c))
+						             (wv-call #'adjust-array (make-array 2 :adjustable t) 2 :displaced-to (vector 7 8 9)
+						                      :displaced-index-offset 1)))
+						(print (list (with-output-to-string (s) (wv-call #'write-string "abcdef" s :start 1 :end 3))
+						             (with-input-from-string (s "") (wv-call #'read-char-no-hang s nil :eof))
+						             (symbolp (wv-call #'gensym "WV")) (symbol-name (wv-call #'intern "WV-SYM" "KEYWORD"))))
+						(print (handler-case (wv-call #'< 1) (program-error (c) (princ-to-string c))))
+						(print (handler-case (wv-call #'logand) (program-error (c) (princ-to-string c))))
+						"""))
+			.isEqualTo("""
+					(T NIL NIL T T 1 15)
+					(15 1.0 NONE ((A . 1) (B . 2)) T T DOUBLE-FLOAT)
+					(255 12 "zz" "aBCd" "one Two" "abCD" T)
+					(8 #(1 2 0) #(A B C) #(8 9))
+					("bc" :EOF T "WV-SYM")
+					"< expects at least 2 arguments, got 1"
+					"LOGAND expects at least 2 arguments, got 0\"""");
+	}
+
 	// Inside a compiled eval a wrong count is the interpreter's program-error too: a
 	// registered function gets EVERY argument form evaluated and the spread dispatcher
 	// judges the count (evaluating exactly the registered arity answered (car 1 2) with

@@ -3873,12 +3873,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// name-registry gate below read the user's designators only
 		// (Ctx.injectedRuntimeBody).
 		Set<String> injectedRuntimeDefuns = new HashSet<>();
-		// gethash/find-symbol/... take their full lambda list and publish their second
-		// value only in a program that names them as a designator.
+		// gethash/find-symbol/... publish their second value only in a program that
+		// names them as a designator.
 		Set<String> designatedProducers = BuiltinFunctionWrappers.designatedValueProducers(program,
 				closRegistry.conditionReports().values());
-		List<LispVal> wrappers = BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes,
-				designatedProducers);
+		List<LispVal> wrappers = BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes);
 		if (LispMacroExpander.declaresMvSpill(program)) {
 			// A wrapper is a function body like any other: its tail settles the
 			// multiple-value channel (the defuns' tails were settled by

@@ -18693,6 +18693,41 @@ cases:
       (:SIMPLE "APPLY: last argument must be a list")
       ((1 2 3) 10 NIL)
 
+  # A built-in's function VALUE takes the operator's standard lambda list: the optional
+  # and keyword arguments reach the call-position lowering through the wrapper, and a
+  # direct string-downcase :end / typep environment is lowered, not dropped or refused.
+  # (The comparisons' and logand's one- and zero-argument VALUE calls are left out: the
+  # compiled wrappers keep two required parameters, .kb/error-handling.md.)
+  - name: builtin-function-values-take-the-standard-lambda-list
+    source: |
+      (defun ci-wv-call (f &rest a) (apply f a))
+      (print (list (ci-wv-call #'< 1 2 3) (ci-wv-call #'< 1 3 2) (ci-wv-call #'/= 1 2 1) (ci-wv-call #'char< #\a #\b #\c)
+                   (ci-wv-call #'char-equal #\a #\A #\a) (ci-wv-call #'logand 1 3 7) (ci-wv-call #'logxor 1 2 4 8)))
+      (print (list (ci-wv-call #'digit-char-p #\f 16) (ci-wv-call #'float 1 1.0d0)
+                   (ci-wv-call #'gethash 1 (make-hash-table) 'none) (ci-wv-call #'pairlis '(a) '(1) '((b . 2)))
+                   (ci-wv-call #'typep 1 'integer nil) (ci-wv-call #'constantp 1 nil)
+                   (ci-wv-call #'upgraded-complex-part-type 'double-float nil)))
+      (print (list (ci-wv-call #'parse-integer "ff" :radix 16) (ci-wv-call #'parse-integer "a12b" :start 1 :end 3)
+                   (ci-wv-call #'make-string 2 :initial-element #\z) (ci-wv-call #'string-upcase "abcd" :start 1 :end 3)
+                   (ci-wv-call #'string-capitalize "one two" :start 4) (string-downcase "ABCD" :end 2)
+                   (typep 1 'integer nil)))
+      (print (list (let ((v (make-array 0 :fill-pointer 0 :adjustable t)))
+                     (ci-wv-call #'vector-push-extend 1 v 8)
+                     (array-total-size v))
+                   (ci-wv-call #'adjust-array (vector 1 2) 3 :initial-element 0)
+                   (ci-wv-call #'adjust-array (vector 1 2) 3 :initial-contents '(a b c))
+                   (ci-wv-call #'adjust-array (make-array 2 :adjustable t) 2 :displaced-to (vector 7 8 9)
+                               :displaced-index-offset 1)))
+      (print (list (with-output-to-string (s) (ci-wv-call #'write-string "abcdef" s :start 1 :end 3))
+                   (with-input-from-string (s "") (ci-wv-call #'read-char-no-hang s nil :eof))
+                   (symbolp (ci-wv-call #'gensym "WV")) (symbol-name (ci-wv-call #'intern "WV-SYM" "KEYWORD"))))
+    expected: |
+      (T NIL NIL T T 1 15)
+      (15 1.0 NONE ((A . 1) (B . 2)) T T DOUBLE-FLOAT)
+      (255 12 "zz" "aBCd" "one Two" "abCD" T)
+      (8 #(1 2 0) #(A B C) #(8 9))
+      ("bc" :EOF T "WV-SYM")
+
   # A DIRECT call of a wrapped built-in with a count its call shape rules out is the
   # interpreter's program-error at run time, its arguments evaluated first, with a
   # compile-time warning (compiler/BuiltinCallArity): the compiled lowerings dropped a
