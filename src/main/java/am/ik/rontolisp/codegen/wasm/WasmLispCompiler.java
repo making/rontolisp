@@ -4131,6 +4131,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		// bare `unreachable` that cites no bytes.
 		WasmOperandTypes.Texts operandTexts = ehMode
 				? WasmOperandTypes.Texts.intern(stringTable, operandTypeErrorPossible) : null;
+		// _subseq's bounds-error text (todo a42), interned HERE for the same reason as
+		// operandTexts above: buildSubseqBody runs after the data segment's content is
+		// fixed. EH mode only: outside it the check is a bare `unreachable`.
+		StringTable.StringEntry subseqBoundsPrefix = ehMode
+				? stringTable.addBodyString("\"" + LispNames.SUBSEQ + ": invalid bounds \"") : null;
+		StringTable.StringEntry subseqBoundsComma = ehMode ? stringTable.addBodyString("\", \"") : null;
+		StringTable.StringEntry subseqBoundsForLength = ehMode ? stringTable.addBodyString("\" for string of length \"")
+				: null;
 		final List<LispVal> spelledProgram = program;
 		WasmOperandTypes.Operators operandOperators = ehMode
 				? WasmOperandTypes.Operators.place(stringTable, name -> programUsesSymbol(spelledProgram, name))
@@ -7816,7 +7824,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmStringRuntimeBuilder.buildCaseConvertBody(true))
 					.addFunction(WasmStringRuntimeBuilder.buildCaseConvertBody(false))
 					.addFunction(WasmStringRuntimeBuilder.buildCapitalizeBody())
-					.addFunction(WasmStringRuntimeBuilder.buildSubseqBody(this.usesIdentityHashTables))
+					.addFunction(WasmStringRuntimeBuilder.buildSubseqBody(this.usesIdentityHashTables, ehMode,
+							subseqBoundsPrefix, subseqBoundsComma, subseqBoundsForLength))
 					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(false, stringTable))
 					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(true, stringTable))
 					.addFunction(WasmStringRuntimeBuilder.buildTrimBody())

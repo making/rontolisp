@@ -15,6 +15,7 @@ import am.ik.rontolisp.CharacterFilePositionFixture;
 import am.ik.rontolisp.MethodedBuiltinFixture;
 import am.ik.rontolisp.PeekPushbackFixture;
 import am.ik.rontolisp.SequenceBoundsFixture;
+import am.ik.rontolisp.SubseqBoundsFixture;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.ArrayElementTypes;
@@ -1966,6 +1967,19 @@ class LispEvaluatorTest {
 	void evalSubseq() {
 		assertThat(eval("(subseq \"hello world\" 6)")).isEqualTo(new LispString("world"));
 		assertThat(eval("(subseq \"hello world\" 0 5)")).isEqualTo(new LispString("hello"));
+	}
+
+	@Test
+	void subseqSignalsInvalidBoundsOnEveryBackend() {
+		// A start < 0, an end past the string's length, or start > end are all one
+		// report -- the JVM twin used to raise a raw StringIndexOutOfBoundsException and
+		// wasm silently truncated instead of signalling (todo a42).
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(SubseqBoundsFixture.PROGRAM)) {
+			evaluator.eval(expr);
+		}
+		assertThat(baos.toString().trim()).isEqualTo(SubseqBoundsFixture.EXPECTED);
 	}
 
 	// There is no f32 SCALAR: a single-float array's element crosses a double on the way
@@ -16251,6 +16265,17 @@ class LispEvaluatorTest {
 			.hasMessageContaining("prefix must be a string");
 		assertThatThrownBy(() -> evalMulti("(gensym \"a\" \"b\")")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("at most 1 argument");
+	}
+
+	@Test
+	void gensymAcceptsANonNegativeIntegerSuffix() {
+		// CL's other gensym shape: the integer IS the suffix (under the default "G"
+		// prefix) and does not consume the counter -- the (gensym) either side of
+		// (gensym 42) still gets consecutive numbers (todo a42).
+		assertThat(evalMulti("(list (symbol-name (gensym)) (symbol-name (gensym 42)) (symbol-name (gensym)))").print())
+			.isEqualTo("(\"G1\" \"G42\" \"G2\")");
+		assertThatThrownBy(() -> evalMulti("(gensym -1)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("non-negative integer");
 	}
 
 	@Test

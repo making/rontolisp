@@ -4294,18 +4294,28 @@ public final class Environment implements Scope {
 		// gensym: a per-environment counter; the result is an ordinary symbol (rontolisp
 		// has no uninterned symbols) whose "#:" prefix keeps it out of the way of
 		// user-written names. The compilers require a literal string prefix; here the
-		// prefix is any runtime string.
+		// prefix is any runtime string. A non-negative integer argument is CL's other
+		// shape: it is the suffix itself (under the default "G" prefix), and it does not
+		// touch the counter -- (gensym 5) is #:G5, and the very next (gensym) still uses
+		// the count it would have without that call (todo a42).
 		AtomicLong gensymCounter = new AtomicLong();
 		env.defineFunction(LispNames.GENSYM, new LispFunction(LispNames.GENSYM, args -> {
 			if (args.size() > 1) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						LispNames.GENSYM + " expects at most 1 argument, got " + args.size());
 			}
+			if (args.size() == 1 && args.get(0) instanceof LispInteger n) {
+				if (n.value() < 0) {
+					throw new LispEvalException(
+							LispNames.GENSYM + " suffix must be a non-negative integer, got " + n.print());
+				}
+				return new LispSymbol("#:G" + n.value());
+			}
 			String prefix = "G";
 			if (args.size() == 1) {
 				if (!(args.get(0) instanceof LispString s)) {
-					throw new LispEvalException(
-							LispNames.GENSYM + " prefix must be a string, got " + args.get(0).print());
+					throw new LispEvalException(LispNames.GENSYM
+							+ " prefix must be a string or non-negative integer, got " + args.get(0).print());
 				}
 				prefix = s.value();
 			}
