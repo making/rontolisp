@@ -10509,6 +10509,18 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aHandlerBindHandlerPrintsTheReportOfItsCondition() throws Exception {
+		// The JVM twin is
+		// JvmLispCompilerTest#compileAndRunAHandlerBindHandlerPrintsTheReportOfItsCondition.
+		assertThat(compileAndRun("""
+				(defun hb-main ()
+				  (handler-bind ((error (lambda (c) (format t "saw ~a~%" c))))
+				    (car 5)))
+				(print (handler-case (hb-main) (error () :caught)))
+				""")).isEqualTo("saw CAR: The value 5 is not of type LIST\n:CAUGHT");
+	}
+
+	@Test
 	void returnInAHandlerBindHandlerExitsTheLexicalNilBlock() throws Exception {
 		// rove's SIGNALS shape: the handler's plain (return c) names the (block nil ...)
 		// that LEXICALLY encloses it, whatever iteration form -- each of which

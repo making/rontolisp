@@ -1763,6 +1763,19 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAHandlerBindHandlerPrintsTheReportOfItsCondition() throws Exception {
+		// The handler is called with the instance, so the printers route it through its
+		// report (~a / princ) -- the interpreter's answer, not the #<TYPE-ERROR ...>
+		// slot syntax.
+		assertThat(compileAndRun("""
+				(defun hb-main ()
+				  (handler-bind ((error (lambda (c) (format t "saw ~a~%" c))))
+				    (car 5)))
+				(print (handler-case (hb-main) (error () :caught)))
+				""")).isEqualTo("saw CAR: The value 5 is not of type LIST\n:CAUGHT");
+	}
+
+	@Test
 	void compileAndRunAnInnerHandlerCaseShadowsAnEnclosingHandlerBind() throws Exception {
 		// CLHS 9.1.4.1: handlers run MOST RECENT FIRST and handler-case transfers
 		// control, so the nearer handler-case handles the condition and the enclosing

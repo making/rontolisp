@@ -12876,6 +12876,19 @@ cases:
       NIL
       :OUTER-RAN
       :OUTER-RAN
+  # A handler-bind handler is called with the condition, so ~a prints its report,
+  # not the #<TYPE-ERROR ...> slot syntax.
+  - name: handler-bind-handler-prints-report
+    source: |
+      (defvar *ci-hbr-seen* nil)
+      (defun ci-hbr-main ()
+        (handler-bind ((error (lambda (c) (setq *ci-hbr-seen* (format nil "saw ~a" c)))))
+          (car 5)))
+      (print (handler-case (ci-hbr-main) (error () :caught)))
+      (print *ci-hbr-seen*)
+    expected: |
+      :CAUGHT
+      "saw CAR: The value 5 is not of type LIST"
   # A catching form in an ARGUMENT position: the enclosing call has operands live
   # when the protected region begins, and entering a handler discards them (on the
   # JVM the compiler spills them around the region). The float case keeps a raw
