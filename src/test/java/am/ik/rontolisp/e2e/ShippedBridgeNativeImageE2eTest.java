@@ -34,9 +34,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * an {@code UnsupportedFeatureError}). The {@code java:} program's reflective calls and
  * the {@code --blas} / {@code ffi:} programs' downcalls are covered by the configuration
  * the tracing agent records from one {@code java -jar} run; the {@code geom:},
- * {@code --simd} and {@code --gpu} programs need no configuration at all ({@code --gpu}
- * ships its downcall registration inside the jar), and neither does a {@code java:}
- * program compiled with {@code --java-static}, whose calls are all direct
+ * {@code --simd}, {@code --gpu} and {@code objc:} programs need no configuration at all
+ * (the last two ship their native-image registration inside the jar), and neither does a
+ * {@code java:} program compiled with {@code --java-static}, whose calls are all direct
  * (.kb/java-interop.md, "Direct calls"). The {@code objc:} program runs on macOS only,
  * where the image's {@code main} is thread 0 and has to hand it to AppKit (.kb/objc.md).
  * <p>
@@ -249,12 +249,15 @@ class ShippedBridgeNativeImageE2eTest {
 	// has to park it in the run loop and run the program on a worker, as java -jar's
 	// launcher does. A timer on thread 0 clicks the button three times and closes the
 	// window, so no hand is needed -- and nothing fires at all when thread 0 is never
-	// handed over, which is the hang the deadline turns into a failure.
+	// handed over, which is the hang the deadline turns into a failure. Built with NO
+	// configuration: the jar carries the objc_msgSend table and the two methods the
+	// bridge looks up by name, _apply (every callback) and _strv (the built title).
 	@Test
 	void anObjcJarRunsAsANativeImageThatHandsThreadZeroToAppKit() throws Exception {
 		assumeTrue(System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac"), "objc: needs macOS");
 		Path jar = compileJar("""
-				(defvar *window* (appkit:window "native image hand-over" :width 240 :height 120))
+				(defvar *window*
+				  (appkit:window (concatenate 'string "native image " "hand-over") :width 240 :height 120))
 				(defvar *clicks* 0)
 				(defvar *button*
 				  (appkit:button *window* "b" :on-click (lambda () (setq *clicks* (+ *clicks* 1)))))
@@ -263,17 +266,14 @@ class ShippedBridgeNativeImageE2eTest {
 				                    (setq *ticks* (+ *ticks* 1))
 				                    (cond ((<= *ticks* 3) (objc:send *button* "performClick:" nil) t)
 				                          (t (objc:send *window* "performClose:" nil) nil))))
+				(format t "title ~a~%" (objc:send (objc:send *window* "title") "UTF8String"))
 				(appkit:wait *window*)
 				(format t "clicks ~a~%" *clicks*)
 				""");
-		List<String> expected = List.of("clicks 3");
-		Path config = this.tempDir.resolve("config");
+		List<String> expected = List.of("title native image hand-over", "clicks 3");
 		Path java = Path.of(System.getProperty("java.home"), "bin", "java");
-		assertThat(lines(run(java, "-agentlib:native-image-agent=config-output-dir=" + config, "-jar", jar.toString())))
-			.isEqualTo(expected);
-		assertThat(lines(
-				run(Map.of(), Duration.ofSeconds(60), buildImage(jar, "-H:ConfigurationFileDirectories=" + config))))
-			.isEqualTo(expected);
+		assertThat(lines(run(java, "-jar", jar.toString()))).isEqualTo(expected);
+		assertThat(lines(run(Map.of(), Duration.ofSeconds(60), buildImage(jar)))).isEqualTo(expected);
 	}
 
 	private Path compileJar(String program, String... options) throws Exception {

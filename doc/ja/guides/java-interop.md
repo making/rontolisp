@@ -36,7 +36,7 @@
 
 | rontolisp | Java (入力) | Java (出力) |
 |-----------|-----------|------------|
-| integer | `int`/`long`/`short`/`byte`/`float`/`double` (およびそのボックス型) | `int`/`long`/... → integer |
+| integer | `int`/`long`/`short`/`byte`/`float`/`double` (およびそのボックス型) | `int`/`long`/.../`BigInteger` → integer |
 | float | `double`/`float` (およびボックス型) | `double`/`float` → float |
 | string | `String`、長さ 1 なら `char` | `String` → string |
 | character | `char`/`Character` | `Character` → character |
@@ -57,7 +57,7 @@ Java の `null` (および `void` メソッド) は `nil` として返ります�
 (java:static "java.util.Arrays" "copyOf" (list 1 2 3) 2)   ; => (1 2)
 ```
 
-シンボル、ハッシュテーブル、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリング **されません**。
+シンボル、ハッシュテーブル、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリング **されません**。`java.math.BigInteger` の結果は `java` オブジェクトではなく Lisp の整数になるため、`java:call` ではなく Lisp の演算で扱ってください。
 
 ## オーバーロード解決
 

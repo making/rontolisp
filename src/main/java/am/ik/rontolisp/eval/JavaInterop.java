@@ -6,6 +6,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -15,6 +16,7 @@ import java.util.function.Supplier;
 import org.jspecify.annotations.Nullable;
 
 import am.ik.rontolisp.LispArray;
+import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
@@ -714,6 +716,10 @@ final class JavaInterop {
 			case Byte b -> new LispInteger(b);
 			case Double d -> new LispDouble(d);
 			case Float f -> new LispDouble(f);
+			// A Java BigInteger is a Lisp integer (a fixnum when it fits), as compiled:
+			// the
+			// compiled representation cannot tell it from a bignum.
+			case BigInteger b -> b.bitLength() < 64 ? new LispInteger(b.longValue()) : new LispBigInteger(b);
 			case Character c -> new LispChar(c);
 			case String s -> new LispString(s);
 			default -> o.getClass().isArray() ? arrayToList(o) : new LispJavaObject(o);

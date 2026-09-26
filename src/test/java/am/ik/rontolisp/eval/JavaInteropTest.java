@@ -431,6 +431,12 @@ class JavaInteropTest {
 		assertThat(output(JavaInteropPrograms.UPPER_BOUND_DISPATCH)).isEqualTo("(T \"[10, 20]\")");
 	}
 
+	// Mirrors JvmJavaInteropCompilerTest#aLispValueIsNeverAHostObject.
+	@Test
+	void aLispValueIsNeverAHostObject() {
+		assertThat(output(JavaInteropPrograms.HOST_OBJECT_PROGRAM)).isEqualTo(JavaInteropPrograms.HOST_OBJECT_OUTPUT);
+	}
+
 	// What a dispatched site counted on is checked before it chooses: a declared argument
 	// that is not an instance of its class is an error, and arguments no overload takes
 	// are reported as the run-time resolution reports them.

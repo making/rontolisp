@@ -1,6 +1,9 @@
 package am.ik.rontolisp.codegen.jvm;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -9,6 +12,8 @@ import am.ik.rontolisp.cli.CompileFrontendAccess;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.Features;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -106,6 +111,60 @@ class ShippedBridgeClassFilesTest {
 		}
 		Map<String, byte[]> files = compile("Prog", all.toString(), true, true, true, new HashMap<>());
 		assertThat(shippedBridges(files, "Prog")).hasSize(expected);
+	}
+
+	@Test
+	void everyBridgeThatCallsNativeCodeShipsItsNativeImageRegistration() throws Exception {
+		// An image is built from the user's jar, which carries none of rontolisp's own
+		// META-INF: a bridge whose downcalls are not registered in the OUTPUT makes the
+		// image refuse the binding. --gpu then declines silently and objc: signals, so
+		// each carries its file verbatim, under a directory named after the program so
+		// two
+		// programs in one target/classes keep two. (--blas and ffi: still take the
+		// tracing agent's configuration.)
+		Map<String, String> registrations = Map.of("--gpu", "rontolisp-gpu", "objc:", "rontolisp-objc");
+		Map<String, Path> sources = Map.of("--gpu",
+				Path.of("src", "main", "resources", "am", "ik", "gpu", "reachability-metadata.json"), "objc:",
+				Path.of("src", "main", "resources", "META-INF", "native-image", "am.ik.rontolisp", "rontolisp-objc",
+						"reachability-metadata.json"));
+		for (Bridge bridge : BRIDGES) {
+			Map<String, byte[]> files = compile("com/example/Prog", bridge.source(), bridge.simd(), bridge.blas(),
+					bridge.gpu(), new HashMap<>());
+			String registration = registrations.get(bridge.name());
+			if (registration == null) {
+				assertThat(files.keySet()).as(bridge.name()).noneMatch(path -> path.startsWith("META-INF/"));
+				continue;
+			}
+			assertThat(
+					files.get("META-INF/native-image/" + registration + "/com.example.Prog/reachability-metadata.json"))
+				.as(bridge.name())
+				.isEqualTo(Files.readAllBytes(sources.get(bridge.name())));
+		}
+	}
+
+	@Test
+	void anObjcProgramRegistersTheMethodsItsBridgeLooksUpReflectively() {
+		// bind(Class) finds the program's _apply (every callback) and _strv (every string
+		// the program built) by name. In an image without the registration the program
+		// stops at "objc: no _apply method", and without _strv the first built string
+		// dies in MissingReflectionRegistrationError.
+		Map<String, byte[]> files = compile("com/example/Prog", BRIDGES.get(5).source(), false, false, false,
+				new HashMap<>());
+		JsonNode reflection = JsonMapper.builder()
+			.build()
+			.readTree(files
+				.get("META-INF/native-image/rontolisp-objc-bridge/com.example.Prog/reachability-metadata.json"))
+			.path("reflection");
+		assertThat(reflection).hasSize(1);
+		assertThat(reflection.get(0).path("type").asString()).isEqualTo("com.example.Prog");
+		List<String> methods = new ArrayList<>();
+		for (JsonNode method : reflection.get(0).path("methods")) {
+			List<String> parameters = new ArrayList<>();
+			method.path("parameterTypes").forEach(parameter -> parameters.add(parameter.asString()));
+			methods.add(method.path("name").asString() + parameters);
+		}
+		assertThat(methods).containsExactlyInAnyOrder("_apply[java.lang.Object, java.lang.Object]",
+				"_strv[java.lang.Object]");
 	}
 
 	@Test

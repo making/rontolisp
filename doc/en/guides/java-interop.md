@@ -58,7 +58,7 @@ Arguments and results are converted between rontolisp and Java automatically:
 
 | rontolisp | Java (in) | Java (out) |
 |-----------|-----------|------------|
-| integer | `int`/`long`/`short`/`byte`/`float`/`double` (and their boxes) | `int`/`long`/... → integer |
+| integer | `int`/`long`/`short`/`byte`/`float`/`double` (and their boxes) | `int`/`long`/.../`BigInteger` → integer |
 | float | `double`/`float` (and boxes) | `double`/`float` → float |
 | string | `String`, or `char` if length 1 | `String` → string |
 | character | `char`/`Character` | `Character` → character |
@@ -86,7 +86,8 @@ stays an opaque `java` object whose methods you call:
 ```
 
 Symbols, hash tables, dotted (improper) lists and multidimensional (rank-2+)
-arrays are **not** bridged.
+arrays are **not** bridged. A `java.math.BigInteger` result is a Lisp integer,
+not a `java` object: compute with it in Lisp rather than through `java:call`.
 
 ## Overload resolution
 

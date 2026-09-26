@@ -31,6 +31,12 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * The {@code objc_msgSend} shapes are derived from the runtime's type encodings, so the
  * selectors {@code appkit.lisp} and the documented examples send are resolved on a Mac
  * and checked against the file there.
+ *
+ * <p>
+ * Every layer is checked against the {@code objc:} file ALONE
+ * ({@link NativeImageDowncalls#OBJC}): a compiled {@code objc:} program carries that file
+ * and nothing else of rontolisp's registration, so an image built from its jar serves
+ * exactly what it holds.
  */
 class ObjcNativeImageForeignConfigTest {
 
@@ -38,7 +44,7 @@ class ObjcNativeImageForeignConfigTest {
 	void everyRuntimeDowncallShapeIsRegistered() {
 		MainThread pump = new MainThread(NativeImageDowncalls.EVERYTHING, NativeImageDowncalls.EVERYTHING);
 		ObjcRuntime runtime = new ObjcRuntime(NativeImageDowncalls.EVERYTHING, NativeImageDowncalls.EVERYTHING, pump);
-		assertThat(NativeImageDowncalls.missing(runtime.signatures(), Set.of()))
+		assertThat(NativeImageDowncalls.missing(NativeImageDowncalls.OBJC, runtime.signatures(), Set.of()))
 			.as("objc runtime downcall shapes with no entry in the native-image metadata -- the binary refuses "
 					+ "to bind them, so every objc: verb signals on a Mac that has the runtime")
 			.isEmpty();
@@ -50,7 +56,7 @@ class ObjcNativeImageForeignConfigTest {
 		Set<FunctionDescriptor> shapes = new LinkedHashSet<>(pump.upcallSignatures());
 		shapes.addAll(ObjcClasses.allCallbackShapes());
 		assertThat(shapes).hasSize(7);
-		assertThat(NativeImageDowncalls.missingUpcalls(shapes))
+		assertThat(NativeImageDowncalls.missingUpcalls(NativeImageDowncalls.OBJC, shapes))
 			.as("callback shapes with no foreign.upcalls entry -- the binary cannot build the stub, so a class "
 					+ "defined at run time has no method body")
 			.isEmpty();
@@ -319,7 +325,7 @@ class ObjcNativeImageForeignConfigTest {
 			shapes.add(TypeEncoding.parse(raw).descriptor());
 		}
 		assertThat(unresolved).as("selectors this macOS does not declare").isEmpty();
-		assertThat(NativeImageDowncalls.missing(shapes, Set.of()))
+		assertThat(NativeImageDowncalls.missing(NativeImageDowncalls.OBJC, shapes, Set.of()))
 			.as("objc_msgSend shapes the widget layer sends with no entry in the native-image metadata -- the "
 					+ "binary signals on them, so (appkit:window ...) fails there and works on the JVM")
 			.isEmpty();
@@ -415,7 +421,7 @@ class ObjcNativeImageForeignConfigTest {
 			expected.add(NativeImageDowncalls.signature((FunctionDescriptor) row[0], false) + " variadic@" + row[1]);
 		}
 		assertThat(expected).hasSize(144).doesNotHaveDuplicates();
-		assertThat(NativeImageDowncalls.registeredVariadic())
+		assertThat(NativeImageDowncalls.registeredVariadic(NativeImageDowncalls.OBJC))
 			.as("the variadic objc_msgSend entries in the native-image metadata -- a variadic call is its own "
 					+ "stub, so a shape outside this grid signals in the binary naming the entry to add")
 			.containsExactlyInAnyOrderElementsOf(expected);
@@ -480,8 +486,8 @@ class ObjcNativeImageForeignConfigTest {
 			return null;
 		});
 		for (ObjcRuntime.Signature signature : runtime.variadicSignatures()) {
-			assertThat(
-					NativeImageDowncalls.missingVariadic(Set.of(signature.descriptor()), signature.firstVariadicArg()))
+			assertThat(NativeImageDowncalls.missingVariadic(NativeImageDowncalls.OBJC, Set.of(signature.descriptor()),
+					signature.firstVariadicArg()))
 				.as("a variadic shape the binding bound with no entry in the native-image metadata")
 				.isEmpty();
 		}

@@ -74,6 +74,77 @@ public final class JavaInteropPrograms {
 			  (print (list (drop a 1) (java:call a "toString"))))
 			""";
 
+	/**
+	 * Lisp values where a host object is expected -- at a site left to run time
+	 * ({@code size}), a dispatched one ({@code shown}), receivers declared a
+	 * {@code Collection} / {@code Map}, a falsely declared argument -- and
+	 * {@code BigInteger} results: every Lisp value is refused and shown as {@code prin1}
+	 * shows it, a host list and map are called, and a {@code BigInteger} is a Lisp
+	 * integer. Prints {@link #HOST_OBJECT_OUTPUT}.
+	 */
+	public static final String HOST_OBJECT_PROGRAM = """
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun size (x) (java:call x "size"))
+			(defun sized (x)
+			  (declare (type (java:object "java.util.Collection") x))
+			  (java:call x "size"))
+			(defun entries (m)
+			  (declare (type (java:object "java.util.Map") m))
+			  (java:call m "size"))
+			(defun shown (x) (java:static "java.util.Objects" "toString" x))
+			(defun whole (x) (java:call x "toBigInteger"))
+			(dolist (x (list (list 1 2) 1.0e10 (expt 2 100) 1/3 (complex 1 2)
+			                 (make-array 2 :initial-element 0) (make-array 1 :fill-pointer 0)
+			                 (make-array 2 :element-type 'double-float :initial-element 1d0)
+			                 (make-hash-table)))
+			  (row (lambda () (size x)))
+			  (row (lambda () (shown x))))
+			(row (lambda () (sized (vector 1 2))))
+			(row (lambda () (entries (make-hash-table))))
+			(let ((l (java:new "java.util.ArrayList"))
+			      (m (java:new "java.util.LinkedHashMap")))
+			  (java:call l "add" 1)
+			  (java:call m "put" "k" 1)
+			  (row (lambda () (list (size l) (sized l) (size m) (entries m) (shown l) (shown m)))))
+			(row (lambda () (java:static "java.lang.String" "valueOf"
+			                                 (the (java:object "java.util.LinkedHashMap" :exact) (make-hash-table)))))
+			(let ((b (java:new "java.math.BigInteger" "123456789012345678901234567890"))
+			      (s (java:static "java.math.BigInteger" "valueOf" 5)))
+			  (row (lambda () (list b (+ b 1) s (eql s 5) (typep s 'fixnum)
+			                        (java:call (java:new "java.math.BigDecimal" "1.5") "toBigInteger")
+			                        (whole (java:new "java.math.BigDecimal" "2.5")))))
+			  (row (lambda () (size s))))
+			""";
+
+	/** What {@link #HOST_OBJECT_PROGRAM} prints. */
+	public static final String HOST_OBJECT_OUTPUT = """
+			java:call expects a java object as the first argument, got (1 2)
+			"[1, 2]"
+			java:call expects a java object as the first argument, got 1.0e10
+			"1.0E10"
+			java:call expects a java object as the first argument, got 1267650600228229401496703205376
+			No matching method java.util.Objects.toString with 1 argument(s)
+			java:call expects a java object as the first argument, got 1/3
+			No matching method java.util.Objects.toString with 1 argument(s)
+			java:call expects a java object as the first argument, got #C(1 2)
+			No matching method java.util.Objects.toString with 1 argument(s)
+			java:call expects a java object as the first argument, got #(0 0)
+			"[0, 0]"
+			java:call expects a java object as the first argument, got #()
+			"[]"
+			java:call expects a java object as the first argument, got #d(1.0 1.0)
+			No matching method java.util.Objects.toString with 1 argument(s)
+			java:call expects a java object as the first argument, got #<HASH-TABLE :TEST EQUAL :COUNT 0>
+			No matching method java.util.Objects.toString with 1 argument(s)
+			java:call expects a java object as the first argument, got #(1 2)
+			java:call expects a java object as the first argument, got #<HASH-TABLE :TEST EQUAL :COUNT 0>
+			(1 1 1 1 "[1]" "{k=1}")
+			java:static: argument 1 is not a java.util.LinkedHashMap, got #<HASH-TABLE :TEST EQUAL :COUNT 0>
+			(123456789012345678901234567890 123456789012345678901234567891 5 T T 1 2)
+			java:call expects a java object as the first argument, got 5""";
+
 	private JavaInteropPrograms() {
 	}
 
