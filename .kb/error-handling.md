@@ -368,6 +368,15 @@ lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints 
   thunk under a scope of no function (`asyncBody`). A condition escaping the thunk closes segment
   0 (`crossedAsync`), so the awaiter's frames are not attributed to it; the first located form
   after that is the `await`.
+- **The await that re-signalled it** (every backend, since 2026-09-26): a failed future holds ONE
+  condition object, which every `await` of it rethrows, so each await first rewinds the trace to
+  what that future stored -- the hop's site back to none, and every hop an earlier await's path
+  appended dropped. A second await after a handler caught the first names ITSELF, and one of JOB's
+  future after RELAY's (which re-signalled JOB's condition) was caught prints no RELAY hop. The
+  interpreter keys the hop by the future's `CompletableFuture` (`ConditionTrace.reawaited`, from
+  `joinFuture`). Until then the interpreter and the JVM recorded the site once per crossing and
+  named the FIRST await, while `--component` named the right one only when no hop had been added
+  since.
 - **JVM -- read off the stack trace** (`codegen/jvm/JvmSourceSites`, `JvmUncaughtHandler`): every
   method the program's own source compiled into carries a `LineNumberTable` whose numbers are SITE
   ids -- (file, line, function) in a table the class carries as string constants -- not lines: a
@@ -385,9 +394,10 @@ lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints 
   needs none, 4 bytes a method.)
 - **JVM async**: the `%async-run` thunk's last exception entry appends a made-up frame
   `rontolisp/async.crossed(HEAD)` to the escaping exception's trace (`_asyncCross`; `/` is in no
-  binary name), and the first `_await` that rethrows it appends its OWN frames after it
-  (`_asyncAwaited`) -- once per crossing, the interpreter's first-await rule. `_where` reads each
-  such frame as a hop. An exception keeps its identity (`handler-case` classifies by class), and
+  binary name); `run()` keeps the trace as it then is in the error payload, a fourth element
+  (`{EMARKER, t, cond, trace}`, only in a class that records boundaries), and each `_await` that
+  rethrows it puts that trace back and appends its OWN frames after the boundary
+  (`_asyncAwaited`). `_where` reads each such frame as a hop. An exception keeps its identity (`handler-case` classifies by class), and
   the report empties the trace, so none of it shows unless `RONTOLISP_DEBUG` asks for the trace --
   which then IS the async chain.
 - **JVM optimizations keep the granularity**: a fused integer tree (`_fx$N`,
@@ -513,6 +523,11 @@ by `cli/WasmReportLocationsTest` (each case against the interpreter's own output
   and, by its own name, the function (a lambda's frame is named after the function it is written
   in, `Ctx.ucWrittenIn`; a nested `defun`'s after itself); an async body (a hop text in the
   frame) appends a hop whose await site is the next frame with a line.
+- **An await rewinds the note** (`--component` only; Preview 1 signals at the call): the poll of a
+  rejected future calls `_uncaught_reawait(future, payload)` before re-signalling. The FIRST await
+  of a future records a snapshot -- `(last-hop site file line . name)` -- in an association list
+  keyed by the future (nothing but an await of it can have noted its payload since the rejection);
+  each later one restores it. A fresh note clears the list.
 - **Texts ride with their frame**: the name and hop text are unspelled string literals built in the
   frame's own landing (`compileUnspelledLiteral`: a spelled one would arm the dispatch gate), so
   the shaker drops them with the frame. The name is the program's spelling
@@ -533,7 +548,7 @@ by `cli/WasmReportLocationsTest` (each case against the interpreter's own output
   macro-written one, a signal helper) it is a plain `call`, or the call site and its function were
   lost. Disabling tail calls in frames outright was the first version and broke the
   `.kb/wasm-tail-calls.md` invariant a Scheme loop depends on (named `let` overflowed).
-- **Known divergences** (`.todo/991`; the second `await`, `.todo/992`), from 82 programs of the
+- **Known divergences** (`.todo/991`), from 82 programs of the
   JVM parity corpus with a catching form appended (2026-09-26, Linux, wasmtime 49); the others'
   location lines matched the interpreter's byte for byte:
   - A tail call through a function value stays a `return_call`, so a callee that is no frame (a
@@ -546,9 +561,6 @@ by `cli/WasmReportLocationsTest` (each case against the interpreter's own output
   - Preview 1 runs an async body at its call: the hop's await site is the CALL's line when the
     `await` is on another one, and a body whose tail call enters another frame leaves before its
     hop is noted, so the hop line is missing. `--component` matches the interpreter in both.
-  - A future's condition re-signalled by a second `await` after a handler caught the first:
-    `--component` names the second await, the interpreter and the JVM the first (their hop is
-    recorded once per crossing).
 
 Cost in EH mode, measured 2026-09-26 (wasmtime 49.0.0, node 24, macOS arm64):
 

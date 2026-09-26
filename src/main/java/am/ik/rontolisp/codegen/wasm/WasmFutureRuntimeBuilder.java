@@ -256,18 +256,21 @@ final class WasmFutureRuntimeBuilder {
 	 * @param identityHash whether the module's conses carry the identity-hash slot
 	 * @param spillGlobal the {@code %mv-spill} channel's global index, or -1 when the
 	 * program has no multiple-value consumer (the poll then publishes nothing)
+	 * @param reawaitFunc {@code --report-locations}' {@code _uncaught_reawait}, which the
+	 * poll hands a rejected future and its payload before re-signalling it
+	 * ({@link WasmUncaughtLocations}), or -1 when the module notes no hops
 	 * @return the function body bytes (locals declaration included)
 	 */
 	static byte[] build(int off, int base, int futureType, int frameType, int streamType, int currentTaskGlobal,
 			@org.jspecify.annotations.Nullable Sched sched, @org.jspecify.annotations.Nullable Cb cb,
-			boolean identityHash, int spillGlobal) {
+			boolean identityHash, int spillGlobal, int reawaitFunc) {
 		return switch (off) {
 			case OFF_NEW -> buildNew(futureType);
 			case OFF_SETTLE -> buildSettleOrReject(base, futureType, 1);
 			case OFF_REJECT -> buildSettleOrReject(base, futureType, 2);
 			case OFF_ADD_WAITER -> buildAddWaiter(futureType, identityHash);
 			case OFF_WAKE -> buildWake(base, futureType);
-			case OFF_POLL -> buildPoll(futureType, spillGlobal);
+			case OFF_POLL -> buildPoll(futureType, spillGlobal, reawaitFunc);
 			case OFF_SUBTASK_FUTURE ->
 				sched == null ? buildUnreachableStub() : buildSubtaskFuture(futureType, sched, identityHash);
 			case OFF_SCHED_LOOP -> sched == null ? buildSyncForce(base) : buildSchedLoop(base, futureType, sched);
@@ -571,7 +574,7 @@ final class WasmFutureRuntimeBuilder {
 	// the non-asyncMode lowering), so there is no degenerate-future branch. With a spill
 	// global the poll is await's multiple-value producer: it answers one value unless
 	// the last fulfilled future of the chain carries extras, which it publishes.
-	private static byte[] buildPoll(int futureType, int spillGlobal) {
+	private static byte[] buildPoll(int futureType, int spillGlobal, int reawaitFunc) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int STATE = 1;
@@ -615,7 +618,16 @@ final class WasmFutureRuntimeBuilder {
 		setLocal(w, 0);
 		w.write(Instruction.BR, 2); // -> loop (past this if and the TYPE_FUTURE if)
 		w.write(Instruction.END);
-		// rejected -> re-signal the memoized payload
+		// rejected -> re-signal the memoized payload, the uncaught report's note first
+		// rewound to where this future's boundary left it
+		if (reawaitFunc >= 0) {
+			getLocal(w, 0);
+			castFuture(w, 0, futureType);
+			structGet(w, futureType, 1);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(reawaitFunc);
+			w.write(Instruction.DROP);
+		}
 		castFuture(w, 0, futureType);
 		structGet(w, futureType, 1);
 		w.write(Instruction.THROW);

@@ -44,7 +44,9 @@ import org.jspecify.annotations.Nullable;
  * across threads (it is a ThreadLocal), so {@code run()} completes the future NORMALLY
  * with {@code {EMARKER, throwable, condition}} and {@code _await} re-sets the condition
  * on the awaiting thread before rethrowing -- {@code handler-case} around the await then
- * dispatches by type exactly like a same-thread signal;</li>
+ * dispatches by type exactly like a same-thread signal. A program whose uncaught report
+ * records async boundaries adds the throwable's trace as the body left it, which each
+ * await puts back ({@link JvmUncaughtHandler});</li>
  * <li>a body that answers other than exactly one value completes the future with
  * {@code {VMARKER, primary, extras}}, the channel read on the body's own thread the
  * moment it returns; {@code _await} answers the primary and publishes the extras on the
@@ -68,7 +70,9 @@ final class JvmAsyncRuntimeBuilder {
 	static final String RMARKER = "%stream-read\n";
 
 	/**
-	 * Marker heading an async body's error payload {@code {EMARKER, throwable, cond}}.
+	 * Marker heading an async body's error payload {@code {EMARKER, throwable, cond}}
+	 * ({@code {EMARKER, throwable, cond, trace}} when the uncaught report records async
+	 * boundaries).
 	 */
 	static final String EMARKER = "%async-error\n";
 
@@ -248,6 +252,16 @@ final class JvmAsyncRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("()Ljava/lang/Object;")));
 
 		ClassConstant throwableClass = cp.addClass(cp.addUtf8("java/lang/Throwable"));
+		// An async body's error payload carries its trace when the uncaught report
+		// records
+		// the boundary in it (asyncAwaited): {EMARKER, t, cond, trace}.
+		int errorPayloadLength = asyncAwaited != null ? 4 : 3;
+		@Nullable MethodrefConstant throwableGetStackTrace = asyncAwaited != null
+				? cp.addMethodref(throwableClass,
+						cp.addNameAndType(cp.addUtf8("getStackTrace"), cp.addUtf8("()[Ljava/lang/StackTraceElement;")))
+				: null;
+		@Nullable ClassConstant stackTraceArrayClass = asyncAwaited != null
+				? cp.addClass(cp.addUtf8("[Ljava/lang/StackTraceElement;")) : null;
 		ClassConstant runtimeExceptionClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
 		MethodrefConstant runtimeExceptionInit = cp.addMethodref(runtimeExceptionClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
@@ -435,14 +449,15 @@ final class JvmAsyncRuntimeBuilder {
 			int tryEnd = a.pos();
 			int done = a.label();
 			a.branch(Opcode.GOTO, done);
-			// catch (Throwable t): future.complete({EMARKER, t, _condTl.get()})
+			// catch (Throwable t): future.complete({EMARKER, t, _condTl.get()}), and
+			// t.getStackTrace() after them when the body recorded its boundary there
 			int handler = a.pos();
 			a.astore(1);
 			a.aload(0);
 			a.op(Opcode.GETFIELD);
 			a.u2(futureField.index());
 			a.checkcast(futureClass);
-			a.iconst(3);
+			a.iconst(errorPayloadLength);
 			a.anewarray(objectClass);
 			a.op(Opcode.DUP);
 			a.iconst(0);
@@ -458,7 +473,18 @@ final class JvmAsyncRuntimeBuilder {
 			a.u2(condTlField.index());
 			a.op(Opcode.INVOKEVIRTUAL);
 			a.u2(tlGet.index());
-			a.aastore(); // [future, payload]
+			a.aastore();
+			if (throwableGetStackTrace != null) {
+				// The trace as the boundary left it, which every await puts back
+				// (JvmUncaughtHandler): the condition is one object all of them rethrow.
+				a.op(Opcode.DUP);
+				a.iconst(3);
+				a.aload(1);
+				a.op(Opcode.INVOKEVIRTUAL);
+				a.u2(throwableGetStackTrace.index());
+				a.aastore();
+			}
+			// [future, payload]
 			a.op(Opcode.INVOKEVIRTUAL);
 			a.u2(futureComplete.index());
 			a.op(Opcode.POP);
@@ -558,7 +584,7 @@ final class JvmAsyncRuntimeBuilder {
 			a.op(Opcode.INVOKEVIRTUAL);
 			a.u2(futureJoin.index());
 			a.astore(4); // r
-			// 3-element payload: the {EMARKER, t, cond} error envelope
+			// the {EMARKER, t, cond[, trace]} error envelope
 			int plain = a.label();
 			a.aload(4);
 			a.op(Opcode.INSTANCEOF);
@@ -567,7 +593,7 @@ final class JvmAsyncRuntimeBuilder {
 			a.aload(4);
 			a.checkcast(objectArrayClass);
 			a.op(Opcode.ARRAYLENGTH);
-			a.iconst(3);
+			a.iconst(errorPayloadLength);
 			a.branch(Opcode.IF_ICMPNE, plain);
 			a.aload(4);
 			a.checkcast(objectArrayClass);
@@ -592,8 +618,13 @@ final class JvmAsyncRuntimeBuilder {
 			a.checkcast(throwableClass);
 			if (asyncAwaited != null) {
 				// The uncaught report's hop: this await completes the boundary the body's
-				// thunk recorded in the trace (JvmUncaughtHandler).
+				// thunk recorded in the trace, put back as stored (JvmUncaughtHandler).
 				a.op(Opcode.DUP);
+				a.aload(4);
+				a.checkcast(objectArrayClass);
+				a.iconst(3);
+				a.aaload();
+				a.checkcast(java.util.Objects.requireNonNull(stackTraceArrayClass));
 				a.op(Opcode.INVOKESTATIC);
 				a.u2(asyncAwaited.index());
 			}
