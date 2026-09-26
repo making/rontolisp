@@ -94,6 +94,16 @@ public final class OperandTypes {
 	/** The reported name of a store through a {@code row-major-aref} place. */
 	public static final String SETF_ROW_MAJOR_AREF = "(SETF ROW-MAJOR-AREF)";
 
+	/**
+	 * The text of an out-of-range subscript's expected type before the dimension:
+	 * {@code (INTEGER 0 (3))}, CL's {@code type-error} for an array index
+	 * ({@link #indexType}).
+	 */
+	public static final String INDEX_TYPE_PREFIX = "(INTEGER 0 (";
+
+	/** The text of an out-of-range subscript's expected type after the dimension. */
+	public static final String INDEX_TYPE_SUFFIX = "))";
+
 	/** An operator table entry naming a funnel-typed operator ({@link #operatorType}). */
 	public static final String FUNNEL_TYPE = "";
 
@@ -248,6 +258,20 @@ public final class OperandTypes {
 			return Kind.REAL.name();
 		}
 		return type;
+	}
+
+	/**
+	 * The type an array subscript outside its dimension is not of: {@code (INTEGER 0
+	 * (dim))}, every integer in {@code [0, dim)} -- the expected type SBCL's
+	 * {@code invalid-array-index-error} carries. The report names the operator's own type
+	 * for no other failure: an out-of-range subscript is funnel-typed like a non-integer
+	 * one, and its datum is the subscript.
+	 * @param dimension the dimension the subscript indexes (the total size for a
+	 * row-major access)
+	 * @return the type's printed text
+	 */
+	public static String indexType(long dimension) {
+		return INDEX_TYPE_PREFIX + dimension + INDEX_TYPE_SUFFIX;
 	}
 
 	/**

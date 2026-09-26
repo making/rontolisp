@@ -57,7 +57,8 @@ registry, the `concatenateBuiltin` arrangement); `JvmArrayCompiler.compileMake` 
 
 ## Shared semantics
 - A masked store returns the value AS STORED; a `TYPE_BIGINT`-tier store contributes its LOW
-  32 bits everywhere; an out-of-range index errors (WASM traps).
+  32 bits everywhere; an out-of-range index is the access's `type-error` naming its bound
+  (`.kb/error-handling.md`, "An out-of-range subscript"; wasm-GC outside EH mode traps).
 - `typep` for `(simple-array (unsigned-byte 8) (*))` tests `%arrayp` AND
   `(equal (array-element-type x) '(unsigned-byte N))`, dimensions unchecked -- so a general
   `#(...)` is never a `(vector (unsigned-byte 8))` (s-sql's `sql-escape` dispatches on it).

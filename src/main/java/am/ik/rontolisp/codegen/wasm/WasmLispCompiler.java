@@ -1970,6 +1970,33 @@ public final class WasmLispCompiler implements LispCompiler {
 	// shifts, and shaken when nothing calls it.
 	static final int FUNC_TILDE = FUNC_TYPE_ERR + 1;
 
+	// _idx_in ((ref null eq) subscript, i32 bound) -> i32: an element access's bound
+	// check (WasmEmitHelper.buildIndexBoundBody): an i31 subscript in [0, bound)
+	// answers itself unboxed; anything else -- a negative one, one at or past the
+	// bound, a wide integer -- is out of range: in EH mode the operator's type-error
+	// "The value S is not of type (INTEGER 0 (bound))" through _type_err's index arm
+	// under the register the caller set, outside it a trap. Reuses TYPE_STR_TO_MEM;
+	// appended after the last fixed helper so no index above shifts, and shaken when
+	// no site checks a bound.
+	static final int FUNC_IDX_IN = FUNC_TILDE + 1;
+
+	// _idx_bound ((ref null eq) array, (ref null eq) subscript) -> (ref null eq): the
+	// flat bound check every rank-1 and row-major access makes
+	// (WasmArrayRuntimeBuilder.buildIndexBoundBody): the subscript checked against the
+	// array's total size whatever its representation (packed float, packed integer,
+	// general; a string passes unchecked) through _idx_in, and answered unchanged.
+	// Reuses the binary callable signature (TYPE_CALLABLE_BASE + 1); appended after the
+	// last fixed helper so no index above shifts, and shaken when no site checks.
+	static final int FUNC_IDX_BOUND = FUNC_IDX_IN + 1;
+
+	// _idx_ref ((ref null eq) array, (ref null eq) subscript, (ref null eq) operator id
+	// as an i31) -> (ref null eq): an element read's whole subscript check in one call,
+	// EH mode only (WasmArrayRuntimeBuilder.buildIndexRefBody): _idx_chk's integer check
+	// and _idx_bound's flat bound, answering the subscript. Reuses the ternary callable
+	// signature (TYPE_CALLABLE_BASE + 2); appended after the last fixed helper so no
+	// index above shifts, and shaken when no site reads through it.
+	static final int FUNC_IDX_REF = FUNC_IDX_BOUND + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -2000,7 +2027,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_TILDE + 1;
+	static final int FUNC_VEC_BASE = FUNC_IDX_REF + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -2015,9 +2042,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	// unboxed-fixnum fusion helpers (_fx_*, WasmFxRuntimeBuilder), the fdlibm
 	// runtime, the identity-hash helper (_ihash), the eq/eql tail (_eql_tail) and the
 	// non-list landing (_type_err_list), the subscript check (_idx_chk) and the shared
-	// landing body (_type_err) and the text-control helper (_tilde) -- plus, under
-	// --simd, the vec: SIMD block. Use userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FUNC_TILDE + 1;
+	// landing body (_type_err), the text-control helper (_tilde) and the bound check
+	// (_idx_in, _idx_bound, _idx_ref) -- plus, under --simd, the vec: SIMD block. Use
+	// userFuncBase(), which adds that offset.
+	static final int FUNC_USER_BASE = FUNC_IDX_REF + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -7035,6 +7063,15 @@ public final class WasmLispCompiler implements LispCompiler {
 													// (FUNC_TYPE_ERR)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _tilde (string, mode) ->
 															// string (FUNC_TILDE)
+				fnDef.addFunction(TYPE_STR_TO_MEM); // _idx_in (subscript, bound) -> i32
+													// (FUNC_IDX_IN)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _idx_bound (array,
+															// subscript)
+															// -> subscript
+															// (FUNC_IDX_BOUND)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _idx_ref (array, subscript,
+															// op) -> subscript
+															// (FUNC_IDX_REF)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -8000,6 +8037,15 @@ public final class WasmLispCompiler implements LispCompiler {
 				// the text-control body (FUNC_TILDE): shaken when no condition stores or
 				// renders text.
 				code.addFunction(WasmStringRuntimeBuilder.buildTildeBody());
+				// the bound check body (FUNC_IDX_IN): shaken when no site checks a bound.
+				code.addFunction(WasmEmitHelper
+					.buildIndexBoundBody(ehMode && operandOperators.indexed() ? operandOpGlobalIndex : -1));
+				// the flat bound check body (FUNC_IDX_BOUND): shaken with its sites.
+				code.addFunction(WasmArrayRuntimeBuilder
+					.buildIndexBoundBody(ehMode && operandOperators.indexed() ? operandOpGlobalIndex : -1));
+				// the read's subscript check body (FUNC_IDX_REF): shaken with its sites.
+				code.addFunction(WasmArrayRuntimeBuilder
+					.buildIndexRefBody(ehMode && operandOperators.indexed() ? operandOpGlobalIndex : -1));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp

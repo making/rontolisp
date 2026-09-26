@@ -8,7 +8,7 @@ Deviations:
 
 - The object is raised again after the body has been left, so a `with-exception-handler` outside the `guard` cannot resume a `raise-continuable` of the body: its handler returning is a secondary error. Gauche resumes the body.
 - A body answering several values answers its first one.
-- On WebAssembly, an error the machine traps on -- `car` of a non-pair, a vector index out of range -- ends the program instead of being raised. `error`, `raise` and an arithmetic type error are caught on every backend.
+- On WebAssembly a string index out of range is not checked: `string-ref` past the end answers a character instead of raising. `error`, `raise`, an arithmetic type error, `car` of a non-pair and a vector index out of range are caught on every backend.
 - `eval` refuses `guard` by name.
 
 ```scheme

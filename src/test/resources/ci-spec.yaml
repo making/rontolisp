@@ -18338,6 +18338,86 @@ cases:
       ("ROW-MAJOR-AREF: The value NIL is not of type INTEGER" NIL INTEGER)
       ("(SETF ROW-MAJOR-AREF): The value FOO is not of type REAL" FOO REAL)
       (7 "ay" 2.0 3)
+  # .kb/error-handling.md, "An out-of-range subscript is a type-error naming its
+  # bound": a subscript outside its dimension reports OP: The value S is not of type
+  # (INTEGER 0 (D)) as a type-error answering the subscript and the list -- per axis
+  # (a column past its dimension no longer reads the next row), the total size for a
+  # row-major access, a bignum out of range, a store's value checked before its bound
+  # and its value form run first, and a JVM typed loop reporting what the boxed path
+  # does, with the accumulator it leaves.
+  - name: out-of-range-subscripts-are-type-errors-naming-their-bound
+    source: |
+      (defun ci-oob (thunk)
+        (handler-case (funcall thunk)
+          (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+          (error (e) (list :not-a-type-error (princ-to-string e)))))
+      (defvar *ci-oob-big* (expt 2 70))
+      (defvar *ci-oob-side* 0)
+      (let ((v (vector 1 2 3)) (d (make-array 3 :element-type 'double-float))
+            (f (make-array 3 :element-type 'single-float)) (u (make-array 3 :element-type '(unsigned-byte 8)))
+            (m (make-array '(2 3) :initial-element 0)) (dm (make-array '(2 3) :element-type 'double-float))
+            (c (make-array '(2 2 2) :initial-element 0)) (fp (make-array 5 :fill-pointer 2 :initial-element 0))
+            (dv (make-array 2 :displaced-to (make-array 10 :initial-element 7) :displaced-index-offset 3)))
+        (print (ci-oob (lambda () (aref v 3))))
+        (print (ci-oob (lambda () (aref v -1))))
+        (print (ci-oob (lambda () (svref v 3))))
+        (print (ci-oob (lambda () (elt v 3))))
+        (print (ci-oob (lambda () (aref v *ci-oob-big*))))
+        (print (ci-oob (lambda () (aref d 3))))
+        (print (ci-oob (lambda () (aref d -1))))
+        (print (ci-oob (lambda () (aref f 3))))
+        (print (ci-oob (lambda () (aref u 3))))
+        (print (list (aref fp 4) (ci-oob (lambda () (aref fp 5)))))
+        (print (ci-oob (lambda () (aref dv 2))))
+        (print (ci-oob (lambda () (aref m 0 3))))
+        (print (ci-oob (lambda () (aref m 2 0))))
+        (print (ci-oob (lambda () (aref dm 0 3))))
+        (print (ci-oob (lambda () (aref c 0 2 0))))
+        (print (ci-oob (lambda () (row-major-aref m 6))))
+        (print (ci-oob (lambda () (row-major-aref u 3))))
+        (print (ci-oob (lambda () (setf (aref v 3) 0))))
+        (print (ci-oob (lambda () (setf (aref d 3) 1d0))))
+        (print (ci-oob (lambda () (setf (aref d 3) "x"))))
+        (print (ci-oob (lambda () (setf (aref u 3) (progn (incf *ci-oob-side*) 1)))))
+        (print (ci-oob (lambda () (setf (aref m 0 3) 1))))
+        (print (ci-oob (lambda () (setf (aref dm 2 0) 1d0))))
+        (print (ci-oob (lambda () (setf (row-major-aref m 6) 0))))
+        (print (ci-oob (lambda () (setf (row-major-aref d 3) 0d0))))
+        (print (list *ci-oob-side* (aref m 1 2) (row-major-aref m 5) (equal (third (ci-oob (lambda () (aref v 9)))) '(integer 0 (3))))))
+      (defun ci-oob-sum (v n)
+        (declare (type (simple-array double-float (*)) v) (fixnum n))
+        (let ((s 0d0)) (declare (double-float s))
+          (handler-case (dotimes (i n) (setf s (+ s (aref v i))))
+            (type-error (e) (list (princ-to-string e) s)))))
+      (print (ci-oob-sum (make-array 3 :element-type 'double-float :initial-element 1d0) 5))
+    expected: |
+      ("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+      ("AREF: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
+      ("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+      ("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+      ("AREF: The value 1180591620717411303424 is not of type (INTEGER 0 (3))" 1180591620717411303424 (INTEGER 0 (3)))
+      ("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+      ("AREF: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
+      ("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+      ("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+      (0 ("AREF: The value 5 is not of type (INTEGER 0 (5))" 5 (INTEGER 0 (5))))
+      ("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+      ("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+      ("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+      ("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+      ("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+      ("ROW-MAJOR-AREF: The value 6 is not of type (INTEGER 0 (6))" 6 (INTEGER 0 (6)))
+      ("ROW-MAJOR-AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+      ("(SETF AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+      ("(SETF AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+      ("(SETF AREF): The value \"x\" is not of type REAL" "x" REAL)
+      ("(SETF AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+      ("(SETF AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+      ("(SETF AREF): The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+      ("(SETF ROW-MAJOR-AREF): The value 6 is not of type (INTEGER 0 (6))" 6 (INTEGER 0 (6)))
+      ("(SETF ROW-MAJOR-AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+      (1 0 0 T)
+      ("AREF: The value 3 is not of type (INTEGER 0 (3))" 3.0)
   # CLHS 3.5.1.4-6 / .kb/error-handling.md, "Argument-shape errors signal a
   # catchable program-error": a keyword the operator does not accept, an odd
   # keyword tail and a non-keyword in keyword position signal a CATCHABLE
@@ -19206,6 +19286,23 @@ standalone:
       "Not a function: 3"
     stderr: |
       Unhandled condition: Not a function: 4
+    fails: true
+  - name: uncaught-out-of-range-subscript-report
+    source: |
+      ;; The handler-case puts the wasm module in EH mode, where an out-of-range
+      ;; subscript signals instead of trapping; the JVM's typed loop reports what the
+      ;; boxed accessor would (.kb/error-handling.md).
+      (defun sum-first (v n)
+        (declare (type (simple-array double-float (*)) v) (fixnum n))
+        (let ((s 0d0)) (declare (double-float s))
+          (dotimes (i n) (setf s (+ s (aref v i)))) s))
+      (print (handler-case (sum-first (make-array 3 :element-type 'double-float :initial-element 1d0) 5)
+               (error (e) (princ-to-string e))))
+      (sum-first (make-array 3 :element-type 'double-float :initial-element 1d0) 5)
+    stdout: |
+      "AREF: The value 3 is not of type (INTEGER 0 (3))"
+    stderr: |
+      Unhandled condition: AREF: The value 3 is not of type (INTEGER 0 (3))
     fails: true
   - name: foreign-call-against-the-process
     source: |

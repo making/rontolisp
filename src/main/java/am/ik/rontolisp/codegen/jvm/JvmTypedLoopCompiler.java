@@ -20,6 +20,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OperandTypes;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -157,6 +158,9 @@ final class JvmTypedLoopCompiler {
 
 		/** Emission, ARRAY: the int local holding {@code 1 + rank} (the data offset). */
 		int baseSlot = -1;
+
+		/** Emission, ARRAY: the int local holding dimension 0, subscript 0's bound. */
+		int dim0Slot = -1;
 
 		/** Emission, ARRAY of rank 2: the int local holding the column count. */
 		int colsSlot = -1;
@@ -1190,7 +1194,9 @@ final class JvmTypedLoopCompiler {
 				return false;
 			}
 			int guarded = (int) numbers.stream().filter(v -> !v.rawDouble).count();
-			int needed = guarded * 3 + 1 + arrays.size() * 4 + this.an.loopDepth() * 4 + this.an.letDepth() * 2 + 4;
+			// + 10: the long subscript temps a store holds while an access in its value
+			// holds its own, and the value's (subscripts(), aset()).
+			int needed = guarded * 3 + 1 + arrays.size() * 5 + this.an.loopDepth() * 4 + this.an.letDepth() * 2 + 14;
 			if (this.ctx.nextLocal + needed > SLOT_BUDGET) {
 				return false;
 			}
@@ -1227,6 +1233,7 @@ final class JvmTypedLoopCompiler {
 				this.ctx.emit(v.refSlot);
 				v.slot = this.ctx.allocTemp();
 				v.baseSlot = this.ctx.allocTemp();
+				v.dim0Slot = this.ctx.allocTemp();
 				if (v.rank == 2) {
 					v.colsSlot = this.ctx.allocTemp();
 				}
@@ -1400,6 +1407,13 @@ final class JvmTypedLoopCompiler {
 				this.ctx.emit(Opcode.IADD);
 				this.ctx.emit(Opcode.ISTORE);
 				this.ctx.emit(v.baseSlot);
+				// dimension 0 from the header, as _fvAref* bound subscript 0 by it
+				this.ctx.emit(Opcode.ALOAD);
+				this.ctx.emit(v.slot);
+				this.ctx.emit(Opcode.ICONST_1);
+				loadHeaderInt();
+				this.ctx.emit(Opcode.ISTORE);
+				this.ctx.emit(v.dim0Slot);
 				if (v.rank == 2) {
 					this.ctx.emit(Opcode.ALOAD);
 					this.ctx.emit(v.slot);
@@ -1583,9 +1597,14 @@ final class JvmTypedLoopCompiler {
 					this.ctx.emit(Opcode.I2L);
 				}
 				case Aref a -> {
-					arrayIndex(a.arr(), a.idx());
-					// An index out of range fails in this load: it reports the aref.
+					// An index out of range fails in its bound check: it reports the
+					// aref,
+					// by the name the boxed accessor's wrapper gives it.
+					int saved = this.ctx.nextLocal;
+					int[] subs = subscripts(a.idx());
 					atSite(a.site());
+					arrayIndex(a.arr(), subs, LispNames.AREF);
+					this.ctx.nextLocal = saved;
 					if (this.single) {
 						this.ctx.emit(Opcode.FALOAD);
 						this.ctx.emit(Opcode.F2D);
@@ -1675,23 +1694,66 @@ final class JvmTypedLoopCompiler {
 			this.ctx.emit(v.slot);
 		}
 
-		/** Leaves {@code (arrayref, int index)} on the stack, the helpers' arithmetic. */
-		private void arrayIndex(Var arr, List<Node> idx) {
+		/**
+		 * Evaluates the subscripts, in order, into fresh long temps -- every one before
+		 * any bound is checked, as the boxed access evaluates its arguments before its
+		 * accessor runs.
+		 */
+		private int[] subscripts(List<Node> idx) {
+			int[] slots = new int[idx.size()];
+			for (int k = 0; k < slots.length; k++) {
+				expr(idx.get(k));
+				slots[k] = allocWide();
+				this.ctx.emit(Opcode.LSTORE);
+				this.ctx.emit(slots[k]);
+			}
+			return slots;
+		}
+
+		/**
+		 * Leaves {@code (arrayref, int index)} on the stack, the helpers' arithmetic:
+		 * each subscript checked against its own dimension through {@code _ckBoundJ}
+		 * under the access's wrapper, so an out-of-range one throws the report the boxed
+		 * accessor throws ({@code JvmOperandTypeRuntime}).
+		 */
+		private void arrayIndex(Var arr, int[] subs, String operator) {
 			this.ctx.emit(Opcode.ALOAD);
 			this.ctx.emit(arr.slot);
 			this.ctx.emit(Opcode.ILOAD);
 			this.ctx.emit(arr.baseSlot);
-			expr(idx.get(0));
-			this.ctx.emit(Opcode.L2I);
-			if (idx.size() == 2) {
+			bounded(subs[0], arr.dim0Slot, operator);
+			if (subs.length == 2) {
 				this.ctx.emit(Opcode.ILOAD);
 				this.ctx.emit(arr.colsSlot);
 				this.ctx.emit(Opcode.IMUL);
 				this.ctx.emit(Opcode.IADD);
-				expr(idx.get(1));
-				this.ctx.emit(Opcode.L2I);
+				bounded(subs[1], arr.colsSlot, operator);
 			}
 			this.ctx.emit(Opcode.IADD);
+		}
+
+		/**
+		 * Pushes the long subscript in {@code slot} checked against the int {@code dim}.
+		 */
+		private void bounded(int slot, int dimSlot, String operator) {
+			this.ctx.emit(Opcode.LLOAD);
+			this.ctx.emit(slot);
+			this.ctx.emit(Opcode.ILOAD);
+			this.ctx.emit(dimSlot);
+			@Nullable String outer = this.ctx.operator;
+			this.ctx.operator = operator;
+			try {
+				this.ctx.emit(Opcode.INVOKESTATIC);
+				this.ctx.emitU2(
+						this.ctx
+							.wrapForOperator(JvmOperandTypeRuntime.CK_BOUND_J, JvmOperandTypeRuntime.CK_BOUND_J_DESC,
+									java.util.Objects
+										.requireNonNull(this.ctx.numOps.get(JvmOperandTypeRuntime.CK_BOUND_J)))
+							.index());
+			}
+			finally {
+				this.ctx.operator = outer;
+			}
 		}
 
 		/** Makes the next instruction report {@code site}, the loop's own without one. */
@@ -1701,18 +1763,19 @@ final class JvmTypedLoopCompiler {
 
 		private void aset(Aset a, boolean valueNeeded) {
 			// No --gpu guard here: hoistArrays already reported the array written, once
-			// for the whole loop.
-			arrayIndex(a.arr(), a.idx());
+			// for the whole loop. The subscripts and the value are evaluated before any
+			// bound is checked, as the boxed %aset evaluates its arguments before its
+			// store helper runs; an out-of-range one reports the store's form.
+			int saved = this.ctx.nextLocal;
+			int[] subs = subscripts(a.idx());
 			exprAsDouble(a.value());
-			int tmp = -1;
-			if (valueNeeded) {
-				tmp = allocWide();
-				this.ctx.emit(Opcode.DUP2);
-				this.ctx.emit(Opcode.DSTORE);
-				this.ctx.emit(tmp);
-			}
-			// An index out of range fails in this store: it reports the store's form.
+			int tmp = allocWide();
+			this.ctx.emit(Opcode.DSTORE);
+			this.ctx.emit(tmp);
 			atSite(a.site());
+			arrayIndex(a.arr(), subs, OperandTypes.SETF_AREF);
+			this.ctx.emit(Opcode.DLOAD);
+			this.ctx.emit(tmp);
 			if (this.single) {
 				this.ctx.emit(Opcode.D2F);
 				this.ctx.emit(Opcode.FASTORE);
@@ -1730,6 +1793,7 @@ final class JvmTypedLoopCompiler {
 					this.ctx.emit(Opcode.F2D);
 				}
 			}
+			this.ctx.nextLocal = saved;
 		}
 
 		private void let(Let l, boolean valueNeeded) {

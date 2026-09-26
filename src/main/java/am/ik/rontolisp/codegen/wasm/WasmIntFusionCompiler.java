@@ -1287,6 +1287,16 @@ final class WasmIntFusionCompiler {
 				ctx.writer.writeHeapType(Type.I31.code());
 				ctx.writer.write(Instruction.I32_EQZ);
 				ctx.writer.write(Instruction.BR_IF, 0);
+				if (WasmArrayCompiler.reportsBounds(ctx)) {
+					// An out-of-range index bails too, to the fallback's checked read,
+					// which reports it rather than trapping here.
+					ctx.writer.write(Instruction.GET_LOCAL);
+					ctx.writer.writeUnsignedLeb128(leaf.idxSlot);
+					WasmEmitHelper.castI31GetS(ctx);
+					WasmArrayCompiler.emitPackedIntLen(ctx, leaf.arrSlot);
+					ctx.writer.write(Instruction.I32_GE_U);
+					ctx.writer.write(Instruction.BR_IF, 0);
+				}
 				WasmArrayCompiler.emitPackedIntRead(ctx, leaf.arrSlot, leaf.idxSlot);
 				leaf.i64Slot = ctx.allocI64Temp();
 				ctx.writer.write(Instruction.SET_LOCAL);
@@ -1561,7 +1571,10 @@ final class WasmIntFusionCompiler {
 			case ArefLeaf leaf -> {
 				WasmUncaughtLocations.Operation located = WasmUncaughtLocations.enterOperation(leaf.source, leaf.owner,
 						ctx);
-				WasmArrayCompiler.emitAref1FromSlots(ctx, leaf.arrSlot, leaf.idxSlot);
+				// Under AREF's name: the fallback runs away from the aref form, and an
+				// out-of-range index reports the access.
+				WasmOperandTypes.withOperator(ctx, LispNames.AREF,
+						() -> WasmArrayCompiler.emitAref1FromSlots(ctx, leaf.arrSlot, leaf.idxSlot, false));
 				WasmUncaughtLocations.leaveOperation(located, ctx);
 			}
 			// The snapshot re-boxed: the shadow when non-null, else the raw value

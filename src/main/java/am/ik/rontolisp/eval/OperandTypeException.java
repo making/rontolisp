@@ -1,6 +1,10 @@
 package am.ik.rontolisp.eval;
 
 import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OperandTypes;
 
@@ -21,12 +25,20 @@ final class OperandTypeException extends LispEvalException {
 
 	private final @Nullable String operator;
 
-	private OperandTypeException(LispVal datum, OperandTypes.Kind kind, @Nullable String operator) {
-		super(OperandTypes.message(operator, datum.print(), OperandTypes.expectedType(operator, kind)), null,
+	/**
+	 * The dimension an out-of-range subscript missed, or -1 for a wrong-type operand,
+	 * whose type comes from the kind.
+	 */
+	private final long dimension;
+
+	private OperandTypeException(LispVal datum, OperandTypes.Kind kind, @Nullable String operator, long dimension) {
+		super(OperandTypes.message(operator, datum.print(),
+				dimension < 0 ? OperandTypes.expectedType(operator, kind) : OperandTypes.indexType(dimension)), null,
 				ClosRegistry.TYPE_ERROR_CLASS_NAME);
 		this.datum = datum;
 		this.kind = kind;
 		this.operator = operator;
+		this.dimension = dimension;
 	}
 
 	/**
@@ -36,7 +48,34 @@ final class OperandTypeException extends LispEvalException {
 	 * @return the exception to throw
 	 */
 	static OperandTypeException of(LispVal datum, OperandTypes.Kind kind) {
-		return new OperandTypeException(datum, kind, null);
+		return new OperandTypeException(datum, kind, null, -1);
+	}
+
+	/**
+	 * The unnamed error of an array subscript outside its dimension: the subscript is not
+	 * of type {@code (INTEGER 0 (dimension))} ({@link OperandTypes#indexType}), CL's
+	 * report for an out-of-range index. The access's seam names it like a wrong-type
+	 * subscript.
+	 * @param subscript the subscript as the program passed it
+	 * @param dimension the dimension it indexes
+	 * @return the exception to throw
+	 */
+	static OperandTypeException outOfRange(LispVal subscript, long dimension) {
+		return new OperandTypeException(subscript, OperandTypes.Kind.INTEGER, null, dimension);
+	}
+
+	/**
+	 * {@link #outOfRange(LispVal, long)} for an access that knows which operator it is
+	 * serving.
+	 * @param subscript the subscript as the program passed it
+	 * @param dimension the dimension it indexes
+	 * @param operator the operator's symbol name
+	 * @return the exception to throw
+	 */
+	static OperandTypeException outOfRange(LispVal subscript, long dimension, String operator) {
+		String reported = OperandTypes.reportedOperator(operator);
+		return new OperandTypeException(subscript, OperandTypes.Kind.INTEGER, reported != null ? reported : operator,
+				dimension);
 	}
 
 	/**
@@ -52,7 +91,7 @@ final class OperandTypeException extends LispEvalException {
 	 */
 	static OperandTypeException of(LispVal datum, OperandTypes.Kind kind, String operator) {
 		String reported = OperandTypes.reportedOperator(operator);
-		return new OperandTypeException(datum, kind, reported != null ? reported : operator);
+		return new OperandTypeException(datum, kind, reported != null ? reported : operator, -1);
 	}
 
 	/**
@@ -66,7 +105,7 @@ final class OperandTypeException extends LispEvalException {
 		if (this.operator != null || reported == null) {
 			return this;
 		}
-		OperandTypeException named = new OperandTypeException(this.datum, this.kind, reported);
+		OperandTypeException named = new OperandTypeException(this.datum, this.kind, reported, this.dimension);
 		named.setStackTrace(getStackTrace());
 		return named;
 	}
@@ -80,11 +119,16 @@ final class OperandTypeException extends LispEvalException {
 	}
 
 	/**
-	 * The type the report names, for the condition's {@code expected-type} slot.
-	 * @return the type name
+	 * The type the report names, for the condition's {@code expected-type} slot: a type
+	 * symbol, or the list {@code (INTEGER 0 (dim))} of an out-of-range subscript.
+	 * @return the type
 	 */
-	String expectedType() {
-		return OperandTypes.expectedType(this.operator, this.kind);
+	LispVal expectedType() {
+		if (this.dimension < 0) {
+			return new LispSymbol(OperandTypes.expectedType(this.operator, this.kind));
+		}
+		return new LispCons(new LispSymbol(OperandTypes.Kind.INTEGER.name()), new LispCons(new LispInteger(0),
+				new LispCons(new LispCons(new LispInteger(this.dimension), LispNil.INSTANCE), LispNil.INSTANCE)));
 	}
 
 }

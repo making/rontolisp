@@ -167,7 +167,7 @@ class JvmQuantizedMatrixTest {
 		assertAgreedText(program + "(print (handler-case (setf (aref *m* 0 0) 1.0) (error (e) (princ-to-string e))))",
 				"\"%ASET: a quantized matrix is immutable (dequantize it into a packed float array to change it)\"");
 		assertAgreedText("(print (handler-case (aref (rontolisp:make-quantized-matrix 'q8-0 '(2 32)) 2 0)"
-				+ " (error (e) (princ-to-string e))))", "\"aref: index out of bounds\"");
+				+ " (error (e) (princ-to-string e))))", "\"AREF: The value 2 is not of type (INTEGER 0 (2))\"");
 	}
 
 	@Test

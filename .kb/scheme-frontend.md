@@ -851,8 +851,8 @@ reports and what a Common Lisp `handler-case` around Scheme code catches.
   clause-less fall-through raises again from the guard, so an outer handler cannot resume a
   body's `raise-continuable` (Gauche answers 11 where this is a secondary error, the
   `a-guard-reraise-...` standalone case); a guard answers its body's first value; on wasm
-  `car` of a non-pair and an out-of-range index are traps no handler sees (arithmetic type
-  errors are catchable, so the corpus uses `(+ 1 'a)`); `eval` refuses `guard` by name
+  an out-of-range STRING index is unchecked (`.todo/186`) -- `car` of a non-pair and a vector
+  index signal like the arithmetic type errors since 2026-09-26; `eval` refuses `guard` by name
   (its keyword list), while `raise` and the rest reach `eval` through the generated table.
 - The guard lowering spells its re-raise and helpers as `(raw ..)` (`CORE_RAW`), so a user
   `define` of `raise` does not capture it. `SchemeExpander` scopes the guard variable to

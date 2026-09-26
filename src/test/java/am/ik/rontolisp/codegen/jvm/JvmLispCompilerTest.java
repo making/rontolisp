@@ -1569,6 +1569,129 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void outOfRangeSubscriptsAreTypeErrorsNamingTheirBound() throws Exception {
+		// A subscript outside its dimension is the access's type-error naming its bound:
+		// "OP: The value S is not of type (INTEGER 0 (D))", the datum the subscript and
+		// the expected type the list (.kb/error-handling.md, "An out-of-range subscript
+		// is
+		// a type-error naming its bound") -- per axis, the total size for a row-major
+		// access, a bignum out of range, a store's value checked before its bound and its
+		// value form run first. The twins are LispEvaluatorTest, JvmLispCompilerTest and
+		// WasmLispCompilerIntegrationTest's
+		// outOfRangeSubscriptsAreTypeErrorsNamingTheirBound.
+		// The JVM reported "index out of bounds" with neither slot (the host's
+		// "Index 5 out of bounds for length 3" uncaught) and read (aref m 0 3) as
+		// m[1][0].
+		assertThat(compileAndRun(
+				"""
+						(defun te (thunk)
+						  (handler-case (funcall thunk)
+						    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+						    (error (e) (list :not-a-type-error (princ-to-string e)))))
+						(defvar *te-big* (expt 2 70))
+						(defvar *te-side* 0)
+						(let ((v (vector 1 2 3)) (d (make-array 3 :element-type 'double-float))
+						      (f (make-array 3 :element-type 'single-float)) (u (make-array 3 :element-type '(unsigned-byte 8)))
+						      (m (make-array '(2 3) :initial-element 0)) (dm (make-array '(2 3) :element-type 'double-float))
+						      (c (make-array '(2 2 2) :initial-element 0)) (fp (make-array 5 :fill-pointer 2 :initial-element 0))
+						      (dv (make-array 2 :displaced-to (make-array 10 :initial-element 7) :displaced-index-offset 3)))
+						  (print (te (lambda () (aref v 3))))
+						  (print (te (lambda () (aref v -1))))
+						  (print (te (lambda () (svref v 3))))
+						  (print (te (lambda () (elt v 3))))
+						  (print (te (lambda () (aref v *te-big*))))
+						  (print (te (lambda () (aref d 3))))
+						  (print (te (lambda () (aref d -1))))
+						  (print (te (lambda () (aref f 3))))
+						  (print (te (lambda () (aref u 3))))
+						  (print (list (aref fp 4) (te (lambda () (aref fp 5)))))
+						  (print (te (lambda () (aref dv 2))))
+						  (print (te (lambda () (aref m 0 3))))
+						  (print (te (lambda () (aref m 2 0))))
+						  (print (te (lambda () (aref dm 0 3))))
+						  (print (te (lambda () (aref c 0 2 0))))
+						  (print (te (lambda () (row-major-aref m 6))))
+						  (print (te (lambda () (row-major-aref u 3))))
+						  (print (te (lambda () (setf (aref v 3) 0))))
+						  (print (te (lambda () (setf (aref d 3) 1d0))))
+						  (print (te (lambda () (setf (aref d 3) "x"))))
+						  (print (te (lambda () (setf (aref u 3) (progn (incf *te-side*) 1)))))
+						  (print (te (lambda () (setf (aref m 0 3) 1))))
+						  (print (te (lambda () (setf (aref dm 2 0) 1d0))))
+						  (print (te (lambda () (setf (row-major-aref m 6) 0))))
+						  (print (te (lambda () (setf (row-major-aref d 3) 0d0))))
+						  (print (list *te-side* (aref m 1 2) (row-major-aref m 5) (equal (third (te (lambda () (aref v 9)))) '(integer 0 (3))))))
+						"""))
+			.isEqualTo(
+					"""
+							("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("AREF: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
+							("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("AREF: The value 1180591620717411303424 is not of type (INTEGER 0 (3))" 1180591620717411303424 (INTEGER 0 (3)))
+							("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("AREF: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
+							("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							(0 ("AREF: The value 5 is not of type (INTEGER 0 (5))" 5 (INTEGER 0 (5))))
+							("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+							("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+							("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+							("ROW-MAJOR-AREF: The value 6 is not of type (INTEGER 0 (6))" 6 (INTEGER 0 (6)))
+							("ROW-MAJOR-AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("(SETF AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("(SETF AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("(SETF AREF): The value \\"x\\" is not of type REAL" "x" REAL)
+							("(SETF AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("(SETF AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("(SETF AREF): The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+							("(SETF ROW-MAJOR-AREF): The value 6 is not of type (INTEGER 0 (6))" 6 (INTEGER 0 (6)))
+							("(SETF ROW-MAJOR-AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							(1 0 0 T)""");
+	}
+
+	@Test
+	void aTypedLoopReportsAnOutOfRangeSubscriptAsTheBoxedPathDoes() throws Exception {
+		// A typed loop (.kb/jvm-typed-loops.md) checks each subscript against its own
+		// dimension through the access's wrapper, so an out-of-range one reports exactly
+		// what the boxed accessor would -- caught with the accumulator the boxed path
+		// leaves, and uncaught as the one report line; it rethrew the raw DALOAD's
+		// "Index 5 out of bounds for length 5", its length counting the header.
+		String source = """
+				(defun f (v n)
+				  (declare (type (simple-array double-float (*)) v) (fixnum n))
+				  (let ((s 0d0)) (declare (double-float s))
+				    (handler-case (dotimes (i n) (setf s (+ s (aref v i))))
+				      (type-error (e) (list (princ-to-string e) s)))))
+				(defun g (m n)
+				  (declare (type (simple-array double-float (* *)) m) (fixnum n))
+				  (dotimes (i n) (dotimes (j n) (setf (aref m i j) 1d0))))
+				(print (f (make-array 3 :element-type 'double-float :initial-element 1d0) 5))
+				(print (handler-case (g (make-array '(2 3) :element-type 'double-float) 3)
+				         (type-error (e) (princ-to-string e))))
+				""";
+		String expected = """
+				("AREF: The value 3 is not of type (INTEGER 0 (3))" 3.0)
+				"(SETF AREF): The value 2 is not of type (INTEGER 0 (2))\"""";
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(source));
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
+		assertThat(small).isNotEqualTo(fast);
+		assertThat(runClass(fast)).isEqualTo(expected);
+		assertThat(runClass(small)).isEqualTo(expected);
+	}
+
+	@Test
 	void listConsumersBeyondTheFirstSetNameTheOperator() throws Exception {
 		// The list consumers beyond the first set name their operator as the first set
 		// does (compiler/OperandTypes): reverse/nreverse over a non-sequence (SEQUENCE),
@@ -1971,8 +2094,9 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunASynthesizedBuiltInConditionReportsARontolispMessage() throws Exception {
-		// A cast failure's host text names Java classes and an out-of-range index's
-		// counts the layout cell; both are replaced at the pad. (car 1) names itself now
+		// A cast failure's host text names Java classes and is replaced at the pad; an
+		// out-of-range index reports its bound itself now
+		// (outOfRangeSubscriptsAreTypeErrorsNamingTheirBound). (car 1) names itself now
 		// (argumentTypeErrorsNameTheOperatorBeyondArithmetic), as does nthcdr's walk
 		// (listWalksAndStringIndicesNameTheOperator) and rplaca's
 		// (listConsumersNameTheOperator); an access's array argument is still a bare
@@ -1980,7 +2104,7 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (handler-case (aref 5 0) (type-error (e) (princ-to-string e))))"))
 			.isEqualTo("\"the value is not of the expected type\"");
 		assertThat(compileAndRun("(print (handler-case (aref (vector 1 2) 5) (type-error (e) (princ-to-string e))))"))
-			.isEqualTo("\"index out of bounds\"");
+			.isEqualTo("\"AREF: The value 5 is not of type (INTEGER 0 (2))\"");
 		assertThat(compileAndRun("(print (handler-case (/ 1 0) (division-by-zero (e) (princ-to-string e))))"))
 			.isEqualTo("\"Division by zero\"");
 	}
@@ -16295,7 +16419,9 @@ class JvmLispCompilerTest {
 		// funnel-typed arm): +143 B.
 		// 10,238 since mapcar's list argument is checked (_ckList and MAPCAR's wrapper,
 		// replacing the inline guard's message): +109 B.
-		assertThat(classBytes.length).isLessThan(10_300);
+		// 10,301 since an out-of-range subscript's compound type (INTEGER 0 (d)) rides
+		// _opTypeErr verbatim: +71 B.
+		assertThat(classBytes.length).isLessThan(10_400);
 		assertThat(runClass(classBytes)).isEqualTo("(1 4 9)");
 	}
 
@@ -17618,11 +17744,12 @@ class JvmLispCompilerTest {
 		// -o). The helper costs 8,112 there, 8,102 here; 8,713 since a wrong-type
 		// operand's report names the operator (JvmOperandTypeRuntime: _teRaw, _opTypeErr
 		// and the (+ a b) wrapper); 8,940 since car/cdr name themselves (the &optional
-		// walk's _car/_cdr, and _opTypeErr's funnel-typed arm).
+		// walk's _car/_cdr, and _opTypeErr's funnel-typed arm); 9,011 since an
+		// out-of-range subscript's compound type rides _opTypeErr verbatim.
 		byte[] classBytes = new JvmLispCompiler("Test")
 			.compile(LispReader.readAllFromString("(defun f (a &optional (b 2)) (+ a b)) (print (f 1))"));
 		assertThat(declaredMethodNames(classBytes)).doesNotContain("_toMutStr", "_strToCharVec", "_length", "_scount");
-		assertThat(classBytes.length).isLessThan(9_000);
+		assertThat(classBytes.length).isLessThan(9_100);
 		assertThat(runClass(classBytes)).isEqualTo("3");
 	}
 
@@ -20024,7 +20151,7 @@ class JvmLispCompilerTest {
 			.rootCause()
 			.hasMessageContaining("integer");
 		assertThatThrownBy(() -> compileAndRun("(aref (make-array 2 :element-type '(unsigned-byte 8)) 5)")).rootCause()
-			.hasMessageContaining("out of range");
+			.hasMessageContaining("AREF: The value 5 is not of type (INTEGER 0 (2))");
 		assertThatThrownBy(() -> compileAndRun("(vector-push 1 (make-array 2 :element-type '(unsigned-byte 8)))"))
 			.rootCause()
 			.hasMessageContaining("packed integer vector");

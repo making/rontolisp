@@ -105,6 +105,35 @@ final class JvmOperandTypeRuntime {
 
 	static final String CK_CONS_DESC = "(Ljava/lang/Object;)[Ljava/lang/Object;";
 
+	/**
+	 * An out-of-range subscript's exception builder, {@code _oob(datum, dim)}: the
+	 * unnamed {@code The value D is not of type (INTEGER 0 (dim))}, recorded under a pad
+	 * with the type as the list it spells ({@code OperandTypes.indexType}).
+	 */
+	static final String OOB = "_oob";
+
+	static final String OOB_DESC = "(Ljava/lang/Object;I)Ljava/lang/RuntimeException;";
+
+	/**
+	 * A subscript's bound check, {@code _ckBound(i, dim)}: the index {@code i} as an
+	 * {@code int} when it is a {@code Long} in {@code [0, dim)}, else
+	 * {@code throw _oob(i, dim)} -- a {@code BigInteger} (an integer {@link #CK_IDX}
+	 * passed) included. Every packed and general accessor reads its subscripts through
+	 * it, one per axis, so the report is the operator's wrapper's to name.
+	 */
+	static final String CK_BOUND = "_ckBound";
+
+	static final String CK_BOUND_DESC = "(Ljava/lang/Object;I)I";
+
+	/**
+	 * {@link #CK_BOUND} over a raw {@code long} subscript, {@code _ckBoundJ(i, dim)}: a
+	 * typed loop's ({@code JvmTypedLoopCompiler}), whose index arithmetic is unboxed, so
+	 * the loop reports exactly what the boxed accessor would.
+	 */
+	static final String CK_BOUND_J = "_ckBoundJ";
+
+	static final String CK_BOUND_J_DESC = "(JI)I";
+
 	/** The thread-local record's field. */
 	static final String TL_FIELD = "_teTl";
 
@@ -238,9 +267,128 @@ final class JvmOperandTypeRuntime {
 		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(TE_RAW), cp.addUtf8(TE_RAW_DESC), c, 6, 3,
 				List.of()));
 
+		// _oob(Object datum, int dim): new RuntimeException("The value " + prin1(datum)
+		// + " is not of type (INTEGER 0 (" + dim + "))"), recorded under a pad with the
+		// type as the list (INTEGER 0 (dim)).
+		MethodrefConstant intToString = cp.addMethodref(string,
+				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(I)Ljava/lang/String;")));
+		MethodrefConstant longValueOf = cp.addMethodref(longClass,
+				cp.addNameAndType(cp.addUtf8("valueOf"), cp.addUtf8("(J)Ljava/lang/Long;")));
+		List<Integer> b = new ArrayList<>();
+		b.add(Opcode.NEW);
+		JvmRuntimeBuilder.emitU2(b, rte.index());
+		b.add(Opcode.DUP);
+		JvmRuntimeBuilder.emitLdc(b, valuePrefix.index());
+		b.add(Opcode.ALOAD_0);
+		invoke(b, Opcode.INVOKESTATIC, lispToString);
+		invoke(b, Opcode.INVOKEVIRTUAL, concat);
+		JvmRuntimeBuilder.emitLdc(b, cp.addString(OperandTypes.TYPE_INFIX + OperandTypes.INDEX_TYPE_PREFIX).index());
+		invoke(b, Opcode.INVOKEVIRTUAL, concat);
+		b.add(Opcode.ILOAD_1);
+		invoke(b, Opcode.INVOKESTATIC, intToString);
+		invoke(b, Opcode.INVOKEVIRTUAL, concat);
+		JvmRuntimeBuilder.emitLdc(b, cp.addString(OperandTypes.INDEX_TYPE_SUFFIX).index());
+		invoke(b, Opcode.INVOKEVIRTUAL, concat);
+		invoke(b, Opcode.INVOKESPECIAL, rteInit);
+		if (teTl != null) {
+			b.add(Opcode.ASTORE_2);
+			StringConstant integerKind = cp.addString(OperandTypes.Kind.INTEGER.name());
+			emitRecord(b, teTl, object, tlSet, 2, () -> b.add(Opcode.ALOAD_0), () -> {
+				// (INTEGER 0 (dim)): {"INTEGER", {0L, {{dimL, nil}, nil}}}
+				emitConsHead(b, object, () -> JvmRuntimeBuilder.emitLdc(b, integerKind.index()));
+				emitConsHead(b, object, () -> {
+					b.add(Opcode.LCONST_0);
+					invoke(b, Opcode.INVOKESTATIC, longValueOf);
+				});
+				emitConsHead(b, object, () -> {
+					emitConsHead(b, object, () -> {
+						b.add(Opcode.ILOAD_1);
+						b.add(Opcode.I2L);
+						invoke(b, Opcode.INVOKESTATIC, longValueOf);
+					});
+					b.add(Opcode.ACONST_NULL);
+					emitConsTail(b);
+				});
+				b.add(Opcode.ACONST_NULL);
+				emitConsTail(b);
+				emitConsTail(b);
+				emitConsTail(b);
+			});
+			b.add(Opcode.ALOAD_2);
+		}
+		b.add(Opcode.ARETURN);
+		methods.add(
+				new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(OOB), cp.addUtf8(OOB_DESC), b, 24, 3, List.of()));
+
+		// _ckBound(Object i, int dim): (int) i for a Long in [0, dim), else
+		// throw _oob(i, dim) -- a BigInteger, which no bound reaches, included.
+		MethodrefConstant longLongValue = cp.addMethodref(longClass,
+				cp.addNameAndType(cp.addUtf8("longValue"), cp.addUtf8("()J")));
+		List<Integer> k = new ArrayList<>();
+		k.add(Opcode.ALOAD_0);
+		k.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(k, longClass.index());
+		int ifNotLong = branch(k, Opcode.IFEQ);
+		k.add(Opcode.ALOAD_0);
+		k.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(k, longClass.index());
+		invoke(k, Opcode.INVOKEVIRTUAL, longLongValue);
+		k.add(Opcode.LSTORE_2);
+		k.add(Opcode.LLOAD_2);
+		k.add(Opcode.LCONST_0);
+		k.add(Opcode.LCMP);
+		int ifNegative = branch(k, Opcode.IFLT);
+		k.add(Opcode.LLOAD_2);
+		k.add(Opcode.ILOAD_1);
+		k.add(Opcode.I2L);
+		k.add(Opcode.LCMP);
+		int ifPast = branch(k, Opcode.IFGE);
+		k.add(Opcode.LLOAD_2);
+		k.add(Opcode.L2I);
+		k.add(Opcode.IRETURN);
+		int out = k.size();
+		JvmRuntimeBuilder.patchBranch(k, ifNotLong, out);
+		JvmRuntimeBuilder.patchBranch(k, ifNegative, out);
+		JvmRuntimeBuilder.patchBranch(k, ifPast, out);
+		k.add(Opcode.ALOAD_0);
+		k.add(Opcode.ILOAD_1);
+		invoke(k, Opcode.INVOKESTATIC, self(cp, thisClass, OOB, OOB_DESC));
+		k.add(Opcode.ATHROW);
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(CK_BOUND), cp.addUtf8(CK_BOUND_DESC), k, 4, 4,
+				List.of()));
+
+		// _ckBoundJ(long i, int dim): (int) i in [0, dim), else
+		// throw _oob(Long.valueOf(i), dim). The check is Objects.checkIndex, the JIT's
+		// own range-check intrinsic, so a typed loop's check is hoisted the way its array
+		// access's is (a hand-written compare cost a typed double loop 27%); its host
+		// exception becomes the access's report. The boxed _ckBound keeps the compare:
+		// the intrinsic's extra inline depth made a general-vector store 4x slower.
+		MethodrefConstant checkIndex = cp.addMethodref(cp.addClass(cp.addUtf8("java/util/Objects")),
+				cp.addNameAndType(cp.addUtf8("checkIndex"), cp.addUtf8("(JJ)J")));
+		ClassConstant ioobe = cp.addClass(cp.addUtf8("java/lang/IndexOutOfBoundsException"));
+		List<Integer> j = new ArrayList<>();
+		j.add(Opcode.LLOAD_0);
+		j.add(Opcode.ILOAD_2);
+		j.add(Opcode.I2L);
+		invoke(j, Opcode.INVOKESTATIC, checkIndex);
+		j.add(Opcode.L2I);
+		int tryEnd = j.size();
+		j.add(Opcode.IRETURN);
+		int handler = j.size();
+		j.add(Opcode.POP);
+		j.add(Opcode.LLOAD_0);
+		invoke(j, Opcode.INVOKESTATIC, longValueOf);
+		j.add(Opcode.ILOAD_2);
+		invoke(j, Opcode.INVOKESTATIC, self(cp, thisClass, OOB, OOB_DESC));
+		j.add(Opcode.ATHROW);
+		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(CK_BOUND_J), cp.addUtf8(CK_BOUND_J_DESC), j,
+				4, 3, List.<int[]>of(new int[] { 0, tryEnd, handler, ioobe.index() })));
+
 		// _opTypeErr(Throwable e, String op, String opType): an unnamed report renamed
 		// "OP: The value X is not of type T" (T = opType, narrowed NUMBER -> REAL when
-		// the funnel wanted a real); anything else is answered unchanged.
+		// the funnel wanted a real); anything else is answered unchanged. A COMPOUND
+		// type -- an out-of-range subscript's (INTEGER 0 (d)) -- is the report's own,
+		// kept verbatim under any operator, and so is the record's type object.
 		MethodrefConstant getMessage = cp.addMethodref(throwable,
 				cp.addNameAndType(cp.addUtf8("getMessage"), cp.addUtf8("()Ljava/lang/String;")));
 		MethodrefConstant startsWith = cp.addMethodref(string,
@@ -248,9 +396,12 @@ final class JvmOperandTypeRuntime {
 		MethodrefConstant endsWith = cp.addMethodref(string,
 				cp.addNameAndType(cp.addUtf8("endsWith"), cp.addUtf8("(Ljava/lang/String;)Z")));
 		MethodrefConstant lastIndexOf = cp.addMethodref(string,
-				cp.addNameAndType(cp.addUtf8("lastIndexOf"), cp.addUtf8("(I)I")));
+				cp.addNameAndType(cp.addUtf8("lastIndexOf"), cp.addUtf8("(Ljava/lang/String;)I")));
 		MethodrefConstant substring = cp.addMethodref(string,
 				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(II)Ljava/lang/String;")));
+		MethodrefConstant charAt = cp.addMethodref(string, cp.addNameAndType(cp.addUtf8("charAt"), cp.addUtf8("(I)C")));
+		// Locals: 0=e, 1=op, 2=opType, 3=msg, 4=the type's start, 5=type, 6=the renamed
+		// exception, 7=the record, 8=1 when the type is the report's own compound one.
 		List<Integer> o = new ArrayList<>();
 		o.add(Opcode.ALOAD_0);
 		invoke(o, Opcode.INVOKEVIRTUAL, getMessage);
@@ -262,14 +413,35 @@ final class JvmOperandTypeRuntime {
 		invoke(o, Opcode.INVOKEVIRTUAL, startsWith);
 		int ifNotRaw = branch(o, Opcode.IFEQ);
 		o.add(Opcode.ALOAD_3);
-		o.add(Opcode.BIPUSH);
-		o.add((int) ' ');
+		JvmRuntimeBuilder.emitLdc(o, typeInfix.index());
 		invoke(o, Opcode.INVOKEVIRTUAL, lastIndexOf);
+		o.add(Opcode.DUP);
 		o.add(Opcode.ISTORE);
 		o.add(4);
+		// A text that only opens like a report is some other error's.
+		int ifNoType = branch(o, Opcode.IFLT);
+		o.add(Opcode.IINC);
+		o.add(4);
+		o.add(OperandTypes.TYPE_INFIX.length());
 		o.add(Opcode.ALOAD_2);
 		o.add(Opcode.ASTORE);
 		o.add(5);
+		// compound = msg.charAt(start) == '('
+		o.add(Opcode.ALOAD_3);
+		o.add(Opcode.ILOAD);
+		o.add(4);
+		invoke(o, Opcode.INVOKEVIRTUAL, charAt);
+		o.add(Opcode.BIPUSH);
+		o.add((int) '(');
+		int ifNotCompound = branch(o, Opcode.IF_ICMPNE);
+		o.add(Opcode.ICONST_1);
+		o.add(Opcode.ISTORE);
+		o.add(8);
+		int toReportsOwn = branch(o, Opcode.GOTO);
+		JvmRuntimeBuilder.patchBranch(o, ifNotCompound, o.size());
+		o.add(Opcode.ICONST_0);
+		o.add(Opcode.ISTORE);
+		o.add(8);
 		// opType is always a wrapper's ldc constant, and string constants are interned,
 		// so identity decides it. A funnel-typed operator's is FUNNEL_TYPE: the type is
 		// the funnel's own kind, the report's last word, a to-double funnel's NUMBER
@@ -277,11 +449,10 @@ final class JvmOperandTypeRuntime {
 		o.add(Opcode.ALOAD_2);
 		JvmRuntimeBuilder.emitLdc(o, cp.addString(OperandTypes.FUNNEL_TYPE).index());
 		int ifNotFunnelTyped = branch(o, Opcode.IF_ACMPNE);
+		JvmRuntimeBuilder.patchBranch(o, toReportsOwn, o.size());
 		o.add(Opcode.ALOAD_3);
 		o.add(Opcode.ILOAD);
 		o.add(4);
-		o.add(Opcode.ICONST_1);
-		o.add(Opcode.IADD);
 		invoke(o, Opcode.INVOKEVIRTUAL, cp.addMethodref(string,
 				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(I)Ljava/lang/String;"))));
 		o.add(Opcode.ASTORE);
@@ -320,8 +491,6 @@ final class JvmOperandTypeRuntime {
 		o.add(Opcode.ICONST_0);
 		o.add(Opcode.ILOAD);
 		o.add(4);
-		o.add(Opcode.ICONST_1);
-		o.add(Opcode.IADD);
 		invoke(o, Opcode.INVOKEVIRTUAL, substring);
 		invoke(o, Opcode.INVOKEVIRTUAL, concat);
 		o.add(Opcode.ALOAD);
@@ -331,7 +500,8 @@ final class JvmOperandTypeRuntime {
 		o.add(Opcode.ASTORE);
 		o.add(6);
 		if (teTl != null) {
-			// The datum travels from the funnel's record when it is THIS exception's.
+			// The datum travels from the funnel's record when it is THIS exception's, and
+			// so does a compound type's object (a list the text only spells).
 			o.add(Opcode.GETSTATIC);
 			JvmRuntimeBuilder.emitU2(o, teTl.index());
 			invoke(o, Opcode.INVOKEVIRTUAL, tlGet);
@@ -348,6 +518,16 @@ final class JvmOperandTypeRuntime {
 			o.add(Opcode.AALOAD);
 			o.add(Opcode.ALOAD_0);
 			int ifOther = branch(o, Opcode.IF_ACMPNE);
+			o.add(Opcode.ILOAD);
+			o.add(8);
+			int ifSymbolType = branch(o, Opcode.IFEQ);
+			o.add(Opcode.ALOAD);
+			o.add(7);
+			o.add(Opcode.ICONST_2);
+			o.add(Opcode.AALOAD);
+			o.add(Opcode.ASTORE);
+			o.add(5);
+			JvmRuntimeBuilder.patchBranch(o, ifSymbolType, o.size());
 			emitRecord(o, teTl, object, tlSet, 6, () -> {
 				o.add(Opcode.ALOAD);
 				o.add(7);
@@ -367,10 +547,11 @@ final class JvmOperandTypeRuntime {
 		int unchanged = o.size();
 		JvmRuntimeBuilder.patchBranch(o, ifNull, unchanged);
 		JvmRuntimeBuilder.patchBranch(o, ifNotRaw, unchanged);
+		JvmRuntimeBuilder.patchBranch(o, ifNoType, unchanged);
 		o.add(Opcode.ALOAD_0);
 		o.add(Opcode.ARETURN);
 		methods.add(new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(OP_TYPE_ERR), cp.addUtf8(OP_TYPE_ERR_DESC), o,
-				8, 8, List.of()));
+				8, 9, List.of()));
 
 		if (teTl != null) {
 			// _teSlot(Throwable e, int i): the record's slot i when the record is e's,
@@ -520,6 +701,30 @@ final class JvmOperandTypeRuntime {
 		}
 		c.add(Opcode.ARETURN);
 		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(desc), c, 2, 1, List.of());
+	}
+
+	/**
+	 * Opens a cons: {@code new Object[2]} with {@code car} stored, leaving the array on
+	 * the stack for {@link #emitConsTail} to store the cdr pushed after it. Peak operand
+	 * stack: 3 plus the car's.
+	 */
+	private static void emitConsHead(List<Integer> c, ClassConstant object, Runnable car) {
+		c.add(Opcode.ICONST_2);
+		c.add(Opcode.ANEWARRAY);
+		JvmRuntimeBuilder.emitU2(c, object.index());
+		c.add(Opcode.DUP);
+		c.add(Opcode.ICONST_0);
+		car.run();
+		c.add(Opcode.AASTORE);
+		c.add(Opcode.DUP);
+		c.add(Opcode.ICONST_1);
+	}
+
+	/**
+	 * Closes the cons {@link #emitConsHead} opened, over the cdr on top of the stack.
+	 */
+	private static void emitConsTail(List<Integer> c) {
+		c.add(Opcode.AASTORE);
 	}
 
 	/**
