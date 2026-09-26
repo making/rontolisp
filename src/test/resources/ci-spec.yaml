@@ -17944,6 +17944,29 @@ cases:
       ("LCM: The value NIL is not of type INTEGER" NIL INTEGER)
       ("GCD: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
       ("COMPLEX: The value #C(1 2) is not of type REAL" #C(1 2) REAL)
+  # .kb/error-handling.md, "A wrong-type argument names its operator": random's domain
+  # is CLHS's (OR (INTEGER 1) (FLOAT (0.0))) -- a ratio limit is real but neither, and
+  # an integer or float limit <= 0 is out of range either way. Both report under
+  # RANDOM's own registered REAL type, like a non-real limit above (.todo/981).
+  - name: random-limit-domain-violations-signal-a-type-error
+    source: |
+      (defun ci-rand-te (thunk)
+        (handler-case (funcall thunk)
+          (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+          (error (e) (list :not-a-type-error (princ-to-string e)))))
+      (print (ci-rand-te (lambda () (random 1/2))))
+      (print (ci-rand-te (lambda () (random -1))))
+      (print (ci-rand-te (lambda () (random 0))))
+      (print (ci-rand-te (lambda () (random -1.5))))
+      (print (ci-rand-te (lambda () (random 0.0))))
+      (let ((x -1.0)) (print (ci-rand-te (lambda () (random x)))))
+    expected: |
+      ("RANDOM: The value 1/2 is not of type REAL" 1/2 REAL)
+      ("RANDOM: The value -1 is not of type REAL" -1 REAL)
+      ("RANDOM: The value 0 is not of type REAL" 0 REAL)
+      ("RANDOM: The value -1.5 is not of type REAL" -1.5 REAL)
+      ("RANDOM: The value 0.0 is not of type REAL" 0.0 REAL)
+      ("RANDOM: The value -1.0 is not of type REAL" -1.0 REAL)
   # CLHS 3.5.1.4-6 / .kb/error-handling.md, "Argument-shape errors signal a
   # catchable program-error": a keyword the operator does not accept, an odd
   # keyword tail and a non-keyword in keyword position signal a CATCHABLE

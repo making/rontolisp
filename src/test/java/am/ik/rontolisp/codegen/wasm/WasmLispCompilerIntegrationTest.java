@@ -24537,6 +24537,36 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void ehRandomLimitDomainViolationsSignalATypeError() throws Exception {
+		// The evaluator twin is randomLimitDomainViolationsSignalATypeError. A ratio
+		// limit used to pass _as_f64 (float contagion) and meet _int_val's UNNAMED
+		// INTEGER report, and a non-positive limit was never checked at all -- the
+		// float path silently scaled by a negative number and the integer path took an
+		// UNSIGNED remainder of it, both wrong values instead of a signal (.todo/981).
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(print (te (lambda () (random 1/2))))
+				(print (te (lambda () (random -1))))
+				(print (te (lambda () (random 0))))
+				(print (te (lambda () (random -1.5))))
+				(print (te (lambda () (random 0.0))))
+				(let ((x -1.0)) (print (te (lambda () (random x)))))
+				""";
+		String expected = """
+				("RANDOM: The value 1/2 is not of type REAL" 1/2 REAL)
+				("RANDOM: The value -1 is not of type REAL" -1 REAL)
+				("RANDOM: The value 0 is not of type REAL" 0 REAL)
+				("RANDOM: The value -1.5 is not of type REAL" -1.5 REAL)
+				("RANDOM: The value 0.0 is not of type REAL" 0.0 REAL)
+				("RANDOM: The value -1.0 is not of type REAL" -1.0 REAL)""";
+		assertThat(compileAndRunPrelude(source)).isEqualTo(expected);
+		assertThat(compileComponentAndRunPrelude(source)).isEqualTo(expected);
+	}
+
+	@Test
 	void ehArgumentShapeErrorsSignalACatchableProgramError() throws Exception {
 		// A malformed keyword tail compiles to a call-time program-error carrying the
 		// interpreter's text, and :allow-other-keys t suppresses the check

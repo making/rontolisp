@@ -18679,6 +18679,40 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void randomLimitDomainViolationsSignalATypeError() {
+		// random's domain is CLHS's (OR (INTEGER 1) (FLOAT (0.0))): a ratio limit is
+		// real but neither, and an integer or float limit <= 0 is out of range either
+		// way. Both report under RANDOM's own registered REAL type, like a non-real
+		// limit above, rather than teaching the operand-type table a compound type for
+		// this one operator (.todo/981). The twins are JvmLispCompilerTest and
+		// WasmLispCompilerIntegrationTest's randomLimitDomainViolationsSignalATypeError.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(print (te (lambda () (random 1/2))))
+				(print (te (lambda () (random -1))))
+				(print (te (lambda () (random 0))))
+				(print (te (lambda () (random -1.5))))
+				(print (te (lambda () (random 0.0))))
+				(let ((x -1.0)) (print (te (lambda () (random x)))))
+				""";
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal expr : LispReader.readAllFromString(source)) {
+			evaluator.eval(expr);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8).strip()).isEqualTo("""
+				("RANDOM: The value 1/2 is not of type REAL" 1/2 REAL)
+				("RANDOM: The value -1 is not of type REAL" -1 REAL)
+				("RANDOM: The value 0 is not of type REAL" 0 REAL)
+				("RANDOM: The value -1.5 is not of type REAL" -1.5 REAL)
+				("RANDOM: The value 0.0 is not of type REAL" 0.0 REAL)
+				("RANDOM: The value -1.0 is not of type REAL" -1.0 REAL)""");
+	}
+
+	@Test
 	void zeroArgumentSubtractionAndDivisionSignalCatchableProgramErrors() {
 		// (-) and (/) have no identity (CLHS 12.2 gives + and * only): the compile path
 		// (compiler/ArithmeticIdentities) rejects them with "<op> requires at least one

@@ -607,7 +607,7 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildSignum(nSignum, dUnary, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf,
 				signumDouble, rRatNum, biSignum, longValueOf, rcClass, rCsignum, hasComplex));
 		methods.add(buildRandom(nRandom, dUnary, doubleClass, rDbl, numberClass, numDoubleValue, doubleValueOf,
-				longValueOf, tlrCurrent, tlrNextDouble));
+				longValueOf, tlrCurrent, tlrNextDouble, ratArrClass, typeErrRefs));
 		methods.add(buildSelect(nMin, dBinary, rCmpb, CMPB_LT | CMPB_EQ, rcClass, typeErrRefs, hasComplex));
 		methods.add(buildSelect(nMax, dBinary, rCmpb, CMPB_GT | CMPB_EQ, rcClass, typeErrRefs, hasComplex));
 		methods.add(buildFloatSelect(nFmin, dFmod, Opcode.DCMPG, Opcode.IFLE));
@@ -1931,20 +1931,45 @@ final class JvmNumericRuntimeBuilder {
 	// limit. d = Math.random() * (double) limit; a Double limit returns d, otherwise the
 	// truncated (long) d. Dispatching on the runtime type handles a float limit reaching
 	// random through a variable; using _dbl for the multiply also makes the integer path
-	// robust to a BigInteger / ratio limit.
+	// robust to a BigInteger limit.
+	//
+	// CLHS's domain is (OR (INTEGER 1) (FLOAT (0.0))): a ratio limit (a BigInteger[]
+	// here)
+	// is real but neither, and an integer or float limit <= 0 is out of range either way.
+	// Both are reported under RANDOM's own registered REAL type (like a non-real limit,
+	// `.kb/error-handling.md` "A wrong-type argument names its operator") rather than
+	// teaching the shared operand-type table a compound type for this one operator
+	// (.todo/981).
 	private static NumericMethod buildRandom(Utf8Constant name, Utf8Constant desc, ClassConstant doubleClass,
 			MethodrefConstant rDbl, ClassConstant numberClass, MethodrefConstant numDoubleValue,
 			MethodrefConstant doubleValueOf, MethodrefConstant longValueOf, MethodrefConstant tlrCurrent,
-			MethodrefConstant tlrNextDouble) {
+			MethodrefConstant tlrNextDouble, ClassConstant ratArrClass, TypeErrRefs typeErrRefs) {
 		List<Integer> c = new ArrayList<>();
-		// d = ThreadLocalRandom.current().nextDouble() * _dbl(limit). The per-thread
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, ratArrClass.index());
+		int ifNotRatio = c.size();
+		c.add(Opcode.IFEQ);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitRealErrThrow(c, typeErrRefs);
+		JvmRuntimeBuilder.patchBranch(c, ifNotRatio, c.size());
+		// limitD = _dbl(limit); reject <= 0 (and NaN, DCMPL's -1) before drawing.
+		emitToDouble(c, Opcode.ALOAD_0, rDbl, numberClass, numDoubleValue);
+		c.add(Opcode.DUP2);
+		c.add(Opcode.DCONST_0);
+		c.add(Opcode.DCMPL);
+		int ifPositive = c.size();
+		c.add(Opcode.IFGT);
+		JvmRuntimeBuilder.emitU2(c, 0);
+		emitRealErrThrow(c, typeErrRefs);
+		JvmRuntimeBuilder.patchBranch(c, ifPositive, c.size());
+		// d = ThreadLocalRandom.current().nextDouble() * limitD. The per-thread
 		// generator, not Math.random()'s single shared java.util.Random -- see
 		// .kb/random.md.
 		c.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(c, tlrCurrent.index());
 		c.add(Opcode.INVOKEVIRTUAL);
 		JvmRuntimeBuilder.emitU2(c, tlrNextDouble.index());
-		emitToDouble(c, Opcode.ALOAD_0, rDbl, numberClass, numDoubleValue);
 		c.add(Opcode.DMUL);
 		// limit instanceof Double ? Double.valueOf(d) : Long.valueOf((long) d)
 		c.add(Opcode.ALOAD_0);
@@ -1961,7 +1986,7 @@ final class JvmNumericRuntimeBuilder {
 		c.add(Opcode.INVOKESTATIC);
 		JvmRuntimeBuilder.emitU2(c, longValueOf.index());
 		c.add(Opcode.ARETURN);
-		return new NumericMethod(name, desc, c, 4, 1, List.of());
+		return new NumericMethod(name, desc, c, 6, 1, List.of());
 	}
 
 	// _min/_max(Object a, Object b): keep a when the IEEE comparison holds, else take b

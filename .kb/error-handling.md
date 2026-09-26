@@ -720,6 +720,7 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
 | `(random nil)`, `(complex #c(1 2) 3)` | `RANDOM:` / `COMPLEX: ... REAL` |
 | `(numerator nil)`, `(denominator 1.5)` | `NUMERATOR:` / `DENOMINATOR: ... RATIONAL` |
 | `(lcm nil)`, `(gcd 1.5)` (one argument) | `LCM:` / `GCD: ... INTEGER` |
+| `(random 1/2)`, `(random -1)`, `(random 0.0)` | `RANDOM: ... REAL` |
 
 - **FUNNEL-TYPED operators** (`OperandTypes.FUNNEL_TYPE`: `CAR`, `CDR`, `NTHCDR`, `AREF`,
   `(SETF AREF)`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
@@ -755,11 +756,60 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   87,936 -> 88,735 (+0.9%); a tight 1M-element `car`/`cdr` loop in an EH module 129 -> 166 ms
   (+28%): the cons path tests the type twice (`ref.test`, `ref.cast`) -- `.todo/979` makes it one
   `br_on_cast_fail`. The `aref` loop and the JVM are unchanged.
-- **Open**: list walks and `char` indices (`.todo/980`), `random`'s domain (`.todo/981`), `#'gcd`
-  arity and `#'numerator` (`.todo/982`).
+- **Open**: list walks and `char` indices (`.todo/980`), `#'gcd` arity and `#'numerator`
+  (`.todo/982`).
 - Pinned by `ci-spec.yaml`'s `argument-type-errors-name-the-operator-beyond-arithmetic` and the
   `argumentTypeErrorsNameTheOperatorBeyondArithmetic` triple (`LispEvaluatorTest`,
   `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
+
+### `random`'s domain (closed 2026-09-26, `.todo/981`)
+CLHS's domain is a COMPOUND type, `(OR (INTEGER 1) (FLOAT (0.0)))`: a ratio limit is real but
+neither integer nor float, and an integer or float limit `<= 0` is out of range either way. No
+single existing `OperandTypes.Kind` names that domain truthfully, and `WasmOperandTypes.Texts`
+interns one SYMBOL per `Kind`, not a compound cons structure, so building the CLHS-precise type
+would mean teaching the shared operand-type table (used by many operators) a new representation
+for this one operator alone. Resolution: report it under RANDOM's own ALREADY-registered type,
+`REAL` -- the same text `(random nil)` already got before this fix -- rather than adding
+compound-type machinery only `random` would ever use. A known simplification (like "no
+random-state objects exist" above), not a claim that a ratio or a negative number is not real.
+
+- **Interpreter** (`Environment.java`'s `RANDOM` builtin): the three hand-written
+  `LispEvalException` throws (ratio, non-positive int/float/bignum) became
+  `OperandTypeException.of(limit, Kind.REAL).named(RANDOM)`, the exact call the pre-existing
+  non-real case already made -- catchable now, where they were plain uncatchable-by-class
+  `simple-error`s before.
+- **JVM, the general path** (`JvmNumericRuntimeBuilder.buildRandom`, `_random`): a ratio limit
+  (`BigInteger[]`) and a `<= 0` limit (checked via `_dbl`, so one comparison catches Long, Double
+  and BigInteger alike) both throw the unnamed `_teRaw(limit, REAL)` `_dbl` already throws for a
+  non-real limit; the per-(helper, operator) wrapper around every `_random` call site (already
+  established for the non-real case) renames it the same way.
+- **JVM, the two paths that bypass `_random` for performance** -- `.kb/random.md`'s "Four JVM
+  sites must agree on the FORMULA" already tracked this exposure:
+  - `JvmRandomCompiler`'s double-literal fast path (`unboxDouble` + inline multiply, no dispatch)
+    now checks the limit's sign first: positive re-runs `unboxDouble` (a pure coercion, cheap to
+    call twice) and inlines as before; non-positive calls the wrapped `_random` on the STILL-BOXED
+    value instead of drawing, which throws before any draw happens (no double-draw).
+  - `JvmIntFusionCompiler`: a foldable constant limit `<= 0` no longer builds a `RandomLeaf` at
+    all (`randomLeaf` returns null, the same bail a ratio/bignum limit already took), forcing the
+    call through the checked unfused path. A runtime Long limit `<= 0` now joins the "not a Long"
+    trampoline in `emitRandomDraw` (which already calls the wrapped `_random`) instead of drawing.
+    That trampoline's `ctx.numOp(RANDOM)` call needed an explicit `ctx.operator = RANDOM` around
+    it: the fusion planner reaches a `(random ...)` argument STRUCTURALLY, never through
+    `JvmExprCompiler.compileCons`'s per-form dispatch that normally sets `ctx.operator`, so the
+    wrapper was resolving unnamed until this was added.
+- **wasm-GC, EH mode only** (gated behind `WasmEmitHelper.checksConsFields`, like the non-real
+  check above -- a non-EH module is unchanged, byte for byte): the float branch (both the
+  literal-argument fast path and the runtime `ref.test TYPE_FLOAT` one) checks the limit's `f64`
+  value against `0.0` before scaling; the integer branch's `_int_val` call -- which already
+  rejected a ratio, since a ratio is neither an i31 nor a boxed integer, but UNNAMED (a raw `call`,
+  not `WasmOperandTypes.emitCall`) -- now goes through `emitCall` like `_as_f64` beside it, so it
+  reports RANDOM's own `REAL` under the operator register instead of an unnamed `INTEGER`; the
+  extracted `i64` limit is then checked `<= 0` before the unsigned remainder (which previously
+  read a negative limit's two's-complement bit pattern as a huge unsigned value). `_int_val` is
+  pure, so calling it a second time for the actual remainder draws nothing extra.
+- Pinned by `ci-spec.yaml`'s `random-limit-domain-violations-signal-a-type-error` and the
+  `randomLimitDomainViolationsSignalATypeError` / `ehRandomLimitDomainViolationsSignalATypeError`
+  triple (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
 
 ## Argument-shape errors signal a catchable program-error
 **Invariant: a keyword the operator does not accept, an odd keyword tail and a non-keyword in
