@@ -136,8 +136,23 @@ final class WasmFdlibmRuntimeBuilder {
 	 * @return true when the blob must be placed
 	 */
 	static boolean needsTables(Collection<Fn> fns) {
-		return fns.contains(Fn.REM_PIO2) || fns.contains(Fn.K_REM_PIO2) || fns.contains(Fn.SIN) || fns.contains(Fn.COS)
-				|| fns.contains(Fn.TAN);
+		for (Fn fn : fns) {
+			if (addressesTables(fn)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the function's own body cites the {@link #tables()} base -- the shaker
+	 * keeps the blob exactly while one of these survives, so the set must name every body
+	 * that does.
+	 * @param fn the function
+	 * @return true for the trig reduction and its three entry points
+	 */
+	static boolean addressesTables(Fn fn) {
+		return fn == Fn.REM_PIO2 || fn == Fn.K_REM_PIO2 || fn == Fn.SIN || fn == Fn.COS || fn == Fn.TAN;
 	}
 
 	// --- the linear-memory blob: two tables, then the reduction's scratch arrays ------
@@ -1298,7 +1313,7 @@ final class WasmFdlibmRuntimeBuilder {
 
 		// Pushes the element address: base + (index << shift); the array's own offset
 		// rides in the load/store immediate. The base is always cited as its own
-		// i32.const so a shaker probing the blob on its base word finds every reader.
+		// i32.const, so a body cites it exactly when addressesTables says it does.
 		private void address(MemArray arr, Expr index) {
 			this.w.write(Instruction.I32_CONST);
 			this.w.writeSignedLeb128(this.tablesBase);

@@ -175,7 +175,7 @@ final class WasmOperandTypes {
 					rowCodes.add(code(OperandTypes.Kind.STRING));
 				}
 			}
-			return new Operators(java.util.Map.copyOf(ids), table.appendShakeableBlobProbedOnBase(blob.toByteArray()),
+			return new Operators(java.util.Map.copyOf(ids), table.appendReaderOwnedBlob(blob.toByteArray()),
 					java.util.Set.copyOf(rowCodes));
 		}
 

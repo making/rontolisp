@@ -211,12 +211,12 @@ reference for the SHAPE only.
 - **WASM**: `_fun_name(funcId)` reuses `TYPE_PRINT_I32` and WRITES the whole tag itself via
   `emitWriteString` (so prin1/princ cannot drift and no scratch local is needed), binary-searching
   a sorted 12-byte-row blob `[funcId][nameOff][nameLen]` placed with
-  `appendShakeableBlobUnalignedProbedOnBase` -- UNALIGNED on purpose (the reader loads rows with
+  `appendReaderOwnedBlobUnaligned` -- UNALIGNED on purpose (the reader loads rows with
   plain `i32.load`s, and an alignment pad here would charge a quoted u16/u8 vector's next element
   for the pad it shifts, breaking the per-element cost pin in
   `WasmLispCompilerTest#aLiteralLookupTableCostsItsOwnBytesAndNotThreeTimesThem`). The names are
-  interned with plain `addString`, and each joins the droppable ranges PROBED ON THE BLOB'S FIRST
-  WORD: `_fun_name` is their only reader and reaches them through words inside the blob, a citation
+  interned with plain `addString`, and each joins the droppable ranges DECIDED BY THE BLOB'S READER
+  (`.kb/optimize-dead-code-elimination.md`): `_fun_name` is their only reader and reaches them through words inside the blob, a citation
   the constant scan cannot follow, so name, blob and `_fun_name` live and fall together. The tag
   pieces are `StringTable.lambdaStr`/`funcPrefix` (`addBodyString`, shakeable) and the shared `>` of
   `hashTableEnd`. The blob and the function are SKIPPED entirely when the table is empty

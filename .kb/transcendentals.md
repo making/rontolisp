@@ -29,8 +29,9 @@ The one stated exception is `--gpu`'s transcendental tier (`.kb/linalg-simd.md`)
   arithmetic, `(int) d` is the saturating `i32.trunc_sat_f64_s` (Java's cast), and
   the language has NO implicit promotion, so a missed cast in a transliteration fails
   to parse. The trig reduction's 2/pi table, `npio2_hw` and `__kernel_rem_pio2`'s
-  scratch arrays live in linear memory (`tables()`, a shakeable blob probed on its base;
-  every access cites the base as its own `i32.const`).
+  scratch arrays live in linear memory (`tables()`, a reader-owned blob kept while a function
+  `addressesTables` names survives; every access cites the base as its own `i32.const`, which
+  `WasmLispCompilerTest#everyFdlibmBodyThatCitesTheTablesIsOneTheShakerCountsAsTheirReader` pins).
   - GC backend: fixed slots `FUNC_FD_BASE + Fn.ordinal()` after `_cdr` (types
     `TYPE_FD_*` after the Schubfach block). Every call site goes through
     `Ctx.fdlibm(fn)`, which records the function; the code section gives the closure

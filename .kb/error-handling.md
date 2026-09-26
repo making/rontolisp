@@ -1039,9 +1039,10 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   `car`/`cdr` read, whose block would need a cast-typed signature); the JVM unchanged.
 - **Cost of the string accesses, measured 2026-09-26** (wasmtime 49): `zlib` code +201 B and
   strings +52 B; `hello_world`, `pi_approx`, `dom_reactor` unchanged, a non-EH module
-  byte-identical, JVM class 164,583 -> 164,736. Its P1 total reads 117,008 -> 118,253 only because
-  the 52-byte shift put the fdlibm table's probed base word on chipz's literal `2048`, which pins
-  ~990 dead bytes (`.todo/990`). A 21M-read `char` loop: JVM unchanged (noise), EH wasm 560 ->
+  byte-identical, JVM class 164,583 -> 164,736. Its P1 total read 117,008 -> 118,253 only because
+  the 52-byte shift put the fdlibm table's then-probed base word on chipz's literal `2048`, pinning
+  ~990 dead bytes; with the table decided by its readers it is 117,260
+  (`.kb/optimize-dead-code-elimination.md`). A 21M-read `char` loop: JVM unchanged (noise), EH wasm 560 ->
   580 ms (the register write around `_str_char_ref` and its quote-frame test).
 - **Open**: the list consumers beyond these (`.todo/985`), the string-store leftovers
   (`.todo/989`).

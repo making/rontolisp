@@ -130,6 +130,18 @@ public final class WasmTreeShaker {
 	 * bytes. A deduplicated string is the case: a function name in a name table that is
 	 * also the symbol a live body builds.
 	 *
+	 * <p>
+	 * {@code readerFuncIndices}, when non-null, replaces the probe with the caller's word
+	 * for WHO reads the bytes, in the {@link OwnedDataSegment} sense: the range is kept
+	 * while one of those functions is reachable (or, with {@code ownCitationKeeps}, while
+	 * its own bytes are cited) and the probed interval is ignored. It is for a blob whose
+	 * readers are known functions citing its BASE word: probing that one word by
+	 * observation let any unrelated live constant equal to it -- an integer literal in
+	 * user code -- pin the whole blob, and which constant that was moved with every
+	 * string placed in front of it. An empty array means no function reads the bytes. The
+	 * readers must keep their own bodies: a pass that moves one into its caller (the
+	 * single-call-site inliner) must pin it, as for an {@code OwnedDataSegment} owner.
+	 *
 	 * @param segmentIndex index of the segment within the data section
 	 * @param start offset of the range within that segment's bytes
 	 * @param end end offset (exclusive) of the range within that segment's bytes
@@ -137,9 +149,27 @@ public final class WasmTreeShaker {
 	 * @param probeEnd end offset (exclusive) of the decided interval
 	 * @param ownCitationKeeps whether a citation of the range's own bytes keeps it as
 	 * well
+	 * @param readerFuncIndices global function indices (pre-shake) whose reachability
+	 * decides the range in place of the probe, or null to decide it by observation
 	 */
 	public record DroppableDataRange(int segmentIndex, int start, int end, int probeStart, int probeEnd,
-			boolean ownCitationKeeps) {
+			boolean ownCitationKeeps, int @Nullable [] readerFuncIndices) {
+
+		/**
+		 * The observed form, probed on {@code [probeStart, probeEnd)}.
+		 * @param segmentIndex index of the segment within the data section
+		 * @param start offset of the range within that segment's bytes
+		 * @param end end offset (exclusive) of the range within that segment's bytes
+		 * @param probeStart offset within the segment's bytes whose citations decide the
+		 * fate
+		 * @param probeEnd end offset (exclusive) of the decided interval
+		 * @param ownCitationKeeps whether a citation of the range's own bytes keeps it as
+		 * well
+		 */
+		public DroppableDataRange(int segmentIndex, int start, int end, int probeStart, int probeEnd,
+				boolean ownCitationKeeps) {
+			this(segmentIndex, start, end, probeStart, probeEnd, ownCitationKeeps, null);
+		}
 
 		/**
 		 * The self-probed form: the range is cut exactly when its own bytes are uncited.
@@ -149,6 +179,25 @@ public final class WasmTreeShaker {
 		 */
 		public DroppableDataRange(int segmentIndex, int start, int end) {
 			this(segmentIndex, start, end, start, end, true);
+		}
+
+		/**
+		 * The reader-decided form: the range is cut exactly when none of the given
+		 * functions survives (and, with {@code ownCitationKeeps}, nothing cites its bytes
+		 * either).
+		 * @param segmentIndex index of the segment within the data section
+		 * @param start offset of the range within that segment's bytes
+		 * @param end end offset (exclusive) of the range within that segment's bytes
+		 * @param readerFuncIndices global function indices (pre-shake) of every function
+		 * that reads the bytes
+		 * @param ownCitationKeeps whether a citation of the range's own bytes keeps it as
+		 * well
+		 * @return the range
+		 */
+		public static DroppableDataRange readBy(int segmentIndex, int start, int end, int[] readerFuncIndices,
+				boolean ownCitationKeeps) {
+			return new DroppableDataRange(segmentIndex, start, end, start, end, ownCitationKeeps,
+					readerFuncIndices.clone());
 		}
 
 		/**
@@ -945,7 +994,8 @@ public final class WasmTreeShaker {
 	// range's start would otherwise pin a genuinely dead neighbour -- which is what kept
 	// the printer prologue's " . " alive behind "\n", and a dead builtin-wrapper literal
 	// alive behind the one the program actually prints. The probed interval is the
-	// range's own bytes unless the caller tied it to another (see DroppableDataRange).
+	// range's own bytes unless the caller tied it to another, and a range that names its
+	// reader functions is decided by their reachability instead (see DroppableDataRange).
 	private static List<DroppableDataRange> deadRanges(List<DroppableDataRange> candidates, List<DataSegment> segments,
 			List<Integer> deadSegments, boolean[] reachable, int numImportedFuncs,
 			List<@Nullable IntList> bodyConstants, IntList globalConstants) {
@@ -968,7 +1018,9 @@ public final class WasmTreeShaker {
 			}
 			int base = segments.get(r.segmentIndex()).offset();
 			int address = base + r.probeStart();
-			boolean probeCited = containsInRange(sorted, address, address + (r.probeEnd() - r.probeStart()) - 1);
+			int @Nullable [] readers = r.readerFuncIndices();
+			boolean probeCited = readers != null ? anyOwnerAlive(readers, reachable, reachable.length)
+					: containsInRange(sorted, address, address + (r.probeEnd() - r.probeStart()) - 1);
 			boolean ownCited = r.ownCitationKeeps() && containsInRange(sorted, base + r.start(), base + r.end() - 1);
 			if (!probeCited && !ownCited) {
 				dead.add(r);

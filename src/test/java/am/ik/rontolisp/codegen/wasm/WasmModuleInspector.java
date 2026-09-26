@@ -23,6 +23,8 @@ public final class WasmModuleInspector {
 
 	private static final int SECTION_CODE = 10;
 
+	private static final int SECTION_DATA = 11;
+
 	/** Component section carrying a nested core module (its payload is a core binary). */
 	private static final int COMPONENT_SECTION_CORE_MODULE = 1;
 
@@ -87,6 +89,68 @@ public final class WasmModuleInspector {
 			cursor[0] = sectionEnd;
 		}
 		return 0;
+	}
+
+	/**
+	 * Returns the linear-memory address at which an active data segment of the core
+	 * module places {@code needle}, or -1 when no segment holds it -- after a shake, -1
+	 * means the bytes were cut. Only the flag-0 segments the backends emit are read.
+	 */
+	public static int dataAddressOf(byte[] module, byte[] needle) {
+		int[] cursor = { 8 };
+		while (cursor[0] < module.length) {
+			int sectionId = module[cursor[0]++] & 0xFF;
+			int sectionSize = readUnsignedLeb128(module, cursor);
+			int sectionEnd = cursor[0] + sectionSize;
+			if (sectionId == SECTION_DATA) {
+				int count = readUnsignedLeb128(module, cursor);
+				for (int i = 0; i < count; i++) {
+					int flags = readUnsignedLeb128(module, cursor);
+					if (flags != 0 || module[cursor[0]++] != 0x41) {
+						throw new IllegalArgumentException("not an active i32.const segment");
+					}
+					int offset = readSignedLeb128(module, cursor);
+					cursor[0]++; // end
+					int length = readUnsignedLeb128(module, cursor);
+					int at = indexOf(module, cursor[0], cursor[0] + length, needle);
+					if (at >= 0) {
+						return offset + at - cursor[0];
+					}
+					cursor[0] += length;
+				}
+				return -1;
+			}
+			cursor[0] = sectionEnd;
+		}
+		return -1;
+	}
+
+	private static int indexOf(byte[] bytes, int from, int to, byte[] needle) {
+		outer: for (int i = from; i + needle.length <= to; i++) {
+			for (int k = 0; k < needle.length; k++) {
+				if (bytes[i + k] != needle[k]) {
+					continue outer;
+				}
+			}
+			return i;
+		}
+		return -1;
+	}
+
+	private static int readSignedLeb128(byte[] bytes, int[] cursor) {
+		int result = 0;
+		int shift = 0;
+		int b;
+		do {
+			b = bytes[cursor[0]++] & 0xFF;
+			result |= (b & 0x7F) << shift;
+			shift += 7;
+		}
+		while ((b & 0x80) != 0);
+		if (shift < 32 && (b & 0x40) != 0) {
+			result |= -1 << shift;
+		}
+		return result;
 	}
 
 	private static int readUnsignedLeb128(byte[] bytes, int[] cursor) {
