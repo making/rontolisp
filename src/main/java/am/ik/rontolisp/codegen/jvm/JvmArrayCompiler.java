@@ -431,29 +431,32 @@ final class JvmArrayCompiler {
 
 	static void compileRowMajorAref(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		// (row-major-aref array index): the data is stored flat right after the header,
-		// so this is exactly the rank-1 accessor, independent of the array's rank.
+		// so this is exactly the rank-1 accessor, independent of the array's rank. A
+		// subscript that is no integer is ROW-MAJOR-AREF's type-error.
 		List<LispVal> args = cons.toList();
 		if (args.size() != 3) {
 			throw new UnsupportedOperationException(
 					"row-major-aref expects an array and an index, got " + (args.size() - 1) + " argument(s)");
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		compileSubscript(args.get(2), ctx, className);
 		invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.AREF1, JvmFloatArrayRuntimeBuilder.AREF1,
 				JvmArrayRuntimeBuilder.AREF1), JvmArrayRuntimeBuilder.AREF1_DESC);
 	}
 
 	static void compileRowMajorAset(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		// (%row-major-aset array index value): flat store, the rank-1 setter.
+		// (%row-major-aset array index value): flat store, the rank-1 setter, a
+		// wrong-type
+		// subscript or packed value reported as (SETF ROW-MAJOR-AREF)'s, as %aset's are.
 		List<LispVal> args = cons.toList();
 		if (args.size() != 4) {
 			throw new UnsupportedOperationException("%row-major-aset expects an array, an index and a value, got "
 					+ (args.size() - 1) + " argument(s)");
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		compileSubscript(args.get(2), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(3), ctx, className);
-		invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1, JvmFloatArrayRuntimeBuilder.ASET1,
+		invokeStoreHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1, JvmFloatArrayRuntimeBuilder.ASET1,
 				JvmArrayRuntimeBuilder.ASET1), JvmArrayRuntimeBuilder.ASET1_DESC);
 	}
 

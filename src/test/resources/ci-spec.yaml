@@ -18109,8 +18109,8 @@ cases:
   # .kb/error-handling.md, "A wrong-type argument names its operator": char/schar
   # of a non-string (STRING), a (setf char|schar) place's string and subscript
   # under (SETF CHAR)/(SETF SCHAR), a string-holding aref/elt place's subscript
-  # under (SETF AREF) as its array arm's, row-major-aref's unnamed as its array
-  # arm's.
+  # under (SETF AREF) as its array arm's, row-major-aref's under
+  # (SETF ROW-MAJOR-AREF).
   - name: string-accesses-name-the-operator
     source: |
       (defun ci-sa (thunk)
@@ -18150,8 +18150,56 @@ cases:
       ("(SETF SCHAR): The value FOO is not of type STRING" FOO STRING)
       ("(SETF AREF): The value NIL is not of type INTEGER" NIL INTEGER)
       ("(SETF AREF): The value NIL is not of type INTEGER" NIL INTEGER)
-      ("The value NIL is not of type INTEGER" NIL INTEGER)
+      ("(SETF ROW-MAJOR-AREF): The value NIL is not of type INTEGER" NIL INTEGER)
       ("xb" "zy" #\x #\y #\é)
+  # .kb/error-handling.md, "A wrong-type argument names its operator": a
+  # non-character stored through a char/schar/aref/elt/row-major-aref place is its
+  # store's CHARACTER type-error; a row-major-aref subscript that is no integer is
+  # ROW-MAJOR-AREF's / (SETF ROW-MAJOR-AREF)'s, on every arm.
+  - name: string-stores-and-row-major-subscripts-name-the-operator
+    source: |
+      (defun ci-ss (thunk)
+        (handler-case (funcall thunk)
+          (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+          (error (e) (list :not-a-type-error (princ-to-string e)))))
+      (defvar *ci-ss-nil* nil)
+      (defvar *ci-ss-five* 5)
+      (defvar *ci-ss-sym* 'foo)
+      (let ((s (copy-seq "ab")))
+        (print (ci-ss (lambda () (setf (char s 0) *ci-ss-five*))))
+        (print (ci-ss (lambda () (setf (schar s 1) *ci-ss-sym*))))
+        (print (ci-ss (lambda () (setf (aref s 0) *ci-ss-five*))))
+        (print (ci-ss (lambda () (setf (elt s 0) *ci-ss-five*))))
+        (print (ci-ss (lambda () (setf (row-major-aref s 0) *ci-ss-five*))))
+        (print s))
+      (let ((v (vector 1 2 3)) (s (copy-seq "ab")) (m (make-array '(2 2) :initial-element 0))
+            (u (make-array 3 :element-type '(unsigned-byte 8))) (d (make-array 2 :element-type 'double-float)))
+        (print (ci-ss (lambda () (row-major-aref v *ci-ss-nil*))))
+        (print (ci-ss (lambda () (setf (row-major-aref v *ci-ss-nil*) 0))))
+        (print (ci-ss (lambda () (row-major-aref s *ci-ss-nil*))))
+        (print (ci-ss (lambda () (setf (row-major-aref s *ci-ss-nil*) #\x))))
+        (print (ci-ss (lambda () (row-major-aref m 1.5))))
+        (print (ci-ss (lambda () (setf (row-major-aref m *ci-ss-sym*) 1))))
+        (print (ci-ss (lambda () (row-major-aref u *ci-ss-nil*))))
+        (print (ci-ss (lambda () (setf (row-major-aref d 0) *ci-ss-sym*))))
+        (setf (row-major-aref m 3) 7 (row-major-aref s 1) #\y (row-major-aref d 1) 2)
+        (print (list (row-major-aref m 3) s (row-major-aref d 1) (row-major-aref v 2))))
+    expected: |
+      ("(SETF CHAR): The value 5 is not of type CHARACTER" 5 CHARACTER)
+      ("(SETF SCHAR): The value FOO is not of type CHARACTER" FOO CHARACTER)
+      ("(SETF AREF): The value 5 is not of type CHARACTER" 5 CHARACTER)
+      ("(SETF AREF): The value 5 is not of type CHARACTER" 5 CHARACTER)
+      ("(SETF ROW-MAJOR-AREF): The value 5 is not of type CHARACTER" 5 CHARACTER)
+      "ab"
+      ("ROW-MAJOR-AREF: The value NIL is not of type INTEGER" NIL INTEGER)
+      ("(SETF ROW-MAJOR-AREF): The value NIL is not of type INTEGER" NIL INTEGER)
+      ("ROW-MAJOR-AREF: The value NIL is not of type INTEGER" NIL INTEGER)
+      ("(SETF ROW-MAJOR-AREF): The value NIL is not of type INTEGER" NIL INTEGER)
+      ("ROW-MAJOR-AREF: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+      ("(SETF ROW-MAJOR-AREF): The value FOO is not of type INTEGER" FOO INTEGER)
+      ("ROW-MAJOR-AREF: The value NIL is not of type INTEGER" NIL INTEGER)
+      ("(SETF ROW-MAJOR-AREF): The value FOO is not of type REAL" FOO REAL)
+      (7 "ay" 2.0 3)
   # CLHS 3.5.1.4-6 / .kb/error-handling.md, "Argument-shape errors signal a
   # catchable program-error": a keyword the operator does not accept, an odd
   # keyword tail and a non-keyword in keyword position signal a CATCHABLE

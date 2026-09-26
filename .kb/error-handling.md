@@ -934,12 +934,15 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
 | `(loop for x in 5 ...)`, `(loop for x in '(1 2 . 3) ...)` | `ENDP: ... LIST` |
 | `(char 5 0)`, `(schar 'foo 0)`, `(char (vector #\a) 0)` | `CHAR:` / `SCHAR: ... STRING` |
 | `(setf (char s nil) c)`, `(setf (schar 5 0) c)` | `(SETF CHAR): ... INTEGER` / `(SETF SCHAR): ... STRING` |
+| `(setf (char s 0) 5)`, `(setf (aref s 0) 5)` (`s` a string) | `(SETF CHAR):` / `(SETF AREF): ... CHARACTER` |
+| `(row-major-aref v nil)`, `(setf (row-major-aref v nil) 0)` | `ROW-MAJOR-AREF:` / `(SETF ROW-MAJOR-AREF): ... INTEGER` |
 
 - **FUNNEL-TYPED operators** (`OperandTypes.FUNNEL_TYPE`: `CAR`, `CDR`, `NTHCDR`, `ENDP`, `AREF`,
-  `(SETF AREF)`, `CHAR`, `SCHAR`, `(SETF CHAR)`, `(SETF SCHAR)`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
-  (new kinds `LIST`, `RATIONAL`, `STRING`) -- except that a to-double funnel (`NUMBER`) there is a packed float
+  `(SETF AREF)`, `CHAR`, `SCHAR`, `(SETF CHAR)`, `(SETF SCHAR)`, `ROW-MAJOR-AREF`,
+  `(SETF ROW-MAJOR-AREF)`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
+  (new kinds `LIST`, `RATIONAL`, `STRING`, `CHARACTER`) -- except that a to-double funnel (`NUMBER`) there is a packed float
   store, which takes any real: `REAL`. A numeric operator keeps its one fixed type. `%aset` reports
-  as `(SETF AREF)`, `nth` as `NTHCDR`, `svref` as `AREF`, `first`/`rest` as `CAR`/`CDR`
+  as `(SETF AREF)`, `%row-major-aset` as `(SETF ROW-MAJOR-AREF)`, `nth` as `NTHCDR`, `svref` as `AREF`, `first`/`rest` as `CAR`/`CDR`
   (`OperandTypes.REWRITTEN`, the call-position-rewrite rule above). A one-argument `gcd`/`lcm`
   lowers to `(gcd x 0)`/`(lcm x 1)` (`LispMacroExpander.expandReduction`) -- it was `abs`, which
   accepted a float and named itself.
@@ -983,9 +986,9 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   then the string -- that order on every backend, because the compiled sites check the
   subscript ahead of the read. A `setf` place names its STORE: `%schar-set`'s optional fourth
   operand is the quoted place head (`LispMacroExpander.scharSetOf`), reported as
-  `(SETF CHAR)`/`(SETF SCHAR)`, and as `(SETF AREF)` for an `aref`/`svref`/`elt` place's
-  string arm (the array arm's name); `row-major-aref`'s string arm stays unnamed, as its array
-  arm is. Interpreter: `charRef`, `scharSet(args, rebind, operator)`. Compiled:
+  `(SETF CHAR)`/`(SETF SCHAR)`, as `(SETF AREF)` for an `aref`/`svref`/`elt` place's
+  string arm (the array arm's name) and as `(SETF ROW-MAJOR-AREF)` for a `row-major-aref`
+  place's. Interpreter: `charRef`, `scharSet(args, rebind, operator)`. Compiled:
   `expandScharSetFunctional` wraps the runtime defun's arguments in `(%check-string var 'op)`
   (a `char`/`schar` place only; the others run under `stringp`) and `(%check-index i 'op)`
   (`op` nil = unnamed) -- compile-path-only forms, since `%schar-set-runtime` cannot know the
@@ -999,8 +1002,23 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   `emitStringpI32` plus `emitTypeError`, `%check-index` is `emitIndexCheck`. The landing
   selects `STRING` only when the table has a string-checking row (`STRING_CHECKED` adds its
   code to `rowCodes`); `LOWERED_TO` adds `(SETF CHAR)`/`(SETF SCHAR)` for `CHAR`/`SCHAR` and
-  `(SETF AREF)` for `ELT`. Still open: a `setf` value that is no character, and
-  `row-major-aref`'s array-arm subscript (`.todo/989`).
+  `(SETF AREF)` for `ELT`.
+- **String stores and `row-major-aref`** (2026-09-26; a non-character store was
+  `%SCHAR-SET`'s message-only error, a silent JVM store that later escaped as a
+  `ClassCastException`, a wasm cast trap; a `row-major-aref` subscript unnamed, a
+  `NullPointerException` or a trap): a `%schar-set` checks string, subscript, VALUE, then
+  bounds -- the value is `CHARACTER`, a new kind. Compiled: the runtime defun's third
+  argument is `(%check-character c 'op)`, every place (`op` nil = unnamed). JVM:
+  `instanceof int[]` plus the site throw `%check-string` uses (`emitSiteTypeError`). wasm, EH
+  mode only: `ref.test $char` plus `emitTypeError`; the landing selects `CHARACTER` only when
+  the module carries `%schar-set-runtime` (`WasmOperandTypes.CHARACTER_CHECKED`, the one
+  function every string store calls). The interpreter's `%aset`/`%row-major-aset` string arm
+  (`storeStringChar`) throws the unnamed `CHARACTER` report the seam names. `row-major-aref`
+  and `%row-major-aset` check their subscript as `aref`/`%aset` do (`compileSubscript`: JVM
+  `_ckIdx`, wasm `_idx_chk` on every arm), and the JVM store goes through the wrapper, so a
+  packed float store's non-real reports `(SETF ROW-MAJOR-AREF): ... REAL` as the
+  interpreter's seam now names it. `LOWERED_TO` adds `(SETF ROW-MAJOR-AREF)` for
+  `ROW-MAJOR-AREF`.
 - **Interpreter**: the built-ins throw `OperandTypeException` with the kind (`car`/`cdr`/`first`/
   `rest` and `nthValue` `LIST`, `numerator`/`denominator` `RATIONAL`, `random` `NUMBER`/`REAL`), the
   seam names them. `#'first`/`#'rest` of nil and `#'second` past the end answer nil now, as the
@@ -1043,13 +1061,23 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   the 52-byte shift put the fdlibm table's probed base word on chipz's literal `2048`, which pins
   ~990 dead bytes (`.todo/990`). A 21M-read `char` loop: JVM unchanged (noise), EH wasm 560 ->
   580 ms (the register write around `_str_char_ref` and its quote-frame test).
-- **Open**: the list consumers beyond these (`.todo/985`), the string-store leftovers
-  (`.todo/989`).
+- **Cost of the string stores and `row-major-aref`, measured 2026-09-26** (wasmtime 49): `zlib`
+  P1 code 107,679 -> 107,748 (+69 B; the landing's `CHARACTER` arm +16), data 9,610 -> 8,654 (the
+  `.todo/990` pin no longer lands), total 118,253 -> 117,366; size level code 80,330 -> 79,844
+  (`WasmRefTypeFolder` proves `%schar-set-runtime`'s value a character, so its packed-integer
+  arm folds to a trap and one body folds away); JVM class 164,736 -> 165,719 (+983 B: the
+  `_ckIdx`/store wrappers and the call sites of chipz's `row-major-aref`/`fill`/`replace`
+  loops). `hello_world`, `pi_approx`, `dom_reactor` unchanged; a non-EH module byte-identical.
+  A 20M-iteration `row-major-aref` read+store loop: EH wasm 0.91 -> 1.08 s, what the same `aref`
+  loop already paid (0.99 s); JVM unchanged (1.67 -> 1.65 s at 300M).
+- **Open**: the list consumers beyond these (`.todo/985`).
 - Pinned by `ci-spec.yaml`'s `argument-type-errors-name-the-operator-beyond-arithmetic` and
   `list-walks-and-string-indices-name-the-operator`, `list-consumers-name-the-operator` and
-  `string-accesses-name-the-operator`, and the
+  `string-accesses-name-the-operator`, `string-stores-and-row-major-subscripts-name-the-operator`,
+  and the
   `argumentTypeErrorsNameTheOperatorBeyondArithmetic` / `listWalksAndStringIndicesNameTheOperator` /
-  `listConsumersNameTheOperator` / `stringAccessesNameTheOperator` triples (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
+  `listConsumersNameTheOperator` / `stringAccessesNameTheOperator` /
+  `stringStoresAndRowMajorSubscriptsNameTheOperator` triples (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
 
 ### `random`'s domain (closed 2026-09-26, `.todo/981`)
 CLHS's domain is a COMPOUND type, `(OR (INTEGER 1) (FLOAT (0.0)))`: a ratio limit is real but
