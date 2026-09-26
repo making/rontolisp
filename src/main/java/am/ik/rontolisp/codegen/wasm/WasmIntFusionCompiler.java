@@ -10,8 +10,11 @@ import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.SourceLocation;
+import am.ik.rontolisp.SourceProvenance;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Fuses a nested integer arithmetic/bitwise expression tree ({@code + - * mod rem logand
@@ -124,7 +127,15 @@ final class WasmIntFusionCompiler {
 		}
 	}
 
-	private record OpNode(String op, List<Node> args) implements Node {
+	/**
+	 * A fused operation. {@code source} is the innermost form read from a file it
+	 * evaluates under and {@code owner} the defun whose body holds that form
+	 * ({@code null} for the function the tree compiles in): where
+	 * {@code --report-locations} places a condition its generic helper signals
+	 * ({@link WasmUncaughtLocations#enterOperation}).
+	 */
+	private record OpNode(String op, List<Node> args, @Nullable LispCons source,
+			@Nullable String owner) implements Node {
 	}
 
 	private record ConstLeaf(long value) implements Node {
@@ -164,9 +175,16 @@ final class WasmIntFusionCompiler {
 
 		int i64Slot = -1;
 
-		ArefLeaf(LispVal arrayExpr, LispVal indexExpr) {
+		/** As {@link OpNode#source}: where the generic read's condition is reported. */
+		final @Nullable LispCons source;
+
+		final @Nullable String owner;
+
+		ArefLeaf(LispVal arrayExpr, LispVal indexExpr, @Nullable LispCons source, @Nullable String owner) {
 			this.arrayExpr = arrayExpr;
 			this.indexExpr = indexExpr;
+			this.source = source;
+			this.owner = owner;
 		}
 
 	}
@@ -206,6 +224,20 @@ final class WasmIntFusionCompiler {
 		final java.util.Map<String, RawLeaf> sharedRawLeaves = new java.util.HashMap<>();
 
 		final java.util.Set<String> assignedNames = new java.util.HashSet<>();
+
+		/**
+		 * The innermost form read from a file the classification is under, and the defun
+		 * whose body holds it ({@code null}: the function the tree compiles in).
+		 */
+		@Nullable LispCons source;
+
+		@Nullable String sourceOwner;
+
+		/**
+		 * The defun whose body the classification is in -- an inlined one's -- or
+		 * {@code null} for the function the tree compiles in.
+		 */
+		@Nullable String bodyOwner;
 
 		Site(LispVal expr) {
 			collectAssignedNames(expr, this.assignedNames);
@@ -847,6 +879,26 @@ final class WasmIntFusionCompiler {
 	@org.jspecify.annotations.Nullable
 	private static Node classify(LispVal expr, WasmLispCompiler.Ctx ctx, java.util.Map<String, Node> env, Site site,
 			int depth) {
+		SourceLocation location = expr instanceof LispCons ? SourceProvenance.locate(expr) : null;
+		if (location == null || location.file() == null) {
+			return classifyHere(expr, ctx, env, site, depth);
+		}
+		LispCons outerSource = site.source;
+		String outerOwner = site.sourceOwner;
+		site.source = (LispCons) expr;
+		site.sourceOwner = site.bodyOwner;
+		try {
+			return classifyHere(expr, ctx, env, site, depth);
+		}
+		finally {
+			site.source = outerSource;
+			site.sourceOwner = outerOwner;
+		}
+	}
+
+	@org.jspecify.annotations.Nullable
+	private static Node classifyHere(LispVal expr, WasmLispCompiler.Ctx ctx, java.util.Map<String, Node> env, Site site,
+			int depth) {
 		List<Node> leaves = site.leaves;
 		if (expr instanceof LispInteger i) {
 			return new ConstLeaf(i.value());
@@ -891,7 +943,7 @@ final class WasmIntFusionCompiler {
 			// references, which the slot-based ArefLeaf cannot express;
 			// classifyInlineAref
 			// handles the parameter-shaped case below.
-			return registerLeaf(new ArefLeaf(parts.get(1), parts.get(2)), leaves);
+			return registerLeaf(new ArefLeaf(parts.get(1), parts.get(2), site.source, site.sourceOwner), leaves);
 		}
 		if (LispNames.LDB.equals(op) && arity == 2) {
 			// (ldb (byte s p) x) with a literal byte spec lowers to its pure
@@ -914,7 +966,7 @@ final class WasmIntFusionCompiler {
 			LocalIntLambda lambda = ctx.localIntLambdas.get(fvar.name());
 			if (lambda != null && arity - 1 == lambda.params().size()) {
 				Node substituted = substituteCall(lambda.params(), lambda.body(), parts.subList(2, parts.size()), ctx,
-						env, site, depth);
+						env, site, depth, null);
 				if (substituted != null) {
 					return substituted;
 				}
@@ -924,7 +976,7 @@ final class WasmIntFusionCompiler {
 		if (inlinable != null && arity == inlinable.paramNames().size() && depth < MAX_INLINE_DEPTH) {
 			LispVal body = java.util.Objects.requireNonNull(singleBodyExpr(inlinable.bodyExprs()));
 			Node substituted = substituteCall(inlinable.paramNames(), body, parts.subList(1, parts.size()), ctx, env,
-					site, depth);
+					site, depth, op);
 			if (substituted != null) {
 				return substituted;
 			}
@@ -962,9 +1014,9 @@ final class WasmIntFusionCompiler {
 			args.add(arg);
 		}
 		return switch (op) {
-			case LispNames.ONE_PLUS -> makeOp(LispNames.ADD, List.of(args.get(0), new ConstLeaf(1)));
-			case LispNames.ONE_MINUS -> makeOp(LispNames.SUB, List.of(args.get(0), new ConstLeaf(1)));
-			default -> makeOp(op, args);
+			case LispNames.ONE_PLUS -> makeOp(LispNames.ADD, List.of(args.get(0), new ConstLeaf(1)), site);
+			case LispNames.ONE_MINUS -> makeOp(LispNames.SUB, List.of(args.get(0), new ConstLeaf(1)), site);
+			default -> makeOp(op, args, site);
 		};
 	}
 
@@ -977,10 +1029,10 @@ final class WasmIntFusionCompiler {
 	 * the ordinary node on overflow or a zero divisor, so the runtime's promotion/trap
 	 * behavior is preserved).
 	 */
-	private static Node makeOp(String op, List<Node> args) {
+	private static Node makeOp(String op, List<Node> args, Site site) {
 		for (Node arg : args) {
 			if (!(arg instanceof ConstLeaf)) {
-				return new OpNode(op, args);
+				return new OpNode(op, args, site.source, site.sourceOwner);
 			}
 		}
 		try {
@@ -1006,7 +1058,7 @@ final class WasmIntFusionCompiler {
 			return new ConstLeaf(acc);
 		}
 		catch (ArithmeticException overflowOrZeroDivide) {
-			return new OpNode(op, args);
+			return new OpNode(op, args, site.source, site.sourceOwner);
 		}
 	}
 
@@ -1036,7 +1088,7 @@ final class WasmIntFusionCompiler {
 	 */
 	@org.jspecify.annotations.Nullable
 	private static Node substituteCall(List<String> params, LispVal body, List<LispVal> args, WasmLispCompiler.Ctx ctx,
-			java.util.Map<String, Node> env, Site site, int depth) {
+			java.util.Map<String, Node> env, Site site, int depth, @Nullable String owner) {
 		List<Node> leaves = site.leaves;
 		// An accessor-shaped body -- exactly (aref P I) over parameters/literals -- maps
 		// straight onto an ArefLeaf over the CALLER's operand expressions, provided each
@@ -1053,7 +1105,10 @@ final class WasmIntFusionCompiler {
 				LispVal arr = inlineArefOperand(bodyParts.get(1), params, args);
 				LispVal idx = inlineArefOperand(bodyParts.get(2), params, args);
 				if (arr != null && idx != null) {
-					return registerLeaf(new ArefLeaf(arr, idx), leaves);
+					SourceLocation location = SourceProvenance.locate(bodyCons);
+					boolean located = location != null && location.file() != null;
+					return registerLeaf(new ArefLeaf(arr, idx, located ? bodyCons : site.source,
+							located ? (owner != null ? owner : site.bodyOwner) : site.sourceOwner), leaves);
 				}
 			}
 		}
@@ -1068,7 +1123,16 @@ final class WasmIntFusionCompiler {
 			callEnv.put(params.get(i), argNode);
 		}
 		if (callEnv.size() == params.size()) {
-			substituted = classify(body, ctx, callEnv, site, depth + 1);
+			String outerBody = site.bodyOwner;
+			if (owner != null) {
+				site.bodyOwner = owner;
+			}
+			try {
+				substituted = classify(body, ctx, callEnv, site, depth + 1);
+			}
+			finally {
+				site.bodyOwner = outerBody;
+			}
 		}
 		if (substituted == null) {
 			leaves.subList(mark, leaves.size()).clear();
@@ -1494,7 +1558,12 @@ final class WasmIntFusionCompiler {
 			// float, packed integer and general arrays all behave exactly as an
 			// unfused (aref a i) call would (the read is pure, so recomputing it in
 			// the fallback is safe).
-			case ArefLeaf leaf -> WasmArrayCompiler.emitAref1FromSlots(ctx, leaf.arrSlot, leaf.idxSlot);
+			case ArefLeaf leaf -> {
+				WasmUncaughtLocations.Operation located = WasmUncaughtLocations.enterOperation(leaf.source, leaf.owner,
+						ctx);
+				WasmArrayCompiler.emitAref1FromSlots(ctx, leaf.arrSlot, leaf.idxSlot);
+				WasmUncaughtLocations.leaveOperation(located, ctx);
+			}
 			// The snapshot re-boxed: the shadow when non-null, else the raw value
 			// through _int_new (an i31 for the fixnum range -- allocation-free).
 			case RawLeaf leaf -> {
@@ -1516,6 +1585,10 @@ final class WasmIntFusionCompiler {
 				}
 			}
 			case OpNode op -> {
+				// --report-locations: the operation's own line (and inlined function)
+				// while its helper runs; a no-op outside a frame.
+				WasmUncaughtLocations.Operation located = WasmUncaughtLocations.enterOperation(op.source(), op.owner(),
+						ctx);
 				emitFallback(op.args().get(0), ctx);
 				// A node's generic call reports under the NODE's operator: the tree is
 				// compiled under its root's form ((evenp x) is one (= (mod x 2) 0) tree).
@@ -1526,6 +1599,7 @@ final class WasmIntFusionCompiler {
 				if (LispNames.LOGNOT.equals(op.op())) {
 					WasmOperandTypes.withOperator(ctx, op.op(), () -> emitCall(WasmLispCompiler.FUNC_BIG_NOT, ctx));
 				}
+				WasmUncaughtLocations.leaveOperation(located, ctx);
 			}
 		}
 	}

@@ -18,7 +18,8 @@ import am.ik.wasm.WasmWriter;
  * value is wrapped in a settled (kind 2) {@code TYPE_P1_FUTURE} struct -- the degenerate
  * future that keeps the cross-backend surface identical. (A {@code --component} program
  * with an async surface is asyncMode and compiles through the {@code WasmAsyncEmit} state
- * machines instead.)
+ * machines instead.) In an exception-handling module a body that signals settles a failed
+ * future instead, which the await re-signals.
  */
 final class WasmAsyncRunCompiler {
 
@@ -38,18 +39,70 @@ final class WasmAsyncRunCompiler {
 				&& thunk.car() instanceof LispSymbol head && LispNames.LAMBDA.equals(head.name())) {
 			ctx.ucPendingHop = WasmUncaughtLocations.hopText(ctx.ucFunctionName);
 		}
+		if (ctx.ehMode && ctx.p1Futures) {
+			compileCapturingFailure(() -> compileSettling(args.get(1), ctx), ctx);
+			return;
+		}
+		compileSettling(args.get(1), ctx);
+	}
+
+	private static void compileSettling(LispVal thunk, WasmLispCompiler.Ctx ctx) {
 		Integer spillGlobal = ctx.globalIndices.get(LispNames.MV_SPILL);
 		if (spillGlobal != null) {
-			compileCapturingValues(args.get(1), spillGlobal, ctx);
+			compileCapturingValues(thunk, spillGlobal, ctx);
 			return;
 		}
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(WasmP1FutureRuntimeBuilder.KIND_SETTLED);
-		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		WasmExprCompiler.compileExpr(thunk, ctx);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_P1_FUTURE);
+	}
+
+	// In an exception-handling module a condition the body signals settles a FAILED
+	// future over its payload, which every await signals again: the interpreter's and
+	// the JVM's errored future, re-signalled at the await -- not at the call, where a
+	// handler around the await could never see it. The landing pad follows the
+	// WasmLandingPad discipline, since the caller's code continues after it.
+	private static void compileCapturingFailure(Runnable settle, WasmLispCompiler.Ctx ctx) {
+		WasmWriter w = ctx.writer;
+		w.write(Instruction.BLOCK);
+		w.writeRefType(true, Type.EQ.code());
+		ctx.wasmCtrlDepth++;
+		int doneDepth = ctx.wasmCtrlDepth;
+		WasmLandingPad.Kept kept = WasmLandingPad.keepLocalsAlive(ctx);
+		int payloadSlot = ctx.allocTemp();
+		w.write(Instruction.BLOCK);
+		w.writeRefType(true, Type.EQ.code());
+		ctx.wasmCtrlDepth++;
+		int handlerDepth = ctx.wasmCtrlDepth;
+		w.write(Instruction.TRY_TABLE);
+		w.writeRefType(true, Type.EQ.code());
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.CATCH);
+		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+		w.writeUnsignedLeb128(ctx.wasmCtrlDepth - handlerDepth);
+		ctx.wasmCtrlDepth++;
+		settle.run();
+		ctx.wasmCtrlDepth--;
+		w.write(Instruction.END); // try_table
+		w.write(Instruction.BR, ctx.wasmCtrlDepth - doneDepth);
+		ctx.wasmCtrlDepth--;
+		w.write(Instruction.END); // block $h
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(payloadSlot);
+		WasmLandingPad.refresh(ctx, kept);
+		WasmUncaughtLocations.resyncPad(ctx);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmP1FutureRuntimeBuilder.KIND_FAILED);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(payloadSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_P1_FUTURE);
+		ctx.wasmCtrlDepth--;
+		w.write(Instruction.END); // block $done
 	}
 
 	// In a program with a multiple-value consumer: the channel holds the body's extra

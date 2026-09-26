@@ -211,6 +211,7 @@ final class WasmUnwindProtectCompiler {
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(payloadSlot);
 			WasmLandingPad.refresh(ctx, java.util.Objects.requireNonNull(condKept));
+			WasmUncaughtLocations.notePad(ctx, payloadSlot);
 			if (twoTags) {
 				ctx.writer.write(Instruction.I32_CONST);
 				ctx.writer.writeSignedLeb128(0);
@@ -221,6 +222,7 @@ final class WasmUnwindProtectCompiler {
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(payloadSlot);
 				WasmLandingPad.refresh(ctx, java.util.Objects.requireNonNull(blockExitKept));
+				WasmUncaughtLocations.resyncPad(ctx);
 				ctx.writer.write(Instruction.I32_CONST);
 				ctx.writer.writeSignedLeb128(1);
 				ctx.wasmCtrlDepth--;

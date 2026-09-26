@@ -93,8 +93,7 @@ final class WasmFunctionCallCompiler {
 		// Push args
 		args.forEach(Runnable::run);
 		// Call dispatch
-		ctx.writer.write(tail ? Instruction.RETURN_CALL : Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(dispatchFuncIdx);
+		WasmUncaughtLocations.emitValueCall(ctx, tail, arity + 1, dispatchFuncIdx);
 	}
 
 	private static void compileDirectCall(String name, LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {

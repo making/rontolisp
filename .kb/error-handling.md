@@ -547,21 +547,35 @@ by `cli/WasmReportLocationsTest` (each case against the interpreter's own output
 - **A frame** = a defun, lambda, top-level chunk or `--component` resume whose OWN code (outside
   the lambdas it builds) has a form read from a file. It wraps its body in `block` +
   `try_table (catch $lisp-cond)`; the landing calls `_uncaught_note(payload, file-id, line, name,
-  hop)`, which records and rethrows the SAME payload. Library source, macro output and the Preview 1
-  `(%async-run (lambda ...))` wrapper defun are not frames, exactly as the interpreter's frames
-  without a located form note nothing.
+  hop)`, which records and hands back the SAME payload, and rethrows it. Library source, macro
+  output and the Preview 1 `(%async-run (lambda ...))` wrapper defun are not frames, exactly as the
+  interpreter's frames without a located form note nothing -- except an ASYNC BODY with no located
+  form (`rontolisp:then`'s async lambda, a library `async-defun`), a frame that notes its hop and no
+  position (`Spec.hopOnly`): the interpreter prints that hop, with no await site when the await
+  that crossed it is library code too.
 - **The note is keyed by payload IDENTITY** (a global holding the payload it describes): a
   condition a `handler-case` caught cannot leak into a later report, and a rethrow (unmatched
   clause, `await` re-signalling a rejected future -- both rethrow the same payload) keeps the
   inner frames' note. Rules = `ConditionTrace`'s: the first frame with a line gives the location
   and, by its own name, the function (a lambda's frame is named after the function it is written
   in, `Ctx.ucWrittenIn`; a nested `defun`'s after itself); an async body (a hop text in the
-  frame) appends a hop whose await site is the next frame with a line.
-- **An await rewinds the note** (`--component` only; Preview 1 signals at the call): the poll of a
-  rejected future calls `_uncaught_reawait(future, payload)` before re-signalling. The FIRST await
-  of a future records a snapshot -- `(last-hop site file line . name)` -- in an association list
-  keyed by the future (nothing but an await of it can have noted its payload since the rejection);
-  each later one restores it. A fresh note clears the list.
+  frame) appends a hop whose await site is the next frame with a line. So every rethrow keeps the
+  payload: `%hb-guard` stores the instance it synthesized into the payload it caught rather than
+  consing a new one (under the option only, so the bytes without it stay), which lost every line a
+  `handler-bind` handler's own frame had noted.
+- **A landing pad inside a frame notes first** (`notePad`): its code moves the line local, and its
+  refresh ([wasm-landing-pad-refresh.md](wasm-landing-pad-refresh.md)) would put the local back to
+  the region's entry -- so the frame's catch saw the `unwind-protect`'s, the special `let`'s or the
+  unmatched `handler-case`'s line instead of the signalling form's. The position locals (line,
+  file, owner: i31s, which the collector never moves) stay out of the pad's push
+  (`positionSlot`); the pad notes what they held at the throw, then sets them to what the static
+  track says (`resyncPad`) for the code after it. A caught condition's note is harmless (keyed by
+  identity); a later await rewinds it (below).
+- **An await rewinds the note** (`--component`, and Preview 1 over its failed futures): the poll of
+  a rejected future (`_p1_future_await` of a failed one) calls `_uncaught_reawait(future, payload)`
+  before re-signalling. The FIRST await of a future records a snapshot -- `(last-hop site file line
+  . name)` -- in an association list keyed by the future (nothing but an await of it can have noted
+  its payload since the rejection); each later one restores it. A fresh note clears the list.
 - **Texts ride with their frame**: the name and hop text are unspelled string literals built in the
   frame's own landing (`compileUnspelledLiteral`: a spelled one would arm the dispatch gate), so
   the shaker drops them with the frame. The name is the program's spelling
@@ -577,37 +591,50 @@ by `cli/WasmReportLocationsTest` (each case against the interpreter's own output
   as the interpreter does. Printed by `_uncaught_digits` (i31 -> string via `_str_fresh`): the
   general printer (`%princ-to-string`) pulled 20 KB into a module that never prints
   (`examples/net/http-handler.lisp` 2,171 -> 23,868 B; now 2,769).
-- **Tail calls**: a `return_call` leaves the try_table. Inside a frame it stays one only into
-  another frame or through a function value (`tailCallOp`); into anything else (a library defun, a
-  macro-written one, a signal helper) it is a plain `call`, or the call site and its function were
-  lost. Disabling tail calls in frames outright was the first version and broke the
-  `.kb/wasm-tail-calls.md` invariant a Scheme loop depends on (named `let` overflowed).
-- **Known divergences** (`.todo/991`), from 82 programs of the
-  JVM parity corpus with a catching form appended (2026-09-26, Linux, wasmtime 49); the others'
-  location lines matched the interpreter's byte for byte:
-  - A tail call through a function value stays a `return_call`, so a callee that is no frame (a
-    built-in: `(funcall f x)` into `parse-integer`) leaves the location to the frames further out
-    -- the line that called the caller, not its `funcall`. A lambda callee is a frame and names
-    the function it is written in, so only this location moves.
-  - A `handler-bind` handler's condition is located at the `handler-bind` form, not the
-    handler's own form; a fused or inlined arithmetic tree reports its caller's or its first line
-    (`(sq a)` inlined into F says `in F`).
-  - Preview 1 runs an async body at its call: the hop's await site is the CALL's line when the
-    `await` is on another one, and a body whose tail call enters another frame leaves before its
-    hop is noted, so the hop line is missing. `--component` matches the interpreter in both.
+- **Tail calls**: a `return_call` leaves the try_table. Inside a frame a direct one stays one only
+  into another frame (`tailCallOp`); one through a function value tests the callee at run time
+  (`emitValueCall` -> `_uc_frame_p`, a test over the frames' funcId ranges or a `br_table` when
+  shorter, written once Pass 2c knows every frame): into a frame a `return_call`, into anything
+  else (a built-in, library code) a plain `call`, so the frame notes the `funcall` the interpreter
+  would. An async body's frame never tail-calls out: it must open its hop. Disabling tail calls in
+  frames outright was the first version and broke the `.kb/wasm-tail-calls.md` invariant a Scheme
+  loop depends on (named `let` overflowed); a plain `call` through every function value would too.
+- **A fused integer tree** ([wasm-int-fusion.md](wasm-int-fusion.md)) is one form to the frame,
+  but its fallback -- the one path where an operation signals -- marks each operation
+  (`enterOperation`): its own line, and for one from an inlined defun's body that defun, through an
+  owner local (an i31 index into the frame's list of inlined functions) the frame's catch
+  dispatches on for file, name and, under `function`, definition line. The fast path bails
+  rather than signalling, so it marks nothing.
+- **Preview 1 async**: an EH-mode module settles a FAILED future when the body signals, and the
+  await rethrows its payload ([async-await.md](async-await.md)), so the hop names the await's line
+  as on every other backend.
+- **Measured 2026-09-26** (macOS arm64, wasmtime 49): the 35 single-file programs of
+  `UncaughtReportParityTest`, `RontoLispCliStreamsTest` and this suite, plus 39 aimed at the shapes
+  above (multi-file and cross-file inlining among them), each with `(print (ignore-errors nil))`
+  appended -- every location line matches the interpreter's on Preview 1 and `--component`. What
+  still differs is not a location: a raw trap (a typed loop's out-of-range `aref`) prints no report
+  at all, the three-point spectrum above; a `handler-bind` handler that fails in a built-in reports
+  a different condition on each backend (`.todo/994`); and `~a` of a handler's condition prints its
+  slots on the JVM and wasm-GC (`.todo/995`).
 
-Cost in EH mode, measured 2026-09-26 (wasmtime 49.0.0, node 24, macOS arm64):
+Cost in EH mode, measured 2026-09-26 on 2f611be61 plus `.todo/991`'s change (wasmtime 49.0.0,
+node 24, macOS arm64); the change itself cost zlib `--optimize=size` +351 B `function` / +358 B
+`line`, `--optimize` +351 / +666 (the fused fallbacks' marks), the 101 functions +116 (a `throw`
+in each landing where `unreachable` was), the one-function programs +14-15:
 
 | module | flags | off | `function` | `line` |
 | --- | --- | --- | --- | --- |
-| hello_world + `(ignore-errors nil)` | `--optimize=size` | 1,214 | 1,351 | 1,377 |
-| pi_approx + `(ignore-errors nil)` | `--optimize=size` | 2,293 | 2,442 | 2,495 |
-| zlib (chipz, 51 frames) | `--optimize` | 114,383 | 118,247 (+3.4%) | 120,121 (+5.0%) |
-| zlib | `--optimize=size` | 87,936 | 91,792 (+4.4%) | 93,774 (+6.6%) |
-| zlib | `--component --optimize=size` | 92,096 | 95,905 | 97,887 |
-| zlib | `--optimize=off` | 446,851 | 451,206 | 453,952 |
-| 1 three-line function | `--optimize=size` | 6,533 | 7,060 | 7,110 |
-| 101 three-line functions | `--optimize=size` | 13,196 | 17,651 | 19,663 |
+| hello_world + `(ignore-errors nil)` | `--optimize=size` | 1,214 | 1,361 | 1,386 |
+| pi_approx + `(ignore-errors nil)` | `--optimize=size` | 2,293 | 2,439 | 2,512 |
+| zlib (chipz, 51 frames) | `--optimize` | 116,920 | 122,115 (+4.4%) | 128,129 (+9.6%) |
+| zlib | `--optimize=size` | 89,499 | 94,685 (+5.8%) | 100,626 (+12.4%) |
+| zlib | `--component --optimize=size` | 93,557 | 98,717 | 104,665 |
+| zlib | `--optimize=off` | 462,894 | 468,828 | 476,221 |
+| 1 three-line function | `--optimize=size` | 7,426 | 8,057 | 8,107 |
+| 101 three-line functions | `--optimize=size` | 14,092 | 18,754 | 20,765 |
+
+zlib's `line` column was 93,774 (+6.6%) when first measured the same day: the growth came in with
+upstream commits before 2f611be61 (that commit alone gives 100,268), not from this table's change.
 
 Outside EH mode (`ENTRY_REPORT`), measured 2026-09-26 on da01b1a51 (wasmtime 49.0.0).
 "forced" is plain EH mode forced by the option (`RENDERED`), the first shape tried:

@@ -142,13 +142,11 @@ final class WasmDesignatorCall {
 	 * @param tail whether the call is in tail position of the function being built
 	 */
 	void emitCall(WasmLispCompiler.Ctx ctx, List<Runnable> args, boolean tail) {
-		int callOp = tail ? Instruction.RETURN_CALL : Instruction.CALL;
 		if (this.target == null) {
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(this.funcSlot);
 			args.forEach(Runnable::run);
-			ctx.writer.write(callOp);
-			ctx.writer.writeUnsignedLeb128(this.dispatchFuncIndex);
+			WasmUncaughtLocations.emitValueCall(ctx, tail, args.size() + 1, this.dispatchFuncIndex);
 			return;
 		}
 		int required = required(this.target);

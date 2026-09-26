@@ -263,10 +263,13 @@ whole.
 
 **Preview 1** WASM has none of this — there is no asynchronous host I/O in a
 Preview 1 core module — so an async body simply runs to completion the moment
-it is called, and its future is born already settled. The observable behavior
-matches the other backends whenever an `await` is adjacent to the call that
-produced the future (the common shape); it diverges only in that an error
-signals at the *call* rather than at the `await`, and `wait-for` / the guest
+it is called, and its future is born already settled. An error the body signals
+is kept in the future and signalled again by each `await`, as on the other
+backends, so a `handler-case` around the `await` (or `rontolisp:catch`) sees it —
+in any program that can catch a condition at all; one with no catching form
+(`handler-case`, `ignore-errors`, `unwind-protect`, ...), built without
+`--report-locations`, stops at the *call*,
+before anything between the call and the `await` runs. `wait-for` / the guest
 stream operations are rejected at compile time. **`--no-gc`** rejects the entire
 async surface by name.
 

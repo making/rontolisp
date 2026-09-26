@@ -358,20 +358,20 @@ exception-handling proposal a catching form needs (wasmtime 37+), except under
 `--no-wasi`, whose standard error goes nowhere. It adds nothing to a program
 given with `-e`, which has no file to point into. The file names are the paths
 the compiler read, stored in the module. Tail calls into the program's own
-functions and through function values run in constant stack under the option
-as well.
+functions, directly or through a function value, run in constant stack under
+the option as well.
 
 Every function read from a file catches the condition on its way out, and
 under `line` every form that starts a new line records it:
 
 | module (`--optimize=size`) | off | `function` | `line` |
 | --- | --- | --- | --- |
-| `zlib` (chipz gunzip) | 87,936 B | 91,792 B (+4.4%) | 93,774 B (+6.6%) |
-| 100 three-line functions | 13,196 B | 17,651 B (+33.8%) | 19,663 B (+49.0%) |
-| `hello_world`, no catching form | 480 B | 649 B | 660 B |
-| `(print (read))`, no catching form | 34,981 B | 42,396 B | 42,404 B |
+| `zlib` (chipz gunzip) | 89,499 B | 94,685 B (+5.8%) | 100,626 B (+12.4%) |
+| 100 three-line functions | 14,092 B | 18,754 B (+33.1%) | 20,765 B (+47.4%) |
+| `hello_world`, no catching form | 480 B | 643 B | 654 B |
+| `(print (read))`, no catching form | 39,027 B | 42,300 B | 42,313 B |
 
-That is about 40 bytes per function, and 6 to 7 more per line under `line`.
+That is about 45 bytes per function, and 6 to 7 more per line under `line`.
 Without a catching form the report itself comes on top: the text of every
 condition the program can signal, which is what grows the last row.
 Run time is unchanged on V8 (Node 24). On wasmtime 49 the catch costs a

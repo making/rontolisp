@@ -37,7 +37,6 @@ final class WasmApplyCompiler {
 	 * ({@code Ctx.tailPosition}).
 	 */
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
-		int callOp = tail ? Instruction.RETURN_CALL : Instruction.CALL;
 		List<LispVal> args = cons.toList();
 		int n = args.size();
 
@@ -152,8 +151,7 @@ final class WasmApplyCompiler {
 		ctx.writer.writeUnsignedLeb128(funcSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(curSlot);
-		ctx.writer.write(callOp);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
+		WasmUncaughtLocations.emitValueCall(ctx, tail, 2, WasmLispCompiler.FUNC_APPLY);
 	}
 
 }

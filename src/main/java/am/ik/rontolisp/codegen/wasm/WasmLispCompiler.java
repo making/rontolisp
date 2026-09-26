@@ -780,6 +780,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	private boolean usesDeferredFutures;
 
 	/**
+	 * Whether a FAILED degenerate future can exist: an EH-mode module with a Preview 1
+	 * future, whose {@code %async-run} settles one when its body signals
+	 * ({@link WasmAsyncRunCompiler}), so the await runtime carries the arm re-signalling
+	 * it.
+	 */
+	private boolean usesFailedFutures;
+
+	/**
 	 * How many per-arity dispatchers past {@link #MAX_CALLABLE_ARITY} this program asks
 	 * for: {@code 0} unless a call site is wider than the fixed block, and never more
 	 * than {@link #MAX_EXTRA_CALL_ARITY}. Derived in {@link #compile} from
@@ -3432,6 +3440,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// can find -- and the --component narrowing below reads this same fact rather
 		// than re-deriving one, so the two cannot drift apart.
 		boolean uncaughtReportPad = WasmUncaughtReportCompiler.emittedFor(ehMode);
+		this.usesFailedFutures = ehMode && p1Futures;
 		// Whether this module carries _arity_chk: it shifts userFuncBase(), so the
 		// decision has to be made here, in front of pass 2, rather than beside the
 		// dispatchers that call it. The site scan is deliberately loose -- the literal
@@ -4230,7 +4239,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// for a program with a file to locate into).
 		WasmUncaughtLocations.Module uncaughtLocations = this.reportLocations != null && uncaughtReportPad
 				? new WasmUncaughtLocations.Module(this.reportLocations, program,
-						this.asyncMode || programUsesSymbol(program, LispNames.ASYNC_RUN_QUALIFIED), this.asyncMode)
+						this.asyncMode || programUsesSymbol(program, LispNames.ASYNC_RUN_QUALIFIED),
+						this.asyncMode || this.usesFailedFutures)
 				: null;
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.stringTable(stringTable)
@@ -4355,6 +4365,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (spec != null) {
 					defunFrames.put(defun, spec);
 					uncaughtLocations.framedFunctions.add(defun.name);
+					uncaughtLocations.defunSpecs.put(defun.name, spec);
 				}
 			}
 		}
@@ -4708,6 +4719,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			lambdaFunctionBodies.add(buildLocalsAndPatch(lambdaCtx, lambda.paramNames.size() + 1, lambdaBody));
 			lambdaIdx++;
 		}
+		WasmUncaughtLocations.finishFramePredicate(uncaughtLocations, lambdaFunctionBodies, functions);
 		stringTable.attributing(false);
 
 		// Build dispatch function bodies
@@ -7703,7 +7715,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// gensym runtime helper body (FUNC_GENSYM)
 				code.addFunction(WasmGensymRuntimeBuilder.build());
 				// p1-future-await runtime helper body (FUNC_P1_FUTURE_AWAIT)
-				code.addFunction(WasmP1FutureRuntimeBuilder.buildAwait(this.usesDeferredFutures,
+				code.addFunction(WasmP1FutureRuntimeBuilder.buildAwait(this.usesDeferredFutures, this.usesFailedFutures,
+						uncaughtLocations != null ? uncaughtLocations.reawaitFuncIndex() : -1,
 						globalIndices.getOrDefault(LispNames.MV_SPILL, -1)));
 				// binary stream runtime helper bodies (FUNC_READ_BYTE, FUNC_WRITE_BYTE)
 				code.addFunction(WasmIoRuntimeBuilder.buildReadByteBody());

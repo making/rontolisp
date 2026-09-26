@@ -132,14 +132,27 @@ final class WasmUncaughtLocations {
 	}
 
 	/**
-	 * What a frame notes: its file id (0: the file rides in a local, a top level), the
-	 * line its definition starts on, the function its code is written in ({@code null}:
-	 * none), and -- for an async body -- the hop line's text ({@code null}: not an async
-	 * body).
+	 * What a frame notes: its file id (0: the file rides in a local, a top level;
+	 * {@link #NO_FILE}: an async body no form of which was read from a file), the line
+	 * its definition starts on, the function its code is written in ({@code null}: none),
+	 * and -- for an async body -- the hop line's text ({@code null}: not an async body).
 	 */
 	record Spec(int fileId, int baseLine, @Nullable String name, @Nullable String hop) {
 
 		static final Spec TOP_LEVEL = new Spec(0, 0, null, null);
+
+		/** {@link #fileId} of a frame that knows no position, only its hop. */
+		static final int NO_FILE = -1;
+
+		/**
+		 * An async body with no form read from a file -- library code, a macro's output:
+		 * it notes no position, but it is a hop the interpreter prints all the same
+		 * ({@code rontolisp:then}'s async lambda), whose await site stays unknown when
+		 * the await is its own.
+		 */
+		static Spec hopOnly(String hopText) {
+			return new Spec(NO_FILE, 0, null, hopText);
+		}
 
 		boolean topLevel() {
 			return this.fileId == 0;
@@ -178,6 +191,18 @@ final class WasmUncaughtLocations {
 		 */
 		boolean inNoted;
 
+		/**
+		 * The local naming the inlined function a fused operation belongs to (an i31
+		 * index into {@link #owners}, plus one), or -1 until one needs it.
+		 */
+		int ownerSlot = -1;
+
+		/** What {@link #ownerSlot} holds at the current emission point; 0 = null. */
+		int curOwner;
+
+		/** The inlined functions {@link #ownerSlot} can name, in index order. */
+		final List<Spec> owners = new ArrayList<>();
+
 		Frame(Spec spec, int fileSlot, int lineSlot) {
 			this.spec = spec;
 			this.fileSlot = fileSlot;
@@ -213,14 +238,20 @@ final class WasmUncaughtLocations {
 		/** The defuns that are frames ({@link #tailCallOp}). */
 		final Set<String> framedFunctions = new HashSet<>();
 
+		/**
+		 * Each framed defun's spec, by name: what a fused operation inlined from its body
+		 * reports ({@link #enterOperation}).
+		 */
+		final Map<String, Spec> defunSpecs = new HashMap<>();
+
 		/** Whether an async body can exist, so the note and the render carry hops. */
 		final boolean hopsPossible;
 
 		/**
 		 * Whether an {@code await} can re-signal a future's stored condition
-		 * ({@code --component}'s {@code _future_poll}), so the note rewinds at each one
-		 * ({@link #reawaitBody}). Preview 1 signals an async body's condition at its
-		 * call.
+		 * ({@code --component}'s {@code _future_poll}, Preview 1's
+		 * {@code _p1_future_await} of a failed future), so the note rewinds at each one
+		 * ({@link #reawaitBody}).
 		 */
 		private final boolean reawaits;
 
@@ -247,6 +278,12 @@ final class WasmUncaughtLocations {
 
 		private int digitsFuncIndex = -1;
 
+		/** {@code _uc_frame_p}'s function index, -1 until a call site needs it. */
+		private int framePFuncIndex = -1;
+
+		/** Its position among the lambda declarations, whose body Pass 2c leaves open. */
+		private int framePDecl = -1;
+
 		Module(WasmReportLocations granularity, List<LispVal> program, boolean hopsPossible, boolean reawaits) {
 			this.granularity = granularity;
 			this.hopsPossible = hopsPossible;
@@ -258,6 +295,20 @@ final class WasmUncaughtLocations {
 				fileId(file);
 				return false;
 			});
+		}
+
+		/**
+		 * {@code _uc_frame_p}'s index, declared on first need; its body waits for Pass 2c
+		 * to know every frame ({@link #finishFramePredicate}).
+		 */
+		int framePredicate(WasmLispCompiler.Ctx ctx) {
+			if (this.framePFuncIndex < 0) {
+				this.framePDecl = ctx.lambdaDecls.size();
+				this.framePFuncIndex = ctx.userFuncBase + ctx.numDefuns + ctx.lambdaDecls.size();
+				ctx.lambdaDecls.add(new WasmLispCompiler.LambdaInfo(ctx.nextFuncId[0]++, "_uc_frame_p", List.of(),
+						false, List.of(), List.of(), this.framePFuncIndex, new byte[0]));
+			}
+			return this.framePFuncIndex;
 		}
 
 		/** Whether anything in the program was read from a file. */
@@ -538,8 +589,10 @@ final class WasmUncaughtLocations {
 		}
 
 		/**
-		 * The note helper, {@code (payload file line name hop) -> never}: records what
-		 * one frame knows about the payload, then rethrows it.
+		 * The note helper, {@code (payload file line name hop) -> payload}: records what
+		 * one frame knows about the payload and hands it back -- to the frame's catch,
+		 * which rethrows it, or to a landing pad inside the frame
+		 * ({@link WasmUncaughtLocations#notePad}).
 		 */
 		private byte[] noteBody(boolean identityHash) {
 			ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
@@ -592,8 +645,6 @@ final class WasmUncaughtLocations {
 				openHop(w, identityHash);
 			}
 			get(w, NOTE_PAYLOAD);
-			w.write(Instruction.THROW);
-			w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 			w.write(Instruction.END);
 			return out.toByteArray();
 		}
@@ -738,8 +789,11 @@ final class WasmUncaughtLocations {
 	 */
 	static @Nullable Spec asyncBodySpec(@Nullable Module module, @Nullable String name, @Nullable LispVal form,
 			List<LispVal> body) {
+		if (module == null) {
+			return null;
+		}
 		Spec spec = functionSpec(module, null, form, body);
-		return spec == null ? null : spec.asAsyncBody(hopText(name));
+		return spec == null ? Spec.hopOnly(hopText(name)) : spec.asAsyncBody(hopText(name));
 	}
 
 	/**
@@ -789,8 +843,9 @@ final class WasmUncaughtLocations {
 			module.lambdaWrittenIn.put(funcId, writtenIn);
 		}
 		Spec spec = functionSpec(module, writtenIn, form, body);
-		if (spec != null) {
-			module.lambdaSpecs.put(funcId, hop != null ? spec.asAsyncBody(hop) : spec);
+		if (spec != null || hop != null) {
+			module.lambdaSpecs.put(funcId,
+					hop == null ? spec : spec == null ? Spec.hopOnly(hop) : spec.asAsyncBody(hop));
 		}
 	}
 
@@ -860,23 +915,120 @@ final class WasmUncaughtLocations {
 		w.write(Instruction.UNREACHABLE);
 		w.write(Instruction.END);
 		ctx.wasmCtrlDepth--;
+		if (!frame.owners.isEmpty()) {
+			// A fused operation inlined from another function's body names that
+			// function, its file and -- under FUNCTION -- its definition line.
+			int payload = ctx.allocTemp();
+			setLocal(w, payload);
+			for (int k = 0; k < frame.owners.size(); k++) {
+				Spec owner = frame.owners.get(k);
+				get(w, frame.ownerSlot);
+				i31(w, k + 1);
+				w.write(Instruction.REF_EQ);
+				w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+				get(w, payload);
+				i31(w, owner.fileId());
+				if (frame.lineSlot >= 0 && module.granularity == WasmReportLocations.LINE) {
+					get(w, frame.lineSlot);
+				}
+				else {
+					i31(w, owner.baseLine());
+				}
+				text(ctx, owner.name());
+				text(ctx, frame.spec.hop());
+				w.write(Instruction.CALL);
+				w.writeUnsignedLeb128(module.noteFuncIndex);
+				rethrow(w);
+				w.write(Instruction.END);
+			}
+			get(w, payload);
+		}
+		emitNote(ctx, frame, module, frame.spec.hop());
+		rethrow(w);
+	}
+
+	/**
+	 * Whether {@code slot} is one of the frame's position locals, which a landing pad
+	 * leaves out of its refresh ({@link WasmLandingPad#allSlots}): what they hold at the
+	 * throw is what the pad notes ({@link #notePad}). They hold i31s or null, never a
+	 * reference the collector moves, so reading one through the catch block is safe.
+	 * @param ctx the context
+	 * @param slot a local
+	 * @return whether the pad must leave it alone
+	 */
+	static boolean positionSlot(WasmLispCompiler.Ctx ctx, int slot) {
+		Frame frame = ctx.ucFrame;
+		return frame != null && (slot == frame.lineSlot || slot == frame.fileSlot || slot == frame.ownerSlot);
+	}
+
+	/**
+	 * Notes the payload a landing pad inside a frame received, where the position locals
+	 * still hold the throw's position -- the pad's own code moves them, so the frame's
+	 * catch would see only that once the pad rethrows -- then puts them back where the
+	 * code after the pad expects them ({@link #resyncPad}). A no-op outside a frame.
+	 * @param ctx the context compiling the pad
+	 * @param payloadSlot the local holding the payload, after the pad's refresh
+	 */
+	static void notePad(WasmLispCompiler.Ctx ctx, int payloadSlot) {
+		Frame frame = ctx.ucFrame;
+		Module module = ctx.uncaughtLocations;
+		if (frame == null || module == null) {
+			return;
+		}
+		get(ctx.writer, payloadSlot);
+		// The hop is the frame's catch's to open: a pad is inside the async body.
+		emitNote(ctx, frame, module, null);
+		ctx.writer.write(Instruction.DROP);
+		resyncPad(ctx);
+	}
+
+	/**
+	 * Sets the frame's position locals to what the compile-time track says they hold
+	 * after a landing pad's refresh, which leaves them out: a pad's code continues from
+	 * the region's entry, not from the throw. A no-op outside a frame.
+	 * @param ctx the context compiling the pad
+	 */
+	static void resyncPad(WasmLispCompiler.Ctx ctx) {
+		Frame frame = ctx.ucFrame;
+		if (frame == null) {
+			return;
+		}
+		WasmWriter w = ctx.writer;
+		if (frame.fileSlot >= 0) {
+			setI31(w, frame.fileSlot, frame.curFile);
+		}
+		if (frame.lineSlot >= 0) {
+			setI31(w, frame.lineSlot, frame.curLine);
+		}
+		if (frame.ownerSlot >= 0) {
+			setI31(w, frame.ownerSlot, frame.curOwner);
+		}
+	}
+
+	/** Calls the note helper over the payload on the stack with what the frame knows. */
+	private static void emitNote(WasmLispCompiler.Ctx ctx, Frame frame, Module module, @Nullable String hop) {
+		WasmWriter w = ctx.writer;
 		if (frame.fileSlot >= 0) {
 			get(w, frame.fileSlot);
 		}
 		else {
-			i31(w, frame.spec.fileId());
+			pushI31OrNull(w, frame.spec.fileId());
 		}
 		if (frame.lineSlot >= 0) {
 			get(w, frame.lineSlot);
 		}
 		else {
-			i31(w, frame.spec.baseLine());
+			pushI31OrNull(w, frame.spec.baseLine());
 		}
 		text(ctx, frame.spec.name());
-		text(ctx, frame.spec.hop());
+		text(ctx, hop);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(module.noteFuncIndex);
-		w.write(Instruction.UNREACHABLE);
+	}
+
+	private static void rethrow(WasmWriter w) {
+		w.write(Instruction.THROW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 	}
 
 	/**
@@ -914,10 +1066,180 @@ final class WasmUncaughtLocations {
 			return Instruction.CALL;
 		}
 		Module module = ctx.uncaughtLocations;
-		if (ctx.ucFrame == null || module == null || callee == null || module.framedFunctions.contains(callee)) {
+		Frame frame = ctx.ucFrame;
+		if (frame == null || module == null) {
+			return Instruction.RETURN_CALL;
+		}
+		if (frame.spec.hop() == null && (callee == null || module.framedFunctions.contains(callee))) {
 			return Instruction.RETURN_CALL;
 		}
 		return Instruction.CALL;
+	}
+
+	/**
+	 * Emits a call through a function value to {@code funcIndex} -- a dispatcher or
+	 * {@code _apply}, whose {@code operands} arguments (the function value first) are on
+	 * the stack. In tail position inside a frame, whether the frame may leave depends on
+	 * the callee, known only at run time: into a frame the call stays a
+	 * {@code return_call}, so a loop through function values keeps its constant stack
+	 * ({@code .kb/wasm-tail-calls.md}); into anything else -- a built-in, library code --
+	 * it is a plain {@code call}, so this frame still notes the call site, as the
+	 * interpreter's innermost located form is that call. An async body never leaves: its
+	 * frame opens the hop the awaiter's lines hang from.
+	 * @param ctx the calling function's context
+	 * @param tail whether the call is in tail position
+	 * @param operands how many operands the callee takes, the function value first
+	 * @param funcIndex the callee
+	 */
+	static void emitValueCall(WasmLispCompiler.Ctx ctx, boolean tail, int operands, int funcIndex) {
+		WasmWriter w = ctx.writer;
+		Module module = ctx.uncaughtLocations;
+		Frame frame = ctx.ucFrame;
+		if (!tail || frame == null || module == null || frame.spec.hop() != null) {
+			w.write(tail && (frame == null || module == null) ? Instruction.RETURN_CALL : Instruction.CALL);
+			w.writeUnsignedLeb128(funcIndex);
+			return;
+		}
+		int[] slots = new int[operands];
+		for (int i = operands - 1; i >= 0; i--) {
+			slots[i] = ctx.allocTemp();
+			setLocal(w, slots[i]);
+		}
+		get(w, slots[0]);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(module.framePredicate(ctx));
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		for (int slot : slots) {
+			get(w, slot);
+		}
+		w.write(Instruction.RETURN_CALL);
+		w.writeUnsignedLeb128(funcIndex);
+		w.write(Instruction.END);
+		for (int slot : slots) {
+			get(w, slot);
+		}
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(funcIndex);
+	}
+
+	/**
+	 * Writes {@code _uc_frame_p}'s body into the slot Pass 2c left for it, now that every
+	 * frame is known; a no-op when no call site asked for it.
+	 * @param module the module state, or {@code null} when the option is off
+	 * @param lambdaBodies the lambda bodies Pass 2c compiled, in declaration order
+	 * @param functions the compiled defuns, by name
+	 */
+	static void finishFramePredicate(@Nullable Module module, List<byte[]> lambdaBodies,
+			Map<String, WasmLispCompiler.WasmFunctionInfo> functions) {
+		if (module == null || module.framePDecl < 0) {
+			return;
+		}
+		Set<Integer> frames = new HashSet<>(module.lambdaSpecs.keySet());
+		for (String name : module.framedFunctions) {
+			WasmLispCompiler.WasmFunctionInfo info = functions.get(name);
+			if (info != null) {
+				frames.add(info.funcId());
+			}
+		}
+		lambdaBodies.set(module.framePDecl, framePredicateBody(frames));
+	}
+
+	/**
+	 * {@code _uc_frame_p}, {@code (value) -> non-nil when a frame}: whether the function
+	 * value is a closure whose funcId is a frame's -- a test over the frames' funcId
+	 * ranges, or over a {@code br_table} when the ranges would be longer. Any other value
+	 * (a symbol designator, a non-function) answers nil: a plain call is always correct,
+	 * it only costs a stack frame.
+	 */
+	static byte[] framePredicateBody(Set<Integer> frames) {
+		List<int[]> ranges = new ArrayList<>();
+		for (int id : new java.util.TreeSet<>(frames)) {
+			int[] last = ranges.isEmpty() ? null : ranges.get(ranges.size() - 1);
+			if (last != null && last[1] + 1 == id) {
+				last[1] = id;
+			}
+			else {
+				ranges.add(new int[] { id, id });
+			}
+		}
+		int low = ranges.isEmpty() ? 0 : ranges.get(0)[0];
+		int high = ranges.isEmpty() ? 0 : ranges.get(ranges.size() - 1)[1];
+		// ~10 bytes a range against ~1 byte a funcId in [low, high].
+		boolean table = ranges.size() * 10L > (long) high - low + 16;
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(out);
+		int value = 0;
+		int id = 1;
+		w.write(1);
+		w.writeUnsignedLeb128(1);
+		w.write(Type.I32);
+		get(w, value);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CLOSURE);
+		w.write(Instruction.IF, Type.I32);
+		get(w, value);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CLOSURE);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
+		w.writeUnsignedLeb128(0);
+		setLocal(w, id);
+		if (ranges.isEmpty()) {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+		}
+		else if (table) {
+			// block $no { block $yes { br_table over id - low } 1 } 0
+			w.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			w.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			get(w, id);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(low);
+			w.write(Instruction.I32_SUB);
+			w.write(Instruction.BR_TABLE);
+			w.writeUnsignedLeb128(high - low + 1);
+			for (int i = low; i <= high; i++) {
+				w.writeUnsignedLeb128(frames.contains(i) ? 0 : 1);
+			}
+			w.writeUnsignedLeb128(1);
+			w.write(Instruction.END);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(1);
+			w.write(Instruction.BR, 1);
+			w.write(Instruction.END);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(0);
+		}
+		else {
+			for (int i = 0; i < ranges.size(); i++) {
+				int[] range = ranges.get(i);
+				get(w, id);
+				w.write(Instruction.I32_CONST);
+				w.writeSignedLeb128(range[0]);
+				w.write(Instruction.I32_SUB);
+				w.write(Instruction.I32_CONST);
+				w.writeSignedLeb128(range[1] - range[0]);
+				w.write(Instruction.I32_LE_U);
+				if (i > 0) {
+					w.write(Instruction.I32_OR);
+				}
+			}
+		}
+		w.write(Instruction.ELSE);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		i31(w, 1);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		return out.toByteArray();
 	}
 
 	/**
@@ -994,6 +1316,92 @@ final class WasmUncaughtLocations {
 		}
 		if (form != frame.tail) {
 			track(ctx.writer, frame, (int) (token >>> 32), (int) token);
+		}
+	}
+
+	/**
+	 * What {@link #enterOperation} changed, for {@link #leaveOperation}: the line token
+	 * {@link #enterForm} answered and the owner the frame held before.
+	 */
+	record Operation(LispCons source, long line, int owner) {
+	}
+
+	/**
+	 * Notes a fused operation's position before its generic helper runs -- in a fused
+	 * tree's fallback, the one path where an operation can signal. The tree compiled as
+	 * one form, but each operation is a form of its own to the interpreter: one on a
+	 * later line reports that line, and one inlined from another function's body
+	 * ({@code owner}) reports that function, as a frame of its own would.
+	 * @param source the innermost form read from a file the operation evaluates under --
+	 * its own, or the inlined call's when the body it came from was not
+	 * @param owner the defun whose body holds {@code source}, or {@code null} for the
+	 * function the tree is compiled in
+	 * @param ctx the context
+	 * @return what {@link #leaveOperation} restores, or {@code null} for nothing
+	 */
+	static @Nullable Operation enterOperation(@Nullable LispCons source, @Nullable String owner,
+			WasmLispCompiler.Ctx ctx) {
+		Frame frame = ctx.ucFrame;
+		Module module = ctx.uncaughtLocations;
+		if (frame == null || module == null || source == null) {
+			return null;
+		}
+		Spec ownerSpec = owner == null ? null : module.defunSpecs.get(owner);
+		boolean own = owner == null || ownerSpec != null && Objects.equals(ownerSpec.name(), frame.spec.name())
+				&& (frame.fileSlot >= 0 || ownerSpec.fileId() == frame.spec.fileId());
+		if (own || ownerSpec == null) {
+			// An owner that is no frame wrote no located form, so its operations are
+			// located at the call it was inlined for, which the tree already noted.
+			long line = own ? enterForm(source, ctx) : UNCHANGED;
+			return line == UNCHANGED ? null : new Operation(source, line, frame.curOwner);
+		}
+		int index = frame.owners.indexOf(ownerSpec) + 1;
+		if (index == 0) {
+			frame.owners.add(ownerSpec);
+			index = frame.owners.size();
+		}
+		if (frame.ownerSlot < 0) {
+			frame.ownerSlot = ctx.allocTemp();
+		}
+		int previous = frame.curOwner;
+		setOwner(ctx.writer, frame, index);
+		long line = UNCHANGED;
+		SourceLocation location = fileLocation(source);
+		if (frame.lineSlot >= 0 && module.granularity == WasmReportLocations.LINE && location != null
+				&& module.fileId(Objects.requireNonNull(location.file())) == ownerSpec.fileId()
+				&& location.line() != frame.curLine) {
+			line = ((long) frame.curFile << 32) | (frame.curLine & 0xFFFFFFFFL);
+			setI31(ctx.writer, frame.lineSlot, location.line());
+			frame.curLine = location.line();
+		}
+		return new Operation(source, line, previous);
+	}
+
+	/**
+	 * Restores what {@link #enterOperation} changed.
+	 * @param operation its answer
+	 * @param ctx the context
+	 */
+	static void leaveOperation(@Nullable Operation operation, WasmLispCompiler.Ctx ctx) {
+		Frame frame = ctx.ucFrame;
+		if (operation == null || frame == null) {
+			return;
+		}
+		if (operation.owner() != frame.curOwner) {
+			setOwner(ctx.writer, frame, operation.owner());
+			if (operation.line() != UNCHANGED) {
+				setI31(ctx.writer, frame.lineSlot, (int) operation.line());
+				frame.curLine = (int) operation.line();
+			}
+			return;
+		}
+		leaveForm(operation.line(), operation.source(), ctx);
+	}
+
+	private static void setOwner(WasmWriter w, Frame frame, int owner) {
+		if (owner != frame.curOwner) {
+			setI31(w, frame.ownerSlot, owner);
+			frame.curOwner = owner;
 		}
 	}
 
@@ -1177,6 +1585,17 @@ final class WasmUncaughtLocations {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(value);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+	}
+
+	/** Pushes {@code value} as an i31, where 0 and below are null: "not known here". */
+	private static void pushI31OrNull(WasmWriter w, int value) {
+		if (value <= 0) {
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+		}
+		else {
+			i31(w, value);
+		}
 	}
 
 	/** {@code local = value}, where 0 is null: "not known here". */
