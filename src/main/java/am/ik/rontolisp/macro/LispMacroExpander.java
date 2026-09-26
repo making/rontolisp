@@ -27633,8 +27633,10 @@ public final class LispMacroExpander {
 	 * binary applications, e.g. {@code (min a b c)} becomes {@code (min (min a b) c)}. A
 	 * two-argument call is left for the caller to compile directly. The identity cases
 	 * follow Common Lisp: {@code (gcd)} is 0, {@code (lcm)} is 1, a single argument to
-	 * {@code gcd}/{@code lcm} is its absolute value, and a single argument to
-	 * {@code min}/{@code max} is itself.
+	 * {@code gcd}/{@code lcm} is its absolute value -- spelled {@code (gcd x 0)} /
+	 * {@code (lcm x 1)}, so it is checked as an integer and reported under its own name
+	 * like any other call ({@code abs} would accept a float and name itself) -- and a
+	 * single argument to {@code min}/{@code max} is itself.
 	 * @param cons the reduction expression
 	 * @return the expanded expression
 	 */
@@ -27657,7 +27659,8 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(name + " requires at least one argument");
 		}
 		if (n == 1) {
-			return gcdLcm ? listToCons(List.of(new LispSymbol(LispNames.ABS), parts.get(1))) : parts.get(1);
+			return gcdLcm ? listToCons(List.of(op, parts.get(1), new LispInteger(LispNames.GCD.equals(name) ? 0 : 1)))
+					: parts.get(1);
 		}
 		LispVal acc = listToCons(List.of(op, parts.get(1), parts.get(2)));
 		for (int i = 3; i <= n; i++) {

@@ -12,7 +12,7 @@
 
 誰も捕捉しなかった場合、コンディションは**標準エラー出力に 1 行**で報告されます — `Unhandled condition: ` に続けて、同じコンディションを [`princ`](../functions/princ.md) が出力するテキストがそのまま並びます — そしてプロセスは非ゼロで終了します。この 1 行は 4 つのバックエンドすべてで同一です。その後ろに続くのはホスト自身が「プロセスが死んだ」と述べる行だけです(JVM の `Exception in thread "main" ...`、wasmtime のトラップ報告)。環境変数 `RONTOLISP_DEBUG` に任意の値を設定すると、インタプリタでもコンパイル済み `.class` でも JVM のスタックトレースが追加で出力されます。wasm-GC バックエンドが報告するのは、モジュールが例外機構を持つとき — つまりプログラムのどこかに捕捉フォームがあるとき(ライブラリを読み込むプログラムは常にそうです)だけです。捕捉フォームがなければモジュールはメッセージなしでトラップします。これが、通知を一切行わないプログラムに機構の代価を払わせないための仕組みです。`--no-wasi` リアクターはそもそも書き込める標準エラー出力を持たないため、報告は破棄される出力シンクへ消えます([wasm-GC モジュールガイド](../../guides/wasm-gc-module.md#what-the-build-tells-you-before-you-run-it)を参照)。
 
-インタプリタと JVM バックエンド(コンパイル済みの `.class`、`.jar`、`.war`)は、その行の下に発生場所を示す同じ行を加えます。`at FILE:LINE in FUNCTION` は、コンディションが通過したプログラムのファイル中で最も内側のフォームと、それを含むプログラム自身の名前付き関数を示します(通過したライブラリ関数が示されることはありません)。[`rontolisp:async-defun`](../special-forms/rontolisp-async-defun.md) の本体から抜けたコンディションには、それを再送出した `await` ごとに `in NAME (async), awaited at FILE:LINE` の行が 1 行ずつ加わります。報告行そのものは変わらないため、`handler-case` や `princ` が見るものに影響はありません。`-e` で与えたプログラムと wasm-GC バックエンドは報告行だけを出力し、Scheme のソースに発生場所が付くのは JVM バックエンドだけです。
+インタプリタと JVM バックエンド(コンパイル済みの `.class`、`.jar`、`.war`)は、その行の下に発生場所を示す同じ行を加えます。`at FILE:LINE in FUNCTION` は、コンディションが通過したプログラムのファイル中で最も内側のフォームと、それを含むプログラム自身の名前付き関数を示します(通過したライブラリ関数が示されることはありません)。[`rontolisp:async-defun`](../special-forms/rontolisp-async-defun.md) の本体から抜けたコンディションには、それを再送出した `await` ごとに `in NAME (async), awaited at FILE:LINE` の行が 1 行ずつ加わります。報告行そのものは変わらないため、`handler-case` や `princ` が見るものに影響はありません。`-e` で与えたプログラムと wasm-GC バックエンドは報告行だけを出力します。
 
 ```console
 $ rontolisp app.lisp

@@ -8,8 +8,8 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The wasm-GC half of {@link OperandTypes}: a wrong-type operand reaching the numeric
- * runtime reports {@code OP: The value X is not of type T} (EH mode; outside it the
- * landing traps without a message).
+ * runtime signals a {@code type-error} reporting {@code OP: The value X is not of type T}
+ * (EH mode; outside it the landing traps without a message).
  *
  * <p>
  * The runtime's helpers are shared by many operators, so the operator is known only at
@@ -24,29 +24,52 @@ import org.jspecify.annotations.Nullable;
  * The id indexes the operator table ({@link Operators}), one data blob placed before any
  * body compiles (a string added during emission lands after the data segment is fixed): a
  * 12-byte row {@code {text offset from the blob base, text length, type code}} per
- * operator (row 0 unused), then the quote-framed {@code "OP: "} texts. Type code 1 =
- * {@code INTEGER}, 2 = {@code NUMBER}, 3 = {@code REAL}. The landings cite the blob's
- * base, so it is dropped with them.
+ * operator (row 0 unused), then the quote-framed {@code "OP: "} texts. Type code
+ * {@code i + 1} is {@link #TYPES}' {@code i}th type; 0 marks a funnel-typed operator (the
+ * landing's own kind). The landings cite the blob's base, so it is dropped with them.
  */
 final class WasmOperandTypes {
 
-	/** Type codes, as the table holds them and as the landing selects its suffix. */
-	private static final int INTEGER_CODE = 1;
+	/**
+	 * The types a report can name: type code {@code i + 1} is the {@code i}th, as the
+	 * table holds them and as the landing selects its suffix and symbol.
+	 */
+	private static final java.util.List<String> TYPES = java.util.Arrays.stream(OperandTypes.Kind.values())
+		.map(Enum::name)
+		.toList();
 
-	private static final int NUMBER_CODE = 2;
+	/** A funnel-typed operator's row type: the landing's own kind decides. */
+	private static final int FUNNEL_CODE = 0;
 
-	private static final int REAL_CODE = 3;
+	private static final int NUMBER_CODE = code(OperandTypes.Kind.NUMBER);
+
+	private static final int REAL_CODE = code(OperandTypes.Kind.REAL);
 
 	/** Bytes per table row. */
 	private static final int ROW = 12;
 
+	/** The shared landing's parameters and locals. */
+	private static final int KIND_LOCAL = 1;
+
+	private static final int CODE_LOCAL = 2;
+
+	private static final int ROW_LOCAL = 3;
+
+	private static final int MSG_LOCAL = 4;
+
+	private static final int SLOTS_LOCAL = 5;
+
+	/** The kinds a {@code _type_err_*} landing stub hands the shared body. */
+	private static final java.util.List<OperandTypes.Kind> LANDING_KINDS = java.util.List.of(OperandTypes.Kind.INTEGER,
+			OperandTypes.Kind.NUMBER, OperandTypes.Kind.REAL, OperandTypes.Kind.LIST);
+
 	/**
 	 * Operators a compile-time lowering introduces where the source spelled another name:
-	 * a {@code coerce} to {@code real} signals through {@code float}, a one-argument
-	 * {@code gcd}/{@code lcm} is {@code abs}.
+	 * a {@code coerce} to {@code real} signals through {@code float}, a {@code setf} of
+	 * an {@code aref} or {@code svref} place through {@code %aset}.
 	 */
-	private static final java.util.Map<String, String> LOWERED_TO = java.util.Map.of("COERCE", "FLOAT", "GCD", "ABS",
-			"LCM", "ABS");
+	private static final java.util.Map<String, String> LOWERED_TO = java.util.Map.of("COERCE", "FLOAT", "AREF",
+			OperandTypes.SETF_AREF, "SVREF", OperandTypes.SETF_AREF);
 
 	private WasmOperandTypes() {
 	}
@@ -56,10 +79,13 @@ final class WasmOperandTypes {
 	 *
 	 * @param ids operator to its row (1-based)
 	 * @param base the blob's absolute address
+	 * @param rowCodes the type codes the rows hold ({@link #FUNNEL_CODE} included): a
+	 * landing selects among only the types they can name, so a suffix no row can reach is
+	 * never cited and drops with the string blob's dead ranges
 	 */
-	record Operators(java.util.Map<String, Integer> ids, int base) {
+	record Operators(java.util.Map<String, Integer> ids, int base, java.util.Set<Integer> rowCodes) {
 
-		static final Operators NONE = new Operators(java.util.Map.of(), -1);
+		static final Operators NONE = new Operators(java.util.Map.of(), -1, java.util.Set.of());
 
 		/**
 		 * Places the table for the operators this module can name: the ones the program
@@ -105,7 +131,12 @@ final class WasmOperandTypes {
 			java.io.ByteArrayOutputStream blob = new java.io.ByteArrayOutputStream();
 			blob.writeBytes(rows.array());
 			blob.writeBytes(texts.toByteArray());
-			return new Operators(java.util.Map.copyOf(ids), table.appendShakeableBlobProbedOnBase(blob.toByteArray()));
+			java.util.Set<Integer> rowCodes = new java.util.TreeSet<>();
+			for (String op : wanted) {
+				rowCodes.add(typeCode(java.util.Objects.requireNonNull(OperandTypes.operatorType(op))));
+			}
+			return new Operators(java.util.Map.copyOf(ids), table.appendShakeableBlobProbedOnBase(blob.toByteArray()),
+					java.util.Set.copyOf(rowCodes));
 		}
 
 	}
@@ -117,20 +148,39 @@ final class WasmOperandTypes {
 	 * @param func the callee's function index
 	 */
 	static void emitCall(WasmLispCompiler.Ctx ctx, int func) {
-		int id = 0;
-		if (ctx.operandOpGlobalIndex >= 0 && mayReject(func)) {
-			String op = OperandTypes.reportedOperator(ctx.operator);
-			Integer row = op == null ? null : ctx.operandOperators.ids().get(op);
-			id = row == null ? 0 : row;
-		}
+		int id = mayReject(func) ? operatorId(ctx) : 0;
 		if (id != 0) {
 			setRegister(ctx.writer, ctx.operandOpGlobalIndex, id);
 		}
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(func);
-		if (id != 0) {
+		if (id != 0 && !isLanding(func)) {
 			setRegister(ctx.writer, ctx.operandOpGlobalIndex, 0);
 		}
+	}
+
+	/**
+	 * The operator register's value for a call compiled here: the innermost named
+	 * operator's table row, or 0 -- also outside EH mode, where no register exists.
+	 * @param ctx the emission context
+	 * @return the id
+	 */
+	static int operatorId(WasmLispCompiler.Ctx ctx) {
+		if (ctx.operandOpGlobalIndex < 0) {
+			return 0;
+		}
+		String op = OperandTypes.reportedOperator(ctx.operator);
+		Integer row = op == null ? null : ctx.operandOperators.ids().get(op);
+		return row == null ? 0 : row;
+	}
+
+	/**
+	 * Whether a helper is one of the landings, which never return (and clear the register
+	 * themselves), so nothing after the call needs to.
+	 */
+	private static boolean isLanding(int func) {
+		return func == WasmLispCompiler.FUNC_TYPE_ERR_INT || func == WasmLispCompiler.FUNC_TYPE_ERR_NUM
+				|| func == WasmLispCompiler.FUNC_TYPE_ERR_REAL || func == WasmLispCompiler.FUNC_TYPE_ERR_LIST;
 	}
 
 	/**
@@ -171,52 +221,101 @@ final class WasmOperandTypes {
 	}
 
 	private static int typeCode(String type) {
-		if (OperandTypes.Kind.INTEGER.name().equals(type)) {
-			return INTEGER_CODE;
-		}
-		return OperandTypes.Kind.NUMBER.name().equals(type) ? NUMBER_CODE : REAL_CODE;
+		return OperandTypes.FUNNEL_TYPE.equals(type) ? FUNNEL_CODE : TYPES.indexOf(type) + 1;
+	}
+
+	private static int code(OperandTypes.Kind kind) {
+		return kind.ordinal() + 1;
 	}
 
 	/**
 	 * The quote-framed texts the landings cite, interned before any body compiles.
 	 *
 	 * @param valuePrefix {@code "The value "}
-	 * @param integerSuffix {@code " is not of type INTEGER"}
-	 * @param numberSuffix {@code " is not of type NUMBER"}
-	 * @param realSuffix {@code " is not of type REAL"}
+	 * @param suffixes {@code " is not of type T"} for each of {@link #TYPES}
+	 * @param typeNames the type symbols a {@code type-error}'s {@code expected-type}
+	 * holds, one per {@link #TYPES} entry, or null when the module builds none --
+	 * interned as the names themselves: a symbol's identity is its entry, so these are
+	 * the entries a quoted {@code 'number} in the program shares, and {@code eq} holds
+	 * between the two
 	 */
 	record Texts(WasmLispCompiler.StringTable.StringEntry valuePrefix,
-			WasmLispCompiler.StringTable.StringEntry integerSuffix,
-			WasmLispCompiler.StringTable.StringEntry numberSuffix,
-			WasmLispCompiler.StringTable.StringEntry realSuffix) {
+			java.util.List<WasmLispCompiler.StringTable.StringEntry> suffixes,
+			java.util.@Nullable List<WasmLispCompiler.StringTable.StringEntry> typeNames) {
 
-		static Texts intern(WasmLispCompiler.StringTable table) {
+		/**
+		 * Interns the texts.
+		 * @param table the module's string table
+		 * @param typeError whether the landings build a {@code type-error}
+		 * @return the texts
+		 */
+		static Texts intern(WasmLispCompiler.StringTable table, boolean typeError) {
 			return new Texts(table.addBodyString("\"" + OperandTypes.VALUE_PREFIX + "\""),
-					table.addBodyString("\"" + OperandTypes.TYPE_INFIX + OperandTypes.Kind.INTEGER.name() + "\""),
-					table.addBodyString("\"" + OperandTypes.TYPE_INFIX + OperandTypes.Kind.NUMBER.name() + "\""),
-					table.addBodyString("\"" + OperandTypes.TYPE_INFIX + OperandTypes.Kind.REAL.name() + "\""));
+					TYPES.stream()
+						.map(type -> table.addBodyString("\"" + OperandTypes.TYPE_INFIX + type + "\""))
+						.toList(),
+					typeError ? TYPES.stream().map(table::addBodyString).toList() : null);
 		}
 
 	}
 
 	/**
-	 * Builds {@code _type_err_int} / {@code _type_err_num} / {@code _type_err_real}: the
-	 * landing for a non-number reaching the arithmetic runtime. Signature
-	 * {@code ((ref null eq)) -> ()}; it never returns. In EH mode it renders the report,
-	 * builds the instance-less {@code (nil . message)} payload and throws it on
-	 * {@code $lisp-cond} -- the channel a plain {@code %error} uses, so
-	 * {@code handler-case} catches it as a {@code simple-error} and the entry landing pad
-	 * reports it. Outside EH mode it is a bare {@code unreachable}: no tag exists, and
-	 * citing the prin1 renderer would pin the printer family into every module.
-	 * @param kind what the funnel was coercing to
+	 * The {@code type-error} instance a landing throws: the class's baked shape and the
+	 * slots it fills besides {@code format-control}.
+	 *
+	 * @param instance the baked layout and slot shape
+	 * @param datumSlot the index of {@code DATUM}
+	 * @param expectedTypeSlot the index of {@code EXPECTED-TYPE}
+	 */
+	record TypeErrorShape(WasmRuntimeBuilder.ConditionInstance instance, int datumSlot, int expectedTypeSlot) {
+	}
+
+	/**
+	 * Builds {@code _type_err_int} / {@code _type_err_num} / {@code _type_err_real} /
+	 * {@code _type_err_list}, the landings of a wrong-type argument, signature
+	 * {@code ((ref null eq)) -> ()}; none returns. In EH mode each is a stub handing its
+	 * kind to the shared {@code _type_err} ({@link #buildSharedLandingBody}), so the
+	 * rendering is carried once however many landings a module reaches. Outside EH mode
+	 * it is a bare {@code unreachable}: no tag exists, and citing the prin1 renderer
+	 * would pin the printer family into every module.
+	 * @param kind what the funnel was checking for
+	 * @param ehMode whether the module is in EH mode
+	 * @return the function body
+	 */
+	static byte[] buildLandingBody(OperandTypes.Kind kind, boolean ehMode) {
+		java.io.ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // no extra locals
+		if (ehMode) {
+			getLocal(w, 0);
+			i32Const(w, code(kind));
+			call(w, WasmLispCompiler.FUNC_TYPE_ERR);
+		}
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds {@code _type_err(culprit, kind) -> i32}, the one landing body the
+	 * {@code _type_err_*} stubs share ({@code TYPE_STR_TO_MEM}; it never returns). In EH
+	 * mode it renders the report and throws it on {@code $lisp-cond}, the channel
+	 * {@code %error-cond} uses, as a {@code type-error} instance whose {@code datum} is
+	 * the operand and whose {@code expected-type} is the type the report names -- or, in
+	 * a module that did not bake the class ({@code typeError} null: no handler landing
+	 * pad, so nothing can observe the class), as the instance-less
+	 * {@code (nil . message)} payload the entry landing pad reports the same way. Outside
+	 * EH mode a bare {@code unreachable}.
 	 * @param texts the interned texts, non-null in EH mode
-	 * @param operatorTable the operator table's address ({@link Operators#base})
+	 * @param operators the operator table
 	 * @param operatorGlobal the operator register, or -1 outside EH mode
+	 * @param typeError the type-error shape, or null for the instance-less payload
 	 * @param identityHash whether a cons carries the identity-hash field
 	 * @return the function body
 	 */
-	static byte[] buildLandingBody(OperandTypes.Kind kind, @Nullable Texts texts, int operatorTable, int operatorGlobal,
-			boolean identityHash) {
+	static byte[] buildSharedLandingBody(@Nullable Texts texts, Operators operators, int operatorGlobal,
+			@Nullable TypeErrorShape typeError, boolean identityHash) {
+		int operatorTable = operators.base();
 		java.io.ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		if (texts == null || operatorGlobal < 0) {
@@ -225,28 +324,36 @@ final class WasmOperandTypes {
 			w.write(Instruction.END);
 			return body.toByteArray();
 		}
-		// two extra locals: $g (i32) the register's id, $row (i32) its table row
-		w.writeUnsignedLeb128(1);
+		// params: the culprit, its funnel's kind code; extra locals: $g (i32) the
+		// register's id, then the type code; $row (i32) its table row; with a type-error
+		// to build, $msg and $slots ((ref null eq))
+		w.writeUnsignedLeb128(typeError == null ? 1 : 2);
 		w.writeUnsignedLeb128(2);
 		w.write(Type.I32);
+		if (typeError != null) {
+			w.writeUnsignedLeb128(2);
+			w.writeRefType(true, Type.EQ.code());
+		}
 		w.write(Instruction.GET_GLOBAL);
 		w.writeUnsignedLeb128(operatorGlobal);
 		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(1);
+		w.writeUnsignedLeb128(CODE_LOCAL);
 		setRegister(w, operatorGlobal, 0);
 		// $row = table + g * ROW
-		getLocal(w, 1);
+		getLocal(w, CODE_LOCAL);
 		i32Const(w, ROW);
 		w.write(Instruction.I32_MUL);
 		i32Const(w, operatorTable);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(2);
-		// payload car: the condition instance slot, nil for a message-only throw
-		w.write(Instruction.REF_NULL);
-		w.writeHeapType(Type.EQ.code());
+		w.writeUnsignedLeb128(ROW_LOCAL);
+		if (typeError == null) {
+			// payload car: the condition instance slot, nil for a message-only throw
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+		}
 		// the head: "The value ", after "OP: " when the register named one
-		getLocal(w, 1);
+		getLocal(w, CODE_LOCAL);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF);
 		w.writeRefType(true, Type.EQ.code());
@@ -264,59 +371,109 @@ final class WasmOperandTypes {
 		getLocal(w, 0);
 		call(w, WasmLispCompiler.FUNC_PRIN1_TO_STR);
 		call(w, WasmLispCompiler.FUNC_STRING_CONCAT);
-		// the type: the funnel's own kind unnamed, else the operator's (narrowed to REAL
-		// for a NUMBER operator where the funnel wanted a real) --
-		// OperandTypes.expectedType
-		int kindCode = kind == OperandTypes.Kind.INTEGER ? INTEGER_CODE
-				: kind == OperandTypes.Kind.NUMBER ? NUMBER_CODE : REAL_CODE;
-		getLocal(w, 1);
+		// the type -- OperandTypes.expectedType: the funnel's own kind unnamed; for a
+		// funnel-typed operator the kind too, a to-double funnel's read as REAL; else the
+		// operator's, narrowed to REAL for a NUMBER operator where the funnel wanted a
+		// real
+		getLocal(w, CODE_LOCAL);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF);
 		w.write(Type.I32);
-		i32Const(w, kindCode);
+		getLocal(w, KIND_LOCAL);
 		w.write(Instruction.ELSE);
 		loadRow(w, 8);
-		if (kind == OperandTypes.Kind.REAL) {
-			i32Const(w, INTEGER_CODE);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(CODE_LOCAL);
+		getLocal(w, CODE_LOCAL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		selectReal(w, () -> {
+			getLocal(w, KIND_LOCAL);
+			i32Const(w, NUMBER_CODE);
 			w.write(Instruction.I32_EQ);
-			w.write(Instruction.IF);
-			w.write(Type.I32);
-			i32Const(w, INTEGER_CODE);
-			w.write(Instruction.ELSE);
+		}, KIND_LOCAL);
+		w.write(Instruction.ELSE);
+		selectReal(w, () -> {
+			getLocal(w, KIND_LOCAL);
 			i32Const(w, REAL_CODE);
-			w.write(Instruction.END);
-		}
+			w.write(Instruction.I32_EQ);
+			getLocal(w, CODE_LOCAL);
+			i32Const(w, NUMBER_CODE);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.I32_AND);
+		}, CODE_LOCAL);
+		w.write(Instruction.END);
 		w.write(Instruction.END);
 		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(1);
-		getLocal(w, 1);
-		i32Const(w, INTEGER_CODE);
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.IF);
-		w.writeRefType(true, Type.EQ.code());
-		strBuild(w, texts.integerSuffix());
-		w.write(Instruction.ELSE);
-		getLocal(w, 1);
-		i32Const(w, NUMBER_CODE);
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.IF);
-		w.writeRefType(true, Type.EQ.code());
-		strBuild(w, texts.numberSuffix());
-		w.write(Instruction.ELSE);
-		strBuild(w, texts.realSuffix());
-		w.write(Instruction.END);
-		w.write(Instruction.END);
+		w.writeUnsignedLeb128(CODE_LOCAL);
+		// the codes the type can take: every landing's kind, and what a row type becomes
+		java.util.SortedSet<Integer> codes = new java.util.TreeSet<>();
+		for (OperandTypes.Kind kind : LANDING_KINDS) {
+			codes.add(code(kind));
+		}
+		for (int rowCode : operators.rowCodes()) {
+			if (rowCode != FUNNEL_CODE) {
+				codes.add(rowCode);
+			}
+		}
+		emitByCode(w, codes, texts.suffixes());
 		call(w, WasmLispCompiler.FUNC_STRING_CONCAT);
-		WasmEmitHelper.emitNewCons(w, identityHash);
-		w.write(Instruction.THROW);
-		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+		if (typeError == null) {
+			WasmEmitHelper.emitNewCons(w, identityHash);
+			w.write(Instruction.THROW);
+			w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+		}
+		else {
+			java.util.List<WasmLispCompiler.StringTable.StringEntry> typeNames = java.util.Objects
+				.requireNonNull(texts.typeNames());
+			w.write(Instruction.SET_LOCAL);
+			w.writeUnsignedLeb128(MSG_LOCAL);
+			WasmRuntimeBuilder.emitConditionThrow(w, typeError.instance(), SLOTS_LOCAL, MSG_LOCAL,
+					java.util.Map.of(typeError.datumSlot(), () -> getLocal(w, 0), typeError.expectedTypeSlot(),
+							() -> emitByCode(w, codes, typeNames)));
+		}
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
 
-	/** Emits {@code i32.load offset=field} of the row in local 2. */
+	/** Pushes {@code REAL}'s code when {@code test} holds, else the local's value. */
+	private static void selectReal(WasmWriter w, Runnable test, int otherwise) {
+		test.run();
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		i32Const(w, REAL_CODE);
+		w.write(Instruction.ELSE);
+		getLocal(w, otherwise);
+		w.write(Instruction.END);
+	}
+
+	/**
+	 * Pushes the entry the type code in {@link #CODE_LOCAL} selects among {@code codes}
+	 * (code {@code c} is entry {@code c - 1}), built as a string; the last code is the
+	 * fall-through.
+	 */
+	private static void emitByCode(WasmWriter w, java.util.SortedSet<Integer> codes,
+			java.util.List<WasmLispCompiler.StringTable.StringEntry> entries) {
+		java.util.List<Integer> ordered = java.util.List.copyOf(codes);
+		for (int i = 0; i < ordered.size() - 1; i++) {
+			getLocal(w, CODE_LOCAL);
+			i32Const(w, ordered.get(i));
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF);
+			w.writeRefType(true, Type.EQ.code());
+			strBuild(w, entries.get(ordered.get(i) - 1));
+			w.write(Instruction.ELSE);
+		}
+		strBuild(w, entries.get(ordered.getLast() - 1));
+		for (int i = 0; i < ordered.size() - 1; i++) {
+			w.write(Instruction.END);
+		}
+	}
+
+	/** Emits {@code i32.load offset=field} of the row in {@link #ROW_LOCAL}. */
 	private static void loadRow(WasmWriter w, int field) {
-		getLocal(w, 2);
+		getLocal(w, ROW_LOCAL);
 		w.write(Instruction.I32_LOAD);
 		w.writeUnsignedLeb128(2);
 		w.writeUnsignedLeb128(field);

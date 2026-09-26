@@ -163,13 +163,14 @@ class JvmFloatArrayTest {
 		// Storing a non-real (a string) into a packed array is a type error at runtime,
 		// and it arrives as the SAME condition the interpreter signals rather than as a
 		// raw ClassCastException: the store goes through the shared double coercion,
-		// which names the value it could not use (.kb/error-handling.md).
+		// which names the value it could not use, under (setf aref), which takes any
+		// real (.kb/error-handling.md).
 		assertThatThrownBy(() -> compileAndRun("(let ((v #d(1.0 2.0 3.0))) (setf (aref v 0) \"x\") (print v))"))
-			.hasRootCauseMessage("The value \"x\" is not of type NUMBER");
+			.hasRootCauseMessage("(SETF AREF): The value \"x\" is not of type REAL");
 		assertThat(compileAndRun("""
 				(print (handler-case (let ((v #d(1.0 2.0 3.0))) (setf (aref v 0) "x") v)
 				         (type-error (e) (princ-to-string e))))
-				""")).isEqualTo("\"The value \\\"x\\\" is not of type NUMBER\"");
+				""")).isEqualTo("\"(SETF AREF): The value \\\"x\\\" is not of type REAL\"");
 	}
 
 	// --- single-float (#f) parity: a native float[] with the same header layout ---
@@ -282,7 +283,7 @@ class JvmFloatArrayTest {
 	@Test
 	void singleNonRealStoreIsATypeError() throws Exception {
 		assertThatThrownBy(() -> compileAndRun("(let ((v #f(1.0 2.0 3.0))) (setf (aref v 0) \"x\") (print v))"))
-			.hasRootCauseMessage("The value \"x\" is not of type NUMBER");
+			.hasRootCauseMessage("(SETF AREF): The value \"x\" is not of type REAL");
 	}
 
 }

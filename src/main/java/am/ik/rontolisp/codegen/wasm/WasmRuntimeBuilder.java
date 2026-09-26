@@ -2342,11 +2342,11 @@ final class WasmRuntimeBuilder {
 	 *
 	 * <p>
 	 * The class rides on a layout the module already has. A program that NAMES
-	 * {@code type-error} (or {@code undefined-function}) has that layout baked, and gets
-	 * the typed instance a clause can match; one that does not cannot tell the instance
-	 * from a message-only payload -- its {@code error} clause and the entry landing pad
-	 * report the same text either way -- so it gets the payload and bakes nothing new.
-	 * The pieces are interned on first use, as {@link ArityReport}'s are.
+	 * {@code type-error} (or {@code undefined-function}) has that layout baked, and so
+	 * does one with a handler landing pad ({@code type-error}, for the operand landings,
+	 * {@code WasmOperandTypes}); it gets the typed instance a clause can match. Any other
+	 * program gets the message-only payload and bakes nothing new. The pieces are
+	 * interned on first use, as {@link ArityReport}'s are.
 	 */
 	static final class NotFunctionReport {
 
@@ -2701,6 +2701,20 @@ final class WasmRuntimeBuilder {
 	 * landing pad reports it. {@code slotsLocal} is a spare {@code (ref null eq)}.
 	 */
 	private static void emitConditionThrow(WasmWriter w, ConditionInstance instance, int slotsLocal, int msgLocal) {
+		emitConditionThrow(w, instance, slotsLocal, msgLocal, Map.of());
+	}
+
+	/**
+	 * {@link #emitConditionThrow(WasmWriter, ConditionInstance, int, int)} with more
+	 * slots filled: each entry's emitter pushes that slot's value.
+	 * @param w the writer
+	 * @param instance the condition class's shape
+	 * @param slotsLocal a spare {@code (ref null eq)} local
+	 * @param msgLocal the local holding the message
+	 * @param slots slot index to the emission pushing its value
+	 */
+	static void emitConditionThrow(WasmWriter w, ConditionInstance instance, int slotsLocal, int msgLocal,
+			Map<Integer, Runnable> slots) {
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
 		w.write(Instruction.I32_CONST);
@@ -2719,6 +2733,17 @@ final class WasmRuntimeBuilder {
 		w.writeUnsignedLeb128(msgLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		for (Map.Entry<Integer, Runnable> slot : new TreeMap<>(slots).entrySet()) {
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(slotsLocal);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(slot.getKey());
+			slot.getValue().run();
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		}
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(instance.layoutAddress());
 		w.write(Instruction.GET_LOCAL);

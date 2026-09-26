@@ -104,8 +104,14 @@ final class JvmComplexCompiler {
 		else {
 			JvmEmitHelper.compileLong(0, ctx);
 		}
+		// The constructor rejects a part that is no real: under the complex form it is
+		// named COMPLEX (a literal's parts are canonical and cannot fail).
+		String desc = JvmComplexRuntimeBuilder.descFor(JvmComplexRuntimeBuilder.COMPLEX);
 		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(complexOp(ctx, className, JvmComplexRuntimeBuilder.COMPLEX).index());
+		ctx.emitU2(ctx
+			.wrapForOperator(JvmComplexRuntimeBuilder.COMPLEX, desc,
+					complexOp(ctx, className, JvmComplexRuntimeBuilder.COMPLEX))
+			.index());
 	}
 
 	/** Compiles {@code (complexp x)}. */

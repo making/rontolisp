@@ -290,7 +290,7 @@ final class WasmEmitHelper {
 		}
 		int slot = WasmExprCompiler.plainLocalSlot(operand, ctx);
 		if (slot >= 0) {
-			emitInlineConsField(ctx.writer, slot, field);
+			emitInlineConsField(ctx, slot, field);
 			return;
 		}
 		WasmExprCompiler.compileExpr(operand, ctx);
@@ -310,7 +310,125 @@ final class WasmEmitHelper {
 		int tmpSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(tmpSlot);
-		emitInlineConsField(ctx.writer, tmpSlot, field);
+		emitInlineConsField(ctx, tmpSlot, field);
+	}
+
+	/**
+	 * Whether a cons field read checks its operand: in EH mode a non-list is a catchable
+	 * {@code type-error} ({@code _type_err_list}) named {@code CAR}/{@code CDR} -- the
+	 * checked {@code _car}/{@code _cdr} name themselves, whichever form reached them;
+	 * outside it the cast traps, as every other failed cast does there.
+	 */
+	static boolean checksConsFields(WasmLispCompiler.Ctx ctx) {
+		return ctx.operandOpGlobalIndex >= 0;
+	}
+
+	/**
+	 * Checks the boxed index on the stack ahead of an {@code i31} unboxing (EH mode,
+	 * {@link #checksConsFields}), leaving it there: {@code i32.const id; ref.i31; call
+	 * _idx_chk} ({@link #buildIndexCheckBody}), so one that is no integer is the
+	 * operator's catchable type-error rather than a trapping cast. A no-op outside EH
+	 * mode.
+	 * @param ctx the compile context
+	 */
+	static void emitIndexCheck(WasmLispCompiler.Ctx ctx) {
+		if (!checksConsFields(ctx)) {
+			return;
+		}
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmOperandTypes.operatorId(ctx));
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_IDX_CHK);
+	}
+
+	/**
+	 * Builds {@code _idx_chk(index, id) -> index}: a fixnum answers itself at once;
+	 * anything else goes through {@code _int_val} with the i31 operator id in the
+	 * register -- a non-integer throws that operator's {@code INTEGER} type-error, a wide
+	 * integer answers and is answered (its access fails as it always did). A bare
+	 * {@code unreachable} outside EH mode, where nothing calls it.
+	 * @param operatorGlobal the operator register, or -1 outside EH mode
+	 * @return the function body
+	 */
+	static byte[] buildIndexCheckBody(int operatorGlobal) {
+		java.io.ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // no locals: the index and the operator id
+		if (operatorGlobal < 0) {
+			w.write(Instruction.UNREACHABLE);
+			w.write(Instruction.END);
+			return body.toByteArray();
+		}
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		castI31GetS(w);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(operatorGlobal);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+		w.write(Instruction.DROP);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(operatorGlobal);
+		w.write(Instruction.END);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * The inline cons field read of the list in {@code slot}; checked
+	 * ({@link #checksConsFields}), a value that is no cons -- nil or a wrong type --
+	 * leaves the hot path for the checked {@code _car}/{@code _cdr} body, which answers
+	 * nil for nil and signals {@code CAR}'s / {@code CDR}'s type-error otherwise:
+	 * {@code local.get slot; ref.test $cons; if (result eqref) local.get slot; ref.cast
+	 * $cons; struct.get $cons field else local.get slot; call _car end} -- four bytes
+	 * over the unchecked shape.
+	 */
+	static void emitInlineConsField(WasmLispCompiler.Ctx ctx, int slot, int field) {
+		if (!checksConsFields(ctx)) {
+			emitInlineConsField(ctx.writer, slot, field);
+			return;
+		}
+		emitCheckedConsField(ctx.writer, slot, field, () -> {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(slot);
+			WasmConsRuntimeBuilder.emitCall(ctx.writer, field);
+		});
+	}
+
+	/**
+	 * {@code local.get slot; ref.test $cons; if (result eqref) <the field> else <miss>
+	 * end}, {@code miss} pushing what a value that is no cons answers.
+	 */
+	static void emitCheckedConsField(WasmWriter w, int slot, int field, Runnable miss) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(field);
+		w.write(Instruction.ELSE);
+		miss.run();
+		w.write(Instruction.END);
 	}
 
 	/**

@@ -332,9 +332,7 @@ the one `princ` writes, and nothing below changes it.
 through and the innermost of the PROGRAM'S named functions holding it -- then one
 `  in NAME (async), awaited at FILE:LINE` per async boundary crossed. Nothing known (a `-e`
 program, only macro-built forms) prints none. **The interpreter and the JVM backend print the same
-lines** (`cli/UncaughtReportParityTest`); wasm-GC and interpreted Scheme source do not yet (open
-items). The JVM backend locates Scheme source too (`SchemeReader` records positions on the compile
-path), so a compiled `.scm` prints lines its interpreted run does not until the Scheme item lands.
+lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC does not yet (open item).
 - **Which function** (both backends): only a named function whose body was read from a named file
   (`LispLambda.sourced`; `JvmSourceSites.sourced`) -- a library function a user callback runs
   under is never named (`%run-handlers` around a `handler-bind` handler, `%sort-runtime` around a
@@ -393,11 +391,12 @@ path), so a compiled `.scm` prints lines its interpreted run does not until the 
   as CONTAINED, in order (wasmtime prints around ours), so the location lines need no change there
   and are pinned instead by `RontoLispCliStreamsTest`'s `anUncaught*` cases (the interpreter, then
   `java -cp` and `java -jar` of the compiled program) and `UncaughtReportParityTest`, where the file
-  path is the test's own. `scheme-spec.yaml`'s interpreter leg and the Scheme cases in
-  `RontoLispCliStreamsTest` compare the whole of stderr and stay valid because interpreted Scheme
-  is not located yet -- when it is, they compare the report line; the JVM leg compares CONTAINED.
-  The JVM/wasm assertions that compile directly (`JvmLispCompilerTest`, `JvmSizedMainTest`,
-  `WasmLispCompilerIntegrationTest`) record no positions, so they pin the report line alone.
+  path is the test's own. `scheme-spec.yaml` compares the interpreter's MESSAGE and the compiled
+  legs' stderr as CONTAINED, so it needs no change; the Scheme cases in `RontoLispCliStreamsTest` pin
+  the location lines where the case is about the report and the report line alone where it is about
+  the message. The JVM/wasm assertions that compile directly (`JvmLispCompilerTest`,
+  `JvmSizedMainTest`, `WasmLispCompilerIntegrationTest`) record no positions, so they pin the
+  report line alone.
 
 - **Interpreter / compile failures** (`RontoLispCli.runReporting`): only `main` catches -- `run`
   still throws, so an embedded caller keeps the exception with its type and cause. A rontolisp
@@ -634,14 +633,14 @@ message at the catching end** -- except for the failures the backends report as 
   bytecode with no channel to carry a class; a wrong-type operand's exception is recognized by
   identity instead (`_teSlot`, see "A non-number reaching arithmetic"). The arms are compiled Lisp forms built by `LispMacroExpander.reportingConditionForm`, so no
   slot index is baked here.
-- **WASM**: the pad is unchanged, and correctly so -- only `$lisp-cond` throws land in it. **Two
-  families diverge by CLASS rather than catchability**: an undefined-function call and a non-number
-  reaching arithmetic are both catchable but as a `simple-error`. **The stub cannot construct the
-  typed instance**: it is produced during BODY compilation, after `mayCreateInstances` fixed whether
-  the artifact has an instance representation and after `usedLayoutTags` chose which layouts to bake
-  (`%OBJ-NEW reached the compiler with no instance representation`). **Trigger: teach both gates
-  about undefined calls** -- `usedLayoutTags` already stands in for the `end-of-file` tag on the read
-  family's presence -- and fix the two families together.
+- **WASM**: the pad is unchanged, and correctly so -- only `$lisp-cond` throws land in it. **An
+  undefined-function call diverges by CLASS rather than catchability**: catchable, but as a
+  `simple-error`. **The stub cannot construct the typed instance**: it is produced during BODY
+  compilation, after `mayCreateInstances` fixed whether the artifact has an instance representation
+  and after `usedLayoutTags` chose which layouts to bake (`%OBJ-NEW reached the compiler with no
+  instance representation`). **Trigger: teach both gates about undefined calls** -- the precedent is
+  the non-number family ("A non-number reaching arithmetic"), whose `type-error` layout
+  `usedLayoutTags` bakes on the pad's presence alone.
 - **Undefined functions keep the call-time stub contract**: a call to a name with no definition
   compiles to `The function X is undefined` at call time plus a compile-time warning, matching the
   interpreter's late binding. It stays a STRING signal for the gate reason above.
@@ -666,15 +665,16 @@ message at the catching end** -- except for the failures the backends report as 
 ## A non-number reaching arithmetic signals a catchable type-error
 **Invariant: a wrong-type operand reaching a numeric operator signals a CATCHABLE error whose text
 is `OP: The value <prin1> is not of type T` -- the operator and the type IT accepts, CL's
-`type-error` shape -- byte-identical on all four backends; on the interpreter and the JVM the
-condition is a `type-error` whose `type-error-datum`/`type-error-expected-type` answer the operand
-and `T`.** One table, `compiler/OperandTypes`: the named operators and their types (`NUMBER` for
+`type-error` shape -- byte-identical on all four backends, and the condition is a `type-error`
+whose `type-error-datum`/`type-error-expected-type` answer the operand and `T`.** One table, `compiler/OperandTypes`: the named operators and their types (`NUMBER` for
 `+ - * / = abs sqrt exp expt ...`, `REAL` for the orderings, `min`/`max`, the rounding family,
-`mod`/`rem`, `float`; `INTEGER` for the bitwise family, `gcd`/`lcm`/`isqrt`), narrowed to `REAL`
-where a `NUMBER` operator met a complex that must be real (two-argument `atan`). A failure outside a
-named operator reports unnamed (`The value "x" is not of type NUMBER` for a packed-array store) with
-the funnel's own kind. Pinned by `ci-spec.yaml`'s `non-number-arithmetic-operands-are-catchable` and
-`operand-type-errors-name-the-operator-wherever-it-compiles`.
+`mod`/`rem`, `float`, `random`, `complex`; `INTEGER` for the bitwise family, `gcd`/`lcm`/`isqrt`;
+`RATIONAL` for `numerator`/`denominator`), narrowed to `REAL` where a `NUMBER` operator met a complex
+that must be real (two-argument `atan`). The table's other operators are FUNNEL-TYPED ("A wrong-type
+argument names its operator" below). A failure outside a named operator reports unnamed with the
+funnel's own kind. Pinned by `ci-spec.yaml`'s `non-number-arithmetic-operands-are-catchable` and
+`operand-type-errors-name-the-operator-wherever-it-compiles`; the wasm class by
+`WasmLispCompilerIntegrationTest.ehANonNumberArithmeticOperandSignalsATypeError`.
 
 **Detection stays at each backend's coercion FUNNEL; the operator is attached ONE LEVEL UP**, because
 a funnel (and every shared helper above it -- `_cmpb` serves `< > <= >= = min max`) cannot know which
@@ -705,8 +705,31 @@ operator it serves:
   fixed and reads back as blanks**), so it holds only the operators the program spells, their
   call-position rewrites, the `+ - * / = < > <= >=` family and the operators a lowering introduces
   (`WasmOperandTypes.LOWERED_TO`); an operator missing there reports unnamed. Boxing, the fused raw
-  i64 helpers and fdlibm take no register (`mayReject`). Size: +2.3% on a 109 KB EH module; a non-EH
-  module is byte-identical. Outside EH mode the landings stay a bare `unreachable`.
+  i64 helpers and fdlibm take no register (`mayReject`), and a call to a landing is not followed by
+  the clear (a landing never returns and clears the register itself). Size: +2.3% on a 109 KB EH
+  module; a non-EH module is byte-identical. Outside EH mode the landings stay a bare `unreachable`.
+- **wasm-GC, one landing body**: `_type_err_int`/`_num`/`_real`/`_list` are 8-byte stubs handing
+  their kind to the shared `_type_err(culprit, kind)` (`buildSharedLandingBody`, `TYPE_STR_TO_MEM`),
+  which renders every report, so a module reaching several landings carries the rendering once; its
+  type chain selects among only the codes a landing kind or a table row can produce
+  (`Operators.rowCodes`), so a suffix no row reaches is never cited and drops with the string
+  blob's dead ranges.
+- **wasm-GC, the class**: the landings throw a `type-error` instance built in raw wasm
+  (`WasmOperandTypes.TypeErrorShape`, `WasmRuntimeBuilder.emitConditionThrow` -- the
+  `NotFunctionReport` precedent): `format-control` the report, `datum` the operand,
+  `expected-type` the symbol the report names. The landing is a fixed helper built after the
+  instance gates decided, so the GATE is the pad: EH mode behind a handler landing pad
+  (`establishesLandingPad`) with instances on, and `usedLayoutTags` bakes `TYPE-ERROR` on the pad
+  alone -- not on the program spelling `type-error`, because `type-of`, `class-of` and a
+  `simple-error` clause observe the class without naming it. Without a pad nothing can observe the
+  class and the landing throws the message-only `(nil . message)` payload, which the entry pad
+  reports identically. **The type symbols are interned as their own names before any body compiles**
+  (`Texts.typeNames`): a symbol's identity is its string-table entry, so `(eq (type-error-expected-type
+  e) 'number)` holds only because the landing and the program's literal share it -- a view into the
+  suffix text would print right and fail `eq`. Size: +106-116 B on zlib with a `handler-case`
+  around its body (P1/component, default and `--optimize=size`, measured 2026-09-26); zlib as
+  shipped has no pad and is byte-identical. A side effect: `NotFunctionReport`'s `type-error` for
+  `(funcall 5)` is typed under any pad now, since it rides the same baked layout.
 - **The operator is the innermost FORM being compiled**, so a lowering that re-emits an operator's
   calls away from its form sets it back: the fusion fallbacks per tree node
   (`JvmIntFusionCompiler.numOpFor`, the compare method's mask -> `compareOperator`,
@@ -716,23 +739,73 @@ operator it serves:
   -> `+`/`-`, `zerop`/`plusp`/`minusp`/`/=` -> `= > < =`, `evenp`/`oddp` -> `mod`, `logtest`/`logeqv`
   -> `logand`/`logxor`), because the compiled backends' function values (`#'1+`) ARE the rewrite
   (`BuiltinFunctionWrappers`), so the interpreter's built-in reports what a call does.
-- **Class divergence, deliberate**: the wasm pair signal a `simple-error` carrying the same text --
-  the landing is a fixed helper built after the instance gates (`mayCreateInstances`,
-  `usedLayoutTags`) decided. `(handler-case ... (type-error ...))` therefore does not match there.
-- **Outside the named operators the old divergences remain**: a one-argument `lcm`/`gcd` compiles to
-  `abs` (and accepts a float), `numerator`/`random`/`nth`/`aref` over a non-number keep their own
-  per-backend texts.
 - `_int_val`'s limb-tier arm still TRAPS explicitly ([wasm-bignum.md](wasm-bignum.md)'s exact-or-trap
   boundary is about values that ARE integers). The `_as_f64` ladder is float-first
   ([wasm-shared-coercion.md](wasm-shared-coercion.md)). `--no-gc` unaffected, still traps.
-- **What still traps on wasm-GC**: anything not funneled through `_int_val`/`_as_f64` -- `(car 5)`,
-  division by zero, kinded/generic aref casts, the limb-tier boundaries.
+- **What still traps on wasm-GC**: division by zero, a list walk's own cast (`nthcdr`, `dolist` over
+  a non-list, `.todo/980`), the array argument of an access, the limb-tier boundaries -- and
+  everything outside EH mode.
 - **The funnels' reach is wider than arithmetic**: a STORE into a packed float array goes through the
-  same `_dbl`/`_as_f64`. Pinned by `JvmFloatArrayTest`'s
+  same `_dbl`/`_as_f64`, and reports under `(SETF AREF)` since 972. Pinned by `JvmFloatArrayTest`'s
   `nonRealStoreIsATypeError`/`singleNonRealStoreIsATypeError` -- the reason to run the WHOLE suite
   after changing a shared runtime helper.
 - Pre-existing edge unchanged: a condition thrown from INSIDE a wasm to-string capture leaves the
   capture flag set.
+
+## A wrong-type argument names its operator
+**Invariant: outside arithmetic too, a wrong-type argument reports `OP: The value <prin1> is not of
+type T` with the type the operator requires, as a catchable `type-error` answering the datum and
+`T`, byte-identical on all four backends (wasm-GC: in EH mode).** Covered since 2026-09-26:
+
+| Form | Report |
+| --- | --- |
+| `(car 5)`, `(first 5)` / `(cdr "s")`, `(rest 5)` | `CAR: ... 5 ... LIST` / `CDR: ...` |
+| `(nth nil l)`, `(nthcdr 1.5 l)` | `NTHCDR: ... INTEGER` |
+| `(aref v nil)`, `(svref v nil)` | `AREF: ... INTEGER` |
+| `(setf (aref v nil) x)`, `(setf (aref #d(1.0) 0) "x")` | `(SETF AREF): ... INTEGER` / `... REAL` |
+| `(random nil)`, `(complex #c(1 2) 3)` | `RANDOM:` / `COMPLEX: ... REAL` |
+| `(numerator nil)`, `(denominator 1.5)` | `NUMERATOR:` / `DENOMINATOR: ... RATIONAL` |
+| `(lcm nil)`, `(gcd 1.5)` (one argument) | `LCM:` / `GCD: ... INTEGER` |
+
+- **FUNNEL-TYPED operators** (`OperandTypes.FUNNEL_TYPE`: `CAR`, `CDR`, `NTHCDR`, `AREF`,
+  `(SETF AREF)`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
+  (new kinds `LIST`, `RATIONAL`) -- except that a to-double funnel (`NUMBER`) there is a packed float
+  store, which takes any real: `REAL`. A numeric operator keeps its one fixed type. `%aset` reports
+  as `(SETF AREF)`, `nth` as `NTHCDR`, `svref` as `AREF`, `first`/`rest` as `CAR`/`CDR`
+  (`OperandTypes.REWRITTEN`, the call-position-rewrite rule above). A one-argument `gcd`/`lcm`
+  lowers to `(gcd x 0)`/`(lcm x 1)` (`LispMacroExpander.expandReduction`) -- it was `abs`, which
+  accepted a float and named itself.
+- **Interpreter**: the built-ins throw `OperandTypeException` with the kind (`car`/`cdr`/`first`/
+  `rest` and `nthValue` `LIST`, `numerator`/`denominator` `RATIONAL`, `random` `NUMBER`/`REAL`), the
+  seam names them. `#'first`/`#'rest` of nil and `#'second` past the end answer nil now, as the
+  calls do (they signalled "expects a cons cell").
+- **JVM**: `car`/`cdr` compile to `_car`/`_cdr` (`JvmOperandTypeRuntime`), whole readers that name
+  themselves (`_opTypeErr(_teRaw(x, "LIST"), "CAR", FUNNEL_TYPE)`) -- one call per site where the
+  inline null test and cast were; `zlib` -4.5 KB, a one-defun class +227 B (the two methods). The
+  subscripts of `aref`/`%aset`/`nthcdr` go through `_ckIdx` (a `Long` or `BigInteger`), `numerator`/
+  `denominator` through `_ckRat`, both via the operator's wrapper; `%aset`'s store helpers and the
+  `complex` constructor are invoked under the wrapper too. `_opTypeErr`'s funnel-typed arm reads the
+  kind back off the raw report.
+- **wasm-GC, EH mode only** (`WasmEmitHelper.checksConsFields`; outside it every cast still traps and
+  a non-EH module is byte-identical): an inline `car`/`cdr` site is `local.get x; ref.test $cons; if
+  (result eqref) local.get x; ref.cast $cons; struct.get else local.get x; call _car end` (+4 B), and
+  `_car`/`_cdr` are CHECKED there -- nil answers nil, a non-list sets the register to `CAR`'s/`CDR`'s
+  row and lands in `_type_err_list`; a `--optimize=size` site was already that call and pays nothing.
+  The body names itself whichever form reached it (an unnamed report when the program spells neither
+  name). A subscript goes through `i32.const id; ref.i31; call _idx_chk` (+6 B): a fixnum answers
+  itself, anything else `_int_val` under the id. `compileAset` names itself (a statement-position
+  store and a pinned-kind `setf` reach it without `compileCons`). `random`'s integer arm first runs
+  the limit through `_as_f64` (a ratio passes and meets `_int_val`'s unnamed, true, `INTEGER`);
+  `denominator` checks a non-ratio through `_int_val`, since `_rat_den` answers 1 for anything.
+- **Cost, measured 2026-09-26** (wasmtime 47): P1 `zlib` 114,383 -> 115,984 (+1.4%), size level
+  87,936 -> 88,735 (+0.9%); a tight 1M-element `car`/`cdr` loop in an EH module 129 -> 166 ms
+  (+28%): the cons path tests the type twice (`ref.test`, `ref.cast`) -- `.todo/979` makes it one
+  `br_on_cast_fail`. The `aref` loop and the JVM are unchanged.
+- **Open**: list walks and `char` indices (`.todo/980`), `random`'s domain (`.todo/981`), `#'gcd`
+  arity and `#'numerator` (`.todo/982`).
+- Pinned by `ci-spec.yaml`'s `argument-type-errors-name-the-operator-beyond-arithmetic` and the
+  `argumentTypeErrorsNameTheOperatorBeyondArithmetic` triple (`LispEvaluatorTest`,
+  `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
 
 ## Argument-shape errors signal a catchable program-error
 **Invariant: a keyword the operator does not accept, an odd keyword tail and a non-keyword in
@@ -986,7 +1059,8 @@ all, so **`restart-case` alone unblocks nothing real**.
   `ehAnUncaughtArgumentShapeErrorReportsTheInterpreterLineBeforeTrapping`,
   `anInnerHandlerCaseShadowsAnEnclosingHandlerBind` (+3),
   `signalFallsThroughAHandlerCaseWhoseClausesDoNotMatch` (+3),
-  `nonNumberArithmeticOperandsSignalCatchableTypeErrors`, the restart block (15-16 cases each),
+  `nonNumberArithmeticOperandsSignalCatchableTypeErrors`,
+  `argumentTypeErrorsNameTheOperatorBeyondArithmetic` (+2), the restart block (15-16 cases each),
   `compileRuntimeErrorDispatchScalesPastTheBranchLimit`, `anUncaughtCondition*`, `ehUncaught*`, and
   the `compileAndRunHandlerCaseIn*` block -- which must COMPILE, LOAD and RUN the class, since the
   broken class was written without complaint and only failed at link time.
@@ -1014,7 +1088,9 @@ all, so **`restart-case` alone unblocks nothing real**.
   `signal-runtime-control-string`, `handler-case-catches-typed-and-plain-errors` (+2),
   `handler-case-in-argument-position`, `restart-system`,
   `signal-declines-an-unmatched-handler-case`, `no-applicable-method-report`,
-  `non-number-arithmetic-operands-are-catchable`, `argument-shape-errors-signal-program-error`,
+  `non-number-arithmetic-operands-are-catchable`,
+  `argument-type-errors-name-the-operator-beyond-arithmetic`,
+  `argument-shape-errors-signal-program-error`,
   `applying-a-non-function-signals-its-condition`,
   `runtime-type-dispatch-residue`,
   `runtime-type-dispatch-and-symbol-designators`, `postmodern-language-incidentals`, plus the

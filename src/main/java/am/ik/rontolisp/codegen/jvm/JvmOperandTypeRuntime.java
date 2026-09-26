@@ -54,6 +54,34 @@ final class JvmOperandTypeRuntime {
 
 	static final String TE_SLOT_DESC = "(Ljava/lang/Throwable;I)Ljava/lang/Object;";
 
+	/**
+	 * {@code car} and {@code cdr} themselves: nil answers nil, a cons its field, and
+	 * anything else throws {@code CAR}'s / {@code CDR}'s {@code LIST} type-error. Whole
+	 * readers rather than a check a wrapper names: every site is one call where it was an
+	 * inline null test and cast, so a program pays the two small methods once instead of
+	 * a check and a wrapper per operator.
+	 */
+	static final String CAR = "_car";
+
+	static final String CDR = "_cdr";
+
+	static final String FIELD_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/**
+	 * The argument checks of the other funnel-typed operators ({@code OperandTypes}):
+	 * each answers its argument when it has the type and throws the unnamed report
+	 * otherwise, for a wrapper to name. {@code _ckIdx} an index (an {@code INTEGER}: a
+	 * {@code Long}, or a {@code BigInteger} the access then rejects as out of range),
+	 * {@code _ckRat} a rational.
+	 */
+	static final String CK_IDX = "_ckIdx";
+
+	static final String CK_IDX_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	static final String CK_RAT = "_ckRat";
+
+	static final String CK_RAT_DESC = CK_IDX_DESC;
+
 	/** The thread-local record's field. */
 	static final String TL_FIELD = "_teTl";
 
@@ -145,6 +173,19 @@ final class JvmOperandTypeRuntime {
 		StringConstant typeInfix = cp.addString(OperandTypes.TYPE_INFIX);
 
 		List<JvmNumericRuntimeBuilder.NumericMethod> methods = new ArrayList<>();
+		MethodrefConstant teRaw = self(cp, thisClass, TE_RAW, TE_RAW_DESC);
+		ClassConstant longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
+		ClassConstant bigClass = cp.addClass(cp.addUtf8("java/math/BigInteger"));
+		ClassConstant ratioClass = cp.addClass(cp.addUtf8("[Ljava/math/BigInteger;"));
+		MethodrefConstant opTypeErr = self(cp, thisClass, OP_TYPE_ERR, OP_TYPE_ERR_DESC);
+		StringConstant listKind = cp.addString(OperandTypes.Kind.LIST.name());
+		StringConstant funnelType = cp.addString(OperandTypes.FUNNEL_TYPE);
+		methods.add(field(cp, CAR, 0, objArr, teRaw, opTypeErr, listKind, funnelType));
+		methods.add(field(cp, CDR, 1, objArr, teRaw, opTypeErr, listKind, funnelType));
+		methods.add(check(cp, CK_IDX, CK_IDX_DESC, List.of(longClass, bigClass), null, teRaw,
+				cp.addString(OperandTypes.Kind.INTEGER.name())));
+		methods.add(check(cp, CK_RAT, CK_RAT_DESC, List.of(longClass, bigClass, ratioClass), null, teRaw,
+				cp.addString(OperandTypes.Kind.RATIONAL.name())));
 
 		// _teRaw(Object x, String kind): new RuntimeException("The value " + prin1(x) +
 		// " is not of type " + kind), recorded under a pad.
@@ -203,7 +244,30 @@ final class JvmOperandTypeRuntime {
 		o.add(Opcode.ASTORE);
 		o.add(5);
 		// opType is always a wrapper's ldc constant, and string constants are interned,
-		// so identity decides it.
+		// so identity decides it. A funnel-typed operator's is FUNNEL_TYPE: the type is
+		// the funnel's own kind, the report's last word, a to-double funnel's NUMBER
+		// read as REAL.
+		o.add(Opcode.ALOAD_2);
+		JvmRuntimeBuilder.emitLdc(o, cp.addString(OperandTypes.FUNNEL_TYPE).index());
+		int ifNotFunnelTyped = branch(o, Opcode.IF_ACMPNE);
+		o.add(Opcode.ALOAD_3);
+		o.add(Opcode.ILOAD);
+		o.add(4);
+		o.add(Opcode.ICONST_1);
+		o.add(Opcode.IADD);
+		invoke(o, Opcode.INVOKEVIRTUAL, cp.addMethodref(string,
+				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(I)Ljava/lang/String;"))));
+		o.add(Opcode.ASTORE);
+		o.add(5);
+		o.add(Opcode.ALOAD_3);
+		JvmRuntimeBuilder.emitLdc(o, cp.addString(" " + OperandTypes.Kind.NUMBER.name()).index());
+		invoke(o, Opcode.INVOKEVIRTUAL, endsWith);
+		int ifKindNotNumber = branch(o, Opcode.IFEQ);
+		JvmRuntimeBuilder.emitLdc(o, cp.addString(OperandTypes.Kind.REAL.name()).index());
+		o.add(Opcode.ASTORE);
+		o.add(5);
+		int toBuild = branch(o, Opcode.GOTO);
+		JvmRuntimeBuilder.patchBranch(o, ifNotFunnelTyped, o.size());
 		o.add(Opcode.ALOAD_2);
 		JvmRuntimeBuilder.emitLdc(o, cp.addString(OperandTypes.Kind.NUMBER.name()).index());
 		int ifNotNumber = branch(o, Opcode.IF_ACMPNE);
@@ -217,6 +281,8 @@ final class JvmOperandTypeRuntime {
 		int build = o.size();
 		JvmRuntimeBuilder.patchBranch(o, ifNotNumber, build);
 		JvmRuntimeBuilder.patchBranch(o, ifNotReal, build);
+		JvmRuntimeBuilder.patchBranch(o, ifKindNotNumber, build);
+		JvmRuntimeBuilder.patchBranch(o, toBuild, build);
 		o.add(Opcode.NEW);
 		JvmRuntimeBuilder.emitU2(o, rte.index());
 		o.add(Opcode.DUP);
@@ -309,6 +375,74 @@ final class JvmOperandTypeRuntime {
 					3, List.of()));
 		}
 		return methods;
+	}
+
+	/**
+	 * Builds {@code _car}/{@code _cdr}: nil answers nil, a cons ({@code Object[]}) its
+	 * field, anything else
+	 * {@code throw _opTypeErr(_teRaw(x, "LIST"), "CAR", FUNNEL_TYPE)}.
+	 */
+	private static JvmNumericRuntimeBuilder.NumericMethod field(ConstantPool cp, String name, int index,
+			ClassConstant objArr, MethodrefConstant teRaw, MethodrefConstant opTypeErr, StringConstant listKind,
+			StringConstant funnelType) {
+		List<Integer> c = new ArrayList<>();
+		c.add(Opcode.ALOAD_0);
+		int ifNotNull = branch(c, Opcode.IFNONNULL);
+		c.add(Opcode.ACONST_NULL);
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNotNull, c.size());
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, objArr.index());
+		int ifNotCons = branch(c, Opcode.IFEQ);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(c, objArr.index());
+		c.add(index == 0 ? Opcode.ICONST_0 : Opcode.ICONST_1);
+		c.add(Opcode.AALOAD);
+		c.add(Opcode.ARETURN);
+		JvmRuntimeBuilder.patchBranch(c, ifNotCons, c.size());
+		c.add(Opcode.ALOAD_0);
+		JvmRuntimeBuilder.emitLdc(c, listKind.index());
+		invoke(c, Opcode.INVOKESTATIC, teRaw);
+		JvmRuntimeBuilder.emitLdc(c,
+				cp.addString(index == 0 ? am.ik.rontolisp.LispNames.CAR : am.ik.rontolisp.LispNames.CDR).index());
+		JvmRuntimeBuilder.emitLdc(c, funnelType.index());
+		invoke(c, Opcode.INVOKESTATIC, opTypeErr);
+		c.add(Opcode.ATHROW);
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(FIELD_DESC), c, 3, 1, List.of());
+	}
+
+	/**
+	 * Builds an argument check: {@code x} (cast to {@code result} when given) when it is
+	 * an instance of one of {@code accepted}, else {@code throw _teRaw(x, kind)}.
+	 */
+	private static JvmNumericRuntimeBuilder.NumericMethod check(ConstantPool cp, String name, String desc,
+			List<ClassConstant> accepted, @Nullable ClassConstant result, MethodrefConstant teRaw,
+			StringConstant kind) {
+		List<Integer> c = new ArrayList<>();
+		List<Integer> hits = new ArrayList<>();
+		for (ClassConstant type : accepted) {
+			c.add(Opcode.ALOAD_0);
+			c.add(Opcode.INSTANCEOF);
+			JvmRuntimeBuilder.emitU2(c, type.index());
+			hits.add(branch(c, Opcode.IFNE));
+		}
+		c.add(Opcode.ALOAD_0);
+		JvmRuntimeBuilder.emitLdc(c, kind.index());
+		invoke(c, Opcode.INVOKESTATIC, teRaw);
+		c.add(Opcode.ATHROW);
+		int ok = c.size();
+		for (int hit : hits) {
+			JvmRuntimeBuilder.patchBranch(c, hit, ok);
+		}
+		c.add(Opcode.ALOAD_0);
+		if (result != null) {
+			c.add(Opcode.CHECKCAST);
+			JvmRuntimeBuilder.emitU2(c, result.index());
+		}
+		c.add(Opcode.ARETURN);
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(desc), c, 2, 1, List.of());
 	}
 
 	/**

@@ -29,6 +29,8 @@ final class JvmNthcdrCompiler {
 		// Evaluate n -> Long, unbox to long, convert to int. Evaluated before the list,
 		// as the inline walk this replaced did.
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).index());
 		JvmEmitHelper.unboxLong(ctx);
 		ctx.emit(Opcode.L2I);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);

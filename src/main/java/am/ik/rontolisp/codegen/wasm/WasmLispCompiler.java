@@ -1824,10 +1824,9 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	// _type_err_real ((ref null eq)) -> (): the landing for a complex reaching an
 	// ordering operator (or min/max) -- a REAL operand-type report, a catchable
-	// $lisp-cond throw in EH mode (caught as a
-	// simple-error, the documented instance-less-throw divergence) and a bare
-	// `unreachable` outside it. Reuses TYPE_PRINT_VAL; appended after the last
-	// fixed helper so no index above shifts.
+	// $lisp-cond throw in EH mode (a type-error behind a handler landing pad,
+	// WasmOperandTypes.buildLandingBody) and a bare `unreachable` outside it. Reuses
+	// TYPE_PRINT_VAL; appended after the last fixed helper so no index above shifts.
 	static final int FUNC_TYPE_ERR_REAL = FUNC_C_NEG + 1;
 
 	// _csignum ((ref null eq)) -> (ref null eq): the unit vector of a complex
@@ -1908,6 +1907,29 @@ public final class WasmLispCompiler implements LispCompiler {
 	// helper so no index above shifts.
 	static final int FUNC_EQL_TAIL = FUNC_IHASH + 1;
 
+	// _type_err_list ((ref null eq) culprit) -> (): the landing for a non-list reaching
+	// car/cdr (WasmOperandTypes.buildLandingBody over the LIST kind), called by the
+	// EH-mode _car/_cdr bodies (WasmConsRuntimeBuilder.buildFieldBody), where the bare
+	// ref.cast used to trap. Reuses TYPE_PRINT_VAL; appended after the last fixed helper
+	// so no index above shifts, and shaken when nothing checks a cons field.
+	static final int FUNC_TYPE_ERR_LIST = FUNC_EQL_TAIL + 1;
+
+	// _idx_chk ((ref null eq) index, (ref null eq) operator id as an i31) ->
+	// (ref null eq): the EH-mode subscript check (WasmEmitHelper.buildIndexCheckBody):
+	// a fixnum answers itself; anything else goes through _int_val under the operator
+	// id, which throws the operator's INTEGER type-error for a non-integer and answers
+	// for a wide integer, which is answered too (the access then fails as before).
+	// Reuses the binary callable signature (TYPE_CALLABLE_BASE + 1); appended after the
+	// last fixed helper so no index above shifts, and shaken when no site checks.
+	static final int FUNC_IDX_CHK = FUNC_TYPE_ERR_LIST + 1;
+
+	// _type_err ((ref null eq) culprit, i32 kind code) -> i32: the one landing body the
+	// _type_err_* stubs hand their kind to (WasmOperandTypes.buildSharedLandingBody), so
+	// a module reaching several landings carries the rendering once. Never returns.
+	// Reuses TYPE_STR_TO_MEM; appended after the last fixed helper so no index above
+	// shifts, and shaken with the last stub.
+	static final int FUNC_TYPE_ERR = FUNC_IDX_CHK + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -1938,7 +1960,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_EQL_TAIL + 1;
+	static final int FUNC_VEC_BASE = FUNC_TYPE_ERR + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -1951,10 +1973,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	// helpers, the three bignum helpers (_int_new, _int_val, _print_i64_no_nl), the
 	// limb bigint runtime (_limb_* / _big_*, WasmBigIntRuntimeBuilder) and the
 	// unboxed-fixnum fusion helpers (_fx_*, WasmFxRuntimeBuilder), the fdlibm
-	// runtime, the identity-hash helper (_ihash) and the eq/eql tail (_eql_tail) -- plus,
-	// under
-	// --simd, the vec: SIMD block. Use userFuncBase(), which adds that offset.
-	static final int FUNC_USER_BASE = FUNC_EQL_TAIL + 1;
+	// runtime, the identity-hash helper (_ihash), the eq/eql tail (_eql_tail) and the
+	// non-list landing (_type_err_list), the subscript check (_idx_chk) and the shared
+	// landing body (_type_err) -- plus, under --simd, the vec: SIMD block. Use
+	// userFuncBase(), which adds that offset.
+	static final int FUNC_USER_BASE = FUNC_TYPE_ERR + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -3969,11 +3992,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		int dataBase = this.component && !this.noWasi ? COMPONENT_DATA_BASE_OFFSET : DATA_BASE_OFFSET;
 		StringTable stringTable = new StringTable(dataBase, this.usesEqualpHashTables, this.usesIdentityHashTables);
 		StringTable.StringEntry tSymEntry = stringTable.addBodyString("T");
+		// Whether the operand landings can build a type-error (operandTypeErrorShape): a
+		// handler landing pad bakes the class (usedLayoutTags) and forces the instance
+		// representation on.
+		boolean operandTypeErrorPossible = ehMode && hasLandingPad && this.usesInstances;
 		// The _type_err_int/_type_err_num/_type_err_real texts, interned HERE -- before
 		// any body compiles -- because the landing bodies are built after the data
 		// segment's content is fixed. EH mode only: outside it all three bodies are a
 		// bare `unreachable` that cites no bytes.
-		WasmOperandTypes.Texts operandTexts = ehMode ? WasmOperandTypes.Texts.intern(stringTable) : null;
+		WasmOperandTypes.Texts operandTexts = ehMode
+				? WasmOperandTypes.Texts.intern(stringTable, operandTypeErrorPossible) : null;
 		final List<LispVal> spelledProgram = program;
 		WasmOperandTypes.Operators operandOperators = ehMode
 				? WasmOperandTypes.Operators.place(stringTable, name -> programUsesSymbol(spelledProgram, name))
@@ -5256,6 +5284,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				? WasmRuntimeBuilder.buildArityChkBody(arityReport) : WasmRuntimeBuilder.buildArityChkStubBody())
 				: new byte[0];
 		int arityChkIndex = arityReport != null ? arityChkFuncIndex() : -1;
+		// The type-error a wrong-type operand's landing throws (WasmOperandTypes): only
+		// where the texts interned its type symbols (operandTypeErrorPossible); elsewhere
+		// the message-only payload reports the same text.
+		WasmOperandTypes.@Nullable TypeErrorShape operandTypeError = operandTexts != null
+				&& operandTexts.typeNames() != null ? operandTypeErrorShape(closRegistry, layoutAddresses) : null;
 		// What a dispatcher throws for a value that names no function: EH mode only,
 		// where a throw has a tag and a catcher (the entry landing pad at least).
 		WasmRuntimeBuilder.NotFunctionReport notFunctionReport = ehMode ? new WasmRuntimeBuilder.NotFunctionReport(
@@ -6881,6 +6914,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_RAT_GET); // _ihash (key) -> i32 (FUNC_IHASH)
 				fnDef.addFunction(TYPE_RAT_CMP); // _eql_tail (a, b) -> i32
 													// (FUNC_EQL_TAIL)
+				fnDef.addFunction(TYPE_PRINT_VAL); // _type_err_list (culprit) -> ()
+													// (FUNC_TYPE_ERR_LIST)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _idx_chk (index, op) ->
+															// index (FUNC_IDX_CHK)
+				fnDef.addFunction(TYPE_STR_TO_MEM); // _type_err (culprit, kind) -> i32
+													// (FUNC_TYPE_ERR)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -7752,10 +7791,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				// FUNC_TYPE_ERR_NUM): a catchable $lisp-cond throw in EH mode, a bare
 				// `unreachable` outside it (no tag section exists there, and referencing
 				// the prin1 renderer would pin the printer family into every module).
-				code.addFunction(WasmOperandTypes.buildLandingBody(am.ik.rontolisp.compiler.OperandTypes.Kind.INTEGER,
-						operandTexts, operandOperators.base(), operandOpGlobalIndex, this.usesIdentityHashTables));
-				code.addFunction(WasmOperandTypes.buildLandingBody(am.ik.rontolisp.compiler.OperandTypes.Kind.NUMBER,
-						operandTexts, operandOperators.base(), operandOpGlobalIndex, this.usesIdentityHashTables));
+				code.addFunction(
+						WasmOperandTypes.buildLandingBody(am.ik.rontolisp.compiler.OperandTypes.Kind.INTEGER, ehMode));
+				code.addFunction(
+						WasmOperandTypes.buildLandingBody(am.ik.rontolisp.compiler.OperandTypes.Kind.NUMBER, ehMode));
 				// either-representation character index body (FUNC_STR_CHAR_REF)
 				code.addFunction(WasmStringRuntimeBuilder.buildStrCharRefBody());
 				// string -> mutable character vector body (FUNC_STR_TO_CV)
@@ -7786,8 +7825,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmComplexRuntimeBuilder.buildDivBody());
 				code.addFunction(WasmComplexRuntimeBuilder.buildNegBody());
 				// ordering-over-complex landing body (FUNC_TYPE_ERR_REAL)
-				code.addFunction(WasmOperandTypes.buildLandingBody(am.ik.rontolisp.compiler.OperandTypes.Kind.REAL,
-						operandTexts, operandOperators.base(), operandOpGlobalIndex, this.usesIdentityHashTables));
+				code.addFunction(
+						WasmOperandTypes.buildLandingBody(am.ik.rontolisp.compiler.OperandTypes.Kind.REAL, ehMode));
 				// complex signum body (FUNC_C_SIGNUM)
 				code.addFunction(WasmComplexRuntimeBuilder.buildCsignumBody());
 				// directory-creation body (FUNC_MAKE_DIRECTORIES)
@@ -7803,8 +7842,11 @@ public final class WasmLispCompiler implements LispCompiler {
 						: WasmCharIoRuntimeBuilder.buildStub());
 				// the nil-passing cons field readers (FUNC_CAR, FUNC_CDR): called from
 				// every car/cdr site under --optimize=size, dead and shaken otherwise.
-				code.addFunction(WasmConsRuntimeBuilder.buildFieldBody(0));
-				code.addFunction(WasmConsRuntimeBuilder.buildFieldBody(1));
+				// checked in EH mode: a non-list lands in _type_err_list under CAR/CDR
+				code.addFunction(WasmConsRuntimeBuilder.buildFieldBody(0, operandOpGlobalIndex,
+						operandOperators.ids().getOrDefault(LispNames.CAR, 0)));
+				code.addFunction(WasmConsRuntimeBuilder.buildFieldBody(1, operandOpGlobalIndex,
+						operandOperators.ids().getOrDefault(LispNames.CDR, 0)));
 				// the fdlibm runtime (FUNC_FD_BASE ..): a real body for every function
 				// Pass 2 (or a --simd kernel) reaches, closed over the callees; a
 				// trapping stub in every other slot.
@@ -7822,6 +7864,15 @@ public final class WasmLispCompiler implements LispCompiler {
 				// the eq/eql tail body (FUNC_EQL_TAIL): shaken when no site compares.
 				code.addFunction(WasmRuntimeBuilder.buildEqlTailBody(this.usesInstances ? instanceTypeBase() : -1,
 						this.addressKeyedLayout));
+				// the non-list landing body (FUNC_TYPE_ERR_LIST): shaken when no site
+				// checks a cons field.
+				code.addFunction(
+						WasmOperandTypes.buildLandingBody(am.ik.rontolisp.compiler.OperandTypes.Kind.LIST, ehMode));
+				// the subscript check body (FUNC_IDX_CHK): EH mode only calls it
+				code.addFunction(WasmEmitHelper.buildIndexCheckBody(operandOpGlobalIndex));
+				// the shared landing body (FUNC_TYPE_ERR)
+				code.addFunction(WasmOperandTypes.buildSharedLandingBody(operandTexts, operandOperators,
+						operandOpGlobalIndex, operandTypeError, this.usesIdentityHashTables));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp
@@ -8506,6 +8557,35 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * The {@code type-error} shape the operand landings construct, or {@code null} when
+	 * this module did not bake the class.
+	 * @param closRegistry the class registry, for the slot layout
+	 * @param layoutAddresses the baked instance layout records
+	 * @return the shape, or null
+	 */
+	private WasmOperandTypes.@Nullable TypeErrorShape operandTypeErrorShape(ClosRegistry closRegistry,
+			Map<String, Integer> layoutAddresses) {
+		WasmRuntimeBuilder.ConditionInstance instance = conditionInstance(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+				closRegistry, layoutAddresses);
+		ClosRegistry.ClassInfo info = closRegistry.findClass(ClosRegistry.TYPE_ERROR_CLASS_NAME);
+		if (instance == null || info == null) {
+			return null;
+		}
+		int datum = -1;
+		int expectedType = -1;
+		for (int i = 0; i < info.slots().size(); i++) {
+			switch (info.slots().get(i).baseName()) {
+				case "DATUM" -> datum = i;
+				case "EXPECTED-TYPE" -> expectedType = i;
+				default -> {
+				}
+			}
+		}
+		return datum < 0 || expectedType < 0 ? null
+				: new WasmOperandTypes.TypeErrorShape(instance, datum, expectedType);
 	}
 
 	private Set<Integer> dispatchableFuncIds(List<DefunDecl> defuns, Set<Integer> valueFuncIds,
@@ -11281,6 +11361,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// landing pad -- so the pad stands in for the tag.
 		if (LispMacroExpander.establishesLandingPad(program)) {
 			used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.PROGRAM_ERROR_CLASS_NAME);
+			// The same for a wrong-type operand's type-error, which the fixed
+			// _type_err_* landings build (WasmOperandTypes.buildLandingBody).
+			used.add(LispLayout.CLASS_TAG_PREFIX + am.ik.rontolisp.ClosRegistry.TYPE_ERROR_CLASS_NAME);
 			// The same for a failed open's / %file-error's file-error (lowerFileError).
 			for (String site : LispMacroExpander.FILE_ERROR_SITES) {
 				if (symbols.contains(site)) {
