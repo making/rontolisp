@@ -4925,6 +4925,8 @@ public final class LispEvaluator {
 			}
 			return JavaInterop.proxy(iface.value(), args.get(1), caller);
 		}));
+		String jreify = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_REIFY);
+		this.globalEnv.defineFunction(jreify, new LispFunction(jreify, args -> JavaInterop.reify(args, caller)));
 	}
 
 	/**
@@ -5056,6 +5058,15 @@ public final class LispEvaluator {
 					? located.file() + ":" + located.line() + ": " : "";
 			for (LispCons site : am.ik.rontolisp.compiler.JavaSiteResolver.sitesIn(lowered)) {
 				javaSite(site, location);
+			}
+			// A java:reify / java:proxy a compiled program implements by reflection too.
+			for (LispCons implementationForm : am.ik.rontolisp.compiler.JavaImplementations.formsIn(lowered)) {
+				am.ik.rontolisp.compiler.JavaImplementation implementation = am.ik.rontolisp.compiler.JavaImplementations
+					.resolve(implementationForm, am.ik.rontolisp.compiler.ReflectiveJavaClasses.instance());
+				if (!implementation.resolved()) {
+					System.err.println(location + "warning: " + am.ik.rontolisp.compiler.JavaImplementations
+						.reflectionWarning(implementationForm, implementation));
+				}
 			}
 		}
 		return lowered;

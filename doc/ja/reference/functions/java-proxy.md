@@ -2,7 +2,7 @@
 
 `(java:proxy "fully.qualified.Interface" callable)`
 
-rontolisp の callable を背後に持つ、指定インターフェースのホストインスタンスを生成します。各インターフェースメソッドは `(callable "method-name" arg...)` として callable に振り分けられます。つまり callable の**第 1 引数には呼び出されたメソッドの名前**(文字列)が渡され、残りの引数がそのメソッドの実引数になります。callable の戻り値はメソッドの戻り型へマーシャリングされます (`void` メソッドは無視します)。これにより rontolisp のラムダが Java のリスナーやコンパレータになります。単一メソッド (SAM) インターフェースではメソッド名は常に同じなので、慣習的に無視します (下記の例の `method` 引数)。JVM 専用の `java` 連携パッケージの一部であり、インタプリタと JVM クラスへのコンパイルの両方で利用できます (WASM バックエンドでは利用できません)。[Java 連携ガイド](../../guides/java-interop.md)を参照してください。
+rontolisp の callable を背後に持つ、指定インターフェースのホストインスタンスを生成します。各インターフェースメソッドは `(callable "method-name" arg...)` として callable に振り分けられます。つまり callable の**第 1 引数には呼び出されたメソッドの名前**(文字列)が渡され、残りの引数がそのメソッドの実引数になります。callable の戻り値はメソッドの戻り型へマーシャリングされます (`void` メソッドは無視します。返した関数はプロキシにしないので、インターフェースが期待される戻り値には `java:proxy` か [`java:reify`](java-reify.md) のオブジェクトを返してください)。これにより rontolisp のラムダが Java のリスナーやコンパレータになります。単一メソッド (SAM) インターフェースではメソッド名は常に同じなので、慣習的に無視します (下記の例の `method` 引数)。JVM 専用の `java` 連携パッケージの一部であり、インタプリタと JVM クラスへのコンパイルの両方で利用できます (WASM バックエンドでは利用できません)。[Java 連携ガイド](../../guides/java-interop.md)を参照してください。
 
 ```lisp
 (java:call (java:proxy "java.util.function.Supplier" (lambda (method) 42)) "get")
@@ -57,3 +57,9 @@ JDK 側が SAM メソッドを呼び出す場合でもプロキシは動作し�
 ## デフォルトメソッド
 
 動的プロキシは `BiFunction.andThen` や `Predicate.and` といったデフォルトメソッドも含め、**すべて**のメソッド呼び出しを callable に転送します。これらを呼ぶと、インターフェース本来のデフォルト実装を実行する代わりに `(callable "andThen" ...)` としてラムダに振り分けられるため、`(f.andThen g)` のようなコンビネータは利用できません。代わりに単一抽象メソッド (`apply`/`test`/`accept`/`get`/`compare`) を呼んでください。
+
+メソッドごとに別の関数で実装し、デフォルトメソッドの本体を保つには [`java:reify`](java-reify.md) を使ってください。
+
+## コンパイル済みプログラムでの扱い
+
+インターフェース名がリテラル文字列で、そのインターフェースがコンパイル時に見える `java:proxy` は、コンパイル時に生成するクラス (プログラムの隣の `Prog$Proxy0.class`) になります。インターフェースが期待される箇所に渡した関数も同じです。`java.lang.reflect.Proxy` を使わないので、そのプログラムは `--java-static` でコンパイルでき、GraalVM ネイティブイメージにも設定なしでビルドできます。表示は `#<java Prog$Proxy0>` で、インタプリタでは `java.lang.reflect.Proxy` のクラス名になります。実行時にインターフェース名を与える `java:proxy` はリフレクションブリッジを通ります。

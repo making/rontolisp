@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.JavaImplementationPrograms;
 import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
 
@@ -546,6 +547,95 @@ class JavaInteropTest {
 		assertThatThrownBy(() -> eval("(java:proxy \"java.lang.String\" (lambda (m) nil))"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("expects an interface");
+	}
+
+	// java:reify: each function implements the one method its name designates; a
+	// default method keeps its body; Object's three are identity unless implemented.
+	// Mirrors JvmJavaInteropCompilerTest#aReifyImplementsEachMethodWithItsFunction.
+	@Test
+	void aReifyImplementsEachMethodWithItsFunction() {
+		assertThat(output(JavaImplementationPrograms.REIFY)).isEqualTo(JavaImplementationPrograms.REIFY_OUTPUT);
+	}
+
+	// An abstract method no function implements throws; a function's value that does
+	// not convert to the method's return type is an error. Mirrors
+	// JvmJavaInteropCompilerTest#whatAReifyCannotDoIsAnError.
+	@Test
+	void whatAReifyCannotDoIsAnError() {
+		assertThatThrownBy(
+				() -> eval("(java:call (java:reify \"java.util.Iterator\" \"hasNext\" (lambda () t)) \"next\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("error calling java.util.Iterator.next: java.lang.UnsupportedOperationException:"
+					+ " java:reify: no implementation of java.util.Iterator.next()");
+		assertThatThrownBy(
+				() -> eval("(java:call (java:reify \"java.util.function.IntSupplier\" \"getAsInt\" (lambda () \"x\"))"
+						+ " \"getAsInt\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining(
+					"java:reify: cannot return \"x\" as int from java.util.function.IntSupplier.getAsInt");
+		assertThatThrownBy(() -> eval("(java:reify \"java.util.Comparator\" \"nope\" #'car)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("java:reify: interface java.util.Comparator has no method nope");
+		assertThatThrownBy(() -> eval("(java:reify \"java.lang.Appendable\" \"append\" #'car)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("java:reify: append names more than one method of java.lang.Appendable: append(char),"
+					+ " append(java.lang.CharSequence), append(java.lang.CharSequence,int,int)");
+		assertThatThrownBy(() -> eval("(java:reify \"java.util.Iterator\" \"next\" #'car \"next()\" #'cdr)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("java:reify: java.util.Iterator.next() is implemented twice");
+		assertThatThrownBy(() -> eval("(java:reify \"java.lang.String\" \"length\" #'car)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("java:reify expects an interface, got java.lang.String");
+		assertThatThrownBy(() -> eval("(java:reify \"java.lang.Runnable\" \"run\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("java:reify expects (java:reify \"interface\" \"method\" function ...)");
+		// The interface and the names may be computed: they are resolved when it runs.
+		assertThat(eval("""
+				(let ((iface "java.util.function.Supplier") (name "get"))
+				  (java:call (java:reify iface name (lambda () 7)) "get"))
+				""")).isEqualTo(new LispInteger(7));
+	}
+
+	// java:proxy routes every method -- a default one too -- to its callable, with the
+	// method's name first; Object's three keep their identity behavior. Mirrors
+	// JvmJavaInteropCompilerTest#aProxyRoutesEveryMethodToItsCallable.
+	@Test
+	void aProxyRoutesEveryMethodToItsCallable() {
+		assertThat(output(JavaImplementationPrograms.PROXY)).isEqualTo(JavaImplementationPrograms.PROXY_OUTPUT);
+
+	}
+
+	// A reify held in a let keeps its kind, so the calls passing it resolve; a
+	// declaration that a value is one, which lies, is an error. Mirrors
+	// JvmJavaInteropCompilerTest#aLetBoundReifyKeepsItsKind.
+	@Test
+	void aLetBoundReifyKeepsItsKind() {
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		try (var ignored = ThreadStdio.err(err)) {
+			assertThat(output("(setq java:*warn-on-reflection* t)\n" + JavaImplementationPrograms.LISTENER))
+				.isEqualTo(JavaImplementationPrograms.LISTENER_OUTPUT);
+		}
+		assertThat(err.toString()).isEmpty();
+		assertThatThrownBy(() -> eval(JavaImplementationPrograms.FALSE_IMPLEMENTATION))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage(JavaImplementationPrograms.FALSE_IMPLEMENTATION_ERROR);
+	}
+
+	// java:*warn-on-reflection* reports a java:reify / java:proxy the compiler would
+	// implement by reflection, as the compile path does.
+	@Test
+	void warnOnReflectionReportsAnInterfaceImplementedByReflection() {
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		try (var ignored = ThreadStdio.err(err)) {
+			eval("""
+					(setq java:*warn-on-reflection* t)
+					(defun proxy-of (iface f) (java:proxy iface f))
+					(defun runnable (f) (java:reify "java.lang.Runnable" "run" f))
+					""");
+		}
+		assertThat(err.toString()).contains(
+				"warning: java:proxy is implemented by reflection at run time: the interface name is not a literal string")
+			.doesNotContain("java:reify");
 	}
 
 }

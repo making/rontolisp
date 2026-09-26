@@ -12,6 +12,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.JavaImplementationPrograms;
 import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -564,8 +565,9 @@ class JvmJavaInteropCompilerTest {
 			.hasMessage("error constructing java.lang.StringBuilder: java.lang.NegativeArraySizeException: -1");
 	}
 
-	// A function value passed where an interface is expected becomes the bridge's proxy
-	// even on a direct call: the one conversion that reflects.
+	// A function value passed where an interface is expected becomes the interface's
+	// generated proxy class, as a java:proxy of it: nothing reflects, and the class
+	// travels beside the program.
 	@Test
 	void aFunctionArgumentOfADirectCallBecomesAProxy() throws Exception {
 		String program = """
@@ -573,7 +575,114 @@ class JvmJavaInteropCompilerTest {
 				""";
 		assertThat(compileAndRun(program)).isEqualTo("1\n2\n3");
 		assertThat(javap(program)).contains("InterfaceMethod java/util/List.forEach:(Ljava/util/function/Consumer;)V")
-			.contains("javaProxy");
+			.contains("Method Test$Proxy0.of:([Ljava/lang/Object;)Ljava/lang/Object;")
+			.doesNotContain("javaProxy")
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX)
+			.doesNotContain("java/lang/reflect");
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		compiler.compile(LispReader.readAllFromString(program));
+		assertThat(compiler.runtimeClassFiles()).containsOnlyKeys("Test$Implementation.class", "Test$Proxy0.class");
+	}
+
+	// java:reify: each function implements the one method its name designates, in a class
+	// generated for it -- the interpreter's output, method for method. Mirrors
+	// JavaInteropTest#aReifyImplementsEachMethodWithItsFunction.
+	@Test
+	void aReifyImplementsEachMethodWithItsFunction() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.REIFY)).isEqualTo(JavaImplementationPrograms.REIFY_OUTPUT);
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		compiler.compile(LispReader.readAllFromString(JavaImplementationPrograms.REIFY));
+		// A function the program passes where an interface is expected is a proxy of it.
+		assertThat(compiler.runtimeClassFiles().keySet()).contains("Test$Implementation.class", "Test$Reify0.class",
+				"Test$Proxy0.class");
+	}
+
+	// Mirrors JavaInteropTest#whatAReifyCannotDoIsAnError. A form whose methods cannot be
+	// chosen when it is compiled is resolved by the bridge when it runs, with the same
+	// errors.
+	@Test
+	void whatAReifyCannotDoIsAnError() throws Exception {
+		assertThatThrownBy(() -> compileAndRun(
+				"(java:call (java:reify \"java.util.Iterator\" \"hasNext\" (lambda () t)) \"next\")"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("error calling java.util.Iterator.next: java.lang.UnsupportedOperationException:"
+					+ " java:reify: no implementation of java.util.Iterator.next()");
+		assertThatThrownBy(() -> compileAndRun(
+				"(java:call (java:reify \"java.util.function.IntSupplier\" \"getAsInt\" (lambda () \"x\"))"
+						+ " \"getAsInt\")"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageContaining(
+					"java:reify: cannot return \"x\" as int from java.util.function.IntSupplier.getAsInt");
+		assertThatThrownBy(() -> compileAndRun("(java:reify \"java.util.Comparator\" \"nope\" #'car)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("java:reify: interface java.util.Comparator has no method nope");
+		assertThatThrownBy(() -> compileAndRun("(java:reify \"java.lang.Appendable\" \"append\" #'car)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("java:reify: append names more than one method of java.lang.Appendable: append(char),"
+					+ " append(java.lang.CharSequence), append(java.lang.CharSequence,int,int)");
+		assertThatThrownBy(() -> compileAndRun("(java:reify \"java.util.Iterator\" \"next\" #'car \"next()\" #'cdr)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("java:reify: java.util.Iterator.next() is implemented twice");
+		assertThatThrownBy(() -> compileAndRun("(java:reify \"java.lang.String\" \"length\" #'car)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("java:reify expects an interface, got java.lang.String");
+		assertThat(compileAndRun("""
+				(let ((iface "java.util.function.Supplier") (name "get"))
+				  (print (java:call (java:reify iface name (lambda () 7)) "get")))
+				""")).isEqualTo("7");
+	}
+
+	// Mirrors JavaInteropTest#aProxyRoutesEveryMethodToItsCallable.
+	@Test
+	void aProxyRoutesEveryMethodToItsCallable() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.PROXY)).isEqualTo(JavaImplementationPrograms.PROXY_OUTPUT);
+	}
+
+	// A reify passed where its interface is expected resolves the call before it runs:
+	// the object's kind is its interface's implementation, so the call is direct.
+	@Test
+	void aReifyArgumentResolvesItsCall() throws Exception {
+		String program = """
+				(let ((lst (java:new "java.util.ArrayList")))
+				  (java:call lst "add" 2)
+				  (java:call lst "add" 1)
+				  (java:static "java.util.Collections" "sort" lst
+				    (java:reify "java.util.Comparator" "compare" (lambda (a b) (- a b))))
+				  (print (java:call lst "toString")))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("\"[1, 2]\"");
+		assertThat(javap(program))
+			.contains("Method java/util/Collections.sort:(Ljava/util/List;Ljava/util/Comparator;)V")
+			.contains("Method Test$Reify0.of:([Ljava/lang/Object;)Ljava/lang/Object;")
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX);
+	}
+
+	// The generated class declares exactly the chosen slots: a default method it does
+	// not override keeps its body, an abstract one throws, toString answers the
+	// interpreter's text; its superclass is the program's one, a Serializable like a
+	// Proxy.
+	@Test
+	void theGeneratedClassDeclaresTheChosenSlots() throws Exception {
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		compiler.compile(LispReader.readAllFromString("""
+				(print (java:reify "java.util.Iterator" "hasNext" (lambda () nil)))
+				"""));
+		byte[] reify = compiler.runtimeClassFiles().get("Test$Reify0.class");
+		assertThat(reify).isNotNull();
+		Path dir = Files.createTempDirectory(this.tempDir, "reify");
+		Files.write(dir.resolve("Test$Reify0.class"), reify);
+		java.util.spi.ToolProvider javap = java.util.spi.ToolProvider.findFirst("javap").orElseThrow();
+		java.io.StringWriter out = new java.io.StringWriter();
+		javap.run(new java.io.PrintWriter(out), new java.io.PrintWriter(out), "-p", "-c",
+				dir.resolve("Test$Reify0.class").toString());
+		assertThat(out.toString())
+			.contains("final class Test$Reify0 extends Test$Implementation implements java.util.Iterator")
+			.contains("public boolean hasNext()")
+			.contains("public java.lang.Object next()")
+			.contains("java:reify: no implementation of java.util.Iterator.next()")
+			.contains("#<java-reify java.util.Iterator>")
+			.doesNotContain("forEachRemaining")
+			.doesNotContain("remove()");
 	}
 
 	// The value comes back as the bridge's unmarshal makes it, specialized to the
@@ -616,32 +725,40 @@ class JvmJavaInteropCompilerTest {
 	}
 
 	// --java-static: a program whose sites are all direct compiles to a class with no
-	// reflection; any site that would need the bridge is a compile error naming it.
+	// reflection; any site that would need the bridge is a compile error naming it. A
+	// java:reify / java:proxy whose interface resolves and a function passed where an
+	// interface is expected need none: their classes are generated.
 	@Test
 	void javaStaticRefusesEverySiteThatNeedsReflection() throws Exception {
-		byte[] direct = JvmLispCompiler.builder()
-			.className("Test")
-			.javaStatic(true)
-			.build()
-			.compile(LispReader.readAllFromString("(print (java:static \"java.lang.Math\" \"max\" 3 7))"));
-		assertThat(new String(direct, java.nio.charset.StandardCharsets.ISO_8859_1))
-			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX);
+		JvmLispCompiler direct = JvmLispCompiler.builder().className("Test").javaStatic(true).build();
+		byte[] classBytes = direct.compile(LispReader.readAllFromString("""
+				(print (java:static "java.lang.Math" "max" 3 7))
+				(java:call (java:proxy "java.lang.Runnable" (lambda (m) (print m))) "run")
+				(java:call (java:static "java.util.List" "of" 1) "forEach" (lambda (m x) (print x)))
+				(java:call (java:reify "java.lang.Runnable" "run" (lambda () (print :ran))) "run")
+				"""));
+		assertThat(new String(classBytes, java.nio.charset.StandardCharsets.ISO_8859_1))
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX)
+			.doesNotContain("java/lang/reflect");
+		assertThat(direct.runtimeClassFiles()).allSatisfy(
+				(name, bytes) -> assertThat(new String(bytes, java.nio.charset.StandardCharsets.ISO_8859_1)).as(name)
+					.doesNotContain("java/lang/reflect"));
 		assertThatThrownBy(() -> JvmLispCompiler.builder()
 			.className("Test")
 			.javaStatic(true)
 			.build()
 			.compile(LispReader.readAllFromString("""
 					(defun len (x) (java:call x "length"))
-					(java:proxy "java.lang.Runnable" (lambda (m) nil))
-					(java:call (java:static "java.util.List" "of" 1) "forEach" (lambda (m x) x))
+					(defun proxy-of (iface f) (java:proxy iface f))
+					(java:reify "no.such.Listener" "run" (lambda () nil))
 					"""))).isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("--java-static: 3 java: calls cannot be compiled without reflection:")
 			.hasMessageContaining("java:call \"length\": it is resolved by reflection at run time:"
 					+ " the receiver's class is not known")
-			.hasMessageContaining("java:proxy \"java.lang.Runnable\": java:proxy implements its interface with"
-					+ " java.lang.reflect.Proxy")
-			.hasMessageContaining("java:call \"forEach\": argument 1 may be a function, which becomes a"
-					+ " java.lang.reflect.Proxy of java.util.function.Consumer");
+			.hasMessageContaining("java:proxy: it implements its interface with java.lang.reflect.Proxy:"
+					+ " the interface name is not a literal string")
+			.hasMessageContaining("java:reify \"no.such.Listener\": it implements its interface with"
+					+ " java.lang.reflect.Proxy: class no.such.Listener is not found");
 	}
 
 	// The class's disassembly, as javap prints it.
@@ -886,6 +1003,30 @@ class JvmJavaInteropCompilerTest {
 			}
 			assertThat(baos.toString().trim()).isEqualTo("7");
 		}
+	}
+
+	// Mirrors JavaInteropTest#aLetBoundReifyKeepsItsKind: the calls passing the listener
+	// are direct, and a lying declaration is refused as the interpreter refuses it.
+	@Test
+	void aLetBoundReifyKeepsItsKind() throws Exception {
+		assertThat(compileWarnings(JavaImplementationPrograms.LISTENER, true)).isEmpty();
+		assertThat(compileAndRun(JavaImplementationPrograms.LISTENER))
+			.isEqualTo(JavaImplementationPrograms.LISTENER_OUTPUT);
+		assertThat(javap(JavaImplementationPrograms.LISTENER)).doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX);
+		assertThatThrownBy(() -> compileAndRun(JavaImplementationPrograms.FALSE_IMPLEMENTATION))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage(JavaImplementationPrograms.FALSE_IMPLEMENTATION_ERROR);
+	}
+
+	// Mirrors JavaInteropTest#warnOnReflectionReportsAnInterfaceImplementedByReflection.
+	@Test
+	void warnJavaReflectionReportsAnInterfaceImplementedByReflection() {
+		assertThat(compileWarnings("""
+				(defun proxy-of (iface f) (java:proxy iface f))
+				(defun runnable (f) (java:reify "java.lang.Runnable" "run" f))
+				""", true)).contains(
+				"warning: java:proxy is implemented by reflection at run time: the interface name is not a literal string")
+			.doesNotContain("java:reify");
 	}
 
 }

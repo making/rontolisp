@@ -16,6 +16,7 @@ import am.ik.jvm.Opcode;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.compiler.JavaExecutable;
 import am.ik.rontolisp.compiler.JavaField;
+import am.ik.rontolisp.compiler.JavaImplementationType;
 import am.ik.rontolisp.compiler.JavaKind;
 import am.ik.rontolisp.compiler.JavaSite;
 import am.ik.rontolisp.compiler.JavaType;
@@ -37,9 +38,9 @@ import org.jspecify.annotations.Nullable;
  * A value is checked by its KIND ({@link JavaKind}), computed from the compiled
  * representation as the bridge's {@code kindOf} computes it; the conversions are the
  * bridge's {@code convert} and {@code convertLong}, one arm per (kind, parameter type)
- * the resolution counted on. The one arm that needs the bridge is a function value where
- * an interface is expected: it becomes the bridge's proxy, so such a site calls
- * {@code _javaInit} and {@code javaProxy} (and {@code --java-static} refuses it).
+ * the resolution counted on. A function value where an interface is expected becomes the
+ * interface's generated proxy class ({@link JvmJavaImplementations}), as the bridge makes
+ * it a {@code java.lang.reflect.Proxy}: nothing here reflects.
  * <p>
  * Three shared helpers are emitted beside the sites when one needs them: {@code _jhost}
  * (the bridge's {@code isJavaObject}), {@code _junm} (its {@code unmarshal}, for a value
@@ -116,6 +117,8 @@ final class JvmJavaDirectSites {
 
 	private @Nullable MethodrefConstant arrayToList;
 
+	private @Nullable JvmJavaImplementations implementations;
+
 	/**
 	 * @param cp the class's constant pool
 	 * @param thisClass the class
@@ -139,18 +142,19 @@ final class JvmJavaDirectSites {
 	}
 
 	/**
-	 * Whether a resolved site needs the bridge: an argument that may be a function value,
-	 * which becomes a {@code java.lang.reflect.Proxy} of its interface parameter.
-	 * @param site a resolved site
-	 * @return whether the site's method calls the bridge's proxy
+	 * Sets the generated classes a function value where an interface is expected becomes.
+	 * @param implementations the attempt's implementations
 	 */
-	static boolean needsProxy(JavaSite site) {
-		for (JavaSite.Argument argument : site.arguments()) {
-			if (argument.kinds().contains(JavaKind.Lisp.FUNCTION)) {
-				return true;
-			}
-		}
-		return false;
+	void implementations(JvmJavaImplementations implementations) {
+		this.implementations = implementations;
+	}
+
+	/**
+	 * {@code _junm}: the bridge's {@code unmarshal}, made when first asked for.
+	 * @return the helper
+	 */
+	MethodrefConstant unmarshalHelper() {
+		return unmarshal();
 	}
 
 	/**
@@ -160,15 +164,10 @@ final class JvmJavaDirectSites {
 	 * class-name literal (a static read, no object passed)
 	 * @param valueCount how many values the call passes: the receiver or object, then the
 	 * arguments
-	 * @param bridge the bridge's references ({@code init}, {@code proxy}), or
-	 * {@code null} when the attempt carries no bridge -- a proxy argument then calls the
-	 * absent {@code _javaInit}, which the helper-gate check turns into a retry with the
-	 * bridge
 	 * @return the method, in the {@code (Object...)Object} shape or, past
 	 * {@link #MAX_SPREAD} values, {@code (Object[])Object}
 	 */
-	MethodrefConstant site(JavaSite site, boolean staticField, int valueCount,
-			@Nullable Map<String, MethodrefConstant> bridge) {
+	MethodrefConstant site(JavaSite site, boolean staticField, int valueCount) {
 		boolean packedValues = valueCount > MAX_SPREAD;
 		String key = shapeKey(site, staticField, packedValues);
 		MethodrefConstant cached = this.sites.get(key);
@@ -189,7 +188,7 @@ final class JvmJavaDirectSites {
 		MethodrefConstant ref = this.cp.addMethodref(this.thisClass, this.cp.addNameAndType(nameUtf, descUtf));
 		// Registered before it is built, which may add the shared helpers first.
 		this.sites.put(key, ref);
-		this.methods.add(new SiteBuilder(site, staticField, valueCount, packedValues, bridge).build(nameUtf, descUtf));
+		this.methods.add(new SiteBuilder(site, staticField, valueCount, packedValues).build(nameUtf, descUtf));
 		return ref;
 	}
 
@@ -337,8 +336,6 @@ final class JvmJavaDirectSites {
 
 		private final boolean packedValues;
 
-		private final @Nullable Map<String, MethodrefConstant> bridge;
-
 		private final JvmAsm a = new JvmAsm();
 
 		// {start, end, handler label, catch type}: a handler's position is known once
@@ -359,13 +356,11 @@ final class JvmJavaDirectSites {
 
 		private final String operator;
 
-		SiteBuilder(JavaSite site, boolean staticField, int valueCount, boolean packedValues,
-				@Nullable Map<String, MethodrefConstant> bridge) {
+		SiteBuilder(JavaSite site, boolean staticField, int valueCount, boolean packedValues) {
 			this.site = site;
 			this.staticField = staticField;
 			this.valueCount = valueCount;
 			this.packedValues = packedValues;
-			this.bridge = bridge;
 			this.type = Objects.requireNonNull(
 					JvmJavaDirectSites.this.lookup.find(Objects.requireNonNull(site.staticClass())), "resolved class");
 			this.owner = cls(this.type);
@@ -582,6 +577,19 @@ final class JvmJavaDirectSites {
 		 */
 		private void emitKindTest(int slot, JavaKind kind, boolean bothStrings, int fail) {
 			JvmAsm a = this.a;
+			if (kind instanceof JavaImplementationType implementation) {
+				// An object a java:reify / java:proxy of the interface made: of a class
+				// generated for one (JvmJavaImplementations), implementing it.
+				a.aload(slot);
+				a.instanceOf(cls(
+						Objects.requireNonNull(JvmJavaDirectSites.this.implementations, "the attempt's implementations")
+							.baseClass()));
+				a.branch(Opcode.IFEQ, fail);
+				a.aload(slot);
+				a.instanceOf(cls(implementation.iface()));
+				a.branch(Opcode.IFEQ, fail);
+				return;
+			}
 			if (kind instanceof JavaType host) {
 				a.aload(slot);
 				a.branch(Opcode.IFNULL, fail);
@@ -779,25 +787,17 @@ final class JvmJavaDirectSites {
 					}
 				}
 				case FUNCTION -> {
-					// The bridge's proxy of the interface parameter: the one arm that
-					// reflects.
-					Map<String, MethodrefConstant> ops = this.bridge;
-					if (ops == null) {
-						// No bridge in this attempt: calling the absent _javaInit makes
-						// the
-						// helper-gate check retry with it.
-						a.invokestatic(JvmJavaDirectSites.this.cp.addMethodref(JvmJavaDirectSites.this.thisClass,
-								JvmJavaDirectSites.this.cp.addNameAndType(
-										JvmJavaDirectSites.this.cp.addUtf8(JvmJavaRuntimeBuilder.INIT_METHOD),
-										JvmJavaDirectSites.this.cp.addUtf8("()V"))));
-						a.aconstNull();
-					}
-					else {
-						a.invokestatic(Objects.requireNonNull(ops.get("init")));
-						a.ldcString(str("\"" + name + "\""));
-						a.aload(slot);
-						a.invokestatic(Objects.requireNonNull(ops.get("proxy")));
-					}
+					// The interface's generated proxy class over the function, as the
+					// bridge makes it a Proxy: of(new Object[] { function }).
+					a.iconst(1);
+					a.anewarray(cls("java/lang/Object"));
+					a.dup();
+					a.iconst(0);
+					a.aload(slot);
+					a.aastore();
+					a.invokestatic(Objects
+						.requireNonNull(JvmJavaDirectSites.this.implementations, "the attempt's implementations")
+						.proxyFactory(target));
 				}
 			}
 		}

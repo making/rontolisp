@@ -91,6 +91,10 @@ public record JavaSite(Operator operator, @Nullable String staticClass, @Nullabl
 		 * @return e.g. {@code a java.lang.String}, or {@code an integer or nil}
 		 */
 		public String expected() {
+			// (java:object "I" :exact) of an interface: any I is not one.
+			if (this.kinds.size() == 1 && this.kinds.get(0) instanceof JavaImplementationType implementation) {
+				return describe(implementation);
+			}
 			String declaredClass = this.declared;
 			// A primitive declaration ((java:object "int")) reads better as its kinds.
 			if (declaredClass != null && !PRIMITIVES.contains(declaredClass)) {
@@ -107,6 +111,9 @@ public record JavaSite(Operator operator, @Nullable String staticClass, @Nullabl
 		}
 
 		private static String describe(JavaKind kind) {
+			if (kind instanceof JavaImplementationType implementation) {
+				return "an implementation of " + implementation.iface().name();
+			}
 			if (kind instanceof JavaType type) {
 				return "a " + type.name();
 			}

@@ -13,6 +13,9 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.compiler.JavaExecutable;
 import am.ik.rontolisp.compiler.JavaField;
+import am.ik.rontolisp.compiler.JavaImplementation;
+import am.ik.rontolisp.compiler.JavaImplementationType;
+import am.ik.rontolisp.compiler.JavaImplementations;
 import am.ik.rontolisp.compiler.JavaKind;
 import am.ik.rontolisp.compiler.JavaSite;
 import am.ik.rontolisp.compiler.JavaSiteResolver;
@@ -225,6 +228,65 @@ class JvmClassFileLookupTest {
 			}
 		}
 		assertThat(resolved).as("the corpus exercises resolution").isGreaterThan(40);
+	}
+
+	// java:reify / java:proxy implement an interface by the methods Class.getMethods()
+	// lists: both lookups list the same ones, abstract where reflection says so, so a
+	// form declares the same slots interpreted and compiled -- and the object's kind is
+	// assignable to the same types.
+	@Test
+	void everyInterfaceIsImplementedTheSame() {
+		List<String> interfaces = List.of("java.lang.Runnable", "java.lang.CharSequence", "java.lang.Appendable",
+				"java.lang.Iterable", "java.lang.Comparable", "java.util.Comparator", "java.util.Iterator",
+				"java.util.Collection", "java.util.List", "java.util.Map", "java.util.function.Function",
+				"java.util.function.UnaryOperator", "java.util.function.Supplier", "java.util.function.Predicate",
+				"java.util.function.IntSupplier", "java.util.concurrent.Callable", "java.beans.PropertyChangeListener",
+				"java.awt.event.MouseListener", "javax.net.ssl.X509TrustManager");
+		for (String name : interfaces) {
+			JavaType reflected = Objects.requireNonNull(REFLECTION.find(name), name);
+			JavaType read = Objects.requireNonNull(classFiles.find(name), name);
+			assertThat(abstractness(read.publicMethods())).as("%s methods", name)
+				.isEqualTo(abstractness(reflected.publicMethods()));
+			assertThat(slots(JavaImplementations.proxy(read, classFiles))).as("%s proxy", name)
+				.isEqualTo(slots(JavaImplementations.proxy(reflected, REFLECTION)));
+			JavaImplementationType readKind = classFiles.implementationOf(read);
+			JavaImplementationType reflectedKind = REFLECTION.implementationOf(reflected);
+			assertThat(classFiles.implementationOf(read)).isSameAs(readKind);
+			for (String target : CORPUS) {
+				assertThat(Objects.requireNonNull(classFiles.find(target)).isAssignableFrom(readKind))
+					.as("%s <- %s", target, readKind)
+					.isEqualTo(Objects.requireNonNull(REFLECTION.find(target)).isAssignableFrom(reflectedKind));
+			}
+		}
+		for (List<String> reify : List.of(List.of("java.util.Comparator", "compare"),
+				List.of("java.util.Iterator", "hasNext", "next"), List.of("java.lang.Appendable", "append(char)"),
+				List.of("java.lang.CharSequence", "length", "charAt", "toString", "hashCode"),
+				List.of("java.util.function.Function", "apply", "andThen"))) {
+			String name = reify.get(0);
+			List<String> designators = reify.subList(1, reify.size());
+			assertThat(slots(
+					JavaImplementations.reify(Objects.requireNonNull(classFiles.find(name)), designators, classFiles)))
+				.as("%s %s", name, designators)
+				.isEqualTo(slots(JavaImplementations.reify(Objects.requireNonNull(REFLECTION.find(name)), designators,
+						REFLECTION)));
+		}
+	}
+
+	private static List<String> abstractness(List<? extends JavaExecutable> executables) {
+		List<String> list = new ArrayList<>();
+		for (JavaExecutable e : executables) {
+			list.add(signature(e) + (e.isAbstract() ? " abstract" : ""));
+		}
+		list.sort(null);
+		return list;
+	}
+
+	private static List<String> slots(JavaImplementation implementation) {
+		List<String> slots = new ArrayList<>();
+		for (JavaImplementation.Slot slot : implementation.slots()) {
+			slots.add(slot.dispatchKey() + "=" + slot.implementation());
+		}
+		return slots;
 	}
 
 	// A class-path root (here the project's own compiled classes, loaded in this JVM by

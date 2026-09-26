@@ -20,4 +20,12 @@ public interface JavaClassLookup {
 	 */
 	@Nullable JavaType find(String name);
 
+	/**
+	 * The kind of the object a {@code java:reify} or {@code java:proxy} of an interface
+	 * makes, canonical within this lookup (kinds compare by identity).
+	 * @param iface an interface this lookup found
+	 * @return its implementation type
+	 */
+	JavaImplementationType implementationOf(JavaType iface);
+
 }

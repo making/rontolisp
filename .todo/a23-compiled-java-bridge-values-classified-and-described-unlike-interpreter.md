@@ -21,6 +21,15 @@ The last one is behavior, not text, and the direct path shares it: `_jhost` mirr
 bridge's `isJavaObject`, which accepts every `ArrayList`, so a Lisp vector passed where a
 `(java:object "java.util.List")` was declared is called instead of refused.
 
+The printer has the opposite confusion (found 2026-09-26, a16): in a compiled program whose
+printing goes through `%print-object-str` with its vector arm -- it formats a condition with
+`~a` and can hold a general array -- printing a host `ArrayList` of integers throws
+`ClassCastException: Integer cannot be cast to [Ljava.lang.Object;` from `_arrayDims` under
+`%pos-walk` (`vectorp` takes it for a Lisp vector). The interpreter prints
+`#<java java.util.ArrayList>`. Reproduction:
+`(defun msg (e) (format nil "~a" e)) (print (handler-case (error "boom") (error (e) (msg e))))
+(print (vector 1 2)) (let ((l (java:new "java.util.ArrayList"))) (java:call l "add" 1) (print l))`.
+
 Plan:
 - One host-object test for compiled code, the bridge's `kindOf` rule (an `ArrayList`
   whose slot 0 is an `Object[]` header is a Lisp array): `isJavaObject` in

@@ -87,6 +87,16 @@ public interface JavaType extends JavaKind {
 	List<? extends JavaExecutable> methods(String name);
 
 	/**
+	 * Every public method, as {@link Class#getMethods()} answers it: of an interface its
+	 * abstract, default and own static methods and those its superinterfaces declare
+	 * (none of {@code Object}'s it does not redeclare), each as DECLARED -- never
+	 * re-resolved to an accessible declaration as {@link #methods} re-resolves it, since
+	 * this is what a class implementing the interface must answer, whoever declared it.
+	 * @return the methods, in no particular order
+	 */
+	List<? extends JavaExecutable> publicMethods();
+
+	/**
 	 * @return the public constructors ({@link Class#getConstructors()})
 	 */
 	List<? extends JavaExecutable> constructors();
