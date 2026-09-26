@@ -348,6 +348,10 @@ final class JvmLetCompiler {
 				JvmExprCompiler.compileExpr(parts.get(i), ctx, className);
 			}
 		}
+		if (!hasBody && !forEffect) {
+			// CLHS: a body-less let/let* returns nil (the loop above pushed nothing).
+			ctx.emit(Opcode.ACONST_NULL);
+		}
 		afterBody.run();
 	}
 

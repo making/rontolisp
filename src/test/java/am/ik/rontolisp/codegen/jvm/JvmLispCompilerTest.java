@@ -21620,4 +21620,18 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("(2 1)\n(2 1)\n(2 1)\n(10 1)\n16");
 	}
 
+	@Test
+	void compileAndRunEmptyBodyLetReturnsNil() throws Exception {
+		// CLHS: a let/let* with no body forms returns nil. Was an operand-stack
+		// underflow at compile time (the body lowering pushed no value for an empty
+		// body): (let ((p 1))) and (let ()) both failed to compile.
+		assertThat(compileAndRun("""
+				(print (let ((p 1))))
+				(print (let* ((p 1))))
+				(print (let ()))
+				(defun f () (let ((p 1))))
+				(print (f))
+				""")).isEqualTo("NIL\nNIL\nNIL\nNIL");
+	}
+
 }
