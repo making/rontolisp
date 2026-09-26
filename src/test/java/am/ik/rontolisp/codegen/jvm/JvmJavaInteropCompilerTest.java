@@ -117,6 +117,24 @@ class JvmJavaInteropCompilerTest {
 		assertThat(compileAndRun("(print (java:static \"java.lang.Math\" \"sqrt\" 16))")).isEqualTo("4.0");
 	}
 
+	// A character argument marshals to an int parameter (the code point) when there is
+	// no char/Character overload -- mirrors
+	// JavaInteropTest#characterMarshalsToIntParameter
+	// to pin the interpreter and the compiled bridge to the same rule.
+	@Test
+	void characterMarshalsToIntParameter() throws Exception {
+		assertThat(compileAndRun("(print (java:static \"java.lang.Character\" \"charCount\" #\\a))")).isEqualTo("1");
+	}
+
+	// A supplementary code point cannot fit a single Java char, so it falls back to the
+	// int overload (Character.toString(int)) rather than the char one -- mirrors
+	// JavaInteropTest#supplementaryCodePointDoesNotNarrowToChar.
+	@Test
+	void supplementaryCodePointDoesNotNarrowToChar() throws Exception {
+		assertThat(compileAndRun("(print (java:static \"java.lang.Character\" \"toString\" (code-char 128512)))"))
+			.isEqualTo("\"" + new String(Character.toChars(128512)) + "\"");
+	}
+
 	// The symbol t marshals to a boolean parameter (the compiled true is the bare
 	// symbol "T", which is also what a boolean answer comes back as).
 	@Test
