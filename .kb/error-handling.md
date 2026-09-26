@@ -322,19 +322,43 @@ second payload reader, so both gates go broad; outside EH mode nothing is observ
   through `%seq-to-string`/`%schar-set-runtime` and where those bytes matter.**
 
 ## An uncaught condition reports ONE line, the same one, on all four backends
-**Invariant: a signaled condition escaping the top level writes exactly
-`Unhandled condition: <report>` to standard error, then the process exits the way it always did.**
-Built from `compiler/UncaughtReport.PREFIX` at all three emission sites; the report text is the one
-`princ` writes.
+**Invariant: a signaled condition escaping the top level writes `Unhandled condition: <report>` to
+standard error -- the same line on all four backends -- then the process exits the way it always
+did.** Built from `compiler/UncaughtReport.PREFIX` at all three emission sites; the report text is
+the one `princ` writes, and nothing below changes it.
+
+**Under it, location lines** (`UncaughtReport.atLine` / `asyncLine`, two-space indented):
+`  at FILE:LINE in FUNCTION` -- the innermost form read from a named file that the condition passed
+through and the innermost NAMED function (or macro expander) holding it -- then one
+`  in NAME (async), awaited at FILE:LINE` per async boundary crossed. Nothing known (a `-e`
+program, only macro-built forms) prints none. **The interpreter prints them; the compiled backends
+do not yet** (open items for the JVM backend, wasm-GC and interpreted Scheme source).
+- **Recorded on the throw path only** (`eval/ConditionTrace`, on `LispEvalException.trace()`):
+  `evalCons` keeps the innermost `LocatedCons` it stepped onto and the lambda it was in then (a
+  type test and two stores per loop step; [source-positions.md](source-positions.md) Phase 4) and
+  hands them over from the catch clauses it already had. The function is decided by the first
+  frame that sees the location known and is in a named body: a tail call into a library function
+  with no positions reports the CALL SITE and the caller; a location found only in a caller is
+  never attributed to the callee; an anonymous lambda defers to the named function around it.
+- **Async**: `evalCons` runs `%async-run` itself (`runAsync`), naming the async function from its
+  own frame -- the body's virtual thread never sees the defun. A condition escaping the thunk
+  closes segment 0 (`crossedAsync`), so the awaiter's frames are not attributed to it; the first
+  located form after that is the `await`.
+- **Harness decisions, per suite**: `ci-spec.yaml`'s `standalone:` compares expected stderr lines
+  as CONTAINED, in order (wasmtime prints around ours), so the location lines need no change there
+  and are pinned instead by `RontoLispCliStreamsTest`'s `anUncaught*` cases, where the file path is
+  the test's own. `scheme-spec.yaml` and the Scheme cases in `RontoLispCliStreamsTest` compare the
+  whole of stderr and stay valid because Scheme source is not located yet -- when it is, they
+  compare the report line. The JVM/wasm assertions (`JvmLispCompilerTest`, `JvmSizedMainTest`,
+  `WasmLispCompilerIntegrationTest`) pin the report line and stay exact until those backends print
+  locations.
 
 - **Interpreter / compile failures** (`RontoLispCli.runReporting`): only `main` catches -- `run`
   still throws, so an embedded caller keeps the exception with its type and cause. A rontolisp
   diagnostic (read error, compile failure, bad command line) says `error:` instead and keeps the
-  `file:line:column:` prefix (`locateCompileFailure`). **A RUNTIME condition carries no such prefix
-  on any backend, deliberately**: the position table records on the COMPILE path only, because
-  recording it in the interpreter would put a `file:line:` on runtime error text that `ci-spec.yaml`
-  and the doc examples pin byte for byte (`SourceProvenance`, whose javadoc holds the trigger).
-  `RONTOLISP_DEBUG` additionally prints the JVM trace.
+  `file:line:column:` prefix (`locateCompileFailure`). **A RUNTIME condition's MESSAGE carries no
+  position on any backend**: the location goes under the report, never into the text a program
+  can read. `RONTOLISP_DEBUG` additionally prints the JVM trace.
 - **JVM** (`JvmUncaughtHandler`): a last exception-table entry over the whole of `main` catching
   `RuntimeException`; prints the line, EMPTIES the stack trace and RETHROWS. **Not
   `System.exit(1)`**: a compiled class's `main` is invoked in-process by ~110 assertions here and by

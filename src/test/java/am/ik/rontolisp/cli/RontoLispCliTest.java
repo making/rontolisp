@@ -1681,10 +1681,10 @@ class RontoLispCliTest {
 
 	@Test
 	void theInterpreterKeepsItsBareErrorText() throws Exception {
-		// The deliberate divergence: the interpreter reaches the same expander at
-		// EVALUATION time, so a position prefix there would land on ordinary runtime
-		// error text (which ci-spec.yaml and the doc examples pin byte for byte). It
-		// records nothing, and its message stays exactly as it was.
+		// The interpreter reaches the same expander at EVALUATION time, so a position
+		// prefix there would land on runtime error text a program can read. It opens no
+		// recording scope and its message stays exactly as it was; where it happened
+		// goes UNDER the uncaught report instead (RontoLispCliStreamsTest#anUncaught*).
 		Files.writeString(this.tempDir.resolve("lib.lisp"), """
 				(defmacro twice (x)
 				  (error "twice: bad argument ~a" x))

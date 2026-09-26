@@ -7,9 +7,10 @@ import java.util.Objects;
 import org.jspecify.annotations.Nullable;
 
 /**
- * A mutable cons cell holding a car and cdr pair.
+ * A mutable cons cell holding a car and cdr pair. A cons the interpreter read from a
+ * named file is a {@link LocatedCons}, which is otherwise the same cell.
  */
-public final class LispCons implements LispVal {
+public sealed class LispCons implements LispVal permits LocatedCons {
 
 	private LispVal car;
 
@@ -75,7 +76,13 @@ public final class LispCons implements LispVal {
 	 * @return {@code original} when nothing changed, otherwise a new cons of the two
 	 */
 	public static LispCons rebuilt(LispCons original, LispVal car, LispVal cdr) {
-		return car == original.car() && cdr == original.cdr() ? original : new LispCons(car, cdr);
+		if (car == original.car() && cdr == original.cdr()) {
+			return original;
+		}
+		// The rewrite stands for the same source text, so a located original keeps its
+		// position -- the runtime half of SourceProvenance.inherit.
+		return original instanceof LocatedCons located ? new LocatedCons(car, cdr, located.file(), located.line())
+				: new LispCons(car, cdr);
 	}
 
 	/**
@@ -100,10 +107,10 @@ public final class LispCons implements LispVal {
 			return original;
 		}
 		LispVal result = LispNil.INSTANCE;
-		for (int k = elements.size() - 1; k >= 0; k--) {
+		for (int k = elements.size() - 1; k >= 1; k--) {
 			result = new LispCons(elements.get(k), result);
 		}
-		return result;
+		return elements.isEmpty() ? result : rebuilt(original, elements.get(0), result);
 	}
 
 	/**

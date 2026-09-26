@@ -1,6 +1,6 @@
-# Source positions: `file:line:column` in reader AND frontend errors, and the two literals a program can read
+# Source positions: `file:line:column` in reader AND frontend errors, the two literals a program can read, and where an uncaught condition happened
 
-Three mechanisms. Positions never reach an emitter: compiled output is byte-identical
+Four mechanisms. Positions never reach an emitter: compiled output is byte-identical
 with and without any of this. `am.ik.rontolisp.SourceLocation` (`file`, 1-based
 `line`/`column`; `at`, `prefix`) lives in the AST package, NOT `reader`, because
 `compiler`/`codegen.*` may not import `reader`. **No file means no prefix** — `""` when
@@ -66,13 +66,32 @@ sees anything but a string and an integer.
   reader runs before `in-package` is interpreted. Substitution is unconditional, quoted
   data included. A `load`ed / ASDF-spliced file names ITSELF.
 
-## The compile-path-only divergence
-Recording is opt-in per thread (a `ThreadLocal`); only `RontoLispCli.compileToFile` opts
-in, because (a) a prefix on the interpreter's path would change runtime error text pinned
-byte for byte by `ci-spec.yaml` and the doc examples; (b) a served request may `load` at
-run time, so a process-wide table would grow unbounded and race. **Trigger**: if the
-interpreter grows a separate frontend phase, (a) stops holding and this should be retired.
-
+## Phase 4 — runtime positions for the interpreter's uncaught report
+The compile path's table is per-thread and opens only in `RontoLispCli.compileToFile`; a
+read with no scope open is the interpreter's, and there the reader answers each datum's
+OUTERMOST cons (for a named file) as `am.ik.rontolisp.LocatedCons` -- a `LispCons`
+subclass carrying `file`/`line`, identical to a plain cell for everything a program can
+observe. Used ONLY by the top-level uncaught report (`eval/ConditionTrace`, the location
+lines of [error-handling.md](error-handling.md)); no message ever gets a prefix, so
+`handler-case`, `princ` and every pinned output are unchanged.
+- **Why a subclass** (measured 2026-09-26, GraalVM 25.0.3): a third field on `LispCons` is
+  free on HotSpot's default layout (24 bytes either way) but grows EVERY cons 16 -> 24
+  bytes in the native image and under compact headers; a weak identity table costs ~56
+  bytes an entry plus a synchronized probe. The subclass costs +8 bytes per LIST read and
+  a type test, which is what lets `evalCons` track the innermost located form on every
+  loop step (`located`/`locatedIn` locals). fib 27 / 300k-element list build / 50k caught
+  errors: within noise of the build before it.
+- **Lifetime = the cons's**, so a served request's run-time `load` leaves nothing behind
+  (the reason the compile table is thread-local).
+- **Keeping it through rewrites**: `LispCons.rebuilt`/`rebuiltList` rebuild a located
+  original as located; `SourceProvenance.inherit` with no scope open answers a located
+  COPY of the rewritten top cell (callers use its return value -- all do). That is what
+  carries positions through `PackageResolver`, i.e. every `in-package` file.
+- **Reader labels**: the located cell is a copy, so `readExpr` never converts a `#n#`
+  result (a datum read elsewhere, or `#n=`'s identity-patched placeholder) and a `#n=`
+  datum is located by its own inner read.
+- **Not located**: `-e`/stdin programs (no file), library source spliced from the jar,
+  macro-built forms (the macro CALL is), and Scheme (`SchemeReader` builds plain conses).
 ## Tests
 `LispReaderTest` (opening-delimiter cases, `currentFileAndCurrentLineReadAsTheirOwnPosition`),
 `LoadInlinerTest#readerErrorIn*`,
@@ -82,4 +101,6 @@ interpreter grows a separate frontend phase, (a) stops holding and this should b
 `theRecordingScopeIsClosedEvenWhenTheCompileFails`,
 `theInterpreterKeepsItsBareErrorText`,
 `theSourcePositionLiteralsNameTheLoadedFileNotTheEntryFile`), ci-spec
-`source-position-literals`.
+`source-position-literals`; Phase 4: `LispReaderTest#aNamedFilesDatumsAreLocatedAndAStringsAreNot`,
+`#locatingADatumKeepsEveryLabelReferenceToIt`, `LispConsTest#aRebuildOfALocatedConsStaysLocated`,
+`RontoLispCliStreamsTest`'s `anUncaught*` cases.

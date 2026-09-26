@@ -65,4 +65,22 @@ class LispConsTest {
 		assertThat(rebuilt.print()).isEqualTo("(A)");
 	}
 
+	@Test
+	void aRebuildOfALocatedConsStaysLocated() {
+		// The interpreter's positions ride on the cell itself, so a pass that rewrites a
+		// located form (the package resolver qualifying its symbols) must keep it
+		// located -- and one that changes nothing hands back the very same cell.
+		LocatedCons located = new LocatedCons(new LispSymbol("F"), LispNil.INSTANCE, "app.lisp", 7);
+		assertThat(LispCons.rebuilt(located, located.car(), located.cdr())).isSameAs(located);
+		LispCons rewritten = LispCons.rebuilt(located, new LispSymbol("APP::F"), LispNil.INSTANCE);
+		assertThat(rewritten).isInstanceOfSatisfying(LocatedCons.class, copy -> {
+			assertThat(copy.file()).isEqualTo("app.lisp");
+			assertThat(copy.line()).isEqualTo(7);
+		});
+		assertThat(LispCons.rebuiltList(located, List.of(new LispSymbol("APP::F")))).isInstanceOf(LocatedCons.class);
+		// Nothing a program can observe differs from a plain cell.
+		assertThat(located).isEqualTo(new LispCons(new LispSymbol("F"), LispNil.INSTANCE));
+		assertThat(located.print()).isEqualTo("(F)");
+	}
+
 }

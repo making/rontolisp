@@ -12,6 +12,14 @@ Every backend raises the condition so `handler-case` can dispatch on its type: t
 
 When nothing catches it, the condition reports itself as **one line on standard error** — `Unhandled condition: ` followed by the same text [`princ`](../functions/princ.md) writes for it — and the process exits non-zero. That line is identical on all four backends; what follows it is only the host's own note that the process died (the JVM's `Exception in thread "main" ...`, wasmtime's trap report). Setting the `RONTOLISP_DEBUG` environment variable to any value additionally prints the JVM stack trace, on the interpreter and on a compiled `.class`. The wasm-GC backends report only when the module carries the exception machinery — that is, when the program contains a catching form somewhere, as any program that loads a library does; without one the module traps with no message, which is what keeps a program that never signals from paying for the machinery. A `--no-wasi` reactor has no standard error to write to at all, so there the report goes into its discarding output sink (see the [wasm-GC module guide](../../guides/wasm-gc-module.md#what-the-build-tells-you-before-you-run-it)).
 
+The interpreter adds, under that line, where it happened: `at FILE:LINE in FUNCTION` names the innermost form of the program's files the condition passed through and the named function holding it, and a condition that escaped an [`rontolisp:async-defun`](../special-forms/rontolisp-async-defun.md) body adds one `in NAME (async), awaited at FILE:LINE` line per `await` that rethrew it. The report line itself never changes, so what `handler-case` and `princ` see is unaffected. A program given with `-e`, Scheme source and the compiled backends print the report line alone.
+
+```console
+$ rontolisp app.lisp
+Unhandled condition: parse-integer: junk in string "x"
+  at app.lisp:5 in APP::PARSE
+```
+
 Because an uncaught `error` aborts execution it is shown here statically rather than as a runnable example:
 
 ```console

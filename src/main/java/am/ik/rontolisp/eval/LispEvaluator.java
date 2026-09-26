@@ -37,6 +37,7 @@ import am.ik.rontolisp.macro.MopEvalCapture;
 import am.ik.rontolisp.macro.MopProtocol;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispFuture;
+import am.ik.rontolisp.LocatedCons;
 import am.ik.rontolisp.LispThread;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispStream;
@@ -602,6 +603,12 @@ public final class LispEvaluator {
 	 * a {@code (funcall closure ...)}.
 	 */
 	private @Nullable LispFunction applyBuiltin;
+
+	/**
+	 * The {@code %async-run} built-in, kept so {@link #evalCons} can run an async body
+	 * knowing the async function it belongs to ({@link #runAsync}).
+	 */
+	private @Nullable LispFunction asyncRunBuiltin;
 
 	/**
 	 * True once any {@code progv} has run. {@code progv} can dynamically bind a symbol
@@ -2633,23 +2640,12 @@ public final class LispEvaluator {
 		// %async-run (the async-defun/async-lambda lowering primitive) lives here rather
 		// than in Environment because running the body thunk needs the evaluator's
 		// apply. rontolisp:await itself is a special form (evalCons), not a function.
+		// evalCons calls runAsync itself when the call is in a lambda's body, so the
+		// condition trace can name the async function; this function value is what any
+		// other route (funcall, apply) reaches.
 		String asyncRunName = LispNames.ASYNC_RUN_QUALIFIED;
-		this.globalEnv.defineFunction(asyncRunName, new LispFunction(asyncRunName, args -> {
-			if (args.size() != 1) {
-				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
-						LispNames.ASYNC_RUN + " expects 1 argument, got " + args.size());
-			}
-			LispVal thunk = args.get(0);
-			// The body's values are captured where it completes: the channel holds its
-			// extra values the moment the thunk returns, on the thread that ran it, and
-			// they travel in the future -- the awaiter publishes them from there, never
-			// from the channel it shares with every other thread.
-			return AsyncRuntime.run(future -> {
-				LispVal primary = apply(thunk, List.of(), this.globalEnv);
-				future.settleExtras(this.globalEnv.spill());
-				return primary;
-			});
-		}));
+		this.asyncRunBuiltin = new LispFunction(asyncRunName, args -> runAsync(args, null));
+		this.globalEnv.defineFunction(asyncRunName, this.asyncRunBuiltin);
 		// %future-force: the FUNCTION spelling of await's resolve, for synchronous
 		// boundaries (the http-reactor transport resolving a future-valued application
 		// answer). A function, not a special form, so the lexical await-placement rule
@@ -6099,10 +6095,21 @@ public final class LispEvaluator {
 		Environment owner = null;
 		boolean inBody = false;
 		boolean funcallSeam = false;
+		// Where a condition leaving this frame was (ConditionTrace): the innermost form
+		// read from a named file the loop has stepped onto and the lambda whose body it
+		// was in then, and the lambda whose body the loop is in now. A type test and two
+		// stores per step; read only when a condition escapes.
+		LocatedCons located = null;
+		LispLambda locatedIn = null;
+		LispLambda frameLambda = null;
 		LispVal result;
 		try {
 			frame: while (true) {
 				LispVal next;
+				if (cons instanceof LocatedCons here) {
+					located = here;
+					locatedIn = frameLambda;
+				}
 				dispatch: {
 					LispVal head = cons.car();
 					// A dotted tail is only meaningful as data (inside quote); in call
@@ -6731,9 +6738,21 @@ public final class LispEvaluator {
 						funcallSeam = true;
 						args = spreadApplyArguments(args);
 					}
+					else if (function == this.asyncRunBuiltin) {
+						// The async function whose body this thunk is, named from THIS
+						// frame: the body's own thread will never see the defun.
+						try {
+							result = singleValue(runAsync(args, frameLambda == null ? null : frameLambda.name()));
+						}
+						catch (LispEvalException e) {
+							throw withHandlerBindHandlersRun(e);
+						}
+						break frame;
+					}
 					if (function instanceof LispLambda lambda) {
 						Environment lambdaEnv = lexicalLambdaScope(lambda, args);
 						if (lambdaEnv != null) {
+							frameLambda = lambda;
 							// The body runs in this frame. See expandMacroCall: the depth
 							// tells a macro expansion
 							// whether its call site is a TOP-LEVEL form (whose file's
@@ -6802,14 +6821,17 @@ public final class LispEvaluator {
 			result = signal.value();
 		}
 		catch (LispEvalException e) {
+			e.trace().passing(located, locatedIn, frameLambda);
 			throw funcallSeam ? withHandlerBindHandlersRun(e) : e;
 		}
 		catch (IllegalArgumentException | IndexOutOfBoundsException raw) {
 			LispEvalException failure = rawEvaluationFailure(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, raw);
+			failure.trace().passing(located, locatedIn, frameLambda);
 			throw funcallSeam ? withHandlerBindHandlersRun(failure) : failure;
 		}
 		catch (ClassCastException | ArithmeticException | NegativeArraySizeException raw) {
 			LispEvalException failure = rawEvaluationFailure(rawFailureConditionClass(raw), raw);
+			failure.trace().passing(located, locatedIn, frameLambda);
 			throw funcallSeam ? withHandlerBindHandlersRun(failure) : failure;
 		}
 		finally {
@@ -8865,6 +8887,10 @@ public final class LispEvaluator {
 			}
 			markExpansionConstants(expansion, new java.util.IdentityHashMap<>());
 			return expansion;
+		}
+		catch (LispEvalException e) {
+			e.trace().passingNamed(name);
+			throw e;
 		}
 		finally {
 			if (swapPackage) {
@@ -11939,6 +11965,41 @@ public final class LispEvaluator {
 		return args;
 	}
 
+	/**
+	 * {@code %async-run}: runs the thunk an async-defun/async-lambda lowering built on
+	 * its own virtual thread and answers the future. A condition escaping the thunk is
+	 * marked as having crossed the boundary ({@link ConditionTrace#crossedAsync}) before
+	 * the future stores it, since the frames that see it next -- the await's -- are
+	 * another function's.
+	 * @param args the thunk, alone
+	 * @param asyncFunction the async function's name, or null when unknown (an async
+	 * lambda, or a call through a function value)
+	 * @return the future
+	 */
+	private LispVal runAsync(List<LispVal> args, @Nullable String asyncFunction) {
+		if (args.size() != 1) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+					LispNames.ASYNC_RUN + " expects 1 argument, got " + args.size());
+		}
+		LispVal thunk = args.get(0);
+		// The body's values are captured where it completes: the channel holds its
+		// extra values the moment the thunk returns, on the thread that ran it, and
+		// they travel in the future -- the awaiter publishes them from there, never
+		// from the channel it shares with every other thread.
+		return AsyncRuntime.run(future -> {
+			LispVal primary;
+			try {
+				primary = apply(thunk, List.of(), this.globalEnv);
+			}
+			catch (LispEvalException e) {
+				e.trace().crossedAsync(asyncFunction);
+				throw e;
+			}
+			future.settleExtras(this.globalEnv.spill());
+			return primary;
+		});
+	}
+
 	// The rontolisp:await special form: evaluates its one operand and resolves it.
 	private LispVal evalAwait(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
@@ -12509,6 +12570,10 @@ public final class LispEvaluator {
 					result = eval(bodyExpr, lambdaEnv);
 				}
 				return result;
+			}
+			catch (LispEvalException e) {
+				e.trace().passing(null, null, lambda);
+				throw e;
 			}
 			finally {
 				this.functionBodyDepth--;

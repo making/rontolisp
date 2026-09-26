@@ -141,14 +141,97 @@ class RontoLispCliStreamsTest {
 	void anUncaughtConditionReportsOneLineAndExitsOne() throws Exception {
 		// The interpreter's half of the cross-backend contract: the condition's report,
 		// once, on standard error -- not the 16 (212 for a cl-postgres connect) frames
-		// of LispEvaluator the default handler used to print. The program's own output
-		// still comes out.
+		// of LispEvaluator the default handler used to print -- and under it where it
+		// happened. The program's own output still comes out.
 		Path program = this.tempDir.resolve("boom.lisp");
 		Files.writeString(program, "(print \"before\")\n(error \"boom: ~a\" 42)\n");
 		String[] result = runReporting(program.toString());
 		assertThat(result[0]).isEqualTo("1");
 		assertThat(result[1]).isEqualTo("\"before\"\n");
-		assertThat(result[2].trim()).isEqualTo("Unhandled condition: boom: 42");
+		assertThat(result[2].lines()).containsExactly("Unhandled condition: boom: 42", "  at " + program + ":2");
+	}
+
+	@Test
+	void anUncaughtConditionNamesTheInnermostFormAndTheFunctionHoldingIt() throws Exception {
+		// The innermost form read from the file that the condition passed through, and
+		// the named function whose body holds it -- through a package (the resolver's
+		// rewrite keeps the position), a when/dolist expansion, and a tail call into a
+		// built-in library function whose own forms carry no position: the call site in
+		// PARSE is what is reported, not the library's body and not RUN.
+		Path program = this.tempDir.resolve("app.lisp");
+		Files.writeString(program, """
+				(defpackage :app (:use :cl))
+				(in-package :app)
+
+				(defun parse (s)
+				  (parse-integer s))
+
+				(defun run ()
+				  (dolist (s '("1" "x"))
+				    (when s
+				      (print (parse s)))))
+
+				(run)
+				""");
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[2].lines()).containsExactly("Unhandled condition: parse-integer: junk in string \"x\"",
+				"  at " + program + ":5 in APP::PARSE");
+	}
+
+	@Test
+	void anUncaughtConditionInALoadedFileNamesThatFile() throws Exception {
+		// A macro that signals while expanding at evaluation time: the form in the
+		// LOADED file, inside the macro -- not F, whose body holds the call site. The
+		// message itself stays bare
+		// (RontoLispCliTest#theInterpreterKeepsItsBareErrorText).
+		Files.writeString(this.tempDir.resolve("lib.lisp"), """
+				(defmacro twice (x)
+				  (error "twice: bad argument ~a" x))
+
+				(defun f (n)
+				  (twice n))
+				""");
+		Path main = this.tempDir.resolve("main.lisp");
+		Files.writeString(main, "(load \"lib.lisp\")\n(print (f 1))\n");
+		String[] result = runReporting(main.toString());
+		List<String> lines = result[2].lines().toList();
+		assertThat(lines).hasSize(2);
+		assertThat(lines.get(0)).isEqualTo("Unhandled condition: twice: bad argument N");
+		assertThat(lines.get(1)).startsWith("  at ").endsWith("lib.lisp:2 in TWICE");
+	}
+
+	@Test
+	void anAsyncBodysConditionNamesTheAsyncFunctionAndEveryAwaitSite() throws Exception {
+		// The body runs on its own virtual thread and await rethrows on another, so the
+		// awaiter's frames are not the async function's: each boundary is its own line,
+		// naming the async function and the await that rethrew.
+		Path program = this.tempDir.resolve("prices.lisp");
+		Files.writeString(program, """
+				(rontolisp:async-defun current-price (symbol)
+				  (let ((feed nil))
+				    (error "no price for ~a" symbol)))
+
+				(rontolisp:async-defun portfolio ()
+				  (list
+				    (rontolisp:await (current-price "ABC"))))
+
+				(print (rontolisp:await (portfolio)))
+				""");
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[2].lines()).containsExactly("Unhandled condition: no price for ABC", "  at " + program + ":3",
+				"  in CURRENT-PRICE (async), awaited at " + program + ":7",
+				"  in PORTFOLIO (async), awaited at " + program + ":9");
+	}
+
+	@Test
+	void aProgramWithNoFileReportsTheLineAlone() {
+		// -e names no file, so there is nothing to locate against: the report is the one
+		// line it always was.
+		String[] result = runReporting("-e", "(defun f (x) (car x)) (f 1)");
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[2].lines()).containsExactly("Unhandled condition: car expects a cons cell, got: 1");
 	}
 
 	@Test

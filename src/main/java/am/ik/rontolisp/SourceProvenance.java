@@ -21,23 +21,15 @@ import org.jspecify.annotations.Nullable;
  * conses are recorded; an error about an atom is reported against the form containing it.
  *
  * <p>
- * <b>Recording is opt-in, per thread, and COMPILE PATH ONLY.</b> Nothing is recorded
+ * <b>This table is opt-in, per thread, and COMPILE PATH ONLY.</b> Nothing is recorded
  * until {@link #startRecording()} opens a scope, which only
- * {@code RontoLispCli.compileToFile} does. Two reasons, both deliberate:
- * <ul>
- * <li>The interpreter reaches the same expander at EVALUATION time, so recording there
- * would put a {@code file:line:} prefix on ordinary runtime error text, which
- * {@code ci-spec.yaml} and the doc examples pin byte for byte. The compile path has a
- * frontend that is over before the program runs, so its diagnostics are free to say
- * where.</li>
- * <li>A served request may {@code load} at run time; a process-wide table would grow
- * without bound and race across request threads. The state is a {@link ThreadLocal}, so a
- * thread that never opens a scope pays one null check and a request thread that does
- * takes its table with it when it ends.</li>
- * </ul>
- * The re-evaluation trigger for the first bullet: if the interpreter ever grows a
- * separate frontend phase (one that expands a whole program before evaluating any of it),
- * recording it becomes free of that risk and the divergence should be retired.
+ * {@code RontoLispCli.compileToFile} does: the compile path has a frontend that is over
+ * before the program runs, so its diagnostics are free to prefix the MESSAGE with where.
+ * The interpreter reaches the same expander at evaluation time, where a prefix on the
+ * message would change runtime error text a program can read; a read outside a scope
+ * makes each datum's outermost cons a {@link LocatedCons} instead, whose position reaches
+ * only the top-level uncaught-condition report, never a message -- and lives exactly as
+ * long as the cons, so a served request's run-time {@code load} leaves nothing behind.
  *
  * <p>
  * <b>How a location reaches an error.</b> Not by wrapping: a frontend pass may catch its
@@ -142,16 +134,27 @@ public final class SourceProvenance {
 	 * same position.
 	 *
 	 * <p>
-	 * A no-op when the pass handed back the original (the identity rule already applied),
-	 * when the result is not a cons, or when this thread is not recording.
+	 * A no-op when the pass handed back the original (the identity rule already applied)
+	 * or when the result is not a cons. With no recording scope open the rewrite is the
+	 * interpreter's (the package resolver runs at evaluation time), whose positions ride
+	 * on {@link LocatedCons}: a located original's rewrite is answered as a located COPY
+	 * of its top cell, so the caller must use the value returned, never its argument --
+	 * which every caller's {@code return SourceProvenance.inherit(cons, ...)} does.
 	 * @param <T> the static type of the rewritten form
 	 * @param original the cons the pass walked
-	 * @param rewritten what it produced in its place
-	 * @return {@code rewritten}, for {@code return SourceProvenance.inherit(cons, ...)}
+	 * @param rewritten what it produced in its place, a cell nothing else holds yet
+	 * @return {@code rewritten}, or its located copy
 	 */
+	@SuppressWarnings("unchecked")
 	public static <T extends @Nullable LispVal> T inherit(LispCons original, T rewritten) {
+		if (!(rewritten instanceof LispCons cons) || cons == original) {
+			return rewritten;
+		}
 		State state = STATE.get();
-		if (state == null || !(rewritten instanceof LispCons cons) || cons == original) {
+		if (state == null) {
+			if (original instanceof LocatedCons located && !(cons instanceof LocatedCons)) {
+				return (T) new LocatedCons(cons.car(), cons.cdr(), located.file(), located.line());
+			}
 			return rewritten;
 		}
 		Position position = state.positions.get(original);
