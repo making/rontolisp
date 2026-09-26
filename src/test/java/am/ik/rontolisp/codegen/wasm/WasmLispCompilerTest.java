@@ -498,9 +498,11 @@ class WasmLispCompilerTest {
 
 	@Test
 	void tcpWrongArgCountsAreCallTimeProgramErrors() {
-		// The component's tcp operators are sockets.lisp defuns, so a wrong count is a
-		// direct call of a program function: a program-error when it runs, with a
-		// compile-time warning (compiler/DefinedCallArity), never a failed compile.
+		// The component's tcp operators are sockets.lisp defuns with the built-ins' own
+		// lambda lists, so a wrong count is judged as the built-in: a program-error
+		// when it runs, under the interpreter's name for it, with a compile-time
+		// warning (compiler/BuiltinCallArity#builtinShapedDefuns), never a failed
+		// compile.
 		ByteArrayOutputStream err = new ByteArrayOutputStream();
 		try (var _ = ThreadStdio.err(err)) {
 			assertThat(compileComponent("(rontolisp:tcp-connect \"127.0.0.1\")")).isNotEmpty();
@@ -508,10 +510,10 @@ class WasmLispCompilerTest {
 			assertThat(compileComponent("(rontolisp:tcp-accept)")).isNotEmpty();
 			assertThat(compileComponent("(rontolisp:tcp-local-port 1 2)")).isNotEmpty();
 		}
-		assertThat(err.toString()).contains("warning: Function expects 2 arguments, got 1")
-			.contains("warning: Function expects at least 1 argument, got 0")
-			.contains("warning: Function expects 1 argument, got 0")
-			.contains("warning: Function expects 1 argument, got 2");
+		assertThat(err.toString()).contains("warning: TCP-CONNECT expects 2 arguments, got 1")
+			.contains("warning: TCP-LISTEN expects at least 1 argument, got 0")
+			.contains("warning: TCP-ACCEPT expects 1 argument, got 0")
+			.contains("warning: TCP-LOCAL-PORT expects 1 argument, got 2");
 	}
 
 	@Test

@@ -42,6 +42,7 @@ import am.ik.rontolisp.compiler.AstOutliner;
 import am.ik.rontolisp.compiler.DeadTypeBranchPruner;
 import am.ik.rontolisp.compiler.ToplevelStatements;
 import am.ik.rontolisp.compiler.BoundaryType;
+import am.ik.rontolisp.compiler.BuiltinCallArity;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
@@ -3367,6 +3368,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// mode below, which the expansions' unwind-protects need).
 		boolean blockExitTag = crossLambda.used() || programUsesSymbol(program, LispNames.CATCH)
 				|| programUsesSymbol(program, LispNames.THROW) || restartMode;
+		// Read before the lambda lists lose their &optional bounds.
+		Set<String> builtinShapedDefuns = BuiltinCallArity.builtinShapedDefuns(program);
 		// Desugar extended lambda lists (&optional/&key/&aux) into the native
 		// "required + &rest" shape so the passes below only see that shape.
 		program = LambdaLists.desugarProgram(program);
@@ -4372,6 +4375,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.importDecls(importWrappers)
 			.numDefuns(defuns.size())
 			.userDefunNames(Set.copyOf(userDefinedNames))
+			.builtinShapedDefuns(builtinShapedDefuns)
 			.warnedClRedefinitions(warnedClRedefinitions)
 			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
 			.usesRuntimePackages(packageResolver.runtimePackagesMutable())
@@ -10459,6 +10463,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<String> userDefunNames = Set.of();
 
 		/**
+		 * The defuns whose lambda list takes the counts of the built-in they are named
+		 * after (compiler/BuiltinCallArity#builtinShapedDefuns): a direct call of one is
+		 * judged, and reported, as the built-in rather than by the defun's own check.
+		 */
+		Set<String> builtinShapedDefuns = Set.of();
+
+		/**
 		 * Whether the program calls {@code fmakunbound} anywhere. When it does, a LITERAL
 		 * {@code (fboundp 'x)} may no longer be folded to a bare constant: the retired
 		 * name must answer nil, so the fold is emitted behind a runtime tombstone probe
@@ -10876,6 +10887,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.importDecls = builder.importDecls;
 			this.numDefuns = builder.numDefuns;
 			this.userDefunNames = builder.userDefunNames;
+			this.builtinShapedDefuns = builder.builtinShapedDefuns;
 			this.usesFmakunbound = builder.usesFmakunbound;
 			this.usesRuntimePackages = builder.usesRuntimePackages;
 			this.usesProgv = builder.usesProgv;
@@ -11046,6 +11058,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private int numDefuns = 0;
 
 			private Set<String> userDefunNames = Set.of();
+
+			private Set<String> builtinShapedDefuns = Set.of();
 
 			private boolean usesFmakunbound = false;
 
@@ -11428,6 +11442,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder userDefunNames(Set<String> userDefunNames) {
 				this.userDefunNames = userDefunNames;
+				return this;
+			}
+
+			Builder builtinShapedDefuns(Set<String> builtinShapedDefuns) {
+				this.builtinShapedDefuns = builtinShapedDefuns;
 				return this;
 			}
 

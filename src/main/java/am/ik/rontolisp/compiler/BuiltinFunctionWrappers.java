@@ -453,15 +453,17 @@ public final class BuiltinFunctionWrappers {
 
 	/**
 	 * The operator a wrong-argument-count report names for a function of this name: the
-	 * name itself when it is a wrapped built-in, {@code null} (reported as
-	 * {@code ClosRegistry.ARITY_ANONYMOUS_OPERATOR}) for anything else. One rule for all
-	 * four backends -- the interpreter asks it of a lambda's name, the compiled backends
-	 * of a callable's -- decided by the NAME, because the interpreter's catalog lambda
-	 * and the compilers' injected wrapper defun are the same function under it. The
-	 * compile paths' dispatcher of a wrapped built-in a {@code defmethod} shadows
-	 * ({@code ShadowedBuiltins}, {@link LispMacroExpander#shadowedDispatcherName})
-	 * reports as the built-in, as the interpreter's dispatcher, which keeps the
-	 * built-in's name, does.
+	 * name itself when it is a wrapped built-in, the interpreter's name for a native one
+	 * ({@link NativeCallShapes#operator}) -- a spliced library defun that implements it
+	 * on a compiled backend reports as the built-in, not as {@code Function} -- and
+	 * {@code null} (reported as {@code ClosRegistry.ARITY_ANONYMOUS_OPERATOR}) for
+	 * anything else. One rule for all four backends -- the interpreter asks it of a
+	 * lambda's name, the compiled backends of a callable's -- decided by the NAME,
+	 * because the interpreter's catalog lambda and the compilers' injected wrapper defun
+	 * are the same function under it. The compile paths' dispatcher of a wrapped built-in
+	 * a {@code defmethod} shadows ({@code ShadowedBuiltins},
+	 * {@link LispMacroExpander#shadowedDispatcherName}) reports as the built-in, as the
+	 * interpreter's dispatcher, which keeps the built-in's name, does.
 	 * @param functionName the callee's name, or {@code null} for an anonymous one
 	 * @return the operator to report, or {@code null}
 	 */
@@ -469,7 +471,11 @@ public final class BuiltinFunctionWrappers {
 		if (functionName == null) {
 			return null;
 		}
-		return WRAPPER_NAMES.contains(functionName) ? functionName : ShadowedDispatchers.OPERATORS.get(functionName);
+		if (WRAPPER_NAMES.contains(functionName)) {
+			return functionName;
+		}
+		String nativeOperator = NativeCallShapes.operator(functionName);
+		return nativeOperator != null ? nativeOperator : ShadowedDispatchers.OPERATORS.get(functionName);
 	}
 
 	/**

@@ -36,6 +36,7 @@ import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.compiler.BuiltinCallArity;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
 import am.ik.rontolisp.compiler.ConcatenateForms;
@@ -1050,6 +1051,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// surface scans cannot see (the expansion happens during Pass 2).
 		boolean blockExitChannel = crossLambda.used() || programUsesSymbol(program, LispNames.CATCH)
 				|| programUsesSymbol(program, LispNames.THROW) || restartMode;
+		// Read before the lambda lists lose their &optional bounds.
+		Set<String> builtinShapedDefuns = BuiltinCallArity.builtinShapedDefuns(program);
 		program = LambdaLists.desugarProgram(program);
 		// Create the %mv-spill global (a top-level setq) when the program uses a
 		// multiple-value operator: the expansions read/write it across functions.
@@ -2487,6 +2490,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.geomOps(geomRuntime != null ? geomRuntime.ops() : null)
 			.className(this.className)
 			.userDefunNames(Set.copyOf(userDefinedNames))
+			.builtinShapedDefuns(builtinShapedDefuns)
 			.warnedClRedefinitions(new HashSet<>())
 			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
 			.usesRuntimePackages(packageResolver.runtimePackagesMutable())
@@ -6843,6 +6847,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		Set<String> userDefunNames = Set.of();
 
 		/**
+		 * The defuns whose lambda list takes the counts of the built-in they are named
+		 * after (compiler/BuiltinCallArity#builtinShapedDefuns): a direct call of one is
+		 * judged, and reported, as the built-in rather than by the defun's own check.
+		 */
+		Set<String> builtinShapedDefuns = Set.of();
+
+		/**
 		 * The {@code cl} function names this compile ATTEMPT has already warned about, so
 		 * an override that happens at fifty call sites reports once -- and a retried
 		 * attempt (a mispredicted helper gate) warns again, because
@@ -7158,6 +7169,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.mayUseAsyncValues = builder.mayUseAsyncValues;
 			this.className = builder.className;
 			this.userDefunNames = builder.userDefunNames;
+			this.builtinShapedDefuns = builder.builtinShapedDefuns;
 			this.warnedClRedefinitions = builder.warnedClRedefinitions;
 			this.usesFmakunbound = builder.usesFmakunbound;
 			this.usesRuntimePackages = builder.usesRuntimePackages;
@@ -7652,6 +7664,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private String className = "";
 
 			private Set<String> userDefunNames = Set.of();
+
+			private Set<String> builtinShapedDefuns = Set.of();
 
 			private Set<String> warnedClRedefinitions = new HashSet<>();
 
@@ -8212,6 +8226,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder userDefunNames(Set<String> userDefunNames) {
 				this.userDefunNames = userDefunNames;
+				return this;
+			}
+
+			Builder builtinShapedDefuns(Set<String> builtinShapedDefuns) {
+				this.builtinShapedDefuns = builtinShapedDefuns;
 				return this;
 			}
 

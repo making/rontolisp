@@ -5,6 +5,7 @@ import java.util.Objects;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
@@ -69,6 +70,51 @@ class BuiltinCallArityTest {
 			.isNull();
 		assertThat(BuiltinCallArity.wrongCountSignal((LispCons) LispReader.readAllFromString("(frob 1)").getFirst()))
 			.isNull();
+	}
+
+	@Test
+	void aNativeBuiltinIsJudgedByItsOwnShapeAndReportedUnderTheInterpretersName() {
+		assertThat(BuiltinFunctionWrappers.wrapperNames()).doesNotContainAnyElementsOf(BuiltinCallArity.nativeNames());
+		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.BOUNDP, 0))
+			.isEqualTo("BOUNDP expects 1 argument, got 0");
+		assertThat(BuiltinCallArity.wrongCountMessage(LispNames.EXPORT, 3))
+			.isEqualTo("EXPORT expects at most 2 arguments, got 3");
+		String tcpConnect = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_CONNECT);
+		assertThat(BuiltinCallArity.wrongCountMessage(tcpConnect, 1))
+			.isEqualTo("TCP-CONNECT expects 2 arguments, got 1");
+		assertThat(Objects
+			.requireNonNull(BuiltinCallArity
+				.wrongCountSignal((LispCons) LispReader.readAllFromString("(rontolisp:tcp-connect h)").getFirst()))
+			.print()).isEqualTo("(PROGN H (%PROGRAM-ERROR \"TCP-CONNECT expects 2 arguments, got 1\"))");
+		// tls-connect takes a host and a port, and at most one option pair.
+		String tlsConnect = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_CONNECT);
+		assertThat(BuiltinCallArity.wrongCountMessage(tlsConnect, 2)).isNull();
+		assertThat(BuiltinCallArity.wrongCountMessage(tlsConnect, 4)).isNull();
+		assertThat(BuiltinCallArity.wrongCountMessage(tlsConnect, 3))
+			.isEqualTo("TLS-CONNECT expects 2 or 4 arguments, got 3");
+		assertThat(BuiltinCallArity.wrongCountMessage(tlsConnect, 1))
+			.isEqualTo("TLS-CONNECT expects 2 or 4 arguments, got 1");
+		// A library defun that implements a native built-in names it in its own reports.
+		assertThat(BuiltinFunctionWrappers.arityOperator(tcpConnect)).isEqualTo("TCP-CONNECT");
+		assertThat(BuiltinFunctionWrappers.arityOperator(LispNames.CHAR_NAME)).isEqualTo("CHAR-NAME");
+	}
+
+	// A library's implementation of a native built-in takes the built-in's counts; a
+	// defun of another shape, and any defun of a catalog name, keeps its own call path.
+	@Test
+	void aDefunWithANativeBuiltinsOwnCountsIsJudgedAsTheBuiltin() {
+		assertThat(BuiltinCallArity.builtinShapedDefuns(LispReader.readAllFromString("""
+				(defun rontolisp:tcp-listen (port &optional host) (list port host))
+				(progn (defun find-class (name &optional errorp env) (list name errorp env)))
+				(defun make-package (name &key use nicknames) (list name use nicknames))
+				(defun rontolisp:tls-connect (host port &optional opt value) (list host port opt value))
+				(defun char-name (a b) (list a b))
+				(defun rontolisp:fetch (url &rest options) (list url options))
+				(defun car (x) x)
+				(defun my-own (x) x)
+				"""))).containsExactlyInAnyOrder(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_LISTEN),
+				LispNames.FIND_CLASS, LispNames.MAKE_PACKAGE,
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_CONNECT));
 	}
 
 	private static BuiltinCallArity.Shape wrapperShape(LispVal lambdaList) {

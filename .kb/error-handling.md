@@ -1586,7 +1586,8 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     the class initialization, so widening a wrapper retires its row.
   - A name the program defines itself (a `defun` of a cl name, a spliced library defun such as
     wait.lisp's `sleep`) keeps its own call path: `ctx.userDefunNames` on the compiled backends, a
-    `LispLambda` global binding in the interpreter.
+    `LispLambda` global binding in the interpreter. The one exception is a NATIVE built-in's
+    library defun (next bullet).
 - **A DIRECT call of a program's own function** (2026-09-26). **Invariant: `(f args...)` with `f`
   a compiled defun, or `((lambda ...) args...)`, with a count the lambda list rules out evaluates
   its arguments and then signals the interpreter's `program-error` at run time on all four
@@ -1612,6 +1613,58 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     `LENGTH expects 1 argument, got 2` everywhere (the function-value path said `Function` on
     both compiled backends, the direct call failed the compile). `ShadowedBuiltins` now keeps the
     rewritten call's source position, so the warning has one.
+- **A DIRECT call of a native built-in outside the catalog** (2026-09-26). **Invariant: a built-in
+  the interpreter implements natively that has no `BuiltinFunctionWrappers` entry (`boundp`,
+  `export`, `get-universal-time`, `rontolisp:tcp-connect`, `rontolisp:tls-connect`, ...) is judged
+  by the same `BuiltinCallArity` check, its shape from `compiler/NativeCallShapes`, and reports
+  under the interpreter's name for it** (`TCP-CONNECT expects 2 arguments, got 1`, `EXPORT expects
+  at most 2 arguments, got 3`, `TLS-CONNECT expects 2 or 4 arguments, got 3`). Pinned by ci-spec
+  `direct-native-builtin-call-wrong-count-signals-program-error`, `NativeCallArityCompileTest`
+  (every row x every wrong count, compiled through the CLI for the JVM, wasm and the component:
+  the warning's literal IS the run-time message),
+  `LispEvaluatorTest.everyNativeBuiltinReportsAWrongDirectCountWithItsCallShape`,
+  `JvmLispCompilerTest.compileAndRunADirectNativeBuiltinCallWithAWrongCountSignalsAtCallTime` and
+  its wasm twin.
+  - Measured before (2026-09-26, all 389 non-catalog cl / `rontolisp:` / native names x counts
+    0..5, compiled through the CLI and run): of 83 public native names 81 diverged. Most failed the
+    COMPILE (`ARRAYP expects 1 argument: (ARRAYP)`, `close expects 1 argument, got 2`, `fetch
+    expects 1 or 2 arguments`); `export`/`import`/`unexport`/`use-package`/`unuse-package` with 3
+    arguments answered `T`, `make-random-state` with 2 `NIL`, `rontolisp:version` with 1 the
+    version plist; a prelude or library defun of one (`char-name`, `symbol-package`,
+    `find-class`, `macroexpand`, the component's sockets.lisp `tcp-*`) said `Function expects ...`,
+    the `&optional` surplus from inside the callee. Only `make-string-input-stream` and
+    `make-synonym-stream` agreed.
+  - A row is the counts the INTERPRETER's implementation takes, not the standard lambda list
+    (`close` takes no `:abort`): a shape wider than the implementation would hand a lowering a
+    count it cannot take. Keywords count as unbounded (`load`, `make-package`); a PAIRED row
+    (`tls-connect`, `tls-upgrade`: 2 or 4, the surplus one option pair) is the one shape a lambda
+    list cannot spell. The interpreter's direct call now reports the shape's text, so a range says
+    `at least` / `at most` where the implementation said `1 or 2` / `1 to 3` (its function value
+    still does).
+  - A library defun that implements a native built-in (`BuiltinCallArity.builtinShapedDefuns`:
+    a top-level defun of a native name whose lambda list takes exactly the row's counts, read
+    before `LambdaLists.desugarProgram`) does not keep its own call path: `Ctx.builtinShapedDefuns`
+    lets the check through `ctx.userDefunNames`, so the surplus past its `&optional` is the
+    built-in's report at the call site. `BuiltinFunctionWrappers.arityOperator` names native
+    rows too, so its own checks (a missing argument, the function-value path) say the built-in's
+    name, not `Function`. http.lisp's and HostFetchLibrary's `rontolisp:fetch` took `(url &rest
+    options)`; they take `(url &optional options)` now, the built-in's own shape.
+  - Residual: a PROGRAM's own redefinition of a native built-in with the built-in's exact shape
+    reports under the built-in's name on the compiled backends, where the interpreter's
+    `LispLambda` says `Function` for the `&optional` surplus (the compile path cannot tell a
+    library splice from the program's defun). Undefined consequences for a cl name (CLHS
+    11.1.2.1.2); `rontolisp:` names are the implementation's.
+  - Not listed: internal `%` operators (forms the expansions emit with a fixed shape; a program
+    spelling one is outside the contract) and `rontolisp:http-handler`, a compile-time directive
+    whose literal handler name the compile path requires, like `wit-export`.
+  - Front-end passes that lower a native call by its shape leave a wrong count alone for the
+    backend's check: `JsonLibrary`'s json-parse/json-stringify rewrite and `TlsPemInliner`
+    threw at compile time. `WasmAwaitAnalysis` counts an `await` with a wrong count as no suspend
+    point -- it compiles to the signal, and counting it failed the component's async state-count
+    check.
+  - Found on the way, not fixed here: a program whose only package operation is `delete-package`,
+    `shadow`, `shadowing-import` or `unintern` fails to compile (a library splice short of
+    `string<` / `%baked-packages%`), right count or wrong.
 - **Inside a compiled `eval`** (2026-09-26) the same reports hold: the runtime evaluates every
   argument form of a registered function and the spread case judges the count, `apply` is a
   catalog wrapper, an eval-built closure without a `&` marker is checked, and the operators

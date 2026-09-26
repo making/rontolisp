@@ -5084,6 +5084,34 @@ class JvmLispCompilerTest {
 				(T 3 1 T (1 2))""");
 	}
 
+	// A native built-in outside the wrapper catalog (compiler/NativeCallShapes) called
+	// with a wrong count is the same run-time report: its lowering used to fail the
+	// compile ((boundp)), answer ((export 'x p 3) was T) or, for a prelude defun, say
+	// Function -- and the surplus past a library defun's &optional tail (find-class)
+	// said so from inside the callee.
+	@Test
+	void compileAndRunADirectNativeBuiltinCallWithAWrongCountSignalsAtCallTime() throws Exception {
+		assertThat(compileAndRun("""
+				(defun nb-report (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
+				(print (nb-report (lambda () (boundp))))
+				(print (nb-report (lambda () (export 'nb-x *package* 3))))
+				(print (nb-report (lambda () (get-universal-time 1))))
+				(print (nb-report (lambda () (row-major-aref #(1)))))
+				(print (nb-report (lambda () (char-name))))
+				(print (nb-report (lambda () (find-class 'nb-x nil nil 4))))
+				(print (nb-report (lambda () (rontolisp:version 1))))
+				(print (list (boundp 'nb-unbound) (row-major-aref #(7) 0) (char-name #\\Space)))
+				""")).isEqualTo("""
+				"BOUNDP expects 1 argument, got 0"
+				"EXPORT expects at most 2 arguments, got 3"
+				"GET-UNIVERSAL-TIME expects 0 arguments, got 1"
+				"ROW-MAJOR-AREF expects 2 arguments, got 1"
+				"CHAR-NAME expects 1 argument, got 0"
+				"FIND-CLASS expects at most 3 arguments, got 4"
+				"VERSION expects 0 arguments, got 1"
+				(NIL 7 "Space")""");
+	}
+
 	// Inside a compiled eval a wrong count is the interpreter's program-error too: a
 	// registered function gets EVERY argument form evaluated and the spread dispatcher
 	// judges the count (evaluating exactly the registered arity answered (car 1 2) with
@@ -14705,10 +14733,19 @@ class JvmLispCompilerTest {
 		}
 	}
 
+	// A wrong count of a native built-in outside the wrapper catalog is the
+	// interpreter's run-time program-error, not a failed compile
+	// (compiler/NativeCallShapes).
 	@Test
-	void compileFetchRejectsWrongArgCount() {
-		assertThatThrownBy(() -> compileAndRun("(rontolisp:fetch)")).isInstanceOf(UnsupportedOperationException.class);
-		assertThatThrownBy(() -> compileAndRun("(rontolisp:await)")).isInstanceOf(UnsupportedOperationException.class);
+	void compileAndRunAWrongCountFetchOrAwaitSignalsAtCallTime() throws Exception {
+		assertThat(compileAndRun("""
+				(print (handler-case (rontolisp:fetch) (program-error (c) (princ-to-string c))))
+				(print (handler-case (rontolisp:fetch "http://x" nil 3) (program-error (c) (princ-to-string c))))
+				(print (handler-case (rontolisp:await) (program-error (c) (princ-to-string c))))
+				""")).isEqualTo("""
+				"FETCH expects at least 1 argument, got 0"
+				"FETCH expects at most 2 arguments, got 3"
+				"AWAIT expects 1 argument, got 0\"""");
 	}
 
 	// The serving round trip lives in HttpHandlerJvmTest (eval package, where the test
@@ -14926,19 +14963,26 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileTcpRejectsWrongArgCount() {
-		assertThatThrownBy(() -> compileAndRun("(rontolisp:tcp-connect \"127.0.0.1\")"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TCP-CONNECT expects 2 arguments");
-		assertThatThrownBy(() -> compileAndRun("(rontolisp:tcp-listen)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TCP-LISTEN expects 1 or 2 arguments");
-		assertThatThrownBy(() -> compileAndRun("(rontolisp:tcp-accept)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TCP-ACCEPT expects 1 arguments");
-		assertThatThrownBy(() -> compileAndRun("(rontolisp:tcp-local-port 1 2)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TCP-LOCAL-PORT expects 1 arguments");
+	void compileAndRunAWrongCountTcpCallSignalsAtCallTime() throws Exception {
+		assertThat(compileAndRun("""
+				(defun tcp-report (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
+				(print (tcp-report (lambda () (rontolisp:tcp-connect "127.0.0.1"))))
+				(print (tcp-report (lambda () (rontolisp:tcp-listen))))
+				(print (tcp-report (lambda () (rontolisp:tcp-listen 0 "127.0.0.1" 3))))
+				(print (tcp-report (lambda () (rontolisp:tcp-accept))))
+				(print (tcp-report (lambda () (rontolisp:tcp-local-port 1 2))))
+				(print (tcp-report (lambda () (rontolisp:tcp-peer-address))))
+				(print (tcp-report (lambda () (rontolisp:tcp-peer-port 1 2))))
+				(print (tcp-report (lambda () (rontolisp:tcp-local-address))))
+				""")).isEqualTo("""
+				"TCP-CONNECT expects 2 arguments, got 1"
+				"TCP-LISTEN expects at least 1 argument, got 0"
+				"TCP-LISTEN expects at most 2 arguments, got 3"
+				"TCP-ACCEPT expects 1 argument, got 0"
+				"TCP-LOCAL-PORT expects 1 argument, got 2"
+				"TCP-PEER-ADDRESS expects 1 argument, got 0"
+				"TCP-PEER-PORT expects 1 argument, got 2"
+				"TCP-LOCAL-ADDRESS expects 1 argument, got 0\"""");
 	}
 
 	@Test
@@ -14956,19 +15000,6 @@ class JvmLispCompilerTest {
 				  (close client)
 				  (close listener))
 				""")).isEqualTo("\"127.0.0.1\"\n\"127.0.0.1\"\nT\n\"127.0.0.1\"");
-	}
-
-	@Test
-	void compileTcpAddressAccessorsRejectWrongArgCount() {
-		assertThatThrownBy(() -> compileAndRun("(rontolisp:tcp-peer-address)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TCP-PEER-ADDRESS expects 1 arguments");
-		assertThatThrownBy(() -> compileAndRun("(rontolisp:tcp-peer-port 1 2)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TCP-PEER-PORT expects 1 arguments");
-		assertThatThrownBy(() -> compileAndRun("(rontolisp:tcp-local-address)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TCP-LOCAL-ADDRESS expects 1 arguments");
 	}
 
 	@Test
@@ -15147,20 +15178,25 @@ class JvmLispCompilerTest {
 		client.join();
 	}
 
+	// A wrong COUNT is the interpreter's run-time program-error; an option keyword the
+	// operator does not take stays a compile error, the keyword check being the
+	// operator's own.
 	@Test
-	void compileTlsRejectsWrongArgCount() {
-		assertThatThrownBy(() -> compileAndRun("(rontolisp:tls-connect \"127.0.0.1\")"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TLS-CONNECT expects 2 or 4 arguments");
-		assertThatThrownBy(() -> compileAndRun("(rontolisp:tls-connect \"127.0.0.1\" 443 :insecure)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TLS-CONNECT expects 2 or 4 arguments");
+	void compileTlsReportsAWrongCountAtCallTimeAndRejectsAnUnknownOption() throws Exception {
+		assertThat(compileAndRun("""
+				(defun tls-report (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
+				(print (tls-report (lambda () (rontolisp:tls-connect "127.0.0.1"))))
+				(print (tls-report (lambda () (rontolisp:tls-connect "127.0.0.1" 443 :insecure))))
+				(print (tls-report (lambda () (rontolisp:tls-listen "ks.p12" "pw"))))
+				(print (tls-report (lambda () (rontolisp:tls-upgrade 99))))
+				""")).isEqualTo("""
+				"TLS-CONNECT expects 2 or 4 arguments, got 1"
+				"TLS-CONNECT expects 2 or 4 arguments, got 3"
+				"TLS-LISTEN expects at least 3 arguments, got 2"
+				"TLS-UPGRADE expects 2 or 4 arguments, got 1\"""");
 		assertThatThrownBy(() -> compileAndRun("(rontolisp:tls-connect \"127.0.0.1\" 443 :verify t)"))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("expects :insecure");
-		assertThatThrownBy(() -> compileAndRun("(rontolisp:tls-listen \"ks.p12\" \"pw\")"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TLS-LISTEN expects 3 or 4 arguments");
 	}
 
 	@Test
@@ -15237,10 +15273,7 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileTlsUpgradeRejectsWrongArgCount() {
-		assertThatThrownBy(() -> compileAndRun("(rontolisp:tls-upgrade 99)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("TLS-UPGRADE expects 2 or 4 arguments");
+	void compileTlsUpgradeRejectsAnUnknownOption() {
 		assertThatThrownBy(() -> compileAndRun("(rontolisp:tls-upgrade 99 \"h\" :verify t)"))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("expects :insecure");
