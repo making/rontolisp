@@ -159,10 +159,30 @@ rlhttp.readResponseBody(reply, ptr, cap) -> i32  ; 0 = end, -1 = failed mid-body
   same size: 2.7 s, 1.05 GB). Before, the malformed bytes walked the compiled per-byte loop: the
   256 MiB read died after ~65 s with the GC heap exhausted, and a 16 MiB one took 6.9 s and 1.0 GB
   RSS -- the loop cost ~550 ns and ~60 heap bytes per octet (16 MiB decoded in isolation: JVM
-  5.9 s -> 0.32 s, wasm Preview 1 9.2 s -> 0.20 s, `--native` 11.3 s -> 0.20 s). The JDK backends
-  now peak far higher than `--native` on the same read -- interpreter 13 s / 7.5 GB, JVM 6.2 s /
-  4.4 GB -- because a packed octet vector is a `long[]` there, eight bytes per octet, held twice
-  (the chunks and the joined vector).
+  5.9 s -> 0.32 s, wasm Preview 1 9.2 s -> 0.20 s, `--native` 11.3 s -> 0.20 s).
+- **`read-all` on the JDK backends** (2026-09-26, same host and bodies; wall / peak RSS / live heap
+  at the peak, the last from a `jcmd GC.class_histogram` polled through the run):
+
+  | | binary body | text body |
+  | --- | --- | --- |
+  | interpreter, before | 14.8 s / 6.95 GB / 6.2 GB | 12.0 s / 6.77 GB |
+  | interpreter | 4.7 s / 2.0 GB / 1.10 GB | 3.3 s / 1.7 GB / 1.35 GB |
+  | JVM, before | 7.3 s / 4.35 GB / 3.38 GB | 5.1 s / 3.94 GB |
+  | JVM | 5.1 s / 1.8 GB / 1.32 GB | 2.1 s / 1.2 GB |
+
+  Before, an octet was a `long` on both, and the octets were two thirds of the live peak (4.3 GB of
+  `long[]` on the interpreter, the chunks and their join; 2.1 GB on the JVM, `RontoFetch`'s one
+  chunk); the rest was body-sized decode intermediates -- a `byte[]` copy, the platform decoder's
+  `CharBuffer`, a `StringBuilder`, the `String`, and on the interpreter the spined buffer
+  `String.codePoints().toArray()` grows (1.9 GB of `int[]` for an 826 MB result). Now an octet is
+  a byte ([packed-integer-vectors.md](packed-integer-vectors.md)), read-all drops its chunk list
+  once joined, and the decode writes its result once at the size it counted first. What is left
+  is the octets once plus the string: 4 bytes a character on the interpreter (a `LispString` holds
+  code points); on the JVM the `String`, the `char[]` it is transcoded into, and the Latin-1
+  attempt `String(char[])` makes and drops for a body that is not Latin-1. The binary decode is
+  branch-bound (the lenient arms over random octets): ~1 s a pass on the JVM, which counts, then
+  fills. Pinned by `ReadAllHeapBoundE2eTest` (a 32 MiB binary body in a 320 MiB serial-GC heap,
+  both backends).
 
 ## The cross-backend corpus and its known divergences
 
@@ -245,7 +265,7 @@ content-dependent corruption. The bivalent-stream alternative was rejected: it n
 primitive on four stream runtimes and a carry inside each.
 
 Per backend: `HttpSupport.BodyPump` writes one `LispIntVector` per publisher batch (interpreter);
-`RontoFetch` takes the reply with `BodyHandlers.ofByteArray()` and queues ONE `long[]{8, ...}`,
+`RontoFetch` takes the reply with `BodyHandlers.ofByteArray()` and queues ONE `byte[]{8, ...}`,
 `_drain_body` refuses a mixed stream, and `usesIntArray` is forced on by
 `usesFetch || usesHttpHandler` (JVM); the `stream<u8>` READ lift answers a packed vector
 (`_bytes_from_mem`, `.kb/wit.md`) so `%http-body-value` needs no change (`--component`);
@@ -256,9 +276,10 @@ Per backend: `HttpSupport.BodyPump` writes one `LispIntVector` per publisher bat
 applies, one Lisp definition compiled on the compile paths and mirrored natively by `Environment`
 (`LispPreludeLibraryTest` pins the two). The per-byte loop is only the FALLBACK, for a general array:
 the definition first offers the vector to the native `rontolisp::%octets-to-string-packed`, which
-decodes every packed octet vector itself -- valid UTF-8 as a platform decode on interpreter/JVM and
-one `array.copy` on wasm (500 KB body: 102 -> 2 ms wasm, 19 -> 3 ms JVM), malformed bytes by a
-native transcode of the lenient arms (`.kb/async-await.md`). **The raw copy is sound only because the
+decodes every packed octet vector itself -- one counted lenient transcode on interpreter/JVM (on
+valid UTF-8 the lenient arms answer the strict decode, so there is no strict pass), a
+validate-then-`array.copy` on wasm (500 KB body: 102 -> 2 ms), malformed bytes there by a native
+transcode of the lenient arms (`.kb/async-await.md`). **The wasm raw copy is sound only because its
 validator is STRICT** -- `_str_char_at`'s lead ranges are NOT that validator. Gates: ci-spec `read-all-decodes-an-octet-chunk-stream` (all four backends),
 `HttpHandlerTest.directiveRelaysAFetchedBodyByteExactlyAndReadAllStillDecodesIt` + its
 `HttpHandlerJvmTest` twin,

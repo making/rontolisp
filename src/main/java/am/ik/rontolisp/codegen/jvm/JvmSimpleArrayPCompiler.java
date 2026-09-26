@@ -18,8 +18,8 @@ import am.ik.jvm.Opcode;
  * <li>the QUOTE-FRAMED immutable runtime {@code String} -- always simple (a symbol shares
  * the class without the frame and is no array, so the frame is tested here exactly as
  * {@link JvmStringpCompiler} tests it);</li>
- * <li>a packed {@code long[]} / {@code double[]} / {@code float[]} -- simple by
- * construction ({@code make-array} degrades to the general shape the moment
+ * <li>a packed {@code byte[]} / {@code long[]} / {@code double[]} / {@code float[]} --
+ * simple by construction ({@code make-array} degrades to the general shape the moment
  * {@code :fill-pointer} / {@code :adjustable} / {@code :displaced-to} appears), each
  * behind the same program gate {@link JvmArraypCompiler} tests them behind;</li>
  * <li>an {@code ArrayList} -- the general array, the mutable character vector and the
@@ -70,7 +70,17 @@ final class JvmSimpleArrayPCompiler {
 		ctx.emit(Opcode.GOTO);
 		ctx.emitU2(0);
 		JvmEmitHelper.patchBranch(ctx, ifNotString, ctx.code.size());
-		// The packed vectors: simple by construction.
+		// The packed vectors: simple by construction -- the octet vector first, whose
+		// test tells it from a quantized matrix (no array) where one can exist.
+		if (ctx.usesIntArray) {
+			List<Integer> notOctets = JvmIntArrayRuntimeBuilder.emitOctetTestOnStack(ctx);
+			gotoTrue.add(ctx.code.size());
+			ctx.emit(Opcode.GOTO);
+			ctx.emitU2(0);
+			for (int pos : notOctets) {
+				JvmEmitHelper.patchBranch(ctx, pos, ctx.code.size());
+			}
+		}
 		List<String> simpleClasses = new ArrayList<>();
 		if (ctx.usesIntArray) {
 			simpleClasses.add("[J");

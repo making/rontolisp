@@ -2,7 +2,6 @@ package am.ik.rontolisp.eval;
 
 import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
-import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -27,26 +26,36 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.JavaExecutable;
+import am.ik.rontolisp.compiler.JavaKind;
+import am.ik.rontolisp.compiler.JavaOverloads;
+import am.ik.rontolisp.compiler.JavaType;
+import am.ik.rontolisp.compiler.ReflectiveJavaClasses;
 
 /**
  * Reflection bridge that exposes arbitrary Java APIs (Swing, AWT, ...) to the rontolisp
  * interpreter. It marshals between Lisp values and Java objects, resolves overloaded
- * constructors/methods <em>deterministically</em> (by a per-argument conversion cost, so
- * an integer prefers an {@code int} overload over a {@code long}/{@code double} one, with
- * ties broken by a stable signature key rather than by reflection ordering), turns Lisp
- * callables into Java interface instances via {@link Proxy}, bridges proper lists and
- * rank-1 vectors to Java arrays / {@code java.util.List} parameters (packing varargs
- * tails), and returns Java array results as Lisp lists.
+ * constructors/methods by THE shared rule ({@link JavaOverloads}: a per-argument
+ * conversion cost, ties broken by a stable signature key rather than by reflection
+ * ordering), turns Lisp callables into Java interface instances via {@link Proxy},
+ * bridges proper lists and rank-1 vectors to Java arrays / {@code java.util.List}
+ * parameters (packing varargs tails), and returns Java array results as Lisp lists.
+ * <p>
+ * A member designator may carry a parameter tag ({@code "max(long,long)"},
+ * {@code "java.lang.StringBuilder(int)"}) that narrows the candidates. A site the
+ * interpreter resolved before running it ({@code compiler.JavaSiteResolver}) arrives here
+ * as its static class and its fully tagged designator ({@link #callInstanceAs}); the
+ * member it names is the one chosen, and the compiled program's bridge receives the very
+ * same request.
  * <p>
  * This is the interpreter side of the bridge: the wrapped objects are
  * {@link LispJavaObject}s, and the reflection relies on classes (and their members) being
  * registered for reflection at runtime -- a GraalVM native image carries none for
  * interop, so interpreting {@code java:} works only under {@code java -jar
  * rontolisp.jar}. The JVM compiler supports the same five functions through its own
- * rewrite of this class against the compiled value representation
- * ({@code codegen.jvm.JavaBridgeTemplate}) -- keep the marshalling rules and overload
- * costs of the two in sync. The WASM backend cannot lower host references and rejects
- * {@code java:} forms.
+ * rewrite of the run-time half against the compiled value representation
+ * ({@code codegen.jvm.JavaBridgeTemplate}) -- keep the marshalling rules of the two in
+ * sync. The WASM backend cannot lower host references and rejects {@code java:} forms.
  */
 final class JavaInterop {
 
@@ -60,85 +69,35 @@ final class JavaInterop {
 
 	}
 
-	// Conversion cost of a single argument against a parameter type: lower is a better
-	// (more specific, less lossy) match. The selected overload minimizes the total.
-	private static final int COST_EXACT = 0; // ideal target (int<-integer,
-												// String<-string)
+	private static final ReflectiveJavaClasses CLASSES = ReflectiveJavaClasses.instance();
 
-	private static final int COST_WIDEN = 1; // lossless widening (int->long,
-												// float->double)
+	private static final int NO_MATCH = JavaOverloads.NO_MATCH;
 
-	private static final int COST_CONVERT = 2; // representable but less ideal
-												// (integer->double)
-
-	private static final int COST_NARROW = 4; // narrowing/lossy (integer->short/byte,
-												// string->char)
-
-	private static final int COST_BOXED = 6; // boxed/Object/Number/super-type target
-
-	private static final int COST_PROXY = 8; // a Lisp callable adapted to an interface
-
-	private static final int COST_VARARGS = 10; // flat penalty for packing a varargs
-												// tail, so a fixed-arity overload wins
-
-	private static final int NO_MATCH = -1; // this argument cannot become this type
-
-	// Resolution caches. Reflection lookups (Class.forName, getMethods, getField) and the
-	// cost-based overload selection dominate a java: call, so each is remembered. The
-	// chosen overload is keyed by (class, member, argument kinds): a kind is the smallest
-	// token of which every marshal() cost is a pure function, so the memoized choice is
-	// the one select() would make again. Lists and vectors are element-dependent and
-	// have no kind; a call passing one is resolved every time. Kinds are canonical (a
-	// KIND_ constant or a Class), so a member's remembered choices are scanned by
-	// identity. Mirrored in codegen.jvm.JavaBridgeTemplate.
+	// The overload chosen for (class, member designator, argument kinds), remembered: a
+	// kind is the smallest token of which every marshal() cost is a pure function, so
+	// the memoized choice is the one select() would make again. Lists and vectors are
+	// element-dependent and have no kind; a call passing one is resolved every time.
+	// Kinds are canonical (a JavaKind.Lisp constant or a canonical JavaType), so a
+	// member's remembered choices are scanned by identity. Mirrored in
+	// codegen.jvm.JavaBridgeTemplate.
 	private static final int CACHE_LIMIT = 4096; // a full cache is cleared, never grown
 
 	private static final int CHOICES_PER_MEMBER = 16; // a full member starts over
 
 	private static final String CONSTRUCTOR = "<init>"; // member key of a constructor
 
-	private static final ConcurrentHashMap<String, Class<?>> CLASSES = new ConcurrentHashMap<>();
-
-	private static final ConcurrentHashMap<Class<?>, List<Constructor<?>>> CONSTRUCTORS = new ConcurrentHashMap<>();
-
-	private static final ConcurrentHashMap<List<Object>, List<Method>> METHODS = new ConcurrentHashMap<>();
-
-	private static final ConcurrentHashMap<List<Object>, Field> FIELDS = new ConcurrentHashMap<>();
-
 	private static final ConcurrentHashMap<Class<?>, ConcurrentHashMap<String, Memo[]>> CHOICES = new ConcurrentHashMap<>();
 
-	// Argument kinds that are not a host object's class (a host object's kind is its
-	// exact class, which isInstance/== costs depend on).
-	private static final String KIND_NIL = "nil";
-
-	private static final String KIND_T = "t";
-
-	private static final String KIND_INTEGER = "integer";
-
-	private static final String KIND_FLOAT = "float";
-
-	private static final String KIND_STRING_1 = "string/1"; // may narrow to char
-
-	private static final String KIND_STRING = "string";
-
-	private static final String KIND_CHAR = "char"; // BMP: fits a Java char
-
-	private static final String KIND_SUPPLEMENTARY_CHAR = "char/supplementary";
-
-	private static final String KIND_FUNCTION = "function";
+	// Parsed member designators: a tag is parsed once, not per call.
+	private static final ConcurrentHashMap<String, JavaOverloads.Member> MEMBERS = new ConcurrentHashMap<>();
 
 	private JavaInterop() {
 	}
 
-	// An overload chosen by select(): the executable, its parameter types, and whether
-	// the trailing arguments are packed into its varargs array.
-	private record Overload(Executable executable, Class<?>[] params, boolean packed) {
-	}
-
 	// The overload select() chose for these argument kinds.
-	private record Memo(Object[] kinds, Overload overload) {
+	private record Memo(JavaKind[] kinds, JavaOverloads.Overload overload) {
 
-		boolean matches(Object[] argumentKinds) {
+		boolean matches(JavaKind[] argumentKinds) {
 			if (this.kinds.length != argumentKinds.length) {
 				return false;
 			}
@@ -152,27 +111,25 @@ final class JavaInterop {
 
 	}
 
-	// The cost of passing argument `index` where `target` is expected, or NO_MATCH.
-	@FunctionalInterface
-	private interface ArgumentCost {
-
-		int cost(int index, Class<?> target);
-
-	}
-
-	static LispVal newInstance(String className, List<LispVal> args, Caller caller) {
-		Class<?> cls = loadClass(className);
-		Overload overload = resolve(cls, CONSTRUCTOR, () -> constructors(cls), args, caller);
+	static LispVal newInstance(String classDesignator, List<LispVal> args, Caller caller) {
+		boolean tagged = isTagged(classDesignator);
+		String name = tagged ? member(classDesignator).name() : classDesignator;
+		ReflectiveJavaClasses.Type type = loadClass(name);
+		// A tagged java:new is remembered under its designator, which no method name can
+		// spell, so it never answers an untagged one's choice.
+		JavaOverloads.Overload overload = resolve(type, tagged ? classDesignator : CONSTRUCTOR,
+				() -> JavaOverloads.filterByTag(type.constructors(), tagged ? member(classDesignator).tag() : null),
+				args, caller);
 		if (overload == null) {
 			throw new LispEvalException(
-					"No matching constructor for " + className + " with " + args.size() + " argument(s)");
+					"No matching constructor for " + classDesignator + " with " + args.size() + " argument(s)");
 		}
 		try {
-			Constructor<?> constructor = (Constructor<?>) overload.executable();
+			Constructor<?> constructor = (Constructor<?>) executable(overload);
 			return unmarshal(constructor.newInstance(marshalArguments(overload, args, caller)));
 		}
 		catch (ReflectiveOperationException ex) {
-			throw fail("constructing " + className, ex);
+			throw fail("constructing " + name, ex);
 		}
 	}
 
@@ -180,56 +137,107 @@ final class JavaInterop {
 		if (!(target instanceof LispJavaObject obj)) {
 			throw new LispEvalException("java:call expects a java object as the first argument, got " + target.print());
 		}
-		return invoke(obj.ref().getClass(), obj.ref(), methodName, args, caller);
+		return invoke(ReflectiveJavaClasses.of(obj.ref().getClass()), obj.ref(), methodName, args, caller);
+	}
+
+	/**
+	 * A {@code java:call} whose receiver is statically typed: the method is resolved
+	 * among the members of {@code className} -- for a resolved site, the one its fully
+	 * tagged designator names -- and the receiver must be an instance of it.
+	 */
+	static LispVal callInstanceAs(String className, LispVal target, String methodName, List<LispVal> args,
+			Caller caller) {
+		if (!(target instanceof LispJavaObject obj)) {
+			throw new LispEvalException("java:call expects a java object as the first argument, got " + target.print());
+		}
+		ReflectiveJavaClasses.Type type = loadClass(className);
+		if (!type.type().isInstance(obj.ref())) {
+			throw new LispEvalException("java:call: the receiver is not a " + className + ", got " + target.print());
+		}
+		return invoke(type, obj.ref(), methodName, args, caller);
 	}
 
 	static LispVal callStatic(String className, String methodName, List<LispVal> args, Caller caller) {
 		return invoke(loadClass(className), null, methodName, args, caller);
 	}
 
-	private static LispVal invoke(Class<?> cls, @Nullable Object receiver, String methodName, List<LispVal> args,
-			Caller caller) {
-		Overload overload = resolve(cls, methodName, () -> methods(cls, methodName), args, caller);
+	private static LispVal invoke(ReflectiveJavaClasses.Type type, @Nullable Object receiver, String methodName,
+			List<LispVal> args, Caller caller) {
+		// The designator is parsed only when the candidates are needed: a remembered
+		// choice is found by the designator as written.
+		JavaOverloads.Overload overload = resolve(type, methodName, () -> {
+			if (!isTagged(methodName)) {
+				return type.methods(methodName);
+			}
+			JavaOverloads.Member member = member(methodName);
+			return JavaOverloads.filterByTag(type.methods(member.name()), member.tag());
+		}, args, caller);
 		if (overload == null) {
 			throw new LispEvalException(
-					"No matching method " + cls.getName() + "." + methodName + " with " + args.size() + " argument(s)");
+					"No matching method " + type.name() + "." + methodName + " with " + args.size() + " argument(s)");
 		}
 		try {
-			Method method = (Method) overload.executable();
+			Method method = (Method) executable(overload);
 			return unmarshal(method.invoke(receiver, marshalArguments(overload, args, caller)));
 		}
 		catch (ReflectiveOperationException ex) {
-			throw fail("calling " + cls.getName() + "." + methodName, ex);
+			throw fail("calling " + type.name() + "." + overload.executable().name(), ex);
 		}
 	}
 
-	// The overload of `member` on `cls` for these arguments: the one remembered for their
-	// kinds, otherwise select() over the candidates by argument kind (and remembered).
-	// A list or vector has no kind: such a call is costed by marshalling its arguments
-	// and never remembered.
-	private static @Nullable Overload resolve(Class<?> cls, String member,
-			Supplier<? extends List<? extends Executable>> candidates, List<LispVal> args, Caller caller) {
-		Object[] kinds = kindsOf(args);
+	// Whether a designator carries a parameter tag (or a stray parenthesis parseMember
+	// reports): the untagged common case is never looked up in MEMBERS.
+	private static boolean isTagged(String designator) {
+		return designator.indexOf('(') >= 0 || designator.indexOf(')') >= 0;
+	}
+
+	private static JavaOverloads.Member member(String designator) {
+		JavaOverloads.Member cached = MEMBERS.get(designator);
+		if (cached == null) {
+			try {
+				cached = JavaOverloads.parseMember(designator);
+			}
+			catch (IllegalArgumentException ex) {
+				throw new LispEvalException(String.valueOf(ex.getMessage()));
+			}
+			remember(MEMBERS, designator, cached);
+		}
+		return cached;
+	}
+
+	private static java.lang.reflect.Executable executable(JavaOverloads.Overload overload) {
+		return ((ReflectiveJavaClasses.Member) overload.executable()).executable();
+	}
+
+	// The overload of `member` on `type` for these arguments: the one remembered for
+	// their kinds, otherwise select() over the candidates by argument kind (and
+	// remembered). A list or vector has no kind: such a call is costed by marshalling its
+	// arguments and never remembered.
+	private static JavaOverloads.@Nullable Overload resolve(ReflectiveJavaClasses.Type type, String member,
+			Supplier<? extends List<? extends JavaExecutable>> candidates, List<LispVal> args, Caller caller) {
+		JavaKind[] kinds = kindsOf(args);
 		if (kinds == null) {
 			@Nullable Object[] slot = new @Nullable Object[1];
-			return select(candidates.get(), args.size(), (i, target) -> marshal(args.get(i), target, caller, slot, 0));
+			return JavaOverloads.select(candidates.get(), args.size(),
+					(i, target) -> marshal(args.get(i), target, caller, slot, 0));
 		}
-		Overload remembered = remembered(cls, member, kinds);
+		JavaOverloads.Overload remembered = remembered(type.type(), member, kinds);
 		if (remembered != null) {
 			return remembered;
 		}
-		Overload chosen = select(candidates.get(), kinds.length, (i, target) -> kindCost(kinds[i], target));
+		JavaOverloads.Overload chosen = JavaOverloads.select(candidates.get(), kinds.length,
+				(i, target) -> JavaOverloads.kindCost(kinds[i], target, CLASSES));
 		if (chosen != null) {
-			rememberChoice(cls, member, new Memo(kinds, chosen));
+			rememberChoice(type.type(), member, new Memo(kinds, chosen));
 		}
 		return chosen;
 	}
 
 	// The kind of every argument, or null when one has none.
-	private static Object @Nullable [] kindsOf(List<LispVal> args) {
-		Object[] kinds = new Object[args.size()];
+	private static JavaKind @Nullable [] kindsOf(List<LispVal> args) {
+		JavaKind[] kinds = new JavaKind[args.size()];
 		for (int i = 0; i < kinds.length; i++) {
-			Object kind = kindOf(args.get(i));
+			JavaKind kind = kindOf(args.get(i));
 			if (kind == null) {
 				return null;
 			}
@@ -238,7 +246,7 @@ final class JavaInterop {
 		return kinds;
 	}
 
-	private static @Nullable Overload remembered(Class<?> cls, String member, Object[] kinds) {
+	private static JavaOverloads.@Nullable Overload remembered(Class<?> cls, String member, JavaKind[] kinds) {
 		ConcurrentHashMap<String, Memo[]> members = CHOICES.get(cls);
 		Memo[] memos = members == null ? null : members.get(member);
 		if (memos != null) {
@@ -273,57 +281,20 @@ final class JavaInterop {
 	// The token of which marshal(value, target) is a pure function for every target, or
 	// null when there is none: a list or vector (the cost sums its elements), and the
 	// values marshal() never bridges (they never match, so nothing is remembered).
-	private static @Nullable Object kindOf(LispVal value) {
+	private static @Nullable JavaKind kindOf(LispVal value) {
 		return switch (value) {
-			case LispNil ignored -> KIND_NIL;
-			case LispTrue ignored -> KIND_T;
-			case LispInteger ignored -> KIND_INTEGER;
-			case LispDouble ignored -> KIND_FLOAT;
-			case LispString s -> s.value().length() == 1 ? KIND_STRING_1 : KIND_STRING;
-			case LispChar c -> Character.isBmpCodePoint(c.codePoint()) ? KIND_CHAR : KIND_SUPPLEMENTARY_CHAR;
-			case LispJavaObject obj -> obj.ref().getClass();
-			case LispLambda ignored -> KIND_FUNCTION;
-			case LispFunction ignored -> KIND_FUNCTION;
+			case LispNil ignored -> JavaKind.Lisp.NIL;
+			case LispTrue ignored -> JavaKind.Lisp.T;
+			case LispInteger ignored -> JavaKind.Lisp.INTEGER;
+			case LispDouble ignored -> JavaKind.Lisp.FLOAT;
+			case LispString s -> s.value().length() == 1 ? JavaKind.Lisp.STRING_1 : JavaKind.Lisp.STRING;
+			case LispChar c ->
+				Character.isBmpCodePoint(c.codePoint()) ? JavaKind.Lisp.CHAR : JavaKind.Lisp.SUPPLEMENTARY_CHAR;
+			case LispJavaObject obj -> ReflectiveJavaClasses.of(obj.ref().getClass());
+			case LispLambda ignored -> JavaKind.Lisp.FUNCTION;
+			case LispFunction ignored -> JavaKind.Lisp.FUNCTION;
 			default -> null;
 		};
-	}
-
-	private static List<Constructor<?>> constructors(Class<?> cls) {
-		List<Constructor<?>> cached = CONSTRUCTORS.get(cls);
-		if (cached == null) {
-			cached = List.of(cls.getConstructors());
-			remember(CONSTRUCTORS, cls, cached);
-		}
-		return cached;
-	}
-
-	private static List<Method> methods(Class<?> cls, String methodName) {
-		List<Object> key = List.of(cls, methodName);
-		List<Method> cached = METHODS.get(key);
-		if (cached == null) {
-			List<Method> candidates = new ArrayList<>();
-			for (Method method : cls.getMethods()) {
-				if (method.getName().equals(methodName)) {
-					Method accessible = accessibleMethod(method);
-					if (accessible != null) {
-						candidates.add(accessible);
-					}
-				}
-			}
-			cached = List.copyOf(candidates);
-			remember(METHODS, key, cached);
-		}
-		return cached;
-	}
-
-	private static Field publicField(Class<?> cls, String fieldName) throws NoSuchFieldException {
-		List<Object> key = List.of(cls, fieldName);
-		Field cached = FIELDS.get(key);
-		if (cached == null) {
-			cached = cls.getField(fieldName);
-			remember(FIELDS, key, cached);
-		}
-		return cached;
 	}
 
 	private static <K, V> void remember(ConcurrentHashMap<K, V> cache, K key, V value) {
@@ -333,152 +304,18 @@ final class JavaInterop {
 		cache.put(key, value);
 	}
 
-	// A public method declared in a non-exported/non-public class (e.g. the List.of
-	// result type java.util.ImmutableCollections$ListN) cannot be invoked reflectively;
-	// re-resolve it to the same method on an accessible superclass or interface
-	// (List.size() instead of ImmutableCollections$ListN.size()).
-	private static @Nullable Method accessibleMethod(Method method) {
-		if (method.trySetAccessible()) {
-			return method;
-		}
-		for (Class<?> c = method.getDeclaringClass(); c != null; c = c.getSuperclass()) {
-			Method onInterface = accessibleOnInterfaces(c, method);
-			if (onInterface != null) {
-				return onInterface;
-			}
-			if (c != method.getDeclaringClass()) {
-				Method declared = accessibleDeclaration(c, method);
-				if (declared != null) {
-					return declared;
-				}
-			}
-		}
-		return null;
-	}
-
-	private static @Nullable Method accessibleOnInterfaces(Class<?> cls, Method method) {
-		for (Class<?> iface : cls.getInterfaces()) {
-			Method declared = accessibleDeclaration(iface, method);
-			if (declared != null) {
-				return declared;
-			}
-			Method nested = accessibleOnInterfaces(iface, method);
-			if (nested != null) {
-				return nested;
-			}
-		}
-		return null;
-	}
-
-	private static @Nullable Method accessibleDeclaration(Class<?> cls, Method method) {
-		try {
-			Method declared = cls.getMethod(method.getName(), method.getParameterTypes());
-			return declared.trySetAccessible() ? declared : null;
-		}
-		catch (NoSuchMethodException ex) {
-			return null;
-		}
-	}
-
-	// Picks the overload whose arguments convert at the lowest total cost; ties are
-	// broken by the parameter-type signature so the result never depends on the
-	// (unspecified) order getMethods()/getConstructors() returns. A varargs executable
-	// is tried both as-is (the last argument supplying the array itself) and with the
-	// trailing arguments packed into the varargs array (at a flat extra cost, so a
-	// fixed-arity interpretation is preferred). A pure function of the candidates and
-	// the argument costs: over kindCost of argument kinds it needs no argument value.
-	private static @Nullable Overload select(List<? extends Executable> candidates, int argc, ArgumentCost cost) {
-		Overload best = null;
-		int bestCost = 0;
-		for (Executable e : candidates) {
-			Class<?>[] params = e.getParameterTypes();
-			int fixedCost = fixedArityCost(params, argc, cost);
-			if (fixedCost != NO_MATCH) {
-				Overload fixed = new Overload(e, params, false);
-				if (best == null || beats(fixed, fixedCost, best, bestCost)) {
-					best = fixed;
-					bestCost = fixedCost;
-				}
-			}
-			if (e.isVarArgs()) {
-				int packedCost = varargsCost(params, argc, cost);
-				if (packedCost != NO_MATCH) {
-					Overload packed = new Overload(e, params, true);
-					if (best == null || beats(packed, packedCost, best, bestCost)) {
-						best = packed;
-						bestCost = packedCost;
-					}
-				}
-			}
-		}
-		return best;
-	}
-
-	private static boolean beats(Overload a, int costA, Overload b, int costB) {
-		return costA < costB || (costA == costB && signatureOf(a).compareTo(signatureOf(b)) < 0);
-	}
-
-	private static int fixedArityCost(Class<?>[] params, int argc, ArgumentCost cost) {
-		if (params.length != argc) {
-			return NO_MATCH;
-		}
-		int total = 0;
-		for (int i = 0; i < params.length; i++) {
-			int c = cost.cost(i, params[i]);
-			if (c == NO_MATCH) {
-				return NO_MATCH;
-			}
-			total += c;
-		}
-		return total;
-	}
-
-	private static int varargsCost(Class<?>[] params, int argc, ArgumentCost cost) {
-		int fixed = params.length - 1;
-		if (argc < fixed) {
-			return NO_MATCH;
-		}
-		int total = COST_VARARGS;
-		for (int i = 0; i < fixed; i++) {
-			int c = cost.cost(i, params[i]);
-			if (c == NO_MATCH) {
-				return NO_MATCH;
-			}
-			total += c;
-		}
-		Class<?> component = params[fixed].getComponentType();
-		for (int i = fixed; i < argc; i++) {
-			int c = cost.cost(i, component);
-			if (c == NO_MATCH) {
-				return NO_MATCH;
-			}
-			total += c;
-		}
-		return total;
-	}
-
-	// The tie-break key: the parameter-type names, with a "*" that keeps a packed varargs
-	// interpretation distinct from the same method's fixed-arity one, so the tie-break
-	// stays a total order. Built only on a cost tie.
-	private static String signatureOf(Overload overload) {
-		StringBuilder sb = new StringBuilder();
-		for (Class<?> p : overload.params()) {
-			sb.append(p.getName()).append(',');
-		}
-		return overload.packed() ? sb.append('*').toString() : sb.toString();
-	}
-
 	// The Java arguments for the chosen overload, packing a varargs tail.
-	private static @Nullable Object[] marshalArguments(Overload overload, List<LispVal> args, Caller caller) {
-		Class<?>[] params = overload.params();
-		@Nullable Object[] out = new @Nullable Object[params.length];
-		int fixed = overload.packed() ? params.length - 1 : params.length;
+	private static @Nullable Object[] marshalArguments(JavaOverloads.Overload overload, List<LispVal> args,
+			Caller caller) {
+		List<? extends JavaType> params = overload.executable().parameterTypes();
+		@Nullable Object[] out = new @Nullable Object[params.size()];
+		int fixed = overload.packed() ? params.size() - 1 : params.size();
 		for (int i = 0; i < fixed; i++) {
-			marshalSelected(args.get(i), params[i], caller, out, i);
+			marshalSelected(args.get(i), params.get(i), caller, out, i);
 		}
 		if (overload.packed()) {
-			Class<?> component = params[fixed].getComponentType();
-			Object packed = Array.newInstance(component, args.size() - fixed);
+			JavaType component = java.util.Objects.requireNonNull(params.get(fixed).componentType());
+			Object packed = Array.newInstance(classOf(component), args.size() - fixed);
 			@Nullable Object[] slot = new @Nullable Object[1];
 			for (int i = fixed; i < args.size(); i++) {
 				marshalSelected(args.get(i), component, caller, slot, 0);
@@ -489,12 +326,17 @@ final class JavaInterop {
 		return out;
 	}
 
-	// select() costed this argument against this type, so it converts.
-	private static void marshalSelected(LispVal value, Class<?> target, Caller caller, @Nullable Object[] out,
+	// select() costed this argument against this type, so it converts -- unless a
+	// statically resolved site met a value its declaration did not promise.
+	private static void marshalSelected(LispVal value, JavaType target, Caller caller, @Nullable Object[] out,
 			int index) {
 		if (marshal(value, target, caller, out, index) == NO_MATCH) {
 			throw new IllegalStateException("java interop: the selected overload rejects " + value.print());
 		}
+	}
+
+	private static Class<?> classOf(JavaType type) {
+		return ((ReflectiveJavaClasses.Type) type).type();
 	}
 
 	// (java:field "class.Name" "CONSTANT") -> static field; (java:field obj "name") ->
@@ -506,7 +348,7 @@ final class JavaInterop {
 				return unmarshal(field.get(null));
 			}
 			if (classOrObject instanceof LispJavaObject obj) {
-				Field field = publicField(obj.ref().getClass(), fieldName);
+				Field field = publicField(ReflectiveJavaClasses.of(obj.ref().getClass()), fieldName);
 				return unmarshal(field.get(obj.ref()));
 			}
 			throw new LispEvalException(
@@ -517,11 +359,40 @@ final class JavaInterop {
 		}
 	}
 
+	/**
+	 * A {@code java:field} whose object is statically typed: the field is looked up on
+	 * {@code className}, and the object must be an instance of it.
+	 */
+	static LispVal fieldAs(String className, LispVal object, String fieldName) {
+		if (!(object instanceof LispJavaObject obj)) {
+			throw new LispEvalException(
+					"java:field expects a class-name string or a java object, got " + object.print());
+		}
+		ReflectiveJavaClasses.Type type = loadClass(className);
+		if (!type.type().isInstance(obj.ref())) {
+			throw new LispEvalException("java:field: the object is not a " + className + ", got " + object.print());
+		}
+		try {
+			return unmarshal(publicField(type, fieldName).get(obj.ref()));
+		}
+		catch (ReflectiveOperationException ex) {
+			throw fail("reading field " + fieldName, ex);
+		}
+	}
+
+	private static Field publicField(ReflectiveJavaClasses.Type type, String fieldName) throws NoSuchFieldException {
+		ReflectiveJavaClasses.FieldMember field = type.field(fieldName);
+		if (field == null) {
+			throw new NoSuchFieldException(fieldName);
+		}
+		return field.field();
+	}
+
 	// (java:proxy "fully.qualified.Interface" callable): the callable is applied as
 	// (callable method-name arg1 arg2 ...) for every interface method; Object methods
 	// (equals/hashCode/toString) keep identity behavior.
 	static LispVal proxy(String interfaceName, LispVal callable, Caller caller) {
-		Class<?> iface = loadClass(interfaceName);
+		Class<?> iface = loadClass(interfaceName).type();
 		if (!iface.isInterface()) {
 			throw new LispEvalException("java:proxy expects an interface, got " + interfaceName);
 		}
@@ -553,7 +424,7 @@ final class JavaInterop {
 						return null;
 					}
 					@Nullable Object[] slot = new @Nullable Object[1];
-					if (marshal(result, ret, caller, slot, 0) == NO_MATCH) {
+					if (marshal(result, ReflectiveJavaClasses.of(ret), caller, slot, 0) == NO_MATCH) {
 						throw new LispEvalException("java:proxy: cannot return " + result.print() + " as " + ret
 								+ " from " + interfaceName);
 					}
@@ -566,12 +437,12 @@ final class JavaInterop {
 	// returns its conversion cost, or NO_MATCH (writing nothing) if it cannot convert. A
 	// value with a kind is costed by kindCost -- the one cost table -- and converted by
 	// convert(); a list or vector element-wise.
-	private static int marshal(LispVal value, Class<?> target, Caller caller, @Nullable Object[] out, int index) {
-		Object kind = kindOf(value);
+	private static int marshal(LispVal value, JavaType target, Caller caller, @Nullable Object[] out, int index) {
+		JavaKind kind = kindOf(value);
 		if (kind != null) {
-			int cost = kindCost(kind, target);
+			int cost = JavaOverloads.kindCost(kind, target, CLASSES);
 			if (cost != NO_MATCH) {
-				out[index] = convert(value, target, caller);
+				out[index] = convert(value, classOf(target), caller);
 			}
 			return cost;
 		}
@@ -600,99 +471,6 @@ final class JavaInterop {
 				return NO_MATCH; // symbol, hash-table, ... are not bridged
 			}
 		}
-	}
-
-	// The conversion cost of a value of `kind` where `target` is expected, or NO_MATCH.
-	// Pure: it reads no value, so overload selection over kinds needs none.
-	private static int kindCost(Object kind, Class<?> target) {
-		if (kind instanceof Class<?> host) { // a host object's exact class
-			if (!target.isAssignableFrom(host)) {
-				return NO_MATCH;
-			}
-			return target == host ? COST_EXACT : COST_WIDEN;
-		}
-		return switch ((String) kind) {
-			case KIND_NIL -> {
-				if (target == boolean.class) {
-					yield COST_EXACT;
-				}
-				// nil carries no type, so any reference target ties
-				yield target.isPrimitive() ? NO_MATCH : COST_BOXED;
-			}
-			case KIND_T -> {
-				if (target == boolean.class) {
-					yield COST_EXACT;
-				}
-				if (target == Boolean.class) {
-					yield COST_WIDEN;
-				}
-				yield target.isAssignableFrom(Boolean.class) ? COST_BOXED : NO_MATCH;
-			}
-			case KIND_INTEGER -> integerCost(target);
-			case KIND_FLOAT -> floatCost(target);
-			case KIND_STRING, KIND_STRING_1 -> {
-				if (target.isAssignableFrom(String.class)) {
-					yield target == String.class ? COST_EXACT : COST_BOXED;
-				}
-				// Only a one-character string narrows to a char.
-				yield KIND_STRING_1.equals(kind) && (target == char.class || target == Character.class) ? COST_NARROW
-						: NO_MATCH;
-			}
-			case KIND_CHAR, KIND_SUPPLEMENTARY_CHAR -> {
-				// A supplementary code point cannot fit a single Java char, so the
-				// char/Character overload is refused for it rather than truncated.
-				if (KIND_CHAR.equals(kind) && (target == char.class || target == Character.class
-						|| target.isAssignableFrom(Character.class))) {
-					yield target == char.class ? COST_EXACT : (target == Character.class ? COST_WIDEN : COST_BOXED);
-				}
-				// int / Integer accept the raw code point (including supplementary
-				// values).
-				if (target == int.class || target == Integer.class) {
-					yield COST_WIDEN;
-				}
-				yield target.isAssignableFrom(Integer.class) ? COST_BOXED : NO_MATCH;
-			}
-			// A Lisp callable passed where an interface is expected is auto-wrapped in
-			// a proxy.
-			case KIND_FUNCTION -> target.isInterface() ? COST_PROXY : NO_MATCH;
-			default -> throw new IllegalArgumentException("unknown argument kind " + kind);
-		};
-	}
-
-	private static int integerCost(Class<?> target) {
-		if (target == int.class) {
-			return COST_EXACT;
-		}
-		if (target == Integer.class || target == long.class || target == Long.class) {
-			return COST_WIDEN;
-		}
-		if (target == double.class || target == Double.class || target == float.class || target == Float.class) {
-			return COST_CONVERT;
-		}
-		if (target == short.class || target == Short.class || target == byte.class || target == Byte.class) {
-			return COST_NARROW;
-		}
-		if (target == Object.class || target == Number.class || target.isAssignableFrom(Long.class)
-				|| target.isAssignableFrom(Integer.class)) {
-			return COST_BOXED;
-		}
-		return NO_MATCH;
-	}
-
-	private static int floatCost(Class<?> target) {
-		if (target == double.class) {
-			return COST_EXACT;
-		}
-		if (target == Double.class) {
-			return COST_WIDEN;
-		}
-		if (target == float.class || target == Float.class) {
-			return COST_NARROW;
-		}
-		if (target == Object.class || target == Number.class || target.isAssignableFrom(Double.class)) {
-			return COST_BOXED;
-		}
-		return NO_MATCH;
 	}
 
 	// The Java value of a value with a kind, for a target kindCost accepted.
@@ -746,13 +524,13 @@ final class JavaInterop {
 	// component type, recursively) or, for any List-compatible reference target, to a
 	// java.util.List of boxed elements. The per-element costs count toward the total so
 	// string elements still prefer a String[] parameter over Object[].
-	private static int marshalSequence(List<LispVal> elements, Class<?> target, Caller caller, @Nullable Object[] out,
+	private static int marshalSequence(List<LispVal> elements, JavaType target, Caller caller, @Nullable Object[] out,
 			int index) {
 		@Nullable Object[] slot = new @Nullable Object[1];
-		if (target.isArray()) {
-			Class<?> component = target.getComponentType();
-			Object array = Array.newInstance(component, elements.size());
-			int total = COST_CONVERT;
+		JavaType component = target.componentType();
+		if (component != null) {
+			Object array = Array.newInstance(classOf(component), elements.size());
+			int total = JavaOverloads.COST_CONVERT;
 			for (int i = 0; i < elements.size(); i++) {
 				int cost = marshal(elements.get(i), component, caller, slot, 0);
 				if (cost == NO_MATCH) {
@@ -764,11 +542,12 @@ final class JavaInterop {
 			out[index] = array;
 			return total;
 		}
-		if (target.isAssignableFrom(ArrayList.class)) {
+		if (classOf(target).isAssignableFrom(ArrayList.class)) {
 			List<@Nullable Object> list = new ArrayList<>(elements.size());
-			int total = COST_BOXED;
+			int total = JavaOverloads.COST_BOXED;
+			JavaType object = ReflectiveJavaClasses.of(Object.class);
 			for (LispVal element : elements) {
-				int cost = marshal(element, Object.class, caller, slot, 0);
+				int cost = marshal(element, object, caller, slot, 0);
 				if (cost == NO_MATCH) {
 					return NO_MATCH;
 				}
@@ -817,19 +596,12 @@ final class JavaInterop {
 		return result;
 	}
 
-	private static Class<?> loadClass(String name) {
-		Class<?> cached = CLASSES.get(name);
-		if (cached != null) {
-			return cached;
-		}
-		try {
-			Class<?> cls = Class.forName(name);
-			remember(CLASSES, name, cls);
-			return cls;
-		}
-		catch (ClassNotFoundException ex) {
+	private static ReflectiveJavaClasses.Type loadClass(String name) {
+		ReflectiveJavaClasses.Type type = CLASSES.find(name);
+		if (type == null || type.isPrimitive() || type.isArray()) {
 			throw new LispEvalException("No such class: " + name);
 		}
+		return type;
 	}
 
 	private static LispEvalException fail(String what, ReflectiveOperationException ex) {

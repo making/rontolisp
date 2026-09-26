@@ -49,7 +49,7 @@ final class LiteralArrays {
 				case LispDoubleFloatArray fa -> new LispDoubleFloatArray(fa.data().clone(), fa.dims().clone());
 				case LispBFloat16Array fa -> new LispBFloat16Array(fa.data().clone(), fa.dims().clone());
 			};
-			case LispIntVector iv -> new LispIntVector(iv.width(), iv.data().clone());
+			case LispIntVector iv -> iv.copy();
 			default -> datum;
 		};
 	}

@@ -175,12 +175,12 @@ final class JvmHttpHandlerRuntimeBuilder {
 								PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, ClackEnv.NORMALIZE_RESPONSE))),
 						unaryDesc));
 		// The request body crosses as OCTETS -- RontoHttpClack.bodyOctets answers
-		// the packed long[] vector -- for both :raw-body modes: the buffered Gray stream
+		// the packed byte[] vector -- for both :raw-body modes: the buffered Gray stream
 		// is a byte stream and stores them as they are (encoding a decoded body doubled
 		// every octet >= #x80 of a binary POST), and the default asynchronous stream is
 		// an octet stream on every backend, one settled chunk here.
 		MethodrefConstant bodyOctets = cp.addMethodref(runtimeClass,
-				cp.addNameAndType(cp.addUtf8("bodyOctets"), cp.addUtf8("(L" + SUPPORT_CLASS + "$Request;)[J")));
+				cp.addNameAndType(cp.addUtf8("bodyOctets"), cp.addUtf8("(L" + SUPPORT_CLASS + "$Request;)[B")));
 		MethodrefConstant buildEnv = cp.addMethodref(runtimeClass, cp.addNameAndType(cp.addUtf8("buildEnv"),
 				cp.addUtf8("(L" + SUPPORT_CLASS + "$Request;Ljava/lang/Object;)Ljava/lang/Object;")));
 		MethodrefConstant toResponse = cp.addMethodref(runtimeClass, cp.addNameAndType(cp.addUtf8("toResponse"),
@@ -229,7 +229,7 @@ final class JvmHttpHandlerRuntimeBuilder {
 			a.aload(3);
 			a.op(Opcode.ARRAYLENGTH);
 			a.iconst(1);
-			a.branch(Opcode.IF_ICMPLE, bodyEmpty); // long[]{8} alone: no body
+			a.branch(Opcode.IF_ICMPLE, bodyEmpty); // byte[]{8} alone: no body
 			a.aload(2);
 			a.aload(3);
 			a.op(Opcode.INVOKESTATIC);

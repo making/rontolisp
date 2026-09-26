@@ -12,6 +12,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -345,6 +346,117 @@ class JvmJavaInteropCompilerTest {
 		assertThat(compileAndRun(
 				"(print (java:call (java:call (java:new \"java.lang.StringBuilder\" \"ab\") \"chars\") \"toArray\"))"))
 			.isEqualTo("(97 98)");
+	}
+
+	// A parameter tag names the overload the cost would not pick -- mirrors
+	// JavaInteropTest#aParameterTagSelectsTheOverload.
+	@Test
+	void aParameterTagSelectsTheOverload() throws Exception {
+		assertThat(compileAndRun("""
+				(print (java:static "java.lang.String" "valueOf(int)" #\\a))
+				(print (java:static "java.lang.String" "valueOf" #\\a))
+				(print (java:static "java.lang.Math" "max(long,_)" 3 7))
+				(print (java:call (java:new "java.lang.StringBuilder(int)" 16) "capacity"))
+				(setq sb (java:new "java.lang.StringBuilder"))
+				(java:call sb "append(Object)" "x")
+				(print (java:call sb "toString"))
+				""")).isEqualTo("\"97\"\n\"a\"\n7\n16\n\"x\"");
+	}
+
+	@Test
+	void aMalformedParameterTagSignals() {
+		assertThatThrownBy(() -> compileAndRun("(java:static \"java.lang.Math\" \"max(long\" 3 7)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageContaining("malformed parameter tag");
+	}
+
+	// The receiver-subclass difference, identical to the interpreter's -- mirrors
+	// JavaInteropTest#anUpperBoundReceiverResolvesAmongTheBoundsMethods.
+	@Test
+	void anUpperBoundReceiverResolvesAmongTheBoundsMethods() throws Exception {
+		assertThat(compileAndRun("""
+				(defun drop-one (c)
+				  (declare (type (java:object "java.util.Collection") c))
+				  (java:call c "remove" 1))
+				(defun fill-list ()
+				  (let ((lst (java:new "java.util.ArrayList")))
+				    (java:call lst "add" 10)
+				    (java:call lst "add" 20)
+				    (java:call lst "add" 1)
+				    lst))
+				(let ((a (fill-list)) (b (fill-list)) (c (fill-list)))
+				  (print (list (drop-one a) (java:call a "toString")
+				               (java:call b "remove" 1) (java:call b "toString")
+				               (java:call (the (java:object "java.util.Collection") c) "remove" 10)
+				               (java:call c "toString"))))
+				""")).isEqualTo("(T \"[10, 20]\" 20 \"[10, 1]\" T \"[20, 1]\")");
+	}
+
+	@Test
+	void aFalseDeclarationSignals() {
+		assertThatThrownBy(() -> compileAndRun("""
+				(defun size-of (c)
+				  (declare (type (java:object "java.util.Collection") c))
+				  (java:call c "size"))
+				(size-of (java:new "java.lang.StringBuilder"))
+				""")).isInstanceOf(RuntimeException.class)
+			.hasMessageContaining(
+					"java:call: the receiver is not a java.util.Collection, got #<java java.lang.StringBuilder>");
+	}
+
+	@Test
+	void aChainResolvesThroughDeclaredReturnTypes() throws Exception {
+		assertThat(compileAndRun("""
+				(print (java:call (java:call (java:call (java:new "java.lang.StringBuilder" "ab") "append" "c")
+				                             "reverse")
+				                  "toString"))
+				""")).isEqualTo("\"cba\"");
+	}
+
+	// A resolved site is compiled as the explicit request the interpreter runs it as:
+	// the static class and the fully tagged member are what the class carries, and the
+	// names as written are not.
+	@Test
+	void aResolvedSiteCarriesItsMember() {
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(print (java:static \"java.lang.Math\" \"max\" 3 7))"));
+		String text = new String(classBytes, java.nio.charset.StandardCharsets.ISO_8859_1);
+		assertThat(text).contains("max(int,int)").contains("javaStatic");
+	}
+
+	// --warn-java-reflection reports at compile time, with the site's position, each
+	// site left to run time; so does a top-level (setq java:*warn-on-reflection* t), for
+	// the forms after it -- which is when the interpreter reports the same sites.
+	@Test
+	void warnJavaReflectionReportsTheSitesLeftToRunTime() {
+		String program = """
+				(defun before (x) (java:call x "size"))
+				(defun len (x) (java:call x "length"))
+				(print (java:static "java.lang.Math" "max" 1 2))
+				""";
+		assertThat(compileWarnings(program, true))
+			.contains("warning: java:call \"size\" is resolved by reflection at run time")
+			.contains("warning: java:call \"length\" is resolved by reflection at run time:"
+					+ " the receiver's class is not known")
+			.doesNotContain("\"max\"");
+		assertThat(compileWarnings("""
+				(defun before (x) (java:call x "size"))
+				(setq java:*warn-on-reflection* t)
+				(defun len (x) (java:call x "length"))
+				""", false)).contains("\"length\"").doesNotContain("\"size\"");
+		assertThat(compileWarnings(program, false)).isEmpty();
+	}
+
+	private static String compileWarnings(String program, boolean warn) {
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		try (var ignored = ThreadStdio.err(err)) {
+			JvmLispCompiler.builder()
+				.className("Test")
+				.warnJavaReflection(warn)
+				.build()
+				.compile(LispReader.readAllFromString(program));
+		}
+		return err.toString().trim();
 	}
 
 	// A wrapped host object prints opaquely as #<java class>, matching the interpreter.

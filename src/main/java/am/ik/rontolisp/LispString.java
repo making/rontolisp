@@ -71,7 +71,7 @@ public final class LispString implements LispVal {
 	 * @param value the string content
 	 */
 	public LispString(String value) {
-		this.chars = value.codePoints().toArray();
+		this.chars = codePointsOf(value);
 		this.displacedTo = null;
 		this.displacedOffset = 0;
 		this.viewLength = 0;
@@ -86,7 +86,7 @@ public final class LispString implements LispVal {
 	 * @param adjustable whether the string may grow
 	 */
 	public LispString(String value, int fillPointer, boolean adjustable) {
-		this.chars = value.codePoints().toArray();
+		this.chars = codePointsOf(value);
 		this.fillPointer = fillPointer;
 		this.adjustable = adjustable;
 		this.displacedTo = null;
@@ -235,6 +235,39 @@ public final class LispString implements LispVal {
 		LispString string = new LispString("");
 		string.chars = codePoints;
 		return string;
+	}
+
+	/**
+	 * Creates a string whose buffer IS {@code codePoints}, one code point a slot, with no
+	 * copy: the string owns the array from here on, so the caller must not keep it. This
+	 * is how a decoder that already produced the code points hands over a document-sized
+	 * result without a second one.
+	 * @param codePoints the code points
+	 * @return the string over them
+	 */
+	public static LispString wrapCodePoints(int[] codePoints) {
+		return fromCodePoints(codePoints);
+	}
+
+	// The code points of a Java string, counted first so the buffer is allocated once at
+	// its exact size: String.codePoints().toArray() grows a spined buffer through
+	// doublings for any string holding a non-Latin-1 character, and a 206 M-character
+	// decode peaked at 1.9 GB of int[] for an 826 MB result.
+	private static int[] codePointsOf(String value) {
+		int length = value.length();
+		int[] codePoints = new int[value.codePointCount(0, length)];
+		if (codePoints.length == length) {
+			for (int i = 0; i < length; i++) {
+				codePoints[i] = value.charAt(i);
+			}
+			return codePoints;
+		}
+		for (int i = 0, k = 0; i < length; k++) {
+			int cp = value.codePointAt(i);
+			codePoints[k] = cp;
+			i += Character.charCount(cp);
+		}
+		return codePoints;
 	}
 
 	/**

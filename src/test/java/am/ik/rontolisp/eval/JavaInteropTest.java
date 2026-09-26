@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -282,6 +283,97 @@ class JavaInteropTest {
 	void returnedPrimitiveArrayUnmarshalsToList() {
 		assertThat(eval("(java:call (java:call (java:new \"java.lang.StringBuilder\" \"ab\") \"chars\") \"toArray\")")
 			.print()).isEqualTo("(97 98)");
+	}
+
+	// A parameter tag names the overload the cost would not pick: valueOf(int) makes the
+	// code point of #\a, where valueOf(char) would make "a". A constructor takes one
+	// too. Mirrors JvmJavaInteropCompilerTest#aParameterTagSelectsTheOverload.
+	@Test
+	void aParameterTagSelectsTheOverload() {
+		assertThat(eval("(java:static \"java.lang.String\" \"valueOf(int)\" #\\a)")).isEqualTo(new LispString("97"));
+		assertThat(eval("(java:static \"java.lang.String\" \"valueOf\" #\\a)")).isEqualTo(new LispString("a"));
+		assertThat(eval("(java:static \"java.lang.Math\" \"max(long,_)\" 3 7)")).isEqualTo(new LispInteger(7));
+		assertThat(eval("(java:call (java:new \"java.lang.StringBuilder(int)\" 16) \"capacity\")"))
+			.isEqualTo(new LispInteger(16));
+		// On a receiver whose class is known only at run time the tag still narrows.
+		assertThat(eval("""
+				(setq sb (java:new "java.lang.StringBuilder"))
+				(java:call sb "append(Object)" "x")
+				(java:call sb "toString")
+				""")).isEqualTo(new LispString("x"));
+	}
+
+	@Test
+	void aMalformedParameterTagSignals() {
+		assertThatThrownBy(() -> eval("(java:static \"java.lang.Math\" \"max(long\" 3 7)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("malformed parameter tag");
+	}
+
+	// The documented difference between a site resolved before it runs and run-time
+	// resolution: a receiver typed by an upper bound resolves among the bound's methods,
+	// so Collection.remove(Object) removes the ELEMENT 1, where the untyped call on the
+	// ArrayList picks ArrayList.remove(int) and removes the element AT index 1. Mirrors
+	// JvmJavaInteropCompilerTest#anUpperBoundReceiverResolvesAmongTheBoundsMethods.
+	@Test
+	void anUpperBoundReceiverResolvesAmongTheBoundsMethods() {
+		assertThat(eval("""
+				(defun drop-one (c)
+				  (declare (type (java:object "java.util.Collection") c))
+				  (java:call c "remove" 1))
+				(defun fill-list ()
+				  (let ((lst (java:new "java.util.ArrayList")))
+				    (java:call lst "add" 10)
+				    (java:call lst "add" 20)
+				    (java:call lst "add" 1)
+				    lst))
+				(let ((a (fill-list)) (b (fill-list)) (c (fill-list)))
+				  (list (drop-one a) (java:call a "toString")
+				        (java:call b "remove" 1) (java:call b "toString")
+				        (java:call (the (java:object "java.util.Collection") c) "remove" 10) (java:call c "toString")))
+				""").print()).isEqualTo("(T \"[10, 20]\" 20 \"[10, 1]\" T \"[20, 1]\")");
+	}
+
+	// A declared type is trusted, so a false one is a deterministic error where the
+	// value meets the member -- the same message the compiled bridge raises.
+	@Test
+	void aFalseDeclarationSignals() {
+		assertThatThrownBy(() -> eval("""
+				(defun size-of (c)
+				  (declare (type (java:object "java.util.Collection") c))
+				  (java:call c "size"))
+				(size-of (java:new "java.lang.StringBuilder"))
+				""")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining(
+					"java:call: the receiver is not a java.util.Collection, got #<java java.lang.StringBuilder>");
+	}
+
+	// A chain resolves link by link: each declared return type types the next receiver.
+	@Test
+	void aChainResolvesThroughDeclaredReturnTypes() {
+		assertThat(eval("""
+				(java:call (java:call (java:call (java:new "java.lang.StringBuilder" "ab") "append" "c") "reverse")
+				           "toString")
+				""")).isEqualTo(new LispString("cba"));
+	}
+
+	// java:*warn-on-reflection* reports each site a top-level form shows that cannot be
+	// resolved before it runs, when the form is loaded; a resolved site is not reported.
+	@Test
+	void warnOnReflectionReportsTheSitesLeftToRunTime() {
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		try (var ignored = ThreadStdio.err(err)) {
+			eval("""
+					(defun before (x) (java:call x "size"))
+					(setq java:*warn-on-reflection* t)
+					(defun len (x) (java:call x "length"))
+					(java:static "java.lang.Math" "max" 1 2)
+					""");
+		}
+		assertThat(err.toString()).contains(
+				"warning: java:call \"length\" is resolved by reflection at run time: the receiver's class is not known")
+			.doesNotContain("\"size\"")
+			.doesNotContain("\"max\"");
 	}
 
 	@Test

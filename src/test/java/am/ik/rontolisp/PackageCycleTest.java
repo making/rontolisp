@@ -106,7 +106,9 @@ class PackageCycleTest {
 			"installed builtins (linalg, ironclad, user macros) call back into the evaluator that installed them",
 			"am.ik.rontolisp.codegen.jvm.JvmExprCompiler",
 			"recursive-descent dispatch: a per-form compiler compiles its subexpressions through the dispatcher",
-			"am.ik.rontolisp.codegen.wasm.WasmExprCompiler", "recursive-descent dispatch, same shape as codegen.jvm");
+			"am.ik.rontolisp.codegen.wasm.WasmExprCompiler", "recursive-descent dispatch, same shape as codegen.jvm",
+			"am.ik.rontolisp.compiler.JavaType",
+			"the java: type model: a type answers its members and a member its declaring and parameter types, the cycle java.lang.Class and java.lang.reflect.Method form");
 
 	@Test
 	void classCyclesAreOnlyTheDesignedMutualRecursions() throws IOException {

@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>
  * Everything here speaks the JVM backend's RUNTIME VALUE REPRESENTATION (nil is
  * {@code null}, a cons an {@code Object[2]}, an integer a {@code Long}, a string its
- * quote-wrapped text, an octet vector the packed {@code long[]{8, e0, ...}}). It is in
+ * quote-wrapped text, an octet vector the packed {@code byte[]{8, e0, ...}}). It is in
  * {@code runtime}, and imports nothing of the project's, so that it TRAVELS with the
  * compiled class ({@code .kb/jvm-export.md}) and the program fetches on a bare
  * {@code java -cp .}.
@@ -150,14 +150,14 @@ public final class RontoFetch {
 	 * The whole reply as ONE octet chunk of a closed stream -- the shape
 	 * {@code _make_stream} builds, with the chunk and the end-of-stream pill already
 	 * queued and the state closed (1), so {@code stream-read} answers the chunk and then
-	 * nil.
+	 * nil. The chunk is the packed {@code (unsigned-byte 8)} vector, {@code byte[]{8, e0,
+	 * ...}}: the width 8 in slot 0, as the compiled {@code _iv*} helpers lay it out, so a
+	 * body costs one byte an octet.
 	 */
 	private static Object bodyStream(byte[] body) {
-		long[] octets = new long[body.length + 1];
+		byte[] octets = new byte[body.length + 1];
 		octets[0] = 8;
-		for (int i = 0; i < body.length; i++) {
-			octets[i + 1] = body[i] & 0xff;
-		}
+		System.arraycopy(body, 0, octets, 1, body.length);
 		LinkedBlockingQueue<Object> queue = new LinkedBlockingQueue<>();
 		queue.offer(octets);
 		queue.offer(STREAM_MARKER);

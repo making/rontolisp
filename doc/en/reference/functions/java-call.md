@@ -18,3 +18,9 @@ guide](../../guides/java-interop.md).
 
 A `java.util.ArrayList` is created, one element is added, and `size` returns the
 element count.
+
+The method name may carry the parameter types (`"append(CharSequence)"`). A call whose
+receiver class and argument kinds are known from the text -- `(java:new ...)`, a declared
+return type, `(the (java:object "C") x)` or `(declare (type (java:object "C") v))` -- is
+resolved once, before it runs, among the methods of that class (the guide's [Resolving
+calls before they run](../../guides/java-interop.md#resolving-calls-before-they-run)).
