@@ -43,13 +43,12 @@ final class JvmMapcanCompiler {
 		// else goes through the arity dispatcher.
 		JvmDesignatorCall call = JvmDesignatorCall.prepare(args.get(1), nLists, ctx, className);
 
-		// Compile each list expression, checking it is a list: a non-list (e.g. a string)
-		// is MAPCAN's type-error. The slots double as the cursors --
-		// only the concatenation is returned, so no list has to survive the walk.
+		// Compile each list expression; the walk's end checks it is a list. The slots
+		// double as the cursors -- only the concatenation is returned, so no list has to
+		// survive the walk.
 		List<Integer> listSlots = new ArrayList<>();
 		for (int i = 0; i < nLists; i++) {
 			JvmExprCompiler.compileExpr(args.get(2 + i), ctx, className);
-			JvmEmitHelper.emitListCheck(ctx);
 			int listSlot = ctx.allocTemp();
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(listSlot);
@@ -74,13 +73,15 @@ final class JvmMapcanCompiler {
 
 		// loop:
 		int loopPos = ctx.code.size();
-		// if any list == null, goto exit (stop at the shortest list)
+		// if any list is no cons, goto exit (stop at the shortest list)
 		List<Integer> exitBranches = new ArrayList<>();
 		for (int listSlot : listSlots) {
 			ctx.emit(Opcode.ALOAD);
 			ctx.emit(listSlot);
+			ctx.emit(Opcode.INSTANCEOF);
+			ctx.emitU2(ctx.objectArrayClass.index());
 			exitBranches.add(ctx.code.size());
-			ctx.emit(Opcode.IFNULL);
+			ctx.emit(Opcode.IFEQ);
 			ctx.emitU2(0);
 		}
 
@@ -94,11 +95,11 @@ final class JvmMapcanCompiler {
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(mappedSlot);
 
-		// A nil piece contributes nothing; anything else is spliced in as a fresh
-		// copy below. A non-list piece fails the copy's CHECKCAST, signalling like
-		// the interpreter's append over it does.
+		// A piece that is no list is MAPCAN's type-error; a nil piece contributes
+		// nothing, a cons is spliced in as a fresh copy below.
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(mappedSlot);
+		JvmEmitHelper.emitListCheck(ctx);
 		int skipPiecePos = ctx.code.size();
 		ctx.emit(Opcode.IFNULL);
 		ctx.emitU2(0);
@@ -180,6 +181,14 @@ final class JvmMapcanCompiler {
 		int exitPos = ctx.code.size();
 		for (int branchPos : exitBranches) {
 			JvmEmitHelper.patchBranch(ctx, branchPos, exitPos);
+		}
+		// Every cursor must be a list: nil ends one, any other atom -- an argument that
+		// was no list, a dotted list's tail -- is the operator's type-error.
+		for (int listSlot : listSlots) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(listSlot);
+			JvmEmitHelper.emitListCheck(ctx);
+			ctx.emit(Opcode.POP);
 		}
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(headSlot);

@@ -200,12 +200,28 @@ had**.
   hand to `funcall`; shortening a dispatcher's `"No applicable method: X on "` literal to `"X"`
   cost **+11.5 KB on the hello-clack Worker**, so it keeps the `" on "` separator
   (`LispMacroExpander.noApplicableMethod`).
+- **A runtime table whose readers the compiler builds is decided by THOSE READERS, not observed**
+  (`StringTable.appendReaderOwnedBlob`, `DroppableDataRange.readBy`): the Schubfach tables
+  (`_schub_g`), the fdlibm reduction tables (the `addressesTables` functions), the operand-type
+  operator table (`_type_err`) and the funcId -> name table (`_fun_name`). Each reader registers
+  through `StringTable.readBlob` as its body is built; the range is kept while one survives and cut
+  when none was registered. They used to be probed on the blob's BASE word, so a live constant equal
+  to the address pinned the blob: on 2026-09-26 a 52-byte string shift put the fdlibm base on
+  chipz's literal `2048` and `zlib` carried ~990 dead bytes (P1 118,253 -> 117,260 and size level
+  90,868 -> 89,875 once decided by readers; `checkpoint-tokenizer` -757; every other example, the
+  Worker family, `hello_world`, `pi_approx`, `dom_reactor` unchanged). **Two obligations**: every
+  body handed the base registers (for fdlibm,
+  `WasmLispCompilerTest#everyFdlibmBodyThatCitesTheTablesIsOneTheShakerCountsAsTheirReader`), and
+  `shakeCore` pins each reader against `WasmInliner`, which would otherwise move a small reader
+  into its caller and leave the claim naming a function the shake kills. Pin:
+  `anIntegerLiteralEqualToARuntimeTableAddressDoesNotKeepTheTable`,
+  `WasmTreeShakerTest.aReaderDecidedRangeIgnoresAnUnrelatedConstantEqualToItsBase`.
 - **The runtime intern table is handled structurally.** Each candidate's 8-byte `(offset, length)`
   row in `buildInternBlob` is offered as a droppable range OF ITS OWN, probed on the STRING's
   interval -- the five-argument `DroppableDataRange`, whose extra interval is a caller claim: the
   only reader of the cut bytes must tolerate them reading as zeros. **The function-name table
-  (`_fun_name`) is the inverse shape and needs the six-argument form**: the NAME's bytes are probed
-  on the table's base word, but a deduplicated name is also the symbol a live body builds
+  (`_fun_name`) is the inverse shape**: the NAME's bytes are decided by the table's reader (below),
+  but a deduplicated name is also the symbol a live body builds
   (`VECTOR`, `-`), so `ownCitationKeeps` keeps it while any body cites it -- and
   `StringTable.addFunName` offers the claim only for a name no OTHER blob pinned. Cutting on the
   probe alone printed `type-of`'s `VECTOR` as NULs the day the type-test fold retired the

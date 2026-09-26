@@ -6373,10 +6373,12 @@ class LispEvaluatorTest {
 		// An unknown keyword stays the defun's lambda-list error.
 		assertThatThrownBy(() -> eval("(search \"ab\" \"xab\" :bogus 1)")).isInstanceOf(LispEvalException.class);
 		// Sequences (length seq) does not measure the way the arm does: a dotted list, a
-		// rank-2 array, a non-sequence.
-		assertThat(evalMulti(both + """
-				(both :dotted (search '(1) '(1 2 . 3)) (funcall #'search '(1) '(1 2 . 3)))
-				""").print()).isEqualTo("0");
+		// rank-2 array, a non-sequence. A dotted list is no proper sequence: the defun's
+		// (length x) signals over its tail.
+		assertThatThrownBy(() -> eval("(search '(1) '(1 2 . 3))"))
+			.hasMessageContaining("LENGTH: The value 3 is not of type SEQUENCE");
+		assertThatThrownBy(() -> eval("(funcall #'search '(1) '(1 2 . 3))"))
+			.hasMessageContaining("LENGTH: The value 3 is not of type SEQUENCE");
 		assertThatThrownBy(() -> eval("(search '(1) (make-array '(2 2)))")).isInstanceOf(LispEvalException.class);
 		// A non-sequence is the defun's (length x) SEQUENCE type-error, as
 		// .kb/seq-coerce-runtime.md records for coerce. The arm reproduces it by
@@ -6458,12 +6460,11 @@ class LispEvaluatorTest {
 				            (funcall #'search '(1 2 3) '(1 2 3) :start2 -1))
 				      (both :start1-negative (search '(1 2 3) '(1 2 3) :start1 -1)
 				            (funcall #'search '(1 2 3) '(1 2 3) :start1 -1))
-				      (both :dotted (search '(1) '(1 2 . 3)) (funcall #'search '(1) '(1 2 . 3)))
 				      (both :m-end1-past (mismatch '(1 2 3) '(1 2 3) :end1 99)
 				            (funcall #'mismatch '(1 2 3) '(1 2 3) :end1 99))
 				      (both :m-end2-past (mismatch '(1 2 3) '(1 2 3) :end2 99)
 				            (funcall #'mismatch '(1 2 3) '(1 2 3) :end2 99)))
-				""").print()).isEqualTo("(0 NIL 0 NIL 0 NIL 0 3 3)");
+				""").print()).isEqualTo("(0 NIL 0 NIL 0 NIL 3 3)");
 		// The shapes the arm declines land in this body, so the cursor has to serve them.
 		assertThat(evalMulti("""
 				(list (funcall #'search '(3 4) '(1 2 3 4 5) :key #'identity)
@@ -18991,6 +18992,89 @@ class LispEvaluatorTest {
 				("ROW-MAJOR-AREF: The value NIL is not of type INTEGER" NIL INTEGER)
 				("(SETF ROW-MAJOR-AREF): The value FOO is not of type REAL" FOO REAL)
 				(7 "ay" 2.0 3)""");
+	}
+
+	@Test
+	void listConsumersBeyondTheFirstSetNameTheOperator() {
+		// The list consumers beyond the first set name their operator as the first set
+		// does (compiler/OperandTypes): reverse/nreverse over a non-sequence (SEQUENCE),
+		// append, the member/assoc/rassoc scans and list-length over a non-list (LIST), a
+		// dotted list's tail wherever a walk reaches it (length, the map* walks), a
+		// mapcan/mapcon piece that is no list, and the multi-list map* value path, which
+		// reported CAR. The twins are LispEvaluatorTest, JvmLispCompilerTest and
+		// WasmLispCompilerIntegrationTest's
+		// listConsumersBeyondTheFirstSetNameTheOperator.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *te-five* 5)
+				(defvar *te-dotted* '(1 2 . 3))
+				(print (te (lambda () (length *te-dotted*))))
+				(print (te (lambda () (reverse *te-five*))))
+				(print (te (lambda () (reverse *te-dotted*))))
+				(print (te (lambda () (nreverse *te-five*))))
+				(print (te (lambda () (funcall #'reverse *te-five*))))
+				(print (te (lambda () (append *te-five* nil))))
+				(print (te (lambda () (append *te-dotted* '(4)))))
+				(print (te (lambda () (funcall #'append *te-five* nil))))
+				(print (te (lambda () (member 1 *te-five*))))
+				(print (te (lambda () (member 9 *te-dotted*))))
+				(print (te (lambda () (funcall #'member 1 *te-five*))))
+				(print (te (lambda () (member-if #'evenp *te-five*))))
+				(print (te (lambda () (assoc 1 *te-five*))))
+				(print (te (lambda () (assoc-if #'evenp *te-five*))))
+				(print (te (lambda () (rassoc 1 *te-five*))))
+				(print (te (lambda () (rassoc-if #'evenp *te-five*))))
+				(print (te (lambda () (list-length *te-five*))))
+				(print (te (lambda () (list-length *te-dotted*))))
+				(print (te (lambda () (mapcar #'1+ *te-dotted*))))
+				(print (te (lambda () (mapc #'1+ *te-dotted*))))
+				(print (te (lambda () (mapcan #'list *te-dotted*))))
+				(print (te (lambda () (maplist #'car *te-dotted*))))
+				(print (te (lambda () (mapcan (lambda (x) x) '(1 2)))))
+				(print (te (lambda () (mapcon (lambda (x) 5) '(1 2)))))
+				(print (te (lambda () (funcall #'mapcar #'+ '(1 2) *te-five*))))
+				(print (te (lambda () (funcall #'mapcar #'+ '(1 2) *te-dotted*))))
+				(print (te (lambda () (funcall #'mapcan (lambda (x y) x) '(1 2) '(3 4)))))
+				(print (list (reverse '(1 2)) (member 1 *te-dotted*) (member 3 '(1 2)) (assoc 2 '((1 . a) (2 . b)))
+				             (append '(1) 2) (mapcan #'list '(1 2)) (list-length '(1 2)) (mapcar #'+ '(1 2 3) '(1 2))))
+				""";
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal expr : LispReader.readAllFromString(source)) {
+			evaluator.eval(expr);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8).strip()).isEqualTo("""
+				("LENGTH: The value 3 is not of type SEQUENCE" 3 SEQUENCE)
+				("REVERSE: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+				("REVERSE: The value 3 is not of type SEQUENCE" 3 SEQUENCE)
+				("NREVERSE: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+				("REVERSE: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+				("APPEND: The value 5 is not of type LIST" 5 LIST)
+				("APPEND: The value 3 is not of type LIST" 3 LIST)
+				("APPEND: The value 5 is not of type LIST" 5 LIST)
+				("MEMBER: The value 5 is not of type LIST" 5 LIST)
+				("MEMBER: The value 3 is not of type LIST" 3 LIST)
+				("MEMBER: The value 5 is not of type LIST" 5 LIST)
+				("MEMBER-IF: The value 5 is not of type LIST" 5 LIST)
+				("ASSOC: The value 5 is not of type LIST" 5 LIST)
+				("ASSOC-IF: The value 5 is not of type LIST" 5 LIST)
+				("RASSOC: The value 5 is not of type LIST" 5 LIST)
+				("RASSOC-IF: The value 5 is not of type LIST" 5 LIST)
+				("LIST-LENGTH: The value 5 is not of type LIST" 5 LIST)
+				("LIST-LENGTH: The value 3 is not of type LIST" 3 LIST)
+				("MAPCAR: The value 3 is not of type LIST" 3 LIST)
+				("MAPC: The value 3 is not of type LIST" 3 LIST)
+				("MAPCAN: The value 3 is not of type LIST" 3 LIST)
+				("MAPLIST: The value 3 is not of type LIST" 3 LIST)
+				("MAPCAN: The value 1 is not of type LIST" 1 LIST)
+				("MAPCON: The value 5 is not of type LIST" 5 LIST)
+				("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+				("MAPCAR: The value 3 is not of type LIST" 3 LIST)
+				("MAPCAN: The value 1 is not of type LIST" 1 LIST)
+				((2 1) (1 2 . 3) NIL (2 . B) (1 . 2) (1 2) 2 (2 4))""");
 	}
 
 	@Test

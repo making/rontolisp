@@ -932,6 +932,10 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
 | `(last 5)`, `(mapcar #'1+ 5)` and `mapc`/`mapcan`/`maplist`/`mapl`/`mapcon` | `LAST:` / `MAPCAR: ... LIST` |
 | `(rplaca 5 0)`, `(rplacd nil 0)`, `(setf (car 5) 0)` | `RPLACA:` / `RPLACD: ... CONS` |
 | `(loop for x in 5 ...)`, `(loop for x in '(1 2 . 3) ...)` | `ENDP: ... LIST` |
+| `(reverse 5)`, `(nreverse 5)`, `(reverse '(1 . 2))`, `(length '(1 . 2))` | `REVERSE:` / `NREVERSE:` / `LENGTH: ... SEQUENCE` |
+| `(append 5 nil)`, `(append '(1 . 2) nil)`, `(list-length 5)` | `APPEND:` / `LIST-LENGTH: ... LIST` |
+| `(member 1 5)`, `(member 9 '(1 . 2))`, `member-if`/`assoc`/`assoc-if`/`rassoc`/`rassoc-if` | `MEMBER: ... LIST` |
+| `(mapcar #'1+ '(1 . 2))` and the other five, `(mapcan (lambda (x) 5) '(1))` | `MAPCAR:` / `MAPCAN: ... LIST` |
 | `(char 5 0)`, `(schar 'foo 0)`, `(char (vector #\a) 0)` | `CHAR:` / `SCHAR: ... STRING` |
 | `(setf (char s nil) c)`, `(setf (schar 5 0) c)` | `(SETF CHAR): ... INTEGER` / `(SETF SCHAR): ... STRING` |
 | `(setf (char s 0) 5)`, `(setf (aref s 0) 5)` (`s` a string) | `(SETF CHAR):` / `(SETF AREF): ... CHARACTER` |
@@ -970,8 +974,8 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   `RPLACA`, `RPLACD` are FIXED-typed (`SEQUENCE`, `CONS`, two kinds no funnel produces -- the row
   names the type, so wasm reuses `_type_err_list`); `LAST` and the six `map*` are funnel-typed.
   A lowering checks through `(%check-list x 'op)` (`LispMacroExpander.checkListOf`): `last`'s
-  binding, the `maplist`/`mapl`/`mapcon` guard, and `loop`'s `for-in` cursor under `ENDP` -- whose
-  end test is `(if (consp c) nil (endp c))`, so `endp` runs only on the way out, as `dolist`'s
+  binding, the `maplist`/`mapl`/`mapcon` guard (moved to the walk's end, next bullet), and
+  `loop`'s `for-in` cursor under `ENDP` -- whose end test is `(if (consp c) nil (endp c))`, so `endp` runs only on the way out, as `dolist`'s
   does. Interpreter: `Environment.requireListArgument`. JVM: `_ckList` (nil or a cons) and
   `_ckCons` (returns the `Object[]`, replacing the site's `checkcast`) through the operator's
   wrapper; `%check-list` of `ENDP` calls `_endp`; `_length` throws `LENGTH`'s report for a symbol
@@ -980,7 +984,31 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   it the cast still traps); `_seq_len` lands under `LENGTH`'s row, baked in like `_car`'s. The
   table gains `ENDP` for `LOOP`, `RPLACA`/`RPLACD` for `SETF INCF DECF PUSH POP PUSHNEW` (a
   `car` place's store). `#'rplaca`/`#'rplacd` became first-class on the compiled backends.
-  Still open: a dotted list's `length` and the other consumers (`.todo/985`).
+- **The rest of the list consumers** (2026-09-26; `reverse`/`member`/`assoc` answered NIL over a
+  non-list, `append` a message-only error or the pad's generic text or a trap, `list-length` an
+  instance-printing report, `length`/`mapcar` of a dotted list a count or a list): `REVERSE`,
+  `NREVERSE` are fixed-typed `SEQUENCE`; `APPEND`, `LIST-LENGTH`, `MEMBER`, `MEMBER-IF`, `ASSOC`,
+  `ASSOC-IF`, `RASSOC`, `RASSOC-IF` funnel-typed. **A walk is checked where it ENDS, not where it
+  starts**: the atom it stops at must be nil, so one check covers a non-list argument (the walk
+  ends at once) and a dotted tail (the datum is the tail: `LENGTH: The value 3 ...`), and no loop
+  gains a test. The six scans end `((atom cur) (%check-list cur 'op))`
+  (`LispMacroExpander.listScanEnd`; a literal proper list keeps its bare nil, so the internal
+  `(member x '(...))` of `case`/`typecase` lowerings pays nothing); `reverse` is a consing `do`
+  (it was `reduce` with a lambda) ending in the check; the user `nreverse` checks its cursor after
+  the relink loop (`nreverseListForm(list, op)`; the internal reversals pass none); `list-length`'s
+  prelude signals through `%check-list` over the atom it met. The `map*` walks check every cursor
+  after the loop -- `maplist`/`mapl`/`mapcon`'s `do` result forms, the inline
+  `Jvm/WasmMapcarCompiler`/`MapcCompiler`/`MapcanCompiler` after their exit (the JVM loop test is now `instanceof`, not
+  `ifnull`), the interpreter's `mapFamilyValues` -- which replaced the up-front argument check; a
+  `mapcan`/`mapcon` PIECE is checked as it arrives (the message-only `MAPCON: argument is not a
+  list` is gone; a non-list LAST piece, which CL's `nconc` would answer, signals too). The
+  multi-list value path (`BuiltinFunctionWrappers.mapFamilyWrapper`) checks each cursor as it is
+  taken, so `(funcall #'mapcar f l 5)` reports `MAPCAR`, not `CAR`. Runtime helpers name
+  themselves: JVM `_append` throws `APPEND`'s report (as `_length` does `LENGTH`'s) and `_length`
+  tests the walk's end; wasm `_append` (EH mode only; a non-EH body is byte-identical) and
+  `_seq_len` land under their rows. Interpreter: `Environment.requireListEnd`. Not covered:
+  `member-if-not` & co. report under the `-if` operator their prelude defun calls; `nconc`, `reduce`
+  and the other sequence functions are unchanged.
 - **String accesses** (2026-09-26; a non-string was a message-only error, the pad's generic
   text or a trap, a symbol read as its NAME on the JVM): `char`/`schar` check the subscript,
   then the string -- that order on every backend, because the compiled sites check the
@@ -1057,27 +1085,35 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   `car`/`cdr` read, whose block would need a cast-typed signature); the JVM unchanged.
 - **Cost of the string accesses, measured 2026-09-26** (wasmtime 49): `zlib` code +201 B and
   strings +52 B; `hello_world`, `pi_approx`, `dom_reactor` unchanged, a non-EH module
-  byte-identical, JVM class 164,583 -> 164,736. Its P1 total reads 117,008 -> 118,253 only because
-  the 52-byte shift put the fdlibm table's probed base word on chipz's literal `2048`, which pins
-  ~990 dead bytes (`.todo/990`). A 21M-read `char` loop: JVM unchanged (noise), EH wasm 560 ->
+  byte-identical, JVM class 164,583 -> 164,736. Its P1 total read 117,008 -> 118,253 only because
+  the 52-byte shift put the fdlibm table's then-probed base word on chipz's literal `2048`, pinning
+  ~990 dead bytes; with the table decided by its readers it is 117,260
+  (`.kb/optimize-dead-code-elimination.md`). A 21M-read `char` loop: JVM unchanged (noise), EH wasm 560 ->
   580 ms (the register write around `_str_char_ref` and its quote-frame test).
-- **Cost of the string stores and `row-major-aref`, measured 2026-09-26** (wasmtime 49): `zlib`
-  P1 code 107,679 -> 107,748 (+69 B; the landing's `CHARACTER` arm +16), data 9,610 -> 8,654 (the
-  `.todo/990` pin no longer lands), total 118,253 -> 117,366; size level code 80,330 -> 79,844
-  (`WasmRefTypeFolder` proves `%schar-set-runtime`'s value a character, so its packed-integer
-  arm folds to a trap and one body folds away); JVM class 164,736 -> 165,719 (+983 B: the
-  `_ckIdx`/store wrappers and the call sites of chipz's `row-major-aref`/`fill`/`replace`
-  loops). `hello_world`, `pi_approx`, `dom_reactor` unchanged; a non-EH module byte-identical.
-  A 20M-iteration `row-major-aref` read+store loop: EH wasm 0.91 -> 1.08 s, what the same `aref`
-  loop already paid (0.99 s); JVM unchanged (1.67 -> 1.65 s at 300M).
-- **Open**: the list consumers beyond these (`.todo/985`).
+- **Cost of the rest, measured 2026-09-26** (on the tree before the string accesses): `zlib` P1 117,008 -> 116,675, size level 89,623 ->
+  89,254, JVM class 164,583 -> 161,636 (`reverse`'s `do` replaces a `reduce` over a lambda);
+  `hello_world`, `pi_approx` unchanged. The price is paid by a TINY EH module: one whose only
+  checked site is a `length` or an `append` (`(handler-case (length *x*) ...)`, 1,573 -> 6,127 B)
+  now keeps the landing and its tables, because the dotted-tail test at the walk's end is one the
+  whole-module type facts cannot prove away; `examples/console/error-handling.lisp` 35,901 -> 35,641.
+- **Cost of the string stores and `row-major-aref`, measured 2026-09-26** (wasmtime 49, on the
+  tree after `.todo/985` and `990`): `zlib` P1 116,920 -> 117,028 (code +67 B, the landing's
+  `CHARACTER` arm +16; data +41 B, the `CHARACTER` suffix and the new row); size level 89,499 ->
+  89,051 (code -488 B: `WasmRefTypeFolder` proves `%schar-set-runtime`'s value a character, so its
+  packed-integer arm folds to a trap and one body folds away); JVM class 172,368 -> 173,351
+  (+983 B: the `_ckIdx`/store wrappers and chipz's `row-major-aref`/`fill`/`replace` sites).
+  `hello_world`, `pi_approx`, `dom_reactor` byte-identical; a non-EH module too. A 20M-iteration
+  `row-major-aref` read+store loop: EH wasm 0.91 -> 1.08 s, what the same `aref` loop already
+  paid (0.99 s); JVM unchanged (1.67 -> 1.65 s at 300M).
 - Pinned by `ci-spec.yaml`'s `argument-type-errors-name-the-operator-beyond-arithmetic` and
-  `list-walks-and-string-indices-name-the-operator`, `list-consumers-name-the-operator` and
-  `string-accesses-name-the-operator`, `string-stores-and-row-major-subscripts-name-the-operator`,
-  and the
-  `argumentTypeErrorsNameTheOperatorBeyondArithmetic` / `listWalksAndStringIndicesNameTheOperator` /
-  `listConsumersNameTheOperator` / `stringAccessesNameTheOperator` /
-  `stringStoresAndRowMajorSubscriptsNameTheOperator` triples (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
+  `list-walks-and-string-indices-name-the-operator`, `list-consumers-name-the-operator`,
+  `list-consumers-beyond-the-first-set-name-the-operator`, `string-accesses-name-the-operator` and
+  `string-stores-and-row-major-subscripts-name-the-operator`, and the
+  `argumentTypeErrorsNameTheOperatorBeyondArithmetic` /
+  `listWalksAndStringIndicesNameTheOperator` / `listConsumersNameTheOperator` /
+  `listConsumersBeyondTheFirstSetNameTheOperator` / `stringAccessesNameTheOperator` /
+  `stringStoresAndRowMajorSubscriptsNameTheOperator` triples
+  (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
 
 ### `random`'s domain (closed 2026-09-26, `.todo/981`)
 CLHS's domain is a COMPOUND type, `(OR (INTEGER 1) (FLOAT (0.0)))`: a ratio limit is real but

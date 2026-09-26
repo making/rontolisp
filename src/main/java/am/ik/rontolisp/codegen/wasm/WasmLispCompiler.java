@@ -1904,7 +1904,8 @@ public final class WasmLispCompiler implements LispCompiler {
 	// algorithm the interpreter and the JVM run as StrictMath (.kb/transcendentals.md).
 	// A slot the program never reaches (Ctx.fdlibmUsed, closed over the callees) holds
 	// a trapping stub, so the space stays dense without carrying the bytes; the trig
-	// reduction's tables ride in a shakeable blob placed before Pass 2 when a trig name
+	// reduction's tables ride in a reader-owned blob placed before Pass 2 when a trig
+	// name
 	// is spelled at all (fdlibmTablesBase). Appended after the last fixed helper so no
 	// index above shifts.
 	static final int FUNC_FD_BASE = FUNC_CDR + 1;
@@ -4047,12 +4048,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		WasmOperandTypes.Operators operandOperators = ehMode
 				? WasmOperandTypes.Operators.place(stringTable, name -> programUsesSymbol(spelledProgram, name))
 				: WasmOperandTypes.Operators.NONE;
-		// The Schubfach float-printer tables (todo-431): ONE shakeable blob whose only
-		// readers are the _schub_* helper bodies built later, so a program that never
-		// prints a float carries no table bytes. Appended here, BEFORE any user body
+		// The Schubfach float-printer tables (todo-431): ONE reader-owned blob whose one
+		// reader is the _schub_g body built later, so a program that never prints a
+		// float carries no table bytes. Appended here, BEFORE any user body
 		// compiles, so a user literal blob (a packed lookup table) stays the LAST
 		// aligned append and its marginal per-element cost stays exact.
-		int schubBlobBase = stringTable.appendShakeableBlobProbedOnBase(SchubfachTables.blob());
+		int schubBlobBase = stringTable.appendReaderOwnedBlob(SchubfachTables.blob());
 		// The fdlibm trig reduction's tables (WasmFdlibmRuntimeBuilder.tables()): the
 		// same shape of blob, placed only when a name that can reach sin/cos/tan is
 		// spelled at all (the real trig, and the arms of exp/expt/cis/sinh/cosh/tanh
@@ -4075,8 +4076,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			mayReachTrig |= programUsesSymbol(program, name)
 					|| (symbolBuildersForTrig && programSpellsStringLiteral(program, name));
 		}
-		int fdlibmTablesBase = mayReachTrig
-				? stringTable.appendShakeableBlobProbedOnBase(WasmFdlibmRuntimeBuilder.tables()) : -1;
+		int fdlibmTablesBase = mayReachTrig ? stringTable.appendReaderOwnedBlob(WasmFdlibmRuntimeBuilder.tables()) : -1;
 		// Bake the instance layouts into the data segment BEFORE Pass 2a: %obj-new
 		// emits a record's address as an i32.const inside an ordinary function body, so
 		// unlike the eval registry, the intern table and the case-fold tables -- all of
@@ -5473,8 +5473,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (WasmFdlibmRuntimeBuilder.needsTables(fdlibmNeeded) && fdlibmTablesBase < 0) {
 			throw new IllegalStateException("fdlibm trig reached without its tables placed: " + fdlibmNeeded);
 		}
+		for (WasmFdlibmRuntimeBuilder.Fn fn : fdlibmNeeded) {
+			if (WasmFdlibmRuntimeBuilder.addressesTables(fn)) {
+				stringTable.readBlob(fdlibmTablesBase, fdlibmFunc(fn));
+			}
+		}
 		byte[] schubUmulhiBody = WasmSchubfachRuntimeBuilder.buildUmulhiBody();
-		byte[] schubGBody = WasmSchubfachRuntimeBuilder.buildGBody(FUNC_SCHUB_UMULHI, schubBlobBase);
+		byte[] schubGBody = WasmSchubfachRuntimeBuilder.buildGBody(FUNC_SCHUB_UMULHI,
+				stringTable.readBlob(schubBlobBase, FUNC_SCHUB_G));
 		byte[] schubRopBody = WasmSchubfachRuntimeBuilder.buildRopBody(FUNC_SCHUB_UMULHI);
 		byte[] f64DecBody = WasmSchubfachRuntimeBuilder.buildF64DecBody(FUNC_SCHUB_G, FUNC_SCHUB_ROP);
 		byte[] f32DecBody = WasmSchubfachRuntimeBuilder.buildF32DecBody(FUNC_SCHUB_G, FUNC_SCHUB_UMULHI);
@@ -5484,7 +5490,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		byte[] printF32NoNlBody = WasmRuntimeBuilder.buildPrintF32Core(stringTable);
 		byte[] printF64Body = WasmRuntimeBuilder.buildPrintF64Core(true, stringTable);
 		byte[] printF64NoNlBody = WasmRuntimeBuilder.buildPrintF64Core(false, stringTable);
-		byte[] appendBody = WasmRuntimeBuilder.buildAppendBody(this.usesIdentityHashTables);
+		// (a non-list lands in _type_err_list under APPEND in EH mode)
+		byte[] appendBody = WasmRuntimeBuilder.buildAppendBody(this.usesIdentityHashTables, operandOpGlobalIndex,
+				operandOperators.ids().getOrDefault(LispNames.APPEND, 0));
 		byte[] readLineBody = WasmRuntimeBuilder.buildReadLineBody(stringTable);
 		byte[] princValBody = WasmRuntimeBuilder.buildPrincValBody(stringTable, this.simd,
 				this.asyncMode ? asyncTypeBase() : -1, this.usesP1Streams ? p1StreamTypeBase() : -1,
@@ -5578,15 +5586,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		// table covers every DISPATCHABLE defun instead, so the boxed value prints
 		// its registered name. Rows come out in
 		// ascending funcId order (the defun index IS the funcId), which is what the
-		// search relies on. The blob is shakeable on its BASE -- its one reader is
-		// _fun_name's own i32.const -- and each name the table alone reads invisibly
-		// joins the droppable ranges PROBED ON THAT SAME WORD (see addFunName and
+		// search relies on. The blob is reader-owned -- its one reader is _fun_name --
+		// and each name the table alone reads invisibly joins the droppable ranges
+		// DECIDED BY THAT SAME READER (see addFunName and
 		// shakeableRanges): the search reaches the names only through words inside the
 		// blob, a citation the constant scan cannot follow, so blob and names live and
 		// fall together with _fun_name (.kb/optimize-dead-code-elimination.md). A
 		// hello-shaped program whose internal #'identity/#'eql values are
 		// dead-code-eliminated keeps NEITHER. The placement
-		// is unaligned (appendShakeableBlobUnalignedProbedOnBase): an alignment pad here
+		// is unaligned (appendReaderOwnedBlobUnaligned): an alignment pad here
 		// would charge a quoted u16/u8 vector's next element for the pad it shifts,
 		// breaking the per-element cost pin
 		// (WasmLispCompilerTest#aLiteralLookupTableCostsItsOwnBytesAndNotThreeTimesThem).
@@ -5605,7 +5613,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// No rows: no bytes appended, so a program with no nameable function value is
 		// byte-identical to the one from before this table existed.
 		final int funNameBase = funNameCount == 0 ? -1
-				: stringTable.appendShakeableBlobUnalignedProbedOnBase(funNameRows.toByteArray());
+				: stringTable.appendReaderOwnedBlobUnaligned(funNameRows.toByteArray());
 		if (usesEval) {
 			WasmEvalRuntimeBuilder.SpecialFormOffsets offsets = WasmEvalRuntimeBuilder.SpecialFormOffsets.builder()
 				.add(stringTable, LispNames.QUOTE)
@@ -7901,7 +7909,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmFloatFdivRuntimeBuilder.buildBody());
 				// closure-value name tag body (FUNC_FUN_NAME); a constant when the
 				// funcId -> name table has no rows
-				code.addFunction(WasmRuntimeBuilder.buildFunNameBody(stringTable, funNameBase, funNameCount));
+				code.addFunction(WasmRuntimeBuilder.buildFunNameBody(stringTable,
+						funNameBase < 0 ? funNameBase : stringTable.readBlob(funNameBase, FUNC_FUN_NAME),
+						funNameCount));
 				// complex-number runtime bodies (FUNC_C_COMPLEX .. FUNC_C_NEG)
 				code.addFunction(WasmComplexRuntimeBuilder.buildComplexBody());
 				code.addFunction(WasmComplexRuntimeBuilder.buildAddBody());
@@ -7955,7 +7965,11 @@ public final class WasmLispCompiler implements LispCompiler {
 						WasmOperandTypes.buildLandingBody(am.ik.rontolisp.compiler.OperandTypes.Kind.LIST, ehMode));
 				// the subscript check body (FUNC_IDX_CHK): EH mode only calls it
 				code.addFunction(WasmEmitHelper.buildIndexCheckBody(operandOpGlobalIndex));
-				// the shared landing body (FUNC_TYPE_ERR)
+				// the shared landing body (FUNC_TYPE_ERR), the operator table's one
+				// reader
+				if (operandOperators.base() >= 0) {
+					stringTable.readBlob(operandOperators.base(), FUNC_TYPE_ERR);
+				}
 				code.addFunction(WasmOperandTypes.buildSharedLandingBody(operandTexts, operandOperators,
 						operandOpGlobalIndex, operandTypeError, this.usesIdentityHashTables));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
@@ -8129,7 +8143,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// exactly that reason).
 		int stringDataSegIndex = upperFoldSegIndex - 1;
 		List<am.ik.wasm.WasmTreeShaker.DroppableDataRange> stringRanges = stringData.length == 0 ? List.of()
-				: stringTable.shakeableRanges(stringDataSegIndex, dataBase, internBase, internRows, funNameBase);
+				: stringTable.shakeableRanges(stringDataSegIndex, dataBase, internBase, internRows, funNameBase,
+						hostImports.size());
 		// The two --no-wasi host setters, offered to the shaker as cell hooks: each is an
 		// export (hence a root, hence immortal) whose only effect is a store to one cell,
 		// so a module in which no OTHER surviving body names that cell can drop the hook
@@ -8322,8 +8337,12 @@ public final class WasmLispCompiler implements LispCompiler {
 						.append(' ')
 						.append(range.probeStart())
 						.append(' ')
-						.append(range.probeEnd())
-						.append('\n');
+						.append(range.probeEnd());
+					int @Nullable [] readers = range.readerFuncIndices();
+					if (readers != null) {
+						claims.append(" readers ").append(Arrays.toString(readers));
+					}
+					claims.append('\n');
 				}
 				java.nio.file.Files.writeString(java.nio.file.Path.of(coreDump + ".claims.txt"), claims.toString());
 			}
@@ -8342,14 +8361,25 @@ public final class WasmLispCompiler implements LispCompiler {
 		coreModule = am.ik.wasm.WasmPeephole.rewrite(coreModule, peepholePureNonNullCalls(importShift));
 		// Then the single-call-site move, which needs both of those in front of it (the
 		// fold is what leaves a helper with one caller) and the shake behind it (it
-		// unreferences the callee rather than deleting it). The case-fold owners are
-		// pinned: their segment claims name them by index, so a moved body would take
-		// the table with it (.kb/optimize-dead-code-elimination.md).
-		int[] pinned = new int[caseFoldSegments.size()];
-		for (int i = 0; i < pinned.length; i++) {
-			int[] owners = caseFoldSegments.get(i).ownerFuncIndices();
-			pinned[i] = owners.length > 0 ? owners[0] : -1;
+		// unreferences the callee rather than deleting it). The case-fold owners and the
+		// reader-owned blobs' readers are pinned: their claims name them by index, so a
+		// moved body would take the table with it
+		// (.kb/optimize-dead-code-elimination.md).
+		Set<Integer> pinnedSet = new java.util.TreeSet<>();
+		for (am.ik.wasm.WasmTreeShaker.OwnedDataSegment owned : caseFoldSegments) {
+			for (int owner : owned.ownerFuncIndices()) {
+				pinnedSet.add(owner);
+			}
 		}
+		for (am.ik.wasm.WasmTreeShaker.DroppableDataRange range : stringRanges) {
+			int @Nullable [] readers = range.readerFuncIndices();
+			if (readers != null) {
+				for (int reader : readers) {
+					pinnedSet.add(reader);
+				}
+			}
+		}
+		int[] pinned = pinnedSet.stream().mapToInt(Integer::intValue).toArray();
 		coreModule = am.ik.wasm.WasmInliner.inline(coreModule, pinned);
 		// Then the single-use local sink, over the residue the move's argument hand-over
 		// and the emitter's own temporaries leave: a function's own locals only, so it
@@ -11576,18 +11606,21 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		/**
 		 * The function-name table's entries whose only reader outside a body is that
-		 * table ({@link #addFunName}): offered to the shaker probed on the table's base
-		 * word, kept while any body still cites their bytes. A later closed-window intern
-		 * -- another blob reading the same name -- retracts the entry here as it does
-		 * from {@link #shakeable}, pinning the bytes for good.
+		 * table ({@link #addFunName}): offered to the shaker decided by the table's
+		 * readers, kept while any body still cites their bytes. A later closed-window
+		 * intern -- another blob reading the same name -- retracts the entry here as it
+		 * does from {@link #shakeable}, pinning the bytes for good.
 		 */
 		private final Set<StringEntry> funNameClaimable = new HashSet<>();
 
 		/**
-		 * {@code {absolute offset, length}} of every {@link #appendShakeableBlob} blob,
-		 * in append (i.e. address) order so the emitted range list is deterministic.
+		 * Every {@link #appendShakeableBlob} and reader-owned blob, in append (i.e.
+		 * address) order so the emitted range list is deterministic.
 		 */
-		private final List<int[]> shakeableBlobs = new ArrayList<>();
+		private final List<ShakeableBlob> shakeableBlobs = new ArrayList<>();
+
+		/** The reader-owned blobs by base address, for {@link #readBlob}. */
+		private final Map<Integer, ShakeableBlob> readerOwnedBlobs = new HashMap<>();
 
 		private boolean attributing;
 
@@ -11828,7 +11861,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * Interns a function name the funcId-to-name table cites. The name's bytes stay a
 		 * shake candidate when their only readers so far are bodies (or none): the table
 		 * is then the one reader the constant scan cannot see, and the range is offered
-		 * probed on the table's base word, kept as well by any body citation
+		 * decided by the table's reader, kept as well by any body citation
 		 * ({@code DroppableDataRange.ownCitationKeeps}). A name some other blob already
 		 * pinned stays pinned -- the table adds nothing the shaker could decide on.
 		 * @param s the function name
@@ -11891,16 +11924,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * @param internRows the intern table's rows in blob order (empty when absent)
 		 * @param funNameBase the funcId -> name blob's absolute base address, or -1 when
 		 * the program has no nameable function value -- each name the blob alone reads
-		 * invisibly ({@link #addFunName}) is offered as a range PROBED ON THE BLOB'S
-		 * FIRST WORD, since _fun_name reaches it through words inside the blob, a
-		 * citation the constant scan cannot follow, and kept as well while a body still
-		 * cites the name itself (a deduplicated symbol): name, blob and _fun_name fall
-		 * together, never a name something else still reads
+		 * invisibly ({@link #addFunName}) is offered as a range decided by THE BLOB'S
+		 * READERS, since _fun_name reaches it through words inside the blob, a citation
+		 * the constant scan cannot follow, and kept as well while a body still cites the
+		 * name itself (a deduplicated symbol): name, blob and _fun_name fall together,
+		 * never a name something else still reads
+		 * @param importShift the host-import count added to every reader's function index
 		 * @return the candidate ranges, each string range followed by its row range (the
 		 * shaker orders cuts itself; this order is fixed so the module is deterministic)
 		 */
 		List<am.ik.wasm.WasmTreeShaker.DroppableDataRange> shakeableRanges(int segmentIndex, int dataBase,
-				int internBase, List<StringEntry> internRows, int funNameBase) {
+				int internBase, List<StringEntry> internRows, int funNameBase, int importShift) {
 			List<StringEntry> entries = new ArrayList<>(this.shakeable.size());
 			for (String s : this.shakeable) {
 				entries.add(this.cache.get(s));
@@ -11922,24 +11956,34 @@ public final class WasmLispCompiler implements LispCompiler {
 							start, end));
 				}
 			}
-			for (int[] blob : this.shakeableBlobs) {
-				int start = blob[0] - dataBase;
-				int probeStart = blob.length > 3 ? blob[3] - dataBase : start;
-				int probeLen = blob[2] > 0 ? blob[2] : blob[1];
-				ranges.add(new am.ik.wasm.WasmTreeShaker.DroppableDataRange(segmentIndex, start, start + blob[1],
-						probeStart, probeStart + probeLen));
+			for (ShakeableBlob blob : this.shakeableBlobs) {
+				int start = blob.start() - dataBase;
+				List<Integer> readers = blob.readers();
+				ranges.add(readers == null
+						? new am.ik.wasm.WasmTreeShaker.DroppableDataRange(segmentIndex, start, start + blob.length())
+						: am.ik.wasm.WasmTreeShaker.DroppableDataRange.readBy(segmentIndex, start,
+								start + blob.length(), readerIndices(readers, importShift), false));
 			}
 			if (funNameBase >= 0) {
-				int blobStart = funNameBase - dataBase;
+				ShakeableBlob funNames = java.util.Objects.requireNonNull(this.readerOwnedBlobs.get(funNameBase));
+				int[] readers = readerIndices(java.util.Objects.requireNonNull(funNames.readers()), importShift);
 				List<StringEntry> names = new ArrayList<>(this.funNameClaimable);
 				names.sort(java.util.Comparator.comparingInt(StringEntry::offset));
 				for (StringEntry e : names) {
 					int start = e.offset() - dataBase;
-					ranges.add(new am.ik.wasm.WasmTreeShaker.DroppableDataRange(segmentIndex, start, start + e.length(),
-							blobStart, blobStart + 4, true));
+					ranges.add(am.ik.wasm.WasmTreeShaker.DroppableDataRange.readBy(segmentIndex, start,
+							start + e.length(), readers, true));
 				}
 			}
 			return ranges;
+		}
+
+		private static int[] readerIndices(List<Integer> readers, int importShift) {
+			int[] out = new int[readers.size()];
+			for (int i = 0; i < out.length; i++) {
+				out[i] = readers.get(i) + importShift;
+			}
+			return out;
 		}
 
 		/**
@@ -11973,48 +12017,73 @@ public final class WasmLispCompiler implements LispCompiler {
 		 */
 		int appendShakeableBlob(byte[] blob) {
 			int offset = appendBlob(blob);
-			this.shakeableBlobs.add(new int[] { offset, blob.length, 0 });
+			this.shakeableBlobs.add(new ShakeableBlob(offset, blob.length, null));
 			return offset;
 		}
 
 		/**
-		 * {@link #appendShakeableBlob} for a blob whose readers all cite its BASE address
-		 * (interior offsets are derived arithmetically inside the reading bodies): the
-		 * droppable range is probed on the first word only, so an unrelated small
-		 * constant landing somewhere inside a wide blob cannot pin it -- with a 755-byte
-		 * table that false retention was near-certain (todo-431's Schubfach tables are
-		 * the one user today). The {@code appendBlob} alignment padding BEFORE the blob
-		 * joins the cut range (probing still on the blob's own base word): padding that
-		 * exists only because this blob needed it must not survive as a zero segment when
-		 * the blob is cut.
+		 * {@link #appendShakeableBlob} for a blob whose readers are runtime functions the
+		 * compiler builds itself, each registered through {@link #readBlob} as its body
+		 * is built: the range is kept exactly while one of them survives the shake, and
+		 * cut when none was registered. Observation cannot decide such a blob -- its
+		 * readers cite the BASE word and derive interior offsets arithmetically, and
+		 * probing that one word let any unrelated live constant equal to it (a user
+		 * integer literal) pin the whole blob, at an address that moves with every string
+		 * placed in front of it. The {@code appendBlob} alignment padding BEFORE the blob
+		 * joins the cut range: padding that exists only because this blob needed it must
+		 * not survive as a zero segment when the blob is cut.
 		 * @param blob the bytes to place
 		 * @return the absolute offset where the blob was placed
 		 */
-		int appendShakeableBlobProbedOnBase(byte[] blob) {
+		int appendReaderOwnedBlob(byte[] blob) {
 			int beforePadding = this.nextOffset;
 			int offset = appendBlob(blob);
-			this.shakeableBlobs.add(new int[] { beforePadding, offset - beforePadding + blob.length, 4, offset });
+			addReaderOwned(offset,
+					new ShakeableBlob(beforePadding, offset - beforePadding + blob.length, new ArrayList<>()));
 			return offset;
 		}
 
 		/**
-		 * {@link #appendShakeableBlobProbedOnBase} WITHOUT the 4-byte alignment. The
-		 * funcId -> name table is its user: its only reader loads rows with plain
-		 * {@code i32.load}s, and wasm linear memory defines an access at ANY address, so
-		 * the alignment bought nothing while making the blob's leading padding depend on
-		 * the phase of the packed literals placed before it -- one more u16 element in a
-		 * quoted vector then cost 4 module bytes instead of its own 2. With no padding
-		 * there is no leading pad to join the cut range either: the range is the blob
-		 * exactly.
+		 * {@link #appendReaderOwnedBlob} WITHOUT the 4-byte alignment. The funcId -> name
+		 * table is its user: its only reader loads rows with plain {@code i32.load}s, and
+		 * wasm linear memory defines an access at ANY address, so the alignment bought
+		 * nothing while making the blob's leading padding depend on the phase of the
+		 * packed literals placed before it -- one more u16 element in a quoted vector
+		 * then cost 4 module bytes instead of its own 2. With no padding there is no
+		 * leading pad to join the cut range either: the range is the blob exactly.
 		 * @param blob the bytes to place
 		 * @return the absolute offset where the blob was placed
 		 */
-		int appendShakeableBlobUnalignedProbedOnBase(byte[] blob) {
+		int appendReaderOwnedBlobUnaligned(byte[] blob) {
 			int offset = this.nextOffset;
 			this.data.write(blob, 0, blob.length);
 			this.nextOffset += blob.length;
-			this.shakeableBlobs.add(new int[] { offset, blob.length, 4, offset });
+			addReaderOwned(offset, new ShakeableBlob(offset, blob.length, new ArrayList<>()));
 			return offset;
+		}
+
+		private void addReaderOwned(int base, ShakeableBlob blob) {
+			this.shakeableBlobs.add(blob);
+			this.readerOwnedBlobs.put(base, blob);
+		}
+
+		/**
+		 * Registers a function whose body reads the reader-owned blob at {@code base}.
+		 * Every body handed the base must be registered, or the shaker cuts bytes it
+		 * still reads. {@code shakeCore} pins each reader against the inliner, since a
+		 * moved body would leave the range decided by a function the shake then kills.
+		 * @param base the blob's address, as {@link #appendReaderOwnedBlob} returned it
+		 * @param funcIndex the reader's function index, without the host-import shift
+		 * @return {@code base}, for handing on to the body builder
+		 */
+		int readBlob(int base, int funcIndex) {
+			ShakeableBlob blob = this.readerOwnedBlobs.get(base);
+			List<Integer> readers = blob == null ? null : blob.readers();
+			if (readers == null) {
+				throw new IllegalStateException("no reader-owned blob at " + base);
+			}
+			readers.add(funcIndex);
+			return base;
 		}
 
 		byte[] toByteArray() {
@@ -12033,6 +12102,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 
 		record StringEntry(int offset, int length) {
+		}
+
+		/**
+		 * One shakeable blob: its first cut byte (leading alignment padding included),
+		 * its cut length, and -- for a reader-owned blob -- the function indices
+		 * registered as reading it; null for a blob decided by observation of its own
+		 * bytes.
+		 */
+		private record ShakeableBlob(int start, int length, @Nullable List<Integer> readers) {
 		}
 
 	}

@@ -35,10 +35,16 @@ final class WasmRuntimeBuilder {
 	 * <p>
 	 * The recursive spelling allocated its result by recursing once per element, so a
 	 * long first argument exhausted the wasm stack rather than answering slowly
-	 * (.todo/749). The result is unchanged (a fresh spine, the tail shared) and an
-	 * improper first argument still traps at the same {@code ref.cast}.
+	 * (.todo/749). The result is unchanged (a fresh spine, the tail shared). In EH mode a
+	 * first argument that is no list, or ends dotted, is {@code APPEND}'s type-error over
+	 * the atom the walk met ({@code _type_err_list} under its row); outside it the body
+	 * is unchanged and traps at the {@code ref.cast}.
+	 * @param identityHash whether a cons carries an identity hash
+	 * @param operatorGlobal the operator register, or -1 outside EH mode
+	 * @param operatorId {@code APPEND}'s row, or 0 when the program cannot name it
+	 * @return the function body
 	 */
-	static byte[] buildAppendBody(boolean identityHash) {
+	static byte[] buildAppendBody(boolean identityHash, int operatorGlobal, int operatorId) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -63,6 +69,23 @@ final class WasmRuntimeBuilder {
 		getLocal(w, 4);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.BR_IF, 1);
+		if (operatorGlobal >= 0) {
+			// EH mode: an atom other than nil is APPEND's type-error.
+			getLocal(w, 4);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(operatorId);
+			w.write(Instruction.SET_GLOBAL);
+			w.writeUnsignedLeb128(operatorGlobal);
+			getLocal(w, 4);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_TYPE_ERR_LIST);
+			w.write(Instruction.UNREACHABLE);
+			w.write(Instruction.END);
+		}
 		// fresh = cons(cursor.car, null)
 		getLocal(w, 4);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);

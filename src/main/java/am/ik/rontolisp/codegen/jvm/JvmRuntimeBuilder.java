@@ -15,7 +15,9 @@ import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.RenderCycleGuard;
+import am.ik.rontolisp.compiler.OperandTypes;
 
 /**
  * Builds JVM bytecode for runtime helper methods: dispatch, _lispToString, and
@@ -2096,10 +2098,12 @@ final class JvmRuntimeBuilder {
 	 * <p>
 	 * The recursive spelling allocated its result by recursing once per element, so a
 	 * long first argument was a StackOverflowError rather than a slow call (.todo/749).
-	 * The result is unchanged (a fresh spine, the tail shared) and an improper first
-	 * argument still fails at the same CHECKCAST.
+	 * The result is unchanged (a fresh spine, the tail shared). A first argument that is
+	 * no list, or ends dotted, is {@code APPEND}'s {@code LIST} type-error over the atom
+	 * the walk met ({@link JvmOperandTypeRuntime}).
 	 */
-	static List<Integer> buildAppendBody(ClassConstant objectArrayClass, ClassConstant objectClass) {
+	static List<Integer> buildAppendBody(ConstantPool cp, ClassConstant thisClass, ClassConstant objectArrayClass,
+			ClassConstant objectClass) {
 		List<Integer> code = new ArrayList<>();
 		// cursor = a; head = null; tail = null
 		code.add(Opcode.ALOAD_0);
@@ -2111,11 +2115,18 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.ASTORE);
 		code.add(3);
 		int loopPos = code.size();
-		// if (cursor == null) goto end
+		// if (cursor == null) goto end; if (!(cursor instanceof Object[])) goto notList
 		code.add(Opcode.ALOAD);
 		code.add(4);
 		int endPos = code.size();
 		code.add(Opcode.IFNULL);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD);
+		code.add(4);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, objectArrayClass.index());
+		int notListPos = code.size();
+		code.add(Opcode.IFEQ);
 		emitU2(code, 0);
 		// fresh = new Object[]{((Object[]) cursor)[0], null}
 		code.add(Opcode.ICONST_2);
@@ -2189,6 +2200,25 @@ final class JvmRuntimeBuilder {
 		patchBranch(code, nullHeadPos, code.size());
 		code.add(Opcode.ALOAD_1);
 		code.add(Opcode.ARETURN);
+		// notList: throw _opTypeErr(_teRaw(cursor, "LIST"), "APPEND", "LIST")
+		patchBranch(code, notListPos, code.size());
+		ConstantPool.StringConstant list = cp.addString(OperandTypes.Kind.LIST.name());
+		code.add(Opcode.ALOAD);
+		code.add(4);
+		emitLdc(code, list.index());
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code,
+				JvmOperandTypeRuntime
+					.self(cp, thisClass, JvmOperandTypeRuntime.TE_RAW, JvmOperandTypeRuntime.TE_RAW_DESC)
+					.index());
+		emitLdc(code, cp.addString(LispNames.APPEND).index());
+		emitLdc(code, list.index());
+		code.add(Opcode.INVOKESTATIC);
+		emitU2(code,
+				JvmOperandTypeRuntime
+					.self(cp, thisClass, JvmOperandTypeRuntime.OP_TYPE_ERR, JvmOperandTypeRuntime.OP_TYPE_ERR_DESC)
+					.index());
+		code.add(Opcode.ATHROW);
 		return code;
 	}
 

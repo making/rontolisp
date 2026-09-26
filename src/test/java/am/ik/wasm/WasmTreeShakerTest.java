@@ -94,6 +94,77 @@ class WasmTreeShakerTest {
 	}
 
 	@Test
+	void aReaderDecidedRangeIgnoresAnUnrelatedConstantEqualToItsBase() {
+		// A blob whose readers cite its BASE word was probed on that word, so any live
+		// constant equal to the address pinned it -- chipz's `2048` held ~990 dead bytes
+		// of fdlibm tables the day a string shift moved their base there. The
+		// reader-decided form keys the range on the reader's reachability instead.
+		byte[] unrelated = bodyCiting(100); // live, and equal to the blob's base by
+											// chance
+		byte[] reader = bodyCiting(100);
+		byte[] deadReader = module(unrelated, reader, false);
+		byte[] liveReader = module(unrelated, reader, true);
+		List<WasmTreeShaker.DroppableDataRange> readBy = List
+			.of(WasmTreeShaker.DroppableDataRange.readBy(0, 0, 12, new int[] { 1 }, false));
+
+		assertThat(dataSectionText(WasmTreeShaker.shake(deadReader, List.of(),
+				List.of(new WasmTreeShaker.DroppableDataRange(0, 0, 12, 0, 4)))))
+			.as("observation: the unrelated constant pins the blob")
+			.contains("ABCDEFGHIJKL");
+		assertThat(dataSectionText(WasmTreeShaker.shake(deadReader, List.of(), readBy)))
+			.as("the reader died, so the blob goes whatever else holds its address")
+			.doesNotContain("ABCD");
+		assertThat(dataSectionText(WasmTreeShaker.shake(liveReader, List.of(), readBy))).as("a live reader keeps it")
+			.contains("ABCDEFGHIJKL");
+		assertThat(dataSectionText(WasmTreeShaker.shake(liveReader, List.of(),
+				List.of(WasmTreeShaker.DroppableDataRange.readBy(0, 0, 12, new int[0], false)))))
+			.as("no reader at all: nothing reads the bytes")
+			.doesNotContain("ABCD");
+	}
+
+	private static byte[] bodyCiting(int address) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // no locals
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(address);
+		w.write(Instruction.DROP);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	// Two functions over a 12-byte blob at address 100: f is exported; g is exported
+	// only when asked, so it is otherwise unreachable.
+	private static byte[] module(byte[] f, byte[] g, boolean exportG) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		new WasmWriter(out).write("\0asm")
+			.writeLittleEndian4(1)
+			.writeTypeSection(types -> types.addFunc(new Type[] {}, new Type[] {}))
+			.writeFunction(functions -> {
+				functions.addFunction(0);
+				functions.addFunction(0);
+			})
+			.writeMemory(memories -> memories.addMemory(1))
+			.writeExport(exports -> {
+				exports.addExport("f", ExternalKind.FUNCTION, 0);
+				if (exportG) {
+					exports.addExport("g", ExternalKind.FUNCTION, 1);
+				}
+			})
+			.writeCode(code -> {
+				code.addFunction(f);
+				code.addFunction(g);
+			})
+			.writeDataSection(data -> data.addActiveData(0, 100,
+					"ABCDEFGHIJKL".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1)));
+		return out.toByteArray();
+	}
+
+	private static String dataSectionText(byte[] module) {
+		return new String(dataSectionPayload(module), java.nio.charset.StandardCharsets.ISO_8859_1);
+	}
+
+	@Test
 	void dropsGlobalsNoSurvivorReadsAndRenumbersTheRest() {
 		// The shaker walked functions, types and data; a GLOBAL nothing reads survived
 		// it. The backends emit one per top-level Lisp variable whether or not the

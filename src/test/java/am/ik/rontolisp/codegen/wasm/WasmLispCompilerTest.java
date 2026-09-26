@@ -1551,6 +1551,67 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void anIntegerLiteralEqualToARuntimeTableAddressDoesNotKeepTheTable() {
+		// The fdlibm reduction tables and the Schubfach tables are read by known runtime
+		// bodies that cite their BASE word. The shaker used to probe that word by
+		// observation, so a live user literal equal to the address pinned a table no
+		// reachable function reads: chipz's `2048` held ~990 dead bytes of fdlibm tables
+		// the day a 52-byte string shift moved their base there. Neither table is read
+		// here -- nothing reaches sin, and nothing prints a float.
+		for (byte[] table : List.of(WasmFdlibmRuntimeBuilder.tables(), SchubfachTables.blob())) {
+			byte[] prefix = Arrays.copyOf(table, 16);
+			int base = WasmModuleInspector.dataAddressOf(compileBumping(0, OptimizeLevel.NONE), prefix);
+			assertThat(base).as("the unoptimized module places the table").isPositive();
+			assertThat(WasmModuleInspector.dataAddressOf(compileBumping(base, OptimizeLevel.DEFAULT), prefix))
+				.as("a literal %d equal to the table's address keeps it", base)
+				.isEqualTo(-1);
+		}
+		byte[] trig = WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(LispReader.readAllFromString("(print (sin (float (length (list 1 2)))))"));
+		assertThat(WasmModuleInspector.dataAddressOf(trig, Arrays.copyOf(WasmFdlibmRuntimeBuilder.tables(), 16)))
+			.as("a reachable sin keeps its tables")
+			.isPositive();
+	}
+
+	@Test
+	void everyFdlibmBodyThatCitesTheTablesIsOneTheShakerCountsAsTheirReader() {
+		// The shaker keeps the tables exactly while an addressesTables function
+		// survives, so a body citing the base outside that set would read zeros.
+		int base = 0x5A5A5; // a three-byte LEB no other immediate is likely to spell
+		java.io.ByteArrayOutputStream cite = new java.io.ByteArrayOutputStream();
+		new am.ik.wasm.WasmWriter(cite).write(Instruction.I32_CONST).writeSignedLeb128(base);
+		for (WasmFdlibmRuntimeBuilder.Fn fn : WasmFdlibmRuntimeBuilder.Fn.values()) {
+			byte[] body = WasmFdlibmRuntimeBuilder.build(fn, f -> 1000 + f.ordinal(), base);
+			assertThat(indexOf(body, cite.toByteArray()) >= 0).as(fn.name())
+				.isEqualTo(WasmFdlibmRuntimeBuilder.addressesTables(fn));
+		}
+	}
+
+	private static int indexOf(byte[] bytes, byte[] needle) {
+		outer: for (int i = 0; i + needle.length <= bytes.length; i++) {
+			for (int k = 0; k < needle.length; k++) {
+				if (bytes[i + k] != needle[k]) {
+					continue outer;
+				}
+			}
+			return i;
+		}
+		return -1;
+	}
+
+	// A program that spells sin (so the fdlibm tables are placed) without reaching it,
+	// and holds `constant` as a live integer immediate.
+	private static byte[] compileBumping(int constant, OptimizeLevel level) {
+		return WasmLispCompiler.builder()
+			.optimize(level)
+			.build()
+			.compile(LispReader.readAllFromString("(defun unused (x) (sin x))\n(defun bump (x) (+ x " + constant
+					+ "))\n(print (bump (length (list 1 2))))"));
+	}
+
+	@Test
 	void aLiteralLookupTableCostsItsOwnBytesAndNotThreeTimesThem() {
 		// A literal (unsigned-byte N) table is baked into the module's static data at the
 		// element width, so one more element costs w/8 bytes -- not the ~11.8 the cons

@@ -1569,6 +1569,83 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void listConsumersBeyondTheFirstSetNameTheOperator() throws Exception {
+		// The list consumers beyond the first set name their operator as the first set
+		// does (compiler/OperandTypes): reverse/nreverse over a non-sequence (SEQUENCE),
+		// append, the member/assoc/rassoc scans and list-length over a non-list (LIST), a
+		// dotted list's tail wherever a walk reaches it (length, the map* walks), a
+		// mapcan/mapcon piece that is no list, and the multi-list map* value path, which
+		// reported CAR. The twins are LispEvaluatorTest, JvmLispCompilerTest and
+		// WasmLispCompilerIntegrationTest's
+		// listConsumersBeyondTheFirstSetNameTheOperator.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *te-five* 5)
+				(defvar *te-dotted* '(1 2 . 3))
+				(print (te (lambda () (length *te-dotted*))))
+				(print (te (lambda () (reverse *te-five*))))
+				(print (te (lambda () (reverse *te-dotted*))))
+				(print (te (lambda () (nreverse *te-five*))))
+				(print (te (lambda () (funcall #'reverse *te-five*))))
+				(print (te (lambda () (append *te-five* nil))))
+				(print (te (lambda () (append *te-dotted* '(4)))))
+				(print (te (lambda () (funcall #'append *te-five* nil))))
+				(print (te (lambda () (member 1 *te-five*))))
+				(print (te (lambda () (member 9 *te-dotted*))))
+				(print (te (lambda () (funcall #'member 1 *te-five*))))
+				(print (te (lambda () (member-if #'evenp *te-five*))))
+				(print (te (lambda () (assoc 1 *te-five*))))
+				(print (te (lambda () (assoc-if #'evenp *te-five*))))
+				(print (te (lambda () (rassoc 1 *te-five*))))
+				(print (te (lambda () (rassoc-if #'evenp *te-five*))))
+				(print (te (lambda () (list-length *te-five*))))
+				(print (te (lambda () (list-length *te-dotted*))))
+				(print (te (lambda () (mapcar #'1+ *te-dotted*))))
+				(print (te (lambda () (mapc #'1+ *te-dotted*))))
+				(print (te (lambda () (mapcan #'list *te-dotted*))))
+				(print (te (lambda () (maplist #'car *te-dotted*))))
+				(print (te (lambda () (mapcan (lambda (x) x) '(1 2)))))
+				(print (te (lambda () (mapcon (lambda (x) 5) '(1 2)))))
+				(print (te (lambda () (funcall #'mapcar #'+ '(1 2) *te-five*))))
+				(print (te (lambda () (funcall #'mapcar #'+ '(1 2) *te-dotted*))))
+				(print (te (lambda () (funcall #'mapcan (lambda (x y) x) '(1 2) '(3 4)))))
+				(print (list (reverse '(1 2)) (member 1 *te-dotted*) (member 3 '(1 2)) (assoc 2 '((1 . a) (2 . b)))
+				             (append '(1) 2) (mapcan #'list '(1 2)) (list-length '(1 2)) (mapcar #'+ '(1 2 3) '(1 2))))
+				""")).isEqualTo("""
+				("LENGTH: The value 3 is not of type SEQUENCE" 3 SEQUENCE)
+				("REVERSE: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+				("REVERSE: The value 3 is not of type SEQUENCE" 3 SEQUENCE)
+				("NREVERSE: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+				("REVERSE: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+				("APPEND: The value 5 is not of type LIST" 5 LIST)
+				("APPEND: The value 3 is not of type LIST" 3 LIST)
+				("APPEND: The value 5 is not of type LIST" 5 LIST)
+				("MEMBER: The value 5 is not of type LIST" 5 LIST)
+				("MEMBER: The value 3 is not of type LIST" 3 LIST)
+				("MEMBER: The value 5 is not of type LIST" 5 LIST)
+				("MEMBER-IF: The value 5 is not of type LIST" 5 LIST)
+				("ASSOC: The value 5 is not of type LIST" 5 LIST)
+				("ASSOC-IF: The value 5 is not of type LIST" 5 LIST)
+				("RASSOC: The value 5 is not of type LIST" 5 LIST)
+				("RASSOC-IF: The value 5 is not of type LIST" 5 LIST)
+				("LIST-LENGTH: The value 5 is not of type LIST" 5 LIST)
+				("LIST-LENGTH: The value 3 is not of type LIST" 3 LIST)
+				("MAPCAR: The value 3 is not of type LIST" 3 LIST)
+				("MAPC: The value 3 is not of type LIST" 3 LIST)
+				("MAPCAN: The value 3 is not of type LIST" 3 LIST)
+				("MAPLIST: The value 3 is not of type LIST" 3 LIST)
+				("MAPCAN: The value 1 is not of type LIST" 1 LIST)
+				("MAPCON: The value 5 is not of type LIST" 5 LIST)
+				("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+				("MAPCAR: The value 3 is not of type LIST" 3 LIST)
+				("MAPCAN: The value 1 is not of type LIST" 1 LIST)
+				((2 1) (1 2 . 3) NIL (2 . B) (1 . 2) (1 2) 2 (2 4))""");
+	}
+
+	@Test
 	void compileAndRunOperandTypeErrorAnswersItsDatumAndExpectedType() throws Exception {
 		// The pad fills the type-error's datum and expected-type from the record the
 		// wrapper left (JvmOperandTypeRuntime); the evaluator twin is
@@ -16823,7 +16900,7 @@ class JvmLispCompilerTest {
 				(print (search '(1 2 3) '(1 2 3) :start1 1 :end1 99))
 				(print (search '(1 2 3) '(1 2 3) :start2 -1))
 				(print (search '(1 2 3) '(1 2 3) :start1 -1))
-				(print (search '(1) '(1 2 . 3)))
+				(print (handler-case (search '(1) '(1 2 . 3)) (type-error (e) (princ-to-string e))))
 				(print (search '(3 4) '(1 2 3 4 5) :key #'identity))
 				(print (mismatch '(1 2 3) '(1 2 4)))
 				(print (mismatch '(1 2 3) '(1 2 3) :end1 99))
@@ -16838,7 +16915,8 @@ class JvmLispCompilerTest {
 				               (search '(5 6) long :from-end t) (mismatch long long)
 				               (mismatch long (append (butlast long) (list 99))))))
 				""")).isEqualTo(
-				"2\nNIL\n4\n2\nNIL\n1\n1\n0\nNIL\n0\nNIL\n0\nNIL\n0\n2\n2\n3\n3\n0\nNIL\n2\n" + "(NIL 5 397 NIL 399)");
+				"2\nNIL\n4\n2\nNIL\n1\n1\n0\nNIL\n0\nNIL\n0\nNIL\n\"LENGTH: The value 3 is not of type SEQUENCE\"\n"
+						+ "2\n2\n3\n3\n0\nNIL\n2\n" + "(NIL 5 397 NIL 399)");
 	}
 
 	@Test

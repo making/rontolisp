@@ -190,7 +190,7 @@ final class WasmOperandTypes {
 			if (spelled.test(CHARACTER_CHECKED)) {
 				rowCodes.add(code(OperandTypes.Kind.CHARACTER));
 			}
-			return new Operators(java.util.Map.copyOf(ids), table.appendShakeableBlobProbedOnBase(blob.toByteArray()),
+			return new Operators(java.util.Map.copyOf(ids), table.appendReaderOwnedBlob(blob.toByteArray()),
 					java.util.Set.copyOf(rowCodes));
 		}
 
