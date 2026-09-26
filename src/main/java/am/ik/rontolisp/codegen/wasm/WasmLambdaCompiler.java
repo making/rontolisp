@@ -60,6 +60,7 @@ final class WasmLambdaCompiler {
 		int funcIndex = ctx.userFuncBase + ctx.numDefuns + ctx.lambdaDecls.size();
 		ctx.lambdaDecls.add(new WasmLispCompiler.LambdaInfo(funcId, methodName, paramNames, nf.variadic(), bodyExprs,
 				new ArrayList<>(freeVars), funcIndex));
+		WasmUncaughtLocations.registerLambda(funcId, cons, bodyExprs, ctx);
 
 		emitClosureValue(funcId, new ArrayList<>(freeVars), ctx);
 	}

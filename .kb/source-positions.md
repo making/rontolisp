@@ -1,7 +1,8 @@
 # Source positions: `file:line:column` in reader AND frontend errors, the two literals a program can read, and where an uncaught condition happened
 
-Four mechanisms. Positions never reach an emitter: compiled output is byte-identical
-with and without any of this. `am.ik.rontolisp.SourceLocation` (`file`, 1-based
+Four mechanisms. Positions never reach an emitter -- compiled output is byte-identical
+with and without any of this -- except the wasm-GC `--report-locations` frames, which read
+them at emission time ([error-handling.md](error-handling.md), "Location lines on wasm-GC"). `am.ik.rontolisp.SourceLocation` (`file`, 1-based
 `line`/`column`; `at`, `prefix`) lives in the AST package, NOT `reader`, because
 `compiler`/`codegen.*` may not import `reader`. **No file means no prefix** — `""` when
 `file` is null (runtime `read`, REPL), so runtime error text stays byte-identical.
@@ -51,7 +52,13 @@ check.**
 `SourceProvenance.inherit(original, rewritten)`; `PureBuiltinFolder` routes every rebuild
 through it, the model for the next such pass. A pass can owe BOTH halves;
 `PackageResolver` owes them most. Legitimately coarse: a CONSUMED top-level directive
-(`in-package`, `defpackage`, `export`).
+(`in-package`, `defpackage`, `export`). `SourceProvenance.inheritWhenCompiling` records the
+position on the compile path only, for an expansion shared with the interpreter whose located
+copies would move what the interpreter's report attributes: the `flet`/`labels` expansion and
+its local-call rewrite, and `LispAsync`'s `%async-run` thunk.
+- **`locate` is cheap enough to call per form**: a unit's line starts are indexed once
+  (`State.lineStarts`, binary search), where `SourceLocation.at` rescans the text from the start
+  -- quadratic for a backend that locates every form it compiles.
 
 ## Phase 3 — source position literals a PROGRAM can read
 `rontolisp:current-file` / `rontolisp:current-line` (`LispNames.CURRENT_FILE` /

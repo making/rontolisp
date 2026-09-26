@@ -210,6 +210,9 @@ final class WasmToplevelEmit {
 		if (boxedVars != null) {
 			ctx.boxedVars = boxedVars;
 		}
+		// --report-locations: a top-level form's condition is noted here, with the unit
+		// of whichever file the form came from.
+		WasmUncaughtLocations.open(ctx, WasmUncaughtLocations.topLevelSpec(ctx.uncaughtLocations));
 		return new Chunk(ctx, writer, body, lambdaIdx, funcId, funcIndex);
 	}
 
@@ -220,6 +223,7 @@ final class WasmToplevelEmit {
 	private static void closeChunk(Chunk chunk, WasmLispCompiler.Ctx start, boolean guarded) {
 		chunk.writer.write(Instruction.REF_NULL);
 		chunk.writer.writeHeapType(Type.EQ.code());
+		WasmUncaughtLocations.close(chunk.ctx);
 		chunk.writer.write(Instruction.END);
 
 		start.lambdaDecls.set(chunk.lambdaIdx,

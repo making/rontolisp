@@ -9,6 +9,7 @@ import java.util.Deque;
 import java.util.HashMap;
 import java.util.EnumSet;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -33,6 +34,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.PackageResolver;
+import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.AstOutliner;
 import am.ik.rontolisp.compiler.DeadTypeBranchPruner;
 import am.ik.rontolisp.compiler.ToplevelStatements;
@@ -98,6 +100,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	private final boolean reentrant;
 
+	private final @Nullable WasmReportLocations reportLocations;
+
 	/**
 	 * The names the compiled program's {@code *features*} starts out holding. The WASM
 	 * backend's own set unless the frontend {@link Builder#runtimeFeatures(List) says
@@ -142,6 +146,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		this.optimize = builder.optimize;
 		this.serve = builder.serve && builder.component;
 		this.simd = builder.simd;
+		this.reportLocations = builder.reportLocations;
 		this.hostRandom = builder.hostRandom;
 		this.hostFetch = builder.hostFetch;
 		this.runnerFetch = builder.runnerFetch;
@@ -243,6 +248,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		private boolean runnerFetch;
 
 		private boolean reentrant;
+
+		private @Nullable WasmReportLocations reportLocations;
 
 		private List<String> runtimeFeatures = LispMacroExpander.backendFeatures(true);
 
@@ -358,6 +365,19 @@ public final class WasmLispCompiler implements LispCompiler {
 		 */
 		public Builder simd(boolean simd) {
 			this.simd = simd;
+			return this;
+		}
+
+		/**
+		 * Selects {@code --report-locations}: the entry's uncaught report also says where
+		 * the condition happened, at the given granularity. Takes effect in EH mode only
+		 * -- the only mode with a report -- so outside it, and with {@code null} (the
+		 * default), the module is byte-identical to a build that never knew about it.
+		 * @param reportLocations the granularity, or {@code null} for none
+		 * @return this builder
+		 */
+		public Builder reportLocations(@Nullable WasmReportLocations reportLocations) {
+			this.reportLocations = reportLocations;
 			return this;
 		}
 
@@ -3382,6 +3402,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// real (defun ...) form defines a function; a top-level (setq name (lambda ...))
 		// binds a variable to a closure like any other setq.
 		List<DefunDecl> defuns = new ArrayList<>();
+		// Each source defun's defining form, for --report-locations: the definition line
+		// a frame reports under =function (WasmUncaughtLocations).
+		Map<DefunDecl, LispVal> defunForms = new IdentityHashMap<>();
 		List<LispVal> topLevelExprs = new ArrayList<>();
 		// (rontolisp:wasm-export ...) directives: collected here and turned into
 		// host-callable
@@ -3403,7 +3426,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		for (LispVal expr : program) {
 			if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 					&& LispNames.DEFUN.equals(sym.name())) {
-				defuns.add(extractSetqLambda(LispMacroExpander.expandDefun(cons)));
+				DefunDecl decl = extractSetqLambda(LispMacroExpander.expandDefun(cons));
+				defuns.add(decl);
+				defunForms.put(decl, cons);
 			}
 			else if (WasmExportCompiler.isExportForm(expr)) {
 				exportDecls.add(WasmExportCompiler.parse((LispCons) expr));
@@ -4150,6 +4175,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 
 		// Reusable builder template with shared constants and state
+		// --report-locations: the frames' shared state, in EH mode only -- the only mode
+		// with an uncaught report to put location lines under.
+		WasmUncaughtLocations.Module uncaughtLocations = this.reportLocations != null && uncaughtReportPad
+				? new WasmUncaughtLocations.Module(this.reportLocations, program,
+						this.asyncMode || programUsesSymbol(program, LispNames.ASYNC_RUN_QUALIFIED))
+				: null;
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.stringTable(stringTable)
 			.ehMode(ehMode)
@@ -4166,6 +4197,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.ehDepthGlobalIndex(ehDepthGlobalIndex)
 			.operandOpGlobalIndex(operandOpGlobalIndex)
 			.operandOperators(operandOperators)
+			.uncaughtLocations(uncaughtLocations)
 			.rawSentinelGlobalIndex(rawSentinelGlobalIndex)
 			.functions(functions)
 			.inlinableDefuns(inlinableDefuns)
@@ -4257,6 +4289,25 @@ public final class WasmLispCompiler implements LispCompiler {
 		// body. See .kb/optimize-dead-code-elimination.md.
 		stringTable.attributing(true);
 
+		// --report-locations: which defuns are frames, decided before any body compiles
+		// -- a tail call INTO one may leave the caller's frame, a tail call into any
+		// other function keeps it (WasmUncaughtLocations.tailCallOp).
+		Map<DefunDecl, WasmUncaughtLocations.Spec> defunFrames = new IdentityHashMap<>();
+		if (uncaughtLocations != null) {
+			for (DefunDecl defun : defuns) {
+				if (injectedRuntimeDefuns.contains(defun.name)
+						|| (this.asyncMode && asyncDefunNames.contains(defun.name))) {
+					continue;
+				}
+				WasmUncaughtLocations.Spec spec = WasmUncaughtLocations.functionSpec(uncaughtLocations, defun.name,
+						defunForms.get(defun), defun.bodyExprs);
+				if (spec != null) {
+					defunFrames.put(defun, spec);
+					uncaughtLocations.framedFunctions.add(defun.name);
+				}
+			}
+		}
+
 		// Pass 2a: Compile each defun body (with env param at slot 0)
 		List<byte[]> userFunctionBodies = new ArrayList<>();
 		// Import wrapper bodies are deferred until after the lambda pass: a :string
@@ -4298,7 +4349,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				ByteArrayOutputStream protoBuf = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 				Ctx protoCtx = ctxBuilder.writer(new WasmWriter(protoBuf)).bodyStream(protoBuf).build();
 				WasmAsyncEmit.Resume resume = WasmAsyncEmit.compileResume(protoCtx, defun.paramNames, defun.bodyExprs,
-						List.of(), false, false);
+						List.of(), false, false, injectedBody ? null : WasmUncaughtLocations
+							.asyncBodySpec(uncaughtLocations, defun.name, defunForms.get(defun), defun.bodyExprs));
 				userFunctionBodies.add(WasmAsyncEmit.buildEntryBody(protoCtx, defun.paramNames.size(), false, resume));
 				continue;
 			}
@@ -4334,6 +4386,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			}
 
+			// --report-locations: a function read from a file notes where a condition
+			// leaving it happened (an injected runtime body is library code, never).
+			funcCtx.ucFunctionName = injectedBody ? null : defun.name;
+			WasmUncaughtLocations.open(funcCtx, defunFrames.get(defun));
 			if (defun.bodyExprs.isEmpty()) {
 				// (defun f ()) -- an empty body answers nil, per CL (dissect's no-op
 				// interface stubs are this shape).
@@ -4350,9 +4406,11 @@ public final class WasmLispCompiler implements LispCompiler {
 					// The last form's value is the function's: a call there is a tail
 					// call (Ctx.tailPosition).
 					funcCtx.tailPosition = true;
+					WasmUncaughtLocations.tailForm(funcCtx, defun.bodyExprs.get(i));
 					WasmExprCompiler.compileExpr(defun.bodyExprs.get(i), funcCtx);
 				}
 			}
+			WasmUncaughtLocations.close(funcCtx);
 			funcWriter.write(Instruction.END);
 
 			// Rebuild with correct local declarations (extra locals beyond env+params)
@@ -4486,7 +4544,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			// top-level await's re-signal) escapes to the catch-all prologue -- the
 			// same trap an uncaught error produces today.
 			WasmAsyncEmit.Resume topResume = WasmAsyncEmit.compileResume(ctx, List.of(), topLevelExprs, List.of(), true,
-					usesEval);
+					usesEval, WasmUncaughtLocations.topLevelSpec(uncaughtLocations));
 			WasmAsyncEmit.emitStartEntry(ctx, topResume);
 		}
 		else {
@@ -4571,6 +4629,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			}
 
+			WasmUncaughtLocations.open(lambdaCtx,
+					uncaughtLocations == null ? null : uncaughtLocations.lambdaSpecs.get(lambda.funcId()));
 			for (int i = 0; i < lambda.bodyExprs.size(); i++) {
 				// Non-tail statements compile for effect, like a defun body's.
 				if (i < lambda.bodyExprs.size() - 1) {
@@ -4578,6 +4638,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				else {
 					lambdaCtx.tailPosition = true;
+					WasmUncaughtLocations.tailForm(lambdaCtx, lambda.bodyExprs.get(i));
 					WasmExprCompiler.compileExpr(lambda.bodyExprs.get(i), lambdaCtx);
 				}
 			}
@@ -4586,6 +4647,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				lambdaWriter.write(Instruction.REF_NULL);
 				lambdaWriter.writeHeapType(Type.EQ.code());
 			}
+			WasmUncaughtLocations.close(lambdaCtx);
 			lambdaWriter.write(Instruction.END);
 
 			lambdaFunctionBodies.add(buildLocalsAndPatch(lambdaCtx, lambda.paramNames.size() + 1, lambdaBody));
@@ -8800,7 +8862,7 @@ public final class WasmLispCompiler implements LispCompiler {
 							+ " expects (async-defun name (params) body...): " + form.print());
 				}
 				asyncDefunNames.add(name.name());
-				out.add(new LispCons(new LispSymbol(LispNames.DEFUN), cons.cdr()));
+				out.add(SourceProvenance.inherit(cons, new LispCons(new LispSymbol(LispNames.DEFUN), cons.cdr())));
 			}
 			else {
 				out.add(form);
@@ -9976,6 +10038,34 @@ public final class WasmLispCompiler implements LispCompiler {
 		WasmOperandTypes.Operators operandOperators = WasmOperandTypes.Operators.NONE;
 
 		/**
+		 * The {@code --report-locations} state shared by every context of the module, or
+		 * {@code null} when the option is off or the module is not in EH mode
+		 * ({@link WasmUncaughtLocations}).
+		 */
+		WasmUncaughtLocations.@Nullable Module uncaughtLocations;
+
+		/**
+		 * The frame of the function body compiling into this context, or {@code null}
+		 * outside one ({@link WasmUncaughtLocations#open}).
+		 */
+		WasmUncaughtLocations.@Nullable Frame ucFrame;
+
+		/**
+		 * The hop the NEXT lambda registered here is an async body under -- set by
+		 * {@code %async-run} over its thunk, consumed by the lambda's registration;
+		 * {@code null} for none ({@link WasmUncaughtLocations#hopText}).
+		 */
+		@Nullable String ucPendingHop;
+
+		/**
+		 * The name of the defun whose body compiles into this context, under
+		 * {@code --report-locations}: what an async body it runs names its hop after,
+		 * whether or not the defun is a frame itself
+		 * ({@link WasmUncaughtLocations#hopText}).
+		 */
+		@Nullable String ucFunctionName;
+
+		/**
 		 * The operator of the innermost form being compiled (set by
 		 * {@code WasmExprCompiler.compileCons}).
 		 */
@@ -10459,6 +10549,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.ehDepthGlobalIndex = builder.ehDepthGlobalIndex;
 			this.operandOpGlobalIndex = builder.operandOpGlobalIndex;
 			this.operandOperators = builder.operandOperators;
+			this.uncaughtLocations = builder.uncaughtLocations;
 			this.rawSentinelGlobalIndex = builder.rawSentinelGlobalIndex;
 			this.simd = builder.simd;
 			this.userFuncBase = builder.userFuncBase;
@@ -10612,6 +10703,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private int operandOpGlobalIndex = -1;
 
 			private WasmOperandTypes.Operators operandOperators = WasmOperandTypes.Operators.NONE;
+
+			private WasmUncaughtLocations.@Nullable Module uncaughtLocations;
 
 			private int rawSentinelGlobalIndex = -1;
 
@@ -10951,6 +11044,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder operandOperators(WasmOperandTypes.Operators operandOperators) {
 				this.operandOperators = operandOperators;
+				return this;
+			}
+
+			Builder uncaughtLocations(WasmUncaughtLocations.@Nullable Module uncaughtLocations) {
+				this.uncaughtLocations = uncaughtLocations;
 				return this;
 			}
 

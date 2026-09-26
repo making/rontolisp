@@ -152,6 +152,8 @@ final class WasmUncaughtReportCompiler {
 		}
 		// %warn answers nil; the landing pad has no value.
 		ctx.writer.write(Instruction.DROP);
+		// --report-locations: where it happened, under the report.
+		WasmUncaughtLocations.emitReportLines(ctx, payloadSlot);
 	}
 
 	/** Stores {@code (car payload)} (field 0) or {@code (cdr payload)} (field 1). */

@@ -42,6 +42,11 @@ case is gone). A program without a tail call still moves by the dispatcher's byt
   its result type is the host's, and `return_call` requires the callee's results to EQUAL
   the caller's -- every compiled Lisp function answers one `(ref null eq)`, which is what
   makes the rest legal. The top level (`_start`, void) never arms it.
+- **The one exception, `--report-locations`** ([error-handling.md](error-handling.md), "Location
+  lines on wasm-GC"): inside a frame a tail call into a DIRECT callee that is not itself a frame
+  (library code, a macro-written defun) is a plain `call`, so the frame can still note the call
+  site. Into a frame and through a function value it stays a `return_call`, so the depths below
+  hold with the option on.
 - The general indirect call `((lambda ..) ..)` and `multiple-value-call` are ordinary
   calls (conservative, not a bug). An `error` in tail position is a `return_call` like any
   other direct call.

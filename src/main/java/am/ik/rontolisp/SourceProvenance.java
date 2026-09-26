@@ -57,10 +57,6 @@ public final class SourceProvenance {
 
 	/** A cons's recorded origin: the unit it was read from and its offset in it. */
 	private record Position(Unit unit, int offset) {
-
-		SourceLocation location() {
-			return SourceLocation.at(this.unit.file(), this.offset, this.unit.text());
-		}
 	}
 
 	/** The per-thread recording; {@code null} when this thread is not recording. */
@@ -76,6 +72,44 @@ public final class SourceProvenance {
 
 		/** The top-level form the pipeline is on, used when no frame noted a location. */
 		@Nullable LispVal topLevelForm;
+
+		/**
+		 * Each unit's line-start offsets, built on the first {@link #locate} into it. A
+		 * backend that asks for the line of every form it compiles (the wasm-GC
+		 * {@code --report-locations}) would otherwise rescan the unit's text from the
+		 * start once per form -- quadratic in the size of the file.
+		 */
+		final Map<Unit, int[]> lineStarts = new IdentityHashMap<>();
+
+		SourceLocation location(Position position) {
+			Unit unit = position.unit();
+			String text = unit.text();
+			int[] starts = this.lineStarts.computeIfAbsent(unit, u -> lineStartsOf(text));
+			// The same clamp SourceLocation.at applies to an offset past the end.
+			int limit = Math.max(0, Math.min(position.offset(), text.length()));
+			int found = java.util.Arrays.binarySearch(starts, limit);
+			// A line starts AFTER its newline, so an offset equal to a start is on that
+			// line; otherwise it is on the line whose start precedes it.
+			int line = found >= 0 ? found : -found - 2;
+			return new SourceLocation(unit.file(), line + 1, limit - starts[line] + 1);
+		}
+
+		private static int[] lineStartsOf(String text) {
+			int count = 1;
+			for (int i = 0; i < text.length(); i++) {
+				if (text.charAt(i) == '\n') {
+					count++;
+				}
+			}
+			int[] starts = new int[count];
+			int next = 1;
+			for (int i = 0; i < text.length(); i++) {
+				if (text.charAt(i) == '\n') {
+					starts[next++] = i + 1;
+				}
+			}
+			return starts;
+		}
 
 	}
 
@@ -165,6 +199,22 @@ public final class SourceProvenance {
 	}
 
 	/**
+	 * {@link #inherit} for the compile path only: records {@code rewritten} at the
+	 * position of {@code original} when a recording scope is open, and does nothing
+	 * otherwise -- the interpreter's forms keep exactly the {@link LocatedCons} cells
+	 * they had. For a rewrite shared with the interpreter whose positions only a compiled
+	 * program's report reads (the wasm-GC {@code --report-locations} frames), where a
+	 * located copy would move what the interpreter's own report attributes.
+	 * @param original the cons the rewrite stands for
+	 * @param rewritten what replaced it
+	 */
+	public static void inheritWhenCompiling(LispCons original, @Nullable LispVal rewritten) {
+		if (STATE.get() != null) {
+			inherit(original, rewritten);
+		}
+	}
+
+	/**
 	 * The recorded location of a form, or {@code null} when it is not a cons, was not
 	 * read from source (a macro built it), or this thread is not recording.
 	 * @param form the form to locate
@@ -176,7 +226,7 @@ public final class SourceProvenance {
 			return null;
 		}
 		Position position = state.positions.get(cons);
-		return position == null ? null : position.location();
+		return position == null ? null : state.location(position);
 	}
 
 	/**
