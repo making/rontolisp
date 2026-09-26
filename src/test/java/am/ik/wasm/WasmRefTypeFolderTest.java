@@ -120,6 +120,8 @@ class WasmRefTypeFolderTest {
 				case 0xFB -> switch (in.sub) {
 					case 0x14 -> "ref.test " + in.a;
 					case 0x16 -> "ref.cast " + in.a;
+					case 0x18 -> "br_on_cast " + in.a;
+					case 0x19 -> "br_on_cast_fail " + in.a;
 					case 0x1C -> "ref.i31";
 					case 0x00 -> "struct.new " + in.a;
 					case 0x02 -> "struct.get " + in.a + "." + in.b;
@@ -294,6 +296,137 @@ class WasmRefTypeFolderTest {
 		Process process = wasmtime(folded, "g");
 		String output = new String(process.getErrorStream().readAllBytes());
 		assertThat(process.waitFor()).as("the folded module must still trap:%n%s", output).isNotZero();
+	}
+
+	// br_on_cast_fail DEPTH eqref (ref TYPE): leaves for the label with the operand when
+	// it is not a (ref TYPE), falls through with it cast otherwise.
+	private static void brOnCastFail(WasmWriter w, int depth, int heapType) {
+		w.write(Instruction.GC_PREFIX, Instruction.BR_ON_CAST_FAIL);
+		w.write(0x01); // the operand nullable, the cast not
+		w.writeUnsignedLeb128(depth);
+		w.writeHeapType(Type.EQ.code());
+		w.writeHeapType(heapType);
+	}
+
+	// `block (result eqref) local.get 0; br_on_cast_fail 0 (ref 0); <fallThrough> end;
+	// drop; i32.const -1`: the value a struct{i32} argument answers, or -1.
+	private static byte[] castBranch(Consumer<WasmWriter> fallThrough) {
+		return body(w -> {
+			w.write(Instruction.BLOCK, Type.EQ.code());
+			local(w, 0);
+			brOnCastFail(w, 0, 0);
+			fallThrough.accept(w);
+			w.write(Instruction.END);
+			w.write(Instruction.DROP);
+			i32(w, -1);
+		});
+	}
+
+	private static void readFieldAndReturn(WasmWriter w) {
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(0);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.RETURN);
+	}
+
+	private static void struct(WasmWriter w, int value) {
+		i32(w, value);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(0);
+	}
+
+	@Test
+	void aCastBranchNoValueFailsBecomesTheCastItFallsThroughTo() throws Exception {
+		// Only a struct{i32} ever reaches f: the branch is never taken, so what is left
+		// is
+		// the cast its fall-through is -- and the label nothing reaches any more.
+		byte[] f = castBranch(WasmRefTypeFolderTest::readFieldAndReturn);
+		byte[] g = body(w -> {
+			struct(w, 7);
+			call(w, 0);
+		});
+		byte[] folded = WasmRefTypeFolder.fold(module(new int[] { 1, 2 }, List.of(f, g), Map.of("g", 1)));
+
+		assertThat(mnemonics(code(folded, 0))).containsExactly("block", "local.get 0", "ref.cast 0", "struct.get 0.0",
+				"0x0F", "end", "unreachable", "end");
+		assertThat(validateAndInvoke(folded, "g")).isEqualTo("7");
+	}
+
+	@Test
+	void aCastBranchEveryValueFailsBecomesAPlainBranch() throws Exception {
+		// Only an i31 ever reaches f: the branch is always taken -- a br, and the
+		// fall-through behind it is dead.
+		byte[] f = castBranch(WasmRefTypeFolderTest::readFieldAndReturn);
+		byte[] g = body(w -> {
+			i31(w, 5);
+			call(w, 0);
+		});
+		byte[] folded = WasmRefTypeFolder.fold(module(new int[] { 1, 2 }, List.of(f, g), Map.of("g", 1)));
+
+		assertThat(mnemonics(code(folded, 0))).containsExactly("block", "local.get 0", "br 0", "end", "0x1A",
+				"i32.const -1", "end");
+		assertThat(validateAndInvoke(folded, "g")).isEqualTo("-1");
+	}
+
+	@Test
+	void keepsACastBranchTheSetsCannotDecideAndRefinesTheLocalItFallsThroughWith() throws Exception {
+		// f is handed an i31 and a struct{i32}: the branch stays. Past it the local IS a
+		// struct{i32} -- the fall-through is a guard, as a br_if's is -- so the test of
+		// the same local there is decided.
+		byte[] f = castBranch(w -> {
+			w.write(Instruction.DROP);
+			local(w, 0);
+			refTest(w, 0);
+			w.write(Instruction.RETURN);
+		});
+		byte[] g = body(w -> {
+			i31(w, 5);
+			call(w, 0);
+			struct(w, 7);
+			call(w, 0);
+			w.write(Instruction.I32_ADD);
+		});
+		byte[] folded = WasmRefTypeFolder.fold(module(new int[] { 1, 2 }, List.of(f, g), Map.of("g", 1)));
+
+		assertThat(mnemonics(code(folded, 0))).containsExactly("block", "local.get 0", "br_on_cast_fail 0", "0x1A",
+				"i32.const 1", "0x0F", "end", "0x1A", "i32.const -1", "end");
+		assertThat(validateAndInvoke(folded, "g")).isEqualTo("0");
+	}
+
+	@Test
+	void reindexesACastBranchCrossingASplicedInArm() throws Exception {
+		// The if is decided and spliced in bare: the cast branch that crossed its label
+		// to reach the block crosses nothing now, and names the block one label closer.
+		byte[] f = body(w -> {
+			w.write(Instruction.BLOCK, Type.EQ.code());
+			i31(w, 5);
+			refTest(w, Type.I31.code());
+			w.write(Instruction.IF, Type.I32.code());
+			local(w, 0);
+			brOnCastFail(w, 1, 0);
+			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			w.writeUnsignedLeb128(0);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.ELSE);
+			i32(w, 0);
+			w.write(Instruction.END);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END);
+			w.write(Instruction.DROP);
+			i32(w, -1);
+		});
+		byte[] g = body(w -> {
+			i31(w, 5);
+			call(w, 0);
+			struct(w, 7);
+			call(w, 0);
+			w.write(Instruction.I32_ADD);
+		});
+		byte[] folded = WasmRefTypeFolder.fold(module(new int[] { 1, 2 }, List.of(f, g), Map.of("g", 1)));
+
+		assertThat(mnemonics(code(folded, 0))).containsExactly("block", "local.get 0", "br_on_cast_fail 0",
+				"struct.get 0.0", "0x0F", "end", "0x1A", "i32.const -1", "end");
+		assertThat(validateAndInvoke(folded, "g")).isEqualTo("6");
 	}
 
 	@Test

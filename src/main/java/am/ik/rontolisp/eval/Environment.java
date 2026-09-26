@@ -3134,21 +3134,27 @@ public final class Environment implements Scope {
 						LispNames.RANDOM + " expects 1 or 2 arguments, got " + args.size());
 			}
 			LispVal limit = args.get(0);
+			// CLHS's domain is (OR (INTEGER 1) (FLOAT (0.0))): a ratio is real but
+			// neither, and an integer or float limit <= 0 is out of range either way.
+			// Both are reported under RANDOM's own registered REAL type (like a
+			// non-real limit below) rather than teaching the operand-type table a
+			// compound type for this one operator (.todo/981,
+			// .kb/error-handling.md).
 			if (limit instanceof LispDouble d) {
 				if (d.value() <= 0.0) {
-					throw new LispEvalException("random expects a positive limit, got: " + limit.print());
+					throw OperandTypeException.of(limit, OperandTypes.Kind.REAL).named(LispNames.RANDOM);
 				}
 				return new LispDouble(ThreadLocalRandom.current().nextDouble() * d.value());
 			}
 			if (limit instanceof LispInteger i) {
 				if (i.value() <= 0) {
-					throw new LispEvalException("random expects a positive limit, got: " + limit.print());
+					throw OperandTypeException.of(limit, OperandTypes.Kind.REAL).named(LispNames.RANDOM);
 				}
 				return new LispInteger((long) (ThreadLocalRandom.current().nextDouble() * i.value()));
 			}
 			if (limit instanceof LispBigInteger b) {
 				if (b.value().signum() <= 0) {
-					throw new LispEvalException("random expects a positive limit, got: " + limit.print());
+					throw OperandTypeException.of(limit, OperandTypes.Kind.REAL).named(LispNames.RANDOM);
 				}
 				// Scale a [0,1) random fraction across the bignum range, then floor.
 				return normalizeBig(new java.math.BigDecimal(b.value())
@@ -3156,7 +3162,7 @@ public final class Environment implements Scope {
 					.toBigInteger());
 			}
 			if (limit instanceof LispRatio) {
-				throw new LispEvalException("random expects an integer or float limit, got: " + limit.print());
+				throw OperandTypeException.of(limit, OperandTypes.Kind.REAL).named(LispNames.RANDOM);
 			}
 			throw OperandTypeException
 				.of(limit, limit instanceof LispComplex ? OperandTypes.Kind.REAL : OperandTypes.Kind.NUMBER)
@@ -4050,6 +4056,9 @@ public final class Environment implements Scope {
 				}
 				return new LispInteger(qm.totalSize());
 			}
+			if (!(args.get(0) instanceof LispCons) && !(args.get(0) instanceof LispNil)) {
+				throw OperandTypeException.of(args.get(0), OperandTypes.Kind.SEQUENCE, LispNames.LENGTH);
+			}
 			long count = 0;
 			LispVal cur = args.get(0);
 			while (cur instanceof LispCons cell) {
@@ -4122,7 +4131,7 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.LAST, new LispFunction(LispNames.LAST, args -> {
 			requireArgCountBetween(LispNames.LAST, args, 1, 2);
-			LispVal cur = args.get(0);
+			LispVal cur = requireListArgument(LispNames.LAST, args.get(0));
 			if (args.size() == 1) {
 				while (cur instanceof LispCons cell && cell.cdr() instanceof LispCons) {
 					cur = cell.cdr();
@@ -4806,6 +4815,34 @@ public final class Environment implements Scope {
 			return s;
 		}
 		return s.substring(s.offsetByCodePoints(0, start), s.offsetByCodePoints(0, end));
+	}
+
+	/**
+	 * A {@code char}/{@code schar} subscript: one that is no integer is the operator's
+	 * {@code INTEGER} type-error. A bignum is an integer, out of any string's bounds.
+	 */
+	private static int requireStringIndex(String operator, LispVal val) {
+		if (val instanceof LispInteger i) {
+			return (int) i.value();
+		}
+		if (val instanceof LispBigInteger) {
+			return requireIndex(operator, val);
+		}
+		throw OperandTypeException.of(val, OperandTypes.Kind.INTEGER, operator);
+	}
+
+	/**
+	 * A list argument: nil or a cons answers itself, anything else is the operator's
+	 * {@code LIST} type-error.
+	 * @param operator the operator's symbol name
+	 * @param val the argument
+	 * @return the argument
+	 */
+	static LispVal requireListArgument(String operator, LispVal val) {
+		if (val instanceof LispCons || val instanceof LispNil) {
+			return val;
+		}
+		throw OperandTypeException.of(val, OperandTypes.Kind.LIST, operator);
 	}
 
 	static int requireIndex(String name, LispVal val) {
@@ -7836,7 +7873,7 @@ public final class Environment implements Scope {
 		if (!(args.get(0) instanceof LispString s)) {
 			throw new LispEvalException(name + " expects a string, got: " + args.get(0).print());
 		}
-		int index = requireIndex(name, args.get(1));
+		int index = requireStringIndex(name, args.get(1));
 		// Indexing is by CHARACTER (Unicode code point), not by UTF-16 code unit -- a
 		// supplementary code point is one indexed character, not two, matching every
 		// other backend and Common Lisp's contract. The backing store is already one code
@@ -8139,11 +8176,33 @@ public final class Environment implements Scope {
 				if (list instanceof LispCons cons) {
 					list = cons.cdr();
 				}
-				else {
+				else if (list instanceof LispNil) {
 					return LispNil.INSTANCE;
+				}
+				else {
+					// A walk that meets a non-list before the count runs out: 5 in
+					// (nthcdr 1 5), the 2 of (nthcdr 2 '(1 . 2)).
+					throw OperandTypeException.of(list, OperandTypes.Kind.LIST, LispNames.NTHCDR);
 				}
 			}
 			return list;
+		}));
+		// endp: t for nil, nil for a cons, a type-error for anything else -- also
+		// dolist's, whose expansion checks the list's end once after its loop.
+		env.defineFunction(LispNames.ENDP, new LispFunction(LispNames.ENDP, args -> {
+			requireArgCount(LispNames.ENDP, args, 1);
+			return switch (args.get(0)) {
+				case LispNil nil -> LispTrue.INSTANCE;
+				case LispCons cons -> LispNil.INSTANCE;
+				default -> throw OperandTypeException.of(args.get(0), OperandTypes.Kind.LIST, LispNames.ENDP);
+			};
+		}));
+		// (%check-list x 'op): x when it is a list, else OP's LIST type-error -- the
+		// check an expansion makes on its operator's behalf (last, maplist, loop's
+		// for-in under endp).
+		env.defineFunction(LispNames.CHECK_LIST_INTERNAL, new LispFunction(LispNames.CHECK_LIST_INTERNAL, args -> {
+			requireArgCount(LispNames.CHECK_LIST_INTERNAL, args, 2);
+			return requireListArgument(((LispSymbol) args.get(1)).name(), args.get(0));
 		}));
 		env.defineFunction(LispNames.RPLACA, new LispFunction(LispNames.RPLACA, args -> {
 			requireArgCount(LispNames.RPLACA, args, 2);
@@ -8151,8 +8210,7 @@ public final class Environment implements Scope {
 				cons.setCar(args.get(1));
 				return cons;
 			}
-			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-					"rplaca expects a cons cell, got: " + args.get(0).print());
+			throw OperandTypeException.of(args.get(0), OperandTypes.Kind.CONS, LispNames.RPLACA);
 		}));
 		env.defineFunction(LispNames.RPLACD, new LispFunction(LispNames.RPLACD, args -> {
 			requireArgCount(LispNames.RPLACD, args, 2);
@@ -8160,8 +8218,7 @@ public final class Environment implements Scope {
 				cons.setCdr(args.get(1));
 				return cons;
 			}
-			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-					"rplacd expects a cons cell, got: " + args.get(0).print());
+			throw OperandTypeException.of(args.get(0), OperandTypes.Kind.CONS, LispNames.RPLACD);
 		}));
 		env.defineFunction(LispNames.REMF_TAIL, new LispFunction(LispNames.REMF_TAIL, args -> {
 			requireArgCount(LispNames.REMF_TAIL, args, 2);
@@ -8222,8 +8279,16 @@ public final class Environment implements Scope {
 	 */
 	private static LispVal nthValue(long n, LispVal list) {
 		LispVal cur = list;
-		for (long i = 0; i < n && cur instanceof LispCons cons; i++) {
-			cur = cons.cdr();
+		for (long i = 0; i < n; i++) {
+			if (cur instanceof LispCons cons) {
+				cur = cons.cdr();
+			}
+			else if (cur instanceof LispNil) {
+				return LispNil.INSTANCE;
+			}
+			else {
+				throw OperandTypeException.of(cur, OperandTypes.Kind.LIST, LispNames.NTHCDR);
+			}
 		}
 		if (cur instanceof LispCons cons) {
 			return cons.car();
@@ -8231,7 +8296,7 @@ public final class Environment implements Scope {
 		if (cur instanceof LispNil) {
 			return LispNil.INSTANCE;
 		}
-		throw OperandTypeException.of(cur, OperandTypes.Kind.LIST);
+		throw OperandTypeException.of(cur, OperandTypes.Kind.LIST, LispNames.CAR);
 	}
 
 	private static LispVal appendTwo(LispVal list, LispVal tail) {

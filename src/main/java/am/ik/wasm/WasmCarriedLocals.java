@@ -325,6 +325,16 @@ public final class WasmCarriedLocals {
 							edges.add(b, this.blockOf[ctrl.target(label)]);
 						}
 					}
+					// br_on_cast / br_on_cast_fail: a conditional branch, as br_if.
+					case Instruction.GC_PREFIX -> {
+						if (in.isCastBranch()) {
+							edges.add(b, this.blockOf[i + 1]);
+							edges.add(b, this.blockOf[ctrl.target((int) in.a)]);
+						}
+						else if (last) {
+							edges.add(b, this.blockOf[i + 1]);
+						}
+					}
 					case Instruction.RETURN, Instruction.UNREACHABLE -> {
 					}
 					// A tail call leaves the frame, so its callee's exception finds no
@@ -445,6 +455,11 @@ public final class WasmCarriedLocals {
 						leader[i + 1] = true;
 					case Instruction.CALL -> {
 						if (tryDepth > 0) {
+							leader[i + 1] = true;
+						}
+					}
+					case Instruction.GC_PREFIX -> {
+						if (in.isCastBranch()) {
 							leader[i + 1] = true;
 						}
 					}

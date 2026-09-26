@@ -9,7 +9,8 @@ import am.ik.wasm.Type;
 
 /**
  * Compiles the {@code nthcdr} built-in function. Generates a block/loop that applies
- * {@code cdr} n times to the list argument. The counter is kept as an i31ref since all
+ * {@code cdr} n times to the list argument; in EH mode a non-list met before the count
+ * runs out is {@code NTHCDR}'s type-error. The counter is kept as an i31ref since all
  * locals are typed {@code (ref null eq)}.
  */
 final class WasmNthcdrCompiler {
@@ -46,14 +47,22 @@ final class WasmNthcdrCompiler {
 		ctx.writer.writeUnsignedLeb128(listSlot);
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.BR_IF, 1);
-		// list = cdr(list)
+		// list = cdr(list). In EH mode a non-list is NTHCDR's catchable type-error, in
+		// the
+		// one type test the step makes anyway (nil left above); outside it the cast
+		// traps.
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(listSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeUnsignedLeb128(1); // cdr
+		if (WasmEmitHelper.checksConsFields(ctx)) {
+			WasmEmitHelper.emitCheckedConsField(ctx.writer, 1, () -> WasmEmitHelper.emitListTypeError(ctx));
+		}
+		else {
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.writeUnsignedLeb128(1); // cdr
+		}
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(listSlot);
 		// n = n - 1 (unbox, sub, rebox)

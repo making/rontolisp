@@ -27,6 +27,8 @@ final class WasmCharCompiler {
 		// string) and decodes an immutable string's UTF-8 through _str_char_at.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		// In EH mode an index that is no integer is CHAR's / SCHAR's type-error.
+		WasmEmitHelper.emitIndexCheck(ctx);
 		WasmEmitHelper.castI31GetS(ctx);
 		WasmEmitHelper.emitStrCharRefCall(ctx);
 		makeChar(ctx);

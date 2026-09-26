@@ -66,10 +66,30 @@ final class WasmOperandTypes {
 	/**
 	 * Operators a compile-time lowering introduces where the source spelled another name:
 	 * a {@code coerce} to {@code real} signals through {@code float}, a {@code setf} of
-	 * an {@code aref} or {@code svref} place through {@code %aset}.
+	 * an {@code aref} or {@code svref} place through {@code %aset}, {@code nth} and
+	 * {@code second}..{@code tenth} through {@code (car (nthcdr ...))}, {@code dolist}
+	 * and {@code loop}'s {@code for-in} through {@code endp}, a {@code car}/{@code cdr}
+	 * place's store ({@code setf} and the modify macros) through {@code rplaca} /
+	 * {@code rplacd}.
 	 */
-	private static final java.util.Map<String, String> LOWERED_TO = java.util.Map.of("COERCE", "FLOAT", "AREF",
-			OperandTypes.SETF_AREF, "SVREF", OperandTypes.SETF_AREF);
+	private static final java.util.Map<String, java.util.List<String>> LOWERED_TO = loweredTo();
+
+	private static java.util.Map<String, java.util.List<String>> loweredTo() {
+		java.util.Map<String, java.util.List<String>> map = new java.util.HashMap<>();
+		map.put("COERCE", java.util.List.of("FLOAT"));
+		map.put("AREF", java.util.List.of(OperandTypes.SETF_AREF));
+		map.put("SVREF", java.util.List.of(OperandTypes.SETF_AREF));
+		map.put("DOLIST", java.util.List.of("ENDP"));
+		map.put("LOOP", java.util.List.of("ENDP"));
+		for (String modify : java.util.List.of("SETF", "INCF", "DECF", "PUSH", "POP", "PUSHNEW")) {
+			map.put(modify, java.util.List.of("RPLACA", "RPLACD"));
+		}
+		for (String nth : java.util.List.of("NTH", "SECOND", "THIRD", "FOURTH", "FIFTH", "SIXTH", "SEVENTH", "EIGHTH",
+				"NINTH", "TENTH")) {
+			map.put(nth, java.util.List.of("NTHCDR", "CAR"));
+		}
+		return java.util.Map.copyOf(map);
+	}
 
 	private WasmOperandTypes() {
 	}
@@ -104,14 +124,16 @@ final class WasmOperandTypes {
 					wanted.add(op);
 				}
 			}
-			OperandTypes.rewritten().forEach((from, to) -> {
+			// In key order: Map.of's iteration order varies from one JVM to the next, and
+			// the rows' order is the module's bytes.
+			new java.util.TreeMap<>(OperandTypes.rewritten()).forEach((from, to) -> {
 				if (spelled.test(from)) {
 					wanted.add(to);
 				}
 			});
-			LOWERED_TO.forEach((from, to) -> {
+			new java.util.TreeMap<>(LOWERED_TO).forEach((from, to) -> {
 				if (spelled.test(from)) {
-					wanted.add(to);
+					wanted.addAll(to);
 				}
 			});
 			java.util.Map<String, Integer> ids = new java.util.HashMap<>();

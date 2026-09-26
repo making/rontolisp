@@ -29,7 +29,26 @@ final class JvmRandomCompiler {
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		if (JvmLispCompiler.hasDoubleLiteral(args, ctx)) {
-			// Float limit: tlr.nextDouble() * limit, kept as a double.
+			// Float limit: tlr.nextDouble() * limit, kept as a double -- but check the
+			// limit's sign first (.todo/981): a non-positive float is _random's domain
+			// violation too, and this path never reaches _random to catch it. unboxDouble
+			// is a pure coercion (no draw), so calling it twice on the positive path
+			// costs
+			// nothing observable; the non-positive path bails to the wrapped _random call
+			// instead of drawing, which throws before any draw happens either.
+			ctx.emit(Opcode.DUP);
+			JvmEmitHelper.unboxDouble(ctx);
+			ctx.emit(Opcode.DCONST_0);
+			ctx.emit(Opcode.DCMPL);
+			int ifPositive = ctx.code.size();
+			ctx.emit(Opcode.IFGT);
+			ctx.emitU2(0);
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.RANDOM).index());
+			int done = ctx.code.size();
+			ctx.emit(Opcode.GOTO);
+			ctx.emitU2(0);
+			JvmEmitHelper.patchBranch(ctx, ifPositive, ctx.code.size());
 			JvmEmitHelper.unboxDouble(ctx);
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(ctx.mathOp(JvmMathFnCompiler.TLR_CURRENT).index());
@@ -37,11 +56,12 @@ final class JvmRandomCompiler {
 			ctx.emitU2(ctx.mathOp(JvmMathFnCompiler.TLR_NEXT_DOUBLE).index());
 			ctx.emit(Opcode.DMUL);
 			JvmEmitHelper.boxDouble(ctx);
+			JvmEmitHelper.patchBranch(ctx, done, ctx.code.size());
 		}
 		else {
 			// Non-literal limit: _random dispatches on the runtime type (a Double limit
 			// returns a Double, otherwise the truncated Long), so a float limit through a
-			// variable works.
+			// variable works, and rejects a non-positive or ratio limit (.todo/981).
 			ctx.emit(Opcode.INVOKESTATIC);
 			ctx.emitU2(ctx.numOp(JvmNumericRuntimeBuilder.RANDOM).index());
 		}

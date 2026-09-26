@@ -28,8 +28,10 @@ plausible WRONG list, not an error.
   registrations, else `#'maplist` is undefined while both compile backends wrap it happily.
 
 ## Errors
-A non-list signals `<NAME>: argument is not a list ... (use map for strings/vectors)` on
-interpreter and JVM, traps `unreachable` on WASM; `nil` is a valid empty list. `(mapcan #'list)`
+A non-list argument is the operator's catchable `type-error`, `<NAME>: The value X is not of type
+LIST`, on every backend (wasm-GC: EH mode; a trap outside it); `nil` is a valid empty list
+(`.kb/error-handling.md`, "A wrong-type argument names its operator"). A non-list PIECE a
+`mapcon` function answers keeps the message-only `MAPCON: argument is not a list ...`. `(mapcan #'list)`
 -> `<NAME> expects at least 2 arguments` (`LispEvaluator.requireMapLists`, `expandMapFamily`, and
 an `UnsupportedOperationException` from the emitter -- a compile error, the count is static).
 

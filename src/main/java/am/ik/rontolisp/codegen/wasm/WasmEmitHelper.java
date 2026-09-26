@@ -272,25 +272,27 @@ final class WasmEmitHelper {
 
 	/**
 	 * Compiles {@code (car x)} (field 0) or {@code (cdr x)} (field 1): nil answers nil, a
-	 * cons its field, anything else traps on the cast. Three spellings of the one shape,
-	 * chosen by what is being optimized for ({@code .kb/cons-access-runtime.md}): under
-	 * {@code --optimize=size} the site is the operand plus one {@code call} of the shared
-	 * {@code _car}/{@code _cdr} body; otherwise the shape is inline, reading a plain
-	 * local operand twice where it already lives and spilling any other operand into a
-	 * fresh temp first.
+	 * cons its field, anything else traps on the cast -- or, in EH mode
+	 * ({@link #checksConsFields}), is {@code CAR}'s / {@code CDR}'s type-error. The
+	 * spellings of the one shape, chosen by what is being optimized for
+	 * ({@code .kb/cons-access-runtime.md}): under {@code --optimize=size} the site is the
+	 * operand plus one {@code call} of the shared {@code _car}/{@code _cdr} body;
+	 * otherwise the shape is inline -- in EH mode over the operand on the stack, outside
+	 * it reading a plain local operand twice where it already lives and spilling any
+	 * other operand into a fresh temp first.
 	 * @param operand the argument form
 	 * @param field the cons field
 	 * @param ctx the compile context
 	 */
 	static void compileConsField(am.ik.rontolisp.LispVal operand, int field, WasmLispCompiler.Ctx ctx) {
-		if (ctx.optimize.prefersSizeOverSpeed()) {
+		if (ctx.optimize.prefersSizeOverSpeed() || checksConsFields(ctx)) {
 			WasmExprCompiler.compileExpr(operand, ctx);
-			WasmConsRuntimeBuilder.emitCall(ctx.writer, field);
+			emitConsField(ctx, field);
 			return;
 		}
 		int slot = WasmExprCompiler.plainLocalSlot(operand, ctx);
 		if (slot >= 0) {
-			emitInlineConsField(ctx, slot, field);
+			emitInlineConsField(ctx.writer, slot, field);
 			return;
 		}
 		WasmExprCompiler.compileExpr(operand, ctx);
@@ -307,10 +309,14 @@ final class WasmEmitHelper {
 			WasmConsRuntimeBuilder.emitCall(ctx.writer, field);
 			return;
 		}
+		if (checksConsFields(ctx)) {
+			emitCheckedConsField(ctx.writer, field, () -> WasmConsRuntimeBuilder.emitCall(ctx.writer, field));
+			return;
+		}
 		int tmpSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(tmpSlot);
-		emitInlineConsField(ctx, tmpSlot, field);
+		emitInlineConsField(ctx.writer, tmpSlot, field);
 	}
 
 	/**
@@ -340,6 +346,60 @@ final class WasmEmitHelper {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_IDX_CHK);
+	}
+
+	/**
+	 * Checks that the value in {@code slot} is a cons -- or nil too, with {@code orNil}
+	 * -- and otherwise signals: in EH mode ({@link #checksConsFields}) the innermost
+	 * operator's catchable {@code LIST} type-error ({@code _type_err_list} under its id
+	 * in the register), outside it a trap.
+	 * {@code local.get slot; ref.test $cons [local.get
+	 * slot; ref.is_null; i32.or]; i32.eqz; if <signal>; unreachable end}.
+	 * @param ctx the compile context
+	 * @param slot the local holding the value
+	 * @param orNil whether nil passes too
+	 */
+	static void emitListCheck(WasmLispCompiler.Ctx ctx, int slot, boolean orNil) {
+		WasmWriter w = ctx.writer;
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		if (orNil) {
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(slot);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.I32_OR);
+		}
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		if (checksConsFields(ctx)) {
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(slot);
+			emitListTypeError(ctx);
+		}
+		else {
+			w.write(Instruction.UNREACHABLE);
+		}
+		w.write(Instruction.END);
+	}
+
+	/**
+	 * Signals the innermost operator's {@code LIST} type-error over the value on the
+	 * stack (EH mode, {@link #checksConsFields}):
+	 * {@code i32.const id; global.set $op; call
+	 * _type_err_list; unreachable}. Never returns; the stack is polymorphic after it.
+	 * @param ctx the compile context
+	 */
+	static void emitListTypeError(WasmLispCompiler.Ctx ctx) {
+		WasmWriter w = ctx.writer;
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmOperandTypes.operatorId(ctx));
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(ctx.operandOpGlobalIndex);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_TYPE_ERR_LIST);
+		w.write(Instruction.UNREACHABLE);
 	}
 
 	/**
@@ -388,45 +448,35 @@ final class WasmEmitHelper {
 	}
 
 	/**
-	 * The inline cons field read of the list in {@code slot}; checked
-	 * ({@link #checksConsFields}), a value that is no cons -- nil or a wrong type --
-	 * leaves the hot path for the checked {@code _car}/{@code _cdr} body, which answers
-	 * nil for nil and signals {@code CAR}'s / {@code CDR}'s type-error otherwise:
-	 * {@code local.get slot; ref.test $cons; if (result eqref) local.get slot; ref.cast
-	 * $cons; struct.get $cons field else local.get slot; call _car end} -- four bytes
-	 * over the unchecked shape.
+	 * The checked cons field read of the list on the stack: a cons yields its field in
+	 * ONE type test, and a value that is no cons -- nil or a wrong type -- is handed,
+	 * still on the stack, to {@code miss}, which pushes what it answers (at an inline
+	 * site the checked {@code _car}/{@code _cdr} body, which answers nil for nil and
+	 * signals {@code CAR}'s / {@code CDR}'s type-error otherwise):
+	 * {@code block (eqref -> eqref)
+	 * block (eqref -> eqref) br_on_cast_fail 0 eqref (ref $cons); struct.get $cons field;
+	 * br 1 end <miss> end}. Both blocks take the operand as their parameter, so the site
+	 * needs no local of its own.
+	 * @param w the writer
+	 * @param field the cons field
+	 * @param miss pushes the answer for the non-cons operand it finds on the stack
 	 */
-	static void emitInlineConsField(WasmLispCompiler.Ctx ctx, int slot, int field) {
-		if (!checksConsFields(ctx)) {
-			emitInlineConsField(ctx.writer, slot, field);
-			return;
-		}
-		emitCheckedConsField(ctx.writer, slot, field, () -> {
-			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(slot);
-			WasmConsRuntimeBuilder.emitCall(ctx.writer, field);
-		});
-	}
-
-	/**
-	 * {@code local.get slot; ref.test $cons; if (result eqref) <the field> else <miss>
-	 * end}, {@code miss} pushing what a value that is no cons answers.
-	 */
-	static void emitCheckedConsField(WasmWriter w, int slot, int field, Runnable miss) {
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(slot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.IF);
-		w.writeRefType(true, Type.EQ.code());
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(slot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+	static void emitCheckedConsField(WasmWriter w, int field, Runnable miss) {
+		w.write(Instruction.BLOCK);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CALLABLE_BASE);
+		w.write(Instruction.BLOCK);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_CALLABLE_BASE);
+		w.write(Instruction.GC_PREFIX, Instruction.BR_ON_CAST_FAIL);
+		w.write(0x01); // the operand nullable, the cast not
+		w.writeUnsignedLeb128(0);
+		w.writeHeapType(Type.EQ.code());
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		w.writeUnsignedLeb128(field);
-		w.write(Instruction.ELSE);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.END);
 		miss.run();
 		w.write(Instruction.END);
 	}
@@ -453,32 +503,6 @@ final class WasmEmitHelper {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		w.writeUnsignedLeb128(field);
-		w.write(Instruction.END);
-	}
-
-	/**
-	 * Emits a list-type guard for the {@code map*} family over the value in
-	 * {@code listSlot}: if the value is neither null (nil) nor a cons, the function traps
-	 * ({@code unreachable}). This matches the interpreter, which signals an error rather
-	 * than silently treating a non-list (e.g. a string) as the empty list. The guard is a
-	 * balanced, self-contained {@code if}/{@code end} that pushes no value, so it does
-	 * not affect {@code wasmCtrlDepth} bookkeeping.
-	 */
-	static void emitRequireListGuard(WasmLispCompiler.Ctx ctx, int listSlot) {
-		WasmWriter w = ctx.writer;
-		// valid = (ref.is_null list) | (ref.test $cons list)
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(listSlot);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.GET_LOCAL);
-		w.writeUnsignedLeb128(listSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.I32_OR);
-		// if not valid, trap.
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.UNREACHABLE);
 		w.write(Instruction.END);
 	}
 

@@ -22,6 +22,12 @@ final class WasmRplacdCompiler {
 		int tmpLocal = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(tmpLocal);
+		// In EH mode anything but a cons (nil included) is RPLACD's CONS type-error;
+		// outside
+		// it the cast below traps.
+		if (WasmEmitHelper.checksConsFields(ctx)) {
+			WasmEmitHelper.emitListCheck(ctx, tmpLocal, false);
+		}
 		// Cast to cons struct and do struct.set field 1 (cdr)
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(tmpLocal);

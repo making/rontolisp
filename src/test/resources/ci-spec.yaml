@@ -1015,7 +1015,7 @@ cases:
       (print (coerce nil 'vector))
       (print (handler-case (coerce '(1 2) 'string) (error () :not-a-character)))
       (print (coerce 5 'vector))
-      (print (coerce 5 'list))
+      (print (handler-case (coerce 5 'list) (type-error (e) (type-error-expected-type e))))
       (print (position #\Space "a b c"))
       (print (position #\Space "a b c" :from-end t))
       (print (count #\a "banana"))
@@ -1032,7 +1032,7 @@ cases:
       #()
       :NOT-A-CHARACTER
       5
-      NIL
+      SEQUENCE
       1
       3
       3
@@ -3855,9 +3855,9 @@ cases:
       (princ (apply #'format nil (list "|~@{~a~^-~}" 1 2 3 4 5 6 7 8 9)))
       (terpri)
       ;; A ~{ argument that is not a list keeps whatever (length x) makes it do --
-      ;; the vector is built for a PROPER list only, so nothing here changed.
+      ;; the vector is built for a PROPER list only: length's type-error.
       (let ((ci-fmt-d "~{~a~}[~a]"))
-        (princ (format nil ci-fmt-d 5 'tail))
+        (princ (handler-case (format nil ci-fmt-d 5 'tail) (type-error () :type-error)))
         (princ (format nil ci-fmt-d nil 'tail)))
       (terpri)
     expected: |
@@ -3871,7 +3871,7 @@ cases:
       [1 2][3 4][5 6][7 8][9 10]
       3000
       many X|1-2-3-4-5-6-7-8-9
-      [TAIL][TAIL]
+      TYPE-ERROR[TAIL]
   # ~W writes its argument as `write` does (prin1 under the printer control
   # variables) and consumes exactly one -- rove's assertion description ends in
   # ~:[...~], which reads the wrong argument if ~W is copied out verbatim.
@@ -17964,6 +17964,148 @@ cases:
       ("LCM: The value NIL is not of type INTEGER" NIL INTEGER)
       ("GCD: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
       ("COMPLEX: The value #C(1 2) is not of type REAL" #C(1 2) REAL)
+  # .kb/error-handling.md, "A wrong-type argument names its operator": random's domain
+  # is CLHS's (OR (INTEGER 1) (FLOAT (0.0))) -- a ratio limit is real but neither, and
+  # an integer or float limit <= 0 is out of range either way. Both report under
+  # RANDOM's own registered REAL type, like a non-real limit above (.todo/981).
+  - name: random-limit-domain-violations-signal-a-type-error
+    source: |
+      (defun ci-rand-te (thunk)
+        (handler-case (funcall thunk)
+          (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+          (error (e) (list :not-a-type-error (princ-to-string e)))))
+      (print (ci-rand-te (lambda () (random 1/2))))
+      (print (ci-rand-te (lambda () (random -1))))
+      (print (ci-rand-te (lambda () (random 0))))
+      (print (ci-rand-te (lambda () (random -1.5))))
+      (print (ci-rand-te (lambda () (random 0.0))))
+      (let ((x -1.0)) (print (ci-rand-te (lambda () (random x)))))
+    expected: |
+      ("RANDOM: The value 1/2 is not of type REAL" 1/2 REAL)
+      ("RANDOM: The value -1 is not of type REAL" -1 REAL)
+      ("RANDOM: The value 0 is not of type REAL" 0 REAL)
+      ("RANDOM: The value -1.5 is not of type REAL" -1.5 REAL)
+      ("RANDOM: The value 0.0 is not of type REAL" 0.0 REAL)
+      ("RANDOM: The value -1.0 is not of type REAL" -1.0 REAL)
+  # .kb/error-handling.md, "A wrong-type argument names its operator": a list walk
+  # over a non-list (nthcdr, and so nth and second..tenth; endp, and so dolist,
+  # which checks its list's end after the loop) and a string index that is no
+  # integer report the operator and the type it requires.
+  - name: list-walks-and-string-indices-name-the-operator
+    source: |
+      (defun ci-lw (thunk)
+        (handler-case (funcall thunk)
+          (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+          (error (e) (list :not-a-type-error (princ-to-string e)))))
+      (defvar *ci-lw-n* nil)
+      (defvar *ci-lw-five* 5)
+      (print (ci-lw (lambda () (nthcdr 1 *ci-lw-five*))))
+      (print (ci-lw (lambda () (nthcdr 1 5))))
+      (print (ci-lw (lambda () (nthcdr 2 '(1 . 2)))))
+      (print (ci-lw (lambda () (nth 1 *ci-lw-five*))))
+      (print (ci-lw (lambda () (second *ci-lw-five*))))
+      (print (ci-lw (lambda () (third '(1 . 2)))))
+      (print (ci-lw (lambda () (funcall #'nthcdr 1 *ci-lw-five*))))
+      (print (ci-lw (lambda () (funcall #'nth 1 *ci-lw-five*))))
+      (print (ci-lw (lambda () (funcall #'second *ci-lw-five*))))
+      (print (ci-lw (lambda () (funcall #'second '(1 . 5)))))
+      (print (ci-lw (lambda () (dolist (x *ci-lw-five*) x))))
+      (print (ci-lw (lambda () (dolist (x 5) x))))
+      (print (ci-lw (lambda () (dolist (x *ci-lw-five*)))))
+      (let ((seen nil))
+        (print (list (ci-lw (lambda () (dolist (x '(1 2 . 3)) (push x seen)))) seen)))
+      (print (ci-lw (lambda () (endp *ci-lw-five*))))
+      (print (ci-lw (lambda () (funcall #'endp *ci-lw-five*))))
+      (print (list (endp nil) (endp '(1)) (dolist (x '(1 2) :done) x)))
+      (print (ci-lw (lambda () (char "ab" *ci-lw-n*))))
+      (print (ci-lw (lambda () (schar "ab" *ci-lw-n*))))
+      (print (ci-lw (lambda () (char "ab" 1.5))))
+      (print (ci-lw (lambda () (funcall #'char "ab" *ci-lw-n*))))
+    expected: |
+      ("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+      ("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+      ("NTHCDR: The value 2 is not of type LIST" 2 LIST)
+      ("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+      ("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+      ("NTHCDR: The value 2 is not of type LIST" 2 LIST)
+      ("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+      ("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+      ("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+      ("CAR: The value 5 is not of type LIST" 5 LIST)
+      ("ENDP: The value 5 is not of type LIST" 5 LIST)
+      ("ENDP: The value 5 is not of type LIST" 5 LIST)
+      ("ENDP: The value 5 is not of type LIST" 5 LIST)
+      (("ENDP: The value 3 is not of type LIST" 3 LIST) (2 1))
+      ("ENDP: The value 5 is not of type LIST" 5 LIST)
+      ("ENDP: The value 5 is not of type LIST" 5 LIST)
+      (T NIL :DONE)
+      ("CHAR: The value NIL is not of type INTEGER" NIL INTEGER)
+      ("SCHAR: The value NIL is not of type INTEGER" NIL INTEGER)
+      ("CHAR: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+      ("CHAR: The value NIL is not of type INTEGER" NIL INTEGER)
+  # .kb/error-handling.md, "A wrong-type argument names its operator": a list
+  # consumer over a non-list -- length (SEQUENCE), last and the map* family
+  # (LIST), rplaca/rplacd (CONS), loop's for-in (ENDP) -- reports the operator
+  # and the type it requires.
+  - name: list-consumers-name-the-operator
+    source: |
+      (defun ci-lc (thunk)
+        (handler-case (funcall thunk)
+          (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+          (error (e) (list :not-a-type-error (princ-to-string e)))))
+      (defvar *ci-lc-five* 5)
+      (defvar *ci-lc-sym* 'foo)
+      (defvar *ci-lc-nil* nil)
+      (print (ci-lc (lambda () (length *ci-lc-five*))))
+      (print (ci-lc (lambda () (length *ci-lc-sym*))))
+      (print (ci-lc (lambda () (length (make-hash-table)))))
+      (print (ci-lc (lambda () (funcall #'length *ci-lc-five*))))
+      (print (list (length nil) (length '(1 2)) (length "ab") (length (vector 1 2 3))))
+      (print (ci-lc (lambda () (last *ci-lc-five*))))
+      (print (ci-lc (lambda () (last *ci-lc-five* 1))))
+      (print (ci-lc (lambda () (funcall #'last *ci-lc-five*))))
+      (print (list (last nil) (last '(1 2 . 3)) (last '(1 2 3) 2)))
+      (print (ci-lc (lambda () (rplaca *ci-lc-five* 0))))
+      (print (ci-lc (lambda () (rplacd *ci-lc-nil* 0))))
+      (print (ci-lc (lambda () (funcall #'rplaca *ci-lc-five* 0))))
+      (print (ci-lc (lambda () (setf (car *ci-lc-five*) 0))))
+      (print (ci-lc (lambda () (mapcar #'1+ *ci-lc-five*))))
+      (print (ci-lc (lambda () (mapcar #'+ '(1 2) *ci-lc-five*))))
+      (print (ci-lc (lambda () (mapc #'1+ *ci-lc-five*))))
+      (print (ci-lc (lambda () (mapcan #'list *ci-lc-five*))))
+      (print (ci-lc (lambda () (maplist #'car *ci-lc-five*))))
+      (print (ci-lc (lambda () (mapl #'car *ci-lc-five*))))
+      (print (ci-lc (lambda () (mapcon #'list *ci-lc-five*))))
+      (print (ci-lc (lambda () (funcall #'mapcar #'1+ *ci-lc-five*))))
+      (print (ci-lc (lambda () (loop for x in *ci-lc-five* collect x))))
+      (let ((seen nil))
+        (print (list (ci-lc (lambda () (loop for x in '(1 2 . 3) do (push x seen)))) seen)))
+      (print (list (loop for x in '(1 2) collect x) (loop for x in nil collect x) (mapcar #'1+ nil)))
+    expected: |
+      ("LENGTH: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      ("LENGTH: The value FOO is not of type SEQUENCE" FOO SEQUENCE)
+      ("LENGTH: The value #<HASH-TABLE :TEST EQUAL :COUNT 0> is not of type SEQUENCE" #<HASH-TABLE :TEST EQUAL :COUNT 0> SEQUENCE)
+      ("LENGTH: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+      (0 2 2 3)
+      ("LAST: The value 5 is not of type LIST" 5 LIST)
+      ("LAST: The value 5 is not of type LIST" 5 LIST)
+      ("LAST: The value 5 is not of type LIST" 5 LIST)
+      (NIL (2 . 3) (2 3))
+      ("RPLACA: The value 5 is not of type CONS" 5 CONS)
+      ("RPLACD: The value NIL is not of type CONS" NIL CONS)
+      ("RPLACA: The value 5 is not of type CONS" 5 CONS)
+      ("RPLACA: The value 5 is not of type CONS" 5 CONS)
+      ("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+      ("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+      ("MAPC: The value 5 is not of type LIST" 5 LIST)
+      ("MAPCAN: The value 5 is not of type LIST" 5 LIST)
+      ("MAPLIST: The value 5 is not of type LIST" 5 LIST)
+      ("MAPL: The value 5 is not of type LIST" 5 LIST)
+      ("MAPCON: The value 5 is not of type LIST" 5 LIST)
+      ("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+      ("ENDP: The value 5 is not of type LIST" 5 LIST)
+      (("ENDP: The value 3 is not of type LIST" 3 LIST) (2 1))
+      ((1 2) NIL NIL)
   # CLHS 3.5.1.4-6 / .kb/error-handling.md, "Argument-shape errors signal a
   # catchable program-error": a keyword the operator does not accept, an odd
   # keyword tail and a non-keyword in keyword position signal a CATCHABLE

@@ -3158,9 +3158,11 @@ class LispEvaluatorTest {
 			double d = ((LispDouble) floatResult).value();
 			assertThat(d).isGreaterThanOrEqualTo(0.0).isLessThan(2.0);
 		}
-		// A non-positive limit is an error.
-		assertThatThrownBy(() -> eval("(random 0)")).hasMessageContaining("positive");
-		assertThatThrownBy(() -> eval("(random -3)")).hasMessageContaining("positive");
+		// A non-positive limit is a catchable type-error
+		// (randomLimitDomainViolationsSignalATypeError
+		// covers the full domain, including a ratio limit).
+		assertThatThrownBy(() -> eval("(random 0)")).hasMessage("RANDOM: The value 0 is not of type REAL");
+		assertThatThrownBy(() -> eval("(random -3)")).hasMessage("RANDOM: The value -3 is not of type REAL");
 	}
 
 	@Test
@@ -6089,31 +6091,30 @@ class LispEvaluatorTest {
 
 	@Test
 	void mapFamilySignalsErrorOnNonList() {
-		// The map* family operates on lists; passing a non-list (e.g. a string) signals
-		// an
-		// error rather than silently returning nil, which would hide a caller's mistake.
+		// The map* family operates on lists; a non-list (e.g. a string) is the operator's
+		// LIST type-error rather than a silent nil, which would hide a caller's mistake.
 		// nil is a valid empty list and must stay accepted.
 		assertThatThrownBy(() -> eval("(mapcar #'identity \"abc\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("MAPCAR: argument is not a list: \"abc\"");
+			.hasMessageContaining("MAPCAR: The value \"abc\" is not of type LIST");
 		assertThatThrownBy(() -> eval("(mapc #'identity \"abc\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("MAPC: argument is not a list");
+			.hasMessageContaining("MAPC: The value \"abc\" is not of type LIST");
 		assertThatThrownBy(() -> eval("(mapcan #'list \"abc\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("MAPCAN: argument is not a list");
+			.hasMessageContaining("MAPCAN: The value \"abc\" is not of type LIST");
 		assertThatThrownBy(() -> eval("(maplist #'identity \"abc\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("MAPLIST: argument is not a list");
+			.hasMessageContaining("MAPLIST: The value \"abc\" is not of type LIST");
 		assertThatThrownBy(() -> eval("(mapcon #'list \"abc\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("MAPCON: argument is not a list");
+			.hasMessageContaining("MAPCON: The value \"abc\" is not of type LIST");
 		assertThatThrownBy(() -> eval("(mapl #'identity \"abc\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("MAPL: argument is not a list");
+			.hasMessageContaining("MAPL: The value \"abc\" is not of type LIST");
 		assertThatThrownBy(() -> eval("(mapcar #'1+ 5)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("MAPCAR: argument is not a list: 5");
+			.hasMessageContaining("MAPCAR: The value 5 is not of type LIST");
 		// Every list position is guarded, not just the first.
 		assertThatThrownBy(() -> eval("(mapcar #'list '(1) \"ab\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("MAPCAR: argument is not a list: \"ab\"");
+			.hasMessageContaining("MAPCAR: The value \"ab\" is not of type LIST");
 		assertThatThrownBy(() -> eval("(mapc #'list '(1) \"ab\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("MAPC: argument is not a list: \"ab\"");
+			.hasMessageContaining("MAPC: The value \"ab\" is not of type LIST");
 		assertThatThrownBy(() -> eval("(maplist #'list '(1) \"ab\")")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("MAPLIST: argument is not a list: \"ab\"");
+			.hasMessageContaining("MAPLIST: The value \"ab\" is not of type LIST");
 		// nil (the empty list) stays accepted across the family.
 		assertThat(eval("(mapcar #'1+ nil)")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(maplist #'identity nil)")).isEqualTo(LispNil.INSTANCE);
@@ -6377,12 +6378,12 @@ class LispEvaluatorTest {
 				(both :dotted (search '(1) '(1 2 . 3)) (funcall #'search '(1) '(1 2 . 3)))
 				""").print()).isEqualTo("0");
 		assertThatThrownBy(() -> eval("(search '(1) (make-array '(2 2)))")).isInstanceOf(LispEvalException.class);
-		// A non-sequence answers NIL rather than signalling -- (length 5) falls through
-		// the defun's cons walk and finds none, the same oddity .kb/seq-coerce-runtime.md
-		// records for coerce. The arm reproduces it by declining, not by copying it.
-		assertThat(evalMulti(both + """
-				(both :non-sequence (search "ab" 5) (funcall #'search "ab" 5))
-				""").print()).isEqualTo("NIL");
+		// A non-sequence is the defun's (length x) SEQUENCE type-error, as
+		// .kb/seq-coerce-runtime.md records for coerce. The arm reproduces it by
+		// declining, not by copying it.
+		assertThatThrownBy(() -> eval("(search \"ab\" 5)")).hasMessageContaining("The value 5 is not of type SEQUENCE");
+		assertThatThrownBy(() -> eval("(funcall #'search \"ab\" 5)"))
+			.hasMessageContaining("The value 5 is not of type SEQUENCE");
 		// mismatch's :from-end: the defun ACCEPTS the keyword and ignores it, which is
 		// not
 		// what CLHS specifies. The arm declines rather than spreading that to a second
@@ -6590,12 +6591,13 @@ class LispEvaluatorTest {
 				""").print()).isEqualTo("(\"1,2,3\" \"1,2,3,4,5,6,7,8,9,10,11,12\" \"\" \"[1 2][3 4][5 6][7 8][9 10]\" "
 				+ "\"|1-2-3-4-5-6-7-8-9\")");
 		// Only a PROPER list is materialized; everything else keeps the (nth i x) /
-		// (length x) the renderer always made, oddities included -- (length 5) is 0, so
-		// ~{ over a non-sequence renders nothing and leaves the argument consumed.
+		// (length x) the renderer always made -- so ~{ over a non-sequence is length's
+		// SEQUENCE type-error.
 		assertThat(evalMulti("""
 				(let ((c "~{~a~}[~a]"))
-				  (list (format nil c 5 'tail) (format nil c nil 'tail)))
-				""").print()).isEqualTo("(\"[TAIL]\" \"[TAIL]\")");
+				  (list (handler-case (format nil c 5 'tail) (type-error (e) (type-error-expected-type e)))
+				        (format nil c nil 'tail)))
+				""").print()).isEqualTo("(SEQUENCE \"[TAIL]\")");
 		assertThatThrownBy(() -> evalMulti("(let ((c \"~{~a~}\")) (format nil c \"abc\"))"))
 			.hasMessageContaining("CAR: The value \"abc\" is not of type LIST");
 		// Long enough that the head-walk showed: 2.5 ms a call before, and every
@@ -17261,10 +17263,9 @@ class LispEvaluatorTest {
 		// Declining means the shared expansion runs unchanged over the already-evaluated
 		// value, so every answer below -- error, oddity and identity alike -- is the one
 		// the expansion has always given.
-		// A non-sequence answers nil rather than signalling here (the expansion's (length
-		// x) fallthrough walks a cons chain and finds none) -- an oddity, but the fast
+		// A non-sequence is the expansion's (length x) SEQUENCE type-error -- the fast
 		// arm must reproduce it, not improve on it.
-		assertThat(eval("(coerce 5 'list)").print()).isEqualTo("NIL");
+		assertThatThrownBy(() -> eval("(coerce 5 'list)")).hasMessageContaining("The value 5 is not of type SEQUENCE");
 		assertThatThrownBy(() -> eval("(coerce (make-array '(2 2)) 'list)")).hasMessageContaining("not a sequence");
 		// A non-character element on the way to a string is the expansion's business --
 		// which signals it.
@@ -18690,6 +18691,185 @@ class LispEvaluatorTest {
 		// and #'second of a one-element list used to signal "expects a cons cell".
 		assertThat(evalMulti("(list (funcall #'first nil) (funcall #'rest nil) (funcall #'second '(1)))").print())
 			.isEqualTo("(NIL NIL NIL)");
+	}
+
+	@Test
+	void randomLimitDomainViolationsSignalATypeError() {
+		// random's domain is CLHS's (OR (INTEGER 1) (FLOAT (0.0))): a ratio limit is
+		// real but neither, and an integer or float limit <= 0 is out of range either
+		// way. Both report under RANDOM's own registered REAL type, like a non-real
+		// limit above, rather than teaching the operand-type table a compound type for
+		// this one operator (.todo/981). The twins are JvmLispCompilerTest and
+		// WasmLispCompilerIntegrationTest's randomLimitDomainViolationsSignalATypeError.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(print (te (lambda () (random 1/2))))
+				(print (te (lambda () (random -1))))
+				(print (te (lambda () (random 0))))
+				(print (te (lambda () (random -1.5))))
+				(print (te (lambda () (random 0.0))))
+				(let ((x -1.0)) (print (te (lambda () (random x)))))
+				""";
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal expr : LispReader.readAllFromString(source)) {
+			evaluator.eval(expr);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8).strip()).isEqualTo("""
+				("RANDOM: The value 1/2 is not of type REAL" 1/2 REAL)
+				("RANDOM: The value -1 is not of type REAL" -1 REAL)
+				("RANDOM: The value 0 is not of type REAL" 0 REAL)
+				("RANDOM: The value -1.5 is not of type REAL" -1.5 REAL)
+				("RANDOM: The value 0.0 is not of type REAL" 0.0 REAL)
+				("RANDOM: The value -1.0 is not of type REAL" -1.0 REAL)""");
+	}
+
+	@Test
+	void listWalksAndStringIndicesNameTheOperator() {
+		// A list walk over a non-list and a string index that is no integer name their
+		// operator as the other wrong-type arguments do (compiler/OperandTypes): nthcdr's
+		// walk (and so nth and second..tenth), endp and so dolist -- which checks its
+		// list's end once after the loop, CL's endp -- and char/schar.
+		// The twins are JvmLispCompilerTest and WasmLispCompilerIntegrationTest's
+		// listWalksAndStringIndicesNameTheOperator; the interpreter answered NIL for the
+		// walks and a simple-error for the index.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *te-n* nil)
+				(defvar *te-five* 5)
+				(print (te (lambda () (nthcdr 1 *te-five*))))
+				(print (te (lambda () (nthcdr 1 5))))
+				(print (te (lambda () (nthcdr 2 '(1 . 2)))))
+				(print (te (lambda () (nth 1 *te-five*))))
+				(print (te (lambda () (second *te-five*))))
+				(print (te (lambda () (third '(1 . 2)))))
+				(print (te (lambda () (funcall #'nthcdr 1 *te-five*))))
+				(print (te (lambda () (funcall #'nth 1 *te-five*))))
+				(print (te (lambda () (funcall #'second *te-five*))))
+				(print (te (lambda () (funcall #'second '(1 . 5)))))
+				(print (te (lambda () (dolist (x *te-five*) x))))
+				(print (te (lambda () (dolist (x 5) x))))
+				(print (te (lambda () (dolist (x *te-five*)))))
+				(let ((seen nil))
+				  (print (list (te (lambda () (dolist (x '(1 2 . 3)) (push x seen)))) seen)))
+				(print (te (lambda () (endp *te-five*))))
+				(print (te (lambda () (funcall #'endp *te-five*))))
+				(print (list (endp nil) (endp '(1)) (dolist (x '(1 2) :done) x)))
+				(print (te (lambda () (char "ab" *te-n*))))
+				(print (te (lambda () (schar "ab" *te-n*))))
+				(print (te (lambda () (char "ab" 1.5))))
+				(print (te (lambda () (funcall #'char "ab" *te-n*))))
+				""";
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal expr : LispReader.readAllFromString(source)) {
+			evaluator.eval(expr);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8).strip()).isEqualTo("""
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 2 is not of type LIST" 2 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 2 is not of type LIST" 2 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("CAR: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				(("ENDP: The value 3 is not of type LIST" 3 LIST) (2 1))
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				(T NIL :DONE)
+				("CHAR: The value NIL is not of type INTEGER" NIL INTEGER)
+				("SCHAR: The value NIL is not of type INTEGER" NIL INTEGER)
+				("CHAR: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+				("CHAR: The value NIL is not of type INTEGER" NIL INTEGER)""");
+	}
+
+	@Test
+	void listConsumersNameTheOperator() {
+		// A list consumer over a non-list names its operator as the list walks do
+		// (compiler/OperandTypes): length of a non-sequence (SEQUENCE), last and the map*
+		// family of a non-list (LIST), rplaca/rplacd of a non-cons (CONS), and loop's
+		// for-in, which checks its list's end as endp does.
+		// The twins are JvmLispCompilerTest and WasmLispCompilerIntegrationTest's
+		// listConsumersNameTheOperator; the interpreter answered 0 for length and NIL for
+		// last,
+		// and a message-only error for the rest.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *te-five* 5)
+				(defvar *te-sym* 'foo)
+				(defvar *te-nil* nil)
+				(print (te (lambda () (length *te-five*))))
+				(print (te (lambda () (length *te-sym*))))
+				(print (te (lambda () (length (make-hash-table)))))
+				(print (te (lambda () (funcall #'length *te-five*))))
+				(print (list (length nil) (length '(1 2)) (length "ab") (length (vector 1 2 3))))
+				(print (te (lambda () (last *te-five*))))
+				(print (te (lambda () (last *te-five* 1))))
+				(print (te (lambda () (funcall #'last *te-five*))))
+				(print (list (last nil) (last '(1 2 . 3)) (last '(1 2 3) 2)))
+				(print (te (lambda () (rplaca *te-five* 0))))
+				(print (te (lambda () (rplacd *te-nil* 0))))
+				(print (te (lambda () (funcall #'rplaca *te-five* 0))))
+				(print (te (lambda () (setf (car *te-five*) 0))))
+				(print (te (lambda () (mapcar #'1+ *te-five*))))
+				(print (te (lambda () (mapcar #'+ '(1 2) *te-five*))))
+				(print (te (lambda () (mapc #'1+ *te-five*))))
+				(print (te (lambda () (mapcan #'list *te-five*))))
+				(print (te (lambda () (maplist #'car *te-five*))))
+				(print (te (lambda () (mapl #'car *te-five*))))
+				(print (te (lambda () (mapcon #'list *te-five*))))
+				(print (te (lambda () (funcall #'mapcar #'1+ *te-five*))))
+				(print (te (lambda () (loop for x in *te-five* collect x))))
+				(let ((seen nil))
+				  (print (list (te (lambda () (loop for x in '(1 2 . 3) do (push x seen)))) seen)))
+				(print (list (loop for x in '(1 2) collect x) (loop for x in nil collect x) (mapcar #'1+ nil)))
+				""";
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal expr : LispReader.readAllFromString(source)) {
+			evaluator.eval(expr);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8).strip()).isEqualTo(
+				"""
+						("LENGTH: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+						("LENGTH: The value FOO is not of type SEQUENCE" FOO SEQUENCE)
+						("LENGTH: The value #<HASH-TABLE :TEST EQUAL :COUNT 0> is not of type SEQUENCE" #<HASH-TABLE :TEST EQUAL :COUNT 0> SEQUENCE)
+						("LENGTH: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+						(0 2 2 3)
+						("LAST: The value 5 is not of type LIST" 5 LIST)
+						("LAST: The value 5 is not of type LIST" 5 LIST)
+						("LAST: The value 5 is not of type LIST" 5 LIST)
+						(NIL (2 . 3) (2 3))
+						("RPLACA: The value 5 is not of type CONS" 5 CONS)
+						("RPLACD: The value NIL is not of type CONS" NIL CONS)
+						("RPLACA: The value 5 is not of type CONS" 5 CONS)
+						("RPLACA: The value 5 is not of type CONS" 5 CONS)
+						("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+						("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+						("MAPC: The value 5 is not of type LIST" 5 LIST)
+						("MAPCAN: The value 5 is not of type LIST" 5 LIST)
+						("MAPLIST: The value 5 is not of type LIST" 5 LIST)
+						("MAPL: The value 5 is not of type LIST" 5 LIST)
+						("MAPCON: The value 5 is not of type LIST" 5 LIST)
+						("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+						("ENDP: The value 5 is not of type LIST" 5 LIST)
+						(("ENDP: The value 3 is not of type LIST" 3 LIST) (2 1))
+						((1 2) NIL NIL)""");
 	}
 
 	@Test

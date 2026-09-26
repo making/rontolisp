@@ -7,6 +7,8 @@ import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.compiler.OperandTypes;
 
 /**
  * Builds the {@code _length} runtime helper for the {@code length} built-in:
@@ -15,10 +17,11 @@ import am.ik.jvm.Opcode;
  *
  * <p>
  * A string returns its character count (the stored length minus the two surrounding
- * quotes); a vector (rank-1 array) returns its element count; any other value is treated
- * as a list and its cons cells are counted (Common Lisp sequences). A rank-2+ array is
- * not a sequence, so it throws. An array is an {@link java.util.ArrayList} whose slot 0
- * holds the {@code {dims, fillPointer, adjustable}} header (see
+ * quotes); a vector (rank-1 array) returns its element count; a list's cons cells are
+ * counted (Common Lisp sequences). A rank-2+ array is not a sequence, so it throws; any
+ * other value -- a symbol, a number, a hash table -- is {@code LENGTH}'s {@code SEQUENCE}
+ * type-error ({@link JvmOperandTypeRuntime}). An array is an {@link java.util.ArrayList}
+ * whose slot 0 holds the {@code {dims, fillPointer, adjustable}} header (see
  * {@link JvmArrayRuntimeBuilder}), so its element count is the fill pointer when the
  * header carries one, otherwise {@code size() - 1}.
  *
@@ -56,6 +59,8 @@ final class JvmLengthRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;")));
 		MethodrefConstant alSize = cp.addMethodref(arrayListClass,
 				cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
+		MethodrefConstant startsWith = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("startsWith"), cp.addUtf8("(Ljava/lang/String;)Z")));
 		MethodrefConstant rtExInit = cp.addMethodref(rtExClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
 
@@ -71,9 +76,16 @@ final class JvmLengthRuntimeBuilder {
 		// String: return _scount(v) -- the character-visible length inside the
 		// surrounding quote framing. A supplementary code point counts as one character,
 		// matching (length "😀") == 1 on every backend after todo 153.
+		int notSequence = a.label();
 		a.aload(0);
 		a.instanceOf(stringClass);
 		a.branch(Opcode.IFEQ, notString);
+		// A symbol is a String too, without the quote framing: no sequence.
+		a.aload(0);
+		a.checkcast(stringClass);
+		a.ldcString(cp.addString("\""));
+		a.invokevirtual(startsWith);
+		a.branch(Opcode.IFEQ, notSequence);
 		a.aload(0);
 		a.checkcast(stringClass);
 		a.invokestatic(stringCharCount);
@@ -128,7 +140,15 @@ final class JvmLengthRuntimeBuilder {
 		a.areturn();
 		a.bind(notArray);
 
-		// List: count cons cells (Object[]) until the value is no longer a cons.
+		// List: count cons cells (Object[]) until the value is no longer a cons. Anything
+		// else that is not nil is no sequence.
+		int list = a.label();
+		a.aload(0);
+		a.branch(Opcode.IFNULL, list);
+		a.aload(0);
+		a.instanceOf(objectArrayClass);
+		a.branch(Opcode.IFEQ, notSequence);
+		a.bind(list);
 		a.op(Opcode.LCONST_0);
 		a.op(Opcode.LSTORE);
 		a.op0(1);
@@ -153,6 +173,17 @@ final class JvmLengthRuntimeBuilder {
 		a.op0(1);
 		a.invokestatic(longValueOf);
 		a.areturn();
+		// throw _opTypeErr(_teRaw(v, "SEQUENCE"), "LENGTH", "SEQUENCE")
+		a.bind(notSequence);
+		a.aload(0);
+		a.ldcString(cp.addString(OperandTypes.Kind.SEQUENCE.name()));
+		a.invokestatic(JvmOperandTypeRuntime.self(cp, selfClass, JvmOperandTypeRuntime.TE_RAW,
+				JvmOperandTypeRuntime.TE_RAW_DESC));
+		a.ldcString(cp.addString(LispNames.LENGTH));
+		a.ldcString(cp.addString(OperandTypes.Kind.SEQUENCE.name()));
+		a.invokestatic(JvmOperandTypeRuntime.self(cp, selfClass, JvmOperandTypeRuntime.OP_TYPE_ERR,
+				JvmOperandTypeRuntime.OP_TYPE_ERR_DESC));
+		a.op(Opcode.ATHROW);
 
 		return new LengthMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), 4, 4, a.finish());
 	}

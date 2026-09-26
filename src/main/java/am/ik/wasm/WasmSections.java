@@ -578,6 +578,13 @@ public final class WasmSections {
 			// No immediate.
 			case 0x0F, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E -> {
 			}
+			// br_on_cast / br_on_cast_fail: a flags byte, a label, then two heaptypes.
+			case 0x18, 0x19 -> {
+				p[0]++;
+				skipLeb(buf, p);
+				recordHeapType(buf, p, refs);
+				recordHeapType(buf, p, refs);
+			}
 			// array.new_data / array.new_elem / array.init_data / array.init_elem carry a
 			// dataidx / elemidx this pass does not renumber -- and it DOES drop data
 			// segments (see OwnedDataSegment), so accepting one would silently corrupt

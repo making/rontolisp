@@ -1272,6 +1272,80 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void aCheckedConsAccessSiteTestsItsOperandOnceAndNeedsNoLocal() {
+		// In EH mode a (car x) site checks its operand (.kb/cons-access-runtime.md) with
+		// ONE br_on_cast_fail over the operand on the stack: no ref.test in front of a
+		// ref.cast, and no temp for a computed operand, which the old two-read shape
+		// needed. nthcdr's walk steps with the same read. Counted per site as the
+		// difference between five sites and four, at the level that leaves the emitted
+		// bytes alone (so $cons is still type 3).
+		byte[] brOnCastFailCons = { (byte) 0xFB, 0x19, 0x01, 0x00, 0x6D, WasmLispCompiler.TYPE_CONS };
+		byte[] refTestCons = { (byte) 0xFB, 0x14, WasmLispCompiler.TYPE_CONS };
+		byte[] refCastCons = { (byte) 0xFB, 0x16, WasmLispCompiler.TYPE_CONS };
+		for (String site : List.of("(car x)", "(car (cdr x))", "(nthcdr 2 x)")) {
+			byte[] four = compileCheckedConsSites(site, 4);
+			byte[] five = compileCheckedConsSites(site, 5);
+			int checks = site.equals("(car (cdr x))") ? 2 : 1;
+			assertThat(count(five, brOnCastFailCons) - count(four, brOnCastFailCons)).as(site).isEqualTo(checks);
+			assertThat(count(five, refTestCons) - count(four, refTestCons)).as(site).isZero();
+			assertThat(count(five, refCastCons) - count(four, refCastCons)).as(site).isZero();
+			if (!site.startsWith("(nthcdr")) {
+				assertThat(declaredLocals(five)).as(site).isEqualTo(declaredLocals(four));
+			}
+		}
+	}
+
+	// `count` copies of `site` in statement position, in a program that compiles in EH
+	// mode and hands the function a list and a non-list, so no site is decided.
+	private static byte[] compileCheckedConsSites(String site, int count) {
+		StringBuilder source = new StringBuilder("(defun f (x)");
+		for (int k = 0; k < count; k++) {
+			source.append(' ').append(site);
+		}
+		source.append(" x)\n(print (f (list 1 2 3)))\n(print (handler-case (f 5) (error () :e)))");
+		return WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.NONE)
+			.build()
+			.compile(LispReader.readAllFromString(source.toString()));
+	}
+
+	// How many times the module's bytes spell `needle`.
+	private static int count(byte[] module, byte[] needle) {
+		int n = 0;
+		outer: for (int i = 0; i + needle.length <= module.length; i++) {
+			for (int k = 0; k < needle.length; k++) {
+				if (module[i + k] != needle[k]) {
+					continue outer;
+				}
+			}
+			n++;
+		}
+		return n;
+	}
+
+	// The locals every function body declares, summed (parameters excluded).
+	private static int declaredLocals(byte[] module) {
+		byte[] code = section(module, 10);
+		int[] p = { 0 };
+		int bodies = readUleb(code, p);
+		int total = 0;
+		for (int i = 0; i < bodies; i++) {
+			int size = readUleb(code, p);
+			int end = p[0] + size;
+			int groups = readUleb(code, p);
+			for (int g = 0; g < groups; g++) {
+				total += readUleb(code, p);
+				int valType = code[p[0]++] & 0xFF;
+				if (valType == 0x63 || valType == 0x64) { // (ref null ht) / (ref ht)
+					readUleb(code, p);
+				}
+			}
+			p[0] = end;
+		}
+		return total;
+	}
+
+	@Test
 	void anElementAccessSiteDoesNotCarryItsOwnCopyOfTheSharedRuntime() {
 		// A byte budget, because nothing else notices: every arrangement of this code
 		// compiles and runs correctly, and the only difference is how many times the

@@ -37,16 +37,15 @@ final class JvmMapcCompiler {
 		// else goes through the arity dispatcher.
 		JvmDesignatorCall call = JvmDesignatorCall.prepare(args.get(1), nLists, ctx, className);
 
-		// Compile each list expression, guarding it is a list. mapc operates on lists; a
-		// non-list (e.g. a string) signals an error.
+		// Compile each list expression, checking it is a list: a non-list (e.g. a string)
+		// is MAPC's type-error.
 		List<Integer> listSlots = new ArrayList<>();
 		for (int i = 0; i < nLists; i++) {
 			JvmExprCompiler.compileExpr(args.get(2 + i), ctx, className);
+			JvmEmitHelper.emitListCheck(ctx);
 			int listSlot = ctx.allocTemp();
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(listSlot);
-			JvmEmitHelper.emitRequireListGuard(ctx, listSlot,
-					"MAPC: argument is not a list (use map for strings/vectors)");
 			listSlots.add(listSlot);
 		}
 

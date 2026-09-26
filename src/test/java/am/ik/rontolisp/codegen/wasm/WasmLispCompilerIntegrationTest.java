@@ -1817,6 +1817,57 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void checkedConsAccessAnswersTheSameAtEveryLevel() throws Exception {
+		// The same shapes in EH mode, where a site is CHECKED
+		// (.kb/cons-access-runtime.md):
+		// one br_on_cast_fail over the operand on the stack, the checked _car/_cdr body
+		// on the miss -- inline at the default levels, the body alone at the size level.
+		// Nil and a cons answer as before at every level, whatever the operand (a
+		// parameter, a special, a nested read, a do-stepped local, apply's walk), and a
+		// non-list is CAR's / CDR's catchable type-error, wherever a site took it: an
+		// inline site, a nested one, a walk that ran off a dotted tail.
+		String program = """
+				(defvar *l* (list 1 (list 2 3) nil))
+				(defun second-of (x) (car (cdr x)))
+				(defun walk (l) (let ((n 0)) (do ((c l (cdr c))) ((null c) n) (when (car c) (setq n (+ n 1))))))
+				(defun three (a b c) (list a b c))
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e)))))
+				(print (car nil))
+				(print (cdr nil))
+				(print (car *l*))
+				(print (second-of *l*))
+				(print (car (car (cdr *l*))))
+				(print (walk *l*))
+				(print (apply (car (list #'three)) 1 '(2 3)))
+				(print (te (lambda () (car 5))))
+				(print (te (lambda () (second-of (cons 1 "s")))))
+				(print (te (lambda () (walk (cons 1 2)))))
+				(print (te (lambda () (car (car *l*)))))
+				""";
+		String expected = """
+				NIL
+				NIL
+				1
+				(2 3)
+				2
+				2
+				(1 2 3)
+				("CAR: The value 5 is not of type LIST" 5)
+				("CAR: The value \\"s\\" is not of type LIST" "s")
+				("CAR: The value 2 is not of type LIST" 2)
+				("CAR: The value 1 is not of type LIST" 1)""";
+		// type-error-datum is prelude Lisp.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(program));
+		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			byte[] module = WasmLispCompiler.builder().optimize(level).build().compile(forms);
+			assertThat(runModule(module, "checked-cons-" + level.name().toLowerCase() + ".wasm")).as(level.name())
+				.isEqualTo(expected);
+		}
+	}
+
+	@Test
 	void theSizeLevelDeclinesTheSpeedTradesWithoutChangingAnyResult() throws Exception {
 		// --optimize=size declines the two wasm-GC emissions that spend bytes on speed:
 		// integer expression-tree fusion (every fused site emits its tree TWICE, raw
@@ -8139,9 +8190,9 @@ class WasmLispCompilerIntegrationTest {
 				+ "\"|1-2-3-4-5-6-7-8-9\")");
 		assertThat(compileAndRun("""
 				(let ((c "~{~a~}[~a]"))
-				  (princ (format nil c 5 'tail))
+				  (princ (handler-case (format nil c 5 'tail) (type-error () :type-error)))
 				  (princ (format nil c nil 'tail)))
-				""")).isEqualTo("[TAIL][TAIL]");
+				""")).isEqualTo("TYPE-ERROR[TAIL]");
 		assertThat(compileAndRun("""
 				(let* ((c "~{~a~}")
 				       (long (let ((out nil))
@@ -21365,13 +21416,13 @@ class WasmLispCompilerIntegrationTest {
 				(print (coerce nil 'vector))
 				(print (handler-case (coerce '(1 2) 'string) (error () :not-a-character)))
 				(print (coerce 5 'vector))
-				(print (coerce 5 'list))
+				(print (handler-case (coerce 5 'list) (type-error () :type-error)))
 				(print (position #\\Space "a b c"))
 				(print (position #\\Space "a b c" :from-end t))
 				(print (count #\\a "banana"))
 				(print (remove #\\a "banana"))
 				""")).isEqualTo(
-				"1\n(#\\z #\\z)\n(7 7)\n(1 2 3)\n(1.0 2.0)\n\"pq\"\n\"\"\n#()\n:NOT-A-CHARACTER\n5\nNIL\n1\n3\n3\n\"bnn\"");
+				"1\n(#\\z #\\z)\n(7 7)\n(1 2 3)\n(1.0 2.0)\n\"pq\"\n\"\"\n#()\n:NOT-A-CHARACTER\n5\n:TYPE-ERROR\n1\n3\n3\n\"bnn\"");
 	}
 
 	@Test
@@ -24557,6 +24608,170 @@ class WasmLispCompilerIntegrationTest {
 				("LCM: The value NIL is not of type INTEGER" NIL INTEGER)
 				("GCD: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
 				("COMPLEX: The value #C(1 2) is not of type REAL" #C(1 2) REAL)""";
+		assertThat(compileAndRunPrelude(source)).isEqualTo(expected);
+		assertThat(compileComponentAndRunPrelude(source)).isEqualTo(expected);
+	}
+
+	@Test
+	void ehRandomLimitDomainViolationsSignalATypeError() throws Exception {
+		// The evaluator twin is randomLimitDomainViolationsSignalATypeError. A ratio
+		// limit used to pass _as_f64 (float contagion) and meet _int_val's UNNAMED
+		// INTEGER report, and a non-positive limit was never checked at all -- the
+		// float path silently scaled by a negative number and the integer path took an
+		// UNSIGNED remainder of it, both wrong values instead of a signal (.todo/981).
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(print (te (lambda () (random 1/2))))
+				(print (te (lambda () (random -1))))
+				(print (te (lambda () (random 0))))
+				(print (te (lambda () (random -1.5))))
+				(print (te (lambda () (random 0.0))))
+				(let ((x -1.0)) (print (te (lambda () (random x)))))
+				""";
+		String expected = """
+				("RANDOM: The value 1/2 is not of type REAL" 1/2 REAL)
+				("RANDOM: The value -1 is not of type REAL" -1 REAL)
+				("RANDOM: The value 0 is not of type REAL" 0 REAL)
+				("RANDOM: The value -1.5 is not of type REAL" -1.5 REAL)
+				("RANDOM: The value 0.0 is not of type REAL" 0.0 REAL)
+				("RANDOM: The value -1.0 is not of type REAL" -1.0 REAL)""";
+		assertThat(compileAndRunPrelude(source)).isEqualTo(expected);
+		assertThat(compileComponentAndRunPrelude(source)).isEqualTo(expected);
+	}
+
+	@Test
+	void listWalksAndStringIndicesNameTheOperator() throws Exception {
+		// A list walk over a non-list and a string index that is no integer name their
+		// operator as the other wrong-type arguments do (compiler/OperandTypes): nthcdr's
+		// walk (and so nth and second..tenth), endp and so dolist -- which checks its
+		// list's end once after the loop, CL's endp -- and char/schar.
+		// They used to be uncatchable traps here, and endp answered NIL.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *te-n* nil)
+				(defvar *te-five* 5)
+				(print (te (lambda () (nthcdr 1 *te-five*))))
+				(print (te (lambda () (nthcdr 1 5))))
+				(print (te (lambda () (nthcdr 2 '(1 . 2)))))
+				(print (te (lambda () (nth 1 *te-five*))))
+				(print (te (lambda () (second *te-five*))))
+				(print (te (lambda () (third '(1 . 2)))))
+				(print (te (lambda () (funcall #'nthcdr 1 *te-five*))))
+				(print (te (lambda () (funcall #'nth 1 *te-five*))))
+				(print (te (lambda () (funcall #'second *te-five*))))
+				(print (te (lambda () (funcall #'second '(1 . 5)))))
+				(print (te (lambda () (dolist (x *te-five*) x))))
+				(print (te (lambda () (dolist (x 5) x))))
+				(print (te (lambda () (dolist (x *te-five*)))))
+				(let ((seen nil))
+				  (print (list (te (lambda () (dolist (x '(1 2 . 3)) (push x seen)))) seen)))
+				(print (te (lambda () (endp *te-five*))))
+				(print (te (lambda () (funcall #'endp *te-five*))))
+				(print (list (endp nil) (endp '(1)) (dolist (x '(1 2) :done) x)))
+				(print (te (lambda () (char "ab" *te-n*))))
+				(print (te (lambda () (schar "ab" *te-n*))))
+				(print (te (lambda () (char "ab" 1.5))))
+				(print (te (lambda () (funcall #'char "ab" *te-n*))))
+				""";
+		String expected = """
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 2 is not of type LIST" 2 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 2 is not of type LIST" 2 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("CAR: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				(("ENDP: The value 3 is not of type LIST" 3 LIST) (2 1))
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				(T NIL :DONE)
+				("CHAR: The value NIL is not of type INTEGER" NIL INTEGER)
+				("SCHAR: The value NIL is not of type INTEGER" NIL INTEGER)
+				("CHAR: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+				("CHAR: The value NIL is not of type INTEGER" NIL INTEGER)""";
+		assertThat(compileAndRunPrelude(source)).isEqualTo(expected);
+		assertThat(compileComponentAndRunPrelude(source)).isEqualTo(expected);
+	}
+
+	@Test
+	void listConsumersNameTheOperator() throws Exception {
+		// A list consumer over a non-list names its operator as the list walks do
+		// (compiler/OperandTypes): length of a non-sequence (SEQUENCE), last and the map*
+		// family of a non-list (LIST), rplaca/rplacd of a non-cons (CONS), and loop's
+		// for-in, which checks its list's end as endp does.
+		// They used to be uncatchable traps here, and length and last answered wrong
+		// values.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *te-five* 5)
+				(defvar *te-sym* 'foo)
+				(defvar *te-nil* nil)
+				(print (te (lambda () (length *te-five*))))
+				(print (te (lambda () (length *te-sym*))))
+				(print (te (lambda () (length (make-hash-table)))))
+				(print (te (lambda () (funcall #'length *te-five*))))
+				(print (list (length nil) (length '(1 2)) (length "ab") (length (vector 1 2 3))))
+				(print (te (lambda () (last *te-five*))))
+				(print (te (lambda () (last *te-five* 1))))
+				(print (te (lambda () (funcall #'last *te-five*))))
+				(print (list (last nil) (last '(1 2 . 3)) (last '(1 2 3) 2)))
+				(print (te (lambda () (rplaca *te-five* 0))))
+				(print (te (lambda () (rplacd *te-nil* 0))))
+				(print (te (lambda () (funcall #'rplaca *te-five* 0))))
+				(print (te (lambda () (setf (car *te-five*) 0))))
+				(print (te (lambda () (mapcar #'1+ *te-five*))))
+				(print (te (lambda () (mapcar #'+ '(1 2) *te-five*))))
+				(print (te (lambda () (mapc #'1+ *te-five*))))
+				(print (te (lambda () (mapcan #'list *te-five*))))
+				(print (te (lambda () (maplist #'car *te-five*))))
+				(print (te (lambda () (mapl #'car *te-five*))))
+				(print (te (lambda () (mapcon #'list *te-five*))))
+				(print (te (lambda () (funcall #'mapcar #'1+ *te-five*))))
+				(print (te (lambda () (loop for x in *te-five* collect x))))
+				(let ((seen nil))
+				  (print (list (te (lambda () (loop for x in '(1 2 . 3) do (push x seen)))) seen)))
+				(print (list (loop for x in '(1 2) collect x) (loop for x in nil collect x) (mapcar #'1+ nil)))
+				""";
+		String expected = """
+				("LENGTH: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+				("LENGTH: The value FOO is not of type SEQUENCE" FOO SEQUENCE)
+				("LENGTH: The value #<HASH-TABLE :TEST EQUAL :COUNT 0> is not of type SEQUENCE" #<HASH-TABLE :TEST EQUAL :COUNT 0> SEQUENCE)
+				("LENGTH: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+				(0 2 2 3)
+				("LAST: The value 5 is not of type LIST" 5 LIST)
+				("LAST: The value 5 is not of type LIST" 5 LIST)
+				("LAST: The value 5 is not of type LIST" 5 LIST)
+				(NIL (2 . 3) (2 3))
+				("RPLACA: The value 5 is not of type CONS" 5 CONS)
+				("RPLACD: The value NIL is not of type CONS" NIL CONS)
+				("RPLACA: The value 5 is not of type CONS" 5 CONS)
+				("RPLACA: The value 5 is not of type CONS" 5 CONS)
+				("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+				("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+				("MAPC: The value 5 is not of type LIST" 5 LIST)
+				("MAPCAN: The value 5 is not of type LIST" 5 LIST)
+				("MAPLIST: The value 5 is not of type LIST" 5 LIST)
+				("MAPL: The value 5 is not of type LIST" 5 LIST)
+				("MAPCON: The value 5 is not of type LIST" 5 LIST)
+				("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				(("ENDP: The value 3 is not of type LIST" 3 LIST) (2 1))
+				((1 2) NIL NIL)""";
 		assertThat(compileAndRunPrelude(source)).isEqualTo(expected);
 		assertThat(compileComponentAndRunPrelude(source)).isEqualTo(expected);
 	}

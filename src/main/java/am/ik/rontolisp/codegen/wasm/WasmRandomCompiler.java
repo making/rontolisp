@@ -62,12 +62,22 @@ final class WasmRandomCompiler {
 			throw new UnsupportedOperationException("random expects 1 argument, got " + (args.size() - 1));
 		}
 		if (WasmLispCompiler.hasDoubleLiteral(args)) {
-			// Float-literal limit: the float path directly, no runtime test needed.
+			// Float-literal limit: the float path directly, no runtime test needed --
+			// but reject a non-positive one first (.todo/981), which this path would
+			// otherwise never check.
+			int limitSlot = ctx.allocTemp();
+			WasmExprCompiler.compileExpr(args.get(1), ctx);
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(limitSlot);
+			if (WasmEmitHelper.checksConsFields(ctx)) {
+				emitPositiveFloatCheck(ctx, limitSlot);
+			}
 			int savedI64 = ctx.nextI64Local;
 			emitRandomI32(ctx);
 			ctx.nextI64Local = savedI64;
 			emitFloatLimitProduct(ctx, () -> {
-				WasmExprCompiler.compileExpr(args.get(1), ctx);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(limitSlot);
 				WasmEmitHelper.castFloatGetF64(ctx);
 			});
 		}
@@ -91,8 +101,12 @@ final class WasmRandomCompiler {
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 			ctx.writer.write(Instruction.IF);
 			ctx.writer.writeRefType(true, Type.EQ.code());
-			// Float limit: (rand / 2^31) * limit, a TYPE_FLOAT struct. The fraction
-			// spends the draw's low 32 bits, masked to [0, 2^31).
+			// Float limit: reject <= 0.0 first under EH mode (.todo/981), then
+			// (rand / 2^31) * limit, a TYPE_FLOAT struct. The fraction spends the
+			// draw's low 32 bits, masked to [0, 2^31).
+			if (WasmEmitHelper.checksConsFields(ctx)) {
+				emitPositiveFloatCheck(ctx, limitSlot);
+			}
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writeI64LocalIndex(drawSlot);
 			ctx.writer.write(Instruction.I32_WRAP_I64);
@@ -107,16 +121,34 @@ final class WasmRandomCompiler {
 			ctx.writer.write(Instruction.ELSE);
 			if (WasmEmitHelper.checksConsFields(ctx)) {
 				// EH mode: a limit that is no real is RANDOM's type-error, through
-				// _as_f64 under the operator's register; a ratio passes it and meets
-				// _int_val's unnamed INTEGER report below, which is true of it.
+				// _as_f64 under the operator's register.
 				ctx.writer.write(Instruction.GET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(limitSlot);
 				WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_AS_F64);
 				ctx.writer.write(Instruction.DROP);
+				// A ratio passes _as_f64 (float contagion) but is neither integer nor
+				// float: _int_val rejects it too, now under the SAME register so it
+				// reports RANDOM's own REAL type instead of an unnamed INTEGER one
+				// (.todo/981).
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(limitSlot);
+				WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_INT_VAL);
+				ctx.writer.write(Instruction.I64_CONST);
+				ctx.writer.writeSignedLeb128(0);
+				ctx.writer.write(Instruction.I64_LE_S);
+				ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(limitSlot);
+				WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_TYPE_ERR_REAL);
+				ctx.writer.write(Instruction.UNREACHABLE);
+				ctx.writer.write(Instruction.END);
 			}
 			// Integer limit: rand mod limit in i64, normalized through _int_new. The
-			// masked value is non-negative and the limit is positive, so the unsigned
-			// remainder stays in [0, limit); _int_val accepts an i31 or boxed limit.
+			// masked value is non-negative and the limit is positive (checked above
+			// under EH mode; outside it a non-positive limit still traps or wraps, like
+			// any other unrecoverable failure there), so the unsigned remainder stays
+			// in [0, limit); _int_val accepts an i31 or boxed limit and is pure, so
+			// calling it again here (after the check above) draws nothing extra.
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writeI64LocalIndex(drawSlot);
 			ctx.writer.write(Instruction.I64_CONST);
@@ -124,14 +156,36 @@ final class WasmRandomCompiler {
 			ctx.writer.write(Instruction.I64_AND);
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(limitSlot);
-			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_INT_VAL);
 			ctx.writer.write(Instruction.I64_REM_U);
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 			ctx.writer.write(Instruction.END);
 			ctx.nextI64Local = savedI64;
 		}
+	}
+
+	/**
+	 * Rejects a {@code TYPE_FLOAT} limit whose value is {@code <= 0.0}: RANDOM's domain
+	 * violation (.todo/981), reported like a non-real limit -- a catchable
+	 * {@code type-error} naming RANDOM's own REAL type under EH mode, a trap outside it
+	 * ({@link WasmLispCompiler#FUNC_TYPE_ERR_REAL}'s own gate).
+	 * @param ctx the compilation context
+	 * @param limitSlot the {@code (ref null eq)} local holding the limit
+	 */
+	private static void emitPositiveFloatCheck(WasmLispCompiler.Ctx ctx, int limitSlot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(limitSlot);
+		WasmEmitHelper.castFloatGetF64(ctx);
+		ctx.writer.write(Instruction.F64_CONST);
+		ctx.writer.writeF64(0.0);
+		ctx.writer.write(Instruction.F64_LE);
+		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(limitSlot);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_TYPE_ERR_REAL);
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.writer.write(Instruction.END);
 	}
 
 	/**

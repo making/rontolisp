@@ -6,6 +6,8 @@ import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.compiler.OperandTypes;
 
 /**
  * Builds the {@code _nthcdr} runtime helper behind the {@code nthcdr} built-in:
@@ -14,7 +16,9 @@ import am.ik.jvm.Opcode;
  *
  * <p>
  * Walks {@code cdr} {@code n} times, stopping early on {@code nil} because
- * {@code (nthcdr n lst)} past the end of the list is {@code nil} in Common Lisp.
+ * {@code (nthcdr n lst)} past the end of the list is {@code nil} in Common Lisp. A
+ * non-list met before the count runs out -- {@code 5} in {@code (nthcdr 1 5)} -- is
+ * {@code NTHCDR}'s {@code LIST} type-error ({@link JvmOperandTypeRuntime}).
  *
  * <p>
  * The walk lives in this helper rather than inline at the call site for a reason that has
@@ -41,17 +45,21 @@ final class JvmNthcdrRuntimeBuilder {
 	private JvmNthcdrRuntimeBuilder() {
 	}
 
-	static NthcdrMethod build(ConstantPool cp, ClassConstant objectArrayClass) {
+	static NthcdrMethod build(ConstantPool cp, ClassConstant objectArrayClass, ClassConstant thisClass) {
 		// Slots: 0 = n (int), 1 = the list cursor.
 		JvmAsm a = new JvmAsm();
 		int loop = a.label();
 		int done = a.label();
+		int notList = a.label();
 
 		a.bind(loop);
 		a.iload(0);
 		a.branch(Opcode.IFLE, done);
 		a.aload(1);
 		a.branch(Opcode.IFNULL, done);
+		a.aload(1);
+		a.instanceOf(objectArrayClass);
+		a.branch(Opcode.IFEQ, notList);
 		a.aload(1);
 		a.checkcast(objectArrayClass);
 		a.iconst(1);
@@ -62,8 +70,19 @@ final class JvmNthcdrRuntimeBuilder {
 		a.bind(done);
 		a.aload(1);
 		a.areturn();
+		// throw _opTypeErr(_teRaw(list, "LIST"), "NTHCDR", FUNNEL_TYPE)
+		a.bind(notList);
+		a.aload(1);
+		a.ldcString(cp.addString(OperandTypes.Kind.LIST.name()));
+		a.invokestatic(JvmOperandTypeRuntime.self(cp, thisClass, JvmOperandTypeRuntime.TE_RAW,
+				JvmOperandTypeRuntime.TE_RAW_DESC));
+		a.ldcString(cp.addString(LispNames.NTHCDR));
+		a.ldcString(cp.addString(OperandTypes.FUNNEL_TYPE));
+		a.invokestatic(JvmOperandTypeRuntime.self(cp, thisClass, JvmOperandTypeRuntime.OP_TYPE_ERR,
+				JvmOperandTypeRuntime.OP_TYPE_ERR_DESC));
+		a.athrow();
 
-		return new NthcdrMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), 2, 2, a.finish());
+		return new NthcdrMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), 3, 2, a.finish());
 	}
 
 }

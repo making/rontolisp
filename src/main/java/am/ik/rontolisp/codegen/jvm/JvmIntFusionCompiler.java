@@ -1404,6 +1404,12 @@ final class JvmIntFusionCompiler {
 		}
 		LispVal limit = parts.get(1);
 		if (limit instanceof LispInteger lit) {
+			if (lit.value() <= 0) {
+				// _random's domain violation (.todo/981): bail out of fusion so the
+				// unfused path's call reaches the checked, throwing helper instead of
+				// baking a bad constant into the draw.
+				return null;
+			}
 			return new RandomLeaf(null, lit.value());
 		}
 		if (limit instanceof am.ik.rontolisp.LispBigInteger || limit instanceof am.ik.rontolisp.LispRatio) {
@@ -1674,7 +1680,18 @@ final class JvmIntFusionCompiler {
 					l.flagSlot = ctx.allocTemp();
 					l.boxSlot = ctx.allocTemp();
 				}
-				emitRandomDraw(l, ctx, ctx.numOp(JvmNumericRuntimeBuilder.RANDOM), limitScratch, bailFlag);
+				// ctx.operator names the wrapper this numOp call resolves to
+				// (.todo/981): the fusion planner reaches this leaf structurally, never
+				// through JvmExprCompiler.compileCons's own (random ...) dispatch, so
+				// nothing else sets it to RANDOM here.
+				String outerOperator = ctx.operator;
+				ctx.operator = LispNames.RANDOM;
+				try {
+					emitRandomDraw(l, ctx, ctx.numOp(JvmNumericRuntimeBuilder.RANDOM), limitScratch, bailFlag);
+				}
+				finally {
+					ctx.operator = outerOperator;
+				}
 			}
 		}
 		if (bailFlag >= 0) {
@@ -1793,10 +1810,12 @@ final class JvmIntFusionCompiler {
 	 * {@code Long} limit (and a literal one, which needs no argument at all) computes the
 	 * same expression {@code _random} evaluates for it,
 	 * {@code (long) (ThreadLocalRandom.current().nextDouble() * limit)}, straight into a
-	 * raw slot, with the box on both ends gone; any other limit (a float reaching
-	 * {@code random} through a variable) takes its ONE draw from {@code _random} into the
-	 * boxed slot and raises the bail flag, so the tree falls back with the value already
-	 * drawn.
+	 * raw slot, with the box on both ends gone -- unless it is non-positive, which
+	 * {@code _random} rejects too (.todo/981): that joins the not-a-Long case below
+	 * instead of drawing. Any other limit (a float reaching {@code random} through a
+	 * variable) takes its ONE draw from {@code _random} into the boxed slot and raises
+	 * the bail flag, so the tree falls back with the value already drawn -- or, for a
+	 * rejected limit, with {@code _random}'s throw instead.
 	 */
 	private static void emitRandomDraw(RandomLeaf leaf, JvmLispCompiler.Ctx ctx, MethodrefConstant randomHelper,
 			int limitScratch, int bailFlag) {
@@ -1816,6 +1835,14 @@ final class JvmIntFusionCompiler {
 		JvmEmitHelper.unboxLong(ctx);
 		ctx.emit(Opcode.LSTORE);
 		ctx.emit(limitScratch);
+		// A non-positive Long limit is _random's domain violation too (.todo/981): join
+		// the not-a-Long trampoline below instead of drawing, so the boxed helper call
+		// throws (its own check runs before any draw, so this never draws twice).
+		ctx.emit(Opcode.LLOAD);
+		ctx.emit(limitScratch);
+		ctx.emit(Opcode.LCONST_0);
+		ctx.emit(Opcode.LCMP);
+		int notPositive = branch(ctx, Opcode.IFLE);
 		emitDrawTimesDouble(ctx, limitScratch, 0);
 		ctx.emit(Opcode.LSTORE);
 		ctx.emit(leaf.longSlot);
@@ -1827,6 +1854,7 @@ final class JvmIntFusionCompiler {
 		ctx.emit(leaf.boxSlot);
 		int drawn = branch(ctx, Opcode.GOTO);
 		JvmEmitHelper.patchBranch(ctx, notLong, ctx.code.size());
+		JvmEmitHelper.patchBranch(ctx, notPositive, ctx.code.size());
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(leaf.limitParam);
 		ctx.emit(Opcode.INVOKESTATIC);

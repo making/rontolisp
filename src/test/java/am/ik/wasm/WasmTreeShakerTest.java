@@ -862,6 +862,59 @@ class WasmTreeShakerTest {
 	}
 
 	@Test
+	void keepsAndRenumbersTheTypeACastBranchNames() {
+		// Type 0 is named only by a dead function and goes; type 1, a struct, is named
+		// only by the live body's br_on_cast_fail, as the cast's target heap type -- so
+		// it survives, as type 0, and the immediate follows it there.
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		new WasmWriter(out).write("\0asm")
+			.writeLittleEndian4(1)
+			.writeTypeSection(types -> types.addFunc(new Type[] { Type.F64 }, new Type[0])
+				.addRecGroup(rec -> rec.addSubFinalStruct(fields -> fields.addField(false, w -> w.write(Type.I32))))
+				.addFunc(new Type[0], new Type[] { Type.I32 }))
+			.writeFunction(funcs -> funcs.addFunction(0).addFunction(2))
+			.writeExport(exports -> exports.addExport("g", ExternalKind.FUNCTION, 1))
+			.writeCode(code -> code.addFunction(new byte[] { 0x00, (byte) Instruction.END }).addFunction(entry(w -> {
+				w.write(Instruction.BLOCK, Type.EQ.code());
+				w.write(Instruction.I32_CONST).writeSignedLeb128(3);
+				w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+				w.write(Instruction.GC_PREFIX, Instruction.BR_ON_CAST_FAIL);
+				w.write(0x01).writeUnsignedLeb128(0).writeHeapType(Type.EQ.code()).writeHeapType(1);
+				w.write(Instruction.DROP);
+				w.write(Instruction.REF_NULL).writeHeapType(Type.EQ.code());
+				w.write(Instruction.END);
+				w.write(Instruction.REF_IS_NULL);
+			})));
+		byte[] shaken = WasmTreeShaker.shake(out.toByteArray());
+
+		List<WasmSections.Section> sections = WasmSections.parseSections(shaken);
+		WasmCodeModel.TypeSection types = WasmCodeModel
+			.parseTypeSection(java.util.Objects.requireNonNull(WasmSections.find(sections, 1)).payload());
+		assertThat(types.count()).isEqualTo(2);
+		assertThat(types.types().get(0)).isInstanceOf(WasmCodeModel.StructType.class);
+		List<byte[]> entries = WasmSections
+			.parseCodeEntries(java.util.Objects.requireNonNull(WasmSections.find(sections, 10)).payload());
+		assertThat(entries).hasSize(1);
+		WasmCodeModel.Instr branch = WasmCodeModel.decode(entries.get(0), types)
+			.code()
+			.stream()
+			.filter(WasmCodeModel.Instr::isCastBranch)
+			.findFirst()
+			.orElseThrow();
+		assertThat(java.util.Objects.requireNonNull(branch.cast).to()).isZero();
+		assertThat(WasmTreeShaker.shake(shaken)).isEqualTo(shaken);
+	}
+
+	private static byte[] entry(java.util.function.Consumer<WasmWriter> instructions) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(out);
+		w.write(0); // no locals
+		instructions.accept(w);
+		w.write(Instruction.END);
+		return out.toByteArray();
+	}
+
+	@Test
 	void aSectionTheShakeEmptiedIsDroppedRatherThanWrittenBackEmpty() {
 		// A module exporting only its memory: the one function is unreachable and goes,
 		// and so does the type only it named. `00` (zero entries) says exactly what no

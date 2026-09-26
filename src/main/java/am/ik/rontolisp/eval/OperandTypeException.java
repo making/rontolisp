@@ -40,6 +40,22 @@ final class OperandTypeException extends LispEvalException {
 	}
 
 	/**
+	 * The error of a built-in that knows which operator it is serving: a walk that
+	 * reports the step that failed ({@code nth}'s cdrs as {@code NTHCDR}, its last read
+	 * as {@code CAR}), or a helper reached outside the built-in seam
+	 * ({@code %schar-set}).
+	 * @param datum the rejected operand
+	 * @param kind what was checked for
+	 * @param operator the operator's symbol name (a rewritten one reports as the operator
+	 * it becomes)
+	 * @return the exception to throw
+	 */
+	static OperandTypeException of(LispVal datum, OperandTypes.Kind kind, String operator) {
+		String reported = OperandTypes.reportedOperator(operator);
+		return new OperandTypeException(datum, kind, reported != null ? reported : operator);
+	}
+
+	/**
 	 * This error attributed to the built-in whose body raised it, or itself when it is
 	 * already named or the built-in is not a named operator.
 	 * @param builtin the built-in's name

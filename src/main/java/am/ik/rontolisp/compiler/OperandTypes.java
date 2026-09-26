@@ -49,7 +49,20 @@ public final class OperandTypes {
 		RATIONAL,
 
 		/** A non-list reaching {@code car}/{@code cdr}. */
-		LIST
+		LIST,
+
+		/**
+		 * The type of an operator that takes any sequence ({@code length}); no funnel
+		 * checks for it, the operator's row names it.
+		 */
+		SEQUENCE,
+
+		/**
+		 * The type of an operator that takes a cons, never nil ({@code rplaca},
+		 * {@code rplacd}): a funnel checking for it reports it unnamed, the operator's
+		 * row names it.
+		 */
+		CONS
 
 	}
 
@@ -90,9 +103,12 @@ public final class OperandTypes {
 	/**
 	 * The funnel-typed operators ({@link #expectedType}): {@code (setf aref)} is the
 	 * reported name of {@code %aset}, the operator a {@code setf} of an {@code aref} or
-	 * {@code svref} place lowers to.
+	 * {@code svref} place lowers to. {@code endp} is also {@code dolist}'s and
+	 * {@code loop}'s {@code for-in}: the expansions check the list's end as it does.
+	 * {@code last} and the {@code map*} family check their list arguments.
 	 */
-	private static final List<String> FUNNEL_TYPED = List.of("CAR", "CDR", "NTHCDR", "AREF", SETF_AREF);
+	private static final List<String> FUNNEL_TYPED = List.of("CAR", "CDR", "NTHCDR", "ENDP", "AREF", SETF_AREF, "CHAR",
+			"SCHAR", "LAST", "MAPCAR", "MAPC", "MAPCAN", "MAPLIST", "MAPL", "MAPCON");
 
 	static {
 		String[] numberOps = { "+", "-", "*", "/", "=", "ABS", "SIGNUM", "SQRT", "EXP", "LOG", "EXPT", "SIN", "COS",
@@ -102,6 +118,10 @@ public final class OperandTypes {
 				"FCEILING", "FTRUNCATE", "FROUND", "MOD", "REM", "FLOAT", "RATIONAL", "RATIONALIZE", "CIS", "RANDOM",
 				"COMPLEX" };
 		String[] rationalOps = { "NUMERATOR", "DENOMINATOR" };
+		// A list consumer whose one check is its own type: length takes any sequence,
+		// rplaca/rplacd a cons (nil is no cons).
+		String[][] fixedOps = { { "LENGTH", Kind.SEQUENCE.name() }, { "RPLACA", Kind.CONS.name() },
+				{ "RPLACD", Kind.CONS.name() } };
 		String[] integerOps = { "LOGAND", "LOGIOR", "LOGXOR", "LOGEQV", "LOGNAND", "LOGNOR", "LOGANDC1", "LOGANDC2",
 				"LOGORC1", "LOGORC2", "LOGNOT", "LOGCOUNT", "LOGBITP", "LOGTEST", "ASH", "INTEGER-LENGTH", "GCD", "LCM",
 				"ISQRT" };
@@ -125,6 +145,10 @@ public final class OperandTypes {
 		for (String op : FUNNEL_TYPED) {
 			OPERATOR_TYPES.put(op, FUNNEL_TYPE);
 			order.add(op);
+		}
+		for (String[] op : fixedOps) {
+			OPERATOR_TYPES.put(op[0], op[1]);
+			order.add(op[0]);
 		}
 		OPERATORS = List.copyOf(order);
 	}
@@ -161,9 +185,9 @@ public final class OperandTypes {
 	/**
 	 * The type a named operator accepts.
 	 * @param operator the operator's symbol name
-	 * @return {@code NUMBER}, {@code REAL}, {@code INTEGER} or {@code RATIONAL},
-	 * {@link #FUNNEL_TYPE} for a funnel-typed operator, or null for an operator that is
-	 * not named
+	 * @return {@code NUMBER}, {@code REAL}, {@code INTEGER}, {@code RATIONAL},
+	 * {@code SEQUENCE} or {@code CONS}, {@link #FUNNEL_TYPE} for a funnel-typed operator,
+	 * or null for an operator that is not named
 	 */
 	public static @Nullable String operatorType(String operator) {
 		return OPERATOR_TYPES.get(operator);
