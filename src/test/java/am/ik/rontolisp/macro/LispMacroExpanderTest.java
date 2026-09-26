@@ -1020,11 +1020,22 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
-	void anEntryReportWithADeclinedRendererKeepsNoFunctionControlArm() {
+	void aDeclinedRendererKeepsNoFunctionControlArmInAnyMode() {
 		// Every control is a directive-free literal, so none is a function: the arm that
-		// funcalls one -- a runtime designator -- is gone, and only under ENTRY_REPORT.
+		// funcalls one -- a runtime designator -- is gone in every signal-messages mode,
+		// not only under ENTRY_REPORT.
 		String source = "(define-condition zc (error) ()) (defun f () (error 'zc)) (f)";
 		assertThat(formatConditionDefun(source, SignalMessages.ENTRY_REPORT)).doesNotContain("FUNCALL");
+		assertThat(formatConditionDefun(source, SignalMessages.RENDERED)).doesNotContain("FUNCALL");
+	}
+
+	@Test
+	void aForcedRendererKeepsTheFunctionControlArm() {
+		// An explicit :format-control initarg forces the renderer, so the control CAN be
+		// a
+		// function at run time and the arm must stay, in every mode.
+		String source = "(defun f (x) (error 'simple-error :format-control x)) (f (read))";
+		assertThat(formatConditionDefun(source, SignalMessages.ENTRY_REPORT)).contains("FUNCALL");
 		assertThat(formatConditionDefun(source, SignalMessages.RENDERED)).contains("FUNCALL");
 	}
 

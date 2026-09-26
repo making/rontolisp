@@ -7401,11 +7401,14 @@ public final class Environment implements Scope {
 	 * matching the JVM and WASM char-vec representations.
 	 */
 	private static LispVal storeStringChar(String op, LispString str, int index, LispVal value) {
+		// A non-character is the store's type-error, named by the built-in seam.
+		if (!(value instanceof LispChar c)) {
+			throw OperandTypeException.of(value, OperandTypes.Kind.CHARACTER);
+		}
 		if (index < 0 || index >= str.capacity()) {
 			throw new LispEvalException(
 					op + ": index " + index + " out of bounds for string of capacity " + str.capacity());
 		}
-		LispChar c = requireChar(op, value);
 		// A SOURCE LITERAL is never written (.kb/string-write-runtime.md). These two
 		// entries -- %aset and %row-major-aset -- carry no rebind hook, so like
 		// %schar-set as a first-class value they refuse rather than rewrite the program
@@ -7515,9 +7518,9 @@ public final class Environment implements Scope {
 	 * result, and the compiled backends refuse such a place outright, so this refuses it
 	 * too ({@code .kb/string-write-runtime.md}).
 	 * <p>
-	 * A string that is no string and a subscript that is no integer are the
-	 * {@code operator}'s type-errors -- {@code (SETF CHAR)} for a {@code char} place --
-	 * or unnamed ones without it.
+	 * A string that is no string, a subscript that is no integer and a value that is no
+	 * character are the {@code operator}'s type-errors -- {@code (SETF CHAR)} for a
+	 * {@code char} place -- or unnamed ones without it.
 	 * @param args the string, the index and the character
 	 * @param rebindPlace how to store a rebuilt string back into the place the string
 	 * came from, or {@code null} when the place cannot take one
@@ -7531,6 +7534,12 @@ public final class Environment implements Scope {
 					: OperandTypeException.of(args.get(0), OperandTypes.Kind.STRING, operator);
 		}
 		int index = requireStringIndex(operator, LispNames.SCHAR_SET, args.get(1));
+		// The value before the bounds, as the compiled expansion checks it ahead of the
+		// runtime defun's write.
+		if (!(args.get(2) instanceof LispChar c)) {
+			throw operator == null ? OperandTypeException.of(args.get(2), OperandTypes.Kind.CHARACTER)
+					: OperandTypeException.of(args.get(2), OperandTypes.Kind.CHARACTER, operator);
+		}
 		// Capacity, not the fill pointer: a (setf (char s i) c) past the fill pointer
 		// writes an inactive slot in CL and on all three compile backends, and the
 		// fill pointer bounds the sequence view only (.kb/adjustable-arrays.md).
@@ -7538,7 +7547,6 @@ public final class Environment implements Scope {
 			throw new LispEvalException(
 					LispNames.SCHAR_SET + ": index " + index + " out of bounds for string of length " + str.capacity());
 		}
-		LispChar c = requireChar(LispNames.SCHAR_SET, args.get(2));
 		if (str.sourceLiteral()) {
 			if (rebindPlace == null) {
 				throw new LispEvalException("setf on " + LispNames.SCHAR + "/" + LispNames.CHAR

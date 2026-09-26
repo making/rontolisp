@@ -66,7 +66,10 @@ public final class OperandTypes {
 		CONS,
 
 		/** A non-string reaching {@code char}/{@code schar} or their {@code setf}. */
-		STRING
+		STRING,
+
+		/** A non-character stored into a string ({@code (setf char)} and its kin). */
+		CHARACTER
 
 	}
 
@@ -88,6 +91,9 @@ public final class OperandTypes {
 	/** The reported name of a store through a {@code schar} place. */
 	public static final String SETF_SCHAR = "(SETF SCHAR)";
 
+	/** The reported name of a store through a {@code row-major-aref} place. */
+	public static final String SETF_ROW_MAJOR_AREF = "(SETF ROW-MAJOR-AREF)";
+
 	/** An operator table entry naming a funnel-typed operator ({@link #operatorType}). */
 	public static final String FUNNEL_TYPE = "";
 
@@ -108,7 +114,8 @@ public final class OperandTypes {
 			Map.entry("/=", "="), Map.entry("ZEROP", "="), Map.entry("PLUSP", ">"), Map.entry("MINUSP", "<"),
 			Map.entry("EVENP", "MOD"), Map.entry("ODDP", "MOD"), Map.entry("LOGTEST", "LOGAND"),
 			Map.entry("LOGEQV", "LOGXOR"), Map.entry("FIRST", "CAR"), Map.entry("REST", "CDR"),
-			Map.entry("NTH", "NTHCDR"), Map.entry("SVREF", "AREF"), Map.entry("%ASET", SETF_AREF));
+			Map.entry("NTH", "NTHCDR"), Map.entry("SVREF", "AREF"), Map.entry("%ASET", SETF_AREF),
+			Map.entry("%ROW-MAJOR-ASET", SETF_ROW_MAJOR_AREF));
 
 	/**
 	 * The funnel-typed operators ({@link #expectedType}): {@code (setf aref)} is the
@@ -118,11 +125,13 @@ public final class OperandTypes {
 	 * {@code last}, the {@code map*} family, {@code append}, {@code list-length} and the
 	 * {@code member}/{@code assoc}/{@code rassoc} scans check their list arguments. A
 	 * string access checks its string ({@code STRING}) and its subscript
-	 * ({@code INTEGER}).
+	 * ({@code INTEGER}), a string store its value ({@code CHARACTER});
+	 * {@code (setf row-major-aref)} is {@code %row-major-aset}'s reported name.
 	 */
 	private static final List<String> FUNNEL_TYPED = List.of("CAR", "CDR", "NTHCDR", "ENDP", "AREF", SETF_AREF, "CHAR",
 			"SCHAR", "LAST", "MAPCAR", "MAPC", "MAPCAN", "MAPLIST", "MAPL", "MAPCON", SETF_CHAR, SETF_SCHAR, "APPEND",
-			"LIST-LENGTH", "MEMBER", "MEMBER-IF", "ASSOC", "ASSOC-IF", "RASSOC", "RASSOC-IF");
+			"LIST-LENGTH", "MEMBER", "MEMBER-IF", "ASSOC", "ASSOC-IF", "RASSOC", "RASSOC-IF", "ROW-MAJOR-AREF",
+			SETF_ROW_MAJOR_AREF);
 
 	static {
 		String[] numberOps = { "+", "-", "*", "/", "=", "ABS", "SIGNUM", "SQRT", "EXP", "LOG", "EXPT", "SIN", "COS",

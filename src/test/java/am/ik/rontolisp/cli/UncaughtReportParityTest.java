@@ -266,7 +266,9 @@ class UncaughtReportParityTest {
 	}
 
 	@Test
-	void aSecondAwaitOfAFailedFutureKeepsTheFirstAwaitAsTheBoundarysSite() throws Exception {
+	void aConditionReSignalledByASecondAwaitNamesThatAwait() throws Exception {
+		// Both awaits rethrow the one condition the future stored; the report names the
+		// one it escaped from, not the one whose signal the handler caught.
 		Path program = write("twice.lisp", """
 				(rontolisp:async-defun job ()
 				  (error "job failed"))
@@ -277,7 +279,41 @@ class UncaughtReportParityTest {
 				  (rontolisp:await f))
 				""");
 		assertSameReport(program, "Unhandled condition: job failed", "  at " + program + ":2",
-				"  in JOB (async), awaited at " + program + ":5");
+				"  in JOB (async), awaited at " + program + ":7");
+	}
+
+	@Test
+	void aSecondAwaitDropsTheHopsAnEarlierAwaitsPathAdded() throws Exception {
+		// The first signal crossed RELAY's boundary too; the second await of JOB's future
+		// did not, and a later await of RELAY's future keeps JOB's site inside RELAY.
+		Path direct = write("relay-then-direct.lisp", """
+				(rontolisp:async-defun job ()
+				  (error "job failed"))
+
+				(rontolisp:async-defun relay (f)
+				  (rontolisp:await f))
+
+				(let ((f (job)))
+				  (handler-case (rontolisp:await (relay f))
+				    (error () (print :caught)))
+				  (rontolisp:await f))
+				""");
+		assertSameReport(direct, "Unhandled condition: job failed", "  at " + direct + ":2",
+				"  in JOB (async), awaited at " + direct + ":10");
+		Path relayed = write("direct-then-relay.lisp", """
+				(rontolisp:async-defun job ()
+				  (error "job failed"))
+
+				(rontolisp:async-defun relay (f)
+				  (rontolisp:await f))
+
+				(let ((f (job)))
+				  (handler-case (rontolisp:await f)
+				    (error () (print :caught)))
+				  (rontolisp:await (relay f)))
+				""");
+		assertSameReport(relayed, "Unhandled condition: job failed", "  at " + relayed + ":2",
+				"  in JOB (async), awaited at " + relayed + ":5", "  in RELAY (async), awaited at " + relayed + ":10");
 	}
 
 	@Test

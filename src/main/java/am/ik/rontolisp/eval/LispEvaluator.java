@@ -12024,7 +12024,7 @@ public final class LispEvaluator {
 				primary = apply(thunk, List.of(), this.globalEnv);
 			}
 			catch (LispEvalException e) {
-				e.trace().crossedAsync(asyncFunction);
+				e.trace().crossedAsync(asyncFunction, future.future());
 				throw e;
 			}
 			future.settleExtras(this.globalEnv.spill());
@@ -12090,6 +12090,9 @@ public final class LispEvaluator {
 		catch (java.util.concurrent.CompletionException ex) {
 			Throwable cause = java.util.Objects.requireNonNullElse(ex.getCause(), ex);
 			if (cause instanceof LispEvalException lispError) {
+				// This await is the one re-signalling it (ConditionTrace, "the await that
+				// re-signalled it").
+				lispError.trace().reawaited(cf);
 				throw lispError;
 			}
 			throw new LispEvalException(java.util.Objects.requireNonNullElse(cause.getMessage(), "await failed"));

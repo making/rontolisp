@@ -18901,8 +18901,9 @@ class LispEvaluatorTest {
 		// non-string (STRING), and a (setf char|schar) place's string and subscript --
 		// under (SETF CHAR) / (SETF SCHAR); a string-holding aref/elt place's subscript
 		// is
-		// (SETF AREF)'s, as its array arm's is, and row-major-aref's stays unnamed as its
-		// array arm's does. The twins are LispEvaluatorTest, JvmLispCompilerTest and
+		// (SETF AREF)'s, as its array arm's is, and row-major-aref's (SETF
+		// ROW-MAJOR-AREF)'s.
+		// The twins are LispEvaluatorTest, JvmLispCompilerTest and
 		// WasmLispCompilerIntegrationTest's stringAccessesNameTheOperator.
 		// The interpreter reported message-only errors under CHAR / %SCHAR-SET.
 		String source = """
@@ -18949,8 +18950,70 @@ class LispEvaluatorTest {
 				("(SETF SCHAR): The value FOO is not of type STRING" FOO STRING)
 				("(SETF AREF): The value NIL is not of type INTEGER" NIL INTEGER)
 				("(SETF AREF): The value NIL is not of type INTEGER" NIL INTEGER)
-				("The value NIL is not of type INTEGER" NIL INTEGER)
+				("(SETF ROW-MAJOR-AREF): The value NIL is not of type INTEGER" NIL INTEGER)
 				("xb" "zy" #\\x #\\y #\\é)""");
+	}
+
+	@Test
+	void stringStoresAndRowMajorSubscriptsNameTheOperator() {
+		// A string store's value and row-major-aref's subscript name the operator
+		// (compiler/OperandTypes): a non-character stored through a char/schar/aref/elt/
+		// row-major-aref place is its store's CHARACTER type-error, and a row-major-aref
+		// subscript that is no integer ROW-MAJOR-AREF's / (SETF ROW-MAJOR-AREF)'s INTEGER
+		// one, on every arm. The twins are LispEvaluatorTest, JvmLispCompilerTest and
+		// WasmLispCompilerIntegrationTest's
+		// stringStoresAndRowMajorSubscriptsNameTheOperator.
+		// The interpreter reported a message-only %SCHAR-SET error and an unnamed
+		// INTEGER.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *te-nil* nil)
+				(defvar *te-five* 5)
+				(defvar *te-sym* 'foo)
+				(let ((s (copy-seq "ab")))
+				  (print (te (lambda () (setf (char s 0) *te-five*))))
+				  (print (te (lambda () (setf (schar s 1) *te-sym*))))
+				  (print (te (lambda () (setf (aref s 0) *te-five*))))
+				  (print (te (lambda () (setf (elt s 0) *te-five*))))
+				  (print (te (lambda () (setf (row-major-aref s 0) *te-five*))))
+				  (print s))
+				(let ((v (vector 1 2 3)) (s (copy-seq "ab")) (m (make-array '(2 2) :initial-element 0))
+				      (u (make-array 3 :element-type '(unsigned-byte 8))) (d (make-array 2 :element-type 'double-float)))
+				  (print (te (lambda () (row-major-aref v *te-nil*))))
+				  (print (te (lambda () (setf (row-major-aref v *te-nil*) 0))))
+				  (print (te (lambda () (row-major-aref s *te-nil*))))
+				  (print (te (lambda () (setf (row-major-aref s *te-nil*) #\\x))))
+				  (print (te (lambda () (row-major-aref m 1.5))))
+				  (print (te (lambda () (setf (row-major-aref m *te-sym*) 1))))
+				  (print (te (lambda () (row-major-aref u *te-nil*))))
+				  (print (te (lambda () (setf (row-major-aref d 0) *te-sym*))))
+				  (setf (row-major-aref m 3) 7 (row-major-aref s 1) #\\y (row-major-aref d 1) 2)
+				  (print (list (row-major-aref m 3) s (row-major-aref d 1) (row-major-aref v 2))))
+				""";
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal expr : LispReader.readAllFromString(source)) {
+			evaluator.eval(expr);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8).strip()).isEqualTo("""
+				("(SETF CHAR): The value 5 is not of type CHARACTER" 5 CHARACTER)
+				("(SETF SCHAR): The value FOO is not of type CHARACTER" FOO CHARACTER)
+				("(SETF AREF): The value 5 is not of type CHARACTER" 5 CHARACTER)
+				("(SETF AREF): The value 5 is not of type CHARACTER" 5 CHARACTER)
+				("(SETF ROW-MAJOR-AREF): The value 5 is not of type CHARACTER" 5 CHARACTER)
+				"ab"
+				("ROW-MAJOR-AREF: The value NIL is not of type INTEGER" NIL INTEGER)
+				("(SETF ROW-MAJOR-AREF): The value NIL is not of type INTEGER" NIL INTEGER)
+				("ROW-MAJOR-AREF: The value NIL is not of type INTEGER" NIL INTEGER)
+				("(SETF ROW-MAJOR-AREF): The value NIL is not of type INTEGER" NIL INTEGER)
+				("ROW-MAJOR-AREF: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+				("(SETF ROW-MAJOR-AREF): The value FOO is not of type INTEGER" FOO INTEGER)
+				("ROW-MAJOR-AREF: The value NIL is not of type INTEGER" NIL INTEGER)
+				("(SETF ROW-MAJOR-AREF): The value FOO is not of type REAL" FOO REAL)
+				(7 "ay" 2.0 3)""");
 	}
 
 	@Test

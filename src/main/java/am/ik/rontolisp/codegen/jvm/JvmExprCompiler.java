@@ -2070,6 +2070,7 @@ final class JvmExprCompiler {
 			case LispNames.CHECK_LIST_INTERNAL -> JvmNullPredCompiler.compileCheckList(cons, ctx, className);
 			case LispNames.CHECK_STRING_INTERNAL -> JvmCharCompiler.compileCheckString(cons, ctx, className);
 			case LispNames.CHECK_INDEX_INTERNAL -> JvmCharCompiler.compileCheckIndex(cons, ctx, className);
+			case LispNames.CHECK_CHARACTER_INTERNAL -> JvmCharCompiler.compileCheckCharacter(cons, ctx, className);
 			case LispNames.ELT ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandElt(cons, ctx.usesArrays), ctx, className);
 			case LispNames.RASSOC -> JvmExprCompiler.compileExpr(LispMacroExpander.expandRassoc(cons), ctx, className);

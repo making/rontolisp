@@ -62,19 +62,42 @@ final class JvmCharCompiler {
 	/**
 	 * Compiles {@code (%check-string x 'op)}: {@code x}, left on the stack when it is a
 	 * string (the shared {@code _pStringp} test) and otherwise {@code op}'s
-	 * {@code STRING} type-error, thrown here: {@code _teRaw} named by {@code _opTypeErr}.
-	 * Only a {@code (setf char)} / {@code (setf schar)} store checks this way, so the
-	 * site carries the throw rather than a wrapper.
+	 * {@code STRING} type-error ({@link #emitSiteTypeError}).
 	 */
 	static void compileCheckString(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
 		ctx.emit(Opcode.DUP);
 		JvmEmitHelper.emitSharedCall(ctx, className, "_pStringp", 1,
 				helper -> JvmStringpCompiler.emitStringpCheck(helper, 0));
-		int ifString = ctx.code.size();
-		ctx.emit(Opcode.IFNONNULL);
+		emitSiteTypeError(cons, ctx, className, Opcode.IFNONNULL, OperandTypes.Kind.STRING);
+	}
+
+	/**
+	 * Compiles {@code (%check-character x 'op)}: {@code x}, left on the stack when it is
+	 * a character ({@code int[]}) and otherwise {@code op}'s {@code CHARACTER} type-error
+	 * ({@link #emitSiteTypeError}).
+	 */
+	static void compileCheckCharacter(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(JvmEmitHelper.charArrayClass(ctx).index());
+		emitSiteTypeError(cons, ctx, className, Opcode.IFNE, OperandTypes.Kind.CHARACTER);
+	}
+
+	/**
+	 * Emits a check's miss over the value under its test's result: {@code ifPass} skips
+	 * it, else {@code kind}'s report of the value -- {@code _teRaw} named by
+	 * {@code _opTypeErr} after the check's operator, unnamed without one -- thrown here.
+	 * Only a string store checks this way, so the site carries the throw rather than a
+	 * wrapper.
+	 */
+	private static void emitSiteTypeError(LispCons cons, JvmLispCompiler.Ctx ctx, String className, int ifPass,
+			OperandTypes.Kind kind) {
+		int pass = ctx.code.size();
+		ctx.emit(ifPass);
 		ctx.emitU2(0);
-		JvmEmitHelper.compileUnspelledLiteral(OperandTypes.Kind.STRING.name(), ctx);
+		JvmEmitHelper.compileUnspelledLiteral(kind.name(), ctx);
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(JvmEmitHelper
 			.selfMethod(ctx, className, JvmOperandTypeRuntime.TE_RAW, JvmOperandTypeRuntime.TE_RAW_DESC)
@@ -89,7 +112,7 @@ final class JvmCharCompiler {
 				.index());
 		}
 		ctx.emit(Opcode.ATHROW);
-		JvmEmitHelper.patchBranch(ctx, ifString, ctx.code.size());
+		JvmEmitHelper.patchBranch(ctx, pass, ctx.code.size());
 	}
 
 	/**
