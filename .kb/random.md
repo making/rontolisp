@@ -18,7 +18,10 @@ optional state argument normalized away -- `LispNames.MAKE_RANDOM_STATE`, `LispM
 - **Four JVM sites must agree on the FORMULA** `(long) (current().nextDouble() * limit)`:
   `Environment.createGlobal`, `JvmRandomCompiler`, `JvmNumericRuntimeBuilder.buildRandom`
   (`_random`), `JvmIntFusionCompiler.emitRandomDraw` (`.kb/jvm-int-fusion.md`). Constant pool
-  `JvmMathFnCompiler.TLR_CURRENT` / `TLR_NEXT_DOUBLE`.
+  `JvmMathFnCompiler.TLR_CURRENT` / `TLR_NEXT_DOUBLE`. The same four sites (plus wasm's one
+  inline site) must also agree on the DOMAIN check -- a ratio limit, or an integer/float limit
+  `<= 0` -- since two of the four bypass `_random` for performance and drew from an unchecked
+  limit until `.todo/981` (`.kb/error-handling.md`, "`random`'s domain").
 - Trap: a fused site draws exactly ONCE, in the prologue before any guard, and the fallback only
   READS it -- a drawing fallback re-emits twice for a substituted parameter used twice, so
   `(defun dif (x) (- x x))` over `(dif (random lim))` would stop answering 0.
@@ -38,4 +41,7 @@ optional state argument normalized away -- `LispNames.MAKE_RANDOM_STATE`, `LispM
 ci-spec `random-deterministic-properties`; `WasmLispCompilerIntegrationTest`'s four `noWasi*` /
 `aWasiBuildDrawsFromTheInModuleGenerator...` cases;
 `WasmImportCompilerTest#underHostRandomTheEntropyApiReachesTheHostAndAnUnusedImportIsStillShaken`;
-`LispEvaluatorTest` / `JvmLispCompilerTest` `random` cases.
+`LispEvaluatorTest` / `JvmLispCompilerTest` `random` cases. The domain check: ci-spec
+`random-limit-domain-violations-signal-a-type-error` and the
+`randomLimitDomainViolationsSignalATypeError` / `ehRandomLimitDomainViolationsSignalATypeError`
+triple (`.kb/error-handling.md`, "`random`'s domain").

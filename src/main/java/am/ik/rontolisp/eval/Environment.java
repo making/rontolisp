@@ -3107,21 +3107,27 @@ public final class Environment implements Scope {
 						LispNames.RANDOM + " expects 1 or 2 arguments, got " + args.size());
 			}
 			LispVal limit = args.get(0);
+			// CLHS's domain is (OR (INTEGER 1) (FLOAT (0.0))): a ratio is real but
+			// neither, and an integer or float limit <= 0 is out of range either way.
+			// Both are reported under RANDOM's own registered REAL type (like a
+			// non-real limit below) rather than teaching the operand-type table a
+			// compound type for this one operator (.todo/981,
+			// .kb/error-handling.md).
 			if (limit instanceof LispDouble d) {
 				if (d.value() <= 0.0) {
-					throw new LispEvalException("random expects a positive limit, got: " + limit.print());
+					throw OperandTypeException.of(limit, OperandTypes.Kind.REAL).named(LispNames.RANDOM);
 				}
 				return new LispDouble(ThreadLocalRandom.current().nextDouble() * d.value());
 			}
 			if (limit instanceof LispInteger i) {
 				if (i.value() <= 0) {
-					throw new LispEvalException("random expects a positive limit, got: " + limit.print());
+					throw OperandTypeException.of(limit, OperandTypes.Kind.REAL).named(LispNames.RANDOM);
 				}
 				return new LispInteger((long) (ThreadLocalRandom.current().nextDouble() * i.value()));
 			}
 			if (limit instanceof LispBigInteger b) {
 				if (b.value().signum() <= 0) {
-					throw new LispEvalException("random expects a positive limit, got: " + limit.print());
+					throw OperandTypeException.of(limit, OperandTypes.Kind.REAL).named(LispNames.RANDOM);
 				}
 				// Scale a [0,1) random fraction across the bignum range, then floor.
 				return normalizeBig(new java.math.BigDecimal(b.value())
@@ -3129,7 +3135,7 @@ public final class Environment implements Scope {
 					.toBigInteger());
 			}
 			if (limit instanceof LispRatio) {
-				throw new LispEvalException("random expects an integer or float limit, got: " + limit.print());
+				throw OperandTypeException.of(limit, OperandTypes.Kind.REAL).named(LispNames.RANDOM);
 			}
 			throw OperandTypeException
 				.of(limit, limit instanceof LispComplex ? OperandTypes.Kind.REAL : OperandTypes.Kind.NUMBER)
