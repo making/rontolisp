@@ -18106,6 +18106,52 @@ cases:
       ("ENDP: The value 5 is not of type LIST" 5 LIST)
       (("ENDP: The value 3 is not of type LIST" 3 LIST) (2 1))
       ((1 2) NIL NIL)
+  # .kb/error-handling.md, "A wrong-type argument names its operator": char/schar
+  # of a non-string (STRING), a (setf char|schar) place's string and subscript
+  # under (SETF CHAR)/(SETF SCHAR), a string-holding aref/elt place's subscript
+  # under (SETF AREF) as its array arm's, row-major-aref's unnamed as its array
+  # arm's.
+  - name: string-accesses-name-the-operator
+    source: |
+      (defun ci-sa (thunk)
+        (handler-case (funcall thunk)
+          (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+          (error (e) (list :not-a-type-error (princ-to-string e)))))
+      (defvar *ci-sa-nil* nil)
+      (defvar *ci-sa-five* 5)
+      (defvar *ci-sa-sym* 'foo)
+      (print (ci-sa (lambda () (char *ci-sa-five* 0))))
+      (print (ci-sa (lambda () (schar *ci-sa-five* 0))))
+      (print (ci-sa (lambda () (char *ci-sa-sym* 0))))
+      (print (ci-sa (lambda () (char (vector #\a) 0))))
+      (print (ci-sa (lambda () (funcall #'char *ci-sa-five* 0))))
+      (print (ci-sa (lambda () (char *ci-sa-five* *ci-sa-nil*))))
+      (print (ci-sa (lambda () (let ((s (copy-seq "ab"))) (setf (char s *ci-sa-nil*) #\x)))))
+      (print (ci-sa (lambda () (let ((s (make-string 2))) (setf (schar s 1.5) #\x)))))
+      (print (ci-sa (lambda () (let ((s *ci-sa-five*)) (setf (char s 0) #\x)))))
+      (print (ci-sa (lambda () (let ((s *ci-sa-sym*)) (setf (schar s 0) #\x)))))
+      (print (ci-sa (lambda () (let ((s (copy-seq "ab"))) (setf (aref s *ci-sa-nil*) #\x)))))
+      (print (ci-sa (lambda () (let ((s (copy-seq "ab"))) (setf (elt s *ci-sa-nil*) #\x)))))
+      (print (ci-sa (lambda () (let ((s (copy-seq "ab"))) (setf (row-major-aref s *ci-sa-nil*) #\x)))))
+      (let ((s (copy-seq "ab")) (m (make-string 2 :initial-element #\z)))
+        (setf (char s 0) #\x)
+        (setf (schar m 1) #\y)
+        (print (list s m (char s 0) (schar m 1) (char "héllo" 1))))
+    expected: |
+      ("CHAR: The value 5 is not of type STRING" 5 STRING)
+      ("SCHAR: The value 5 is not of type STRING" 5 STRING)
+      ("CHAR: The value FOO is not of type STRING" FOO STRING)
+      ("CHAR: The value #(#\\a) is not of type STRING" #(#\a) STRING)
+      ("CHAR: The value 5 is not of type STRING" 5 STRING)
+      ("CHAR: The value NIL is not of type INTEGER" NIL INTEGER)
+      ("(SETF CHAR): The value NIL is not of type INTEGER" NIL INTEGER)
+      ("(SETF SCHAR): The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+      ("(SETF CHAR): The value 5 is not of type STRING" 5 STRING)
+      ("(SETF SCHAR): The value FOO is not of type STRING" FOO STRING)
+      ("(SETF AREF): The value NIL is not of type INTEGER" NIL INTEGER)
+      ("(SETF AREF): The value NIL is not of type INTEGER" NIL INTEGER)
+      ("The value NIL is not of type INTEGER" NIL INTEGER)
+      ("xb" "zy" #\x #\y #\é)
   # CLHS 3.5.1.4-6 / .kb/error-handling.md, "Argument-shape errors signal a
   # catchable program-error": a keyword the operator does not accept, an odd
   # keyword tail and a non-keyword in keyword position signal a CATCHABLE

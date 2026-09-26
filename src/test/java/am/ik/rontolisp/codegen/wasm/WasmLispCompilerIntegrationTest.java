@@ -24777,6 +24777,61 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void stringAccessesNameTheOperator() throws Exception {
+		// A string access names its operator (compiler/OperandTypes): char/schar of a
+		// non-string (STRING), and a (setf char|schar) place's string and subscript --
+		// under (SETF CHAR) / (SETF SCHAR); a string-holding aref/elt place's subscript
+		// is
+		// (SETF AREF)'s, as its array arm's is, and row-major-aref's stays unnamed as its
+		// array arm's does. The twins are LispEvaluatorTest, JvmLispCompilerTest and
+		// WasmLispCompilerIntegrationTest's stringAccessesNameTheOperator.
+		// They used to be uncatchable traps here.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *te-n* nil)
+				(defvar *te-five* 5)
+				(defvar *te-sym* 'foo)
+				(print (te (lambda () (char *te-five* 0))))
+				(print (te (lambda () (schar *te-five* 0))))
+				(print (te (lambda () (char *te-sym* 0))))
+				(print (te (lambda () (char (vector #\\a) 0))))
+				(print (te (lambda () (funcall #'char *te-five* 0))))
+				(print (te (lambda () (char *te-five* *te-n*))))
+				(print (te (lambda () (let ((s (copy-seq "ab"))) (setf (char s *te-n*) #\\x)))))
+				(print (te (lambda () (let ((s (make-string 2))) (setf (schar s 1.5) #\\x)))))
+				(print (te (lambda () (let ((s *te-five*)) (setf (char s 0) #\\x)))))
+				(print (te (lambda () (let ((s *te-sym*)) (setf (schar s 0) #\\x)))))
+				(print (te (lambda () (let ((s (copy-seq "ab"))) (setf (aref s *te-n*) #\\x)))))
+				(print (te (lambda () (let ((s (copy-seq "ab"))) (setf (elt s *te-n*) #\\x)))))
+				(print (te (lambda () (let ((s (copy-seq "ab"))) (setf (row-major-aref s *te-n*) #\\x)))))
+				(let ((s (copy-seq "ab")) (m (make-string 2 :initial-element #\\z)))
+				  (setf (char s 0) #\\x)
+				  (setf (schar m 1) #\\y)
+				  (print (list s m (char s 0) (schar m 1) (char "héllo" 1))))
+				""";
+		String expected = """
+				("CHAR: The value 5 is not of type STRING" 5 STRING)
+				("SCHAR: The value 5 is not of type STRING" 5 STRING)
+				("CHAR: The value FOO is not of type STRING" FOO STRING)
+				("CHAR: The value #(#\\\\a) is not of type STRING" #(#\\a) STRING)
+				("CHAR: The value 5 is not of type STRING" 5 STRING)
+				("CHAR: The value NIL is not of type INTEGER" NIL INTEGER)
+				("(SETF CHAR): The value NIL is not of type INTEGER" NIL INTEGER)
+				("(SETF SCHAR): The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+				("(SETF CHAR): The value 5 is not of type STRING" 5 STRING)
+				("(SETF SCHAR): The value FOO is not of type STRING" FOO STRING)
+				("(SETF AREF): The value NIL is not of type INTEGER" NIL INTEGER)
+				("(SETF AREF): The value NIL is not of type INTEGER" NIL INTEGER)
+				("The value NIL is not of type INTEGER" NIL INTEGER)
+				("xb" "zy" #\\x #\\y #\\é)""";
+		assertThat(compileAndRunPrelude(source)).isEqualTo(expected);
+		assertThat(compileComponentAndRunPrelude(source)).isEqualTo(expected);
+	}
+
+	@Test
 	void ehArgumentShapeErrorsSignalACatchableProgramError() throws Exception {
 		// A malformed keyword tail compiles to a call-time program-error carrying the
 		// interpreter's text, and :allow-other-keys t suppresses the check

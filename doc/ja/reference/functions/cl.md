@@ -92,7 +92,7 @@
 | `copy-readtable` | `(copy-readtable nil)` | ライト版スタブ: 常に `nil` -- リーダーはリードテーブル駆動ではないため、リードテーブルオブジェクトは存在しません (`*readtable*` は存在しますが `nil` に初期化されています) |
 | `set-dispatch-macro-character` | `(set-dispatch-macro-character #\# #\7 fn)` | ライト版スタブ: 受け付けますが無視し、`t` を返します (ユーザーのディスパッチマクロでリーダーを拡張することはできません) |
 | `readtable-case` | `(readtable-case *readtable*)` | ライト版スタブ: 常に `:upcase` -- リーダーはエスケープされていないシンボル名を常に大文字化します。標準リードテーブルのモードです |
-| `char` `schar` | `(char "hello" 1)` | `#\e` -- 0始まりの文字列インデックスの文字 |
+| `char` `schar` | `(char "hello" 1)` | `#\e` -- 0始まりの文字列インデックスの文字 (文字列でない値や整数でないインデックスは `type-error` を通知) |
 | `char-code` | `(char-code #\A)` | `65` -- 文字のコードポイント |
 | `code-char` | `(code-char 66)` | `#\B` -- 指定したコードポイントの文字 |
 | `char=` `char<` `char<=` | `(char< #\a #\b #\c)` | `t`(コードポイントによる可変長引数比較) |

@@ -32,6 +32,7 @@ import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.macro.SignalMessages;
 import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.SourceProvenance;
@@ -3155,20 +3156,34 @@ public final class WasmLispCompiler implements LispCompiler {
 		// plain %error's message and an empty report for a typed condition. Widening
 		// that means moving the lowering above this pass -- and the lowering has to run
 		// after it, or a generated dispatcher's return-from would not be lowered at all.
-		boolean reportsUncaught = programUsesEhForm(program) || this.asyncMode || restartMode
+		boolean ehFormReport = programUsesEhForm(program) || this.asyncMode || restartMode
 				|| programUsesSymbol(program, LispNames.CATCH) || programUsesSymbol(program, LispNames.THROW);
-		// lazyConditionMessages: without a landing pad that reads it, this backend never
+		// --report-locations gives the report to a program with none of those, too: EH
+		// mode for the throw path and the landing pad, with nothing else in the module
+		// able to catch (SignalMessages.ENTRY_REPORT). Only where a form was read from a
+		// file -- with nothing to locate, the option asks for nothing, and the module is
+		// the one it would have been without it -- and not for a --no-wasi reactor, whose
+		// standard error is a discarding sink: the report would cost EH mode and print
+		// nowhere.
+		boolean entryReportOnly = !ehFormReport && this.reportLocations != null && !this.noWasi
+				&& WasmUncaughtLocations.readsAnyFile(program);
+		boolean reportsUncaught = ehFormReport || entryReportOnly;
+		// SignalMessages.LAZY: without a landing pad that reads it, this backend never
 		// renders a signal's message (an uncaught condition is a bare trap and the
 		// %error/%error-cond compilers skip the message operand), so the report-routing
 		// gate narrows to "can program code HOLD a condition" -- see the
 		// expandTopLevelDefinitions overload. In EH mode the landing pad IS a holder, of
 		// every condition that escapes, so the gate goes back to the broad answer: the
-		// report machinery it injects has ONE call site there, not one per signal.
+		// report machinery it injects has ONE call site there, not one per signal. When
+		// that pad is the ONLY holder (ENTRY_REPORT), the printing operators keep the
+		// narrow answer: no program code can hand them a condition.
 		// The dispatch narrower drops generic-function branches no call site can select
 		// (compiler/GenericDispatchNarrowing); only an optimizing, early-bound compile
 		// may narrow -- under --dynamic any name resolves at run time.
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
-				packageResolver::spellsAsExternal, this.dynamic, !reportsUncaught,
+				packageResolver::spellsAsExternal, this.dynamic,
+				entryReportOnly ? SignalMessages.ENTRY_REPORT
+						: reportsUncaught ? SignalMessages.RENDERED : SignalMessages.LAZY,
 				this.optimize.eliminatesDeadCode() && !this.dynamic
 						? new am.ik.rontolisp.compiler.GenericDispatchNarrowing() : null);
 		// The read/compile-time package table for the runtime package API (see
@@ -3398,7 +3413,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// so it forces EH mode (and the `wasmtime -W exceptions=y` run flag) exactly like
 		// a
 		// catching form. A program without one stays byte-identical and flag-free.
-		boolean ehMode = programUsesEhForm(program) || this.asyncMode || blockExitTag;
+		// --report-locations outside it turns it on as well (entryReportOnly above).
+		boolean ehMode = programUsesEhForm(program) || this.asyncMode || blockExitTag || entryReportOnly;
 		// Whether the entry function gets the uncaught-condition landing pad. It writes
 		// fd 2 through a %warn call the compiler SYNTHESIZES in pass 2, so it is a
 		// producer of the reserved *error-output* handle that no scan of the user's text
@@ -4200,7 +4216,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		// Reusable builder template with shared constants and state
 		// --report-locations: the frames' shared state, in EH mode only -- the only mode
-		// with an uncaught report to put location lines under.
+		// with an uncaught report to put location lines under (the option turned it on
+		// for a program with a file to locate into).
 		WasmUncaughtLocations.Module uncaughtLocations = this.reportLocations != null && uncaughtReportPad
 				? new WasmUncaughtLocations.Module(this.reportLocations, program,
 						this.asyncMode || programUsesSymbol(program, LispNames.ASYNC_RUN_QUALIFIED))
@@ -7864,7 +7881,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(
 						WasmOperandTypes.buildLandingBody(am.ik.rontolisp.compiler.OperandTypes.Kind.NUMBER, ehMode));
 				// either-representation character index body (FUNC_STR_CHAR_REF)
-				code.addFunction(WasmStringRuntimeBuilder.buildStrCharRefBody());
+				code.addFunction(WasmStringRuntimeBuilder.buildStrCharRefBody(ehMode));
 				// string -> mutable character vector body (FUNC_STR_TO_CV)
 				code.addFunction(WasmStringRuntimeBuilder.buildStrToCvBody(this.usesIdentityHashTables));
 				// mutable-result string/list subseq lane body (FUNC_SUBSEQ_STR)

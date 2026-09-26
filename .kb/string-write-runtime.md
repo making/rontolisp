@@ -12,8 +12,13 @@ into `%schar-set`, expanded by `expandScharSetFunctional`:
 
 ```lisp
 (let ((__schar_i i)) (let ((__schar_c c))
-  (setq v (%schar-set-runtime v __schar_i __schar_c)) __schar_c))
+  (setq v (%schar-set-runtime (%check-string v '|(SETF CHAR)|)
+                              (%check-index __schar_i '|(SETF CHAR)|) __schar_c))
+  __schar_c))
 ```
+
+The checks name the store (`%schar-set`'s quoted place head; `%check-string` only for a
+`char`/`schar` place) -- `.kb/error-handling.md`, "String accesses".
 
 - `scharSetRuntimeDefun()` answers **the string the write leaves behind** -- the same object for a
   mutable character vector, a fresh one for an immutable string; one call-site shape serves both.

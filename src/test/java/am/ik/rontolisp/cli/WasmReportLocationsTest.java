@@ -19,10 +19,11 @@ import org.junit.jupiter.api.io.TempDir;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@code --report-locations}: a wasm-GC module prints the interpreter's location lines
- * under its uncaught report, on Preview 1 and {@code --component} alike, and a module
- * without the report is byte-identical with and without the option
- * ({@code .kb/error-handling.md}, "Location lines on wasm-GC").
+ * {@code --report-locations}: a wasm-GC module prints the interpreter's uncaught report
+ * and location lines, on Preview 1 and {@code --component} alike -- turning the report on
+ * for a program with no catching form -- and a program read from no file is
+ * byte-identical with and without the option ({@code .kb/error-handling.md}, "Location
+ * lines on wasm-GC").
  */
 class WasmReportLocationsTest {
 
@@ -261,19 +262,69 @@ class WasmReportLocationsTest {
 	}
 
 	@Test
-	void outsideExceptionHandlingModeTheOptionAddsNoByte() throws Exception {
-		// No catching form: the module has no report, so nothing to put lines under.
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aProgramWithNoCatchingFormGetsTheReportAndItsLines() throws Exception {
+		// No catching form: without the option the module is a bare trap; with it, the
+		// option turns the report on as well as the lines under it.
 		Path program = write("plain.lisp", """
 				(defun parse (s)
 				  (parse-integer s))
 				(print (parse "12"))
+				(print (parse "x"))
 				""");
-		byte[] plain = Files.readAllBytes(compile(program, "plain.wasm"));
+		List<String> expected = List.of("Unhandled condition: parse-integer: junk in string \"x\"",
+				"  at " + program + ":2 in PARSE");
+		assertThat(interpreterReport(program)).isEqualTo(expected);
+		assertThat(wasmReport(program)).isEmpty();
 		for (String granularity : List.of("line", "function")) {
-			assertThat(Files.readAllBytes(compile(program, granularity + ".wasm", "--report-locations=" + granularity)))
-				.as(granularity)
-				.isEqualTo(plain);
+			List<String> located = granularity.equals("line") ? expected
+					: List.of(expected.get(0), "  at " + program + ":1 in PARSE");
+			assertThat(wasmReport(program, "--report-locations=" + granularity)).as(granularity).isEqualTo(located);
+			assertThat(wasmReport(program, "--report-locations=" + granularity, "--component")).as(granularity)
+				.isEqualTo(located);
 		}
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void outsideExceptionHandlingModeATypedConditionReportsAsTheInterpreterDoes() throws Exception {
+		// The report is the only reader of a condition here, so it must render every
+		// class that can escape: a report inherited from a superclass, a format control
+		// with arguments, and a static report string.
+		Path inherited = write("inherited.lisp", """
+				(define-condition base-error (error) ((v :initarg :v :reader v))
+				  (:report (lambda (c s) (format s "base report ~a" (v c)))))
+				(define-condition sub-error (base-error) ())
+				(defun f (x) (error 'sub-error :v x))
+				(f (length "abc"))
+				""");
+		Path control = write("control.lisp", """
+				(define-condition my-simple (simple-error) ())
+				(defun f (x) (error 'my-simple :format-control "mine ~a" :format-arguments (list x)))
+				(f (length "abc"))
+				""");
+		Path fixed = write("fixed.lisp", """
+				(define-condition fixed-error (error) () (:report "a static report"))
+				(defun f (x) (when x (error 'fixed-error)))
+				(f (length "abc"))
+				""");
+		for (Path program : List.of(inherited, control, fixed)) {
+			List<String> expected = interpreterReport(program);
+			assertThat(expected).as(program.toString()).hasSize(2);
+			assertThat(wasmReport(program, "--report-locations=line")).as(program.toString()).isEqualTo(expected);
+		}
+	}
+
+	@Test
+	void outsideExceptionHandlingModeAProgramReadFromNoFileHasNothingToLocate() throws Exception {
+		// -e with no catching form: nothing was read from a file, so the option asks for
+		// nothing -- no report is turned on for it.
+		String source = "(defun f (s) (parse-integer s)) (f \"y\")";
+		Path plain = this.tempDir.resolve("plain.wasm");
+		Path located = this.tempDir.resolve("located.wasm");
+		assertThat(runReporting("-e", source, "-o", plain.toString())[0]).isEqualTo("0");
+		assertThat(runReporting("-e", source, "-o", located.toString(), "--report-locations=line")[0]).isEqualTo("0");
+		assertThat(Files.readAllBytes(located)).isEqualTo(Files.readAllBytes(plain));
 	}
 
 	@Test
@@ -287,6 +338,20 @@ class WasmReportLocationsTest {
 		assertThat(runReporting("-e", source, "-o", plain.toString())[0]).isEqualTo("0");
 		assertThat(runReporting("-e", source, "-o", located.toString(), "--report-locations=line")[0]).isEqualTo("0");
 		assertThat(Files.readAllBytes(located)).isEqualTo(Files.readAllBytes(plain));
+	}
+
+	@Test
+	void outsideExceptionHandlingModeAReactorWithNowhereToReportIsUnchanged() throws Exception {
+		// --no-wasi: standard error is a discarding sink, so the report would print
+		// nowhere and the option turns nothing on.
+		Path program = write("reactor.lisp", """
+				(defun twice (n)
+				  (if (> n 100) (error "too big: ~a" n) (* 2 n)))
+				(rontolisp:wasm-export 'twice :params '(:int) :returns :int)
+				""");
+		byte[] plain = Files.readAllBytes(compile(program, "plain.wasm", "--no-wasi"));
+		assertThat(Files.readAllBytes(compile(program, "located.wasm", "--no-wasi", "--report-locations=line")))
+			.isEqualTo(plain);
 	}
 
 	@Test

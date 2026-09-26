@@ -7,7 +7,8 @@ compile time** (no condition objects in its value model).
 wasm-GC catching uses the WebAssembly exception-handling proposal and is GATED: only a program
 containing one of the three catching forms is compiled in **EH mode** (one `$lisp-cond` tag,
 `try_table`/`throw`) and only such a program needs wasmtime 37+. Anything else is byte-identical to
-a build that never knew about EH.
+a build that never knew about EH -- unless `--report-locations` asks for the uncaught report
+("Location lines on wasm-GC" below).
 
 - **A NON-LOCAL EXIT is not a condition**: it passes through a `handler-case` uncaught while still
   running every `unwind-protect` cleanup -- cross-lambda `return-from`/`go` and `catch`/`throw`
@@ -295,8 +296,8 @@ second payload reader, so both gates go broad; outside EH mode nothing is observ
 - **A plain `%error`'s message operand compiles only when `Ctx.condMessagesObservable`** -- its
   message IS what a caught raw trap becomes a `simple-error` from AND the only text the entry landing
   pad has. Forced on under restart mode / `--dynamic` / EH mode; copied in `WasmAsyncEmit.freshCtx`.
-- **The routing gate narrows outside EH MODE**: `expandTopLevelDefinitions` takes
-  `lazyConditionMessages` (`WasmLispCompiler` passes `!reportsUncaught`), under which the answer is
+- **The routing gate narrows outside EH MODE**: `expandTopLevelDefinitions` takes a
+  `macro/SignalMessages` (`WasmLispCompiler` passes `LAZY` when `!reportsUncaught`), under which the answer is
   `mayHoldConditions` = `mayCreateConditions` minus the throw-only constructions (literal-typed
   `error`/`cerror`, `signal`, the read family's EOF lowering). The keyword constructor every
   `define-condition` splices is exempted by SHAPE (`conditionConstructorName`) unless another form
@@ -325,9 +326,9 @@ second payload reader, so both gates go broad; outside EH mode nothing is observ
 **Invariant: a signaled condition escaping the top level writes `Unhandled condition: <report>` to
 standard error -- the same line on all four backends -- then the process exits the way it always
 did.** Built from `compiler/UncaughtReport.PREFIX` at all three emission sites; the report text is
-the one `princ` writes, and nothing below changes it. Three reports still differ (`.todo/993`: a
-struct accessor on a non-instance and a typed loop's out-of-range `aref` on the JVM, a report-less
-`type-error` instance on wasm-GC).
+the one `princ` writes, and nothing below changes it. Two reports still differ on the JVM
+(`.todo/993`: a struct accessor on a non-instance, a typed loop's out-of-range `aref`), and one on
+wasm-GC (the report-less class, "Known gap" below).
 
 **Under it, location lines** (`UncaughtReport.atLine` / `asyncLine`, two-space indented):
 `  at FILE:LINE in FUNCTION` -- the innermost form read from a named file that the condition passed
@@ -439,28 +440,48 @@ lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints 
   predicate: `WasmLispCompiler` gates the pad on it and ORs the same value into
   `WasmComponentBuilder.Narrowing`'s `reachesStandardError`
   ([standard-output-redirect.md](standard-output-redirect.md)).
-- **Outside EH mode nothing changes, byte for byte**; reporting there means turning EH mode on for
-  every program (121,572 -> 175,486 B on the two-line toy). `--no-gc` is exempt outright; a
+- **Outside EH mode nothing changes, byte for byte**, unless `--report-locations` turns the report
+  on (`SignalMessages.ENTRY_REPORT`, below); reporting there by default means turning EH mode on for
+  every program (121,572 -> 175,486 B on the two-line toy, 2026-08-14). `--no-gc` is exempt outright; a
   `--no-wasi` reactor compiles the pad but writes into the discarding `fd_write` sink, which is why
   `doc/{en,ja}/guides/wasm-gc-module.md` still says a load-time failure there is a bare
   `RuntimeError: unreachable`. Worst-case cost on zlib `--optimize=size`: 72,837 B ->
   `condMessagesObservable` 76,812 -> broad routing gate 85,391 (+17.2%), taken deliberately since
-  the first step alone printed `Unhandled condition: ` and nothing else. **Re-evaluate if** the
-  report renderer becomes narrowable to the classes that can actually ESCAPE.
+  the first step alone printed `Unhandled condition: ` and nothing else. Narrowing it to the
+  classes that can ESCAPE buys nothing: without a catching form every constructible class
+  escapes, which is what `conditionNarrowing` already keeps. What `ENTRY_REPORT` narrows instead
+  is the printing operators and the function-control arm (below).
+- **Known gap (all of EH mode)**: a class with no report of its own or inherited (`(define-condition
+  c (error) ())`, a bare `type-error`) reports an EMPTY text -- `%condition-report-str` answers
+  nil and `compileCond` skipped the message, while the interpreter prints `Condition (C) was
+  signalled.`.
 - Pinned cross-backend by `ci-spec.yaml`'s `standalone:` list -- a section `CiSpecE2eTest` runs one
   program at a time, per backend; the corpus cannot host these since running one ends the program.
 
 ## Location lines on wasm-GC (`--report-locations`)
 **Invariant: `--report-locations=line` makes a wasm-GC module (Preview 1, `--component`,
-`--native`) print the interpreter's location lines under the report, byte for byte; `=function`
-prints the function and the line its definition starts on. OFF BY DEFAULT, and a module with no
-report (outside EH mode), no file-read form (`-e`) or no option is byte-identical to a build that
-never knew about it.** `codegen/wasm/WasmUncaughtLocations`; pinned by
-`cli/WasmReportLocationsTest` (each case against the interpreter's own output).
+`--native`) print the interpreter's report and location lines, byte for byte -- turning the report
+on for a program outside EH mode too; `=function` prints the function and the line its definition
+starts on. OFF BY DEFAULT, and a module with no file-read form (`-e`), no option, or no
+report anywhere to print to (a `--no-wasi` reactor outside EH mode) is byte-identical to a build
+that never knew about it.** `codegen/wasm/WasmUncaughtLocations`; pinned
+by `cli/WasmReportLocationsTest` (each case against the interpreter's own output) and
+`e2e/NativeOutputE2eTest`.
 
 - **Opt-in because size decides it** (the user's call, 2026-09-26): the lines cost bytes in every
-  function read from a file, and the report itself exists only in EH mode, so the option never
-  turns EH mode on.
+  function read from a file, and outside EH mode the report itself costs the EH machinery.
+- **Outside EH mode the option turns EH mode on, as `SignalMessages.ENTRY_REPORT`**
+  (`WasmLispCompiler`'s `entryReportOnly`: the option, no EH trigger, and a located form --
+  `WasmUncaughtLocations.readsAnyFile` -- but never a `--no-wasi` reactor, whose standard error is
+  a discarding sink). The entry pad is then the only reader of a condition, so
+  two things EH mode proper carries are dropped: (1) the printing operators route a condition
+  through its report only when program code can HOLD one (`ClosRegistry.printsConditionReports`,
+  the `mayHoldConditions` answer) while the renderer itself stays on the `mayCreateConditions` one
+  (`routesConditionReports`); (2) with a declined renderer `%format-condition` keeps no arm for a
+  FUNCTION control -- a funcall of a runtime value, which in a program that can make a symbol at run
+  time (`read`) keeps every built-in dispatchable: `(print (read))` 245,561 -> 42,404 B. (2) is
+  valid in EH mode proper too, and is not applied there only because it would change a build
+  without the option. A program already in EH mode builds exactly as before under the option.
 - **A frame** = a defun, lambda, top-level chunk or `--component` resume whose OWN code (outside
   the lambdas it builds) has a form read from a file. It wraps its body in `block` +
   `try_table (catch $lisp-cond)`; the landing calls `_uncaught_note(payload, file-id, line, name,
@@ -511,11 +532,10 @@ never knew about it.** `codegen/wasm/WasmUncaughtLocations`; pinned by
     `--component` names the second await, the interpreter and the JVM the first (their hop is
     recorded once per crossing).
 
-Cost, measured 2026-09-26 (wasmtime 49.0.0, node 24, macOS arm64):
+Cost in EH mode, measured 2026-09-26 (wasmtime 49.0.0, node 24, macOS arm64):
 
 | module | flags | off | `function` | `line` |
 | --- | --- | --- | --- | --- |
-| hello_world, pi_approx, dom_reactor (no EH mode) | every size-report row | = | = | = |
 | hello_world + `(ignore-errors nil)` | `--optimize=size` | 1,214 | 1,351 | 1,377 |
 | pi_approx + `(ignore-errors nil)` | `--optimize=size` | 2,293 | 2,442 | 2,495 |
 | zlib (chipz, 51 frames) | `--optimize` | 114,383 | 118,247 (+3.4%) | 120,121 (+5.0%) |
@@ -525,11 +545,31 @@ Cost, measured 2026-09-26 (wasmtime 49.0.0, node 24, macOS arm64):
 | 1 three-line function | `--optimize=size` | 6,533 | 7,060 | 7,110 |
 | 101 three-line functions | `--optimize=size` | 13,196 | 17,651 | 19,663 |
 
+Outside EH mode (`ENTRY_REPORT`), measured 2026-09-26 on da01b1a51 (wasmtime 49.0.0).
+"forced" is plain EH mode forced by the option (`RENDERED`), the first shape tried:
+
+| module | flags | off | forced (`line`) | `function` | `line` |
+| --- | --- | --- | --- | --- | --- |
+| hello_world | `--optimize=size` | 480 | 660 | 649 | 660 |
+| hello_world | `--component --optimize=size` | 1,635 | 2,000 | 1,989 | 2,000 |
+| pi_approx | `--optimize=size` | 1,489 | 1,779 | 1,740 | 1,779 |
+| pi_approx | `--optimize` | 2,410 | 2,697 | 2,658 | 2,697 |
+| `(parse-integer (read-line))` in a defun | `--optimize=size` | 6,350 | 12,583 | 12,566 | 12,583 |
+| a typed condition, inherited `:report` | `--optimize=size` | 2,898 | 26,829 | 20,216 | 20,232 |
+| a typed condition, inherited `:report` | `--component --optimize=size` | 3,882 | 30,733 | 24,056 | 24,072 |
+| `(print (read))` | `--optimize=size` | 34,981 | 245,561 | 42,396 | 42,404 |
+| `(print (read))` | `--optimize` | 35,920 | 300,416 | 43,324 | 43,332 |
+
+- The rest is what a report needs: the throw path and the pad (~170 B on hello_world, where
+  nothing can throw), and each signal's message -- `parse-integer`'s names its string, so the
+  string printer comes in (+6.2 KB). The typed toy's `off` is a folded trap.
+
 - Fixed: ~140 B (the note and digit helpers, the render). Per frame: ~39 B raw / ~9.5 B gzip under
   `function` (the try_table wrapper is 12, the note call ~20, the name ~5 of data); `line` adds
   ~6.5 B per line change (3-line bodies: +20 B). gzip, zlib `--optimize=size`: 29,146 -> 30,416 ->
   31,221.
-- Run time (bench-report programs + `(ignore-errors nil)`, best of 5): **V8 within noise** (every
+- Run time (bench-report programs + `(ignore-errors nil)`, best of 5 -- the EH mode the option now
+  turns on by itself for these programs): **V8 within noise** (every
   program +-4%); **wasmtime: fib +220%**, matmul +13-15%, mandelbrot +8-13%, the rest 0-7%. The
   cost is the try_table around calls in Cranelift (`function`, which sets no line, pays the same),
   so a tiny recursive function pays the most. **Re-evaluate if** wasmtime's exception lowering
@@ -874,10 +914,12 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
 | `(last 5)`, `(mapcar #'1+ 5)` and `mapc`/`mapcan`/`maplist`/`mapl`/`mapcon` | `LAST:` / `MAPCAR: ... LIST` |
 | `(rplaca 5 0)`, `(rplacd nil 0)`, `(setf (car 5) 0)` | `RPLACA:` / `RPLACD: ... CONS` |
 | `(loop for x in 5 ...)`, `(loop for x in '(1 2 . 3) ...)` | `ENDP: ... LIST` |
+| `(char 5 0)`, `(schar 'foo 0)`, `(char (vector #\a) 0)` | `CHAR:` / `SCHAR: ... STRING` |
+| `(setf (char s nil) c)`, `(setf (schar 5 0) c)` | `(SETF CHAR): ... INTEGER` / `(SETF SCHAR): ... STRING` |
 
 - **FUNNEL-TYPED operators** (`OperandTypes.FUNNEL_TYPE`: `CAR`, `CDR`, `NTHCDR`, `ENDP`, `AREF`,
-  `(SETF AREF)`, `CHAR`, `SCHAR`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
-  (new kinds `LIST`, `RATIONAL`) -- except that a to-double funnel (`NUMBER`) there is a packed float
+  `(SETF AREF)`, `CHAR`, `SCHAR`, `(SETF CHAR)`, `(SETF SCHAR)`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
+  (new kinds `LIST`, `RATIONAL`, `STRING`) -- except that a to-double funnel (`NUMBER`) there is a packed float
   store, which takes any real: `REAL`. A numeric operator keeps its one fixed type. `%aset` reports
   as `(SETF AREF)`, `nth` as `NTHCDR`, `svref` as `AREF`, `first`/`rest` as `CAR`/`CDR`
   (`OperandTypes.REWRITTEN`, the call-position-rewrite rule above). A one-argument `gcd`/`lcm`
@@ -918,6 +960,29 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   table gains `ENDP` for `LOOP`, `RPLACA`/`RPLACD` for `SETF INCF DECF PUSH POP PUSHNEW` (a
   `car` place's store). `#'rplaca`/`#'rplacd` became first-class on the compiled backends.
   Still open: a dotted list's `length` and the other consumers (`.todo/985`).
+- **String accesses** (2026-09-26; a non-string was a message-only error, the pad's generic
+  text or a trap, a symbol read as its NAME on the JVM): `char`/`schar` check the subscript,
+  then the string -- that order on every backend, because the compiled sites check the
+  subscript ahead of the read. A `setf` place names its STORE: `%schar-set`'s optional fourth
+  operand is the quoted place head (`LispMacroExpander.scharSetOf`), reported as
+  `(SETF CHAR)`/`(SETF SCHAR)`, and as `(SETF AREF)` for an `aref`/`svref`/`elt` place's
+  string arm (the array arm's name); `row-major-aref`'s string arm stays unnamed, as its array
+  arm is. Interpreter: `charRef`, `scharSet(args, rebind, operator)`. Compiled:
+  `expandScharSetFunctional` wraps the runtime defun's arguments in `(%check-string var 'op)`
+  (a `char`/`schar` place only; the others run under `stringp`) and `(%check-index i 'op)`
+  (`op` nil = unnamed) -- compile-path-only forms, since `%schar-set-runtime` cannot know the
+  store's name. JVM: `_charRef` throws the unnamed `STRING` report for anything but a
+  quote-framed String or a character vector, named by the operator's wrapper
+  (`wrapForOperator`); `%check-string` is `_pStringp` plus a site throw
+  (`_opTypeErr(_teRaw(x, "STRING"), op, FUNNEL_TYPE)`), `%check-index` is `_ckIdx` under `op`.
+  wasm, EH mode only (a non-EH module is byte-identical): `_str_char_ref` lands a non-string
+  through `_type_err(x, STRING)` directly (`WasmOperandTypes.emitLanding`; `STRING` has no
+  `_type_err_*` stub) under the register its site sets (`emitCall`), `%check-string` is
+  `emitStringpI32` plus `emitTypeError`, `%check-index` is `emitIndexCheck`. The landing
+  selects `STRING` only when the table has a string-checking row (`STRING_CHECKED` adds its
+  code to `rowCodes`); `LOWERED_TO` adds `(SETF CHAR)`/`(SETF SCHAR)` for `CHAR`/`SCHAR` and
+  `(SETF AREF)` for `ELT`. Still open: a `setf` value that is no character, and
+  `row-major-aref`'s array-arm subscript (`.todo/989`).
 - **Interpreter**: the built-ins throw `OperandTypeException` with the kind (`car`/`cdr`/`first`/
   `rest` and `nthValue` `LIST`, `numerator`/`denominator` `RATIONAL`, `random` `NUMBER`/`REAL`), the
   seam names them. `#'first`/`#'rest` of nil and `#'second` past the end answer nil now, as the
@@ -954,12 +1019,19 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   unchanged. A 1M-element `loop`/`dolist`+`rplacd`/`length` mix in an EH module 0.34 -> 0.36 s
   (the `rplacd` site's `ref.test` in front of its cast: not the one-test `br_on_cast_fail` of a
   `car`/`cdr` read, whose block would need a cast-typed signature); the JVM unchanged.
-- **Open**: a string access's non-string and `(setf char)` index (`.todo/983`), the list consumers
-  beyond these (`.todo/985`).
+- **Cost of the string accesses, measured 2026-09-26** (wasmtime 49): `zlib` code +201 B and
+  strings +52 B; `hello_world`, `pi_approx`, `dom_reactor` unchanged, a non-EH module
+  byte-identical, JVM class 164,583 -> 164,736. Its P1 total reads 117,008 -> 118,253 only because
+  the 52-byte shift put the fdlibm table's probed base word on chipz's literal `2048`, which pins
+  ~990 dead bytes (`.todo/990`). A 21M-read `char` loop: JVM unchanged (noise), EH wasm 560 ->
+  580 ms (the register write around `_str_char_ref` and its quote-frame test).
+- **Open**: the list consumers beyond these (`.todo/985`), the string-store leftovers
+  (`.todo/989`).
 - Pinned by `ci-spec.yaml`'s `argument-type-errors-name-the-operator-beyond-arithmetic` and
-  `list-walks-and-string-indices-name-the-operator` and `list-consumers-name-the-operator`, and the
+  `list-walks-and-string-indices-name-the-operator`, `list-consumers-name-the-operator` and
+  `string-accesses-name-the-operator`, and the
   `argumentTypeErrorsNameTheOperatorBeyondArithmetic` / `listWalksAndStringIndicesNameTheOperator` /
-  `listConsumersNameTheOperator` triples (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
+  `listConsumersNameTheOperator` / `stringAccessesNameTheOperator` triples (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
 
 ### `random`'s domain (closed 2026-09-26, `.todo/981`)
 CLHS's domain is a COMPOUND type, `(OR (INTEGER 1) (FLOAT (0.0)))`: a ratio limit is real but

@@ -1859,11 +1859,14 @@ final class WasmStringRuntimeBuilder {
 	 * {@code make-string} buffer O(n^2) ({@code .kb/string-index-cost.md}); anything else
 	 * decodes through {@code _str_char_at}. Every {@code (char s i)} /
 	 * {@code (schar s i)} site calls this instead of the old {@code _charvec_to_str} +
-	 * {@code _str_char_at} pair.
+	 * {@code _str_char_at} pair. In EH mode anything else that is no string is the
+	 * {@code STRING} type-error of the operator the call site put in the register
+	 * ({@code CHAR}/{@code SCHAR}); outside it the body is unchanged.
+	 * @param ehMode whether the module is in EH mode
 	 * @return the function body (signature {@code ((ref null eq), i32) -> i32},
 	 * TYPE_STR_TO_MEM)
 	 */
-	static byte[] buildStrCharRefBody() {
+	static byte[] buildStrCharRefBody(boolean ehMode) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: v = 0, i = 1. No locals.
@@ -1889,6 +1892,14 @@ final class WasmStringRuntimeBuilder {
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // if
+		if (ehMode) {
+			WasmStringpCompiler.emitStringpI32(w, 0);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF, 0x40);
+			get(w, 0);
+			WasmOperandTypes.emitLanding(w, am.ik.rontolisp.compiler.OperandTypes.Kind.STRING);
+			w.write(Instruction.END); // if
+		}
 		get(w, 0);
 		get(w, 1);
 		WasmEmitHelper.emitStrCharAtCall(w);

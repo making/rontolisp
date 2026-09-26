@@ -6,6 +6,9 @@ import java.util.List;
 import am.ik.jvm.Opcode;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OperandTypes;
+import am.ik.rontolisp.macro.LispMacroExpander;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles the character built-ins. A CHARACTER on the JVM compile path is a length-1
@@ -46,12 +49,64 @@ final class JvmCharCompiler {
 		ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).index());
 		JvmEmitHelper.unboxLong(ctx);
 		ctx.emit(Opcode.L2I);
+		// A string that is no string is CHAR's / SCHAR's type-error too: _charRef throws
+		// the unnamed report, the operator's wrapper names it.
 		ctx.emit(Opcode.INVOKESTATIC);
-		ctx.emitU2(JvmEmitHelper
-			.selfMethod(ctx, className, JvmStringIndexRuntimeBuilder.CHARREF_METHOD,
-					JvmStringIndexRuntimeBuilder.CHARREF_DESC)
+		ctx.emitU2(ctx.wrapForOperator(JvmStringIndexRuntimeBuilder.CHARREF_METHOD,
+				JvmStringIndexRuntimeBuilder.CHARREF_DESC, JvmEmitHelper.selfMethod(ctx, className,
+						JvmStringIndexRuntimeBuilder.CHARREF_METHOD, JvmStringIndexRuntimeBuilder.CHARREF_DESC))
 			.index());
 		JvmEmitHelper.boxCodePoint(ctx);
+	}
+
+	/**
+	 * Compiles {@code (%check-string x 'op)}: {@code x}, left on the stack when it is a
+	 * string (the shared {@code _pStringp} test) and otherwise {@code op}'s
+	 * {@code STRING} type-error, thrown here: {@code _teRaw} named by {@code _opTypeErr}.
+	 * Only a {@code (setf char)} / {@code (setf schar)} store checks this way, so the
+	 * site carries the throw rather than a wrapper.
+	 */
+	static void compileCheckString(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
+		ctx.emit(Opcode.DUP);
+		JvmEmitHelper.emitSharedCall(ctx, className, "_pStringp", 1,
+				helper -> JvmStringpCompiler.emitStringpCheck(helper, 0));
+		int ifString = ctx.code.size();
+		ctx.emit(Opcode.IFNONNULL);
+		ctx.emitU2(0);
+		JvmEmitHelper.compileUnspelledLiteral(OperandTypes.Kind.STRING.name(), ctx);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(JvmEmitHelper
+			.selfMethod(ctx, className, JvmOperandTypeRuntime.TE_RAW, JvmOperandTypeRuntime.TE_RAW_DESC)
+			.index());
+		String operator = LispMacroExpander.checkOperator(cons);
+		if (operator != null) {
+			JvmEmitHelper.compileUnspelledLiteral(operator, ctx);
+			JvmEmitHelper.compileUnspelledLiteral(OperandTypes.FUNNEL_TYPE, ctx);
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(JvmEmitHelper
+				.selfMethod(ctx, className, JvmOperandTypeRuntime.OP_TYPE_ERR, JvmOperandTypeRuntime.OP_TYPE_ERR_DESC)
+				.index());
+		}
+		ctx.emit(Opcode.ATHROW);
+		JvmEmitHelper.patchBranch(ctx, ifString, ctx.code.size());
+	}
+
+	/**
+	 * Compiles {@code (%check-index x 'op)}: {@code x} through {@code _ckIdx} under
+	 * {@code op}'s wrapper -- unnamed when {@code op} is nil.
+	 */
+	static void compileCheckIndex(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
+		@Nullable String outer = ctx.operator;
+		ctx.operator = LispMacroExpander.checkOperator(cons);
+		try {
+			ctx.emit(Opcode.INVOKESTATIC);
+			ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).index());
+		}
+		finally {
+			ctx.operator = outer;
+		}
 	}
 
 	/** {@code (char-code ch)}: the code point as an integer. */

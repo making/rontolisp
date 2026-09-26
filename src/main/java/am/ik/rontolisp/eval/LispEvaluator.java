@@ -10616,7 +10616,7 @@ public final class LispEvaluator {
 	 */
 	private LispVal evalScharSet(LispCons cons, Environment env) {
 		List<LispVal> parts = cons.toList();
-		if (parts.size() != 4) {
+		if (parts.size() != 4 && parts.size() != 5) {
 			throw new LispEvalException(LispNames.SCHAR_SET + " expects a string, an index and a character");
 		}
 		LispVal target = eval(parts.get(1), env);
@@ -10624,7 +10624,9 @@ public final class LispEvaluator {
 		LispVal character = eval(parts.get(3), env);
 		Consumer<LispString> rebind = parts.get(1) instanceof LispSymbol place
 				? rebuilt -> assignVariable(place.name(), rebuilt, env) : null;
-		return singleValue(Environment.scharSet(List.of(target, index, character), rebind));
+		// The place head names the store a wrong-type string or subscript reports under.
+		return singleValue(Environment.scharSet(List.of(target, index, character), rebind,
+				LispMacroExpander.scharSetOperator(cons)));
 	}
 
 	private LispVal evalWhile(LispCons cons, Environment env) {

@@ -62,7 +62,10 @@ public final class OperandTypes {
 		 * {@code rplacd}): a funnel checking for it reports it unnamed, the operator's
 		 * row names it.
 		 */
-		CONS
+		CONS,
+
+		/** A non-string reaching {@code char}/{@code schar} or their {@code setf}. */
+		STRING
 
 	}
 
@@ -77,6 +80,12 @@ public final class OperandTypes {
 
 	/** The reported name of a store through an {@code aref} place. */
 	public static final String SETF_AREF = "(SETF AREF)";
+
+	/** The reported name of a store through a {@code char} place. */
+	public static final String SETF_CHAR = "(SETF CHAR)";
+
+	/** The reported name of a store through a {@code schar} place. */
+	public static final String SETF_SCHAR = "(SETF SCHAR)";
 
 	/** An operator table entry naming a funnel-typed operator ({@link #operatorType}). */
 	public static final String FUNNEL_TYPE = "";
@@ -105,10 +114,11 @@ public final class OperandTypes {
 	 * reported name of {@code %aset}, the operator a {@code setf} of an {@code aref} or
 	 * {@code svref} place lowers to. {@code endp} is also {@code dolist}'s and
 	 * {@code loop}'s {@code for-in}: the expansions check the list's end as it does.
-	 * {@code last} and the {@code map*} family check their list arguments.
+	 * {@code last} and the {@code map*} family check their list arguments. A string
+	 * access checks its string ({@code STRING}) and its subscript ({@code INTEGER}).
 	 */
 	private static final List<String> FUNNEL_TYPED = List.of("CAR", "CDR", "NTHCDR", "ENDP", "AREF", SETF_AREF, "CHAR",
-			"SCHAR", "LAST", "MAPCAR", "MAPC", "MAPCAN", "MAPLIST", "MAPL", "MAPCON");
+			"SCHAR", "LAST", "MAPCAR", "MAPC", "MAPCAN", "MAPLIST", "MAPL", "MAPCON", SETF_CHAR, SETF_SCHAR);
 
 	static {
 		String[] numberOps = { "+", "-", "*", "/", "=", "ABS", "SIGNUM", "SQRT", "EXP", "LOG", "EXPT", "SIN", "COS",
