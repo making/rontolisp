@@ -9,6 +9,15 @@ Defines a structure type named `name` and returns the name symbol. Each `slot` i
 - `copy-name (object)` — a shallow copier
 - `name-slot (object)` — one accessor per slot; accessors are also `setf`-able places, so `setf`/`incf`/`push` on `(name-slot obj)` work
 
+An accessor, its `setf` place and the copier signal a `type-error` when the object is not a structure instance. The report names the function and the type, and `type-error-datum`/`type-error-expected-type` answer the object and the structure name. Any structure instance passes the check, so an instance of another structure type is not rejected. On the wasm-GC backends the error is catchable only in a module compiled in exception-handling mode (a program with a catching form); elsewhere it traps, as every runtime failure there does.
+
+```lisp
+(defstruct point x y)
+(handler-case (point-x 42)
+  (type-error (e) (list (type-error-datum e) (type-error-expected-type e) (princ-to-string e))))
+; => (42 POINT "POINT-X: The value 42 is not of type POINT")
+```
+
 Because the generated names are plain functions they are first-class (`#'point-x`, `mapcar`, `funcall`). On the compilation path `defstruct` is only supported as a top-level form; the interpreter also accepts it in the REPL and via `load`. Under a [user-defined package](../packages.md#user-defined-packages-defpackage) the generated names are interned as internal symbols of that package (`geo::make-pt`); listing them in a `defpackage` `:export` clause is not supported.
 
 An instance is a first-class structure object, not a list: `print` shows it in the standard `#S(NAME :SLOT value ...)` syntax, `consp`/`listp` are `nil` on instances, and `equal` compares instances slot-wise (Common Lisp compares distinct structures as unequal). The options syntax `(defstruct (name option...) slot...)` supports `(:constructor name)`, `(:conc-name prefix)`, `(:predicate name)`, `(:copier name)`, `(:include parent (slot new-default) ...)`, `(:type (vector ...))`, `(:print-object fn)` and `(:print-function fn)` on every backend, and a documentation string before the slots is accepted and dropped. A BOA constructor -- `(:constructor name (lambda-list))` -- is supported in a lite form: a slot named by the lambda list reads that parameter, and every other slot evaluates its initform in the constructor body. Slot options `:type` and `:read-only` are parsed and ignored. The struct name is usable as a [`defmethod`](defmethod.md) parameter specializer, and the runtime `eval` of a compiled program knows neither `defstruct` nor accessor `setf` places (calling the generated functions from `eval` works).

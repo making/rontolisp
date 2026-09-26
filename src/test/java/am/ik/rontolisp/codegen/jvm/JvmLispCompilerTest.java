@@ -17912,6 +17912,35 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunDefstructAccessorsSignalATypeErrorOnANonInstance() throws Exception {
+		// A non-instance fails the instance guard -- a cons is an Object[] too, and
+		// the accessor read (and the setf wrote) one of its fields -- and signals the
+		// accessor's type-error, not a ClassCastException.
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(defvar *v* nil)
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (type-error-datum e) (eq (type-error-expected-type e) 'point)
+				                          (princ-to-string e)))))
+				(print (te (lambda () (point-x 42))))
+				(print (te (lambda () (point-y (cons 1 2)))))
+				(print (te (lambda () (setf (point-y (cons 1 2)) (progn (setq *v* :v) 0)))))
+				(print *v*)
+				(print (te (lambda () (incf (point-x "s")))))
+				(print (te (lambda () (copy-point nil))))
+				(let ((p (make-point :x 1))) (setf (point-y p) 2) (incf (point-x p)) (print (list p (copy-point p))))
+				""")).isEqualTo("""
+				(42 T "POINT-X: The value 42 is not of type POINT")
+				((1 . 2) T "POINT-Y: The value (1 . 2) is not of type POINT")
+				((1 . 2) T "(SETF POINT-Y): The value (1 . 2) is not of type POINT")
+				:V
+				("s" T "POINT-X: The value \\"s\\" is not of type POINT")
+				(NIL T "COPY-POINT: The value NIL is not of type POINT")
+				(#S(POINT :X 2 :Y 2) #S(POINT :X 2 :Y 2))""");
+	}
+
+	@Test
 	void compileAndRunAPrunedBundledDefstructThroughTheRegistrationMarker() throws Exception {
 		// The pruner expands a bundled-library defstruct into its defuns ahead of
 		// pruning and leaves a %struct-definition marker in the stream; this pass

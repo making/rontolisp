@@ -350,9 +350,11 @@ second payload reader, so both gates go broad; outside EH mode nothing is observ
 **Invariant: a signaled condition escaping the top level writes `Unhandled condition: <report>` to
 standard error -- the same line on all four backends -- then the process exits the way it always
 did.** Built from `compiler/UncaughtReport.PREFIX` at all three emission sites; the report text is
-the one `princ` writes, and nothing below changes it. Two reports still differ on the JVM
-(`.todo/993`: a struct accessor on a non-instance, a typed loop's out-of-range `aref`), and one on
-wasm-GC (the report-less class, "Known gap" below).
+the one `princ` writes, and nothing below changes it. An out-of-range `aref` still differs -- the
+JVM prints the raw `ArrayIndexOutOfBoundsException` text and wasm-GC traps even in EH mode
+(`.todo/a00`) -- and so does one report on wasm-GC (the report-less class, "Known gap" below). A
+struct accessor on a non-instance agrees since 2026-09-26 ([defstruct.md](defstruct.md),
+"Accessors check their object").
 
 **Under it, location lines** (`UncaughtReport.atLine` / `asyncLine`, two-space indented):
 `  at FILE:LINE in FUNCTION` -- the innermost form read from a named file that the condition passed
@@ -1013,6 +1015,7 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
 | `(setf (char s nil) c)`, `(setf (schar 5 0) c)` | `(SETF CHAR): ... INTEGER` / `(SETF SCHAR): ... STRING` |
 | `(setf (char s 0) 5)`, `(setf (aref s 0) 5)` (`s` a string) | `(SETF CHAR):` / `(SETF AREF): ... CHARACTER` |
 | `(row-major-aref v nil)`, `(setf (row-major-aref v nil) 0)` | `ROW-MAJOR-AREF:` / `(SETF ROW-MAJOR-AREF): ... INTEGER` |
+| `(point-x 42)`, `(setf (point-x 42) 0)`, `(copy-point 42)` (a `defstruct`'s) | `POINT-X:` / `(SETF POINT-X):` / `COPY-POINT: ... POINT` -- generated code, not this table: [defstruct.md](defstruct.md) |
 
 - **FUNNEL-TYPED operators** (`OperandTypes.FUNNEL_TYPE`: `CAR`, `CDR`, `NTHCDR`, `ENDP`, `AREF`,
   `(SETF AREF)`, `CHAR`, `SCHAR`, `(SETF CHAR)`, `(SETF SCHAR)`, `ROW-MAJOR-AREF`,

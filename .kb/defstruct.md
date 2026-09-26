@@ -33,6 +33,49 @@ slot-wise (deliberate CL deviation); `#S(...)` source reads back via `StructLite
   names (`(:predicate torch:tensorp)`) are the robust spelling for an exported API.
 - `UserMacroExpander`'s walker has a defstruct case, so a user macro may expand into one.
 
+## Accessors check their object
+**Invariant: an accessor, its `setf` place and the copier given a non-instance signal a
+`type-error` reporting `POINT-X: The value 42 is not of type POINT` (`(SETF POINT-X): ...`,
+`COPY-POINT: ...`) whose datum is the object and expected-type the struct name -- the same line on
+all four backends, wasm-GC in EH mode.** Pinned by ci-spec
+`defstruct-accessors-signal-a-type-error-on-a-non-instance` and standalone
+`uncaught-struct-accessor-report`, `cli/UncaughtReportParityTest`, and one test per backend
+(`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`, the last also
+pinning the unchecked module). Until 2026-09-26 the interpreter reported `%OBJ-REF expects an
+instance, got 42` (a `simple-error`), the JVM a `ClassCastException` -- and, a cons being an
+`Object[]`, READ and WROTE a field of `(cons 1 2)` -- and wasm-GC trapped even in EH mode.
+
+- **The check rides the primitive, as a FAILURE operand**: the accessor body is `(%obj-ref obj i
+  (%struct-type-error obj "POINT-X" 'POINT nil))`, the place `(%obj-set tgt i v (%struct-type-error
+  tgt "POINT-X" 'POINT t))` (`LispMacroExpander.checkedStructRead` / `checkedStructWrite`), and each
+  backend folds the test into the access it makes anyway: interpreter `evalCons` (the operand is
+  evaluated only for a non-instance), JVM `JvmObjCompiler.emitChecked` (the instance guard; the
+  failure form on its reject arm), wasm-GC `WasmInstanceCompiler.emitChecked` (ONE
+  `br_on_cast_fail`, the failure form on its miss). **Not `(if (%obj-p obj) ...)` in the
+  expansion**: that was the first cut and cost a second type test per access -- 200M iterations of
+  two stores and a read under wasmtime 0.88 s -> 1.57 s; the operand form runs 0.89 s. The JVM JIT
+  did not care either way.
+- **The store checks after the value** (`let`-bound unless the object is a symbol and the value an
+  atom), CL's order: `(incf (point-x "s"))` reports the READ, `POINT-X`.
+- **`%struct-type-error` is one generated defun** (`structTypeErrorDefun`, injected when referenced;
+  the interpreter defines it on first resolution). The report is rendered into the TEXT CONTROL at
+  the signal (`formatMessagePieces` + `textControlForm`), never stored as a control with arguments:
+  a runtime control drags the format renderer in (zlib +59 KB). The operator travels as a string (a
+  store builds `(SETF ...)` from the reader's), the type as `%unspelled-quote`. The owner a place
+  needs is `ClosRegistry.structOfAccessor`, registered only by a checked expansion.
+- **Unchecked where nothing reads the report**: under `SignalMessages.LAZY` (wasm-GC outside EH
+  mode) `expandTopLevelDefinitions` expands unchecked, so the module is byte-identical; a
+  pruner-expanded library struct (`LibraryDefunPruner`, which cannot know the mode) keeps the
+  operand and wasm-GC ignores it outside EH mode (`checkedFailure`).
+- **ANY instance passes**, not the struct's own tags: a later `:include` child widens the tag set
+  after the accessor exists (the predicate regeneration below), so `(point-x <another struct>)`
+  still reads a slot. Deliberate; revisit with a per-accessor tag test the predicate refresh also
+  rebuilds.
+- Cost, wasm-GC EH mode (2026-09-26, `--optimize=size`): zlib 89,252 -> 95,803 B (+7.3%; gzip
+  29,776 -> 31,250), `--optimize` 117,000 -> 124,519 -- ~35 B per checked site (133 in zlib: the
+  failure call's two literals and the blocks) plus the operator strings. A module already carrying
+  the printer pays little (a toy with `ignore-errors`: +88 B). Outside EH mode: 0.
+
 ## `:include` (single inheritance)
 Parent slots (in ITS layout order) are PREPENDED, so an inherited slot keeps one index in every
 descendant and the parent's baked `%obj-ref` accessors read a child. `ClosRegistry.structAncestors`

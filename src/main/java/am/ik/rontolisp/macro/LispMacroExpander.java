@@ -4122,8 +4122,9 @@ public final class LispMacroExpander {
 							}
 							yield listToCons(call);
 						}
-						// (setf (point-x p) val) -> (%obj-set p <index> val)
-						yield objSet(placeParts.get(1), structSlot - 1, value);
+						// (setf (point-x p) val) -> (%obj-set p <index> val), checked
+						yield checkedStructWrite(placeParts.get(1), structSlot - 1, value, accessor,
+								closRegistry == null ? null : closRegistry.structOfAccessor(accessor));
 					}
 					if (LispNames.isCarCdrComposition(accessor)) {
 
@@ -15630,6 +15631,27 @@ public final class LispMacroExpander {
 	public static List<LispVal> expandDefstruct(LispCons cons, java.util.Map<String, Integer> structAccessors,
 			@org.jspecify.annotations.Nullable ClosRegistry closRegistry,
 			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported) {
+		return expandDefstruct(cons, structAccessors, closRegistry, exported, true);
+	}
+
+	/**
+	 * As
+	 * {@link #expandDefstruct(LispCons, java.util.Map, ClosRegistry, java.util.function.BiPredicate)},
+	 * choosing whether the generated accessors, accessor places and copier check their
+	 * object ({@link #checkedStructRead}). Unchecked is for a backend where nothing can
+	 * read the report: a wasm-GC module outside exception-handling mode traps on the
+	 * non-instance either way, so the checks would be bytes that change nothing.
+	 * @param cons the defstruct expression
+	 * @param structAccessors mutated: accessor name to 1-based slot position
+	 * @param closRegistry mutated when non-null: the struct type and its layout
+	 * @param exported {@code (package, member) -> is it external}, or {@code null}
+	 * @param checked whether a non-instance signals the accessor's {@code type-error}
+	 * @return the generated top-level forms, in definition order
+	 */
+	public static List<LispVal> expandDefstruct(LispCons cons, java.util.Map<String, Integer> structAccessors,
+			@org.jspecify.annotations.Nullable ClosRegistry closRegistry,
+			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported,
+			boolean checked) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
 			throw new IllegalArgumentException(LispNames.DEFSTRUCT + " expects a struct name: " + cons.print());
@@ -16000,8 +16022,13 @@ public final class LispMacroExpander {
 				for (int i = 0; i < slotSyms.size(); i++) {
 					copied.add(objRef(obj, i));
 				}
-				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(copierName), params,
-						objNew(structTag, copied))));
+				LispVal copy = objNew(structTag, copied);
+				forms
+					.add(listToCons(
+							List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(copierName), params,
+									checked ? makeIf(callOf(LispNames.OBJ_P, obj), copy,
+											structTypeError(obj, operatorName(copierName), structName, false))
+											: copy)));
 			}
 		}
 		// (defun <conc-name><slot> (__struct) (%obj-ref __struct <index>))
@@ -16026,9 +16053,12 @@ public final class LispMacroExpander {
 				structAccessors.put(accessor, TYPED_VECTOR_SLOT_BASE - i);
 			}
 			else {
-				forms.add(listToCons(
-						List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(accessor), params, objRef(obj, i))));
+				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(accessor), params,
+						checked ? checkedStructRead(obj, i, accessor, structName) : objRef(obj, i))));
 				structAccessors.put(accessor, i + 1);
+				if (closRegistry != null && checked) {
+					closRegistry.registerStructAccessor(accessor, structName);
+				}
 				if (closRegistry != null && slotTypes.get(i) != null) {
 					closRegistry.registerStructSlotType(structName, slotBases.get(i), accessor, slotTypes.get(i));
 				}
@@ -17612,6 +17642,110 @@ public final class LispMacroExpander {
 				new LispSymbol(LispNames.SLOT_BOUND_P_INTERNAL), listToCons(List.of(value)),
 				makeIf(objIs(value, List.of(ClosRegistry.UNBOUND_TAG)), LispNil.INSTANCE, LispTrue.INSTANCE)));
 		return List.of(read, boundp);
+	}
+
+	/**
+	 * Builds a {@code defstruct} accessor's body: {@code (%obj-ref obj <index>
+	 * (%struct-type-error obj "ACCESSOR" 'TYPE nil))}. A non-instance is CL's
+	 * {@code type-error} naming the accessor and the struct type, the same report on
+	 * every backend; without it the interpreter reported its own primitive, the JVM a
+	 * {@code ClassCastException} (and, a cons being an {@code Object[]} there, read a
+	 * slot of {@code (cons 1 2)}), and wasm-GC trapped. The third operand is the read's
+	 * FAILURE form, evaluated only when the object is no instance: each backend folds the
+	 * test into the cast it makes anyway (wasm-GC {@code br_on_cast_fail}), where a
+	 * separate {@code (if (%obj-p obj) ...)} cost a second type test per access -- a
+	 * struct-write loop ran 78% slower under wasmtime that way. The test is ANY instance,
+	 * not the struct's own tag set: a later {@code :include} child widens that set after
+	 * the accessor is generated, so an instance of another struct is not rejected.
+	 */
+	private static LispVal checkedStructRead(LispVal objVar, int index, String accessor, String structName) {
+		return listToCons(List.of(new LispSymbol(LispNames.OBJ_REF), objVar, new LispInteger(index),
+				structTypeError(objVar, operatorName(accessor), structName, false)));
+	}
+
+	/**
+	 * Builds a {@code defstruct} accessor place's store: {@code (let ((__setf_tgt obj))
+	 * (let ((__setf value)) (%obj-set __setf_tgt <index> __setf (%struct-type-error
+	 * __setf_tgt "ACCESSOR" 'TYPE t))))}, the fourth operand the store's failure form
+	 * ({@link #checkedStructRead}). CL's order -- the object, then the value, then the
+	 * check -- so {@code (incf (point-x 5))} reports the READ, as it would through a setf
+	 * function. A symbol object and an atom value need no binding: neither can run code
+	 * that changes the other. With no checked owner (an unchecked expansion, or no
+	 * registry) the store is the bare {@code %obj-set}.
+	 */
+	private static LispVal checkedStructWrite(LispVal obj, int index, LispVal value, String accessor,
+			@Nullable String structName) {
+		if (structName == null) {
+			return objSet(obj, index, value);
+		}
+		boolean bare = obj instanceof LispSymbol && !(value instanceof LispCons);
+		LispVal target = bare ? obj : new LispSymbol(SETF_TARGET_VAR);
+		LispVal stored = bare ? value : new LispSymbol(SETF_VAR);
+		LispVal store = listToCons(List.of(new LispSymbol(LispNames.OBJ_SET), target, new LispInteger(index), stored,
+				structTypeError(target, operatorName(accessor), structName, true)));
+		return bare ? store : makeLet(SETF_TARGET_VAR, obj, makeLet(SETF_VAR, value, store));
+	}
+
+	/**
+	 * Builds {@code (%struct-type-error obj "OPERATOR" 'TYPE store)}. The operator is
+	 * report text only, a string; a store reports it as {@code (SETF OPERATOR)}, built by
+	 * the helper so the place shares the reader's string. The type is the condition's
+	 * {@code expected-type}, a symbol in {@code %unspelled-quote}: the compiler
+	 * synthesized it, the user spelled no designator.
+	 */
+	private static LispVal structTypeError(LispVal objVar, String operator, String structName, boolean store) {
+		return listToCons(
+				List.of(new LispSymbol(LispNames.STRUCT_TYPE_ERROR_INTERNAL), objVar, new LispString(operator),
+						listToCons(List.of(new LispSymbol(LispNames.UNSPELLED_QUOTE), new LispSymbol(structName))),
+						store ? LispTrue.INSTANCE : LispNil.INSTANCE));
+	}
+
+	/**
+	 * The name a generated struct function's report gives it: the package-free spelling,
+	 * as every other operator in a wrong-type report is named.
+	 */
+	private static String operatorName(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
+	}
+
+	/**
+	 * The one out-of-line failure arm of the generated {@code defstruct} accessors,
+	 * accessor places and copiers ({@link #checkedStructRead},
+	 * {@link #checkedStructWrite}): {@code OP: The value X is not of type T}, the report
+	 * shape of every wrong-type argument ({@code compiler/OperandTypes}), as a
+	 * {@code type-error} answering the value and the type. The report is rendered HERE
+	 * into the text control, never stored as a control with arguments: a runtime control
+	 * drags the whole format renderer into every wasm-GC module that can report it (zlib:
+	 * +59 KB). The compile path emits the defun once per program that references it
+	 * ({@code expandTopLevelDefinitions}); the interpreter evaluates it on the first
+	 * resolution of the name.
+	 * @param rendered whether anything reads the report; without a reader (a wasm-GC
+	 * module outside exception-handling mode, which traps) the signal carries none, and
+	 * the printer stays out of the module
+	 * @return the {@code %struct-type-error} defun
+	 */
+	public static LispVal structTypeErrorDefun(boolean rendered) {
+		LispSymbol datum = new LispSymbol("__datum");
+		LispSymbol operator = new LispSymbol("__operator");
+		LispSymbol type = new LispSymbol("__type");
+		LispSymbol store = new LispSymbol("__store");
+		List<LispVal> signal = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.ERROR), quoteOf("TYPE-ERROR"),
+				new LispSymbol(":DATUM"), datum, new LispSymbol(":EXPECTED-TYPE"), type));
+		LispVal body = listToCons(signal);
+		if (rendered) {
+			// (let ((__operator (if __store (%string-concat "(SETF " __operator ")")
+			// __operator))) (error ... :format-control <rendered>))
+			signal.add(new LispSymbol(":FORMAT-CONTROL"));
+			signal.add(textControlForm(
+					formatMessagePieces("~A: The value ~S is not of type ~A", List.of(operator, datum, type))));
+			LispVal setfName = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT), listToCons(List
+				.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("(" + LispNames.SETF + " "), operator)),
+					new LispString(")")));
+			body = makeLet(operator.name(), makeIf(store, setfName, operator), listToCons(signal));
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.STRUCT_TYPE_ERROR_INTERNAL),
+				listToCons(List.of(datum, operator, type, store)), body));
 	}
 
 	/**
@@ -23837,7 +23971,8 @@ public final class LispMacroExpander {
 				// Plain defuns, plus -- for a (:print-object ...) / (:print-function ...)
 				// struct -- a synthesized print-object defmethod, which needs the same
 				// registration + dispatcher placement a top-level defmethod gets.
-				for (LispVal generated : expandDefstruct((LispCons) form, structAccessors, closRegistry, exported)) {
+				for (LispVal generated : expandDefstruct((LispCons) form, structAccessors, closRegistry, exported,
+						signalMessages != SignalMessages.LAZY)) {
 					addExpandedDefinition(generated, out, closRegistry, dispatcherSlots, placedDispatchers);
 				}
 			}
@@ -23849,7 +23984,8 @@ public final class LispMacroExpander {
 				// The regenerated forms are discarded (the stream carries the kept
 				// subset; a (:print-object ...) struct's synthesized defmethod rides the
 				// stream too and registers through the defmethod arm above).
-				expandDefstruct(structPayload, structAccessors, closRegistry, exported);
+				expandDefstruct(structPayload, structAccessors, closRegistry, exported,
+						signalMessages != SignalMessages.LAZY);
 			}
 			else if (isNamedForm(form, LispNames.DEFCLASS)) {
 				// The expansion mixes plain defuns (constructor) with synthesized
@@ -24146,6 +24282,9 @@ public final class LispMacroExpander {
 		}
 		if (needsSlotUnboundHelper(program, out)) {
 			out.addAll(slotUnboundDefuns());
+		}
+		if (out.stream().anyMatch(f -> usesSymbol(f, LispNames.STRUCT_TYPE_ERROR_INTERNAL))) {
+			out.add(structTypeErrorDefun(signalMessages != SignalMessages.LAZY));
 		}
 		// The shared no-applicable-method signal, once per program with a dispatcher that
 		// can reach it: without this defun every dispatcher (each synthesized slot
