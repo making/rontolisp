@@ -51,7 +51,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [reader-case-upcase.md](reader-case-upcase.md) -- uppercase-canonical reader model, verbatim `intern`/`find-symbol`
 - [reader-features.md](reader-features.md) -- `#+`/`#-`, `*features*` as a runtime variable, `#|...|#`, `#.`, `--feature`
 - [read-time-constants.md](read-time-constants.md) -- `pi`/float-range/fixnum/array limits as bound symbols, not reader substitutions; per-backend values
-- [source-positions.md](source-positions.md) -- `file:line:column` in reader and frontend errors; the cons-identity rule every AST pass honours
+- [source-positions.md](source-positions.md) -- `file:line:column` in reader and frontend errors; the cons-identity rule every AST pass honours; `LocatedCons`, the interpreter's runtime positions
 - [source-language.md](source-language.md) -- the one seam from user source to core forms (`SourceLanguage`): per-file language pick, `--source-language`, the program-wide `SourceStandards`, what is NOT user source
 - [scheme-frontend.md](scheme-frontend.md) -- the EXPERIMENTAL Scheme front end: lowering table, library tags, `--scheme-standard`, destination-driven loops, tail-call groups of top-level procedures, identifier escaping, hygienic `syntax-rules` macros, `define-library` / `include`, `cond-expand` and its feature list, `(scheme char)`'s generated Unicode tables, ports and `(scheme file)` file ports, the `#f` / loop-shape / tail-depth / size measurements
 - [format.md](format.md) -- `format`'s two renderings of one directive set, and the shared Schubfach float printer

@@ -22,8 +22,8 @@ class SourceProvenanceTest {
 
 	@Test
 	void recordsNothingUntilAScopeIsOpened() {
-		// The interpreter never opens one, so it pays nothing and its error text is
-		// untouched -- the deliberate compile-path-only divergence.
+		// The interpreter never opens one, so its error text is untouched; its
+		// positions ride on LocatedCons instead.
 		assertThat(SourceProvenance.isRecording()).isFalse();
 		List<LispVal> forms = read("(print (+ 1 2))");
 		assertThat(SourceProvenance.locate(forms.get(0))).isNull();

@@ -20,6 +20,7 @@ import am.ik.rontolisp.LispRatio;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.LocatedCons;
 import am.ik.rontolisp.SourceLocation;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.reader.LispReadException;
@@ -44,7 +45,10 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * Every list's head cons is recorded with {@link SourceProvenance}, like
  * {@code LispReader.readExpr} does, so a lowering that inherits positions keeps
- * {@code file:line:column} in compile errors ({@code .kb/source-positions.md}).
+ * {@code file:line:column} in compile errors ({@code .kb/source-positions.md}). With no
+ * recording scope open -- the interpreter reading a named file -- that head cons is a
+ * {@link LocatedCons} instead, which the lowering keeps through its rewrites so an
+ * uncaught condition can say where it happened ("Phase 4" there).
  */
 final class SchemeReader {
 
@@ -81,6 +85,13 @@ final class SchemeReader {
 
 	private final SourceProvenance.@Nullable Unit unit;
 
+	// The file every list's head cons is located in (LocatedCons), or null: a named
+	// file read with no compile-path scope open, i.e. the interpreter's.
+	private final @Nullable String runtimeFile;
+
+	// The offset each line starts at, built on the first located datum.
+	private int @Nullable [] lineStarts;
+
 	// Every recorded cons, always: a syntax error names its position on the interpreter
 	// too, where SourceProvenance records nothing.
 	private final Map<LispCons, Integer> offsets = new IdentityHashMap<>();
@@ -102,6 +113,7 @@ final class SchemeReader {
 		this.input = input;
 		this.file = file;
 		this.unit = SourceProvenance.isRecording() ? new SourceProvenance.Unit(file, input) : null;
+		this.runtimeFile = this.unit == null ? file : null;
 	}
 
 	/**
@@ -256,7 +268,7 @@ final class SchemeReader {
 		if (datum == CLOSE || datum == DOT) {
 			throw error("a datum must follow the abbreviation", start);
 		}
-		return recorded(new LispCons(new LispSymbol(operator), new LispCons(datum, LispNil.INSTANCE)), start);
+		return recorded(new LispSymbol(operator), new LispCons(datum, LispNil.INSTANCE), start);
 	}
 
 	private LispVal readList(int start) {
@@ -291,19 +303,44 @@ final class SchemeReader {
 			}
 			elements.add(datum);
 		}
-		LispVal list = tail;
-		for (int i = elements.size() - 1; i >= 0; i--) {
-			list = new LispCons(elements.get(i), list);
+		if (elements.isEmpty()) {
+			return tail;
 		}
-		return list instanceof LispCons cons ? recorded(cons, start) : list;
+		LispVal rest = tail;
+		for (int i = elements.size() - 1; i >= 1; i--) {
+			rest = new LispCons(elements.get(i), rest);
+		}
+		return recorded(elements.get(0), rest, start);
 	}
 
-	private LispCons recorded(LispCons cons, int start) {
-		this.offsets.put(cons, start);
+	// A list's head cons, recorded as starting at `start`: in the compile path's table,
+	// and for the interpreter built as a located cell.
+	private LispCons recorded(LispVal car, LispVal cdr, int start) {
+		LispCons head = this.runtimeFile != null ? new LocatedCons(car, cdr, this.runtimeFile, lineOf(start))
+				: new LispCons(car, cdr);
+		this.offsets.put(head, start);
 		if (this.unit != null) {
-			SourceProvenance.record(cons, this.unit, start);
+			SourceProvenance.record(head, this.unit, start);
 		}
-		return cons;
+		return head;
+	}
+
+	// The 1-based line an offset is on, through a line-start index built once per read.
+	private int lineOf(int offset) {
+		int[] starts = this.lineStarts;
+		if (starts == null) {
+			List<Integer> found = new ArrayList<>();
+			found.add(0);
+			for (int i = 0; i < this.input.length(); i++) {
+				if (this.input.charAt(i) == '\n') {
+					found.add(i + 1);
+				}
+			}
+			starts = found.stream().mapToInt(Integer::intValue).toArray();
+			this.lineStarts = starts;
+		}
+		int index = java.util.Arrays.binarySearch(starts, offset);
+		return (index >= 0 ? index : -index - 2) + 1;
 	}
 
 	private LispVal readHash(int start) {

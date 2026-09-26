@@ -1,5 +1,7 @@
 package am.ik.rontolisp.eval;
 
+import java.util.List;
+
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispVal;
 
@@ -18,6 +20,9 @@ public class LispEvalException extends RuntimeException {
 
 	/** The seeded condition class this error carries, or {@code null} for a plain one. */
 	private final @Nullable String conditionClassName;
+
+	/** Where this error has been while unwinding; built by the first frame it leaves. */
+	private transient @Nullable ConditionTrace trace;
 
 	/**
 	 * Create a new evaluation exception with the given message.
@@ -74,6 +79,32 @@ public class LispEvalException extends RuntimeException {
 	 */
 	public @Nullable String conditionClassName() {
 		return this.conditionClassName;
+	}
+
+	/**
+	 * Where this error has been while unwinding (see {@link ConditionTrace}), created on
+	 * first use. Frames on different threads (an async body, then its awaiter) reach it
+	 * one after the other, never at once: the await rethrows only after the body's thread
+	 * completed the future.
+	 * @return the trace
+	 */
+	synchronized ConditionTrace trace() {
+		ConditionTrace current = this.trace;
+		if (current == null) {
+			current = new ConditionTrace();
+			this.trace = current;
+		}
+		return current;
+	}
+
+	/**
+	 * The location lines an uncaught report prints under this error's report line --
+	 * where it was signaled, and every async boundary it crossed -- or none when nothing
+	 * is known.
+	 * @return the lines, without newlines
+	 */
+	public synchronized List<String> locationLines() {
+		return this.trace == null ? List.of() : this.trace.lines();
 	}
 
 }

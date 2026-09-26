@@ -28,6 +28,7 @@ import am.ik.rontolisp.LispTrees;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.LocatedCons;
 import am.ik.rontolisp.SourceLocation;
 import am.ik.rontolisp.SourceProvenance;
 
@@ -50,12 +51,23 @@ public final class LispReader {
 	private final @Nullable String file;
 
 	/**
-	 * The source unit every cons of this read is recorded against, or {@code null} when
-	 * the thread is not recording provenance (the interpreter, a runtime {@code read}).
-	 * Built once per read: recording is compile-path only, so a non-recording read never
-	 * even allocates it.
+	 * The source unit every cons of this read is recorded against in the compile path's
+	 * {@link SourceProvenance} table, or {@code null} when the thread has no recording
+	 * scope open (the interpreter, a runtime {@code read}). Built once per read, so a
+	 * non-recording read never even allocates it.
 	 */
 	private final SourceProvenance.@Nullable Unit unit;
+
+	/**
+	 * The origin file every datum's outermost cons is located in ({@link LocatedCons}),
+	 * or {@code null}: set for a provenance-recording read of a NAMED file on a thread
+	 * with no compile-path scope open -- the interpreter's entry file, a {@code load}, an
+	 * ASDF component. A runtime {@code read} of a string has no file and locates nothing.
+	 */
+	private final @Nullable String runtimeFile;
+
+	/** The offset each line starts at, built on the first located datum. */
+	private int @Nullable [] lineStarts;
 
 	private int pos;
 
@@ -67,6 +79,7 @@ public final class LispReader {
 		this.input = input;
 		this.file = file;
 		this.unit = recordProvenance && SourceProvenance.isRecording() ? new SourceProvenance.Unit(file, input) : null;
+		this.runtimeFile = recordProvenance && this.unit == null ? file : null;
 		this.pos = 0;
 	}
 
@@ -392,16 +405,18 @@ public final class LispReader {
 	}
 
 	/**
-	 * Reads one datum and, when this thread is recording provenance, records the cons it
-	 * produced against the offset the datum STARTS at. Only the outermost cons of a datum
-	 * is recorded here -- every nested one is produced by its own {@code readExpr} call,
-	 * so a list's elements each get their own position while the cells that merely chain
-	 * them share their element's line, which is where an error about that element points
-	 * anyway.
+	 * Reads one datum and, when this read records provenance, records the cons it
+	 * produced against the offset the datum STARTS at: in the compile path's
+	 * {@link #unit} table, or -- for the interpreter's {@link #runtimeFile} -- by
+	 * answering a {@link LocatedCons} copy of the outermost cell in its place. Only the
+	 * outermost cons of a datum is recorded here -- every nested one is produced by its
+	 * own {@code readExpr} call, so a list's elements each get their own position while
+	 * the cells that merely chain them share their element's line, which is where an
+	 * error about that element points anyway.
 	 * @return the datum
 	 */
 	private LispVal readExpr() {
-		if (this.unit == null) {
+		if (this.unit == null && this.runtimeFile == null) {
 			return readDatum();
 		}
 		int start = this.pos;
@@ -410,10 +425,51 @@ public final class LispReader {
 			// A datum that returns has consumed at least one token, so `start` indexes a
 			// real one; the end-of-input fallback only exists so a future caller cannot
 			// turn a diagnostic into an AIOOBE.
-			SourceProvenance.record(cons, this.unit,
-					start < this.offsets.length ? this.offsets[start] : this.input.length());
+			int offset = start < this.offsets.length ? this.offsets[start] : this.input.length();
+			if (this.unit != null) {
+				SourceProvenance.record(cons, this.unit, offset);
+			}
+			else if (!(cons instanceof LocatedCons) && !(this.tokens.get(start) instanceof Token.LabelRef)) {
+				// A #n# reference is a datum read ELSEWHERE (or #n='s placeholder, which
+				// is
+				// patched by identity), and a #n= datum was located by its own inner
+				// read.
+				datum = new LocatedCons(cons.car(), cons.cdr(), java.util.Objects.requireNonNull(this.runtimeFile),
+						lineOf(offset));
+			}
 		}
 		return datum;
+	}
+
+	/**
+	 * The 1-based line an offset is on, through a line-start index built once per read --
+	 * scanning from the start for each datum would make a read quadratic.
+	 */
+	private int lineOf(int offset) {
+		int[] starts = this.lineStarts;
+		if (starts == null) {
+			starts = lineStarts(this.input);
+			this.lineStarts = starts;
+		}
+		int index = java.util.Arrays.binarySearch(starts, offset);
+		return (index >= 0 ? index : -index - 2) + 1;
+	}
+
+	private static int[] lineStarts(String input) {
+		int count = 1;
+		for (int i = 0; i < input.length(); i++) {
+			if (input.charAt(i) == '\n') {
+				count++;
+			}
+		}
+		int[] starts = new int[count];
+		int line = 1;
+		for (int i = 0; i < input.length(); i++) {
+			if (input.charAt(i) == '\n') {
+				starts[line++] = i + 1;
+			}
+		}
+		return starts;
 	}
 
 	private LispVal readDatum() {

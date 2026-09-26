@@ -1658,9 +1658,10 @@ public final class RontoLispCli {
 	}
 
 	/**
-	 * The one line a failure prints. A condition the program signaled and nobody caught
-	 * gets the cross-backend {@link UncaughtReport} wording -- the same line the JVM and
-	 * wasm backends print for the same condition; anything else (a read error, a compile
+	 * What a failure prints. A condition the program signaled and nobody caught gets the
+	 * cross-backend {@link UncaughtReport} wording -- the same line the JVM and wasm
+	 * backends print for the same condition -- followed by the location lines naming
+	 * where it happened in the program's files; anything else (a read error, a compile
 	 * failure, a bad command line) is a rontolisp diagnostic and says {@code error:},
 	 * keeping whatever {@code file:line:column:} prefix the frontend already put on it.
 	 */
@@ -1669,7 +1670,15 @@ public final class RontoLispCli {
 		if (message == null || message.isEmpty()) {
 			message = ex.getClass().getName();
 		}
-		return ex instanceof LispEvalException ? UncaughtReport.line(message) : "error: " + message;
+		if (!(ex instanceof LispEvalException condition)) {
+			return "error: " + message;
+		}
+		// The report line, then where it happened (UncaughtReport's location lines).
+		StringBuilder report = new StringBuilder(UncaughtReport.line(message));
+		for (String location : condition.locationLines()) {
+			report.append(System.lineSeparator()).append(location);
+		}
+		return report.toString();
 	}
 
 	// A non-zero exit code has to go through System.exit -- returning from main is always

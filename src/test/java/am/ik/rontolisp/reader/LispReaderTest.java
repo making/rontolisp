@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.LocatedCons;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -1115,6 +1116,36 @@ class LispReaderTest {
 		assertThat(vector.data()[2]).isSameAs(vector);
 		// A label that stands for nothing but itself has no datum to record.
 		assertThatThrownBy(() -> LispReader.readFromString("#1=#1#")).isInstanceOf(LispReadException.class);
+	}
+
+	@Test
+	void aNamedFilesDatumsAreLocatedAndAStringsAreNot() {
+		// The interpreter's positions: each datum's OUTERMOST cons read from a named file
+		// is a LocatedCons carrying the line it starts on; its chain cells are not, and a
+		// runtime read of a string (no file) locates nothing.
+		List<LispVal> forms = LispReader.readAllFromString("(defun f (x)\n  (car x))\n\n(f '(1 2))\n",
+				Features.INTERPRETER, "app.lisp");
+		LocatedCons defun = (LocatedCons) forms.get(0);
+		assertThat(defun.file()).isEqualTo("app.lisp");
+		assertThat(defun.line()).isEqualTo(1);
+		LispCons body = (LispCons) ((LispCons) ((LispCons) defun.cdr()).cdr()).cdr();
+		assertThat(body).isNotInstanceOf(LocatedCons.class);
+		assertThat(((LocatedCons) body.car()).line()).isEqualTo(2);
+		assertThat(((LocatedCons) forms.get(1)).line()).isEqualTo(4);
+		assertThat(LispReader.readFromString("(car x)")).isNotInstanceOf(LocatedCons.class);
+	}
+
+	@Test
+	void locatingADatumKeepsEveryLabelReferenceToIt() {
+		// A located datum is a COPY of the cell the list reader built, so a #n# must end
+		// up at the copy: inside its own datum (a circle) and after it (sharing).
+		List<LispVal> forms = LispReader.readAllFromString("(#1=(17) #1#)\n#2=(A B . #2#)\n", Features.INTERPRETER,
+				"labels.lisp");
+		LispCons shared = (LispCons) forms.get(0);
+		assertThat(shared.car()).isInstanceOf(LocatedCons.class).isSameAs(((LispCons) shared.cdr()).car());
+		LispCons circular = (LispCons) forms.get(1);
+		assertThat(circular).isInstanceOf(LocatedCons.class);
+		assertThat(((LispCons) circular.cdr()).cdr()).isSameAs(circular);
 	}
 
 	@Test
