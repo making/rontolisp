@@ -2713,6 +2713,16 @@ public final class LispNames {
 	public static final String SYMBOL_IN_PACKAGE_INTERNAL = "%SYMBOL-IN-PACKAGE";
 
 	/**
+	 * The {@code (%find-package designator)} helper a compiled {@code find-package} with
+	 * a COMPUTED designator calls: the lookup in the package table baked from the
+	 * resolver's final registry (plus the runtime table when the program can create
+	 * packages). Injected by the backends after package resolution
+	 * ({@code LispMacroExpander.injectFindPackageHelper}), so the table is built once per
+	 * program instead of once per site.
+	 */
+	public static final String FIND_PACKAGE_INTERNAL = "%FIND-PACKAGE";
+
+	/**
 	 * Internal {@code (%open-or-nil path direction [element-type])}: {@code open} in the
 	 * positional shape, answering nil where {@code open} would fail. Only the compiled
 	 * backends' {@code open} lowering produces it

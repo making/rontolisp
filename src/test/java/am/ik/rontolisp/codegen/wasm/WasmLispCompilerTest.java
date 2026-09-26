@@ -1346,6 +1346,30 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void aComputedFindPackageSiteDoesNotCarryItsOwnCopyOfThePackageTable() {
+		// A computed find-package is one call to the %find-package helper the backend
+		// injects with the baked package table, not the table built at every site
+		// (~1.6 KB per site, ~2.3 KB with runtime packages, measured 2026-09-26).
+		assertThat(findPackageBytes(3, false) - findPackageBytes(2, false)).isLessThan(100);
+		assertThat(findPackageBytes(3, true) - findPackageBytes(2, true)).isLessThan(100);
+	}
+
+	private static int findPackageBytes(int sites, boolean runtimePackages) {
+		StringBuilder source = new StringBuilder("(defvar *p* :cl)\n");
+		if (runtimePackages) {
+			source.append("(defvar *q* (make-package \"FPB-RT\"))\n");
+		}
+		for (int k = 0; k < sites; k++) {
+			source.append("(print (find-package *p*))\n");
+		}
+		return WasmLispCompiler.builder()
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary
+				.process(LispReader.readAllFromString(source.toString()))).length;
+	}
+
+	@Test
 	void anElementAccessSiteDoesNotCarryItsOwnCopyOfTheSharedRuntime() {
 		// A byte budget, because nothing else notices: every arrangement of this code
 		// compiles and runs correctly, and the only difference is how many times the

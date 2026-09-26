@@ -839,6 +839,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// .kb/packages.md): injected after package resolution, from the resolver's
 		// final registry, only when the program can need it at run time.
 		program = LispMacroExpander.injectBakedPackageTable(program, packageResolver);
+		// The computed find-package lookup, once per program: its sites call it instead
+		// of building the baked table each (LispMacroExpander.injectFindPackageHelper).
+		program = LispMacroExpander.injectFindPackageHelper(program, packageResolver.runtimePackageTable(),
+				packageResolver.runtimePackagesMutable());
 		if (System.getProperty("rontolisp.debug.dump-program") != null) {
 			for (LispVal form : program) {
 				System.err.println(form.print());

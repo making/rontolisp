@@ -3209,6 +3209,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// .kb/packages.md): injected after package resolution, from the resolver's
 		// final registry, only when the program can need it at run time.
 		program = LispMacroExpander.injectBakedPackageTable(program, packageResolver);
+		// The computed find-package lookup, once per program: its sites call it instead
+		// of building the baked table each (LispMacroExpander.injectFindPackageHelper).
+		program = LispMacroExpander.injectFindPackageHelper(program, packageResolver.runtimePackageTable(),
+				packageResolver.runtimePackagesMutable());
 		// Whether any signal's message string is observable: the narrowed routing answer
 		// (a message is read only through a HELD condition), forced on with it under
 		// restart mode / --dynamic, and in EH mode by the landing pad -- a plain %error
