@@ -57,8 +57,21 @@ final class JvmArityOperators {
 	 * @return the shape
 	 */
 	int shape(int required, boolean variadic, @Nullable String functionName) {
+		return namedShape(required, variadic, BuiltinFunctionWrappers.arityOperator(functionName));
+	}
+
+	/**
+	 * The shape of a report that names {@code operator} whatever it is: the compiled
+	 * {@code eval}'s own count checks for the operators it evaluates inline and no
+	 * wrapper backs ({@code EVAL expects 1 argument, got 2}), which the interpreter names
+	 * as its built-ins.
+	 * @param required the required argument count
+	 * @param variadic whether more arguments are accepted
+	 * @param operator the operator to name, or {@code null} for {@code Function}
+	 * @return the shape
+	 */
+	int namedShape(int required, boolean variadic, @Nullable String operator) {
 		int shape = plainShape(required, variadic);
-		String operator = BuiltinFunctionWrappers.arityOperator(functionName);
 		if (operator == null || shape >= 1 << OPERATOR_SHIFT) {
 			return shape;
 		}

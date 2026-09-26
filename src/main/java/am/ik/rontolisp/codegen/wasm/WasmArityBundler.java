@@ -1,13 +1,7 @@
 package am.ik.rontolisp.codegen.wasm;
 
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
-import org.jspecify.annotations.Nullable;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
@@ -15,71 +9,75 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.wasm.Instruction;
+import am.ik.wasm.Type;
 
 /**
  * Rewrites fixed-arity {@code defun}s with more parameters than the WASM callable-type
  * limit ({@link WasmLispCompiler#MAX_CALLABLE_ARITY}) into the "bundle the extra
  * arguments into a list" shape the limit's error message suggests -- automatically, so
- * real-library code with wide helper signatures (e.g. split-sequence's 10-parameter
- * {@code split-list}) compiles without source changes. Raising the limit itself would
- * move indices in every module -- it is the origin {@code FUNC_DISPATCH_SPREAD} and every
- * later {@code FUNC_*} and type index are defined off -- so the transform stays at the
- * AST level:
+ * real-library code with wide helper signatures compiles without source changes. Raising
+ * the limit itself would move indices in every module -- it is the origin
+ * {@code FUNC_DISPATCH_SPREAD} and every later {@code FUNC_*} and type index are defined
+ * off -- so the transform stays at the AST level:
  *
  * <pre>
- * (defun f (p1 .. p10) body)          -> (defun f (p1 .. p6 %bundle)
- *                                          (let* ((p7 (nth 0 %bundle)) .. (p10 (nth 3 %bundle)))
- *                                            body))
- * (f a1 .. a10)                       -> (f a1 .. a6 (list a7 .. a10))
+ * (defun f (p1 .. p12) body)  -> (defun f (&amp;rest %bundle)
+ *                                  (let* ((p1 (progn (check %bundle) (nth 0 %bundle)))
+ *                                         (p2 (nth 1 %bundle)) .. (p12 (nth 11 %bundle)))
+ *                                    body))
  * </pre>
  *
- * Only DIRECT calls are rewritten (in Lisp-2 a head-position symbol is unambiguous), so a
- * first-class reference ({@code #'f}, {@code symbol-function}) to a bundled function is
- * rejected with a clear error -- the arity dispatchers only exist up to the limit.
- * Variadic ({@code &rest}) definitions past the limit keep the existing hard error, and a
- * {@code flet}/{@code labels} binding of the same name shadows the rewrite inside its
- * form.
+ * The bundle is a {@code &rest} list, so every caller packs it the way it packs any
+ * variadic callee's: a direct call, {@code #'f} through a per-arity dispatcher,
+ * {@code apply}, and a name the compiled {@code eval} resolves at run time, which reaches
+ * the SPREAD dispatcher. A bundle passed as one explicit list argument after the first
+ * nine used to serve direct calls only: {@code #'f} was refused and
+ * {@code (eval '(f ...))} trapped on the cast of an argument that was no list. With no
+ * required parameter left, the check is the only count judge, so every wrong count -- a
+ * direct call's included -- signals the interpreter's {@code program-error},
+ * {@code Function expects 12 arguments, got 13}; keeping the first nine as required
+ * parameters would have made a short call report {@code at least 9}. The price is one
+ * cons per argument per call, on a signature only a generated or unusually wide helper
+ * has. Variadic ({@code &rest}) definitions past the limit keep the existing hard error.
  */
 final class WasmArityBundler {
 
 	private static final String BUNDLE_VAR = "%arity-bundle";
 
+	/** The count check a rewritten defun opens with ({@link #compileCheck}). */
+	static final String CHECK = "%ARITY-BUNDLE-CHECK";
+
 	private WasmArityBundler() {
 	}
 
 	/**
-	 * Applies the transform: bundles every too-wide fixed-arity defun and rewrites its
-	 * direct call sites. Runs after lambda-list desugaring (so only the native "required
-	 * + &rest" shape appears) and before compilation.
+	 * Applies the transform to every too-wide fixed-arity top-level defun; its call sites
+	 * need no rewrite. Runs after lambda-list desugaring (so only the native "required +
+	 * &rest" shape appears) and before compilation.
 	 * @param program the top-level forms
 	 * @return the transformed program (the same list when nothing is too wide)
 	 */
 	static List<LispVal> bundle(List<LispVal> program) {
-		// name -> original parameter count of each too-wide fixed-arity defun.
-		Map<String, Integer> wide = new HashMap<>();
-		for (LispVal form : program) {
-			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+		List<LispVal> out = null;
+		for (int i = 0; i < program.size(); i++) {
+			if (program.get(i) instanceof LispCons cons && cons.car() instanceof LispSymbol op
 					&& LispNames.DEFUN.equals(op.name()) && cons.isProperList()) {
 				List<LispVal> parts = cons.toList();
-				if (parts.size() >= 3 && parts.get(1) instanceof LispSymbol name
-						&& (parts.get(2) instanceof LispCons || parts.get(2) instanceof LispNil)) {
-					List<LispVal> params = parts.get(2) instanceof LispCons paramsCons ? paramsCons.toList()
-							: List.of();
+				if (parts.size() >= 3 && parts.get(1) instanceof LispSymbol
+						&& parts.get(2) instanceof LispCons paramsCons) {
+					List<LispVal> params = paramsCons.toList();
 					if (params.size() > WasmLispCompiler.MAX_CALLABLE_ARITY
 							&& params.stream().allMatch(WasmArityBundler::isPlainParam)) {
-						wide.put(name.name(), params.size());
+						if (out == null) {
+							out = new ArrayList<>(program);
+						}
+						out.set(i, bundleDefun(parts));
 					}
 				}
 			}
 		}
-		if (wide.isEmpty()) {
-			return program;
-		}
-		List<LispVal> out = new ArrayList<>(program.size());
-		for (LispVal form : program) {
-			out.add(rewrite(form, wide));
-		}
-		return out;
+		return out == null ? program : out;
 	}
 
 	private static boolean isPlainParam(LispVal param) {
@@ -195,103 +193,70 @@ final class WasmArityBundler {
 		return LispCons.rebuiltList(cons, out);
 	}
 
-	private static LispVal rewrite(LispVal form, Map<String, Integer> wide) {
-		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
-			return form;
-		}
-		if (!(cons.car() instanceof LispSymbol op)) {
-			return rewriteElements(cons, cons.toList(), 0, wide);
-		}
-		String name = op.name();
-		if (LispNames.QUOTE.equals(name)) {
-			return form;
-		}
-		if (LispNames.DEFUN.equals(name)) {
-			List<LispVal> parts = cons.toList();
-			if (parts.size() >= 3 && parts.get(1) instanceof LispSymbol defName && wide.containsKey(defName.name())) {
-				return bundleDefun(parts, wide);
-			}
-			return rewriteElements(cons, parts, 3, wide);
-		}
-		if ((LispNames.FLET.equals(name) || LispNames.LABELS.equals(name)) && cons.toList().size() >= 2) {
-			// A local function shadows a bundled global of the same name for the
-			// whole form; the shadowed names' call sites must stay untouched there.
-			List<LispVal> parts = cons.toList();
-			Set<String> shadowed = new HashSet<>();
-			if (parts.get(1) instanceof LispCons defs) {
-				for (LispVal def : defs.toList()) {
-					if (def instanceof LispCons defCons && defCons.car() instanceof LispSymbol localName) {
-						shadowed.add(localName.name());
-					}
-				}
-			}
-			if (shadowed.stream().anyMatch(wide::containsKey)) {
-				Map<String, Integer> visible = new HashMap<>(wide);
-				visible.keySet().removeAll(shadowed);
-				return visible.isEmpty() ? form : rewrite(form, visible);
-			}
-			return rewriteElements(cons, parts, 1, wide);
-		}
-		if (LispNames.FUNCTION.equals(name) || LispNames.SYMBOL_FUNCTION.equals(name)) {
-			List<LispVal> parts = cons.toList();
-			LispVal target = parts.size() == 2 ? parts.get(1) : LispNil.INSTANCE;
-			String referenced = target instanceof LispSymbol sym ? sym.name() : quotedName(target);
-			if (referenced != null && wide.containsKey(referenced)) {
-				throw new UnsupportedOperationException("Cannot take a function value of '" + referenced + "': its "
-						+ wide.get(referenced) + "-parameter signature exceeds the WASM limit of "
-						+ WasmLispCompiler.MAX_CALLABLE_ARITY + " and was bundled, which only direct calls support");
-			}
-			return rewriteElements(cons, parts, 1, wide);
-		}
-		Integer arity = wide.get(name);
-		List<LispVal> parts = cons.toList();
-		if (arity != null && parts.size() == arity + 1) {
-			// (f a1 .. aN) -> (f a1 .. a6 (list a7 .. aN)), arguments rewritten too.
-			List<LispVal> out = new ArrayList<>();
-			out.add(op);
-			for (int i = 1; i <= WasmLispCompiler.MAX_CALLABLE_ARITY - 1; i++) {
-				out.add(rewrite(parts.get(i), wide));
-			}
-			List<LispVal> bundleParts = new ArrayList<>();
-			bundleParts.add(new LispSymbol(LispNames.LIST));
-			for (int i = WasmLispCompiler.MAX_CALLABLE_ARITY; i < parts.size(); i++) {
-				bundleParts.add(rewrite(parts.get(i), wide));
-			}
-			out.add(listToCons(bundleParts));
-			return listToCons(out);
-		}
-		return rewriteElements(cons, parts, 1, wide);
-	}
-
-	private static LispVal bundleDefun(List<LispVal> parts, Map<String, Integer> wide) {
+	private static LispVal bundleDefun(List<LispVal> parts) {
 		List<LispVal> params = ((LispCons) parts.get(2)).toList();
-		int keep = WasmLispCompiler.MAX_CALLABLE_ARITY - 1;
-		List<LispVal> newParams = new ArrayList<>(params.subList(0, keep));
 		LispSymbol bundle = new LispSymbol(BUNDLE_VAR);
-		newParams.add(bundle);
+		List<LispVal> newParams = List.of(new LispSymbol(LispNames.LAMBDA_REST), bundle);
 		List<LispVal> letBindings = new ArrayList<>();
-		for (int i = keep; i < params.size(); i++) {
-			LispVal nth = listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(i - keep), bundle));
+		for (int i = 0; i < params.size(); i++) {
+			LispVal nth = listToCons(List.of(new LispSymbol(LispNames.NTH), new LispInteger(i), bundle));
+			if (i == 0) {
+				nth = listToCons(List.of(new LispSymbol(LispNames.PROGN), bundleCheck(bundle, params.size()), nth));
+			}
 			letBindings.add(listToCons(List.of(params.get(i), nth)));
 		}
 		List<LispVal> letParts = new ArrayList<>();
 		letParts.add(new LispSymbol(LispNames.LET_STAR));
 		letParts.add(listToCons(letBindings));
-		for (int i = 3; i < parts.size(); i++) {
-			letParts.add(rewrite(parts.get(i), wide));
-		}
+		letParts.addAll(parts.subList(3, parts.size()));
 		return listToCons(List.of(parts.get(0), parts.get(1), listToCons(newParams), listToCons(letParts)));
 	}
 
-	// Identity-preserving (LispCons.rebuilt): a form with no bundled call in it is
-	// handed back as it came in, so its SourceProvenance position survives the pass.
-	private static LispVal rewriteElements(LispCons original, List<LispVal> parts, int from,
-			Map<String, Integer> wide) {
-		List<LispVal> out = new ArrayList<>(parts.size());
-		for (int i = 0; i < parts.size(); i++) {
-			out.add(i < from ? parts.get(i) : rewrite(parts.get(i), wide));
+	/**
+	 * {@code (%arity-bundle-check bundle n)}: the count check a fixed-arity callee's
+	 * dispatch would make ({@link #compileCheck}).
+	 */
+	private static LispVal bundleCheck(LispSymbol bundle, int arity) {
+		return listToCons(List.of(new LispSymbol(CHECK), bundle, new LispInteger(arity)));
+	}
+
+	/**
+	 * Compiles {@code (%arity-bundle-check bundle n)} to nil, after measuring the list:
+	 * where the module reports a wrong count ({@code _arity_chk}, EH mode behind a
+	 * handler landing pad) it throws the interpreter's {@code program-error},
+	 * {@code Function expects n arguments, got m}, through the helper every other count
+	 * report uses; elsewhere a wrong count traps, as a dispatcher's no-match arm does
+	 * there. A Lisp-level {@code (error 'program-error ...)} would have pulled the
+	 * instance machinery into every module with a wide defun, and could not be compiled
+	 * at all where the instance gate had already closed.
+	 * @param cons the check form
+	 * @param ctx the compilation context
+	 */
+	static void compileCheck(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> parts = cons.toList();
+		int arity = (int) ((LispInteger) parts.get(2)).value();
+		if (ctx.arityChkFuncIndex >= 0) {
+			WasmExprCompiler.compileExpr(parts.get(1), ctx);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(WasmRuntimeBuilder.arityShape(arity, false, -1));
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(ctx.arityChkFuncIndex);
+			ctx.writer.write(Instruction.DROP);
 		}
-		return LispCons.rebuiltList(original, out);
+		else {
+			WasmExprCompiler.compileExpr(listToCons(List.of(new LispSymbol(LispNames.LENGTH), parts.get(1))), ctx);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(Type.I31.code());
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(arity);
+			ctx.writer.write(Instruction.I32_NE);
+			ctx.writer.write(Instruction.IF, 0x40);
+			ctx.writer.write(Instruction.UNREACHABLE);
+			ctx.writer.write(Instruction.END);
+		}
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
 	}
 
 	private static LispVal listToCons(List<LispVal> items) {
@@ -300,15 +265,6 @@ final class WasmArityBundler {
 			result = new LispCons(items.get(i), result);
 		}
 		return result;
-	}
-
-	/** The symbol name inside a {@code (quote name)} designator, or null. */
-	@Nullable private static String quotedName(LispVal form) {
-		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name())
-				&& cons.cdr() instanceof LispCons datumCell && datumCell.car() instanceof LispSymbol datum) {
-			return datum.name();
-		}
-		return null;
 	}
 
 }

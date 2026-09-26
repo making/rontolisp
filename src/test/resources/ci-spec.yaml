@@ -18610,6 +18610,42 @@ cases:
       (10 (3 12))
       "APPLY expects at least 2 arguments, got 1"
 
+  # The operators the compiled eval used to evaluate inline (.kb/eval-runtime.md,
+  # "Argument counts"): funcall and the arithmetic arms take only their own shape and
+  # hand any other to the registered wrapper, mapcar/mapc/reduce and the list accessors
+  # have no arm left, eval counts itself, a defun of eight or more parameters answers
+  # through the registry (on wasm a rest-bundled one), and the min/max/-// wrappers
+  # require their first argument.
+  - name: eval-inline-operators-check-their-argument-count
+    source: |
+      (defun ci-ev-wide (a b c d e f g h i j k) (list a k))
+      (print (handler-case (eval '(funcall)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(mapcar #'car)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(first 1 2)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(nth 1)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(rest)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(reduce #'+)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(-)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(eval 1 2)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (eval '(ci-ev-wide 1 2)) (program-error (c) (princ-to-string c))))
+      (print (handler-case (funcall #'max) (program-error (c) (princ-to-string c))))
+      (print (list (eval '(mapcar #'+ '(1 2) '(10 20))) (eval '(first nil)) (eval '(rest nil)) (eval '(+)) (eval '(*))
+                   (eval '(reduce #'list '(1 2 3) :from-end t)) (eval '(reduce #'+ nil))
+                   (eval '(ci-ev-wide 1 2 3 4 5 6 7 8 9 10 11)) (funcall #'ci-ev-wide 1 2 3 4 5 6 7 8 9 10 11)
+                   (funcall #'reduce #'+ '(1 2 3) :initial-value 10 :from-end t)))
+    expected: |
+      "FUNCALL expects at least 1 argument, got 0"
+      "MAPCAR expects at least 2 arguments, got 1"
+      "FIRST expects 1 argument, got 2"
+      "NTH expects 2 arguments, got 1"
+      "REST expects 1 argument, got 0"
+      "REDUCE expects at least 2 arguments, got 1"
+      "- expects at least 1 argument, got 0"
+      "EVAL expects 1 argument, got 2"
+      "Function expects 11 arguments, got 2"
+      "MAX expects at least 1 argument, got 0"
+      ((11 22) NIL NIL 0 1 (1 (2 3)) 0 (1 11) (1 11) 16)
+
   # Applying a value that names no function is the interpreter's condition on every
   # backend (.kb/error-handling.md): a type-error "Not a function: <prin1>" for a
   # non-designator, an undefined-function for a symbol -- NIL included -- no function

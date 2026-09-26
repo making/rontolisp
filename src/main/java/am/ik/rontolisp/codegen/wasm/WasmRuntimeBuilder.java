@@ -2358,12 +2358,20 @@ final class WasmRuntimeBuilder {
 		/** The funcIds whose report names an operator, and the operator each names. */
 		private final SortedMap<Integer, String> namedFuncIds;
 
+		/**
+		 * The operators a report names with no callee behind them (the eval runtime's own
+		 * count checks), by the id past every funcId above that each was given. Only
+		 * {@code _arity_opening} reads them: {@link #names} stays false for these ids, so
+		 * no dispatcher names a callee by one.
+		 */
+		private final SortedMap<Integer, String> unbackedOperators;
+
 		/** {@code _arity_opening}'s module index, or -1 when the module has none. */
 		private final int openingIndex;
 
 		ArityReport(WasmLispCompiler.StringTable stringTable, int layoutAddress, int instanceTypeIndex,
 				int slotCapacity, int formatControlSlot, boolean identityHash, SortedMap<Integer, String> namedFuncIds,
-				int openingIndex) {
+				SortedMap<Integer, String> unbackedOperators, int openingIndex) {
 			this.stringTable = stringTable;
 			this.layoutAddress = layoutAddress;
 			this.instanceTypeIndex = instanceTypeIndex;
@@ -2371,12 +2379,13 @@ final class WasmRuntimeBuilder {
 			this.formatControlSlot = formatControlSlot;
 			this.identityHash = identityHash;
 			this.namedFuncIds = openingIndex >= 0 ? namedFuncIds : new TreeMap<>();
+			this.unbackedOperators = openingIndex >= 0 ? unbackedOperators : new TreeMap<>();
 			this.openingIndex = openingIndex;
 		}
 
 		/** Whether a shape may carry a funcId the report names an operator for. */
 		boolean namesOperators() {
-			return !this.namedFuncIds.isEmpty();
+			return !this.namedFuncIds.isEmpty() || !this.unbackedOperators.isEmpty();
 		}
 
 		/** Whether the report names the operator of this callee. */
@@ -2925,7 +2934,9 @@ final class WasmRuntimeBuilder {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // 0 locals
-		List<Map.Entry<Integer, String>> ops = new ArrayList<>(report.namedFuncIds.entrySet());
+		SortedMap<Integer, String> opening = new TreeMap<>(report.namedFuncIds);
+		opening.putAll(report.unbackedOperators);
+		List<Map.Entry<Integer, String>> ops = new ArrayList<>(opening.entrySet());
 		int n = ops.size();
 		int funcIdLocal = 1;
 		w.write(Instruction.BLOCK);

@@ -1650,7 +1650,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.LOAD))) {
 			wrapperExcludes.add(LispNames.READ_FROM_STRING);
 		}
-		if (!usesFuncallValue) {
+		// With the eval runtime on, a runtime funcall designator -- (eval '(funcall)), a
+		// read or interned FUNCALL -- resolves through _lookup like any wrapper name, and
+		// the _apply its body calls is there.
+		if (!usesFuncallValue && !usesEval) {
 			wrapperExcludes.add(LispNames.FUNCALL);
 		}
 		// The map*/every/some family, gated as a whole rather than on each name: with
