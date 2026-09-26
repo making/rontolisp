@@ -1039,10 +1039,20 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
 | `(setf (char s 0) 5)`, `(setf (aref s 0) 5)` (`s` a string) | `(SETF CHAR):` / `(SETF AREF): ... CHARACTER` |
 | `(row-major-aref v nil)`, `(setf (row-major-aref v nil) 0)` | `ROW-MAJOR-AREF:` / `(SETF ROW-MAJOR-AREF): ... INTEGER` |
 | `(point-x 42)`, `(setf (point-x 42) 0)`, `(copy-point 42)` (a `defstruct`'s) | `POINT-X:` / `(SETF POINT-X):` / `COPY-POINT: ... POINT` -- generated code, not this table: [defstruct.md](defstruct.md) |
+| `(copy-list 5)` | `COPY-LIST: ... LIST` |
 
+- **`copy-list` of a non-list** (2026-09-26): used to signal a bare `type-error` whose
+  `datum`/`expected-type` answered nothing on the interpreter (a raw
+  `LispEvalException.ofClass`) and a `simple-error` on the compiled backends (a
+  message-only `(error "The value ~s is not of type LIST" x)` inside
+  `%copy-list-runtime`, kept instance-free by never naming a condition class). Now
+  `COPY-LIST` is FUNNEL-TYPED like `last`/`append`/the rest of the list consumers: the
+  interpreter's built-in goes through `Environment.requireListArgument`, and
+  `%copy-list-runtime`'s non-list branch is `(%check-list x 'copy-list)` -- the same
+  shared, instance-free funnel, so the fix costs nothing beyond one more table row.
 - **FUNNEL-TYPED operators** (`OperandTypes.FUNNEL_TYPE`: `CAR`, `CDR`, `NTHCDR`, `ENDP`, `AREF`,
   `(SETF AREF)`, `CHAR`, `SCHAR`, `(SETF CHAR)`, `(SETF SCHAR)`, `ROW-MAJOR-AREF`,
-  `(SETF ROW-MAJOR-AREF)`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
+  `(SETF ROW-MAJOR-AREF)`, `COPY-LIST`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
   (new kinds `LIST`, `RATIONAL`, `STRING`, `CHARACTER`) -- except that a to-double funnel (`NUMBER`) there is a packed float
   store, which takes any real: `REAL`. A numeric operator keeps its one fixed type. `%aset` reports
   as `(SETF AREF)`, `%row-major-aset` as `(SETF ROW-MAJOR-AREF)`, `nth` as `NTHCDR`, `svref` as `AREF`, `first`/`rest` as `CAR`/`CDR`

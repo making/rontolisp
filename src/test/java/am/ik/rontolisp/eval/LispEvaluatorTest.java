@@ -6678,7 +6678,15 @@ class LispEvaluatorTest {
 		assertThat(eval("(copy-list '(1 2 . 3))").print()).isEqualTo("(1 2 . 3)");
 		assertThat(eval("(let* ((a (list 1 2)) (b (copy-list a))) (list b (eq a b) (eq (cdr a) (cdr b))))").print())
 			.isEqualTo("((1 2) NIL NIL)");
-		assertThat(eval("(handler-case (copy-list 5) (type-error () :type-error))").print()).isEqualTo(":TYPE-ERROR");
+		// A non-list names COPY-LIST as the other list operators name themselves
+		// (compiler/OperandTypes): a catchable type-error whose datum and expected-type
+		// answer the operand and LIST, not a bare type-error whose slots answer nothing.
+		assertThat(evalMulti("""
+				(defun ci-cpl-id (x) x)
+				(handler-case (copy-list (ci-cpl-id 5))
+				  (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				  (error (e) (list :not-a-type-error (princ-to-string e))))
+				""").print()).isEqualTo("(\"COPY-LIST: The value 5 is not of type LIST\" 5 LIST)");
 	}
 
 	@Test
@@ -19106,6 +19114,8 @@ class LispEvaluatorTest {
 				(print (te (lambda () (append *te-five* nil))))
 				(print (te (lambda () (append *te-dotted* '(4)))))
 				(print (te (lambda () (funcall #'append *te-five* nil))))
+				(print (te (lambda () (copy-list *te-five*))))
+				(print (te (lambda () (funcall #'copy-list *te-five*))))
 				(print (te (lambda () (member 1 *te-five*))))
 				(print (te (lambda () (member 9 *te-dotted*))))
 				(print (te (lambda () (funcall #'member 1 *te-five*))))
@@ -19142,6 +19152,8 @@ class LispEvaluatorTest {
 				("APPEND: The value 5 is not of type LIST" 5 LIST)
 				("APPEND: The value 3 is not of type LIST" 3 LIST)
 				("APPEND: The value 5 is not of type LIST" 5 LIST)
+				("COPY-LIST: The value 5 is not of type LIST" 5 LIST)
+				("COPY-LIST: The value 5 is not of type LIST" 5 LIST)
 				("MEMBER: The value 5 is not of type LIST" 5 LIST)
 				("MEMBER: The value 3 is not of type LIST" 3 LIST)
 				("MEMBER: The value 5 is not of type LIST" 5 LIST)
