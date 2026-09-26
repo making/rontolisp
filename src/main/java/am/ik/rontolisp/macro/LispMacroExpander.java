@@ -4844,11 +4844,15 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands (reverse seq) into a reduce-based reversal wrapped in the string dispatch:
-	 * a string reverses as a list of its characters and is coerced back to a string.
+	 * Expands (reverse seq) into a consing walk wrapped in the string dispatch: a string
+	 * reverses as a list of its characters and is coerced back to a string. The walk ends
+	 * at the first atom, which must be nil: anything else -- a non-sequence, a dotted
+	 * list's tail -- is {@code REVERSE}'s type-error.
 	 *
 	 * <pre>
-	 * (reverse lst) -> (reduce (lambda (__acc __x) (cons __x __acc)) lst :initial-value nil)
+	 * (reverse lst) -> (do ((__reverse_acc nil (cons (car __reverse_cur) __reverse_acc))
+	 *                       (__reverse_cur lst (cdr __reverse_cur)))
+	 *                      ((atom __reverse_cur) (%check-list __reverse_cur 'reverse) __reverse_acc))
 	 * </pre>
 	 * @param cons the reverse expression
 	 * @return the expanded expression
@@ -4868,11 +4872,16 @@ public final class LispMacroExpander {
 	public static LispVal expandReverse(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		LispSymbol acc = new LispSymbol("__reverse_acc");
-		LispSymbol x = new LispSymbol("__reverse_x");
-		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(acc, x)),
-				listToCons(List.of(new LispSymbol(LispNames.CONS), x, acc))));
-		return seqResultDispatchForm(parts.get(1), lst -> listToCons(List.of(new LispSymbol(LispNames.REDUCE), lambda,
-				lst, new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), LispNil.INSTANCE)), arraysExist, false);
+		LispSymbol cur = new LispSymbol("__reverse_cur");
+		return seqResultDispatchForm(parts.get(1), lst -> {
+			LispVal bindings = listToCons(List.of(
+					listToCons(List.of(acc, LispNil.INSTANCE,
+							listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, cur), acc)))),
+					listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
+			LispVal endClause = listToCons(
+					List.of(callOf(LispNames.ATOM, cur), checkListOf(cur, LispNames.REVERSE), acc));
+			return expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), bindings, endClause)));
+		}, arraysExist, false);
 	}
 
 	/**
@@ -4899,13 +4908,13 @@ public final class LispMacroExpander {
 		LispSymbol item = new LispSymbol("__member_item");
 		LispSymbol cur = new LispSymbol("__member_cur");
 		// (do ((__member_item item) (__member_cur lst (cdr __member_cur)))
-		// ((atom __member_cur) nil)
+		// ((atom __member_cur) (%check-list __member_cur 'member))
 		// (if (eql __member_item (car __member_cur)) (return __member_cur)))
 		// With :test fn, the match becomes (funcall fn __member_item <elem>); with :key
 		// fn, <elem> becomes (funcall fn (car __member_cur)).
 		LispVal bindings = listToCons(List.of(listToCons(List.of(item, parts.get(1))),
 				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal endClause = listScanEnd(cur, parts.get(2), LispNames.MEMBER);
 		LispVal element = keyedForm(keyForm, callOf(LispNames.CAR, cur));
 		LispVal match = testMatchForm(testForm, item, element);
 		LispVal body = makeIf(match, makeReturn(cur), LispNil.INSTANCE);
@@ -6536,12 +6545,12 @@ public final class LispMacroExpander {
 		LispSymbol cur = new LispSymbol("__assoc_cur");
 		LispVal pair = callOf(LispNames.CAR, cur);
 		// (do ((__assoc_key key) (__assoc_cur alist (cdr __assoc_cur)))
-		// ((atom __assoc_cur) nil)
+		// ((atom __assoc_cur) (%check-list __assoc_cur 'assoc))
 		// (if (and (consp (car __assoc_cur)) (eql __assoc_key (car (car __assoc_cur))))
 		// (return (car __assoc_cur))))
 		LispVal bindings = listToCons(List.of(listToCons(List.of(key, parts.get(1))),
 				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal endClause = listScanEnd(cur, parts.get(2), LispNames.ASSOC);
 		LispVal comparison = testMatchForm(testForm, key, keyedForm(keyForm, callOf(LispNames.CAR, pair)));
 		LispVal match = listToCons(List.of(new LispSymbol(LispNames.AND),
 				listToCons(List.of(new LispSymbol(LispNames.CONSP), pair)), comparison));
@@ -6571,13 +6580,13 @@ public final class LispMacroExpander {
 		LispSymbol pred = new LispSymbol("__memberif_pred");
 		LispSymbol cur = new LispSymbol("__memberif_cur");
 		// (do ((__memberif_pred pred) (__memberif_cur lst (cdr __memberif_cur)))
-		// ((atom __memberif_cur) nil)
+		// ((atom __memberif_cur) (%check-list __memberif_cur 'member-if))
 		// (if (funcall __memberif_pred (car __memberif_cur)) (return __memberif_cur)
 		// nil))
 		// With :key fn, the tested value becomes (funcall fn (car __memberif_cur)).
 		LispVal bindings = listToCons(List.of(listToCons(List.of(pred, parts.get(1))),
 				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal endClause = listScanEnd(cur, parts.get(2), LispNames.MEMBER_IF);
 		LispVal test = listToCons(
 				List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, callOf(LispNames.CAR, cur))));
 		LispVal body = makeIf(test, makeReturn(cur), LispNil.INSTANCE);
@@ -6605,13 +6614,13 @@ public final class LispMacroExpander {
 		LispSymbol cur = new LispSymbol("__associf_cur");
 		LispVal pair = callOf(LispNames.CAR, cur);
 		// (do ((__associf_pred pred) (__associf_cur alist (cdr __associf_cur)))
-		// ((atom __associf_cur) nil)
+		// ((atom __associf_cur) (%check-list __associf_cur 'assoc-if))
 		// (if (and (consp (car __associf_cur))
 		// (funcall __associf_pred (car (car __associf_cur))))
 		// (return (car __associf_cur))))
 		LispVal bindings = listToCons(List.of(listToCons(List.of(pred, parts.get(1))),
 				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal endClause = listScanEnd(cur, parts.get(2), LispNames.ASSOC_IF);
 		LispVal match = listToCons(List.of(new LispSymbol(LispNames.AND),
 				listToCons(List.of(new LispSymbol(LispNames.CONSP), pair)), listToCons(List
 					.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, callOf(LispNames.CAR, pair))))));
@@ -6735,13 +6744,13 @@ public final class LispMacroExpander {
 		LispSymbol cur = new LispSymbol("__rassocif_cur");
 		LispVal pair = callOf(LispNames.CAR, cur);
 		// (do ((__rassocif_pred pred) (__rassocif_cur alist (cdr __rassocif_cur)))
-		// ((atom __rassocif_cur) nil)
+		// ((atom __rassocif_cur) (%check-list __rassocif_cur 'rassoc-if))
 		// (if (and (consp (car __rassocif_cur))
 		// (funcall __rassocif_pred (cdr (car __rassocif_cur))))
 		// (return (car __rassocif_cur))))
 		LispVal bindings = listToCons(List.of(listToCons(List.of(pred, parts.get(1))),
 				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal endClause = listScanEnd(cur, parts.get(2), LispNames.RASSOC_IF);
 		LispVal match = listToCons(List.of(new LispSymbol(LispNames.AND),
 				listToCons(List.of(new LispSymbol(LispNames.CONSP), pair)), listToCons(List
 					.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, callOf(LispNames.CDR, pair))))));
@@ -7114,7 +7123,8 @@ public final class LispMacroExpander {
 		if (parts.size() < 2 || isSeqDispatchVar(parts.get(1))) {
 			return null;
 		}
-		return seqResultDispatchForm(parts.get(1), LispMacroExpander::nreverseListForm, arraysExist, true);
+		return seqResultDispatchForm(parts.get(1), list -> nreverseListForm(list, LispNames.NREVERSE), arraysExist,
+				true);
 	}
 
 	/**
@@ -7127,6 +7137,19 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	private static LispVal nreverseListForm(LispVal list) {
+		return nreverseListForm(list, null);
+	}
+
+	/**
+	 * {@link #nreverseListForm(LispVal)}, checking the walk's end under {@code operator}
+	 * when one is given: an atom other than nil there -- a non-sequence, a dotted list's
+	 * tail -- is its type-error. The internal reversals of a list the expansion built
+	 * itself pass none.
+	 * @param list the list form to reverse
+	 * @param operator the operator a report names, or null for no check
+	 * @return the expanded expression
+	 */
+	private static LispVal nreverseListForm(LispVal list, @Nullable String operator) {
 		LispSymbol prev = new LispSymbol("__nrev_prev");
 		LispSymbol cur = new LispSymbol("__nrev_cur");
 		LispSymbol next = new LispSymbol("__nrev_next");
@@ -7146,6 +7169,10 @@ public final class LispMacroExpander {
 				List.of(new LispSymbol(LispNames.WHILE), whileTest, saveNext, relink, advancePrev, advanceCur));
 		LispVal bindings = listToCons(List.of(listToCons(List.of(prev, LispNil.INSTANCE)),
 				listToCons(List.of(cur, list)), listToCons(List.of(next, LispNil.INSTANCE))));
+		if (operator != null) {
+			return listToCons(
+					List.of(new LispSymbol(LispNames.LET), bindings, whileExpr, checkListOf(cur, operator), prev));
+		}
 		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, whileExpr, prev));
 	}
 
@@ -15436,6 +15463,31 @@ public final class LispMacroExpander {
 	static LispVal checkListOf(LispVal form, String operator) {
 		return listToCons(List.of(new LispSymbol(LispNames.CHECK_LIST_INTERNAL), form,
 				callOf(LispNames.QUOTE, new LispSymbol(operator))));
+	}
+
+	/**
+	 * The end clause of a {@code do} scan over a list argument, {@code ((atom cur) END)}:
+	 * the walk stops at the first atom, which must be nil -- a list that is no list, or a
+	 * dotted one, is the operator's type-error ({@link #checkListOf}), and nil answers
+	 * nil. A literal proper list can end nowhere else, so its scan keeps a bare nil.
+	 * @param cur the scan's cursor
+	 * @param listForm the list argument's form
+	 * @param operator the operator the report names
+	 * @return the end clause
+	 */
+	static LispVal listScanEnd(LispSymbol cur, LispVal listForm, String operator) {
+		LispVal end = isLiteralProperList(listForm) ? LispNil.INSTANCE : checkListOf(cur, operator);
+		return listToCons(List.of(callOf(LispNames.ATOM, cur), end));
+	}
+
+	/** Whether a form is nil or a quoted proper list. */
+	private static boolean isLiteralProperList(LispVal form) {
+		if (form instanceof LispNil) {
+			return true;
+		}
+		return form instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quoted.cdr() instanceof LispCons rest
+				&& (rest.car() instanceof LispNil || rest.car() instanceof LispCons list && list.isProperList());
 	}
 
 	/**
@@ -29165,7 +29217,7 @@ public final class LispMacroExpander {
 		LispVal pair = callOf(LispNames.CAR, cur);
 		LispVal bindings = listToCons(List.of(listToCons(List.of(key, parts.get(1))),
 				listToCons(List.of(cur, parts.get(2), callOf(LispNames.CDR, cur)))));
-		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), LispNil.INSTANCE));
+		LispVal endClause = listScanEnd(cur, parts.get(2), LispNames.RASSOC);
 		LispVal comparison = testMatchForm(testForm, key, keyedForm(keyForm, callOf(LispNames.CDR, pair)));
 		LispVal match = listToCons(List.of(new LispSymbol(LispNames.AND),
 				listToCons(List.of(new LispSymbol(LispNames.CONSP), pair)), comparison));
@@ -29307,11 +29359,11 @@ public final class LispMacroExpander {
 	 *
 	 * <pre>
 	 * (let ((#fn F) (#l0 L0) (#l1 L1))            ; left-to-right: function, then lists
-	 *   (if (listp #l0) nil (error ...))          ; nil is a valid empty list
-	 *   (if (listp #l1) nil (error ...))
 	 *   (do ((#acc nil)                            ; COLLECT / CONCATENATE only
 	 *        (#c0 #l0 (cdr #c0)) (#c1 #l1 (cdr #c1)))
-	 *       ((or (atom #c0) (atom #c1)) RESULT)     ; shortest-list termination
+	 *       ((or (atom #c0) (atom #c1))             ; shortest-list termination
+	 *        (%check-list #c0 'op) (%check-list #c1 'op) ; each cursor a list: nil
+	 *        RESULT)                                ; ends a list, an atom is no list
 	 *     BODY))
 	 * </pre>
 	 *
@@ -29372,11 +29424,18 @@ public final class LispMacroExpander {
 			endTest = listToCons(orParts);
 		}
 		LispVal call = listToCons(callArgs);
-		LispVal result = switch (accumulation) {
+		// The walk's end: every cursor is a list, a dotted tail -- or an argument that
+		// was no list at all, which ends the walk at once -- being the operator's
+		// type-error.
+		List<LispVal> result = new java.util.ArrayList<>();
+		for (LispSymbol cursor : cursors) {
+			result.add(checkListOf(cursor, name));
+		}
+		result.add(switch (accumulation) {
 			case COLLECT -> nreverseListForm(acc);
 			case CONCATENATE -> acc;
 			case DISCARD -> lists.get(0);
-		};
+		});
 		LispVal body = switch (accumulation) {
 			case COLLECT -> listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 					listToCons(List.of(new LispSymbol(LispNames.CONS), call, acc))));
@@ -29385,9 +29444,8 @@ public final class LispMacroExpander {
 			// (quadratic) through a call that itself recursed per element (linear
 			// stack depth), so a long walk was a slow crash rather than a slow call
 			// (.todo/749). The result is fully fresh, matching the first-class
-			// path's right fold piece for piece; a non-list piece signals through
-			// the family's guard idiom where the fold silently spliced it as a
-			// dotted tail.
+			// path's right fold piece for piece; a non-list piece is the operator's
+			// type-error where the fold silently spliced it as a dotted tail.
 			case CONCATENATE -> listToCons(List.of(new LispSymbol(LispNames.PROGN),
 					listToCons(List.of(new LispSymbol(LispNames.SETQ), piece, call)),
 					makeIf(listToCons(List.of(new LispSymbol(LispNames.CONSP), piece)), listToCons(List.of(
@@ -29398,12 +29456,15 @@ public final class LispMacroExpander {
 									listToCons(List.of(new LispSymbol(LispNames.SETQ), acc, copy))),
 							listToCons(List.of(new LispSymbol(LispNames.SETQ), tail,
 									listToCons(List.of(new LispSymbol(LispNames.LAST), copy)))))),
-							listToCons(List.of(new LispSymbol(LispNames.IF), piece, mapNotAListError(name, piece))))));
+							checkListOf(piece, name))));
 			case DISCARD -> call;
 		};
-		LispVal loop = expandDo((LispCons) listToCons(List.of(new LispSymbol(LispNames.DO), listToCons(bindings),
-				listToCons(List.of(endTest, result)), body)));
-		return wrapMapListGuard(name, fn, parts.get(1), lists, parts.subList(2, parts.size()), loop);
+		List<LispVal> endClause = new java.util.ArrayList<>();
+		endClause.add(endTest);
+		endClause.addAll(result);
+		LispVal loop = expandDo((LispCons) listToCons(
+				List.of(new LispSymbol(LispNames.DO), listToCons(bindings), listToCons(endClause), body)));
+		return wrapMapListGuard(fn, parts.get(1), lists, parts.subList(2, parts.size()), loop);
 	}
 
 	/**
@@ -29620,12 +29681,11 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Wraps a {@code maplist}/{@code mapcon}/{@code mapl} loop in a guard that binds the
-	 * function and every list argument once (preserving left-to-right evaluation:
-	 * function first, then the lists in order) and signals the operator's type-error for
-	 * a list argument that is not a list ({@link #checkListOf}). Each list value is bound
-	 * to the matching symbol, which the loop walks. nil is a valid empty list.
-	 * @param name the operator name (for the error message)
+	 * Wraps a {@code maplist}/{@code mapcon}/{@code mapl} loop in a {@code let} that
+	 * binds the function and every list argument once (preserving left-to-right
+	 * evaluation: function first, then the lists in order). Each list value is bound to
+	 * the matching symbol, which the loop walks; the loop's end checks them
+	 * ({@link #expandMapFamily}).
 	 * @param fnSym the symbol the function argument is bound to
 	 * @param fnArg the (unevaluated) function argument form
 	 * @param lstSyms the symbols the list arguments are bound to
@@ -29633,7 +29693,7 @@ public final class LispMacroExpander {
 	 * @param loop the expanded loop that walks the bound lists
 	 * @return the guarded expression
 	 */
-	private static LispVal wrapMapListGuard(String name, LispSymbol fnSym, LispVal fnArg, List<LispSymbol> lstSyms,
+	private static LispVal wrapMapListGuard(LispSymbol fnSym, LispVal fnArg, List<LispSymbol> lstSyms,
 			List<LispVal> listArgs, LispVal loop) {
 		List<LispVal> letBindings = new java.util.ArrayList<>();
 		letBindings.add(listToCons(List.of(fnSym, fnArg)));
@@ -29643,23 +29703,8 @@ public final class LispMacroExpander {
 		List<LispVal> letForm = new java.util.ArrayList<>();
 		letForm.add(new LispSymbol(LispNames.LET));
 		letForm.add(listToCons(letBindings));
-		for (LispSymbol lstSym : lstSyms) {
-			letForm.add(checkListOf(lstSym, name));
-		}
 		letForm.add(loop);
 		return listToCons(letForm);
-	}
-
-	/**
-	 * Builds {@code (error "<name>: argument is not a list: ~s ..." valueSym)} for the
-	 * map* family list-type guard.
-	 * @param name the operator name
-	 * @param valueSym the symbol holding the offending value
-	 * @return the error expression
-	 */
-	private static LispVal mapNotAListError(String name, LispSymbol valueSym) {
-		return listToCons(List.of(new LispSymbol(LispNames.ERROR),
-				new LispString(name + ": argument is not a list: ~s (use map for strings/vectors)"), valueSym));
 	}
 
 	/**

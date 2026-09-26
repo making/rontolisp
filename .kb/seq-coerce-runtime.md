@@ -69,7 +69,7 @@ Each arm reproduces its `expandCoerce` body exactly, oddities included:
   included); the four vector representations convert. Else DECLINES: a rank-2
   array (whose `(length ...)` signals `not a sequence`) and a non-sequence, for
   which the expansion's `(length x)` signals `LENGTH`'s `SEQUENCE` type-error (it
-  answered nil until 2026-09-26; the report names `LENGTH`, `.todo/985`).
+  answered nil until 2026-09-26; the report names `LENGTH`).
 - **`'string`** -- `LispString` is itself; a list or converted vector of all
   `LispChar` becomes a string. A NON-character element declines and the
   expansion's `(map 'string #'identity ...)` signals it (since 2026-09-18; it
@@ -103,7 +103,8 @@ unchanged. Served only where identical answers are provable:
   (`effectiveLength`/`readFlat`), a `LispIntVector`, a rank-1 `LispFloatArray`. A
   dotted list, rank-2 array and non-sequence decline, so the prelude keeps owning
   them -- `(search "ab" 5)` is `LENGTH`'s `SEQUENCE` type-error through the
-  prelude's `(length x)` (NIL until 2026-09-26).
+  prelude's `(length x)` (NIL until 2026-09-26), and so is a dotted operand, over
+  its tail.
 - **Every bounding index must be inside its sequence, start <= end.** Outside it
   the prelude's answer depends on which `elt` it reaches first
   (`(search "ab" "xab" :end2 99)` is 1, not an error), so the arm never guesses.

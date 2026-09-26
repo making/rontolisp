@@ -5490,7 +5490,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		byte[] printF32NoNlBody = WasmRuntimeBuilder.buildPrintF32Core(stringTable);
 		byte[] printF64Body = WasmRuntimeBuilder.buildPrintF64Core(true, stringTable);
 		byte[] printF64NoNlBody = WasmRuntimeBuilder.buildPrintF64Core(false, stringTable);
-		byte[] appendBody = WasmRuntimeBuilder.buildAppendBody(this.usesIdentityHashTables);
+		// (a non-list lands in _type_err_list under APPEND in EH mode)
+		byte[] appendBody = WasmRuntimeBuilder.buildAppendBody(this.usesIdentityHashTables, operandOpGlobalIndex,
+				operandOperators.ids().getOrDefault(LispNames.APPEND, 0));
 		byte[] readLineBody = WasmRuntimeBuilder.buildReadLineBody(stringTable);
 		byte[] princValBody = WasmRuntimeBuilder.buildPrincValBody(stringTable, this.simd,
 				this.asyncMode ? asyncTypeBase() : -1, this.usesP1Streams ? p1StreamTypeBase() : -1,

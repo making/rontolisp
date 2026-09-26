@@ -10,28 +10,32 @@ plausible WRONG list, not an error.
 ## Implementations
 - `LispMacroExpander.expandMapFamily` (`maplist`/`mapcon`/`mapl`). Axes: `tails` (cdrs, not cars),
   `MapAccumulation` `COLLECT`/`CONCATENATE`/`DISCARD` (`DISCARD` answers the FIRST list). Lowering:
-  `let` (function, then lists, left to right), one `listp` guard per list, `do` ending on
-  `(or (atom #c0) (atom #c1) ...)`; `do` steps before testing, so `cdr` never sees the atom.
+  `let` (function, then lists, left to right), `do` ending on `(or (atom #c0) (atom #c1) ...)`
+  whose result forms `%check-list` every cursor first; `do` steps before testing, so `cdr` never
+  sees the atom.
 - Inline emitters `Jvm/WasmMapcarCompiler`, `Jvm/WasmMapcCompiler`, `Jvm/WasmMapcanCompiler`: slot
-  per list, exit when ANY cursor is not a cons, `_invoke_<nLists>`/`dispatch_<nLists>`.
+  per list, exit when ANY cursor is not a cons, then check every cursor is a list,
+  `_invoke_<nLists>`/`dispatch_<nLists>`.
   **`ctx.indirectCallArities` must get `nLists`, not 1** -- a stale `1` trapped a two-list `mapc`
   on WASM. A literal `#'name`/`'name` of matching arity is called DIRECTLY via
   `Wasm/JvmDesignatorCall`, registering no arity (`.kb/optimize-dead-code-elimination.md`).
 - Interpreter `LispEvaluator.mapFamilyValues` + `mapValues`/`mapForEffect`/`mapcanValues` --
   **the reference the compile backends are diffed against; widen it first.**
 - `BuiltinFunctionWrappers.mapFamilyWrapper` (value path, RUNTIME count): one
-  `(lambda (f l &rest more) ...)` for all six. **`(member nil ls)` detects PROPER-list exhaustion
-  only**; improper lists are caught by the call-position `atom` test.
+  `(lambda (f l &rest more) ...)` for all six. Every cursor is `%check-list`ed as it is taken (the
+  initial lists and each `cdr` step), so **`(member nil ls)` is exhaustion** and a non-list or
+  dotted tail is the operator's type-error, as in call position.
 - Wrappers are injected UNGATED; `--optimize` strips unreferenced ones. **Never gate them on
   `referencesFunctionValue`**: a missed reference then answers one list silently. Interpreter
   built-ins ARE the function objects, so `maplist`/`mapcon`/`mapl` also need `defineFunction`
   registrations, else `#'maplist` is undefined while both compile backends wrap it happily.
 
 ## Errors
-A non-list argument is the operator's catchable `type-error`, `<NAME>: The value X is not of type
-LIST`, on every backend (wasm-GC: EH mode; a trap outside it); `nil` is a valid empty list
-(`.kb/error-handling.md`, "A wrong-type argument names its operator"). A non-list PIECE a
-`mapcon` function answers keeps the message-only `MAPCON: argument is not a list ...`. `(mapcan #'list)`
+A non-list argument, a dotted list's tail and a non-list PIECE a `mapcan`/`mapcon` function answers
+are the operator's catchable `type-error`, `<NAME>: The value X is not of type LIST`, on every
+backend (wasm-GC: EH mode; a trap outside it); `nil` is a valid empty list
+(`.kb/error-handling.md`, "A wrong-type argument names its operator"). The check sits at the walk's
+END, so it costs no loop a test. `(mapcan #'list)`
 -> `<NAME> expects at least 2 arguments` (`LispEvaluator.requireMapLists`, `expandMapFamily`, and
 an `UnsupportedOperationException` from the emitter -- a compile error, the count is static).
 

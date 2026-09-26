@@ -37,12 +37,10 @@ final class JvmMapcCompiler {
 		// else goes through the arity dispatcher.
 		JvmDesignatorCall call = JvmDesignatorCall.prepare(args.get(1), nLists, ctx, className);
 
-		// Compile each list expression, checking it is a list: a non-list (e.g. a string)
-		// is MAPC's type-error.
+		// Compile each list expression; the walk's end checks it is a list.
 		List<Integer> listSlots = new ArrayList<>();
 		for (int i = 0; i < nLists; i++) {
 			JvmExprCompiler.compileExpr(args.get(2 + i), ctx, className);
-			JvmEmitHelper.emitListCheck(ctx);
 			int listSlot = ctx.allocTemp();
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(listSlot);
@@ -62,13 +60,15 @@ final class JvmMapcCompiler {
 
 		// loop:
 		int loopPos = ctx.code.size();
-		// if any cursor == null, goto exit (stop at the shortest list)
+		// if any cursor is no cons, goto exit (stop at the shortest list)
 		List<Integer> exitBranches = new ArrayList<>();
 		for (int cursorSlot : cursorSlots) {
 			ctx.emit(Opcode.ALOAD);
 			ctx.emit(cursorSlot);
+			ctx.emit(Opcode.INSTANCEOF);
+			ctx.emitU2(ctx.objectArrayClass.index());
 			exitBranches.add(ctx.code.size());
-			ctx.emit(Opcode.IFNULL);
+			ctx.emit(Opcode.IFEQ);
 			ctx.emitU2(0);
 		}
 
@@ -103,6 +103,14 @@ final class JvmMapcCompiler {
 		int exitPos = ctx.code.size();
 		for (int branchPos : exitBranches) {
 			JvmEmitHelper.patchBranch(ctx, branchPos, exitPos);
+		}
+		// Every cursor must be a list: nil ends one, any other atom -- an argument that
+		// was no list, a dotted list's tail -- is the operator's type-error.
+		for (int cursorSlot : cursorSlots) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(cursorSlot);
+			JvmEmitHelper.emitListCheck(ctx);
+			ctx.emit(Opcode.POP);
 		}
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(listSlots.get(0));

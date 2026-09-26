@@ -3351,8 +3351,8 @@ public final class LispPreludeLibrary {
 				""");
 		// list-length is length's circular-safe sibling: the tortoise/hare walk is what
 		// lets it answer nil for a circular list in bounded time instead of hanging, and
-		// the two consp guards are what make a dotted or non-list argument a type-error
-		// rather than a silent count.
+		// the two consp guards are what make a dotted or non-list argument LIST-LENGTH's
+		// type-error, naming the atom the walk met, rather than a silent count.
 		SOURCES.put(LispNames.LIST_LENGTH, """
 				(defun list-length (%ll-list)
 				  (let ((%ll-n 0) (%ll-fast %ll-list) (%ll-slow %ll-list)
@@ -3362,12 +3362,12 @@ public final class LispPreludeLibrary {
 				             (setq %ll-result %ll-n)
 				             (setq %ll-done t))
 				            ((not (consp %ll-fast))
-				             (error 'type-error :datum %ll-list :expected-type 'list))
+				             (%check-list %ll-fast 'list-length))
 				            ((null (cdr %ll-fast))
 				             (setq %ll-result (+ %ll-n 1))
 				             (setq %ll-done t))
 				            ((not (consp (cdr %ll-fast)))
-				             (error 'type-error :datum %ll-list :expected-type 'list))
+				             (%check-list (cdr %ll-fast) 'list-length))
 				            (t (setq %ll-fast (cdr (cdr %ll-fast)))
 				               (setq %ll-slow (cdr %ll-slow))
 				               (setq %ll-n (+ %ll-n 2))

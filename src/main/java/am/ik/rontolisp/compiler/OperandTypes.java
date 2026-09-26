@@ -52,8 +52,9 @@ public final class OperandTypes {
 		LIST,
 
 		/**
-		 * The type of an operator that takes any sequence ({@code length}); no funnel
-		 * checks for it, the operator's row names it.
+		 * The type of an operator that takes any sequence ({@code length},
+		 * {@code reverse}, {@code nreverse}); no funnel checks for it, the operator's row
+		 * names it.
 		 */
 		SEQUENCE,
 
@@ -114,11 +115,14 @@ public final class OperandTypes {
 	 * reported name of {@code %aset}, the operator a {@code setf} of an {@code aref} or
 	 * {@code svref} place lowers to. {@code endp} is also {@code dolist}'s and
 	 * {@code loop}'s {@code for-in}: the expansions check the list's end as it does.
-	 * {@code last} and the {@code map*} family check their list arguments. A string
-	 * access checks its string ({@code STRING}) and its subscript ({@code INTEGER}).
+	 * {@code last}, the {@code map*} family, {@code append}, {@code list-length} and the
+	 * {@code member}/{@code assoc}/{@code rassoc} scans check their list arguments. A
+	 * string access checks its string ({@code STRING}) and its subscript
+	 * ({@code INTEGER}).
 	 */
 	private static final List<String> FUNNEL_TYPED = List.of("CAR", "CDR", "NTHCDR", "ENDP", "AREF", SETF_AREF, "CHAR",
-			"SCHAR", "LAST", "MAPCAR", "MAPC", "MAPCAN", "MAPLIST", "MAPL", "MAPCON", SETF_CHAR, SETF_SCHAR);
+			"SCHAR", "LAST", "MAPCAR", "MAPC", "MAPCAN", "MAPLIST", "MAPL", "MAPCON", SETF_CHAR, SETF_SCHAR, "APPEND",
+			"LIST-LENGTH", "MEMBER", "MEMBER-IF", "ASSOC", "ASSOC-IF", "RASSOC", "RASSOC-IF");
 
 	static {
 		String[] numberOps = { "+", "-", "*", "/", "=", "ABS", "SIGNUM", "SQRT", "EXP", "LOG", "EXPT", "SIN", "COS",
@@ -128,10 +132,11 @@ public final class OperandTypes {
 				"FCEILING", "FTRUNCATE", "FROUND", "MOD", "REM", "FLOAT", "RATIONAL", "RATIONALIZE", "CIS", "RANDOM",
 				"COMPLEX" };
 		String[] rationalOps = { "NUMERATOR", "DENOMINATOR" };
-		// A list consumer whose one check is its own type: length takes any sequence,
-		// rplaca/rplacd a cons (nil is no cons).
+		// A list consumer whose one check is its own type: length and the reversals take
+		// any sequence, rplaca/rplacd a cons (nil is no cons).
 		String[][] fixedOps = { { "LENGTH", Kind.SEQUENCE.name() }, { "RPLACA", Kind.CONS.name() },
-				{ "RPLACD", Kind.CONS.name() } };
+				{ "RPLACD", Kind.CONS.name() }, { "REVERSE", Kind.SEQUENCE.name() },
+				{ "NREVERSE", Kind.SEQUENCE.name() } };
 		String[] integerOps = { "LOGAND", "LOGIOR", "LOGXOR", "LOGEQV", "LOGNAND", "LOGNOR", "LOGANDC1", "LOGANDC2",
 				"LOGORC1", "LOGORC2", "LOGNOT", "LOGCOUNT", "LOGBITP", "LOGTEST", "ASH", "INTEGER-LENGTH", "GCD", "LCM",
 				"ISQRT" };

@@ -4065,6 +4065,8 @@ public final class Environment implements Scope {
 				count++;
 				cur = cell.cdr();
 			}
+			// A dotted list is no proper sequence: its tail is the report's datum.
+			requireListEnd(LispNames.LENGTH, cur, OperandTypes.Kind.SEQUENCE);
 			return new LispInteger(count);
 		}));
 		env.defineFunction(LispNames.REVERSE, new LispFunction(LispNames.REVERSE, args -> {
@@ -4075,6 +4077,7 @@ public final class Environment implements Scope {
 				result = new LispCons(cell.car(), result);
 				cur = cell.cdr();
 			}
+			requireListEnd(LispNames.REVERSE, cur, OperandTypes.Kind.SEQUENCE);
 			return seqResult(args.get(0), result);
 		}));
 		// member is registered in LispEvaluator so the optional :test keyword designator
@@ -4420,6 +4423,7 @@ public final class Environment implements Scope {
 				prev = cell;
 				cur = next;
 			}
+			requireListEnd(LispNames.NREVERSE, cur, OperandTypes.Kind.SEQUENCE);
 			return isSeq ? seqResultDestructive(original, prev) : prev;
 		}));
 		env.defineFunction(LispNames.MAKE_LIST, new LispFunction(LispNames.MAKE_LIST, args -> {
@@ -4852,6 +4856,19 @@ public final class Environment implements Scope {
 			return val;
 		}
 		throw OperandTypeException.of(val, OperandTypes.Kind.LIST, operator);
+	}
+
+	/**
+	 * The end of a list walk: nil passes, anything else -- the argument itself when it
+	 * was no list, a dotted list's tail -- is the operator's type-error.
+	 * @param operator the operator's symbol name
+	 * @param end the value the walk stopped at
+	 * @param kind the type a report names for an operator without a fixed one
+	 */
+	static void requireListEnd(String operator, LispVal end, OperandTypes.Kind kind) {
+		if (!(end instanceof LispNil)) {
+			throw OperandTypeException.of(end, kind, operator);
+		}
 	}
 
 	static int requireIndex(String name, LispVal val) {
@@ -8321,14 +8338,14 @@ public final class Environment implements Scope {
 			return tail;
 		}
 		if (!(list instanceof LispCons head)) {
-			throw new LispEvalException("append expects a list, got: " + list.print());
+			throw OperandTypeException.of(list, OperandTypes.Kind.LIST, LispNames.APPEND);
 		}
 		// Iterative (.todo/749): the recursive spelling allocated its result by
 		// recursing once per element, so a long first argument was a
 		// StackOverflowError rather than a slow call. Walk forward, cons as you go,
 		// and patch the last cdr to the shared tail; the result is unchanged (a
 		// fresh spine, the tail shared) and an improper first argument still
-		// signals with the same message.
+		// signals, naming the tail it met.
 		LispCons result = new LispCons(head.car(), LispNil.INSTANCE);
 		LispCons last = result;
 		LispVal cursor = head.cdr();
@@ -8338,9 +8355,7 @@ public final class Environment implements Scope {
 			last = fresh;
 			cursor = cell.cdr();
 		}
-		if (!(cursor instanceof LispNil)) {
-			throw new LispEvalException("append expects a list, got: " + list.print());
-		}
+		requireListEnd(LispNames.APPEND, cursor, OperandTypes.Kind.LIST);
 		last.setCdr(tail);
 		return result;
 	}
