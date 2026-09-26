@@ -850,7 +850,8 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
 - **Cost of the list walks, measured 2026-09-26**: `zlib` P1 115,984 -> 116,300 (+0.27%), size level
   88,735 -> 89,051, JVM classes 163,399 -> 163,693; `hello_world`, `pi_approx`, `dom_reactor`
   unchanged. No loop gains a test.
-- **Open**: `random`'s domain (`.todo/981`), `#'gcd` arity and `#'numerator` (`.todo/982`).
+- **Open**: `random`'s domain (`.todo/981`), a string access's non-string and `(setf char)` index
+  (`.todo/983`), list consumers over a non-list (`.todo/984`).
 - Pinned by `ci-spec.yaml`'s `argument-type-errors-name-the-operator-beyond-arithmetic` and
   `list-walks-and-string-indices-name-the-operator`, and the
   `argumentTypeErrorsNameTheOperatorBeyondArithmetic` / `listWalksAndStringIndicesNameTheOperator`
