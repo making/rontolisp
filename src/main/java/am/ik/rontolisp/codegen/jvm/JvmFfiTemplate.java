@@ -12,7 +12,7 @@ import am.ik.ffi.FfiType;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The {@code ffi:} bridge injected into a compiled {@code .class} program: the verbs'
+ * The {@code ffi:} bridge shipped beside a compiled {@code .class} program: the verbs'
  * bodies against the compiled value representation ({@code null} = nil, the symbol
  * {@code "T"} = true, a {@code String} with surrounding quotes = string, a bare
  * {@code String} starting with {@code :} = keyword, {@code Long} / {@code Double} /
@@ -24,10 +24,10 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * Unlike the marshalling, the binding is NOT copied: {@code am.ik.ffi} itself travels in
- * the same blob as this class ({@link JvmFfiRuntimeBuilder}), renamed into the emitted
- * program's own package, so the compiled program runs the very bytes the interpreter runs
- * -- one carrier canonicalisation, one downcall handle cache, one errno capture, one
- * native-image shape refusal with the actionable message.
+ * beside the program with this class ({@link JvmFfiRuntimeBuilder}), renamed after it, so
+ * the compiled program runs the very bytes the interpreter runs -- one carrier
+ * canonicalisation, one downcall handle cache, one errno capture, one native-image shape
+ * refusal with the actionable message.
  *
  * <h2>Callbacks apply a compiled function</h2>
  *
@@ -42,8 +42,8 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * Design constraints (as for {@link JvmObjcTemplate}): no nested classes or records, no
  * switch over an enum (javac lowers one through a synthetic {@code $1} class file the
- * single-blob template cannot carry; lambdas are fine), and no reference to any class
- * that is not either the JDK's or in the blob.
+ * builder does not ship; lambdas are fine), and no reference to any class that is not
+ * either the JDK's or shipped with it.
  */
 final class JvmFfiTemplate {
 
@@ -63,7 +63,7 @@ final class JvmFfiTemplate {
 	 * vector on this backend ({@code .kb/string-write-runtime.md}), and every string this
 	 * bridge accepts funnels through {@link #lispString(Object)}, which renders it once
 	 * here -- the same one-chokepoint rule the IO/socket/fetch runtimes follow, without
-	 * adding a class to the travelling blob or duplicating the representation walk
+	 * adding a class to the shipped closure or duplicating the representation walk
 	 * {@code _strv} owns.
 	 */
 	private static @Nullable Method strvMethod;

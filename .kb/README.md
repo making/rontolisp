@@ -155,7 +155,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [jvm-osr-backedges.md](jvm-osr-backedges.md) -- no backward branch may target a bci with a non-empty operand stack
 - [jvm-aot-cache.md](jvm-aot-cache.md) -- the JDK 25 Leyden AOT cache, measured and deliberately not shipped
 - [stackmap-augmenter.md](stackmap-augmenter.md) -- class version 61 via `am.ik.jvm.StackMapAugmenter`
-- [template-class-embedding.md](template-class-embedding.md) -- when to use a Java template class, shipping it beside the program vs. the legacy defineClass embed, and class closures
+- [template-class-embedding.md](template-class-embedding.md) -- when to use a Java template class, shipping it beside the program named after it, and class closures
 - [java-interop.md](java-interop.md) -- `java:` interop: one resolution model, resolved sites as direct calls (`--java-static`, native-image without metadata), the reflection bridge for the rest
 
 ## WASM backends

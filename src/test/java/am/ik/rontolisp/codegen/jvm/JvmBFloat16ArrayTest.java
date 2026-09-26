@@ -88,12 +88,15 @@ class JvmBFloat16ArrayTest {
 	private byte[] compile(String lispCode, boolean accel) {
 		List<LispVal> program = LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
 		program = LinalgLibrary.process(VecLibrary.process(program));
-		return JvmLispCompiler.builder()
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
 			.className("Test")
 			.optimize(OptimizeLevel.NONE)
 			.simd(accel)
-			.build()
-			.compile(program);
+			.build();
+		byte[] classBytes = compiler.compile(program);
+		// The bridges travel beside the class as their own files, where run() loads.
+		TravellingClassFiles.write(compiler, this.tempDir);
+		return classBytes;
 	}
 
 	private Class<?> load(byte[] classBytes) throws Exception {

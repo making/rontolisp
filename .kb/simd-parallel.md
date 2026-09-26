@@ -31,8 +31,8 @@ which row cannot change a bit** and every byte-identity statement in `.kb/linalg
   `JvmSimdParallelCompilerTest#theEmittedPoolDefaultsToHalfTheBoxToo` and
   `SimdParallelTest#theDefaultThreadCountIsHalfTheBoxAndNeverFillsIt`.
 - Pool: `threads - 1` daemon workers (`rontolisp-parallel-N`), lazy, NOT a `ForkJoinPool`, one
-  call at a time. JVM dispatch is one flat class with an `Object[]` job record (single-blob
-  injection carries no nested class, `.kb/template-class-embedding.md`); `eval/SimdParallel` is
+  call at a time. JVM dispatch is one flat class with an `Object[]` job record (a single-file
+  template ships no nested class, `.kb/template-class-embedding.md`); `eval/SimdParallel` is
   the twin with a real `RowKernel`.
 - `--gpu`: parallel lanes sit strictly BELOW the device decision (`compileGpuMatvec`,
   `JvmLinalgKernelCompiler`), so `CudaResidency` (not thread-safe) stays on the calling thread.

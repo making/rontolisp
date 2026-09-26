@@ -8,7 +8,7 @@ intercepted set, the declined-input fallback and the precision contract in sync 
 | backend | interceptor | kernels | without `jdk.incubator.vector` |
 |---|---|---|---|
 | interpreter | `eval/LinalgSimd` (re-`defineFunction`) | `eval/LinalgSimdKernels` | `VecSimd.available()` probes first; `RontoLispCli.enableSimd` warns once and leaves `evaluator.setSimd` off |
-| JVM | `codegen/jvm/JvmLinalgKernelCompiler` (call site) | `JvmSimdVectorTemplate.la*` (one embedded bridge) | `_simdInit` catches the `LinkageError` from `Lookup.defineClass`, warns once; every call site checks `_simdReady()` BEFORE resolving a reference into the bridge |
+| JVM | `codegen/jvm/JvmLinalgKernelCompiler` (call site) | `JvmSimdVectorTemplate.la*` (one embedded bridge) | `_simdInit` catches the `LinkageError` from forcing the shipped bridge to link (`Lookup.ensureInitialized`), warns once; every call site checks `_simdReady()` BEFORE resolving a reference into the bridge |
 | wasm-GC | `codegen/wasm/WasmLinalgSimdCompiler` (call site) | `WasmLinalgSimdRuntimeBuilder` (56 emitted functions) | n/a |
 
 `--no-gc` is out of scope: `linalg:` cannot compile there at all.
@@ -406,15 +406,18 @@ only the Pages workflow's Web Image build would notice**; `./mvnw -Pweb compile`
 would be at RUN time. `JvmSimdRuntimeBuilder` registers the `la*` method refs under
 **package-prefixed keys** (`"linalg:add"`; internal members under the double-colon spelling), because
 `vec:add` and `linalg:add` share a member name. **`jdk.incubator.vector` is an optional module**:
-`_simdInit`'s `Lookup.defineClass` resolves the template's verifier-visible types AT THAT CALL, so a
-JVM without `--add-modules` fails to LINK the bridge -- before any bridge method runs, unlike
-`--blas`/`--gpu`, whose probe is a method call inside an already-linked bridge. So every accelerated
+the bridge ships beside the class and a class constant only LOADS it (it links at first use), so
+`_simdInit` forces linking and initialization with `MethodHandles.lookup().ensureInitialized` inside
+its `LinkageError` catch: a JVM without `--add-modules` fails to LINK the bridge THERE -- before any
+bridge method runs, unlike `--blas`/`--gpu`, whose probe is a method call inside the bridge.
+Measured 2026-09-26: with a bare `ldc` in its place all four `JvmSimdModuleFallbackTest` cases died
+with `NoClassDefFoundError: jdk/incubator/vector/Vector` at the first kernel call. So every accelerated
 call site checks `_simdReady()` BEFORE emitting a call that would resolve a method reference into the
 bridge (`JvmSimdModuleFallbackTest` runs a compiled class in a child JVM with no `--add-modules`).
 The compiled packed array carries an **in-array header** `[rank, dim..., data...]`, `off = 1 + rank`,
 so an element-wise linalg kernel is the `vec:` one at a different offset and the fresh result must
 copy the whole header (`laNewLike`). The gate `JvmLispCompiler.programUsesAnyAcceleratedSimdOp` scans
-AFTER `LinalgLibrary.process` has spliced the defuns, so ANY linalg program embeds the bridge.
+AFTER `LinalgLibrary.process` has spliced the defuns, so ANY linalg program ships the bridge.
 
 **wasm-GC.** Fifty-six standalone functions at `WasmLispCompiler.linalgFuncBase()` =
 `FUNC_VEC_BASE + 55`, emitted only under `--simd`; `userFuncBase()` shifts by 111. Newest first:

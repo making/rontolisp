@@ -3,7 +3,7 @@
 The `java` package drives arbitrary Java APIs. It is
 **JVM-only** — it works on the interpreter (`java -jar rontolisp.jar`) and in
 JVM-compiled classes (a call resolved at compile time becomes a direct call,
-the others go through a reflection bridge the compiler embeds into the
+the others go through a reflection bridge the compiler writes beside the
 generated `.class`), but not on the WASM backend, and the GraalVM native binary
 carries no reflection metadata to interpret it — and **not part of Common
 Lisp**; reference its functions with the `java:`

@@ -27,10 +27,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * The {@code --simd} JVM acceleration path: the six vectorizable {@code vec:} kernels
  * ({@code add}/{@code sub}/{@code mul}/{@code scale}/{@code dot}/{@code sum}) are routed
- * to the embedded {@link JvmSimdVectorTemplate jdk.incubator.vector bridge} over the
- * packed {@code double[]} representation instead of the scalar {@code vec.lisp}
- * reference, and must produce byte-identical output. The bridge is defined in-process via
- * {@code Lookup.defineClass}; the Surefire config adds
+ * to the {@link JvmSimdVectorTemplate jdk.incubator.vector bridge} shipped beside the
+ * class, over the packed {@code double[]} representation instead of the scalar
+ * {@code vec.lisp} reference, and must produce byte-identical output. The bridge loads
+ * in-process from beside the class; the Surefire config adds
  * {@code --add-modules jdk.incubator.vector} so the incubator module is in the test JVM's
  * module graph. Both a small-array (scalar-tail) and a large-array (Vector API loop) case
  * are exercised, plus the opt-in gating (no bridge unless {@code --simd} AND the simd
@@ -43,14 +43,18 @@ class JvmSimdAccelCompilerTest {
 	@TempDir
 	Path tempDir;
 
+	// Compiles into the class path root run() loads from: the bridge travels beside the
+	// class as its own file.
 	private byte[] compile(String lispCode, boolean accel) {
 		List<LispVal> program = VecLibrary.process(LispReader.readAllFromString(lispCode));
-		return JvmLispCompiler.builder()
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
 			.className("Test")
 			.optimize(OptimizeLevel.NONE)
 			.simd(accel)
-			.build()
-			.compile(program);
+			.build();
+		byte[] classBytes = compiler.compile(program);
+		TravellingClassFiles.write(compiler, this.tempDir);
+		return classBytes;
 	}
 
 	private String run(byte[] classBytes) throws Exception {
@@ -770,24 +774,26 @@ class JvmSimdAccelCompilerTest {
 	}
 
 	private static boolean embedsBridge(byte[] classBytes) {
-		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmSimdRuntimeBuilder.BRIDGE_NAME);
+		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmSimdRuntimeBuilder.bridgeName("Test"));
 	}
 
-	// MethodHandles.Lookup.defineClass(byte[]) requires the defined class to share the
-	// lookup class's package; every test above compiles into the default package, so this
-	// one alone proves the embedded bridge is renamed into a NON-default package too.
+	// The bridge's entry points are package-private; every test above compiles into the
+	// default package, so this one alone proves the bridge is renamed into a NON-default
+	// package too.
 	@Test
 	void theBridgeIsRenamedIntoTheGeneratedClassOwnPackageAndRunsThere() throws Exception {
 		List<LispVal> program = VecLibrary
 			.process(LispReader.readAllFromString("(print (vec:add #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))"));
-		byte[] classBytes = JvmLispCompiler.builder()
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
 			.className("com/example/Test")
 			.optimize(OptimizeLevel.NONE)
 			.simd(true)
-			.build()
-			.compile(program);
+			.build();
+		byte[] classBytes = compiler.compile(program);
+		TravellingClassFiles.write(compiler, this.tempDir);
 
-		String bridgeName = "com/example/" + JvmSimdRuntimeBuilder.BRIDGE_NAME;
+		String bridgeName = JvmSimdRuntimeBuilder.bridgeName("com/example/Test");
+		assertThat(bridgeName).isEqualTo("com/example/Test$SimdBridge");
 		assertThat(new String(classBytes, StandardCharsets.ISO_8859_1)).contains(bridgeName);
 
 		Path packageDir = this.tempDir.resolve("com").resolve("example");

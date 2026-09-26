@@ -199,31 +199,28 @@ object hold two references; classes own nothing. Hence the rule `appkit:window` 
 `objc:` window must: **`setReleasedWhenClosed:` NO**, or the close releases a reference the wrapper
 still holds. Leaking is the safe direction everywhere here.
 
-## The JVM backend: the binding travels in the class, and calls back into it
+## The JVM backend: the binding travels beside the class, and calls back into it
 `-o Prog.class` / `-o lib.jar` uses the `--gpu` route ([gpu.md](gpu.md),
 [template-class-embedding.md](template-class-embedding.md)): every class file of `am.ik.objc` is
-renamed by one prefix rule (`am/ik/objc/` -> the program's package + `RontoLispObjc`), base64'd and
-`Lookup.defineClass`'d by the emitted `_objcInit` on the first `objc:` call.
+renamed by one prefix rule (`am/ik/objc/` -> `<Program>$Objc`) and ships beside the program through
+`runtimeClassFiles()`; the emitted `_objcInit` only binds, on the first `objc:` call.
 `JvmObjcRuntimeBuilder` owns the list (pinned by
-`JvmObjcInteropCompilerTest#theBlobCarriesTheWholeLibrary`). Two classes ride along, each ONE class
-file: `JvmObjcTemplate` -> `RontoLispObjcBridge` (the seven verbs against the compiled value model,
+`JvmObjcInteropCompilerTest#theProgramShipsTheWholeLibrary`). Two classes ride along, each ONE class
+file: `JvmObjcTemplate` -> `<Program>$ObjcBridge` (the seven verbs against the compiled value model,
 the hand-kept twin of `ObjcBridge` -- **KEEP THE TWO IN SYNC**; an if-chain over
-`TypeEncoding.Kind`, because an enum `switch` lowers to a synthetic `$1` class the blob does not
-carry) and `JvmObjcHandle` -> `RontoLispObjcObject` (address + class name, `equals` by address,
+`TypeEncoding.Kind`, because an enum `switch` lowers to a synthetic `$1` class the builder does not
+ship) and `JvmObjcHandle` -> `<Program>$ObjcObject` (address + class name, `equals` by address,
 reached by the printer through the bridge's `objcPrint` hook, `JvmRuntimeBuilder.ObjcPrint`,
 emitted AHEAD of the `java:` branch which would otherwise claim it).
 
-Three differences from the `--gpu` blob:
-- **Definition order is not free**: the VERIFIER loads a class it must check assignability against
-  while defining the referencing class (a `catch` type must be a `Throwable`), so `ObjcException`
-  is defined FIRST; alphabetical order died in `defineClass` with `NoClassDefFoundError`.
-- **The blob makes UPCALLS into the program**: a `define-class` method and an `on-main` body are
+Differences from the `--gpu` library:
+- **It makes UPCALLS into the program**: a `define-class` method and an `on-main` body are
   applied through `_apply`, handed over by `bind(Class)` from `_objcInit`, which is why `usesObjc`
   forces `usesEval` and roots `_apply` for the shaker. `bind` hands over `_strv` the same way
   (nullable -- absent exactly when the program has no array runtime).
 - **The gate is the nine verbs**, qualified, and `appkit.lisp` reaches them:
   `AppKitLibrary.process` splices the widget layer on the compile path (pruned to what the program
-  calls), so an `appkit:` program compiles as ordinary Lisp whose `objc:send` gates the blob on.
+  calls), so an `appkit:` program compiles as ordinary Lisp whose `objc:send` gates the library on.
 - **The same gate keeps the compiled `main` where it was.** Every other class with a `main` runs
   its program on a sized worker thread ([interpreter-stack.md](interpreter-stack.md),
   `JvmSizedMainBuilder`); a class with `usesObjc` does not, and its bytes are what they were
@@ -241,8 +238,15 @@ Three differences from the `--gpu` blob:
 Under the `java` launcher thread 0 is already parked, so no hand-over arises. A bare `.class`
 without `--enable-native-access=ALL-UNNAMED` gets the JDK's one-time warning and works; a `.jar`
 carries `Enable-Native-Access: ALL-UNNAMED` in its manifest (`JvmJarWriter`). Each compiled program
-defines its own copy into its own loader, which is why the test names a run-time class per program
-(`objc_allocateClassPair` cannot be undone).
+ships its own copy as class files named after it (`<Program>$Objc*`,
+[template-class-embedding.md](template-class-embedding.md)), which is why the test names a run-time
+class per program (`objc_allocateClassPair` cannot be undone). Verified on macOS 26.3 aarch64
+(Oracle GraalVM 25.0.3, 2026-09-27, screen locked, so clicks were `performClick:` from an
+`appkit:timer` and the close `performClose:`): `counter.lisp` counts 3 clicks and exits 0 under
+`java -jar`, the native binary, `java Counter`, `java -jar counter.jar` and `--native`; the native
+CLI and `java -jar` compile byte-identical class files. **A `native-image` of the `.jar` does NOT
+work**: `main` is thread 0 there and nothing hands it over, so the window opens and nothing is ever
+dispatched (open item).
 
 ## `--native`: the runner is the Objective-C host
 `--native -o prog` (`macos-aarch64` only: `CompileFrontend` accepts them when the native target is
@@ -372,6 +376,8 @@ via `eval/ObjcInterop`'s five entry points (the `LinalgGpu`/`LinalgGpuKernels` s
   it travels into every compiled `appkit:` program.
 
 ## Open items
+- A compiled `objc:` jar built into a native image hangs: its `main` runs the program on thread 0
+  and never parks it in the run loop (`RontoLispCli.main`'s hand-over has no compiled twin).
 - No MAIN menu (a process with no bundle sets none), so no Cmd-Q on a windowed program.
 - Callback shapes with struct or integer arguments, and block-taking selectors.
 - A variadic selector a PROGRAM declares: served only for the names in `VariadicSelectors`, and

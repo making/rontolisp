@@ -888,11 +888,13 @@ class RontoLispCliTest {
 			.hasMessageContaining("--gpu reaches the interpreter and the JVM class output only");
 		Path classFile = tempDir.resolve("P.class");
 		runCli("", file.toString(), "-o", classFile.toString(), "--gpu");
-		// The bridge's own name is an ordinary class constant; the CUDA binding it calls
-		// is base64 in the blob beside it, and the PTX kernels are there verbatim.
-		assertThat(Files.readString(classFile, java.nio.charset.StandardCharsets.ISO_8859_1))
-			.contains("RontoLispGpuBridge")
+		// The bridge's own name is an ordinary class constant and the PTX kernels are
+		// there verbatim; the bridge and the CUDA binding it calls are class files of
+		// their own beside the class.
+		assertThat(Files.readString(classFile, java.nio.charset.StandardCharsets.ISO_8859_1)).contains("P$GpuBridge")
 			.contains(".visible .entry gemm_f64");
+		assertThat(tempDir.resolve("P$GpuBridge.class")).exists();
+		assertThat(tempDir.resolve("P$GpuGpu.class")).exists();
 	}
 
 	@Test

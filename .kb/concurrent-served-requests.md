@@ -8,9 +8,10 @@ bugs, and each looks like someone else's fault.
 - Servlet (`-o app.war`, `.kb/http-server.md`): the container reuses ONE platform thread, so
   `RontoHttpServlet` must `startAsync` onto a fresh virtual thread.
 - Fixed: special variables (`.kb/dynamic-special-variables.md`); stream-table handle allocation
-  (`.kb/read-load-streams.md`); the JVM backend's lazy inits (`_javaInit`, `_objcInit`,
-  simd/blas/gpu inits) are emitted `ACC_SYNCHRONIZED` by `JvmLispCompiler`, else a `defineClass`
-  one answers `LinkageError: attempted duplicate class definition`.
+  (`.kb/read-load-streams.md`); the JVM backend's lazy inits (`_javaInit`, `_objcInit`, `_ffiInit`,
+  simd/gpu/geom inits) are emitted `ACC_SYNCHRONIZED` by `JvmLispCompiler` (found when they still
+  `defineClass`d: the second of two racing first calls answered `LinkageError: attempted duplicate
+  class definition`).
 - Lazy loads (interpreter): `LispEvaluator.libraryLoadLock` guards EVERY load and every read of a
   guarding flag -- `resolveFunction`'s slow path plus the `ensure*Loaded` gates and
   `applyJsonHelper`. Fast path stays lock-free. Inside the lock the flag is set BEFORE evaluating

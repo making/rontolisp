@@ -47,6 +47,15 @@ its class plus `Hello$Part1.class`, `Hello$Part2.class`, ... written beside it i
 package directory, and a jar carries them too. Run the class as before; the part files
 only have to stay next to it.
 
+A program that uses [`java:`](../guides/java-interop.md), the `geom:` kernels,
+`--simd`, `--blas`, `--gpu`, `objc:` or `ffi:` gets the bridge each one needs the same
+way: `Hello$JavaBridge.class`, `Hello$SimdBridge.class`, ... beside the class (for
+`--gpu`, `objc:` and `ffi:` with a renamed copy of the binding library,
+`Hello$Gpu*.class` and so on), and inside a jar. Nothing is defined at run time, so
+such a jar also builds into a GraalVM native image with `native-image -jar`; reflective
+`java:` calls and the `--blas` / `ffi:` foreign calls need the metadata the tracing agent
+records from one `java -jar` run ([Java interop](../guides/java-interop.md#native-image)).
+
 A class can also be a **library** Java code calls directly:
 [`rontolisp:jvm-export`](../reference/functions/rontolisp-jvm-export.md)
 declares a typed, Java-callable static method for a `defun`, and `--no-main`

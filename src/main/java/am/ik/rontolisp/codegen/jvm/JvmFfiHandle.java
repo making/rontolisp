@@ -12,9 +12,9 @@ package am.ik.rontolisp.codegen.jvm;
  * outside the Lisp representation), and address 0 is a legal value (C's {@code NULL}).
  *
  * <p>
- * Travels in the {@code ffi:} blob beside {@link JvmFfiTemplate}, renamed into the
- * emitted program's own package by {@link JvmFfiRuntimeBuilder}; hence the same
- * constraints -- no nested classes, no rontolisp import.
+ * Ships beside the program with {@link JvmFfiTemplate}, renamed after it by
+ * {@link JvmFfiRuntimeBuilder}; hence the same constraints -- no nested classes, no
+ * rontolisp import.
  */
 final class JvmFfiHandle {
 
