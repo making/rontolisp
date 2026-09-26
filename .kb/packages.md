@@ -467,7 +467,7 @@ made table-aware. The model:
   `intern` over a computed designator naming a READ/COMPILE-TIME package build the
   permissive `PKG:NAME` spelling on the compiled backends (the unknown-name
   deviation's sibling; a runtime package answers from its member table instead); a
-  computed package designator naming nothing answers nil / signals only when gated;
+  computed package designator naming nothing signals a `package-error`;
   `symbol-package` on the compiled backends reads the qualifier off the spelling, so
   an uninterned symbol keeps its old home there; `unintern`'s name-conflict check
   runs on the interpreter only; `--no-gc` refuses the whole tier (no conses).

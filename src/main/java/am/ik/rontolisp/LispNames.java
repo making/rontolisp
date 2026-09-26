@@ -2693,13 +2693,24 @@ public final class LispNames {
 	/**
 	 * Internal two-argument primitive {@code (%package-error package message)} that
 	 * signals a {@code package-error} carrying the package designator (a keyword) and
-	 * reporting the message: what the compile-path {@code intern} lowering emits for a
-	 * package that does not exist ({@code LispMacroExpander.expandInternInPackage}).
-	 * Lowered like {@link #FILE_ERROR_INTERNAL}
-	 * ({@code LispMacroExpander.lowerPackageError}); the interpreter's {@code intern}
-	 * signals directly and never sees it.
+	 * reporting the message: what the compile-path {@code intern} / {@code find-symbol}
+	 * lowerings emit for a package that does not exist
+	 * ({@code LispMacroExpander.expandInternInPackage} /
+	 * {@code expandFindSymbolInPackage}). Lowered like {@link #FILE_ERROR_INTERNAL}
+	 * ({@code LispMacroExpander.lowerPackageError}); the interpreter's operators signal
+	 * directly and never see it.
 	 */
 	public static final String PACKAGE_ERROR_INTERNAL = "%PACKAGE-ERROR";
+
+	/**
+	 * The {@code (%symbol-in-package name package)} prelude helper a compiled
+	 * {@code find-symbol} / {@code intern} with a COMPUTED package designator calls: the
+	 * qualified spelling built behind a {@code find-package} guard, signalling a
+	 * {@code package-error} for a package that does not exist
+	 * ({@code LispMacroExpander.computedPackageLookup}). One call per site instead of the
+	 * guard inline.
+	 */
+	public static final String SYMBOL_IN_PACKAGE_INTERNAL = "%SYMBOL-IN-PACKAGE";
 
 	/**
 	 * Internal {@code (%open-or-nil path direction [element-type])}: {@code open} in the
