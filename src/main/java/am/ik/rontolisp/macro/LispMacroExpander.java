@@ -24169,9 +24169,10 @@ public final class LispMacroExpander {
 			// A declined renderer means no site can hand the report a control that is not
 			// a literal string, so a FUNCTION control cannot reach it either -- and its
 			// arm is a funcall of a runtime value, which in a program that can make a
-			// symbol at run time (read) keeps every built-in dispatchable. Dropped only
-			// under ENTRY_REPORT: every other mode's artifact keeps its bytes.
-			boolean functionControls = signalMessages != SignalMessages.ENTRY_REPORT || !narrowing.declineRenderer();
+			// symbol at run time (read) keeps every built-in dispatchable. Dropped in
+			// every mode: changes the bytes of every EH-mode module whose renderer is
+			// declined (.kb/error-handling.md, "Location lines on wasm-GC").
+			boolean functionControls = !narrowing.declineRenderer();
 			out.addAll(conditionReportDefuns(closRegistry, narrowing, functionControls));
 		}
 		// The print-object renderer, once per program that defines a print-object method

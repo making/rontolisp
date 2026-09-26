@@ -453,7 +453,9 @@ lines, for Scheme source too** (`cli/UncaughtReportParityTest`); wasm-GC prints 
   the first step alone printed `Unhandled condition: ` and nothing else. Narrowing it to the
   classes that can ESCAPE buys nothing: without a catching form every constructible class
   escapes, which is what `conditionNarrowing` already keeps. What `ENTRY_REPORT` narrows instead
-  is the printing operators and the function-control arm (below).
+  is the printing operators (below). The function-control arm narrows the same way in EVERY
+  mode (`.todo/988`, below): a declined renderer drops it whether or not `--report-locations`
+  is the reason EH mode is on.
 - **A class that reports nothing is reported by its SIGNAL SITE** (`(define-condition c (error) ())`,
   a bare `type-error`, `simple-error` with no control): `%condition-report-str` answers nil, and the
   text -- `Condition (C :INITARG v) was signalled.` for a typed signal, `Condition of type C was
@@ -492,14 +494,25 @@ by `cli/WasmReportLocationsTest` (each case against the interpreter's own output
   (`WasmLispCompiler`'s `entryReportOnly`: the option, no EH trigger, and a located form --
   `WasmUncaughtLocations.readsAnyFile` -- but never a `--no-wasi` reactor, whose standard error is
   a discarding sink). The entry pad is then the only reader of a condition, so
-  two things EH mode proper carries are dropped: (1) the printing operators route a condition
+  one thing EH mode proper carries is dropped: the printing operators route a condition
   through its report only when program code can HOLD one (`ClosRegistry.printsConditionReports`,
   the `mayHoldConditions` answer) while the renderer itself stays on the `mayCreateConditions` one
-  (`routesConditionReports`); (2) with a declined renderer `%format-condition` keeps no arm for a
-  FUNCTION control -- a funcall of a runtime value, which in a program that can make a symbol at run
-  time (`read`) keeps every built-in dispatchable: `(print (read))` 245,561 -> 42,404 B. (2) is
-  valid in EH mode proper too, and is not applied there only because it would change a build
-  without the option. A program already in EH mode builds exactly as before under the option.
+  (`routesConditionReports`).
+- **A declined renderer drops `%format-condition`'s FUNCTION-control arm in every mode, not only
+  under `ENTRY_REPORT`** (`.todo/988`, 2026-09-26): the arm is a funcall of a runtime value, which
+  in a program that can make a symbol at run time (`read`) keeps every built-in dispatchable by
+  name, whatever narrowed EH mode is on for. The first version of this narrowing kept the arm in
+  plain EH mode (`SignalMessages.RENDERED`) to hold `--report-locations` byte-identical to a build
+  without the option; the user approved dropping that condition for this change and its size
+  effect is recorded here instead. `(print (read))` plus `(ignore-errors nil)`,
+  `--optimize=size`: 245,858 -> 47,570 B (`without the catching form`: 39,027 B, unaffected either
+  way). Under `ENTRY_REPORT` (`--report-locations=line`, no catching form) nothing moves --
+  42,326 B before and after -- since that arm was already dropped there. `zlib` (chipz, EH mode via
+  `catch`/`throw`, no option): `--optimize=size` 89,499 -> 89,326 B (-173, -0.19%), `--optimize`
+  116,920 -> 116,513 (-407), `--optimize=off` 462,894 -> 462,464 (-430), `--component --optimize=size`
+  93,557 -> 93,382 (-175); gzip -9 `--optimize=size` 29,971 -> 29,924. `hello_world`/`pi_approx`
+  `--optimize=size` (no catching form, not in EH mode) unchanged: 480 / 1,489 B. Measured on this
+  worktree's HEAD (`ea5e69304` + the change), wasmtime 49.0.0, Linux.
 - **A frame** = a defun, lambda, top-level chunk or `--component` resume whose OWN code (outside
   the lambdas it builds) has a form read from a file. It wraps its body in `block` +
   `try_table (catch $lisp-cond)`; the landing calls `_uncaught_note(payload, file-id, line, name,
