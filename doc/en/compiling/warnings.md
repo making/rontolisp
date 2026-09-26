@@ -11,6 +11,9 @@ line on standard error, at the position of the form:
   operator anyway
 - a primitive a `--no-wasi` module reaches while it loads, an `http-handler` port a war
   ignores, and, with `--warn-java-reflection`, a `java:` call left to run-time reflection
+- a `(warn ...)` a macro calls while it expands, placed at the macro call. A
+  `style-warning` prints as `style-warning:` instead, and a warning a handler muffles
+  prints nothing
 
 ```lisp
 (defun add (a b) (+ a b))
@@ -47,8 +50,7 @@ count:
 - a warning in a system `ql:quickload` downloaded from a dist, which you cannot fix
 - a line that is not about the source: the `:async t` and `--host-fetch` host
   obligations, and `warning: no JDK found`
-- a `(warn ...)` a macro calls while it expands, which is a Lisp condition rather than
-  a compiler warning
+- a `style-warning` a macro signals while it expands
 
 The Maven plugin takes it as `<warningsAsErrors>true</warningsAsErrors>`
 (`-Drontolisp.warningsAsErrors=true`), and an embedder as

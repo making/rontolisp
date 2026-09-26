@@ -260,12 +260,15 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * therefore stay in the class when it is split: {@code _apply} and {@code _strv},
 	 * which the shipped java:/objc:/ffi: bridges look up with {@code getDeclaredMethod},
 	 * {@code _lispToString}, which the java: bridge shows a value in a message with,
-	 * {@code _bf16Value}, which it reads a bfloat16 vector's elements through, and
+	 * {@code _bf16Value}, which it reads a bfloat16 vector's elements through,
+	 * {@code _jsig}/{@code _jfail}, which its {@code Proxy} records what a callback
+	 * raised with and its calls pass it on through, and
 	 * {@code _gpuMaterialize}/{@code _gpuWritten}, which the travelling float-array
 	 * handle resolves through {@code MethodHandles} ({@code .kb/jvm-export.md}).
 	 */
 	private static final Set<String> REFLECTIVELY_FOUND_METHODS = Set.of("_apply", "_strv", "_lispToString",
-			JvmFloatArrayRuntimeBuilder.BF16_VALUE, "_gpuMaterialize", "_gpuWritten");
+			JvmFloatArrayRuntimeBuilder.BF16_VALUE, JvmJavaDirectSites.SIGNAL, JvmJavaDirectSites.FAIL,
+			"_gpuMaterialize", "_gpuWritten");
 
 	/** The array runtime helper group ({@link JvmArrayRuntimeBuilder}). */
 	private static final String GROUP_ARRAYS = "arrays";
@@ -3834,6 +3837,16 @@ public final class JvmLispCompiler implements LispCompiler {
 			fusedHelperMethods.add(JvmIntFusionCompiler.buildFxAsh(cp));
 		}
 
+		// The java: sites' failure helpers, made now that every body is compiled: whether
+		// a function can be called back from Java -- a generated implementation's
+		// callback, the bridge's Proxy -- decides the per-thread record _jsigTl and what
+		// _jfail reads (JvmJavaDirectSites#finishHelpers).
+		final JvmJavaDirectSites.@Nullable Signals javaSignals = javaSites != null
+				? javaSites.direct().finishHelpers(usesJavaBridge, mainCtx.conditionChannel) : null;
+		if (javaSignals != null) {
+			mainCtx.conditionChannel.ensureThreadLocalInfra(cp);
+		}
+
 		// The class as data first: a program whose pool fits one class file is written
 		// from it as it always was; one whose pool outgrew it is split from it
 		// (.kb/jvm-method-size-limits.md).
@@ -4058,6 +4071,12 @@ public final class JvmLispCompiler implements LispCompiler {
 					java.util.Objects.requireNonNull(mainCtx.conditionChannel.nleFieldName),
 					java.util.Objects.requireNonNull(mainCtx.conditionChannel.fieldDesc));
 		}
+		if (javaSignals != null) {
+			// The per-thread record of what functions called back from Java raised, from
+			// _jsig to the _jfail of the site the Java call was made from; initialized in
+			// <clinit>.
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, javaSignals.name(), javaSignals.desc());
+		}
 		// One private static String[] per instance layout the program references:
 		// {tag, printName, "S"|"C", slot0, ...}. Initialized in <clinit>; the
 		// array in slot 0 of an instance is also its type discriminator. The
@@ -4147,7 +4166,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || teTlField != null
 				|| !mainCtx.layoutPool.isEmpty() || !mainCtx.bigIntPool.isEmpty() || !structTableClinitFinal.isEmpty()
-				|| dynVarRuntime != null || initsClinit || (mvChannel != null && mvChannel.perThread() != null)) {
+				|| dynVarRuntime != null || initsClinit || (mvChannel != null && mvChannel.perThread() != null)
+				|| javaSignals != null) {
 			// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
 			// on a thread with no pending condition returns null). The async
 			// runtime's _handoffTl (the eager-start handoff) joins the same
@@ -4181,6 +4201,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				// The per-thread %mv-spill store joins the same initializer: every
 				// thread's register starts null, nil.
 				tlFields.add(java.util.Objects.requireNonNull(mvChannel.perThread()).threadLocal());
+			}
+			if (javaSignals != null) {
+				// ... as does the record of what functions called back from Java raised.
+				tlFields.add(javaSignals.field());
 			}
 			List<Integer> clinitCode = new java.util.ArrayList<>();
 			// The holder-presence probe's single initialization (.todo/757):
@@ -4770,6 +4794,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				if (usesFloatArray) {
 					roots.add(JvmFloatArrayRuntimeBuilder.BF16_VALUE);
 				}
+				// ... and records what its Proxy's callback raised, and passes it on from
+				// a call, through the program's _jsig and _jfail.
+				roots.add(JvmJavaDirectSites.SIGNAL);
+				roots.add(JvmJavaDirectSites.FAIL);
 			}
 			// A generated java: interface implementation calls its program-side
 			// callbacks from its own class: an edge this class's bytecode cannot show.

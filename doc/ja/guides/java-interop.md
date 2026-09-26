@@ -104,6 +104,8 @@ bignum は、`java.math.BigInteger` (または `Number`、`Object` などその�
 - `(declaim (type (java:object "C") v))` は、それ以降のフォームで大域変数 `v` の型を示す。`defvar` の初期値は型を示さない。どのフォームもその変数に代入しうるため
 - インターフェース名がリテラルの `(java:reify "I" ...)` と `(java:proxy "I" ...)` は、`I` を実装し、プログラムが名前で指せる型はほかに実装しないクラスのオブジェクトを作る。それに対する呼び出しは `I` のメソッドの中から解決され、それを引数として渡す呼び出しも解決される。`let` 変数はこの型を保ち、その表記が `(java:object "I" :exact)` である。インターフェースをちょうどクラスとするオブジェクトは存在しないので、インターフェースに対する `:exact` はこの意味になる
 
+既知のクラスがインターフェースである値に対する呼び出しは、そのインターフェースが宣言していない `Object` の public メソッド（`toString`、`getClass` など）にも解決されます。Java の `list.toString()` と同じです。
+
 宣言された型は信頼されます。`C` でない値は、レシーバでも引数でも、呼び出しに渡った時点でエラーになります。選ばれていないメソッドに合わせて変換されることはありません。
 
 ```lisp
@@ -261,6 +263,36 @@ error: --java-static: 1 java: call cannot be compiled without reflection:
 (java:call button "addActionListener"
   (lambda (method event) (handle-click)))
 ```
+
+## エラーと非局所脱出
+
+Java のメンバが投げた例外は、メンバと例外を示す Lisp のエラーとして通知されます。
+
+```lisp
+(handler-case (java:static "java.lang.Integer" "parseInt" "x")
+  (error (e) (format nil "~a" e)))
+; => "error calling java.lang.Integer.parseInt: java.lang.NumberFormatException: For input string: \"x\""
+```
+
+Java からコールバックとして呼ばれた rontolisp の関数が通知したコンディションや、その関数から抜ける `return-from`・`throw`・`go` は、Lisp のフレームを抜けるときと同じく途中の Java のフレームをそのまま伝播し、Java を呼び出したコードに到達します。
+
+```lisp
+(block found
+  (java:call (java:static "java.util.List" "of" 1 2 3) "forEach"
+             (lambda (method x) (when (= x 2) (return-from found x))))
+  nil)
+; => 2
+```
+
+```lisp
+(handler-case
+    (java:call (java:static "java.util.List" "of" 1) "forEach"
+               (lambda (method x) (error "bad element ~a" x)))
+  (error (e) (format nil "~a" e)))
+; => "bad element 1"
+```
+
+途中の Java のコードにとってこれは通常の例外であり、到達するのはそのコードが伝播させたものだけです。捕捉して握りつぶされたものは到達せず、ラップされたものや別スレッドで投げ直されたものは、その Java 呼び出し自体の失敗として到達します (`FutureTask.get` は `ExecutionException` でラップします)。
 
 ## Swing の例
 

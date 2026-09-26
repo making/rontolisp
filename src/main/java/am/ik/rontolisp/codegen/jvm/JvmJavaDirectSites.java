@@ -57,6 +57,11 @@ import org.jspecify.annotations.Nullable;
  * (the bridge's {@code isJavaObject}), {@code _junm} (its {@code unmarshal}, for a value
  * declared as a type a box, a string or an array may hide behind) and {@code _jarr} (its
  * {@code arrayToList}, over every array type without {@code java.lang.reflect.Array}).
+ * <p>
+ * What a site's Java call throws goes through {@code _jfail}: a throwable a function
+ * called back from Java raised -- recorded on its way out by {@code _jsig}, which the
+ * generated implementations and the bridge's {@code Proxy} call -- is thrown on as it is,
+ * anything else as the error calling the member ({@link #finishHelpers}).
  */
 final class JvmJavaDirectSites {
 
@@ -100,6 +105,28 @@ final class JvmJavaDirectSites {
 	 * The prefix of {@code _jconv$N(Object)T}: a value converted to one parameter type.
 	 */
 	static final String CONVERT_PREFIX = "_jconv$";
+
+	/**
+	 * {@code _jfail(Throwable, String)Throwable}: what a site throws when its Java call
+	 * throws -- what a function called back from Java raised, as it is, or else the error
+	 * calling the member, the given text before the throwable's. The bridge's
+	 * {@code fail} calls it too.
+	 */
+	static final String FAIL = "_jfail";
+
+	/**
+	 * {@code _jsig(Throwable)Throwable}: records a throwable leaving a function called
+	 * back from Java -- a generated implementation's callback, the bridge's {@code Proxy}
+	 * -- for {@link #FAIL}, and answers it.
+	 */
+	static final String SIGNAL = "_jsig";
+
+	/** The per-thread record {@link #SIGNAL} keeps and {@link #FAIL} reads. */
+	static final String SIGNALS = "_jsigTl";
+
+	private static final String FAIL_DESC = "(Ljava/lang/Throwable;Ljava/lang/String;)Ljava/lang/Throwable;";
+
+	private static final String SIGNAL_DESC = "(Ljava/lang/Throwable;)Ljava/lang/Throwable;";
 
 	// _jkind's codes: a Lisp kind's is its index in LISP_KINDS (its ordinal), then the
 	// four below.
@@ -199,6 +226,25 @@ final class JvmJavaDirectSites {
 
 	private final Map<String, MethodrefConstant> converts = new LinkedHashMap<>();
 
+	// _jfail and _jsig, named when first asked for and built by finishHelpers(), once
+	// every body is compiled: what they read depends on the whole program.
+	private @Nullable MethodrefConstant failure;
+
+	private @Nullable MethodrefConstant signal;
+
+	private boolean finished;
+
+	/**
+	 * The per-thread record of what functions called back from Java raised, a
+	 * {@code ThreadLocal} field the class declares and initializes in {@code <clinit>}.
+	 *
+	 * @param field the field
+	 * @param name its name
+	 * @param desc its descriptor
+	 */
+	record Signals(FieldrefConstant field, Utf8Constant name, Utf8Constant desc) {
+	}
+
 	/**
 	 * @param cp the class's constant pool
 	 * @param thisClass the class
@@ -288,6 +334,259 @@ final class JvmJavaDirectSites {
 	 */
 	MethodrefConstant returnedConvert(JavaType target) {
 		return convert(target, false, true);
+	}
+
+	/**
+	 * {@code _jsig}: what a generated implementation's callback calls with the throwable
+	 * leaving it. Built by {@link #finishHelpers}.
+	 * @return {@code _jsig(Throwable)Throwable}
+	 */
+	MethodrefConstant signalHelper() {
+		MethodrefConstant ref = this.signal;
+		if (ref == null) {
+			ref = unfinishedHelper(SIGNAL, SIGNAL_DESC);
+			this.signal = ref;
+		}
+		return ref;
+	}
+
+	private MethodrefConstant failure() {
+		MethodrefConstant ref = this.failure;
+		if (ref == null) {
+			ref = unfinishedHelper(FAIL, FAIL_DESC);
+			this.failure = ref;
+		}
+		return ref;
+	}
+
+	private MethodrefConstant unfinishedHelper(String name, String desc) {
+		if (this.finished) {
+			throw new IllegalStateException(name + " asked for after the java: helpers were finished");
+		}
+		return this.cp.addMethodref(this.thisClass,
+				this.cp.addNameAndType(this.cp.addUtf8(name), this.cp.addUtf8(desc)));
+	}
+
+	/**
+	 * Builds {@code _jfail} and {@code _jsig}, once every body is compiled -- the bridge
+	 * finds both by name, so it asks for them whatever the sites did.
+	 * <p>
+	 * A throwable a function called back from Java raises is recorded on its way out
+	 * ({@code _jsig}); a site whose Java call throws that very throwable throws it on
+	 * unchanged ({@code _jfail}), anything else as the error calling the member. The
+	 * record is per thread -- a throwable Java moves to another thread arrives as
+	 * something else -- and keeps the newest
+	 * {@link am.ik.rontolisp.compiler.JavaImplementations#PENDING_SIGNALS}.
+	 * <p>
+	 * The two per-thread channels a compiled condition or exit also lives in travel with
+	 * it: {@code _jsig} takes the condition out of {@code _condTl} and the throwable's
+	 * own entry off the exit stack {@code _nleTl}, and {@code _jfail} puts both back for
+	 * the throwable it passes on. So a callback that Java lets fail meanwhile (a second
+	 * close handler) cannot leave its own in their place, and one Java swallows leaves
+	 * nothing behind: a later failure never reads its condition, and the member's own
+	 * failure clears the channel.
+	 * @param bridge whether the reflective bridge travels with the program
+	 * @param channel the program's condition channel: which of {@code _condTl} and
+	 * {@code _nleTl} it has
+	 * @return the record's field, or {@code null} when no function can be called back
+	 * from Java
+	 */
+	@Nullable Signals finishHelpers(boolean bridge, JvmLispCompiler.ConditionChannel channel) {
+		if (bridge) {
+			failure();
+			signalHelper();
+		}
+		Signals signals = null;
+		FieldrefConstant condTl = channel.used ? channel.condTlField : null;
+		FieldrefConstant nleTl = channel.nleUsed ? channel.nleTlField : null;
+		if (this.signal != null) {
+			Utf8Constant name = this.cp.addUtf8(SIGNALS);
+			Utf8Constant desc = this.cp.addUtf8("Ljava/lang/ThreadLocal;");
+			signals = new Signals(this.cp.addFieldref(this.thisClass, this.cp.addNameAndType(name, desc)), name, desc);
+			this.methods.add(buildSignal(signals.field(), condTl, nleTl));
+		}
+		if (this.failure != null) {
+			this.methods.add(buildFailure(signals == null ? null : signals.field(), condTl, nleTl));
+		}
+		this.finished = true;
+		return signals;
+	}
+
+	// static Throwable _jsig(Throwable t): _condTl's condition taken out of the channel,
+	// and the entry of _nleTl t is the exit of off the stack; then {t, that condition,
+	// that entry, the record} pushed on the record, cut to the newest PENDING_SIGNALS; t.
+	private Method buildSignal(FieldrefConstant signals, @Nullable FieldrefConstant condTl,
+			@Nullable FieldrefConstant nleTl) {
+		JvmAsm a = new JvmAsm();
+		ClassConstant objects = cls("[Ljava/lang/Object;");
+		MethodrefConstant get = method("java/lang/ThreadLocal", "get", "()Ljava/lang/Object;");
+		MethodrefConstant set = method("java/lang/ThreadLocal", "set", "(Ljava/lang/Object;)V");
+		// 0 = t, 1 = the record, 2 = a node, 3 = its depth, 4 = the condition, 5 = the
+		// exit. The condition leaves the channel with t: one Java swallows is not read
+		// as a later failure's.
+		a.aconstNull();
+		a.astore(4);
+		if (condTl != null) {
+			a.getstatic(condTl);
+			a.invokevirtual(get);
+			a.astore(4);
+			a.getstatic(condTl);
+			a.aconstNull();
+			a.invokevirtual(set);
+		}
+		a.aconstNull();
+		a.astore(5);
+		if (nleTl != null) {
+			int notItsExit = a.label();
+			a.getstatic(nleTl);
+			a.invokevirtual(get);
+			a.checkcast(objects);
+			a.astore(2);
+			a.aload(2);
+			a.branch(Opcode.IFNULL, notItsExit);
+			a.aload(2);
+			a.iconst(0);
+			a.aaload();
+			a.aload(0);
+			a.branch(Opcode.IF_ACMPNE, notItsExit);
+			a.aload(2);
+			a.astore(5);
+			a.getstatic(nleTl);
+			a.aload(2);
+			a.iconst(3);
+			a.aaload();
+			a.invokevirtual(set);
+			a.bind(notItsExit);
+		}
+		int walk = a.label();
+		int cut = a.label();
+		int push = a.label();
+		a.getstatic(signals);
+		a.invokevirtual(get);
+		a.checkcast(objects);
+		a.astore(1);
+		a.aload(1);
+		a.astore(2);
+		a.iconst(1);
+		a.istore(3);
+		a.bind(walk);
+		a.aload(2);
+		a.branch(Opcode.IFNULL, push);
+		a.iload(3);
+		a.iconst(am.ik.rontolisp.compiler.JavaImplementations.PENDING_SIGNALS - 1);
+		a.branch(Opcode.IF_ICMPGE, cut);
+		a.aload(2);
+		a.iconst(3);
+		a.aaload();
+		a.checkcast(objects);
+		a.astore(2);
+		a.iinc(3, 1);
+		a.branch(Opcode.GOTO, walk);
+		a.bind(cut);
+		a.aload(2);
+		a.iconst(3);
+		a.aconstNull();
+		a.aastore();
+		a.bind(push);
+		a.getstatic(signals);
+		a.iconst(4);
+		a.anewarray(cls("java/lang/Object"));
+		int slot = 0;
+		for (int local : new int[] { 0, 4, 5, 1 }) {
+			a.dup();
+			a.iconst(slot++);
+			a.aload(local);
+			a.aastore();
+		}
+		a.invokevirtual(set);
+		a.aload(0);
+		a.areturn();
+		return new Method(this.cp.addUtf8(SIGNAL), this.cp.addUtf8(SIGNAL_DESC), 6, 6, a.finish(), List.of());
+	}
+
+	// static Throwable _jfail(Throwable t, String text): t when the record holds it --
+	// taken off with every newer node, its condition and exit entry put back -- else
+	// new RuntimeException(text + t), with no condition in the channel.
+	private Method buildFailure(@Nullable FieldrefConstant signals, @Nullable FieldrefConstant condTl,
+			@Nullable FieldrefConstant nleTl) {
+		JvmAsm a = new JvmAsm();
+		if (signals != null) {
+			ClassConstant objects = cls("[Ljava/lang/Object;");
+			MethodrefConstant get = method("java/lang/ThreadLocal", "get", "()Ljava/lang/Object;");
+			MethodrefConstant set = method("java/lang/ThreadLocal", "set", "(Ljava/lang/Object;)V");
+			// 0 = t, 1 = the text, 2 = a node, 3 = its exit entry
+			int walk = a.label();
+			int found = a.label();
+			int wrap = a.label();
+			a.getstatic(signals);
+			a.invokevirtual(get);
+			a.checkcast(objects);
+			a.astore(2);
+			a.bind(walk);
+			a.aload(2);
+			a.branch(Opcode.IFNULL, wrap);
+			a.aload(2);
+			a.iconst(0);
+			a.aaload();
+			a.aload(0);
+			a.branch(Opcode.IF_ACMPEQ, found);
+			a.aload(2);
+			a.iconst(3);
+			a.aaload();
+			a.checkcast(objects);
+			a.astore(2);
+			a.branch(Opcode.GOTO, walk);
+			a.bind(found);
+			a.getstatic(signals);
+			a.aload(2);
+			a.iconst(3);
+			a.aaload();
+			a.invokevirtual(set);
+			if (condTl != null) {
+				a.getstatic(condTl);
+				a.aload(2);
+				a.iconst(1);
+				a.aaload();
+				a.invokevirtual(set);
+			}
+			if (nleTl != null) {
+				int noExit = a.label();
+				a.aload(2);
+				a.iconst(2);
+				a.aaload();
+				a.checkcast(objects);
+				a.astore(3);
+				a.aload(3);
+				a.branch(Opcode.IFNULL, noExit);
+				a.aload(3);
+				a.iconst(3);
+				a.getstatic(nleTl);
+				a.invokevirtual(get);
+				a.aastore();
+				a.getstatic(nleTl);
+				a.aload(3);
+				a.invokevirtual(set);
+				a.bind(noExit);
+			}
+			a.aload(0);
+			a.areturn();
+			a.bind(wrap);
+		}
+		if (condTl != null) {
+			// The member's own failure carries no condition: none a callback left.
+			a.getstatic(condTl);
+			a.aconstNull();
+			a.invokevirtual(method("java/lang/ThreadLocal", "set", "(Ljava/lang/Object;)V"));
+		}
+		a.anew(cls("java/lang/RuntimeException"));
+		a.dup();
+		a.aload(1);
+		a.aload(0);
+		a.invokestatic(method("java/lang/String", "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;"));
+		a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
+		a.invokespecial(method("java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V"));
+		a.areturn();
+		return new Method(this.cp.addUtf8(FAIL), this.cp.addUtf8(FAIL_DESC), 6, 4, a.finish(), List.of());
 	}
 
 	/**
@@ -616,15 +915,12 @@ final class JvmJavaDirectSites {
 				this.a.pop();
 				throwMessage(this.a, "No such class: " + bound.getKey());
 			}
+			// What the member threw: through _jfail, which passes on what a function
+			// called
+			// back from Java raised and wraps anything else.
 			this.a.bind(memberFailed);
-			this.a.astore(this.objectTemp);
-			this.a.anew(cls("java/lang/RuntimeException"));
-			this.a.dup();
 			this.a.ldcString(str(failure));
-			this.a.aload(this.objectTemp);
-			this.a.invokestatic(method("java/lang/String", "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;"));
-			this.a.invokevirtual(method("java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
-			this.a.invokespecial(method("java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V"));
+			this.a.invokestatic(failure());
 			this.a.athrow();
 			return finish(name, desc, Math.max(8, stackForCall + 6));
 		}

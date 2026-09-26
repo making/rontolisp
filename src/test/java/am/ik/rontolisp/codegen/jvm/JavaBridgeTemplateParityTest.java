@@ -321,7 +321,8 @@ class JavaBridgeTemplateParityTest {
 			}
 			finally {
 				// The template class is this JVM's: leave it unbound for the other tests.
-				for (String field : List.of("applyMethod", "strvMethod", "lispToStringMethod", "bf16ValueMethod")) {
+				for (String field : List.of("applyMethod", "strvMethod", "lispToStringMethod", "bf16ValueMethod",
+						"signalMethod", "failMethod")) {
 					Field f = JavaBridgeTemplate.class.getDeclaredField(field);
 					f.setAccessible(true);
 					f.set(null, null);

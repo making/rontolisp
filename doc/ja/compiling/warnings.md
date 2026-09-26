@@ -10,6 +10,8 @@
 - 呼び出し箇所が結局標準の演算子にコンパイルされる `COMMON-LISP` 関数の `defun`
 - `--no-wasi` モジュールのロード中に到達するプリミティブ、war が無視する `http-handler` の
   ポート、そして `--warn-java-reflection` 指定時の、実行時リフレクションに残る `java:` 呼び出し
+- マクロが展開中に呼ぶ `(warn ...)`。位置はマクロ呼び出しです。`style-warning` は代わりに
+  `style-warning:` として表示され、ハンドラが抑止した警告は何も表示されません
 
 ```lisp
 (defun add (a b) (+ a b))
@@ -46,8 +48,7 @@ error: 2 warnings about the program's source, treated as errors (--warnings-as-e
 - `ql:quickload` が dist からダウンロードしたシステムの中の警告。利用者には直せません
 - ソースについてではない行。`:async t` と `--host-fetch` のホスト側の義務、そして
   `warning: no JDK found`
-- マクロが展開中に呼ぶ `(warn ...)`。これはコンパイラの警告ではなく Lisp のコンディション
-  です
+- マクロが展開中に通知する `style-warning`
 
 Maven プラグインでは `<warningsAsErrors>true</warningsAsErrors>`
 (`-Drontolisp.warningsAsErrors=true`)、組み込み利用では

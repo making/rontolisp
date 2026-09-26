@@ -230,6 +230,45 @@ class JvmClassFileLookupTest {
 		assertThat(resolved).as("the corpus exercises resolution").isGreaterThan(40);
 	}
 
+	// Both lookups answer Class.getMethods() of an interface: none of Object's methods it
+	// does not redeclare. The resolver adds them for a java:call (JLS 9.2), so a site
+	// calling one on an interface receiver -- declared, or a java:reify object --
+	// resolves to Object's member through either lookup.
+	@Test
+	void anInterfaceReceiverReachesObjectsMethodsThroughTheResolver() {
+		for (JavaClassLookup lookup : List.of(REFLECTION, classFiles)) {
+			JavaType list = Objects.requireNonNull(lookup.find("java.util.List"));
+			assertThat(list.methods("toString")).as("%s", lookup).isEmpty();
+			assertThat(list.methods("getClass")).as("%s", lookup).isEmpty();
+			assertThat(signatures(list.methods("hashCode"))).as("%s", lookup)
+				.containsExactly("java.util.List.hashCode[]int");
+		}
+		String corpus = """
+				(java:call (the (java:object "java.util.List") x) "toString")
+				(java:call (the (java:object "java.util.List") x) "hashCode")
+				(java:call (the (java:object "java.util.List") x) "equals" "s")
+				(java:call (the (java:object "java.util.List") x) "getClass")
+				(java:call (the (java:object "java.util.List") x) "wait" 1)
+				(java:call (java:reify "java.lang.Runnable" "run" (lambda () nil)) "toString")
+				(java:call (java:reify "java.lang.Runnable" "run" (lambda () nil)) "hashCode")
+				(java:call (java:reify "java.lang.Runnable" "run" (lambda () nil)) "equals" nil)
+				""";
+		List<String> expected = List.of("java.lang.Object.toString[]java.lang.String", "java.util.List.hashCode[]int",
+				"java.util.List.equals[java.lang.Object]boolean", "java.lang.Object.getClass[]java.lang.Class",
+				"java.lang.Object.wait[long]void", "java.lang.Object.toString[]java.lang.String",
+				"java.lang.Object.hashCode[]int", "java.lang.Object.equals[java.lang.Object]boolean");
+		JavaSiteResolver byReflection = new JavaSiteResolver(REFLECTION);
+		JavaSiteResolver byClassFiles = new JavaSiteResolver(classFiles);
+		List<LispVal> sites = LispReader.readAllFromString(corpus);
+		for (int i = 0; i < sites.size(); i++) {
+			LispCons site = (LispCons) sites.get(i);
+			JavaSite a = byReflection.resolve(site);
+			assertThat(describe(byClassFiles.resolve(site))).as(site.print()).isEqualTo(describe(a));
+			assertThat(a.executable()).as(site.print()).isNotNull();
+			assertThat(signature(Objects.requireNonNull(a.executable()))).as(site.print()).isEqualTo(expected.get(i));
+		}
+	}
+
 	// java:reify / java:proxy implement an interface by the methods Class.getMethods()
 	// lists: both lookups list the same ones, abstract where reflection says so, so a
 	// form declares the same slots interpreted and compiled -- and the object's kind is

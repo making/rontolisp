@@ -142,6 +142,13 @@ public final class ClosRegistry {
 	public static final String DIVISION_BY_ZERO_CLASS_NAME = "DIVISION-BY-ZERO";
 
 	/**
+	 * The warning class a compile never fails on: a macro-time {@code warn} of one is
+	 * reported and not counted by {@code --warnings-as-errors}, as SBCL's
+	 * {@code compile-file} leaves {@code failure-p} alone for it.
+	 */
+	public static final String STYLE_WARNING_CLASS_NAME = "STYLE-WARNING";
+
+	/**
 	 * The substring that tells a {@code division-by-zero} from any other arithmetic
 	 * failure, in the host exception's message ({@code "/ by zero"},
 	 * {@code "BigInteger divide by zero"}, rontolisp's own {@code "Division by zero"}).

@@ -39,7 +39,8 @@ import am.ik.rontolisp.macro.LispMacroExpander;
  * fallback call into the dispatch again would recurse forever -- the
  * {@code GrayStreamsLibrary.DISPATCH_DEFUNS} rule), quoted data, macro-definition bodies,
  * and every non-evaluated binding position it knows ({@code let}/{@code lambda} families,
- * {@code case}/{@code handler-case} clause heads). When {@code close} is shadowed, the
+ * {@code case}/{@code handler-case} clause heads), and keeps the head of a place
+ * ({@code setf}, {@code incf}, {@code push}, ...). When {@code close} is shadowed, the
  * {@code with-open-*}/{@code with-*-to-string} forms are pre-expanded so their implicit
  * {@code (close ...)} routes through the dispatcher like it does on the interpreter
  * (where every {@code close} call goes through the global function binding).
@@ -214,6 +215,20 @@ public final class ShadowedBuiltins {
 		return out;
 	}
 
+	/**
+	 * Renames the call sites and {@code #'name} references of the given built-ins onto
+	 * their dispatchers -- this pass's walk, with the same non-evaluated positions kept.
+	 * The interpreter uses it ahead of its multiple-value lowerings, which recognize a
+	 * producer ({@code floor}, {@code gethash}, ...) by its NAME and would otherwise
+	 * spell the built-in's own values past a user method.
+	 * @param form the form to walk
+	 * @param dispatchers built-in name -&gt; the name its dispatcher is bound under
+	 * @return the rewritten form, or {@code form} itself when nothing matched
+	 */
+	public static LispVal renameCallSites(LispVal form, Map<String, String> dispatchers) {
+		return rewrite(form, dispatchers, false);
+	}
+
 	private static LispVal rewrite(LispVal form, Map<String, String> shadowed, boolean closeShadowed) {
 		if (!(form instanceof LispCons cons)) {
 			return form;
@@ -329,6 +344,21 @@ public final class ShadowedBuiltins {
 					}
 					break;
 				}
+				case LispNames.SETF, LispNames.PSETF, LispNames.INCF, LispNames.DECF, LispNames.POP, LispNames.REMF,
+						LispNames.PUSH, LispNames.PUSHNEW, LispNames.ROTATEF, LispNames.SHIFTF: {
+					// A place names its setf expansion, not a call: (setf (gethash k h)
+					// v) stores through gethash's setf function whatever methods the
+					// reader has, so the place's head stays and only its argument forms
+					// are rewritten.
+					List<LispVal> rebuilt = new ArrayList<>(parts.size());
+					rebuilt.add(parts.get(0));
+					for (int i = 1; i < parts.size(); i++) {
+						LispVal part = parts.get(i);
+						rebuilt.add(isPlacePosition(opName, i, parts.size())
+								? rewritePlace(part, shadowed, closeShadowed) : rewrite(part, shadowed, closeShadowed));
+					}
+					return LispCons.rebuiltList(cons, rebuilt);
+				}
 				case LispNames.MULTIPLE_VALUE_BIND, LispNames.DESTRUCTURING_BIND: {
 					if (parts.size() >= 3) {
 						List<LispVal> rebuilt = new ArrayList<>(parts.size());
@@ -387,6 +417,31 @@ public final class ShadowedBuiltins {
 			return form;
 		}
 		return new LispCons(car, cdr);
+	}
+
+	/**
+	 * Whether element {@code index} of a place-modifying form is a place: every other
+	 * element from the first for {@code setf}/{@code psetf}, the second for
+	 * {@code push}/{@code pushnew}, all but the new value for {@code shiftf}, every one
+	 * for {@code rotatef}, and the first for the rest.
+	 */
+	private static boolean isPlacePosition(String op, int index, int size) {
+		return switch (op) {
+			case LispNames.SETF, LispNames.PSETF -> index % 2 == 1;
+			case LispNames.PUSH, LispNames.PUSHNEW -> index == 2;
+			case LispNames.ROTATEF -> true;
+			case LispNames.SHIFTF -> index < size - 1;
+			default -> index == 1;
+		};
+	}
+
+	/** A place: a compound place keeps its head, its argument forms evaluate. */
+	private static LispVal rewritePlace(LispVal place, Map<String, String> shadowed, boolean closeShadowed) {
+		if (place instanceof LispCons cons && cons.car() instanceof LispSymbol && cons.isProperList()) {
+			LispVal args = rewriteTail(cons.cdr(), shadowed, closeShadowed);
+			return args == cons.cdr() ? place : SourceProvenance.inherit(cons, new LispCons(cons.car(), args));
+		}
+		return rewrite(place, shadowed, closeShadowed);
 	}
 
 	private static LispVal rewriteTail(LispVal tail, Map<String, String> shadowed, boolean closeShadowed) {

@@ -27429,6 +27429,66 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The interpreter's {@code (warn ...)}:
+	 * {@link #expandWarn(LispCons, ClosRegistry, boolean)} with every
+	 * {@code (%warn message)} terminal widened to {@code (%warn message designator)}, the
+	 * designator naming what was signalled -- the quoted class of a typed designator, the
+	 * runtime datum ({@code __signal_cond}: a condition instance, a class-name symbol, or
+	 * a format-control string), or nil for a literal control string (a
+	 * {@code simple-warning}). The interpreter's {@code %warn} reads it to tell a
+	 * {@code style-warning} apart when a warning reaches its report while a macro expands
+	 * on the compile path (the {@code --warnings-as-errors} count). The compiled backends
+	 * never see this shape: they expand {@code warn} themselves.
+	 * @param cons the warn expression
+	 * @param closRegistry the class registry
+	 * @param signalHook whether to run {@code handler-bind} handlers at the signal point
+	 * @return the expanded expression
+	 */
+	public static LispVal expandWarnWithDesignator(LispCons cons, ClosRegistry closRegistry, boolean signalHook) {
+		LispVal expansion = expandWarn(cons, closRegistry, signalHook);
+		List<LispVal> parts = cons.toList();
+		LispVal datum = parts.get(1);
+		LispVal designator;
+		if (datum instanceof LispCons mc && mc.car() instanceof LispSymbol mcOp
+				&& LispNames.MAKE_CONDITION.equals(mcOp.name()) && mc.cdr() instanceof LispCons mcArgs
+				&& quotedSymbol(mcArgs.car()) instanceof LispSymbol typeSym) {
+			designator = listToCons(List.of(new LispSymbol(LispNames.QUOTE), typeSym));
+		}
+		else if (quotedSymbol(datum) instanceof LispSymbol typeSym) {
+			designator = listToCons(List.of(new LispSymbol(LispNames.QUOTE), typeSym));
+		}
+		else if (datum instanceof LispString) {
+			designator = LispNil.INSTANCE;
+		}
+		else {
+			designator = new LispSymbol(SIGNAL_COND_VAR);
+		}
+		// The call's own subforms stand in the expansion as they were written; none of
+		// them is a terminal of THIS warn, so the walk does not enter them.
+		java.util.Set<LispVal> userForms = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		userForms.addAll(parts.subList(1, parts.size()));
+		return withWarnDesignator(expansion, designator, userForms);
+	}
+
+	private static LispVal withWarnDesignator(LispVal form, LispVal designator, java.util.Set<LispVal> userForms) {
+		if (!(form instanceof LispCons cons) || userForms.contains(form)) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			if (LispNames.QUOTE.equals(head.name())) {
+				return form;
+			}
+			if (LispNames.WARN_INTERNAL.equals(head.name()) && cons.cdr() instanceof LispCons args
+					&& args.cdr() instanceof LispNil) {
+				return listToCons(List.of(head, args.car(), designator));
+			}
+		}
+		LispVal car = withWarnDesignator(cons.car(), designator, userForms);
+		LispVal cdr = withWarnDesignator(cons.cdr(), designator, userForms);
+		return car == cons.car() && cdr == cons.cdr() ? form : new LispCons(car, cdr);
+	}
+
+	/**
 	 * Expands {@code (signal datum args...)} -- the non-fatal signaling operator, with
 	 * the same designator surface as {@link #expandError} -- into
 	 * {@code (%signal-cond condition message)}: the condition is raised when a
@@ -37021,9 +37081,30 @@ public final class LispMacroExpander {
 		return isMvProducerForm(form);
 	}
 
+	/**
+	 * True when {@code op} names an operator the multiple-value lowerings treat as a
+	 * syntactic producer (in the arities {@link #isMvProducerForm} lists). This list
+	 * GATES {@link #isMvProducerForm}, so a producer missing here is never lowered.
+	 * @param op the operator name
+	 * @return {@code true} for a syntactic producer's name
+	 */
+	public static boolean isSyntacticMultipleValueProducerName(String op) {
+		return switch (op) {
+			case LispNames.VALUES, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.TRUNCATE,
+					LispNames.FFLOOR, LispNames.FCEILING, LispNames.FROUND, LispNames.FTRUNCATE, LispNames.GETHASH,
+					LispNames.ARRAY_DISPLACEMENT, LispNames.SUBTYPEP, LispNames.FIND_SYMBOL, LispNames.INTERN,
+					LispNames.READ_FROM_STRING ->
+				true;
+			default -> false;
+		};
+	}
+
 	/** True when the form is recognized as a multi-value producer (see MvProducer). */
 	private static boolean isMvProducerForm(LispVal form) {
 		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+			return false;
+		}
+		if (!isSyntacticMultipleValueProducerName(op.name())) {
 			return false;
 		}
 		int size = cons.toList().size();

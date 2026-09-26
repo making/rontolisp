@@ -522,6 +522,20 @@ class JavaInteropTest {
 				""")).isEqualTo("#\\b\nT\n#\\a\nT\n1.5\n7\n(\"a\" \"b\")\nT");
 	}
 
+	// An interface has Object's public methods as members, which Class.getMethods() of
+	// it does not list: a call of one resolves before it runs, so nothing is reported.
+	// Mirrors JvmJavaInteropCompilerTest#objectsMethodsOnAnInterfaceAreDirectCalls.
+	@Test
+	void objectsMethodsOnAnInterfaceResolveBeforeTheyRun() {
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		try (var ignored = ThreadStdio.err(err)) {
+			assertThat(
+					output("(setq java:*warn-on-reflection* t)\n" + JavaInteropPrograms.OBJECT_METHODS_ON_AN_INTERFACE))
+				.isEqualTo(JavaInteropPrograms.OBJECT_METHODS_ON_AN_INTERFACE_OUTPUT);
+		}
+		assertThat(err.toString()).isEmpty();
+	}
+
 	// Evaluates the forms and answers what they printed.
 	private String output(String input) {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -660,6 +674,17 @@ class JavaInteropTest {
 				(let ((iface "java.util.function.Supplier") (name "get"))
 				  (java:call (java:reify iface name (lambda () 7)) "get"))
 				""")).isEqualTo(new LispInteger(7));
+	}
+
+	// What a function called back from Java raises passes through the Java frames to
+	// the Lisp code that made the call -- before, the java: site wrapped it as "error
+	// calling C.m: ...", so an exit never arrived and a handler on the condition's type
+	// never matched. Mirrors
+	// JvmJavaInteropCompilerTest#whatACallbackRaisesPassesThroughTheJavaCall.
+	@Test
+	void whatACallbackRaisesPassesThroughTheJavaCall() {
+		assertThat(output(JavaImplementationPrograms.CALLBACK_SIGNALS))
+			.isEqualTo(JavaImplementationPrograms.CALLBACK_SIGNALS_OUTPUT);
 	}
 
 	// java:proxy routes every method -- a default one too -- to its callable, with the

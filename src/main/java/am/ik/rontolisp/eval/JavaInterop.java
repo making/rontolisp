@@ -8,6 +8,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.math.BigInteger;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -107,6 +108,12 @@ final class JavaInterop {
 
 	// Parsed member designators: a tag is parsed once, not per call.
 	private static final ConcurrentHashMap<String, JavaOverloads.Member> MEMBERS = new ConcurrentHashMap<>();
+
+	// What functions called back from Java raised on this thread and no site has passed
+	// on yet, newest first (at most JavaImplementations.PENDING_SIGNALS): a Java call
+	// that throws one of them throws it on unchanged (fail). A compiled program keeps
+	// the same record (codegen.jvm.JvmJavaDirectSites' _jsig / _jfail).
+	private static final ThreadLocal<ArrayDeque<Throwable>> RAISED = new ThreadLocal<>();
 
 	private JavaInterop() {
 	}
@@ -675,7 +682,9 @@ final class JavaInterop {
 	 * function is never made a proxy there); an abstract method no function implements
 	 * throws; a default method no slot overrides runs its body; {@code Object}'s three
 	 * keep their identity behavior. What a compiled program's generated class does,
-	 * method for method.
+	 * method for method. What the function raises -- or the refusal of its value -- is
+	 * recorded on its way out to the Java caller ({@link #raised}), so the site whose
+	 * Java call it reaches throws it on unchanged.
 	 */
 	private static final class ImplementationHandler implements InvocationHandler {
 
@@ -713,6 +722,15 @@ final class JavaInterop {
 				default -> {
 				}
 			}
+			try {
+				return call(index, method, methodArgs);
+			}
+			catch (Throwable signal) {
+				throw raised(signal);
+			}
+		}
+
+		private @Nullable Object call(int index, Method method, @Nullable Object @Nullable [] methodArgs) {
 			boolean proxy = this.dispatch.implementation.proxy();
 			List<LispVal> callArgs = new ArrayList<>();
 			if (proxy) {
@@ -965,9 +983,53 @@ final class JavaInterop {
 		return type;
 	}
 
-	private static LispEvalException fail(String what, ReflectiveOperationException ex) {
+	// What a failed Java call throws: what a function called back from Java raised -- an
+	// exit, a condition, uiop:quit -- on to the Lisp code that made the call, as it is;
+	// anything else is the error calling the member.
+	private static RuntimeException fail(String what, ReflectiveOperationException ex) {
 		Throwable cause = ex instanceof InvocationTargetException ite && ite.getCause() != null ? ite.getCause() : ex;
+		if (passedOn(cause)) {
+			if (cause instanceof RuntimeException signal) {
+				return signal;
+			}
+			if (cause instanceof Error error) {
+				throw error;
+			}
+		}
 		return new LispEvalException("error " + what + ": " + cause);
+	}
+
+	// Records a throwable leaving a function called back from Java; answers it.
+	private static Throwable raised(Throwable throwable) {
+		ArrayDeque<Throwable> pending = RAISED.get();
+		if (pending == null) {
+			pending = new ArrayDeque<>();
+			RAISED.set(pending);
+		}
+		pending.addFirst(throwable);
+		if (pending.size() > JavaImplementations.PENDING_SIGNALS) {
+			pending.removeLast();
+		}
+		return throwable;
+	}
+
+	// Whether a callback raised this very throwable on this thread; if so it is taken off
+	// the record with every newer one -- those left their callbacks after it and never
+	// reached a site: Java code swallowed them while this one was on its way out.
+	private static boolean passedOn(Throwable throwable) {
+		ArrayDeque<Throwable> pending = RAISED.get();
+		if (pending == null) {
+			return false;
+		}
+		for (Throwable raised : pending) {
+			if (raised == throwable) {
+				while (pending.pollFirst() != throwable) {
+					// newer, swallowed
+				}
+				return true;
+			}
+		}
+		return false;
 	}
 
 }

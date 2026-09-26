@@ -69,10 +69,10 @@ class ShippedBridgeNativeImageE2eTest {
 	void aJavaInteropJarRunsAsANativeImageWithAgentConfiguration() throws Exception {
 		// The bridge's entry points a program still needs -- a class named at run time,
 		// a receiver of no known class, a proxy of an interface named at run time -- and
-		// both reflective back-calls bind() makes: _apply (the proxy's lambda) and _strv
-		// (a string built by concatenate). The calls that resolve are direct, and a
-		// java:proxy of a literal interface is a generated class: neither needs
-		// configuration.
+		// the reflective back-calls bind() makes: _apply (the proxy's lambda), _strv (a
+		// string built by concatenate), and _jsig / _jfail (an exit leaving the proxy's
+		// lambda through the call). The calls that resolve are direct, and a java:proxy
+		// of a literal interface is a generated class: neither needs configuration.
 		Path jar = compileJar("""
 				(defvar *sb* (java:new "java.lang.StringBuilder" "hi"))
 				(let ((math "java.lang.Math") (int "java.lang.Integer") (supplier "java.util.function.Supplier"))
@@ -80,9 +80,10 @@ class ShippedBridgeNativeImageE2eTest {
 				  (java:call *sb* "append" (concatenate 'string "!" "?"))
 				  (print (java:call *sb* "toString"))
 				  (print (java:field int "MAX_VALUE"))
-				  (print (java:call (java:proxy supplier (lambda (method) 42)) "get")))
+				  (print (java:call (java:proxy supplier (lambda (method) 42)) "get"))
+				  (print (block b (java:call (java:proxy supplier (lambda (method) (return-from b :left))) "get"))))
 				""");
-		List<String> expected = List.of("7", "\"hi!?\"", "2147483647", "42");
+		List<String> expected = List.of("7", "\"hi!?\"", "2147483647", "42", ":LEFT");
 
 		Path config = this.tempDir.resolve("config");
 		Path java = Path.of(System.getProperty("java.home"), "bin", "java");
@@ -145,7 +146,8 @@ class ShippedBridgeNativeImageE2eTest {
 	// implementing interfaces needs no configuration either: a Swing-free listener the
 	// JDK calls back (added, fired, removed), a comparator Collections.sort calls and
 	// whose default reversed() runs, a Runnable a thread runs, a Consumer from a lambda,
-	// a proxy, a primitive-typed method.
+	// a proxy, a primitive-typed method -- and an exit and a condition leaving a callback
+	// through the Java call.
 	@Test
 	void anInterfaceImplementingJavaStaticJarRunsAsANativeImageWithNoConfiguration() throws Exception {
 		Path jar = compileJar(
@@ -177,10 +179,16 @@ class ShippedBridgeNativeImageE2eTest {
 						(print (java:call (java:proxy "java.util.function.Supplier" (lambda (method) method)) "get"))
 						(print (java:call (java:reify "java.util.function.IntBinaryOperator" "applyAsInt" (lambda (a b) (* a b)))
 						                  "applyAsInt" 6 7))
+						(print (block b
+						         (java:call (java:static "java.util.List" "of" 1 2 3) "forEach"
+						                    (lambda (method x) (when (= x 2) (return-from b x))))))
+						(print (handler-case (java:call (java:static "java.util.List" "of" 1) "forEach"
+						                                (lambda (method x) (error "boom ~a" x)))
+						         (error (e) (format nil "~a" e))))
 						""",
 				"--java-static");
 		List<String> expected = List.of("((\"size\" 2) (\"name\" \"b\"))", "\"[1, 2, 3]\"", "1", "(\"accept\" 1)",
-				"(\"accept\" 2)", "(\"accept\" 3)", ":RAN", "\"get\"", "42");
+				"(\"accept\" 2)", "(\"accept\" 3)", ":RAN", "\"get\"", "42", "2", "\"boom 1\"");
 		Path java = Path.of(System.getProperty("java.home"), "bin", "java");
 		assertThat(lines(run(java, "-jar", jar.toString()))).isEqualTo(expected);
 		try (ZipFile entries = new ZipFile(jar.toFile())) {

@@ -178,7 +178,8 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   it was not chosen for (a13 converted it when convertible and re-derived the varargs packing --
   both gone). X is `print` / the program's `_lispToString`, so the texts agree for every value.
   Then the member is called with the packing the resolution chose; what it throws is `error
-  calling C.m: <throwable>` / `error constructing C: ...` / `error reading field f: ...`.
+  calling C.m: <throwable>` / `error constructing C: ...` / `error reading field f: ...` --
+  unless a function called back from Java raised it ("What a callback raises", below).
 - Variable types: `compiler/JavaDeclarations` rewrites references to a typed variable in java:
   receiver/argument positions into `(the <spec> v)` -- the ONE scope walk (special forms
   structurally; built-in and user macros expanded, once per walk and cached, only to learn what
@@ -250,6 +251,12 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   three: resolver, interpreter, bridge -- its memo key is prefixed so a call's and a static's
   choices of one name never mix). An instance method under `java:static` only ever failed (an NPE
   out of `Method.invoke`); now it is no candidate: `No matching method C.m with N argument(s)`.
+- An INTERFACE receiver's `java:call` candidates add `Object`'s public instance methods it does
+  not redeclare (`JavaSiteResolver.callableMethods`; JLS 9.2 members, final ones included --
+  javac emits `invokeinterface List.getClass`, which links by JVMS 5.4.3.4). The lookups keep
+  `getMethods()` semantics (none of them listed; `JvmClassFileLookupTest#anInterfaceReceiver...`
+  pins both), so `publicMethods()` / reify slots are unaffected. Before 2026-09-26 such a site
+  (a declared `List`, a `java:reify` object) was left to run time and `--java-static` refused it.
 - `(java:field "C" "f")` reads a static field: an instance field so named is `java:field: field
   C.f is not static` on all three (was an NPE), and the resolver leaves it unresolved with that
   reason. `(java:field obj "CONSTANT")` of a static field still reads it.
@@ -469,13 +476,81 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   output identical to `java -jar`
   (`ShippedBridgeNativeImageE2eTest#anInterfaceImplementingJavaStaticJarRunsAsANativeImageWithNoConfiguration`).
 
+## What a callback raises passes through the Java call
+- A function called back from Java (a `java:reify` / `java:proxy` object's method, a function
+  passed where an interface is expected) runs inside a Java call a `java:` site made. What
+  LEAVES it thrown -- an exit (`return-from`, `throw`, `go`, `invoke-restart`), a condition of
+  any type, a raw failure, `uiop:quit`, the refusal of its value (`cannot return X as T`) -- is
+  recorded on its way out, and the site whose Java call throws THAT throwable throws it on
+  unchanged; anything else is still `error calling C.m: <throwable>`. Clojure's reify
+  semantics. The `UnsupportedOperationException` of an abstract method no function implements
+  is the object's own Java-level failure: not recorded, wrapped as before.
+- Measured 2026-09-26 before: every one was wrapped -- a `return-from` out of `List.forEach`'s
+  callback never arrived (`error calling java.util.List.forEach:
+  am.ik.rontolisp.eval.BlockReturnSignal`, compiled `java.lang.RuntimeException`), a
+  `handler-case` on the condition's own type never matched on the interpreter, a restart
+  established outside the call could not be invoked from inside it (interpreted: `...
+  ThrowSignal`), and the text named each backend's exception class.
+- Why a record, not a class test: the interpreter's signals are its own classes
+  (`LispEvalException`, `BlockReturnSignal`, `ThrowSignal`, `GoSignal`, `LispExitSignal`),
+  which no Java code throws, but a compiled program's are JDK classes (`RuntimeException` for
+  `error` and every exit, `ClassCastException` / `ArithmeticException` / ... for a raw failure)
+  a Java method throws too. The boundary is the one place that knows a throwable is Lisp's.
+  Both backends keep the record, so they agree on what Java does with it.
+- The record: per thread, newest first, at most `JavaImplementations.PENDING_SIGNALS` (16). A
+  site that finds the throwable drops it and every NEWER entry: those left their callbacks
+  after it and Java swallowed them while it was on its way out (`Stream.close` runs every
+  close handler and relays the first one's throwable with the rest suppressed, so a single
+  slot would hold the second and lose the first). What Java catches and ignores stays until 16
+  newer push it out; what it wraps (`FutureTask.get`'s `ExecutionException`) or rethrows on
+  another thread (ForkJoin may re-create it with the original as its cause) is a Java failure
+  like any other -- the compiled per-thread channels below could not follow it to another
+  thread anyway.
+- Interpreter: `JavaInterop.ImplementationHandler.invoke` -> `raised` (the whole Lisp side:
+  argument unmarshalling, the call, the return conversion); `fail` -> `passedOn` (`RAISED`).
+- Compiled: `_jsig(Throwable)Throwable` is the handler of every `_jimpl$K` (its whole body)
+  and of the bridge's Proxy (`callback` / `signal`, bound in `bind`). Every site's failure
+  handler is `ldc text; invokestatic _jfail(Throwable,String)Throwable; athrow` -- one method
+  holds the rule (the inline wrap it replaced took ~20 bytes of code per site method, the call
+  takes ~7), and
+  the bridge's `fail` calls it too (bound in `bind`, like `_apply`; missing = a loud bind
+  error). The record is `_jsigTl`, a ThreadLocal of `Object[]{throwable, condition, exit entry,
+  previous}`, declared and initialized in `<clinit>` only when a callback can exist (a
+  `_jimpl$K`, or the bridge). `JvmJavaDirectSites.finishHelpers` builds both helpers after
+  every body is compiled, since what they read depends on the channels the program has;
+  `_jsig`/`_jfail` are `REFLECTIVELY_FOUND_METHODS` and, with the bridge, shaker roots.
+- Compiled custody of the two per-thread channels a condition or exit also lives in (the
+  interpreter's signals carry their own state): `_jsig` takes the condition out of `_condTl`
+  and the throwable's own entry off the `_nleTl` exit stack; `_jfail` puts both back for the
+  throwable it passes on, and clears `_condTl` for a wrapped failure. Measured 2026-09-26
+  without it: the `Stream.close` relay answered the SECOND handler's condition and lost the
+  first handler's exit (`%nlx-catch` reads only the top entry: `Unhandled condition: null`);
+  a condition `FutureTask.run` swallowed was read by the next `handler-case` on the thread,
+  for the `get` failure and for a later Lisp `type-error` alike. One loss remains: a Java call
+  made from a cleanup while a typed condition is on its way out, whose callback raises a PLAIN
+  throwable Java swallows, takes the outer condition with it -- `_condTl` is keyed by nothing,
+  which loses conditions without Java frames too (`.todo/a43`).
+- Cost, measured 2026-09-26 (JDK 25): the normal path is unchanged (an exception-table entry):
+  a 200,000-element `Collections.sort` through a `java:reify` comparator takes ~37 ms before and
+  after compiled, a 20,000-element one ~71 ms interpreted. Class bytes before -> after:
+  `(print (java:static "java.lang.Math" "max" 3 7))` 6,916 -> 7,030 (`_jfail`); a direct
+  `forEach` with a lambda 30,135 -> 30,783 (`_jsig`, custody, `_jsigTl`); java-interop.lisp
+  59,289 -> 59,802 and its bridge 47,726 -> 49,151; life-gui.lisp 107,098 -> 107,553.
+- Pins: `JavaInteropTest` / `JvmJavaInteropCompilerTest#whatACallbackRaisesPassesThroughTheJavaCall`
+  over `testsupport/JavaImplementationPrograms.CALLBACK_SIGNALS` (exits, typed and raw
+  conditions, a restart, a nested call, a site left to run time, a bridge Proxy,
+  `Stream.close`, `FutureTask`), `JvmLispCompilerSplitTest#aForcedSplitKeepsJavaCallsWorking`,
+  `ShippedBridgeNativeImageE2eTest` (the agent-config program binds `_jsig`/`_jfail`; the
+  `--java-static` one needs no configuration for them); user doc `guides/java-interop.md`,
+  "Errors and non-local exits".
+
 ## Tests / docs
 `JavaSiteResolverTest`, `JavaDeclarationsTest`, `JavaImplementationsTest` (compiler),
 `JvmClassFileLookupTest` (incl. `everyInterfaceIsImplementedTheSame`),
 `JavaBridgeTemplateParityTest`, `am.ik.jvm.JvmClassPathTest`; direct calls:
 `JvmJavaInteropCompilerTest` (javap shape, class version, `--java-static`, conversions, texts,
 dispatch: `aDispatchedSite*`, programs shared with `JavaInteropTest` through
-`testsupport/JavaInteropPrograms`; the reify/proxy programs through
+`testsupport/JavaInteropPrograms`; the reify/proxy programs, callback signals included, through
 `testsupport/JavaImplementationPrograms`),
 `JvmLispCompilerSplitTest#aForcedSplitKeepsJavaCallsWorking`,
 `JvmClassShakerTest#keepsTheCallbacksOfAGeneratedInterfaceImplementation`,

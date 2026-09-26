@@ -176,6 +176,22 @@ final class JavaBridgeTemplate {
 	 */
 	private static @Nullable Method bf16ValueMethod;
 
+	/**
+	 * The generated program's {@code _jsig(Throwable)}: what this bridge's {@code Proxy}
+	 * records a throwable leaving its callback with, as a generated implementation's
+	 * callback does, so the site whose Java call it reaches -- this bridge's or a direct
+	 * one -- throws it on unchanged. Bound beside {@code _apply}.
+	 */
+	private static @Nullable Method signalMethod;
+
+	/**
+	 * The generated program's {@code _jfail(Throwable, String)}: what a failed call
+	 * throws -- what a callback raised, as it is, or the error calling the member -- the
+	 * one rule this bridge and the program's direct calls share. Bound beside
+	 * {@code _apply}.
+	 */
+	private static @Nullable Method failMethod;
+
 	/** The width tag slot 0 of a packed {@code (unsigned-byte 8)} vector holds. */
 	private static final int OCTET_TAG = 8;
 
@@ -201,14 +217,9 @@ final class JavaBridgeTemplate {
 	 * @param mainClass the generated program class
 	 */
 	static void bind(Class<?> mainClass) {
-		try {
-			Method apply = mainClass.getDeclaredMethod("_apply", Object.class, Object.class);
-			apply.setAccessible(true);
-			applyMethod = apply;
-		}
-		catch (NoSuchMethodException ex) {
-			throw new RuntimeException("java interop: no _apply method in " + mainClass.getName());
-		}
+		applyMethod = required(mainClass, "_apply", Object.class, Object.class);
+		signalMethod = required(mainClass, "_jsig", Throwable.class);
+		failMethod = required(mainClass, "_jfail", Throwable.class, String.class);
 		try {
 			Method strv = mainClass.getDeclaredMethod("_strv", Object.class);
 			strv.setAccessible(true);
@@ -234,6 +245,18 @@ final class JavaBridgeTemplate {
 		catch (NoSuchMethodException ex) {
 			// No packed float runtime in this program: no bfloat16 array can exist.
 			bf16ValueMethod = null;
+		}
+	}
+
+	// A method every program the bridge travels with declares.
+	private static Method required(Class<?> mainClass, String name, Class<?>... parameterTypes) {
+		try {
+			Method method = mainClass.getDeclaredMethod(name, parameterTypes);
+			method.setAccessible(true);
+			return method;
+		}
+		catch (NoSuchMethodException ex) {
+			throw new RuntimeException("java interop: no " + name + " method in " + mainClass.getName());
 		}
 	}
 
@@ -399,7 +422,9 @@ final class JavaBridgeTemplate {
 	// The object: a Proxy whose handler dispatches by name(parameters)return on the
 	// slots -- a function's index, or -1 for an abstract method no function implements --
 	// as the interpreter's and a compiled program's generated class do. A default method
-	// no slot names runs its body; Object's three keep their identity behavior.
+	// no slot names runs its body; Object's three keep their identity behavior. What the
+	// function raises -- or the refusal of its value -- is recorded on its way out to the
+	// Java caller (the program's _jsig), as a generated class's callback records it.
 	private static Object implementation(Class<?> iface, boolean proxy, Map<String, Integer> slots,
 			@Nullable Object[] functions) {
 		String name = iface.getName();
@@ -428,28 +453,54 @@ final class JavaBridgeTemplate {
 			if (index < 0) {
 				throw new UnsupportedOperationException("java:reify: no implementation of " + name + "." + key);
 			}
-			// Build the ([method-name] arg...) cons list, tail-first.
-			Object argList = null;
-			if (methodArgs != null) {
-				for (int i = methodArgs.length - 1; i >= 0; i--) {
-					argList = new Object[] { unmarshal(methodArgs[i]), argList };
-				}
+			try {
+				return callback(name, proxy, method, methodArgs, functions[index]);
 			}
-			if (proxy) {
-				argList = new Object[] { quote(method.getName()), argList };
+			catch (Throwable raised) {
+				throw signal(raised);
 			}
-			Object result = applyCallable(functions[index], argList);
-			Class<?> ret = method.getReturnType();
-			if (ret == void.class) {
-				return null;
-			}
-			@Nullable Object[] slot = new @Nullable Object[1];
-			if (marshal(result, ret, slot, 0, false) == NO_MATCH) {
-				throw new RuntimeException((proxy ? "java:proxy" : "java:reify") + ": cannot return " + describe(result)
-						+ " as " + ret + " from " + name + (proxy ? "" : "." + method.getName()));
-			}
-			return slot[0];
 		});
+	}
+
+	// A slot's function applied to the ([method-name] arg...) list, its value marshalled
+	// to the method's return type.
+	private static @Nullable Object callback(String name, boolean proxy, Method method,
+			@Nullable Object @Nullable [] methodArgs, @Nullable Object function) {
+		// Build the ([method-name] arg...) cons list, tail-first.
+		Object argList = null;
+		if (methodArgs != null) {
+			for (int i = methodArgs.length - 1; i >= 0; i--) {
+				argList = new Object[] { unmarshal(methodArgs[i]), argList };
+			}
+		}
+		if (proxy) {
+			argList = new Object[] { quote(method.getName()), argList };
+		}
+		Object result = applyCallable(function, argList);
+		Class<?> ret = method.getReturnType();
+		if (ret == void.class) {
+			return null;
+		}
+		@Nullable Object[] slot = new @Nullable Object[1];
+		if (marshal(result, ret, slot, 0, false) == NO_MATCH) {
+			throw new RuntimeException((proxy ? "java:proxy" : "java:reify") + ": cannot return " + describe(result)
+					+ " as " + ret + " from " + name + (proxy ? "" : "." + method.getName()));
+		}
+		return slot[0];
+	}
+
+	// Records a throwable leaving a callback through the program's _jsig; answers it.
+	private static Throwable signal(Throwable throwable) {
+		Method record = signalMethod;
+		if (record != null) {
+			try {
+				record.invoke(null, throwable);
+			}
+			catch (ReflectiveOperationException ex) {
+				// Not recorded: the site wraps it as a failure of the Java call.
+			}
+		}
+		return throwable;
 	}
 
 	// The methods (java:reify "I" designator ...) declares, by name(parameters)return:
@@ -589,15 +640,20 @@ final class JavaBridgeTemplate {
 			return apply.invoke(null, callable, argList);
 		}
 		catch (InvocationTargetException ex) {
-			// A Lisp error thrown by the callable propagates unchanged.
-			if (ex.getCause() instanceof RuntimeException re) {
-				throw re;
-			}
-			throw new RuntimeException("error applying callback: " + ex.getCause());
+			// What the callable raised -- an exit, a condition -- goes on as it is.
+			Throwable raised = ex.getCause();
+			throw rethrow(raised != null ? raised : ex);
 		}
 		catch (ReflectiveOperationException ex) {
 			throw new RuntimeException("error applying callback: " + ex);
 		}
+	}
+
+	// Throws a throwable as it is, whatever its class: only bytecode's rules apply to
+	// what a compiled program throws.
+	@SuppressWarnings("unchecked")
+	private static <T extends Throwable> RuntimeException rethrow(Throwable throwable) throws T {
+		throw (T) throwable;
 	}
 
 	private static @Nullable Object invoke(Class<?> cls, @Nullable Object receiver, String methodName,
@@ -1605,9 +1661,28 @@ final class JavaBridgeTemplate {
 		}
 	}
 
+	// What a failed call throws, as the program's _jfail decides for its direct calls:
+	// what a callback raised, as it is, or the error calling the member.
 	private static RuntimeException fail(String what, ReflectiveOperationException ex) {
 		Throwable cause = ex instanceof InvocationTargetException ite && ite.getCause() != null ? ite.getCause() : ex;
-		return new RuntimeException("error " + what + ": " + cause);
+		String text = "error " + what + ": ";
+		Method fail = failMethod;
+		Throwable answer = null;
+		if (fail != null) {
+			try {
+				answer = (Throwable) fail.invoke(null, cause, text);
+			}
+			catch (ReflectiveOperationException unexpected) {
+				// The error calling the member, below.
+			}
+		}
+		if (answer == null) {
+			return new RuntimeException(text + cause);
+		}
+		if (answer instanceof RuntimeException exception) {
+			return exception;
+		}
+		throw rethrow(answer);
 	}
 
 }
