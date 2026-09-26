@@ -15117,10 +15117,19 @@ public final class LispMacroExpander {
 		LispVal writeDst = listToCons(List.of(new LispSymbol(LispNames.ASET), outVar, iVar, readSrc));
 		LispVal fillLoop = listToCons(
 				List.of(new LispSymbol(LispNames.DOTIMES), listToCons(List.of(iVar, nVar, outVar)), writeDst));
-		LispVal vectorBody = listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
-				listToCons(List.of(listToCons(List.of(lenVar, effectiveEnd)), listToCons(List.of(nVar, length)),
-						listToCons(List.of(outVar, makeOut)))),
-				fillLoop));
+		// The element loop is fronted by the backend's bulk copy, as replace's is: the
+		// fresh %array-alike output has the source's representation, so a packed integer
+		// vector moves with one engine-level copy (wasm's array.copy) instead of an aref
+		// and a %aset dispatch per element -- which was most of a fetched body's drain on
+		// wasm, where every chunk is (subseq receive-buffer 0 n). A decline (a general
+		// vector, an out-of-range end, a backend with no bulk path) copied nothing, and
+		// the loop keeps owning the answer and the error shape.
+		LispVal bulk = listToCons(
+				List.of(new LispSymbol(LispNames.REPLACE_BULK), outVar, seqVar, new LispInteger(0), startVar, nVar));
+		LispVal vectorBody = listToCons(List.of(
+				new LispSymbol(LispNames.LET_STAR), listToCons(List.of(listToCons(List.of(lenVar, effectiveEnd)),
+						listToCons(List.of(nVar, length)), listToCons(List.of(outVar, makeOut)))),
+				makeIf(bulk, outVar, fillLoop)));
 		List<LispVal> coreParts = new java.util.ArrayList<>();
 		coreParts.add(new LispSymbol(LispNames.SUBSEQ_CORE));
 		coreParts.add(seqVar);

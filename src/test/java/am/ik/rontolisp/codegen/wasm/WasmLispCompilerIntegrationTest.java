@@ -7920,6 +7920,48 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void subseqOfAPackedIntegerVectorIsOneBulkCopy() throws Exception {
+		// A fetched body reaches its stream as (subseq receive-buffer 0 n) per chunk, so
+		// the element loop the general-array arm used to run -- an aref and a %aset
+		// dispatch per element, ~170 fuel each -- was most of a --native drain. 64
+		// copies of 64 KiB are ~730 M fuel through that loop; one array.copy per call
+		// keeps the whole program near the module's fixed start-up cost (~17 M).
+		String source = """
+				(let ((buf (make-array 65536 :element-type '(unsigned-byte 8))) (total 0))
+				  (setf (aref buf 65535) 7)
+				  (dotimes (i 64)
+				    (let ((c (subseq buf 1 65536)))
+				      (setq total (+ total (length c) (aref c 65534)))))
+				  (print total))
+				""";
+		assertThat(compileAndRunWithFuel(source, 64_000_000L)).isEqualTo(String.valueOf(64 * (65535 + 7)));
+		// Every width keeps its element type and its values, and what the copy declines
+		// -- a general vector -- is still the element loop's answer.
+		assertThat(compileAndRun("""
+				(let ((b (make-array 5 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3 4 255)))
+				      (h (make-array 4 :element-type '(unsigned-byte 16) :initial-contents '(1 2 65535 4)))
+				      (w (make-array 3 :element-type '(unsigned-byte 32) :initial-contents '(4294967295 2 3)))
+				      (v (vector 1 2 3)))
+				  (print (list (subseq b 2) (array-element-type (subseq b 2)) (subseq b 0 0)
+				               (subseq h 1 3) (array-element-type (subseq h 1 3))
+				               (subseq w 0 1) (array-element-type (subseq w 0 1))
+				               (subseq v 1))))
+				""")).isEqualTo("(#(3 4 255) (UNSIGNED-BYTE 8) #() #(2 65535) (UNSIGNED-BYTE 16) #(4294967295) "
+				+ "(UNSIGNED-BYTE 32) #(2 3))");
+	}
+
+	// Runs a Preview 1 program under a wasmtime fuel budget: an instruction count, so a
+	// test can tell a bulk operation from an element loop without timing anything.
+	private static String compileAndRunWithFuel(String lispCode, long fuel) throws Exception {
+		byte[] wasmBytes = new WasmLispCompiler().compile(LispReader.readAllFromString(lispCode));
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", "-W", "exceptions=y", "-W",
+				"fuel=" + fuel, path("test.wasm"));
+		assertThat(result.getExitCode()).as("exit code within %d fuel\nstderr: %s", fuel, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
 	void subseqList() throws Exception {
 		assertThat(compileAndRun("(print (subseq '(1 2 3 4 5) 1 3))")).isEqualTo("(2 3)");
 		assertThat(compileAndRun("(print (subseq '(1 2 3 4 5) 2))")).isEqualTo("(3 4 5)");
