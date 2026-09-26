@@ -1284,34 +1284,32 @@ class JvmLispCompilerTest {
 		// literal or through a variable -- and used to skip this check entirely: a
 		// non-positive limit silently produced a wrong value instead of signaling
 		// (.todo/981).
-		assertThat(compileAndRun(
-				"""
-						(defun te (thunk)
-						  (handler-case (funcall thunk)
-						    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
-						    (error (e) (list :not-a-type-error (princ-to-string e)))))
-						(print (te (lambda () (random 1/2))))
-						(print (te (lambda () (random -1))))
-						(print (te (lambda () (random 0))))
-						(print (te (lambda () (random -1.5))))
-						(print (te (lambda () (random 0.0))))
-						(let ((x -1.0)) (print (te (lambda () (random x)))))
-						(print (te (lambda () (+ 100 (random -1)))))
-						(print (te (lambda () (+ 100 (random 0)))))
-						(let ((x -1)) (print (te (lambda () (+ 100 (random x))))))
-						(let ((r (+ 100 (random 3)))) (print (and (integerp r) (>= r 100) (< r 103))))
-						"""))
-			.isEqualTo("""
-					("RANDOM: The value 1/2 is not of type REAL" 1/2 REAL)
-					("RANDOM: The value -1 is not of type REAL" -1 REAL)
-					("RANDOM: The value 0 is not of type REAL" 0 REAL)
-					("RANDOM: The value -1.5 is not of type REAL" -1.5 REAL)
-					("RANDOM: The value 0.0 is not of type REAL" 0.0 REAL)
-					("RANDOM: The value -1.0 is not of type REAL" -1.0 REAL)
-					("RANDOM: The value -1 is not of type REAL" -1 REAL)
-					("RANDOM: The value 0 is not of type REAL" 0 REAL)
-					("RANDOM: The value -1 is not of type REAL" -1 REAL)
-					T""");
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(print (te (lambda () (random 1/2))))
+				(print (te (lambda () (random -1))))
+				(print (te (lambda () (random 0))))
+				(print (te (lambda () (random -1.5))))
+				(print (te (lambda () (random 0.0))))
+				(let ((x -1.0)) (print (te (lambda () (random x)))))
+				(print (te (lambda () (+ 100 (random -1)))))
+				(print (te (lambda () (+ 100 (random 0)))))
+				(let ((x -1)) (print (te (lambda () (+ 100 (random x))))))
+				(let ((r (+ 100 (random 3)))) (print (and (integerp r) (>= r 100) (< r 103))))
+				""")).isEqualTo("""
+				("RANDOM: The value 1/2 is not of type REAL" 1/2 REAL)
+				("RANDOM: The value -1 is not of type REAL" -1 REAL)
+				("RANDOM: The value 0 is not of type REAL" 0 REAL)
+				("RANDOM: The value -1.5 is not of type REAL" -1.5 REAL)
+				("RANDOM: The value 0.0 is not of type REAL" 0.0 REAL)
+				("RANDOM: The value -1.0 is not of type REAL" -1.0 REAL)
+				("RANDOM: The value -1 is not of type REAL" -1 REAL)
+				("RANDOM: The value 0 is not of type REAL" 0 REAL)
+				("RANDOM: The value -1 is not of type REAL" -1 REAL)
+				T""");
 	}
 
 	@Test
