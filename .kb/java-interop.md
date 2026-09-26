@@ -92,7 +92,10 @@ Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns -
   `PackageResolver` in `JvmLispCompiler.compile`. Known gap: a user macro whose EXPANSION alone
   holds the java:object declaration is lowered on the compile path (user macros pre-expanded) but
   not by the interpreter (the unexpanded form does not mention it) -- visible only in the
-  upper-bound receiver case. let-initializer inference: not done (a later step).
+  upper-bound receiver case. let-initializer inference: not done (a later step, .todo/a20).
+- Measured 2026-09-26 (`--warn-java-reflection`): examples/jvm/java-interop.lisp resolves 8 of
+  17 sites before they run, swing.lisp 13 of 53; what stays at run time is almost entirely a
+  receiver held in a `let` local or a `defvar` global.
 - Lookups: interpreter = `ReflectiveJavaClasses` (Class.forName without init; canonical Type per
   Class via ClassValue). JVM compile = `codegen.jvm.JvmClassFileLookup` over `am.ik.jvm.JvmClassPath`
   (`ClassFileInfo` reader): a JDK's `lib/ct.sym` for one release (java.home, else JAVA_HOME, else

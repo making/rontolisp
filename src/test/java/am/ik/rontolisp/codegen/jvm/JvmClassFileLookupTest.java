@@ -24,6 +24,7 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -252,6 +253,26 @@ class JvmClassFileLookupTest {
 			assertThat(new JavaSiteResolver(release21).resolve(site).designator())
 				.isEqualTo("repeat(java.lang.CharSequence,int)");
 		}
+	}
+
+	// Where the JDK is found: a home first, else the java a PATH directory holds,
+	// followed through a symbolic link (the sdkman / alternatives layout) to its JDK.
+	@Test
+	void theJdkIsFoundFromAHomeOrThroughTheJavaOnPath(@TempDir Path dir) throws Exception {
+		Path jdk = dir.resolve("jdk");
+		java.nio.file.Files.createDirectories(jdk.resolve("lib"));
+		java.nio.file.Files.createDirectories(jdk.resolve("bin"));
+		java.nio.file.Files.write(jdk.resolve("lib").resolve("ct.sym"), new byte[0]);
+		java.nio.file.Files.write(jdk.resolve("bin").resolve("java"), new byte[0]);
+		Path shims = dir.resolve("shims");
+		java.nio.file.Files.createDirectories(shims);
+		java.nio.file.Files.createSymbolicLink(shims.resolve("java"), jdk.resolve("bin").resolve("java"));
+		Path expected = jdk.resolve("lib").resolve("ct.sym").toRealPath();
+		assertThat(JvmClassFileLookup.findCtSym(List.of(jdk.toString()), null)).isEqualTo(jdk.resolve("lib/ct.sym"));
+		assertThat(JvmClassFileLookup.findCtSym(List.of(dir.resolve("nowhere").toString()),
+				dir.resolve("empty") + java.io.File.pathSeparator + shims))
+			.isEqualTo(expected);
+		assertThat(JvmClassFileLookup.findCtSym(List.of(), dir.toString())).isNull();
 	}
 
 	private static String describe(JavaSite site) {

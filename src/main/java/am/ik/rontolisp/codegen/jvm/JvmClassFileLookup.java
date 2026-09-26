@@ -117,20 +117,30 @@ public final class JvmClassFileLookup implements JavaClassLookup, AutoCloseable 
 		if (envHome != null) {
 			homes.add(envHome);
 		}
+		return findCtSym(homes, System.getenv("PATH"));
+	}
+
+	/**
+	 * The first {@code lib/ct.sym} of the given JDK homes, else of the JDK whose
+	 * {@code bin/java} a {@code PATH} directory holds (through symbolic links).
+	 * @param homes JDK home directories, in order
+	 * @param path a {@code PATH} value, or {@code null}
+	 * @return the file, or {@code null} when none holds one
+	 */
+	static @Nullable Path findCtSym(List<String> homes, @Nullable String path) {
 		for (String home : homes) {
 			Path ctSym = Path.of(home, "lib", "ct.sym");
 			if (Files.isRegularFile(ctSym)) {
 				return ctSym;
 			}
 		}
-		String path = System.getenv("PATH");
 		if (path != null) {
 			for (String dir : path.split(java.io.File.pathSeparator)) {
 				if (dir.isEmpty()) {
 					continue;
 				}
 				Path java = Path.of(dir, "java");
-				if (!Files.isExecutable(java)) {
+				if (!Files.isRegularFile(java)) {
 					continue;
 				}
 				try {
