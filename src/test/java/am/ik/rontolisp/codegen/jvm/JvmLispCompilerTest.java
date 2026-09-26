@@ -16618,7 +16618,10 @@ class JvmLispCompilerTest {
 		// (_isCons, and the same test in _ckList): +165 B.
 		// 10,474 since an out-of-range subscript's compound type (INTEGER 0 (d)) rides
 		// _opTypeErr verbatim: +71 B.
-		assertThat(classBytes.length).isLessThan(10_550);
+		// 10,686 since a built-in's wrong-count report names the operator: the thrown
+		// class the landing pad recognizes, the names of the runtime's own dispatchable
+		// defaults (#'identity, #'eql) and their decode in _arityMsg/_arityErr: +152 B.
+		assertThat(classBytes.length).isLessThan(10_760);
 		assertThat(runClass(classBytes)).isEqualTo("(1 4 9)");
 	}
 
