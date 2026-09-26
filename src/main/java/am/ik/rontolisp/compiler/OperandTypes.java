@@ -7,14 +7,23 @@ import java.util.Map;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The text and the expected type of a wrong-type operand reaching a numeric operator:
+ * The text and the expected type of a wrong-type argument reaching a built-in:
  * {@code >: The value NIL is not of type REAL}, the shape of a CL {@code type-error}
- * report. Every backend detects the failure at a coercion FUNNEL that knows only what it
- * was coercing to ({@link Kind}); the OPERATOR is attached one level up -- the
- * interpreter's built-in seam, the JVM's per-operator helper wrappers, the wasm runtime's
- * operator register -- and names the type that operator accepts ({@link #expectedType}).
- * One table, so the four backends cannot disagree on a name or a type
- * ({@code .kb/error-handling.md}, "A non-number reaching arithmetic").
+ * report. Every backend detects the failure at a FUNNEL that knows only what it was
+ * checking for ({@link Kind}); the OPERATOR is attached one level up -- the interpreter's
+ * built-in seam, the JVM's per-operator helper wrappers, the wasm runtime's operator
+ * register -- and names the type that operator requires ({@link #expectedType}). One
+ * table, so the four backends cannot disagree on a name or a type
+ * ({@code .kb/error-handling.md}, "A non-number reaching arithmetic" and "A wrong-type
+ * argument names its operator").
+ *
+ * <p>
+ * A numeric operator has ONE type: its funnels coerce to an integer or a double whatever
+ * the operator accepts, so the operator's type replaces the funnel's. Every other named
+ * operator is FUNNEL-TYPED: each of its funnels checks exactly one argument's type
+ * ({@code aref}'s index is an {@code INTEGER}), so the funnel's kind is the type --
+ * except that a to-double funnel ({@link Kind#NUMBER}) there is a packed float array's
+ * store, which takes any real.
  */
 public final class OperandTypes {
 
@@ -34,7 +43,13 @@ public final class OperandTypes {
 		NUMBER,
 
 		/** A complex reaching an ordering or real-only operation. */
-		REAL
+		REAL,
+
+		/** A non-rational reaching {@code numerator}/{@code denominator}. */
+		RATIONAL,
+
+		/** A non-list reaching {@code car}/{@code cdr}. */
+		LIST
 
 	}
 
@@ -46,6 +61,12 @@ public final class OperandTypes {
 
 	/** What follows the operator name in a named report. */
 	public static final String OPERATOR_SEPARATOR = ": ";
+
+	/** The reported name of a store through an {@code aref} place. */
+	public static final String SETF_AREF = "(SETF AREF)";
+
+	/** An operator table entry naming a funnel-typed operator ({@link #operatorType}). */
+	public static final String FUNNEL_TYPE = "";
 
 	private static final Map<String, String> OPERATOR_TYPES = new HashMap<>();
 
@@ -60,15 +81,27 @@ public final class OperandTypes {
 	 * a call does -- the compiled backends' function value IS that rewrite
 	 * ({@code BuiltinFunctionWrappers}).
 	 */
-	private static final Map<String, String> REWRITTEN = Map.of("1+", "+", "1-", "-", "/=", "=", "ZEROP", "=", "PLUSP",
-			">", "MINUSP", "<", "EVENP", "MOD", "ODDP", "MOD", "LOGTEST", "LOGAND", "LOGEQV", "LOGXOR");
+	private static final Map<String, String> REWRITTEN = Map.ofEntries(Map.entry("1+", "+"), Map.entry("1-", "-"),
+			Map.entry("/=", "="), Map.entry("ZEROP", "="), Map.entry("PLUSP", ">"), Map.entry("MINUSP", "<"),
+			Map.entry("EVENP", "MOD"), Map.entry("ODDP", "MOD"), Map.entry("LOGTEST", "LOGAND"),
+			Map.entry("LOGEQV", "LOGXOR"), Map.entry("FIRST", "CAR"), Map.entry("REST", "CDR"),
+			Map.entry("NTH", "NTHCDR"), Map.entry("SVREF", "AREF"), Map.entry("%ASET", SETF_AREF));
+
+	/**
+	 * The funnel-typed operators ({@link #expectedType}): {@code (setf aref)} is the
+	 * reported name of {@code %aset}, the operator a {@code setf} of an {@code aref} or
+	 * {@code svref} place lowers to.
+	 */
+	private static final List<String> FUNNEL_TYPED = List.of("CAR", "CDR", "NTHCDR", "AREF", SETF_AREF);
 
 	static {
 		String[] numberOps = { "+", "-", "*", "/", "=", "ABS", "SIGNUM", "SQRT", "EXP", "LOG", "EXPT", "SIN", "COS",
 				"TAN", "ASIN", "ACOS", "ATAN", "SINH", "COSH", "TANH", "ASINH", "ACOSH", "ATANH", "CONJUGATE", "PHASE",
 				"REALPART", "IMAGPART" };
 		String[] realOps = { "<", ">", "<=", ">=", "MIN", "MAX", "FLOOR", "CEILING", "TRUNCATE", "ROUND", "FFLOOR",
-				"FCEILING", "FTRUNCATE", "FROUND", "MOD", "REM", "FLOAT", "RATIONAL", "RATIONALIZE", "CIS" };
+				"FCEILING", "FTRUNCATE", "FROUND", "MOD", "REM", "FLOAT", "RATIONAL", "RATIONALIZE", "CIS", "RANDOM",
+				"COMPLEX" };
+		String[] rationalOps = { "NUMERATOR", "DENOMINATOR" };
 		String[] integerOps = { "LOGAND", "LOGIOR", "LOGXOR", "LOGEQV", "LOGNAND", "LOGNOR", "LOGANDC1", "LOGANDC2",
 				"LOGORC1", "LOGORC2", "LOGNOT", "LOGCOUNT", "LOGBITP", "LOGTEST", "ASH", "INTEGER-LENGTH", "GCD", "LCM",
 				"ISQRT" };
@@ -83,6 +116,14 @@ public final class OperandTypes {
 		}
 		for (String op : integerOps) {
 			OPERATOR_TYPES.put(op, Kind.INTEGER.name());
+			order.add(op);
+		}
+		for (String op : rationalOps) {
+			OPERATOR_TYPES.put(op, Kind.RATIONAL.name());
+			order.add(op);
+		}
+		for (String op : FUNNEL_TYPED) {
+			OPERATOR_TYPES.put(op, FUNNEL_TYPE);
 			order.add(op);
 		}
 		OPERATORS = List.copyOf(order);
@@ -120,8 +161,9 @@ public final class OperandTypes {
 	/**
 	 * The type a named operator accepts.
 	 * @param operator the operator's symbol name
-	 * @return {@code NUMBER}, {@code REAL} or {@code INTEGER}, or null for an operator
-	 * that is not named
+	 * @return {@code NUMBER}, {@code REAL}, {@code INTEGER} or {@code RATIONAL},
+	 * {@link #FUNNEL_TYPE} for a funnel-typed operator, or null for an operator that is
+	 * not named
 	 */
 	public static @Nullable String operatorType(String operator) {
 		return OPERATOR_TYPES.get(operator);
@@ -139,15 +181,20 @@ public final class OperandTypes {
 	/**
 	 * The type a report names: the one the operator accepts, narrowed to {@code REAL}
 	 * when a {@code NUMBER} operator met a complex where only a real will do (the
-	 * two-argument {@code atan}); the funnel's own kind when no operator is known.
+	 * two-argument {@code atan}); for a funnel-typed operator the funnel's kind, a
+	 * to-double funnel's read as {@code REAL}; the funnel's own kind when no operator is
+	 * known.
 	 * @param operator the operator, or null
-	 * @param kind what the funnel was coercing to
+	 * @param kind what the funnel was checking for
 	 * @return the type name
 	 */
 	public static String expectedType(@Nullable String operator, Kind kind) {
 		String type = operator == null ? null : OPERATOR_TYPES.get(operator);
 		if (type == null) {
 			return kind.name();
+		}
+		if (FUNNEL_TYPE.equals(type)) {
+			return (kind == Kind.NUMBER ? Kind.REAL : kind).name();
 		}
 		if (kind == Kind.REAL && Kind.NUMBER.name().equals(type)) {
 			return Kind.REAL.name();

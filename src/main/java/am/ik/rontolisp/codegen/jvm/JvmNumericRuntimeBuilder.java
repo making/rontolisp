@@ -217,7 +217,9 @@ final class JvmNumericRuntimeBuilder {
 			Map.entry(INTEGER_LENGTH, UNARY_DESC), Map.entry(CMP, "(" + OBJ + OBJ + ")I"),
 			Map.entry(CMPB, "(" + OBJ + OBJ + ")I"), Map.entry(LOGBITP, "(" + OBJ + OBJ + ")I"),
 			Map.entry(BIG_OP, "(" + OBJ + ")" + BIG), Map.entry(RAT_NUM, "(" + OBJ + ")" + BIG),
-			Map.entry(RAT_DEN, "(" + OBJ + ")" + BIG), Map.entry(FDIV, "(" + OBJ + OBJ + "I)" + OBJ));
+			Map.entry(RAT_DEN, "(" + OBJ + ")" + BIG), Map.entry(FDIV, "(" + OBJ + OBJ + "I)" + OBJ),
+			Map.entry(RANDOM, UNARY_DESC), Map.entry(JvmOperandTypeRuntime.CK_IDX, JvmOperandTypeRuntime.CK_IDX_DESC),
+			Map.entry(JvmOperandTypeRuntime.CK_RAT, JvmOperandTypeRuntime.CK_RAT_DESC));
 
 	/**
 	 * The descriptor of a helper a wrong-type operand can escape from, or null.

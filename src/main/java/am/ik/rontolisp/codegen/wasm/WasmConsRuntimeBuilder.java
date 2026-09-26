@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.wasm;
 import java.io.ByteArrayOutputStream;
 
 import am.ik.wasm.Instruction;
+import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
 
 /**
@@ -20,15 +21,47 @@ final class WasmConsRuntimeBuilder {
 
 	/**
 	 * The body of {@code _car} (field 0) or {@code _cdr} (field 1); signature
-	 * {@code TYPE_CALLABLE_BASE + 0}.
+	 * {@code TYPE_CALLABLE_BASE + 0}. Outside EH mode it is the inline shape, whose cast
+	 * traps on a value that is no list. In EH mode it is CHECKED: a cons yields its
+	 * field, nil itself, and anything else stores {@code car}'s / {@code cdr}'s operator
+	 * id in the register and lands in {@code _type_err_list}, which never returns -- the
+	 * slow path every checked inline site leaves for
+	 * ({@code WasmEmitHelper.emitInlineConsField}), so the id is the function's own.
 	 * @param field the cons field the function reads
+	 * @param operatorGlobal the operator register, or -1 outside EH mode
+	 * @param operatorId the operator table's row for {@code CAR}/{@code CDR}, 0 when the
+	 * program spells neither (the report is unnamed then)
 	 * @return the code entry
 	 */
-	static byte[] buildFieldBody(int field) {
+	static byte[] buildFieldBody(int field, int operatorGlobal, int operatorId) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		w.write(0); // no locals: the one parameter is the list
-		WasmEmitHelper.emitInlineConsField(w, 0, field);
+		if (operatorGlobal < 0) {
+			WasmEmitHelper.emitInlineConsField(w, 0, field);
+			w.write(Instruction.END);
+			return body.toByteArray();
+		}
+		WasmEmitHelper.emitCheckedConsField(w, 0, field, () -> {
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.IF);
+			w.writeRefType(true, Type.EQ.code());
+			w.write(Instruction.REF_NULL);
+			w.writeHeapType(Type.EQ.code());
+			w.write(Instruction.ELSE);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(operatorId);
+			w.write(Instruction.SET_GLOBAL);
+			w.writeUnsignedLeb128(operatorGlobal);
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_TYPE_ERR_LIST);
+			w.write(Instruction.UNREACHABLE);
+			w.write(Instruction.END);
+		});
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}

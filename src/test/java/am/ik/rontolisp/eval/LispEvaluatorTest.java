@@ -3085,8 +3085,9 @@ class LispEvaluatorTest {
 				+ " \"TRUNCATE: The value #C(1 2) is not of type REAL\""
 				+ " \"CEILING: The value #C(1 2) is not of type REAL\""
 				+ " \"ROUND: The value #C(1 2) is not of type REAL\""
-				+ " \"FLOAT: The value #C(1 2) is not of type REAL\"" + " \"The value #C(1 2) is not of type REAL\""
-				+ " \"The value #C(1 2) is not of type REAL\")");
+				+ " \"FLOAT: The value #C(1 2) is not of type REAL\""
+				+ " \"NUMERATOR: The value #C(1 2) is not of type RATIONAL\""
+				+ " \"DENOMINATOR: The value #C(1 2) is not of type RATIONAL\")");
 		assertThat(evalMulti("""
 				(defun te-print (thunk)
 				  (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
@@ -6596,7 +6597,7 @@ class LispEvaluatorTest {
 				  (list (format nil c 5 'tail) (format nil c nil 'tail)))
 				""").print()).isEqualTo("(\"[TAIL]\" \"[TAIL]\")");
 		assertThatThrownBy(() -> evalMulti("(let ((c \"~{~a~}\")) (format nil c \"abc\"))"))
-			.hasMessageContaining("car expects a cons cell, got: \"abc\"");
+			.hasMessageContaining("CAR: The value \"abc\" is not of type LIST");
 		// Long enough that the head-walk showed: 2.5 ms a call before, and every
 		// character of the answer is the same.
 		assertThat(evalMulti("""
@@ -13449,7 +13450,7 @@ class LispEvaluatorTest {
 		// The four synthesized classes carry format-control, so princ prints the
 		// message rather than a bare #<TYPE-ERROR>.
 		assertThat(eval("(handler-case (car 1) (type-error (e) (princ-to-string e)))").print())
-			.isEqualTo("\"car expects a cons cell, got: 1\"");
+			.isEqualTo("\"CAR: The value 1 is not of type LIST\"");
 		assertThat(eval("(handler-case (/ 1 0) (division-by-zero (e) (princ-to-string e)))").print())
 			.isEqualTo("\"Division by zero\"");
 	}
@@ -18612,6 +18613,69 @@ class LispEvaluatorTest {
 				      (te-slots (lambda () (sqrt 'q))))
 				""").print()).isEqualTo("((NIL REAL) (\"x\" INTEGER) (Q NUMBER))");
 		assertThatThrownBy(() -> eval("(> nil 0)")).hasMessage(">: The value NIL is not of type REAL");
+	}
+
+	@Test
+	void argumentTypeErrorsNameTheOperatorBeyondArithmetic() {
+		// A wrong-type argument outside the numeric operators reports
+		// "OP: The value X is not of type T" with the type the operator requires, as a
+		// type-error, identically on every backend (compiler/OperandTypes); the twins
+		// are JvmLispCompilerTest and WasmLispCompilerIntegrationTest's
+		// argumentTypeErrorsNameTheOperatorBeyondArithmetic. A call-position rewrite
+		// reports under the operator it becomes: nth is (car (nthcdr ...)), svref is
+		// aref.
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *te-n* nil)
+				(print (te (lambda () (car 5))))
+				(print (te (lambda () (cdr "s"))))
+				(print (te (lambda () (first 5))))
+				(print (te (lambda () (rest 5))))
+				(print (te (lambda () (nth *te-n* '(1 2)))))
+				(print (te (lambda () (nthcdr 1.5 '(1 2)))))
+				(print (te (lambda () (aref #(1 2) *te-n*))))
+				(print (te (lambda () (svref #(1 2) *te-n*))))
+				(print (te (lambda () (let ((v (vector 1 2))) (setf (aref v *te-n*) 3)))))
+				(print (te (lambda () (setf (aref #d(1.0) 0) "x"))))
+				(print (te (lambda () (let ((v (make-array 2 :element-type 'double-float))) (setf (aref v 0) "y") :unreached))))
+				(print (te (lambda () (random *te-n*))))
+				(print (te (lambda () (numerator *te-n*))))
+				(print (te (lambda () (denominator 1.5))))
+				(print (te (lambda () (lcm *te-n*))))
+				(print (te (lambda () (gcd 1.5))))
+				(print (te (lambda () (complex #c(1 2) 3))))
+				""";
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal expr : LispReader.readAllFromString(source)) {
+			evaluator.eval(expr);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8).strip()).isEqualTo("""
+				("CAR: The value 5 is not of type LIST" 5 LIST)
+				("CDR: The value \\"s\\" is not of type LIST" "s" LIST)
+				("CAR: The value 5 is not of type LIST" 5 LIST)
+				("CDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value NIL is not of type INTEGER" NIL INTEGER)
+				("NTHCDR: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+				("AREF: The value NIL is not of type INTEGER" NIL INTEGER)
+				("AREF: The value NIL is not of type INTEGER" NIL INTEGER)
+				("(SETF AREF): The value NIL is not of type INTEGER" NIL INTEGER)
+				("(SETF AREF): The value \\"x\\" is not of type REAL" "x" REAL)
+				("(SETF AREF): The value \\"y\\" is not of type REAL" "y" REAL)
+				("RANDOM: The value NIL is not of type REAL" NIL REAL)
+				("NUMERATOR: The value NIL is not of type RATIONAL" NIL RATIONAL)
+				("DENOMINATOR: The value 1.5 is not of type RATIONAL" 1.5 RATIONAL)
+				("LCM: The value NIL is not of type INTEGER" NIL INTEGER)
+				("GCD: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+				("COMPLEX: The value #C(1 2) is not of type REAL" #C(1 2) REAL)""");
+		assertThatThrownBy(() -> eval("(car 5)")).hasMessage("CAR: The value 5 is not of type LIST");
+		// The function values answer nil past the end, as the calls do: #'first of nil
+		// and #'second of a one-element list used to signal "expects a cons cell".
+		assertThat(evalMulti("(list (funcall #'first nil) (funcall #'rest nil) (funcall #'second '(1)))").print())
+			.isEqualTo("(NIL NIL NIL)");
 	}
 
 	@Test

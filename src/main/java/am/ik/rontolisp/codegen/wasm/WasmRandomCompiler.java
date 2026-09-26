@@ -105,6 +105,15 @@ final class WasmRandomCompiler {
 				WasmEmitHelper.castFloatGetF64(ctx);
 			});
 			ctx.writer.write(Instruction.ELSE);
+			if (WasmEmitHelper.checksConsFields(ctx)) {
+				// EH mode: a limit that is no real is RANDOM's type-error, through
+				// _as_f64 under the operator's register; a ratio passes it and meets
+				// _int_val's unnamed INTEGER report below, which is true of it.
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(limitSlot);
+				WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_AS_F64);
+				ctx.writer.write(Instruction.DROP);
+			}
 			// Integer limit: rand mod limit in i64, normalized through _int_new. The
 			// masked value is non-negative and the limit is positive, so the unsigned
 			// remainder stays in [0, limit); _int_val accepts an i31 or boxed limit.

@@ -4,7 +4,7 @@
 
 Returns the car (first element) of `pair`.
 
-Deviation: `(car '())` answers `()` instead of signalling an error. Any other non-pair is an error whose message spells the Common Lisp name: `car expects a cons cell, got: 5`.
+Deviation: `(car '())` answers `()` instead of signalling an error. Any other non-pair is an error whose message spells the Common Lisp name: `CAR: The value 5 is not of type LIST`.
 
 ```scheme
 (car '(1 2 3)) ; => 1

@@ -262,7 +262,7 @@ class RontoLispCliStreamsTest {
 		// line it always was.
 		String[] result = runReporting("-e", "(defun f (x) (car x)) (f 1)");
 		assertThat(result[0]).isEqualTo("1");
-		assertThat(result[2].lines()).containsExactly("Unhandled condition: car expects a cons cell, got: 1");
+		assertThat(result[2].lines()).containsExactly("Unhandled condition: CAR: The value 1 is not of type LIST");
 	}
 
 	@Test
@@ -322,14 +322,14 @@ class RontoLispCliStreamsTest {
 				runSession(false, "(car 1)\n(+ 1 2)\n", "--source-language", "scheme"))) {
 			assertThat(session[0]).isEqualTo("1");
 			assertThat(session[1]).isEqualTo("3\n");
-			assertThat(session[2]).startsWith("Error: car ").endsWith("\n").hasLineCount(1);
+			assertThat(session[2]).startsWith("Error: CAR: ").endsWith("\n").hasLineCount(1);
 		}
 		assertThat(runSession(false, "(+ 1 2)\n")[0]).isEqualTo("0");
 		// On a terminal the report stays between the prompts, and the status is 0: a
 		// person saw it.
 		String[] terminal = runSession(true, "(car 1)\n(+ 1 2)\n", "--source-language", "scheme");
 		assertThat(terminal[0]).isEqualTo("0");
-		assertThat(terminal[1]).startsWith("scheme> Error: car ").endsWith("\nscheme> 3\nscheme> ");
+		assertThat(terminal[1]).startsWith("scheme> Error: CAR: ").endsWith("\nscheme> 3\nscheme> ");
 		assertThat(terminal[2]).isEmpty();
 	}
 

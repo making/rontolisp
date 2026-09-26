@@ -412,13 +412,13 @@ final class JvmArrayCompiler {
 					JvmArrayRuntimeBuilder.AREF1), JvmArrayRuntimeBuilder.AREF1_DESC);
 		}
 		else if (subscriptCount == 1) {
-			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+			compileSubscript(args.get(2), ctx, className);
 			invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.AREF1, JvmFloatArrayRuntimeBuilder.AREF1,
 					JvmArrayRuntimeBuilder.AREF1), JvmArrayRuntimeBuilder.AREF1_DESC);
 		}
 		else if (subscriptCount == 2) {
-			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			JvmExprCompiler.compileExpr(args.get(3), ctx, className);
+			compileSubscript(args.get(2), ctx, className);
+			compileSubscript(args.get(3), ctx, className);
 			invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.AREF2, JvmArrayRuntimeBuilder.AREF2),
 					JvmArrayRuntimeBuilder.AREF2_DESC);
 		}
@@ -572,26 +572,30 @@ final class JvmArrayCompiler {
 			// (%aset a value): the rank-0 store, the twin of the (aref a) arm above.
 			JvmExprCompiler.compileExpr(new LispInteger(0), ctx, className);
 			JvmExprCompiler.compileExpr(value, ctx, className);
-			invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1, JvmFloatArrayRuntimeBuilder.ASET1,
-					JvmArrayRuntimeBuilder.ASET1), JvmArrayRuntimeBuilder.ASET1_DESC);
+			invokeStoreHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1,
+					JvmFloatArrayRuntimeBuilder.ASET1, JvmArrayRuntimeBuilder.ASET1),
+					JvmArrayRuntimeBuilder.ASET1_DESC);
 		}
 		else if (subscriptCount == 1) {
-			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+			compileSubscript(args.get(2), ctx, className);
 			JvmExprCompiler.compileExpr(value, ctx, className);
-			invokeHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1, JvmFloatArrayRuntimeBuilder.ASET1,
-					JvmArrayRuntimeBuilder.ASET1), JvmArrayRuntimeBuilder.ASET1_DESC);
+			invokeStoreHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1,
+					JvmFloatArrayRuntimeBuilder.ASET1, JvmArrayRuntimeBuilder.ASET1),
+					JvmArrayRuntimeBuilder.ASET1_DESC);
 		}
 		else if (subscriptCount == 2) {
-			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-			JvmExprCompiler.compileExpr(args.get(3), ctx, className);
+			compileSubscript(args.get(2), ctx, className);
+			compileSubscript(args.get(3), ctx, className);
 			JvmExprCompiler.compileExpr(value, ctx, className);
-			invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.ASET2, JvmArrayRuntimeBuilder.ASET2),
+			invokeStoreHelper(ctx, className,
+					fvOr(ctx, JvmFloatArrayRuntimeBuilder.ASET2, JvmArrayRuntimeBuilder.ASET2),
 					JvmArrayRuntimeBuilder.ASET2_DESC);
 		}
 		else {
 			emitSubscriptArray(args, 2, subscriptCount, ctx, className);
 			JvmExprCompiler.compileExpr(value, ctx, className);
-			invokeHelper(ctx, className, fvOr(ctx, JvmFloatArrayRuntimeBuilder.ASETN, JvmArrayRuntimeBuilder.ASETN),
+			invokeStoreHelper(ctx, className,
+					fvOr(ctx, JvmFloatArrayRuntimeBuilder.ASETN, JvmArrayRuntimeBuilder.ASETN),
 					JvmArrayRuntimeBuilder.ASETN_DESC);
 		}
 	}
@@ -606,7 +610,7 @@ final class JvmArrayCompiler {
 		for (int i = 0; i < rank; i++) {
 			ctx.emit(Opcode.DUP);
 			JvmEmitHelper.emitIntConst(ctx, i);
-			JvmExprCompiler.compileExpr(args.get(firstSub + i), ctx, className);
+			compileSubscript(args.get(firstSub + i), ctx, className);
 			ctx.emit(Opcode.AASTORE);
 		}
 	}
@@ -678,6 +682,29 @@ final class JvmArrayCompiler {
 			return;
 		}
 		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.TO_MUT_STR, JvmArrayRuntimeBuilder.TO_MUT_STR_DESC);
+	}
+
+	/**
+	 * Compiles a subscript and checks it is an integer: anything else is a type-error
+	 * naming the access ({@code _ckIdx}, {@code JvmOperandTypeRuntime}), where the
+	 * helpers' own unboxing would throw a host {@code NullPointerException} or
+	 * {@code ClassCastException}.
+	 */
+	private static void compileSubscript(LispVal subscript, JvmLispCompiler.Ctx ctx, String className) {
+		JvmExprCompiler.compileExpr(subscript, ctx, className);
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).index());
+	}
+
+	/**
+	 * Invokes a store helper under the operator's wrapper: a packed array's store coerces
+	 * the value through the numeric funnels, whose report the wrapper names.
+	 */
+	private static void invokeStoreHelper(JvmLispCompiler.Ctx ctx, String className, String name, String desc) {
+		MethodrefConstant ref = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
+				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.wrapForOperator(name, desc, ref).index());
 	}
 
 	private static void invokeHelper(JvmLispCompiler.Ctx ctx, String className, String name, String desc) {

@@ -3128,7 +3128,12 @@ public final class Environment implements Scope {
 					.multiply(java.math.BigDecimal.valueOf(ThreadLocalRandom.current().nextDouble()))
 					.toBigInteger());
 			}
-			throw new LispEvalException("random expects an integer or float limit, got: " + limit.print());
+			if (limit instanceof LispRatio) {
+				throw new LispEvalException("random expects an integer or float limit, got: " + limit.print());
+			}
+			throw OperandTypeException
+				.of(limit, limit instanceof LispComplex ? OperandTypes.Kind.REAL : OperandTypes.Kind.NUMBER)
+				.named(LispNames.RANDOM);
 		}));
 		// %random-byte: ONE cryptographically strong byte (0-255). Unlike random (a
 		// plain PRNG here), the source is java.security.SecureRandom -- the same
@@ -7987,8 +7992,7 @@ public final class Environment implements Scope {
 			if (args.get(0) instanceof LispNil) {
 				return LispNil.INSTANCE;
 			}
-			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-					"car expects a cons cell, got: " + args.get(0).print());
+			throw OperandTypeException.of(args.get(0), OperandTypes.Kind.LIST);
 		}));
 		env.defineFunction(LispNames.CDR, new LispFunction(LispNames.CDR, args -> {
 			requireArgCount(LispNames.CDR, args, 1);
@@ -7998,64 +8002,67 @@ public final class Environment implements Scope {
 			if (args.get(0) instanceof LispNil) {
 				return LispNil.INSTANCE;
 			}
-			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-					"cdr expects a cons cell, got: " + args.get(0).print());
+			throw OperandTypeException.of(args.get(0), OperandTypes.Kind.LIST);
 		}));
 		env.defineFunction(LispNames.FIRST, new LispFunction(LispNames.FIRST, args -> {
 			requireArgCount(LispNames.FIRST, args, 1);
 			if (args.get(0) instanceof LispCons cons) {
 				return cons.car();
 			}
-			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-					"first expects a cons cell, got: " + args.get(0).print());
+			if (args.get(0) instanceof LispNil) {
+				return LispNil.INSTANCE;
+			}
+			throw OperandTypeException.of(args.get(0), OperandTypes.Kind.LIST);
 		}));
 		env.defineFunction(LispNames.REST, new LispFunction(LispNames.REST, args -> {
 			requireArgCount(LispNames.REST, args, 1);
 			if (args.get(0) instanceof LispCons cons) {
 				return cons.cdr();
 			}
-			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-					"rest expects a cons cell, got: " + args.get(0).print());
+			if (args.get(0) instanceof LispNil) {
+				return LispNil.INSTANCE;
+			}
+			throw OperandTypeException.of(args.get(0), OperandTypes.Kind.LIST);
 		}));
 		env.defineFunction(LispNames.NTH, new LispFunction(LispNames.NTH, args -> {
 			requireArgCount(LispNames.NTH, args, 2);
-			return nthValue(LispNames.NTH, asLong(args.get(0)), args.get(1));
+			return nthValue(asLong(args.get(0)), args.get(1));
 		}));
 		env.defineFunction(LispNames.SECOND, new LispFunction(LispNames.SECOND, args -> {
 			requireArgCount(LispNames.SECOND, args, 1);
-			return nthValue(LispNames.SECOND, 1, args.get(0));
+			return nthValue(1, args.get(0));
 		}));
 		env.defineFunction(LispNames.THIRD, new LispFunction(LispNames.THIRD, args -> {
 			requireArgCount(LispNames.THIRD, args, 1);
-			return nthValue(LispNames.THIRD, 2, args.get(0));
+			return nthValue(2, args.get(0));
 		}));
 		env.defineFunction(LispNames.FOURTH, new LispFunction(LispNames.FOURTH, args -> {
 			requireArgCount(LispNames.FOURTH, args, 1);
-			return nthValue(LispNames.FOURTH, 3, args.get(0));
+			return nthValue(3, args.get(0));
 		}));
 		env.defineFunction(LispNames.FIFTH, new LispFunction(LispNames.FIFTH, args -> {
 			requireArgCount(LispNames.FIFTH, args, 1);
-			return nthValue(LispNames.FIFTH, 4, args.get(0));
+			return nthValue(4, args.get(0));
 		}));
 		env.defineFunction(LispNames.SIXTH, new LispFunction(LispNames.SIXTH, args -> {
 			requireArgCount(LispNames.SIXTH, args, 1);
-			return nthValue(LispNames.SIXTH, 5, args.get(0));
+			return nthValue(5, args.get(0));
 		}));
 		env.defineFunction(LispNames.SEVENTH, new LispFunction(LispNames.SEVENTH, args -> {
 			requireArgCount(LispNames.SEVENTH, args, 1);
-			return nthValue(LispNames.SEVENTH, 6, args.get(0));
+			return nthValue(6, args.get(0));
 		}));
 		env.defineFunction(LispNames.EIGHTH, new LispFunction(LispNames.EIGHTH, args -> {
 			requireArgCount(LispNames.EIGHTH, args, 1);
-			return nthValue(LispNames.EIGHTH, 7, args.get(0));
+			return nthValue(7, args.get(0));
 		}));
 		env.defineFunction(LispNames.NINTH, new LispFunction(LispNames.NINTH, args -> {
 			requireArgCount(LispNames.NINTH, args, 1);
-			return nthValue(LispNames.NINTH, 8, args.get(0));
+			return nthValue(8, args.get(0));
 		}));
 		env.defineFunction(LispNames.TENTH, new LispFunction(LispNames.TENTH, args -> {
 			requireArgCount(LispNames.TENTH, args, 1);
-			return nthValue(LispNames.TENTH, 9, args.get(0));
+			return nthValue(9, args.get(0));
 		}));
 		env.defineFunction(LispNames.LIST, new LispFunction(LispNames.LIST, args -> {
 			LispVal result = LispNil.INSTANCE;
@@ -8182,10 +8189,9 @@ public final class Environment implements Scope {
 
 	/**
 	 * Walks {@code n} cdrs and returns the car, matching the macro expansion
-	 * {@code (car (nthcdr n list))}: walking off the end yields nil, whose car is an
-	 * error.
+	 * {@code (car (nthcdr n list))}: walking off the end yields nil, whose car is nil.
 	 */
-	private static LispVal nthValue(String name, long n, LispVal list) {
+	private static LispVal nthValue(long n, LispVal list) {
 		LispVal cur = list;
 		for (long i = 0; i < n && cur instanceof LispCons cons; i++) {
 			cur = cons.cdr();
@@ -8193,8 +8199,10 @@ public final class Environment implements Scope {
 		if (cur instanceof LispCons cons) {
 			return cons.car();
 		}
-		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-				name + " expects a cons cell, got: " + cur.print());
+		if (cur instanceof LispNil) {
+			return LispNil.INSTANCE;
+		}
+		throw OperandTypeException.of(cur, OperandTypes.Kind.LIST);
 	}
 
 	private static LispVal appendTwo(LispVal list, LispVal tail) {
@@ -8383,26 +8391,24 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.NUMERATOR, new LispFunction(LispNames.NUMERATOR, args -> {
 			requireArgCount(LispNames.NUMERATOR, args, 1);
 			LispVal arg = args.get(0);
-			requireRealOperand(LispNames.NUMERATOR, arg);
 			if (arg instanceof LispRatio r) {
 				return normalizeBig(r.numerator());
 			}
 			if (arg instanceof LispInteger || arg instanceof LispBigInteger) {
 				return arg;
 			}
-			throw new LispEvalException("numerator expects a rational, got: " + arg.print());
+			throw OperandTypeException.of(arg, OperandTypes.Kind.RATIONAL).named(LispNames.NUMERATOR);
 		}));
 		env.defineFunction(LispNames.DENOMINATOR, new LispFunction(LispNames.DENOMINATOR, args -> {
 			requireArgCount(LispNames.DENOMINATOR, args, 1);
 			LispVal arg = args.get(0);
-			requireRealOperand(LispNames.DENOMINATOR, arg);
 			if (arg instanceof LispRatio r) {
 				return normalizeBig(r.denominator());
 			}
 			if (arg instanceof LispInteger || arg instanceof LispBigInteger) {
 				return new LispInteger(1);
 			}
-			throw new LispEvalException("denominator expects a rational, got: " + arg.print());
+			throw OperandTypeException.of(arg, OperandTypes.Kind.RATIONAL).named(LispNames.DENOMINATOR);
 		}));
 		env.defineFunction(LispNames.RATIONAL, new LispFunction(LispNames.RATIONAL, args -> {
 			// The exact rational the real IS: identity for integers and ratios,
