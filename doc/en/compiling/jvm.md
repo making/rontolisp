@@ -53,7 +53,7 @@ way: `Hello$JavaBridge.class`, `Hello$SimdBridge.class`, ... beside the class (f
 `--gpu`, `objc:` and `ffi:` with a renamed copy of the binding library,
 `Hello$Gpu*.class` and so on), and inside a jar. Nothing is defined at run time, so
 such a jar also builds into a GraalVM native image with `native-image -jar`; reflective
-`java:` calls and the `--blas` / `ffi:` foreign calls need the metadata the tracing agent
+`java:` calls and the `--blas` / `objc:` / `ffi:` foreign calls need the metadata the tracing agent
 records from one `java -jar` run ([Java interop](../guides/java-interop.md#native-image)).
 
 A class can also be a **library** Java code calls directly:

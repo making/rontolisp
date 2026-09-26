@@ -756,7 +756,9 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * program's own package instead: a split program's {@code $PartN} classes and the
 	 * template bridges ({@code $JavaBridge}, {@code $GeomBridge}, {@code $SimdBridge},
 	 * {@code $BlasBridge}, and the {@code $Gpu*}, {@code $Objc*} and {@code $Ffi*}
-	 * library copies).
+	 * library copies). One entry is not a class: the {@code $Gpu*} copies bring their
+	 * native-image downcall registration under {@code META-INF/native-image/}
+	 * ({@link JvmGpuRuntimeBuilder#nativeImageMetadataPath}).
 	 *
 	 * <p>
 	 * The runtime classes are written at their canonical names rather than renamed into
@@ -764,7 +766,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * package they come from imports nothing, which is what makes the output run with no
 	 * rontolisp jar on the classpath ({@code .kb/jvm-export.md}). Valid after
 	 * {@link #compile}.
-	 * @return each class file's path within an output tree (or jar), mapped to its bytes
+	 * @return each file's path within an output tree (or jar), mapped to its bytes
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
 		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsHashTableRuntime
@@ -2149,6 +2151,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodrefConstant strvMethod = usesArrays ? cp.addMethodref(thisClass, cp
 			.addNameAndType(cp.addUtf8(JvmArrayRuntimeBuilder.STRV), cp.addUtf8(JvmArrayRuntimeBuilder.STRV_DESC)))
 				: null;
+		if (javaSites != null) {
+			// A dispatched java: site renders a mutable character vector, a sequence's
+			// elements too, before it costs and converts it.
+			javaSites.direct().strv(strvMethod);
+		}
 		// Numeric runtime helpers (long arithmetic with automatic BigInteger promotion)
 		// The interned layout array of an instance -- the discriminator the structural
 		// _equal and _hash arms share, minted once so both see the same constant.
@@ -3530,13 +3537,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		// thread of its own, sized by -Drontolisp.stack, and the old main body becomes
 		// _main$body. Not where there is no main, not where the top level runs in
 		// <clinit> (a jvm-export library, a war: the JVM initializes the class on the
-		// caller's thread before main could move anything), and NOT for a program that
-		// reaches objc: -- AppKit belongs to thread 0 (.kb/objc.md), and those outputs
-		// stay byte-identical because a GUI change is verified only by hand on macOS.
-		final JvmSizedMainBuilder.@Nullable SizedMain sizedMain = !this.noMain && !topLevelInClinit && !usesObjc
+		// caller's thread before main could move anything). A program that reaches objc:
+		// also hands thread 0 to the run loop when it is a native image's main
+		// (.kb/objc.md, "AppKit belongs to thread 0").
+		final JvmSizedMainBuilder.@Nullable SizedMain sizedMain = !this.noMain && !topLevelInClinit
 				? JvmSizedMainBuilder.build(cp, thisClass, this.className,
 						cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V"))),
-						cp.addUtf8("([Ljava/lang/String;)V"))
+						cp.addUtf8("([Ljava/lang/String;)V"),
+						usesObjc ? JvmObjcRuntimeBuilder.mainThreadName(this.className) : null)
 				: null;
 		final MethodrefConstant ctorObjectInitRef = objectInitRef != null ? objectInitRef : sizedMain != null
 				? cp.addMethodref(objectClass, cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V"))) : null;
@@ -3898,6 +3906,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			// body's throwable out (published by Thread.join).
 			definition.addField(AccessFlag.ACC_PRIVATE, sizedMain.argsName(), sizedMain.argsDesc());
 			definition.addField(AccessFlag.ACC_PRIVATE, sizedMain.thrownName(), sizedMain.thrownDesc());
+			if (sizedMain.exitName() != null) {
+				definition.addField(AccessFlag.ACC_PRIVATE, sizedMain.exitName(),
+						java.util.Objects.requireNonNull(sizedMain.exitDesc()));
+			}
 		}
 		if (asyncRuntimeBodies != null) {
 			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,

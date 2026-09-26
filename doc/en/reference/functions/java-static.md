@@ -19,6 +19,8 @@ See the [Java interop guide](../../guides/java-interop.md).
 arguments select the `int` overload, so the result is the integer `7`.
 
 The method name may carry the parameter types, which picks the overload directly:
-`"max(long,long)"`, or `"max(long,_)"` with `_` left to the cost rule. A call whose argument
-kinds are known from the text is resolved once, before it runs (the guide's [Resolving
-calls before they run](../../guides/java-interop.md#resolving-calls-before-they-run)).
+`"max(long,long)"`, or `"max(long,_)"` with `_` left to the cost rule. A call is resolved
+once, before it runs: to one method when its argument kinds are known from the text,
+otherwise to the overloads it chooses among by the kinds its arguments have when it runs
+(the guide's [Resolving calls before they
+run](../../guides/java-interop.md#resolving-calls-before-they-run)).

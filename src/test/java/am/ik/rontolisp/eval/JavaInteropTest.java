@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.JavaInteropPrograms;
 import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.Test;
 
@@ -401,6 +402,51 @@ class JavaInteropTest {
 		assertThat(eval(parse + "(parse \"42\")")).isEqualTo(new LispInteger(42));
 		assertThatThrownBy(() -> eval(parse + "(parse 42)")).isInstanceOf(LispEvalException.class)
 			.hasMessage("java:static: argument 1 is not a java.lang.String, got 42");
+	}
+
+	// A site whose class is known but whose argument kinds are not chooses among that
+	// class's overloads when it runs, from the kinds the arguments have: numbers,
+	// characters, strings, t and nil, a list and a vector (an array parameter), a varargs
+	// tail, a constructor. The compiled program dispatches the same way without
+	// reflection (JvmJavaInteropCompilerTest#aDispatchedSiteChoosesByTheKindsItMeets).
+	@Test
+	void aDispatchedSiteChoosesByTheKindsItMeets() {
+		assertThat(output(JavaInteropPrograms.DISPATCH_PROGRAM)).isEqualTo(JavaInteropPrograms.DISPATCH_OUTPUT);
+	}
+
+	// Sequences and functions reach a dispatched site as the run-time resolution passes
+	// them: a list or vector becomes an array or a list of the parameter's type, a
+	// function a proxy of an interface -- the one arm that needs the bridge.
+	@Test
+	void aDispatchedSiteConvertsSequencesAndFunctions() {
+		assertThat(output(JavaInteropPrograms.SEQUENCE_DISPATCH_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.SEQUENCE_DISPATCH_OUTPUT);
+	}
+
+	// A dispatched call on a receiver of declared class C chooses among C's overloads,
+	// never the run-time class's: Collection.remove(Object) removes the ELEMENT 1 even
+	// when the argument's kind is known only when it runs.
+	@Test
+	void aDispatchedSiteChoosesAmongTheDeclaredClasssOverloads() {
+		assertThat(output(JavaInteropPrograms.UPPER_BOUND_DISPATCH)).isEqualTo("(T \"[10, 20]\")");
+	}
+
+	// What a dispatched site counted on is checked before it chooses: a declared argument
+	// that is not an instance of its class is an error, and arguments no overload takes
+	// are reported as the run-time resolution reports them.
+	@Test
+	void aDispatchedSiteChecksWhatItCountedOn() {
+		String addAll = """
+				(defun add-all (c)
+				  (declare (type (java:object "java.util.Collection") c))
+				  (java:call (java:new "java.util.ArrayList") "addAll" c))
+				""";
+		assertThat(eval(addAll + "(add-all (java:static \"java.util.List\" \"of\" 1))")).isEqualTo(LispTrue.INSTANCE);
+		assertThatThrownBy(() -> eval(addAll + "(add-all 5)")).isInstanceOf(LispEvalException.class)
+			.hasMessage("java:call: argument 1 is not a java.util.Collection, got 5");
+		assertThatThrownBy(() -> eval("(defun mx (x y) (java:static \"java.lang.Math\" \"max\" x y)) (mx \"a\" 1)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("No matching method java.lang.Math.max with 2 argument(s)");
 	}
 
 	// java:static calls a static method: an instance method of the name, which could only

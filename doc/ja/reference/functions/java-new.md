@@ -10,4 +10,4 @@
 
 文字列 `"ab"` から `java.lang.StringBuilder` を生成し、その `length` メソッドが `2` を返します。
 
-クラス名にはコンストラクタのパラメータ型を付けて直接指定できます: `(java:new "java.lang.StringBuilder(int)" 64)`。引数の種別がテキストから分かる呼び出しは、実行前に一度だけ解決されます (ガイドの[実行前の呼び出し解決](../../guides/java-interop.md#resolving-calls-before-they-run))。
+クラス名にはコンストラクタのパラメータ型を付けて直接指定できます: `(java:new "java.lang.StringBuilder(int)" 64)`。呼び出しは実行前に一度だけ解決されます。引数の種別がテキストから分かればただ 1 つのコンストラクタへ、分からなければコンストラクタの集合へ解決され、実行時に引数の種別でその中から選びます (ガイドの[実行前の呼び出し解決](../../guides/java-interop.md#resolving-calls-before-they-run))。

@@ -7,14 +7,19 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import am.ik.gpu.GpuThresholds;
 import am.ik.rontolisp.cli.RontoLispCli;
 import am.ik.rontolisp.eval.FfiInterop;
 import am.ik.rontolisp.eval.LinalgBlas;
+import am.ik.rontolisp.eval.LinalgGpu;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -29,10 +34,11 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * an {@code UnsupportedFeatureError}). The {@code java:} program's reflective calls and
  * the {@code --blas} / {@code ffi:} programs' downcalls are covered by the configuration
  * the tracing agent records from one {@code java -jar} run; the {@code geom:},
- * {@code --simd} and {@code --gpu} programs need no configuration at all, and neither
- * does a {@code java:} program compiled with {@code --java-static}, whose calls are all
- * direct (.kb/java-interop.md, "Direct calls"). {@code objc:} needs macOS and is not
- * covered here.
+ * {@code --simd} and {@code --gpu} programs need no configuration at all ({@code --gpu}
+ * ships its downcall registration inside the jar), and neither does a {@code java:}
+ * program compiled with {@code --java-static}, whose calls are all direct
+ * (.kb/java-interop.md, "Direct calls"). The {@code objc:} program runs on macOS only,
+ * where the image's {@code main} is thread 0 and has to hand it to AppKit (.kb/objc.md).
  * <p>
  * Opt-in ({@code -Drontolisp.native-image.e2e=true}), because it runs
  * {@code native-image} (about 20 s a program) from the running JDK, which must be a
@@ -61,15 +67,15 @@ class ShippedBridgeNativeImageE2eTest {
 	@Test
 	void aJavaInteropJarRunsAsANativeImageWithAgentConfiguration() throws Exception {
 		// The bridge's entry points a program still needs -- a class named at run time,
-		// an argument of no known kind, a proxy -- and both reflective back-calls bind()
+		// a receiver of no known class, a proxy -- and both reflective back-calls bind()
 		// makes: _apply (the proxy's lambda) and _strv (a string built by concatenate).
 		// The calls that resolve are direct and need no configuration.
 		Path jar = compileJar("""
+				(defvar *sb* (java:new "java.lang.StringBuilder" "hi"))
 				(let ((math "java.lang.Math") (int "java.lang.Integer"))
 				  (print (java:static math "max" 3 7))
-				  (let ((sb (java:new "java.lang.StringBuilder" "hi")))
-				    (java:call sb "append" (concatenate 'string "!" "?"))
-				    (print (java:call sb "toString")))
+				  (java:call *sb* "append" (concatenate 'string "!" "?"))
+				  (print (java:call *sb* "toString"))
 				  (print (java:field int "MAX_VALUE")))
 				(print (java:call (java:proxy "java.util.function.Supplier" (lambda (method) 42)) "get"))
 				""");
@@ -87,7 +93,9 @@ class ShippedBridgeNativeImageE2eTest {
 	// no agent run -- into an executable that prints what java -jar prints. Every shape a
 	// direct call has: a constructor, instance and interface calls, a static call and a
 	// varargs one, fields, a chain typed by declared return types, a let-typed receiver,
-	// a returned array, a primitive char, and an exception the member throws.
+	// a returned array, a primitive char, and an exception the member throws -- and the
+	// dispatch of a site whose argument kinds are known only when it runs, over numbers,
+	// t, a list to a char[], a vector to an int[] and a list to an Object[].
 	@Test
 	void aJavaStaticJarRunsAsANativeImageWithNoConfiguration() throws Exception {
 		Path jar = compileJar("""
@@ -111,11 +119,16 @@ class ShippedBridgeNativeImageE2eTest {
 				                  "toString"))
 				(print (handler-case (java:static "java.lang.Integer" "parseInt" "zz")
 				         (error (e) (format nil "caught: ~a" e))))
+				(defun mx (x y) (java:static "java.lang.Math" "max" x y))
+				(defun val (x) (java:static "java.lang.String" "valueOf" x))
+				(defun ts (x) (java:static "java.util.Arrays" "toString" x))
+				(print (list (mx 1 2) (mx 1 2.5) (val t) (val (list #\\a #\\b)) (ts (vector 1 2)) (ts (list "a" nil))))
 				""", "--java-static");
 		List<String> expected = List.of("\"items: 1 2 3\"", "7", "2.5", "\"cba\"", "#\\b", "2147483647", "4", "\"1-x\"",
 				"(\"a\" \"b\" \"c\")", "3", "\"SATURDAY\"",
 				"\"caught: error calling java.lang.Integer.parseInt: java.lang.NumberFormatException:"
-						+ " For input string: \\\"zz\\\"\"");
+						+ " For input string: \\\"zz\\\"\"",
+				"(2 2.5 \"true\" \"ab\" \"[1, 2]\" \"[a, null]\")");
 		Path java = Path.of(System.getProperty("java.home"), "bin", "java");
 		assertThat(lines(run(java, "-jar", jar.toString()))).isEqualTo(expected);
 		try (ZipFile entries = new ZipFile(jar.toFile())) {
@@ -166,9 +179,9 @@ class ShippedBridgeNativeImageE2eTest {
 
 	@Test
 	void aGpuJarRunsAsANativeImageWithNoConfiguration() throws Exception {
-		// The whole renamed am.ik.gpu travels in the jar. A machine without a device
-		// declines every product, so this pins that the image loads the library and
-		// runs; the device path itself is .kb/gpu.md's.
+		// The whole renamed am.ik.gpu travels in the jar, with its downcall registration.
+		// An 8x8 product is below every device threshold, so this pins that the image
+		// loads the library and runs on any machine; the device path is the next test's.
 		Path jar = compileJar("""
 				(defparameter *a* (linalg:reshape (linalg:arange 1 65) '(8 8)))
 				(print (linalg:sum (linalg:matmul *a* *a*)))
@@ -177,6 +190,37 @@ class ShippedBridgeNativeImageE2eTest {
 		List<String> onTheJvm = lines(run(java, "-jar", jar.toString()));
 		assertThat(onTheJvm).hasSize(1);
 		assertThat(lines(run(buildImage(jar)))).isEqualTo(onTheJvm);
+	}
+
+	@Test
+	void aGpuJarTakesTheDevicePathUnderJavaJarAndAsANativeImage() throws Exception {
+		assumeTrue(LinalgGpu.available(), LinalgGpu::description);
+		assumeTrue(GpuThresholds.lazyResultsPay(), "lazy results pay on this device");
+		// The device path, observed from outside the process: every accepted member lands
+		// on the defun's bits, so no printed value tells the device from the fallback.
+		// Memory does. 48 kept 2048x2048 f32 results are 768 MB of host arrays, which a
+		// 256 MB heap cannot hold, while a lazy device result has no host array at all
+		// (.kb/gpu.md, "Lazy results"). The shipped $Gpu* classes must therefore reach
+		// the device in the jar and in the image built from it, and the same program
+		// without --gpu must not fit.
+		int side = 2048;
+		String program = """
+				(defparameter *a* (linalg:reshape (linalg:arange 1 %d :element-type 'single-float) '(%d %d)))
+				(defparameter *row* (linalg:reshape (linalg:arange 1 %d :element-type 'single-float) '(1 %d)))
+				(defparameter *keep* nil)
+				(dotimes (i 48) (setq *keep* (cons (linalg:add *a* *row*) *keep*)))
+				(format t "kept ~a~%%" (length *keep*))
+				(format t "cell ~a ~a~%%" (aref (car *keep*) 7 9) (aref (car (last *keep*)) %d %d))
+				""".formatted(side * side + 1, side, side, side + 1, side, side - 1, side - 1);
+		// a[7][9] = 7*2048+10, row[9] = 10; a[2047][2047] = 2048*2048, row[2047] = 2048.
+		List<String> expected = List.of("kept 48", "cell 14356.0 4196352.0");
+		Path java = Path.of(System.getProperty("java.home"), "bin", "java");
+		Path jar = compileJar(program, "--gpu");
+		assertThat(lines(run(java, "-Xmx256m", "--enable-native-access=ALL-UNNAMED", "-jar", jar.toString())))
+			.isEqualTo(expected);
+		assertThat(lines(run(buildImage(jar), "-Xmx256m"))).isEqualTo(expected);
+		Path cpuJar = compileJar(program);
+		assertThat(runFailing(java, "-Xmx256m", "-jar", cpuJar.toString())).contains("OutOfMemoryError");
 	}
 
 	@Test
@@ -199,6 +243,37 @@ class ShippedBridgeNativeImageE2eTest {
 		assertThat(lines(run(java, "-agentlib:native-image-agent=config-output-dir=" + config, "-jar", jar.toString())))
 			.isEqualTo(expected);
 		assertThat(lines(run(buildImage(jar, "-H:ConfigurationFileDirectories=" + config)))).isEqualTo(expected);
+	}
+
+	// A native image's main IS thread 0, the thread AppKit needs draining: the image
+	// has to park it in the run loop and run the program on a worker, as java -jar's
+	// launcher does. A timer on thread 0 clicks the button three times and closes the
+	// window, so no hand is needed -- and nothing fires at all when thread 0 is never
+	// handed over, which is the hang the deadline turns into a failure.
+	@Test
+	void anObjcJarRunsAsANativeImageThatHandsThreadZeroToAppKit() throws Exception {
+		assumeTrue(System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac"), "objc: needs macOS");
+		Path jar = compileJar("""
+				(defvar *window* (appkit:window "native image hand-over" :width 240 :height 120))
+				(defvar *clicks* 0)
+				(defvar *button*
+				  (appkit:button *window* "b" :on-click (lambda () (setq *clicks* (+ *clicks* 1)))))
+				(defvar *ticks* 0)
+				(appkit:timer 0.1 (lambda ()
+				                    (setq *ticks* (+ *ticks* 1))
+				                    (cond ((<= *ticks* 3) (objc:send *button* "performClick:" nil) t)
+				                          (t (objc:send *window* "performClose:" nil) nil))))
+				(appkit:wait *window*)
+				(format t "clicks ~a~%" *clicks*)
+				""");
+		List<String> expected = List.of("clicks 3");
+		Path config = this.tempDir.resolve("config");
+		Path java = Path.of(System.getProperty("java.home"), "bin", "java");
+		assertThat(lines(run(java, "-agentlib:native-image-agent=config-output-dir=" + config, "-jar", jar.toString())))
+			.isEqualTo(expected);
+		assertThat(lines(
+				run(Map.of(), Duration.ofSeconds(60), buildImage(jar, "-H:ConfigurationFileDirectories=" + config))))
+			.isEqualTo(expected);
 	}
 
 	private Path compileJar(String program, String... options) throws Exception {
@@ -232,15 +307,42 @@ class ShippedBridgeNativeImageE2eTest {
 		return run(Map.of(), executable, arguments);
 	}
 
-	private String run(Map<String, String> environment, Path executable, String... arguments) throws Exception {
+	/** Runs a command that must exit non-zero and answers its output. */
+	private String runFailing(Path executable, String... arguments) throws Exception {
 		List<String> command = new ArrayList<>();
 		command.add(executable.toString());
 		command.addAll(List.of(arguments));
-		ProcessBuilder builder = new ProcessBuilder(command).directory(this.tempDir.toFile()).redirectErrorStream(true);
+		Process process = new ProcessBuilder(command).directory(this.tempDir.toFile())
+			.redirectErrorStream(true)
+			.start();
+		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(process.waitFor()).describedAs("%s should fail:%n%s", command, output).isNotZero();
+		return output;
+	}
+
+	private String run(Map<String, String> environment, Path executable, String... arguments) throws Exception {
+		return run(environment, Duration.ofMinutes(10), executable, arguments);
+	}
+
+	private String run(Map<String, String> environment, Duration deadline, Path executable, String... arguments)
+			throws Exception {
+		List<String> command = new ArrayList<>();
+		command.add(executable.toString());
+		command.addAll(List.of(arguments));
+		// Into a file, not a pipe: a process that hangs must not hang the read.
+		Path log = Files.createTempFile(this.tempDir, "run", ".log");
+		ProcessBuilder builder = new ProcessBuilder(command).directory(this.tempDir.toFile())
+			.redirectErrorStream(true)
+			.redirectOutput(log.toFile());
 		builder.environment().putAll(environment);
 		Process process = builder.start();
-		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		int status = process.waitFor();
+		boolean exited = process.waitFor(deadline.toMillis(), TimeUnit.MILLISECONDS);
+		if (!exited) {
+			process.destroyForcibly().waitFor();
+		}
+		String output = Files.readString(log, StandardCharsets.UTF_8);
+		assertThat(exited).describedAs("%s still running after %s:%n%s", command, deadline, output).isTrue();
+		int status = process.exitValue();
 		assertThat(status).describedAs("%s exited %d:%n%s", command, status, output).isZero();
 		return output;
 	}

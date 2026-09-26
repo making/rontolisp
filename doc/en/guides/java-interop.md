@@ -112,11 +112,14 @@ When no integer overload exists the integer is converted to the available type:
 ## Resolving calls before they run
 
 The interpreter and a compiled class resolve every call by that one rule. A call whose
-receiver class and argument kinds are known from the program text is resolved once, before
-it first runs, to exactly one method -- the model is Clojure's type-hinted interop, applied
-by the interpreter too. Any other call is resolved when it runs, from the receiver's class
-and the arguments' kinds. The method chosen is the same either way, with the one exception
-below.
+class is known from the program text -- the class `java:new` or `java:static` names, the type
+of a `java:call` receiver -- is resolved once, before it first runs, among that class's
+methods: to exactly one method when the argument kinds are known too, otherwise to the
+overloads the arguments can select, among which the call chooses by the kinds its arguments
+have each time it runs. The model is Clojure's type-hinted interop, applied by the
+interpreter too. A call whose receiver class is not known is resolved when it runs, from the
+receiver's class and the arguments' kinds. The method chosen is the same either way, with
+the one exception below.
 
 What the program text says about a value:
 
@@ -159,20 +162,32 @@ Both calls below are resolved before they run: `sb` is exactly a `StringBuilder`
   (java:call sb "toString"))   ; => "ba"
 ```
 
-A compiled class makes each resolved call a direct call of its method -- no reflection --
-and writes the reflection bridge only for the calls left to run time. The interpreter runs a
-resolved call the same way: the method chosen, the arguments checked and converted.
+A compiled class makes a call resolved to one method a direct call of it, and a call
+resolved to overloads a comparison of its arguments' kinds followed by a direct call of the
+overload they select -- no reflection either way -- and writes the reflection bridge only
+for the calls left to run time. The interpreter runs a resolved call the same way: the
+method chosen, the arguments checked and converted.
 
-An argument resolves a call only when every kind it can have selects the same method. A
-`String` answer may be `nil`, which selects `append(boolean)`, so
-`(java:call sb "append" (java:call x "toString"))` is resolved when it runs.
+```lisp
+(defun bigger (a b) (java:static "java.lang.Math" "max" a b))
+(list (bigger 3 7) (bigger 2.5 1) (bigger #\a 1))   ; => (7 2.5 97)
+```
+
+`a` and `b` may be anything, so each call of `bigger` chooses among `max(int,int)`,
+`max(long,long)`, `max(float,float)` and `max(double,double)` by the cost rule.
+
+An argument decides the method before the call runs only when every kind it can have
+selects the same one. A `String` answer may be `nil`, which selects `append(boolean)`, so
+`(java:call sb "append" (java:call sb "toString"))` chooses between `append(String)` and
+`append(boolean)` when it runs.
 
 ### The declared receiver class decides the candidates
 
 A call on a receiver of declared class `C` resolves among `C`'s methods, as in Java -- so
 does one on a `let` variable whose initializer is typed `C`. A public overload of the same
-name that only the run-time class adds is not a candidate -- the one place where resolving
-early chooses differently from resolving at run time:
+name that only the run-time class adds is not a candidate, whether the argument kinds are
+known before the call runs or only when it does -- the one place where resolving early
+chooses differently from resolving at run time:
 
 ```lisp
 (defun remove-one (c)
@@ -236,7 +251,9 @@ $ rontolisp app.lisp -o app.jar --java-release 21 --java-classpath lib/guava.jar
 
 `--java-static` makes every call that needs reflection a compile error: one left to run
 time, a `java:proxy`, and a function passed where an interface is expected (it becomes a
-`java.lang.reflect.Proxy`). The compile lists them all at once. What compiles has no
+`java.lang.reflect.Proxy`). An argument whose kind is known only when the call runs may be a
+function, so such a call needs reflection when one of its overloads expects an interface
+there, as `String.join(CharSequence, Iterable)` does. The compile lists them all at once. What compiles has no
 reflection in it, so GraalVM `native-image` builds the jar into an executable with no
 reachability metadata -- no `reflect-config.json`, no agent run:
 
@@ -344,9 +361,9 @@ native-image -jar prog.jar -H:ConfigurationFileDirectories=config
 
 The metadata covers only the calls the traced run made. A call that selects an
 overload the run never selected fails in the image with
-`MissingReflectionRegistrationError` -- for example `(java:static
-"java.lang.Math" "max" a b)` with `a` and `b` of unknown kinds, passed floats
-after a run that only passed integers. Trace runs that exercise every call
+`MissingReflectionRegistrationError` -- for example `(java:call sb "append" x)`
+on an `sb` whose class is not known, passed a float after a run that only
+passed integers. Trace runs that exercise every call
 shape the program uses, or declare the types so the calls resolve.
 
 ## Limitations
