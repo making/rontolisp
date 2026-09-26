@@ -163,6 +163,10 @@ What the program text says about a value:
   keeps that type, which `(java:object "I" :exact)` spells -- no object's class is exactly
   an interface, so for one `:exact` means this.
 
+A call on a value whose known class is an interface also resolves to `Object`'s public
+methods the interface does not declare (`toString`, `getClass`, ...), as Java's own call
+`list.toString()` does.
+
 A declared type is trusted: a value that is not a `C` is an error where it meets the call,
 whether it is the receiver or an argument -- never converted for a method it was not chosen
 for.
