@@ -8,6 +8,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -517,6 +518,31 @@ public final class DistClient {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * Whether a source file belongs to a release some installed dist extracted -- a
+	 * dependency the program fetched, rather than source of its own. The compile path
+	 * prints such a file's warnings and does not count them toward
+	 * {@code --warnings-as-errors}, the way a build tool caps a registry dependency's
+	 * lints: the program's author cannot fix them.
+	 * @param file a source file path, as the program's reads name it
+	 * @return true when it lies under an installed dist's {@code software/} directory
+	 */
+	public synchronized boolean installedSource(String file) {
+		Path path;
+		try {
+			path = Path.of(file).toAbsolutePath().normalize();
+		}
+		catch (InvalidPathException ex) {
+			return false;
+		}
+		for (Dist dist : this.dists) {
+			if (path.startsWith(dist.home.resolve("software").toAbsolutePath().normalize())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private Path homeFor(String name) {

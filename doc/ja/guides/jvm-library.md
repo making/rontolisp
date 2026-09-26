@@ -228,7 +228,7 @@ mvn package     # one jar, Lisp classes and Java classes together
 を `target/test-classes` にコンパイルします。
 
 JVM バックエンドに届くフラグはすべて同じ名前のパラメータになります — `simd`、`blas`、
-`gpu`、`parallel`、`optimize`、`dynamic`、`noPrune`、`systemPath`、`dists` — そして
+`gpu`、`parallel`、`optimize`、`dynamic`、`noPrune`、`warningsAsErrors`、`systemPath`、`dists` — そして
 `skip` (`-Drontolisp.skip=true`) でゴールを止められます。コマンドラインと既定値が違う
 のは 1 つだけ、`noMain` が **オン** であることです。ソースセットはライブラリだからで、
 エクスポートしないファイルがクラスではなく普通の Lisp になるのもこれによります。

@@ -75,6 +75,8 @@ public final class JvmSourceCompiler {
 
 	private boolean javaStatic;
 
+	private boolean warningsAsErrors;
+
 	/**
 	 * @param className the class to emit, in either the {@code com.acme.Kernels} or the
 	 * {@code com/acme/Kernels} spelling
@@ -252,6 +254,16 @@ public final class JvmSourceCompiler {
 	}
 
 	/**
+	 * @param warningsAsErrors {@code --warnings-as-errors}: a compile that warns about
+	 * the program's own source fails with a {@link WarningsAsErrorsException} once every
+	 * warning is printed, instead of answering a class
+	 */
+	public JvmSourceCompiler warningsAsErrors(boolean warningsAsErrors) {
+		this.warningsAsErrors = warningsAsErrors;
+		return this;
+	}
+
+	/**
 	 * Compiles a source text.
 	 * <p>
 	 * A failure carries the frontend's {@code file:line:column:} prefix, exactly as the
@@ -294,14 +306,15 @@ public final class JvmSourceCompiler {
 	}
 
 	private Optional<Result> compileRecording(String source, @Nullable String entryFile, boolean onlyIfExported) {
-		return CompileDiagnostics.recording(() -> {
+		DistClient dists = DistClient.createDefault(this.dists);
+		return CompileDiagnostics.recording(dists, () -> {
 			CompileFrontend.Result frontend = CompileFrontend.run(CompileFrontend.Request.builder()
 				.source(source)
 				.entryFile(entryFile)
 				.sourceLanguage(this.sourceLanguage)
 				.standards(this.standards)
 				.systemPath(this.systemPath)
-				.dists(DistClient.createDefault(this.dists))
+				.dists(dists)
 				.declaredFeatures(this.features)
 				.options(CompileFrontend.Options.builder()
 					.baseDir(this.baseDir)
@@ -313,7 +326,9 @@ public final class JvmSourceCompiler {
 			if (onlyIfExported && frontend.program().stream().noneMatch(JvmExportDirective::isExportForm)) {
 				return Optional.empty();
 			}
-			return Optional.of(compileProgram(frontend.program(), frontend.features()));
+			Result compiled = compileProgram(frontend.program(), frontend.features());
+			CompileDiagnostics.failOnWarnings(this.warningsAsErrors);
+			return Optional.of(compiled);
 		});
 	}
 

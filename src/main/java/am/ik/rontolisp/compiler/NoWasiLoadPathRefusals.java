@@ -210,7 +210,8 @@ public final class NoWasiLoadPathRefusals {
 			LispNames.SYMBOL_MACROLET);
 
 	/**
-	 * The build lines for every refusing primitive this program's load path reaches.
+	 * Warns once per refusing primitive this program's load path reaches, in the order it
+	 * reaches them, each at the call site that reaches it.
 	 * @param program the resolved, flattened top-level forms, before
 	 * {@link NoWasiFilesystemStubs#rewrite(List)} has replaced the file-opening forms
 	 * @param hostRandom whether {@code --host-random} routes {@code random_get} at a host
@@ -222,15 +223,10 @@ public final class NoWasiLoadPathRefusals {
 	 * @param reactorComponent whether this is the {@code --component --no-wasi} reactor,
 	 * which carries no host hooks at all (its top level runs at instantiation, so there
 	 * is no window before the first read)
-	 * @return one line per primitive, position prefix included, in the order the load
-	 * path reaches them; empty when it reaches none
 	 */
-	public static List<String> report(List<LispVal> program, boolean hostRandom, boolean hostFetch,
-			boolean reactorComponent) {
-		Map<String, Found> found = walk(program, hostRandom, hostFetch, Set.of(), null);
-		List<String> lines = new ArrayList<>(found.size());
-		found.values().forEach(f -> lines.add(line(f, reactorComponent)));
-		return lines;
+	public static void warn(List<LispVal> program, boolean hostRandom, boolean hostFetch, boolean reactorComponent) {
+		walk(program, hostRandom, hostFetch, Set.of(), null).values()
+			.forEach(found -> CompileWarnings.warn(found.site(), text(found, reactorComponent)));
 	}
 
 	/**
@@ -880,7 +876,7 @@ public final class NoWasiLoadPathRefusals {
 				: "rontolisp:" + LispNames.RANDOM_BYTES;
 	}
 
-	private static String line(Found found, boolean reactorComponent) {
+	private static String text(Found found, boolean reactorComponent) {
 		String remedy = switch (found.kind()) {
 			case CLOCK -> reactorComponent
 					? "A --no-wasi reactor component imports no clock and exposes no way to hand one in -- its top"
@@ -905,8 +901,7 @@ public final class NoWasiLoadPathRefusals {
 			// formats it, and report() never produces the kind.
 			case SUSPEND -> throw new IllegalStateException("SUSPEND is not a reportable line");
 		};
-		return SourceProvenance.prefix(found.site()) + "warning: " + found.operator()
-				+ " is reachable from a top-level form of this --no-wasi module (" + found.origin()
+		return found.operator() + " is reachable from a top-level form of this --no-wasi module (" + found.origin()
 				+ "), so it can run while the module LOADS -- where nothing catches it and the host sees only"
 				+ " RuntimeError: unreachable. " + remedy;
 	}

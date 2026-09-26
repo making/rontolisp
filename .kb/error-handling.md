@@ -1551,7 +1551,8 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   evaluates its arguments and then signals `program-error` with ONE text on all four backends**
   (`CAR expects 1 argument, got 2`, `FLOOR expects at most 2 arguments, got 3`, `GETHASH expects
   at least 2 arguments, got 1`), and each compiled backend warns at compile time
-  (`warning: ...; compiled as a call-time program-error`). Pinned by ci-spec
+  (`warning: ...; compiled as a call-time program-error`), which `--warnings-as-errors` makes a
+  failed compile ([compile-warnings.md](compile-warnings.md)). Pinned by ci-spec
   `direct-builtin-call-wrong-count-signals-program-error`, `BuiltinCallArityTest`,
   `LispEvaluatorTest.everyWrappedBuiltinReportsAWrongDirectCountWithItsCallShape` (every catalog
   name, counts 0..4) and `JvmLispCompilerTest.compileAndRunADirectBuiltinCallWithAWrongCountSignalsAtCallTime`
@@ -1590,7 +1591,8 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
   a compiled defun, or `((lambda ...) args...)`, with a count the lambda list rules out evaluates
   its arguments and then signals the interpreter's `program-error` at run time on all four
   backends** (`Function expects 2 arguments, got 1`), each compiled backend warning at compile
-  time. Pinned by ci-spec `direct-defun-call-wrong-count-signals-program-error`,
+  time (`--warnings-as-errors` fails the compile instead, [compile-warnings.md](compile-warnings.md)).
+  Pinned by ci-spec `direct-defun-call-wrong-count-signals-program-error`,
   `DefinedCallArityTest` and `JvmLispCompilerTest`
   `compileAndRunADirectCallOfAProgramFunctionWithAWrongCountSignalsAtCallTime` with its wasm twin.
   - Before: both compiled backends failed the COMPILE (`UD expects 2 arguments, got 1`, `lambda
