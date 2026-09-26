@@ -40,6 +40,10 @@ final class JvmCharCompiler {
 		List<LispVal> args = cons.toList();
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		// An index that is no integer is CHAR's / SCHAR's type-error, named by the
+		// operator's wrapper (JvmOperandTypeRuntime).
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.numOp(JvmOperandTypeRuntime.CK_IDX).index());
 		JvmEmitHelper.unboxLong(ctx);
 		ctx.emit(Opcode.L2I);
 		ctx.emit(Opcode.INVOKESTATIC);

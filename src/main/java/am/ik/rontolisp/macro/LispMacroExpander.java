@@ -4446,8 +4446,15 @@ public final class LispMacroExpander {
 	 *     (while (consp __dolist)
 	 *       (let ((x (car __dolist))) body...)
 	 *       (setq __dolist (cdr __dolist)))
+	 *     (endp __dolist)
 	 *     (let ((x nil)) r))
 	 * </pre>
+	 *
+	 * <p>
+	 * The {@code endp} after the loop is CL's end test, which signals a
+	 * {@code type-error} for a list that ends in no {@code nil}: {@code 5}, or the
+	 * {@code 3} of {@code (1 2 . 3)} after the body has seen 1 and 2 -- what testing
+	 * {@code endp} before each iteration would do, without a check in the loop.
 	 * @param cons the dolist expression
 	 * @return the expanded expression
 	 */
@@ -4480,9 +4487,11 @@ public final class LispMacroExpander {
 		// (let ((var nil)) result) -- CL evaluates the result form with var bound to nil
 		LispVal resultExpr = listToCons(List.of(new LispSymbol(LispNames.LET),
 				new LispCons(listToCons(List.of(var, LispNil.INSTANCE)), LispNil.INSTANCE), resultForm));
-		// (let ((__dolist list)) while-expr result-expr), wrapped in a return boundary.
+		// (let ((__dolist list)) while-expr (endp __dolist) result-expr), wrapped in a
+		// return boundary.
 		LispVal bindings = new LispCons(listToCons(List.of(cursor, listForm)), LispNil.INSTANCE);
-		return makeBlock(listToCons(List.of(new LispSymbol(LispNames.LET), bindings, whileExpr, resultExpr)));
+		return makeBlock(listToCons(List.of(new LispSymbol(LispNames.LET), bindings, whileExpr,
+				callOf(LispNames.ENDP, cursor), resultExpr)));
 	}
 
 	/**
@@ -27663,15 +27672,6 @@ public final class LispMacroExpander {
 		List<LispVal> parts = cons.toList();
 		LispVal pair = listToCons(List.of(new LispSymbol(LispNames.CONS), parts.get(1), parts.get(2)));
 		return listToCons(List.of(new LispSymbol(LispNames.CONS), pair, parts.get(3)));
-	}
-
-	/**
-	 * Expands (endp x) into (null x). The Common Lisp improper-list error is relaxed.
-	 * @param cons the endp expression
-	 * @return the expanded expression
-	 */
-	public static LispVal expandEndp(LispCons cons) {
-		return callOf(LispNames.NULL, cons.toList().get(1));
 	}
 
 	/**

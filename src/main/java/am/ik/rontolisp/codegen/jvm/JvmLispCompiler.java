@@ -2037,6 +2037,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		numericRuntime.methods().addAll(JvmOperandTypeRuntime.build(cp, thisClass, teTlField));
 		for (String[] check : new String[][] { { JvmOperandTypeRuntime.CAR, JvmOperandTypeRuntime.FIELD_DESC },
 				{ JvmOperandTypeRuntime.CDR, JvmOperandTypeRuntime.FIELD_DESC },
+				{ JvmOperandTypeRuntime.ENDP, JvmOperandTypeRuntime.FIELD_DESC },
 				{ JvmOperandTypeRuntime.CK_IDX, JvmOperandTypeRuntime.CK_IDX_DESC },
 				{ JvmOperandTypeRuntime.CK_RAT, JvmOperandTypeRuntime.CK_RAT_DESC } }) {
 			numericRuntime.ops().put(check[0], JvmOperandTypeRuntime.self(cp, thisClass, check[0], check[1]));
@@ -3395,7 +3396,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// at all so its loop's backedge sits at operand stack depth 0, the only shape
 		// HotSpot will OSR-compile (JvmNthcdrRuntimeBuilder).
 		final JvmNthcdrRuntimeBuilder.NthcdrMethod nthcdrMethodBody = JvmNthcdrRuntimeBuilder.build(cp,
-				objectArrayClass);
+				objectArrayClass, thisClass);
 
 		// The &optional surplus-argument message (%arity-surplus-message). Emitted
 		// unconditionally like _nthcdr: its sites are the lambda-list prologue, which the

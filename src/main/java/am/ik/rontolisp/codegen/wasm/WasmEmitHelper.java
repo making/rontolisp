@@ -343,6 +343,45 @@ final class WasmEmitHelper {
 	}
 
 	/**
+	 * Checks that the value in {@code slot} is a cons -- or nil too, with {@code orNil}
+	 * -- and otherwise signals: in EH mode ({@link #checksConsFields}) the innermost
+	 * operator's catchable {@code LIST} type-error ({@code _type_err_list} under its id
+	 * in the register), outside it a trap.
+	 * {@code local.get slot; ref.test $cons [local.get
+	 * slot; ref.is_null; i32.or]; i32.eqz; if <signal>; unreachable end}.
+	 * @param ctx the compile context
+	 * @param slot the local holding the value
+	 * @param orNil whether nil passes too
+	 */
+	static void emitListCheck(WasmLispCompiler.Ctx ctx, int slot, boolean orNil) {
+		WasmWriter w = ctx.writer;
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		if (orNil) {
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(slot);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.I32_OR);
+		}
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		if (checksConsFields(ctx)) {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(WasmOperandTypes.operatorId(ctx));
+			w.write(Instruction.SET_GLOBAL);
+			w.writeUnsignedLeb128(ctx.operandOpGlobalIndex);
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(slot);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_TYPE_ERR_LIST);
+		}
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+	}
+
+	/**
 	 * Builds {@code _idx_chk(index, id) -> index}: a fixnum answers itself at once;
 	 * anything else goes through {@code _int_val} with the i31 operator id in the
 	 * register -- a non-integer throws that operator's {@code INTEGER} type-error, a wide

@@ -9,7 +9,8 @@ import am.ik.wasm.Type;
 
 /**
  * Compiles the {@code nthcdr} built-in function. Generates a block/loop that applies
- * {@code cdr} n times to the list argument. The counter is kept as an i31ref since all
+ * {@code cdr} n times to the list argument; in EH mode a non-list met before the count
+ * runs out is {@code NTHCDR}'s type-error. The counter is kept as an i31ref since all
  * locals are typed {@code (ref null eq)}.
  */
 final class WasmNthcdrCompiler {
@@ -46,6 +47,11 @@ final class WasmNthcdrCompiler {
 		ctx.writer.writeUnsignedLeb128(listSlot);
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.BR_IF, 1);
+		// In EH mode a non-list is NTHCDR's catchable type-error; outside it the cast
+		// below traps.
+		if (WasmEmitHelper.checksConsFields(ctx)) {
+			WasmEmitHelper.emitListCheck(ctx, listSlot, false);
+		}
 		// list = cdr(list)
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(listSlot);

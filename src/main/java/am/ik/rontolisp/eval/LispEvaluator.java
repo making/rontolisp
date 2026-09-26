@@ -7160,8 +7160,6 @@ public final class LispEvaluator {
 				return builtinMacroExpansion(cons, LispMacroExpander::expandListStar);
 			case LispNames.ACONS:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandAcons);
-			case LispNames.ENDP:
-				return builtinMacroExpansion(cons, LispMacroExpander::expandEndp);
 			case LispNames.ELT:
 				return builtinMacroExpansion(cons, LispMacroExpander::expandElt);
 			case LispNames.VECTOR:

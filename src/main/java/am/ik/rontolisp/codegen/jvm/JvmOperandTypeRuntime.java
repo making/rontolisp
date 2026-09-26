@@ -68,6 +68,13 @@ final class JvmOperandTypeRuntime {
 	static final String FIELD_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
 	/**
+	 * {@code endp}'s check, self-naming like {@link #CAR}: nil or a cons answers itself,
+	 * anything else throws {@code ENDP}'s {@code LIST} type-error. Descriptor
+	 * {@link #FIELD_DESC}.
+	 */
+	static final String ENDP = "_endp";
+
+	/**
 	 * The argument checks of the other funnel-typed operators ({@code OperandTypes}):
 	 * each answers its argument when it has the type and throws the unnamed report
 	 * otherwise, for a wrapper to name. {@code _ckIdx} an index (an {@code INTEGER}: a
@@ -182,6 +189,7 @@ final class JvmOperandTypeRuntime {
 		StringConstant funnelType = cp.addString(OperandTypes.FUNNEL_TYPE);
 		methods.add(field(cp, CAR, 0, objArr, teRaw, opTypeErr, listKind, funnelType));
 		methods.add(field(cp, CDR, 1, objArr, teRaw, opTypeErr, listKind, funnelType));
+		methods.add(listCheck(cp, objArr, teRaw, opTypeErr, listKind, funnelType));
 		methods.add(check(cp, CK_IDX, CK_IDX_DESC, List.of(longClass, bigClass), null, teRaw,
 				cp.addString(OperandTypes.Kind.INTEGER.name())));
 		methods.add(check(cp, CK_RAT, CK_RAT_DESC, List.of(longClass, bigClass, ratioClass), null, teRaw,
@@ -402,15 +410,52 @@ final class JvmOperandTypeRuntime {
 		c.add(Opcode.AALOAD);
 		c.add(Opcode.ARETURN);
 		JvmRuntimeBuilder.patchBranch(c, ifNotCons, c.size());
+		emitNamedListThrow(c, cp, teRaw, opTypeErr, listKind, funnelType,
+				index == 0 ? am.ik.rontolisp.LispNames.CAR : am.ik.rontolisp.LispNames.CDR);
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(FIELD_DESC), c, 3, 1, List.of());
+	}
+
+	/**
+	 * Builds {@code _endp}: nil or a cons ({@code Object[]}) answers itself, anything
+	 * else {@code throw _opTypeErr(_teRaw(x, "LIST"), "ENDP", FUNNEL_TYPE)}.
+	 */
+	private static JvmNumericRuntimeBuilder.NumericMethod listCheck(ConstantPool cp, ClassConstant objArr,
+			MethodrefConstant teRaw, MethodrefConstant opTypeErr, StringConstant listKind, StringConstant funnelType) {
+		List<Integer> c = new ArrayList<>();
+		c.add(Opcode.ALOAD_0);
+		int ifNull = branch(c, Opcode.IFNULL);
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.INSTANCEOF);
+		JvmRuntimeBuilder.emitU2(c, objArr.index());
+		int ifCons = branch(c, Opcode.IFNE);
+		emitNamedListThrow(c, cp, teRaw, opTypeErr, listKind, funnelType, am.ik.rontolisp.LispNames.ENDP);
+		JvmRuntimeBuilder.patchBranch(c, ifNull, c.size());
+		JvmRuntimeBuilder.patchBranch(c, ifCons, c.size());
+		c.add(Opcode.ALOAD_0);
+		c.add(Opcode.ARETURN);
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(ENDP), cp.addUtf8(FIELD_DESC), c, 3, 1, List.of());
+	}
+
+	/**
+	 * Emits {@code throw _opTypeErr(_teRaw(<local 0>, "LIST"), operator, FUNNEL_TYPE)}: a
+	 * list walk's self-named type-error. Peak operand stack: 3.
+	 * @param c the bytecode sink
+	 * @param cp the constant pool
+	 * @param teRaw {@code _teRaw}
+	 * @param opTypeErr {@code _opTypeErr}
+	 * @param listKind the {@code "LIST"} constant
+	 * @param funnelType the {@link OperandTypes#FUNNEL_TYPE} constant
+	 * @param operator the operator the report names
+	 */
+	static void emitNamedListThrow(List<Integer> c, ConstantPool cp, MethodrefConstant teRaw,
+			MethodrefConstant opTypeErr, StringConstant listKind, StringConstant funnelType, String operator) {
 		c.add(Opcode.ALOAD_0);
 		JvmRuntimeBuilder.emitLdc(c, listKind.index());
 		invoke(c, Opcode.INVOKESTATIC, teRaw);
-		JvmRuntimeBuilder.emitLdc(c,
-				cp.addString(index == 0 ? am.ik.rontolisp.LispNames.CAR : am.ik.rontolisp.LispNames.CDR).index());
+		JvmRuntimeBuilder.emitLdc(c, cp.addString(operator).index());
 		JvmRuntimeBuilder.emitLdc(c, funnelType.index());
 		invoke(c, Opcode.INVOKESTATIC, opTypeErr);
 		c.add(Opcode.ATHROW);
-		return new JvmNumericRuntimeBuilder.NumericMethod(cp.addUtf8(name), cp.addUtf8(FIELD_DESC), c, 3, 1, List.of());
 	}
 
 	/**

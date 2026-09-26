@@ -4787,6 +4787,20 @@ public final class Environment implements Scope {
 		return s.substring(s.offsetByCodePoints(0, start), s.offsetByCodePoints(0, end));
 	}
 
+	/**
+	 * A {@code char}/{@code schar} subscript: one that is no integer is the operator's
+	 * {@code INTEGER} type-error. A bignum is an integer, out of any string's bounds.
+	 */
+	private static int requireStringIndex(String operator, LispVal val) {
+		if (val instanceof LispInteger i) {
+			return (int) i.value();
+		}
+		if (val instanceof LispBigInteger) {
+			return requireIndex(operator, val);
+		}
+		throw OperandTypeException.of(val, OperandTypes.Kind.INTEGER, operator);
+	}
+
 	static int requireIndex(String name, LispVal val) {
 		if (val instanceof LispInteger i) {
 			return (int) i.value();
@@ -7813,7 +7827,7 @@ public final class Environment implements Scope {
 		if (!(args.get(0) instanceof LispString s)) {
 			throw new LispEvalException(name + " expects a string, got: " + args.get(0).print());
 		}
-		int index = requireIndex(name, args.get(1));
+		int index = requireStringIndex(name, args.get(1));
 		// Indexing is by CHARACTER (Unicode code point), not by UTF-16 code unit -- a
 		// supplementary code point is one indexed character, not two, matching every
 		// other backend and Common Lisp's contract. The backing store is already one code
@@ -8116,11 +8130,26 @@ public final class Environment implements Scope {
 				if (list instanceof LispCons cons) {
 					list = cons.cdr();
 				}
-				else {
+				else if (list instanceof LispNil) {
 					return LispNil.INSTANCE;
+				}
+				else {
+					// A walk that meets a non-list before the count runs out: 5 in
+					// (nthcdr 1 5), the 2 of (nthcdr 2 '(1 . 2)).
+					throw OperandTypeException.of(list, OperandTypes.Kind.LIST, LispNames.NTHCDR);
 				}
 			}
 			return list;
+		}));
+		// endp: t for nil, nil for a cons, a type-error for anything else -- also
+		// dolist's, whose expansion checks the list's end once after its loop.
+		env.defineFunction(LispNames.ENDP, new LispFunction(LispNames.ENDP, args -> {
+			requireArgCount(LispNames.ENDP, args, 1);
+			return switch (args.get(0)) {
+				case LispNil nil -> LispTrue.INSTANCE;
+				case LispCons cons -> LispNil.INSTANCE;
+				default -> throw OperandTypeException.of(args.get(0), OperandTypes.Kind.LIST, LispNames.ENDP);
+			};
 		}));
 		env.defineFunction(LispNames.RPLACA, new LispFunction(LispNames.RPLACA, args -> {
 			requireArgCount(LispNames.RPLACA, args, 2);
@@ -8199,8 +8228,16 @@ public final class Environment implements Scope {
 	 */
 	private static LispVal nthValue(long n, LispVal list) {
 		LispVal cur = list;
-		for (long i = 0; i < n && cur instanceof LispCons cons; i++) {
-			cur = cons.cdr();
+		for (long i = 0; i < n; i++) {
+			if (cur instanceof LispCons cons) {
+				cur = cons.cdr();
+			}
+			else if (cur instanceof LispNil) {
+				return LispNil.INSTANCE;
+			}
+			else {
+				throw OperandTypeException.of(cur, OperandTypes.Kind.LIST, LispNames.NTHCDR);
+			}
 		}
 		if (cur instanceof LispCons cons) {
 			return cons.car();
@@ -8208,7 +8245,7 @@ public final class Environment implements Scope {
 		if (cur instanceof LispNil) {
 			return LispNil.INSTANCE;
 		}
-		throw OperandTypeException.of(cur, OperandTypes.Kind.LIST);
+		throw OperandTypeException.of(cur, OperandTypes.Kind.LIST, LispNames.CAR);
 	}
 
 	private static LispVal appendTwo(LispVal list, LispVal tail) {

@@ -769,9 +769,9 @@ operator it serves:
 - `_int_val`'s limb-tier arm still TRAPS explicitly ([wasm-bignum.md](wasm-bignum.md)'s exact-or-trap
   boundary is about values that ARE integers). The `_as_f64` ladder is float-first
   ([wasm-shared-coercion.md](wasm-shared-coercion.md)). `--no-gc` unaffected, still traps.
-- **What still traps on wasm-GC**: division by zero, a list walk's own cast (`nthcdr`, `dolist` over
-  a non-list, `.todo/980`), the array argument of an access, the limb-tier boundaries -- and
-  everything outside EH mode.
+- **What still traps on wasm-GC**: division by zero, the array argument of an access, the limb-tier
+  boundaries -- and everything outside EH mode. (A list walk over a non-list is named since
+  2026-09-26: "A wrong-type argument names its operator".)
 - **The funnels' reach is wider than arithmetic**: a STORE into a packed float array goes through the
   same `_dbl`/`_as_f64`, and reports under `(SETF AREF)` since 972. Pinned by `JvmFloatArrayTest`'s
   `nonRealStoreIsATypeError`/`singleNonRealStoreIsATypeError` -- the reason to run the WHOLE suite
@@ -794,15 +794,34 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
 | `(numerator nil)`, `(denominator 1.5)` | `NUMERATOR:` / `DENOMINATOR: ... RATIONAL` |
 | `(lcm nil)`, `(gcd 1.5)` (one argument) | `LCM:` / `GCD: ... INTEGER` |
 | `(random 1/2)`, `(random -1)`, `(random 0.0)` | `RANDOM: ... REAL` |
+| `(nthcdr 1 5)`, `(nth 1 5)`, `(second 5)`, `(nthcdr 2 '(1 . 2))` | `NTHCDR: ... LIST` |
+| `(endp 5)`, `(dolist (x 5))`, `(dolist (x '(1 2 . 3)))` | `ENDP: ... LIST` |
+| `(char "ab" nil)`, `(schar "ab" 1.5)` | `CHAR:` / `SCHAR: ... INTEGER` |
 
-- **FUNNEL-TYPED operators** (`OperandTypes.FUNNEL_TYPE`: `CAR`, `CDR`, `NTHCDR`, `AREF`,
-  `(SETF AREF)`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
+- **FUNNEL-TYPED operators** (`OperandTypes.FUNNEL_TYPE`: `CAR`, `CDR`, `NTHCDR`, `ENDP`, `AREF`,
+  `(SETF AREF)`, `CHAR`, `SCHAR`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
   (new kinds `LIST`, `RATIONAL`) -- except that a to-double funnel (`NUMBER`) there is a packed float
   store, which takes any real: `REAL`. A numeric operator keeps its one fixed type. `%aset` reports
   as `(SETF AREF)`, `nth` as `NTHCDR`, `svref` as `AREF`, `first`/`rest` as `CAR`/`CDR`
   (`OperandTypes.REWRITTEN`, the call-position-rewrite rule above). A one-argument `gcd`/`lcm`
   lowers to `(gcd x 0)`/`(lcm x 1)` (`LispMacroExpander.expandReduction`) -- it was `abs`, which
   accepted a float and named itself.
+- **List walks** (2026-09-26): `nthcdr`'s walk signals on a non-list met before the count runs out
+  (`(nthcdr 0 5)` is `5`, `(nthcdr 1 '(1 . 5))` is `5`); `nth` and `second`..`tenth` are
+  `(car (nthcdr ...))`, so their report is `NTHCDR`'s or, on the last read, `CAR`'s. `endp` is
+  checked (it was `(null x)`), and `dolist` checks ONCE, after its loop: the expansion is
+  `(while (consp c) ...) (endp c) result` -- equivalent to CL's per-iteration `endp` (the body has
+  seen 1 and 2 when `(1 2 . 3)` signals) with the loop unchanged. Interpreter: `endp` is a
+  built-in function; `#'nth`/`#'second` name the failing step explicitly
+  (`OperandTypeException.of(datum, kind, operator)`). JVM: `_nthcdr` throws `NTHCDR`'s report, and
+  `endp` is `_endp` (nil or a cons answers itself, else `ENDP`'s report) plus the null test. wasm:
+  `WasmEmitHelper.emitListCheck` -- `ref.test $cons [or ref.is_null]`, else `_type_err_list` under
+  the operator's id in EH mode and a trap outside it (`endp` traps outside EH mode rather than
+  answering nil; the `nthcdr` walk keeps its trapping cast there). The operator table adds `ENDP`
+  for a program that spells `dolist`, `NTHCDR` and `CAR` for one that spells `nth`/`second`..
+  (`WasmOperandTypes.LOWERED_TO`), and is placed in key order (it iterated `Map.of`s, whose
+  order varies between JVMs). `char`/`schar` check the subscript as `aref` does (`_ckIdx`,
+  `_idx_chk`).
 - **Interpreter**: the built-ins throw `OperandTypeException` with the kind (`car`/`cdr`/`first`/
   `rest` and `nthValue` `LIST`, `numerator`/`denominator` `RATIONAL`, `random` `NUMBER`/`REAL`), the
   seam names them. `#'first`/`#'rest` of nil and `#'second` past the end answer nil now, as the
@@ -829,11 +848,15 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   87,936 -> 88,735 (+0.9%); a tight 1M-element `car`/`cdr` loop in an EH module 129 -> 166 ms
   (+28%): the cons path tests the type twice (`ref.test`, `ref.cast`) -- `.todo/979` makes it one
   `br_on_cast_fail`. The `aref` loop and the JVM are unchanged.
-- **Open**: list walks and `char` indices (`.todo/980`), `#'gcd` arity and `#'numerator`
-  (`.todo/982`).
-- Pinned by `ci-spec.yaml`'s `argument-type-errors-name-the-operator-beyond-arithmetic` and the
-  `argumentTypeErrorsNameTheOperatorBeyondArithmetic` triple (`LispEvaluatorTest`,
-  `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
+- **Cost of the list walks, measured 2026-09-26**: `zlib` P1 115,984 -> 116,300 (+0.27%), size level
+  88,735 -> 89,051, JVM classes 163,399 -> 163,693; `hello_world`, `pi_approx`, `dom_reactor`
+  unchanged. No loop gains a test.
+- **Open**: a string access's non-string and `(setf char)` index (`.todo/983`), list consumers
+  over a non-list (`.todo/984`).
+- Pinned by `ci-spec.yaml`'s `argument-type-errors-name-the-operator-beyond-arithmetic` and
+  `list-walks-and-string-indices-name-the-operator`, and the
+  `argumentTypeErrorsNameTheOperatorBeyondArithmetic` / `listWalksAndStringIndicesNameTheOperator`
+  triples (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
 
 ### `random`'s domain (closed 2026-09-26, `.todo/981`)
 CLHS's domain is a COMPOUND type, `(OR (INTEGER 1) (FLOAT (0.0)))`: a ratio limit is real but
