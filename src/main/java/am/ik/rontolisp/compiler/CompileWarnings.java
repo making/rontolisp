@@ -19,10 +19,10 @@ import org.jspecify.annotations.Nullable;
  * {@code --warnings-as-errors} fails the compile on.
  *
  * <p>
- * <b>Three kinds of line.</b> A {@link #warn warning} is about a form of the program: it is
- * placed at that form ({@code file:line:column: warning: ...}) and it may be counted. A
- * {@link #styleWarning style warning} (a {@code style-warning} a macro signalled while it
- * expanded) is placed the same way and never counted. A {@link #note} states what the
+ * <b>Three kinds of line.</b> A {@link #warn warning} is about a form of the program: it
+ * is placed at that form ({@code file:line:column: warning: ...}) and it may be counted.
+ * A {@link #styleWarning style warning} (a {@code style-warning} a macro signalled while
+ * it expanded) is placed the same way and never counted. A {@link #note} states what the
  * build did or what the host now owes (the {@code :async t} and {@code --host-fetch}
  * obligations, a missing JDK): it is printed verbatim and never counted, because there is
  * nothing in the source to change.
