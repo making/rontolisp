@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Predicate;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
@@ -94,6 +95,38 @@ final class WasmUncaughtLocations {
 	private static final int NOTE_HOP_CELL = 5;
 
 	private WasmUncaughtLocations() {
+	}
+
+	/**
+	 * Whether any form of {@code program} was read from a file -- whether a frame can
+	 * exist, so whether {@code --report-locations} has anything to add.
+	 * @param program the program
+	 * @return whether a located cons names a file
+	 */
+	static boolean readsAnyFile(List<LispVal> program) {
+		return forEachFile(program, file -> true);
+	}
+
+	/**
+	 * Visits the file of every located cons of {@code program}, until the visitor answers
+	 * true.
+	 * @return whether the visitor stopped the walk
+	 */
+	private static boolean forEachFile(List<LispVal> program, Predicate<String> visitor) {
+		Set<LispVal> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+		Deque<LispVal> pending = new ArrayDeque<>(program);
+		while (!pending.isEmpty()) {
+			LispVal val = pending.pop();
+			while (val instanceof LispCons cons && seen.add(cons)) {
+				SourceLocation location = SourceProvenance.locate(cons);
+				if (location != null && location.file() != null && visitor.test(location.file())) {
+					return true;
+				}
+				pending.push(cons.car());
+				val = cons.cdr();
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -193,19 +226,10 @@ final class WasmUncaughtLocations {
 			// Every file a located cons of the program came from: a rewrite during
 			// Pass 2 inherits the position of a cons already here, so no later frame
 			// can name a file this missed.
-			Set<LispVal> seen = Collections.newSetFromMap(new IdentityHashMap<>());
-			Deque<LispVal> pending = new ArrayDeque<>(program);
-			while (!pending.isEmpty()) {
-				LispVal val = pending.pop();
-				while (val instanceof LispCons cons && seen.add(cons)) {
-					SourceLocation location = SourceProvenance.locate(cons);
-					if (location != null && location.file() != null) {
-						fileId(location.file());
-					}
-					pending.push(cons.car());
-					val = cons.cdr();
-				}
-			}
+			forEachFile(program, file -> {
+				fileId(file);
+				return false;
+			});
 		}
 
 		/** Whether anything in the program was read from a file. */

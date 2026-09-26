@@ -1339,8 +1339,8 @@ public final class RontoLispCli {
 		this.out.println("                     With a wasm-GC output (.wasm, --component, --native): print where");
 		this.out.println("                     an uncaught condition happened under its report, as the");
 		this.out.println("                     interpreter does. Off by default; costs bytes in every function");
-		this.out.println("                     read from a file, and only a module in exception-handling mode");
-		this.out.println("                     (handler-case & co.) has a report to put the lines under");
+		this.out.println("                     read from a file, and gives a program without handler-case & co.");
+		this.out.println("                     the report itself (and exception handling) too");
 		this.out.println("                       function  the function and the line its definition starts on");
 		this.out.println("                       line      the innermost form, like the interpreter");
 		this.out.println("  --simd             Accelerate the vec: and linalg: kernels with hardware SIMD");
