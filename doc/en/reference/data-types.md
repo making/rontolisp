@@ -118,6 +118,11 @@ backend: a component's host functions cross the canonical ABI, so
 [`rontolisp:wasm-import`](../guides/wasm-gc-module.md) is refused there and a
 source that declares one guards it with `#-rontolisp-component`. (A
 `--component --no-wasi` build is a reactor too, so it has both.)
+A `--native` output additionally has `:rontolisp-native`: the module inside is
+the same Preview 1 build as ever, but the runner around it answers imports
+Preview 1 alone does not have (`rontolisp:fetch`, and `objc:`/`appkit:`/
+`metal:`/`scene:` on `macos-aarch64`), so a source that wants to fetch on
+native and fall back on Preview 1 elsewhere guards it with `#+rontolisp-native`.
 
 `*features*` is an ordinary special variable holding that list, on every
 backend: a program may `push` onto it, `setq` it, and bind it with `let` like
