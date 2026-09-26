@@ -260,8 +260,17 @@ every narrowing is IMPOSSIBILITY-based.
   whether any site can hand `%format-condition` an UNRENDERED control. Tag sources: literal datums of
   the signal family, literal-tag `%obj-new`, plus always the synthesized simple-* three. BAILS to
   `none()` on a computed datum, `eval`/`symbol-function`/`fdefinition`, an escaping `#'error`-family
-  value or quoted designator in data, `--dynamic`, restart mode. Name forgery from computed strings
+  value or quoted designator in data, `--dynamic`. Name forgery from computed strings
   can reach a pruned arm -- the failure is the caller's fallback report text, never a lost signal.
+- **Restart mode narrows like any other program** (since 2026-09-26; the bail it replaced had no
+  stated reason). What it adds is seen by the scan or always in the set: the signal hook builds the
+  simple-* three over a text control, restart-mode `cerror` keeps its datum inside a `restart-case`,
+  and the restart runtime defuns are injected before the scan. `usedLayoutTags` dropped its
+  restart-mode bail on the same grounds. A handler-bind whose handler prints its condition,
+  `(car 5)` probe, wasm-GC default optimize: **113,391 -> 26,365 B** (component 117,075 -> 27,911; JVM
+  output 106,911 -> 38,728 B); the same handler ignoring its condition 18,094 -> 16,614 B (the
+  layout half). Output unchanged on all four backends over 43 probes covering every late-lowering
+  site and raw failure under a bare handler-bind.
 - **`%format-condition` declines the renderer** when every possible control has no directive but
   `~~` -- a literal whose every `~` is half of a `~~`, nil, or a `(%text-control x)` -- with nil
   arguments: the common case, since every string-datum signal site pre-renders
@@ -280,7 +289,7 @@ every narrowing is IMPOSSIBILITY-based.
 - **`WasmInstanceLayouts.emit` takes a used-tag set** (`usedLayoutTags`): a `%class-`/`%struct-`
   layout ships only when its tag or bare name occurs as a symbol in the final program (plus the
   simple-* three the handler lowering synthesizes during Pass 2), with null (= bake all) under
-  `--dynamic`, an embedded eval runtime, restart mode, subclass enumeration,
+  `--dynamic`, an embedded eval runtime, subclass enumeration,
   `find-class`/`change-class`/`allocate-instance`/`symbol-function`/`fdefinition`. The JVM already
   interned per referenced tag (`LayoutPool`).
 - **`needsRuntimeErrorDispatch` no longer misreads handler clauses**: `(handler-case b (error (e)
@@ -299,11 +308,9 @@ fails. What decides the gate is whether program code can ever HOLD that instance
   first required parameter** (`handlerBindExposesCondition`): a handler is CALLED with the instance,
   so a `#'name`, a computed handler or a lambda list opening with `&rest`/`&optional` counts. Before
   2026-09-26 it did not count at all, and on the compiled backends `(format t "~a" c)` in a handler
-  printed `#<TYPE-ERROR :DATUM 5 ...>` while the interpreter printed the report. Restart mode never
-  narrows the condition runtime (`conditionNarrowing`), so turning the gate on costs a handler-bind
-  program far more than a handler-case one: the `(car 5)` probe is 17,961 B on wasm-GC with a
-  handler that ignores its condition, 114,044 B with one that prints it (the handler-case twin:
-  7,357 B).
+  printed `#<TYPE-ERROR :DATUM 5 ...>` while the interpreter printed the report. The `(car 5)`
+  probe on wasm-GC: 16,614 B with a handler that ignores its condition, 26,365 B with one that
+  prints it (113,391 B until restart mode was narrowed, above).
 - **`ignore-errors` counts only where a SECOND value can be read** (`receivesMultipleValues`, a
   whole-program answer): any occurrence of
   `multiple-value-bind`/`-list`/`-call`/`-setq`/`-prog1`/`nth-value`/`%mv-spill` turns it back on.
