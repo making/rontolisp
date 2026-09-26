@@ -1457,6 +1457,82 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void consAccessorsRejectEveryObjectArrayThatIsNoCons() throws Exception {
+		// An instance, a ratio and a function reference are Object[]s like a cons cell;
+		// car/cdr/endp/rplaca/rplacd/nthcdr and the inline map walks read them as one:
+		// the instance's layout for its car, its first slot overwritten by rplacd.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defun id (x) x)
+				(defstruct pt x y)
+				(defvar *pt* (make-pt :x 1 :y 2))
+				(print (te (lambda () (car (id *pt*)))))
+				(print (te (lambda () (cdr (id *pt*)))))
+				(print (te (lambda () (endp (id *pt*)))))
+				(print (te (lambda () (dolist (x (id *pt*) :walked) x))))
+				(print (te (lambda () (rplaca (id *pt*) 9))))
+				(print (te (lambda () (rplacd (id *pt*) 9))))
+				(print (te (lambda () (nthcdr 1 (id *pt*)))))
+				(print (te (lambda () (mapcar #'id (id *pt*)))))
+				(print (te (lambda () (car (id 1/2)))))
+				(print (te (lambda () (cdr (id #'id)))))
+				(print *pt*)
+				(print (te (lambda () (handler-bind ((error (lambda (c) (car c)))) (error "first")))))
+				(print (list (car (id '(1 . 2))) (cdr (id '(1 . 2))) (endp (id '(1))) (nthcdr 1 (id '(1 2)))))
+				""")).isEqualTo(
+				"""
+						("CAR: The value #S(PT :X 1 :Y 2) is not of type LIST" LIST)
+						("CDR: The value #S(PT :X 1 :Y 2) is not of type LIST" LIST)
+						("ENDP: The value #S(PT :X 1 :Y 2) is not of type LIST" LIST)
+						("ENDP: The value #S(PT :X 1 :Y 2) is not of type LIST" LIST)
+						("RPLACA: The value #S(PT :X 1 :Y 2) is not of type CONS" CONS)
+						("RPLACD: The value #S(PT :X 1 :Y 2) is not of type CONS" CONS)
+						("NTHCDR: The value #S(PT :X 1 :Y 2) is not of type LIST" LIST)
+						("MAPCAR: The value #S(PT :X 1 :Y 2) is not of type LIST" LIST)
+						("CAR: The value 1/2 is not of type LIST" LIST)
+						("CDR: The value #<function ID> is not of type LIST" LIST)
+						#S(PT :X 1 :Y 2)
+						("CAR: The value #<SIMPLE-ERROR :FORMAT-CONTROL \\"first\\" :FORMAT-ARGUMENTS NIL> is not of type LIST" LIST)
+						(1 2 NIL (2))""");
+		// Without an instance the program tests for none, and still excludes a ratio
+		// and a function reference.
+		assertThat(compileAndRun("""
+				(defun id (x) x)
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-expected-type e)))))
+				(print (te (lambda () (car (id #'id)))))
+				(print (te (lambda () (endp (id 1/2)))))
+				(print (te (lambda () (mapc #'print (id #'id)))))
+				(print (te (lambda () (mapcan #'list (id 1/2)))))
+				(print (te (lambda () (mapcar #'+ '(1 2) (id #'id)))))
+				(print (list (mapcar #'1+ (id '(1 2))) (mapcan #'list (id '(1 2))) (mapc #'id (id '(1)))))
+				""")).isEqualTo("""
+				("CAR: The value #<function ID> is not of type LIST" LIST)
+				("ENDP: The value 1/2 is not of type LIST" LIST)
+				("MAPC: The value #<function ID> is not of type LIST" LIST)
+				("MAPCAN: The value 1/2 is not of type LIST" LIST)
+				("MAPCAR: The value #<function ID> is not of type LIST" LIST)
+				((2 3) (1 2) (1))""");
+		// A stream is an Object[3] headed by its marker.
+		assertThat(compileAndRun("""
+				(defun id (x) x)
+				(defvar *s* (rontolisp::%stream-new (lambda () nil) (lambda () nil)))
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (type-error-expected-type e))))
+				(print (list (te (lambda () (car (id *s*)))) (te (lambda () (rplaca (id *s*) 1)))
+				             (te (lambda () (nthcdr 1 (id *s*)))) (te (lambda () (mapcar #'id (id *s*))))))
+				(print (car (id (list (id *s*) 2))))
+				""")).isEqualTo("""
+				(LIST CONS LIST LIST)
+				#<STREAM>""");
+	}
+
+	@Test
 	void stringAccessesNameTheOperator() throws Exception {
 		// A string access names its operator (compiler/OperandTypes): char/schar of a
 		// non-string (STRING), and a (setf char|schar) place's string and subscript --
@@ -16316,7 +16392,9 @@ class JvmLispCompilerTest {
 		// funnel-typed arm): +143 B.
 		// 10,238 since mapcar's list argument is checked (_ckList and MAPCAR's wrapper,
 		// replacing the inline guard's message): +109 B.
-		assertThat(classBytes.length).isLessThan(10_300);
+		// 10,403 since mapcar's walk tells a cons from a ratio or a function reference
+		// (_isCons, and the same test in _ckList): +165 B.
+		assertThat(classBytes.length).isLessThan(10_450);
 		assertThat(runClass(classBytes)).isEqualTo("(1 4 9)");
 	}
 

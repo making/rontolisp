@@ -18065,6 +18065,44 @@ cases:
       ("RANDOM: The value -1.5 is not of type REAL" -1.5 REAL)
       ("RANDOM: The value 0.0 is not of type REAL" 0.0 REAL)
       ("RANDOM: The value -1.0 is not of type REAL" -1.0 REAL)
+  - name: cons-accessors-reject-object-arrays-that-are-no-cons
+    # An instance, a ratio and a function reference are Object[]s on the JVM, like a
+    # cons cell; the list accessors and walks must reject them as consp does.
+    source: |
+      (defun ci-nocons-id (x) x)
+      (defstruct ci-nocons-pt x y)
+      (defvar *ci-nocons-pt* (make-ci-nocons-pt :x 1 :y 2))
+      (defun ci-nocons-te (thunk)
+        (handler-case (funcall thunk)
+          (type-error (e) (list (princ-to-string e) (type-error-expected-type e)))
+          (error (e) (list :not-a-type-error (princ-to-string e)))))
+      (print (ci-nocons-te (lambda () (car (ci-nocons-id *ci-nocons-pt*)))))
+      (print (ci-nocons-te (lambda () (cdr (ci-nocons-id *ci-nocons-pt*)))))
+      (print (ci-nocons-te (lambda () (endp (ci-nocons-id *ci-nocons-pt*)))))
+      (print (ci-nocons-te (lambda () (dolist (x (ci-nocons-id *ci-nocons-pt*) :walked) x))))
+      (print (ci-nocons-te (lambda () (rplaca (ci-nocons-id *ci-nocons-pt*) 9))))
+      (print (ci-nocons-te (lambda () (rplacd (ci-nocons-id *ci-nocons-pt*) 9))))
+      (print (ci-nocons-te (lambda () (nthcdr 1 (ci-nocons-id *ci-nocons-pt*)))))
+      (print (ci-nocons-te (lambda () (mapcar #'ci-nocons-id (ci-nocons-id *ci-nocons-pt*)))))
+      (print (ci-nocons-te (lambda () (car (ci-nocons-id 1/2)))))
+      (print (ci-nocons-te (lambda () (mapc #'print (ci-nocons-id 1/2)))))
+      (print (ci-nocons-te (lambda () (cdr (ci-nocons-id #'ci-nocons-id)))))
+      (print (ci-nocons-te (lambda () (mapcan #'list (ci-nocons-id #'ci-nocons-id)))))
+      (print *ci-nocons-pt*)
+    expected: |
+      ("CAR: The value #S(CI-NOCONS-PT :X 1 :Y 2) is not of type LIST" LIST)
+      ("CDR: The value #S(CI-NOCONS-PT :X 1 :Y 2) is not of type LIST" LIST)
+      ("ENDP: The value #S(CI-NOCONS-PT :X 1 :Y 2) is not of type LIST" LIST)
+      ("ENDP: The value #S(CI-NOCONS-PT :X 1 :Y 2) is not of type LIST" LIST)
+      ("RPLACA: The value #S(CI-NOCONS-PT :X 1 :Y 2) is not of type CONS" CONS)
+      ("RPLACD: The value #S(CI-NOCONS-PT :X 1 :Y 2) is not of type CONS" CONS)
+      ("NTHCDR: The value #S(CI-NOCONS-PT :X 1 :Y 2) is not of type LIST" LIST)
+      ("MAPCAR: The value #S(CI-NOCONS-PT :X 1 :Y 2) is not of type LIST" LIST)
+      ("CAR: The value 1/2 is not of type LIST" LIST)
+      ("MAPC: The value 1/2 is not of type LIST" LIST)
+      ("CDR: The value #<function CI-NOCONS-ID> is not of type LIST" LIST)
+      ("MAPCAN: The value #<function CI-NOCONS-ID> is not of type LIST" LIST)
+      #S(CI-NOCONS-PT :X 1 :Y 2)
   # .kb/error-handling.md, "A wrong-type argument names its operator": a list walk
   # over a non-list (nthcdr, and so nth and second..tenth; endp, and so dolist,
   # which checks its list's end after the loop) and a string index that is no
@@ -19202,13 +19240,13 @@ standalone:
       (defun k ()
         (handler-bind ((error (lambda (c)
                                 (print (type-of c))
-                                (car (type-of c)))))
+                                (car c))))
           (error "first")))
       (k)
     stdout: |
       SIMPLE-ERROR
     stderr: |
-      Unhandled condition: CAR: The value SIMPLE-ERROR is not of type LIST
+      Unhandled condition: CAR: The value #<SIMPLE-ERROR :FORMAT-CONTROL "first" :FORMAT-ARGUMENTS NIL> is not of type LIST
     fails: true
   - name: uncaught-struct-accessor-report
     source: |

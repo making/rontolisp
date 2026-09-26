@@ -2036,10 +2036,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		final Utf8Constant teTlDesc = hasLandingPad ? cp.addUtf8(JvmOperandTypeRuntime.TL_DESC) : null;
 		final FieldrefConstant teTlField = teTlName != null && teTlDesc != null
 				? cp.addFieldref(thisClass, cp.addNameAndType(teTlName, teTlDesc)) : null;
-		numericRuntime.methods().addAll(JvmOperandTypeRuntime.build(cp, thisClass, teTlField));
+		// What tells a cons from the other Object[]-shaped values this program can build,
+		// shared by every cons-walking runtime helper.
+		final JvmOperandTypeRuntime.ConsShape consShape = JvmOperandTypeRuntime.ConsShape.of(cp, instanceLayoutClass,
+				usesAsyncRuntime);
+		numericRuntime.methods().addAll(JvmOperandTypeRuntime.build(cp, thisClass, teTlField, consShape));
 		for (String[] check : new String[][] { { JvmOperandTypeRuntime.CAR, JvmOperandTypeRuntime.FIELD_DESC },
 				{ JvmOperandTypeRuntime.CDR, JvmOperandTypeRuntime.FIELD_DESC },
 				{ JvmOperandTypeRuntime.ENDP, JvmOperandTypeRuntime.FIELD_DESC },
+				{ JvmOperandTypeRuntime.IS_CONS, JvmOperandTypeRuntime.IS_CONS_DESC },
 				{ JvmOperandTypeRuntime.CK_IDX, JvmOperandTypeRuntime.CK_IDX_DESC },
 				{ JvmOperandTypeRuntime.CK_RAT, JvmOperandTypeRuntime.CK_RAT_DESC },
 				{ JvmOperandTypeRuntime.CK_LIST, JvmOperandTypeRuntime.FIELD_DESC },
@@ -3428,11 +3433,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// nthcdr runtime helper. Emitted unconditionally for the same reason _length is:
 		// nthcdr is generated internally by a long tail of expanders (nth, elt, loop's
 		// list stepping, destructuring-bind, format's ~* family), so a source-symbol gate
-		// would miss those call sites -- and the body is ~20 bytes. It exists as a method
+		// would miss those call sites -- and the body is a few dozen bytes. It exists as
+		// a method
 		// at all so its loop's backedge sits at operand stack depth 0, the only shape
 		// HotSpot will OSR-compile (JvmNthcdrRuntimeBuilder).
-		final JvmNthcdrRuntimeBuilder.NthcdrMethod nthcdrMethodBody = JvmNthcdrRuntimeBuilder.build(cp,
-				objectArrayClass, thisClass);
+		final JvmNthcdrRuntimeBuilder.NthcdrMethod nthcdrMethodBody = JvmNthcdrRuntimeBuilder.build(cp, consShape,
+				thisClass);
 
 		// The &optional surplus-argument message (%arity-surplus-message). Emitted
 		// unconditionally like _nthcdr: its sites are the lambda-list prologue, which the

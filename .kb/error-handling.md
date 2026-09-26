@@ -1150,6 +1150,18 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
   `denominator` through `_ckRat`, both via the operator's wrapper; `%aset`'s store helpers and the
   `complex` constructor are invoked under the wrapper too. `_opTypeErr`'s funnel-typed arm reads the
   kind back off the raw report.
+- **What is a cons on the JVM** (`JvmOperandTypeRuntime.ConsShape`): `_car`/`_cdr`/`_endp`/
+  `_ckList`/`_ckCons`, `_nthcdr`'s walk and the inline `mapcar`/`mapc`/`mapcan` walks (`_isCons`)
+  exclude the other `Object[]`s exactly as `consp` does: a ratio, a function reference (`Integer`
+  head), an instance (`String[]` head; tested only when `mayUseInstances`) and an async value
+  (`Object[3]` + marker; only with the async runtime). Until 2026-09-26 they tested `instanceof
+  Object[]` alone: `(car an-instance)` answered its layout, `rplacd` overwrote its first slot, and
+  `(car c)` in a `handler-bind` handler returned. Cost, measured 2026-09-26 (JDK 25, 10 interleaved
+  runs pinned to 4 cores on a loaded host, best/median ms): 1M-element `car`+`cdr` walk x40
+  156/189 -> 161/190; `endp`+`cdr` walk 182/242 -> 150/187; `dolist` 159/191 -> 161/188; `mapcar`
+  over 10k x2000 131/150 -> 132/150; bench-report `list` 463/513 -> 463/484. A `mapcar` class
+  +165 B. Pins: `JvmLispCompilerTest.consAccessorsRejectEveryObjectArrayThatIsNoCons`, ci-spec
+  `cons-accessors-reject-object-arrays-that-are-no-cons` and `failing-handler-bind-handler-report`.
 - **wasm-GC, EH mode only** (`WasmEmitHelper.checksConsFields`; outside it every cast still traps and
   a non-EH module is byte-identical): an inline `car`/`cdr` site is ONE type test over the operand
   on the stack, `block block br_on_cast_fail 0 eqref (ref $cons); struct.get; br 1 end; call _car

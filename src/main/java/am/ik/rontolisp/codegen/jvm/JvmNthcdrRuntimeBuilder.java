@@ -45,8 +45,8 @@ final class JvmNthcdrRuntimeBuilder {
 	private JvmNthcdrRuntimeBuilder() {
 	}
 
-	static NthcdrMethod build(ConstantPool cp, ClassConstant objectArrayClass, ClassConstant thisClass) {
-		// Slots: 0 = n (int), 1 = the list cursor.
+	static NthcdrMethod build(ConstantPool cp, JvmOperandTypeRuntime.ConsShape consShape, ClassConstant thisClass) {
+		// Slots: 0 = n (int), 1 = the list cursor, 2 = it as a cons, 3 = its car.
 		JvmAsm a = new JvmAsm();
 		int loop = a.label();
 		int done = a.label();
@@ -57,11 +57,8 @@ final class JvmNthcdrRuntimeBuilder {
 		a.branch(Opcode.IFLE, done);
 		a.aload(1);
 		a.branch(Opcode.IFNULL, done);
-		a.aload(1);
-		a.instanceOf(objectArrayClass);
-		a.branch(Opcode.IFEQ, notList);
-		a.aload(1);
-		a.checkcast(objectArrayClass);
+		consShape.emitTest(a, 1, 2, 3, notList);
+		a.aload(2);
 		a.iconst(1);
 		a.aaload();
 		a.astore(1);
@@ -82,7 +79,7 @@ final class JvmNthcdrRuntimeBuilder {
 				JvmOperandTypeRuntime.OP_TYPE_ERR_DESC));
 		a.athrow();
 
-		return new NthcdrMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), 3, 2, a.finish());
+		return new NthcdrMethod(cp.addUtf8(METHOD), cp.addUtf8(DESC), 3, 4, a.finish());
 	}
 
 }

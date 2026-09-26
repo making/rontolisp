@@ -13,6 +13,10 @@ Encoding and pipeline invariants shared by the interpreter and both compilers.
   leading `"`.
 - consp on the JVM: cons cells and function references are both `Object[]`, split by
   `arr[0] instanceof Integer`. A two-field class measured ~4% slower on a `cdr` walk.
+  Instances (`String[]` head), ratios (`BigInteger[]`) and async values (`Object[3]` + marker)
+  are `Object[]`s too; every cons READER tests the same shape as `consp`
+  (`JvmOperandTypeRuntime.ConsShape`, [error-handling.md](error-handling.md), "What is a cons
+  on the JVM").
 - General arrays on the JVM start PACKED: plain `(make-array n)` (no fill pointer /
   adjustability / displacement, initial element nil or integer) is an `ArrayList` holding a
   length-6 header whose last slot is a flat `long[]`, `Long.MIN_VALUE` the nil sentinel; the
