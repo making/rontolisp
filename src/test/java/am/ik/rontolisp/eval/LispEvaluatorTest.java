@@ -19325,6 +19325,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void theSortFunctionValueTakesAKeyAndReportsAShortCall() {
+		// #'sort takes the :key its call position takes, routed through stable-sort as
+		// the call is; it used to demand exactly two arguments.
+		assertThat(eval("(list (funcall #'sort (list '(3) '(1) '(2)) #'< :key #'car)"
+				+ " (let ((v (vector 3 1 2))) (funcall #'sort v #'< :key #'-) v) (funcall #'sort (list 2 1) #'<))")
+			.print()).isEqualTo("(((1) (2) (3)) #(3 2 1) (1 2))");
+		assertThat(eval("(handler-case (funcall #'sort (list 1)) (program-error (c) (princ-to-string c)))").print())
+			.isEqualTo("\"SORT expects at least 2 arguments, got 1\"");
+	}
+
+	@Test
 	void zeroArgumentSubtractionAndDivisionSignalCatchableProgramErrors() {
 		// (-) and (/) have no identity (CLHS 12.2 gives + and * only): the compile path
 		// (compiler/ArithmeticIdentities) rejects them with "<op> expects at least 1

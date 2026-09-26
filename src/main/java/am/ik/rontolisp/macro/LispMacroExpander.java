@@ -3238,13 +3238,27 @@ public final class LispMacroExpander {
 	 * keyword arguments
 	 */
 	public static @Nullable LispVal expandSortWithKey(LispCons cons) {
+		return expandSortWithKey(cons, true);
+	}
+
+	/**
+	 * {@link #expandSortWithKey(LispCons)} with the array gate of
+	 * {@link #expandStableSort(LispCons, boolean)}: the {@code #'sort} wrapper's keyword
+	 * arm is in every JVM program, so an ungated vector arm opened the array runtime for
+	 * a program that never sorts.
+	 * @param cons the sort expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @return the {@code stable-sort} expansion, or {@code null} when there are no
+	 * keyword arguments
+	 */
+	public static @Nullable LispVal expandSortWithKey(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() <= 3) {
 			return null;
 		}
 		List<LispVal> stableParts = new ArrayList<>(parts);
 		stableParts.set(0, new LispSymbol(LispNames.STABLE_SORT));
-		return expandStableSort((LispCons) listToCons(stableParts));
+		return expandStableSort((LispCons) listToCons(stableParts), arraysExist);
 	}
 
 	/**
@@ -15423,6 +15437,36 @@ public final class LispMacroExpander {
 		listStar.add(new LispSymbol(LispNames.LIST_STAR));
 		listStar.addAll(parts.subList(2 + required, parts.size()));
 		return listToCons(listStar);
+	}
+
+	/**
+	 * Whether the last argument of {@code (apply f ... lst)} is a proper list by its
+	 * SHAPE -- {@code nil}, a quoted proper list, a {@code (list ...)} call -- so the
+	 * backends' aligned apply fast path can leave out the walk that signals
+	 * {@code APPLY: last argument must be a list} (every other shape walks the list
+	 * anyway, to count it).
+	 * @param cons the apply expression
+	 * @return whether the spread list cannot be improper
+	 */
+	public static boolean applyListProvablyProper(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		LispVal last = parts.get(parts.size() - 1);
+		if (isNilForm(last)) {
+			return true;
+		}
+		if (last instanceof LispCons call && call.car() instanceof LispSymbol op) {
+			if (LispNames.LIST.equals(op.name())) {
+				return true;
+			}
+			if (LispNames.QUOTE.equals(op.name()) && call.cdr() instanceof LispCons quoted) {
+				LispVal tail = quoted.car();
+				while (tail instanceof LispCons cell) {
+					tail = cell.cdr();
+				}
+				return tail instanceof LispNil;
+			}
+		}
+		return false;
 	}
 
 	/**

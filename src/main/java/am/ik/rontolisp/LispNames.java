@@ -7471,6 +7471,9 @@ public final class LispNames {
 	/** {@code java:field}, qualified. */
 	public static final String JAVA_FIELD_QUALIFIED = JAVA_PKG + ":" + JAVA_FIELD;
 
+	/** {@code java:proxy}, qualified. */
+	public static final String JAVA_PROXY_QUALIFIED = JAVA_PKG + ":" + JAVA_PROXY;
+
 	/** {@code java:object}, qualified. */
 	public static final String JAVA_OBJECT_QUALIFIED = JAVA_PKG + ":" + JAVA_OBJECT;
 

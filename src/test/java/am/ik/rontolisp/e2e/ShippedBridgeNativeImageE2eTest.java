@@ -9,6 +9,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 import am.ik.rontolisp.cli.RontoLispCli;
 import am.ik.rontolisp.eval.FfiInterop;
@@ -27,8 +29,10 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * an {@code UnsupportedFeatureError}). The {@code java:} program's reflective calls and
  * the {@code --blas} / {@code ffi:} programs' downcalls are covered by the configuration
  * the tracing agent records from one {@code java -jar} run; the {@code geom:},
- * {@code --simd} and {@code --gpu} programs need no configuration at all. {@code objc:}
- * needs macOS and is not covered here.
+ * {@code --simd} and {@code --gpu} programs need no configuration at all, and neither does
+ * a {@code java:} program compiled with {@code --java-static}, whose calls are all direct
+ * (.kb/java-interop.md, "Direct calls"). {@code objc:} needs macOS and is not covered
+ * here.
  * <p>
  * Opt-in ({@code -Drontolisp.native-image.e2e=true}), because it runs
  * {@code native-image} (about 20 s a program) from the running JDK, which must be a
@@ -56,14 +60,17 @@ class ShippedBridgeNativeImageE2eTest {
 
 	@Test
 	void aJavaInteropJarRunsAsANativeImageWithAgentConfiguration() throws Exception {
-		// Every entry point of the bridge, and both reflective back-calls bind() makes:
-		// _apply (the proxy's lambda) and _strv (a string built by concatenate).
+		// The bridge's entry points a program still needs -- a class named at run time,
+		// an argument of no known kind, a proxy -- and both reflective back-calls bind()
+		// makes: _apply (the proxy's lambda) and _strv (a string built by concatenate).
+		// The calls that resolve are direct and need no configuration.
 		Path jar = compileJar("""
-				(print (java:static "java.lang.Math" "max" 3 7))
-				(let ((sb (java:new "java.lang.StringBuilder" "hi")))
-				  (java:call sb "append" (concatenate 'string "!" "?"))
-				  (print (java:call sb "toString")))
-				(print (java:field "java.lang.Integer" "MAX_VALUE"))
+				(let ((math "java.lang.Math") (int "java.lang.Integer"))
+				  (print (java:static math "max" 3 7))
+				  (let ((sb (java:new "java.lang.StringBuilder" "hi")))
+				    (java:call sb "append" (concatenate 'string "!" "?"))
+				    (print (java:call sb "toString")))
+				  (print (java:field int "MAX_VALUE")))
 				(print (java:call (java:proxy "java.util.function.Supplier" (lambda (method) 42)) "get"))
 				""");
 		List<String> expected = List.of("7", "\"hi!?\"", "2147483647", "42");
@@ -73,6 +80,48 @@ class ShippedBridgeNativeImageE2eTest {
 		assertThat(lines(run(java, "-agentlib:native-image-agent=config-output-dir=" + config, "-jar", jar.toString())))
 			.isEqualTo(expected);
 		assertThat(lines(run(buildImage(jar, "-H:ConfigurationFileDirectories=" + config)))).isEqualTo(expected);
+	}
+
+	// What --java-static is for: every call resolved and direct, so the jar carries no
+	// bridge and native-image builds it with NO configuration -- no reflect-config.json,
+	// no agent run -- into an executable that prints what java -jar prints. Every shape a
+	// direct call has: a constructor, instance and interface calls, a static call and a
+	// varargs one, fields, a chain typed by declared return types, a let-typed receiver,
+	// a returned array, a primitive char, and an exception the member throws.
+	@Test
+	void aJavaStaticJarRunsAsANativeImageWithNoConfiguration() throws Exception {
+		Path jar = compileJar("""
+				(defun joined (items)
+				  (let ((sb (java:new "java.lang.StringBuilder" "items:")))
+				    (dolist (x items)
+				      (java:call sb "append" " ")
+				      (java:call sb "append" (the (java:object "int") x)))
+				    (java:call sb "toString")))
+				(print (joined (list 1 2 3)))
+				(print (java:static "java.lang.Math" "max" 3 7))
+				(print (java:static "java.lang.Math" "max" 2.5 1))
+				(print (java:call (java:call (java:new "java.lang.StringBuilder" "abc") "reverse") "toString"))
+				(print (java:call (java:new "java.lang.StringBuilder" "abc") "charAt" 1))
+				(print (java:field "java.lang.Integer" "MAX_VALUE"))
+				(print (java:field (java:new "java.awt.Point" 3 4) "y"))
+				(print (java:static "java.lang.String" "format" "%s-%s" 1 "x"))
+				(print (java:call (java:static "java.util.regex.Pattern" "compile" ",") "split" "a,b,c"))
+				(print (java:call (java:static "java.util.List" "of" 1 2 3) "size"))
+				(print (java:call (java:call (java:static "java.time.LocalDate" "of" 2026 9 26) "getDayOfWeek")
+				                  "toString"))
+				(print (handler-case (java:static "java.lang.Integer" "parseInt" "zz")
+				         (error (e) (format nil "caught: ~a" e))))
+				""", "--java-static");
+		List<String> expected = List.of("\"items: 1 2 3\"", "7", "2.5", "\"cba\"", "#\\b", "2147483647", "4", "\"1-x\"",
+				"(\"a\" \"b\" \"c\")", "3", "\"SATURDAY\"",
+				"\"caught: error calling java.lang.Integer.parseInt: java.lang.NumberFormatException:"
+						+ " For input string: \\\"zz\\\"\"");
+		Path java = Path.of(System.getProperty("java.home"), "bin", "java");
+		assertThat(lines(run(java, "-jar", jar.toString()))).isEqualTo(expected);
+		try (ZipFile entries = new ZipFile(jar.toFile())) {
+			assertThat(entries.stream().map(ZipEntry::getName)).noneMatch(name -> name.contains("Bridge"));
+		}
+		assertThat(lines(run(buildImage(jar)))).isEqualTo(expected);
 	}
 
 	@Test
@@ -152,7 +201,7 @@ class ShippedBridgeNativeImageE2eTest {
 		assertThat(lines(run(buildImage(jar, "-H:ConfigurationFileDirectories=" + config)))).isEqualTo(expected);
 	}
 
-	private Path compileJar(String program, String... flags) throws Exception {
+	private Path compileJar(String program, String... options) throws Exception {
 		Path source = this.tempDir.resolve("prog.lisp");
 		Files.writeString(source, program);
 		Path jar = this.tempDir.resolve("prog.jar");
@@ -160,7 +209,7 @@ class ShippedBridgeNativeImageE2eTest {
 				new PrintStream(new ByteArrayOutputStream()));
 		List<String> arguments = new ArrayList<>(
 				List.of(source.toString(), "-o", jar.toString(), "--class-name", "com.example.Prog"));
-		arguments.addAll(List.of(flags));
+		arguments.addAll(List.of(options));
 		cli.run(arguments.toArray(String[]::new));
 		assertThat(jar).exists();
 		return jar;

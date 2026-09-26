@@ -427,6 +427,24 @@ public final class JavaOverloads {
 	}
 
 	/**
+	 * The static methods among the candidates: what {@code java:static} chooses from. An
+	 * instance method of the name is no candidate -- called without a receiver it could
+	 * only fail -- so {@code (java:static "java.lang.String" "length")} finds no method,
+	 * and a static overload is never passed over for an instance one.
+	 * @param candidates the methods of a name
+	 * @return the static ones, in the same order
+	 */
+	public static <E extends JavaExecutable> List<E> staticMethods(List<E> candidates) {
+		List<E> statics = new ArrayList<>();
+		for (E candidate : candidates) {
+			if (candidate.isStatic()) {
+				statics.add(candidate);
+			}
+		}
+		return statics.size() == candidates.size() ? candidates : statics;
+	}
+
+	/**
 	 * The candidates a parameter tag leaves: one parameter per tag type, each the type
 	 * the tag names or anything for {@link #WILDCARD}.
 	 * @param candidates the methods or constructors

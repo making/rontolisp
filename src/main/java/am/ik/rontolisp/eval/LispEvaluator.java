@@ -3182,9 +3182,15 @@ public final class LispEvaluator {
 		this.globalEnv.defineFunction(LispNames.MAPCAN, new LispFunction(LispNames.MAPCAN,
 				args -> mapcanValues(LispNames.MAPCAN, args.get(0), requireMapLists(LispNames.MAPCAN, args), false)));
 		this.globalEnv.defineFunction(LispNames.SORT, new LispFunction(LispNames.SORT, args -> {
-			if (args.size() != 2) {
+			if (args.size() < 2) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
-						LispNames.SORT + " expects 2 arguments, got " + args.size());
+						LispNames.SORT + " expects at least 2 arguments, got " + args.size());
+			}
+			if (args.size() > 2) {
+				// A :key routes through stable-sort, as the call position does
+				// (LispMacroExpander.expandSortWithKey).
+				requireKeyKeyword(LispNames.SORT, args, 2);
+				return stableSortValues(args);
 			}
 			// A string/vector argument sorts as a list of its elements and is written
 			// back into its own storage (Common Lisp sequences; .todo/623 keeps a
@@ -3203,29 +3209,7 @@ public final class LispEvaluator {
 						LispNames.STABLE_SORT + " expects at least 2 arguments, got " + args.size());
 			}
 			requireKeyKeyword(LispNames.STABLE_SORT, args, 2);
-			LispVal keyArg = optionalKeywordArg(args, 2, LispNames.KEY_KEYWORD);
-			LispVal keyFn = keyArg instanceof LispNil ? null : keyArg;
-			LispVal pred = args.get(1);
-			List<LispVal[]> decorated = new java.util.ArrayList<>();
-			LispVal cur = Environment.seqAsList(args.get(0));
-			while (cur instanceof LispCons cell) {
-				LispVal keyVal = (keyFn == null) ? cell.car() : apply(keyFn, List.of(cell.car()), this.globalEnv);
-				decorated.add(new LispVal[] { keyVal, cell.car() });
-				cur = cell.cdr();
-			}
-			decorated.sort((x, y) -> {
-				if (isTruthy(apply(pred, List.of(x[0], y[0]), this.globalEnv))) {
-					return -1;
-				}
-				return isTruthy(apply(pred, List.of(y[0], x[0]), this.globalEnv)) ? 1 : 0;
-			});
-			LispVal result = LispNil.INSTANCE;
-			for (int i = decorated.size() - 1; i >= 0; i--) {
-				result = new LispCons(decorated.get(i)[1], result);
-			}
-			// A string/vector argument sorts as a list of its elements and is written
-			// back into its own storage, matching the SORT builtin above (.todo/623).
-			return Environment.seqResultDestructive(args.get(0), result);
+			return stableSortValues(args);
 		}));
 		this.applyBuiltin = new LispFunction(LispNames.APPLY, args -> {
 			if (args.size() < 2) {
@@ -4966,11 +4950,11 @@ public final class LispEvaluator {
 	/**
 	 * Evaluates a {@code java:new} / {@code java:call} / {@code java:static} /
 	 * {@code java:field} call site. The site is resolved once ({@link #javaSite}); a
-	 * resolved one runs as the explicit request the compiled program's bridge receives
-	 * for it -- its static class and fully tagged member -- and an unresolved one as the
-	 * ordinary call of the built-in, which resolves at run time. Answers
-	 * {@link #UNHANDLED} (before evaluating anything) when the operator is no longer the
-	 * built-in, so a redefinition is called like any function.
+	 * resolved one runs its resolved member ({@link JavaInterop#invokeResolved}), as a
+	 * compiled program's direct call does, and an unresolved one as the ordinary call of
+	 * the built-in, which resolves at run time. Answers {@link #UNHANDLED} (before
+	 * evaluating anything) when the operator is no longer the built-in, so a redefinition
+	 * is called like any function.
 	 */
 	private LispVal evalJavaSite(LispCons cons, Environment env, String name) {
 		LispFunction builtin = this.javaBuiltins.get(name);
@@ -4980,19 +4964,18 @@ public final class LispEvaluator {
 		}
 		am.ik.rontolisp.compiler.JavaSite site = javaSite(cons);
 		List<LispVal> args = evalArgs(cons, env, length - 1);
-		String staticClass = site.staticClass();
-		String designator = site.designator();
-		if (staticClass == null || designator == null) {
+		if (!site.resolved()) {
 			return apply(builtin, args, env);
 		}
 		JavaInterop.Caller caller = this.javaCaller;
 		LispVal result = switch (site.operator()) {
-			case NEW -> JavaInterop.newInstance(designator, args.subList(1, args.size()), caller);
-			case STATIC -> JavaInterop.callStatic(staticClass, designator, args.subList(2, args.size()), caller);
-			case CALL ->
-				JavaInterop.callInstanceAs(staticClass, args.get(0), designator, args.subList(2, args.size()), caller);
-			case FIELD -> args.get(0) instanceof LispString ? JavaInterop.field(args.get(0), designator)
-					: JavaInterop.fieldAs(staticClass, args.get(0), designator);
+			case NEW -> JavaInterop.invokeResolved(site, null, args.subList(1, args.size()), caller);
+			case STATIC -> JavaInterop.invokeResolved(site, null, args.subList(2, args.size()), caller);
+			case CALL -> JavaInterop.invokeResolved(site, args.get(0), args.subList(2, args.size()), caller);
+			// The FORM says static or instance: a class-name literal reads a static
+			// field, any other first argument is the object -- whatever it evaluates to.
+			case FIELD -> JavaInterop.invokeResolved(site,
+					((LispCons) cons.cdr()).car() instanceof LispString ? null : args.get(0), List.of(), caller);
 		};
 		return singleValue(result);
 	}
@@ -12213,6 +12196,35 @@ public final class LispEvaluator {
 		System.arraycopy(buffer, 0, values, from, length);
 	}
 
+	// stable-sort's decorate-sort-undecorate over (seq pred [:key fn]), the keyword tail
+	// already validated. A Java list sort is stable; a string/vector argument is written
+	// back into its own storage.
+	private LispVal stableSortValues(List<LispVal> args) {
+		LispVal keyArg = optionalKeywordArg(args, 2, LispNames.KEY_KEYWORD);
+		LispVal keyFn = keyArg instanceof LispNil ? null : keyArg;
+		LispVal pred = args.get(1);
+		List<LispVal[]> decorated = new java.util.ArrayList<>();
+		LispVal cur = Environment.seqAsList(args.get(0));
+		while (cur instanceof LispCons cell) {
+			LispVal keyVal = (keyFn == null) ? cell.car() : apply(keyFn, List.of(cell.car()), this.globalEnv);
+			decorated.add(new LispVal[] { keyVal, cell.car() });
+			cur = cell.cdr();
+		}
+		decorated.sort((x, y) -> {
+			if (isTruthy(apply(pred, List.of(x[0], y[0]), this.globalEnv))) {
+				return -1;
+			}
+			return isTruthy(apply(pred, List.of(y[0], x[0]), this.globalEnv)) ? 1 : 0;
+		});
+		LispVal result = LispNil.INSTANCE;
+		for (int i = decorated.size() - 1; i >= 0; i--) {
+			result = new LispCons(decorated.get(i)[1], result);
+		}
+		// A string/vector argument sorts as a list of its elements and is written
+		// back into its own storage, matching the SORT builtin above (.todo/623).
+		return Environment.seqResultDestructive(args.get(0), result);
+	}
+
 	// Apply a function to a spread argument list (Common Lisp apply semantics): the
 	// leading
 	// arguments are taken literally and the final argument must be a list whose elements
@@ -12240,7 +12252,7 @@ public final class LispEvaluator {
 			tail = cell.cdr();
 		}
 		if (!(tail instanceof LispNil)) {
-			throw new LispEvalException(LispNames.APPLY + ": last argument must be a list");
+			throw new LispEvalException(ClosRegistry.APPLY_IMPROPER_LIST_MESSAGE);
 		}
 		return callArgs;
 	}

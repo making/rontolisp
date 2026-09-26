@@ -59,9 +59,9 @@ final class JvmJavaRuntimeBuilder {
 	/**
 	 * The ready-to-emit {@code _javaInit} method, its guard field, the constant-pool
 	 * references the {@code java:} call-site compiler needs ({@code ops} keys:
-	 * {@code init}, {@code new}, {@code call}, {@code callAs}, {@code static},
-	 * {@code field}, {@code fieldAs}, {@code proxy}), and the bridge class file that
-	 * travels beside the program, keyed by its path within an output tree.
+	 * {@code init}, {@code new}, {@code call}, {@code static}, {@code field},
+	 * {@code proxy}), and the bridge class file that travels beside the program, keyed by
+	 * its path within an output tree.
 	 */
 	record JavaRuntime(Utf8Constant initName, Utf8Constant initDesc, List<Integer> initCode, int maxStack,
 			int maxLocals, Utf8Constant initedFieldName, Utf8Constant initedFieldDesc,
@@ -106,15 +106,10 @@ final class JvmJavaRuntimeBuilder {
 		ops.put("init", cp.addMethodref(thisClass, cp.addNameAndType(initName, initDesc)));
 		ops.put("new", cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("javaNew"), cp.addUtf8(newDesc))));
 		ops.put("call", cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("javaCall"), cp.addUtf8(callDesc))));
-		String callAsDesc = "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;";
-		ops.put("callAs",
-				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("javaCallAs"), cp.addUtf8(callAsDesc))));
 		ops.put("static",
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("javaStatic"), cp.addUtf8(callDesc))));
 		ops.put("field",
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("javaField"), cp.addUtf8(twoArgDesc))));
-		ops.put("fieldAs", cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("javaFieldAs"),
-				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"))));
 		ops.put("proxy",
 				cp.addMethodref(bridgeClass, cp.addNameAndType(cp.addUtf8("javaProxy"), cp.addUtf8(twoArgDesc))));
 

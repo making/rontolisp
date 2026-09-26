@@ -189,6 +189,29 @@ public final class JavaSiteResolver {
 	}
 
 	/**
+	 * The class the outermost {@code (the (java:object "C") ...)} around a form names --
+	 * looking through any other {@code the}, as {@link #typeOf} does -- or {@code null}.
+	 * @param form an argument form
+	 * @return the class name, or {@code null} when no declaration types the form
+	 */
+	public static @Nullable String declaredClass(LispVal form) {
+		LispVal current = form;
+		while (current instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.THE.equals(head.name()) && cons.isProperList()) {
+			List<LispVal> parts = cons.toList();
+			if (parts.size() != 3) {
+				return null;
+			}
+			String className = javaObjectClass(parts.get(1));
+			if (className != null) {
+				return className;
+			}
+			current = parts.get(2);
+		}
+		return null;
+	}
+
+	/**
 	 * A site as a warning names it: the operator and its literal names.
 	 * @param site the site
 	 * @return e.g. {@code java:call "append"}
@@ -309,8 +332,15 @@ public final class JavaSiteResolver {
 			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "class " + member.name() + " is not found");
 		}
 		JavaStaticType result = JavaStaticType.ofConstructed(type, this.lookup);
-		if (!type.isAccessible()) {
-			return JavaSite.unresolved(op, result, "class " + type.name() + " is not accessible");
+		String unlinkable = unlinkable("class ", type);
+		if (unlinkable != null) {
+			return JavaSite.unresolved(op, result, unlinkable);
+		}
+		if (type.isAbstract()) {
+			// A public constructor of an abstract class makes nothing: the run-time path
+			// reports what reflection reports.
+			return JavaSite.unresolved(op, result,
+					"class " + type.name() + " is " + (type.isInterface() ? "an interface" : "abstract"));
 		}
 		List<? extends JavaExecutable> candidates = JavaOverloads.filterByTag(type.constructors(), member.tag());
 		return select(op, type, member, candidates, parts.subList(2, parts.size()), result);
@@ -328,9 +358,15 @@ public final class JavaSiteResolver {
 		if (type == null) {
 			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "class " + className.value() + " is not found");
 		}
+		String unlinkable = unlinkable("class ", type);
+		if (unlinkable != null) {
+			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, unlinkable);
+		}
 		JavaOverloads.Member member = JavaOverloads.parseMember(methodName.value());
-		List<? extends JavaExecutable> candidates = JavaOverloads.filterByTag(type.methods(member.name()),
-				member.tag());
+		// java:static calls a static method: an instance method of the name is no
+		// candidate (the run-time rule, JavaOverloads.staticMethods).
+		List<? extends JavaExecutable> candidates = JavaOverloads
+			.filterByTag(JavaOverloads.staticMethods(type.methods(member.name())), member.tag());
 		return select(op, type, member, candidates, parts.subList(3, parts.size()), null);
 	}
 
@@ -343,9 +379,9 @@ public final class JavaSiteResolver {
 		if (type == null) {
 			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "the receiver's class is not known");
 		}
-		if (!type.isAccessible()) {
-			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN,
-					"the receiver's class " + type.name() + " is not accessible");
+		String unlinkable = unlinkable("the receiver's class ", type);
+		if (unlinkable != null) {
+			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, unlinkable);
 		}
 		JavaOverloads.Member member = JavaOverloads.parseMember(methodName.value());
 		List<? extends JavaExecutable> candidates = JavaOverloads.filterByTag(type.methods(member.name()),
@@ -376,12 +412,41 @@ public final class JavaSiteResolver {
 			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN,
 					"class " + type.name() + " has no public field " + fieldName.value());
 		}
-		if (!type.isAccessible() || !field.declaringClass().isAccessible()) {
+		if (!type.isLinkable() || !field.declaringClass().isAccessible()) {
 			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN,
 					"field " + type.name() + "." + fieldName.value() + " is not accessible");
 		}
+		if (parts.get(1) instanceof LispString && !field.isStatic()) {
+			// A class name reads a static field; the run-time path says so.
+			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, notStatic(type.name(), fieldName.value()));
+		}
 		return new JavaSite(op, type.name(), fieldName.value(), null, field, false,
-				JavaStaticType.ofDeclared(field.type(), this.lookup), null);
+				JavaStaticType.ofDeclared(field.type(), this.lookup), List.of(), null);
+	}
+
+	/**
+	 * The error a {@code (java:field "C" "f")} of an instance field raises when it runs,
+	 * and the reason such a site is not resolved before.
+	 * @param className the class
+	 * @param fieldName the field
+	 * @return the text
+	 */
+	public static String notStatic(String className, String fieldName) {
+		return "field " + className + "." + fieldName + " is not static";
+	}
+
+	/**
+	 * Why a compiled program could not name a class, or {@code null} when it can
+	 * ({@link JavaType#isLinkable()}).
+	 */
+	private static @Nullable String unlinkable(String what, JavaType type) {
+		if (!type.isAccessible()) {
+			return what + type.name() + " is not accessible";
+		}
+		if (!type.isPublic()) {
+			return what + type.name() + " is not public";
+		}
+		return null;
 	}
 
 	/**
@@ -393,7 +458,8 @@ public final class JavaSiteResolver {
 			List<? extends JavaExecutable> candidates, List<LispVal> args, @Nullable JavaStaticType constructed) {
 		JavaStaticType unresolvedResult = constructed != null ? constructed : JavaStaticType.UNKNOWN;
 		if (candidates.isEmpty()) {
-			String what = op == JavaSite.Operator.NEW ? "constructor" : "method " + member.name();
+			String what = op == JavaSite.Operator.NEW ? "constructor"
+					: (op == JavaSite.Operator.STATIC ? "static method " : "method ") + member.name();
 			return JavaSite.unresolved(op, unresolvedResult, "class " + type.name() + " has no public " + what
 					+ (member.tag() != null ? " matching " + member.designator() : ""));
 		}
@@ -442,11 +508,21 @@ public final class JavaSiteResolver {
 			throw new IllegalStateException("no combination was enumerated");
 		}
 		JavaExecutable executable = chosen.executable();
+		for (JavaType parameter : executable.parameterTypes()) {
+			String unlinkable = unlinkable("the parameter type ", parameter);
+			if (unlinkable != null) {
+				return JavaSite.unresolved(op, unresolvedResult, unlinkable);
+			}
+		}
 		String name = op == JavaSite.Operator.NEW ? type.name() : member.name();
 		JavaStaticType result = constructed != null ? constructed
 				: JavaStaticType.ofDeclared(executable.returnType(), this.lookup);
+		List<JavaSite.Argument> arguments = new ArrayList<>();
+		for (int i = 0; i < args.size(); i++) {
+			arguments.add(new JavaSite.Argument(kinds.get(i), declaredClass(args.get(i))));
+		}
 		return new JavaSite(op, type.name(), JavaOverloads.fullDesignator(executable, name), executable, null,
-				chosen.packed(), result, null);
+				chosen.packed(), result, arguments, null);
 	}
 
 	private static String kindKey(JavaKind kind) {

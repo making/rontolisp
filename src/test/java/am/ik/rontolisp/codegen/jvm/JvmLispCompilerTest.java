@@ -5116,6 +5116,46 @@ class JvmLispCompilerTest {
 					((11 22) NIL NIL 0 1 (1 (2 3)) 0 (1 11) (1 11) 16)""");
 	}
 
+	// The function values of find / find-if / find-if-not, sort and make-list take the
+	// keywords their call position takes, through funcall and inside eval (they were
+	// fixed-arity wrappers); an apply whose last argument is no proper list is the
+	// interpreter's simple-error through a computed designator, a literal variadic target
+	// and an eval-built closure alike.
+	@Test
+	void compileAndRunBuiltinFunctionValuesTakeTheirKeywordsAndApplyChecksItsList() throws Exception {
+		assertThat(compileAndRun("""
+				(defvar *kw-list* #'list)
+				(defun kw-try (thunk)
+				  (handler-case (funcall thunk)
+				    (simple-error (c) (list :simple (princ-to-string c)))
+				    (error (c) (list :error (princ-to-string c)))))
+				(print (list (funcall #'find 3 '((1) (3)) :key #'car)
+				             (funcall #'find 2 '(1 2 3) :test #'< :from-end t)
+				             (apply #'find-if #'evenp '((1) (4)) :key #'car nil)
+				             (funcall #'find-if-not #'evenp '(2 4 5 6) :start 1)
+				             (funcall #'sort (list '(3) '(1) '(2)) #'< :key #'car)
+				             (let ((v (vector 3 1 2))) (funcall #'sort v #'< :key #'-) v)
+				             (funcall #'make-list 2 :initial-element 'x)))
+				(print (list (eval '(find 3 '((1) (3)) :key #'car))
+				             (eval '(sort (list '(3) '(1)) #'< :key #'car))
+				             (eval '(make-list 2 :initial-element 7))))
+				(print (kw-try (lambda () (funcall #'find 1))))
+				(print (kw-try (lambda () (apply *kw-list* 1 2))))
+				(print (kw-try (lambda () (apply *kw-list* 1 '(2 . 3)))))
+				(print (kw-try (lambda () (apply #'list 1 2))))
+				(print (kw-try (lambda () (apply (eval '(lambda (&rest r) r)) 1 2))))
+				(print (list (apply *kw-list* 1 '(2 3)) (apply #'list nil)))
+				""")).isEqualTo("""
+				((3) 3 (4) 5 ((1) (2) (3)) #(3 2 1) (X X))
+				((3) ((1) (3)) (7 7))
+				(:ERROR "FIND expects at least 2 arguments, got 1")
+				(:SIMPLE "APPLY: last argument must be a list")
+				(:SIMPLE "APPLY: last argument must be a list")
+				(:SIMPLE "APPLY: last argument must be a list")
+				(:SIMPLE "APPLY: last argument must be a list")
+				((1 2 3) NIL)""");
+	}
+
 	@Test
 	void compileAndRunMapIntoList() throws Exception {
 		assertThat(compileAndRun("(print (map-into (list 0 0 0 0) #'+ '(1 2 3) '(10 20 30 40)))"))

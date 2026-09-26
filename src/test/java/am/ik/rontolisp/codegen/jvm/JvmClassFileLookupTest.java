@@ -112,7 +112,11 @@ class JvmClassFileLookupTest {
 			reflected.add(Objects.requireNonNull(REFLECTION.find(className)));
 			read.add(Objects.requireNonNull(classFiles.find(className)));
 		}
-		for (String name : List.of("int", "[I", "[Ljava.lang.String;", "[[Ljava.lang.Object;")) {
+		// A protected member class is public in its class file, which is what linking
+		// reads; a package-private supertype is neither public nor accessible.
+		for (String name : List.of("int", "[I", "[Ljava.lang.String;", "[[Ljava.lang.Object;",
+				"java.awt.Component$AccessibleAWTComponent", "java.lang.AbstractStringBuilder",
+				"java.io.InputStream")) {
 			reflected.add(Objects.requireNonNull(REFLECTION.find(name)));
 			read.add(Objects.requireNonNull(classFiles.find(name)));
 		}
@@ -124,6 +128,9 @@ class JvmClassFileLookupTest {
 			assertThat(a.isFinal()).as("%s final", a).isEqualTo(ra.isFinal());
 			assertThat(a.isArray()).as("%s array", a).isEqualTo(ra.isArray());
 			assertThat(a.isAccessible()).as("%s accessible", a).isEqualTo(ra.isAccessible());
+			assertThat(a.isPublic()).as("%s public", a).isEqualTo(ra.isPublic());
+			assertThat(a.isAbstract()).as("%s abstract", a).isEqualTo(ra.isAbstract());
+			assertThat(a.isLinkable()).as("%s linkable", a).isEqualTo(ra.isLinkable());
 			for (int j = 0; j < read.size(); j++) {
 				assertThat(a.isAssignableFrom(read.get(j))).as("%s <- %s", a, read.get(j))
 					.isEqualTo(ra.isAssignableFrom(reflected.get(j)));
@@ -199,6 +206,11 @@ class JvmClassFileLookupTest {
 				(java:field "java.awt.BorderLayout" "CENTER")
 				(java:static "java.lang.Math" "noSuchMethod" 1)
 				(java:static "no.such.Class" "m")
+				(java:static "java.lang.String" "length")
+				(java:static "java.lang.Integer" "parseInt" (the (java:object "java.lang.String") s) 16)
+				(java:new "java.io.InputStream")
+				(java:field "java.awt.Point" "x")
+				(java:call (java:static "java.util.List" "of" 1 2) "forEach" (lambda (m x) x))
 				""";
 		JavaSiteResolver byReflection = new JavaSiteResolver(REFLECTION);
 		JavaSiteResolver byClassFiles = new JavaSiteResolver(classFiles);
@@ -277,8 +289,16 @@ class JvmClassFileLookupTest {
 
 	private static String describe(JavaSite site) {
 		JavaExecutable executable = site.executable();
+		List<String> arguments = new ArrayList<>();
+		for (JavaSite.Argument argument : site.arguments()) {
+			List<String> kinds = new ArrayList<>();
+			for (JavaKind kind : argument.kinds()) {
+				kinds.add(kind instanceof JavaType t ? t.name() : kind.toString());
+			}
+			arguments.add(kinds + (argument.declared() != null ? " as " + argument.declared() : ""));
+		}
 		return site.operator() + " " + site.staticClass() + " " + site.designator() + " packed=" + site.packed()
-				+ " result=" + describe(site.result()) + " reason=" + site.reason()
+				+ " result=" + describe(site.result()) + " arguments=" + arguments + " reason=" + site.reason()
 				+ (executable != null ? " -> " + signature(executable) : "");
 	}
 

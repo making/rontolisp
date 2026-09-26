@@ -2,11 +2,13 @@
 
 Preference order for a runtime helper in compiled output: (1) macro expansion into existing
 primitives; (2) a hand-assembled `Jvm/Wasm<Name>RuntimeBuilder`, the standard everywhere else
-([[stackmap-augmenter]]); (3) a project-compiled Java class, renamed after the generated program by
-constant-pool rewrite (`JvmJavaRuntimeBuilder.renameClass`). Use (3) only for a helper needing JDK
-facilities impractical in raw bytecode: [[java-interop]], [[geom]] and the `--simd`/`--blas`/`--gpu`,
-`objc:`, `ffi:` bridges. Before adding one, check whether the complex part can run at COMPILE time;
-pin the rename with `JvmJavaInteropCompilerTest#renameClassLeavesOtherUtf8EntriesIntact`.
+([[stackmap-augmenter]]); (3) a project-compiled Java class, renamed after the generated program
+by constant-pool rewrite (`JvmJavaRuntimeBuilder.renameClass`). Use (3) only for a helper
+needing JDK facilities impractical in raw bytecode: [[java-interop]] (only for the sites left to
+run time: a resolved site is a hand-assembled direct call, `JvmJavaDirectSites`), [[geom]] and the
+`--simd`/`--blas`/`--gpu`, `objc:`, `ffi:` bridges. Before adding one, check whether the complex
+part can run at COMPILE time; pin the rename with
+`JvmJavaInteropCompilerTest#renameClassLeavesOtherUtf8EntriesIntact`.
 
 **A template SHIPS; it is never `defineClass`d.** The renamed bytes join
 `JvmLispCompiler.bridgeClassFiles` -> `runtimeClassFiles()` (beside `-o X.class`, inside

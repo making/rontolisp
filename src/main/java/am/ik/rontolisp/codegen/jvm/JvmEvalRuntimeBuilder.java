@@ -1323,27 +1323,15 @@ final class JvmEvalRuntimeBuilder {
 			a.areturn();
 		}
 
-		// compiled closure: dispatch by argument count
-		a.bind(compiled);
-		a.iconst(0);
-		a.istore(LEN);
-		a.aload(ARGLIST);
-		a.astore(ARGCUR);
-		int lloop = a.label();
-		int lend = a.label();
-		a.bind(lloop);
-		a.aload(ARGCUR);
-		a.branch(Opcode.IFNULL, lend);
-		a.iinc(LEN, 1);
-		cdr(a, ARGCUR);
-		a.astore(ARGCUR);
-		a.branch(Opcode.GOTO, lloop);
-		a.bind(lend);
-		// One call, any argument count: the SPREAD dispatcher takes the list whole and
-		// each case reads its target's required parameters out of it, handing a variadic
-		// target the remaining tail. The per-arity dispatchers cannot serve apply -- they
+		// compiled closure: one call, any argument count. The SPREAD dispatcher takes
+		// the list whole and each case reads its target's required parameters out of it,
+		// handing a variadic target the remaining tail; its _arityChk judges the count
+		// and the list's properness. The per-arity dispatchers cannot serve apply -- they
 		// take one JVM parameter per Lisp argument, so they stop at MAX_CALLABLE_ARITY,
-		// and an apply past it used to fall off the ladder and answer nil.
+		// and an apply past it used to fall off the ladder and answer nil. (A length walk
+		// here, left over from that ladder, cast every cell and raised a type-error on
+		// an improper list before the dispatcher could report it.)
+		a.bind(compiled);
 		a.aload(FN);
 		a.aload(ARGLIST);
 		a.invokestatic(this.k.invokeSpread());
@@ -1357,9 +1345,11 @@ final class JvmEvalRuntimeBuilder {
 	/**
 	 * Emits the wrong-count check of an interpreted closure: {@code _arityChk(argList,
 	 * 2 * params)}, reported as {@code Function expects N argument(s), got M} like any
-	 * anonymous callee. A lambda list with a {@code &}-marker is left unchecked: the
+	 * anonymous callee. A lambda list with a {@code &}-marker has no count checked: the
 	 * runtime {@code lambda} binds such a list positionally (a documented limitation), so
-	 * its parameter count is no count the call has to match.
+	 * its parameter count is no count the call has to match. Its list is still walked
+	 * with the shape {@code (0, variadic)}, which only an {@code apply}'s improper last
+	 * argument can fail.
 	 */
 	private void emitClosureArityCheck(Asm a, int paramsSlot, int argListSlot, int cursorSlot, int countSlot) {
 		int loop = a.label();
@@ -1392,12 +1382,19 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(cursorSlot);
 		a.branch(Opcode.GOTO, loop);
 		a.bind(counted);
-		a.aload(argListSlot);
+		int check = a.label();
 		a.iload(countSlot);
 		a.iconst(1);
 		a.op(Opcode.ISHL);
-		a.invokestatic(this.k.arityChkRef());
+		a.istore(countSlot);
+		a.branch(Opcode.GOTO, check);
 		a.bind(unchecked);
+		a.iconst(1);
+		a.istore(countSlot);
+		a.bind(check);
+		a.aload(argListSlot);
+		a.iload(countSlot);
+		a.invokestatic(this.k.arityChkRef());
 	}
 
 	/**

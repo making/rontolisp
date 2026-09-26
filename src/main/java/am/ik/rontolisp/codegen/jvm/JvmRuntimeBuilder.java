@@ -664,7 +664,7 @@ final class JvmRuntimeBuilder {
 		}
 		if (withChk) {
 			methods.add(new JvmLispCompiler.DispatchMethod(cp.addUtf8(ARITY_CHK_NAME), cp.addUtf8(ARITY_CHK_DESC),
-					buildArityChkBody(objectArrayClass, runtimeEx, exCtor, msgRef, !operatorNames.isEmpty()), 5));
+					buildArityChkBody(cp, objectArrayClass, runtimeEx, exCtor, msgRef, !operatorNames.isEmpty()), 5));
 		}
 		return methods;
 	}
@@ -680,14 +680,19 @@ final class JvmRuntimeBuilder {
 	 * The walk is the whole list, not the first {@code required + 1} cells: the count it
 	 * reports has to be the real one ({@code Function expects 1 argument, got 3}, as the
 	 * interpreter says it), and an {@code apply} argument list is the arguments of ONE
-	 * call. Nothing here allocates, and the common case returns after the walk. It stops
-	 * at the first non-cons rather than casting, so an IMPROPER tail ends the count
-	 * instead of raising: {@code (apply #'f '(1 . 2))} is undefined in CL and answered
-	 * {@code (f 1)} before this guard existed, and a guard is no place to start failing
-	 * on it.
+	 * call. Nothing here allocates, and the common case returns after the walk.
+	 *
+	 * <p>
+	 * A list that ends in anything but nil came from an {@code apply} whose last argument
+	 * is no proper list -- every other list reaching a spread case is built by the
+	 * compiler -- so the walk's end signals the interpreter's {@code simple-error}
+	 * ({@link ClosRegistry#APPLY_IMPROPER_LIST_MESSAGE}, a plain {@code RuntimeException}
+	 * as a compiled {@code (error "...")} is) before the count is judged, as the
+	 * interpreter's spread does. The aligned literal {@code apply} passes its rest tail
+	 * here with the shape {@code (0, variadic)} for that check alone.
 	 */
-	private static List<Integer> buildArityChkBody(ClassConstant objectArrayClass, ClassConstant runtimeEx,
-			MethodrefConstant exCtor, MethodrefConstant msgRef, boolean named) {
+	private static List<Integer> buildArityChkBody(ConstantPool cp, ClassConstant objectArrayClass,
+			ClassConstant runtimeEx, MethodrefConstant exCtor, MethodrefConstant msgRef, boolean named) {
 		// Params: 0 = argList, 1 = shape. Locals: 2 = got, 3 = cursor, 4 = required.
 		int argList = 0, shape = 1, got = 2, cursor = 3, required = 4;
 		JvmAsm a = new JvmAsm();
@@ -712,6 +717,17 @@ final class JvmRuntimeBuilder {
 		a.astore(cursor);
 		a.branch(Opcode.GOTO, loop);
 		a.bind(counted);
+		int proper = a.label();
+		a.aload(cursor);
+		a.branch(Opcode.IFNULL, proper);
+		ClassConstant simpleError = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
+		a.anew(simpleError);
+		a.dup();
+		a.ldcString(cp.addString(cp.addUtf8(ClosRegistry.APPLY_IMPROPER_LIST_MESSAGE)));
+		a.invokespecial(cp.addMethodref(simpleError,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V"))));
+		a.op(Opcode.ATHROW);
+		a.bind(proper);
 		a.iload(shape);
 		if (named) {
 			// the operator bits above ARITY_OPERATOR_SHIFT shifted out first
@@ -1191,7 +1207,7 @@ final class JvmRuntimeBuilder {
 		// used; a mutable character vector instead renders via _strv, quote-framed like
 		// the String branch)
 		emitArrayBranch(code, arrayListClass, arrayToStringMethod, packedPrint, packedIntPrint, strvMethod, stringClass,
-				null, null, strEscMethod);
+				null, null, strEscMethod, javaPrint);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, longClass.index());
@@ -2037,7 +2053,7 @@ final class JvmRuntimeBuilder {
 		// a mutable character vector instead renders via _strv with the surrounding
 		// quotes stripped, like the String branch)
 		emitArrayBranch(code, arrayListClass, arrayToDisplayStringMethod, packedPrint, packedIntPrint, strvMethod,
-				stringClass, stringLength, stringSubstring, null);
+				stringClass, stringLength, stringSubstring, null, javaPrint);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, longClass.index());
@@ -2433,10 +2449,13 @@ final class JvmRuntimeBuilder {
 	/**
 	 * Constant-pool references for printing a wrapped {@code java:} host object as
 	 * {@code #<java class.Name>} (interpreter parity), threaded into the two
-	 * lisp-to-string builders only when the program uses {@code java:} interop.
+	 * lisp-to-string builders only when the program uses {@code java:} interop -- which
+	 * is also when an {@code ArrayList} may be a host object rather than a Lisp array, so
+	 * the array branch checks for the array's header first.
 	 */
 	record JavaPrint(ClassConstant bigIntegerClass, MethodrefConstant objectGetClass, MethodrefConstant classGetName,
-			MethodrefConstant stringConcat, ConstantPool.StringConstant prefix, ConstantPool.StringConstant suffix) {
+			MethodrefConstant stringConcat, ConstantPool.StringConstant prefix, ConstantPool.StringConstant suffix,
+			MethodrefConstant arrayListIsEmpty, MethodrefConstant arrayListGet, ClassConstant objectArrayClass) {
 	}
 
 	/**
@@ -3476,7 +3495,8 @@ final class JvmRuntimeBuilder {
 			@org.jspecify.annotations.Nullable MethodrefConstant strvMethod, ClassConstant stringClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant stringLength,
 			@org.jspecify.annotations.Nullable MethodrefConstant stringSubstring,
-			@org.jspecify.annotations.Nullable MethodrefConstant strEscMethod) {
+			@org.jspecify.annotations.Nullable MethodrefConstant strEscMethod,
+			@org.jspecify.annotations.Nullable JavaPrint javaPrint) {
 		if (arrayListClass == null || arrayToStringMethod == null) {
 			return;
 		}
@@ -3555,9 +3575,34 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.INSTANCEOF);
 		emitU2(code, arrayListClass.index());
-		int ifNotArrayPos = code.size();
+		List<Integer> notArray = new ArrayList<>();
+		notArray.add(code.size());
 		code.add(Opcode.IFEQ);
 		emitU2(code, 0);
+		if (javaPrint != null) {
+			// A java: call can answer an ArrayList of its own, which is a host object: a
+			// Lisp array's slot 0 is its Object[] header (the bridge's kindOf test), and
+			// anything else falls through to the #<java ...> tail.
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, arrayListClass.index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, javaPrint.arrayListIsEmpty().index());
+			notArray.add(code.size());
+			code.add(Opcode.IFNE);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, arrayListClass.index());
+			code.add(Opcode.ICONST_0);
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, javaPrint.arrayListGet().index());
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, javaPrint.objectArrayClass().index());
+			notArray.add(code.size());
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+		}
 		if (strvMethod != null) {
 			// Object s = _strv(val); if (s instanceof String) -> character vector
 			code.add(Opcode.ALOAD_0);
@@ -3599,7 +3644,9 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.INVOKESTATIC);
 		emitU2(code, arrayToStringMethod.index());
 		code.add(Opcode.ARETURN);
-		patchBranch(code, ifNotArrayPos, code.size());
+		for (int pos : notArray) {
+			patchBranch(code, pos, code.size());
+		}
 	}
 
 	static void emitLdc(List<Integer> code, int cpIndex) {

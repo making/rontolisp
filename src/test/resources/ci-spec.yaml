@@ -18646,6 +18646,53 @@ cases:
       "MAX expects at least 1 argument, got 0"
       ((11 22) NIL NIL 0 1 (1 (2 3)) 0 (1 11) (1 11) 16)
 
+  # The function values of find / find-if / find-if-not, sort and make-list take the
+  # keywords their call position takes (.kb/eval-runtime.md, "Argument counts"), through
+  # funcall and inside a compiled eval alike; they were fixed-arity wrappers that
+  # reported FIND expects 2 arguments, got 4. An apply whose last argument is no proper
+  # list is the interpreter's simple-error on every path -- a computed designator used to
+  # be a type-error on the JVM and a trap on wasm, and a literal variadic target answered
+  # (1 . 2).
+  - name: builtin-function-values-take-their-keywords
+    source: |
+      (defvar *ci-kw-list* #'list)
+      (defun ci-kw-try (thunk)
+        (handler-case (funcall thunk)
+          (simple-error (c) (list :simple (princ-to-string c)))
+          (error (c) (list :error (princ-to-string c)))))
+      (print (list (funcall #'find 3 '((1) (3)) :key #'car)
+                   (funcall #'find 2 '(1 2 3) :test #'< :from-end t)
+                   (apply #'find-if #'evenp '((1) (4)) :key #'car nil)
+                   (funcall #'find-if-not #'evenp '(2 4 5 6) :start 1)
+                   (funcall #'find #\b "abc")
+                   (funcall #'sort (list '(3) '(1) '(2)) #'< :key #'car)
+                   (let ((v (vector 3 1 2))) (funcall #'sort v #'< :key #'-) v)
+                   (funcall #'sort (list 3 1 2) #'<)
+                   (funcall #'make-list 2 :initial-element 'x)
+                   (funcall #'make-list 2)))
+      (print (list (eval '(find 3 '((1) (3)) :key #'car))
+                   (eval '(sort (list '(3) '(1)) #'< :key #'car))
+                   (eval '(make-list 2 :initial-element 7))))
+      (print (ci-kw-try (lambda () (funcall #'find 1))))
+      (print (ci-kw-try (lambda () (funcall #'sort (list 1)))))
+      (print (ci-kw-try (lambda () (apply *ci-kw-list* 1 2))))
+      (print (ci-kw-try (lambda () (apply *ci-kw-list* 1 '(2 . 3)))))
+      (print (ci-kw-try (lambda () (apply #'list 1 2))))
+      (print (ci-kw-try (lambda () (apply #'car 1 2 3))))
+      (print (ci-kw-try (lambda () (apply (eval '(lambda (&rest r) r)) 1 2))))
+      (print (list (apply *ci-kw-list* 1 '(2 3)) (apply #'+ 1 2 '(3 4)) (apply #'list nil)))
+    expected: |
+      ((3) 3 (4) 5 #\b ((1) (2) (3)) #(3 2 1) (1 2 3) (X X) (NIL NIL))
+      ((3) ((1) (3)) (7 7))
+      (:ERROR "FIND expects at least 2 arguments, got 1")
+      (:ERROR "SORT expects at least 2 arguments, got 1")
+      (:SIMPLE "APPLY: last argument must be a list")
+      (:SIMPLE "APPLY: last argument must be a list")
+      (:SIMPLE "APPLY: last argument must be a list")
+      (:SIMPLE "APPLY: last argument must be a list")
+      (:SIMPLE "APPLY: last argument must be a list")
+      ((1 2 3) 10 NIL)
+
   # Applying a value that names no function is the interpreter's condition on every
   # backend (.kb/error-handling.md): a type-error "Not a function: <prin1>" for a
   # non-designator, an undefined-function for a symbol -- NIL included -- no function
