@@ -230,7 +230,8 @@ public final class RontoLispCli {
 					options.contains("--host-boundary") ? HostBoundary.parse(options.get("--host-boundary")) : null,
 					options.contains("--report-locations")
 							? WasmReportLocations.parse(options.get("--report-locations")) : null,
-					JvmArtifactOptions.from(options), javaResolution, inputFile, sourceLanguage, standards);
+					JvmArtifactOptions.from(options), javaResolution, options.contains("--warnings-as-errors"),
+					inputFile, sourceLanguage, standards);
 		}
 		else {
 			// A side-artifact flag names a file to write BESIDE the output, so without
@@ -257,6 +258,12 @@ public final class RontoLispCli {
 						"--native writes a native executable, so it needs -o <file> (e.g. -o hello)");
 			}
 			nativeTarget(options);
+			// The interpreter emits none of the compile-time warnings: a wrong-count call
+			// or an undefined function is only its call-time condition there.
+			if (options.contains("--warnings-as-errors")) {
+				throw new UnsupportedOperationException("--warnings-as-errors fails a COMPILE on its warnings, so it"
+						+ " needs -o <file>; the interpreter warns about nothing before it runs");
+			}
 			if (options.contains("--no-main")) {
 				throw new UnsupportedOperationException("--no-main compiles a JVM library class (no main method), so"
 						+ " it needs -o <file>.class or -o <file>.jar");
@@ -630,13 +637,13 @@ public final class RontoLispCli {
 			boolean gpu, boolean parallel, boolean noPrune, boolean noMain, boolean wit, boolean jsGlue,
 			boolean hostRandom, boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary,
 			@Nullable WasmReportLocations reportLocations, JvmArtifactOptions jvmArtifact,
-			JavaResolutionOptions javaResolution, @Nullable String entryFile, @Nullable String sourceLanguage,
-			SourceStandards standards) {
-		CompileDiagnostics.recording(() -> {
+			JavaResolutionOptions javaResolution, boolean warningsAsErrors, @Nullable String entryFile,
+			@Nullable String sourceLanguage, SourceStandards standards) {
+		CompileDiagnostics.recording(dists, () -> {
 			compileRecorded(source, baseDir, systemPath, dists, declaredFeatures, outputFile, dynamic, component,
 					noWasi, optimize, noGc, nativeTarget, simd, blas, gpu, parallel, noPrune, noMain, wit, jsGlue,
 					hostRandom, hostFetch, reentrant, hostBoundary, reportLocations, jvmArtifact, javaResolution,
-					entryFile, sourceLanguage, standards);
+					warningsAsErrors, entryFile, sourceLanguage, standards);
 			return null;
 		});
 	}
@@ -647,8 +654,8 @@ public final class RontoLispCli {
 			boolean gpu, boolean parallel, boolean noPrune, boolean noMain, boolean wit, boolean jsGlue,
 			boolean hostRandom, boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary,
 			@Nullable WasmReportLocations reportLocations, JvmArtifactOptions jvmArtifact,
-			JavaResolutionOptions javaResolution, @Nullable String entryFile, @Nullable String sourceLanguage,
-			SourceStandards standards) {
+			JavaResolutionOptions javaResolution, boolean warningsAsErrors, @Nullable String entryFile,
+			@Nullable String sourceLanguage, SourceStandards standards) {
 		// --native is the wasm-GC backend's WASI Preview 1 command module, precompiled
 		// and appended to a runner stub: every flag that asks for a DIFFERENT module is
 		// refused by name rather than half-honoured, and so is an -o name that says
@@ -963,6 +970,9 @@ public final class RontoLispCli {
 			bytes = compiled.classBytes();
 			jvmRuntimeClasses = compiled.runtimeClasses();
 		}
+		// --warnings-as-errors: every warning is printed by now and nothing is written
+		// yet, so the failed compile writes nothing, exactly as a compile error does.
+		CompileDiagnostics.failOnWarnings(warningsAsErrors);
 		try {
 			// -o com/acme/Kernels.class places the class in a package via its path, so
 			// the directory is part of the request; create it instead of failing.
@@ -1453,6 +1463,12 @@ public final class RontoLispCli {
 		this.out.println("                     ELEMENTWISE: the product fuses each multiply-add and the device");
 		this.out.println("                     has its own libm, so an accelerated exp/erf/... differs in the");
 		this.out.println("                     last few digits (and more at single float).");
+		this.out.println("  --warnings-as-errors");
+		this.out.println("                     With -o: fail the compile, writing nothing and exiting 1,");
+		this.out.println("                     when it warns about the program's own source (a wrong");
+		this.out.println("                     argument count, an undefined function, ...). Every warning");
+		this.out.println("                     is still printed; a spliced library's or a dist-installed");
+		this.out.println("                     system's warnings never count");
 		this.out.println("  --no-prune         Keep every spliced library function in the compiled output");
 		this.out.println("                     By default unreachable library definitions (linalg:/vec:/...)");
 		this.out.println("                     are dropped at compile time; names forged at runtime from");

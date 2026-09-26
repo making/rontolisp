@@ -43,7 +43,7 @@ An unknown keyword argument signals an error unless the lambda list declares `&a
 (area 3) ; => 9
 ```
 
-Calling a function with too few required arguments (or too many, for a fixed-arity function) evaluates the arguments and then signals a catchable `program-error` when the call runs, on every backend. It is not a compile error: the JVM/WASM compilers print a warning for a direct call whose count is wrong.
+Calling a function with too few required arguments (or too many, for a fixed-arity function) evaluates the arguments and then signals a catchable `program-error` when the call runs, on every backend. It is not a compile error: the JVM/WASM compilers print a warning for a direct call whose count is wrong, which `--warnings-as-errors` turns into a failed compile ([Compile-Time Warnings](../../compiling/warnings.md)).
 
 ```console
 CL-USER> (defun f (a b) (+ a b))

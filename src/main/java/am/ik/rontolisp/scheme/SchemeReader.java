@@ -112,7 +112,7 @@ final class SchemeReader {
 	SchemeReader(String input, @Nullable String file) {
 		this.input = input;
 		this.file = file;
-		this.unit = SourceProvenance.isRecording() ? new SourceProvenance.Unit(file, input) : null;
+		this.unit = SourceProvenance.unit(file, input);
 		this.runtimeFile = this.unit == null ? file : null;
 	}
 

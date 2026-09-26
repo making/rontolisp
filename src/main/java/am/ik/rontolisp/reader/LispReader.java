@@ -78,7 +78,7 @@ public final class LispReader {
 		this.features = features;
 		this.input = input;
 		this.file = file;
-		this.unit = recordProvenance && SourceProvenance.isRecording() ? new SourceProvenance.Unit(file, input) : null;
+		this.unit = recordProvenance ? SourceProvenance.unit(file, input) : null;
 		this.runtimeFile = recordProvenance && this.unit == null ? file : null;
 		this.pos = 0;
 	}

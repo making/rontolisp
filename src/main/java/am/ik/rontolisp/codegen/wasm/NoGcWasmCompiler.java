@@ -4428,7 +4428,15 @@ public final class NoGcWasmCompiler implements LispCompiler {
 						+ "' is not a parameter or let binding (scalar mode has no globals or heap values)");
 			}
 			case LispCons cons -> {
-				return compileCall(cons, fn);
+				// A warning about a form a macro built is placed at this one when it is
+				// the innermost located form around it (CompileWarnings).
+				LispCons enclosing = SourceProvenance.enterForm(cons);
+				try {
+					return compileCall(cons, fn);
+				}
+				finally {
+					SourceProvenance.leaveForm(enclosing);
+				}
 			}
 			default -> throw new UnsupportedOperationException(
 					"--no-gc: unsupported value in function '" + fn.fnName + "': " + expr.print());
@@ -4630,7 +4638,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 		};
 		if (redefinedClFunction && this.warnedClRedefinitions.add(name)) {
-			CompileWarnings.warn(SourceProvenance.prefix(cons) + ClRedefinitionWarnings.message(name));
+			CompileWarnings.warn(cons, ClRedefinitionWarnings.message(name));
 		}
 		return result;
 	}

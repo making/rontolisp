@@ -1463,7 +1463,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				: CLASS_MAJOR_VERSION;
 		if (javaSites != null) {
 			if (!javaClasses().hasPlatform()) {
-				CompileWarnings.warn("warning: no JDK found (java.home, JAVA_HOME or java on PATH holds no lib/ct.sym):"
+				CompileWarnings.note("warning: no JDK found (java.home, JAVA_HOME or java on PATH holds no lib/ct.sym):"
 						+ " java: sites that name JDK classes are resolved at run time");
 			}
 			javaSites.report(program, this.warnJavaReflection);

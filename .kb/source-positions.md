@@ -34,10 +34,14 @@ against the containing form.
   (`State.lineStarts`, binary search: a backend asks for every form it emits, and
   `SourceLocation.at`'s scan from the text's start made that quadratic); `locatedInFile`
   answers "read from a named file" without resolving one.
-- **A warning goes through `compiler.CompileWarnings.warn`, never `System.err`** —
+- **A warning goes through `compiler.CompileWarnings.warn(subject, text)`, never
+  `System.err`** —
   `JvmLispCompiler` may compile a program TWICE, so an attempt buffers (`startAttempt`),
   only the shipping one prints (`flushAttempt`), a retry drops its own
-  (`discardAttempt`); with no attempt open (WASM) `warn` prints straight through.
+  (`discardAttempt`); with no attempt open (WASM) `warn` prints straight through. It places the
+  line itself (`SourceProvenance.warningLocation`: the subject's position, else the innermost
+  located form a backend `enterForm`ed) and counts it for `--warnings-as-errors` when the unit
+  is the program's (`readingProgramSource`) -- [compile-warnings.md](compile-warnings.md).
 
 **Half 1 — the cons-identity rule every AST pass must honour.** A pass that changes
 nothing must return the object it was given: a rebuilt parent forces rebuilt children, so

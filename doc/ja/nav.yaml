@@ -25,6 +25,8 @@ sections:
         title: ネイティブ実行ファイルへのコンパイル
       - file: compiling/dynamic.md
         title: 動的（遅延束縛）
+      - file: compiling/warnings.md
+        title: コンパイル時の警告
       - file: compiling/self-hosted-repl.md
         title: セルフホスティングREPL
   - title: 言語リファレンス
