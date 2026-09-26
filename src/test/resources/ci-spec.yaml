@@ -12859,6 +12859,16 @@ cases:
       (print (block ci-hb-b
                (handler-bind ((error (lambda (e) (return-from ci-hb-b :outer-ran))))
                  (handler-case (error "boom") (error () (error "again"))))))
+      ;; A handler runs with its own cluster disabled: a built-in failing inside
+      ;; it reaches the enclosing handlers once each and never the failing one.
+      (print (let ((ci-hb-log nil))
+               (handler-case
+                   (handler-bind ((error (lambda (c) (setq ci-hb-log (cons (type-of c) ci-hb-log)))))
+                     (handler-bind ((error (lambda (c)
+                                             (setq ci-hb-log (cons :inner ci-hb-log))
+                                             (car (type-of c)))))
+                       (error "first")))
+                 (error (e) (list (type-of e) ci-hb-log)))))
     expected: |
       (:RECONNECTED 42)
       3
@@ -12876,6 +12886,7 @@ cases:
       NIL
       :OUTER-RAN
       :OUTER-RAN
+      (TYPE-ERROR (TYPE-ERROR :INNER))
   # A catching form in an ARGUMENT position: the enclosing call has operands live
   # when the protected region begins, and entering a handler discards them (on the
   # JVM the compiler spills them around the region). The float case keeps a raw
@@ -19140,6 +19151,21 @@ standalone:
       :OK
     stderr: |
       Unhandled condition: Condition (PLAIN-ERR :CODE 42) was signalled.
+    fails: true
+  - name: failing-handler-bind-handler-report
+    source: |
+      ;; The handler's own failure escapes: it runs with its cluster disabled, so
+      ;; the handler-bind does not run it a second time on the type-error.
+      (defun k ()
+        (handler-bind ((error (lambda (c)
+                                (print (type-of c))
+                                (car (type-of c)))))
+          (error "first")))
+      (k)
+    stdout: |
+      SIMPLE-ERROR
+    stderr: |
+      Unhandled condition: CAR: The value SIMPLE-ERROR is not of type LIST
     fails: true
   - name: uncaught-non-function-report
     source: |

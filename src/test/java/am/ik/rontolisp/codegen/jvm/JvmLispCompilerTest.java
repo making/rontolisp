@@ -1839,6 +1839,27 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunAHandlerFailingInABuiltInDoesNotRunItself() throws Exception {
+		// CLHS 9.1.4.1: a handler runs with its own cluster disabled, so a built-in
+		// failing inside it reaches only the enclosing handlers -- never the failing
+		// handler again, which the handler-bind's own landing pad used to rerun.
+		assertThat(compileAndRun("""
+				(defun hb-id (x) x)
+				(print (let ((n 0))
+				         (handler-case
+				             (handler-bind ((error (lambda (c) (setq n (+ n 1)) (car (hb-id 5)))))
+				               (error "first"))
+				           (error (e) (list (type-of e) n)))))
+				(print (let ((log nil))
+				         (handler-case
+				             (handler-bind ((error (lambda (c) (setq log (cons (type-of c) log)))))
+				               (handler-bind ((error (lambda (c) (setq log (cons :inner log)) (car (hb-id 5)))))
+				                 (error "first")))
+				           (error (e) (list (type-of e) log)))))
+				""")).isEqualTo("(TYPE-ERROR 1)\n(TYPE-ERROR (TYPE-ERROR :INNER))");
+	}
+
+	@Test
 	void compileAndRunHandlerBindHandlerAndHandlerCaseSeeTheSameInstance() throws Exception {
 		// The signal path attaches the instance %run-handlers saw to the throw, so
 		// the handlers run once and handler-case dispatches on the identical

@@ -747,6 +747,13 @@ Rove's failure-recording model is `handler-bind` around USER code, so `(car 1)`,
   innermost, CLHS rebinding included, so ONE pad run covers every enclosing cluster and outer pads
   skip by the mark -- and rethrows CARRYING the instance. The pad never touches the hc-depth channel,
   has no cleanup (no `UnwindScope`, no trampoline), and does not catch the block-exit tag.
+- **A handler's own call runs in a pad too** (`runHandlersDefun`: `(%hb-guard (funcall handler
+  c))`), while `%handler-clusters%` holds the REMAINING clusters. CLHS 9.1.4.1 runs a handler with
+  its cluster disabled, so a built-in failing inside it is walked there, against the enclosing
+  clusters only, and marked; the handler-bind's own pad then rethrows it untouched. Without it the
+  failure escaped the walk's cleanup with the full stack restored and the handler-bind's pad RAN
+  THE FAILING HANDLER AGAIN on the `type-error` (JVM and both wasm-GC, until 2026-09-26). Pinned by
+  ci-spec `restart-system` (the output) and `failing-handler-bind-handler-report` (the report).
 - **Identity contract**: `%run-handlers` sets `%handlers-ran%` to its argument AT THE END of a
   completed walk, so a pad recognizes an already-walked condition by `eq` and handlers run ONCE.
   End-of-walk (not entry) marking keeps a nested signal inside a handler from clearing the outer

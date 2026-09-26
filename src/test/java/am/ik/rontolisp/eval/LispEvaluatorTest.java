@@ -13333,6 +13333,20 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aHandlerFailingInABuiltInDoesNotRunItself() {
+		// CLHS 9.1.4.1: a handler runs with its own cluster disabled, so a built-in
+		// failing inside it reaches only the enclosing handlers, each once.
+		assertThat(eval("""
+				(let ((log nil))
+				  (handler-case
+				      (handler-bind ((error (lambda (c) (setq log (cons (type-of c) log)))))
+				        (handler-bind ((error (lambda (c) (setq log (cons :inner log)) (car 5))))
+				          (error "first")))
+				    (error (e) (list (type-of e) log))))
+				""").print()).isEqualTo("(TYPE-ERROR (TYPE-ERROR :INNER))");
+	}
+
+	@Test
 	void handlerBindHandlerAndHandlerCaseSeeTheSameInstance() {
 		// The signal path attaches the instance %run-handlers saw to the throw, so
 		// the handler-case clause dispatches on the IDENTICAL condition -- and the

@@ -34521,7 +34521,7 @@ public final class LispMacroExpander {
 	// (while (and (null __rh_stop) (consp __rh_entries))
 	// (when (funcall (car (car __rh_entries)) __rh_c)
 	// (if (cdr (car __rh_entries)) ; nil cdr = a handler-case
-	// (funcall (cdr (car __rh_entries)) __rh_c) ; clause: it TRANSFERS
+	// (%hb-guard (funcall (cdr (car __rh_entries)) __rh_c)) ; clause: it TRANSFERS
 	// (setq __rh_stop t))) ; control, so stop here
 	// (setq __rh_entries (cdr __rh_entries)))))
 	// (setq %handler-clusters% __rh_saved)))))))
@@ -34539,10 +34539,19 @@ public final class LispMacroExpander {
 		// nearest matching one HANDLES the condition (it transfers control when the
 		// ordinary throw resumes), so the walk stops instead of running any enclosing
 		// handler-bind handler -- CLHS 9.1.4.1, most recent first.
+		//
+		// The handler call runs inside its own %hb-guard landing pad: CLHS 9.1.4.1 runs
+		// a handler with its cluster (and every more recent one) disabled, so a
+		// BUILT-IN failing inside it -- which signals through no hook on the compiled
+		// backends -- must be walked HERE, against the remaining clusters the global
+		// holds now. Without it the failure escapes this walk's cleanup with the full
+		// stack restored and the handler-bind's own pad reruns the failing handler.
+		// The pad marks the walk, so every pad further out rethrows untouched.
+		LispVal callHandler = listToCons(List.of(new LispSymbol(LispNames.HB_GUARD_INTERNAL),
+				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), callOf(LispNames.CDR, entry), c))));
 		LispVal callEntry = makeIf(
 				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), callOf(LispNames.CAR, entry), c)),
-				makeIf(callOf(LispNames.CDR, entry),
-						listToCons(List.of(new LispSymbol(LispNames.FUNCALL), callOf(LispNames.CDR, entry), c)),
+				makeIf(callOf(LispNames.CDR, entry), callHandler,
 						listToCons(List.of(new LispSymbol(LispNames.SETQ), stop, LispTrue.INSTANCE))),
 				LispNil.INSTANCE);
 		LispVal entriesLoop = makeLet(entries.name(), cluster,

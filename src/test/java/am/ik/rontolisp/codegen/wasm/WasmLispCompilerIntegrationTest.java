@@ -25394,6 +25394,27 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void ehAHandlerFailingInABuiltInDoesNotRunItself() throws Exception {
+		// CLHS 9.1.4.1: a handler runs with its own cluster disabled, so a built-in
+		// failing inside it reaches only the enclosing handlers -- never the failing
+		// handler again, which the handler-bind's own landing pad used to rerun.
+		assertThat(compileAndRunEh("""
+				(defun hb-id (x) x)
+				(print (let ((n 0))
+				         (handler-case
+				             (handler-bind ((error (lambda (c) (setq n (+ n 1)) (car (hb-id 5)))))
+				               (error "first"))
+				           (error (e) (list (typep e 'type-error) n)))))
+				(print (let ((log nil))
+				         (handler-case
+				             (handler-bind ((error (lambda (c) (setq log (cons (typep c 'type-error) log)))))
+				               (handler-bind ((error (lambda (c) (setq log (cons :inner log)) (car (hb-id 5)))))
+				                 (error "first")))
+				           (error (e) (list (typep e 'type-error) log)))))
+				""")).isEqualTo("(T 1)\n(T (T :INNER))");
+	}
+
+	@Test
 	void ehHandlerBindHandlerAndHandlerCaseSeeTheSameInstance() throws Exception {
 		// The signal path attaches the instance %run-handlers saw to the throw, so
 		// the handlers run once and handler-case dispatches on the identical
