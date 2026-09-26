@@ -2660,7 +2660,8 @@ public final class LispEvaluator {
 		}));
 		this.funcallBuiltin = new LispFunction(LispNames.FUNCALL, args -> {
 			if (args.isEmpty()) {
-				throw new LispEvalException(LispNames.FUNCALL + " expects at least 1 argument");
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						ClosRegistry.arityMessage(LispNames.FUNCALL, 1, true, 0));
 			}
 			return apply(args.get(0), args.subList(1, args.size()), this.globalEnv);
 		}, true);
@@ -2939,6 +2940,10 @@ public final class LispEvaluator {
 		this.globalEnv.defineFunction(LispNames.REDUCE, new LispFunction(LispNames.REDUCE, args -> {
 			// (reduce fn seq) or (reduce fn seq :initial-value init); a string sequence
 			// folds over a list of its characters (Environment.seqAsList).
+			if (args.size() < 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						ClosRegistry.arityMessage(LispNames.REDUCE, 2, true, args.size()));
+			}
 			if (args.size() == 2) {
 				LispVal list = Environment.seqAsList(args.get(1));
 				if (!(list instanceof LispCons first)) {
@@ -2955,6 +2960,21 @@ public final class LispEvaluator {
 			if (args.size() == 4 && args.get(2) instanceof LispSymbol kw
 					&& LispNames.INITIAL_VALUE_KEYWORD.equals(kw.name())) {
 				return reduceValues(args.get(0), args.get(3), Environment.seqAsList(args.get(1)));
+			}
+			if (args.size() % 2 == 0) {
+				// #'reduce with :key/:from-end/:start/:end: the call position lowers
+				// those
+				// (LispMacroExpander.expandReduce), so evaluate the same call over the
+				// values, quoted -- (funcall #'reduce f l :from-end t) answers what
+				// (reduce f l :from-end t) does.
+				LispVal tail = LispNil.INSTANCE;
+				for (int i = args.size() - 1; i >= 0; i--) {
+					tail = new LispCons(i >= 2 && i % 2 == 0 ? args.get(i) : quoteValue(args.get(i)), tail);
+				}
+				LispCons form = new LispCons(new LispSymbol(LispNames.REDUCE), tail);
+				if (LispMacroExpander.expandReduce(form) != null) {
+					return eval(form, this.globalEnv);
+				}
 			}
 			throw new LispEvalException(
 					LispNames.REDUCE + " expects (reduce fn list) or (reduce fn list :initial-value init)");
@@ -6602,40 +6622,81 @@ public final class LispEvaluator {
 							case LispNames.ODDP:
 								next = builtinMacroExpansion(cons, LispMacroExpander::expandOddp);
 								break dispatch;
+							// The accessors below expand only a call of their own
+							// shape; any other count is the ordinary call, whose
+							// built-in reports it (FIRST expects 1 argument, got 2)
+							// where the expansion would drop the surplus or index
+							// past the form.
 							case LispNames.FIRST:
+								if (properLength != 2) {
+									break;
+								}
 								next = builtinMacroExpansion(cons, LispMacroExpander::expandFirst);
 								break dispatch;
 							case LispNames.REST:
+								if (properLength != 2) {
+									break;
+								}
 								next = builtinMacroExpansion(cons, LispMacroExpander::expandRest);
 								break dispatch;
 							case LispNames.NTH:
+								if (properLength != 3) {
+									break;
+								}
 								next = builtinMacroExpansion(cons, LispMacroExpander::expandNth);
 								break dispatch;
 							case LispNames.SECOND:
+								if (properLength != 2) {
+									break;
+								}
 								next = builtinMacroExpansion(cons, LispMacroExpander::expandSecond);
 								break dispatch;
 							case LispNames.THIRD:
+								if (properLength != 2) {
+									break;
+								}
 								next = builtinMacroExpansion(cons, LispMacroExpander::expandThird);
 								break dispatch;
 							case LispNames.FOURTH:
+								if (properLength != 2) {
+									break;
+								}
 								next = builtinMacroExpansion(cons, LispMacroExpander::expandFourth);
 								break dispatch;
 							case LispNames.FIFTH:
+								if (properLength != 2) {
+									break;
+								}
 								next = builtinMacroExpansion(cons, LispMacroExpander::expandFifth);
 								break dispatch;
 							case LispNames.SIXTH:
+								if (properLength != 2) {
+									break;
+								}
 								next = builtinMacroExpansion(cons, LispMacroExpander::expandSixth);
 								break dispatch;
 							case LispNames.SEVENTH:
+								if (properLength != 2) {
+									break;
+								}
 								next = builtinMacroExpansion(cons, LispMacroExpander::expandSeventh);
 								break dispatch;
 							case LispNames.EIGHTH:
+								if (properLength != 2) {
+									break;
+								}
 								next = builtinMacroExpansion(cons, LispMacroExpander::expandEighth);
 								break dispatch;
 							case LispNames.NINTH:
+								if (properLength != 2) {
+									break;
+								}
 								next = builtinMacroExpansion(cons, LispMacroExpander::expandNinth);
 								break dispatch;
 							case LispNames.TENTH:
+								if (properLength != 2) {
+									break;
+								}
 								next = builtinMacroExpansion(cons, LispMacroExpander::expandTenth);
 								break dispatch;
 							case LispNames.SETF: {

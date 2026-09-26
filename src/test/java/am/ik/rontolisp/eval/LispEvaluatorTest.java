@@ -19291,16 +19291,41 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void theListAccessorsFuncallAndReduceReportAWrongArgumentCount() {
+		// first ... tenth, rest and nth expand only a call of their own shape; any other
+		// count is the ordinary call, whose built-in reports it (the expansion dropped a
+		// surplus argument and indexed past a short form). funcall and reduce report a
+		// short call as the count it is, and #'reduce takes the call position's keywords.
+		assertThat(eval("(handler-case (first 1 2) (program-error (c) (princ-to-string c)))").print())
+			.isEqualTo("\"FIRST expects 1 argument, got 2\"");
+		assertThat(eval("(handler-case (second) (program-error (c) (princ-to-string c)))").print())
+			.isEqualTo("\"SECOND expects 1 argument, got 0\"");
+		assertThat(eval("(handler-case (rest '(1) 2) (program-error (c) (princ-to-string c)))").print())
+			.isEqualTo("\"REST expects 1 argument, got 2\"");
+		assertThat(eval("(handler-case (nth 1) (program-error (c) (princ-to-string c)))").print())
+			.isEqualTo("\"NTH expects 2 arguments, got 1\"");
+		assertThat(eval("(handler-case (funcall) (program-error (c) (princ-to-string c)))").print())
+			.isEqualTo("\"FUNCALL expects at least 1 argument, got 0\"");
+		assertThat(eval("(handler-case (reduce #'+) (program-error (c) (princ-to-string c)))").print())
+			.isEqualTo("\"REDUCE expects at least 2 arguments, got 1\"");
+		assertThat(eval("(list (first '(1 2)) (tenth '(1 2 3 4 5 6 7 8 9 10)) (nth 1 '(a b)) (rest '(1 2)))").print())
+			.isEqualTo("(1 10 B (2))");
+		assertThat(eval("(list (funcall #'reduce #'list '(1 2 3) :from-end t)"
+				+ " (funcall #'reduce #'+ '(1 2 3 4) :start 1 :end 3 :initial-value 10))")
+			.print()).isEqualTo("((1 (2 3)) 15)");
+	}
+
+	@Test
 	void zeroArgumentSubtractionAndDivisionSignalCatchableProgramErrors() {
 		// (-) and (/) have no identity (CLHS 12.2 gives + and * only): the compile path
-		// (compiler/ArithmeticIdentities) rejects them with "<op> requires at least one
-		// argument" at compile time, and the interpreter used to leak the raw
+		// (compiler/ArithmeticIdentities) rejects them with "<op> expects at least 1
+		// argument, got 0" at compile time, and the interpreter used to leak the raw
 		// IndexOutOfBoundsException from indexing an empty argument list instead of
 		// signaling that same message as a catchable program-error.
 		assertThatThrownBy(() -> eval("(-)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("- requires at least one argument");
+			.hasMessageContaining("- expects at least 1 argument, got 0");
 		assertThatThrownBy(() -> eval("(/)")).isInstanceOf(LispEvalException.class)
-			.hasMessageContaining("/ requires at least one argument");
+			.hasMessageContaining("/ expects at least 1 argument, got 0");
 		assertThat(eval("(handler-case (-) (program-error (c) :caught))").print()).isEqualTo(":CAUGHT");
 		assertThat(eval("(handler-case (/) (program-error (c) :caught))").print()).isEqualTo(":CAUGHT");
 	}

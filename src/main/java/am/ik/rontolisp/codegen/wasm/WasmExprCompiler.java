@@ -2193,6 +2193,7 @@ final class WasmExprCompiler {
 			case LispNames.STRINGP -> WasmStringpCompiler.compile(cons, ctx);
 			case LispNames.LISTP -> WasmListpCompiler.compile(cons, ctx);
 			case LispNames.CONSP -> WasmConspCompiler.compile(cons, ctx);
+			case WasmArityBundler.CHECK -> WasmArityBundler.compileCheck(cons, ctx);
 			case LispNames.OBJ_NEW -> WasmInstanceCompiler.compileNew(cons, ctx);
 			case LispNames.OBJ_BECOME -> WasmInstanceCompiler.compileBecome(cons, ctx);
 			case LispNames.OBJ_REF -> WasmInstanceCompiler.compileRef(cons, ctx);

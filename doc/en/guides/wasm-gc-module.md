@@ -45,17 +45,16 @@ carried, `:as` renaming, arity match, void returns), see the
 Two behavioral notes on the wasm-GC value model:
 
 - **Parameter limit.** A function (`defun` or `lambda`) may take at most
-  **seven parameters** (the interpreter and JVM backends have no such limit).
-  A fixed-arity `defun` past the limit is bundled automatically: the compiler
-  keeps the first six parameters, packs the rest into a list, and rewrites
-  every direct call site to match — so wide library signatures compile
-  unchanged. Taking such a function's value with `#'name`/`symbol-function`
-  is a compile error (only direct calls know the bundled shape), and a
-  `lambda` or variadic function past the limit still errors — bundle those
-  arguments into a list yourself. The rest list of a variadic function
-  counts as one parameter, so a `&rest` function may declare at most six
-  required parameters while accepting any number of arguments at a direct
-  call site.
+  **ten parameters** (the interpreter and JVM backends have no such limit).
+  A fixed-arity `defun` past the limit is rewritten automatically to take its
+  arguments as one `&rest` list and check their count itself — so wide
+  library signatures compile unchanged, and the function is an ordinary
+  value: `#'name`, `funcall`, `apply` and `eval` all reach it, and a wrong
+  argument count signals the interpreter's `program-error`. A `lambda` or
+  variadic function past the limit still errors — bundle those arguments
+  into a list yourself. The rest list of a variadic function counts as one
+  parameter, so a `&rest` function may declare at most nine required
+  parameters while accepting any number of arguments.
 - **Float printing.** Floats print byte-identically on every backend: the
   shortest decimal that reads back as the same value (`(print 1.21)` prints
   `1.21`, `(print (* 1.5 (expt 10.0 12)))` prints `1.5e12`), with `Infinity`,
