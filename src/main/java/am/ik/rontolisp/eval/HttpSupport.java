@@ -174,14 +174,14 @@ final class HttpSupport {
 			for (ByteBuffer buffer : buffers) {
 				total += buffer.remaining();
 			}
-			long[] data = new long[total];
+			byte[] data = new byte[total];
 			int k = 0;
 			for (ByteBuffer buffer : buffers) {
-				while (buffer.hasRemaining()) {
-					data[k++] = buffer.get() & 0xFF;
-				}
+				int n = buffer.remaining();
+				buffer.get(data, k, n);
+				k += n;
 			}
-			return new LispIntVector(8, data);
+			return LispIntVector.wrapOctets(data);
 		}
 
 	}

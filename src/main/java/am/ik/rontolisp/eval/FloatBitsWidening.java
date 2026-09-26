@@ -64,7 +64,7 @@ final class FloatBitsWidening {
 			throw new LispEvalException(fnName + ": dst must be a packed float array");
 		}
 		int start = parseStart(fnName, args, 3);
-		long[] bitsData = bits.data();
+		short[] bitsData = bits.shorts();
 		int n = bitsData.length;
 		checkBounds(fnName, start, n, dst.totalSize());
 		switch (dst) {
@@ -72,7 +72,7 @@ final class FloatBitsWidening {
 				float[] out = (float[]) FloatArrayAccessHook.written(f.storage());
 				if (float16) {
 					for (int i = 0; i < n; i++) {
-						out[start + i] = Float.float16ToFloat((short) bitsData[i]);
+						out[start + i] = Float.float16ToFloat(bitsData[i]);
 					}
 				}
 				else {
@@ -83,7 +83,7 @@ final class FloatBitsWidening {
 					// already an f32's top half with zero-filled low bits, so the widen
 					// is exactly this one shift and needs no double detour at all.
 					for (int i = 0; i < n; i++) {
-						out[start + i] = Float.intBitsToFloat((int) bitsData[i] << 16);
+						out[start + i] = Float.intBitsToFloat((bitsData[i] & 0xFFFF) << 16);
 					}
 				}
 			}
@@ -91,12 +91,12 @@ final class FloatBitsWidening {
 				double[] out = (double[]) FloatArrayAccessHook.written(d.storage());
 				if (float16) {
 					for (int i = 0; i < n; i++) {
-						out[start + i] = Float.float16ToFloat((short) bitsData[i]);
+						out[start + i] = Float.float16ToFloat(bitsData[i]);
 					}
 				}
 				else {
 					for (int i = 0; i < n; i++) {
-						out[start + i] = BFloat16.value((int) bitsData[i]);
+						out[start + i] = BFloat16.value(bitsData[i] & 0xFFFF);
 					}
 				}
 			}
@@ -111,16 +111,14 @@ final class FloatBitsWidening {
 					// Widening into #f and narrowing back answers the same patterns and
 					// allocates the f32 array this width exists to avoid.
 					for (int i = 0; i < n; i++) {
-						out[start + i] = (short) BFloat16.bits(Float.float16ToFloat((short) bitsData[i]));
+						out[start + i] = (short) BFloat16.bits(Float.float16ToFloat(bitsData[i]));
 					}
 				}
 				else {
 					// A straight copy: the patterns ARE this width's representation, so
 					// there is no conversion and nothing a NaN can lose -- the same
 					// byte-for-byte identity read-sequence already has at this width.
-					for (int i = 0; i < n; i++) {
-						out[start + i] = (short) bitsData[i];
-					}
+					System.arraycopy(bitsData, 0, out, start, n);
 				}
 			}
 		}
@@ -157,13 +155,13 @@ final class FloatBitsWidening {
 		int start = parseStart(fnName, args, 3);
 		int n = src.totalSize();
 		checkBounds(fnName, start, n, dst.length());
-		long[] out = dst.data();
+		short[] out = dst.shorts();
 		switch (src) {
 			case LispSingleFloatArray f -> {
 				float[] in = f.data();
 				if (float16) {
 					for (int i = 0; i < n; i++) {
-						out[start + i] = Float.floatToFloat16(in[i]) & 0xFFFFL;
+						out[start + i] = Float.floatToFloat16(in[i]);
 					}
 				}
 				else {
@@ -171,7 +169,7 @@ final class FloatBitsWidening {
 					// overload resolution picks it -- no implicit f2d widening, no
 					// private copy of its arithmetic.
 					for (int i = 0; i < n; i++) {
-						out[start + i] = BFloat16.bits(in[i]);
+						out[start + i] = (short) BFloat16.bits(in[i]);
 					}
 				}
 			}
@@ -179,7 +177,7 @@ final class FloatBitsWidening {
 				double[] in = d.data();
 				if (float16) {
 					for (int i = 0; i < n; i++) {
-						out[start + i] = Float.floatToFloat16((float) in[i]) & 0xFFFFL;
+						out[start + i] = Float.floatToFloat16((float) in[i]);
 					}
 				}
 				else {
@@ -187,7 +185,7 @@ final class FloatBitsWidening {
 					// so BFloat16.bits's own double-domain NaN handling is exact -- this
 					// is the arm .todo/487 actually designed it for.
 					for (int i = 0; i < n; i++) {
-						out[start + i] = BFloat16.bits(in[i]);
+						out[start + i] = (short) BFloat16.bits(in[i]);
 					}
 				}
 			}
@@ -200,15 +198,13 @@ final class FloatBitsWidening {
 					// arm runs, so this answers what widening into #f and narrowing
 					// would, without the f32 array in between.
 					for (int i = 0; i < n; i++) {
-						out[start + i] = Float.floatToFloat16(Float.intBitsToFloat((in[i] & 0xFFFF) << 16)) & 0xFFFFL;
+						out[start + i] = Float.floatToFloat16(Float.intBitsToFloat((in[i] & 0xFFFF) << 16));
 					}
 				}
 				else {
 					// The copy in the other direction: the stored patterns are already
 					// what a :bfloat16 bits vector holds.
-					for (int i = 0; i < n; i++) {
-						out[start + i] = in[i] & 0xFFFFL;
-					}
+					System.arraycopy(in, 0, out, start, n);
 				}
 			}
 		}

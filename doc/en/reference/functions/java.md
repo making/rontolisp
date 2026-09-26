@@ -18,3 +18,8 @@ limitations.
 | `java:field` | `(java:field "java.lang.Integer" "MAX_VALUE")` | the marshalled field value |
 | `java:proxy` | `(java:proxy "java.lang.Runnable" (lambda (m) ...))` | an interface instance backed by the callable |
 
+Two more symbols serve resolution before a call runs: the type specifier
+`(java:object "fqcn")`, for `the` and `declare`, and the variable
+`java:*warn-on-reflection*`, which reports the calls left to run time (the guide's
+[Resolving calls before they run](../../guides/java-interop.md#resolving-calls-before-they-run)).
+

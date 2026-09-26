@@ -10,6 +10,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Callable;
 
@@ -256,12 +257,13 @@ final class JvmObjcTemplate {
 		try {
 			ObjcRuntime runtime = ObjcRuntime.get();
 			byte[] bytes = onMainValue(runtime, () -> runtime.dataBytes(MemorySegment.ofAddress(handle.address())));
-			// The compiled packed (unsigned-byte 8) vector: long[]{width, e0, ...}.
-			long[] vector = new long[bytes.length + 1];
+			// The compiled packed (unsigned-byte 8) vector: byte[]{8, e0, ...}, the width
+			// in
+			// slot 0 (JvmIntArrayRuntimeBuilder.OCTET_TAG; this class travels alone, so
+			// the number is spelled here).
+			byte[] vector = new byte[bytes.length + 1];
 			vector[0] = 8;
-			for (int i = 0; i < bytes.length; i++) {
-				vector[i + 1] = bytes[i] & 0xFFL;
-			}
+			System.arraycopy(bytes, 0, vector, 1, bytes.length);
 			return vector;
 		}
 		catch (ObjcException ex) {
@@ -272,9 +274,10 @@ final class JvmObjcTemplate {
 	/**
 	 * The bytes {@code objc:data} sends, little-endian and row-major: a packed float
 	 * array is a {@code float[]} / {@code double[]} of any rank, a packed
-	 * {@code (unsigned-byte 8|16|32)} vector a {@code long[]{width, e0, ...}}, and a
-	 * string its UTF-8 bytes. The interpreter's {@code eval/PackedBuffer} decides the
-	 * same thing against the interpreted representation.
+	 * {@code (unsigned-byte 8)} vector a {@code byte[]{8, e0, ...}}, a packed
+	 * {@code (unsigned-byte 16|32)} vector a {@code long[]{width, e0, ...}}, and a string
+	 * its UTF-8 bytes. The interpreter's {@code eval/PackedBuffer} decides the same thing
+	 * against the interpreted representation.
 	 */
 	private static byte[] bufferBytes(@Nullable Object buffer) {
 		String text = lispString(buffer);
@@ -296,6 +299,9 @@ final class JvmObjcTemplate {
 			ByteBuffer bytes = ByteBuffer.allocate((doubles.length - from) * 8).order(ByteOrder.LITTLE_ENDIAN);
 			bytes.asDoubleBuffer().put(doubles, from, doubles.length - from);
 			return bytes.array();
+		}
+		if (buffer instanceof byte[] octets && octets.length >= 1 && octets[0] == 8) {
+			return Arrays.copyOfRange(octets, 1, octets.length);
 		}
 		if (buffer instanceof long[] vector && vector.length >= 1) {
 			int width = (int) vector[0] / 8;

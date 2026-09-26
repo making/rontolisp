@@ -9,8 +9,19 @@ capped at `MAX_EXTRA_CALL_ARITY` = 4), and no program may observe either.** Fixe
 dispatchers are `FUNC_DISPATCH_BASE + 0..10`. Rewrites happen at AST level in
 `WasmArityBundler`, before the apply-runtime scan.
 
-- DEFUN >10 params: bundled -- surplus params become one list param, direct call sites pass
-  `(list ...)`. Taking a function VALUE of a bundled function is a clear compile error.
+- DEFUN >10 params (fixed arity): rewritten to `(&rest %arity-bundle)`, its parameters bound
+  by `nth` in a `let*` whose first init checks `(length %arity-bundle)` and signals the
+  interpreter's `program-error` (`Function expects 11 arguments, got 12`) -- concatenated,
+  not formatted: a `:format-arguments` list needs the format runtime, which a program that
+  formats nothing lacks (the report then printed `got ~D`). Call sites are untouched: every
+  path packs a variadic callee's rest list, so `#'f`, `funcall`, `apply` and the compiled
+  `eval` (SPREAD dispatcher) all reach it (2026-09-26). The earlier shape -- nine params plus
+  one explicit list, direct calls rewritten to pass `(list ...)` -- served direct calls only:
+  `#'f` was a compile error and `(eval '(f ...))` trapped on the cast of an argument that was
+  no list. Keeping nine REQUIRED params beside the rest list would make a short call report
+  `at least 9`, so none are kept; the cost is one cons per argument per call. A DIRECT call
+  with a wrong count is a run-time report too (the compiler sees only the rest list), where
+  the JVM refuses it at compile time.
 - CALL SITE 11..14 args through a function value: its own appended per-arity dispatcher.
 - Past that: spread -- `(funcall f a1 .. a15)` -> `(apply f (list ...))`, which `_apply`
   hands to `FUNC_DISPATCH_SPREAD` (`WasmArityBundler.spreadOverArityFuncalls`).
@@ -43,4 +54,5 @@ dispatchers are `FUNC_DISPATCH_BASE + 0..10`. Rewrites happen at AST level in
   `compileFuncallEitherSideOfTheDerivedArityCeilingAnswersTheSame` (the `freshCtx` pin),
   `compileMapcarOverMoreListsThanTheFixedDispatcherBlockWorks`
 - `WasmLispCompilerTest.aFuncallPastTheFixedDispatcherBlockCostsALadderAndNotTheSpreadDispatcher`
-- ci-spec `fill-and-over-arity-funcall`; `ChipzE2eTest`.
+- ci-spec `fill-and-over-arity-funcall`, `eval-inline-operators-check-their-argument-count`
+  (the rest-bundled defun through `eval` and `#'`); `ChipzE2eTest`.

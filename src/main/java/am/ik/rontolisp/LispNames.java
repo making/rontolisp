@@ -7445,6 +7445,39 @@ public final class LispNames {
 	public static final String JAVA_PROXY = "PROXY";
 
 	/**
+	 * {@code java:object} -- the type specifier {@code (java:object "fqcn")}: a value a
+	 * Java member answered as that class. In {@code the} and {@code declare} it types a
+	 * {@code java:} receiver or argument for static resolution
+	 * ({@code compiler.JavaSiteResolver}).
+	 */
+	public static final String JAVA_OBJECT = "OBJECT";
+
+	/**
+	 * {@code java:*warn-on-reflection*} -- when true, the interpreter reports each
+	 * {@code java:} site it cannot resolve before running it; the compile path's switch
+	 * is {@code --warn-java-reflection}.
+	 */
+	public static final String JAVA_WARN_ON_REFLECTION = "*WARN-ON-REFLECTION*";
+
+	/** {@code java:new}, qualified. */
+	public static final String JAVA_NEW_QUALIFIED = JAVA_PKG + ":" + JAVA_NEW;
+
+	/** {@code java:call}, qualified. */
+	public static final String JAVA_CALL_QUALIFIED = JAVA_PKG + ":" + JAVA_CALL;
+
+	/** {@code java:static}, qualified. */
+	public static final String JAVA_STATIC_QUALIFIED = JAVA_PKG + ":" + JAVA_STATIC;
+
+	/** {@code java:field}, qualified. */
+	public static final String JAVA_FIELD_QUALIFIED = JAVA_PKG + ":" + JAVA_FIELD;
+
+	/** {@code java:object}, qualified. */
+	public static final String JAVA_OBJECT_QUALIFIED = JAVA_PKG + ":" + JAVA_OBJECT;
+
+	/** {@link #JAVA_WARN_ON_REFLECTION}, qualified. */
+	public static final String JAVA_WARN_ON_REFLECTION_QUALIFIED = JAVA_PKG + ":" + JAVA_WARN_ON_REFLECTION;
+
+	/**
 	 * The {@code objc} package name: the Objective-C runtime through the foreign function
 	 * API ({@code am.ik.objc}, wired in {@code eval.ObjcInterop}). The exact analogue of
 	 * {@code java} -- a package named after the foreign system with a handful of generic

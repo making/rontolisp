@@ -45,12 +45,8 @@ final class BrowserHttpResponses {
 		// The body stream is a BYTE stream on every backend (HttpSupport.BodyPump): the
 		// broker delivered text, so its UTF-8 octets are the one settled chunk.
 		byte[] bytes = result.body().getBytes(java.nio.charset.StandardCharsets.UTF_8);
-		long[] data = new long[bytes.length];
-		for (int i = 0; i < bytes.length; i++) {
-			data[i] = bytes[i] & 0xFF;
-		}
 		return new HttpSupport.Start(result.status(), result.headers(),
-				am.ik.rontolisp.LispStream.settled(new am.ik.rontolisp.LispIntVector(8, data)));
+				am.ik.rontolisp.LispStream.settled(am.ik.rontolisp.LispIntVector.wrapOctets(bytes)));
 	}
 
 }

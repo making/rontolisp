@@ -98,11 +98,7 @@ final class IroncladNative {
 		}
 		byte[] derived = Sha2Kernels.pbkdf2(sha224, passphrase, salt, (int) iterations.value(),
 				(int) keyLength.value());
-		long[] elements = new long[derived.length];
-		for (int i = 0; i < derived.length; i++) {
-			elements[i] = derived[i] & 0xff;
-		}
-		return new LispIntVector(8, elements);
+		return LispIntVector.wrapOctets(derived);
 	}
 
 	/**
@@ -137,11 +133,7 @@ final class IroncladNative {
 	 */
 	private static byte @Nullable [] octets(LispVal value) {
 		if (value instanceof LispIntVector packed && packed.width() == 8) {
-			byte[] bytes = new byte[packed.length()];
-			for (int i = 0; i < bytes.length; i++) {
-				bytes[i] = (byte) packed.elementAt(i);
-			}
-			return bytes;
+			return packed.octets().clone();
 		}
 		if (value instanceof LispArray array && array.dimensions().length == 1 && !array.hasFillPointer()
 				&& array.displacedTo() == null) {

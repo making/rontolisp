@@ -115,13 +115,10 @@ record PackedBuffer(LispVal value, int width, int size) {
 			case LispBFloat16Array b ->
 				bytes.asShortBuffer().get((short[]) FloatArrayAccessHook.written(b.storage()), start, n);
 			case LispIntVector iv -> {
-				long[] data = iv.data();
-				for (int k = 0; k < n; k++) {
-					data[start + k] = switch (iv.width()) {
-						case 8 -> bytes.get() & 0xFFL;
-						case 16 -> bytes.getShort() & 0xFFFFL;
-						default -> bytes.getInt() & 0xFFFF_FFFFL;
-					};
+				switch (iv.width()) {
+					case 8 -> bytes.get(iv.octets(), start, n);
+					case 16 -> bytes.asShortBuffer().get(iv.shorts(), start, n);
+					default -> bytes.asIntBuffer().get(iv.ints(), start, n);
 				}
 			}
 			// The blocks are the device's residency key too (.todo/728): the read is
@@ -138,14 +135,10 @@ record PackedBuffer(LispVal value, int width, int size) {
 			case LispDoubleFloatArray d -> bytes.asDoubleBuffer().put(d.data(), start, n);
 			case LispBFloat16Array b -> bytes.asShortBuffer().put(b.data(), start, n);
 			case LispIntVector iv -> {
-				long[] data = iv.data();
-				for (int k = 0; k < n; k++) {
-					long e = data[start + k];
-					switch (iv.width()) {
-						case 8 -> bytes.put((byte) e);
-						case 16 -> bytes.putShort((short) e);
-						default -> bytes.putInt((int) e);
-					}
+				switch (iv.width()) {
+					case 8 -> bytes.put(iv.octets(), start, n);
+					case 16 -> bytes.asShortBuffer().put(iv.shorts(), start, n);
+					default -> bytes.asIntBuffer().put(iv.ints(), start, n);
 				}
 			}
 			case LispQuantizedMatrix qm -> bytes.put(qm.blocks(), start, n);

@@ -42,7 +42,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * with the width as a field (8/16/32) -- and its designator {@code (unsigned-byte N)} is
  * parsed from the SPECIFIER, not resolved from permit names, so there is no permits
  * clause to enumerate here. Its two hand-written width lists are the
- * {@code LispIntVector} constructor's check (LOUD: an unsupported width throws) and
+ * {@code LispIntVector} allocation's check (LOUD: an unsupported width throws) and
  * {@code LispNames.unsignedByteWidth}'s parse (silent: an unsupported width answers 0 and
  * the general array). The last two tests pin both directions as they stand.
  */
@@ -261,18 +261,19 @@ class PackedFloatReachabilityTest {
 	 * The audit's finding, pinned: the resolver's direction is the SILENT one -- an
 	 * {@code (unsigned-byte N)} the resolver does not list degrades to the general array
 	 * with no error and remembers nothing -- while the allocation's direction is loud:
-	 * the constructor refuses a width outside 8/16/32. Adding an integer width therefore
-	 * means editing BOTH {@code LispNames.unsignedByteWidth} and the
-	 * {@code LispIntVector} constructor, and the second makes at least its half of the
-	 * edit a hard error -- which is what the float umbrella's switches give at compile
-	 * time.
+	 * {@code LispIntVector.zeros} / {@code of} refuse a width outside 8/16/32. Adding an
+	 * integer width therefore means editing BOTH {@code LispNames.unsignedByteWidth} and
+	 * {@code LispIntVector}'s width check (and its storage switch), and the second makes
+	 * at least its half of the edit a hard error -- which is what the float umbrella's
+	 * switches give at compile time.
 	 */
 	@Test
 	void thePackedIntegerWidthListsAreTwoAndTheirFailureModesDiffer() {
 		assertThat(eval("(let ((a (make-array 3 :element-type '(unsigned-byte 64)))) (array-element-type a))"))
 			.as("an unlisted width degrades to the general array, remembering nothing")
 			.isSameAs(LispTrue.INSTANCE);
-		assertThatThrownBy(() -> new LispIntVector(64, new long[0])).isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> LispIntVector.zeros(64, 0)).isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> LispIntVector.of(64, new long[0])).isInstanceOf(IllegalArgumentException.class);
 	}
 
 }

@@ -227,8 +227,8 @@ public final class BuiltinFunctionWrappers {
 
 	/**
 	 * The wrappers whose BODY calls {@code apply}: the {@code map*} family, {@code every}
-	 * / {@code some} and {@code funcall} itself. All of them forward a runtime number of
-	 * arguments, which is what {@code apply} is for.
+	 * / {@code some}, {@code funcall} and {@code apply} themselves. All of them forward a
+	 * runtime number of arguments, which is what {@code apply} is for.
 	 *
 	 * <p>
 	 * They are injected ungated, but a backend that GATES its {@code apply} runtime on
@@ -241,7 +241,7 @@ public final class BuiltinFunctionWrappers {
 	 */
 	public static final Set<String> APPLY_USING_FUNCTIONS = Set.of(LispNames.MAPCAR, LispNames.MAPC, LispNames.MAPCAN,
 			LispNames.MAPLIST, LispNames.MAPCON, LispNames.MAPL, LispNames.EVERY, LispNames.SOME, LispNames.NOTANY,
-			LispNames.NOTEVERY, LispNames.MAP, LispNames.MAP_INTO, LispNames.FUNCALL);
+			LispNames.NOTEVERY, LispNames.MAP, LispNames.MAP_INTO, LispNames.FUNCALL, LispNames.APPLY);
 
 	/**
 	 * Whether the expression takes any {@link #APPLY_USING_FUNCTIONS} member as a
@@ -604,6 +604,85 @@ public final class BuiltinFunctionWrappers {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * {@code #'reduce}: {@code (lambda (f seq &rest kw) ...)}, the runtime keywords fed
+	 * back into the call-position expansion ({@code LispMacroExpander.expandReduce}),
+	 * which already folds a COMPUTED
+	 * {@code :key}/{@code :from-end}/{@code :start}/{@code :end}. A call with no keyword
+	 * is the plain fold, and {@code :initial-value} is told apart from an absent one by a
+	 * {@code getf} default no value can be (the fresh rest list itself), since nil is a
+	 * legal initial value. It is also what the compiled {@code eval} reaches for
+	 * {@code reduce}: the registry names the operator in a wrong count
+	 * ({@code REDUCE expects at least 2 arguments}) and serves every keyword.
+	 *
+	 * <pre>
+	 * (if kw
+	 *     (let ((iv (getf kw :initial-value kw)))
+	 *       (if (eq iv kw)
+	 *           (reduce f seq :key k :from-end e :start s :end n)
+	 *           (reduce f seq :key k :from-end e :start s :end n :initial-value iv)))
+	 *     (reduce f seq))
+	 * </pre>
+	 */
+	private static WrapperDef reduceWrapper() {
+		LispSymbol kw = new LispSymbol("kw");
+		LispSymbol iv = new LispSymbol("iv");
+		List<LispVal> keyed = new ArrayList<>(List.of(new LispSymbol(LispNames.REDUCE), new LispSymbol("f"),
+				new LispSymbol("seq"), new LispSymbol(LispNames.KEY_KEYWORD), getfKw(LispNames.KEY_KEYWORD),
+				new LispSymbol(LispNames.FROM_END_KEYWORD), getfKw(LispNames.FROM_END_KEYWORD),
+				new LispSymbol(LispNames.START_KEYWORD), getfKwOr(LispNames.START_KEYWORD, new LispInteger(0)),
+				new LispSymbol(LispNames.END_KEYWORD), getfKw(LispNames.END_KEYWORD)));
+		LispVal withoutInit = listToCons(keyed);
+		keyed.add(new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD));
+		keyed.add(iv);
+		LispVal withInit = listToCons(keyed);
+		LispVal pick = listToCons(
+				List.of(new LispSymbol(LispNames.IF), callV(LispNames.EQ_GENERAL, iv, kw), withoutInit, withInit));
+		LispVal keywords = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of((LispVal) listToCons(
+						List.of(iv, callV(LispNames.GETF, kw, new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), kw))))),
+				pick));
+		LispVal body = listToCons(
+				List.of(new LispSymbol(LispNames.IF), kw, keywords, call(LispNames.REDUCE, "f", "seq")));
+		return new WrapperDef(LispNames.REDUCE, List.of("f", "seq", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
+	/**
+	 * {@code #'apply}: {@code (lambda (f a &rest r) ...)} spreads its LAST argument -- a
+	 * when r is empty, else the last of r -- behind the arguments in front of it, and
+	 * refuses a last argument that is no proper list with the interpreter's text (a
+	 * dotted one would otherwise reach the dispatcher's list walk). Its lambda list is
+	 * what a wrong count is reported from ({@code APPLY expects at least 2 arguments}),
+	 * which is also how the compiled {@code eval} reaches it: through the registry, like
+	 * any other catalog name.
+	 *
+	 * <pre>
+	 * (let ((l (if r (car (last r)) a)))
+	 *   (if (do ((c l (cdr c))) ((atom c) (null c)))
+	 *       (apply f (if r (cons a (append (butlast r) l)) l))
+	 *       (error "APPLY: last argument must be a list")))
+	 * </pre>
+	 */
+	private static WrapperDef applyWrapper() {
+		LispSymbol f = new LispSymbol("f");
+		LispSymbol a = new LispSymbol("a");
+		LispSymbol r = new LispSymbol("r");
+		LispSymbol l = new LispSymbol("l");
+		LispSymbol c = new LispSymbol("c");
+		LispVal last = listToCons(
+				List.of(new LispSymbol(LispNames.IF), r, callV(LispNames.CAR, callV(LispNames.LAST, r)), a));
+		LispVal proper = listToCons(List.of(new LispSymbol(LispNames.DO),
+				listToCons(List.of((LispVal) listToCons(List.of(c, l, callV(LispNames.CDR, c))))),
+				listToCons(List.of(callV(LispNames.ATOM, c), callV(LispNames.NULL, c)))));
+		LispVal spread = listToCons(List.of(new LispSymbol(LispNames.IF), r,
+				callV(LispNames.CONS, a, callV(LispNames.APPEND, callV(LispNames.BUTLAST, r), l)), l));
+		LispVal checked = listToCons(List.of(new LispSymbol(LispNames.IF), proper, callV(LispNames.APPLY, f, spread),
+				callV(LispNames.ERROR, new LispString("APPLY: last argument must be a list"))));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of((LispVal) listToCons(List.of(l, last)))), checked));
+		return new WrapperDef(LispNames.APPLY, List.of("f", "a", LispNames.LAMBDA_REST, "r"), List.of(body));
 	}
 
 	// Helper to build a call expression: (op args...)
@@ -1089,11 +1168,13 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	// Variadic wrapper for min/max (needs at least one argument; a single argument
-	// returns itself): (lambda (&rest r) (reduce (lambda (a x) (op a x)) (cdr r)
-	// :initial-value (car r))). Zero args fold over nil with init nil, yielding nil.
+	// returns itself): (lambda (n &rest r) (reduce (lambda (a x) (op a x)) r
+	// :initial-value n)). The required n is what makes (funcall #'min) the count report
+	// the interpreter gives (MIN expects at least 1 argument, got 0); with a bare &rest
+	// it folded over nil and answered nil.
 	private static WrapperDef variadicNonEmpty(String name) {
-		return new WrapperDef(name, List.of(LispNames.LAMBDA_REST, "r"),
-				List.of(foldReduce(name, call(LispNames.CDR, "r"), call(LispNames.CAR, "r"))));
+		return new WrapperDef(name, List.of("n", LispNames.LAMBDA_REST, "r"),
+				List.of(foldReduce(name, new LispSymbol("r"), new LispSymbol("n"))));
 	}
 
 	// Variadic wrapper for append, the same shape as nconc's below. It has to be
@@ -1122,13 +1203,14 @@ public final class BuiltinFunctionWrappers {
 
 	// Variadic wrapper for - and /, which have distinct one-argument semantics
 	// ((- x) = -x, (/ x) = 1/x) from the multi-argument left fold:
-	// (lambda (&rest r) (if (cdr r) (reduce ... (cdr r) :initial-value (car r))
-	// (op unaryLeft (car r)))).
+	// (lambda (n &rest r) (if r (reduce ... r :initial-value n) (op unaryLeft n))).
+	// Neither has an identity, so the first argument is required: (funcall #'-) is the
+	// interpreter's - expects at least 1 argument, got 0, not a type-error on nil.
 	private static WrapperDef variadicUnaryLeft(String name, LispVal unaryLeft) {
-		LispVal multi = foldReduce(name, call(LispNames.CDR, "r"), call(LispNames.CAR, "r"));
-		LispVal single = callV(name, unaryLeft, call(LispNames.CAR, "r"));
-		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.CDR, "r"), multi, single));
-		return new WrapperDef(name, List.of(LispNames.LAMBDA_REST, "r"), List.of(body));
+		LispVal multi = foldReduce(name, new LispSymbol("r"), new LispSymbol("n"));
+		LispVal single = callV(name, unaryLeft, new LispSymbol("n"));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("r"), multi, single));
+		return new WrapperDef(name, List.of("n", LispNames.LAMBDA_REST, "r"), List.of(body));
 	}
 
 	// (getf kw :indicator) -- runtime keyword extraction from the wrapper's rest list.
@@ -1784,7 +1866,7 @@ public final class BuiltinFunctionWrappers {
 			sequenceScanFamily(LispNames.SUBSTITUTE_IF, false, true, 2),
 			sequenceScanFamily(LispNames.SUBSTITUTE_IF_NOT, false, true, 2),
 			sequenceScanFamily(LispNames.NSUBSTITUTE_IF, false, true, 2),
-			sequenceScanFamily(LispNames.NSUBSTITUTE_IF_NOT, false, true, 2), binary(LispNames.SORT),
+			sequenceScanFamily(LispNames.NSUBSTITUTE_IF_NOT, false, true, 2), reduceWrapper(), binary(LispNames.SORT),
 			variadicStableSort(), unary(LispNames.COPY_SEQ),
 			// The mapping family as first-class values (alexandria hands #'mapcar to
 			// its own combinators). Every member carries ANY number of lists, the same
@@ -1799,6 +1881,7 @@ public final class BuiltinFunctionWrappers {
 			// cl-utilities' compose folds with (reduce #'funcall fns ...).
 			new WrapperDef(LispNames.FUNCALL, List.of("f", LispNames.LAMBDA_REST, "r"),
 					List.of(callV(LispNames.APPLY, new LispSymbol("f"), new LispSymbol("r")))),
+			applyWrapper(),
 			// #'make-instance (gated by REFERENCE_GATED_FUNCTIONS): forwards to the
 			// generated %mop-make-instance runtime-class construction defun.
 			new WrapperDef(LispNames.MAKE_INSTANCE, List.of("class", LispNames.LAMBDA_REST, "r"),

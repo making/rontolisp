@@ -5036,6 +5036,86 @@ class JvmLispCompilerTest {
 					((1 . 2) (3 . 4) 5 ((1 . 2)))""");
 	}
 
+	// Inside a compiled eval a wrong count is the interpreter's program-error too: a
+	// registered function gets EVERY argument form evaluated and the spread dispatcher
+	// judges the count (evaluating exactly the registered arity answered (car 1 2) with
+	// a type-error and (cons 1) with (1)); apply is the catalog's wrapper, so eval
+	// reaches it and the report names it; an eval-built closure without a lambda-list
+	// keyword is checked; and the comparisons chain over every argument.
+	@Test
+	void compileAndRunEvalReportsAWrongArgumentCountAsTheInterpreterDoes() throws Exception {
+		assertThat(compileAndRun(
+				"""
+						(defun ev-one (x) x)
+						(print (handler-case (eval '(apply #'car '(1 2))) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(car 1 2)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(cons 1)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(ev-one 1 2)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(apply #'+)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(<)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '((lambda (x) x) 1 2)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(progn (defun ev-two (a b) (list a b)) (ev-two 1))) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(apply #'list 1 2)) (program-error () :pe) (error (c) (princ-to-string c))))
+						(print (list (eval '(apply #'cons '(1 2))) (eval '(apply #'+ 1 2 '(3 4))) (eval '(< 1 3 2))
+						             (eval '(<= 1 2 2 3)) (eval '(/= 1 2 1)) (eval '(/= 1 2 3)) (eval '(= 4))
+						             (eval '(funcall (lambda (a &optional b) (list a b)) 1))))
+						(print (list (funcall #'apply #'+ 1 2 '(3 4)) (mapcar #'apply (list #'+ #'*) '((1 2) (3 4)))))
+						"""))
+			.isEqualTo("""
+					"CAR expects 1 argument, got 2"
+					"CAR expects 1 argument, got 2"
+					"CONS expects 2 arguments, got 1"
+					"Function expects 1 argument, got 2"
+					"APPLY expects at least 2 arguments, got 1"
+					"< expects at least 1 argument, got 0"
+					"Function expects 1 argument, got 2"
+					"Function expects 2 arguments, got 1"
+					"APPLY: last argument must be a list"
+					((1 . 2) 10 NIL T NIL T T (1 NIL))
+					(10 (3 12))""");
+	}
+
+	// The operators the compiled eval used to evaluate INLINE check their count too: an
+	// arm handles only the call shape it is written for and anything else goes to the
+	// registered wrapper, which names the operator; mapcar/mapc, reduce and the list
+	// accessors have no arm left (the arm walked one list, took :from-end for the initial
+	// value, and threw on (first nil)); eval reports its own count; a defun of eight or
+	// more parameters answers through the registry; and the min/max/-// wrappers require
+	// their first argument.
+	@Test
+	void compileAndRunEvalChecksTheCountOfTheOperatorsItUsedToInline() throws Exception {
+		assertThat(compileAndRun(
+				"""
+						(defun ev-wide (a b c d e f g h i j k) (list a k))
+						(print (handler-case (eval '(funcall)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(mapcar #'car)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(first 1 2)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(nth 1)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(rest)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(reduce #'+)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(-)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(eval 1 2)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (eval '(ev-wide 1 2)) (program-error (c) (princ-to-string c))))
+						(print (handler-case (funcall #'max) (program-error (c) (princ-to-string c))))
+						(print (list (eval '(mapcar #'+ '(1 2) '(10 20))) (eval '(first nil)) (eval '(rest nil)) (eval '(+)) (eval '(*))
+						             (eval '(reduce #'list '(1 2 3) :from-end t)) (eval '(reduce #'+ nil))
+						             (eval '(ev-wide 1 2 3 4 5 6 7 8 9 10 11)) (funcall #'ev-wide 1 2 3 4 5 6 7 8 9 10 11)
+						             (funcall #'reduce #'+ '(1 2 3) :initial-value 10 :from-end t)))
+						"""))
+			.isEqualTo("""
+					"FUNCALL expects at least 1 argument, got 0"
+					"MAPCAR expects at least 2 arguments, got 1"
+					"FIRST expects 1 argument, got 2"
+					"NTH expects 2 arguments, got 1"
+					"REST expects 1 argument, got 0"
+					"REDUCE expects at least 2 arguments, got 1"
+					"- expects at least 1 argument, got 0"
+					"EVAL expects 1 argument, got 2"
+					"Function expects 11 arguments, got 2"
+					"MAX expects at least 1 argument, got 0"
+					((11 22) NIL NIL 0 1 (1 (2 3)) 0 (1 11) (1 11) 16)""");
+	}
+
 	@Test
 	void compileAndRunMapIntoList() throws Exception {
 		assertThat(compileAndRun("(print (map-into (list 0 0 0 0) #'+ '(1 2 3) '(10 20 30 40)))"))

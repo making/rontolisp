@@ -93,25 +93,26 @@ public final class ShadowedBuiltins {
 	 * opposite direction. Pinned by {@code ShadowedBuiltinsTest}: every name the set
 	 * keeps must be a {@code LispFunction} in a fresh global environment.
 	 */
-	private static final Set<String> EXPANSION_LOWERED = Set.of(LispNames.NE, LispNames.ASSOC, LispNames.ASSOC_IF,
-			LispNames.COUNT, LispNames.COUNT_IF, LispNames.REMOVE, LispNames.DELETE, LispNames.SUBSTITUTE,
-			LispNames.REMOVE_DUPLICATES, LispNames.DELETE_DUPLICATES, LispNames.NSUBSTITUTE, LispNames.DELETE_IF,
-			LispNames.DELETE_IF_NOT, LispNames.EVERY, LispNames.FILE_WRITE_DATE, LispNames.FIND, LispNames.FIND_IF,
-			LispNames.FIND_IF_NOT, LispNames.FIND_PACKAGE, LispNames.FORMAT, LispNames.FUNCALL, LispNames.MAPC,
-			LispNames.MAPCAN, LispNames.MAPCAR, LispNames.MAPCON, LispNames.MAPHASH, LispNames.MAPL, LispNames.MAPLIST,
-			LispNames.MEMBER, LispNames.MEMBER_IF, LispNames.NSUBSTITUTE_IF, LispNames.NSUBSTITUTE_IF_NOT,
-			LispNames.LIST_ALL_PACKAGES, LispNames.PACKAGE_USE_LIST, LispNames.PACKAGE_USED_BY_LIST, LispNames.POSITION,
-			LispNames.POSITION_IF, LispNames.POSITION_IF_NOT, LispNames.PROBE_FILE, LispNames.RASSOC,
-			LispNames.RASSOC_IF, LispNames.REMOVE_IF, LispNames.REMOVE_IF_NOT,
-			LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS, LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, LispNames.SOME,
-			LispNames.SORT, LispNames.STABLE_SORT, LispNames.SUBSTITUTE_IF, LispNames.SUBSTITUTE_IF_NOT,
-			LispNames.SYMBOL_VALUE, LispNames.ELT, LispNames.COERCE, LispNames.TYPEP,
-			LispNames.UPGRADED_COMPLEX_PART_TYPE, LispNames.ENDP, LispNames.LIST_STAR, LispNames.REVAPPEND,
-			LispNames.NRECONC, LispNames.VECTOR, LispNames.SVREF, LispNames.ARRAY_RANK, LispNames.ARRAY_DIMENSION,
-			LispNames.ARRAY_TOTAL_SIZE, LispNames.ARRAY_ROW_MAJOR_INDEX, LispNames.MAP, LispNames.MAP_INTO,
-			LispNames.NOTANY, LispNames.NOTEVERY, LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE,
-			LispNames.COPY_READTABLE, LispNames.READTABLE_CASE, LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.UNION,
-			LispNames.INTERSECTION, LispNames.SET_DIFFERENCE, LispNames.ADJOIN, LispNames.SUBSETP, LispNames.SET);
+	private static final Set<String> EXPANSION_LOWERED = Set.of(LispNames.NE, LispNames.APPLY, LispNames.ASSOC,
+			LispNames.ASSOC_IF, LispNames.COUNT, LispNames.COUNT_IF, LispNames.REMOVE, LispNames.DELETE,
+			LispNames.SUBSTITUTE, LispNames.REMOVE_DUPLICATES, LispNames.DELETE_DUPLICATES, LispNames.NSUBSTITUTE,
+			LispNames.DELETE_IF, LispNames.DELETE_IF_NOT, LispNames.EVERY, LispNames.FILE_WRITE_DATE, LispNames.FIND,
+			LispNames.FIND_IF, LispNames.FIND_IF_NOT, LispNames.FIND_PACKAGE, LispNames.FORMAT, LispNames.FUNCALL,
+			LispNames.MAPC, LispNames.MAPCAN, LispNames.MAPCAR, LispNames.MAPCON, LispNames.MAPHASH, LispNames.MAPL,
+			LispNames.MAPLIST, LispNames.MEMBER, LispNames.MEMBER_IF, LispNames.NSUBSTITUTE_IF,
+			LispNames.NSUBSTITUTE_IF_NOT, LispNames.LIST_ALL_PACKAGES, LispNames.PACKAGE_USE_LIST,
+			LispNames.PACKAGE_USED_BY_LIST, LispNames.POSITION, LispNames.POSITION_IF, LispNames.POSITION_IF_NOT,
+			LispNames.PROBE_FILE, LispNames.RASSOC, LispNames.RASSOC_IF, LispNames.REDUCE, LispNames.REMOVE_IF,
+			LispNames.REMOVE_IF_NOT, LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS,
+			LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, LispNames.SOME, LispNames.SORT, LispNames.STABLE_SORT,
+			LispNames.SUBSTITUTE_IF, LispNames.SUBSTITUTE_IF_NOT, LispNames.SYMBOL_VALUE, LispNames.ELT,
+			LispNames.COERCE, LispNames.TYPEP, LispNames.UPGRADED_COMPLEX_PART_TYPE, LispNames.ENDP,
+			LispNames.LIST_STAR, LispNames.REVAPPEND, LispNames.NRECONC, LispNames.VECTOR, LispNames.SVREF,
+			LispNames.ARRAY_RANK, LispNames.ARRAY_DIMENSION, LispNames.ARRAY_TOTAL_SIZE,
+			LispNames.ARRAY_ROW_MAJOR_INDEX, LispNames.MAP, LispNames.MAP_INTO, LispNames.NOTANY, LispNames.NOTEVERY,
+			LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE, LispNames.COPY_READTABLE, LispNames.READTABLE_CASE,
+			LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.UNION, LispNames.INTERSECTION, LispNames.SET_DIFFERENCE,
+			LispNames.ADJOIN, LispNames.SUBSETP, LispNames.SET);
 
 	private static volatile @org.jspecify.annotations.Nullable Set<String> lowered;
 

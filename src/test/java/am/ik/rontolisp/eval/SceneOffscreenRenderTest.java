@@ -569,7 +569,7 @@ class SceneOffscreenRenderTest {
 		assertThat(answer).as("scene:snapshot answered a packed byte vector").isInstanceOf(LispIntVector.class);
 		LispIntVector vector = (LispIntVector) answer;
 		assertThat(vector.length()).as("width * height * 4 bytes of BGRA").isEqualTo(WIDTH * HEIGHT * 4);
-		Frame frame = new Frame(name, vector.data());
+		Frame frame = new Frame(name, vector.toLongArray());
 		frame.write();
 		return frame;
 	}

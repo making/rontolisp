@@ -177,7 +177,7 @@ final class WasmQuoteCompiler {
 	 * @param ctx the compilation context
 	 */
 	static void compileIntVectorLiteral(am.ik.rontolisp.LispIntVector iv, WasmLispCompiler.Ctx ctx) {
-		long[] data = iv.data();
+		long[] data = iv.toLongArray();
 		int type = WasmArrayCompiler.intArrType(iv.width());
 		// An async resume body declares its own locals and never resolves an i64 scratch
 		// placeholder, which is why every other i64-local user (fusion, the raw let
@@ -257,7 +257,7 @@ final class WasmQuoteCompiler {
 	// Elements are stored little-endian, which is what the load reads back on every host:
 	// wasm's linear memory is little-endian by definition.
 	private static void compileIntVectorFromData(am.ik.rontolisp.LispIntVector iv, int type, WasmLispCompiler.Ctx ctx) {
-		long[] data = iv.data();
+		long[] data = iv.toLongArray();
 		int bytes = iv.width() / 8;
 		int shift = Integer.numberOfTrailingZeros(bytes);
 		byte[] blob = new byte[data.length * bytes];

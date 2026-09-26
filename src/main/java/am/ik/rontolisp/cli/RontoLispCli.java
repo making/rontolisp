@@ -156,6 +156,11 @@ public final class RontoLispCli {
 		// the same reason.
 		SourceStandards standards = SourceStandards.parse(options.get("--scheme-standard"));
 
+		// --java-release / --java-classpath / --warn-java-reflection: how java: call
+		// sites resolve (compiler/JavaSiteResolver). Read once here so a malformed
+		// release number fails before any file is read.
+		JavaResolutionOptions javaResolution = JavaResolutionOptions.from(options);
+
 		// -e/--eval "FORMS": the program is the argument itself rather than a file, and
 		// nothing downstream can tell the difference -- it interprets, and with -o it
 		// compiles. Only what a file itself provides is missing: a directory for a
@@ -167,9 +172,10 @@ public final class RontoLispCli {
 					+ "': give the program either inline or in a file");
 		}
 		if (!test && inline == null && !options.containsNoKey()) {
+			refuseJavaClassFiles(javaResolution);
 			repl(systemPath, dists, features, options.contains("--simd"), options.contains("--blas"),
 					options.contains("--gpu"), options.contains("--parallel"), commandLine(null, options.arguments()),
-					sourceLanguage, standards);
+					sourceLanguage, standards, javaResolution.warnReflection());
 			return;
 		}
 
@@ -224,7 +230,7 @@ public final class RontoLispCli {
 					options.contains("--host-boundary") ? HostBoundary.parse(options.get("--host-boundary")) : null,
 					options.contains("--report-locations")
 							? WasmReportLocations.parse(options.get("--report-locations")) : null,
-					JvmArtifactOptions.from(options), inputFile, sourceLanguage, standards);
+					JvmArtifactOptions.from(options), javaResolution, inputFile, sourceLanguage, standards);
 		}
 		else {
 			// A side-artifact flag names a file to write BESIDE the output, so without
@@ -263,9 +269,22 @@ public final class RontoLispCli {
 							+ " describes a compiled JVM artifact, so it needs -o <file>.class" + " or -o <file>.jar");
 				}
 			}
+			refuseJavaClassFiles(javaResolution);
 			interpret(source, baseDir, systemPath, dists, features, options.contains("--simd"),
 					options.contains("--blas"), options.contains("--gpu"), options.contains("--parallel"), inputFile,
-					commandLine(inputFile, options.arguments()), sourceLanguage, standards);
+					commandLine(inputFile, options.arguments()), sourceLanguage, standards,
+					javaResolution.warnReflection());
+		}
+	}
+
+	// The interpreter resolves java: sites against the classes it runs with, by
+	// reflection: a class-file option would be silently ignored, so it is refused.
+	private static void refuseJavaClassFiles(JavaResolutionOptions javaResolution) {
+		if (javaResolution.namesClassFiles()) {
+			throw new UnsupportedOperationException("--java-release and --java-classpath choose the classes a"
+					+ " compiled JVM program resolves its java: calls against, so they need -o <file>.class or"
+					+ " -o <file>.jar; the interpreter resolves against the classes it runs with"
+					+ " (java -cp ... to add some)");
 		}
 	}
 
@@ -380,8 +399,9 @@ public final class RontoLispCli {
 
 	private void repl(List<String> systemPath, DistClient dists, List<String> declaredFeatures, boolean simd,
 			boolean blas, boolean gpu, boolean parallel, List<String> commandLine, @Nullable String sourceLanguage,
-			SourceStandards standards) {
+			SourceStandards standards, boolean warnJavaReflection) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
+		evaluator.setWarnOnJavaReflection(warnJavaReflection);
 		evaluator.setSystemPath(systemPath);
 		evaluator.setDeclaredFeatures(declaredFeatures);
 		evaluator.setCommandLineArguments(commandLine);
@@ -555,8 +575,9 @@ public final class RontoLispCli {
 	private void interpret(String source, @Nullable String baseDir, List<String> systemPath, DistClient dists,
 			List<String> declaredFeatures, boolean simd, boolean blas, boolean gpu, boolean parallel,
 			@Nullable String entryFile, List<String> commandLine, @Nullable String sourceLanguage,
-			SourceStandards standards) {
+			SourceStandards standards, boolean warnJavaReflection) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
+		evaluator.setWarnOnJavaReflection(warnJavaReflection);
 		evaluator.setLoadBaseDir(baseDir);
 		evaluator.setSystemPath(systemPath);
 		// The entry file, every file it loads and every ASDF component under it read
@@ -609,13 +630,14 @@ public final class RontoLispCli {
 			OptimizeLevel optimize, boolean noGc, @Nullable NativeTarget nativeTarget, boolean simd, boolean blas,
 			boolean gpu, boolean parallel, boolean noPrune, boolean noMain, boolean wit, boolean jsGlue,
 			boolean hostRandom, boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary,
-			@Nullable WasmReportLocations reportLocations, JvmArtifactOptions jvmArtifact, @Nullable String entryFile,
-			@Nullable String sourceLanguage, SourceStandards standards) {
+			@Nullable WasmReportLocations reportLocations, JvmArtifactOptions jvmArtifact,
+			JavaResolutionOptions javaResolution, @Nullable String entryFile, @Nullable String sourceLanguage,
+			SourceStandards standards) {
 		CompileDiagnostics.recording(() -> {
 			compileRecorded(source, baseDir, systemPath, dists, declaredFeatures, outputFile, dynamic, component,
 					noWasi, optimize, noGc, nativeTarget, simd, blas, gpu, parallel, noPrune, noMain, wit, jsGlue,
-					hostRandom, hostFetch, reentrant, hostBoundary, reportLocations, jvmArtifact, entryFile,
-					sourceLanguage, standards);
+					hostRandom, hostFetch, reentrant, hostBoundary, reportLocations, jvmArtifact, javaResolution,
+					entryFile, sourceLanguage, standards);
 			return null;
 		});
 	}
@@ -625,8 +647,9 @@ public final class RontoLispCli {
 			OptimizeLevel optimize, boolean noGc, @Nullable NativeTarget nativeTarget, boolean simd, boolean blas,
 			boolean gpu, boolean parallel, boolean noPrune, boolean noMain, boolean wit, boolean jsGlue,
 			boolean hostRandom, boolean hostFetch, boolean reentrant, @Nullable HostBoundary hostBoundary,
-			@Nullable WasmReportLocations reportLocations, JvmArtifactOptions jvmArtifact, @Nullable String entryFile,
-			@Nullable String sourceLanguage, SourceStandards standards) {
+			@Nullable WasmReportLocations reportLocations, JvmArtifactOptions jvmArtifact,
+			JavaResolutionOptions javaResolution, @Nullable String entryFile, @Nullable String sourceLanguage,
+			SourceStandards standards) {
 		// --native is the wasm-GC backend's WASI Preview 1 command module, precompiled
 		// and appended to a runner stub: every flag that asks for a DIFFERENT module is
 		// refused by name rather than half-honoured, and so is an -o name that says
@@ -674,6 +697,13 @@ public final class RontoLispCli {
 			throw new UnsupportedOperationException("--no-main makes the class itself the artifact's Java API, so a"
 					+ " library jar has to name it: add --class-name com.example.Kernels."
 					+ " Only a program jar derives its class name from the -o file name");
+		}
+		// --java-release / --java-classpath name the class files a JVM compile resolves
+		// java: sites against; java: has no WASM lowering at all.
+		if (javaResolution.namesClassFiles() && !jvmOutput(outputFile)) {
+			throw new UnsupportedOperationException("--java-release and --java-classpath choose the classes a"
+					+ " compiled JVM program resolves its java: calls against, so they need a .class, .jar or .war"
+					+ " output");
 		}
 		if (jvmArtifact.className() != null && !jvmOutput(outputFile)) {
 			throw new UnsupportedOperationException("--class-name names the class a JVM compile emits, so it needs a"
@@ -925,6 +955,9 @@ public final class RontoLispCli {
 				.noMain(noMain)
 				.servlet(outputFile.endsWith(".war"))
 				.baseDir(baseDir)
+				.javaRelease(javaResolution.release())
+				.javaClasspath(javaResolution.classpath())
+				.warnJavaReflection(javaResolution.warnReflection())
 				.compileProgram(program, features);
 			jvmClassName = compiled.internalClassName();
 			bytes = compiled.classBytes();
@@ -1250,6 +1283,15 @@ public final class RontoLispCli {
 		this.out.println("  --emit-pom         Write that same pom next to the jar as out.pom (for");
 		this.out.println("                     deploy-file), the way --emit-wit writes the world next to the");
 		this.out.println("                     .wasm. Needs --maven-coordinates");
+		this.out.println("  --java-release N   With a .class, .jar or .war output: resolve java: calls against");
+		this.out.println("                     Java release N's API, read from the JDK's lib/ct.sym (default:");
+		this.out.println("                     the newest the JDK holds -- its own)");
+		this.out.println("  --java-classpath PATHS");
+		this.out.println("                     With a .class, .jar or .war output: directories and jars whose");
+		this.out.println("                     classes java: calls resolve against after the JDK's");
+		this.out.println("  --warn-java-reflection");
+		this.out.println("                     Report every java: call that cannot be resolved before it runs");
+		this.out.println("                     (a compile warning; the interpreter sets java:*warn-on-reflection*)");
 		this.out.println("  --no-wasi          Emit WASM with no WASI imports (reactor mode)");
 		this.out.println("                     Instantiates without an import object (beyond any");
 		this.out.println("                     rontolisp:wasm-import host functions); pure-compute");

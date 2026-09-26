@@ -3,6 +3,19 @@
 Difficulty: High
 
 Depends on a13.
+
+a13 gives (see .kb/java-interop.md "One resolution model"): per site,
+`JvmJavaSites.resolve(cons)` -> `JavaSite` with `executable()`/`field()`, `packed()`,
+`staticClass()` (the receiver's static type: the checkcast target) and the declared
+result type; today a resolved site is emitted as `javaCallAs`/`javaStatic`/`javaNew`
+with the fully tagged designator, which is where the direct emission goes.
+Reconcile: the metadata default is the JDK's own release (ct.sym's newest), not 17 --
+a member chosen against 25 may not exist on a class-61 JRE, so pick the default
+release and the class version together. `java:static`/`java:call` candidates are
+getMethods() (static AND instance, kept from before a13): an instance member chosen
+for java:static must not become an invokestatic. A false declaration is today the
+bridge's "the receiver is not a C" error; the checkcast must raise the same text
+(the interpreter's JavaInterop.callInstanceAs is the other half).
 Prototype 2026-09-26: invokestatic Math.max(II)I, new/invokespecial
 StringBuilder(String), invokevirtual length/append, invokeinterface List.size,
 getstatic Integer.MAX_VALUE with inline marshal (l2i, quote strip) and

@@ -103,6 +103,10 @@ final class JvmEvalRuntimeBuilder {
 
 		private final @Nullable FieldrefConstant hasComplexField;
 
+		private final @Nullable MethodrefConstant arityChkRef;
+
+		private final JvmArityOperators arityOperators;
+
 		private EvalConstants(Builder b) {
 			this.cp = Objects.requireNonNull(b.cp);
 			this.objectClass = Objects.requireNonNull(b.objectClass);
@@ -131,6 +135,8 @@ final class JvmEvalRuntimeBuilder {
 			this.functions = Objects.requireNonNull(b.functions);
 			this.complexValues = b.complexValues;
 			this.hasComplexField = b.hasComplexField;
+			this.arityChkRef = b.arityChkRef;
+			this.arityOperators = Objects.requireNonNull(b.arityOperators);
 		}
 
 		ConstantPool cp() {
@@ -242,6 +248,22 @@ final class JvmEvalRuntimeBuilder {
 			return this.hasComplexField;
 		}
 
+		/**
+		 * {@code _arityChk(argList, shape)}: the count guard the spread cases carry,
+		 * which the runtime's own count checks throw through too. Present wherever
+		 * {@code _apply} is built.
+		 */
+		MethodrefConstant arityChkRef() {
+			return Objects.requireNonNull(this.arityChkRef, "_arityChk is built only with _apply");
+		}
+
+		/**
+		 * The compile's arity-operator registry, still open while the runtime is built.
+		 */
+		JvmArityOperators arityOperators() {
+			return this.arityOperators;
+		}
+
 		static Builder builder() {
 			return new Builder();
 		}
@@ -301,6 +323,10 @@ final class JvmEvalRuntimeBuilder {
 			private boolean complexValues;
 
 			private @Nullable FieldrefConstant hasComplexField;
+
+			private @Nullable MethodrefConstant arityChkRef;
+
+			private @Nullable JvmArityOperators arityOperators;
 
 			Builder cp(ConstantPool cp) {
 				this.cp = cp;
@@ -434,6 +460,16 @@ final class JvmEvalRuntimeBuilder {
 
 			Builder hasComplexField(@Nullable FieldrefConstant hasComplexField) {
 				this.hasComplexField = hasComplexField;
+				return this;
+			}
+
+			Builder arityChkRef(@Nullable MethodrefConstant arityChkRef) {
+				this.arityChkRef = arityChkRef;
+				return this;
+			}
+
+			Builder arityOperators(JvmArityOperators arityOperators) {
+				this.arityOperators = arityOperators;
 				return this;
 			}
 
@@ -638,6 +674,23 @@ final class JvmEvalRuntimeBuilder {
 		else {
 			a.op(Opcode.LDC_W);
 			a.u2(sc.index());
+		}
+	}
+
+	/** Pushes an int constant, pooled when it is past {@code sipush} range. */
+	private void ldcInt(Asm a, int value) {
+		if (value >= Short.MIN_VALUE && value <= Short.MAX_VALUE) {
+			a.iconst(value);
+			return;
+		}
+		int index = this.k.cp().addInteger(value).index();
+		if (index <= 255) {
+			a.op(Opcode.LDC);
+			a.code.add(index);
+		}
+		else {
+			a.op(Opcode.LDC_W);
+			a.u2(index);
 		}
 	}
 
@@ -903,58 +956,6 @@ final class JvmEvalRuntimeBuilder {
 	}
 
 	/**
-	 * Emits a loop evaluating exactly {@code arity} arguments from the list at
-	 * {@code restSlot} (missing arguments default to nil) and linking them into a fresh
-	 * list left in {@code headSlot}. Consumes {@code restSlot} and {@code arityIntSlot}.
-	 */
-	private void buildNArgs(Asm a, int restSlot, int envSlot, int arityIntSlot, int headSlot, int tailSlot,
-			int cellSlot, int tmpSlot) {
-		a.aconstNull();
-		a.astore(headSlot);
-		a.aconstNull();
-		a.astore(tailSlot);
-		int loop = a.label();
-		int end = a.label();
-		a.bind(loop);
-		a.iload(arityIntSlot);
-		a.branch(Opcode.IFLE, end);
-		// val = (rest == null) ? nil : eval(car rest)
-		int rnull = a.label();
-		int vset = a.label();
-		a.aload(restSlot);
-		a.branch(Opcode.IFNULL, rnull);
-		evalCar(a, restSlot, envSlot);
-		a.branch(Opcode.GOTO, vset);
-		a.bind(rnull);
-		a.aconstNull();
-		a.bind(vset);
-		a.astore(tmpSlot);
-		// advance rest if not null
-		int skipAdv = a.label();
-		a.aload(restSlot);
-		a.branch(Opcode.IFNULL, skipAdv);
-		cdr(a, restSlot);
-		a.astore(restSlot);
-		a.bind(skipAdv);
-		// cell = cons(tmp, null); append
-		a.iconst(2);
-		a.anewarray(this.k.objectClass());
-		a.dup();
-		a.iconst(0);
-		a.aload(tmpSlot);
-		a.aastore();
-		a.dup();
-		a.iconst(1);
-		a.aconstNull();
-		a.aastore();
-		a.astore(cellSlot);
-		appendCell(a, cellSlot, headSlot, tailSlot);
-		a.iinc(arityIntSlot, -1);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(end);
-	}
-
-	/**
 	 * Appends the cons in {@code cellSlot} to the list tracked by {@code headSlot}/
 	 * {@code tailSlot}.
 	 */
@@ -1048,11 +1049,14 @@ final class JvmEvalRuntimeBuilder {
 			Set<String> spelledLiterals) {
 		// Only the rows the dispatchers kept a case for: a name whose funcId has no case
 		// would resolve here and then fall through the dispatcher's search tree
-		// (JvmLispCompiler.dispatchableFuncIds decides both together).
+		// (JvmLispCompiler.dispatchableFuncIds decides both together). Every parameter
+		// count answers: a designator's call reaches the SPREAD dispatcher when it is
+		// wider than the per-arity ones, and a function of eight or more parameters left
+		// out here answered (eval '(f a1 ... a8)) and (funcall 'f ...) with nil or an
+		// undefined function.
 		List<Map.Entry<String, JvmLispCompiler.FunctionInfo>> entries = new ArrayList<>(this.k.functions()
 			.entrySet()
 			.stream()
-			.filter(e -> e.getValue().paramCount() <= MAX_CALLABLE_ARITY)
 			.filter(e -> dispatchable == null || dispatchable.contains(e.getValue().funcId()))
 			.toList());
 		// Alias rows for INTERNAL names: a runtime-interned symbol carries
@@ -1264,6 +1268,7 @@ final class JvmEvalRuntimeBuilder {
 			a.astore(PARAMS);
 			cdr(a, PAIR);
 			a.astore(BODY);
+			emitClosureArityCheck(a, PARAMS, ARGLIST, TMP, LEN);
 			// bind params to args
 			a.aload(ARGLIST);
 			a.astore(ARGCUR);
@@ -1347,6 +1352,52 @@ final class JvmEvalRuntimeBuilder {
 		a.bind(notArr);
 		emitNotFunctionThrow(a, FN);
 		return a.finish();
+	}
+
+	/**
+	 * Emits the wrong-count check of an interpreted closure: {@code _arityChk(argList,
+	 * 2 * params)}, reported as {@code Function expects N argument(s), got M} like any
+	 * anonymous callee. A lambda list with a {@code &}-marker is left unchecked: the
+	 * runtime {@code lambda} binds such a list positionally (a documented limitation), so
+	 * its parameter count is no count the call has to match.
+	 */
+	private void emitClosureArityCheck(Asm a, int paramsSlot, int argListSlot, int cursorSlot, int countSlot) {
+		int loop = a.label();
+		int counted = a.label();
+		int nextParam = a.label();
+		int unchecked = a.label();
+		a.iconst(0);
+		a.istore(countSlot);
+		a.aload(paramsSlot);
+		a.astore(cursorSlot);
+		a.bind(loop);
+		a.aload(cursorSlot);
+		a.branch(Opcode.IFNULL, counted);
+		car(a, cursorSlot);
+		a.instanceOf(this.k.stringClass());
+		a.branch(Opcode.IFEQ, nextParam);
+		car(a, cursorSlot);
+		a.checkcast(this.k.stringClass());
+		a.invokevirtual(this.k.stringLength());
+		a.branch(Opcode.IFEQ, nextParam);
+		car(a, cursorSlot);
+		a.checkcast(this.k.stringClass());
+		a.iconst(0);
+		a.invokevirtual(this.k.stringCharAt());
+		a.iconst('&');
+		a.branch(Opcode.IF_ICMPEQ, unchecked);
+		a.bind(nextParam);
+		a.iinc(countSlot, 1);
+		cdr(a, cursorSlot);
+		a.astore(cursorSlot);
+		a.branch(Opcode.GOTO, loop);
+		a.bind(counted);
+		a.aload(argListSlot);
+		a.iload(countSlot);
+		a.iconst(1);
+		a.op(Opcode.ISHL);
+		a.invokestatic(this.k.arityChkRef());
+		a.bind(unchecked);
 	}
 
 	/**
@@ -1855,6 +1906,12 @@ final class JvmEvalRuntimeBuilder {
 		a.areturn();
 		a.bind(symOp);
 
+		// The inline arms below take only the call shape they are written for; any other
+		// argument count branches here, to the generic application, whose registered
+		// wrapper judges the count and names the operator (FUNCALL expects at least 1
+		// argument, got 0) or serves the shape the arm does not ((+) is 0).
+		int registryApply = a.label();
+
 		// ---- quote ----
 		int n = special(a, OP, LispNames.QUOTE);
 		car(a, REST);
@@ -2349,7 +2406,11 @@ final class JvmEvalRuntimeBuilder {
 		a.bind(n);
 
 		// ---- eval (nested) ----
+		// No wrapper backs eval, so the arm reports a wrong count itself.
 		n = special(a, OP, LispNames.EVAL);
+		a.aload(REST);
+		ldcInt(a, this.k.arityOperators().namedShape(1, false, LispNames.EVAL));
+		a.invokestatic(this.k.arityChkRef());
 		evalCar(a, REST, ENV);
 		a.aconstNull();
 		a.invokestatic(this.k.evalRef());
@@ -2358,6 +2419,8 @@ final class JvmEvalRuntimeBuilder {
 
 		// ---- funcall ----
 		n = special(a, OP, LispNames.FUNCALL);
+		a.aload(REST);
+		a.branch(Opcode.IFNULL, registryApply);
 		evalCar(a, REST, ENV);
 		a.astore(FN);
 		cdr(a, REST);
@@ -2369,217 +2432,12 @@ final class JvmEvalRuntimeBuilder {
 		a.areturn();
 		a.bind(n);
 
-		// ---- mapcar: (mapcar fn list) ----
-		n = special(a, OP, LispNames.MAPCAR);
-		evalCar(a, REST, ENV);
-		a.astore(FN);
-		cdr(a, REST);
-		a.astore(REST);
-		evalCar(a, REST, ENV);
-		a.astore(ELEM); // input list cursor
-		a.aconstNull();
-		a.astore(ARGHEAD);
-		a.aconstNull();
-		a.astore(ARGTAIL);
-		int mapLoop = a.label();
-		int mapEnd = a.label();
-		a.bind(mapLoop);
-		a.aload(ELEM);
-		a.instanceOf(this.k.objectArrayClass());
-		a.branch(Opcode.IFEQ, mapEnd);
-		// argl = cons(car(ELEM), null)
-		a.iconst(2);
-		a.anewarray(this.k.objectClass());
-		a.dup();
-		a.iconst(0);
-		car(a, ELEM);
-		a.aastore();
-		a.dup();
-		a.iconst(1);
-		a.aconstNull();
-		a.aastore();
-		a.astore(NEWCELL);
-		a.aload(FN);
-		a.aload(NEWCELL);
-		a.invokestatic(this.k.applyRef());
-		a.astore(TMP);
-		// cell = cons(mapped, null)
-		a.iconst(2);
-		a.anewarray(this.k.objectClass());
-		a.dup();
-		a.iconst(0);
-		a.aload(TMP);
-		a.aastore();
-		a.dup();
-		a.iconst(1);
-		a.aconstNull();
-		a.aastore();
-		a.astore(NEWCELL);
-		appendCell(a, NEWCELL, ARGHEAD, ARGTAIL);
-		cdr(a, ELEM);
-		a.astore(ELEM);
-		a.branch(Opcode.GOTO, mapLoop);
-		a.bind(mapEnd);
-		a.aload(ARGHEAD);
-		a.areturn();
-		a.bind(n);
-
-		// ---- mapc: (mapc fn list) — apply for effect, return the list ----
-		n = special(a, OP, LispNames.MAPC);
-		evalCar(a, REST, ENV);
-		a.astore(FN);
-		cdr(a, REST);
-		a.astore(REST);
-		evalCar(a, REST, ENV);
-		a.astore(ARGHEAD); // original list, returned at the end
-		a.aload(ARGHEAD);
-		a.astore(ELEM); // input list cursor
-		int mapcLoop = a.label();
-		int mapcEnd = a.label();
-		a.bind(mapcLoop);
-		a.aload(ELEM);
-		a.instanceOf(this.k.objectArrayClass());
-		a.branch(Opcode.IFEQ, mapcEnd);
-		// argl = cons(car(ELEM), null)
-		a.iconst(2);
-		a.anewarray(this.k.objectClass());
-		a.dup();
-		a.iconst(0);
-		car(a, ELEM);
-		a.aastore();
-		a.dup();
-		a.iconst(1);
-		a.aconstNull();
-		a.aastore();
-		a.astore(NEWCELL);
-		a.aload(FN);
-		a.aload(NEWCELL);
-		a.invokestatic(this.k.applyRef());
-		a.pop(); // discard the result
-		cdr(a, ELEM);
-		a.astore(ELEM);
-		a.branch(Opcode.GOTO, mapcLoop);
-		a.bind(mapcEnd);
-		a.aload(ARGHEAD);
-		a.areturn();
-		a.bind(n);
-
-		// ---- reduce: (reduce fn list) or (reduce fn list :initial-value init) ----
-		n = special(a, OP, LispNames.REDUCE);
-		evalCar(a, REST, ENV);
-		a.astore(FN);
-		cdr(a, REST);
-		a.astore(REST);
-		cdr(a, REST);
-		a.astore(TMP); // cdr(rest): null for 2-arg, (:initial-value init) for keyword
-						// form
-		int withInit = a.label();
-		int afterInit = a.label();
-		a.aload(TMP);
-		a.branch(Opcode.IFNONNULL, withInit);
-		// 2-arg: list = eval(car rest); acc = car(list); list = cdr(list)
-		evalCar(a, REST, ENV);
-		a.astore(ELEM);
-		car(a, ELEM);
-		a.astore(ACC);
-		cdr(a, ELEM);
-		a.astore(ELEM);
-		a.branch(Opcode.GOTO, afterInit);
-		a.bind(withInit);
-		// keyword form: list = eval(car rest); acc = eval(car (cdr (cdr rest)))
-		evalCar(a, REST, ENV);
-		a.astore(ELEM);
-		cdr(a, TMP); // TMP = (init)
-		a.astore(TMP);
-		evalCar(a, TMP, ENV);
-		a.astore(ACC);
-		a.bind(afterInit);
-		int redLoop = a.label();
-		int redEnd = a.label();
-		a.bind(redLoop);
-		a.aload(ELEM);
-		a.instanceOf(this.k.objectArrayClass());
-		a.branch(Opcode.IFEQ, redEnd);
-		// inner = cons(car(ELEM), null)
-		a.iconst(2);
-		a.anewarray(this.k.objectClass());
-		a.dup();
-		a.iconst(0);
-		car(a, ELEM);
-		a.aastore();
-		a.dup();
-		a.iconst(1);
-		a.aconstNull();
-		a.aastore();
-		a.astore(NEWCELL);
-		// argl = cons(acc, inner)
-		consFromSlots(a, ACC, NEWCELL);
-		a.astore(NEWCELL);
-		a.aload(FN);
-		a.aload(NEWCELL);
-		a.invokestatic(this.k.applyRef());
-		a.astore(ACC);
-		cdr(a, ELEM);
-		a.astore(ELEM);
-		a.branch(Opcode.GOTO, redLoop);
-		a.bind(redEnd);
-		a.aload(ACC);
-		a.areturn();
-		a.bind(n);
-
-		// ---- first/second/third/fourth/fifth/sixth/seventh/eighth/ninth/tenth ----
-		fixedAccessorEval(a, OP, LispNames.FIRST, REST, ENV, ACC, 0);
-		fixedAccessorEval(a, OP, LispNames.SECOND, REST, ENV, ACC, 1);
-		fixedAccessorEval(a, OP, LispNames.THIRD, REST, ENV, ACC, 2);
-		fixedAccessorEval(a, OP, LispNames.FOURTH, REST, ENV, ACC, 3);
-		fixedAccessorEval(a, OP, LispNames.FIFTH, REST, ENV, ACC, 4);
-		fixedAccessorEval(a, OP, LispNames.SIXTH, REST, ENV, ACC, 5);
-		fixedAccessorEval(a, OP, LispNames.SEVENTH, REST, ENV, ACC, 6);
-		fixedAccessorEval(a, OP, LispNames.EIGHTH, REST, ENV, ACC, 7);
-		fixedAccessorEval(a, OP, LispNames.NINTH, REST, ENV, ACC, 8);
-		fixedAccessorEval(a, OP, LispNames.TENTH, REST, ENV, ACC, 9);
-
-		// ---- rest: (rest lst) -> (cdr lst) ----
-		n = special(a, OP, LispNames.REST);
-		evalCar(a, REST, ENV);
-		a.astore(ACC);
-		cdr(a, ACC);
-		a.areturn();
-		a.bind(n);
-
-		// ---- nth: (nth n list) ----
-		n = special(a, OP, LispNames.NTH);
-		evalCar(a, REST, ENV);
-		a.checkcast(this.k.longClass());
-		a.invokevirtual(this.k.longValue());
-		a.op(Opcode.L2I);
-		a.istore(IDX);
-		cdr(a, REST);
-		a.astore(REST);
-		evalCar(a, REST, ENV);
-		a.astore(ACC);
-		int nthLoop = a.label();
-		int nthEnd = a.label();
-		a.bind(nthLoop);
-		a.iload(IDX);
-		a.branch(Opcode.IFLE, nthEnd);
-		a.aload(ACC);
-		a.branch(Opcode.IFNULL, nthEnd);
-		cdr(a, ACC);
-		a.astore(ACC);
-		a.iinc(IDX, -1);
-		a.branch(Opcode.GOTO, nthLoop);
-		a.bind(nthEnd);
-		int nthNil = a.label();
-		a.aload(ACC);
-		a.instanceOf(this.k.objectArrayClass());
-		a.branch(Opcode.IFEQ, nthNil);
-		car(a, ACC);
-		a.areturn();
-		a.bind(nthNil);
-		a.aconstNull();
-		a.areturn();
-		a.bind(n);
+		// mapcar, mapc, reduce, first ... tenth, rest and nth have no arm: their
+		// registered wrappers take every shape (mapcar over several lists, reduce with
+		// :from-end), report a wrong count naming the operator and signal the
+		// interpreter's type-error on a non-list, where the arms this replaced answered
+		// one list only, took a :from-end for the initial value, dropped a surplus
+		// argument and threw a NullPointerException on (first nil).
 
 		// ---- list (variadic) ----
 		n = special(a, OP, LispNames.LIST);
@@ -2599,6 +2457,10 @@ final class JvmEvalRuntimeBuilder {
 		}
 		a.branch(Opcode.GOTO, notArith);
 		a.bind(arith);
+		// no argument: the wrapper answers the identity ((+) is 0) or reports the count
+		// ((-) expects at least 1 argument)
+		a.aload(REST);
+		a.branch(Opcode.IFNULL, registryApply);
 		a.aload(OP);
 		a.invokestatic(this.k.lookupRef());
 		a.astore(TMP);
@@ -2663,15 +2525,23 @@ final class JvmEvalRuntimeBuilder {
 		a.areturn();
 		a.bind(notArith);
 
+		// ---- = < > <= >= /= : every argument evaluated, then each pair tested ----
+		// The wrappers are binary (a sort predicate stays a two-argument call), so a
+		// chain goes pairwise through them here: adjacent pairs for the ordering
+		// operators, every pair for /=. The registry path below would evaluate every
+		// argument too and then report the binary wrapper's count.
+		comparisonChain(a, OP, REST, ENV, FN, ACC, ELEM, ARGHEAD, ARGTAIL, NEWCELL, TMP, IDX, VALID);
+
 		// ---- generic named application ----
 		// Lisp-2: the operator resolves in the function namespace only. Variable
-		// bindings (lexical or global) never shadow a function. ARITY doubles as the
-		// one-shot case-flip guard until branch (b) assigns it on a registry hit: an
-		// unknown operator retries once with the case-flipped spelling (compiled
+		// bindings (lexical or global) never shadow a function. The ARITY slot is the
+		// one-shot case-flip guard here: an unknown operator retries once with the
+		// case-flipped spelling (compiled
 		// definitions are upcased, runtime-read references case-preserved, and vice
 		// versa) after the carcdr check falls through.
 		ConstantPool.MethodrefConstant applyToLowerCase = stringCaseRef("toLowerCase");
 		ConstantPool.MethodrefConstant applyToUpperCase = stringCaseRef("toUpperCase");
+		a.bind(registryApply);
 		a.iconst(0);
 		a.istore(ARITY);
 		int genericApply = a.label();
@@ -2695,11 +2565,15 @@ final class JvmEvalRuntimeBuilder {
 		a.invokestatic(this.k.applyRef());
 		a.areturn();
 		a.bind(notFenv);
-		// (b) registered function: evaluate exactly its arity, then apply
+		int notReg = a.label();
+		// (b) registered function: evaluate every argument form, then apply. The count is
+		// the spread dispatcher's to judge -- its case measures the list against the
+		// callee's lambda list and reports a wrong count naming the operator -- so no
+		// argument is dropped or padded here (evaluating exactly the registered arity
+		// answered (car 1 2) with a type-error on 1 and (cons 1) with (1)).
 		a.aload(OP);
 		a.invokestatic(this.k.lookupRef());
 		a.astore(TMP);
-		int notReg = a.label();
 		a.aload(TMP);
 		a.branch(Opcode.IFNULL, notReg);
 		a.iconst(1);
@@ -2712,25 +2586,7 @@ final class JvmEvalRuntimeBuilder {
 		a.aaload();
 		a.aastore();
 		a.astore(FN);
-		a.aload(TMP);
-		a.checkcast(this.k.objectArrayClass());
-		a.iconst(1);
-		a.aaload();
-		a.checkcast(this.k.integerClass());
-		a.invokevirtual(this.k.integerValue());
-		a.istore(ARITY);
-		// A negative arity marks a variadic function: evaluate every argument form
-		// (the _apply dispatch links the surplus into the rest list); a non-negative
-		// arity evaluates exactly that many, padding missing arguments with nil.
-		int fixedArity = a.label();
-		int applyCall = a.label();
-		a.iload(ARITY);
-		a.branch(Opcode.IFGE, fixedArity);
 		buildArgList(a, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP);
-		a.branch(Opcode.GOTO, applyCall);
-		a.bind(fixedArity);
-		buildNArgs(a, REST, ENV, ARITY, ARGHEAD, ARGTAIL, NEWCELL, TMP);
-		a.bind(applyCall);
 		a.aload(FN);
 		a.aload(ARGHEAD);
 		a.invokestatic(this.k.applyRef());
@@ -2739,9 +2595,9 @@ final class JvmEvalRuntimeBuilder {
 		// (c) car/cdr composition such as cadr -- BEFORE the case-flip retry, so the
 		// composition sees the original spelling (a returning match ends the eval).
 		carCdrComposition(a, OP, REST, ENV, ACC, IDX, CH, LEN, VALID);
-		// One case-flip retry of (a)+(b), guarded by ARITY's sign (branch (b) only
-		// assigns it on a registry hit, which returns; a second pass runs the
-		// composition again with the flipped spelling, harmlessly).
+		// One case-flip retry of (a)+(b), guarded by ARITY's sign (a hit in either
+		// returns; a second pass runs the composition again with the flipped spelling,
+		// harmlessly).
 		int noRetry = a.label();
 		int applyFlipped = a.label();
 		a.iload(ARITY);
@@ -2776,21 +2632,86 @@ final class JvmEvalRuntimeBuilder {
 	}
 
 	/**
-	 * Emits an {@code _eval} fixed car/cdr accessor (e.g. {@code second}): evaluates the
-	 * single argument, applies {@code cdrCount} cdrs then a final car, and returns.
+	 * Emits the {@code _eval} arm for the comparison operators: {@code (< a b c)} is
+	 * {@code (and (< a b) (< b c))} over arguments all evaluated first, as the
+	 * interpreter does, and {@code (/= a b c)} tests every pair. With no argument it
+	 * reports the interpreter's {@code < expects at least 1 argument, got 0} through
+	 * {@code _arityChk}; one argument answers {@code T}. Falls through for any other
+	 * operator.
 	 */
-	private void fixedAccessorEval(Asm a, int opSlot, String name, int restSlot, int envSlot, int accSlot,
-			int cdrCount) {
-		int next = special(a, opSlot, name);
-		evalCar(a, restSlot, envSlot);
-		a.astore(accSlot);
-		for (int i = 0; i < cdrCount; i++) {
-			cdr(a, accSlot);
-			a.astore(accSlot);
+	private void comparisonChain(Asm a, int opSlot, int restSlot, int envSlot, int fnSlot, int leftSlot, int rightSlot,
+			int headSlot, int tailSlot, int cellSlot, int tmpSlot, int shapeSlot, int allPairsSlot) {
+		String[] operators = { LispNames.EQ, LispNames.LT, LispNames.GT, LispNames.LE, LispNames.GE, LispNames.NE };
+		int chain = a.label();
+		int notComparison = a.label();
+		for (String operator : operators) {
+			int next = a.label();
+			a.aload(opSlot);
+			ldcStr(a, operator);
+			a.invokevirtual(this.k.objectEquals());
+			a.branch(Opcode.IFEQ, next);
+			ldcInt(a, this.k.arityOperators().shape(1, true, operator));
+			a.istore(shapeSlot);
+			a.iconst(LispNames.NE.equals(operator) ? 1 : 0);
+			a.istore(allPairsSlot);
+			a.branch(Opcode.GOTO, chain);
+			a.bind(next);
 		}
-		car(a, accSlot);
+		a.branch(Opcode.GOTO, notComparison);
+		a.bind(chain);
+		// no argument at all: _arityChk measures the empty list and throws
+		a.aload(restSlot);
+		a.iload(shapeSlot);
+		a.invokestatic(this.k.arityChkRef());
+		// fn = the binary wrapper, as a function value
+		a.aload(opSlot);
+		a.invokestatic(this.k.lookupRef());
+		a.astore(tmpSlot);
+		a.iconst(1);
+		a.anewarray(this.k.objectClass());
+		a.dup();
+		a.iconst(0);
+		a.aload(tmpSlot);
+		a.checkcast(this.k.objectArrayClass());
+		a.iconst(0);
+		a.aaload();
+		a.aastore();
+		a.astore(fnSlot);
+		buildArgList(a, restSlot, envSlot, headSlot, tailSlot, cellSlot, tmpSlot);
+		a.aload(headSlot);
+		a.astore(leftSlot);
+		int outer = a.label();
+		int inner = a.label();
+		int nextLeft = a.label();
+		int holds = a.label();
+		a.bind(outer);
+		cdr(a, leftSlot);
+		a.astore(rightSlot);
+		a.aload(rightSlot);
+		a.branch(Opcode.IFNONNULL, inner);
+		ldcStr(a, "T");
 		a.areturn();
-		a.bind(next);
+		a.bind(inner);
+		a.aload(rightSlot);
+		a.branch(Opcode.IFNULL, nextLeft);
+		a.aload(fnSlot);
+		car(a, leftSlot);
+		car(a, rightSlot);
+		a.invokestatic(this.k.invoke()[2]);
+		a.branch(Opcode.IFNONNULL, holds);
+		a.aconstNull();
+		a.areturn();
+		a.bind(holds);
+		a.iload(allPairsSlot);
+		a.branch(Opcode.IFEQ, nextLeft);
+		cdr(a, rightSlot);
+		a.astore(rightSlot);
+		a.branch(Opcode.GOTO, inner);
+		a.bind(nextLeft);
+		cdr(a, leftSlot);
+		a.astore(leftSlot);
+		a.branch(Opcode.GOTO, outer);
+		a.bind(notComparison);
 	}
 
 	/**

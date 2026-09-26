@@ -10,3 +10,5 @@
 | `java:field` | `(java:field "java.lang.Integer" "MAX_VALUE")` | マーシャリングされたフィールド値 |
 | `java:proxy` | `(java:proxy "java.lang.Runnable" (lambda (m) ...))` | callable を背後に持つインターフェースのインスタンス |
 
+呼び出しの実行前解決のために、さらに 2 つのシンボルがあります。`the` と `declare` で使う型指定子 `(java:object "fqcn")` と、実行時解決に回る呼び出しを報告する変数 `java:*warn-on-reflection*` です (ガイドの[実行前の呼び出し解決](../../guides/java-interop.md#resolving-calls-before-they-run))。
+

@@ -17,9 +17,13 @@ JVM; both WASM backends refuse it by name. `.todo/672`; the device kernel `.todo
   endian) then 32 int8 quants, 34 bytes, row-major. `read-sequence` / `write-sequence`
   therefore move a GGUF tensor as ONE transfer (`PackedBuffer` width 1, JVM `_readSeqPacked`'s
   `byte[]` arm) and a written matrix is what `llama.cpp` reads; `:start`/`:end` count bytes.
-- **The `byte[]` is load-bearing.** The packed integer vector stores one byte in eight
-  (`.kb/packed-integer-vectors.md`), which would make this type twice the f32 matrix it
-  exists to shrink. On the JVM a bare `byte[]` is also the free `instanceof` discriminator.
+- **The `byte[]` is load-bearing.** The packed integer vector stored one byte in eight when this
+  type arrived (`.todo/672`), which would have made it twice the f32 matrix it exists to shrink.
+  On the JVM the `byte[]` is SHARED with the `(unsigned-byte 8)` vector since 2026-09-26
+  (`byte[]{8, e0, ...}`, `.kb/packed-integer-vectors.md`): where both can exist, slot 0 tells them
+  apart -- this header's format code (1) against the octet vector's width tag (8) -- so **no format
+  code may be 8**, and every `instanceof byte[]` door here reads it (`emitMatrixTest`,
+  `emitQuantizedArm`, the `--simd` lane guard, `JvmGpuTemplate.gpuMatvec`).
 - JVM representation: `[format:int LE][rank:int][dim_k:int...]` then the blocks, data offset
   `8 + 4 * rank`. Three places spell it: `JvmQuantizedMatrixRuntimeBuilder` (the `_qm*`
   helpers), `JvmSimdVectorTemplate.qmOff/qmDim` and `JvmGpuTemplate.qmOff/qmDim` (the

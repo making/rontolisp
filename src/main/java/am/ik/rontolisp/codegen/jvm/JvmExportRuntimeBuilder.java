@@ -78,7 +78,7 @@ final class JvmExportRuntimeBuilder {
 
 	private static final String BYTES_IN = "_exBytesIn";
 
-	private static final String BYTES_IN_DESC = "([B)[J";
+	private static final String BYTES_IN_DESC = "([B)[B";
 
 	private static final String BYTES_OUT = "_exBytesOut";
 
@@ -298,8 +298,6 @@ final class JvmExportRuntimeBuilder {
 
 		final ClassConstant stringClass;
 
-		final ClassConstant longArrayClass;
-
 		final ClassConstant thisClassConstant;
 
 		final @Nullable MethodrefConstant floatArrayArgument;
@@ -321,7 +319,6 @@ final class JvmExportRuntimeBuilder {
 			}
 			this.longClass = cp.addClass(cp.addUtf8("java/lang/Long"));
 			this.stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
-			this.longArrayClass = cp.addClass(cp.addUtf8("[J"));
 			ClassConstant doubleClass = cp.addClass(cp.addUtf8("java/lang/Double"));
 			ClassConstant numberClass = cp.addClass(cp.addUtf8("java/lang/Number"));
 			this.longValueOf = cp.addMethodref(this.longClass,
@@ -672,12 +669,14 @@ final class JvmExportRuntimeBuilder {
 		return new BuiltMethod(cp.addUtf8(UNFRAME), cp.addUtf8(UNFRAME_DESC), 5, 3, asm.code, false);
 	}
 
-	// _exBytesIn(bytes): a fresh packed (unsigned-byte 8) vector — long[]{8, e0, ...},
-	// the width-headered representation .kb/packed-integer-vectors.md pins — with each
-	// byte widened unsigned.
+	// _exBytesIn(bytes): a fresh packed (unsigned-byte 8) vector -- byte[]{8, e0, ...},
+	// the width-headered representation .kb/packed-integer-vectors.md pins -- holding a
+	// copy of the bytes.
 	private static BuiltMethod buildBytesIn(ConstantPool cp) {
+		MethodrefConstant arraycopy = cp.addMethodref(cp.addClass(cp.addUtf8("java/lang/System")),
+				cp.addNameAndType(cp.addUtf8("arraycopy"), cp.addUtf8("(Ljava/lang/Object;ILjava/lang/Object;II)V")));
 		JvmAsm asm = new JvmAsm();
-		// n = bytes.length; r = new long[n + 1]; r[0] = 8;
+		// n = bytes.length; r = new byte[n + 1]; r[0] = 8;
 		asm.code.add(Opcode.ALOAD_0);
 		asm.code.add(Opcode.ARRAYLENGTH);
 		asm.code.add(Opcode.ISTORE_1);
@@ -685,108 +684,61 @@ final class JvmExportRuntimeBuilder {
 		asm.code.add(Opcode.ICONST_1);
 		asm.code.add(Opcode.IADD);
 		asm.code.add(Opcode.NEWARRAY);
-		asm.code.add(11); // T_LONG
+		asm.code.add(8); // T_BYTE
 		asm.code.add(Opcode.ASTORE_2);
 		asm.code.add(Opcode.ALOAD_2);
 		asm.code.add(Opcode.ICONST_0);
-		asm.code.add(Opcode.LDC2_W);
-		JvmRuntimeBuilder.emitU2(asm.code, cp.addLong(8L).index());
-		asm.code.add(Opcode.LASTORE);
-		// for (i = 0; i < n; i++) r[i + 1] = bytes[i] & 0xFF;
-		asm.code.add(Opcode.ICONST_0);
-		asm.code.add(Opcode.ISTORE_3);
-		int loop = asm.label();
-		int end = asm.label();
-		asm.bind(loop);
-		asm.code.add(Opcode.ILOAD_3);
-		asm.code.add(Opcode.ILOAD_1);
-		asm.branch(Opcode.IF_ICMPGE, end);
-		asm.code.add(Opcode.ALOAD_2);
-		asm.code.add(Opcode.ILOAD_3);
-		asm.code.add(Opcode.ICONST_1);
-		asm.code.add(Opcode.IADD);
+		asm.code.add(Opcode.BIPUSH);
+		asm.code.add(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+		asm.code.add(Opcode.BASTORE);
+		// System.arraycopy(bytes, 0, r, 1, n)
 		asm.code.add(Opcode.ALOAD_0);
-		asm.code.add(Opcode.ILOAD_3);
-		asm.code.add(Opcode.BALOAD);
-		asm.code.add(Opcode.SIPUSH);
-		JvmRuntimeBuilder.emitU2(asm.code, 255);
-		asm.code.add(Opcode.IAND);
-		asm.code.add(Opcode.I2L);
-		asm.code.add(Opcode.LASTORE);
-		asm.code.add(Opcode.IINC);
-		asm.code.add(3);
-		asm.code.add(1);
-		asm.branch(Opcode.GOTO, loop);
-		asm.bind(end);
+		asm.code.add(Opcode.ICONST_0);
+		asm.code.add(Opcode.ALOAD_2);
+		asm.code.add(Opcode.ICONST_1);
+		asm.code.add(Opcode.ILOAD_1);
+		invoke(asm, Opcode.INVOKESTATIC, arraycopy);
 		asm.code.add(Opcode.ALOAD_2);
 		asm.code.add(Opcode.ARETURN);
-		return new BuiltMethod(cp.addUtf8(BYTES_IN), cp.addUtf8(BYTES_IN_DESC), 5, 4, asm.code, false);
+		return new BuiltMethod(cp.addUtf8(BYTES_IN), cp.addUtf8(BYTES_IN_DESC), 5, 3, asm.code, false);
 	}
 
 	// _exBytesOut(value): the byte[] copy of a packed (unsigned-byte 8) vector
-	// (long[]{8, e0, ...}); any other value — including a packed vector of another
-	// width — throws ClassCastException.
+	// (byte[]{8, e0, ...}); any other value -- a packed vector of another width, and a
+	// quantized matrix, whose byte[] starts with its format code -- throws
+	// ClassCastException.
 	private static BuiltMethod buildBytesOut(ConstantPool cp, Refs refs) {
+		ClassConstant byteArrayClass = cp.addClass(cp.addUtf8("[B"));
+		MethodrefConstant copyOfRange = cp.addMethodref(cp.addClass(cp.addUtf8("java/util/Arrays")),
+				cp.addNameAndType(cp.addUtf8("copyOfRange"), cp.addUtf8("([BII)[B")));
 		JvmAsm asm = new JvmAsm();
 		int throwLabel = asm.label();
+		// if (value instanceof byte[] b && b[0] == 8) return Arrays.copyOfRange(b, 1,
+		// b.length)
 		asm.code.add(Opcode.ALOAD_0);
 		asm.code.add(Opcode.INSTANCEOF);
-		JvmRuntimeBuilder.emitU2(asm.code, refs.longArrayClass.index());
+		JvmRuntimeBuilder.emitU2(asm.code, byteArrayClass.index());
 		asm.branch(Opcode.IFEQ, throwLabel);
 		asm.code.add(Opcode.ALOAD_0);
 		asm.code.add(Opcode.CHECKCAST);
-		JvmRuntimeBuilder.emitU2(asm.code, refs.longArrayClass.index());
-		asm.code.add(Opcode.ASTORE_1);
-		asm.code.add(Opcode.ALOAD_1);
+		JvmRuntimeBuilder.emitU2(asm.code, byteArrayClass.index());
+		asm.code.add(Opcode.ICONST_0);
+		asm.code.add(Opcode.BALOAD);
+		asm.code.add(Opcode.BIPUSH);
+		asm.code.add(JvmIntArrayRuntimeBuilder.OCTET_TAG);
+		asm.branch(Opcode.IF_ICMPNE, throwLabel);
+		asm.code.add(Opcode.ALOAD_0);
+		asm.code.add(Opcode.CHECKCAST);
+		JvmRuntimeBuilder.emitU2(asm.code, byteArrayClass.index());
+		asm.code.add(Opcode.DUP);
+		asm.code.add(Opcode.ICONST_1);
+		asm.code.add(Opcode.SWAP);
 		asm.code.add(Opcode.ARRAYLENGTH);
-		asm.code.add(Opcode.ISTORE_2);
-		asm.code.add(Opcode.ILOAD_2);
-		asm.code.add(Opcode.ICONST_1);
-		asm.branch(Opcode.IF_ICMPLT, throwLabel);
-		asm.code.add(Opcode.ALOAD_1);
-		asm.code.add(Opcode.ICONST_0);
-		asm.code.add(Opcode.LALOAD);
-		asm.code.add(Opcode.LDC2_W);
-		JvmRuntimeBuilder.emitU2(asm.code, cp.addLong(8L).index());
-		asm.code.add(Opcode.LCMP);
-		asm.branch(Opcode.IFNE, throwLabel);
-		// n = value.length - 1; out = new byte[n];
-		asm.code.add(Opcode.ILOAD_2);
-		asm.code.add(Opcode.ICONST_1);
-		asm.code.add(Opcode.ISUB);
-		asm.code.add(Opcode.ISTORE_3);
-		asm.code.add(Opcode.ILOAD_3);
-		asm.code.add(Opcode.NEWARRAY);
-		asm.code.add(8); // T_BYTE
-		emitStore(asm, Opcode.ASTORE, 4);
-		asm.code.add(Opcode.ICONST_0);
-		emitStore(asm, Opcode.ISTORE, 5);
-		int loop = asm.label();
-		int end = asm.label();
-		asm.bind(loop);
-		emitLoad(asm, Opcode.ILOAD, 5);
-		asm.code.add(Opcode.ILOAD_3);
-		asm.branch(Opcode.IF_ICMPGE, end);
-		emitLoad(asm, Opcode.ALOAD, 4);
-		emitLoad(asm, Opcode.ILOAD, 5);
-		asm.code.add(Opcode.ALOAD_1);
-		emitLoad(asm, Opcode.ILOAD, 5);
-		asm.code.add(Opcode.ICONST_1);
-		asm.code.add(Opcode.IADD);
-		asm.code.add(Opcode.LALOAD);
-		asm.code.add(Opcode.L2I);
-		asm.code.add(Opcode.I2B);
-		asm.code.add(Opcode.BASTORE);
-		asm.code.add(Opcode.IINC);
-		asm.code.add(5);
-		asm.code.add(1);
-		asm.branch(Opcode.GOTO, loop);
-		asm.bind(end);
-		emitLoad(asm, Opcode.ALOAD, 4);
+		invoke(asm, Opcode.INVOKESTATIC, copyOfRange);
 		asm.code.add(Opcode.ARETURN);
 		asm.bind(throwLabel);
 		emitThrowCce(asm, cp, refs, "rontolisp:jvm-export: the function did not return an (unsigned-byte 8) vector: ");
-		return new BuiltMethod(cp.addUtf8(BYTES_OUT), cp.addUtf8(BYTES_OUT_DESC), 6, 6, asm.code, false);
+		return new BuiltMethod(cp.addUtf8(BYTES_OUT), cp.addUtf8(BYTES_OUT_DESC), 6, 1, asm.code, false);
 	}
 
 	// new ClassCastException(prefix + _lispToString(value in slot 0)); throw

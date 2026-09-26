@@ -160,6 +160,15 @@ class LispReaderTest {
 	}
 
 	@Test
+	void readsASupplementaryPlaneCharacterLiteralAsOneCharacter() {
+		// U+1F600 (GRINNING FACE) is a surrogate PAIR in the UTF-16 source. Scanning
+		// the char right after '#\' one UTF-16 unit at a time reads only the high
+		// surrogate and strands the low surrogate to be lexed as its own, unrelated
+		// token -- the bug this test pins.
+		assertThat(LispReader.readFromString("#\\😀")).isEqualTo(new LispChar(0x1F600));
+	}
+
+	@Test
 	void readerErrorOnALaterLineReportsTheRightLine() {
 		// Line/column are counted by newline, so an error on the second line names
 		// line 2, not a flattened single line.

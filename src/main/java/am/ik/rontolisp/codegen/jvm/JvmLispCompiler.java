@@ -215,6 +215,24 @@ public final class JvmLispCompiler implements LispCompiler {
 	private final int poolIndexOrigin;
 
 	/**
+	 * The Java release {@code java:} sites resolve against ({@code --java-release}), or
+	 * {@code null} for the newest the JDK holds.
+	 */
+	private final @Nullable Integer javaRelease;
+
+	/** The class path {@code java:} sites resolve against after the JDK. */
+	private final List<java.nio.file.Path> javaClasspath;
+
+	/** Whether a {@code java:} site left to run time is reported. */
+	private final boolean warnJavaReflection;
+
+	/**
+	 * The class files {@code java:} sites resolve against, opened by the first attempt
+	 * that compiles one and closed when {@link #compile(List)} returns.
+	 */
+	private @Nullable JvmClassFileLookup javaClasses;
+
+	/**
 	 * The methods something outside the class's own bytecode finds by NAME, which
 	 * therefore stay in the class when it is split: {@code _apply} and {@code _strv},
 	 * which the embedded java:/objc:/ffi: bridges look up with {@code getDeclaredMethod},
@@ -377,6 +395,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		// pool no class can carry down the single-class path.
 		this.classPoolLimit = Math.clamp(builder.classPoolLimit, 1, ConstantPool.MAX_INDEX);
 		this.poolIndexOrigin = builder.poolIndexOrigin;
+		this.javaRelease = builder.javaRelease;
+		this.javaClasspath = builder.javaClasspath;
+		this.warnJavaReflection = builder.warnJavaReflection;
 	}
 
 	/**
@@ -418,6 +439,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		private int classPoolLimit = Integer.getInteger("rontolisp.jvm.class-pool-limit", ConstantPool.MAX_INDEX);
 
 		private int poolIndexOrigin = Integer.getInteger("rontolisp.jvm.pool-index-origin", 1);
+
+		private @Nullable Integer javaRelease;
+
+		private List<java.nio.file.Path> javaClasspath = List.of();
+
+		private boolean warnJavaReflection;
 
 		private Builder() {
 		}
@@ -628,6 +655,43 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 
 		/**
+		 * Sets the Java release {@code java:} call sites are resolved against
+		 * ({@code --java-release}): the platform classes are read from the JDK's
+		 * {@code ct.sym} for that release. Left alone, the newest release the JDK holds
+		 * -- its own -- which is what the interpreter on that JDK resolves against.
+		 * @param javaRelease the release, or {@code null} for the default
+		 * @return this builder
+		 */
+		public Builder javaRelease(@Nullable Integer javaRelease) {
+			this.javaRelease = javaRelease;
+			return this;
+		}
+
+		/**
+		 * Sets the class path {@code java:} call sites are resolved against after the
+		 * platform ({@code --java-classpath}): directories and jar/zip archives.
+		 * @param javaClasspath the entries, searched in order
+		 * @return this builder
+		 */
+		public Builder javaClasspath(List<java.nio.file.Path> javaClasspath) {
+			this.javaClasspath = List.copyOf(javaClasspath);
+			return this;
+		}
+
+		/**
+		 * Reports each {@code java:} call site that cannot be resolved at compile time
+		 * and is resolved by reflection at run time instead
+		 * ({@code --warn-java-reflection}, the compile path's
+		 * {@code java:*warn-on-reflection*}).
+		 * @param warnJavaReflection whether to report them
+		 * @return this builder
+		 */
+		public Builder warnJavaReflection(boolean warnJavaReflection) {
+			this.warnJavaReflection = warnJavaReflection;
+			return this;
+		}
+
+		/**
 		 * Builds the compiler.
 		 * @return a new JVM compiler
 		 * @throws NullPointerException when no class name was set
@@ -724,6 +788,19 @@ public final class JvmLispCompiler implements LispCompiler {
 		// `forced` it strictly grows -- a name is added, or its target shrinks toward
 		// the floor -- so the loop terminates.
 		Map<String, AstOutliner.Budget> outline = new LinkedHashMap<>();
+		try {
+			return compileAttempts(program, forced, outline);
+		}
+		finally {
+			JvmClassFileLookup classes = this.javaClasses;
+			if (classes != null) {
+				classes.close();
+				this.javaClasses = null;
+			}
+		}
+	}
+
+	private byte[] compileAttempts(List<LispVal> program, Set<String> forced, Map<String, AstOutliner.Budget> outline) {
 		while (true) {
 			// A retried attempt's bytecode is thrown away, and so are its warnings: a
 			// warning printed as it was emitted said the same thing twice for one compile
@@ -771,6 +848,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		// the rest of compilation sees canonical names.
 		PackageResolver packageResolver = new PackageResolver();
 		program = packageResolver.resolveProgram(program);
+		// The host types of variables -- declared, inferred from a let initializer,
+		// proclaimed -- onto the java: sites they type, as the interpreter lowers each
+		// top-level form before running it (compiler/JavaDeclarations): the site
+		// resolver then reads the site alone.
+		program = lowerJavaDeclarations(program);
 		// A quoted designator of a wrapped built-in becomes #'name before any wrapper
 		// gate scans the program for that spelling (compiler/FunctionDesignators).
 		program = am.ik.rontolisp.compiler.FunctionDesignators.normalizeBuiltinDesignators(program);
@@ -1312,6 +1394,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (javaRuntime != null) {
 			this.bridgeClassFiles.putAll(javaRuntime.classFiles());
 		}
+		// The sites resolve against class files, never the classes this compiler runs
+		// on (compiler/JavaSiteResolver, .kb/java-interop.md).
+		final JvmJavaSites javaSites = usesJava ? new JvmJavaSites(javaClasses()) : null;
+		if (javaSites != null) {
+			if (!javaClasses().hasPlatform()) {
+				CompileWarnings.warn("warning: no JDK found (java.home, JAVA_HOME or java on PATH holds no lib/ct.sym):"
+						+ " java: sites that name JDK classes are resolved at run time");
+			}
+			javaSites.report(program, this.warnJavaReflection);
+		}
 
 		// objc: runtime: emitted only when the program uses one of the seven objc: verbs
 		// (an appkit: program does, through the spliced appkit.lisp). It embeds the whole
@@ -1577,7 +1669,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.LOAD))) {
 			wrapperExcludes.add(LispNames.READ_FROM_STRING);
 		}
-		if (!usesFuncallValue) {
+		// With the eval runtime on, a runtime funcall designator -- (eval '(funcall)), a
+		// read or interned FUNCALL -- resolves through _lookup like any wrapper name, and
+		// the _apply its body calls is there.
+		if (!usesFuncallValue && !usesEval) {
 			wrapperExcludes.add(LispNames.FUNCALL);
 		}
 		// The map*/every/some family, gated as a whole rather than on each name: with
@@ -2267,6 +2362,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.tlsListenP12Helper(tlsListenP12HelperMethod)
 			.httpHandlerRuntime(httpHandlerRuntime)
 			.javaOps(javaRuntime != null ? javaRuntime.ops() : null)
+			.javaSites(javaSites)
 			.objcOps(objcRuntime != null ? objcRuntime.ops() : null)
 			.ffiOps(ffiRuntime != null ? ffiRuntime.ops() : null)
 			.dynamic(this.dynamic)
@@ -2826,6 +2922,14 @@ public final class JvmLispCompiler implements LispCompiler {
 				.functions(functions)
 				.complexValues(usesComplex)
 				.hasComplexField(hasComplexField)
+				// _arityChk comes with _apply (reportsCount below), and only then does
+				// the
+				// runtime reference it
+				.arityChkRef(usesApplyRuntime ? cp.addMethodref(thisClass,
+						cp.addNameAndType(cp.addUtf8(JvmRuntimeBuilder.ARITY_CHK_NAME),
+								cp.addUtf8(JvmRuntimeBuilder.ARITY_CHK_DESC)))
+						: null)
+				.arityOperators(arityOperators)
 				.build();
 			if (usesEval) {
 				evalCode = JvmEvalRuntimeBuilder.buildEval(ec);
@@ -2974,19 +3078,20 @@ public final class JvmLispCompiler implements LispCompiler {
 				built.addAll(JvmFloatArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass,
 						gpuRuntime != null ? gpuRuntime.ops().get(JvmGpuRuntimeBuilder.WRITTEN) : null,
 						gpuRuntime != null ? gpuRuntime.ops().get(JvmGpuRuntimeBuilder.MATERIALIZE) : null,
-						usesQuantized));
+						usesQuantized, usesIntArray));
 				if (usesQuantized) {
 					// The quantized matrix's own helpers; the _fv* byte[] arms above
 					// delegate to them.
-					built.addAll(JvmQuantizedMatrixRuntimeBuilder.build(cp, thisClass));
+					built.addAll(JvmQuantizedMatrixRuntimeBuilder.build(cp, thisClass, usesIntArray));
 				}
 			}
-			// The packed integer-vector helpers (_iv*) dispatch on instanceof long[]
-			// and delegate any other array shape down the chain (to the _fv* tier when
-			// it is emitted, else straight to the general helpers).
+			// The packed integer-vector helpers (_iv*) dispatch on the representation
+			// (byte[] at width 8, long[] at 16/32) and delegate any other array shape
+			// down the chain (to the _fv* tier when it is emitted, else straight to the
+			// general helpers).
 			if (usesIntArray) {
-				built.addAll(
-						JvmIntArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass, usesFloatArray));
+				built.addAll(JvmIntArrayRuntimeBuilder.build(cp, objectClass, objectArrayClass, thisClass,
+						usesFloatArray, usesQuantized));
 			}
 			// widen-float-bits/narrow-float-bits (.todo/671): bulk f16/bf16 bit <->
 			// packed-float conversion, over the same bare double[]/float[]/short[]/long[]
@@ -3023,13 +3128,14 @@ public final class JvmLispCompiler implements LispCompiler {
 									cp.addUtf8(JvmQuantizedMatrixRuntimeBuilder.TO_STRING_DESC)))
 							: null);
 		}
-		// The packed integer-vector print branch: a long[] renders as a plain #(...)
-		// vector (CL prints specialized vectors this way) by converting to a general
-		// array (_ivToGeneral) and reusing the general renderer -- no prefix rewrite,
-		// unlike the #d/#f float syntax.
+		// The packed integer-vector print branch: a byte[]/long[] renders as a plain
+		// #(...) vector (CL prints specialized vectors this way) by converting to a
+		// general array (_ivToGeneral) and reusing the general renderer -- no prefix
+		// rewrite, unlike the #d/#f float syntax.
 		JvmRuntimeBuilder.@Nullable PackedIntPrint packedIntPrint = null;
 		if (usesIntArray) {
 			packedIntPrint = new JvmRuntimeBuilder.PackedIntPrint(cp.addClass(cp.addUtf8("[J")),
+					cp.addClass(cp.addUtf8("[B")), usesQuantized,
 					cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmIntArrayRuntimeBuilder.TO_GENERAL),
 							cp.addUtf8(JvmIntArrayRuntimeBuilder.TO_GENERAL_DESC))));
 		}
@@ -3260,7 +3366,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		final JvmSecureRandomRuntimeBuilder.@Nullable SecureRandomRuntime secureRandomRuntime = usesSecureRandom
 				? JvmSecureRandomRuntimeBuilder.build(cp, thisClass, longValueOf) : null;
 		final JvmAsyncRuntimeBuilder.@Nullable AsyncMethod octetsPackedRuntime = usesOctetsPacked
-				? JvmAsyncRuntimeBuilder.buildOctetsToString(cp, stringConcat) : null;
+				? JvmAsyncRuntimeBuilder.buildOctetsToString(cp) : null;
 		final List<JvmMutexRuntimeBuilder.MutexMethod> mutexMethods = usesMutexes ? JvmMutexRuntimeBuilder.build(cp)
 				: List.of();
 		final JvmSocketRuntimeBuilder.@Nullable SocketRuntime socketRuntime = usesSockets
@@ -4797,6 +4903,39 @@ public final class JvmLispCompiler implements LispCompiler {
 		return false;
 	}
 
+	// The host types the program text gives its variables lowered onto the java: sites
+	// they type, every top-level form in order (compiler/JavaDeclarations); a program
+	// that mentions no java: symbol comes back unchanged without opening the classes.
+	private List<LispVal> lowerJavaDeclarations(List<LispVal> program) {
+		if (program.stream().noneMatch(am.ik.rontolisp.compiler.JavaDeclarations::mentionsJava)) {
+			return program;
+		}
+		am.ik.rontolisp.compiler.JavaDeclarations declarations = new am.ik.rontolisp.compiler.JavaDeclarations(
+				javaClasses());
+		List<LispVal> lowered = null;
+		for (int i = 0; i < program.size(); i++) {
+			LispVal form = program.get(i);
+			LispVal result = declarations.lower(form, null);
+			if (result != form) {
+				if (lowered == null) {
+					lowered = new ArrayList<>(program);
+				}
+				lowered.set(i, result);
+			}
+		}
+		return lowered == null ? program : lowered;
+	}
+
+	// The class files java: sites resolve against, opened once per compile.
+	private JvmClassFileLookup javaClasses() {
+		JvmClassFileLookup classes = this.javaClasses;
+		if (classes == null) {
+			classes = JvmClassFileLookup.forJdk(this.javaRelease, this.javaClasspath);
+			this.javaClasses = classes;
+		}
+		return classes;
+	}
+
 	// True when the program references any of the five java: interop functions, so the
 	// bridge runtime (and the eval runtime its callbacks need) is emitted.
 	private static boolean programUsesAnyJavaOp(List<LispVal> program) {
@@ -6055,6 +6194,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		final @Nullable Map<String, MethodrefConstant> javaOps;
 
+		/** How each {@code java:} site resolves; null when the program has none. */
+		final @Nullable JvmJavaSites javaSites;
+
 		/**
 		 * The {@code objc:} bridge references ({@code init} plus one per verb); null
 		 * unless the program uses an {@code objc:} verb.
@@ -6958,6 +7100,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.tlsListenP12Helper = builder.tlsListenP12Helper;
 			this.httpHandlerRuntime = builder.httpHandlerRuntime;
 			this.javaOps = builder.javaOps;
+			this.javaSites = builder.javaSites;
 			this.objcOps = builder.objcOps;
 			this.ffiOps = builder.ffiOps;
 			this.simdOps = builder.simdOps;
@@ -7277,6 +7420,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private JvmHttpHandlerRuntimeBuilder.@Nullable HttpHandlerRuntime httpHandlerRuntime;
 
 			private @Nullable Map<String, MethodrefConstant> javaOps;
+
+			private @Nullable JvmJavaSites javaSites;
 
 			private @Nullable Map<String, MethodrefConstant> objcOps;
 
@@ -7700,6 +7845,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder javaOps(@Nullable Map<String, MethodrefConstant> javaOps) {
 				this.javaOps = javaOps;
+				return this;
+			}
+
+			Builder javaSites(@Nullable JvmJavaSites javaSites) {
+				this.javaSites = javaSites;
 				return this;
 			}
 

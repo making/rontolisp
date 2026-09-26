@@ -67,6 +67,73 @@ stubs to hold fixed function indices, JVM needs none.
   on both compile paths and in the CLI/playground before the tree-shaker; only `(boundp (intern ...))`
   opens it (`.kb/compile-time-boundp.md`).
 
+## Argument counts
+
+**Invariant: a wrong argument count inside a compiled `eval` is the interpreter's `program-error`,
+with its text, on both backends** (2026-09-26). Pinned by ci-spec
+`eval-wrong-arity-signals-program-error` and `eval-inline-operators-check-their-argument-count`,
+`JvmLispCompilerTest.compileAndRunEvalReportsAWrongArgumentCountAsTheInterpreterDoes` /
+`compileAndRunEvalChecksTheCountOfTheOperatorsItUsedToInline`, their `WasmLispCompilerIntegrationTest`
+twins, `LispEvaluatorTest.theListAccessorsFuncallAndReduceReportAWrongArgumentCount`.
+
+- **A registered function gets EVERY argument form evaluated** and `_apply` hands the list to the
+  spread dispatcher, whose case guard (`_arityChk` / `_arity_chk`) judges the count and names the
+  operator ([error-handling.md](error-handling.md), "A wrong argument COUNT"). The registry's
+  arity used to be the number of forms `_eval` evaluated, padding with nil and dropping the
+  surplus: `(car 1 2)` raised a type-error on `1`, `(cons 1)` answered `(1)`.
+- **`= < > <= >= /=` chain in `_eval`** (`comparisonChain` / `emitComparisonChain`): their wrappers
+  stay binary, since a sort predicate is a two-argument call and a variadic wrapper would cons a
+  rest list per comparison, so the arm evaluates every argument and tests adjacent pairs (every
+  pair for `/=`) through the binary wrapper. Without it the first bullet would have turned the old
+  "extra arguments ignored" (`(< 1 3 2)` => T) into a count error. `(<)` reports `< expects at
+  least 1 argument` through `_arityChk` with the operator's shape; on wasm the shape carries the
+  `<` wrapper's funcId when it is in the named set, and the call traps where the module reports
+  no count (no EH landing pad).
+- **`apply` is a catalog wrapper** (`BuiltinFunctionWrappers.applyWrapper`, `(f a &rest r)`), so
+  `eval` reaches it through the registry like any name and the report says `APPLY expects at least
+  2 arguments`; it also made `#'apply` compile. It refuses a last argument that is no proper list
+  with the interpreter's `APPLY: last argument must be a list`. `apply` was unknown inside `eval`
+  before, which is why `(eval '(apply #'car '(1 2)))` answered nil.
+- **An interpreted closure checks its count only without a `&` marker** in its lambda list: the
+  runtime `lambda` binds such a list positionally (documented), so its parameter count is no
+  count a call must match. The check is `_arityChk(argList, 2 * params)` in `_apply`'s closure
+  arm; on wasm it exists only where `_arity_chk` does.
+- **What a fixed-arity wrapper now reports** instead of silently dropping: `find` / `find-if` with
+  `:test`/`:key`, `sort` with `:key`, `make-list` with `:initial-element` (`FIND expects 2
+  arguments, got 4`), the same answer `(funcall #'find ...)` gives compiled. Most sequence
+  wrappers already take their keywords.
+- **Size** (2026-09-26, `--class-name P` / wasm Preview 1 bytes): `(print (eval '(+ 1 2)))`
+  317,887 -> 319,303 JVM, 247,064 -> 247,775 wasm; the same under `handler-case` 449,779 ->
+  451,309 / 375,740 -> 376,831. A program without `eval` is unchanged.
+- **The inline operators** (2026-09-26). An `_eval` arm handles only the call shape it is written
+  for and hands any other to the generic application, whose registered wrapper reports the count
+  naming the operator: `funcall` with no argument, `+ - * /` with none (`(+)` is 0 through the
+  wrapper, `(-)` reports). `mapcar`/`mapc`, `reduce`, `first` ... `tenth`, `rest` and `nth` have
+  NO arm any more: the arms walked one list only (`(mapcar #'+ '(1 2) '(10 20))` answered
+  `(1 2)`), took a `:from-end` for the initial value, dropped a surplus argument, and threw a
+  NullPointerException on `(first nil)` / `(reduce #'+ nil)` (a trap on wasm). What that needed:
+  - a `reduce` catalog wrapper (`BuiltinFunctionWrappers.reduceWrapper`, `(f seq &rest kw)` fed
+    back into `expandReduce`), which also made `#'reduce` compile at all; the interpreter's own
+    `REDUCE` function value evaluates a keyword call through the same expansion;
+  - on the JVM, the `funcall` wrapper kept under `usesEval` (`wrapperExcludes` dropped it unless
+    the program spelled `#'funcall`, so `(eval '(funcall))` answered nil);
+  - `eval` counts itself -- `_arityChk` / `_arity_chk` with an operator no callee carries
+    ([error-handling.md](error-handling.md), "Inside a compiled `eval`").
+  The interpreter's `first` ... `tenth`, `rest` and `nth` expand only a call of their own shape
+  (`LispEvaluator`, `properLength`), so any other count reaches the Java built-in and reports
+  (`FIRST expects 1 argument, got 2`); the expansion used to drop the surplus, and `(nth 1)`
+  indexed past the form. `(funcall)` is a `program-error` there too.
+- **Every parameter count answers** (2026-09-26). The JVM `_lookup` filtered out functions of more
+  than `MAX_CALLABLE_ARITY` (7) parameters -- a leftover of the per-arity `_apply`; `_apply` hands
+  every list to the spread dispatcher now -- so `(eval '(f a1 ... a8))` answered nil and
+  `(funcall 'f ...)` was an undefined function. On wasm a defun past 10 parameters is a rest-list
+  defun that counts itself ([wasm-callable-arity.md](wasm-callable-arity.md)).
+- **Size of the above** (2026-09-26, same method): `(print (eval '(+ 1 2)))` 319,302 -> 323,589 JVM,
+  247,775 -> 250,901 wasm; under `handler-case` 428,184 -> 432,840 / 359,713 -> 364,156 -- the
+  reduce wrapper's keyword expansion is most of it. `(print (+ 1 2))` unchanged (6,023 / 348); an
+  11-parameter defun called directly, wasm 1,426 -> 2,284; `(print (mapcar #'- '(1 2)))` 23,931 ->
+  24,118 JVM, 9,673 -> 2,880 wasm.
+
 ## Top-level global mirroring
 
 When `usesEval`, a top-level `setq`/`defvar`/`defparameter`/`defconstant` (`Ctx.topLevel`) also calls

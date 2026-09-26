@@ -103,7 +103,7 @@ class SchemeReaderTest {
 		List<LispVal> read = read("#u8(1 #xff 0) #U8() #u8( 7 )");
 		assertThat(read).allSatisfy(datum -> assertThat(datum).isInstanceOf(LispIntVector.class));
 		assertThat(read.stream().map(datum -> ((LispIntVector) datum).width()).toList()).containsOnly(8);
-		assertThat(read.stream().map(datum -> Arrays.toString(((LispIntVector) datum).data())).toList())
+		assertThat(read.stream().map(datum -> Arrays.toString(((LispIntVector) datum).toLongArray())).toList())
 			.containsExactly("[1, 255, 0]", "[]", "[7]");
 	}
 

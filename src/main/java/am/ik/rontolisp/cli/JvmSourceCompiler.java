@@ -67,6 +67,12 @@ public final class JvmSourceCompiler {
 
 	private SourceStandards standards = SourceStandards.DEFAULT;
 
+	private @Nullable Integer javaRelease;
+
+	private List<java.nio.file.Path> javaClasspath = List.of();
+
+	private boolean warnJavaReflection;
+
 	/**
 	 * @param className the class to emit, in either the {@code com.acme.Kernels} or the
 	 * {@code com/acme/Kernels} spelling
@@ -208,6 +214,33 @@ public final class JvmSourceCompiler {
 	}
 
 	/**
+	 * @param javaRelease {@code --java-release}: the Java release {@code java:} sites
+	 * resolve against, or {@code null} for the newest the JDK holds
+	 */
+	public JvmSourceCompiler javaRelease(@Nullable Integer javaRelease) {
+		this.javaRelease = javaRelease;
+		return this;
+	}
+
+	/**
+	 * @param javaClasspath {@code --java-classpath}: the directories and archives
+	 * {@code java:} sites resolve against after the JDK
+	 */
+	public JvmSourceCompiler javaClasspath(List<java.nio.file.Path> javaClasspath) {
+		this.javaClasspath = List.copyOf(javaClasspath);
+		return this;
+	}
+
+	/**
+	 * @param warnJavaReflection {@code --warn-java-reflection}: report each {@code java:}
+	 * site left to run-time reflection
+	 */
+	public JvmSourceCompiler warnJavaReflection(boolean warnJavaReflection) {
+		this.warnJavaReflection = warnJavaReflection;
+		return this;
+	}
+
+	/**
 	 * Compiles a source text.
 	 * <p>
 	 * A failure carries the frontend's {@code file:line:column:} prefix, exactly as the
@@ -295,6 +328,9 @@ public final class JvmSourceCompiler {
 			.noMain(this.noMain)
 			.servlet(this.servlet)
 			.runtimeFeatures(features.names())
+			.javaRelease(this.javaRelease)
+			.javaClasspath(this.javaClasspath)
+			.warnJavaReflection(this.warnJavaReflection)
 			.build();
 		byte[] bytes = compiler.compile(TlsPemInliner.inline(program, this.baseDir));
 		// A :float-vector / :float-matrix export hands out a handle class; it travels

@@ -1005,7 +1005,7 @@ dispatching `defun f`:
 ## Bytevectors (2026-09-18, `.todo/871`)
 
 **A bytevector IS the `(unsigned-byte 8)` pack** (`.kb/packed-integer-vectors.md`): a
-`LispIntVector` of width 8 on the interpreter, a width-headed `long[]` on the JVM, a bare
+`LispIntVector` of width 8 on the interpreter, a width-headed `byte[]` on the JVM, a bare
 `(array (mut i8))` on wasm. Nothing reaches a backend that a Common Lisp program cannot
 already send it.
 

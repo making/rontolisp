@@ -1416,9 +1416,12 @@ report's two top rows: 370 + 299 lost forms) and to fail the COMPILE on the comp
   through a function VALUE ("A wrong argument COUNT" below), `apply` included since 2026-09-12.
   `-`/`/` (no identity, unlike `+`/`*`: `compiler/ArithmeticIdentities`) inline-check their own empty
   argument list in `Environment.registerArithmetic` rather than fall through to the generic
-  `IndexOutOfBoundsException` conversion above, so `(-)`/`(/)` signal the SAME text
-  (`"- requires at least one argument"`) interpreted as `ArithmeticIdentities.of` rejects at compile
-  time, instead of the interpreter's former raw `Index 0 out of bounds for length 0`.
+  `IndexOutOfBoundsException` conversion above, so `(-)`/`(/)` signal the SAME text interpreted as
+  `ArithmeticIdentities.of` rejects at compile time, instead of the interpreter's former raw `Index 0
+  out of bounds for length 0`. Since 2026-09-26 that text is the count report, `- expects at least 1
+  argument, got 0` (it was `- requires at least one argument`), which is also what `(funcall #'-)`
+  says compiled: the `-`/`/`/`min`/`max` wrappers take their first argument as a required `n`
+  (`(n &rest r)`), where a bare `&rest` folded over nil into a type-error or answered nil.
   The first-class twins are pinned on
   `#'member` / `#'find` / `#'position` and, since the family took the bounding keywords, on
   `#'remove` too -- its wrapper now forwards a keyword tail instead of taking a fixed two arguments
@@ -1531,6 +1534,14 @@ Pinned by ci-spec `wrong-arity-funcall-signals-program-error` and `JvmLispCompil
     with an optional tail spells its own range (`GETHASH expects 2 or 3 arguments, got 0`), while
     the compiled wrapper's lambda list says `at least 2`; and a wrapper's `&optional` surplus check
     says `Function expects at most N`.
+- **Inside a compiled `eval`** (2026-09-26) the same reports hold: the runtime evaluates every
+  argument form of a registered function and the spread case judges the count, `apply` is a
+  catalog wrapper, an eval-built closure without a `&` marker is checked, and the operators
+  `_eval` evaluates inline report too ([eval-runtime.md](eval-runtime.md), "Argument counts").
+  `eval` itself has no wrapper, so its report names an operator no callee carries: the JVM
+  registers it by name (`JvmArityOperators.namedShape`), and wasm gives it an id one past the
+  largest named funcId that only `_arity_opening` reads (`ArityReport.unbackedOperators`;
+  `names(id)` stays false for it, so no dispatcher can name a real callee by that id).
 - **Sizes** (2026-09-12, minimal programs, JVM `.class` / wasm Preview 1 bytes):
 
   | program | JVM before | after | wasm before | after |

@@ -252,14 +252,18 @@ public final class FormatReader {
 
 	// #\c: the character right after the backslash is taken literally even when it is
 	// whitespace or a delimiter; only an alphabetic one may start a multi-character name.
+	// The first character is read as a CODE POINT: a supplementary-plane literal is a
+	// surrogate pair in the source, and advancing by one char would strand the low
+	// surrogate to be re-scanned (and mis-rendered) as the next token.
 	private String readCharLiteral() {
 		int start = this.pos;
 		this.pos += 2;
 		if (this.pos >= this.source.length()) {
 			throw error(start, "end of input after '#\\'");
 		}
-		boolean named = Character.isLetter(this.source.charAt(this.pos));
-		this.pos++;
+		int first = this.source.codePointAt(this.pos);
+		boolean named = Character.isLetter(first);
+		this.pos += Character.charCount(first);
 		if (named) {
 			while (this.pos < this.source.length() && isTokenChar(this.source.charAt(this.pos))) {
 				this.pos++;

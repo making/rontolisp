@@ -419,11 +419,11 @@ final class SchemeReader {
 			}
 			bytes.add(value);
 		}
-		long[] data = new long[bytes.size()];
+		byte[] data = new byte[bytes.size()];
 		for (int i = 0; i < data.length; i++) {
-			data[i] = bytes.get(i);
+			data[i] = (byte) (long) bytes.get(i);
 		}
-		return new LispIntVector(8, data);
+		return LispIntVector.wrapOctets(data);
 	}
 
 	private LispVal readCharacter(int start) {
