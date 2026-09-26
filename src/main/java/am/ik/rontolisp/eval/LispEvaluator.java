@@ -5009,13 +5009,28 @@ public final class LispEvaluator {
 		return site;
 	}
 
+	// The program's java: declarations, fed every top-level form in order (created on
+	// the first form: it carries the proclamations seen so far).
+	private am.ik.rontolisp.compiler.@Nullable JavaDeclarations javaDeclarations;
+
+	private synchronized am.ik.rontolisp.compiler.JavaDeclarations javaDeclarations() {
+		am.ik.rontolisp.compiler.JavaDeclarations declarations = this.javaDeclarations;
+		if (declarations == null) {
+			declarations = new am.ik.rontolisp.compiler.JavaDeclarations(
+					am.ik.rontolisp.compiler.ReflectiveJavaClasses.instance());
+			this.javaDeclarations = declarations;
+		}
+		return declarations;
+	}
+
 	/**
-	 * Prepares a top-level form's {@code java:} sites before it runs: the
-	 * {@code (declare (type (java:object "C") v))} of the form are lowered onto the sites
-	 * they type ({@code compiler.JavaDeclarations}, the same pass the JVM compiler runs),
-	 * and under {@code java:*warn-on-reflection*} every site the form shows is resolved
-	 * now, so what cannot be resolved is reported when the code is loaded, not when it
-	 * first runs.
+	 * Prepares a top-level form's {@code java:} sites before it runs: the host types the
+	 * form's text gives its variables -- declared, inferred from a {@code let}
+	 * initializer, proclaimed by an earlier form -- are lowered onto the sites they type
+	 * ({@code compiler.JavaDeclarations}, the same pass the JVM compiler runs), and under
+	 * {@code java:*warn-on-reflection*} every site the form shows is resolved now, so
+	 * what cannot be resolved is reported when the code is loaded, not when it first
+	 * runs.
 	 */
 	private LispVal prepareJavaSites(LispVal form) {
 		if (this.javaBuiltins.isEmpty() || !(form instanceof LispCons)) {
@@ -5024,7 +5039,7 @@ public final class LispEvaluator {
 		// User macros are expanded only to learn what they bind, and not into the
 		// expansion memo: the form has not run yet, so state an earlier part of it sets
 		// is not there, and the evaluator must expand at its own time.
-		LispVal lowered = am.ik.rontolisp.compiler.JavaDeclarations.lower(form, call -> {
+		LispVal lowered = javaDeclarations().lower(form, call -> {
 			if (!(call.car() instanceof LispSymbol op)) {
 				return null;
 			}

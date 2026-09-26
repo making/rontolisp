@@ -27,11 +27,12 @@ import org.jspecify.annotations.Nullable;
  * What is known about a subform, all of it LEXICAL ({@link #typeOf}): a literal's kind; a
  * {@code (java:new "C" ...)} is exactly a {@code C}; a resolved member's value is what
  * its declared type unmarshals to ({@link JavaStaticType#ofDeclared}); a
- * {@code (the (java:object "C") x)} is what a {@code C} unmarshals to; and a variable
- * declared {@code (declare (type (java:object "C") v))}, which {@link JavaDeclarations}
- * has already turned into that {@code the} at each site. A declared type is trusted: a
- * false one is a deterministic error where the value meets the member, never a different
- * member.
+ * {@code (the (java:object "C") x)} is what a {@code C} unmarshals to
+ * ({@code (java:object "C" :exact)}: what {@code java:new} answers); and a typed variable
+ * -- declared, inferred from its {@code let} initializer, proclaimed -- which
+ * {@link JavaDeclarations} has already turned into that {@code the} at each site. A
+ * declared type is trusted: a false one is a deterministic error where the value meets
+ * the member, never a different member.
  * <p>
  * The one place a resolved site chooses differently from run-time resolution: a receiver
  * typed by an upper bound resolves among the bound's methods, so a run-time class that
@@ -78,17 +79,113 @@ public final class JavaSiteResolver {
 	}
 
 	/**
-	 * The class a {@code (java:object "C")} type specifier names.
+	 * The class a {@code (java:object "C")} or {@code (java:object "C" :exact)} type
+	 * specifier names.
 	 * @param spec a type specifier
 	 * @return the class name, or {@code null} when the specifier is not one
 	 */
 	public static @Nullable String javaObjectClass(LispVal spec) {
 		if (spec instanceof LispCons cons && cons.car() instanceof LispSymbol head
 				&& LispNames.JAVA_OBJECT_QUALIFIED.equals(head.name()) && cons.cdr() instanceof LispCons rest
-				&& rest.car() instanceof LispString className && rest.cdr() instanceof LispNil) {
+				&& rest.car() instanceof LispString className
+				&& (rest.cdr() instanceof LispNil || isExactMarker(rest.cdr()))) {
 			return className.value();
 		}
 		return null;
+	}
+
+	private static boolean isExactMarker(LispVal tail) {
+		return tail instanceof LispCons marker && marker.car() instanceof LispSymbol keyword
+				&& EXACT.equals(keyword.name()) && marker.cdr() instanceof LispNil;
+	}
+
+	/** The marker of {@code (java:object "C" :exact)}. */
+	private static final String EXACT = ":EXACT";
+
+	/**
+	 * The spellings {@link #specOf} chooses among for a set of Lisp kinds: each is what a
+	 * member declared with that type answers ({@link JavaStaticType#ofDeclared}).
+	 */
+	private static final List<String> KIND_SPELLINGS = List.of("void", "int", "double", "char", "java.lang.Long",
+			"java.lang.Double", "java.lang.Character", "boolean", "java.lang.String");
+
+	/**
+	 * What a {@code java:object} type specifier says about a value.
+	 * {@code (java:object "C")} is what a member declared to answer a {@code C} answers
+	 * ({@link JavaStaticType#ofDeclared}: a subclass of {@code C} or {@code nil}, a
+	 * primitive's Lisp kind, ...); {@code (java:object "C" :exact)} is what
+	 * {@code (java:new "C" ...)} answers ({@link JavaStaticType#ofConstructed}).
+	 * @param spec a type specifier
+	 * @return its static type, or {@code null} when the specifier is not a
+	 * {@code java:object} one
+	 */
+	public @Nullable JavaStaticType typeOfSpec(LispVal spec) {
+		String className = javaObjectClass(spec);
+		if (className == null) {
+			return null;
+		}
+		JavaType type = this.lookup.find(className);
+		if (type == null) {
+			return JavaStaticType.UNKNOWN;
+		}
+		boolean exact = ((LispCons) ((LispCons) spec).cdr()).cdr() instanceof LispCons;
+		return exact ? JavaStaticType.ofConstructed(type, this.lookup) : JavaStaticType.ofDeclared(type, this.lookup);
+	}
+
+	/**
+	 * The {@code java:object} specifier that says the most {@link #typeOfSpec} can read
+	 * back of a static type -- the same type, or the narrowest one containing it: a bound
+	 * is {@code (java:object "C")}, one exact host class
+	 * {@code (java:object "C" :exact)}, a set of Lisp kinds (with at most one host class
+	 * that may be {@code nil}) the smallest declared type whose value covers the set, so
+	 * {@code {integer}} is {@code (java:object "int")}. A wider type resolves fewer sites
+	 * and never a different member (a site resolves only when every kind selects the same
+	 * one).
+	 * @param type a static type
+	 * @return the specifier, or {@code null} when nothing but {@code t} covers the type
+	 */
+	public @Nullable LispVal specOf(JavaStaticType type) {
+		if (type instanceof JavaStaticType.Bounded bounded) {
+			return javaObjectSpec(bounded.type().name(), false);
+		}
+		if (!(type instanceof JavaStaticType.Kinds known)) {
+			return null;
+		}
+		Set<JavaKind> kinds = known.kinds();
+		List<String> candidates = new ArrayList<>();
+		for (JavaKind kind : kinds) {
+			if (kind instanceof JavaType host) {
+				if (kinds.size() == 1) {
+					return javaObjectSpec(host.name(), true);
+				}
+				candidates.add(host.name());
+			}
+		}
+		candidates.addAll(KIND_SPELLINGS);
+		String best = null;
+		int bestSize = Integer.MAX_VALUE;
+		for (String name : candidates) {
+			JavaType candidate = this.lookup.find(name);
+			if (candidate != null
+					&& JavaStaticType.ofDeclared(candidate, this.lookup) instanceof JavaStaticType.Kinds covering
+					&& covering.kinds().containsAll(kinds) && covering.kinds().size() < bestSize) {
+				best = name;
+				bestSize = covering.kinds().size();
+			}
+		}
+		return best == null ? null : javaObjectSpec(best, false);
+	}
+
+	/**
+	 * A fresh {@code (java:object "C")} or {@code (java:object "C" :exact)} specifier.
+	 * @param className the class name
+	 * @param exact whether the value is exactly a {@code C}
+	 * @return the specifier
+	 */
+	public static LispCons javaObjectSpec(String className, boolean exact) {
+		LispVal tail = exact ? new LispCons(new LispSymbol(EXACT), LispNil.INSTANCE) : LispNil.INSTANCE;
+		return new LispCons(new LispSymbol(LispNames.JAVA_OBJECT_QUALIFIED),
+				new LispCons(new LispString(className), tail));
 	}
 
 	/**
@@ -426,13 +523,9 @@ public final class JavaSiteResolver {
 				if (parts.size() != 3) {
 					return JavaStaticType.UNKNOWN;
 				}
-				String className = javaObjectClass(parts.get(1));
-				if (className != null) {
-					JavaType type = this.lookup.find(className);
-					return type == null ? JavaStaticType.UNKNOWN : JavaStaticType.ofDeclared(type, this.lookup);
-				}
+				JavaStaticType declared = typeOfSpec(parts.get(1));
 				// Any other type specifier says nothing the bridge's kinds depend on.
-				return typeOf(parts.get(2));
+				return declared != null ? declared : typeOf(parts.get(2));
 			}
 			default -> {
 				return JavaStaticType.UNKNOWN;

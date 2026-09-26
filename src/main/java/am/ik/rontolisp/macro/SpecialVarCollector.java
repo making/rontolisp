@@ -88,6 +88,22 @@ public final class SpecialVarCollector {
 		// `(with-input-from-string (*standard-input* s) ...)` -- which is also the only
 		// case whose behavior differs from the plain-stdio default.
 		out.addAll(collectDynamicallyBound(List.of(form), SEEDED_STREAM_SPECIALS));
+		collectDeclared(form, out);
+	}
+
+	/**
+	 * Records the special names a single form DECLARES -- {@link #collectForm} without
+	 * the seeded stream specials a binding makes special: the name of a
+	 * {@code defvar}-family form, the {@code (special ...)} clauses of a
+	 * {@code declaim}/{@code proclaim}, and every local {@code (declare (special ...))}
+	 * inside the form. One linear walk, no macro expansion.
+	 * @param form the form to inspect
+	 * @param out the set to add discovered special names to
+	 */
+	public static void collectDeclared(LispVal form, Set<String> out) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
+			return;
+		}
 		List<LispVal> parts = cons.toList();
 		switch (head.name()) {
 			case LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT -> {

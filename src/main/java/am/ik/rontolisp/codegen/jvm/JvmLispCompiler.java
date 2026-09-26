@@ -835,9 +835,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// the rest of compilation sees canonical names.
 		PackageResolver packageResolver = new PackageResolver();
 		program = packageResolver.resolveProgram(program);
-		// (declare (type (java:object "C") v)) onto the java: sites it types, as the
-		// interpreter lowers each top-level form before running it
-		// (compiler/JavaDeclarations): the site resolver then reads the site alone.
+		// The host types of variables -- declared, inferred from a let initializer,
+		// proclaimed -- onto the java: sites they type, as the interpreter lowers each
+		// top-level form before running it (compiler/JavaDeclarations): the site
+		// resolver then reads the site alone.
 		program = lowerJavaDeclarations(program);
 		// A quoted designator of a wrapped built-in becomes #'name before any wrapper
 		// gate scans the program for that spelling (compiler/FunctionDesignators).
@@ -4878,13 +4879,19 @@ public final class JvmLispCompiler implements LispCompiler {
 		return false;
 	}
 
-	// The java: declarations of every top-level form lowered onto their sites
-	// (compiler/JavaDeclarations); a form without java:object comes back unchanged.
-	private static List<LispVal> lowerJavaDeclarations(List<LispVal> program) {
+	// The host types the program text gives its variables lowered onto the java: sites
+	// they type, every top-level form in order (compiler/JavaDeclarations); a program
+	// that mentions no java: symbol comes back unchanged without opening the classes.
+	private List<LispVal> lowerJavaDeclarations(List<LispVal> program) {
+		if (program.stream().noneMatch(am.ik.rontolisp.compiler.JavaDeclarations::mentionsJava)) {
+			return program;
+		}
+		am.ik.rontolisp.compiler.JavaDeclarations declarations = new am.ik.rontolisp.compiler.JavaDeclarations(
+				javaClasses());
 		List<LispVal> lowered = null;
 		for (int i = 0; i < program.size(); i++) {
 			LispVal form = program.get(i);
-			LispVal result = am.ik.rontolisp.compiler.JavaDeclarations.lower(form, null);
+			LispVal result = declarations.lower(form, null);
 			if (result != form) {
 				if (lowered == null) {
 					lowered = new ArrayList<>(program);
