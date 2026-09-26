@@ -51,6 +51,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmBlasRuntimeBuilder"
+        },
+        "pattern": "META-INF/native-image/am\\.ik\\.rontolisp/rontolisp-blas/reachability-metadata\\.json"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmGeomRuntimeBuilder"
         },
         "pattern": "am/ik/rontolisp/codegen/jvm/JvmGeomTemplate\\.class"
