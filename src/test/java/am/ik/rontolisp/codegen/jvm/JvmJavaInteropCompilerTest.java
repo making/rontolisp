@@ -393,6 +393,41 @@ class JvmJavaInteropCompilerTest {
 	}
 
 	@Test
+	void aLetBoundReceiverTakesItsInitializersType() throws Exception {
+		assertThat(compileAndRun("""
+				(defun fill-list ()
+				  (let ((lst (java:new "java.util.ArrayList")))
+				    (java:call lst "add" 10)
+				    (java:call lst "add" 20)
+				    (java:call lst "add" 1)
+				    lst))
+				(let ((c (the (java:object "java.util.Collection") (fill-list)))
+				      (d (the (java:object "java.util.Collection") (fill-list))))
+				  (setq d (fill-list))
+				  (print (list (java:call c "remove" 1) (java:call c "toString")
+				               (java:call d "remove" 1) (java:call d "toString"))))
+				""")).isEqualTo("(T \"[10, 20]\" 20 \"[10, 1]\")");
+	}
+
+	@Test
+	void aProclaimedGlobalTypesTheFormsAfterIt() throws Exception {
+		assertThat(compileAndRun("""
+				(defun fill-list ()
+				  (let ((lst (java:new "java.util.ArrayList")))
+				    (java:call lst "add" 10)
+				    (java:call lst "add" 20)
+				    (java:call lst "add" 1)
+				    lst))
+				(defvar *before* (fill-list))
+				(defun drop-before () (java:call *before* "remove" 1))
+				(declaim (type (java:object "java.util.Collection") *c* *before*))
+				(defvar *c* (fill-list))
+				(print (list (java:call *c* "remove" 1) (java:call *c* "toString")
+				             (drop-before) (java:call *before* "toString")))
+				""")).isEqualTo("(T \"[10, 20]\" 20 \"[10, 1]\")");
+	}
+
+	@Test
 	void aFalseDeclarationSignals() {
 		assertThatThrownBy(() -> compileAndRun("""
 				(defun size-of (c)
@@ -433,18 +468,42 @@ class JvmJavaInteropCompilerTest {
 				(defun before (x) (java:call x "size"))
 				(defun len (x) (java:call x "length"))
 				(print (java:static "java.lang.Math" "max" 1 2))
+				(let ((sb (java:new "java.lang.StringBuilder"))) (java:call sb "capacity"))
 				""";
 		assertThat(compileWarnings(program, true))
 			.contains("warning: java:call \"size\" is resolved by reflection at run time")
 			.contains("warning: java:call \"length\" is resolved by reflection at run time:"
 					+ " the receiver's class is not known")
-			.doesNotContain("\"max\"");
+			.doesNotContain("\"max\"")
+			.doesNotContain("\"capacity\"");
 		assertThat(compileWarnings("""
 				(defun before (x) (java:call x "size"))
 				(setq java:*warn-on-reflection* t)
 				(defun len (x) (java:call x "length"))
 				""", false)).contains("\"length\"").doesNotContain("\"size\"");
 		assertThat(compileWarnings(program, false)).isEmpty();
+	}
+
+	// A site rewritten for a typed argument, around another rewritten site, keeps its
+	// source position in the report.
+	@Test
+	void aRewrittenSiteKeepsItsPosition() {
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		am.ik.rontolisp.SourceProvenance.startRecording();
+		try (var ignored = ThreadStdio.err(err)) {
+			JvmLispCompiler.builder()
+				.className("Test")
+				.warnJavaReflection(true)
+				.build()
+				.compile(LispReader.readAllFromString("""
+						(let ((sb (java:new "java.lang.StringBuilder")))
+						  (java:call (other) "accept" sb (lambda () (java:call sb "length"))))
+						""", am.ik.rontolisp.reader.Features.JVM, "t.lisp"));
+		}
+		finally {
+			am.ik.rontolisp.SourceProvenance.stopRecording();
+		}
+		assertThat(err.toString()).contains("t.lisp:2:3: warning: java:call \"accept\"");
 	}
 
 	private static String compileWarnings(String program, boolean warn) {

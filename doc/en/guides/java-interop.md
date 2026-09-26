@@ -124,6 +124,11 @@ What the program text says about a value:
   `Object` says nothing;
 - `(the (java:object "C") x)` and `(declare (type (java:object "C") v))` say that the value
   is a `C` (or `nil`). `C` is a binary class name, as for `java:new` (`java.util.Map$Entry`).
+  `(java:object "C" :exact)` says it is exactly a `C`, never `nil`, as `java:new` answers;
+- a `let` or `let*` variable has its initializer's type, unless it is special or something
+  in its scope assigns it (`setq`, `setf`, `incf`, ..., in a closure too);
+- `(declaim (type (java:object "C") v))` types the global `v` in the forms after it. A
+  `defvar`'s initial value does not: any form may assign the variable.
 
 A declared type is trusted: a value that is not a `C` is an error where it meets the call.
 
@@ -134,15 +139,24 @@ A declared type is trusted: a value that is not a `C` is an error where it meets
 (total-length (java:new "java.lang.StringBuilder" "abc"))   ; => 3
 ```
 
+Both calls below are resolved before they run: `sb` is exactly a `StringBuilder`.
+
+```lisp
+(let ((sb (java:new "java.lang.StringBuilder" "ab")))
+  (java:call sb "reverse")
+  (java:call sb "toString"))   ; => "ba"
+```
+
 An argument resolves a call only when every kind it can have selects the same method. A
 `String` answer may be `nil`, which selects `append(boolean)`, so
 `(java:call sb "append" (java:call x "toString"))` is resolved when it runs.
 
 ### The declared receiver class decides the candidates
 
-A call on a receiver of declared class `C` resolves among `C`'s methods, as in Java. A
-public overload of the same name that only the run-time class adds is not a candidate --
-the one place where resolving early chooses differently from resolving at run time:
+A call on a receiver of declared class `C` resolves among `C`'s methods, as in Java -- so
+does one on a `let` variable whose initializer is typed `C`. A public overload of the same
+name that only the run-time class adds is not a candidate -- the one place where resolving
+early chooses differently from resolving at run time:
 
 ```lisp
 (defun remove-one (c)

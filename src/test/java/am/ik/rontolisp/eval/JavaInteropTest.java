@@ -334,6 +334,46 @@ class JavaInteropTest {
 				""").print()).isEqualTo("(T \"[10, 20]\" 20 \"[10, 1]\" T \"[20, 1]\")");
 	}
 
+	// A let binding nothing assigns takes its initializer's static type, so a receiver
+	// held in it resolves as the initializer would; an assigned one is left to run time.
+	// Mirrors JvmJavaInteropCompilerTest#aLetBoundReceiverTakesItsInitializersType.
+	@Test
+	void aLetBoundReceiverTakesItsInitializersType() {
+		assertThat(eval("""
+				(defun fill-list ()
+				  (let ((lst (java:new "java.util.ArrayList")))
+				    (java:call lst "add" 10)
+				    (java:call lst "add" 20)
+				    (java:call lst "add" 1)
+				    lst))
+				(let ((c (the (java:object "java.util.Collection") (fill-list)))
+				      (d (the (java:object "java.util.Collection") (fill-list))))
+				  (setq d (fill-list))
+				  (list (java:call c "remove" 1) (java:call c "toString")
+				        (java:call d "remove" 1) (java:call d "toString")))
+				""").print()).isEqualTo("(T \"[10, 20]\" 20 \"[10, 1]\")");
+	}
+
+	// A proclaimed type types the global in every form after it. Mirrors
+	// JvmJavaInteropCompilerTest#aProclaimedGlobalTypesTheFormsAfterIt.
+	@Test
+	void aProclaimedGlobalTypesTheFormsAfterIt() {
+		assertThat(eval("""
+				(defun fill-list ()
+				  (let ((lst (java:new "java.util.ArrayList")))
+				    (java:call lst "add" 10)
+				    (java:call lst "add" 20)
+				    (java:call lst "add" 1)
+				    lst))
+				(defvar *before* (fill-list))
+				(defun drop-before () (java:call *before* "remove" 1))
+				(declaim (type (java:object "java.util.Collection") *c* *before*))
+				(defvar *c* (fill-list))
+				(list (java:call *c* "remove" 1) (java:call *c* "toString")
+				      (drop-before) (java:call *before* "toString"))
+				""").print()).isEqualTo("(T \"[10, 20]\" 20 \"[10, 1]\")");
+	}
+
 	// A declared type is trusted, so a false one is a deterministic error where the
 	// value meets the member -- the same message the compiled bridge raises.
 	@Test
@@ -368,12 +408,14 @@ class JavaInteropTest {
 					(setq java:*warn-on-reflection* t)
 					(defun len (x) (java:call x "length"))
 					(java:static "java.lang.Math" "max" 1 2)
+					(let ((sb (java:new "java.lang.StringBuilder"))) (java:call sb "capacity"))
 					""");
 		}
 		assertThat(err.toString()).contains(
 				"warning: java:call \"length\" is resolved by reflection at run time: the receiver's class is not known")
 			.doesNotContain("\"size\"")
-			.doesNotContain("\"max\"");
+			.doesNotContain("\"max\"")
+			.doesNotContain("\"capacity\"");
 	}
 
 	@Test

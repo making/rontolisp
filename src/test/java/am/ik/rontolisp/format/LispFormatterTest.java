@@ -856,6 +856,15 @@ class LispFormatterTest {
 	}
 
 	@Test
+	void keepsASupplementaryPlaneCharacterLiteralWhole() {
+		// #\<emoji> is a UTF-16 surrogate PAIR in the source. The CST reader's
+		// readCharLiteral must consume both units of the pair, not just the high
+		// surrogate -- otherwise the low surrogate is left to be re-scanned (and
+		// mis-rendered) as the next token.
+		assertThat(LispFormatter.format("(f #\\😀)\n")).isEqualTo("(f #\\😀)\n");
+	}
+
+	@Test
 	void reportsAnUnreadableSourceWithItsPosition() {
 		assertThatThrownBy(() -> LispFormatter.format("(defun f (x)\n  (g x)\n")).isInstanceOf(FormatException.class)
 			.hasMessageContaining("1:1")
