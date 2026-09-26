@@ -147,6 +147,31 @@ wasm-GC のコード生成には、速度と引き換えにバイト数を費や
 
 このレベルはすべてのバックエンドで受け付けられるので、ビルドスクリプトが対象を知る必要はありません。ただしトレードする対象があるのは wasm-GC(Preview 1 と `--component`)だけで、[JVM](jvm.md) と [`--no-gc`](../guides/wasm-nogc.md) の出力は `--optimize=default` が生成するものとバイト単位で同一です。
 
+### 捕捉されなかったコンディションの発生場所(`--report-locations`)
+
+コンディションを誰も捕捉しなかったとき、インタプリタは `Unhandled condition:` の行の下に発生場所を出力します([`error`](../reference/macros/error.md))。wasm-GC モジュールは `--report-locations` を付けてコンパイルすると同じ行を出力します:
+
+```console
+$ rontolisp app.lisp -o app.wasm --report-locations=line
+$ wasmtime run app.wasm
+Unhandled condition: parse-integer: junk in string "x"
+  at app.lisp:5 in APP::PARSE
+```
+
+- `line` は、コンディションが通過したプログラムのファイル中で最も内側のフォームと、それを含む名前付き関数を示します。インタプリタと同じく、コンディションを再送出した `await` ごとの `in NAME (async), awaited at FILE:LINE` の行も含みます。
+- `function` は関数と、その定義が始まる行を示します。バイト数は少なく、答えは粗くなります。
+
+Preview 1、`--component`、`--native` のいずれでも動作し、デフォルトでは無効です。行を書き込む先の報告を持たないモジュール、つまり捕捉フォーム(`handler-case`、`ignore-errors`、`unwind-protect` など)を含まないモジュールには何も加えません。指し示すファイルを持たない `-e` のプログラムも同様です。ファイル名はコンパイラが読んだパスで、モジュールに埋め込まれます。このオプションの下でも、プログラム自身の関数への末尾呼び出しと関数値を通した末尾呼び出しは定数スタックで動作します。
+
+ファイルから読んだ関数はどれも、コンディションが抜けていく途中でそれを捕捉します。`line` ではさらに、新しい行で始まるフォームのたびに行を記録します:
+
+| モジュール(`--optimize=size`) | 無効 | `function` | `line` |
+| --- | --- | --- | --- |
+| `zlib`(chipz による gunzip) | 87,936 B | 91,792 B (+4.4%) | 93,774 B (+6.6%) |
+| 3 行の関数 100 個 | 13,196 B | 17,651 B (+33.8%) | 19,663 B (+49.0%) |
+
+関数あたりおよそ 40 バイトで、`line` では行ごとにさらに 6〜7 バイトです。実行時間は V8(Node 24)では変わりません。wasmtime 49 では呼び出しの多い関数ほど捕捉の代価が大きく、再帰的な `fib` は約 3 倍遅くなります。他のベンチマークプログラムは 0〜15% の範囲に収まります。
+
 ### SIMD アクセラレーション(`--simd`)
 
 `--simd` はすべてのバックエンドに共通する唯一のアクセラレーションスイッチです: ベクトル化可能な [`vec:` および `linalg:` カーネル](../guides/simd-acceleration.md)を本物のベクトル命令へローワリングします。WASM では値モデルと直交します:

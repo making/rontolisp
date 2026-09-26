@@ -332,7 +332,8 @@ the one `princ` writes, and nothing below changes it.
 through and the innermost NAMED function (or macro expander) holding it -- then one
 `  in NAME (async), awaited at FILE:LINE` per async boundary crossed. Nothing known (a `-e`
 program, only macro-built forms) prints none. **The interpreter prints them, for Scheme source
-too; the compiled backends do not yet** (open items for the JVM backend and wasm-GC).
+too; wasm-GC prints them only under `--report-locations`** (below, "Location lines on wasm-GC");
+the JVM backend does not yet.
 - **Recorded on the throw path only** (`eval/ConditionTrace`, on `LispEvalException.trace()`):
   `evalCons` keeps the innermost `LocatedCons` it stepped onto and the lambda it was in then (a
   type test and two stores per loop step; [source-positions.md](source-positions.md) Phase 4) and
@@ -350,8 +351,8 @@ too; the compiled backends do not yet** (open items for the JVM backend and wasm
   the test's own. `scheme-spec.yaml` compares the interpreter's MESSAGE (contained), so it needs no
   change; the Scheme cases in `RontoLispCliStreamsTest` pin the location lines where the case is
   about the report and the report line alone where it is about the message. The JVM/wasm assertions (`JvmLispCompilerTest`, `JvmSizedMainTest`,
-  `WasmLispCompilerIntegrationTest`) pin the report line and stay exact until those backends print
-  locations.
+  `WasmLispCompilerIntegrationTest`) pin the report line and stay exact: their programs are read
+  from no file, so a wasm module has nothing to locate even under the option.
 
 - **Interpreter / compile failures** (`RontoLispCli.runReporting`): only `main` catches -- `run`
   still throws, so an embedded caller keeps the exception with its type and cause. A rontolisp
@@ -389,6 +390,78 @@ too; the compiled backends do not yet** (open items for the JVM backend and wasm
   report renderer becomes narrowable to the classes that can actually ESCAPE.
 - Pinned cross-backend by `ci-spec.yaml`'s `standalone:` list -- a section `CiSpecE2eTest` runs one
   program at a time, per backend; the corpus cannot host these since running one ends the program.
+
+## Location lines on wasm-GC (`--report-locations`)
+**Invariant: `--report-locations=line` makes a wasm-GC module (Preview 1, `--component`,
+`--native`) print the interpreter's location lines under the report, byte for byte; `=function`
+prints the function and the line its definition starts on. OFF BY DEFAULT, and a module with no
+report (outside EH mode), no file-read form (`-e`) or no option is byte-identical to a build that
+never knew about it.** `codegen/wasm/WasmUncaughtLocations`; pinned by
+`cli/WasmReportLocationsTest` (each case against the interpreter's own output).
+
+- **Opt-in because size decides it** (the user's call, 2026-09-26): the lines cost bytes in every
+  function read from a file, and the report itself exists only in EH mode, so the option never
+  turns EH mode on.
+- **A frame** = a defun, lambda, top-level chunk or `--component` resume whose OWN code (outside
+  the lambdas it builds) has a form read from a file. It wraps its body in `block` +
+  `try_table (catch $lisp-cond)`; the landing calls `_uncaught_note(payload, file-id, line, name,
+  hop)`, which records and rethrows the SAME payload. Library source, macro output and the Preview 1
+  `(%async-run (lambda ...))` wrapper defun are not frames, exactly as the interpreter's frames
+  without a located form note nothing.
+- **The note is keyed by payload IDENTITY** (a global holding the payload it describes): a
+  condition a `handler-case` caught cannot leak into a later report, and a rethrow (unmatched
+  clause, `await` re-signalling a rejected future -- both rethrow the same payload) keeps the
+  inner frames' note. Rules = `ConditionTrace`'s: first frame with a line gives the location; the
+  first NAMED frame from there the function; an async body (a hop text in the frame) freezes the
+  function and appends a hop whose await site is the next frame with a line.
+- **Texts ride with their frame**: the name and hop text are unspelled string literals built in the
+  frame's own landing (`compileUnspelledLiteral`: a spelled one would arm the dispatch gate), so
+  the shaker drops them with the frame. A first version kept a quoted name TABLE: every defun's
+  name stayed after its function was shaken -- zlib +4,489 B instead of +3,856. Files are the one
+  table (quoted list, sealed when the entry's render compiles; the prescan of the program is what
+  makes it complete, since every Pass 2 rewrite inherits an existing cons's position).
+- **The line**: an i31 in an eqref local (mirrored by a resume's spill array, so it survives a
+  suspension), set on entry to a located form when it holds another value and restored after it
+  (static tracking in `Frame.curLine`; the function's tail form restores nothing). Starts NULL, not
+  at the definition line: a frame that entered no located form leaves the location to its callers,
+  as the interpreter does. Printed by `_uncaught_digits` (i31 -> string via `_str_fresh`): the
+  general printer (`%princ-to-string`) pulled 20 KB into a module that never prints
+  (`examples/net/http-handler.lisp` 2,171 -> 23,868 B; now 2,769).
+- **Tail calls**: a `return_call` leaves the try_table. Inside a frame it stays one only into
+  another frame or through a function value (`tailCallOp`); into anything else (a library defun, a
+  macro-written one, a signal helper) it is a plain `call`, or the call site and its function were
+  lost. Disabling tail calls in frames outright was the first version and broke the
+  `.kb/wasm-tail-calls.md` invariant a Scheme loop depends on (named `let` overflowed).
+- **Known divergence**: an error inside a `labels`/`flet` local function reports the form's own
+  line on wasm (the expansion records positions through `SourceProvenance.inheritWhenCompiling`)
+  and the `labels` form's line on the interpreter, whose expansion drops them. The interpreter's
+  cells were deliberately left alone: a located copy there moves what its trampolined frames
+  attribute (`lab.lisp:3 in OUTER` became `lab.lisp:5` with no function).
+
+Cost, measured 2026-09-26 (wasmtime 49.0.0, node 24, macOS arm64):
+
+| module | flags | off | `function` | `line` |
+| --- | --- | --- | --- | --- |
+| hello_world, pi_approx, dom_reactor (no EH mode) | every size-report row | = | = | = |
+| hello_world + `(ignore-errors nil)` | `--optimize=size` | 1,214 | 1,351 | 1,377 |
+| pi_approx + `(ignore-errors nil)` | `--optimize=size` | 2,293 | 2,442 | 2,495 |
+| zlib (chipz, 51 frames) | `--optimize` | 114,383 | 118,247 (+3.4%) | 120,121 (+5.0%) |
+| zlib | `--optimize=size` | 87,936 | 91,792 (+4.4%) | 93,774 (+6.6%) |
+| zlib | `--component --optimize=size` | 92,096 | 95,905 | 97,887 |
+| zlib | `--optimize=off` | 446,851 | 451,206 | 453,952 |
+| 1 three-line function | `--optimize=size` | 6,533 | 7,060 | 7,110 |
+| 101 three-line functions | `--optimize=size` | 13,196 | 17,651 | 19,663 |
+
+- Fixed: ~140 B (the note and digit helpers, the render). Per frame: ~39 B raw / ~9.5 B gzip under
+  `function` (the try_table wrapper is 12, the note call ~20, the name ~5 of data); `line` adds
+  ~6.5 B per line change (3-line bodies: +20 B). gzip, zlib `--optimize=size`: 29,146 -> 30,416 ->
+  31,221.
+- Run time (bench-report programs + `(ignore-errors nil)`, best of 5): **V8 within noise** (every
+  program +-4%); **wasmtime: fib +220%**, matmul +13-15%, mandelbrot +8-13%, the rest 0-7%. The
+  cost is the try_table around calls in Cranelift (`function`, which sets no line, pays the same),
+  so a tiny recursive function pays the most. **Re-evaluate if** wasmtime's exception lowering
+  stops spilling across calls inside a try_table -- or if the option is ever meant to stay on in
+  production, in which case the per-call catch is what to replace.
 
 ## cerror, signal-operator function values, runtime type dispatch
 - `cerror` has TWO lowerings on the restart-mode gate: outside it `expandCerror(cons, registry)`
