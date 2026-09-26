@@ -2,7 +2,7 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**15,928 / 19,524 tests pass (81.6%)** -- 1,482 fail, 2,114 signal an error.
+**16,000 / 19,526 tests pass (81.9%)** -- 1,422 fail, 2,104 signal an error.
 
 7 top-level forms could not be read, 378 could not be evaluated, 3 did not terminate; every test those forms would have defined is missing from the counts above.
 
@@ -11,13 +11,13 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | arrays | 1,356 | 1,280 | 22 | 54 | 94.4% | 11 |
 | characters | 259 | 213 | 6 | 40 | 82.2% | 11 |
 | conditions | 673 | 553 | 58 | 62 | 82.2% | 11 |
-| cons | 1,879 | 1,661 | 141 | 77 | 88.4% | 11 |
-| data-and-control-flow | 1,428 | 1,224 | 73 | 131 | 85.7% | 12 |
+| cons | 1,881 | 1,722 | 93 | 66 | 91.5% | 11 |
+| data-and-control-flow | 1,428 | 1,225 | 72 | 131 | 85.8% | 12 |
 | environment | 210 | 132 | 11 | 67 | 62.9% | 11 |
 | eval-and-compile | 306 | 220 | 39 | 47 | 71.9% | 11 |
 | files | 87 | 33 | 9 | 45 | 37.9% | 11 |
 | hash-tables | 157 | 130 | 21 | 6 | 82.8% | 13 |
-| iteration | 843 | 728 | 92 | 23 | 86.4% | 11 |
+| iteration | 843 | 729 | 89 | 25 | 86.5% | 11 |
 | misc | 740 | 729 | 7 | 4 | 98.5% | 11 |
 | numbers | 1,444 | 1,254 | 52 | 138 | 86.8% | 15 |
 | objects | 846 | 343 | 200 | 303 | 40.5% | 37 |
@@ -26,14 +26,14 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | printer | 536 | 248 | 117 | 171 | 46.3% | 48 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 12 |
 | reader | 575 | 369 | 66 | 140 | 64.2% | 19 |
-| sequences | 3,287 | 3,017 | 100 | 170 | 91.8% | 11 |
-| streams | 797 | 650 | 77 | 70 | 81.6% | 16 |
+| sequences | 3,287 | 3,024 | 94 | 169 | 92.0% | 11 |
+| streams | 797 | 652 | 75 | 70 | 81.8% | 16 |
 | strings | 509 | 404 | 56 | 49 | 79.4% | 12 |
 | structures | 1,030 | 744 | 58 | 228 | 72.2% | 36 |
 | symbols | 1,145 | 1,080 | 25 | 40 | 94.3% | 11 |
 | system-construction | 77 | 26 | 1 | 50 | 33.8% | 11 |
 | types-and-classes | 626 | 335 | 191 | 100 | 53.5% | 13 |
-| **total** | **19,524** | **15,928** | **1,482** | **2,114** | **81.6%** | **388** |
+| **total** | **19,526** | **16,000** | **1,422** | **2,104** | **81.9%** | **388** |
 
 ## Most frequent failure reasons
 
