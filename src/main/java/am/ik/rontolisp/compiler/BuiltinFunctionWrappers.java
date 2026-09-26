@@ -457,12 +457,40 @@ public final class BuiltinFunctionWrappers {
 	 * {@code ClosRegistry.ARITY_ANONYMOUS_OPERATOR}) for anything else. One rule for all
 	 * four backends -- the interpreter asks it of a lambda's name, the compiled backends
 	 * of a callable's -- decided by the NAME, because the interpreter's catalog lambda
-	 * and the compilers' injected wrapper defun are the same function under it.
+	 * and the compilers' injected wrapper defun are the same function under it. The
+	 * compile paths' dispatcher of a wrapped built-in a {@code defmethod} shadows
+	 * ({@code ShadowedBuiltins}, {@link LispMacroExpander#shadowedDispatcherName})
+	 * reports as the built-in, as the interpreter's dispatcher, which keeps the
+	 * built-in's name, does.
 	 * @param functionName the callee's name, or {@code null} for an anonymous one
 	 * @return the operator to report, or {@code null}
 	 */
 	public static @Nullable String arityOperator(@Nullable String functionName) {
-		return functionName != null && WRAPPER_NAMES.contains(functionName) ? functionName : null;
+		if (functionName == null) {
+			return null;
+		}
+		return WRAPPER_NAMES.contains(functionName) ? functionName : ShadowedDispatchers.OPERATORS.get(functionName);
+	}
+
+	/**
+	 * {@link LispMacroExpander#shadowedDispatcherName} of every wrapped name -&gt; the
+	 * name, built on first use rather than in this class's initializer, which the
+	 * expander's may be running.
+	 */
+	private static final class ShadowedDispatchers {
+
+		static final Map<String, String> OPERATORS;
+		static {
+			Map<String, String> operators = new java.util.HashMap<>();
+			for (String name : WRAPPER_NAMES) {
+				operators.put(LispMacroExpander.shadowedDispatcherName(name), name);
+			}
+			OPERATORS = Map.copyOf(operators);
+		}
+
+		private ShadowedDispatchers() {
+		}
+
 	}
 
 	/**

@@ -18724,6 +18724,40 @@ cases:
       "GETHASH expects at least 2 arguments, got 1"
       (T 3 1 T)
 
+  # A DIRECT call of the program's own function with a count its lambda list rules
+  # out is the interpreter's program-error at run time, its arguments evaluated first,
+  # with a compile-time warning (compiler/DefinedCallArity): both compiled backends
+  # failed the COMPILE, so a wrong call in a branch never taken or under a handler kept
+  # the program from compiling. A lambda form in call position is judged the same way,
+  # and the dispatcher a defmethod on a built-in is compiled to reports as the built-in
+  # (conjugate: shadowing it reroutes every call of it in this shared program, and
+  # one other case calls it).
+  - name: direct-defun-call-wrong-count-signals-program-error
+    source: |
+      (defun ci-dc-two (a b) (list a b))
+      (defun ci-dc-rest (a &rest r) (list a r))
+      (defun ci-dc-opt (a &optional b) (list a b))
+      (defclass ci-dc-box () ())
+      (defmethod conjugate ((b ci-dc-box)) 42)
+      (defun ci-dc-report (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
+      (print (ci-dc-report (lambda () (ci-dc-two 1))))
+      (print (let ((n 0)) (list (ci-dc-report (lambda () (ci-dc-two (incf n) (incf n) (incf n)))) n)))
+      (print (ci-dc-report (lambda () (ci-dc-rest))))
+      (print (ci-dc-report (lambda () (ci-dc-opt 1 2 3))))
+      (print (ci-dc-report (lambda () ((lambda (a) a) 1 2))))
+      (print (ci-dc-report (lambda () (conjugate 1 2))))
+      (print (ci-dc-report (lambda () (funcall #'conjugate 1 2))))
+      (print (list (ci-dc-two 1 2) (ci-dc-rest 1 2 3) (conjugate (make-instance 'ci-dc-box)) (conjugate #c(1 2))))
+    expected: |
+      "Function expects 2 arguments, got 1"
+      ("Function expects 2 arguments, got 3" 3)
+      "Function expects at least 1 argument, got 0"
+      "Function expects at most 2 arguments, got 3"
+      "Function expects 1 argument, got 2"
+      "CONJUGATE expects 1 argument, got 2"
+      "CONJUGATE expects 1 argument, got 2"
+      ((1 2) (1 (2 3)) 42 #C(1 -2))
+
   # Applying a value that names no function is the interpreter's condition on every
   # backend (.kb/error-handling.md): a type-error "Not a function: <prin1>" for a
   # non-designator, an undefined-function for a symbol -- NIL included -- no function

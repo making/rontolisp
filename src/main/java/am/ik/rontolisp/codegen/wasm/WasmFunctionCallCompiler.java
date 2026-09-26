@@ -6,6 +6,7 @@ import java.util.List;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.CompileWarnings;
+import am.ik.rontolisp.compiler.DefinedCallArity;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FunctionDesignators;
@@ -109,11 +110,15 @@ final class WasmFunctionCallCompiler {
 		if (fi != null) {
 			WasmEmitHelper.requireNoCharvecHelper(ctx, name);
 			List<LispVal> args = cons.toList();
-			int supplied = args.size() - 1;
 			int required = fi.variadic() ? fi.paramCount() - 1 : fi.paramCount();
-			if (supplied < required || (!fi.variadic() && supplied > required)) {
-				throw new UnsupportedOperationException(name + " expects " + (fi.variadic() ? "at least " : "")
-						+ required + " argument" + (required == 1 ? "" : "s") + ", got " + supplied);
+			// A count the lambda list rules out is the interpreter's program-error when
+			// the call RUNS, its arguments evaluated first, with a compile-time warning
+			// (compiler/DefinedCallArity): the call may sit in a branch never taken or
+			// under a program-error handler.
+			LispVal wrongCount = DefinedCallArity.wrongCountSignal(cons, name, required, fi.variadic());
+			if (wrongCount != null) {
+				WasmExprCompiler.compileExpr(wrongCount, ctx);
+				return;
 			}
 			// Push null env (defun functions ignore it)
 			ctx.writer.write(Instruction.REF_NULL);
