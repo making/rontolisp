@@ -3937,13 +3937,24 @@ public final class WasmLispCompiler implements LispCompiler {
 						: hashGasGlobalIndex >= 0 ? hashGasGlobalIndex : ostreamTableGlobalIndex;
 		int renderPathGlobalIndex = lastCounterGlobalIndex + 1;
 		int renderDepthGlobalIndex = lastCounterGlobalIndex + 2;
+		// The ended-stream latch of a module that binds a component stream.read: a cons
+		// list of the i31 readable-end handles whose read completed DROPPED. That status
+		// can come WITH the last items (Dropped(n), n > 0), and the host traps the next
+		// stream.read of the handle, so the read wrappers answer a latched handle nil
+		// without touching it; its drop-readable unlinks it. After the render pair, so
+		// every module without a stream read keeps the globals it had.
+		boolean readsComponentStream = componentAsyncWrappers.values()
+			.stream()
+			.anyMatch(async -> async.stream() && async.op() == WasmComponentImportCompiler.AsyncOp.READ);
+		int streamEndedGlobalIndex = readsComponentStream ? renderDepthGlobalIndex + 1 : -1;
 		// The quoted-datum constants (.kb/quoted-data.md): one (mut (ref null eq)) =
 		// null per quoted aggregate the bodies compile, discovered DURING body
 		// compilation, so they are appended after every fixed-index global above --
 		// the render-guard pair included -- and nothing renumbers. A program with no
 		// quoted aggregate allocates none and is byte-identical to a build that never
 		// knew about them.
-		QuoteGlobals quoteGlobals = new QuoteGlobals(renderDepthGlobalIndex + 1);
+		QuoteGlobals quoteGlobals = new QuoteGlobals(
+				(streamEndedGlobalIndex >= 0 ? streamEndedGlobalIndex : renderDepthGlobalIndex) + 1);
 
 		// Create string table. The page-6 component base exists to keep the static data
 		// clear of the OTHER writers of the shared memory (the adapter's page-5 scratch,
@@ -4787,7 +4798,7 @@ public final class WasmLispCompiler implements LispCompiler {
 								Objects.requireNonNull(importSlotIndex
 									.get(schedIface + "\0" + WasmComponentImportCompiler.FIELD_SUBTASK_DROP))),
 						schedRegistryGlobalIndex, schedSetGlobalIndex, schedReadFreeGlobalIndex, allocFuncIndex,
-						strFromMemFuncIndex, bytesFromMemFuncIndex);
+						strFromMemFuncIndex, bytesFromMemFuncIndex, streamEndedGlobalIndex);
 				break;
 			}
 		}
@@ -4864,7 +4875,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						Objects.requireNonNull(importSlotIndex
 							.get(async.module() + "\0" + WasmComponentImportCompiler.FIELD_SUBTASK_DROP)));
 				byte[] body = WasmComponentImportCompiler.buildAsyncBody(ctxBuilder, async, ordinal, asyncWaitOrdinals,
-						allocFuncIndex, strFromMemFuncIndex, bytesFromMemFuncIndex, sched);
+						allocFuncIndex, strFromMemFuncIndex, bytesFromMemFuncIndex, sched, streamEndedGlobalIndex);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(async.lispName())), body);
 			}
 			for (WasmComponentImportCompiler.AsyncCall call : componentCallStartWrappers.values()) {
@@ -7245,6 +7256,17 @@ public final class WasmLispCompiler implements LispCompiler {
 					g.writeSignedLeb128(0);
 					g.write(Instruction.END);
 				});
+				// The ended-stream latch at streamEndedGlobalIndex, a (mut (ref null eq))
+				// = null (the empty list), present only when a stream.read is bound.
+				if (streamEndedGlobalIndex >= 0) {
+					gs.add(g -> {
+						g.writeRefType(true, Type.EQ.code());
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.REF_NULL);
+						g.writeHeapType(Type.EQ.code());
+						g.write(Instruction.END);
+					});
+				}
 				// One (mut (ref null eq)) = null per quoted aggregate datum
 				// (.kb/quoted-data.md), filled lazily by its quote site's first
 				// evaluation (WasmQuoteCompiler.compile). Discovered during body
