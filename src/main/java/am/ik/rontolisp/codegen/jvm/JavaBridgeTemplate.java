@@ -13,6 +13,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
+import java.util.function.ToIntBiFunction;
 
 import org.jspecify.annotations.Nullable;
 
@@ -85,8 +86,9 @@ final class JavaBridgeTemplate {
 
 	private static final ConcurrentHashMap<List<Object>, Field> FIELDS = new ConcurrentHashMap<>();
 
-	// class -> member -> choices, each {Object[] kinds, Executable, Class<?>[] parameter
-	// types, Boolean packed-varargs}.
+	// class -> member -> memos, each {Object[] kinds, Object[] overload}; an overload is
+	// {Executable, Class<?>[] parameter types, Boolean packed-varargs} (plain arrays: a
+	// nested record would become a second class file).
 	private static final ConcurrentHashMap<Class<?>, ConcurrentHashMap<String, Object[][]>> CHOICES = new ConcurrentHashMap<>();
 
 	private static final String KIND_NIL = "nil";
@@ -161,12 +163,13 @@ final class JavaBridgeTemplate {
 			throw new RuntimeException("java:new expects a class-name string, got " + describe(className));
 		}
 		Class<?> cls = loadClass(name);
-		Object[] sel = resolve(cls, CONSTRUCTOR, () -> constructors(cls), args);
-		if (sel == null) {
+		@Nullable Object[] values = renderedAll(args);
+		Object[] overload = resolve(cls, CONSTRUCTOR, () -> constructors(cls), values);
+		if (overload == null) {
 			throw new RuntimeException("No matching constructor for " + name + " with " + args.length + " argument(s)");
 		}
 		try {
-			return unmarshal(((Constructor<?>) sel[0]).newInstance((@Nullable Object[]) sel[1]));
+			return unmarshal(((Constructor<?>) overload[0]).newInstance(marshalArguments(overload, values)));
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("constructing " + name, ex);
@@ -299,54 +302,50 @@ final class JavaBridgeTemplate {
 
 	private static @Nullable Object invoke(Class<?> cls, @Nullable Object receiver, String methodName,
 			@Nullable Object[] args) {
-		Object[] sel = resolve(cls, methodName, () -> methods(cls, methodName), args);
-		if (sel == null) {
+		@Nullable Object[] values = renderedAll(args);
+		Object[] overload = resolve(cls, methodName, () -> methods(cls, methodName), values);
+		if (overload == null) {
 			throw new RuntimeException(
 					"No matching method " + cls.getName() + "." + methodName + " with " + args.length + " argument(s)");
 		}
 		try {
-			return unmarshal(((Method) sel[0]).invoke(receiver, (@Nullable Object[]) sel[1]));
+			return unmarshal(((Method) overload[0]).invoke(receiver, marshalArguments(overload, values)));
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("calling " + cls.getName() + "." + methodName, ex);
 		}
 	}
 
-	// The overload of `member` on `cls` for these arguments: the memoized choice when the
-	// argument kinds were seen before (marshalled afresh against its parameter types),
-	// otherwise select() over the candidates, remembered when every argument has a kind.
+	// The overload of `member` on `cls` for these (rendered) arguments: the one
+	// remembered
+	// for their kinds, otherwise select() over the candidates by argument kind (and
+	// remembered). A cons or Lisp array has no kind: such a call is costed by marshalling
+	// its arguments and never remembered.
 	private static Object @Nullable [] resolve(Class<?> cls, String member,
-			Supplier<? extends List<? extends Executable>> candidates, @Nullable Object[] args) {
-		// Render mutable character vectors once, before both the kinds and marshal() see
-		// them (marshal() renders again, a no-op on a rendered string).
-		@Nullable Object[] values = renderedAll(args);
+			Supplier<? extends List<? extends Executable>> candidates, @Nullable Object[] values) {
 		Object[] kinds = kindsOf(values);
-		if (kinds != null) {
-			Object[] choice = remembered(cls, member, kinds);
-			if (choice != null) {
-				Executable e = (Executable) choice[1];
-				Class<?>[] params = (Class<?>[]) choice[2];
-				Object[] sel = (Boolean) choice[3] ? tryVarargs(e, params, values) : tryFixedArity(e, params, values);
-				if (sel != null) {
-					return sel;
-				}
-			}
+		if (kinds == null) {
+			@Nullable Object[] slot = new @Nullable Object[1];
+			return select(candidates.get(), values.length, (i, target) -> marshal(values[i], target, slot, 0));
 		}
-		Object[] sel = select(candidates.get(), values);
-		if (sel != null && kinds != null) {
-			Executable e = (Executable) sel[0];
-			rememberChoice(cls, member, new Object[] { kinds, e, e.getParameterTypes(), sel[3] });
+		Object[] remembered = remembered(cls, member, kinds);
+		if (remembered != null) {
+			return remembered;
 		}
-		return sel;
+		Object[] chosen = select(candidates.get(), kinds.length, (i, target) -> kindCost(kinds[i], target));
+		if (chosen != null) {
+			rememberChoice(cls, member, new Object[] { kinds, chosen });
+		}
+		return chosen;
 	}
 
 	private static Object @Nullable [] remembered(Class<?> cls, String member, Object[] kinds) {
 		ConcurrentHashMap<String, Object[][]> members = CHOICES.get(cls);
-		Object[][] choices = members == null ? null : members.get(member);
-		if (choices != null) {
-			for (Object[] choice : choices) {
-				if (sameKinds((Object[]) choice[0], kinds)) {
-					return choice;
+		Object[][] memos = members == null ? null : members.get(member);
+		if (memos != null) {
+			for (Object[] memo : memos) {
+				if (sameKinds((Object[]) memo[0], kinds)) {
+					return (Object[]) memo[1];
 				}
 			}
 		}
@@ -366,24 +365,26 @@ final class JavaBridgeTemplate {
 	}
 
 	// Copy-on-write: a racing update may drop a choice, which is only resolved again.
-	private static void rememberChoice(Class<?> cls, String member, Object[] choice) {
+	private static void rememberChoice(Class<?> cls, String member, Object[] memo) {
 		ConcurrentHashMap<String, Object[][]> members = CHOICES.get(cls);
 		if (members == null) {
 			members = new ConcurrentHashMap<>();
 			remember(CHOICES, cls, members);
 		}
 		Object[][] old = members.get(member);
-		Object[][] choices;
+		Object[][] memos;
 		if (old == null || old.length >= CHOICES_PER_MEMBER) {
-			choices = new Object[][] { choice };
+			memos = new Object[][] { memo };
 		}
 		else {
-			choices = Arrays.copyOf(old, old.length + 1);
-			choices[old.length] = choice;
+			memos = Arrays.copyOf(old, old.length + 1);
+			memos[old.length] = memo;
 		}
-		members.put(member, choices);
+		members.put(member, memos);
 	}
 
+	// Mutable character vectors rendered once per call, before both the kinds and
+	// marshal() see them (marshal() renders again, a no-op on a rendered string).
 	private static @Nullable Object[] renderedAll(@Nullable Object[] args) {
 		@Nullable Object[] values = args;
 		for (int i = 0; i < args.length; i++) {
@@ -411,9 +412,9 @@ final class JavaBridgeTemplate {
 		return kinds;
 	}
 
-	// The token of which marshal(value, target) is a pure function for every target, or
-	// null when there is none: a cons or a Lisp array (the cost sums its elements), and
-	// the values marshal() never bridges. The tests mirror marshal()'s, in its order.
+	// The token of which every conversion cost is a pure function (kindCost), or null
+	// when there is none: a cons or a Lisp array (the cost sums its elements), and the
+	// values marshal() never bridges. The tests mirror marshal()'s, in its order.
 	private static @Nullable Object kindOf(@Nullable Object value) {
 		if (value == null) {
 			return KIND_NIL;
@@ -537,185 +538,146 @@ final class JavaBridgeTemplate {
 		}
 	}
 
-	// Picks the overload whose arguments marshal at the lowest total cost; ties broken
+	// Picks the overload whose arguments convert at the lowest total cost; ties broken
 	// by the parameter-type signature (never by getMethods() order). A varargs
 	// executable is tried both as-is and with the trailing arguments packed (at a flat
-	// extra cost). Returns {executable, marshalled args, Integer cost, Boolean
-	// packed-varargs} (a plain Object[] because a nested record would become a second
-	// class file).
-	private static Object @Nullable [] select(List<? extends Executable> candidates, @Nullable Object[] args) {
+	// extra cost). A pure function of the candidates and the argument costs (cost(i,
+	// target)): over kindCost of argument kinds it needs no argument value. Returns the
+	// overload {Executable, Class<?>[] params, Boolean packed-varargs}.
+	private static Object @Nullable [] select(List<? extends Executable> candidates, int argc,
+			ToIntBiFunction<Integer, Class<?>> cost) {
 		Object[] best = null;
+		int bestCost = 0;
 		for (Executable e : candidates) {
 			Class<?>[] params = e.getParameterTypes();
-			best = better(best, tryFixedArity(e, params, args));
+			int fixedCost = fixedArityCost(params, argc, cost);
+			if (fixedCost != NO_MATCH) {
+				Object[] fixed = new Object[] { e, params, Boolean.FALSE };
+				if (best == null || beats(fixed, fixedCost, best, bestCost)) {
+					best = fixed;
+					bestCost = fixedCost;
+				}
+			}
 			if (e.isVarArgs()) {
-				best = better(best, tryVarargs(e, params, args));
+				int packedCost = varargsCost(params, argc, cost);
+				if (packedCost != NO_MATCH) {
+					Object[] packed = new Object[] { e, params, Boolean.TRUE };
+					if (best == null || beats(packed, packedCost, best, bestCost)) {
+						best = packed;
+						bestCost = packedCost;
+					}
+				}
 			}
 		}
 		return best;
 	}
 
-	private static Object @Nullable [] better(Object @Nullable [] a, Object @Nullable [] b) {
-		if (a == null) {
-			return b;
-		}
-		if (b == null) {
-			return a;
-		}
-		int costA = (Integer) a[2];
-		int costB = (Integer) b[2];
-		return costB < costA || (costB == costA && signatureOf(b).compareTo(signatureOf(a)) < 0) ? b : a;
+	private static boolean beats(Object[] a, int costA, Object[] b, int costB) {
+		return costA < costB || (costA == costB && signatureOf(a).compareTo(signatureOf(b)) < 0);
 	}
 
-	private static Object @Nullable [] tryFixedArity(Executable e, Class<?>[] params, @Nullable Object[] args) {
-		if (params.length != args.length) {
-			return null;
+	private static int fixedArityCost(Class<?>[] params, int argc, ToIntBiFunction<Integer, Class<?>> cost) {
+		if (params.length != argc) {
+			return NO_MATCH;
 		}
-		@Nullable Object[] out = new @Nullable Object[params.length];
 		int total = 0;
 		for (int i = 0; i < params.length; i++) {
-			int cost = marshal(args[i], params[i], out, i);
-			if (cost == NO_MATCH) {
-				return null;
+			int c = cost.applyAsInt(i, params[i]);
+			if (c == NO_MATCH) {
+				return NO_MATCH;
 			}
-			total += cost;
+			total += c;
 		}
-		return new Object[] { e, out, total, Boolean.FALSE };
+		return total;
 	}
 
-	private static Object @Nullable [] tryVarargs(Executable e, Class<?>[] params, @Nullable Object[] args) {
+	private static int varargsCost(Class<?>[] params, int argc, ToIntBiFunction<Integer, Class<?>> cost) {
 		int fixed = params.length - 1;
-		if (args.length < fixed) {
-			return null;
+		if (argc < fixed) {
+			return NO_MATCH;
 		}
-		@Nullable Object[] out = new @Nullable Object[params.length];
 		int total = COST_VARARGS;
 		for (int i = 0; i < fixed; i++) {
-			int cost = marshal(args[i], params[i], out, i);
-			if (cost == NO_MATCH) {
-				return null;
+			int c = cost.applyAsInt(i, params[i]);
+			if (c == NO_MATCH) {
+				return NO_MATCH;
 			}
-			total += cost;
+			total += c;
 		}
 		Class<?> component = params[fixed].getComponentType();
-		Object packed = Array.newInstance(component, args.length - fixed);
-		@Nullable Object[] slot = new @Nullable Object[1];
-		for (int i = fixed; i < args.length; i++) {
-			int cost = marshal(args[i], component, slot, 0);
-			if (cost == NO_MATCH) {
-				return null;
+		for (int i = fixed; i < argc; i++) {
+			int c = cost.applyAsInt(i, component);
+			if (c == NO_MATCH) {
+				return NO_MATCH;
 			}
-			total += cost;
-			Array.set(packed, i - fixed, slot[0]);
+			total += c;
 		}
-		out[fixed] = packed;
-		return new Object[] { e, out, total, Boolean.TRUE };
+		return total;
 	}
 
 	// The tie-break key: the parameter-type names, with a "*" that keeps a packed varargs
 	// interpretation distinct from the fixed-arity one, so the tie-break stays a total
 	// order. Built only on a cost tie.
-	private static String signatureOf(Object[] sel) {
+	private static String signatureOf(Object[] overload) {
 		StringBuilder sb = new StringBuilder();
-		for (Class<?> p : ((Executable) sel[0]).getParameterTypes()) {
+		for (Class<?> p : (Class<?>[]) overload[1]) {
 			sb.append(p.getName()).append(',');
 		}
-		return (Boolean) sel[3] ? sb.append('*').toString() : sb.toString();
+		return (Boolean) overload[2] ? sb.append('*').toString() : sb.toString();
+	}
+
+	// The Java arguments for the chosen overload, packing a varargs tail.
+	private static @Nullable Object[] marshalArguments(Object[] overload, @Nullable Object[] values) {
+		Class<?>[] params = (Class<?>[]) overload[1];
+		boolean packs = (Boolean) overload[2];
+		@Nullable Object[] out = new @Nullable Object[params.length];
+		int fixed = packs ? params.length - 1 : params.length;
+		for (int i = 0; i < fixed; i++) {
+			marshalSelected(values[i], params[i], out, i);
+		}
+		if (packs) {
+			Class<?> component = params[fixed].getComponentType();
+			Object packed = Array.newInstance(component, values.length - fixed);
+			@Nullable Object[] slot = new @Nullable Object[1];
+			for (int i = fixed; i < values.length; i++) {
+				marshalSelected(values[i], component, slot, 0);
+				Array.set(packed, i - fixed, slot[0]);
+			}
+			out[fixed] = packed;
+		}
+		return out;
+	}
+
+	// select() costed this argument against this type, so it converts.
+	private static void marshalSelected(@Nullable Object value, Class<?> target, @Nullable Object[] out, int index) {
+		if (marshal(value, target, out, index) == NO_MATCH) {
+			throw new IllegalStateException("java interop: the selected overload rejects " + describe(value));
+		}
 	}
 
 	// Writes the Java value for `value` into out[index] and returns its conversion
-	// cost, or NO_MATCH if it cannot convert. The single source of truth for both
-	// overload selection and actual marshalling, mirroring eval/JavaInterop over the
-	// compiled value representation.
+	// cost, or NO_MATCH if it cannot convert, mirroring eval/JavaInterop over the
+	// compiled value representation. A value with a kind is costed by kindCost -- the
+	// one cost table -- and converted by convert(); a cons or Lisp array element-wise.
 	private static int marshal(@Nullable Object value, Class<?> target, @Nullable Object[] out, int index) {
 		// A mutable character vector marshals as the string it spells: rendered once
 		// here, the single source of truth for every argument position (fixed arity,
-		// varargs and constructors alike).
+		// varargs, constructors and sequence elements alike).
 		value = rendered(value);
-		if (value == null) { // nil
-			if (target == boolean.class || target == Boolean.class) {
-				out[index] = Boolean.FALSE;
-				return target == boolean.class ? COST_EXACT : COST_BOXED;
+		Object kind = kindOf(value);
+		if (kind != null) {
+			int cost = kindCost(kind, target);
+			if (cost != NO_MATCH) {
+				out[index] = convert(value, target);
 			}
-			if (target.isPrimitive()) {
-				return NO_MATCH;
-			}
-			out[index] = null;
-			return COST_BOXED; // nil carries no type, so any reference target ties
+			return cost;
 		}
-		if (value instanceof Long l) {
-			return marshalLong(l, target, out, index);
-		}
-		if (value instanceof Double d) {
-			return marshalDouble(d, target, out, index);
-		}
-		if (value instanceof int[] chBox && chBox.length == 1) {
-			// A Lisp CHARACTER is a length-1 int[]{codePoint}. Narrow to a Java char when
-			// the target parameter is char/Character AND the code point fits in the BMP;
-			// a
-			// supplementary code point cannot fit a single Java char, so bridging that
-			// parameter shape is refused (the caller can accept a String / int instead).
-			int cp = chBox[0];
-			if ((target == char.class || target == Character.class || target.isAssignableFrom(Character.class))
-					&& Character.isBmpCodePoint(cp)) {
-				Character c = (char) cp;
-				out[index] = c;
-				return target == char.class ? COST_EXACT : (target == Character.class ? COST_WIDEN : COST_BOXED);
-			}
-			// int / Integer accept the raw code point (including supplementary values).
-			if (target == int.class) {
-				out[index] = cp;
-				return COST_WIDEN;
-			}
-			if (target == Integer.class || target.isAssignableFrom(Integer.class)) {
-				out[index] = cp;
-				return target == Integer.class ? COST_WIDEN : COST_BOXED;
-			}
-			return NO_MATCH;
-		}
-		if (value instanceof String s) {
-			if (isLispString(s)) {
-				String str = stringValue(s);
-				if (target.isAssignableFrom(String.class)) {
-					out[index] = str;
-					return target == String.class ? COST_EXACT : COST_BOXED;
-				}
-				if ((target == char.class || target == Character.class) && str.length() == 1) {
-					out[index] = str.charAt(0);
-					return COST_NARROW;
-				}
-				return NO_MATCH;
-			}
-			if ("T".equals(s)) { // the symbol t = Lisp true (the reader upcases it)
-				if (target == boolean.class) {
-					out[index] = Boolean.TRUE;
-					return COST_EXACT;
-				}
-				if (target == Boolean.class || target.isAssignableFrom(Boolean.class)) {
-					out[index] = Boolean.TRUE;
-					return target == Boolean.class ? COST_WIDEN : COST_BOXED;
-				}
-				return NO_MATCH;
-			}
-			return NO_MATCH; // any other symbol is not bridged
-		}
-		if (value.getClass() == Object[].class) {
-			Object[] arr = (Object[]) value;
-			if (arr.length > 0 && arr[0] instanceof Integer) { // function value
-				if (target.isInterface()) {
-					out[index] = proxy(target, value);
-					return COST_PROXY;
-				}
-				return NO_MATCH;
-			}
-			List<@Nullable Object> elements = properListElements(arr);
+		if (value != null && value.getClass() == Object[].class) {
+			List<@Nullable Object> elements = properListElements((Object[]) value);
 			if (elements == null) {
 				return NO_MATCH; // a dotted (improper) list is not a sequence
 			}
 			return marshalSequence(elements, target, out, index);
-		}
-		if (value instanceof BigInteger || value instanceof BigInteger[]) {
-			return NO_MATCH; // bignums and ratios are not bridged (as interpreted)
 		}
 		if (value instanceof ArrayList<?> list && !list.isEmpty() && list.get(0) instanceof Object[] header) {
 			// The compiled Lisp array representation: slot 0 = the {dims, fillPointer,
@@ -736,12 +698,154 @@ final class JavaBridgeTemplate {
 			int count = header[1] instanceof Long fp ? fp.intValue() : list.size() - 1;
 			return marshalSequence(new ArrayList<>(list.subList(1, 1 + count)), target, out, index);
 		}
-		// Anything else is a wrapped host object.
-		if (target.isInstance(value)) {
-			out[index] = value;
-			return target == value.getClass() ? COST_EXACT : COST_WIDEN;
+		return NO_MATCH; // other symbols, bignums and ratios are not bridged (as
+							// interpreted)
+	}
+
+	// The conversion cost of a value of `kind` where `target` is expected, or NO_MATCH.
+	// Pure: it reads no value, so overload selection over kinds needs none. Mirrors
+	// eval/JavaInterop.kindCost.
+	private static int kindCost(Object kind, Class<?> target) {
+		if (kind instanceof Class<?> host) { // a wrapped host object's exact class
+			if (!target.isAssignableFrom(host)) {
+				return NO_MATCH;
+			}
+			return target == host ? COST_EXACT : COST_WIDEN;
+		}
+		return switch ((String) kind) {
+			case KIND_NIL -> {
+				if (target == boolean.class) {
+					yield COST_EXACT;
+				}
+				// nil carries no type, so any reference target ties
+				yield target.isPrimitive() ? NO_MATCH : COST_BOXED;
+			}
+			case KIND_T -> {
+				if (target == boolean.class) {
+					yield COST_EXACT;
+				}
+				if (target == Boolean.class) {
+					yield COST_WIDEN;
+				}
+				yield target.isAssignableFrom(Boolean.class) ? COST_BOXED : NO_MATCH;
+			}
+			case KIND_INTEGER -> integerCost(target);
+			case KIND_FLOAT -> floatCost(target);
+			case KIND_STRING, KIND_STRING_1 -> {
+				if (target.isAssignableFrom(String.class)) {
+					yield target == String.class ? COST_EXACT : COST_BOXED;
+				}
+				// Only a one-character string narrows to a char.
+				yield KIND_STRING_1.equals(kind) && (target == char.class || target == Character.class) ? COST_NARROW
+						: NO_MATCH;
+			}
+			case KIND_CHAR, KIND_SUPPLEMENTARY_CHAR -> {
+				// A Lisp CHARACTER narrows to a Java char only when its code point is in
+				// the BMP; a supplementary one cannot fit a single char, so that
+				// parameter shape is refused (the caller can accept a String / int).
+				if (KIND_CHAR.equals(kind) && (target == char.class || target == Character.class
+						|| target.isAssignableFrom(Character.class))) {
+					yield target == char.class ? COST_EXACT : (target == Character.class ? COST_WIDEN : COST_BOXED);
+				}
+				// int / Integer accept the raw code point (including supplementary
+				// values).
+				if (target == int.class || target == Integer.class) {
+					yield COST_WIDEN;
+				}
+				yield target.isAssignableFrom(Integer.class) ? COST_BOXED : NO_MATCH;
+			}
+			case KIND_FUNCTION -> target.isInterface() ? COST_PROXY : NO_MATCH;
+			default -> throw new IllegalArgumentException("unknown argument kind " + kind);
+		};
+	}
+
+	private static int integerCost(Class<?> target) {
+		if (target == int.class) {
+			return COST_EXACT;
+		}
+		if (target == Integer.class || target == long.class || target == Long.class) {
+			return COST_WIDEN;
+		}
+		if (target == double.class || target == Double.class || target == float.class || target == Float.class) {
+			return COST_CONVERT;
+		}
+		if (target == short.class || target == Short.class || target == byte.class || target == Byte.class) {
+			return COST_NARROW;
+		}
+		if (target == Object.class || target == Number.class || target.isAssignableFrom(Long.class)
+				|| target.isAssignableFrom(Integer.class)) {
+			return COST_BOXED;
 		}
 		return NO_MATCH;
+	}
+
+	private static int floatCost(Class<?> target) {
+		if (target == double.class) {
+			return COST_EXACT;
+		}
+		if (target == Double.class) {
+			return COST_WIDEN;
+		}
+		if (target == float.class || target == Float.class) {
+			return COST_NARROW;
+		}
+		if (target == Object.class || target == Number.class || target.isAssignableFrom(Double.class)) {
+			return COST_BOXED;
+		}
+		return NO_MATCH;
+	}
+
+	// The Java value of a (rendered) value with a kind, for a target kindCost accepted.
+	private static @Nullable Object convert(@Nullable Object value, Class<?> target) {
+		if (value == null) { // nil
+			return target == boolean.class || target == Boolean.class ? Boolean.FALSE : null;
+		}
+		if (value instanceof Long l) {
+			return convertLong(l, target);
+		}
+		if (value instanceof Double d) {
+			return target == float.class || target == Float.class ? (Object) (float) d.doubleValue() : (Object) d;
+		}
+		if (value instanceof int[] chBox) { // a CHARACTER
+			int cp = chBox[0];
+			return Character.isBmpCodePoint(cp)
+					&& (target == char.class || target == Character.class || target.isAssignableFrom(Character.class))
+							? (Object) (char) cp : (Object) cp;
+		}
+		if (value instanceof String s) {
+			if (!isLispString(s)) {
+				return Boolean.TRUE; // the symbol t
+			}
+			String str = stringValue(s);
+			return target.isAssignableFrom(String.class) ? str : (Object) str.charAt(0);
+		}
+		if (value.getClass() == Object[].class) { // a function value
+			return proxy(target, value);
+		}
+		return value; // a wrapped host object
+	}
+
+	private static Object convertLong(long v, Class<?> target) {
+		if (target == int.class || target == Integer.class) {
+			return (int) v;
+		}
+		if (target == long.class || target == Long.class) {
+			return v;
+		}
+		if (target == double.class || target == Double.class) {
+			return (double) v;
+		}
+		if (target == float.class || target == Float.class) {
+			return (float) v;
+		}
+		if (target == short.class || target == Short.class) {
+			return (short) v;
+		}
+		if (target == byte.class || target == Byte.class) {
+			return (byte) v;
+		}
+		// Box to the narrowest type that holds the value, like Common Lisp fixnums.
+		return v >= Integer.MIN_VALUE && v <= Integer.MAX_VALUE ? (Object) (int) v : (Object) v;
 	}
 
 	// A proper list (or rank-1 vector) converts to a Java array (element-wise to the
@@ -778,56 +882,6 @@ final class JavaBridgeTemplate {
 			}
 			out[index] = list;
 			return total;
-		}
-		return NO_MATCH;
-	}
-
-	private static int marshalLong(long v, Class<?> target, @Nullable Object[] out, int index) {
-		if (target == int.class || target == Integer.class) {
-			out[index] = (int) v;
-			return target == int.class ? COST_EXACT : COST_WIDEN;
-		}
-		if (target == long.class || target == Long.class) {
-			out[index] = v;
-			return COST_WIDEN;
-		}
-		if (target == double.class || target == Double.class) {
-			out[index] = (double) v;
-			return COST_CONVERT;
-		}
-		if (target == float.class || target == Float.class) {
-			out[index] = (float) v;
-			return COST_CONVERT;
-		}
-		if (target == short.class || target == Short.class) {
-			out[index] = (short) v;
-			return COST_NARROW;
-		}
-		if (target == byte.class || target == Byte.class) {
-			out[index] = (byte) v;
-			return COST_NARROW;
-		}
-		if (target == Object.class || target == Number.class || target.isAssignableFrom(Long.class)
-				|| target.isAssignableFrom(Integer.class)) {
-			// Box to the narrowest type that holds the value, like Common Lisp fixnums.
-			out[index] = v >= Integer.MIN_VALUE && v <= Integer.MAX_VALUE ? (Object) (int) v : (Object) v;
-			return COST_BOXED;
-		}
-		return NO_MATCH;
-	}
-
-	private static int marshalDouble(double v, Class<?> target, @Nullable Object[] out, int index) {
-		if (target == double.class || target == Double.class) {
-			out[index] = v;
-			return target == double.class ? COST_EXACT : COST_WIDEN;
-		}
-		if (target == float.class || target == Float.class) {
-			out[index] = (float) v;
-			return COST_NARROW;
-		}
-		if (target == Object.class || target == Number.class || target.isAssignableFrom(Double.class)) {
-			out[index] = v;
-			return COST_BOXED;
 		}
 		return NO_MATCH;
 	}

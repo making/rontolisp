@@ -15,44 +15,44 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
 - Trap: the template must have NO nested classes/records and NO rontolisp imports.
   `usesJava` forces `usesEval` and threads `JvmRuntimeBuilder.JavaPrint` into the print builders.
 - `select()` = lowest total cost `COST_EXACT` < `COST_WIDEN` < `COST_CONVERT` < `COST_NARROW` <
-  `COST_BOXED` < `COST_PROXY` (`COST_VARARGS` via `tryVarargs`), ties by stable signature string.
+  `COST_BOXED` < `COST_PROXY` (`COST_VARARGS` via `varargsCost`), ties by stable signature string.
   `marshal`/`marshalSequence`/`accessibleMethod`. Symbols, hash tables, dotted lists and rank-2+
   arrays are NOT marshalled.
 
-## Resolution caches (both bridges, identical)
+## Resolution: kinds, pure select, caches (both bridges, identical)
 Per call the uncached bridge paid `getMethods()` (~2.5 us), `select()` (250 ns - 1.4 us),
-`Class.forName` (~500 ns); a resolved `Method.invoke` is ~46 ns. Both bridges now remember:
-class by name, constructors of a class, accessible methods of (class, name), field of (class,
-name), and the CHOICE per (class, member, argument kinds) -> executable + parameter types +
-packed-varargs flag. `ConcurrentHashMap` only (the template cannot subclass `ClassValue`);
-each map is cleared when it reaches 4096 entries, a member keeps at most 16 choices.
-- A KIND is the smallest token of which every `marshal()` cost is a pure function: nil, t,
-  integer, float, string of UTF-16 length 1 (may narrow to `char`), other string, BMP char,
-  supplementary char, function value, host object = its exact `Class`. Kinds are canonical
-  (constants / `Class`), compared by identity. Conses and Lisp arrays have NO kind (the cost
-  sums the elements): such a call is resolved every time, never remembered. Values `marshal`
-  never bridges (symbols, bignums, ...) have no kind either. The template renders mutable
-  character vectors ONCE per call (`renderedAll`) before classifying.
-- A hit re-marshals through the unchanged `tryFixedArity`/`tryVarargs` against the chosen
-  parameter types, so values, errors and proxies are exactly as before; a hit that fails to
-  marshal (a kind bug) falls back to `select()`. A new kind rule = a new `marshal` arm: keep
-  `kindOf` in step or the memo returns a stale overload (the `remembered*` tests catch the
-  integer/float conflation).
-- The tie-break signature is built only on a cost tie.
+`Class.forName` (~500 ns); a resolved `Method.invoke` is ~46 ns.
+- A KIND is the smallest token every conversion cost is a pure function of: nil, t, integer,
+  float, string of UTF-16 length 1 (may narrow to `char`), other string, BMP char,
+  supplementary char, function value, host object = its exact `Class`. Canonical (constants /
+  `Class`), compared by identity. Conses and Lisp arrays have NO kind (the cost sums the
+  elements); values `marshal` never bridges (symbols, bignums, ...) have none either.
+- `kindCost(kind, target)` is THE cost table; `marshal` = `kindCost` + `convert` for a value
+  with a kind, element-wise `marshal` for a sequence. So cost and conversion cannot drift.
+- `select(candidates, argc, cost)` returns an overload (executable, parameter types,
+  packed-varargs flag) and reads no argument value: over `kindCost` of kinds it is a pure
+  function of candidates x kinds (the shape a compile-time resolver can call). A call with a
+  kindless argument passes `marshal` as the cost instead and is never remembered.
+  `marshalArguments` then converts the values for the chosen overload only. The tie-break
+  signature is built only on a cost tie.
+- Caches: class by name, constructors of a class, accessible methods of (class, name), field
+  of (class, name), overload per (class, member, kinds). `ConcurrentHashMap` only (the
+  template cannot subclass `ClassValue`); a map is cleared at 4096 entries, a member keeps at
+  most 16 memos (copy-on-write; a lost race only re-resolves). The template renders mutable
+  character vectors once per call (`renderedAll`) before classifying.
+- A new `marshal` rule is a new kind or a `kindCost` arm; the `remembered*` tests catch a
+  kind that conflates two cost rows (integer/float).
 - Measured 2026-09-26, JDK 25, 1M-iteration loop after warm-up, ns/call, before -> after
-  (host under load; best of two):
-  JVM output: Math.max 3438 -> 217, Math.abs 3112 -> 324, StringBuilder.length 2026 -> 117,
-  append(int) 3404 -> 158, ArrayList.size 1231 -> 97, Integer.MAX_VALUE 374 -> 108,
-  new StringBuilder() 577 -> 153. Interpreter: Math.max 4259 -> 1136, Math.abs 3791 -> 927,
-  length 2931 -> 765, append 4664 -> 701, size 1520 -> 653, field 946 -> 616, new 1202 -> 683;
+  (shared host, best of 2-3 runs):
+  JVM output: Math.max 3438 -> 248, Math.abs 3112 -> 301, StringBuilder.length 2026 -> 148,
+  append(int) 3404 -> 194, ArrayList.size 1231 -> 120, Integer.MAX_VALUE 374 -> 120,
+  new StringBuilder() 577 -> 129. Interpreter: Math.max 4259 -> 1141, Math.abs 3791 -> 799,
+  length 2931 -> 784, append 4664 -> 635, size 1520 -> 606, field 946 -> 593, new 1202 -> 591;
   the interpreter is now at its own loop floor (`(setq *x* i)` in the same loop: ~700-1000).
-  What remains on the JVM (CHM gets, `String.hashCode` of the per-call name substrings,
-  `Object[]` packing, `Method.invoke`) is what an invokedynamic call site would remove.
+  What remains on the JVM is CHM gets, `String.hashCode` of the per-call name substrings,
+  `Object[]` packing and `Method.invoke`.
 - No `bench-report/` program: that suite compares portable ANSI CL across SBCL/ECL/ABCL and
   the wasm backend, none of which has `java:`.
-- Rejected: compile-time static binding. Selection depends on the receiver's run-time class
-  and argument values; the compile classpath is the CLI's (not the user's, not reflectable in
-  the native binary), so the output would depend on the build environment.
 
 ## Tests / docs
 `JavaInteropTest` + `JvmJavaInteropCompilerTest` mirror the same cases — keep in step, headless
