@@ -3151,6 +3151,45 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void findSymbolInAMissingPackageSignalsACatchablePackageError() throws Exception {
+		// A literal and a computed designator naming no package (nil included) signal a
+		// catchable package-error for either value arity and create nothing.
+		assertThat(compileAndRun("""
+				(defun fse-in (p) (find-symbol "X" p))
+				(print (handler-case (find-symbol "X" "FSE-NOPKG") (error () :caught)))
+				(print (handler-case (fse-in "FSE-NOPKG")
+				         (package-error (e) (list (package-error-package e) (princ-to-string e)))))
+				(print (handler-case (fse-in nil) (package-error () :caught)))
+				(print (handler-case (find-symbol "X" nil) (package-error () :caught)))
+				(print (handler-case (multiple-value-list (find-symbol "X" :fse-nopkg))
+				         (package-error () :caught)))
+				(print (handler-case (multiple-value-list (fse-in "FSE-NOPKG")) (package-error () :caught)))
+				(print (find-package "FSE-NOPKG"))
+				"""))
+			.isEqualTo(":CAUGHT\n(:FSE-NOPKG \"No such package: FSE-NOPKG\")\n:CAUGHT\n:CAUGHT\n:CAUGHT\n:CAUGHT\nNIL");
+	}
+
+	@Test
+	void findSymbolInAMissingPackageSignalsWithRuntimePackages() throws Exception {
+		// The same with runtime packages in the program; a runtime package answers
+		// from its member table.
+		assertThat(compileAndRun("""
+				(defun fse-in (p) (find-symbol "X" p))
+				(print (handler-case (find-symbol "X" "FSE-NOPKG") (error () :caught)))
+				(print (handler-case (fse-in "FSE-NOPKG")
+				         (package-error (e) (list (package-error-package e) (princ-to-string e)))))
+				(print (handler-case (fse-in nil) (package-error () :caught)))
+				(print (handler-case (find-symbol "X" nil) (package-error () :caught)))
+				(print (handler-case (multiple-value-list (find-symbol "X" :fse-nopkg))
+				         (package-error () :caught)))
+				(print (handler-case (multiple-value-list (fse-in "FSE-NOPKG")) (package-error () :caught)))
+				(print (find-package "FSE-NOPKG"))
+				(print (fse-in (make-package "FSE-RT" :use nil)))
+				""")).isEqualTo(
+				":CAUGHT\n(:FSE-NOPKG \"No such package: FSE-NOPKG\")\n:CAUGHT\n:CAUGHT\n:CAUGHT\n:CAUGHT\nNIL\nNIL");
+	}
+
+	@Test
 	void internIntoAMissingPackageSignalsACatchablePackageError() throws Exception {
 		// A literal and a computed designator naming no package signal a catchable
 		// package-error and create nothing.
@@ -4026,10 +4065,12 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunFindSymbolWithAComputedPackageDesignator() throws Exception {
 		// (find-symbol name pkg) with pkg in a variable: keyword/cl/cl-user need no
-		// qualifier, anything else gets the external "PKG:" spelling.
-		assertThat(compileAndRun("(defun fs (n p) (find-symbol n p))"
-				+ "(print (fs \"FOO\" :keyword)) (print (fs \"CAR\" :cl)) (print (fs \"BAR\" nil))"))
-			.isEqualTo(":FOO\nCAR\nNIL");
+		// qualifier, anything else gets the external "PKG:" spelling; nil names no
+		// package, so it signals.
+		assertThat(compileAndRun(
+				"(defun fs (n p) (find-symbol n p))" + "(print (fs \"FOO\" :keyword)) (print (fs \"CAR\" :cl))"
+						+ "(print (handler-case (fs \"BAR\" nil) (package-error () :caught)))"))
+			.isEqualTo(":FOO\nCAR\n:CAUGHT");
 	}
 
 	// macroexpand/macroexpand-1 with a literal quoted argument are folded to the
