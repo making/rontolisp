@@ -21,8 +21,8 @@
   handler outside it cannot resume a `raise-continuable` of the body. The handler of a
   `with-exception-handler` runs where `raise`, `raise-continuable` and `error` stand, but
   for an error a built-in procedure signals it runs after the `thunk` has been left. On
-  WebAssembly an error the machine traps on (`car` of a non-pair, an index out of range)
-  ends the program instead of being raised. An uncaught `error` ends the program with its
+  WebAssembly a string index out of range is not checked (`string-ref` past the end answers
+  a character). An uncaught `error` ends the program with its
   message and irritants, an uncaught `raise` with its object.
 - Calling a parameter object with an argument is an error; Gauche sets its value. `eval`
   refuses `parameterize` by name.

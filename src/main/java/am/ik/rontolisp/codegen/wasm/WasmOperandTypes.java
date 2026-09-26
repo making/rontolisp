@@ -94,12 +94,20 @@ final class WasmOperandTypes {
 	 */
 	private static final String CHARACTER_CHECKED = LispNames.SCHAR_SET_RUNTIME;
 
+	/**
+	 * The element accesses whose sites check a subscript against its bound in EH mode
+	 * ({@code _idx_in}): a table naming any of them gives the shared landing its index
+	 * arm ({@link Operators#indexed}).
+	 */
+	private static final java.util.List<String> INDEXED = java.util.List.of("AREF", OperandTypes.SETF_AREF,
+			"ROW-MAJOR-AREF", OperandTypes.SETF_ROW_MAJOR_AREF);
+
 	private static java.util.Map<String, java.util.List<String>> loweredTo() {
 		java.util.Map<String, java.util.List<String>> map = new java.util.HashMap<>();
 		map.put("COERCE", java.util.List.of("FLOAT"));
 		map.put("AREF", java.util.List.of(OperandTypes.SETF_AREF));
 		map.put("SVREF", java.util.List.of(OperandTypes.SETF_AREF));
-		map.put("ELT", java.util.List.of(OperandTypes.SETF_AREF));
+		map.put("ELT", java.util.List.of("AREF", OperandTypes.SETF_AREF));
 		map.put("CHAR", java.util.List.of(OperandTypes.SETF_CHAR));
 		map.put("SCHAR", java.util.List.of(OperandTypes.SETF_SCHAR));
 		map.put("ROW-MAJOR-AREF", java.util.List.of(OperandTypes.SETF_ROW_MAJOR_AREF));
@@ -130,9 +138,22 @@ final class WasmOperandTypes {
 	 * so a suffix no row can reach is never cited and drops with the string blob's dead
 	 * ranges
 	 */
-	record Operators(java.util.Map<String, Integer> ids, int base, java.util.Set<Integer> rowCodes) {
+	record Operators(java.util.Map<String, Integer> ids, int base, java.util.Set<Integer> rowCodes,
+			WasmLispCompiler.StringTable.@Nullable StringEntry indexPrefix,
+			WasmLispCompiler.StringTable.@Nullable StringEntry indexSuffix) {
 
-		static final Operators NONE = new Operators(java.util.Map.of(), -1, java.util.Set.of());
+		static final Operators NONE = new Operators(java.util.Map.of(), -1, java.util.Set.of(), null, null);
+
+		/**
+		 * Whether an element access checks its subscript against its bound
+		 * ({@code _idx_in}) and the shared landing reports an out-of-range one: exactly
+		 * when the table names an element access, so a module that spells none carries
+		 * neither the arm nor its two texts.
+		 * @return whether the index arm exists
+		 */
+		boolean indexed() {
+			return this.indexPrefix != null;
+		}
 
 		/**
 		 * Places the table for the operators this module can name: the ones the program
@@ -190,8 +211,14 @@ final class WasmOperandTypes {
 			if (spelled.test(CHARACTER_CHECKED)) {
 				rowCodes.add(code(OperandTypes.Kind.CHARACTER));
 			}
-			return new Operators(java.util.Map.copyOf(ids), table.appendReaderOwnedBlob(blob.toByteArray()),
-					java.util.Set.copyOf(rowCodes));
+			int base = table.appendReaderOwnedBlob(blob.toByteArray());
+			// The out-of-range subscript's texts: " is not of type (INTEGER 0 (" and "))"
+			// around the printed bound (OperandTypes.indexType).
+			boolean indexed = INDEXED.stream().anyMatch(wanted::contains);
+			return new Operators(java.util.Map.copyOf(ids), base, java.util.Set.copyOf(rowCodes),
+					indexed ? table
+						.addBodyString("\"" + OperandTypes.TYPE_INFIX + OperandTypes.INDEX_TYPE_PREFIX + "\"") : null,
+					indexed ? table.addBodyString("\"" + OperandTypes.INDEX_TYPE_SUFFIX + "\"") : null);
 		}
 
 	}
@@ -258,12 +285,14 @@ final class WasmOperandTypes {
 	}
 
 	/**
-	 * Whether a helper is one of the landings, which never return (and clear the register
-	 * themselves), so nothing after the call needs to.
+	 * Whether a helper clears the register itself, so nothing after the call needs to:
+	 * one of the landings, which never return, or a bound check ({@code _idx_in} and the
+	 * {@code _idx_bound} that calls it), which clears it on success.
 	 */
 	private static boolean isLanding(int func) {
 		return func == WasmLispCompiler.FUNC_TYPE_ERR_INT || func == WasmLispCompiler.FUNC_TYPE_ERR_NUM
-				|| func == WasmLispCompiler.FUNC_TYPE_ERR_REAL || func == WasmLispCompiler.FUNC_TYPE_ERR_LIST;
+				|| func == WasmLispCompiler.FUNC_TYPE_ERR_REAL || func == WasmLispCompiler.FUNC_TYPE_ERR_LIST
+				|| func == WasmLispCompiler.FUNC_IDX_IN || func == WasmLispCompiler.FUNC_IDX_BOUND;
 	}
 
 	/**
@@ -454,6 +483,22 @@ final class WasmOperandTypes {
 		getLocal(w, 0);
 		call(w, WasmLispCompiler.FUNC_PRIN1_TO_STR);
 		call(w, WasmLispCompiler.FUNC_STRING_CONCAT);
+		// an out-of-range subscript (a negative kind, -1 - bound: _idx_in): its type
+		// is (INTEGER 0 (bound)), the text around the printed bound
+		if (operators.indexed()) {
+			getLocal(w, KIND_LOCAL);
+			i32Const(w, 0);
+			w.write(Instruction.I32_LT_S);
+			w.write(Instruction.IF);
+			w.writeRefType(true, Type.EQ.code());
+			strBuild(w, java.util.Objects.requireNonNull(operators.indexPrefix()));
+			pushBound(w);
+			call(w, WasmLispCompiler.FUNC_PRIN1_TO_STR);
+			call(w, WasmLispCompiler.FUNC_STRING_CONCAT);
+			strBuild(w, java.util.Objects.requireNonNull(operators.indexSuffix()));
+			call(w, WasmLispCompiler.FUNC_STRING_CONCAT);
+			w.write(Instruction.ELSE);
+		}
 		// the type -- OperandTypes.expectedType: the funnel's own kind unnamed; for a
 		// funnel-typed operator the kind too, a to-double funnel's read as REAL; else the
 		// operator's, narrowed to REAL for a NUMBER operator where the funnel wanted a
@@ -501,6 +546,9 @@ final class WasmOperandTypes {
 			}
 		}
 		emitByCode(w, codes, texts.suffixes());
+		if (operators.indexed()) {
+			w.write(Instruction.END);
+		}
 		call(w, WasmLispCompiler.FUNC_STRING_CONCAT);
 		if (typeError == null) {
 			WasmEmitHelper.emitNewCons(w, identityHash);
@@ -512,12 +560,49 @@ final class WasmOperandTypes {
 				.requireNonNull(texts.typeNames());
 			w.write(Instruction.SET_LOCAL);
 			w.writeUnsignedLeb128(MSG_LOCAL);
-			WasmRuntimeBuilder.emitConditionThrow(w, typeError.instance(), SLOTS_LOCAL, MSG_LOCAL,
-					java.util.Map.of(typeError.datumSlot(), () -> getLocal(w, 0), typeError.expectedTypeSlot(),
-							() -> emitByCode(w, codes, typeNames)));
+			Runnable expectedType = () -> emitByCode(w, codes, typeNames);
+			if (operators.indexed()) {
+				// (INTEGER 0 (bound)) for an out-of-range subscript
+				Runnable byCode = expectedType;
+				expectedType = () -> {
+					getLocal(w, KIND_LOCAL);
+					i32Const(w, 0);
+					w.write(Instruction.I32_LT_S);
+					w.write(Instruction.IF);
+					w.writeRefType(true, Type.EQ.code());
+					strBuild(w, typeNames.get(code(OperandTypes.Kind.INTEGER) - 1));
+					i32Const(w, 0);
+					w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+					pushBound(w);
+					w.write(Instruction.REF_NULL);
+					w.writeHeapType(Type.EQ.code());
+					WasmEmitHelper.emitNewCons(w, identityHash);
+					w.write(Instruction.REF_NULL);
+					w.writeHeapType(Type.EQ.code());
+					WasmEmitHelper.emitNewCons(w, identityHash);
+					WasmEmitHelper.emitNewCons(w, identityHash);
+					WasmEmitHelper.emitNewCons(w, identityHash);
+					w.write(Instruction.ELSE);
+					byCode.run();
+					w.write(Instruction.END);
+				};
+			}
+			WasmRuntimeBuilder.emitConditionThrow(w, typeError.instance(), SLOTS_LOCAL, MSG_LOCAL, java.util.Map
+				.of(typeError.datumSlot(), () -> getLocal(w, 0), typeError.expectedTypeSlot(), expectedType));
 		}
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	/**
+	 * Pushes the bound an out-of-range subscript's kind encodes, {@code -1 - kind}, as an
+	 * i31.
+	 */
+	private static void pushBound(WasmWriter w) {
+		i32Const(w, -1);
+		getLocal(w, KIND_LOCAL);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 	}
 
 	/** Pushes {@code REAL}'s code when {@code test} holds, else the local's value. */

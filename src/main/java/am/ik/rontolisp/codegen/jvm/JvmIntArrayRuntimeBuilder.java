@@ -127,10 +127,14 @@ final class JvmIntArrayRuntimeBuilder {
 		MethodrefConstant arrayMakeTyped = self(cp, selfClass, JvmArrayRuntimeBuilder.MAKE_TYPED,
 				JvmArrayRuntimeBuilder.MAKE_TYPED_DESC);
 
+		// An out-of-range subscript is the access's type-error (JvmOperandTypeRuntime),
+		// named by its operator's wrapper.
+		MethodrefConstant ckBound = self(cp, selfClass, JvmOperandTypeRuntime.CK_BOUND,
+				JvmOperandTypeRuntime.CK_BOUND_DESC);
+
 		List<ArrayMethod> methods = new ArrayList<>();
-		methods.add(buildAref1(cp, longArrayClass, longClass, longIntValue, longValueOf, rtExClass, rtExInit,
-				aref1Delegate));
-		methods.add(buildAset1(cp, longArrayClass, longClass, bigIntegerClass, numberClass, longIntValue, longValueOf,
+		methods.add(buildAref1(cp, longArrayClass, longValueOf, ckBound, aref1Delegate));
+		methods.add(buildAset1(cp, longArrayClass, ckBound, longClass, bigIntegerClass, numberClass, longValueOf,
 				numberLongValue, rtExClass, rtExInit, aset1Delegate));
 		methods.add(buildDims(cp, longArrayClass, objectClass, longValueOf, dimsDelegate));
 		methods
@@ -156,25 +160,6 @@ final class JvmIntArrayRuntimeBuilder {
 		a.ldcString(message);
 		a.invokespecial(rtExInit);
 		a.op(Opcode.ATHROW);
-	}
-
-	// Bounds check for the packed vector in local l against the int index in local idx:
-	// idx < 0 || idx >= l.length - 1 throws "out of range".
-	private static void emitBoundsCheck(JvmAsm a, int l, int idx, ClassConstant rtExClass, MethodrefConstant rtExInit,
-			ConstantPool.StringConstant message) {
-		int oob = a.label();
-		int ok = a.label();
-		a.iload(idx);
-		a.branch(Opcode.IFLT, oob);
-		a.iload(idx);
-		a.aload(l);
-		a.arraylength();
-		a.iconst(1);
-		a.op(Opcode.ISUB);
-		a.branch(Opcode.IF_ICMPLT, ok);
-		a.bind(oob);
-		emitThrow(a, rtExClass, rtExInit, message);
-		a.bind(ok);
 	}
 
 	// Coerces the integer value in objSlot to a raw long in vSlot (Long or BigInteger:
@@ -213,13 +198,13 @@ final class JvmIntArrayRuntimeBuilder {
 		a.lstore(vSlot);
 	}
 
-	// _ivAref1(arr, i): packed -> Long.valueOf(l[1 + (int) i]) (pre-masked unsigned, so
-	// the boxed Long is the widened unsigned read); out-of-range index errors; else
-	// delegate. Serves rank-1 aref and row-major-aref. Locals: 0=arr, 1=i, 2=l, 3=idx.
-	private static ArrayMethod buildAref1(ConstantPool cp, ClassConstant longArrayClass, ClassConstant longClass,
-			MethodrefConstant longIntValue, MethodrefConstant longValueOf, ClassConstant rtExClass,
-			MethodrefConstant rtExInit, MethodrefConstant aref1Delegate) {
-		int arr = 0, i = 1, l = 2, idx = 3;
+	// _ivAref1(arr, i): packed -> Long.valueOf(l[1 + i]) (pre-masked unsigned, so the
+	// boxed Long is the widened unsigned read), i checked against the length
+	// (_ckBound); else delegate. Serves rank-1 aref and row-major-aref. Locals: 0=arr,
+	// 1=i, 2=l.
+	private static ArrayMethod buildAref1(ConstantPool cp, ClassConstant longArrayClass, MethodrefConstant longValueOf,
+			MethodrefConstant ckBound, MethodrefConstant aref1Delegate) {
+		int arr = 0, i = 1, l = 2;
 		JvmAsm a = new JvmAsm();
 		int notPacked = a.label();
 		a.aload(arr);
@@ -228,15 +213,9 @@ final class JvmIntArrayRuntimeBuilder {
 		a.aload(arr);
 		a.checkcast(longArrayClass);
 		a.astore(l);
-		a.aload(i);
-		a.checkcast(longClass);
-		a.invokevirtual(longIntValue);
-		a.istore(idx);
-		emitBoundsCheck(a, l, idx, rtExClass, rtExInit,
-				cp.addString("aref: index out of range for a packed integer vector"));
 		a.aload(l);
 		a.iconst(1);
-		a.iload(idx);
+		emitBoundedIndex(a, l, i, ckBound);
 		a.op(Opcode.IADD);
 		a.laload();
 		a.invokestatic(longValueOf);
@@ -246,15 +225,27 @@ final class JvmIntArrayRuntimeBuilder {
 		a.aload(i);
 		a.invokestatic(aref1Delegate);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(AREF1), cp.addUtf8(JvmArrayRuntimeBuilder.AREF1_DESC), 5, 4, a.finish());
+		return new ArrayMethod(cp.addUtf8(AREF1), cp.addUtf8(JvmArrayRuntimeBuilder.AREF1_DESC), 6, 3, a.finish());
 	}
 
-	// _ivAset1(arr, i, val): packed -> l[1 + (int) i] = coerce(val) & widthMask, return
-	// the stored value as a Long (the value AS STORED, matching the interpreter); else
-	// delegate. Serves rank-1 %aset and %row-major-aset. Locals: 0=arr, 1=i, 2=val, 3=l,
-	// 4=idx, 5=width, 6..7=v.
-	private static ArrayMethod buildAset1(ConstantPool cp, ClassConstant longArrayClass, ClassConstant longClass,
-			ClassConstant bigIntegerClass, ClassConstant numberClass, MethodrefConstant longIntValue,
+	// Pushes the subscript in local i checked against the vector's length
+	// (l.length - 1, past the width header): the index as an int.
+	private static void emitBoundedIndex(JvmAsm a, int l, int i, MethodrefConstant ckBound) {
+		a.aload(i);
+		a.aload(l);
+		a.arraylength();
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.invokestatic(ckBound);
+	}
+
+	// _ivAset1(arr, i, val): packed -> l[1 + i] = coerce(val) & widthMask, return the
+	// stored value as a Long (the value AS STORED, matching the interpreter); else
+	// delegate. The value is checked before the bound, as every store checks them.
+	// Serves rank-1 %aset and %row-major-aset. Locals: 0=arr, 1=i, 2=val, 3=l, 4=idx,
+	// 5=width, 6..7=v.
+	private static ArrayMethod buildAset1(ConstantPool cp, ClassConstant longArrayClass, MethodrefConstant ckBound,
+			ClassConstant longClass, ClassConstant bigIntegerClass, ClassConstant numberClass,
 			MethodrefConstant longValueOf, MethodrefConstant numberLongValue, ClassConstant rtExClass,
 			MethodrefConstant rtExInit, MethodrefConstant aset1Delegate) {
 		int arr = 0, i = 1, val = 2, l = 3, idx = 4, width = 5, v = 6;
@@ -266,14 +257,10 @@ final class JvmIntArrayRuntimeBuilder {
 		a.aload(arr);
 		a.checkcast(longArrayClass);
 		a.astore(l);
-		a.aload(i);
-		a.checkcast(longClass);
-		a.invokevirtual(longIntValue);
-		a.istore(idx);
-		emitBoundsCheck(a, l, idx, rtExClass, rtExInit,
-				cp.addString("%aset: index out of range for a packed integer vector"));
 		emitCoerceInt(a, val, v, longClass, bigIntegerClass, numberClass, numberLongValue, rtExClass, rtExInit,
 				cp.addString("%aset: a packed integer vector stores integers"));
+		emitBoundedIndex(a, l, i, ckBound);
+		a.istore(idx);
 		// width = (int) l[0]; v &= (1L << width) - 1
 		a.aload(l);
 		a.iconst(0);

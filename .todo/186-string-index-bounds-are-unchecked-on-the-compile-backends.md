@@ -44,6 +44,15 @@ other for exactly the reason above:
 Fixing the bounds check is therefore what unblocks a four-backend pin on
 `char`/`schar` too, and the ci-spec case should be widened in the same pass.
 
+## State after the array subscripts (2026-09-26)
+
+A MUTABLE character vector (`make-string`, `:element-type 'character`) is a general array on
+the compiled backends, so its `aref`/`row-major-aref` reads now report the decided text. Its
+stores through `%schar-set-runtime` report too, but under `(SETF ROW-MAJOR-AREF)` -- the
+runtime defun's own `%row-major-aset` -- where the interpreter names the place (`(SETF AREF)`,
+`(SETF CHAR)`): the site's `%check-index` has to bound the subscript under the place's name.
+An IMMUTABLE string is still unchecked on the JVM (`#\"`) and both wasm backends (`#\Nul`).
+
 ## What to do
 
 Emit the same check the interpreter has, per backend, on `char` / `schar` /
@@ -55,8 +64,13 @@ Emit the same check the interpreter has, per backend, on `char` / `schar` /
 - **WASM, both backends**: `WasmStringRuntimeBuilder` `_str_char_at` /
   `_str_char_byte_offset` and the char-vec store. `_str_char_count` already walks
   the data, so the length is available.
-- The error must be the same TEXT on all four -- `CHAR: index N out of bounds for
-  string of length L` -- or the ci-spec cannot pin it. Signalling makes it
+- The error must be the same TEXT on all four -- DECIDED 2026-09-26 with the array
+  subscripts: `CHAR: The value N is not of type (INTEGER 0 (L))`, a `type-error` whose datum
+  is the subscript and whose expected type is the list `(INTEGER 0 (L))`, `L` the capacity
+  (`.kb/error-handling.md`, "An out-of-range subscript is a type-error naming its bound").
+  The interpreter already reports it under `CHAR`, `SCHAR`, `AREF`, `ROW-MAJOR-AREF` and
+  their `setf`s. The array paths' checks exist to reuse: JVM `_ckBound`/`_oob`, wasm-GC
+  `_idx_ref`/`_idx_in` and `_type_err`'s index arm. Signalling makes it
   catchable by `handler-case`, which is the point (`.kb/error-handling.md`
   for what that costs on the wasm side: an EH-mode program).
 

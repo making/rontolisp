@@ -1170,13 +1170,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		// caller), so a program that does not read its arguments keeps byte-identical
 		// output -- and main grows no prologue.
 		boolean usesArgv = programUsesSymbol(program, LispNames.HOST_ARGV);
-		// Strict UTF-8 decode helper: emitted only when the program references the
-		// internal %octets-to-string-strict primitive (the prelude's lenient octet
+		// Octet-vector decode helper: emitted only when the program references the
+		// internal %octets-to-string-packed primitive (the prelude's lenient octet
 		// decoder is its one caller), so a program that never turns bytes into text
 		// keeps byte-identical output. Gated on ITS OWN name rather than riding
 		// usesAsyncRuntime: %octets-to-string is an ordinary function, reachable from a
 		// program that spawns nothing.
-		boolean usesOctetsStrict = programUsesSymbol(program, LispNames.OCTETS_TO_STRING_STRICT_INTERNAL_QUALIFIED);
+		boolean usesOctetsPacked = programUsesSymbol(program, LispNames.OCTETS_TO_STRING_PACKED_INTERNAL_QUALIFIED);
 		// Mutex helpers: emitted only when the program references one of the three
 		// rontolisp:*-mutex primitives, so a lock-free program keeps byte-identical
 		// output.
@@ -2052,6 +2052,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				{ JvmOperandTypeRuntime.ENDP, JvmOperandTypeRuntime.FIELD_DESC },
 				{ JvmOperandTypeRuntime.IS_CONS, JvmOperandTypeRuntime.IS_CONS_DESC },
 				{ JvmOperandTypeRuntime.CK_IDX, JvmOperandTypeRuntime.CK_IDX_DESC },
+				{ JvmOperandTypeRuntime.CK_BOUND_J, JvmOperandTypeRuntime.CK_BOUND_J_DESC },
 				{ JvmOperandTypeRuntime.CK_RAT, JvmOperandTypeRuntime.CK_RAT_DESC },
 				{ JvmOperandTypeRuntime.CK_LIST, JvmOperandTypeRuntime.FIELD_DESC },
 				{ JvmOperandTypeRuntime.CK_CONS, JvmOperandTypeRuntime.CK_CONS_DESC } }) {
@@ -3237,8 +3238,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// built-ins can grow socket branches.
 		final JvmSecureRandomRuntimeBuilder.@Nullable SecureRandomRuntime secureRandomRuntime = usesSecureRandom
 				? JvmSecureRandomRuntimeBuilder.build(cp, thisClass, longValueOf) : null;
-		final JvmAsyncRuntimeBuilder.@Nullable AsyncMethod octetsStrictRuntime = usesOctetsStrict
-				? JvmAsyncRuntimeBuilder.buildOctetsStrict(cp, stringConcat) : null;
+		final JvmAsyncRuntimeBuilder.@Nullable AsyncMethod octetsPackedRuntime = usesOctetsPacked
+				? JvmAsyncRuntimeBuilder.buildOctetsToString(cp, stringConcat) : null;
 		final List<JvmMutexRuntimeBuilder.MutexMethod> mutexMethods = usesMutexes ? JvmMutexRuntimeBuilder.build(cp)
 				: List.of();
 		final JvmSocketRuntimeBuilder.@Nullable SocketRuntime socketRuntime = usesSockets
@@ -4247,10 +4248,10 @@ public final class JvmLispCompiler implements LispCompiler {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, mvPerThread.setName(),
 					mvPerThread.setDesc(), 2, 1, mvPerThread.setCode(mvChannel.field()), List.of());
 		}
-		if (octetsStrictRuntime != null) {
-			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, octetsStrictRuntime.name(),
-					octetsStrictRuntime.desc(), octetsStrictRuntime.maxStack(), octetsStrictRuntime.maxLocals(),
-					octetsStrictRuntime.code(), exceptionTable(octetsStrictRuntime.exceptionTable()));
+		if (octetsPackedRuntime != null) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, octetsPackedRuntime.name(),
+					octetsPackedRuntime.desc(), octetsPackedRuntime.maxStack(), octetsPackedRuntime.maxLocals(),
+					octetsPackedRuntime.code(), exceptionTable(octetsPackedRuntime.exceptionTable()));
 		}
 		if (secureRandomRuntime != null) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, secureRandomRuntime.name(),

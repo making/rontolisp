@@ -94,6 +94,10 @@ WASM コンパイル(`--no-wasi` または `--no-gc`)には
 を通るので [`rontolisp:wasm-import`](../guides/wasm-gc-module.md)
 はそこでは拒否され、これを宣言するソースは `#-rontolisp-component` で囲みます(`--component --no-wasi`
 のビルドはリアクタでもあるので、両方が立ちます)。
+`--native` の出力にはさらに `:rontolisp-native` が加わります。中身のモジュールはこれまでどおりの Preview 1
+ビルドのままですが、それを包むランナーは Preview 1 単体にはない輸入(`rontolisp:fetch`、および
+`macos-aarch64` での `objc:`/`appkit:`/`metal:`/`scene:`)に応えるので、native では fetch
+し、それ以外の Preview 1 では代替する、というソースは `#+rontolisp-native` で囲みます。
 
 `*features*` はそのリストを保持する普通のスペシャル変数で、これはすべてのバックエンドで同じです。`push`
 でき、`setq` でき、他のスペシャル変数と同様に `let` で束縛できます。

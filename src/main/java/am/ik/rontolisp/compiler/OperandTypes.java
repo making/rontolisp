@@ -94,6 +94,16 @@ public final class OperandTypes {
 	/** The reported name of a store through a {@code row-major-aref} place. */
 	public static final String SETF_ROW_MAJOR_AREF = "(SETF ROW-MAJOR-AREF)";
 
+	/**
+	 * The text of an out-of-range subscript's expected type before the dimension:
+	 * {@code (INTEGER 0 (3))}, CL's {@code type-error} for an array index
+	 * ({@link #indexType}).
+	 */
+	public static final String INDEX_TYPE_PREFIX = "(INTEGER 0 (";
+
+	/** The text of an out-of-range subscript's expected type after the dimension. */
+	public static final String INDEX_TYPE_SUFFIX = "))";
+
 	/** An operator table entry naming a funnel-typed operator ({@link #operatorType}). */
 	public static final String FUNNEL_TYPE = "";
 
@@ -122,16 +132,16 @@ public final class OperandTypes {
 	 * reported name of {@code %aset}, the operator a {@code setf} of an {@code aref} or
 	 * {@code svref} place lowers to. {@code endp} is also {@code dolist}'s and
 	 * {@code loop}'s {@code for-in}: the expansions check the list's end as it does.
-	 * {@code last}, the {@code map*} family, {@code append}, {@code list-length} and the
-	 * {@code member}/{@code assoc}/{@code rassoc} scans check their list arguments. A
-	 * string access checks its string ({@code STRING}) and its subscript
-	 * ({@code INTEGER}), a string store its value ({@code CHARACTER});
+	 * {@code last}, the {@code map*} family, {@code append}, {@code list-length}, the
+	 * {@code member}/{@code assoc}/{@code rassoc} scans and {@code copy-list} check their
+	 * list arguments. A string access checks its string ({@code STRING}) and its
+	 * subscript ({@code INTEGER}), a string store its value ({@code CHARACTER});
 	 * {@code (setf row-major-aref)} is {@code %row-major-aset}'s reported name.
 	 */
 	private static final List<String> FUNNEL_TYPED = List.of("CAR", "CDR", "NTHCDR", "ENDP", "AREF", SETF_AREF, "CHAR",
 			"SCHAR", "LAST", "MAPCAR", "MAPC", "MAPCAN", "MAPLIST", "MAPL", "MAPCON", SETF_CHAR, SETF_SCHAR, "APPEND",
 			"LIST-LENGTH", "MEMBER", "MEMBER-IF", "ASSOC", "ASSOC-IF", "RASSOC", "RASSOC-IF", "ROW-MAJOR-AREF",
-			SETF_ROW_MAJOR_AREF);
+			SETF_ROW_MAJOR_AREF, "COPY-LIST");
 
 	static {
 		String[] numberOps = { "+", "-", "*", "/", "=", "ABS", "SIGNUM", "SQRT", "EXP", "LOG", "EXPT", "SIN", "COS",
@@ -248,6 +258,20 @@ public final class OperandTypes {
 			return Kind.REAL.name();
 		}
 		return type;
+	}
+
+	/**
+	 * The type an array subscript outside its dimension is not of: {@code (INTEGER 0
+	 * (dim))}, every integer in {@code [0, dim)} -- the expected type SBCL's
+	 * {@code invalid-array-index-error} carries. The report names the operator's own type
+	 * for no other failure: an out-of-range subscript is funnel-typed like a non-integer
+	 * one, and its datum is the subscript.
+	 * @param dimension the dimension the subscript indexes (the total size for a
+	 * row-major access)
+	 * @return the type's printed text
+	 */
+	public static String indexType(long dimension) {
+		return INDEX_TYPE_PREFIX + dimension + INDEX_TYPE_SUFFIX;
 	}
 
 	/**

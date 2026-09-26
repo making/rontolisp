@@ -62,6 +62,306 @@ final class WasmArrayRuntimeBuilder {
 	}
 
 	/**
+	 * Builds {@code _idx_bound (array, subscript) -> subscript}
+	 * ({@link WasmLispCompiler#FUNC_IDX_BOUND}): the subscript checked against the
+	 * array's TOTAL size through {@code _idx_in} -- the product of a packed float or a
+	 * general array's dims, a packed integer vector's length -- and answered unchanged.
+	 * The total is the bound of every flat access: a rank-1 subscript's (its one
+	 * dimension) and a row-major index's. A string passes unchecked, and the operator
+	 * register the caller set is cleared on every path that does not reach
+	 * {@code _idx_in}, which clears it itself.
+	 * @param operatorGlobal the operator register, or -1 when the module has none to
+	 * clear
+	 * @return the function body (signature {@code ((ref null eq), (ref null eq)) ->
+	 * (ref null eq)}, the binary callable)
+	 */
+	static byte[] buildIndexBoundBody(int operatorGlobal) {
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(out);
+		w.write(0); // no locals: the array and the subscript
+		w.write(Instruction.BLOCK, 0x40);
+		// packed float: the product of its dims (field 0)
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+		w.writeUnsignedLeb128(0);
+		emitTotalAndCheck(w);
+		w.write(Instruction.END);
+		// packed integer vector: its length
+		WasmArrayCompiler.testIntVector(w, 0);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		WasmArrayCompiler.emitPackedIntLen(w, 0);
+		call(w, WasmLispCompiler.FUNC_IDX_IN);
+		w.write(Instruction.DROP);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END);
+		// general: the product of the header's dims (its car)
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(0);
+		emitTotalAndCheck(w);
+		w.write(Instruction.END);
+		// anything else -- a string -- passes unchecked
+		if (operatorGlobal >= 0) {
+			i32(w, 0);
+			w.write(Instruction.SET_GLOBAL);
+			w.writeUnsignedLeb128(operatorGlobal);
+		}
+		w.write(Instruction.END);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.END);
+		return out.toByteArray();
+	}
+
+	/**
+	 * Builds {@code _idx_ref (array, subscript, operator) -> subscript}
+	 * ({@link WasmLispCompiler#FUNC_IDX_REF}): an element READ's whole subscript check in
+	 * one call, EH mode only -- the check {@code _idx_chk} makes (a subscript that is no
+	 * integer is the operator's {@code INTEGER} type-error, through {@code _int_val}) and
+	 * the flat bound {@link #buildIndexBoundBody} checks (the array's total size by
+	 * representation; a string, or anything that is no array, passes). The operator id
+	 * arrives as an i31 and becomes the register value both landings read; a subscript
+	 * that passes clears it. A read site calls this INSTEAD of {@code _idx_chk}, so its
+	 * hot path pays one call, as before.
+	 * @param operatorGlobal the operator register (EH mode with the landing's index arm),
+	 * or -1, when the body is a bare trap no site calls
+	 * @return the function body (signature
+	 * {@code ((ref null eq), (ref null eq), (ref null
+	 * eq)) -> (ref null eq)}, the ternary callable)
+	 */
+	static byte[] buildIndexRefBody(int operatorGlobal) {
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(out);
+		if (operatorGlobal < 0) {
+			w.write(0);
+			w.write(Instruction.UNREACHABLE);
+			w.write(Instruction.END);
+			return out.toByteArray();
+		}
+		int arr = 0, idx = 1, op = 2, bound = 3;
+		// locals: the bound (i32), the dims buckets being totalled
+		w.writeUnsignedLeb128(2);
+		w.writeUnsignedLeb128(1);
+		w.write(Type.I32);
+		w.writeUnsignedLeb128(1);
+		w.writeRefType(true, Type.EQ.code());
+		// the register: the operator both landings name
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(op);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(operatorGlobal);
+		// the bound, by representation; anything else passes with the register cleared
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(arr);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(arr);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+		w.writeUnsignedLeb128(0);
+		emitDimsTotal(w);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(bound);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END);
+		WasmArrayCompiler.testIntVector(w, arr);
+		w.write(Instruction.IF, 0x40);
+		WasmArrayCompiler.emitPackedIntLen(w, arr);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(bound);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(arr);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(arr);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(0);
+		emitDimsTotal(w);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(bound);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END);
+		// no bound to check: the subscript's own type still is (a string's arm unboxes
+		// it as an i31)
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitNotWideIntegerLands(w, idx);
+		w.write(Instruction.END);
+		clearRegister(w, operatorGlobal);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// a fixnum inside the bound passes
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(bound);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, 0x40);
+		clearRegister(w, operatorGlobal);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		// no fixnum: a wide integer (an i64 box or a limb one) is out of range below;
+		// anything else is the operator's INTEGER type-error (_int_val lands under the
+		// register -- only for a non-integer, whose limb-tier arm would trap)
+		emitNotWideIntegerLands(w, idx);
+		w.write(Instruction.END);
+		// out of range: the index arm of the shared landing, kind -1 - bound
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		i32(w, -1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(bound);
+		w.write(Instruction.I32_SUB);
+		call(w, WasmLispCompiler.FUNC_TYPE_ERR);
+		w.write(Instruction.DROP);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+		return out.toByteArray();
+	}
+
+	// Unless the non-fixnum in local idx is a wide integer (TYPE_BIGNUM, TYPE_BIGINT),
+	// lands through _int_val: the operator's INTEGER type-error. A wide integer is left
+	// to its caller -- _int_val's limb-tier arm traps rather than answering.
+	private static void emitNotWideIntegerLands(WasmWriter w, int idx) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		call(w, WasmLispCompiler.FUNC_INT_VAL);
+		w.write(Instruction.DROP);
+		w.write(Instruction.END);
+	}
+
+	// Over the dims buckets on the stack (in _idx_ref's body, whose local 4 holds them):
+	// their product as an i32 -- the one dimension of a rank-1 array read directly, any
+	// other rank through _arr_total.
+	private static void emitDimsTotal(WasmWriter w) {
+		int dims = 4;
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(dims);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(dims);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, Type.I32.code());
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(dims);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		i32(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(dims);
+		call(w, WasmLispCompiler.FUNC_ARR_TOTAL);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.END);
+	}
+
+	private static void clearRegister(WasmWriter w, int operatorGlobal) {
+		i32(w, 0);
+		w.write(Instruction.SET_GLOBAL);
+		w.writeUnsignedLeb128(operatorGlobal);
+	}
+
+	// Over [subscript, dims buckets] on the stack: _idx_in(subscript, _arr_total(dims)),
+	// its answer dropped, then out of the enclosing check block (depth 1 from inside
+	// its arm's if).
+	private static void emitTotalAndCheck(WasmWriter w) {
+		call(w, WasmLispCompiler.FUNC_ARR_TOTAL);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		call(w, WasmLispCompiler.FUNC_IDX_IN);
+		w.write(Instruction.DROP);
+		w.write(Instruction.BR, 1);
+	}
+
+	/**
 	 * Builds {@code _arr_get (header, flat) -> value}: the displacement walk, then
 	 * {@code buckets[index]}.
 	 * @return the function body (signature {@code ((ref null eq), i32) -> (ref null eq)},

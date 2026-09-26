@@ -2691,12 +2691,13 @@ final class WasmStringRuntimeBuilder {
 
 	/**
 	 * Builds {@code _iv_utf8_str} (FUNC_IV_UTF8_STR): a packed {@code (unsigned-byte 8)}
-	 * vector (a bare {@code TYPE_I8ARR}) validated as STRICT UTF-8 and, when it is,
-	 * turned into the {@code TYPE_STRING} its bytes spell by ONE {@code array.copy}
-	 * between the two storage quotes; anything else answers nil. The native half of the
-	 * prelude's {@code rontolisp::%octets-to-string}, so a well-formed body -- every real
-	 * one -- decodes at the speed of a copy and only malformed bytes pay the per-byte
-	 * loop.
+	 * vector (a bare {@code TYPE_I8ARR}) decoded into a {@code TYPE_STRING} by the
+	 * prelude's lenient {@code rontolisp::%octets-to-string} rule; any other value
+	 * answers nil. The native half of that decoder: valid UTF-8 -- every real text body
+	 * -- is ONE {@code array.copy} between the two storage quotes, and anything else a
+	 * two-pass transcode (count the output bytes, then write them) of the prelude's arms,
+	 * so a binary body never reaches the compiled per-byte loop, which cost ~550 ns a
+	 * byte and a GC heap many times the body's size.
 	 *
 	 * <p>
 	 * The validator is the strict one, deliberately NOT the walk
@@ -2718,18 +2719,20 @@ final class WasmStringRuntimeBuilder {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: v = 0. locals: arr = 1 (TYPE_I8ARR), out = 2 ($str_bytes);
-		// n = 3, i = 4, b = 5, c = 6, k = 7, lo = 8, hi = 9, id = 10 (i32).
+		// n = 3, i = 4, b = 5, c = 6, k = 7, lo = 8, hi = 9, id = 10, m = 11, cp = 12,
+		// adv = 13, j = 14 (i32).
 		w.write(3);
 		w.write(1);
 		w.writeRefType(true, WasmLispCompiler.TYPE_I8ARR);
 		w.write(1);
 		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
-		w.write(8);
+		w.write(12);
 		w.write(Type.I32);
 		int v = 0, arr = 1, out = 2, n = 3, i = 4, b = 5, c = 6, k = 7, lo = 8, hi = 9, id = 10;
+		int m = 11, cp = 12, adv = 13, j = 14;
 
 		// Not a packed octet vector -> nil. The caller's loop walks the value through the
-		// generic aref, so a character vector or a general array is its business.
+		// generic aref, so a general array is its business.
 		get(w, v);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
@@ -2829,8 +2832,7 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // B: invalid
-		w.write(Instruction.REF_NULL);
-		w.writeHeapType(Type.EQ.code());
+		emitLenientTranscode(w, arr, out, n, i, b, c, id, m, cp, adv, j);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // A: valid
 		// out = array.new_default $str_bytes (n + 2); the frame quotes, then ONE copy of
@@ -2881,6 +2883,238 @@ final class WasmStringRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.END); // function
 		return body.toByteArray();
+	}
+
+	// Pushes the TYPE_STRING the prelude's lenient rule decodes the TYPE_I8ARR in arr
+	// (length n) to: pass 1 sums each decoded character's UTF-8 width into m, pass 2
+	// writes the characters into a $str_bytes of exactly m + 2 bytes between the frame
+	// quotes, so the result costs its own size and nothing transient. A code point is
+	// re-encoded the way every other wasm string build encodes one (a surrogate as its
+	// three bytes, U+0000 as one), which is what the loop's write-char produced.
+	private static void emitLenientTranscode(WasmWriter w, int arr, int out, int n, int i, int b, int c, int id, int m,
+			int cp, int adv, int j) {
+		i32(w, 0);
+		set(w, m);
+		i32(w, 0);
+		set(w, i);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, i);
+		get(w, n);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		emitLenientStep(w, arr, i, n, b, c, cp, adv);
+		// m += 1 + (cp >= 0x80) + (cp >= 0x800) + (cp >= 0x10000)
+		get(w, m);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		for (int bound : new int[] { 0x80, 0x800, 0x10000 }) {
+			get(w, cp);
+			i32(w, bound);
+			w.write(Instruction.I32_GE_U);
+			w.write(Instruction.I32_ADD);
+		}
+		set(w, m);
+		get(w, i);
+		get(w, adv);
+		w.write(Instruction.I32_ADD);
+		set(w, i);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		get(w, m);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		set(w, out);
+		get(w, out);
+		i32(w, 0);
+		i32(w, QUOTE);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		get(w, out);
+		get(w, m);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		i32(w, QUOTE);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		i32(w, 0);
+		set(w, i);
+		i32(w, 1);
+		set(w, j);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, i);
+		get(w, n);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		emitLenientStep(w, arr, i, n, b, c, cp, adv);
+		emitArrayUtf8Encode(w, out, j, cp);
+		get(w, i);
+		get(w, adv);
+		w.write(Instruction.I32_ADD);
+		set(w, i);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// id = STRING_ID_CTR++ -- a runtime string, as the valid path stamps one.
+		i32(w, WasmLispCompiler.STRING_ID_CTR_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		set(w, id);
+		i32(w, WasmLispCompiler.STRING_ID_CTR_ADDR);
+		get(w, id);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		get(w, id);
+		get(w, m);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		get(w, out);
+		emitSeedCursor(w);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+	}
+
+	// One step of the prelude's lenient decode at arr[i]: cp = the character, adv = the
+	// bytes it takes. A byte below 0xC0 (ASCII, or a continuation that leads nothing), an
+	// 0xF8.. byte, a lead the vector truncates and a four-byte form past U+10FFFF are
+	// their own character, one byte long; a lead takes its continuation bytes whatever
+	// their high bits. Arm for arm LispPreludeLibrary's %octets-to-string.
+	private static void emitLenientStep(WasmWriter w, int arr, int i, int n, int b, int c, int cp, int adv) {
+		get(w, arr);
+		get(w, i);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_I8ARR);
+		set(w, b);
+		get(w, b);
+		set(w, cp);
+		i32(w, 1);
+		set(w, adv);
+		w.write(Instruction.BLOCK, 0x40); // done
+		get(w, b);
+		i32(w, 0xC0);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.BR_IF, 0);
+		int[][] arms = { { 0xE0, 2, 0x1F }, { 0xF0, 3, 0x0F } };
+		for (int[] arm : arms) {
+			get(w, b);
+			i32(w, arm[0]);
+			w.write(Instruction.I32_LT_U);
+			w.write(Instruction.IF, 0x40);
+			emitLeadFits(w, i, n, arm[1]);
+			w.write(Instruction.IF, 0x40);
+			emitLeadAssemble(w, arr, i, b, arm[1], arm[2]);
+			set(w, cp);
+			i32(w, arm[1]);
+			set(w, adv);
+			w.write(Instruction.END);
+			w.write(Instruction.BR, 1);
+			w.write(Instruction.END);
+		}
+		get(w, b);
+		i32(w, 0xF8);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 0);
+		emitLeadFits(w, i, n, 4);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 0);
+		emitLeadAssemble(w, arr, i, b, 4, 0x07);
+		set(w, c);
+		get(w, c);
+		i32(w, 0x10FFFF);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.BR_IF, 0);
+		get(w, c);
+		set(w, cp);
+		i32(w, 4);
+		set(w, adv);
+		w.write(Instruction.END); // done
+	}
+
+	// Pushes "the vector holds all `length` bytes of the sequence at i" (i + length <=
+	// n).
+	private static void emitLeadFits(WasmWriter w, int i, int n, int length) {
+		get(w, i);
+		i32(w, length);
+		w.write(Instruction.I32_ADD);
+		get(w, n);
+		w.write(Instruction.I32_LE_U);
+	}
+
+	// Pushes (b & leadMask) followed by the low six bits of each of the length - 1 bytes
+	// after arr[i], six bits apiece.
+	private static void emitLeadAssemble(WasmWriter w, int arr, int i, int b, int length, int leadMask) {
+		get(w, b);
+		i32(w, leadMask);
+		w.write(Instruction.I32_AND);
+		for (int k = 1; k < length; k++) {
+			i32(w, 6);
+			w.write(Instruction.I32_SHL);
+			get(w, arr);
+			get(w, i);
+			i32(w, k);
+			w.write(Instruction.I32_ADD);
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_I8ARR);
+			i32(w, 0x3F);
+			w.write(Instruction.I32_AND);
+			w.write(Instruction.I32_OR);
+		}
+	}
+
+	// Writes the code point in cp as 1-4 UTF-8 bytes into the $str_bytes in out at j, and
+	// advances j past them. The caller sized out for them.
+	private static void emitArrayUtf8Encode(WasmWriter w, int out, int j, int cp) {
+		// { bound below which this width applies, width, lead prefix }
+		int[][] widths = { { 0x80, 1, 0x00 }, { 0x800, 2, 0xC0 }, { 0x10000, 3, 0xE0 }, { 0, 4, 0xF0 } };
+		for (int[] width : widths) {
+			boolean last = width[1] == 4;
+			if (!last) {
+				get(w, cp);
+				i32(w, width[0]);
+				w.write(Instruction.I32_LT_U);
+				w.write(Instruction.IF, 0x40);
+			}
+			for (int k = 0; k < width[1]; k++) {
+				int shift = 6 * (width[1] - 1 - k);
+				get(w, out);
+				get(w, j);
+				if (k > 0) {
+					i32(w, k);
+					w.write(Instruction.I32_ADD);
+				}
+				get(w, cp);
+				if (shift > 0) {
+					i32(w, shift);
+					w.write(Instruction.I32_SHR_U);
+				}
+				if (k > 0) {
+					i32(w, 0x3F);
+					w.write(Instruction.I32_AND);
+					i32(w, 0x80);
+					w.write(Instruction.I32_OR);
+				}
+				else if (width[2] != 0) {
+					i32(w, width[2]);
+					w.write(Instruction.I32_OR);
+				}
+				w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+				w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+			}
+			get(w, j);
+			i32(w, width[1]);
+			w.write(Instruction.I32_ADD);
+			set(w, j);
+			if (!last) {
+				w.write(Instruction.ELSE);
+			}
+		}
+		for (int e = 0; e < 3; e++) {
+			w.write(Instruction.END);
+		}
 	}
 
 	// "if the lead byte is exactly `lead`, the first continuation's bound `boundLocal`

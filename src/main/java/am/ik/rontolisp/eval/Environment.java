@@ -1342,30 +1342,27 @@ public final class Environment implements Scope {
 			if (args.isEmpty()) {
 				throw new LispEvalException(LispNames.AREF + " expects an array and subscripts");
 			}
-			int[] subs = new int[args.size() - 1];
-			for (int i = 1; i < args.size(); i++) {
-				subs[i - 1] = (int) asLong(args.get(i));
-			}
+			long[] values = subscriptValues(args, 1, args.size());
 			if (args.get(0) instanceof LispFloatArray fa) {
-				return fa.aref(subs);
+				return fa.aref(boundedSubscripts(args, 1, values, fa.dims()));
 			}
 			if (args.get(0) instanceof LispQuantizedMatrix qm) {
 				// Dequantize-on-read: q * scale, a double (.kb/quantized-matrix.md).
-				return new LispDouble(qm.aref(subs));
+				return new LispDouble(qm.aref(boundedSubscripts(args, 1, values, qm.dims())));
 			}
 			if (args.get(0) instanceof LispIntVector iv) {
-				if (subs.length != 1) {
+				if (values.length != 1) {
 					throw new LispEvalException(LispNames.AREF + ": a packed integer vector is rank 1");
 				}
-				return new LispInteger(intVectorRead(LispNames.AREF, iv, subs[0]));
+				return new LispInteger(iv.elementAt(inBounds(args.get(1), values[0], iv.length())));
 			}
 			// A string is a rank-1 array of characters in CL, so (aref s i) reads like
 			// (char s i). Writing still goes through %schar-set (the schar setf place).
-			if (args.get(0) instanceof LispString && subs.length == 1) {
+			if (args.get(0) instanceof LispString && values.length == 1) {
 				return charRef(LispNames.AREF, args);
 			}
 			LispArray array = requireArray(LispNames.AREF, args.get(0));
-			return array.aref(subs);
+			return array.aref(boundedSubscripts(args, 1, values, array.dimensions()));
 		}));
 		env.defineFunction(LispNames.ARRAY_DIMENSIONS, new LispFunction(LispNames.ARRAY_DIMENSIONS, args -> {
 			requireArgCount(LispNames.ARRAY_DIMENSIONS, args, 1);
@@ -1389,17 +1386,18 @@ public final class Environment implements Scope {
 				throw new LispEvalException(LispNames.ASET + " expects an array, subscripts and a value");
 			}
 			LispVal value = args.get(args.size() - 1);
-			int[] subs = new int[args.size() - 2];
-			for (int i = 1; i < args.size() - 1; i++) {
-				subs[i - 1] = (int) asLong(args.get(i));
-			}
+			// Each subscript's type, then the value's, then the bounds: the order every
+			// compiled store checks them in (the subscripts at the site, the value and
+			// the bounds in the store).
+			long[] values = subscriptValues(args, 1, args.size() - 1);
 			if (args.get(0) instanceof LispFloatArray fa) {
 				// Coerce to a double (a non-real is a type error), narrow-store it (f32
-				// for
-				// single-float), and return the value AS STORED (read back widened), so
-				// the
-				// effective element value is consistent across backends and widths.
-				fa.aset(asDouble(value), subs);
+				// for single-float), and return the value AS STORED (read back widened),
+				// so the effective element value is consistent across backends and
+				// widths.
+				double element = asDouble(value);
+				int[] subs = boundedSubscripts(args, 1, values, fa.dims());
+				fa.aset(element, subs);
 				return fa.aref(subs);
 			}
 			if (args.get(0) instanceof LispQuantizedMatrix) {
@@ -1408,33 +1406,33 @@ public final class Environment implements Scope {
 			if (args.get(0) instanceof LispIntVector iv) {
 				// Mask-store to the element width and return the value AS STORED, so the
 				// effective element value is consistent across backends and widths.
-				if (subs.length != 1) {
+				if (values.length != 1) {
 					throw new LispEvalException(LispNames.ASET + ": a packed integer vector is rank 1");
 				}
-				intVectorRead(LispNames.ASET, iv, subs[0]);
-				return new LispInteger(iv.setElement(subs[0], exactIntElement(LispNames.ASET, value)));
+				long element = exactIntElement(LispNames.ASET, value);
+				return new LispInteger(iv.setElement(inBounds(args.get(1), values[0], iv.length()), element));
 			}
 			// A string is a rank-1 character array: (setf (aref s i) c) mutates in
 			// place like the schar setf place (cl-ppcre builds two-char strings with
 			// make-array + aset).
-			if (args.get(0) instanceof LispString str && subs.length == 1) {
-				return storeStringChar(LispNames.ASET, str, subs[0], value);
+			if (args.get(0) instanceof LispString str && values.length == 1) {
+				return storeStringChar(LispNames.ASET, str, args.get(1), values[0], value);
 			}
 			LispArray array = requireArray(LispNames.ASET, args.get(0));
-			array.aset(value, subs);
+			array.aset(value, boundedSubscripts(args, 1, values, array.dimensions()));
 			return value;
 		}));
 		env.defineFunction(LispNames.ROW_MAJOR_AREF, new LispFunction(LispNames.ROW_MAJOR_AREF, args -> {
 			requireArgCount(LispNames.ROW_MAJOR_AREF, args, 2);
+			long index = subscriptValue(args.get(1));
 			if (args.get(0) instanceof LispFloatArray fa) {
-				return fa.readFlat(rowMajorIndex(LispNames.ROW_MAJOR_AREF, fa.totalSize(), args.get(1)));
+				return fa.readFlat(inBounds(args.get(1), index, fa.totalSize()));
 			}
 			if (args.get(0) instanceof LispQuantizedMatrix qm) {
-				return new LispDouble(
-						qm.elementAt(rowMajorIndex(LispNames.ROW_MAJOR_AREF, qm.totalSize(), args.get(1))));
+				return new LispDouble(qm.elementAt(inBounds(args.get(1), index, qm.totalSize())));
 			}
 			if (args.get(0) instanceof LispIntVector iv) {
-				return new LispInteger(intVectorRead(LispNames.ROW_MAJOR_AREF, iv, (int) asLong(args.get(1))));
+				return new LispInteger(iv.elementAt(inBounds(args.get(1), index, iv.length())));
 			}
 			// A string is a rank-1 array of characters in CL, so (row-major-aref s i)
 			// reads like (char s i) -- the same arm AREF has above.
@@ -1442,32 +1440,34 @@ public final class Environment implements Scope {
 				return charRef(LispNames.ROW_MAJOR_AREF, args);
 			}
 			LispArray array = requireArray(LispNames.ROW_MAJOR_AREF, args.get(0));
-			return array.readFlat(rowMajorIndex(LispNames.ROW_MAJOR_AREF, array.totalSize(), args.get(1)));
+			return array.readFlat(inBounds(args.get(1), index, array.totalSize()));
 		}));
 		env.defineFunction(LispNames.ROW_MAJOR_ASET, new LispFunction(LispNames.ROW_MAJOR_ASET, args -> {
-			// (%row-major-aset array index value)
+			// (%row-major-aset array index value): the subscript's type, the value's,
+			// then the bound, as %aset checks them.
 			requireArgCount(LispNames.ROW_MAJOR_ASET, args, 3);
 			LispVal value = args.get(2);
+			long index = subscriptValue(args.get(1));
 			if (args.get(0) instanceof LispFloatArray fa) {
-				int flat = rowMajorIndex(LispNames.ROW_MAJOR_ASET, fa.totalSize(), args.get(1));
+				double element = asDouble(value);
+				int flat = inBounds(args.get(1), index, fa.totalSize());
 				// Narrow-store (f32 for single-float) then read back widened, so the
 				// returned value matches what is stored across widths and backends.
-				fa.setElement(flat, asDouble(value));
+				fa.setElement(flat, element);
 				return fa.readFlat(flat);
 			}
 			if (args.get(0) instanceof LispQuantizedMatrix) {
 				throw new LispEvalException(quantizedImmutable(LispNames.ROW_MAJOR_ASET));
 			}
 			if (args.get(0) instanceof LispIntVector iv) {
-				int flat = (int) asLong(args.get(1));
-				intVectorRead(LispNames.ROW_MAJOR_ASET, iv, flat);
-				return new LispInteger(iv.setElement(flat, exactIntElement(LispNames.ROW_MAJOR_ASET, value)));
+				long element = exactIntElement(LispNames.ROW_MAJOR_ASET, value);
+				return new LispInteger(iv.setElement(inBounds(args.get(1), index, iv.length()), element));
 			}
 			if (args.get(0) instanceof LispString str) {
-				return storeStringChar(LispNames.ROW_MAJOR_ASET, str, (int) asLong(args.get(1)), value);
+				return storeStringChar(LispNames.ROW_MAJOR_ASET, str, args.get(1), index, value);
 			}
 			LispArray array = requireArray(LispNames.ROW_MAJOR_ASET, args.get(0));
-			array.writeFlat(rowMajorIndex(LispNames.ROW_MAJOR_ASET, array.totalSize(), args.get(1)), value);
+			array.writeFlat(inBounds(args.get(1), index, array.totalSize()), value);
 			return value;
 		}));
 		env.defineFunction(LispNames.FILL_POINTER, new LispFunction(LispNames.FILL_POINTER, args -> {
@@ -1993,12 +1993,70 @@ public final class Environment implements Scope {
 		}
 	}
 
-	private static int rowMajorIndex(String fn, int totalSize, LispVal indexVal) {
-		int index = (int) asLong(indexVal);
-		if (index < 0 || index >= totalSize) {
-			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME, fn + ": index out of bounds");
+	/**
+	 * An array subscript's value, before any bound is known: a fixnum answers itself, a
+	 * bignum -- an integer no dimension reaches -- answers -1, so {@link #inBounds}
+	 * reports it as the datum it is, and anything else is the access's {@code INTEGER}
+	 * type-error, named by the built-in seam.
+	 */
+	private static long subscriptValue(LispVal subscript) {
+		if (subscript instanceof LispInteger i) {
+			return i.value();
 		}
-		return index;
+		if (subscript instanceof LispBigInteger) {
+			return -1;
+		}
+		throw OperandTypeException.of(subscript, OperandTypes.Kind.INTEGER);
+	}
+
+	/**
+	 * {@link #subscriptValue} of {@code args[from, to)}, every one checked before any
+	 * bound: a wrong-type subscript is reported ahead of an out-of-range one, as the
+	 * compiled sites check each subscript where it is evaluated.
+	 */
+	private static long[] subscriptValues(List<LispVal> args, int from, int to) {
+		long[] values = new long[to - from];
+		for (int k = 0; k < values.length; k++) {
+			values[k] = subscriptValue(args.get(from + k));
+		}
+		return values;
+	}
+
+	/**
+	 * A subscript checked against the dimension it indexes: an integer outside
+	 * {@code [0, dimension)} is the access's type-error, the subscript not being of type
+	 * {@code (INTEGER 0 (dimension))} -- the one report every backend gives
+	 * ({@code .kb/error-handling.md}, "An out-of-range subscript").
+	 * @param subscript the subscript as the program passed it (the report's datum)
+	 * @param value its {@link #subscriptValue}
+	 * @param dimension the bound: the axis's dimension, a row-major access's total size
+	 * @return the subscript as an index
+	 */
+	private static int inBounds(LispVal subscript, long value, int dimension) {
+		if (value >= 0 && value < dimension) {
+			return (int) value;
+		}
+		throw OperandTypeException.outOfRange(subscript, dimension);
+	}
+
+	/**
+	 * The subscripts {@code args[from, ...)} checked PER AXIS, each against its own
+	 * dimension, first failing axis first: a column past its dimension is out of range
+	 * even when the row-major index it folds to is not. A count that is not the rank is
+	 * left to the array's own rank check.
+	 */
+	private static int[] boundedSubscripts(List<LispVal> args, int from, long[] values, int[] dims) {
+		int[] subs = new int[values.length];
+		if (values.length != dims.length) {
+			for (int k = 0; k < values.length; k++) {
+				subs[k] = (int) values[k];
+			}
+			return subs;
+		}
+		for (int k = 0; k < values.length; k++) {
+			subs[k] = inBounds(args.get(from + k), values[k], dims[k]);
+		}
+		return subs;
 	}
 
 	// Parses a make-array dimensions argument (an integer for rank 1, or a list of
@@ -2046,16 +2104,6 @@ public final class Environment implements Scope {
 			throw new LispEvalException(fn + ": not applicable to a packed integer vector");
 		}
 		return requireArray(fn, val);
-	}
-
-	// A bounds-checked packed integer-vector element read (the compiled backends trap on
-	// the same condition).
-	private static long intVectorRead(String fn, LispIntVector iv, int index) {
-		if (index < 0 || index >= iv.length()) {
-			throw new LispEvalException(
-					fn + ": index " + index + " out of range for packed integer vector of length " + iv.length());
-		}
-		return iv.elementAt(index);
 	}
 
 	// The packed integer-vector element width a make-array :element-type argument
@@ -4372,11 +4420,7 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.COPY_LIST, new LispFunction(LispNames.COPY_LIST, args -> {
 			requireArgCount(LispNames.COPY_LIST, args, 1);
-			LispVal list = args.get(0);
-			if (!(list instanceof LispCons) && !(list instanceof LispNil)) {
-				throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
-						"The value " + list.print() + " is not of type LIST");
-			}
+			LispVal list = requireListArgument(LispNames.COPY_LIST, args.get(0));
 			// A fresh spine whose last cdr is the argument's final atom: a dotted list
 			// copies dotted (CLHS copy-list), as the compile paths' %copy-list-runtime.
 			List<LispVal> elements = new java.util.ArrayList<>();
@@ -4825,23 +4869,32 @@ public final class Environment implements Scope {
 	 * A {@code char}/{@code schar} subscript: one that is no integer is the operator's
 	 * {@code INTEGER} type-error. A bignum is an integer, out of any string's bounds.
 	 */
-	private static int requireStringIndex(String operator, LispVal val) {
-		return requireStringIndex(operator, operator, val);
-	}
-
 	/**
-	 * A string subscript under {@code operator}, unnamed when it is null; a bignum's
-	 * out-of-range report names {@code fallback}.
+	 * A string subscript under {@code operator}, unnamed when it is null: its
+	 * {@link #subscriptValue}, a bignum answering -1 for the bound to report.
 	 */
-	private static int requireStringIndex(@Nullable String operator, String fallback, LispVal val) {
+	private static long stringSubscript(@Nullable String operator, LispVal val) {
 		if (val instanceof LispInteger i) {
-			return (int) i.value();
+			return i.value();
 		}
 		if (val instanceof LispBigInteger) {
-			return requireIndex(operator == null ? fallback : operator, val);
+			return -1;
 		}
 		throw operator == null ? OperandTypeException.of(val, OperandTypes.Kind.INTEGER)
 				: OperandTypeException.of(val, OperandTypes.Kind.INTEGER, operator);
+	}
+
+	/**
+	 * A string subscript checked against the string's CAPACITY, under {@code operator}
+	 * (unnamed when null): the report every out-of-range subscript gives
+	 * ({@link #inBounds}).
+	 */
+	private static int stringSlot(@Nullable String operator, LispVal subscript, long index, int capacity) {
+		if (index >= 0 && index < capacity) {
+			return (int) index;
+		}
+		throw operator == null ? OperandTypeException.outOfRange(subscript, capacity)
+				: OperandTypeException.outOfRange(subscript, capacity, operator);
 	}
 
 	/**
@@ -7398,17 +7451,15 @@ public final class Environment implements Scope {
 	 * row-major variant): bounds-checked against the capacity (the fill pointer only
 	 * limits the effective length, so a write between them is legal, as in CL). One
 	 * indexed slot holds one full code point (including supplementary code points),
-	 * matching the JVM and WASM char-vec representations.
+	 * matching the JVM and WASM char-vec representations. The value is checked before the
+	 * bound, and both are reported unnamed for the built-in seam to name.
 	 */
-	private static LispVal storeStringChar(String op, LispString str, int index, LispVal value) {
+	private static LispVal storeStringChar(String op, LispString str, LispVal subscript, long index, LispVal value) {
 		// A non-character is the store's type-error, named by the built-in seam.
 		if (!(value instanceof LispChar c)) {
 			throw OperandTypeException.of(value, OperandTypes.Kind.CHARACTER);
 		}
-		if (index < 0 || index >= str.capacity()) {
-			throw new LispEvalException(
-					op + ": index " + index + " out of bounds for string of capacity " + str.capacity());
-		}
+		int slot = inBounds(subscript, index, str.capacity());
 		// A SOURCE LITERAL is never written (.kb/string-write-runtime.md). These two
 		// entries -- %aset and %row-major-aset -- carry no rebind hook, so like
 		// %schar-set as a first-class value they refuse rather than rewrite the program
@@ -7418,7 +7469,7 @@ public final class Environment implements Scope {
 			throw new LispEvalException(
 					op + " on a string literal requires a variable string place, got " + str.print());
 		}
-		str.setCharAt(index, c.codePoint());
+		str.setCharAt(slot, c.codePoint());
 		return c;
 	}
 
@@ -7533,7 +7584,7 @@ public final class Environment implements Scope {
 			throw operator == null ? OperandTypeException.of(args.get(0), OperandTypes.Kind.STRING)
 					: OperandTypeException.of(args.get(0), OperandTypes.Kind.STRING, operator);
 		}
-		int index = requireStringIndex(operator, LispNames.SCHAR_SET, args.get(1));
+		long index = stringSubscript(operator, args.get(1));
 		// The value before the bounds, as the compiled expansion checks it ahead of the
 		// runtime defun's write.
 		if (!(args.get(2) instanceof LispChar c)) {
@@ -7543,19 +7594,16 @@ public final class Environment implements Scope {
 		// Capacity, not the fill pointer: a (setf (char s i) c) past the fill pointer
 		// writes an inactive slot in CL and on all three compile backends, and the
 		// fill pointer bounds the sequence view only (.kb/adjustable-arrays.md).
-		if (index < 0 || index >= str.capacity()) {
-			throw new LispEvalException(
-					LispNames.SCHAR_SET + ": index " + index + " out of bounds for string of length " + str.capacity());
-		}
+		int slot = stringSlot(operator, args.get(1), index, str.capacity());
 		if (str.sourceLiteral()) {
 			if (rebindPlace == null) {
 				throw new LispEvalException("setf on " + LispNames.SCHAR + "/" + LispNames.CHAR
 						+ " requires a variable string place when the string is a literal, got " + str.print());
 			}
-			rebindPlace.accept(str.withCharAt(index, c.codePoint()));
+			rebindPlace.accept(str.withCharAt(slot, c.codePoint()));
 			return c;
 		}
-		str.setCharAt(index, c.codePoint());
+		str.setCharAt(slot, c.codePoint());
 		return c;
 	}
 
@@ -7706,7 +7754,7 @@ public final class Environment implements Scope {
 		//
 		// The Lisp source reads its argument through plain length/aref, so it accepts ANY
 		// rank-1 array of small integers, not only a packed byte vector; the compile
-		// paths inherit that for free (their %octets-to-string-strict fast path declines
+		// paths inherit that for free (their %octets-to-string-packed native declines
 		// a general array and the same generic loop runs). This native mirror used to
 		// require a LispIntVector outright, so a general array -- exactly what a general
 		// array's subseq answered before .todo/698 fixed it -- signaled here while the
@@ -7721,19 +7769,22 @@ public final class Environment implements Scope {
 			String strict = decodeUtf8Strict(v);
 			return new LispString(strict != null ? strict : decodeUtf8Leniently(v));
 		}));
-		// %octets-to-string-strict: the STRICT half, native on every backend so the
-		// prelude's lenient definition can offer the vector to a platform decoder before
-		// it walks a byte at a time. Present here as its own binding (rather than only
-		// folded into the mirror above) because the compile paths call it BY NAME from
-		// the spliced defun, and LispPreludeLibraryTest evaluates that defun to pin the
-		// two renderings against each other. Anything it cannot fast-path -- malformed
-		// bytes, a value that is not a packed octet vector -- answers nil, and the
-		// caller's loop decides; it never signals.
-		String octetsToStringStrict = LispNames.OCTETS_TO_STRING_STRICT_INTERNAL_QUALIFIED;
-		env.defineFunction(octetsToStringStrict, new LispFunction(octetsToStringStrict, args -> {
-			requireArgCount(LispNames.OCTETS_TO_STRING_STRICT_INTERNAL, args, 1);
-			String decoded = args.get(0) instanceof LispIntVector v ? decodeUtf8Strict(v) : null;
-			return decoded == null ? LispNil.INSTANCE : new LispString(decoded);
+		// %octets-to-string-packed: the NATIVE half, on every backend, so the prelude's
+		// lenient definition hands a packed octet vector -- every HTTP body -- to native
+		// code, malformed bytes included, and walks a byte at a time only through a
+		// general array. Present here as its own binding (rather than only folded into
+		// the mirror above) because the compile paths call it BY NAME from the spliced
+		// defun, and LispPreludeLibraryTest evaluates that defun to pin the two
+		// renderings against each other. A value that is not a packed octet vector
+		// answers nil, and the caller's loop decides; it never signals.
+		String octetsToStringPacked = LispNames.OCTETS_TO_STRING_PACKED_INTERNAL_QUALIFIED;
+		env.defineFunction(octetsToStringPacked, new LispFunction(octetsToStringPacked, args -> {
+			requireArgCount(LispNames.OCTETS_TO_STRING_PACKED_INTERNAL, args, 1);
+			if (!(args.get(0) instanceof LispIntVector v) || v.width() != 8) {
+				return LispNil.INSTANCE;
+			}
+			String strict = decodeUtf8Strict(v);
+			return new LispString(strict != null ? strict : decodeUtf8Leniently(v));
 		}));
 		env.defineFunction(LispNames.CONSTANTP, new LispFunction(LispNames.CONSTANTP, args -> {
 			requireMinArgCount(LispNames.CONSTANTP, args, 1);
@@ -7922,7 +7973,7 @@ public final class Environment implements Scope {
 	private static LispVal charRef(String name, java.util.List<LispVal> args) {
 		requireArgCount(name, args, 2);
 		// The subscript first, as the compiled backends check it ahead of the read.
-		int index = requireStringIndex(name, args.get(1));
+		long index = stringSubscript(name, args.get(1));
 		if (!(args.get(0) instanceof LispString s)) {
 			throw OperandTypeException.of(args.get(0), OperandTypes.Kind.STRING, name);
 		}
@@ -7940,11 +7991,7 @@ public final class Environment implements Scope {
 		// .kb/adjustable-arrays.md states and all three compile backends already
 		// honour. Reading `value()` made this the fill pointer and left the
 		// interpreter the only backend that could not see an inactive slot.
-		int cpLen = s.capacity();
-		if (index < 0 || index >= cpLen) {
-			throw new LispEvalException(name + ": index " + index + " out of bounds for string of length " + cpLen);
-		}
-		return new LispChar(s.codePointAt(index));
+		return new LispChar(s.codePointAt(stringSlot(name, args.get(1), index, s.capacity())));
 	}
 
 	private static LispChar requireChar(String name, LispVal val) {
@@ -9895,7 +9942,7 @@ public final class Environment implements Scope {
 	 * prelude's {@code rontolisp::%octets-to-string}: a byte that leads no valid
 	 * sequence, a sequence the vector truncates, and one that assembles a code point
 	 * outside the Unicode range answer their own characters, so malformed input never
-	 * signals. The FALLBACK half -- {@link #decodeUtf8Strict} takes every well-formed
+	 * signals. The malformed half -- {@link #decodeUtf8Strict} takes every well-formed
 	 * input before this runs.
 	 * @param v the octets
 	 * @return the decoded string

@@ -6678,7 +6678,15 @@ class LispEvaluatorTest {
 		assertThat(eval("(copy-list '(1 2 . 3))").print()).isEqualTo("(1 2 . 3)");
 		assertThat(eval("(let* ((a (list 1 2)) (b (copy-list a))) (list b (eq a b) (eq (cdr a) (cdr b))))").print())
 			.isEqualTo("((1 2) NIL NIL)");
-		assertThat(eval("(handler-case (copy-list 5) (type-error () :type-error))").print()).isEqualTo(":TYPE-ERROR");
+		// A non-list names COPY-LIST as the other list operators name themselves
+		// (compiler/OperandTypes): a catchable type-error whose datum and expected-type
+		// answer the operand and LIST, not a bare type-error whose slots answer nothing.
+		assertThat(evalMulti("""
+				(defun ci-cpl-id (x) x)
+				(handler-case (copy-list (ci-cpl-id 5))
+				  (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				  (error (e) (list :not-a-type-error (princ-to-string e))))
+				""").print()).isEqualTo("(\"COPY-LIST: The value 5 is not of type LIST\" 5 LIST)");
 	}
 
 	@Test
@@ -19105,6 +19113,97 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void outOfRangeSubscriptsAreTypeErrorsNamingTheirBound() {
+		// A subscript outside its dimension is the access's type-error naming its bound:
+		// "OP: The value S is not of type (INTEGER 0 (D))", the datum the subscript and
+		// the expected type the list (.kb/error-handling.md, "An out-of-range subscript
+		// is
+		// a type-error naming its bound") -- per axis, the total size for a row-major
+		// access, a bignum out of range, a store's value checked before its bound and its
+		// value form run first. The twins are LispEvaluatorTest, JvmLispCompilerTest and
+		// WasmLispCompilerIntegrationTest's
+		// outOfRangeSubscriptsAreTypeErrorsNamingTheirBound.
+		// The interpreter reported "aref: index out of bounds" with neither slot, and
+		// read (aref m 0 3) as m[1][0].
+		String source = """
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *te-big* (expt 2 70))
+				(defvar *te-side* 0)
+				(let ((v (vector 1 2 3)) (d (make-array 3 :element-type 'double-float))
+				      (f (make-array 3 :element-type 'single-float)) (u (make-array 3 :element-type '(unsigned-byte 8)))
+				      (m (make-array '(2 3) :initial-element 0)) (dm (make-array '(2 3) :element-type 'double-float))
+				      (c (make-array '(2 2 2) :initial-element 0)) (fp (make-array 5 :fill-pointer 2 :initial-element 0))
+				      (dv (make-array 2 :displaced-to (make-array 10 :initial-element 7) :displaced-index-offset 3)))
+				  (print (te (lambda () (aref v 3))))
+				  (print (te (lambda () (aref v -1))))
+				  (print (te (lambda () (svref v 3))))
+				  (print (te (lambda () (elt v 3))))
+				  (print (te (lambda () (aref v *te-big*))))
+				  (print (te (lambda () (aref d 3))))
+				  (print (te (lambda () (aref d -1))))
+				  (print (te (lambda () (aref f 3))))
+				  (print (te (lambda () (aref u 3))))
+				  (print (list (aref fp 4) (te (lambda () (aref fp 5)))))
+				  (print (te (lambda () (aref dv 2))))
+				  (print (te (lambda () (aref m 0 3))))
+				  (print (te (lambda () (aref m 2 0))))
+				  (print (te (lambda () (aref dm 0 3))))
+				  (print (te (lambda () (aref c 0 2 0))))
+				  (print (te (lambda () (row-major-aref m 6))))
+				  (print (te (lambda () (row-major-aref u 3))))
+				  (print (te (lambda () (setf (aref v 3) 0))))
+				  (print (te (lambda () (setf (aref d 3) 1d0))))
+				  (print (te (lambda () (setf (aref d 3) "x"))))
+				  (print (te (lambda () (setf (aref u 3) (progn (incf *te-side*) 1)))))
+				  (print (te (lambda () (setf (aref m 0 3) 1))))
+				  (print (te (lambda () (setf (aref dm 2 0) 1d0))))
+				  (print (te (lambda () (setf (row-major-aref m 6) 0))))
+				  (print (te (lambda () (setf (row-major-aref d 3) 0d0))))
+				  (print (list *te-side* (aref m 1 2) (row-major-aref m 5) (equal (third (te (lambda () (aref v 9)))) '(integer 0 (3))))))
+				""";
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal expr : LispReader.readAllFromString(source)) {
+			evaluator.eval(expr);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8).strip()).isEqualTo(
+				"""
+						("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("AREF: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
+						("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("AREF: The value 1180591620717411303424 is not of type (INTEGER 0 (3))" 1180591620717411303424 (INTEGER 0 (3)))
+						("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("AREF: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
+						("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						(0 ("AREF: The value 5 is not of type (INTEGER 0 (5))" 5 (INTEGER 0 (5))))
+						("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+						("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+						("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+						("ROW-MAJOR-AREF: The value 6 is not of type (INTEGER 0 (6))" 6 (INTEGER 0 (6)))
+						("ROW-MAJOR-AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("(SETF AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("(SETF AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("(SETF AREF): The value \\"x\\" is not of type REAL" "x" REAL)
+						("(SETF AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("(SETF AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("(SETF AREF): The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+						("(SETF ROW-MAJOR-AREF): The value 6 is not of type (INTEGER 0 (6))" 6 (INTEGER 0 (6)))
+						("(SETF ROW-MAJOR-AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						(1 0 0 T)""");
+		// A string's subscript reports the same way under char and schar.
+		assertThat(eval("(handler-case (char \"abc\" 3) (type-error (e) (list (princ-to-string e)"
+				+ " (type-error-expected-type e))))")
+			.print()).isEqualTo("(\"CHAR: The value 3 is not of type (INTEGER 0 (3))\" (INTEGER 0 (3)))");
+	}
+
+	@Test
 	void listConsumersBeyondTheFirstSetNameTheOperator() {
 		// The list consumers beyond the first set name their operator as the first set
 		// does (compiler/OperandTypes): reverse/nreverse over a non-sequence (SEQUENCE),
@@ -19129,6 +19228,8 @@ class LispEvaluatorTest {
 				(print (te (lambda () (append *te-five* nil))))
 				(print (te (lambda () (append *te-dotted* '(4)))))
 				(print (te (lambda () (funcall #'append *te-five* nil))))
+				(print (te (lambda () (copy-list *te-five*))))
+				(print (te (lambda () (funcall #'copy-list *te-five*))))
 				(print (te (lambda () (member 1 *te-five*))))
 				(print (te (lambda () (member 9 *te-dotted*))))
 				(print (te (lambda () (funcall #'member 1 *te-five*))))
@@ -19165,6 +19266,8 @@ class LispEvaluatorTest {
 				("APPEND: The value 5 is not of type LIST" 5 LIST)
 				("APPEND: The value 3 is not of type LIST" 3 LIST)
 				("APPEND: The value 5 is not of type LIST" 5 LIST)
+				("COPY-LIST: The value 5 is not of type LIST" 5 LIST)
+				("COPY-LIST: The value 5 is not of type LIST" 5 LIST)
 				("MEMBER: The value 5 is not of type LIST" 5 LIST)
 				("MEMBER: The value 3 is not of type LIST" 3 LIST)
 				("MEMBER: The value 5 is not of type LIST" 5 LIST)
@@ -23494,7 +23597,7 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> eval("(setf (aref (make-array 2 :element-type '(unsigned-byte 8)) 0) 1.5)"))
 			.hasMessageContaining("integer");
 		assertThatThrownBy(() -> eval("(aref (make-array 2 :element-type '(unsigned-byte 8)) 5)"))
-			.hasMessageContaining("out of range");
+			.hasMessageContaining("AREF: The value 5 is not of type (INTEGER 0 (2))");
 		assertThatThrownBy(() -> eval("(vector-push 1 (make-array 2 :element-type '(unsigned-byte 8)))"))
 			.hasMessageContaining("packed integer vector");
 	}

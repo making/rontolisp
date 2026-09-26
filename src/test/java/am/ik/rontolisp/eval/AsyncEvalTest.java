@@ -326,14 +326,14 @@ class AsyncEvalTest {
 	}
 
 	@Test
-	void octetsDecodeThroughTheStrictFastPathAndFallBackOnMalformedBytes() {
+	void octetsDecodeNativelyWhetherOrNotTheBytesAreUtf8() {
 		// The interpreter arm of the gate (JvmAsyncCompilerTest and
 		// WasmLispCompilerIntegrationTest are the other three): read-all's decoder is
-		// the native %octets-to-string-strict FIRST -- a well-formed body is a platform
-		// decode, not a per-byte walk -- with the lenient loop for what it refuses. The
-		// answers are the ones the loop alone gave: a byte that leads no valid sequence
-		// is its own character, and a four-byte form past U+10FFFF is refused a code
-		// point at all rather than signalling.
+		// the native %octets-to-string-packed, which decodes every packed octet vector
+		// itself -- a platform decode when it is UTF-8, the lenient arms when not -- and
+		// declines (nil) a general array. A byte that leads no valid sequence is its own
+		// character, and a four-byte form past U+10FFFF is refused a code point at all
+		// rather than signalling.
 		Run run = evalMulti("""
 				(defun octs (bs)
 				  (let ((a (make-array (length bs) :element-type '(unsigned-byte 8))) (i 0))
@@ -344,10 +344,12 @@ class AsyncEvalTest {
 				           (rontolisp::%octets-to-string (octs '(#xE3 #x81 #x82 #xF0 #x9F #x98 #x80))))
 				      (map 'list #'char-code (rontolisp::%octets-to-string (octs '(#xFF #x41))))
 				      (map 'list #'char-code (rontolisp::%octets-to-string (octs '(#xF4 #x90 #x80 #x80))))
-				      (rontolisp::%octets-to-string-strict (octs '(72 105)))
-				      (rontolisp::%octets-to-string-strict (octs '(#xFF))))
+				      (rontolisp::%octets-to-string-packed (octs '(72 105)))
+				      (map 'list #'char-code (rontolisp::%octets-to-string-packed (octs '(#xFF))))
+				      (rontolisp::%octets-to-string-packed (make-array 2 :initial-contents '(72 105))))
 				""");
-		assertThat(run.result().print()).isEqualTo("(\"Hi\" (12354 128512) (255 65) (244 144 128 128) \"Hi\" NIL)");
+		assertThat(run.result().print())
+			.isEqualTo("(\"Hi\" (12354 128512) (255 65) (244 144 128 128) \"Hi\" (255) NIL)");
 	}
 
 	@Test

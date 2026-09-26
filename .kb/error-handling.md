@@ -366,11 +366,10 @@ second payload reader, so both gates go broad; outside EH mode nothing is observ
 **Invariant: a signaled condition escaping the top level writes `Unhandled condition: <report>` to
 standard error -- the same line on all four backends -- then the process exits the way it always
 did.** Built from `compiler/UncaughtReport.PREFIX` at all three emission sites; the report text is
-the one `princ` writes, and nothing below changes it. An out-of-range `aref` still differs -- the
-JVM prints the raw `ArrayIndexOutOfBoundsException` text and wasm-GC traps even in EH mode
-(`.todo/a00`) -- and so does one report on wasm-GC (the report-less class, "Known gap" below). A
-struct accessor on a non-instance agrees since 2026-09-26 ([defstruct.md](defstruct.md),
-"Accessors check their object").
+the one `princ` writes, and nothing below changes it. One report still differs on wasm-GC (the
+report-less class, "Known gap" below). A struct accessor on a non-instance agrees since 2026-09-26
+([defstruct.md](defstruct.md), "Accessors check their object"), and so does an out-of-range
+subscript ("An out-of-range subscript is a type-error naming its bound").
 
 **Under it, location lines** (`UncaughtReport.atLine` / `asyncLine`, two-space indented):
 `  at FILE:LINE in FUNCTION` -- the innermost form read from a named file that the condition passed
@@ -903,10 +902,12 @@ message at the catching end** -- except for the failures the backends report as 
 - **The message a raw host failure reports is rontolisp's, not the host's**:
   `ClosRegistry.TYPE_ERROR_MESSAGE` replaces a `ClassCastException`'s Java class names and
   `INDEX_OUT_OF_BOUNDS_MESSAGE` the JVM's `Index 10 out of bounds for length 3` (whose length counts
-  the layout cell in slot 0). Per-site texts a built-in writes itself are kept and are NOT identical
-  across backends. The numeric operators name themselves by per-operator emission at the call
-  ("A non-number reaching arithmetic"), never by message parsing at the pad. The substitution does
-  NOT reach the UNCAUGHT top-level line on the JVM -- deliberate.
+  the layout cell in slot 0) -- now only for what still reaches the host's check (a string's
+  index, `.todo/186`): an array subscript reports its bound itself ("An out-of-range subscript").
+  Per-site texts a built-in writes itself are kept and are NOT identical across backends. The
+  numeric operators name themselves by per-operator emission at the call ("A non-number reaching
+  arithmetic"), never by message parsing at the pad. The substitution does NOT reach the UNCAUGHT
+  top-level line on the JVM -- deliberate.
 - **Restart mode moves the undefined-function text out of the pad's reach**: the string-datum `error`
   arm builds its `simple-error` at the SIGNAL point and hands it over on the condition channel, so
   `(handler-case (nosuchfn) (undefined-function ...))` matches on the JVM in a plain program and not
@@ -1039,10 +1040,20 @@ type T` with the type the operator requires, as a catchable `type-error` answeri
 | `(setf (char s 0) 5)`, `(setf (aref s 0) 5)` (`s` a string) | `(SETF CHAR):` / `(SETF AREF): ... CHARACTER` |
 | `(row-major-aref v nil)`, `(setf (row-major-aref v nil) 0)` | `ROW-MAJOR-AREF:` / `(SETF ROW-MAJOR-AREF): ... INTEGER` |
 | `(point-x 42)`, `(setf (point-x 42) 0)`, `(copy-point 42)` (a `defstruct`'s) | `POINT-X:` / `(SETF POINT-X):` / `COPY-POINT: ... POINT` -- generated code, not this table: [defstruct.md](defstruct.md) |
+| `(copy-list 5)` | `COPY-LIST: ... LIST` |
 
+- **`copy-list` of a non-list** (2026-09-26): used to signal a bare `type-error` whose
+  `datum`/`expected-type` answered nothing on the interpreter (a raw
+  `LispEvalException.ofClass`) and a `simple-error` on the compiled backends (a
+  message-only `(error "The value ~s is not of type LIST" x)` inside
+  `%copy-list-runtime`, kept instance-free by never naming a condition class). Now
+  `COPY-LIST` is FUNNEL-TYPED like `last`/`append`/the rest of the list consumers: the
+  interpreter's built-in goes through `Environment.requireListArgument`, and
+  `%copy-list-runtime`'s non-list branch is `(%check-list x 'copy-list)` -- the same
+  shared, instance-free funnel, so the fix costs nothing beyond one more table row.
 - **FUNNEL-TYPED operators** (`OperandTypes.FUNNEL_TYPE`: `CAR`, `CDR`, `NTHCDR`, `ENDP`, `AREF`,
   `(SETF AREF)`, `CHAR`, `SCHAR`, `(SETF CHAR)`, `(SETF SCHAR)`, `ROW-MAJOR-AREF`,
-  `(SETF ROW-MAJOR-AREF)`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
+  `(SETF ROW-MAJOR-AREF)`, `COPY-LIST`): each of their funnels checks ONE argument's type, so the funnel's kind IS the type
   (new kinds `LIST`, `RATIONAL`, `STRING`, `CHARACTER`) -- except that a to-double funnel (`NUMBER`) there is a packed float
   store, which takes any real: `REAL`. A numeric operator keeps its one fixed type. `%aset` reports
   as `(SETF AREF)`, `%row-major-aset` as `(SETF ROW-MAJOR-AREF)`, `nth` as `NTHCDR`, `svref` as `AREF`, `first`/`rest` as `CAR`/`CDR`
@@ -1274,6 +1285,75 @@ random-state objects exist" above), not a claim that a ratio or a negative numbe
 - Pinned by `ci-spec.yaml`'s `random-limit-domain-violations-signal-a-type-error` and the
   `randomLimitDomainViolationsSignalATypeError` / `ehRandomLimitDomainViolationsSignalATypeError`
   triple (`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
+
+## An out-of-range subscript is a type-error naming its bound
+**Invariant: a subscript outside its dimension reports `OP: The value S is not of type (INTEGER 0
+(D))` -- CL's `type-error` for an array index, SBCL's `invalid-array-index-error` -- as a catchable
+`type-error` whose `type-error-datum` is the subscript and whose `type-error-expected-type` is the
+LIST `(INTEGER 0 (D))`, byte-identical on all four backends (wasm-GC: in EH mode).** Closed
+2026-09-26 (`.todo/a00`); it was `aref: index out of bounds` interpreted, the host's `Index 5 out of
+bounds for length 5` (the length counting header slots) uncaught on the JVM and an uncatchable trap
+on wasm-GC even in EH mode.
+
+- **Per axis.** Each subscript is checked against ITS OWN dimension, the first failing axis
+  reporting (`D` is that axis's dimension): until then only the row-major total was checked, so
+  `(aref m 0 2)` on a 2x2 array answered `m[1][0]` on all four. A row-major access
+  (`row-major-aref`, rank 0) is bounded by the total size. A bignum subscript is out of range, not a
+  wrong-type one.
+- **Names**: `AREF` (also `svref`, and `elt` of a vector, which expands to `aref`), `(SETF AREF)`,
+  `ROW-MAJOR-AREF`, `(SETF ROW-MAJOR-AREF)` -- the operator the wrong-type subscript already
+  reported under ("A wrong-type argument names its operator"). `OperandTypes.indexType` holds the
+  text.
+- **Order**: every subscript's type, then a store's value (its evaluation and a packed store's
+  coercion), then the bounds -- what the interpreter's `subscriptValues` -> `asDouble` -> `inBounds`
+  does and every compiled store now does: `(setf (aref dv 5) "x")` on a 3-element `double-float`
+  vector reports `REAL`, and a value form's side effects run before an out-of-range store fails.
+- **Interpreter**: `Environment.subscriptValue` / `inBounds` / `boundedSubscripts` ahead of each
+  representation's accessor; `OperandTypeException.outOfRange` is named by the built-in seam like a
+  wrong-type operand and `expectedType()` builds the list. A string's `aref`, `char`, `schar` and
+  their stores report the same text (`charRef`, `scharSet`, `storeStringChar`) -- the decision for
+  `.todo/186`, whose compiled string paths are still unchecked.
+- **JVM** (`JvmOperandTypeRuntime`): `_oob(datum, dim)` builds the unnamed report and records the
+  list under a pad; `_ckBound(Object, int)` checks a boxed subscript, `_ckBoundJ(long, int)` a raw
+  one through `Objects.checkIndex`, the JIT's range-check intrinsic. Every accessor bounds its
+  subscripts through them -- `_aref1`/`_aset1` against the total (`emitFlatBound`: a packed array's
+  `long[]` length, a boxed one's `ArrayList` size, a displaced view's own dims product),
+  `_aref2`/`_arefN` and the stores per axis, the `_fv*` widths against `d.length - off` and the
+  header dims, `_ivAref1`/`_ivAset1`, the quantized `_qmAref*` -- and reads now go through the
+  operator's wrapper as stores did. `_opTypeErr` finds the type after `TYPE_INFIX`, not after the
+  last space, and keeps a compound type (and the record's list) verbatim under any operator. The
+  typed loops (`.kb/jvm-typed-loops.md`) check each subscript with `_ckBoundJ` under the access's
+  wrapper; the int-fusion aref leaf bails on a long index past the int range and its fallback runs
+  under `AREF`'s wrapper.
+- **wasm-GC, EH mode** where the operator table names an access (`Operators.indexed`, which also
+  interns the two texts and gives `_type_err` its index arm: kind `-1 - bound`, the type built as
+  the list): a read's subscript goes through `_idx_ref(array, subscript, op)` INSTEAD of `_idx_chk`
+  -- the integer check and the flat bound by representation in one call; a store checks after its
+  value through `_idx_ref`, or, at the speed levels, an inline compare against the arm's own bound
+  (a packed integer vector's length, dimension 0) that calls it only on a miss; a pinned-kind
+  read at the speed levels does the same after `_idx_chk`. A packed integer store's raw value waits
+  in an i64 temp. `_idx_chk` answers a limb-tier integer rather than trapping in `_int_val`.
+- **wasm-GC, every mode**: a rank-2+ access checks each axis (`_idx_in`, a trap outside EH mode --
+  the wrap-around above was a wrong answer there); a `--simd` block's zero padding past its count is
+  checked (`_idx_bound`), where no engine check reaches. **A rank-1 access outside EH mode keeps the
+  engine's own trap and its module byte for byte**, except that a displaced view's out-of-range
+  read still reaches through to its target there.
+- **Cost, measured 2026-09-26** (wasmtime 49, JDK 25): zlib P1 124,519 -> 127,370 B (+2.3%), size
+  level 95,803 -> 96,729, component 128,550 -> 131,399 -- EH mode (chipz's `unwind-protect`) and
+  every access checked; `hello_world`, `pi_approx`, `dom_reactor` and a non-EH rank-1 array program
+  byte-identical. JVM class: zlib 185,749 -> 186,421, pi_approx 14,495 -> 14,576 (the
+  compound arm of `_opTypeErr` every wrapped program carries). Run time: chipz inflating 20 KB x300 in an EH
+  module 782 -> 829 ms (+6%); EH micro loops over 1000 elements, 400M accesses: `u8` read 425 -> 503
+  ms, `u8` write 985 -> 1172, a declared `double-float` read+write loop 5.1 -> 6.6 s, a general
+  vector 962 -> 1137, a rank-2 packed read 293 -> 368. JVM (4G accesses): typed `double-float` loop
+  2624 -> 2654 ms, packed `u8` 2704 -> 2730, general vector read 1148 -> 1131, write 1111 -> 1215,
+  rank-2 packed 1142 -> 1127. **A hand-written compare in the typed loop cost it 27%**, and
+  `Objects.checkIndex` there 1.7%; the same intrinsic in the BOXED `_ckBound` made a general-vector
+  store 4x slower (the extra inline depth), so the boxed check stays a compare.
+- Pinned by `ci-spec.yaml`'s `out-of-range-subscripts-are-type-errors-naming-their-bound` and the
+  `standalone:` `uncaught-out-of-range-subscript-report`, and the
+  `outOfRangeSubscriptsAreTypeErrorsNamingTheirBound` triple (`LispEvaluatorTest`,
+  `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`).
 
 ## Argument-shape errors signal a catchable program-error
 **Invariant: a keyword the operator does not accept, an odd keyword tail and a non-keyword in
@@ -1581,7 +1661,8 @@ all, so **`restart-case` alone unblocks nothing real**.
   `aPrintObjectMethodStillWins*`, `aConditionWithNoReport*`,
   `readCharEndOfFileIsCatchableAsEndOfFile`, `noApplicableMethodIsCatchableAndReportsTheSameText`,
   `handlerBindSees*`, `handlerBindRunsEachClusterOnceForABuiltInErrorInnermostFirst`,
-  `arefOutOfBoundsAndNegativeMakeArrayAreCatchable`,
+  `arefOutOfBoundsAndNegativeMakeArrayAreCatchable`, `outOfRangeSubscriptsAreTypeErrorsNamingTheirBound`
+  (+2), `aTypedLoopReportsAnOutOfRangeSubscriptAsTheBoxedPathDoes`,
   `argumentShapeErrorsSignalACatchableProgramError` (+2, the compiled twins being
   `compileAndRunArgumentShapeErrorsSignalACatchableProgramError` and
   `ehArgumentShapeErrorsSignalACatchableProgramError`), `allowOtherKeysSuppressesTheKeywordCheck`,
@@ -1621,6 +1702,7 @@ all, so **`restart-case` alone unblocks nothing real**.
   `non-number-arithmetic-operands-are-catchable`,
   `argument-type-errors-name-the-operator-beyond-arithmetic`,
   `argument-shape-errors-signal-program-error`,
+  `out-of-range-subscripts-are-type-errors-naming-their-bound`,
   `applying-a-non-function-signals-its-condition`,
   `runtime-type-dispatch-residue`,
   `runtime-type-dispatch-and-symbol-designators`, `postmodern-language-incidentals`, plus the

@@ -53,8 +53,9 @@ Two disciplines share the linear scratch at `HEAP_PTR_ADDR`:
   (`FUNC_T_SYM`), which lazily builds "T" ONCE into the last module global; quoted `'t` still goes
   through `compileStringLiteral`, id-equal.
 - `_str_fresh(off,len)` (`FUNC_STR_FRESH`) -- id = counter++, for RUNTIME strings. Two are built
-  WITHOUT it: `_str_stream_contents` and `_iv_utf8_str` (`FUNC_IV_UTF8_STR`), each one GC-to-GC
-  `array.copy` stamping the counter id itself.
+  WITHOUT it: `_str_stream_contents` and `_iv_utf8_str` (`FUNC_IV_UTF8_STR`; one GC-to-GC
+  `array.copy` for valid UTF-8, a two-pass lenient transcode otherwise), each stamping the counter
+  id itself.
 - `_str_to_mem(str,ptr)->len` (`FUNC_STR_TO_MEM`) -- the array->linear bridge for `open`/`load`,
   the reader input scratch (RESERVED so parse-time interns stack above the unparsed input),
   `intern`, the host `:string` boundary (`WasmExportCompiler.emitStringResult`; a staged import

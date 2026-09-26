@@ -457,19 +457,19 @@ final class JvmExprCompiler {
 					JvmHttpServerSeamCompiler.compile(qn.member(), cons, ctx, className);
 					return;
 				}
-				if (LispNames.OCTETS_TO_STRING_STRICT_INTERNAL.equals(qn.member())) {
-					// The STRICT half of the prelude's lenient octet decoder: the JDK
-					// UTF-8 decode of a packed octet vector, or nil when the bytes are
-					// not valid UTF-8 (_utf8Strict, emitted because the reference gated
-					// it).
+				if (LispNames.OCTETS_TO_STRING_PACKED_INTERNAL.equals(qn.member())) {
+					// The native half of the prelude's lenient octet decoder: a packed
+					// octet vector decoded (the JDK's strict decode, else a transcode by
+					// the lenient arms), or nil for any other value (_octetsToString,
+					// emitted because the reference gated it).
 					if (cons.toList().size() != 2) {
 						throw new UnsupportedOperationException(
-								"%octets-to-string-strict expects 1 argument, got " + (cons.toList().size() - 1));
+								"%octets-to-string-packed expects 1 argument, got " + (cons.toList().size() - 1));
 					}
 					compileExpr(cons.toList().get(1), ctx, className);
 					ctx.emit(Opcode.INVOKESTATIC);
 					ctx.emitU2(ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
-							ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmAsyncRuntimeBuilder.OCTETS_STRICT_METHOD),
+							ctx.cp.addNameAndType(ctx.cp.addUtf8(JvmAsyncRuntimeBuilder.OCTETS_PACKED_METHOD),
 									ctx.cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)))
 						.index());
 					return;

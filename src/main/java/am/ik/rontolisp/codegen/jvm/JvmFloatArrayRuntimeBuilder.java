@@ -144,7 +144,8 @@ final class JvmFloatArrayRuntimeBuilder {
 
 	/** The constant-pool references one emitted body needs, per width. */
 	private record Refs(ClassConstant doubleArrayClass, ClassConstant floatArrayClass, ClassConstant shortArrayClass,
-			MethodrefConstant bf16Value, MethodrefConstant bf16Bits, @Nullable Quantized quantized) {
+			MethodrefConstant bf16Value, MethodrefConstant bf16Bits, MethodrefConstant ckBound,
+			@Nullable Quantized quantized) {
 
 		ClassConstant arrayClass(JvmPackedFloatWidth w) {
 			return switch (w) {
@@ -207,6 +208,8 @@ final class JvmFloatArrayRuntimeBuilder {
 				JvmArrayRuntimeBuilder.DIMS_DESC);
 		MethodrefConstant arrayCheckRank = self(cp, selfClass, JvmArrayRuntimeBuilder.CHECK_RANK,
 				JvmArrayRuntimeBuilder.CHECK_RANK_DESC);
+		MethodrefConstant ckBound = self(cp, selfClass, JvmOperandTypeRuntime.CK_BOUND,
+				JvmOperandTypeRuntime.CK_BOUND_DESC);
 		MethodrefConstant bf16Value = self(cp, selfClass, BF16_VALUE, BF16_VALUE_DESC);
 		MethodrefConstant bf16Bits = self(cp, selfClass, BF16_BITS, BF16_BITS_DESC);
 		MethodrefConstant bf16Print = self(cp, selfClass, BF16_PRINT, BF16_PRINT_DESC);
@@ -222,7 +225,7 @@ final class JvmFloatArrayRuntimeBuilder {
 						JvmQuantizedMatrixRuntimeBuilder.UNARY_DESC),
 				self(cp, selfClass, JvmQuantizedMatrixRuntimeBuilder.INT, JvmQuantizedMatrixRuntimeBuilder.INT_DESC))
 				: null;
-		Refs refs = new Refs(doubleArrayClass, floatArrayClass, shortArrayClass, bf16Value, bf16Bits, qm);
+		Refs refs = new Refs(doubleArrayClass, floatArrayClass, shortArrayClass, bf16Value, bf16Bits, ckBound, qm);
 
 		List<ArrayMethod> methods = new ArrayList<>();
 		methods.add(buildToGeneral(cp, TO_GENERAL, refs, arrayListClass, objectClass, alInit, alAdd, longValueOf,
@@ -438,13 +441,13 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.bind(next);
 	}
 
-	// _fvAref1(arr, i): packed -> Double.valueOf(d[off + (int) i]); else _aref1.
-	// Serves rank-1 aref and row-major-aref (rank read from the header). Locals:
-	// 0=arr, 1=i, 2=d, 3=rank.
+	// _fvAref1(arr, i): packed -> Double.valueOf(d[off + i]), i checked against the
+	// total size (d.length - off); else _aref1. Serves rank-1 aref and row-major-aref
+	// (rank read from the header). Locals: 0=arr, 1=i, 2=d, 3=rank, 4=off.
 	private static ArrayMethod buildAref1(ConstantPool cp, Refs refs, ClassConstant longClass,
 			MethodrefConstant longIntValue, MethodrefConstant doubleValueOf, MethodrefConstant aref1,
 			@Nullable MethodrefConstant materialize) {
-		int arr = 0, i = 1, d = 2, rank = 3;
+		int arr = 0, i = 1, d = 2, rank = 3, off = 4;
 		JvmAsm a = new JvmAsm();
 		// --gpu: the element read below must see the device's bytes if it holds them.
 		emitMaterialize(a, arr, materialize);
@@ -461,12 +464,12 @@ final class JvmFloatArrayRuntimeBuilder {
 			asm.aload(d);
 			w.loadRank(asm);
 			asm.istore(rank);
-			asm.aload(d);
 			asm.iload(rank);
 			w.emitDataOffset(asm);
-			asm.aload(i);
-			asm.checkcast(longClass);
-			asm.invokevirtual(longIntValue);
+			asm.istore(off);
+			asm.aload(d);
+			asm.iload(off);
+			emitFlatBounded(asm, refs, i, d, off);
 			asm.op(Opcode.IADD);
 			w.loadElem(asm, refs.bf16Value());
 			asm.invokestatic(doubleValueOf);
@@ -476,11 +479,12 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(i);
 		a.invokestatic(aref1);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(AREF1), cp.addUtf8(JvmArrayRuntimeBuilder.AREF1_DESC), 5, 4, a.finish());
+		return new ArrayMethod(cp.addUtf8(AREF1), cp.addUtf8(JvmArrayRuntimeBuilder.AREF1_DESC), 5, 5, a.finish());
 	}
 
 	// _fvAref2(arr, i, j): packed -> Double.valueOf(d[off + i * cols + j]) with
-	// cols = dim 1; else _aref2. Locals: 0=arr, 1=i, 2=j, 3=d, 4=rank, 5=cols.
+	// cols = dim 1, i and j each checked against its own dimension; else _aref2.
+	// Locals: 0=arr, 1=i, 2=j, 3=d, 4=rank, 5=cols.
 	private static ArrayMethod buildAref2(ConstantPool cp, Refs refs, ClassConstant longClass,
 			MethodrefConstant longIntValue, MethodrefConstant doubleValueOf, MethodrefConstant aref2,
 			@Nullable MethodrefConstant materialize) {
@@ -508,15 +512,7 @@ final class JvmFloatArrayRuntimeBuilder {
 			asm.aload(d);
 			asm.iload(rank);
 			w.emitDataOffset(asm);
-			asm.aload(i);
-			asm.checkcast(longClass);
-			asm.invokevirtual(longIntValue);
-			asm.iload(cols);
-			asm.op(Opcode.IMUL);
-			asm.op(Opcode.IADD);
-			asm.aload(j);
-			asm.checkcast(longClass);
-			asm.invokevirtual(longIntValue);
+			emitFlat2Bounded(asm, w, refs, i, j, d, cols);
 			asm.op(Opcode.IADD);
 			w.loadElem(asm, refs.bf16Value());
 			asm.invokestatic(doubleValueOf);
@@ -527,7 +523,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(j);
 		a.invokestatic(aref2);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(AREF2), cp.addUtf8(JvmArrayRuntimeBuilder.AREF2_DESC), 8, 6, a.finish());
+		return new ArrayMethod(cp.addUtf8(AREF2), cp.addUtf8(JvmArrayRuntimeBuilder.AREF2_DESC), 10, 6, a.finish());
 	}
 
 	// _fvArefN(arr, subs): packed -> Horner flat index over the header dims; else _arefN.
@@ -554,7 +550,7 @@ final class JvmFloatArrayRuntimeBuilder {
 			asm.aload(d);
 			w.loadRank(asm);
 			asm.istore(rank);
-			emitHornerFlatIndex(asm, w, d, subsArr, rank, flat, k, longClass, longIntValue);
+			emitHornerFlatIndex(asm, w, refs, d, subsArr, rank, flat, k);
 			asm.aload(d);
 			asm.iload(rank);
 			w.emitDataOffset(asm);
@@ -568,14 +564,43 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(subs);
 		a.invokestatic(arefN);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(AREFN), cp.addUtf8(JvmArrayRuntimeBuilder.AREFN_DESC), 8, 7, a.finish());
+		return new ArrayMethod(cp.addUtf8(AREFN), cp.addUtf8(JvmArrayRuntimeBuilder.AREFN_DESC), 10, 7, a.finish());
 	}
 
-	// flat = 0; for k in 0..rank-1: flat = flat * dims[k] + subs[k]. Starting the fold
-	// at 0 rather than at subs[0] is what makes a RANK-0 packed array (no subscripts)
-	// answer the flat index 0 of its single element.
-	private static void emitHornerFlatIndex(JvmAsm a, JvmPackedFloatWidth w, int d, int subsArr, int rank, int flat,
-			int k, ClassConstant longClass, MethodrefConstant longIntValue) {
+	// Pushes the subscript in local i checked against the flat bound d.length - off,
+	// the total size: the index as an int (_ckBound, JvmOperandTypeRuntime).
+	private static void emitFlatBounded(JvmAsm a, Refs refs, int i, int d, int off) {
+		a.aload(i);
+		a.aload(d);
+		a.arraylength();
+		a.iload(off);
+		a.op(Opcode.ISUB);
+		a.invokestatic(refs.ckBound());
+	}
+
+	// Pushes i * cols + j, each subscript checked against its own dimension (dim 0 read
+	// from the header, cols in its local) so a column past its dimension is out of
+	// range rather than folding into the next row.
+	private static void emitFlat2Bounded(JvmAsm a, JvmPackedFloatWidth w, Refs refs, int i, int j, int d, int cols) {
+		a.aload(i);
+		a.aload(d);
+		a.iconst(0);
+		w.loadDim(a);
+		a.invokestatic(refs.ckBound());
+		a.iload(cols);
+		a.op(Opcode.IMUL);
+		a.aload(j);
+		a.iload(cols);
+		a.invokestatic(refs.ckBound());
+		a.op(Opcode.IADD);
+	}
+
+	// flat = 0; for k in 0..rank-1: flat = flat * dims[k] + subs[k], each subscript
+	// checked against its own dimension. Starting the fold at 0 rather than at subs[0]
+	// is what makes a RANK-0 packed array (no subscripts) answer the flat index 0 of its
+	// single element.
+	private static void emitHornerFlatIndex(JvmAsm a, JvmPackedFloatWidth w, Refs refs, int d, int subsArr, int rank,
+			int flat, int k) {
 		a.iconst(0);
 		a.istore(flat);
 		a.iconst(0);
@@ -594,8 +619,10 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(subsArr);
 		a.iload(k);
 		a.aaload();
-		a.checkcast(longClass);
-		a.invokevirtual(longIntValue);
+		a.aload(d);
+		a.iload(k);
+		w.loadDim(a);
+		a.invokestatic(refs.ckBound());
 		a.op(Opcode.IADD);
 		a.istore(flat);
 		a.iinc(k, 1);
@@ -603,16 +630,21 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.bind(done);
 	}
 
-	// Common tail of the aset bodies: coerce val to a double in dval, report the write
-	// to the device runtime (--gpu), store at idx, and return the value AS STORED.
-	private static void emitCoerceStoreReturn(JvmAsm a, JvmPackedFloatWidth w, Refs refs, int val, int d, int idx,
-			int dval, ClassConstant numberClass, MethodrefConstant numberDoubleValue, MethodrefConstant doubleValueOf,
-			MethodrefConstant dbl, @Nullable MethodrefConstant written) {
+	// The first half of the aset bodies: coerce val to a double in dval -- a non-real
+	// is the store's type-error, reported before an out-of-range subscript is.
+	private static void emitCoerce(JvmAsm a, int val, int dval, ClassConstant numberClass,
+			MethodrefConstant numberDoubleValue, MethodrefConstant dbl) {
 		a.aload(val);
 		a.invokestatic(dbl);
 		a.checkcast(numberClass);
 		a.invokevirtual(numberDoubleValue);
 		a.dstore(dval);
+	}
+
+	// The tail of the aset bodies: report the write to the device runtime (--gpu), store
+	// dval at idx, and return the value AS STORED.
+	private static void emitStoreReturn(JvmAsm a, JvmPackedFloatWidth w, Refs refs, int d, int idx, int dval,
+			MethodrefConstant doubleValueOf, @Nullable MethodrefConstant written) {
 		if (written != null) {
 			// --gpu, BEFORE the store: a device copy that was the authoritative one comes
 			// home first and is dropped, so the store lands on the array's real bytes --
@@ -657,18 +689,18 @@ final class JvmFloatArrayRuntimeBuilder {
 			asm.aload(arr);
 			asm.checkcast(refs.arrayClass(w));
 			asm.astore(d);
+			emitCoerce(asm, val, dval, numberClass, numberDoubleValue, dbl);
 			asm.aload(d);
 			w.loadRank(asm);
 			asm.istore(rank);
 			asm.iload(rank);
 			w.emitDataOffset(asm);
-			asm.aload(i);
-			asm.checkcast(longClass);
-			asm.invokevirtual(longIntValue);
+			asm.istore(idx);
+			asm.iload(idx);
+			emitFlatBounded(asm, refs, i, d, idx);
 			asm.op(Opcode.IADD);
 			asm.istore(idx);
-			emitCoerceStoreReturn(asm, w, refs, val, d, idx, dval, numberClass, numberDoubleValue, doubleValueOf, dbl,
-					written);
+			emitStoreReturn(asm, w, refs, d, idx, dval, doubleValueOf, written);
 		});
 		a.aload(arr);
 		a.aload(i);
@@ -698,6 +730,7 @@ final class JvmFloatArrayRuntimeBuilder {
 			asm.aload(arr);
 			asm.checkcast(refs.arrayClass(w));
 			asm.astore(d);
+			emitCoerce(asm, val, dval, numberClass, numberDoubleValue, dbl);
 			asm.aload(d);
 			w.loadRank(asm);
 			asm.istore(rank);
@@ -707,19 +740,10 @@ final class JvmFloatArrayRuntimeBuilder {
 			asm.istore(cols);
 			asm.iload(rank);
 			w.emitDataOffset(asm);
-			asm.aload(i);
-			asm.checkcast(longClass);
-			asm.invokevirtual(longIntValue);
-			asm.iload(cols);
-			asm.op(Opcode.IMUL);
-			asm.op(Opcode.IADD);
-			asm.aload(j);
-			asm.checkcast(longClass);
-			asm.invokevirtual(longIntValue);
+			emitFlat2Bounded(asm, w, refs, i, j, d, cols);
 			asm.op(Opcode.IADD);
 			asm.istore(idx);
-			emitCoerceStoreReturn(asm, w, refs, val, d, idx, dval, numberClass, numberDoubleValue, doubleValueOf, dbl,
-					written);
+			emitStoreReturn(asm, w, refs, d, idx, dval, doubleValueOf, written);
 		});
 		a.aload(arr);
 		a.aload(i);
@@ -727,7 +751,7 @@ final class JvmFloatArrayRuntimeBuilder {
 		a.aload(val);
 		a.invokestatic(aset2);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(ASET2), cp.addUtf8(JvmArrayRuntimeBuilder.ASET2_DESC), 8, 10, a.finish());
+		return new ArrayMethod(cp.addUtf8(ASET2), cp.addUtf8(JvmArrayRuntimeBuilder.ASET2_DESC), 10, 10, a.finish());
 	}
 
 	// _fvAsetN(arr, subs, val): packed Horner store; else _asetN.
@@ -754,24 +778,24 @@ final class JvmFloatArrayRuntimeBuilder {
 			asm.aload(subs);
 			asm.checkcast(objectArrayClass);
 			asm.astore(subsArr);
+			emitCoerce(asm, val, dval, numberClass, numberDoubleValue, dbl);
 			asm.aload(d);
 			w.loadRank(asm);
 			asm.istore(rank);
-			emitHornerFlatIndex(asm, w, d, subsArr, rank, flat, k, longClass, longIntValue);
+			emitHornerFlatIndex(asm, w, refs, d, subsArr, rank, flat, k);
 			asm.iload(rank);
 			w.emitDataOffset(asm);
 			asm.iload(flat);
 			asm.op(Opcode.IADD);
 			asm.istore(idx);
-			emitCoerceStoreReturn(asm, w, refs, val, d, idx, dval, numberClass, numberDoubleValue, doubleValueOf, dbl,
-					written);
+			emitStoreReturn(asm, w, refs, d, idx, dval, doubleValueOf, written);
 		});
 		a.aload(arr);
 		a.aload(subs);
 		a.aload(val);
 		a.invokestatic(asetN);
 		a.areturn();
-		return new ArrayMethod(cp.addUtf8(ASETN), cp.addUtf8(JvmArrayRuntimeBuilder.ASETN_DESC), 8, 11, a.finish());
+		return new ArrayMethod(cp.addUtf8(ASETN), cp.addUtf8(JvmArrayRuntimeBuilder.ASETN_DESC), 10, 11, a.finish());
 	}
 
 	// _fvDims(arr): packed -> a fresh cons list of the header dims as Longs; else

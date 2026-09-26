@@ -183,11 +183,19 @@ truncated one, is its own character). Mixing kinds is an error. `%octets-to-stri
 for the compile paths and a native `Environment` mirror on the interpreter (the `char-name`
 arrangement); `LispPreludeLibraryTest` pins the two arm for arm.
 
-**The lenient loop is the FALLBACK: `%octets-to-string-strict` runs first**, NATIVE on every backend
--- bytes as STRICT UTF-8, or `nil` when not valid; only what it refuses walks a byte at a time.
-`Environment.decodeUtf8Strict`; JVM `_utf8Strict` (`JvmAsyncRuntimeBuilder.buildOctetsStrict`); both
-WASM GC tiers `_iv_utf8_str` (`WasmStringRuntimeBuilder.buildIvUtf8StrBody`, `FUNC_IV_UTF8_STR`).
-**Deliberately NOT `_str_char_at`'s walk**, whose ranges accept overlong forms, surrogates, code
+**The lenient loop is the FALLBACK, for a general array only: `%octets-to-string-packed` runs
+first**, NATIVE on every backend, and answers every packed `(unsigned-byte 8)` vector itself
+(`nil` for any other value): STRICT UTF-8 first (a platform decode; one `array.copy` on wasm), the
+lenient arms as a native transcode for the rest. `Environment.decodeUtf8Strict` /
+`decodeUtf8Leniently`; JVM `_octetsToString` (`JvmAsyncRuntimeBuilder.buildOctetsToString`, the
+transcode in the `CharacterCodingException` handler); both WASM GC tiers `_iv_utf8_str`
+(`WasmStringRuntimeBuilder.buildIvUtf8StrBody`, `FUNC_IV_UTF8_STR`, a two-pass transcode behind the
+validator). Until 2026-09-26 the primitive was `%octets-to-string-strict` (`nil` on malformed
+bytes) and a binary body walked the compiled loop: ~350-700 ns a byte, and on a `--native` output a
+256 MiB body exhausted the GC heap (`.kb/fetch-http.md`, "Throughput"). The native transcodes are
+pinned against the loop case for case by the three `octetsDecodeNativelyWhetherOrNotTheBytesAreUtf8` tests (the loop fed a
+GENERAL array, which the primitive declines) and `LispPreludeLibraryTest`.
+**The validator is deliberately NOT `_str_char_at`'s walk**, whose ranges accept overlong forms, surrogates, code
 points past U+10FFFF and bare continuation bytes. Strict ranges: `C2..DF` one continuation; `E0..EF`
 two (`E0` needs `A0..BF` first, `ED` needs `80..9F`); `F0..F4` three (`F0` needs `90..BF`, `F4` needs
 `80..8F`); every continuation `10xxxxxx`; a truncated tail refused. The lenient 4-byte arm re-tests
@@ -212,7 +220,7 @@ drained via `rontolisp::%http-drain`, not read-all.
 ## Tests
 `AsyncEvalTest` / `JvmAsyncCompilerTest` pairs (`thenChainsOnFutureSettledValue`,
 `streamNewBuildsAPullStreamOverAPairOfThunks` and its async-thunk / no-write-end edges,
-`octetsDecodeThroughTheStrictFastPathAndFallBackOnMalformedBytes`);
+`octetsDecodeNativelyWhetherOrNotTheBytesAreUtf8`);
 `WasmLispCompilerIntegrationTest` `p1Then*` / `componentThen*` / `componentCatch*` /
 `componentFinally*` / `preview1HasAFirstClassStreamValueOverAPairOfThunks`;
 `WasmLispCompilerTest.theP1StreamBlockRidesOnlyAStreamCreatingModule`;

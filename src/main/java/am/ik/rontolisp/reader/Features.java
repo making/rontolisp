@@ -125,6 +125,22 @@ public final class Features {
 	 */
 	public static final String BODY_IMPORTS = "rontolisp-body-imports";
 
+	/**
+	 * The feature naming the RUNNER a {@code --native} executable's wasm-GC module runs
+	 * inside, added to the WASM set exactly there ({@link #with}). A native output is
+	 * still the Preview 1 module ({@link #WASM} as is: no reactor, no component, no
+	 * scalar backend -- the CLI refuses those beside {@code --native}), but the runner
+	 * around it answers imports Preview 1 alone does not have -- {@code rontolisp:fetch}
+	 * through {@code rlrun-net}, and {@code objc:}/{@code appkit:}/{@code metal:}/
+	 * {@code scene:} through {@code rlobjc} on {@code macos-aarch64} -- so no existing
+	 * feature can tell the two builds apart and one source cannot say "fetch on native,
+	 * fall back on Preview 1" without it. Deliberately silent on OS/architecture: those
+	 * would have to come from {@code --native-target} and never the compile host's
+	 * {@code os.name} (a cross build would lie), and they flip {@code #+unix}/
+	 * {@code #+darwin} branches in shipped libraries ({@code .kb/uiop.md}).
+	 */
+	public static final String NATIVE = "rontolisp-native";
+
 	private final List<String> names;
 
 	/**

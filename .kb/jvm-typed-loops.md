@@ -63,10 +63,14 @@ monotone.
 
 All arrays of one loop must be `float[]` or all `double[]`; mixed bails. Each variant hoists per
 array the typed reference, the data offset `1 + rank` and (rank 2) the column count `header[2]`, then
-indexes exactly as `_fvAref1`/`_fvAref2` do -- `base + (int) i * cols + (int) j`, `int` arithmetic
-with the same truncation (`Long.intValue()` = `L2I`) and the same association -- so the
-subscript-count quirk reproduces bit for bit and an out-of-range index throws the same
-`ArrayIndexOutOfBoundsException` from the same array. A store narrows with `D2F` for `float[]` and in
+indexes exactly as `_fvAref1`/`_fvAref2` do -- `base + i * cols + j` -- and check each subscript
+against its OWN dimension first (dimension 0 and the column count, hoisted with the base) through
+`_ckBoundJ` under the access's wrapper, `AREF` or `(SETF AREF)`: an out-of-range subscript throws
+exactly the report the boxed accessor throws (`.kb/error-handling.md`, "An out-of-range
+subscript"). The subscripts -- and a store's value -- are evaluated into temps before any check,
+as the boxed call evaluates its arguments. **The check is `Objects.checkIndex`**, which the JIT
+hoists like its own range checks: a hand-written compare cost a `double-float` loop 27%,
+`checkIndex` 1.7% (2026-09-26). A store narrows with `D2F` for `float[]` and in
 value position answers the value AS STORED. Under `--gpu` each array the body STORES into is
 reported `_gpuWritten` ONCE, at `hoistArrays` and after every array's `_gpuMaterialize` -- not per
 store, as `_fvAset*` must (`.kb/gpu.md`). Two things make the hoist the same contract: nothing
@@ -115,4 +119,5 @@ expected output and re-added when 722 closes. It was hand-checked identical on a
 - `incf`/`decf`, `floor`/`mod`, `min`/`max`, `abs`, `and`/`or`/`not` tests, `the`, a let-bound ARRAY,
   `array-dimension`, comparisons of more than two operands -- each a small exact addition.
 - **If the boxed helpers change semantics (`_fvAref*` bounds checks, the rank check, a `Float` box),
-  the typed emission must change with them** -- the pinning test says so.
+  the typed emission must change with them** -- `typedLoopsMatchTheBoxedPathAndTheSizeLevelDeclinesThem`
+  and `aTypedLoopReportsAnOutOfRangeSubscriptAsTheBoxedPathDoes` say so.

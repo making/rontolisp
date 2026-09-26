@@ -5613,25 +5613,22 @@ public final class LispNames {
 	 *
 	 * <p>
 	 * The loop is the FALLBACK, not the path: the definition first offers the vector to
-	 * the native {@link #OCTETS_TO_STRING_STRICT_INTERNAL}, and only bytes that decoder
-	 * refuses reach the per-byte arms. Valid UTF-8 -- every real body -- is therefore a
-	 * platform decode, and the answers stay identical by construction (the strict result
-	 * IS the lenient one wherever the input is well formed).
+	 * the native {@link #OCTETS_TO_STRING_PACKED_INTERNAL}, which answers every packed
+	 * octet vector itself, so only a general array reaches the per-byte arms.
 	 */
 	public static final String OCTETS_TO_STRING_INTERNAL = "%OCTETS-TO-STRING";
 
 	/**
-	 * The internal {@code rontolisp::%octets-to-string-strict} primitive: the STRICT half
-	 * of {@link #OCTETS_TO_STRING_INTERNAL} -- an {@code (unsigned-byte 8)} vector -> the
-	 * string its bytes spell when they are valid UTF-8, and {@code nil} when they are
-	 * not. NATIVE on every backend (a platform decoder on the interpreter and the JVM, a
-	 * validate-then-{@code array.copy} runtime function on WASM), which is what lets the
-	 * lenient decoder answer a well-formed body at memcpy speed and keep the compiled
-	 * per-byte loop for the malformed rest. It never signals and never guesses: an input
-	 * it cannot fast-path -- malformed bytes, a value that is not a packed octet vector
-	 * -- answers {@code nil} and the loop decides.
+	 * The internal {@code rontolisp::%octets-to-string-packed} primitive: the NATIVE half
+	 * of {@link #OCTETS_TO_STRING_INTERNAL} -- a packed {@code (unsigned-byte 8)} vector
+	 * -> the string {@link #OCTETS_TO_STRING_INTERNAL}'s lenient rule decodes it to, and
+	 * {@code nil} for any other value. Native on every backend: valid UTF-8 is a platform
+	 * decode (interpreter, JVM) or a validate-then-{@code array.copy} (WASM), and the
+	 * malformed rest a native transcode, so a binary body never reaches a compiled
+	 * per-byte loop. It never signals: a value it does not take (a general array) answers
+	 * {@code nil} and the prelude's loop decides.
 	 */
-	public static final String OCTETS_TO_STRING_STRICT_INTERNAL = "%OCTETS-TO-STRING-STRICT";
+	public static final String OCTETS_TO_STRING_PACKED_INTERNAL = "%OCTETS-TO-STRING-PACKED";
 
 	/**
 	 * The internal {@code rontolisp::%octets-join} helper: a list of
@@ -7337,12 +7334,12 @@ public final class LispNames {
 
 	/**
 	 * The canonical internal-qualified spelling of
-	 * {@code rontolisp::%octets-to-string-strict}
-	 * ({@link #OCTETS_TO_STRING_STRICT_INTERNAL}), which is what the compile backends
+	 * {@code rontolisp::%octets-to-string-packed}
+	 * ({@link #OCTETS_TO_STRING_PACKED_INTERNAL}), which is what the compile backends
 	 * gate its runtime helper on.
 	 */
-	public static final String OCTETS_TO_STRING_STRICT_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::"
-			+ OCTETS_TO_STRING_STRICT_INTERNAL;
+	public static final String OCTETS_TO_STRING_PACKED_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::"
+			+ OCTETS_TO_STRING_PACKED_INTERNAL;
 
 	/**
 	 * The {@code wasm-import} directive provided by the {@code rontolisp} package. Used
